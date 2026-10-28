@@ -356,3 +356,358 @@ fn aggregate_initializers() {
         ],
     );
 }
+
+/// §3.2: constant expressions (opaque-pointer forms).
+#[test]
+fn constant_expressions() {
+    let mut m = aarch64();
+    let arr = m.types.array(TypeId::I32, 4);
+    let g = m.add_global("arr", arr);
+    let z = m.const_zero(arr);
+    m.set_initializer(g, Some(z)).unwrap();
+    let gv = Value::global(g);
+    let (c0, c2) = (m.const_int(TypeId::I64, 0), m.const_int(TypeId::I32, 2));
+    let e = m.const_gep(arr, gv, &[c0, c2], GepFlags::INBOUNDS, None).unwrap();
+    let p = m.add_global("p", TypeId::PTR);
+    m.set_initializer(p, Some(e)).unwrap();
+    let c1 = m.const_int(TypeId::I64, 1);
+    let r = m.const_gep(arr, gv, &[c0, c1], GepFlags::INBOUNDS, Some((-4, 12))).unwrap();
+    let q = m.add_global("q", TypeId::PTR);
+    m.set_initializer(q, Some(r)).unwrap();
+    let pi = m.const_cast(CastOp::PtrToInt, gv, TypeId::I64).unwrap();
+    let i = m.add_global("i", TypeId::I64);
+    m.set_initializer(i, Some(pi)).unwrap();
+    let k = m.const_int(TypeId::I64, 8);
+    let s = m.const_binop(BinOp::Add, Flags::NUW, pi, k).unwrap();
+    let j = m.add_global("j", TypeId::I64);
+    m.set_initializer(j, Some(s)).unwrap();
+    let ip = m.const_int(TypeId::I64, 4096);
+    let ip = m.const_cast(CastOp::IntToPtr, ip, TypeId::PTR).unwrap();
+    let h = m.add_global("h", TypeId::PTR);
+    m.set_initializer(h, Some(ip)).unwrap();
+    let p1 = m.types.ptr(1);
+    let asc = m.const_cast(CastOp::AddrSpaceCast, gv, p1).unwrap();
+    let a = m.add_global("as", p1);
+    m.set_initializer(a, Some(asc)).unwrap();
+    let t = m.const_cast(CastOp::Trunc, pi, TypeId::I32).unwrap();
+    let tt = m.add_global("t", TypeId::I32);
+    m.set_initializer(tt, Some(t)).unwrap();
+    check(
+        &m,
+        &[
+            "@arr = global [4 x i32] zeroinitializer\n",
+            "@p = global ptr getelementptr inbounds ([4 x i32], ptr @arr, i64 0, i32 2)\n",
+            "@q = global ptr getelementptr inbounds inrange(-4, 12) ([4 x i32], ptr @arr, i64 0, i64 1)\n",
+            "@i = global i64 ptrtoint (ptr @arr to i64)\n",
+            "@j = global i64 add nuw (i64 ptrtoint (ptr @arr to i64), i64 8)\n",
+            "@h = global ptr inttoptr (i64 4096 to ptr)\n",
+            "@as = global ptr addrspace(1) addrspacecast (ptr @arr to ptr addrspace(1))\n",
+            "@t = global i32 trunc (i64 ptrtoint (ptr @arr to i64) to i32)\n",
+        ],
+    );
+}
+
+/// §2.5: aliases (plain, GEP aliasee, properties) and comdats.
+#[test]
+fn aliases_and_comdats() {
+    let mut m = aarch64();
+    let s = m.types.struct_literal(&[TypeId::I32, TypeId::I32], false);
+    let g = m.add_global("g", s);
+    let z = m.const_zero(s);
+    m.set_initializer(g, Some(z)).unwrap();
+    let c = m.comdat("g", ComdatKind::Any);
+    m.global_mut(g).comdat = Some(c);
+    m.global_mut(g).linkage = Linkage::LinkOnceOdr;
+    let c2 = m.comdat("grp", ComdatKind::Largest);
+    let h = m.add_global("h", TypeId::I8);
+    let z8 = m.const_int(TypeId::I8, 0);
+    m.set_initializer(h, Some(z8)).unwrap();
+    m.global_mut(h).comdat = Some(c2);
+    let _ = m.comdat("nd", ComdatKind::NoDeduplicate);
+    let gv = Value::global(g);
+    let a = m.add_alias("a", s, gv).unwrap();
+    m.alias_mut(a).dso_local = true;
+    let (c0, c1) = (m.const_int(TypeId::I32, 0), m.const_int(TypeId::I32, 1));
+    let fld = m.const_gep(s, gv, &[c0, c1], GepFlags::INBOUNDS, None).unwrap();
+    let b = m.add_alias("b", TypeId::I32, fld).unwrap();
+    {
+        let b = m.alias_mut(b);
+        b.linkage = Linkage::Internal;
+        b.unnamed_addr = UnnamedAddr::Global;
+    }
+    let w = m.add_alias("w", s, Value::alias(a)).unwrap();
+    m.alias_mut(w).linkage = Linkage::Weak;
+    m.alias_mut(w).visibility = Visibility::Hidden;
+    let fty = m.types.function(TypeId::VOID, &[], false);
+    let f = m.add_function("f", fty).unwrap();
+    m.func_mut(f).comdat = Some(c);
+    m.func_mut(f).linkage = Linkage::LinkOnceOdr;
+    let mut bld = IrBuilder::new(&mut m, f);
+    let e = bld.append_block("");
+    bld.position_at_end(e);
+    bld.ret_void().unwrap();
+    check(
+        &m,
+        &[
+            // Comdats are separated by blank lines; unused ones are not printed.
+            "\n$g = comdat any\n\n$grp = comdat largest\n\n@g",
+            " = linkonce_odr global { i32, i32 } zeroinitializer, comdat\n",
+            "@h = global i8 0, comdat($grp)\n",
+            "@a = dso_local alias { i32, i32 }, ptr @g\n",
+            "@b = internal unnamed_addr alias i32, getelementptr inbounds ({ i32, i32 }, ptr @g, i32 0, i32 1)\n",
+            "@w = weak hidden alias { i32, i32 }, ptr @a\n",
+            "define linkonce_odr void @f() comdat($g) {\n",
+        ],
+    );
+}
+
+/// §3.2: `blockaddress`, `dso_local_equivalent`, `no_cfi`.
+#[test]
+fn function_constants() {
+    let mut m = aarch64();
+    let fty = m.types.function(TypeId::VOID, &[], false);
+    let ext = m.add_function("ext", fty).unwrap();
+    let mut b = define(&mut m, "f", TypeId::VOID, &[]);
+    let fid = b.func_id();
+    let l = b.append_block("lbl");
+    b.br(l).unwrap();
+    b.position_at_end(l);
+    b.ret_void().unwrap();
+    let ba = m.const_blockaddress(fid, l);
+    let g = m.add_global("ba", TypeId::PTR);
+    m.set_initializer(g, Some(ba)).unwrap();
+    let d = m.const_dso_local_equivalent(Value::func(ext));
+    let g = m.add_global("dle", TypeId::PTR);
+    m.set_initializer(g, Some(d)).unwrap();
+    let n = m.const_no_cfi(Value::func(ext));
+    let g = m.add_global("ncfi", TypeId::PTR);
+    m.set_initializer(g, Some(n)).unwrap();
+    check(
+        &m,
+        &[
+            "@ba = global ptr blockaddress(@f, %lbl)\n",
+            "@dle = global ptr dso_local_equivalent @ext\n",
+            "@ncfi = global ptr no_cfi @ext\n",
+            "declare void @ext()\n",
+            "  br label %lbl\n\nlbl:",
+        ],
+    );
+}
+
+/// §2.4: declarations, varargs, unnamed functions and globals.
+#[test]
+fn declarations() {
+    let mut m = aarch64();
+    let pf = m.types.function(TypeId::I32, &[TypeId::PTR], true);
+    let printf = m.add_function("printf", pf).unwrap();
+    let nounwind = m.attr_set(&[Attr::Flag(AttrKind::NoUndef)]);
+    m.func_mut(printf).attrs.set_param(0, nounwind);
+    let vf = m.types.function(TypeId::VOID, &[], true);
+    let _ = m.add_function("only_va", vf).unwrap();
+    let ew = m.add_function("weak_ref", vf).unwrap();
+    m.func_mut(ew).linkage = Linkage::ExternWeak;
+    let anon = m.add_function("", vf).unwrap();
+    m.func_mut(anon).linkage = Linkage::Internal;
+    let mut b = IrBuilder::new(&mut m, anon);
+    let e = b.append_block("");
+    b.position_at_end(e);
+    b.ret_void().unwrap();
+    let g = m.add_global("", TypeId::I32);
+    let one = m.const_int(TypeId::I32, 1);
+    m.set_initializer(g, Some(one)).unwrap();
+    m.global_mut(g).linkage = Linkage::Private;
+    let user = m.add_global("user", TypeId::PTR);
+    m.set_initializer(user, Some(Value::func(anon))).unwrap();
+    let user2 = m.add_global("user2", TypeId::PTR);
+    m.set_initializer(user2, Some(Value::global(g))).unwrap();
+    check(
+        &m,
+        &[
+            "@0 = private global i32 1\n@user = global ptr @1\n@user2 = global ptr @0\n",
+            "declare i32 @printf(ptr noundef, ...)\n",
+            "declare void @only_va(...)\n",
+            "declare extern_weak void @weak_ref(...)\n",
+            "define internal void @1(...) {\n",
+        ],
+    );
+}
+
+/// §5: parameter and return attributes as clang emits them.
+#[test]
+fn parameter_attributes() {
+    let mut m = aarch64();
+    let s = m.types.named_struct("struct.S");
+    m.types.set_body(s, &[TypeId::I64, TypeId::I64, TypeId::I64], false).unwrap();
+    let params = [TypeId::PTR, TypeId::I8, TypeId::I16, TypeId::PTR, TypeId::PTR, TypeId::PTR];
+    let fty = m.types.function(TypeId::VOID, &params, false);
+    let f = m.add_function("f", fty).unwrap();
+    let sets = [
+        m.attr_set(&[
+            Attr::Flag(AttrKind::NoAlias),
+            Attr::Flag(AttrKind::Writable),
+            Attr::SRet(s),
+            Attr::Align(8),
+        ]),
+        m.attr_set(&[Attr::Flag(AttrKind::NoUndef), Attr::Flag(AttrKind::ZExt)]),
+        m.attr_set(&[Attr::Flag(AttrKind::NoUndef), Attr::Flag(AttrKind::SExt)]),
+        m.attr_set(&[Attr::ByVal(s), Attr::Align(8)]),
+        m.attr_set(&[
+            Attr::Flag(AttrKind::NoUndef),
+            Attr::Flag(AttrKind::NonNull),
+            Attr::Align(4),
+            Attr::Dereferenceable(16),
+        ]),
+        m.attr_set(&[
+            Attr::Flag(AttrKind::NoCapture),
+            Attr::Flag(AttrKind::ReadOnly),
+            Attr::DereferenceableOrNull(8),
+        ]),
+    ];
+    for (i, a) in sets.into_iter().enumerate() {
+        m.func_mut(f).attrs.set_param(i, a);
+    }
+    let gty = m.types.function(TypeId::PTR, &[TypeId::I1], false);
+    let g = m.add_function("g", gty).unwrap();
+    let r = m.attr_set(&[Attr::Flag(AttrKind::NoAlias), Attr::Flag(AttrKind::NonNull)]);
+    m.func_mut(g).attrs.ret = r;
+    let z = m.attr_set(&[Attr::Flag(AttrKind::ZExt)]);
+    m.func_mut(g).attrs.set_param(0, z);
+    check(
+        &m,
+        &[
+            "%struct.S = type { i64, i64, i64 }\n",
+            "declare void @f(ptr noalias writable sret(%struct.S) align 8, i8 noundef zeroext, \
+             i16 noundef signext, ptr byval(%struct.S) align 8, \
+             ptr noundef nonnull align 4 dereferenceable(16), \
+             ptr nocapture readonly dereferenceable_or_null(8))\n",
+            "declare noalias nonnull ptr @g(i1 zeroext)\n",
+        ],
+    );
+}
+
+/// §5: function attribute groups are deduplicated and numbered in first-use
+/// order, with enum attributes before string attributes.
+#[test]
+fn attribute_groups() {
+    let mut m = aarch64();
+    let clang_fn = m.attr_set(&[
+        Attr::string("target-features", "+neon"),
+        Attr::Flag(AttrKind::NoInline),
+        Attr::Flag(AttrKind::NoUnwind),
+        Attr::Flag(AttrKind::OptimizeNone),
+        Attr::UwTable(UwTableKind::Async),
+        Attr::string("frame-pointer", "non-leaf"),
+        Attr::string("no-trapping-math", "true"),
+        Attr::string("stack-protector-buffer-size", "8"),
+    ]);
+    let decl_attrs = m.attr_set(&[
+        Attr::Memory(MemoryEffects::argmem_only(ModRef::Read)),
+        Attr::Flag(AttrKind::NoFree),
+        Attr::Flag(AttrKind::WillReturn),
+        Attr::AllocSize(0, None),
+    ]);
+    let mixed = m.attr_set(&[
+        Attr::Memory(MemoryEffects {
+            argmem: ModRef::ReadWrite,
+            inaccessiblemem: ModRef::Write,
+            other: ModRef::Read,
+        }),
+        Attr::AlignStack(16),
+        Attr::VScaleRange(1, 16),
+        Attr::AllocSize(0, Some(1)),
+        Attr::string("empty", ""),
+    ]);
+    let vf = m.types.function(TypeId::VOID, &[TypeId::I64], false);
+    let d = m.add_function("d", vf).unwrap();
+    m.func_mut(d).attrs.func = decl_attrs;
+    let vf2 = m.types.function(TypeId::VOID, &[TypeId::I64, TypeId::I64], false);
+    let x = m.add_function("x", vf2).unwrap();
+    m.func_mut(x).attrs.func = mixed;
+    for name in ["a", "b"] {
+        let mut b = define(&mut m, name, TypeId::VOID, &[TypeId::I64]);
+        b.func().attrs.func = clang_fn;
+        b.ret_void().unwrap();
+    }
+    check(
+        &m,
+        &[
+            "declare void @d(i64) #0\n",
+            "declare void @x(i64, i64) #1\n",
+            "define dso_local void @a(i64 %0) #2 {\n",
+            "define dso_local void @b(i64 %0) #2 {\n",
+            "attributes #0 = { nofree willreturn allocsize(0) memory(argmem: read) }\n",
+            // Enum, then type, then integer attributes (by LLVM enum value).
+            "attributes #1 = { allocsize(0,1) \
+             memory(read, argmem: readwrite, inaccessiblemem: write) alignstack=16 \
+             vscale_range(1,16) \"empty\" }\n",
+            "attributes #2 = { noinline nounwind optnone uwtable \"frame-pointer\"=\"non-leaf\" \
+             \"no-trapping-math\"=\"true\" \"stack-protector-buffer-size\"=\"8\" \
+             \"target-features\"=\"+neon\" }\n",
+        ],
+    );
+}
+
+/// §2.4: function-level properties.
+#[test]
+fn function_properties() {
+    let mut m = aarch64();
+    let pers_ty = m.types.function(TypeId::I32, &[], true);
+    let pers = m.add_function("__gxx_personality_v0", pers_ty).unwrap();
+    let mut b = define(&mut m, "props", TypeId::VOID, &[]);
+    {
+        let f = b.func();
+        f.linkage = Linkage::Internal;
+        f.dso_local = false;
+        f.unnamed_addr = UnnamedAddr::Global;
+        f.section = Some("text.hot".into());
+        f.align = Some(16);
+        f.gc = Some("statepoint-example".into());
+        f.personality = Some(Value::func(pers));
+        f.cc = CallConv::FAST;
+    }
+    b.ret_void().unwrap();
+    let mut b = define(&mut m, "vis", TypeId::VOID, &[]);
+    {
+        let f = b.func();
+        f.visibility = Visibility::Protected;
+        f.unnamed_addr = UnnamedAddr::Local;
+        f.dll_storage = DllStorage::Export;
+    }
+    b.ret_void().unwrap();
+    check(
+        &m,
+        &[
+            "define internal fastcc void @props() unnamed_addr section \"text.hot\" align 16 \
+             gc \"statepoint-example\" personality ptr @__gxx_personality_v0 {\n",
+            // Non-default visibility implies dso_local, which is then not printed.
+            "define protected dllexport void @vis() local_unnamed_addr {\n",
+        ],
+    );
+}
+
+/// §2.4: calling-convention keywords, including the numeric `cc N` form.
+#[test]
+fn calling_conventions() {
+    let mut m = aarch64();
+    let vf = m.types.function(TypeId::VOID, &[], false);
+    let ccs = [
+        (CallConv::C, "declare void @cc0()\n"),
+        (CallConv::FAST, "declare fastcc void @cc8()\n"),
+        (CallConv::COLD, "declare coldcc void @cc9()\n"),
+        (CallConv::PRESERVE_MOST, "declare preserve_mostcc void @cc14()\n"),
+        (CallConv::PRESERVE_ALL, "declare preserve_allcc void @cc15()\n"),
+        (CallConv::SWIFT, "declare swiftcc void @cc16()\n"),
+        (CallConv::CXX_FAST_TLS, "declare cxx_fast_tlscc void @cc17()\n"),
+        (CallConv::TAIL, "declare tailcc void @cc18()\n"),
+        (CallConv::X86_64_SYSV, "declare x86_64_sysvcc void @cc78()\n"),
+        (CallConv::WIN64, "declare win64cc void @cc79()\n"),
+        (CallConv::AARCH64_VECTOR_PCS, "declare aarch64_vector_pcs void @cc97()\n"),
+        (CallConv(200), "declare cc200 void @cc200()\n"),
+    ];
+    for (cc, _) in ccs {
+        let f = m.add_function(&format!("cc{}", cc.0), vf).unwrap();
+        m.func_mut(f).cc = cc;
+    }
+    let lines: Vec<&str> = ccs.iter().map(|c| c.1).collect();
+    check(&m, &lines);
+}

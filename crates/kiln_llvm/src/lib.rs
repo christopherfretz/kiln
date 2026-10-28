@@ -28,7 +28,7 @@ mod types;
 mod value;
 mod verify;
 
-pub use attr::{Attr, AttrKind, AttrList};
+pub use attr::{Attr, AttrKind, AttrList, MemoryEffects, ModRef, UwTableKind};
 pub use builder::{CallOpts, CmpXchgOpts, IrBuilder, MemOpts, SHUFFLE_POISON};
 pub use constant::{ConstData, IntValue};
 pub use error::{IrError, IrErrorKind, IrResult};
