@@ -678,3 +678,9 @@ share, `types_mem` test, x86-64, both table implementations): record 16,
 pointer 16, typedef 24, constant array 32, function with 2 parameters 40,
 dependent sized array (with its profile) 76, `W<int, R>` (with its
 argument list) 72.
+
+## 19. Dump second-string rule (2026-10-28)
+In AST dumps (`spec/ast-dump.md` §2) the second string of `'X':'Y'` is
+clang's **top-level-only desugar** of the written type (`desugar_top`), not
+the canonical type, and is omitted when equal. `print_type` with
+`PrintOptions::CANONICAL` remains the canonical printer for diagnostics.

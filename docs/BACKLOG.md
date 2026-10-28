@@ -37,7 +37,7 @@ Format per `docs/AGENTS.md`. Ids are stable; status moves between
 | WP-043 | C const-store (ConstStore, StringPool, float formatting, printing) | done (2026-10-28). Sema obligation: `&s` vs `&s.x` at equal offsets intern identically — [temp.type] equivalence must compare designators in sema, not ConstValueId |
 | WP-044 | D dump printer (ast-dump.md) | in-progress |
 | WP-045 | E dump loader (text → Ast, M2 subset) | todo (after D) |
-| WP-046 | F+G: `xtask clang-ast` normalizer (clang JSON → ast-dump text) + harness `expect: ast` outcome with goldens | in-progress |
+| WP-046 | F+G: `xtask clang-ast` normalizer + harness `expect: ast` + 32 AST goldens; ast-dump spec reconciled with clang | done (2026-10-28). Decisions: second type string = clang's top-level desugar (types.md §12 note); ParenExpr kept; values clang can't give (floats in ConstantExpr, pointers, long double) are checked by kiln-only `expect: ast` tests later |
 | WP-047 | (merged into WP-046) | — |
 | WP-048 | H parser M2 (decls, declarators, exprs, stmts → sema actions) | in-progress |
 | WP-049 | I sema conversions (implicit casts, arithmetic conversions, literal typing) | in-progress |
