@@ -11,14 +11,14 @@ use kiln_diag::{Diag, DiagEngine, DiagId, DiagOptions};
 use kiln_lex::Interner;
 use kiln_lex::TokKind;
 use kiln_pp::{
-    DirGroup, HeaderSearch, PicModel, PpOptions, PredefConfig, Preprocessor, PrintOptions, RealFs,
-    SearchDirSpec, SearchList, build_predefines, print_macros, print_preprocessed,
+    ClangFeatures, DirGroup, HeaderSearch, IfEval, PicModel, PpOptions, PredefConfig, Preprocessor,
+    PrintOptions, RealFs, SearchDirSpec, SearchList, build_predefines, print_macros,
+    print_preprocessed,
 };
 use kiln_source::{FileId, SourceManager, Span};
 
 use crate::args::{Args, Lang};
 use crate::deps::{DepCallbacks, DepList, on_search_event};
-use crate::stub_features::StubFeatures;
 use crate::toolchain::{LangStd, SystemIncludes, Toolchain};
 use crate::{SharedWriter, make_engine, time};
 
@@ -222,14 +222,19 @@ impl Job<'_> {
         }
         let mut pp = Preprocessor::new(sm, engine, interner, self.pp_options(predefines));
         pp.set_include_resolver(Box::new(search));
-        let p = &a.predef;
-        pp.set_feature_queries(Box::new(StubFeatures::new(
-            self.std.cplusplus,
-            self.std.cxx20(),
-            p.exceptions.unwrap_or(self.std.cplusplus),
-            p.rtti.unwrap_or(self.std.cplusplus),
-            self.toolchain.target,
-        )));
+        let triple = self.toolchain.target.triple;
+        pp.set_if_evaluator(Box::new(IfEval::for_triple(triple)));
+        // `from_args` sees the GNU dialect only through `-std=`; the
+        // effective dialect (clang's default is GNU) goes last so it wins.
+        let mut fargs = a.argv.clone();
+        fargs.push(if self.std.gnu { "-std=gnu++" } else { "-std=c++" }.to_owned());
+        let Some(features) = ClangFeatures::from_args(triple, self.std.lex, &fargs) else {
+            // No silent fallback to `NoFeatures` (unreachable today:
+            // `Target` only has triples the tables cover).
+            Diag::new(DiagId::drv_unsupported_target, Span::INVALID).arg(triple).emit(engine);
+            return;
+        };
+        pp.set_feature_queries(Box::new(features));
         if let Some(d) = &deps {
             pp.set_callbacks(Box::new(DepCallbacks { list: Rc::clone(d), sm }));
         }
