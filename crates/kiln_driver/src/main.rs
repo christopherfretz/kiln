@@ -121,12 +121,12 @@ fn fail(msg: &str) -> ExitCode {
 }
 
 fn main() -> ExitCode {
-    let argv: Vec<String> = std::env::args().skip(1).collect();
-    if argv.iter().any(|a| a == "--version") {
+    let raw: Vec<String> = std::env::args().skip(1).collect();
+    if raw.iter().any(|a| a == "--version") {
         println!("kiln version {} (C++26 frontend, LLVM IR backend)", env!("CARGO_PKG_VERSION"));
         return ExitCode::SUCCESS;
     }
-    let args = parse_args(argv);
+    let args = parse_args(raw);
     if let Some(e) = args.errors.first() {
         return fail(e);
     }
@@ -161,7 +161,9 @@ fn main() -> ExitCode {
         Format::Json => {
             DiagEngine::new(&sm, &args.diag, JsonSink::new(std::io::stderr(), &args.diag))
         }
-        _ => DiagEngine::new(&sm, &args.diag, TextSink::new(std::io::stderr(), &args.diag)),
+        Format::Text => {
+            DiagEngine::new(&sm, &args.diag, TextSink::new(std::io::stderr(), &args.diag))
+        }
     };
     let popts = ParseOptions { std: args.std.unwrap_or(Std::Cxx26) };
     let ast = parse_file(&sm, file, &engine, target, &popts);

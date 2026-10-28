@@ -96,24 +96,7 @@ impl Parser<'_, '_> {
                     return Some(s);
                 }
                 Kw::Return => return self.parse_return(),
-                Kw::Goto => {
-                    self.bump();
-                    if self.at(Punct::Star) {
-                        self.unsupported("computed goto", self.loc());
-                        self.skip_to_semi();
-                        return None;
-                    }
-                    let Some(name) = self.ident() else {
-                        let d = self.s.diag(DiagId::parse_expected, self.loc()).arg("identifier");
-                        self.emit(d);
-                        self.skip_to_semi();
-                        return None;
-                    };
-                    let nl = self.bump().span.lo;
-                    let s = self.s.act_on_goto(name, nl, loc);
-                    self.expect_semi_after_stmt("goto");
-                    return Some(s);
-                }
+                Kw::Goto => return self.parse_goto(),
                 Kw::Try | Kw::CoReturn | Kw::Asm => {
                     self.unsupported(&format!("'{}' statements", k.spelling()), loc);
                     self.skip_statement();
@@ -156,6 +139,26 @@ impl Parser<'_, '_> {
             return Some(self.s.act_on_decl_stmt(&decls, loc));
         }
         self.parse_expression_statement()
+    }
+
+    /// `goto identifier ;` ([stmt.goto]).
+    fn parse_goto(&mut self) -> Option<StmtId> {
+        let loc = self.bump().span.lo;
+        if self.at(Punct::Star) {
+            self.unsupported("computed goto", self.loc());
+            self.skip_to_semi();
+            return None;
+        }
+        let Some(name) = self.ident() else {
+            let d = self.s.diag(DiagId::parse_expected, self.loc()).arg("identifier");
+            self.emit(d);
+            self.skip_to_semi();
+            return None;
+        };
+        let nl = self.bump().span.lo;
+        let s = self.s.act_on_goto(name, nl, loc);
+        self.expect_semi_after_stmt("goto");
+        Some(s)
     }
 
     /// Skips a statement kiln does not parse.

@@ -131,10 +131,7 @@ impl Sema<'_, '_> {
             BaseSpec::Auto => self.ast.types.auto_type(AutoKeyword::Auto, None, None, None, false),
             BaseSpec::Named => ds.named.unwrap_or(QualType::ERROR),
         };
-        let mut cv = ds.cv;
-        if ds.constexpr.is_some() {
-            cv |= Quals::CONST;
-        }
+        let cv = ds.cv;
         if cv.is_empty() { base } else { self.ast.types.qualify(base, cv) }
     }
 
@@ -435,6 +432,12 @@ impl Sema<'_, '_> {
         } else if d.ctx == DeclaratorContext::Member {
             self.act_on_field(ds, ty, d, invalid)
         } else {
+            // [dcl.constexpr]/6: a constexpr object is const.
+            let ty = if ds.constexpr.is_some() && !self.ast.types.is_reference(ty) {
+                self.ast.types.qualify(ty, Quals::CONST)
+            } else {
+                ty
+            };
             self.act_on_var(ds, ty, d, name)
         };
         if invalid {

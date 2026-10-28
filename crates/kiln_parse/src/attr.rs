@@ -101,18 +101,14 @@ impl Parser<'_, '_> {
             let mut scope = default_scope;
             if self.at(Punct::ColonColon) {
                 self.bump();
-                match self.attr_name() {
-                    Some(n) => {
-                        scope = Some(name);
-                        name = n;
-                        self.bump();
-                    }
-                    None => {
-                        self.error_here(DiagId::parse_expected_unqualified_id);
-                        self.skip_until(&[Punct::RSquare], false, false);
-                        break;
-                    }
-                }
+                let Some(n) = self.attr_name() else {
+                    self.error_here(DiagId::parse_expected_unqualified_id);
+                    self.skip_until(&[Punct::RSquare], false, false);
+                    break;
+                };
+                scope = Some(name);
+                name = n;
+                self.bump();
             }
             let args = self.parse_attr_args(name);
             if let Some(l) = self.eat(Punct::Ellipsis) {
@@ -187,14 +183,12 @@ impl Parser<'_, '_> {
             } else {
                 self.parse_assignment_expr()
             };
-            match e {
-                Some(e) => args.push(AttrArg::Expr(e)),
-                None => {
-                    ok = false;
-                    self.skip_until(&[Punct::RParen], false, false);
-                    break;
-                }
-            }
+            let Some(e) = e else {
+                ok = false;
+                self.skip_until(&[Punct::RParen], false, false);
+                break;
+            };
+            args.push(AttrArg::Expr(e));
             if self.eat(Punct::Comma).is_none() {
                 break;
             }

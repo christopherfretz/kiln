@@ -364,7 +364,6 @@ impl Sema<'_, '_> {
             let f = fields[cur];
             let fty = self.ast.decls.get(f).ty().unwrap_or(QualType::ERROR);
             let e = self.init_element(fty, items, pos, lbrace);
-            self.ast.decls.set_flags(f, kiln_ast::decl::DeclFlags::REFERENCED);
             slots[cur] = Some(e);
             if union {
                 union_field = Some(f);

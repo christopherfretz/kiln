@@ -611,13 +611,11 @@ impl Parser<'_, '_> {
                 self.parse_declarator(&mut d);
             }
             if self.eat(Punct::Colon).is_some() {
-                match self.parse_constant_expr() {
-                    Some(w) => d.bit_width = Some(w),
-                    None => {
-                        self.skip_to_semi();
-                        return;
-                    }
-                }
+                let Some(w) = self.parse_constant_expr() else {
+                    self.skip_to_semi();
+                    return;
+                };
+                d.bit_width = Some(w);
             }
             if self.at_attr() {
                 self.parse_attributes(&mut d.attrs);
@@ -775,13 +773,10 @@ impl Parser<'_, '_> {
         if (self.ident().is_some() || self.at(Punct::ColonColon))
             && d.ctx != DeclaratorContext::TypeName
         {
-            let qual = match self.parse_nested_name() {
-                Ok(q) => q,
-                Err(()) => {
-                    d.invalid = true;
-                    None
-                }
-            };
+            let qual = self.parse_nested_name().unwrap_or_else(|()| {
+                d.invalid = true;
+                None
+            });
             if let Some(n) = self.ident() {
                 let l = self.bump().span.lo;
                 d.name = Some((n, l));
@@ -1139,13 +1134,11 @@ impl Parser<'_, '_> {
             let value = if self.at(Punct::LBrace) {
                 InitValue::List(self.parse_init_list()?)
             } else {
-                match self.parse_assignment_expr() {
-                    Some(e) => InitValue::Expr(e),
-                    None => {
-                        self.skip_until(&[Punct::RBrace], false, true);
-                        return Err(());
-                    }
-                }
+                let Some(e) = self.parse_assignment_expr() else {
+                    self.skip_until(&[Punct::RBrace], false, true);
+                    return Err(());
+                };
+                InitValue::Expr(e)
             };
             if let Some(l) = self.eat(Punct::Ellipsis) {
                 self.unsupported("pack expansions", l);
