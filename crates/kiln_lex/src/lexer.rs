@@ -7,7 +7,6 @@ use std::ops::Range;
 use kiln_source::{FileId, Loc, SourceManager, Span};
 
 use crate::diag::{LexDiag, LexDiagKind};
-use crate::interner::Interner;
 use crate::options::{LexMode, LexOptions, Std};
 use crate::phase::{Src, is_hws};
 use crate::token::{Encoding, Punct, TokFlags, TokKind, Token};
@@ -15,6 +14,7 @@ use crate::unicode::{
     NameMatch, is_ascii_ident_continue, is_nfc, is_unicode_whitespace, is_xid_continue,
     is_xid_start, lookup_char_name,
 };
+use kiln_source::symbol::Interner;
 
 /// Result of reading a universal-character-name at a decoded `\`.
 #[derive(Clone, Copy, Debug)]

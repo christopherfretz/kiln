@@ -13,11 +13,16 @@
 //!   [`SourceManager::add_expansion`] entries.
 //! - `#line` presumed locations: [`SourceManager::add_line_directive`] and
 //!   [`SourceManager::presumed_line_col`].
+//! - [`symbol`]: the shared identifier [`Interner`](symbol::Interner) and
+//!   its 4-byte [`Symbol`](symbol::Symbol) handles; [`fx`]: the `FxHash`
+//!   hasher used by every compiler-internal hash table.
 #![forbid(unsafe_code)]
 
 mod arena;
+pub mod fx;
 mod loc;
 mod manager;
+pub mod symbol;
 
 pub use loc::{FileId, Loc, Span};
 pub use manager::{

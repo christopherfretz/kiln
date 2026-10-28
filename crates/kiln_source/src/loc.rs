@@ -66,6 +66,21 @@ impl Loc {
     pub const fn with_offset(self, n: u32) -> Loc {
         Loc(self.0 + n)
     }
+
+    /// The raw `u32` value, for packing a location into a `u32` slot of a
+    /// compact node (e.g. `kiln_ast` statement payloads). Round-trips
+    /// through [`Loc::from_raw`].
+    pub const fn to_raw(self) -> u32 {
+        self.0
+    }
+
+    /// The location with raw value `raw` (the inverse of [`Loc::to_raw`]).
+    /// A value the [`SourceManager`](crate::SourceManager) never allocated
+    /// is an *unknown* location: queries on it return `None` /
+    /// [`Loc::INVALID`], never panic.
+    pub const fn from_raw(raw: u32) -> Loc {
+        Loc(raw)
+    }
 }
 
 impl fmt::Debug for Loc {
