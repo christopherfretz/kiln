@@ -10,7 +10,8 @@ use kiln_source::{FileId, Loc, SourceManager, Span};
 
 use crate::builtin::{FeatureQueries, NoFeatures};
 use crate::callbacks::{FileChange, NoCallbacks, PpCallbacks, PragmaIntroducer, PragmaMessageKind};
-use crate::cond::{IfEvaluator, StubIfEvaluator};
+use crate::cond::IfEvaluator;
+use crate::ifeval::IfEval;
 use crate::include::{IncludeResolver, NoIncludes};
 use crate::macros::{MacroDef, MacroTable, SymMap};
 use crate::options::PpOptions;
@@ -301,7 +302,7 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
             macros: MacroTable::default(),
             frames: Vec::new(),
             resolver: Box::new(NoIncludes),
-            evaluator: Some(Box::new(StubIfEvaluator)),
+            evaluator: Some(Box::new(IfEval::default())),
             features: Box::new(NoFeatures),
             callbacks: Box::new(NoCallbacks),
             markers: VecDeque::new(),
@@ -341,7 +342,8 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
         self.resolver = r;
     }
 
-    /// Installs the `#if` evaluator (default: [`StubIfEvaluator`]).
+    /// Installs the `#if` evaluator (default: [`IfEval::default`], the
+    /// x86-64 Linux character types).
     pub fn set_if_evaluator(&mut self, e: Box<dyn IfEvaluator + 'd>) {
         self.evaluator = Some(e);
     }
