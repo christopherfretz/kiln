@@ -14,11 +14,12 @@ use crate::macros::MacroDef;
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum FileChange {
     /// Lexing enters `file` (the main file, the predefines buffer or an
-    /// `#include`d file). `from` is the `#include` directive's hash, if any.
+    /// `#include`d file).
     Enter {
         /// The entered buffer.
         file: FileId,
-        /// Where it was included from.
+        /// The header-name token of the `#include` that entered it, if any
+        /// (clang's include location).
         from: Option<Loc>,
     },
     /// Lexing returns to `file` after the end of an included file.
@@ -27,7 +28,28 @@ pub enum FileChange {
         file: FileId,
         /// The buffer that ended.
         exited: FileId,
+        /// Where lexing resumes in `file`: the start of the line after the
+        /// `#include`.
+        resume: Loc,
     },
+    /// `#pragma GCC system_header` made the rest of `file` a system header.
+    SystemHeader {
+        /// The current buffer.
+        file: FileId,
+        /// The `system_header` token.
+        at: Loc,
+    },
+}
+
+/// The kind of a message pragma.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum PragmaMessageKind {
+    /// `#pragma message(...)`.
+    Message,
+    /// `#pragma GCC warning "..."`.
+    Warning,
+    /// `#pragma GCC error "..."`.
+    Error,
 }
 
 /// How a pragma was written.
@@ -88,6 +110,19 @@ pub trait PpCallbacks {
     fn pragma(&mut self, info: &PragmaInfo<'_>) -> bool {
         let _ = info;
         false
+    }
+
+    /// `#pragma message`, `#pragma GCC warning` or `#pragma GCC error`
+    /// (already diagnosed by the core). `namespace` is `Some("GCC")` for
+    /// the GCC forms; `text` is the message with escapes resolved.
+    fn pragma_message(
+        &mut self,
+        span: Span,
+        namespace: Option<&str>,
+        kind: PragmaMessageKind,
+        text: &str,
+    ) {
+        let _ = (span, namespace, kind, text);
     }
 
     /// `#ident` / `#sccs` with its string.

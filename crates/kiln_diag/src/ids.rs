@@ -258,7 +258,7 @@ diag_ids! {
     pp_include_next_in_primary = Warning [IncludeNextOutsideHeader] (0) "#include_next in primary source file";
     pp_include_expects_file = Error (0) "expected \"FILENAME\" or <FILENAME>";
     pp_empty_filename = Error (0) "empty filename";
-    pp_embed_ext = Extension (0) "#embed is a C++26 extension";
+    pp_embed_ext = ExtWarn [C23Extensions] (0) "#embed is a Clang extension";
     pp_embed_unknown_param = Error (1) "unknown embed preprocessor parameter '{0}'";
     pp_embed_duplicate_param = Error (1) "cannot specify parameter '{0}' twice in the same '#embed' directive";
     pp_embed_malformed_param = Error (1) "expected '(' or ')' in parameter '{0}'";
@@ -281,6 +281,11 @@ diag_ids! {
     pp_expansion_to_defined = WarningOff [ExpansionToDefined] (0) "macro expansion producing 'defined' has undefined behavior";
     pp_expr_bad_token_binop = Error (0) "token is not a valid binary operator in a preprocessor subexpression";
     pp_expected_rparen_in_expr = Error (0) "expected ')' in preprocessor expression";
+    pp_nested_paren = Error (1) "nested parentheses not permitted in '{0}'";
+    pp_has_warning_invalid_option = ExtWarn [MalformedWarningCheck] (0) "__has_warning expected option name (e.g. \"-Wundef\")";
+    pp_expected_string_literal = Error (1) "expected string literal in {0}";
+    pp_date_time = WarningOff [DateTime] (0) "expansion of date or time macro is not reproducible";
+    pp_malformed_ident = Error (0) "invalid #ident directive";
     pp_expr_unsupported = Error (0) "kiln: this #if expression needs the full evaluator (WP-015)";
     pp_include_unsupported = Fatal (0) "kiln: no include resolver is installed";
 
