@@ -1,9 +1,10 @@
-//! The undefined-behaviour catalogue ([expr.const]/5.7, [defns.undefined]):
+//! The undefined-behaviour catalogue ([expr.const]/5.8, [defns.undefined]):
 //! every core-UB operation reachable in M2 is diagnosed with clang 19's
 //! exact notes. Each golden was checked against `clang++-19 -std=c++2c
 //! -fsyntax-only`; deviations are called out on the test. Golden lines are
 //! `line:col: text` for the source exactly as written (line 1 starts right
-//! after the opening quote).
+//! after the opening quote). Bullet numbers of [expr.const]/5 are those of
+//! N4950 (C++23).
 
 mod common;
 use common::*;
@@ -82,7 +83,7 @@ static_assert(f() == 0);
     );
 }
 
-/// [expr.const]/5.8, [basic.indet]/2: lvalue-to-rvalue conversion of an indeterminate value.
+/// [expr.const]/5.11, [basic.indet]/2: lvalue-to-rvalue conversion of an indeterminate value.
 #[test]
 fn ub_uninit_read() {
     fails_exactly(
@@ -119,7 +120,7 @@ static_assert(f() == 0);
     );
 }
 
-/// [dcl.init.general]/7, [expr.const]/5.8: an uninitialized member read.
+/// [dcl.init.general]/7, [expr.const]/5.11: an uninitialized member read.
 #[test]
 fn ub_uninit_member() {
     fails_exactly(
@@ -508,7 +509,7 @@ static_assert(f() == 0);
     );
 }
 
-/// [expr.rel]/4.3, [expr.const]/5.23: relational comparison of unrelated objects is unspecified.
+/// [expr.rel]/4.3, [expr.const]/5.24: relational comparison of unrelated objects is unspecified.
 #[test]
 fn ub_cmp_cross_alloc() {
     fails_exactly(
@@ -527,7 +528,7 @@ static_assert(f());
     );
 }
 
-/// [expr.eq]/3.1, [expr.const]/5.23: equality with a past-the-end pointer of another object is unspecified.
+/// [expr.eq]/3.1, [expr.const]/5.24: equality with a past-the-end pointer of another object is unspecified.
 #[test]
 fn ub_cmp_past_end() {
     fails_exactly(
@@ -546,7 +547,7 @@ static_assert(!f());
     );
 }
 
-/// [lex.string]/9, [expr.const]/5.23: distinct literal evaluations need not be distinct objects.
+/// [lex.string]/9, [expr.const]/5.24: distinct literal evaluations need not be distinct objects.
 #[test]
 fn ub_cmp_string_literals() {
     fails_exactly(
@@ -578,7 +579,7 @@ static_assert(f() == 0);
     );
 }
 
-/// [class.union]/2, [expr.const]/5.9: reading an inactive union member (type punning).
+/// [class.union]/2, [expr.const]/5.10: reading an inactive union member (type punning).
 #[test]
 fn ub_union_inactive() {
     fails_exactly(
@@ -691,7 +692,7 @@ static_assert(f() == 2);
     );
 }
 
-/// [expr.const]/5.8: reading a non-const variable.
+/// [expr.const]/5.9: reading a non-const variable.
 #[test]
 fn ub_read_non_const() {
     fails_exactly(
@@ -706,7 +707,7 @@ static_assert(g == 1);
     );
 }
 
-/// [expr.const]/5.8, [expr.const]/4: a const double is not usable in constant expressions.
+/// [expr.const]/5.9, [expr.const]/4: a const double is not usable in constant expressions.
 #[test]
 fn ub_read_non_constexpr_double() {
     fails_exactly(
@@ -736,7 +737,7 @@ static_assert(e == 1);
     );
 }
 
-/// [expr.static.cast]/8, [expr.const]/5.7: an unscoped enum value outside its range.
+/// [expr.static.cast]/9, [expr.const]/5.8: an unscoped enum value outside its range.
 /// Deviation: clang 19 diagnoses this only in a constexpr variable's
 /// initializer (`-Wenum-constexpr-conversion`, same wording); the cast is UB
 /// by [expr.static.cast]/9 wherever it is evaluated, so kiln rejects it.

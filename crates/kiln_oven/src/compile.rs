@@ -1495,6 +1495,7 @@ impl Compiler<'_> {
         {
             let op = skip_parens(ast, ast.exprs.operand(e0));
             if ast.exprs.get(op).kind() == ExprKind::DeclRefExpr
+                && ast.exprs.get(op).ty().quals_bits() & 2 == 0
                 && let Some(Local::Reg(r)) = self.locals.get(&ast.exprs.decl(op)).copied()
             {
                 return r;
@@ -1921,14 +1922,21 @@ impl Compiler<'_> {
         let ck = ast.exprs.cast_kind(e);
         let op = ast.exprs.operand(e);
         let ek = ast.exprs.get(e).kind();
+        if ek == ExprKind::CXXReinterpretCastExpr {
+            // [expr.const]/5.15, whatever conversion it performs.
+            self.trap(e, "reinterpret_cast is not allowed in a constant expression");
+            return;
+        }
         match ck {
             CastKind::LValueToRValue => {
-                let opn = self.node(op);
-                if opn.ty().quals_bits() & 2 != 0 {
-                    self.trap(
-                        e,
-                        "read of volatile-qualified type is not allowed in a constant expression",
+                let q = self.node(op).ty();
+                if q.quals_bits() & 2 != 0 {
+                    let msg = format!(
+                        "read of volatile-qualified type '{}' is not allowed in a constant expression",
+                        Oven::type_name(ast, q)
                     );
+                    let loc = self.begin(op);
+                    self.trap_loc(loc, msg);
                     return;
                 }
                 let p = self.lv(op, Access::Read);

@@ -73,6 +73,7 @@ struct Spec {
     consteval: bool,
     constinit: bool,
     is_const: bool,
+    is_volatile: bool,
     is_static: bool,
     is_extern: bool,
     is_typedef: bool,
@@ -360,7 +361,8 @@ impl Parser<'_> {
                 "static" => s.is_static = true,
                 "extern" => s.is_extern = true,
                 "typedef" => s.is_typedef = true,
-                "inline" | "volatile" => {}
+                "inline" => {}
+                "volatile" => s.is_volatile = true,
                 "const" => s.is_const = true,
                 "long" => longs += 1,
                 "short" => short = true,
@@ -457,6 +459,10 @@ impl Parser<'_> {
         if s.is_const {
             let t = s.ty.expect("type");
             s.ty = Some(self.add_const(t));
+        }
+        if s.is_volatile {
+            let t = s.ty.expect("type");
+            s.ty = Some(self.ast.types.qualify(t, Quals::VOLATILE));
         }
         s
     }

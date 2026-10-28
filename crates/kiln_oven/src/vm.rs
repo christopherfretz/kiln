@@ -930,12 +930,26 @@ impl Oven {
         }
     }
 
+    /// The bounds check of a load; the read half of a read-modify-write
+    /// (`k` other than [`ak::READ`]) is checked as the write it precedes, so
+    /// modifying an object visible outside the evaluation is diagnosed
+    /// before reading it ([expr.const]/5.16).
+    fn rmw_check(&self, raw: u64, len: u64, ty: OTy, k: u32) -> Result<(bool, u64, &Alloc), Fault> {
+        let fault = |f| Fault::Mem { f, ak: k, ty, p: raw };
+        let w = k != ak::READ;
+        let (st, abs, a) = self.mem.check(raw, len, w).map_err(fault)?;
+        if w && let Some(f) = write_fault(st, a, ty) {
+            return Err(fault(f));
+        }
+        Ok((st, abs, a))
+    }
+
     fn load(&self, raw: u64, ty: OTy, k: u32) -> Result<u128, Fault> {
         let info = self.types.info(ty);
         let len = value_len(info.size, info.kind);
         let is_ptr = matches!(info.kind, TyKind::Ptr(_) | TyKind::NullPtr);
         let fault = |f| Fault::Mem { f, ak: k, ty, p: raw };
-        let (st, abs, a) = self.mem.check(raw, len, false).map_err(fault)?;
+        let (st, abs, a) = self.rmw_check(raw, len, ty, k)?;
         if a.flags & flags::HAS_UNION != 0 {
             self.union_path(raw, ty, k)?;
         }
@@ -975,7 +989,7 @@ impl Oven {
     fn load_bits(&self, raw: u64, ty: OTy, bit: u32, width: u32, k: u32) -> Result<u128, Fault> {
         let n = u64::from((bit + width).div_ceil(8));
         let fault = |f| Fault::Mem { f, ak: k, ty, p: raw };
-        let (st, abs, a) = self.mem.check(raw, n, false).map_err(fault)?;
+        let (st, abs, a) = self.rmw_check(raw, n, ty, k)?;
         if a.flags & flags::HAS_UNION != 0 {
             self.union_path(raw, ty, k)?;
         }
