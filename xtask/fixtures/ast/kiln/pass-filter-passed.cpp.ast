@@ -1,0 +1,3 @@
+Dumping @FILTER@:
+VarDecl x 'int' cinit
+`-IntegerLiteral 'int' 1

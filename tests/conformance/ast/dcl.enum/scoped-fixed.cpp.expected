@@ -1,0 +1,23 @@
+TranslationUnitDecl
+|-EnumDecl referenced class Small 'unsigned char'
+| |-EnumConstantDecl a 'Small' value=0
+| |-EnumConstantDecl b 'Small' value=3
+| | `-ConstantExpr 'unsigned char' value=3
+| |   `-ImplicitCastExpr 'unsigned char' <IntegralCast>
+| |     `-IntegerLiteral 'int' 3
+| `-EnumConstantDecl c 'Small' value=4
+|-EnumDecl struct Wide 'long long'
+| `-EnumConstantDecl big 'Wide' value=1099511627776
+|   `-ConstantExpr 'long long' value=1099511627776
+|     `-BinaryOperator 'long long' '<<'
+|       |-IntegerLiteral 'long long' 1
+|       `-IntegerLiteral 'int' 40
+|-EnumDecl Plain 'short'
+| `-EnumConstantDecl p0 'Plain' value=0
+`-FunctionDecl to_int 'int (Small)'
+  |-ParmVarDecl used s 'Small'
+  `-CompoundStmt
+    `-ReturnStmt
+      `-CStyleCastExpr 'int' <IntegralCast>
+        `-ImplicitCastExpr 'Small' <LValueToRValue> part_of_explicit_cast
+          `-DeclRefExpr 'Small' lvalue ParmVar 's' 'Small'

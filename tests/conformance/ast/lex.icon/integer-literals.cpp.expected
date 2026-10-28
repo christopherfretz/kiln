@@ -1,0 +1,16 @@
+TranslationUnitDecl
+|-VarDecl dec 'int' cinit
+| `-IntegerLiteral 'int' 42
+|-VarDecl hex 'unsigned int' cinit
+| `-IntegerLiteral 'unsigned int' 255
+|-VarDecl oct 'long' cinit
+| `-IntegerLiteral 'long' 15
+|-VarDecl bin 'unsigned long long' cinit
+| `-IntegerLiteral 'unsigned long long' 10
+|-VarDecl sep 'long long' cinit
+| `-IntegerLiteral 'long long' 1000000
+|-VarDecl sz 'unsigned long' cinit
+| `-IntegerLiteral 'unsigned long' 3
+`-VarDecl big 'unsigned long' cinit
+  `-ImplicitCastExpr 'unsigned long' <IntegralCast>
+    `-IntegerLiteral 'long' 4294967296

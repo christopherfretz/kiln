@@ -1,0 +1,6 @@
+Dumping P::x:
+FieldDecl referenced x 'int'
+
+Dumping x:
+ParmVarDecl used x 'int'
+

@@ -1,0 +1,5 @@
+TranslationUnitDecl
+`-FunctionDecl f 'void ()'
+  `-CompoundStmt
+    `-DeclStmt
+      `-VarDecl unused_var 'int'

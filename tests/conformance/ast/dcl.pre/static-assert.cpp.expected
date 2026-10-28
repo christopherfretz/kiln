@@ -1,0 +1,16 @@
+TranslationUnitDecl
+|-StaticAssertDecl
+| `-CXXBoolLiteralExpr 'bool' true
+|-StaticAssertDecl
+| |-BinaryOperator 'bool' '=='
+| | |-BinaryOperator 'int' '+'
+| | | |-IntegerLiteral 'int' 1
+| | | `-IntegerLiteral 'int' 1
+| | `-IntegerLiteral 'int' 2
+| `-StringLiteral unevaluated "math"
+`-StaticAssertDecl
+  |-BinaryOperator 'bool' '=='
+  | |-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof 'char'
+  | `-ImplicitCastExpr 'unsigned long' <IntegralCast>
+  |   `-IntegerLiteral 'int' 1
+  `-StringLiteral unevaluated "bytes"

@@ -1,0 +1,18 @@
+TranslationUnitDecl
+|-VarDecl plain 'const char *' cinit
+| `-ImplicitCastExpr 'const char *' <ArrayToPointerDecay>
+|   `-StringLiteral 'const char[17]' lvalue "tab\there \"q\" \\ \x{7f}"
+|-VarDecl utf8 'const char8_t *' cinit
+| `-ImplicitCastExpr 'const char8_t *' <ArrayToPointerDecay>
+|   `-StringLiteral 'const char8_t[6]' lvalue u8"\x{c3}\x{a9}\x{e2}\x{82}\x{ac}"
+|-VarDecl utf16 'const char16_t *' cinit
+| `-ImplicitCastExpr 'const char16_t *' <ArrayToPointerDecay>
+|   `-StringLiteral 'const char16_t[5]' lvalue u"a\x{e9}\x{d83d}\x{de00}"
+|-VarDecl utf32 'const char32_t *' cinit
+| `-ImplicitCastExpr 'const char32_t *' <ArrayToPointerDecay>
+|   `-StringLiteral 'const char32_t[3]' lvalue U"\x{1f600}z"
+|-VarDecl joined 'const char *' cinit
+| `-ImplicitCastExpr 'const char *' <ArrayToPointerDecay>
+|   `-StringLiteral 'const char[5]' lvalue "abcd"
+`-VarDecl arr 'const char[4]' cinit
+  `-StringLiteral 'const char[4]' "xyz"

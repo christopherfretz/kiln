@@ -1,0 +1,19 @@
+TranslationUnitDecl
+|-VarDecl file_static 'int' static cinit
+| `-IntegerLiteral 'int' 1
+|-VarDecl declared 'int' extern
+|-VarDecl used inl 'int' inline cinit
+| `-IntegerLiteral 'int' 2
+|-VarDecl defined_extern 'int' extern cinit
+| `-IntegerLiteral 'int' 3
+`-FunctionDecl counter 'int ()'
+  `-CompoundStmt
+    |-DeclStmt
+    | `-VarDecl used calls 'int' static
+    `-ReturnStmt
+      `-BinaryOperator 'int' '+'
+        |-ImplicitCastExpr 'int' <LValueToRValue>
+        | `-UnaryOperator 'int' lvalue prefix '++'
+        |   `-DeclRefExpr 'int' lvalue Var 'calls' 'int'
+        `-ImplicitCastExpr 'int' <LValueToRValue>
+          `-DeclRefExpr 'int' lvalue Var 'inl' 'int'

@@ -1,0 +1,975 @@
+//! The printer: clang JSON nodes to kiln dump lines (`spec/ast-dump.md`
+//! §2–§3), with the §4 deviations applied.
+
+use std::collections::{HashMap, HashSet};
+
+use super::side::{self, TextDecl};
+use super::table::{self, Disposition};
+use super::values::{self, Field, Literals, Record, Types};
+use super::{DumpOptions, escape};
+use crate::util::json::Json;
+
+type Res<T> = Result<T, String>;
+
+pub(super) fn kind(n: &Json) -> &str {
+    n.get("kind").and_then(Json::as_str).unwrap_or("")
+}
+
+fn flag(n: &Json, key: &str) -> bool {
+    matches!(n.get(key), Some(Json::Bool(true)))
+}
+
+fn text<'a>(n: &'a Json, key: &str) -> Option<&'a str> {
+    n.get(key).and_then(Json::as_str)
+}
+
+fn id(n: &Json) -> &str {
+    text(n, "id").unwrap_or("")
+}
+
+fn name(n: &Json) -> Option<&str> {
+    text(n, "name").filter(|s| !s.is_empty())
+}
+
+/// clang writes an absent child slot as `{}`.
+fn is_null(n: &Json) -> bool {
+    n.as_obj().is_some_and(<[_]>::is_empty)
+}
+
+/// A node's children: `inner`, or `array_filler` (an `InitListExpr` with a
+/// filler, whose first entry is the filler).
+fn kids(n: &Json) -> impl Iterator<Item = &Json> {
+    n.as_obj()
+        .into_iter()
+        .flatten()
+        .filter(|(k, _)| k == "inner" || k == "array_filler")
+        .flat_map(|(_, v)| v.as_arr().unwrap_or(&[]))
+}
+
+/// `'type'` or `'type':'desugared'` (only when the strings differ: clang
+/// 19 dumps a written `S` as `'S':'S'` through its `ElaboratedType`, which
+/// kiln does not create).
+fn type_pair(t: Option<&Json>, what: &str) -> Res<String> {
+    let q = t
+        .and_then(|t| text(t, "qualType"))
+        .ok_or_else(|| format!("clang-ast: {what} has no type"))?;
+    Ok(match t.and_then(|t| text(t, "desugaredQualType")) {
+        Some(d) if d != q => format!("'{q}':'{d}'"),
+        _ => format!("'{q}'"),
+    })
+}
+
+fn qual_type(n: &Json) -> &str {
+    n.get("type").and_then(|t| text(t, "qualType")).unwrap_or("")
+}
+
+/// What the whole tree is scanned for before printing.
+#[derive(Default)]
+struct Index<'a> {
+    /// File names in the order clang mentions them.
+    files: Vec<&'a str>,
+    /// The (expansion) file of each declaration with a location.
+    decl_file: HashMap<&'a str, usize>,
+    types: Types,
+    /// Bit-field `FieldDecl` ids.
+    bitfields: HashSet<&'a str>,
+    /// `FunctionDecl`s by id (for `previousDecl`).
+    funcs: HashMap<&'a str, &'a Json>,
+    /// `FunctionDecl`/`VarDecl` ids by pre-order position (the side
+    /// channel's alignment).
+    order: HashMap<&'a str, usize>,
+    /// (class, name) of each position in `order`.
+    order_names: Vec<(&'a str, &'a str)>,
+}
+
+impl<'a> Index<'a> {
+    fn build(root: &'a Json) -> Self {
+        let mut ix = Index::default();
+        let mut cur = None;
+        ix.walk(root, &mut cur);
+        ix
+    }
+
+    /// Follows clang's "file only when it changes" location encoding in
+    /// document order.
+    fn scan(&mut self, v: &'a Json, cur: &mut Option<usize>) {
+        match v {
+            Json::Obj(o) => {
+                if v.get("offset").is_some()
+                    && let Some(f) = text(v, "file")
+                {
+                    let i = self.files.iter().position(|x| *x == f).unwrap_or_else(|| {
+                        self.files.push(f);
+                        self.files.len() - 1
+                    });
+                    *cur = Some(i);
+                }
+                for (_, x) in o {
+                    self.scan(x, cur);
+                }
+            }
+            Json::Arr(a) => {
+                for x in a {
+                    self.scan(x, cur);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn walk(&mut self, n: &'a Json, cur: &mut Option<usize>) {
+        let Some(obj) = n.as_obj() else { return };
+        let k = kind(n);
+        if k == "FunctionDecl" || k == "VarDecl" {
+            self.order.insert(id(n), self.order_names.len());
+            self.order_names.push((k, name(n).unwrap_or("")));
+        }
+        for (key, v) in obj {
+            if key == "inner" || key == "array_filler" {
+                for c in v.as_arr().unwrap_or(&[]) {
+                    self.walk(c, cur);
+                }
+                continue;
+            }
+            self.scan(v, cur);
+            if key == "loc"
+                && k.ends_with("Decl")
+                && !is_null(v)
+                && let Some(f) = *cur
+            {
+                self.decl_file.insert(id(n), f);
+            }
+        }
+        match k {
+            "FunctionDecl" => {
+                self.funcs.insert(id(n), n);
+            }
+            "FieldDecl" if flag(n, "isBitfield") => {
+                self.bitfields.insert(id(n));
+            }
+            "CXXRecordDecl" if flag(n, "completeDefinition") && !flag(n, "isImplicit") => {
+                if let Some(nm) = name(n) {
+                    let fields = kids(n)
+                        .filter(|c| kind(c) == "FieldDecl")
+                        .map(|c| Field {
+                            name: name(c).map(str::to_owned),
+                            ty: qual_type(c).into(),
+                        })
+                        .collect();
+                    let union = text(n, "tagUsed") == Some("union");
+                    self.types.add_record(nm, Record { union, fields });
+                }
+            }
+            "TypedefDecl" | "TypeAliasDecl" => {
+                if let Some(nm) = name(n) {
+                    self.types.add_alias(nm, qual_type(n));
+                }
+            }
+            "EnumDecl" => {
+                if let Some(nm) = name(n) {
+                    self.types.enums.insert(nm.to_owned());
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// A printed node.
+struct Tree {
+    line: String,
+    kids: Vec<Tree>,
+}
+
+fn render(t: &Tree, out: &mut String) {
+    out.push_str(&t.line);
+    out.push('\n');
+    let mut indent = String::new();
+    render_kids(&t.kids, &mut indent, out);
+}
+
+fn render_kids(kids: &[Tree], indent: &mut String, out: &mut String) {
+    for (i, k) in kids.iter().enumerate() {
+        let last = i + 1 == kids.len();
+        out.push_str(indent);
+        out.push_str(if last { "`-" } else { "|-" });
+        out.push_str(&k.line);
+        out.push('\n');
+        let len = indent.len();
+        indent.push_str(if last { "  " } else { "| " });
+        render_kids(&k.kids, indent, out);
+        indent.truncate(len);
+    }
+}
+
+/// A declaration context, for qualified names in filter mode.
+enum Ctx {
+    /// Contributes `name::`.
+    Named(String),
+    /// A function: contributes `f(params)::`, but its direct members print
+    /// unqualified (`NamedDecl::printQualifiedName`).
+    Function(String),
+    /// Transparent (`extern "C"`, an unscoped enumeration).
+    Transparent,
+    /// An unnamed class (clang's spelling of it is not reproduced).
+    Unnamed,
+}
+
+struct Printer<'a, 'f> {
+    ix: Index<'a>,
+    opts: &'f DumpOptions,
+    main_file: &'f str,
+    text: &'f mut (dyn FnMut() -> Result<String, String> + Send),
+    side: Option<Vec<TextDecl>>,
+    /// Function flags derived from the JSON, checked against the side
+    /// channel when it is loaded: (order position, constexpr, consteval,
+    /// implicit-inline).
+    fn_flags: Vec<(usize, bool, bool, bool)>,
+}
+
+/// Prints `root` (a `TranslationUnitDecl`) per `opts`.
+pub fn dump(
+    root: &Json,
+    main_file: &str,
+    opts: &DumpOptions,
+    text: &mut (dyn FnMut() -> Result<String, String> + Send),
+) -> Res<String> {
+    if kind(root) != "TranslationUnitDecl" {
+        return Err("clang-ast: the JSON dump is not a TranslationUnitDecl".into());
+    }
+    let mut p =
+        Printer { ix: Index::build(root), opts, main_file, text, side: None, fn_flags: Vec::new() };
+    let mut out = String::new();
+    match &opts.filter {
+        None => {
+            let mut tu = Tree { line: "TranslationUnitDecl".into(), kids: Vec::new() };
+            for k in kids(root) {
+                if p.top_level(k)?
+                    && let Some(t) = p.node(k).map_err(|e| context(k, &e))?
+                {
+                    tu.kids.push(t);
+                }
+            }
+            render(&tu, &mut out);
+        }
+        Some(f) => {
+            let mut ctx = Vec::new();
+            for k in kids(root) {
+                if p.top_level(k)? {
+                    p.find(k, f, &mut ctx, &mut out).map_err(|e| context(k, &e))?;
+                }
+            }
+        }
+    }
+    p.check_fn_flags()?;
+    Ok(out)
+}
+
+fn context(n: &Json, e: &str) -> String {
+    match name(n) {
+        Some(nm) => format!("{e}\n  (in top-level {} `{nm}`)", kind(n)),
+        None => format!("{e}\n  (in a top-level {})", kind(n)),
+    }
+}
+
+impl<'a> Printer<'a, '_> {
+    fn implicit_dropped(&self, n: &Json) -> bool {
+        kind(n).ends_with("Decl") && flag(n, "isImplicit") && !self.opts.implicit
+    }
+
+    /// Whether a top-level declaration is printed: the main file only,
+    /// unless `all-files`.
+    fn top_level(&self, n: &Json) -> Res<bool> {
+        if self.implicit_dropped(n) {
+            return Ok(false);
+        }
+        if self.opts.all_files {
+            return Ok(true);
+        }
+        match self.ix.decl_file.get(id(n)) {
+            Some(&f) => Ok(self.ix.files[f] == self.main_file),
+            None if flag(n, "isImplicit") => Ok(true),
+            None => Err(format!(
+                "clang-ast: top-level {} {} has no source location",
+                kind(n),
+                name(n).unwrap_or("")
+            )),
+        }
+    }
+
+    /// Filter mode: dumps each matching named declaration under `n`.
+    fn find(&mut self, n: &'a Json, f: &str, ctx: &mut Vec<Ctx>, out: &mut String) -> Res<()> {
+        if is_null(n) || self.implicit_dropped(n) {
+            return Ok(());
+        }
+        let k = kind(n);
+        if k.ends_with("Type") {
+            return Ok(());
+        }
+        if k.ends_with("Decl")
+            && let Some(nm) = name(n)
+        {
+            let q = qualified(ctx, nm)?;
+            if q.contains(f) {
+                if let Some(t) = self.node(n)? {
+                    out.push_str("Dumping ");
+                    out.push_str(&q);
+                    out.push_str(":\n");
+                    render(&t, out);
+                    out.push('\n');
+                }
+                return Ok(());
+            }
+        }
+        let pushed = match k {
+            "CXXRecordDecl" => Some(name(n).map_or(Ctx::Unnamed, |s| Ctx::Named(s.into()))),
+            "EnumDecl" if n.get("scopedEnumTag").is_some() => {
+                Some(name(n).map_or(Ctx::Unnamed, |s| Ctx::Named(s.into())))
+            }
+            "EnumDecl" | "LinkageSpecDecl" => Some(Ctx::Transparent),
+            "FunctionDecl" => Some(Ctx::Function(signature(n))),
+            _ => None,
+        };
+        let has = pushed.is_some();
+        if let Some(c) = pushed {
+            ctx.push(c);
+        }
+        let r = kids(n).try_for_each(|c| self.find(c, f, ctx, out));
+        if has {
+            ctx.pop();
+        }
+        r
+    }
+
+    fn side(&mut self) -> Res<&[TextDecl]> {
+        if self.side.is_none() {
+            let decls = side::parse(&(self.text)()?)?;
+            if decls.len() != self.ix.order_names.len() {
+                return Err(format!(
+                    "clang-ast: clang's text dump has {} FunctionDecl/VarDecl lines but its \
+                     JSON dump has {}; cannot align them",
+                    decls.len(),
+                    self.ix.order_names.len()
+                ));
+            }
+            for (d, (class, nm)) in decls.iter().zip(&self.ix.order_names) {
+                if d.class != *class || !d.names(nm) {
+                    return Err(format!(
+                        "clang-ast: text dump line `{}` does not match JSON {class} `{nm}`",
+                        d.line
+                    ));
+                }
+            }
+            self.side = Some(decls);
+        }
+        Ok(self.side.as_deref().unwrap_or(&[]))
+    }
+
+    fn check_fn_flags(&mut self) -> Res<()> {
+        let Some(side) = &self.side else { return Ok(()) };
+        for &(pos, constexpr, consteval, implicit_inline) in &self.fn_flags {
+            let d = &side[pos];
+            let want = [constexpr, consteval, implicit_inline];
+            let got =
+                [d.has_flag("constexpr"), d.has_flag("consteval"), d.has_flag("implicit-inline")];
+            if want != got {
+                return Err(format!(
+                    "clang-ast: derived FunctionDecl flags [constexpr, consteval, \
+                     implicit-inline] = {want:?} disagree with clang's text dump `{}`",
+                    d.line
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn kid_trees(&mut self, n: &'a Json) -> Res<Vec<Tree>> {
+        let mut v = Vec::new();
+        for c in kids(n) {
+            if let Some(t) = self.node(c)? {
+                v.push(t);
+            }
+        }
+        Ok(v)
+    }
+
+    /// Prints one node and its subtree; `None` when the node is dropped.
+    #[allow(clippy::too_many_lines, reason = "one arm per kept node kind (spec/ast-dump.md §3)")]
+    fn node(&mut self, n: &'a Json) -> Res<Option<Tree>> {
+        if is_null(n) {
+            return Err("clang-ast: unexpected absent child (`{}`) in clang's JSON".into());
+        }
+        let k = kind(n);
+        if self.implicit_dropped(n) {
+            return Ok(None);
+        }
+        match table::lookup(k)? {
+            Disposition::Drop => return Ok(None),
+            Disposition::Unsupported(why) => {
+                let nm = name(n).map(|s| format!(" `{s}`")).unwrap_or_default();
+                return Err(format!("clang-ast: unsupported {k}{nm}: {why}"));
+            }
+            Disposition::Keep => {}
+        }
+        let obj = n.as_obj().unwrap_or(&[]);
+        table::check_keys(k, obj.iter().map(|(key, _)| key.as_str()))?;
+        let line;
+        let mut kids_out = Vec::new();
+        match k {
+            "TypedefDecl" | "TypeAliasDecl" => {
+                line = format!(
+                    "{} {} {}",
+                    decl_head(n, k),
+                    name(n).unwrap_or(""),
+                    type_pair(n.get("type"), k)?
+                );
+                for c in kids(n) {
+                    // The type tree of the aliased type is not printed.
+                    if !kind(c).ends_with("Type")
+                        && let Some(t) = self.node(c)?
+                    {
+                        kids_out.push(t);
+                    }
+                }
+            }
+            "CXXRecordDecl" => {
+                let mut l = decl_head(n, k);
+                push_word(&mut l, text(n, "tagUsed").ok_or("clang-ast: record without a tag")?);
+                push_opt(&mut l, name(n));
+                if flag(n, "completeDefinition") {
+                    push_word(&mut l, "definition");
+                }
+                line = l;
+                kids_out = self.kid_trees(n)?;
+            }
+            "FieldDecl" => {
+                let mut l = decl_head(n, k);
+                push_opt(&mut l, name(n));
+                push_word(&mut l, &type_pair(n.get("type"), k)?);
+                line = l;
+                kids_out = self.kid_trees(n)?;
+            }
+            "EnumDecl" => {
+                let mut l = decl_head(n, k);
+                push_opt(&mut l, text(n, "scopedEnumTag"));
+                push_opt(&mut l, name(n));
+                if let Some(t) = n.get("fixedUnderlyingType") {
+                    push_word(&mut l, &type_pair(Some(t), "fixed underlying type")?);
+                }
+                line = l;
+                let mut next: i128 = 0;
+                for c in kids(n) {
+                    if kind(c) != "EnumConstantDecl" {
+                        if let Some(t) = self.node(c)? {
+                            kids_out.push(t);
+                        }
+                        continue;
+                    }
+                    let value = match kids(c).next() {
+                        Some(init) => enumerator_value(init)?,
+                        None => next,
+                    };
+                    next = value + 1;
+                    table::check_keys(
+                        "EnumConstantDecl",
+                        c.as_obj().unwrap_or(&[]).iter().map(|(key, _)| key.as_str()),
+                    )?;
+                    let line = format!(
+                        "{} {} {} value={value}",
+                        decl_head(c, "EnumConstantDecl"),
+                        name(c).unwrap_or(""),
+                        type_pair(c.get("type"), "EnumConstantDecl")?
+                    );
+                    kids_out.push(Tree { line, kids: self.kid_trees(c)? });
+                }
+            }
+            "LinkageSpecDecl" => {
+                let mut l = decl_head(n, k);
+                push_word(
+                    &mut l,
+                    text(n, "language").ok_or("clang-ast: linkage without language")?,
+                );
+                line = l;
+                kids_out = self.kid_trees(n)?;
+            }
+            "FunctionDecl" => {
+                line = self.function(n)?;
+                kids_out = self.kid_trees(n)?;
+            }
+            "ParmVarDecl" => {
+                let mut l = decl_head(n, k);
+                push_opt(&mut l, name(n));
+                push_word(&mut l, &type_pair(n.get("type"), k)?);
+                line = l;
+                kids_out = self.kid_trees(n)?;
+                if !kids_out.is_empty() {
+                    return Err("clang-ast: default arguments are not in the M2 dump".into());
+                }
+            }
+            "VarDecl" => {
+                line = self.var(n)?;
+                kids_out = self.kid_trees(n)?;
+            }
+            "StaticAssertDecl" => {
+                line = decl_head(n, k);
+                let mut it = kids(n);
+                let cond = it.next().ok_or("clang-ast: static_assert without a condition")?;
+                kids_out.extend(self.node(cond)?);
+                if let Some(msg) = it.next()
+                    && !is_null(msg)
+                {
+                    kids_out.extend(self.node(msg)?);
+                }
+                if it.next().is_some() {
+                    return Err("clang-ast: static_assert with more than two children".into());
+                }
+            }
+            "IntegerLiteral" => {
+                let v = text(n, "value").ok_or("clang-ast: IntegerLiteral without a value")?;
+                line = format!("{} {v}", self.expr_head(n, k)?);
+            }
+            "FloatingLiteral" => {
+                let v = text(n, "value").ok_or("clang-ast: FloatingLiteral without a value")?;
+                line = format!("{} {}", self.expr_head(n, k)?, float_literal(qual_type(n), v)?);
+            }
+            "CharacterLiteral" => {
+                let v = n
+                    .get("value")
+                    .and_then(Json::as_f64)
+                    .ok_or("clang-ast: CharacterLiteral without a value")?;
+                line = format!("{} {}", self.expr_head(n, k)?, v as i64);
+            }
+            "StringLiteral" => {
+                let v = text(n, "value").ok_or("clang-ast: StringLiteral without a value")?;
+                let lit = escape::respell(v)?;
+                line = if qual_type(n) == "NULL TYPE" {
+                    format!("StringLiteral unevaluated {lit}")
+                } else {
+                    format!("{} {lit}", self.expr_head(n, k)?)
+                };
+            }
+            "CXXBoolLiteralExpr" => {
+                let v = match n.get("value") {
+                    Some(Json::Bool(b)) => *b,
+                    _ => return Err("clang-ast: CXXBoolLiteralExpr without a value".into()),
+                };
+                line = format!("{} {v}", self.expr_head(n, k)?);
+            }
+            "DeclRefExpr" => {
+                let r = n.get("referencedDecl").ok_or("clang-ast: DeclRefExpr without a decl")?;
+                let rk = kind(r);
+                let mut l = format!(
+                    "{} {} '{}' {}",
+                    self.expr_head(n, k)?,
+                    rk.strip_suffix("Decl").unwrap_or(rk),
+                    text(r, "name").unwrap_or(""),
+                    type_pair(r.get("type"), "referenced declaration")?
+                );
+                if let Some(why) = text(n, "nonOdrUseReason") {
+                    l.push_str(" non_odr_use_");
+                    l.push_str(why);
+                }
+                line = l;
+                kids_out = self.kid_trees(n)?;
+            }
+            "MemberExpr" => {
+                let arrow = if flag(n, "isArrow") { "->" } else { "." };
+                line = format!(
+                    "{} {arrow}{}",
+                    self.expr_head(n, k)?,
+                    text(n, "name").ok_or("clang-ast: MemberExpr without a name")?
+                );
+                kids_out = self.kid_trees(n)?;
+            }
+            "ImplicitCastExpr" | "CStyleCastExpr" => {
+                let ck = text(n, "castKind").ok_or("clang-ast: cast without a kind")?;
+                let mut l = format!("{} <{ck}>", self.expr_head(n, k)?);
+                if flag(n, "isPartOfExplicitCast") {
+                    l.push_str(" part_of_explicit_cast");
+                }
+                line = l;
+                kids_out = self.kid_trees(n)?;
+            }
+            "UnaryOperator" => {
+                let op = text(n, "opcode").ok_or("clang-ast: operator without an opcode")?;
+                let fix = if flag(n, "isPostfix") { "postfix" } else { "prefix" };
+                let mut l = format!("{} {fix} '{op}'", self.expr_head(n, k)?);
+                if matches!(n.get("canOverflow"), Some(Json::Bool(false))) {
+                    l.push_str(" cannot overflow");
+                }
+                line = l;
+                kids_out = self.kid_trees(n)?;
+            }
+            "BinaryOperator" => {
+                let op = text(n, "opcode").ok_or("clang-ast: operator without an opcode")?;
+                line = format!("{} '{op}'", self.expr_head(n, k)?);
+                kids_out = self.kid_trees(n)?;
+            }
+            "CompoundAssignOperator" => {
+                let op = text(n, "opcode").ok_or("clang-ast: operator without an opcode")?;
+                line = format!(
+                    "{} '{op}' ComputeLHSTy={} ComputeResultTy={}",
+                    self.expr_head(n, k)?,
+                    type_pair(n.get("computeLHSType"), "ComputeLHSTy")?,
+                    type_pair(n.get("computeResultType"), "ComputeResultTy")?
+                );
+                kids_out = self.kid_trees(n)?;
+            }
+            "UnaryExprOrTypeTraitExpr" => {
+                let op = text(n, "name").unwrap_or("");
+                if op != "sizeof" && op != "alignof" {
+                    return Err(format!("clang-ast: unsupported trait `{op}` (not in M2)"));
+                }
+                let mut l = format!("{} {op}", self.expr_head(n, k)?);
+                if let Some(t) = n.get("argType") {
+                    push_word(&mut l, &type_pair(Some(t), "sizeof operand")?);
+                }
+                line = l;
+                kids_out = self.kid_trees(n)?;
+            }
+            "InitListExpr" => {
+                let mut l = self.expr_head(n, k)?;
+                if let Some(f) = n.get("field") {
+                    l.push_str(" field=");
+                    l.push_str(text(f, "name").unwrap_or(""));
+                }
+                line = l;
+                kids_out = self.kid_trees(n)?;
+                if n.get("array_filler").is_some()
+                    && let Some(first) = kids_out.first_mut()
+                {
+                    first.line.insert_str(0, "array_filler: ");
+                }
+            }
+            "ConstantExpr" => {
+                let v = text(n, "value").ok_or_else(|| {
+                    "clang-ast: ConstantExpr without a value (an lvalue or unevaluated \
+                     constant) is not supported"
+                        .to_string()
+                })?;
+                let v = values::constant(&self.ix.types, v, qual_type(n))?;
+                line = format!("{} value={v}", self.expr_head(n, k)?);
+                kids_out = self.kid_trees(n)?;
+            }
+            "CXXNullPtrLiteralExpr"
+            | "ConditionalOperator"
+            | "ParenExpr"
+            | "ArraySubscriptExpr"
+            | "CallExpr"
+            | "ImplicitValueInitExpr" => {
+                line = self.expr_head(n, k)?;
+                kids_out = self.kid_trees(n)?;
+            }
+            "IfStmt" => {
+                let mut l = String::from(k);
+                for (key, word) in
+                    [("hasInit", "has_init"), ("hasVar", "has_var"), ("hasElse", "has_else")]
+                {
+                    if flag(n, key) {
+                        push_word(&mut l, word);
+                    }
+                }
+                if flag(n, "isConstexpr") {
+                    push_word(&mut l, "constexpr");
+                }
+                if flag(n, "isConsteval") {
+                    push_word(
+                        &mut l,
+                        if flag(n, "constevalIsNegated") { "!consteval" } else { "consteval" },
+                    );
+                }
+                line = l;
+                kids_out = self.kid_trees(n)?;
+            }
+            "SwitchStmt" | "WhileStmt" => {
+                let mut l = String::from(k);
+                for (key, word) in [("hasInit", "has_init"), ("hasVar", "has_var")] {
+                    if flag(n, key) {
+                        push_word(&mut l, word);
+                    }
+                }
+                line = l;
+                kids_out = self.kid_trees(n)?;
+            }
+            "ForStmt" => {
+                let slots: Vec<&Json> = kids(n).collect();
+                if slots.len() != 5 {
+                    return Err(format!(
+                        "clang-ast: ForStmt with {} child slots, not 5",
+                        slots.len()
+                    ));
+                }
+                let mut l = String::from(k);
+                for (slot, word) in slots.iter().zip(["has_init", "has_var", "has_cond", "has_inc"])
+                {
+                    if !is_null(slot) {
+                        push_word(&mut l, word);
+                    }
+                }
+                line = l;
+                for slot in slots {
+                    if !is_null(slot)
+                        && let Some(t) = self.node(slot)?
+                    {
+                        kids_out.push(t);
+                    }
+                }
+            }
+            "CompoundStmt" | "DeclStmt" | "NullStmt" | "ReturnStmt" | "BreakStmt"
+            | "ContinueStmt" | "DefaultStmt" | "CaseStmt" | "DoStmt" => {
+                line = k.to_owned();
+                kids_out = self.kid_trees(n)?;
+            }
+            _ => return Err(format!("clang-ast: no printer for kept kind `{k}` (normalizer bug)")),
+        }
+        Ok(Some(Tree { line, kids: kids_out }))
+    }
+
+    /// `Class 'type' [lvalue|xvalue] [bitfield]`.
+    fn expr_head(&self, n: &Json, class: &str) -> Res<String> {
+        let mut s = format!("{class} {}", type_pair(n.get("type"), class)?);
+        match text(n, "valueCategory") {
+            Some("prvalue") => {}
+            Some(c @ ("lvalue" | "xvalue")) => {
+                push_word(&mut s, c);
+                if self.bitfield(n) {
+                    push_word(&mut s, "bitfield");
+                }
+            }
+            other => return Err(format!("clang-ast: {class} with value category {other:?}")),
+        }
+        Ok(s)
+    }
+
+    /// Whether a glvalue designates a bit-field (clang's `OK_BitField`,
+    /// which the JSON dump omits): derived as Sema propagates it.
+    fn bitfield(&self, n: &Json) -> bool {
+        if text(n, "valueCategory") == Some("prvalue") {
+            return false;
+        }
+        let kid = |i: usize| kids(n).nth(i).is_some_and(|c| self.bitfield(c));
+        match kind(n) {
+            "MemberExpr" => {
+                text(n, "referencedMemberDecl").is_some_and(|d| self.ix.bitfields.contains(d))
+            }
+            "ParenExpr" | "CompoundAssignOperator" => kid(0),
+            "BinaryOperator" => match text(n, "opcode") {
+                Some("=") => kid(0),
+                Some(",") => kid(1),
+                _ => false,
+            },
+            "UnaryOperator" => {
+                !flag(n, "isPostfix") && matches!(text(n, "opcode"), Some("++" | "--")) && kid(0)
+            }
+            "ConditionalOperator" => kid(1) || kid(2),
+            _ => false,
+        }
+    }
+
+    fn function(&mut self, n: &'a Json) -> Res<String> {
+        let consteval = flag(n, "immediate");
+        let constexpr = flag(n, "constexpr") && !consteval;
+        let deleted = flag(n, "explicitlyDeleted");
+        let inline = flag(n, "inline");
+        let implicit_inline = !inline && self.inlined(n);
+        if let Some(&pos) = self.ix.order.get(id(n)) {
+            self.fn_flags.push((pos, constexpr, consteval, implicit_inline));
+        }
+        let mut l = decl_head(n, "FunctionDecl");
+        if constexpr {
+            push_word(&mut l, "constexpr");
+        }
+        if consteval {
+            push_word(&mut l, "consteval");
+        }
+        push_word(&mut l, name(n).ok_or("clang-ast: FunctionDecl without a name")?);
+        push_word(&mut l, &type_pair(n.get("type"), "FunctionDecl")?);
+        push_opt(&mut l, text(n, "storageClass"));
+        if inline {
+            push_word(&mut l, "inline");
+        }
+        if deleted {
+            push_word(&mut l, "delete");
+        }
+        if implicit_inline {
+            push_word(&mut l, "implicit-inline");
+        }
+        Ok(l)
+    }
+
+    /// `FunctionDecl::isInlined()`: `inline`, `constexpr`/`consteval` and
+    /// deleted functions are inline, and a redeclaration inherits it.
+    fn inlined(&self, n: &Json) -> bool {
+        let mut cur = Some(n);
+        // Bounded by the redeclaration chain; the cap guards a cycle.
+        for _ in 0..10_000 {
+            let Some(f) = cur else { return false };
+            if flag(f, "inline") || flag(f, "constexpr") || flag(f, "explicitlyDeleted") {
+                return true;
+            }
+            cur = text(f, "previousDecl").and_then(|p| self.ix.funcs.get(p).copied());
+        }
+        false
+    }
+
+    fn var(&mut self, n: &'a Json) -> Res<String> {
+        let mut l = decl_head(n, "VarDecl");
+        push_word(&mut l, name(n).ok_or("clang-ast: VarDecl without a name")?);
+        push_word(&mut l, &type_pair(n.get("type"), "VarDecl")?);
+        push_opt(&mut l, text(n, "storageClass"));
+        for key in ["nrvo", "inline", "constexpr"] {
+            if flag(n, key) {
+                push_word(&mut l, key);
+            }
+        }
+        if let Some(init) = text(n, "init") {
+            push_word(
+                &mut l,
+                match init {
+                    "c" => "cinit",
+                    "call" => "callinit",
+                    "list" => "listinit",
+                    _ => return Err(format!("clang-ast: unsupported init style `{init}`")),
+                },
+            );
+            if flag(n, "constexpr") {
+                let v = self.var_value(n)?;
+                l.push_str(" value=");
+                l.push_str(&v);
+            }
+        }
+        Ok(l)
+    }
+
+    /// The `value=` of a constexpr variable, from the side channel.
+    fn var_value(&mut self, n: &'a Json) -> Res<String> {
+        let pos = *self.ix.order.get(id(n)).ok_or("clang-ast: VarDecl missing from the index")?;
+        let side = self.side()?;
+        let vnode = side[pos].value.clone().ok_or_else(|| {
+            format!(
+                "clang-ast: clang's text dump shows no value for constexpr `{}`",
+                name(n).unwrap_or("")
+            )
+        })?;
+        let v = values::parse(&vnode)?;
+        let mut lits = Literals::default();
+        for c in kids(n) {
+            collect_literals(c, &mut lits);
+        }
+        let null_init = kids(n).next().is_some_and(is_null_pointer_constant);
+        values::print_var(&self.ix.types, &v, qual_type(n), &lits, null_init)
+    }
+}
+
+fn push_word(l: &mut String, w: &str) {
+    l.push(' ');
+    l.push_str(w);
+}
+
+fn push_opt(l: &mut String, w: Option<&str>) {
+    if let Some(w) = w {
+        push_word(l, w);
+    }
+}
+
+/// `Class [implicit] [used|referenced]`.
+fn decl_head(n: &Json, class: &str) -> String {
+    let mut l = String::from(class);
+    if flag(n, "isImplicit") {
+        l.push_str(" implicit");
+    }
+    if flag(n, "isUsed") {
+        l.push_str(" used");
+    } else if flag(n, "isReferenced") {
+        l.push_str(" referenced");
+    }
+    l
+}
+
+/// The qualified name of `nm` declared in `ctx`
+/// (`NamedDecl::printQualifiedName`).
+fn qualified(ctx: &[Ctx], nm: &str) -> Res<String> {
+    if matches!(ctx.last(), Some(Ctx::Function(_))) {
+        return Ok(nm.to_owned());
+    }
+    let mut q = String::new();
+    for c in ctx {
+        match c {
+            Ctx::Named(s) | Ctx::Function(s) => {
+                q.push_str(s);
+                q.push_str("::");
+            }
+            Ctx::Transparent => {}
+            Ctx::Unnamed => {
+                return Err(format!(
+                    "clang-ast: filter mode cannot name `{nm}`, a member of an unnamed class \
+                     or enumeration"
+                ));
+            }
+        }
+    }
+    q.push_str(nm);
+    Ok(q)
+}
+
+/// `f(int, char *, ...)`, as a function prints in a qualified name.
+fn signature(n: &Json) -> String {
+    let params: Vec<&str> = kids(n).filter(|c| kind(c) == "ParmVarDecl").map(qual_type).collect();
+    let mut s = format!("{}({}", name(n).unwrap_or(""), params.join(", "));
+    if flag(n, "variadic") {
+        s.push_str(if params.is_empty() { "..." } else { ", ..." });
+    }
+    s.push(')');
+    s
+}
+
+/// An enumerator's value from its initializer's `ConstantExpr`.
+fn enumerator_value(init: &Json) -> Res<i128> {
+    let mut e = init;
+    while matches!(kind(e), "ImplicitCastExpr" | "ParenExpr") {
+        e = kids(e).next().ok_or("clang-ast: empty cast in an enumerator")?;
+    }
+    let v = (kind(e) == "ConstantExpr").then(|| text(e, "value")).flatten();
+    match v {
+        Some("true") => Ok(1),
+        Some("false") => Ok(0),
+        Some(v) => v
+            .parse::<i128>()
+            .map_err(|_| format!("clang-ast: enumerator value `{v}` is not an integer")),
+        None => Err("clang-ast: enumerator initializer without a ConstantExpr value".into()),
+    }
+}
+
+fn float_literal(ty: &str, v: &str) -> Res<String> {
+    let bad = || format!("clang-ast: FloatingLiteral `{v}` of type `{ty}`");
+    let s = match ty {
+        "float" => format!("{:e}", v.parse::<f32>().map_err(|_| bad())?),
+        "double" => format!("{:e}", v.parse::<f64>().map_err(|_| bad())?),
+        _ => return Err(format!("{}: only float and double are supported", bad())),
+    };
+    Ok(if s == "NaN" { "nan".into() } else { s })
+}
+
+fn collect_literals(n: &Json, lits: &mut Literals) {
+    if matches!(kind(n), "FloatingLiteral" | "IntegerLiteral")
+        && let Some(v) = text(n, "value")
+    {
+        lits.values.push(v.to_owned());
+    }
+    for c in kids(n) {
+        collect_literals(c, lits);
+    }
+}
+
+/// `nullptr`, `0`, or either converted (`<NullToPointer>`) or
+/// parenthesized.
+fn is_null_pointer_constant(n: &Json) -> bool {
+    match kind(n) {
+        "CXXNullPtrLiteralExpr" => true,
+        "IntegerLiteral" => text(n, "value") == Some("0"),
+        "ImplicitCastExpr" | "ParenExpr" | "CStyleCastExpr" => {
+            kids(n).next().is_some_and(is_null_pointer_constant)
+        }
+        _ => false,
+    }
+}

@@ -1,0 +1,28 @@
+TranslationUnitDecl
+|-CXXRecordDecl referenced struct S definition
+| |-FieldDecl c 'char'
+| `-FieldDecl d 'double'
+|-FunctionDecl sizes 'unsigned long (int)'
+| |-ParmVarDecl referenced x 'int'
+| `-CompoundStmt
+|   |-DeclStmt
+|   | `-VarDecl referenced arr 'int[7]'
+|   `-ReturnStmt
+|     `-BinaryOperator 'unsigned long' '+'
+|       |-BinaryOperator 'unsigned long' '+'
+|       | |-BinaryOperator 'unsigned long' '+'
+|       | | |-BinaryOperator 'unsigned long' '+'
+|       | | | |-BinaryOperator 'unsigned long' '+'
+|       | | | | |-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof
+|       | | | | | `-DeclRefExpr 'int' lvalue ParmVar 'x' 'int' non_odr_use_unevaluated
+|       | | | | `-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof 'S'
+|       | | | `-UnaryExprOrTypeTraitExpr 'unsigned long' alignof 'S'
+|       | | `-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof
+|       | |   `-DeclRefExpr 'int[7]' lvalue Var 'arr' 'int[7]' non_odr_use_unevaluated
+|       | `-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof 'int[3]'
+|       `-UnaryExprOrTypeTraitExpr 'unsigned long' alignof 'double'
+`-StaticAssertDecl
+  `-BinaryOperator 'bool' '=='
+    |-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof 'S'
+    `-ImplicitCastExpr 'unsigned long' <IntegralCast>
+      `-IntegerLiteral 'int' 16

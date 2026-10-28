@@ -1,0 +1,30 @@
+TranslationUnitDecl
+|-VarDecl referenced d 'const double' constexpr cinit value=1.5e0
+| `-FloatingLiteral 'double' 1.5e0
+|-VarDecl f 'const float' constexpr cinit value=2.5e-1
+| `-FloatingLiteral 'float' 2.5e-1
+|-VarDecl tiny 'const double' constexpr cinit value=1e-300
+| `-FloatingLiteral 'double' 1e-300
+|-VarDecl neg 'const double' constexpr cinit value=-2e0
+| `-UnaryOperator 'double' prefix '-'
+|   `-FloatingLiteral 'double' 2e0
+|-VarDecl zero 'const double' constexpr cinit value=0e0
+| `-FloatingLiteral 'double' 0e0
+|-VarDecl arr 'const float[3]' constexpr cinit value={1e0, 2.5e0, 0e0}
+| `-InitListExpr 'const float[3]'
+|   |-array_filler: ImplicitValueInitExpr 'const float'
+|   |-FloatingLiteral 'float' 1e0
+|   `-FloatingLiteral 'float' 2.5e0
+`-FunctionDecl sum 'double (float)'
+  |-ParmVarDecl used x 'float'
+  `-CompoundStmt
+    `-ReturnStmt
+      `-BinaryOperator 'double' '+'
+        |-ImplicitCastExpr 'double' <FloatingCast>
+        | `-ImplicitCastExpr 'float' <LValueToRValue>
+        |   `-DeclRefExpr 'float' lvalue ParmVar 'x' 'float'
+        `-BinaryOperator 'double' '*'
+          |-ImplicitCastExpr 'double' <LValueToRValue>
+          | `-DeclRefExpr 'const double' lvalue Var 'd' 'const double' non_odr_use_constant
+          `-ImplicitCastExpr 'double' <IntegralToFloating>
+            `-IntegerLiteral 'int' 3

@@ -1,0 +1,104 @@
+TranslationUnitDecl
+|-CXXRecordDecl referenced struct I definition
+| |-FieldDecl a 'int'
+| `-FieldDecl b 'bool'
+|-CXXRecordDecl referenced struct O definition
+| |-FieldDecl in 'I'
+| |-FieldDecl arr 'int[3]'
+| |-FieldDecl c 'char'
+| `-FieldDecl is 'I[2]'
+|-CXXRecordDecl referenced union U definition
+| |-FieldDecl i 'int'
+| `-FieldDecl s 'I'
+|-VarDecl o 'const O' constexpr cinit value={{1, true}, {4, 0, 0}, 99, {{5, false}, {0, false}}}
+| `-InitListExpr 'const O'
+|   |-InitListExpr 'I'
+|   | |-IntegerLiteral 'int' 1
+|   | `-CXXBoolLiteralExpr 'bool' true
+|   |-InitListExpr 'int[3]'
+|   | |-array_filler: ImplicitValueInitExpr 'int'
+|   | `-IntegerLiteral 'int' 4
+|   |-CharacterLiteral 'char' 99
+|   `-InitListExpr 'I[2]'
+|     |-array_filler: InitListExpr 'I'
+|     | |-ImplicitValueInitExpr 'int'
+|     | `-ImplicitValueInitExpr 'bool'
+|     `-InitListExpr 'I'
+|       |-IntegerLiteral 'int' 5
+|       `-CXXBoolLiteralExpr 'bool' false
+|-VarDecl u1 'const U' constexpr cinit value={.i = 7}
+| `-InitListExpr 'const U' field=i
+|   `-IntegerLiteral 'int' 7
+|-VarDecl u2 'const U' constexpr cinit value={.s = {8, true}}
+| `-InitListExpr 'const U' field=s
+|   `-InitListExpr 'I'
+|     |-IntegerLiteral 'int' 8
+|     `-CXXBoolLiteralExpr 'bool' true
+|-VarDecl u3 'const U' constexpr cinit value={.i = 0}
+| `-InitListExpr 'const U' field=i
+|-VarDecl big 'const int[40]' constexpr cinit value={1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, ...}
+| `-InitListExpr 'const int[40]'
+|   |-array_filler: ImplicitValueInitExpr 'const int'
+|   |-IntegerLiteral 'int' 1
+|   |-IntegerLiteral 'int' 2
+|   |-IntegerLiteral 'int' 3
+|   |-IntegerLiteral 'int' 4
+|   |-IntegerLiteral 'int' 5
+|   |-IntegerLiteral 'int' 6
+|   |-IntegerLiteral 'int' 7
+|   |-IntegerLiteral 'int' 8
+|   |-IntegerLiteral 'int' 9
+|   |-IntegerLiteral 'int' 10
+|   `-IntegerLiteral 'int' 11
+|-VarDecl z 'const int[3]' constexpr cinit value={0, 0, 0}
+| `-InitListExpr 'const int[3]'
+|   `-array_filler: ImplicitValueInitExpr 'const int'
+|-VarDecl ia 'const I[2]' constexpr cinit value={{0, false}, {0, false}}
+| `-InitListExpr 'const I[2]'
+|   `-array_filler: InitListExpr 'const I'
+|     |-ImplicitValueInitExpr 'int'
+|     `-ImplicitValueInitExpr 'bool'
+|-CXXRecordDecl referenced struct Bf definition
+| |-FieldDecl x 'int'
+| | `-ConstantExpr 'int' value=3
+| |   `-IntegerLiteral 'int' 3
+| |-FieldDecl 'int'
+| | `-ConstantExpr 'int' value=2
+| |   `-IntegerLiteral 'int' 2
+| `-FieldDecl y 'int'
+|   `-ConstantExpr 'int' value=4
+|     `-IntegerLiteral 'int' 4
+|-VarDecl bf 'const Bf' constexpr cinit value={-1, 5}
+| `-InitListExpr 'const Bf'
+|   |-UnaryOperator 'int' prefix '-'
+|   | `-IntegerLiteral 'int' 1
+|   `-IntegerLiteral 'int' 5
+|-CXXRecordDecl referenced struct Em definition
+|-VarDecl em 'const Em' constexpr listinit value={}
+| `-InitListExpr 'const Em'
+|-CXXRecordDecl referenced struct D definition
+| |-FieldDecl a 'double'
+| `-FieldDecl b 'float'
+|-VarDecl d 'const double' constexpr cinit value=1.5e0
+| `-FloatingLiteral 'double' 1.5e0
+|-VarDecl f 'const float' constexpr cinit value=1e-1
+| `-FloatingLiteral 'float' 1e-1
+|-VarDecl n 'const double' constexpr cinit value=-2.5e-3
+| `-UnaryOperator 'double' prefix '-'
+|   `-FloatingLiteral 'double' 2.5e-3
+|-VarDecl s 'const D' constexpr cinit value={1e-1, 3e0}
+| `-InitListExpr 'const D'
+|   |-FloatingLiteral 'double' 1e-1
+|   `-ImplicitCastExpr 'float' <IntegralToFloating>
+|     `-IntegerLiteral 'int' 3
+|-VarDecl arr 'const double[3]' constexpr cinit value={1e300, 0e0, 0e0}
+| `-InitListExpr 'const double[3]'
+|   |-array_filler: ImplicitValueInitExpr 'const double'
+|   `-FloatingLiteral 'double' 1e300
+|-VarDecl np 'int *const' constexpr cinit value=nullptr
+| `-ImplicitCastExpr 'int *const' <NullToPointer>
+|   `-CXXNullPtrLiteralExpr 'std::nullptr_t'
+|-VarDecl bb 'const bool' constexpr cinit value=true
+| `-CXXBoolLiteralExpr 'bool' true
+`-VarDecl ch 'const char' constexpr cinit value=97
+  `-CharacterLiteral 'char' 97

@@ -1,0 +1,3 @@
+Dumping x:
+VarDecl x 'int' cinit
+`-IntegerLiteral 'int' 1

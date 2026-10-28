@@ -1,0 +1,42 @@
+TranslationUnitDecl
+`-FunctionDecl assign 'long (int, long, unsigned int)'
+  |-ParmVarDecl used a 'int'
+  |-ParmVarDecl used l 'long'
+  |-ParmVarDecl used u 'unsigned int'
+  `-CompoundStmt
+    |-BinaryOperator 'int' lvalue '='
+    | |-DeclRefExpr 'int' lvalue ParmVar 'a' 'int'
+    | `-IntegerLiteral 'int' 1
+    |-CompoundAssignOperator 'long' lvalue '+=' ComputeLHSTy='long' ComputeResultTy='long'
+    | |-DeclRefExpr 'long' lvalue ParmVar 'l' 'long'
+    | `-ImplicitCastExpr 'long' <IntegralCast>
+    |   `-ImplicitCastExpr 'int' <LValueToRValue>
+    |     `-DeclRefExpr 'int' lvalue ParmVar 'a' 'int'
+    |-CompoundAssignOperator 'int' lvalue '*=' ComputeLHSTy='int' ComputeResultTy='int'
+    | |-DeclRefExpr 'int' lvalue ParmVar 'a' 'int'
+    | `-IntegerLiteral 'int' 2
+    |-CompoundAssignOperator 'unsigned int' lvalue '<<=' ComputeLHSTy='unsigned int' ComputeResultTy='unsigned int'
+    | |-DeclRefExpr 'unsigned int' lvalue ParmVar 'u' 'unsigned int'
+    | `-IntegerLiteral 'int' 3
+    |-CompoundAssignOperator 'unsigned int' lvalue '%=' ComputeLHSTy='unsigned int' ComputeResultTy='unsigned int'
+    | |-DeclRefExpr 'unsigned int' lvalue ParmVar 'u' 'unsigned int'
+    | `-IntegerLiteral 'unsigned int' 5
+    |-BinaryOperator 'int' lvalue '='
+    | |-DeclRefExpr 'int' lvalue ParmVar 'a' 'int'
+    | `-ImplicitCastExpr 'int' <IntegralCast>
+    |   `-ImplicitCastExpr 'long' <LValueToRValue>
+    |     `-BinaryOperator 'long' lvalue '='
+    |       |-DeclRefExpr 'long' lvalue ParmVar 'l' 'long'
+    |       `-ImplicitCastExpr 'long' <IntegralCast>
+    |         `-IntegerLiteral 'int' 4
+    |-CompoundAssignOperator 'int' lvalue '^=' ComputeLHSTy='unsigned int' ComputeResultTy='unsigned int'
+    | |-DeclRefExpr 'int' lvalue ParmVar 'a' 'int'
+    | `-ImplicitCastExpr 'unsigned int' <LValueToRValue>
+    |   `-CompoundAssignOperator 'unsigned int' lvalue '|=' ComputeLHSTy='unsigned int' ComputeResultTy='unsigned int'
+    |     |-DeclRefExpr 'unsigned int' lvalue ParmVar 'u' 'unsigned int'
+    |     `-ImplicitCastExpr 'unsigned int' <IntegralCast>
+    |       `-IntegerLiteral 'int' 1
+    `-ReturnStmt
+      `-ImplicitCastExpr 'long' <LValueToRValue>
+        `-ImplicitCastExpr 'long' xvalue <NoOp>
+          `-DeclRefExpr 'long' lvalue ParmVar 'l' 'long'

@@ -1,0 +1,26 @@
+TranslationUnitDecl
+|-EnumDecl referenced Color
+| |-EnumConstantDecl referenced Red 'Color' value=0
+| |-EnumConstantDecl Green 'Color' value=4
+| | `-ConstantExpr 'int' value=4
+| |   `-IntegerLiteral 'int' 4
+| |-EnumConstantDecl referenced Blue 'Color' value=5
+| |-EnumConstantDecl Neg 'Color' value=-2
+| | `-ConstantExpr 'int' value=-2
+| |   `-UnaryOperator 'int' prefix '-'
+| |     `-IntegerLiteral 'int' 2
+| `-EnumConstantDecl referenced After 'Color' value=-1
+`-FunctionDecl pick 'int (Color)'
+  |-ParmVarDecl used c 'Color'
+  `-CompoundStmt
+    `-ReturnStmt
+      `-ImplicitCastExpr 'int' <IntegralCast>
+        `-ConditionalOperator 'Color'
+          |-BinaryOperator 'bool' '=='
+          | |-ImplicitCastExpr 'int' <IntegralCast>
+          | | `-ImplicitCastExpr 'Color' <LValueToRValue>
+          | |   `-DeclRefExpr 'Color' lvalue ParmVar 'c' 'Color'
+          | `-ImplicitCastExpr 'int' <IntegralCast>
+          |   `-DeclRefExpr 'Color' EnumConstant 'Blue' 'Color'
+          |-DeclRefExpr 'Color' EnumConstant 'After' 'Color'
+          `-DeclRefExpr 'Color' EnumConstant 'Red' 'Color'

@@ -1,0 +1,15 @@
+Dumping two:
+FunctionDecl two 'int (int)'
+|-ParmVarDecl used a 'int'
+`-CompoundStmt
+  |-DeclStmt
+  | `-VarDecl used twofold 'int' cinit
+  |   `-BinaryOperator 'int' '*'
+  |     |-ImplicitCastExpr 'int' <LValueToRValue>
+  |     | `-DeclRefExpr 'int' lvalue ParmVar 'a' 'int'
+  |     `-IntegerLiteral 'int' 2
+  `-ReturnStmt
+    `-ImplicitCastExpr 'int' <LValueToRValue>
+      `-ImplicitCastExpr 'int' xvalue <NoOp>
+        `-DeclRefExpr 'int' lvalue Var 'twofold' 'int'
+

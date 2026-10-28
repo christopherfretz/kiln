@@ -1,0 +1,46 @@
+TranslationUnitDecl
+`-FunctionDecl casts 'long (int, double, void *)'
+  |-ParmVarDecl used i 'int'
+  |-ParmVarDecl used d 'double'
+  |-ParmVarDecl used v 'void *'
+  `-CompoundStmt
+    |-DeclStmt
+    | `-VarDecl used s 'short' cinit
+    |   `-CStyleCastExpr 'short' <NoOp>
+    |     `-ImplicitCastExpr 'short' <IntegralCast> part_of_explicit_cast
+    |       `-ImplicitCastExpr 'int' <LValueToRValue> part_of_explicit_cast
+    |         `-DeclRefExpr 'int' lvalue ParmVar 'i' 'int'
+    |-DeclStmt
+    | `-VarDecl used t 'int' cinit
+    |   `-CStyleCastExpr 'int' <NoOp>
+    |     `-ImplicitCastExpr 'int' <FloatingToIntegral> part_of_explicit_cast
+    |       `-ImplicitCastExpr 'double' <LValueToRValue> part_of_explicit_cast
+    |         `-DeclRefExpr 'double' lvalue ParmVar 'd' 'double'
+    |-DeclStmt
+    | `-VarDecl used ip 'int *' cinit
+    |   `-CStyleCastExpr 'int *' <BitCast>
+    |     `-ImplicitCastExpr 'void *' <LValueToRValue> part_of_explicit_cast
+    |       `-DeclRefExpr 'void *' lvalue ParmVar 'v' 'void *'
+    |-DeclStmt
+    | `-VarDecl used b 'bool' cinit
+    |   `-CStyleCastExpr 'bool' <NoOp>
+    |     `-ImplicitCastExpr 'bool' <PointerToBoolean> part_of_explicit_cast
+    |       `-ImplicitCastExpr 'int *' <LValueToRValue> part_of_explicit_cast
+    |         `-DeclRefExpr 'int *' lvalue Var 'ip' 'int *'
+    |-CStyleCastExpr 'void' <ToVoid>
+    | `-DeclRefExpr 'bool' lvalue Var 'b' 'bool'
+    `-ReturnStmt
+      `-BinaryOperator 'long' '+'
+        |-BinaryOperator 'long' '+'
+        | |-CStyleCastExpr 'long' <NoOp>
+        | | `-ImplicitCastExpr 'long' <IntegralCast> part_of_explicit_cast
+        | |   `-ImplicitCastExpr 'short' <LValueToRValue> part_of_explicit_cast
+        | |     `-DeclRefExpr 'short' lvalue Var 's' 'short'
+        | `-ImplicitCastExpr 'long' <IntegralCast>
+        |   `-ImplicitCastExpr 'int' <LValueToRValue>
+        |     `-DeclRefExpr 'int' lvalue Var 't' 'int'
+        `-ImplicitCastExpr 'long' <IntegralCast>
+          `-CStyleCastExpr 'unsigned char' <NoOp>
+            `-ImplicitCastExpr 'unsigned char' <IntegralCast> part_of_explicit_cast
+              `-ImplicitCastExpr 'int' <LValueToRValue> part_of_explicit_cast
+                `-DeclRefExpr 'int' lvalue ParmVar 'i' 'int'

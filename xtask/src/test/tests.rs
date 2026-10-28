@@ -173,9 +173,12 @@ fn seed_corpus_passes_with_clang() {
         flag(s.pp_linemarkers, "pp-linemarkers");
         flag(s.args.iter().any(|a| a.contains("%{")), "placeholder");
         flag(c.lang == directives::Lang::C, "c-test");
+        flag(s.ast_filter.is_some(), "ast-filter");
     }
     let want = [
         "args",
+        "ast",
+        "ast-filter",
         "c-test",
         "compile-fail",
         "compile-ok",
@@ -331,6 +334,70 @@ fn filter_and_no_tests() {
     assert!(execute(&o).unwrap_err().contains("cannot run compiler"));
 }
 
+/// `expect: ast` with clang as the compiler under test: its JSON dump is
+/// normalized in-process and compared with the golden.
+#[test]
+fn ast_fixtures_with_clang() {
+    if !have_clang() {
+        return;
+    }
+    let results = execute(&clang_opts(&[repo_root().join("xtask/fixtures/ast/clang")])).unwrap();
+    check_fixture_statuses(&results, 8);
+    let by_name = |n: &str| results.iter().find(|r| r.name.ends_with(n)).unwrap();
+    let has = |n: &str, what: &str| {
+        let d = &by_name(n).details;
+        assert!(d.contains(what), "{n}: {what:?} not in\n{d}");
+    };
+    has("fail-golden-differs.cpp", "-  `-IntegerLiteral 'int' 2\n");
+    has("fail-golden-differs.cpp", "+  `-IntegerLiteral 'int' 1\n");
+    has("fail-compile-error.cpp", "expected the AST dump, but the compiler failed");
+    has("fail-unexpected-diag.cpp", "unexpected diagnostics");
+    has("error-missing-golden.cpp", "`cargo xtask clang-ast <test>`");
+    has("error-unsupported-construct.cpp", "unsupported CXXConstructorDecl `P`");
+    let logged = |n: &str, what: &str| by_name(n).log.iter().any(|l| l.contains(what));
+    assert!(
+        logged("pass-dump.cpp", "-Xclang -ast-dump "),
+        "constexpr values come from the text dump"
+    );
+    assert!(!logged("pass-filter.cpp", "-Xclang -ast-dump "), "no constexpr value, no text dump");
+}
+
+/// `expect: ast` with kiln (a fake that prints canned dumps) as the compiler
+/// under test, and clang's normalized dump as the `oracle: clang` check.
+#[test]
+fn ast_fixtures_with_a_fake_kiln() {
+    if !have_clang() {
+        return;
+    }
+    let root = repo_root();
+    let mut o = clang_opts(&[root.join("xtask/fixtures/ast/kiln")]);
+    o.compiler = Some(root.join("xtask/fixtures/fake-kiln/kiln"));
+    let results = execute(&o).unwrap();
+    check_fixture_statuses(&results, 7);
+    let by_name = |n: &str| results.iter().find(|r| r.name.ends_with(n)).unwrap();
+    let has = |n: &str, what: &str| {
+        let d = &by_name(n).details;
+        assert!(d.contains(what), "{n}: {what:?} not in\n{d}");
+    };
+    let logged = |n: &str, what: &str| by_name(n).log.iter().any(|l| l.contains(what));
+    assert!(logged("pass-dump.cpp", "-fsyntax-only -fdump-ast "));
+    assert!(logged("pass-filter-passed.cpp", "-fdump-ast -fdump-ast-filter=x "));
+    has("fail-dump-differs.cpp", "dump differs from fail-dump-differs.cpp.expected");
+    has("fail-oracle-disagrees.cpp", "the oracle's normalized dump differs");
+    has("error-oracle-cannot-normalize.cpp", "cannot normalize the AST dump of clang++-19");
+    // Without `oracle: clang` clang is never run.
+    assert!(!logged("pass-dump.cpp", "clang++-19"));
+    assert!(logged("pass-oracle-agrees.cpp", "clang++-19"));
+
+    // `--no-oracle` drops the oracle half, and with it the oracle failures.
+    o.no_oracle = true;
+    let results = execute(&o).unwrap();
+    for n in ["fail-oracle-disagrees.cpp", "error-oracle-cannot-normalize.cpp"] {
+        let r = results.iter().find(|r| r.name.ends_with(n)).unwrap();
+        assert_eq!(r.status, Status::Pass, "{}", report::format_result(r, true));
+    }
+}
+
 /// `--update` rewrites an existing `.expected`; it never creates one.
 #[test]
 fn update_rewrites_existing_goldens() {
@@ -347,21 +414,39 @@ fn update_rewrites_existing_goldens() {
     std::fs::write(&test, "//@ expect: pp\n#define V 3\nV\n").unwrap();
     std::fs::write(&golden, "stale\n").unwrap();
     std::fs::write(&fresh, "//@ expect: pp\nx\n").unwrap();
+    let ast = dir.join("ast.cpp");
+    let ast_golden = dir.join("ast.cpp.expected");
+    std::fs::write(&ast, "//@ expect: ast\nint v = 3;\n").unwrap();
+    std::fs::write(&ast_golden, "stale\n").unwrap();
+    let fresh_ast = dir.join("fresh-ast.cpp");
+    std::fs::write(&fresh_ast, "//@ expect: ast\nint w;\n").unwrap();
 
     let mut o = clang_opts(std::slice::from_ref(&dir));
     o.no_oracle = true;
+    let status = |r: &[TestResult], n: &str| r.iter().find(|r| r.name.ends_with(n)).unwrap().status;
+    // An `ast` test without a golden is broken, `--update` or not.
+    let others_pass = |r: &[TestResult]| {
+        assert_eq!(status(r, "/fresh-ast.cpp"), Status::Error, "{}", report(r));
+        r.iter().filter(|r| !r.name.ends_with("/fresh-ast.cpp")).all(|r| r.status == Status::Pass)
+    };
     let r = execute(&o).unwrap();
-    assert_eq!(r.iter().find(|r| r.name.ends_with("golden.cpp")).unwrap().status, Status::Fail);
+    assert_eq!(status(&r, "/golden.cpp"), Status::Fail);
+    assert_eq!(status(&r, "/ast.cpp"), Status::Fail);
 
     o.update = true;
     let r = execute(&o).unwrap();
-    assert!(r.iter().all(|r| r.status == Status::Pass), "{}", report(&r));
-    assert_eq!(r.iter().filter(|r| r.updated).count(), 1);
+    assert!(others_pass(&r), "{}", report(&r));
+    assert_eq!(r.iter().filter(|r| r.updated).count(), 2);
     assert_eq!(std::fs::read_to_string(&golden).unwrap(), "3\n");
+    assert_eq!(
+        std::fs::read_to_string(&ast_golden).unwrap(),
+        "TranslationUnitDecl\n`-VarDecl v 'int' cinit\n  `-IntegerLiteral 'int' 3\n"
+    );
     assert!(!dir.join("fresh.cpp.expected").exists());
+    assert!(!dir.join("fresh-ast.cpp.expected").exists());
 
     o.update = false;
     let r = execute(&o).unwrap();
-    assert!(r.iter().all(|r| r.status == Status::Pass), "{}", report(&r));
+    assert!(others_pass(&r), "{}", report(&r));
     std::fs::remove_dir_all(&dir).unwrap();
 }

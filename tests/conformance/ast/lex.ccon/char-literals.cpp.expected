@@ -1,0 +1,17 @@
+TranslationUnitDecl
+|-VarDecl a 'char' cinit
+| `-CharacterLiteral 'char' 97
+|-VarDecl nl 'char' cinit
+| `-CharacterLiteral 'char' 10
+|-VarDecl c16 'char16_t' cinit
+| `-CharacterLiteral 'char16_t' 233
+|-VarDecl c32 'char32_t' cinit
+| `-CharacterLiteral 'char32_t' 128512
+|-VarDecl c8 'char8_t' cinit
+| `-CharacterLiteral 'char8_t' 120
+`-VarDecl mc 'int' cinit
+  `-BinaryOperator 'int' '-'
+    |-ImplicitCastExpr 'int' <IntegralCast>
+    | `-CharacterLiteral 'char' 122
+    `-ImplicitCastExpr 'int' <IntegralCast>
+      `-CharacterLiteral 'char' 97

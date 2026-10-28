@@ -1,0 +1,87 @@
+TranslationUnitDecl
+|-CXXRecordDecl referenced struct P definition
+| |-FieldDecl referenced x 'int'
+| `-FieldDecl y 'int'
+|-EnumDecl E
+| |-EnumConstantDecl A 'E' value=0
+| `-EnumConstantDecl B 'E' value=5
+|   `-ImplicitCastExpr 'unsigned int' <IntegralCast>
+|     `-ConstantExpr 'int' value=5
+|       `-IntegerLiteral 'int' 5
+|-FunctionDecl used constexpr sq 'int (int)' implicit-inline
+| |-ParmVarDecl used x 'int'
+| `-CompoundStmt
+|   `-ReturnStmt
+|     `-BinaryOperator 'int' '*'
+|       |-ImplicitCastExpr 'int' <LValueToRValue>
+|       | `-DeclRefExpr 'int' lvalue ParmVar 'x' 'int'
+|       `-ImplicitCastExpr 'int' <LValueToRValue>
+|         `-DeclRefExpr 'int' lvalue ParmVar 'x' 'int'
+|-StaticAssertDecl
+| |-BinaryOperator 'bool' '=='
+| | |-CallExpr 'int'
+| | | |-ImplicitCastExpr 'int (*)(int)' <FunctionToPointerDecay>
+| | | | `-DeclRefExpr 'int (int)' lvalue Function 'sq' 'int (int)'
+| | | `-IntegerLiteral 'int' 3
+| | `-IntegerLiteral 'int' 9
+| `-StringLiteral unevaluated "msg"
+|-TypedefDecl referenced Arr 'int[3]'
+|-VarDecl ca 'const Arr':'const int[3]' cinit
+| `-InitListExpr 'const Arr':'const int[3]'
+|   |-IntegerLiteral 'int' 1
+|   |-IntegerLiteral 'int' 2
+|   `-IntegerLiteral 'int' 3
+`-FunctionDecl referenced f 'long (char, int *)'
+  |-ParmVarDecl used c 'char'
+  |-ParmVarDecl used p 'int *'
+  `-CompoundStmt
+    |-DeclStmt
+    | `-VarDecl used a 'int[3]' cinit
+    |   `-InitListExpr 'int[3]'
+    |     |-array_filler: ImplicitValueInitExpr 'int'
+    |     `-IntegerLiteral 'int' 1
+    |-DeclStmt
+    | `-VarDecl used q 'P' cinit
+    |   `-InitListExpr 'P'
+    |     |-IntegerLiteral 'int' 1
+    |     `-IntegerLiteral 'int' 2
+    |-ForStmt has_init has_cond has_inc
+    | |-DeclStmt
+    | | `-VarDecl used i 'int' cinit
+    | |   `-IntegerLiteral 'int' 0
+    | |-BinaryOperator 'bool' '<'
+    | | |-ImplicitCastExpr 'int' <LValueToRValue>
+    | | | `-DeclRefExpr 'int' lvalue Var 'i' 'int'
+    | | `-IntegerLiteral 'int' 3
+    | |-UnaryOperator 'int' lvalue prefix '++'
+    | | `-DeclRefExpr 'int' lvalue Var 'i' 'int'
+    | `-CompoundAssignOperator 'int' lvalue '+=' ComputeLHSTy='int' ComputeResultTy='int'
+    |   |-ArraySubscriptExpr 'int' lvalue
+    |   | |-ImplicitCastExpr 'int *' <ArrayToPointerDecay>
+    |   | | `-DeclRefExpr 'int[3]' lvalue Var 'a' 'int[3]'
+    |   | `-ImplicitCastExpr 'int' <LValueToRValue>
+    |   |   `-DeclRefExpr 'int' lvalue Var 'i' 'int'
+    |   `-ImplicitCastExpr 'int' <IntegralCast>
+    |     `-ImplicitCastExpr 'char' <LValueToRValue>
+    |       `-DeclRefExpr 'char' lvalue ParmVar 'c' 'char'
+    |-IfStmt
+    | |-ImplicitCastExpr 'bool' <PointerToBoolean>
+    | | `-ImplicitCastExpr 'int *' <LValueToRValue>
+    | |   `-DeclRefExpr 'int *' lvalue ParmVar 'p' 'int *'
+    | `-ReturnStmt
+    |   `-ImplicitCastExpr 'long' <IntegralCast>
+    |     `-ImplicitCastExpr 'int' <LValueToRValue>
+    |       `-MemberExpr 'int' lvalue .x
+    |         `-DeclRefExpr 'P' lvalue Var 'q' 'P'
+    `-ReturnStmt
+      `-BinaryOperator 'long' '+'
+        |-CStyleCastExpr 'long' <NoOp>
+        | `-ImplicitCastExpr 'long' <IntegralCast> part_of_explicit_cast
+        |   `-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof 'P'
+        `-CallExpr 'long'
+          |-ImplicitCastExpr 'long (*)(char, int *)' <FunctionToPointerDecay>
+          | `-DeclRefExpr 'long (char, int *)' lvalue Function 'f' 'long (char, int *)'
+          |-ImplicitCastExpr 'char' <LValueToRValue>
+          | `-DeclRefExpr 'char' lvalue ParmVar 'c' 'char'
+          `-ImplicitCastExpr 'int *' <NullToPointer>
+            `-CXXNullPtrLiteralExpr 'std::nullptr_t'

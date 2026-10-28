@@ -1,0 +1,15 @@
+TranslationUnitDecl
+|-FunctionDecl used constexpr sq 'int (int)' implicit-inline
+| |-ParmVarDecl used x 'int'
+| `-CompoundStmt
+|   `-ReturnStmt
+|     `-BinaryOperator 'int' '*'
+|       |-ImplicitCastExpr 'int' <LValueToRValue>
+|       | `-DeclRefExpr 'int' lvalue ParmVar 'x' 'int'
+|       `-ImplicitCastExpr 'int' <LValueToRValue>
+|         `-DeclRefExpr 'int' lvalue ParmVar 'x' 'int'
+`-VarDecl k 'const int' constexpr cinit value=9
+  `-CallExpr 'int'
+    |-ImplicitCastExpr 'int (*)(int)' <FunctionToPointerDecay>
+    | `-DeclRefExpr 'int (int)' lvalue Function 'sq' 'int (int)'
+    `-IntegerLiteral 'int' 3

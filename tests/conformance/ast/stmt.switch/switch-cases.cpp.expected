@@ -1,0 +1,59 @@
+TranslationUnitDecl
+|-EnumDecl referenced Op
+| |-EnumConstantDecl referenced Add 'Op' value=0
+| |-EnumConstantDecl referenced Sub 'Op' value=1
+| `-EnumConstantDecl referenced Neg 'Op' value=2
+`-FunctionDecl eval 'int (Op, int, int)'
+  |-ParmVarDecl used op 'Op'
+  |-ParmVarDecl used a 'int'
+  |-ParmVarDecl used b 'int'
+  `-CompoundStmt
+    |-SwitchStmt has_init
+    | |-DeclStmt
+    | | `-VarDecl used t 'int' cinit
+    | |   `-ImplicitCastExpr 'int' <LValueToRValue>
+    | |     `-DeclRefExpr 'int' lvalue ParmVar 'a' 'int'
+    | |-ImplicitCastExpr 'int' <IntegralCast>
+    | | `-ImplicitCastExpr 'Op' <LValueToRValue>
+    | |   `-DeclRefExpr 'Op' lvalue ParmVar 'op' 'Op'
+    | `-CompoundStmt
+    |   |-CaseStmt
+    |   | |-ConstantExpr 'int' value=0
+    |   | | `-ImplicitCastExpr 'int' <IntegralCast>
+    |   | |   `-DeclRefExpr 'Op' EnumConstant 'Add' 'Op'
+    |   | `-ReturnStmt
+    |   |   `-BinaryOperator 'int' '+'
+    |   |     |-ImplicitCastExpr 'int' <LValueToRValue>
+    |   |     | `-DeclRefExpr 'int' lvalue Var 't' 'int'
+    |   |     `-ImplicitCastExpr 'int' <LValueToRValue>
+    |   |       `-DeclRefExpr 'int' lvalue ParmVar 'b' 'int'
+    |   |-CaseStmt
+    |   | |-ConstantExpr 'int' value=1
+    |   | | `-ImplicitCastExpr 'int' <IntegralCast>
+    |   | |   `-DeclRefExpr 'Op' EnumConstant 'Sub' 'Op'
+    |   | `-CaseStmt
+    |   |   |-ConstantExpr 'int' value=2
+    |   |   | `-ImplicitCastExpr 'int' <IntegralCast>
+    |   |   |   `-DeclRefExpr 'Op' EnumConstant 'Neg' 'Op'
+    |   |   `-BinaryOperator 'int' lvalue '='
+    |   |     |-DeclRefExpr 'int' lvalue ParmVar 'a' 'int'
+    |   |     `-UnaryOperator 'int' prefix '-'
+    |   |       `-ImplicitCastExpr 'int' <LValueToRValue>
+    |   |         `-DeclRefExpr 'int' lvalue ParmVar 'a' 'int'
+    |   |-CompoundAssignOperator 'int' lvalue '+=' ComputeLHSTy='int' ComputeResultTy='int'
+    |   | |-DeclRefExpr 'int' lvalue ParmVar 'a' 'int'
+    |   | `-IntegerLiteral 'int' 1
+    |   `-DefaultStmt
+    |     `-BreakStmt
+    |-SwitchStmt
+    | |-ImplicitCastExpr 'int' <LValueToRValue>
+    | | `-DeclRefExpr 'int' lvalue ParmVar 'b' 'int'
+    | `-CaseStmt
+    |   |-ConstantExpr 'int' value=1
+    |   | `-IntegerLiteral 'int' 1
+    |   `-ReturnStmt
+    |     `-IntegerLiteral 'int' 1
+    `-ReturnStmt
+      `-ImplicitCastExpr 'int' <LValueToRValue>
+        `-ImplicitCastExpr 'int' xvalue <NoOp>
+          `-DeclRefExpr 'int' lvalue ParmVar 'a' 'int'

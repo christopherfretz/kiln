@@ -1,0 +1,44 @@
+TranslationUnitDecl
+|-TypedefDecl referenced Int 'int'
+|-TypedefDecl referenced Int2 'Int':'int'
+|-TypeAliasDecl referenced Ptr 'const Int *'
+|-TypeAliasDecl referenced Fn 'int (int, Ptr)'
+|-CXXRecordDecl struct definition
+| `-FieldDecl referenced v 'int'
+|-TypedefDecl referenced Anon 'struct Anon':'Anon'
+|-FunctionDecl twice 'Int2 (Int2)'
+| |-ParmVarDecl used x 'Int2':'int'
+| `-CompoundStmt
+|   `-ReturnStmt
+|     `-BinaryOperator 'int' '*'
+|       |-ImplicitCastExpr 'Int2':'int' <LValueToRValue>
+|       | `-DeclRefExpr 'Int2':'int' lvalue ParmVar 'x' 'Int2':'int'
+|       `-IntegerLiteral 'int' 2
+|-FunctionDecl deref 'int (Ptr)'
+| |-ParmVarDecl used p 'Ptr':'const Int *'
+| `-CompoundStmt
+|   `-ReturnStmt
+|     `-ImplicitCastExpr 'Int':'int' <LValueToRValue>
+|       `-UnaryOperator 'const Int':'const int' lvalue prefix '*' cannot overflow
+|         `-ImplicitCastExpr 'Ptr':'const Int *' <LValueToRValue>
+|           `-DeclRefExpr 'Ptr':'const Int *' lvalue ParmVar 'p' 'Ptr':'const Int *'
+|-FunctionDecl call 'int (Fn *, Int)'
+| |-ParmVarDecl used f 'Fn *'
+| |-ParmVarDecl used a 'Int':'int'
+| `-CompoundStmt
+|   `-ReturnStmt
+|     `-CallExpr 'int'
+|       |-ImplicitCastExpr 'Fn *' <LValueToRValue>
+|       | `-DeclRefExpr 'Fn *' lvalue ParmVar 'f' 'Fn *'
+|       |-ImplicitCastExpr 'Int':'int' <LValueToRValue>
+|       | `-DeclRefExpr 'Int':'int' lvalue ParmVar 'a' 'Int':'int'
+|       `-ImplicitCastExpr 'Ptr':'const Int *' <NoOp>
+|         `-UnaryOperator 'Int *' prefix '&' cannot overflow
+|           `-DeclRefExpr 'Int':'int' lvalue ParmVar 'a' 'Int':'int'
+`-FunctionDecl anon 'int (Anon)'
+  |-ParmVarDecl used a 'Anon'
+  `-CompoundStmt
+    `-ReturnStmt
+      `-ImplicitCastExpr 'int' <LValueToRValue>
+        `-MemberExpr 'int' lvalue .v
+          `-DeclRefExpr 'Anon' lvalue ParmVar 'a' 'Anon'

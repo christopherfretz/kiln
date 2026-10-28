@@ -1,0 +1,24 @@
+TranslationUnitDecl
+`-FunctionDecl seq 'int (int, int)'
+  |-ParmVarDecl used a 'int'
+  |-ParmVarDecl used b 'int'
+  `-CompoundStmt
+    |-DeclStmt
+    | `-VarDecl used c 'int' cinit
+    |   `-ImplicitCastExpr 'int' <LValueToRValue>
+    |     `-ParenExpr 'int' lvalue
+    |       `-BinaryOperator 'int' lvalue ','
+    |         |-UnaryOperator 'int' postfix '++'
+    |         | `-DeclRefExpr 'int' lvalue ParmVar 'a' 'int'
+    |         `-DeclRefExpr 'int' lvalue ParmVar 'b' 'int'
+    |-BinaryOperator 'int' lvalue '='
+    | |-ParenExpr 'int' lvalue
+    | | `-BinaryOperator 'int' lvalue ','
+    | |   |-DeclRefExpr 'int' lvalue ParmVar 'a' 'int'
+    | |   `-DeclRefExpr 'int' lvalue ParmVar 'b' 'int'
+    | `-IntegerLiteral 'int' 7
+    `-ReturnStmt
+      `-ImplicitCastExpr 'int' <LValueToRValue>
+        `-BinaryOperator 'int' lvalue ','
+          |-DeclRefExpr 'int' lvalue Var 'c' 'int'
+          `-DeclRefExpr 'int' lvalue ParmVar 'a' 'int'

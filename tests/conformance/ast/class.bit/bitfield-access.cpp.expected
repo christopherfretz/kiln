@@ -1,0 +1,63 @@
+TranslationUnitDecl
+|-CXXRecordDecl referenced struct Flags definition
+| |-FieldDecl referenced a 'unsigned int'
+| | `-ConstantExpr 'int' value=3
+| |   `-IntegerLiteral 'int' 3
+| |-FieldDecl referenced b 'int'
+| | `-ConstantExpr 'int' value=5
+| |   `-IntegerLiteral 'int' 5
+| |-FieldDecl 'unsigned int'
+| | `-ConstantExpr 'int' value=0
+| |   `-IntegerLiteral 'int' 0
+| `-FieldDecl referenced c 'bool'
+|   `-ConstantExpr 'int' value=1
+|     `-IntegerLiteral 'int' 1
+`-FunctionDecl touch 'int (Flags, bool)'
+  |-ParmVarDecl used f 'Flags'
+  |-ParmVarDecl used which 'bool'
+  `-CompoundStmt
+    |-BinaryOperator 'unsigned int' lvalue bitfield '='
+    | |-MemberExpr 'unsigned int' lvalue bitfield .a
+    | | `-DeclRefExpr 'Flags' lvalue ParmVar 'f' 'Flags'
+    | `-ImplicitCastExpr 'unsigned int' <IntegralCast>
+    |   `-IntegerLiteral 'int' 5
+    |-UnaryOperator 'int' lvalue bitfield prefix '++'
+    | `-MemberExpr 'int' lvalue bitfield .b
+    |   `-DeclRefExpr 'Flags' lvalue ParmVar 'f' 'Flags'
+    |-CompoundAssignOperator 'int' lvalue bitfield '+=' ComputeLHSTy='int' ComputeResultTy='int'
+    | |-MemberExpr 'int' lvalue bitfield .b
+    | | `-DeclRefExpr 'Flags' lvalue ParmVar 'f' 'Flags'
+    | `-IntegerLiteral 'int' 2
+    |-BinaryOperator 'unsigned int' lvalue bitfield '='
+    | |-ParenExpr 'unsigned int' lvalue bitfield
+    | | `-ConditionalOperator 'unsigned int' lvalue bitfield
+    | |   |-ImplicitCastExpr 'bool' <LValueToRValue>
+    | |   | `-DeclRefExpr 'bool' lvalue ParmVar 'which' 'bool'
+    | |   |-MemberExpr 'unsigned int' lvalue bitfield .a
+    | |   | `-DeclRefExpr 'Flags' lvalue ParmVar 'f' 'Flags'
+    | |   `-MemberExpr 'unsigned int' lvalue bitfield .a
+    | |     `-DeclRefExpr 'Flags' lvalue ParmVar 'f' 'Flags'
+    | `-ImplicitCastExpr 'unsigned int' <IntegralCast>
+    |   `-IntegerLiteral 'int' 1
+    |-BinaryOperator 'int' lvalue bitfield '='
+    | |-ParenExpr 'int' lvalue bitfield
+    | | `-BinaryOperator 'int' lvalue bitfield ','
+    | |   |-MemberExpr 'unsigned int' lvalue bitfield .a
+    | |   | `-DeclRefExpr 'Flags' lvalue ParmVar 'f' 'Flags'
+    | |   `-MemberExpr 'int' lvalue bitfield .b
+    | |     `-DeclRefExpr 'Flags' lvalue ParmVar 'f' 'Flags'
+    | `-IntegerLiteral 'int' 3
+    `-ReturnStmt
+      `-BinaryOperator 'int' '+'
+        |-BinaryOperator 'int' '+'
+        | |-ImplicitCastExpr 'int' <IntegralCast>
+        | | `-ImplicitCastExpr 'unsigned int' <LValueToRValue>
+        | |   `-MemberExpr 'unsigned int' lvalue bitfield .a
+        | |     `-DeclRefExpr 'Flags' lvalue ParmVar 'f' 'Flags'
+        | `-ImplicitCastExpr 'int' <LValueToRValue>
+        |   `-MemberExpr 'int' lvalue bitfield .b
+        |     `-DeclRefExpr 'Flags' lvalue ParmVar 'f' 'Flags'
+        `-ImplicitCastExpr 'int' <IntegralCast>
+          `-ImplicitCastExpr 'bool' <LValueToRValue>
+            `-MemberExpr 'bool' lvalue bitfield .c
+              `-DeclRefExpr 'Flags' lvalue ParmVar 'f' 'Flags'

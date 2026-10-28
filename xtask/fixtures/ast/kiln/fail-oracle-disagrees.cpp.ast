@@ -1,0 +1,3 @@
+TranslationUnitDecl
+`-VarDecl x 'int'
+  `-IntegerLiteral 'int' 1

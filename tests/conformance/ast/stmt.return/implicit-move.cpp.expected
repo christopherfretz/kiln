@@ -1,0 +1,25 @@
+TranslationUnitDecl
+|-CXXRecordDecl struct Box definition
+| `-FieldDecl v 'int'
+|-FunctionDecl local 'int ()'
+| `-CompoundStmt
+|   |-DeclStmt
+|   | `-VarDecl used x 'int' cinit
+|   |   `-IntegerLiteral 'int' 1
+|   `-ReturnStmt
+|     `-ImplicitCastExpr 'int' <LValueToRValue>
+|       `-ImplicitCastExpr 'int' xvalue <NoOp>
+|         `-DeclRefExpr 'int' lvalue Var 'x' 'int'
+|-FunctionDecl param 'int (int)'
+| |-ParmVarDecl used p 'int'
+| `-CompoundStmt
+|   `-ReturnStmt
+|     `-ImplicitCastExpr 'int' <LValueToRValue>
+|       `-ImplicitCastExpr 'int' xvalue <NoOp>
+|         `-DeclRefExpr 'int' lvalue ParmVar 'p' 'int'
+|-VarDecl used global_g 'int'
+`-FunctionDecl global 'int ()'
+  `-CompoundStmt
+    `-ReturnStmt
+      `-ImplicitCastExpr 'int' <LValueToRValue>
+        `-DeclRefExpr 'int' lvalue Var 'global_g' 'int'

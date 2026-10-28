@@ -1,0 +1,31 @@
+TranslationUnitDecl
+|-FunctionDecl nope 'void (int)' delete implicit-inline
+| `-ParmVarDecl 'int'
+|-FunctionDecl nope 'void (long)'
+| |-ParmVarDecl 'long'
+| `-CompoundStmt
+|-FunctionDecl used in 'int (int)' inline
+| |-ParmVarDecl used x 'int'
+| `-CompoundStmt
+|   `-ReturnStmt
+|     `-ImplicitCastExpr 'int' <LValueToRValue>
+|       `-ImplicitCastExpr 'int' xvalue <NoOp>
+|         `-DeclRefExpr 'int' lvalue ParmVar 'x' 'int'
+|-FunctionDecl used st 'int ()' static
+| `-CompoundStmt
+|   `-ReturnStmt
+|     `-IntegerLiteral 'int' 0
+|-FunctionDecl used ex 'int ()' extern
+`-FunctionDecl call 'int ()'
+  `-CompoundStmt
+    `-ReturnStmt
+      `-BinaryOperator 'int' '+'
+        |-CallExpr 'int'
+        | |-ImplicitCastExpr 'int (*)(int)' <FunctionToPointerDecay>
+        | | `-DeclRefExpr 'int (int)' lvalue Function 'in' 'int (int)'
+        | `-CallExpr 'int'
+        |   `-ImplicitCastExpr 'int (*)()' <FunctionToPointerDecay>
+        |     `-DeclRefExpr 'int ()' lvalue Function 'st' 'int ()'
+        `-CallExpr 'int'
+          `-ImplicitCastExpr 'int (*)()' <FunctionToPointerDecay>
+            `-DeclRefExpr 'int ()' lvalue Function 'ex' 'int ()'
