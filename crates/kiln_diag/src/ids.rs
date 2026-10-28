@@ -281,6 +281,7 @@ diag_ids! {
     pp_has_include_outside_directive = Error (1) "'{0}' must be used within a preprocessing directive";
     pp_missing_lparen_after = Error (1) "missing '(' after '{0}'";
     pp_feature_check_malformed = Error (0) "builtin feature check macro requires a parenthesized identifier";
+    pp_expected_id_building_module = Error (0) "expected a module name in '__building_module' expression";
     pp_defined_requires_identifier = Error (0) "operator 'defined' requires an identifier";
     pp_expansion_to_defined = Warning [ExpansionToDefined] (0) "macro expansion producing 'defined' has undefined behavior";
     pp_expansion_to_defined_fn = Extension [ExpansionToDefined] (0) "macro expansion producing 'defined' has undefined behavior";

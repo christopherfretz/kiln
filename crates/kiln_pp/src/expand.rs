@@ -1242,6 +1242,12 @@ impl Preprocessor<'_, '_> {
                     0
                 }
             }
+            Builtin::BuildingModule => {
+                if tok.ident().is_none() {
+                    self.emit(Diag::new(DiagId::pp_expected_id_building_module, tok.tok.span));
+                }
+                0
+            }
             _ => match self.feature_ident(&tok) {
                 None => 0,
                 Some(s) => {

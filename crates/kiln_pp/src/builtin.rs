@@ -44,6 +44,9 @@ pub enum Builtin {
     IsTargetEnvironment,
     IsTargetVariantOs,
     IsTargetVariantEnvironment,
+    /// `__building_module(name)`: 1 when compiling module `name` (kiln
+    /// builds no Clang modules, so always 0).
+    BuildingModule,
 }
 
 impl Builtin {
@@ -78,6 +81,7 @@ impl Builtin {
         ("__is_target_environment", Builtin::IsTargetEnvironment),
         ("__is_target_variant_os", Builtin::IsTargetVariantOs),
         ("__is_target_variant_environment", Builtin::IsTargetVariantEnvironment),
+        ("__building_module", Builtin::BuildingModule),
     ];
 
     /// The macro name.
