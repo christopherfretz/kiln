@@ -72,6 +72,11 @@ diag_groups! {
     UnusedResult = "unused-result" [];
     DeprecatedDeclarations = "deprecated-declarations" [];
     ReturnType = "return-type" [];
+    // sema conversions (WP-049)
+    ImplicitlyUnsignedLiteral = "implicitly-unsigned-literal" [];
+    LiteralRange = "literal-range" [];
+    Cxx11Narrowing = "c++11-narrowing" [];
+    Narrowing = "narrowing" [Cxx11Narrowing];
 }
 
 impl Group {

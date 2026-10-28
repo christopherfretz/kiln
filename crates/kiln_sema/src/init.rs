@@ -114,10 +114,10 @@ impl Sema<'_, '_> {
             };
         }
         match init {
-            Initializer::Expr(e) => self.init_from_expr(ty, e),
+            Initializer::Expr(e) => self.init_from_expr(ty, e, ConvCtx::Initialization),
             Initializer::Paren(v, l, r) => {
                 if v.len() == 1 {
-                    self.init_from_expr(ty, v[0])
+                    self.init_from_expr(ty, v[0], ConvCtx::DirectInitialization)
                 } else {
                     self.unsupported("parenthesized initialization with multiple expressions", l);
                     self.builder().recovery(ty, &v, l, r)
@@ -130,14 +130,13 @@ impl Sema<'_, '_> {
         }
     }
 
-    fn init_from_expr(&mut self, ty: QualType, e: ExprId) -> ExprId {
+    fn init_from_expr(&mut self, ty: QualType, e: ExprId, ctx: ConvCtx) -> ExprId {
         let ety = self.ast.exprs.get(e).ty();
         if self.is_error_type(ety) {
             return e;
         }
-        let t = &self.ast.types;
-        if t.is_array(ty) {
-            let elem = t.element(ty).unwrap_or(QualType::ERROR);
+        if self.ast.types.is_array(ty) {
+            let elem = self.ast.types.element(ty).unwrap_or(QualType::ERROR);
             if let Some(s) = self.string_lit_of(e) {
                 if self.is_char_type(elem) {
                     return self.check_string_init(ty, s, e);
@@ -148,52 +147,7 @@ impl Sema<'_, '_> {
             self.emit(msg);
             return e;
         }
-        if let Some(r) = self.ast.types.as_record(ty) {
-            if self.ast.types.as_record(ety).is_some_and(|x| self.ast.first(x) == self.ast.first(r)) {
-                return conv::lvalue_to_rvalue(self, e);
-            }
-            let msg = self
-                .diag(DiagId::sema_stub_no_conversion, self.ast.exprs.get(e).loc())
-                .arg(self.ty_arg(ety))
-                .arg(self.ty_arg(ty));
-            self.emit(msg);
-            return e;
-        }
-        if self.ast.types.is_reference(ty) {
-            return self.bind_reference(ty, e);
-        }
-        self.convert_for_init(e, ty, ConvCtx::Initialization)
-    }
-
-    /// Reference binding ([dcl.init.ref]), for the M2 subset: an lvalue
-    /// of a reference-compatible type binds directly.
-    fn bind_reference(&mut self, ty: QualType, e: ExprId) -> ExprId {
-        let target = self.ast.types.pointee(ty).unwrap_or(QualType::ERROR);
-        let n = *self.ast.exprs.get(e);
-        let lvalue = n.value_category() == kiln_ast::expr::ValueCategory::LValue;
-        let t = &self.ast.types;
-        let same = t.same_unqualified(target, n.ty());
-        let tq = t.effective_quals(target);
-        let eq = t.effective_quals(n.ty());
-        if lvalue && same && tq.contains(eq) {
-            return e;
-        }
-        if lvalue && same {
-            let msg = self
-                .diag(DiagId::sema_stub_incompatible, n.loc())
-                .arg(self.ty_arg(ty))
-                .arg(self.ty_arg(n.ty()));
-            self.emit(msg);
-            return e;
-        }
-        if !tq.is_const() || tq.is_volatile() {
-            let which = if same { "0" } else { "1" };
-            let msg = self.diag(DiagId::sema_rvalue_to_reference, n.loc()).arg(self.ty_arg(target)).arg(which);
-            self.emit(msg);
-            return e;
-        }
-        self.unsupported("binding a reference to a temporary", n.loc());
-        e
+        self.convert_for_init(e, ty, ctx)
     }
 
     /// `char s[N] = "..."` ([dcl.init.string]).
@@ -201,11 +155,9 @@ impl Sema<'_, '_> {
         let sty = self.ast.exprs.get(s).ty();
         let len = self.ast.types.array_size(sty).unwrap_or(0);
         if let Some(n) = self.ast.types.array_size(ty) {
-            if len > n + 1 || (len == n + 1 && false) {
-                self.error(DiagId::sema_init_string_too_long, self.ast.exprs.get(s).loc());
-            } else if len > n {
-                // The terminating NUL does not fit: an error in C++
-                // ([dcl.init.string]/2).
+            // `len` counts the terminating NUL, which must fit in C++
+            // ([dcl.init.string]/2).
+            if len > n {
                 self.error(DiagId::sema_init_string_too_long, self.ast.exprs.get(s).loc());
             }
         }
@@ -314,7 +266,7 @@ impl Sema<'_, '_> {
                     self.check_aggregate(ty, items, pos, false, at, at)
                 } else {
                     *pos += 1;
-                    self.init_from_expr(ty, e)
+                    self.init_from_expr(ty, e, ConvCtx::Initialization)
                 }
             }
         }

@@ -1759,9 +1759,9 @@ impl Sema<'_, '_> {
             return;
         }
         let Some(ty) = self.ast.decls.get(d).ty() else { return };
-        let Some((_, natural)) = target::size_align(&self.ast, ty, &self.target) else { return };
+        let Some((_, natural)) = target::size_align(&self.ast, ty, &self.abi) else { return };
         let requested = if node.b != 0 {
-            QualType::from_raw(node.b).and_then(|t| target::size_align(&self.ast, t, &self.target)).map(|x| x.1)
+            QualType::from_raw(node.b).and_then(|t| target::size_align(&self.ast, t, &self.abi)).map(|x| x.1)
         } else {
             ExprId::from_raw(node.a).and_then(|e| match self.evaluate(e) {
                 Ok(ConstVal::Int(v)) => u64::try_from(v).ok(),

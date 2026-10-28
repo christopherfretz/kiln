@@ -6,7 +6,8 @@
 //! The parser (`kiln_parse`) drives a [`Sema`] through `act_on_*` entry
 //! points, clang's Parser/Sema split: the parser owns the grammar and the
 //! token stream, `Sema` owns scopes, lookup, declarations, types and the
-//! typed AST it builds through [`kiln_ast::AstBuilder`].
+//! typed AST it builds through [`kiln_ast::AstBuilder`]. Conversions live
+//! in [`conv`] (`spec/sema-conv.md`) and literal typing in [`literal`].
 #![forbid(unsafe_code)]
 
 pub mod constfold;
@@ -17,19 +18,20 @@ pub mod expr;
 pub mod init;
 pub mod literal;
 pub mod lookup;
+pub mod names;
 pub mod scope;
 pub mod stmt;
 pub mod target;
 
 use kiln_abi::Target;
-use kiln_ast::types::{PrintOptions, aka, print_type};
+use kiln_ast::types::{PrintOptions, TargetTypes, aka, print_type};
 use kiln_ast::{Ast, AstBuilder, DeclId, ExprId, QualType};
 use kiln_diag::{Diag, DiagEngine, DiagId};
 use kiln_source::{Loc, Span};
 
 pub use constfold::{ConstEvaluator, ConstVal, NotConstant};
-pub use declspec::{BaseSpec, Chunk, DeclSpec, Declarator, DeclaratorContext, ParamInfo, Sign, StorageSpec, Width};
 pub use decl::{NameClass, TagUse};
+pub use declspec::{BaseSpec, Chunk, DeclSpec, Declarator, DeclaratorContext, ParamInfo, Sign, StorageSpec, Width};
 pub use init::{Designator, InitItem, InitList, InitValue, Initializer};
 pub use scope::ScopeKind;
 
@@ -44,8 +46,12 @@ pub struct Sema<'a, 'sm> {
     pub ast: Ast,
     /// Where diagnostics go.
     pub diags: &'a DiagEngine<'sm>,
-    /// The target (layout for `sizeof`/`alignof`, spec/abi.md).
-    pub target: Target,
+    /// The target's builtin type properties (the conversion machinery's
+    /// view of the target, spec/sema-conv.md).
+    pub target: TargetTypes,
+    /// The full target description (layout for `sizeof`/`alignof`,
+    /// spec/abi.md).
+    pub abi: Target,
     pub(crate) scopes: Vec<scope::Scope>,
     /// The current semantic declaration context.
     pub(crate) ctx: DeclId,
@@ -64,14 +70,27 @@ pub struct Sema<'a, 'sm> {
 }
 
 impl<'a, 'sm> Sema<'a, 'sm> {
-    /// A `Sema` over `ast` (whose translation unit becomes the outermost
-    /// scope) reporting to `diags`.
-    pub fn new(ast: Ast, diags: &'a DiagEngine<'sm>, target: Target) -> Self {
+    /// A `Sema` over `ast` reporting to `diags`, for the target whose
+    /// builtin types are `target` (the layout target is picked from its
+    /// `long double` format, [`target::target_for_types`]).
+    pub fn new(ast: Ast, diags: &'a DiagEngine<'sm>, target: TargetTypes) -> Self {
+        let abi = target::target_for_types(&target);
+        Self::with_abi(ast, diags, abi, target)
+    }
+
+    /// A `Sema` over `ast` reporting to `diags` for `abi`.
+    pub fn for_target(ast: Ast, diags: &'a DiagEngine<'sm>, abi: Target) -> Self {
+        let types = abi.types.clone();
+        Self::with_abi(ast, diags, abi, types)
+    }
+
+    fn with_abi(ast: Ast, diags: &'a DiagEngine<'sm>, abi: Target, target: TargetTypes) -> Self {
         let tu = ast.tu;
         Sema {
             ast,
             diags,
             target,
+            abi,
             scopes: vec![scope::Scope::new(ScopeKind::TranslationUnit, Some(tu))],
             ctx: tu,
             func: None,
@@ -87,14 +106,19 @@ impl<'a, 'sm> Sema<'a, 'sm> {
         &mut self.ast
     }
 
-    /// A builder appending to the AST.
+    /// A builder over the AST.
     pub fn builder(&mut self) -> AstBuilder<'_> {
         self.ast.builder()
     }
 
-    /// The target.
-    pub fn target(&self) -> &Target {
+    /// The target's builtin type properties.
+    pub fn target(&self) -> &TargetTypes {
         &self.target
+    }
+
+    /// The full target description.
+    pub fn abi(&self) -> &Target {
+        &self.abi
     }
 
     /// The current semantic declaration context.
@@ -132,8 +156,9 @@ impl<'a, 'sm> Sema<'a, 'sm> {
     /// `q` as clang prints a type argument: `'T'`, or `'T' (aka 'int')`
     /// when the canonical spelling differs.
     pub fn ty_arg(&self, q: QualType) -> String {
-        let s = print_type(&self.ast.types, &self.ast, q, PrintOptions::SUGARED);
-        match aka(&self.ast.types, &self.ast, q) {
+        let names = names::SemaNames::new(self);
+        let s = print_type(&self.ast.types, &names, q, PrintOptions::SUGARED);
+        match aka(&self.ast.types, &names, q) {
             Some(a) => format!("'{s}' (aka '{a}')"),
             None => format!("'{s}'"),
         }
@@ -141,7 +166,8 @@ impl<'a, 'sm> Sema<'a, 'sm> {
 
     /// `q` printed without quotes.
     pub fn ty_str(&self, q: QualType) -> String {
-        print_type(&self.ast.types, &self.ast, q, PrintOptions::SUGARED)
+        let names = names::SemaNames::new(self);
+        print_type(&self.ast.types, &names, q, PrintOptions::SUGARED)
     }
 
     /// The simple name of `d` (empty when unnamed).

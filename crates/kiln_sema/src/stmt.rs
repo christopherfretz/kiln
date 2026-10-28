@@ -503,7 +503,7 @@ impl Sema<'_, '_> {
                 let els = d.els.map_or(Falloff::Always, |e| self.falls_off(e));
                 // A constant condition selects one branch.
                 if let Some(c) = d.cond {
-                    if let Ok(v) = constfold::evaluator(&self.target).evaluate(&self.ast, c) {
+                    if let Ok(v) = constfold::evaluator(&self.abi).evaluate(&self.ast, c) {
                         return if v.truthy() { then } else { els };
                     }
                 }
@@ -517,7 +517,7 @@ impl Sema<'_, '_> {
                 let d = st.loop_data(s);
                 let infinite = match d.cond {
                     None => true,
-                    Some(c) => constfold::evaluator(&self.target).evaluate(&self.ast, c).is_ok_and(|v| v.truthy()),
+                    Some(c) => constfold::evaluator(&self.abi).evaluate(&self.ast, c).is_ok_and(|v| v.truthy()),
                 };
                 if infinite && !d.body.is_some_and(|b| self.contains_break(b, 0)) {
                     Falloff::Never
