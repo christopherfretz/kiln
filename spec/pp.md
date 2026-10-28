@@ -61,7 +61,8 @@ pub trait IncludeResolver {
 pub struct IncludeRequest { kind: IncludeKind, name: String, angled: bool,
     includer: Option<FileId>, lookup_from: Option<u32>, name_span: Span, directive_span: Span }
 pub enum IncludeKind { Include, IncludeNext, Import, HasInclude, HasIncludeNext }
-pub struct ResolvedInclude { file: FileId, lookup_index: Option<u32>, system: bool }
+pub struct ResolvedInclude { file: FileId, lookup_index: Option<u32>, system: bool,
+    extern_c: bool }
 pub struct EmbedRequest { name: String, angled: bool, includer: Option<FileId>,
     limit: Option<u64>, offset: Option<u64>, name_span: Span, query_only: bool }
 pub struct EmbedData { bytes: Vec<u8> }
@@ -77,11 +78,68 @@ The core does the following itself:
   include-guard optimization (below);
 - enters the file and reports `FileChange`.
 
-WP-014 supplies `-I`, `-isystem`, `-iquote`, `-idirafter`, the sysroot,
-the resource directory (`resource/include/`, a copy of clang 19's builtin
-headers), the file cache, and the `system` flag. The clang search order is
-quote directories, then `-I`, then `-isystem`, then the sysroot C++ and C
-includes, then `-idirafter`.
+The core marks a header `extern_c` (line-marker flags `3 4`) when the
+resolver says so or when its includer is extern-C itself.
+
+#### Header search (WP-014): `HeaderSearch`, `SearchList`, `HeaderFs`
+
+`kiln_pp::HeaderSearch<F: HeaderFs>` is the clang 19
+`HeaderSearch::LookupFile` implementation. It runs over a `SearchList`
+and a file system seam: `RealFs` is the disk, and `MemoryFs` is a virtual
+tree for tests. The driver builds the list (`spec/driver.md` "Toolchain").
+
+**Realizing the list.** `SearchList::build(specs, cplusplus, fs)`
+implements clang `InitHeaderSearch::AddPath`, `Realize` and
+`RemoveDuplicates`. It takes `SearchDirSpec { path, group }` in `cc1`
+order.
+
+- A nonexistent directory is dropped with an
+  `ignoring nonexistent directory` note.
+- The list is ordered by group:
+  1. `-iquote`;
+  2. `-I` (`<...>` searches start here: `angled_start`);
+  3. `System`, `ExternCSystem` and the language's `-c-isystem` /
+     `-cxx-isystem`, in their order of appearance;
+  4. `-idirafter`.
+- Duplicates (same directory identity) are dropped within the quote group
+  and within the rest. A user directory duplicated by a later system
+  directory is the one dropped (`as it is a non-system directory that
+  duplicates a system directory`).
+- `verbose_text()` is clang's `-v` block, byte for byte.
+
+**Lookup.**
+
+- An absolute name is opened as is. `#include_next` of an absolute name
+  finds nothing.
+- `"..."`, except `#include_next` from a searched header, first tries the
+  includer's directory. The header is named `parent(includer)/name`, or
+  `./name` when the includer has no directory part (the working directory
+  for `<built-in>`). It inherits the includer's characteristic and has no
+  `lookup_index`.
+- Then the list is searched from index 0 (`"..."`), from `angled_start`
+  (`<...>`), or after the includer's index (`#include_next`). A header
+  found there is named `dir/name`, joined without normalization as
+  `llvm::sys::path::append` does. It takes the directory's characteristic
+  (`User`, `System`, or `ExternCSystem`) and that index.
+- A header reached by an absolute path keeps the characteristic it was
+  last found with (clang `HeaderFileInfo::DirInfo`).
+- The name is the `FileManager` name, so `__FILE__`, line markers,
+  diagnostics and `-M` output all spell it as clang does.
+- Opened paths are cached, and so is the absence of a path.
+
+**`#embed`.** This is clang `LookupEmbedFile`:
+
+- an absolute name is opened as is;
+- for `"..."`, the includer's directory, then the working directory;
+- then the `--embed-dir` directories.
+
+**Observer.** `set_observer(SearchObserver)` reports what the `-M` output
+needs but the `FileChange` callbacks do not see:
+
+- `SearchEvent::HasInclude { file, characteristic }` for each successful
+  `__has_include` / `__has_include_next`;
+- `SearchEvent::Embed { path }` for each `#embed` / `__has_embed` that
+  finds a resource.
 
 For `#embed` the core parses `limit`, `prefix`, `suffix`, `if_empty` and
 their `clang::` / `__x__` spellings. It evaluates `limit` and
@@ -435,7 +493,27 @@ belong to WP-017, which builds them on `macro_defined` and
   text is normally `resource/predefines/<triple>.<std>.txt`, generated
   with `clang -E -dM`; see `resource/README.md`.
 
-  The `<built-in>` buffer holds the predefines, then each `-D` and `-U`.
+  `kiln_pp::build_predefines(base, &PredefConfig, &[CmdMacro])` (WP-014,
+  `predef.rs`) builds the buffer clang's way, in this order:
+  - `__KILN__`, `__KILN_MAJOR__` and `__KILN_MINOR__`;
+  - `# 1 "<built-in>" 3`;
+  - the sorted base macros, adjusted for the dialect and the
+    macro-changing flags (`PredefConfig`; the effects are measured in
+    `resource/README.md`);
+  - clang 19's `#pragma push_macro("__GCC_DESTRUCTIVE_SIZE")` and
+    `push_macro("__GCC_CONSTRUCTIVE_SIZE")`, so that `-D` may redefine
+    them without a warning;
+  - `# 1 "<command line>" 1`;
+  - each `-D` (`X` -> `X 1`, `X=v` -> `X v`) and `-U`, in order;
+  - the driver's `__GCC_HAVE_DWARF2_CFI_ASM`;
+  - `# 1 "<built-in>" 2`.
+
+  Keeping kiln's own macros ahead of the first line marker gives the
+  numbered part of `<built-in>` clang's line count. The
+  `# N "<built-in>" 3` marker before `<command line>` therefore matches
+  clang byte for byte. The printer emits that marker for a flag-1 line
+  marker, as clang's `EnterFile` does for its include location. The flag-to-config
+  mapping is the driver's (`spec/driver.md` "Predefines").
   The builtin macros are entries in the macro table with
   `MacroDef::is_builtin` set, so `#ifdef __has_include` is true.
   `__DATE__`, `__TIME__` and `__TIMESTAMP__` can be fixed through
@@ -446,20 +524,20 @@ belong to WP-017, which builds them on `macro_defined` and
 
 ## Deviations from clang 19 (each covered by a test or a test note)
 
-1. **The `<built-in>` buffer in `-E` mode.** kiln prints only
-   `# 1 "<built-in>" 1` and `# 1 "<file>" 2`. clang also prints
-   `# 1 "<built-in>" 3`, `# 493 "<built-in>" 3` and the
-   `<command line>` buffer, because it splits the buffer into the
-   predefines and the command-line macros. `-P` output is unaffected.
+1. *(Resolved by WP-014.)* The `# N "<built-in>" 3` marker is now
+   printed as clang prints it (see "Predefined macros").
 2. **`#pragma clang|GCC diagnostic` is only validated.** kiln checks the
    syntax and the group names. Changing diagnostic state is phase-7 work
    for the consumer of `PpCallbacks::pragma`.
 3. **`#pragma clang deprecated`, `final` and `restrict_expansion` are
-   passed through.** kiln does not implement their effects on macros.
+   validated and consumed, without effect.** As in clang, `-E` does not
+   print them, but kiln does not implement their warnings on later uses
+   of the macro.
 4. **`#pragma GCC dependency` is consumed without checking the file's
    date.**
-5. **`push_macro` does not suppress redefinition warnings.** It also does
-   not record the "macro was pushed" state.
+5. *(Resolved by WP-014.)* `push_macro` marks the pushed definition as
+   redefinable without a warning (clang
+   `setIsAllowRedefinitionsWithoutWarning`).
 6. **Poisoned identifiers are not checked inside `_Pragma` strings.**
 7. **`AvoidConcat` also separates `[:`, `:]` and `^^`.** This is for C++26
    reflection splicers. It always uses the C++11 and later rules, such as
@@ -485,9 +563,11 @@ belong to WP-017, which builds them on `macro_defined` and
     kiln uses "no token from a macro location" instead.
 15. **`-CC` does not retain comments in `#define` bodies.** Comments in
     macro arguments are retained.
-16. **`__FILE__` names a header by its include spelling.** For example,
-    `"b.h"` comes from `MemoryResolver`, not `"inc/b.h"`. The spelling
-    comes from the resolver, so WP-014 decides it.
+16. **`__FILE__` under `MemoryResolver`.** The test resolver names a
+    header by its include spelling: `"b.h"`, not `"inc/b.h"`.
+    `HeaderSearch` (the driver's resolver) names it exactly as clang
+    does (`dir/name`, `./name`). This is a deviation of the test resolver
+    only.
 
 17. **`#if` evaluation (WP-015 `IfEval`) differs from clang 19 in
     these minor respects, none of which change a group selection:**
@@ -576,8 +656,8 @@ it through kiln_diag's fatal handling; the core itself carries on.
     docs/VALIDATION.md (`expect: pp`).
   - `tests/differential/pp/`, which covers every libc++ 19 header and
     clang's `test/Preprocessor` torture cases. These are compared to
-    `clang -E` token by token and to `-E -P` as text, once WP-014's
-    header search exists.
+    `clang -E` token by token and to `-E -P` as text, through the
+    driver. The status is in `docs/status/pp-parity.md`.
 
 ## Open questions
 
@@ -586,8 +666,10 @@ it through kiln_diag's fatal handling; the core itself carries on.
   the item stream? clang interleaves them with the output text, which
   needs the printer to see them in stream order. Today callbacks run
   synchronously, before queued markers are printed.
-- **The `<built-in>` / `<command line>` split** (deviation 1). Should
-  `<built-in>` become two buffers so that `-E` output is byte-identical?
+- **`SourceManager::add_inclusion` was not added by WP-014** (see
+  "Decisions" below). Every inclusion still starts at `sm.loc(file, 0)`.
+  This needs an owner before "In file included from" notes for repeated
+  inclusions (phase 7).
 - **One location range per inclusion** (below). This is needed before
   "In file included from" notes can distinguish repeated inclusions.
 - **Comments in `#define` bodies under `-CC`** (deviation 15).
@@ -604,9 +686,10 @@ it through kiln_diag's fatal handling; the core itself carries on.
   `Loc` range per `FileId`. "In file included from ..." notes need a range
   per inclusion.
 
-  WP-014 adds `SourceManager::add_inclusion(FileId, included_from: Loc) ->
-  Loc`, a new range that aliases the same text. It also adds a `Lexer`
-  constructor that starts from a base `Loc`. The main file uses the file's
+  The plan was for WP-014 to add `SourceManager::add_inclusion(FileId,
+  included_from: Loc) -> Loc`, a new range that aliases the same text,
+  and a `Lexer` constructor that starts from a base `Loc`. WP-014 did not
+  add them (see "Open questions"). The main file uses the file's
   own range. Spec `source.md` must be updated with that API when it lands.
 
   Until then, kiln_pp enters every inclusion of a file at

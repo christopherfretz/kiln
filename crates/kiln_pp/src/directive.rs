@@ -267,7 +267,7 @@ impl<'a> Preprocessor<'a, '_> {
         if !in_system && let Some(old) = self.macros.get_rc(name).cloned() {
             if self.is_language_builtin(&old) {
                 self.emit(Diag::new(DiagId::pp_builtin_macro_redefined, ntok.tok.span));
-            } else if !self.identical(&old, &def) {
+            } else if !old.allow_redef.get() && !self.identical(&old, &def) {
                 self.emit(
                     Diag::new(DiagId::pp_macro_redefined, def.name_span)
                         .arg(self.interner.as_str(name))
@@ -416,6 +416,7 @@ impl<'a> Preprocessor<'a, '_> {
             builtin: None,
             enabled: std::cell::Cell::new(true),
             used: std::cell::Cell::new(false),
+            allow_redef: std::cell::Cell::new(false),
         })
     }
 
@@ -1201,9 +1202,14 @@ impl Preprocessor<'_, '_> {
         if d == Dir::Import {
             self.once_files.insert(r.file);
         }
-        let system = r.system || self.cur_file_ref().is_some_and(|f| f.system);
+        // clang: the characteristic is the max of the directory's and the
+        // includer's (user < system < extern "C" system).
+        let (cur_sys, cur_c) =
+            self.cur_file_ref().map_or((false, false), |f| (f.system, f.extern_c));
+        let extern_c = r.extern_c || cur_c;
+        let system = r.system || cur_sys || extern_c;
         self.include_depth += 1;
-        self.push_file(r.file, Some(name.tok.span.lo), r.lookup_index, system);
+        self.push_file(r.file, Some(name.tok.span.lo), r.lookup_index, system, extern_c);
     }
 
     /// The `(` of `__has_include` / `__has_embed` and the header name after
@@ -1712,12 +1718,21 @@ impl Preprocessor<'_, '_> {
 
     /// Records a presumed-line change for the line after the current
     /// (finished) directive.
-    fn add_line_note(&mut self, line: u32, name: Option<&str>, system: bool, flag: Option<u8>) {
+    fn add_line_note(
+        &mut self,
+        line: u32,
+        name: Option<&str>,
+        kind: Option<(bool, bool)>,
+        flag: Option<u8>,
+    ) {
         let Some(f) = self.cur_file() else { return };
-        if system {
-            f.system = true;
+        if let Some((system, extern_c)) = kind {
+            // A line marker sets the characteristic of the rest of the
+            // file (flags 3 and 4, or neither: user).
+            f.system = system;
+            f.extern_c = extern_c;
         }
-        let (file, off, system) = (f.file, f.lx.offset(), f.system);
+        let (file, off, system, extern_c) = (f.file, f.lx.offset(), f.system, f.extern_c);
         let text = self.sm.text(file).as_bytes();
         let mut at = off as usize;
         if text.get(at) == Some(&b'\r') {
@@ -1729,7 +1744,7 @@ impl Preprocessor<'_, '_> {
         let at = u32::try_from(at.min(text.len())).unwrap_or(off);
         self.sm.add_line_directive(file, at, line, name);
         let loc = self.sm.loc(file, at);
-        self.file_change(FileChange::Rename { file, at: loc, system, flag });
+        self.file_change(FileChange::Rename { file, at: loc, system, extern_c, flag });
     }
 
     /// `#line digit-sequence "s-char-sequence"opt` ([cpp.line]; the
@@ -1749,7 +1764,7 @@ impl Preprocessor<'_, '_> {
             self.check_eod("line", true);
         }
         self.finish_directive();
-        self.add_line_note(line, name.as_deref(), false, None);
+        self.add_line_note(line, name.as_deref(), None, None);
     }
 
     /// A GNU line marker `# 42 "file" flags...` (clang
@@ -1765,13 +1780,14 @@ impl Preprocessor<'_, '_> {
         if s.kind() == TokKind::Eod {
             self.emit(Diag::new(DiagId::pp_line_marker_ext, s.tok.span));
             self.finish_directive();
-            self.add_line_note(line, None, false, None);
+            self.add_line_note(line, None, None, None);
             return;
         }
         let Ok(name) = self.line_file_name(&s, true) else { return };
         let mut enter = false;
         let mut exit = false;
         let mut system = false;
+        let mut extern_c = false;
         let mut want = [1u32, 2, 3, 4].as_slice();
         loop {
             let f = self.lex_nc();
@@ -1797,6 +1813,7 @@ impl Preprocessor<'_, '_> {
             enter |= v == 1;
             exit |= v == 2;
             system |= v >= 3;
+            extern_c |= v == 4;
             want = &want[(i + if v == 1 { 2 } else { 1 })..];
         }
         let builtin =
@@ -1814,7 +1831,7 @@ impl Preprocessor<'_, '_> {
         }
         self.finish_directive();
         let flag = if enter { Some(1) } else { exit.then_some(2) };
-        self.add_line_note(line, name.as_deref(), system, flag);
+        self.add_line_note(line, name.as_deref(), Some((system, extern_c)), flag);
     }
 
     /// `#ident "text"` / `#sccs "text"`.

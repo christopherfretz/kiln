@@ -372,3 +372,51 @@ fn pragma_stdc() {
 "#,
     );
 }
+
+/// [cpp.pragma]/1
+///
+/// clang consumes these (kiln does not implement their effect on later uses of the macro).
+#[test]
+fn clang_macro_annotations() {
+    common::check(
+        r#"#define A 1
+#define B 2
+#pragma clang deprecated(A)
+#pragma clang deprecated(B, "use C")
+#pragma clang final(A)
+#pragma clang restrict_expansion(B, "no" "t here")
+#pragma GCC deprecated(A)
+x
+"#,
+        r#"#pragma GCC deprecated(A)
+x
+"#,
+    );
+}
+
+/// [cpp.pragma]/1
+#[test]
+fn clang_macro_annotations_malformed() {
+    common::check_diags(
+        r#"#define A 1
+#pragma clang deprecated A
+#pragma clang deprecated(1)
+#pragma clang deprecated(Z)
+#pragma clang deprecated(A, 3)
+#pragma clang deprecated(A x
+#pragma clang final(A, "m")
+#pragma clang deprecated(A) junk
+x
+"#,
+        r#"x
+"#,
+        &[
+            r#"2:26: error: expected ("#,
+            r#"3:26: error: expected identifier"#,
+            r#"4:26: error: no macro named 'Z'"#,
+            r#"5:29: error: expected string literal in #pragma clang deprecated"#,
+            r#"6:28: error: expected )"#,
+            r#"7:22: error: expected )"#,
+        ],
+    );
+}

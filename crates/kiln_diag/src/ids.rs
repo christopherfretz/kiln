@@ -281,6 +281,7 @@ diag_ids! {
     pp_has_include_outside_directive = Error (1) "'{0}' must be used within a preprocessing directive";
     pp_missing_lparen_after = Error (1) "missing '(' after '{0}'";
     pp_feature_check_malformed = Error (0) "builtin feature check macro requires a parenthesized identifier";
+    pp_expected_id_building_module = Error (0) "expected a module name in '__building_module' expression";
     pp_defined_requires_identifier = Error (0) "operator 'defined' requires an identifier";
     pp_expansion_to_defined = Warning [ExpansionToDefined] (0) "macro expansion producing 'defined' has undefined behavior";
     pp_expansion_to_defined_fn = Extension [ExpansionToDefined] (0) "macro expansion producing 'defined' has undefined behavior";
@@ -328,6 +329,7 @@ diag_ids! {
     pp_expr_unsupported = Error (0) "kiln: this #if expression needs the full evaluator (WP-015)";
     pp_include_unsupported = Fatal (0) "kiln: no include resolver is installed";
     pp_expected = Error (1) "expected {0}";
+    pp_pragma_non_macro = Error (1) "no macro named '{0}'";
     pp_pragma_diagnostic_unknown_warning = Warning [UnknownWarningOption] (1) "unknown warning group '{0}', ignored";
     pp_pragma_diagnostic_invalid = Warning [UnknownPragmas] (0) "pragma diagnostic expected 'error', 'warning', 'ignored', 'fatal', 'push', or 'pop'";
     pp_pragma_diagnostic_invalid_token = Warning [UnknownPragmas] (0) "unexpected token in pragma diagnostic";
@@ -349,6 +351,17 @@ diag_ids! {
     drv_invalid_int_value = Error (2) "invalid integral value '{1}' in '{0}'";
     drv_invalid_value = Error (2) "invalid value '{1}' in '{0}'";
     drv_ignoring_tabstop = Warning (2) "ignoring invalid -ftabstop value '{0}', using default value {1}";
+    drv_no_such_file = Error (1) "no such file or directory: '{0}'";
+    drv_missing_argument = Error (2) "argument to '{0}' is missing (expected {1} value)";
+    drv_argument_not_allowed_with = Error (2) "invalid argument '{0}' not allowed with '{1}'";
+    drv_invalid_stdlib_name = Error (1) "invalid library name in argument '{0}'";
+    drv_language_not_recognized = Error (1) "language not recognized: '{0}'";
+    drv_framework_dir_ignored = Warning (1) "ignoring framework directory '{0}' (kiln does not search frameworks)";
+    drv_not_implemented = Error (1) "{0} is not implemented yet";
+    drv_unsupported_target = Error (1) "unsupported target '{0}' (kiln supports aarch64 and x86_64 Linux)";
+    drv_cannot_open_output = Error (2) "unable to open output file '{0}': '{1}'";
+    drv_cannot_read_input = Fatal (2) "cannot read '{0}': {1}";
+    drv_cannot_read_predefines = Fatal (2) "cannot read the predefined macros '{0}': {1}";
 
     // ----- sema conversions (WP-049): [conv], [expr.arith.conv], [lex.*con] --
     // Type arguments are passed pre-quoted, with clang's `(aka '...')`

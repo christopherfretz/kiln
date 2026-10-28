@@ -23,6 +23,9 @@ pub enum FileChange {
         from: Option<Loc>,
         /// The entered buffer is a system header.
         system: bool,
+        /// The entered buffer is an `extern "C"` system header (found in a
+        /// `-internal-externc-isystem` directory; line-marker flag 4).
+        extern_c: bool,
     },
     /// Lexing returns to `file` after the end of an included file.
     Exit {
@@ -35,6 +38,8 @@ pub enum FileChange {
         resume: Loc,
         /// `file` is a system header.
         system: bool,
+        /// `file` is an `extern "C"` system header.
+        extern_c: bool,
     },
     /// A `#line` directive or line marker ([cpp.line]) changed the presumed
     /// line (and maybe name) from `at` on.
@@ -45,6 +50,8 @@ pub enum FileChange {
         at: Loc,
         /// `file` is (now) a system header.
         system: bool,
+        /// `file` is (now) an `extern "C"` system header (flag 4).
+        extern_c: bool,
         /// A line marker with flag 1 (entering an include) or 2 (returning
         /// from one): clang reports these as `EnterFile` / `ExitFile`.
         flag: Option<u8>,

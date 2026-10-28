@@ -131,6 +131,7 @@ impl Preprocessor<'_, '_> {
                 builtin: Some(b),
                 enabled: Cell::new(true),
                 used: Cell::new(false),
+                allow_redef: Cell::new(false),
             };
             self.macros.map.insert(name, Rc::new(def));
         }
@@ -1241,6 +1242,12 @@ impl Preprocessor<'_, '_> {
                 } else {
                     0
                 }
+            }
+            Builtin::BuildingModule => {
+                if tok.ident().is_none() {
+                    self.emit(Diag::new(DiagId::pp_expected_id_building_module, tok.tok.span));
+                }
+                0
             }
             _ => match self.feature_ident(&tok) {
                 None => 0,

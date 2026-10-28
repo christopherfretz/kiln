@@ -60,6 +60,9 @@ pub struct MacroDef {
     /// False while the macro is being expanded ([cpp.rescan]/2).
     pub(crate) enabled: Cell<bool>,
     pub(crate) used: Cell<bool>,
+    /// clang `isAllowRedefinitionsWithoutWarning`: set by
+    /// `#pragma push_macro` so a later redefinition does not warn.
+    pub(crate) allow_redef: Cell<bool>,
 }
 
 impl MacroDef {

@@ -63,6 +63,7 @@ struct Printer<'p, 'a, 'd, 'o> {
     cur_line: u32,
     cur_filename: String,
     system: bool,
+    extern_c: bool,
     emitted_tokens: bool,
     emitted_directive: bool,
     initialized: bool,
@@ -85,6 +86,7 @@ pub fn print_preprocessed(pp: &mut Preprocessor<'_, '_>, opts: PrintOptions, out
         cur_line: 0,
         cur_filename: String::from("<uninit>"),
         system: false,
+        extern_c: false,
         emitted_tokens: false,
         emitted_directive: false,
         initialized: false,
@@ -523,7 +525,9 @@ impl Printer<'_, '_, '_, '_> {
             push_escaped(self.out, &self.cur_filename);
             self.out.push('"');
             self.out.push_str(extra);
-            if self.system {
+            if self.extern_c {
+                self.out.push_str(" 3 4");
+            } else if self.system {
                 self.out.push_str(" 3");
             }
         }
@@ -602,11 +606,13 @@ impl Printer<'_, '_, '_, '_> {
 
     /// clang `FileChanged`.
     fn file_changed(&mut self, c: FileChange) {
-        let (at, system) = match c {
-            FileChange::Enter { file, system, .. } => (self.sm.loc(file, 0), system),
-            FileChange::Exit { resume, system, .. } => (resume, system),
-            FileChange::Rename { at, system, .. } => (at, system),
-            FileChange::SystemHeader { at, .. } => (at, true),
+        let (at, system, extern_c) = match c {
+            FileChange::Enter { file, system, extern_c, .. } => {
+                (self.sm.loc(file, 0), system, extern_c)
+            }
+            FileChange::Exit { resume, system, extern_c, .. } => (resume, system, extern_c),
+            FileChange::Rename { at, system, extern_c, .. } => (at, system, extern_c),
+            FileChange::SystemHeader { at, .. } => (at, true, false),
         };
         let Some(p) = self.sm.presumed_line_col(at) else { return };
         let mut line = p.line;
@@ -615,12 +621,22 @@ impl Printer<'_, '_, '_, '_> {
             FileChange::Enter { from: Some(from), .. } => {
                 self.move_to_loc(from, false);
             }
+            // clang: a line marker with flag 1 is `EnterFile` whose include
+            // location is the marker's own line (`LineTableInfo::AddLineNote`).
+            FileChange::Rename { file, at, flag: Some(1), .. } => {
+                if let Some((_, off)) = self.sm.offset_of(at)
+                    && off > 0
+                {
+                    self.move_to_loc(self.sm.loc(file, off - 1), false);
+                }
+            }
             FileChange::SystemHeader { .. } => line += 1,
             _ => {}
         }
         self.cur_line = line;
         self.cur_filename = name;
         self.system = system;
+        self.extern_c = extern_c;
         if !self.opts.line_markers {
             self.start_new_line_if_needed();
             return;

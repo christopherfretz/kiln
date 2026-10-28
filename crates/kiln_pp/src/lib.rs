@@ -33,8 +33,11 @@ mod include;
 mod macros;
 mod options;
 mod pragma;
+mod predef;
 mod preprocessor;
 pub mod print;
+mod resolver;
+mod search;
 mod tok;
 
 pub use builtin::{Builtin, FeatureQueries, NoFeatures, TargetQuery};
@@ -50,5 +53,11 @@ pub use include::{
 };
 pub use macros::{MacroDef, MacroTable};
 pub use options::PpOptions;
+pub use predef::{CmdMacro, OptLevel, PicModel, PredefConfig, build_predefines};
 pub use preprocessor::{Marker, PpItem, Preprocessor};
 pub use print::{PrintOptions, print_macros, print_preprocessed};
+pub use resolver::{HeaderSearch, SearchEvent, SearchObserver};
+pub use search::{
+    Characteristic, DirGroup, HeaderFs, MemoryFs, RealFs, SearchDir, SearchDirSpec, SearchList,
+    join_path, parent_dir,
+};
