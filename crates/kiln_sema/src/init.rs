@@ -165,6 +165,14 @@ impl Sema<'_, '_> {
                 self.error(DiagId::sema_init_string_too_long, self.ast.exprs.get(s).loc());
             }
         }
+        // The literal takes the (completed) array type as a prvalue.
+        let target = if self.ast.types.array_size(ty).is_some() {
+            ty
+        } else {
+            let elem = self.ast.types.element(ty).unwrap_or(QualType::ERROR);
+            self.ast.types.constant_array(elem, len, None)
+        };
+        self.ast.exprs.update_string_init_type(e, target);
         e
     }
 

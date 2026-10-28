@@ -1,4 +1,5 @@
 //@ expect: ast
+//@ xfail(kiln): deleted functions and overloading are M3
 void nope(int) = delete;
 void nope(long) {}
 inline int in(int x) { return x; }

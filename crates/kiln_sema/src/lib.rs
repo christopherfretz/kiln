@@ -14,6 +14,7 @@
     reason = "sema code uses the standard's short names (e, t, d, l, r)"
 )]
 
+mod aggval;
 pub mod constfold;
 pub mod conv;
 pub mod decl;

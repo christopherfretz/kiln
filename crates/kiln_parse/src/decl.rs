@@ -1059,7 +1059,10 @@ impl Parser<'_, '_> {
 
     /// The initializer after a declarator, per the style peeked before the
     /// declaration was created. `Err` after a syntax error.
-    fn parse_initializer(&mut self, style: Option<InitStyle>) -> Result<Option<Initializer>, ()> {
+    pub(crate) fn parse_initializer(
+        &mut self,
+        style: Option<InitStyle>,
+    ) -> Result<Option<Initializer>, ()> {
         match style {
             None => Ok(None),
             Some(InitStyle::C) => {

@@ -1,14 +1,19 @@
 //! Statements ([stmt]; spec/parse.md §6).
 
-use kiln_ast::{ExprId, StmtId};
+use kiln_ast::decl::InitStyle;
+use kiln_ast::{DeclId, ExprId, StmtId};
 use kiln_diag::DiagId;
 use kiln_lex::{Punct, TokKind};
-use kiln_sema::{DeclaratorContext, NameClass, ScopeKind};
+use kiln_sema::{Declarator, DeclaratorContext, NameClass, ScopeKind};
 use kiln_source::Loc;
 
 use crate::decl::is_decl_specifier_kw;
 use crate::keywords::Kw;
 use crate::parser::Parser;
+
+/// A parsed condition: the condition variable, if one was declared, and
+/// the (unconverted) condition expression.
+type Cond = (Option<DeclId>, ExprId);
 
 impl Parser<'_, '_> {
     /// compound-statement ([stmt.block]). A function body shares the
@@ -231,7 +236,7 @@ impl Parser<'_, '_> {
 
     /// `( [init-statement] condition )` for `if` and `switch`. Returns
     /// the init-statement and the condition expression.
-    fn parse_paren_condition(&mut self, what: &str) -> Option<(Option<StmtId>, ExprId)> {
+    fn parse_paren_condition(&mut self, what: &str) -> Option<(Option<StmtId>, Cond)> {
         let Some(open) = self.eat(Punct::LParen) else {
             let d = self
                 .s
@@ -246,17 +251,59 @@ impl Parser<'_, '_> {
         if let Some((_, Punct::Semi)) = self.scan_for(&[Punct::Semi, Punct::RParen]) {
             init = self.parse_statement();
         }
-        if self.is_declaration_statement() {
-            self.unsupported("condition declarations", self.loc());
-            self.skip_until(&[Punct::RParen], false, true);
-            return None;
-        }
-        let Some(c) = self.parse_expression() else {
+        let Some(c) = self.parse_condition() else {
             self.skip_until(&[Punct::RParen], false, true);
             return None;
         };
         self.expect_closing(Punct::RParen, Punct::LParen, open);
         Some((init, c))
+    }
+
+    /// condition ([stmt.pre]/1): an expression, or a declaration of a
+    /// single variable with a brace-or-equal-initializer. Returns the
+    /// condition variable (if any) and the condition expression -- for a
+    /// declaration, a reference to the variable -- not yet converted.
+    fn parse_condition(&mut self) -> Option<Cond> {
+        if !self.is_declaration_statement() {
+            return self.parse_expression().map(|e| (None, e));
+        }
+        let ctx = DeclaratorContext::Condition;
+        let ds = self.parse_decl_specifiers(ctx);
+        if ds.is_empty() {
+            self.error_here(DiagId::parse_expected_expression);
+            return None;
+        }
+        let base = self.s.type_from_declspec(&ds);
+        let mut d = Declarator::new(ctx, self.loc());
+        self.parse_declarator(&mut d);
+        if self.at_attr() {
+            self.parse_attributes(&mut d.attrs);
+        }
+        let Some((_, name_loc)) = d.name else {
+            if !d.invalid {
+                self.error_here(DiagId::parse_expected_unqualified_id);
+            }
+            return None;
+        };
+        d.init_style = match Self::punct_of(self.tok()) {
+            Some(Punct::Equal) => Some(InitStyle::C),
+            Some(Punct::LBrace) => Some(InitStyle::List),
+            Some(Punct::LParen) => {
+                self.error_here(DiagId::parse_expected_init_in_condition_lparen);
+                return None;
+            }
+            _ => {
+                self.error_here(DiagId::parse_expected_init_in_condition);
+                return None;
+            }
+        };
+        let v = self.s.act_on_declarator(&ds, base, &d);
+        let Ok(Some(init)) = self.parse_initializer(d.init_style) else {
+            return None;
+        };
+        let v = v?;
+        self.s.act_on_init(v, init);
+        Some(self.s.act_on_condition_var(v, name_loc))
     }
 
     /// if-statement ([stmt.if]).
@@ -268,7 +315,7 @@ impl Parser<'_, '_> {
             return None;
         }
         self.s.push_scope(ScopeKind::Block);
-        let Some((init, c)) = self.parse_paren_condition("if") else {
+        let Some((init, (var, c))) = self.parse_paren_condition("if") else {
             self.s.pop_scope();
             self.skip_if_rest_after_cond();
             return None;
@@ -278,7 +325,7 @@ impl Parser<'_, '_> {
         let els =
             if self.eat_kw(Kw::Else).is_some() { Some(self.parse_sub_statement()) } else { None };
         self.s.pop_scope();
-        Some(self.s.act_on_if(init, cond, then, els, loc))
+        Some(self.s.act_on_if(init, var, cond, then, els, loc))
     }
 
     /// Recovery after an unsupported `if` head: skip the condition and
@@ -320,14 +367,14 @@ impl Parser<'_, '_> {
     fn parse_switch(&mut self) -> Option<StmtId> {
         let loc = self.bump().span.lo;
         self.s.push_scope(ScopeKind::Block);
-        let Some((init, c)) = self.parse_paren_condition("switch") else {
+        let Some((init, (var, c))) = self.parse_paren_condition("switch") else {
             self.skip_sub_statement();
             self.s.pop_scope();
             return None;
         };
         let cond = self.s.act_on_start_switch(c);
         let body = self.parse_sub_statement();
-        let s = self.s.act_on_finish_switch(init, cond, body, loc);
+        let s = self.s.act_on_finish_switch(init, var, cond, body, loc);
         self.s.pop_scope();
         Some(s)
     }
@@ -358,8 +405,8 @@ impl Parser<'_, '_> {
         Some(self.s.act_on_case(v, sub, loc))
     }
 
-    /// A loop condition `( expression )`.
-    fn parse_loop_condition(&mut self, what: &str) -> Option<ExprId> {
+    /// A loop condition `( condition )`; `do` takes only an expression.
+    fn parse_loop_condition(&mut self, what: &str, allow_decl: bool) -> Option<Cond> {
         let Some(open) = self.eat(Punct::LParen) else {
             let d = self
                 .s
@@ -369,29 +416,30 @@ impl Parser<'_, '_> {
             self.emit(d);
             return None;
         };
-        if self.is_declaration_statement() {
-            self.unsupported("condition declarations", self.loc());
-            self.skip_until(&[Punct::RParen], false, true);
-            return None;
-        }
-        let Some(c) = self.parse_expression() else {
+        let c = if allow_decl {
+            self.parse_condition()
+        } else {
+            self.parse_expression().map(|e| (None, e))
+        };
+        let Some((var, c)) = c else {
             self.skip_until(&[Punct::RParen], false, true);
             return None;
         };
         self.expect_closing(Punct::RParen, Punct::LParen, open);
-        Some(self.s.act_on_condition(c))
+        Some((var, self.s.act_on_condition(c)))
     }
 
     /// while-statement ([stmt.while]).
     fn parse_while(&mut self) -> Option<StmtId> {
         let loc = self.bump().span.lo;
         self.s.push_scope(ScopeKind::Block);
-        let cond = self.parse_loop_condition("while");
+        let cond = self.parse_loop_condition("while", true);
         self.s.act_on_start_loop();
         let body = self.parse_sub_statement();
         self.s.act_on_end_loop();
         self.s.pop_scope();
-        Some(self.s.act_on_while(cond?, body, loc))
+        let (var, cond) = cond?;
+        Some(self.s.act_on_while(var, cond, body, loc))
     }
 
     /// do-statement ([stmt.do]).
@@ -406,8 +454,8 @@ impl Parser<'_, '_> {
             self.eat(Punct::Semi);
             return None;
         }
-        let cond = self.parse_loop_condition("while");
-        let Some(cond) = cond else {
+        let cond = self.parse_loop_condition("while", false);
+        let Some((_, cond)) = cond else {
             self.skip_until(&[Punct::RBrace], true, false);
             self.eat(Punct::Semi);
             return None;
@@ -454,13 +502,14 @@ impl Parser<'_, '_> {
         } else {
             self.parse_expression_statement()
         };
-        let mut cond = None;
+        let (mut var, mut cond) = (None, None);
         if !self.at(Punct::Semi) {
-            let Some(c) = self.parse_expression() else {
+            let Some((v, c)) = self.parse_condition() else {
                 self.skip_until(&[Punct::RParen], false, true);
                 self.skip_sub_statement();
                 return None;
             };
+            var = v;
             cond = Some(self.s.act_on_condition(c));
         }
         if self.eat(Punct::Semi).is_none() {
@@ -487,7 +536,7 @@ impl Parser<'_, '_> {
         self.s.act_on_start_loop();
         let body = self.parse_sub_statement();
         self.s.act_on_end_loop();
-        Some(self.s.act_on_for(init, cond, inc, body, loc))
+        Some(self.s.act_on_for(init, var, cond, inc, body, loc))
     }
 
     /// return-statement ([stmt.return]).

@@ -149,7 +149,7 @@ impl Sema<'_, '_> {
             || self.is_nullptr_type(t)
     }
 
-    fn is_nullptr_type(&self, t: QualType) -> bool {
+    pub(crate) fn is_nullptr_type(&self, t: QualType) -> bool {
         self.ast.types.builtin(t) == Some(BuiltinType::NullPtr)
     }
 
@@ -1403,9 +1403,46 @@ impl Sema<'_, '_> {
             }
             return res;
         }
+        // [expr.cond]/4.1: an lvalue of a less cv-qualified type binds to a
+        // reference to the other operand's type.
+        if tn.value_category() == ValueCategory::LValue
+            && fnn.value_category() == ValueCategory::LValue
+            && !tv
+            && !fv
+            && self.ast.types.as_record(tt).is_none()
+            && self.ast.types.same_unqualified(tt, ft)
+        {
+            let (tq, fq) = (self.ast.types.effective_quals(tt), self.ast.types.effective_quals(ft));
+            let lv = ValueCategory::LValue;
+            let pair = if tq.contains(fq) {
+                Some((t, conv::raw_cast(self, CastKind::NoOp, f, tt, lv, None), tt))
+            } else if fq.contains(tq) {
+                Some((conv::raw_cast(self, CastKind::NoOp, t, ft, lv, None), f, ft))
+            } else {
+                None
+            };
+            if let Some((t2, f2, ty)) = pair {
+                let res = self.builder().conditional(c2, t2, f2, ty, loc);
+                if self.is_bitfield(t) || self.is_bitfield(f) {
+                    self.ast.exprs.mark_bitfield(res);
+                }
+                return res;
+            }
+        }
         let arith = |s: &Self, q: QualType| {
             s.ast.types.is_arithmetic(q) || s.ast.types.as_enum(q).is_some()
         };
+        // [expr.cond]/7: after the standard conversions, operands of the
+        // same type give that type (no promotion: `b ? s1 : s2` is
+        // `short`).
+        if !tv && !fv && arith(self, tt) && arith(self, ft) {
+            let t2 = conv::decay(self, t);
+            let f2 = conv::decay(self, f);
+            let (t2ty, f2ty) = (self.ety(t2), self.ety(f2));
+            if self.ast.types.same_type(t2ty, f2ty) {
+                return self.builder().conditional(c2, t2, f2, t2ty, loc);
+            }
+        }
         if arith(self, tt) && arith(self, ft) {
             return match conv::usual_arithmetic_conversions_kind(
                 self,
@@ -1437,6 +1474,24 @@ impl Sema<'_, '_> {
     }
 
     // -- postfix -----------------------------------------------------------------
+
+    /// The function prototype of `q` as written: sugar is looked through
+    /// only down to the first function type, so parameter types keep
+    /// their typedef names (clang converts arguments to them).
+    fn sugared_proto(&self, q: QualType) -> Option<kiln_ast::types::FuncProto> {
+        let mut cur = q;
+        for _ in 0..256 {
+            if let Some(p) = self.ast.types.proto_of(cur.ty()) {
+                return Some(*p);
+            }
+            let next = self.ast.types.desugar_once(cur);
+            if next == cur {
+                break;
+            }
+            cur = next;
+        }
+        self.ast.types.proto(q).copied()
+    }
 
     /// `e1[e2]` ([expr.sub]).
     pub fn act_on_subscript(&mut self, base: ExprId, idx: ExprId, loc: Loc) -> ExprId {
@@ -1487,14 +1542,14 @@ impl Sema<'_, '_> {
         };
         let f = conv::decay(self, callee);
         let ft = self.ety(f);
-        let fn_ty = self.ast.types.pointee(ft).filter(|p| self.ast.types.is_function(*p));
+        let fn_ty = self.pointee_sugared(ft).filter(|p| self.ast.types.is_function(*p));
         let Some(fn_ty) = fn_ty else {
             let msg =
                 self.diag(DiagId::sema_call_not_function, loc).arg(self.ty_arg(self.ety(callee)));
             self.emit(msg);
             return self.recover_err(&kids, loc);
         };
-        let Some(proto) = self.ast.types.proto(fn_ty).copied() else {
+        let Some(proto) = self.sugared_proto(fn_ty) else {
             self.unsupported("calls through this function type", loc);
             return self.recover_err(&kids, loc);
         };

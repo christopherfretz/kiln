@@ -1016,6 +1016,26 @@ impl ExprArena {
         n.bits = (n.bits & !(3 << 2)) | ((ObjectKind::BitField as u8) << 2);
     }
 
+    /// Retypes the string literal `e` that initializes a character array
+    /// (and the parentheses around it) to the array type `ty`, as a
+    /// prvalue ([dcl.init.string]; clang's `updateStringLiteralType`).
+    ///
+    /// # Panics
+    /// If `e` is not a `StringLiteral` inside zero or more `ParenExpr`s.
+    pub fn update_string_init_type(&mut self, e: ExprId, ty: QualType) {
+        let mut e = e;
+        loop {
+            let n = &mut self.nodes[e.index() as usize];
+            n.ty = ty;
+            n.bits &= !3;
+            match n.kind {
+                ExprKind::StringLiteral => return,
+                ExprKind::ParenExpr => e = ExprId::new(n.a),
+                k => panic!("update_string_init_type on {k:?}"),
+            }
+        }
+    }
+
     /// Marks the `ImplicitCastExpr` `e` as part of an explicit cast
     /// (`part_of_explicit_cast`): sema builds the implicit conversion
     /// sequence of a C-style or functional cast first and marks it

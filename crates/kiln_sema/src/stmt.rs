@@ -117,16 +117,24 @@ impl Sema<'_, '_> {
         self.act_on_full_expr(e)
     }
 
-    /// `if (init; cond) then else els` ([stmt.if]).
+    /// A condition declaration ([stmt.pre]/4): the variable `v` (already
+    /// initialized) yields the condition value, a reference to `v`.
+    pub fn act_on_condition_var(&mut self, v: DeclId, loc: Loc) -> (Option<DeclId>, ExprId) {
+        (Some(v), self.build_decl_ref(v, loc))
+    }
+
+    /// `if (init; cond) then else els` ([stmt.if]); `cond_var` is the
+    /// condition variable, if declared.
     pub fn act_on_if(
         &mut self,
         init: Option<StmtId>,
+        cond_var: Option<DeclId>,
         cond: ExprId,
         then: StmtId,
         els: Option<StmtId>,
         loc: Loc,
     ) -> StmtId {
-        let data = IfData { init, cond_var: None, cond: Some(cond), then: Some(then), els };
+        let data = IfData { init, cond_var, cond: Some(cond), then: Some(then), els };
         self.builder().if_stmt(IfKind::Ordinary, data, loc)
     }
 
@@ -145,8 +153,14 @@ impl Sema<'_, '_> {
     }
 
     /// `while (cond) body` ([stmt.while]).
-    pub fn act_on_while(&mut self, cond: ExprId, body: StmtId, loc: Loc) -> StmtId {
-        let data = LoopData { cond: Some(cond), body: Some(body), ..LoopData::default() };
+    pub fn act_on_while(
+        &mut self,
+        cond_var: Option<DeclId>,
+        cond: ExprId,
+        body: StmtId,
+        loc: Loc,
+    ) -> StmtId {
+        let data = LoopData { cond_var, cond: Some(cond), body: Some(body), ..LoopData::default() };
         self.builder().while_stmt(data, loc)
     }
 
@@ -159,6 +173,7 @@ impl Sema<'_, '_> {
     pub fn act_on_for(
         &mut self,
         init: Option<StmtId>,
+        cond_var: Option<DeclId>,
         cond: Option<ExprId>,
         inc: Option<ExprId>,
         body: StmtId,
@@ -168,7 +183,7 @@ impl Sema<'_, '_> {
             self.diagnose_unused(e);
             self.act_on_full_expr(e)
         });
-        let data = LoopData { init, cond_var: None, cond, inc, body: Some(body) };
+        let data = LoopData { init, cond_var, cond, inc, body: Some(body) };
         self.builder().for_stmt(data, loc)
     }
 
@@ -211,6 +226,7 @@ impl Sema<'_, '_> {
     pub fn act_on_finish_switch(
         &mut self,
         init: Option<StmtId>,
+        cond_var: Option<DeclId>,
         cond: ExprId,
         body: StmtId,
         loc: Loc,
@@ -223,7 +239,7 @@ impl Sema<'_, '_> {
             None => Vec::new(),
         };
         let cases = self.builder().list(&cases);
-        self.builder().switch_stmt(SwitchData { init, cond_var: None, cond, body, cases }, loc)
+        self.builder().switch_stmt(SwitchData { init, cond_var, cond, body, cases }, loc)
     }
 
     /// The value of `case value:` ([stmt.switch]/2): a converted constant

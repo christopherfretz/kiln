@@ -252,6 +252,8 @@ diag_ids! {
     parse_expected_semi_after_expr = Error (0) "expected ';' after expression";
     parse_expected_semi_toplevel = Error (0) "expected ';' after top level declarator";
     parse_function_definition_not_allowed = Error (0) "function definition is not allowed here";
+    parse_expected_init_in_condition = Error (0) "variable declaration in condition must have an initializer";
+    parse_expected_init_in_condition_lparen = Error (0) "variable declaration in condition cannot have a parenthesized initializer";
     parse_expected_semi_after_stmt = Error (1) "expected ';' after {0} statement";
     parse_expected_expression = Error (0) "expected expression";
     parse_expected_unqualified_id = Error (0) "expected unqualified-id";

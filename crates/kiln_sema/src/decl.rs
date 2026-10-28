@@ -8,7 +8,7 @@ use kiln_ast::decl::{
     ConstexprKind, DeclFlags, DeclKind, DefinitionBits, EnumData, FieldData, FnSpec, FnStorage,
     LinkageLang, TagKind, TlsKind, VarSpec, VarStorage,
 };
-use kiln_ast::expr::ExprKind;
+use kiln_ast::expr::{CastKind, ExprKind};
 use kiln_ast::ids::RawId;
 use kiln_ast::names::DeclName;
 use kiln_ast::types::{AutoKeyword, BuiltinType, ExcSpec, FuncInfo, Quals, TagKeyword, TypeView};
@@ -944,9 +944,17 @@ impl Sema<'_, '_> {
             return;
         }
         let ty = self.ast.decls.get(v).ty().unwrap_or(QualType::ERROR);
-        match self.evaluate(e) {
-            Ok(val) => {
-                let cv = self.const_value(ty, val);
+        let result = if self.is_aggregate_object(ty) {
+            match self.fold_aggregate(ty, e) {
+                Ok(cv) => Ok(Some(cv)),
+                Err(crate::aggval::AggFail::Unsupported) => Ok(None),
+                Err(crate::aggval::AggFail::NotConstant(nc)) => Err(nc),
+            }
+        } else {
+            self.evaluate(e).map(|val| self.const_value(ty, val))
+        };
+        match result {
+            Ok(cv) => {
                 self.ast.decls.finish_eval(v, cv);
             }
             Err(nc) => {
@@ -1441,6 +1449,39 @@ impl Sema<'_, '_> {
         d
     }
 
+    /// The underlying and promotion types of an enumeration without a
+    /// fixed underlying type ([dcl.enum]/7, [conv.prom]/3), after clang's
+    /// `ActOnEnumBody`: the narrowest of `int`, `long`, `long long` when
+    /// some value is negative, else of `unsigned int`, `unsigned long`,
+    /// `unsigned long long`, promoting to the signed type of the same
+    /// width unless the values need every bit.
+    fn best_enum_types(&self, values: &[(DeclId, i128)]) -> (QualType, QualType) {
+        let mut neg_bits = 0u32;
+        let mut pos_bits = 0u32;
+        for &(_, v) in values {
+            if v < 0 {
+                // Minimum signed bits.
+                neg_bits = neg_bits.max(129 - (!v).leading_zeros().min(128));
+            } else {
+                pos_bits = pos_bits.max((128 - v.leading_zeros()).max(1));
+            }
+        }
+        let width = |t: QualType| constfold::int_info(&self.ast, t).map_or(64, |x| x.0);
+        let signed = [QualType::INT, QualType::LONG, QualType::LONGLONG];
+        let unsigned = [QualType::UINT, QualType::ULONG, QualType::ULONGLONG];
+        if neg_bits > 0 {
+            let t = signed
+                .into_iter()
+                .find(|&t| neg_bits <= width(t) && pos_bits < width(t))
+                .unwrap_or(QualType::LONGLONG);
+            (t, t)
+        } else {
+            let i = unsigned.iter().position(|&t| pos_bits <= width(t)).unwrap_or(2);
+            let t = unsigned[i];
+            (t, if pos_bits == width(t) { t } else { signed[i] })
+        }
+    }
+
     fn lookup_current_scope_outside_enum(&self, name: Symbol) -> Option<DeclId> {
         let s = self
             .scopes
@@ -1494,21 +1535,19 @@ impl Sema<'_, '_> {
         let computed = if build.fixed.is_some() {
             None
         } else {
-            let min = build.enumerators.iter().map(|x| x.1).min().unwrap_or(0);
-            let max = build.enumerators.iter().map(|x| x.1).max().unwrap_or(0);
-            let cands = [
-                QualType::INT,
-                QualType::UINT,
-                QualType::LONG,
-                QualType::ULONG,
-                QualType::LONGLONG,
-                QualType::ULONGLONG,
-            ];
-            let t = cands
-                .into_iter()
-                .find(|&t| self.fits(t, min) && self.fits(t, max))
-                .unwrap_or(QualType::ULONGLONG);
-            Some((t, t))
+            let (best, promotion) = self.best_enum_types(&build.enumerators);
+            // [dcl.enum]/5 (clang's `ActOnEnumBody`): each initializer is
+            // converted to the underlying type.
+            for &(d, _) in &build.enumerators {
+                let Some(init) = self.ast.decls.enumerator(d).and_then(|x| x.init) else {
+                    continue;
+                };
+                let c = conv::cast_to(self, CastKind::IntegralCast, init, best, None);
+                if c != init {
+                    self.ast.decls.replace_enumerator_init(d, c);
+                }
+            }
+            Some((best, promotion))
         };
         let _ = self.builder().complete_enum_definition(e, computed);
     }
