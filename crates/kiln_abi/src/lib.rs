@@ -6,6 +6,7 @@
 //! `-fdump-record-layouts` printer ([`dump`]).
 #![forbid(unsafe_code)]
 
+pub mod call;
 pub mod dump;
 pub mod irtype;
 pub mod layout;
