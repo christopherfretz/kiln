@@ -1,7 +1,64 @@
 //! Lowering of the typed AST to LLVM IR.
 //!
-//! See `docs/ARCHITECTURE.md` and `spec/codegen.md` for the contract
-//! this crate implements.
+//! The lowering mirrors clang 19 at `-O0` instruction for instruction so
+//! that kiln's output can be diffed against the clang oracle; see
+//! `spec/codegen.md` for the contract this crate implements.
 #![forbid(unsafe_code)]
-mod fold;
+
+mod consts;
+mod expr;
 mod fir;
+mod fold;
+mod func;
+mod module;
+mod stmt;
+
+use kiln_abi::Target;
+use kiln_ast::Ast;
+use kiln_llvm::Module;
+use kiln_oven::Oven;
+use kiln_source::Loc;
+
+/// Options controlling code generation.
+#[derive(Clone, Debug)]
+pub struct CodegenOptions {
+    /// The module's `source_filename`.
+    pub source_filename: String,
+    /// C++ exceptions are enabled (`-fexceptions`, the default). When
+    /// disabled every function is `nounwind`.
+    pub exceptions: bool,
+    /// The `llvm.ident` string; empty for none.
+    pub ident: String,
+}
+
+impl Default for CodegenOptions {
+    fn default() -> Self {
+        CodegenOptions { source_filename: String::new(), exceptions: true, ident: String::new() }
+    }
+}
+
+/// A construct codegen does not support (yet), or an internal failure.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CodegenError {
+    /// Where the offending construct is, when known.
+    pub loc: Option<Loc>,
+    /// What went wrong.
+    pub msg: String,
+}
+
+impl std::fmt::Display for CodegenError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.msg)
+    }
+}
+
+impl std::error::Error for CodegenError {}
+
+/// Lowers a translation unit to an LLVM module.
+///
+/// `ast` must be free of errors. Constant expressions are folded with
+/// `oven` first (which may cache values in `ast`).
+pub fn emit(ast: &mut Ast, oven: &mut Oven, target: &Target, opts: &CodegenOptions) -> Result<Module, CodegenError> {
+    let folds = fold::prepass(ast, oven, target);
+    module::Cg::new(&*ast, &folds, target, opts).run()
+}

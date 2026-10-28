@@ -47,6 +47,7 @@ pub(crate) enum Op {
     Switch { c: V, default: Blk, cases: Vec<(V, Blk)> },
     Ret { v: Option<V> },
     Unreachable,
+    ExtractValue { agg: V, idx: u32 },
 }
 
 impl Op {
@@ -82,6 +83,7 @@ impl Op {
     fn operands(&self) -> Vec<V> {
         match self {
             Op::Alloca { .. } | Op::Br { .. } | Op::Unreachable => Vec::new(),
+            Op::ExtractValue { agg, .. } => vec![*agg],
             Op::Load { ptr, .. } => vec![*ptr],
             Op::Store { val, ptr, .. } => vec![*val, *ptr],
             Op::Bin { l, r, .. } | Op::ICmp { l, r, .. } | Op::FCmp { l, r, .. } => vec![*l, *r],
@@ -99,6 +101,7 @@ impl Op {
     fn operands_mut(&mut self) -> Vec<&mut V> {
         match self {
             Op::Alloca { .. } | Op::Br { .. } | Op::Unreachable => Vec::new(),
+            Op::ExtractValue { agg, .. } => vec![agg],
             Op::Load { ptr, .. } => vec![ptr],
             Op::Store { val, ptr, .. } => vec![val, ptr],
             Op::Bin { l, r, .. } | Op::ICmp { l, r, .. } | Op::FCmp { l, r, .. } => vec![l, r],
@@ -395,6 +398,43 @@ impl Fir {
         V::I(n)
     }
 
+    /// Appends `op` to block `b` (which need not be current or placed).
+    pub fn push_in(&mut self, b: Blk, op: Op, ty: TypeId) -> V {
+        let n = self.insts.len() as u32;
+        for s in op.successors() {
+            self.blocks[s.0 as usize].uses += 1;
+        }
+        self.insts.push(Inst { op, ty, block: Some(b), md: Vec::new() });
+        self.blocks[b.0 as usize].insts.push(n);
+        V::I(n)
+    }
+
+    /// Adds an incoming edge to phi `i`.
+    pub fn add_incoming(&mut self, i: u32, v: V, from: Blk) {
+        if let Op::Phi { inc, .. } = &mut self.insts[i as usize].op {
+            inc.push((v, from));
+        }
+    }
+
+    /// The predecessors of `b` in LLVM use-list order: the most recently
+    /// created branch first (one entry per edge).
+    pub fn predecessors(&self, b: Blk) -> Vec<Blk> {
+        let mut out = Vec::new();
+        for (i, inst) in self.insts.iter().enumerate().rev() {
+            let Some(bb) = inst.block else { continue };
+            if !inst.op.is_terminator() {
+                continue;
+            }
+            let _ = i;
+            for s in inst.op.successors().into_iter().rev() {
+                if s == b {
+                    out.push(bb);
+                }
+            }
+        }
+        out
+    }
+
     /// Creates an alloca at the alloca insertion point of the entry block.
     pub fn alloca(&mut self, ty: TypeId, align: u64) -> V {
         let n = self.insts.len() as u32;
@@ -468,6 +508,7 @@ impl Fir {
                     }
                     Op::Ret { v } => b.ret(v.map(val))?,
                     Op::Unreachable => b.unreachable()?,
+                    Op::ExtractValue { agg, idx } => b.extract_value(val(*agg), &[*idx])?,
                 };
                 if let Some(id) = r.as_inst() {
                     for &(k, md) in &inst.md {

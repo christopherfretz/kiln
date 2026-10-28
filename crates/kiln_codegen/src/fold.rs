@@ -228,6 +228,7 @@ impl Collect<'_> {
             ExprKind::UnaryOperator if ast.exprs.unary_op(e) == UnaryOp::LNot => {
                 self.out.push(ast.exprs.operand(e));
             }
+            ExprKind::UnaryExprOrTypeTraitExpr => self.out.push(e),
             ExprKind::ImplicitCastExpr if ast.exprs.cast_kind(e) == CastKind::LValueToRValue => {
                 if refers_to_const_var(ast, ast.exprs.operand(e)) {
                     self.out.push(e);
