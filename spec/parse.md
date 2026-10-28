@@ -54,30 +54,130 @@ undeclared, which resolves the C++ declaration/expression ambiguities.
 ### 1.3 Entry points
 | fn | grammar |
 |---|---|
-| `parse_file(sm, file, diags, target, opts) -> Ast` | a whole translation unit |
+| `parse_file(sm, interner, file, diags, target, opts) -> Ast` | a whole translation unit, preprocessed with default `PpOptions` (no include paths), default `ConstexprLimits` |
+| `parse_tu(sm, interner, file, diags, target, opts, limits) -> ParsedTu` | the same, with explicit constant-evaluation limits; also returns the Oven |
+| `parse_preprocessed(pp, interner, diags, target, opts, limits) -> (ParsedTu, Preprocessor)` | a whole translation unit read from a configured preprocessor (the driver's path) |
 | `Parser::parse_translation_unit` | translation-unit ([basic.link]/1) |
 | `Parser::parse_external_declaration` | declaration ([dcl.pre]) |
 | `Parser::parse_declarator` (crate) | declarator ([dcl.decl]) |
 | `Parser::parse_expression` / `parse_assignment_expr` / `parse_constant_expr` / `parse_expr_prec(min)` | expression / assignment-expression / constant-expression / binary operators at precedence ≥ `min` |
 | `Parser::parse_statement` | statement ([stmt.pre]) |
 
-`parse_file` lives in `kiln_parse`, not in the driver, so tests and the
-driver share one path. It lexes the main file (§2), maps lexer
-diagnostics (§8), builds a `Sema::for_target`, parses, and returns the
-AST. The driver adds `-fsyntax-only -fdump-ast` on top (§7).
+**Interface change (WP-055).** All three entry points take the
+`Arc<Interner>` the preprocessor and the AST share. The caller creates
+it before the `DiagEngine`, because the engine's lifetime is invariant
+and the preprocessor borrows both. `parse_preprocessed` asserts that
+`interner` is the preprocessor's interner, and returns the preprocessor
+so the caller can read its state afterwards (dependencies, `#pragma
+once` files).
 
-## 2. Token buffer (`tokens.rs`)
-- `TokenBuffer::lex` lexes the whole main file up front, so lookahead is
-  an index (`peek(n)`, `tok_at(i)`).
-- Comments are dropped. Alternative tokens become their punctuators.
-- Literal spellings are kept in a parallel `spellings` vector.
-- Preprocessing directives are skipped, and recorded in `skipped`:
-  - `#pragma` is accepted.
-  - `#pragma pack` and every other directive produce
-    `"... is not supported yet"`.
-- This is a stopgap until the preprocessor (kiln_pp, WP-012, now
-  merged) feeds the parser. The switch belongs to the driver work
-  (WP-014). See §9.
+`ParseOptions { std, keep_tokens }`:
+- `std` is the lexer standard, `Cxx26` by default. The driver passes
+  `-std=`.
+- `keep_tokens` keeps the whole token stream in memory instead of the
+  lookahead window (§2.1). It exists for measurement and tests; the
+  parse is identical.
+
+`ConstexprLimits { budget, backtrace_limit }` are the driver's
+`-fconstexpr-*` limits (WP-054; spec/oven.md "Integration"), applied to
+Sema's Oven. The default is clang's step, depth and backtrace limits and
+kiln's 256 MiB memory budget.
+
+`parse_preprocessed` builds a `Sema::for_target` with the limits, wraps
+the preprocessor in a `TokenSource` (§2), parses, and returns a
+`ParsedTu { ast, oven }` with the preprocessor. The Oven's statistics
+feed `-fconstexpr-report`. The driver configures the preprocessor
+exactly as `-E` does, calls `parse_preprocessed`, and writes the report
+(§7). `parse_tu` builds a `Preprocessor` for `file` with
+`PpOptions::new(opts.std)` and calls `parse_preprocessed`. `parse_file`
+is `parse_tu` with the default limits, keeping only the AST; unit tests
+use it. All three live in `kiln_parse`, so tests and the driver share
+one path.
+
+## 2. Token source (`tokens.rs`, `pragma.rs`)
+
+The parser reads phase-4 tokens ([lex.phases]/1.4: macro-expanded, with
+directives executed) from `kiln_pp::Preprocessor::next_item`. This is
+clang's `Parser` over `Preprocessor::Lex`.
+
+### 2.1 The lookahead window
+- `TokenSource` holds the tokens from a little behind the parser's
+  position to the furthest token looked at. Lookahead is by absolute
+  index (`tok_at(i)`), so arbitrary-distance scans such as `scan_for`
+  and `at_constructor_declaration` work unchanged; the window grows to
+  cover them.
+- `bump` releases consumed tokens. The source keeps `KEEP_BEHIND` = 8
+  tokens behind the position (the parser reads back at most one, for
+  `prev_end`), and drops consumed tokens in batches of 256 so the cost
+  is amortized.
+- `ParseOptions::keep_tokens` disables release. Measured with
+  `-fsyntax-only -ferror-limit=0` (release build, median of 5): the
+  window and the whole buffer take the same time (`headers`: 2.40 s vs
+  2.37 s; `xmacro`: 3.84 s vs 3.87 s), and the window uses 21% less
+  (`headers`, 99 MB vs 125 MB) and 11% less (`xmacro`, 336 MB vs
+  378 MB) peak RSS. The window is the default.
+- Parsing adds no measurable time over preprocessing: `-fsyntax-only`
+  runs in 2.10 s on `headers` (`-E -o /dev/null`: 2.21 s) and 3.69 s on
+  `xmacro` (`-E`: 3.81 s), because `-E` spends more time formatting its
+  output than the parser spends. Until templates are parsed, much of
+  `headers` is skipped as unsupported, so re-measure when M3 lands.
+- After a fatal error (`'x' file not found`, `-ferror-limit` reached),
+  the source returns `Eof`, so parsing stops, as in clang.
+
+### 2.2 Tokens
+- **Keywords** are classified by the parser (`keywords.rs`, one hash
+  lookup on the identifier's symbol). The preprocessor delivers them as
+  identifiers.
+- **Alternative tokens** ([lex.digraph]/2: `and`, `bitor`, `not_eq`,
+  ...) become their punctuators in the token source, including when
+  they come from a macro expansion. `#` still sees them as identifiers
+  (`#and` is `"and"`), because stringizing happens in the preprocessor.
+- **Spelling** comes from the source manager (`kiln_lex::spelling` of
+  the token's span). Spans of macro-expanded tokens are expansion
+  locations, so diagnostics carry "expanded from macro" notes.
+- **Literal diagnostics** (invalid escapes, out-of-range characters,
+  unevaluated-string prefixes, ...) are mapped by
+  `kiln_pp::literal_diags`, the mapping `-E` and `#if` use. The parser
+  reports them when it converts a literal (§5). (WP-055 deleted the
+  `lexdiag.rs` stopgap.)
+- Diagnostics in included files, and everything else the preprocessor
+  reports, go through the shared `DiagEngine`.
+
+### 2.3 Pragmas and module directives
+The preprocessor handles `#pragma once`, `push_macro`/`pop_macro`,
+`poison`, `system_header`, `GCC warning`/`error`, `message` and
+`_Pragma` (spec/pp.md). It passes every other pragma to the parser as a
+`Marker::Pragma` with its tokens.
+
+The token source classifies each pragma as soon as it reads the marker
+(`pragma::classify`), so syntax warnings are reported in the place of
+clang's pragma handlers. Pragmas with a semantic effect become an
+`Event`, keyed by the index of the next token. The parser acts on events
+when it reaches that token (`handle_events`, as for clang's
+`annot_pragma_*` tokens).
+
+| Pragma | Handling |
+|---|---|
+| unknown (also unknown `GCC x` / `clang x`, empty `#pragma`) | `unknown pragma ignored` [-Wunknown-pragmas], at the first unrecognized token |
+| `STDC FP_CONTRACT`, `FENV_ACCESS`, `CX_LIMITED_RANGE`, `FENV_ROUND` | accepted, no effect |
+| `STDC <other>` | `unknown pragma in STDC namespace` [-Wunknown-pragmas] |
+| `GCC visibility push(v)` / `pop` | syntax warnings [-Wignored-pragmas] (missing `(`/`)`, `expected identifier`, extra tokens); `Event::Visibility`. An unknown `v` gets `unknown visibility 'v'` [-Wignored-attributes] and is not pushed; an unmatched `pop` is an error. The visibility itself is not applied yet (M3). |
+| `pack ...` | missing `(` gets `missing '(' after '#pragma pack' - ignoring`. Otherwise `Event::PragmaPack`; Sema records `(loc, args)` in `Sema::pragma_packs` and reports `'#pragma pack' is not supported yet` (layout does not apply it yet). |
+| `GCC diagnostic ...`, `clang diagnostic`, `clang loop`, `clang fp`, `clang optimize`, `clang max_tokens_*`, `clang __debug` | accepted, ignored. **Not applied:** `clang diagnostic ignored` does not silence anything. |
+| `comment`, `float_control`, `unused`, `omp`, `unroll`, `nounroll`, `unroll_and_jam`, `nounroll_and_jam` | accepted, ignored |
+| `weak`, `redefine_extname`, `align`, `options`, `ms_struct`, `clang attribute`, `clang section` | `Event::UnsupportedPragma`: `'#pragma <name>' is not supported yet` |
+
+A `module` or `import` directive ([cpp.module], [cpp.import]) is
+removed from the stream through its `;`. The parser reports `a module
+import is not supported yet` or `a module declaration is not supported
+yet` and continues with the next declaration.
+
+**Known divergence: ordering.** The preprocessor processes all the
+directives up to the next token before it returns their markers. So a
+preprocessor-level warning (for example `#pragma once in main file` from
+`_Pragma`) can come before the syntax warnings of an earlier `#pragma`.
+Locations and texts match clang; only the order differs, and the test
+harness ignores order.
 
 ## 3. Parser core (`parser.rs`)
 - **Token access:**
@@ -257,25 +357,26 @@ AST. The driver adds `-fsyntax-only -fdump-ast` on top (§7).
   - before a statement, for the statement (`fallthrough`, `likely`)
 
 ## 7. Driver (`kiln -fsyntax-only [-fdump-ast]`)
-- The driver calls `parse_file` and prints diagnostics.
-- With `-fdump-ast` it prints `kiln_ast::dump` (spec/ast-dump.md).
+- The driver builds the preprocessor exactly as `-E` does
+  (`Job::build_preprocessor`: search list, predefines, `-D`/`-U`/
+  `-include`, `#if` evaluation, feature queries; spec/driver.md). It
+  then calls `parse_preprocessed` with the `-fconstexpr-*` limits,
+  writes the `-fconstexpr-report=` from the returned Oven (spec/oven.md),
+  and prints diagnostics.
+- With `-fdump-ast` it prints `kiln_ast::dump` (spec/ast-dump.md) of the
+  main file's top-level declarations; `-fdump-ast=all-files` adds those
+  from included files, whose locations name their file.
 - The exit code is 1 if any error was reported.
 
-## 8. Lexer-diagnostic stopgap (`lexdiag.rs`)
-- Until the preprocessor feeds the parser, `lex_diag` maps
-  `kiln_lex::LexDiagKind` to `kiln_diag` diagnostics:
-  - Kinds that have an `lex_*` id of their own use it.
-  - Other errors use `lex_literal_error`, and other warnings
-    `lex_literal_warning`, both with clang's wording.
-  - Extensions are not reported.
-- kiln_pp (WP-012) now owns the complete mapping. When the parser
-  switches to kiln_pp tokens, this module is deleted.
+## 8. (Removed) lexer-diagnostic stopgap
+`lexdiag.rs` is gone (WP-055). Literal diagnostics use
+`kiln_pp::literal_diags` (§2.2). The `lex_*` diagnostic ids it used stay
+in `kiln_diag` for now; nothing emits them.
 
 ## 9. To be implemented (M3+)
-- **Inputs:**
-  - tokens from kiln_pp instead of the raw-lexer buffer (§2), which
-    brings macros, `#include` and `#if`
-  - `#pragma pack`
+- **Pragmas:** applying `#pragma pack` to layout, `GCC visibility` to
+  linkage, `clang diagnostic` to the diagnostic engine; `weak` and the
+  other unsupported pragmas of §2.3.
 - **Tentative parsing:**
   - `T(x);`, `T(x)` in parameter lists, and `(T)(x)` disambiguation
     ([stmt.ambig], [dcl.ambig.res])
@@ -319,10 +420,15 @@ AST. The driver adds `-fsyntax-only -fdump-ast` on top (§7).
   - `expr.rs`: [expr.*], [lex.string], [lex.ext]
   - `stmt.rs`: [stmt.*]
   - `sema.rs`: rules that need the parser in front of Sema
+  - `tokens.rs`: the token source: macro-expanded tokens, alternative
+    tokens, pragmas, module directives, and window/whole-buffer parity
   - `common/mod.rs` provides `parse(src) -> Parsed` with
     `assert_clean`, `assert_diag(substr)` and `assert_dump(substr)`.
 - **Conformance tests:** `diag:` tests under
   `tests/conformance/{dcl.*,expr.*,stmt.*,basic.*,class.*,namespace.*}/`.
+  Tests of the token source are under `cpp.pragma`, `cpp.pragma.op`,
+  `cpp.include` (with headers in `Inputs/`), `cpp.replace`,
+  `lex.digraph`, `lex.string.uneval` and `module.import`.
   They pass with both `cargo xtask test` and
   `cargo xtask test --compiler clang++-19`.
 - **AST goldens:** `tests/conformance/ast/` (spec/ast-dump.md),

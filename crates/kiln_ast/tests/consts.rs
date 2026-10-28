@@ -15,7 +15,9 @@ use kiln_ast::consts::{
     ShadowKind, ShadowRun, Shape, UnionMember, ValueKind,
 };
 use kiln_ast::strings::{StringEncoding, StringPool};
-use kiln_ast::{ConstValueId, DeclId, HeapSize, QualType, ReflectionId, StringLitId, TypeId};
+use kiln_ast::{
+    ConstValueId, DeclId, ExprId, HeapSize, QualType, ReflectionId, StringLitId, TypeId,
+};
 
 fn ty(n: u32) -> QualType {
     QualType::unqual(TypeId::new(n))
@@ -213,6 +215,11 @@ fn agg(t: u32, bytes: &[u8]) -> ByteImage<'_> {
 // ---------------------------------------------------------------------------
 // Round-trips and interning
 
+/// A string literal base created by expression #1.
+fn lit(lit: StringLitId) -> PtrBase {
+    PtrBase::StringLit { lit, origin: ExprId::new(1) }
+}
+
 fn roundtrip(store: &mut ConstStore, s: Scalar<'_>) -> ConstValueId {
     let id = store.push_scalar(s).expect("push");
     assert_eq!(store.get(id), ConstValue::Scalar(s), "round-trip {s:?}");
@@ -335,7 +342,8 @@ fn every_scalar_kind_roundtrips() {
         PtrBase::Decl(DeclId::new(1)),
         PtrBase::Function(DeclId::new(4)),
         PtrBase::Temporary(DeclId::new(7)),
-        PtrBase::StringLit(StringLitId::new(1)),
+        PtrBase::StringLit { lit: StringLitId::new(1), origin: ExprId::new(9) },
+        PtrBase::StringLit { lit: StringLitId::new(1), origin: ExprId::new(10) },
         PtrBase::Const(c),
         PtrBase::TypeInfo(ty(INT)),
     ] {
@@ -347,6 +355,15 @@ fn every_scalar_kind_roundtrips() {
             roundtrip(&mut st, Scalar::Pointer { ty: ty(INT_PTR), base, offset: 1 << 40 });
         }
     }
+    // A string literal object is identified by the expression that
+    // created it ([lex.string]/9): equal contents, different objects.
+    let at = |origin| Scalar::Pointer {
+        ty: ty(INT_PTR),
+        base: PtrBase::StringLit { lit: StringLitId::new(1), origin: ExprId::new(origin) },
+        offset: 1,
+    };
+    let (p9, p10) = (roundtrip(&mut st, at(9)), roundtrip(&mut st, at(10)));
+    assert_ne!(p9, p10);
     let path = [DeclId::new(30), DeclId::new(31)];
     for (kind, derived) in [(MemberKind::Data, false), (MemberKind::Function, true)] {
         roundtrip(
@@ -899,18 +916,14 @@ fn print_scalars() {
             "&s.x",
             "&s.x",
         ),
+        (push(Scalar::Pointer { ty: ty(INT_PTR), base: lit(hi), offset: 0 }), "\"hi\"", "\"hi\""),
         (
-            push(Scalar::Pointer { ty: ty(INT_PTR), base: PtrBase::StringLit(hi), offset: 0 }),
-            "\"hi\"",
-            "\"hi\"",
-        ),
-        (
-            push(Scalar::Pointer { ty: ty(INT_PTR), base: PtrBase::StringLit(hi), offset: 1 }),
+            push(Scalar::Pointer { ty: ty(INT_PTR), base: lit(hi), offset: 1 }),
             "&\"hi\"[1]",
             "&\"hi\"[1]",
         ),
         (
-            push(Scalar::Pointer { ty: ty(INT_PTR), base: PtrBase::StringLit(wide), offset: 2 }),
+            push(Scalar::Pointer { ty: ty(INT_PTR), base: lit(wide), offset: 2 }),
             "&u\"ab\"[1]",
             "&u\"ab\"[1]",
         ),

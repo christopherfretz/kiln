@@ -1,0 +1,3 @@
+MEMBER(int, id)
+MEMBER(unsigned char, flags)
+MEMBER(long long, stamp)

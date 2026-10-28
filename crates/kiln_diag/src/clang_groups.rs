@@ -428,7 +428,6 @@ pub(crate) const CLANG_GROUP_NAMES: &[&str] = &[
     "ignored-optimization-argument",
     "ignored-pragma-intrinsic",
     "ignored-pragma-optimize",
-    "ignored-pragmas",
     "ignored-qualifiers",
     "ignored-reference-qualifiers",
     "implicit",

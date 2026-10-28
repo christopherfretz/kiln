@@ -46,6 +46,7 @@ pub use callbacks::{
     FileChange, NoCallbacks, PpCallbacks, PragmaInfo, PragmaIntroducer, PragmaMessageKind,
 };
 pub use cond::{IfContext, IfEvaluator, StubIfEvaluator};
+pub use diag_map::literal_diags;
 pub use features::{ClangFeatures, FeatureFlag};
 pub use ifeval::IfEval;
 pub use include::{

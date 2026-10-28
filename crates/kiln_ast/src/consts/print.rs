@@ -356,7 +356,7 @@ impl Printer<'_> {
         };
         let amp = !(reference && self.template());
         match base {
-            PtrBase::StringLit(lit) => {
+            PtrBase::StringLit { lit, .. } => {
                 let unit = u64::from(self.strings.encoding(lit).unit_bytes());
                 if offset == 0 {
                     self.strings.write_literal(lit, out);

@@ -7,7 +7,8 @@ constant-evaluated contexts, `std::is_constant_evaluated`,
 (active member), [expr.new]/[expr.delete] (transient allocation),
 [dcl.constexpr], [dcl.constinit], [expr.prim.req], [meta.reflection] (P2996
 and successors, M6), [intro.object], [basic.align], [conv.*]. This is a
-spec is **normative for M2** (the C-like subset, implemented by WP-051):
+spec is **normative for M2** (the C-like subset, implemented by WP-051 and
+wired into sema and the driver by WP-054):
 every rule below not marked *(design, M3+)* describes what `kiln_oven` does
 and is tested. Sections marked *(design)* fix the data model later
 milestones build on. The reference implementation for diagnostics is
@@ -129,11 +130,16 @@ the evaluator's flattened type table.
   ("read of dereferenced null pointer"); a compound assignment to an
   inactive union member at the operator; a step-limit note at the begin of
   the statement that would exceed it.
+- An "in call to" note is located at the begin of the call's callee
+  expression (clang's call-site location), not at the `CallExpr`'s own
+  location (its parenthesis). Arguments bound to reference parameters print
+  as the referred-to object (`bad(a[1], 0)`), as clang prints them.
+- `-fconstexpr-backtrace-limit=N` (`Oven::set_backtrace_limit`) sets the
+  frame limit; 0 shows every frame.
 - `try_fold` and `is_constant_initialized` never render notes (`silent`).
-- **Deviations from clang 19** (each documented on its test): an enum
-  conversion out of the range of the enumeration's values
-  ([expr.static.cast]/10) is diagnosed in every constant evaluation; clang 19
-  only diagnoses it in a constexpr variable initializer.
+- An out-of-range conversion to an unscoped enumeration without a fixed
+  underlying type ([expr.static.cast]/10) is accepted with the value, and
+  reported only where clang 19 reports it ("Integration").
 
 ### Evaluation entry points — normative for M2
 - `Oven::evaluate(bridge, e, EvalContext) -> Result<ConstValueId,
@@ -153,7 +159,8 @@ the evaluator's flattened type table.
 ### Limits and metrics — normative for M2
 - `Budget { steps: 1048576, depth: 512, bytes: 256 MiB, memo_entries:
   4096 }` (defaults; driver flags `-fconstexpr-steps=`,
-  `-fconstexpr-depth=`, `-fconstexpr-memory=` (kiln), and a memo size).
+  `-fconstexpr-depth=`, `-fconstexpr-memory=` (kiln); the memo size has no
+  flag yet).
 - **Steps** are exactly clang's: one per statement executed (a compound
   statement, a declaration statement, each loop-body execution, ...;
   conditions and loop increments are not statements). The smallest
@@ -227,7 +234,9 @@ inexact). They ignore unknown keys (so the format can grow) and blank lines.
   this when pointers to transient allocations can be passed.)
 - Calls are cached in a bounded LRU (`Budget::memo_entries`, 0 disables;
   table allocated once, least recently used evicted) keyed by `(function,
-  argument bits)`. Only successful calls are cached.
+  argument bits)`. Only successful calls are cached, and not a call that
+  converted a value out of an enumeration's range (its diagnostic must
+  recur on every evaluation that checks it).
 - A hit charges everything the call cost when it ran: steps, calls,
   cumulative bytes, peak bytes above the live bytes at the call, and depth.
   Every counter and every budget decision is therefore identical with the
@@ -247,6 +256,17 @@ repeated evaluations of the compiled expression; clang is
 | `fib(25)`, memo on | 485570 | 0 | 0.17 µs (warm) / 55 µs (first) | — |
 | sieve of 10000 | 49442 | 10008 | 1.1 ms | ~38 ms |
 | heap sort of 1000 structs | 86468 | 16032 | 3.6 ms | ~69 ms |
+
+Whole-driver baselines (`bench/baselines/oven.json`; release kiln and
+clang 19, `-fsyntax-only`, median of 5 runs, aarch64, 24 CPUs, load
+average 8-9 during the run):
+
+| entry | kiln | clang 19 | kiln MB | clang MB |
+|---|---|---|---|---|
+| `oven/fib` | 1.9 ms | 611 ms | 3.4 | 83 |
+| `oven/sieve-nohdr` | 8.2 ms | 267 ms | 3.2 | 89 |
+| `oven/sort-nohdr` | 20.2 ms | 412 ms | 3.4 | 91 |
+| `oven/table-nohdr` | 42.4 ms | 1369 ms | 4.2 | 90 |
 
 ### Design for M3+ *(design)*
 - Transient allocation (`new`/`delete`, `std::allocator`): a third space
@@ -297,34 +317,90 @@ impl Oven {
 pub mod report { pub fn render(..) -> String; pub fn write(..) -> io::Result<()>; }
 ```
 
-## Status (WP-051) and what remains
+## Integration — normative (WP-054)
+`kiln_oven` is the only constant evaluator: sema calls it for every
+constant it needs (spec/sema.md §8), and the driver reaches it through
+sema.
+
+- **One Oven per translation unit.** `Sema` owns it; `kiln_sema`'s
+  `oven_bridge.rs` implements `SemaBridge` per call. `kiln_parse::parse_tu`
+  and `parse_preprocessed` (the driver's path) return it beside the AST
+  (`ParsedTu { ast, oven }`) for the report.
+- **Contexts.** Every manifestly constant-evaluated site passes an
+  `EvalContext`. Its `kind` is the report's `kind`; `loc` is the
+  construct's location. The constructors match where clang 19 checks
+  enumeration ranges:
+
+  | constructor | kind | enum range checked | sites |
+  |---|---|---|---|
+  | `EvalContext::init(var, loc)` | `init` | yes | `constexpr` variable initializers (a `constinit` one that is not `constexpr` is to clear the check; sema does not evaluate those yet) |
+  | `EvalContext::converted(loc)` | `other` | yes | `case` labels, enumerators of a fixed-type enumeration |
+  | `EvalContext::new(StaticAssert, loc)` | `static_assert` | no | `static_assert` |
+  | `EvalContext::new(Other, loc)` | `other` | no | array bounds, bit-field widths, other enumerators, `alignas`, array designators |
+  | `EvalContext::new(TemplateArg / Consteval / IfConstexpr, loc)` | as named | yes | M3 |
+
+- **Enumeration range.** Where the check is on, an out-of-range value
+  gives the `-Wenum-constexpr-conversion` error ("integer value V is
+  outside the valid range of values [MIN, MAX] for the enumeration type
+  'E'") through `SemaBridge::diag`. The evaluation continues with the
+  value.
+  - Following clang's `HandleCast`, the operand is sign-extended if the
+    enumeration has negative values, else zero-extended. `V` is printed
+    in the operand's own signedness.
+  - The error is reported at the cast each time such a cast executes in
+    a checked evaluation, so it recurs on every evaluation that reaches it
+    (`allow_duplicate`).
+  - `try_fold` never reports it.
+- **Driver flags** (`kiln_driver::constexpr_opts`, spec/driver.md):
+
+  | flag | sets | default |
+  |---|---|---|
+  | `-fconstexpr-steps=N` | `Budget::steps` | 1048576 |
+  | `-fconstexpr-depth=N` | `Budget::depth` | 512 |
+  | `-fconstexpr-memory=N[k\|m\|g]` | `Budget::bytes` | 256 MiB |
+  | `-fconstexpr-backtrace-limit=N` | the backtrace limit | 10 |
+  | `-fconstexpr-report=<path>` | the report | none |
+
+  An invalid value is a driver error, as clang's is.
+- **The report** is written by `ConstexprOpts::write_report` at the end
+  of each `-fsyntax-only` job, even one with errors. It is not yet written
+  for:
+  - codegen jobs (WP-052 calls the same function);
+  - a job that stops before parsing (an invalid `-fdump-ast` value, an
+    unsupported target).
+- **Conformance.** `tests/conformance/expr.const/` runs through the driver
+  and passes with `--compiler clang++-19`:
+  - one directory per [expr.const]/5 bullet reachable in M2;
+  - references and aggregate members;
+  - `budget/`: step counts equal to clang's smallest accepted
+    `-fconstexpr-steps`, pinned with `oven:` budgets, plus one-step-short
+    twins with clang's notes.
+
+## Status and what remains
 Implemented (M2): integers of every width incl. `__int128`, `bool`,
 character types, binary32/64, x87 `long double`, binary128, enums;
-pointers to objects, arrays and functions; arrays, structs, unions,
-bit-fields; all C control flow (if, loops, switch incl. fallthrough,
-break/continue, return) with goto diagnosed as clang does; calls and
-recursion; constexpr variables and functions; `static_assert`; compound
-assignment, comma, conditional, casts, `sizeof`/`alignof`; string literals,
-`nullptr`, local aggregates and their initializers; `& * [] . ->` and
-lvalue-to-rvalue; every [expr.const]/5 bullet reachable in M2 (5.2, 5.3,
-5.4, 5.7, 5.8, 5.9, 5.10, 5.11, 5.14, 5.15, 5.16, 5.24).
+pointers to objects, arrays and functions; **references** (lowered as
+pointers: local, parameter, member, global and return references, bound
+to glvalues); arrays, structs, unions, bit-fields; all C control flow (if,
+loops, switch incl. fallthrough, break/continue, return); labels and
+`goto` (diagnosed as clang does); calls and recursion; constexpr variables
+and functions; `static_assert`; compound assignment, comma, conditional,
+casts, `sizeof`/`alignof` (of a reference type: the referred type's);
+string literals (each evaluation of a `StringLiteral` is a distinct object;
+frozen pointers keep it through `PtrBase::StringLit { lit, origin }`, so
+`p + 1 != q` for `constexpr const char *p = "ab", *q = "ab";` is rejected
+as unspecified, as by clang), `nullptr`, local aggregates and their
+initializers; `& * [] . ->` and lvalue-to-rvalue; every [expr.const]/5
+bullet reachable in M2 (5.2, 5.3, 5.4, 5.7, 5.8, 5.9, 5.10, 5.11, 5.14,
+5.15, 5.16, 5.24).
 
-Remaining for M2 consumers (each traps with a `kiln:` note today):
-- Labels: `LabelStmt`/`AttributedStmt` payloads are not defined by
-  kiln_ast (spec/ast.md §6), so labelled statements and `goto` are not
-  exercised by tests (no AST builder exists).
-- `MaterializeTemporaryExpr` lowering is implemented but untested: there is
-  no builder in kiln_ast; to be tested when the parser (WP-048) emits it.
+Remaining (each traps with a `kiln:` note today):
+- Binding a reference to a temporary (a prvalue). Sema rejects these
+  before evaluation in M2 anyway.
+- `MaterializeTemporaryExpr`: kiln_sema never builds one in M2, and the
+  compiler has no lowering for it. It comes with temporaries in M3.
 - Volatile objects: reads are diagnosed ([expr.const]/5.9) only where the
   front end puts the volatile qualifier on the read expression's type.
-
-Open questions:
-- Thawed string-literal identity: `PtrBase::StringLit` in kiln_ast's
-  `ConstStore` carries no expression identity, so two constexpr pointers
-  frozen from equal-content literals thaw into the same object, and
-  `p + 1 != q` for `constexpr const char *p = "ab", *q = "ab";` is accepted
-  where clang rejects it as unspecified. Fixing it needs an additive change
-  to `PtrBase` (literal expression id) in kiln_ast.
 
 ## Tests
 `crates/kiln_oven/tests/`, each test naming its section:
@@ -342,6 +418,9 @@ Open questions:
   directly (test-only; replaced by the real front end as it lands).
 Every negative golden was produced by kiln and compared to clang 19's
 output for the same source; positives are all accepted by clang 19.
-Planned *(design)*: `tests/conformance/expr.const/` through the driver,
-`tests/differential/constexpr/` programs built and run with clang,
-`xtask fuzz-constexpr`, and `bench/oven/` with vs-clang ratios.
+Through the driver: `tests/conformance/expr.const/` ("Integration") and
+`bench/oven/` (`cargo xtask bench --filter oven`, with vs-clang ratios in
+docs/status/perf.md). The `*-nohdr` entries are header-free twins of the
+libc++-based ones, which kiln cannot compile until `#include` works.
+Planned *(design)*: `tests/differential/constexpr/` programs built and run
+with clang, and `xtask fuzz-constexpr`.

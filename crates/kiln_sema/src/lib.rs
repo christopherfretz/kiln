@@ -14,7 +14,6 @@
     reason = "sema code uses the standard's short names (e, t, d, l, r)"
 )]
 
-mod aggval;
 pub mod constfold;
 pub mod conv;
 pub mod decl;
@@ -24,6 +23,7 @@ pub mod init;
 pub mod literal;
 pub mod lookup;
 pub mod names;
+mod oven_bridge;
 pub mod scope;
 pub mod stmt;
 pub mod target;
@@ -34,12 +34,12 @@ use kiln_ast::{Ast, AstBuilder, DeclId, ExprId, QualType};
 use kiln_diag::{Diag, DiagEngine, DiagId};
 use kiln_source::{Loc, Span};
 
-pub use constfold::{ConstEvaluator, ConstVal, NotConstant};
 pub use decl::{NameClass, TagUse};
 pub use declspec::{
     BaseSpec, Chunk, DeclSpec, Declarator, DeclaratorContext, ParamInfo, Sign, StorageSpec, Width,
 };
 pub use init::{Designator, InitItem, InitList, InitValue, Initializer};
+pub use kiln_oven::{Budget, EvalContext, EvalFailure, EvalKind, Oven};
 pub use scope::ScopeKind;
 
 /// The semantic-analysis state of one translation unit (spec/sema.md §1).
@@ -59,6 +59,10 @@ pub struct Sema<'a, 'sm> {
     /// The full target description (layout for `sizeof`/`alignof`,
     /// spec/abi.md).
     pub abi: Target,
+    /// The `#pragma pack` directives seen, in order (location and the
+    /// spelling of the argument list), for `kiln_abi`'s record layout
+    /// once packing is supported (WP-055; reported as unsupported now).
+    pub pragma_packs: Vec<(Loc, String)>,
     pub(crate) scopes: Vec<scope::Scope>,
     /// The current semantic declaration context.
     pub(crate) ctx: DeclId,
@@ -78,6 +82,8 @@ pub struct Sema<'a, 'sm> {
     /// enclosing namespace and name: a later namespace-scope declaration
     /// redeclares them ([basic.link]/6, clang's local extern decls).
     pub(crate) local_externs: Vec<(DeclId, kiln_source::symbol::Symbol, DeclId)>,
+    /// The constant evaluator of the translation unit (spec/sema.md §8).
+    pub(crate) oven: Oven,
 }
 
 impl<'a, 'sm> Sema<'a, 'sm> {
@@ -102,6 +108,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             diags,
             target,
             abi,
+            pragma_packs: Vec::new(),
             scopes: vec![scope::Scope::new(ScopeKind::TranslationUnit, Some(tu))],
             ctx: tu,
             func: None,
@@ -110,6 +117,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             defining: Vec::new(),
             enums: Vec::new(),
             local_externs: Vec::new(),
+            oven: Oven::new(Budget::default()),
         }
     }
 

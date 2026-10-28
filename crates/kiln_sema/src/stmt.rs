@@ -12,9 +12,9 @@ use kiln_diag::DiagId;
 use kiln_source::Loc;
 use kiln_source::symbol::Symbol;
 
+use crate::Sema;
 use crate::conv::{self, ConvCtx};
 use crate::scope::{Scope, ScopeKind};
-use crate::{ConstEvaluator, Sema, constfold};
 
 /// A label of the current function.
 #[derive(Clone, Debug)]
@@ -259,9 +259,10 @@ impl Sema<'_, '_> {
                 return e;
             }
         };
-        match self.evaluate(conv) {
+        let at = self.begin_loc(e);
+        match self.eval_const(conv, kiln_oven::EvalContext::converted(at)) {
             Ok(v) => {
-                let iv = v.as_int().unwrap_or(0);
+                let iv = self.const_int(v).unwrap_or(0);
                 let cv = self.int_const(cond_ty, iv);
                 let ce = self.builder().constant_expr(conv, Some(cv));
                 let ce = self.act_on_full_expr(ce);
@@ -283,11 +284,11 @@ impl Sema<'_, '_> {
                 }
                 ce
             }
-            Err(nc) => {
+            Err(f) => {
                 // [stmt.switch]/2: a converted constant expression (clang's
                 // `CheckConvertedConstantExpression`, CCEK_CaseValue).
                 let msg = self.diag(DiagId::sema_expr_not_cce, loc).arg("case value");
-                let d = self.with_not_constant_notes(msg, nc);
+                let d = Self::with_failure_notes(msg, f);
                 self.emit(d);
                 self.act_on_full_expr(conv)
             }
@@ -520,13 +521,12 @@ impl Sema<'_, '_> {
 
     /// Whether control can reach the end of `s` (a structural
     /// approximation of clang's CFG-based `-Wreturn-type`).
-    fn falls_off(&self, s: StmtId) -> Falloff {
-        let st = &self.ast.stmts;
-        let n = st.get(s);
+    fn falls_off(&mut self, s: StmtId) -> Falloff {
+        let n = *self.ast.stmts.get(s);
         match n.kind() {
             StmtKind::ReturnStmt | StmtKind::GotoStmt => Falloff::Never,
             StmtKind::CompoundStmt => {
-                let list = st.compound_body(s);
+                let list = self.ast.stmts.compound_body(s);
                 let items: Vec<StmtId> = self.ast.lists.iter(list).collect();
                 let mut result = Falloff::Always;
                 for &c in &items {
@@ -539,14 +539,14 @@ impl Sema<'_, '_> {
                 result
             }
             StmtKind::IfStmt => {
-                let d = st.if_data(s);
+                let d = *self.ast.stmts.if_data(s);
                 let then = d.then.map_or(Falloff::Always, |t| self.falls_off(t));
                 let els = d.els.map_or(Falloff::Always, |e| self.falls_off(e));
                 // A constant condition selects one branch.
                 if let Some(c) = d.cond
-                    && let Ok(v) = constfold::evaluator(&self.abi).evaluate(&self.ast, c)
+                    && let Some(v) = self.try_fold(c).and_then(|v| self.const_truth(v))
                 {
-                    return if v.truthy() { then } else { els };
+                    return if v { then } else { els };
                 }
                 match (then, els) {
                     (Falloff::Never, Falloff::Never) => Falloff::Never,
@@ -555,12 +555,10 @@ impl Sema<'_, '_> {
                 }
             }
             StmtKind::WhileStmt | StmtKind::ForStmt | StmtKind::DoStmt => {
-                let d = st.loop_data(s);
+                let d = *self.ast.stmts.loop_data(s);
                 let infinite = match d.cond {
                     None => true,
-                    Some(c) => constfold::evaluator(&self.abi)
-                        .evaluate(&self.ast, c)
-                        .is_ok_and(constfold::ConstVal::truthy),
+                    Some(c) => self.try_fold(c).and_then(|v| self.const_truth(v)) == Some(true),
                 };
                 let breaks = d.body.is_some_and(|b| self.contains_break(b, 0));
                 let body_never = n.kind() == StmtKind::DoStmt
@@ -572,15 +570,15 @@ impl Sema<'_, '_> {
                 }
             }
             StmtKind::LabelStmt => self.falls_off(StmtId::new(n.b())),
-            StmtKind::CaseStmt => self.falls_off(st.case_data(s).sub),
-            StmtKind::DefaultStmt => self.falls_off(st.default_sub(s)),
+            StmtKind::CaseStmt => self.falls_off(self.ast.stmts.case_data(s).sub),
+            StmtKind::DefaultStmt => self.falls_off(self.ast.stmts.default_sub(s)),
             StmtKind::SwitchStmt => {
-                let d = st.switch_data(s);
+                let d = *self.ast.stmts.switch_data(s);
                 let has_default = self
                     .ast
                     .lists
                     .iter::<StmtId>(d.cases)
-                    .any(|c| st.get(c).kind() == StmtKind::DefaultStmt);
+                    .any(|c| self.ast.stmts.get(c).kind() == StmtKind::DefaultStmt);
                 let body = self.falls_off(d.body);
                 if has_default && body == Falloff::Never && !self.contains_break(d.body, 0) {
                     Falloff::Never
@@ -591,7 +589,7 @@ impl Sema<'_, '_> {
                 }
             }
             StmtKind::ExprStmt => {
-                let e = st.expr_stmt_expr(s);
+                let e = self.ast.stmts.expr_stmt_expr(s);
                 if self.is_noreturn_call(e) { Falloff::Never } else { Falloff::Always }
             }
             _ => Falloff::Always,

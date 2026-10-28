@@ -321,6 +321,9 @@ diag_ids! {
     lit_four_char = WarningOff [FourByteMultiChar] (0) "multi-character character constant";
     lit_char_constant_too_long = Warning (0) "character constant too long for its type";
     lit_multichar_not_allowed = Error (1) "{0:wide|Unicode} character literals may not contain multiple characters";
+    lit_unevaluated_prefix = Error (0) "an unevaluated string literal cannot have an encoding prefix";
+    lit_unevaluated_escape = Error (1) "invalid escape sequence '{0}' in an unevaluated string literal";
+    lit_unevaluated_udl = Error (0) "an unevaluated string literal cannot be a user-defined literal";
     note_ucn_name_loose_match = Note (0) "characters names in Unicode escape sequences are sensitive to case and whitespaces";
     pp_has_warning_invalid_option = ExtWarn [MalformedWarningCheck] (0) "__has_warning expected option name (e.g. \"-Wundef\")";
     pp_expected_string_literal = Error (1) "expected string literal in {0}";
@@ -440,6 +443,14 @@ diag_ids! {
     parse_attribute_requires_string = Error (1) "expected string literal as argument of '{0}' attribute";
     parse_unsupported = Error (1) "{0} is not supported yet";
     parse_expected_lbrace_after_base = Error (0) "expected '{{' after base class list";
+    // pragmas handled by the parser (WP-055; clang ParsePragma.cpp)
+    parse_pragma_expected_lparen = Warning [IgnoredPragmas] (1) "missing '(' after '#pragma {0}' - ignoring";
+    parse_pragma_expected_rparen = Warning [IgnoredPragmas] (1) "missing ')' after '#pragma {0}' - ignoring";
+    parse_pragma_expected_identifier = Warning [IgnoredPragmas] (1) "expected identifier in '#pragma {0}' - ignored";
+    parse_pragma_extra_tokens = Warning [IgnoredPragmas] (1) "extra tokens at end of '#pragma {0}' - ignored";
+    parse_pragma_stdc_unknown = ExtWarn [UnknownPragmas] (0) "unknown pragma in STDC namespace";
+    sema_unknown_visibility = Warning [IgnoredAttributes] (1) "unknown visibility '{0}'";
+    sema_visibility_pop_mismatch = Error (0) "#pragma visibility pop with no matching #pragma visibility push";
 
     // ----- sema (WP-048)
     sema_undeclared_var_use = Error (1) "use of undeclared identifier '{0}'";
@@ -517,6 +528,7 @@ diag_ids! {
     sema_static_assert_requirement_failed = Error (1) "static assertion failed due to requirement '{0}'";
     sema_static_assert_requirement_failed_msg = Error (2) "static assertion failed due to requirement '{0}': {1}";
     sema_static_assert_not_ice = Error (0) "static assertion expression is not an integral constant expression";
+    oven_enum_constexpr_conversion = WarningError [EnumConstexprConversion] (4) "integer value {0} is outside the valid range of values [{1}, {2}] for the enumeration type '{3}'";
     note_expr_evaluates_to = Note (3) "expression evaluates to '{0} {1} {2}'";
     note_constexpr_overflow = Note (2) "value {0} is outside the range of representable values of type {1}";
     note_expr_divide_by_zero = Note (0) "division by zero";

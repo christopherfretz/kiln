@@ -45,7 +45,7 @@ macro_rules! diag_groups {
 diag_groups! {
     All = "all" [Most];
     Most = "most" [Comment, UnknownPragmas];
-    Pragmas = "pragmas" [UnknownPragmas];
+    Pragmas = "pragmas" [UnknownPragmas, IgnoredPragmas];
     Pedantic = "pedantic" [];
     BackslashNewlineEscape = "backslash-newline-escape" [];
     InvalidPpToken = "invalid-pp-token" [];
@@ -55,6 +55,7 @@ diag_groups! {
     PoundPragmaMessage = "#pragma-messages" [];
     ExtraTokens = "extra-tokens" [];
     UnknownPragmas = "unknown-pragmas" [];
+    IgnoredPragmas = "ignored-pragmas" [];
     UnknownWarningOption = "unknown-warning-option" [];
     // ----- WP-048 (parser and sema)
     UnknownEscapeSequence = "unknown-escape-sequence" [];
@@ -71,6 +72,7 @@ diag_groups! {
     DivisionByZero = "division-by-zero" [];
     ShiftCountNegative = "shift-count-negative" [];
     ShiftCountOverflow = "shift-count-overflow" [];
+    EnumConstexprConversion = "enum-constexpr-conversion" [];
     Unused = "unused" [UnusedValue];
     UnusedValue = "unused-value" [UnusedComparison, UnusedResult];
     UnusedComparison = "unused-comparison" [];

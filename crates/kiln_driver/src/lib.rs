@@ -7,6 +7,7 @@
 #![forbid(unsafe_code)]
 
 pub mod args;
+pub mod constexpr_opts;
 pub mod deps;
 pub mod pp_cmd;
 pub mod syntax_cmd;
@@ -111,7 +112,9 @@ Implemented: -E -P -C -CC -dM -o -x -std= -D -U -I -isystem -iquote
 -isysroot --sysroot -resource-dir -stdlib= --target= --embed-dir= -M -MM
 -MD -MMD -MF -MT -MQ -MP -W... -w -pedantic -ferror-limit=
 -fdiagnostics-format= -f[no-]color-diagnostics -fkiln-reproducible-time
--fsyntax-only -fdump-ast[=...] -fdump-ast-filter= -v --version.
+-fsyntax-only -fdump-ast[=...] -fdump-ast-filter= -fconstexpr-steps=
+-fconstexpr-depth= -fconstexpr-memory= -fconstexpr-backtrace-limit=
+-fconstexpr-report= -v --version.
 See spec/driver.md.
 ";
 
@@ -126,6 +129,9 @@ fn emit_arg_error(e: &ArgError, engine: &DiagEngine<'_>) {
         }
         ArgError::InvalidStdlib(a) => {
             Diag::new(DiagId::drv_invalid_stdlib_name, Span::INVALID).arg(a)
+        }
+        ArgError::InvalidInt(a, v) => {
+            Diag::new(DiagId::drv_invalid_int_value, Span::INVALID).arg(a).arg(v)
         }
     };
     d.emit(engine);
@@ -274,8 +280,9 @@ fn syntax_only(
         e.flush();
         return JobResult { errors: 1, ..JobResult::default() };
     }
-    SyntaxJob { args, toolchain: tc, std, path, stdin_text, diag_opts, stderr: io.stderr.clone() }
-        .run()
+    let job =
+        Job { args, toolchain: tc, std, path, stdin_text, diag_opts, stderr: io.stderr.clone() };
+    SyntaxJob(job).run()
 }
 
 /// The inputs that exist (`-` is standard input); the others are errors.
