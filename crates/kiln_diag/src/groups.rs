@@ -44,7 +44,7 @@ macro_rules! diag_groups {
 
 diag_groups! {
     All = "all" [Most];
-    Most = "most" [UnknownPragmas];
+    Most = "most" [Comment, UnknownPragmas];
     Pragmas = "pragmas" [UnknownPragmas];
     Pedantic = "pedantic" [];
     BackslashNewlineEscape = "backslash-newline-escape" [];
@@ -56,6 +56,30 @@ diag_groups! {
     ExtraTokens = "extra-tokens" [];
     UnknownPragmas = "unknown-pragmas" [];
     UnknownWarningOption = "unknown-warning-option" [];
+    BuiltinMacroRedefined = "builtin-macro-redefined" [];
+    Comment = "comment" [];
+    Cxx20Compat = "c++20-compat" [];
+    DelimitedEscapeSequenceExtension = "delimited-escape-sequence-extension" [];
+    DisabledMacroExpansion = "disabled-macro-expansion" [];
+    DollarInIdentifierExtension = "dollar-in-identifier-extension" [];
+    EmbeddedDirective = "embedded-directive" [];
+    ExpansionToDefined = "expansion-to-defined" [];
+    GnuIncludeNext = "gnu-include-next" [];
+    GnuLineMarker = "gnu-line-marker" [];
+    GnuZeroLineDirective = "gnu-zero-line-directive" [];
+    GnuZeroVariadicMacroArguments = "gnu-zero-variadic-macro-arguments" [];
+    IncludeNextOutsideHeader = "include-next-outside-header" [];
+    KeywordAsMacro = "keyword-macro" [];
+    NewlineEof = "newline-eof" [];
+    NullCharacter = "null-character" [];
+    PragmaOnceOutsideHeader = "pragma-once-outside-header" [];
+    PragmaSystemHeaderOutsideHeader = "pragma-system-header-outside-header" [];
+    ReservedMacroIdentifier = "reserved-macro-identifier" [];
+    ReservedUserDefinedLiteral = "reserved-user-defined-literal" [];
+    Trigraphs = "trigraphs" [];
+    Unicode = "unicode" [];
+    UnicodeWhitespace = "unicode-whitespace" [];
+    VariadicMacros = "variadic-macros" [];
 }
 
 impl Group {
