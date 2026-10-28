@@ -7,7 +7,9 @@
 #![forbid(unsafe_code)]
 
 pub mod dump;
+pub mod irtype;
 pub mod layout;
+pub mod mangle;
 pub mod target;
 
 pub use dump::{dump_record_layout, write_record_layout};
