@@ -481,7 +481,7 @@ impl Cg<'_> {
             LTy::VOID,
         );
         let _ = (c, src);
-        self.f.calls.push((Fir::last_inst(c), Some(f), false));
+        self.f.calls.push((Fir::last_inst(c), Some(f), true));
     }
 
     /// `memcpy(dst, src, n)` with an instruction source.
@@ -501,7 +501,7 @@ impl Cg<'_> {
             Op::Call { fn_ty, callee: V::C(Value::func(f)), args: vec![dst.v, src, V::C(nv), V::C(vb)], opts: Box::new(opts) },
             LTy::VOID,
         );
-        self.f.calls.push((Fir::last_inst(c), Some(f), false));
+        self.f.calls.push((Fir::last_inst(c), Some(f), true));
     }
 
     /// `memset(dst, byte, n)`.
@@ -521,7 +521,7 @@ impl Cg<'_> {
             Op::Call { fn_ty, callee: V::C(Value::func(f)), args: vec![dst.v, V::C(bv), V::C(nv), V::C(vb)], opts: Box::new(opts) },
             LTy::VOID,
         );
-        self.f.calls.push((Fir::last_inst(c), Some(f), false));
+        self.f.calls.push((Fir::last_inst(c), Some(f), true));
     }
 
     /// clang `CreateCoercedLoad` from `src` to the ABI type `ct`.
