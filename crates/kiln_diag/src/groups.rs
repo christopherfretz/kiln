@@ -57,6 +57,8 @@ diag_groups! {
     UnknownPragmas = "unknown-pragmas" [];
     UnknownWarningOption = "unknown-warning-option" [];
     // ----- WP-048 (parser and sema)
+    UnknownEscapeSequence = "unknown-escape-sequence" [];
+    Multichar = "multichar" [];
     Attributes = "attributes" [UnknownAttributes, IgnoredAttributes];
     UnknownAttributes = "unknown-attributes" [];
     IgnoredAttributes = "ignored-attributes" [];

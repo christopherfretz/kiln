@@ -2,7 +2,7 @@
 //! constant folder (spec/sema.md §9). Layout is `kiln_abi`'s Itanium
 //! implementation (spec/abi.md); this module only picks the target.
 
-use kiln_abi::{Arch, Target};
+pub use kiln_abi::{Arch, Target};
 use kiln_ast::types::{FloatFormat, TargetTypes, TypeView};
 use kiln_ast::{Ast, QualType};
 

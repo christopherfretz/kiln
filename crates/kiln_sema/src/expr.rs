@@ -167,6 +167,18 @@ impl Sema<'_, '_> {
         self.recover(QualType::ERROR, kids, loc)
     }
 
+    /// An erroneous expression at `loc` over `kids` (a `RecoveryExpr` of
+    /// the error type), for the parser's recovery after a syntax error
+    /// that was already reported.
+    pub fn act_on_error_expr(&mut self, kids: &[ExprId], loc: Loc) -> ExprId {
+        self.recover_err(kids, loc)
+    }
+
+    /// True if `e` is erroneous (a `RecoveryExpr` or of the error type).
+    pub fn is_error_expr(&self, e: ExprId) -> bool {
+        self.is_err_expr(e)
+    }
+
     /// True if an integer type `t` is narrower than `int`: arithmetic on
     /// it is done in `int` and cannot overflow (clang's
     /// `UnaryOperator::canOverflow` rule).

@@ -1737,7 +1737,11 @@ impl DeclArena {
 
     /// Records `typedef_decl` as the name of unnamed tag `tag` for linkage
     /// purposes ([dcl.typedef]/9). Write-once.
-    pub fn set_typedef_for_anon(&mut self, tag: DeclId, typedef_decl: DeclId) -> Result<(), AlreadySet> {
+    pub fn set_typedef_for_anon(
+        &mut self,
+        tag: DeclId,
+        typedef_decl: DeclId,
+    ) -> Result<(), AlreadySet> {
         self.cold.typedef_for_anon.insert(tag, typedef_decl)
     }
 

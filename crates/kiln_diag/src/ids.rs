@@ -250,6 +250,8 @@ diag_ids! {
     parse_expected_semi_declaration = Error (0) "expected ';' at end of declaration";
     parse_expected_semi_decl_list = Error (0) "expected ';' at end of declaration list";
     parse_expected_semi_after_expr = Error (0) "expected ';' after expression";
+    parse_expected_semi_toplevel = Error (0) "expected ';' after top level declarator";
+    parse_function_definition_not_allowed = Error (0) "function definition is not allowed here";
     parse_expected_semi_after_stmt = Error (1) "expected ';' after {0} statement";
     parse_expected_expression = Error (0) "expected expression";
     parse_expected_unqualified_id = Error (0) "expected unqualified-id";
@@ -392,6 +394,15 @@ diag_ids! {
     note_ovl_candidate_not_viable = Note (1) "candidate function not viable: {0}";
     sema_unsupported_string_concat = Error (0) "unsupported non-standard concatenation of string literals";
     sema_ref_non_value = Error (1) "{0} does not refer to a value";
+    // lexer and literal diagnostics the parser reports (a stopgap until the
+    // preprocessor maps every LexDiagKind, spec/parse.md §8)
+    lex_invalid_digit = Error (2) "invalid digit '{0}' in {1} constant";
+    lex_invalid_suffix = Error (2) "invalid suffix '{0}' on {1:integer|floating} constant";
+    lex_empty_char = Error (0) "empty character constant";
+    lex_literal_error = Error (1) "{0}";
+    lex_unknown_escape = Warning [UnknownEscapeSequence] (1) "unknown escape sequence '\\{0}'";
+    lex_multichar = Warning [Multichar] (0) "multi-character character constant";
+    lex_literal_warning = Warning (1) "{0}";
     sema_incdec_invalid = Error (2) "cannot {0:increment|decrement} value of type {1}";
     sema_sizeof_incomplete = Error (2) "invalid application of '{0}' to an incomplete type {1}";
     sema_sizeof_function = Extension [PointerArith] (1) "invalid application of '{0}' to a function type";

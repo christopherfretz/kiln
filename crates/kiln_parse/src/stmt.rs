@@ -1,0 +1,511 @@
+//! Statements ([stmt]; spec/parse.md §6).
+
+use kiln_ast::{ExprId, StmtId};
+use kiln_diag::DiagId;
+use kiln_lex::{Punct, TokKind};
+use kiln_sema::{DeclaratorContext, NameClass, ScopeKind};
+use kiln_source::Loc;
+
+use crate::decl::is_decl_specifier_kw;
+use crate::keywords::Kw;
+use crate::parser::Parser;
+
+impl Parser<'_, '_> {
+    /// compound-statement ([stmt.block]). A function body shares the
+    /// function's scope (`new_scope` false). Returns the statement and the
+    /// location of the `}`.
+    pub(crate) fn parse_compound(&mut self, new_scope: bool) -> (StmtId, Loc) {
+        let lbrace = self.bump().span.lo;
+        if new_scope {
+            self.s.push_scope(ScopeKind::Block);
+        }
+        let mut stmts = Vec::new();
+        while !self.at(Punct::RBrace) && !self.at_eof() {
+            if let Some(s) = self.parse_statement() {
+                stmts.push(s);
+            }
+        }
+        let rbrace = self.expect_closing(Punct::RBrace, Punct::LBrace, lbrace);
+        if new_scope {
+            self.s.pop_scope();
+        }
+        (self.s.act_on_compound(&stmts, lbrace, rbrace), rbrace)
+    }
+
+    /// A sub-statement in its own block scope ([stmt.pre]/5); a dropped
+    /// statement becomes a null statement.
+    fn parse_sub_statement(&mut self) -> StmtId {
+        let loc = self.loc();
+        self.s.push_scope(ScopeKind::Block);
+        let s = self.parse_statement();
+        self.s.pop_scope();
+        s.unwrap_or_else(|| self.s.act_on_null_stmt(loc))
+    }
+
+    /// A labeled statement's sub-statement: a label at the end of a block
+    /// labels a null statement (C++23 [stmt.label]).
+    fn parse_labeled_sub(&mut self) -> StmtId {
+        let loc = self.loc();
+        if self.at(Punct::RBrace) {
+            return self.s.act_on_null_stmt(loc);
+        }
+        self.parse_statement().unwrap_or_else(|| self.s.act_on_null_stmt(loc))
+    }
+
+    /// statement ([stmt.pre]). `None` if the statement was dropped after a
+    /// syntax error.
+    pub fn parse_statement(&mut self) -> Option<StmtId> {
+        if self.at_cxx11_attr() {
+            let mut attrs = Vec::new();
+            self.parse_attributes(&mut attrs);
+        }
+        let loc = self.loc();
+        match Self::punct_of(self.tok()) {
+            Some(Punct::LBrace) => return Some(self.parse_compound(true).0),
+            Some(Punct::Semi) => {
+                self.bump();
+                return Some(self.s.act_on_null_stmt(loc));
+            }
+            _ => {}
+        }
+        if let Some(k) = self.kw() {
+            match k {
+                Kw::If => return self.parse_if(),
+                Kw::Switch => return self.parse_switch(),
+                Kw::While => return self.parse_while(),
+                Kw::Do => return self.parse_do(),
+                Kw::For => return self.parse_for(),
+                Kw::Case => return self.parse_case(),
+                Kw::Default if self.peek_is(1, Punct::Colon) => {
+                    self.bump();
+                    self.bump();
+                    self.s.act_on_default_label(loc);
+                    let sub = self.parse_labeled_sub();
+                    return Some(self.s.act_on_default(sub, loc));
+                }
+                Kw::Break => {
+                    self.bump();
+                    let s = self.s.act_on_break(loc);
+                    self.expect_semi_after_stmt("break");
+                    return Some(s);
+                }
+                Kw::Continue => {
+                    self.bump();
+                    let s = self.s.act_on_continue(loc);
+                    self.expect_semi_after_stmt("continue");
+                    return Some(s);
+                }
+                Kw::Return => return self.parse_return(),
+                Kw::Goto => {
+                    self.bump();
+                    if self.at(Punct::Star) {
+                        self.unsupported("computed goto", self.loc());
+                        self.skip_to_semi();
+                        return None;
+                    }
+                    let Some(name) = self.ident() else {
+                        let d = self.s.diag(DiagId::parse_expected, self.loc()).arg("identifier");
+                        self.emit(d);
+                        self.skip_to_semi();
+                        return None;
+                    };
+                    let nl = self.bump().span.lo;
+                    let s = self.s.act_on_goto(name, nl, loc);
+                    self.expect_semi_after_stmt("goto");
+                    return Some(s);
+                }
+                Kw::Try | Kw::CoReturn | Kw::Asm => {
+                    self.unsupported(&format!("'{}' statements", k.spelling()), loc);
+                    self.skip_statement();
+                    return None;
+                }
+                Kw::StaticAssert => {
+                    let d = self.parse_static_assert()?;
+                    return Some(self.s.act_on_decl_stmt(&[d], loc));
+                }
+                Kw::Using => {
+                    let ds = self.parse_using();
+                    if ds.is_empty() {
+                        return None;
+                    }
+                    return Some(self.s.act_on_decl_stmt(&ds, loc));
+                }
+                Kw::Namespace | Kw::Template => {
+                    self.unsupported(&format!("'{}' here", k.spelling()), loc);
+                    self.skip_statement();
+                    return None;
+                }
+                _ => {}
+            }
+        }
+        if let Some(name) = self.ident()
+            && self.peek_is(1, Punct::Colon)
+        {
+            self.bump();
+            self.bump();
+            self.skip_attributes();
+            let l = self.s.act_on_label(name, loc);
+            let sub = self.parse_labeled_sub();
+            return Some(self.s.act_on_label_stmt(l, sub, loc));
+        }
+        if self.is_declaration_statement() {
+            let decls = self.parse_simple_declaration(DeclaratorContext::Block, false);
+            if decls.is_empty() {
+                return None;
+            }
+            return Some(self.s.act_on_decl_stmt(&decls, loc));
+        }
+        self.parse_expression_statement()
+    }
+
+    /// Skips a statement kiln does not parse.
+    fn skip_statement(&mut self) {
+        self.skip_unsupported_declaration();
+    }
+
+    /// expression-statement ([stmt.expr]).
+    fn parse_expression_statement(&mut self) -> Option<StmtId> {
+        let Some(e) = self.parse_expression() else {
+            self.skip_until(&[Punct::RBrace], true, false);
+            self.eat(Punct::Semi);
+            return None;
+        };
+        let s = self.s.act_on_expr_stmt(e);
+        if self.eat(Punct::Semi).is_none() {
+            self.s.error(DiagId::parse_expected_semi_after_expr, self.expected_loc());
+            self.skip_until(&[Punct::RBrace], true, false);
+            self.eat(Punct::Semi);
+        }
+        Some(s)
+    }
+
+    /// Expects the `;` ending a `what` statement.
+    fn expect_semi_after_stmt(&mut self, what: &str) {
+        if self.eat(Punct::Semi).is_none() {
+            let d =
+                self.s.diag(DiagId::parse_expected_semi_after_stmt, self.expected_loc()).arg(what);
+            self.emit(d);
+            self.skip_until(&[Punct::RBrace], true, false);
+            self.eat(Punct::Semi);
+        }
+    }
+
+    /// Whether a declaration-statement starts here ([stmt.ambig]: a
+    /// statement that can be a declaration is one). TODO(M3): tentative
+    /// parsing for `T(x);` and friends.
+    fn is_declaration_statement(&self) -> bool {
+        if let Some(k) = self.kw() {
+            return is_decl_specifier_kw(k);
+        }
+        if self.at_cxx11_attr() {
+            return true;
+        }
+        if self.ident().is_none() && !self.at(Punct::ColonColon) {
+            return false;
+        }
+        match self.scan_name(self.pos()) {
+            Some((end, NameClass::Type(..), _)) => {
+                let next = self.tok_at(end);
+                if self.ident_of(next).is_some() {
+                    return true;
+                }
+                match Self::punct_of(next) {
+                    Some(Punct::Star | Punct::Amp | Punct::AmpAmp | Punct::Semi) => true,
+                    Some(Punct::LParen) => {
+                        self.tok_at(end + 1).kind == TokKind::Punct(Punct::Star)
+                            || self.tok_at(end + 1).kind == TokKind::Punct(Punct::Amp)
+                    }
+                    _ => self.kw_of(next).is_some_and(is_decl_specifier_kw),
+                }
+            }
+            Some((end, NameClass::Undeclared, _)) => {
+                let next = self.tok_at(end);
+                self.ident_of(next).is_some() && self.kw_of(next).is_none()
+            }
+            _ => false,
+        }
+    }
+
+    /// `( [init-statement] condition )` for `if` and `switch`. Returns
+    /// the init-statement and the condition expression.
+    fn parse_paren_condition(&mut self, what: &str) -> Option<(Option<StmtId>, ExprId)> {
+        let Some(open) = self.eat(Punct::LParen) else {
+            let d = self
+                .s
+                .diag(DiagId::parse_expected_after, self.expected_loc())
+                .arg(format!("'{what}'"))
+                .arg("'('");
+            self.emit(d);
+            self.skip_until(&[Punct::RBrace], true, false);
+            return None;
+        };
+        let mut init = None;
+        if let Some((_, Punct::Semi)) = self.scan_for(&[Punct::Semi, Punct::RParen]) {
+            init = self.parse_statement();
+        }
+        if self.is_declaration_statement() {
+            self.unsupported("condition declarations", self.loc());
+            self.skip_until(&[Punct::RParen], false, true);
+            return None;
+        }
+        let Some(c) = self.parse_expression() else {
+            self.skip_until(&[Punct::RParen], false, true);
+            return None;
+        };
+        self.expect_closing(Punct::RParen, Punct::LParen, open);
+        Some((init, c))
+    }
+
+    /// if-statement ([stmt.if]).
+    fn parse_if(&mut self) -> Option<StmtId> {
+        let loc = self.bump().span.lo;
+        if self.at_kw(Kw::Constexpr) || self.at_kw(Kw::Consteval) || self.at(Punct::Exclaim) {
+            self.unsupported("'if constexpr' and 'if consteval'", self.loc());
+            self.skip_if_rest();
+            return None;
+        }
+        self.s.push_scope(ScopeKind::Block);
+        let Some((init, c)) = self.parse_paren_condition("if") else {
+            self.s.pop_scope();
+            self.skip_if_rest_after_cond();
+            return None;
+        };
+        let cond = self.s.act_on_condition(c);
+        let then = self.parse_sub_statement();
+        let els =
+            if self.eat_kw(Kw::Else).is_some() { Some(self.parse_sub_statement()) } else { None };
+        self.s.pop_scope();
+        Some(self.s.act_on_if(init, cond, then, els, loc))
+    }
+
+    /// Recovery after an unsupported `if` head: skip the condition and
+    /// the sub-statements.
+    fn skip_if_rest(&mut self) {
+        while !self.at(Punct::LParen) && !self.at_eof() && !self.at(Punct::LBrace) {
+            self.bump();
+        }
+        if self.eat(Punct::LParen).is_some() {
+            self.skip_until(&[Punct::RParen], false, true);
+        }
+        self.skip_if_rest_after_cond();
+    }
+
+    fn skip_if_rest_after_cond(&mut self) {
+        self.s.push_scope(ScopeKind::Block);
+        self.skip_sub_statement();
+        if self.eat_kw(Kw::Else).is_some() {
+            self.skip_sub_statement();
+        }
+        self.s.pop_scope();
+    }
+
+    /// Skips one statement without building it.
+    fn skip_sub_statement(&mut self) {
+        if self.at(Punct::LBrace) {
+            self.bump();
+            self.skip_until(&[Punct::RBrace], false, true);
+        } else if self.at_kw(Kw::If) {
+            self.bump();
+            self.skip_if_rest();
+        } else {
+            self.skip_until(&[Punct::RBrace], true, false);
+            self.eat(Punct::Semi);
+        }
+    }
+
+    /// switch-statement ([stmt.switch]).
+    fn parse_switch(&mut self) -> Option<StmtId> {
+        let loc = self.bump().span.lo;
+        self.s.push_scope(ScopeKind::Block);
+        let Some((init, c)) = self.parse_paren_condition("switch") else {
+            self.skip_sub_statement();
+            self.s.pop_scope();
+            return None;
+        };
+        let cond = self.s.act_on_start_switch(c);
+        let body = self.parse_sub_statement();
+        let s = self.s.act_on_finish_switch(init, cond, body, loc);
+        self.s.pop_scope();
+        Some(s)
+    }
+
+    /// `case constant-expression :` ([stmt.label]).
+    fn parse_case(&mut self) -> Option<StmtId> {
+        let loc = self.bump().span.lo;
+        let Some(v) = self.parse_constant_expr() else {
+            self.skip_until(&[Punct::Colon, Punct::RBrace], true, false);
+            self.eat(Punct::Colon);
+            return None;
+        };
+        if self.at(Punct::Ellipsis) {
+            self.unsupported("case ranges", self.loc());
+            self.skip_until(&[Punct::Colon], true, true);
+            return None;
+        }
+        let v = self.s.act_on_case_value(v, loc);
+        if self.eat(Punct::Colon).is_none() {
+            let d = self
+                .s
+                .diag(DiagId::parse_expected_after, self.expected_loc())
+                .arg("'case'")
+                .arg("':'");
+            self.emit(d);
+        }
+        let sub = self.parse_labeled_sub();
+        Some(self.s.act_on_case(v, sub, loc))
+    }
+
+    /// A loop condition `( expression )`.
+    fn parse_loop_condition(&mut self, what: &str) -> Option<ExprId> {
+        let Some(open) = self.eat(Punct::LParen) else {
+            let d = self
+                .s
+                .diag(DiagId::parse_expected_after, self.expected_loc())
+                .arg(format!("'{what}'"))
+                .arg("'('");
+            self.emit(d);
+            return None;
+        };
+        if self.is_declaration_statement() {
+            self.unsupported("condition declarations", self.loc());
+            self.skip_until(&[Punct::RParen], false, true);
+            return None;
+        }
+        let Some(c) = self.parse_expression() else {
+            self.skip_until(&[Punct::RParen], false, true);
+            return None;
+        };
+        self.expect_closing(Punct::RParen, Punct::LParen, open);
+        Some(self.s.act_on_condition(c))
+    }
+
+    /// while-statement ([stmt.while]).
+    fn parse_while(&mut self) -> Option<StmtId> {
+        let loc = self.bump().span.lo;
+        self.s.push_scope(ScopeKind::Block);
+        let cond = self.parse_loop_condition("while");
+        self.s.act_on_start_loop();
+        let body = self.parse_sub_statement();
+        self.s.act_on_end_loop();
+        self.s.pop_scope();
+        Some(self.s.act_on_while(cond?, body, loc))
+    }
+
+    /// do-statement ([stmt.do]).
+    fn parse_do(&mut self) -> Option<StmtId> {
+        let loc = self.bump().span.lo;
+        self.s.act_on_start_loop();
+        let body = self.parse_sub_statement();
+        self.s.act_on_end_loop();
+        if self.eat_kw(Kw::While).is_none() {
+            self.error_here(DiagId::parse_expected_while);
+            self.skip_until(&[Punct::RBrace], true, false);
+            self.eat(Punct::Semi);
+            return None;
+        }
+        let cond = self.parse_loop_condition("while");
+        let Some(cond) = cond else {
+            self.skip_until(&[Punct::RBrace], true, false);
+            self.eat(Punct::Semi);
+            return None;
+        };
+        let s = self.s.act_on_do(body, cond, loc);
+        self.expect_semi_after_stmt("do/while");
+        Some(s)
+    }
+
+    /// for-statement ([stmt.for]); range-based for is not supported.
+    fn parse_for(&mut self) -> Option<StmtId> {
+        let loc = self.bump().span.lo;
+        let Some(open) = self.eat(Punct::LParen) else {
+            let d = self
+                .s
+                .diag(DiagId::parse_expected_after, self.expected_loc())
+                .arg("'for'")
+                .arg("'('");
+            self.emit(d);
+            self.skip_until(&[Punct::RBrace], true, false);
+            return None;
+        };
+        if let Some((_, Punct::Colon)) = self.scan_for(&[Punct::Semi, Punct::Colon, Punct::RParen])
+        {
+            self.unsupported("range-based for", loc);
+            self.skip_until(&[Punct::RParen], false, true);
+            self.skip_sub_statement();
+            return None;
+        }
+        self.s.push_scope(ScopeKind::Block);
+        let r = self.parse_for_rest(open, loc);
+        self.s.pop_scope();
+        r
+    }
+
+    fn parse_for_rest(&mut self, open: Loc, loc: Loc) -> Option<StmtId> {
+        let init = if self.at(Punct::Semi) {
+            self.bump();
+            None
+        } else if self.is_declaration_statement() {
+            let l = self.loc();
+            let decls = self.parse_simple_declaration(DeclaratorContext::ForInit, false);
+            Some(self.s.act_on_decl_stmt(&decls, l))
+        } else {
+            self.parse_expression_statement()
+        };
+        let mut cond = None;
+        if !self.at(Punct::Semi) {
+            let Some(c) = self.parse_expression() else {
+                self.skip_until(&[Punct::RParen], false, true);
+                self.skip_sub_statement();
+                return None;
+            };
+            cond = Some(self.s.act_on_condition(c));
+        }
+        if self.eat(Punct::Semi).is_none() {
+            let d = self
+                .s
+                .diag(DiagId::parse_expected_after, self.expected_loc())
+                .arg("for-statement condition")
+                .arg("';'");
+            self.emit(d);
+            self.skip_until(&[Punct::RParen], false, true);
+            self.skip_sub_statement();
+            return None;
+        }
+        let mut inc = None;
+        if !self.at(Punct::RParen) {
+            let Some(e) = self.parse_expression() else {
+                self.skip_until(&[Punct::RParen], false, true);
+                self.skip_sub_statement();
+                return None;
+            };
+            inc = Some(e);
+        }
+        self.expect_closing(Punct::RParen, Punct::LParen, open);
+        self.s.act_on_start_loop();
+        let body = self.parse_sub_statement();
+        self.s.act_on_end_loop();
+        Some(self.s.act_on_for(init, cond, inc, body, loc))
+    }
+
+    /// return-statement ([stmt.return]).
+    fn parse_return(&mut self) -> Option<StmtId> {
+        let loc = self.bump().span.lo;
+        let mut value = None;
+        if self.at(Punct::LBrace) {
+            self.unsupported("returning a braced-init-list", self.loc());
+            self.skip_to_semi();
+            return None;
+        }
+        if !self.at(Punct::Semi) {
+            let Some(e) = self.parse_expression() else {
+                self.skip_until(&[Punct::RBrace], true, false);
+                self.eat(Punct::Semi);
+                return None;
+            };
+            value = Some(e);
+        }
+        let s = self.s.act_on_return(value, loc);
+        self.expect_semi_after_stmt("return");
+        Some(s)
+    }
+}
