@@ -89,7 +89,9 @@ pub(crate) struct TrapInfo {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum GKind {
     Var(DeclId),
-    Str(StringLitId, OTy),
+    /// A string literal object; the `StringLiteral` expr that created it
+    /// (`None`: thawed from a frozen pointer).
+    Str(StringLitId, OTy, Option<ExprId>),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -224,8 +226,29 @@ impl Oven {
             return i as u32;
         }
         let i = self.globals.len() as u32;
-        self.globals.push(Global { kind: GKind::Str(s, ty), state: GState::Unresolved, slot: 0 });
+        self.globals.push(Global {
+            kind: GKind::Str(s, ty, None),
+            state: GState::Unresolved,
+            slot: 0,
+        });
         self.strings.insert(s, u64::from(i));
+        i
+    }
+
+    /// The string literal object of `StringLiteral` expr `e`: one object
+    /// per expression, so `"a" == "a"` compares distinct objects (the
+    /// pool's ids are storage dedup only; spec/ast.md §9.1).
+    pub(crate) fn string_expr_index(&mut self, e: ExprId, s: StringLitId, ty: OTy) -> u32 {
+        if let Some(&i) = self.lit_exprs.get(&e) {
+            return i;
+        }
+        let i = self.globals.len() as u32;
+        self.globals.push(Global {
+            kind: GKind::Str(s, ty, Some(e)),
+            state: GState::Unresolved,
+            slot: 0,
+        });
+        self.lit_exprs.insert(e, i);
         i
     }
 
@@ -403,6 +426,9 @@ pub(crate) struct Compiler<'a> {
     ret: RetKind,
     /// The body creates temporaries (scopes are needed per statement).
     has_temps: bool,
+    /// The operator location of the innermost read-modify-write being
+    /// compiled (clang reports union active-member faults there).
+    rmw_loc: Option<Loc>,
 }
 
 impl<'a> Compiler<'a> {
@@ -415,6 +441,7 @@ impl<'a> Compiler<'a> {
             locals: FxHashMap::default(),
             mem_vars: FxHashSet::default(),
             pending: Vec::new(),
+            rmw_loc: None,
             breakables: Vec::new(),
             scopes: Vec::new(),
             ret: RetKind::Void,
@@ -444,11 +471,60 @@ impl<'a> Compiler<'a> {
         pc
     }
 
+    /// The place of the operand `x` of read-modify-write `op_e`.
+    fn lv_rmw(&mut self, x: ExprId, op_e: ExprId) -> Place {
+        let saved = self.rmw_loc.replace(self.b.ast().exprs.get(op_e).loc());
+        let p = self.lv(x, Access::Rmw);
+        self.rmw_loc = saved;
+        p
+    }
+
+    fn emit_site(&mut self, op: Op, aux: u32, args: &[u32], e: ExprId, loc: Loc) -> usize {
+        let pc = self.emit(op, aux, args);
+        self.o.sites.push(Site { pc: pc as u32, loc, e: Some(e) });
+        pc
+    }
+
+    fn sites_len(&self) -> usize {
+        self.o.sites.len()
+    }
+
     fn emit_at(&mut self, op: Op, aux: u32, args: &[u32], e: ExprId) -> usize {
         let pc = self.emit(op, aux, args);
         let loc = self.b.ast().exprs.get(e).loc();
         self.o.sites.push(Site { pc: pc as u32, loc, e: Some(e) });
         pc
+    }
+
+    /// The begin location of `e` (spec/ast.md: ranges are computed by
+    /// walking to the leftmost child). clang reports an lvalue-to-rvalue
+    /// conversion's notes at the begin of the converted expression.
+    fn begin(&self, e: ExprId) -> Loc {
+        let ast = self.b.ast();
+        let mut e = e;
+        loop {
+            let n = ast.exprs.get(e);
+            e = match n.kind() {
+                ExprKind::BinaryOperator
+                | ExprKind::CompoundAssignOperator
+                | ExprKind::ArraySubscriptExpr
+                | ExprKind::ConditionalOperator
+                | ExprKind::MaterializeTemporaryExpr => ExprId::new(n.a()),
+                ExprKind::CallExpr => ast.exprs.callee(e),
+                ExprKind::ImplicitCastExpr | ExprKind::ConstantExpr => ast.exprs.operand(e),
+                ExprKind::MemberExpr => {
+                    let base = ast.exprs.operand(e);
+                    if ast.exprs.get(base).loc() == n.loc() {
+                        return n.loc();
+                    }
+                    base
+                }
+                ExprKind::UnaryOperator if ast.exprs.unary_op(e).is_postfix() => {
+                    ast.exprs.operand(e)
+                }
+                _ => return n.loc(),
+            };
+        }
     }
 
     fn emit_loc(&mut self, op: Op, aux: u32, args: &[u32], loc: Loc) -> usize {
@@ -1621,7 +1697,7 @@ impl Compiler<'_> {
                 self.load(p, ty, ak::READ, e, dst);
             }
             UnaryOp::PostInc | UnaryOp::PostDec | UnaryOp::PreInc | UnaryOp::PreDec => {
-                let place = self.lv(x, Access::Rmw);
+                let place = self.lv_rmw(x, e);
                 let xty = self.ety(x);
                 self.inc_dec(place, xty, op, Some(dst), e);
             }
@@ -1856,7 +1932,10 @@ impl Compiler<'_> {
                     return;
                 }
                 let p = self.lv(op, Access::Read);
+                let at = self.sites_len();
                 self.load(p, ty, ak::READ, op, dst);
+                let begin = self.begin(op);
+                self.o.sites[at..].iter_mut().for_each(|s| s.loc = begin);
             }
             CastKind::NoOp => self.rv_inner(op, dst),
             CastKind::ToVoid => self.effect(op),
@@ -1886,9 +1965,17 @@ impl Compiler<'_> {
                     self.emit_at(Op::EnumCheck, 0, &[dst, lo(min), hi(min), lo(max), hi(max)], e);
                 }
             }
+            CastKind::FloatingToIntegral => {
+                // clang reports an out-of-range value at the operand.
+                let from = self.ety(op);
+                let r = self.rv(op);
+                let at = self.sites_len();
+                self.convert(r, from, ty, dst, e);
+                let begin = self.begin(op);
+                self.o.sites[at..].iter_mut().for_each(|s| s.loc = begin);
+            }
             CastKind::IntegralToBoolean
             | CastKind::IntegralToFloating
-            | CastKind::FloatingToIntegral
             | CastKind::FloatingToBoolean
             | CastKind::FloatingCast
             | CastKind::PointerToBoolean => {
@@ -2023,7 +2110,7 @@ impl Compiler<'_> {
             ExprKind::StringLiteral => {
                 let s = self.ast().exprs.string_lit(e);
                 let ty = self.ety(e);
-                let g = self.o.string_index(s, ty);
+                let g = self.o.string_expr_index(e, s, ty);
                 let r = self.reg();
                 self.emit_at(Op::GlobalAddr, 0, &[r, g], e);
                 Place::Mem(r)
@@ -2069,7 +2156,7 @@ impl Compiler<'_> {
                 match op {
                     UnaryOp::Deref => Place::Mem(self.rv(x)),
                     UnaryOp::PreInc | UnaryOp::PreDec => {
-                        let place = self.lv(x, Access::Rmw);
+                        let place = self.lv_rmw(x, e);
                         let xty = self.ety(x);
                         self.inc_dec(place, xty, op, None, e);
                         place
@@ -2171,25 +2258,32 @@ impl Compiler<'_> {
             };
             self.lv_mem(base, sub)
         };
+        // `p->m` checks its operand for null even at offset 0 (clang:
+        // "cannot access field of null pointer"); `.` on an lvalue cannot
+        // see a null base (a later read says "dereferenced null pointer").
+        let q = if fi.offset == 0 && !arrow {
+            p
+        } else {
+            let r = self.reg();
+            self.emit_at(Op::Field, u32::from(!arrow), &[r, p, fi.offset as u32], e);
+            r
+        };
         if union {
             match acc {
                 Access::Write => {
                     self.emit_at(Op::SetActive, 0, &[p, idx as u32, rt.0], e);
                 }
                 Access::Read | Access::Rmw => {
-                    let akind = if acc == Access::Read { ak::READ } else { ak::ASSIGN };
-                    self.emit_at(Op::ActiveCheck, akind, &[p, idx as u32, rt.0], e);
+                    let (akind, loc) = match (acc, self.rmw_loc) {
+                        (Access::Rmw, Some(l)) => (ak::ASSIGN, l),
+                        (Access::Rmw, None) => (ak::ASSIGN, self.node(e).loc()),
+                        _ => (ak::READ, self.begin(e)),
+                    };
+                    self.emit_site(Op::ActiveCheck, akind, &[p, idx as u32, rt.0], e, loc);
                 }
                 Access::Addr => {}
             }
         }
-        let q = if fi.offset == 0 {
-            p
-        } else {
-            let r = self.reg();
-            self.emit_at(Op::Field, 0, &[r, p, fi.offset as u32], e);
-            r
-        };
         match fi.width {
             Some(w) => Place::Bits { p: q, bit: fi.bit, width: w },
             None => Place::Mem(q),
@@ -2220,7 +2314,7 @@ impl Compiler<'_> {
         let op = ast.exprs.binary_op(e);
         let lhs = ExprId::new(n.a());
         let r = self.rv_copy(x.rhs);
-        let place = self.lv(lhs, Access::Rmw);
+        let place = self.lv_rmw(lhs, e);
         let ty = self.ety(lhs);
         let rty = self.ety(x.rhs);
         let old = self.reg();
@@ -2518,7 +2612,7 @@ impl Compiler<'_> {
             ExprKind::UnaryOperator if self.ast().exprs.unary_op(e).is_inc_dec() => {
                 let op = self.ast().exprs.unary_op(e);
                 let x = self.ast().exprs.operand(e);
-                let place = self.lv(x, Access::Rmw);
+                let place = self.lv_rmw(x, e);
                 let xty = self.ety(x);
                 self.inc_dec(place, xty, op, None, e);
             }

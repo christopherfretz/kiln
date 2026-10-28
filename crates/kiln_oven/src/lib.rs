@@ -179,7 +179,11 @@ pub struct Oven {
     pub(crate) thunks: FxHashMap<ExprId, u32>,
     pub(crate) globals: Vec<Global>,
     pub(crate) global_map: FxHashMap<DeclId, u32>,
+    /// String literal objects thawed from frozen pointers, by contents.
     pub(crate) strings: FxHashMap<StringLitId, u64>,
+    /// String literal objects of evaluated `StringLiteral` exprs, one per
+    /// expression ([lex.string]/9: distinct evaluations need not share).
+    pub(crate) lit_exprs: FxHashMap<ExprId, u32>,
     pub(crate) thawed: FxHashMap<ConstValueId, u64>,
     pub(crate) mem: Memory,
     pub(crate) regs: Vec<u128>,
@@ -207,6 +211,7 @@ impl Oven {
             globals: Vec::new(),
             global_map: FxHashMap::default(),
             strings: FxHashMap::default(),
+            lit_exprs: FxHashMap::default(),
             thawed: FxHashMap::default(),
             mem: Memory::new(budget.bytes),
             regs: vec![0; 256],

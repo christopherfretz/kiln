@@ -747,6 +747,7 @@ impl Parser<'_> {
     fn static_assert(&mut self) {
         let l = self.expect("static_assert");
         self.expect("(");
+        let begin = self.loc();
         let c = self.expr();
         let c = self.to_bool(c);
         if self.eat(",") {
@@ -756,7 +757,8 @@ impl Parser<'_> {
         self.expect(";");
         let ctx = self.ctx();
         self.ast.builder().static_assert(ctx, l, c, None);
-        self.items.push(Item::Assert { cond: c, loc: l });
+        // clang reports the failure at the condition's begin location.
+        self.items.push(Item::Assert { cond: c, loc: begin });
     }
 
     /// A simple-declaration (or function definition at namespace scope).

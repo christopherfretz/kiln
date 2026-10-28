@@ -117,6 +117,7 @@ impl Oven {
                     format!("cannot refer to element {idx} of {what} in a constant expression"),
                 )
             }
+            Fault::Invalid => (site.loc, "subexpression not valid in a constant expression".into()),
             Fault::PtrSub => {
                 (site.loc, "subtracted pointers are not elements of the same array".into())
             }
@@ -371,7 +372,7 @@ impl Oven {
             Origin::Var(d) | Origin::Global(d) | Origin::External(d) => {
                 s.push_str(&name_of(ast, d));
             }
-            Origin::Str(id) => ast.strings.write_literal(id, &mut s),
+            Origin::Str(id, _) => ast.strings.write_literal(id, &mut s),
             Origin::Temp(_) | Origin::Const(_) | Origin::None => s.push_str("{temporary}"),
         }
         let (mut t, mut rel) = (a.ty, u64::from(p.off));
@@ -460,6 +461,16 @@ impl Oven {
         }
     }
 
+    /// Whether the call that created dead frame object `p` is running.
+    fn frame_alive(&self, p: u64) -> bool {
+        let p = Ptr::decode(p);
+        let fr = match self.mem.slots.get(p.slot as usize) {
+            Some(a) if !p.is_static() && a.frame != 0 => a.frame,
+            _ => return false,
+        };
+        self.stack.iter().any(|f| f.serial == fr)
+    }
+
     fn mem_msg(
         &self,
         ast: &Ast,
@@ -476,6 +487,13 @@ impl Oven {
                 format!("{verb} dereferenced null pointer is not allowed in a constant expression")
             }
             MemFault::FnPtr => format!("{verb} a function is not allowed in a constant expression"),
+            // clang: a local of a still-running call whose scope ended is
+            // "outside its lifetime"; one of a returned call has "ended".
+            MemFault::Dead(_) if self.frame_alive(p) => {
+                format!(
+                    "{verb} object outside its lifetime is not allowed in a constant expression"
+                )
+            }
             MemFault::Dead(Origin::Var(d)) => {
                 extra.push(Note::new(ast.decls.get(d).loc(), "declared here"));
                 format!("{verb} variable whose lifetime has ended")
@@ -505,6 +523,14 @@ impl Oven {
                     let verb = if k == ak::COMPOUND { "read of" } else { verb };
                     format!("{verb} uninitialized object is not allowed in a constant expression")
                 }
+            }
+            // clang 19 treats a literal as an object of unknown value.
+            MemFault::Literal(e) => {
+                if let Some(e) = e {
+                    extra.push(Note::new(ast.exprs.get(e).loc(), "temporary created here"));
+                }
+                let d = self.ptr_string(ast, p, ty);
+                format!("{verb} object '{}' whose value is not known", d.trim_start_matches('&'))
             }
             MemFault::Const(t) => {
                 let q = self.types.info(t).q;

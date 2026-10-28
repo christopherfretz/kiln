@@ -230,7 +230,7 @@ impl Oven {
         if p.is_static() {
             let base = match a.origin {
                 Origin::Global(d) | Origin::External(d) => PtrBase::Decl(d),
-                Origin::Str(s) => PtrBase::StringLit(s),
+                Origin::Str(s, _) => PtrBase::StringLit(s),
                 Origin::Const(c) => PtrBase::Const(c),
                 _ => return Err(Freeze::Fault(FailKind::NotConstant)),
             };
@@ -471,7 +471,7 @@ impl Oven {
     /// first free register (for a nested evaluation of its initializer).
     pub(crate) fn resolve_global(&mut self, b: &mut dyn SemaBridge, g: u32, top: u32) -> u64 {
         let p = match self.globals[g as usize].kind {
-            GKind::Str(s, ty) => self.alloc_string(b, s, ty),
+            GKind::Str(s, ty, e) => self.alloc_string(b, s, ty, e),
             GKind::Var(d) => self.resolve_var(b, g, d, top),
         };
         if let GState::Unresolved = self.globals[g as usize].state {
@@ -480,9 +480,15 @@ impl Oven {
         p
     }
 
-    fn alloc_string(&mut self, b: &mut dyn SemaBridge, s: StringLitId, ty: OTy) -> u64 {
+    fn alloc_string(
+        &mut self,
+        b: &mut dyn SemaBridge,
+        s: StringLitId,
+        ty: OTy,
+        e: Option<ExprId>,
+    ) -> u64 {
         let size = self.types.size(ty);
-        let p = self.mem.alloc_static(ty, size, flags::CONST, Origin::Str(s));
+        let p = self.mem.alloc_static(ty, size, flags::CONST, Origin::Str(s, e));
         let base = u64::from(
             self.mem.statics[(Ptr::decode(p).slot & !crate::mem::STATIC_BIT) as usize].base,
         );

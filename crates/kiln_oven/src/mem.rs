@@ -104,8 +104,8 @@ pub(crate) enum Origin {
     /// A variable not usable in constant expressions (reads and writes
     /// are diagnosed; its address is a constant).
     External(DeclId),
-    /// A string literal.
-    Str(StringLitId),
+    /// A string literal (and the expr that created it, if evaluated).
+    Str(StringLitId, Option<ExprId>),
     /// An anonymous constant thawed from the store.
     Const(ConstValueId),
 }
@@ -128,6 +128,9 @@ pub(crate) struct Alloc {
     pub flags: u8,
     pub ty: OTy,
     pub origin: Origin,
+    /// Serial of the call frame that created it (0: none); tells a dead
+    /// local of a live frame (scope ended) from one of a returned call.
+    pub frame: u32,
 }
 
 #[derive(Debug, Default)]
@@ -226,6 +229,8 @@ pub(crate) enum MemFault {
     OutOfBounds,
     Uninit,
     Const(OTy),
+    /// Modification of a string literal object (its creating expr).
+    Literal(Option<ExprId>),
     /// Modification of a namespace-scope or static variable.
     ModifyGlobal,
     /// Read (`false`) or write (`true`) of an external variable.
@@ -253,6 +258,9 @@ pub(crate) struct Memory {
     /// Peak live frame bytes.
     pub peak: u64,
     pub limit: u64,
+    /// Serial of the running call frame, and the last serial handed out.
+    pub cur_frame: u32,
+    pub serial: u32,
 }
 
 const DEAD0: Alloc = Alloc {
@@ -263,6 +271,7 @@ const DEAD0: Alloc = Alloc {
     flags: 0,
     ty: OTy(0),
     origin: Origin::None,
+    frame: 0,
 };
 
 impl Memory {
@@ -278,6 +287,8 @@ impl Memory {
             allocated: 0,
             peak: 0,
             limit,
+            cur_frame: 0,
+            serial: 0,
         }
     }
 
@@ -292,6 +303,13 @@ impl Memory {
         }
         self.allocated = 0;
         self.peak = 0;
+    }
+
+    /// A fresh frame serial, made current.
+    pub fn next_frame(&mut self) -> u32 {
+        self.serial = self.serial.wrapping_add(1).max(1);
+        self.cur_frame = self.serial;
+        self.serial
     }
 
     /// A frame mark: live-allocation count and arena top.
@@ -343,6 +361,7 @@ impl Memory {
             flags: fl,
             ty,
             origin,
+            frame: self.cur_frame,
         };
         let slot = if let Some(s) = self.free.pop_front() {
             let g = self.slots[s as usize].generation + 1;
@@ -378,6 +397,7 @@ impl Memory {
             flags: fl,
             ty,
             origin,
+            frame: 0,
         });
         Ptr { slot: idx | STATIC_BIT, generation: 0, past: false, off: 0 }.encode()
     }

@@ -73,6 +73,8 @@ pub(crate) struct Frame {
     pub mark: u64,
     pub call_pc: u32,
     pub memo: bool,
+    /// Unique per activation (see `Alloc::frame`).
+    pub serial: u32,
 }
 
 /// Why execution stopped (rendered into notes by `notes`).
@@ -111,6 +113,8 @@ pub(crate) enum Fault {
         array: bool,
     },
     PtrSub,
+    /// clang's generic `Error(E)`: "subexpression not valid".
+    Invalid,
     PtrCmp {
         p: u64,
         q: u64,
@@ -203,6 +207,7 @@ impl Oven {
             }
         };
         self.stack.truncate(entry);
+        self.mem.cur_frame = self.stack.last().map_or(0, |f| f.serial);
         self.run.entry = saved_entry;
         out
     }
@@ -228,6 +233,7 @@ impl Oven {
         let mut pc = self.funcs[func as usize].entry as usize;
         let mut fb = fb0 as usize;
         self.grow_regs(fb + self.funcs[func as usize].nregs as usize + 1);
+        let serial = self.mem.next_frame();
         self.stack.push(Frame {
             func,
             ret_pc: 0,
@@ -235,6 +241,7 @@ impl Oven {
             mark: BOTTOM,
             call_pc: NO_CALL,
             memo: false,
+            serial,
         });
         loop {
             let w = self.code[pc];
@@ -439,14 +446,23 @@ impl Oven {
                 Op::Field => {
                     let raw = reg!(1) as u64;
                     if raw == 0 {
-                        fail!(Fault::NullField);
+                        // aux 1 (`.` on `*null`): stay null, so the access
+                        // reports the dereferenced null pointer.
+                        if aux == 0 {
+                            fail!(Fault::NullField);
+                        }
+                        reg!(0) = 0;
+                    } else {
+                        let p = Ptr::decode(raw);
+                        if p.past {
+                            fail!(Fault::PastField);
+                        }
+                        reg!(0) = u128::from(Ptr::with_off(
+                            raw,
+                            u64::from(p.off) + arg!(2) as u64,
+                            false,
+                        ));
                     }
-                    let p = Ptr::decode(raw);
-                    if p.past {
-                        fail!(Fault::PastField);
-                    }
-                    reg!(0) =
-                        u128::from(Ptr::with_off(raw, u64::from(p.off) + arg!(2) as u64, false));
                     pc += 4;
                 }
                 Op::Load => {
@@ -576,6 +592,7 @@ impl Oven {
                     if fr.mark != BOTTOM {
                         self.mem.release(fr.mark, &self.types);
                     }
+                    self.mem.cur_frame = self.stack.last().map_or(0, |f| f.serial);
                     if fr.memo {
                         self.finish_memo(v);
                     }
@@ -671,13 +688,16 @@ impl Oven {
         self.run.counters.calls += 1;
         self.run.maxd = self.run.maxd.max(active + 1);
         self.grow_regs(nb + nregs + 1);
+        let mark = self.mem.mark();
+        let serial = self.mem.next_frame();
         self.stack.push(Frame {
             func: callee,
             ret_pc: (pc + 3) as u32,
             fb: nb as u32,
-            mark: self.mem.mark(),
+            mark,
             call_pc: pc as u32,
             memo,
+            serial,
         });
         Ok(Some((entry, nb)))
     }
@@ -747,7 +767,8 @@ impl Oven {
             return Ok(0);
         }
         if p == 0 || q == 0 || Ptr::alloc_key(p) != Ptr::alloc_key(q) {
-            return Err(Fault::PtrSub);
+            // Different complete objects: clang has no specific note.
+            return Err(Fault::Invalid);
         }
         let (sp, _, ip, _) = self.extent_of(p, elem).map_err(|_| Fault::PtrSub)?;
         let (sq, _, iq, _) = self.extent_of(q, elem).map_err(|_| Fault::PtrSub)?;
@@ -759,7 +780,7 @@ impl Oven {
 
     fn is_literal(&self, raw: u64) -> bool {
         let p = Ptr::decode(raw);
-        self.alloc_any(p).is_some_and(|a| matches!(a.origin, Origin::Str(_)))
+        self.alloc_any(p).is_some_and(|a| matches!(a.origin, Origin::Str(..)))
     }
 
     /// One past the end of a complete object.
@@ -1150,6 +1171,9 @@ impl Oven {
 fn write_fault(stat: bool, a: &Alloc, ty: OTy) -> Option<MemFault> {
     if stat && a.flags & flags::RESOLVING == 0 && matches!(a.origin, Origin::Global(_)) {
         return Some(MemFault::ModifyGlobal);
+    }
+    if let Origin::Str(_, e) = a.origin {
+        return Some(MemFault::Literal(e));
     }
     (a.flags & flags::CONST != 0).then_some(MemFault::Const(ty))
 }
