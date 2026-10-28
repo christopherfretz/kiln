@@ -12,6 +12,7 @@ kiln_diag.workspace = true
 kiln_ast.workspace = true
 kiln_abi.workspace = true
 kiln_llvm.workspace = true
+kiln_oven.workspace = true
 
 [lints]
 workspace = true

@@ -33,6 +33,7 @@ dependencies = [
  "kiln_ast",
  "kiln_diag",
  "kiln_llvm",
+ "kiln_oven",
  "kiln_source",
 ]
 
