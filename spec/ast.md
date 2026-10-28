@@ -1,0 +1,590 @@
+# spec: kiln_ast — the typed AST, templates, constant values, dump format
+
+Status: **design** (WP-040). Normative for M2 where marked; sections marked
+*(M3+)* fix representation decisions now and are implemented later.
+Companion: `spec/types.md` (types, `TypeContext`, type printing).
+Consumers: kiln_parse/kiln_sema (build), kiln_oven (reads, via
+`SemaBridge`), kiln_codegen (reads), the harness (dump goldens).
+
+## 1. Principles
+1. **Index arenas, no pointer graph.** Every node lives in a `Vec` and is
+   named by a 4-byte `NonZeroU32` id. No `Rc`, no lifetimes in node types,
+   `#![forbid(unsafe_code)]`. Ids are TU-local.
+2. **Append-only, write-once.** Nodes are never removed and, apart from the
+   short list of late-bound slots in §2.4, never modified after creation.
+   Ids handed out stay valid and mean the same thing for the whole TU, so
+   the Oven and codegen may cache by id across evaluations.
+3. **One semantic tree.** The AST is the sema output: every expression
+   carries its type and value category and every conversion is explicit.
+   There is no separate syntax tree (the parser drives sema directly, as
+   clang). Syntactic forms that sema rewrites keep only what diagnostics,
+   reflection and the dump need (§5.6).
+4. **Compact fixed-size headers + side arenas.** Hot fields (kind, type,
+   value category, two operands) are inline; anything larger or rarer is
+   in a per-kind side record or a sparse "cold" map keyed by id.
+5. **clang's model, kiln's encoding.** Node classes, children order and
+   conversion kinds follow clang 19 so its AST is a usable oracle
+  (ast-dump.md §6);
+   the storage is ours.
+
+## 2. Ownership and ids
+### 2.1 Ids
+```rust
+pub struct DeclId(NonZeroU32);   pub struct ExprId(NonZeroU32);
+pub struct StmtId(NonZeroU32);   pub struct AttrId(NonZeroU32);
+pub struct ListId(NonZeroU32);   // immutable list of u32 ids in `lists`
+pub struct ConstValueId(NonZeroU32); pub struct ReflectionId(NonZeroU32);
+pub struct StringLitId(NonZeroU32);  // bytes of a string literal (`strings` pool)
+// from types.md: TypeId, QualType, TemplateNameId, NnsId, ArgListId, ProfileId
+```
+`Option<XId>` is 4 bytes. Index 0 of each arena is a dummy. An id
+type per arena makes mixing arenas a type error. Capacity is 2^32 − 1 per
+arena; exhaustion is a fatal diagnostic, not a panic.
+
+### 2.2 The `Ast`
+```rust
+pub struct Ast {
+    pub types: TypeContext,        // spec/types.md
+    pub decls: DeclArena,          // §4: headers + per-kind payloads + cold maps
+    pub exprs: ExprArena,          // §5
+    pub stmts: StmtArena,          // §6
+    pub attrs: AttrArena,          // §7
+    pub lists: IdLists,            // ListId -> &[u32]; (start: u32, len: u32) spans into one Vec<u32>
+    pub strings: StringPool,       // literal bytes (code units, encoding-tagged)
+    pub lookup: LookupTables,      // §4.3
+    pub redecls: RedeclTable,      // §4.4
+    pub templates: TemplateTables, // §8
+    pub consts: ConstStore,        // §9
+    pub reflections: ReflectionTable, // §10 (M6)
+    pub layouts: LayoutCache,      // spec/types.md §11
+    pub tu: DeclId,                // the TranslationUnitDecl
+    symbols: Arc<kiln_lex::Interner>,
+}
+```
+`Ast` is created by sema at TU start, owned by `kiln_sema::Sema` while
+parsing, then moved to codegen. Sema is single-threaded per TU (§13 Q8);
+`Ast: Send`, not `Sync`-shared during construction.
+
+### 2.3 Memory accounting
+Every arena implements `HeapSize { fn heap_bytes(&self) -> MemReport }`
+(rows: name, count, live bytes, reserved bytes). `Ast::memory()`
+aggregates; `-fconstexpr-report` and the bench record it per TU next to
+the Oven counters (spec/bench.md). Size assertions (`size_of`) for every
+header type are unit tests (§14), so a field addition that grows a header
+fails CI rather than silently costing memory.
+
+### 2.4 Mutation discipline
+After a node is created its header and side record are immutable, except:
+
+| slot | written | by |
+|---|---|---|
+| `FunctionData.body` | once (definition parsed or instantiated) | sema |
+| `VarData.init`, `VarData.eval` | init once; eval state machine §9.2 | sema / Oven via bridge |
+| `RecordData` definition data, `first/last_child` | while the class is being defined; frozen at `}` (except `define_aggregate`, §10) | sema |
+| `DeclNode.ty` | re-pointed for deduced return types and resolved exception specs | sema |
+| `RedeclGroup.latest/definition` | on each redeclaration / definition | sema |
+| `DeclFlags::{USED, REFERENCED, INVALID}` | monotone set | sema |
+| lookup tables, specialization maps, `layouts`, `consts`, `types` | insert-only | sema / Oven |
+
+**Instantiation adds nodes, never rewrites patterns**: substituting a
+pattern creates fresh decls/exprs/stmts (with `instantiated_from` links,
+§8.3) appended to the arenas. Consequently instantiated bodies are retained
+for the TU's life (§13 Q6).
+
+## 3. Names
+`DeclName(u32)`: a 3-bit tag in bits 29..=31 and a 29-bit payload.
+
+| tag | name | payload |
+|---|---|---|
+| 0 | identifier | `Symbol` index (payload 0 + tag 0 = the empty name) |
+| 1 | `operator@` | `OverloadedOperator` (`+`, `new[]`, `()`, `co_await`, `<=>`, ...) |
+| 2 | constructor | index into `names.special` → canonical class `TypeId` |
+| 3 | destructor | same |
+| 4 | conversion function | index → canonical target `QualType` |
+| 5 | literal operator | `Symbol` of the suffix |
+| 6 | deduction guide | index → template `DeclId` |
+| 7 | reserved | |
+
+`names.special` is interned, so `DeclName` equality is `u32` equality and
+`(context, DeclName)` is a hashable 8-byte lookup key.
+
+## 4. Declarations
+### 4.1 Header
+```rust
+struct DeclNode {        // 28 bytes
+    kind: DeclKind,      // u8 (§4.2)
+    flags: DeclFlags,    // u8: INVALID IMPLICIT USED REFERENCED HAS_ATTRS
+                         //     HAS_LEXICAL_CTX DEPENDENT_CTX INJECTED
+    misc: DeclMisc,      // u16: access(2) friend(2) local_extern(1) module_ownership(3)
+                         //      name_independent(1, P2169 `_`) linkage cache(3) visibility(2) spare(2)
+    name: DeclName,      // u32
+    ctx: Option<DeclId>, // semantic DeclContext; None only for the TU
+    next: Option<DeclId>,// next sibling in the *lexical* context's member list
+    loc: Loc,            // the name's location ([dcl.decl]: the declarator-id)
+    ty: Option<QualType>,// value decls: declared type; type decls: the declared type; else None
+    data: u32,           // index into the kind's payload arena (0 = none)
+}
+```
+- The lexical context is stored in a sparse map `lexical_ctx: FxHashMap<
+  DeclId, DeclId>` only when it differs from `ctx` (out-of-line member
+  definitions, friends, local externs): flag `HAS_LEXICAL_CTX`.
+- Source range: the begin location (decl-specifiers start) is in the
+  payload of kinds that need it for diagnostics; the end is computed.
+- Identifier namespace (IDNS: ordinary / tag / member / namespace / label
+  / template-param) is a function of `kind` and `misc.friend`/
+  `local_extern`, not stored.
+
+### 4.2 Kinds and payloads
+Context kinds (★) own a member list `first_child/last_child` (append O(1)
+through `next`) and a lookup table (§4.3). Functions are the semantic
+context of their parameters and local declarations but own neither (§4.3). `R` = redeclarable (payload starts with `Redecl { prev:
+Option<DeclId>, group: RedeclGroupId }`). `T` = may be templated (§8.2).
+
+| group | kinds |
+|---|---|
+| scopes | `TranslationUnit`★, `Namespace`★R (inline bit; inline children in an append-only side map), `NamespaceAlias`R, `LinkageSpec`★ (C / C++), `Export`★ (M4), `Empty`, `FileScopeAsm` |
+| using | `UsingDirective`, `Using`, `UsingEnum`, `UsingShadow`, `ConstructorUsingShadow`, `UsingPack`, `UnresolvedUsingValue`, `UnresolvedUsingTypename`, `UnresolvedUsingIfExists` (M3) |
+| types | `Typedef`R, `TypeAlias`R T, `Enum`★R T (scoped, fixed underlying type, `int_type`, promotion type), `EnumConstant` (value: `ConstValueId`), `CXXRecord`★R T (struct/class/union; lambda closure bit), `ClassTemplateSpecialization`★R, `ClassTemplatePartialSpecialization`★R |
+| members | `Field` (bit-width `ExprId`, default member init, mutable, `[[no_unique_address]]`), `IndirectField` (chain into anonymous unions), `AccessSpec`, `Friend` (decl or type; P2893 pack), `FriendTemplate` |
+| functions | `Function`R T, `CXXMethod`R T, `CXXConstructor`R T, `CXXDestructor`R T, `CXXConversion`R T, `CXXDeductionGuide` T |
+| variables | `Var`R T, `ParmVar`, `ImplicitParam` (`this`, coroutine frame), `Decomposition` (structured bindings: `bindings: ListId`; P1061 pack), `Binding` (`binding: ExprId`, holding var for tuple-like), `VarTemplateSpecialization`R, `VarTemplatePartialSpecialization`R |
+| templates | `ClassTemplate`R, `FunctionTemplate`R, `VarTemplate`R, `TypeAliasTemplate`R, `Concept`, `BuiltinTemplate` (`__make_integer_seq`, `__type_pack_element`), `TemplateTypeParm`, `NonTypeTemplateParm`, `TemplateTemplateParm`, `ImplicitConceptSpecialization`, `RequiresExprBody`★ |
+| synthesized | `LifetimeExtendedTemporary` (value of a lifetime-extended temporary in a constant initializer), `TemplateParamObject` (class-type NTTP object: type + `ConstValueId`), `StaticAssert` (cond `ExprId`, message `ExprId`, P2741), `Label`, `ContractResultName` (P2900 `post(r: ...)`) |
+
+Hot payloads (dense arenas, one record per decl of the kind):
+```rust
+struct FunctionData {               // 24 bytes
+    redecl: Redecl,                 // 8
+    params: ListId,                 // ParmVar DeclIds
+    body: Option<StmtId>,           // late-bound (§2.4)
+    spec: FnSpec,                   // u32: storage(2) inline(1) implicit_inline(1) constexpr_kind(2: none/constexpr/consteval)
+                                    //   virtual(1) pure(1) defaulted(2: no/=default/implicit) deleted(1) explicit(1)
+                                    //   trivial(1) immediate_escalating(1) has_contracts(1) is_coroutine(1) ...
+    templ: TemplLink,               // §8.2
+}
+struct VarData {                    // 24 bytes
+    redecl: Redecl,
+    init: Option<ExprId>,
+    spec: VarSpec,                  // u32: storage(3) tls(2) init_style(2: c/call/list/paren-list) constexpr(1) constinit(1)
+                                    //   inline(1) nrvo(1) exception_var(1) cxx_for_range(1) ...
+    eval: VarEval,                  // u32, §9.2: 0 NotEvaluated | MAX Evaluating | MAX-1 NotConstant | else ConstValueId
+    templ: TemplLink,
+}
+struct RecordData { redecl: Redecl, first_child, last_child, bases: ListId /*BaseSpec ids*/,
+                    defn: DefinitionBits /*u64, clang's DefinitionData flags*/, templ: TemplLink,
+                    lambda: Option<LambdaId>, tag: TagKind /*struct/class/union*/ }   // 40 bytes
+```
+Cold data (only some decls have it) lives in `FxHashMap<DeclId, _>`
+maps: `= delete("reason")` messages (P2573), `explicit(expr)`, trailing
+requires-clauses, contract lists (P2900: `ListId` of `ContractSpec { kind:
+pre|post, cond: ExprId, result_name: Option<DeclId> }`), `asm` labels,
+default arguments of templates, alignment overrides, deprecation messages.
+A cold map costs ~16 B per *entry* and nothing for decls without one;
+fields used by fewer than ~5% of decls of a kind go there.
+
+### 4.3 DeclContext lookup tables
+- **One global table** `FxHashMap<(DeclId /*semantic ctx*/, DeclName),
+  LookupEntry>`. `LookupEntry(u32)`: top bit clear = a single `DeclId`
+  (so decl ids are capped at 2^31 − 1; exhaustion is fatal); set = index into `sets: Vec<SmallVec<[DeclId; 4]>>` (overload sets,
+  tag + non-tag pairs `struct stat` / `stat()`, P2169 multiple `_`).
+- The entry holds the **latest** declaration of each entity
+  (redeclarations replace their predecessor in place, keeping overload-set
+  order = order of first declaration).
+- **Transparent contexts** (`LinkageSpec`, `Export`, unscoped `Enum`
+  enumerators, anonymous unions/structs' `IndirectField`s) insert each
+  name into the nearest non-transparent enclosing context as well as (for
+  enums and anonymous records) their own.
+- **Inline namespaces**: names declared in inline namespace `I` are also
+  inserted into each enclosing namespace up the chain of inline
+  namespaces, flagged `via_inline` in the set entry ([namespace.def]/7);
+  `inline_children: FxHashMap<DeclId, Vec<DeclId>>` serves ADL's
+  associated namespaces (namespaces reopen, so this cannot be a `ListId`).
+- Function-local scopes are **not** tables: block-scope lookup is sema's
+  scope stack during parsing; afterwards function bodies are reached only
+  through ids. Class scopes, namespaces and the TU are tables.
+- Lookup *rules* (hiding, using-directives, ADL, two-phase) are sema's;
+  the AST answers `lookup_local(ctx, name) -> &[DeclId]` and
+  `members(ctx) -> impl Iterator<DeclId>` (lexical order).
+
+### 4.4 Redeclaration chains
+`RedeclGroup { first: DeclId, latest: DeclId, definition: Option<DeclId> }`
+(12 B), shared by all redeclarations; each redeclarable payload stores
+`prev` and `group`. `first(d)`, `latest(d)`, `definition(d)` are O(1).
+Types and template keys refer to `first` (spec/types.md: `Record(first)`),
+lookup returns `latest`, codegen emits from `definition`. A redeclaration
+merges into its predecessor's group (sema checks compatibility). The
+`ODR`-checked "is this the same entity" question is group identity.
+
+## 5. Expressions
+### 5.1 Header
+```rust
+struct ExprNode {        // 20 bytes
+    kind: ExprKind,      // u8 (§5.3)
+    bits: u8,            // value category (2: prvalue/lvalue/xvalue) | object kind (2: ordinary/bitfield/vector elt)
+                         //   | 4 per-kind flags (e.g. part_of_explicit_cast, postfix, arrow, adl)
+    deps: ExprDeps,      // u8: TYPE VALUE INSTANTIATION UNEXPANDED_PACK ERROR (+3 spare)
+    aux: u8,             // operator / cast kind / literal radix / trait kind
+    ty: QualType,        // never a reference type ([expr.type]/1); placeholder builtins for overload sets etc.
+    loc: Loc,            // operator / start token location
+    a: u32, b: u32,      // operands: ExprId/DeclId/ListId/side-record index, or inline payload
+}
+```
+- Every expression has a type and a value category, *including* in
+  templates (dependent expressions have type `Dependent` (builtin 29) or
+  a dependent type, and category per [temp.dep.expr] best knowledge).
+- **Dependence** (`deps`) is computed at construction from children and
+  the node's own rule ([temp.dep.expr], [temp.dep.constexpr]); it is never
+  recomputed. `ERROR` propagates from `RecoveryExpr` and error types.
+- Inline encodings: `IntegerLiteral` ≤ 64 bits stores the value in `a|b`
+  (wider: `a` = `ConstValueId`); `CharacterLiteral`/`CXXBoolLiteral`
+  in `a`; `FloatingLiteral` in `a` = `ConstValueId`; unary/cast: `a` =
+  operand; binary: `a`, `b`; `CallExpr`: `a` = callee, `b` = args `ListId`;
+  `DeclRefExpr`: `a` = `DeclId`, `b` = side index for qualifier/template
+  args/found-decl (0 if none); `MemberExpr`: `a` = base, `b` = member decl
+  (rare extras in a cold map).
+- Source ranges are computed (`begin(e)` walks to the leftmost child;
+  kinds ending in a closing token store it in their side record or cold
+  map); no stored ranges.
+- **No parent links.** `ParentMap::build(&Ast, root: StmtId)` builds one on
+  demand (diagnostics needing context, `-Wparentheses`-style checks).
+
+### 5.2 Value categories ([basic.lval])
+`ty` is the type of the expression after [expr.type] adjustment (never a
+reference); `lvalue`/`xvalue` are printed in the dump; prvalue is not.
+Bit-fields set object kind `bitfield` (codegen and the Oven need the
+`FieldDecl` from the `MemberExpr`).
+
+### 5.3 Expression kinds
+Names are clang's (the dump prints them). (M2) marks the M2 subset.
+
+| group | kinds |
+|---|---|
+| literals | `IntegerLiteral` (M2), `FloatingLiteral` (M2), `CharacterLiteral` (M2: kind ascii/wide/utf8/16/32), `StringLiteral` (M2: `StringLitId`, kind), `CXXBoolLiteralExpr` (M2), `CXXNullPtrLiteralExpr` (M2), `UserDefinedLiteral`, `ImaginaryLiteral`, `EmbedExpr` (`#embed`), `GNUNullExpr` (`__null`, glibc `NULL`) |
+| names | `DeclRefExpr` (M2), `MemberExpr` (M2), `CXXThisExpr`, `PredefinedExpr` (`__func__`, `__PRETTY_FUNCTION__`), `SourceLocExpr` (`__builtin_source_location`, `__builtin_LINE`...), `UnresolvedLookupExpr`, `UnresolvedMemberExpr`, `DependentScopeDeclRefExpr`, `CXXDependentScopeMemberExpr`, `SubstNonTypeTemplateParmExpr`, `SubstNonTypeTemplateParmPackExpr`, `FunctionParmPackExpr` |
+| operators | `UnaryOperator` (M2), `BinaryOperator` (M2; incl. `,` and assignment), `CompoundAssignOperator` (M2; computation types in side record), `ConditionalOperator` (M2), `BinaryConditionalOperator` (GNU `?:`), `ArraySubscriptExpr` (M2), `ParenExpr` (M2), `CallExpr` (M2), `CXXMemberCallExpr`, `CXXOperatorCallExpr`, `CXXRewrittenBinaryOperator` (`<=>`/`==` rewrites), `ParenListExpr` (dependent init) |
+| casts | `ImplicitCastExpr` (M2), `CStyleCastExpr` (M2), `CXXFunctionalCastExpr`, `CXXStaticCastExpr`, `CXXConstCastExpr`, `CXXReinterpretCastExpr`, `CXXDynamicCastExpr`, `BuiltinBitCastExpr` (`__builtin_bit_cast`) |
+| initialization | `InitListExpr` (M2; semantic form, §5.6), `ImplicitValueInitExpr` (M2), `CXXConstructExpr`, `CXXTemporaryObjectExpr`, `CXXInheritedCtorInitExpr`, `CXXDefaultArgExpr`, `CXXDefaultInitExpr`, `CXXScalarValueInitExpr`, `CXXParenListInitExpr` (P0960), `ArrayInitLoopExpr`, `ArrayInitIndexExpr`, `CXXStdInitializerListExpr`, `CompoundLiteralExpr` (GNU), `NoInitExpr` |
+| temporaries | `MaterializeTemporaryExpr` (extending decl / `LifetimeExtendedTemporary`), `CXXBindTemporaryExpr`, `ExprWithCleanups`, `OpaqueValueExpr` |
+| memory | `CXXNewExpr` (incl. placement, P2747 constexpr placement new), `CXXDeleteExpr`, `CXXPseudoDestructorExpr` |
+| exceptions/RTTI | `CXXThrowExpr` (P3068 constexpr exceptions), `CXXNoexceptExpr`, `CXXTypeidExpr` |
+| traits | `UnaryExprOrTypeTraitExpr` (M2: `sizeof`, `alignof`, `__alignof`), `TypeTraitExpr` (`__is_same`, ..., `__builtin_is_within_lifetime` is a call), `ArrayTypeTraitExpr`, `ExpressionTraitExpr`, `OffsetOfExpr`, `SizeOfPackExpr`, `RequiresExpr`, `ConceptSpecializationExpr` |
+| lambdas, packs | `LambdaExpr`, `PackExpansionExpr`, `CXXFoldExpr`, `PackIndexingExpr` (P2662), `CXXUnresolvedConstructExpr` |
+| coroutines | `CoawaitExpr`, `DependentCoawaitExpr`, `CoyieldExpr` |
+| constant | `ConstantExpr` (M2; caches the value, §9.2) |
+| GNU / builtins | `StmtExpr`, `ChooseExpr`, `VAArgExpr`, `AtomicExpr` (`__c11_atomic_*`, `__atomic_*`), `ShuffleVectorExpr`, `ConvertVectorExpr`, `ExtVectorElementExpr` |
+| reflection (M6) | `CXXReflectExpr` (`^^`: operand type/decl/namespace/expr → `ReflectionId` when non-dependent), `CXXSpliceExpr` (`[: e :]` in expression position; designated entity once evaluated) |
+| recovery | `RecoveryExpr` (children kept; `ERROR` dependence; type if known) |
+
+Builtin *functions* (`__builtin_memcpy`, `__builtin_is_constant_evaluated`,
+`__builtin_is_within_lifetime`, `__builtin_constant_p`, ...) are ordinary
+`CallExpr`s whose callee is a `DeclRefExpr` to an implicit `Function`
+decl carrying a `BuiltinId` in its cold data (as clang).
+
+### 5.4 Cast kinds (`aux` of the cast kinds)
+Each implicit conversion of [conv] is one `ImplicitCastExpr`; a standard
+conversion sequence is a chain (`LValueToRValue` innermost). Kinds
+(clang's `CastKind`, C++-relevant subset, stable numbering):
+
+`Dependent`, `NoOp` (qualification, function-pointer `noexcept`,
+identity), `LValueToRValue`, `LValueToRValueBitCast`, `LValueBitCast`,
+`BitCast`, `ArrayToPointerDecay`, `FunctionToPointerDecay`,
+`BuiltinFnToFnPtr`, `NullToPointer`, `NullToMemberPointer`,
+`IntegralToPointer`, `PointerToIntegral`, `PointerToBoolean`,
+`IntegralCast`, `IntegralToBoolean`, `BooleanToSignedIntegral`,
+`IntegralToFloating`, `FloatingToIntegral`, `FloatingToBoolean`,
+`FloatingCast`, `DerivedToBase`, `UncheckedDerivedToBase`, `BaseToDerived`,
+`Dynamic`, `DerivedToBaseMemberPointer`, `BaseToDerivedMemberPointer`,
+`MemberPointerToBoolean`, `ReinterpretMemberPointer`,
+`UserDefinedConversion`, `ConstructorConversion`, `ToVoid`, `ToUnion`
+(GNU), `VectorSplat`, `NonAtomicToAtomic`, `AtomicToNonAtomic`,
+`IntegralRealToComplex`, `FloatingRealToComplex`, `IntegralComplexCast`,
+`FloatingComplexCast`, `IntegralComplexToReal`, `FloatingComplexToReal`,
+`IntegralComplexToBoolean`, `FloatingComplexToBoolean`,
+`IntegralComplexToFloatingComplex`, `FloatingComplexToIntegralComplex`.
+
+Derived-to-base casts store the base path (`ListId` of `BaseSpec`s) in a
+side record. Explicit casts carry the same cast kind for their *last*
+step; earlier steps are `ImplicitCastExpr` children with the
+`part_of_explicit_cast` flag (clang's model; the M2 dump shows one).
+
+### 5.5 Constant results on expressions
+Sema wraps each expression that the language requires to be a constant
+expression and that is *not value-dependent* in `ConstantExpr { a =
+sub-expression, b = ConstValueId }`: case labels, array bounds, enumerator
+initializers, bit-field widths, template arguments, `alignas`,
+`noexcept(e)`, `explicit(e)`, `if constexpr` conditions, immediate
+invocations ([expr.const]) and `[: :]` operands. The value is stored
+once, by sema, from `Oven::evaluate`. `static_assert` conditions are not
+wrapped (clang compatibility; the result is used immediately and not
+needed later). Values of non-constant-context folding (`try_fold`) are
+**not** stored in the AST; the Oven keeps its own bounded cache
+(spec/oven.md).
+
+### 5.6 Syntactic forms not kept
+- `InitListExpr` keeps only the **semantic** form (one initializer per
+  element/field in order; `array_filler` for the tail; union active field).
+  Designators as written are in a cold side table `designators: ExprId ->
+  ListId` for diagnostics and the printer. (clang keeps both forms: ~2× for
+  large initializers; §13 Q7.)
+- `ParenExpr` is kept (it changes `decltype` and [temp.over.link]).
+- No `DesignatedInitExpr`, no `CXXRewrittenBinaryOperator` syntactic form
+  beyond its one child (the semantic call), no `TypoExpr` (typo correction
+  is resolved before the node is built).
+
+## 6. Statements
+```rust
+struct StmtNode { kind: StmtKind /*u8*/, flags: u8, aux: u16, loc: Loc, a: u32, b: u32 }  // 16 bytes
+```
+| kind | payload / notes |
+|---|---|
+| `CompoundStmt` (M2) | `a` = `ListId` of statements; rbrace loc in `b` |
+| `DeclStmt` (M2) | `a` = `ListId` of decls |
+| `ExprStmt` (M2) | `a` = `ExprId` (an expression statement; the dump elides it, §11) |
+| `NullStmt` (M2) | |
+| `IfStmt` (M2) | side record `{init, cond_var, cond, then, else}` (optional slots); `aux` = ordinary/`constexpr`/`consteval`/`!consteval`. `if constexpr`'s cond is a `ConstantExpr`; in an instantiation the discarded branch is not instantiated (its slot is empty); in a non-template both are kept and consumers use the constant |
+| `SwitchStmt` (M2) | `{init, cond_var, cond, body}`; case list `ListId` (for jump tables / the Oven) |
+| `CaseStmt` (M2) | `{lhs ConstantExpr, rhs (GNU range) or none, sub}` |
+| `DefaultStmt` (M2), `BreakStmt` (M2), `ContinueStmt` (M2) | |
+| `WhileStmt` (M2), `DoStmt` (M2), `ForStmt` (M2) | `{init, cond_var, cond, inc, body}` |
+| `ReturnStmt` (M2) | `a` = value; `b` = NRVO candidate `DeclId` |
+| `LabelStmt`, `GotoStmt`, `IndirectGotoStmt` | `LabelDecl` ids; computed goto reserved (GNU) |
+| `AttributedStmt` | attrs `ListId` + sub (`[[likely]]`, `[[fallthrough]]`, `[[assume(e)]]`) |
+| `CXXForRangeStmt` | clang's desugaring, all slots kept: `{init, range_var DeclStmt, begin DeclStmt, end DeclStmt, cond, inc, loop_var DeclStmt, body}`; for C++26 lifetime extension of temporaries in the range-init (P2718) the range var's init records extended temporaries |
+| `CXXExpansionStmt` (P1306, M6) | `aux` = enumerating / iterating / destructuring; `{init, expansion_var pattern DeclStmt, range (expansion-init-list `ListId` or range expr), body pattern, instantiations: ListId}` where each instantiation is a `CompoundStmt` with the per-element variable; `break`/`continue` target the whole statement |
+| `CXXTryStmt` | `{block, handlers: ListId}`; `CXXCatchStmt {exception_decl or catch-all, block}` |
+| `CoroutineBodyStmt` | side record with clang's fixed slots: body, promise decl, initial/final suspend, exception handler, fallthrough handler, allocate, deallocate, return-value init, result decl, return stmt on alloc failure, param moves `ListId` |
+| `CoreturnStmt` | `{operand, promise call}` |
+| `GCCAsmStmt` | side record: template `StringLitId`, outputs/inputs `ListId` of `(constraint StringLitId, ExprId)`, clobbers, labels; volatile/goto bits |
+| `ContractAssertStmt` (P2900) | `a` = cond, `aux` = evaluation semantic slot (resolved at codegen) |
+
+## 7. Attributes
+`AttrNode { kind: AttrKind /*u16*/, syntax: u8 /*[[ ]], GNU, keyword, declspec*/, flags: u8, loc, a, b }`
+(16 B). Arguments: `ExprId`s, a `Symbol`, or a side record. Declarations
+with attributes have `HAS_ATTRS` and an entry in `decl_attrs: FxHashMap<
+DeclId, ListId>`. Annotations (P3394, M6) are `AttrKind::Annotation` with
+`a` = `ConstValueId` (the annotation value, evaluated when not
+dependent). Unknown attributes are diagnosed and dropped (not stored).
+
+## 8. Templates (M3; representation fixed now)
+### 8.1 Parameters
+`TemplateParamList { depth: u16, params: ListId, requires: Option<ExprId> }`
+in `templates.param_lists`; each template decl's payload has one. A
+template parameter decl's payload is `{depth, index, pack, default,
+type-constraint}`; its *canonical* type/name is `(depth, index, pack)`
+(spec/types.md §5.3, §8.1).
+
+### 8.2 `TemplLink` (in the payload of every templatable decl, 4 bytes)
+```rust
+pub struct TemplLink(u32);    // 0 = None; else 3-bit tag (bits 29..=31) + 29-bit index:
+    // Pattern(TemplateIndex)       this decl is the pattern of a template decl (index into templates.decls)
+    // Specialization(SpecId)       implicit/explicit specialization or instantiation of a template
+    // MemberOfSpecialization(MemberSpecId)  member of a class template specialization
+    //                              (clang's MemberSpecializationInfo)
+    // DependentFriend(FriendSpecId) friend function template specializations (M3 detail)
+struct SpecInfo {             // templates.specs, 24 bytes
+    template: DeclId,         // first decl of the primary template
+    args: ArgListId,          // as written (sugared); canonical via spec/types.md §8.3
+    kind: SpecKind,           // Undeclared | ImplicitInstantiation | ExplicitSpecialization
+                              //   | ExplicitInstantiationDeclaration | ExplicitInstantiationDefinition
+    from: DeclId,             // pattern used: the primary template's pattern or a partial specialization
+    from_args: Option<ArgListId>, // deduced partial-specialization args
+    point_of_instantiation: Loc,
+}
+struct MemberSpecInfo { instantiated_from: DeclId, kind: SpecKind, point_of_instantiation: Loc } // 12 bytes
+```
+`instantiated_from(d)` is `SpecInfo.from` / `MemberSpecInfo.instantiated_from`
+for decls with a `TemplLink`, and a sparse map for other kinds
+(`Field`, `EnumConstant`, `ParmVar`, `Typedef`, `UsingShadow`, local
+decls), so every instantiated decl reaches its pattern in O(1).
+
+### 8.3 Specialization keys
+One global `specializations: FxHashMap<(DeclId /*first decl of template*/,
+ArgListId /*canonical*/), DeclId>` for class, function, variable, alias
+(alias specializations are types, not entries) and partial
+specializations (keyed by their canonical pattern args; listed per
+template in `partials: DeclId -> ListId`). The template decl's payload
+lists its specializations in creation order (dump order, ast-dump.md §5).
+
+### 8.4 Deduction results, substitution, instantiation stack
+- Deduction produces a `DeducedArgs` scratch (a `Vec<TemplateArg>` with
+  `Null` for undeduced) owned by sema; the result is interned as an
+  `ArgListId` and stored only in the `SpecInfo` it produces. Failed
+  deductions store nothing in the AST (diagnostic notes are rendered
+  from sema's scratch).
+- Substitution creates `SubstTemplateTypeParm` sugar (spec/types.md §5.3,
+  open question T3), `SubstNonTypeTemplateParmExpr` (replacement expr +
+  parameter decl) and `SubstTemplateTemplateParm` names.
+- The **instantiation stack** (for "in instantiation of ... required
+  here" notes, depth limits, SFINAE contexts) is sema state, not AST. The
+  AST stores the point of instantiation per specialization (above).
+- Function body instantiation is lazy (end of TU, or on demand when the
+  Oven needs a body: `SemaBridge::ensure_body`, §13 Q2).
+
+## 9. Constant values
+### 9.1 `ConstStore`
+All results of constant evaluation that the AST retains are **interned**
+`ConstValueId`s: equal values (same type, same bits, same relocations)
+have the same id, so template-argument equivalence ([temp.type]) and
+`ConstantExpr` comparisons are id equality.
+```rust
+enum ConstValue {                 // logical view; storage: 12-byte ConstNode + words/blob pools
+    Int { ty: QualType, value: APInt /*≤64 bits inline*/ },   // integral, enum, bool, char
+    Float { ty: QualType, bits: APInt },                        // exact IEEE bits (−0.0 ≠ +0.0)
+    NullPtr { ty: QualType },                                   // null object/function/member pointer
+    Pointer { ty: QualType, base: PtrBase, offset: i64, path: Option<ListId> }, // also references
+    MemberPtr { ty: QualType, member: DeclId, path: ListId, derived: bool },
+    Reflection(ReflectionId),                                   // std::meta::info (M6)
+    Aggregate { ty: QualType, image: BlobId, relocs: ListId },  // class/array/union/complex/vector
+}
+enum PtrBase {
+    Decl(DeclId),                      // variable/function/TemplateParamObject (first decl)
+    Temporary(DeclId),                 // LifetimeExtendedTemporary
+    StringLit(StringLitId),            // pointer into a string literal object
+    TypeInfo(QualType),                // &typeid(T)
+}
+```
+- `Aggregate` is a **byte image** in target layout (`RecordLayout` from
+  `ast.layouts`) with padding bytes zeroed, plus relocations: `(byte
+  offset, ConstValueId)` for each pointer/reference/member-pointer/
+  reflection subobject (whose image bytes are zero) and `(byte offset,
+  FieldDecl)` for each active union member. This is what the Oven freezes
+  and thaws by `memcpy` (spec/oven.md "frozen result"); equality of images
+  + relocs is [temp.type] equivalence. The image is target-specific (one
+  target per compilation). A constant expression's result is fully
+  initialized ([expr.const]), so no init mask is stored.
+- Printing (dump, diagnostics, template arguments) decodes the image
+  using the layout and field list.
+
+### 9.2 Where values are cached
+| cache | content |
+|---|---|
+| `ConstantExpr.b` | value of a constant expression (§5.5) |
+| `VarData.eval` | `NotEvaluated → Evaluating → Value(id) / NotConstant`; `Evaluating` detects self-reference; used for `constexpr`/`constinit` vars, `const` integral vars usable in constant expressions, and static-storage constant initialization (codegen emits the value) |
+| `EnumConstant` payload | value (`Int`) |
+| `TemplateArg::Value` | the converted non-type argument (spec/types.md §8.3) |
+| `TemplateParamObject` | the object's value |
+| `IfStmt` | `if constexpr` via its `ConstantExpr`; `if consteval` needs no value |
+| `Annotation` attr | annotation value (M6) |
+
+### 9.3 Printing values
+Dump (`value=` fields): integers decimal (`-5`, `18446744073709551615`),
+`bool` as `true`/`false`; floats as the shortest round-trip form in Rust
+`{:e}` notation (`1.5e0`, `-0e0`, `inf`, `nan`); null pointers `nullptr`;
+pointers `&name+off` (`&a[1]` style when the path is an array element,
+`&"hi"[1]` for string literals); aggregates `{1, 2, {3}}` with union
+members as `.x = 1`. In type names (template arguments) values print as
+clang's `TemplateArgument::print`: integer suffixes `U`, `L`, `UL`, `LL`,
+`ULL` for non-`int` types, `char` as `'a'`, enumerators as `E::X` (or
+`(E)7` when no enumerator matches), `nullptr`, `&x`, class-type values as
+`S{1, 2}`.
+
+## 10. Reflection and injection (M6; representation fixed now)
+- `ReflectionTable` interns `ReflectionId → Reflectee`: `Type(QualType)`,
+  `Decl(DeclId)`, `Namespace(DeclId)`, `Template(TemplateNameId)`,
+  `Value(ConstValueId)`, `Object(ConstValueId /*pointer*/)`,
+  `BaseSpec(DeclId, index)`, `DataMemberSpec(...)`, `Null`.
+- `^^T` reflects the type **as written**: a `QualType` that names an alias
+  (`Typedef`/`Using` sugar at the top) keeps it; all other sugar is
+  canonicalized before interning, so `^^const int == ^^int const` and
+  `^^decltype(1) == ^^int`, but `^^Alias != ^^int` ([meta.reflection]
+  `dealias`).
+- `define_aggregate(r, specs)` completes an incomplete class from a
+  constant evaluation: sema (through the bridge) appends `Field` decls
+  flagged `INJECTED` to the class with an *injection point* (the
+  consteval call's location and the evaluation context) recorded in a cold
+  map, then completes the class and computes its layout. This is the one
+  exception to "frozen at `}`" (§2.4) and is serialized through sema so
+  the Oven never observes a half-completed class.
+- Splices (`[: r :]`) are `CXXSpliceExpr` / `Splice` types / `Splice`
+  nested-name-specifiers whose designated entity is resolved when the
+  operand is not value-dependent.
+
+## 11. The AST dump format
+Specified in **`spec/ast-dump.md`** (split out to keep both files
+readable): the text format, driver options, the normative M2 node lines
+with a clang-verified example, the template/lambda sketch, the clang
+normalizer for differential tests and the harness `expect: ast` outcome.
+The dump prints this AST as is: one line per node, children in the order
+of §4–§6, every type, value category, cast kind and cached value visible.
+
+## 12. Agent parallelization
+The AST is the hub; the plan front-loads the pieces that let everything
+downstream start *without the parser*. Ids (§2.1) and the `Ast` field
+skeleton land first as a ~1-hour stub commit; after that the WPs below
+proceed in parallel. Each WP's acceptance is a set of tests named here.
+
+| WP | scope | interface consumed → produced | acceptance |
+|---|---|---|---|
+| A ast-core | ids, arenas, `IdLists`, `DeclName`, decl/expr/stmt headers + M2 payloads, lookup tables, redecl table, `MemReport`, **`AstBuilder`** (typed constructors computing dependence, used by sema, tests and the loader) | §2–§7 → `Ast`, `AstBuilder` | size asserts; builder unit tests; lookup/redecl tests |
+| B types | `TypeContext`, interning, canonical types, M2 kinds, `TypePrinter` | spec/types.md | types.md §14 |
+| C const-store | `ConstStore`, interning, value printing | §9 → `ConstValueId` | round-trip + printing tests |
+| D dump | dump printer, options, filter | ast-dump.md, A+B+C → text | ast-dump.md §4 golden via `AstBuilder` |
+| E dump-loader | text → `Ast` for the M2 subset (inverse of D; types re-parsed by a small declarator parser) | ast-dump.md → `Ast` | `load(dump(ast))` round-trips on all goldens |
+| F clang-normalizer | `xtask clang-ast` | clang JSON → ast-dump.md text | M2 sample matches ast-dump.md §4 byte for byte |
+| G harness | `expect: ast` outcome | ast-dump.md §7 | harness self-tests |
+| H parser-M2 | declarations, declarators, expressions, statements → sema actions | lexer/pp → `AstBuilder` | M2 conformance tests (dump goldens) |
+| I sema-conv | implicit conversion sequences → `ImplicitCastExpr` chains, usual arithmetic conversions, integral promotions, literal typing ([lex.icon] table) | `AstBuilder`, types | dump goldens per [conv]/[expr.arith.conv] paragraph |
+| J abi-layout | `TargetTypes`, `record_layout` | spec/types.md §11 | layouts vs clang `-fdump-record-layouts` |
+| K oven-compile | AST → KBC compiler for the M2 subset | `Ast` (from E's loader at first), `SemaBridge` (§13 Q2) | spec/oven.md tests, fed by loaded dumps |
+| L codegen-M2 | AST → LLVM IR | `Ast` from E | IR/run tests on loaded dumps |
+
+E is the multiplier: once it exists, K and L test on hand-written or
+clang-normalized dumps (F) while H and I are still being built, and a
+parser bug cannot block Oven or codegen progress. B and C are leaf work
+with no dependency on each other. Conflict surface: A owns
+`crates/kiln_ast/src/{ids,decl,expr,stmt}.rs`, B owns `types/`, C owns
+`consts.rs`, D/E own `dump/`; `lib.rs` re-exports are the only shared
+file.
+
+## 13. Open questions (each with a recommendation)
+1. **Type-layer questions** — `hashbrown` (types.md T1), kiln_ast →
+   kiln_lex for `Symbol` (T2), `SubstTemplateTypeParm` sugar (T3),
+   kiln_sema → kiln_abi (T4), TypeLoc deferral (T5), `InjectedClassName`
+   canonical form (T6). Recommendations are in spec/types.md §16.
+2. **Oven / sema borrow conflict.** spec/oven.md has `Oven::new(ast: &Ast,
+   bridge: &mut dyn SemaBridge)`, but the bridge (sema) must *mutate* the
+   Ast while the Oven runs (instantiating a body on `function_body`,
+   `define_aggregate`, interning `ConstValue`s), which Rust rejects while
+   `&Ast` is held. *Recommend* amending oven.md: the Oven holds no `&Ast`;
+   `SemaBridge` gains `fn ast(&self) -> &Ast`, `fn ensure_body(&mut self,
+   f: DeclId) -> Option<StmtId>`, `fn ensure_layout(&mut self, r: DeclId)
+   -> &RecordLayout`, `fn consts(&mut self) -> &mut ConstStore`; the Oven
+   re-borrows `bridge.ast()` per compile step and keeps only ids (valid
+   forever by §2.4). Bonus: `Oven` loses its lifetime and can live for the
+   whole TU, keeping its KBC and fold caches across evaluations.
+3. **Dump uses clang's class names and glyphs.** *Recommend* yes: the
+   clang oracle (ast-dump.md §6) and contributors' clang familiarity
+   outweigh the freedom to rename; deviations are listed in ast-dump.md §4.
+4. **Dump loader (WP E).** *Recommend* yes, M2 subset only, growing on
+   demand; it is test infrastructure, not a product feature.
+5. **Harness `expect: ast`.** *Recommend* yes (ast-dump.md §7).
+6. **Instantiated bodies retained** (append-only arenas, §2.4). A heavy
+   constexpr/template TU keeps every instantiation. *Recommend* accept
+   for M2–M6 and measure in M7; the escape hatch is a per-function
+   "body arena" that can be dropped after codegen, which the id design
+   allows without changing node types.
+7. **Semantic-only `InitListExpr`** (§5.6). *Recommend* yes; designators
+   side table covers diagnostics.
+8. **Single-threaded sema per TU.** *Recommend* yes; parallelism is across
+   TUs and inside the Oven's own budgeted evaluation, not inside sema.
+9. **TU-local ids and modules.** *Recommend* defer: M4 imports re-intern
+   through constructors (types.md §10); id-range remapping only if the
+   M7 profile demands it.
+10. **`static_assert` message type.** clang 19 prints its type as `NULL
+    TYPE`; kiln marks it `unevaluated`. *Recommend* keep the deviation
+    (normalizer rewrites clang's form).
+
+## 14. Tests (`crates/kiln_ast/tests/`)
+- `layout.rs`: `size_of::<ExprNode>() == 20`, `StmtNode == 16`,
+  `DeclNode == 28`, `FunctionData == 24`, `VarData == 24`, `AttrNode == 16`,
+  `Option<ExprId> == 4`, and the types.md list.
+- `builder.rs`: dependence propagation per expression kind; value
+  categories of the M2 kinds; redeclaration groups; lookup for overload
+  sets, transparent contexts and inline namespaces; P2169 `_` multiple
+  declarations.
+- `consts.rs`: interning identity (`-0.0` vs `+0.0`, union active member,
+  pointer relocations), printing per §9.3.
+- `dump/`: the ast-dump.md §4 example (built by `AstBuilder`) equals the
+  golden; each M2 line form of ast-dump.md §3 has a focused golden; with
+  `ids,locs`; filter mode; no trailing whitespace anywhere.
+- `loader.rs` (WP E): `dump(load(text)) == text` for every golden.

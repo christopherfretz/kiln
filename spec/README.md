@@ -17,4 +17,7 @@ say which in the PR. A spec change without tests is incomplete.
 | [oven.md](oven.md) | kiln_oven | design |
 | [harness.md](harness.md) | xtask (`cargo xtask test`) | implemented |
 | [bench.md](bench.md) | xtask (`cargo xtask bench`) | implemented |
-| ast, parse, sema, abi, llvm, codegen, driver | | not started (M2) |
+| [types.md](types.md) | kiln_ast (`TypeContext`) | design |
+| [ast.md](ast.md) | kiln_ast | design |
+| [ast-dump.md](ast-dump.md) | kiln_ast (dump), xtask (`clang-ast`) | design |
+| parse, sema, abi, llvm, codegen, driver | | not started (M2) |
