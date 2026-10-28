@@ -27,7 +27,8 @@ pub(crate) fn lex_diag(sm: &SourceManager, d: &LexDiag) -> Option<Diag> {
             Diag::new(DiagId::lex_invalid_char, span).arg(format!("{:04X}", u32::from(ch)))
         }
         K::CharNotAllowedInIdentifier { ch } => {
-            Diag::new(DiagId::lex_char_not_allowed_in_identifier, span).arg(format!("{:04X}", u32::from(ch)))
+            Diag::new(DiagId::lex_char_not_allowed_in_identifier, span)
+                .arg(format!("{:04X}", u32::from(ch)))
         }
         K::UnicodeWhitespace { .. } => Diag::new(DiagId::lex_unicode_whitespace, span),
         K::NullCharacter => Diag::new(DiagId::lex_null_character, span),
@@ -38,7 +39,9 @@ pub(crate) fn lex_diag(sm: &SourceManager, d: &LexDiag) -> Option<Diag> {
         K::NoNewlineAtEof => Diag::new(DiagId::lex_no_newline_eof, span),
         K::UnterminatedBlockComment => Diag::new(DiagId::lex_unterminated_comment, span),
         K::NestedBlockComment => Diag::new(DiagId::lex_nested_block_comment, span),
-        K::EscapedNewlineBlockCommentEnd => Diag::new(DiagId::lex_escaped_newline_block_comment_end, span),
+        K::EscapedNewlineBlockCommentEnd => {
+            Diag::new(DiagId::lex_escaped_newline_block_comment_end, span)
+        }
         K::MultiLineLineComment => Diag::new(DiagId::lex_multi_line_line_comment, span),
         K::UnterminatedString => Diag::new(DiagId::lex_unterminated_string, span),
         K::UnterminatedChar => Diag::new(DiagId::lex_unterminated_char, span),
@@ -53,7 +56,9 @@ pub(crate) fn lex_diag(sm: &SourceManager, d: &LexDiag) -> Option<Diag> {
         }
         K::EmptyCharLiteral => Diag::new(DiagId::lex_empty_character, span),
         K::RawDelimiterTooLong => Diag::new(DiagId::lex_raw_delim_too_long, span),
-        K::RawDelimiterInvalidChar { ch } => Diag::new(DiagId::lex_raw_delim_invalid_char, span).arg(ch),
+        K::RawDelimiterInvalidChar { ch } => {
+            Diag::new(DiagId::lex_raw_delim_invalid_char, span).arg(ch)
+        }
         K::ReservedUdSuffix => Diag::new(DiagId::lex_reserved_ud_suffix, span),
         K::UcnNoDigits => {
             let c = rest_of_line(sm, d).chars().nth(1).unwrap_or('u');
@@ -73,7 +78,11 @@ pub(crate) fn lex_diag(sm: &SourceManager, d: &LexDiag) -> Option<Diag> {
         K::UcnInvalidCodePoint { .. } => Diag::new(DiagId::lex_ucn_invalid, span),
         K::UcnUnknownName => {
             let line = rest_of_line(sm, d);
-            let name = line.find('{').map(|i| &line[i + 1..]).and_then(|r| r.split('}').next()).unwrap_or("");
+            let name = line
+                .find('{')
+                .map(|i| &line[i + 1..])
+                .and_then(|r| r.split('}').next())
+                .unwrap_or("");
             Diag::new(DiagId::lex_ucn_unknown_name, span).arg(name)
         }
         K::UcnDelimitedExtension => Diag::new(DiagId::lex_delimited_escape_ext, span).arg(0),

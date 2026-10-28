@@ -3,6 +3,7 @@
 use kiln_lex::{LexOptions, Std};
 
 /// Options of one preprocessor run.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Clone, Debug)]
 pub struct PpOptions {
     /// Language standard (affects the lexer, `#elifdef`, `#warning`,

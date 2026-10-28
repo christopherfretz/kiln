@@ -14,7 +14,7 @@ use crate::cond::{IfEvaluator, StubIfEvaluator};
 use crate::include::{IncludeResolver, NoIncludes};
 use crate::macros::{MacroDef, MacroTable, SymMap};
 use crate::options::PpOptions;
-use crate::tok::{PpFlags, PpTok};
+use crate::tok::PpTok;
 
 /// One item of the preprocessed stream: a token, or an out-of-band event
 /// at that point of the stream.
@@ -71,6 +71,13 @@ pub enum Marker {
         /// An `import` (else a `module`) directive.
         import: bool,
     },
+    /// An `#embed` directive ([cpp.embed]) produced the tokens that follow:
+    /// its `prefix`, the bytes (see [`Preprocessor::is_embed_byte`]) and its
+    /// `suffix` (or its `if_empty` tokens).
+    Embed {
+        /// The `embed` directive-name token.
+        span: Span,
+    },
 }
 
 /// One open `#if` group.
@@ -82,6 +89,8 @@ pub(crate) struct Cond {
     pub(crate) found_non_skip: bool,
     /// `#else` was seen.
     pub(crate) found_else: bool,
+    /// The whole conditional is inside a skipped group.
+    pub(crate) was_skipping: bool,
 }
 
 /// A buffer being lexed.
@@ -91,7 +100,7 @@ pub(crate) struct FileFrame<'a> {
     /// Tokens lexed ahead (by the `(` lookahead), last = next.
     pub(crate) back: Vec<Token>,
     /// Start-of-line / leading-space flags propagated from an ended macro
-    /// expansion, ORed into the next token.
+    /// expansion, `ORed` into the next token.
     pub(crate) pend: TokFlags,
     pub(crate) conds: Vec<Cond>,
     /// Search-path index the file was found at (for `#include_next`).
@@ -100,6 +109,7 @@ pub(crate) struct FileFrame<'a> {
 }
 
 /// A macro expansion or a token stream being read.
+#[allow(clippy::struct_excessive_bools)]
 pub(crate) struct MacroFrame {
     pub(crate) toks: Vec<PpTok>,
     pub(crate) idx: usize,
@@ -131,7 +141,6 @@ pub(crate) struct Syms {
     pub(crate) defined: Symbol,
     pub(crate) va_args: Symbol,
     pub(crate) va_opt: Symbol,
-    pub(crate) pragma: Symbol,
     pub(crate) module: Symbol,
     pub(crate) import: Symbol,
     pub(crate) export: Symbol,
@@ -143,6 +152,7 @@ pub(crate) struct Syms {
 /// spans of expanded tokens are macro locations: the source manager maps
 /// them to their spelling (in the `#define`, the argument, or the scratch
 /// buffer) and to their expansion (the invocation).
+#[allow(clippy::struct_excessive_bools)]
 pub struct Preprocessor<'a, 'd> {
     pub(crate) sm: &'a SourceManager,
     pub(crate) diags: &'d DiagEngine<'a>,
@@ -183,6 +193,17 @@ pub struct Preprocessor<'a, 'd> {
     pub(crate) date_time: Option<(String, String)>,
     /// Reused buffer for token pasting.
     pub(crate) paste_buf: String,
+    /// A directive line is being read (the lexer yields `Eod`).
+    pub(crate) in_directive: bool,
+    /// The directive's `Eod`, once read: returned again for every
+    /// further read until the directive is finished.
+    pub(crate) dir_eod: Option<Token>,
+    /// Lexer diagnostics are dropped (skipped groups).
+    pub(crate) quiet_lex: bool,
+    /// Depth of `#pragma GCC/clang diagnostic push` (for "cannot pop").
+    pub(crate) diag_pushes: u32,
+    /// Scratch buffers holding `#embed` byte spellings.
+    pub(crate) embed_bufs: HashSet<FileId>,
 }
 
 impl std::fmt::Debug for Preprocessor<'_, '_> {
@@ -208,7 +229,6 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
             defined: interner.intern("defined"),
             va_args: interner.intern("__VA_ARGS__"),
             va_opt: interner.intern("__VA_OPT__"),
-            pragma: interner.intern("_Pragma"),
             module: interner.intern("module"),
             import: interner.intern("import"),
             export: interner.intern("export"),
@@ -245,6 +265,11 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
             va_scope: false,
             date_time: None,
             paste_buf: String::new(),
+            in_directive: false,
+            dir_eod: None,
+            quiet_lex: false,
+            diag_pushes: 0,
+            embed_bufs: HashSet::new(),
         };
         pp.define_builtins();
         pp
@@ -348,7 +373,7 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
             lookup,
             system,
         })));
-        self.file_change(FileChange::Enter { file, from });
+        self.file_change(FileChange::Enter { file, from, system });
     }
 
     /// Records a file change (callback and marker).
@@ -420,7 +445,7 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
         let mut t = self.lex_raw_from(top);
         let Some(Frame::File(f)) = self.frames.last_mut() else { unreachable!() };
         if !f.pend.is_empty() && !matches!(t.kind, TokKind::Eod | TokKind::Eof) {
-            t.flags = t.flags | f.pend;
+            t.flags |= f.pend;
             f.pend = TokFlags::empty();
         }
         if let TokKind::Identifier(s) = t.kind {
@@ -431,21 +456,80 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
 
     /// The next token of file frame `i` (pushed-back tokens first),
     /// reporting lexer diagnostics; no flags are applied.
-    fn lex_raw_from(&mut self, i: usize) -> Token {
-        let Frame::File(f) = &mut self.frames[i] else { unreachable!() };
-        if let Some(t) = f.back.pop() {
-            return t;
+    pub(crate) fn lex_raw_from(&mut self, i: usize) -> Token {
+        if self.in_directive
+            && let Some(e) = self.dir_eod
+        {
+            return e;
         }
-        let t = f.lx.next();
-        if !f.lx.diagnostics().is_empty() {
-            let ds = f.lx.take_diagnostics();
-            for d in &ds {
-                if let Some(diag) = crate::diag_map::lex_diag(self.sm, d) {
-                    self.emit(diag);
+        let Frame::File(f) = &mut self.frames[i] else { unreachable!() };
+        let t = if let Some(t) = f.back.pop() {
+            t
+        } else {
+            let t = f.lx.next();
+            if !f.lx.diagnostics().is_empty() {
+                let ds = f.lx.take_diagnostics();
+                if !self.quiet_lex {
+                    for d in &ds {
+                        if let Some(diag) = crate::diag_map::lex_diag(self.sm, d) {
+                            self.emit(diag);
+                        }
+                    }
                 }
             }
+            t
+        };
+        if self.in_directive && t.kind == TokKind::Eod {
+            self.dir_eod = Some(t);
         }
         t
+    }
+
+    /// Starts reading a directive line in the top file frame (after its
+    /// `#`): the lexer yields `Eod` at the end of the line; comments are
+    /// not returned.
+    pub(crate) fn start_directive(&mut self) {
+        if let Some(Frame::File(f)) = self.frames.last_mut() {
+            f.lx.set_in_directive(true);
+            f.lx.set_keep_comments(false);
+        }
+        self.in_directive = true;
+        self.dir_eod = None;
+    }
+
+    /// Discards the rest of the directive line and ends the directive;
+    /// returns its `Eod` (clang `DiscardUntilEndOfDirective`). A no-op
+    /// returning `Eod` at an invalid span when no directive is active.
+    pub(crate) fn finish_directive(&mut self) -> Token {
+        if !self.in_directive {
+            return Token { kind: TokKind::Eod, span: Span::INVALID, flags: TokFlags::empty() };
+        }
+        let eod = loop {
+            if let Some(e) = self.dir_eod {
+                break e;
+            }
+            let t = self.lex_unexpanded();
+            if t.tok.kind == TokKind::Eod {
+                break t.tok;
+            }
+            if t.tok.kind == TokKind::Eof {
+                break Token { kind: TokKind::Eod, span: t.tok.span, flags: TokFlags::empty() };
+            }
+        };
+        // Macro frames pushed while reading the directive have ended.
+        while matches!(self.frames.last(), Some(Frame::Macro(_))) {
+            self.pop_macro();
+        }
+        self.in_directive = false;
+        self.dir_eod = None;
+        let keep = self.opts.keep_comments;
+        if let Some(Frame::File(f)) = self.frames.last_mut() {
+            f.lx.set_in_directive(false);
+            f.lx.set_mode(kiln_lex::LexMode::Normal);
+            f.lx.set_keep_comments(keep);
+            f.pend = TokFlags::empty();
+        }
+        eod
     }
 
     /// Pushes `t` back onto the top file frame.
@@ -458,7 +542,7 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
     /// `#pragma poison` and `__VA_ARGS__` / `__VA_OPT__` outside a
     /// variadic definition (clang `HandlePoisonedIdentifier`).
     pub(crate) fn check_poison(&mut self, s: Symbol, span: Span) {
-        if self.va_scope {
+        if self.va_scope || self.quiet_lex {
             return;
         }
         if s == self.syms.va_args {
@@ -474,6 +558,11 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
     /// `disable_expand`, with directives executed.
     pub(crate) fn lex(&mut self) -> PpTok {
         loop {
+            if self.in_directive
+                && let Some(e) = self.dir_eod
+            {
+                return PpTok::new(e);
+            }
             match self.frames.last_mut() {
                 None => return PpTok::new(eof_tok(Span::INVALID)),
                 Some(Frame::Macro(m)) => {
@@ -482,6 +571,13 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
                         continue;
                     }
                     let t = self.macro_next();
+                    if t.tok.kind == TokKind::Eod {
+                        // The end of a `_Pragma` string (see `pragma.rs`).
+                        if self.in_directive {
+                            self.dir_eod = Some(t.tok);
+                        }
+                        return t;
+                    }
                     if let Some(s) = t.ident() {
                         let no_expand = match self.frames.last() {
                             Some(Frame::Macro(m)) => m.no_expand,
@@ -509,7 +605,9 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
                         }
                         TokKind::Identifier(s) => {
                             if t.has(TokFlags::START_OF_LINE)
-                                && (s == self.syms.module || s == self.syms.import || s == self.syms.export)
+                                && (s == self.syms.module
+                                    || s == self.syms.import
+                                    || s == self.syms.export)
                                 && !self.disable_expand
                             {
                                 self.maybe_module_directive(t, s);
@@ -654,9 +752,9 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
         let exited = f.file;
         self.include_depth = self.include_depth.saturating_sub(1);
         if let Some(Frame::File(below)) = self.frames.last() {
-            let file = below.file;
+            let (file, system) = (below.file, below.system);
             let resume = self.sm.loc(file, below.lx.offset());
-            self.file_change(FileChange::Exit { file, exited, resume });
+            self.file_change(FileChange::Exit { file, exited, resume, system });
         }
         false
     }
@@ -742,6 +840,14 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
             return std::borrow::Cow::Borrowed(self.interner.as_str(s));
         }
         kiln_lex::spelling(self.sm, t, &self.lex_opts)
+    }
+
+    /// True if `t` is one of the integer literals or commas an `#embed`
+    /// directive produced for the resource's bytes (clang prints these as
+    /// one `annot_embed` token).
+    pub fn is_embed_byte(&self, t: &Token) -> bool {
+        let at = self.sm.spelling_loc(t.span.lo);
+        self.sm.offset_of(at).is_some_and(|(f, _)| self.embed_bufs.contains(&f))
     }
 
     /// True if the top frame is a file frame.

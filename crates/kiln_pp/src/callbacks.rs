@@ -21,6 +21,8 @@ pub enum FileChange {
         /// The header-name token of the `#include` that entered it, if any
         /// (clang's include location).
         from: Option<Loc>,
+        /// The entered buffer is a system header.
+        system: bool,
     },
     /// Lexing returns to `file` after the end of an included file.
     Exit {
@@ -31,6 +33,18 @@ pub enum FileChange {
         /// Where lexing resumes in `file`: the start of the line after the
         /// `#include`.
         resume: Loc,
+        /// `file` is a system header.
+        system: bool,
+    },
+    /// A `#line` directive or line marker ([cpp.line]) changed the presumed
+    /// line (and maybe name) from `at` on.
+    Rename {
+        /// The current buffer.
+        file: FileId,
+        /// The start of the line after the directive.
+        at: Loc,
+        /// `file` is (now) a system header.
+        system: bool,
     },
     /// `#pragma GCC system_header` made the rest of `file` a system header.
     SystemHeader {

@@ -207,7 +207,9 @@ impl IncludeResolver for MemoryResolver {
         let all = self.resources.get(&req.name)?;
         let start = usize::try_from(req.offset.unwrap_or(0)).unwrap_or(usize::MAX).min(all.len());
         let rest = &all[start..];
-        let len = req.limit.map_or(rest.len(), |l| usize::try_from(l).unwrap_or(usize::MAX).min(rest.len()));
+        let len = req
+            .limit
+            .map_or(rest.len(), |l| usize::try_from(l).unwrap_or(usize::MAX).min(rest.len()));
         Some(EmbedData { bytes: rest[..len].to_vec() })
     }
 }

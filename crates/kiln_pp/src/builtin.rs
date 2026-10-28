@@ -84,24 +84,6 @@ impl Builtin {
     pub fn name(self) -> &'static str {
         Builtin::ALL.iter().find(|&&(_, b)| b == self).map_or("", |&(n, _)| n)
     }
-
-    /// `__has_*` / `__is_*`: takes a parenthesized operand.
-    pub(crate) fn is_feature_like(self) -> bool {
-        !matches!(
-            self,
-            Builtin::Line
-                | Builtin::File
-                | Builtin::Date
-                | Builtin::Time
-                | Builtin::Counter
-                | Builtin::IncludeLevel
-                | Builtin::BaseFile
-                | Builtin::FileName
-                | Builtin::Timestamp
-                | Builtin::FltEvalMethod
-                | Builtin::Pragma
-        )
-    }
 }
 
 /// Which `__is_target_*` query.
@@ -210,17 +192,99 @@ impl FeatureQueries for NoFeatures {}
 /// C++26 keywords ([lex.key] Table 5) and alternative tokens
 /// ([lex.digraph] Table 6), sorted.
 const CXX26_KEYWORDS: &[&str] = &[
-    "alignas", "alignof", "and", "and_eq", "asm", "auto", "bitand", "bitor", "bool", "break",
-    "case", "catch", "char", "char16_t", "char32_t", "char8_t", "class", "co_await", "co_return",
-    "co_yield", "compl", "concept", "const", "const_cast", "consteval", "constexpr", "constinit",
-    "continue", "contract_assert", "decltype", "default", "delete", "do", "double",
-    "dynamic_cast", "else", "enum", "explicit", "export", "extern", "false", "float", "for",
-    "friend", "goto", "if", "inline", "int", "long", "mutable", "namespace", "new", "noexcept",
-    "not", "not_eq", "nullptr", "operator", "or", "or_eq", "private", "protected", "public",
-    "register", "reinterpret_cast", "requires", "return", "short", "signed", "sizeof", "static",
-    "static_assert", "static_cast", "struct", "switch", "template", "this", "thread_local",
-    "throw", "true", "try", "typedef", "typeid", "typename", "union", "unsigned", "using",
-    "virtual", "void", "volatile", "wchar_t", "while", "xor", "xor_eq",
+    "alignas",
+    "alignof",
+    "and",
+    "and_eq",
+    "asm",
+    "auto",
+    "bitand",
+    "bitor",
+    "bool",
+    "break",
+    "case",
+    "catch",
+    "char",
+    "char16_t",
+    "char32_t",
+    "char8_t",
+    "class",
+    "co_await",
+    "co_return",
+    "co_yield",
+    "compl",
+    "concept",
+    "const",
+    "const_cast",
+    "consteval",
+    "constexpr",
+    "constinit",
+    "continue",
+    "contract_assert",
+    "decltype",
+    "default",
+    "delete",
+    "do",
+    "double",
+    "dynamic_cast",
+    "else",
+    "enum",
+    "explicit",
+    "export",
+    "extern",
+    "false",
+    "float",
+    "for",
+    "friend",
+    "goto",
+    "if",
+    "inline",
+    "int",
+    "long",
+    "mutable",
+    "namespace",
+    "new",
+    "noexcept",
+    "not",
+    "not_eq",
+    "nullptr",
+    "operator",
+    "or",
+    "or_eq",
+    "private",
+    "protected",
+    "public",
+    "register",
+    "reinterpret_cast",
+    "requires",
+    "return",
+    "short",
+    "signed",
+    "sizeof",
+    "static",
+    "static_assert",
+    "static_cast",
+    "struct",
+    "switch",
+    "template",
+    "this",
+    "thread_local",
+    "throw",
+    "true",
+    "try",
+    "typedef",
+    "typeid",
+    "typename",
+    "union",
+    "unsigned",
+    "using",
+    "virtual",
+    "void",
+    "volatile",
+    "wchar_t",
+    "while",
+    "xor",
+    "xor_eq",
 ];
 
 /// The C++ alternative tokens that cannot be macro names

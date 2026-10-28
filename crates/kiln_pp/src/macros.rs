@@ -12,7 +12,7 @@ use crate::builtin::Builtin;
 use crate::tok::PpTok;
 
 /// A fast hasher for `Symbol` keys (a multiplicative hash of the `u32`):
-/// `Symbol`s are dense small integers, so SipHash's DoS resistance buys
+/// `Symbol`s are dense small integers, so `SipHash`'s `DoS` resistance buys
 /// nothing here.
 #[derive(Default, Clone, Copy, Debug)]
 pub(crate) struct SymHasher(u64);
@@ -57,8 +57,6 @@ pub struct MacroDef {
     /// Length of the definition range (name through the last body token).
     pub(crate) def_len: u32,
     pub(crate) builtin: Option<Builtin>,
-    /// `, ## __VA_ARGS__` appears in the body (GNU comma pasting).
-    pub(crate) has_comma_paste: bool,
     /// False while the macro is being expanded ([cpp.rescan]/2).
     pub(crate) enabled: Cell<bool>,
     pub(crate) used: Cell<bool>,

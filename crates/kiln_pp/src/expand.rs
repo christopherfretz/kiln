@@ -7,7 +7,7 @@
 use std::cell::Cell;
 use std::rc::Rc;
 
-use kiln_diag::{Diag, DiagId, NoteMsg};
+use kiln_diag::{Diag, DiagId};
 use kiln_lex::{Encoding, Lexer, Punct, Symbol, TokFlags, TokKind, Token};
 use kiln_source::{ExpansionKind, Loc, Span};
 
@@ -56,6 +56,7 @@ pub(crate) struct PasteCx {
 }
 
 /// clang `VAOptExpansionContext`.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Default)]
 struct VaOpt {
     /// Unmatched `(` of the `__VA_OPT__` (empty: not in one).
@@ -92,7 +93,7 @@ impl VaOpt {
     }
 }
 
-impl<'a> Preprocessor<'a, '_> {
+impl Preprocessor<'_, '_> {
     /// `SourceManager::add_expansion`, tolerating invalid inputs (falls
     /// back to the spelling location).
     pub(crate) fn add_exp(&self, spelling: Loc, len: u32, exp: Span, kind: ExpansionKind) -> Loc {
@@ -128,7 +129,6 @@ impl<'a> Preprocessor<'a, '_> {
                 def_start: Loc::INVALID,
                 def_len: 0,
                 builtin: Some(b),
-                has_comma_paste: false,
                 enabled: Cell::new(true),
                 used: Cell::new(false),
             };
@@ -328,7 +328,10 @@ impl<'a> Preprocessor<'a, '_> {
                     }
                     TokKind::Punct(Punct::RParen) => {
                         if parens == 0 {
-                            if toks.last().is_some_and(|t| t.pf.contains(PpFlags::COMMA_AFTER_ELIDED)) {
+                            if toks
+                                .last()
+                                .is_some_and(|t| t.pf.contains(PpFlags::COMMA_AFTER_ELIDED))
+                            {
                                 found_elided_comma = true;
                             }
                             break;
@@ -342,10 +345,10 @@ impl<'a> Preprocessor<'a, '_> {
                         }
                     }
                     TokKind::Comment if !self.opts.keep_macro_comments => continue,
-                    TokKind::Identifier(s) => {
-                        if self.macros.get(s).is_some_and(|m| !m.enabled.get()) {
-                            tok.pf.insert(PpFlags::NO_EXPAND);
-                        }
+                    TokKind::Identifier(s)
+                        if self.macros.get(s).is_some_and(|m| !m.enabled.get()) =>
+                    {
+                        tok.pf.insert(PpFlags::NO_EXPAND);
                     }
                     _ => {}
                 }
@@ -503,7 +506,7 @@ impl<'a> Preprocessor<'a, '_> {
     /// Substitutes the arguments into the replacement list `body` (whose
     /// spans are already in the expansion), writing the result to `out`
     /// (clang `ExpandFunctionArguments`). Returns `NextTokGetsSpace`.
-    #[allow(clippy::too_many_lines)]
+    #[allow(clippy::too_many_lines, clippy::many_single_char_names)]
     fn expand_args(
         &mut self,
         body: &[PpTok],
@@ -774,7 +777,13 @@ impl<'a> Preprocessor<'a, '_> {
     /// Pastes `lhs` with the tokens after the `##` at `s[*idx]`, repeatedly
     /// while another `##` follows (clang `pasteTokens`). On return `*idx`
     /// is the index of the first token not consumed.
-    pub(crate) fn paste(&mut self, s: &[PpTok], idx: &mut usize, mut lhs: PpTok, cx: &PasteCx) -> PpTok {
+    pub(crate) fn paste(
+        &mut self,
+        s: &[PpTok],
+        idx: &mut usize,
+        mut lhs: PpTok,
+        cx: &PasteCx,
+    ) -> PpTok {
         let start = lhs.tok.span.lo;
         let mut buf = std::mem::take(&mut self.paste_buf);
         loop {
@@ -857,7 +866,13 @@ impl<'a> Preprocessor<'a, '_> {
 
     /// `#` applied to `toks` (clang `MacroArgs::StringifyArgument`). The
     /// result is spelled in a scratch buffer and expanded at `span`.
-    pub(crate) fn stringify(&mut self, toks: &[PpTok], charify: bool, span: Span, name: Span) -> PpTok {
+    pub(crate) fn stringify(
+        &mut self,
+        toks: &[PpTok],
+        charify: bool,
+        span: Span,
+        name: Span,
+    ) -> PpTok {
         let quote = if charify { '\'' } else { '"' };
         let mut s = String::with_capacity(16);
         s.push(quote);
@@ -869,7 +884,10 @@ impl<'a> Preprocessor<'a, '_> {
                 s.push(' ');
             }
             let sp = self.spelling(&t.tok);
-            if matches!(t.kind(), TokKind::StringLit(_) | TokKind::RawStringLit(_) | TokKind::CharLit(_)) {
+            if matches!(
+                t.kind(),
+                TokKind::StringLit(_) | TokKind::RawStringLit(_) | TokKind::CharLit(_)
+            ) {
                 escape_into(&mut s, &sp);
             } else {
                 s.push_str(&sp);
@@ -894,7 +912,13 @@ impl<'a> Preprocessor<'a, '_> {
     }
 
     /// A token spelled `text` in a scratch buffer, expanded at `exp`.
-    pub(crate) fn scratch_tok(&mut self, text: &str, kind: TokKind, exp: Span, name: Span) -> Token {
+    pub(crate) fn scratch_tok(
+        &mut self,
+        text: &str,
+        kind: TokKind,
+        exp: Span,
+        name: Span,
+    ) -> Token {
         let len = u32::try_from(text.len()).unwrap_or(u32::MAX);
         let span = match self.scratch_loc(text) {
             Some((_, l)) => {
@@ -912,7 +936,8 @@ impl<'a> Preprocessor<'a, '_> {
         let mut bytes = Vec::new();
         for t in toks {
             let sp = self.spelling(t);
-            let lit = kiln_lex::literal::decode_string(&sp, kiln_lex::literal::LiteralOptions::default());
+            let lit =
+                kiln_lex::literal::decode_string(&sp, kiln_lex::literal::LiteralOptions::default());
             if lit.has_error {
                 return None;
             }
@@ -954,7 +979,7 @@ struct OpResult {
     next: Option<PpTok>,
 }
 
-impl<'a> Preprocessor<'a, '_> {
+impl Preprocessor<'_, '_> {
     /// Expands builtin macro `b` named by `t` (clang `ExpandBuiltinMacro`).
     pub(crate) fn expand_builtin(&mut self, t: PpTok, b: Builtin) -> Option<PpTok> {
         use std::fmt::Write as _;
@@ -1031,7 +1056,9 @@ impl<'a> Preprocessor<'a, '_> {
             _ => {
                 let expand = matches!(
                     b,
-                    Builtin::HasAttribute | Builtin::HasCppAttribute | Builtin::HasDeclspecAttribute
+                    Builtin::HasAttribute
+                        | Builtin::HasCppAttribute
+                        | Builtin::HasDeclspecAttribute
                 );
                 match self.eval_feature_like(&t, b, expand) {
                     Ok((v, rparen)) => {
@@ -1078,7 +1105,9 @@ impl<'a> Preprocessor<'a, '_> {
         let lp = self.lex_unexpanded();
         if !lp.is_punct(Punct::LParen) {
             self.emit(
-                Diag::new(DiagId::pp_expected_after, lp.tok.span).arg(format!("'{name}'")).arg("'('"),
+                Diag::new(DiagId::pp_expected_after, lp.tok.span)
+                    .arg(format!("'{name}'"))
+                    .arg("'('"),
             );
             if lp.is_eod_or_eof() {
                 return Err(lp);
@@ -1121,16 +1150,13 @@ impl<'a> Preprocessor<'a, '_> {
                 if depth > 0 {
                     continue;
                 }
-                return Ok(match result {
-                    Some((v, _)) => (v, tok.tok.span),
-                    None => {
-                        if !quiet {
-                            self.emit(
-                                Diag::new(DiagId::pp_macro_args_mismatch, tok.tok.span).arg(0),
-                            );
-                        }
-                        (0, tok.tok.span)
+                return Ok(if let Some((v, _)) = result {
+                    (v, tok.tok.span)
+                } else {
+                    if !quiet {
+                        self.emit(Diag::new(DiagId::pp_macro_args_mismatch, tok.tok.span).arg(0));
                     }
+                    (0, tok.tok.span)
                 });
             } else if result.is_none() {
                 let r = self.feature_op(b, tok);
@@ -1140,7 +1166,7 @@ impl<'a> Preprocessor<'a, '_> {
             }
             // A token after the operand: diagnose the missing `)`.
             if !quiet {
-                let last = result.map(|(_, t)| t).unwrap_or(tok);
+                let last = result.map_or(tok, |(_, t)| t);
                 let what = match last.ident() {
                     Some(s) => format!("'{}'", self.interner.as_str(s)),
                     None => format!("'{}'", self.spelling(&last.tok)),
@@ -1163,9 +1189,8 @@ impl<'a> Preprocessor<'a, '_> {
         let mut next = None;
         let value = match b {
             Builtin::IsIdentifier => {
-                let id = tok.ident().is_some_and(|s| {
-                    !self.features.is_keyword(self.interner.as_str(s))
-                });
+                let id =
+                    tok.ident().is_some_and(|s| !self.features.is_keyword(self.interner.as_str(s)));
                 u32::from(id)
             }
             Builtin::HasWarning => {
@@ -1246,7 +1271,8 @@ impl<'a> Preprocessor<'a, '_> {
         };
         if !is_str(&first) {
             self.emit(
-                Diag::new(DiagId::pp_expected_string_literal, first.tok.span).arg("'__has_warning'"),
+                Diag::new(DiagId::pp_expected_string_literal, first.tok.span)
+                    .arg("'__has_warning'"),
             );
             return (false, None);
         }

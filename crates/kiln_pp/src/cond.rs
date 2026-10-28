@@ -43,6 +43,15 @@ pub trait IfEvaluator {
     /// included. Errors are reported through `cx`; an erroneous
     /// expression evaluates to `false`.
     fn eval(&mut self, cx: &mut dyn IfContext) -> bool;
+
+    /// Evaluates an integer constant expression in preprocessor arithmetic
+    /// for an `#embed` / `__has_embed` `limit(...)` / `clang::offset(...)`
+    /// parameter (C23 6.10.4.2). The tokens end with `Eod` at the closing
+    /// parenthesis. Returns `None` after reporting an error. The default
+    /// uses the [`StubIfEvaluator`] grammar; WP-015 overrides it.
+    fn eval_value(&mut self, cx: &mut dyn IfContext) -> Option<i64> {
+        stub_value(cx)
+    }
 }
 
 /// A minimal evaluator: integer literals (any base, `'` separators,
@@ -65,12 +74,20 @@ struct Stub<'c> {
 
 impl IfEvaluator for StubIfEvaluator {
     fn eval(&mut self, cx: &mut dyn IfContext) -> bool {
+        stub_value(cx).is_some_and(|v| v != 0)
+    }
+}
+
+/// The [`StubIfEvaluator`] grammar: the value of the whole line, or `None`
+/// after reporting an error.
+pub(crate) fn stub_value(cx: &mut dyn IfContext) -> Option<i64> {
+    {
         let defined = cx.interner().intern("defined");
         let true_ = cx.interner().intern("true");
         let tok = cx.next();
         if tok.kind == TokKind::Eod {
             cx.emit(Diag::new(DiagId::pp_expected_value_in_expr, tok.span));
-            return false;
+            return None;
         }
         let mut s = Stub { cx, tok, failed: false, defined, true_ };
         let v = s.cond(true);
@@ -78,7 +95,7 @@ impl IfEvaluator for StubIfEvaluator {
             let span = s.tok.span;
             s.fail(DiagId::pp_expr_bad_token_binop, span);
         }
-        !s.failed && v != 0
+        (!s.failed).then_some(v)
     }
 }
 
@@ -239,12 +256,11 @@ impl Stub<'_> {
                 let text = self.cx.spelling(&self.tok);
                 let span = self.tok.span;
                 self.bump();
-                match parse_int(&text) {
-                    Some(v) => v,
-                    None => {
-                        self.fail(DiagId::pp_expr_unsupported, span);
-                        0
-                    }
+                if let Some(v) = parse_int(&text) {
+                    v
+                } else {
+                    self.fail(DiagId::pp_expr_unsupported, span);
+                    0
                 }
             }
             TokKind::Identifier(s) if s == self.defined => self.defined(),
@@ -268,7 +284,9 @@ impl Stub<'_> {
 
     fn defined(&mut self) -> i64 {
         let kw = self.tok.span;
-        if self.cx.source_manager().is_macro_loc(kw.lo) && self.cx.is_enabled(DiagId::pp_expansion_to_defined) {
+        if self.cx.source_manager().is_macro_loc(kw.lo)
+            && self.cx.is_enabled(DiagId::pp_expansion_to_defined)
+        {
             self.cx.emit(Diag::new(DiagId::pp_expansion_to_defined, kw));
         }
         let mut t = self.cx.next_unexpanded();
@@ -285,7 +303,9 @@ impl Stub<'_> {
             let close = self.cx.next_unexpanded();
             if close.kind != TokKind::Punct(Punct::RParen) {
                 self.failed = true;
-                self.cx.emit(Diag::new(DiagId::pp_expected_after, close.span).arg("'defined'").arg("')'"));
+                self.cx.emit(
+                    Diag::new(DiagId::pp_expected_after, close.span).arg("'defined'").arg("')'"),
+                );
                 return 0;
             }
         }
@@ -297,6 +317,7 @@ impl Stub<'_> {
 /// Parses an integer pp-number (`0x1F`, `0b101`, `017`, `1'000`, with
 /// `u`/`l`/`z` suffixes). `None` for floating literals and malformed
 /// numbers.
+#[allow(clippy::many_single_char_names)]
 pub(crate) fn parse_int(text: &str) -> Option<i64> {
     let t = text.as_bytes();
     let (radix, mut i) = if t.len() > 1 && t[0] == b'0' && (t[1] | 0x20) == b'x' {

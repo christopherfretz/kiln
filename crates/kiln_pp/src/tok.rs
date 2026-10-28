@@ -22,6 +22,9 @@ impl PpFlags {
     /// A `, ## __VA_ARGS__` comma after this token was removed (clang
     /// `CommaAfterElided`).
     pub(crate) const COMMA_AFTER_ELIDED: PpFlags = PpFlags(8);
+    /// A byte value or separating comma produced by `#embed` (printed as
+    /// clang prints its `annot_embed` token).
+    pub(crate) const EMBED: PpFlags = PpFlags(16);
 
     pub(crate) const fn empty() -> PpFlags {
         PpFlags(0)

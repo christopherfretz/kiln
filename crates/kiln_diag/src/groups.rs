@@ -70,6 +70,7 @@ diag_groups! {
     GnuLineMarker = "gnu-line-marker" [];
     GnuZeroLineDirective = "gnu-zero-line-directive" [];
     GnuZeroVariadicMacroArguments = "gnu-zero-variadic-macro-arguments" [];
+    IncludeNextAbsPath = "include-next-absolute-path" [];
     IncludeNextOutsideHeader = "include-next-outside-header" [];
     KeywordAsMacro = "keyword-macro" [];
     MalformedWarningCheck = "malformed-warning-check" [];

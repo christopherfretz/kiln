@@ -256,12 +256,15 @@ diag_ids! {
     pp_import_ext = Extension (0) "#import is a language extension";
     pp_include_next_ext = Extension [GnuIncludeNext] (0) "#include_next is a language extension";
     pp_include_next_in_primary = Warning [IncludeNextOutsideHeader] (0) "#include_next in primary source file";
+    pp_include_next_absolute_path = Warning [IncludeNextAbsPath] (0) "#include_next in file found relative to primary source file or found by absolute path; will search from start of include path";
     pp_include_expects_file = Error (0) "expected \"FILENAME\" or <FILENAME>";
     pp_empty_filename = Error (0) "empty filename";
     pp_embed_ext = ExtWarn [C23Extensions] (0) "#embed is a Clang extension";
     pp_embed_unknown_param = Error (1) "unknown embed preprocessor parameter '{0}'";
     pp_embed_duplicate_param = Error (1) "cannot specify parameter '{0}' twice in the same '#embed' directive";
     pp_embed_malformed_param = Error (1) "expected '(' or ')' in parameter '{0}'";
+    pp_embed_defined = Error (0) "'defined' cannot appear within this context";
+    pp_embed_negative_value = Error (1) "invalid value '{0}'; must be positive";
     pp_header_unit_unsupported = Error (0) "importing a header unit is not supported yet";
     pp_module_name_is_macro = Error (1) "module name component '{0}' cannot be an object-like macro";
     pp_pragma_once_in_main = Warning [PragmaOnceOutsideHeader] (0) "#pragma once in main file";
@@ -290,6 +293,10 @@ diag_ids! {
     pp_include_unsupported = Fatal (0) "kiln: no include resolver is installed";
     pp_expected = Error (1) "expected {0}";
     pp_pragma_diagnostic_unknown_warning = Warning [UnknownWarningOption] (1) "unknown warning group '{0}', ignored";
+    pp_pragma_diagnostic_invalid = Warning [UnknownPragmas] (0) "pragma diagnostic expected 'error', 'warning', 'ignored', 'fatal', 'push', or 'pop'";
+    pp_pragma_diagnostic_invalid_token = Warning [UnknownPragmas] (0) "unexpected token in pragma diagnostic";
+    pp_pragma_diagnostic_invalid_option = Warning [UnknownPragmas] (0) "pragma diagnostic expected option name (e.g. \"-Wundef\")";
+    pp_pragma_diagnostic_cannot_pop = Warning [UnknownPragmas] (0) "pragma diagnostic pop could not pop, no matching push";
 
     // ----- shared notes ------------------------------------------------
     note_previous_definition = Note (0) "previous definition is here";
