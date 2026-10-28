@@ -116,6 +116,11 @@ clang's `Parser` over `Preprocessor::Lex`.
   2.37 s; `xmacro`: 3.84 s vs 3.87 s), and the window uses 21% less
   (`headers`, 99 MB vs 125 MB) and 11% less (`xmacro`, 336 MB vs
   378 MB) peak RSS. The window is the default.
+- Parsing adds no measurable time over preprocessing: `-fsyntax-only`
+  runs in 2.10 s on `headers` (`-E -o /dev/null`: 2.21 s) and 3.69 s on
+  `xmacro` (`-E`: 3.81 s), because `-E` spends more time formatting its
+  output than the parser spends. Until templates are parsed, much of
+  `headers` is skipped as unsupported, so re-measure when M3 lands.
 - After a fatal error (`'x' file not found`, `-ferror-limit` reached),
   the source returns `Eof`, so parsing stops, as in clang.
 
