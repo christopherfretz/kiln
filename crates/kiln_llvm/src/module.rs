@@ -745,7 +745,10 @@ impl Module {
     }
 
     fn aggregate_canon(&self, elems: &[Value]) -> Option<u8> {
-        // 0 = all zero, 1 = all undef, 2 = all poison.
+        // 0 = all zero (or empty), 1 = all undef, 2 = all poison.
+        if elems.is_empty() {
+            return Some(0);
+        }
         let kind = |v: Value| -> Option<u8> {
             match self.const_of(v)? {
                 ConstData::Undef(_) => Some(1),
