@@ -157,22 +157,31 @@ The layout follows clang:
 
 ## Syntax checking (`-fsyntax-only`)
 
-Each input is parsed by `kiln_parse::parse_file` (WP-048) at the
-`-std=` standard (default `gnu++17`, as clang). The target is
-`kiln_sema::target::Target::from_triple`. The output and status follow
-the `-E` rules:
+Each input is preprocessed and parsed in one pass. The driver builds the
+preprocessor exactly as `-E` does: `Job::pp_inputs` (search list, `-v`
+block, main file, predefines with `-D`/`-U`/`-include`) and then
+`Job::build_preprocessor` (header search, `#if` evaluation, feature
+queries, callbacks, entering the main file). `-E` and `-fsyntax-only`
+share both functions, so macros, `#include` and `#if` behave identically
+in the two modes. The parser then reads the preprocessor's tokens through
+`kiln_parse::parse_preprocessed` (spec/parse.md §2) at the `-std=`
+standard (default `gnu++17`, as clang; `cargo xtask test` always passes
+`-std=`). The target is `kiln_sema::target::Target::from_triple`. The
+output and status follow the `-E` rules:
 
 - diagnostics, then the error summary, go to standard error;
-- `-fdump-ast` writes the dump to the output;
+- `-fdump-ast` writes the dump to the output. It covers the main file's
+  declarations; `-fdump-ast=all-files` adds those of included files;
+- the parser's Sema evaluates constants under the `-fconstexpr-*`
+  limits; after the parse `-fconstexpr-report=` writes the Oven's report
+  (`constexpr_opts`);
 - the exit status is 1 on any error.
 
 An unknown `-fdump-ast` option gives `invalid value '<opt>' in
 '-fdump-ast=<opts>'`.
 
-The parser still lexes the file itself, so `#include` and macros do not
-work under `-fsyntax-only` until WP-055 feeds it `kiln_pp` tokens. C
-inputs, `-MD`/`-MMD`, and `-fdump-ast` without `-fsyntax-only` are "not
-implemented yet".
+C inputs (`-x c`, `.c`), `-MD`/`-MMD` with `-fsyntax-only`, and
+`-fdump-ast` without `-fsyntax-only` are "not implemented yet".
 
 ## Dependency output
 

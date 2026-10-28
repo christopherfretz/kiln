@@ -324,7 +324,8 @@ sema.
 
 - **One Oven per translation unit.** `Sema` owns it; `kiln_sema`'s
   `oven_bridge.rs` implements `SemaBridge` per call. `kiln_parse::parse_tu`
-  returns it beside the AST (`ParsedTu { ast, oven }`) for the report.
+  and `parse_preprocessed` (the driver's path) return it beside the AST
+  (`ParsedTu { ast, oven }`) for the report.
 - **Contexts.** Every manifestly constant-evaluated site passes an
   `EvalContext`. Its `kind` is the report's `kind`; `loc` is the
   construct's location. The constructors match where clang 19 checks
