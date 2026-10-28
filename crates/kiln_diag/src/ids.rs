@@ -393,7 +393,6 @@ diag_ids! {
     parse_attribute_requires_string = Error (1) "expected string literal as argument of '{0}' attribute";
     parse_unsupported = Error (1) "{0} is not supported yet";
     parse_expected_lbrace_after_base = Error (0) "expected '{{' after base class list";
-    note_matching = Note (1) "to match this {0}";
 
     // ----- sema (WP-048)
     sema_undeclared_var_use = Error (1) "use of undeclared identifier '{0}'";
