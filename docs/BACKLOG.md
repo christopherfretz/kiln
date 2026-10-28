@@ -35,15 +35,16 @@ Format per `docs/AGENTS.md`. Ids are stable; status moves between
 | WP-041 | A ast-core (ids, arenas, headers, lookup/redecl, MemReport, AstBuilder; Symbol/Interner → kiln_source) | done (2026-10-28). Follow-up: id exhaustion panics instead of a fatal diagnostic |
 | WP-042 | B types (TypeContext, interning, canonical, M2 kinds, template-arg tables, layout hooks, clang-port printer) | done (2026-10-28) |
 | WP-043 | C const-store (ConstStore, StringPool, float formatting, printing) | done (2026-10-28). Sema obligation: `&s` vs `&s.x` at equal offsets intern identically — [temp.type] equivalence must compare designators in sema, not ConstValueId |
-| WP-044 | D dump printer (ast-dump.md) | in-progress |
-| WP-045 | E dump loader (text → Ast, M2 subset) | todo (after D) |
+| WP-044 | D dump printer (clang format, 14 goldens byte-exact) | done (2026-10-28). Sema obligations: propagate bit-field lvalue marking through operators; `TypedefNameForAnonDecl` storage for `typedef struct {..} T` (dcl.typedef/aliases golden) | |
+| WP-045 | E dump loader (text → Ast) | deferred — parser (WP-048) is in progress; Oven/codegen test on parsed sources instead. Revive only if H slips |
 | WP-046 | F+G: `xtask clang-ast` normalizer + harness `expect: ast` + 32 AST goldens; ast-dump spec reconciled with clang | done (2026-10-28). Decisions: second type string = clang's top-level desugar (types.md §12 note); ParenExpr kept; values clang can't give (floats in ConstantExpr, pointers, long double) are checked by kiln-only `expect: ast` tests later |
 | WP-047 | (merged into WP-046) | — |
 | WP-048 | H parser M2 (decls, declarators, exprs, stmts → sema actions) | in-progress |
 | WP-049 | I sema conversions (implicit casts, arithmetic conversions, literal typing) | in-progress |
 | WP-050 | J abi layout (`TargetTypes`, `record_layout` vs clang `-fdump-record-layouts`) | in-progress |
-| WP-051 | K oven compile (AST → KBC, M2 subset; tests via loaded dumps) | todo (after E) |
-| WP-052 | L codegen M2 (AST → LLVM IR; tests via loaded dumps) | todo (after E, J) |
+| WP-051 | K Oven M2: KBC compiler + VM + abstract memory for the C-ish subset, tests via AstBuilder now and parsed sources when H lands | in-progress |
+| WP-053 | `kiln_llvm`: in-memory LLVM IR model (types, globals, functions, blocks, instructions, attributes, metadata) + textual printer validated by `llvm-as`/`opt -verify` round trips | in-progress |
+| WP-052 | L codegen M2 (AST → kiln_llvm; run tests vs clang) | todo (after H, J, WP-053) |
 
 ## Cross-cutting
 | id | scope | status |
