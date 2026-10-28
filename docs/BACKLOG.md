@@ -42,10 +42,10 @@ Format per `docs/AGENTS.md`. Ids are stable; status moves between
 | WP-048 | H parser M2 + Sema core (full M2 subset; `kiln -fsyntax-only -fdump-ast` end to end; 47 AST golden dirs, 74 diag tests) | done (2026-10-28). Open: parser lexes the file itself — must take kiln_pp tokens (WP-055); `aggval` unions/bit-fields; [dcl.align]/6; jumps past init | |
 | WP-049 | I sema conversions ([conv], [expr.arith.conv], [over.ics] ranking, narrowing, literal typing; 104 tests, clang wording) | done (2026-10-28). M3: user-defined conversions, temporaries, access checks | |
 | WP-050 | J abi layout (targets, Itanium record layout w/ bit-fields/packed/aligned/no_unique_address, clang-exact on 640 random records per run) | done (2026-10-28). Open: `#pragma pack` needs sema state; bases/vptr are M3 (spec/abi.md §8) | |
-| WP-051 | K Oven M2: KBC compiler + VM + abstract memory for the C-ish subset, tests via AstBuilder now and parsed sources when H lands | in-progress |
+| WP-051 | K Oven M2 (KBC, VM, abstract memory, 56-case UB catalogue, exact clang step parity, memo, report; fib/sieve/sort 19–47x faster than clang) | done (2026-10-28). Open: string-literal identity needs `PtrBase::StringLit` to carry the literal ExprId; labels/goto (builders now exist from WP-048); MaterializeTemporaryExpr untested; enum range check stricter than clang |
 | WP-053 | `kiln_llvm` IR model + builder + verifier + printer (40 corpus modules verified; 16 C programs match clang -O0 through `opt -S`) | done (2026-10-28) |
 | WP-052 | L codegen M2 (AST → kiln_llvm, `-S -emit-llvm`/`-c`/link via clang; `run` tests vs clang oracle) | in-progress |
-| WP-054 | Oven↔sema integration: replace sema's `ConstEvaluator` Folder with the Oven via `SemaBridge`; `oven:` budgets + `-fconstexpr-report` end to end | todo (after WP-051) |
+| WP-054 | Oven↔sema integration: replace sema's `ConstEvaluator` Folder with the Oven via `SemaBridge`; driver `-fconstexpr-steps/-depth/-memory`, `-fconstexpr-report`; `oven:` conformance tests; string-literal identity; labels/goto; tests/conformance/expr.const via parsed sources; `bench/oven` through kiln | in-progress |
 | WP-055 | parser consumes kiln_pp tokens (`TokenSource` over `Preprocessor::next`), lexdiag.rs stopgap removed, `kiln -fsyntax-only` on files with `#include` | todo (after WP-014) |
 
 ## Cross-cutting
