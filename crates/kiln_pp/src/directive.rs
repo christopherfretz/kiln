@@ -42,37 +42,62 @@ pub(crate) enum Dir {
 }
 
 impl Dir {
+    /// Every directive, in the order of [`Dir::NAMES`].
+    const ALL: [Dir; 20] = [
+        Dir::If,
+        Dir::Ifdef,
+        Dir::Ifndef,
+        Dir::Elif,
+        Dir::Elifdef,
+        Dir::Elifndef,
+        Dir::Else,
+        Dir::Endif,
+        Dir::Include,
+        Dir::IncludeNext,
+        Dir::Import,
+        Dir::Embed,
+        Dir::Define,
+        Dir::Undef,
+        Dir::Line,
+        Dir::Error,
+        Dir::Warning,
+        Dir::Pragma,
+        Dir::Ident,
+        Dir::Sccs,
+    ];
+    /// The directive names, in the order of [`Dir::ALL`].
+    const NAMES: [&'static str; 20] = [
+        "if",
+        "ifdef",
+        "ifndef",
+        "elif",
+        "elifdef",
+        "elifndef",
+        "else",
+        "endif",
+        "include",
+        "include_next",
+        "import",
+        "embed",
+        "define",
+        "undef",
+        "line",
+        "error",
+        "warning",
+        "pragma",
+        "ident",
+        "sccs",
+    ];
+
     pub(crate) fn from_name(s: &str) -> Option<Dir> {
-        Some(match s {
-            "if" => Dir::If,
-            "ifdef" => Dir::Ifdef,
-            "ifndef" => Dir::Ifndef,
-            "elif" => Dir::Elif,
-            "elifdef" => Dir::Elifdef,
-            "elifndef" => Dir::Elifndef,
-            "else" => Dir::Else,
-            "endif" => Dir::Endif,
-            "include" => Dir::Include,
-            "include_next" => Dir::IncludeNext,
-            "import" => Dir::Import,
-            "embed" => Dir::Embed,
-            "define" => Dir::Define,
-            "undef" => Dir::Undef,
-            "line" => Dir::Line,
-            "error" => Dir::Error,
-            "warning" => Dir::Warning,
-            "pragma" => Dir::Pragma,
-            "ident" => Dir::Ident,
-            "sccs" => Dir::Sccs,
-            _ => return None,
-        })
+        Dir::NAMES.iter().position(|n| *n == s).map(|i| Dir::ALL[i])
     }
 }
 
 impl<'a> Preprocessor<'a, '_> {
     /// The directive name of identifier token `t`, if it is one.
     pub(crate) fn dir_of(&self, t: &PpTok) -> Option<Dir> {
-        t.ident().and_then(|s| Dir::from_name(self.interner.as_str(s)))
+        t.ident().and_then(|s| self.dirs.get(s, self.interner))
     }
 
     /// `#` at the start of a line was lexed from the top file frame
@@ -593,6 +618,9 @@ impl<'a> Preprocessor<'a, '_> {
     }
 }
 
+/// How many leading `#if` tokens [`IfCx`] records for guard detection.
+const IF_REC: usize = 8;
+
 /// The [`IfContext`] the core hands to the [`IfEvaluator`].
 struct IfCx<'p, 'a, 'd> {
     pp: &'p mut Preprocessor<'a, 'd>,
@@ -603,21 +631,22 @@ struct IfCx<'p, 'a, 'd> {
     end: Option<Token>,
     /// `defined` was evaluated.
     used_defined: bool,
-    /// The first tokens read (for `#if !defined(X)` guard detection);
-    /// `None` once more than [`IfCx::REC`] were read.
-    rec: Option<Vec<Token>>,
+    /// The first tokens read (for `#if !defined(X)` guard detection).
+    rec: [Token; IF_REC],
+    /// How many of `rec` are filled; `None` once more than
+    /// [`IF_REC`] tokens were read.
+    rec_len: Option<usize>,
 }
 
 impl<'p, 'a, 'd> IfCx<'p, 'a, 'd> {
-    const REC: usize = 8;
-
     fn new(pp: &'p mut Preprocessor<'a, 'd>, paren: bool) -> Self {
         IfCx {
             pp,
             paren: paren.then_some(0),
             end: None,
             used_defined: false,
-            rec: Some(Vec::new()),
+            rec: [crate::preprocessor::eof_tok(Span::INVALID); IF_REC],
+            rec_len: Some(0),
         }
     }
 
@@ -626,26 +655,30 @@ impl<'p, 'a, 'd> IfCx<'p, 'a, 'd> {
     /// (clang's `DefinedTracker::NotDefinedMacro` with no
     /// `DidMacroExpansion`).
     fn ifndef_macro(&self) -> Option<Symbol> {
-        let rec = self.rec.as_ref()?;
+        let rec = self.rec.get(..self.rec_len?)?;
         let (last, rest) = rec.split_last()?;
         if last.kind != TokKind::Eod || rest.iter().any(|t| self.pp.sm.is_macro_loc(t.span.lo)) {
             return None;
         }
         let mut depth = 0i32;
-        let mut core = Vec::new();
+        let mut core = [TokKind::Eod; IF_REC];
+        let mut n = 0;
         for t in rest {
             match t.kind {
                 TokKind::Punct(Punct::LParen) => depth += 1,
                 TokKind::Punct(Punct::RParen) => depth -= 1,
-                _ => core.push(t.kind),
+                k => {
+                    core[n] = k;
+                    n += 1;
+                }
             }
             if depth < 0 {
                 return None;
             }
         }
-        match core.as_slice() {
+        match &core[..n] {
             [TokKind::Punct(Punct::Exclaim), TokKind::Identifier(d), TokKind::Identifier(x)]
-                if depth == 0 && self.pp.interner.as_str(*d) == "defined" =>
+                if depth == 0 && *d == self.pp.syms.defined =>
             {
                 Some(*x)
             }
@@ -654,11 +687,12 @@ impl<'p, 'a, 'd> IfCx<'p, 'a, 'd> {
     }
 
     fn record(&mut self, t: Token) -> Token {
-        if let Some(r) = &mut self.rec {
-            if r.len() < Self::REC {
-                r.push(t);
+        if let Some(n) = self.rec_len {
+            if let Some(slot) = self.rec.get_mut(n) {
+                *slot = t;
+                self.rec_len = Some(n + 1);
             } else {
-                self.rec = None;
+                self.rec_len = None;
             }
         }
         t
@@ -1940,5 +1974,74 @@ impl Preprocessor<'_, '_> {
             self.emit(Diag::new(DiagId::pp_module_name_is_macro, next.span).arg(sp));
         }
         self.queue(Marker::Module { span: t.span, export, import });
+    }
+}
+
+/// `Symbol -> Dir` for the directive names, interned once per
+/// preprocessor: a table indexed by symbol index (offset by the smallest
+/// directive symbol), so the per-directive lookup is one bounds check
+/// instead of a string comparison.
+pub(crate) struct DirTable {
+    base: u32,
+    /// `Dir::ALL` index + 1, or 0 for "not a directive name".
+    slots: Box<[u8]>,
+}
+
+impl DirTable {
+    /// Above this many slots the table falls back to string matching.
+    const MAX_SLOTS: u32 = 1 << 16;
+
+    pub(crate) fn new(interner: &Interner) -> Self {
+        let syms = Dir::NAMES.map(|n| interner.intern(n).index());
+        let base = syms.iter().copied().min().unwrap_or(0);
+        let span = syms.iter().copied().max().unwrap_or(0) - base + 1;
+        if span > Self::MAX_SLOTS {
+            return DirTable { base: 0, slots: Box::new([]) };
+        }
+        let mut slots = vec![0u8; span as usize].into_boxed_slice();
+        for (i, s) in syms.iter().enumerate() {
+            slots[(s - base) as usize] = i as u8 + 1;
+        }
+        DirTable { base, slots }
+    }
+
+    pub(crate) fn get(&self, s: Symbol, interner: &Interner) -> Option<Dir> {
+        if self.slots.is_empty() {
+            return Dir::from_name(interner.as_str(s));
+        }
+        let slot = *self.slots.get(s.index().checked_sub(self.base)? as usize)?;
+        Dir::ALL.get(usize::from(slot).checked_sub(1)?).copied()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Dir, DirTable};
+    use kiln_lex::Interner;
+
+    /// [cpp.pre]/1: the symbol table classifies exactly the directive
+    /// names, also when the interner already held other strings (so the
+    /// directive symbols are not contiguous).
+    #[test]
+    fn cpp_pre_dir_table_matches_names() {
+        for warm in [0usize, 3, 300] {
+            let interner = Interner::new();
+            for i in 0..warm {
+                interner.intern(&format!("w{i}"));
+                if i == 1 {
+                    interner.intern("endif");
+                }
+            }
+            let table = DirTable::new(&interner);
+            for (name, dir) in Dir::NAMES.iter().zip(Dir::ALL) {
+                assert_eq!(Dir::from_name(name), Some(dir));
+                assert_eq!(table.get(interner.intern(name), &interner), Some(dir), "{name}");
+            }
+            for other in ["w0", "IF", "defined", "include_nexts", "x"] {
+                let s = interner.intern(other);
+                assert_eq!(table.get(s, &interner), None, "{other}");
+                assert_eq!(Dir::from_name(other), None);
+            }
+        }
     }
 }

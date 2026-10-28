@@ -234,6 +234,8 @@ pub struct Preprocessor<'a, 'd> {
     /// Recycled token buffers.
     pub(crate) pool: Vec<Vec<PpTok>>,
     pub(crate) syms: Syms,
+    /// Directive-name classification by symbol.
+    pub(crate) dirs: crate::directive::DirTable,
     pub(crate) counter: u32,
     pub(crate) once_files: HashSet<FileId>,
     /// Files with a detected include guard, and its macro.
@@ -316,6 +318,7 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
             scratch: HashMap::new(),
             pool: Vec::new(),
             syms,
+            dirs: crate::directive::DirTable::new(interner),
             counter: 0,
             once_files: HashSet::new(),
             guards: HashMap::new(),
@@ -980,6 +983,21 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
             && !t.flags.contains(TokFlags::HAS_UCN)
         {
             return std::borrow::Cow::Borrowed(self.interner.as_str(s));
+        }
+        // A punctuator not spelled as a digraph and without splices or
+        // trigraphs is spelled exactly as its primary spelling
+        // ([lex.operators]): no source lookup needed.
+        if let TokKind::Punct(p) = t.kind
+            && !t.flags.contains(TokFlags::NEEDS_CLEANING)
+            && !t.flags.contains(TokFlags::DIGRAPH)
+        {
+            #[cfg(debug_assertions)]
+            if let Some(text) = self.sm.span_text(t.span)
+                && !text.is_empty()
+            {
+                debug_assert_eq!(text, p.as_str(), "punctuator spelling");
+            }
+            return std::borrow::Cow::Borrowed(p.as_str());
         }
         crate::profile::count!(spelling_slow);
         kiln_lex::spelling(self.sm, t, &self.lex_opts)
