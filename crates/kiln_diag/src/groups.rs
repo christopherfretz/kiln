@@ -110,6 +110,17 @@ diag_groups! {
     Unicode = "unicode" [];
     UnicodeWhitespace = "unicode-whitespace" [];
     VariadicMacros = "variadic-macros" [];
+    // #if expressions and literals (WP-015)
+    Undef = "undef" [];
+    MultiChar = "multichar" [];
+    FourByteMultiChar = "four-char-constants" [];
+    UnknownEscapeSequence = "unknown-escape-sequence" [];
+    Cxx11LongLong = "c++11-long-long" [];
+    Cxx11Extensions = "c++11-extensions" [Cxx11LongLong];
+    Cxx14BinaryLiteral = "c++14-binary-literal" [];
+    Cxx14Extensions = "c++14-extensions" [Cxx14BinaryLiteral];
+    Cxx17Extensions = "c++17-extensions" [];
+    Cxx23Extensions = "c++23-extensions" [];
 }
 
 impl Group {
