@@ -3,7 +3,7 @@
 # answers clang 19 gives to every __has_builtin / __has_feature /
 # __has_extension / __has_attribute / __has_cpp_attribute /
 # __has_declspec_attribute / __has_constexpr_builtin query that appears in the
-# libc++ 19 headers, the sysroot headers, kiln's resource headers and tests/.
+# libc++ 19 headers (directly or through glibc's __glibc_has_* wrappers), the sysroot headers, kiln's resource headers and tests/.
 # This is a stopgap until WP-015 lands the real feature tables; delete both
 # files then.
 #
@@ -13,7 +13,8 @@ import os, re, subprocess, sys
 ROOTS = ["/usr/lib/llvm-19/include/c++/v1", "/usr/include", "resource/include", "tests"]
 KINDS = ["has_builtin", "has_feature", "has_extension", "has_attribute",
          "has_cpp_attribute", "has_declspec_attribute", "has_constexpr_builtin"]
-pat = re.compile(rb"__(" + b"|".join(k.encode() for k in KINDS) + rb")\s*\(\s*([A-Za-z_][A-Za-z_0-9]*(?:::[A-Za-z_][A-Za-z_0-9]*)?)")
+# glibc wraps the queries in __glibc_has_{attribute,builtin,extension}.
+pat = re.compile(rb"(?:__|__glibc_)(" + b"|".join(k.encode() for k in KINDS) + rb")\s*\(\s*([A-Za-z_][A-Za-z_0-9]*(?:::[A-Za-z_][A-Za-z_0-9]*)?)")
 items = set()
 for root in ROOTS:
     for d, _, fs in os.walk(root):
