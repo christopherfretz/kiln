@@ -1,0 +1,8 @@
+int a = 5;
+int b = 6;
+int c = 10;
+int d = 14;
+int e = 16;
+int f = 18;
+int g[] = { 20 21 };
+int h = 22 + 23;

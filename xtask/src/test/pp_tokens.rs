@@ -350,11 +350,19 @@ impl Lexed {
                 let sp = self.spelling(it);
                 let shown: String = sp.chars().take(120).collect();
                 let more = if shown.len() < sp.len() { "..." } else { "" };
-                let _ = write!(s, "  {}{more}  ({})", shown.escape_debug(), cat.name());
+                let _ = write!(s, "  {}{more}  ({})", escape_controls(&shown), cat.name());
             }
         }
         s
     }
+}
+
+/// Makes a spelling printable on one line: control characters (a raw string
+/// can hold newlines) are escaped, everything else is shown as is.
+fn escape_controls(s: &str) -> String {
+    s.chars()
+        .map(|c| if c.is_control() { c.escape_default().to_string() } else { c.to_string() })
+        .collect()
 }
 
 fn sys_suffix(flags: u8) -> &'static str {

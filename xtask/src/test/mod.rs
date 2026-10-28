@@ -5,7 +5,7 @@
 
 mod compare;
 mod diag_parse;
-mod directives;
+pub(crate) mod directives;
 mod discover;
 mod pp_tokens;
 mod report;

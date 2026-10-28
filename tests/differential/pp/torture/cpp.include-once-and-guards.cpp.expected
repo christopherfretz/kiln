@@ -1,0 +1,23 @@
+
+once_h_body
+guarded_h_body
+
+level 1 begin
+level 2 begin
+level 3 begin
+level 4 begin
+level 5 begin
+level 5 end
+
+level 4 end
+
+level 3 end
+
+level 2 end
+
+level 1 end
+unguarded_h_body
+unguarded_h_body
+
+guarded_h_body
+end;

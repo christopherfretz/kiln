@@ -1,0 +1,8 @@
+nodiscard 201907L;
+gnu_always_inline;
+no_such_attribute;
+has_attribute;
+has_builtin;
+has_feature;
+is_identifier;
+                          201803L 201603L

@@ -1,0 +1,2 @@
+#define WHERE __FILE_NAME__ __INCLUDE_LEVEL__
+in_header __FILE_NAME__ __INCLUDE_LEVEL__ WHERE

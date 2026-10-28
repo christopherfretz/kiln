@@ -1,0 +1,9 @@
+R"(line one
+line two, with (parens) and a comma)" end1;
+R"delim(a, b
+  )" not the end )delim" end2;
+"R\"x(spliced\\\nline)x\"" end3;
+u8R"(utf8
+raw)" LR"(wide)" uR"()" UR"(
+)" end4;
+"R\"(\n)\"" end5;

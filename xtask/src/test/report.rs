@@ -124,14 +124,11 @@ pub fn parity_table(h: &ParityHeader, results: &[TestResult]) -> String {
         }
         // Skipped tests are not counted against the rate.
         let ran = rs.len() - c.get(Status::Skip);
-        let rate = if ran == 0 {
-            "-".to_owned()
-        } else {
-            // Permille in integers: counts are far below f64's exact range,
-            // but the lint cannot know that.
-            let permille = (c.get(Status::Pass) * 1000 + ran / 2) / ran;
-            format!("{}.{}%", permille / 10, permille % 10)
-        };
+        // Permille in integers: counts are far below f64's exact range, but
+        // the lint cannot know that. No test ran: no rate.
+        let rate = (c.get(Status::Pass) * 1000 + ran / 2)
+            .checked_div(ran)
+            .map_or_else(|| "-".to_owned(), |p| format!("{}.{}%", p / 10, p % 10));
         let _ = writeln!(
             s,
             "| {name} | {} | {} | {} | {} | {} | {} | {} | {rate} |",

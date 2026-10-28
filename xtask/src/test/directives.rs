@@ -369,7 +369,7 @@ impl Parser {
                 self.pp_only.push((line, "pp-compare"));
                 match PpCompare::parse(value) {
                     Some(_) if self.pp_compare.is_some() => {
-                        self.err(line, "duplicate `pp-compare`")
+                        self.err(line, "duplicate `pp-compare`");
                     }
                     Some(c) => self.pp_compare = Some(c),
                     None => self.err(line, format!("unknown pp-compare `{value}` (tokens|text)")),

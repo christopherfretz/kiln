@@ -1,0 +1,61 @@
+# 1 "tests/differential/pp/torture/cpp.include-once-and-guards-markers.cpp"
+# 1 "<built-in>" 1
+# 1 "<built-in>" 3
+# 493 "<built-in>" 3
+# 1 "<command line>" 1
+# 1 "<built-in>" 2
+# 1 "tests/differential/pp/torture/cpp.include-once-and-guards-markers.cpp" 2
+
+
+
+
+# 1 "tests/differential/pp/torture/Inputs/once.h" 1
+
+once_h_body
+# 6 "tests/differential/pp/torture/cpp.include-once-and-guards-markers.cpp" 2
+
+# 1 "tests/differential/pp/torture/Inputs/guarded.h" 1
+
+
+
+
+guarded_h_body
+# 1 "tests/differential/pp/torture/Inputs/guarded.h" 1
+# 7 "tests/differential/pp/torture/Inputs/guarded.h" 2
+# 8 "tests/differential/pp/torture/cpp.include-once-and-guards-markers.cpp" 2
+
+# 1 "tests/differential/pp/torture/Inputs/recurse.h" 1
+level 1 begin
+
+# 1 "tests/differential/pp/torture/Inputs/recurse.h" 1
+level 2 begin
+
+# 1 "tests/differential/pp/torture/Inputs/recurse.h" 1
+level 3 begin
+
+# 1 "tests/differential/pp/torture/Inputs/recurse.h" 1
+level 4 begin
+
+# 1 "tests/differential/pp/torture/Inputs/recurse.h" 1
+level 5 begin
+
+
+
+level 5 end
+# 4 "tests/differential/pp/torture/Inputs/recurse.h" 2
+
+level 4 end
+# 4 "tests/differential/pp/torture/Inputs/recurse.h" 2
+
+level 3 end
+# 4 "tests/differential/pp/torture/Inputs/recurse.h" 2
+
+level 2 end
+# 4 "tests/differential/pp/torture/Inputs/recurse.h" 2
+
+level 1 end
+# 10 "tests/differential/pp/torture/cpp.include-once-and-guards-markers.cpp" 2
+# 1 "tests/differential/pp/torture/Inputs/unguarded.h" 1
+unguarded_h_body
+# 11 "tests/differential/pp/torture/cpp.include-once-and-guards-markers.cpp" 2
+end;

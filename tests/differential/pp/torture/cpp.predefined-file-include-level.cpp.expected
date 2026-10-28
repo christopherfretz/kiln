@@ -1,0 +1,5 @@
+"tests/differential/pp/torture/cpp.predefined-file-include-level.cpp" "cpp.predefined-file-include-level.cpp" 0
+
+in_header "file-macros.h" 1 "file-macros.h" 1
+"cpp.predefined-file-include-level.cpp" 0
+"renamed/main.cpp" "main.cpp" 50 "main.cpp" 0
