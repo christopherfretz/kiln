@@ -281,12 +281,47 @@ diag_ids! {
     pp_has_include_outside_directive = Error (1) "'{0}' must be used within a preprocessing directive";
     pp_missing_lparen_after = Error (1) "missing '(' after '{0}'";
     pp_feature_check_malformed = Error (0) "builtin feature check macro requires a parenthesized identifier";
+    pp_expected_id_building_module = Error (0) "expected a module name in '__building_module' expression";
     pp_defined_requires_identifier = Error (0) "operator 'defined' requires an identifier";
     pp_expansion_to_defined = Warning [ExpansionToDefined] (0) "macro expansion producing 'defined' has undefined behavior";
     pp_expansion_to_defined_fn = Extension [ExpansionToDefined] (0) "macro expansion producing 'defined' has undefined behavior";
     pp_expr_bad_token_binop = Error (0) "token is not a valid binary operator in a preprocessor subexpression";
     pp_expected_rparen_in_expr = Error (0) "expected ')' in preprocessor expression";
     pp_nested_paren = Error (1) "nested parentheses not permitted in '{0}'";
+    // #if expressions ([cpp.cond], WP-015; clang PPExpressions.cpp)
+    pp_undef_identifier = WarningOff [Undef] (1) "'{0}' is not defined, evaluates to 0";
+    pp_expected_eol_in_expr = Error (0) "expected end of line in preprocessor expression";
+    pp_illegal_floating_literal = Error (0) "floating point literal in preprocessor expression";
+    pp_invalid_udl = Error (1) "{0:character|integer} literal with user-defined suffix cannot be used in preprocessor constant expression";
+    pp_expr_overflow = Warning (0) "integer overflow in preprocessor expression";
+    pp_convert_to_positive = Warning (2) "{0:left|right} side of operator converted from negative value to unsigned: {1}";
+    pp_comma_expr = Extension (0) "comma operator in operand of #if";
+    pp_colon_without_question = Error (0) "':' without preceding '?'";
+    pp_long_long_ext = Extension [Cxx11LongLong] (0) "'long long' is a C++11 extension";
+    // literal values ([lex.icon], [lex.ccon]; clang LiteralSupport.cpp)
+    lit_invalid_digit = Error (2) "invalid digit '{0}' in {1:binary|octal|decimal} constant";
+    lit_invalid_suffix = Error (2) "invalid suffix '{0}' on {1:integer|floating} constant";
+    lit_exponent_no_digits = Error (0) "exponent has no digits";
+    lit_hex_float_requires = Error (1) "hexadecimal floating literal requires {0:an exponent|a significand}";
+    lit_digit_separator = Error (1) "digit separator cannot appear at {0:start|end} of digit sequence";
+    lit_binary_ext = Extension [Cxx14BinaryLiteral] (0) "binary integer literals are a C++14 extension";
+    lit_hex_float_ext = Extension [Cxx17Extensions] (0) "hexadecimal floating literals are a C++17 feature";
+    lit_size_t_ext = ExtWarn [Cxx23Extensions] (0) "'size_t' suffix for literals is a C++23 extension";
+    lit_unknown_escape = ExtWarn [UnknownEscapeSequence] (1) "unknown escape sequence '\\{0}'";
+    lit_nonstandard_escape = Extension (1) "use of non-standard escape character '\\{0}'";
+    lit_escape_no_digits = Error (1) "\\{0} used with no following hex digits";
+    lit_escape_missing_brace = Error (1) "expected '{{' after '\\{0}' escape sequence";
+    lit_delimited_escape_empty = Error (0) "delimited escape sequence cannot be empty";
+    lit_delimited_escape_invalid = Error (1) "invalid digit '{0}' in escape sequence";
+    lit_hex_escape_too_large = Error (0) "hex escape sequence out of range";
+    lit_octal_escape_too_large = Error (0) "octal escape sequence out of range";
+    lit_ucn_escape_incomplete = Error (0) "incomplete universal character name";
+    lit_char_too_large = Error (0) "character too large for enclosing character literal type";
+    lit_multichar = Warning [Multichar] (0) "multi-character character constant";
+    lit_four_char = WarningOff [FourByteMultiChar] (0) "multi-character character constant";
+    lit_char_constant_too_long = Warning (0) "character constant too long for its type";
+    lit_multichar_not_allowed = Error (1) "{0:wide|Unicode} character literals may not contain multiple characters";
+    note_ucn_name_loose_match = Note (0) "characters names in Unicode escape sequences are sensitive to case and whitespaces";
     pp_has_warning_invalid_option = ExtWarn [MalformedWarningCheck] (0) "__has_warning expected option name (e.g. \"-Wundef\")";
     pp_expected_string_literal = Error (1) "expected string literal in {0}";
     pp_date_time = WarningOff [DateTime] (0) "expansion of date or time macro is not reproducible";
@@ -294,6 +329,7 @@ diag_ids! {
     pp_expr_unsupported = Error (0) "kiln: this #if expression needs the full evaluator (WP-015)";
     pp_include_unsupported = Fatal (0) "kiln: no include resolver is installed";
     pp_expected = Error (1) "expected {0}";
+    pp_pragma_non_macro = Error (1) "no macro named '{0}'";
     pp_pragma_diagnostic_unknown_warning = Warning [UnknownWarningOption] (1) "unknown warning group '{0}', ignored";
     pp_pragma_diagnostic_invalid = Warning [UnknownPragmas] (0) "pragma diagnostic expected 'error', 'warning', 'ignored', 'fatal', 'push', or 'pop'";
     pp_pragma_diagnostic_invalid_token = Warning [UnknownPragmas] (0) "unexpected token in pragma diagnostic";
@@ -315,6 +351,17 @@ diag_ids! {
     drv_invalid_int_value = Error (2) "invalid integral value '{1}' in '{0}'";
     drv_invalid_value = Error (2) "invalid value '{1}' in '{0}'";
     drv_ignoring_tabstop = Warning (2) "ignoring invalid -ftabstop value '{0}', using default value {1}";
+    drv_no_such_file = Error (1) "no such file or directory: '{0}'";
+    drv_missing_argument = Error (2) "argument to '{0}' is missing (expected {1} value)";
+    drv_argument_not_allowed_with = Error (2) "invalid argument '{0}' not allowed with '{1}'";
+    drv_invalid_stdlib_name = Error (1) "invalid library name in argument '{0}'";
+    drv_language_not_recognized = Error (1) "language not recognized: '{0}'";
+    drv_framework_dir_ignored = Warning (1) "ignoring framework directory '{0}' (kiln does not search frameworks)";
+    drv_not_implemented = Error (1) "{0} is not implemented yet";
+    drv_unsupported_target = Error (1) "unsupported target '{0}' (kiln supports aarch64 and x86_64 Linux)";
+    drv_cannot_open_output = Error (2) "unable to open output file '{0}': '{1}'";
+    drv_cannot_read_input = Fatal (2) "cannot read '{0}': {1}";
+    drv_cannot_read_predefines = Fatal (2) "cannot read the predefined macros '{0}': {1}";
 
     // ----- sema conversions (WP-049): [conv], [expr.arith.conv], [lex.*con] --
     // Type arguments are passed pre-quoted, with clang's `(aka '...')`

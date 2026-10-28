@@ -10,7 +10,8 @@ use kiln_source::{FileId, Loc, SourceManager, Span};
 
 use crate::builtin::{FeatureQueries, NoFeatures};
 use crate::callbacks::{FileChange, NoCallbacks, PpCallbacks, PragmaIntroducer, PragmaMessageKind};
-use crate::cond::{IfEvaluator, StubIfEvaluator};
+use crate::cond::IfEvaluator;
+use crate::ifeval::IfEval;
 use crate::include::{IncludeResolver, NoIncludes};
 use crate::macros::{MacroDef, MacroTable, SymMap};
 use crate::options::PpOptions;
@@ -155,6 +156,8 @@ pub(crate) struct FileFrame<'a> {
     /// Search-path index the file was found at (for `#include_next`).
     pub(crate) lookup: Option<u32>,
     pub(crate) system: bool,
+    /// An `extern "C"` system header (implies `system`).
+    pub(crate) extern_c: bool,
     /// Line markers with flag 1 not yet closed by flag 2 in this file
     /// (clang's presumed include stack, as far as it is checked).
     pub(crate) marker_depth: u32,
@@ -301,7 +304,7 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
             macros: MacroTable::default(),
             frames: Vec::new(),
             resolver: Box::new(NoIncludes),
-            evaluator: Some(Box::new(StubIfEvaluator)),
+            evaluator: Some(Box::new(IfEval::default())),
             features: Box::new(NoFeatures),
             callbacks: Box::new(NoCallbacks),
             markers: VecDeque::new(),
@@ -341,7 +344,8 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
         self.resolver = r;
     }
 
-    /// Installs the `#if` evaluator (default: [`StubIfEvaluator`]).
+    /// Installs the `#if` evaluator (default: [`IfEval::default`], the
+    /// x86-64 Linux character types).
     pub fn set_if_evaluator(&mut self, e: Box<dyn IfEvaluator + 'd>) {
         self.evaluator = Some(e);
     }
@@ -392,7 +396,7 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
     pub fn enter_main_file(&mut self, file: FileId) {
         use std::fmt::Write as _;
         self.main_file = Some(file);
-        self.push_file(file, None, None, false);
+        self.push_file(file, None, None, false, false);
         let mut text = self.opts.predefines.clone();
         if !text.is_empty() && !text.ends_with('\n') {
             text.push('\n');
@@ -404,7 +408,7 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
             let _ = writeln!(text, "#undef {name}");
         }
         if let Ok(b) = self.sm.add_virtual("<built-in>", text) {
-            self.push_file(b, None, None, false);
+            self.push_file(b, None, None, false, false);
         }
     }
 
@@ -415,6 +419,7 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
         from: Option<Loc>,
         lookup: Option<u32>,
         system: bool,
+        extern_c: bool,
     ) {
         if self.entered.insert(file) {
             for r in &self.sm.load_report(file).replacements {
@@ -432,10 +437,11 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
             conds: Vec::new(),
             lookup,
             system,
+            extern_c,
             marker_depth: 0,
             mi: MiOpt::default(),
         })));
-        self.file_change(FileChange::Enter { file, from, system });
+        self.file_change(FileChange::Enter { file, from, system, extern_c });
     }
 
     /// Records a file change (callback and marker).
@@ -830,7 +836,7 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
         }
         self.include_depth = self.include_depth.saturating_sub(1);
         if let Some(Frame::File(below)) = self.frames.last() {
-            let (file, system) = (below.file, below.system);
+            let (file, system, extern_c) = (below.file, below.system, below.extern_c);
             // The includer resumes after the newline ending the `#include`
             // (clang's lexer has consumed it with the `eod`).
             let mut off = below.lx.offset();
@@ -841,7 +847,7 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
                 off += 1;
             }
             let resume = self.sm.loc(file, off);
-            self.file_change(FileChange::Exit { file, exited, resume, system });
+            self.file_change(FileChange::Exit { file, exited, resume, system, extern_c });
         }
         false
     }

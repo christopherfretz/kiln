@@ -1,7 +1,7 @@
 //! Literal *tokens* (spelling and extent only): [lex.ccon], [lex.string],
 //! [lex.ext]. Literal contents are WP-011.
 mod common;
-use common::{cxx26, diag_kinds, kinds, kinds_with, lex, spellings, std};
+use common::{cxx26, diag_kinds, kinds, kinds_with, lex, lex_with, spellings, std};
 use kiln_lex::{Encoding, LexDiagKind as D, Std, TokFlags, TokKind};
 
 /// [lex.ccon]/1, [lex.string]/1: encoding prefixes.
@@ -102,6 +102,24 @@ fn lex_ext_reserved_suffix() {
     assert_eq!(l.spellings, ["\"abc\"", "xyz"]);
     assert_eq!(l.diags[0].0, D::ReservedUdSuffix);
     assert_eq!(kinds_with("\"a\"_b\n", std(Std::Cxx03)), "string_literal identifier");
+}
+
+/// [lex.ext] (clang behavior): after a string literal, every standard
+/// library suffix is lexed as a ud-suffix from C++14 (`operator""h`
+/// declares the `<chrono>` operators), `d` and `y` from C++20.
+#[test]
+fn lex_ext_library_suffixes_after_string() {
+    let src = "\"\"h \"\"min \"\"ms \"\"us \"\"ns \"\"il \"\"i \"\"if \"\"s \"\"sv\n";
+    let l = lex_with(src, std(Std::Cxx14));
+    assert_eq!(l.tokens.len(), 10);
+    assert!(l.tokens.iter().all(|t| t.has(TokFlags::UD_SUFFIX)));
+    assert_eq!(l.diags.len(), 0, "{:?}", l.diags);
+    assert_eq!(kinds_with("\"\"d \"\"y\n", std(Std::Cxx20)), "string_literal string_literal");
+    let l = lex_with("\"\"d\n", std(Std::Cxx17));
+    assert_eq!(l.spellings, ["\"\"", "d"]);
+    assert_eq!(l.diags[0].0, D::ReservedUdSuffix);
+    let l = lex_with("\"\"h\n", std(Std::Cxx11));
+    assert_eq!(l.diags[0].0, D::ReservedUdSuffix);
 }
 
 /// [lex.ccon], [lex.string]: unterminated literals end at the newline.

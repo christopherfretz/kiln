@@ -292,3 +292,30 @@ yes
         ],
     );
 }
+
+/// [cpp.predefined]/4
+///
+/// clang always registers `__building_module`; kiln builds no Clang modules, so it is 0.
+#[test]
+fn building_module() {
+    common::check_diags(
+        r#"#ifdef __building_module
+defined
+#endif
+#if __building_module(foo)
+yes
+#else
+no
+#endif
+a __building_module(foo) b
+c __building_module(1) d
+"#,
+        r#"
+defined
+no
+a 0 b
+c 0 d
+"#,
+        &[r#"10:21: error: expected a module name in '__building_module' expression"#],
+    );
+}

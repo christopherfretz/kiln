@@ -28,4 +28,7 @@ C('date_time_shape', '[cpp.predefined]/1', '#define S(x) #x\n#define X(x) S(x)\n
 C('builtin_macro_defined', '[cpp.predefined]/4', '#if defined(__LINE__) && defined(__has_include) && defined(__COUNTER__) && defined(_Pragma)\nyes\n#endif\n'),
 C('undef_builtin', '[cpp.predefined]/4', '#undef __LINE__\n__LINE__\n'),
 C('has_include_next_in_main', '[cpp.cond]/2', '#if __has_include_next("a.h")\nyes\n#endif\n', files={'a.h': ('h', '')}),
+C('building_module', '[cpp.predefined]/4',
+  '#ifdef __building_module\ndefined\n#endif\n#if __building_module(foo)\nyes\n#else\nno\n#endif\na __building_module(foo) b\nc __building_module(1) d\n',
+  note='clang always registers `__building_module`; kiln builds no Clang modules, so it is 0.'),
 ]

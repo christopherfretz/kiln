@@ -20,8 +20,8 @@ Format per `docs/AGENTS.md`. Ids are stable; status moves between
 | WP-011 | `kiln_lex`: literal escapes validation, `\N{}` full name table + loose matching, header-name diagnostics, literal value decoder (`kiln_lex::literal`), number classifier, full NFC | done (2026-10-28). Open: invalid-UCN-in-identifier recovery vs clang; C mode; GNU/MS suffixes | 
 | WP-012 | `kiln_pp` core + macro engine + builtins + pragmas + `-E` printer + include-guard optimization (226 tests vs clang) | done (2026-10-28). Open: `#embed` not streamed; per-inclusion source ranges; `-dD/-dI` placement |
 | WP-013 | (merged into WP-012) | — |
-| WP-014 | `IncludeResolver` impl (clang search order from `resource/include-paths`, `-I/-isystem/-iquote/-idirafter/-isysroot/-nostdinc*`, `#include_next`, `__has_include*`, `-resource-dir`), driver `kiln -E` with the flag subset + `-M*`, predefines loading + `__KILN__`, and the first parity run over tests/differential/pp with `--report-parity` | in-progress |
-| WP-015 | `IfEvaluator` impl (full [cpp.cond]: intmax arithmetic, char literals via kiln_lex::literal, `defined`, `__has_*`, division by zero, unevaluated branches, clang diagnostics) + `FeatureQueries` tables (clang 19's `__has_feature/extension/builtin/attribute/cpp_attribute/declspec_attribute`, `__is_target_*`) | in-progress |
+| WP-014 | include resolver, predefines, `kiln -E` driver, `-M*`, hooks installed; **pp parity 275/276 token-wise (libc++ 106/106, sysroot 92/92, torture 48/48)** | done (2026-10-28) |
+| WP-015 | `IfEval` (clang-port `#if` evaluator, 0/1228 differential diffs) + `ClangFeatures` tables (2309 builtins, 128 features, 310 C++ attrs, 35 flag overlays; generated/verified by `scripts/gen-features.sh`) | done (2026-10-28). Decisions: unsupported triples → driver error (not silent NoFeatures); `-march` ignored for now (M7); `#embed` `defined` rule follows the standard |
 | WP-016 | `#embed` resolver (part of WP-014's resolver) + streaming (WP-012 open item) | folded into WP-014 / later |
 | WP-017 | `-E` printer | done inside WP-012 (`-dD/-dI` placement open) |
 | WP-018 | driver `-E` | folded into WP-014; `-fsyntax-only -fdump-ast` wiring after WP-048 |
@@ -46,7 +46,8 @@ Format per `docs/AGENTS.md`. Ids are stable; status moves between
 | WP-053 | `kiln_llvm` IR model + builder + verifier + printer (40 corpus modules verified; 16 C programs match clang -O0 through `opt -S`) | done (2026-10-28) |
 | WP-052 | L codegen M2 (AST → kiln_llvm, `-S -emit-llvm`/`-c`/link via clang; `run` tests vs clang oracle) | in-progress |
 | WP-054 | Oven↔sema integration: replace sema's `ConstEvaluator` Folder with the Oven via `SemaBridge`; driver `-fconstexpr-steps/-depth/-memory`, `-fconstexpr-report`; `oven:` conformance tests; string-literal identity; labels/goto; tests/conformance/expr.const via parsed sources; `bench/oven` through kiln | in-progress |
-| WP-055 | parser consumes kiln_pp tokens (`TokenSource` over `Preprocessor::next`), lexdiag.rs stopgap removed, `kiln -fsyntax-only` on files with `#include` | todo (after WP-014) |
+| WP-055 | parser consumes kiln_pp tokens (`TokenSource` over `Preprocessor::next`), lexdiag.rs stopgap removed, `kiln -fsyntax-only` on files with `#include`; `lex.digraph/alternative-tokens.cpp` passes; `-fsyntax-only` default std = clang's gnu++17 | in-progress |
+| WP-056 | macro-engine performance: `bench/pp/repetition` 147x and `xmacro` 5x slower than clang (suspect `expand.rs relocate()`/`loc_diff` walking location chains per token); target ≤1.5x clang on all pp entries; plus `SourceManager::add_inclusion` per-inclusion ranges + "In file included from" notes | in-progress |
 
 ## Cross-cutting
 | id | scope | status |

@@ -95,12 +95,24 @@ done
 DST_PRE="$RES/predefines"
 mkdir -p "$DST_PRE"
 find "$DST_PRE" -mindepth 1 -maxdepth 1 -type f -name '*.txt' -delete
-dm() { # dm <target> <std>  -> sorted '#define NAME VALUE' lines on stdout
-  "$CLANG" --target="$1" -std="$2" -E -dM -x c++ /dev/null | sort
+dm() { # dm <target> <std> [lang]  -> sorted '#define NAME VALUE' lines on stdout
+  "$CLANG" --target="$1" -std="$2" -E -dM -x "${3:-c++}" /dev/null | sort
 }
 for t in "${TARGETS[@]}"; do
   for s in "${STDS[@]}"; do
     dm "$t" "$s" > "$DST_PRE/$t.$s.txt"
+  done
+done
+# Older C++ standards and C (for `-std=c++14`, `-x c -std=c11`, ...): files
+# only; the structure summary below covers STDS.
+EXTRA_CXX_STDS=(c++98 c++11 c++14)
+EXTRA_C_STDS=(c89 c99 c11 c17 c23)
+for t in "${TARGETS[@]}"; do
+  for s in "${EXTRA_CXX_STDS[@]}"; do
+    dm "$t" "$s" > "$DST_PRE/$t.$s.txt"
+  done
+  for s in "${EXTRA_C_STDS[@]}"; do
+    dm "$t" "$s" c > "$DST_PRE/$t.$s.txt"
   done
 done
 

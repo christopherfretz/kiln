@@ -29,4 +29,9 @@ C('pragma_system_header_in_main', '[cpp.pragma]/1', '#pragma GCC system_header\n
 C('pragma_mark_region', '[cpp.pragma]/1', '#pragma mark - section\n#pragma region R\n#pragma endregion R\nx\n'),
 C('pragma_in_macro_args', '[cpp.pragma.op]/1', '#define F(x) [x]\nF(a _Pragma("p") b)\n'),
 C('pragma_stdc', '[cpp.pragma]/2', '#pragma STDC FENV_ACCESS ON\n#pragma STDC CX_LIMITED_RANGE OFF\n'),
+C('clang_macro_annotations', '[cpp.pragma]/1',
+  '#define A 1\n#define B 2\n#pragma clang deprecated(A)\n#pragma clang deprecated(B, "use C")\n#pragma clang final(A)\n#pragma clang restrict_expansion(B, "no" "t here")\n#pragma GCC deprecated(A)\nx\n',
+  note='clang consumes these (kiln does not implement their effect on later uses of the macro).'),
+C('clang_macro_annotations_malformed', '[cpp.pragma]/1',
+  '#define A 1\n#pragma clang deprecated A\n#pragma clang deprecated(1)\n#pragma clang deprecated(Z)\n#pragma clang deprecated(A, 3)\n#pragma clang deprecated(A x\n#pragma clang final(A, "m")\n#pragma clang deprecated(A) junk\nx\n'),
 ]

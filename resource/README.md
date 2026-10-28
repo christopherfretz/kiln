@@ -23,7 +23,10 @@ license, and the skip list are in `include/README.md`.
 
 One file per (target, standard): `<triple>.<std>.txt`, for triples
 `aarch64-unknown-linux-gnu` (the container's native target) and
-`x86_64-unknown-linux-gnu`, and std `c++17`, `c++20`, `c++23`, `c++26`. Each
+`x86_64-unknown-linux-gnu`, and std `c++17`, `c++20`, `c++23`, `c++26` (plus
+`c++98`, `c++11`, `c++14`, and the C standards `c89`, `c99`, `c11`, `c17`,
+`c23` generated with `-x c`; the structure summary covers only the first
+four). Each
 is the output of
 
 ```
