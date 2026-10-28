@@ -173,9 +173,7 @@ impl Interner {
     /// # Panics
     /// If `sym` was not created by this interner.
     pub fn as_str(&self, sym: Symbol) -> &str {
-        self.arena
-            .get(sym.0)
-            .unwrap_or_else(|| panic!("{sym:?} was not created by this Interner"))
+        self.arena.get(sym.0).unwrap_or_else(|| panic!("{sym:?} was not created by this Interner"))
     }
 
     /// Number of distinct strings interned.

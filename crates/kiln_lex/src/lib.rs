@@ -9,6 +9,8 @@
 
 mod diag;
 mod dump;
+#[cfg(test)]
+mod golden_tests;
 mod interner;
 mod lexer;
 mod options;

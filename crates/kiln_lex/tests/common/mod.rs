@@ -1,4 +1,4 @@
-//! Shared helpers for the kiln_lex integration tests.
+//! Shared helpers for the `kiln_lex` integration tests.
 #![allow(dead_code, reason = "each test binary uses a subset")]
 
 use kiln_lex::{Interner, LexDiagKind, LexMode, LexOptions, Lexer, Std, TokKind, Token, dump};
@@ -30,7 +30,11 @@ pub fn lex_with(text: &str, opts: LexOptions) -> Lexed {
 
 /// Like [`lex_with`] but lets `drive` adjust the lexer before each token
 /// (called with the lexer and the tokens so far).
-pub fn lex_driven(text: &str, opts: LexOptions, mut drive: impl FnMut(&mut Lexer<'_>, &[Token])) -> Lexed {
+pub fn lex_driven(
+    text: &str,
+    opts: LexOptions,
+    mut drive: impl FnMut(&mut Lexer<'_>, &[Token]),
+) -> Lexed {
     let sm = SourceManager::new();
     let file = sm.add_virtual("<test>", text.to_owned()).unwrap();
     let interner = Interner::new();

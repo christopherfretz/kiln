@@ -312,7 +312,10 @@ impl<'a> Lexer<'a> {
         self.pos = end;
         let literal = matches!(
             kind,
-            TokKind::CharLit(_) | TokKind::StringLit(_) | TokKind::RawStringLit(_) | TokKind::Unknown
+            TokKind::CharLit(_)
+                | TokKind::StringLit(_)
+                | TokKind::RawStringLit(_)
+                | TokKind::Unknown
         );
         let dirty = match self.raw_body.take() {
             Some((a, b)) => {
@@ -332,11 +335,18 @@ impl<'a> Lexer<'a> {
         let end = self.src.len();
         if self.in_directive {
             self.in_directive = false;
-            return Token { kind: TokKind::Eod, span: Span::empty(self.loc(end)), flags: TokFlags::empty() };
+            return Token {
+                kind: TokKind::Eod,
+                span: Span::empty(self.loc(end)),
+                flags: TokFlags::empty(),
+            };
         }
         if !self.eof_seen {
             self.eof_seen = true;
-            if self.whole_file && !self.src.bytes.is_empty() && !matches!(self.src.bytes[end - 1], b'\n' | b'\r') {
+            if self.whole_file
+                && !self.src.bytes.is_empty()
+                && !matches!(self.src.bytes[end - 1], b'\n' | b'\r')
+            {
                 self.diag(LexDiagKind::NoNewlineAtEof, end, end);
             }
         }
@@ -366,7 +376,11 @@ impl<'a> Lexer<'a> {
                             flags: TokFlags::empty(),
                         });
                     }
-                    self.pos += if b == b'\r' && self.src.byte(self.pos + 1) == Some(b'\n') { 2 } else { 1 };
+                    self.pos += if b == b'\r' && self.src.byte(self.pos + 1) == Some(b'\n') {
+                        2
+                    } else {
+                        1
+                    };
                     self.at_line_start = true;
                     self.leading_space = false;
                 }
@@ -419,7 +433,11 @@ impl<'a> Lexer<'a> {
                     let (c, s) = self.src.decode(self.pos);
                     match c {
                         Some(c) if is_unicode_whitespace(c) => {
-                            self.diag(LexDiagKind::UnicodeWhitespace { ch: c }, self.pos, self.pos + s);
+                            self.diag(
+                                LexDiagKind::UnicodeWhitespace { ch: c },
+                                self.pos,
+                                self.pos + s,
+                            );
                             self.leading_space = true;
                             self.pos += s;
                         }
@@ -463,7 +481,11 @@ impl<'a> Lexer<'a> {
             if j != nl {
                 self.diag(LexDiagKind::BackslashNewlineSpace, bs, bs + 1);
             }
-            i = if bytes[nl] == b'\r' && bytes.get(nl + 1) == Some(&b'\n') { nl + 2 } else { nl + 1 };
+            i = if bytes[nl] == b'\r' && bytes.get(nl + 1) == Some(&b'\n') {
+                nl + 2
+            } else {
+                nl + 1
+            };
             if !warned && !bytes[i..].starts_with(b"//") {
                 warned = true;
                 self.diag(LexDiagKind::MultiLineLineComment, start, start + 2);
@@ -600,7 +622,8 @@ impl<'a> Lexer<'a> {
                 (TokKind::Unknown, end, TokFlags::empty())
             }
             Ucn::Valid { ch, end, ext } => {
-                let ident_start = is_xid_start(ch) || (ch == '$' && self.opts.dollar_in_identifiers);
+                let ident_start =
+                    is_xid_start(ch) || (ch == '$' && self.opts.dollar_in_identifiers);
                 if !ident_start && !is_xid_continue(ch) {
                     self.diag(LexDiagKind::UcnInvalidCodePoint { cp: u32::from(ch) }, start, end);
                     return (TokKind::Unknown, end, TokFlags::empty());
@@ -651,11 +674,8 @@ impl<'a> Lexer<'a> {
         } else {
             scratch.push(first);
         }
-        let mut info = IdentInfo {
-            has_ucn: first_ucn,
-            dollar: first == '$',
-            not_nfc: is_nfc_qc_no(first),
-        };
+        let mut info =
+            IdentInfo { has_ucn: first_ucn, dollar: first == '$', not_nfc: is_nfc_qc_no(first) };
         let end = self.ident_tail(p, Some(&mut scratch), &mut info);
         if info.dollar {
             self.diag(LexDiagKind::DollarInIdentifier, start, end);
@@ -671,19 +691,26 @@ impl<'a> Lexer<'a> {
 
     /// Consumes identifier-continue characters from `p` ([lex.name]),
     /// pushing decoded characters to `out`. Returns the end position.
-    fn ident_tail(&mut self, mut p: usize, mut out: Option<&mut String>, info: &mut IdentInfo) -> usize {
+    fn ident_tail(
+        &mut self,
+        mut p: usize,
+        mut out: Option<&mut String>,
+        info: &mut IdentInfo,
+    ) -> usize {
         loop {
             let (c, s) = self.src.decode(p);
             let Some(c) = c else {
                 return p;
             };
             if c.is_ascii() {
-                if is_ascii_ident_continue(c as u8) || (c == '$' && self.opts.dollar_in_identifiers) {
+                if is_ascii_ident_continue(c as u8) || (c == '$' && self.opts.dollar_in_identifiers)
+                {
                     info.dollar |= c == '$';
                 } else if c == '\\' {
                     match self.scan_ucn(p) {
                         Ucn::Valid { ch, end, ext } => {
-                            if is_xid_continue(ch) || (ch == '$' && self.opts.dollar_in_identifiers) {
+                            if is_xid_continue(ch) || (ch == '$' && self.opts.dollar_in_identifiers)
+                            {
                                 info.dollar |= ch == '$';
                                 info.not_nfc |= is_nfc_qc_no(ch);
                                 if let Some(ext) = ext {
@@ -695,7 +722,11 @@ impl<'a> Lexer<'a> {
                             } else if is_unicode_whitespace(ch) {
                                 return p;
                             } else {
-                                self.diag(LexDiagKind::UcnInvalidCodePoint { cp: u32::from(ch) }, p, end);
+                                self.diag(
+                                    LexDiagKind::UcnInvalidCodePoint { cp: u32::from(ch) },
+                                    p,
+                                    end,
+                                );
                                 if let Some(o) = out.as_deref_mut() {
                                     push_decoded(self.src, o, p, end);
                                 }
@@ -829,7 +860,12 @@ impl<'a> Lexer<'a> {
 
     /// An identifier that may be an encoding prefix of a literal
     /// ([lex.ccon], [lex.string]).
-    fn lex_ident_or_literal(&mut self, start: usize, c: char, p1: usize) -> (TokKind, usize, TokFlags) {
+    fn lex_ident_or_literal(
+        &mut self,
+        start: usize,
+        c: char,
+        p1: usize,
+    ) -> (TokKind, usize, TokFlags) {
         let (kind, p, flags) = self.lex_identifier(start, c, p1, false);
         if !matches!(c, 'u' | 'U' | 'L' | 'R') || flags.contains(TokFlags::HAS_UCN) {
             return (kind, p, flags);
@@ -883,7 +919,9 @@ impl<'a> Lexer<'a> {
             let ok = match c {
                 '+' | '-' => match prev {
                     'e' | 'E' => true,
-                    'p' | 'P' => self.std_at_least(Std::Cxx17) || self.looks_like_hex_float(start, p),
+                    'p' | 'P' => {
+                        self.std_at_least(Std::Cxx17) || self.looks_like_hex_float(start, p)
+                    }
                     _ => false,
                 },
                 c if c.is_ascii_alphanumeric() || c == '_' || c == '.' => true,
@@ -936,7 +974,13 @@ impl<'a> Lexer<'a> {
     ///
     /// TODO(WP-011): escape sequences are only skipped (`\` consumes the
     /// next character), not validated; values are computed later.
-    fn lex_quoted(&mut self, start: usize, mut p: usize, quote: char, enc: Encoding) -> (TokKind, usize, TokFlags) {
+    fn lex_quoted(
+        &mut self,
+        start: usize,
+        mut p: usize,
+        quote: char,
+        enc: Encoding,
+    ) -> (TokKind, usize, TokFlags) {
         let is_string = quote == '"';
         if !is_string && self.src.decode(p).0 == Some('\'') {
             let (_, s) = self.src.decode(p);
@@ -983,7 +1027,13 @@ impl<'a> Lexer<'a> {
     /// raw source bytes: phase 1-2 transformations are reverted inside.
     ///
     /// TODO(WP-011): the body is not inspected beyond finding its end.
-    fn lex_raw_string(&mut self, start: usize, q: usize, qs: usize, enc: Encoding) -> (TokKind, usize, TokFlags) {
+    fn lex_raw_string(
+        &mut self,
+        start: usize,
+        q: usize,
+        qs: usize,
+        enc: Encoding,
+    ) -> (TokKind, usize, TokFlags) {
         let bytes = self.src.bytes;
         let len = bytes.len();
         let d0 = q + qs;
@@ -994,7 +1044,9 @@ impl<'a> Lexer<'a> {
         if bytes.get(i) != Some(&b'(') {
             match bytes.get(i) {
                 None => self.diag(LexDiagKind::UnterminatedRawString, start, start),
-                Some(&b) if self.is_d_char(b) => self.diag(LexDiagKind::RawDelimiterTooLong, d0, i + 1),
+                Some(&b) if self.is_d_char(b) => {
+                    self.diag(LexDiagKind::RawDelimiterTooLong, d0, i + 1);
+                }
                 Some(_) => {
                     let ch = self.src.text.get(i..).and_then(|t| t.chars().next()).unwrap_or('\0');
                     self.diag(LexDiagKind::RawDelimiterInvalidChar { ch }, i, i + ch.len_utf8());
@@ -1002,7 +1054,8 @@ impl<'a> Lexer<'a> {
             }
             // clang's recovery: skip to the next `"`.
             let end = bytes[d0..].iter().position(|&b| b == b'"').map_or(len, |k| d0 + k + 1);
-            self.raw_body = Some((d0, end));
+            // An error token: its spelling is cleaned like any other
+            // `Unknown` (no raw body), keeping `spelling` == `clean`.
             return (TokKind::Unknown, end, TokFlags::empty());
         }
         let delim = &bytes[d0..i];
@@ -1010,7 +1063,6 @@ impl<'a> Lexer<'a> {
         let body_end = loop {
             let Some(j) = bytes[k..].iter().position(|&b| b == b')') else {
                 self.diag(LexDiagKind::UnterminatedRawString, start, start);
-                self.raw_body = Some((d0, len));
                 return (TokKind::Unknown, len, TokFlags::empty());
             };
             let close = k + j + 1;
@@ -1214,7 +1266,9 @@ impl<'a> Lexer<'a> {
                 _ => two(P::LessLess),
             },
             ('<', Some('=')) => match self.src.decode(p2) {
-                (Some('>'), s3) if self.std_at_least(Std::Cxx20) => (TokKind::Punct(P::Spaceship), p2 + s3, none),
+                (Some('>'), s3) if self.std_at_least(Std::Cxx20) => {
+                    (TokKind::Punct(P::Spaceship), p2 + s3, none)
+                }
                 (Some('>'), s3) => {
                     self.diag(LexDiagKind::SpaceshipCompat, start, p2 + s3);
                     two(P::LessEqual)

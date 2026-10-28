@@ -43,16 +43,8 @@ pub(crate) fn is_nfc_qc_no(c: char) -> bool {
 pub(crate) fn is_unicode_whitespace(c: char) -> bool {
     matches!(
         c,
-        '\u{0085}'
-            | '\u{00A0}'
-            | '\u{1680}'
-            | '\u{180E}'
-            | '\u{2000}'..='\u{200A}'
-            | '\u{2028}'
-            | '\u{2029}'
-            | '\u{202F}'
-            | '\u{205F}'
-            | '\u{3000}'
+        '\u{0085}' | '\u{00A0}' | '\u{1680}' | '\u{180E}' | '\u{2000}'
+            ..='\u{200A}' | '\u{2028}' | '\u{2029}' | '\u{202F}' | '\u{205F}' | '\u{3000}'
     )
 }
 
@@ -71,8 +63,7 @@ pub(crate) fn lookup_char_name(name: &str) -> Option<char> {
     } else {
         (false, "")
     };
-    if !prefix_ok || !(4..=5).contains(&hex.len()) || !hex.bytes().all(|b| b.is_ascii_hexdigit())
-    {
+    if !prefix_ok || !(4..=5).contains(&hex.len()) || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
         return None;
     }
     let cp = u32::from_str_radix(hex, 16).ok()?;

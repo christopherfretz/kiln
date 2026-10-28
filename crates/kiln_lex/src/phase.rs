@@ -75,7 +75,9 @@ impl<'a> Src<'a> {
         }
         match self.byte(q)? {
             b'\n' => Some((q + 1, q != after)),
-            b'\r' => Some((if self.byte(q + 1) == Some(b'\n') { q + 2 } else { q + 1 }, q != after)),
+            b'\r' => {
+                Some((if self.byte(q + 1) == Some(b'\n') { q + 2 } else { q + 1 }, q != after))
+            }
             _ => None,
         }
     }

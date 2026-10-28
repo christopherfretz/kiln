@@ -1525,4 +1525,3 @@ pub(crate) static NFC_QC_NO: &[(u32, u32)] = &[
     (0x1D1BB, 0x1D1C0),
     (0x2F800, 0x2FA1D),
 ];
-
