@@ -16,10 +16,9 @@ use kiln_lex::literal::{
     EncodingParams, IntSize, LitDiag, LiteralOptions, NumberClass, Radix, classify_number,
     decode_char,
 };
-use kiln_lex::{Encoding, LexDiagKind, LexOptions, Punct, Std, Symbol, TokKind, Token};
+use kiln_lex::{Encoding, LexDiagKind, LexOptions, Punct, Std, Symbol, TokFlags, TokKind, Token};
 use kiln_source::Span;
 
-use crate::builtin::OPERATOR_NAMES;
 use crate::cond::{IfContext, IfEvaluator};
 
 /// clang's `#if` evaluator ([cpp.cond]).
@@ -137,27 +136,36 @@ struct Ev<'c> {
     tok: Token,
     params: EncodingParams,
     std: Std,
-    defined: Symbol,
-    true_: Symbol,
-    false_: Symbol,
-    /// The alternative tokens ([lex.digraph]) and their punctuators.
-    op_names: [(Symbol, Punct); OPERATOR_NAMES.len()],
+    /// The symbol of `defined`, once seen (symbols are equal exactly when
+    /// their strings are, so later checks compare symbols).
+    defined: Option<Symbol>,
+}
+
+/// The punctuator an alternative token ([lex.digraph]/2) stands for
+/// (`crate::builtin::OPERATOR_NAMES`, as a match: names are compared as
+/// text so that no symbol is interned per `#if`).
+fn op_punct(name: &str) -> Option<Punct> {
+    Some(match name {
+        "and" => Punct::AmpAmp,
+        "and_eq" => Punct::AmpEqual,
+        "bitand" => Punct::Amp,
+        "bitor" => Punct::Pipe,
+        "compl" => Punct::Tilde,
+        "not" => Punct::Exclaim,
+        "not_eq" => Punct::ExclaimEqual,
+        "or" => Punct::PipePipe,
+        "or_eq" => Punct::PipeEqual,
+        "xor" => Punct::Caret,
+        "xor_eq" => Punct::CaretEqual,
+        _ => return None,
+    })
 }
 
 impl<'c> Ev<'c> {
     fn new(cx: &'c mut dyn IfContext, params: EncodingParams) -> Self {
-        let i = cx.interner();
-        let defined = i.intern("defined");
-        let true_ = i.intern("true");
-        let false_ = i.intern("false");
-        let op_names = std::array::from_fn(|k| {
-            let (name, spelling) = OPERATOR_NAMES[k];
-            let p = Punct::ALL.iter().copied().find(|p| p.as_str() == spelling);
-            (i.intern(name), p.unwrap_or(Punct::Amp))
-        });
         let std = cx.std();
         let tok = cx.next();
-        Ev { cx, tok, params, std, defined, true_, false_, op_names }
+        Ev { cx, tok, params, std, defined: None }
     }
 
     fn bump(&mut self) {
@@ -170,7 +178,24 @@ impl<'c> Ev<'c> {
 
     /// The operator name `sym` stands for, if it is one ([lex.digraph]/2).
     fn op_name(&self, sym: Symbol) -> Option<Punct> {
-        self.op_names.iter().find(|(s, _)| *s == sym).map(|&(_, p)| p)
+        op_punct(self.name(sym))
+    }
+
+    /// True if `sym` is `defined` ([cpp.cond]/1).
+    fn is_defined_keyword(&mut self, sym: Symbol) -> bool {
+        if let Some(d) = self.defined {
+            return d == sym;
+        }
+        let yes = self.name(sym) == "defined";
+        if yes {
+            self.defined = Some(sym);
+        }
+        yes
+    }
+
+    /// The text of an identifier.
+    fn name(&self, sym: Symbol) -> &str {
+        self.cx.interner().as_str(sym)
     }
 
     /// The punctuator the current token is (or stands for).
@@ -208,7 +233,7 @@ impl<'c> Ev<'c> {
     fn value(&mut self, live: bool) -> R<Val> {
         let tok = self.tok;
         let punct = match tok.kind {
-            TokKind::Identifier(s) if s == self.defined => return self.defined(),
+            TokKind::Identifier(s) if self.is_defined_keyword(s) => return self.defined(),
             TokKind::Identifier(s) => match self.op_name(s) {
                 Some(p) => Some(p),
                 None => return Ok(self.identifier(s, live)),
@@ -256,8 +281,10 @@ impl<'c> Ev<'c> {
     fn identifier(&mut self, s: Symbol, live: bool) -> Val {
         let span = self.tok.span;
         self.bump();
-        if s == self.true_ || s == self.false_ {
-            return Val::signed(u64::from(s == self.true_));
+        match self.name(s) {
+            "true" => return Val::signed(1),
+            "false" => return Val::signed(0),
+            _ => {}
         }
         if live && self.cx.is_enabled(DiagId::pp_undef_identifier) {
             let name = self.cx.interner().as_str(s).to_owned();
@@ -340,6 +367,12 @@ impl<'c> Ev<'c> {
     /// An integer literal ([cpp.cond]/12, [lex.icon]).
     fn number(&mut self, live: bool) -> R<Val> {
         let tok = self.tok;
+        if !tok.flags.contains(TokFlags::NEEDS_CLEANING)
+            && let Some(v) = self.cx.source_manager().span_text(tok.span).and_then(plain_decimal)
+        {
+            self.bump();
+            return Ok(v);
+        }
         let spelling = self.cx.spelling(&tok);
         let n = classify_number(&spelling, self.std);
         // clang's `NumericLiteralParser` reads `1ui`, `1il`, ... as
@@ -625,6 +658,29 @@ impl<'c> Ev<'c> {
     }
 }
 
+/// The value of a plain decimal literal such as `0`, `42`, `201103L` or
+/// `1u`: no digit separators, at most 18 digits (so it cannot overflow),
+/// and a suffix of at most one `u` and one `l`, which can draw no
+/// diagnostic. `None` sends anything else down the full
+/// [`classify_number`] path. The `#if` fast path ([cpp.cond]/12).
+fn plain_decimal(text: &str) -> Option<Val> {
+    let b = text.as_bytes();
+    let digits = b.iter().take_while(|c| c.is_ascii_digit()).count();
+    if digits == 0 || digits > 18 || (digits > 1 && b[0] == b'0') {
+        return None;
+    }
+    let (mut unsigned, mut long) = (false, false);
+    for &c in &b[digits..] {
+        match c {
+            b'u' | b'U' if !unsigned => unsigned = true,
+            b'l' | b'L' if !long => long = true,
+            _ => return None,
+        }
+    }
+    let v = b[..digits].iter().fold(0u64, |v, &c| v * 10 + u64::from(c - b'0'));
+    Some(Val { v, unsigned })
+}
+
 /// Whether a ud-suffix makes clang's `NumericLiteralParser` read the
 /// literal as imaginary (`1i`, `1il`, `1ui`, ...): only `u`/`l`/`z` and
 /// exactly one `i`/`j`, or the standard ud-suffix `if`.
@@ -653,5 +709,95 @@ fn is_soft_error(d: &LitDiag, spelling: &str) -> bool {
         }
         LexDiagKind::OctalEscapeTooLarge => esc != Some('o'),
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{IntSize, NumberClass, Radix, Std, classify_number, op_punct, plain_decimal};
+    use crate::builtin::OPERATOR_NAMES;
+
+    /// [lex.digraph]/2: the evaluator's alternative-token table is the
+    /// crate's.
+    #[test]
+    fn op_punct_matches_operator_names() {
+        for (name, spelling) in OPERATOR_NAMES {
+            assert_eq!(op_punct(name).map(kiln_lex::Punct::as_str), Some(*spelling), "{name}");
+        }
+        assert_eq!(op_punct("defined"), None);
+        assert_eq!(op_punct("AND"), None);
+    }
+
+    /// [cpp.cond]/12, [lex.icon]: the plain-decimal fast path agrees with
+    /// the full literal classifier wherever it applies, and declines
+    /// everything that could draw a diagnostic or overflow.
+    #[test]
+    fn cpp_cond_plain_decimal_matches_classify_number() {
+        let mut cases: Vec<String> = [
+            "0",
+            "7",
+            "42",
+            "201103L",
+            "1u",
+            "1U",
+            "1l",
+            "1ul",
+            "1LU",
+            "0u",
+            "999999999999999999",
+            "1000000000000000000",
+            "08",
+            "00",
+            "0x1F",
+            "1'000",
+            "1LL",
+            "1ull",
+            "1uu",
+            "1ll",
+            "1i",
+            "1z",
+            "1.0",
+            "1e3",
+            "1_x",
+            "18446744073709551616",
+        ]
+        .iter()
+        .map(|s| (*s).to_string())
+        .collect();
+        let mut seed = 0x2545_f491_4f6c_dd1du64;
+        for _ in 0..2000 {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            let len = 1 + (seed % 21) as usize;
+            let s: String = (0..len)
+                .map(|i| {
+                    let pick = (seed >> (i * 3 % 60)) % 16;
+                    b"0123456789uUlLx'"[pick as usize] as char
+                })
+                .collect();
+            cases.push(s);
+        }
+        for text in &cases {
+            let Some(fast) = plain_decimal(text) else { continue };
+            let n = classify_number(text, Std::Cxx98);
+            assert!(n.diags.is_empty() && !n.has_error, "{text}");
+            let NumberClass::Integer(lit) = n.class else { panic!("{text}") };
+            let radix = if text.starts_with('0') { Radix::Octal } else { Radix::Decimal };
+            assert_eq!(lit.radix, radix, "{text}");
+            assert!(lit.ud_suffix.is_none(), "{text}");
+            assert_ne!(lit.suffix.size, IntSize::LongLong, "{text}");
+            assert_eq!(fast.unsigned, lit.suffix.unsigned, "{text}");
+            let slow = if lit.digits.is_empty() {
+                0
+            } else {
+                u64::from_str_radix(&lit.digits, radix.value()).unwrap_or_else(|_| panic!("{text}"))
+            };
+            assert_eq!(fast.v, slow, "{text}");
+            assert!(i64::try_from(slow).is_ok(), "{text}");
+        }
+        for text in ["08", "1'0", "1LL", "1uu", "0x1", "1i", "1000000000000000000", ""] {
+            assert!(plain_decimal(text).is_none(), "{text}");
+        }
     }
 }

@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Mutex, MutexGuard, OnceLock, PoisonError, RwLock};
 use std::{error, fmt, fs, io};
 
@@ -157,6 +158,41 @@ pub struct ExpansionInfo {
     pub kind: ExpansionKind,
 }
 
+/// Set in [`Entry::len_kind`] for [`ExpansionKind::Macro`] entries.
+/// Free because an entry is shorter than the 2^31-position macro space.
+const MACRO_KIND: u32 = 1 << 31;
+
+/// How an expansion entry is stored (24 bytes; [`ExpansionInfo`] is the
+/// public view). The macro-name span of a [`ExpansionKind::Macro`] entry
+/// lives in [`SourceManager::macro_names`]: argument entries, which
+/// dominate deep expansions, do not need one.
+#[derive(Debug, Clone, Copy)]
+struct Entry {
+    base: Loc,
+    /// `len` | [`MACRO_KIND`].
+    len_kind: u32,
+    spelling: Loc,
+    /// [`SourceManager::spelling_loc`] of `spelling`, computed once when
+    /// the entry is created so that spelling lookups are O(1) whatever the
+    /// depth of the chain (every link maps the entry by a constant offset).
+    file_spelling: Loc,
+    expansion: Span,
+}
+
+impl Entry {
+    fn len(&self) -> u32 {
+        self.len_kind & !MACRO_KIND
+    }
+
+    fn is_macro_kind(&self) -> bool {
+        self.len_kind & MACRO_KIND != 0
+    }
+
+    fn contains(&self, loc: Loc) -> bool {
+        loc.0.checked_sub(self.base.0).is_some_and(|off| off <= self.len())
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 struct LineDirective {
     /// Offset of the first byte of the line the directive renumbers.
@@ -192,6 +228,22 @@ impl FileEntry {
     }
 }
 
+/// One range of file location space: a buffer's own range (created with
+/// the buffer) or one inclusion of it ([`SourceManager::add_inclusion`]).
+/// Every range of a buffer spells the same text.
+#[derive(Debug, Clone, Copy)]
+struct FileRange {
+    /// Raw value of the range's first location.
+    start: u32,
+    /// Length of the buffer's text (the range is `[start, start + len]`).
+    len: u32,
+    /// The buffer whose text the range spells.
+    file: FileId,
+    /// The `#include` that entered this inclusion; invalid for a buffer's
+    /// own range.
+    included_from: Loc,
+}
+
 #[derive(Debug)]
 struct Alloc {
     next_file: u64,
@@ -213,10 +265,22 @@ struct Alloc {
 /// manager; methods taking a [`Loc`] treat unknown locations as invalid.
 pub struct SourceManager {
     files: AppendVec<FileEntry>,
-    expansions: AppendVec<ExpansionInfo>,
+    /// Every file location range, in allocation (and so `start`) order.
+    ranges: AppendVec<FileRange>,
+    expansions: AppendVec<Entry>,
+    /// `(base, name)` of every [`ExpansionKind::Macro`] entry, in creation
+    /// (and so base) order.
+    macro_names: AppendVec<(Loc, Span)>,
     presumed_names: AppendVec<Box<str>>,
     by_path: Mutex<HashMap<PathBuf, FileId>>,
     alloc: Mutex<Alloc>,
+    /// Index of the range found by the last lookup (clang's
+    /// `LastFileIDLookup`): a hint only, checked before use.
+    last_file: AtomicU32,
+    /// The `last_file` before the latest change of `last_file`.
+    prev_file: AtomicU32,
+    /// Index of the expansion entry found by the last lookup.
+    last_expansion: AtomicU32,
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -243,10 +307,15 @@ impl SourceManager {
     pub fn new() -> Self {
         Self {
             files: AppendVec::new(),
+            ranges: AppendVec::new(),
             expansions: AppendVec::new(),
+            macro_names: AppendVec::new(),
             presumed_names: AppendVec::new(),
             by_path: Mutex::new(HashMap::new()),
             alloc: Mutex::new(Alloc { next_file: 1, next_macro: u64::from(MACRO_BIT) }),
+            last_file: AtomicU32::new(0),
+            prev_file: AtomicU32::new(0),
+            last_expansion: AtomicU32::new(0),
         }
     }
 
@@ -301,8 +370,56 @@ impl SourceManager {
             lines: OnceLock::new(),
             line_directives: RwLock::new(Vec::new()),
         });
+        self.ranges.push(FileRange {
+            start: start as u32,
+            len: (end - start - 1) as u32,
+            file: FileId(idx),
+            included_from: Loc::INVALID,
+        });
         alloc.next_file = end;
         Ok(FileId(idx))
+    }
+
+    /// Allocates a new location range for one inclusion of `file`,
+    /// entered by the `#include` at `included_from`, and returns the
+    /// location of its byte 0 (clang's `createFileID` per inclusion). The
+    /// range spells the buffer's text exactly as the buffer's own range
+    /// does: offsets, lines, columns, text and `#line` directives are
+    /// those of `file`. Locations in it remember the inclusion
+    /// ([`include_loc`](Self::include_loc)), so diagnostics can print the
+    /// include stack. [`loc`](Self::loc) keeps returning locations in the
+    /// buffer's own range (the main file is lexed there).
+    ///
+    /// # Errors
+    /// [`LocSpaceExhausted`] if file location space is used up.
+    ///
+    /// # Panics
+    /// If `file` was not created by this manager.
+    pub fn add_inclusion(
+        &self,
+        file: FileId,
+        included_from: Loc,
+    ) -> Result<Loc, LocSpaceExhausted> {
+        let len = self.file(file).len();
+        let mut alloc = lock(&self.alloc);
+        let start = alloc.next_file;
+        let end = start + u64::from(len) + 1;
+        if end > FILE_SPACE_END {
+            return Err(LocSpaceExhausted);
+        }
+        self.ranges.push(FileRange { start: start as u32, len, file, included_from });
+        alloc.next_file = end;
+        Ok(Loc(start as u32))
+    }
+
+    /// The location of the `#include` that entered the inclusion holding
+    /// `loc` (clang `getIncludeLoc`); macro locations use their
+    /// [`expansion_loc`](Self::expansion_loc). Invalid for locations in a
+    /// buffer's own range (the main file, virtual buffers, files lexed
+    /// without [`add_inclusion`](Self::add_inclusion)) and for invalid or
+    /// unknown locations.
+    pub fn include_loc(&self, loc: Loc) -> Loc {
+        self.find_range(self.expansion_loc(loc)).map_or(Loc::INVALID, |(r, _)| r.included_from)
     }
 
     fn file(&self, id: FileId) -> &FileEntry {
@@ -357,13 +474,37 @@ impl SourceManager {
     }
 
     fn find_file(&self, loc: Loc) -> Option<(FileId, &FileEntry, u32)> {
+        let (r, off) = self.find_range(loc)?;
+        Some((r.file, self.file(r.file), off))
+    }
+
+    /// The file range holding `loc` and the offset of `loc` in it.
+    fn find_range(&self, loc: Loc) -> Option<(FileRange, u32)> {
         if !loc.is_file() {
             return None;
         }
-        let i = self.files.partition_point(|f| f.start <= loc.0).checked_sub(1)?;
-        let f = self.files.get(i)?;
-        let off = loc.0 - f.start;
-        (off <= f.len()).then_some((FileId(i), f, off))
+        let hint = self.last_file.load(Ordering::Relaxed);
+        let in_range = |i: u32| {
+            let r = self.ranges.get(i)?;
+            let off = loc.0.checked_sub(r.start)?;
+            (off <= r.len).then_some((*r, off))
+        };
+        if let Some(found) = in_range(hint) {
+            return Some(found);
+        }
+        // Lookups alternate between a few buffers (the file being read and
+        // the headers its macros were defined in): try the one found
+        // before the hint, then binary-search.
+        let prev = self.prev_file.load(Ordering::Relaxed);
+        let i = if in_range(prev).is_some() {
+            prev
+        } else {
+            self.ranges.partition_point(|r| r.start <= loc.0).checked_sub(1)?
+        };
+        let found = in_range(i)?;
+        self.prev_file.store(hint, Ordering::Relaxed);
+        self.last_file.store(i, Ordering::Relaxed);
+        Some(found)
     }
 
     // ----- lines and columns ---------------------------------------------
@@ -406,6 +547,10 @@ impl SourceManager {
     /// the same buffer in order, or not on character boundaries.
     pub fn span_text(&self, span: Span) -> Option<&str> {
         let (lo_file, f, lo) = self.find_file(self.spelling_loc(span.lo))?;
+        if let Some(d) = self.same_entry_distance(span.lo, span.hi) {
+            // Same entry: the spelled range is as long as the span.
+            return f.text.get(lo as usize..(lo + d) as usize);
+        }
         let (hi_file, _, hi) = self.find_file(self.spelling_loc(span.hi))?;
         if lo_file != hi_file || lo > hi {
             return None;
@@ -437,14 +582,25 @@ impl SourceManager {
         expansion: Span,
         kind: ExpansionKind,
     ) -> Result<Loc, LocSpaceExhausted> {
-        assert!(self.is_allocated(spelling), "add_expansion: bad spelling {spelling:?}");
+        let file_spelling = self.spelling_loc(spelling);
+        let mut alloc = lock(&self.alloc);
+        // Allocated space is contiguous from the start of each half, so
+        // "allocated" is a comparison with the allocation frontier.
+        let allocated = |l: Loc| {
+            l.is_valid()
+                && u64::from(l.0) < if l.is_macro() { alloc.next_macro } else { alloc.next_file }
+        };
         assert!(
-            self.is_allocated(expansion.lo) && self.is_allocated(expansion.hi),
+            allocated(spelling) && file_spelling.is_valid(),
+            "add_expansion: bad spelling {spelling:?}"
+        );
+        assert!(
+            allocated(expansion.lo) && allocated(expansion.hi),
             "add_expansion: bad expansion span {expansion:?}"
         );
         if let ExpansionKind::Macro { name } = kind {
             assert!(
-                self.is_allocated(name.lo) && self.is_allocated(name.hi),
+                allocated(name.lo) && allocated(name.hi),
                 "add_expansion: bad macro-name span {name:?}"
             );
         }
@@ -452,41 +608,85 @@ impl SourceManager {
             spelling.0.checked_add(len).is_some_and(|end| self.same_entry(spelling, Loc(end))),
             "add_expansion: spelled range {spelling:?}+{len} crosses an entry boundary"
         );
-        let mut alloc = lock(&self.alloc);
         let base = alloc.next_macro;
         let end = base + u64::from(len) + 1;
         if end > MACRO_SPACE_END {
             return Err(LocSpaceExhausted);
         }
         let base = Loc(base as u32);
-        self.expansions.push(ExpansionInfo { base, len, spelling, expansion, kind });
+        let len_kind = match kind {
+            ExpansionKind::Macro { name } => {
+                self.macro_names.push((base, name));
+                len | MACRO_KIND
+            }
+            ExpansionKind::MacroArg => len,
+        };
+        self.expansions.push(Entry { base, len_kind, spelling, file_spelling, expansion });
         alloc.next_macro = end;
         Ok(base)
     }
 
-    fn find_expansion(&self, loc: Loc) -> Option<&ExpansionInfo> {
+    fn find_expansion(&self, loc: Loc) -> Option<&Entry> {
         if !loc.is_macro() {
             return None;
         }
+        let hint = self.last_expansion.load(Ordering::Relaxed);
+        if let Some(e) = self.expansions.get(hint)
+            && e.contains(loc)
+        {
+            return Some(e);
+        }
+        // Most misses land next to the hint or on the newest entry (the
+        // expansion being built): try those before the binary search.
+        let newest = self.expansions.len().checked_sub(1)?;
+        for i in [newest, hint.wrapping_add(1), hint.wrapping_sub(1)] {
+            if let Some(e) = self.expansions.get(i)
+                && e.contains(loc)
+            {
+                self.last_expansion.store(i, Ordering::Relaxed);
+                return Some(e);
+            }
+        }
         let i = self.expansions.partition_point(|e| e.base <= loc).checked_sub(1)?;
         let e = self.expansions.get(i)?;
-        (loc.0 - e.base.0 <= e.len).then_some(e)
+        if !e.contains(loc) {
+            return None;
+        }
+        self.last_expansion.store(i, Ordering::Relaxed);
+        Some(e)
     }
 
-    fn is_allocated(&self, loc: Loc) -> bool {
+    /// The first and last location of the buffer range or expansion entry
+    /// containing `loc` (both inclusive: a buffer's range ends at its
+    /// end-of-file location). `None` for invalid and unknown locations.
+    ///
+    /// Two locations with the same bounds are in the same entry, and then
+    /// their spellings are exactly as far apart as they are (see
+    /// [`same_entry_distance`](Self::same_entry_distance)).
+    pub fn entry_bounds(&self, loc: Loc) -> Option<(Loc, Loc)> {
         if loc.is_macro() {
-            self.find_expansion(loc).is_some()
+            self.find_expansion(loc).map(|e| (e.base, Loc(e.base.0 + e.len())))
         } else {
-            self.find_file(loc).is_some()
+            self.find_range(loc).map(|(r, _)| (Loc(r.start), Loc(r.start + r.len)))
         }
+    }
+
+    /// `hi - lo` if both are in the same buffer range or expansion entry
+    /// and `lo <= hi`, else `None`. O(1) after a cached lookup.
+    ///
+    /// Every link of a spelling chain maps a whole entry by a constant
+    /// offset into a single entry, so for such a pair
+    /// `spelling_loc(hi) - spelling_loc(lo) == hi - lo`: this is the
+    /// fast path for token lengths and gaps (clang
+    /// `isInSameSLocAddrSpace`).
+    pub fn same_entry_distance(&self, lo: Loc, hi: Loc) -> Option<u32> {
+        let d = hi.0.checked_sub(lo.0)?;
+        let (_, last) = self.entry_bounds(lo)?;
+        (hi <= last).then_some(d)
     }
 
     fn same_entry(&self, a: Loc, b: Loc) -> bool {
-        if a.is_macro() {
-            matches!((self.find_expansion(a), self.find_expansion(b)), (Some(x), Some(y)) if x.base == y.base)
-        } else {
-            matches!((self.find_file(a), self.find_file(b)), (Some(x), Some(y)) if x.0 == y.0)
-        }
+        a.is_valid() && self.entry_bounds(a).is_some_and(|(lo, hi)| lo <= b && b <= hi)
     }
 
     /// True if `loc` is a macro-expansion location. O(1).
@@ -499,7 +699,22 @@ impl SourceManager {
     /// [`immediate_macro_caller_loc`](Self::immediate_macro_caller_loc)
     /// to produce "expanded from macro" notes.
     pub fn expansion_info(&self, loc: Loc) -> Option<ExpansionInfo> {
-        self.find_expansion(loc).copied()
+        let e = self.find_expansion(loc)?;
+        let kind = if e.is_macro_kind() {
+            let i = self.macro_names.partition_point(|&(b, _)| b <= e.base).checked_sub(1)?;
+            let &(b, name) = self.macro_names.get(i)?;
+            debug_assert_eq!(b, e.base);
+            ExpansionKind::Macro { name }
+        } else {
+            ExpansionKind::MacroArg
+        };
+        Some(ExpansionInfo {
+            base: e.base,
+            len: e.len(),
+            spelling: e.spelling,
+            expansion: e.expansion,
+            kind,
+        })
     }
 
     /// One step of spelling resolution: where `loc` is spelled according
@@ -513,13 +728,16 @@ impl SourceManager {
         }
     }
 
-    /// Where the characters of `loc` were written: follows spelling links
-    /// until a file location. Identity for file locations.
-    pub fn spelling_loc(&self, mut loc: Loc) -> Loc {
-        while loc.is_macro() {
-            loc = self.immediate_spelling_loc(loc);
+    /// Where the characters of `loc` were written: the end of the chain of
+    /// [`immediate_spelling_loc`](Self::immediate_spelling_loc) links, a
+    /// file location. Identity for file locations; O(1) (the end of each
+    /// entry's chain is recorded when the entry is created).
+    pub fn spelling_loc(&self, loc: Loc) -> Loc {
+        match self.find_expansion(loc) {
+            Some(e) => e.file_spelling.with_offset(loc.0 - e.base.0),
+            None if loc.is_macro() => Loc::INVALID,
+            None => loc,
         }
-        loc
     }
 
     /// The file location of the outermost macro invocation that produced
@@ -553,7 +771,7 @@ impl SourceManager {
     /// the invocation. Identity for file locations.
     pub fn immediate_macro_caller_loc(&self, loc: Loc) -> Loc {
         match self.find_expansion(loc) {
-            Some(e) if e.kind == ExpansionKind::MacroArg => self.immediate_spelling_loc(loc),
+            Some(e) if !e.is_macro_kind() => e.spelling.with_offset(loc.0 - e.base.0),
             Some(e) => e.expansion.lo,
             None if loc.is_macro() => Loc::INVALID,
             None => loc,
@@ -634,9 +852,19 @@ fn line_col_in(starts: &[u32], off: u32) -> (u32, u32) {
 /// lone `\r`.
 fn compute_line_starts(text: &str) -> Box<[u32]> {
     let b = text.as_bytes();
-    let mut starts = vec![0u32];
+    let mut starts = Vec::with_capacity(b.len() / 32 + 1);
+    starts.push(0u32);
     let mut i = 0;
     while i < b.len() {
+        // Skip eight bytes at a time while none of them is `\n` or `\r`.
+        if let Some(w) = b.get(i..i + 8) {
+            let mut word = [0u8; 8];
+            word.copy_from_slice(w);
+            if !has_line_end(u64::from_le_bytes(word)) {
+                i += 8;
+                continue;
+            }
+        }
         match b[i] {
             b'\n' => starts.push(i as u32 + 1),
             b'\r' => {
@@ -650,6 +878,16 @@ fn compute_line_starts(text: &str) -> Box<[u32]> {
         i += 1;
     }
     starts.into_boxed_slice()
+}
+
+/// Whether any byte of `w` is `\n` or `\r` (SWAR zero-byte test; exact,
+/// since a byte only tests as zero if it is zero or a borrow came from a
+/// lower zero byte).
+fn has_line_end(w: u64) -> bool {
+    const ONES: u64 = 0x0101_0101_0101_0101;
+    const HIGHS: u64 = 0x8080_8080_8080_8080;
+    let zero = |x: u64| x.wrapping_sub(ONES) & !x & HIGHS;
+    zero(w ^ (ONES * u64::from(b'\n'))) | zero(w ^ (ONES * u64::from(b'\r'))) != 0
 }
 
 /// Decodes `bytes` as UTF-8, replacing each maximal invalid subsequence
@@ -676,3 +914,7 @@ const _: fn() = || {
     fn assert_send_sync<T: Send + Sync>() {}
     assert_send_sync::<SourceManager>();
 };
+
+// Expansion entries dominate the manager's memory in deep expansions
+// (one per macro-argument run per substitution): keep them at 24 bytes.
+const _: () = assert!(size_of::<Entry>() == 24);

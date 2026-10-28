@@ -6,8 +6,8 @@ use kiln_lex::literal::{
     LitDiag, LiteralOptions, classify_number, decode_char, decode_string,
     decode_unevaluated_string, encode_string,
 };
-use kiln_lex::{Interner, LexOptions, LexSeverity, Lexer, Std, TokKind, clean};
-use kiln_source::SourceManager;
+use kiln_lex::{Interner, LexOptions, LexSeverity, Lexer, Std, TokFlags, TokKind, clean};
+use kiln_source::{SourceManager, Span};
 
 /// [lex.pptoken]/2: garbage still produces tokens and diagnostics.
 #[test]
@@ -180,6 +180,12 @@ fn check(text: &str, opts: LexOptions) {
         assert_eq!(clean(&sp, t.kind, false), sp, "spelling not idempotent on {text:?}");
         let raw = &text[lo as usize..hi as usize];
         assert_eq!(clean(raw, t.kind, opts.trigraphs), sp);
+        // The lexer's skip-the-scan cursor (WP-056) never hides a splice.
+        assert_eq!(
+            t.has(TokFlags::NEEDS_CLEANING),
+            clean(raw, t.kind, opts.trigraphs) != raw,
+            "NEEDS_CLEANING of {raw:?} in {text:?}"
+        );
         if matches!(
             t.kind,
             TokKind::StringLit(_)
@@ -222,6 +228,31 @@ fn lex_fuzz_random_bytes() {
             (0..len).map(|_| PIECES[rng.below(PIECES.len())]).collect()
         };
         check(&text, opts[iter % opts.len()]);
+    }
+}
+
+/// [lex.phases]/1.2: long mostly-clean inputs with rare splices and
+/// trigraphs, so that the lexer's clean-run cursor is reused across many
+/// tokens; every token's spelling and `NEEDS_CLEANING` stay exact.
+#[test]
+fn lex_phases_sparse_splices_fuzz() {
+    const CLEAN: &[&str] =
+        &["ab", " ", "\n", "12", "+", "/* c */", "\"s\"", "'c'", "R\"(x)\"", "_y"];
+    const DIRTY: &[&str] = &["\\\n", "\\ \n", "??/\n", "??=", "?", "\\", "R\"(\\\n)\""];
+    let mut rng = Rng(0x5851_F42D_4C95_7F2D);
+    for iter in 0..300 {
+        let len = 50 + rng.below(400);
+        let text: String = (0..len)
+            .map(|_| {
+                if rng.below(25) == 0 {
+                    DIRTY[rng.below(DIRTY.len())]
+                } else {
+                    CLEAN[rng.below(CLEAN.len())]
+                }
+            })
+            .collect();
+        let trigraphs = iter % 2 == 0;
+        check(&text, LexOptions { trigraphs, ..std(Std::Cxx11) });
     }
 }
 
@@ -278,5 +309,68 @@ fn lex_fuzz_directive_mode() {
             steps += 1;
             assert!(steps <= 2 * text.len() + 2, "no progress on {text:?}");
         }
+    }
+}
+
+/// Line-initial tokens and `Eod`s (kind, spelling, span, flags) of `text`, lexing normally or calling
+/// `skip_plain_line_rest` after every token.
+fn line_starts(
+    text: &str,
+    opts: LexOptions,
+    skip: bool,
+    directive: bool,
+) -> Vec<(std::mem::Discriminant<TokKind>, String, Span, TokFlags)> {
+    let sm = SourceManager::new();
+    let f = sm.add_virtual("<skip>", text.to_owned()).unwrap();
+    let i = Interner::new();
+    let mut lx = Lexer::new(&sm, &i, f, sm.loc(f, 0), opts);
+    let mut out = Vec::new();
+    for _ in 0..=2 * text.len() + 2 {
+        let t = lx.next();
+        if t.is_eof() {
+            return out;
+        }
+        if t.has(TokFlags::START_OF_LINE) || t.kind == TokKind::Eod {
+            out.push((
+                std::mem::discriminant(&t.kind),
+                lx.spelling(&t).into_owned(),
+                t.span,
+                t.flags,
+            ));
+        }
+        // As for a directive line: Eod at the end of each line.
+        if directive && t.has(TokFlags::START_OF_LINE) {
+            lx.set_in_directive(true);
+        }
+        if skip && t.kind != TokKind::Eod {
+            lx.skip_plain_line_rest();
+        }
+    }
+    panic!("lexer did not terminate on {text:?}");
+}
+
+/// [cpp.cond]/13, [lex.pptoken]: the skipped-group fast path
+/// (`skip_plain_line_rest`) never changes which tokens start lines (so
+/// which `#` can introduce a directive) nor where a directive line's
+/// `Eod` falls, on random multi-line input with comments, literals,
+/// raw strings, splices and trigraphs.
+#[test]
+fn cpp_cond_skip_plain_line_rest_preserves_line_starts() {
+    const LINE_PIECES: &[&str] = &[
+        "a", "_b", " ", "\t", "12", "1'0", "+", "#", "%:", "(", ")", ",", ";", "\n", "\n", "\r\n",
+        "\r", "/", "*", "/*", "*/", "//", "\"", "'", "R\"x(", ")x\"", "\\", "\\\n", "??/", "??=",
+        "?", "\u{e9}", "\u{3000}", "\0", "/*/", "/* c */", "\\ ", "u8R\"(", ")\"",
+    ];
+    let mut rng = Rng(0x0DDB_A11D_EAD5_EED5);
+    for iter in 0..6000 {
+        let len = rng.below(60);
+        let text: String = (0..len).map(|_| LINE_PIECES[rng.below(LINE_PIECES.len())]).collect();
+        let opts = if iter % 2 == 0 { cxx26() } else { LexOptions { trigraphs: true, ..cxx26() } };
+        let directive = iter % 3 == 0;
+        assert_eq!(
+            line_starts(&text, opts, true, directive),
+            line_starts(&text, opts, false, directive),
+            "{text:?}"
+        );
     }
 }

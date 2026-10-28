@@ -194,9 +194,9 @@ impl<W: Write> TextSink<W> {
         push(buf, ": ");
     }
 
-    /// clang's `emitIncludeStack`. Kiln does not record inclusions yet
-    /// (WP-014), so the include location is always invalid and nothing
-    /// is printed; the state machine is in place for when it does.
+    /// clang's `emitIncludeStack`: an "In file included from" line per
+    /// enclosing `#include`, printed when the include location changes
+    /// (and never for notes).
     fn include_stack(&mut self, sm: &SourceManager, loc: Loc, level: Level, buf: &mut Vec<u8>) {
         let inc = if loc.is_valid() { include_loc(sm, loc) } else { Loc::INVALID };
         if inc == self.last_include_loc {
@@ -380,10 +380,10 @@ impl<W: Write> TextSink<W> {
     }
 }
 
-/// The location of the `#include` that entered the buffer of `loc`. Hook
-/// for WP-014: always invalid until `kiln_source` records inclusions.
-fn include_loc(_sm: &SourceManager, _loc: Loc) -> Loc {
-    Loc::INVALID
+/// The location of the `#include` that entered the inclusion holding
+/// `loc` (invalid in the main file; see `SourceManager::include_loc`).
+fn include_loc(sm: &SourceManager, loc: Loc) -> Loc {
+    sm.include_loc(loc)
 }
 
 fn gutter(buf: &mut Vec<u8>, width: u32) {

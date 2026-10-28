@@ -11,10 +11,33 @@ use crate::options::{LexMode, LexOptions, Std};
 use crate::phase::{Src, is_hws};
 use crate::token::{Encoding, Punct, TokFlags, TokKind, Token};
 use crate::unicode::{
-    NameMatch, is_ascii_ident_continue, is_nfc, is_unicode_whitespace, is_xid_continue,
-    is_xid_start, lookup_char_name,
+    NameMatch, ascii_ident_end, is_ascii_ident_continue, is_nfc, is_unicode_whitespace,
+    is_xid_continue, is_xid_start, lookup_char_name,
 };
 use kiln_source::symbol::Interner;
+
+/// The position of the first `\` or `?` at or after `from` (the bytes
+/// phase 2 can act on), or the end of `bytes`.
+fn next_special(bytes: &[u8], from: usize) -> usize {
+    const ONES: u64 = 0x0101_0101_0101_0101;
+    const HIGHS: u64 = 0x8080_8080_8080_8080;
+    // SWAR zero-byte test: nonzero iff some byte of `x` is zero.
+    let zero = |x: u64| x.wrapping_sub(ONES) & !x & HIGHS;
+    let mut i = from;
+    while let Some(w) = bytes.get(i..i + 8) {
+        let mut word = [0u8; 8];
+        word.copy_from_slice(w);
+        let w = u64::from_le_bytes(word);
+        if zero(w ^ (ONES * u64::from(b'\\'))) | zero(w ^ (ONES * u64::from(b'?'))) != 0 {
+            break;
+        }
+        i += 8;
+    }
+    bytes
+        .get(i..)
+        .and_then(|rest| rest.iter().position(|&c| c == b'\\' || c == b'?'))
+        .map_or(bytes.len(), |k| i + k)
+}
 
 /// Result of reading a universal-character-name at a decoded `\`.
 #[derive(Clone, Copy, Debug)]
@@ -65,6 +88,10 @@ pub struct Lexer<'a> {
     /// Raw-string body of the token being lexed: excluded from phase-2
     /// scanning (splices inside raw strings are reverted, [lex.pptoken]/3.1).
     raw_body: Option<(usize, usize)>,
+    /// No `\` or `?` occurs in `[pos, clean_until)`: tokens ending by
+    /// then need no phase-2 scan (the scan is the per-token hot spot on
+    /// splice-free text).
+    clean_until: usize,
     diags: Vec<LexDiag>,
     scratch: String,
 }
@@ -125,6 +152,7 @@ impl<'a> Lexer<'a> {
             whole_file: false,
             eof_seen: false,
             raw_body: None,
+            clean_until: 0,
             diags: Vec::new(),
             scratch: String::new(),
         }
@@ -182,6 +210,78 @@ impl<'a> Lexer<'a> {
     /// Byte offset in the file of the next character to lex.
     pub fn offset(&self) -> u32 {
         self.pos as u32
+    }
+
+    /// Fast path for skipped groups ([cpp.cond]/13): moves to the end of
+    /// the current logical line without forming its tokens, if that end is
+    /// the next line terminator, and returns true; otherwise does nothing
+    /// and returns false. Only a token can carry a logical line past a
+    /// terminator, and only three can: a block comment, a raw string
+    /// literal and a line splice. So the rest of the line qualifies unless
+    /// it holds a `/*` with no `*/` after it on the line (or one that a
+    /// `/*/` could reopen), an `R"`, a `\` as its last non-blank byte, or
+    /// (with trigraphs) a `??/`. Lexing on from there gives the same
+    /// following tokens as lexing the skipped ones would have; no
+    /// diagnostics are recorded and nothing is interned for the skipped
+    /// bytes.
+    pub fn skip_plain_line_rest(&mut self) -> bool {
+        // Only after a token on this line, in the ordinary mode: a `#` at
+        // the start of a line is never skipped.
+        if self.at_line_start || self.mode != LexMode::Normal {
+            return false;
+        }
+        let from = self.pos;
+        let Some(rest) = self.src.bytes.get(from..) else {
+            return false;
+        };
+        let at = |k: usize| rest.get(k).copied();
+        let trigraphs = self.opts.trigraphs;
+        // `R"` or `??/` at `k`: both can matter even inside what looks
+        // like a comment here (the `/*` may be inside a literal).
+        let opener = |k: usize| match at(k) {
+            Some(b'"') => k > 0 && at(k - 1) == Some(b'R'),
+            Some(b'?') => trigraphs && at(k + 1) == Some(b'?') && at(k + 2) == Some(b'/'),
+            _ => false,
+        };
+        let mut k = 0;
+        let mut last = b' ';
+        while let Some(c) = at(k) {
+            match c {
+                b'\n' | b'\r' => break,
+                b'/' if at(k + 1) == Some(b'*') => {
+                    // A comment (or `/*` in a literal) must close on this
+                    // line; the first `*/` after it is where a comment
+                    // opened here or anywhere before that `*/` closes,
+                    // except one opened by its own `/` (`/*/`).
+                    let mut q = k + 2;
+                    loop {
+                        match at(q) {
+                            None | Some(b'\n' | b'\r') => return false,
+                            Some(b'*') if at(q + 1) == Some(b'/') => break,
+                            _ if opener(q) => return false,
+                            _ => q += 1,
+                        }
+                    }
+                    if q >= k + 3 && at(q - 1) == Some(b'/') {
+                        return false;
+                    }
+                    k = q + 2;
+                    last = b'/';
+                    continue;
+                }
+                _ if opener(k) => return false,
+                b' ' | b'\t' | 0x0B | 0x0C => {}
+                _ => last = c,
+            }
+            k += 1;
+        }
+        if k == 0 || last == b'\\' {
+            return false;
+        }
+        self.pos = from + k;
+        self.at_line_start = false;
+        self.leading_space = true;
+        true
     }
 
     /// Diagnostics recorded so far.
@@ -318,7 +418,11 @@ impl<'a> Lexer<'a> {
                 | TokKind::RawStringLit(_)
                 | TokKind::Unknown
         );
+        if end > self.clean_until {
+            self.clean_until = next_special(self.src.bytes, start);
+        }
         let dirty = match self.raw_body.take() {
+            _ if end <= self.clean_until => false,
             Some((a, b)) => {
                 let x = self.phase2(start, a, literal, true);
                 self.phase2(b, end, literal, true) || x
@@ -655,9 +759,7 @@ impl<'a> Lexer<'a> {
         let mut p = p1;
         let simple_first = first.is_ascii() && first != '$' && !first_ucn && p1 == start + 1;
         if simple_first {
-            while p < bytes.len() && is_ascii_ident_continue(bytes[p]) {
-                p += 1;
-            }
+            p = ascii_ident_end(bytes, p);
             let slow = match bytes.get(p) {
                 Some(b'\\' | b'$' | 0x80..) => true,
                 Some(b'?') => self.opts.trigraphs,

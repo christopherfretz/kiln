@@ -8,7 +8,7 @@ Targets: `aarch64-unknown-linux-gnu` (dev container) first, `x86_64` second.
 Oracle/backend: clang/LLVM 19. Reference library:
 the libc++ shipped with that LLVM.
 
-## M0 — Bootstrap (current)
+## M0 — Bootstrap — DONE 2026-10-28
 - Cargo workspace with every crate stubbed, `forbid(unsafe_code)`, clippy +
   rustfmt clean, `cargo test` green.
 - `cargo xtask` harness skeleton: conformance test runner with the directive
@@ -19,7 +19,10 @@ the libc++ shipped with that LLVM.
 - Exit: `cargo xtask test` runs and passes an empty/sanity suite; first
   work packages for M1 issued.
 
-## M1 — Preprocessor parity with clang
+## M1 — Preprocessor parity with clang — DONE 2026-10-28
+Result: 291/291 token-wise vs `clang -E` (all libc++ 19 public headers, wrapped
+C headers, sysroot headers, torture corpus); `bench/pp` 0.52x–1.42x of clang
+time at ≤ clang memory. See `docs/status/pp-parity.md`, `docs/status/perf.md`.
 The first fully-conformant, independently valuable component, and highly
 parallelizable (lexer, macro expander, directives, include resolution, `-E`
 printer, diagnostics are separate work packages).
@@ -35,7 +38,10 @@ printer, diagnostics are separate work packages).
 - Perf: preprocessing all libc++ headers within 1.5x of clang's `-E` time
   and lower peak RSS. Recorded in `bench/baselines/pp.json`.
 
-## M2 — The C-ish subset, end to end, with the Oven
+## M2 — The C-ish subset, end to end, with the Oven — in progress (codegen pending)
+Status: parse/sema/Oven/dump done; `kiln -fsyntax-only -fdump-ast` matches
+clang on 47 golden directories; 99 [expr.const] source tests; Oven 0.02x clang
+time / 0.04x memory on `bench/oven`. Codegen + `run` tests: WP-052.
 A vertical slice that exercises every crate: parse, sema, Oven, ABI, codegen,
 driver. Scope: fundamental types, arithmetic and conversions, pointers,
 arrays, enums, structs (no members functions yet), functions, all C control

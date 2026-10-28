@@ -42,42 +42,69 @@ pub(crate) enum Dir {
 }
 
 impl Dir {
+    /// Every directive, in the order of [`Dir::NAMES`].
+    const ALL: [Dir; 20] = [
+        Dir::If,
+        Dir::Ifdef,
+        Dir::Ifndef,
+        Dir::Elif,
+        Dir::Elifdef,
+        Dir::Elifndef,
+        Dir::Else,
+        Dir::Endif,
+        Dir::Include,
+        Dir::IncludeNext,
+        Dir::Import,
+        Dir::Embed,
+        Dir::Define,
+        Dir::Undef,
+        Dir::Line,
+        Dir::Error,
+        Dir::Warning,
+        Dir::Pragma,
+        Dir::Ident,
+        Dir::Sccs,
+    ];
+    /// The directive names, in the order of [`Dir::ALL`].
+    const NAMES: [&'static str; 20] = [
+        "if",
+        "ifdef",
+        "ifndef",
+        "elif",
+        "elifdef",
+        "elifndef",
+        "else",
+        "endif",
+        "include",
+        "include_next",
+        "import",
+        "embed",
+        "define",
+        "undef",
+        "line",
+        "error",
+        "warning",
+        "pragma",
+        "ident",
+        "sccs",
+    ];
+
     pub(crate) fn from_name(s: &str) -> Option<Dir> {
-        Some(match s {
-            "if" => Dir::If,
-            "ifdef" => Dir::Ifdef,
-            "ifndef" => Dir::Ifndef,
-            "elif" => Dir::Elif,
-            "elifdef" => Dir::Elifdef,
-            "elifndef" => Dir::Elifndef,
-            "else" => Dir::Else,
-            "endif" => Dir::Endif,
-            "include" => Dir::Include,
-            "include_next" => Dir::IncludeNext,
-            "import" => Dir::Import,
-            "embed" => Dir::Embed,
-            "define" => Dir::Define,
-            "undef" => Dir::Undef,
-            "line" => Dir::Line,
-            "error" => Dir::Error,
-            "warning" => Dir::Warning,
-            "pragma" => Dir::Pragma,
-            "ident" => Dir::Ident,
-            "sccs" => Dir::Sccs,
-            _ => return None,
-        })
+        Dir::NAMES.iter().position(|n| *n == s).map(|i| Dir::ALL[i])
     }
 }
 
 impl<'a> Preprocessor<'a, '_> {
     /// The directive name of identifier token `t`, if it is one.
     pub(crate) fn dir_of(&self, t: &PpTok) -> Option<Dir> {
-        t.ident().and_then(|s| Dir::from_name(self.interner.as_str(s)))
+        t.ident().and_then(|s| self.dirs.get(s, self.interner))
     }
 
     /// `#` at the start of a line was lexed from the top file frame
     /// (clang `HandleDirective`).
     pub(crate) fn handle_directive(&mut self, _hash: Token) {
+        crate::profile::time!(t_directive_ns);
+        crate::profile::count!(directives);
         self.start_directive();
         // For include-guard detection: were tokens read before this
         // directive? (Its own tokens count as read from here on.)
@@ -115,7 +142,10 @@ impl<'a> Preprocessor<'a, '_> {
                     self.do_include(name, d);
                 }
                 Some(Dir::Embed) => self.do_embed(name),
-                Some(Dir::Define) => self.do_define(),
+                Some(Dir::Define) => {
+                    crate::profile::time!(t_define_ns);
+                    self.do_define();
+                }
                 Some(Dir::Undef) => self.do_undef(),
                 Some(Dir::Line) => self.do_line(),
                 Some(Dir::Error) => self.do_error_warning(name, true),
@@ -363,7 +393,9 @@ impl<'a> Preprocessor<'a, '_> {
         } else {
             self.emit(Diag::new(DiagId::pp_missing_whitespace_after_name, tok.tok.span));
         }
-        let mut body: Vec<PpTok> = Vec::new();
+        // A pooled buffer: the definition keeps an exact-size copy, so the
+        // growth of the buffer is paid once, not per `#define`.
+        let mut body = self.take_buf();
         let mut has_comma_paste = false;
         if function_like {
             if !self.read_fn_body(tok, &params, &mut body, &mut has_comma_paste) {
@@ -402,6 +434,8 @@ impl<'a> Preprocessor<'a, '_> {
             }
             _ => (ntok.tok.span.lo, 0, Box::default()),
         };
+        let boxed: Box<[PpTok]> = body.as_slice().into();
+        self.give_buf(body);
         Some(MacroDef {
             name,
             name_span: ntok.tok.span,
@@ -409,7 +443,7 @@ impl<'a> Preprocessor<'a, '_> {
             function_like,
             variadic,
             named_variadic,
-            body: body.into_boxed_slice(),
+            body: boxed,
             rel,
             def_start,
             def_len,
@@ -588,6 +622,9 @@ impl<'a> Preprocessor<'a, '_> {
     }
 }
 
+/// How many leading `#if` tokens [`IfCx`] records for guard detection.
+const IF_REC: usize = 8;
+
 /// The [`IfContext`] the core hands to the [`IfEvaluator`].
 struct IfCx<'p, 'a, 'd> {
     pp: &'p mut Preprocessor<'a, 'd>,
@@ -598,21 +635,22 @@ struct IfCx<'p, 'a, 'd> {
     end: Option<Token>,
     /// `defined` was evaluated.
     used_defined: bool,
-    /// The first tokens read (for `#if !defined(X)` guard detection);
-    /// `None` once more than [`IfCx::REC`] were read.
-    rec: Option<Vec<Token>>,
+    /// The first tokens read (for `#if !defined(X)` guard detection).
+    rec: [Token; IF_REC],
+    /// How many of `rec` are filled; `None` once more than
+    /// [`IF_REC`] tokens were read.
+    rec_len: Option<usize>,
 }
 
 impl<'p, 'a, 'd> IfCx<'p, 'a, 'd> {
-    const REC: usize = 8;
-
     fn new(pp: &'p mut Preprocessor<'a, 'd>, paren: bool) -> Self {
         IfCx {
             pp,
             paren: paren.then_some(0),
             end: None,
             used_defined: false,
-            rec: Some(Vec::new()),
+            rec: [crate::preprocessor::eof_tok(Span::INVALID); IF_REC],
+            rec_len: Some(0),
         }
     }
 
@@ -621,26 +659,30 @@ impl<'p, 'a, 'd> IfCx<'p, 'a, 'd> {
     /// (clang's `DefinedTracker::NotDefinedMacro` with no
     /// `DidMacroExpansion`).
     fn ifndef_macro(&self) -> Option<Symbol> {
-        let rec = self.rec.as_ref()?;
+        let rec = self.rec.get(..self.rec_len?)?;
         let (last, rest) = rec.split_last()?;
         if last.kind != TokKind::Eod || rest.iter().any(|t| self.pp.sm.is_macro_loc(t.span.lo)) {
             return None;
         }
         let mut depth = 0i32;
-        let mut core = Vec::new();
+        let mut core = [TokKind::Eod; IF_REC];
+        let mut n = 0;
         for t in rest {
             match t.kind {
                 TokKind::Punct(Punct::LParen) => depth += 1,
                 TokKind::Punct(Punct::RParen) => depth -= 1,
-                _ => core.push(t.kind),
+                k => {
+                    core[n] = k;
+                    n += 1;
+                }
             }
             if depth < 0 {
                 return None;
             }
         }
-        match core.as_slice() {
+        match &core[..n] {
             [TokKind::Punct(Punct::Exclaim), TokKind::Identifier(d), TokKind::Identifier(x)]
-                if depth == 0 && self.pp.interner.as_str(*d) == "defined" =>
+                if depth == 0 && *d == self.pp.syms.defined =>
             {
                 Some(*x)
             }
@@ -649,11 +691,12 @@ impl<'p, 'a, 'd> IfCx<'p, 'a, 'd> {
     }
 
     fn record(&mut self, t: Token) -> Token {
-        if let Some(r) = &mut self.rec {
-            if r.len() < Self::REC {
-                r.push(t);
+        if let Some(n) = self.rec_len {
+            if let Some(slot) = self.rec.get_mut(n) {
+                *slot = t;
+                self.rec_len = Some(n + 1);
             } else {
-                self.rec = None;
+                self.rec_len = None;
             }
         }
         t
@@ -739,6 +782,8 @@ impl Preprocessor<'_, '_> {
     /// finishes the directive (clang `EvaluateDirectiveExpression`; macro
     /// expansion is on even inside macro arguments).
     pub(crate) fn eval_if(&mut self) -> bool {
+        crate::profile::time!(t_if_ns);
+        crate::profile::count!(if_evals);
         let old_de = std::mem::replace(&mut self.disable_expand, false);
         let old_pi = std::mem::replace(&mut self.parsing_if, true);
         let old_q = std::mem::replace(&mut self.quiet_lex, false);
@@ -909,6 +954,7 @@ impl Preprocessor<'_, '_> {
     /// tracked; `#elif` conditions are evaluated only when they could
     /// select a group.
     pub(crate) fn skip_excluded(&mut self, if_span: Span, found_non_skip: bool, found_else: bool) {
+        crate::profile::time!(t_skip_ns);
         self.push_cond(Cond { span: if_span, found_non_skip, found_else, was_skipping: false });
         let start = if_span.lo;
         let old_q = std::mem::replace(&mut self.quiet_lex, true);
@@ -918,13 +964,23 @@ impl Preprocessor<'_, '_> {
             }
             let top = self.frames.len() - 1;
             let t = self.lex_raw_from(top);
+            crate::profile::count!(skip_tokens);
             match t.kind {
                 TokKind::Eof => {
                     self.unlex_file_tok(t);
                     break;
                 }
                 TokKind::Punct(Punct::Hash) if t.flags.contains(TokFlags::START_OF_LINE) => {}
-                _ => continue,
+                _ => {
+                    // The rest of a non-directive line cannot matter
+                    // unless it could open a comment or a literal.
+                    if let Frame::File(f) = &mut self.frames[top]
+                        && f.back.is_empty()
+                    {
+                        f.lx.skip_plain_line_rest();
+                    }
+                    continue;
+                }
             }
             self.start_directive();
             let name = PpTok::new(self.lex_raw_from(top));
@@ -987,7 +1043,7 @@ impl Preprocessor<'_, '_> {
             }
         }
         self.quiet_lex = old_q;
-        let end = self.cur_file_ref().map_or(start, |f| self.sm.loc(f.file, f.lx.offset()));
+        let end = self.cur_file_ref().map_or(start, |f| f.base.with_offset(f.lx.offset()));
         self.callbacks.source_range_skipped(Span::new(start, end));
     }
 
@@ -1149,6 +1205,7 @@ impl Preprocessor<'_, '_> {
     /// `#include`, `#include_next`, `#import` ([cpp.include]): asks the
     /// [`IncludeResolver`] and enters the file.
     fn do_include(&mut self, name: PpTok, d: Dir) {
+        crate::profile::time!(t_include_ns);
         let (dir, kind) = match d {
             Dir::IncludeNext => ("include_next", IncludeKind::IncludeNext),
             Dir::Import => ("import", IncludeKind::Import),
@@ -1209,19 +1266,25 @@ impl Preprocessor<'_, '_> {
         let extern_c = r.extern_c || cur_c;
         let system = r.system || cur_sys || extern_c;
         self.include_depth += 1;
-        self.push_file(r.file, Some(name.tok.span.lo), r.lookup_index, system, extern_c);
+        self.push_file(
+            r.file,
+            Some(name.tok.span.lo),
+            Some(ft.tok.span.lo),
+            r.lookup_index,
+            system,
+            extern_c,
+        );
     }
 
     /// The `(` of `__has_include` / `__has_embed` and the header name after
     /// it (clang `EvaluateHasIncludeCommon` / `EvaluateHasEmbed`, up to the
     /// header name). `Ok((lparen, header))`.
     fn has_open(&mut self, t: PpTok, lenient: bool) -> Result<(Span, PpTok), PpTok> {
-        let name = self.spelling(&t.tok).into_owned();
         if !self.parsing_if {
+            let name = self.spelling(&t.tok).into_owned();
             self.emit(Diag::new(DiagId::pp_has_include_outside_directive, t.tok.span).arg(&name));
             return Err(t);
         }
-        let quoted = format!("'{name}'");
         let mut h = if lenient {
             self.lex_header_name()?
         } else {
@@ -1237,6 +1300,7 @@ impl Preprocessor<'_, '_> {
             l
         } else {
             let at = if lenient { Span::new(t.tok.span.hi, t.tok.span.hi) } else { h.tok.span };
+            let quoted = format!("'{}'", self.spelling(&t.tok));
             self.emit(Diag::new(DiagId::pp_expected_after, at).arg(&quoted).arg("'('"));
             if !lenient || h.kind() != TokKind::HeaderName {
                 return Err(h);
@@ -1282,7 +1346,10 @@ impl Preprocessor<'_, '_> {
             name_span: h.tok.span,
             directive_span: t.tok.span,
         };
-        let found = self.resolver.resolve(self.sm, &req).is_some();
+        let found = {
+            crate::profile::time!(t_has_include_ns);
+            self.resolver.resolve(self.sm, &req).is_some()
+        };
         Ok((found, close.tok.span))
     }
 }
@@ -1732,7 +1799,8 @@ impl Preprocessor<'_, '_> {
             f.system = system;
             f.extern_c = extern_c;
         }
-        let (file, off, system, extern_c) = (f.file, f.lx.offset(), f.system, f.extern_c);
+        let (file, base, off, system, extern_c) =
+            (f.file, f.base, f.lx.offset(), f.system, f.extern_c);
         let text = self.sm.text(file).as_bytes();
         let mut at = off as usize;
         if text.get(at) == Some(&b'\r') {
@@ -1743,7 +1811,7 @@ impl Preprocessor<'_, '_> {
         }
         let at = u32::try_from(at.min(text.len())).unwrap_or(off);
         self.sm.add_line_directive(file, at, line, name);
-        let loc = self.sm.loc(file, at);
+        let loc = base.with_offset(at);
         self.file_change(FileChange::Rename { file, at: loc, system, extern_c, flag });
     }
 
@@ -1910,5 +1978,74 @@ impl Preprocessor<'_, '_> {
             self.emit(Diag::new(DiagId::pp_module_name_is_macro, next.span).arg(sp));
         }
         self.queue(Marker::Module { span: t.span, export, import });
+    }
+}
+
+/// `Symbol -> Dir` for the directive names, interned once per
+/// preprocessor: a table indexed by symbol index (offset by the smallest
+/// directive symbol), so the per-directive lookup is one bounds check
+/// instead of a string comparison.
+pub(crate) struct DirTable {
+    base: u32,
+    /// `Dir::ALL` index + 1, or 0 for "not a directive name".
+    slots: Box<[u8]>,
+}
+
+impl DirTable {
+    /// Above this many slots the table falls back to string matching.
+    const MAX_SLOTS: u32 = 1 << 16;
+
+    pub(crate) fn new(interner: &Interner) -> Self {
+        let syms = Dir::NAMES.map(|n| interner.intern(n).index());
+        let base = syms.iter().copied().min().unwrap_or(0);
+        let span = syms.iter().copied().max().unwrap_or(0) - base + 1;
+        if span > Self::MAX_SLOTS {
+            return DirTable { base: 0, slots: Box::new([]) };
+        }
+        let mut slots = vec![0u8; span as usize].into_boxed_slice();
+        for (i, s) in syms.iter().enumerate() {
+            slots[(s - base) as usize] = i as u8 + 1;
+        }
+        DirTable { base, slots }
+    }
+
+    pub(crate) fn get(&self, s: Symbol, interner: &Interner) -> Option<Dir> {
+        if self.slots.is_empty() {
+            return Dir::from_name(interner.as_str(s));
+        }
+        let slot = *self.slots.get(s.index().checked_sub(self.base)? as usize)?;
+        Dir::ALL.get(usize::from(slot).checked_sub(1)?).copied()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Dir, DirTable};
+    use kiln_lex::Interner;
+
+    /// [cpp.pre]/1: the symbol table classifies exactly the directive
+    /// names, also when the interner already held other strings (so the
+    /// directive symbols are not contiguous).
+    #[test]
+    fn cpp_pre_dir_table_matches_names() {
+        for warm in [0usize, 3, 300] {
+            let interner = Interner::new();
+            for i in 0..warm {
+                interner.intern(&format!("w{i}"));
+                if i == 1 {
+                    interner.intern("endif");
+                }
+            }
+            let table = DirTable::new(&interner);
+            for (name, dir) in Dir::NAMES.iter().zip(Dir::ALL) {
+                assert_eq!(Dir::from_name(name), Some(dir));
+                assert_eq!(table.get(interner.intern(name), &interner), Some(dir), "{name}");
+            }
+            for other in ["w0", "IF", "defined", "include_nexts", "x"] {
+                let s = interner.intern(other);
+                assert_eq!(table.get(s, &interner), None, "{other}");
+                assert_eq!(Dir::from_name(other), None);
+            }
+        }
     }
 }

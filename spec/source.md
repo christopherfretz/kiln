@@ -25,9 +25,12 @@ chunked append-only arena (`OnceLock` slots, doubling chunk sizes).
   panic.
 - `Loc(u32)`, 4 bytes, `Copy`, ordered by raw value. Value space:
   - `0` is `Loc::INVALID`;
-  - `[1, 2^31)`: *file locations*. Each buffer owns `[start, start + len]`
-    (the extra position is its end-of-file location), allocated in creation
-    order, contiguous. `start + n` is byte offset `n`.
+  - `[1, 2^31)`: *file locations*, in *file ranges*. Each buffer owns
+    one range `[start, start + len]` (the extra position is its
+    end-of-file location), allocated at creation; each
+    `add_inclusion` allocates another range over the same text (see
+    "Inclusions"). Ranges are allocated in order, contiguous. `start + n`
+    is byte offset `n` of the buffer.
   - `[2^31, 2^32)`: *macro locations*. Each expansion entry owns
     `[base, base + len]` (again one extra position, so the half-open end of
     the last spelled byte stays inside the entry).
@@ -60,14 +63,36 @@ Buffers:
   `file_name(FileId) -> &str`, `load_report(FileId) -> &LoadReport` (empty
   for virtual buffers).
 - `loc(FileId, offset) -> Loc` (panics if `offset > len`; `offset == len`
-  is the EOF location), `file_span(FileId) -> Span` (`[0, len)`),
-  `offset_of(Loc) -> Option<(FileId, u32)>` (file locations only; `None`
-  for invalid, unknown and macro locations).
+  is the EOF location), `file_span(FileId) -> Span` (`[0, len)`): both in
+  the buffer's own range,
+  `offset_of(Loc) -> Option<(FileId, u32)>` (file locations only, in any
+  range of the buffer; `None` for invalid, unknown and macro locations).
+
+Inclusions ([cpp.include]; clang allocates a `FileID` per `#include`):
+- `add_inclusion(FileId, included_from: Loc) -> Result<Loc, LocSpaceExhausted>`
+  allocates a new file range of `len + 1` positions aliasing the buffer and
+  returns its start. A location in it behaves exactly like the same offset
+  in the buffer's own range for `offset_of`, `line_col`, `span_text`,
+  `presumed_line_col` (so `#line` state is per buffer, not per inclusion:
+  kiln_pp re-adds a re-entered header's directives) and `spelling_loc`;
+  only `include_loc` and entry identity (`entry_bounds`,
+  `same_entry_distance`) tell inclusions apart.
+- `include_loc(Loc) -> Loc` (clang `getIncludeLoc`): the `included_from`
+  of the range holding `expansion_loc(loc)`; `Loc::INVALID` in a buffer's
+  own range (main file, virtual buffers) and for invalid/unknown locations.
+  Following it until invalid gives the include stack, innermost first.
+- kiln_pp lexes the main file in its own range and every `#include`d file
+  in a fresh inclusion range whose `included_from` is the expansion
+  location of the header-name token. kiln_diag prints "In file included
+  from" lines from it (spec/diag.md §9.6).
 
 Lines (tables built lazily, once per buffer, `OnceLock`):
 - Line terminators are `\n`, `\r\n` and lone `\r` (clang's line table and
   lexer agree). The terminator belongs to the line it ends; the EOF location
   after a trailing terminator is column 1 of the empty line after it.
+  The table is built by scanning eight bytes at a time (a word test for
+  `\n`/`\r`) and is the same as a byte-by-byte scan
+  (`lex_phases_line_table_matches_bytewise_reference`).
 - `line_col(Loc) -> Option<LineCol>`: macro locations are first mapped
   through `expansion_loc` (the user-visible position; call `spelling_loc`
   first for the spelling position). `None` for invalid/unknown locations.
@@ -98,7 +123,21 @@ Macro expansions (modeled on clang's expansion `SLocEntry`s, index-based):
 - `is_macro_loc(Loc)` (O(1)), `expansion_info(Loc) -> Option<ExpansionInfo>`
   (the immediate entry).
 - `immediate_spelling_loc(Loc)`: one step; `spelling_loc(Loc)`: to a file
-  location. Identity for file locations.
+  location, O(1) after the entry lookup (each entry stores its final file
+  spelling at creation). Identity for file locations.
+- `entry_bounds(Loc) -> Option<(Loc, Loc)>`: the first and last location
+  of the file range or expansion entry holding the location (`None` for
+  invalid/unknown). `same_entry_distance(lo, hi) -> Option<u32>`: `hi - lo`
+  when both are in one range/entry and `lo <= hi`. Every spelling link
+  maps a whole entry by a constant offset into one entry, so within an
+  entry `spelling_loc(hi) - spelling_loc(lo) == hi - lo`: the O(1) fast
+  path for token lengths and gaps (clang `isInSameSLocAddrSpace`).
+  Lookups use per-manager hints (relaxed atomics) before a binary
+  search: for expansion entries the last entry found, then the newest
+  entry and the hint's two neighbours; for file ranges the last range
+  found, then the one found before it (lookups alternate between the
+  file being read and the header a macro was defined in). Hints only
+  change speed; every hit is checked against the range.
 - `expansion_loc(Loc)`: follows `expansion.lo` to the outermost
   invocation's file location. `expansion_span(Loc) -> Span`: the outermost
   invocation's file range (start walks `expansion.lo`, end walks
@@ -143,9 +182,15 @@ text; skipping it is the lexer's job.
   inverse of `index()` for packed encodings.
 - `kiln_source::fx::{FxHasher, FxBuildHasher, FxHashMap, FxHashSet}`: the
   rustc `FxHash`, used by every compiler-internal hash table.
+- `Interner::intern` / `get` first probe a small per-thread cache
+  (4096 direct-mapped slots of `hash tag | Symbol`). A hit is verified by
+  comparing the candidate symbol's text, so the cache is shared safely by
+  every interner on the thread (strings are unique per interner); a miss
+  takes the lock. The cache only changes speed, never results.
 
 ## Limits
-Buffers share 2^31 positions (each buffer uses `len + 1`), expansion
+File ranges share 2^31 positions (each buffer and each inclusion uses
+`len + 1`), expansion
 entries another 2^31 (`len + 1` each). Exhaustion is reported as
 `LoadError::LocSpaceExhausted` / `LocSpaceExhausted`, never a panic.
 
@@ -153,8 +198,8 @@ entries another 2^31 (`len + 1` each). Exhaustion is reported as
 - `Loc` and `Span` are `Copy`, 4/8 bytes (static assertions).
 - Line tables are computed lazily and once per buffer.
 - No dependency on diagnostics; decode errors are data (`LoadReport`).
-- One location range per buffer, allocated at first load. (See open
-  question 1.)
+- One own location range per buffer, allocated at first load, plus one
+  range per `add_inclusion`; every range maps to exactly one buffer.
 
 ## Tests (`crates/kiln_source/tests/unit.rs`, arena unit tests in `src/arena.rs`)
 - Round-trip `line_col` on CRLF, LF, mixed (incl. lone CR), empty and
@@ -171,16 +216,19 @@ entries another 2^31 (`len + 1` each). Exhaustion is reported as
 - Presumed locations: name change and inheritance, out-of-order and
   replacing directives, macro locations, saturation.
 - Text borrows survive concurrent appends; sharing across threads.
+- Same-entry fast paths (`entry_bounds`, `same_entry_distance`,
+  `spelling_loc`, `span_text`) agree with the slow walk on randomized
+  nested expansions.
+- Inclusion ranges alias their buffer (offsets, lines, presumed lines,
+  text) and report their include location, also for macro locations.
 
 ## Open questions
-1. **Per-inclusion location ranges.** clang allocates a fresh `FileID`
-   range per `#include` (with its include location), so any location
-   encodes its include stack ("In file included from ...") and `#line`
-   state per inclusion. Here a `FileId` is content identity and owns one
-   range, so include stacks for post-pp diagnostics must come from
-   elsewhere. Adding it later is additive: `add_inclusion(FileId,
-   included_from: Loc) -> Result<Loc, _>` allocating another range over
-   the same text, plus a lexer constructor taking a start `Loc`.
+1. **`#line` state per inclusion.** Inclusion ranges (WP-056) give
+   every location its include stack, but `#line` directives are still
+   stored per buffer: a diagnostic about an earlier inclusion emitted
+   after a later inclusion re-added different directives would see the
+   later ones. clang keeps line tables per `FileID`. Not observable for
+   `-E` or for diagnostics emitted while preprocessing.
 2. **Scratch buffer.** `##`/`#`/builtin-macro results need spelling text.
    `add_virtual` per result works but costs one entry per pasted token; a
    chunked scratch buffer (clang's `ScratchBuffer`) would be cheaper.
