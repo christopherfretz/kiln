@@ -4,3 +4,4 @@
 //! this crate implements.
 #![forbid(unsafe_code)]
 mod fold;
+mod fir;
