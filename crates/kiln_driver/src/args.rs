@@ -151,8 +151,14 @@ pub enum ArgError {
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Args {
+    /// The command line as given (for `ClangFeatures::from_args`).
+    pub argv: Vec<String>,
     /// Input files, in order.
     pub inputs: Vec<Input>,
+    /// `-fdump-ast[=<opts>]` (`-fsyntax-only`): the options, `""` for none.
+    pub dump_ast: Option<String>,
+    /// `-fdump-ast-filter=<substr>`.
+    pub dump_ast_filter: Option<String>,
     /// `-o <file>`.
     pub output: Option<String>,
     /// The action.
@@ -236,7 +242,7 @@ const SEPARATE_OR_EQ: &[&str] =
 impl Args {
     /// Parses `argv` (without the program name).
     pub fn parse(argv: &[String]) -> Args {
-        let mut a = Args::default();
+        let mut a = Args { argv: argv.to_vec(), ..Args::default() };
         let mut x: Option<Lang> = None;
         let mut i = 0;
         while i < argv.len() {
@@ -323,6 +329,7 @@ impl Args {
             "-fdollars-in-identifiers" => self.dollars = Some(true),
             "-fno-dollars-in-identifiers" => self.dollars = Some(false),
             "-fkiln-reproducible-time" => self.reproducible_time = true,
+            "-fdump-ast" => self.dump_ast = Some(String::new()),
             _ => {
                 if let Some(v) =
                     arg.strip_prefix("-stdlib=").or_else(|| arg.strip_prefix("--stdlib="))
@@ -334,6 +341,10 @@ impl Args {
                     }
                 } else if let Some(v) = arg.strip_prefix("--embed-dir=") {
                     self.embed_dirs.push(v.to_owned());
+                } else if let Some(v) = arg.strip_prefix("-fdump-ast-filter=") {
+                    self.dump_ast_filter = Some(v.to_owned());
+                } else if let Some(v) = arg.strip_prefix("-fdump-ast=") {
+                    self.dump_ast = Some(v.to_owned());
                 } else {
                     return false;
                 }

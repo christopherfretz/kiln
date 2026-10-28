@@ -1,14 +1,15 @@
 //! The `kiln` driver: a clang-compatible command line over the frontend.
 //! See `spec/driver.md` and `docs/ARCHITECTURE.md` ("Driver").
 //!
-//! Only preprocessing (`-E`, `-M`, `-MM`) is implemented; `-fsyntax-only`
-//! (WP-048), `-c`, `-S` and linking report "not implemented yet".
+//! Preprocessing (`-E`, `-M`, `-MM`) and `-fsyntax-only [-fdump-ast]`
+//! (WP-048's parser) are implemented; `-c`, `-S` and linking report "not
+//! implemented yet".
 #![forbid(unsafe_code)]
 
 pub mod args;
 pub mod deps;
 pub mod pp_cmd;
-mod stub_features;
+pub mod syntax_cmd;
 pub mod time;
 pub mod toolchain;
 
@@ -19,7 +20,8 @@ use kiln_diag::{Diag, DiagEngine, DiagId, DiagOptions, Format, JsonSink, TextSin
 use kiln_source::{SourceManager, Span};
 
 use crate::args::{Action, ArgError, Args, Lang};
-use crate::pp_cmd::{Job, input_lang};
+use crate::pp_cmd::{Job, JobResult, input_lang};
+use crate::syntax_cmd::SyntaxJob;
 use crate::toolchain::{LangStd, Target, Toolchain};
 
 /// A [`Write`]r shared between the driver and its diagnostic engines.
@@ -100,7 +102,7 @@ pub fn make_engine<'sm>(
 }
 
 const HELP: &str = "\
-OVERVIEW: kiln, a C++26 frontend (preprocessing only so far)
+OVERVIEW: kiln, a C++26 frontend (preprocessing and -fsyntax-only so far)
 
 USAGE: kiln [options] file...
 
@@ -109,7 +111,8 @@ Implemented: -E -P -C -CC -dM -o -x -std= -D -U -I -isystem -iquote
 -isysroot --sysroot -resource-dir -stdlib= --target= --embed-dir= -M -MM
 -MD -MMD -MF -MT -MQ -MP -W... -w -pedantic -ferror-limit=
 -fdiagnostics-format= -f[no-]color-diagnostics -fkiln-reproducible-time
--v --version. See spec/driver.md.
+-fsyntax-only -fdump-ast[=...] -fdump-ast-filter= -v --version.
+See spec/driver.md.
 ";
 
 fn emit_arg_error(e: &ArgError, engine: &DiagEngine<'_>) {
@@ -193,14 +196,17 @@ fn check_action(args: &Args, drv: &DiagEngine<'_>) {
         action = Action::Preprocess;
     }
     let not_impl = match action {
-        Action::Preprocess => None,
-        Action::SyntaxOnly => Some("-fsyntax-only"),
+        Action::SyntaxOnly if args.deps.side.is_some() => Some("-MD / -MMD with -fsyntax-only"),
+        Action::Preprocess | Action::SyntaxOnly => None,
         Action::Compile => Some("compiling (-c, -S, -emit-llvm)"),
         Action::Link => Some("linking (kiln only preprocesses so far: pass -E)"),
     };
     let not_impl = not_impl
         .or(args.print.defines_too.then_some("-dD"))
-        .or(args.print.includes_too.then_some("-dI"));
+        .or(args.print.includes_too.then_some("-dI"))
+        .or((action != Action::SyntaxOnly
+            && (args.dump_ast.is_some() || args.dump_ast_filter.is_some()))
+        .then_some("-fdump-ast without -fsyntax-only"));
     if let Some(what) = not_impl {
         Diag::new(DiagId::drv_not_implemented, Span::INVALID).arg(what).emit(drv);
     }
@@ -249,6 +255,43 @@ fn read_stdin(stdin: &mut dyn Read) -> String {
     }
 }
 
+/// One `-fsyntax-only` input (C is not implemented yet).
+#[allow(clippy::too_many_arguments)]
+fn syntax_only(
+    args: &Args,
+    tc: &Toolchain,
+    std: LangStd,
+    lang: Lang,
+    path: &str,
+    stdin_text: Option<String>,
+    diag_opts: &DiagOptions,
+    io: &Io,
+) -> JobResult {
+    if lang == Lang::C {
+        let sm = SourceManager::new();
+        let e = make_engine(&sm, diag_opts, io.stderr.clone(), None);
+        Diag::new(DiagId::drv_not_implemented, Span::INVALID).arg("-fsyntax-only for C").emit(&e);
+        e.flush();
+        return JobResult { errors: 1, ..JobResult::default() };
+    }
+    SyntaxJob { args, toolchain: tc, std, path, stdin_text, diag_opts, stderr: io.stderr.clone() }
+        .run()
+}
+
+/// The inputs that exist (`-` is standard input); the others are errors.
+fn existing_inputs<'a>(args: &'a Args, drv: &DiagEngine<'_>) -> Vec<&'a args::Input> {
+    args.inputs
+        .iter()
+        .filter(|i| {
+            let ok = i.path == "-" || std::path::Path::new(&i.path).exists();
+            if !ok {
+                Diag::new(DiagId::drv_no_such_file, Span::INVALID).arg(&i.path).emit(drv);
+            }
+            ok
+        })
+        .collect()
+}
+
 /// Runs the driver on `argv` (without the program name). Returns the exit
 /// code: 0 on success, 1 on any error (clang's convention).
 pub fn run(command_line: &[String], mut io: Io) -> i32 {
@@ -284,17 +327,7 @@ pub fn run(command_line: &[String], mut io: Io) -> i32 {
     if args.verbose {
         print_version(&mut io.stderr, &tc, true);
     }
-    let inputs: Vec<_> = args
-        .inputs
-        .iter()
-        .filter(|i| {
-            let ok = i.path == "-" || std::path::Path::new(&i.path).exists();
-            if !ok {
-                Diag::new(DiagId::drv_no_such_file, Span::INVALID).arg(&i.path).emit(&drv);
-            }
-            ok
-        })
-        .collect();
+    let inputs = existing_inputs(&args, &drv);
     if inputs.is_empty() {
         if (args.version || args.verbose) && args.inputs.is_empty() && drv.error_count() == 0 {
             return 0;
@@ -328,6 +361,13 @@ pub fn run(command_line: &[String], mut io: Io) -> i32 {
                 continue;
             }
         };
+        if args.action == Action::SyntaxOnly {
+            let stdin = if input.path == "-" { stdin_text.clone() } else { None };
+            let r = syntax_only(&args, &tc, std, lang, &input.path, stdin, &diag_opts, &io);
+            errors += r.errors;
+            output.push_str(&r.output);
+            continue;
+        }
         let job = Job {
             args: &args,
             toolchain: &tc,

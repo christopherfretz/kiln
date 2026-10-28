@@ -63,11 +63,35 @@ fn argument_errors() {
     assert_eq!((o.code, o.stderr.as_str()), (1, "error: invalid value 'c++27' in '-std=c++27'\n"));
     let o = kiln(&["-E", "-std=c11", "-"], "");
     assert_eq!(o.stderr, "error: invalid argument '-std=c11' not allowed with 'C++'\n");
-    let o = kiln(&["-fsyntax-only", "-"], "");
+    let o = kiln(&["-c", "-"], "");
     assert_eq!(
         (o.code, o.stderr.as_str()),
-        (1, "kiln: error: -fsyntax-only is not implemented yet\n")
+        (1, "kiln: error: compiling (-c, -S, -emit-llvm) is not implemented yet\n")
     );
+}
+
+#[test]
+fn syntax_only() {
+    let o = kiln(&["-std=c++26", "-fsyntax-only", "-"], "int f();\n");
+    assert_eq!((o.code, o.stdout.as_str(), o.stderr.as_str()), (0, "", ""));
+    let o = kiln(&["-std=c++26", "-fsyntax-only", "-"], "int x = ;\n");
+    assert_eq!(o.code, 1);
+    assert!(o.stderr.ends_with("1 error generated.\n"), "{}", o.stderr);
+    let o = kiln(
+        &["-std=c++26", "-fsyntax-only", "-fdump-ast", "-fdump-ast-filter=keep", "-"],
+        "int keep_me;\nint drop_me;\n",
+    );
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    assert!(o.stdout.contains("keep_me") && !o.stdout.contains("drop_me"), "{}", o.stdout);
+    let o = kiln(&["-fsyntax-only", "-fdump-ast=bogus", "-"], "");
+    assert_eq!(
+        o.stderr,
+        "error: invalid value 'bogus' in '-fdump-ast=bogus'\n1 error generated.\n"
+    );
+    let o = kiln(&["-E", "-fdump-ast", "-"], "");
+    assert_eq!(o.stderr, "kiln: error: -fdump-ast without -fsyntax-only is not implemented yet\n");
+    let o = kiln(&["-fsyntax-only", "-x", "c", "-"], "");
+    assert_eq!(o.stderr, "error: -fsyntax-only for C is not implemented yet\n");
 }
 
 #[test]
