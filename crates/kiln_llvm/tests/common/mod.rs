@@ -94,8 +94,48 @@ pub fn check(m: &Module, expect: &[&str]) -> String {
             None => panic!("expected (in order) {e:?} in:\n{}", numbered(&text)),
         }
     }
-    llvm_accepts(&text);
+    if llvm_accepts(&text) {
+        assert_fixed_point(&text);
+    }
     text
+}
+
+/// Drop what `opt -S` adds as comments (`; ModuleID`, `; Function Attrs:`,
+/// `; preds = ...`, `; No predecessors!`) so texts can be compared exactly.
+pub fn strip_comments(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for line in text.lines() {
+        if line.starts_with("; ModuleID") || line.starts_with("; Function Attrs:") {
+            continue;
+        }
+        let line = match line.find("; preds = ").or_else(|| line.find("; No predecessors!")) {
+            Some(p) if !line.starts_with(' ') => line[..p].trim_end(),
+            _ => line,
+        };
+        out.push_str(line);
+        out.push('\n');
+    }
+    out
+}
+
+/// The printer is a fixed point of `opt -S`: re-printing our text with
+/// LLVM's own writer changes nothing but comments (`spec/llvm.md` §7).
+pub fn assert_fixed_point(text: &str) {
+    let Some(c) = canonical(text) else { return };
+    let (ours, theirs) = (strip_comments(text), strip_comments(&c));
+    if ours != theirs {
+        let first = ours
+            .lines()
+            .zip(theirs.lines())
+            .position(|(a, b)| a != b)
+            .unwrap_or_else(|| ours.lines().count().min(theirs.lines().count()));
+        panic!(
+            "printer output differs from opt -S at line {}:\n--- ours ---\n{}--- opt ---\n{}",
+            first + 1,
+            numbered(&ours),
+            numbered(&theirs)
+        );
+    }
 }
 
 /// Compile a C file with clang 19 at -O0 for aarch64 Linux.

@@ -389,7 +389,8 @@ fn constant_expressions() {
     let asc = m.const_cast(CastOp::AddrSpaceCast, gv, p1).unwrap();
     let a = m.add_global("as", p1);
     m.set_initializer(a, Some(asc)).unwrap();
-    let t = m.const_cast(CastOp::Trunc, pi, TypeId::I32).unwrap();
+    // (`trunc` of a bare `ptrtoint` would be folded by the IR parser.)
+    let t = m.const_cast(CastOp::Trunc, s, TypeId::I32).unwrap();
     let tt = m.add_global("t", TypeId::I32);
     m.set_initializer(tt, Some(t)).unwrap();
     check(
@@ -402,7 +403,7 @@ fn constant_expressions() {
             "@j = global i64 add nuw (i64 ptrtoint (ptr @arr to i64), i64 8)\n",
             "@h = global ptr inttoptr (i64 4096 to ptr)\n",
             "@as = global ptr addrspace(1) addrspacecast (ptr @arr to ptr addrspace(1))\n",
-            "@t = global i32 trunc (i64 ptrtoint (ptr @arr to i64) to i32)\n",
+            "@t = global i32 trunc (i64 add nuw (i64 ptrtoint (ptr @arr to i64), i64 8) to i32)\n",
         ],
     );
 }
@@ -1320,6 +1321,147 @@ fn inline_asm() {
             "  call void asm sideeffect \"\", \"~{memory}\"()\n",
             "  %2 = call i32 asm alignstack inteldialect unwind \"add $0, $1, #1 \\22q\\22\\0A\", \
              \"=r,r\"(i32 %0)\n",
+        ],
+    );
+}
+
+/// §4: Itanium exception handling: `invoke`, `landingpad` (cleanup, catch,
+/// filter), `resume`.
+#[test]
+fn itanium_eh() {
+    let mut m = aarch64();
+    let pers_ty = m.types.function(TypeId::I32, &[], true);
+    let pers = m.add_function("__gxx_personality_v0", pers_ty).unwrap();
+    let vv = m.types.function(TypeId::VOID, &[], false);
+    let thrower = m.add_function("may_throw", vv).unwrap();
+    let ti = m.add_global("_ZTIi", TypeId::PTR);
+    m.global_mut(ti).is_constant = true;
+    let lp_ty = m.types.struct_literal(&[TypeId::PTR, TypeId::I32], false);
+    let empty_filter = m.const_array(TypeId::PTR, &[]).unwrap();
+    let typeid = intrinsics::eh_typeid_for(&mut m);
+    let mut b = define(&mut m, "eh", TypeId::VOID, &[]);
+    b.func().personality = Some(Value::func(pers));
+    let cont = b.append_block("invoke.cont");
+    let lpad = b.append_block("lpad");
+    let lpad2 = b.append_block("lpad2");
+    b.invoke(thrower, &[], cont, lpad).unwrap();
+    b.position_at_end(cont);
+    let o = CallOpts { cc: CallConv::C, ..CallOpts::default() };
+    b.invoke_ex(vv, Value::func(thrower), &[], cont, lpad2, &o).unwrap();
+    b.position_at_end(lpad);
+    let tiv = Value::global(ti);
+    let lp = b
+        .landingpad(lp_ty, true, &[Clause::Catch(tiv), Clause::Filter(empty_filter)])
+        .unwrap();
+    let sel = b.extract_value(lp, &[1]).unwrap();
+    let id = b.call(typeid, &[tiv]).unwrap();
+    b.icmp(IntPredicate::Eq, sel, id).unwrap();
+    b.resume(lp).unwrap();
+    b.position_at_end(lpad2);
+    let null = b.module().const_null(TypeId::PTR);
+    let lp2 = b.landingpad(lp_ty, false, &[Clause::Catch(null)]).unwrap();
+    b.resume(lp2).unwrap();
+    check(
+        &m,
+        &[
+            "@_ZTIi = external constant ptr\n",
+            "declare i32 @llvm.eh.typeid.for.p0(ptr) #0\n",
+            "define dso_local void @eh() personality ptr @__gxx_personality_v0 {\n",
+            "  invoke void @may_throw()\n          to label %invoke.cont unwind label %lpad\n",
+            "\ninvoke.cont:\n  invoke void @may_throw()\n          to label %invoke.cont \
+             unwind label %lpad2\n",
+            "\nlpad:\n  %1 = landingpad { ptr, i32 }\n          cleanup\n          \
+             catch ptr @_ZTIi\n          filter [0 x ptr] zeroinitializer\n",
+            "  %2 = extractvalue { ptr, i32 } %1, 1\n  %3 = call i32 @llvm.eh.typeid.for.p0(ptr @_ZTIi)\n",
+            "  resume { ptr, i32 } %1\n",
+            "\nlpad2:\n  %5 = landingpad { ptr, i32 }\n          catch ptr null\n",
+            "attributes #0 = { nounwind memory(none) }\n",
+        ],
+    );
+}
+
+/// §4: funclet exception handling (`catchswitch`, `catchpad`, `catchret`,
+/// `cleanuppad`, `cleanupret`).
+#[test]
+fn funclet_eh() {
+    let mut m = Module::with_target("w.c", X86_64_LINUX_GNU);
+    m.target_triple = "x86_64-pc-windows-msvc".into();
+    let pers_ty = m.types.function(TypeId::I32, &[], true);
+    let pers = m.add_function("__CxxFrameHandler3", pers_ty).unwrap();
+    let vv = m.types.function(TypeId::VOID, &[], false);
+    let thrower = m.add_function("may_throw", vv).unwrap();
+    let mut b = define(&mut m, "seh", TypeId::VOID, &[]);
+    b.func().personality = Some(Value::func(pers));
+    let cont = b.append_block("cont");
+    let dispatch = b.append_block("catch.dispatch");
+    let handler = b.append_block("catch");
+    let after = b.append_block("after");
+    let cleanup = b.append_block("cleanup");
+    b.invoke(thrower, &[], cont, dispatch).unwrap();
+    b.position_at_end(cont);
+    b.ret_void().unwrap();
+    b.position_at_end(dispatch);
+    let cs = b.catchswitch(None, &[handler], Some(cleanup)).unwrap();
+    b.position_at_end(handler);
+    let null = b.module().const_null(TypeId::PTR);
+    let c64 = b.module().const_int(TypeId::I32, 64);
+    let cp = b.catchpad(cs, &[null, c64, null]).unwrap();
+    let o = CallOpts {
+        bundles: vec![OperandBundle { tag: "funclet".into(), args: vec![cp] }],
+        ..CallOpts::default()
+    };
+    b.call_ex(vv, Value::func(thrower), &[], &o).unwrap();
+    b.catchret(cp, after).unwrap();
+    b.position_at_end(after);
+    b.ret_void().unwrap();
+    b.position_at_end(cleanup);
+    let cl = b.cleanuppad(None, &[]).unwrap();
+    b.cleanupret(cl, None).unwrap();
+    check(
+        &m,
+        &[
+            "\ncatch.dispatch:\n  %1 = catchswitch within none [label %catch] unwind label %cleanup\n",
+            "\ncatch:\n  %2 = catchpad within %1 [ptr null, i32 64, ptr null]\n",
+            "  call void @may_throw() [ \"funclet\"(token %2) ]\n",
+            "  catchret from %2 to label %after\n",
+            "\ncleanup:\n  %3 = cleanuppad within none []\n  cleanupret from %3 unwind to caller\n",
+        ],
+    );
+}
+
+/// §4: `va_arg` with the `llvm.va_*` intrinsics.
+#[test]
+fn varargs() {
+    let mut m = aarch64();
+    let fty = m.types.function(TypeId::I32, &[TypeId::I32], true);
+    let f = m.add_function("va", fty).unwrap();
+    let (vs, ve, vc) =
+        (intrinsics::va_start(&mut m), intrinsics::va_end(&mut m), intrinsics::va_copy(&mut m));
+    let va_list = m.types.named_struct("struct.std::__va_list");
+    m.types
+        .set_body(va_list, &[TypeId::PTR, TypeId::PTR, TypeId::PTR, TypeId::I32, TypeId::I32], false)
+        .unwrap();
+    let mut b = IrBuilder::new(&mut m, f);
+    let e = b.append_block("entry");
+    b.position_at_end(e);
+    b.name_next("ap");
+    let ap = b.alloca(va_list, 8).unwrap();
+    let ap2 = b.alloca(va_list, 8).unwrap();
+    b.call(vs, &[ap]).unwrap();
+    b.call(vc, &[ap2, ap]).unwrap();
+    let v = b.va_arg(ap, TypeId::I32).unwrap();
+    b.call(ve, &[ap]).unwrap();
+    b.ret(Some(v)).unwrap();
+    check(
+        &m,
+        &[
+            "%\"struct.std::__va_list\" = type { ptr, ptr, ptr, i32, i32 }\n",
+            "define i32 @va(i32 %0, ...) {\nentry:\n",
+            "  %ap = alloca %\"struct.std::__va_list\", align 8\n  %1 = alloca",
+            "  call void @llvm.va_start.p0(ptr %ap)\n",
+            "  call void @llvm.va_copy.p0(ptr %1, ptr %ap)\n",
+            "  %2 = va_arg ptr %ap, i32\n",
+            "declare void @llvm.va_start.p0(ptr) #0\n",
         ],
     );
 }
