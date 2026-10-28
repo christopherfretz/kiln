@@ -5,7 +5,7 @@
 
 mod compare;
 mod entry;
-mod record;
+pub(crate) mod record;
 mod stats;
 #[cfg(test)]
 mod tests;

@@ -8,6 +8,9 @@ license.workspace = true
 publish = false
 
 [dependencies]
+# Re-lexes `-E` output for the token-wise pp comparison (spec/harness.md).
+kiln_lex.workspace = true
+kiln_source.workspace = true
 
 [lints]
 workspace = true

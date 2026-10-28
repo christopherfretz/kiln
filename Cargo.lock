@@ -110,3 +110,7 @@ version = "0.0.1"
 [[package]]
 name = "xtask"
 version = "0.0.1"
+dependencies = [
+ "kiln_lex",
+ "kiln_source",
+]

@@ -27,6 +27,9 @@ fn cli_parsing() {
         "--oracle",
         "clang++",
         "--no-oracle",
+        "--pp-compare=text",
+        "--report-parity",
+        "docs/status/pp-parity.md",
         "tests/a",
         "b.cpp",
     ]))
@@ -43,14 +46,21 @@ fn cli_parsing() {
             jobs: Some(3),
             run_timeout: Duration::from_millis(2500),
             verbose: true,
+            pp_compare: Some(PpCompare::Text),
+            report_parity: Some("docs/status/pp-parity.md".into()),
             paths: vec!["tests/a".into(), "b.cpp".into()],
         }
     );
     assert_eq!(parse_args(strings(&["--help"])).unwrap(), None);
     assert_eq!(parse_args(Vec::new()).unwrap().unwrap(), Options::default());
-    for bad in
-        [&["--jobs", "0"][..], &["--compiler"], &["--bogus"], &["--update=1"], &["--timeout", "-1"]]
-    {
+    for bad in [
+        &["--jobs", "0"][..],
+        &["--compiler"],
+        &["--bogus"],
+        &["--update=1"],
+        &["--timeout", "-1"],
+        &["--pp-compare", "bytes"],
+    ] {
         assert!(parse_args(strings(bad)).is_err(), "{bad:?} should be rejected");
     }
 }
@@ -85,6 +95,25 @@ fn report(results: &[TestResult]) -> String {
     results.iter().map(|r| report::format_result(r, true)).collect()
 }
 
+/// The hand-written corpus: the default roots without the generated
+/// header corpus under `tests/differential/pp` (`cargo xtask gen-pp-corpus`;
+/// `xtask ci` runs it) but with the hand-written `pp/torture`.
+fn seed_roots(root: &Path) -> Vec<PathBuf> {
+    let mut roots = vec![root.join("tests/conformance")];
+    if let Ok(dir) = std::fs::read_dir(root.join("tests/differential")) {
+        let mut subdirs: Vec<PathBuf> = dir
+            .filter_map(Result::ok)
+            .map(|e| e.path())
+            .filter(|p| p.is_dir() && p.file_name().is_some_and(|n| n != "pp"))
+            .collect();
+        subdirs.sort();
+        roots.extend(subdirs);
+    }
+    roots.push(root.join("tests/differential/pp/torture"));
+    roots.retain(|p| p.is_dir());
+    roots
+}
+
 /// The seed corpus is self-validating: it must pass with clang 19, and it
 /// must exercise every directive.
 #[test]
@@ -92,7 +121,8 @@ fn seed_corpus_passes_with_clang() {
     if !have_clang() {
         return;
     }
-    let results = execute(&clang_opts(&[])).expect("runner infrastructure works");
+    let root = repo_root();
+    let results = execute(&clang_opts(&seed_roots(&root))).expect("runner infrastructure works");
     let all = report(&results);
     assert!(results.iter().all(|r| !r.status.is_failure()), "{all}");
     let counts = report::Counts::of(&results);
@@ -101,8 +131,7 @@ fn seed_corpus_passes_with_clang() {
     assert!(counts.get(Status::Skip) >= 2, "{all}");
 
     // Directive coverage, so the corpus keeps demonstrating the format.
-    let root = repo_root();
-    let cases = discover::discover(&root, &discover::default_roots(&root), None).unwrap();
+    let cases = discover::discover(&root, &seed_roots(&root), None).unwrap();
     let mut seen = BTreeSet::new();
     for c in &cases {
         let src = std::fs::read_to_string(&c.path).unwrap();
@@ -140,6 +169,9 @@ fn seed_corpus_passes_with_clang() {
             "pp-expected",
         );
         flag(c.is_header, "header-test");
+        flag(src.contains("//@ pp-compare:"), "pp-compare");
+        flag(s.pp_linemarkers, "pp-linemarkers");
+        flag(s.args.iter().any(|a| a.contains("%{")), "placeholder");
         flag(c.lang == directives::Lang::C, "c-test");
     }
     let want = [
@@ -155,7 +187,10 @@ fn seed_corpus_passes_with_clang() {
         "oracle",
         "oven",
         "pp",
+        "pp-compare",
         "pp-expected",
+        "pp-linemarkers",
+        "placeholder",
         "run",
         "run-args",
         "run-stdin",
@@ -204,8 +239,8 @@ fn fixtures_produce_expected_statuses() {
     let mut o = clang_opts(&[dir]);
     o.run_timeout = Duration::from_secs(1);
     let results = execute(&o).unwrap();
-    // 28 tests: helper.h and Inputs/* are not discovered.
-    check_fixture_statuses(&results, 28);
+    // 33 tests: helper.h and Inputs/* are not discovered.
+    check_fixture_statuses(&results, 33);
     let by_name = |n: &str| results.iter().find(|r| r.name.ends_with(n)).unwrap();
     assert!(by_name("fail-timeout.cpp").details.contains("timed out"));
     assert!(by_name("fail-crash.cpp").details.contains("signal"));
@@ -215,7 +250,15 @@ fn fixtures_produce_expected_statuses() {
     );
     assert!(by_name("fail-diag-wrong-line.cpp").details.contains("3:11 error"));
     assert!(by_name("fail-strict-unexpected.cpp").details.contains("unexpected diagnostics"));
-    assert!(by_name("fail-pp-golden.cpp").details.contains("-1 + 3\n    +1 + 2"));
+    let has = |n: &str, what: &str| {
+        let d = &by_name(n).details;
+        assert!(d.contains(what), "{n}: {what:?} not in\n{d}");
+    };
+    has("fail-pp-golden.cpp", "output differs from fail-pp-golden.cpp.expected (token-wise):");
+    has("fail-pp-golden.cpp", "-1:5  3  (pp-number)\n    +1:5  2  (pp-number)\n");
+    has("fail-pp-tokens-glued.cpp", "-1:1  ++\n    +1:1  +\n    +1:3  +\n");
+    has("fail-pp-text-mode.cpp", "(whitespace-normalized text):");
+    has("fail-pp-text-mode.cpp", "-f(a+b);\n    +f( a+b );");
     assert_eq!(
         by_name("skip-kiln-specific.cpp").reason.as_deref(),
         Some("not supported by this compiler (kiln-specific `oven:` directive)")

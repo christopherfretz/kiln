@@ -6,10 +6,10 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
 
-use super::compare::{line_diff, normalize_pp, pp_equivalent};
+use super::compare::{line_diff, pp_diff};
 use super::diag_parse::{self, Diagnostic};
 use super::directives::{
-    self, CompilerKind, Expect, Lang, Severity, StdinInput, StdoutExpect, TestSpec,
+    self, CompilerKind, Expect, Lang, PpCompare, Severity, StdinInput, StdoutExpect, TestSpec,
 };
 use super::discover::TestCase;
 use crate::util::oven_report::{self, Report};
@@ -29,6 +29,8 @@ pub struct Config {
     pub scratch: PathBuf,
     pub compile_timeout: Duration,
     pub run_timeout: Duration,
+    /// `--pp-compare`: overrides every test's `pp-compare:`.
+    pub pp_compare: Option<PpCompare>,
 }
 
 /// Outcome of one test.
@@ -184,12 +186,23 @@ impl Test<'_> {
         }
         c.arg(format!("-std={}", spec.std));
         c.args(mode);
-        c.args(&spec.args);
+        c.args(spec.args.iter().map(|a| directives::substitute(a, |n| self.placeholder(n))));
         c.arg(&self.case.name);
         if let Some(o) = out {
             c.arg("-o").arg(o);
         }
         c
+    }
+
+    /// The value of an `args:` placeholder (`spec/harness.md` "Placeholders").
+    fn placeholder(&self, name: &str) -> Option<String> {
+        let path = match name {
+            "repo_root" => self.cfg.root.clone(),
+            "resource_dir" => self.cfg.root.join("resource"),
+            "test_dir" => self.case.path.parent()?.to_path_buf(),
+            _ => return None,
+        };
+        Some(path.to_string_lossy().into_owned())
     }
 
     fn exec(&mut self, mut cmd: Command, timeout: Duration) -> Result<Output, String> {
@@ -481,7 +494,16 @@ impl Test<'_> {
     }
 
     fn pp(&mut self, spec: &TestSpec) -> Check {
-        let o = self.compile(spec, &["-E", "-P"], None)?;
+        let mode: &[&str] = if spec.pp_linemarkers { &["-E"] } else { &["-E", "-P"] };
+        let how = self.cfg.pp_compare.unwrap_or(spec.pp_compare);
+        let compare = |want: &str, got: &str, labels| {
+            pp_diff(how, &spec.std, spec.pp_linemarkers, want, got, labels)
+        };
+        let rule = match how {
+            PpCompare::Tokens => "token-wise",
+            PpCompare::Text => "whitespace-normalized text",
+        };
+        let o = self.compile(spec, mode, None)?;
         if !o.success() {
             return Err(Problem::Fail(format!(
                 "preprocessing failed ({})\n{}",
@@ -498,32 +520,32 @@ impl Test<'_> {
         if golden.is_file() {
             let want = fs::read_to_string(&golden)
                 .map_err(|e| Problem::Broken(format!("cannot read {}: {e}", golden.display())))?;
+            let diff = compare(&want, &got, ("expected", "actual"));
             if self.cfg.update {
-                if want != got {
+                // Only a real difference rewrites: an equivalent output
+                // spelled differently (another compiler's spacing) is kept.
+                if diff.is_some() {
                     fs::write(&golden, &got).map_err(|e| {
                         Problem::Broken(format!("cannot write {}: {e}", golden.display()))
                     })?;
                     self.updated = true;
                 }
-            } else if !pp_equivalent(&want, &got) {
+            } else if let Some(d) = diff {
                 let _ = write!(
                     failures,
-                    "output differs from {} after whitespace normalization (-expected +actual):\n{}",
+                    "output differs from {} ({rule}):\n{}",
                     golden.file_name().unwrap_or_default().to_string_lossy(),
-                    indent(&line_diff(&normalize_pp(&want), &normalize_pp(&got)))
+                    indent(&d)
                 );
             }
         }
         if spec.oracle
             && let Some(oracle) = self.cfg.oracle.clone()
         {
-            let theirs = self.oracle_compile(&oracle, spec, &["-E", "-P"], None)?.stdout_str();
-            if !pp_equivalent(&theirs, &got) {
-                let _ = write!(
-                    failures,
-                    "output differs from the oracle after whitespace normalization (-oracle +actual):\n{}",
-                    indent(&line_diff(&normalize_pp(&theirs), &normalize_pp(&got)))
-                );
+            let theirs = self.oracle_compile(&oracle, spec, mode, None)?.stdout_str();
+            if let Some(d) = compare(&theirs, &got, ("oracle", "actual")) {
+                let _ =
+                    write!(failures, "output differs from the oracle ({rule}):\n{}", indent(&d));
             }
         }
         if failures.is_empty() { Ok(()) } else { Err(Problem::Fail(failures)) }
