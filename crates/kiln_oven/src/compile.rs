@@ -1,0 +1,2498 @@
+//! The KBC compiler: lowers a function body or a top-level expression to
+//! KBC once, lazily (on the first call), and keeps it for the translation
+//! unit.
+//!
+//! Locals whose address is never taken live in registers; the rest (and
+//! every aggregate) live in abstract memory, allocated at the entry of
+//! their block. Every construct the evaluator cannot evaluate compiles to
+//! a `Trap` carrying its note, so compilation itself never fails: a
+//! function is rejected only when control actually reaches the construct
+//! ([expr.const]/10 is about evaluation, not about the function).
+
+use kiln_ast::consts::{FloatKind, Scalar};
+use kiln_ast::decl::{ConstexprKind, DeclKind, VarStorage};
+use kiln_ast::expr::{BinaryOp, CastKind, ExprKind, ObjectKind, TraitKind, UnaryOp};
+use kiln_ast::stmt::{IfKind, StmtKind};
+use kiln_ast::types::TypeView;
+use kiln_ast::{DeclId, ExprId, QualType, StmtId, StringLitId};
+use kiln_source::Loc;
+use kiln_source::fx::{FxHashMap, FxHashSet};
+
+use crate::failure::Note;
+use crate::kbc::{Op, ak, cmp, int_aux};
+use crate::mem::{Origin, fn_ptr};
+use crate::ty::{OTy, Scal, TyKind, eval_int};
+use crate::{Oven, SemaBridge};
+
+/// `Func::entry` of a function not compiled yet.
+pub(crate) const UNCOMPILED: u32 = u32::MAX;
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum FState {
+    /// Not compiled yet.
+    Stub,
+    Ready,
+    /// Not `constexpr` ([expr.const]/10.2).
+    NotConstexpr,
+    /// Declared but not defined (yet): retried on every call.
+    Undefined,
+    Deleted,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum RetKind {
+    Void,
+    Scalar(OTy),
+    /// Aggregate: the caller passes the result object's address in
+    /// register 0.
+    Sret(OTy),
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ParamInfo {
+    pub decl: DeclId,
+    pub ty: OTy,
+    /// The register holding the value (or, for `mem`, the address).
+    pub reg: u32,
+    pub mem: bool,
+}
+
+#[derive(Debug)]
+pub(crate) struct Func {
+    /// `None` for a top-level thunk.
+    pub decl: Option<DeclId>,
+    pub entry: u32,
+    pub state: FState,
+    pub nregs: u32,
+    pub ret: RetKind,
+    pub params: Vec<ParamInfo>,
+    /// Eligible for memoization (pure: scalar, non-pointer parameters).
+    pub memo: bool,
+}
+
+/// The source of a faulting instruction.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Site {
+    pub pc: u32,
+    pub loc: Loc,
+    pub e: Option<ExprId>,
+}
+
+/// A compiled-in failure.
+#[derive(Clone, Debug)]
+pub(crate) struct TrapInfo {
+    pub loc: Loc,
+    pub msg: String,
+    pub extra: Vec<Note>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum GKind {
+    Var(DeclId),
+    Str(StringLitId, OTy),
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum GState {
+    Unresolved,
+    /// Its initializer is being evaluated (a self-reference).
+    Resolving,
+    Resolved(u64),
+    /// Its initializer is not a constant expression.
+    Failed,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Global {
+    pub kind: GKind,
+    pub state: GState,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Local {
+    Reg(u32),
+    /// The register holds the object's address.
+    Mem(u32),
+}
+
+/// A compiled lvalue.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Place {
+    Reg(u32),
+    Mem(u32),
+    Bits { p: u32, bit: u32, width: u32 },
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Access {
+    Read,
+    Write,
+    Rmw,
+    Addr,
+}
+
+struct Breakable {
+    breaks: Vec<usize>,
+    conts: Option<Vec<usize>>,
+    /// `scopes.len()` outside the statement.
+    depth: usize,
+    /// `scopes.len()` outside the loop body.
+    cont_depth: usize,
+}
+
+pub(crate) fn float_code(k: FloatKind) -> u32 {
+    match k {
+        FloatKind::Half => 0,
+        FloatKind::BFloat16 => 1,
+        FloatKind::Single => 2,
+        FloatKind::Double => 3,
+        FloatKind::X87Extended => 4,
+        FloatKind::Quad => 5,
+    }
+}
+
+pub(crate) fn float_of(c: u32) -> FloatKind {
+    match c & 15 {
+        0 => FloatKind::Half,
+        1 => FloatKind::BFloat16,
+        2 => FloatKind::Single,
+        3 => FloatKind::Double,
+        4 => FloatKind::X87Extended,
+        _ => FloatKind::Quad,
+    }
+}
+
+/// Strips parentheses.
+fn skip_parens(ast: &kiln_ast::Ast, mut e: ExprId) -> ExprId {
+    while ast.exprs.get(e).kind() == ExprKind::ParenExpr {
+        e = ast.exprs.operand(e);
+    }
+    e
+}
+
+/// Whether `d` is a variable with automatic storage duration.
+pub(crate) fn is_local_var(ast: &kiln_ast::Ast, d: DeclId) -> bool {
+    let n = ast.decls.get(d);
+    match n.kind() {
+        DeclKind::ParmVar => true,
+        DeclKind::Var => {
+            let Some(v) = ast.decls.var(d) else { return false };
+            v.spec.storage() == VarStorage::None
+                && n.ctx().is_some_and(|c| ast.decls.get(c).kind().is_function())
+        }
+        _ => false,
+    }
+}
+
+impl Oven {
+    /// The function index of `d` (a stub until first called).
+    pub(crate) fn func_index(&mut self, ast: &kiln_ast::Ast, d: DeclId) -> u32 {
+        let d = ast.first(d);
+        if let Some(&i) = self.func_map.get(&d) {
+            return i;
+        }
+        let i = self.funcs.len() as u32;
+        self.funcs.push(Func {
+            decl: Some(d),
+            entry: UNCOMPILED,
+            state: FState::Stub,
+            nregs: 0,
+            ret: RetKind::Void,
+            params: Vec::new(),
+            memo: false,
+        });
+        self.func_map.insert(d, i);
+        i
+    }
+
+    /// The global index of variable `d`.
+    pub(crate) fn global_index(&mut self, ast: &kiln_ast::Ast, d: DeclId) -> u32 {
+        let d = ast.first(d);
+        if let Some(&i) = self.global_map.get(&d) {
+            return i;
+        }
+        let i = self.globals.len() as u32;
+        self.globals.push(Global { kind: GKind::Var(d), state: GState::Unresolved });
+        self.global_map.insert(d, i);
+        i
+    }
+
+    fn string_index(&mut self, s: StringLitId, ty: OTy) -> u32 {
+        if let Some(&i) = self.strings.get(&s) {
+            return i as u32;
+        }
+        let i = self.globals.len() as u32;
+        self.globals.push(Global { kind: GKind::Str(s, ty), state: GState::Unresolved });
+        self.strings.insert(s, u64::from(i));
+        i
+    }
+
+    /// Compiles a top-level thunk evaluating `e`: a scalar result in
+    /// register 0, or the address of the result object (whose origin is
+    /// `object`, else a temporary) in register 0.
+    pub(crate) fn compile_thunk(&mut self, b: &mut dyn SemaBridge, e: ExprId, object: Option<DeclId>) -> u32 {
+        if let Some(&f) = self.thunks.get(&e) {
+            if object.is_none() || self.funcs[f as usize].decl.is_none() {
+                return f;
+            }
+        }
+        let idx = self.funcs.len() as u32;
+        self.funcs.push(Func {
+            decl: None,
+            entry: UNCOMPILED,
+            state: FState::Stub,
+            nregs: 0,
+            ret: RetKind::Void,
+            params: Vec::new(),
+            memo: false,
+        });
+        let mut c = Compiler::new(self, b);
+        let entry = c.here();
+        let ty = c.ety(e);
+        let glvalue = c.b.ast().exprs.get(e).value_category().is_glvalue();
+        let ret;
+        if c.o.types.is_aggregate(ty) {
+            let origin = match object {
+                Some(d) => Origin::Var(d),
+                None => Origin::Temp(e),
+            };
+            let r = c.reg();
+            c.alloc(r, ty, origin, false, e);
+            if glvalue {
+                let p = c.lv_mem(e, Access::Read);
+                c.emit_at(Op::Copy, 1, &[r, p, ty.0], e);
+            } else {
+                c.init(e, r, ty);
+            }
+            c.emit(Op::Ret, 0, &[r]);
+            ret = RetKind::Sret(ty);
+        } else if c.o.types.kind(ty) == TyKind::Void {
+            c.effect(e);
+            c.emit(Op::Ret, 0, &[0]);
+            ret = RetKind::Void;
+        } else {
+            let r = c.reg();
+            c.rv_into(e, r);
+            c.emit(Op::Ret, 1, &[r]);
+            ret = RetKind::Scalar(ty);
+        }
+        let nregs = c.max;
+        let f = &mut self.funcs[idx as usize];
+        f.entry = entry;
+        f.state = FState::Ready;
+        f.nregs = nregs;
+        f.ret = ret;
+        self.thunks.insert(e, idx);
+        idx
+    }
+
+    /// Compiles function `idx` if it can be: sets its state.
+    pub(crate) fn compile_func(&mut self, b: &mut dyn SemaBridge, idx: u32) {
+        let Some(d) = self.funcs[idx as usize].decl else { return };
+        let ast = b.ast();
+        let Some(fd) = ast.decls.function(ast.latest(d)) else {
+            self.funcs[idx as usize].state = FState::NotConstexpr;
+            return;
+        };
+        let spec = fd.spec;
+        if spec.is_deleted() {
+            self.funcs[idx as usize].state = FState::Deleted;
+            return;
+        }
+        if spec.constexpr_kind() == ConstexprKind::None {
+            self.funcs[idx as usize].state = FState::NotConstexpr;
+            return;
+        }
+        let Some(body) = b.ensure_body(d) else {
+            self.funcs[idx as usize].state = FState::Undefined;
+            return;
+        };
+        let ast = b.ast();
+        let def = ast.definition(d).unwrap_or(d);
+        let params: Vec<DeclId> = ast
+            .decls
+            .function(def)
+            .map(|f| ast.lists.get(f.params).iter().map(|&p| DeclId::new(p)).collect())
+            .unwrap_or_default();
+        let fty = ast.decls.get(def).ty().unwrap_or(QualType::INT);
+        let ret_q = match ast.types.canonical_view(fty) {
+            TypeView::Function(p) => p.ret(),
+            _ => QualType::INT,
+        };
+        let mut c = Compiler::new(self, b);
+        let rty = c.ty(ret_q);
+        let ret = if c.o.types.is_aggregate(rty) {
+            RetKind::Sret(rty)
+        } else if c.o.types.kind(rty) == TyKind::Void {
+            RetKind::Void
+        } else {
+            RetKind::Scalar(rty)
+        };
+        c.ret = ret;
+        c.scan(body, &params);
+        if matches!(ret, RetKind::Sret(_)) {
+            c.reg();
+        }
+        let mut infos = Vec::with_capacity(params.len());
+        for &p in &params {
+            let q = c.b.ast().decls.get(p).ty().unwrap_or(QualType::INT);
+            let ty = c.ty(q);
+            let r = c.reg();
+            let mem = c.o.types.is_aggregate(ty) || c.mem_vars.contains(&p);
+            infos.push(ParamInfo { decl: p, ty, reg: r, mem });
+        }
+        let entry = c.here();
+        for pi in &infos {
+            if c.o.types.is_aggregate(pi.ty) {
+                // The caller materialized the argument; the register holds its address.
+                c.locals.insert(pi.decl, Local::Mem(pi.reg));
+            } else if pi.mem {
+                let p = c.reg();
+                c.alloc_var(p, pi.ty, pi.decl, false);
+                c.emit(Op::InitStore, 0, &[p, pi.reg, pi.ty.0]);
+                c.locals.insert(pi.decl, Local::Mem(p));
+            } else {
+                c.locals.insert(pi.decl, Local::Reg(pi.reg));
+            }
+        }
+        c.stmt(body);
+        // Falling off the end ([stmt.return]/4).
+        if ret == RetKind::Void {
+            c.emit(Op::Ret, 0, &[0]);
+        } else {
+            let ast = c.b.ast();
+            let loc = ast.stmts.rbrace(body);
+            c.trap_loc(loc, "control reached end of constexpr function".into());
+        }
+        let nregs = c.max;
+        let memo = c.o.budget.memo_entries > 0
+            && !matches!(ret, RetKind::Sret(_) | RetKind::Void)
+            && infos.len() <= 4
+            && infos.iter().all(|p| {
+                matches!(c.o.types.scal(p.ty), Some(Scal::Int { .. } | Scal::Bool | Scal::Float(_)))
+            })
+            && !matches!(ret, RetKind::Scalar(t) if c.o.types.scal(t) == Some(Scal::Ptr));
+        let f = &mut self.funcs[idx as usize];
+        f.entry = entry;
+        f.state = FState::Ready;
+        f.nregs = nregs;
+        f.ret = ret;
+        f.params = infos;
+        f.memo = memo;
+    }
+}
+
+pub(crate) struct Compiler<'a> {
+    pub o: &'a mut Oven,
+    pub b: &'a mut dyn SemaBridge,
+    next: u32,
+    pub max: u32,
+    locals: FxHashMap<DeclId, Local>,
+    mem_vars: FxHashSet<DeclId>,
+    pending: Vec<Loc>,
+    breakables: Vec<Breakable>,
+    /// Mark registers of the open scopes (`None`: allocates nothing).
+    scopes: Vec<Option<u32>>,
+    ret: RetKind,
+    /// The body creates temporaries (scopes are needed per statement).
+    has_temps: bool,
+}
+
+impl<'a> Compiler<'a> {
+    fn new(o: &'a mut Oven, b: &'a mut dyn SemaBridge) -> Self {
+        Compiler {
+            o,
+            b,
+            next: 0,
+            max: 0,
+            locals: FxHashMap::default(),
+            mem_vars: FxHashSet::default(),
+            pending: Vec::new(),
+            breakables: Vec::new(),
+            scopes: Vec::new(),
+            ret: RetKind::Void,
+            has_temps: false,
+        }
+    }
+
+    // ---- emission -------------------------------------------------------
+
+    fn flush(&mut self) {
+        if self.pending.is_empty() {
+            return;
+        }
+        let idx = self.o.step_locs.len() as u32;
+        let n = self.pending.len() as u32;
+        self.o.step_locs.append(&mut self.pending);
+        self.o.code.push(Op::Step as u32 | n << 8);
+        self.o.code.push(idx);
+    }
+
+    fn emit(&mut self, op: Op, aux: u32, args: &[u32]) -> usize {
+        debug_assert_eq!(args.len(), op.operands(), "{op:?}");
+        self.flush();
+        let pc = self.o.code.len();
+        self.o.code.push(op as u32 | aux << 8);
+        self.o.code.extend_from_slice(args);
+        pc
+    }
+
+    fn emit_at(&mut self, op: Op, aux: u32, args: &[u32], e: ExprId) -> usize {
+        let pc = self.emit(op, aux, args);
+        let loc = self.b.ast().exprs.get(e).loc();
+        self.o.sites.push(Site { pc: pc as u32, loc, e: Some(e) });
+        pc
+    }
+
+    fn emit_loc(&mut self, op: Op, aux: u32, args: &[u32], loc: Loc) -> usize {
+        let pc = self.emit(op, aux, args);
+        self.o.sites.push(Site { pc: pc as u32, loc, e: None });
+        pc
+    }
+
+    /// The current position as a jump target.
+    fn here(&mut self) -> u32 {
+        self.flush();
+        self.o.code.len() as u32
+    }
+
+    /// Emits a jump; returns the index of its target word.
+    fn jmp(&mut self) -> usize {
+        self.emit(Op::Jmp, 0, &[0]) + 1
+    }
+
+    fn jmp_if(&mut self, cond: u32, when: bool) -> usize {
+        self.emit(if when { Op::JmpIf } else { Op::JmpIfNot }, 0, &[cond, 0]) + 2
+    }
+
+    fn patch(&mut self, at: usize, target: u32) {
+        self.o.code[at] = target;
+    }
+
+    fn patch_here(&mut self, at: usize) {
+        let t = self.here();
+        self.patch(at, t);
+    }
+
+    fn trap_loc(&mut self, loc: Loc, msg: String) {
+        self.trap_notes(loc, msg, Vec::new());
+    }
+
+    fn trap_notes(&mut self, loc: Loc, msg: String, extra: Vec<Note>) {
+        let i = self.o.traps.len() as u32;
+        self.o.traps.push(TrapInfo { loc, msg, extra });
+        self.emit_loc(Op::Trap, 0, &[i], loc);
+    }
+
+    fn trap(&mut self, e: ExprId, msg: &str) {
+        let loc = self.b.ast().exprs.get(e).loc();
+        self.trap_loc(loc, msg.to_owned());
+    }
+
+    fn unsupported(&mut self, e: ExprId) {
+        let k = self.b.ast().exprs.get(e).kind();
+        self.trap(e, &format!("kiln: constant evaluation of {k:?} is not supported yet"));
+    }
+
+    fn reg(&mut self) -> u32 {
+        let r = self.next;
+        self.next += 1;
+        self.max = self.max.max(self.next);
+        r
+    }
+
+    pub fn ty(&mut self, q: QualType) -> OTy {
+        self.o.types.intern(&mut *self.b, q)
+    }
+
+    pub fn ety(&mut self, e: ExprId) -> OTy {
+        let q = self.b.ast().exprs.get(e).ty();
+        self.ty(q)
+    }
+
+    fn konst(&mut self, dst: u32, v: u128) {
+        if v == (v as i64) as i128 as u128 {
+            self.emit(Op::Const, 1, &[dst, v as u32, (v >> 32) as u32]);
+        } else if v >> 64 == 0 {
+            self.emit(Op::Const, 0, &[dst, v as u32, (v >> 32) as u32]);
+        } else {
+            self.emit(Op::Const2, 0, &[dst, v as u32, (v >> 32) as u32, (v >> 64) as u32, (v >> 96) as u32]);
+        }
+    }
+
+    fn alloc(&mut self, dst: u32, ty: OTy, origin: Origin, is_const: bool, e: ExprId) {
+        let oi = self.o.push_origin(origin);
+        self.emit_at(Op::Alloc, u32::from(is_const), &[dst, ty.0, oi], e);
+    }
+
+    fn alloc_var(&mut self, dst: u32, ty: OTy, d: DeclId, is_const: bool) {
+        let oi = self.o.push_origin(Origin::Var(d));
+        let loc = self.b.ast().decls.get(d).loc();
+        self.emit_loc(Op::Alloc, u32::from(is_const), &[dst, ty.0, oi], loc);
+    }
+}
+
+// ---- pre-scan: which locals need an address ----------------------------
+
+struct Scan<'x> {
+    ast: &'x kiln_ast::Ast,
+    mem: &'x mut FxHashSet<DeclId>,
+    cur: Option<DeclId>,
+    temps: bool,
+}
+
+impl Scan<'_> {
+    fn stmt(&mut self, s: StmtId) {
+        let ast = self.ast;
+        let n = *ast.stmts.get(s);
+        match n.kind() {
+            StmtKind::CompoundStmt => {
+                for &c in ast.lists.get(ast.stmts.compound_body(s)) {
+                    self.stmt(StmtId::new(c));
+                }
+            }
+            StmtKind::DeclStmt => {
+                for &d in ast.lists.get(ast.stmts.decl_stmt_decls(s)) {
+                    self.decl(DeclId::new(d));
+                }
+            }
+            StmtKind::ExprStmt => self.expr(ast.stmts.expr_stmt_expr(s), true),
+            StmtKind::IfStmt => {
+                let d = *ast.stmts.if_data(s);
+                d.init.into_iter().for_each(|x| self.stmt(x));
+                d.cond_var.into_iter().for_each(|x| self.decl(x));
+                d.cond.into_iter().for_each(|x| self.expr(x, false));
+                d.then.into_iter().for_each(|x| self.stmt(x));
+                d.els.into_iter().for_each(|x| self.stmt(x));
+            }
+            StmtKind::SwitchStmt => {
+                let d = *ast.stmts.switch_data(s);
+                d.init.into_iter().for_each(|x| self.stmt(x));
+                d.cond_var.into_iter().for_each(|x| self.decl(x));
+                self.expr(d.cond, false);
+                self.stmt(d.body);
+            }
+            StmtKind::CaseStmt => self.stmt(ast.stmts.case_data(s).sub),
+            StmtKind::DefaultStmt => self.stmt(ast.stmts.default_sub(s)),
+            StmtKind::WhileStmt | StmtKind::DoStmt | StmtKind::ForStmt => {
+                let d = *ast.stmts.loop_data(s);
+                d.init.into_iter().for_each(|x| self.stmt(x));
+                d.cond_var.into_iter().for_each(|x| self.decl(x));
+                d.cond.into_iter().for_each(|x| self.expr(x, false));
+                d.inc.into_iter().for_each(|x| self.expr(x, true));
+                d.body.into_iter().for_each(|x| self.stmt(x));
+            }
+            StmtKind::ReturnStmt => {
+                if let Some(v) = ast.stmts.return_value(s) {
+                    self.expr(v, false);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn decl(&mut self, d: DeclId) {
+        let ast = self.ast;
+        if ast.decls.get(d).kind() != DeclKind::Var {
+            return;
+        }
+        if let Some(init) = ast.decls.var(d).and_then(|v| v.init) {
+            let saved = self.cur.replace(d);
+            self.expr(init, false);
+            self.cur = saved;
+        }
+    }
+
+    fn expr(&mut self, e: ExprId, ok: bool) {
+        let ast = self.ast;
+        let n = *ast.exprs.get(e);
+        match n.kind() {
+            ExprKind::DeclRefExpr => {
+                let d = ast.exprs.decl(e);
+                if (!ok || self.cur == Some(d)) && is_local_var(ast, d) {
+                    self.mem.insert(d);
+                }
+            }
+            ExprKind::ParenExpr => self.expr(ast.exprs.operand(e), ok),
+            k if k.is_cast() => {
+                let op = ast.exprs.operand(e);
+                match ast.exprs.cast_kind(e) {
+                    CastKind::LValueToRValue => self.expr(op, true),
+                    CastKind::NoOp if n.value_category().is_glvalue() => self.expr(op, ok),
+                    CastKind::ToVoid => self.expr(op, true),
+                    _ => self.expr(op, false),
+                }
+            }
+            ExprKind::UnaryOperator => {
+                let op = ast.exprs.unary_op(e);
+                let x = ast.exprs.operand(e);
+                match op {
+                    UnaryOp::PreInc | UnaryOp::PreDec => self.expr(x, ok),
+                    UnaryOp::PostInc | UnaryOp::PostDec => self.expr(x, true),
+                    _ => self.expr(x, false),
+                }
+            }
+            ExprKind::BinaryOperator => {
+                let [a, b] = ast.exprs.operands(e);
+                match ast.exprs.binary_op(e) {
+                    BinaryOp::Assign => {
+                        self.expr(a, ok);
+                        self.expr(b, false);
+                    }
+                    BinaryOp::Comma => {
+                        self.expr(a, true);
+                        self.expr(b, ok);
+                    }
+                    _ => {
+                        self.expr(a, false);
+                        self.expr(b, false);
+                    }
+                }
+            }
+            ExprKind::CompoundAssignOperator => {
+                self.expr(ExprId::new(n.a()), ok);
+                self.expr(ast.exprs.compound_assign(e).rhs, false);
+            }
+            ExprKind::UnaryExprOrTypeTraitExpr => {}
+            ExprKind::CallExpr => {
+                let ty = n.ty();
+                if matches!(ast.types.canonical_view(ty), TypeView::Record(_) | TypeView::ConstantArray(_)) {
+                    self.temps = true;
+                }
+                for c in ast.exprs.children(e, &ast.lists) {
+                    let cty = ast.exprs.get(c).ty();
+                    if matches!(ast.types.canonical_view(cty), TypeView::Record(_)) {
+                        self.temps = true;
+                    }
+                    self.expr(c, false);
+                }
+            }
+            ExprKind::MaterializeTemporaryExpr | ExprKind::CompoundLiteralExpr => {
+                self.temps = true;
+                for c in ast.exprs.children(e, &ast.lists) {
+                    self.expr(c, false);
+                }
+            }
+            _ => {
+                for c in ast.exprs.children(e, &ast.lists) {
+                    self.expr(c, false);
+                }
+            }
+        }
+    }
+}
+
+/// The steps clang charges while hunting for a `case` label through `s`
+/// without finding it (`EvaluateStmt` with a non-null `Case`).
+fn hunt_cost(ast: &kiln_ast::Ast, s: StmtId, locs: &mut Vec<Loc>) {
+    let n = *ast.stmts.get(s);
+    locs.push(n.loc());
+    match n.kind() {
+        StmtKind::CaseStmt => hunt_cost(ast, ast.stmts.case_data(s).sub, locs),
+        StmtKind::DefaultStmt => hunt_cost(ast, ast.stmts.default_sub(s), locs),
+        StmtKind::CompoundStmt => {
+            for &c in ast.lists.get(ast.stmts.compound_body(s)) {
+                hunt_cost(ast, StmtId::new(c), locs);
+            }
+        }
+        StmtKind::DoStmt | StmtKind::WhileStmt | StmtKind::ForStmt => {
+            if let Some(b) = ast.stmts.loop_data(s).body {
+                hunt_cost(ast, b, locs);
+            }
+        }
+        StmtKind::IfStmt => {
+            let d = *ast.stmts.if_data(s);
+            d.then.into_iter().chain(d.els).for_each(|x| hunt_cost(ast, x, locs));
+        }
+        _ => {}
+    }
+}
+
+/// Whether `s` contains a `case`/`default` label (stopping at nested
+/// switches).
+fn has_case(ast: &kiln_ast::Ast, s: StmtId) -> bool {
+    let n = *ast.stmts.get(s);
+    match n.kind() {
+        StmtKind::CaseStmt | StmtKind::DefaultStmt => true,
+        StmtKind::CompoundStmt => {
+            ast.lists.get(ast.stmts.compound_body(s)).iter().any(|&c| has_case(ast, StmtId::new(c)))
+        }
+        StmtKind::DoStmt | StmtKind::WhileStmt | StmtKind::ForStmt => {
+            ast.stmts.loop_data(s).body.is_some_and(|x| has_case(ast, x))
+        }
+        StmtKind::IfStmt => {
+            let d = *ast.stmts.if_data(s);
+            d.then.into_iter().chain(d.els).any(|x| has_case(ast, x))
+        }
+        _ => false,
+    }
+}
+
+struct CaseTarget {
+    stmt: StmtId,
+    /// `None` for `default`.
+    range: Option<(u128, u128)>,
+    pre: Vec<Loc>,
+    stub_jmp: usize,
+}
+
+impl Compiler<'_> {
+    fn scan(&mut self, body: StmtId, params: &[DeclId]) {
+        let ast = self.b.ast();
+        let mut s = Scan { ast, mem: &mut self.mem_vars, cur: None, temps: false };
+        s.stmt(body);
+        self.has_temps = s.temps;
+        let _ = params;
+    }
+
+    fn step(&mut self, s: StmtId) {
+        let loc = self.b.ast().stmts.get(s).loc();
+        self.pending.push(loc);
+    }
+
+    /// Whether local `d` of type `ty` lives in memory.
+    fn needs_mem(&self, d: DeclId, ty: OTy) -> bool {
+        if self.o.types.is_aggregate(ty) || self.mem_vars.contains(&d) {
+            return true;
+        }
+        self.b.ast().decls.var(d).is_some_and(|v| v.init.is_none())
+    }
+
+    /// Opens a scope allocating the memory locals among `decls`.
+    fn open_scope(&mut self, decls: &[DeclId], force: bool) {
+        let mut mem = Vec::new();
+        for &d in decls {
+            let ast = self.b.ast();
+            if !is_local_var(ast, d) || ast.decls.get(d).kind() != DeclKind::Var {
+                continue;
+            }
+            let q = ast.decls.get(d).ty().unwrap_or(QualType::INT);
+            let is_const = ast.types.canonical(q).has_const_bit();
+            let ty = self.ty(q);
+            if self.needs_mem(d, ty) {
+                mem.push((d, ty, is_const));
+            }
+        }
+        if mem.is_empty() && !force {
+            self.scopes.push(None);
+            return;
+        }
+        let mark = self.reg();
+        self.emit(Op::ScopeEnter, 0, &[mark]);
+        for (d, ty, is_const) in mem {
+            let p = self.reg();
+            self.alloc_var(p, ty, d, is_const);
+            self.locals.insert(d, Local::Mem(p));
+        }
+        self.scopes.push(Some(mark));
+    }
+
+    fn close_scope(&mut self) {
+        if let Some(Some(mark)) = self.scopes.pop() {
+            self.emit(Op::ScopeExit, 0, &[mark]);
+        }
+    }
+
+    /// Releases the scopes from `depth` on (before a jump out of them).
+    fn exit_scopes(&mut self, depth: usize) {
+        if let Some(&Some(mark)) = self.scopes[depth..].iter().find(|m| m.is_some()) {
+            self.emit(Op::ScopeExit, 0, &[mark]);
+        }
+    }
+
+    fn block_decls(&self, children: &[u32]) -> Vec<DeclId> {
+        let ast = self.b.ast();
+        let mut v = Vec::new();
+        for &c in children {
+            let s = StmtId::new(c);
+            if ast.stmts.get(s).kind() == StmtKind::DeclStmt {
+                v.extend(ast.lists.get(ast.stmts.decl_stmt_decls(s)).iter().map(|&d| DeclId::new(d)));
+            }
+        }
+        v
+    }
+
+    fn stmt_decls(&self, s: Option<StmtId>, var: Option<DeclId>) -> Vec<DeclId> {
+        let mut v = match s {
+            Some(s) => self.block_decls(&[s.index()]),
+            None => Vec::new(),
+        };
+        v.extend(var);
+        v
+    }
+
+    fn stmt(&mut self, s: StmtId) {
+        let ast = self.b.ast();
+        let n = *ast.stmts.get(s);
+        let m = self.next;
+        match n.kind() {
+            StmtKind::CompoundStmt => {
+                self.step(s);
+                let children = ast.lists.get(ast.stmts.compound_body(s)).to_vec();
+                let decls = self.block_decls(&children);
+                self.open_scope(&decls, false);
+                for c in children {
+                    self.stmt(StmtId::new(c));
+                }
+                self.close_scope();
+                self.next = m;
+            }
+            StmtKind::DeclStmt => {
+                self.step(s);
+                let decls = ast.lists.get(ast.stmts.decl_stmt_decls(s)).to_vec();
+                for d in decls {
+                    self.decl(DeclId::new(d));
+                }
+            }
+            StmtKind::ExprStmt => {
+                self.step(s);
+                let e = ast.stmts.expr_stmt_expr(s);
+                if self.has_temps {
+                    self.open_scope(&[], true);
+                    self.effect(e);
+                    self.close_scope();
+                } else {
+                    self.effect(e);
+                }
+                self.next = m;
+            }
+            StmtKind::NullStmt => self.step(s),
+            StmtKind::IfStmt => {
+                self.step(s);
+                let d = *ast.stmts.if_data(s);
+                let kind = ast.stmts.if_kind(s);
+                let decls = self.stmt_decls(d.init, d.cond_var);
+                self.open_scope(&decls, false);
+                if let Some(i) = d.init {
+                    self.stmt(i);
+                }
+                if let Some(v) = d.cond_var {
+                    self.decl(v);
+                }
+                match kind {
+                    // Constant evaluation is always manifestly constant-evaluated.
+                    IfKind::Consteval => {
+                        if let Some(t) = d.then {
+                            self.stmt(t);
+                        }
+                    }
+                    IfKind::NotConsteval => {
+                        if let Some(t) = d.els {
+                            self.stmt(t);
+                        }
+                    }
+                    _ => {
+                        let j = match d.cond {
+                            Some(c) => {
+                                let r = self.rv(c);
+                                Some(self.jmp_if(r, false))
+                            }
+                            None => None,
+                        };
+                        if let Some(t) = d.then {
+                            self.stmt(t);
+                        }
+                        if let Some(e) = d.els {
+                            let end = self.jmp();
+                            if let Some(j) = j {
+                                self.patch_here(j);
+                            }
+                            self.stmt(e);
+                            self.patch_here(end);
+                        } else if let Some(j) = j {
+                            self.patch_here(j);
+                        }
+                    }
+                }
+                self.close_scope();
+                self.next = m;
+            }
+            StmtKind::WhileStmt | StmtKind::ForStmt | StmtKind::DoStmt => {
+                self.step(s);
+                self.loop_stmt(s, n.kind());
+                self.next = m;
+            }
+            StmtKind::SwitchStmt => {
+                self.step(s);
+                self.switch_stmt(s);
+                self.next = m;
+            }
+            StmtKind::BreakStmt | StmtKind::ContinueStmt => {
+                self.step(s);
+                let brk = n.kind() == StmtKind::BreakStmt;
+                let idx = if brk {
+                    self.breakables.len().checked_sub(1)
+                } else {
+                    self.breakables.iter().rposition(|b| b.conts.is_some())
+                };
+                let Some(idx) = idx else {
+                    self.trap_loc(n.loc(), "kiln: 'break' or 'continue' outside a loop".into());
+                    return;
+                };
+                let depth = if brk { self.breakables[idx].depth } else { self.breakables[idx].cont_depth };
+                self.exit_scopes(depth);
+                let j = self.jmp();
+                let b = &mut self.breakables[idx];
+                if brk {
+                    b.breaks.push(j);
+                } else if let Some(c) = &mut b.conts {
+                    c.push(j);
+                }
+            }
+            StmtKind::ReturnStmt => {
+                self.step(s);
+                let v = ast.stmts.return_value(s);
+                match (self.ret, v) {
+                    (RetKind::Sret(ty), Some(v)) => {
+                        self.init(v, 0, ty);
+                        self.emit(Op::Ret, 0, &[0]);
+                    }
+                    (RetKind::Scalar(_), Some(v)) => {
+                        let r = self.rv(v);
+                        self.emit(Op::Ret, 1, &[r]);
+                    }
+                    (_, v) => {
+                        if let Some(v) = v {
+                            self.effect(v);
+                        }
+                        self.emit(Op::Ret, 0, &[0]);
+                    }
+                }
+                self.next = m;
+            }
+            StmtKind::CaseStmt | StmtKind::DefaultStmt => {
+                self.step(s);
+                self.trap_loc(n.loc(), "kiln: a 'case' label outside its switch body is not supported yet".into());
+            }
+            StmtKind::GotoStmt | StmtKind::IndirectGotoStmt | StmtKind::LabelStmt => {
+                self.step(s);
+                self.trap_loc(n.loc(), "kiln: constant evaluation of 'goto' is not supported yet".into());
+            }
+            k => {
+                self.step(s);
+                self.trap_loc(n.loc(), format!("kiln: constant evaluation of {k:?} is not supported yet"));
+            }
+        }
+    }
+
+    fn loop_stmt(&mut self, s: StmtId, kind: StmtKind) {
+        let d = *self.b.ast().stmts.loop_data(s);
+        let decls = self.stmt_decls(d.init, None);
+        self.open_scope(&decls, false);
+        if let Some(i) = d.init {
+            self.stmt(i);
+        }
+        let top = self.here();
+        let iter = self.has_temps || d.cond_var.is_some();
+        let break_depth = self.scopes.len();
+        if iter {
+            let decls: Vec<DeclId> = d.cond_var.into_iter().collect();
+            self.open_scope(&decls, true);
+        }
+        let mut exit = None;
+        if kind != StmtKind::DoStmt {
+            if let Some(v) = d.cond_var {
+                self.decl(v);
+            }
+            if let Some(c) = d.cond {
+                let m = self.next;
+                let r = self.rv(c);
+                exit = Some(self.jmp_if(r, false));
+                self.next = m;
+            }
+        }
+        let cont_depth = self.scopes.len();
+        self.breakables.push(Breakable { breaks: Vec::new(), conts: Some(Vec::new()), depth: break_depth, cont_depth });
+        if let Some(b) = d.body {
+            self.stmt(b);
+        }
+        let b = self.breakables.pop().unwrap_or(Breakable { breaks: Vec::new(), conts: None, depth: 0, cont_depth: 0 });
+        let cont = self.here();
+        for j in b.conts.unwrap_or_default() {
+            self.patch(j, cont);
+        }
+        if kind == StmtKind::DoStmt {
+            let mut back = None;
+            if let Some(c) = d.cond {
+                let m = self.next;
+                let r = self.rv(c);
+                if iter {
+                    let mark = self.scopes.last().copied().flatten().unwrap_or(0);
+                    self.emit(Op::ScopeExit, 0, &[mark]);
+                }
+                back = Some(self.jmp_if(r, true));
+                self.next = m;
+            }
+            if let Some(j) = back {
+                self.patch(j, top);
+            }
+            if iter {
+                self.scopes.pop();
+            }
+        } else {
+            if let Some(i) = d.inc {
+                let m = self.next;
+                self.effect(i);
+                self.next = m;
+            }
+            if iter {
+                let mark = self.scopes.last().copied().flatten().unwrap_or(0);
+                self.emit(Op::ScopeExit, 0, &[mark]);
+            }
+            let j = self.jmp();
+            self.patch(j, top);
+            if let Some(x) = exit {
+                self.patch_here(x);
+            }
+            if iter {
+                self.close_scope();
+            }
+        }
+        let end = self.here();
+        for j in b.breaks {
+            self.patch(j, end);
+        }
+        self.close_scope();
+    }
+
+    fn switch_stmt(&mut self, s: StmtId) {
+        let ast = self.b.ast();
+        let d = *ast.stmts.switch_data(s);
+        let body = d.body;
+        let body_is_compound = ast.stmts.get(body).kind() == StmtKind::CompoundStmt;
+        let children: Vec<StmtId> = if body_is_compound {
+            ast.lists.get(ast.stmts.compound_body(body)).iter().map(|&c| StmtId::new(c)).collect()
+        } else {
+            vec![body]
+        };
+        // Collect the case labels: direct children of the body and their chains.
+        let mut targets: Vec<CaseTarget> = Vec::new();
+        let mut nested = false;
+        let mut pre = Vec::new();
+        if body_is_compound {
+            pre.push(ast.stmts.get(body).loc());
+        }
+        for &c in &children {
+            let mut chain = pre.clone();
+            let mut cur = c;
+            loop {
+                let k = ast.stmts.get(cur).kind();
+                let (range, sub) = match k {
+                    StmtKind::CaseStmt => {
+                        let cd = *ast.stmts.case_data(cur);
+                        let lo = eval_int(ast, cd.lhs).unwrap_or(0);
+                        let hi = cd.rhs.and_then(|r| eval_int(ast, r)).unwrap_or(lo);
+                        (Some((lo, hi)), cd.sub)
+                    }
+                    StmtKind::DefaultStmt => (None, ast.stmts.default_sub(cur)),
+                    _ => {
+                        nested |= has_case(ast, cur);
+                        break;
+                    }
+                };
+                targets.push(CaseTarget { stmt: cur, range, pre: chain.clone(), stub_jmp: 0 });
+                chain.push(ast.stmts.get(cur).loc());
+                cur = sub;
+            }
+            hunt_cost(ast, c, &mut pre);
+        }
+        let ctx_decls = self.stmt_decls(d.init, d.cond_var);
+        self.open_scope(&ctx_decls, false);
+        if let Some(i) = d.init {
+            self.stmt(i);
+        }
+        if let Some(v) = d.cond_var {
+            self.decl(v);
+        }
+        let cond_ty = self.ety(d.cond);
+        let (cw, cs) = match self.o.types.kind(cond_ty) {
+            TyKind::Int { width, signed } => (u32::from(width), signed),
+            _ => (8, false),
+        };
+        let c = self.rv(d.cond);
+        if nested {
+            let loc = self.b.ast().stmts.get(s).loc();
+            self.trap_loc(loc, "kiln: a 'case' label nested in a sub-statement of the switch body is not supported yet".into());
+        }
+        let block_decls = if body_is_compound {
+            let ch: Vec<u32> = children.iter().map(|s| s.index()).collect();
+            self.block_decls(&ch)
+        } else {
+            Vec::new()
+        };
+        self.open_scope(&block_decls, false);
+        // Dispatch.
+        let t = self.reg();
+        let mut stubs: Vec<(usize, usize)> = Vec::new();
+        let aux_eq = int_aux(cw as u8, cs) | cmp::EQ << 9;
+        for (i, tg) in targets.iter().enumerate() {
+            let Some((lo, hi)) = tg.range else { continue };
+            let (lo, hi) = (crate::arith::canon(lo, cw, cs), crate::arith::canon(hi, cw, cs));
+            if lo == hi {
+                self.konst(t, lo);
+                self.emit(Op::ICmp, aux_eq, &[t, c, t]);
+                let j = self.jmp_if(t, true);
+                stubs.push((i, j));
+            } else {
+                let u = self.reg();
+                self.konst(t, lo);
+                self.emit(Op::ICmp, int_aux(cw as u8, cs) | cmp::GE << 9, &[u, c, t]);
+                let skip = self.jmp_if(u, false);
+                self.konst(t, hi);
+                self.emit(Op::ICmp, int_aux(cw as u8, cs) | cmp::LE << 9, &[u, c, t]);
+                let j = self.jmp_if(u, true);
+                stubs.push((i, j));
+                self.patch_here(skip);
+            }
+        }
+        let default = targets.iter().position(|t| t.range.is_none());
+        let none = self.jmp();
+        if let Some(di) = default {
+            stubs.push((di, none));
+        }
+        // Stubs charging the hunt's steps.
+        for &(i, j) in &stubs {
+            self.patch_here(j);
+            let pre = targets[i].pre.clone();
+            self.pending.extend(pre);
+            targets[i].stub_jmp = self.jmp();
+        }
+        let mut end_jumps = Vec::new();
+        if default.is_none() {
+            end_jumps.push(none);
+        }
+        // The body.
+        let depth = self.scopes.len() - 1;
+        self.breakables.push(Breakable { breaks: Vec::new(), conts: None, depth, cont_depth: depth });
+        for &ch in &children {
+            let mut cur = ch;
+            loop {
+                let ast = self.b.ast();
+                let k = ast.stmts.get(cur).kind();
+                let sub = match k {
+                    StmtKind::CaseStmt => ast.stmts.case_data(cur).sub,
+                    StmtKind::DefaultStmt => ast.stmts.default_sub(cur),
+                    _ => {
+                        self.stmt(cur);
+                        break;
+                    }
+                };
+                let label = self.here();
+                for tg in &targets {
+                    if tg.stmt == cur && tg.stub_jmp != 0 {
+                        self.o.code[tg.stub_jmp] = label;
+                    }
+                }
+                self.step(cur);
+                cur = sub;
+            }
+        }
+        let b = self.breakables.pop().map(|b| b.breaks).unwrap_or_default();
+        self.close_scope();
+        let end = self.here();
+        for j in b.into_iter().chain(end_jumps) {
+            self.patch(j, end);
+        }
+        // A target whose stub was never reached by the linear pass (cannot
+        // happen for direct children) would jump to 0: point it at the end.
+        for tg in &targets {
+            if tg.stub_jmp != 0 && self.o.code[tg.stub_jmp] == 0 {
+                self.o.code[tg.stub_jmp] = end;
+            }
+        }
+        self.close_scope();
+    }
+
+    /// A declaration in a `DeclStmt` (or a condition variable).
+    fn decl(&mut self, d: DeclId) {
+        let ast = self.b.ast();
+        let n = *ast.decls.get(d);
+        if n.kind() != DeclKind::Var {
+            return;
+        }
+        let Some(v) = ast.decls.var(d).copied() else { return };
+        if !is_local_var(ast, d) {
+            if v.spec.storage() == VarStorage::Static && !v.spec.is_constexpr() {
+                self.trap_loc(n.loc(), "control flows through the definition of a static variable".into());
+            }
+            return;
+        }
+        let q = n.ty().unwrap_or(QualType::INT);
+        let ty = self.ty(q);
+        let local = self.locals.get(&d).copied();
+        match local {
+            Some(Local::Mem(p)) => {
+                if let Some(init) = v.init {
+                    let m = self.next;
+                    self.init(init, p, ty);
+                    self.next = m;
+                }
+            }
+            _ => {
+                if self.needs_mem(d, ty) {
+                    // Not hoisted (a condition variable of a loop iteration).
+                    let is_const = self.b.ast().types.canonical(q).has_const_bit();
+                    let p = self.reg();
+                    self.alloc_var(p, ty, d, is_const);
+                    self.locals.insert(d, Local::Mem(p));
+                    if let Some(init) = v.init {
+                        let m = self.next;
+                        self.init(init, p, ty);
+                        self.next = m;
+                    }
+                } else {
+                    let r = self.reg();
+                    if let Some(init) = v.init {
+                        let m = self.next;
+                        self.rv_into(init, r);
+                        self.next = m;
+                    }
+                    self.locals.insert(d, Local::Reg(r));
+                }
+            }
+        }
+    }
+}
+
+// ---- expressions ---------------------------------------------------------
+
+/// `(width, signed)` of an integral or bool type.
+fn int_of(k: TyKind) -> Option<(u32, bool)> {
+    match k {
+        TyKind::Bool => Some((1, false)),
+        TyKind::Int { width, signed } => Some((u32::from(width), signed)),
+        _ => None,
+    }
+}
+
+fn scalar_bits(s: &Scalar<'_>) -> Option<u128> {
+    match s {
+        Scalar::Int { bits, signed, .. } => {
+            let w = bits.width();
+            bits.to_u128().map(|v| crate::arith::canon(v, w, *signed))
+        }
+        Scalar::Bool { value, .. } => Some(u128::from(*value)),
+        Scalar::Float { bits, .. } => Some(*bits),
+        Scalar::Null { .. } => Some(0),
+        _ => None,
+    }
+}
+
+fn int_op(op: BinaryOp) -> Option<Op> {
+    Some(match op {
+        BinaryOp::Mul | BinaryOp::MulAssign => Op::IMul,
+        BinaryOp::Div | BinaryOp::DivAssign => Op::IDiv,
+        BinaryOp::Rem | BinaryOp::RemAssign => Op::IRem,
+        BinaryOp::Add | BinaryOp::AddAssign => Op::IAdd,
+        BinaryOp::Sub | BinaryOp::SubAssign => Op::ISub,
+        BinaryOp::Shl | BinaryOp::ShlAssign => Op::IShl,
+        BinaryOp::Shr | BinaryOp::ShrAssign => Op::IShr,
+        BinaryOp::And | BinaryOp::AndAssign => Op::IAnd,
+        BinaryOp::Xor | BinaryOp::XorAssign => Op::IXor,
+        BinaryOp::Or | BinaryOp::OrAssign => Op::IOr,
+        _ => return None,
+    })
+}
+
+fn float_op(op: Op) -> Option<Op> {
+    Some(match op {
+        Op::IAdd => Op::FAdd,
+        Op::ISub => Op::FSub,
+        Op::IMul => Op::FMul,
+        Op::IDiv => Op::FDiv,
+        _ => return None,
+    })
+}
+
+fn cmp_of(op: BinaryOp) -> Option<u32> {
+    Some(match op {
+        BinaryOp::EQ => cmp::EQ,
+        BinaryOp::NE => cmp::NE,
+        BinaryOp::LT => cmp::LT,
+        BinaryOp::LE => cmp::LE,
+        BinaryOp::GT => cmp::GT,
+        BinaryOp::GE => cmp::GE,
+        _ => return None,
+    })
+}
+
+impl Compiler<'_> {
+    fn ast(&self) -> &kiln_ast::Ast {
+        self.b.ast()
+    }
+
+    fn node(&self, e: ExprId) -> kiln_ast::expr::ExprNode {
+        *self.b.ast().exprs.get(e)
+    }
+
+    fn kind(&self, t: OTy) -> TyKind {
+        self.o.types.kind(t)
+    }
+
+    /// Evaluates scalar prvalue `e` into some register (possibly a local's
+    /// own register: the caller must not write it).
+    fn rv(&mut self, e: ExprId) -> u32 {
+        let ast = self.ast();
+        let e0 = skip_parens(ast, e);
+        let n = *ast.exprs.get(e0);
+        if n.kind() == ExprKind::ImplicitCastExpr && ast.exprs.cast_kind(e0) == CastKind::LValueToRValue {
+            let op = skip_parens(ast, ast.exprs.operand(e0));
+            if ast.exprs.get(op).kind() == ExprKind::DeclRefExpr {
+                if let Some(Local::Reg(r)) = self.locals.get(&ast.exprs.decl(op)).copied() {
+                    return r;
+                }
+            }
+        }
+        if n.kind() == ExprKind::CallExpr {
+            return self.call(e0, None);
+        }
+        let r = self.reg();
+        self.rv_into(e, r);
+        r
+    }
+
+    /// Evaluates scalar prvalue `e` into a fresh register.
+    fn rv_copy(&mut self, e: ExprId) -> u32 {
+        let r = self.reg();
+        self.rv_into(e, r);
+        r
+    }
+
+    fn rv_into(&mut self, e: ExprId, dst: u32) {
+        let m = self.next.max(dst + 1);
+        self.next = m;
+        self.rv_inner(e, dst);
+        self.next = m;
+    }
+
+    fn rv_inner(&mut self, e: ExprId, dst: u32) {
+        let n = self.node(e);
+        let ty = self.ety(e);
+        match n.kind() {
+            ExprKind::IntegerLiteral => {
+                let v = eval_int(self.ast(), e).unwrap_or(0);
+                let (w, s) = int_of(self.kind(ty)).unwrap_or((64, true));
+                self.konst(dst, crate::arith::canon(v, w, s));
+            }
+            ExprKind::CharacterLiteral => {
+                let v = u128::from(self.ast().exprs.char_value(e));
+                let (w, s) = int_of(self.kind(ty)).unwrap_or((32, false));
+                self.konst(dst, crate::arith::canon(v, w, s));
+            }
+            ExprKind::CXXBoolLiteralExpr => {
+                let v = self.ast().exprs.bool_value(e);
+                self.konst(dst, u128::from(v));
+            }
+            ExprKind::CXXNullPtrLiteralExpr | ExprKind::GNUNullExpr | ExprKind::ImplicitValueInitExpr => {
+                self.konst(dst, 0);
+            }
+            ExprKind::FloatingLiteral => {
+                let ast = self.ast();
+                let v = ast.exprs.literal_const(e).and_then(|c| ast.consts.scalar(c)).and_then(|s| scalar_bits(&s));
+                self.konst(dst, v.unwrap_or(0));
+            }
+            ExprKind::ParenExpr => {
+                let op = self.ast().exprs.operand(e);
+                self.rv_inner(op, dst);
+            }
+            ExprKind::ConstantExpr => {
+                let ast = self.ast();
+                let v = ast.exprs.constant_value(e).and_then(|c| ast.consts.scalar(c)).and_then(|s| scalar_bits(&s));
+                if let Some(v) = v {
+                    self.konst(dst, v);
+                } else {
+                    let op = ast.exprs.operand(e);
+                    self.rv_inner(op, dst);
+                }
+            }
+            ExprKind::DeclRefExpr => {
+                let ast = self.ast();
+                let d = ast.exprs.decl(e);
+                if let Some(v) = ast.decls.enumerator(d).and_then(|x| x.value) {
+                    let bits = ast.consts.scalar(v).and_then(|s| scalar_bits(&s)).unwrap_or(0);
+                    let (w, s) = int_of(self.kind(ty)).unwrap_or((64, true));
+                    self.konst(dst, crate::arith::canon(bits, w, s));
+                } else if ast.decls.get(d).kind().is_function() {
+                    let f = self.o.func_index(self.b.ast(), d);
+                    self.konst(dst, u128::from(fn_ptr(f)));
+                } else {
+                    self.unsupported(e);
+                }
+            }
+            ExprKind::UnaryExprOrTypeTraitExpr => self.trait_expr(e, dst, ty),
+            ExprKind::UnaryOperator => self.unary(e, dst, ty),
+            ExprKind::BinaryOperator => self.binary(e, dst, ty),
+            ExprKind::CompoundAssignOperator => {
+                let place = self.compound_assign(e);
+                self.load(place, ty, ak::READ, e, dst);
+            }
+            ExprKind::ConditionalOperator => {
+                let c = self.rv(ExprId::new(n.a()));
+                let [t, f] = self.ast().exprs.cond_arms(e);
+                let j = self.jmp_if(c, false);
+                self.rv_into(t, dst);
+                let end = self.jmp();
+                self.patch_here(j);
+                self.rv_into(f, dst);
+                self.patch_here(end);
+            }
+            ExprKind::CallExpr => {
+                let r = self.call(e, None);
+                if r != dst {
+                    self.emit(Op::Mov, 0, &[dst, r]);
+                }
+            }
+            ExprKind::InitListExpr => {
+                let inits = self.ast().lists.get(self.ast().exprs.init_list_inits(e)).to_vec();
+                match inits.first() {
+                    Some(&x) => self.rv_inner(ExprId::new(x), dst),
+                    None => self.konst(dst, 0),
+                }
+            }
+            k if k.is_cast() => self.cast(e, dst, ty),
+            _ if n.value_category().is_glvalue() => {
+                // A glvalue used as a value (an lvalue-to-rvalue conversion
+                // sema left implicit).
+                let p = self.lv(e, Access::Read);
+                self.load(p, ty, ak::READ, e, dst);
+            }
+            _ => self.unsupported(e),
+        }
+    }
+
+    fn trait_expr(&mut self, e: ExprId, dst: u32, ty: OTy) {
+        let ast = self.ast();
+        let kind = ast.exprs.trait_kind(e);
+        let q = match ast.exprs.trait_type_arg(e) {
+            Some(q) => q,
+            None => {
+                let op = ExprId::new(ast.exprs.get(e).a());
+                ast.exprs.get(op).ty()
+            }
+        };
+        let t = self.ty(q);
+        let v = match kind {
+            TraitKind::SizeOf => self.o.types.size(t),
+            TraitKind::AlignOf | TraitKind::PreferredAlignOf => u64::from(self.o.types.info(t).align),
+            _ => {
+                self.unsupported(e);
+                return;
+            }
+        };
+        let (w, s) = int_of(self.kind(ty)).unwrap_or((64, false));
+        self.konst(dst, crate::arith::canon(u128::from(v), w, s));
+    }
+
+    fn unary(&mut self, e: ExprId, dst: u32, ty: OTy) {
+        let op = self.ast().exprs.unary_op(e);
+        let x = self.ast().exprs.operand(e);
+        match op {
+            UnaryOp::Plus => self.rv_inner(x, dst),
+            UnaryOp::Minus => {
+                let r = self.rv(x);
+                match self.kind(ty) {
+                    TyKind::Float(k) => {
+                        self.emit(Op::FNeg, float_code(k), &[dst, r]);
+                    }
+                    k => {
+                        let (w, s) = int_of(k).unwrap_or((32, true));
+                        self.emit_at(Op::INeg, int_aux(w as u8, s), &[dst, r], e);
+                    }
+                }
+            }
+            UnaryOp::Not => {
+                let r = self.rv(x);
+                let (w, s) = int_of(self.kind(ty)).unwrap_or((32, true));
+                self.emit(Op::INot, int_aux(w as u8, s), &[dst, r]);
+            }
+            UnaryOp::LNot => {
+                let r = self.rv(x);
+                self.emit(Op::LNot, 0, &[dst, r]);
+            }
+            UnaryOp::AddrOf => {
+                let x0 = skip_parens(self.ast(), x);
+                let xn = self.node(x0);
+                let xty = self.ety(x0);
+                if self.kind(xty) == TyKind::Func {
+                    let r = self.fn_lv(x0);
+                    self.emit(Op::Mov, 0, &[dst, r]);
+                    return;
+                }
+                let _ = xn;
+                let p = self.lv_mem(x, Access::Addr);
+                if p != dst {
+                    self.emit(Op::Mov, 0, &[dst, p]);
+                }
+            }
+            UnaryOp::Deref => {
+                let p = self.lv(e, Access::Read);
+                self.load(p, ty, ak::READ, e, dst);
+            }
+            UnaryOp::PostInc | UnaryOp::PostDec | UnaryOp::PreInc | UnaryOp::PreDec => {
+                let place = self.lv(x, Access::Rmw);
+                let xty = self.ety(x);
+                self.inc_dec(place, xty, op, Some(dst), e);
+            }
+            _ => self.unsupported(e),
+        }
+    }
+
+    /// Increment/decrement of `place`; `out` receives the old value for a
+    /// postfix operator, the new one for a prefix one.
+    fn inc_dec(&mut self, place: Place, ty: OTy, op: UnaryOp, out: Option<u32>, e: ExprId) {
+        let inc = matches!(op, UnaryOp::PostInc | UnaryOp::PreInc);
+        let akind = if inc { ak::INCREMENT } else { ak::DECREMENT };
+        let old = self.reg();
+        self.load(place, ty, akind, e, old);
+        let new = self.reg();
+        match self.kind(ty) {
+            TyKind::Float(k) => {
+                let one = self.reg();
+                let bits = crate::arith::int_to_float(k, 1, true).unwrap_or(0);
+                self.konst(one, bits);
+                self.emit_at(if inc { Op::FAdd } else { Op::FSub }, float_code(k), &[new, old, one], e);
+            }
+            TyKind::Ptr(pointee) => {
+                let one = self.reg();
+                self.konst(one, 1);
+                let aux = int_aux(64, true) | u32::from(!inc) << 9;
+                self.emit_at(Op::PtrAdd, aux, &[new, old, one, pointee.0], e);
+            }
+            k => {
+                let (w, s) = int_of(k).unwrap_or((32, true));
+                let one = self.reg();
+                self.konst(one, 1);
+                if k == TyKind::Bool {
+                    // C++17 removed `++` on bool; `--` never existed. Sema
+                    // rejects both; treat as `= true` for robustness.
+                    self.konst(new, 1);
+                } else {
+                    self.emit_at(if inc { Op::IAdd } else { Op::ISub }, int_aux(w as u8, s), &[new, old, one], e);
+                }
+            }
+        }
+        self.store(place, new, ty, akind, e);
+        if let Some(out) = out {
+            let postfix = matches!(op, UnaryOp::PostInc | UnaryOp::PostDec);
+            let src = if postfix { old } else { new };
+            if let Place::Bits { .. } = place {
+                if !postfix {
+                    // The value of the bit-field after the store.
+                    self.load(place, ty, ak::READ, e, out);
+                    return;
+                }
+            }
+            self.emit(Op::Mov, 0, &[out, src]);
+        }
+    }
+
+    fn binary(&mut self, e: ExprId, dst: u32, ty: OTy) {
+        let op = self.ast().exprs.binary_op(e);
+        let [a, b] = self.ast().exprs.operands(e);
+        match op {
+            BinaryOp::Comma => {
+                self.effect(a);
+                self.rv_inner(b, dst);
+            }
+            BinaryOp::LAnd | BinaryOp::LOr => {
+                self.rv_into(a, dst);
+                let j = self.jmp_if(dst, op == BinaryOp::LOr);
+                self.rv_into(b, dst);
+                self.patch_here(j);
+            }
+            BinaryOp::Assign => {
+                let place = self.assign(e);
+                self.load(place, ty, ak::READ, e, dst);
+            }
+            _ if op.is_compound_assignment() => {
+                let place = self.compound_assign(e);
+                self.load(place, ty, ak::READ, e, dst);
+            }
+            _ => {
+                let at = self.ety(a);
+                let bt = self.ety(b);
+                let (ak_, bk) = (self.kind(at), self.kind(bt));
+                if let Some(c) = cmp_of(op) {
+                    let ra = self.rv(a);
+                    let rb = self.rv(b);
+                    match (ak_, bk) {
+                        (TyKind::Float(k), _) => {
+                            self.emit_at(Op::FCmp, float_code(k) | c << 4, &[dst, ra, rb], e);
+                        }
+                        (TyKind::Ptr(p), _) | (_, TyKind::Ptr(p)) => {
+                            self.emit_at(Op::PtrCmp, c, &[dst, ra, rb, p.0], e);
+                        }
+                        (TyKind::NullPtr, _) => {
+                            self.konst(dst, u128::from(matches!(c, cmp::EQ | cmp::LE | cmp::GE)));
+                        }
+                        (k, _) => {
+                            let (w, s) = int_of(k).unwrap_or((32, true));
+                            self.emit(Op::ICmp, int_aux(w as u8, s) | c << 9, &[dst, ra, rb]);
+                        }
+                    }
+                    return;
+                }
+                if matches!(op, BinaryOp::Add | BinaryOp::Sub) {
+                    if let (TyKind::Ptr(pa), TyKind::Ptr(_)) = (ak_, bk) {
+                        let ra = self.rv(a);
+                        let rb = self.rv(b);
+                        self.emit_at(Op::PtrSub, 0, &[dst, ra, rb, pa.0], e);
+                        return;
+                    }
+                    let ptr_side = match (ak_, bk) {
+                        (TyKind::Ptr(p), k) => Some((a, b, p, k)),
+                        (k, TyKind::Ptr(p)) => Some((b, a, p, k)),
+                        _ => None,
+                    };
+                    if let Some((pe, ie, pointee, ik)) = ptr_side {
+                        let (rp, ri) = if pe == a {
+                            let rp = self.rv(pe);
+                            (rp, self.rv(ie))
+                        } else {
+                            let ri = self.rv(ie);
+                            (self.rv(pe), ri)
+                        };
+                        let (w, s) = int_of(ik).unwrap_or((64, true));
+                        let aux = int_aux(w as u8, s) | u32::from(op == BinaryOp::Sub) << 9;
+                        self.emit_at(Op::PtrAdd, aux, &[dst, rp, ri, pointee.0], e);
+                        return;
+                    }
+                }
+                let Some(iop) = int_op(op) else {
+                    self.unsupported(e);
+                    return;
+                };
+                let shift = matches!(iop, Op::IShl | Op::IShr);
+                // [expr.shift]/4: the left operand is sequenced first.
+                let ra = if shift { self.rv_copy(a) } else { self.rv(a) };
+                let rb = self.rv(b);
+                self.arith(iop, ty, bt, dst, ra, rb, e);
+            }
+        }
+    }
+
+    /// `dst = a op b` in type `ty` (`bt`: the right operand's type, for
+    /// shifts).
+    fn arith(&mut self, iop: Op, ty: OTy, bt: OTy, dst: u32, ra: u32, rb: u32, e: ExprId) {
+        match self.kind(ty) {
+            TyKind::Float(k) => match float_op(iop) {
+                Some(fop) => {
+                    self.emit_at(fop, float_code(k), &[dst, ra, rb], e);
+                }
+                None => self.unsupported(e),
+            },
+            k => {
+                let (w, s) = int_of(k).unwrap_or((32, true));
+                let mut aux = int_aux(w as u8, s);
+                if matches!(iop, Op::IShl | Op::IShr) {
+                    let (cw, cs) = int_of(self.kind(bt)).unwrap_or((32, true));
+                    aux |= cw << 9 | u32::from(cs) << 17;
+                }
+                self.emit_at(iop, aux, &[dst, ra, rb], e);
+            }
+        }
+    }
+
+    /// Converts `src` of type `from` to `to` into `dst`.
+    fn convert(&mut self, src: u32, from: OTy, to: OTy, dst: u32, e: ExprId) {
+        let (fk, tk) = (self.kind(from), self.kind(to));
+        match (fk, tk) {
+            _ if fk == tk => {
+                if src != dst {
+                    self.emit(Op::Mov, 0, &[dst, src]);
+                }
+            }
+            (TyKind::Int { .. } | TyKind::Bool, TyKind::Bool) => {
+                let (w, _) = int_of(fk).unwrap_or((32, true));
+                self.emit(Op::ToBool, w, &[dst, src]);
+            }
+            (TyKind::Int { .. } | TyKind::Bool, TyKind::Int { width, signed }) => {
+                let (w, s) = int_of(fk).unwrap_or((32, true));
+                let aux = w | u32::from(s) << 8 | u32::from(width) << 9 | u32::from(signed) << 17;
+                self.emit(Op::ICast, aux, &[dst, src]);
+            }
+            (TyKind::Int { .. } | TyKind::Bool, TyKind::Float(k)) => {
+                let (w, s) = int_of(fk).unwrap_or((32, true));
+                self.emit_at(Op::IToF, w | u32::from(s) << 8 | float_code(k) << 9, &[dst, src], e);
+            }
+            (TyKind::Float(k), TyKind::Bool) => {
+                self.emit(Op::FToBool, float_code(k), &[dst, src]);
+            }
+            (TyKind::Float(k), TyKind::Int { width, signed }) => {
+                let aux = float_code(k) | u32::from(width) << 4 | u32::from(signed) << 12;
+                self.emit_at(Op::FToI, aux, &[dst, src], e);
+            }
+            (TyKind::Float(a), TyKind::Float(b)) => {
+                self.emit_at(Op::FCast, float_code(a) | float_code(b) << 4, &[dst, src], e);
+            }
+            (TyKind::Ptr(_), TyKind::Bool) => {
+                self.emit(Op::PtrToBool, 0, &[dst, src]);
+            }
+            (TyKind::NullPtr, TyKind::Bool) => self.konst(dst, 0),
+            (TyKind::Ptr(_) | TyKind::NullPtr, TyKind::Ptr(_) | TyKind::NullPtr) => {
+                if src != dst {
+                    self.emit(Op::Mov, 0, &[dst, src]);
+                }
+            }
+            _ => self.unsupported(e),
+        }
+    }
+
+    fn cast(&mut self, e: ExprId, dst: u32, ty: OTy) {
+        let ast = self.ast();
+        let ck = ast.exprs.cast_kind(e);
+        let op = ast.exprs.operand(e);
+        let ek = ast.exprs.get(e).kind();
+        match ck {
+            CastKind::LValueToRValue => {
+                let opn = self.node(op);
+                if opn.ty().quals_bits() & 2 != 0 {
+                    self.trap(e, "read of volatile-qualified type is not allowed in a constant expression");
+                    return;
+                }
+                let p = self.lv(op, Access::Read);
+                self.load(p, ty, ak::READ, op, dst);
+            }
+            CastKind::NoOp => self.rv_inner(op, dst),
+            CastKind::ToVoid => self.effect(op),
+            CastKind::NullToPointer => {
+                self.effect(op);
+                self.konst(dst, 0);
+            }
+            CastKind::ArrayToPointerDecay => {
+                let p = self.lv_mem(op, Access::Addr);
+                if p != dst {
+                    self.emit(Op::Mov, 0, &[dst, p]);
+                }
+            }
+            CastKind::FunctionToPointerDecay => {
+                let r = self.fn_lv(op);
+                if r != dst {
+                    self.emit(Op::Mov, 0, &[dst, r]);
+                }
+            }
+            CastKind::IntegralCast
+            | CastKind::IntegralToBoolean
+            | CastKind::IntegralToFloating
+            | CastKind::FloatingToIntegral
+            | CastKind::FloatingToBoolean
+            | CastKind::FloatingCast
+            | CastKind::PointerToBoolean => {
+                let from = self.ety(op);
+                let r = self.rv(op);
+                self.convert(r, from, ty, dst, e);
+            }
+            CastKind::BitCast => {
+                let from = self.ety(op);
+                let (fk, tk) = (self.kind(from), self.kind(ty));
+                let r = self.rv(op);
+                match (fk, tk) {
+                    (TyKind::Ptr(fp), TyKind::Ptr(tp)) => {
+                        let fvoid = self.kind(fp) == TyKind::Void;
+                        let tvoid = self.kind(tp) == TyKind::Void;
+                        if tvoid || fp == tp {
+                            self.emit(Op::Mov, 0, &[dst, r]);
+                        } else if fvoid && ek != ExprKind::CXXReinterpretCastExpr {
+                            self.emit_at(Op::VoidCast, 0, &[dst, r, tp.0], e);
+                        } else {
+                            self.trap(e, "cast that performs the conversions of a reinterpret_cast is not allowed in a constant expression");
+                        }
+                    }
+                    _ => self.trap(e, "cast that performs the conversions of a reinterpret_cast is not allowed in a constant expression"),
+                }
+            }
+            CastKind::IntegralToPointer | CastKind::PointerToIntegral => {
+                self.trap(e, "cast that performs the conversions of a reinterpret_cast is not allowed in a constant expression");
+            }
+            _ => self.unsupported(e),
+        }
+    }
+
+    /// The function an lvalue of function type designates, as a function
+    /// pointer.
+    fn fn_lv(&mut self, e: ExprId) -> u32 {
+        let e = skip_parens(self.ast(), e);
+        let n = self.node(e);
+        match n.kind() {
+            ExprKind::DeclRefExpr => {
+                let d = self.ast().exprs.decl(e);
+                let f = self.o.func_index(self.b.ast(), d);
+                let r = self.reg();
+                self.konst(r, u128::from(fn_ptr(f)));
+                r
+            }
+            ExprKind::UnaryOperator if self.ast().exprs.unary_op(e) == UnaryOp::Deref => {
+                let x = self.ast().exprs.operand(e);
+                self.rv(x)
+            }
+            _ => {
+                self.unsupported(e);
+                self.reg()
+            }
+        }
+    }
+
+    // ---- places -----------------------------------------------------------
+
+    fn load(&mut self, place: Place, ty: OTy, akind: u32, e: ExprId, dst: u32) {
+        match place {
+            Place::Reg(r) => {
+                if r != dst {
+                    self.emit(Op::Mov, 0, &[dst, r]);
+                }
+            }
+            Place::Mem(p) => {
+                self.emit_at(Op::Load, akind, &[dst, p, ty.0], e);
+            }
+            Place::Bits { p, bit, width } => {
+                self.emit_at(Op::LoadBits, akind, &[dst, p, ty.0, bit | width << 8], e);
+            }
+        }
+    }
+
+    fn store(&mut self, place: Place, src: u32, ty: OTy, akind: u32, e: ExprId) {
+        match place {
+            Place::Reg(r) => {
+                if r != src {
+                    self.emit(Op::Mov, 0, &[r, src]);
+                }
+            }
+            Place::Mem(p) => {
+                self.emit_at(Op::Store, akind, &[p, src, ty.0], e);
+            }
+            Place::Bits { p, bit, width } => {
+                self.emit_at(Op::StoreBits, 0, &[p, src, ty.0, bit | width << 8], e);
+            }
+        }
+    }
+
+    /// A glvalue that must have an address.
+    fn lv_mem(&mut self, e: ExprId, acc: Access) -> u32 {
+        match self.lv(e, acc) {
+            Place::Mem(p) => p,
+            Place::Reg(_) | Place::Bits { .. } => {
+                self.trap(e, "kiln: internal: the address of a register value was taken");
+                self.reg()
+            }
+        }
+    }
+
+    fn lv(&mut self, e: ExprId, acc: Access) -> Place {
+        let n = self.node(e);
+        match n.kind() {
+            ExprKind::ParenExpr => {
+                let op = self.ast().exprs.operand(e);
+                self.lv(op, acc)
+            }
+            ExprKind::DeclRefExpr => {
+                let ast = self.ast();
+                let d = ast.exprs.decl(e);
+                if let Some(l) = self.locals.get(&d).copied() {
+                    return match l {
+                        Local::Reg(r) => Place::Reg(r),
+                        Local::Mem(p) => Place::Mem(p),
+                    };
+                }
+                if is_local_var(ast, d) {
+                    self.trap(e, "kiln: internal: a local variable without storage");
+                    return Place::Mem(self.reg());
+                }
+                if ast.decls.get(d).kind() != DeclKind::Var {
+                    self.unsupported(e);
+                    return Place::Mem(self.reg());
+                }
+                let g = self.o.global_index(self.b.ast(), d);
+                let r = self.reg();
+                self.emit_at(Op::GlobalAddr, 0, &[r, g], e);
+                Place::Mem(r)
+            }
+            ExprKind::StringLiteral => {
+                let s = self.ast().exprs.string_lit(e);
+                let ty = self.ety(e);
+                let g = self.o.string_index(s, ty);
+                let r = self.reg();
+                self.emit_at(Op::GlobalAddr, 0, &[r, g], e);
+                Place::Mem(r)
+            }
+            ExprKind::MemberExpr => self.member(e, acc),
+            ExprKind::ArraySubscriptExpr => {
+                let ast = self.ast();
+                let [a, b] = ast.exprs.operands(e);
+                let a_is_ptr = matches!(
+                    ast.types.canonical_view(ast.exprs.get(a).ty()),
+                    TypeView::Pointer(_)
+                );
+                let (pe, ie) = if a_is_ptr { (a, b) } else { (b, a) };
+                let ety = self.ety(e);
+                let pe0 = skip_parens(self.ast(), pe);
+                let pn = self.node(pe0);
+                let decay = pn.kind() == ExprKind::ImplicitCastExpr
+                    && self.ast().exprs.cast_kind(pe0) == CastKind::ArrayToPointerDecay;
+                let (p, i) = if decay {
+                    let inner = self.ast().exprs.operand(pe0);
+                    let sub = if acc == Access::Addr { Access::Addr } else { acc };
+                    if pe == a {
+                        let p = self.lv_mem(inner, sub);
+                        (p, self.rv(ie))
+                    } else {
+                        let i = self.rv(ie);
+                        (self.lv_mem(inner, sub), i)
+                    }
+                } else if pe == a {
+                    let p = self.rv(pe);
+                    (p, self.rv(ie))
+                } else {
+                    let i = self.rv(ie);
+                    (self.rv(pe), i)
+                };
+                let it = self.ety(ie);
+                let (w, s) = int_of(self.kind(it)).unwrap_or((64, true));
+                let r = self.reg();
+                self.emit_at(Op::PtrAdd, int_aux(w as u8, s), &[r, p, i, ety.0], e);
+                Place::Mem(r)
+            }
+            ExprKind::UnaryOperator => {
+                let op = self.ast().exprs.unary_op(e);
+                let x = self.ast().exprs.operand(e);
+                match op {
+                    UnaryOp::Deref => Place::Mem(self.rv(x)),
+                    UnaryOp::PreInc | UnaryOp::PreDec => {
+                        let place = self.lv(x, Access::Rmw);
+                        let xty = self.ety(x);
+                        self.inc_dec(place, xty, op, None, e);
+                        place
+                    }
+                    _ => {
+                        self.unsupported(e);
+                        Place::Mem(self.reg())
+                    }
+                }
+            }
+            ExprKind::BinaryOperator => {
+                let op = self.ast().exprs.binary_op(e);
+                match op {
+                    BinaryOp::Assign => self.assign(e),
+                    BinaryOp::Comma => {
+                        let [a, b] = self.ast().exprs.operands(e);
+                        self.effect(a);
+                        self.lv(b, acc)
+                    }
+                    _ if op.is_compound_assignment() => self.compound_assign(e),
+                    _ => {
+                        self.unsupported(e);
+                        Place::Mem(self.reg())
+                    }
+                }
+            }
+            ExprKind::CompoundAssignOperator => self.compound_assign(e),
+            ExprKind::ConditionalOperator => {
+                let c = self.rv(ExprId::new(n.a()));
+                let [t, f] = self.ast().exprs.cond_arms(e);
+                let r = self.reg();
+                let j = self.jmp_if(c, false);
+                let pt = self.lv_mem(t, acc);
+                self.emit(Op::Mov, 0, &[r, pt]);
+                let end = self.jmp();
+                self.patch_here(j);
+                let pf = self.lv_mem(f, acc);
+                self.emit(Op::Mov, 0, &[r, pf]);
+                self.patch_here(end);
+                Place::Mem(r)
+            }
+            ExprKind::ConstantExpr => {
+                let op = self.ast().exprs.operand(e);
+                self.lv(op, acc)
+            }
+            k if k.is_cast() && self.ast().exprs.cast_kind(e) == CastKind::NoOp => {
+                let op = self.ast().exprs.operand(e);
+                self.lv(op, acc)
+            }
+            ExprKind::CallExpr if !n.value_category().is_glvalue() => {
+                // A class prvalue used as a glvalue: materialize it.
+                let ty = self.ety(e);
+                let r = self.reg();
+                self.alloc(r, ty, Origin::Temp(e), false, e);
+                self.init(e, r, ty);
+                Place::Mem(r)
+            }
+            _ => {
+                self.unsupported(e);
+                Place::Mem(self.reg())
+            }
+        }
+    }
+
+    fn member(&mut self, e: ExprId, acc: Access) -> Place {
+        let ast = self.ast();
+        let n = *ast.exprs.get(e);
+        let base = ExprId::new(n.a());
+        let fd = ast.exprs.decl(e);
+        let arrow = n.has(kiln_ast::expr::ExprFlags::ARROW);
+        let bq = ast.exprs.get(base).ty();
+        let bt = self.ty(bq);
+        let rt = if arrow {
+            match self.kind(bt) {
+                TyKind::Ptr(p) => p,
+                _ => bt,
+            }
+        } else {
+            bt
+        };
+        let (union, idx) = match self.kind(rt) {
+            TyKind::Record { union, .. } => {
+                (union, self.o.types.fields(rt).iter().position(|f| f.decl == fd))
+            }
+            _ => (false, None),
+        };
+        let Some(idx) = idx else {
+            self.unsupported(e);
+            return Place::Mem(self.reg());
+        };
+        let fi = self.o.types.fields(rt)[idx];
+        let p = if arrow {
+            self.rv(base)
+        } else {
+            let sub = match acc {
+                Access::Write => Access::Write,
+                Access::Addr => Access::Addr,
+                Access::Read | Access::Rmw => Access::Read,
+            };
+            self.lv_mem(base, sub)
+        };
+        if union {
+            match acc {
+                Access::Write => {
+                    self.emit_at(Op::SetActive, 0, &[p, idx as u32, rt.0], e);
+                }
+                Access::Read | Access::Rmw => {
+                    let akind = if acc == Access::Read { ak::READ } else { ak::ASSIGN };
+                    self.emit_at(Op::ActiveCheck, akind, &[p, idx as u32, rt.0], e);
+                }
+                Access::Addr => {}
+            }
+        }
+        let q = if fi.offset == 0 {
+            p
+        } else {
+            let r = self.reg();
+            self.emit_at(Op::Field, 0, &[r, p, fi.offset as u32], e);
+            r
+        };
+        match fi.width {
+            Some(w) => Place::Bits { p: q, bit: fi.bit, width: w },
+            None => Place::Mem(q),
+        }
+    }
+
+    /// `a = b` (scalar or trivially copyable aggregate); returns the place.
+    fn assign(&mut self, e: ExprId) -> Place {
+        let [a, b] = self.ast().exprs.operands(e);
+        let ty = self.ety(a);
+        if self.o.types.is_aggregate(ty) {
+            let src = self.lv_mem(b, Access::Read);
+            let dstp = self.lv_mem(a, Access::Write);
+            self.emit_at(Op::Copy, 0, &[dstp, src, ty.0], e);
+            return Place::Mem(dstp);
+        }
+        // [expr.assign]/1: the right operand is sequenced first.
+        let r = self.rv_copy(b);
+        let place = self.lv(a, Access::Write);
+        self.store(place, r, ty, ak::ASSIGN, e);
+        place
+    }
+
+    fn compound_assign(&mut self, e: ExprId) -> Place {
+        let ast = self.ast();
+        let n = *ast.exprs.get(e);
+        let x = *ast.exprs.compound_assign(e);
+        let op = ast.exprs.binary_op(e);
+        let lhs = ExprId::new(n.a());
+        let r = self.rv_copy(x.rhs);
+        let place = self.lv(lhs, Access::Rmw);
+        let ty = self.ety(lhs);
+        let rty = self.ety(x.rhs);
+        let old = self.reg();
+        self.load(place, ty, ak::COMPOUND, e, old);
+        let new = self.reg();
+        if let TyKind::Ptr(pointee) = self.kind(ty) {
+            let (w, s) = int_of(self.kind(rty)).unwrap_or((64, true));
+            let aux = int_aux(w as u8, s) | u32::from(op == BinaryOp::SubAssign) << 9;
+            self.emit_at(Op::PtrAdd, aux, &[new, old, r, pointee.0], e);
+        } else {
+            let lt = self.ty(x.lhs_ty);
+            let ct = self.ty(x.result_ty);
+            let Some(iop) = int_op(op) else {
+                self.unsupported(e);
+                return place;
+            };
+            let shift = matches!(iop, Op::IShl | Op::IShr);
+            let a = self.reg();
+            self.convert(old, ty, lt, a, e);
+            let b = if shift {
+                r
+            } else {
+                let b = self.reg();
+                self.convert(r, rty, ct, b, e);
+                b
+            };
+            let a2 = if shift || lt == ct {
+                a
+            } else {
+                let a2 = self.reg();
+                self.convert(a, lt, ct, a2, e);
+                a2
+            };
+            let res = self.reg();
+            self.arith(iop, ct, rty, res, a2, b, e);
+            self.convert(res, ct, ty, new, e);
+        }
+        self.store(place, new, ty, ak::COMPOUND, e);
+        place
+    }
+
+    // ---- initialization ---------------------------------------------------
+
+    /// Initializes the object of type `ty` at `p` from `e`.
+    fn init(&mut self, e: ExprId, p: u32, ty: OTy) {
+        let m = self.next.max(p + 1);
+        self.next = m;
+        self.init_inner(e, p, ty);
+        self.next = m;
+    }
+
+    fn init_inner(&mut self, e: ExprId, p: u32, ty: OTy) {
+        let n = self.node(e);
+        match n.kind() {
+            ExprKind::ParenExpr | ExprKind::ConstantExpr => {
+                let op = self.ast().exprs.operand(e);
+                return self.init_inner(op, p, ty);
+            }
+            ExprKind::ImplicitValueInitExpr => {
+                self.emit_at(Op::ZeroInit, 0, &[p, ty.0], e);
+                return;
+            }
+            _ => {}
+        }
+        if !self.o.types.is_aggregate(ty) {
+            let r = self.rv(e);
+            self.emit_at(Op::InitStore, 0, &[p, r, ty.0], e);
+            return;
+        }
+        match n.kind() {
+            ExprKind::InitListExpr => self.init_list(e, p, ty),
+            ExprKind::StringLiteral => {
+                let sty = self.ety(e);
+                let s = self.ast().exprs.string_lit(e);
+                let g = self.o.string_index(s, sty);
+                let r = self.reg();
+                self.emit_at(Op::GlobalAddr, 0, &[r, g], e);
+                if self.o.types.size(sty) < self.o.types.size(ty) {
+                    self.emit_at(Op::ZeroInit, 0, &[p, ty.0], e);
+                }
+                let cty = if self.o.types.size(sty) <= self.o.types.size(ty) { sty } else { ty };
+                self.emit_at(Op::Copy, 1, &[p, r, cty.0], e);
+            }
+            ExprKind::CallExpr => {
+                self.call(e, Some(p));
+            }
+            ExprKind::ConditionalOperator => {
+                let c = self.rv(ExprId::new(n.a()));
+                let [t, f] = self.ast().exprs.cond_arms(e);
+                let j = self.jmp_if(c, false);
+                self.init(t, p, ty);
+                let end = self.jmp();
+                self.patch_here(j);
+                self.init(f, p, ty);
+                self.patch_here(end);
+            }
+            ExprKind::BinaryOperator if self.ast().exprs.binary_op(e) == BinaryOp::Comma => {
+                let [a, b] = self.ast().exprs.operands(e);
+                self.effect(a);
+                self.init_inner(b, p, ty);
+            }
+            k if k.is_cast()
+                && matches!(self.ast().exprs.cast_kind(e), CastKind::NoOp | CastKind::LValueToRValue) =>
+            {
+                let op = self.ast().exprs.operand(e);
+                if self.node(op).value_category().is_glvalue() {
+                    let src = self.lv_mem(op, Access::Read);
+                    self.emit_at(Op::Copy, 1, &[p, src, ty.0], e);
+                } else {
+                    self.init_inner(op, p, ty);
+                }
+            }
+            _ if n.value_category().is_glvalue() => {
+                let src = self.lv_mem(e, Access::Read);
+                self.emit_at(Op::Copy, 1, &[p, src, ty.0], e);
+            }
+            _ => self.unsupported(e),
+        }
+    }
+
+    fn init_list(&mut self, e: ExprId, p: u32, ty: OTy) {
+        let ast = self.ast();
+        let inits: Vec<ExprId> = ast.lists.get(ast.exprs.init_list_inits(e)).iter().map(|&x| ExprId::new(x)).collect();
+        let extra = *ast.exprs.init_list(e);
+        match self.kind(ty) {
+            TyKind::Array { elem, n } => {
+                if inits.len() as u64 > n {
+                    self.unsupported(e);
+                    return;
+                }
+                // A list of one string literal initializing a char array.
+                if inits.len() == 1 && self.node(skip_parens(self.ast(), inits[0])).kind() == ExprKind::StringLiteral {
+                    let s = skip_parens(self.ast(), inits[0]);
+                    self.init_inner(s, p, ty);
+                    return;
+                }
+                let filler = extra.array_filler;
+                let rest = n - inits.len() as u64;
+                let zero_fill = rest > 0
+                    && filler.is_none_or(|f| self.node(f).kind() == ExprKind::ImplicitValueInitExpr);
+                if zero_fill {
+                    self.emit_at(Op::ZeroInit, 0, &[p, ty.0], e);
+                }
+                let es = self.o.types.size(elem);
+                for (i, &x) in inits.iter().enumerate() {
+                    let q = self.elem_ptr(p, i as u64 * es, e);
+                    self.init(x, q, elem);
+                }
+                if rest > 0 && !zero_fill {
+                    if let Some(f) = filler {
+                        // A loop over the remaining elements.
+                        let k = self.reg();
+                        let one = self.reg();
+                        let lim = self.reg();
+                        let c = self.reg();
+                        self.konst(k, inits.len() as u128);
+                        self.konst(one, 1);
+                        self.konst(lim, u128::from(n));
+                        let top = self.here();
+                        self.emit(Op::ICmp, int_aux(64, false) | cmp::LT << 9, &[c, k, lim]);
+                        let exit = self.jmp_if(c, false);
+                        let q = self.reg();
+                        self.emit_at(Op::PtrAdd, int_aux(64, false), &[q, p, k, elem.0], e);
+                        self.init(f, q, elem);
+                        self.emit(Op::IAdd, int_aux(64, false), &[k, k, one]);
+                        let j = self.jmp();
+                        self.patch(j, top);
+                        self.patch_here(exit);
+                    }
+                }
+            }
+            TyKind::Record { union: true, .. } => {
+                let fields = self.o.types.fields(ty).to_vec();
+                let target = extra.union_field.or_else(|| fields.first().map(|f| f.decl));
+                let Some(idx) = target.and_then(|d| fields.iter().position(|f| f.decl == d)) else {
+                    return;
+                };
+                self.emit_at(Op::SetActive, 0, &[p, idx as u32, ty.0], e);
+                let fi = fields[idx];
+                match inits.first() {
+                    Some(&x) => self.init_field(x, p, fi, e),
+                    None => {
+                        let q = self.elem_ptr(p, fi.offset, e);
+                        self.emit_at(Op::ZeroInit, 0, &[q, fi.ty.0], e);
+                    }
+                }
+            }
+            TyKind::Record { .. } => {
+                let fields = self.o.types.fields(ty).to_vec();
+                let mut it = inits.iter();
+                for fi in fields {
+                    let unnamed_bf = fi.width.is_some() && !self.has_name(fi.decl);
+                    if unnamed_bf {
+                        continue;
+                    }
+                    if let Some(&x) = it.next() {
+                        self.init_field(x, p, fi, e);
+                    } else if let Some(di) = self.ast().decls.field(fi.decl).and_then(|f| f.init) {
+                        self.init_field(di, p, fi, e);
+                    } else {
+                        // [dcl.init.aggr]/5.3: copy-initialized from `{}`.
+                        let q = self.elem_ptr(p, fi.offset, e);
+                        match fi.width {
+                            Some(w) => {
+                                let z = self.reg();
+                                self.konst(z, 0);
+                                self.emit_at(Op::StoreBits, 1, &[q, z, fi.ty.0, fi.bit | w << 8], e);
+                            }
+                            None => {
+                                self.emit_at(Op::ZeroInit, 0, &[q, fi.ty.0], e);
+                            }
+                        }
+                    }
+                }
+            }
+            _ => self.unsupported(e),
+        }
+    }
+
+    fn has_name(&self, d: DeclId) -> bool {
+        let mut s = String::new();
+        kiln_ast::dump::AstNames::new(self.ast()).write_name(d, &mut s);
+        !s.is_empty()
+    }
+
+    /// `p + off` (bytes).
+    fn elem_ptr(&mut self, p: u32, off: u64, e: ExprId) -> u32 {
+        if off == 0 {
+            return p;
+        }
+        let r = self.reg();
+        self.emit_at(Op::Field, 0, &[r, p, off as u32], e);
+        r
+    }
+
+    fn init_field(&mut self, x: ExprId, p: u32, fi: crate::ty::FieldInfo, e: ExprId) {
+        let q = self.elem_ptr(p, fi.offset, e);
+        match fi.width {
+            Some(w) => {
+                let r = self.rv(x);
+                self.emit_at(Op::StoreBits, 1, &[q, r, fi.ty.0, fi.bit | w << 8], x);
+            }
+            None => self.init(x, q, fi.ty),
+        }
+    }
+
+    // ---- effects and calls ------------------------------------------------
+
+    /// Evaluates `e` for its side effects.
+    fn effect(&mut self, e: ExprId) {
+        let m = self.next;
+        let n = self.node(e);
+        let ty = self.ety(e);
+        match n.kind() {
+            ExprKind::ParenExpr => {
+                let op = self.ast().exprs.operand(e);
+                self.effect(op);
+            }
+            ExprKind::BinaryOperator => {
+                let op = self.ast().exprs.binary_op(e);
+                match op {
+                    BinaryOp::Comma => {
+                        let [a, b] = self.ast().exprs.operands(e);
+                        self.effect(a);
+                        self.effect(b);
+                    }
+                    BinaryOp::Assign => {
+                        self.assign(e);
+                    }
+                    _ if op.is_compound_assignment() => {
+                        self.compound_assign(e);
+                    }
+                    _ => {
+                        let r = self.reg();
+                        self.rv_into(e, r);
+                    }
+                }
+            }
+            ExprKind::CompoundAssignOperator => {
+                self.compound_assign(e);
+            }
+            ExprKind::UnaryOperator if self.ast().exprs.unary_op(e).is_inc_dec() => {
+                let op = self.ast().exprs.unary_op(e);
+                let x = self.ast().exprs.operand(e);
+                let place = self.lv(x, Access::Rmw);
+                let xty = self.ety(x);
+                self.inc_dec(place, xty, op, None, e);
+            }
+            ExprKind::CallExpr => {
+                if self.o.types.is_aggregate(ty) {
+                    let r = self.reg();
+                    self.alloc(r, ty, Origin::Temp(e), false, e);
+                    self.call(e, Some(r));
+                } else {
+                    self.call(e, None);
+                }
+            }
+            ExprKind::ConditionalOperator => {
+                let c = self.rv(ExprId::new(n.a()));
+                let [t, f] = self.ast().exprs.cond_arms(e);
+                let j = self.jmp_if(c, false);
+                self.effect(t);
+                let end = self.jmp();
+                self.patch_here(j);
+                self.effect(f);
+                self.patch_here(end);
+            }
+            k if k.is_cast() && self.ast().exprs.cast_kind(e) == CastKind::ToVoid => {
+                let op = self.ast().exprs.operand(e);
+                self.effect(op);
+            }
+            _ if n.value_category().is_glvalue() => {
+                // A discarded glvalue is evaluated, not read.
+                let _ = self.lv(e, Access::Addr);
+            }
+            _ if self.kind(ty) == TyKind::Void => self.unsupported(e),
+            _ if self.o.types.is_aggregate(ty) => {
+                let r = self.reg();
+                self.alloc(r, ty, Origin::Temp(e), false, e);
+                self.init(e, r, ty);
+            }
+            _ => {
+                let r = self.reg();
+                self.rv_into(e, r);
+            }
+        }
+        self.next = m;
+    }
+
+    /// Compiles call `e`; the scalar result is in the returned register.
+    /// `sret`: the result object's address (aggregate results).
+    fn call(&mut self, e: ExprId, sret: Option<u32>) -> u32 {
+        let ast = self.ast();
+        let callee = ast.exprs.callee(e);
+        let args: Vec<ExprId> = ast.lists.get(ast.exprs.call_args(e)).iter().map(|&x| ExprId::new(x)).collect();
+        let ty = self.ety(e);
+        // The direct callee, if any.
+        let mut c = skip_parens(ast, callee);
+        while ast.exprs.get(c).kind().is_cast()
+            && matches!(ast.exprs.cast_kind(c), CastKind::FunctionToPointerDecay | CastKind::NoOp)
+        {
+            c = skip_parens(ast, ast.exprs.operand(c));
+        }
+        let direct = (ast.exprs.get(c).kind() == ExprKind::DeclRefExpr
+            && ast.decls.get(ast.exprs.decl(c)).kind().is_function())
+        .then(|| ast.exprs.decl(c));
+        let fp = if direct.is_none() { Some(self.rv_copy(callee)) } else { None };
+        let is_sret = self.o.types.is_aggregate(ty);
+        let base = self.next;
+        let window = args.len() as u32 + u32::from(is_sret);
+        for _ in 0..window.max(1) {
+            self.reg();
+        }
+        if is_sret {
+            match sret {
+                Some(p) => {
+                    self.emit(Op::Mov, 0, &[base, p]);
+                }
+                None => {
+                    self.alloc(base, ty, Origin::Temp(e), false, e);
+                }
+            }
+        }
+        for (i, &a) in args.iter().enumerate() {
+            let slot = base + u32::from(is_sret) + i as u32;
+            let aty = self.ety(a);
+            if self.o.types.is_aggregate(aty) {
+                self.alloc(slot, aty, Origin::Temp(a), false, a);
+                self.init(a, slot, aty);
+            } else {
+                self.rv_into(a, slot);
+            }
+        }
+        match (direct, fp) {
+            (Some(d), _) => {
+                let f = self.o.func_index(self.b.ast(), d);
+                self.emit_at(Op::Call, 0, &[f, base], e);
+            }
+            (None, Some(r)) => {
+                self.emit_at(Op::CallInd, 0, &[r, base], e);
+            }
+            (None, None) => {}
+        }
+        self.next = base + 1;
+        base
+    }
+}
