@@ -1,8 +1,9 @@
 # spec: kiln_ast types — `TypeContext`, `QualType`, canonical types
 
-Status: **design** (WP-040). Normative for the M2 implementation of the
-type layer; sections marked *(M3+)* fix the representation now so later
-milestones do not reshape it, but need not be implemented in M2.
+Status: **implemented** (WP-042; design WP-040). Normative for the type
+layer; sections marked *(M3+)* fix the representation now so later
+milestones do not reshape it. Where the implementation differs from the
+design text below, §18 records the deviation and is authoritative.
 Companion: `spec/ast.md` (declarations, expressions, the dump format).
 
 Standard: [basic.types], [basic.fundamental], [basic.compound],
@@ -401,9 +402,16 @@ pub struct LayoutCache { /* FxHashMap<DeclId /*first decl*/, Box<RecordLayout>> 
 ## 12. Printing
 `TypePrinter` renders a `QualType` as clang 19's `QualType::getAsString`
 does with the C++ `PrintingPolicy`, because diagnostics tests compare text
-with clang's. Options: `canonical` (print `canonical(q)`), `full_scope`
-(qualify every name; default for canonical, off for sugar, which prints as
-written), `suppress_tag` (omit `struct`/`enum` keywords not written).
+with clang's. Options (`PrintOptions`): `canonical` (print `canonical(q)`),
+`desugar` (print `desugar_top(q)`, the AST dump's second string),
+`full_scope` (qualify every name; default for canonical, off for sugar,
+which prints as written), `suppress_tag` (omit written `struct`/`enum`
+keywords). Presets: `SUGARED`, `CANONICAL` (canonical + full scope),
+`DESUGARED`. Declaration names, expressions and constant values come from
+the caller through the `TypeNames` trait (implemented by `Ast`); `RawNames`
+prints placeholders for AST-less use. Entry points: `print_type`,
+`write_type`, `aka` (the ` (aka 'U')` string or `None`) and `dump_strings`
+(the `'T'`/`'T':'U'` pair).
 
 Algorithm (clang's `TypePrinter`, declarator inside-out): `print(q, inner)`
 where `inner` is the declarator text so far (empty at the top):
@@ -450,6 +458,7 @@ canonical type (`full_scope`), differs textually from `T` (clang's
 | array of 3 pointer to char | `char *[3]` |
 | pointer to function (int) returning int | `int (*)(int)` |
 | function returning pointer to function | `void (*(int))(char)` |
+| pointer to that | `void (*(*)(int))(char)` |
 | reference to array | `int (&)[3]` |
 | member function pointer | `void (S::*)(int) const &` |
 | member data pointer | `int S::*` |
@@ -491,8 +500,9 @@ impl TypeContext {
     // ... one constructor per kind in §5; dependent constructors take ProfileIds from Ast
     pub fn memory(&self) -> MemReport;
 }
-pub fn print_type(ast: &Ast, q: QualType, opts: PrintOptions) -> String;
+pub fn print_type(ctx: &TypeContext, names: &dyn TypeNames, q: QualType, opts: PrintOptions) -> String;
 ```
+(The implemented signatures are in rustdoc; §18 lists where they differ.)
 `TypeContext` lives in `Ast` (spec/ast.md §2) because printing and
 profiling need declarations and expressions; the type layer itself only
 stores ids.
@@ -599,3 +609,72 @@ stores ids.
 - T4 approved. T5 approved (defer). T6 approved (canonicalize to the
   dependent specialization; keep an `InjectedClassName` *sugar* node so
   printing says `S`).
+
+## 18. Implementation notes and deviations (WP-042)
+Authoritative where it disagrees with §§2–14.
+
+Representation and encodings:
+- `Typedef`, `Using` and `InjectedClassName` payloads are `pairs`
+  `[decl, underlying]` / `[pattern, injected]`. `DependentBitInt` stores
+  only the width profile. `Subst` aux = `pack_index + 1` (0 = none;
+  indices ≥ 65535 are not recorded). `TemplateSpecialization` aux bit 0 =
+  alias. `CanonTemplateTypeParm` aux = `depth | pack << 15`. `Auto` aux =
+  `keyword | pack << 2`.
+- `AUX_PROFILE` (aux bit `0x100`) marks the profile-keyed canonical form of
+  `DependentSizedArray`, `DependentVector`, `PackIndexing`, `TypeOf` and
+  `Splice`: the sugar node keys on the written expression, the canonical
+  node on the `ProfileId`.
+- Parameter counts are `u16` (65535 parameters); the `noexcept(expr)`
+  operand and type ids are 29-bit; on any overflow the context sets
+  `exhausted()` and returns `QualType::ERROR` (or sentinel id 1 for
+  profiles, argument lists, nns and template names). No panics on
+  user-derivable input.
+- `ExtQual` takes a `QualType` base. `Record`/`Enum` have
+  `record_type_dependent` / `enum_type_dependent` variants (members of the
+  current instantiation).
+- Constructors of declaration types (`record_type`, `enum_type`,
+  `typedef_type`, `using_type`, `template_type_parm`,
+  `canon_template_type_parm`, `injected_class_name`) return `TypeId`;
+  every other constructor returns `QualType` (`From<TypeId> for QualType`).
+- `TargetTypes` is a plain struct filled by `kiln_abi`; its `Default` is
+  an unknown target (all sizes 0).
+- `hashbrown` is a plain dependency of kiln_ast (the const store and
+  string pool use it too); the `std-intern` feature selects the std
+  fallback type `InternTable` instead (same API; built and tested with
+  `--features std-intern`).
+
+Canonical forms:
+- The canonical keyword of `DependentName`/`DependentTemplateSpecialization`
+  is `typename` (`None` → `Typename`), so `T::x` and `typename T::x` are the
+  same type.
+- `Decltype` with a profile canonicalizes to `DependentDecltype(profile)`.
+- `VariableArray` nodes are never interned (one node per occurrence, as
+  clang).
+- `TemplateName::Overloaded` sets are not deduplicated.
+- `Nns::Splice` is canonical as written.
+- Template arguments: `ArgKind::Profile` is the canonical form of a
+  dependent expression argument; `Expr` arguments store their profile in
+  the second payload word. `TemplateName::Qualified` holds the underlying
+  `TemplateNameId`; `Splice` / `SpliceProfile` names were added (P2996).
+
+Printing:
+- Defaulted template arguments are not tracked by the type layer:
+  `TypeNames::specialization_args` must return the argument list with
+  defaulted arguments already removed.
+- Nesting deeper than 400 prints `...` (balanced) instead of recursing.
+- `ExtQual` prints `__attribute__((address_space(N))) T` (approximate: the
+  ext-qual word is printed raw).
+- kiln creates no `Elaborated` node for a name written without keyword or
+  qualifier (R4), so a written `S` is a bare `Record`: `dump_strings`
+  omits the second string when it would repeat the first, where clang
+  prints `'S':'S'`. The `-fdump-ast` normalizer (WP-046) treats `'X':'X'`
+  as `'X'`.
+- clang 19 prints a bare `RecordType` (what desugaring leaves) scoped:
+  `DESUGARED` scopes the top-level record/enum, giving clang's
+  `'S':'ns::S'`.
+
+Measured cost (live bytes per new type including the intern table's
+share, `types_mem` test, x86-64, both table implementations): record 16,
+pointer 16, typedef 24, constant array 32, function with 2 parameters 40,
+dependent sized array (with its profile) 76, `W<int, R>` (with its
+argument list) 72.
