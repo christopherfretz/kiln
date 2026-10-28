@@ -90,6 +90,9 @@ Lines (tables built lazily, once per buffer, `OnceLock`):
 - Line terminators are `\n`, `\r\n` and lone `\r` (clang's line table and
   lexer agree). The terminator belongs to the line it ends; the EOF location
   after a trailing terminator is column 1 of the empty line after it.
+  The table is built by scanning eight bytes at a time (a word test for
+  `\n`/`\r`) and is the same as a byte-by-byte scan
+  (`lex_phases_line_table_matches_bytewise_reference`).
 - `line_col(Loc) -> Option<LineCol>`: macro locations are first mapped
   through `expansion_loc` (the user-visible position; call `spelling_loc`
   first for the spelling position). `None` for invalid/unknown locations.
@@ -129,8 +132,12 @@ Macro expansions (modeled on clang's expansion `SLocEntry`s, index-based):
   maps a whole entry by a constant offset into one entry, so within an
   entry `spelling_loc(hi) - spelling_loc(lo) == hi - lo`: the O(1) fast
   path for token lengths and gaps (clang `isInSameSLocAddrSpace`).
-  Lookups use a per-manager hint (the last entry found, relaxed atomics)
-  before a binary search.
+  Lookups use per-manager hints (relaxed atomics) before a binary
+  search: for expansion entries the last entry found, then the newest
+  entry and the hint's two neighbours; for file ranges the last range
+  found, then the one found before it (lookups alternate between the
+  file being read and the header a macro was defined in). Hints only
+  change speed; every hit is checked against the range.
 - `expansion_loc(Loc)`: follows `expansion.lo` to the outermost
   invocation's file location. `expansion_span(Loc) -> Span`: the outermost
   invocation's file range (start walks `expansion.lo`, end walks

@@ -618,6 +618,31 @@ it through kiln_diag's fatal handling; the core itself carries on.
   `#![forbid(unsafe_code)]` in this crate and its tests. The obligation is
   therefore checked by the bench harness (peak RSS, wall time), not by a
   unit test.
+- **Skipped groups are not tokenized** ([cpp.cond]/13; WP-056). In a
+  skipped group only lines starting with `#` are lexed, and only up to the
+  directive name. When the name does not change the nesting (anything but
+  `if`/`ifdef`/`ifndef`/`elif*`/`else`/`endif`), the rest of the line is
+  dropped by `Lexer::skip_plain_line_rest` (spec/lex.md) instead of being
+  formed into tokens. Lexer diagnostics are never reported in a skipped
+  group. `tests/cpp_cond_skip_fuzz.rs` checks that the output equals the
+  token-by-token path on random skipped groups.
+- **Cheap per-token paths** (WP-056). Hot paths avoid source-manager
+  walks and allocations without changing results:
+  - `spelling()` returns an identifier's or a clean (no splices, not a
+    digraph) punctuator's fixed text without reading the source;
+  - `#if` evaluates a clean plain decimal pp-number (at most 18 digits,
+    optional `u`/`l` suffixes) without `classify_number`, and compares
+    `defined` and directive names by symbol (`DirTable`), not by text;
+  - `#define` bodies, macro-argument token buffers and their index
+    vectors come from pools (`pool`, `arg_pool`);
+  - location arithmetic within one expansion entry or file range uses
+    `SourceManager::same_entry_distance` (O(1)) instead of walking
+    spelling chains.
+
+  Each fast path has a test comparing it with the general path
+  (`cpp_cond_plain_decimal_matches_classify_number`,
+  `cpp_pre_dir_table_matches_names`, the debug assertion in `spelling()`,
+  and the randomized same-entry tests in kiln_source).
 - **Speed and memory against clang.** `-E` on all libc++ 19 headers must
   take at most 1.5x clang's time and use no more than clang's peak RSS.
   The baseline is in `bench/baselines/pp.json` (M1 gate).
