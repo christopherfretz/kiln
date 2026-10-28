@@ -33,6 +33,9 @@ chunked append-only arena (`OnceLock` slots, doubling chunk sizes).
     the last spelled byte stays inside the entry).
   - `Loc::is_valid()`, `is_macro()` (O(1), top bit), `is_file()`,
     `with_offset(n)` (same entry; caller keeps it in range).
+  - `to_raw()` / `from_raw(u32)`: the raw value, for packing into `u32`
+    slots of compact AST nodes; a never-allocated value is an unknown
+    location (queries return `None`/`INVALID`).
 - `Span { lo: Loc, hi: Loc }`, 8 bytes, `Copy`: half-open `[lo, hi)`.
   `Span::new`, `Span::empty(loc)`, `Span::INVALID`, `is_valid()`.
 - `LineCol { file: FileId, line: u32 /*1-based*/, col: u32 /*1-based, bytes*/ }`.
@@ -131,6 +134,15 @@ Files are decoded as UTF-8; each maximal invalid subsequence (as
 This crate never emits diagnostics; kiln_pp/kiln_diag report the
 replacements (once per file, on first entry). A UTF-8 BOM is kept in the
 text; skipping it is the lexer's job.
+
+## Identifiers and hashing
+- `kiln_source::symbol::{Symbol, Interner}`: the thread-safe identifier
+  interner (moved here from kiln_lex, which re-exports it, so that
+  kiln_ast stores `Symbol`s without linking the lexer; spec/types.md §17
+  T2). `Symbol` is a 4-byte dense index; `Symbol::from_index` is the
+  inverse of `index()` for packed encodings.
+- `kiln_source::fx::{FxHasher, FxBuildHasher, FxHashMap, FxHashSet}`: the
+  rustc `FxHash`, used by every compiler-internal hash table.
 
 ## Limits
 Buffers share 2^31 positions (each buffer uses `len + 1`), expansion

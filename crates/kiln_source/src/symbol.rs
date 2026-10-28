@@ -1,5 +1,9 @@
 //! The identifier interner: [`Symbol`] and [`Interner`].
 //!
+//! Lives in `kiln_source` (the leaf crate) so that `kiln_ast` can store
+//! symbols without depending on the lexer; `kiln_lex` re-exports both
+//! types (spec/types.md §17 T2).
+//!
 //! One interner is shared by the lexer, the preprocessor and semantic
 //! analysis, so it is used through `&Interner` and is `Sync`. Interned
 //! strings never move: a lock-free append-only arena maps `Symbol -> &str`
@@ -8,9 +12,10 @@
 
 use std::collections::HashMap;
 use std::fmt;
-use std::hash::{BuildHasherDefault, Hasher};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
+
+use crate::fx::FxBuildHasher;
 
 /// An interned identifier: a 4-byte handle into an [`Interner`].
 ///
@@ -23,6 +28,14 @@ impl Symbol {
     /// The symbol's index (dense, starting at 0, in interning order).
     pub const fn index(self) -> u32 {
         self.0
+    }
+
+    /// The symbol with dense index `index`: the inverse of [`Symbol::index`],
+    /// for decoding packed encodings (such as `kiln_ast`'s `DeclName`).
+    /// The result is only meaningful for the interner that produced
+    /// `index`; [`Interner::as_str`] panics on an index it never issued.
+    pub const fn from_index(index: u32) -> Symbol {
+        Symbol(index)
     }
 
     /// The interned string. Equivalent to [`Interner::as_str`].
@@ -40,52 +53,7 @@ impl fmt::Debug for Symbol {
     }
 }
 
-/// `FxHash` (the rustc hasher): fast, non-cryptographic, good for short keys.
-#[derive(Default, Clone, Copy)]
-struct FxHasher {
-    hash: u64,
-}
-
-const FX_SEED: u64 = 0x51_7c_c1_b7_27_22_0a_95;
-
-impl FxHasher {
-    #[inline]
-    fn add(&mut self, word: u64) {
-        self.hash = (self.hash.rotate_left(5) ^ word).wrapping_mul(FX_SEED);
-    }
-}
-
-impl Hasher for FxHasher {
-    #[inline]
-    fn write(&mut self, bytes: &[u8]) {
-        let (chunks, rest) = bytes.as_chunks::<8>();
-        for c in chunks {
-            self.add(u64::from_le_bytes(*c));
-        }
-        if !rest.is_empty() {
-            let mut w = [0u8; 8];
-            w[..rest.len()].copy_from_slice(rest);
-            self.add(u64::from_le_bytes(w));
-        }
-    }
-
-    #[inline]
-    fn write_u8(&mut self, i: u8) {
-        self.add(u64::from(i));
-    }
-
-    #[inline]
-    fn write_usize(&mut self, i: usize) {
-        self.add(i as u64);
-    }
-
-    #[inline]
-    fn finish(&self) -> u64 {
-        self.hash
-    }
-}
-
-type FxBuild = BuildHasherDefault<FxHasher>;
+type FxBuild = FxBuildHasher;
 
 const FIRST_CHUNK_BITS: u32 = 8;
 const CHUNKS: usize = (u32::BITS - FIRST_CHUNK_BITS + 1) as usize;

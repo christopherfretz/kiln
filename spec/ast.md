@@ -599,3 +599,72 @@ report instantiation-retained bytes as its own row from day one so M7 can
 see it. Q7 yes. Q8 yes. Q9 defer. Q10 keep.
 Work packages A–L (§12) are the M2 plan; ids in docs/BACKLOG.md are
 WP-041..052 in that order.
+
+## 16. Implementation refinements (WP-041, normative)
+These refine or replace the text above where they differ; each says why.
+1. **`Symbol`/`Interner` live in `kiln_source::symbol`** (and `FxHasher` in
+   `kiln_source::fx`), not `kiln_lex`: `kiln_ast` must name symbols without
+   depending on the lexer. `Ast::new(symbols: Arc<Interner>, types:
+   TypeContext)`; `Ast::symbols()` borrows the interner.
+2. **`DeclName` identifier payload = `Symbol` index + 1** (29 bits), so the
+   all-zero `DeclName` is `DeclName::EMPTY` (§3). Non-identifier names
+   (operators, conversion functions, constructors, destructors, deduction
+   guides, literal operators) intern their extra data in **`Ast.names:
+   NameTable`**, a field added to §2.2.
+3. **Id exhaustion panics** (`"<Id> id space exhausted"`): 2^32 nodes is
+   far beyond any memory budget, and the oven's budget (§9, oven.md) stops
+   runaway evaluation long before; a diagnostic path would cost every push.
+   Index 0 is a dummy in every arena so `Option<Id>` is 4 bytes.
+4. **`ListId::EMPTY` = index 1** is the shared empty list; payloads default
+   to it instead of `Option<ListId>`.
+5. **`lookup_local(ctx, name) -> LookupResult`** (`None | One(DeclId) |
+   Many(&[u32])`, with `single`, `len`, `to_vec`, `iter_with_inline`)
+   instead of `&[DeclId]`: the single-decl case (≈95%) stores no set.
+   Overload sets are `Vec<Vec<u32>>` (no `smallvec`, per the no-new-deps
+   rule); the high bit of each raw entry is `via_inline`.
+6. **Lookup placement.** `ctx` is first mapped through `redecl_context`
+   (skips `LinkageSpec`/`Export`) and `primary_context` (namespace → first
+   declaration; class/enum → its definition, else itself). Only TU,
+   Namespace, CXXRecord, ClassTemplate(Partial)Specialization and Enum own
+   tables; a decl in any other context (function, block) gets no table
+   entry and is not appended to a member list. Unscoped enumerators are
+   also entered in the enclosing context; inline-namespace members are
+   entered in each enclosing namespace up the inline chain with
+   `via_inline`; `add_inline_child` is called on the first inline
+   declaration. A redeclaration replaces its predecessor in place (order
+   preserved); a P2169 `_` declaration (`DeclMisc::name_independent`) is
+   always appended. Friend declarations are entered; sema filters by
+   `misc.friend`.
+7. **Begin locations** of declarations whose begin ≠ `loc` and the
+   **end locations** of `CallExpr`/`UnaryExprOrTypeTraitExpr` (`rparen`)
+   live in cold `ColdMap`s (`DeclArena::begin_loc`, `ExprArena` cold
+   `end_loc`): they are rarely read and would grow the hot header.
+8. **`IndirectField`**: its payload is the `ListId` chain of fields (from
+   the anonymous member to the named field), read with
+   `Ast::indirect_field_chain`; the decl is `IMPLICIT`.
+9. **Base specifiers** are stored in `DeclArena::base_specs` (a vector of
+   `BaseSpec`); `RecordData::bases` lists 1-based indices into it.
+10. **`ParamData`** = `{default_arg, original_ty, index: u16, flags:
+    u16}`. Parameters are created after their function (their `ctx` is the
+    function), so `FunctionData::params` is attached once afterwards with
+    `AstBuilder::set_params` (write-once while the list is `EMPTY`).
+11. **`DeclRefExpr`/`MemberExpr` `aux` = `NonOdrUse`** ([basic.def.odr]/5
+    classification, filled by sema).
+12. **String literals:** `AstBuilder::string_literal` takes an already
+    interned `StringLitId` (`StringPool::intern(encoding, code_units)`,
+    owned by WP-043), keeping the builder free of encoding logic.
+13. **Enums:** `AstBuilder::enumeration(h, flags, fixed: Option<(underlying,
+    promotion)>, prev)` sets the types at declaration for a fixed
+    underlying type; otherwise `complete_enum_definition(e, computed)`
+    supplies them (and errors if they were fixed already).
+14. **Instantiation meter (§15 Q6):** `begin_instantiation` /
+    `end_instantiation` nest; only the outermost pair adds the growth of
+    node bytes (decls, exprs, stmts, attrs, lists, lookup, redecls) to the
+    total. `memory()` always has the row `instantiation.retained` (count =
+    instantiations, live = reserved = retained bytes); it overlaps the
+    arena rows, so `MemReport::live_bytes` excludes rows starting with
+    `total`/`instantiation`.
+15. **Potentially-constant variables** ([expr.const]/3) are approximated in
+    dependence propagation as "const-qualified or `constexpr`" (no
+    integral/enumeration type check): over-approximating value dependence
+    is safe (it only defers evaluation to instantiation).

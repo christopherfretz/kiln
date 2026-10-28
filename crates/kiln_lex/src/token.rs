@@ -5,7 +5,7 @@ use std::ops::{BitOr, BitOrAssign};
 
 use kiln_source::Span;
 
-use crate::interner::Symbol;
+use kiln_source::symbol::Symbol;
 
 /// One preprocessing token ([lex.pptoken]).
 ///

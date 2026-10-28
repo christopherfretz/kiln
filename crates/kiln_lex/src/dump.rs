@@ -4,11 +4,11 @@ use std::fmt::Write as _;
 
 use kiln_source::SourceManager;
 
-use crate::interner::Interner;
 use crate::lexer::Lexer;
 use crate::options::LexOptions;
 use crate::spelling::spelling;
 use crate::token::{TokKind, Token};
+use kiln_source::symbol::Interner;
 
 /// One line describing `tok`: `kind 'spelling'` followed by its flags as
 /// ` [StartOfLine] [LeadingSpace] [UnClean] [Digraph] [UCN] [UDSuffix]`
