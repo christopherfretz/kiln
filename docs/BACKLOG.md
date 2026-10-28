@@ -9,6 +9,7 @@ Format per `docs/AGENTS.md`. Ids are stable; status moves between
 | WP-001 | `kiln_source`: implement `spec/source.md` with unit tests | done (2026-10-28) |
 | WP-002 | `kiln_diag`: implement `spec/diag.md` (engine, ids table skeleton, text + JSON renderers) | done (2026-10-28) |
 | WP-003 | `xtask test`: conformance runner implementing the directive format in `docs/VALIDATION.md` (see `spec/harness.md`) | done (2026-10-28) |
+| WP-006b | bench: `--record` must MERGE rows into `docs/status/perf.md` instead of regenerating from the filtered run (a `--filter` record currently wipes other groups' rows); intern-cache TLS 32 KB could be inverted to leave initialised data | todo |
 | WP-006 | harness follow-ups: `run-args:`/`run-stdin:`/`env:`, ci corpus self-check, oracle hang=ERROR, `-fconstexpr-report` protocol (`spec/oven.md`), bench per-entry thresholds + oven counters, heavier pp entries. **Still open:** re-record all `bench/baselines/*.json` on a quiet host (load < 4; durable reminder set) | done except baseline re-record (2026-10-28) |
 | WP-004 | `xtask bench`: run `bench/` entries, record wall/RSS/oven stats, compare with baselines (see `spec/bench.md`) | done (2026-10-28) |
 | WP-005 | `resource/`: import clang 19 builtin headers + generated predefines for aarch64/x86_64 linux; script to regenerate | done (2026-10-28) |
@@ -47,7 +48,7 @@ Format per `docs/AGENTS.md`. Ids are stable; status moves between
 | WP-052 | L codegen M2 (AST → kiln_llvm, `-S -emit-llvm`/`-c`/link via clang; `run` tests vs clang oracle) | in-progress |
 | WP-054 | Oven↔sema integration (one Oven per TU via SemaBridge; folder/aggval deleted; `-fconstexpr-*` flags + report; references; string-literal identity; labels/goto; 99 expr.const source tests; oven baselines: kiln 0.02x clang time, 0.04x memory) | done (2026-10-28). Open: codegen path must call `write_report`; `constinit` not wired; sema rejects temporaries (M3) |
 | WP-055 | parser consumes kiln_pp tokens (8-token lookahead window), pragmas, module/import stubs, shared driver pp construction; libc++ first blockers in `docs/status/libcxx-syntax.md` (templates, using-declarations, exception specs, asm labels, `__builtin_is_constant_evaluated`) | done (2026-10-28). Open: system-header warning suppression; sema diagnostics lack source ranges (no outer "expanded from macro" notes); `clang diagnostic` pragmas not applied |
-| WP-056 | macro-engine performance: `bench/pp/repetition` 147x and `xmacro` 5x slower than clang (suspect `expand.rs relocate()`/`loc_diff` walking location chains per token); target ≤1.5x clang on all pp entries; plus `SourceManager::add_inclusion` per-inclusion ranges + "In file included from" notes | in-progress |
+| WP-056 | preprocessor performance: headers 3.56x→1.42x, repetition 171x→0.52x, xmacro 5.22x→0.99x of clang (`cargo xtask bench`, load ~8); per-inclusion source ranges + "In file included from" notes; release profile: `codegen-units=1` for kiln_lex/source/pp | done (2026-10-28). Follow-ups: `Lexer::next` ~185 instr/token (rare paths out of line, `check_poison`, double macro lookup, resolver allocations); unknown-directive warnings in skipped groups; backslash-space column off by one |
 
 ## M3 preparation
 | id | scope | status |
