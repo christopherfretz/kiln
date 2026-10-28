@@ -16,8 +16,8 @@ Format per `docs/AGENTS.md`. Ids are stable; status moves between
 ## M1 — preprocessor parity (unlocked by WP-001..003)
 | id | scope | status |
 |---|---|---|
-| WP-010 | `kiln_lex`: phases 1–2 + identifiers, punctuators, pp-numbers, comments, flags (`spec/lex.md`) | todo |
-| WP-011 | `kiln_lex`: char/string/raw-string literals, UCNs, header-name mode, recovery, fuzz | todo (after WP-010 interface lands) |
+| WP-010 | `kiln_lex`: phases 1–2 + identifiers, punctuators, pp-numbers, comments, flags (`spec/lex.md`) | done (2026-10-28) |
+| WP-011 | `kiln_lex`: literal escapes validation (simple/octal/hex/`\o{}`/`\x{}`/`\u`/`\N{}`), full Unicode name table + aliases + Hangul + loose matching for `\N{}`, header-name diagnostics, encoding/multichar checks, NFC_QC=Maybe, literal *value* decoder shared with sema/oven, C mode flag | todo |
 | WP-012 | `kiln_pp`: directive parsing, conditional stack, `#define`/`#undef`, object-like expansion, hide sets, `Eod` protocol with lexer | todo |
 | WP-013 | `kiln_pp`: function-like macros, `#`, `##`, `__VA_OPT__`, rescan, expansion locations | todo |
 | WP-014 | `kiln_pp`: `#include` resolution, `#include_next`, `#pragma once`, include guards, `__has_include*`, include depth, callbacks | todo |
