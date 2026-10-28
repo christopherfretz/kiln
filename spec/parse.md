@@ -65,6 +65,12 @@ undeclared, which resolves the C++ declaration/expression ambiguities.
 driver share one path. It lexes the main file (§2), maps lexer
 diagnostics (§8), builds a `Sema::for_target`, parses, and returns the
 AST. The driver adds `-fsyntax-only -fdump-ast` on top (§7).
+`parse_tu` does the same with the driver's `ConstexprLimits` (the
+`-fconstexpr-*` budget and backtrace limit, applied to Sema's Oven) and
+returns a `ParsedTu { ast, oven }`, so the driver can write the
+`-fconstexpr-report` from the Oven's statistics (spec/oven.md
+"Integration"). `parse_file` is `parse_tu` with the default limits, keeping
+only the AST.
 
 ## 2. Token buffer (`tokens.rs`)
 - `TokenBuffer::lex` lexes the whole main file up front, so lookahead is

@@ -311,67 +311,71 @@ are not odr-used.
 - A redefinition is an error, with a note.
 - Jumps past initializations are not checked yet (M3, [stmt.dcl]/3).
 
-## 8. Constant evaluation (`constfold.rs`, `aggval.rs`)
+## 8. Constant evaluation (`oven_bridge.rs`)
 
-### 8.1 The ConstEvaluator seam
-- Sema evaluates only through
-  `trait ConstEvaluator { fn evaluate(&self, &Ast, ExprId) -> Result<ConstVal, NotConstant> }`.
-- `evaluator(&Target)` returns the M2 `Folder`. Switching to the Oven
-  (WP-051) is a change to that one function.
-- `NotConstant` carries clang's `note_constexpr_*` note, located where
-  clang puts it, plus an optional declaration note.
-- **Callers:**
-  - array bounds, bit-field widths, enumerator values
-  - `case` values, `static_assert`
-  - `constexpr` initializers
-  - converted constant expressions ([expr.const]/12), with narrowing
-    checks
-- **Folded values:** integral, `bool`, enumeration, `float`/`double`
-  and null pointer values.
-- **Reads of variables:** only of variables usable in constant
-  expressions, with clang's notes when they are not (`read of non-const
-  variable`, `initializer of 'x' is not a constant expression`).
+Sema does no constant evaluation of its own: every constant it needs
+comes from the Oven (`kiln_oven`, spec/oven.md; "Integration" there
+covers the Oven's side). `constfold.rs` keeps only integer helpers
+(`int_info`, `wrap`, `fits`). The M2 `Folder`, its tree-walking `Eval`
+interpreter and `aggval` were removed by WP-054.
 
-### 8.2 Interpreter
-- Calls to `constexpr` functions run in a tree-walking interpreter
-  (`Eval`), whose frames hold scalar parameters and locals.
-- It executes:
-  - compound, declaration, expression, `if`, `while`, `do` and `for`
-    statements
-  - `switch`, `break`, `continue`, `return`
-  - assignment and increment of locals
-- **Limits:** recursion depth 512, call depth 512, 2^20 steps. Hitting
-  a limit makes the expression non-constant.
-- A call to a non-`constexpr` function, or to one without a
-  definition, gives clang's note.
-- This is a stand-in. The Oven (spec/oven.md) replaces it in M3.
+### 8.1 One Oven per translation unit
+- `Sema` owns one `Oven`. Compiled bytecode, resolved globals and the
+  memo cache are shared by every evaluation in the TU.
+- `oven_bridge.rs` implements `SemaBridge` over the `Sema`'s AST,
+  target and diagnostics engine for the duration of one call:
+  - `ensure_body` returns the body of the function's definition
+    (there are no templates in M2);
+  - `ensure_layout` uses `kiln_abi::ensure_layout`;
+  - `diag` emits into the engine (for `-Wenum-constexpr-conversion`).
+- `set_constexpr_limits(Budget, backtrace_limit)` applies the driver's
+  `-fconstexpr-*` flags, reaching Sema through
+  `kiln_parse::ConstexprLimits`.
+- `oven()` and `into_parts() -> (Ast, Oven)` hand the Oven's statistics
+  to the driver for `-fconstexpr-report`.
 
-### 8.3 Aggregate values
-- **Storing:** `aggval` folds the semantic `InitListExpr` of a
-  `constexpr` array or class object, leaf by leaf through the
-  evaluator. The value is stored as a canonical `ByteImage` in
-  `ast.consts`, laid out by `kiln_abi`, with relocations for null
-  pointers. The variable's evaluation state becomes
-  `VarEvalState::Value(id)`.
-- **The M2 subset:**
-  - arrays and non-union classes without bases or bit-fields
-  - leaves that are integral, enumeration, `bool`, `float`, `double`,
-    null-pointer or `nullptr_t` values
+### 8.2 Entry points
+| method | Oven call | use |
+|---|---|---|
+| `eval_const(e, EvalContext)` | `evaluate` | manifestly constant-evaluated contexts; recorded in the stats and the report; failures carry notes |
+| `eval_int(e, ctx)` | `evaluate` | the same, for an integral or `bool` result |
+| `try_fold(e)` / `fold_int(e)` | `try_fold` | silent, unrecorded speculative folds for warnings |
+| `is_constant_initialized(var)` | `is_constant_initialized` | [basic.start.static]/2, usable-in-constant-expressions checks |
+| `const_int(v)` / `const_truth(v)` | (reads `ast.consts`) | the integer or truth value of a scalar constant |
 
-  Anything else (unions, bit-fields, string initializers, `long
-  double`) is left unvalued *without* a diagnostic, for the Oven.
-- **Reading:** an lvalue-to-rvalue conversion of a place inside a
-  valued aggregate is read from the image (`aggregate_place`,
-  `read_leaf`). The place can be:
-  - the variable itself
-  - `.member` of a non-bit-field
-  - `[i]`
-  - parentheses
-- **Out-of-bounds indices** give clang's notes:
-  - `read of dereferenced one-past-the-end pointer is not allowed in a
-    constant expression` when `i == N`
-  - `cannot refer to element i of array of N elements in a constant
-    expression` otherwise
+### 8.3 Evaluation sites
+Each site picks the `EvalContext` that clang 19 uses there. The context
+sets the report `kind` and whether an out-of-range conversion to an
+unscoped enumeration is reported (spec/oven.md "Integration").
+
+| construct | context |
+|---|---|
+| `static_assert` condition | `EvalKind::StaticAssert` |
+| initializer of a `constexpr` variable | `EvalContext::init(var, loc)`; on success the variable becomes `VarEvalState::Value(id)` |
+| `case` label, enumerator of an enumeration with a fixed underlying type | `EvalContext::converted(loc)`; a converted constant expression ([expr.const]/12) |
+| array bound, bit-field width, enumerator without a fixed type, `alignas`, array designator | `EvalKind::Other` |
+
+- **Speculative folds (`try_fold`):**
+  - narrowing checks in list-initialization and fixed-type enumerators
+  - division by zero and shift-amount warnings
+  - the `static_assert` failed-comparison explanation (`'5 == 6'`)
+  - constant `if`/loop conditions in the falls-off-the-end analysis
+    (`-Wreturn-type`)
+  - the alignment of an `alignas` expression for layout
+- **Usable in constant expressions** ([expr.const]/4) means:
+  - a `constexpr` variable, or
+  - a `const`, non-`volatile` integral or enumeration variable,
+  - whose initializer is a constant initializer
+    (`is_constant_initialized`).
+
+  A reference is usable when it binds to a static lvalue.
+- **Failures:**
+  - The primary diagnostic is sema's, at the site, as clang reports it
+    (for example `static assertion expression is not an integral
+    constant expression`).
+  - The `EvalFailure`'s notes follow it (`with_failure_notes`): the
+    reason, the `in call to` backtrace, and any `declared here` notes.
+  - An expression that already contains errors is not evaluated.
 
 ## 9. Target (`target.rs`)
 - `pub use kiln_abi::{Arch, Target}`.
@@ -388,12 +392,16 @@ are not odr-used.
   beyond the M2 basics.
 - **Other language features:** lambdas, exceptions, coroutines,
   reflection, contracts.
-- **Constant evaluation:**
-  - the Oven replaces §8 (WP-051)
-  - consteval and immediate invocations
-  - non-scalar locals
-  - pointers to objects
-  - union and bit-field values
+- **Constant evaluation** (what the Oven supports in M2 is in
+  spec/oven.md):
+  - `consteval` and immediate invocations
+  - `if constexpr` and template arguments (`EvalKind::IfConstexpr`,
+    `EvalKind::TemplateArg`)
+  - constant-initialization of `constinit` variables
+  - Sema still rejects some M2 constructs before evaluation: a
+    reference bound to a temporary, a cast to a reference type,
+    list-initialization of a temporary, and initialization of a class
+    object from anything but a braced list
 - **Rules not checked yet:**
   - jumps past initialization ([stmt.dcl]/3)
   - [dcl.align]/6, that `alignas` must be on the definition
@@ -403,6 +411,8 @@ are not odr-used.
 ## 11. Tests
 - `crates/kiln_sema/tests/`: per-rule tests that drive `Sema`
   directly, for example `constfold.rs`.
+- `tests/conformance/expr.const/`: constant evaluation through the
+  driver (WP-054), including `oven:` budgets.
 - `crates/kiln_parse/tests/`: rules that are easier to state in
   source, including `sema.rs`.
 - `diag:` conformance tests under `tests/conformance/`, which also
