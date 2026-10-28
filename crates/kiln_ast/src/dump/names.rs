@@ -158,6 +158,10 @@ impl<'a> AstNames<'a> {
         let n = self.ast.decls.get(d);
         let kind = n.kind();
         if self.is_unnamed(d) {
+            if let Some(td) = self.ast.decls.typedef_for_anon(d) {
+                self.write_name(td, out);
+                return;
+            }
             match kind {
                 DeclKind::Namespace => out.push_str("(anonymous namespace)"),
                 DeclKind::CXXRecord
@@ -676,7 +680,15 @@ impl TypeNames for AstNames<'_> {
                 | DeclKind::Enum
         );
         if tag && self.is_unnamed(decl) {
-            self.write_unnamed_tag(decl, out);
+            match self.ast.decls.typedef_for_anon(decl) {
+                Some(td) => {
+                    if scoped {
+                        self.append_scope(self.ast.decls.get(td).ctx(), 0, out);
+                    }
+                    self.write_name(td, out);
+                }
+                None => self.write_unnamed_tag(decl, out),
+            }
             return;
         }
         if scoped {

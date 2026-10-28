@@ -1307,6 +1307,10 @@ pub struct ColdDeclData {
     pub injection_point: ColdMap<DeclId, Loc>,
     /// Builtin function ids of implicit builtin `Function` decls (§5.3).
     pub builtin_id: ColdMap<DeclId, u32>,
+    /// The typedef that names an unnamed class or enumeration for linkage
+    /// purposes ([dcl.typedef]/9, clang's `TypedefNameForAnonDecl`): the
+    /// tag's type prints with the typedef's name.
+    pub typedef_for_anon: ColdMap<DeclId, DeclId>,
 }
 
 impl Default for ColdDeclData {
@@ -1324,12 +1328,13 @@ impl Default for ColdDeclData {
             instantiated_from: ColdMap::new("instantiated_from"),
             injection_point: ColdMap::new("injection_point"),
             builtin_id: ColdMap::new("builtin_id"),
+            typedef_for_anon: ColdMap::new("typedef_for_anon"),
         }
     }
 }
 
 impl ColdDeclData {
-    fn rows(&self) -> [MemRow; 12] {
+    fn rows(&self) -> [MemRow; 13] {
         [
             self.lexical_ctx.mem_row(),
             self.begin_loc.mem_row(),
@@ -1343,6 +1348,7 @@ impl ColdDeclData {
             self.instantiated_from.mem_row(),
             self.injection_point.mem_row(),
             self.builtin_id.mem_row(),
+            self.typedef_for_anon.mem_row(),
         ]
     }
 }
@@ -1721,6 +1727,18 @@ impl DeclArena {
         } else {
             n.ctx
         }
+    }
+
+    /// The typedef naming unnamed tag `d` for linkage purposes
+    /// ([dcl.typedef]/9), if any.
+    pub fn typedef_for_anon(&self, d: DeclId) -> Option<DeclId> {
+        self.cold.typedef_for_anon.get(d).copied()
+    }
+
+    /// Records `typedef_decl` as the name of unnamed tag `tag` for linkage
+    /// purposes ([dcl.typedef]/9). Write-once.
+    pub fn set_typedef_for_anon(&mut self, tag: DeclId, typedef_decl: DeclId) -> Result<(), AlreadySet> {
+        self.cold.typedef_for_anon.insert(tag, typedef_decl)
     }
 
     /// Records a lexical context different from the semantic one. Must be

@@ -1005,6 +1005,17 @@ impl ExprArena {
         Ok(())
     }
 
+    /// Marks the glvalue `e` as designating a bit-field
+    /// ([`ObjectKind::BitField`]): sema propagates the marking from a
+    /// member access through `=`, compound assignment, prefix `++`/`--`,
+    /// `?:` and `,` ([expr.ass]/1, [expr.pre.incr]/1, [expr.cond]/7.1,
+    /// [expr.comma]/1), which the builder cannot see. Monotone.
+    pub fn mark_bitfield(&mut self, e: ExprId) {
+        let n = &mut self.nodes[e.index() as usize];
+        assert!(n.bits & 3 != 0, "only a glvalue can designate a bit-field");
+        n.bits = (n.bits & !(3 << 2)) | ((ObjectKind::BitField as u8) << 2);
+    }
+
     /// The callee of a `CallExpr`.
     pub fn callee(&self, e: ExprId) -> ExprId {
         ExprId::new(self.expect_kind(e, ExprKind::CallExpr).a)
