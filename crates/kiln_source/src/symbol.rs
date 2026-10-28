@@ -8,8 +8,11 @@
 //! analysis, so it is used through `&Interner` and is `Sync`. Interned
 //! strings never move: a lock-free append-only arena maps `Symbol -> &str`
 //! and a mutex-protected hash map maps `&str -> Symbol`. Lookups by symbol
-//! take no lock.
+//! take no lock. A small per-thread direct-mapped cache in front of the map
+//! answers repeated `intern` calls without taking the lock: a hit is
+//! verified against the arena, so it is never wrong (see [`Interner::intern`]).
 
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -102,6 +105,53 @@ impl Arena {
     }
 }
 
+/// Slots of the per-thread intern cache (a power of two).
+const CACHE_SLOTS: usize = 4096;
+/// An empty cache slot (`u32::MAX` is never a symbol).
+const CACHE_EMPTY: u64 = u64::MAX;
+
+thread_local! {
+    /// Direct-mapped `hash -> (tag, symbol)` cache shared by every interner
+    /// used on this thread. A slot holds `tag << 32 | symbol`, `tag` being
+    /// the high half of the string's hash. Entries are hints only: a hit is
+    /// accepted only if the interner's arena holds exactly the looked-up
+    /// string at that symbol, so slots written by another interner (or
+    /// stale ones) can cost a probe but never give a wrong answer.
+    static INTERN_CACHE: [Cell<u64>; CACHE_SLOTS] =
+        const { [const { Cell::new(CACHE_EMPTY) }; CACHE_SLOTS] };
+}
+
+/// A cheap hash for the cache only (the map keeps `FxHash`): the first
+/// and last eight bytes and the length, folded by one wide multiply.
+/// Weak keys only cost cache misses, never wrong answers.
+fn str_hash(s: &str) -> u64 {
+    let bytes = s.as_bytes();
+    let len = bytes.len();
+    let (head, tail) = if len >= 8 {
+        let mut lo = [0u8; 8];
+        let mut hi = [0u8; 8];
+        lo.copy_from_slice(&bytes[..8]);
+        hi.copy_from_slice(&bytes[len - 8..]);
+        (u64::from_le_bytes(lo), u64::from_le_bytes(hi))
+    } else {
+        let mut word = [0u8; 8];
+        word[..len].copy_from_slice(bytes);
+        (u64::from_le_bytes(word), 0)
+    };
+    let len_mix = (len as u64).wrapping_mul(0xe703_7ed1_a0b4_28db);
+    let product = u128::from(head ^ 0xa076_1d64_78bd_642f)
+        * u128::from(tail ^ len_mix ^ 0x8ebc_6af0_9c88_c6e3);
+    #[allow(clippy::cast_possible_truncation, reason = "folding the halves")]
+    let folded = (product as u64) ^ (product >> 64) as u64;
+    folded
+}
+
+fn cache_slot(hash: u64) -> usize {
+    #[allow(clippy::cast_possible_truncation, reason = "masked to CACHE_SLOTS")]
+    let i = hash as usize;
+    i & (CACHE_SLOTS - 1)
+}
+
 /// A thread-safe string interner, shared through `&Interner`.
 pub struct Interner {
     map: Mutex<HashMap<Arc<str>, Symbol, FxBuild>>,
@@ -120,20 +170,54 @@ impl Interner {
     /// # Panics
     /// If more than `u32::MAX` distinct strings are interned.
     pub fn intern(&self, s: &str) -> Symbol {
-        let mut map = self.map.lock().unwrap_or_else(PoisonError::into_inner);
-        if let Some(&sym) = map.get(s) {
+        let hash = str_hash(s);
+        if let Some(sym) = self.cached(s, hash) {
             return sym;
         }
-        assert!(self.arena.len.load(Ordering::Relaxed) < u32::MAX, "interner exhausted");
-        let owned: Arc<str> = Arc::from(s);
-        let sym = Symbol(self.arena.push(Arc::clone(&owned)));
-        map.insert(owned, sym);
+        let sym = {
+            let mut map = self.map.lock().unwrap_or_else(PoisonError::into_inner);
+            if let Some(&sym) = map.get(s) {
+                sym
+            } else {
+                assert!(self.arena.len.load(Ordering::Relaxed) < u32::MAX, "interner exhausted");
+                let owned: Arc<str> = Arc::from(s);
+                let sym = Symbol(self.arena.push(Arc::clone(&owned)));
+                map.insert(owned, sym);
+                sym
+            }
+        };
+        Self::remember(hash, sym);
         sym
     }
 
     /// The symbol for `s` if it has been interned.
     pub fn get(&self, s: &str) -> Option<Symbol> {
-        self.map.lock().unwrap_or_else(PoisonError::into_inner).get(s).copied()
+        let hash = str_hash(s);
+        if let Some(sym) = self.cached(s, hash) {
+            return Some(sym);
+        }
+        let sym = self.map.lock().unwrap_or_else(PoisonError::into_inner).get(s).copied()?;
+        Self::remember(hash, sym);
+        Some(sym)
+    }
+
+    /// The per-thread cache's answer for `s`, verified: strings are unique
+    /// within an interner, so if this interner's arena holds `s` at the
+    /// cached symbol, that symbol is `s`'s.
+    #[inline]
+    fn cached(&self, s: &str, hash: u64) -> Option<Symbol> {
+        let v = INTERN_CACHE.with(|c| c[cache_slot(hash)].get());
+        if v == CACHE_EMPTY || (v >> 32) != (hash >> 32) {
+            return None;
+        }
+        #[allow(clippy::cast_possible_truncation, reason = "low half of the slot")]
+        let sym = v as u32;
+        (self.arena.get(sym) == Some(s)).then_some(Symbol(sym))
+    }
+
+    fn remember(hash: u64, sym: Symbol) {
+        let v = (hash >> 32) << 32 | u64::from(sym.0);
+        INTERN_CACHE.with(|c| c[cache_slot(hash)].set(v));
     }
 
     /// The string of `sym`.
@@ -204,6 +288,31 @@ mod tests {
             assert_eq!(i.as_str(sym), s);
         }
         assert_eq!(i.len(), 2002);
+    }
+
+    /// The per-thread cache is shared by all interners on a thread: a slot
+    /// written by one never answers for another with a wrong symbol.
+    #[test]
+    fn intern_cache_is_per_interner_safe() {
+        let a = Interner::new();
+        let b = Interner::new();
+        for n in 0..3000 {
+            a.intern(&format!("a{n}"));
+        }
+        // `b` has different symbols for the same strings.
+        let b0 = b.intern("zzz");
+        for n in (0..3000).rev() {
+            let s = format!("a{n}");
+            let sb = b.intern(&s);
+            assert_eq!(b.as_str(sb), s);
+            let sa = a.intern(&s);
+            assert_eq!(a.as_str(sa), s);
+            assert_eq!(b.get(&s), Some(sb));
+        }
+        assert_eq!(b.as_str(b0), "zzz");
+        assert_eq!(a.get("zzz"), None);
+        assert_eq!(b.len(), 3001);
+        assert_eq!(a.len(), 3000);
     }
 
     #[test]
