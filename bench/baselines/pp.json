@@ -8,18 +8,18 @@
         "flags": "-std=c++26 -E -o /dev/null -stdlib=libc++",
         "source_hash": "fnv1a64:dc9c28b2335da2c1",
         "runs": 5,
-        "wall_ms_median": 706.876,
-        "wall_ms_min": 678.912,
-        "wall_ms_max": 750.059,
-        "spread_pct": 4.12,
-        "max_rss_kb": 157788,
+        "wall_ms_median": 623.872,
+        "wall_ms_min": 619.272,
+        "wall_ms_max": 648.328,
+        "spread_pct": 0.74,
+        "max_rss_kb": 158308,
         "compiler": "clang++-19",
         "compiler_version": "Debian clang version 19.1.7 (3+b1)",
         "host": {
           "arch": "aarch64",
           "cpus": 24
         },
-        "recorded": "2026-10-28T082451"
+        "recorded": "2026-10-28T133111"
       }
     },
     "repetition": {
@@ -28,18 +28,18 @@
         "flags": "-std=c++26 -E -o /dev/null",
         "source_hash": "fnv1a64:19e8b110aa48b49c",
         "runs": 5,
-        "wall_ms_median": 901.706,
-        "wall_ms_min": 856.289,
-        "wall_ms_max": 909.166,
-        "spread_pct": 5.3,
-        "max_rss_kb": 214548,
+        "wall_ms_median": 786.138,
+        "wall_ms_min": 768.945,
+        "wall_ms_max": 846.456,
+        "spread_pct": 2.24,
+        "max_rss_kb": 215088,
         "compiler": "clang++-19",
         "compiler_version": "Debian clang version 19.1.7 (3+b1)",
         "host": {
           "arch": "aarch64",
           "cpus": 24
         },
-        "recorded": "2026-10-28T082451"
+        "recorded": "2026-10-28T133111"
       }
     },
     "xmacro": {
@@ -48,18 +48,18 @@
         "flags": "-std=c++26 -E -o /dev/null",
         "source_hash": "fnv1a64:8a65a5b7279bcd75",
         "runs": 5,
-        "wall_ms_median": 866.055,
-        "wall_ms_min": 841.507,
-        "wall_ms_max": 878.551,
-        "spread_pct": 2.92,
-        "max_rss_kb": 222472,
+        "wall_ms_median": 771.284,
+        "wall_ms_min": 762.035,
+        "wall_ms_max": 791.735,
+        "spread_pct": 1.21,
+        "max_rss_kb": 222860,
         "compiler": "clang++-19",
         "compiler_version": "Debian clang version 19.1.7 (3+b1)",
         "host": {
           "arch": "aarch64",
           "cpus": 24
         },
-        "recorded": "2026-10-28T082451"
+        "recorded": "2026-10-28T133111"
       }
     }
   }
