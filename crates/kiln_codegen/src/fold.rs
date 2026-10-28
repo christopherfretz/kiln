@@ -129,7 +129,11 @@ impl Collect<'_> {
                     | TypeView::LValueRef(_)
                     | TypeView::RValueRef(_)
             )
-            || (ast.types.effective_quals(ty).is_const() && !ast.types.effective_quals(ty).is_volatile());
+            || (ast.types.effective_quals(ty).is_const()
+                && !ast.types.effective_quals(ty).is_volatile()
+                && (is_static
+                    || ast.types.is_integral(ty)
+                    || matches!(ast.types.canonical_view(ty), TypeView::Enum(_))));
         if fold {
             self.out.push(init);
         }
