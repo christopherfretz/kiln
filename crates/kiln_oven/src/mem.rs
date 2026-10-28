@@ -292,6 +292,16 @@ impl Memory {
         }
     }
 
+    /// Heap bytes held (see `Oven::footprint`).
+    pub fn footprint(&self) -> usize {
+        let space = |s: &Space| s.bytes.capacity() + s.init.capacity() + s.ptr.capacity();
+        space(&self.frame)
+            + space(&self.stat)
+            + (self.slots.capacity() + self.statics.capacity()) * size_of::<Alloc>()
+            + (self.free.capacity() + self.live.capacity()) * 4
+            + self.unions.capacity() * (size_of::<(u64, u32)>() + 1)
+    }
+
     /// Drops every frame allocation (end of a top-level evaluation).
     pub fn reset(&mut self) {
         self.frame.top = 0;

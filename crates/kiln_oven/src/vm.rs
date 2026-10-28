@@ -64,6 +64,13 @@ pub(crate) struct RunState {
     pub nesting: u32,
 }
 
+impl RunState {
+    /// Heap bytes held (see `Oven::footprint`).
+    pub(crate) fn footprint(&self) -> usize {
+        self.pending.capacity() * size_of::<Pending>()
+    }
+}
+
 /// An activation.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Frame {

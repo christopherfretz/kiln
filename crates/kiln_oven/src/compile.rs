@@ -835,8 +835,16 @@ impl Compiler<'_> {
         let _ = params;
     }
 
+    /// Counts statement `s` as a step; the step-limit note is at its begin
+    /// (clang's `Stmt::getBeginLoc`, the leftmost token of an expression
+    /// statement).
     fn step(&mut self, s: StmtId) {
-        let loc = self.b.ast().stmts.get(s).loc();
+        let ast = self.b.ast();
+        let loc = if ast.stmts.get(s).kind() == StmtKind::ExprStmt {
+            self.begin(ast.stmts.expr_stmt_expr(s))
+        } else {
+            ast.stmts.get(s).loc()
+        };
         self.pending.push(loc);
     }
 

@@ -32,6 +32,17 @@ pub(crate) struct Scratch {
     unions: Vec<UnionMember>,
 }
 
+impl Scratch {
+    /// Heap bytes held (see `Oven::footprint`).
+    pub(crate) fn footprint(&self) -> usize {
+        self.bytes.capacity()
+            + self.cover.capacity()
+            + self.relocs.capacity() * size_of::<Reloc>()
+            + self.padding.capacity() * size_of::<ByteRange>()
+            + self.unions.capacity() * size_of::<UnionMember>()
+    }
+}
+
 /// How a variable reads in constant expressions.
 pub(crate) struct VarInfo {
     /// Usable in constant expressions ([expr.const]/4): constexpr, or a

@@ -69,6 +69,12 @@ impl Memo {
         }
     }
 
+    /// Heap bytes held (see `Oven::footprint`).
+    pub fn footprint(&self) -> usize {
+        self.map.capacity() * (size_of::<(MemoKey, u32)>() + 1)
+            + self.entries.capacity() * size_of::<Entry>()
+    }
+
     pub fn enabled(&self) -> bool {
         self.cap > 0
     }

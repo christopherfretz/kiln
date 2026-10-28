@@ -288,6 +288,38 @@ impl Oven {
         &self.stats
     }
 
+    /// Bytes of heap the evaluator holds (capacities of its code, abstract
+    /// memory, registers, stacks, caches and scratch buffers). Compiling
+    /// new code grows it; re-evaluating compiled code must not
+    /// (spec/oven.md "Memory": the frame arena is reset, not freed).
+    pub fn footprint(&self) -> usize {
+        fn cap<T>(v: &Vec<T>) -> usize {
+            v.capacity() * size_of::<T>()
+        }
+        fn map<K, V>(m: &FxHashMap<K, V>) -> usize {
+            m.capacity() * (size_of::<(K, V)>() + 1)
+        }
+        cap(&self.code)
+            + cap(&self.sites)
+            + cap(&self.step_locs)
+            + cap(&self.origins)
+            + cap(&self.traps)
+            + cap(&self.funcs)
+            + map(&self.func_map)
+            + map(&self.thunks)
+            + cap(&self.globals)
+            + map(&self.global_map)
+            + map(&self.strings)
+            + map(&self.lit_exprs)
+            + map(&self.thawed)
+            + self.mem.footprint()
+            + cap(&self.regs)
+            + cap(&self.stack)
+            + self.memo.footprint()
+            + self.run.footprint()
+            + self.scratch.footprint()
+    }
+
     /// The disassembly of everything compiled so far (debugging aid).
     pub fn disassemble(&self) -> String {
         kbc::disassemble(&self.code, 0, self.code.len())
