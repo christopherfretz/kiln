@@ -93,6 +93,55 @@ pub(crate) struct Cond {
     pub(crate) was_skipping: bool,
 }
 
+/// The include-guard detector of one file (clang `MultipleIncludeOpt`):
+/// a file whose only tokens are inside a top-level `#ifndef X` /
+/// `#if !defined(X)` group is skipped when re-included while `X` is
+/// defined.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct MiOpt {
+    /// Tokens were read outside the candidate guard.
+    pub(crate) read_any: bool,
+    /// The candidate controlling macro.
+    pub(crate) the_macro: Option<Symbol>,
+}
+
+impl MiOpt {
+    /// Any token (directive tokens included) was lexed.
+    pub(crate) fn read_token(&mut self) {
+        self.read_any = true;
+    }
+
+    /// A conditional other than the guard at the top level.
+    pub(crate) fn invalidate(&mut self) {
+        self.read_any = true;
+        self.the_macro = None;
+    }
+
+    /// A top-level `#ifndef m` with nothing before it.
+    pub(crate) fn enter_ifndef(&mut self, m: Symbol) {
+        self.read_any = true;
+        if self.the_macro.is_some() {
+            self.invalidate();
+        } else {
+            self.the_macro = Some(m);
+        }
+    }
+
+    /// The top-level `#endif`.
+    pub(crate) fn exit_top_level(&mut self) {
+        if self.the_macro.is_some() {
+            self.read_any = false;
+        } else {
+            self.invalidate();
+        }
+    }
+
+    /// The controlling macro, at the end of the file.
+    pub(crate) fn controlling_macro(self) -> Option<Symbol> {
+        if self.read_any { None } else { self.the_macro }
+    }
+}
+
 /// A buffer being lexed.
 pub(crate) struct FileFrame<'a> {
     pub(crate) lx: Lexer<'a>,
@@ -106,6 +155,11 @@ pub(crate) struct FileFrame<'a> {
     /// Search-path index the file was found at (for `#include_next`).
     pub(crate) lookup: Option<u32>,
     pub(crate) system: bool,
+    /// Line markers with flag 1 not yet closed by flag 2 in this file
+    /// (clang's presumed include stack, as far as it is checked).
+    pub(crate) marker_depth: u32,
+    /// Include-guard detection.
+    pub(crate) mi: MiOpt,
 }
 
 /// A macro expansion or a token stream being read.
@@ -175,6 +229,10 @@ pub struct Preprocessor<'a, 'd> {
     pub(crate) syms: Syms,
     pub(crate) counter: u32,
     pub(crate) once_files: HashSet<FileId>,
+    /// Files with a detected include guard, and its macro.
+    pub(crate) guards: HashMap<FileId, Symbol>,
+    /// The `X` of a `#if !defined(X)` just evaluated by `eval_if`.
+    pub(crate) if_ndef: Option<Symbol>,
     pub(crate) poisoned: SymMap<Span>,
     pub(crate) pushed: SymMap<Vec<Option<Rc<MacroDef>>>>,
     pub(crate) entered: HashSet<FileId>,
@@ -253,6 +311,8 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
             syms,
             counter: 0,
             once_files: HashSet::new(),
+            guards: HashMap::new(),
+            if_ndef: None,
             poisoned: SymMap::default(),
             pushed: SymMap::default(),
             entered: HashSet::new(),
@@ -372,6 +432,8 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
             conds: Vec::new(),
             lookup,
             system,
+            marker_depth: 0,
+            mi: MiOpt::default(),
         })));
         self.file_change(FileChange::Enter { file, from, system });
     }
@@ -437,12 +499,17 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
     /// Lexes one token from the top file frame (pushed-back tokens first),
     /// applying propagated flags and reporting lexer diagnostics. Comments
     /// are returned. Identifiers are checked for poisoning.
-    pub(crate) fn lex_file_tok(&mut self) -> Token {
+    ///
+    /// Also returns whether the token physically starts its line (before
+    /// propagated flags are applied): only such a `#` introduces a
+    /// directive (clang `IsAtPhysicalStartOfLine`).
+    pub(crate) fn lex_file_tok_phys(&mut self) -> (Token, bool) {
         let top = self.frames.len().wrapping_sub(1);
         if !matches!(self.frames.last(), Some(Frame::File(_))) {
-            return eof_tok(Span::INVALID);
+            return (eof_tok(Span::INVALID), false);
         }
         let mut t = self.lex_raw_from(top);
+        let phys = t.has(TokFlags::START_OF_LINE);
         let Some(Frame::File(f)) = self.frames.last_mut() else { unreachable!() };
         if !f.pend.is_empty() && !matches!(t.kind, TokKind::Eod | TokKind::Eof) {
             t.flags |= f.pend;
@@ -451,7 +518,7 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
         if let TokKind::Identifier(s) = t.kind {
             self.check_poison(s, t.span);
         }
-        t
+        (t, phys)
     }
 
     /// The next token of file frame `i` (pushed-back tokens first),
@@ -593,9 +660,15 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
                     return t;
                 }
                 Some(Frame::File(_)) => {
-                    let t = self.lex_file_tok();
+                    let (t, phys_sol) = self.lex_file_tok_phys();
+                    if !(phys_sol && t.kind == TokKind::Punct(Punct::Hash))
+                        && !matches!(t.kind, TokKind::Comment | TokKind::Eod | TokKind::Eof)
+                        && let Some(Frame::File(f)) = self.frames.last_mut()
+                    {
+                        f.mi.read_token();
+                    }
                     match t.kind {
-                        TokKind::Punct(Punct::Hash) if t.has(TokFlags::START_OF_LINE) => {
+                        TokKind::Punct(Punct::Hash) if phys_sol => {
                             self.handle_directive(t);
                         }
                         TokKind::Eof => {
@@ -604,7 +677,7 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
                             }
                         }
                         TokKind::Identifier(s) => {
-                            if t.has(TokFlags::START_OF_LINE)
+                            if phys_sol
                                 && (s == self.syms.module
                                     || s == self.syms.import
                                     || s == self.syms.export)
@@ -750,10 +823,24 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
         }
         let Some(Frame::File(f)) = self.frames.pop() else { unreachable!() };
         let exited = f.file;
+        if conds.is_empty()
+            && let Some(m) = f.mi.controlling_macro()
+        {
+            self.guards.insert(exited, m);
+        }
         self.include_depth = self.include_depth.saturating_sub(1);
         if let Some(Frame::File(below)) = self.frames.last() {
             let (file, system) = (below.file, below.system);
-            let resume = self.sm.loc(file, below.lx.offset());
+            // The includer resumes after the newline ending the `#include`
+            // (clang's lexer has consumed it with the `eod`).
+            let mut off = below.lx.offset();
+            let rest = self.sm.text(file).as_bytes().get(off as usize..).unwrap_or_default();
+            if rest.starts_with(b"\r\n") {
+                off += 2;
+            } else if rest.starts_with(b"\n") || rest.starts_with(b"\r") {
+                off += 1;
+            }
+            let resume = self.sm.loc(file, off);
             self.file_change(FileChange::Exit { file, exited, resume, system });
         }
         false

@@ -237,7 +237,7 @@ diag_ids! {
     pp_invalid_string_literal = Warning (0) "invalid string literal, ignoring final '\\'";
     pp_disabled_macro_expansion = WarningOff [DisabledMacroExpansion] (0) "disabled expansion of recursive macro";
     pp_embedded_directive = Error (1) "embedding a #{0} directive within macro arguments is not supported";
-    pp_embedded_directive_ext = ExtWarn [EmbeddedDirective] (0) "embedding a directive within macro arguments has undefined behavior";
+    pp_embedded_directive_ext = Extension [EmbeddedDirective] (0) "embedding a directive within macro arguments has undefined behavior";
     pp_else_after_else = Error (0) "#else after #else";
     pp_elif_after_else = Error (1) "#{0} after #else";
     pp_elifdef_without_if = Error (1) "#{0} without #if";
@@ -249,13 +249,14 @@ diag_ids! {
     pp_line_too_big = Extension (1) "C requires #line number to be less than {0}, allowed as extension";
     pp_line_invalid_filename = Error (1) "invalid filename for {0:#line|line marker} directive";
     pp_line_marker_flag = Error (0) "invalid flag line marker directive";
+    pp_line_marker_pop = Error (0) "invalid line marker flag '2': cannot pop empty include stack";
     pp_line_marker_ext = Extension [GnuLineMarker] (0) "this style of line directive is a GNU extension";
     pp_string_udl = Error (0) "string literal with user-defined suffix cannot be used here";
     pp_warning_directive_ext = Extension (0) "#warning is a C++23 extension";
     pp_ident_ext = Extension (0) "#ident is a language extension";
     pp_import_ext = Extension (0) "#import is a language extension";
     pp_include_next_ext = Extension [GnuIncludeNext] (0) "#include_next is a language extension";
-    pp_include_next_in_primary = Warning [IncludeNextOutsideHeader] (0) "#include_next in primary source file";
+    pp_include_next_in_primary = Warning [IncludeNextOutsideHeader] (0) "#include_next in primary source file; will search from start of include path";
     pp_include_next_absolute_path = Warning [IncludeNextAbsPath] (0) "#include_next in file found relative to primary source file or found by absolute path; will search from start of include path";
     pp_include_expects_file = Error (0) "expected \"FILENAME\" or <FILENAME>";
     pp_empty_filename = Error (0) "empty filename";
@@ -281,7 +282,8 @@ diag_ids! {
     pp_missing_lparen_after = Error (1) "missing '(' after '{0}'";
     pp_feature_check_malformed = Error (0) "builtin feature check macro requires a parenthesized identifier";
     pp_defined_requires_identifier = Error (0) "operator 'defined' requires an identifier";
-    pp_expansion_to_defined = WarningOff [ExpansionToDefined] (0) "macro expansion producing 'defined' has undefined behavior";
+    pp_expansion_to_defined = Warning [ExpansionToDefined] (0) "macro expansion producing 'defined' has undefined behavior";
+    pp_expansion_to_defined_fn = Extension [ExpansionToDefined] (0) "macro expansion producing 'defined' has undefined behavior";
     pp_expr_bad_token_binop = Error (0) "token is not a valid binary operator in a preprocessor subexpression";
     pp_expected_rparen_in_expr = Error (0) "expected ')' in preprocessor expression";
     pp_nested_paren = Error (1) "nested parentheses not permitted in '{0}'";

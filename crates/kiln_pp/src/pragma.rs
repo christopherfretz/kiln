@@ -140,6 +140,11 @@ impl Preprocessor<'_, '_> {
             self.give_buf(m.toks);
         }
         (self.in_directive, self.dir_eod) = saved;
+        // clang's pragma buffer ends with a newline, so its end-of-file
+        // token is at the start of a line and the next token inherits that
+        // (`PropagateLineStartLeadingSpaceInfo`); it shows in `-E` output
+        // only for the first line of a file (`IsFirstInFile`).
+        self.propagate(true, false);
         None
     }
 

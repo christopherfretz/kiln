@@ -991,7 +991,26 @@ impl Preprocessor<'_, '_> {
         match b {
             Builtin::Pragma => return self.handle_pragma_op(t),
             Builtin::Line => {
-                let hi = self.sm.expansion_span(t.tok.span.lo).hi;
+                // clang `AdvanceToTokenCharacter(Loc, 0)`: a token spelled
+                // after a line splice is on the line after it.
+                let mut lo = t.tok.span.lo;
+                if let Some((f, mut off)) = self.sm.offset_of(lo) {
+                    let b = self.sm.text(f).as_bytes();
+                    while b.get(off as usize) == Some(&b'\\') {
+                        let mut i = off as usize + 1;
+                        while matches!(b.get(i), Some(b' ' | b'\t' | b'\x0b' | b'\x0c')) {
+                            i += 1;
+                        }
+                        match b.get(i) {
+                            Some(b'\r') if b.get(i + 1) == Some(&b'\n') => i += 2,
+                            Some(b'\n' | b'\r') => i += 1,
+                            _ => break,
+                        }
+                        off = u32::try_from(i).unwrap_or(off);
+                    }
+                    lo = self.sm.loc(f, off);
+                }
+                let hi = self.sm.expansion_span(lo).hi;
                 let line = self.sm.presumed_line_col(hi).map_or(1, |p| p.line);
                 let _ = write!(text, "{line}");
             }

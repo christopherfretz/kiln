@@ -8,7 +8,7 @@
 
 use kiln_diag::{Diag, DiagId};
 use kiln_lex::{Interner, Punct, Std, Symbol, TokKind, Token};
-use kiln_source::{SourceManager, Span};
+use kiln_source::{ExpansionKind, SourceManager, Span};
 
 /// What an [`IfEvaluator`] can do with the directive it evaluates.
 ///
@@ -284,10 +284,18 @@ impl Stub<'_> {
 
     fn defined(&mut self) -> i64 {
         let kw = self.tok.span;
-        if self.cx.source_manager().is_macro_loc(kw.lo)
-            && self.cx.is_enabled(DiagId::pp_expansion_to_defined)
-        {
-            self.cx.emit(Diag::new(DiagId::pp_expansion_to_defined, kw));
+        if let Some(info) = self.cx.source_manager().expansion_info(kw.lo) {
+            // clang `isFunctionMacroExpansion`: a warning for an object-like
+            // macro (easily rewritten), an extension otherwise.
+            let id = match info.kind {
+                ExpansionKind::Macro { name } if info.expansion == name => {
+                    DiagId::pp_expansion_to_defined
+                }
+                _ => DiagId::pp_expansion_to_defined_fn,
+            };
+            if self.cx.is_enabled(id) {
+                self.cx.emit(Diag::new(id, kw));
+            }
         }
         let mut t = self.cx.next_unexpanded();
         let paren = t.kind == TokKind::Punct(Punct::LParen);

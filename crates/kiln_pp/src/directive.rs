@@ -79,6 +79,9 @@ impl<'a> Preprocessor<'a, '_> {
     /// (clang `HandleDirective`).
     pub(crate) fn handle_directive(&mut self, _hash: Token) {
         self.start_directive();
+        // For include-guard detection: were tokens read before this
+        // directive? (Its own tokens count as read from here on.)
+        let read_before = self.cur_file_ref().is_none_or(|f| f.mi.read_any);
         let name = self.lex_unexpanded();
         let dir = self.dir_of(&name);
         if let Some((mname, mspan)) = self.in_args {
@@ -101,8 +104,10 @@ impl<'a> Preprocessor<'a, '_> {
             TokKind::Eod => {}
             TokKind::PpNumber => self.do_line_marker(name),
             _ => match dir {
-                Some(Dir::If) => self.do_if(name),
-                Some(d @ (Dir::Ifdef | Dir::Ifndef)) => self.do_ifdef(name, d == Dir::Ifndef),
+                Some(Dir::If) => self.do_if(name, read_before),
+                Some(d @ (Dir::Ifdef | Dir::Ifndef)) => {
+                    self.do_ifdef(name, d == Dir::Ifndef, read_before);
+                }
                 Some(d @ (Dir::Elif | Dir::Elifdef | Dir::Elifndef)) => self.do_elif(name, d),
                 Some(Dir::Else) => self.do_else(name),
                 Some(Dir::Endif) => self.do_endif(name),
@@ -592,11 +597,59 @@ struct IfCx<'p, 'a, 'd> {
     end: Option<Token>,
     /// `defined` was evaluated.
     used_defined: bool,
+    /// The first tokens read (for `#if !defined(X)` guard detection);
+    /// `None` once more than [`IfCx::REC`] were read.
+    rec: Option<Vec<Token>>,
 }
 
 impl<'p, 'a, 'd> IfCx<'p, 'a, 'd> {
+    const REC: usize = 8;
+
     fn new(pp: &'p mut Preprocessor<'a, 'd>, paren: bool) -> Self {
-        IfCx { pp, paren: paren.then_some(0), end: None, used_defined: false }
+        IfCx { pp, paren: paren.then_some(0), end: None, used_defined: false, rec: Some(Vec::new()) }
+    }
+
+    /// The `X` if the tokens read were exactly `!defined X` or
+    /// `!defined(X)`, possibly parenthesized, none from a macro expansion
+    /// (clang's `DefinedTracker::NotDefinedMacro` with no
+    /// `DidMacroExpansion`).
+    fn ifndef_macro(&self) -> Option<Symbol> {
+        let rec = self.rec.as_ref()?;
+        let (last, rest) = rec.split_last()?;
+        if last.kind != TokKind::Eod || rest.iter().any(|t| self.pp.sm.is_macro_loc(t.span.lo)) {
+            return None;
+        }
+        let mut depth = 0i32;
+        let mut core = Vec::new();
+        for t in rest {
+            match t.kind {
+                TokKind::Punct(Punct::LParen) => depth += 1,
+                TokKind::Punct(Punct::RParen) => depth -= 1,
+                _ => core.push(t.kind),
+            }
+            if depth < 0 {
+                return None;
+            }
+        }
+        match core.as_slice() {
+            [TokKind::Punct(Punct::Exclaim), TokKind::Identifier(d), TokKind::Identifier(x)]
+                if depth == 0 && self.pp.interner.as_str(*d) == "defined" =>
+            {
+                Some(*x)
+            }
+            _ => None,
+        }
+    }
+
+    fn record(&mut self, t: Token) -> Token {
+        if let Some(r) = &mut self.rec {
+            if r.len() < Self::REC {
+                r.push(t);
+            } else {
+                self.rec = None;
+            }
+        }
+        t
     }
 
     fn filter(&mut self, t: Token) -> Token {
@@ -625,6 +678,7 @@ impl IfContext for IfCx<'_, '_, '_> {
             return e;
         }
         let t = self.pp.lex().tok;
+        let t = self.record(t);
         self.filter(t)
     }
 
@@ -633,6 +687,7 @@ impl IfContext for IfCx<'_, '_, '_> {
             return e;
         }
         let t = self.pp.lex_unexpanded().tok;
+        let t = self.record(t);
         self.filter(t)
     }
 
@@ -683,10 +738,13 @@ impl Preprocessor<'_, '_> {
         let mut ev = self.evaluator.take();
         let v = {
             let mut cx = IfCx::new(self, false);
-            match ev.as_mut() {
+            let v = match ev.as_mut() {
                 Some(e) => e.eval(&mut cx),
                 None => StubIfEvaluator.eval(&mut cx),
-            }
+            };
+            let ndef = cx.ifndef_macro();
+            cx.pp.if_ndef = ndef;
+            v
         };
         if self.evaluator.is_none() {
             self.evaluator = ev;
@@ -708,9 +766,40 @@ impl Preprocessor<'_, '_> {
         self.cur_file().and_then(|f| f.conds.pop())
     }
 
+    /// Include-guard detection for a conditional directive at the top
+    /// level of the file: `guard` is the controlling macro it may
+    /// introduce (`#ifndef X` / `#if !defined(X)` with `X` undefined and
+    /// no tokens before).
+    fn mi_enter(&mut self, guard: Option<Symbol>) {
+        if let Some(f) = self.cur_file()
+            && f.conds.is_empty()
+        {
+            match guard {
+                Some(m) => f.mi.enter_ifndef(m),
+                None => f.mi.invalidate(),
+            }
+        }
+    }
+
+    /// `#else` / `#elif` / `#endif` at the top level of the file.
+    fn mi_exit(&mut self, endif: bool) {
+        if let Some(f) = self.cur_file()
+            && f.conds.is_empty()
+        {
+            if endif {
+                f.mi.exit_top_level();
+            } else {
+                f.mi.invalidate();
+            }
+        }
+    }
+
     /// `#if` ([cpp.cond]).
-    fn do_if(&mut self, name: PpTok) {
-        if self.eval_if() {
+    fn do_if(&mut self, name: PpTok, read_before: bool) {
+        let v = self.eval_if();
+        let ndef = self.if_ndef.take();
+        self.mi_enter(ndef.filter(|_| v && !read_before));
+        if v {
             self.push_cond(Cond {
                 span: name.tok.span,
                 found_non_skip: true,
@@ -723,8 +812,9 @@ impl Preprocessor<'_, '_> {
     }
 
     /// `#ifdef` / `#ifndef`.
-    fn do_ifdef(&mut self, name: PpTok, ndef: bool) {
+    fn do_ifdef(&mut self, name: PpTok, ndef: bool, read_before: bool) {
         let Some((s, _)) = self.read_macro_name(false) else {
+            self.mi_enter(None);
             self.skip_excluded(name.tok.span, false, false);
             return;
         };
@@ -736,6 +826,7 @@ impl Preprocessor<'_, '_> {
             }
             None => false,
         };
+        self.mi_enter(Some(s).filter(|_| ndef && !defined && !read_before));
         if defined == ndef {
             self.skip_excluded(name.tok.span, false, false);
         } else {
@@ -777,6 +868,7 @@ impl Preprocessor<'_, '_> {
         if c.found_else {
             self.emit(Diag::new(DiagId::pp_elif_after_else, name.tok.span).arg(n));
         }
+        self.mi_exit(false);
         self.skip_excluded(c.span, true, c.found_else);
     }
 
@@ -790,6 +882,7 @@ impl Preprocessor<'_, '_> {
         if c.found_else {
             self.emit(Diag::new(DiagId::pp_else_after_else, name.tok.span));
         }
+        self.mi_exit(false);
         self.skip_excluded(c.span, true, true);
     }
 
@@ -798,6 +891,8 @@ impl Preprocessor<'_, '_> {
         self.check_eod("endif", false);
         if self.pop_cond().is_none() {
             self.emit(Diag::new(DiagId::pp_endif_without_if, name.tok.span));
+        } else {
+            self.mi_exit(true);
         }
     }
 
@@ -1088,6 +1183,13 @@ impl Preprocessor<'_, '_> {
             return;
         };
         if self.once_files.contains(&r.file) {
+            return;
+        }
+        // The multiple-include optimization: re-including a guarded file
+        // whose guard macro is defined has no effect.
+        if let Some(&m) = self.guards.get(&r.file)
+            && self.macros.is_defined(m)
+        {
             return;
         }
         if d == Dir::Import {
@@ -1661,6 +1763,7 @@ impl Preprocessor<'_, '_> {
             return;
         }
         let Ok(name) = self.line_file_name(&s, true) else { return };
+        let mut enter = false;
         let mut exit = false;
         let mut system = false;
         let mut want = [1u32, 2, 3, 4].as_slice();
@@ -1679,6 +1782,13 @@ impl Preprocessor<'_, '_> {
                 self.emit(Diag::new(DiagId::pp_line_marker_flag, f.tok.span));
                 return;
             }
+            if v == 2 && self.cur_file_ref().is_some_and(|f| f.marker_depth == 0) {
+                // clang: the presumed location has no include location in
+                // this physical file.
+                self.emit(Diag::new(DiagId::pp_line_marker_pop, f.tok.span));
+                return;
+            }
+            enter |= v == 1;
             exit |= v == 2;
             system |= v >= 3;
             want = &want[(i + if v == 1 { 2 } else { 1 })..];
@@ -1689,6 +1799,13 @@ impl Preprocessor<'_, '_> {
             self.emit(Diag::new(DiagId::pp_line_marker_ext, s.tok.span));
         }
         let name = name.filter(|n| !(exit && n.is_empty()));
+        if let Some(f) = self.cur_file() {
+            if enter {
+                f.marker_depth += 1;
+            } else if exit {
+                f.marker_depth -= 1;
+            }
+        }
         self.finish_directive();
         self.add_line_note(line, name.as_deref(), system);
     }
