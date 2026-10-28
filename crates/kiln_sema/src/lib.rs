@@ -16,7 +16,6 @@ pub mod declspec;
 pub mod expr;
 pub mod literal;
 pub mod lookup;
-pub mod names;
 pub mod scope;
 pub mod stmt;
 pub mod target;
@@ -117,9 +116,8 @@ impl<'a, 'sm> Sema<'a, 'sm> {
     /// `q` as clang prints a type argument: `'T'`, or `'T' (aka 'int')`
     /// when the canonical spelling differs.
     pub fn ty_arg(&self, q: QualType) -> String {
-        let names = names::SemaNames::new(self);
-        let s = print_type(&self.ast.types, &names, q, PrintOptions::SUGARED);
-        match aka(&self.ast.types, &names, q) {
+        let s = print_type(&self.ast.types, &self.ast, q, PrintOptions::SUGARED);
+        match aka(&self.ast.types, &self.ast, q) {
             Some(a) => format!("'{s}' (aka '{a}')"),
             None => format!("'{s}'"),
         }
@@ -127,8 +125,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
 
     /// `q` printed without quotes.
     pub fn ty_str(&self, q: QualType) -> String {
-        let names = names::SemaNames::new(self);
-        print_type(&self.ast.types, &names, q, PrintOptions::SUGARED)
+        print_type(&self.ast.types, &self.ast, q, PrintOptions::SUGARED)
     }
 
     /// The simple name of `d` (empty when unnamed).

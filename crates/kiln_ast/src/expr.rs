@@ -1016,6 +1016,19 @@ impl ExprArena {
         n.bits = (n.bits & !(3 << 2)) | ((ObjectKind::BitField as u8) << 2);
     }
 
+    /// Marks the `ImplicitCastExpr` `e` as part of an explicit cast
+    /// (`part_of_explicit_cast`): sema builds the implicit conversion
+    /// sequence of a C-style or functional cast first and marks it
+    /// afterwards ([expr.cast]/4). Monotone.
+    ///
+    /// # Panics
+    /// If `e` is not an `ImplicitCastExpr`.
+    pub fn mark_part_of_explicit_cast(&mut self, e: ExprId) {
+        let n = &mut self.nodes[e.index() as usize];
+        assert!(n.kind == ExprKind::ImplicitCastExpr, "not an ImplicitCastExpr");
+        n.bits |= ExprFlags::PART_OF_EXPLICIT_CAST.0;
+    }
+
     /// The callee of a `CallExpr`.
     pub fn callee(&self, e: ExprId) -> ExprId {
         ExprId::new(self.expect_kind(e, ExprKind::CallExpr).a)
