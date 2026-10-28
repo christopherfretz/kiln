@@ -27,3 +27,8 @@ Format per `docs/AGENTS.md`. Ids are stable; status moves between
 | WP-018 | driver: `kiln -E` flag parsing subset + `-M*` dependency output | todo |
 | WP-019 | differential corpus: all libc++ 19 headers + sysroot C headers + clang Preprocessor tests; `xtask test` pp-diff mode | todo |
 | WP-020 | predefined macro audit: `__cpp_*` values kiln claims for M1; decide `__VERSION__`/`__clang_version__` strings, GNU-mode (`gnu++NN`) macro delta, which macros the driver supplies from flags (`__OPTIMIZE__`, `__PIE__`, `__EXCEPTIONS`, `__GXX_RTTI`, `__GCC_HAVE_DWARF2_CFI_ASM`) vs the static files — see `resource/README.md` | todo |
+
+## Cross-cutting
+| id | scope | status |
+|---|---|---|
+| WP-030 | perf/stress corpus from mirrorbind: `corpus/lib/synth/make_lib.py` generates synthetic reflection-heavy libraries (`corpus/runs/synth_*`, see mirrorbind `PERF.md`); wire a generated set into `bench/mirrorbind/` once kiln parses templates (M3) and reflection (M6); until then use their preprocessed/`-E` forms for pp benches (M1) | todo |
