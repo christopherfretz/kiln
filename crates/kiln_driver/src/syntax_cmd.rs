@@ -1,39 +1,23 @@
 //! `-fsyntax-only [-fdump-ast[=opts]] [-fdump-ast-filter=s]` for one input:
-//! WP-048's parser and Sema on the file, then the optional AST dump
+//! the preprocessor exactly as `-E` builds it ([`Job::build_preprocessor`]),
+//! the parser and Sema on its token stream, then the optional AST dump
 //! (`spec/driver.md` "Syntax checking", `spec/ast-dump.md`).
-//!
-//! The parser still lexes the file itself (no `#include`, no macros) until
-//! WP-055 feeds it `kiln_pp` tokens.
+
+use std::sync::Arc;
 
 use kiln_ast::dump::{DumpOptions, Filter, dump};
-use kiln_diag::{Diag, DiagId, DiagOptions};
-use kiln_parse::{ParseOptions, parse_tu};
+use kiln_diag::{Diag, DiagEngine, DiagId};
+use kiln_lex::Interner;
+use kiln_parse::{ParseOptions, parse_preprocessed};
 use kiln_sema::target::Target;
 use kiln_source::{FileId, SourceManager, Span};
 
-use crate::args::Args;
-use crate::pp_cmd::JobResult;
-use crate::toolchain::{LangStd, Toolchain};
-use crate::{SharedWriter, make_engine};
+use crate::make_engine;
+use crate::pp_cmd::{Job, JobResult, PpInputs};
 
-/// One input to parse.
+/// One input to parse: the same inputs as a preprocessing [`Job`].
 #[derive(Debug)]
-pub struct SyntaxJob<'j> {
-    /// The command line.
-    pub args: &'j Args,
-    /// The toolchain.
-    pub toolchain: &'j Toolchain,
-    /// The standard.
-    pub std: LangStd,
-    /// The input path (`-` for standard input).
-    pub path: &'j str,
-    /// Standard input's text, for `-`.
-    pub stdin_text: Option<String>,
-    /// Diagnostic options.
-    pub diag_opts: &'j DiagOptions,
-    /// Standard error.
-    pub stderr: SharedWriter,
-}
+pub struct SyntaxJob<'j>(pub Job<'j>);
 
 /// The dump options of `-fdump-ast=<opts>` (`ids`, `locs`, `canonical`,
 /// `implicit`, `all-files`), or the unknown option.
@@ -67,27 +51,21 @@ impl SyntaxJob<'_> {
     /// to standard error, the AST dump (if asked for) as the output.
     pub fn run(self) -> JobResult {
         use std::io::Write as _;
+        let job = &self.0;
         let sm = SourceManager::new();
-        let engine = make_engine(&sm, self.diag_opts, self.stderr.clone(), None);
+        // The preprocessor and the AST share the interner; it outlives
+        // the engine.
+        let interner = Arc::new(Interner::new());
+        let engine = make_engine(&sm, job.diag_opts, job.stderr.clone(), None);
         let mut result = JobResult::default();
-        let loaded = match &self.stdin_text {
-            Some(t) => sm.add_virtual("<stdin>", t.clone()).map_err(|e| e.to_string()),
-            None => sm.load_file(std::path::Path::new(self.path)).map_err(|e| e.to_string()),
-        };
-        match loaded {
-            Err(e) => {
-                Diag::new(DiagId::drv_cannot_read_input, Span::INVALID)
-                    .arg(self.path)
-                    .arg(e)
-                    .emit(&engine);
-            }
-            Ok(file) => self.parse(&sm, &engine, file, &mut result),
+        if let Some(inputs) = job.pp_inputs(&sm, &engine) {
+            self.parse(&sm, &engine, &interner, inputs, &mut result);
         }
         engine.flush();
         if let Some(s) = engine.summary()
-            && self.diag_opts.format == kiln_diag::Format::Text
+            && job.diag_opts.format == kiln_diag::Format::Text
         {
-            let mut err = self.stderr.clone();
+            let mut err = job.stderr.clone();
             let _ = writeln!(err, "{s}");
         }
         result.errors = engine.error_count();
@@ -97,13 +75,15 @@ impl SyntaxJob<'_> {
     fn parse<'sm>(
         &self,
         sm: &'sm SourceManager,
-        engine: &kiln_diag::DiagEngine<'sm>,
-        file: FileId,
+        engine: &DiagEngine<'sm>,
+        interner: &'sm Arc<Interner>,
+        inputs: PpInputs,
         result: &mut JobResult,
     ) {
-        let a = self.args;
+        let job = &self.0;
+        let a = job.args;
         let dump_opts = match &a.dump_ast {
-            Some(o) => match dump_options(o, a.dump_ast_filter.clone(), sm, file) {
+            Some(o) => match dump_options(o, a.dump_ast_filter.clone(), sm, inputs.main) {
                 Ok(d) => Some(d),
                 Err(bad) => {
                     Diag::new(DiagId::drv_invalid_value, Span::INVALID)
@@ -115,14 +95,20 @@ impl SyntaxJob<'_> {
             },
             None => None,
         };
-        let Ok(target) = Target::from_triple(self.toolchain.target.triple) else {
+        let Ok(target) = Target::from_triple(job.toolchain.target.triple) else {
             Diag::new(DiagId::drv_unsupported_target, Span::INVALID)
-                .arg(self.toolchain.target.triple)
+                .arg(job.toolchain.target.triple)
                 .emit(engine);
             return;
         };
-        let popts = ParseOptions { std: self.std.lex };
-        let tu = parse_tu(sm, file, engine, target, &popts, a.constexpr.limits());
+        // `-MD` with `-fsyntax-only` is rejected before this (no deps).
+        let Some((pp, _deps)) = job.build_preprocessor(sm, engine, interner, inputs) else {
+            return;
+        };
+        let popts = ParseOptions { std: job.std.lex, ..ParseOptions::default() };
+        let limits = a.constexpr.limits();
+        let (tu, _pp) =
+            parse_preprocessed(pp, Arc::clone(interner), engine, target, &popts, limits);
         a.constexpr.write_report(&tu.oven, sm, engine);
         let ast = tu.ast;
         if let Some(d) = dump_opts {

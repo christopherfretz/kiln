@@ -216,7 +216,7 @@ impl Parser<'_, '_> {
     fn parse_linkage_spec(&mut self) {
         let loc = self.bump().span.lo;
         let lang_tok = self.bump();
-        let lang = self.unevaluated_text(self.pos() - 1);
+        let lang = self.unevaluated_text(&lang_tok);
         let ls = self.s.act_on_start_linkage_spec(&lang, loc, lang_tok.span.lo);
         if let Some(open) = self.eat(Punct::LBrace) {
             while !self.at(Punct::RBrace) && !self.at_eof() {
@@ -556,16 +556,72 @@ impl Parser<'_, '_> {
         let open = self.bump().span.lo;
         self.s.act_on_start_record_definition(r);
         while !self.at(Punct::RBrace) && !self.at_eof() {
-            self.parse_member_declaration();
+            self.parse_member_declaration(r);
         }
         self.expect_closing(Punct::RBrace, Punct::LBrace, open);
         let then_semi = self.at(Punct::Semi);
         self.s.act_on_finish_record_definition(r, then_semi);
     }
 
-    /// member-declaration ([class.mem]).
-    fn parse_member_declaration(&mut self) {
+    /// True if a constructor declaration of the class `r` starts here
+    /// ([class.ctor.general]/1: optional specifiers and attributes, then
+    /// the class's injected-class-name and a parameter list).
+    fn at_constructor_declaration(&self, r: DeclId) -> bool {
+        let Some(class) = self.s.ast.decls.get(r).name().as_ident() else {
+            return false;
+        };
+        let mut i = self.pos();
+        loop {
+            let t = self.tok_at(i);
+            match self.kw_of(t) {
+                Some(Kw::Explicit) if self.tok_at(i + 1).kind == TokKind::Punct(Punct::LParen) => {
+                    i = self.skip_balanced_at(i + 1);
+                }
+                Some(Kw::Explicit | Kw::Constexpr | Kw::Consteval | Kw::Inline) => i += 1,
+                Some(Kw::Attribute | Kw::Alignas | Kw::Declspec) => {
+                    i = self.skip_balanced_at(i + 1);
+                }
+                _ if t.kind == TokKind::Punct(Punct::LSquare)
+                    && self.tok_at(i + 1).kind == TokKind::Punct(Punct::LSquare) =>
+                {
+                    i = self.skip_balanced_at(i);
+                }
+                _ => break,
+            }
+        }
+        self.ident_of(self.tok_at(i)) == Some(class)
+            && self.tok_at(i + 1).kind == TokKind::Punct(Punct::LParen)
+    }
+
+    /// The index after the bracketed group opening at `i` (`i` itself if
+    /// no bracket opens there).
+    fn skip_balanced_at(&self, mut i: usize) -> usize {
+        let mut depth = 0u32;
+        loop {
+            match Self::punct_of(self.tok_at(i)) {
+                Some(Punct::LParen | Punct::LSquare | Punct::LBrace) => depth += 1,
+                Some(Punct::RParen | Punct::RSquare | Punct::RBrace) => {
+                    depth = depth.saturating_sub(1);
+                }
+                _ if self.tok_at(i).kind == TokKind::Eof => return i,
+                _ => {}
+            }
+            i += 1;
+            if depth == 0 {
+                return i;
+            }
+        }
+    }
+
+    /// member-declaration ([class.mem]) of the class `r`.
+    fn parse_member_declaration(&mut self, r: DeclId) {
         let loc = self.loc();
+        if self.at_constructor_declaration(r) {
+            // Not a field of the class's own type ([class.ctor.general]).
+            self.unsupported("special member functions", loc);
+            self.skip_unsupported_declaration();
+            return;
+        }
         match (Self::punct_of(self.tok()), self.kw()) {
             (Some(Punct::Semi), _) => {
                 self.bump();
@@ -1016,9 +1072,16 @@ impl Parser<'_, '_> {
                     return decls;
                 }
                 match self.s.act_on_declarator(&ds, base, &d) {
-                    Some(f) => {
+                    Some(f) if self.s.ast.decls.function(f).is_some() => {
                         self.parse_function_body(f);
                         decls.push(f);
+                    }
+                    // An invalid declarator sema did not make a function
+                    // (an unknown return type, say): the error is
+                    // reported; skip the body.
+                    Some(_) => {
+                        self.bump();
+                        self.skip_until(&[Punct::RBrace], false, true);
                     }
                     None => self.skip_unsupported_declaration(),
                 }

@@ -280,8 +280,9 @@ fn syntax_only(
         e.flush();
         return JobResult { errors: 1, ..JobResult::default() };
     }
-    SyntaxJob { args, toolchain: tc, std, path, stdin_text, diag_opts, stderr: io.stderr.clone() }
-        .run()
+    let job =
+        Job { args, toolchain: tc, std, path, stdin_text, diag_opts, stderr: io.stderr.clone() };
+    SyntaxJob(job).run()
 }
 
 /// The inputs that exist (`-` is standard input); the others are errors.

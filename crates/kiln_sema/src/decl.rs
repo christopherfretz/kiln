@@ -565,7 +565,21 @@ impl Sema<'_, '_> {
             self.error(DiagId::sema_storage_class_on_typedef, loc);
         }
         let (ctx, lexical) = self.decl_contexts(d);
-        let prev = self.find_prev(name, d.qualifier);
+        // An earlier redefinition that was diagnosed is not the previous
+        // declaration (as in clang, which does not chain invalid
+        // redeclarations): the later one is compared with the valid one.
+        let prev = {
+            let found: Vec<DeclId> = match d.qualifier {
+                Some(q) => self.lookup_qualified(q, name, LookupKind::Ordinary).decls,
+                None => self.lookup_current_scope(name),
+            };
+            found.into_iter().rev().find(|&p| {
+                let n = self.ast.decls.get(p);
+                let invalid_typedef = matches!(n.kind(), DeclKind::Typedef | DeclKind::TypeAlias)
+                    && n.has(DeclFlags::INVALID);
+                !is_tag_kind(n.kind()) && !invalid_typedef
+            })
+        };
         // `typedef struct { } T;`: T names the class for linkage purposes
         // ([dcl.typedef]/9).
         let anon_tag = ds.tag.filter(|&t| {
@@ -583,6 +597,7 @@ impl Sema<'_, '_> {
             None => ty,
         };
         let mut prev_ok = None;
+        let mut invalid = false;
         if let Some(p) = prev {
             let pk = self.ast.decls.get(p).kind();
             if matches!(pk, DeclKind::Typedef | DeclKind::TypeAlias) {
@@ -597,6 +612,7 @@ impl Sema<'_, '_> {
                         .arg(self.ty_arg(pty));
                     let msg = self.note_prev(msg, p, true);
                     self.emit(msg);
+                    invalid = true;
                 }
             } else {
                 let msg = self
@@ -610,6 +626,9 @@ impl Sema<'_, '_> {
         let mut h = DeclHead::new(ctx, DeclName::ident(name), d.name_loc());
         h.lexical = Some(lexical);
         let td = self.builder().typedef(h, kind, underlying, prev_ok);
+        if invalid {
+            self.ast.decls.set_flags(td, DeclFlags::INVALID);
+        }
         if let Some(t) = anon_tag {
             let _ = self.ast.decls.set_typedef_for_anon(t, td);
         }
@@ -794,10 +813,16 @@ impl Sema<'_, '_> {
             let msg = self.diag(DiagId::sema_duplicate_member, d.name_loc()).arg(sym_str(self, n));
             self.emit(msg.with_note(note));
         }
-        if !invalid && !self.is_complete(ty) && !self.ast.types.is_reference(ty) {
+        let ty = if !invalid && !self.is_complete(ty) && !self.ast.types.is_reference(ty) {
             let msg = self.diag(DiagId::sema_field_incomplete, d.name_loc()).arg(self.ty_arg(ty));
             self.emit(self.incomplete_note(msg, ty));
-        }
+            // clang marks the field invalid: initialization never
+            // descends into it (a field of the class's own type would
+            // recurse forever).
+            QualType::ERROR
+        } else {
+            ty
+        };
         let width = d.bit_width.and_then(|w| self.bit_width(w, ty, nm.as_deref(), d.name_loc()));
         let h = DeclHead::new(ctx, name.map_or(DeclName::EMPTY, DeclName::ident), d.name_loc());
         self.builder().field(h, ty, width, flags)
@@ -2340,5 +2365,13 @@ impl Sema<'_, '_> {
     /// `#pragma pack` and other unsupported pragmas.
     pub fn act_on_unsupported_pragma(&self, what: &str, loc: Loc) {
         self.unsupported(&format!("'#pragma {what}'"), loc);
+    }
+
+    /// `#pragma pack(args)` at `loc` ([cpp.pragma]; clang's
+    /// `ActOnPragmaPack`): recorded in [`Sema::pragma_packs`] for the
+    /// layout and reported as not supported yet.
+    pub fn act_on_pragma_pack(&mut self, loc: Loc, args: String) {
+        self.act_on_unsupported_pragma("pack", loc);
+        self.pragma_packs.push((loc, args));
     }
 }

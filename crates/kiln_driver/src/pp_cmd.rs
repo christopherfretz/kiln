@@ -33,6 +33,20 @@ pub struct JobResult {
     pub errors: u32,
 }
 
+/// The dependency list a preprocessor's callbacks fill (`-M`, `-MD`).
+pub(crate) type SharedDeps = Rc<RefCell<DepList>>;
+
+/// What [`Job::build_preprocessor`] needs besides the job.
+#[derive(Debug)]
+pub(crate) struct PpInputs {
+    /// The header search list.
+    pub list: SearchList,
+    /// The main file.
+    pub main: FileId,
+    /// The predefines buffer (`<built-in>`).
+    pub predefines: String,
+}
+
 /// One input to preprocess.
 #[derive(Debug)]
 pub struct Job<'j> {
@@ -168,6 +182,27 @@ impl Job<'_> {
         }
         let engine = make_engine(&sm, &diag_opts, self.stderr.clone(), None);
         let mut result = JobResult::default();
+        if let Some(inputs) = self.pp_inputs(&sm, &engine) {
+            self.preprocess(&sm, &engine, &interner, inputs, &mut result);
+        }
+        engine.flush();
+        if let Some(s) = engine.summary()
+            && diag_opts.format == kiln_diag::Format::Text
+        {
+            let mut err = self.stderr.clone();
+            let _ = writeln!(err, "{s}");
+        }
+        result.errors = engine.error_count();
+        result
+    }
+
+    /// The search list (printed for `-v`), the main file and the
+    /// predefines of this input; `None` after reporting an error.
+    pub(crate) fn pp_inputs(
+        &self,
+        sm: &SourceManager,
+        engine: &DiagEngine<'_>,
+    ) -> Option<PpInputs> {
         let cplusplus = self.std.cplusplus;
         let header_sysroot =
             self.args.isysroot.as_deref().or(self.args.sysroot.as_deref()).unwrap_or("");
@@ -183,34 +218,25 @@ impl Job<'_> {
                 list.verbose_text()
             );
         }
-        let main = self.load_main(&sm, &engine);
-        let predefines = self.predefines(&engine);
-        if let (Some(main), Some(predefines)) = (main, predefines) {
-            self.preprocess(&sm, &engine, &interner, list, main, predefines, &mut result);
-        }
-        engine.flush();
-        if let Some(s) = engine.summary()
-            && diag_opts.format == kiln_diag::Format::Text
-        {
-            let mut err = self.stderr.clone();
-            let _ = writeln!(err, "{s}");
-        }
-        result.errors = engine.error_count();
-        result
+        let main = self.load_main(sm, engine);
+        let predefines = self.predefines(engine);
+        Some(PpInputs { list, main: main?, predefines: predefines? })
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn preprocess<'a>(
+    /// The preprocessor of this input, exactly as `-E` configures it
+    /// (header search, `#if` evaluation, `__has_feature` and friends,
+    /// dependency collection), with the main file entered. Shared by
+    /// `-E`, `-M` and `-fsyntax-only` (spec/driver.md). `None` after
+    /// reporting an error.
+    pub(crate) fn build_preprocessor<'a, 'd>(
         &self,
         sm: &'a SourceManager,
-        engine: &DiagEngine<'a>,
+        engine: &'d DiagEngine<'a>,
         interner: &'a Interner,
-        list: SearchList,
-        main: FileId,
-        predefines: String,
-        result: &mut JobResult,
-    ) {
+        inputs: PpInputs,
+    ) -> Option<(Preprocessor<'a, 'd>, Option<SharedDeps>)> {
         let a = self.args;
+        let PpInputs { list, main, predefines } = inputs;
         let mut search = HeaderSearch::new(RealFs, list).with_embed_dirs(a.embed_dirs.clone());
         let deps = a
             .deps
@@ -232,13 +258,28 @@ impl Job<'_> {
             // No silent fallback to `NoFeatures` (unreachable today:
             // `Target` only has triples the tables cover).
             Diag::new(DiagId::drv_unsupported_target, Span::INVALID).arg(triple).emit(engine);
-            return;
+            return None;
         };
         pp.set_feature_queries(Box::new(features));
         if let Some(d) = &deps {
             pp.set_callbacks(Box::new(DepCallbacks { list: Rc::clone(d), sm }));
         }
         pp.enter_main_file(main);
+        Some((pp, deps))
+    }
+
+    fn preprocess<'a>(
+        &self,
+        sm: &'a SourceManager,
+        engine: &DiagEngine<'a>,
+        interner: &'a Interner,
+        inputs: PpInputs,
+        result: &mut JobResult,
+    ) {
+        let a = self.args;
+        let Some((mut pp, deps)) = self.build_preprocessor(sm, engine, interner, inputs) else {
+            return;
+        };
         if a.deps.only.is_some() {
             while pp.next().kind != TokKind::Eof {}
         } else if a.print.macros_only {
