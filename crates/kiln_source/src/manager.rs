@@ -277,6 +277,8 @@ pub struct SourceManager {
     /// Index of the range found by the last lookup (clang's
     /// `LastFileIDLookup`): a hint only, checked before use.
     last_file: AtomicU32,
+    /// The `last_file` before the latest change of `last_file`.
+    prev_file: AtomicU32,
     /// Index of the expansion entry found by the last lookup.
     last_expansion: AtomicU32,
 }
@@ -312,6 +314,7 @@ impl SourceManager {
             by_path: Mutex::new(HashMap::new()),
             alloc: Mutex::new(Alloc { next_file: 1, next_macro: u64::from(MACRO_BIT) }),
             last_file: AtomicU32::new(0),
+            prev_file: AtomicU32::new(0),
             last_expansion: AtomicU32::new(0),
         }
     }
@@ -481,20 +484,27 @@ impl SourceManager {
             return None;
         }
         let hint = self.last_file.load(Ordering::Relaxed);
-        if let Some(r) = self.ranges.get(hint)
-            && let Some(off) = loc.0.checked_sub(r.start)
-            && off <= r.len
-        {
-            return Some((*r, off));
+        let in_range = |i: u32| {
+            let r = self.ranges.get(i)?;
+            let off = loc.0.checked_sub(r.start)?;
+            (off <= r.len).then_some((*r, off))
+        };
+        if let Some(found) = in_range(hint) {
+            return Some(found);
         }
-        let i = self.ranges.partition_point(|r| r.start <= loc.0).checked_sub(1)?;
-        let r = *self.ranges.get(i)?;
-        let off = loc.0 - r.start;
-        if off > r.len {
-            return None;
-        }
+        // Lookups alternate between a few buffers (the file being read and
+        // the headers its macros were defined in): try the one found
+        // before the hint, then binary-search.
+        let prev = self.prev_file.load(Ordering::Relaxed);
+        let i = if in_range(prev).is_some() {
+            prev
+        } else {
+            self.ranges.partition_point(|r| r.start <= loc.0).checked_sub(1)?
+        };
+        let found = in_range(i)?;
+        self.prev_file.store(hint, Ordering::Relaxed);
         self.last_file.store(i, Ordering::Relaxed);
-        Some((r, off))
+        Some(found)
     }
 
     // ----- lines and columns ---------------------------------------------
@@ -625,6 +635,17 @@ impl SourceManager {
             && e.contains(loc)
         {
             return Some(e);
+        }
+        // Most misses land next to the hint or on the newest entry (the
+        // expansion being built): try those before the binary search.
+        let newest = self.expansions.len().checked_sub(1)?;
+        for i in [newest, hint.wrapping_add(1), hint.wrapping_sub(1)] {
+            if let Some(e) = self.expansions.get(i)
+                && e.contains(loc)
+            {
+                self.last_expansion.store(i, Ordering::Relaxed);
+                return Some(e);
+            }
         }
         let i = self.expansions.partition_point(|e| e.base <= loc).checked_sub(1)?;
         let e = self.expansions.get(i)?;
