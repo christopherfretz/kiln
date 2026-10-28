@@ -101,6 +101,10 @@ impl Preprocessor<'_, '_> {
             return spelling;
         }
         let exp = if exp.is_valid() { exp } else { Span::new(spelling, spelling) };
+        match kind {
+            ExpansionKind::Macro { .. } => crate::profile::count!(exp_macro),
+            ExpansionKind::MacroArg => crate::profile::count!(exp_macro_arg),
+        }
         let kind = match kind {
             ExpansionKind::Macro { name } if !name.is_valid() => ExpansionKind::Macro { name: exp },
             k => k,
@@ -160,6 +164,7 @@ impl Preprocessor<'_, '_> {
     /// token to return, or `None` to lex again (an expansion was entered).
     pub(crate) fn handle_identifier(&mut self, mut t: PpTok) -> Option<PpTok> {
         let s = t.ident()?;
+        crate::profile::count!(macro_lookup);
         let def: Def = Rc::clone(self.macros.get_rc(s)?);
         if t.pf.contains(PpFlags::NO_EXPAND) {
             return Some(t);
@@ -716,6 +721,7 @@ impl Preprocessor<'_, '_> {
     /// token `param` (clang `updateLocForMacroArgTokens`): runs of nearby
     /// tokens of one entry share one source-manager entry.
     fn relocate(&self, param: Span, toks: &mut [PpTok]) {
+        crate::profile::time!(t_relocate_ns);
         let mut b = 0;
         while b < toks.len() {
             let begin = toks[b].tok.span.lo;
@@ -747,6 +753,7 @@ impl Preprocessor<'_, '_> {
                 end += 1;
             }
             let len = total + self.tok_len(&toks[end - 1].tok);
+            crate::profile::count!(relocate_runs);
             let base = self.add_exp(begin, len, param, ExpansionKind::MacroArg);
             if base != begin {
                 let mut off = 0u32;

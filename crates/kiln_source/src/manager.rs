@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Mutex, MutexGuard, OnceLock, PoisonError, RwLock};
 use std::{error, fmt, fs, io};
 
@@ -157,6 +158,41 @@ pub struct ExpansionInfo {
     pub kind: ExpansionKind,
 }
 
+/// Set in [`Entry::len_kind`] for [`ExpansionKind::Macro`] entries.
+/// Free because an entry is shorter than the 2^31-position macro space.
+const MACRO_KIND: u32 = 1 << 31;
+
+/// How an expansion entry is stored (24 bytes; [`ExpansionInfo`] is the
+/// public view). The macro-name span of a [`ExpansionKind::Macro`] entry
+/// lives in [`SourceManager::macro_names`]: argument entries, which
+/// dominate deep expansions, do not need one.
+#[derive(Debug, Clone, Copy)]
+struct Entry {
+    base: Loc,
+    /// `len` | [`MACRO_KIND`].
+    len_kind: u32,
+    spelling: Loc,
+    /// [`SourceManager::spelling_loc`] of `spelling`, computed once when
+    /// the entry is created so that spelling lookups are O(1) whatever the
+    /// depth of the chain (every link maps the entry by a constant offset).
+    file_spelling: Loc,
+    expansion: Span,
+}
+
+impl Entry {
+    fn len(&self) -> u32 {
+        self.len_kind & !MACRO_KIND
+    }
+
+    fn is_macro_kind(&self) -> bool {
+        self.len_kind & MACRO_KIND != 0
+    }
+
+    fn contains(&self, loc: Loc) -> bool {
+        loc.0.checked_sub(self.base.0).is_some_and(|off| off <= self.len())
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 struct LineDirective {
     /// Offset of the first byte of the line the directive renumbers.
@@ -213,10 +249,18 @@ struct Alloc {
 /// manager; methods taking a [`Loc`] treat unknown locations as invalid.
 pub struct SourceManager {
     files: AppendVec<FileEntry>,
-    expansions: AppendVec<ExpansionInfo>,
+    expansions: AppendVec<Entry>,
+    /// `(base, name)` of every [`ExpansionKind::Macro`] entry, in creation
+    /// (and so base) order.
+    macro_names: AppendVec<(Loc, Span)>,
     presumed_names: AppendVec<Box<str>>,
     by_path: Mutex<HashMap<PathBuf, FileId>>,
     alloc: Mutex<Alloc>,
+    /// Index of the buffer found by the last lookup (clang's
+    /// `LastFileIDLookup`): a hint only, checked before use.
+    last_file: AtomicU32,
+    /// Index of the expansion entry found by the last lookup.
+    last_expansion: AtomicU32,
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -244,9 +288,12 @@ impl SourceManager {
         Self {
             files: AppendVec::new(),
             expansions: AppendVec::new(),
+            macro_names: AppendVec::new(),
             presumed_names: AppendVec::new(),
             by_path: Mutex::new(HashMap::new()),
             alloc: Mutex::new(Alloc { next_file: 1, next_macro: u64::from(MACRO_BIT) }),
+            last_file: AtomicU32::new(0),
+            last_expansion: AtomicU32::new(0),
         }
     }
 
@@ -360,10 +407,21 @@ impl SourceManager {
         if !loc.is_file() {
             return None;
         }
+        let hint = self.last_file.load(Ordering::Relaxed);
+        if let Some(f) = self.files.get(hint)
+            && let Some(off) = loc.0.checked_sub(f.start)
+            && off <= f.len()
+        {
+            return Some((FileId(hint), f, off));
+        }
         let i = self.files.partition_point(|f| f.start <= loc.0).checked_sub(1)?;
         let f = self.files.get(i)?;
         let off = loc.0 - f.start;
-        (off <= f.len()).then_some((FileId(i), f, off))
+        if off > f.len() {
+            return None;
+        }
+        self.last_file.store(i, Ordering::Relaxed);
+        Some((FileId(i), f, off))
     }
 
     // ----- lines and columns ---------------------------------------------
@@ -406,6 +464,10 @@ impl SourceManager {
     /// the same buffer in order, or not on character boundaries.
     pub fn span_text(&self, span: Span) -> Option<&str> {
         let (lo_file, f, lo) = self.find_file(self.spelling_loc(span.lo))?;
+        if let Some(d) = self.same_entry_distance(span.lo, span.hi) {
+            // Same entry: the spelled range is as long as the span.
+            return f.text.get(lo as usize..(lo + d) as usize);
+        }
         let (hi_file, _, hi) = self.find_file(self.spelling_loc(span.hi))?;
         if lo_file != hi_file || lo > hi {
             return None;
@@ -437,14 +499,25 @@ impl SourceManager {
         expansion: Span,
         kind: ExpansionKind,
     ) -> Result<Loc, LocSpaceExhausted> {
-        assert!(self.is_allocated(spelling), "add_expansion: bad spelling {spelling:?}");
+        let file_spelling = self.spelling_loc(spelling);
+        let mut alloc = lock(&self.alloc);
+        // Allocated space is contiguous from the start of each half, so
+        // "allocated" is a comparison with the allocation frontier.
+        let allocated = |l: Loc| {
+            l.is_valid()
+                && u64::from(l.0) < if l.is_macro() { alloc.next_macro } else { alloc.next_file }
+        };
         assert!(
-            self.is_allocated(expansion.lo) && self.is_allocated(expansion.hi),
+            allocated(spelling) && file_spelling.is_valid(),
+            "add_expansion: bad spelling {spelling:?}"
+        );
+        assert!(
+            allocated(expansion.lo) && allocated(expansion.hi),
             "add_expansion: bad expansion span {expansion:?}"
         );
         if let ExpansionKind::Macro { name } = kind {
             assert!(
-                self.is_allocated(name.lo) && self.is_allocated(name.hi),
+                allocated(name.lo) && allocated(name.hi),
                 "add_expansion: bad macro-name span {name:?}"
             );
         }
@@ -452,41 +525,74 @@ impl SourceManager {
             spelling.0.checked_add(len).is_some_and(|end| self.same_entry(spelling, Loc(end))),
             "add_expansion: spelled range {spelling:?}+{len} crosses an entry boundary"
         );
-        let mut alloc = lock(&self.alloc);
         let base = alloc.next_macro;
         let end = base + u64::from(len) + 1;
         if end > MACRO_SPACE_END {
             return Err(LocSpaceExhausted);
         }
         let base = Loc(base as u32);
-        self.expansions.push(ExpansionInfo { base, len, spelling, expansion, kind });
+        let len_kind = match kind {
+            ExpansionKind::Macro { name } => {
+                self.macro_names.push((base, name));
+                len | MACRO_KIND
+            }
+            ExpansionKind::MacroArg => len,
+        };
+        self.expansions.push(Entry { base, len_kind, spelling, file_spelling, expansion });
         alloc.next_macro = end;
         Ok(base)
     }
 
-    fn find_expansion(&self, loc: Loc) -> Option<&ExpansionInfo> {
+    fn find_expansion(&self, loc: Loc) -> Option<&Entry> {
         if !loc.is_macro() {
             return None;
         }
+        let hint = self.last_expansion.load(Ordering::Relaxed);
+        if let Some(e) = self.expansions.get(hint)
+            && e.contains(loc)
+        {
+            return Some(e);
+        }
         let i = self.expansions.partition_point(|e| e.base <= loc).checked_sub(1)?;
         let e = self.expansions.get(i)?;
-        (loc.0 - e.base.0 <= e.len).then_some(e)
+        if !e.contains(loc) {
+            return None;
+        }
+        self.last_expansion.store(i, Ordering::Relaxed);
+        Some(e)
     }
 
-    fn is_allocated(&self, loc: Loc) -> bool {
+    /// The first and last location of the buffer range or expansion entry
+    /// containing `loc` (both inclusive: a buffer's range ends at its
+    /// end-of-file location). `None` for invalid and unknown locations.
+    ///
+    /// Two locations with the same bounds are in the same entry, and then
+    /// their spellings are exactly as far apart as they are (see
+    /// [`same_entry_distance`](Self::same_entry_distance)).
+    pub fn entry_bounds(&self, loc: Loc) -> Option<(Loc, Loc)> {
         if loc.is_macro() {
-            self.find_expansion(loc).is_some()
+            self.find_expansion(loc).map(|e| (e.base, Loc(e.base.0 + e.len())))
         } else {
-            self.find_file(loc).is_some()
+            self.find_file(loc).map(|(_, f, _)| (Loc(f.start), Loc(f.start + f.len())))
         }
+    }
+
+    /// `hi - lo` if both are in the same buffer range or expansion entry
+    /// and `lo <= hi`, else `None`. O(1) after a cached lookup.
+    ///
+    /// Every link of a spelling chain maps a whole entry by a constant
+    /// offset into a single entry, so for such a pair
+    /// `spelling_loc(hi) - spelling_loc(lo) == hi - lo`: this is the
+    /// fast path for token lengths and gaps (clang
+    /// `isInSameSLocAddrSpace`).
+    pub fn same_entry_distance(&self, lo: Loc, hi: Loc) -> Option<u32> {
+        let d = hi.0.checked_sub(lo.0)?;
+        let (_, last) = self.entry_bounds(lo)?;
+        (hi <= last).then_some(d)
     }
 
     fn same_entry(&self, a: Loc, b: Loc) -> bool {
-        if a.is_macro() {
-            matches!((self.find_expansion(a), self.find_expansion(b)), (Some(x), Some(y)) if x.base == y.base)
-        } else {
-            matches!((self.find_file(a), self.find_file(b)), (Some(x), Some(y)) if x.0 == y.0)
-        }
+        a.is_valid() && self.entry_bounds(a).is_some_and(|(lo, hi)| lo <= b && b <= hi)
     }
 
     /// True if `loc` is a macro-expansion location. O(1).
@@ -499,7 +605,22 @@ impl SourceManager {
     /// [`immediate_macro_caller_loc`](Self::immediate_macro_caller_loc)
     /// to produce "expanded from macro" notes.
     pub fn expansion_info(&self, loc: Loc) -> Option<ExpansionInfo> {
-        self.find_expansion(loc).copied()
+        let e = self.find_expansion(loc)?;
+        let kind = if e.is_macro_kind() {
+            let i = self.macro_names.partition_point(|&(b, _)| b <= e.base).checked_sub(1)?;
+            let &(b, name) = self.macro_names.get(i)?;
+            debug_assert_eq!(b, e.base);
+            ExpansionKind::Macro { name }
+        } else {
+            ExpansionKind::MacroArg
+        };
+        Some(ExpansionInfo {
+            base: e.base,
+            len: e.len(),
+            spelling: e.spelling,
+            expansion: e.expansion,
+            kind,
+        })
     }
 
     /// One step of spelling resolution: where `loc` is spelled according
@@ -513,13 +634,16 @@ impl SourceManager {
         }
     }
 
-    /// Where the characters of `loc` were written: follows spelling links
-    /// until a file location. Identity for file locations.
-    pub fn spelling_loc(&self, mut loc: Loc) -> Loc {
-        while loc.is_macro() {
-            loc = self.immediate_spelling_loc(loc);
+    /// Where the characters of `loc` were written: the end of the chain of
+    /// [`immediate_spelling_loc`](Self::immediate_spelling_loc) links, a
+    /// file location. Identity for file locations; O(1) (the end of each
+    /// entry's chain is recorded when the entry is created).
+    pub fn spelling_loc(&self, loc: Loc) -> Loc {
+        match self.find_expansion(loc) {
+            Some(e) => e.file_spelling.with_offset(loc.0 - e.base.0),
+            None if loc.is_macro() => Loc::INVALID,
+            None => loc,
         }
-        loc
     }
 
     /// The file location of the outermost macro invocation that produced
@@ -553,7 +677,7 @@ impl SourceManager {
     /// the invocation. Identity for file locations.
     pub fn immediate_macro_caller_loc(&self, loc: Loc) -> Loc {
         match self.find_expansion(loc) {
-            Some(e) if e.kind == ExpansionKind::MacroArg => self.immediate_spelling_loc(loc),
+            Some(e) if !e.is_macro_kind() => e.spelling.with_offset(loc.0 - e.base.0),
             Some(e) => e.expansion.lo,
             None if loc.is_macro() => Loc::INVALID,
             None => loc,
@@ -676,3 +800,7 @@ const _: fn() = || {
     fn assert_send_sync<T: Send + Sync>() {}
     assert_send_sync::<SourceManager>();
 };
+
+// Expansion entries dominate the manager's memory in deep expansions
+// (one per macro-argument run per substitution): keep them at 24 bytes.
+const _: () = assert!(size_of::<Entry>() == 24);

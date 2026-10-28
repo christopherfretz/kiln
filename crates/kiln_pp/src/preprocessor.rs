@@ -854,7 +854,10 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
 
     /// A pooled, empty token buffer.
     pub(crate) fn take_buf(&mut self) -> Vec<PpTok> {
-        self.pool.pop().unwrap_or_default()
+        self.pool.pop().unwrap_or_else(|| {
+            crate::profile::count!(buf_new);
+            Vec::new()
+        })
     }
 
     /// Returns a token buffer to the pool.
@@ -862,6 +865,8 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
         v.clear();
         if self.pool.len() < 64 {
             self.pool.push(v);
+        } else {
+            crate::profile::count!(buf_dropped);
         }
     }
 
@@ -901,18 +906,30 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
 
     /// The base location of the source-manager entry containing `loc`.
     pub(crate) fn entry_of(&self, loc: Loc) -> Option<Loc> {
-        if loc.is_macro() {
-            self.sm.expansion_info(loc).map(|e| e.base)
-        } else {
-            self.sm.offset_of(loc).map(|(f, _)| self.sm.loc(f, 0))
-        }
+        crate::profile::count!(entry_of);
+        self.sm.entry_bounds(loc).map(|(base, _)| base)
     }
 
-    /// `hi - lo` for two locations in the same entry, walking spelling
-    /// chains down to a file (linear in the expansion depth).
+    /// The distance between the spellings of `lo` and `hi` when their
+    /// spelling chains end in the same file at the same depth (`None`
+    /// otherwise). O(1) when both are in the same entry.
     pub(crate) fn loc_diff(&self, lo: Loc, hi: Loc) -> Option<u32> {
+        crate::profile::count!(loc_diff);
+        if let Some(d) = self.sm.same_entry_distance(lo, hi) {
+            return Some(d);
+        }
+        crate::profile::count!(loc_diff_slow);
+        self.loc_diff_slow(lo, hi)
+    }
+
+    /// [`loc_diff`](Self::loc_diff) without the same-entry fast path:
+    /// walks both spelling chains in lockstep down to a file (linear in
+    /// the expansion depth). Kept for locations in different entries and
+    /// as the reference the fast path is tested against.
+    pub(crate) fn loc_diff_slow(&self, lo: Loc, hi: Loc) -> Option<u32> {
         let (mut a, mut b) = (lo, hi);
         while a.is_macro() && b.is_macro() {
+            crate::profile::count!(loc_diff_steps);
             a = self.sm.immediate_spelling_loc(a);
             b = self.sm.immediate_spelling_loc(b);
         }
@@ -932,6 +949,7 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
         {
             return std::borrow::Cow::Borrowed(self.interner.as_str(s));
         }
+        crate::profile::count!(spelling_slow);
         kiln_lex::spelling(self.sm, t, &self.lex_opts)
     }
 

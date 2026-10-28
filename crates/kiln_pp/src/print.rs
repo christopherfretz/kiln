@@ -95,7 +95,11 @@ pub fn print_preprocessed(pp: &mut Preprocessor<'_, '_>, opts: PrintOptions, out
         prev_prev: Prev::None,
         embed: None,
     };
-    p.run();
+    {
+        crate::profile::time!(t_total_ns);
+        p.run();
+    }
+    crate::profile::report();
 }
 
 /// `-dM`: drives `pp` to the end of the main file, then writes a
@@ -290,6 +294,8 @@ impl Printer<'_, '_, '_, '_> {
     }
 
     fn token(&mut self, t: &Token, sol: &mut bool, in_bytes: &mut bool) {
+        crate::profile::count!(tokens_out);
+        crate::profile::time!(t_print_ns);
         let sp = self.pp.spelling(t);
         let mut same_line = false;
         if let Some(e) = self.embed {
@@ -456,6 +462,7 @@ impl Printer<'_, '_, '_, '_> {
     }
 
     fn move_to_tok(&mut self, t: &Token, require_sol: bool) -> bool {
+        crate::profile::count!(presumed);
         let p = self.sm.presumed_line_col(t.span.lo);
         let target = p.as_ref().map_or(self.cur_line, |p| p.line);
         let first_in_file =

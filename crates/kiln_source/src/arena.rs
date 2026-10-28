@@ -67,17 +67,37 @@ impl<T> AppendVec<T> {
 
     /// Index of the first element for which `pred` is false, assuming the
     /// elements are partitioned (all `true` before all `false`).
+    ///
+    /// Searches the chunks by their first element, then the one chunk
+    /// that holds the boundary as a slice: one atomic length load and
+    /// `O(log n)` slot reads.
     pub(crate) fn partition_point(&self, mut pred: impl FnMut(&T) -> bool) -> u32 {
-        let (mut lo, mut hi) = (0, self.len());
+        let len = self.len();
+        let Some(last) = len.checked_sub(1) else { return 0 };
+        let (last_k, last_slot) = locate(last);
+        let first_ok = |k: usize, pred: &mut dyn FnMut(&T) -> bool| {
+            self.chunks[k].get().and_then(|c| c.first()).and_then(OnceLock::get).is_some_and(pred)
+        };
+        let (mut lo, mut hi) = (0, last_k + 1);
         while lo < hi {
             let mid = lo + (hi - lo) / 2;
-            match self.get(mid) {
-                Some(v) if pred(v) => lo = mid + 1,
-                _ => hi = mid,
+            if first_ok(mid, &mut pred) {
+                lo = mid + 1;
+            } else {
+                hi = mid;
             }
         }
-        lo
+        let Some(k) = lo.checked_sub(1) else { return 0 };
+        let Some(chunk) = self.chunks[k].get() else { return 0 };
+        let filled = if k == last_k { last_slot + 1 } else { chunk.len() };
+        let i = chunk[..filled].partition_point(|slot| slot.get().is_some_and(&mut pred));
+        chunk_start(k) + i as u32
     }
+}
+
+/// Flat index of the first slot of chunk `k`.
+fn chunk_start(k: usize) -> u32 {
+    (((1u64 << k) - 1) << FIRST_CHUNK_BITS) as u32
 }
 
 impl<T> fmt::Debug for AppendVec<T> {
@@ -115,5 +135,17 @@ mod tests {
         assert_eq!(v.get(999), Some(&1998));
         assert_eq!(v.get(1000), None);
         assert_eq!(v.partition_point(|&x| x <= 501), 251);
+        for t in [0, 1, 126, 127, 128, 129, 1997, 1998, 1999, 5000] {
+            let want = (0..1000u32).filter(|i| i * 2 <= t).count() as u32;
+            assert_eq!(v.partition_point(|&x| x <= t), want, "t {t}");
+        }
+        assert_eq!(AppendVec::<u32>::new().partition_point(|_| true), 0);
+    }
+
+    #[test]
+    fn chunk_start_matches_locate() {
+        for k in 0..20 {
+            assert_eq!(locate(super::chunk_start(k)), (k, 0));
+        }
     }
 }

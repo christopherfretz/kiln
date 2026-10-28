@@ -547,3 +547,108 @@ fn manager_is_shareable_across_threads() {
     });
     assert_eq!(sm.file_count(), 401);
 }
+
+/// Tiny xorshift generator (no dependencies).
+struct Rng(u64);
+
+impl Rng {
+    fn next(&mut self) -> u64 {
+        self.0 ^= self.0 << 13;
+        self.0 ^= self.0 >> 7;
+        self.0 ^= self.0 << 17;
+        self.0
+    }
+
+    fn below(&mut self, n: u32) -> u32 {
+        (self.next() % u64::from(n.max(1))) as u32
+    }
+}
+
+/// Reference distance: walks both spelling chains one link at a time in
+/// lockstep (the slow path `kiln_pp` used before WP-056).
+fn slow_distance(sm: &SourceManager, lo: Loc, hi: Loc) -> Option<u32> {
+    let (mut a, mut b) = (lo, hi);
+    while a.is_macro() && b.is_macro() {
+        a = sm.immediate_spelling_loc(a);
+        b = sm.immediate_spelling_loc(b);
+    }
+    let (fa, oa) = sm.offset_of(a)?;
+    let (fb, ob) = sm.offset_of(b)?;
+    (fa == fb && ob >= oa).then(|| ob - oa)
+}
+
+// Fast paths for [cpp.rescan] location chains (WP-056): `entry_bounds`
+// and `same_entry_distance` (which use a cached last lookup and a chunked
+// search) agree with brute force and with the chain-walking reference on
+// a randomized set of deep expansion chains, queried in random order.
+#[test]
+fn cpp_rescan_same_entry_fast_paths_match_slow_walk() {
+    let sm = SourceManager::new();
+    let mut rng = Rng(0x9e37_79b9_7f4a_7c15);
+    // Model: every entry's inclusive bounds.
+    let mut entries: Vec<(Loc, Loc)> = Vec::new();
+    for i in 0..40 {
+        let len = 1 + rng.below(200);
+        let text: String = (0..len).map(|j| char::from(b'a' + ((i + j) % 26) as u8)).collect();
+        let f = sm.add_virtual(&format!("r{i}"), text).unwrap();
+        let s = sm.file_span(f);
+        entries.push((s.lo, s.hi));
+    }
+    let file_entries = entries.len();
+    for _ in 0..3000 {
+        // Spell the new entry inside a random existing entry, preferring
+        // recent ones so that chains get deep.
+        let n = entries.len() as u32;
+        let pick = if rng.below(4) == 0 { rng.below(n) } else { n - 1 - rng.below(n.min(30)) };
+        let (lo, hi) = entries[pick as usize];
+        let room = hi.to_raw() - lo.to_raw();
+        let start = rng.below(room + 1);
+        let len = rng.below(room - start + 1);
+        let spelling = lo.with_offset(start);
+        let exp = Span::new(spelling, spelling);
+        let kind = if rng.below(2) == 0 {
+            ExpansionKind::MacroArg
+        } else {
+            ExpansionKind::Macro { name: exp }
+        };
+        let base = sm.add_expansion(spelling, len, exp, kind).unwrap();
+        entries.push((base, base.with_offset(len)));
+    }
+    let random_loc = |rng: &mut Rng| {
+        let (lo, hi) = entries[rng.below(entries.len() as u32) as usize];
+        lo.with_offset(rng.below(hi.to_raw() - lo.to_raw() + 1))
+    };
+    for _ in 0..20_000 {
+        let a = random_loc(&mut rng);
+        // Half the pairs share an entry.
+        let b = if rng.below(2) == 0 {
+            let (lo, hi) = sm.entry_bounds(a).unwrap();
+            lo.with_offset(rng.below(hi.to_raw() - lo.to_raw() + 1))
+        } else {
+            random_loc(&mut rng)
+        };
+        let model = |l: Loc| entries.iter().copied().find(|&(lo, hi)| lo <= l && l <= hi);
+        assert_eq!(sm.entry_bounds(a), model(a), "{a:?}");
+        let same = model(a) == model(b);
+        let fast = sm.same_entry_distance(a, b);
+        assert_eq!(fast.is_some(), same && a <= b, "{a:?} {b:?}");
+        if let Some(d) = fast {
+            assert_eq!(slow_distance(&sm, a, b), Some(d), "{a:?} {b:?}");
+            assert_eq!(sm.spelling_loc(b), sm.spelling_loc(a).with_offset(d));
+            let slow_text = {
+                let (fa, oa) = sm.offset_of(sm.spelling_loc(a)).unwrap();
+                let (_, ob) = sm.offset_of(sm.spelling_loc(b)).unwrap();
+                &sm.text(fa)[oa as usize..ob as usize]
+            };
+            assert_eq!(sm.span_text(Span::new(a, b)), Some(slow_text));
+        }
+    }
+    // Locations past every entry are unknown, whatever the cached hint.
+    let (_, last_file_end) = entries[file_entries - 1];
+    let (_, last_exp_end) = *entries.last().unwrap();
+    for l in [last_file_end.with_offset(1), last_exp_end.with_offset(1)] {
+        assert_eq!(sm.entry_bounds(l), None);
+        assert_eq!(sm.same_entry_distance(l, l), None);
+    }
+    assert_eq!(sm.entry_bounds(Loc::INVALID), None);
+}
