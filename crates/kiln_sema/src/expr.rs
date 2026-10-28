@@ -6,7 +6,7 @@
 //! conversions of [`crate::conv`] spelled out as `ImplicitCastExpr`s.
 
 use kiln_ast::attr::AttrKind;
-use kiln_ast::consts::{FloatKind, IntBits, NullKind, Scalar};
+use kiln_ast::consts::{IntBits, Scalar};
 use kiln_ast::decl::{DeclFlags, DeclKind};
 use kiln_ast::expr::{
     BinaryOp, CastKind, CharKind, ExprFlags, ExprKind, NonOdrUse, ObjectKind, Radix, StringKind,
@@ -23,7 +23,7 @@ use kiln_source::Loc;
 use kiln_source::symbol::Symbol;
 
 use crate::Sema;
-use crate::constfold::{self, ConstEvaluator, ConstVal, NotConstant, int_info};
+use crate::constfold::int_info;
 use crate::conv::{self, ArithConvKind, ConvCtx, ConvError};
 use crate::literal;
 use crate::lookup::LookupKind;
@@ -192,25 +192,6 @@ impl Sema<'_, '_> {
 
     // -- constants ---------------------------------------------------------------
 
-    /// Evaluates `e` as a constant expression (through the
-    /// [`ConstEvaluator`] seam, spec/sema.md §8).
-    ///
-    /// # Errors
-    /// If `e` is not a constant expression; the notes explain why.
-    pub fn evaluate(&self, e: ExprId) -> Result<ConstVal, NotConstant> {
-        constfold::evaluator(&self.abi).evaluate(&self.ast, e)
-    }
-
-    /// `d` with the notes explaining a failed evaluation.
-    pub(crate) fn with_not_constant_notes(&self, d: Diag, nc: NotConstant) -> Diag {
-        let mut d = d;
-        for (id, loc, args) in [nc.note, nc.decl_note].into_iter().flatten() {
-            let n = args.into_iter().fold(self.diag(id, loc), Diag::arg);
-            d = d.with_note(n);
-        }
-        d
-    }
-
     /// Emits a conversion error at `loc`.
     pub(crate) fn emit_conv_error(&self, err: ConvError, loc: Loc) {
         let d = err.args.into_iter().fold(self.diag(err.id, loc), Diag::arg);
@@ -230,35 +211,6 @@ impl Sema<'_, '_> {
             Scalar::Int { ty: t, signed, bits: IntBits::from_i128(w.clamp(1, 128), v) }
         };
         self.ast.consts.push_scalar(scalar).expect("integer constants intern")
-    }
-
-    /// Interns the floating constant `f` of type `t` (exact for `float`
-    /// and `double`; other formats are not cached).
-    fn float_value(&mut self, t: QualType, f: f64) -> Option<ConstValueId> {
-        let b = self.ast.types.builtin(t)?;
-        let kind = conv::narrow::float_kind(self, b)?;
-        let bits = match kind {
-            FloatKind::Double => u128::from(f.to_bits()),
-            #[allow(clippy::cast_possible_truncation, reason = "rounding to the target format")]
-            FloatKind::Single => u128::from((f as f32).to_bits()),
-            _ => return None,
-        };
-        self.ast.consts.push_scalar(Scalar::Float { ty: t, kind, bits }).ok()
-    }
-
-    /// Interns the value `v` of an object of type `ty`, if representable.
-    pub(crate) fn const_value(&mut self, ty: QualType, v: ConstVal) -> Option<ConstValueId> {
-        let t = conv::strip_cv(self, ty);
-        match v {
-            ConstVal::Int(i) if int_info(&self.ast, t).is_some() => Some(self.int_const(t, i)),
-            #[allow(clippy::cast_precision_loss, reason = "integral value of a floating object")]
-            ConstVal::Int(i) if self.ast.types.is_floating(t) => self.float_value(t, i as f64),
-            ConstVal::Float(f) if self.ast.types.is_floating(t) => self.float_value(t, f),
-            ConstVal::Null if self.ast.types.is_pointer(t) || self.is_nullptr_type(t) => {
-                self.ast.consts.push_scalar(Scalar::Null { ty: t, kind: NullKind::Pointer }).ok()
-            }
-            _ => None,
-        }
     }
 
     /// clang's `UsefulToPrintExpr` negated: literals (and simple
@@ -436,7 +388,7 @@ impl Sema<'_, '_> {
     /// integral or enumeration variable, or a reference, with a constant
     /// initializer. (A reference's initializer is constant in M2 when it
     /// names a function or a variable with static storage duration.)
-    fn usable_in_constant_expressions(&self, d: DeclId) -> bool {
+    fn usable_in_constant_expressions(&mut self, d: DeclId) -> bool {
         let n = self.ast.decls.get(d);
         if n.kind() != DeclKind::Var {
             return false;
@@ -453,7 +405,7 @@ impl Sema<'_, '_> {
                 && !q.is_volatile()
                 && self.is_integral_or_enum(ty)
                 && !self.ast.types.is_reference(ty));
-        ok && self.evaluate(init).is_ok()
+        ok && self.is_constant_initialized(d)
     }
 
     /// True if the glvalue `e` designates a function or a variable with
@@ -1327,7 +1279,7 @@ impl Sema<'_, '_> {
         if self.unevaluated > 0 || !self.ast.types.is_integral(self.ety(r)) {
             return;
         }
-        if matches!(self.evaluate(r), Ok(ConstVal::Int(0))) {
+        if self.fold_int(r) == Some(0) {
             let what = if matches!(op, BinaryOp::Div | BinaryOp::DivAssign) {
                 "division"
             } else {
@@ -1346,7 +1298,7 @@ impl Sema<'_, '_> {
             return;
         }
         let Some((width, _)) = int_info(&self.ast, lty) else { return };
-        let Ok(ConstVal::Int(v)) = self.evaluate(r) else { return };
+        let Some(v) = self.fold_int(r) else { return };
         let id = if v < 0 {
             DiagId::sema_shift_negative
         } else if v >= i128::from(width) {

@@ -286,6 +286,14 @@ impl Oven {
             c.effect(e);
             c.emit(Op::Ret, 0, &[0]);
             RetKind::Void
+        } else if glvalue && !object.is_some_and(|d| is_reference_var(c.b.ast(), d)) {
+            // The value of a scalar glvalue (sema's speculative folds of
+            // an operand before its lvalue-to-rvalue conversion).
+            let r = c.reg();
+            let p = c.lv(e, Access::Read);
+            c.load(p, ty, ak::READ, e, r);
+            c.emit(Op::Ret, 1, &[r]);
+            RetKind::Scalar(ty)
         } else {
             let r = c.reg();
             c.rv_into(e, r);
@@ -2178,7 +2186,12 @@ impl Compiler<'_> {
                 let it = self.ety(ie);
                 let (w, s) = int_of(self.kind(it)).unwrap_or((64, true));
                 let r = self.reg();
-                self.emit_at(Op::PtrAdd, int_aux(w as u8, s), &[r, p, i, ety.0], e);
+                // clang's `ArraySubscriptExpr::getExprLoc`: the base's.
+                let pc = self.emit_at(Op::PtrAdd, int_aux(w as u8, s), &[r, p, i, ety.0], e);
+                let loc = self.ast().exprs.get(pe).loc();
+                if let Some(site) = self.o.sites.last_mut().filter(|x| x.pc == pc as u32) {
+                    site.loc = loc;
+                }
                 Place::Mem(r)
             }
             ExprKind::UnaryOperator => {
@@ -2746,4 +2759,9 @@ impl Compiler<'_> {
         self.next = base + 1;
         base
     }
+}
+
+/// Whether `d` is a variable of reference type.
+fn is_reference_var(ast: &kiln_ast::Ast, d: DeclId) -> bool {
+    ast.decls.get(d).ty().is_some_and(|t| ast.types.is_reference(t))
 }

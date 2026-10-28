@@ -329,10 +329,7 @@ impl Sema<'_, '_> {
         let Some(scs) = conv::standard_conversion(self, e, to, ConvCtx::Initialization) else {
             return;
         };
-        let value = match self.evaluate(e) {
-            Ok(v) => self.const_value(from, v),
-            Err(_) => None,
-        };
+        let value = self.try_fold(e);
         let n = conv::narrowing_kind(self, &scs, e, value);
         if let Some(d) = conv::narrowing_diag(self, &n, e, entity) {
             self.emit(d);
@@ -529,12 +526,18 @@ impl Sema<'_, '_> {
                 }
                 let c = conv::lvalue_to_rvalue(self, ie);
                 let c = self.act_on_full_expr(c);
-                match self.evaluate(c) {
-                    Ok(crate::ConstVal::Int(v)) if v >= 0 => {
+                match self.eval_int(c, kiln_oven::EvalContext::new(kiln_oven::EvalKind::Other, dloc))
+                {
+                    Ok(v) if v >= 0 => {
                         cur = u64::try_from(v).unwrap_or(u64::MAX);
                     }
-                    _ => {
-                        self.error(DiagId::sema_expr_not_ice, dloc);
+                    r => {
+                        let d = self.diag(DiagId::sema_expr_not_ice, dloc);
+                        let d = match r {
+                            Err(f) => self.with_failure_notes(d, f),
+                            Ok(_) => d,
+                        };
+                        self.emit(d);
                         *pos += 1;
                         continue;
                     }
