@@ -581,8 +581,6 @@ impl<'a> Cg<'a> {
         let gv = self.m.global_mut(g);
         gv.linkage = Linkage::External;
         gv.align = Some(align);
-        let is_const = ast.types.effective_quals(ty).is_const();
-        gv.is_constant = is_const && false;
         self.gvars.insert(first, g);
         Ok(g)
     }
