@@ -22,8 +22,8 @@ use kiln_ast::types::TypeContext;
 use kiln_diag::DiagEngine;
 use kiln_lex::literal::{EncodingParams, LiteralOptions};
 use kiln_lex::{LexOptions, Std};
-use kiln_sema::Sema;
 use kiln_sema::target::Target;
+use kiln_sema::{Budget, Oven, Sema};
 use kiln_source::symbol::Interner;
 use kiln_source::{FileId, SourceManager};
 
@@ -53,6 +53,36 @@ fn encoding_params(target: &Target) -> EncodingParams {
     }
 }
 
+/// Constant-evaluation settings of a translation unit: the driver's
+/// `-fconstexpr-steps=`, `-fconstexpr-depth=`, `-fconstexpr-memory=` and
+/// `-fconstexpr-backtrace-limit=` (`spec/oven.md` "Integration").
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ConstexprLimits {
+    /// The budget of each top-level evaluation.
+    pub budget: Budget,
+    /// Call frames a failure's backtrace shows (0: all).
+    pub backtrace_limit: usize,
+}
+
+impl Default for ConstexprLimits {
+    /// clang's defaults (steps 1048576, depth 512, backtrace 10) and
+    /// kiln's 256 MiB memory budget.
+    fn default() -> Self {
+        ConstexprLimits { budget: Budget::default(), backtrace_limit: 10 }
+    }
+}
+
+/// A parsed translation unit: its AST and the Oven that evaluated its
+/// constant expressions (whose [`Oven::stats`] feed
+/// `-fconstexpr-report=`).
+#[derive(Debug)]
+pub struct ParsedTu {
+    /// The AST.
+    pub ast: Ast,
+    /// The TU's constant evaluator.
+    pub oven: Oven,
+}
+
 /// Parses and analyses the translation unit whose main file is `file`,
 /// reporting to `diags`, and returns its AST.
 #[must_use]
@@ -63,12 +93,27 @@ pub fn parse_file<'sm>(
     target: Target,
     opts: &ParseOptions,
 ) -> Ast {
+    parse_tu(sm, file, diags, target, opts, ConstexprLimits::default()).ast
+}
+
+/// [`parse_file`] with explicit constant-evaluation limits, also returning
+/// the TU's Oven.
+#[must_use]
+pub fn parse_tu<'sm>(
+    sm: &'sm SourceManager,
+    file: FileId,
+    diags: &DiagEngine<'sm>,
+    target: Target,
+    opts: &ParseOptions,
+    limits: ConstexprLimits,
+) -> ParsedTu {
     let interner = Arc::new(Interner::new());
     let lex_opts = LexOptions::new(opts.std);
     let buf = TokenBuffer::lex(sm, &interner, file, lex_opts);
     let ast = Ast::new(interner, TypeContext::new(target.types.clone()));
     let lit_opts = LiteralOptions::new(opts.std, encoding_params(&target));
-    let s = Sema::for_target(ast, diags, target);
+    let mut s = Sema::for_target(ast, diags, target);
+    s.set_constexpr_limits(limits.budget, limits.backtrace_limit);
     for d in &buf.diags {
         if let Some(d) = lex_diag(sm, d) {
             s.emit(d);
@@ -84,5 +129,6 @@ pub fn parse_file<'sm>(
     }
     let mut p = Parser::new(s, sm, buf.toks, buf.spellings, lex_opts, lit_opts);
     p.parse_translation_unit();
-    p.into_sema().into_ast()
+    let (ast, oven) = p.into_sema().into_parts();
+    ParsedTu { ast, oven }
 }

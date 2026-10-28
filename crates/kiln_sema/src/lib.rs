@@ -34,12 +34,12 @@ use kiln_ast::{Ast, AstBuilder, DeclId, ExprId, QualType};
 use kiln_diag::{Diag, DiagEngine, DiagId};
 use kiln_source::{Loc, Span};
 
-pub use kiln_oven::{Budget, EvalContext, EvalFailure, EvalKind, Oven};
 pub use decl::{NameClass, TagUse};
 pub use declspec::{
     BaseSpec, Chunk, DeclSpec, Declarator, DeclaratorContext, ParamInfo, Sign, StorageSpec, Width,
 };
 pub use init::{Designator, InitItem, InitList, InitValue, Initializer};
+pub use kiln_oven::{Budget, EvalContext, EvalFailure, EvalKind, Oven};
 pub use scope::ScopeKind;
 
 /// The semantic-analysis state of one translation unit (spec/sema.md §1).

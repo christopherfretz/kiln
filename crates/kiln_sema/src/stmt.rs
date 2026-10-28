@@ -12,9 +12,9 @@ use kiln_diag::DiagId;
 use kiln_source::Loc;
 use kiln_source::symbol::Symbol;
 
+use crate::Sema;
 use crate::conv::{self, ConvCtx};
 use crate::scope::{Scope, ScopeKind};
-use crate::Sema;
 
 /// A label of the current function.
 #[derive(Clone, Debug)]
@@ -288,7 +288,7 @@ impl Sema<'_, '_> {
                 // [stmt.switch]/2: a converted constant expression (clang's
                 // `CheckConvertedConstantExpression`, CCEK_CaseValue).
                 let msg = self.diag(DiagId::sema_expr_not_cce, loc).arg("case value");
-                let d = self.with_failure_notes(msg, f);
+                let d = Self::with_failure_notes(msg, f);
                 self.emit(d);
                 self.act_on_full_expr(conv)
             }

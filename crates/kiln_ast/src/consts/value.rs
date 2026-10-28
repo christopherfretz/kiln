@@ -317,7 +317,7 @@ impl PtrBase {
             0 => PtrBase::Decl(DeclId::try_new(raw)?),
             1 => PtrBase::Function(DeclId::try_new(raw)?),
             2 => PtrBase::Temporary(DeclId::try_new(raw)?),
-            3 => return None,
+            // 3 was the retired string-literal base (now `Const`).
             4 => PtrBase::Const(ConstValueId::try_new(raw)?),
             5 => PtrBase::TypeInfo(QualType::from_raw(raw)?),
             _ => return None,

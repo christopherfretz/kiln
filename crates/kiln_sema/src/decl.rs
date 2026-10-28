@@ -18,7 +18,6 @@ use kiln_source::Loc;
 use kiln_source::symbol::Symbol;
 
 use crate::constfold;
-use kiln_oven::{EvalContext, EvalKind};
 use crate::conv::{self, ConvCtx};
 use crate::declspec::{
     BaseSpec, Chunk, DeclSpec, Declarator, DeclaratorContext, ParamInfo, Sign, StorageSpec, Width,
@@ -27,6 +26,7 @@ use crate::init::Initializer;
 use crate::lookup::{LookupKind, is_tag_kind, is_type_kind};
 use crate::scope::{Scope, ScopeKind};
 use crate::{Sema, target};
+use kiln_oven::{EvalContext, EvalKind};
 
 /// How a class or enumeration name is used ([dcl.type.elab],
 /// [class.pre], [dcl.enum]).
@@ -832,7 +832,7 @@ impl Sema<'_, '_> {
             Ok(v) => v,
             Err(f) => {
                 let d = self.diag(DiagId::sema_expr_not_ice, self.begin_loc(w));
-                let d = self.with_failure_notes(d, f);
+                let d = Self::with_failure_notes(d, f);
                 self.emit(d);
                 return None;
             }
@@ -1080,7 +1080,7 @@ impl Sema<'_, '_> {
                 self.ast.decls.finish_eval(v, None);
                 let name = self.decl_name(v);
                 let msg = self.diag(DiagId::sema_constexpr_var_non_constant, loc).arg(name);
-                let msg = self.with_failure_notes(msg, f);
+                let msg = Self::with_failure_notes(msg, f);
                 self.emit(msg);
             }
         }
@@ -1491,6 +1491,65 @@ impl Sema<'_, '_> {
         self.ctx = e;
     }
 
+    /// The value and the converted initializer of an enumerator whose
+    /// initializer is `ie` ([dcl.enum]/5).
+    fn enumerator_init(&mut self, build: &EnumBuild, ie: ExprId) -> (Option<i128>, Option<ExprId>) {
+        let e = build.decl;
+        let mut value: Option<i128> = None;
+        let mut init_e = None;
+        let ity = self.ast.exprs.get(ie).ty();
+        let t = &self.ast.types;
+        let ok_ty = t.is_integral(ity)
+            || t.as_enum(ity).is_some_and(|en| !self.is_scoped_enum(en) || en == e);
+        if !ok_ty && !self.is_error_type(ity) {
+            self.error(DiagId::sema_expr_not_ice, self.ast.exprs.get(ie).loc());
+        } else if !self.is_error_type(ity) {
+            let mut c = conv::lvalue_to_rvalue(self, ie);
+            let cty = if let Some(f) = build.fixed {
+                // [dcl.enum]/5: a converted constant expression, so a
+                // narrowing value is ill-formed ([expr.const]/12).
+                if let Some(raw) = self.fold_int(c)
+                    && !self.fits(f, raw)
+                {
+                    let msg = self
+                        .diag(DiagId::sema_cce_narrowing_value, self.begin_loc(ie))
+                        .arg("enumerator value")
+                        .arg(raw.to_string())
+                        .arg(self.ty_arg(f));
+                    self.emit(msg);
+                }
+                c = conv::implicit_convert(self, c, f, ConvCtx::Initialization).unwrap_or(c);
+                f
+            } else {
+                let cty = self.ast.exprs.get(c).ty();
+                if self.ast.types.as_enum(cty).is_some() { QualType::INT } else { cty }
+            };
+            let c = self.act_on_full_expr(c);
+            // A converted constant expression for a fixed underlying
+            // type ([dcl.enum]/5), else an integral constant expression.
+            let at = self.begin_loc(ie);
+            let ctx = if build.fixed.is_some() {
+                EvalContext::converted(at)
+            } else {
+                EvalContext::new(EvalKind::Other, at)
+            };
+            match self.eval_int(c, ctx) {
+                Ok(v) => {
+                    let v = self.check_enumerator_range(v, build.fixed, ie);
+                    value = Some(v);
+                    let cv = self.int_const(cty, v);
+                    init_e = Some(self.builder().constant_expr(c, Some(cv)));
+                }
+                Err(f) => {
+                    let msg = self.diag(DiagId::sema_expr_not_ice, self.ast.exprs.get(ie).loc());
+                    let msg = Self::with_failure_notes(msg, f);
+                    self.emit(msg);
+                }
+            }
+        }
+        (value, init_e)
+    }
+
     /// An enumerator-definition ([dcl.enum]/2,5).
     pub fn act_on_enumerator(
         &mut self,
@@ -1520,61 +1579,10 @@ impl Sema<'_, '_> {
             let msg = self.note_prev(msg, p, true);
             self.emit(msg);
         }
-        let mut value: Option<i128> = None;
-        let mut init_e = None;
-        if let Some(ie) = init {
-            let ity = self.ast.exprs.get(ie).ty();
-            let t = &self.ast.types;
-            let ok_ty = t.is_integral(ity)
-                || t.as_enum(ity).is_some_and(|en| !self.is_scoped_enum(en) || en == e);
-            if !ok_ty && !self.is_error_type(ity) {
-                self.error(DiagId::sema_expr_not_ice, self.ast.exprs.get(ie).loc());
-            } else if !self.is_error_type(ity) {
-                let mut c = conv::lvalue_to_rvalue(self, ie);
-                let cty = if let Some(f) = build.fixed {
-                    // [dcl.enum]/5: a converted constant expression, so a
-                    // narrowing value is ill-formed ([expr.const]/12).
-                    if let Some(raw) = self.fold_int(c)
-                        && !self.fits(f, raw)
-                    {
-                        let msg = self
-                            .diag(DiagId::sema_cce_narrowing_value, self.begin_loc(ie))
-                            .arg("enumerator value")
-                            .arg(raw.to_string())
-                            .arg(self.ty_arg(f));
-                        self.emit(msg);
-                    }
-                    c = conv::implicit_convert(self, c, f, ConvCtx::Initialization).unwrap_or(c);
-                    f
-                } else {
-                    let cty = self.ast.exprs.get(c).ty();
-                    if self.ast.types.as_enum(cty).is_some() { QualType::INT } else { cty }
-                };
-                let c = self.act_on_full_expr(c);
-                // A converted constant expression for a fixed underlying
-                // type ([dcl.enum]/5), else an integral constant expression.
-                let at = self.begin_loc(ie);
-                let ctx = if build.fixed.is_some() {
-                    EvalContext::converted(at)
-                } else {
-                    EvalContext::new(EvalKind::Other, at)
-                };
-                match self.eval_int(c, ctx) {
-                    Ok(v) => {
-                        let v = self.check_enumerator_range(v, build.fixed, ie);
-                        value = Some(v);
-                        let cv = self.int_const(cty, v);
-                        init_e = Some(self.builder().constant_expr(c, Some(cv)));
-                    }
-                    Err(f) => {
-                        let msg =
-                            self.diag(DiagId::sema_expr_not_ice, self.ast.exprs.get(ie).loc());
-                        let msg = self.with_failure_notes(msg, f);
-                        self.emit(msg);
-                    }
-                }
-            }
-        }
+        let (value, init_e) = match init {
+            Some(ie) => self.enumerator_init(&build, ie),
+            None => (None, None),
+        };
         let v = value.unwrap_or_else(|| match build.last {
             Some(l) => {
                 let next = l + 1;
@@ -1874,7 +1882,7 @@ impl Sema<'_, '_> {
                 }
                 Err(f) => {
                     let d = self.diag(DiagId::sema_static_assert_not_ice, cloc);
-                    let d = self.with_failure_notes(d, f);
+                    let d = Self::with_failure_notes(d, f);
                     self.emit(d);
                 }
             }
@@ -2242,7 +2250,7 @@ impl Sema<'_, '_> {
             Some(self.builder().constant_expr(c, Some(cv)))
         } else if let Err(f) = r {
             let d = self.diag(DiagId::sema_expr_not_ice, loc);
-            let d = self.with_failure_notes(d, f);
+            let d = Self::with_failure_notes(d, f);
             self.emit(d);
             None
         } else {

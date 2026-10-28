@@ -60,8 +60,12 @@ impl SemaBridge for Bridge<'_, '_, '_> {
 impl<'a, 'sm> Sema<'a, 'sm> {
     /// Splits `self` into the Oven and a bridge over the rest.
     fn oven_parts(&mut self) -> (&mut Oven, Bridge<'_, 'a, 'sm>) {
-        let bridge =
-            Bridge { ast: &mut self.ast, abi: &self.abi, diags: self.diags, vt: VTableLayout::default() };
+        let bridge = Bridge {
+            ast: &mut self.ast,
+            abi: &self.abi,
+            diags: self.diags,
+            vt: VTableLayout::default(),
+        };
         (&mut self.oven, bridge)
     }
 
@@ -139,7 +143,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
 
     /// `d` with the notes explaining the failed evaluation `f` (the
     /// reason, the call stack and supporting notes, in clang's order).
-    pub(crate) fn with_failure_notes(&self, d: Diag, f: EvalFailure) -> Diag {
+    pub(crate) fn with_failure_notes(d: Diag, f: EvalFailure) -> Diag {
         f.notes.into_iter().fold(d, |d, n| d.note(n.msg, Span::empty(n.loc)))
     }
 
@@ -155,5 +159,11 @@ impl<'a, 'sm> Sema<'a, 'sm> {
         let mut oven = Oven::new(budget);
         oven.set_backtrace_limit(backtrace_limit);
         self.oven = oven;
+    }
+
+    /// The AST and the evaluator, at the end of the translation unit (the
+    /// evaluator's [`Oven::stats`] are its `-fconstexpr-report=`).
+    pub fn into_parts(self) -> (Ast, Oven) {
+        (self.ast, self.oven)
     }
 }

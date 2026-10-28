@@ -526,7 +526,8 @@ impl Sema<'_, '_> {
                 }
                 let c = conv::lvalue_to_rvalue(self, ie);
                 let c = self.act_on_full_expr(c);
-                match self.eval_int(c, kiln_oven::EvalContext::new(kiln_oven::EvalKind::Other, dloc))
+                match self
+                    .eval_int(c, kiln_oven::EvalContext::new(kiln_oven::EvalKind::Other, dloc))
                 {
                     Ok(v) if v >= 0 => {
                         cur = u64::try_from(v).unwrap_or(u64::MAX);
@@ -534,7 +535,7 @@ impl Sema<'_, '_> {
                     r => {
                         let d = self.diag(DiagId::sema_expr_not_ice, dloc);
                         let d = match r {
-                            Err(f) => self.with_failure_notes(d, f),
+                            Err(f) => Self::with_failure_notes(d, f),
                             Ok(_) => d,
                         };
                         self.emit(d);
