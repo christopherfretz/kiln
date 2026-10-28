@@ -79,11 +79,16 @@ a query, not a guess.
 ## Performance tracking
 
 `cargo xtask bench` runs each entry in `bench/` and records wall-clock
-(median of N), max RSS (from `getrusage` of the child), and the Oven's own
-step/byte counters, into `bench/results/<date>.json`; `bench/baselines/` holds
-the committed reference. A run fails if any entry regresses beyond its
-threshold (default 5% time, 2% memory). The same corpus is run through clang
-to produce the comparison table in `docs/status/perf.md`.
+(median of N), max RSS of the child (via GNU time's `%M`, since safe Rust
+cannot call `getrusage` for a child), and, once the Oven exists, its own
+step/byte counters, into `bench/results/<date>.json` (git-ignored local
+history); `bench/baselines/` holds the committed reference, one per entry and
+compiler kind. A run fails if any entry regresses beyond its threshold
+(default 5% time, 2% memory); the time rule compares the fastest current run
+with the baseline median so host load does not read as a regression, and a
+baseline taken with a different compiler version, host or entry source is
+advisory only. The same corpus is run through clang to produce the
+comparison table in `docs/status/perf.md`. The contract is `spec/bench.md`.
 
 ## Release candidates
 

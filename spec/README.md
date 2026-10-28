@@ -16,4 +16,5 @@ say which in the PR. A spec change without tests is incomplete.
 | [pp.md](pp.md) | kiln_pp | draft |
 | [oven.md](oven.md) | kiln_oven | design |
 | [harness.md](harness.md) | xtask (`cargo xtask test`) | implemented |
+| [bench.md](bench.md) | xtask (`cargo xtask bench`) | implemented |
 | ast, parse, sema, abi, llvm, codegen, driver | | not started (M2) |

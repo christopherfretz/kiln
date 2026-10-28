@@ -3,7 +3,9 @@
 
 use std::process::ExitCode;
 
+mod bench;
 mod test;
+mod util;
 
 const USAGE: &str = "\
 usage: cargo xtask <command>
@@ -11,7 +13,8 @@ usage: cargo xtask <command>
 commands:
   test        run tests/conformance and tests/differential through the kiln binary
               (`cargo xtask test --help` for options; contract in spec/harness.md)
-  bench       run bench/ and compare against bench/baselines
+  bench       measure bench/ compile time and memory against bench/baselines
+              (`cargo xtask bench --help` for options; contract in spec/bench.md)
   libcxx      run the libc++ lit suite with kiln as the compiler
   ci          fmt --check, clippy -D warnings, cargo test, xtask test
 ";
@@ -20,7 +23,8 @@ fn main() -> ExitCode {
     let mut args = std::env::args().skip(1);
     match args.next().as_deref() {
         Some("test") => test::main(args),
-        Some("bench" | "libcxx") => {
+        Some("bench") => bench::main(args),
+        Some("libcxx") => {
             eprintln!("xtask: not implemented yet (M0 work package)");
             ExitCode::FAILURE
         }

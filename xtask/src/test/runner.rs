@@ -10,7 +10,7 @@ use super::compare::{line_diff, normalize_pp, pp_equivalent};
 use super::diag_parse::{self, Diagnostic};
 use super::directives::{self, CompilerKind, Expect, Lang, Severity, StdoutExpect, TestSpec};
 use super::discover::TestCase;
-use super::process::{self, Output, Shown};
+use crate::util::process::{self, Output, Shown};
 
 /// Everything a worker needs; shared read-only between threads.
 #[derive(Debug)]

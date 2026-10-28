@@ -210,9 +210,10 @@ removed at the end of the run.
 
 ## Tests backing this spec
 
-- `xtask/src/test/{directives,diag_parse,compare,process}.rs`: unit tests for
-  the directive parser, the diagnostic parser and matcher, normalization and
-  diffs, and process timeouts.
+- `xtask/src/test/{directives,diag_parse,compare}.rs` and
+  `xtask/src/util/process.rs`: unit tests for the directive parser, the
+  diagnostic parser and matcher, normalization and diffs, and process
+  timeouts.
 - `xtask/src/test/tests.rs`:
   - the seed corpus passes with clang, and every directive kind appears in it;
   - `xtask/fixtures/basic/` (one fixture per outcome, with the expected status
