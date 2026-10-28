@@ -1465,3 +1465,106 @@ fn varargs() {
         ],
     );
 }
+
+/// §6: every intrinsic helper declares a signature the verifier accepts,
+/// with clang 19's attributes; repeated requests return the same function.
+#[test]
+fn intrinsic_declarations() {
+    use intrinsics::*;
+    let mut m = aarch64();
+    let v4 = m.types.vector(TypeId::I32, 4);
+    let decls = [
+        memcpy(&mut m, TypeId::I64),
+        memmove(&mut m, TypeId::I64),
+        memset(&mut m, TypeId::I32),
+        lifetime_start(&mut m),
+        lifetime_end(&mut m),
+        trap(&mut m),
+        debugtrap(&mut m),
+        with_overflow(&mut m, OverflowOp::UMul, TypeId::I64),
+        with_overflow(&mut m, OverflowOp::SAdd, TypeId::I32),
+        with_overflow(&mut m, OverflowOp::USub, TypeId::I8),
+        va_start(&mut m),
+        stacksave(&mut m),
+        stackrestore(&mut m),
+        threadlocal_address(&mut m),
+        expect(&mut m, TypeId::I64),
+        assume(&mut m),
+        abs(&mut m, TypeId::I32),
+        ctlz(&mut m, TypeId::I64),
+        cttz(&mut m, v4),
+        ctpop(&mut m, TypeId::I16),
+        bswap(&mut m, TypeId::I32),
+        fabs(&mut m, TypeId::DOUBLE),
+    ];
+    assert_eq!(memcpy(&mut m, TypeId::I64), decls[0]);
+    assert_eq!(
+        overloaded_name(&m, "llvm.foo", &[TypeId::PTR, v4, TypeId::FLOAT]),
+        "llvm.foo.p0.v4i32.f32"
+    );
+    let fty = m.types.function(TypeId::I32, &[TypeId::I32], false);
+    let custom = intrinsic(&mut m, "llvm.bitreverse.i32", fty).unwrap();
+    // `intrinsic` adds no attributes; LLVM's parser would add these, so the
+    // caller supplies them to keep the text canonical.
+    let pure = m.func(decls[7]).attrs.func;
+    m.func_mut(custom).attrs.func = pure;
+    assert!(intrinsic(&mut m, "notllvm", fty).is_err());
+    let mut b = define(&mut m, "use", TypeId::VOID, &[TypeId::PTR, TypeId::I64]);
+    let (p, n) = (arg(&b, 0), arg(&b, 1));
+    let f = b.module().const_bool(false);
+    b.call(decls[0], &[p, p, n, f]).unwrap();
+    let z = b.module().const_int(TypeId::I8, 0);
+    let n32 = b.cast(CastOp::Trunc, n, TypeId::I32).unwrap();
+    b.call(decls[2], &[p, z, n32, f]).unwrap();
+    let k = b.module().const_int(TypeId::I64, 8);
+    b.call(decls[3], &[k, p]).unwrap();
+    b.call(decls[4], &[k, p]).unwrap();
+    let r = b.call(decls[7], &[n, n]).unwrap();
+    b.extract_value(r, &[1]).unwrap();
+    b.call(custom, &[n32]).unwrap();
+    b.ret_void().unwrap();
+    check(
+        &m,
+        &[
+            "declare void @llvm.memcpy.p0.p0.i64(ptr noalias nocapture writeonly, \
+             ptr noalias nocapture readonly, i64, i1 immarg) #0\n",
+            "declare void @llvm.memmove.p0.p0.i64(ptr nocapture writeonly, ptr nocapture readonly, \
+             i64, i1 immarg) #0\n",
+            "declare void @llvm.memset.p0.i32(ptr nocapture writeonly, i8, i32, i1 immarg) #1\n",
+            "declare void @llvm.lifetime.start.p0(i64 immarg, ptr nocapture) #2\n",
+            "declare void @llvm.lifetime.end.p0(i64 immarg, ptr nocapture) #2\n",
+            "declare void @llvm.trap() #3\n",
+            "declare void @llvm.debugtrap() #4\n",
+            "declare { i64, i1 } @llvm.umul.with.overflow.i64(i64, i64) #5\n",
+            "declare { i32, i1 } @llvm.sadd.with.overflow.i32(i32, i32) #5\n",
+            "declare { i8, i1 } @llvm.usub.with.overflow.i8(i8, i8) #5\n",
+            "declare void @llvm.va_start.p0(ptr) #6\n",
+            "declare ptr @llvm.stacksave.p0() #6\n",
+            "declare void @llvm.stackrestore.p0(ptr) #6\n",
+            "declare nonnull ptr @llvm.threadlocal.address.p0(ptr nonnull) #5\n",
+            "declare i64 @llvm.expect.i64(i64, i64) #7\n",
+            "declare void @llvm.assume(i1 noundef) #8\n",
+            "declare i32 @llvm.abs.i32(i32, i1 immarg) #5\n",
+            "declare i64 @llvm.ctlz.i64(i64, i1 immarg) #5\n",
+            "declare <4 x i32> @llvm.cttz.v4i32(<4 x i32>, i1 immarg) #5\n",
+            "declare i16 @llvm.ctpop.i16(i16) #5\n",
+            "declare i32 @llvm.bswap.i32(i32) #5\n",
+            "declare double @llvm.fabs.f64(double) #5\n",
+            "declare i32 @llvm.bitreverse.i32(i32) #5\n",
+            "  call void @llvm.memcpy.p0.p0.i64(ptr %0, ptr %0, i64 %1, i1 false)\n",
+            "  call void @llvm.lifetime.start.p0(i64 8, ptr %0)\n",
+            "attributes #0 = { nocallback nofree nounwind willreturn memory(argmem: readwrite) }\n",
+            "attributes #1 = { nocallback nofree nounwind willreturn memory(argmem: write) }\n",
+            "attributes #2 = { nocallback nofree nosync nounwind willreturn \
+             memory(argmem: readwrite) }\n",
+            "attributes #3 = { cold noreturn nounwind memory(inaccessiblemem: write) }\n",
+            "attributes #4 = { nounwind }\n",
+            "attributes #5 = { nocallback nofree nosync nounwind speculatable willreturn \
+             memory(none) }\n",
+            "attributes #6 = { nocallback nofree nosync nounwind willreturn }\n",
+            "attributes #7 = { nocallback nofree nosync nounwind willreturn memory(none) }\n",
+            "attributes #8 = { nocallback nofree nosync nounwind willreturn \
+             memory(inaccessiblemem: write) }\n",
+        ],
+    );
+}

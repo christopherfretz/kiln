@@ -101,12 +101,22 @@ pub fn overloaded_name(m: &Module, base: &str, overloads: &[TypeId]) -> String {
 }
 
 /// Declare (or find) an intrinsic by full name and function type, without
-/// attributes. Use for intrinsics that have no dedicated helper.
+/// attributes. Use for intrinsics that have no dedicated helper. LLVM's
+/// parser attaches an intrinsic's built-in attributes when it reads the
+/// declaration, so set `attrs.func` to match them if the printed text is to
+/// be canonical (`spec/llvm.md` §6).
 ///
 /// # Errors
 ///
-/// Errors unless `fn_ty` is a function type.
+/// Errors unless `name` starts with `llvm.` and `fn_ty` is a function type
+/// (or if a function of that name exists with another type).
 pub fn intrinsic(m: &mut Module, name: &str, fn_ty: TypeId) -> IrResult<FuncId> {
+    if !name.starts_with("llvm.") {
+        return Err(crate::IrError::new(
+            crate::IrErrorKind::BadFunction,
+            format!("intrinsic name {name:?} does not start with \"llvm.\""),
+        ));
+    }
     m.get_or_insert_function(name, fn_ty)
 }
 
