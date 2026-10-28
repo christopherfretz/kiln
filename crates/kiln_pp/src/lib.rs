@@ -9,11 +9,16 @@
 //! is a hook installed on the preprocessor:
 //!
 //! - [`IncludeResolver`]: `#include`, `#include_next`, `#embed`,
-//!   `__has_include`, `__has_embed` (header search, WP-014);
+//!   `__has_include`, `__has_embed` (header search WP-014, `#embed`
+//!   resources WP-016);
 //! - [`IfEvaluator`]: the value of a `#if` / `#elif` expression (WP-015);
 //! - [`FeatureQueries`]: `__has_builtin`, `__has_attribute`,
-//!   `__has_feature`, ... (WP-016);
-//! - [`PpCallbacks`]: observers, pragma handlers (WP-017).
+//!   `__has_feature`, ... (the tables of WP-015);
+//! - [`PpCallbacks`]: observers and pragma handlers (`-M` dependency
+//!   output with WP-014, `-dD` / `-dI` with WP-017, phase-7 pragmas).
+//!
+//! `#pragma once` and the include-guard optimization (clang's
+//! `MultipleIncludeOpt`) are in the core.
 #![forbid(unsafe_code)]
 
 mod builtin;

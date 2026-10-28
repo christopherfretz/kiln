@@ -2,8 +2,8 @@
 //!
 //! The core parses the directive into an [`IncludeRequest`] /
 //! [`EmbedRequest`] and asks the installed [`IncludeResolver`] for the
-//! file. Search paths, header maps, include guards and the file cache are
-//! WP-014 (`#include`) and WP-016 (`#embed`); they plug in by implementing
+//! file. Search paths, header maps and the file cache are WP-014
+//! (`#include`) and WP-016 (`#embed`); they plug in by implementing
 //! this trait. [`MemoryResolver`] is an in-memory resolver for tests.
 
 use std::collections::HashMap;

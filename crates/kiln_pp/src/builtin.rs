@@ -8,7 +8,7 @@
 //! `__COUNTER__`, `__has_include`, ...); everything that depends on the
 //! language implementation or target (`__has_feature`,
 //! `__has_builtin`, `__has_cpp_attribute`, `__is_target_os`, ...) is
-//! asked of a [`FeatureQueries`] implementation (WP-017).
+//! asked of a [`FeatureQueries`] implementation (WP-015).
 
 /// A builtin macro.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -105,7 +105,7 @@ pub enum TargetQuery {
 
 /// Answers the language- and target-dependent builtin queries.
 ///
-/// To be implemented by WP-017 (feature tables generated from clang 19
+/// To be implemented by WP-015 (feature tables generated from clang 19
 /// for the configured target). The defaults are those of a compiler that
 /// supports nothing beyond the standard: no features, extensions or
 /// builtins; the standard attributes of [cpp.cond] Table 23 (with
