@@ -448,4 +448,161 @@ mod tests {
         assert!(!is_xid_continue('😀'));
         assert!(!is_xid_start('a')); // ASCII handled separately
     }
+
+    /// Every name and alias in the generated table resolves exactly to its
+    /// code point; its lower-cased form resolves loosely to the same one.
+    #[test]
+    fn every_table_name_round_trips() {
+        let mut name = Buf::new();
+        let mut at = 0;
+        let mut count = 0;
+        while at < NAMES.len() {
+            let (cp, next) = decode_entry(at, &mut name).expect("well-formed table");
+            let n = std::str::from_utf8(name.as_slice()).expect("ASCII names");
+            let want = char::from_u32(cp).expect("scalar value");
+            assert_eq!(lookup_char_name(n), Some(NameMatch::Exact(want)), "{n}");
+            if count % 7 == 0 {
+                let lower = n.to_ascii_lowercase().replace(' ', "_");
+                assert_eq!(lookup_char_name(&lower), Some(NameMatch::Loose(want)), "{lower}");
+            }
+            count += 1;
+            at = next;
+        }
+        assert!(count > 33_000, "{count} entries");
+    }
+
+    /// NR1: all 11172 Hangul syllable names (Unicode ch. 3.12).
+    #[test]
+    fn hangul_syllable_names() {
+        for cp in S_BASE..S_BASE + S_COUNT {
+            let s = cp - S_BASE;
+            let name = format!(
+                "HANGUL SYLLABLE {}{}{}",
+                JAMO_L[(s / N_COUNT) as usize],
+                JAMO_V[((s % N_COUNT) / T_COUNT) as usize],
+                JAMO_T[(s % T_COUNT) as usize]
+            );
+            let c = char::from_u32(cp).expect("syllable");
+            assert_eq!(lookup_char_name(&name), Some(NameMatch::Exact(c)), "{name}");
+            if s.is_multiple_of(97) {
+                let lower = name.to_ascii_lowercase();
+                assert_eq!(lookup_char_name(&lower), Some(NameMatch::Loose(c)), "{lower}");
+            }
+        }
+        assert_eq!(lookup_char_name("HANGUL SYLLABLE"), None);
+        assert_eq!(lookup_char_name("HANGUL SYLLABLE GAGX"), None);
+    }
+
+    /// UAX44-LM2: the hyphen of U+1180 HANGUL JUNGSEONG O-E is not
+    /// ignorable (U+116C is HANGUL JUNGSEONG OE).
+    #[test]
+    fn o_e_hyphen() {
+        assert_eq!(lookup_char_name("HANGUL JUNGSEONG O-E"), Some(NameMatch::Exact('\u{1180}')));
+        assert_eq!(lookup_char_name("HANGUL JUNGSEONG OE"), Some(NameMatch::Exact('\u{116C}')));
+        assert_eq!(lookup_char_name("hangul jungseong o-e"), Some(NameMatch::Loose('\u{1180}')));
+        assert_eq!(lookup_char_name("hangul_jungseong_oe"), Some(NameMatch::Loose('\u{116C}')));
+        // Medial hyphens elsewhere are ignorable; others are not.
+        assert_eq!(
+            lookup_char_name("ZERO WIDTH NO-BREAK SPACE"),
+            Some(NameMatch::Exact('\u{FEFF}'))
+        );
+        assert_eq!(
+            lookup_char_name("ZERO WIDTH NO BREAK SPACE"),
+            Some(NameMatch::Loose('\u{FEFF}'))
+        );
+        assert_eq!(
+            lookup_char_name("ZERO WIDTH NOBREAK SPACE"),
+            Some(NameMatch::Loose('\u{FEFF}'))
+        );
+        assert_eq!(lookup_char_name("-ZERO WIDTH SPACE"), None);
+    }
+
+    /// NR2: names derived from a prefix and the code point in hex.
+    #[test]
+    fn nr2_names() {
+        assert_eq!(
+            lookup_char_name("CJK UNIFIED IDEOGRAPH-4E00"),
+            Some(NameMatch::Exact('\u{4E00}'))
+        );
+        assert_eq!(
+            lookup_char_name("CJK UNIFIED IDEOGRAPH-4e00"),
+            Some(NameMatch::Loose('\u{4E00}'))
+        );
+        assert_eq!(
+            lookup_char_name("cjk unified ideograph 4e00"),
+            Some(NameMatch::Loose('\u{4E00}'))
+        );
+        assert_eq!(
+            lookup_char_name("CJK UNIFIED IDEOGRAPH-20000"),
+            Some(NameMatch::Exact('\u{20000}'))
+        );
+        assert_eq!(lookup_char_name("CJK UNIFIED IDEOGRAPH-0041"), None);
+        assert_eq!(lookup_char_name("CJK UNIFIED IDEOGRAPH-04E00"), None);
+        assert_eq!(lookup_char_name("CJK UNIFIED IDEOGRAPH-"), None);
+        assert_eq!(
+            lookup_char_name("CJK COMPATIBILITY IDEOGRAPH-F900"),
+            Some(NameMatch::Exact('\u{F900}'))
+        );
+        assert_eq!(lookup_char_name("TANGUT IDEOGRAPH-17000"), Some(NameMatch::Exact('\u{17000}')));
+        for (lo, hi, prefix) in NR2_RANGES {
+            for cp in [*lo, *hi] {
+                let name = format!("{prefix}{cp:04X}");
+                let c = char::from_u32(cp).expect("scalar");
+                assert_eq!(lookup_char_name(&name), Some(NameMatch::Exact(c)), "{name}");
+            }
+        }
+    }
+
+    /// Aliases of every type resolve; non-names do not.
+    #[test]
+    fn aliases_and_misses() {
+        assert_eq!(lookup_char_name("NULL"), Some(NameMatch::Exact('\0')));
+        assert_eq!(lookup_char_name("LINE FEED"), Some(NameMatch::Exact('\n')));
+        assert_eq!(lookup_char_name("LF"), Some(NameMatch::Exact('\n')));
+        assert_eq!(lookup_char_name("BYTE ORDER MARK"), Some(NameMatch::Exact('\u{FEFF}')));
+        assert_eq!(lookup_char_name("LATIN CAPITAL LETTER GHA"), Some(NameMatch::Exact('\u{1A2}')));
+        assert_eq!(lookup_char_name(""), None);
+        assert_eq!(lookup_char_name("NOT A CHARACTER NAME"), None);
+        assert_eq!(lookup_char_name("LATIN SMALL LETTER \u{E9}"), None);
+        assert_eq!(lookup_char_name(&"A".repeat(200)), None);
+    }
+
+    /// NFC: quick-check and full normalization agree with Unicode's
+    /// NormalizationTest.txt. Needs the file:
+    /// `KILN_UCD_NORMALIZATION_TEST=<path> cargo test -p kiln_lex -- --ignored nfc`.
+    #[test]
+    #[ignore = "needs NormalizationTest.txt (KILN_UCD_NORMALIZATION_TEST)"]
+    fn nfc_normalization_test() {
+        let path = std::env::var("KILN_UCD_NORMALIZATION_TEST")
+            .expect("set KILN_UCD_NORMALIZATION_TEST to NormalizationTest.txt");
+        let text = std::fs::read_to_string(path).expect("readable");
+        let mut lines = 0;
+        for line in text.lines() {
+            let line = line.split('#').next().unwrap_or("");
+            if line.is_empty() || line.starts_with('@') {
+                continue;
+            }
+            let cols: Vec<String> = line
+                .split(';')
+                .take(5)
+                .map(|col| {
+                    col.split_whitespace()
+                        .map(|h| {
+                            char::from_u32(u32::from_str_radix(h, 16).expect("hex"))
+                                .expect("scalar")
+                        })
+                        .collect()
+                })
+                .collect();
+            let nfc: Vec<char> = cols[1].chars().collect();
+            for (i, col) in cols.iter().enumerate() {
+                let want = if i < 3 { &nfc } else { &cols[3].chars().collect() };
+                assert_eq!(&to_nfc(col), want, "NFC of column {} in {line}", i + 1);
+                let is = to_nfc(col).iter().copied().eq(col.chars());
+                assert_eq!(is_nfc(col), is, "is_nfc of column {} in {line}", i + 1);
+            }
+            lines += 1;
+        }
+        assert!(lines > 10_000, "{lines} test lines");
+    }
 }

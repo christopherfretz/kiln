@@ -64,7 +64,7 @@ fn lex_icon_suffixes() {
 }
 
 /// [lex.icon], [lex.fcon]: diagnosed malformed literals (clang's
-/// NumericLiteralParser).
+/// `NumericLiteralParser`).
 #[test]
 fn lex_icon_errors() {
     assert_eq!(diags("0x"), [D::InvalidSuffix { floating: false }]);
@@ -76,7 +76,7 @@ fn lex_icon_errors() {
     assert_eq!(diags("0b1e"), [D::InvalidDigit { ch: 'e', radix: 2 }]);
     assert_eq!(diags("1f"), [D::InvalidDigit { ch: 'f', radix: 10 }]);
     assert_eq!(diags("1fu"), [D::InvalidDigit { ch: 'f', radix: 10 }]);
-    assert!(diags("0x1f").is_empty());
+    assert_eq!(diags("0x1f"), []);
     let n = classify_number("100000000000000000000000000000000000000000", Std::Cxx26);
     match n.class {
         NumberClass::Integer(i) => assert_eq!(i.value(), None),
@@ -201,9 +201,9 @@ fn lex_ext_numeric_ud_suffix() {
 #[test]
 fn lex_icon_fcon_extensions() {
     assert_eq!(diags_in("0b1", Std::Cxx11), [D::BinaryLiteralExtension]);
-    assert!(diags_in("0b1", Std::Cxx14).is_empty());
+    assert_eq!(diags_in("0b1", Std::Cxx14), []);
     assert_eq!(diags_in("0x1p1", Std::Cxx14), [D::HexFloatExtension]);
-    assert!(diags_in("0x1p1", Std::Cxx17).is_empty());
+    assert_eq!(diags_in("0x1p1", Std::Cxx17), []);
     assert_eq!(diags_in("1z", Std::Cxx20), [D::SizeSuffixExtension]);
     assert_eq!(diags_in("1uz", Std::Cxx20), [D::SizeSuffixExtension]);
 }

@@ -99,3 +99,54 @@ fn lex_name_interned() {
     assert_eq!(l.tokens[0].kind, l.tokens[2].kind);
     assert_ne!(l.tokens[0].kind, l.tokens[1].kind);
 }
+
+/// [lex.universal.char]/3 (C++23): `\N{}` names in identifiers: exact
+/// names, aliases and Hangul syllables resolve; a name that only matches
+/// loosely (UAX44-LM2) is ill-formed but recovers to the character; an
+/// unknown name is diagnosed. Matches clang 19 `-dump-tokens`.
+#[test]
+fn lex_universal_char_named_in_identifier() {
+    // Alias (correction) of U+01A2 LATIN CAPITAL LETTER OI.
+    let l = lex("\\N{LATIN CAPITAL LETTER GHA}\n");
+    assert_eq!(l.idents, ["\u{1A2}"]);
+    assert_eq!(l.diags.len(), 0, "{:?}", l.diags);
+    let l = lex("\\N{HANGUL SYLLABLE GAG}\n");
+    assert_eq!(l.idents, ["\u{AC01}"]);
+    assert_eq!(l.diags.len(), 0, "{:?}", l.diags);
+    let l = lex("\\N{latin_small_letter_e-with_acute}\n");
+    assert_eq!(l.idents, ["\u{E9}"]);
+    assert_eq!(l.diags[0].0, D::UcnNameLooseMatch { ch: '\u{E9}' });
+    assert_eq!(diag_kinds("a\\N{ABC}\n", cxx26()), [D::UcnUnknownName]);
+    // A basic character by name is still a basic character.
+    assert_eq!(
+        diag_kinds("\\N{LATIN SMALL LETTER A}\n", cxx26()),
+        [D::UcnBasicOrControl { cp: 0x61 }]
+    );
+}
+
+/// [lex.universal.char]: a malformed `\N` is not a UCN: `\` lexes as a
+/// lone token (clang's recovery and warnings).
+#[test]
+fn lex_universal_char_named_malformed() {
+    let l = lex("a\\N{LATIN\nb\n");
+    assert_eq!(l.spellings, ["a", "\\", "N", "{", "LATIN", "b"]);
+    assert_eq!(l.diags[0].0, D::UcnDelimitedIncomplete);
+    let l = lex("a\\N{}\n");
+    assert_eq!(l.spellings, ["a", "\\", "N", "{", "}"]);
+    assert_eq!(l.diags[0].0, D::UcnDelimitedEmpty);
+    assert_eq!(diag_kinds("a\\N\n", cxx26()), [D::UcnIncomplete]);
+}
+
+/// [lex.name]/1: `NFC_QC=Maybe` characters need the full NFC check: a
+/// combining mark that composes with the preceding starter is not NFC,
+/// one that does not compose is.
+#[test]
+fn lex_name_not_nfc_maybe() {
+    // a + U+0301 composes to U+00E1.
+    assert_eq!(diag_kinds("a\u{301}\n", cxx26()), [D::IdentifierNotNfc]);
+    // x + U+0301 and U+00E9 + U+0301 have no composition.
+    assert_eq!(diag_kinds("x\u{301}\n", cxx26()), []);
+    assert_eq!(diag_kinds("\u{E9}\u{301}\n", cxx26()), []);
+    // Via a UCN too.
+    assert_eq!(diag_kinds("a\\u0301\n", cxx26()), [D::IdentifierNotNfc]);
+}

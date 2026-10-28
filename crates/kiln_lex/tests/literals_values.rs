@@ -64,7 +64,7 @@ fn lex_ext_ud_suffix() {
 fn lex_string_uneval() {
     let s = decode_unevaluated_string("\"ok \u{e9}\\n\"", X86);
     assert_eq!(s.units, CodeUnits::U8(b"ok \xC3\xA9\n".to_vec()));
-    assert!(s.diags.is_empty());
+    assert_eq!(s.diags, []);
     let s = decode_unevaluated_string("u8\"x\"", X86);
     assert_eq!(kinds(&s.diags), [D::UnevaluatedStringPrefix]);
     assert_eq!(s.units, CodeUnits::U8(b"x".to_vec()));
@@ -83,7 +83,7 @@ fn lex_string_uneval() {
 }
 
 /// [lex.ccon]/2, /5: a single c-char: type and value; plain `char` is
-/// signed on x86-64 and unsigned on AArch64 Linux.
+/// signed on x86-64 and unsigned on `AArch64` Linux.
 #[test]
 fn lex_ccon_single_values() {
     let c = decode_char("'a'", X86);
@@ -110,8 +110,8 @@ fn lex_ccon_too_large() {
     assert_eq!(kinds(&decode_char("u8'\u{e9}'", X86).diags), [D::CharTooLarge]);
     assert_eq!(kinds(&decode_char("u'\u{1F600}'", X86).diags), [D::CharTooLarge]);
     assert_eq!(kinds(&decode_char("L'\u{1F600}'", WIN).diags), [D::CharTooLarge]);
-    assert!(decode_char("L'\u{1F600}'", X86).diags.is_empty());
-    assert!(decode_char("u'\u{e9}'", X86).diags.is_empty());
+    assert_eq!(decode_char("L'\u{1F600}'", X86).diags, []);
+    assert_eq!(decode_char("u'\u{e9}'", X86).diags, []);
 }
 
 /// [lex.ccon]/2 (conditionally-supported multicharacter literals): type
@@ -136,7 +136,7 @@ fn lex_ccon_multichar() {
 
 /// [cpp.cond]/12: in `#if`, a character literal's value is computed in
 /// the width of its kind and extended by the character type's signedness
-/// (clang's PPExpressions).
+/// (clang's `PPExpressions`).
 #[test]
 fn cpp_cond_char_values() {
     let c = decode_char("'\\xff'", X86);
@@ -235,4 +235,34 @@ fn lex_string_decode_encode_decode() {
         let b = decode_string(&spelled, X86);
         assert_eq!(a.units, b.units, "{sp}");
     }
+}
+
+/// [lex.phases]/1.2: a literal diagnostic's spelling offsets map back to
+/// the source through splices and trigraphs (`LitDiag::locate`).
+#[test]
+fn lex_string_diag_locate_through_splices() {
+    use kiln_lex::{Interner, LexOptions, Lexer, TokKind};
+    use kiln_source::SourceManager;
+    // Source:  x "a\<newline>\x100??/q"   (trigraph `??/` is `\`).
+    let src = "x \"a\\\n\\x100??/q\"\n";
+    let sm = SourceManager::new();
+    let file = sm.add_virtual("<t>", src.to_owned()).unwrap();
+    let interner = Interner::new();
+    let lopts = LexOptions { trigraphs: true, ..LexOptions::default() };
+    let mut lx = Lexer::new(&sm, &interner, file, sm.loc(file, 0), lopts);
+    let _x = lx.next();
+    let tok = lx.next();
+    assert_eq!(tok.kind, TokKind::StringLit(Encoding::Ordinary));
+    let spelling = lx.spelling(&tok).into_owned();
+    assert_eq!(spelling, "\"a\\x100\\q\"");
+    let lit = decode_string(&spelling, LiteralOptions::default());
+    assert_eq!(kinds(&lit.diags), [D::HexEscapeTooLarge, D::UnknownEscape { ch: 'q' }]);
+    let text = sm.span_text(tok.span).unwrap();
+    let at = |d: &kiln_lex::literal::LitDiag| {
+        let l = d.locate(&tok, text, &lopts);
+        (sm.offset_of(l.span.lo).unwrap().1, sm.offset_of(l.span.hi).unwrap().1)
+    };
+    // `\x100` is source bytes 6..11; `??/q` is 11..15.
+    assert_eq!(at(&lit.diags[0]), (6, 11));
+    assert_eq!(at(&lit.diags[1]), (11, 15));
 }
