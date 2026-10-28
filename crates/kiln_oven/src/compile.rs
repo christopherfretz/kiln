@@ -55,6 +55,8 @@ pub(crate) struct ParamInfo {
     /// The register holding the value (or, for `mem`, the address).
     pub reg: u32,
     pub mem: bool,
+    /// A reference parameter: `reg` holds the referent's address.
+    pub is_ref: bool,
 }
 
 #[derive(Debug)]
@@ -267,7 +269,16 @@ impl Oven {
         let ty = c.ety(e);
         let glvalue = c.b.ast().exprs.get(e).value_category().is_glvalue();
 
-        let ret = if c.o.types.is_aggregate(ty) {
+        let ref_object = object.filter(|&d| is_reference_var(c.b.ast(), d));
+        let ret = if let Some(d) = ref_object {
+            // A reference's initializer: the address of its referent.
+            let q = c.b.ast().decls.get(d).ty().unwrap_or(QualType::INT);
+            let rt = c.ty(q);
+            let r = c.reg();
+            c.bind_ref(e, r);
+            c.emit(Op::Ret, 1, &[r]);
+            RetKind::Scalar(rt)
+        } else if c.o.types.is_aggregate(ty) {
             let origin = match object {
                 Some(d) => Origin::Var(d),
                 None => Origin::Temp(e),
@@ -286,7 +297,7 @@ impl Oven {
             c.effect(e);
             c.emit(Op::Ret, 0, &[0]);
             RetKind::Void
-        } else if glvalue && !object.is_some_and(|d| is_reference_var(c.b.ast(), d)) {
+        } else if glvalue {
             // The value of a scalar glvalue (sema's speculative folds of
             // an operand before its lvalue-to-rvalue conversion).
             let r = c.reg();
@@ -353,6 +364,7 @@ impl Oven {
             RetKind::Scalar(rty)
         };
         c.ret = ret;
+        c.ret_ref = c.b.ast().types.is_reference(ret_q);
         c.scan(body, &params);
         if matches!(ret, RetKind::Sret(_)) {
             c.reg();
@@ -362,13 +374,15 @@ impl Oven {
             let q = c.b.ast().decls.get(p).ty().unwrap_or(QualType::INT);
             let ty = c.ty(q);
             let r = c.reg();
-            let mem = c.o.types.is_aggregate(ty) || c.mem_vars.contains(&p);
-            infos.push(ParamInfo { decl: p, ty, reg: r, mem });
+            let is_ref = c.b.ast().types.is_reference(q);
+            let mem = !is_ref && (c.o.types.is_aggregate(ty) || c.mem_vars.contains(&p));
+            infos.push(ParamInfo { decl: p, ty, reg: r, mem, is_ref });
         }
         let entry = c.here();
         for pi in &infos {
-            if c.o.types.is_aggregate(pi.ty) {
-                // The caller materialized the argument; the register holds its address.
+            if pi.is_ref || c.o.types.is_aggregate(pi.ty) {
+                // The caller bound the reference or materialized the
+                // argument; the register holds its address.
                 c.locals.insert(pi.decl, Local::Mem(pi.reg));
             } else if pi.mem {
                 let p = c.reg();
@@ -418,6 +432,8 @@ pub(crate) struct Compiler<'a> {
     /// Mark registers of the open scopes (`None`: allocates nothing).
     scopes: Vec<Option<u32>>,
     ret: RetKind,
+    /// The function returns a reference (`ret` is the address).
+    ret_ref: bool,
     /// The body creates temporaries (scopes are needed per statement).
     has_temps: bool,
     /// The operator location of the innermost read-modify-write being
@@ -439,6 +455,7 @@ impl<'a> Compiler<'a> {
             breakables: Vec::new(),
             scopes: Vec::new(),
             ret: RetKind::Void,
+            ret_ref: false,
             has_temps: false,
         }
     }
@@ -847,6 +864,10 @@ impl Compiler<'_> {
 
     /// Whether local `d` of type `ty` lives in memory.
     fn needs_mem(&self, d: DeclId, ty: OTy) -> bool {
+        if is_reference_var(self.b.ast(), d) {
+            // A register holding the referent's address.
+            return false;
+        }
         if self.o.types.is_aggregate(ty) || self.mem_vars.contains(&d) {
             return true;
         }
@@ -1041,6 +1062,11 @@ impl Compiler<'_> {
                     (RetKind::Sret(ty), Some(v)) => {
                         self.init(v, 0, ty);
                         self.emit(Op::Ret, 0, &[0]);
+                    }
+                    (RetKind::Scalar(_), Some(v)) if self.ret_ref => {
+                        let r = self.reg();
+                        self.bind_ref(v, r);
+                        self.emit(Op::Ret, 1, &[r]);
                     }
                     (RetKind::Scalar(_), Some(v)) => {
                         let r = self.rv(v);
@@ -1346,6 +1372,16 @@ impl Compiler<'_> {
             }
             return;
         }
+        if is_reference_var(ast, d) {
+            let r = self.reg();
+            if let Some(init) = v.init {
+                let m = self.next;
+                self.bind_ref(init, r);
+                self.next = m;
+            }
+            self.locals.insert(d, Local::Mem(r));
+            return;
+        }
         let q = n.ty().unwrap_or(QualType::INT);
         let ty = self.ty(q);
         let local = self.locals.get(&d).copied();
@@ -1513,7 +1549,7 @@ impl Compiler<'_> {
                 return r;
             }
         }
-        if n.kind() == ExprKind::CallExpr {
+        if n.kind() == ExprKind::CallExpr && !n.value_category().is_glvalue() {
             return self.call(e0, None);
         }
         let r = self.reg();
@@ -1616,7 +1652,7 @@ impl Compiler<'_> {
                 self.rv_into(f, dst);
                 self.patch_here(end);
             }
-            ExprKind::CallExpr => {
+            ExprKind::CallExpr if !n.value_category().is_glvalue() => {
                 let r = self.call(e, None);
                 if r != dst {
                     self.emit(Op::Mov, 0, &[dst, r]);
@@ -1648,6 +1684,12 @@ impl Compiler<'_> {
         } else {
             let op = ExprId::new(ast.exprs.get(e).a());
             ast.exprs.get(op).ty()
+        };
+        // [expr.sizeof]/2, [expr.alignof]/3: of a reference type, the
+        // referenced type's.
+        let q = match ast.types.canonical_view(q) {
+            TypeView::LValueRef(r) | TypeView::RValueRef(r) => r,
+            _ => q,
         };
         let t = self.ty(q);
         let v = match kind {
@@ -2147,6 +2189,14 @@ impl Compiler<'_> {
                 let g = self.o.global_index(self.b.ast(), d);
                 let r = self.reg();
                 self.emit_at(Op::GlobalAddr, 0, &[r, g], e);
+                if is_reference_var(self.b.ast(), d) {
+                    // The variable holds its referent's address.
+                    let q = self.ast().decls.get(d).ty().unwrap_or(QualType::INT);
+                    let rt = self.ty(q);
+                    let a = self.reg();
+                    self.emit_at(Op::Load, ak::READ, &[a, r, rt.0], e);
+                    return Place::Mem(a);
+                }
                 Place::Mem(r)
             }
             ExprKind::StringLiteral => {
@@ -2253,7 +2303,9 @@ impl Compiler<'_> {
                 let op = self.ast().exprs.operand(e);
                 self.lv(op, acc)
             }
-            ExprKind::CallExpr if !n.value_category().is_glvalue() => {
+            // A call returning a reference: the referent's address.
+            ExprKind::CallExpr if n.value_category().is_glvalue() => Place::Mem(self.call(e, None)),
+            ExprKind::CallExpr => {
                 // A class prvalue used as a glvalue: materialize it.
                 let ty = self.ety(e);
                 let r = self.reg();
@@ -2330,6 +2382,12 @@ impl Compiler<'_> {
                 }
                 Access::Addr => {}
             }
+        }
+        if is_reference_decl(self.ast(), fd) {
+            // A reference member holds its referent's address.
+            let a = self.reg();
+            self.emit_at(Op::Load, ak::READ, &[a, q, fi.ty.0], e);
+            return Place::Mem(a);
         }
         match fi.width {
             Some(w) => Place::Bits { p: q, bit: fi.bit, width: w },
@@ -2612,6 +2670,12 @@ impl Compiler<'_> {
 
     fn init_field(&mut self, x: ExprId, p: u32, fi: crate::ty::FieldInfo, e: ExprId) {
         let q = self.elem_ptr(p, fi.offset, e);
+        if is_reference_decl(self.ast(), fi.decl) {
+            let r = self.reg();
+            self.bind_ref(x, r);
+            self.emit_at(Op::InitStore, 0, &[q, r, fi.ty.0], x);
+            return;
+        }
         match fi.width {
             Some(w) => {
                 let r = self.rv(x);
@@ -2706,6 +2770,37 @@ impl Compiler<'_> {
 
     /// Compiles call `e`; the scalar result is in the returned register.
     /// `sret`: the result object's address (aggregate results).
+    /// Binds a reference to glvalue `init`: its address into `dst`.
+    fn bind_ref(&mut self, init: ExprId, dst: u32) {
+        let m = self.next.max(dst + 1);
+        self.next = m;
+        if self.node(init).value_category().is_glvalue() {
+            let p = self.lv_mem(init, Access::Addr);
+            if p != dst {
+                self.emit(Op::Mov, 0, &[dst, p]);
+            }
+        } else {
+            // Sema materializes no temporaries yet (no
+            // `MaterializeTemporaryExpr`).
+            let loc = self.begin(init);
+            self.trap_loc(loc, "kiln: binding a reference to a temporary is not supported yet".into());
+        }
+        self.next = m;
+    }
+
+    /// Which parameters of the function `callee` designates are references.
+    fn ref_params(&self, callee: ExprId) -> Vec<bool> {
+        let ast = self.ast();
+        let mut q = ast.exprs.get(callee).ty();
+        if let Some(p) = ast.types.pointee(q) {
+            q = p;
+        }
+        ast.types
+            .proto(q)
+            .map(|p| ast.types.params(p).iter().map(|&t| ast.types.is_reference(t)).collect())
+            .unwrap_or_default()
+    }
+
     fn call(&mut self, e: ExprId, sret: Option<u32>) -> u32 {
         let ty = self.ety(e);
         let ast = self.ast();
@@ -2739,10 +2834,13 @@ impl Compiler<'_> {
                 }
             }
         }
+        let ref_params = self.ref_params(callee);
         for (i, &a) in args.iter().enumerate() {
             let slot = base + u32::from(is_sret) + i as u32;
             let aty = self.ety(a);
-            if self.o.types.is_aggregate(aty) {
+            if ref_params.get(i).copied().unwrap_or(false) {
+                self.bind_ref(a, slot);
+            } else if self.o.types.is_aggregate(aty) {
                 self.alloc(slot, aty, Origin::Temp(a), false, a);
                 self.init(a, slot, aty);
             } else {
@@ -2774,5 +2872,11 @@ impl Compiler<'_> {
 
 /// Whether `d` is a variable of reference type.
 fn is_reference_var(ast: &kiln_ast::Ast, d: DeclId) -> bool {
+    is_reference_decl(ast, d)
+}
+
+/// Whether declaration `d` (a variable, parameter or field) has reference
+/// type.
+fn is_reference_decl(ast: &kiln_ast::Ast, d: DeclId) -> bool {
     ast.decls.get(d).ty().is_some_and(|t| ast.types.is_reference(t))
 }

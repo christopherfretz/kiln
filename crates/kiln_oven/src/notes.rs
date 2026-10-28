@@ -217,7 +217,15 @@ impl Oven {
                     s.push_str(", ");
                 }
                 let v = self.regs[fr.fb as usize + p.reg as usize];
-                self.write_value(ast, &mut s, p.ty, v, 0);
+                match self.types.kind(p.ty) {
+                    // A reference argument prints as its referent's lvalue
+                    // (clang: `f(a[1])`, not `f(&a[1])`).
+                    TyKind::Ptr(pt) if p.is_ref => {
+                        let r = self.ptr_string(ast, v as u64, pt);
+                        s.push_str(r.strip_prefix('&').unwrap_or(&r));
+                    }
+                    _ => self.write_value(ast, &mut s, p.ty, v, 0),
+                }
             }
             s.push_str(")'");
             notes.push(Note::new(loc, s));

@@ -40,8 +40,8 @@ pub(crate) enum TyKind {
         count: u32,
     },
     Func,
-    /// Incomplete or not representable in M2 (references, member
-    /// pointers, vectors, ...): it has no storage the VM can touch.
+    /// Incomplete or not representable in M2 (member pointers,
+    /// vectors, ...): it has no storage the VM can touch.
     Opaque,
 }
 
@@ -268,7 +268,10 @@ impl Types {
                 };
                 self.simple(c, size, align.max(1), kind)
             }
-            TypeView::Pointer(p) => {
+            // A reference is stored as the address of its referent (only
+            // a declaration has reference type: a variable, parameter,
+            // field or return type; expressions never do).
+            TypeView::Pointer(p) | TypeView::LValueRef(p) | TypeView::RValueRef(p) => {
                 let pointee = self.intern(bridge, p);
                 self.simple(c, pbytes, pbytes as u32, TyKind::Ptr(pointee))
             }
