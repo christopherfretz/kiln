@@ -26,7 +26,8 @@
 # scopes are not stored: features.rs normalizes them as clang does (checked
 # here).
 #
-# Idempotent. Runtime: about a minute (JOBS=2 parallel clang processes).
+# Idempotent (byte-identical output for the same clang). Runtime: about six
+# minutes and 300 MB peak RSS at JOBS=2 (parallel clang processes).
 #
 # Usage: scripts/gen-features.sh            (uses clang++-19 on PATH)
 #        CLANGXX=/path/to/clang++-19 JOBS=4 scripts/gen-features.sh
@@ -460,3 +461,6 @@ print("gen-features: %d candidates, %d configs probed; %s; %d overlays over %d f
 unused = [FLAGS[f][0] for f in range(len(FLAGS)) if f not in used_flags]
 print("gen-features: flags with no effect: %s" % " ".join(unused), file=sys.stderr)
 PY
+
+# The checked-in table is rustfmt-formatted (cargo fmt --check runs in CI).
+rustfmt --edition 2024 --config-path "$WS/rustfmt.toml" "$OUT"
