@@ -16,7 +16,9 @@ pub struct PpOptions {
     /// `-C`: keep comments in the output (they reach [`crate::Preprocessor::next`]
     /// as `TokKind::Comment` tokens, except inside directives).
     pub keep_comments: bool,
-    /// `-CC`: also keep comments inside macro arguments and expansions.
+    /// `-CC`: implies `-C`, and also keeps comments inside macro
+    /// arguments. (Comments in `#define` bodies are not retained yet:
+    /// clang keeps them, rewriting `//` comments as `/* */`.)
     pub keep_macro_comments: bool,
     /// Text of the predefines buffer: `#define` lines for the target and
     /// language (normally `resource/predefines/<triple>.<std>.txt`), read

@@ -1,7 +1,7 @@
 //! [cpp.predefined] Predefined macro names and the builtin function-like macros the core answers.
 //!
 //! Goldens: `clang++-19 -std=c++26 -E -P` (generated).
-#![allow(clippy::needless_raw_string_hashes, reason = "generated goldens")]
+#![allow(clippy::needless_raw_string_hashes, clippy::doc_markdown, reason = "generated goldens")]
 
 mod common;
 
@@ -87,13 +87,20 @@ C C
 /// [cpp.predefined]/1
 #[test]
 fn include_level() {
-    let r = MemoryResolver::new()
-        .with_header("a.h", r#"__INCLUDE_LEVEL__ __FILE_NAME__ __BASE_FILE__
-"#);
+    let r = MemoryResolver::new().with_header(
+        "a.h",
+        r#"__INCLUDE_LEVEL__ __FILE_NAME__ __BASE_FILE__
+"#,
+    );
     common::expect(
-        &common::run_with(r#"__INCLUDE_LEVEL__
+        &common::run_with(
+            r#"__INCLUDE_LEVEL__
 #include "a.h"
-"#, r, PrintOptions::default(), |_| {}),
+"#,
+            r,
+            PrintOptions::default(),
+            |_| {},
+        ),
         r#"0
 1 "a.h" "t.cpp"
 
@@ -116,10 +123,10 @@ fn flt_eval_method() {
 /// [cpp.cond]/2
 #[test]
 fn has_include() {
-    let r = MemoryResolver::new()
-        .with_header("a.h", r#""#);
+    let r = MemoryResolver::new().with_header("a.h", r#""#);
     common::expect(
-        &common::run_with(r#"#if __has_include("a.h") && __has_include(<a.h>) && !__has_include("nope.h")
+        &common::run_with(
+            r#"#if __has_include("a.h") && __has_include(<a.h>) && !__has_include("nope.h")
 yes
 #endif
 #define HDR <a.h>
@@ -129,7 +136,11 @@ macro
 #ifdef __has_include
 defined
 #endif
-"#, r, PrintOptions::default(), |_| {}),
+"#,
+            r,
+            PrintOptions::default(),
+            |_| {},
+        ),
         r#"
 yes
 macro
@@ -164,7 +175,14 @@ fn has_include_malformed() {
 "#,
         r#"
 "#,
-        &[r#"1:18: error: missing '(' after '__has_include'"#, r#"1:18: error: expected value in expression"#, r#"3:19: error: expected "FILENAME" or <FILENAME>"#, r#"3:19: error: expected value in expression"#, r#"5:24: error: missing ')' after '__has_include'"#, r#"5:24: error: expected value in expression"#],
+        &[
+            r#"1:18: error: missing '(' after '__has_include'"#,
+            r#"1:18: error: expected value in expression"#,
+            r#"3:19: error: expected "FILENAME" or <FILENAME>"#,
+            r#"3:19: error: expected value in expression"#,
+            r#"5:24: error: missing ')' after '__has_include'"#,
+            r#"5:24: error: expected value in expression"#,
+        ],
     );
 }
 
@@ -189,7 +207,10 @@ __has_cpp_attribute nodiscard
         r#"                     0
                     0
 "#,
-        &[r#"1:21: error: builtin feature check macro requires a parenthesized identifier"#, r#"2:21: error: missing '(' after '__has_cpp_attribute'"#],
+        &[
+            r#"1:21: error: builtin feature check macro requires a parenthesized identifier"#,
+            r#"2:21: error: missing '(' after '__has_cpp_attribute'"#,
+        ],
     );
 }
 
@@ -252,16 +273,22 @@ __LINE__
 /// [cpp.cond]/2
 #[test]
 fn has_include_next_in_main() {
-    let r = MemoryResolver::new()
-        .with_header("a.h", r#""#);
+    let r = MemoryResolver::new().with_header("a.h", r#""#);
     common::expect(
-        &common::run_with(r#"#if __has_include_next("a.h")
+        &common::run_with(
+            r#"#if __has_include_next("a.h")
 yes
 #endif
-"#, r, PrintOptions::default(), |_| {}),
+"#,
+            r,
+            PrintOptions::default(),
+            |_| {},
+        ),
         r#"
 yes
 "#,
-        &[r#"1:5: warning: #include_next in primary source file; will search from start of include path"#],
+        &[
+            r#"1:5: warning: #include_next in primary source file; will search from start of include path"#,
+        ],
     );
 }

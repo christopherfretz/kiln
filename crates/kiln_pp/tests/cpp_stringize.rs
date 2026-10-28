@@ -1,7 +1,7 @@
 //! [cpp.stringize] The # operator and [cpp.concat] the ## operator.
 //!
 //! Goldens: `clang++-19 -std=c++26 -E -P` (generated).
-#![allow(clippy::needless_raw_string_hashes, reason = "generated goldens")]
+#![allow(clippy::needless_raw_string_hashes, clippy::doc_markdown, reason = "generated goldens")]
 
 mod common;
 
@@ -81,7 +81,10 @@ fn stringize_non_parameter() {
 "#,
         r#"
 "#,
-        &[r#"1:15: error: '#' is not followed by a macro parameter"#, r#"2:16: error: '#' is not followed by a macro parameter"#],
+        &[
+            r#"1:15: error: '#' is not followed by a macro parameter"#,
+            r#"2:16: error: '#' is not followed by a macro parameter"#,
+        ],
     );
 }
 
@@ -187,7 +190,10 @@ C(+, -) C(x, +)
         r#"
 +- x+
 "#,
-        &[r#"2:1: error: pasting formed '+-', an invalid preprocessing token"#, r#"2:9: error: pasting formed 'x+', an invalid preprocessing token"#],
+        &[
+            r#"2:1: error: pasting formed '+-', an invalid preprocessing token"#,
+            r#"2:9: error: pasting formed 'x+', an invalid preprocessing token"#,
+        ],
     );
 }
 
@@ -201,7 +207,11 @@ fn concat_at_edges() {
 "#,
         r#"
 "#,
-        &[r#"1:11: error: '##' cannot appear at start of macro expansion"#, r#"2:13: error: '##' cannot appear at end of macro expansion"#, r#"3:14: error: '##' cannot appear at start of macro expansion"#],
+        &[
+            r#"1:11: error: '##' cannot appear at start of macro expansion"#,
+            r#"2:13: error: '##' cannot appear at end of macro expansion"#,
+            r#"3:14: error: '##' cannot appear at start of macro expansion"#,
+        ],
     );
 }
 
@@ -273,7 +283,10 @@ C(/, /) C(/, *)
         r#"
 / / / *
 "#,
-        &[r#"2:1: error: pasting formed '//', an invalid preprocessing token"#, r#"2:9: error: pasting formed '/*', an invalid preprocessing token"#],
+        &[
+            r#"2:1: error: pasting formed '//', an invalid preprocessing token"#,
+            r#"2:9: error: pasting formed '/*', an invalid preprocessing token"#,
+        ],
     );
 }
 
@@ -370,7 +383,12 @@ a /* other stuff on this line
 "#,
         r#"
 "#,
-        &[r#"7:9: warning: 'OBJ_LIKE' macro redefined"#, r#"8:9: warning: 'OBJ_LIKE' macro redefined"#, r#"9:9: warning: 'FUNC_LIKE' macro redefined"#, r#"10:9: warning: 'FUNC_LIKE' macro redefined"#],
+        &[
+            r#"7:9: warning: 'OBJ_LIKE' macro redefined"#,
+            r#"8:9: warning: 'OBJ_LIKE' macro redefined"#,
+            r#"9:9: warning: 'FUNC_LIKE' macro redefined"#,
+            r#"10:9: warning: 'FUNC_LIKE' macro redefined"#,
+        ],
     );
 }
 

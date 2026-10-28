@@ -1,7 +1,7 @@
 //! [cpp.cond] Conditional inclusion: group structure and skipping (expressions via the stub evaluator).
 //!
 //! Goldens: `clang++-19 -std=c++26 -E -P` (generated).
-#![allow(clippy::needless_raw_string_hashes, reason = "generated goldens")]
+#![allow(clippy::needless_raw_string_hashes, clippy::doc_markdown, reason = "generated goldens")]
 
 mod common;
 
@@ -264,7 +264,11 @@ fn endif_without_if() {
 "#,
         r#"
 "#,
-        &[r#"1:2: error: #endif without #if"#, r#"2:2: error: #else without #if"#, r#"3:2: error: #elif without #if"#],
+        &[
+            r#"1:2: error: #endif without #if"#,
+            r#"2:2: error: #else without #if"#,
+            r#"3:2: error: #elif without #if"#,
+        ],
     );
 }
 
@@ -309,7 +313,11 @@ fn extra_tokens_after_endif() {
 "#,
         r#"
 "#,
-        &[r#"2:7: warning: extra tokens at end of #else directive"#, r#"3:8: warning: extra tokens at end of #endif directive"#, r#"4:10: warning: extra tokens at end of #ifdef directive"#],
+        &[
+            r#"2:7: warning: extra tokens at end of #else directive"#,
+            r#"3:8: warning: extra tokens at end of #endif directive"#,
+            r#"4:10: warning: extra tokens at end of #ifdef directive"#,
+        ],
     );
 }
 

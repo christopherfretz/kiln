@@ -38,7 +38,7 @@ pub fn run_with(
     let sink = MemorySink::new();
     let engine = DiagEngine::new(&sm, &DiagOptions::default(), sink.clone());
     let mut opts = PpOptions::new(Std::Cxx26);
-    opts.predefines = PREDEFINES.to_owned();
+    PREDEFINES.clone_into(&mut opts.predefines);
     opts.reproducible_time = Some(("Jan  1 2000".to_owned(), "00:00:00".to_owned()));
     cfg(&mut opts);
     let mut pp = Preprocessor::new(&sm, &engine, &interner, opts);

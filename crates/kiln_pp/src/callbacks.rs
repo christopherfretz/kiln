@@ -45,6 +45,9 @@ pub enum FileChange {
         at: Loc,
         /// `file` is (now) a system header.
         system: bool,
+        /// A line marker with flag 1 (entering an include) or 2 (returning
+        /// from one): clang reports these as `EnterFile` / `ExitFile`.
+        flag: Option<u8>,
     },
     /// `#pragma GCC system_header` made the rest of `file` a system header.
     SystemHeader {
@@ -116,11 +119,15 @@ pub trait PpCallbacks {
         let _ = (name, def, range);
     }
 
-    /// A pragma the core does not consume itself (everything except
-    /// `once`, `push_macro`, `pop_macro`, `poison`, `GCC poison` and
-    /// `GCC system_header`). Return `true` to consume it; otherwise it is
-    /// passed through to the token stream (see
-    /// [`crate::Marker::Pragma`]).
+    /// A pragma the core does not consume itself. The core consumes
+    /// `once`, `push_macro`, `pop_macro`, `mark`, `region`, `endregion`,
+    /// `GCC`/`clang` `poison`, `system_header` and `dependency`, and turns
+    /// `message`, `GCC warning` and `GCC error` into
+    /// [`crate::Marker::PragmaMessage`] (see
+    /// [`pragma_message`](Self::pragma_message)); `GCC`/`clang`
+    /// `diagnostic` is validated, then handed here like any other pragma.
+    /// Return `true` to consume it; otherwise it is passed through to the
+    /// token stream (see [`crate::Marker::Pragma`]).
     fn pragma(&mut self, info: &PragmaInfo<'_>) -> bool {
         let _ = info;
         false

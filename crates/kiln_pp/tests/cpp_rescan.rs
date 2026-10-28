@@ -1,7 +1,7 @@
 //! [cpp.rescan] Rescanning and further replacement; [cpp.scope].
 //!
 //! Goldens: `clang++-19 -std=c++26 -E -P` (generated).
-#![allow(clippy::needless_raw_string_hashes, reason = "generated goldens")]
+#![allow(clippy::needless_raw_string_hashes, clippy::doc_markdown, reason = "generated goldens")]
 
 mod common;
 

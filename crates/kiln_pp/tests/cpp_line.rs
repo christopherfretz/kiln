@@ -1,7 +1,7 @@
 //! [cpp.line] Line control; [cpp.error] diagnostic directives; [cpp.null].
 //!
 //! Goldens: `clang++-19 -std=c++26 -E -P` (generated).
-#![allow(clippy::needless_raw_string_hashes, reason = "generated goldens")]
+#![allow(clippy::needless_raw_string_hashes, clippy::doc_markdown, reason = "generated goldens")]
 
 mod common;
 
@@ -72,7 +72,12 @@ fn line_not_digit_sequence() {
 "#,
         r#"
 "#,
-        &[r#"1:8: error: #line directive requires a simple digit sequence"#, r#"2:8: error: #line directive requires a simple digit sequence"#, r#"3:7: error: #line directive requires a positive integer argument"#, r#"4:7: error: #line directive requires a positive integer argument"#],
+        &[
+            r#"1:8: error: #line directive requires a simple digit sequence"#,
+            r#"2:8: error: #line directive requires a simple digit sequence"#,
+            r#"3:7: error: #line directive requires a positive integer argument"#,
+            r#"4:7: error: #line directive requires a positive integer argument"#,
+        ],
     );
 }
 
@@ -86,7 +91,11 @@ fn line_bad_filename() {
 "#,
         r#"
 "#,
-        &[r#"1:9: error: invalid filename for #line directive"#, r#"2:9: error: invalid filename for #line directive"#, r#"3:13: warning: extra tokens at end of #line directive"#],
+        &[
+            r#"1:9: error: invalid filename for #line directive"#,
+            r#"2:9: error: invalid filename for #line directive"#,
+            r#"3:13: warning: extra tokens at end of #line directive"#,
+        ],
     );
 }
 
@@ -126,7 +135,10 @@ fn line_marker_bad_flags() {
 "#,
         r#"
 "#,
-        &[r#"1:9: error: invalid flag line marker directive"#, r#"2:9: error: invalid line marker flag '2': cannot pop empty include stack"#],
+        &[
+            r#"1:9: error: invalid flag line marker directive"#,
+            r#"2:9: error: invalid line marker flag '2': cannot pop empty include stack"#,
+        ],
     );
 }
 
@@ -257,7 +269,10 @@ fn unknown_directive() {
 "#,
         r#"
 "#,
-        &[r#"1:2: error: invalid preprocessing directive"#, r#"123:2: error: invalid preprocessing directive"#],
+        &[
+            r#"1:2: error: invalid preprocessing directive"#,
+            r#"123:2: error: invalid preprocessing directive"#,
+        ],
     );
 }
 
@@ -285,7 +300,10 @@ fn assert_unassert() {
 "#,
         r#"
 "#,
-        &[r#"1:2: error: invalid preprocessing directive"#, r#"2:2: error: invalid preprocessing directive"#],
+        &[
+            r#"1:2: error: invalid preprocessing directive"#,
+            r#"2:2: error: invalid preprocessing directive"#,
+        ],
     );
 }
 

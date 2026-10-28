@@ -606,7 +606,13 @@ impl<'p, 'a, 'd> IfCx<'p, 'a, 'd> {
     const REC: usize = 8;
 
     fn new(pp: &'p mut Preprocessor<'a, 'd>, paren: bool) -> Self {
-        IfCx { pp, paren: paren.then_some(0), end: None, used_defined: false, rec: Some(Vec::new()) }
+        IfCx {
+            pp,
+            paren: paren.then_some(0),
+            end: None,
+            used_defined: false,
+            rec: Some(Vec::new()),
+        }
     }
 
     /// The `X` if the tokens read were exactly `!defined X` or
@@ -798,7 +804,7 @@ impl Preprocessor<'_, '_> {
     fn do_if(&mut self, name: PpTok, read_before: bool) {
         let v = self.eval_if();
         let ndef = self.if_ndef.take();
-        self.mi_enter(ndef.filter(|_| v && !read_before));
+        self.mi_enter(if v && !read_before { ndef } else { None });
         if v {
             self.push_cond(Cond {
                 span: name.tok.span,
@@ -826,7 +832,7 @@ impl Preprocessor<'_, '_> {
             }
             None => false,
         };
-        self.mi_enter(Some(s).filter(|_| ndef && !defined && !read_before));
+        self.mi_enter((ndef && !defined && !read_before).then_some(s));
         if defined == ndef {
             self.skip_excluded(name.tok.span, false, false);
         } else {
@@ -1706,7 +1712,7 @@ impl Preprocessor<'_, '_> {
 
     /// Records a presumed-line change for the line after the current
     /// (finished) directive.
-    fn add_line_note(&mut self, line: u32, name: Option<&str>, system: bool) {
+    fn add_line_note(&mut self, line: u32, name: Option<&str>, system: bool, flag: Option<u8>) {
         let Some(f) = self.cur_file() else { return };
         if system {
             f.system = true;
@@ -1723,7 +1729,7 @@ impl Preprocessor<'_, '_> {
         let at = u32::try_from(at.min(text.len())).unwrap_or(off);
         self.sm.add_line_directive(file, at, line, name);
         let loc = self.sm.loc(file, at);
-        self.file_change(FileChange::Rename { file, at: loc, system });
+        self.file_change(FileChange::Rename { file, at: loc, system, flag });
     }
 
     /// `#line digit-sequence "s-char-sequence"opt` ([cpp.line]; the
@@ -1743,7 +1749,7 @@ impl Preprocessor<'_, '_> {
             self.check_eod("line", true);
         }
         self.finish_directive();
-        self.add_line_note(line, name.as_deref(), false);
+        self.add_line_note(line, name.as_deref(), false, None);
     }
 
     /// A GNU line marker `# 42 "file" flags...` (clang
@@ -1759,7 +1765,7 @@ impl Preprocessor<'_, '_> {
         if s.kind() == TokKind::Eod {
             self.emit(Diag::new(DiagId::pp_line_marker_ext, s.tok.span));
             self.finish_directive();
-            self.add_line_note(line, None, false);
+            self.add_line_note(line, None, false, None);
             return;
         }
         let Ok(name) = self.line_file_name(&s, true) else { return };
@@ -1807,7 +1813,8 @@ impl Preprocessor<'_, '_> {
             }
         }
         self.finish_directive();
-        self.add_line_note(line, name.as_deref(), system);
+        let flag = if enter { Some(1) } else { exit.then_some(2) };
+        self.add_line_note(line, name.as_deref(), system, flag);
     }
 
     /// `#ident "text"` / `#sccs "text"`.

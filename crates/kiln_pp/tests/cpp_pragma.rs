@@ -1,7 +1,7 @@
 //! [cpp.pragma] Pragma directive; [cpp.pragma.op] the _Pragma operator.
 //!
 //! Goldens: `clang++-19 -std=c++26 -E -P` (generated).
-#![allow(clippy::needless_raw_string_hashes, reason = "generated goldens")]
+#![allow(clippy::needless_raw_string_hashes, clippy::doc_markdown, reason = "generated goldens")]
 
 mod common;
 
@@ -68,17 +68,28 @@ x
 #[test]
 fn pragma_once_header() {
     let r = MemoryResolver::new()
-        .with_header("a.h", r#"#pragma once
+        .with_header(
+            "a.h",
+            r#"#pragma once
 int a;
-"#)
-        .with_header("b.h", r#"int b;
-"#);
+"#,
+        )
+        .with_header(
+            "b.h",
+            r#"int b;
+"#,
+        );
     common::expect(
-        &common::run_with(r#"#include "a.h"
+        &common::run_with(
+            r#"#include "a.h"
 #include "a.h"
 #include "b.h"
 #include "b.h"
-"#, r, PrintOptions::default(), |_| {}),
+"#,
+            r,
+            PrintOptions::default(),
+            |_| {},
+        ),
         r#"
 int a;
 
@@ -138,7 +149,11 @@ _Pragma("a"
 "#,
         r#" x
 "#,
-        &[r#"1:1: error: _Pragma takes a parenthesized string literal"#, r#"3:1: error: _Pragma takes a parenthesized string literal"#, r#"2:1: error: _Pragma takes a parenthesized string literal"#],
+        &[
+            r#"1:1: error: _Pragma takes a parenthesized string literal"#,
+            r#"3:1: error: _Pragma takes a parenthesized string literal"#,
+            r#"2:1: error: _Pragma takes a parenthesized string literal"#,
+        ],
     );
 }
 
@@ -203,7 +218,11 @@ int bad;
         r#"
 int bad;
 "#,
-        &[r#"2:5: error: attempt to use a poisoned identifier"#, r#"3:9: error: attempt to use a poisoned identifier"#, r#"4:8: error: attempt to use a poisoned identifier"#],
+        &[
+            r#"2:5: error: attempt to use a poisoned identifier"#,
+            r#"3:9: error: attempt to use a poisoned identifier"#,
+            r#"4:8: error: attempt to use a poisoned identifier"#,
+        ],
     );
 }
 
@@ -236,7 +255,12 @@ x
 #pragma GCC error "e"
 x
 "#,
-        &[r#"1:9: warning: hello"#, r#"2:9: warning: plain"#, r#"3:13: warning: w"#, r#"4:13: error: e"#],
+        &[
+            r#"1:9: warning: hello"#,
+            r#"2:9: warning: plain"#,
+            r#"3:13: warning: w"#,
+            r#"4:13: error: e"#,
+        ],
     );
 }
 
@@ -264,7 +288,11 @@ fn pragma_message_malformed() {
 "#,
         r#"
 "#,
-        &[r#"1:9: error: pragma message requires parenthesized string"#, r#"2:17: error: expected string literal in pragma message"#, r#"3:20: error: pragma message requires parenthesized string"#],
+        &[
+            r#"1:9: error: pragma message requires parenthesized string"#,
+            r#"2:17: error: expected string literal in pragma message"#,
+            r#"3:20: error: pragma message requires parenthesized string"#,
+        ],
     );
 }
 
@@ -282,7 +310,10 @@ fn pragma_diagnostic() {
 #pragma clang diagnostic pop
 #pragma GCC diagnostic warning "-Wall"
 "#,
-        &[r#"2:34: warning: unknown warning group '-Wfoo', ignored"#, r#"5:31: warning: pragma diagnostic expected 'error', 'warning', 'ignored', 'fatal', 'push', or 'pop'"#],
+        &[
+            r#"2:34: warning: unknown warning group '-Wfoo', ignored"#,
+            r#"5:31: warning: pragma diagnostic expected 'error', 'warning', 'ignored', 'fatal', 'push', or 'pop'"#,
+        ],
     );
 }
 

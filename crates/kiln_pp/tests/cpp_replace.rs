@@ -1,7 +1,7 @@
 //! [cpp.replace] Macro replacement: definition, redefinition, invocation.
 //!
 //! Goldens: `clang++-19 -std=c++26 -E -P` (generated).
-#![allow(clippy::needless_raw_string_hashes, reason = "generated goldens")]
+#![allow(clippy::needless_raw_string_hashes, clippy::doc_markdown, reason = "generated goldens")]
 
 mod common;
 
@@ -242,7 +242,11 @@ A B F(3)
 "#,
         r#"1+2 2 3
 "#,
-        &[r#"2:9: warning: 'A' macro redefined"#, r#"4:9: warning: 'B' macro redefined"#, r#"6:9: warning: 'F' macro redefined"#],
+        &[
+            r#"2:9: warning: 'A' macro redefined"#,
+            r#"4:9: warning: 'B' macro redefined"#,
+            r#"6:9: warning: 'F' macro redefined"#,
+        ],
     );
 }
 
@@ -282,7 +286,11 @@ fn missing_macro_name() {
 "#,
         r#"
 "#,
-        &[r#"1:8: error: macro name missing"#, r#"2:9: error: macro name must be an identifier"#, r#"3:7: error: macro name missing"#],
+        &[
+            r#"1:8: error: macro name missing"#,
+            r#"2:9: error: macro name must be an identifier"#,
+            r#"3:7: error: macro name missing"#,
+        ],
     );
 }
 
@@ -295,7 +303,10 @@ fn define_defined() {
 "#,
         r#"
 "#,
-        &[r#"1:9: error: 'defined' cannot be used as a macro name"#, r#"2:8: error: 'defined' cannot be used as a macro name"#],
+        &[
+            r#"1:9: error: 'defined' cannot be used as a macro name"#,
+            r#"2:8: error: 'defined' cannot be used as a macro name"#,
+        ],
     );
 }
 
@@ -382,7 +393,12 @@ fn bad_parameter_list() {
 "#,
         r#"
 "#,
-        &[r#"1:13: error: expected comma in macro parameter list"#, r#"2:13: error: expected identifier in macro parameter list"#, r#"3:11: error: invalid token in macro parameter list"#, r#"4:12: error: expected comma in macro parameter list"#],
+        &[
+            r#"1:13: error: expected comma in macro parameter list"#,
+            r#"2:13: error: expected identifier in macro parameter list"#,
+            r#"3:11: error: invalid token in macro parameter list"#,
+            r#"4:12: error: expected comma in macro parameter list"#,
+        ],
     );
 }
 

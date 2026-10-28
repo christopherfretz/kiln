@@ -980,6 +980,31 @@ struct OpResult {
 }
 
 impl Preprocessor<'_, '_> {
+    /// The value of `__LINE__` at `lo`: the presumed line of the end of
+    /// the outermost expansion range. A token spelled after a line splice
+    /// is on the line after it (clang `AdvanceToTokenCharacter(Loc, 0)`).
+    fn line_of(&self, lo: Loc) -> u32 {
+        let mut lo = lo;
+        if let Some((f, mut off)) = self.sm.offset_of(lo) {
+            let b = self.sm.text(f).as_bytes();
+            while b.get(off as usize) == Some(&b'\\') {
+                let mut i = off as usize + 1;
+                while matches!(b.get(i), Some(b' ' | b'\t' | b'\x0b' | b'\x0c')) {
+                    i += 1;
+                }
+                match b.get(i) {
+                    Some(b'\r') if b.get(i + 1) == Some(&b'\n') => i += 2,
+                    Some(b'\n' | b'\r') => i += 1,
+                    _ => break,
+                }
+                off = u32::try_from(i).unwrap_or(off);
+            }
+            lo = self.sm.loc(f, off);
+        }
+        let hi = self.sm.expansion_span(lo).hi;
+        self.sm.presumed_line_col(hi).map_or(1, |p| p.line)
+    }
+
     /// Expands builtin macro `b` named by `t` (clang `ExpandBuiltinMacro`).
     pub(crate) fn expand_builtin(&mut self, t: PpTok, b: Builtin) -> Option<PpTok> {
         use std::fmt::Write as _;
@@ -991,28 +1016,7 @@ impl Preprocessor<'_, '_> {
         match b {
             Builtin::Pragma => return self.handle_pragma_op(t),
             Builtin::Line => {
-                // clang `AdvanceToTokenCharacter(Loc, 0)`: a token spelled
-                // after a line splice is on the line after it.
-                let mut lo = t.tok.span.lo;
-                if let Some((f, mut off)) = self.sm.offset_of(lo) {
-                    let b = self.sm.text(f).as_bytes();
-                    while b.get(off as usize) == Some(&b'\\') {
-                        let mut i = off as usize + 1;
-                        while matches!(b.get(i), Some(b' ' | b'\t' | b'\x0b' | b'\x0c')) {
-                            i += 1;
-                        }
-                        match b.get(i) {
-                            Some(b'\r') if b.get(i + 1) == Some(&b'\n') => i += 2,
-                            Some(b'\n' | b'\r') => i += 1,
-                            _ => break,
-                        }
-                        off = u32::try_from(i).unwrap_or(off);
-                    }
-                    lo = self.sm.loc(f, off);
-                }
-                let hi = self.sm.expansion_span(lo).hi;
-                let line = self.sm.presumed_line_col(hi).map_or(1, |p| p.line);
-                let _ = write!(text, "{line}");
+                let _ = write!(text, "{}", self.line_of(t.tok.span.lo));
             }
             Builtin::File | Builtin::BaseFile | Builtin::FileName => {
                 kind = TokKind::StringLit(Encoding::Ordinary);

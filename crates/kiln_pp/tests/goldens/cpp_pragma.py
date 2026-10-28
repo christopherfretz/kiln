@@ -1,0 +1,32 @@
+from gen import C
+NAME = 'cpp_pragma'
+TITLE = '[cpp.pragma] Pragma directive; [cpp.pragma.op] the _Pragma operator.'
+CASES = [
+C('unknown_pragma_passed_through', '[cpp.pragma]/1', '#pragma foo bar(1, "s")\nx\n'),
+C('pragma_not_macro_expanded', '[cpp.pragma]/1', '#define A 1\n#pragma foo A\n#pragma STDC FP_CONTRACT ON\n'),
+C('pragma_omp_expanded', '[cpp.pragma]/1', '#define N 4\n#pragma omp parallel for num_threads(N)\nx\n'),
+C('pragma_once_in_main_file', '[cpp.pragma]/1', '#pragma once\nx\n'),
+C('pragma_once_header', '[cpp.pragma]/1', '#include "a.h"\n#include "a.h"\n#include "b.h"\n#include "b.h"\n',
+  files={'a.h': ('h', '#pragma once\nint a;\n'), 'b.h': ('h', 'int b;\n')}),
+C('pragma_operator', '[cpp.pragma.op]/1', '_Pragma("foo \\"bar\\" \\\\x") after\n'),
+C('pragma_operator_in_macro', '[cpp.pragma.op]/2',
+  '#define LISTING(x) PRAGMA(listing on #x)\n#define PRAGMA(x) _Pragma(#x)\nLISTING( ..\\listing.dir )\n'),
+C('pragma_operator_wide_strings', '[cpp.pragma.op]/1', '_Pragma(L"a") _Pragma(u8"b") _Pragma(R"(c)")\n'),
+C('pragma_operator_malformed', '[cpp.pragma.op]/1', '_Pragma x\n_Pragma(\n_Pragma("a"\n'),
+C('pragma_operator_once', '[cpp.pragma.op]/1', '_Pragma("once") x\n'),
+C('push_pop_macro', '[cpp.pragma]/1',
+  '#define A 1\n#pragma push_macro("A")\n#undef A\n#define A 2\nA\n#pragma pop_macro("A")\nA\n#pragma pop_macro("B")\n'),
+C('push_macro_undefined', '[cpp.pragma]/1', '#pragma push_macro("U")\n#define U 3\nU\n#pragma pop_macro("U")\nU\n'),
+C('poison', '[cpp.pragma]/1', '#pragma GCC poison bad worse\nint bad;\n#define worse 1\n#ifdef bad\n#endif\n'),
+C('poison_existing_macro', '[cpp.pragma]/1', '#define M 1\n#pragma GCC poison M\n'),
+C('pragma_message', '[cpp.pragma]/1',
+  '#pragma message("hello")\n#pragma message "plain"\n#pragma GCC warning "w"\n#pragma GCC error "e"\nx\n'),
+C('pragma_message_macro_concat', '[cpp.pragma]/1', '#define M "a" "b"\n#pragma message(M "c")\n'),
+C('pragma_message_malformed', '[cpp.pragma]/1', '#pragma message\n#pragma message(1)\n#pragma message("a"\n'),
+C('pragma_diagnostic', '[cpp.pragma]/1',
+  '#pragma clang diagnostic push\n#pragma clang diagnostic ignored "-Wfoo"\n#pragma clang diagnostic pop\n#pragma GCC diagnostic warning "-Wall"\n#pragma clang diagnostic bogus\n'),
+C('pragma_system_header_in_main', '[cpp.pragma]/1', '#pragma GCC system_header\nx\n'),
+C('pragma_mark_region', '[cpp.pragma]/1', '#pragma mark - section\n#pragma region R\n#pragma endregion R\nx\n'),
+C('pragma_in_macro_args', '[cpp.pragma.op]/1', '#define F(x) [x]\nF(a _Pragma("p") b)\n'),
+C('pragma_stdc', '[cpp.pragma]/2', '#pragma STDC FENV_ACCESS ON\n#pragma STDC CX_LIMITED_RANGE OFF\n'),
+]

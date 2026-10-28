@@ -589,7 +589,7 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
         }
         self.in_directive = false;
         self.dir_eod = None;
-        let keep = self.opts.keep_comments;
+        let keep = self.lex_opts.keep_comments;
         if let Some(Frame::File(f)) = self.frames.last_mut() {
             f.lx.set_in_directive(false);
             f.lx.set_mode(kiln_lex::LexMode::Normal);
@@ -661,7 +661,7 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
                 }
                 Some(Frame::File(_)) => {
                     let (t, phys_sol) = self.lex_file_tok_phys();
-                    if !(phys_sol && t.kind == TokKind::Punct(Punct::Hash))
+                    if (!phys_sol || t.kind != TokKind::Punct(Punct::Hash))
                         && !matches!(t.kind, TokKind::Comment | TokKind::Eod | TokKind::Eof)
                         && let Some(Frame::File(f)) = self.frames.last_mut()
                     {

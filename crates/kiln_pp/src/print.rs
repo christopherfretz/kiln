@@ -634,8 +634,8 @@ impl Printer<'_, '_, '_, '_> {
                 self.first_file_entered = true;
                 return;
             }
-            FileChange::Enter { .. } => " 1",
-            FileChange::Exit { .. } => " 2",
+            FileChange::Enter { .. } | FileChange::Rename { flag: Some(1), .. } => " 1",
+            FileChange::Exit { .. } | FileChange::Rename { flag: Some(2), .. } => " 2",
             FileChange::Rename { .. } | FileChange::SystemHeader { .. } => "",
         };
         self.write_line_info(self.cur_line, extra);
