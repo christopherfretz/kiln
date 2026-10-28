@@ -1,0 +1,28 @@
+TranslationUnitDecl
+|-VarDecl used t 'bool' cinit
+| `-CXXBoolLiteralExpr 'bool' true
+|-VarDecl used f 'bool' cinit
+| `-CXXBoolLiteralExpr 'bool' false
+|-VarDecl np 'int *' cinit
+| `-ImplicitCastExpr 'int *' <NullToPointer>
+|   `-CXXNullPtrLiteralExpr 'std::nullptr_t'
+|-VarDecl cnp 'const int *' cinit
+| `-ImplicitCastExpr 'const int *' <NullToPointer>
+|   `-CXXNullPtrLiteralExpr 'std::nullptr_t'
+`-FunctionDecl test 'bool (int *)'
+  |-ParmVarDecl used p 'int *'
+  `-CompoundStmt
+    `-ReturnStmt
+      `-BinaryOperator 'bool' '||'
+        |-BinaryOperator 'bool' '=='
+        | |-ImplicitCastExpr 'int *' <LValueToRValue>
+        | | `-DeclRefExpr 'int *' lvalue ParmVar 'p' 'int *'
+        | `-ImplicitCastExpr 'int *' <NullToPointer>
+        |   `-CXXNullPtrLiteralExpr 'std::nullptr_t'
+        `-BinaryOperator 'bool' '!='
+          |-ImplicitCastExpr 'int' <IntegralCast>
+          | `-ImplicitCastExpr 'bool' <LValueToRValue>
+          |   `-DeclRefExpr 'bool' lvalue Var 't' 'bool'
+          `-ImplicitCastExpr 'int' <IntegralCast>
+            `-ImplicitCastExpr 'bool' <LValueToRValue>
+              `-DeclRefExpr 'bool' lvalue Var 'f' 'bool'

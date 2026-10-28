@@ -1,0 +1,37 @@
+TranslationUnitDecl
+`-FunctionDecl pick 'int (int *, int *, int)'
+  |-ParmVarDecl used p 'int *'
+  |-ParmVarDecl used a 'int *'
+  |-ParmVarDecl used i 'int'
+  `-CompoundStmt
+    `-ReturnStmt
+      `-BinaryOperator 'int' '+'
+        |-BinaryOperator 'int' '+'
+        | |-BinaryOperator 'int' '+'
+        | | |-ImplicitCastExpr 'int' <LValueToRValue>
+        | | | `-ArraySubscriptExpr 'int' lvalue
+        | | |   |-ImplicitCastExpr 'int *' <LValueToRValue>
+        | | |   | `-DeclRefExpr 'int *' lvalue ParmVar 'p' 'int *'
+        | | |   `-ImplicitCastExpr 'int' <LValueToRValue>
+        | | |     `-DeclRefExpr 'int' lvalue ParmVar 'i' 'int'
+        | | `-ImplicitCastExpr 'int' <LValueToRValue>
+        | |   `-ArraySubscriptExpr 'int' lvalue
+        | |     |-ImplicitCastExpr 'int *' <LValueToRValue>
+        | |     | `-DeclRefExpr 'int *' lvalue ParmVar 'a' 'int *'
+        | |     `-BinaryOperator 'int' '+'
+        | |       |-ImplicitCastExpr 'int' <LValueToRValue>
+        | |       | `-DeclRefExpr 'int' lvalue ParmVar 'i' 'int'
+        | |       `-IntegerLiteral 'int' 1
+        | `-ImplicitCastExpr 'int' <LValueToRValue>
+        |   `-ArraySubscriptExpr 'int' lvalue
+        |     |-ImplicitCastExpr 'int' <LValueToRValue>
+        |     | `-DeclRefExpr 'int' lvalue ParmVar 'i' 'int'
+        |     `-ImplicitCastExpr 'int *' <LValueToRValue>
+        |       `-DeclRefExpr 'int *' lvalue ParmVar 'p' 'int *'
+        `-ImplicitCastExpr 'int' <IntegralCast>
+          `-ImplicitCastExpr 'char' <LValueToRValue>
+            `-ArraySubscriptExpr 'const char' lvalue
+              |-ImplicitCastExpr 'const char *' <ArrayToPointerDecay>
+              | `-StringLiteral 'const char[4]' lvalue "abc"
+              `-ImplicitCastExpr 'int' <LValueToRValue>
+                `-DeclRefExpr 'int' lvalue ParmVar 'i' 'int'

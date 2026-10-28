@@ -1,0 +1,45 @@
+TranslationUnitDecl
+|-FunctionDecl widen 'double (int)'
+| |-ParmVarDecl used i 'int'
+| `-CompoundStmt
+|   `-ReturnStmt
+|     `-ImplicitCastExpr 'double' <IntegralToFloating>
+|       `-ImplicitCastExpr 'int' <LValueToRValue>
+|         `-ImplicitCastExpr 'int' xvalue <NoOp>
+|           `-DeclRefExpr 'int' lvalue ParmVar 'i' 'int'
+|-FunctionDecl narrow 'int (double)'
+| |-ParmVarDecl used d 'double'
+| `-CompoundStmt
+|   `-ReturnStmt
+|     `-ImplicitCastExpr 'int' <FloatingToIntegral>
+|       `-ImplicitCastExpr 'double' <LValueToRValue>
+|         `-ImplicitCastExpr 'double' xvalue <NoOp>
+|           `-DeclRefExpr 'double' lvalue ParmVar 'd' 'double'
+|-FunctionDecl truth 'bool (int *)'
+| |-ParmVarDecl used p 'int *'
+| `-CompoundStmt
+|   `-ReturnStmt
+|     `-ImplicitCastExpr 'bool' <PointerToBoolean>
+|       `-ImplicitCastExpr 'int *' <LValueToRValue>
+|         `-ImplicitCastExpr 'int *' xvalue <NoOp>
+|           `-DeclRefExpr 'int *' lvalue ParmVar 'p' 'int *'
+|-FunctionDecl nothing 'void (int)'
+| |-ParmVarDecl 'int'
+| `-CompoundStmt
+|   `-ReturnStmt
+|-FunctionDecl chain 'long (short)'
+| |-ParmVarDecl used s 'short'
+| `-CompoundStmt
+|   `-ReturnStmt
+|     `-ImplicitCastExpr 'long' <IntegralCast>
+|       `-ImplicitCastExpr 'short' <LValueToRValue>
+|         `-ImplicitCastExpr 'short' xvalue <NoOp>
+|           `-DeclRefExpr 'short' lvalue ParmVar 's' 'short'
+`-FunctionDecl trunc 'unsigned char (int)'
+  |-ParmVarDecl used i 'int'
+  `-CompoundStmt
+    `-ReturnStmt
+      `-ImplicitCastExpr 'unsigned char' <IntegralCast>
+        `-ImplicitCastExpr 'int' <LValueToRValue>
+          `-ImplicitCastExpr 'int' xvalue <NoOp>
+            `-DeclRefExpr 'int' lvalue ParmVar 'i' 'int'

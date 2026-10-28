@@ -1,0 +1,37 @@
+TranslationUnitDecl
+|-FunctionDecl used decl_only 'int (int, char)'
+| |-ParmVarDecl 'int'
+| `-ParmVarDecl 'char'
+|-FunctionDecl used decl_only 'int (int, char)'
+| |-ParmVarDecl used a 'int'
+| |-ParmVarDecl used b 'char'
+| `-CompoundStmt
+|   `-ReturnStmt
+|     `-BinaryOperator 'int' '+'
+|       |-ImplicitCastExpr 'int' <LValueToRValue>
+|       | `-DeclRefExpr 'int' lvalue ParmVar 'a' 'int'
+|       `-ImplicitCastExpr 'int' <IntegralCast>
+|         `-ImplicitCastExpr 'char' <LValueToRValue>
+|           `-DeclRefExpr 'char' lvalue ParmVar 'b' 'char'
+|-FunctionDecl used forward 'void ()'
+|-FunctionDecl used forward 'void ()'
+| `-CompoundStmt
+|-FunctionDecl used helper 'int ()' static
+| `-CompoundStmt
+|   `-ReturnStmt
+|     `-IntegerLiteral 'int' 1
+`-FunctionDecl main 'int ()'
+  `-CompoundStmt
+    |-CallExpr 'void'
+    | `-ImplicitCastExpr 'void (*)()' <FunctionToPointerDecay>
+    |   `-DeclRefExpr 'void ()' lvalue Function 'forward' 'void ()'
+    `-ReturnStmt
+      `-BinaryOperator 'int' '+'
+        |-CallExpr 'int'
+        | |-ImplicitCastExpr 'int (*)(int, char)' <FunctionToPointerDecay>
+        | | `-DeclRefExpr 'int (int, char)' lvalue Function 'decl_only' 'int (int, char)'
+        | |-IntegerLiteral 'int' 1
+        | `-CharacterLiteral 'char' 97
+        `-CallExpr 'int'
+          `-ImplicitCastExpr 'int (*)()' <FunctionToPointerDecay>
+            `-DeclRefExpr 'int ()' lvalue Function 'helper' 'int ()'

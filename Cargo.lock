@@ -105,6 +105,7 @@ dependencies = [
 name = "kiln_sema"
 version = "0.0.1"
 dependencies = [
+ "kiln_abi",
  "kiln_ast",
  "kiln_diag",
  "kiln_lex",

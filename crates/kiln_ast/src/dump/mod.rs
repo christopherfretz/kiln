@@ -503,7 +503,9 @@ impl<'a, W: io::Write> Dumper<'a, W> {
             }
             StmtKind::DeclStmt => {
                 for d in lists.iter::<DeclId>(stmts.decl_stmt_decls(s)) {
-                    kids.push((Node::Decl(d), None));
+                    if self.opts.implicit || !names::is_implicit(self.ast, d) {
+                        kids.push((Node::Decl(d), None));
+                    }
                 }
             }
             StmtKind::ExprStmt => expr(Some(stmts.expr_stmt_expr(s)), kids),
@@ -663,7 +665,9 @@ impl<'a, W: io::Write> Dumper<'a, W> {
         if n.has(DeclFlags::IMPLICIT) {
             self.line.push_str(" implicit");
         }
-        if n.has(DeclFlags::USED) {
+        // clang: `isUsed` reads the first declaration,
+        // `isThisDeclarationReferenced` only this one.
+        if n.has(DeclFlags::USED) || decls.get(ast.first(d)).has(DeclFlags::USED) {
             self.line.push_str(" used");
         } else if n.has(DeclFlags::REFERENCED) {
             self.line.push_str(" referenced");

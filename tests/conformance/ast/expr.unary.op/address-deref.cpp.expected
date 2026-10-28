@@ -1,0 +1,48 @@
+TranslationUnitDecl
+|-CXXRecordDecl referenced struct P definition
+| `-FieldDecl referenced v 'int'
+`-FunctionDecl addr 'int (P, P *)'
+  |-ParmVarDecl used p 'P'
+  |-ParmVarDecl used pp 'P *'
+  `-CompoundStmt
+    |-DeclStmt
+    | `-VarDecl used a 'int *' cinit
+    |   `-UnaryOperator 'int *' prefix '&' cannot overflow
+    |     `-MemberExpr 'int' lvalue .v
+    |       `-DeclRefExpr 'P' lvalue ParmVar 'p' 'P'
+    |-DeclStmt
+    | `-VarDecl used q 'P *' cinit
+    |   `-UnaryOperator 'P *' prefix '&' cannot overflow
+    |     `-DeclRefExpr 'P' lvalue ParmVar 'p' 'P'
+    |-DeclStmt
+    | `-VarDecl used aa 'int **' cinit
+    |   `-UnaryOperator 'int **' prefix '&' cannot overflow
+    |     `-DeclRefExpr 'int *' lvalue Var 'a' 'int *'
+    `-ReturnStmt
+      `-BinaryOperator 'int' '+'
+        |-BinaryOperator 'int' '+'
+        | |-BinaryOperator 'int' '+'
+        | | |-ImplicitCastExpr 'int' <LValueToRValue>
+        | | | `-UnaryOperator 'int' lvalue prefix '*' cannot overflow
+        | | |   `-ImplicitCastExpr 'int *' <LValueToRValue>
+        | | |     `-DeclRefExpr 'int *' lvalue Var 'a' 'int *'
+        | | `-ImplicitCastExpr 'int' <LValueToRValue>
+        | |   `-MemberExpr 'int' lvalue .v
+        | |     `-ParenExpr 'P' lvalue
+        | |       `-UnaryOperator 'P' lvalue prefix '*' cannot overflow
+        | |         `-ImplicitCastExpr 'P *' <LValueToRValue>
+        | |           `-DeclRefExpr 'P *' lvalue Var 'q' 'P *'
+        | `-ImplicitCastExpr 'int' <LValueToRValue>
+        |   `-UnaryOperator 'int' lvalue prefix '*' cannot overflow
+        |     `-ImplicitCastExpr 'int *' <LValueToRValue>
+        |       `-UnaryOperator 'int *' lvalue prefix '*' cannot overflow
+        |         `-ImplicitCastExpr 'int **' <LValueToRValue>
+        |           `-DeclRefExpr 'int **' lvalue Var 'aa' 'int **'
+        `-ImplicitCastExpr 'int' <LValueToRValue>
+          `-ArraySubscriptExpr 'int' lvalue
+            |-ParenExpr 'int *'
+            | `-UnaryOperator 'int *' prefix '&' cannot overflow
+            |   `-MemberExpr 'int' lvalue ->v
+            |     `-ImplicitCastExpr 'P *' <LValueToRValue>
+            |       `-DeclRefExpr 'P *' lvalue ParmVar 'pp' 'P *'
+            `-IntegerLiteral 'int' 0

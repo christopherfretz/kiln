@@ -1,0 +1,44 @@
+TranslationUnitDecl
+`-FunctionDecl pick 'int (int)'
+  |-ParmVarDecl used v 'int'
+  `-CompoundStmt
+    |-SwitchStmt has_init
+    | |-DeclStmt
+    | | `-VarDecl used w 'int' cinit
+    | |   `-BinaryOperator 'int' '*'
+    | |     |-ImplicitCastExpr 'int' <LValueToRValue>
+    | |     | `-DeclRefExpr 'int' lvalue ParmVar 'v' 'int'
+    | |     `-IntegerLiteral 'int' 2
+    | |-ImplicitCastExpr 'int' <LValueToRValue>
+    | | `-DeclRefExpr 'int' lvalue Var 'w' 'int'
+    | `-CompoundStmt
+    |   |-CaseStmt
+    |   | |-ConstantExpr 'int' value=0
+    |   | | `-IntegerLiteral 'int' 0
+    |   | `-ReturnStmt
+    |   |   `-IntegerLiteral 'int' 0
+    |   `-CaseStmt
+    |     |-ConstantExpr 'int' value=2
+    |     | `-IntegerLiteral 'int' 2
+    |     `-ReturnStmt
+    |       `-IntegerLiteral 'int' 1
+    |-SwitchStmt has_var
+    | |-DeclStmt
+    | | `-VarDecl used x 'long' cinit
+    | |   `-ImplicitCastExpr 'long' <IntegralCast>
+    | |     `-ImplicitCastExpr 'int' <LValueToRValue>
+    | |       `-DeclRefExpr 'int' lvalue ParmVar 'v' 'int'
+    | |-ImplicitCastExpr 'long' <LValueToRValue>
+    | | `-DeclRefExpr 'long' lvalue Var 'x' 'long'
+    | `-CompoundStmt
+    |   `-CaseStmt
+    |     |-ConstantExpr 'long' value=1
+    |     | `-IntegerLiteral 'long' 1
+    |     `-ReturnStmt
+    |       `-CStyleCastExpr 'int' <NoOp>
+    |         `-ImplicitCastExpr 'int' <IntegralCast> part_of_explicit_cast
+    |           `-ImplicitCastExpr 'long' <LValueToRValue> part_of_explicit_cast
+    |             `-DeclRefExpr 'long' lvalue Var 'x' 'long'
+    `-ReturnStmt
+      `-UnaryOperator 'int' prefix '-'
+        `-IntegerLiteral 'int' 1

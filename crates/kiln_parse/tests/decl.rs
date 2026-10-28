@@ -1,0 +1,298 @@
+//! Per-rule tests for declarations ([dcl], [basic], [namespace], [class]).
+
+mod common;
+use common::parse;
+
+/// [dcl.type.simple]: multi-keyword fundamental types and their order.
+#[test]
+fn dcl_type_simple_combinations() {
+    let p = parse("unsigned long long a; long unsigned int b; signed char c; long double d;");
+    p.assert_clean();
+    p.assert_dump("VarDecl a 'unsigned long long'");
+    p.assert_dump("VarDecl b 'unsigned long'");
+    p.assert_dump("VarDecl c 'signed char'");
+    p.assert_dump("VarDecl d 'long double'");
+}
+
+/// [dcl.type.general]: conflicting specifiers are diagnosed.
+#[test]
+fn dcl_type_conflicting_specifiers() {
+    let p = parse("unsigned float x;");
+    p.assert_diag("error:");
+}
+
+/// [dcl.ptr]: pointers, cv on the pointer and on the pointee.
+#[test]
+fn dcl_ptr_cv() {
+    let p = parse("const int *const p = nullptr; int **q;");
+    p.assert_clean();
+    p.assert_dump("VarDecl p 'const int *const'");
+    p.assert_dump("VarDecl q 'int **'");
+}
+
+/// [dcl.ref]: references must be initialized.
+#[test]
+fn dcl_ref_requires_init() {
+    let p = parse("int &r;");
+    p.assert_diag("declaration of reference variable 'r' requires an initializer");
+}
+
+/// [dcl.array]: the bound is a converted constant expression.
+#[test]
+fn dcl_array_bound_folded() {
+    let p = parse("constexpr int n = 3; int a[n * 2]; char s[] = \"abc\";");
+    p.assert_clean();
+    p.assert_dump("VarDecl a 'int[6]'");
+    p.assert_dump("VarDecl s 'char[4]'");
+}
+
+/// [dcl.array]: a negative bound is ill-formed.
+#[test]
+fn dcl_array_negative_bound() {
+    let p = parse("int a[-1];");
+    p.assert_diag("'a' declared as an array with a negative size");
+}
+
+/// [dcl.fct]: variadic and parameter-list forms.
+#[test]
+fn dcl_fct_variadic() {
+    let p = parse("int printf(const char *, ...); void v(void);");
+    p.assert_clean();
+    p.assert_dump("FunctionDecl printf 'int (const char *, ...)'");
+    p.assert_dump("FunctionDecl v 'void ()'");
+}
+
+/// [dcl.link]: `extern "C"` blocks and single declarations.
+#[test]
+fn dcl_link_extern_c() {
+    let p = parse("extern \"C\" { int a(); }\nextern \"C\" int b();");
+    p.assert_clean();
+    p.assert_dump("LinkageSpecDecl");
+    p.assert_dump("FunctionDecl a 'int ()'");
+}
+
+/// [dcl.typedef]: typedef and alias declarations name the same type.
+#[test]
+fn dcl_typedef_and_alias() {
+    let p = parse("typedef unsigned U; using V = U; V v = 1;");
+    p.assert_clean();
+    p.assert_dump("TypedefDecl referenced U 'unsigned int'");
+    p.assert_dump("TypeAliasDecl referenced V 'U':'unsigned int'");
+}
+
+/// [dcl.enum]: an unscoped enum without a fixed type picks its best type.
+#[test]
+fn dcl_enum_unscoped() {
+    let p = parse("enum E { A, B = 5, C }; int x = C;");
+    p.assert_clean();
+    p.assert_dump("EnumDecl E");
+    p.assert_dump("EnumConstantDecl referenced C 'E' value=6");
+}
+
+/// [dcl.enum]: scoped enumerations do not convert implicitly.
+#[test]
+fn dcl_enum_scoped_no_implicit_conversion() {
+    let p = parse("enum class S : char { X }; int y = S::X;");
+    p.assert_diag("cannot initialize a variable of type 'int' with an rvalue of type 'S'");
+}
+
+/// [dcl.enum]: an enumerator value must fit a fixed underlying type.
+#[test]
+fn dcl_enum_fixed_overflow() {
+    let p = parse("enum F : unsigned char { Big = 256 };");
+    p.assert_diag("error:");
+}
+
+/// [dcl.enum]: redefinition of an enumerator.
+#[test]
+fn dcl_enum_redefinition() {
+    let p = parse("enum E { A, A };");
+    p.assert_diag("redefinition of enumerator 'A'");
+}
+
+/// [class.bit]: bit-field widths and their limits.
+#[test]
+fn class_bit_width() {
+    let p = parse("struct S { unsigned a : 3; int : 0; int b : 40; };");
+    p.assert_diag("warning: width of bit-field 'b' (40 bits) exceeds the width of its type; value will be truncated to 32 bits");
+}
+
+/// [class.mem]: a struct cannot contain itself.
+#[test]
+fn class_mem_incomplete_field() {
+    let p = parse("struct S { S s; };");
+    p.assert_diag("field has incomplete type 'S'");
+}
+
+/// [class.union]: unions and anonymous members.
+#[test]
+fn class_union_anonymous() {
+    let p = parse("struct S { union { int i; float f; }; }; int g(S s) { return s.i; }");
+    p.assert_clean();
+    p.assert_dump("MemberExpr 'int' lvalue .i");
+    p.assert_dump("lvalue .\n");
+}
+
+/// [basic.def.odr]: variable redefinition.
+#[test]
+fn basic_def_odr_redefinition() {
+    let p = parse("int x = 1; int x = 2;");
+    p.assert_diag("redefinition of 'x'");
+    p.assert_diag("note: previous definition is here");
+}
+
+/// [basic.link]: redeclaration with a different type.
+#[test]
+fn basic_link_conflicting_types() {
+    let p = parse("int f(); long f();");
+    p.assert_diag("functions that differ only in their return type cannot be overloaded");
+}
+
+/// [dcl.constexpr]: constexpr variables need constant initializers.
+#[test]
+fn dcl_constexpr_requires_constant() {
+    let p = parse("int g(); constexpr int c = g();");
+    p.assert_diag("constexpr variable 'c' must be initialized by a constant expression");
+}
+
+/// [dcl.constexpr]: constexpr implies const.
+#[test]
+fn dcl_constexpr_implies_const() {
+    let p = parse("constexpr int c = 1;");
+    p.assert_clean();
+    p.assert_dump("VarDecl c 'const int' constexpr cinit");
+}
+
+/// [dcl.pre]: `static_assert` folds its condition.
+#[test]
+fn dcl_pre_static_assert() {
+    let p = parse("static_assert(sizeof(int) == 4); static_assert(1 + 1 == 3, \"math\");");
+    p.assert_diag("static assertion failed due to requirement '1 + 1 == 3': math");
+}
+
+/// [namespace.def]: nested namespaces and qualified lookup.
+#[test]
+fn namespace_def_qualified() {
+    let p = parse("namespace a::b { int x; } namespace a { int y = b::x; } int z = a::b::x;");
+    p.assert_clean();
+    p.assert_dump("NamespaceDecl a");
+    p.assert_dump("NamespaceDecl b");
+}
+
+/// [namespace.udir]: using-directives make names visible.
+#[test]
+fn namespace_udir() {
+    let p = parse("namespace n { int v; } using namespace n; int w = v;");
+    p.assert_clean();
+    p.assert_dump("UsingDirectiveDecl");
+}
+
+/// [basic.lookup]: ambiguous unqualified lookup through two directives.
+#[test]
+fn basic_lookup_ambiguous() {
+    let p = parse(
+        "namespace a { int v; } namespace b { int v; }\nusing namespace a; using namespace b;\nint w = v;",
+    );
+    p.assert_diag("reference to 'v' is ambiguous");
+}
+
+/// [dcl.attr.nodiscard]: discarding a nodiscard result warns.
+#[test]
+fn dcl_attr_nodiscard() {
+    let p = parse("[[nodiscard]] int f(); void g() { f(); }");
+    p.assert_diag("warning: ignoring return value of function declared with 'nodiscard' attribute");
+}
+
+/// [dcl.attr.deprecated]: using a deprecated entity warns.
+#[test]
+fn dcl_attr_deprecated() {
+    let p = parse("[[deprecated(\"old\")]] int f(); int x = f();");
+    p.assert_diag("warning: 'f' is deprecated: old");
+}
+
+/// [dcl.align]: alignas raises alignment.
+#[test]
+fn dcl_align() {
+    let p = parse(
+        "struct alignas(16) S { char c; }; static_assert(alignof(S) == 16 && sizeof(S) == 16);",
+    );
+    p.assert_clean();
+}
+
+/// GNU `__attribute__`: known attributes apply, unknown ones are ignored
+/// with a warning.
+#[test]
+fn gnu_attribute_unknown_ignored() {
+    let p = parse("int x __attribute__((aligned(8))); int y __attribute__((frobnicate));");
+    p.assert_dump("AlignedAttr");
+    p.assert_diag("warning: unknown attribute 'frobnicate' ignored");
+    assert!(p.problems().iter().all(|d| !d.contains("error:")), "{:?}", p.diags);
+}
+
+/// [class.union.anon]: anonymous union members are found in the
+/// enclosing scope, and anonymous unions outside classes need `static`.
+#[test]
+fn class_union_anon() {
+    let p =
+        parse("static union { int a; long b; }; int f() { union { int c; }; c = a; return c; }");
+    p.assert_clean();
+    let p = parse("union { int a; };");
+    p.assert_diag("anonymous unions at namespace or global scope must be declared 'static'");
+    let p = parse("int a; static union { int a; };");
+    p.assert_diag("member of anonymous union redeclares 'a'");
+}
+
+/// [namespace.unnamed]: an unnamed namespace's members are visible in
+/// the enclosing scope, and every unnamed namespace there is the same.
+#[test]
+fn namespace_unnamed() {
+    let p = parse("namespace { int q; } namespace { int r = q; } int s = q + r;");
+    p.assert_clean();
+}
+
+/// [dcl.attr.nodiscard]: a nodiscard class returned by value.
+#[test]
+fn dcl_attr_nodiscard_type() {
+    let p = parse("struct [[nodiscard]] R { int v; }; R make(); void g() { make(); }");
+    p.assert_diag("warning: ignoring return value of function declared with 'nodiscard' attribute");
+}
+
+/// [dcl.init.list]: narrowing in list-initialization.
+#[test]
+fn dcl_init_list_narrowing() {
+    let p = parse("int x = 1; char c{x};");
+    p.assert_diag(
+        "non-constant-expression cannot be narrowed from type 'int' to 'char' in initializer list",
+    );
+}
+
+/// [dcl.init.aggr]: aggregate initialization fills members.
+#[test]
+fn dcl_init_aggr() {
+    let p = parse("struct P { int x, y; }; P p = {1, 2}; int a[3] = {1};");
+    p.assert_clean();
+    p.assert_dump("InitListExpr 'P'");
+}
+
+/// [dcl.init.aggr]: too many initializers.
+#[test]
+fn dcl_init_aggr_excess() {
+    let p = parse("int a[2] = {1, 2, 3};");
+    p.assert_diag("excess elements in array initializer");
+}
+
+/// [dcl.init.string]: a string too long for its array.
+#[test]
+fn dcl_init_string_too_long() {
+    let p = parse("char s[2] = \"abc\";");
+    p.assert_diag(
+        "initializer-string for char array is too long, array size is 2 but initializer has size 4",
+    );
+}
+
+/// Recovery: a missing semicolon after a top-level declaration.
+#[test]
+fn recovery_missing_semi() {
+    let p = parse("int x\nint y;");
+    p.assert_diag("expected ';' after top level declarator");
+}

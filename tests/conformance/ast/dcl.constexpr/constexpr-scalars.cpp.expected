@@ -1,0 +1,34 @@
+TranslationUnitDecl
+|-VarDecl referenced k 'const int' constexpr cinit value=4
+| `-IntegerLiteral 'int' 4
+|-VarDecl big 'const long' constexpr cinit value=4000000000
+| `-BinaryOperator 'long' '*'
+|   |-ImplicitCastExpr 'long' <IntegralCast>
+|   | `-ImplicitCastExpr 'int' <LValueToRValue>
+|   |   `-DeclRefExpr 'const int' lvalue Var 'k' 'const int' non_odr_use_constant
+|   `-IntegerLiteral 'long' 1000000000
+|-VarDecl referenced half 'const double' constexpr cinit value=5e-1
+| `-FloatingLiteral 'double' 5e-1
+|-VarDecl on 'const bool' constexpr cinit value=true
+| `-BinaryOperator 'bool' '&&'
+|   |-BinaryOperator 'bool' '>'
+|   | |-ImplicitCastExpr 'int' <LValueToRValue>
+|   | | `-DeclRefExpr 'const int' lvalue Var 'k' 'const int' non_odr_use_constant
+|   | `-IntegerLiteral 'int' 3
+|   `-BinaryOperator 'bool' '<'
+|     |-ImplicitCastExpr 'double' <LValueToRValue>
+|     | `-DeclRefExpr 'const double' lvalue Var 'half' 'const double' non_odr_use_constant
+|     `-FloatingLiteral 'double' 1e0
+|-VarDecl letter 'const char' constexpr cinit value=101
+| `-ImplicitCastExpr 'const char' <IntegralCast>
+|   `-BinaryOperator 'int' '+'
+|     |-ImplicitCastExpr 'int' <IntegralCast>
+|     | `-CharacterLiteral 'char' 97
+|     `-ImplicitCastExpr 'int' <LValueToRValue>
+|       `-DeclRefExpr 'const int' lvalue Var 'k' 'const int' non_odr_use_constant
+|-VarDecl referenced ci 'const int' cinit
+| `-BinaryOperator 'int' '+'
+|   |-ImplicitCastExpr 'int' <LValueToRValue>
+|   | `-DeclRefExpr 'const int' lvalue Var 'k' 'const int' non_odr_use_constant
+|   `-IntegerLiteral 'int' 1
+`-VarDecl arr 'int[9]'

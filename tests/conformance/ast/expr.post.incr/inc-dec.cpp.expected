@@ -1,0 +1,39 @@
+TranslationUnitDecl
+`-FunctionDecl counts 'int (int *, double, char)'
+  |-ParmVarDecl used p 'int *'
+  |-ParmVarDecl used d 'double'
+  |-ParmVarDecl used c 'char'
+  `-CompoundStmt
+    |-DeclStmt
+    | `-VarDecl used i 'int' cinit
+    |   `-IntegerLiteral 'int' 0
+    |-UnaryOperator 'int' postfix '++'
+    | `-DeclRefExpr 'int' lvalue Var 'i' 'int'
+    |-UnaryOperator 'int' lvalue prefix '++'
+    | `-DeclRefExpr 'int' lvalue Var 'i' 'int'
+    |-UnaryOperator 'int' postfix '--'
+    | `-DeclRefExpr 'int' lvalue Var 'i' 'int'
+    |-UnaryOperator 'int' lvalue prefix '--'
+    | `-DeclRefExpr 'int' lvalue Var 'i' 'int'
+    |-UnaryOperator 'int *' postfix '++'
+    | `-DeclRefExpr 'int *' lvalue ParmVar 'p' 'int *'
+    |-UnaryOperator 'int *' lvalue prefix '--'
+    | `-DeclRefExpr 'int *' lvalue ParmVar 'p' 'int *'
+    |-UnaryOperator 'double' postfix '++'
+    | `-DeclRefExpr 'double' lvalue ParmVar 'd' 'double'
+    |-UnaryOperator 'char' postfix '--' cannot overflow
+    | `-DeclRefExpr 'char' lvalue ParmVar 'c' 'char'
+    `-ReturnStmt
+      `-BinaryOperator 'int' '+'
+        |-BinaryOperator 'int' '+'
+        | |-ImplicitCastExpr 'int' <LValueToRValue>
+        | | `-DeclRefExpr 'int' lvalue Var 'i' 'int'
+        | `-ImplicitCastExpr 'int' <LValueToRValue>
+        |   `-UnaryOperator 'int' lvalue prefix '*' cannot overflow
+        |     `-UnaryOperator 'int *' postfix '++'
+        |       `-DeclRefExpr 'int *' lvalue ParmVar 'p' 'int *'
+        `-ImplicitCastExpr 'int' <LValueToRValue>
+          `-UnaryOperator 'int' lvalue prefix '*' cannot overflow
+            `-ImplicitCastExpr 'int *' <LValueToRValue>
+              `-UnaryOperator 'int *' lvalue prefix '++'
+                `-DeclRefExpr 'int *' lvalue ParmVar 'p' 'int *'

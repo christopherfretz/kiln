@@ -1,0 +1,31 @@
+TranslationUnitDecl
+|-VarDecl used counter 'int' static
+|-FunctionDecl used bump 'int ()' inline
+| `-CompoundStmt
+|   `-ReturnStmt
+|     `-ImplicitCastExpr 'int' <LValueToRValue>
+|       `-UnaryOperator 'int' lvalue prefix '++'
+|         `-DeclRefExpr 'int' lvalue Var 'counter' 'int'
+|-FunctionDecl used peek 'int ()' static inline
+| `-CompoundStmt
+|   `-ReturnStmt
+|     `-ImplicitCastExpr 'int' <LValueToRValue>
+|       `-DeclRefExpr 'int' lvalue Var 'counter' 'int'
+`-FunctionDecl next 'int ()'
+  `-CompoundStmt
+    |-DeclStmt
+    | `-VarDecl used calls 'int' static cinit
+    |   `-IntegerLiteral 'int' 0
+    |-UnaryOperator 'int' postfix '++'
+    | `-DeclRefExpr 'int' lvalue Var 'calls' 'int'
+    `-ReturnStmt
+      `-BinaryOperator 'int' '+'
+        |-BinaryOperator 'int' '+'
+        | |-CallExpr 'int'
+        | | `-ImplicitCastExpr 'int (*)()' <FunctionToPointerDecay>
+        | |   `-DeclRefExpr 'int ()' lvalue Function 'bump' 'int ()'
+        | `-CallExpr 'int'
+        |   `-ImplicitCastExpr 'int (*)()' <FunctionToPointerDecay>
+        |     `-DeclRefExpr 'int ()' lvalue Function 'peek' 'int ()'
+        `-ImplicitCastExpr 'int' <LValueToRValue>
+          `-DeclRefExpr 'int' lvalue Var 'calls' 'int'

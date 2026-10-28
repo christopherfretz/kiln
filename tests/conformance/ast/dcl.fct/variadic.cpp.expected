@@ -1,0 +1,33 @@
+TranslationUnitDecl
+|-LinkageSpecDecl C
+| `-FunctionDecl used c_printf 'int (const char *, ...)'
+|   `-ParmVarDecl 'const char *'
+|-FunctionDecl used log 'int (const char *, ...)'
+| `-ParmVarDecl fmt 'const char *'
+`-FunctionDecl call 'void (float, short, char)'
+  |-ParmVarDecl used f 'float'
+  |-ParmVarDecl used s 'short'
+  |-ParmVarDecl used c 'char'
+  `-CompoundStmt
+    |-CallExpr 'int'
+    | |-ImplicitCastExpr 'int (*)(const char *, ...)' <FunctionToPointerDecay>
+    | | `-DeclRefExpr 'int (const char *, ...)' lvalue Function 'c_printf' 'int (const char *, ...)'
+    | |-ImplicitCastExpr 'const char *' <ArrayToPointerDecay>
+    | | `-StringLiteral 'const char[9]' lvalue "%f %d %c"
+    | |-ImplicitCastExpr 'double' <FloatingCast>
+    | | `-ImplicitCastExpr 'float' <LValueToRValue>
+    | |   `-DeclRefExpr 'float' lvalue ParmVar 'f' 'float'
+    | |-ImplicitCastExpr 'int' <IntegralCast>
+    | | `-ImplicitCastExpr 'short' <LValueToRValue>
+    | |   `-DeclRefExpr 'short' lvalue ParmVar 's' 'short'
+    | `-ImplicitCastExpr 'int' <IntegralCast>
+    |   `-ImplicitCastExpr 'char' <LValueToRValue>
+    |     `-DeclRefExpr 'char' lvalue ParmVar 'c' 'char'
+    `-CallExpr 'int'
+      |-ImplicitCastExpr 'int (*)(const char *, ...)' <FunctionToPointerDecay>
+      | `-DeclRefExpr 'int (const char *, ...)' lvalue Function 'log' 'int (const char *, ...)'
+      |-ImplicitCastExpr 'const char *' <ArrayToPointerDecay>
+      | `-StringLiteral 'const char[2]' lvalue "x"
+      |-IntegerLiteral 'unsigned int' 1
+      `-ImplicitCastExpr 'int' <IntegralCast>
+        `-CXXBoolLiteralExpr 'bool' true

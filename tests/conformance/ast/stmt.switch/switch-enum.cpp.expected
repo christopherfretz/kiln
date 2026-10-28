@@ -1,0 +1,53 @@
+TranslationUnitDecl
+|-EnumDecl referenced K
+| |-EnumConstantDecl referenced A 'K' value=0
+| |-EnumConstantDecl referenced B 'K' value=1
+| `-EnumConstantDecl C 'K' value=2
+`-FunctionDecl classify 'int (K, char)'
+  |-ParmVarDecl used k 'K'
+  |-ParmVarDecl used c 'char'
+  `-CompoundStmt
+    |-SwitchStmt
+    | |-ImplicitCastExpr 'int' <IntegralCast>
+    | | `-ImplicitCastExpr 'K' <LValueToRValue>
+    | |   `-DeclRefExpr 'K' lvalue ParmVar 'k' 'K'
+    | `-CompoundStmt
+    |   |-CaseStmt
+    |   | |-ConstantExpr 'int' value=0
+    |   | | `-ImplicitCastExpr 'int' <IntegralCast>
+    |   | |   `-DeclRefExpr 'K' EnumConstant 'A' 'K'
+    |   | `-CaseStmt
+    |   |   |-ConstantExpr 'int' value=1
+    |   |   | `-ImplicitCastExpr 'int' <IntegralCast>
+    |   |   |   `-DeclRefExpr 'K' EnumConstant 'B' 'K'
+    |   |   `-ReturnStmt
+    |   |     `-IntegerLiteral 'int' 1
+    |   `-DefaultStmt
+    |     `-BreakStmt
+    |-SwitchStmt
+    | |-ImplicitCastExpr 'int' <IntegralCast>
+    | | `-ImplicitCastExpr 'char' <LValueToRValue>
+    | |   `-DeclRefExpr 'char' lvalue ParmVar 'c' 'char'
+    | `-CompoundStmt
+    |   |-CaseStmt
+    |   | |-ConstantExpr 'int' value=97
+    |   | | `-ImplicitCastExpr 'int' <IntegralCast>
+    |   | |   `-CharacterLiteral 'char' 97
+    |   | `-ReturnStmt
+    |   |   `-IntegerLiteral 'int' 2
+    |   `-CaseStmt
+    |     |-ConstantExpr 'int' value=99
+    |     | `-BinaryOperator 'int' '+'
+    |     |   |-ImplicitCastExpr 'int' <IntegralCast>
+    |     |   | `-CharacterLiteral 'char' 98
+    |     |   `-IntegerLiteral 'int' 1
+    |     `-CompoundStmt
+    |       |-DeclStmt
+    |       | `-VarDecl used t 'int' cinit
+    |       |   `-IntegerLiteral 'int' 3
+    |       `-ReturnStmt
+    |         `-ImplicitCastExpr 'int' <LValueToRValue>
+    |           `-ImplicitCastExpr 'int' xvalue <NoOp>
+    |             `-DeclRefExpr 'int' lvalue Var 't' 'int'
+    `-ReturnStmt
+      `-IntegerLiteral 'int' 0

@@ -3,7 +3,7 @@
 
 use kiln_ast::consts::{FloatKind, Scalar};
 use kiln_ast::expr::{CastKind, ExprKind, UnaryOp};
-use kiln_ast::types::BuiltinType;
+use kiln_ast::types::{BuiltinType, TypeView};
 use kiln_ast::{ConstValueId, ExprId, QualType};
 use kiln_diag::{Diag, DiagId};
 
@@ -302,7 +302,7 @@ fn clamp(neg: bool, mag: u128, w: u32, signed: bool) -> (bool, u128) {
 /// its "insert an explicit cast" note), or `None` if `n` is not
 /// narrowing.
 pub fn narrowing_diag(s: &Sema<'_, '_>, n: &Narrowing, init: ExprId, to: QualType) -> Option<Diag> {
-    let loc = s.ast.exprs.get(init).loc();
+    let loc = s.begin_loc(init);
     let to_arg = s.ty_arg(super::strip_cv(s, to));
     let d = match n {
         Narrowing::NotNarrowing | Narrowing::Dependent => return None,
@@ -318,5 +318,24 @@ pub fn narrowing_diag(s: &Sema<'_, '_>, n: &Narrowing, init: ExprId, to: QualTyp
             s.diag(DiagId::sema_init_list_constant_narrowing, loc).arg(value).arg(to_arg)
         }
     };
+    // clang offers the `static_cast<T>(...)` fix-it (and its note) only
+    // when `T` can be spelled: a typedef or a builtin type.
+    if !spellable(s, to) {
+        return Some(d);
+    }
     Some(d.with_note(s.diag(DiagId::note_init_list_narrowing_silence, loc)))
+}
+
+/// True if `t` (through elaborated and using sugar) is a typedef or a
+/// builtin type (clang's `getAs<TypedefType>`/`getAs<BuiltinType>`).
+fn spellable(s: &Sema<'_, '_>, mut t: QualType) -> bool {
+    for _ in 0..64 {
+        match s.ast.types.view(t.ty()) {
+            TypeView::Elaborated { named, .. } => t = named,
+            TypeView::Using { underlying, .. } => t = underlying,
+            TypeView::Typedef { .. } | TypeView::Builtin(_) => return true,
+            _ => return false,
+        }
+    }
+    false
 }

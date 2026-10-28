@@ -1,4 +1,5 @@
 //@ expect: ast
+//@ xfail(kiln): 'if constexpr' and 'if consteval' are M3
 constexpr int pick(int v) {
   if constexpr (sizeof(int) == 4) {
     v += 1;

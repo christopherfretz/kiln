@@ -1,0 +1,31 @@
+TranslationUnitDecl
+|-LinkageSpecDecl C
+| |-FunctionDecl used c_abs 'int (int)'
+| | `-ParmVarDecl 'int'
+| `-FunctionDecl used c_fabs 'double (double)'
+|   `-ParmVarDecl 'double'
+|-LinkageSpecDecl C++
+| `-FunctionDecl used cpp_fn 'int (int)'
+|   `-ParmVarDecl 'int'
+`-FunctionDecl user 'int (int)'
+  |-ParmVarDecl used v 'int'
+  `-CompoundStmt
+    `-ReturnStmt
+      `-BinaryOperator 'int' '+'
+        |-BinaryOperator 'int' '+'
+        | |-CallExpr 'int'
+        | | |-ImplicitCastExpr 'int (*)(int)' <FunctionToPointerDecay>
+        | | | `-DeclRefExpr 'int (int)' lvalue Function 'c_abs' 'int (int)'
+        | | `-ImplicitCastExpr 'int' <LValueToRValue>
+        | |   `-DeclRefExpr 'int' lvalue ParmVar 'v' 'int'
+        | `-CallExpr 'int'
+        |   |-ImplicitCastExpr 'int (*)(int)' <FunctionToPointerDecay>
+        |   | `-DeclRefExpr 'int (int)' lvalue Function 'cpp_fn' 'int (int)'
+        |   `-ImplicitCastExpr 'int' <LValueToRValue>
+        |     `-DeclRefExpr 'int' lvalue ParmVar 'v' 'int'
+        `-CStyleCastExpr 'int' <NoOp>
+          `-ImplicitCastExpr 'int' <FloatingToIntegral> part_of_explicit_cast
+            `-CallExpr 'double'
+              |-ImplicitCastExpr 'double (*)(double)' <FunctionToPointerDecay>
+              | `-DeclRefExpr 'double (double)' lvalue Function 'c_fabs' 'double (double)'
+              `-FloatingLiteral 'double' 1.5e0

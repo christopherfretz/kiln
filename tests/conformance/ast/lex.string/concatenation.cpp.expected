@@ -1,0 +1,13 @@
+TranslationUnitDecl
+|-VarDecl s 'const char *' cinit
+| `-ImplicitCastExpr 'const char *' <ArrayToPointerDecay>
+|   `-StringLiteral 'const char[7]' lvalue "abcdef"
+|-VarDecl t 'const char *' cinit
+| `-ImplicitCastExpr 'const char *' <ArrayToPointerDecay>
+|   `-StringLiteral 'const char[4]' lvalue "xyz"
+|-VarDecl u 'const char[7]' cinit
+| `-StringLiteral 'const char[7]' "onetwo"
+`-VarDecl n 'unsigned long' cinit
+  `-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof
+    `-ParenExpr 'const char[5]' lvalue
+      `-StringLiteral 'const char[5]' lvalue "abcd"

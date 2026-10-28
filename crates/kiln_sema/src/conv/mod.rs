@@ -143,6 +143,19 @@ pub(crate) fn cast_to(
     if s.ast.types.canonical(from) == s.ast.types.canonical(to) {
         return e;
     }
+    // clang retypes an implicit cast of the same kind in place instead of
+    // stacking a second one (`(unsigned char)i + 1L` converts the
+    // `unsigned char` straight to `long`); the replaced node is dropped.
+    let n = s.ast.exprs.get(e);
+    if n.kind() == ExprKind::ImplicitCastExpr
+        && n.value_category() == ValueCategory::PRValue
+        && s.ast.exprs.cast_kind(e) == ck
+        && path.is_none()
+        && s.ast.exprs.cast_path(e).is_none()
+    {
+        let inner = s.ast.exprs.operand(e);
+        return raw_cast(s, ck, inner, to, ValueCategory::PRValue, None);
+    }
     raw_cast(s, ck, e, to, ValueCategory::PRValue, path)
 }
 

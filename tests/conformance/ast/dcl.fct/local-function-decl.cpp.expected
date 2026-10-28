@@ -1,0 +1,26 @@
+TranslationUnitDecl
+|-FunctionDecl used helper 'int (int)'
+| `-ParmVarDecl 'int'
+|-FunctionDecl caller 'int ()'
+| `-CompoundStmt
+|   |-DeclStmt
+|   | `-FunctionDecl used helper 'int (int)'
+|   |   `-ParmVarDecl 'int'
+|   |-DeclStmt
+|   | `-VarDecl used shared 'int' extern
+|   `-ReturnStmt
+|     `-CallExpr 'int'
+|       |-ImplicitCastExpr 'int (*)(int)' <FunctionToPointerDecay>
+|       | `-DeclRefExpr 'int (int)' lvalue Function 'helper' 'int (int)'
+|       `-ImplicitCastExpr 'int' <LValueToRValue>
+|         `-DeclRefExpr 'int' lvalue Var 'shared' 'int'
+|-VarDecl used shared 'int' cinit
+| `-IntegerLiteral 'int' 2
+`-FunctionDecl used helper 'int (int)'
+  |-ParmVarDecl used v 'int'
+  `-CompoundStmt
+    `-ReturnStmt
+      `-BinaryOperator 'int' '+'
+        |-ImplicitCastExpr 'int' <LValueToRValue>
+        | `-DeclRefExpr 'int' lvalue ParmVar 'v' 'int'
+        `-IntegerLiteral 'int' 1

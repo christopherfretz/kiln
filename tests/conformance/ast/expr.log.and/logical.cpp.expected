@@ -1,0 +1,37 @@
+TranslationUnitDecl
+`-FunctionDecl logic 'bool (int, int *, double)'
+  |-ParmVarDecl used a 'int'
+  |-ParmVarDecl used p 'int *'
+  |-ParmVarDecl used d 'double'
+  `-CompoundStmt
+    |-DeclStmt
+    | `-VarDecl used x 'bool' cinit
+    |   `-BinaryOperator 'bool' '&&'
+    |     |-ImplicitCastExpr 'bool' <IntegralToBoolean>
+    |     | `-ImplicitCastExpr 'int' <LValueToRValue>
+    |     |   `-DeclRefExpr 'int' lvalue ParmVar 'a' 'int'
+    |     `-ImplicitCastExpr 'bool' <PointerToBoolean>
+    |       `-ImplicitCastExpr 'int *' <LValueToRValue>
+    |         `-DeclRefExpr 'int *' lvalue ParmVar 'p' 'int *'
+    |-DeclStmt
+    | `-VarDecl used y 'bool' cinit
+    |   `-BinaryOperator 'bool' '||'
+    |     |-UnaryOperator 'bool' prefix '!' cannot overflow
+    |     | `-ImplicitCastExpr 'bool' <IntegralToBoolean>
+    |     |   `-ImplicitCastExpr 'int' <LValueToRValue>
+    |     |     `-DeclRefExpr 'int' lvalue ParmVar 'a' 'int'
+    |     `-ImplicitCastExpr 'bool' <FloatingToBoolean>
+    |       `-ImplicitCastExpr 'double' <LValueToRValue>
+    |         `-DeclRefExpr 'double' lvalue ParmVar 'd' 'double'
+    `-ReturnStmt
+      `-BinaryOperator 'bool' '&&'
+        |-ImplicitCastExpr 'bool' <LValueToRValue>
+        | `-DeclRefExpr 'bool' lvalue Var 'x' 'bool'
+        `-ParenExpr 'bool'
+          `-BinaryOperator 'bool' '||'
+            |-ImplicitCastExpr 'bool' <LValueToRValue>
+            | `-DeclRefExpr 'bool' lvalue Var 'y' 'bool'
+            `-UnaryOperator 'bool' prefix '!' cannot overflow
+              `-ImplicitCastExpr 'bool' <PointerToBoolean>
+                `-ImplicitCastExpr 'int *' <LValueToRValue>
+                  `-DeclRefExpr 'int *' lvalue ParmVar 'p' 'int *'

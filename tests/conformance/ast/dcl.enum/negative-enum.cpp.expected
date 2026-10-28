@@ -1,0 +1,49 @@
+TranslationUnitDecl
+|-EnumDecl referenced Small
+| |-EnumConstantDecl Neg 'Small' value=-1
+| | `-ConstantExpr 'int' value=-1
+| |   `-UnaryOperator 'int' prefix '-'
+| |     `-IntegerLiteral 'int' 1
+| `-EnumConstantDecl Pos 'Small' value=1
+|   `-ConstantExpr 'int' value=1
+|     `-IntegerLiteral 'int' 1
+|-EnumDecl referenced Big
+| `-EnumConstantDecl Huge 'Big' value=4294967296
+|   `-ImplicitCastExpr 'unsigned long' <IntegralCast>
+|     `-ConstantExpr 'long long' value=4294967296
+|       `-IntegerLiteral 'long long' 4294967296
+|-EnumDecl referenced UBig
+| `-EnumConstantDecl Top 'UBig' value=4294967295
+|   `-ConstantExpr 'unsigned int' value=4294967295
+|     `-IntegerLiteral 'unsigned int' 4294967295
+`-FunctionDecl width 'long (Small, Big, UBig)'
+  |-ParmVarDecl used s 'Small'
+  |-ParmVarDecl used b 'Big'
+  |-ParmVarDecl used u 'UBig'
+  `-CompoundStmt
+    `-ReturnStmt
+      `-BinaryOperator 'long' '+'
+        |-BinaryOperator 'long' '+'
+        | |-BinaryOperator 'long' '+'
+        | | |-BinaryOperator 'long' '+'
+        | | | |-CStyleCastExpr 'long' <NoOp>
+        | | | | `-ImplicitCastExpr 'long' <IntegralCast> part_of_explicit_cast
+        | | | |   `-ImplicitCastExpr 'Small' <LValueToRValue> part_of_explicit_cast
+        | | | |     `-DeclRefExpr 'Small' lvalue ParmVar 's' 'Small'
+        | | | `-CStyleCastExpr 'long' <NoOp>
+        | | |   `-ImplicitCastExpr 'long' <IntegralCast> part_of_explicit_cast
+        | | |     `-ImplicitCastExpr 'Big' <LValueToRValue> part_of_explicit_cast
+        | | |       `-DeclRefExpr 'Big' lvalue ParmVar 'b' 'Big'
+        | | `-CStyleCastExpr 'long' <NoOp>
+        | |   `-ImplicitCastExpr 'long' <IntegralCast> part_of_explicit_cast
+        | |     `-ImplicitCastExpr 'UBig' <LValueToRValue> part_of_explicit_cast
+        | |       `-DeclRefExpr 'UBig' lvalue ParmVar 'u' 'UBig'
+        | `-ImplicitCastExpr 'long' <IntegralCast>
+        |   `-BinaryOperator 'int' '*'
+        |     |-ImplicitCastExpr 'int' <IntegralCast>
+        |     | `-ImplicitCastExpr 'Small' <LValueToRValue>
+        |     |   `-DeclRefExpr 'Small' lvalue ParmVar 's' 'Small'
+        |     `-IntegerLiteral 'int' 2
+        `-ImplicitCastExpr 'long' <IntegralCast>
+          `-ImplicitCastExpr 'UBig' <LValueToRValue>
+            `-DeclRefExpr 'UBig' lvalue ParmVar 'u' 'UBig'

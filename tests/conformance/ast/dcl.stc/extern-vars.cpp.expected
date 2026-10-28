@@ -1,0 +1,17 @@
+TranslationUnitDecl
+|-VarDecl used defined_later 'int' extern
+|-VarDecl limit 'const int' extern
+|-VarDecl referenced limit 'const int' cinit
+| `-IntegerLiteral 'int' 10
+|-VarDecl used defined_later 'int' cinit
+| `-BinaryOperator 'int' '*'
+|   |-ImplicitCastExpr 'int' <LValueToRValue>
+|   | `-DeclRefExpr 'const int' lvalue Var 'limit' 'const int' non_odr_use_constant
+|   `-IntegerLiteral 'int' 2
+`-FunctionDecl read 'int ()'
+  `-CompoundStmt
+    |-DeclStmt
+    | `-VarDecl used defined_later 'int' extern
+    `-ReturnStmt
+      `-ImplicitCastExpr 'int' <LValueToRValue>
+        `-DeclRefExpr 'int' lvalue Var 'defined_later' 'int'

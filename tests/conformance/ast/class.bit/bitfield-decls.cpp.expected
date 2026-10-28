@@ -1,0 +1,44 @@
+TranslationUnitDecl
+|-CXXRecordDecl referenced struct Flags definition
+| |-FieldDecl referenced ready 'unsigned int'
+| | `-ConstantExpr 'int' value=1
+| |   `-IntegerLiteral 'int' 1
+| |-FieldDecl referenced mode 'unsigned int'
+| | `-ConstantExpr 'int' value=3
+| |   `-IntegerLiteral 'int' 3
+| |-FieldDecl referenced delta 'int'
+| | `-ConstantExpr 'int' value=5
+| |   `-IntegerLiteral 'int' 5
+| |-FieldDecl 'unsigned int'
+| | `-ConstantExpr 'int' value=0
+| |   `-IntegerLiteral 'int' 0
+| `-FieldDecl referenced b 'bool'
+|   `-ConstantExpr 'int' value=1
+|     `-IntegerLiteral 'int' 1
+`-FunctionDecl read 'int (Flags)'
+  |-ParmVarDecl used f 'Flags'
+  `-CompoundStmt
+    |-BinaryOperator 'unsigned int' lvalue bitfield '='
+    | |-MemberExpr 'unsigned int' lvalue bitfield .mode
+    | | `-DeclRefExpr 'Flags' lvalue ParmVar 'f' 'Flags'
+    | `-ImplicitCastExpr 'unsigned int' <IntegralCast>
+    |   `-IntegerLiteral 'int' 5
+    `-ReturnStmt
+      `-BinaryOperator 'int' '+'
+        |-BinaryOperator 'int' '+'
+        | |-BinaryOperator 'int' '+'
+        | | |-ImplicitCastExpr 'int' <IntegralCast>
+        | | | `-ImplicitCastExpr 'unsigned int' <LValueToRValue>
+        | | |   `-MemberExpr 'unsigned int' lvalue bitfield .ready
+        | | |     `-DeclRefExpr 'Flags' lvalue ParmVar 'f' 'Flags'
+        | | `-ImplicitCastExpr 'int' <IntegralCast>
+        | |   `-ImplicitCastExpr 'unsigned int' <LValueToRValue>
+        | |     `-MemberExpr 'unsigned int' lvalue bitfield .mode
+        | |       `-DeclRefExpr 'Flags' lvalue ParmVar 'f' 'Flags'
+        | `-ImplicitCastExpr 'int' <LValueToRValue>
+        |   `-MemberExpr 'int' lvalue bitfield .delta
+        |     `-DeclRefExpr 'Flags' lvalue ParmVar 'f' 'Flags'
+        `-ImplicitCastExpr 'int' <IntegralCast>
+          `-ImplicitCastExpr 'bool' <LValueToRValue>
+            `-MemberExpr 'bool' lvalue bitfield .b
+              `-DeclRefExpr 'Flags' lvalue ParmVar 'f' 'Flags'

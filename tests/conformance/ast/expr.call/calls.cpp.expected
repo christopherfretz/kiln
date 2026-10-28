@@ -1,0 +1,43 @@
+TranslationUnitDecl
+|-FunctionDecl used none 'void ()'
+|-FunctionDecl used one 'int (int)'
+| `-ParmVarDecl 'int'
+|-FunctionDecl used two 'double (double, long)'
+| |-ParmVarDecl 'double'
+| `-ParmVarDecl 'long'
+`-FunctionDecl calls 'int (short)'
+  |-ParmVarDecl used s 'short'
+  `-CompoundStmt
+    |-CallExpr 'void'
+    | `-ImplicitCastExpr 'void (*)()' <FunctionToPointerDecay>
+    |   `-DeclRefExpr 'void ()' lvalue Function 'none' 'void ()'
+    |-DeclStmt
+    | `-VarDecl used r 'int' cinit
+    |   `-CallExpr 'int'
+    |     |-ImplicitCastExpr 'int (*)(int)' <FunctionToPointerDecay>
+    |     | `-DeclRefExpr 'int (int)' lvalue Function 'one' 'int (int)'
+    |     `-ImplicitCastExpr 'int' <IntegralCast>
+    |       `-ImplicitCastExpr 'short' <LValueToRValue>
+    |         `-DeclRefExpr 'short' lvalue ParmVar 's' 'short'
+    `-ReturnStmt
+      `-BinaryOperator 'int' '+'
+        |-BinaryOperator 'int' '+'
+        | |-ImplicitCastExpr 'int' <LValueToRValue>
+        | | `-DeclRefExpr 'int' lvalue Var 'r' 'int'
+        | `-CStyleCastExpr 'int' <NoOp>
+        |   `-ImplicitCastExpr 'int' <FloatingToIntegral> part_of_explicit_cast
+        |     `-CallExpr 'double'
+        |       |-ImplicitCastExpr 'double (*)(double, long)' <FunctionToPointerDecay>
+        |       | `-DeclRefExpr 'double (double, long)' lvalue Function 'two' 'double (double, long)'
+        |       |-ImplicitCastExpr 'double' <IntegralToFloating>
+        |       | `-ImplicitCastExpr 'short' <LValueToRValue>
+        |       |   `-DeclRefExpr 'short' lvalue ParmVar 's' 'short'
+        |       `-ImplicitCastExpr 'long' <IntegralCast>
+        |         `-CharacterLiteral 'char' 120
+        `-CallExpr 'int'
+          |-ImplicitCastExpr 'int (*)(int)' <FunctionToPointerDecay>
+          | `-DeclRefExpr 'int (int)' lvalue Function 'one' 'int (int)'
+          `-CallExpr 'int'
+            |-ImplicitCastExpr 'int (*)(int)' <FunctionToPointerDecay>
+            | `-DeclRefExpr 'int (int)' lvalue Function 'one' 'int (int)'
+            `-IntegerLiteral 'int' 2

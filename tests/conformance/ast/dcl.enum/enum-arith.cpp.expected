@@ -1,0 +1,49 @@
+TranslationUnitDecl
+|-EnumDecl referenced Color
+| |-EnumConstantDecl referenced Red 'Color' value=0
+| |-EnumConstantDecl referenced Green 'Color' value=4
+| | `-ImplicitCastExpr 'unsigned int' <IntegralCast>
+| |   `-ConstantExpr 'int' value=4
+| |     `-IntegerLiteral 'int' 4
+| `-EnumConstantDecl referenced Blue 'Color' value=5
+|-EnumDecl referenced class Mode 'unsigned char'
+| |-EnumConstantDecl Off 'Mode' value=0
+| `-EnumConstantDecl referenced On 'Mode' value=1
+`-FunctionDecl score 'int (Color, Mode)'
+  |-ParmVarDecl used c 'Color'
+  |-ParmVarDecl used m 'Mode'
+  `-CompoundStmt
+    |-DeclStmt
+    | `-VarDecl used s 'int' cinit
+    |   `-BinaryOperator 'int' '+'
+    |     |-ImplicitCastExpr 'int' <IntegralCast>
+    |     | `-ImplicitCastExpr 'Color' <LValueToRValue>
+    |     |   `-DeclRefExpr 'Color' lvalue ParmVar 'c' 'Color'
+    |     `-IntegerLiteral 'int' 1
+    |-CompoundAssignOperator 'int' lvalue '+=' ComputeLHSTy='int' ComputeResultTy='int'
+    | |-DeclRefExpr 'int' lvalue Var 's' 'int'
+    | `-BinaryOperator 'int' '-'
+    |   |-ImplicitCastExpr 'int' <IntegralCast>
+    |   | `-DeclRefExpr 'Color' EnumConstant 'Blue' 'Color'
+    |   `-ImplicitCastExpr 'int' <IntegralCast>
+    |     `-DeclRefExpr 'Color' EnumConstant 'Red' 'Color'
+    |-IfStmt
+    | |-BinaryOperator 'bool' '=='
+    | | |-ImplicitCastExpr 'int' <IntegralCast>
+    | | | `-ImplicitCastExpr 'Color' <LValueToRValue>
+    | | |   `-DeclRefExpr 'Color' lvalue ParmVar 'c' 'Color'
+    | | `-ImplicitCastExpr 'int' <IntegralCast>
+    | |   `-DeclRefExpr 'Color' EnumConstant 'Green' 'Color'
+    | `-CompoundAssignOperator 'int' lvalue '*=' ComputeLHSTy='int' ComputeResultTy='int'
+    |   |-DeclRefExpr 'int' lvalue Var 's' 'int'
+    |   `-IntegerLiteral 'int' 2
+    `-ReturnStmt
+      `-BinaryOperator 'int' '+'
+        |-BinaryOperator 'int' '+'
+        | |-ImplicitCastExpr 'int' <LValueToRValue>
+        | | `-DeclRefExpr 'int' lvalue Var 's' 'int'
+        | `-CStyleCastExpr 'int' <IntegralCast>
+        |   `-ImplicitCastExpr 'Mode' <LValueToRValue> part_of_explicit_cast
+        |     `-DeclRefExpr 'Mode' lvalue ParmVar 'm' 'Mode'
+        `-CStyleCastExpr 'int' <IntegralCast>
+          `-DeclRefExpr 'Mode' EnumConstant 'On' 'Mode'

@@ -1,0 +1,53 @@
+TranslationUnitDecl
+|-FunctionDecl used add 'int (int, int)'
+| |-ParmVarDecl used a 'int'
+| |-ParmVarDecl used b 'int'
+| `-CompoundStmt
+|   `-ReturnStmt
+|     `-BinaryOperator 'int' '+'
+|       |-ImplicitCastExpr 'int' <LValueToRValue>
+|       | `-DeclRefExpr 'int' lvalue ParmVar 'a' 'int'
+|       `-ImplicitCastExpr 'int' <LValueToRValue>
+|         `-DeclRefExpr 'int' lvalue ParmVar 'b' 'int'
+|-VarDecl used op 'int (*)(int, int)' cinit
+| `-ImplicitCastExpr 'int (*)(int, int)' <FunctionToPointerDecay>
+|   `-DeclRefExpr 'int (int, int)' lvalue Function 'add' 'int (int, int)'
+|-VarDecl used ops 'int (*[2])(int, int)' cinit
+| `-InitListExpr 'int (*[2])(int, int)'
+|   |-ImplicitCastExpr 'int (*)(int, int)' <FunctionToPointerDecay>
+|   | `-DeclRefExpr 'int (int, int)' lvalue Function 'add' 'int (int, int)'
+|   `-UnaryOperator 'int (*)(int, int)' prefix '&' cannot overflow
+|     `-DeclRefExpr 'int (int, int)' lvalue Function 'add' 'int (int, int)'
+`-FunctionDecl run 'int (int (*)(int, int))'
+  |-ParmVarDecl used f 'int (*)(int, int)'
+  `-CompoundStmt
+    `-ReturnStmt
+      `-BinaryOperator 'int' '+'
+        |-BinaryOperator 'int' '+'
+        | |-BinaryOperator 'int' '+'
+        | | |-CallExpr 'int'
+        | | | |-ImplicitCastExpr 'int (*)(int, int)' <LValueToRValue>
+        | | | | `-DeclRefExpr 'int (*)(int, int)' lvalue ParmVar 'f' 'int (*)(int, int)'
+        | | | |-IntegerLiteral 'int' 1
+        | | | `-IntegerLiteral 'int' 2
+        | | `-CallExpr 'int'
+        | |   |-ImplicitCastExpr 'int (*)(int, int)' <FunctionToPointerDecay>
+        | |   | `-ParenExpr 'int (int, int)' lvalue
+        | |   |   `-UnaryOperator 'int (int, int)' lvalue prefix '*' cannot overflow
+        | |   |     `-ImplicitCastExpr 'int (*)(int, int)' <LValueToRValue>
+        | |   |       `-DeclRefExpr 'int (*)(int, int)' lvalue ParmVar 'f' 'int (*)(int, int)'
+        | |   |-IntegerLiteral 'int' 3
+        | |   `-IntegerLiteral 'int' 4
+        | `-CallExpr 'int'
+        |   |-ImplicitCastExpr 'int (*)(int, int)' <LValueToRValue>
+        |   | `-DeclRefExpr 'int (*)(int, int)' lvalue Var 'op' 'int (*)(int, int)'
+        |   |-IntegerLiteral 'int' 5
+        |   `-IntegerLiteral 'int' 6
+        `-CallExpr 'int'
+          |-ImplicitCastExpr 'int (*)(int, int)' <LValueToRValue>
+          | `-ArraySubscriptExpr 'int (*)(int, int)' lvalue
+          |   |-ImplicitCastExpr 'int (**)(int, int)' <ArrayToPointerDecay>
+          |   | `-DeclRefExpr 'int (*[2])(int, int)' lvalue Var 'ops' 'int (*[2])(int, int)'
+          |   `-IntegerLiteral 'int' 1
+          |-IntegerLiteral 'int' 7
+          `-IntegerLiteral 'int' 8

@@ -985,6 +985,70 @@ impl ExprArena {
         NonOdrUse::from_u8(n.aux).expect("valid non-odr-use kind")
     }
 
+    /// Records why a `DeclRefExpr` / `MemberExpr` is not an odr-use (sema's
+    /// end-of-full-expression odr-use pass, [basic.def.odr]/5; clang's
+    /// `MaybeODRUseExprs`). Only `None` → non-`None` is allowed.
+    ///
+    /// # Panics
+    /// If `e` is not a `DeclRefExpr` / `MemberExpr`.
+    pub fn set_non_odr_use(&mut self, e: ExprId, v: NonOdrUse) -> Result<(), AlreadySet> {
+        let n = &mut self.nodes[e.index() as usize];
+        assert!(
+            matches!(n.kind, ExprKind::DeclRefExpr | ExprKind::MemberExpr),
+            "expected DeclRefExpr or MemberExpr, found {:?}",
+            n.kind
+        );
+        if n.aux != NonOdrUse::None as u8 {
+            return Err(AlreadySet { slot: "DeclRefExpr.non_odr_use", existing: u32::from(n.aux) });
+        }
+        n.aux = v as u8;
+        Ok(())
+    }
+
+    /// Marks the glvalue `e` as designating a bit-field
+    /// ([`ObjectKind::BitField`]): sema propagates the marking from a
+    /// member access through `=`, compound assignment, prefix `++`/`--`,
+    /// `?:` and `,` ([expr.ass]/1, [expr.pre.incr]/1, [expr.cond]/7.1,
+    /// [expr.comma]/1), which the builder cannot see. Monotone.
+    pub fn mark_bitfield(&mut self, e: ExprId) {
+        let n = &mut self.nodes[e.index() as usize];
+        assert!(n.bits & 3 != 0, "only a glvalue can designate a bit-field");
+        n.bits = (n.bits & !(3 << 2)) | ((ObjectKind::BitField as u8) << 2);
+    }
+
+    /// Retypes the string literal `e` that initializes a character array
+    /// (and the parentheses around it) to the array type `ty`, as a
+    /// prvalue ([dcl.init.string]; clang's `updateStringLiteralType`).
+    ///
+    /// # Panics
+    /// If `e` is not a `StringLiteral` inside zero or more `ParenExpr`s.
+    pub fn update_string_init_type(&mut self, e: ExprId, ty: QualType) {
+        let mut e = e;
+        loop {
+            let n = &mut self.nodes[e.index() as usize];
+            n.ty = ty;
+            n.bits &= !3;
+            match n.kind {
+                ExprKind::StringLiteral => return,
+                ExprKind::ParenExpr => e = ExprId::new(n.a),
+                k => panic!("update_string_init_type on {k:?}"),
+            }
+        }
+    }
+
+    /// Marks the `ImplicitCastExpr` `e` as part of an explicit cast
+    /// (`part_of_explicit_cast`): sema builds the implicit conversion
+    /// sequence of a C-style or functional cast first and marks it
+    /// afterwards ([expr.cast]/4). Monotone.
+    ///
+    /// # Panics
+    /// If `e` is not an `ImplicitCastExpr`.
+    pub fn mark_part_of_explicit_cast(&mut self, e: ExprId) {
+        let n = &mut self.nodes[e.index() as usize];
+        assert!(n.kind == ExprKind::ImplicitCastExpr, "not an ImplicitCastExpr");
+        n.bits |= ExprFlags::PART_OF_EXPLICIT_CAST.0;
+    }
+
     /// The callee of a `CallExpr`.
     pub fn callee(&self, e: ExprId) -> ExprId {
         ExprId::new(self.expect_kind(e, ExprKind::CallExpr).a)

@@ -1,0 +1,24 @@
+TranslationUnitDecl
+|-TypeAliasDecl referenced Int 'int'
+|-TypeAliasDecl referenced IntPtr 'Int *'
+|-TypeAliasDecl referenced Fn 'int (*)(Int)'
+|-CXXRecordDecl struct definition
+| `-FieldDecl referenced x 'int'
+|-TypedefDecl referenced Anon 'struct Anon':'Anon'
+`-FunctionDecl apply 'int (Fn, IntPtr, Anon)'
+  |-ParmVarDecl used f 'Fn':'int (*)(Int)'
+  |-ParmVarDecl used p 'IntPtr':'Int *'
+  |-ParmVarDecl used a 'Anon'
+  `-CompoundStmt
+    `-ReturnStmt
+      `-BinaryOperator 'int' '+'
+        |-CallExpr 'int'
+        | |-ImplicitCastExpr 'Fn':'int (*)(Int)' <LValueToRValue>
+        | | `-DeclRefExpr 'Fn':'int (*)(Int)' lvalue ParmVar 'f' 'Fn':'int (*)(Int)'
+        | `-ImplicitCastExpr 'Int':'int' <LValueToRValue>
+        |   `-UnaryOperator 'Int':'int' lvalue prefix '*' cannot overflow
+        |     `-ImplicitCastExpr 'IntPtr':'Int *' <LValueToRValue>
+        |       `-DeclRefExpr 'IntPtr':'Int *' lvalue ParmVar 'p' 'IntPtr':'Int *'
+        `-ImplicitCastExpr 'int' <LValueToRValue>
+          `-MemberExpr 'int' lvalue .x
+            `-DeclRefExpr 'Anon' lvalue ParmVar 'a' 'Anon'
