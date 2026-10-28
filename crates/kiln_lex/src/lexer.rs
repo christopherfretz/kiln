@@ -1117,7 +1117,8 @@ impl<'a> Lexer<'a> {
 
     /// A ud-suffix after a literal ending at `p` ([lex.ext]), following
     /// clang: a suffix not starting with `_` is part of the token only if
-    /// it is a standard string suffix (`s`, C++14; `sv`, C++17); otherwise
+    /// (C++14) it is a standard library suffix, see
+    /// [`Self::is_std_string_suffix`]; otherwise
     /// the literal ends and `ReservedUdSuffix` is recorded.
     fn lex_ud_suffix(&mut self, p: usize, is_string: bool) -> (usize, TokFlags) {
         if !self.std_at_least(Std::Cxx11) {
@@ -1156,7 +1157,8 @@ impl<'a> Lexer<'a> {
         (end, TokFlags::UD_SUFFIX)
     }
 
-    /// Whether the identifier at `p` is exactly `s` or (C++17) `sv`.
+    /// Whether the identifier at `p` is a standard library ud-suffix that
+    /// clang lexes after a string literal (measured against clang 19).
     fn is_std_string_suffix(&self, p: usize) -> bool {
         let mut buf = [0u8; 3];
         let mut n = 0;
@@ -1175,9 +1177,12 @@ impl<'a> Lexer<'a> {
                 _ => break,
             }
         }
+        // clang's lookahead accepts every standard library suffix here,
+        // string or numeric (`operator""h` declares a numeric operator),
+        // and `sv` from C++14; `d` and `y` from C++20.
         match &buf[..n] {
-            b"s" => true,
-            b"sv" => self.std_at_least(Std::Cxx17),
+            b"s" | b"sv" | b"h" | b"min" | b"ms" | b"us" | b"ns" | b"il" | b"i" | b"if" => true,
+            b"d" | b"y" => self.std_at_least(Std::Cxx20),
             _ => false,
         }
     }
