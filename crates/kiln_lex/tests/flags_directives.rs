@@ -2,7 +2,7 @@
 //! [cpp.include]/1 (header names, [lex.header]).
 mod common;
 use common::{cxx26, dump_of, lex_driven, lex_header_mode};
-use kiln_lex::{Interner, LexMode, Lexer, TokFlags, TokKind};
+use kiln_lex::{Interner, LexDiagKind as D, LexMode, Lexer, TokFlags, TokKind};
 use kiln_source::SourceManager;
 
 /// [cpp.pre]/1: `START_OF_LINE` and `LEADING_SPACE` are exact.
@@ -73,6 +73,26 @@ fn lex_header_name() {
     let l = lex_header_mode("\"a\\b.h\" x\n");
     assert_eq!(l.tokens[0].kind, TokKind::HeaderName);
     assert_eq!(l.spellings[0], "\"a\\b.h\"");
+}
+
+/// [lex.header]/2: `'`, `\`, `//` or `/*` in a header name, and `"` in a
+/// `<…>` one, are conditionally-supported: kept as ordinary characters,
+/// with an extension diagnostic each (spanning the character/sequence).
+#[test]
+fn lex_header_name_special_chars() {
+    let seqs = |src: &str| -> Vec<(D, u32, u32)> { lex_header_mode(src).diags };
+    assert_eq!(seqs("<a'b>\n"), [(D::HeaderNameSpecialChars { seq: "'" }, 2, 3)]);
+    assert_eq!(seqs("\"a\\b.h\"\n"), [(D::HeaderNameSpecialChars { seq: "\\" }, 2, 3)]);
+    assert_eq!(seqs("<a//b>\n"), [(D::HeaderNameSpecialChars { seq: "//" }, 2, 4)]);
+    assert_eq!(seqs("\"a/*b\"\n"), [(D::HeaderNameSpecialChars { seq: "/*" }, 2, 4)]);
+    assert_eq!(seqs("<a\"b>\n"), [(D::HeaderNameSpecialChars { seq: "\"" }, 2, 3)]);
+    assert_eq!(seqs("<a/b.h>\n"), []);
+    let l = lex_header_mode("<a//b>\n");
+    assert_eq!(l.spellings, ["<a//b>"]);
+    assert_eq!(l.tokens[0].kind, TokKind::HeaderName);
+    for (d, ..) in &l.diags {
+        assert_eq!(d.severity(), kiln_lex::LexSeverity::Extension);
+    }
 }
 
 /// [lex.header]: header-name mode is one-shot and falls back to normal

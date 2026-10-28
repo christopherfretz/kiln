@@ -2,12 +2,13 @@
 
 Standard: [lex.phases] phases 1–3, [lex.charset], [lex.pptoken], [lex.comment],
 [lex.header], [lex.ppnumber], [lex.name], [lex.universal.char],
-[lex.operators], [lex.digraph], [lex.ccon]/[lex.string]/[lex.ext] (token
-*extent* only — literal contents and values are WP-011 / kiln_sema /
-kiln_oven). Keyword classification ([lex.key]) is the parser's job.
+[lex.operators], [lex.digraph], [lex.ccon]/[lex.string]/[lex.ext],
+[lex.icon]/[lex.fcon] (classification and values, module
+`kiln_lex::literal`; types and exact floating values are kiln_sema's /
+kiln_oven's). Keyword classification ([lex.key]) is the parser's job.
 
-Status: implemented by WP-010 (crate `crates/kiln_lex`). Items marked
-**WP-011** are stubs owned by that work package.
+Status: implemented by WP-010 (pp-tokens) and WP-011 (literals, `\N{}`
+names, header-name diagnostics, full NFC check) in `crates/kiln_lex`.
 
 ## Scope
 Input: one buffer (a `FileId` of kiln_source, whole or a byte range).
@@ -58,6 +59,10 @@ pub struct LexOptions { std: Std, trigraphs: bool /*false*/, dollar_in_identifie
 pub enum LexMode { Normal, HeaderName }
 pub struct Interner;  // thread-safe (&self), Symbol(u32); shared by all lexers of a TU
 pub fn spelling(sm, &Token, &LexOptions) -> Cow<str>; pub fn clean(text, TokKind, trigraphs) -> String;
+pub fn source_offset(text, TokKind, trigraphs, spelling_offset: usize) -> usize; // spelling -> source byte
+pub enum NameMatch { Exact(char), Loose(char) }        // + .char()
+pub fn lookup_char_name(name: &str) -> Option<NameMatch>; // \N{} names; never allocates
+pub mod literal;                                         // see "Literals" below
 pub fn dump(sm, &LexOptions, &[Token]) -> String; pub fn dump_source(text, LexOptions) -> String;
 ```
 `Punct` covers every [lex.operators] token plus `^^`, `[:`, `:]` (C++26,
@@ -66,7 +71,8 @@ P2996). `Punct::as_str()` is the primary spelling, `name()` clang's kind name.
 ### Allocation
 `next()` does not allocate except: interning a new identifier spelling;
 identifiers containing UCNs, `$` or splices (built in a reused scratch
-buffer); recording a diagnostic. `spelling()` borrows unless
+buffer); the NFC check of an identifier with a non-ASCII character that is
+not NFC_QC=Yes (full normalization); recording a diagnostic. `spelling()` borrows unless
 `NEEDS_CLEANING`.
 
 ## Behavior
@@ -123,8 +129,17 @@ buffer); recording a diagnostic. `spelling()` borrows unless
   `XID_Continue`-only character at token start is a lone token
   (`CharNotAllowedInIdentifier`; UTF-8 → `Other`, UCN → `Unknown`). Inside
   an identifier, a disallowed character is kept with
-  `CharNotAllowedInIdentifier` (clang's recovery). NFC_QC=No characters
-  record `IdentifierNotNfc`.
+  `CharNotAllowedInIdentifier` (clang's recovery). An identifier that is not in NFC records
+  `IdentifierNotNfc`: NFC_QC=Yes-only text is accepted without work,
+  otherwise the identifier is normalized (UAX #15, tables generated from
+  UCD 15.1) and compared.
+- `\N{name}` ([lex.universal.char]/3): the name or any alias of
+  NameAliases.txt (all five types), Hangul syllable names, and the NR2
+  ranges (`CJK UNIFIED IDEOGRAPH-XXXX`, `TANGUT IDEOGRAPH-XXXX`, …),
+  matched exactly.
+  A name that matches only under UAX #44-LM2 loose matching (case,
+  spaces, `_`, medial `-`) is the named character with the error
+  `UcnNameLooseMatch` (clang's recovery); no match is `UcnUnknownName`.
 - UCNs outside literals ([lex.universal.char]): surrogates, values above
   U+10FFFF and non-identifier characters → `UcnInvalidCodePoint`; basic or
   control characters other than `$ @ \`` → `UcnBasicOrControl`; delimited/named
@@ -162,6 +177,9 @@ tokens with the usual flags.
   lexes normally. kiln_pp sets it after `include`, `embed`,
   `__has_include(`, `__has_embed(`, `import`. Module directives need nothing
   more from the lexer than exact `START_OF_LINE`.
+- [lex.header]/2: each `'`, `\`, `//`, `/*` in a header name (and `"` in
+  `<…>`) is conditionally-supported and accepted with
+  `HeaderNameSpecialChars { seq }` (Extension) on that sequence.
 
 ### Spelling
 `spelling` = source text with splices removed and (if enabled) trigraphs
@@ -191,8 +209,13 @@ kiln-only `raw_string_literal` (`wide_raw_string_literal`, …), `other`,
   token in `-E` output).
 - Stray non-ASCII → `Other(c)` + `InvalidChar` (clang: `unknown`).
 - ` `-style UCN for whitespace → `Unknown` (clang treats as whitespace).
-- In a `"…"` header name `\` is literal (clang treats it as an escape).
-- NFC: only NFC_QC=No is checked (Maybe needs full normalization; TODO).
+- In a `"…"` header name `\` is literal (clang treats it as an escape);
+  kiln diagnoses it with `HeaderNameSpecialChars` (clang has no such
+  diagnostic; it is Extension, off by default).
+- `\N{}` accepts all five alias types (clang 19: correction, control,
+  alternate only); a loose-matched name of a basic or control character
+  records only `UcnBasicOrControl` (clang reports both).
+- Literal-module deviations are listed under "Literals".
 - No `FormFeedInDirective`/`VerticalTabInDirective`; no clang mathematical
   notation identifier extension; no C mode.
 
@@ -207,26 +230,130 @@ kiln-only `raw_string_literal` (`wide_raw_string_literal`, …), `other`,
 - Goldens: in-crate (`src/golden_tests.rs`), `dump_source` output
   cross-checked against `clang-19 -cc1 -std=c++26 -dump-tokens` modulo the
   deviations above.
+- Literals: `tests/literals_escapes.rs`, `literals_values.rs`,
+  `literals_numbers.rs`, each test tagged with its section; values
+  checked against clang-19 (`static_assert`/`#if`). In-crate goldens
+  `golden_lex_literals_tokens` / `golden_lex_literals_values`.
+- Unicode: every table name and alias round-trips (exact and loose), all
+  11,172 Hangul syllables, NR2 ranges. The full UAX #15 conformance file
+  runs with `KILN_UCD_NORMALIZATION_TEST=<path to NormalizationTest.txt>
+  cargo test -p kiln_lex -- --ignored nfc`.
 - Fuzz: `cargo test -p kiln_lex -- fuzz` — bounded random input (raw bytes
   and token-piece soup) under several option sets: no panic, progress,
-  ordered spans, `spelling == clean(raw) == clean(spelling)`. Longer runs:
-  `KILN_LEX_FUZZ_ITERS`, `KILN_LEX_FUZZ_SEED`, `KILN_LEX_FUZZ_LEN`.
+  ordered spans, `spelling == clean(raw) == clean(spelling)`; every
+  literal and pp-number token is also evaluated (diag ranges ordered and
+  inside the spelling, `has_error` consistent, and an error-free unsuffixed
+  string re-encoded with `encode_string` decodes to the same units).
+  Longer runs: `KILN_LEX_FUZZ_ITERS`, `KILN_LEX_FUZZ_SEED`,
+  `KILN_LEX_FUZZ_LEN`.
 - Later: `kiln -E -P` vs `clang -E -P` differential (tests/differential/pp/).
 
-## WP-011 (literals) — what is stubbed and where (`crates/kiln_lex/src`)
-- `lexer.rs::lex_quoted`: escapes are only *skipped* for termination; no
-  validation of simple/octal/hex/`\o{}`/`\x{}`/`\u`/`\N` escapes, no
-  multichar or encoding-range checks, no NUL-in-literal policy beyond a
-  diagnostic.
-- `lexer.rs::lex_raw_string`: body not inspected (fine per standard);
-  delimiter rules implemented.
-- `lexer.rs::scan_header_name`: no diagnostics for `'`, `\`, `//`, `/*` in
-  header names (conditionally-supported, [lex.header]/2).
-- `unicode.rs::lookup_char_name`: `\N{}` resolves only `CJK UNIFIED
-  IDEOGRAPH-XXXX` / `CJK COMPATIBILITY IDEOGRAPH-XXXX`; needs the full UCD
-  name table (+ aliases, Hangul syllables, loose matching rules of
-  [lex.universal.char]).
-- Literal values / encodings: not computed here (kiln_sema/kiln_oven),
-  but the escape decoder WP-011 writes should live in `kiln_lex` so both can
-  share it.
+## Literals (`kiln_lex::literal`, [lex.ccon] [lex.string] [lex.icon] [lex.fcon] [lex.ext])
+The lexer only finds where a literal ends (`\` skips the next character).
+Its contents are evaluated on demand from the token's *spelling* by the
+`literal` module, as clang's `LiteralSupport` does: a literal that is never
+evaluated (skipped group, unused macro) is never diagnosed. kiln_pp
+evaluates `#if` numbers and characters and `#line` operands; sema
+evaluates the rest. Nothing panics on any string.
+
+```rust
+pub struct EncodingParams { pub char_signed: bool, pub wchar_bits: u8 /*16|32*/, pub wchar_signed: bool }
+//   consts LINUX_X86_64 (Default), LINUX_AARCH64, WINDOWS
+pub struct LiteralOptions { pub std: Std, pub params: EncodingParams } // new(); Default = C++26 + default params
+pub struct LitDiag { pub kind: LexDiagKind, pub range: Range<u32> /* into the spelling */ }
+impl LitDiag { pub fn locate(&self, tok: &Token, text: &str, opts: &LexOptions) -> LexDiag; }
+pub enum CodeUnits { U8(Vec<u8>), U16(Vec<u16>), U32(Vec<u32>) } // len, is_empty, get, unit_bits, iter
+pub struct StringLiteral<'s> { encoding, raw, units: CodeUnits, ud_suffix: Option<&'s str>, diags, has_error }
+pub enum CharType { Char, Int, WChar, Char8, Char16, Char32 }
+pub struct CharLiteral<'s> { encoding, ty, chars: u32, value: i64, pp_value: i64, pp_unsigned: bool,
+                             ud_suffix, diags, has_error }
+pub fn decode_string(spelling: &str, LiteralOptions) -> StringLiteral;           // normal + raw
+pub fn decode_unevaluated_string(spelling: &str, LiteralOptions) -> StringLiteral; // [lex.string.uneval]
+pub fn decode_char(spelling: &str, LiteralOptions) -> CharLiteral;
+pub fn encode_string(&CodeUnits, Encoding) -> String; // a literal spelling with that value (round-trip)
+pub fn classify_number(spelling: &str, Std) -> Number;
+pub struct Number<'s> { class: NumberClass<'s>, diags, has_error }
+pub enum NumberClass<'s> { Integer(IntegerLiteral<'s>), Floating(FloatLiteral<'s>), Invalid }
+pub struct IntegerLiteral<'s> { radix: Radix, digits: Cow<'s, str>, suffix: IntSuffix, ud_suffix }
+//   value() -> Option<u128>  (the #if value; None = IntegerTooLarge)
+pub struct FloatLiteral<'s> { radix, int_digits, frac_digits, exponent: i64, suffix: FloatSuffix, ud_suffix }
+//   parse_f64() / parse_f32(): correctly rounded (ties to even), inf on overflow
+pub enum Radix { Binary, Octal, Decimal, Hex }  pub struct IntSuffix { unsigned, size: IntSize }
+pub enum IntSize { None, Long, LongLong, Size }
+pub enum FloatSuffix { None, F, L, F16, F32, F64, F128, BF16 }
+```
+All of this is additive to the WP-010 interface; the new `LexDiagKind`
+variants are additions to a `#[non_exhaustive]` enum.
+
+### Behavior
+- Escapes ([lex.ccon]/3, [lex.string]): simple escapes; octal (1–3 digits)
+  and `\o{…}`; hex `\x…` and `\x{…}` (delimited forms: C++23, earlier
+  `DelimitedEscapeExtension`); `\u`/`\U`/`\u{}`/`\N{}` with
+  [lex.universal.char] rules (inside literals any scalar value is allowed
+  from C++11; before, basic and control characters are
+  `UcnBasicOrControl`); `\e \E \( \{ \[ \%` (GNU, `NonstandardEscape`); anything else `UnknownEscape` (the character
+  itself is the value). A numeric escape's value is truncated to the code
+  unit width (`HexEscapeTooLarge`/`OctalEscapeTooLarge`).
+- Encoding: ordinary and `u8` → UTF-8; `u` → UTF-16; `U` → UTF-32; `L`
+  → UTF-16/32 per `wchar_bits`. Numeric escapes produce one code unit
+  verbatim.
+- Characters: one c-char that is one code unit → its value as `ty`. An
+  ordinary literal with several c-chars is `int`, packs 8 bits per c-char
+  (last in the low byte, low 32 bits kept; `MultiCharLiteral`,
+  `FourCharLiteral` for exactly four, `CharConstantTooLong` beyond four);
+  other encodings: `MultiCharNotAllowed`. A c-char needing several code
+  units: `CharTooLarge`. `pp_value`/`pp_unsigned` give the `#if` value
+  ([cpp.cond]/12) exactly as clang computes it, including x86's
+  sign-extended `L` value.
+- clang's per-literal `HadError` gating is mirrored exactly (some
+  follow-up diagnostics are suppressed after certain errors, e.g. a second
+  `\x100`; an empty `\x{}` in a character literal leaves its `}` as a
+  c-char), so diagnostic counts match clang on the cross-check corpus.
+- ud-suffix ([lex.ext]): split off and returned as spelled; numbers
+  accept `_x` (not `__x`) and from C++14 the standard-library suffixes
+  (`h min s ms us ns il i if`, C++20 `d y`) as clang's `isValidUDSuffix`.
+- pp-numbers: binary (C++14; earlier `BinaryLiteralExtension`), octal,
+  decimal, hex; hex floats (C++17; `HexFloatExtension`); digit separators
+  (C++14; `DigitSeparatorPosition`); integer suffixes `u`, `l`, `ll`, `z`
+  (C++23; `SizeSuffixExtension`) in any legal order and case; float
+  suffixes `f l f16 f32 f64 f128 bf16`. Diagnostics follow clang's
+  `NumericLiteralParser` (`InvalidDigit`, `InvalidSuffix`,
+  `ExponentNoDigits`, `HexFloatNoExponent`, …).
+- Unevaluated strings: an encoding prefix, a ud-suffix, or a numeric /
+  unknown escape is an error (`UnevaluatedString*`).
+- Raw strings: body verbatim; CR LF in the body becomes LF.
+
+### Tables
+`scripts/gen-unicode-tables.py [UCD_VERSION]` (default 15.1.0, SHA-256 of
+each downloaded UCD file pinned) generates `unicode_tables.rs` (XID,
+whitespace, NFC_QC, canonical decomposition/composition, CCC; ~138 KB of
+source) and `unicode_names.rs` (33,421 names and aliases, front-coded in
+blocks of 32 and sorted by loose-match key, plus 17 NR2 ranges and the
+algorithmic Hangul syllables; ~468 KB of source). Name lookup is a binary
+search over blocks with a fixed 128-byte key buffer: no allocation.
+
+### Deviations from clang
+- `f32 f64 f128 bf16` accepted from C++23 (clang 19 rejects them); `f16`
+  in every mode (clang: targets with `_Float16`); GNU `q`/`w`, MS `i64`,
+  fixed-point and `_BitInt` (`wb`) suffixes are not supported (invalid
+  suffix).
+- `i`/`if`/`il` on a number are a ud-suffix (the standard library's
+  `operator""i`), not the GNU imaginary suffix.
+- `FourCharLiteral` is Extension (clang's `-Wfour-char-constants` is off by
+  default), as is `HeaderNameSpecialChars`.
+- `StringLiteral::units` excludes the terminating null; ud-suffixes are
+  not UCN-expanded or NFC-checked.
+
+### What remains (not WP-011)
+- C mode (`'a'` is `int`, no `u8` characters, …): no C mode anywhere yet.
+- Did-you-mean notes for unknown/loose `\N{}` names.
+- GNU `q`/`i`/`j` suffixes, MS `i64`, `_BitInt` `wb`/`uwb`.
+- Types of literals, whether an integer fits its suffix's type, and exact
+  floating values in every format: kiln_sema / kiln_oven (they get the
+  digits and `parse_f64`).
+- UCN expansion and NFC of ud-suffixes (clang does both).
+- Open question from WP-010: an invalid UCN inside an identifier
+  (`a\N{ABC}`) stays in the identifier; clang splits it into an `unknown`
+  token (clang does keep an out-of-range `\U00110000`). Error territory
+  either way.
 - `#embed` resource lexing is kiln_pp's; HeaderName mode already serves it.

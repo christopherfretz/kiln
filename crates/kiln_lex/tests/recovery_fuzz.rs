@@ -2,7 +2,11 @@
 //! progress, and its spellings are stable ([lex.phases], [lex.pptoken]).
 mod common;
 use common::{cxx26, lex, std};
-use kiln_lex::{Interner, LexOptions, Lexer, Std, TokKind, clean};
+use kiln_lex::literal::{
+    LitDiag, LiteralOptions, classify_number, decode_char, decode_string,
+    decode_unevaluated_string, encode_string,
+};
+use kiln_lex::{Interner, LexOptions, LexSeverity, Lexer, Std, TokKind, clean};
 use kiln_source::SourceManager;
 
 /// [lex.pptoken]/2: garbage still produces tokens and diagnostics.
@@ -93,7 +97,60 @@ const PIECES: &[&str] = &[
     "@",
     "d(",
     ")d\"",
+    "\\x",
+    "\\x{",
+    "\\o{",
+    "\\377",
+    "\\n",
+    "\\N{LATIN SMALL LETTER A}",
+    "\\N{latin small letter a}",
+    "f",
+    "ull",
+    "'0",
+    "0x",
+    "0b",
+    "_s",
 ];
+
+/// The literal module on one spelling: no panic, diagnostic ranges inside
+/// the spelling, `has_error` consistent, and (for an error-free string)
+/// `encode_string` round-trips the value.
+fn check_literal(sp: &str, kind: Option<TokKind>, std: Std) {
+    let opts = LiteralOptions { std, ..LiteralOptions::default() };
+    let ok = |diags: &[LitDiag], has_error: bool| {
+        for d in diags {
+            assert!(d.range.start <= d.range.end, "range on {sp:?}: {d:?}");
+            assert!(d.range.end as usize <= sp.len(), "range past end on {sp:?}: {d:?}");
+        }
+        let any = diags.iter().any(|d| d.kind.severity() == LexSeverity::Error);
+        assert_eq!(any, has_error, "has_error on {sp:?}: {diags:?}");
+    };
+    let string = matches!(kind, None | Some(TokKind::StringLit(_) | TokKind::RawStringLit(_)));
+    if string {
+        let s = decode_string(sp, opts);
+        ok(&s.diags, s.has_error);
+        if !s.has_error && s.ud_suffix.is_none() && !s.raw {
+            let enc = encode_string(&s.units, s.encoding);
+            assert_eq!(decode_string(&enc, opts).units, s.units, "round trip of {sp:?}");
+        }
+        let u = decode_unevaluated_string(sp, opts);
+        ok(&u.diags, u.has_error);
+    }
+    if matches!(kind, None | Some(TokKind::CharLit(_))) {
+        let c = decode_char(sp, opts);
+        ok(&c.diags, c.has_error);
+    }
+    if matches!(kind, None | Some(TokKind::PpNumber)) {
+        let n = classify_number(sp, std);
+        ok(&n.diags, n.has_error);
+        if let kiln_lex::literal::NumberClass::Floating(f) = &n.class {
+            let _ = (f.parse_f64(), f.parse_f32());
+        }
+        if let kiln_lex::literal::NumberClass::Integer(i) = &n.class {
+            let _ = i.value();
+        }
+    }
+}
 
 fn check(text: &str, opts: LexOptions) {
     let sm = SourceManager::new();
@@ -123,6 +180,15 @@ fn check(text: &str, opts: LexOptions) {
         assert_eq!(clean(&sp, t.kind, false), sp, "spelling not idempotent on {text:?}");
         let raw = &text[lo as usize..hi as usize];
         assert_eq!(clean(raw, t.kind, opts.trigraphs), sp);
+        if matches!(
+            t.kind,
+            TokKind::StringLit(_)
+                | TokKind::RawStringLit(_)
+                | TokKind::CharLit(_)
+                | TokKind::PpNumber
+        ) {
+            check_literal(&sp, Some(t.kind), opts.std);
+        }
     }
     // Eod tokens can interleave, but never more than one per byte.
     panic!("lexer did not terminate on {text:?}");
@@ -156,6 +222,32 @@ fn lex_fuzz_random_bytes() {
             (0..len).map(|_| PIECES[rng.below(PIECES.len())]).collect()
         };
         check(&text, opts[iter % opts.len()]);
+    }
+}
+
+/// [lex.ccon], [lex.string], [lex.icon], [lex.fcon]: the literal decoders
+/// take arbitrary text (not only lexer-made spellings) without panicking.
+#[test]
+fn lex_fuzz_literal_decoders() {
+    const HEADS: &[&str] =
+        &["\"", "'", "u8\"", "L'", "U\"", "u'", "R\"", "u8R\"x(", "0x", "1", ".", ""];
+    let mut rng = Rng(0xD1B5_4A32_D192_ED03);
+    let iters =
+        std::env::var("KILN_LEX_FUZZ_ITERS").ok().and_then(|v| v.parse().ok()).unwrap_or(3000);
+    for iter in 0..iters {
+        let len = rng.below(16);
+        let mut text: String = HEADS[rng.below(HEADS.len())].to_owned();
+        if iter % 4 == 0 {
+            let bytes: Vec<u8> = (0..len).map(|_| rng.next() as u8).collect();
+            text.push_str(&String::from_utf8_lossy(&bytes));
+        } else {
+            text.extend((0..len).map(|_| PIECES[rng.below(PIECES.len())]));
+        }
+        if rng.below(2) == 0 {
+            text.push_str(["\"", "'", ")x\"", "\"_s", "'_x"][rng.below(5)]);
+        }
+        let std = [Std::Cxx98, Std::Cxx11, Std::Cxx17, Std::Cxx26][iter % 4];
+        check_literal(&text, None, std);
     }
 }
 
