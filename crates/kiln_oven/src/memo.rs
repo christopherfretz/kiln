@@ -73,6 +73,7 @@ impl Memo {
         self.cap > 0
     }
 
+    #[cfg(test)]
     pub fn len(&self) -> usize {
         self.map.len()
     }

@@ -27,6 +27,8 @@
     clippy::wildcard_imports,
     clippy::enum_glob_use,
     clippy::float_cmp,
+    clippy::single_match_else,
+    clippy::unused_self,
     reason = "an interpreter: wide matches over opcodes and kinds, bit-level arithmetic"
 )]
 
@@ -36,6 +38,7 @@ mod failure;
 mod kbc;
 mod mem;
 mod memo;
+mod notes;
 pub mod report;
 mod softfloat;
 mod stats;
@@ -52,8 +55,8 @@ use kiln_diag::Diag;
 use kiln_source::Loc;
 use kiln_source::fx::FxHashMap;
 
-pub use failure::{EvalFailure, Note};
-pub use stats::{EvalRecord, EvalStats};
+pub use failure::{EvalFailure, FailKind, Note};
+pub use stats::{EvalRecord, EvalStats, EvalTotals};
 
 use compile::{Func, Global, Site, TrapInfo};
 use mem::Memory;
@@ -151,7 +154,7 @@ pub trait SemaBridge {
     fn ast(&self) -> &Ast;
     /// The body of function `f`'s definition, instantiating it if needed.
     fn ensure_body(&mut self, f: DeclId) -> Option<StmtId>;
-    /// The layout of a complete record (via kiln_abi).
+    /// The layout of a complete record (via `kiln_abi`).
     fn ensure_layout(&mut self, record: DeclId) -> &RecordLayout;
     /// The vtable of a dynamic class (M3).
     fn vtable(&mut self, record: DeclId) -> &VTableLayout;
@@ -168,7 +171,8 @@ pub struct Oven {
     pub(crate) types: Types,
     pub(crate) code: Vec<u32>,
     pub(crate) sites: Vec<Site>,
-    pub(crate) step_groups: FxHashMap<u32, Box<[(Loc, u32)]>>,
+    pub(crate) step_locs: Vec<Loc>,
+    pub(crate) origins: Vec<mem::Origin>,
     pub(crate) traps: Vec<TrapInfo>,
     pub(crate) funcs: Vec<Func>,
     pub(crate) func_map: FxHashMap<DeclId, u32>,
@@ -178,11 +182,12 @@ pub struct Oven {
     pub(crate) strings: FxHashMap<StringLitId, u64>,
     pub(crate) thawed: FxHashMap<ConstValueId, u64>,
     pub(crate) mem: Memory,
-    pub(crate) regs: Vec<u64>,
+    pub(crate) regs: Vec<u128>,
     pub(crate) stack: Vec<Frame>,
     pub(crate) memo: Memo,
     pub(crate) stats: EvalStats,
     pub(crate) run: vm::RunState,
+    pub(crate) scratch: value::Scratch,
 }
 
 impl Oven {
@@ -193,7 +198,8 @@ impl Oven {
             types: Types::default(),
             code: Vec::new(),
             sites: Vec::new(),
-            step_groups: FxHashMap::default(),
+            step_locs: Vec::new(),
+            origins: Vec::new(),
             traps: Vec::new(),
             funcs: Vec::new(),
             func_map: FxHashMap::default(),
@@ -208,7 +214,15 @@ impl Oven {
             memo: Memo::new(budget.memo_entries),
             stats: EvalStats::default(),
             run: vm::RunState::default(),
+            scratch: value::Scratch::default(),
         }
+    }
+
+    /// Interns an allocation origin for `Alloc` instructions.
+    pub(crate) fn push_origin(&mut self, o: mem::Origin) -> u32 {
+        let i = self.origins.len() as u32;
+        self.origins.push(o);
+        i
     }
 
     /// The limits.

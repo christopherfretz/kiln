@@ -4,10 +4,10 @@
 //! whole translation unit; the VM never looks at the AST's type graph.
 
 use kiln_ast::consts::FloatKind;
+use kiln_ast::decl::DeclKind;
 use kiln_ast::expr::ExprKind;
 use kiln_ast::types::{BuiltinType, FloatFormat, TypeView};
 use kiln_ast::{Ast, DeclId, ExprId, QualType};
-use kiln_ast::decl::DeclKind;
 use kiln_source::fx::FxHashMap;
 
 use crate::SemaBridge;
@@ -21,13 +21,24 @@ pub(crate) struct OTy(pub u32);
 pub(crate) enum TyKind {
     Void,
     Bool,
-    Int { width: u8, signed: bool },
+    Int {
+        width: u8,
+        signed: bool,
+    },
     Float(FloatKind),
     /// Object or function pointer; the pointee.
     Ptr(OTy),
     NullPtr,
-    Array { elem: OTy, n: u64 },
-    Record { decl: DeclId, union: bool, first: u32, count: u32 },
+    Array {
+        elem: OTy,
+        n: u64,
+    },
+    Record {
+        decl: DeclId,
+        union: bool,
+        first: u32,
+        count: u32,
+    },
     Func,
     /// Incomplete or not representable in M2 (references, member
     /// pointers, vectors, ...): it has no storage the VM can touch.
@@ -70,23 +81,13 @@ pub(crate) enum Scal {
     Ptr,
 }
 
-impl Scal {
-    /// Registers the value occupies.
-    pub fn regs(self) -> u32 {
-        match self {
-            Scal::Int { width, .. } if width > 64 => 2,
-            Scal::Float(FloatKind::X87Extended | FloatKind::Quad) => 2,
-            _ => 1,
-        }
-    }
-}
-
 #[derive(Debug, Default)]
 pub(crate) struct Types {
     pub infos: Vec<TyInfo>,
     pub fields: Vec<FieldInfo>,
     pub union_pos: Vec<(u64, OTy)>,
     map: FxHashMap<QualType, OTy>,
+    arrays: FxHashMap<(OTy, u64), OTy>,
 }
 
 /// Evaluates an integral constant already checked by sema (bit-field
@@ -185,10 +186,6 @@ impl Types {
         matches!(self.kind(t), TyKind::Array { .. } | TyKind::Record { .. })
     }
 
-    pub fn is_fn_ptr(&self, t: OTy) -> bool {
-        matches!(self.kind(t), TyKind::Ptr(p) if self.kind(p) == TyKind::Func)
-    }
-
     /// Interns `q` (any qualifiers and sugar are dropped).
     pub fn intern(&mut self, bridge: &mut dyn SemaBridge, q: QualType) -> OTy {
         let c = bridge.ast().types.canonical(q).without_quals();
@@ -197,6 +194,26 @@ impl Types {
         }
         let t = self.build(bridge, c);
         self.map.insert(c, t);
+        t
+    }
+
+    /// A synthetic array of `n` elements of scalar type `elem` (string
+    /// literal objects thawed from the store; its `q` is the element's).
+    pub fn array_of(&mut self, elem: OTy, n: u64) -> OTy {
+        if let Some(&t) = self.arrays.get(&(elem, n)) {
+            return t;
+        }
+        let e = *self.info(elem);
+        let t = self.push(TyInfo {
+            q: e.q,
+            size: e.size.saturating_mul(n),
+            align: e.align,
+            kind: TyKind::Array { elem, n },
+            has_union: false,
+            has_ptr: false,
+            upos: (0, 0),
+        });
+        self.arrays.insert((elem, n), t);
         t
     }
 
@@ -223,9 +240,7 @@ impl Types {
                     BuiltinType::Void => TyKind::Void,
                     BuiltinType::Bool => TyKind::Bool,
                     BuiltinType::NullPtr => TyKind::NullPtr,
-                    BuiltinType::Char => {
-                        TyKind::Int { width: 8, signed: target.char_signed }
-                    }
+                    BuiltinType::Char => TyKind::Int { width: 8, signed: target.char_signed },
                     BuiltinType::WChar => {
                         TyKind::Int { width: (size * 8) as u8, signed: target.wchar_signed }
                     }
@@ -259,7 +274,8 @@ impl Types {
             }
             TypeView::Enum(d) => {
                 let def = ast.definition(d).unwrap_or(d);
-                let int = ast.decls.enumeration(def).and_then(|e| e.int_type).unwrap_or(QualType::INT);
+                let int =
+                    ast.decls.enumeration(def).and_then(|e| e.int_type).unwrap_or(QualType::INT);
                 let it = self.intern(bridge, int);
                 let info = *self.info(it);
                 self.simple(c, info.size, info.align, info.kind)
@@ -283,7 +299,7 @@ impl Types {
                     align: e.align,
                     kind: TyKind::Array { elem, n: a.size },
                     has_union: e.has_union,
-                    has_ptr: e.has_ptr,
+                    has_ptr: e.has_ptr || matches!(e.kind, TyKind::Ptr(_) | TyKind::NullPtr),
                     upos: (start, end),
                 })
             }
@@ -328,7 +344,7 @@ impl Types {
             let bits = offs.get(i).copied().unwrap_or(0);
             let fi = *self.info(fty);
             has_union |= fi.has_union;
-            has_ptr |= fi.has_ptr || matches!(fi.kind, TyKind::Ptr(_));
+            has_ptr |= fi.has_ptr || matches!(fi.kind, TyKind::Ptr(_) | TyKind::NullPtr);
             if fi.has_union {
                 for k in fi.upos.0..fi.upos.1 {
                     let (o, u) = self.union_pos[k as usize];
@@ -343,7 +359,13 @@ impl Types {
                     bit: (bits % 8) as u32,
                     width: Some(w),
                 }),
-                None => fields.push(FieldInfo { decl: m, ty: fty, offset: bits / 8, bit: 0, width: None }),
+                None => fields.push(FieldInfo {
+                    decl: m,
+                    ty: fty,
+                    offset: bits / 8,
+                    bit: 0,
+                    width: None,
+                }),
             }
         }
         let first = self.fields.len() as u32;

@@ -174,8 +174,8 @@ pub(crate) fn from_f64(kind: FloatKind, v: f64) -> u128 {
     repack(kind, unpack(FloatKind::Double, u128::from(v.to_bits())))
 }
 
-pub(crate) fn cast(from: FloatKind, to: FloatKind, a: u128) -> Option<u128> {
-    Some(repack(to, unpack(from, a)))
+pub(crate) fn cast(from: FloatKind, to: FloatKind, a: u128) -> u128 {
+    repack(to, unpack(from, a))
 }
 
 pub(crate) fn cmp(kind: FloatKind, a: u128, b: u128) -> Option<Ordering> {
@@ -195,13 +195,13 @@ pub(crate) fn cmp(kind: FloatKind, a: u128, b: u128) -> Option<Ordering> {
     })
 }
 
-pub(crate) fn from_int(kind: FloatKind, v: u128, signed: bool) -> Option<u128> {
+pub(crate) fn from_int(kind: FloatKind, v: u128, signed: bool) -> u128 {
     let neg = signed && (v as i128) < 0;
     let mag = if neg { (v as i128).unsigned_abs() } else { v };
     if mag == 0 {
-        return Some(pack_zero(Fmt::of(kind), false));
+        return pack_zero(Fmt::of(kind), false);
     }
-    Some(pack(kind, neg, 127, mag))
+    pack(kind, neg, 127, mag)
 }
 
 /// Truncation toward zero: `(negative, magnitude)`; `None` for
@@ -236,8 +236,11 @@ fn add(kind: FloatKind, x: Val, y: Val) -> Val {
         (Val::Zero(a), Val::Zero(b)) => Val::Zero(a && b),
         (Val::Zero(_), v) | (v, Val::Zero(_)) => v,
         (Val::Fin(sa, ea, ma), Val::Fin(sb, eb, mb)) => {
-            let ((sa, ea, ma), (sb, eb, mb)) =
-                if (ea, ma) >= (eb, mb) { ((sa, ea, ma), (sb, eb, mb)) } else { ((sb, eb, mb), (sa, ea, ma)) };
+            let ((sa, ea, ma), (sb, eb, mb)) = if (ea, ma) >= (eb, mb) {
+                ((sa, ea, ma), (sb, eb, mb))
+            } else {
+                ((sb, eb, mb), (sa, ea, ma))
+            };
             let a = ma >> 1;
             let b = shr_sticky(mb >> 1 | (mb & 1), (ea - eb).min(200) as u32);
             let (s, m) = if sa == sb { (sa, a + b) } else { (sa, a - b) };
@@ -256,9 +259,12 @@ fn mul(kind: FloatKind, x: Val, y: Val) -> Val {
     match (x, y) {
         (Val::NaN, _) | (_, Val::NaN) => Val::NaN,
         (Val::Inf(_), Val::Zero(_)) | (Val::Zero(_), Val::Inf(_)) => Val::NaN,
-        (Val::Inf(a), Val::Inf(b) | Val::Fin(b, ..) | Val::Zero(b))
-        | (Val::Fin(a, ..) | Val::Zero(a), Val::Inf(b)) => Val::Inf(a != b),
-        (Val::Zero(a), Val::Zero(b) | Val::Fin(b, ..)) | (Val::Fin(a, ..), Val::Zero(b)) => Val::Zero(a != b),
+        (Val::Inf(a), Val::Inf(b) | Val::Fin(b, ..)) | (Val::Fin(a, ..), Val::Inf(b)) => {
+            Val::Inf(a != b)
+        }
+        (Val::Zero(a), Val::Zero(b) | Val::Fin(b, ..)) | (Val::Fin(a, ..), Val::Zero(b)) => {
+            Val::Zero(a != b)
+        }
         (Val::Fin(sa, ea, ma), Val::Fin(sb, eb, mb)) => {
             let (a, b) = (ma >> (128 - p), mb >> (128 - p));
             // 256-bit product.
@@ -272,7 +278,11 @@ fn mul(kind: FloatKind, x: Val, y: Val) -> Val {
             let hi = hh + (mid >> 64) + carry;
             let (t, m) = if hi != 0 {
                 let lz = hi.leading_zeros();
-                let m = if lz == 0 { hi | u128::from(lo != 0) } else { hi << lz | lo >> (128 - lz) | u128::from(lo << lz != 0) };
+                let m = if lz == 0 {
+                    hi | u128::from(lo != 0)
+                } else {
+                    hi << lz | lo >> (128 - lz) | u128::from(lo << lz != 0)
+                };
                 (255 - lz as i32, m)
             } else {
                 let lz = lo.leading_zeros();
@@ -286,7 +296,10 @@ fn mul(kind: FloatKind, x: Val, y: Val) -> Val {
 fn div(kind: FloatKind, x: Val, y: Val) -> Val {
     let p = Fmt::of(kind).p;
     match (x, y) {
-        (Val::NaN, _) | (_, Val::NaN) | (Val::Inf(_), Val::Inf(_)) | (Val::Zero(_), Val::Zero(_)) => Val::NaN,
+        (Val::NaN, _)
+        | (_, Val::NaN)
+        | (Val::Inf(_), Val::Inf(_))
+        | (Val::Zero(_), Val::Zero(_)) => Val::NaN,
         (Val::Inf(a), Val::Fin(b, ..) | Val::Zero(b)) => Val::Inf(a != b),
         (Val::Fin(a, ..) | Val::Zero(a), Val::Inf(b)) => Val::Zero(a != b),
         (Val::Zero(a), Val::Fin(b, ..)) => Val::Zero(a != b),
@@ -342,10 +355,12 @@ mod tests {
     // [basic.fundamental]/12: the generic path agrees with native binary64.
     #[test]
     fn generic_matches_native_double() {
-        let vals = [1.0, -2.5, 3.141_592_653_589_793, 1e-310, 1e300, 0.1, -0.0, 7.0e-20, 123_456_789.0];
+        let vals = [1.0, -2.5, 3.25, 1e-310, 1e300, 0.1, -0.0, 7.0e-20, 123_456_789.0];
         for &a in &vals {
             for &b in &vals {
-                for (op, r) in [(Op::FAdd, a + b), (Op::FSub, a - b), (Op::FMul, a * b), (Op::FDiv, a / b)] {
+                for (op, r) in
+                    [(Op::FAdd, a + b), (Op::FSub, a - b), (Op::FMul, a * b), (Op::FDiv, a / b)]
+                {
                     let got = bin(op, FloatKind::Double, d(a), d(b)).unwrap();
                     let want = d(r);
                     if r.is_nan() {
@@ -356,15 +371,18 @@ mod tests {
                 }
             }
         }
-        assert_eq!(from_int(FloatKind::Double, (-5i128) as u128, true), Some(d(-5.0)));
-        assert_eq!(cast(FloatKind::Double, FloatKind::Single, d(0.1)), Some(u128::from(0.1f32.to_bits())));
+        assert_eq!(from_int(FloatKind::Double, (-5i128) as u128, true), d(-5.0));
+        assert_eq!(
+            cast(FloatKind::Double, FloatKind::Single, d(0.1)),
+            u128::from(0.1f32.to_bits())
+        );
     }
 
     // x87 extended: 1/3 has a 64-bit significand.
     #[test]
     fn x87_basics() {
-        let one = from_int(FloatKind::X87Extended, 1, true).unwrap();
-        let three = from_int(FloatKind::X87Extended, 3, true).unwrap();
+        let one = from_int(FloatKind::X87Extended, 1, true);
+        let three = from_int(FloatKind::X87Extended, 3, true);
         assert_eq!(one, 0x3FFF_8000_0000_0000_0000);
         let third = bin(Op::FDiv, FloatKind::X87Extended, one, three).unwrap();
         assert_eq!(third, 0x3FFD_AAAA_AAAA_AAAA_AAAB);

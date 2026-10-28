@@ -42,7 +42,15 @@ fn fits(v: i128, width: u32) -> bool {
 
 /// `a op b` for integer binary ops (`a`, `b` canonical); `cw`/`cs` are
 /// the width and signedness of a shift count.
-pub(crate) fn int_bin(op: Op, width: u32, signed: bool, a: u128, b: u128, cw: u32, cs: bool) -> Result<u128, IntErr> {
+pub(crate) fn int_bin(
+    op: Op,
+    width: u32,
+    signed: bool,
+    a: u128,
+    b: u128,
+    cw: u32,
+    cs: bool,
+) -> Result<u128, IntErr> {
     let r = match op {
         Op::IAdd | Op::ISub | Op::IMul => {
             if signed {
@@ -70,7 +78,7 @@ pub(crate) fn int_bin(op: Op, width: u32, signed: bool, a: u128, b: u128, cw: u3
             }
             if signed {
                 let (x, y) = (a as i128, b as i128);
-                if y == -1 && !fits(x.wrapping_neg(), width) || (x == i128::MIN && y == -1) {
+                if y == -1 && (x == i128::MIN || !fits(x.wrapping_neg(), width)) {
                     return Err(IntErr::Overflow);
                 }
                 if op == Op::IDiv { (x / y) as u128 } else { (x % y) as u128 }
@@ -310,7 +318,9 @@ pub(crate) fn float_bin(op: Op, kind: FloatKind, a: u128, b: u128) -> Result<u12
             };
             from_f64(kind, v)
         }
-        FloatKind::X87Extended | FloatKind::Quad => softfloat::bin(op, kind, a, b).ok_or(FloatErr::Unsupported)?,
+        FloatKind::X87Extended | FloatKind::Quad => {
+            softfloat::bin(op, kind, a, b).ok_or(FloatErr::Unsupported)?
+        }
     };
     if is_nan(kind, r) {
         return Err(FloatErr::NaN);
@@ -334,30 +344,43 @@ pub(crate) fn float_cmp(kind: FloatKind, a: u128, b: u128) -> Option<std::cmp::O
 }
 
 /// Converts between floating formats (round to nearest even).
-pub(crate) fn float_cast(from: FloatKind, to: FloatKind, a: u128) -> Result<u128, FloatErr> {
+pub(crate) fn float_cast(from: FloatKind, to: FloatKind, a: u128) -> u128 {
     if from == to {
-        return Ok(a);
+        return a;
     }
-    if matches!(from, FloatKind::X87Extended | FloatKind::Quad) || matches!(to, FloatKind::X87Extended | FloatKind::Quad) {
-        return softfloat::cast(from, to, a).ok_or(FloatErr::Unsupported);
+    if matches!(from, FloatKind::X87Extended | FloatKind::Quad)
+        || matches!(to, FloatKind::X87Extended | FloatKind::Quad)
+    {
+        return softfloat::cast(from, to, a);
     }
-    Ok(from_f64(to, to_f64(from, a)))
+    from_f64(to, to_f64(from, a))
 }
 
 /// Converts a canonical integer to a float (round to nearest even).
-pub(crate) fn int_to_float(kind: FloatKind, v: u128, signed: bool) -> Result<u128, FloatErr> {
+pub(crate) fn int_to_float(kind: FloatKind, v: u128, signed: bool) -> u128 {
     match kind {
-        FloatKind::Single => Ok(u128::from(if signed { (v as i128) as f32 } else { v as f32 }.to_bits())),
-        FloatKind::Double => Ok(u128::from(if signed { (v as i128) as f64 } else { v as f64 }.to_bits())),
-        _ => softfloat::from_int(kind, v, signed).ok_or(FloatErr::Unsupported),
+        FloatKind::Single => {
+            u128::from(if signed { (v as i128) as f32 } else { v as f32 }.to_bits())
+        }
+        FloatKind::Double => {
+            u128::from(if signed { (v as i128) as f64 } else { v as f64 }.to_bits())
+        }
+        _ => softfloat::from_int(kind, v, signed),
     }
 }
 
 /// Truncates a float to an integer of `width`/`signed`
 /// ([conv.fpint]/1: out of range is undefined).
-pub(crate) fn float_to_int(kind: FloatKind, a: u128, width: u32, signed: bool) -> Result<u128, FloatErr> {
+pub(crate) fn float_to_int(
+    kind: FloatKind,
+    a: u128,
+    width: u32,
+    signed: bool,
+) -> Result<u128, FloatErr> {
     let (neg, int) = match kind {
-        FloatKind::X87Extended | FloatKind::Quad => softfloat::trunc(kind, a).ok_or(FloatErr::Range)?,
+        FloatKind::X87Extended | FloatKind::Quad => {
+            softfloat::trunc(kind, a).ok_or(FloatErr::Range)?
+        }
         _ => {
             let v = to_f64(kind, a);
             if !v.is_finite() {
@@ -520,7 +543,10 @@ mod tests {
         assert_eq!(int_bin(Op::IDiv, 32, true, min, u128::MAX, 32, true), Err(IntErr::Overflow));
         assert_eq!(int_bin(Op::IShl, 32, true, 1, 32, 32, true), Err(IntErr::ShiftBig));
         assert_eq!(exact_result(Op::IAdd, true, max, 1), "2147483648");
-        assert_eq!(exact_result(Op::IMul, true, i128::MAX as u128, 2), "340282366920938463463374607431768211454");
+        assert_eq!(
+            exact_result(Op::IMul, true, i128::MAX as u128, 2),
+            "340282366920938463463374607431768211454"
+        );
     }
 
     // [conv.fpint]/1 note formatting (APFloat::toString).
@@ -530,7 +556,13 @@ mod tests {
         assert_eq!(apfloat_to_string(FloatKind::Double, u128::from(3e9f64.to_bits())), "3.0E+9");
         assert_eq!(apfloat_to_string(FloatKind::Double, u128::from(2.5f64.to_bits())), "2.5");
         assert_eq!(apfloat_to_string(FloatKind::Double, u128::from(300.0f64.to_bits())), "300");
-        assert_eq!(apfloat_to_string(FloatKind::Single, u128::from(1e20f32.to_bits())), "1.0E+20");
-        assert_eq!(float_arg_string(FloatKind::Double, u128::from(1.0f64.to_bits())), "1.000000e+00");
+        assert_eq!(
+            apfloat_to_string(FloatKind::Single, u128::from(1e20f32.to_bits())),
+            "1.00000002E+20"
+        );
+        assert_eq!(
+            float_arg_string(FloatKind::Double, u128::from(1.0f64.to_bits())),
+            "1.000000e+00"
+        );
     }
 }

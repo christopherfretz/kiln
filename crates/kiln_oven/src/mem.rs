@@ -14,9 +14,12 @@
 //! A pointer is a `u64`: `offset (32) | past-end (1) | slot (22) | gen (9)`.
 //! Null is 0 (frame slot 0 is never used). Slot numbers with bit 21 set
 //! are static; the all-ones slot is a function pointer whose offset is the
-//! `FuncId`. A frame slot's generation is bumped when the allocation
-//! dies, so a dangling pointer never matches a later allocation in the
-//! same slot; a slot whose generation would wrap is retired.
+//! `FuncId`. A frame slot's generation is bumped when the slot is reused,
+//! so a dangling pointer never matches a later allocation in the same
+//! slot (until then it designates the dead allocation, whose origin names
+//! it in notes); a slot whose generation would wrap is retired.
+
+use std::collections::VecDeque;
 
 use kiln_ast::{ConstValueId, DeclId, ExprId, StringLitId};
 use kiln_source::fx::FxHashMap;
@@ -111,6 +114,9 @@ pub(crate) mod flags {
     pub const CONST: u8 = 1;
     pub const EXTERNAL: u8 = 2;
     pub const HAS_UNION: u8 = 4;
+    /// A global whose initializer is being evaluated (a self-reference
+    /// reads an object outside its lifetime).
+    pub const RESOLVING: u8 = 8;
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -232,7 +238,9 @@ pub(crate) struct Memory {
     pub frame: Space,
     pub stat: Space,
     pub slots: Vec<Alloc>,
-    free: Vec<u32>,
+    /// Dead slots, reused first-in first-out so a dangling pointer stays
+    /// diagnosable (its slot keeps its origin) for as long as possible.
+    free: VecDeque<u32>,
     pub live: Vec<u32>,
     pub statics: Vec<Alloc>,
     /// Active member of each union subobject with one: key
@@ -261,7 +269,7 @@ impl Memory {
             frame: Space::default(),
             stat: Space::default(),
             slots: vec![DEAD0],
-            free: Vec::new(),
+            free: VecDeque::new(),
             live: Vec::new(),
             statics: Vec::new(),
             unions: FxHashMap::default(),
@@ -305,8 +313,7 @@ impl Memory {
                 }
             }
             if a.generation < GEN_MAX {
-                a.generation += 1;
-                self.free.push(s);
+                self.free.push_back(s);
             }
         }
         self.live.truncate(n);
@@ -326,9 +333,17 @@ impl Memory {
         self.frame.top = end;
         self.allocated += end - base;
         self.peak = self.peak.max(end);
-        let a = Alloc { base: base as u32, size: size as u32, generation: 0, live: true, flags: fl, ty, origin };
-        let slot = if let Some(s) = self.free.pop() {
-            let g = self.slots[s as usize].generation;
+        let a = Alloc {
+            base: base as u32,
+            size: size as u32,
+            generation: 0,
+            live: true,
+            flags: fl,
+            ty,
+            origin,
+        };
+        let slot = if let Some(s) = self.free.pop_front() {
+            let g = self.slots[s as usize].generation + 1;
             self.slots[s as usize] = Alloc { generation: g, ..a };
             s
         } else {
@@ -403,12 +418,16 @@ impl Memory {
             return Err(MemFault::PastEnd);
         }
         if u64::from(p.off) + len > u64::from(a.size) {
-            return Err(if u64::from(p.off) >= u64::from(a.size) { MemFault::PastEnd } else { MemFault::OutOfBounds });
+            return Err(if u64::from(p.off) >= u64::from(a.size) {
+                MemFault::PastEnd
+            } else {
+                MemFault::OutOfBounds
+            });
         }
-        if a.flags & flags::EXTERNAL != 0 {
-            if let Origin::External(d) = a.origin {
-                return Err(MemFault::External(d, write));
-            }
+        if a.flags & flags::EXTERNAL != 0
+            && let Origin::External(d) = a.origin
+        {
+            return Err(MemFault::External(d, write));
         }
         Ok((p.is_static(), u64::from(a.base) + u64::from(p.off), a))
     }
@@ -421,34 +440,6 @@ impl Memory {
         if stat { &mut self.stat } else { &mut self.frame }
     }
 
-    /// Loads a `len`-byte scalar (`ptr`: a pointer is expected).
-    pub fn load(&self, raw: u64, len: u64, ptr: bool) -> Result<u128, MemFault> {
-        let (st, abs, _) = self.check(raw, len, false)?;
-        let sp = self.space(st);
-        if !sp.is_init(abs, len) {
-            return Err(MemFault::Uninit);
-        }
-        let v = sp.read(abs, len);
-        // Zero-initialized pointers are unmarked zero bytes (null).
-        if sp.any_ptr(abs, len) != ptr && !(ptr && v == 0) {
-            return Err(MemFault::Incompatible);
-        }
-        Ok(v)
-    }
-
-    /// Stores a `len`-byte scalar; `init` skips the constness check.
-    pub fn store(&mut self, raw: u64, len: u64, v: u128, ptr: bool, init: bool) -> Result<(), MemFault> {
-        let (st, abs, a) = self.check(raw, len, true)?;
-        if !init && a.flags & flags::CONST != 0 {
-            return Err(MemFault::Const(a.ty));
-        }
-        let sp = self.space_mut(st);
-        sp.write(abs, len, v);
-        sp.set_init(abs, len, true);
-        sp.set_ptr(abs, len, ptr);
-        Ok(())
-    }
-
     /// Copies `len` bytes with their shadow (initialization and pointer
     /// marks) from `src` to `dst` (absolute addresses in their spaces).
     pub fn copy(&mut self, dst_st: bool, dst: u64, src_st: bool, src: u64, len: u64) {
@@ -459,20 +450,22 @@ impl Memory {
                 let v = sp.init[((src + i) / GRAN) as usize] >> ((src + i) % GRAN) & 1 != 0;
                 sp.set_init(dst + i, 1, v);
             }
-            if src % GRAN == 0 && dst % GRAN == 0 {
+            if src.is_multiple_of(GRAN) && dst.is_multiple_of(GRAN) {
                 for g in 0..len.div_ceil(GRAN) {
                     sp.ptr[(dst / GRAN + g) as usize] = sp.ptr[(src / GRAN + g) as usize];
                 }
             }
             return;
         }
-        let (d, s) = if dst_st { (&mut self.stat, &self.frame) } else { (&mut self.frame, &self.stat) };
-        d.bytes[dst as usize..(dst + len) as usize].copy_from_slice(&s.bytes[src as usize..(src + len) as usize]);
+        let (d, s) =
+            if dst_st { (&mut self.stat, &self.frame) } else { (&mut self.frame, &self.stat) };
+        d.bytes[dst as usize..(dst + len) as usize]
+            .copy_from_slice(&s.bytes[src as usize..(src + len) as usize]);
         for i in 0..len {
             let v = s.init[((src + i) / GRAN) as usize] >> ((src + i) % GRAN) & 1 != 0;
             d.set_init(dst + i, 1, v);
         }
-        if src % GRAN == 0 && dst % GRAN == 0 {
+        if src.is_multiple_of(GRAN) && dst.is_multiple_of(GRAN) {
             for g in 0..len.div_ceil(GRAN) {
                 d.ptr[(dst / GRAN + g) as usize] = s.ptr[(src / GRAN + g) as usize];
             }

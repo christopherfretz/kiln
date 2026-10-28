@@ -42,7 +42,11 @@ pub fn render(stats: &EvalStats, loc: &dyn Fn(Loc) -> Option<String>) -> String 
 ///
 /// # Errors
 /// If the file cannot be written.
-pub fn write(stats: &EvalStats, loc: &dyn Fn(Loc) -> Option<String>, path: &std::path::Path) -> std::io::Result<()> {
+pub fn write(
+    stats: &EvalStats,
+    loc: &dyn Fn(Loc) -> Option<String>,
+    path: &std::path::Path,
+) -> std::io::Result<()> {
     std::fs::write(path, render(stats, loc))
 }
 

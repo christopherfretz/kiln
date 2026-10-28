@@ -11,7 +11,7 @@
 
 use kiln_ast::consts::{FloatKind, Scalar};
 use kiln_ast::decl::{ConstexprKind, DeclKind, VarStorage};
-use kiln_ast::expr::{BinaryOp, CastKind, ExprKind, ObjectKind, TraitKind, UnaryOp};
+use kiln_ast::expr::{BinaryOp, CastKind, ExprKind, TraitKind, UnaryOp};
 use kiln_ast::stmt::{IfKind, StmtKind};
 use kiln_ast::types::TypeView;
 use kiln_ast::{DeclId, ExprId, QualType, StmtId, StringLitId};
@@ -95,17 +95,19 @@ pub(crate) enum GKind {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum GState {
     Unresolved,
-    /// Its initializer is being evaluated (a self-reference).
-    Resolving,
+    /// Its storage: a static allocation holding the thawed value, the
+    /// placeholder of a variable being initialized (flag `RESOLVING`), or
+    /// an external object (reads and writes are diagnosed).
     Resolved(u64),
-    /// Its initializer is not a constant expression.
-    Failed,
 }
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Global {
     pub kind: GKind,
     pub state: GState,
+    /// A reusable placeholder allocation (0 = none): the storage of a
+    /// variable whose own initializer is evaluated at top level.
+    pub slot: u64,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -212,17 +214,17 @@ impl Oven {
             return i;
         }
         let i = self.globals.len() as u32;
-        self.globals.push(Global { kind: GKind::Var(d), state: GState::Unresolved });
+        self.globals.push(Global { kind: GKind::Var(d), state: GState::Unresolved, slot: 0 });
         self.global_map.insert(d, i);
         i
     }
 
-    fn string_index(&mut self, s: StringLitId, ty: OTy) -> u32 {
+    pub(crate) fn string_index(&mut self, s: StringLitId, ty: OTy) -> u32 {
         if let Some(&i) = self.strings.get(&s) {
             return i as u32;
         }
         let i = self.globals.len() as u32;
-        self.globals.push(Global { kind: GKind::Str(s, ty), state: GState::Unresolved });
+        self.globals.push(Global { kind: GKind::Str(s, ty), state: GState::Unresolved, slot: 0 });
         self.strings.insert(s, u64::from(i));
         i
     }
@@ -230,11 +232,16 @@ impl Oven {
     /// Compiles a top-level thunk evaluating `e`: a scalar result in
     /// register 0, or the address of the result object (whose origin is
     /// `object`, else a temporary) in register 0.
-    pub(crate) fn compile_thunk(&mut self, b: &mut dyn SemaBridge, e: ExprId, object: Option<DeclId>) -> u32 {
-        if let Some(&f) = self.thunks.get(&e) {
-            if object.is_none() || self.funcs[f as usize].decl.is_none() {
-                return f;
-            }
+    pub(crate) fn compile_thunk(
+        &mut self,
+        b: &mut dyn SemaBridge,
+        e: ExprId,
+        object: Option<DeclId>,
+    ) -> u32 {
+        if let Some(&f) = self.thunks.get(&e)
+            && (object.is_none() || self.funcs[f as usize].decl.is_none())
+        {
+            return f;
         }
         let idx = self.funcs.len() as u32;
         self.funcs.push(Func {
@@ -250,8 +257,8 @@ impl Oven {
         let entry = c.here();
         let ty = c.ety(e);
         let glvalue = c.b.ast().exprs.get(e).value_category().is_glvalue();
-        let ret;
-        if c.o.types.is_aggregate(ty) {
+
+        let ret = if c.o.types.is_aggregate(ty) {
             let origin = match object {
                 Some(d) => Origin::Var(d),
                 None => Origin::Temp(e),
@@ -265,17 +272,17 @@ impl Oven {
                 c.init(e, r, ty);
             }
             c.emit(Op::Ret, 0, &[r]);
-            ret = RetKind::Sret(ty);
+            RetKind::Sret(ty)
         } else if c.o.types.kind(ty) == TyKind::Void {
             c.effect(e);
             c.emit(Op::Ret, 0, &[0]);
-            ret = RetKind::Void;
+            RetKind::Void
         } else {
             let r = c.reg();
             c.rv_into(e, r);
             c.emit(Op::Ret, 1, &[r]);
-            ret = RetKind::Scalar(ty);
-        }
+            RetKind::Scalar(ty)
+        };
         let nregs = c.max;
         let f = &mut self.funcs[idx as usize];
         f.entry = entry;
@@ -516,7 +523,11 @@ impl<'a> Compiler<'a> {
         } else if v >> 64 == 0 {
             self.emit(Op::Const, 0, &[dst, v as u32, (v >> 32) as u32]);
         } else {
-            self.emit(Op::Const2, 0, &[dst, v as u32, (v >> 32) as u32, (v >> 64) as u32, (v >> 96) as u32]);
+            self.emit(
+                Op::Const2,
+                0,
+                &[dst, v as u32, (v >> 32) as u32, (v >> 64) as u32, (v >> 96) as u32],
+            );
         }
     }
 
@@ -656,7 +667,10 @@ impl Scan<'_> {
             ExprKind::UnaryExprOrTypeTraitExpr => {}
             ExprKind::CallExpr => {
                 let ty = n.ty();
-                if matches!(ast.types.canonical_view(ty), TypeView::Record(_) | TypeView::ConstantArray(_)) {
+                if matches!(
+                    ast.types.canonical_view(ty),
+                    TypeView::Record(_) | TypeView::ConstantArray(_)
+                ) {
                     self.temps = true;
                 }
                 for c in ast.exprs.children(e, &ast.lists) {
@@ -806,7 +820,9 @@ impl Compiler<'_> {
         for &c in children {
             let s = StmtId::new(c);
             if ast.stmts.get(s).kind() == StmtKind::DeclStmt {
-                v.extend(ast.lists.get(ast.stmts.decl_stmt_decls(s)).iter().map(|&d| DeclId::new(d)));
+                v.extend(
+                    ast.lists.get(ast.stmts.decl_stmt_decls(s)).iter().map(|&d| DeclId::new(d)),
+                );
             }
         }
         v
@@ -822,12 +838,12 @@ impl Compiler<'_> {
     }
 
     fn stmt(&mut self, s: StmtId) {
+        self.step(s);
         let ast = self.b.ast();
         let n = *ast.stmts.get(s);
         let m = self.next;
         match n.kind() {
             StmtKind::CompoundStmt => {
-                self.step(s);
                 let children = ast.lists.get(ast.stmts.compound_body(s)).to_vec();
                 let decls = self.block_decls(&children);
                 self.open_scope(&decls, false);
@@ -838,14 +854,12 @@ impl Compiler<'_> {
                 self.next = m;
             }
             StmtKind::DeclStmt => {
-                self.step(s);
                 let decls = ast.lists.get(ast.stmts.decl_stmt_decls(s)).to_vec();
                 for d in decls {
                     self.decl(DeclId::new(d));
                 }
             }
             StmtKind::ExprStmt => {
-                self.step(s);
                 let e = ast.stmts.expr_stmt_expr(s);
                 if self.has_temps {
                     self.open_scope(&[], true);
@@ -856,9 +870,8 @@ impl Compiler<'_> {
                 }
                 self.next = m;
             }
-            StmtKind::NullStmt => self.step(s),
+            StmtKind::NullStmt => {}
             StmtKind::IfStmt => {
-                self.step(s);
                 let d = *ast.stmts.if_data(s);
                 let kind = ast.stmts.if_kind(s);
                 let decls = self.stmt_decls(d.init, d.cond_var);
@@ -908,17 +921,14 @@ impl Compiler<'_> {
                 self.next = m;
             }
             StmtKind::WhileStmt | StmtKind::ForStmt | StmtKind::DoStmt => {
-                self.step(s);
                 self.loop_stmt(s, n.kind());
                 self.next = m;
             }
             StmtKind::SwitchStmt => {
-                self.step(s);
                 self.switch_stmt(s);
                 self.next = m;
             }
             StmtKind::BreakStmt | StmtKind::ContinueStmt => {
-                self.step(s);
                 let brk = n.kind() == StmtKind::BreakStmt;
                 let idx = if brk {
                     self.breakables.len().checked_sub(1)
@@ -929,7 +939,8 @@ impl Compiler<'_> {
                     self.trap_loc(n.loc(), "kiln: 'break' or 'continue' outside a loop".into());
                     return;
                 };
-                let depth = if brk { self.breakables[idx].depth } else { self.breakables[idx].cont_depth };
+                let depth =
+                    if brk { self.breakables[idx].depth } else { self.breakables[idx].cont_depth };
                 self.exit_scopes(depth);
                 let j = self.jmp();
                 let b = &mut self.breakables[idx];
@@ -940,7 +951,6 @@ impl Compiler<'_> {
                 }
             }
             StmtKind::ReturnStmt => {
-                self.step(s);
                 let v = ast.stmts.return_value(s);
                 match (self.ret, v) {
                     (RetKind::Sret(ty), Some(v)) => {
@@ -961,16 +971,22 @@ impl Compiler<'_> {
                 self.next = m;
             }
             StmtKind::CaseStmt | StmtKind::DefaultStmt => {
-                self.step(s);
-                self.trap_loc(n.loc(), "kiln: a 'case' label outside its switch body is not supported yet".into());
+                self.trap_loc(
+                    n.loc(),
+                    "kiln: a 'case' label outside its switch body is not supported yet".into(),
+                );
             }
             StmtKind::GotoStmt | StmtKind::IndirectGotoStmt | StmtKind::LabelStmt => {
-                self.step(s);
-                self.trap_loc(n.loc(), "kiln: constant evaluation of 'goto' is not supported yet".into());
+                self.trap_loc(
+                    n.loc(),
+                    "kiln: constant evaluation of 'goto' is not supported yet".into(),
+                );
             }
             k => {
-                self.step(s);
-                self.trap_loc(n.loc(), format!("kiln: constant evaluation of {k:?} is not supported yet"));
+                self.trap_loc(
+                    n.loc(),
+                    format!("kiln: constant evaluation of {k:?} is not supported yet"),
+                );
             }
         }
     }
@@ -1002,11 +1018,21 @@ impl Compiler<'_> {
             }
         }
         let cont_depth = self.scopes.len();
-        self.breakables.push(Breakable { breaks: Vec::new(), conts: Some(Vec::new()), depth: break_depth, cont_depth });
+        self.breakables.push(Breakable {
+            breaks: Vec::new(),
+            conts: Some(Vec::new()),
+            depth: break_depth,
+            cont_depth,
+        });
         if let Some(b) = d.body {
             self.stmt(b);
         }
-        let b = self.breakables.pop().unwrap_or(Breakable { breaks: Vec::new(), conts: None, depth: 0, cont_depth: 0 });
+        let b = self.breakables.pop().unwrap_or(Breakable {
+            breaks: Vec::new(),
+            conts: None,
+            depth: 0,
+            cont_depth: 0,
+        });
         let cont = self.here();
         for j in b.conts.unwrap_or_default() {
             self.patch(j, cont);
@@ -1163,7 +1189,12 @@ impl Compiler<'_> {
         }
         // The body.
         let depth = self.scopes.len() - 1;
-        self.breakables.push(Breakable { breaks: Vec::new(), conts: None, depth, cont_depth: depth });
+        self.breakables.push(Breakable {
+            breaks: Vec::new(),
+            conts: None,
+            depth,
+            cont_depth: depth,
+        });
         for &ch in &children {
             let mut cur = ch;
             loop {
@@ -1213,7 +1244,10 @@ impl Compiler<'_> {
         let Some(v) = ast.decls.var(d).copied() else { return };
         if !is_local_var(ast, d) {
             if v.spec.storage() == VarStorage::Static && !v.spec.is_constexpr() {
-                self.trap_loc(n.loc(), "control flows through the definition of a static variable".into());
+                self.trap_loc(
+                    n.loc(),
+                    "control flows through the definition of a static variable".into(),
+                );
             }
             return;
         }
@@ -1335,12 +1369,14 @@ impl Compiler<'_> {
         let ast = self.ast();
         let e0 = skip_parens(ast, e);
         let n = *ast.exprs.get(e0);
-        if n.kind() == ExprKind::ImplicitCastExpr && ast.exprs.cast_kind(e0) == CastKind::LValueToRValue {
+        if n.kind() == ExprKind::ImplicitCastExpr
+            && ast.exprs.cast_kind(e0) == CastKind::LValueToRValue
+        {
             let op = skip_parens(ast, ast.exprs.operand(e0));
-            if ast.exprs.get(op).kind() == ExprKind::DeclRefExpr {
-                if let Some(Local::Reg(r)) = self.locals.get(&ast.exprs.decl(op)).copied() {
-                    return r;
-                }
+            if ast.exprs.get(op).kind() == ExprKind::DeclRefExpr
+                && let Some(Local::Reg(r)) = self.locals.get(&ast.exprs.decl(op)).copied()
+            {
+                return r;
             }
         }
         if n.kind() == ExprKind::CallExpr {
@@ -1383,12 +1419,18 @@ impl Compiler<'_> {
                 let v = self.ast().exprs.bool_value(e);
                 self.konst(dst, u128::from(v));
             }
-            ExprKind::CXXNullPtrLiteralExpr | ExprKind::GNUNullExpr | ExprKind::ImplicitValueInitExpr => {
+            ExprKind::CXXNullPtrLiteralExpr
+            | ExprKind::GNUNullExpr
+            | ExprKind::ImplicitValueInitExpr => {
                 self.konst(dst, 0);
             }
             ExprKind::FloatingLiteral => {
                 let ast = self.ast();
-                let v = ast.exprs.literal_const(e).and_then(|c| ast.consts.scalar(c)).and_then(|s| scalar_bits(&s));
+                let v = ast
+                    .exprs
+                    .literal_const(e)
+                    .and_then(|c| ast.consts.scalar(c))
+                    .and_then(|s| scalar_bits(&s));
                 self.konst(dst, v.unwrap_or(0));
             }
             ExprKind::ParenExpr => {
@@ -1397,7 +1439,11 @@ impl Compiler<'_> {
             }
             ExprKind::ConstantExpr => {
                 let ast = self.ast();
-                let v = ast.exprs.constant_value(e).and_then(|c| ast.consts.scalar(c)).and_then(|s| scalar_bits(&s));
+                let v = ast
+                    .exprs
+                    .constant_value(e)
+                    .and_then(|c| ast.consts.scalar(c))
+                    .and_then(|s| scalar_bits(&s));
                 if let Some(v) = v {
                     self.konst(dst, v);
                 } else {
@@ -1463,17 +1509,18 @@ impl Compiler<'_> {
     fn trait_expr(&mut self, e: ExprId, dst: u32, ty: OTy) {
         let ast = self.ast();
         let kind = ast.exprs.trait_kind(e);
-        let q = match ast.exprs.trait_type_arg(e) {
-            Some(q) => q,
-            None => {
-                let op = ExprId::new(ast.exprs.get(e).a());
-                ast.exprs.get(op).ty()
-            }
+        let q = if let Some(q) = ast.exprs.trait_type_arg(e) {
+            q
+        } else {
+            let op = ExprId::new(ast.exprs.get(e).a());
+            ast.exprs.get(op).ty()
         };
         let t = self.ty(q);
         let v = match kind {
             TraitKind::SizeOf => self.o.types.size(t),
-            TraitKind::AlignOf | TraitKind::PreferredAlignOf => u64::from(self.o.types.info(t).align),
+            TraitKind::AlignOf | TraitKind::PreferredAlignOf => {
+                u64::from(self.o.types.info(t).align)
+            }
             _ => {
                 self.unsupported(e);
                 return;
@@ -1548,9 +1595,14 @@ impl Compiler<'_> {
         match self.kind(ty) {
             TyKind::Float(k) => {
                 let one = self.reg();
-                let bits = crate::arith::int_to_float(k, 1, true).unwrap_or(0);
+                let bits = crate::arith::int_to_float(k, 1, true);
                 self.konst(one, bits);
-                self.emit_at(if inc { Op::FAdd } else { Op::FSub }, float_code(k), &[new, old, one], e);
+                self.emit_at(
+                    if inc { Op::FAdd } else { Op::FSub },
+                    float_code(k),
+                    &[new, old, one],
+                    e,
+                );
             }
             TyKind::Ptr(pointee) => {
                 let one = self.reg();
@@ -1567,7 +1619,12 @@ impl Compiler<'_> {
                     // rejects both; treat as `= true` for robustness.
                     self.konst(new, 1);
                 } else {
-                    self.emit_at(if inc { Op::IAdd } else { Op::ISub }, int_aux(w as u8, s), &[new, old, one], e);
+                    self.emit_at(
+                        if inc { Op::IAdd } else { Op::ISub },
+                        int_aux(w as u8, s),
+                        &[new, old, one],
+                        e,
+                    );
                 }
             }
         }
@@ -1575,12 +1632,12 @@ impl Compiler<'_> {
         if let Some(out) = out {
             let postfix = matches!(op, UnaryOp::PostInc | UnaryOp::PostDec);
             let src = if postfix { old } else { new };
-            if let Place::Bits { .. } = place {
-                if !postfix {
-                    // The value of the bit-field after the store.
-                    self.load(place, ty, ak::READ, e, out);
-                    return;
-                }
+            if let Place::Bits { .. } = place
+                && !postfix
+            {
+                // The value of the bit-field after the store.
+                self.load(place, ty, ak::READ, e, out);
+                return;
             }
             self.emit(Op::Mov, 0, &[out, src]);
         }
@@ -1747,7 +1804,10 @@ impl Compiler<'_> {
             CastKind::LValueToRValue => {
                 let opn = self.node(op);
                 if opn.ty().quals_bits() & 2 != 0 {
-                    self.trap(e, "read of volatile-qualified type is not allowed in a constant expression");
+                    self.trap(
+                        e,
+                        "read of volatile-qualified type is not allowed in a constant expression",
+                    );
                     return;
                 }
                 let p = self.lv(op, Access::Read);
@@ -1918,10 +1978,8 @@ impl Compiler<'_> {
             ExprKind::ArraySubscriptExpr => {
                 let ast = self.ast();
                 let [a, b] = ast.exprs.operands(e);
-                let a_is_ptr = matches!(
-                    ast.types.canonical_view(ast.exprs.get(a).ty()),
-                    TypeView::Pointer(_)
-                );
+                let a_is_ptr =
+                    matches!(ast.types.canonical_view(ast.exprs.get(a).ty()), TypeView::Pointer(_));
                 let (pe, ie) = if a_is_ptr { (a, b) } else { (b, a) };
                 let ety = self.ety(e);
                 let pe0 = skip_parens(self.ast(), pe);
@@ -2211,7 +2269,10 @@ impl Compiler<'_> {
                 self.init_inner(b, p, ty);
             }
             k if k.is_cast()
-                && matches!(self.ast().exprs.cast_kind(e), CastKind::NoOp | CastKind::LValueToRValue) =>
+                && matches!(
+                    self.ast().exprs.cast_kind(e),
+                    CastKind::NoOp | CastKind::LValueToRValue
+                ) =>
             {
                 let op = self.ast().exprs.operand(e);
                 if self.node(op).value_category().is_glvalue() {
@@ -2231,7 +2292,8 @@ impl Compiler<'_> {
 
     fn init_list(&mut self, e: ExprId, p: u32, ty: OTy) {
         let ast = self.ast();
-        let inits: Vec<ExprId> = ast.lists.get(ast.exprs.init_list_inits(e)).iter().map(|&x| ExprId::new(x)).collect();
+        let inits: Vec<ExprId> =
+            ast.lists.get(ast.exprs.init_list_inits(e)).iter().map(|&x| ExprId::new(x)).collect();
         let extra = *ast.exprs.init_list(e);
         match self.kind(ty) {
             TyKind::Array { elem, n } => {
@@ -2240,7 +2302,10 @@ impl Compiler<'_> {
                     return;
                 }
                 // A list of one string literal initializing a char array.
-                if inits.len() == 1 && self.node(skip_parens(self.ast(), inits[0])).kind() == ExprKind::StringLiteral {
+                if inits.len() == 1
+                    && self.node(skip_parens(self.ast(), inits[0])).kind()
+                        == ExprKind::StringLiteral
+                {
                     let s = skip_parens(self.ast(), inits[0]);
                     self.init_inner(s, p, ty);
                     return;
@@ -2248,7 +2313,8 @@ impl Compiler<'_> {
                 let filler = extra.array_filler;
                 let rest = n - inits.len() as u64;
                 let zero_fill = rest > 0
-                    && filler.is_none_or(|f| self.node(f).kind() == ExprKind::ImplicitValueInitExpr);
+                    && filler
+                        .is_none_or(|f| self.node(f).kind() == ExprKind::ImplicitValueInitExpr);
                 if zero_fill {
                     self.emit_at(Op::ZeroInit, 0, &[p, ty.0], e);
                 }
@@ -2257,27 +2323,28 @@ impl Compiler<'_> {
                     let q = self.elem_ptr(p, i as u64 * es, e);
                     self.init(x, q, elem);
                 }
-                if rest > 0 && !zero_fill {
-                    if let Some(f) = filler {
-                        // A loop over the remaining elements.
-                        let k = self.reg();
-                        let one = self.reg();
-                        let lim = self.reg();
-                        let c = self.reg();
-                        self.konst(k, inits.len() as u128);
-                        self.konst(one, 1);
-                        self.konst(lim, u128::from(n));
-                        let top = self.here();
-                        self.emit(Op::ICmp, int_aux(64, false) | cmp::LT << 9, &[c, k, lim]);
-                        let exit = self.jmp_if(c, false);
-                        let q = self.reg();
-                        self.emit_at(Op::PtrAdd, int_aux(64, false), &[q, p, k, elem.0], e);
-                        self.init(f, q, elem);
-                        self.emit(Op::IAdd, int_aux(64, false), &[k, k, one]);
-                        let j = self.jmp();
-                        self.patch(j, top);
-                        self.patch_here(exit);
-                    }
+                if rest > 0
+                    && !zero_fill
+                    && let Some(f) = filler
+                {
+                    // A loop over the remaining elements.
+                    let k = self.reg();
+                    let one = self.reg();
+                    let lim = self.reg();
+                    let c = self.reg();
+                    self.konst(k, inits.len() as u128);
+                    self.konst(one, 1);
+                    self.konst(lim, u128::from(n));
+                    let top = self.here();
+                    self.emit(Op::ICmp, int_aux(64, false) | cmp::LT << 9, &[c, k, lim]);
+                    let exit = self.jmp_if(c, false);
+                    let q = self.reg();
+                    self.emit_at(Op::PtrAdd, int_aux(64, false), &[q, p, k, elem.0], e);
+                    self.init(f, q, elem);
+                    self.emit(Op::IAdd, int_aux(64, false), &[k, k, one]);
+                    let j = self.jmp();
+                    self.patch(j, top);
+                    self.patch_here(exit);
                 }
             }
             TyKind::Record { union: true, .. } => {
@@ -2286,14 +2353,13 @@ impl Compiler<'_> {
                 let Some(idx) = target.and_then(|d| fields.iter().position(|f| f.decl == d)) else {
                     return;
                 };
-                self.emit_at(Op::SetActive, 0, &[p, idx as u32, ty.0], e);
+                self.emit_at(Op::SetActive, 1, &[p, idx as u32, ty.0], e);
                 let fi = fields[idx];
-                match inits.first() {
-                    Some(&x) => self.init_field(x, p, fi, e),
-                    None => {
-                        let q = self.elem_ptr(p, fi.offset, e);
-                        self.emit_at(Op::ZeroInit, 0, &[q, fi.ty.0], e);
-                    }
+                if let Some(&x) = inits.first() {
+                    self.init_field(x, p, fi, e);
+                } else {
+                    let q = self.elem_ptr(p, fi.offset, e);
+                    self.emit_at(Op::ZeroInit, 0, &[q, fi.ty.0], e);
                 }
             }
             TyKind::Record { .. } => {
@@ -2315,7 +2381,12 @@ impl Compiler<'_> {
                             Some(w) => {
                                 let z = self.reg();
                                 self.konst(z, 0);
-                                self.emit_at(Op::StoreBits, 1, &[q, z, fi.ty.0, fi.bit | w << 8], e);
+                                self.emit_at(
+                                    Op::StoreBits,
+                                    1,
+                                    &[q, z, fi.ty.0, fi.bit | w << 8],
+                                    e,
+                                );
                             }
                             None => {
                                 self.emit_at(Op::ZeroInit, 0, &[q, fi.ty.0], e);
@@ -2441,10 +2512,11 @@ impl Compiler<'_> {
     /// Compiles call `e`; the scalar result is in the returned register.
     /// `sret`: the result object's address (aggregate results).
     fn call(&mut self, e: ExprId, sret: Option<u32>) -> u32 {
+        let ty = self.ety(e);
         let ast = self.ast();
         let callee = ast.exprs.callee(e);
-        let args: Vec<ExprId> = ast.lists.get(ast.exprs.call_args(e)).iter().map(|&x| ExprId::new(x)).collect();
-        let ty = self.ety(e);
+        let args: Vec<ExprId> =
+            ast.lists.get(ast.exprs.call_args(e)).iter().map(|&x| ExprId::new(x)).collect();
         // The direct callee, if any.
         let mut c = skip_parens(ast, callee);
         while ast.exprs.get(c).kind().is_cast()

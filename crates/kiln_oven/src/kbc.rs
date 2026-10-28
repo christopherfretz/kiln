@@ -167,11 +167,6 @@ pub(crate) mod ak {
     }
 }
 
-/// Allocation flags (the aux of `Alloc`).
-pub(crate) mod af {
-    pub const CONST: u32 = 1;
-}
-
 /// Packs the aux of an integer op.
 pub(crate) fn int_aux(width: u8, signed: bool) -> u32 {
     u32::from(width) | u32::from(signed) << 8
