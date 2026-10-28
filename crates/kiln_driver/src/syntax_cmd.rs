@@ -107,7 +107,8 @@ impl SyntaxJob<'_> {
         };
         let popts = ParseOptions { std: job.std.lex, ..ParseOptions::default() };
         let limits = a.constexpr.limits();
-        let (tu, _pp) = parse_preprocessed(pp, Arc::clone(interner), engine, target, &popts, limits);
+        let (tu, _pp) =
+            parse_preprocessed(pp, Arc::clone(interner), engine, target, &popts, limits);
         a.constexpr.write_report(&tu.oven, sm, engine);
         let ast = tu.ast;
         if let Some(d) = dump_opts {
