@@ -9,6 +9,11 @@
 use std::fmt;
 use std::path::PathBuf;
 
+pub use crate::util::CompilerKind;
+pub use crate::util::header::{
+    self, C_STDS, CXX_STDS, DirectiveError, OvenBudget, parse_oven, split_args,
+};
+
 /// What a test expects of the compiler.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Expect {
@@ -114,37 +119,12 @@ impl fmt::Display for DiagDirective {
     }
 }
 
-/// The compiler a `skip`/`xfail` marker is restricted to.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum CompilerKind {
-    Kiln,
-    Clang,
-    Other,
-}
-
-impl CompilerKind {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Kiln => "kiln",
-            Self::Clang => "clang",
-            Self::Other => "other",
-        }
-    }
-}
-
 /// A `skip`/`xfail` marker: `skip: reason` (all compilers) or
 /// `skip(kiln): reason` / `skip(clang): reason`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Marker {
     pub compiler: Option<CompilerKind>,
     pub reason: String,
-}
-
-/// `oven: steps<=N bytes<=M` — an evaluation budget (kiln-specific).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct OvenBudget {
-    pub steps: Option<u64>,
-    pub bytes: Option<u64>,
 }
 
 /// Expected stdout of a `run` test.
@@ -200,44 +180,13 @@ fn marker_for(markers: &[Marker], kind: CompilerKind) -> Option<&str> {
         .map(|m| m.reason.as_str())
 }
 
-/// A malformed directive header.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct DirectiveError {
-    /// 1-based source line.
-    pub line: usize,
-    pub message: String,
-}
-
-impl fmt::Display for DirectiveError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "line {}: {}", self.line, self.message)
-    }
-}
-
-const CXX_STDS: &[&str] = &["c++98", "c++03", "c++11", "c++14", "c++17", "c++20", "c++23", "c++26"];
-const C_STDS: &[&str] = &["c89", "c99", "c11", "c17", "c23"];
-
 /// Parses the directive header of `source`. All errors are collected.
 pub fn parse(source: &str, lang: Lang) -> Result<TestSpec, Vec<DirectiveError>> {
+    let (directives, errors) = header::scan(source);
     let mut p = Parser::new(lang);
-    let mut in_header = true;
-    for (idx, raw) in source.lines().enumerate() {
-        let line_no = idx + 1;
-        let line = raw.trim();
-        if in_header && !(line.is_empty() || line.starts_with("//")) {
-            in_header = false;
-        }
-        let Some(body) = line.strip_prefix("//@") else {
-            continue;
-        };
-        if in_header {
-            p.directive(line_no, body.trim());
-        } else {
-            p.err(
-                line_no,
-                "`//@` directive after the header (directives must precede the first line of code)",
-            );
-        }
+    p.errors = errors;
+    for d in directives {
+        p.directive(d.line, d.key, d.value);
     }
     p.finish()
 }
@@ -290,11 +239,7 @@ impl Parser {
         self.errors.push(DirectiveError { line, message: message.into() });
     }
 
-    fn directive(&mut self, line: usize, body: &str) {
-        let (key, value) = match body.split_once(':') {
-            Some((k, v)) => (k.trim(), Some(v.trim())),
-            None => (body.trim(), None),
-        };
+    fn directive(&mut self, line: usize, key: &str, value: Option<&str>) {
         let Some((name, qualifier, value)) = self.split_key(line, key, value) else {
             return;
         };
@@ -571,92 +516,6 @@ fn parse_quoted(s: &str) -> Result<String, String> {
     } else {
         Err(format!("unexpected text after message: `{}`", chars.as_str().trim()))
     }
-}
-
-/// `steps<=N bytes<=M` (either or both, any order).
-fn parse_oven(value: &str) -> Result<OvenBudget, String> {
-    let usage = "expected `oven: steps<=N bytes<=M` (at least one)";
-    let mut b = OvenBudget::default();
-    for item in value.split_whitespace() {
-        let (key, n) =
-            item.split_once("<=").ok_or_else(|| format!("bad budget `{item}`; {usage}"))?;
-        let n: u64 = n.parse().map_err(|_| format!("bad number in `{item}`; {usage}"))?;
-        let slot = match key {
-            "steps" => &mut b.steps,
-            "bytes" => &mut b.bytes,
-            _ => return Err(format!("unknown budget `{key}`; {usage}")),
-        };
-        if slot.replace(n).is_some() {
-            return Err(format!("duplicate budget `{key}`"));
-        }
-    }
-    if b == OvenBudget::default() {
-        return Err(usage.into());
-    }
-    Ok(b)
-}
-
-/// Splits `args:` like a POSIX shell would, minus expansion: whitespace
-/// separates words, `'...'` is literal, `"..."` allows `\"` and `\\`, and an
-/// unquoted `\` escapes the next character.
-pub fn split_args(s: &str) -> Result<Vec<String>, String> {
-    let mut out = Vec::new();
-    let mut cur = String::new();
-    let mut in_word = false;
-    let mut chars = s.chars();
-    while let Some(c) = chars.next() {
-        match c {
-            c if c.is_whitespace() => {
-                if in_word {
-                    out.push(std::mem::take(&mut cur));
-                    in_word = false;
-                }
-            }
-            '\'' => {
-                in_word = true;
-                loop {
-                    match chars.next() {
-                        Some('\'') => break,
-                        Some(c) => cur.push(c),
-                        None => return Err("unterminated `'` in args".into()),
-                    }
-                }
-            }
-            '"' => {
-                in_word = true;
-                loop {
-                    match chars.next() {
-                        Some('"') => break,
-                        Some('\\') => match chars.next() {
-                            Some(c @ ('"' | '\\')) => cur.push(c),
-                            Some(c) => {
-                                cur.push('\\');
-                                cur.push(c);
-                            }
-                            None => return Err("unterminated `\"` in args".into()),
-                        },
-                        Some(c) => cur.push(c),
-                        None => return Err("unterminated `\"` in args".into()),
-                    }
-                }
-            }
-            '\\' => {
-                in_word = true;
-                match chars.next() {
-                    Some(c) => cur.push(c),
-                    None => return Err("trailing `\\` in args".into()),
-                }
-            }
-            c => {
-                in_word = true;
-                cur.push(c);
-            }
-        }
-    }
-    if in_word {
-        out.push(cur);
-    }
-    Ok(out)
 }
 
 #[cfg(test)]

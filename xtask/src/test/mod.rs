@@ -7,19 +7,22 @@ mod compare;
 mod diag_parse;
 mod directives;
 mod discover;
-mod process;
 mod report;
 mod runner;
 
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
-use std::process::{Command, ExitCode};
+use std::process::ExitCode;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use directives::CompilerKind;
 use runner::TestResult;
+
+#[cfg(test)]
+use crate::util::json_string_field;
+use crate::util::{CompilerKind, build_kiln};
+pub use crate::util::{repo_root, target_dir};
 
 pub const USAGE: &str = "\
 usage: cargo xtask test [options] [paths...]
@@ -140,12 +143,6 @@ pub fn main(args: impl IntoIterator<Item = String>) -> ExitCode {
     }
 }
 
-/// The repository root (this crate lives in `<root>/xtask`).
-pub fn repo_root() -> PathBuf {
-    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
-    manifest.parent().unwrap_or(manifest).to_path_buf()
-}
-
 /// Runs the selected tests, printing results and the summary to stdout.
 /// `Err` is an infrastructure problem (exit status 2).
 pub fn execute(opts: &Options) -> Result<Vec<TestResult>, String> {
@@ -168,7 +165,7 @@ pub fn execute(opts: &Options) -> Result<Vec<TestResult>, String> {
 
     let compiler = match &opts.compiler {
         Some(c) => c.clone(),
-        None => build_kiln(&root, &target)?,
+        None => build_kiln(&root, &target, "test", false)?,
     };
     let compiler_kind = detect_kind(&compiler)?;
     let oracle = if opts.no_oracle {
@@ -249,76 +246,7 @@ fn run_all(cfg: &runner::Config, cases: &[discover::TestCase], jobs: usize) -> V
 
 /// `--version` tells kiln (`kiln version ...`) from clang (`... clang version ...`).
 fn detect_kind(compiler: &Path) -> Result<CompilerKind, String> {
-    let o = process::run(Command::new(compiler).arg("--version"), Duration::from_secs(30))
-        .map_err(|e| format!("cannot run compiler `{}`: {e}", compiler.display()))?;
-    if !o.success() {
-        return Err(format!("`{} --version` failed ({})", compiler.display(), o.describe_end()));
-    }
-    let first = o.stdout_str().lines().next().unwrap_or_default().to_owned();
-    Ok(if first.starts_with("kiln version") {
-        CompilerKind::Kiln
-    } else if first.contains("clang version") {
-        CompilerKind::Clang
-    } else {
-        CompilerKind::Other
-    })
-}
-
-/// `$CARGO_TARGET_DIR`, else `target_directory` from `cargo metadata`.
-fn target_dir(root: &Path) -> Result<PathBuf, String> {
-    if let Some(d) = std::env::var_os("CARGO_TARGET_DIR").filter(|d| !d.is_empty()) {
-        return Ok(root.join(d));
-    }
-    let o = Command::new(env!("CARGO"))
-        .args(["metadata", "--format-version", "1", "--no-deps"])
-        .current_dir(root)
-        .output()
-        .map_err(|e| format!("cannot run cargo metadata: {e}"))?;
-    if !o.status.success() {
-        return Err(format!("cargo metadata failed: {}", String::from_utf8_lossy(&o.stderr)));
-    }
-    json_string_field(&String::from_utf8_lossy(&o.stdout), "target_directory")
-        .map(PathBuf::from)
-        .ok_or_else(|| "cargo metadata: no target_directory".into())
-}
-
-/// Extracts a top-level-ish string field from JSON without a JSON library.
-/// Sufficient for `cargo metadata`, whose `target_directory` key is unique.
-fn json_string_field(json: &str, key: &str) -> Option<String> {
-    let needle = format!("\"{key}\":");
-    let rest = json[json.find(&needle)? + needle.len()..].trim_start();
-    let mut chars = rest.strip_prefix('"')?.chars();
-    let mut out = String::new();
-    loop {
-        match chars.next()? {
-            '"' => return Some(out),
-            '\\' => match chars.next()? {
-                'n' => out.push('\n'),
-                't' => out.push('\t'),
-                'u' => {
-                    let hex: String = chars.by_ref().take(4).collect();
-                    out.push(char::from_u32(u32::from_str_radix(&hex, 16).ok()?)?);
-                }
-                c => out.push(c), // \" \\ \/
-            },
-            c => out.push(c),
-        }
-    }
-}
-
-/// `cargo build -p kiln_driver`, returning the path of the `kiln` binary.
-fn build_kiln(root: &Path, target: &Path) -> Result<PathBuf, String> {
-    eprintln!("xtask test: building kiln (cargo build -p kiln_driver)");
-    let status = Command::new(env!("CARGO"))
-        .args(["build", "--quiet", "-p", "kiln_driver"])
-        .current_dir(root)
-        .status()
-        .map_err(|e| format!("cannot run cargo build: {e}"))?;
-    if !status.success() {
-        return Err(format!("cargo build -p kiln_driver failed ({status})"));
-    }
-    let exe = target.join("debug").join(format!("kiln{}", std::env::consts::EXE_SUFFIX));
-    if exe.is_file() { Ok(exe) } else { Err(format!("kiln binary not found at {}", exe.display())) }
+    crate::util::identify(compiler).map(|id| id.kind)
 }
 
 #[cfg(test)]

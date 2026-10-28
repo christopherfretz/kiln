@@ -1,0 +1,269 @@
+# Bench: `cargo xtask bench`
+
+Status: implemented (WP-004). Code: `xtask/src/bench/`, with shared pieces in
+`xtask/src/util/` (`process.rs` measured runs, `header.rs` the `//@` scanner,
+`json.rs` the record format). Policy background is `docs/VALIDATION.md`
+"Performance tracking"; this file is the normative contract for the harness,
+for entry authors, and for anything that reads its records.
+
+## Command line
+
+```
+cargo xtask bench [options] [paths...]
+```
+
+| Option | Meaning |
+|---|---|
+| `--compiler <path>` | Compiler to measure. Default: `cargo build --release -p kiln_driver`, then `<target>/release/kiln` (a debug kiln says nothing about performance). |
+| `--baseline <dir>` | Baseline directory. Default `bench/baselines`. Relative paths are taken from the repo root. |
+| `--record` | Write the measurements as the new baselines (see "Recording"). With `--compare-with`, also write `docs/status/perf.md`. |
+| `--compare-with <path>` | Also measure this compiler (normally `clang++-19`) on the same entries and print the ratio table. |
+| `--filter <substr>` | Keep only entries whose id (`<group>/<name>`) contains `<substr>`. |
+| `--runs <N>` | Runs per entry, N >= 1. Default 5. |
+| `--threshold-time <PCT>` | Allowed wall-clock regression, percent, >= 0. Default 5. |
+| `--threshold-mem <PCT>` | Allowed peak-RSS regression, percent, >= 0. Default 2. |
+| `-v, --verbose` | Print each compiler command. |
+| `-h, --help` | Usage. |
+
+`--flag=value` is accepted for every option that takes a value. `paths` are
+files or directories under the bench root (default: all of `bench/`); a
+relative path that does not exist from the current directory is taken from
+the repo root.
+
+Exit status:
+
+| Code | Meaning |
+|---|---|
+| 0 | Every entry was measured, and none regressed beyond a threshold (or `--record` was given). |
+| 1 | An entry failed (directive error, compile error, crash, timeout) for either compiler, or an entry regressed and `--record` was not given. |
+| 2 | Usage or infrastructure error: bad option, no entries selected, a compiler that cannot run `--version`, an unreadable baseline file, an unwritable output. |
+
+## Entries
+
+An entry is `bench/<group>/<name>.cpp`. Its id is `<group>/<name>`; `name` may
+contain further `/` for nested directories. Discovery walks the given paths,
+keeps `.cpp` files, skips names starting with `.`, directories named
+`Inputs`, and the top-level `bench/results/` and `bench/baselines/`. A file
+directly in `bench/` (no group) is an error. Entries are sorted by id and run
+**serially**, one compiler process at a time, so they never compete with each
+other for the CPU.
+
+Every entry is self-contained: no includes outside the standard library, no
+generated inputs. An entry measures one thing; it should take 0.2–3 s with the
+reference compiler (the `pp` group is the exception: it measures header
+preprocessing, which is fast). Constant-evaluation entries end in
+`static_assert`s so that a compiler which skips the work cannot look fast.
+
+Groups in the seed corpus: `pp` (preprocessing of heavy libc++ headers), `oven`
+(constant evaluation), `frontend` (template-heavy parsing and semantic
+analysis).
+
+## Directives
+
+The header is the `//@ key: value` lines before the first line of code, in
+the same syntax as `cargo xtask test` (`spec/harness.md` "Directives"). The
+scanner is shared; the keys are not.
+
+| Key | Meaning |
+|---|---|
+| `std: <std>` | Language standard, one of the C++ values accepted by `cargo xtask test`. Default `c++26`. |
+| `args: <flags>` | Extra compiler flags, whitespace-split; may repeat (concatenated in order). |
+| `mode: syntax\|pp\|emit-llvm` | What the compiler does (below). Default `syntax`. |
+| `oven: steps=N bytes=N` | Accepted and validated, ignored for now (reserved for Oven budget counters). |
+
+| Mode | Flags |
+|---|---|
+| `syntax` | `-fsyntax-only` |
+| `pp` | `-E -o /dev/null` |
+| `emit-llvm` | `-S -emit-llvm -o /dev/null` |
+
+Output goes to `/dev/null` so disk I/O does not enter the timing.
+
+A `cargo xtask test` key (`expect`, `diag`, `strict-diags`, `stdout`,
+`stdout-file`, `exit`, `oracle`, `skip`, `xfail`) is an error, as is an
+unknown key, a missing value, or a repeated `std`/`mode`/`oven`. A directive
+error fails the entry (exit 1) and the entry is not measured.
+
+The command is
+
+```
+<compiler> -std=<std> <mode flags> <args...> bench/<group>/<name>.cpp
+```
+
+run from the repo root, with stdin and stdout closed (`/dev/null`) and stderr
+captured (shown, first 5 lines, if the compile fails). The recorded `flags`
+string is everything between the compiler and the file name.
+
+## Measurement
+
+Each entry runs N times per compiler; the oracle's runs follow the compiler
+under test's for the same entry. A run that fails (non-zero exit, signal, or
+the fixed 300 s timeout) fails the entry, and its remaining runs are skipped.
+
+- **Wall clock**: from just before spawn to the return of `wait`, taken by a
+  thread blocked in `wait` (no polling quantum). Milliseconds, rounded to µs.
+- **Peak RSS**: the child's `ru_maxrss` in KiB, via GNU time
+  (`/usr/bin/time -f %M -o <file> -- <command>`); safe Rust cannot call
+  `wait4`/`getrusage` without FFI, and the crate forbids `unsafe`. The probe is
+  detected once per run (GNU time must accept the format and write a number).
+  Without it, memory is not measured and the records say `"rss_source": "none"`.
+  The child runs in its own process group, so a timeout kills the wrapper and
+  the compiler together.
+- **Statistics** over the N samples: `min`, `max`, and `median`, where the
+  median is taken after dropping one minimum and one maximum sample when
+  N >= 3 (the mean of the two middle samples for an even count). Peak RSS is
+  the same median over the per-run peaks, and is recorded only if every run
+  reported one.
+- **Spread** is `(median - min) / min * 100`. A spread over 10% is printed as a
+  warning (`noisy`); raise `--runs` or rerun on a quieter host.
+- The 1-minute load average (`/proc/loadavg`) is printed and recorded; a load
+  above the CPU count is warned about.
+
+## Regression policy
+
+A measurement is compared only with the baseline of the **same entry and the
+same compiler kind** (`kiln`, `clang` or `other`, from the first line of
+`--version`), so kiln and clang references coexist in one file.
+
+| Verdict | When | Fails? |
+|---|---|---|
+| `new` | No baseline for this entry and kind. | no |
+| `advisory` | The baseline differs in mode, flags, source hash, compiler version (first `--version` line), or host (arch, CPU count). Deltas are printed but not judged. | no |
+| `REGRESSED (time)` | `cur.min > base.median * (1 + t)` and `cur.min - base.median >= 2 ms`. | yes, unless `--record` |
+| `REGRESSED (mem)` | `cur.rss > base.rss * (1 + m)`, both sides measured. | yes, unless `--record` |
+| `improved` | `cur.median < base.min * (1 - t)` and `base.min - cur.median >= 2 ms`, or `cur.rss < base.rss * (1 - m)`. | no |
+| `ok` | Anything else. | no |
+
+`t` and `m` are `--threshold-time` and `--threshold-mem` as fractions. The
+time rule compares the **fastest** current run against the baseline's
+**typical** run: host noise only ever adds time, so a load spike moves the
+median but rarely every run, while a real slowdown moves them all. The 2 ms
+floor absorbs process start-up jitter on very short entries. Measured on the
+shared 24-CPU development host at load ~27, repeated clang runs vary by up to
+±8% on 1 s entries and ±30% in the median of 0.1 s entries; this rule kept
+repeated identical runs green where a median-only or median-and-min rule did
+not.
+
+An improvement is a hint to re-record, never a failure.
+
+## Recording
+
+`--record` merges each successfully measured entry into
+`<baseline dir>/<group>.json` under its compiler kind, replacing that kind's
+previous baseline for the entry and keeping every other entry and kind. Failed
+entries are not recorded (their old baseline stays). Only the compiler under
+test is recorded, not the `--compare-with` oracle. Regressions are reported
+but do not fail a recording run; failures still do.
+
+Baselines are committed. Re-record when an intended change moves the numbers,
+when the reference compiler changes, or when the comparison has gone advisory.
+A baseline only means something on the host it was recorded on.
+
+## Output
+
+Progress lines go to stderr, one per entry and compiler:
+
+```
+[3/9] oven/sieve clang: 823.8 ms (min 749.7, spread 9.9%), 117.5 MB
+```
+
+The table, results path, ratio table and summary go to stdout:
+
+```
+entry                  mode  base ms      ms   time  spread  base MB     MB   mem  status
+oven/fib             syntax    720.1   718.2  -0.3%    2.3%     84.3   84.3 -0.0%  ok
+...
+results: bench/results/2026-10-28T073652.json
+
+bench result: ok. 9 entries: 0 failed, 0 regressed, 1 improved, 0 new, 0 advisory (32.1s)
+```
+
+Failed entries are listed with their reason (and stderr head) under
+`failures:`. MB are MiB (KiB / 1024).
+
+With `--compare-with`, a ratio table follows: per entry the medians and peak
+RSS of both compilers and `test/oracle` ratios (columns named by compiler
+kind, or `test`/`oracle` when both are the same kind), then the geometric mean
+of the time and memory ratios over the entries both compilers measured. A
+failed side shows `FAIL` and is left out of the means. With `--record`, the
+same table is written as markdown to `docs/status/perf.md`, with a header
+naming both compilers and versions, the host, N, and the RSS source.
+
+## Records
+
+Both formats are JSON written by a dependency-free writer with a fixed key
+order (the order below), two-space indentation, and a trailing newline.
+Integers are written without a fraction. Readers reject duplicate keys and
+unknown `schema` values; they ignore unknown keys. `schema` is 1; bump it on
+an incompatible change.
+
+A **measurement** object:
+
+| Key | Type | Meaning |
+|---|---|---|
+| `mode` | string | `syntax`, `pp` or `emit-llvm` |
+| `flags` | string | Flags between the compiler and the file name, space-joined |
+| `source_hash` | string | `fnv1a64:<16 hex digits>` of the entry file's bytes |
+| `runs` | integer | N |
+| `wall_ms_median`, `wall_ms_min`, `wall_ms_max` | number | Milliseconds (µs precision) |
+| `spread_pct` | number | Percent, 2 decimals |
+| `max_rss_kb` | integer or null | Median peak RSS, KiB; null when not measured |
+| `samples_wall_ms`, `samples_rss_kb` | arrays | Every run, in run order (results files only) |
+| `compiler` | string | The path or name the compiler was invoked as |
+| `compiler_version` | string | First line of `--version` |
+| `host` | object | `{"arch": <Rust target arch>, "cpus": <available parallelism>}` |
+
+**Results file** `bench/results/<YYYY-MM-DD>T<HHMMSS>.json` (UTC; `-1`, `-2`,
+... is appended if the name exists). Written by every run that measured
+anything. The directory is git-ignored: results are local history.
+
+```
+{
+  "schema": 1,
+  "timestamp": "2026-10-28T073652",
+  "host": {"arch": "aarch64", "cpus": 24},
+  "load_avg_1m": 27.31,            // null where unknown
+  "rss_source": "gnu-time",        // or "none"
+  "runs": 5,
+  "test": <compiler run>,
+  "oracle": <compiler run> | null
+}
+```
+
+A compiler run is `{"compiler", "compiler_kind", "compiler_version",
+"entries": {<id>: <outcome>}}`. An outcome is a measurement object with
+`"status": "ok"` as its first key, or `{"status": "failed", "error": <text>}`.
+
+**Baseline file** `bench/baselines/<group>.json`:
+
+```
+{
+  "schema": 1,
+  "group": "oven",
+  "entries": {
+    "fib": {
+      "clang": <measurement without samples, plus "recorded": <timestamp>>
+    }
+  }
+}
+```
+
+Entry keys are the entry name within the group; the inner keys are compiler
+kinds. `recorded` is the timestamp of the results file of the recording run.
+
+## Tests backing this spec
+
+- `xtask/src/util/{json,header,process}.rs`: JSON round-trip, foreign and
+  malformed input; directive scanning; measured runs (exit status, stderr,
+  RSS, timeout killing the process group, a missing GNU time).
+- `xtask/src/bench/entry.rs`: directive defaults, every key, rejected headers,
+  source hashes.
+- `xtask/src/bench/stats.rs`: median after dropping min and max, spread.
+- `xtask/src/bench/record.rs`: results and baseline round-trips, timestamps.
+- `xtask/src/bench/compare.rs`: every verdict and threshold boundary, the
+  absolute floor, advisories, tables, ratios and geometric means.
+- `xtask/src/bench/tests.rs`: command-line parsing, results-name collisions,
+  and an end-to-end smoke test with `clang++-19` (skipped when absent) over
+  `xtask/fixtures/bench/`: record (with perf.md), compare green, a doctored
+  baseline regresses, re-recording replaces it, a broken entry fails and is
+  not recorded.

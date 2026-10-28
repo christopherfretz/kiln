@@ -1,0 +1,66 @@
+{
+  "schema": 1,
+  "group": "pp",
+  "entries": {
+    "algorithm-ranges": {
+      "clang": {
+        "mode": "pp",
+        "flags": "-std=c++26 -E -o /dev/null -stdlib=libc++",
+        "source_hash": "fnv1a64:e569d02d4444634a",
+        "runs": 5,
+        "wall_ms_median": 84.347,
+        "wall_ms_min": 76.922,
+        "wall_ms_max": 120.257,
+        "spread_pct": 9.65,
+        "max_rss_kb": 85444,
+        "compiler": "clang++-19",
+        "compiler_version": "Debian clang version 19.1.7 (3+b1)",
+        "host": {
+          "arch": "aarch64",
+          "cpus": 24
+        },
+        "recorded": "2026-10-28T073448"
+      }
+    },
+    "format": {
+      "clang": {
+        "mode": "pp",
+        "flags": "-std=c++26 -E -o /dev/null -stdlib=libc++",
+        "source_hash": "fnv1a64:77da486fadad0a03",
+        "runs": 5,
+        "wall_ms_median": 107.383,
+        "wall_ms_min": 96.67,
+        "wall_ms_max": 113.45,
+        "spread_pct": 11.08,
+        "max_rss_kb": 87692,
+        "compiler": "clang++-19",
+        "compiler_version": "Debian clang version 19.1.7 (3+b1)",
+        "host": {
+          "arch": "aarch64",
+          "cpus": 24
+        },
+        "recorded": "2026-10-28T073448"
+      }
+    },
+    "vector": {
+      "clang": {
+        "mode": "pp",
+        "flags": "-std=c++26 -E -o /dev/null -stdlib=libc++",
+        "source_hash": "fnv1a64:745c296d5070a226",
+        "runs": 5,
+        "wall_ms_median": 94.307,
+        "wall_ms_min": 86.741,
+        "wall_ms_max": 103.363,
+        "spread_pct": 8.72,
+        "max_rss_kb": 85008,
+        "compiler": "clang++-19",
+        "compiler_version": "Debian clang version 19.1.7 (3+b1)",
+        "host": {
+          "arch": "aarch64",
+          "cpus": 24
+        },
+        "recorded": "2026-10-28T073448"
+      }
+    }
+  }
+}

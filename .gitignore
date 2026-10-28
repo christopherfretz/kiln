@@ -3,3 +3,6 @@
 /.toolchain/
 # supervisor-created worktrees for implementer agents
 /.worktrees/
+
+# cargo xtask bench run records (baselines under bench/baselines are committed)
+/bench/results/
