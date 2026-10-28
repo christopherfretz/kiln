@@ -3,3 +3,4 @@
 //! See `docs/ARCHITECTURE.md` and `spec/codegen.md` for the contract
 //! this crate implements.
 #![forbid(unsafe_code)]
+mod fold;

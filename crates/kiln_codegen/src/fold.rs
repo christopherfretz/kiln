@@ -119,7 +119,7 @@ impl Collect<'_> {
         let ast = self.ast;
         let Some(v) = ast.decls.var(d) else { return };
         let Some(init) = v.init else { return };
-        let ty = ast.decls.get(d).ty().unwrap_or_default();
+        let Some(ty) = ast.decls.get(d).ty() else { return };
         let fold = is_static
             || v.spec.is_constexpr()
             || matches!(
