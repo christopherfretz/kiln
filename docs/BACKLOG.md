@@ -33,15 +33,15 @@ Format per `docs/AGENTS.md`. Ids are stable; status moves between
 |---|---|---|
 | WP-040 | `spec/ast.md` + `spec/types.md` + `spec/ast-dump.md` design | done, approved with decisions (types.md §17, ast.md §15) (2026-10-28) |
 | WP-041 | A ast-core (ids, arenas, headers, lookup/redecl, MemReport, AstBuilder; Symbol/Interner → kiln_source) | done (2026-10-28). Follow-up: id exhaustion panics instead of a fatal diagnostic |
-| WP-042 | B types: `TypeContext`, interning (hashbrown), canonical types, M2 kinds, `TypePrinter` | todo |
+| WP-042 | B types (TypeContext, interning, canonical, M2 kinds, template-arg tables, layout hooks, clang-port printer) | done (2026-10-28) |
 | WP-043 | C const-store (ConstStore, StringPool, float formatting, printing) | done (2026-10-28). Sema obligation: `&s` vs `&s.x` at equal offsets intern identically — [temp.type] equivalence must compare designators in sema, not ConstValueId |
-| WP-044 | D dump printer (ast-dump.md) | todo (after A,B,C) |
+| WP-044 | D dump printer (ast-dump.md) | in-progress |
 | WP-045 | E dump loader (text → Ast, M2 subset) | todo (after D) |
 | WP-046 | F+G: `xtask clang-ast` normalizer (clang JSON → ast-dump text) + harness `expect: ast` outcome with goldens | in-progress |
 | WP-047 | (merged into WP-046) | — |
-| WP-048 | H parser M2 (decls, declarators, exprs, stmts → sema actions) | todo (after A,B) |
-| WP-049 | I sema conversions (implicit casts, arithmetic conversions, literal typing) | todo (after A,B) |
-| WP-050 | J abi layout (`TargetTypes`, `record_layout` vs clang `-fdump-record-layouts`) | todo (after B) |
+| WP-048 | H parser M2 (decls, declarators, exprs, stmts → sema actions) | in-progress |
+| WP-049 | I sema conversions (implicit casts, arithmetic conversions, literal typing) | in-progress |
+| WP-050 | J abi layout (`TargetTypes`, `record_layout` vs clang `-fdump-record-layouts`) | in-progress |
 | WP-051 | K oven compile (AST → KBC, M2 subset; tests via loaded dumps) | todo (after E) |
 | WP-052 | L codegen M2 (AST → LLVM IR; tests via loaded dumps) | todo (after E, J) |
 
