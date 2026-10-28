@@ -12,6 +12,7 @@ use super::directives::{
     self, CompilerKind, Expect, Lang, PpCompare, Severity, StdinInput, StdoutExpect, TestSpec,
 };
 use super::discover::TestCase;
+use crate::clang_ast::{DumpOptions, normalize};
 use crate::util::oven_report::{self, Report};
 use crate::util::process::{self, Output, Shown};
 
@@ -143,11 +144,16 @@ impl Test<'_> {
             let reason = "not supported by this compiler (kiln-specific `oven:` directive)";
             return (Status::Skip, Some(reason.to_owned()), String::new());
         }
+        if spec.expect == Expect::Ast && kind == CompilerKind::Other {
+            let reason = "not supported by this compiler (`expect: ast` needs kiln or clang)";
+            return (Status::Skip, Some(reason.to_owned()), String::new());
+        }
         let outcome = match spec.expect {
             Expect::CompileOk => self.compile_ok(&spec),
             Expect::CompileFail => self.compile_fail(&spec),
             Expect::Run => self.run(&spec),
             Expect::Pp => self.pp(&spec),
+            Expect::Ast => self.ast(&spec),
         };
         // Budgets are checked once the kind's own checks pass.
         let outcome = outcome.and_then(|()| self.check_oven(&spec));
@@ -550,6 +556,129 @@ impl Test<'_> {
         }
         if failures.is_empty() { Ok(()) } else { Err(Problem::Fail(failures)) }
     }
+}
+
+impl Test<'_> {
+    /// `expect: ast` (`spec/ast-dump.md` §7): kiln's `-fdump-ast`, or clang's
+    /// JSON dump normalized by `xtask clang-ast`, against the golden.
+    fn ast(&mut self, spec: &TestSpec) -> Check {
+        let mut golden = self.case.path.clone().into_os_string();
+        golden.push(".expected");
+        let golden = PathBuf::from(golden);
+        let golden_name = golden.file_name().unwrap_or_default().to_string_lossy().into_owned();
+        let want = match fs::read_to_string(&golden) {
+            Ok(w) => w,
+            Err(e) => {
+                return Err(Problem::Broken(format!(
+                    "cannot read the golden {golden_name}: {e} (an `ast` test needs one; \
+                     `cargo xtask clang-ast <test>` prints clang's dump in the kiln format)"
+                )));
+            }
+        };
+        let got = if self.cfg.compiler_kind == CompilerKind::Kiln {
+            let filter = spec.ast_filter.as_ref().map(|f| format!("-fdump-ast-filter={f}"));
+            let mut mode = vec!["-fsyntax-only", "-fdump-ast"];
+            mode.extend(filter.as_deref());
+            let o = self.compile(spec, &mode, None)?;
+            self.ast_compiled(spec, &o)?;
+            o.stdout_str()
+        } else {
+            let compiler = self.cfg.compiler.clone();
+            self.clang_ast(&compiler, spec, false)?
+        };
+        let mut failures = String::new();
+        if let Some(d) = ast_diff(&want, &got) {
+            if self.cfg.update {
+                fs::write(&golden, &got).map_err(|e| {
+                    Problem::Broken(format!("cannot write {}: {e}", golden.display()))
+                })?;
+                self.updated = true;
+            } else {
+                let _ = write!(failures, "dump differs from {golden_name}:\n{}", indent(&d));
+            }
+        }
+        if spec.oracle
+            && let Some(oracle) = self.cfg.oracle.clone()
+            && (self.cfg.compiler_kind == CompilerKind::Kiln || oracle != self.cfg.compiler)
+        {
+            let theirs = self.clang_ast(&oracle, spec, true)?;
+            if let Some(d) = ast_diff(&want, &theirs) {
+                let _ = write!(
+                    failures,
+                    "the oracle's normalized dump differs from {golden_name}:\n{}",
+                    indent(&d)
+                );
+            }
+        }
+        if failures.is_empty() { Ok(()) } else { Err(Problem::Fail(failures)) }
+    }
+
+    /// The exit status and `diag:` checks of an `ast` compile.
+    fn ast_compiled(&self, spec: &TestSpec, o: &Output) -> Check {
+        if !o.success() {
+            return Err(Problem::Fail(format!(
+                "expected the AST dump, but the compiler failed ({})\n{}",
+                o.describe_end(),
+                indent(&o.stderr_str())
+            )));
+        }
+        self.check_diags(spec, &diag_parse::parse(&o.stderr_str()))
+    }
+
+    /// clang's AST of the test in the kiln format (`xtask clang-ast`). As the
+    /// compiler under test its exit status and diagnostics are checked; as
+    /// the `oracle`, any failure means the test is broken. A construct the
+    /// normalizer cannot map makes the test broken either way: it cannot be
+    /// checked against clang.
+    fn clang_ast(
+        &mut self,
+        clang: &Path,
+        spec: &TestSpec,
+        oracle: bool,
+    ) -> Result<String, Problem> {
+        let json_mode = ["-fsyntax-only", "-Xclang", "-ast-dump=json"];
+        let json = if oracle {
+            self.oracle_compile(clang, spec, &json_mode, None)?
+        } else {
+            let o = self.compile(spec, &json_mode, None)?;
+            self.ast_compiled(spec, &o)?;
+            o
+        }
+        .stdout_str();
+        let opts = DumpOptions { filter: spec.ast_filter.clone(), ..DumpOptions::default() };
+        let main_file = self.case.name.clone();
+        let timeout = self.cfg.compile_timeout;
+        let mut text = || {
+            let cmd = self.command(clang, spec, &["-fsyntax-only", "-Xclang", "-ast-dump"], None);
+            let o = self.exec(cmd, timeout)?;
+            if o.success() {
+                Ok(o.stdout_str())
+            } else {
+                Err(format!("clang's text dump failed ({})", o.describe_end()))
+            }
+        };
+        normalize(&json, &main_file, &opts, &mut text).map_err(|e| {
+            Problem::Broken(format!(
+                "cannot normalize the AST dump of {} (`xtask clang-ast`):\n{}",
+                clang.display(),
+                indent(&e)
+            ))
+        })
+    }
+}
+
+/// A line diff of two dumps, or `None` when they are equal up to trailing
+/// whitespace on each line and trailing blank lines.
+fn ast_diff(want: &str, got: &str) -> Option<String> {
+    let norm = |s: &str| {
+        let mut lines: Vec<&str> = s.lines().map(str::trim_end).collect();
+        while lines.last().is_some_and(|l| l.is_empty()) {
+            lines.pop();
+        }
+        lines.join("\n")
+    };
+    let (w, g) = (norm(want), norm(got));
+    (w != g).then(|| line_diff(&w, &g))
 }
 
 /// Indents every line by four spaces (and terminates the last one).

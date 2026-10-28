@@ -1,0 +1,27 @@
+TranslationUnitDecl
+|-CXXRecordDecl referenced struct Pt definition
+| |-FieldDecl x 'int'
+| |-FieldDecl referenced y 'int'
+| `-FieldDecl referenced z 'int'
+`-FunctionDecl dz 'int ()'
+  `-CompoundStmt
+    |-DeclStmt
+    | `-VarDecl used p 'Pt' cinit
+    |   `-InitListExpr 'Pt'
+    |     |-IntegerLiteral 'int' 1
+    |     |-ImplicitValueInitExpr 'int'
+    |     `-IntegerLiteral 'int' 3
+    |-DeclStmt
+    | `-VarDecl used q 'Pt' listinit
+    |   `-InitListExpr 'Pt'
+    |     |-ImplicitValueInitExpr 'int'
+    |     |-IntegerLiteral 'int' 2
+    |     `-ImplicitValueInitExpr 'int'
+    `-ReturnStmt
+      `-BinaryOperator 'int' '+'
+        |-ImplicitCastExpr 'int' <LValueToRValue>
+        | `-MemberExpr 'int' lvalue .z
+        |   `-DeclRefExpr 'Pt' lvalue Var 'p' 'Pt'
+        `-ImplicitCastExpr 'int' <LValueToRValue>
+          `-MemberExpr 'int' lvalue .y
+            `-DeclRefExpr 'Pt' lvalue Var 'q' 'Pt'

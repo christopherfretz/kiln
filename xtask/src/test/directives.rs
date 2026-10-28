@@ -25,6 +25,9 @@ pub enum Expect {
     Run,
     /// `-E -P`; compare the preprocessed output.
     Pp,
+    /// `-fsyntax-only -fdump-ast`; compare the dump with `<test>.expected`
+    /// (`spec/ast-dump.md` §7).
+    Ast,
 }
 
 impl Expect {
@@ -34,6 +37,7 @@ impl Expect {
             "compile-fail" => Self::CompileFail,
             "run" => Self::Run,
             "pp" => Self::Pp,
+            "ast" => Self::Ast,
             _ => return None,
         })
     }
@@ -45,6 +49,7 @@ impl Expect {
             Self::CompileFail => "compile-fail",
             Self::Run => "run",
             Self::Pp => "pp",
+            Self::Ast => "ast",
         }
     }
 }
@@ -237,6 +242,9 @@ pub struct TestSpec {
     pub pp_compare: PpCompare,
     /// `pp-linemarkers`: preprocess without `-P` and compare line markers.
     pub pp_linemarkers: bool,
+    /// `ast-filter:`: dump only the declarations whose qualified name
+    /// contains this substring (`-fdump-ast-filter=`).
+    pub ast_filter: Option<String>,
 }
 
 impl TestSpec {
@@ -298,9 +306,11 @@ struct Parser {
     xfail: Vec<Marker>,
     pp_compare: Option<PpCompare>,
     pp_linemarkers: bool,
+    ast_filter: Option<String>,
     /// Lines of directives whose validity depends on `expect`.
     run_only: Vec<(usize, &'static str)>,
     pp_only: Vec<(usize, &'static str)>,
+    ast_only: Vec<(usize, &'static str)>,
     oracle_line: usize,
     stdout_file_line: usize,
     stdin_file_line: usize,
@@ -330,8 +340,10 @@ impl Parser {
             xfail: Vec::new(),
             pp_compare: None,
             pp_linemarkers: false,
+            ast_filter: None,
             run_only: Vec::new(),
             pp_only: Vec::new(),
+            ast_only: Vec::new(),
             oracle_line: 0,
             stdout_file_line: 0,
             stdin_file_line: 0,
@@ -352,7 +364,7 @@ impl Parser {
                 Some(_) => self.err(line, "duplicate `expect`"),
                 None => self.err(
                     line,
-                    format!("unknown expectation `{value}` (compile-ok|compile-fail|run|pp)"),
+                    format!("unknown expectation `{value}` (compile-ok|compile-fail|run|pp|ast)"),
                 ),
             },
             "std" => self.std_directive(line, value),
@@ -373,6 +385,16 @@ impl Parser {
                     }
                     Some(c) => self.pp_compare = Some(c),
                     None => self.err(line, format!("unknown pp-compare `{value}` (tokens|text)")),
+                }
+            }
+            "ast-filter" => {
+                self.ast_only.push((line, "ast-filter"));
+                if self.ast_filter.is_some() {
+                    self.err(line, "duplicate `ast-filter`");
+                } else if value.is_empty() || value.contains(char::is_whitespace) {
+                    self.err(line, "`ast-filter` requires a substring without whitespace");
+                } else {
+                    self.ast_filter = Some(value.to_owned());
                 }
             }
             "diag" => match parse_diag(value, line) {
@@ -596,8 +618,13 @@ impl Parser {
                 self.err(line, format!("`{key}` only applies to `expect: pp`"));
             }
         }
-        if self.oracle.is_some() && !matches!(expect, Expect::Run | Expect::Pp) {
-            self.err(self.oracle_line, "`oracle` only applies to `run` and `pp` tests");
+        if expect != Expect::Ast {
+            for (line, key) in std::mem::take(&mut self.ast_only) {
+                self.err(line, format!("`{key}` only applies to `expect: ast`"));
+            }
+        }
+        if self.oracle.is_some() && !matches!(expect, Expect::Run | Expect::Pp | Expect::Ast) {
+            self.err(self.oracle_line, "`oracle` only applies to `run`, `pp` and `ast` tests");
         }
         if expect == Expect::Pp {
             for line in std::mem::take(&mut self.oven_lines) {
@@ -648,6 +675,7 @@ impl Parser {
             xfail: self.xfail,
             pp_compare: self.pp_compare.unwrap_or_default(),
             pp_linemarkers: self.pp_linemarkers,
+            ast_filter: self.ast_filter,
         })
     }
 }
@@ -671,6 +699,7 @@ fn is_known_key(k: &str) -> bool {
             | "skip"
             | "xfail"
             | "pp-compare"
+            | "ast-filter"
     )
 }
 
@@ -972,7 +1001,7 @@ mod tests {
         let e = errs("//@ stdout: x\n");
         assert_eq!(e, ["line 1: `stdout` only applies to `expect: run`"]);
         let e = errs("//@ oracle: clang\n");
-        assert_eq!(e, ["line 1: `oracle` only applies to `run` and `pp` tests"]);
+        assert_eq!(e, ["line 1: `oracle` only applies to `run`, `pp` and `ast` tests"]);
         let e = errs("//@ diag: 1 note \"x\"\n");
         assert!(e[0].contains("must follow"));
         let e = errs("//@ expect: run\n//@ stdout: a\n//@ stdout-file: b\n");
@@ -1012,6 +1041,26 @@ mod tests {
         assert_eq!(substitute("-I%{repo_root}/x%{repo_root}", v), "-I/r/x/r");
         assert_eq!(substitute("%{other}%{repo_root}%{", v), "%{other}/r%{");
         assert_eq!(substitute("plain", v), "plain");
+    }
+
+    #[test]
+    fn ast_directives() {
+        let s = ok("//@ expect: ast\n");
+        assert_eq!(s.expect, Expect::Ast);
+        assert_eq!(s.ast_filter, None);
+        assert!(!s.oracle, "oracle is off by default for ast (the golden is the contract)");
+        let s = ok("//@ expect: ast\n//@ ast-filter: ns::f\n//@ oracle: clang\n");
+        assert_eq!(s.ast_filter.as_deref(), Some("ns::f"));
+        assert!(s.oracle);
+        assert_eq!(
+            errs("//@ ast-filter: f\n"),
+            ["line 1: `ast-filter` only applies to `expect: ast`"]
+        );
+        let e = errs("//@ expect: ast\n//@ ast-filter: a\n//@ ast-filter: b\n");
+        assert_eq!(e, ["line 3: duplicate `ast-filter`"]);
+        let e = errs("//@ expect: ast\n//@ ast-filter: c d\n");
+        assert!(e[0].contains("without whitespace"), "{e:?}");
+        assert!(errs("//@ ast-filter\n")[0].contains("requires a value"));
     }
 
     #[test]

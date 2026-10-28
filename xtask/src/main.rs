@@ -4,6 +4,7 @@
 use std::process::ExitCode;
 
 mod bench;
+mod clang_ast;
 mod gen_pp;
 mod test;
 mod util;
@@ -16,6 +17,8 @@ commands:
               (`cargo xtask test --help` for options; contract in spec/harness.md)
   bench       measure bench/ compile time and memory against bench/baselines
               (`cargo xtask bench --help` for options; contract in spec/bench.md)
+  clang-ast   print clang 19's AST of a file in the kiln dump format (spec/ast-dump.md §6;
+              `cargo xtask clang-ast --help` for options)
   gen-pp-corpus
               write the generated per-header preprocessor corpus under
               tests/differential/pp (`cargo xtask gen-pp-corpus --help`)
@@ -29,6 +32,7 @@ fn main() -> ExitCode {
     match args.next().as_deref() {
         Some("test") => test::main(args),
         Some("bench") => bench::main(args),
+        Some("clang-ast") => clang_ast::main(args),
         Some("gen-pp-corpus") => gen_pp::main(args),
         Some("libcxx") => {
             eprintln!("xtask: not implemented yet (M0 work package)");

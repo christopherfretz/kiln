@@ -1,0 +1,36 @@
+TranslationUnitDecl
+|-VarDecl referenced limit 'const int' constexpr cinit value=10
+| `-IntegerLiteral 'int' 10
+|-VarDecl used g 'int'
+`-FunctionDecl use 'int (int)'
+  |-ParmVarDecl used v 'int'
+  `-CompoundStmt
+    |-DeclStmt
+    | `-VarDecl referenced local 'const int' cinit
+    |   `-IntegerLiteral 'int' 3
+    |-DeclStmt
+    | `-VarDecl used arr 'int[10]'
+    |-BinaryOperator 'int' lvalue '='
+    | |-ArraySubscriptExpr 'int' lvalue
+    | | |-ImplicitCastExpr 'int *' <ArrayToPointerDecay>
+    | | | `-DeclRefExpr 'int[10]' lvalue Var 'arr' 'int[10]'
+    | | `-IntegerLiteral 'int' 0
+    | `-ImplicitCastExpr 'int' <LValueToRValue>
+    |   `-DeclRefExpr 'const int' lvalue Var 'local' 'const int' non_odr_use_constant
+    `-ReturnStmt
+      `-ConditionalOperator 'int'
+        |-BinaryOperator 'bool' '<'
+        | |-ImplicitCastExpr 'int' <LValueToRValue>
+        | | `-DeclRefExpr 'int' lvalue ParmVar 'v' 'int'
+        | `-ImplicitCastExpr 'int' <LValueToRValue>
+        |   `-DeclRefExpr 'const int' lvalue Var 'limit' 'const int' non_odr_use_constant
+        |-BinaryOperator 'int' '+'
+        | |-ImplicitCastExpr 'int' <LValueToRValue>
+        | | `-ArraySubscriptExpr 'int' lvalue
+        | |   |-ImplicitCastExpr 'int *' <ArrayToPointerDecay>
+        | |   | `-DeclRefExpr 'int[10]' lvalue Var 'arr' 'int[10]'
+        | |   `-IntegerLiteral 'int' 0
+        | `-ImplicitCastExpr 'int' <LValueToRValue>
+        |   `-DeclRefExpr 'int' lvalue Var 'g' 'int'
+        `-ImplicitCastExpr 'int' <LValueToRValue>
+          `-DeclRefExpr 'const int' lvalue Var 'local' 'const int' non_odr_use_constant

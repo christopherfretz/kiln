@@ -1,0 +1,41 @@
+TranslationUnitDecl
+`-FunctionDecl classify 'int (int)'
+  |-ParmVarDecl used v 'int'
+  `-CompoundStmt
+    |-IfStmt has_init has_else
+    | |-DeclStmt
+    | | `-VarDecl used r 'int' cinit
+    | |   `-BinaryOperator 'int' '%'
+    | |     |-ImplicitCastExpr 'int' <LValueToRValue>
+    | |     | `-DeclRefExpr 'int' lvalue ParmVar 'v' 'int'
+    | |     `-IntegerLiteral 'int' 3
+    | |-BinaryOperator 'bool' '=='
+    | | |-ImplicitCastExpr 'int' <LValueToRValue>
+    | | | `-DeclRefExpr 'int' lvalue Var 'r' 'int'
+    | | `-IntegerLiteral 'int' 0
+    | |-ReturnStmt
+    | | `-IntegerLiteral 'int' 0
+    | `-IfStmt
+    |   |-BinaryOperator 'bool' '<'
+    |   | |-ImplicitCastExpr 'int' <LValueToRValue>
+    |   | | `-DeclRefExpr 'int' lvalue ParmVar 'v' 'int'
+    |   | `-IntegerLiteral 'int' 0
+    |   `-ReturnStmt
+    |     `-UnaryOperator 'int' prefix '-'
+    |       `-IntegerLiteral 'int' 1
+    |-IfStmt has_var
+    | |-DeclStmt
+    | | `-VarDecl used w 'int' cinit
+    | |   `-BinaryOperator 'int' '-'
+    | |     |-ImplicitCastExpr 'int' <LValueToRValue>
+    | |     | `-DeclRefExpr 'int' lvalue ParmVar 'v' 'int'
+    | |     `-IntegerLiteral 'int' 1
+    | |-ImplicitCastExpr 'bool' <IntegralToBoolean>
+    | | `-ImplicitCastExpr 'int' <LValueToRValue>
+    | |   `-DeclRefExpr 'int' lvalue Var 'w' 'int'
+    | `-ReturnStmt
+    |   `-ImplicitCastExpr 'int' <LValueToRValue>
+    |     `-ImplicitCastExpr 'int' xvalue <NoOp>
+    |       `-DeclRefExpr 'int' lvalue Var 'w' 'int'
+    `-ReturnStmt
+      `-IntegerLiteral 'int' 1

@@ -19,7 +19,7 @@ pub enum Json {
     Obj(Vec<(String, Json)>),
 }
 
-/// Maximum nesting accepted by the reader (the records are 4–5 deep).
+/// Maximum nesting accepted by [`Json::parse`] (the records are 4–5 deep).
 const MAX_DEPTH: usize = 64;
 
 impl Json {
@@ -143,7 +143,15 @@ impl Json {
 
     /// Parses a complete JSON document (surrounding whitespace allowed).
     pub fn parse(text: &str) -> Result<Json, String> {
-        let mut r = Reader { s: text.as_bytes(), pos: 0 };
+        Self::parse_with_max_depth(text, MAX_DEPTH)
+    }
+
+    /// [`Json::parse`] with a caller-chosen nesting limit, for foreign
+    /// documents that nest deeply (clang's `-ast-dump=json` nests two levels
+    /// per AST level). The reader recurses once per level, so the caller
+    /// must run on a stack sized for `max_depth`.
+    pub fn parse_with_max_depth(text: &str, max_depth: usize) -> Result<Json, String> {
+        let mut r = Reader { s: text.as_bytes(), pos: 0, max_depth };
         let v = r.value(0)?;
         r.ws();
         if r.pos != r.s.len() {
@@ -191,6 +199,7 @@ fn write_str(out: &mut String, s: &str) {
 struct Reader<'a> {
     s: &'a [u8],
     pos: usize,
+    max_depth: usize,
 }
 
 impl Reader<'_> {
@@ -214,7 +223,7 @@ impl Reader<'_> {
     }
 
     fn value(&mut self, depth: usize) -> Result<Json, String> {
-        if depth > MAX_DEPTH {
+        if depth > self.max_depth {
             return Err(self.error("nesting too deep"));
         }
         self.ws();
@@ -439,6 +448,20 @@ mod tests {
         }
         let deep = "[".repeat(100) + &"]".repeat(100);
         assert!(Json::parse(&deep).unwrap_err().contains("too deep"));
+    }
+
+    #[test]
+    fn depth_limit_is_configurable() {
+        let nest = |n: usize| "[".repeat(n) + &"]".repeat(n);
+        // The limit counts levels below the root: 64 nested is the most.
+        assert!(Json::parse(&nest(65)).is_ok());
+        assert!(Json::parse(&nest(66)).is_err());
+        assert!(Json::parse_with_max_depth(&nest(500), 500).is_ok());
+        let err = Json::parse_with_max_depth(&nest(502), 500).unwrap_err();
+        assert!(err.contains("too deep"), "{err}");
+        let obj = (0..300).fold(String::from("1"), |acc, _| format!("{{\"inner\": [{acc}]}}"));
+        assert!(Json::parse_with_max_depth(&obj, 600).is_ok());
+        assert!(Json::parse_with_max_depth(&obj, 599).is_err());
     }
 
     #[test]

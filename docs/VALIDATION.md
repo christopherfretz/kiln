@@ -31,7 +31,11 @@ static_assert(f(2) == 5);
 
 Directives (the full contract, including matching and outcome rules, is
 [spec/harness.md](../spec/harness.md)):
-- `expect: compile-ok | compile-fail | run | pp` (default `compile-ok`)
+- `expect: compile-ok | compile-fail | run | pp | ast` (default `compile-ok`).
+  `ast` compares the AST dump (spec/ast-dump.md) with the required golden
+  `<test>.expected`. Under clang the JSON dump is normalized by
+  `cargo xtask clang-ast`, which also writes new goldens. `ast-filter:
+  <substr>` dumps only the matching declarations.
 - `std: c++98..c++26 | c89..c23` (default `c++26`, `c17` for `.c`),
   `args: <extra flags>` (which may use the placeholders `%{repo_root}`,
   `%{resource_dir}` and `%{test_dir}`)
@@ -45,8 +49,9 @@ Directives (the full contract, including matching and outcome rules, is
 - `stdout: <text>` / `stdout-file: <path>` / `exit: <code>` for `run`, and
   the program's inputs: `run-args: <args>`, `run-stdin: <text>` /
   `run-stdin-file: <path>`, `env: NAME=value`
-- `oracle: clang | none` for `run`/`pp` tests: also build with clang and
-  require identical output (`clang` is the default for `run` and `pp`)
+- `oracle: clang | none` for `run`/`pp`/`ast` tests: also build with clang
+  and require identical output (`clang` is the default for `run` and `pp`;
+  for `ast`, clang's normalized dump must equal the golden)
 - `pp-compare: tokens | text` and `pp-linemarkers` for `pp` tests: how the
   output is compared (token-wise by default) and whether line markers are
   kept (`-E` instead of `-E -P`) and compared

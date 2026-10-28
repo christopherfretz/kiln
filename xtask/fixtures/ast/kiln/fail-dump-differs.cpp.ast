@@ -1,0 +1,3 @@
+TranslationUnitDecl
+`-VarDecl y 'int' cinit
+  `-IntegerLiteral 'int' 1

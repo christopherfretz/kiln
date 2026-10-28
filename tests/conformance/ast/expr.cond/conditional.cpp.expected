@@ -1,0 +1,47 @@
+TranslationUnitDecl
+|-VarDecl used g 'int'
+|-FunctionDecl ref 'int &(bool, int &)'
+| |-ParmVarDecl used b 'bool'
+| |-ParmVarDecl used x 'int &'
+| `-CompoundStmt
+|   `-ReturnStmt
+|     `-ConditionalOperator 'int' lvalue
+|       |-ImplicitCastExpr 'bool' <LValueToRValue>
+|       | `-DeclRefExpr 'bool' lvalue ParmVar 'b' 'bool'
+|       |-DeclRefExpr 'int' lvalue ParmVar 'x' 'int &'
+|       `-DeclRefExpr 'int' lvalue Var 'g' 'int'
+|-FunctionDecl widen 'long (bool, int, long)'
+| |-ParmVarDecl used b 'bool'
+| |-ParmVarDecl used i 'int'
+| |-ParmVarDecl used l 'long'
+| `-CompoundStmt
+|   `-ReturnStmt
+|     `-ConditionalOperator 'long'
+|       |-ImplicitCastExpr 'bool' <LValueToRValue>
+|       | `-DeclRefExpr 'bool' lvalue ParmVar 'b' 'bool'
+|       |-ImplicitCastExpr 'long' <IntegralCast>
+|       | `-ImplicitCastExpr 'int' <LValueToRValue>
+|       |   `-DeclRefExpr 'int' lvalue ParmVar 'i' 'int'
+|       `-ImplicitCastExpr 'long' <LValueToRValue>
+|         `-DeclRefExpr 'long' lvalue ParmVar 'l' 'long'
+|-FunctionDecl msg 'const char *(bool)'
+| |-ParmVarDecl used b 'bool'
+| `-CompoundStmt
+|   `-ReturnStmt
+|     `-ConditionalOperator 'const char *'
+|       |-ImplicitCastExpr 'bool' <LValueToRValue>
+|       | `-DeclRefExpr 'bool' lvalue ParmVar 'b' 'bool'
+|       |-ImplicitCastExpr 'const char *' <ArrayToPointerDecay>
+|       | `-StringLiteral 'const char[4]' lvalue "yes"
+|       `-ImplicitCastExpr 'const char *' <NullToPointer>
+|         `-CXXNullPtrLiteralExpr 'std::nullptr_t'
+`-FunctionDecl side 'void (bool)'
+  |-ParmVarDecl used b 'bool'
+  `-CompoundStmt
+    `-ConditionalOperator 'void'
+      |-ImplicitCastExpr 'bool' <LValueToRValue>
+      | `-DeclRefExpr 'bool' lvalue ParmVar 'b' 'bool'
+      |-CStyleCastExpr 'void' <ToVoid>
+      | `-IntegerLiteral 'int' 0
+      `-CStyleCastExpr 'void' <ToVoid>
+        `-DeclRefExpr 'int' lvalue Var 'g' 'int'

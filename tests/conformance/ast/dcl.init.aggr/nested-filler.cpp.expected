@@ -1,0 +1,60 @@
+TranslationUnitDecl
+|-CXXRecordDecl referenced struct In definition
+| |-FieldDecl referenced a 'int'
+| `-FieldDecl b 'int'
+|-CXXRecordDecl referenced struct Out definition
+| |-FieldDecl referenced in 'In'
+| |-FieldDecl referenced arr 'int[4]'
+| `-FieldDecl tail 'long'
+`-FunctionDecl use 'int ()'
+  `-CompoundStmt
+    |-DeclStmt
+    | `-VarDecl used o 'Out' cinit
+    |   `-InitListExpr 'Out'
+    |     |-InitListExpr 'In'
+    |     | |-IntegerLiteral 'int' 1
+    |     | `-ImplicitValueInitExpr 'int'
+    |     |-InitListExpr 'int[4]'
+    |     | |-array_filler: ImplicitValueInitExpr 'int'
+    |     | |-IntegerLiteral 'int' 2
+    |     | `-IntegerLiteral 'int' 3
+    |     `-ImplicitValueInitExpr 'long'
+    |-DeclStmt
+    | `-VarDecl used z 'Out' cinit
+    |   `-InitListExpr 'Out'
+    |     |-InitListExpr 'In'
+    |     | |-ImplicitValueInitExpr 'int'
+    |     | `-ImplicitValueInitExpr 'int'
+    |     |-ImplicitValueInitExpr 'int[4]'
+    |     `-ImplicitValueInitExpr 'long'
+    |-DeclStmt
+    | `-VarDecl used grid 'int[2][3]' cinit
+    |   `-InitListExpr 'int[2][3]'
+    |     |-InitListExpr 'int[3]'
+    |     | |-IntegerLiteral 'int' 1
+    |     | |-IntegerLiteral 'int' 2
+    |     | `-IntegerLiteral 'int' 3
+    |     `-InitListExpr 'int[3]'
+    |       |-array_filler: ImplicitValueInitExpr 'int'
+    |       `-IntegerLiteral 'int' 4
+    `-ReturnStmt
+      `-BinaryOperator 'int' '+'
+        |-BinaryOperator 'int' '+'
+        | |-ImplicitCastExpr 'int' <LValueToRValue>
+        | | `-MemberExpr 'int' lvalue .a
+        | |   `-MemberExpr 'In' lvalue .in
+        | |     `-DeclRefExpr 'Out' lvalue Var 'o' 'Out'
+        | `-ImplicitCastExpr 'int' <LValueToRValue>
+        |   `-ArraySubscriptExpr 'int' lvalue
+        |     |-ImplicitCastExpr 'int *' <ArrayToPointerDecay>
+        |     | `-MemberExpr 'int[4]' lvalue .arr
+        |     |   `-DeclRefExpr 'Out' lvalue Var 'z' 'Out'
+        |     `-IntegerLiteral 'int' 1
+        `-ImplicitCastExpr 'int' <LValueToRValue>
+          `-ArraySubscriptExpr 'int' lvalue
+            |-ImplicitCastExpr 'int *' <ArrayToPointerDecay>
+            | `-ArraySubscriptExpr 'int[3]' lvalue
+            |   |-ImplicitCastExpr 'int (*)[3]' <ArrayToPointerDecay>
+            |   | `-DeclRefExpr 'int[2][3]' lvalue Var 'grid' 'int[2][3]'
+            |   `-IntegerLiteral 'int' 1
+            `-IntegerLiteral 'int' 0

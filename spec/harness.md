@@ -14,10 +14,10 @@ cargo xtask test [options] [paths...]
 | Option | Meaning |
 |---|---|
 | `--compiler <path>` | Compiler under test. Default: `cargo build -p kiln_driver`, then the `kiln` binary in the target dir (`$CARGO_TARGET_DIR`, else `target_directory` from `cargo metadata`), `debug` profile. |
-| `--oracle <path>` | Oracle compiler for `run`/`pp` comparisons. Default `clang++-19`. |
+| `--oracle <path>` | Oracle compiler for `run`/`pp`/`ast` comparisons. Default `clang++-19`. |
 | `--no-oracle` | Skip all oracle comparisons. |
 | `--filter <substr>` | Keep only tests whose name (repo-relative path) contains `<substr>`. |
-| `--update` | Rewrite existing pp `.expected` goldens with the actual output. |
+| `--update` | Rewrite existing pp and ast `.expected` goldens with the actual output. |
 | `--pp-compare tokens\|text` | Override every pp test's `pp-compare:` directive (see "pp comparison"). |
 | `--report-parity <file>` | After the run, write a parity table into `<file>` (see "Parity report"). A relative path is relative to the repo root. |
 | `-j, --jobs <N>` | Parallel tests. Default `min(available CPUs, 8)`, capped at the test count. |
@@ -56,7 +56,7 @@ directives are also ERRORs.
 
 | Directive | Semantics |
 |---|---|
-| `expect: compile-ok \| compile-fail \| run \| pp` | Test kind. Default `compile-ok`. |
+| `expect: compile-ok \| compile-fail \| run \| pp \| ast` | Test kind. Default `compile-ok`. |
 | `std: <std>` | `c++98 c++03 c++11 c++14 c++17 c++20 c++23 c++26` (C++), `c89 c99 c11 c17 c23` (C). Default `c++26` / `c17`. Passed as `-std=<std>`. |
 | `args: <flags>` | Extra compiler flags, split shell-style (quotes, backslash). It may be repeated, and the flags accumulate. Placeholders are substituted in each flag (below). |
 | `diag: <line>[:<col>] <sev> "<substring>"` | Expected diagnostic. `<sev>` is one of `error fatal warning note remark`. If the column is omitted, any column matches. |
@@ -68,7 +68,8 @@ directives are also ERRORs.
 | `run-stdin: <text>` | `run` only. Each line contributes its value, trimmed, plus `\n`, to the program's stdin, as for `stdout:`. Repeated lines concatenate in order. |
 | `run-stdin-file: <path>` | `run` only. The program's stdin is the file's exact contents. The path is relative to the test's directory (use `Inputs/`, which discovery skips). It cannot be combined with `run-stdin:`. A missing file is an ERROR. |
 | `env: <NAME>=<value>` | `run` only. Sets an environment variable for the program (the inherited environment is otherwise kept). `NAME` matches `[A-Za-z_][A-Za-z0-9_]*`; the value is the rest of the line, trimmed, and may be empty or contain `=`. It may be repeated, once per name. |
-| `oracle: clang \| none` | `run`/`pp` only. Whether to compare with the oracle. Defaults to `clang` for `run` and `pp`. |
+| `oracle: clang \| none` | `run`/`pp`/`ast` only. Whether to compare with the oracle. Defaults to `clang` for `run` and `pp`, `none` for `ast` (the golden is the contract). |
+| `ast-filter: <substr>` | `ast` only. Dump only the declarations whose qualified name contains `<substr>` (no whitespace): kiln gets `-fdump-ast-filter=<substr>`. |
 | `pp-compare: tokens \| text` | `pp` only. How outputs are compared (see "pp comparison"). Default `tokens`. |
 | `pp-linemarkers` | `pp` only. Preprocess with `-E` instead of `-E -P`, so the output keeps line markers, and compare them (see "pp comparison"). |
 | `oven: [<line>[:<col>]] <counter><=N ...` | kiln-specific constexpr budget; `<counter>` is `steps`, `bytes`, `peak_bytes`, `calls`, `allocs` or `evaluations`. Not for `pp`. See "kiln-specific tests". |
@@ -76,7 +77,7 @@ directives are also ERRORs.
 | `xfail[(kiln\|clang)]: <reason>` | Expected to FAIL. Qualified as for `skip`. |
 
 `expect`, `std`, `stdout-file`, `run-stdin-file`, `exit`, `oracle`,
-`pp-compare`, `pp-linemarkers`, and each `skip`/`xfail` qualifier may appear
+`pp-compare`, `pp-linemarkers`, `ast-filter`, and each `skip`/`xfail` qualifier may appear
 at most once; `oven` at most once per
 location (and once without one). If both a qualified marker
 and an unqualified marker apply, the qualified one's reason is reported.
@@ -157,6 +158,7 @@ satisfies `compile-fail`.
 | `compile-fail` | `-fsyntax-only` | non-zero exit, at least one `error`/`fatal` located in the test file, and the diags match |
 | `run` | compile and link to `<scratch>/test.out` | the compile succeeds and the diags match; the binary exits normally within `--timeout`; stdout equals the expectation exactly (if one is given); the exit code equals `exit:` (default 0); the oracle agrees (below) |
 | `pp` | `-E -P` (`-E` with `pp-linemarkers`) | exit 0; the diags match; the output is equivalent to `<test>.expected` (if that file exists); the oracle agrees (below). Equivalence is defined in "pp comparison". |
+| `ast` | kiln: `-fsyntax-only -fdump-ast [-fdump-ast-filter=<substr>]`; clang: `-fsyntax-only -Xclang -ast-dump=json`, normalized | exit 0; the diags match; the dump equals `<test>.expected` up to trailing whitespace on each line and trailing blank lines; the oracle agrees (below). See "ast tests". |
 
 The `run` binary runs with cwd = its scratch dir, the `run-args:` arguments,
 the inherited environment plus `env:`, and the `run-stdin:` /
@@ -173,6 +175,11 @@ is broken, so there is nothing to compare with.
 
 For `pp`, the oracle preprocesses with the same flags, and its output must be
 equivalent to the compiler's (see "pp comparison").
+
+For `ast` (only with `oracle: clang`), the oracle's normalized dump must
+equal the golden. It is checked when the compiler is kiln, or when the
+oracle is not the compiler under test (a clang compiler's own dump is
+already compared with the golden).
 
 The oracle is run even when the compiler under test is itself clang. This
 keeps the harness's own code paths exercised. If the oracle compile fails or
@@ -229,12 +236,29 @@ exact layout of the output (the printer's spacing), not its tokens.
 
 ### Goldens
 
-A pp golden is `<test file name>.expected`, for example
+A pp or ast golden is `<test file name>.expected`, for example
 `function-like.cpp.expected`, stored next to the test. `--update` rewrites an
 existing golden with the raw actual output when the comparison above says it
 differs (so a golden is not churned by spacing changes), and reports
 "updated N .expected file(s)". It never creates a golden. To opt a test into a
 golden, create an empty file and run `--update`, then review the diff.
+(For ast tests the golden is required, so this is also how one is created;
+`cargo xtask clang-ast <test> > <test>.expected` does the same.)
+
+### ast tests
+
+An `ast` test compares the AST dump (`spec/ast-dump.md`) with its golden
+`<test>.expected`, which is required: a missing golden is an **ERROR** whose
+message points to `cargo xtask clang-ast <test>`, which prints the golden as
+clang sees it. Under kiln the dump is kiln's stdout. Under clang, clang's JSON
+dump is converted in-process by the `xtask clang-ast` normalizer
+(`spec/ast-dump.md` §6; constexpr values come from a second, text-dump run),
+so the AST corpus is checked against clang today. A dump the normalizer
+cannot convert (a construct it does not map) is an **ERROR** naming the
+construct: the test cannot be checked against clang. With another compiler
+(`other`), `ast` tests are a SKIP. A dump that differs from the golden is a
+**FAIL** with a line diff (`-` golden, `+` actual); under `--update` the
+golden is rewritten instead.
 
 ### kiln-specific tests
 
@@ -375,10 +399,19 @@ so neither is skipped there.
     `xtask/fixtures/fake-kiln/kiln`, a shell script that identifies as kiln,
     compiles with clang and writes the canned report `<test>.oven.jsonl`
     (`@SRC@` replaced by the source path) to the `-fconstexpr-report=` path;
+  - `xtask/fixtures/ast/clang/` (`expect: ast` under clang: golden match
+    and mismatch, `ast-filter:`, diags, a compile error, a missing golden,
+    a construct the normalizer rejects) and `xtask/fixtures/ast/kiln/` (the
+    same under the fake kiln, which prints the canned dump `<test>.ast`
+    with `@FILTER@` replaced by the `-fdump-ast-filter=` value, plus the
+    `oracle: clang` comparison and `--no-oracle`);
   - `xtask/fixtures/oracle/` (oracle disagreement, run with `--oracle
     clang++-22`; skipped if that compiler is absent);
   - `--filter`;
-  - `--update`.
+  - `--update` (pp and ast goldens).
+- `xtask/src/clang_ast/tests.rs`: the clang-ast normalizer (the mapping
+  table covers M2, unknown kinds and keys are errors, the spec example,
+  values, strings, the side channel), over `xtask/fixtures/ast/normalize/`.
 
 ## Open questions
 

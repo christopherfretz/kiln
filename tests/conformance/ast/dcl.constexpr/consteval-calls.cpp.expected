@@ -1,0 +1,44 @@
+TranslationUnitDecl
+|-FunctionDecl used consteval sq 'int (int)' implicit-inline
+| |-ParmVarDecl used x 'int'
+| `-CompoundStmt
+|   `-ReturnStmt
+|     `-BinaryOperator 'int' '*'
+|       |-ImplicitCastExpr 'int' <LValueToRValue>
+|       | `-DeclRefExpr 'int' lvalue ParmVar 'x' 'int'
+|       `-ImplicitCastExpr 'int' <LValueToRValue>
+|         `-DeclRefExpr 'int' lvalue ParmVar 'x' 'int'
+|-FunctionDecl used constexpr cube 'int (int)' implicit-inline
+| |-ParmVarDecl used x 'int'
+| `-CompoundStmt
+|   `-ReturnStmt
+|     `-BinaryOperator 'int' '*'
+|       |-BinaryOperator 'int' '*'
+|       | |-ImplicitCastExpr 'int' <LValueToRValue>
+|       | | `-DeclRefExpr 'int' lvalue ParmVar 'x' 'int'
+|       | `-ConstantExpr 'int' value=4
+|       |   `-CallExpr 'int'
+|       |     |-ImplicitCastExpr 'int (*)(int)' <FunctionToPointerDecay>
+|       |     | `-DeclRefExpr 'int (int)' lvalue Function 'sq' 'int (int)'
+|       |     `-IntegerLiteral 'int' 2
+|       `-ImplicitCastExpr 'int' <LValueToRValue>
+|         `-DeclRefExpr 'int' lvalue ParmVar 'x' 'int'
+`-FunctionDecl run 'int (int)'
+  |-ParmVarDecl used y 'int'
+  `-CompoundStmt
+    |-DeclStmt
+    | `-VarDecl used a 'int' cinit
+    |   `-ConstantExpr 'int' value=25
+    |     `-CallExpr 'int'
+    |       |-ImplicitCastExpr 'int (*)(int)' <FunctionToPointerDecay>
+    |       | `-DeclRefExpr 'int (int)' lvalue Function 'sq' 'int (int)'
+    |       `-IntegerLiteral 'int' 5
+    `-ReturnStmt
+      `-BinaryOperator 'int' '+'
+        |-ImplicitCastExpr 'int' <LValueToRValue>
+        | `-DeclRefExpr 'int' lvalue Var 'a' 'int'
+        `-CallExpr 'int'
+          |-ImplicitCastExpr 'int (*)(int)' <FunctionToPointerDecay>
+          | `-DeclRefExpr 'int (int)' lvalue Function 'cube' 'int (int)'
+          `-ImplicitCastExpr 'int' <LValueToRValue>
+            `-DeclRefExpr 'int' lvalue ParmVar 'y' 'int'

@@ -1,0 +1,46 @@
+TranslationUnitDecl
+|-FunctionDecl used constexpr pick 'int (int)' implicit-inline
+| |-ParmVarDecl used v 'int'
+| `-CompoundStmt
+|   |-IfStmt has_else constexpr
+|   | |-ConstantExpr 'bool' value=true
+|   | | `-BinaryOperator 'bool' '=='
+|   | |   |-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof 'int'
+|   | |   `-ImplicitCastExpr 'unsigned long' <IntegralCast>
+|   | |     `-IntegerLiteral 'int' 4
+|   | |-CompoundStmt
+|   | | `-CompoundAssignOperator 'int' lvalue '+=' ComputeLHSTy='int' ComputeResultTy='int'
+|   | |   |-DeclRefExpr 'int' lvalue ParmVar 'v' 'int'
+|   | |   `-IntegerLiteral 'int' 1
+|   | `-CompoundStmt
+|   |   `-CompoundAssignOperator 'int' lvalue '-=' ComputeLHSTy='int' ComputeResultTy='int'
+|   |     |-DeclRefExpr 'int' lvalue ParmVar 'v' 'int'
+|   |     `-IntegerLiteral 'int' 1
+|   `-IfStmt has_else consteval
+|     |-CompoundStmt
+|     | `-ReturnStmt
+|     |   `-BinaryOperator 'int' '*'
+|     |     |-ImplicitCastExpr 'int' <LValueToRValue>
+|     |     | `-DeclRefExpr 'int' lvalue ParmVar 'v' 'int'
+|     |     `-IntegerLiteral 'int' 2
+|     `-CompoundStmt
+|       `-ReturnStmt
+|         `-ImplicitCastExpr 'int' <LValueToRValue>
+|           `-ImplicitCastExpr 'int' xvalue <NoOp>
+|             `-DeclRefExpr 'int' lvalue ParmVar 'v' 'int'
+|-VarDecl k 'const int' constexpr cinit value=8
+| `-CallExpr 'int'
+|   |-ImplicitCastExpr 'int (*)(int)' <FunctionToPointerDecay>
+|   | `-DeclRefExpr 'int (int)' lvalue Function 'pick' 'int (int)'
+|   `-IntegerLiteral 'int' 3
+`-FunctionDecl rt 'int (int)'
+  |-ParmVarDecl used v 'int'
+  `-CompoundStmt
+    `-IfStmt !consteval
+      `-CompoundStmt
+        `-ReturnStmt
+          `-CallExpr 'int'
+            |-ImplicitCastExpr 'int (*)(int)' <FunctionToPointerDecay>
+            | `-DeclRefExpr 'int (int)' lvalue Function 'pick' 'int (int)'
+            `-ImplicitCastExpr 'int' <LValueToRValue>
+              `-DeclRefExpr 'int' lvalue ParmVar 'v' 'int'

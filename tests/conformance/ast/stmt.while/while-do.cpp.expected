@@ -1,0 +1,42 @@
+TranslationUnitDecl
+`-FunctionDecl count 'int (int)'
+  |-ParmVarDecl used n 'int'
+  `-CompoundStmt
+    |-DeclStmt
+    | `-VarDecl used c 'int' cinit
+    |   `-IntegerLiteral 'int' 0
+    |-WhileStmt has_var
+    | |-DeclStmt
+    | | `-VarDecl used m 'int' cinit
+    | |   `-BinaryOperator 'int' '-'
+    | |     |-ImplicitCastExpr 'int' <LValueToRValue>
+    | |     | `-DeclRefExpr 'int' lvalue ParmVar 'n' 'int'
+    | |     `-ImplicitCastExpr 'int' <LValueToRValue>
+    | |       `-DeclRefExpr 'int' lvalue Var 'c' 'int'
+    | |-ImplicitCastExpr 'bool' <IntegralToBoolean>
+    | | `-ImplicitCastExpr 'int' <LValueToRValue>
+    | |   `-DeclRefExpr 'int' lvalue Var 'm' 'int'
+    | `-CompoundStmt
+    |   |-IfStmt
+    |   | |-BinaryOperator 'bool' '=='
+    |   | | |-ImplicitCastExpr 'int' <LValueToRValue>
+    |   | | | `-DeclRefExpr 'int' lvalue Var 'm' 'int'
+    |   | | `-IntegerLiteral 'int' 2
+    |   | `-ContinueStmt
+    |   `-UnaryOperator 'int' lvalue prefix '++'
+    |     `-DeclRefExpr 'int' lvalue Var 'c' 'int'
+    |-DoStmt
+    | |-CompoundStmt
+    | | `-UnaryOperator 'int' postfix '--'
+    | |   `-DeclRefExpr 'int' lvalue Var 'c' 'int'
+    | `-BinaryOperator 'bool' '>'
+    |   |-ImplicitCastExpr 'int' <LValueToRValue>
+    |   | `-DeclRefExpr 'int' lvalue Var 'c' 'int'
+    |   `-IntegerLiteral 'int' 0
+    |-WhileStmt
+    | |-CXXBoolLiteralExpr 'bool' true
+    | `-BreakStmt
+    `-ReturnStmt
+      `-ImplicitCastExpr 'int' <LValueToRValue>
+        `-ImplicitCastExpr 'int' xvalue <NoOp>
+          `-DeclRefExpr 'int' lvalue Var 'c' 'int'

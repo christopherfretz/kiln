@@ -1,0 +1,314 @@
+TranslationUnitDecl 0xaaaad57af448 <<invalid sloc>> <invalid sloc>
+|-TypedefDecl 0xaaaad57b0378 <<invalid sloc>> <invalid sloc> implicit __int128_t '__int128'
+| `-BuiltinType 0xaaaad57afa10 '__int128'
+|-TypedefDecl 0xaaaad5890158 <<invalid sloc>> <invalid sloc> implicit __uint128_t 'unsigned __int128'
+| `-BuiltinType 0xaaaad57afa30 'unsigned __int128'
+|-TypedefDecl 0xaaaad5890518 <<invalid sloc>> <invalid sloc> implicit __NSConstantString '__NSConstantString_tag'
+| `-RecordType 0xaaaad5890260 '__NSConstantString_tag'
+|   `-CXXRecord 0xaaaad58901b8 '__NSConstantString_tag'
+|-TypedefDecl 0xaaaad5890588 <<invalid sloc>> <invalid sloc> implicit __SVInt8_t '__SVInt8_t'
+| `-BuiltinType 0xaaaad57afc30 '__SVInt8_t'
+|-TypedefDecl 0xaaaad58905f8 <<invalid sloc>> <invalid sloc> implicit __SVInt16_t '__SVInt16_t'
+| `-BuiltinType 0xaaaad57afc50 '__SVInt16_t'
+|-TypedefDecl 0xaaaad5890668 <<invalid sloc>> <invalid sloc> implicit __SVInt32_t '__SVInt32_t'
+| `-BuiltinType 0xaaaad57afc70 '__SVInt32_t'
+|-TypedefDecl 0xaaaad58906d8 <<invalid sloc>> <invalid sloc> implicit __SVInt64_t '__SVInt64_t'
+| `-BuiltinType 0xaaaad57afc90 '__SVInt64_t'
+|-TypedefDecl 0xaaaad5890748 <<invalid sloc>> <invalid sloc> implicit __SVUint8_t '__SVUint8_t'
+| `-BuiltinType 0xaaaad57afcb0 '__SVUint8_t'
+|-TypedefDecl 0xaaaad58907b8 <<invalid sloc>> <invalid sloc> implicit __SVUint16_t '__SVUint16_t'
+| `-BuiltinType 0xaaaad57afcd0 '__SVUint16_t'
+|-TypedefDecl 0xaaaad5890828 <<invalid sloc>> <invalid sloc> implicit __SVUint32_t '__SVUint32_t'
+| `-BuiltinType 0xaaaad57afcf0 '__SVUint32_t'
+|-TypedefDecl 0xaaaad5890898 <<invalid sloc>> <invalid sloc> implicit __SVUint64_t '__SVUint64_t'
+| `-BuiltinType 0xaaaad57afd10 '__SVUint64_t'
+|-TypedefDecl 0xaaaad5890908 <<invalid sloc>> <invalid sloc> implicit __SVFloat16_t '__SVFloat16_t'
+| `-BuiltinType 0xaaaad57afd30 '__SVFloat16_t'
+|-TypedefDecl 0xaaaad5890978 <<invalid sloc>> <invalid sloc> implicit __SVFloat32_t '__SVFloat32_t'
+| `-BuiltinType 0xaaaad57afd50 '__SVFloat32_t'
+|-TypedefDecl 0xaaaad58909e8 <<invalid sloc>> <invalid sloc> implicit __SVFloat64_t '__SVFloat64_t'
+| `-BuiltinType 0xaaaad57afd70 '__SVFloat64_t'
+|-TypedefDecl 0xaaaad5890a58 <<invalid sloc>> <invalid sloc> implicit __SVBfloat16_t '__SVBfloat16_t'
+| `-BuiltinType 0xaaaad57afd90 '__SVBfloat16_t'
+|-TypedefDecl 0xaaaad5890ac8 <<invalid sloc>> <invalid sloc> implicit __clang_svint8x2_t '__clang_svint8x2_t'
+| `-BuiltinType 0xaaaad57afdb0 '__clang_svint8x2_t'
+|-TypedefDecl 0xaaaad5890b38 <<invalid sloc>> <invalid sloc> implicit __clang_svint16x2_t '__clang_svint16x2_t'
+| `-BuiltinType 0xaaaad57afdd0 '__clang_svint16x2_t'
+|-TypedefDecl 0xaaaad5890ba8 <<invalid sloc>> <invalid sloc> implicit __clang_svint32x2_t '__clang_svint32x2_t'
+| `-BuiltinType 0xaaaad57afdf0 '__clang_svint32x2_t'
+|-TypedefDecl 0xaaaad5890c18 <<invalid sloc>> <invalid sloc> implicit __clang_svint64x2_t '__clang_svint64x2_t'
+| `-BuiltinType 0xaaaad57afe10 '__clang_svint64x2_t'
+|-TypedefDecl 0xaaaad5890c88 <<invalid sloc>> <invalid sloc> implicit __clang_svuint8x2_t '__clang_svuint8x2_t'
+| `-BuiltinType 0xaaaad57afe30 '__clang_svuint8x2_t'
+|-TypedefDecl 0xaaaad5890cf8 <<invalid sloc>> <invalid sloc> implicit __clang_svuint16x2_t '__clang_svuint16x2_t'
+| `-BuiltinType 0xaaaad57afe50 '__clang_svuint16x2_t'
+|-TypedefDecl 0xaaaad5890d68 <<invalid sloc>> <invalid sloc> implicit __clang_svuint32x2_t '__clang_svuint32x2_t'
+| `-BuiltinType 0xaaaad57afe70 '__clang_svuint32x2_t'
+|-TypedefDecl 0xaaaad5890dd8 <<invalid sloc>> <invalid sloc> implicit __clang_svuint64x2_t '__clang_svuint64x2_t'
+| `-BuiltinType 0xaaaad57afe90 '__clang_svuint64x2_t'
+|-TypedefDecl 0xaaaad5890e48 <<invalid sloc>> <invalid sloc> implicit __clang_svfloat16x2_t '__clang_svfloat16x2_t'
+| `-BuiltinType 0xaaaad57afeb0 '__clang_svfloat16x2_t'
+|-TypedefDecl 0xaaaad5890eb8 <<invalid sloc>> <invalid sloc> implicit __clang_svfloat32x2_t '__clang_svfloat32x2_t'
+| `-BuiltinType 0xaaaad57afed0 '__clang_svfloat32x2_t'
+|-TypedefDecl 0xaaaad5890f28 <<invalid sloc>> <invalid sloc> implicit __clang_svfloat64x2_t '__clang_svfloat64x2_t'
+| `-BuiltinType 0xaaaad57afef0 '__clang_svfloat64x2_t'
+|-TypedefDecl 0xaaaad5890f98 <<invalid sloc>> <invalid sloc> implicit __clang_svbfloat16x2_t '__clang_svbfloat16x2_t'
+| `-BuiltinType 0xaaaad57aff10 '__clang_svbfloat16x2_t'
+|-TypedefDecl 0xaaaad5891008 <<invalid sloc>> <invalid sloc> implicit __clang_svint8x3_t '__clang_svint8x3_t'
+| `-BuiltinType 0xaaaad57aff30 '__clang_svint8x3_t'
+|-TypedefDecl 0xaaaad5891078 <<invalid sloc>> <invalid sloc> implicit __clang_svint16x3_t '__clang_svint16x3_t'
+| `-BuiltinType 0xaaaad57aff50 '__clang_svint16x3_t'
+|-TypedefDecl 0xaaaad58910e8 <<invalid sloc>> <invalid sloc> implicit __clang_svint32x3_t '__clang_svint32x3_t'
+| `-BuiltinType 0xaaaad57aff70 '__clang_svint32x3_t'
+|-TypedefDecl 0xaaaad5891578 <<invalid sloc>> <invalid sloc> implicit __clang_svint64x3_t '__clang_svint64x3_t'
+| `-BuiltinType 0xaaaad57aff90 '__clang_svint64x3_t'
+|-TypedefDecl 0xaaaad58915e8 <<invalid sloc>> <invalid sloc> implicit __clang_svuint8x3_t '__clang_svuint8x3_t'
+| `-BuiltinType 0xaaaad57affb0 '__clang_svuint8x3_t'
+|-TypedefDecl 0xaaaad5891658 <<invalid sloc>> <invalid sloc> implicit __clang_svuint16x3_t '__clang_svuint16x3_t'
+| `-BuiltinType 0xaaaad57affd0 '__clang_svuint16x3_t'
+|-TypedefDecl 0xaaaad58916c8 <<invalid sloc>> <invalid sloc> implicit __clang_svuint32x3_t '__clang_svuint32x3_t'
+| `-BuiltinType 0xaaaad57afff0 '__clang_svuint32x3_t'
+|-TypedefDecl 0xaaaad5891738 <<invalid sloc>> <invalid sloc> implicit __clang_svuint64x3_t '__clang_svuint64x3_t'
+| `-BuiltinType 0xaaaad57b0010 '__clang_svuint64x3_t'
+|-TypedefDecl 0xaaaad58917a8 <<invalid sloc>> <invalid sloc> implicit __clang_svfloat16x3_t '__clang_svfloat16x3_t'
+| `-BuiltinType 0xaaaad57b0030 '__clang_svfloat16x3_t'
+|-TypedefDecl 0xaaaad5891818 <<invalid sloc>> <invalid sloc> implicit __clang_svfloat32x3_t '__clang_svfloat32x3_t'
+| `-BuiltinType 0xaaaad57b0050 '__clang_svfloat32x3_t'
+|-TypedefDecl 0xaaaad5891888 <<invalid sloc>> <invalid sloc> implicit __clang_svfloat64x3_t '__clang_svfloat64x3_t'
+| `-BuiltinType 0xaaaad57b0070 '__clang_svfloat64x3_t'
+|-TypedefDecl 0xaaaad58918f8 <<invalid sloc>> <invalid sloc> implicit __clang_svbfloat16x3_t '__clang_svbfloat16x3_t'
+| `-BuiltinType 0xaaaad57b0090 '__clang_svbfloat16x3_t'
+|-TypedefDecl 0xaaaad5891968 <<invalid sloc>> <invalid sloc> implicit __clang_svint8x4_t '__clang_svint8x4_t'
+| `-BuiltinType 0xaaaad57b00b0 '__clang_svint8x4_t'
+|-TypedefDecl 0xaaaad58919d8 <<invalid sloc>> <invalid sloc> implicit __clang_svint16x4_t '__clang_svint16x4_t'
+| `-BuiltinType 0xaaaad57b00d0 '__clang_svint16x4_t'
+|-TypedefDecl 0xaaaad5891a48 <<invalid sloc>> <invalid sloc> implicit __clang_svint32x4_t '__clang_svint32x4_t'
+| `-BuiltinType 0xaaaad57b00f0 '__clang_svint32x4_t'
+|-TypedefDecl 0xaaaad5891ab8 <<invalid sloc>> <invalid sloc> implicit __clang_svint64x4_t '__clang_svint64x4_t'
+| `-BuiltinType 0xaaaad57b0110 '__clang_svint64x4_t'
+|-TypedefDecl 0xaaaad5891b28 <<invalid sloc>> <invalid sloc> implicit __clang_svuint8x4_t '__clang_svuint8x4_t'
+| `-BuiltinType 0xaaaad57b0130 '__clang_svuint8x4_t'
+|-TypedefDecl 0xaaaad5891b98 <<invalid sloc>> <invalid sloc> implicit __clang_svuint16x4_t '__clang_svuint16x4_t'
+| `-BuiltinType 0xaaaad57b0150 '__clang_svuint16x4_t'
+|-TypedefDecl 0xaaaad5891c08 <<invalid sloc>> <invalid sloc> implicit __clang_svuint32x4_t '__clang_svuint32x4_t'
+| `-BuiltinType 0xaaaad57b0170 '__clang_svuint32x4_t'
+|-TypedefDecl 0xaaaad5891c78 <<invalid sloc>> <invalid sloc> implicit __clang_svuint64x4_t '__clang_svuint64x4_t'
+| `-BuiltinType 0xaaaad57b0190 '__clang_svuint64x4_t'
+|-TypedefDecl 0xaaaad5891ce8 <<invalid sloc>> <invalid sloc> implicit __clang_svfloat16x4_t '__clang_svfloat16x4_t'
+| `-BuiltinType 0xaaaad57b01b0 '__clang_svfloat16x4_t'
+|-TypedefDecl 0xaaaad5891d58 <<invalid sloc>> <invalid sloc> implicit __clang_svfloat32x4_t '__clang_svfloat32x4_t'
+| `-BuiltinType 0xaaaad57b01d0 '__clang_svfloat32x4_t'
+|-TypedefDecl 0xaaaad5891dc8 <<invalid sloc>> <invalid sloc> implicit __clang_svfloat64x4_t '__clang_svfloat64x4_t'
+| `-BuiltinType 0xaaaad57b01f0 '__clang_svfloat64x4_t'
+|-TypedefDecl 0xaaaad5891e38 <<invalid sloc>> <invalid sloc> implicit __clang_svbfloat16x4_t '__clang_svbfloat16x4_t'
+| `-BuiltinType 0xaaaad57b0210 '__clang_svbfloat16x4_t'
+|-TypedefDecl 0xaaaad5891ea8 <<invalid sloc>> <invalid sloc> implicit __SVBool_t '__SVBool_t'
+| `-BuiltinType 0xaaaad57b0230 '__SVBool_t'
+|-TypedefDecl 0xaaaad5891f18 <<invalid sloc>> <invalid sloc> implicit __clang_svboolx2_t '__clang_svboolx2_t'
+| `-BuiltinType 0xaaaad57b0250 '__clang_svboolx2_t'
+|-TypedefDecl 0xaaaad5891f88 <<invalid sloc>> <invalid sloc> implicit __clang_svboolx4_t '__clang_svboolx4_t'
+| `-BuiltinType 0xaaaad57b0270 '__clang_svboolx4_t'
+|-TypedefDecl 0xaaaad5891ff8 <<invalid sloc>> <invalid sloc> implicit __SVCount_t '__SVCount_t'
+| `-BuiltinType 0xaaaad57b0290 '__SVCount_t'
+|-TypedefDecl 0xaaaad58920a0 <<invalid sloc>> <invalid sloc> implicit __builtin_ms_va_list 'char *'
+| `-PointerType 0xaaaad5892050 'char *'
+|   `-BuiltinType 0xaaaad57af4f0 'char'
+|-TypedefDecl 0xaaaad58924f0 <<invalid sloc>> <invalid sloc> implicit __builtin_va_list 'std::__va_list'
+| `-RecordType 0xaaaad58921b0 'std::__va_list'
+|   `-CXXRecord 0xaaaad5892100 '__va_list'
+|-CXXRecordDecl 0xaaaad58af508 <values.cpp:1:1, col:27> col:8 referenced struct I definition
+| |-DefinitionData pass_in_registers aggregate standard_layout trivially_copyable pod trivial literal has_constexpr_non_copy_move_ctor
+| | |-DefaultConstructor exists trivial constexpr needs_implicit defaulted_is_constexpr
+| | |-CopyConstructor simple trivial has_const_param needs_implicit implicit_has_const_param
+| | |-MoveConstructor exists simple trivial needs_implicit
+| | |-CopyAssignment simple trivial has_const_param needs_implicit implicit_has_const_param
+| | |-MoveAssignment exists simple trivial needs_implicit
+| | `-Destructor simple irrelevant trivial constexpr
+| |-CXXRecordDecl 0xaaaad58af640 <col:1, col:8> col:8 implicit struct I
+| |-FieldDecl 0xaaaad58af708 <col:12, col:16> col:16 a 'int'
+| |-FieldDecl 0xaaaad58af770 <col:19, col:24> col:24 b 'bool'
+| `-CXXDestructorDecl 0xaaaad58b0440 <col:8> col:8 implicit referenced constexpr ~I 'void () noexcept' inline default trivial
+|-CXXRecordDecl 0xaaaad58af7e0 <line:2:1, col:47> col:8 referenced struct O definition
+| |-DefinitionData pass_in_registers aggregate standard_layout trivially_copyable pod trivial literal has_constexpr_non_copy_move_ctor
+| | |-DefaultConstructor exists trivial constexpr needs_implicit defaulted_is_constexpr
+| | |-CopyConstructor simple trivial has_const_param needs_implicit implicit_has_const_param
+| | |-MoveConstructor exists simple trivial needs_implicit
+| | |-CopyAssignment simple trivial has_const_param needs_implicit implicit_has_const_param
+| | |-MoveAssignment exists simple trivial needs_implicit
+| | `-Destructor simple irrelevant trivial constexpr needs_implicit
+| |-CXXRecordDecl 0xaaaad58af920 <col:1, col:8> col:8 implicit struct O
+| |-FieldDecl 0xaaaad58afa18 <col:12, col:14> col:14 in 'I'
+| |-FieldDecl 0xaaaad58afb10 <col:18, col:27> col:22 arr 'int[3]'
+| |-FieldDecl 0xaaaad58afb78 <col:30, col:35> col:35 c 'char'
+| `-FieldDecl 0xaaaad58afd68 <col:38, col:44> col:40 is 'I[2]'
+|-CXXRecordDecl 0xaaaad58afdd8 <line:3:1, col:23> col:7 referenced union U definition
+| |-DefinitionData pass_in_registers aggregate standard_layout trivially_copyable pod trivial literal has_constexpr_non_copy_move_ctor has_variant_members
+| | |-DefaultConstructor exists trivial constexpr needs_implicit defaulted_is_constexpr
+| | |-CopyConstructor simple trivial has_const_param needs_implicit implicit_has_const_param
+| | |-MoveConstructor exists simple trivial needs_implicit
+| | |-CopyAssignment simple trivial has_const_param needs_implicit implicit_has_const_param
+| | |-MoveAssignment exists simple trivial needs_implicit
+| | `-Destructor simple irrelevant trivial constexpr needs_implicit
+| |-CXXRecordDecl 0xaaaad58aff10 <col:1, col:7> col:7 implicit union U
+| |-FieldDecl 0xaaaad58affd8 <col:11, col:15> col:15 i 'int'
+| `-FieldDecl 0xaaaad58b0040 <col:18, col:20> col:20 s 'I'
+|-VarDecl 0xaaaad58b00f8 <line:4:1, col:51> col:13 o 'const O' constexpr cinit
+| |-value: Struct
+| | |-field: Struct
+| | | `-fields: Int 1, Int 1
+| | |-field: Array size=3
+| | | |-element: Int 4
+| | | `-filler: 2 x Int 0
+| | |-field: Int 99
+| | `-field: Array size=2
+| |   |-element: Struct
+| |   | `-fields: Int 5, Int 0
+| |   `-filler: 1 x Struct
+| |     `-fields: Int 0, Int 0
+| `-InitListExpr 0xaaaad58b03d8 <col:17, col:51> 'const O'
+|   |-InitListExpr 0xaaaad58b7020 <col:18, col:26> 'I'
+|   | |-IntegerLiteral 0xaaaad58b01b0 <col:19> 'int' 1
+|   | `-CXXBoolLiteralExpr 0xaaaad58b01d0 <col:22> 'bool' true
+|   |-InitListExpr 0xaaaad58b7070 <col:29, col:31> 'int[3]'
+|   | |-array_filler: ImplicitValueInitExpr 0xaaaad58b70b8 <<invalid sloc>> 'int'
+|   | `-IntegerLiteral 0xaaaad58b0230 <col:30> 'int' 4
+|   |-CharacterLiteral 0xaaaad58b0298 <col:34> 'char' 99
+|   `-InitListExpr 0xaaaad58b70c8 <col:39, col:50> 'I[2]'
+|     |-array_filler: InitListExpr 0xaaaad58b71a0 <col:50> 'I'
+|     | |-ImplicitValueInitExpr 0xaaaad58b71f0 <<invalid sloc>> 'int'
+|     | `-ImplicitValueInitExpr 0xaaaad58b7200 <<invalid sloc>> 'bool'
+|     `-InitListExpr 0xaaaad58b7108 <col:40, col:49> 'I'
+|       |-IntegerLiteral 0xaaaad58b02b0 <col:41> 'int' 5
+|       `-CXXBoolLiteralExpr 0xaaaad58b02d0 <col:44> 'bool' false
+|-VarDecl 0xaaaad58b73a8 <line:5:1, col:20> col:13 u1 'const U' constexpr cinit
+| |-value: Union .i Int 7
+| `-InitListExpr 0xaaaad58b7478 <col:18, col:20> 'const U' field Field 0xaaaad58affd8 'i' 'int'
+|   `-IntegerLiteral 0xaaaad58b7410 <col:19> 'int' 7
+|-VarDecl 0xaaaad58b7618 <line:6:1, col:33> col:13 u2 'const U' constexpr cinit
+| |-value: Union .s
+| | `-Struct
+| |   `-fields: Int 8, Int 1
+| `-InitListExpr 0xaaaad58b77e0 <col:18, col:33> 'const U' field Field 0xaaaad58b0040 's' 'I'
+|   `-InitListExpr 0xaaaad58b7828 <col:24, col:32> 'I'
+|     |-IntegerLiteral 0xaaaad58b7680 <col:25> 'int' 8
+|     `-CXXBoolLiteralExpr 0xaaaad58b76a0 <col:28> 'bool' true
+|-VarDecl 0xaaaad58b7900 <line:7:1, col:19> col:13 u3 'const U' constexpr cinit
+| |-value: Union .i Int 0
+| `-InitListExpr 0xaaaad58b79a8 <col:18, col:19> 'const U' field Field 0xaaaad58affd8 'i' 'int'
+|-VarDecl 0xaaaad58b7b10 <line:8:1, col:49> col:15 big 'const int[40]' constexpr cinit
+| |-value: Array size=40
+| | |-elements: Int 1, Int 2, Int 3, Int 4
+| | |-elements: Int 5, Int 6, Int 7, Int 8
+| | |-elements: Int 9, Int 10, Int 11
+| | `-filler: 29 x Int 0
+| `-InitListExpr 0xaaaad58b7da0 <col:25, col:49> 'const int[40]'
+|   |-array_filler: ImplicitValueInitExpr 0xaaaad58b7ed8 <<invalid sloc>> 'const int'
+|   |-IntegerLiteral 0xaaaad58b7b78 <col:26> 'int' 1
+|   |-IntegerLiteral 0xaaaad58b7b98 <col:28> 'int' 2
+|   |-IntegerLiteral 0xaaaad58b7bb8 <col:30> 'int' 3
+|   |-IntegerLiteral 0xaaaad58b7bd8 <col:32> 'int' 4
+|   |-IntegerLiteral 0xaaaad58b7bf8 <col:34> 'int' 5
+|   |-IntegerLiteral 0xaaaad58b7c18 <col:36> 'int' 6
+|   |-IntegerLiteral 0xaaaad58b7c38 <col:38> 'int' 7
+|   |-IntegerLiteral 0xaaaad58b7c58 <col:40> 'int' 8
+|   |-IntegerLiteral 0xaaaad58b7c78 <col:42> 'int' 9
+|   |-IntegerLiteral 0xaaaad58b7c98 <col:44> 'int' 10
+|   `-IntegerLiteral 0xaaaad58b7cb8 <col:47> 'int' 11
+|-VarDecl 0xaaaad58b8db0 <line:9:1, col:23> col:15 z 'const int[3]' constexpr cinit
+| |-value: Array size=3
+| | `-filler: 3 x Int 0
+| `-InitListExpr 0xaaaad58b8e90 <col:22, col:23> 'const int[3]'
+|   `-array_filler: ImplicitValueInitExpr 0xaaaad58b8ed0 <<invalid sloc>> 'const int'
+|-VarDecl 0xaaaad58b8fb8 <line:10:1, col:22> col:13 ia 'const I[2]' constexpr cinit
+| |-value: Array size=2
+| | `-filler: 2 x Struct
+| |   `-fields: Int 0, Int 0
+| `-InitListExpr 0xaaaad58b9090 <col:21, col:22> 'const I[2]'
+|   `-array_filler: InitListExpr 0xaaaad58b9110 <col:22> 'const I'
+|     |-ImplicitValueInitExpr 0xaaaad58b9160 <<invalid sloc>> 'int'
+|     `-ImplicitValueInitExpr 0xaaaad58b9170 <<invalid sloc>> 'bool'
+|-CXXRecordDecl 0xaaaad58b91f8 <line:11:1, col:44> col:8 referenced struct Bf definition
+| |-DefinitionData pass_in_registers aggregate standard_layout trivially_copyable pod trivial literal has_constexpr_non_copy_move_ctor
+| | |-DefaultConstructor exists trivial constexpr needs_implicit defaulted_is_constexpr
+| | |-CopyConstructor simple trivial has_const_param needs_implicit implicit_has_const_param
+| | |-MoveConstructor exists simple trivial needs_implicit
+| | |-CopyAssignment simple trivial has_const_param needs_implicit implicit_has_const_param
+| | |-MoveAssignment exists simple trivial needs_implicit
+| | `-Destructor simple irrelevant trivial constexpr needs_implicit
+| |-CXXRecordDecl 0xaaaad58b9330 <col:1, col:8> col:8 implicit struct Bf
+| |-FieldDecl 0xaaaad58b9438 <col:13, col:21> col:17 x 'int'
+| | `-ConstantExpr 0xaaaad58b9410 <col:21> 'int'
+| |   |-value: Int 3
+| |   `-IntegerLiteral 0xaaaad58b93d8 <col:21> 'int' 3
+| |-FieldDecl 0xaaaad58b94e8 <col:24, col:30> col:28 'int'
+| | `-ConstantExpr 0xaaaad58b94c0 <col:30> 'int'
+| |   |-value: Int 2
+| |   `-IntegerLiteral 0xaaaad58b9488 <col:30> 'int' 2
+| `-FieldDecl 0xaaaad58b9598 <col:33, col:41> col:37 y 'int'
+|   `-ConstantExpr 0xaaaad58b9570 <col:41> 'int'
+|     |-value: Int 4
+|     `-IntegerLiteral 0xaaaad58b9538 <col:41> 'int' 4
+|-VarDecl 0xaaaad58b9648 <line:12:1, col:25> col:14 bf 'const Bf' constexpr cinit
+| |-value: Struct
+| | `-fields: Int -1, None, Int 5
+| `-InitListExpr 0xaaaad58b9758 <col:19, col:25> 'const Bf'
+|   |-UnaryOperator 0xaaaad58b96d0 <col:20, col:21> 'int' prefix '-'
+|   | `-IntegerLiteral 0xaaaad58b96b0 <col:21> 'int' 1
+|   `-IntegerLiteral 0xaaaad58b96e8 <col:24> 'int' 5
+|-CXXRecordDecl 0xaaaad58b98f8 <line:13:1, col:12> col:8 referenced struct Em definition
+| |-DefinitionData pass_in_registers empty aggregate standard_layout trivially_copyable pod trivial literal has_constexpr_non_copy_move_ctor can_const_default_init
+| | |-DefaultConstructor exists trivial constexpr needs_implicit defaulted_is_constexpr
+| | |-CopyConstructor simple trivial has_const_param needs_implicit implicit_has_const_param
+| | |-MoveConstructor exists simple trivial needs_implicit
+| | |-CopyAssignment simple trivial has_const_param needs_implicit implicit_has_const_param
+| | |-MoveAssignment exists simple trivial needs_implicit
+| | `-Destructor simple irrelevant trivial constexpr needs_implicit
+| `-CXXRecordDecl 0xaaaad58b9a30 <col:1, col:8> col:8 implicit struct Em
+|-VarDecl 0xaaaad58b9b38 <line:14:1, col:17> col:14 em 'const Em' constexpr listinit
+| |-value: Struct
+| `-InitListExpr 0xaaaad58b9be0 <col:16, col:17> 'const Em'
+|-CXXRecordDecl 0xaaaad58ba2d8 <line:15:1, col:31> col:8 referenced struct D definition
+| |-DefinitionData pass_in_registers aggregate standard_layout trivially_copyable pod trivial literal has_constexpr_non_copy_move_ctor
+| | |-DefaultConstructor exists trivial constexpr needs_implicit defaulted_is_constexpr
+| | |-CopyConstructor simple trivial has_const_param needs_implicit implicit_has_const_param
+| | |-MoveConstructor exists simple trivial needs_implicit
+| | |-CopyAssignment simple trivial has_const_param needs_implicit implicit_has_const_param
+| | |-MoveAssignment exists simple trivial needs_implicit
+| | `-Destructor simple irrelevant trivial constexpr needs_implicit
+| |-CXXRecordDecl 0xaaaad58ba410 <col:1, col:8> col:8 implicit struct D
+| |-FieldDecl 0xaaaad58ba4d8 <col:12, col:19> col:19 a 'double'
+| `-FieldDecl 0xaaaad58ba548 <col:22, col:28> col:28 b 'float'
+|-VarDecl 0xaaaad58ba5d0 <line:16:1, col:22> col:18 d 'const double' constexpr cinit
+| |-value: Float 1.500000e+00
+| `-FloatingLiteral 0xaaaad58ba638 <col:22> 'double' 1.500000e+00
+|-VarDecl 0xaaaad58ba6e8 <line:17:1, col:21> col:17 f 'const float' constexpr cinit
+| |-value: Float 1.000000e-01
+| `-FloatingLiteral 0xaaaad58ba750 <col:21> 'float' 1.000000e-01
+|-VarDecl 0xaaaad58ba800 <line:18:1, col:23> col:18 n 'const double' constexpr cinit
+| |-value: Float -2.500000e-03
+| `-UnaryOperator 0xaaaad58ba888 <col:22, col:23> 'double' prefix '-'
+|   `-FloatingLiteral 0xaaaad58ba868 <col:23> 'double' 2.500000e-03
+|-VarDecl 0xaaaad58ba958 <line:19:1, col:24> col:13 s 'const D' constexpr cinit
+| |-value: Struct
+| | `-fields: Float 1.000000e-01, Float 3.000000e+00
+| `-InitListExpr 0xaaaad58baa50 <col:17, col:24> 'const D'
+|   |-FloatingLiteral 0xaaaad58ba9c0 <col:18> 'double' 1.000000e-01
+|   `-ImplicitCastExpr 0xaaaad58baaa0 <col:23> 'float' <IntegralToFloating>
+|     `-IntegerLiteral 0xaaaad58ba9e0 <col:23> 'int' 3
+|-VarDecl 0xaaaad58baca0 <line:20:1, col:33> col:18 arr 'const double[3]' constexpr cinit
+| |-value: Array size=3
+| | |-element: Float 1.000000e+300
+| | `-filler: 2 x Float 0.000000e+00
+| `-InitListExpr 0xaaaad58bada0 <col:27, col:33> 'const double[3]'
+|   |-array_filler: ImplicitValueInitExpr 0xaaaad58bade8 <<invalid sloc>> 'const double'
+|   `-FloatingLiteral 0xaaaad58bad08 <col:28> 'double' 1.000000e+300
+|-VarDecl 0xaaaad58baec0 <line:21:1, col:21> col:16 np 'int *const' constexpr cinit
+| |-value: LValue <todo>
+| `-ImplicitCastExpr 0xaaaad58baf38 <col:21> 'int *const' <NullToPointer>
+|   `-CXXNullPtrLiteralExpr 0xaaaad58baf28 <col:21> 'std::nullptr_t'
+|-VarDecl 0xaaaad58bafd8 <line:22:1, col:21> col:16 bb 'const bool' constexpr cinit
+| |-value: Int 1
+| `-CXXBoolLiteralExpr 0xaaaad58bb040 <col:21> 'bool' true
+`-VarDecl 0xaaaad58bb0d8 <line:23:1, col:21> col:16 ch 'const char' constexpr cinit
+  |-value: Int 97
+  `-CharacterLiteral 0xaaaad58bb140 <col:21> 'char' 97

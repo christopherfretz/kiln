@@ -1,0 +1,21 @@
+TranslationUnitDecl
+|-LinkageSpecDecl C
+| `-FunctionDecl used c_func 'int (int)'
+|   `-ParmVarDecl 'int'
+|-LinkageSpecDecl C
+| |-VarDecl used c_var 'int'
+| `-FunctionDecl c_other 'void ()'
+|-LinkageSpecDecl C++
+| `-FunctionDecl used cxx_func 'int ()'
+`-FunctionDecl use 'int ()'
+  `-CompoundStmt
+    `-ReturnStmt
+      `-BinaryOperator 'int' '+'
+        |-CallExpr 'int'
+        | |-ImplicitCastExpr 'int (*)(int)' <FunctionToPointerDecay>
+        | | `-DeclRefExpr 'int (int)' lvalue Function 'c_func' 'int (int)'
+        | `-ImplicitCastExpr 'int' <LValueToRValue>
+        |   `-DeclRefExpr 'int' lvalue Var 'c_var' 'int'
+        `-CallExpr 'int'
+          `-ImplicitCastExpr 'int (*)()' <FunctionToPointerDecay>
+            `-DeclRefExpr 'int ()' lvalue Function 'cxx_func' 'int ()'

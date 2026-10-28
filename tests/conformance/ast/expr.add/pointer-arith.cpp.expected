@@ -1,0 +1,30 @@
+TranslationUnitDecl
+`-FunctionDecl diff 'long (int *, int *, int)'
+  |-ParmVarDecl used a 'int *'
+  |-ParmVarDecl used b 'int *'
+  |-ParmVarDecl used n 'int'
+  `-CompoundStmt
+    |-DeclStmt
+    | `-VarDecl used mid 'int *' cinit
+    |   `-BinaryOperator 'int *' '+'
+    |     |-ImplicitCastExpr 'int *' <LValueToRValue>
+    |     | `-DeclRefExpr 'int *' lvalue ParmVar 'a' 'int *'
+    |     `-BinaryOperator 'int' '/'
+    |       |-ImplicitCastExpr 'int' <LValueToRValue>
+    |       | `-DeclRefExpr 'int' lvalue ParmVar 'n' 'int'
+    |       `-IntegerLiteral 'int' 2
+    |-BinaryOperator 'int *' lvalue '='
+    | |-DeclRefExpr 'int *' lvalue Var 'mid' 'int *'
+    | `-BinaryOperator 'int *' '+'
+    |   |-IntegerLiteral 'int' 1
+    |   `-ImplicitCastExpr 'int *' <LValueToRValue>
+    |     `-DeclRefExpr 'int *' lvalue Var 'mid' 'int *'
+    |-CompoundAssignOperator 'int *' lvalue '-=' ComputeLHSTy='int *' ComputeResultTy='int *'
+    | |-DeclRefExpr 'int *' lvalue Var 'mid' 'int *'
+    | `-IntegerLiteral 'int' 1
+    `-ReturnStmt
+      `-BinaryOperator 'long' '-'
+        |-ImplicitCastExpr 'int *' <LValueToRValue>
+        | `-DeclRefExpr 'int *' lvalue ParmVar 'b' 'int *'
+        `-ImplicitCastExpr 'int *' <LValueToRValue>
+          `-DeclRefExpr 'int *' lvalue Var 'mid' 'int *'

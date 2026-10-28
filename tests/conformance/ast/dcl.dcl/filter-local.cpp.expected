@@ -1,0 +1,15 @@
+Dumping counter_next:
+FunctionDecl counter_next 'int (int)'
+|-ParmVarDecl used step 'int'
+`-CompoundStmt
+  |-DeclStmt
+  | `-VarDecl used counter 'int' static cinit
+  |   `-IntegerLiteral 'int' 0
+  |-CompoundAssignOperator 'int' lvalue '+=' ComputeLHSTy='int' ComputeResultTy='int'
+  | |-DeclRefExpr 'int' lvalue Var 'counter' 'int'
+  | `-ImplicitCastExpr 'int' <LValueToRValue>
+  |   `-DeclRefExpr 'int' lvalue ParmVar 'step' 'int'
+  `-ReturnStmt
+    `-ImplicitCastExpr 'int' <LValueToRValue>
+      `-DeclRefExpr 'int' lvalue Var 'counter' 'int'
+
