@@ -21,7 +21,7 @@ Format per `docs/AGENTS.md`. Ids are stable; status moves between
 | WP-012 | `kiln_pp` core + macro engine + builtins + pragmas + `-E` printer + include-guard optimization (226 tests vs clang) | done (2026-10-28). Open: `#embed` not streamed; per-inclusion source ranges; `-dD/-dI` placement |
 | WP-013 | (merged into WP-012) | — |
 | WP-014 | `IncludeResolver` impl (clang search order from `resource/include-paths`, `-I/-isystem/-iquote/-idirafter/-isysroot/-nostdinc*`, `#include_next`, `__has_include*`, `-resource-dir`), driver `kiln -E` with the flag subset + `-M*`, predefines loading + `__KILN__`, and the first parity run over tests/differential/pp with `--report-parity` | in-progress |
-| WP-015 | `IfEvaluator` impl (full [cpp.cond]: intmax arithmetic, char literals via kiln_lex::literal, `defined`, `__has_*`, division by zero, unevaluated branches, clang diagnostics) + `FeatureQueries` tables (clang 19's `__has_feature/extension/builtin/attribute/cpp_attribute/declspec_attribute`, `__is_target_*`) | in-progress |
+| WP-015 | `IfEval` (clang-port `#if` evaluator, 0/1228 differential diffs) + `ClangFeatures` tables (2309 builtins, 128 features, 310 C++ attrs, 35 flag overlays; generated/verified by `scripts/gen-features.sh`) | done (2026-10-28). Decisions: unsupported triples → driver error (not silent NoFeatures); `-march` ignored for now (M7); `#embed` `defined` rule follows the standard |
 | WP-016 | `#embed` resolver (part of WP-014's resolver) + streaming (WP-012 open item) | folded into WP-014 / later |
 | WP-017 | `-E` printer | done inside WP-012 (`-dD/-dI` placement open) |
 | WP-018 | driver `-E` | folded into WP-014; `-fsyntax-only -fdump-ast` wiring after WP-048 |
