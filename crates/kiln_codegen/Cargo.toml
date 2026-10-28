@@ -14,5 +14,8 @@ kiln_abi.workspace = true
 kiln_llvm.workspace = true
 kiln_oven.workspace = true
 
+[dev-dependencies]
+kiln_parse.workspace = true
+
 [lints]
 workspace = true

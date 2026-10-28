@@ -551,7 +551,9 @@ impl<'a> Cg<'a> {
         a.push(Attr::Flag(AttrKind::OptimizeNone));
         a.push(Attr::UwTable(UwTableKind::Async));
         self.target_attrs(&mut a);
-        a.push(Attr::string("min-legal-vector-width", "0"));
+        if self.is_x86() {
+            a.push(Attr::string("min-legal-vector-width", "0"));
+        }
         self.m.attr_set(&a)
     }
 
