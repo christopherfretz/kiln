@@ -666,12 +666,6 @@ it through kiln_diag's fatal handling; the core itself carries on.
   the item stream? clang interleaves them with the output text, which
   needs the printer to see them in stream order. Today callbacks run
   synchronously, before queued markers are printed.
-- **`SourceManager::add_inclusion` was not added by WP-014** (see
-  "Decisions" below). Every inclusion still starts at `sm.loc(file, 0)`.
-  This needs an owner before "In file included from" notes for repeated
-  inclusions (phase 7).
-- **One location range per inclusion** (below). This is needed before
-  "In file included from" notes can distinguish repeated inclusions.
 - **Comments in `#define` bodies under `-CC`** (deviation 15).
 - **Streaming `#embed`.** The byte tokens are built eagerly, as a `Vec`
   of about two tokens per byte. A large resource should instead be a
@@ -682,18 +676,17 @@ it through kiln_diag's fatal handling; the core itself carries on.
 
 ## Decisions recorded from kiln_source (WP-001): binding for pp
 
-- **One location range per inclusion.** `kiln_source` currently gives one
-  `Loc` range per `FileId`. "In file included from ..." notes need a range
-  per inclusion.
-
-  The plan was for WP-014 to add `SourceManager::add_inclusion(FileId,
-  included_from: Loc) -> Loc`, a new range that aliases the same text,
-  and a `Lexer` constructor that starts from a base `Loc`. WP-014 did not
-  add them (see "Open questions"). The main file uses the file's
-  own range. Spec `source.md` must be updated with that API when it lands.
-
-  Until then, kiln_pp enters every inclusion of a file at
-  `sm.loc(file, 0)`.
+- **One location range per inclusion** (WP-056). The main file and
+  virtual buffers (`<built-in>`, scratch) are lexed in the buffer's own
+  range (`sm.loc(file, 0)`). Every `#include` lexes the file in a fresh
+  `SourceManager::add_inclusion(file, included_from)` range, where
+  `included_from` is the expansion location of the header-name token
+  (clang's include position); the `FileFrame` keeps that `base` and
+  every frame-relative location is `base.with_offset(off)`, never
+  `sm.loc(file, off)`. Line markers are unchanged: presumed lookups map
+  every range of a file to the same buffer, lines and `#line` state. If
+  file location space runs out, the inclusion falls back to the buffer's
+  own range (losing only its include stack) instead of failing.
 - **Scratch buffers.** The results of `#` and `##`, the values of builtin
   macros such as `__LINE__` and `__COUNTER__`, and `_Pragma` strings are
   spelled in one virtual buffer per distinct string. These buffers are

@@ -78,6 +78,8 @@ impl<'a> Preprocessor<'a, '_> {
     /// `#` at the start of a line was lexed from the top file frame
     /// (clang `HandleDirective`).
     pub(crate) fn handle_directive(&mut self, _hash: Token) {
+        crate::profile::time!(t_directive_ns);
+        crate::profile::count!(directives);
         self.start_directive();
         // For include-guard detection: were tokens read before this
         // directive? (Its own tokens count as read from here on.)
@@ -115,7 +117,10 @@ impl<'a> Preprocessor<'a, '_> {
                     self.do_include(name, d);
                 }
                 Some(Dir::Embed) => self.do_embed(name),
-                Some(Dir::Define) => self.do_define(),
+                Some(Dir::Define) => {
+                    crate::profile::time!(t_define_ns);
+                    self.do_define();
+                }
                 Some(Dir::Undef) => self.do_undef(),
                 Some(Dir::Line) => self.do_line(),
                 Some(Dir::Error) => self.do_error_warning(name, true),
@@ -739,6 +744,8 @@ impl Preprocessor<'_, '_> {
     /// finishes the directive (clang `EvaluateDirectiveExpression`; macro
     /// expansion is on even inside macro arguments).
     pub(crate) fn eval_if(&mut self) -> bool {
+        crate::profile::time!(t_if_ns);
+        crate::profile::count!(if_evals);
         let old_de = std::mem::replace(&mut self.disable_expand, false);
         let old_pi = std::mem::replace(&mut self.parsing_if, true);
         let old_q = std::mem::replace(&mut self.quiet_lex, false);
@@ -909,6 +916,7 @@ impl Preprocessor<'_, '_> {
     /// tracked; `#elif` conditions are evaluated only when they could
     /// select a group.
     pub(crate) fn skip_excluded(&mut self, if_span: Span, found_non_skip: bool, found_else: bool) {
+        crate::profile::time!(t_skip_ns);
         self.push_cond(Cond { span: if_span, found_non_skip, found_else, was_skipping: false });
         let start = if_span.lo;
         let old_q = std::mem::replace(&mut self.quiet_lex, true);
@@ -918,6 +926,7 @@ impl Preprocessor<'_, '_> {
             }
             let top = self.frames.len() - 1;
             let t = self.lex_raw_from(top);
+            crate::profile::count!(skip_tokens);
             match t.kind {
                 TokKind::Eof => {
                     self.unlex_file_tok(t);
@@ -987,7 +996,7 @@ impl Preprocessor<'_, '_> {
             }
         }
         self.quiet_lex = old_q;
-        let end = self.cur_file_ref().map_or(start, |f| self.sm.loc(f.file, f.lx.offset()));
+        let end = self.cur_file_ref().map_or(start, |f| f.base.with_offset(f.lx.offset()));
         self.callbacks.source_range_skipped(Span::new(start, end));
     }
 
@@ -1149,6 +1158,7 @@ impl Preprocessor<'_, '_> {
     /// `#include`, `#include_next`, `#import` ([cpp.include]): asks the
     /// [`IncludeResolver`] and enters the file.
     fn do_include(&mut self, name: PpTok, d: Dir) {
+        crate::profile::time!(t_include_ns);
         let (dir, kind) = match d {
             Dir::IncludeNext => ("include_next", IncludeKind::IncludeNext),
             Dir::Import => ("import", IncludeKind::Import),
@@ -1209,7 +1219,14 @@ impl Preprocessor<'_, '_> {
         let extern_c = r.extern_c || cur_c;
         let system = r.system || cur_sys || extern_c;
         self.include_depth += 1;
-        self.push_file(r.file, Some(name.tok.span.lo), r.lookup_index, system, extern_c);
+        self.push_file(
+            r.file,
+            Some(name.tok.span.lo),
+            Some(ft.tok.span.lo),
+            r.lookup_index,
+            system,
+            extern_c,
+        );
     }
 
     /// The `(` of `__has_include` / `__has_embed` and the header name after
@@ -1282,7 +1299,10 @@ impl Preprocessor<'_, '_> {
             name_span: h.tok.span,
             directive_span: t.tok.span,
         };
-        let found = self.resolver.resolve(self.sm, &req).is_some();
+        let found = {
+            crate::profile::time!(t_has_include_ns);
+            self.resolver.resolve(self.sm, &req).is_some()
+        };
         Ok((found, close.tok.span))
     }
 }
@@ -1732,7 +1752,8 @@ impl Preprocessor<'_, '_> {
             f.system = system;
             f.extern_c = extern_c;
         }
-        let (file, off, system, extern_c) = (f.file, f.lx.offset(), f.system, f.extern_c);
+        let (file, base, off, system, extern_c) =
+            (f.file, f.base, f.lx.offset(), f.system, f.extern_c);
         let text = self.sm.text(file).as_bytes();
         let mut at = off as usize;
         if text.get(at) == Some(&b'\r') {
@@ -1743,7 +1764,7 @@ impl Preprocessor<'_, '_> {
         }
         let at = u32::try_from(at.min(text.len())).unwrap_or(off);
         self.sm.add_line_directive(file, at, line, name);
-        let loc = self.sm.loc(file, at);
+        let loc = base.with_offset(at);
         self.file_change(FileChange::Rename { file, at: loc, system, extern_c, flag });
     }
 

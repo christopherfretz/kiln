@@ -993,7 +993,8 @@ impl Preprocessor<'_, '_> {
     /// is on the line after it (clang `AdvanceToTokenCharacter(Loc, 0)`).
     fn line_of(&self, lo: Loc) -> u32 {
         let mut lo = lo;
-        if let Some((f, mut off)) = self.sm.offset_of(lo) {
+        if let Some((f, start)) = self.sm.offset_of(lo) {
+            let mut off = start;
             let b = self.sm.text(f).as_bytes();
             while b.get(off as usize) == Some(&b'\\') {
                 let mut i = off as usize + 1;
@@ -1007,7 +1008,8 @@ impl Preprocessor<'_, '_> {
                 }
                 off = u32::try_from(i).unwrap_or(off);
             }
-            lo = self.sm.loc(f, off);
+            // Same inclusion range as `lo`.
+            lo = lo.with_offset(off - start);
         }
         let hi = self.sm.expansion_span(lo).hi;
         self.sm.presumed_line_col(hi).map_or(1, |p| p.line)

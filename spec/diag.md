@@ -406,10 +406,16 @@ and on one line. Replacement and removal ranges are underlined like ranges.
 
 ### 9.6 Include stack
 
-Before a diagnostic in a file other than the last one reported, clang
-prints `In file included from <file>:<line>:` lines. Kiln has the
-hook (`include_stack` in `src/text.rs`) but `kiln_source` has no include
-records yet, so nothing is printed (D8).
+clang's `emitIncludeStack`. Before a diagnostic whose include location
+(`SourceManager::include_loc`, spec/source.md "Inclusions") differs from
+the last one seen, the renderer prints `In file included from
+<presumed file>:<presumed line>:` for each enclosing `#include`,
+outermost first (`In included file:` under `-fno-show-source-location`).
+The include location is updated for notes too, but a note never prints a
+stack. Locations in the main file have no include
+location, so returning to it prints nothing. Tested end to end against
+clang 19's stderr in `crates/kiln_driver/tests/driver.rs`
+(`include_stack_like_clang`).
 
 ## 10. JSON output
 
@@ -456,7 +462,7 @@ control characters.
 | D5 | Unicode printability and width are approximate (ASCII exact; combining/wide ranges coarse). | clang uses LLVM's full tables; no third-party deps here. |
 | D6 | Unknown-option suggestions consider kiln's groups only, so e.g. `-Wbogus` suggests `-Wmost` where clang's larger table ties and suggests nothing, and `-Rbogus` suggests nothing where clang suggests `-Rpass`. | Kiln lacks clang's group membership data. |
 | D7 | Macro-argument range checks look at range ends only. | Kiln spans are half-open; clang walks token by token. |
-| D8 | No include stack (`In file included from`). | `kiln_source` has no include records yet. |
+| D8 | (Resolved by WP-056: the include stack is printed.) | |
 | D9 | Selects are index-based (`{0:a\|b}`); there is no `%plural`. | Callers pass the index. |
 | D10 | `-WX` is accepted as `-Werror`. | MSVC-style alias some build systems pass. |
 | D11 | JSON is kiln's own schema (with `option`, `fixits`, severity `fatal`), not clang's SARIF. | Built for the test harness. |
@@ -470,7 +476,5 @@ control characters.
   buffer named `<scratch space>`.
 - `#pragma clang diagnostic push/pop/ignored` needs per-location policy
   (clang's `DiagStatePoints`); the policy is immutable today.
-- The include stack (§9.6) needs `include_loc`/`add_inclusion` in
-  `kiln_source` (WP-014).
 - `kiln_source` could expose a line-start query; `kiln_diag` derives it
   from `line_text` pointer arithmetic.

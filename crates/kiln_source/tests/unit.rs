@@ -652,3 +652,56 @@ fn cpp_rescan_same_entry_fast_paths_match_slow_walk() {
     }
     assert_eq!(sm.entry_bounds(Loc::INVALID), None);
 }
+
+// spec: source.md "Inclusions"; [cpp.include]/7 (a file may be included
+// more than once; each inclusion is a distinct range of locations).
+#[test]
+fn cpp_include_inclusion_ranges_alias_the_buffer() {
+    let sm = SourceManager::new();
+    let main = sm.add_virtual("main.cpp", "#include \"h\"\n#include \"h\"\n".into()).unwrap();
+    let h = sm.add_virtual("h", "int a;\n#line 10\nint b;\n".into()).unwrap();
+    sm.add_line_directive(h, 16, 10, None);
+    let own = sm.loc(h, 0);
+    let from1 = sm.loc(main, 9);
+    let from2 = sm.loc(main, 22);
+    let i1 = sm.add_inclusion(h, from1).unwrap();
+    let i2 = sm.add_inclusion(h, from2).unwrap();
+    assert!(i1 != own && i2 != own && i1 != i2);
+    // `loc` keeps returning the buffer's own range.
+    assert_eq!(sm.loc(h, 0), own);
+    assert_eq!(sm.include_loc(own), Loc::INVALID);
+    assert_eq!(sm.include_loc(sm.loc(main, 3)), Loc::INVALID);
+    let len = sm.text(h).len() as u32;
+    for (base, from) in [(i1, from1), (i2, from2)] {
+        for off in [0, 4, 16, len] {
+            let l = base.with_offset(off);
+            assert_eq!(sm.offset_of(l), Some((h, off)));
+            assert_eq!(sm.line_col(l), sm.line_col(own.with_offset(off)));
+            assert_eq!(sm.include_loc(l), from);
+            let (p, q) = (
+                sm.presumed_line_col(l).unwrap(),
+                sm.presumed_line_col(own.with_offset(off)).unwrap(),
+            );
+            assert_eq!((p.file, p.line, p.col, p.file_name), (q.file, q.line, q.col, q.file_name));
+        }
+        assert_eq!(sm.entry_bounds(base.with_offset(5)), Some((base, base.with_offset(len))));
+        assert_eq!(sm.same_entry_distance(base, base.with_offset(len)), Some(len));
+        assert_eq!(sm.span_text(Span::new(base.with_offset(4), base.with_offset(5))), Some("a"));
+        assert_eq!(sm.spelling_loc(base.with_offset(4)), base.with_offset(4));
+    }
+    // The ranges are distinct entries.
+    assert_eq!(sm.same_entry_distance(i1, i2), None);
+    assert_eq!(sm.same_entry_distance(own, i1), None);
+    // A macro location reports the inclusion of its expansion.
+    let m = sm
+        .add_expansion(
+            i2.with_offset(4),
+            1,
+            Span::new(i2.with_offset(4), i2.with_offset(5)),
+            ExpansionKind::Macro { name: Span::new(i2.with_offset(4), i2.with_offset(5)) },
+        )
+        .unwrap();
+    assert_eq!(sm.include_loc(m), from2);
+    // The include stack is followed through the includer's own range.
+    assert_eq!(sm.include_loc(from1), Loc::INVALID);
+}

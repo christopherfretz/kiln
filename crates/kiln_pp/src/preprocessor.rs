@@ -147,6 +147,10 @@ impl MiOpt {
 pub(crate) struct FileFrame<'a> {
     pub(crate) lx: Lexer<'a>,
     pub(crate) file: FileId,
+    /// Location of byte 0 of this inclusion of `file`: the buffer's own
+    /// range for the main file and virtual buffers, a fresh
+    /// `SourceManager::add_inclusion` range for an `#include`d file.
+    pub(crate) base: Loc,
     /// Tokens lexed ahead (by the `(` lookahead), last = next.
     pub(crate) back: Vec<Token>,
     /// Start-of-line / leading-space flags propagated from an ended macro
@@ -396,7 +400,7 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
     pub fn enter_main_file(&mut self, file: FileId) {
         use std::fmt::Write as _;
         self.main_file = Some(file);
-        self.push_file(file, None, None, false, false);
+        self.push_file(file, None, None, None, false, false);
         let mut text = self.opts.predefines.clone();
         if !text.is_empty() && !text.ends_with('\n') {
             text.push('\n');
@@ -408,30 +412,46 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
             let _ = writeln!(text, "#undef {name}");
         }
         if let Ok(b) = self.sm.add_virtual("<built-in>", text) {
-            self.push_file(b, None, None, false, false);
+            self.push_file(b, None, None, None, false, false);
         }
     }
 
     /// Pushes a file frame for `file` (reporting its invalid UTF-8 once).
+    /// `inc` is the location of the header name of the `#include` that
+    /// enters it (clang's include position); the frame then lexes in a
+    /// fresh location range remembering it ([cpp.include]).
     pub(crate) fn push_file(
         &mut self,
         file: FileId,
         from: Option<Loc>,
+        inc: Option<Loc>,
         lookup: Option<u32>,
         system: bool,
         extern_c: bool,
     ) {
+        crate::profile::count!(files_entered);
+        if self.entered.contains(&file) {
+            crate::profile::count!(file_reentries);
+        }
+        // clang: the include position of a macro-expanded header name is
+        // the end of its expansion. If location space is exhausted the
+        // inclusion lexes in the buffer's own range (no include stack in
+        // its diagnostics) rather than failing.
+        let base = inc
+            .and_then(|at| self.sm.add_inclusion(file, self.sm.expansion_loc(at)).ok())
+            .unwrap_or_else(|| self.sm.loc(file, 0));
         if self.entered.insert(file) {
             for r in &self.sm.load_report(file).replacements {
-                let at = self.sm.loc(file, r.offset);
+                let at = base.with_offset(r.offset);
                 Diag::new(DiagId::lex_invalid_utf8, Span::new(at, at.with_offset(3)))
                     .emit(self.diags);
             }
         }
-        let lx = Lexer::new(self.sm, self.interner, file, self.sm.loc(file, 0), self.lex_opts);
+        let lx = Lexer::new(self.sm, self.interner, file, base, self.lex_opts);
         self.frames.push(Frame::File(Box::new(FileFrame {
             lx,
             file,
+            base,
             back: Vec::new(),
             pend: TokFlags::empty(),
             conds: Vec::new(),
@@ -539,6 +559,7 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
         let t = if let Some(t) = f.back.pop() {
             t
         } else {
+            crate::profile::count!(raw_tokens);
             let t = f.lx.next();
             if !f.lx.diagnostics().is_empty() {
                 let ds = f.lx.take_diagnostics();
@@ -836,7 +857,8 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
         }
         self.include_depth = self.include_depth.saturating_sub(1);
         if let Some(Frame::File(below)) = self.frames.last() {
-            let (file, system, extern_c) = (below.file, below.system, below.extern_c);
+            let (file, base, system, extern_c) =
+                (below.file, below.base, below.system, below.extern_c);
             // The includer resumes after the newline ending the `#include`
             // (clang's lexer has consumed it with the `eod`).
             let mut off = below.lx.offset();
@@ -846,7 +868,7 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
             } else if rest.starts_with(b"\n") || rest.starts_with(b"\r") {
                 off += 1;
             }
-            let resume = self.sm.loc(file, off);
+            let resume = base.with_offset(off);
             self.file_change(FileChange::Exit { file, exited, resume, system, extern_c });
         }
         false

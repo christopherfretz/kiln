@@ -228,6 +228,22 @@ impl FileEntry {
     }
 }
 
+/// One range of file location space: a buffer's own range (created with
+/// the buffer) or one inclusion of it ([`SourceManager::add_inclusion`]).
+/// Every range of a buffer spells the same text.
+#[derive(Debug, Clone, Copy)]
+struct FileRange {
+    /// Raw value of the range's first location.
+    start: u32,
+    /// Length of the buffer's text (the range is `[start, start + len]`).
+    len: u32,
+    /// The buffer whose text the range spells.
+    file: FileId,
+    /// The `#include` that entered this inclusion; invalid for a buffer's
+    /// own range.
+    included_from: Loc,
+}
+
 #[derive(Debug)]
 struct Alloc {
     next_file: u64,
@@ -249,6 +265,8 @@ struct Alloc {
 /// manager; methods taking a [`Loc`] treat unknown locations as invalid.
 pub struct SourceManager {
     files: AppendVec<FileEntry>,
+    /// Every file location range, in allocation (and so `start`) order.
+    ranges: AppendVec<FileRange>,
     expansions: AppendVec<Entry>,
     /// `(base, name)` of every [`ExpansionKind::Macro`] entry, in creation
     /// (and so base) order.
@@ -256,7 +274,7 @@ pub struct SourceManager {
     presumed_names: AppendVec<Box<str>>,
     by_path: Mutex<HashMap<PathBuf, FileId>>,
     alloc: Mutex<Alloc>,
-    /// Index of the buffer found by the last lookup (clang's
+    /// Index of the range found by the last lookup (clang's
     /// `LastFileIDLookup`): a hint only, checked before use.
     last_file: AtomicU32,
     /// Index of the expansion entry found by the last lookup.
@@ -287,6 +305,7 @@ impl SourceManager {
     pub fn new() -> Self {
         Self {
             files: AppendVec::new(),
+            ranges: AppendVec::new(),
             expansions: AppendVec::new(),
             macro_names: AppendVec::new(),
             presumed_names: AppendVec::new(),
@@ -348,8 +367,56 @@ impl SourceManager {
             lines: OnceLock::new(),
             line_directives: RwLock::new(Vec::new()),
         });
+        self.ranges.push(FileRange {
+            start: start as u32,
+            len: (end - start - 1) as u32,
+            file: FileId(idx),
+            included_from: Loc::INVALID,
+        });
         alloc.next_file = end;
         Ok(FileId(idx))
+    }
+
+    /// Allocates a new location range for one inclusion of `file`,
+    /// entered by the `#include` at `included_from`, and returns the
+    /// location of its byte 0 (clang's `createFileID` per inclusion). The
+    /// range spells the buffer's text exactly as the buffer's own range
+    /// does: offsets, lines, columns, text and `#line` directives are
+    /// those of `file`. Locations in it remember the inclusion
+    /// ([`include_loc`](Self::include_loc)), so diagnostics can print the
+    /// include stack. [`loc`](Self::loc) keeps returning locations in the
+    /// buffer's own range (the main file is lexed there).
+    ///
+    /// # Errors
+    /// [`LocSpaceExhausted`] if file location space is used up.
+    ///
+    /// # Panics
+    /// If `file` was not created by this manager.
+    pub fn add_inclusion(
+        &self,
+        file: FileId,
+        included_from: Loc,
+    ) -> Result<Loc, LocSpaceExhausted> {
+        let len = self.file(file).len();
+        let mut alloc = lock(&self.alloc);
+        let start = alloc.next_file;
+        let end = start + u64::from(len) + 1;
+        if end > FILE_SPACE_END {
+            return Err(LocSpaceExhausted);
+        }
+        self.ranges.push(FileRange { start: start as u32, len, file, included_from });
+        alloc.next_file = end;
+        Ok(Loc(start as u32))
+    }
+
+    /// The location of the `#include` that entered the inclusion holding
+    /// `loc` (clang `getIncludeLoc`); macro locations use their
+    /// [`expansion_loc`](Self::expansion_loc). Invalid for locations in a
+    /// buffer's own range (the main file, virtual buffers, files lexed
+    /// without [`add_inclusion`](Self::add_inclusion)) and for invalid or
+    /// unknown locations.
+    pub fn include_loc(&self, loc: Loc) -> Loc {
+        self.find_range(self.expansion_loc(loc)).map_or(Loc::INVALID, |(r, _)| r.included_from)
     }
 
     fn file(&self, id: FileId) -> &FileEntry {
@@ -404,24 +471,30 @@ impl SourceManager {
     }
 
     fn find_file(&self, loc: Loc) -> Option<(FileId, &FileEntry, u32)> {
+        let (r, off) = self.find_range(loc)?;
+        Some((r.file, self.file(r.file), off))
+    }
+
+    /// The file range holding `loc` and the offset of `loc` in it.
+    fn find_range(&self, loc: Loc) -> Option<(FileRange, u32)> {
         if !loc.is_file() {
             return None;
         }
         let hint = self.last_file.load(Ordering::Relaxed);
-        if let Some(f) = self.files.get(hint)
-            && let Some(off) = loc.0.checked_sub(f.start)
-            && off <= f.len()
+        if let Some(r) = self.ranges.get(hint)
+            && let Some(off) = loc.0.checked_sub(r.start)
+            && off <= r.len
         {
-            return Some((FileId(hint), f, off));
+            return Some((*r, off));
         }
-        let i = self.files.partition_point(|f| f.start <= loc.0).checked_sub(1)?;
-        let f = self.files.get(i)?;
-        let off = loc.0 - f.start;
-        if off > f.len() {
+        let i = self.ranges.partition_point(|r| r.start <= loc.0).checked_sub(1)?;
+        let r = *self.ranges.get(i)?;
+        let off = loc.0 - r.start;
+        if off > r.len {
             return None;
         }
         self.last_file.store(i, Ordering::Relaxed);
-        Some((FileId(i), f, off))
+        Some((r, off))
     }
 
     // ----- lines and columns ---------------------------------------------
@@ -573,7 +646,7 @@ impl SourceManager {
         if loc.is_macro() {
             self.find_expansion(loc).map(|e| (e.base, Loc(e.base.0 + e.len())))
         } else {
-            self.find_file(loc).map(|(_, f, _)| (Loc(f.start), Loc(f.start + f.len())))
+            self.find_range(loc).map(|(r, _)| (Loc(r.start), Loc(r.start + r.len)))
         }
     }
 
