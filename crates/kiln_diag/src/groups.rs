@@ -112,9 +112,7 @@ diag_groups! {
     VariadicMacros = "variadic-macros" [];
     // #if expressions and literals (WP-015)
     Undef = "undef" [];
-    MultiChar = "multichar" [];
     FourByteMultiChar = "four-char-constants" [];
-    UnknownEscapeSequence = "unknown-escape-sequence" [];
     Cxx11LongLong = "c++11-long-long" [];
     Cxx11Extensions = "c++11-extensions" [Cxx11LongLong];
     Cxx14BinaryLiteral = "c++14-binary-literal" [];

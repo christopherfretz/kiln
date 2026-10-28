@@ -316,7 +316,7 @@ diag_ids! {
     lit_octal_escape_too_large = Error (0) "octal escape sequence out of range";
     lit_ucn_escape_incomplete = Error (0) "incomplete universal character name";
     lit_char_too_large = Error (0) "character too large for enclosing character literal type";
-    lit_multichar = Warning [MultiChar] (0) "multi-character character constant";
+    lit_multichar = Warning [Multichar] (0) "multi-character character constant";
     lit_four_char = WarningOff [FourByteMultiChar] (0) "multi-character character constant";
     lit_char_constant_too_long = Warning (0) "character constant too long for its type";
     lit_multichar_not_allowed = Error (1) "{0:wide|Unicode} character literals may not contain multiple characters";
