@@ -87,7 +87,7 @@ impl Sema<'_, '_> {
         use kiln_ast::types::BuiltinType as B;
         matches!(
             self.ast.types.builtin(self.ast.types.canonical(t).without_quals()),
-            Some(B::Char_S | B::Char_U | B::SChar | B::UChar | B::Char8 | B::Char16 | B::Char32 | B::WChar_S | B::WChar_U)
+            Some(B::Char | B::SChar | B::UChar | B::Char8 | B::Char16 | B::Char32 | B::WChar)
         )
     }
 
@@ -102,25 +102,27 @@ impl Sema<'_, '_> {
         if self.is_error_type(ty) {
             return match init {
                 Initializer::Expr(e) => e,
-                Initializer::Paren(v, l, r) => self.builder().recovery(QualType::ERROR, &v, l, r),
+                Initializer::Paren(v, l, _) => self.recover(QualType::ERROR, &v, l),
                 Initializer::List(l) => {
                     let items: Vec<ExprId> = l
                         .items
                         .iter()
-                        .filter_map(|i| if let InitValue::Expr(e) = i.value { Some(e) } else { None })
+                        .filter_map(
+                            |i| if let InitValue::Expr(e) = i.value { Some(e) } else { None },
+                        )
                         .collect();
-                    self.builder().recovery(QualType::ERROR, &items, l.lbrace, l.rbrace)
+                    self.recover(QualType::ERROR, &items, l.lbrace)
                 }
             };
         }
         match init {
             Initializer::Expr(e) => self.init_from_expr(ty, e, ConvCtx::Initialization),
-            Initializer::Paren(v, l, r) => {
+            Initializer::Paren(v, l, _) => {
                 if v.len() == 1 {
                     self.init_from_expr(ty, v[0], ConvCtx::DirectInitialization)
                 } else {
                     self.unsupported("parenthesized initialization with multiple expressions", l);
-                    self.builder().recovery(ty, &v, l, r)
+                    self.recover(ty, &v, l)
                 }
             }
             Initializer::List(l) => {
@@ -137,13 +139,15 @@ impl Sema<'_, '_> {
         }
         if self.ast.types.is_array(ty) {
             let elem = self.ast.types.element(ty).unwrap_or(QualType::ERROR);
-            if let Some(s) = self.string_lit_of(e) {
-                if self.is_char_type(elem) {
-                    return self.check_string_init(ty, s, e);
-                }
+            if let Some(s) = self.string_lit_of(e)
+                && self.is_char_type(elem)
+            {
+                return self.check_string_init(ty, s, e);
             }
             let which = if self.is_char_type(elem) { "1" } else { "0" };
-            let msg = self.diag(DiagId::sema_array_init_not_init_list, self.ast.exprs.get(e).loc()).arg(which);
+            let msg = self
+                .diag(DiagId::sema_array_init_not_init_list, self.ast.exprs.get(e).loc())
+                .arg(which);
             self.emit(msg);
             return e;
         }
@@ -185,7 +189,12 @@ impl Sema<'_, '_> {
             .filter(|&f| {
                 let n = self.ast.decls.get(f);
                 n.kind() == DeclKind::Field
-                    && !(n.name().is_empty() && self.ast.decls.field(f).is_some_and(|x: &FieldData| x.bit_width.is_some()))
+                    && !(n.name().is_empty()
+                        && self
+                            .ast
+                            .decls
+                            .field(f)
+                            .is_some_and(|x: &FieldData| x.bit_width.is_some()))
             })
             .collect()
     }
@@ -194,9 +203,11 @@ impl Sema<'_, '_> {
     pub fn init_from_list(&mut self, ty: QualType, l: &InitList) -> ExprId {
         if self.is_aggregate(ty) {
             if self.ast.types.as_record(ty).is_some() && !self.is_complete(ty) {
-                let msg = self.diag(DiagId::sema_typecheck_decl_incomplete_type, l.lbrace).arg(self.ty_arg(ty));
+                let msg = self
+                    .diag(DiagId::sema_typecheck_decl_incomplete_type, l.lbrace)
+                    .arg(self.ty_arg(ty));
                 self.emit(msg);
-                return self.builder().recovery(ty, &[], l.lbrace, l.rbrace);
+                return self.recover(ty, &[], l.lbrace);
             }
             let mut pos = 0;
             let e = self.check_aggregate(ty, &l.items, &mut pos, true, l.lbrace, l.rbrace);
@@ -207,7 +218,7 @@ impl Sema<'_, '_> {
         }
         if self.ast.types.is_reference(ty) {
             self.unsupported("list-initialization of a reference", l.lbrace);
-            return self.builder().recovery(ty, &[], l.lbrace, l.rbrace);
+            return self.recover(ty, &[], l.lbrace);
         }
         // Scalar ([dcl.init.list]/3.9-10).
         let mut inits = Vec::new();
@@ -217,7 +228,11 @@ impl Sema<'_, '_> {
                 inits.push(self.convert_for_init(*e, ty, ConvCtx::Initialization));
             }
             Some(item) => {
-                let what = if matches!(item.value, InitValue::List(_)) { "nested braces" } else { "a designator" };
+                let what = if matches!(item.value, InitValue::List(_)) {
+                    "nested braces"
+                } else {
+                    "a designator"
+                };
                 self.unsupported(&format!("{what} in a scalar initializer"), item.value.loc(self));
             }
         }
@@ -232,7 +247,10 @@ impl Sema<'_, '_> {
         let which = if self.ast.types.is_array(ty) {
             "0"
         } else if self.ast.types.as_record(ty).is_some_and(|r| {
-            self.ast.decls.record(self.ast.definition(r).unwrap_or(r)).is_some_and(|x| x.tag == TagKind::Union)
+            self.ast
+                .decls
+                .record(self.ast.definition(r).unwrap_or(r))
+                .is_some_and(|x| x.tag == TagKind::Union)
         }) {
             "3"
         } else {
@@ -244,7 +262,13 @@ impl Sema<'_, '_> {
 
     /// One element of an aggregate: a nested list, a brace-elided
     /// sub-aggregate ([dcl.init.aggr]/16) or an expression.
-    fn init_element(&mut self, ty: QualType, items: &[InitItem], pos: &mut usize, at: Loc) -> ExprId {
+    fn init_element(
+        &mut self,
+        ty: QualType,
+        items: &[InitItem],
+        pos: &mut usize,
+        at: Loc,
+    ) -> ExprId {
         match &items[*pos].value {
             InitValue::List(sub) => {
                 *pos += 1;
@@ -257,7 +281,10 @@ impl Sema<'_, '_> {
                     let elem = self.ast.types.element(ty).unwrap_or(QualType::ERROR);
                     !(self.is_char_type(elem) && self.string_lit_of(e).is_some())
                 } else if let Some(r) = self.ast.types.as_record(ty) {
-                    !self.ast.types.as_record(ety).is_some_and(|x| self.ast.first(x) == self.ast.first(r))
+                    self.ast
+                        .types
+                        .as_record(ety)
+                        .is_none_or(|x| self.ast.first(x) != self.ast.first(r))
                         && !self.is_error_type(ety)
                 } else {
                     false
@@ -288,7 +315,7 @@ impl Sema<'_, '_> {
             return self.check_array(ty, items, pos, braced, lbrace, rbrace);
         }
         let Some(r) = self.ast.types.as_record(ty) else {
-            return self.builder().recovery(ty, &[], lbrace, rbrace);
+            return self.recover(ty, &[], lbrace);
         };
         let fields = self.init_fields(r);
         let def = self.ast.definition(r).unwrap_or(r);
@@ -312,7 +339,10 @@ impl Sema<'_, '_> {
                     *pos += 1;
                     continue;
                 }
-                let Some(idx) = fields.iter().position(|&f| self.ast.decls.get(f).name().as_ident() == Some(name)) else {
+                let Some(idx) = fields
+                    .iter()
+                    .position(|&f| self.ast.decls.get(f).name().as_ident() == Some(name))
+                else {
                     let msg = self
                         .diag(DiagId::sema_no_member, dloc)
                         .arg(self.ast.symbols().as_str(name).to_string())
@@ -323,7 +353,8 @@ impl Sema<'_, '_> {
                 };
                 cur = idx;
             }
-            if cur >= fields.len() || (union && union_field.is_some() && item.designator.is_empty()) {
+            if cur >= fields.len() || (union && union_field.is_some() && item.designator.is_empty())
+            {
                 if braced {
                     self.excess(ty, item);
                     *pos = items.len();
@@ -354,12 +385,11 @@ impl Sema<'_, '_> {
             }
         } else {
             for (i, slot) in slots.into_iter().enumerate() {
-                let e = match slot {
-                    Some(e) => e,
-                    None => {
-                        let fty = self.ast.decls.get(fields[i]).ty().unwrap_or(QualType::ERROR);
-                        self.filler(fty, rbrace)
-                    }
+                let e = if let Some(e) = slot {
+                    e
+                } else {
+                    let fty = self.ast.decls.get(fields[i]).ty().unwrap_or(QualType::ERROR);
+                    self.filler(fty, rbrace)
                 };
                 inits.push(e);
             }
@@ -387,7 +417,10 @@ impl Sema<'_, '_> {
                     break;
                 }
                 let Designator::Index(ie, dloc) = *d else {
-                    let msg = self.diag(DiagId::sema_no_member, item.value.loc(self)).arg("field").arg(self.ty_arg(ty));
+                    let msg = self
+                        .diag(DiagId::sema_no_member, item.value.loc(self))
+                        .arg("field")
+                        .arg(self.ty_arg(ty));
                     self.emit(msg);
                     *pos += 1;
                     continue;
@@ -400,7 +433,9 @@ impl Sema<'_, '_> {
                 let c = conv::lvalue_to_rvalue(self, ie);
                 let c = self.act_on_full_expr(c);
                 match self.evaluate(c) {
-                    Ok(crate::ConstVal::Int(v)) if v >= 0 => cur = u64::try_from(v).unwrap_or(u64::MAX),
+                    Ok(crate::ConstVal::Int(v)) if v >= 0 => {
+                        cur = u64::try_from(v).unwrap_or(u64::MAX);
+                    }
                     _ => {
                         self.error(DiagId::sema_expr_not_ice, dloc);
                         *pos += 1;

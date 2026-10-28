@@ -11,8 +11,8 @@
 use kiln_ast::consts::{FloatKind, Scalar};
 use kiln_ast::decl::DeclKind;
 use kiln_ast::expr::{BinaryOp, CastKind, ExprFlags, ExprKind, TraitKind, UnaryOp};
-use kiln_ast::types::{BuiltinType, TypeView};
 use kiln_ast::stmt::StmtKind;
+use kiln_ast::types::{BuiltinType, TypeView};
 use kiln_ast::{Ast, ConstValueId, DeclId, ExprId, QualType, StmtId};
 use kiln_diag::DiagId;
 use kiln_source::Loc;
@@ -251,8 +251,7 @@ impl Eval<'_> {
         }
         if t.is_pointer(ty) || t.builtin(t.canonical(ty)) == Some(BuiltinType::NullPtr) {
             return match v {
-                ConstVal::Null => Ok(ConstVal::Null),
-                ConstVal::Int(0) => Ok(ConstVal::Null),
+                ConstVal::Null | ConstVal::Int(0) => Ok(ConstVal::Null),
                 _ => Err(NotConstant::plain()),
             };
         }
@@ -320,7 +319,8 @@ impl Eval<'_> {
                 } else {
                     self.ast.exprs.get(ExprId::new(n.a())).ty()
                 };
-                let (s, a) = crate::target::size_align(self.ast, arg, self.target).ok_or_else(NotConstant::plain)?;
+                let (s, a) = crate::target::size_align(self.ast, arg, self.target)
+                    .ok_or_else(NotConstant::plain)?;
                 let v = match kind {
                     TraitKind::SizeOf => s,
                     _ => a,
@@ -365,25 +365,22 @@ impl Eval<'_> {
                     || (self.ast.types.effective_quals(ty).is_const()
                         && !self.ast.types.effective_quals(ty).is_volatile()
                         && int_info(self.ast, ty).is_some());
-                match (usable, v.init) {
-                    (true, Some(init)) => {
-                        let r = self.eval(init)?;
-                        self.to_type(r, ty, loc)
-                    }
-                    _ => {
-                        let id = if usable {
-                            DiagId::note_constexpr_var_init_unknown
-                        } else if int_info(self.ast, ty).is_some()
-                            && !self.ast.types.effective_quals(ty).is_const()
-                        {
-                            DiagId::note_constexpr_ltor_non_const_int
-                        } else {
-                            DiagId::note_constexpr_ltor_non_constexpr
-                        };
-                        let mut nc = NotConstant::note(id, loc, vec![self.name(d)]);
-                        nc.decl_note = Some((DiagId::note_declared_at, node.loc(), vec![]));
-                        Err(nc)
-                    }
+                if let (true, Some(init)) = (usable, v.init) {
+                    let r = self.eval(init)?;
+                    self.to_type(r, ty, loc)
+                } else {
+                    let id = if usable {
+                        DiagId::note_constexpr_var_init_unknown
+                    } else if int_info(self.ast, ty).is_some()
+                        && !self.ast.types.effective_quals(ty).is_const()
+                    {
+                        DiagId::note_constexpr_ltor_non_const_int
+                    } else {
+                        DiagId::note_constexpr_ltor_non_constexpr
+                    };
+                    let mut nc = NotConstant::note(id, loc, vec![self.name(d)]);
+                    nc.decl_note = Some((DiagId::note_declared_at, node.loc(), vec![]));
+                    Err(nc)
                 }
             }
             DeclKind::ParmVar => Err(NotConstant::note(
@@ -640,8 +637,11 @@ impl Eval<'_> {
             return Err(NotConstant::plain());
         };
         let not_constexpr = || {
-            let mut nc =
-                NotConstant::note(DiagId::note_constexpr_invalid_function, n.loc(), vec![self.name(f)]);
+            let mut nc = NotConstant::note(
+                DiagId::note_constexpr_invalid_function,
+                n.loc(),
+                vec![self.name(f)],
+            );
             nc.decl_note = Some((DiagId::note_declared_at, self.ast.decls.get(f).loc(), vec![]));
             nc
         };
@@ -767,12 +767,11 @@ impl Eval<'_> {
                 let mut first = true;
                 let result = loop {
                     self.step()?;
-                    if !(is_do && first) {
-                        if let Some(c) = d.cond {
-                            if !self.eval(c)?.truthy() {
-                                break Flow::Normal;
-                            }
-                        }
+                    if !(is_do && first)
+                        && let Some(c) = d.cond
+                        && !self.eval(c)?.truthy()
+                    {
+                        break Flow::Normal;
                     }
                     first = false;
                     if let Some(b) = d.body {
@@ -883,4 +882,3 @@ pub fn format_float(f: f64) -> String {
         s + ".0"
     }
 }
-

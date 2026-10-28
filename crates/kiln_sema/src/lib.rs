@@ -9,6 +9,10 @@
 //! typed AST it builds through [`kiln_ast::AstBuilder`]. Conversions live
 //! in [`conv`] (`spec/sema-conv.md`) and literal typing in [`literal`].
 #![forbid(unsafe_code)]
+#![allow(
+    clippy::many_single_char_names,
+    reason = "sema code uses the standard's short names (e, t, d, l, r)"
+)]
 
 pub mod constfold;
 pub mod conv;
@@ -31,7 +35,9 @@ use kiln_source::{Loc, Span};
 
 pub use constfold::{ConstEvaluator, ConstVal, NotConstant};
 pub use decl::{NameClass, TagUse};
-pub use declspec::{BaseSpec, Chunk, DeclSpec, Declarator, DeclaratorContext, ParamInfo, Sign, StorageSpec, Width};
+pub use declspec::{
+    BaseSpec, Chunk, DeclSpec, Declarator, DeclaratorContext, ParamInfo, Sign, StorageSpec, Width,
+};
 pub use init::{Designator, InitItem, InitList, InitValue, Initializer};
 pub use scope::ScopeKind;
 

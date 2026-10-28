@@ -179,7 +179,9 @@ impl Sema<'_, '_> {
     pub fn act_on_start_switch(&mut self, cond: ExprId) -> ExprId {
         let ty0 = self.ast.exprs.get(cond).ty();
         let t = &self.ast.types;
-        let ok = t.is_integral(ty0) || t.as_enum(ty0).is_some() || t.builtin(ty0) == Some(BuiltinType::Error);
+        let ok = t.is_integral(ty0)
+            || t.as_enum(ty0).is_some()
+            || t.builtin(ty0) == Some(BuiltinType::Error);
         let (cond, cond_ty, invalid) = if ok {
             let c = conv::integral_promotion(self, cond);
             let ty = self.ast.exprs.get(c).ty();
@@ -193,7 +195,13 @@ impl Sema<'_, '_> {
         };
         let cond = self.act_on_full_expr(cond);
         if let Some(f) = self.func.as_mut() {
-            f.switches.push(SwitchState { cond_ty, values: Vec::new(), cases: Vec::new(), default: None, invalid });
+            f.switches.push(SwitchState {
+                cond_ty,
+                values: Vec::new(),
+                cases: Vec::new(),
+                default: None,
+                invalid,
+            });
             f.breakables.push(false);
         }
         cond
@@ -360,7 +368,9 @@ impl Sema<'_, '_> {
                 .arg(self.ast.symbols().as_str(name))
                 .with_note(self.diag(DiagId::note_previous_declaration, prev));
             self.emit(msg);
-        } else if let Some(l) = self.func.as_mut().and_then(|f| f.labels.iter_mut().find(|l| l.decl == d)) {
+        } else if let Some(l) =
+            self.func.as_mut().and_then(|f| f.labels.iter_mut().find(|l| l.decl == d))
+        {
             l.defined = Some(loc);
         }
         d
@@ -375,7 +385,8 @@ impl Sema<'_, '_> {
     pub fn act_on_goto(&mut self, name: Symbol, name_loc: Loc, loc: Loc) -> StmtId {
         let d = self.label_decl(name, name_loc);
         self.ast.decls.set_flags(d, DeclFlags::USED);
-        if let Some(l) = self.func.as_mut().and_then(|f| f.labels.iter_mut().find(|l| l.decl == d)) {
+        if let Some(l) = self.func.as_mut().and_then(|f| f.labels.iter_mut().find(|l| l.decl == d))
+        {
             l.first_use.get_or_insert(name_loc);
         }
         self.builder().goto_stmt(d, loc)
@@ -431,14 +442,19 @@ impl Sema<'_, '_> {
         let dn = *self.ast.decls.get(d);
         let local = match dn.kind() {
             DeclKind::ParmVar => true,
-            DeclKind::Var => self.ast.decls.var(d).is_some_and(|v| {
-                v.spec.storage() == kiln_ast::decl::VarStorage::None
-                    || v.spec.storage() == kiln_ast::decl::VarStorage::Register
-            }) && dn.ctx().is_some_and(|c| self.ast.decls.get(c).kind().is_function()),
+            DeclKind::Var => {
+                self.ast.decls.var(d).is_some_and(|v| {
+                    v.spec.storage() == kiln_ast::decl::VarStorage::None
+                        || v.spec.storage() == kiln_ast::decl::VarStorage::Register
+                }) && dn.ctx().is_some_and(|c| self.ast.decls.get(c).kind().is_function())
+            }
             _ => false,
         };
         let ty = n.ty();
-        if !local || self.ast.types.effective_quals(ty).is_volatile() || self.ast.types.is_reference(ty) {
+        if !local
+            || self.ast.types.effective_quals(ty).is_volatile()
+            || self.ast.types.is_reference(ty)
+        {
             return e;
         }
         self.builder().implicit_cast(CastKind::NoOp, e, ty, ValueCategory::XValue)
@@ -466,7 +482,12 @@ impl Sema<'_, '_> {
             return;
         }
         let is_main = self.decl_name(state.decl) == "main"
-            && self.ast.decls.get(state.decl).ctx().is_some_and(|c| self.ast.redecl_context(c) == self.ast.tu);
+            && self
+                .ast
+                .decls
+                .get(state.decl)
+                .ctx()
+                .is_some_and(|c| self.ast.redecl_context(c) == self.ast.tu);
         if is_main {
             return;
         }
@@ -483,7 +504,7 @@ impl Sema<'_, '_> {
         let st = &self.ast.stmts;
         let n = st.get(s);
         match n.kind() {
-            StmtKind::ReturnStmt => Falloff::Never,
+            StmtKind::ReturnStmt | StmtKind::GotoStmt => Falloff::Never,
             StmtKind::CompoundStmt => {
                 let list = st.compound_body(s);
                 let items: Vec<StmtId> = self.ast.lists.iter(list).collect();
@@ -502,10 +523,10 @@ impl Sema<'_, '_> {
                 let then = d.then.map_or(Falloff::Always, |t| self.falls_off(t));
                 let els = d.els.map_or(Falloff::Always, |e| self.falls_off(e));
                 // A constant condition selects one branch.
-                if let Some(c) = d.cond {
-                    if let Ok(v) = constfold::evaluator(&self.abi).evaluate(&self.ast, c) {
-                        return if v.truthy() { then } else { els };
-                    }
+                if let Some(c) = d.cond
+                    && let Ok(v) = constfold::evaluator(&self.abi).evaluate(&self.ast, c)
+                {
+                    return if v.truthy() { then } else { els };
                 }
                 match (then, els) {
                     (Falloff::Never, Falloff::Never) => Falloff::Never,
@@ -517,20 +538,20 @@ impl Sema<'_, '_> {
                 let d = st.loop_data(s);
                 let infinite = match d.cond {
                     None => true,
-                    Some(c) => constfold::evaluator(&self.abi).evaluate(&self.ast, c).is_ok_and(|v| v.truthy()),
+                    Some(c) => constfold::evaluator(&self.abi)
+                        .evaluate(&self.ast, c)
+                        .is_ok_and(constfold::ConstVal::truthy),
                 };
-                if infinite && !d.body.is_some_and(|b| self.contains_break(b, 0)) {
-                    Falloff::Never
-                } else if n.kind() == StmtKind::DoStmt
-                    && d.body.is_some_and(|b| self.falls_off(b) == Falloff::Never)
-                    && !d.body.is_some_and(|b| self.contains_break(b, 0))
-                {
+                let breaks = d.body.is_some_and(|b| self.contains_break(b, 0));
+                let body_never = n.kind() == StmtKind::DoStmt
+                    && d.body.is_some_and(|b| self.falls_off(b) == Falloff::Never);
+                if (infinite || body_never) && !breaks {
                     Falloff::Never
                 } else {
                     Falloff::Maybe.min_with(Falloff::Always, d.body.map(|b| self.has_return(b)))
                 }
             }
-            StmtKind::LabelStmt => self.falls_off(kiln_ast::StmtId::new(n.b())),
+            StmtKind::LabelStmt => self.falls_off(StmtId::new(n.b())),
             StmtKind::CaseStmt => self.falls_off(st.case_data(s).sub),
             StmtKind::DefaultStmt => self.falls_off(st.default_sub(s)),
             StmtKind::SwitchStmt => {
@@ -553,7 +574,6 @@ impl Sema<'_, '_> {
                 let e = st.expr_stmt_expr(s);
                 if self.is_noreturn_call(e) { Falloff::Never } else { Falloff::Always }
             }
-            StmtKind::GotoStmt => Falloff::Never,
             _ => Falloff::Always,
         }
     }

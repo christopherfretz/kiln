@@ -8,7 +8,6 @@
 use kiln_ast::types::{Quals, TagKeyword};
 use kiln_ast::{AttrId, DeclId, ExprId, QualType};
 use kiln_diag::DiagId;
-use kiln_diag::ids;
 use kiln_source::Loc;
 use kiln_source::symbol::Symbol;
 
@@ -216,12 +215,11 @@ impl DeclSpec {
     pub fn set_storage(&mut self, s: StorageSpec, loc: Loc) -> Result<(), SpecError> {
         match self.storage {
             Some((old, _)) if old == s => {
-                Err(SpecError::new(ids::parse_duplicate_decl_spec, &[s.spelling()]))
+                Err(SpecError::new(DiagId::parse_duplicate_decl_spec, &[s.spelling()]))
             }
-            Some((old, _)) => Err(SpecError::new(
-                ids::parse_invalid_decl_spec_combination,
-                &[old.spelling()],
-            )),
+            Some((old, _)) => {
+                Err(SpecError::new(DiagId::parse_invalid_decl_spec_combination, &[old.spelling()]))
+            }
             None => {
                 self.storage = Some((s, loc));
                 Ok(())
@@ -235,8 +233,12 @@ impl DeclSpec {
     /// A duplicate qualifier.
     pub fn add_cv(&mut self, q: Quals, spelling: &str) -> Result<(), SpecError> {
         let dup = self.cv.contains(q);
-        self.cv = self.cv | q;
-        if dup { Err(SpecError::new(ids::parse_duplicate_decl_spec, &[spelling])) } else { Ok(()) }
+        self.cv |= q;
+        if dup {
+            Err(SpecError::new(DiagId::parse_duplicate_decl_spec, &[spelling]))
+        } else {
+            Ok(())
+        }
     }
 
     fn note_type(&mut self, loc: Loc) {
@@ -255,19 +257,19 @@ impl DeclSpec {
             (Width::None, w) => w,
             (Width::Long, Width::Long) => Width::LongLong,
             (Width::LongLong, Width::Long) => {
-                return Err(SpecError::new(ids::parse_long_long_long, &[]));
+                return Err(SpecError::new(DiagId::parse_long_long_long, &[]));
             }
             (Width::Short, Width::Short) => {
-                return Err(SpecError::new(ids::parse_duplicate_decl_spec, &["short"]));
+                return Err(SpecError::new(DiagId::parse_duplicate_decl_spec, &["short"]));
             }
-            (old, w) => {
+            (old, _w) => {
                 let sp = |w: Width| match w {
                     Width::Short => "short",
                     Width::LongLong => "long long",
                     _ => "long",
                 };
                 return Err(SpecError::new(
-                    ids::parse_invalid_decl_spec_combination,
+                    DiagId::parse_invalid_decl_spec_combination,
                     &[sp(old)],
                 ));
             }
@@ -285,10 +287,12 @@ impl DeclSpec {
         let sp = |s: Sign| if s == Sign::Signed { "signed" } else { "unsigned" };
         match self.sign {
             Sign::None => {}
-            old if old == s => return Err(SpecError::new(ids::parse_duplicate_decl_spec, &[sp(s)])),
+            old if old == s => {
+                return Err(SpecError::new(DiagId::parse_duplicate_decl_spec, &[sp(s)]));
+            }
             old => {
                 return Err(SpecError::new(
-                    ids::parse_invalid_decl_spec_combination,
+                    DiagId::parse_invalid_decl_spec_combination,
                     &[sp(old)],
                 ));
             }
@@ -301,11 +305,16 @@ impl DeclSpec {
     ///
     /// # Errors
     /// Two base types.
-    pub fn set_base(&mut self, b: BaseSpec, named: Option<QualType>, loc: Loc) -> Result<(), SpecError> {
+    pub fn set_base(
+        &mut self,
+        b: BaseSpec,
+        named: Option<QualType>,
+        loc: Loc,
+    ) -> Result<(), SpecError> {
         self.note_type(loc);
         if self.base != BaseSpec::None {
             return Err(SpecError::new(
-                ids::parse_invalid_decl_spec_combination,
+                DiagId::parse_invalid_decl_spec_combination,
                 &[self.base.spelling()],
             ));
         }
@@ -316,12 +325,13 @@ impl DeclSpec {
     }
 
     fn check_base_width(&self, new_is_base: bool) -> Result<(), SpecError> {
-        let ok = match (self.width, self.base) {
-            (Width::None, _) | (_, BaseSpec::None) => true,
-            (Width::Short | Width::LongLong, BaseSpec::Int) => true,
-            (Width::Long, BaseSpec::Int | BaseSpec::Double) => true,
-            _ => false,
-        };
+        let ok = matches!(
+            (self.width, self.base),
+            (Width::None, _)
+                | (_, BaseSpec::None)
+                | (Width::Short | Width::LongLong | Width::Long, BaseSpec::Int)
+                | (Width::Long, BaseSpec::Double)
+        );
         if ok {
             return Ok(());
         }
@@ -331,18 +341,19 @@ impl DeclSpec {
             _ => "long",
         };
         let prev = if new_is_base { w } else { self.base.spelling() };
-        Err(SpecError::new(ids::parse_invalid_decl_spec_combination, &[prev]))
+        Err(SpecError::new(DiagId::parse_invalid_decl_spec_combination, &[prev]))
     }
 
     fn check_base_sign(&self, new_is_base: bool) -> Result<(), SpecError> {
-        let ok = matches!(self.base, BaseSpec::None | BaseSpec::Char | BaseSpec::Int | BaseSpec::Int128)
-            || self.sign == Sign::None;
+        let ok =
+            matches!(self.base, BaseSpec::None | BaseSpec::Char | BaseSpec::Int | BaseSpec::Int128)
+                || self.sign == Sign::None;
         if ok {
             return Ok(());
         }
         let s = if self.sign == Sign::Signed { "signed" } else { "unsigned" };
         let prev = if new_is_base { s } else { self.base.spelling() };
-        Err(SpecError::new(ids::parse_invalid_decl_spec_combination, &[prev]))
+        Err(SpecError::new(DiagId::parse_invalid_decl_spec_combination, &[prev]))
     }
 }
 

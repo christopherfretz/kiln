@@ -387,6 +387,11 @@ diag_ids! {
     sema_addrof_rvalue = Error (1) "cannot take the address of an rvalue of type {0}";
     sema_addrof_bitfield = Error (0) "address of bit-field requested";
     sema_incdec_bool = Error (1) "ISO C++17 does not allow {0:incrementing|decrementing} expression of type bool";
+    sema_incdec_enum = Error (2) "cannot {0:increment|decrement} expression of enum type {1}";
+    sema_ovl_no_viable_function_in_call = Error (1) "no matching function for call to '{0}'";
+    note_ovl_candidate_not_viable = Note (1) "candidate function not viable: {0}";
+    sema_unsupported_string_concat = Error (0) "unsupported non-standard concatenation of string literals";
+    sema_ref_non_value = Error (1) "{0} does not refer to a value";
     sema_incdec_invalid = Error (2) "cannot {0:increment|decrement} value of type {1}";
     sema_sizeof_incomplete = Error (2) "invalid application of '{0}' to an incomplete type {1}";
     sema_sizeof_function = Extension [PointerArith] (1) "invalid application of '{0}' to a function type";

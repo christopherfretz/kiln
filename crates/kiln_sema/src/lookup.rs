@@ -6,9 +6,9 @@
 //! plus the namespaces nominated by `using namespace` in that scope.
 //! Qualified lookup searches one context's table.
 
+use kiln_ast::DeclId;
 use kiln_ast::decl::DeclKind;
 use kiln_ast::names::DeclName;
-use kiln_ast::DeclId;
 use kiln_source::symbol::Symbol;
 
 use crate::Sema;
@@ -130,7 +130,9 @@ impl Sema<'_, '_> {
             if s.is_local() {
                 let hit = match kind {
                     LookupKind::Tag => s.find(name, Ns::Tag),
-                    LookupKind::Ordinary => s.find(name, Ns::Ordinary).or_else(|| s.find(name, Ns::Tag)),
+                    LookupKind::Ordinary => {
+                        s.find(name, Ns::Ordinary).or_else(|| s.find(name, Ns::Tag))
+                    }
                     LookupKind::Nested => s
                         .locals
                         .iter()
@@ -147,7 +149,8 @@ impl Sema<'_, '_> {
                 continue;
             }
             let Some(entity) = s.entity else { continue };
-            let mut v: Vec<DeclId> = self.ast.lookup_local(entity, DeclName::ident(name)).iter().collect();
+            let mut v: Vec<DeclId> =
+                self.ast.lookup_local(entity, DeclName::ident(name)).iter().collect();
             let own = self.filter(v.clone(), kind);
             if !own.is_empty() {
                 return Found { decls: own };
@@ -194,6 +197,6 @@ impl Sema<'_, '_> {
             .iter()
             .rev()
             .find(|s| !matches!(s.kind, ScopeKind::LinkageSpec | ScopeKind::Enum))
-            .is_some_and(|s| s.is_local())
+            .is_some_and(super::scope::Scope::is_local)
     }
 }
