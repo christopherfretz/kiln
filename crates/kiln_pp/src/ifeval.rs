@@ -412,6 +412,7 @@ impl<'c> Ev<'c> {
 
     /// Reports literal diagnostics with clang's wording and locations.
     fn lit_diags(&mut self, tok: &Token, spelling: &str, diags: &[LitDiag], enc: Option<Encoding>) {
+        use LexDiagKind as K;
         if diags.is_empty() {
             return;
         }
@@ -434,7 +435,6 @@ impl<'c> Ev<'c> {
                 Span::new(lo, lo)
             };
             let range = spelling.get(d.range.start as usize..d.range.end as usize).unwrap_or("");
-            use LexDiagKind as K;
             let diag = match d.kind {
                 K::InvalidDigit { ch, radix } => {
                     Diag::new(DiagId::lit_invalid_digit, at).arg(ch).arg(match radix {
@@ -515,9 +515,8 @@ impl<'c> Ev<'c> {
             let op = self.punct().unwrap_or(Punct::Comma);
             let op_span = self.tok.span;
             let rhs_live = match op {
-                Punct::AmpAmp if lhs.v == 0 => false,
+                Punct::AmpAmp | Punct::Question if lhs.v == 0 => false,
                 Punct::PipePipe if lhs.v != 0 => false,
-                Punct::Question if lhs.v == 0 => false,
                 _ => live,
             };
             self.bump();
@@ -539,7 +538,9 @@ impl<'c> Ev<'c> {
 
     /// Applies the binary operator `op` (the body of clang's
     /// `EvaluateDirectiveSubExpr` loop).
-    #[allow(clippy::too_many_arguments)]
+    // A line-for-line port of clang's EvaluateDirectiveSubExpr operator
+    // switch; splitting it would obscure the correspondence.
+    #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
     fn binary(
         &mut self,
         op: Punct,
@@ -585,7 +586,8 @@ impl<'c> Ev<'c> {
             Punct::Percent | Punct::Slash => {
                 if r != 0 {
                     let v = if lhs.unsigned {
-                        if op == Punct::Slash { l / r } else { l % r }
+                        if op == Punct::Slash { l.checked_div(r) } else { l.checked_rem(r) }
+                            .unwrap_or(0)
                     } else if op == Punct::Slash {
                         let (q, o) = sl.overflowing_div(sr);
                         overflow = o;

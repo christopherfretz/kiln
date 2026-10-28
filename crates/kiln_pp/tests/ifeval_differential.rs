@@ -9,6 +9,8 @@
 
 mod ifeval_common;
 
+use std::fmt::Write as _;
+
 use ifeval_common::{clang_available, run_clang, run_kiln, words};
 use kiln_lex::Std;
 use kiln_pp::MemoryResolver;
@@ -345,12 +347,12 @@ fn build(cases: &[&str]) -> (String, Vec<(u32, u32)>) {
             src.push_str(l);
             src.push('\n');
         }
-        src.push_str(&format!("#if {expr}\nc{i}t\n#else\nc{i}f\n#endif\n"));
+        let _ = write!(src, "#if {expr}\nc{i}t\n#else\nc{i}f\n#endif\n");
         line += u32::try_from(lines.len()).unwrap() + 5;
         for l in &lines {
             if let Some(name) = l.strip_prefix("#define ") {
                 let name = name.split([' ', '(']).next().unwrap_or_default();
-                src.push_str(&format!("#undef {name}\n"));
+                let _ = writeln!(src, "#undef {name}");
                 line += 1;
             }
         }
