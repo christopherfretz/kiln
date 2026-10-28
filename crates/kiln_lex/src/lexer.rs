@@ -12,8 +12,8 @@ use crate::options::{LexMode, LexOptions, Std};
 use crate::phase::{Src, is_hws};
 use crate::token::{Encoding, Punct, TokFlags, TokKind, Token};
 use crate::unicode::{
-    is_ascii_ident_continue, is_nfc_qc_no, is_unicode_whitespace, is_xid_continue, is_xid_start,
-    lookup_char_name,
+    NameMatch, is_ascii_ident_continue, is_nfc, is_unicode_whitespace, is_xid_continue,
+    is_xid_start, lookup_char_name,
 };
 
 /// Result of reading a universal-character-name at a decoded `\`.
@@ -36,7 +36,8 @@ enum Ucn {
 struct IdentInfo {
     has_ucn: bool,
     dollar: bool,
-    not_nfc: bool,
+    /// A non-ASCII character was seen: the NFC check must run.
+    non_ascii: bool,
 }
 
 /// A pull lexer over one buffer (or a byte range of one).
@@ -675,12 +676,12 @@ impl<'a> Lexer<'a> {
             scratch.push(first);
         }
         let mut info =
-            IdentInfo { has_ucn: first_ucn, dollar: first == '$', not_nfc: is_nfc_qc_no(first) };
+            IdentInfo { has_ucn: first_ucn, dollar: first == '$', non_ascii: !first.is_ascii() };
         let end = self.ident_tail(p, Some(&mut scratch), &mut info);
         if info.dollar {
             self.diag(LexDiagKind::DollarInIdentifier, start, end);
         }
-        if info.not_nfc {
+        if info.non_ascii && !is_nfc(&scratch) {
             self.diag(LexDiagKind::IdentifierNotNfc, start, end);
         }
         let sym = self.interner.intern(&scratch);
@@ -712,7 +713,7 @@ impl<'a> Lexer<'a> {
                             if is_xid_continue(ch) || (ch == '$' && self.opts.dollar_in_identifiers)
                             {
                                 info.dollar |= ch == '$';
-                                info.not_nfc |= is_nfc_qc_no(ch);
+                                info.non_ascii |= !ch.is_ascii();
                                 if let Some(ext) = ext {
                                     self.diag(ext, p, end);
                                 }
@@ -750,7 +751,7 @@ impl<'a> Lexer<'a> {
                     return p;
                 }
             } else if is_xid_continue(c) {
-                info.not_nfc |= is_nfc_qc_no(c);
+                info.non_ascii = true;
             } else if is_unicode_whitespace(c) {
                 return p;
             } else {
@@ -779,31 +780,7 @@ impl<'a> Lexer<'a> {
             if c2 != Some('{') {
                 return Ucn::Malformed(LexDiagKind::UcnIncomplete);
             }
-            q += s2;
-            // Rare: a small allocation is fine here.
-            let mut name = String::new();
-            loop {
-                let (c, s) = self.src.decode(q);
-                match c {
-                    Some('}') => {
-                        q += s;
-                        break;
-                    }
-                    Some(c) if c.is_ascii_alphanumeric() || matches!(c, ' ' | '-' | '_') => {
-                        name.push(c);
-                        q += s;
-                    }
-                    _ => return Ucn::Malformed(LexDiagKind::UcnDelimitedIncomplete),
-                }
-            }
-            if name.is_empty() {
-                return Ucn::Malformed(LexDiagKind::UcnDelimitedEmpty);
-            }
-            let ext = (!modern).then_some(LexDiagKind::UcnNamedExtension);
-            return match lookup_char_name(&name) {
-                Some(ch) => validate_ucn(u32::from(ch), q, ext),
-                None => Ucn::Invalid { end: q, kind: LexDiagKind::UcnUnknownName },
-            };
+            return self.scan_ucn_name(q + s2, modern);
         }
         if kind == 'u' && c2 == Some('{') {
             q += s2;
@@ -855,6 +832,56 @@ impl<'a> Lexer<'a> {
             0 => Ucn::Malformed(LexDiagKind::UcnNoDigits),
             d if d < want => Ucn::Malformed(LexDiagKind::UcnIncomplete),
             _ => validate_ucn(value, q, None),
+        }
+    }
+
+    /// The rest of a `\N{…}` named universal-character-name, from `q`
+    /// after the `{` ([lex.universal.char]/3).
+    fn scan_ucn_name(&self, mut q: usize, modern: bool) -> Ucn {
+        // Names are at most `MAX_NAME_LEN` bytes; a longer or non-ASCII
+        // one cannot match but is still scanned to its `}`.
+        let mut buf = [0u8; 128];
+        let mut len = 0usize;
+        let mut fits = true;
+        loop {
+            let (c, s) = self.src.decode(q);
+            match c {
+                Some('}') => {
+                    q += s;
+                    break;
+                }
+                None | Some('\n' | '\r') => {
+                    return Ucn::Malformed(LexDiagKind::UcnDelimitedIncomplete);
+                }
+                Some(c) => {
+                    if c.is_ascii() && len < buf.len() {
+                        buf[len] = c as u8;
+                        len += 1;
+                    } else {
+                        fits = false;
+                    }
+                    q += s;
+                }
+            }
+        }
+        if len == 0 && fits {
+            return Ucn::Malformed(LexDiagKind::UcnDelimitedEmpty);
+        }
+        let ext = (!modern).then_some(LexDiagKind::UcnNamedExtension);
+        let found = if fits {
+            std::str::from_utf8(&buf[..len]).ok().and_then(lookup_char_name)
+        } else {
+            None
+        };
+        match found {
+            Some(NameMatch::Exact(ch)) => validate_ucn(u32::from(ch), q, ext),
+            Some(NameMatch::Loose(ch)) => match validate_ucn(u32::from(ch), q, ext) {
+                Ucn::Valid { ch, end, .. } => {
+                    Ucn::Valid { ch, end, ext: Some(LexDiagKind::UcnNameLooseMatch { ch }) }
+                }
+                other => other,
+            },
+            None => Ucn::Invalid { end: q, kind: LexDiagKind::UcnUnknownName },
         }
     }
 
@@ -968,12 +995,14 @@ impl<'a> Lexer<'a> {
         (t.starts_with(b"0x") || t.starts_with(b"0X")) && !t.contains(&b'_')
     }
 
-    // ----- literals (TODO(WP-011): contents are only skipped) ------------
+    // ----- literals ------------------------------------------------------
 
     /// A character or string literal whose opening `quote` ends at `p`.
     ///
-    /// TODO(WP-011): escape sequences are only skipped (`\` consumes the
-    /// next character), not validated; values are computed later.
+    /// Escape sequences are only skipped here (`\` consumes the next
+    /// character); they are validated and evaluated by
+    /// [`crate::literal::decode_string`] / [`crate::literal::decode_char`],
+    /// as in clang's `LiteralSupport`.
     fn lex_quoted(
         &mut self,
         start: usize,
@@ -1026,7 +1055,8 @@ impl<'a> Lexer<'a> {
     /// `q` with decoded size `qs`. The delimiter and body are read from the
     /// raw source bytes: phase 1-2 transformations are reverted inside.
     ///
-    /// TODO(WP-011): the body is not inspected beyond finding its end.
+    /// The body is not inspected beyond finding its end; see
+    /// [`crate::literal::decode_string`] for its value.
     fn lex_raw_string(
         &mut self,
         start: usize,
@@ -1155,17 +1185,38 @@ impl<'a> Lexer<'a> {
     /// In header-name mode: the end of `<h-chars>` or `"q-chars"` whose
     /// opener ends at `p`, or `None` if no `close` precedes the newline.
     ///
-    /// TODO(WP-011): conditionally-supported characters in header names
-    /// (`'`, `\`, `//`, `/*`) are accepted without diagnosis.
-    fn scan_header_name(&self, mut p: usize, close: char) -> Option<usize> {
-        loop {
+    /// [lex.header]/2: `'`, `\\`, `//`, `/*` (and `"` in `<…>`) in a
+    /// header name are conditionally-supported; each occurrence is
+    /// accepted with [`LexDiagKind::HeaderNameSpecialChars`].
+    fn scan_header_name(&mut self, start: usize, close: char) -> Option<usize> {
+        let mut p = start;
+        let end = loop {
             let (c, s) = self.src.decode(p);
             match c {
                 None | Some('\n' | '\r') => return None,
-                Some(c) if c == close => return Some(p + s),
+                Some(c) if c == close => break p + s,
                 Some(_) => p += s,
             }
+        };
+        let mut p = start;
+        while p < end {
+            let (c, s) = self.src.decode(p);
+            let (next, s2) = self.src.decode(p + s);
+            let (seq, n) = match (c, next) {
+                (Some('\''), _) => ("'", s),
+                (Some('\\'), _) => ("\\", s),
+                (Some('"'), _) if close == '>' => ("\"", s),
+                (Some('/'), Some('/')) => ("//", s + s2),
+                (Some('/'), Some('*')) => ("/*", s + s2),
+                _ => {
+                    p += s.max(1);
+                    continue;
+                }
+            };
+            self.diag(LexDiagKind::HeaderNameSpecialChars { seq }, p, p + n);
+            p += n;
         }
+        Some(end)
     }
 
     // ----- punctuators --------------------------------------------------

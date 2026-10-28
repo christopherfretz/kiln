@@ -36,11 +36,11 @@ fn lex_universal_char_in_identifier() {
     let l = lex("\\u00e9t\\U000000E9 \\u{e9} \\N{LATIN SMALL LETTER E WITH ACUTE}\n");
     assert_eq!(l.idents[0], "étÉ".replace('É', "é"));
     assert_eq!(l.idents[1], "é");
+    assert_eq!(l.idents[2], "é");
     assert!(l.tokens[0].has(TokFlags::HAS_UCN));
     // Spelling keeps the UCN as written.
     assert_eq!(l.spellings[0], "\\u00e9t\\U000000E9");
-    // \N{} is only resolved for CJK names in this work package (WP-011).
-    assert!(l.diags.iter().any(|d| d.0 == D::UcnUnknownName), "{:?}", l.diags);
+    assert_eq!(l.diags.len(), 0, "{:?}", l.diags);
 }
 
 /// [lex.universal.char]: `\N{}` with an algorithmic CJK name.
