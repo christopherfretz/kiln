@@ -33,6 +33,7 @@ mod include;
 mod macros;
 mod options;
 mod pragma;
+mod predef;
 mod preprocessor;
 pub mod print;
 mod resolver;
@@ -52,6 +53,7 @@ pub use include::{
 };
 pub use macros::{MacroDef, MacroTable};
 pub use options::PpOptions;
+pub use predef::{CmdMacro, OptLevel, PicModel, PredefConfig, build_predefines};
 pub use preprocessor::{Marker, PpItem, Preprocessor};
 pub use print::{PrintOptions, print_macros, print_preprocessed};
 pub use resolver::{HeaderSearch, SearchEvent, SearchObserver};
