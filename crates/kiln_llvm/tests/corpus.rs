@@ -2,6 +2,8 @@
 //! through `llvm-as-19` and `opt-19 -passes=verify` (`spec/llvm.md` §9.1).
 //! Every test also pins the exact text of the lines it exercises.
 
+#![allow(clippy::many_single_char_names, clippy::similar_names, clippy::items_after_statements)]
+
 mod common;
 
 use common::check;
@@ -783,8 +785,7 @@ fn binary_operators() {
 fn comparisons() {
     let mut m = aarch64();
     let v4 = m.types.vector(TypeId::FLOAT, 4);
-    let mut b =
-        define(&mut m, "cmp", TypeId::VOID, &[TypeId::I64, TypeId::PTR, TypeId::FLOAT, v4]);
+    let mut b = define(&mut m, "cmp", TypeId::VOID, &[TypeId::I64, TypeId::PTR, TypeId::FLOAT, v4]);
     let (i, p, f, v) = (arg(&b, 0), arg(&b, 1), arg(&b, 2), arg(&b, 3));
     use IntPredicate as I;
     for pr in [I::Eq, I::Ne, I::Ugt, I::Uge, I::Ult, I::Ule, I::Sgt, I::Sge, I::Slt, I::Sle] {
@@ -899,8 +900,7 @@ fn memory_access() {
     b.store(one, a, 4).unwrap();
     b.store_ex(one, a, MemOpts { align: 4, volatile: true, ..MemOpts::default() }).unwrap();
     b.load(TypeId::I32, a, 4).unwrap();
-    b.load_ex(TypeId::I32, a, MemOpts { align: 4, volatile: true, ..MemOpts::default() })
-        .unwrap();
+    b.load_ex(TypeId::I32, a, MemOpts { align: 4, volatile: true, ..MemOpts::default() }).unwrap();
     let at = |ord, scope| MemOpts { align: 4, volatile: false, ordering: ord, scope };
     b.load_ex(TypeId::I32, a, at(Ordering::Acquire, SyncScope::SYSTEM)).unwrap();
     b.load_ex(TypeId::I32, a, at(Ordering::Monotonic, SyncScope::SINGLE_THREAD)).unwrap();
@@ -994,8 +994,19 @@ fn atomics() {
             .into(),
     ];
     let ops = [
-        "xchg", "add", "sub", "and", "nand", "or", "xor", "max", "min", "umax", "umin",
-        "uinc_wrap", "udec_wrap",
+        "xchg",
+        "add",
+        "sub",
+        "and",
+        "nand",
+        "or",
+        "xor",
+        "max",
+        "min",
+        "umax",
+        "umin",
+        "uinc_wrap",
+        "udec_wrap",
     ];
     let mut k = 7;
     for op in ops {
@@ -1181,8 +1192,10 @@ fn multiway_branches() {
     let c = b.append_block("c");
     let d = b.append_block("d");
     let ib = b.append_block("ib");
-    let cases: Vec<(Value, BlockId)> =
-        [(1, a), (-7, c), (42, a)].iter().map(|&(k, bb)| (b.module().const_int(TypeId::I32, k), bb)).collect();
+    let cases: Vec<(Value, BlockId)> = [(1, a), (-7, c), (42, a)]
+        .iter()
+        .map(|&(k, bb)| (b.module().const_int(TypeId::I32, k), bb))
+        .collect();
     b.switch(x, d, &cases).unwrap();
     b.position_at_end(a);
     b.ret(Some(x)).unwrap();
@@ -1350,9 +1363,8 @@ fn itanium_eh() {
     b.invoke_ex(vv, Value::func(thrower), &[], cont, lpad2, &o).unwrap();
     b.position_at_end(lpad);
     let tiv = Value::global(ti);
-    let lp = b
-        .landingpad(lp_ty, true, &[Clause::Catch(tiv), Clause::Filter(empty_filter)])
-        .unwrap();
+    let lp =
+        b.landingpad(lp_ty, true, &[Clause::Catch(tiv), Clause::Filter(empty_filter)]).unwrap();
     let sel = b.extract_value(lp, &[1]).unwrap();
     let id = b.call(typeid, &[tiv]).unwrap();
     b.icmp(IntPredicate::Eq, sel, id).unwrap();
@@ -1439,7 +1451,11 @@ fn varargs() {
         (intrinsics::va_start(&mut m), intrinsics::va_end(&mut m), intrinsics::va_copy(&mut m));
     let va_list = m.types.named_struct("struct.std::__va_list");
     m.types
-        .set_body(va_list, &[TypeId::PTR, TypeId::PTR, TypeId::PTR, TypeId::I32, TypeId::I32], false)
+        .set_body(
+            va_list,
+            &[TypeId::PTR, TypeId::PTR, TypeId::PTR, TypeId::I32, TypeId::I32],
+            false,
+        )
         .unwrap();
     let mut b = IrBuilder::new(&mut m, f);
     let e = b.append_block("entry");
@@ -1565,6 +1581,181 @@ fn intrinsic_declarations() {
             "attributes #7 = { nocallback nofree nosync nounwind willreturn memory(none) }\n",
             "attributes #8 = { nocallback nofree nosync nounwind willreturn \
              memory(inaccessiblemem: write) }\n",
+        ],
+    );
+}
+
+/// §2.6: named metadata, module flags, `!llvm.ident`, tuples, strings,
+/// values, distinct and self-referential nodes, and attachments on globals,
+/// functions and instructions.
+#[test]
+fn metadata() {
+    let mut m = aarch64();
+    m.add_module_flag_i32(1, "wchar_size", 4);
+    m.add_module_flag_i32(8, "PIC Level", 2);
+    m.add_ident("kiln version 0");
+    let g = m.add_global("g", TypeId::I32);
+    let z = m.const_int(TypeId::I32, 0);
+    m.set_initializer(g, Some(z)).unwrap();
+    let s_g = m.md_string(b"g\x01\"");
+    let z64 = m.const_int(TypeId::I64, 0);
+    let off = m.md_const(z64).unwrap();
+    let ty_md = m.md_tuple(&[Some(off), Some(s_g)]);
+    let type_kind = m.md_kind("type");
+    m.add_global_metadata(g, type_kind, ty_md);
+    let gv = Value::global(g);
+    let gref = m.md_const(gv).unwrap();
+    let empty = m.md_tuple(&[]);
+    let with_null = m.md_tuple(&[None, Some(gref), Some(empty)]);
+    m.add_named_metadata("my.named", &[with_null, empty]);
+    let tbaa_root = {
+        let s = m.md_string(b"Simple C/C++ TBAA");
+        m.md_tuple(&[Some(s)])
+    };
+    let char_ty = {
+        let s = m.md_string(b"omnipotent char");
+        let zero = m.const_int(TypeId::I64, 0);
+        let zero = m.md_const(zero).unwrap();
+        m.md_tuple(&[Some(s), Some(tbaa_root), Some(zero)])
+    };
+    let int_ty = {
+        let s = m.md_string(b"int");
+        let zero = m.const_int(TypeId::I64, 0);
+        let zero = m.md_const(zero).unwrap();
+        m.md_tuple(&[Some(s), Some(char_ty), Some(zero)])
+    };
+    let tag = {
+        let zero = m.const_int(TypeId::I64, 0);
+        let zero = m.md_const(zero).unwrap();
+        m.md_tuple(&[Some(int_ty), Some(int_ty), Some(zero)])
+    };
+    let tbaa = m.md_kind("tbaa");
+    let loop_kind = m.md_kind("llvm.loop");
+    let mustprogress = m.md_string(b"llvm.loop.mustprogress");
+    let mp = m.md_tuple(&[Some(mustprogress)]);
+    let lp = m.md_distinct_tuple(&[None, Some(mp)]);
+    m.md_set_operand(lp, 0, Some(lp)).unwrap();
+    let mut b = define(&mut m, "f", TypeId::I32, &[TypeId::PTR]);
+    let p = arg(&b, 0);
+    let l = b.load(TypeId::I32, p, 4).unwrap();
+    let li = l.as_inst().unwrap();
+    b.func().add_inst_metadata(li, tbaa, tag);
+    let body = b.append_block("loop");
+    let br = b.br(body).unwrap();
+    b.func().add_inst_metadata(br.as_inst().unwrap(), loop_kind, lp);
+    b.position_at_end(body);
+    b.ret(Some(l)).unwrap();
+    let fm = m.md_tuple(&[Some(s_g)]);
+    let fid = m.get_function("f").unwrap();
+    m.func_mut(fid).add_metadata(type_kind, fm);
+    check(
+        &m,
+        &[
+            "@g = global i32 0, !type !0\n",
+            "define dso_local i32 @f(ptr %0) !type !",
+            "  %2 = load i32, ptr %0, align 4, !tbaa !",
+            "  br label %loop, !llvm.loop !",
+            "!llvm.module.flags = !{!",
+            "!llvm.ident = !{!",
+            "!my.named = !{!",
+            "!0 = !{i64 0, !\"g\\01\\22\"}\n",
+            "= !{i32 1, !\"wchar_size\", i32 4}\n",
+            "= !{i32 8, !\"PIC Level\", i32 2}\n",
+            "= !{!\"kiln version 0\"}\n",
+            "= !{null, ptr @g, !",
+            "= !{}\n",
+            "= distinct !{",
+            "!{!\"llvm.loop.mustprogress\"}\n",
+        ],
+    );
+}
+
+/// §2.6: a minimal debug-info graph built from specialized nodes.
+#[test]
+fn debug_info() {
+    let mut m = aarch64();
+    m.add_module_flag_i32(7, "Dwarf Version", 5);
+    m.add_module_flag_i32(2, "Debug Info Version", 3);
+    let raw = |s: &str| MdField::Raw(s.into());
+    let file = m.md_specialized(
+        "DIFile",
+        false,
+        vec![
+            ("filename".into(), MdField::Str("t.c".into())),
+            ("directory".into(), MdField::Str("/src".into())),
+        ],
+    );
+    let cu = m.md_specialized(
+        "DICompileUnit",
+        true,
+        vec![
+            ("language".into(), raw("DW_LANG_C11")),
+            ("file".into(), MdField::Node(Some(file))),
+            ("producer".into(), MdField::Str("kiln".into())),
+            ("isOptimized".into(), MdField::Bool(false)),
+            ("runtimeVersion".into(), MdField::UInt(0)),
+            ("emissionKind".into(), raw("FullDebug")),
+            ("splitDebugInlining".into(), MdField::Bool(false)),
+            ("nameTableKind".into(), raw("None")),
+        ],
+    );
+    m.add_named_metadata("llvm.dbg.cu", &[cu]);
+    let int = m.md_specialized(
+        "DIBasicType",
+        false,
+        vec![
+            ("name".into(), MdField::Str("int".into())),
+            ("size".into(), MdField::UInt(32)),
+            ("encoding".into(), raw("DW_ATE_signed")),
+        ],
+    );
+    let types = m.md_tuple(&[Some(int)]);
+    let sty = m.md_specialized(
+        "DISubroutineType",
+        false,
+        vec![("types".into(), MdField::Node(Some(types)))],
+    );
+    let sp = m.md_specialized(
+        "DISubprogram",
+        true,
+        vec![
+            ("name".into(), MdField::Str("main".into())),
+            ("scope".into(), MdField::Node(Some(file))),
+            ("file".into(), MdField::Node(Some(file))),
+            ("line".into(), MdField::UInt(1)),
+            ("type".into(), MdField::Node(Some(sty))),
+            ("scopeLine".into(), MdField::UInt(1)),
+            ("flags".into(), raw("DIFlagPrototyped")),
+            ("spFlags".into(), raw("DISPFlagDefinition")),
+            ("unit".into(), MdField::Node(Some(cu))),
+        ],
+    );
+    let loc = m.md_specialized(
+        "DILocation",
+        false,
+        vec![
+            ("line".into(), MdField::UInt(2)),
+            ("column".into(), MdField::UInt(3)),
+            ("scope".into(), MdField::Node(Some(sp))),
+        ],
+    );
+    let dbg = m.md_kind("dbg");
+    let mut b = define(&mut m, "main", TypeId::I32, &[]);
+    let z = b.module().const_int(TypeId::I32, 0);
+    let r = b.ret(Some(z)).unwrap();
+    b.func().add_metadata(dbg, sp);
+    b.func().add_inst_metadata(r.as_inst().unwrap(), dbg, loc);
+    check(
+        &m,
+        &[
+            "define dso_local i32 @main() !dbg !",
+            "  ret i32 0, !dbg !",
+            "!llvm.dbg.cu = !{!",
+            "distinct !DICompileUnit(language: DW_LANG_C11, file: !",
+            "!DIFile(filename: \"t.c\", directory: \"/src\")\n",
+            "distinct !DISubprogram(name: \"main\", scope: !",
+            "!DIBasicType(name: \"int\", size: 32, encoding: DW_ATE_signed)\n",
+            "!DILocation(line: 2, column: 3, scope: !",
         ],
     );
 }

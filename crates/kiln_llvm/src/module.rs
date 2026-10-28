@@ -429,6 +429,21 @@ impl Module {
         self.funcs.iter().enumerate().map(|(i, f)| (FuncId(i as u32), f))
     }
 
+    /// Run [`crate::verify_function`] over every function, naming the
+    /// offending function in the error message.
+    ///
+    /// # Errors
+    ///
+    /// The first violation, in function order.
+    pub fn verify(&self) -> IrResult<()> {
+        for f in &self.funcs {
+            crate::verify::verify_function(f).map_err(|e| {
+                IrError::new(e.kind, format!("in function @{}: {}", f.name(), e.message))
+            })?;
+        }
+        Ok(())
+    }
+
     /// Add a global variable declaration (`external global T`); set an
     /// initializer with [`Module::set_initializer`] to define it.
     pub fn add_global(&mut self, name: &str, value_type: TypeId) -> GlobalId {

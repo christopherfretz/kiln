@@ -6,6 +6,7 @@
 //! failure (release-candidate validation).
 #![allow(dead_code)]
 
+use std::fmt::Write as _;
 use std::io::Write as _;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
@@ -39,7 +40,11 @@ fn missing(name: &str) -> Option<PathBuf> {
 }
 
 fn numbered(text: &str) -> String {
-    text.lines().enumerate().map(|(i, l)| format!("{:4} | {l}\n", i + 1)).collect()
+    let mut out = String::with_capacity(text.len() + 8 * text.lines().count());
+    for (i, l) in text.lines().enumerate() {
+        let _ = writeln!(out, "{:4} | {l}", i + 1);
+    }
+    out
 }
 
 /// Run `tool args...` with `input` on stdin; return stdout, or panic with
