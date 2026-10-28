@@ -760,6 +760,17 @@ constexpr E e = f(5);
     let d = &tu.diags[0];
     assert!(d.contains("oven_enum_constexpr_conversion"), "{d}");
     assert!(d.contains(r#"args: ["5", "0", "1", "E"]"#), "{d}");
+    // Memoization does not hide it: an unchecked evaluation of `f(5)` is
+    // not cached for a checked one, and clang reports every checked
+    // evaluation (tests/conformance/expr.const/5.8/enum-range.cpp).
+    let src = r"enum E { A, B };
+constexpr E f(int v) { return (E)v; }
+static_assert(f(5) == 5);
+constexpr E e = f(5);
+constexpr E e2 = f(5);
+";
+    let tu = ok(src);
+    assert_eq!(tu.diags.len(), 2, "{:?}", tu.diags);
 }
 
 /// [expr.unary.op]/1: `(*p).m` with p null reads through the null pointer.

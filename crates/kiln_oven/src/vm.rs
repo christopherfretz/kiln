@@ -44,6 +44,8 @@ struct Pending {
     maxd_saved: u32,
     /// The call's own depth (active calls including it).
     d0: u32,
+    /// `RunState::enum_oob` at entry.
+    oob0: u64,
 }
 
 /// The state of the running evaluation.
@@ -63,6 +65,10 @@ pub(crate) struct RunState {
     /// Out-of-range unscoped enumeration casts are reported
     /// ([`crate::EvalContext::enum_range_check`]).
     pub enum_check: bool,
+    /// Out-of-range enumeration casts executed so far. A call that executed
+    /// one is not memoized: clang reports the conversion on every
+    /// evaluation that checks it, and a cached result would skip it.
+    enum_oob: u64,
     /// Nested global initializations in progress.
     pub nesting: u32,
 }
@@ -183,7 +189,7 @@ impl Oven {
     /// returns (the result is in `regs[fb]`).
     /// Reports an out-of-range unscoped enumeration value (clang's
     /// `warn_constexpr_unscoped_enum_out_of_range`).
-    fn enum_range_diag(&self, b: &mut dyn SemaBridge, pc: usize, v: i128, min: i128, max: i128) {
+    fn enum_range_diag(&self, b: &mut dyn SemaBridge, pc: usize, v: &str, min: i128, max: i128) {
         let site = self.site(pc);
         let ast = b.ast();
         let t = site.e.map_or_else(String::new, |e| {
@@ -194,10 +200,12 @@ impl Oven {
             kiln_diag::DiagId::oven_enum_constexpr_conversion,
             kiln_source::Span::empty(site.loc),
         )
-        .arg(v.to_string())
+        .arg(v)
         .arg(min.to_string())
         .arg(max.to_string())
-        .arg(t);
+        .arg(t)
+        // clang reports it on every evaluation that checks it.
+        .allow_duplicate();
         b.diag(d);
     }
 
@@ -384,13 +392,28 @@ impl Oven {
                     let w = |i: usize| u64::from(self.code[pc + i]);
                     let min = i128::from((w(2) | w(3) << 32).cast_signed());
                     let max = i128::from((w(4) | w(5) << 32).cast_signed());
-                    let v = reg!(0).cast_signed();
+                    // clang 19's `HandleCast`: the operand, sign-extended
+                    // for an enumeration with negative values, else
+                    // zero-extended, and printed in its own signedness.
+                    let (fw, fs) = (aux & 0xFF, aux >> 8 & 1 != 0);
+                    let raw = reg!(0);
+                    let oob = if min < 0 {
+                        let v = canon(raw, fw, true).cast_signed();
+                        v < min || v > max
+                    } else {
+                        canon(raw, fw, false) > max.cast_unsigned()
+                    };
                     // clang 19 accepts the value and reports it as an error
                     // (`-Wenum-constexpr-conversion`) only where a constant
                     // expression proper is required (spec/oven.md
                     // "Integration"); elsewhere the cast is not checked.
-                    if (v < min || v > max) && self.run.enum_check && !self.run.silent {
-                        self.enum_range_diag(b, pc, v, min, max);
+                    if oob {
+                        self.run.enum_oob += 1;
+                        if self.run.enum_check && !self.run.silent {
+                            let v =
+                                if fs { raw.cast_signed().to_string() } else { raw.to_string() };
+                            self.enum_range_diag(b, pc, &v, min, max);
+                        }
                     }
                     pc += 6;
                 }
@@ -709,6 +732,7 @@ impl Oven {
                 peak_saved: self.mem.peak,
                 maxd_saved: self.run.maxd,
                 d0: active + 1,
+                oob0: self.run.enum_oob,
             });
             self.mem.peak = self.mem.frame.top;
             self.run.maxd = active + 1;
@@ -741,7 +765,9 @@ impl Oven {
             peak: self.mem.peak.saturating_sub(p.live0),
             depth: self.run.maxd.saturating_sub(p.d0) + 1,
         };
-        self.memo.insert(p.key, val);
+        if self.run.enum_oob == p.oob0 {
+            self.memo.insert(p.key, val);
+        }
         self.mem.peak = self.mem.peak.max(p.peak_saved);
         self.run.maxd = self.run.maxd.max(p.maxd_saved);
     }

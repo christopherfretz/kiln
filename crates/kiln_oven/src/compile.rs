@@ -1982,7 +1982,10 @@ impl Compiler<'_> {
                 if let Some((min, max)) = enum_range(self.b.ast(), self.b.ast().exprs.get(e).ty()) {
                     let lo = |v: i64| v.cast_unsigned() as u32;
                     let hi = |v: i64| (v.cast_unsigned() >> 32) as u32;
-                    self.emit_at(Op::EnumCheck, 0, &[dst, lo(min), hi(min), lo(max), hi(max)], e);
+                    // clang checks (and prints) the operand's value.
+                    let (w, sg) = int_of(self.kind(from)).unwrap_or((64, true));
+                    let aux = int_aux(w as u8, sg);
+                    self.emit_at(Op::EnumCheck, aux, &[r, lo(min), hi(min), lo(max), hi(max)], e);
                 }
             }
             CastKind::FloatingToIntegral => {
@@ -2746,15 +2749,23 @@ impl Compiler<'_> {
                 self.rv_into(a, slot);
             }
         }
-        match (direct, fp) {
+        let pc = match (direct, fp) {
             (Some(d), _) => {
                 let f = self.o.func_index(self.b.ast(), d);
-                self.emit_at(Op::Call, 0, &[f, base], e);
+                Some(self.emit_at(Op::Call, 0, &[f, base], e))
             }
-            (None, Some(r)) => {
-                self.emit_at(Op::CallInd, 0, &[r, base], e);
+            (None, Some(r)) => Some(self.emit_at(Op::CallInd, 0, &[r, base], e)),
+            (None, None) => None,
+        };
+        // clang's `CallExpr::getExprLoc`: the begin of the callee (kiln's
+        // `loc` of a call is its `(`).
+        if let Some(pc) = pc
+            && self.ast().exprs.get(e).kind() == ExprKind::CallExpr
+        {
+            let loc = self.begin(e);
+            if let Some(site) = self.o.sites.last_mut().filter(|x| x.pc == pc as u32) {
+                site.loc = loc;
             }
-            (None, None) => {}
         }
         self.next = base + 1;
         base
