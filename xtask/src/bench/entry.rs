@@ -4,6 +4,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use super::compare::{ThresholdOverrides, parse_pct};
 use crate::util::header::{self, CXX_STDS, DirectiveError, OvenBudget, parse_oven, split_args};
 
 /// What the compiler is asked to do with an entry.
@@ -47,19 +48,47 @@ impl Mode {
 }
 
 /// The directive header of a bench entry.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct BenchSpec {
     pub mode: Mode,
     /// The `-std=` value, e.g. `c++26`.
     pub std: String,
     pub args: Vec<String>,
-    /// Parsed and validated, but not acted on yet (no counters protocol).
-    pub oven: Option<OvenBudget>,
+    /// Budgets checked against kiln's constexpr report (ignored for other
+    /// compilers): at most one unlocated, at most one per location.
+    pub oven: Vec<OvenBudget>,
+    /// `threshold-*:` overrides of the default regression thresholds.
+    pub thresholds: ThresholdOverrides,
 }
 
 /// Directives that belong to `cargo xtask test` and mean nothing here.
-const TEST_ONLY: &[&str] =
-    &["expect", "diag", "strict-diags", "stdout", "stdout-file", "exit", "oracle", "skip", "xfail"];
+const TEST_ONLY: &[&str] = &[
+    "expect",
+    "diag",
+    "strict-diags",
+    "stdout",
+    "stdout-file",
+    "exit",
+    "run-args",
+    "run-stdin",
+    "run-stdin-file",
+    "env",
+    "oracle",
+    "skip",
+    "xfail",
+];
+
+/// The keys a bench entry takes.
+const KEYS: &[&str] = &[
+    "std",
+    "args",
+    "mode",
+    "oven",
+    "threshold-time",
+    "threshold-mem",
+    "threshold-steps",
+    "threshold-bytes",
+];
 
 /// Parses an entry's directive header. All errors are collected.
 pub fn parse_spec(source: &str) -> Result<BenchSpec, Vec<DirectiveError>> {
@@ -67,18 +96,20 @@ pub fn parse_spec(source: &str) -> Result<BenchSpec, Vec<DirectiveError>> {
     let mut mode = None;
     let mut std = None;
     let mut args = Vec::new();
-    let mut oven = None;
+    let mut oven: Vec<(usize, OvenBudget)> = Vec::new();
+    let mut thresholds = ThresholdOverrides::default();
     for d in directives {
         let mut err = |m: String| errors.push(DirectiveError { line: d.line, message: m });
         let base = d.key.split('(').next().unwrap_or(d.key).trim();
         if TEST_ONLY.contains(&base) {
             err(format!(
-                "`{base}` is a `cargo xtask test` directive; bench entries take std, args, mode, oven"
+                "`{base}` is a `cargo xtask test` directive; bench entries take {}",
+                KEYS.join(", ")
             ));
             continue;
         }
         let Some(value) = d.value else {
-            if matches!(d.key, "std" | "args" | "mode" | "oven") {
+            if KEYS.contains(&d.key) {
                 err(format!("`{}` requires a value (`{}: ...`)", d.key, d.key));
             } else {
                 err(format!("unknown directive `{}`", d.key));
@@ -105,11 +136,36 @@ pub fn parse_spec(source: &str) -> Result<BenchSpec, Vec<DirectiveError>> {
                 Err(e) => err(e),
             },
             "oven" => match parse_oven(value) {
-                Ok(_) if oven.is_some() => err("duplicate `oven`".into()),
-                Ok(b) => oven = Some(b),
+                Ok(b) if oven.iter().any(|(_, o)| o.at == b.at) => err(match b.at {
+                    Some(at) => format!("duplicate `oven` for location {at}"),
+                    None => "duplicate `oven` without a location".into(),
+                }),
+                Ok(b) => oven.push((d.line, b)),
                 Err(e) => err(e),
             },
+            k @ ("threshold-time" | "threshold-mem" | "threshold-steps" | "threshold-bytes") => {
+                let slot = match k {
+                    "threshold-time" => &mut thresholds.time_pct,
+                    "threshold-mem" => &mut thresholds.mem_pct,
+                    "threshold-steps" => &mut thresholds.steps_pct,
+                    _ => &mut thresholds.bytes_pct,
+                };
+                match parse_pct(value) {
+                    Some(_) if slot.is_some() => err(format!("duplicate `{k}`")),
+                    Some(p) => *slot = Some(p),
+                    None => err(format!("bad `{k}` value `{value}` (a non-negative percentage)")),
+                }
+            }
             k => err(format!("unknown directive `{k}`")),
+        }
+    }
+    let mode = mode.unwrap_or(Mode::Syntax);
+    if mode == Mode::Pp {
+        for (line, _) in &oven {
+            errors.push(DirectiveError {
+                line: *line,
+                message: "`oven` does not apply to `mode: pp` (nothing is evaluated)".into(),
+            });
         }
     }
     if !errors.is_empty() {
@@ -117,10 +173,11 @@ pub fn parse_spec(source: &str) -> Result<BenchSpec, Vec<DirectiveError>> {
         return Err(errors);
     }
     Ok(BenchSpec {
-        mode: mode.unwrap_or(Mode::Syntax),
+        mode,
         std: std.unwrap_or_else(|| "c++26".to_owned()),
         args,
-        oven,
+        oven: oven.into_iter().map(|(_, b)| b).collect(),
+        thresholds,
     })
 }
 
@@ -246,7 +303,13 @@ mod tests {
         let s = parse_spec("int x;\n").unwrap();
         assert_eq!(
             s,
-            BenchSpec { mode: Mode::Syntax, std: "c++26".into(), args: vec![], oven: None }
+            BenchSpec {
+                mode: Mode::Syntax,
+                std: "c++26".into(),
+                args: vec![],
+                oven: vec![],
+                thresholds: ThresholdOverrides::default(),
+            }
         );
     }
 
@@ -259,13 +322,29 @@ mod tests {
             "//@ args: -stdlib=libc++ '-DX=a b'\n",
             "//@ args: -O1\n",
             "//@ oven: steps<=1000\n",
+            "//@ oven: 9:1 calls<=3\n",
+            "//@ threshold-time: 25\n",
+            "//@ threshold-bytes: 0.5\n",
             "int x;\n",
         ))
         .unwrap();
         assert_eq!(s.mode, Mode::EmitLlvm);
         assert_eq!(s.std, "c++20");
         assert_eq!(s.args, ["-stdlib=libc++", "-DX=a b", "-O1"]);
-        assert_eq!(s.oven, Some(OvenBudget { steps: Some(1000), bytes: None }));
+        assert_eq!(
+            s.oven,
+            [parse_oven("steps<=1000").unwrap(), parse_oven("9:1 calls<=3").unwrap()]
+        );
+        assert_eq!(
+            s.thresholds,
+            ThresholdOverrides {
+                time_pct: Some(25.0),
+                bytes_pct: Some(0.5),
+                ..ThresholdOverrides::default()
+            }
+        );
+        let s = parse_spec("//@ threshold-mem: 10\n//@ threshold-steps: 1\n").unwrap();
+        assert_eq!((s.thresholds.mem_pct, s.thresholds.steps_pct), (Some(10.0), Some(1.0)));
         for (m, flags) in [
             ("syntax", &["-fsyntax-only"][..]),
             ("pp", &["-E", "-o", "/dev/null"]),
@@ -289,6 +368,24 @@ mod tests {
         assert_eq!(errs("//@ frob: 1\n"), ["line 1: unknown directive `frob`"]);
         assert!(errs("int x;\n//@ mode: pp\n")[0].contains("after the header"));
         assert!(errs("//@ oven: time<=3\n")[0].contains("unknown budget"));
+        assert!(errs("//@ oven: steps<=1\n//@ oven: bytes<=1\n")[0].contains("duplicate `oven`"));
+        assert_eq!(
+            errs("//@ mode: pp\n//@ oven: steps<=1\n"),
+            ["line 2: `oven` does not apply to `mode: pp` (nothing is evaluated)"]
+        );
+        assert_eq!(
+            errs("//@ threshold-time: -1\n"),
+            ["line 1: bad `threshold-time` value `-1` (a non-negative percentage)"]
+        );
+        assert_eq!(
+            errs("//@ threshold-mem: 1\n//@ threshold-mem: 2\n"),
+            ["line 2: duplicate `threshold-mem`"]
+        );
+        assert_eq!(
+            errs("//@ threshold-mem\n"),
+            ["line 1: `threshold-mem` requires a value (`threshold-mem: ...`)"]
+        );
+        assert!(errs("//@ run-args: x\n")[0].contains("`cargo xtask test` directive"));
     }
 
     #[test]

@@ -41,12 +41,16 @@ Directives (the full contract, including matching and outcome rules, is
   report a later line first (the preprocessor runs ahead of the parser). Notes
   must stay in order within their group. Only diagnostics located in the test
   file are considered. The column is optional.
-- `stdout: <text>` / `stdout-file: <path>` / `exit: <code>` for `run`
+- `stdout: <text>` / `stdout-file: <path>` / `exit: <code>` for `run`, and
+  the program's inputs: `run-args: <args>`, `run-stdin: <text>` /
+  `run-stdin-file: <path>`, `env: NAME=value`
 - `oracle: clang | none` for `run`/`pp` tests: also build with clang and
   require identical output (`clang` is the default for `run` and `pp`)
-- `oven: steps<=N bytes<=M` asserts an evaluation budget. It is kiln-specific
-  and skipped elsewhere. On kiln it is also skipped until the counters
-  protocol exists (an open question in spec/harness.md).
+- `oven: [<line>[:<col>]] steps<=N bytes<=M ...` asserts a constexpr budget,
+  on the whole TU or on the evaluations at one line of the test. It is
+  kiln-specific and skipped elsewhere. kiln reports its counters with
+  `-fconstexpr-report=<path>` (NDJSON, one line per evaluation and a total;
+  the protocol is in spec/oven.md "Reporting protocol").
 - `skip: <reason>` / `xfail: <reason>` (tracked, must shrink over time).
   `skip(kiln):`, `skip(clang):`, `xfail(kiln):` and `xfail(clang):` apply to
   one compiler only. This lets the corpus be validated against clang while it
@@ -57,6 +61,12 @@ A `.h` file is a test only if it has directives, and `Inputs/` directories
 hold auxiliary files, never tests. A pp golden is `<test file>.expected`, for
 example `foo.cpp.expected`. It is compared after whitespace normalization and
 refreshed by `cargo xtask test --update`.
+
+The corpus validates itself: `cargo xtask ci` runs `cargo xtask test
+--compiler clang++-19` after the unit tests (skipped with a note when clang 19
+is absent; GitHub CI installs it), so a test that clang 19 does not pass is
+caught before it is used to judge kiln. An oracle that hangs or crashes makes
+the test an ERROR, never a kiln FAIL.
 
 Each test file names the standard section it covers in its directory path,
 and `spec/` entries list the tests that back them, so coverage of a spec is
@@ -80,11 +90,15 @@ a query, not a guess.
 
 `cargo xtask bench` runs each entry in `bench/` and records wall-clock
 (median of N), max RSS of the child (via GNU time's `%M`, since safe Rust
-cannot call `getrusage` for a child), and, once the Oven exists, its own
-step/byte counters, into `bench/results/<date>.json` (git-ignored local
-history); `bench/baselines/` holds the committed reference, one per entry and
-compiler kind. A run fails if any entry regresses beyond its threshold
-(default 5% time, 2% memory); the time rule compares the fastest current run
+cannot call `getrusage` for a child), and, for kiln, the Oven's own constexpr
+counters from its `-fconstexpr-report` total, into `bench/results/<date>.json`
+(git-ignored local history); `bench/baselines/` holds the committed reference,
+one per entry and compiler kind. A run fails if any entry regresses beyond its
+threshold (default 5% time, 2% memory, 0% steps, 2% constexpr bytes; an entry
+can set its own with `threshold-*:` directives, and `--threshold-*` options
+override both). The counters are deterministic, so they catch evaluator
+regressions that host noise would hide in the timings, and `oven:` budgets
+on bench entries are enforced too. The time rule compares the fastest current run
 with the baseline median so host load does not read as a regression, and a
 baseline taken with a different compiler version, host or entry source is
 advisory only. The same corpus is run through clang to produce the

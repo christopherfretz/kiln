@@ -3,7 +3,7 @@
 //! measurement (`run_measured`: precise wall clock plus peak RSS).
 
 use std::fmt;
-use std::io::{self, Read};
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::mpsc;
@@ -91,9 +91,28 @@ impl fmt::Display for Shown<'_> {
 /// Runs `cmd` with stdin closed, capturing stdout and stderr, killing it
 /// after `timeout`.
 pub fn run(cmd: &mut Command, timeout: Duration) -> io::Result<Output> {
+    run_with_input(cmd, None, timeout)
+}
+
+/// Like [`run`], but feeds `input` to the child's stdin (then closes it) when
+/// given. A child that exits without reading all of it is not an error.
+pub fn run_with_input(
+    cmd: &mut Command,
+    input: Option<&[u8]>,
+    timeout: Duration,
+) -> io::Result<Output> {
     let start = Instant::now();
-    let mut child =
-        cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()?;
+    let stdin = if input.is_some() { Stdio::piped() } else { Stdio::null() };
+    let mut child = cmd.stdin(stdin).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()?;
+    let writer = input.map(|bytes| {
+        let mut pipe = child.stdin.take().expect("stdin is piped");
+        let bytes = bytes.to_vec();
+        thread::spawn(move || {
+            // EPIPE (the child stopped reading) just ends the input early;
+            // dropping `pipe` closes the child's stdin.
+            let _ = pipe.write_all(&bytes);
+        })
+    });
     let out_reader = spawn_reader(&mut child, true);
     let err_reader = spawn_reader(&mut child, false);
     let mut delay = Duration::from_millis(1);
@@ -110,6 +129,9 @@ pub fn run(cmd: &mut Command, timeout: Duration) -> io::Result<Output> {
         thread::sleep(delay);
         delay = (delay * 2).min(Duration::from_millis(25));
     };
+    if let Some(w) = writer {
+        let _ = w.join();
+    }
     let stdout = out_reader.join().unwrap_or_default();
     let stderr = err_reader.join().unwrap_or_default();
     Ok(Output { status, stdout, stderr, elapsed: start.elapsed() })
@@ -303,6 +325,22 @@ mod tests {
         assert_eq!(o.code(), Some(3));
         assert_eq!(o.describe_end(), "exit code 3");
         assert!(!o.success() && !o.timed_out());
+    }
+
+    #[test]
+    fn feeds_stdin() {
+        let o = run_with_input(
+            Command::new("sh").args(["-c", "read a; read b; echo \"$b $a\"; cat"]),
+            Some(b"one\ntwo\nrest\n"),
+            Duration::from_secs(10),
+        )
+        .unwrap();
+        assert_eq!(o.stdout_str(), "two one\nrest\n");
+        // A child that ignores a large input still finishes normally.
+        let big = vec![b'x'; 1 << 20];
+        let o =
+            run_with_input(&mut Command::new("true"), Some(&big), Duration::from_secs(10)).unwrap();
+        assert!(o.success());
     }
 
     #[test]

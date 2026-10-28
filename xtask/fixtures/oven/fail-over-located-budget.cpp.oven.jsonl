@@ -1,0 +1,2 @@
+{"loc":"@SRC@:4:15","kind":"init","steps":16,"bytes":8,"peak_bytes":8,"calls":1,"allocs":0,"wall_us":1}
+{"total":{"steps":16,"bytes":8,"peak_bytes":8,"calls":1,"allocs":0,"wall_us":1,"evaluations":1}}

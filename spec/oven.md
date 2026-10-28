@@ -22,8 +22,9 @@ later feature depends on it.
    a trait) costs no allocation; a large one (table generation, string
    building, reflection loops) runs at interpreter speed with no per-value
    heap allocation.
-4. Observable: every evaluation reports `steps`, `peak_bytes`, `calls`,
-   `allocs`, and wall time; totals per TU are available from the driver.
+4. Observable: every evaluation reports `steps`, `bytes`, `peak_bytes`,
+   `calls`, `allocs`, and wall time; totals per TU are available from the
+   driver (see "Reporting protocol").
 
 ## Architecture
 ```
@@ -99,8 +100,57 @@ typed AST (kiln_ast) ──compile──▶ KBC function (per FunctionDecl insta
 - `Budget { steps, bytes, call_depth, alloc_count }` from driver flags
   `-fconstexpr-steps=`, `-fconstexpr-depth=`, `-fconstexpr-memory=`
   (kiln extension), with clang-compatible defaults where clang has one.
-- `EvalStats` per evaluation and accumulated per TU; `-fconstexpr-report`
-  prints the top-N evaluations by time/memory with locations.
+- `EvalStats` per evaluation and accumulated per TU; `-fconstexpr-report=`
+  writes them out (below).
+
+### Reporting protocol
+`-fconstexpr-report=<path>` makes the driver write one report per
+translation unit to `<path>` (created or truncated; written even when
+compilation fails, covering the evaluations that ran). It is the interface
+of `oven:` budgets in `cargo xtask test` and of the constexpr counters in
+`cargo xtask bench` (`spec/harness.md`, `spec/bench.md`), and the consumer
+is `xtask/src/util/oven_report.rs`.
+
+The format is NDJSON (UTF-8, one JSON object per `\n`-terminated line), one
+line per **top-level evaluation** in the order the evaluations finished,
+then exactly one `total` line, which is the last line:
+```
+{"loc":"a.cpp:12:1","kind":"static_assert","steps":116,"bytes":40,"peak_bytes":32,"calls":3,"allocs":0,"wall_us":4}
+{"total":{"steps":116,"bytes":40,"peak_bytes":32,"calls":3,"allocs":0,"wall_us":4,"evaluations":1}}
+```
+A top-level evaluation is one call of an evaluation entry point that the
+language requires (a manifestly constant-evaluated context): it includes
+everything it calls, so nested calls are never separate lines. `try_fold`
+(opportunistic folding) is not reported: what it folds is an implementation
+choice and must not move a budget.
+
+| Key | Meaning |
+|---|---|
+| `loc` | `"file:line:col"` of the evaluated construct (1-based line and column; the file as the driver names it in diagnostics, so it may itself contain `:`), or `null` when there is none (a compiler-synthesized evaluation). For a template instantiation, the point of the construct in the template, not the point of instantiation. |
+| `kind` | `static_assert`; `init` (the initializer of a `constexpr`/`constinit` variable or a constant initialization); `template_arg` (a template argument, including default arguments); `consteval` (an immediate invocation); `if_constexpr` (the condition); `other` (array bounds, enumerator values, `case` labels, `alignas`, `noexcept` and `explicit` specifiers, bit-field widths, splices, ...). |
+| `steps` | KBC instructions executed, including the recorded steps of memoized calls (as for the budget, so the count does not depend on cache state). |
+| `bytes` | Abstract-memory bytes allocated over the evaluation (cumulative: frames, temporaries and dynamic allocations; a freed byte stays counted). |
+| `peak_bytes` | The maximum number of abstract-memory bytes live at once. |
+| `calls` | Function calls, memoized hits included. |
+| `allocs` | Dynamic allocations (`new` expressions and `std::allocator<T>::allocate`). |
+| `wall_us` | Wall-clock microseconds, rounded down. |
+
+The `total` object has the same counters summed over the evaluations, except
+`peak_bytes`, which is the **maximum** over them (evaluations do not overlap,
+so the TU's peak is the largest single peak), plus `evaluations`, the number
+of evaluation lines. All counters are integers in `[0, 2^53]`.
+
+Every counter except `wall_us` is **deterministic**: the same compiler on the
+same input reports the same values, on any host and under any load, which is
+what lets budgets and the bench compare them exactly. A change in kiln that
+moves them is a measured change in the evaluator, not noise.
+
+Consumers must reject a report that is not this format: a line that is not
+an object with the keys above (each of the right type), a `kind` outside the
+list, a missing or repeated `total`, text after it, or a `total` that does not
+match the evaluations (sums, maximum for `peak_bytes`, count for
+`evaluations`; `wall_us` is not cross-checked, since rounding makes its sum
+inexact). They ignore unknown keys (so the format can grow) and blank lines.
 
 ### Memoization
 - A function is `pure` for memoization if its KBC has no bridge calls, no

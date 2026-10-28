@@ -10,6 +10,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with: { toolchain: "1.99.1", components: "rustfmt, clippy" }
       - uses: Swatinem/rust-cache@v2
-      - run: cargo fmt --all --check
-      - run: cargo clippy --workspace --all-targets -- -D warnings
-      - run: cargo test --workspace
+      # clang 19 + libc++ 19: the corpus oracle and the reference compiler of
+      # the harness self-tests (spec/harness.md "CI").
+      - run: sudo apt-get update && sudo apt-get install -y clang-19 libc++-19-dev libc++abi-19-dev
+      # fmt, clippy, cargo test, then the corpus self-check with clang++-19.
+      - run: cargo xtask ci

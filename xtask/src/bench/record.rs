@@ -7,7 +7,9 @@ use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::entry::Mode;
+use crate::util::header::Counter;
 use crate::util::json::Json;
+use crate::util::oven_report::Counters;
 
 /// Version of both record formats. Bump on an incompatible change.
 pub const SCHEMA: u64 = 1;
@@ -59,6 +61,9 @@ pub struct Measurement {
     pub spread_pct: f64,
     /// Median over the runs of the child's peak RSS; `None` without a probe.
     pub max_rss_kb: Option<u64>,
+    /// The total line of kiln's constexpr report (identical in every run;
+    /// `wall_us` is not kept). `None` for other compilers.
+    pub oven: Option<Counters>,
     /// Per-run samples, in run order. Results keep them; baselines do not.
     pub samples_wall_ms: Vec<f64>,
     pub samples_rss_kb: Vec<u64>,
@@ -87,6 +92,9 @@ impl Measurement {
             ("spread_pct", Json::Num(self.spread_pct)),
             ("max_rss_kb", self.max_rss_kb.map_or(Json::Null, num_u)),
         ];
+        if let Some(c) = &self.oven {
+            p.push(("oven", Json::obj(Counter::ALL.map(|k| (k.name(), num_u(c.get(k)))))));
+        }
         if samples {
             p.push((
                 "samples_wall_ms",
@@ -137,6 +145,7 @@ impl Measurement {
                 Json::Null => None,
                 r => Some(r.as_u64().ok_or("`max_rss_kb` must be an integer or null")?),
             },
+            oven: j.get("oven").map(oven_from_json).transpose()?,
             samples_wall_ms: nums("samples_wall_ms")?
                 .into_iter()
                 .map(|x| x.as_f64().ok_or("`samples_wall_ms` must hold numbers"))
@@ -150,6 +159,23 @@ impl Measurement {
             host: Host::from_json(field(j, "host")?)?,
         })
     }
+}
+
+fn oven_from_json(j: &Json) -> Result<Counters, String> {
+    let n = |c: Counter| -> Result<u64, String> {
+        field(j, c.name())?
+            .as_u64()
+            .ok_or_else(|| format!("`oven.{}` must be a non-negative integer", c.name()))
+    };
+    Ok(Counters {
+        steps: n(Counter::Steps)?,
+        bytes: n(Counter::Bytes)?,
+        peak_bytes: n(Counter::PeakBytes)?,
+        calls: n(Counter::Calls)?,
+        allocs: n(Counter::Allocs)?,
+        wall_us: 0,
+        evaluations: n(Counter::Evaluations)?,
+    })
 }
 
 fn field<'j>(j: &'j Json, key: &str) -> Result<&'j Json, String> {
@@ -423,6 +449,7 @@ pub(super) mod tests {
             wall_ms_max: median * 1.1,
             spread_pct: 2.04,
             max_rss_kb: rss,
+            oven: None,
             samples_wall_ms: vec![median * 1.1, median, median * 0.98],
             samples_rss_kb: rss.into_iter().collect(),
             compiler: compiler.into(),
@@ -451,6 +478,17 @@ pub(super) mod tests {
         );
         entries.insert("pp/vector".to_owned(), Outcome::Failed("exit code 1: error: x".into()));
         entries.insert("pp/zz".to_owned(), Outcome::Measured(sample("clang++-19", 70.0, None)));
+        let mut kiln = sample("kiln", 9.0, Some(1000));
+        kiln.oven = Some(Counters {
+            steps: 1,
+            bytes: 2,
+            peak_bytes: 3,
+            calls: 4,
+            allocs: 5,
+            wall_us: 0,
+            evaluations: 6,
+        });
+        entries.insert("oven/kiln".to_owned(), Outcome::Measured(kiln));
         let r = RunRecord {
             timestamp: "2026-10-28T123456".into(),
             host: Host { arch: "aarch64".into(), cpus: 24 },
@@ -482,6 +520,18 @@ pub(super) mod tests {
         let pos: Vec<usize> = order.iter().map(|k| tail.find(k).unwrap()).collect();
         assert!(pos.windows(2).all(|w| w[0] < w[1]), "{text}");
         assert!(text.contains("\"max_rss_kb\": null"));
+        // Counters follow max_rss_kb, and only where there are some.
+        let k = &text[text.find("\"oven/kiln\"").unwrap()..];
+        let k = &k[..k.find("\"compiler\"").unwrap()];
+        assert!(
+            k.contains(
+                "\"oven\": {\n          \"steps\": 1,\n          \"bytes\": 2,\n          \
+                 \"peak_bytes\": 3,\n          \"calls\": 4,\n          \"allocs\": 5,\n          \
+                 \"evaluations\": 6\n        }"
+            ),
+            "{k}"
+        );
+        assert_eq!(text.matches("\"oven\":").count(), 1, "{text}");
     }
 
     #[test]

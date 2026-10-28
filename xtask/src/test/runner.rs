@@ -8,8 +8,11 @@ use std::time::{Duration, Instant};
 
 use super::compare::{line_diff, normalize_pp, pp_equivalent};
 use super::diag_parse::{self, Diagnostic};
-use super::directives::{self, CompilerKind, Expect, Lang, Severity, StdoutExpect, TestSpec};
+use super::directives::{
+    self, CompilerKind, Expect, Lang, Severity, StdinInput, StdoutExpect, TestSpec,
+};
 use super::discover::TestCase;
+use crate::util::oven_report::{self, Report};
 use crate::util::process::{self, Output, Shown};
 
 /// Everything a worker needs; shared read-only between threads.
@@ -134,14 +137,8 @@ impl Test<'_> {
         if let Some(r) = spec.skip_reason(kind) {
             return (Status::Skip, Some(r.to_owned()), String::new());
         }
-        if spec.is_kiln_specific() {
-            let reason = if kind == CompilerKind::Kiln {
-                // TODO(oven): read the Oven's step/byte counters (e.g. via
-                // `-fconstexpr-report`) and enforce the budget.
-                "oven: budget checking is not implemented in the harness yet"
-            } else {
-                "not supported by this compiler (kiln-specific `oven:` directive)"
-            };
+        if spec.is_kiln_specific() && kind != CompilerKind::Kiln {
+            let reason = "not supported by this compiler (kiln-specific `oven:` directive)";
             return (Status::Skip, Some(reason.to_owned()), String::new());
         }
         let outcome = match spec.expect {
@@ -150,6 +147,8 @@ impl Test<'_> {
             Expect::Run => self.run(&spec),
             Expect::Pp => self.pp(&spec),
         };
+        // Budgets are checked once the kind's own checks pass.
+        let outcome = outcome.and_then(|()| self.check_oven(&spec));
         let xfail = spec.xfail_reason(kind).map(str::to_owned);
         match (outcome, xfail) {
             (Ok(()), None) => (Status::Pass, None, String::new()),
@@ -210,7 +209,20 @@ impl Test<'_> {
         mode: &[&str],
         out: Option<&Path>,
     ) -> Result<Output, Problem> {
-        let cmd = self.command(&self.cfg.compiler, spec, mode, out);
+        let mut cmd = self.command(&self.cfg.compiler, spec, mode, out);
+        if spec.is_kiln_specific() {
+            // Only kiln gets here (`evaluate` skips the rest). A stale report
+            // must not pass for this compile's.
+            let report = self.report_path()?;
+            if report.exists() {
+                fs::remove_file(&report).map_err(|e| {
+                    Problem::Broken(format!("cannot remove {}: {e}", report.display()))
+                })?;
+            }
+            let mut flag = std::ffi::OsString::from(oven_report::FLAG);
+            flag.push(&report);
+            cmd.arg(flag);
+        }
         let o = self.exec(cmd, self.cfg.compile_timeout).map_err(Problem::Broken)?;
         let stderr = o.stderr_str();
         let crashed = o.code().is_none()
@@ -239,6 +251,12 @@ impl Test<'_> {
         let o = self.exec(cmd, self.cfg.compile_timeout).map_err(Problem::Broken)?;
         if o.success() {
             Ok(o)
+        } else if o.timed_out() {
+            Err(Problem::Broken(format!(
+                "the oracle ({}) hung compiling the test ({})",
+                oracle.display(),
+                o.describe_end()
+            )))
         } else {
             Err(Problem::Broken(format!(
                 "the oracle ({}) rejected the test ({})\n{}",
@@ -313,10 +331,72 @@ impl Test<'_> {
         Ok(&self.dir)
     }
 
-    fn execute_binary(&mut self, exe: &Path) -> Result<Output, String> {
+    fn report_path(&self) -> Result<PathBuf, Problem> {
+        Ok(self.scratch()?.join("constexpr-report.jsonl"))
+    }
+
+    /// Reads the constexpr report of the compile and checks the `oven:`
+    /// budgets. A missing or malformed report is kiln's fault: FAIL.
+    fn check_oven(&mut self, spec: &TestSpec) -> Check {
+        if !spec.is_kiln_specific() {
+            return Ok(());
+        }
+        let path = self.report_path()?;
+        let text = fs::read_to_string(&path).map_err(|e| {
+            Problem::Fail(format!(
+                "oven: the compiler wrote no readable constexpr report at {} ({e})",
+                path.display()
+            ))
+        })?;
+        let report = Report::parse(&text).map_err(|e| {
+            Problem::Fail(format!("oven: malformed constexpr report {}: {e}", path.display()))
+        })?;
+        self.log.push(format!("# constexpr report total: {}", report.total.describe()));
+        oven_report::check_budgets(&report, &spec.oven, &|f| self.in_test_file(f))
+            .map_err(Problem::Fail)
+    }
+
+    /// The stdin bytes of a `run` test (empty without `run-stdin*`).
+    fn stdin_bytes(&self, spec: &TestSpec) -> Result<Option<Vec<u8>>, Problem> {
+        Ok(match &spec.stdin {
+            None => None,
+            Some(StdinInput::Inline(s)) => Some(s.clone().into_bytes()),
+            Some(StdinInput::File(p)) => {
+                let path = self.case.path.parent().unwrap_or(Path::new(".")).join(p);
+                Some(fs::read(&path).map_err(|e| {
+                    Problem::Broken(format!("cannot read run-stdin-file {}: {e}", path.display()))
+                })?)
+            }
+        })
+    }
+
+    /// Runs a built binary in the scratch directory with the test's
+    /// arguments, environment and stdin.
+    fn execute_binary(
+        &mut self,
+        exe: &Path,
+        spec: &TestSpec,
+        stdin: Option<&[u8]>,
+    ) -> Result<Output, String> {
         let mut cmd = Command::new(exe);
-        cmd.current_dir(&self.dir);
-        self.exec(cmd, self.cfg.run_timeout)
+        cmd.current_dir(&self.dir).args(&spec.run_args);
+        for (k, v) in &spec.env {
+            cmd.env(k, v);
+        }
+        let mut shown = Shown(&cmd).to_string();
+        if !spec.env.is_empty() {
+            let vars: Vec<String> = spec.env.iter().map(|(k, v)| format!("{k}={v:?}")).collect();
+            shown = format!("{} {shown}", vars.join(" "));
+        }
+        if stdin.is_some() {
+            shown.push_str(" < (stdin)");
+        }
+        let r = process::run_with_input(&mut cmd, stdin, self.cfg.run_timeout);
+        match &r {
+            Ok(o) => self.log.push(format!("$ {shown}  # {}", o.describe_end())),
+            Err(e) => self.log.push(format!("$ {shown}  # failed to start: {e}")),
+        }
+        r.map_err(|e| format!("could not run `{shown}`: {e}"))
     }
 
     fn run(&mut self, spec: &TestSpec) -> Check {
@@ -330,7 +410,8 @@ impl Test<'_> {
             )));
         }
         self.check_diags(spec, &diag_parse::parse(&o.stderr_str()))?;
-        let got = self.execute_binary(&exe).map_err(Problem::Fail)?;
+        let stdin = self.stdin_bytes(spec)?;
+        let got = self.execute_binary(&exe, spec, stdin.as_deref()).map_err(Problem::Fail)?;
         if got.code().is_none() {
             return Err(Problem::Fail(format!(
                 "test binary {}\nstdout:\n{}stderr:\n{}",
@@ -368,7 +449,18 @@ impl Test<'_> {
         {
             let oexe = self.dir.join("oracle.out");
             self.oracle_compile(&oracle, spec, &[], Some(&oexe))?;
-            let theirs = self.execute_binary(&oexe).map_err(Problem::Broken)?;
+            let theirs =
+                self.execute_binary(&oexe, spec, stdin.as_deref()).map_err(Problem::Broken)?;
+            if theirs.code().is_none() {
+                // The oracle's binary is the reference; if it hangs or
+                // crashes, the test itself is broken.
+                return Err(Problem::Broken(format!(
+                    "the oracle's binary {}\nstdout:\n{}stderr:\n{}",
+                    theirs.describe_end(),
+                    indent(&theirs.stdout_str()),
+                    indent(&theirs.stderr_str())
+                )));
+            }
             if theirs.stdout != got.stdout {
                 let _ = write!(
                     failures,

@@ -6,16 +6,52 @@ use std::fmt::Write as _;
 use super::record::{Baseline, Measurement};
 
 /// Regression thresholds in percent.
+#[allow(clippy::struct_field_names)]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Thresholds {
+    /// Wall clock.
     pub time_pct: f64,
+    /// Peak RSS.
     pub mem_pct: f64,
+    /// The constexpr report's total `steps` (deterministic, so exact by default).
+    pub steps_pct: f64,
+    /// The constexpr report's total `bytes` and `peak_bytes`.
+    pub bytes_pct: f64,
 }
 
 impl Default for Thresholds {
     fn default() -> Self {
-        Self { time_pct: 5.0, mem_pct: 2.0 }
+        Self { time_pct: 5.0, mem_pct: 2.0, steps_pct: 0.0, bytes_pct: 2.0 }
     }
+}
+
+impl Thresholds {
+    /// `self` with every threshold that `o` sets replaced.
+    pub fn with(self, o: &ThresholdOverrides) -> Self {
+        Self {
+            time_pct: o.time_pct.unwrap_or(self.time_pct),
+            mem_pct: o.mem_pct.unwrap_or(self.mem_pct),
+            steps_pct: o.steps_pct.unwrap_or(self.steps_pct),
+            bytes_pct: o.bytes_pct.unwrap_or(self.bytes_pct),
+        }
+    }
+}
+
+/// Thresholds set by an entry's `threshold-*:` directives or by the
+/// `--threshold-*` options; unset ones fall through to the next level
+/// (option, then entry directive, then [`Thresholds::default`]).
+#[allow(clippy::struct_field_names)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct ThresholdOverrides {
+    pub time_pct: Option<f64>,
+    pub mem_pct: Option<f64>,
+    pub steps_pct: Option<f64>,
+    pub bytes_pct: Option<f64>,
+}
+
+/// A threshold value: a finite, non-negative percentage.
+pub fn parse_pct(v: &str) -> Option<f64> {
+    v.parse().ok().filter(|p: &f64| p.is_finite() && *p >= 0.0)
 }
 
 /// Time changes smaller than this are never judged: process start-up jitter
@@ -32,7 +68,7 @@ pub enum Verdict {
     /// Better than the baseline beyond a threshold; consider `--record`.
     Improved,
     /// Worse beyond a threshold. Fails the run (unless `--record`).
-    Regressed { time: bool, mem: bool },
+    Regressed { time: bool, mem: bool, steps: bool, bytes: bool },
     /// Not comparable: the baseline was taken under different conditions
     /// (the reason says which). Reported, never fails.
     Advisory(String),
@@ -44,9 +80,14 @@ impl Verdict {
             Self::New => "new".into(),
             Self::Ok => "ok".into(),
             Self::Improved => "improved".into(),
-            Self::Regressed { time: true, mem: true } => "REGRESSED (time, mem)".into(),
-            Self::Regressed { time: true, .. } => "REGRESSED (time)".into(),
-            Self::Regressed { .. } => "REGRESSED (mem)".into(),
+            Self::Regressed { time, mem, steps, bytes } => {
+                let what: Vec<&str> =
+                    [(time, "time"), (mem, "mem"), (steps, "steps"), (bytes, "bytes")]
+                        .into_iter()
+                        .filter_map(|(on, name)| on.then_some(name))
+                        .collect();
+                format!("REGRESSED ({})", what.join(", "))
+            }
             Self::Advisory(why) => format!("advisory: {why}"),
         }
     }
@@ -69,6 +110,10 @@ pub fn delta_pct(base: f64, cur: f64) -> Option<f64> {
 ///   by more than `time_pct` (and [`TIME_FLOOR_MS`]).
 /// - Memory regresses (improves) when the peak RSS grows (shrinks) by more
 ///   than `mem_pct`. It is judged only when both sides have an RSS figure.
+/// - The constexpr counters (kiln's report total) regress (improve) when
+///   `steps` grows (shrinks) by more than `steps_pct`, or `bytes` or
+///   `peak_bytes` by more than `bytes_pct`. They are judged only when both
+///   sides have them. They are deterministic, so no noise allowance applies.
 /// - Improvements never fail; they suggest re-recording.
 pub fn judge(base: Option<&Baseline>, cur: &Measurement, t: Thresholds) -> Verdict {
     let Some(base) = base else { return Verdict::New };
@@ -106,13 +151,35 @@ pub fn judge(base: Option<&Baseline>, cur: &Measurement, t: Thresholds) -> Verdi
         }
         _ => (false, false),
     };
-    if time_worse || mem_worse {
-        Verdict::Regressed { time: time_worse, mem: mem_worse }
-    } else if time_better || mem_better {
+    let (steps_worse, steps_better, bytes_worse, bytes_better) = match (&b.oven, &cur.oven) {
+        (Some(bo), Some(co)) => {
+            let (sw, sb) = beyond(bo.steps, co.steps, t.steps_pct);
+            let (bw, bb) = beyond(bo.bytes, co.bytes, t.bytes_pct);
+            let (pw, pb) = beyond(bo.peak_bytes, co.peak_bytes, t.bytes_pct);
+            (sw, sb, bw || pw, bb || pb)
+        }
+        _ => (false, false, false, false),
+    };
+    if time_worse || mem_worse || steps_worse || bytes_worse {
+        Verdict::Regressed {
+            time: time_worse,
+            mem: mem_worse,
+            steps: steps_worse,
+            bytes: bytes_worse,
+        }
+    } else if time_better || mem_better || steps_better || bytes_better {
         Verdict::Improved
     } else {
         Verdict::Ok
     }
+}
+
+/// Whether the counter `cur` is worse (above) or better (below) `base` by
+/// more than `pct` percent.
+#[allow(clippy::cast_precision_loss)]
+fn beyond(base: u64, cur: u64, pct: f64) -> (bool, bool) {
+    let (b, c) = (base as f64, cur as f64);
+    (c > b * (1.0 + pct / 100.0), c < b * (1.0 - pct / 100.0))
 }
 
 /// A plain-text table: the first column left-aligned, the rest right-aligned.
@@ -320,7 +387,12 @@ mod tests {
         m
     }
 
-    const T: Thresholds = Thresholds { time_pct: 5.0, mem_pct: 2.0 };
+    const T: Thresholds =
+        Thresholds { time_pct: 5.0, mem_pct: 2.0, steps_pct: 0.0, bytes_pct: 2.0 };
+
+    fn reg(time: bool, mem: bool) -> Verdict {
+        Verdict::Regressed { time, mem, steps: false, bytes: false }
+    }
 
     #[test]
     fn time_regression_needs_every_run_slower() {
@@ -328,10 +400,7 @@ mod tests {
         assert_eq!(judge(None, &with(1.0, 1.0, None), T), Verdict::New);
         assert_eq!(judge(Some(&b), &with(1040.0, 1000.0, Some(100_000)), T), Verdict::Ok);
         // Fastest run +6% over the baseline median: regressed.
-        assert_eq!(
-            judge(Some(&b), &with(1080.0, 1060.0, Some(100_000)), T),
-            Verdict::Regressed { time: true, mem: false }
-        );
+        assert_eq!(judge(Some(&b), &with(1080.0, 1060.0, Some(100_000)), T), reg(true, false));
         // A noisy median alone (one fast run) is not a regression.
         assert_eq!(judge(Some(&b), &with(1300.0, 1040.0, Some(100_000)), T), Verdict::Ok);
         // Exactly at the threshold is not beyond it.
@@ -339,29 +408,76 @@ mod tests {
         // Below the absolute floor nothing is judged, whatever the percentage.
         let tiny = base(with(10.0, 10.0, Some(100_000)));
         assert_eq!(judge(Some(&tiny), &with(11.9, 11.9, Some(100_000)), T), Verdict::Ok);
-        assert_eq!(
-            judge(Some(&tiny), &with(12.1, 12.1, Some(100_000)), T),
-            Verdict::Regressed { time: true, mem: false }
-        );
+        assert_eq!(judge(Some(&tiny), &with(12.1, 12.1, Some(100_000)), T), reg(true, false));
         assert_eq!(judge(Some(&tiny), &with(7.0, 7.0, Some(100_000)), T), Verdict::Improved);
     }
 
     #[test]
     fn memory_threshold() {
         let b = base(with(1000.0, 980.0, Some(100_000)));
-        assert_eq!(
-            judge(Some(&b), &with(1000.0, 980.0, Some(102_001)), T),
-            Verdict::Regressed { time: false, mem: true }
-        );
+        assert_eq!(judge(Some(&b), &with(1000.0, 980.0, Some(102_001)), T), reg(false, true));
         assert_eq!(judge(Some(&b), &with(1000.0, 980.0, Some(102_000)), T), Verdict::Ok);
-        assert_eq!(
-            judge(Some(&b), &with(2000.0, 2000.0, Some(200_000)), T),
-            Verdict::Regressed { time: true, mem: true }
-        );
+        assert_eq!(judge(Some(&b), &with(2000.0, 2000.0, Some(200_000)), T), reg(true, true));
         // No RSS on either side: memory is not judged.
         assert_eq!(judge(Some(&b), &with(1000.0, 980.0, None), T), Verdict::Ok);
-        let loose = Thresholds { time_pct: 50.0, mem_pct: 150.0 };
+        let loose = Thresholds { time_pct: 50.0, mem_pct: 150.0, ..T };
         assert_eq!(judge(Some(&b), &with(1400.0, 1400.0, Some(240_000)), loose), Verdict::Ok);
+    }
+
+    #[test]
+    fn constexpr_counters() {
+        use crate::util::oven_report::Counters;
+        let counters = |steps, bytes, peak_bytes| Counters {
+            steps,
+            bytes,
+            peak_bytes,
+            calls: 7,
+            allocs: 3,
+            wall_us: 0,
+            evaluations: 2,
+        };
+        let m = |c: Option<Counters>| {
+            let mut m = with(1000.0, 980.0, Some(100_000));
+            m.oven = c;
+            m
+        };
+        let b = base(m(Some(counters(1000, 10_000, 5000))));
+        assert_eq!(judge(Some(&b), &m(Some(counters(1000, 10_000, 5000))), T), Verdict::Ok);
+        // Steps are exact by default: one more step regresses, one fewer improves.
+        assert_eq!(
+            judge(Some(&b), &m(Some(counters(1001, 10_000, 5000))), T),
+            Verdict::Regressed { time: false, mem: false, steps: true, bytes: false }
+        );
+        assert_eq!(judge(Some(&b), &m(Some(counters(999, 10_000, 5000))), T), Verdict::Improved);
+        // Bytes and peak bytes share the 2% threshold.
+        assert_eq!(judge(Some(&b), &m(Some(counters(1000, 10_200, 5100))), T), Verdict::Ok);
+        let bytes = Verdict::Regressed { time: false, mem: false, steps: false, bytes: true };
+        assert_eq!(judge(Some(&b), &m(Some(counters(1000, 10_201, 5000))), T), bytes);
+        assert_eq!(judge(Some(&b), &m(Some(counters(1000, 10_000, 5101))), T), bytes);
+        assert_eq!(judge(Some(&b), &m(Some(counters(1000, 9_000, 5000))), T), Verdict::Improved);
+        // Loosened thresholds; one side without counters is not judged.
+        let loose = Thresholds { steps_pct: 10.0, bytes_pct: 50.0, ..T };
+        assert_eq!(judge(Some(&b), &m(Some(counters(1100, 15_000, 7500))), loose), Verdict::Ok);
+        assert_eq!(judge(Some(&b), &m(None), T), Verdict::Ok);
+        let v = Verdict::Regressed { time: true, mem: false, steps: true, bytes: true };
+        assert_eq!(v.label(), "REGRESSED (time, steps, bytes)");
+    }
+
+    #[test]
+    fn threshold_overrides() {
+        let d = Thresholds::default();
+        assert_eq!(d, Thresholds { time_pct: 5.0, mem_pct: 2.0, steps_pct: 0.0, bytes_pct: 2.0 });
+        let entry =
+            ThresholdOverrides { time_pct: Some(20.0), mem_pct: Some(4.0), ..Default::default() };
+        let cli =
+            ThresholdOverrides { time_pct: Some(50.0), steps_pct: Some(1.0), ..Default::default() };
+        let t = d.with(&entry).with(&cli);
+        assert_eq!(t, Thresholds { time_pct: 50.0, mem_pct: 4.0, steps_pct: 1.0, bytes_pct: 2.0 });
+        assert_eq!(parse_pct("2.5"), Some(2.5));
+        assert_eq!(parse_pct("0"), Some(0.0));
+        for bad in ["-1", "x", "inf", "NaN", ""] {
+            assert_eq!(parse_pct(bad), None, "{bad}");
+        }
     }
 
     #[test]

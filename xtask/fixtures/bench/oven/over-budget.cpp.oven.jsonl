@@ -1,0 +1,3 @@
+{"loc":"@SRC@:5:1","kind":"static_assert","steps":100,"bytes":32,"peak_bytes":32,"calls":2,"allocs":0,"wall_us":3}
+{"loc":"@SRC@:6:15","kind":"init","steps":16,"bytes":8,"peak_bytes":8,"calls":1,"allocs":0,"wall_us":1}
+{"total":{"steps":116,"bytes":40,"peak_bytes":32,"calls":3,"allocs":0,"wall_us":4,"evaluations":2}}
