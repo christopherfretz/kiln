@@ -1,15 +1,2102 @@
-//! Declarations: headers, payloads and cold maps (spec/ast.md §4).
+//! Declarations: the 28-byte [`DeclNode`] header, the per-kind payloads and
+//! the cold side maps (spec/ast.md §4.1, §4.2, §2.4).
 //!
-//! (Skeleton from the WP-041 stub commit; filled in by WP-041.)
+//! Nodes are created through the `AstBuilder`; this module owns storage and
+//! the write-once setters of the mutation discipline (§2.4).
+#![warn(missing_docs)]
 
-use crate::mem::{HeapSize, MemReport};
+use kiln_source::Loc;
 
-/// Declarations: headers, payloads and cold maps (spec/ast.md §4).
-#[derive(Debug, Default)]
-pub struct DeclArena {}
+use crate::ids::{
+    ConstValueId, DeclId, ExprId, LambdaId, ListId, QualType, RawId, RedeclGroupId, StmtId,
+    StringLitId,
+};
+use crate::mem::{HeapSize, MemReport, MemRow};
+use crate::names::DeclName;
+use crate::slot::{AlreadySet, ColdMap, set_once};
+
+// ---------------------------------------------------------------------------
+// Kinds
+// ---------------------------------------------------------------------------
+
+/// The kind of a declaration (spec/ast.md §4.2). Names are clang's
+/// (`<Kind>Decl` in the dump). The numbering is stable.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[repr(u8)]
+pub enum DeclKind {
+    // scopes
+    /// The translation unit (★, payload [`ScopeData`]).
+    TranslationUnit,
+    /// A namespace (★, R, payload [`NamespaceData`]).
+    Namespace,
+    /// A namespace alias (R, M3+).
+    NamespaceAlias,
+    /// `extern "C"` / `extern "C++"` (★ transparent, payload [`ScopeData`],
+    /// `aux` = [`LinkageLang`]).
+    LinkageSpec,
+    /// `export { ... }` (★ transparent, payload [`ScopeData`], M4).
+    Export,
+    /// An empty declaration `;`.
+    Empty,
+    /// A file-scope `asm(...)`.
+    FileScopeAsm,
+    // using
+    /// `using namespace N;`.
+    UsingDirective,
+    /// A using-declaration.
+    Using,
+    /// `using enum E;`.
+    UsingEnum,
+    /// A shadow declaration introduced by a using-declaration.
+    UsingShadow,
+    /// A shadow constructor introduced by an inheriting using-declaration.
+    ConstructorUsingShadow,
+    /// A using-declaration pack expansion.
+    UsingPack,
+    /// A dependent value using-declaration (M3).
+    UnresolvedUsingValue,
+    /// A dependent `typename` using-declaration (M3).
+    UnresolvedUsingTypename,
+    /// A `__using_if_exists` placeholder (M3).
+    UnresolvedUsingIfExists,
+    // types
+    /// `typedef` (R, payload [`TypedefData`]).
+    Typedef,
+    /// An alias-declaration `using A = T;` (R, T, payload [`TypedefData`]).
+    TypeAlias,
+    /// An enumeration (★, R, T, payload [`EnumData`]).
+    Enum,
+    /// An enumerator (payload [`EnumeratorData`]).
+    EnumConstant,
+    /// A class, struct or union (★, R, T, payload [`RecordData`]).
+    CXXRecord,
+    /// A class template specialization (★, R, payload [`RecordData`], M3).
+    ClassTemplateSpecialization,
+    /// A class template partial specialization (★, R, payload
+    /// [`RecordData`], M3).
+    ClassTemplatePartialSpecialization,
+    // members
+    /// A non-static data member (payload [`FieldData`]).
+    Field,
+    /// A member of an anonymous struct/union seen from the enclosing scope;
+    /// `data` is the raw `ListId` of the chain of fields (outermost first).
+    IndirectField,
+    /// `public:` / `protected:` / `private:`.
+    AccessSpec,
+    /// A friend declaration.
+    Friend,
+    /// A friend template declaration.
+    FriendTemplate,
+    // functions
+    /// A function (R, T, payload [`FunctionData`]).
+    Function,
+    /// A member function (R, T, payload [`FunctionData`]).
+    CXXMethod,
+    /// A constructor (R, T, payload [`FunctionData`]).
+    CXXConstructor,
+    /// A destructor (R, T, payload [`FunctionData`]).
+    CXXDestructor,
+    /// A conversion function (R, T, payload [`FunctionData`]).
+    CXXConversion,
+    /// A deduction guide (T, payload [`FunctionData`]).
+    CXXDeductionGuide,
+    // variables
+    /// A variable (R, T, payload [`VarData`]).
+    Var,
+    /// A function parameter (payload [`ParamData`]).
+    ParmVar,
+    /// An implicit parameter (`this`, coroutine frame).
+    ImplicitParam,
+    /// A structured-binding declaration.
+    Decomposition,
+    /// One structured binding.
+    Binding,
+    /// A variable template specialization (R, payload [`VarData`], M3).
+    VarTemplateSpecialization,
+    /// A variable template partial specialization (R, payload [`VarData`],
+    /// M3).
+    VarTemplatePartialSpecialization,
+    // templates
+    /// A class template (R, M3).
+    ClassTemplate,
+    /// A function template (R, M3).
+    FunctionTemplate,
+    /// A variable template (R, M3).
+    VarTemplate,
+    /// An alias template (R, M3).
+    TypeAliasTemplate,
+    /// A concept (M3).
+    Concept,
+    /// `__make_integer_seq` / `__type_pack_element` (M3).
+    BuiltinTemplate,
+    /// A type template parameter (M3).
+    TemplateTypeParm,
+    /// A non-type template parameter (M3; expressions naming one are
+    /// value-dependent, [temp.dep.constexpr]).
+    NonTypeTemplateParm,
+    /// A template template parameter (M3).
+    TemplateTemplateParm,
+    /// An implicit concept specialization (M3).
+    ImplicitConceptSpecialization,
+    /// The parameter scope of a requires-expression (★, M3).
+    RequiresExprBody,
+    // synthesized
+    /// A lifetime-extended temporary in a constant initializer.
+    LifetimeExtendedTemporary,
+    /// A class-type non-type template parameter object.
+    TemplateParamObject,
+    /// `static_assert` (payload [`StaticAssertData`]).
+    StaticAssert,
+    /// A label.
+    Label,
+    /// The result name of a postcondition (P2900).
+    ContractResultName,
+}
+
+/// Which payload arena a kind's `data` indexes.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum PayloadClass {
+    /// No payload (`data` is 0) or an inline payload documented on the kind.
+    None,
+    /// [`FunctionData`].
+    Function,
+    /// [`VarData`].
+    Var,
+    /// [`RecordData`].
+    Record,
+    /// [`FieldData`].
+    Field,
+    /// [`EnumData`].
+    Enum,
+    /// [`EnumeratorData`].
+    Enumerator,
+    /// [`ParamData`].
+    Param,
+    /// [`TypedefData`].
+    Typedef,
+    /// [`NamespaceData`].
+    Namespace,
+    /// [`ScopeData`].
+    Scope,
+    /// [`StaticAssertData`].
+    StaticAssert,
+}
+
+impl DeclKind {
+    /// The payload arena of this kind.
+    pub const fn payload(self) -> PayloadClass {
+        use DeclKind as K;
+        match self {
+            K::Function
+            | K::CXXMethod
+            | K::CXXConstructor
+            | K::CXXDestructor
+            | K::CXXConversion
+            | K::CXXDeductionGuide => PayloadClass::Function,
+            K::Var | K::VarTemplateSpecialization | K::VarTemplatePartialSpecialization => {
+                PayloadClass::Var
+            }
+            K::CXXRecord
+            | K::ClassTemplateSpecialization
+            | K::ClassTemplatePartialSpecialization => PayloadClass::Record,
+            K::Field => PayloadClass::Field,
+            K::Enum => PayloadClass::Enum,
+            K::EnumConstant => PayloadClass::Enumerator,
+            K::ParmVar => PayloadClass::Param,
+            K::Typedef | K::TypeAlias => PayloadClass::Typedef,
+            K::Namespace => PayloadClass::Namespace,
+            K::TranslationUnit | K::LinkageSpec | K::Export | K::RequiresExprBody => {
+                PayloadClass::Scope
+            }
+            K::StaticAssert => PayloadClass::StaticAssert,
+            _ => PayloadClass::None,
+        }
+    }
+
+    /// True for kinds that own a member list (★ in §4.2).
+    pub const fn is_context(self) -> bool {
+        matches!(
+            self.payload(),
+            PayloadClass::Record
+                | PayloadClass::Enum
+                | PayloadClass::Namespace
+                | PayloadClass::Scope
+        )
+    }
+
+    /// True for function kinds (semantic context of their parameters and
+    /// locals, owning neither a member list nor a lookup table, §4.3).
+    pub const fn is_function(self) -> bool {
+        matches!(self.payload(), PayloadClass::Function)
+    }
+
+    /// True for kinds whose name is entered in a lookup table when it has
+    /// one: everything but parameters (block-scope, §4.3), access
+    /// specifiers, `static_assert`, empty declarations, using-directives,
+    /// friends and contexts that only group declarations.
+    pub const fn is_named_entity(self) -> bool {
+        !matches!(
+            self,
+            DeclKind::TranslationUnit
+                | DeclKind::LinkageSpec
+                | DeclKind::Export
+                | DeclKind::Empty
+                | DeclKind::FileScopeAsm
+                | DeclKind::UsingDirective
+                | DeclKind::AccessSpec
+                | DeclKind::Friend
+                | DeclKind::FriendTemplate
+                | DeclKind::StaticAssert
+                | DeclKind::RequiresExprBody
+                | DeclKind::ParmVar
+                | DeclKind::ImplicitParam
+                | DeclKind::LifetimeExtendedTemporary
+                | DeclKind::TemplateParamObject
+                | DeclKind::Label
+        )
+    }
+
+    /// The dump name (`<name>Decl` in spec/ast-dump.md).
+    pub const fn name(self) -> &'static str {
+        use DeclKind as K;
+        match self {
+            K::TranslationUnit => "TranslationUnit",
+            K::Namespace => "Namespace",
+            K::NamespaceAlias => "NamespaceAlias",
+            K::LinkageSpec => "LinkageSpec",
+            K::Export => "Export",
+            K::Empty => "Empty",
+            K::FileScopeAsm => "FileScopeAsm",
+            K::UsingDirective => "UsingDirective",
+            K::Using => "Using",
+            K::UsingEnum => "UsingEnum",
+            K::UsingShadow => "UsingShadow",
+            K::ConstructorUsingShadow => "ConstructorUsingShadow",
+            K::UsingPack => "UsingPack",
+            K::UnresolvedUsingValue => "UnresolvedUsingValue",
+            K::UnresolvedUsingTypename => "UnresolvedUsingTypename",
+            K::UnresolvedUsingIfExists => "UnresolvedUsingIfExists",
+            K::Typedef => "Typedef",
+            K::TypeAlias => "TypeAlias",
+            K::Enum => "Enum",
+            K::EnumConstant => "EnumConstant",
+            K::CXXRecord => "CXXRecord",
+            K::ClassTemplateSpecialization => "ClassTemplateSpecialization",
+            K::ClassTemplatePartialSpecialization => "ClassTemplatePartialSpecialization",
+            K::Field => "Field",
+            K::IndirectField => "IndirectField",
+            K::AccessSpec => "AccessSpec",
+            K::Friend => "Friend",
+            K::FriendTemplate => "FriendTemplate",
+            K::Function => "Function",
+            K::CXXMethod => "CXXMethod",
+            K::CXXConstructor => "CXXConstructor",
+            K::CXXDestructor => "CXXDestructor",
+            K::CXXConversion => "CXXConversion",
+            K::CXXDeductionGuide => "CXXDeductionGuide",
+            K::Var => "Var",
+            K::ParmVar => "ParmVar",
+            K::ImplicitParam => "ImplicitParam",
+            K::Decomposition => "Decomposition",
+            K::Binding => "Binding",
+            K::VarTemplateSpecialization => "VarTemplateSpecialization",
+            K::VarTemplatePartialSpecialization => "VarTemplatePartialSpecialization",
+            K::ClassTemplate => "ClassTemplate",
+            K::FunctionTemplate => "FunctionTemplate",
+            K::VarTemplate => "VarTemplate",
+            K::TypeAliasTemplate => "TypeAliasTemplate",
+            K::Concept => "Concept",
+            K::BuiltinTemplate => "BuiltinTemplate",
+            K::TemplateTypeParm => "TemplateTypeParm",
+            K::NonTypeTemplateParm => "NonTypeTemplateParm",
+            K::TemplateTemplateParm => "TemplateTemplateParm",
+            K::ImplicitConceptSpecialization => "ImplicitConceptSpecialization",
+            K::RequiresExprBody => "RequiresExprBody",
+            K::LifetimeExtendedTemporary => "LifetimeExtendedTemporary",
+            K::TemplateParamObject => "TemplateParamObject",
+            K::StaticAssert => "StaticAssert",
+            K::Label => "Label",
+            K::ContractResultName => "ContractResultName",
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Header
+// ---------------------------------------------------------------------------
+
+/// `DeclNode.flags` (spec/ast.md §4.1).
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug)]
+pub struct DeclFlags(u8);
+
+impl DeclFlags {
+    /// The declaration is invalid (an error was diagnosed). Monotone.
+    pub const INVALID: DeclFlags = DeclFlags(1);
+    /// Implicitly declared (special members, builtins, injected names).
+    pub const IMPLICIT: DeclFlags = DeclFlags(2);
+    /// Odr-used ([basic.def.odr]). Monotone.
+    pub const USED: DeclFlags = DeclFlags(4);
+    /// Referenced (for `-Wunused`). Monotone.
+    pub const REFERENCED: DeclFlags = DeclFlags(8);
+    /// Has an entry in `AttrArena::decl_attrs`.
+    pub const HAS_ATTRS: DeclFlags = DeclFlags(16);
+    /// The lexical context differs from `ctx` (entry in
+    /// `DeclArena::lexical_ctx`).
+    pub const HAS_LEXICAL_CTX: DeclFlags = DeclFlags(32);
+    /// Declared in a dependent context ([temp.dep]).
+    pub const DEPENDENT_CTX: DeclFlags = DeclFlags(64);
+    /// Injected by `define_aggregate` (§10).
+    pub const INJECTED: DeclFlags = DeclFlags(128);
+    /// The flags sema may set after creation (§2.4).
+    pub const MONOTONE: DeclFlags = DeclFlags(1 | 4 | 8);
+
+    /// No flags.
+    pub const fn empty() -> Self {
+        DeclFlags(0)
+    }
+    /// The raw bits.
+    pub const fn bits(self) -> u8 {
+        self.0
+    }
+    /// True if every bit of `f` is set.
+    pub const fn contains(self, f: DeclFlags) -> bool {
+        self.0 & f.0 == f.0
+    }
+    /// The union.
+    #[must_use]
+    pub const fn with(self, f: DeclFlags) -> Self {
+        DeclFlags(self.0 | f.0)
+    }
+}
+
+/// Access of a member ([class.access]).
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug)]
+#[repr(u8)]
+pub enum Access {
+    /// Not a member (or not yet known).
+    #[default]
+    None = 0,
+    /// `public`.
+    Public = 1,
+    /// `protected`.
+    Protected = 2,
+    /// `private`.
+    Private = 3,
+}
+
+/// Friend status (clang's `FriendObjectKind`).
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug)]
+#[repr(u8)]
+pub enum FriendKind {
+    /// Not a friend.
+    #[default]
+    None = 0,
+    /// A friend that was also declared elsewhere (visible to ordinary
+    /// lookup).
+    Declared = 1,
+    /// A friend first declared by the friend declaration (found only by
+    /// ADL, [namespace.memdef]).
+    Undeclared = 2,
+}
+
+/// Module ownership of a declaration ([module.reach], M4).
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug)]
+#[repr(u8)]
+pub enum ModuleOwnership {
+    /// Not owned by a named module.
+    #[default]
+    Unowned = 0,
+    /// Visible.
+    Visible = 1,
+    /// Visible when imported.
+    VisibleWhenImported = 2,
+    /// Reachable when imported.
+    ReachableWhenImported = 3,
+    /// Module-private.
+    ModulePrivate = 4,
+}
+
+/// `DeclNode.misc` (spec/ast.md §4.1): `access(2) friend(2)
+/// local_extern(1) module_ownership(3) name_independent(1)
+/// linkage_cache(3) visibility(2) spare(2)`.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug)]
+pub struct DeclMisc(u16);
+
+impl DeclMisc {
+    /// All fields zero.
+    pub const fn new() -> Self {
+        DeclMisc(0)
+    }
+    const fn field(self, shift: u32, width: u32) -> u16 {
+        (self.0 >> shift) & ((1 << width) - 1)
+    }
+    const fn with_field(self, shift: u32, width: u32, v: u16) -> Self {
+        let mask = ((1u16 << width) - 1) << shift;
+        DeclMisc((self.0 & !mask) | ((v << shift) & mask))
+    }
+    /// The raw bits.
+    pub const fn bits(self) -> u16 {
+        self.0
+    }
+    /// The access.
+    pub const fn access(self) -> Access {
+        match self.field(0, 2) {
+            1 => Access::Public,
+            2 => Access::Protected,
+            3 => Access::Private,
+            _ => Access::None,
+        }
+    }
+    /// With access `a`.
+    #[must_use]
+    pub const fn with_access(self, a: Access) -> Self {
+        self.with_field(0, 2, a as u16)
+    }
+    /// The friend status.
+    pub const fn friend(self) -> FriendKind {
+        match self.field(2, 2) {
+            1 => FriendKind::Declared,
+            2 => FriendKind::Undeclared,
+            _ => FriendKind::None,
+        }
+    }
+    /// With friend status `f`.
+    #[must_use]
+    pub const fn with_friend(self, f: FriendKind) -> Self {
+        self.with_field(2, 2, f as u16)
+    }
+    /// A block-scope `extern` declaration.
+    pub const fn local_extern(self) -> bool {
+        self.field(4, 1) != 0
+    }
+    /// With the local-extern bit.
+    #[must_use]
+    pub const fn with_local_extern(self, v: bool) -> Self {
+        self.with_field(4, 1, v as u16)
+    }
+    /// Module ownership.
+    pub const fn module_ownership(self) -> ModuleOwnership {
+        match self.field(5, 3) {
+            1 => ModuleOwnership::Visible,
+            2 => ModuleOwnership::VisibleWhenImported,
+            3 => ModuleOwnership::ReachableWhenImported,
+            4 => ModuleOwnership::ModulePrivate,
+            _ => ModuleOwnership::Unowned,
+        }
+    }
+    /// With module ownership `m`.
+    #[must_use]
+    pub const fn with_module_ownership(self, m: ModuleOwnership) -> Self {
+        self.with_field(5, 3, m as u16)
+    }
+    /// A name-independent declaration (P2169 `_`, [basic.scope.scope]/5).
+    pub const fn name_independent(self) -> bool {
+        self.field(8, 1) != 0
+    }
+    /// With the name-independent bit.
+    #[must_use]
+    pub const fn with_name_independent(self, v: bool) -> Self {
+        self.with_field(8, 1, v as u16)
+    }
+    /// The linkage cache: 0 = not computed, else sema's linkage code + 1.
+    pub const fn linkage_cache(self) -> u8 {
+        self.field(9, 3) as u8
+    }
+    /// The visibility cache (2 bits, sema-defined).
+    pub const fn visibility_cache(self) -> u8 {
+        self.field(12, 2) as u8
+    }
+}
+
+/// The 28-byte declaration header (spec/ast.md §4.1).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct DeclNode {
+    kind: DeclKind,
+    flags: DeclFlags,
+    misc: DeclMisc,
+    name: DeclName,
+    ctx: Option<DeclId>,
+    next: Option<DeclId>,
+    loc: Loc,
+    ty: Option<QualType>,
+    data: u32,
+}
+
+impl DeclNode {
+    /// The kind.
+    pub const fn kind(&self) -> DeclKind {
+        self.kind
+    }
+    /// The flags.
+    pub const fn flags(&self) -> DeclFlags {
+        self.flags
+    }
+    /// True if every bit of `f` is set.
+    pub const fn has(&self, f: DeclFlags) -> bool {
+        self.flags.contains(f)
+    }
+    /// The misc bits.
+    pub const fn misc(&self) -> DeclMisc {
+        self.misc
+    }
+    /// The name.
+    pub const fn name(&self) -> DeclName {
+        self.name
+    }
+    /// The semantic context (`None` only for the TU).
+    pub const fn ctx(&self) -> Option<DeclId> {
+        self.ctx
+    }
+    /// The next sibling in the lexical context's member list.
+    pub const fn next(&self) -> Option<DeclId> {
+        self.next
+    }
+    /// The name's location.
+    pub const fn loc(&self) -> Loc {
+        self.loc
+    }
+    /// Value decls: the declared type; type decls: the declared type.
+    pub const fn ty(&self) -> Option<QualType> {
+        self.ty
+    }
+    /// The payload index (0 = none) or inline payload.
+    pub const fn data(&self) -> u32 {
+        self.data
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Payload pieces
+// ---------------------------------------------------------------------------
+
+/// The redeclaration link at the start of every redeclarable payload
+/// (spec/ast.md §4.2, §4.4).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Redecl {
+    /// The previous declaration of the same entity.
+    pub prev: Option<DeclId>,
+    /// The shared group (first / latest / definition).
+    pub group: RedeclGroupId,
+}
+
+/// The member list of a context: appended in O(1) through
+/// `DeclNode.next`.
+#[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
+pub struct Members {
+    /// The first member.
+    pub first: Option<DeclId>,
+    /// The last member.
+    pub last: Option<DeclId>,
+}
+
+/// `TemplLink` (spec/ast.md §8.2): 0 = none, else a 3-bit tag
+/// (bits 29..=31) and a 29-bit index into the template tables (M3).
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug)]
+pub struct TemplLink(u32);
+
+/// The tag of a [`TemplLink`].
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[repr(u8)]
+pub enum TemplLinkKind {
+    /// The decl is the pattern of a template decl.
+    Pattern = 1,
+    /// A specialization or instantiation (index into `templates.specs`).
+    Specialization = 2,
+    /// A member of a class template specialization.
+    MemberOfSpecialization = 3,
+    /// A dependent friend function template specialization.
+    DependentFriend = 4,
+}
+
+impl TemplLink {
+    /// Not templated.
+    pub const NONE: TemplLink = TemplLink(0);
+
+    /// A link of kind `kind` to `index` (< 2^29).
+    pub const fn new(kind: TemplLinkKind, index: u32) -> Self {
+        assert!(index < 1 << 29, "TemplLink index exceeds 29 bits");
+        TemplLink(((kind as u32) << 29) | index)
+    }
+    /// True for [`TemplLink::NONE`].
+    pub const fn is_none(self) -> bool {
+        self.0 == 0
+    }
+    /// The kind and index, if any.
+    pub const fn get(self) -> Option<(TemplLinkKind, u32)> {
+        let idx = self.0 & ((1 << 29) - 1);
+        match self.0 >> 29 {
+            1 => Some((TemplLinkKind::Pattern, idx)),
+            2 => Some((TemplLinkKind::Specialization, idx)),
+            3 => Some((TemplLinkKind::MemberOfSpecialization, idx)),
+            4 => Some((TemplLinkKind::DependentFriend, idx)),
+            _ => None,
+        }
+    }
+    /// The raw word.
+    pub const fn to_raw(self) -> u32 {
+        self.0
+    }
+}
+
+/// Storage class of a function ([dcl.stc]).
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug)]
+#[repr(u8)]
+pub enum FnStorage {
+    /// None written.
+    #[default]
+    None = 0,
+    /// `static`.
+    Static = 1,
+    /// `extern`.
+    Extern = 2,
+}
+
+/// `constexpr` / `consteval` ([dcl.constexpr]).
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug)]
+#[repr(u8)]
+pub enum ConstexprKind {
+    /// Neither.
+    #[default]
+    None = 0,
+    /// `constexpr` (or implicitly constexpr).
+    Constexpr = 1,
+    /// `consteval` (an immediate function).
+    Consteval = 2,
+}
+
+/// Defaulted status ([dcl.fct.def.default]).
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug)]
+#[repr(u8)]
+pub enum Defaulted {
+    /// Not defaulted.
+    #[default]
+    No = 0,
+    /// Explicitly `= default`.
+    Explicit = 1,
+    /// Implicitly declared and defaulted.
+    Implicit = 2,
+}
+
+/// `FunctionData.spec` (spec/ast.md §4.2): `storage(2) inline(1)
+/// implicit_inline(1) constexpr_kind(2) virtual(1) pure(1) defaulted(2)
+/// deleted(1) explicit(1) trivial(1) immediate_escalating(1)
+/// has_contracts(1) is_coroutine(1) escalated(1) variadic(1)`.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug)]
+pub struct FnSpec(u32);
+
+macro_rules! bit_accessors {
+    ($ty:ident: $($(#[$m:meta])* $get:ident / $set:ident = $bit:expr;)*) => {
+        impl $ty {
+            $(
+                $(#[$m])*
+                pub const fn $get(self) -> bool {
+                    self.0 & (1 << $bit) != 0
+                }
+                #[doc = concat!("With [`Self::", stringify!($get), "`] set to `v`.")]
+                #[must_use]
+                pub const fn $set(self, v: bool) -> Self {
+                    if v { $ty(self.0 | (1 << $bit)) } else { $ty(self.0 & !(1 << $bit)) }
+                }
+            )*
+        }
+    };
+}
+
+impl FnSpec {
+    /// Nothing set.
+    pub const fn new() -> Self {
+        FnSpec(0)
+    }
+    /// The raw bits.
+    pub const fn bits(self) -> u32 {
+        self.0
+    }
+    /// The storage class.
+    pub const fn storage(self) -> FnStorage {
+        match self.0 & 3 {
+            1 => FnStorage::Static,
+            2 => FnStorage::Extern,
+            _ => FnStorage::None,
+        }
+    }
+    /// With storage class `s`.
+    #[must_use]
+    pub const fn with_storage(self, s: FnStorage) -> Self {
+        FnSpec((self.0 & !3) | s as u32)
+    }
+    /// `constexpr` / `consteval`.
+    pub const fn constexpr_kind(self) -> ConstexprKind {
+        match (self.0 >> 4) & 3 {
+            1 => ConstexprKind::Constexpr,
+            2 => ConstexprKind::Consteval,
+            _ => ConstexprKind::None,
+        }
+    }
+    /// With constexpr kind `k`.
+    #[must_use]
+    pub const fn with_constexpr_kind(self, k: ConstexprKind) -> Self {
+        FnSpec((self.0 & !(3 << 4)) | ((k as u32) << 4))
+    }
+    /// Defaulted status.
+    pub const fn defaulted(self) -> Defaulted {
+        match (self.0 >> 8) & 3 {
+            1 => Defaulted::Explicit,
+            2 => Defaulted::Implicit,
+            _ => Defaulted::No,
+        }
+    }
+    /// With defaulted status `d`.
+    #[must_use]
+    pub const fn with_defaulted(self, d: Defaulted) -> Self {
+        FnSpec((self.0 & !(3 << 8)) | ((d as u32) << 8))
+    }
+    /// The bits [`DeclArena::mark_function`] may set after creation
+    /// (properties known only after the body or the class is complete).
+    pub const LATE: FnSpec = FnSpec((1 << 12) | (1 << 14) | (1 << 15) | (1 << 16));
+}
+
+bit_accessors!(FnSpec:
+    /// `inline` written.
+    is_inline / with_inline = 2;
+    /// Implicitly inline (defined in class, constexpr, ...).
+    implicit_inline / with_implicit_inline = 3;
+    /// `virtual` (written or overriding).
+    is_virtual / with_virtual = 6;
+    /// Pure virtual (`= 0`).
+    is_pure / with_pure = 7;
+    /// `= delete`.
+    is_deleted / with_deleted = 10;
+    /// `explicit` (constructors and conversion functions).
+    is_explicit / with_explicit = 11;
+    /// Trivial special member ([class.prop]); set at class completion.
+    is_trivial / with_trivial = 12;
+    /// Immediate-escalating ([expr.const]/17).
+    immediate_escalating / with_immediate_escalating = 13;
+    /// Has `pre`/`post` contract assertions (P2900).
+    has_contracts / with_has_contracts = 14;
+    /// A coroutine (body contains `co_await`/`co_yield`/`co_return`).
+    is_coroutine / with_coroutine = 15;
+    /// An immediate-escalating function that became an immediate function
+    /// ([expr.const]/18).
+    escalated / with_escalated = 16;
+    /// C-style variadic (`...`).
+    is_variadic / with_variadic = 17;
+);
+
+/// Hot payload of function kinds (24 bytes, spec/ast.md §4.2).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct FunctionData {
+    /// Redeclaration link.
+    pub redecl: Redecl,
+    /// `ParmVar` decls.
+    pub params: ListId,
+    /// The body (write-once, §2.4).
+    pub body: Option<StmtId>,
+    /// Specifiers.
+    pub spec: FnSpec,
+    /// Template link.
+    pub templ: TemplLink,
+}
+
+/// Storage class of a variable ([dcl.stc]).
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug)]
+#[repr(u8)]
+pub enum VarStorage {
+    /// None written.
+    #[default]
+    None = 0,
+    /// `static`.
+    Static = 1,
+    /// `extern`.
+    Extern = 2,
+    /// `register` (C; ill-formed in C++17+, kept for diagnostics).
+    Register = 3,
+}
+
+/// Thread-local kind.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug)]
+#[repr(u8)]
+pub enum TlsKind {
+    /// Not thread-local.
+    #[default]
+    None = 0,
+    /// `thread_local` with static (constant) initialization.
+    Static = 1,
+    /// `thread_local` with dynamic initialization.
+    Dynamic = 2,
+}
+
+/// Initialization syntax ([dcl.init]); the dump prints `cinit`,
+/// `callinit`, `listinit`, `parenlistinit`.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug)]
+#[repr(u8)]
+pub enum InitStyle {
+    /// `= e` (or no initializer).
+    #[default]
+    C = 0,
+    /// `(args)`.
+    Call = 1,
+    /// `{args}`.
+    List = 2,
+    /// `(args)` aggregate initialization (P0960).
+    ParenList = 3,
+}
+
+/// `VarData.spec`: `storage(3) tls(2) init_style(2) constexpr(1)
+/// constinit(1) inline(1) nrvo(1) exception_var(1) cxx_for_range(1)`.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug)]
+pub struct VarSpec(u32);
+
+impl VarSpec {
+    /// Nothing set.
+    pub const fn new() -> Self {
+        VarSpec(0)
+    }
+    /// The raw bits.
+    pub const fn bits(self) -> u32 {
+        self.0
+    }
+    /// The storage class.
+    pub const fn storage(self) -> VarStorage {
+        match self.0 & 7 {
+            1 => VarStorage::Static,
+            2 => VarStorage::Extern,
+            3 => VarStorage::Register,
+            _ => VarStorage::None,
+        }
+    }
+    /// With storage class `s`.
+    #[must_use]
+    pub const fn with_storage(self, s: VarStorage) -> Self {
+        VarSpec((self.0 & !7) | s as u32)
+    }
+    /// The thread-local kind.
+    pub const fn tls(self) -> TlsKind {
+        match (self.0 >> 3) & 3 {
+            1 => TlsKind::Static,
+            2 => TlsKind::Dynamic,
+            _ => TlsKind::None,
+        }
+    }
+    /// With thread-local kind `t`.
+    #[must_use]
+    pub const fn with_tls(self, t: TlsKind) -> Self {
+        VarSpec((self.0 & !(3 << 3)) | ((t as u32) << 3))
+    }
+    /// The initialization syntax.
+    pub const fn init_style(self) -> InitStyle {
+        match (self.0 >> 5) & 3 {
+            1 => InitStyle::Call,
+            2 => InitStyle::List,
+            3 => InitStyle::ParenList,
+            _ => InitStyle::C,
+        }
+    }
+    /// With initialization syntax `s`.
+    #[must_use]
+    pub const fn with_init_style(self, s: InitStyle) -> Self {
+        VarSpec((self.0 & !(3 << 5)) | ((s as u32) << 5))
+    }
+    /// The bits [`DeclArena::mark_var`] may set after creation.
+    pub const LATE: VarSpec = VarSpec(1 << 10);
+}
+
+bit_accessors!(VarSpec:
+    /// `constexpr`.
+    is_constexpr / with_constexpr = 7;
+    /// `constinit`.
+    is_constinit / with_constinit = 8;
+    /// `inline` (written or implied by `constexpr` static members).
+    is_inline / with_inline = 9;
+    /// NRVO candidate ([class.copy.elision]); set after the body.
+    is_nrvo / with_nrvo = 10;
+    /// The exception object variable of a handler.
+    is_exception_var / with_exception_var = 11;
+    /// A range-based-for implicit variable.
+    is_cxx_for_range / with_cxx_for_range = 12;
+);
+
+/// The state of a variable's constant evaluation (spec/ast.md §9.2), 4
+/// bytes: `0` `NotEvaluated`, `u32::MAX` `Evaluating`, `u32::MAX − 1`
+/// `NotConstant`, else a `ConstValueId`.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug)]
+pub struct VarEval(u32);
+
+/// A decoded [`VarEval`].
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum VarEvalState {
+    /// Not evaluated yet.
+    NotEvaluated,
+    /// Being evaluated (a re-entry is a self-reference).
+    Evaluating,
+    /// Evaluated; not a constant.
+    NotConstant,
+    /// Evaluated to a constant.
+    Value(ConstValueId),
+}
+
+impl VarEval {
+    const EVALUATING: u32 = u32::MAX;
+    const NOT_CONSTANT: u32 = u32::MAX - 1;
+
+    /// Decodes the state.
+    pub fn state(self) -> VarEvalState {
+        match self.0 {
+            0 => VarEvalState::NotEvaluated,
+            Self::EVALUATING => VarEvalState::Evaluating,
+            Self::NOT_CONSTANT => VarEvalState::NotConstant,
+            v => VarEvalState::Value(ConstValueId::new(v)),
+        }
+    }
+    /// The raw word.
+    pub const fn to_raw(self) -> u32 {
+        self.0
+    }
+}
+
+/// Hot payload of variable kinds (24 bytes, spec/ast.md §4.2).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct VarData {
+    /// Redeclaration link.
+    pub redecl: Redecl,
+    /// The initializer (write-once, §2.4).
+    pub init: Option<ExprId>,
+    /// Specifiers.
+    pub spec: VarSpec,
+    /// Evaluation state (§9.2).
+    pub eval: VarEval,
+    /// Template link.
+    pub templ: TemplLink,
+}
+
+/// struct / class / union ([class.pre]).
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug)]
+#[repr(u8)]
+pub enum TagKind {
+    /// `struct`.
+    #[default]
+    Struct = 0,
+    /// `class`.
+    Class = 1,
+    /// `union`.
+    Union = 2,
+}
+
+impl TagKind {
+    /// The keyword.
+    pub const fn keyword(self) -> &'static str {
+        match self {
+            TagKind::Struct => "struct",
+            TagKind::Class => "class",
+            TagKind::Union => "union",
+        }
+    }
+}
+
+/// `RecordData.defn`: definition state plus clang's `DefinitionData`
+/// property flags, computed by sema while the class is defined.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug)]
+pub struct DefinitionBits(u64);
+
+impl DefinitionBits {
+    /// `{` seen, `}` not yet.
+    pub const BEING_DEFINED: DefinitionBits = DefinitionBits(1);
+    /// `}` seen: the class is complete and its member list frozen.
+    pub const COMPLETE: DefinitionBits = DefinitionBits(1 << 1);
+    /// An anonymous struct/union member ([class.union.anon]).
+    pub const ANONYMOUS: DefinitionBits = DefinitionBits(1 << 2);
+    /// A lambda closure type.
+    pub const LAMBDA: DefinitionBits = DefinitionBits(1 << 3);
+    /// Aggregate ([dcl.init.aggr]).
+    pub const AGGREGATE: DefinitionBits = DefinitionBits(1 << 4);
+    /// Polymorphic ([class.virtual]).
+    pub const POLYMORPHIC: DefinitionBits = DefinitionBits(1 << 5);
+    /// Abstract ([class.abstract]).
+    pub const ABSTRACT: DefinitionBits = DefinitionBits(1 << 6);
+    /// Empty ([class.prop] `is_empty`).
+    pub const EMPTY: DefinitionBits = DefinitionBits(1 << 7);
+    /// Standard-layout ([class.prop]).
+    pub const STANDARD_LAYOUT: DefinitionBits = DefinitionBits(1 << 8);
+    /// Trivially copyable ([class.prop]).
+    pub const TRIVIALLY_COPYABLE: DefinitionBits = DefinitionBits(1 << 9);
+    /// Trivial default constructor.
+    pub const TRIVIAL_DEFAULT_CTOR: DefinitionBits = DefinitionBits(1 << 10);
+    /// Trivial copy constructor.
+    pub const TRIVIAL_COPY_CTOR: DefinitionBits = DefinitionBits(1 << 11);
+    /// Trivial move constructor.
+    pub const TRIVIAL_MOVE_CTOR: DefinitionBits = DefinitionBits(1 << 12);
+    /// Trivial copy assignment.
+    pub const TRIVIAL_COPY_ASSIGN: DefinitionBits = DefinitionBits(1 << 13);
+    /// Trivial move assignment.
+    pub const TRIVIAL_MOVE_ASSIGN: DefinitionBits = DefinitionBits(1 << 14);
+    /// Trivial destructor.
+    pub const TRIVIAL_DTOR: DefinitionBits = DefinitionBits(1 << 15);
+    /// Literal type ([basic.types.general]).
+    pub const LITERAL: DefinitionBits = DefinitionBits(1 << 16);
+    /// Structural type ([temp.param]/7).
+    pub const STRUCTURAL: DefinitionBits = DefinitionBits(1 << 17);
+    /// Has a user-declared constructor.
+    pub const USER_DECLARED_CTOR: DefinitionBits = DefinitionBits(1 << 18);
+    /// Has a `constexpr` (non-copy/move) constructor.
+    pub const HAS_CONSTEXPR_CTOR: DefinitionBits = DefinitionBits(1 << 19);
+    /// Has a variant member (unions and classes with anonymous unions).
+    pub const HAS_VARIANT_MEMBERS: DefinitionBits = DefinitionBits(1 << 20);
+    /// Has mutable fields (directly or in subobjects).
+    pub const HAS_MUTABLE_FIELDS: DefinitionBits = DefinitionBits(1 << 21);
+    /// Has a virtual base.
+    pub const HAS_VIRTUAL_BASES: DefinitionBits = DefinitionBits(1 << 22);
+    /// Trivially relocatable (P2786).
+    pub const TRIVIALLY_RELOCATABLE: DefinitionBits = DefinitionBits(1 << 23);
+
+    /// No bits.
+    pub const fn empty() -> Self {
+        DefinitionBits(0)
+    }
+    /// The raw bits.
+    pub const fn bits(self) -> u64 {
+        self.0
+    }
+    /// True if every bit of `f` is set.
+    pub const fn contains(self, f: DefinitionBits) -> bool {
+        self.0 & f.0 == f.0
+    }
+    /// The union.
+    #[must_use]
+    pub const fn with(self, f: DefinitionBits) -> Self {
+        DefinitionBits(self.0 | f.0)
+    }
+    /// The bits with `f` cleared.
+    #[must_use]
+    pub const fn without(self, f: DefinitionBits) -> Self {
+        DefinitionBits(self.0 & !f.0)
+    }
+}
+
+/// Hot payload of record kinds (40 bytes, spec/ast.md §4.2).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct RecordData {
+    /// Redeclaration link.
+    pub redecl: Redecl,
+    /// Member list (this declaration's lexical members).
+    pub members: Members,
+    /// Base specifiers: indices (1-based) into `DeclArena::base_specs`;
+    /// [`ListId::EMPTY`] if none.
+    pub bases: ListId,
+    /// Definition state and properties.
+    pub defn: DefinitionBits,
+    /// Template link.
+    pub templ: TemplLink,
+    /// Closure data for lambda closure types (M3).
+    pub lambda: Option<LambdaId>,
+    /// struct / class / union.
+    pub tag: TagKind,
+}
+
+/// One base-specifier ([class.derived]).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct BaseSpec {
+    /// The base type as written.
+    pub ty: QualType,
+    /// Location of the base-specifier.
+    pub loc: Loc,
+    /// `virtual`.
+    pub is_virtual: bool,
+    /// The access as written (`None` if defaulted).
+    pub access: Access,
+    /// A pack expansion `Bases...`.
+    pub pack_expansion: bool,
+}
+
+/// Payload of `Field` (12 bytes).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct FieldData {
+    /// The bit-field width (a `ConstantExpr` unless value-dependent).
+    pub bit_width: Option<ExprId>,
+    /// The default member initializer (write-once: parsed after the class
+    /// is complete, [class.mem]/7).
+    pub init: Option<ExprId>,
+    /// [`FieldData::MUTABLE`], [`FieldData::NO_UNIQUE_ADDRESS`], and the
+    /// in-class-initializer style in bits 2..=3 ([`InitStyle`]).
+    pub flags: u32,
+}
+
+impl FieldData {
+    /// `mutable`.
+    pub const MUTABLE: u32 = 1;
+    /// `[[no_unique_address]]`.
+    pub const NO_UNIQUE_ADDRESS: u32 = 2;
+
+    /// `mutable`.
+    pub const fn is_mutable(&self) -> bool {
+        self.flags & Self::MUTABLE != 0
+    }
+    /// `[[no_unique_address]]`.
+    pub const fn no_unique_address(&self) -> bool {
+        self.flags & Self::NO_UNIQUE_ADDRESS != 0
+    }
+}
+
+/// Payload of `Enum` (32 bytes).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct EnumData {
+    /// Redeclaration link.
+    pub redecl: Redecl,
+    /// Enumerators (and nothing else).
+    pub members: Members,
+    /// The underlying type: set at declaration if fixed, else at `}`
+    /// (write-once).
+    pub int_type: Option<QualType>,
+    /// The promotion type ([conv.prom]/4; write-once with `int_type`).
+    pub promotion_type: Option<QualType>,
+    /// [`EnumData::SCOPED`], [`EnumData::SCOPED_STRUCT`],
+    /// [`EnumData::FIXED`], [`EnumData::BEING_DEFINED`],
+    /// [`EnumData::COMPLETE`].
+    pub flags: u32,
+    /// Template link.
+    pub templ: TemplLink,
+}
+
+impl EnumData {
+    /// `enum class` / `enum struct`.
+    pub const SCOPED: u32 = 1;
+    /// Written with `struct` (dump prints `struct` instead of `class`).
+    pub const SCOPED_STRUCT: u32 = 2;
+    /// Fixed underlying type ([dcl.enum]/5).
+    pub const FIXED: u32 = 4;
+    /// `{` seen, `}` not yet.
+    pub const BEING_DEFINED: u32 = 8;
+    /// `}` seen.
+    pub const COMPLETE: u32 = 16;
+
+    /// A scoped enumeration.
+    pub const fn is_scoped(&self) -> bool {
+        self.flags & Self::SCOPED != 0
+    }
+    /// Has a fixed underlying type.
+    pub const fn is_fixed(&self) -> bool {
+        self.flags & Self::FIXED != 0
+    }
+}
+
+/// Payload of `EnumConstant` (8 bytes).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct EnumeratorData {
+    /// The value (`None` while value-dependent).
+    pub value: Option<ConstValueId>,
+    /// The initializer as written.
+    pub init: Option<ExprId>,
+}
+
+/// Payload of `ParmVar` (12 bytes).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct ParamData {
+    /// The default argument (write-once; in-class member functions'
+    /// default arguments are parsed late).
+    pub default_arg: Option<ExprId>,
+    /// The type before adjustment ([dcl.fct]/5: array/function → pointer),
+    /// if it differs.
+    pub original_ty: Option<QualType>,
+    /// The parameter's position.
+    pub index: u16,
+    /// Reserved flags (`this` parameter of explicit-object member
+    /// functions: bit 0; pack: bit 1).
+    pub flags: u16,
+}
+
+impl ParamData {
+    /// The explicit object parameter (`this T self`, [dcl.fct]/6).
+    pub const EXPLICIT_OBJECT: u16 = 1;
+    /// A function parameter pack.
+    pub const PACK: u16 = 2;
+}
+
+/// Payload of `Typedef` / `TypeAlias` (16 bytes).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct TypedefData {
+    /// Redeclaration link.
+    pub redecl: Redecl,
+    /// The aliased type.
+    pub underlying: QualType,
+    /// Template link (alias templates' patterns).
+    pub templ: TemplLink,
+}
+
+/// Payload of `Namespace` (20 bytes).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct NamespaceData {
+    /// Redeclaration link (namespaces reopen: each `namespace N {}` is a
+    /// redeclaration of the first).
+    pub redecl: Redecl,
+    /// This declaration's lexical members.
+    pub members: Members,
+    /// [`NamespaceData::INLINE`], [`NamespaceData::ANONYMOUS`].
+    pub flags: u32,
+}
+
+impl NamespaceData {
+    /// `inline namespace`.
+    pub const INLINE: u32 = 1;
+    /// `namespace { ... }`.
+    pub const ANONYMOUS: u32 = 2;
+
+    /// An inline namespace.
+    pub const fn is_inline(&self) -> bool {
+        self.flags & Self::INLINE != 0
+    }
+}
+
+/// Language of a linkage specification.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[repr(u8)]
+pub enum LinkageLang {
+    /// `extern "C"`.
+    C = 1,
+    /// `extern "C++"`.
+    Cxx = 2,
+}
+
+/// Payload of non-redeclarable contexts (TU, `LinkageSpec`, `Export`,
+/// `RequiresExprBody`), 12 bytes.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct ScopeData {
+    /// Lexical members.
+    pub members: Members,
+    /// `LinkageSpec`: the [`LinkageLang`]; else 0.
+    pub aux: u32,
+}
+
+/// Payload of `StaticAssert` (8 bytes).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct StaticAssertData {
+    /// The condition (not wrapped in a `ConstantExpr`, §5.5).
+    pub cond: ExprId,
+    /// The message (a string literal or a P2741 constant expression).
+    pub message: Option<ExprId>,
+}
+
+// ---------------------------------------------------------------------------
+// Cold data
+// ---------------------------------------------------------------------------
+
+/// Cold per-declaration data (spec/ast.md §4.2), each an insert-only
+/// sparse map.
+#[derive(Clone, Debug)]
+pub struct ColdDeclData {
+    /// The lexical context when it differs from `ctx` (`HAS_LEXICAL_CTX`).
+    pub lexical_ctx: ColdMap<DeclId, DeclId>,
+    /// The begin location (decl-specifiers start) when it differs from the
+    /// name's location.
+    pub begin_loc: ColdMap<DeclId, Loc>,
+    /// `= delete("reason")` messages (P2573).
+    pub delete_message: ColdMap<DeclId, ExprId>,
+    /// `explicit(expr)`.
+    pub explicit_expr: ColdMap<DeclId, ExprId>,
+    /// Trailing requires-clauses.
+    pub requires_clause: ColdMap<DeclId, ExprId>,
+    /// Contract assertions (P2900): `ListId` of contract-spec indices.
+    pub contracts: ColdMap<DeclId, ListId>,
+    /// `asm("label")`.
+    pub asm_label: ColdMap<DeclId, StringLitId>,
+    /// Alignment overrides (`alignas`).
+    pub alignment: ColdMap<DeclId, ExprId>,
+    /// `[[deprecated("msg")]]` messages.
+    pub deprecation: ColdMap<DeclId, StringLitId>,
+    /// The pattern of instantiated decls without a `TemplLink` (§8.2).
+    pub instantiated_from: ColdMap<DeclId, DeclId>,
+    /// Injection points of `define_aggregate` members (§10).
+    pub injection_point: ColdMap<DeclId, Loc>,
+    /// Builtin function ids of implicit builtin `Function` decls (§5.3).
+    pub builtin_id: ColdMap<DeclId, u32>,
+}
+
+impl Default for ColdDeclData {
+    fn default() -> Self {
+        Self {
+            lexical_ctx: ColdMap::new("lexical_ctx"),
+            begin_loc: ColdMap::new("begin_loc"),
+            delete_message: ColdMap::new("delete_message"),
+            explicit_expr: ColdMap::new("explicit_expr"),
+            requires_clause: ColdMap::new("requires_clause"),
+            contracts: ColdMap::new("contracts"),
+            asm_label: ColdMap::new("asm_label"),
+            alignment: ColdMap::new("alignment"),
+            deprecation: ColdMap::new("deprecation"),
+            instantiated_from: ColdMap::new("instantiated_from"),
+            injection_point: ColdMap::new("injection_point"),
+            builtin_id: ColdMap::new("builtin_id"),
+        }
+    }
+}
+
+impl ColdDeclData {
+    fn rows(&self) -> [MemRow; 12] {
+        [
+            self.lexical_ctx.mem_row(),
+            self.begin_loc.mem_row(),
+            self.delete_message.mem_row(),
+            self.explicit_expr.mem_row(),
+            self.requires_clause.mem_row(),
+            self.contracts.mem_row(),
+            self.asm_label.mem_row(),
+            self.alignment.mem_row(),
+            self.deprecation.mem_row(),
+            self.instantiated_from.mem_row(),
+            self.injection_point.mem_row(),
+            self.builtin_id.mem_row(),
+        ]
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Arena
+// ---------------------------------------------------------------------------
+
+/// Declaration headers, payload arenas and cold maps (spec/ast.md §4).
+///
+/// Index 0 of every vector is a dummy. Reads take `&self`; the only
+/// mutations are the write-once / monotone setters of §2.4. Nodes are
+/// appended by the `AstBuilder`.
+#[derive(Debug)]
+pub struct DeclArena {
+    nodes: Vec<DeclNode>,
+    functions: Vec<FunctionData>,
+    vars: Vec<VarData>,
+    records: Vec<RecordData>,
+    fields: Vec<FieldData>,
+    enums: Vec<EnumData>,
+    enumerators: Vec<EnumeratorData>,
+    params: Vec<ParamData>,
+    typedefs: Vec<TypedefData>,
+    namespaces: Vec<NamespaceData>,
+    scopes: Vec<ScopeData>,
+    static_asserts: Vec<StaticAssertData>,
+    base_specs: Vec<BaseSpec>,
+    /// Cold per-declaration data.
+    pub cold: ColdDeclData,
+}
+
+const DUMMY_GROUP: RedeclGroupId = RedeclGroupId::new(u32::MAX);
+const DUMMY_REDECL: Redecl = Redecl { prev: None, group: DUMMY_GROUP };
+
+impl Default for DeclArena {
+    fn default() -> Self {
+        let dummy = DeclNode {
+            kind: DeclKind::Empty,
+            flags: DeclFlags::empty(),
+            misc: DeclMisc::new(),
+            name: DeclName::EMPTY,
+            ctx: None,
+            next: None,
+            loc: Loc::INVALID,
+            ty: None,
+            data: 0,
+        };
+        let qt = QualType::unqual(crate::ids::TypeId::new(1));
+        Self {
+            nodes: vec![dummy],
+            functions: vec![FunctionData {
+                redecl: DUMMY_REDECL,
+                params: ListId::EMPTY,
+                body: None,
+                spec: FnSpec::new(),
+                templ: TemplLink::NONE,
+            }],
+            vars: vec![VarData {
+                redecl: DUMMY_REDECL,
+                init: None,
+                spec: VarSpec::new(),
+                eval: VarEval::default(),
+                templ: TemplLink::NONE,
+            }],
+            records: vec![RecordData {
+                redecl: DUMMY_REDECL,
+                members: Members::default(),
+                bases: ListId::EMPTY,
+                defn: DefinitionBits::empty(),
+                templ: TemplLink::NONE,
+                lambda: None,
+                tag: TagKind::Struct,
+            }],
+            fields: vec![FieldData { bit_width: None, init: None, flags: 0 }],
+            enums: vec![EnumData {
+                redecl: DUMMY_REDECL,
+                members: Members::default(),
+                int_type: None,
+                promotion_type: None,
+                flags: 0,
+                templ: TemplLink::NONE,
+            }],
+            enumerators: vec![EnumeratorData { value: None, init: None }],
+            params: vec![ParamData { default_arg: None, original_ty: None, index: 0, flags: 0 }],
+            typedefs: vec![TypedefData {
+                redecl: DUMMY_REDECL,
+                underlying: qt,
+                templ: TemplLink::NONE,
+            }],
+            namespaces: vec![NamespaceData {
+                redecl: DUMMY_REDECL,
+                members: Members::default(),
+                flags: 0,
+            }],
+            scopes: vec![ScopeData { members: Members::default(), aux: 0 }],
+            static_asserts: vec![StaticAssertData { cond: ExprId::new(u32::MAX), message: None }],
+            base_specs: vec![BaseSpec {
+                ty: qt,
+                loc: Loc::INVALID,
+                is_virtual: false,
+                access: Access::None,
+                pack_expansion: false,
+            }],
+            cold: ColdDeclData::default(),
+        }
+    }
+}
+
+/// A kind-specific payload, passed to [`DeclArena::push`].
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Payload {
+    /// No payload (or the inline `data` documented on the kind).
+    None(u32),
+    /// Function kinds.
+    Function(FunctionData),
+    /// Variable kinds.
+    Var(VarData),
+    /// Record kinds.
+    Record(RecordData),
+    /// `Field`.
+    Field(FieldData),
+    /// `Enum`.
+    Enum(EnumData),
+    /// `EnumConstant`.
+    Enumerator(EnumeratorData),
+    /// `ParmVar`.
+    Param(ParamData),
+    /// `Typedef` / `TypeAlias`.
+    Typedef(TypedefData),
+    /// `Namespace`.
+    Namespace(NamespaceData),
+    /// TU, `LinkageSpec`, `Export`, `RequiresExprBody`.
+    Scope(ScopeData),
+    /// `StaticAssert`.
+    StaticAssert(StaticAssertData),
+}
+
+impl Payload {
+    const fn class(&self) -> PayloadClass {
+        match self {
+            Payload::None(_) => PayloadClass::None,
+            Payload::Function(_) => PayloadClass::Function,
+            Payload::Var(_) => PayloadClass::Var,
+            Payload::Record(_) => PayloadClass::Record,
+            Payload::Field(_) => PayloadClass::Field,
+            Payload::Enum(_) => PayloadClass::Enum,
+            Payload::Enumerator(_) => PayloadClass::Enumerator,
+            Payload::Param(_) => PayloadClass::Param,
+            Payload::Typedef(_) => PayloadClass::Typedef,
+            Payload::Namespace(_) => PayloadClass::Namespace,
+            Payload::Scope(_) => PayloadClass::Scope,
+            Payload::StaticAssert(_) => PayloadClass::StaticAssert,
+        }
+    }
+}
+
+/// The header fields of a new declaration (everything but `next` and
+/// `data`, which the arena fills).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct NewDecl {
+    /// The kind.
+    pub kind: DeclKind,
+    /// Initial flags.
+    pub flags: DeclFlags,
+    /// Misc bits.
+    pub misc: DeclMisc,
+    /// The name.
+    pub name: DeclName,
+    /// The semantic context.
+    pub ctx: Option<DeclId>,
+    /// The name's location.
+    pub loc: Loc,
+    /// The declared type.
+    pub ty: Option<QualType>,
+}
+
+fn push_payload<T>(v: &mut Vec<T>, x: T) -> u32 {
+    let i = v.len();
+    assert!(i < u32::MAX as usize, "declaration payload space exhausted");
+    v.push(x);
+    i as u32
+}
+
+macro_rules! payload_getter {
+    ($(#[$m:meta])* $name:ident, $mut_name:ident, $field:ident, $class:ident, $ty:ty) => {
+        $(#[$m])*
+        pub fn $name(&self, d: DeclId) -> Option<&$ty> {
+            let n = self.get(d);
+            if n.kind.payload() == PayloadClass::$class && n.data != 0 {
+                Some(&self.$field[n.data as usize])
+            } else {
+                None
+            }
+        }
+        #[allow(dead_code, reason = "not every payload has a late setter yet")]
+        fn $mut_name(&mut self, d: DeclId) -> &mut $ty {
+            let n = self.nodes[d.index() as usize];
+            assert!(
+                n.kind.payload() == PayloadClass::$class && n.data != 0,
+                concat!("decl has no ", stringify!($class), " payload")
+            );
+            &mut self.$field[n.data as usize]
+        }
+    };
+}
+
+impl DeclArena {
+    /// An arena holding only the dummies.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// The number of declarations (excluding the dummy).
+    pub fn len(&self) -> usize {
+        self.nodes.len() - 1
+    }
+
+    /// True if there are no declarations.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// The header of `d`.
+    pub fn get(&self, d: DeclId) -> &DeclNode {
+        &self.nodes[d.index() as usize]
+    }
+
+    /// All declaration ids, in creation order.
+    pub fn ids(&self) -> impl ExactSizeIterator<Item = DeclId> + '_ {
+        (1..self.nodes.len() as u32).map(DeclId::new)
+    }
+
+    /// Appends a declaration with its payload. Does not link it into any
+    /// member list (see [`DeclArena::append_member`]).
+    ///
+    /// # Panics
+    /// If the payload does not match the kind, or on id exhaustion.
+    pub fn push(&mut self, h: NewDecl, payload: Payload) -> DeclId {
+        let class = payload.class();
+        assert!(
+            class == h.kind.payload() || matches!(payload, Payload::None(_)),
+            "payload {class:?} does not match decl kind {:?}",
+            h.kind
+        );
+        assert!(
+            h.kind.payload() == PayloadClass::None || class != PayloadClass::None,
+            "decl kind {:?} requires a payload",
+            h.kind
+        );
+        let data = match payload {
+            Payload::None(x) => x,
+            Payload::Function(x) => push_payload(&mut self.functions, x),
+            Payload::Var(x) => push_payload(&mut self.vars, x),
+            Payload::Record(x) => push_payload(&mut self.records, x),
+            Payload::Field(x) => push_payload(&mut self.fields, x),
+            Payload::Enum(x) => push_payload(&mut self.enums, x),
+            Payload::Enumerator(x) => push_payload(&mut self.enumerators, x),
+            Payload::Param(x) => push_payload(&mut self.params, x),
+            Payload::Typedef(x) => push_payload(&mut self.typedefs, x),
+            Payload::Namespace(x) => push_payload(&mut self.namespaces, x),
+            Payload::Scope(x) => push_payload(&mut self.scopes, x),
+            Payload::StaticAssert(x) => push_payload(&mut self.static_asserts, x),
+        };
+        let id = DeclId::new(self.nodes.len() as u32);
+        self.nodes.push(DeclNode {
+            kind: h.kind,
+            flags: h.flags,
+            misc: h.misc,
+            name: h.name,
+            ctx: h.ctx,
+            next: None,
+            loc: h.loc,
+            ty: h.ty,
+            data,
+        });
+        id
+    }
+
+    /// The id the next [`DeclArena::push`] returns.
+    pub fn next_id(&self) -> DeclId {
+        DeclId::new(self.nodes.len() as u32)
+    }
+
+    payload_getter!(
+        /// The function payload of `d`, if `d` is a function kind.
+        function, function_mut, functions, Function, FunctionData
+    );
+    payload_getter!(
+        /// The variable payload of `d`, if `d` is a variable kind.
+        var, var_mut, vars, Var, VarData
+    );
+    payload_getter!(
+        /// The record payload of `d`, if `d` is a record kind.
+        record, record_mut, records, Record, RecordData
+    );
+    payload_getter!(
+        /// The field payload of `d`.
+        field, field_mut, fields, Field, FieldData
+    );
+    payload_getter!(
+        /// The enumeration payload of `d`.
+        enumeration, enumeration_mut, enums, Enum, EnumData
+    );
+    payload_getter!(
+        /// The enumerator payload of `d`.
+        enumerator, enumerator_mut, enumerators, Enumerator, EnumeratorData
+    );
+    payload_getter!(
+        /// The parameter payload of `d`.
+        param, param_mut, params, Param, ParamData
+    );
+    payload_getter!(
+        /// The typedef / alias payload of `d`.
+        typedef, typedef_mut, typedefs, Typedef, TypedefData
+    );
+    payload_getter!(
+        /// The namespace payload of `d`.
+        namespace, namespace_mut, namespaces, Namespace, NamespaceData
+    );
+    payload_getter!(
+        /// The scope payload of the TU, a `LinkageSpec`, `Export` or
+        /// `RequiresExprBody`.
+        scope, scope_mut, scopes, Scope, ScopeData
+    );
+    payload_getter!(
+        /// The `static_assert` payload of `d`.
+        static_assert, static_assert_mut, static_asserts, StaticAssert, StaticAssertData
+    );
+
+    /// The redeclaration link of a redeclarable `d`.
+    pub fn redecl(&self, d: DeclId) -> Option<Redecl> {
+        let n = self.get(d);
+        if n.data == 0 {
+            return None;
+        }
+        let i = n.data as usize;
+        match n.kind.payload() {
+            PayloadClass::Function => Some(self.functions[i].redecl),
+            PayloadClass::Var => Some(self.vars[i].redecl),
+            PayloadClass::Record => Some(self.records[i].redecl),
+            PayloadClass::Enum => Some(self.enums[i].redecl),
+            PayloadClass::Typedef => Some(self.typedefs[i].redecl),
+            PayloadClass::Namespace => Some(self.namespaces[i].redecl),
+            _ => None,
+        }
+        .filter(|r| r.group != DUMMY_GROUP)
+    }
+
+    /// The member list of context `ctx` (`None` if `ctx` owns none).
+    pub fn member_list(&self, ctx: DeclId) -> Option<Members> {
+        let n = self.get(ctx);
+        let i = n.data as usize;
+        if i == 0 {
+            return None;
+        }
+        match n.kind.payload() {
+            PayloadClass::Record => Some(self.records[i].members),
+            PayloadClass::Enum => Some(self.enums[i].members),
+            PayloadClass::Namespace => Some(self.namespaces[i].members),
+            PayloadClass::Scope => Some(self.scopes[i].members),
+            _ => None,
+        }
+    }
+
+    /// The lexical members of `ctx`, in declaration order.
+    pub fn members(&self, ctx: DeclId) -> MemberIter<'_> {
+        MemberIter { arena: self, cur: self.member_list(ctx).and_then(|m| m.first) }
+    }
+
+    /// The lexical context of `d` (`ctx` unless `HAS_LEXICAL_CTX`).
+    pub fn lexical_ctx(&self, d: DeclId) -> Option<DeclId> {
+        let n = self.get(d);
+        if n.has(DeclFlags::HAS_LEXICAL_CTX) {
+            self.cold.lexical_ctx.get(d).copied()
+        } else {
+            n.ctx
+        }
+    }
+
+    /// Records a lexical context different from the semantic one. Must be
+    /// called before `d` is appended to a member list.
+    pub fn set_lexical_ctx(&mut self, d: DeclId, lexical: DeclId) -> Result<(), AlreadySet> {
+        self.cold.lexical_ctx.insert(d, lexical)?;
+        self.nodes[d.index() as usize].flags = self.get(d).flags.with(DeclFlags::HAS_LEXICAL_CTX);
+        Ok(())
+    }
+
+    /// Appends `d` to `ctx`'s member list (O(1) through `next`).
+    ///
+    /// # Panics
+    /// If `ctx` owns no member list, `d` is already linked, or `ctx` is a
+    /// complete record or enumeration and `d` is neither `IMPLICIT` (lazily
+    /// declared special members) nor `INJECTED` (`define_aggregate`, §10):
+    /// a class's member list is frozen at `}` (§2.4).
+    pub fn append_member(&mut self, ctx: DeclId, d: DeclId) {
+        let dn = *self.get(d);
+        assert!(dn.next.is_none(), "decl is already in a member list");
+        let n = *self.get(ctx);
+        let i = n.data as usize;
+        let late_ok = dn.has(DeclFlags::IMPLICIT) || dn.has(DeclFlags::INJECTED);
+        let members = match n.kind.payload() {
+            PayloadClass::Record => {
+                let r = &mut self.records[i];
+                assert!(
+                    !r.defn.contains(DefinitionBits::COMPLETE) || late_ok,
+                    "member added to a complete class (frozen at `}}`, spec/ast.md §2.4)"
+                );
+                &mut r.members
+            }
+            PayloadClass::Enum => {
+                let e = &mut self.enums[i];
+                assert!(
+                    e.flags & EnumData::COMPLETE == 0,
+                    "enumerator added to a complete enumeration"
+                );
+                &mut e.members
+            }
+            PayloadClass::Namespace => &mut self.namespaces[i].members,
+            PayloadClass::Scope if i != 0 => &mut self.scopes[i].members,
+            _ => panic!("decl kind {:?} owns no member list", n.kind),
+        };
+        let last = members.last.replace(d);
+        if last.is_none() {
+            members.first = Some(d);
+        }
+        if let Some(last) = last {
+            assert!(last != d, "decl appended twice");
+            self.nodes[last.index() as usize].next = Some(d);
+        }
+    }
+
+    /// Sets monotone flags ([`DeclFlags::MONOTONE`]: `USED`, `REFERENCED`,
+    /// `INVALID`).
+    ///
+    /// # Panics
+    /// If `f` contains other flags.
+    pub fn set_flags(&mut self, d: DeclId, f: DeclFlags) {
+        assert!(DeclFlags::MONOTONE.contains(f), "only USED/REFERENCED/INVALID may be set late");
+        let n = &mut self.nodes[d.index() as usize];
+        n.flags = n.flags.with(f);
+    }
+
+    /// Sets `HAS_ATTRS` (by `AttrArena::attach`).
+    pub(crate) fn set_has_attrs(&mut self, d: DeclId) {
+        let n = &mut self.nodes[d.index() as usize];
+        n.flags = n.flags.with(DeclFlags::HAS_ATTRS);
+    }
+
+    /// Re-points the declared type (deduced return types, resolved
+    /// exception specifications; §2.4).
+    pub fn set_ty(&mut self, d: DeclId, ty: QualType) {
+        self.nodes[d.index() as usize].ty = Some(ty);
+    }
+
+    /// Stores the linkage/visibility caches of `misc` (cache semantics:
+    /// idempotent; a different value for a computed cache is a bug).
+    ///
+    /// # Panics
+    /// If a cache was already computed with a different value.
+    pub fn set_linkage_cache(&mut self, d: DeclId, linkage: u8, visibility: u8) {
+        assert!(linkage != 0 && linkage < 8 && visibility < 4, "linkage cache out of range");
+        let n = &mut self.nodes[d.index() as usize];
+        let old = n.misc.linkage_cache();
+        assert!(
+            old == 0 || (old == linkage && n.misc.visibility_cache() == visibility),
+            "linkage cache changed"
+        );
+        n.misc =
+            n.misc.with_field(9, 3, u16::from(linkage)).with_field(12, 2, u16::from(visibility));
+    }
+
+    /// Sets a function's body (write-once, §2.4).
+    pub fn set_body(&mut self, f: DeclId, body: StmtId) -> Result<(), AlreadySet> {
+        set_once(&mut self.function_mut(f).body, body, "FunctionData.body", RawId::raw)
+    }
+
+    /// Sets late specifier bits ([`FnSpec::LATE`]: trivial, contracts,
+    /// coroutine, escalated).
+    ///
+    /// # Panics
+    /// If `bits` contains other bits.
+    pub fn mark_function(&mut self, f: DeclId, bits: FnSpec) {
+        assert!(bits.0 & !FnSpec::LATE.0 == 0, "FnSpec bit is not settable after creation");
+        let d = self.function_mut(f);
+        d.spec = FnSpec(d.spec.0 | bits.0);
+    }
+
+    /// Sets the parameter list of function `f` (once a non-empty list is
+    /// set it is frozen; parameters are created after their function
+    /// because they name it as their semantic context).
+    pub fn set_params(&mut self, f: DeclId, params: ListId) -> Result<(), AlreadySet> {
+        let data = self.function_mut(f);
+        if data.params != ListId::EMPTY {
+            return Err(AlreadySet { slot: "FunctionData.params", existing: data.params.raw() });
+        }
+        data.params = params;
+        Ok(())
+    }
+
+    /// Sets a template link that was [`TemplLink::NONE`] (M3: the pattern
+    /// is created before its template decl).
+    pub fn set_templ(&mut self, d: DeclId, link: TemplLink) -> Result<(), AlreadySet> {
+        let n = *self.get(d);
+        let i = n.data as usize;
+        let slot = match n.kind.payload() {
+            PayloadClass::Function => &mut self.functions[i].templ,
+            PayloadClass::Var => &mut self.vars[i].templ,
+            PayloadClass::Record => &mut self.records[i].templ,
+            PayloadClass::Enum => &mut self.enums[i].templ,
+            PayloadClass::Typedef => &mut self.typedefs[i].templ,
+            _ => panic!("decl kind {:?} is not templatable", n.kind),
+        };
+        if !slot.is_none() {
+            return Err(AlreadySet { slot: "TemplLink", existing: slot.0 });
+        }
+        *slot = link;
+        Ok(())
+    }
+
+    /// Sets a variable's initializer (write-once, §2.4).
+    pub fn set_init(&mut self, v: DeclId, init: ExprId) -> Result<(), AlreadySet> {
+        set_once(&mut self.var_mut(v).init, init, "VarData.init", RawId::raw)
+    }
+
+    /// Sets late variable bits ([`VarSpec::LATE`]: NRVO).
+    ///
+    /// # Panics
+    /// If `bits` contains other bits.
+    pub fn mark_var(&mut self, v: DeclId, bits: VarSpec) {
+        assert!(bits.0 & !VarSpec::LATE.0 == 0, "VarSpec bit is not settable after creation");
+        let d = self.var_mut(v);
+        d.spec = VarSpec(d.spec.0 | bits.0);
+    }
+
+    /// `NotEvaluated → Evaluating` (§9.2). Returns the current state
+    /// unchanged as `Err` if it is not `NotEvaluated` (`Evaluating` there
+    /// means a self-referential initializer).
+    pub fn begin_eval(&mut self, v: DeclId) -> Result<(), VarEvalState> {
+        let d = self.var_mut(v);
+        match d.eval.state() {
+            VarEvalState::NotEvaluated => {
+                d.eval = VarEval(VarEval::EVALUATING);
+                Ok(())
+            }
+            s => Err(s),
+        }
+    }
+
+    /// `Evaluating → Value(id) / NotConstant` (`None` = not constant).
+    ///
+    /// # Panics
+    /// If the state is not `Evaluating`, or `value` is one of the two
+    /// reserved raw values.
+    pub fn finish_eval(&mut self, v: DeclId, value: Option<ConstValueId>) {
+        let d = self.var_mut(v);
+        assert_eq!(d.eval.state(), VarEvalState::Evaluating, "finish_eval without begin_eval");
+        d.eval = VarEval(match value {
+            Some(c) => {
+                assert!(
+                    c.index() < VarEval::NOT_CONSTANT,
+                    "ConstValueId collides with VarEval sentinels"
+                );
+                c.index()
+            }
+            None => VarEval::NOT_CONSTANT,
+        });
+    }
+
+    /// `Evaluating → NotEvaluated`: an evaluation was abandoned without a
+    /// verdict (e.g. it hit a resource limit and may be retried).
+    ///
+    /// # Panics
+    /// If the state is not `Evaluating`.
+    pub fn abort_eval(&mut self, v: DeclId) {
+        let d = self.var_mut(v);
+        assert_eq!(d.eval.state(), VarEvalState::Evaluating, "abort_eval without begin_eval");
+        d.eval = VarEval(0);
+    }
+
+    /// `{` of a class definition: marks it being defined.
+    ///
+    /// # Panics
+    /// If the record is already being defined or complete.
+    pub fn begin_definition(&mut self, r: DeclId) {
+        let d = self.record_mut(r);
+        assert!(
+            !d.defn.contains(DefinitionBits::BEING_DEFINED)
+                && !d.defn.contains(DefinitionBits::COMPLETE),
+            "class defined twice"
+        );
+        d.defn = d.defn.with(DefinitionBits::BEING_DEFINED);
+    }
+
+    /// Sets property bits of a class being defined.
+    ///
+    /// # Panics
+    /// If the class is not being defined (properties freeze at `}`).
+    pub fn set_definition_bits(&mut self, r: DeclId, bits: DefinitionBits) {
+        let d = self.record_mut(r);
+        assert!(
+            d.defn.contains(DefinitionBits::BEING_DEFINED),
+            "class properties are frozen at `}}`"
+        );
+        d.defn = d.defn.with(bits);
+    }
+
+    /// Sets the base-specifiers of a class being defined (once).
+    pub fn set_bases(
+        &mut self,
+        r: DeclId,
+        bases: &[BaseSpec],
+        lists: &mut crate::lists::IdLists,
+    ) -> Result<(), AlreadySet> {
+        assert!(
+            self.record_mut(r).defn.contains(DefinitionBits::BEING_DEFINED),
+            "bases set outside the class definition"
+        );
+        if self.record_mut(r).bases != ListId::EMPTY {
+            return Err(AlreadySet {
+                slot: "RecordData.bases",
+                existing: self.record_mut(r).bases.raw(),
+            });
+        }
+        if bases.is_empty() {
+            return Ok(());
+        }
+        let start = self.base_specs.len() as u32;
+        self.base_specs.extend_from_slice(bases);
+        let list = lists.push_raw(&(start..start + bases.len() as u32).collect::<Vec<_>>());
+        self.record_mut(r).bases = list;
+        Ok(())
+    }
+
+    /// The base-specifiers of class `r`.
+    pub fn bases<'a>(
+        &'a self,
+        r: DeclId,
+        lists: &'a crate::lists::IdLists,
+    ) -> impl Iterator<Item = &'a BaseSpec> + 'a {
+        let list = self.record(r).map_or(ListId::EMPTY, |d| d.bases);
+        lists.get(list).iter().map(|&i| &self.base_specs[i as usize])
+    }
+
+    /// `}` of a class definition: the class is complete and its member list
+    /// frozen (§2.4).
+    ///
+    /// # Panics
+    /// If the class is not being defined.
+    pub fn complete_definition(&mut self, r: DeclId) {
+        let d = self.record_mut(r);
+        assert!(
+            d.defn.contains(DefinitionBits::BEING_DEFINED),
+            "complete_definition without begin_definition"
+        );
+        d.defn = d.defn.without(DefinitionBits::BEING_DEFINED).with(DefinitionBits::COMPLETE);
+    }
+
+    /// Sets a field's default member initializer (write-once).
+    pub fn set_field_init(&mut self, f: DeclId, init: ExprId) -> Result<(), AlreadySet> {
+        set_once(&mut self.field_mut(f).init, init, "FieldData.init", RawId::raw)
+    }
+
+    /// `{` of an enumeration definition.
+    pub fn begin_enum_definition(&mut self, e: DeclId) {
+        let d = self.enumeration_mut(e);
+        assert!(
+            d.flags & (EnumData::BEING_DEFINED | EnumData::COMPLETE) == 0,
+            "enumeration defined twice"
+        );
+        d.flags |= EnumData::BEING_DEFINED;
+    }
+
+    /// Sets the underlying and promotion types (once: at declaration when
+    /// fixed, else at `}`).
+    pub fn set_enum_int_type(
+        &mut self,
+        e: DeclId,
+        int_type: QualType,
+        promotion: QualType,
+    ) -> Result<(), AlreadySet> {
+        let d = self.enumeration_mut(e);
+        set_once(&mut d.int_type, int_type, "EnumData.int_type", QualType::to_raw)?;
+        d.promotion_type = Some(promotion);
+        Ok(())
+    }
+
+    /// `}` of an enumeration definition.
+    pub fn complete_enum_definition(&mut self, e: DeclId) {
+        let d = self.enumeration_mut(e);
+        assert!(d.flags & EnumData::BEING_DEFINED != 0, "complete_enum_definition without begin");
+        d.flags = (d.flags & !EnumData::BEING_DEFINED) | EnumData::COMPLETE;
+    }
+
+    /// Sets an enumerator's value (once; enumerators with a value-dependent
+    /// initializer never get one).
+    pub fn set_enumerator_value(&mut self, e: DeclId, v: ConstValueId) -> Result<(), AlreadySet> {
+        set_once(&mut self.enumerator_mut(e).value, v, "EnumeratorData.value", RawId::raw)
+    }
+
+    /// Sets a parameter's default argument (write-once).
+    pub fn set_default_arg(&mut self, p: DeclId, arg: ExprId) -> Result<(), AlreadySet> {
+        set_once(&mut self.param_mut(p).default_arg, arg, "ParamData.default_arg", RawId::raw)
+    }
+
+    /// Bytes of the node and payload vectors (instantiation meter).
+    pub(crate) fn live_bytes(&self) -> u64 {
+        self.vec_rows().iter().map(|r| r.live_bytes).sum()
+    }
+
+    fn vec_rows(&self) -> [MemRow; 13] {
+        [
+            MemRow::of_vec("nodes", &self.nodes),
+            MemRow::of_vec("functions", &self.functions),
+            MemRow::of_vec("vars", &self.vars),
+            MemRow::of_vec("records", &self.records),
+            MemRow::of_vec("fields", &self.fields),
+            MemRow::of_vec("enums", &self.enums),
+            MemRow::of_vec("enumerators", &self.enumerators),
+            MemRow::of_vec("params", &self.params),
+            MemRow::of_vec("typedefs", &self.typedefs),
+            MemRow::of_vec("namespaces", &self.namespaces),
+            MemRow::of_vec("scopes", &self.scopes),
+            MemRow::of_vec("static_asserts", &self.static_asserts),
+            MemRow::of_vec("base_specs", &self.base_specs),
+        ]
+    }
+}
+
+/// Iterator over a context's lexical members ([`DeclArena::members`]).
+#[derive(Clone, Debug)]
+pub struct MemberIter<'a> {
+    arena: &'a DeclArena,
+    cur: Option<DeclId>,
+}
+
+impl Iterator for MemberIter<'_> {
+    type Item = DeclId;
+    fn next(&mut self) -> Option<DeclId> {
+        let d = self.cur?;
+        self.cur = self.arena.get(d).next;
+        Some(d)
+    }
+}
 
 impl HeapSize for DeclArena {
     fn heap_bytes(&self) -> MemReport {
-        MemReport::new()
+        let mut r = MemReport::new();
+        for row in self.vec_rows() {
+            r.push(row);
+        }
+        for row in self.cold.rows() {
+            r.push(row.prefixed("cold"));
+        }
+        r
     }
 }

@@ -1,15 +1,1145 @@
-//! Expressions (spec/ast.md §5).
+//! Expressions: the 20-byte [`ExprNode`] header and side records
+//! (spec/ast.md §5).
 //!
-//! (Skeleton from the WP-041 stub commit; filled in by WP-041.)
+//! Nodes are created by the `AstBuilder`, which computes dependence and
+//! value category; this module owns storage, the operator/cast enums and
+//! typed accessors.
+#![warn(missing_docs)]
 
-use crate::mem::{HeapSize, MemReport};
+use kiln_source::Loc;
 
-/// Expressions (spec/ast.md §5).
-#[derive(Debug, Default)]
-pub struct ExprArena {}
+use crate::ids::{
+    ArgListId, ConstValueId, DeclId, ExprId, ListId, NnsId, QualType, RawId, StringLitId,
+};
+use crate::lists::IdLists;
+use crate::mem::{HeapSize, MemReport, MemRow};
+use crate::slot::{AlreadySet, ColdMap};
+
+/// Expression kinds (spec/ast.md §5.3; clang's class names without the
+/// `Expr`/`Operator` suffix where the dump adds it). The numbering is
+/// stable.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[repr(u8)]
+#[allow(missing_docs, reason = "named after clang's Stmt classes; see spec/ast.md §5.3")]
+pub enum ExprKind {
+    // literals
+    IntegerLiteral,
+    FloatingLiteral,
+    CharacterLiteral,
+    StringLiteral,
+    CXXBoolLiteralExpr,
+    CXXNullPtrLiteralExpr,
+    UserDefinedLiteral,
+    ImaginaryLiteral,
+    EmbedExpr,
+    GNUNullExpr,
+    // names
+    DeclRefExpr,
+    MemberExpr,
+    CXXThisExpr,
+    PredefinedExpr,
+    SourceLocExpr,
+    UnresolvedLookupExpr,
+    UnresolvedMemberExpr,
+    DependentScopeDeclRefExpr,
+    CXXDependentScopeMemberExpr,
+    SubstNonTypeTemplateParmExpr,
+    SubstNonTypeTemplateParmPackExpr,
+    FunctionParmPackExpr,
+    // operators
+    UnaryOperator,
+    BinaryOperator,
+    CompoundAssignOperator,
+    ConditionalOperator,
+    BinaryConditionalOperator,
+    ArraySubscriptExpr,
+    ParenExpr,
+    CallExpr,
+    CXXMemberCallExpr,
+    CXXOperatorCallExpr,
+    CXXRewrittenBinaryOperator,
+    ParenListExpr,
+    // casts
+    ImplicitCastExpr,
+    CStyleCastExpr,
+    CXXFunctionalCastExpr,
+    CXXStaticCastExpr,
+    CXXConstCastExpr,
+    CXXReinterpretCastExpr,
+    CXXDynamicCastExpr,
+    BuiltinBitCastExpr,
+    // initialization
+    InitListExpr,
+    ImplicitValueInitExpr,
+    CXXConstructExpr,
+    CXXTemporaryObjectExpr,
+    CXXInheritedCtorInitExpr,
+    CXXDefaultArgExpr,
+    CXXDefaultInitExpr,
+    CXXScalarValueInitExpr,
+    CXXParenListInitExpr,
+    ArrayInitLoopExpr,
+    ArrayInitIndexExpr,
+    CXXStdInitializerListExpr,
+    CompoundLiteralExpr,
+    NoInitExpr,
+    // temporaries
+    MaterializeTemporaryExpr,
+    CXXBindTemporaryExpr,
+    ExprWithCleanups,
+    OpaqueValueExpr,
+    // memory
+    CXXNewExpr,
+    CXXDeleteExpr,
+    CXXPseudoDestructorExpr,
+    // exceptions / RTTI
+    CXXThrowExpr,
+    CXXNoexceptExpr,
+    CXXTypeidExpr,
+    // traits
+    UnaryExprOrTypeTraitExpr,
+    TypeTraitExpr,
+    ArrayTypeTraitExpr,
+    ExpressionTraitExpr,
+    OffsetOfExpr,
+    SizeOfPackExpr,
+    RequiresExpr,
+    ConceptSpecializationExpr,
+    // lambdas, packs
+    LambdaExpr,
+    PackExpansionExpr,
+    CXXFoldExpr,
+    PackIndexingExpr,
+    CXXUnresolvedConstructExpr,
+    // coroutines
+    CoawaitExpr,
+    DependentCoawaitExpr,
+    CoyieldExpr,
+    // constant
+    ConstantExpr,
+    // GNU / builtins
+    StmtExpr,
+    ChooseExpr,
+    VAArgExpr,
+    AtomicExpr,
+    ShuffleVectorExpr,
+    ConvertVectorExpr,
+    ExtVectorElementExpr,
+    // reflection
+    CXXReflectExpr,
+    CXXSpliceExpr,
+    // recovery
+    RecoveryExpr,
+}
+
+impl ExprKind {
+    /// True for the cast kinds (`aux` is a [`CastKind`]).
+    pub const fn is_cast(self) -> bool {
+        matches!(
+            self,
+            ExprKind::ImplicitCastExpr
+                | ExprKind::CStyleCastExpr
+                | ExprKind::CXXFunctionalCastExpr
+                | ExprKind::CXXStaticCastExpr
+                | ExprKind::CXXConstCastExpr
+                | ExprKind::CXXReinterpretCastExpr
+                | ExprKind::CXXDynamicCastExpr
+                | ExprKind::BuiltinBitCastExpr
+        )
+    }
+
+    /// True for explicit casts.
+    pub const fn is_explicit_cast(self) -> bool {
+        self.is_cast() && !matches!(self, ExprKind::ImplicitCastExpr)
+    }
+}
+
+/// Value category ([basic.lval]), 2 bits of `ExprNode.bits`.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug)]
+#[repr(u8)]
+pub enum ValueCategory {
+    /// prvalue (not printed by the dump).
+    #[default]
+    PRValue = 0,
+    /// lvalue.
+    LValue = 1,
+    /// xvalue.
+    XValue = 2,
+}
+
+impl ValueCategory {
+    /// lvalue or xvalue.
+    pub const fn is_glvalue(self) -> bool {
+        !matches!(self, ValueCategory::PRValue)
+    }
+}
+
+/// Object kind (2 bits of `ExprNode.bits`).
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug)]
+#[repr(u8)]
+pub enum ObjectKind {
+    /// An ordinary object.
+    #[default]
+    Ordinary = 0,
+    /// A bit-field (the `FieldDecl` is reachable from the `MemberExpr`).
+    BitField = 1,
+    /// A vector element.
+    VectorComponent = 2,
+}
+
+/// The 4 per-kind flag bits of `ExprNode.bits` (bits 4..=7).
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug)]
+pub struct ExprFlags(u8);
+
+impl ExprFlags {
+    /// No flags.
+    pub const NONE: ExprFlags = ExprFlags(0);
+    /// `ImplicitCastExpr`: an earlier step of an explicit cast.
+    pub const PART_OF_EXPLICIT_CAST: ExprFlags = ExprFlags(1 << 4);
+    /// `MemberExpr`: `->`.
+    pub const ARROW: ExprFlags = ExprFlags(1 << 4);
+    /// `UnaryOperator`: cannot overflow (dump `cannot overflow`).
+    pub const CANNOT_OVERFLOW: ExprFlags = ExprFlags(1 << 4);
+    /// `IntegerLiteral`: wider than 64 bits; `a` is a `ConstValueId`.
+    pub const WIDE: ExprFlags = ExprFlags(1 << 4);
+    /// `UnaryExprOrTypeTraitExpr`: the operand is a type (`a` = raw
+    /// `QualType`).
+    pub const ARG_IS_TYPE: ExprFlags = ExprFlags(1 << 4);
+    /// `DeclRefExpr`: refers to an enclosing variable or capture.
+    pub const REFERS_TO_ENCLOSING: ExprFlags = ExprFlags(1 << 5);
+    /// `CallExpr`: the callee was found by ADL.
+    pub const ADL: ExprFlags = ExprFlags(1 << 5);
+    /// `DeclRefExpr` / `MemberExpr`: overload resolution chose among
+    /// several candidates.
+    pub const HAD_MULTIPLE_CANDIDATES: ExprFlags = ExprFlags(1 << 6);
+
+    /// The raw bits (already shifted into bits 4..=7).
+    pub const fn bits(self) -> u8 {
+        self.0
+    }
+    /// The union.
+    #[must_use]
+    pub const fn with(self, f: ExprFlags) -> Self {
+        ExprFlags(self.0 | f.0)
+    }
+}
+
+/// Expression dependence (spec/ast.md §5.1; [temp.dep.expr],
+/// [temp.dep.constexpr]).
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug)]
+pub struct ExprDeps(u8);
+
+impl ExprDeps {
+    /// No dependence.
+    pub const NONE: ExprDeps = ExprDeps(0);
+    /// Type-dependent.
+    pub const TYPE: ExprDeps = ExprDeps(1);
+    /// Value-dependent.
+    pub const VALUE: ExprDeps = ExprDeps(2);
+    /// Instantiation-dependent.
+    pub const INSTANTIATION: ExprDeps = ExprDeps(4);
+    /// Contains an unexpanded parameter pack.
+    pub const UNEXPANDED_PACK: ExprDeps = ExprDeps(8);
+    /// Contains an error (recovery expression or error type).
+    pub const ERROR: ExprDeps = ExprDeps(16);
+    /// Type-, value- and instantiation-dependent.
+    pub const TYPE_VALUE_INST: ExprDeps = ExprDeps(7);
+    /// Value- and instantiation-dependent.
+    pub const VALUE_INST: ExprDeps = ExprDeps(6);
+
+    /// The raw bits.
+    pub const fn bits(self) -> u8 {
+        self.0
+    }
+    /// True if every bit of `d` is set.
+    pub const fn contains(self, d: ExprDeps) -> bool {
+        self.0 & d.0 == d.0
+    }
+    /// True if any bit of `d` is set.
+    pub const fn intersects(self, d: ExprDeps) -> bool {
+        self.0 & d.0 != 0
+    }
+    /// The union.
+    #[must_use]
+    pub const fn with(self, d: ExprDeps) -> Self {
+        ExprDeps(self.0 | d.0)
+    }
+    /// The bits not in `d`.
+    #[must_use]
+    pub const fn without(self, d: ExprDeps) -> Self {
+        ExprDeps(self.0 & !d.0)
+    }
+    /// True if no bit is set.
+    pub const fn is_none(self) -> bool {
+        self.0 == 0
+    }
+}
+
+impl std::ops::BitOr for ExprDeps {
+    type Output = ExprDeps;
+    fn bitor(self, rhs: ExprDeps) -> ExprDeps {
+        ExprDeps(self.0 | rhs.0)
+    }
+}
+
+impl std::ops::BitOrAssign for ExprDeps {
+    fn bitor_assign(&mut self, rhs: ExprDeps) {
+        self.0 |= rhs.0;
+    }
+}
+
+macro_rules! u8_enum {
+    ($(#[$m:meta])* $name:ident { $($(#[$vm:meta])* $v:ident = $s:literal,)* }) => {
+        $(#[$m])*
+        #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+        #[repr(u8)]
+        pub enum $name { $($(#[$vm])* $v,)* }
+        impl $name {
+            const ALL: &'static [$name] = &[$($name::$v,)*];
+            /// The variant with discriminant `v`.
+            pub fn from_u8(v: u8) -> Option<Self> {
+                Self::ALL.get(usize::from(v)).copied()
+            }
+            /// The spelling used by the dump.
+            pub const fn spelling(self) -> &'static str {
+                match self { $($name::$v => $s,)* }
+            }
+        }
+    };
+}
+
+u8_enum!(
+    /// Unary operators (clang's `UnaryOperatorKind`).
+    UnaryOp {
+        /// `x++`.
+        PostInc = "++",
+        /// `x--`.
+        PostDec = "--",
+        /// `++x`.
+        PreInc = "++",
+        /// `--x`.
+        PreDec = "--",
+        /// `&x`.
+        AddrOf = "&",
+        /// `*x`.
+        Deref = "*",
+        /// `+x`.
+        Plus = "+",
+        /// `-x`.
+        Minus = "-",
+        /// `~x`.
+        Not = "~",
+        /// `!x`.
+        LNot = "!",
+        /// `__real x`.
+        Real = "__real",
+        /// `__imag x`.
+        Imag = "__imag",
+        /// `__extension__ x`.
+        Extension = "__extension__",
+        /// `co_await x` (non-overloaded).
+        Coawait = "co_await",
+    }
+);
+
+impl UnaryOp {
+    /// `x++` / `x--`.
+    pub const fn is_postfix(self) -> bool {
+        matches!(self, UnaryOp::PostInc | UnaryOp::PostDec)
+    }
+    /// `++` / `--` in either position.
+    pub const fn is_inc_dec(self) -> bool {
+        matches!(self, UnaryOp::PostInc | UnaryOp::PostDec | UnaryOp::PreInc | UnaryOp::PreDec)
+    }
+}
+
+u8_enum!(
+    /// Binary operators (clang's `BinaryOperatorKind`).
+    BinaryOp {
+        /// `.*`.
+        PtrMemD = ".*",
+        /// `->*`.
+        PtrMemI = "->*",
+        /// `*`.
+        Mul = "*",
+        /// `/`.
+        Div = "/",
+        /// `%`.
+        Rem = "%",
+        /// `+`.
+        Add = "+",
+        /// `-`.
+        Sub = "-",
+        /// `<<`.
+        Shl = "<<",
+        /// `>>`.
+        Shr = ">>",
+        /// `<=>`.
+        Cmp = "<=>",
+        /// `<`.
+        LT = "<",
+        /// `>`.
+        GT = ">",
+        /// `<=`.
+        LE = "<=",
+        /// `>=`.
+        GE = ">=",
+        /// `==`.
+        EQ = "==",
+        /// `!=`.
+        NE = "!=",
+        /// `&`.
+        And = "&",
+        /// `^`.
+        Xor = "^",
+        /// `|`.
+        Or = "|",
+        /// `&&`.
+        LAnd = "&&",
+        /// `||`.
+        LOr = "||",
+        /// `=`.
+        Assign = "=",
+        /// `*=`.
+        MulAssign = "*=",
+        /// `/=`.
+        DivAssign = "/=",
+        /// `%=`.
+        RemAssign = "%=",
+        /// `+=`.
+        AddAssign = "+=",
+        /// `-=`.
+        SubAssign = "-=",
+        /// `<<=`.
+        ShlAssign = "<<=",
+        /// `>>=`.
+        ShrAssign = ">>=",
+        /// `&=`.
+        AndAssign = "&=",
+        /// `^=`.
+        XorAssign = "^=",
+        /// `|=`.
+        OrAssign = "|=",
+        /// `,`.
+        Comma = ",",
+    }
+);
+
+impl BinaryOp {
+    /// `=` and the compound assignments.
+    pub const fn is_assignment(self) -> bool {
+        (self as u8) >= (BinaryOp::Assign as u8) && (self as u8) <= (BinaryOp::OrAssign as u8)
+    }
+    /// The compound assignments (`CompoundAssignOperator`).
+    pub const fn is_compound_assignment(self) -> bool {
+        self.is_assignment() && !matches!(self, BinaryOp::Assign)
+    }
+    /// `.*` / `->*`.
+    pub const fn is_ptr_mem(self) -> bool {
+        matches!(self, BinaryOp::PtrMemD | BinaryOp::PtrMemI)
+    }
+}
+
+u8_enum!(
+    /// Cast kinds (spec/ast.md §5.4; clang's `CastKind`, C++ subset, stable
+    /// numbering).
+    CastKind {
+        /// Dependent cast.
+        Dependent = "Dependent",
+        /// Qualification / noexcept / identity.
+        NoOp = "NoOp",
+        /// [conv.lval].
+        LValueToRValue = "LValueToRValue",
+        /// `__builtin_bit_cast` on an lvalue.
+        LValueToRValueBitCast = "LValueToRValueBitCast",
+        /// `reinterpret_cast<T&>`.
+        LValueBitCast = "LValueBitCast",
+        /// Pointer bit cast.
+        BitCast = "BitCast",
+        /// [conv.array].
+        ArrayToPointerDecay = "ArrayToPointerDecay",
+        /// [conv.func].
+        FunctionToPointerDecay = "FunctionToPointerDecay",
+        /// Builtin function to function pointer.
+        BuiltinFnToFnPtr = "BuiltinFnToFnPtr",
+        /// Null pointer constant to pointer.
+        NullToPointer = "NullToPointer",
+        /// Null pointer constant to member pointer.
+        NullToMemberPointer = "NullToMemberPointer",
+        /// Integer to pointer.
+        IntegralToPointer = "IntegralToPointer",
+        /// Pointer to integer.
+        PointerToIntegral = "PointerToIntegral",
+        /// Pointer to `bool`.
+        PointerToBoolean = "PointerToBoolean",
+        /// [conv.integral].
+        IntegralCast = "IntegralCast",
+        /// Integer to `bool`.
+        IntegralToBoolean = "IntegralToBoolean",
+        /// `bool` to signed integer (-1).
+        BooleanToSignedIntegral = "BooleanToSignedIntegral",
+        /// [conv.fpint] integer to floating.
+        IntegralToFloating = "IntegralToFloating",
+        /// [conv.fpint] floating to integer.
+        FloatingToIntegral = "FloatingToIntegral",
+        /// Floating to `bool`.
+        FloatingToBoolean = "FloatingToBoolean",
+        /// [conv.double].
+        FloatingCast = "FloatingCast",
+        /// Derived-to-base.
+        DerivedToBase = "DerivedToBase",
+        /// Derived-to-base, null check elided.
+        UncheckedDerivedToBase = "UncheckedDerivedToBase",
+        /// Base-to-derived.
+        BaseToDerived = "BaseToDerived",
+        /// `dynamic_cast`.
+        Dynamic = "Dynamic",
+        /// Member pointer, derived to base.
+        DerivedToBaseMemberPointer = "DerivedToBaseMemberPointer",
+        /// Member pointer, base to derived.
+        BaseToDerivedMemberPointer = "BaseToDerivedMemberPointer",
+        /// Member pointer to `bool`.
+        MemberPointerToBoolean = "MemberPointerToBoolean",
+        /// `reinterpret_cast` of member pointers.
+        ReinterpretMemberPointer = "ReinterpretMemberPointer",
+        /// User-defined conversion function.
+        UserDefinedConversion = "UserDefinedConversion",
+        /// Converting constructor.
+        ConstructorConversion = "ConstructorConversion",
+        /// To `void`.
+        ToVoid = "ToVoid",
+        /// GNU cast to union.
+        ToUnion = "ToUnion",
+        /// Scalar to vector.
+        VectorSplat = "VectorSplat",
+        /// To `_Atomic`.
+        NonAtomicToAtomic = "NonAtomicToAtomic",
+        /// From `_Atomic`.
+        AtomicToNonAtomic = "AtomicToNonAtomic",
+        /// Complex conversions.
+        IntegralRealToComplex = "IntegralRealToComplex",
+        /// Complex conversions.
+        FloatingRealToComplex = "FloatingRealToComplex",
+        /// Complex conversions.
+        IntegralComplexCast = "IntegralComplexCast",
+        /// Complex conversions.
+        FloatingComplexCast = "FloatingComplexCast",
+        /// Complex conversions.
+        IntegralComplexToReal = "IntegralComplexToReal",
+        /// Complex conversions.
+        FloatingComplexToReal = "FloatingComplexToReal",
+        /// Complex conversions.
+        IntegralComplexToBoolean = "IntegralComplexToBoolean",
+        /// Complex conversions.
+        FloatingComplexToBoolean = "FloatingComplexToBoolean",
+        /// Complex conversions.
+        IntegralComplexToFloatingComplex = "IntegralComplexToFloatingComplex",
+        /// Complex conversions.
+        FloatingComplexToIntegralComplex = "FloatingComplexToIntegralComplex",
+    }
+);
+
+u8_enum!(
+    /// Character literal kinds ([lex.ccon]).
+    CharKind {
+        /// `'a'`.
+        Ascii = "ascii",
+        /// `L'a'`.
+        Wide = "wide",
+        /// `u8'a'`.
+        Utf8 = "utf8",
+        /// `u'a'`.
+        Utf16 = "utf16",
+        /// `U'a'`.
+        Utf32 = "utf32",
+    }
+);
+
+u8_enum!(
+    /// String literal kinds ([lex.string]; clang's `StringLiteralKind`).
+    StringKind {
+        /// `"a"`.
+        Ordinary = "ordinary",
+        /// `L"a"`.
+        Wide = "wide",
+        /// `u8"a"`.
+        Utf8 = "utf8",
+        /// `u"a"`.
+        Utf16 = "utf16",
+        /// `U"a"`.
+        Utf32 = "utf32",
+        /// An unevaluated string ([lex.string.uneval]: `static_assert`,
+        /// `deprecated`, ...).
+        Unevaluated = "unevaluated",
+    }
+);
+
+u8_enum!(
+    /// `UnaryExprOrTypeTraitExpr` kinds.
+    TraitKind {
+        /// `sizeof`.
+        SizeOf = "sizeof",
+        /// `alignof` / `_Alignof`.
+        AlignOf = "alignof",
+        /// `__alignof` (preferred alignment).
+        PreferredAlignOf = "__alignof",
+        /// `__datasizeof`.
+        DataSizeOf = "__datasizeof",
+        /// `vec_step` (`OpenCL`).
+        VecStep = "vec_step",
+    }
+);
+
+u8_enum!(
+    /// Why a `DeclRefExpr`/`MemberExpr` is not an odr-use
+    /// ([basic.def.odr]/5).
+    NonOdrUse {
+        /// It is an odr-use (or potentially one).
+        None = "",
+        /// In an unevaluated operand.
+        Unevaluated = "non_odr_use_unevaluated",
+        /// Constant: lvalue-to-rvalue on a usable-in-constant-expressions
+        /// variable.
+        Constant = "non_odr_use_constant",
+        /// A discarded-value expression.
+        Discarded = "non_odr_use_discarded",
+    }
+);
+
+u8_enum!(
+    /// Integer literal radix (for printing as written).
+    Radix {
+        /// Decimal.
+        Decimal = "10",
+        /// Hexadecimal.
+        Hex = "16",
+        /// Octal.
+        Octal = "8",
+        /// Binary.
+        Binary = "2",
+    }
+);
+
+/// The 20-byte expression header (spec/ast.md §5.1).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct ExprNode {
+    kind: ExprKind,
+    bits: u8,
+    deps: ExprDeps,
+    aux: u8,
+    ty: QualType,
+    loc: Loc,
+    a: u32,
+    b: u32,
+}
+
+impl ExprNode {
+    /// A header (used by the builder after computing `deps` and `vk`).
+    #[allow(clippy::too_many_arguments, reason = "one argument per header field")]
+    pub(crate) fn new(
+        kind: ExprKind,
+        vk: ValueCategory,
+        ok: ObjectKind,
+        flags: ExprFlags,
+        deps: ExprDeps,
+        aux: u8,
+        ty: QualType,
+        loc: Loc,
+        a: u32,
+        b: u32,
+    ) -> Self {
+        let bits = vk as u8 | ((ok as u8) << 2) | flags.0;
+        ExprNode { kind, bits, deps, aux, ty, loc, a, b }
+    }
+    /// The kind.
+    pub const fn kind(&self) -> ExprKind {
+        self.kind
+    }
+    /// The value category.
+    pub const fn value_category(&self) -> ValueCategory {
+        match self.bits & 3 {
+            1 => ValueCategory::LValue,
+            2 => ValueCategory::XValue,
+            _ => ValueCategory::PRValue,
+        }
+    }
+    /// The object kind.
+    pub const fn object_kind(&self) -> ObjectKind {
+        match (self.bits >> 2) & 3 {
+            1 => ObjectKind::BitField,
+            2 => ObjectKind::VectorComponent,
+            _ => ObjectKind::Ordinary,
+        }
+    }
+    /// True if the per-kind flag `f` is set.
+    pub const fn has(&self, f: ExprFlags) -> bool {
+        self.bits & f.0 == f.0 && f.0 != 0
+    }
+    /// The dependence bits.
+    pub const fn deps(&self) -> ExprDeps {
+        self.deps
+    }
+    /// Operator / cast kind / radix / trait kind.
+    pub const fn aux(&self) -> u8 {
+        self.aux
+    }
+    /// The type (never a reference type).
+    pub const fn ty(&self) -> QualType {
+        self.ty
+    }
+    /// The operator / start location.
+    pub const fn loc(&self) -> Loc {
+        self.loc
+    }
+    /// Operand word `a`.
+    pub const fn a(&self) -> u32 {
+        self.a
+    }
+    /// Operand word `b`.
+    pub const fn b(&self) -> u32 {
+        self.b
+    }
+    /// True if type-dependent.
+    pub const fn is_type_dependent(&self) -> bool {
+        self.deps.contains(ExprDeps::TYPE)
+    }
+    /// True if value-dependent.
+    pub const fn is_value_dependent(&self) -> bool {
+        self.deps.contains(ExprDeps::VALUE)
+    }
+}
+
+/// Side record of a `DeclRefExpr` with a qualifier, explicit template
+/// arguments or a found declaration different from the referenced one.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct DeclRefExtra {
+    /// The nested-name-specifier as written.
+    pub qualifier: Option<NnsId>,
+    /// Explicit template arguments as written.
+    pub template_args: Option<ArgListId>,
+    /// The declaration lookup found (a `UsingShadow`, ...) when it differs.
+    pub found_decl: Option<DeclId>,
+}
+
+/// Side record of a `CompoundAssignOperator` (spec/ast.md §5.3).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct CompoundAssignExtra {
+    /// The right operand.
+    pub rhs: ExprId,
+    /// `ComputeLHSTy`: the type the left operand is converted to.
+    pub lhs_ty: QualType,
+    /// `ComputeResultTy`: the type of the computation.
+    pub result_ty: QualType,
+}
+
+/// Side record of an `InitListExpr` (semantic form, §5.6).
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct InitListExtra {
+    /// Initializer for the elements past the explicit ones.
+    pub array_filler: Option<ExprId>,
+    /// The initialized member of a union.
+    pub union_field: Option<DeclId>,
+    /// The `}`.
+    pub rbrace: Loc,
+}
+
+/// Cold per-expression data.
+#[derive(Clone, Debug)]
+pub struct ColdExprData {
+    /// The closing token of kinds that end in one and have no room for it
+    /// (`CallExpr` `)`, `UnaryExprOrTypeTraitExpr` `)`, `CStyleCastExpr`
+    /// `)` before the operand, ...).
+    pub end_loc: ColdMap<ExprId, Loc>,
+    /// `MemberExpr` qualifier / template args / found decl.
+    pub member_extra: ColdMap<ExprId, DeclRefExtra>,
+    /// Designators as written for `InitListExpr` (§5.6).
+    pub designators: ColdMap<ExprId, ListId>,
+}
+
+impl Default for ColdExprData {
+    fn default() -> Self {
+        Self {
+            end_loc: ColdMap::new("end_loc"),
+            member_extra: ColdMap::new("member_extra"),
+            designators: ColdMap::new("designators"),
+        }
+    }
+}
+
+/// Expression headers and side records (spec/ast.md §5). Index 0 of every
+/// vector is a dummy.
+#[derive(Debug)]
+pub struct ExprArena {
+    nodes: Vec<ExprNode>,
+    cond_arms: Vec<[ExprId; 2]>,
+    declref_extras: Vec<DeclRefExtra>,
+    compound_assigns: Vec<CompoundAssignExtra>,
+    init_lists: Vec<InitListExtra>,
+    /// Cold per-expression data.
+    pub cold: ColdExprData,
+}
+
+impl Default for ExprArena {
+    fn default() -> Self {
+        let qt = QualType::unqual(crate::ids::TypeId::new(1));
+        let dummy_e = ExprId::new(ExprId::MAX_INDEX);
+        Self {
+            nodes: vec![ExprNode::new(
+                ExprKind::RecoveryExpr,
+                ValueCategory::PRValue,
+                ObjectKind::Ordinary,
+                ExprFlags::NONE,
+                ExprDeps::ERROR,
+                0,
+                qt,
+                Loc::INVALID,
+                0,
+                0,
+            )],
+            cond_arms: vec![[dummy_e; 2]],
+            declref_extras: vec![DeclRefExtra::default()],
+            compound_assigns: vec![CompoundAssignExtra { rhs: dummy_e, lhs_ty: qt, result_ty: qt }],
+            init_lists: vec![InitListExtra::default()],
+            cold: ColdExprData::default(),
+        }
+    }
+}
+
+fn push_side<T>(v: &mut Vec<T>, x: T) -> u32 {
+    let i = v.len();
+    assert!(i < u32::MAX as usize, "expression side-record space exhausted");
+    v.push(x);
+    i as u32
+}
+
+impl ExprArena {
+    /// An arena holding only the dummies.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// The number of expressions.
+    pub fn len(&self) -> usize {
+        self.nodes.len() - 1
+    }
+
+    /// True if there are no expressions.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// The header of `e`.
+    pub fn get(&self, e: ExprId) -> &ExprNode {
+        &self.nodes[e.index() as usize]
+    }
+
+    pub(crate) fn push(&mut self, n: ExprNode) -> ExprId {
+        let id = ExprId::new(self.nodes.len() as u32);
+        self.nodes.push(n);
+        id
+    }
+
+    pub(crate) fn push_cond_arms(&mut self, then: ExprId, els: ExprId) -> u32 {
+        push_side(&mut self.cond_arms, [then, els])
+    }
+    pub(crate) fn push_declref_extra(&mut self, x: DeclRefExtra) -> u32 {
+        push_side(&mut self.declref_extras, x)
+    }
+    pub(crate) fn push_compound_assign(&mut self, x: CompoundAssignExtra) -> u32 {
+        push_side(&mut self.compound_assigns, x)
+    }
+    pub(crate) fn push_init_list(&mut self, x: InitListExtra) -> u32 {
+        push_side(&mut self.init_lists, x)
+    }
+
+    fn expect_kind(&self, e: ExprId, k: ExprKind) -> &ExprNode {
+        let n = self.get(e);
+        assert!(n.kind == k, "expected {k:?}, found {:?}", n.kind);
+        n
+    }
+
+    /// The value of an `IntegerLiteral` of at most 64 bits (`None` for
+    /// wider literals, whose `a` is a `ConstValueId`).
+    pub fn int_value(&self, e: ExprId) -> Option<u64> {
+        let n = self.expect_kind(e, ExprKind::IntegerLiteral);
+        (!n.has(ExprFlags::WIDE)).then(|| u64::from(n.a) | (u64::from(n.b) << 32))
+    }
+
+    /// The value of a wide `IntegerLiteral` or a `FloatingLiteral`.
+    pub fn literal_const(&self, e: ExprId) -> Option<ConstValueId> {
+        let n = self.get(e);
+        match n.kind {
+            ExprKind::FloatingLiteral => ConstValueId::from_raw(n.a),
+            ExprKind::IntegerLiteral if n.has(ExprFlags::WIDE) => ConstValueId::from_raw(n.a),
+            _ => None,
+        }
+    }
+
+    /// The string of a `StringLiteral`.
+    pub fn string_lit(&self, e: ExprId) -> StringLitId {
+        StringLitId::new(self.expect_kind(e, ExprKind::StringLiteral).a)
+    }
+
+    /// The referenced declaration of a `DeclRefExpr` or `MemberExpr`.
+    pub fn decl(&self, e: ExprId) -> DeclId {
+        let n = self.get(e);
+        match n.kind {
+            ExprKind::DeclRefExpr => DeclId::new(n.a),
+            ExprKind::MemberExpr => DeclId::new(n.b),
+            k => panic!("{k:?} references no declaration"),
+        }
+    }
+
+    /// The extras of a `DeclRefExpr` (qualifier, template args, found
+    /// decl) or `MemberExpr`.
+    pub fn decl_ref_extra(&self, e: ExprId) -> Option<&DeclRefExtra> {
+        let n = self.get(e);
+        match n.kind {
+            ExprKind::DeclRefExpr if n.b != 0 => Some(&self.declref_extras[n.b as usize]),
+            ExprKind::MemberExpr => self.cold.member_extra.get(e),
+            _ => None,
+        }
+    }
+
+    /// The operator of a `UnaryOperator`.
+    pub fn unary_op(&self, e: ExprId) -> UnaryOp {
+        UnaryOp::from_u8(self.expect_kind(e, ExprKind::UnaryOperator).aux).expect("valid opcode")
+    }
+
+    /// The operator of a `BinaryOperator` / `CompoundAssignOperator`.
+    pub fn binary_op(&self, e: ExprId) -> BinaryOp {
+        let n = self.get(e);
+        assert!(
+            matches!(n.kind, ExprKind::BinaryOperator | ExprKind::CompoundAssignOperator),
+            "expected a binary operator, found {:?}",
+            n.kind
+        );
+        BinaryOp::from_u8(n.aux).expect("valid opcode")
+    }
+
+    /// The side record of a `CompoundAssignOperator`.
+    pub fn compound_assign(&self, e: ExprId) -> &CompoundAssignExtra {
+        &self.compound_assigns[self.expect_kind(e, ExprKind::CompoundAssignOperator).b as usize]
+    }
+
+    /// The cast kind of a cast expression.
+    pub fn cast_kind(&self, e: ExprId) -> CastKind {
+        let n = self.get(e);
+        assert!(n.kind.is_cast(), "expected a cast, found {:?}", n.kind);
+        CastKind::from_u8(n.aux).expect("valid cast kind")
+    }
+
+    /// The base path (`ListId` of base-spec indices) of a derived-to-base /
+    /// base-to-derived cast.
+    pub fn cast_path(&self, e: ExprId) -> Option<ListId> {
+        let n = self.get(e);
+        assert!(n.kind.is_cast(), "expected a cast, found {:?}", n.kind);
+        ListId::from_raw(n.b)
+    }
+
+    /// The then/else arms of a `ConditionalOperator`.
+    pub fn cond_arms(&self, e: ExprId) -> [ExprId; 2] {
+        self.cond_arms[self.expect_kind(e, ExprKind::ConditionalOperator).b as usize]
+    }
+
+    /// The side record of an `InitListExpr`.
+    pub fn init_list(&self, e: ExprId) -> &InitListExtra {
+        &self.init_lists[self.expect_kind(e, ExprKind::InitListExpr).b as usize]
+    }
+
+    /// The kind of a `CharacterLiteral`.
+    pub fn char_kind(&self, e: ExprId) -> CharKind {
+        CharKind::from_u8(self.expect_kind(e, ExprKind::CharacterLiteral).aux)
+            .expect("valid char kind")
+    }
+
+    /// The code point of a `CharacterLiteral`.
+    pub fn char_value(&self, e: ExprId) -> u32 {
+        self.expect_kind(e, ExprKind::CharacterLiteral).a
+    }
+
+    /// The kind of a `StringLiteral`.
+    pub fn string_kind(&self, e: ExprId) -> StringKind {
+        StringKind::from_u8(self.expect_kind(e, ExprKind::StringLiteral).aux)
+            .expect("valid string kind")
+    }
+
+    /// The value of a `CXXBoolLiteralExpr`.
+    pub fn bool_value(&self, e: ExprId) -> bool {
+        self.expect_kind(e, ExprKind::CXXBoolLiteralExpr).a != 0
+    }
+
+    /// The radix of an `IntegerLiteral` as written.
+    pub fn radix(&self, e: ExprId) -> Radix {
+        Radix::from_u8(self.expect_kind(e, ExprKind::IntegerLiteral).aux).expect("valid radix")
+    }
+
+    /// Why a `DeclRefExpr` / `MemberExpr` is not an odr-use.
+    pub fn non_odr_use(&self, e: ExprId) -> NonOdrUse {
+        let n = self.get(e);
+        assert!(
+            matches!(n.kind, ExprKind::DeclRefExpr | ExprKind::MemberExpr),
+            "expected DeclRefExpr or MemberExpr, found {:?}",
+            n.kind
+        );
+        NonOdrUse::from_u8(n.aux).expect("valid non-odr-use kind")
+    }
+
+    /// The callee of a `CallExpr`.
+    pub fn callee(&self, e: ExprId) -> ExprId {
+        ExprId::new(self.expect_kind(e, ExprKind::CallExpr).a)
+    }
+
+    /// The arguments of a `CallExpr` (a `ListId` of `ExprId`s).
+    pub fn call_args(&self, e: ExprId) -> ListId {
+        ListId::new(self.expect_kind(e, ExprKind::CallExpr).b)
+    }
+
+    /// The explicit initializers of an `InitListExpr` (a `ListId` of
+    /// `ExprId`s; the filler is in [`ExprArena::init_list`]).
+    pub fn init_list_inits(&self, e: ExprId) -> ListId {
+        ListId::new(self.expect_kind(e, ExprKind::InitListExpr).a)
+    }
+
+    /// The kind of a `UnaryExprOrTypeTraitExpr`.
+    pub fn trait_kind(&self, e: ExprId) -> TraitKind {
+        TraitKind::from_u8(self.expect_kind(e, ExprKind::UnaryExprOrTypeTraitExpr).aux)
+            .expect("valid trait kind")
+    }
+
+    /// The type operand of a `UnaryExprOrTypeTraitExpr` (`None` for an
+    /// expression operand, which is its only child).
+    pub fn trait_type_arg(&self, e: ExprId) -> Option<QualType> {
+        let n = self.expect_kind(e, ExprKind::UnaryExprOrTypeTraitExpr);
+        n.has(ExprFlags::ARG_IS_TYPE).then(|| QualType::from_raw(n.a)).flatten()
+    }
+
+    /// The single operand of a unary operator, cast, `ParenExpr`,
+    /// `ConstantExpr` or `MemberExpr` (its base).
+    pub fn operand(&self, e: ExprId) -> ExprId {
+        let n = self.get(e);
+        assert!(
+            n.kind.is_cast()
+                || matches!(
+                    n.kind,
+                    ExprKind::UnaryOperator
+                        | ExprKind::ParenExpr
+                        | ExprKind::ConstantExpr
+                        | ExprKind::MemberExpr
+                ),
+            "{:?} has no single operand",
+            n.kind
+        );
+        ExprId::new(n.a)
+    }
+
+    /// The operands of a `BinaryOperator` or `ArraySubscriptExpr` (for a
+    /// `CompoundAssignOperator` the right operand is in its side record).
+    pub fn operands(&self, e: ExprId) -> [ExprId; 2] {
+        let n = self.get(e);
+        assert!(
+            matches!(n.kind, ExprKind::BinaryOperator | ExprKind::ArraySubscriptExpr),
+            "{:?} is not a binary expression",
+            n.kind
+        );
+        [ExprId::new(n.a), ExprId::new(n.b)]
+    }
+
+    /// The cached value of a `ConstantExpr`.
+    pub fn constant_value(&self, e: ExprId) -> Option<ConstValueId> {
+        ConstValueId::from_raw(self.expect_kind(e, ExprKind::ConstantExpr).b)
+    }
+
+    /// Stores the value of a `ConstantExpr` (once; sema, from
+    /// `Oven::evaluate`, §5.5).
+    ///
+    /// # Panics
+    /// If `e` is not a `ConstantExpr`.
+    pub fn set_constant_value(&mut self, e: ExprId, v: ConstValueId) -> Result<(), AlreadySet> {
+        let n = &mut self.nodes[e.index() as usize];
+        assert!(n.kind == ExprKind::ConstantExpr, "expected ConstantExpr, found {:?}", n.kind);
+        assert!(!n.deps.contains(ExprDeps::VALUE), "value-dependent ConstantExpr has no value");
+        if n.b != 0 {
+            return Err(AlreadySet { slot: "ConstantExpr.value", existing: n.b });
+        }
+        n.b = v.raw();
+        Ok(())
+    }
+
+    /// The closing-token location of `e`, if stored.
+    pub fn end_loc(&self, e: ExprId) -> Option<Loc> {
+        let n = self.get(e);
+        match n.kind {
+            ExprKind::ParenExpr => Some(Loc::from_raw(n.b)),
+            ExprKind::InitListExpr => Some(self.init_lists[n.b as usize].rbrace),
+            _ => self.cold.end_loc.get(e).copied(),
+        }
+    }
+
+    /// The child expressions of `e` in dump order (§11).
+    pub fn children(&self, e: ExprId, lists: &IdLists) -> Vec<ExprId> {
+        let n = self.get(e);
+        let id = |w: u32| ExprId::from_raw(w);
+        let mut v = Vec::new();
+        match n.kind {
+            ExprKind::MemberExpr
+            | ExprKind::UnaryOperator
+            | ExprKind::ParenExpr
+            | ExprKind::ConstantExpr => v.extend(id(n.a)),
+            k if k.is_cast() => v.extend(id(n.a)),
+            ExprKind::UnaryExprOrTypeTraitExpr if !n.has(ExprFlags::ARG_IS_TYPE) => {
+                v.extend(id(n.a));
+            }
+            ExprKind::BinaryOperator | ExprKind::ArraySubscriptExpr => {
+                v.extend(id(n.a));
+                v.extend(id(n.b));
+            }
+            ExprKind::CompoundAssignOperator => {
+                v.extend(id(n.a));
+                v.push(self.compound_assigns[n.b as usize].rhs);
+            }
+            ExprKind::ConditionalOperator => {
+                v.extend(id(n.a));
+                v.extend(self.cond_arms[n.b as usize]);
+            }
+            ExprKind::CallExpr => {
+                v.extend(id(n.a));
+                v.extend(lists.iter::<ExprId>(ListId::new(n.b)));
+            }
+            ExprKind::InitListExpr => {
+                v.extend(lists.iter::<ExprId>(ListId::new(n.a)));
+                v.extend(self.init_lists[n.b as usize].array_filler);
+            }
+            ExprKind::RecoveryExpr => v.extend(lists.iter::<ExprId>(ListId::new(n.a))),
+            _ => {}
+        }
+        v
+    }
+
+    pub(crate) fn live_bytes(&self) -> u64 {
+        self.vec_rows().iter().map(|r| r.live_bytes).sum()
+    }
+
+    fn vec_rows(&self) -> [MemRow; 5] {
+        [
+            MemRow::of_vec("nodes", &self.nodes),
+            MemRow::of_vec("cond_arms", &self.cond_arms),
+            MemRow::of_vec("declref_extras", &self.declref_extras),
+            MemRow::of_vec("compound_assigns", &self.compound_assigns),
+            MemRow::of_vec("init_lists", &self.init_lists),
+        ]
+    }
+}
 
 impl HeapSize for ExprArena {
     fn heap_bytes(&self) -> MemReport {
-        MemReport::new()
+        let mut r = MemReport::new();
+        for row in self.vec_rows() {
+            r.push(row);
+        }
+        r.push(self.cold.end_loc.mem_row().prefixed("cold"));
+        r.push(self.cold.member_extra.mem_row().prefixed("cold"));
+        r.push(self.cold.designators.mem_row().prefixed("cold"));
+        r
     }
 }

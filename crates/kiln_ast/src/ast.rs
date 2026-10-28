@@ -6,13 +6,15 @@ use kiln_source::symbol::Interner;
 
 use crate::attr::AttrArena;
 use crate::consts::ConstStore;
-use crate::decl::DeclArena;
+use crate::decl::{
+    DeclArena, DeclFlags, DeclKind, DeclMisc, EnumData, NewDecl, Payload, ScopeData,
+};
 use crate::expr::ExprArena;
 use crate::ids::DeclId;
 use crate::lists::IdLists;
-use crate::lookup::LookupTables;
-use crate::mem::{HeapSize, MemReport};
-use crate::names::NameTable;
+use crate::lookup::{LookupResult, LookupTables};
+use crate::mem::{HeapSize, MemReport, MemRow};
+use crate::names::{DeclName, NameTable};
 use crate::redecl::RedeclTable;
 use crate::reflect::ReflectionTable;
 use crate::stmt::StmtArena;
@@ -25,7 +27,7 @@ use crate::types::{LayoutCache, TypeContext};
 /// Created by sema at TU start, owned by `kiln_sema::Sema` while parsing,
 /// then moved to codegen. `Send`, not shared during construction
 /// (spec/ast.md §13 Q8). Nodes are appended through
-/// the `AstBuilder` and never removed.
+/// the [`AstBuilder`](crate::AstBuilder) and never removed.
 #[derive(Debug)]
 pub struct Ast {
     /// Types (spec/types.md).
@@ -59,15 +61,217 @@ pub struct Ast {
     /// The `TranslationUnitDecl`.
     pub tu: DeclId,
     symbols: Arc<Interner>,
+    inst: InstantiationMeter,
+}
+
+/// Bytes appended to the AST node arenas while instantiating (spec/ast.md
+/// §13 Q6, §15): reported as the `instantiation.retained` row.
+#[derive(Clone, Copy, Debug, Default)]
+struct InstantiationMeter {
+    depth: u32,
+    start: u64,
+    retained: u64,
+    count: u64,
 }
 
 impl Ast {
+    /// A new AST holding only the `TranslationUnitDecl`.
+    pub fn new(symbols: Arc<Interner>, types: TypeContext) -> Ast {
+        let mut decls = DeclArena::new();
+        let tu = decls.push(
+            NewDecl {
+                kind: DeclKind::TranslationUnit,
+                flags: DeclFlags::empty(),
+                misc: DeclMisc::new(),
+                name: DeclName::EMPTY,
+                ctx: None,
+                loc: kiln_source::Loc::INVALID,
+                ty: None,
+            },
+            Payload::Scope(ScopeData { members: crate::decl::Members::default(), aux: 0 }),
+        );
+        Ast {
+            types,
+            decls,
+            exprs: ExprArena::new(),
+            stmts: StmtArena::new(),
+            attrs: AttrArena::new(),
+            lists: IdLists::new(),
+            strings: StringPool::default(),
+            names: NameTable::new(),
+            lookup: LookupTables::new(),
+            redecls: RedeclTable::new(),
+            templates: TemplateTables::default(),
+            consts: ConstStore::default(),
+            reflections: ReflectionTable::default(),
+            layouts: LayoutCache::default(),
+            tu,
+            symbols,
+            inst: InstantiationMeter::default(),
+        }
+    }
+
+    /// A builder appending to this AST.
+    pub fn builder(&mut self) -> crate::AstBuilder<'_> {
+        crate::AstBuilder::new(self)
+    }
+
+    /// The access path of an `IndirectField`: the `Field`s from its
+    /// context down to the named member (a `ListId` of `DeclId`s).
+    ///
+    /// # Panics
+    /// If `d` is not an `IndirectField`.
+    pub fn indirect_field_chain(&self, d: DeclId) -> crate::ids::ListId {
+        let n = self.decls.get(d);
+        assert!(n.kind() == DeclKind::IndirectField, "not an IndirectField: {:?}", n.kind());
+        crate::ids::ListId::new(n.data())
+    }
+
+    /// The shared identifier interner (an `Arc` clone).
+    pub fn symbols_arc(&self) -> Arc<Interner> {
+        Arc::clone(&self.symbols)
+    }
+
+    // -- redeclarations (§4.4) ------------------------------------------
+
+    /// The first declaration of `d`'s entity (`d` itself if not
+    /// redeclarable).
+    pub fn first(&self, d: DeclId) -> DeclId {
+        self.decls.redecl(d).map_or(d, |r| self.redecls.get(r.group).first)
+    }
+
+    /// The latest declaration of `d`'s entity.
+    pub fn latest(&self, d: DeclId) -> DeclId {
+        self.decls.redecl(d).map_or(d, |r| self.redecls.get(r.group).latest)
+    }
+
+    /// The definition of `d`'s entity, once seen.
+    pub fn definition(&self, d: DeclId) -> Option<DeclId> {
+        match self.decls.redecl(d) {
+            Some(r) => self.redecls.get(r.group).definition,
+            None => Some(d),
+        }
+    }
+
+    /// The previous declaration of `d`'s entity.
+    pub fn prev(&self, d: DeclId) -> Option<DeclId> {
+        self.decls.redecl(d).and_then(|r| r.prev)
+    }
+
+    /// All declarations of `d`'s entity, latest first.
+    pub fn redecls_of(&self, d: DeclId) -> impl Iterator<Item = DeclId> + '_ {
+        std::iter::successors(Some(self.latest(d)), move |&x| self.prev(x))
+    }
+
+    /// Records `d` as the definition of its entity (once).
+    ///
+    /// # Panics
+    /// If `d` is not redeclarable.
+    pub fn set_definition(&mut self, d: DeclId) -> Result<(), crate::slot::AlreadySet> {
+        let r = self.decls.redecl(d).expect("set_definition on a non-redeclarable decl");
+        self.redecls.set_definition(r.group, d)
+    }
+
+    // -- contexts and lookup (§4.3) ------------------------------------
+
+    /// True for contexts whose names are visible in the enclosing context
+    /// (clang's `isTransparentContext`): `LinkageSpec`, `Export` and
+    /// unscoped enumerations.
+    pub fn is_transparent(&self, ctx: DeclId) -> bool {
+        match self.decls.get(ctx).kind() {
+            DeclKind::LinkageSpec | DeclKind::Export => true,
+            DeclKind::Enum => {
+                self.decls.enumeration(ctx).is_some_and(|e| e.flags & EnumData::SCOPED == 0)
+            }
+            _ => false,
+        }
+    }
+
+    /// The nearest enclosing context of `ctx` (itself included) that is
+    /// not a `LinkageSpec` or `Export` (where its names are declared).
+    pub fn redecl_context(&self, mut ctx: DeclId) -> DeclId {
+        while matches!(self.decls.get(ctx).kind(), DeclKind::LinkageSpec | DeclKind::Export) {
+            ctx = self.decls.get(ctx).ctx().expect("transparent context has a parent");
+        }
+        ctx
+    }
+
+    /// The context whose lookup table holds `ctx`'s names: the first
+    /// declaration of a namespace, the definition of a class or
+    /// enumeration, else `ctx` itself.
+    pub fn primary_context(&self, ctx: DeclId) -> DeclId {
+        match self.decls.get(ctx).kind() {
+            DeclKind::Namespace => self.first(ctx),
+            DeclKind::CXXRecord
+            | DeclKind::ClassTemplateSpecialization
+            | DeclKind::ClassTemplatePartialSpecialization
+            | DeclKind::Enum => self.definition(ctx).unwrap_or(ctx),
+            _ => ctx,
+        }
+    }
+
+    /// The declarations named `name` in context `ctx` (its own table:
+    /// no hiding, using-directives or ADL; those rules are sema's). Each
+    /// result is the latest declaration of its entity, in order of first
+    /// declaration.
+    pub fn lookup_local(&self, ctx: DeclId, name: DeclName) -> LookupResult<'_> {
+        self.lookup.lookup_local(self.primary_context(self.redecl_context(ctx)), name)
+    }
+
+    /// The lexical members of `ctx` in declaration order.
+    pub fn members(&self, ctx: DeclId) -> crate::decl::MemberIter<'_> {
+        self.decls.members(ctx)
+    }
+
+    // -- instantiation accounting (§13 Q6) -----------------------------
+
+    /// Starts an instantiation. Nested calls nest; the outermost
+    /// `begin`/`end` pair adds the growth of the AST node arenas to the
+    /// `instantiation.retained` memory row.
+    pub fn begin_instantiation(&mut self) {
+        if self.inst.depth == 0 {
+            self.inst.start = self.node_live_bytes();
+        }
+        self.inst.depth += 1;
+    }
+
+    /// Ends the instantiation started by the matching
+    /// [`Ast::begin_instantiation`].
+    ///
+    /// # Panics
+    /// Without a matching `begin_instantiation`.
+    pub fn end_instantiation(&mut self) {
+        assert!(self.inst.depth > 0, "end_instantiation without begin_instantiation");
+        self.inst.depth -= 1;
+        if self.inst.depth == 0 {
+            self.inst.retained += self.node_live_bytes().saturating_sub(self.inst.start);
+        }
+        self.inst.count += 1;
+    }
+
+    /// Live bytes of the arenas instantiation appends to (declarations,
+    /// expressions, statements, attributes, lists, lookup, redeclaration
+    /// groups). Types and constants interned during an instantiation are
+    /// shared and not attributed to it.
+    fn node_live_bytes(&self) -> u64 {
+        self.decls.live_bytes()
+            + self.exprs.live_bytes()
+            + self.stmts.live_bytes()
+            + self.attrs.live_bytes()
+            + self.lists.live_bytes()
+            + self.lookup.live_bytes()
+            + self.redecls.live_bytes()
+    }
+
     /// The identifier interner shared with the lexer and preprocessor.
     pub fn symbols(&self) -> &Interner {
         &self.symbols
     }
 
-    /// The memory report of every arena (spec/ast.md §2.3).
+    /// The memory report of every arena (spec/ast.md §2.3), plus the
+    /// derived `instantiation.retained` row (count = instantiations, bytes
+    /// = node-arena growth inside outermost instantiations; excluded from
+    /// [`MemReport::live_bytes`] as it is a subset of the other rows).
     pub fn memory(&self) -> MemReport {
         let mut r = MemReport::new();
         r.extend_prefixed("types", self.types.heap_bytes());
@@ -84,6 +288,12 @@ impl Ast {
         r.extend_prefixed("consts", self.consts.heap_bytes());
         r.extend_prefixed("reflections", self.reflections.heap_bytes());
         r.extend_prefixed("layouts", self.layouts.heap_bytes());
+        r.push(MemRow::new(
+            "instantiation.retained",
+            self.inst.count,
+            self.inst.retained,
+            self.inst.retained,
+        ));
         r
     }
 }

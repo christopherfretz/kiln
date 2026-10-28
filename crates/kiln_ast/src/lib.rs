@@ -13,6 +13,7 @@
 
 pub mod ast;
 pub mod attr;
+pub mod builder;
 pub mod consts;
 pub mod decl;
 pub mod expr;
@@ -23,12 +24,14 @@ pub mod mem;
 pub mod names;
 pub mod redecl;
 pub mod reflect;
+pub mod slot;
 pub mod stmt;
 pub mod strings;
 pub mod templates;
 pub mod types;
 
 pub use ast::Ast;
+pub use builder::{AstBuilder, DeclHead};
 pub use ids::{
     ArgListId, AttrId, BlobId, ConstValueId, DeclId, ExprId, LambdaId, ListId, NnsId, ProfileId,
     QualType, RawId, RedeclGroupId, ReflectionId, StmtId, StringLitId, TemplateNameId, TypeId,

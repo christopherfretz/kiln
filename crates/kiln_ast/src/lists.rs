@@ -100,7 +100,6 @@ impl IdLists {
         self.spans.len() - 2
     }
 
-    #[allow(dead_code, reason = "used by Ast::memory once the builder lands")]
     pub(crate) fn live_bytes(&self) -> u64 {
         (self.spans.len() * 8 + self.data.len() * 4) as u64
     }
