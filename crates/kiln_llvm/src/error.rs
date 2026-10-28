@@ -1,4 +1,4 @@
-//! Errors reported by the builder and the light verifier (`spec/llvm.md` §6).
+//! Errors reported by the builder and the light verifier (`spec/llvm.md` §4.2).
 
 use std::fmt;
 
