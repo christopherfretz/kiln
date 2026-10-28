@@ -586,3 +586,16 @@ stores ids.
   compares it specially with the dependent specialization. *Recommend*
   canonicalizing to the dependent `TemplateSpecialization`, which makes
   `S` and `S<T>` inside the template the same type by construction.
+
+## 17. Supervisor decisions (2026-10-28, binding)
+- T1 **approved**: `hashbrown` (safe API only; `HashTable`) is an allowed
+  dependency for kiln_ast; keep the std fallback compiling behind the same
+  `InternTable` type.
+- T2 **decided differently**: `Symbol`/`Interner` move to `kiln_source`
+  (`kiln_source::symbol`), re-exported from `kiln_lex` for compatibility.
+  kiln_ast must not depend on kiln_lex (layering: the AST is consumed by
+  the Oven and codegen, which have no business linking a lexer).
+- T3 approved (keep subst sugar, interned, measure in M7, `-fno-subst-sugar`).
+- T4 approved. T5 approved (defer). T6 approved (canonicalize to the
+  dependent specialization; keep an `InjectedClassName` *sugar* node so
+  printing says `S`).

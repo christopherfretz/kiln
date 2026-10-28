@@ -170,20 +170,27 @@ inexact). They ignore unknown keys (so the format can grow) and blank lines.
   friends mutate sema state and are therefore only allowed in the
   evaluation contexts the standard permits; the bridge enforces that.
 
-## Interface (M2 shape; grows)
+## Interface (M2 shape; grows) — amended 2026-10-28 per spec/ast.md Q2
+The Oven holds **no** borrow of the AST across calls: sema mutates the AST
+(instantiation on demand, `define_aggregate`, interning constants) while
+evaluations run. The Oven lives for the whole TU (its KBC cache, fold cache
+and memo cache persist across evaluations) and reaches the AST through the
+bridge each step; it stores only ids, which are stable by spec/ast.md §2.4.
 ```rust
 pub trait SemaBridge {
-    fn function_body(&mut self, f: FunctionId) -> Option<&Stmt>;      // instantiates if needed
-    fn layout(&self, t: TypeId) -> &RecordLayout;
-    fn vtable(&self, t: TypeId) -> &VTableLayout;
+    fn ast(&self) -> &Ast;                                        // re-borrowed per step, never held
+    fn ensure_body(&mut self, f: DeclId) -> Option<StmtId>;       // instantiates if needed
+    fn ensure_layout(&mut self, record: DeclId) -> &RecordLayout; // via kiln_abi
+    fn vtable(&mut self, record: DeclId) -> &VTableLayout;
+    fn consts(&mut self) -> &mut ConstStore;                      // freeze results
     fn diag(&mut self, d: Diag);
     // reflection ops added in M6
 }
-pub struct Oven<'a> { /* arena, caches, budget, stats */ }
-impl Oven<'_> {
-    pub fn new(ast: &Ast, bridge: &mut dyn SemaBridge, budget: Budget) -> Self;
-    pub fn evaluate(&mut self, e: ExprId, ctx: EvalContext) -> Result<ConstValue, EvalFailure>;
-    pub fn try_fold(&mut self, e: ExprId) -> Option<ConstValue>;
+pub struct Oven { /* arena, KBC cache, memo cache, budget, stats; no lifetime */ }
+impl Oven {
+    pub fn new(budget: Budget) -> Self;
+    pub fn evaluate(&mut self, bridge: &mut dyn SemaBridge, e: ExprId, ctx: EvalContext) -> Result<ConstValueId, EvalFailure>;
+    pub fn try_fold(&mut self, bridge: &mut dyn SemaBridge, e: ExprId) -> Option<ConstValueId>;
     pub fn stats(&self) -> &EvalStats;
 }
 ```

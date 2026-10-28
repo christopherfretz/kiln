@@ -31,7 +31,19 @@ Format per `docs/AGENTS.md`. Ids are stable; status moves between
 ## M2 preparation
 | id | scope | status |
 |---|---|---|
-| WP-040 | `spec/ast.md` + `spec/types.md`: design of the typed AST, type interning, decl contexts, template representation, AST dump format (the parser/sema test contract) — design only, reviewed by supervisor before any code | in-progress |
+| WP-040 | `spec/ast.md` + `spec/types.md` + `spec/ast-dump.md` design | done, approved with decisions (types.md §17, ast.md §15) (2026-10-28) |
+| WP-041 | A ast-core: ids, arenas, `IdLists`, `DeclName`, decl/expr/stmt headers + M2 payloads, lookup/redecl tables, `MemReport`, `AstBuilder`; plus move `Symbol`/`Interner` to `kiln_source::symbol` (re-export from kiln_lex) | todo |
+| WP-042 | B types: `TypeContext`, interning (hashbrown), canonical types, M2 kinds, `TypePrinter` | todo |
+| WP-043 | C const-store: `ConstStore`, interning, value printing | todo |
+| WP-044 | D dump printer (ast-dump.md) | todo (after A,B,C) |
+| WP-045 | E dump loader (text → Ast, M2 subset) | todo (after D) |
+| WP-046 | F `xtask clang-ast` normalizer (clang JSON → ast-dump text) | todo |
+| WP-047 | G harness `expect: ast` | todo |
+| WP-048 | H parser M2 (decls, declarators, exprs, stmts → sema actions) | todo (after A,B) |
+| WP-049 | I sema conversions (implicit casts, arithmetic conversions, literal typing) | todo (after A,B) |
+| WP-050 | J abi layout (`TargetTypes`, `record_layout` vs clang `-fdump-record-layouts`) | todo (after B) |
+| WP-051 | K oven compile (AST → KBC, M2 subset; tests via loaded dumps) | todo (after E) |
+| WP-052 | L codegen M2 (AST → LLVM IR; tests via loaded dumps) | todo (after E, J) |
 
 ## Cross-cutting
 | id | scope | status |

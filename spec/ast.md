@@ -588,3 +588,14 @@ file.
   golden; each M2 line form of ast-dump.md §3 has a focused golden; with
   `ids,locs`; filter mode; no trailing whitespace anywhere.
 - `loader.rs` (WP E): `dump(load(text)) == text` for every golden.
+
+## 15. Supervisor decisions (2026-10-28, binding)
+Q1 see types.md §17. Q2 **approved**: spec/oven.md is amended (§"Interface")
+so the Oven holds no `&Ast`; it lives for the whole TU and reaches the AST
+through `SemaBridge::ast()`/`ensure_body`/`ensure_layout`/`consts()`.
+Q3 yes (clang class names/glyphs). Q4 yes (dump loader, M2 subset, test
+infrastructure). Q5 yes (`expect: ast`). Q6 accepted; `Ast::memory()` must
+report instantiation-retained bytes as its own row from day one so M7 can
+see it. Q7 yes. Q8 yes. Q9 defer. Q10 keep.
+Work packages A–L (§12) are the M2 plan; ids in docs/BACKLOG.md are
+WP-041..052 in that order.
