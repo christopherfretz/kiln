@@ -73,6 +73,7 @@ pub fn lvalue_to_rvalue(s: &mut Sema<'_, '_>, e: ExprId) -> ExprId {
 
 /// `q` without cv-qualifiers (through sugar).
 fn unqualified_sugar(s: &Sema<'_, '_>, q: QualType) -> QualType {
+    let q = q.without_quals();
     if s.ast.types.effective_quals(q).is_empty() {
         q
     } else {
@@ -113,14 +114,14 @@ fn rank(b: BuiltinType) -> Option<u8> {
 
 fn signed(s: &Sema<'_, '_>, b: BuiltinType) -> bool {
     match b {
-        BuiltinType::Char => s.target.char_signed,
-        BuiltinType::WChar => s.target.wchar_signed,
+        BuiltinType::Char => s.ast.types.target().char_signed,
+        BuiltinType::WChar => s.ast.types.target().wchar_signed,
         _ => b.is_signed_integer(),
     }
 }
 
 fn width(s: &Sema<'_, '_>, b: BuiltinType) -> u32 {
-    u32::from(s.target.builtin_size_align(b).0) * 8
+    u32::from(s.ast.types.target().builtin_size_align(b).0) * 8
 }
 
 /// The promoted type of `q`, or `q` if it does not promote.

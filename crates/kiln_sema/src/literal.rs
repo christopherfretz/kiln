@@ -59,7 +59,7 @@ pub struct FloatLiteralTyping {
 
 fn bits_of(s: &Sema<'_, '_>, q: QualType) -> u32 {
     let b = s.ast.types.builtin(q).expect("integer literal types are builtin");
-    u32::from(s.target.builtin_size_align(b).0) * 8
+    u32::from(s.ast.types.target().builtin_size_align(b).0) * 8
 }
 
 /// Types an integer literal ([lex.icon] table 8).

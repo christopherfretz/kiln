@@ -17,7 +17,7 @@ use kiln_ast::{Ast, ConstValueId, DeclId, ExprId, QualType, StmtId};
 use kiln_diag::DiagId;
 use kiln_source::Loc;
 
-use crate::target::{TargetLayout, layout};
+use kiln_abi::Target;
 
 /// A folded value.
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -76,19 +76,25 @@ pub trait ConstEvaluator {
     fn evaluate(&self, ast: &Ast, e: ExprId) -> Result<ConstVal, NotConstant>;
 }
 
-/// The evaluator sema uses. Swap for the Oven here.
-pub fn evaluator() -> impl ConstEvaluator {
-    Folder
+/// The evaluator sema uses, laying out types for `target`. Swap for the
+/// Oven here.
+pub fn evaluator(target: &Target) -> impl ConstEvaluator + '_ {
+    Folder { target }
 }
 
-/// Folds `e` to an integer (for callers without a `Sema`, e.g. layout).
+/// Folds `e` to an integer (for callers without a `Sema`), on the
+/// target `ast` was built for.
 pub fn fold_int_expr(ast: &Ast, e: ExprId) -> Option<i128> {
-    evaluator().evaluate(ast, e).ok().and_then(ConstVal::as_int)
+    let target = crate::target::target_of(ast);
+    evaluator(&target).evaluate(ast, e).ok().and_then(ConstVal::as_int)
 }
 
 /// The M2 folder.
-#[derive(Clone, Copy, Debug, Default)]
-pub struct Folder;
+#[derive(Clone, Copy, Debug)]
+pub struct Folder<'t> {
+    /// The target `sizeof`/`alignof` lay out for.
+    pub target: &'t Target,
+}
 
 /// `(width, signed)` of an integral or enumeration type.
 pub fn int_info(ast: &Ast, ty: QualType) -> Option<(u32, bool)> {
@@ -136,14 +142,15 @@ pub fn fits(v: i128, width: u32, signed: bool) -> bool {
 const DEPTH_LIMIT: u32 = 512;
 const CALL_LIMIT: usize = 512;
 
-impl ConstEvaluator for Folder {
+impl ConstEvaluator for Folder<'_> {
     fn evaluate(&self, ast: &Ast, e: ExprId) -> Result<ConstVal, NotConstant> {
-        Eval { ast, depth: 0, frames: Vec::new(), steps: 0 }.eval(e)
+        Eval { ast, target: self.target, depth: 0, frames: Vec::new(), steps: 0 }.eval(e)
     }
 }
 
 struct Eval<'s> {
     ast: &'s Ast,
+    target: &'s Target,
     depth: u32,
     /// Call frames of the constexpr-function interpreter: the values of
     /// the parameters and locals of each active call (innermost last).
@@ -313,7 +320,7 @@ impl Eval<'_> {
                 } else {
                     self.ast.exprs.get(ExprId::new(n.a())).ty()
                 };
-                let (s, a) = layout().size_align(self.ast, arg).ok_or_else(NotConstant::plain)?;
+                let (s, a) = crate::target::size_align(self.ast, arg, self.target).ok_or_else(NotConstant::plain)?;
                 let v = match kind {
                     TraitKind::SizeOf => s,
                     _ => a,

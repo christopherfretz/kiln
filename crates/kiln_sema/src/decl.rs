@@ -1,1 +1,1785 @@
-//! decl
+//! Declarations ([dcl], [basic.def], spec/sema.md §4): decl-specifiers and
+//! declarators to types, variables, functions, fields, typedefs, tags,
+//! enumerators, namespaces, linkage specifications, `static_assert` and
+//! attributes.
+
+use kiln_ast::attr::{AttrKind, AttrNode, AttrSyntax};
+use kiln_ast::decl::{
+    ConstexprKind, DeclFlags, DeclKind, DefinitionBits, EnumData, FieldData, FnSpec, FnStorage,
+    InitStyle, LinkageLang, TagKind, TlsKind, VarSpec, VarStorage,
+};
+use kiln_ast::expr::{ExprKind, NonOdrUse};
+use kiln_ast::names::DeclName;
+use kiln_ast::types::{AutoKeyword, BuiltinType, ExcSpec, FuncInfo, Quals, TagKeyword, TypeView};
+use kiln_ast::{AttrId, DeclHead, DeclId, ExprId, QualType, StmtId};
+use kiln_diag::DiagId;
+use kiln_source::Loc;
+use kiln_source::symbol::Symbol;
+
+use crate::constfold::{self, ConstVal};
+use crate::conv::{self, ConvCtx};
+use crate::declspec::{BaseSpec, Chunk, DeclSpec, Declarator, DeclaratorContext, ParamInfo, Sign, StorageSpec, Width};
+use crate::init::Initializer;
+use crate::lookup::{LookupKind, is_tag_kind, is_type_kind};
+use crate::scope::{Scope, ScopeKind};
+use crate::{Sema, target};
+
+/// How a class or enumeration name is used ([dcl.type.elab],
+/// [class.pre], [dcl.enum]).
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum TagUse {
+    /// `struct S *p;`: refers to (or forward-declares) `S`.
+    Reference,
+    /// `struct S;` or `enum E : int;`: declares `S` in the current scope.
+    Declaration,
+    /// `struct S { ... }`: defines `S`.
+    Definition,
+}
+
+/// What a name denotes, for the parser's decisions
+/// ([basic.lookup], clang's `Sema::ClassifyName`).
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum NameClass {
+    /// A type-name (typedef, class or enumeration) with its type.
+    Type(QualType, DeclId),
+    /// A namespace.
+    Namespace(DeclId),
+    /// A variable, function, enumerator, ...
+    Value(DeclId),
+    /// Nothing was found.
+    Undeclared,
+}
+
+/// An attribute argument.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum AttrArg {
+    /// An expression (or string literal).
+    Expr(ExprId),
+    /// A type-id (`alignas(T)`).
+    Type(QualType),
+}
+
+/// The state of an enumeration whose body is being processed.
+#[derive(Clone, Debug)]
+pub struct EnumBuild {
+    decl: DeclId,
+    /// The fixed underlying type, if any.
+    fixed: Option<QualType>,
+    /// The value of the previous enumerator.
+    last: Option<i128>,
+    enumerators: Vec<(DeclId, i128)>,
+}
+
+fn sym_str(s: &Sema<'_, '_>, sym: Symbol) -> String {
+    s.ast.symbols().as_str(sym).to_string()
+}
+
+impl Sema<'_, '_> {
+    // -- types ----------------------------------------------------------------
+
+    /// The type named by the type-specifiers of `ds` ([dcl.type.simple]),
+    /// cv-qualified.
+    pub fn type_from_declspec(&mut self, ds: &DeclSpec) -> QualType {
+        let unsigned = ds.sign == Sign::Unsigned;
+        let base = match ds.base {
+            BaseSpec::None if !ds.has_type_specifier() => {
+                if !ds.invalid {
+                    self.error(DiagId::parse_missing_type_specifier, ds.loc);
+                }
+                QualType::INT
+            }
+            BaseSpec::None | BaseSpec::Int => match (ds.width, unsigned) {
+                (Width::Short, false) => QualType::SHORT,
+                (Width::Short, true) => QualType::USHORT,
+                (Width::Long, false) => QualType::LONG,
+                (Width::Long, true) => QualType::ULONG,
+                (Width::LongLong, false) => QualType::LONGLONG,
+                (Width::LongLong, true) => QualType::ULONGLONG,
+                (Width::None, false) => QualType::INT,
+                (Width::None, true) => QualType::UINT,
+            },
+            BaseSpec::Void => QualType::VOID,
+            BaseSpec::Bool => QualType::BOOL,
+            BaseSpec::Char => match ds.sign {
+                Sign::None => QualType::CHAR,
+                Sign::Signed => QualType::SCHAR,
+                Sign::Unsigned => QualType::UCHAR,
+            },
+            BaseSpec::WChar => QualType::WCHAR,
+            BaseSpec::Char8 => QualType::CHAR8,
+            BaseSpec::Char16 => QualType::CHAR16,
+            BaseSpec::Char32 => QualType::CHAR32,
+            BaseSpec::Int128 => {
+                if unsigned {
+                    QualType::UINT128
+                } else {
+                    QualType::INT128
+                }
+            }
+            BaseSpec::Float => QualType::FLOAT,
+            BaseSpec::Double => {
+                if ds.width == Width::Long {
+                    QualType::LONGDOUBLE
+                } else {
+                    QualType::DOUBLE
+                }
+            }
+            BaseSpec::Float128 => QualType::FLOAT128,
+            BaseSpec::Auto => self.ast.types.auto_type(AutoKeyword::Auto, None, None, None, false),
+            BaseSpec::Named => ds.named.unwrap_or(QualType::ERROR),
+        };
+        let mut cv = ds.cv;
+        if ds.constexpr.is_some() {
+            cv = cv | Quals::CONST;
+        }
+        if cv.is_empty() { base } else { self.ast.types.qualify(base, cv) }
+    }
+
+    /// True if `q` is the error type.
+    pub fn is_error_type(&self, q: QualType) -> bool {
+        self.ast.types.builtin(q) == Some(BuiltinType::Error)
+    }
+
+    /// True if `q` is an undeduced `auto`.
+    pub fn is_undeduced_auto(&self, q: QualType) -> bool {
+        matches!(self.ast.types.view(self.ast.types.canonical(q).ty()), TypeView::Auto { .. })
+    }
+
+    /// True if `q` is a complete object type here (a class is incomplete
+    /// until its closing brace).
+    pub fn is_complete(&self, q: QualType) -> bool {
+        if let Some(r) = self.ast.types.as_record(q) {
+            let f = self.ast.first(r);
+            if self.defining.iter().any(|&d| self.ast.first(d) == f) {
+                return false;
+            }
+        }
+        if let Some(elem) = self.ast.types.element(q) {
+            if self.ast.types.is_array(q) && self.ast.types.array_size(q).is_none() {
+                return false;
+            }
+            return self.is_complete(elem);
+        }
+        target::is_complete_object(&self.ast, q)
+    }
+
+    fn declarator_name(&self, d: &Declarator) -> String {
+        d.name.map_or_else(|| "type name".to_owned(), |(n, _)| sym_str(self, n))
+    }
+
+    /// Normalizes a parameter list ([dcl.fct]/2): a lone unnamed `void`
+    /// parameter means "no parameters"; any other `void` parameter is an
+    /// error.
+    pub fn act_on_param_list(&mut self, params: Vec<ParamInfo>) -> Vec<ParamInfo> {
+        let is_void = |s: &Self, p: &ParamInfo| s.ast.types.is_void(p.ty);
+        if params.len() == 1 && params[0].name.is_none() && is_void(self, &params[0]) {
+            if !self.ast.types.effective_quals(params[0].ty).is_empty() {
+                self.error(DiagId::sema_param_with_void_type, params[0].loc);
+            }
+            return Vec::new();
+        }
+        let mut out = Vec::with_capacity(params.len());
+        for mut p in params {
+            if is_void(self, &p) {
+                if p.name.is_none() {
+                    self.error(DiagId::sema_void_only_param, p.loc);
+                } else {
+                    self.error(DiagId::sema_param_with_void_type, p.name.map_or(p.loc, |n| n.1));
+                }
+                p.ty = QualType::ERROR;
+                p.invalid = true;
+            }
+            out.push(p);
+        }
+        out
+    }
+
+    /// The type of `d` given the decl-specifier type `base`
+    /// ([dcl.meaning], [dcl.ptr], [dcl.ref], [dcl.array], [dcl.fct]).
+    pub fn type_for_declarator(&mut self, base: QualType, d: &Declarator) -> QualType {
+        let mut ty = base;
+        let name = self.declarator_name(d);
+        let mut prev_ref = false;
+        for chunk in d.chunks.iter().rev() {
+            if self.is_error_type(ty) {
+                return ty;
+            }
+            let t = &self.ast.types;
+            match chunk {
+                Chunk::Pointer { quals, loc } => {
+                    if t.is_reference(ty) {
+                        let msg = self.diag(DiagId::sema_pointer_to_reference, *loc).arg(&name).arg(self.ty_arg(ty));
+                        self.emit(msg);
+                        return QualType::ERROR;
+                    }
+                    let p = self.ast.types.pointer_to(ty);
+                    ty = if quals.is_empty() { p } else { self.ast.types.qualify(p, *quals) };
+                    prev_ref = false;
+                }
+                Chunk::LRef { loc } | Chunk::RRef { loc } => {
+                    if t.is_reference(ty) && prev_ref {
+                        let msg = self.diag(DiagId::sema_reference_to_reference, *loc).arg(&name);
+                        self.emit(msg);
+                        return QualType::ERROR;
+                    }
+                    if t.is_void(ty) {
+                        self.error(DiagId::sema_reference_to_void, *loc);
+                        return QualType::ERROR;
+                    }
+                    let lref = matches!(chunk, Chunk::LRef { .. });
+                    // Reference collapsing through typedefs ([dcl.ref]/7).
+                    ty = if let TypeView::LValueRef(inner) = t.canonical_view(ty) {
+                        self.ast.types.lvalue_ref_to(inner)
+                    } else if let TypeView::RValueRef(inner) = t.canonical_view(ty) {
+                        if lref { self.ast.types.lvalue_ref_to(inner) } else { self.ast.types.rvalue_ref_to(inner) }
+                    } else if lref {
+                        self.ast.types.lvalue_ref_to(ty)
+                    } else {
+                        self.ast.types.rvalue_ref_to(ty)
+                    };
+                    prev_ref = true;
+                }
+                Chunk::Array { size, loc } => {
+                    prev_ref = false;
+                    if t.is_void(ty) {
+                        let msg = self.diag(DiagId::sema_array_of_void, *loc).arg(&name);
+                        self.emit(msg);
+                        return QualType::ERROR;
+                    }
+                    if t.is_function(ty) {
+                        let msg = self.diag(DiagId::sema_array_of_functions, *loc).arg(&name).arg(self.ty_arg(ty));
+                        self.emit(msg);
+                        return QualType::ERROR;
+                    }
+                    if t.is_reference(ty) {
+                        let msg = self.diag(DiagId::sema_array_of_references, *loc).arg(&name).arg(self.ty_arg(ty));
+                        self.emit(msg);
+                        return QualType::ERROR;
+                    }
+                    if !self.is_complete(ty) {
+                        let msg = self.diag(DiagId::sema_array_incomplete_type, *loc).arg(self.ty_arg(ty));
+                        self.emit(msg);
+                        return QualType::ERROR;
+                    }
+                    ty = match size {
+                        None => self.ast.types.incomplete_array(ty),
+                        Some(e) => match self.array_bound(*e, d) {
+                            Some(n) => self.ast.types.constant_array(ty, n, None),
+                            None => return QualType::ERROR,
+                        },
+                    };
+                }
+                Chunk::Function { params, variadic, loc, .. } => {
+                    prev_ref = false;
+                    if t.is_array(ty) || t.is_function(ty) {
+                        let which = if t.is_array(ty) { "0" } else { "1" };
+                        let msg = self
+                            .diag(DiagId::sema_func_returning_array_function, *loc)
+                            .arg(which)
+                            .arg(self.ty_arg(ty));
+                        self.emit(msg);
+                        return QualType::ERROR;
+                    }
+                    let ptys: Vec<QualType> =
+                        params.iter().map(|p| self.ast.types.canonical_param(p.ty)).collect();
+                    let info = FuncInfo::new().with_variadic(*variadic);
+                    ty = self.ast.types.function(ty, &ptys, info, ExcSpec::None);
+                }
+            }
+        }
+        ty
+    }
+
+    /// Evaluates an array bound ([dcl.array]/1): a converted constant
+    /// expression of type `std::size_t`.
+    fn array_bound(&mut self, e: ExprId, d: &Declarator) -> Option<u64> {
+        let ety = self.ast.exprs.get(e).ty();
+        let loc = self.ast.exprs.get(e).loc();
+        if self.is_error_type(ety) {
+            return None;
+        }
+        let t = &self.ast.types;
+        let integral = t.is_integral(ety) || t.as_enum(ety).is_some_and(|en| !self.is_scoped_enum(en));
+        if !integral {
+            let msg = self.diag(DiagId::sema_array_size_non_int, loc).arg(self.ty_arg(ety));
+            self.emit(msg);
+            return None;
+        }
+        let c = conv::decay(self, e);
+        let c = self.act_on_full_expr(c);
+        match self.evaluate(c) {
+            Ok(ConstVal::Int(v)) if v < 0 => {
+                match d.name {
+                    Some((n, _)) => {
+                        let msg = self.diag(DiagId::sema_decl_negative_array_size, loc).arg(sym_str(self, n));
+                        self.emit(msg);
+                    }
+                    None => self.error(DiagId::sema_typecheck_negative_array_size, loc),
+                }
+                None
+            }
+            Ok(ConstVal::Int(v)) => {
+                if v > i128::from(u64::MAX >> 4) {
+                    let msg = self.diag(DiagId::sema_array_too_large, loc).arg(v.to_string());
+                    self.emit(msg);
+                    return None;
+                }
+                u64::try_from(v).ok()
+            }
+            _ => {
+                self.error(DiagId::sema_vla_unsupported, loc);
+                None
+            }
+        }
+    }
+
+    pub(crate) fn is_scoped_enum(&self, en: DeclId) -> bool {
+        let def = self.ast.definition(en).unwrap_or(en);
+        self.ast.decls.enumeration(def).is_some_and(|e| e.is_scoped())
+    }
+
+    /// A parameter-declaration ([dcl.fct]/3): its type, adjusted
+    /// ([dcl.fct]/5: arrays and functions become pointers).
+    pub fn act_on_param_declarator(&mut self, ds: &DeclSpec, d: &Declarator) -> ParamInfo {
+        let base = self.type_from_declspec(ds);
+        let mut ty = self.type_for_declarator(base, d);
+        if let Some((s, loc)) = ds.storage {
+            if s != StorageSpec::Register {
+                self.error(DiagId::sema_invalid_storage_class_in_func_decl, loc);
+            }
+        }
+        if self.ast.types.is_array(ty) {
+            let elem = self.ast.types.element(ty).unwrap_or(QualType::ERROR);
+            ty = self.ast.types.pointer_to(elem);
+        } else if self.ast.types.is_function(ty) {
+            ty = self.ast.types.pointer_to(ty);
+        }
+        let mut attrs = ds.attrs.clone();
+        attrs.extend(d.attrs.iter().copied());
+        ParamInfo { name: d.name, ty, loc: d.name_loc(), attrs, invalid: ds.invalid || d.invalid }
+    }
+
+    // -- declarations ------------------------------------------------------------
+
+    /// The context a declarator declares into, and its lexical context.
+    fn decl_contexts(&self, d: &Declarator) -> (DeclId, DeclId) {
+        match d.qualifier {
+            Some(q) => (q, self.ctx),
+            None => (self.ctx, self.ctx),
+        }
+    }
+
+    /// Previous declarations of `name` that `d` may redeclare.
+    fn find_prev(&self, name: Symbol, qualifier: Option<DeclId>) -> Option<DeclId> {
+        let found: Vec<DeclId> = match qualifier {
+            Some(q) => self.lookup_qualified(q, name, LookupKind::Ordinary).decls,
+            None => self.lookup_current_scope(name),
+        };
+        found.into_iter().rev().find(|&d| !is_tag_kind(self.ast.decls.get(d).kind()))
+    }
+
+    /// A declarator in a simple-declaration or member-declaration: creates
+    /// the variable, function, typedef or field (spec/sema.md §4.2). The
+    /// caller then supplies the initializer ([`Sema::act_on_init`] /
+    /// [`Sema::act_on_uninit`]) or the function body.
+    pub fn act_on_declarator(&mut self, ds: &DeclSpec, base: QualType, d: &Declarator) -> Option<DeclId> {
+        let ty = self.type_for_declarator(base, d);
+        let invalid = ds.invalid || d.invalid || self.is_error_type(ty);
+        let Some((name, name_loc)) = d.name else {
+            if d.ctx == DeclaratorContext::Member && d.bit_width.is_some() {
+                return Some(self.act_on_field(ds, ty, d, invalid));
+            }
+            self.error(DiagId::parse_expected_unqualified_id, d.loc);
+            return None;
+        };
+        let _ = name_loc;
+        let mut attrs = ds.attrs.clone();
+        attrs.extend(d.attrs.iter().copied());
+        let decl = if ds.is_typedef() {
+            self.act_on_typedef(ds, ty, d, name, false)
+        } else if self.ast.types.is_function(ty) {
+            if d.ctx == DeclaratorContext::Member {
+                self.unsupported("member functions", d.loc);
+                return None;
+            }
+            self.act_on_function(ds, ty, d, name)
+        } else if d.ctx == DeclaratorContext::Member {
+            self.act_on_field(ds, ty, d, invalid)
+        } else {
+            self.act_on_var(ds, ty, d, name)
+        };
+        if invalid {
+            self.ast.decls.set_flags(decl, DeclFlags::INVALID);
+        }
+        if !attrs.is_empty() {
+            self.check_decl_attrs(decl, &attrs);
+            let _ = self.builder().attach_attrs(decl, &attrs);
+        }
+        Some(decl)
+    }
+
+    /// Reports an unsupported construct (`{what} is not supported yet`).
+    pub fn unsupported(&self, what: &str, loc: Loc) {
+        let d = self.diag(DiagId::parse_unsupported, loc).arg(what);
+        self.emit(d);
+    }
+
+    fn note_prev(&self, msg: kiln_diag::Diag, prev: DeclId, definition: bool) -> kiln_diag::Diag {
+        let loc = self.ast.decls.get(prev).loc();
+        let id = if definition { DiagId::note_previous_definition } else { DiagId::note_previous_declaration };
+        msg.with_note(self.diag(id, loc))
+    }
+
+    fn register_local(&mut self, name: Symbol, d: DeclId) {
+        if self.in_local_scope() {
+            self.push_local(name, d);
+        }
+    }
+
+    /// `typedef T name;` or `using name = T;` ([dcl.typedef]).
+    fn act_on_typedef(&mut self, ds: &DeclSpec, ty: QualType, d: &Declarator, name: Symbol, alias: bool) -> DeclId {
+        if let Some((s, loc)) = ds.storage.filter(|(s, _)| *s != StorageSpec::Typedef) {
+            let _ = s;
+            self.error(DiagId::sema_storage_class_on_typedef, loc);
+        }
+        let (ctx, lexical) = self.decl_contexts(d);
+        let prev = self.find_prev(name, d.qualifier);
+        // `typedef struct { } T;`: T names the class for linkage purposes
+        // ([dcl.typedef]/9).
+        let anon_tag = ds.tag.filter(|&t| {
+            ds.tag_declares
+                && d.chunks.is_empty()
+                && ds.cv.is_empty()
+                && self.ast.decls.get(t).name().is_empty()
+                && self.ast.decls.typedef_for_anon(t).is_none()
+        });
+        let underlying = match anon_tag {
+            Some(t) => {
+                let tag_ty = self.ast.decls.get(self.ast.first(t)).ty().unwrap_or(QualType::ERROR);
+                self.ast.types.elaborated(ds.keyword, None, tag_ty)
+            }
+            None => ty,
+        };
+        let mut prev_ok = None;
+        if let Some(p) = prev {
+            let pk = self.ast.decls.get(p).kind();
+            if matches!(pk, DeclKind::Typedef | DeclKind::TypeAlias) {
+                let pty = self.ast.decls.typedef(p).map_or(QualType::ERROR, |t| t.underlying);
+                if self.ast.types.same_type(pty, underlying) {
+                    prev_ok = Some(p);
+                } else {
+                    let msg = self
+                        .diag(DiagId::sema_redefinition_different_typedef, d.name_loc())
+                        .arg(if alias { "1" } else { "0" })
+                        .arg(self.ty_arg(underlying))
+                        .arg(self.ty_arg(pty));
+                    let msg = self.note_prev(msg, p, true);
+                    self.emit(msg);
+                }
+            } else {
+                let msg = self.diag(DiagId::sema_redefinition_different_kind, d.name_loc()).arg(sym_str(self, name));
+                let msg = self.note_prev(msg, p, true);
+                self.emit(msg);
+            }
+        }
+        let kind = if alias { DeclKind::TypeAlias } else { DeclKind::Typedef };
+        let mut h = DeclHead::new(ctx, DeclName::ident(name), d.name_loc());
+        h.lexical = Some(lexical);
+        let td = self.builder().typedef(h, kind, underlying, prev_ok);
+        if let Some(t) = anon_tag {
+            let _ = self.ast.decls.set_typedef_for_anon(t, td);
+        }
+        self.register_local(name, td);
+        td
+    }
+
+    /// `using name = type-id;` ([dcl.typedef]/2).
+    pub fn act_on_alias_decl(&mut self, name: Symbol, name_loc: Loc, ty: QualType, attrs: &[AttrId]) -> DeclId {
+        let mut d = Declarator::new(DeclaratorContext::File, name_loc);
+        d.name = Some((name, name_loc));
+        let ds = DeclSpec::new(name_loc);
+        let td = self.act_on_typedef(&ds, ty, &d, name, true);
+        if !attrs.is_empty() {
+            let _ = self.builder().attach_attrs(td, attrs);
+        }
+        td
+    }
+
+    fn act_on_function(&mut self, ds: &DeclSpec, ty: QualType, d: &Declarator, name: Symbol) -> DeclId {
+        let (ctx, lexical) = self.decl_contexts(d);
+        let mut spec = FnSpec::new();
+        let block = self.in_local_scope();
+        match ds.storage {
+            Some((StorageSpec::Static, loc)) => {
+                if block {
+                    self.error(DiagId::sema_static_block_func, loc);
+                } else {
+                    spec = spec.with_storage(FnStorage::Static);
+                }
+            }
+            Some((StorageSpec::Extern, _)) => spec = spec.with_storage(FnStorage::Extern),
+            Some((StorageSpec::Register | StorageSpec::Mutable, loc)) => {
+                self.error(DiagId::sema_invalid_storage_class_in_func_decl, loc);
+            }
+            _ => {}
+        }
+        if ds.inline.is_some() {
+            spec = spec.with_inline(true);
+        }
+        if ds.constexpr.is_some() {
+            spec = spec.with_constexpr_kind(ConstexprKind::Constexpr).with_implicit_inline(true);
+        }
+        let variadic = self.ast.types.proto(ty).is_some_and(|p| p.info().variadic());
+        spec = spec.with_variadic(variadic);
+        let mut prev_ok = None;
+        if let Some(p) = self.find_prev(name, d.qualifier) {
+            let pn = *self.ast.decls.get(p);
+            if pn.kind() == DeclKind::Function {
+                let pty = pn.ty().unwrap_or(QualType::ERROR);
+                if self.ast.types.same_type(pty, ty) {
+                    prev_ok = Some(p);
+                    let pspec = self.ast.decls.function(p).map(|f| f.spec).unwrap_or_default();
+                    if spec.storage() == FnStorage::Static && pspec.storage() != FnStorage::Static {
+                        let msg = self.diag(DiagId::sema_static_non_static, d.name_loc()).arg(sym_str(self, name));
+                        let msg = self.note_prev(msg, p, false);
+                        self.emit(msg);
+                    }
+                    if pspec.storage() == FnStorage::Static && spec.storage() == FnStorage::None {
+                        spec = spec.with_storage(FnStorage::Static);
+                    }
+                    if pspec.is_inline() {
+                        spec = spec.with_implicit_inline(true);
+                    }
+                } else {
+                    let same_params = match (self.ast.types.proto(pty), self.ast.types.proto(ty)) {
+                        (Some(a), Some(b)) => {
+                            let (a, b) = (a.clone(), b.clone());
+                            let (pa, pb) = (self.ast.types.params(&a).to_vec(), self.ast.types.params(&b).to_vec());
+                            pa.len() == pb.len()
+                                && pa.iter().zip(&pb).all(|(x, y)| self.ast.types.same_type(*x, *y))
+                                && a.info().variadic() == b.info().variadic()
+                        }
+                        _ => false,
+                    };
+                    let msg = if same_params {
+                        self.diag(DiagId::sema_ovl_diff_return_type, d.name_loc())
+                    } else {
+                        self.diag(DiagId::sema_overload_unsupported, d.name_loc()).arg(sym_str(self, name))
+                    };
+                    let msg = self.note_prev(msg, p, false);
+                    self.emit(msg);
+                }
+            } else {
+                let msg = self.diag(DiagId::sema_redefinition_different_kind, d.name_loc()).arg(sym_str(self, name));
+                let msg = self.note_prev(msg, p, true);
+                self.emit(msg);
+            }
+        }
+        let mut h = DeclHead::new(ctx, DeclName::ident(name), d.name_loc());
+        h.lexical = Some(lexical);
+        let f = self.builder().function(h, DeclKind::Function, ty, spec, prev_ok);
+        let params: Vec<ParamInfo> = d.function_params().map(<[ParamInfo]>::to_vec).unwrap_or_default();
+        let mut ids = Vec::with_capacity(params.len());
+        let mut seen: Vec<Symbol> = Vec::new();
+        for (i, p) in params.iter().enumerate() {
+            let pname = match p.name {
+                Some((n, loc)) => {
+                    if seen.contains(&n) {
+                        let msg = self.diag(DiagId::sema_param_redefinition, loc).arg(sym_str(self, n));
+                        self.emit(msg);
+                    }
+                    seen.push(n);
+                    DeclName::ident(n)
+                }
+                None => DeclName::EMPTY,
+            };
+            let idx = u16::try_from(i).unwrap_or(u16::MAX);
+            let pd = self.builder().param(f, pname, p.loc, p.ty, idx, 0);
+            if p.invalid {
+                self.ast.decls.set_flags(pd, DeclFlags::INVALID);
+            }
+            if !p.attrs.is_empty() {
+                let _ = self.builder().attach_attrs(pd, &p.attrs);
+            }
+            ids.push(pd);
+        }
+        let _ = self.builder().set_params(f, &ids);
+        self.register_local(name, f);
+        f
+    }
+
+    fn act_on_field(&mut self, ds: &DeclSpec, ty: QualType, d: &Declarator, invalid: bool) -> DeclId {
+        let ctx = self.ctx;
+        let name = d.name.map(|n| n.0);
+        let nm = name.map(|n| sym_str(self, n));
+        let mut flags = 0;
+        if let Some((s, loc)) = ds.storage {
+            match s {
+                StorageSpec::Mutable => flags |= FieldData::MUTABLE,
+                StorageSpec::Static => self.unsupported("static data members", loc),
+                _ => self.error(DiagId::sema_invalid_storage_class_in_func_decl, loc),
+            }
+        }
+        if let Some(n) = name {
+            if !self.lookup_in(ctx, n, LookupKind::Ordinary).is_empty() {
+                let msg = self.diag(DiagId::sema_duplicate_member, d.name_loc()).arg(sym_str(self, n));
+                self.emit(msg);
+            }
+        }
+        if !invalid && !self.is_complete(ty) && !self.ast.types.is_reference(ty) {
+            let msg = self.diag(DiagId::sema_field_incomplete, d.name_loc()).arg(self.ty_arg(ty));
+            self.emit(msg);
+        }
+        let width = d.bit_width.and_then(|w| self.bit_width(w, ty, nm.as_deref()));
+        let h = DeclHead::new(ctx, name.map_or(DeclName::EMPTY, DeclName::ident), d.name_loc());
+        self.builder().field(h, ty, width, flags)
+    }
+
+    /// Checks a bit-field width ([class.bit]/1): an integral constant
+    /// expression, wrapped in a `ConstantExpr`.
+    fn bit_width(&mut self, w: ExprId, ty: QualType, name: Option<&str>) -> Option<ExprId> {
+        let loc = self.ast.exprs.get(w).loc();
+        let t = &self.ast.types;
+        if !(t.is_integral(ty) || t.as_enum(ty).is_some()) && !self.is_error_type(ty) {
+            let msg = match name {
+                Some(n) => self.diag(DiagId::sema_bitfield_non_integral, loc).arg(n).arg(self.ty_arg(ty)),
+                None => self.diag(DiagId::sema_anon_bitfield_non_integral, loc).arg(self.ty_arg(ty)),
+            };
+            self.emit(msg);
+            return None;
+        }
+        let c = conv::decay(self, w);
+        let c = self.act_on_full_expr(c);
+        let v = match self.evaluate(c) {
+            Ok(ConstVal::Int(v)) => v,
+            Ok(_) | Err(_) => {
+                self.error(DiagId::sema_expr_not_ice, loc);
+                return None;
+            }
+        };
+        if v < 0 {
+            let msg = match name {
+                Some(n) => self.diag(DiagId::sema_bitfield_negative_width, loc).arg(n).arg(v.to_string()),
+                None => self.diag(DiagId::sema_anon_bitfield_negative_width, loc).arg(v.to_string()),
+            };
+            self.emit(msg);
+            return None;
+        }
+        if v == 0 {
+            if let Some(n) = name {
+                let msg = self.diag(DiagId::sema_bitfield_zero_width, loc).arg(n);
+                self.emit(msg);
+                return None;
+            }
+        }
+        if let Some((bits, _)) = constfold::int_info(&self.ast, ty) {
+            let bits = if self.ast.types.builtin(ty) == Some(BuiltinType::Bool) { 8 } else { bits };
+            if v > i128::from(bits) {
+                let msg = self
+                    .diag(DiagId::sema_bitfield_width_exceeds, loc)
+                    .arg(name.unwrap_or(""))
+                    .arg(v.to_string())
+                    .arg(bits.to_string())
+                    .arg("");
+                self.emit(msg);
+            }
+        }
+        let cv = self.int_const(QualType::INT, v);
+        Some(self.builder().constant_expr(c, Some(cv)))
+    }
+
+    fn var_spec(&mut self, ds: &DeclSpec) -> VarSpec {
+        let mut spec = VarSpec::new();
+        match ds.storage {
+            Some((StorageSpec::Static, _)) => spec = spec.with_storage(VarStorage::Static),
+            Some((StorageSpec::Extern, _)) => spec = spec.with_storage(VarStorage::Extern),
+            Some((StorageSpec::Mutable, loc)) => {
+                self.error(DiagId::sema_invalid_storage_class_in_func_decl, loc);
+            }
+            _ => {}
+        }
+        if ds.thread_local.is_some() {
+            spec = spec.with_tls(TlsKind::Static);
+        }
+        if ds.constexpr.is_some() {
+            spec = spec.with_constexpr(true);
+        }
+        if ds.constinit.is_some() {
+            spec = spec.with_constinit(true);
+        }
+        if ds.inline.is_some() {
+            spec = spec.with_inline(true);
+        }
+        spec
+    }
+
+    fn is_var_definition(&self, v: DeclId) -> bool {
+        self.ast.decls.var(v).is_some_and(|x| x.spec.storage() != VarStorage::Extern || x.init.is_some())
+    }
+
+    fn act_on_var(&mut self, ds: &DeclSpec, ty: QualType, d: &Declarator, name: Symbol) -> DeclId {
+        let (ctx, lexical) = self.decl_contexts(d);
+        let spec = self.var_spec(ds);
+        let mut prev_ok = None;
+        if let Some(p) = self.find_prev(name, d.qualifier) {
+            let pn = *self.ast.decls.get(p);
+            let block = self.in_local_scope();
+            if pn.kind() == DeclKind::Var && !block {
+                let pty = pn.ty().unwrap_or(QualType::ERROR);
+                let compatible = self.ast.types.same_type(pty, ty) || {
+                    let t = &self.ast.types;
+                    t.is_array(pty)
+                        && t.is_array(ty)
+                        && (t.array_size(pty).is_none() || t.array_size(ty).is_none())
+                        && t.element(pty).zip(t.element(ty)).is_some_and(|(a, b)| t.same_type(a, b))
+                };
+                if !compatible {
+                    let msg = self
+                        .diag(DiagId::sema_redefinition_different_type, d.name_loc())
+                        .arg(sym_str(self, name))
+                        .arg(self.ty_arg(ty))
+                        .arg(self.ty_arg(pty));
+                    let msg = self.note_prev(msg, p, true);
+                    self.emit(msg);
+                } else if spec.storage() != VarStorage::Extern && self.is_var_definition(p) {
+                    let msg = self.diag(DiagId::sema_redefinition, d.name_loc()).arg(sym_str(self, name));
+                    let msg = self.note_prev(msg, p, true);
+                    self.emit(msg);
+                } else {
+                    prev_ok = Some(p);
+                }
+            } else if block && pn.kind() == DeclKind::Var {
+                let msg = self.diag(DiagId::sema_redefinition, d.name_loc()).arg(sym_str(self, name));
+                let msg = self.note_prev(msg, p, true);
+                self.emit(msg);
+            } else if pn.kind() != DeclKind::ParmVar || !block {
+                let msg = self.diag(DiagId::sema_redefinition_different_kind, d.name_loc()).arg(sym_str(self, name));
+                let msg = self.note_prev(msg, p, true);
+                self.emit(msg);
+            }
+        }
+        if let Some(p) = prev_ok {
+            // An incomplete array redeclared with a bound takes the bound.
+            let _ = p;
+        }
+        let mut h = DeclHead::new(ctx, DeclName::ident(name), d.name_loc());
+        h.lexical = Some(lexical);
+        let v = self.builder().var(h, ty, spec, prev_ok);
+        self.register_local(name, v);
+        v
+    }
+
+    // -- initializers ---------------------------------------------------------
+
+    /// The initializer of variable `v` ([dcl.init]); `copy` is true for
+    /// `= init`.
+    pub fn act_on_init(&mut self, v: DeclId, init: Initializer, copy: bool) {
+        let vn = *self.ast.decls.get(v);
+        if vn.kind() != DeclKind::Var {
+            if let Initializer::Expr(e) = init {
+                self.act_on_full_expr(e);
+            }
+            return;
+        }
+        let spec = self.ast.decls.var(v).map(|x| x.spec).unwrap_or_default();
+        let loc = vn.loc();
+        if spec.storage() == VarStorage::Extern {
+            if self.in_local_scope() {
+                self.error(DiagId::sema_block_extern_init, loc);
+                return;
+            }
+            self.error(DiagId::sema_extern_init, loc);
+        }
+        let mut ty = vn.ty().unwrap_or(QualType::ERROR);
+        let style = match (&init, copy) {
+            (_, true) => InitStyle::C,
+            (Initializer::Paren(..), false) => InitStyle::Call,
+            (_, false) => InitStyle::List,
+        };
+        if self.is_undeduced_auto(ty) {
+            ty = match self.deduce_auto(ty, &init, loc) {
+                Some(t) => t,
+                None => QualType::ERROR,
+            };
+            self.ast.decls.set_ty(v, ty);
+        }
+        let e = self.perform_init(ty, init, loc);
+        let e = self.act_on_full_expr(e);
+        self.ast.decls.mark_var(v, VarSpec::new().with_init_style(style));
+        let _ = self.builder().set_var_init(v, e);
+        // An incomplete array takes its bound from the initializer.
+        let ety = self.ast.exprs.get(e).ty();
+        if self.ast.types.is_array(ty) && self.ast.types.array_size(ty).is_none() && self.ast.types.array_size(ety).is_some() {
+            self.ast.decls.set_ty(v, ety);
+        }
+        if spec.is_constexpr() {
+            self.check_constexpr_init(v, e);
+        }
+    }
+
+    /// `auto x = e;` ([dcl.type.auto.deduct]): the decayed, unqualified
+    /// type of the initializer, plus the declared cv-qualifiers.
+    fn deduce_auto(&mut self, declared: QualType, init: &Initializer, loc: Loc) -> Option<QualType> {
+        let e = match init {
+            Initializer::Expr(e) => *e,
+            Initializer::Paren(v, ..) if v.len() == 1 => v[0],
+            _ => {
+                self.unsupported("this form of 'auto' deduction", loc);
+                return None;
+            }
+        };
+        let ety = self.ast.exprs.get(e).ty();
+        let t = &self.ast.types;
+        let base = if t.is_array(ety) {
+            let el = t.element(ety).unwrap_or(QualType::ERROR);
+            self.ast.types.pointer_to(el)
+        } else if t.is_function(ety) {
+            self.ast.types.pointer_to(ety)
+        } else {
+            let c = self.ast.types.canonical(ety);
+            if self.ast.types.effective_quals(ety).is_empty() { ety } else { c.without_quals() }
+        };
+        let q = declared.quals();
+        Some(if q.is_empty() { base } else { self.ast.types.qualify(base, q) })
+    }
+
+    /// A `constexpr` variable's initializer must be a constant expression
+    /// ([dcl.constexpr]/10); its value is recorded.
+    fn check_constexpr_init(&mut self, v: DeclId, e: ExprId) {
+        if self.ast.decls.begin_eval(v).is_err() {
+            return;
+        }
+        let ty = self.ast.decls.get(v).ty().unwrap_or(QualType::ERROR);
+        match self.evaluate(e) {
+            Ok(val) => {
+                let cv = self.const_value(ty, val);
+                self.ast.decls.finish_eval(v, cv);
+            }
+            Err(nc) => {
+                self.ast.decls.finish_eval(v, None);
+                if self.has_errors_in(e) {
+                    return;
+                }
+                let loc = self.ast.exprs.get(e).loc();
+                let name = self.decl_name(v);
+                let msg = self.diag(DiagId::sema_constexpr_var_non_constant, loc).arg(name);
+                let msg = self.with_not_constant_notes(msg, nc);
+                self.emit(msg);
+            }
+        }
+    }
+
+    fn has_errors_in(&self, e: ExprId) -> bool {
+        self.ast.exprs.get(e).kind() == ExprKind::RecoveryExpr || self.is_error_type(self.ast.exprs.get(e).ty())
+    }
+
+    /// A variable declared without an initializer ([dcl.init]/7).
+    pub fn act_on_uninit(&mut self, v: DeclId) {
+        let vn = *self.ast.decls.get(v);
+        if vn.kind() != DeclKind::Var || vn.has(DeclFlags::INVALID) {
+            return;
+        }
+        let spec = self.ast.decls.var(v).map(|x| x.spec).unwrap_or_default();
+        let ty = vn.ty().unwrap_or(QualType::ERROR);
+        let loc = vn.loc();
+        let name = self.decl_name(v);
+        if self.is_error_type(ty) {
+            return;
+        }
+        if self.is_undeduced_auto(ty) {
+            self.unsupported("'auto' without an initializer", loc);
+            return;
+        }
+        if self.ast.types.is_reference(ty) {
+            if spec.storage() != VarStorage::Extern {
+                let msg = self.diag(DiagId::sema_reference_var_requires_init, loc).arg(name);
+                self.emit(msg);
+            }
+            return;
+        }
+        if spec.storage() == VarStorage::Extern {
+            return;
+        }
+        if !self.is_complete(ty) {
+            let msg = if self.ast.types.is_void(ty) {
+                self.diag(DiagId::sema_void_var, loc).arg(self.ty_arg(ty))
+            } else {
+                self.diag(DiagId::sema_typecheck_decl_incomplete_type, loc).arg(self.ty_arg(ty))
+            };
+            self.emit(msg);
+            self.ast.decls.set_flags(v, DeclFlags::INVALID);
+            return;
+        }
+        if spec.is_constexpr() {
+            let msg = self.diag(DiagId::sema_constexpr_var_non_constant, loc).arg(name);
+            self.emit(msg);
+            return;
+        }
+        let quals = self.ast.types.effective_quals(ty);
+        if quals.is_const() && self.ast.types.as_record(ty).is_none() {
+            let msg = self.diag(DiagId::sema_default_init_const, loc).arg(self.ty_arg(ty));
+            self.emit(msg);
+        }
+    }
+
+    // -- function definitions ----------------------------------------------------
+
+    /// Starts the definition of function `f` at `{`: checks for a
+    /// redefinition, opens the function scope with the parameters.
+    pub fn act_on_start_function_def(&mut self, f: DeclId) {
+        if let Some(prev) = self.ast.definition(f) {
+            if prev != f {
+                let msg = self.diag(DiagId::sema_redefinition, self.ast.decls.get(f).loc()).arg(self.decl_name(f));
+                let msg = self.note_prev(msg, prev, true);
+                self.emit(msg);
+            }
+        }
+        let fty = self.ast.decls.get(f).ty().unwrap_or(QualType::ERROR);
+        let ret = self.ast.types.proto(fty).map_or(QualType::ERROR, kiln_ast::types::FuncProto::ret);
+        self.scopes.push(Scope::new(ScopeKind::Function, None));
+        self.ctx = f;
+        let params: Vec<DeclId> = self
+            .ast
+            .decls
+            .function(f)
+            .map(|x| self.ast.lists.iter(x.params).collect())
+            .unwrap_or_default();
+        for p in params {
+            let n = self.ast.decls.get(p).name();
+            if let Some(sym) = self.ast.names.as_ident(n) {
+                self.push_local(sym, p);
+            }
+            let pty = self.ast.decls.get(p).ty().unwrap_or(QualType::ERROR);
+            if !self.is_complete(pty) && !self.ast.types.is_reference(pty) && !self.is_error_type(pty) {
+                let msg = self.diag(DiagId::sema_typecheck_decl_incomplete_type, self.ast.decls.get(p).loc()).arg(self.ty_arg(pty));
+                self.emit(msg);
+            }
+        }
+        self.begin_function_body(f, ret);
+    }
+
+    /// Finishes the definition of `f` with `body`.
+    pub fn act_on_finish_function_def(&mut self, f: DeclId, body: StmtId, rbrace: Loc) {
+        self.end_function_body(body, rbrace);
+        if self.ast.definition(f).is_none() {
+            let _ = self.builder().set_body(f, body);
+        }
+        self.pop_scope();
+        self.ctx = self.ast.decls.lexical_ctx(f).or_else(|| self.ast.decls.get(f).ctx()).unwrap_or(self.ast.tu);
+    }
+}
+
+// -- tags, enumerations, namespaces, attributes ---------------------------------
+
+impl Sema<'_, '_> {
+    /// The type of tag `d` (shared by all its redeclarations).
+    pub fn tag_type(&self, d: DeclId) -> QualType {
+        self.ast.decls.get(self.ast.first(d)).ty().unwrap_or(QualType::ERROR)
+    }
+
+    /// The type an elaborated-type-specifier or class-specifier names:
+    /// `struct S` is `'struct S':'S'` ([dcl.type.elab]).
+    pub fn elaborated_tag_type(&mut self, d: DeclId, keyword: TagKeyword) -> QualType {
+        let t = self.tag_type(d);
+        self.ast.types.elaborated(keyword, None, t)
+    }
+
+    /// Marks a type-name's declaration referenced ([basic.def.odr]: clang's
+    /// `isReferenced` for types).
+    pub fn mark_type_referenced(&mut self, d: DeclId) {
+        self.ast.decls.set_flags(d, DeclFlags::REFERENCED);
+        let first = self.ast.first(d);
+        if first != d {
+            self.ast.decls.set_flags(first, DeclFlags::REFERENCED);
+        }
+    }
+
+    fn tag_kind_of(keyword: TagKeyword) -> TagKind {
+        match keyword {
+            TagKeyword::Class => TagKind::Class,
+            TagKeyword::Union => TagKind::Union,
+            _ => TagKind::Struct,
+        }
+    }
+
+    fn tag_matches(&self, d: DeclId, keyword: TagKeyword) -> bool {
+        let n = self.ast.decls.get(d);
+        match keyword {
+            TagKeyword::Enum => n.kind() == DeclKind::Enum,
+            TagKeyword::Union => self.ast.decls.record(d).is_some_and(|r| r.tag == TagKind::Union),
+            _ => self.ast.decls.record(d).is_some_and(|r| r.tag != TagKind::Union),
+        }
+    }
+
+    /// The scope a new tag declared by `struct S;`-style uses goes into
+    /// ([basic.scope.pdecl]/7): the nearest enclosing namespace or block
+    /// scope, skipping classes and prototypes for a mere reference.
+    fn tag_decl_context(&self, use_: TagUse) -> DeclId {
+        if use_ != TagUse::Reference {
+            return self.ctx;
+        }
+        let mut ctx = self.ctx;
+        for _ in 0..256 {
+            let k = self.ast.decls.get(ctx).kind();
+            if matches!(k, DeclKind::CXXRecord | DeclKind::Enum) {
+                match self.ast.decls.get(ctx).ctx() {
+                    Some(c) => ctx = c,
+                    None => break,
+                }
+            } else {
+                break;
+            }
+        }
+        ctx
+    }
+
+    /// The promotion type of an enumeration with underlying type `t`
+    /// ([conv.prom]/4).
+    fn enum_promotion(&self, t: QualType) -> QualType {
+        match constfold::int_info(&self.ast, t) {
+            Some((bits, signed)) if bits < 32 || (bits == 32 && signed) => QualType::INT,
+            Some((32, false)) => QualType::UINT,
+            _ => self.ast.types.canonical(t).without_quals(),
+        }
+    }
+
+    /// A class-key or `enum` followed by a name ([dcl.type.elab],
+    /// [class.pre], [dcl.enum]). `scoped` is `EnumData::SCOPED[_STRUCT]`
+    /// bits; `fixed` the enum-base. Returns the tag declaration.
+    #[allow(clippy::too_many_arguments)]
+    pub fn act_on_tag(
+        &mut self,
+        keyword: TagKeyword,
+        name: Option<(Symbol, Loc)>,
+        qualifier: Option<DeclId>,
+        use_: TagUse,
+        scoped: u32,
+        fixed: Option<QualType>,
+        loc: Loc,
+    ) -> DeclId {
+        let is_enum = keyword == TagKeyword::Enum;
+        let fixed = fixed.or(if is_enum && scoped != 0 { Some(QualType::INT) } else { None });
+        if let Some(f) = fixed {
+            let ok = self.ast.types.is_integral(f) || self.is_error_type(f);
+            if !ok {
+                let msg = self.diag(DiagId::sema_enum_invalid_underlying, loc).arg(self.ty_arg(f));
+                self.emit(msg);
+            }
+        }
+        let mut prev = None;
+        if let Some((n, nloc)) = name {
+            let found: Vec<DeclId> = match (qualifier, use_) {
+                (Some(q), _) => self.lookup_qualified(q, n, LookupKind::Tag).decls,
+                (None, TagUse::Reference) if !(is_enum && fixed.is_some()) => {
+                    self.lookup_name(n, LookupKind::Tag).decls
+                }
+                (None, _) => self
+                    .lookup_current_scope(n)
+                    .into_iter()
+                    .filter(|&d| is_tag_kind(self.ast.decls.get(d).kind()))
+                    .collect(),
+            };
+            if let Some(&p) = found.last() {
+                if self.tag_matches(p, keyword) {
+                    prev = Some(p);
+                } else {
+                    let msg = self.diag(DiagId::sema_use_with_wrong_tag, nloc).arg(sym_str(self, n));
+                    let msg = self.note_prev(msg, p, false);
+                    self.emit(msg);
+                }
+            }
+            if let (Some(p), true) = (prev, is_enum) {
+                self.check_enum_redecl(p, scoped, fixed, nloc, use_);
+            }
+            if let Some(p) = prev {
+                if use_ == TagUse::Reference {
+                    self.mark_type_referenced(p);
+                    return p;
+                }
+                if use_ == TagUse::Definition {
+                    if let Some(def) = self.ast.definition(p) {
+                        let msg = self.diag(DiagId::sema_redefinition, nloc).arg(sym_str(self, n));
+                        let msg = self.note_prev(msg, def, true);
+                        self.emit(msg);
+                        prev = None;
+                    }
+                } else if use_ == TagUse::Declaration {
+                    return p;
+                }
+            } else if qualifier.is_some() {
+                let msg = self
+                    .diag(DiagId::sema_no_member, nloc)
+                    .arg(sym_str(self, n))
+                    .arg(format!("'{}'", self.decl_name(qualifier.unwrap_or(self.ast.tu))));
+                self.emit(msg);
+            }
+        }
+        let ctx = qualifier.unwrap_or_else(|| self.tag_decl_context(use_));
+        let dname = name.map_or(DeclName::EMPTY, |n| DeclName::ident(n.0));
+        let mut h = DeclHead::new(ctx, dname, name.map_or(loc, |n| n.1));
+        h.lexical = Some(if qualifier.is_some() { self.ctx } else { ctx });
+        let d = if is_enum {
+            let fx = fixed.map(|f| (f, self.enum_promotion(f)));
+            self.builder().enumeration(h, scoped, fx, prev)
+        } else {
+            self.builder().record(h, Self::tag_kind_of(keyword), prev)
+        };
+        if let Some((n, _)) = name {
+            if self.in_local_scope() && qualifier.is_none() {
+                self.push_local(n, d);
+            }
+        }
+        d
+    }
+
+    fn check_enum_redecl(&mut self, p: DeclId, scoped: u32, fixed: Option<QualType>, loc: Loc, use_: TagUse) {
+        if use_ == TagUse::Reference && fixed.is_none() && scoped == 0 {
+            return;
+        }
+        let Some(pe) = self.ast.decls.enumeration(p).copied() else { return };
+        let prev_scoped = pe.flags & EnumData::SCOPED != 0;
+        let msg = if prev_scoped != (scoped != 0) {
+            Some(self.diag(DiagId::sema_enum_scoped_mismatch, loc).arg(if prev_scoped { "1" } else { "0" }))
+        } else if pe.is_fixed() && fixed.is_none() {
+            Some(self.diag(DiagId::sema_enum_fixed_redecl_unfixed, loc))
+        } else if !pe.is_fixed() && fixed.is_some() {
+            Some(self.diag(DiagId::sema_enum_unfixed_redecl_fixed, loc))
+        } else {
+            match (pe.int_type, fixed) {
+                (Some(a), Some(b)) if !self.ast.types.same_type(a, b) => Some(
+                    self.diag(DiagId::sema_enum_redeclare_type_mismatch, loc).arg(self.ty_arg(b)).arg(self.ty_arg(a)),
+                ),
+                _ => None,
+            }
+        };
+        if let Some(m) = msg {
+            let m = self.note_prev(m, p, false);
+            self.emit(m);
+        }
+    }
+
+    /// `{` of a class definition: the class becomes the current context.
+    pub fn act_on_start_record_definition(&mut self, r: DeclId) {
+        let _ = self.builder().begin_record_definition(r);
+        self.defining.push(r);
+        self.scopes.push(Scope::new(ScopeKind::Record, Some(r)));
+        self.ctx = r;
+    }
+
+    /// `}` of a class definition ([class.mem]/8: complete from here).
+    pub fn act_on_finish_record_definition(&mut self, r: DeclId) {
+        self.scopes.pop();
+        self.defining.retain(|&d| d != r);
+        self.ctx = self.ast.decls.lexical_ctx(r).or_else(|| self.ast.decls.get(r).ctx()).unwrap_or(self.ast.tu);
+        let mut bits = DefinitionBits::COMPLETE
+            .with(DefinitionBits::AGGREGATE)
+            .with(DefinitionBits::STANDARD_LAYOUT)
+            .with(DefinitionBits::TRIVIALLY_COPYABLE)
+            .with(DefinitionBits::TRIVIAL_DEFAULT_CTOR)
+            .with(DefinitionBits::TRIVIAL_COPY_CTOR)
+            .with(DefinitionBits::TRIVIAL_MOVE_CTOR)
+            .with(DefinitionBits::TRIVIAL_COPY_ASSIGN)
+            .with(DefinitionBits::TRIVIAL_MOVE_ASSIGN)
+            .with(DefinitionBits::TRIVIAL_DTOR)
+            .with(DefinitionBits::LITERAL)
+            .with(DefinitionBits::STRUCTURAL);
+        let fields: Vec<DeclId> = self.ast.decls.members(r).collect();
+        let mut any_named = false;
+        for f in fields {
+            if self.ast.decls.get(f).kind() != DeclKind::Field {
+                continue;
+            }
+            let fd = self.ast.decls.field(f).copied();
+            if fd.is_some_and(|x| x.flags & FieldData::MUTABLE != 0) {
+                bits = bits.with(DefinitionBits::HAS_MUTABLE_FIELDS);
+            }
+            if !(fd.is_some_and(|x| x.bit_width.is_some()) && self.ast.decls.get(f).name().is_empty()) {
+                any_named = true;
+            }
+        }
+        if !any_named {
+            bits = bits.with(DefinitionBits::EMPTY);
+        }
+        if self.ast.decls.record(r).is_some_and(|x| x.tag == TagKind::Union) {
+            bits = bits.with(DefinitionBits::HAS_VARIANT_MEMBERS);
+        }
+        self.builder().complete_record_definition(r, bits);
+    }
+
+    /// `{` of an enumeration definition.
+    pub fn act_on_start_enum_definition(&mut self, e: DeclId) {
+        let _ = self.builder().begin_enum_definition(e);
+        let fixed = self.ast.decls.enumeration(e).and_then(|x| if x.is_fixed() { x.int_type } else { None });
+        self.enums.push(EnumBuild { decl: e, fixed, last: None, enumerators: Vec::new() });
+        self.scopes.push(Scope::new(ScopeKind::Enum, Some(e)));
+        self.ctx = e;
+    }
+
+    /// An enumerator-definition ([dcl.enum]/2,5).
+    pub fn act_on_enumerator(&mut self, name: Symbol, loc: Loc, init: Option<ExprId>, attrs: &[AttrId]) -> DeclId {
+        let Some(build) = self.enums.last().cloned() else {
+            return self.ast.tu;
+        };
+        let e = build.decl;
+        let scoped = self.is_scoped_enum(e);
+        // Redeclaration ([basic.scope.scope]).
+        let clash = if scoped {
+            self.lookup_in(e, name, LookupKind::Ordinary).decls.first().copied()
+        } else {
+            self.lookup_current_scope_outside_enum(name)
+        };
+        if let Some(p) = clash {
+            let msg = self.diag(DiagId::sema_redefinition, loc).arg(sym_str(self, name));
+            let msg = self.note_prev(msg, p, true);
+            self.emit(msg);
+        }
+        let mut value: Option<i128> = None;
+        let mut init_e = None;
+        if let Some(ie) = init {
+            let ity = self.ast.exprs.get(ie).ty();
+            let t = &self.ast.types;
+            let ok_ty = t.is_integral(ity) || t.as_enum(ity).is_some_and(|en| !self.is_scoped_enum(en) || en == e);
+            if !ok_ty && !self.is_error_type(ity) {
+                self.error(DiagId::sema_expr_not_ice, self.ast.exprs.get(ie).loc());
+            } else if !self.is_error_type(ity) {
+                let mut c = conv::lvalue_to_rvalue(self, ie);
+                let cty = match build.fixed {
+                    Some(f) => {
+                        c = conv::implicit_convert(self, c, f, ConvCtx::Initialization).unwrap_or(c);
+                        f
+                    }
+                    None => {
+                        let cty = self.ast.exprs.get(c).ty();
+                        if self.ast.types.as_enum(cty).is_some() { QualType::INT } else { cty }
+                    }
+                };
+                let c = self.act_on_full_expr(c);
+                match self.evaluate(c) {
+                    Ok(ConstVal::Int(v)) => {
+                        let v = self.check_enumerator_range(v, build.fixed, ie);
+                        value = Some(v);
+                        let cv = self.int_const(cty, v);
+                        init_e = Some(self.builder().constant_expr(c, Some(cv)));
+                    }
+                    _ => {
+                        let msg = self.diag(DiagId::sema_expr_not_ice, self.ast.exprs.get(ie).loc());
+                        self.emit(msg);
+                    }
+                }
+            }
+        }
+        let v = value.unwrap_or_else(|| match build.last {
+            Some(l) => {
+                let next = l + 1;
+                if let Some(f) = build.fixed {
+                    if !self.fits(f, next) {
+                        let msg = self
+                            .diag(DiagId::sema_enumerator_too_large, loc)
+                            .arg(next.to_string())
+                            .arg(self.ty_arg(f));
+                        self.emit(msg);
+                    }
+                }
+                next
+            }
+            None => 0,
+        });
+        let h = DeclHead::new(e, DeclName::ident(name), loc);
+        let d = self.builder().enumerator(h, init_e);
+        let vty = build.fixed.unwrap_or(if self.fits(QualType::INT, v) { QualType::INT } else { QualType::LONG });
+        let cv = self.int_const(vty, v);
+        let _ = self.ast.decls.set_enumerator_value(d, cv);
+        if !attrs.is_empty() {
+            let _ = self.builder().attach_attrs(d, attrs);
+        }
+        if !scoped && self.in_local_scope() {
+            self.push_local(name, d);
+        }
+        if let Some(b) = self.enums.last_mut() {
+            b.last = Some(v);
+            b.enumerators.push((d, v));
+        }
+        d
+    }
+
+    fn lookup_current_scope_outside_enum(&self, name: Symbol) -> Option<DeclId> {
+        let s = self
+            .scopes
+            .iter()
+            .rev()
+            .find(|s| !matches!(s.kind, ScopeKind::LinkageSpec | ScopeKind::Enum))?;
+        if s.is_local() {
+            return s.locals.iter().rev().find(|e| e.0 == name && e.2 == crate::scope::Ns::Ordinary).map(|e| e.1);
+        }
+        let ent = s.entity?;
+        self.ast
+            .lookup_local(ent, DeclName::ident(name))
+            .iter()
+            .find(|&d| !is_tag_kind(self.ast.decls.get(d).kind()))
+    }
+
+    fn fits(&self, ty: QualType, v: i128) -> bool {
+        constfold::int_info(&self.ast, ty).is_none_or(|(bits, signed)| constfold::fits(v, bits, signed))
+    }
+
+    fn check_enumerator_range(&self, v: i128, fixed: Option<QualType>, e: ExprId) -> i128 {
+        if let Some(f) = fixed {
+            if !self.fits(f, v) {
+                let msg = self
+                    .diag(DiagId::sema_enumerator_too_large, self.ast.exprs.get(e).loc())
+                    .arg(v.to_string())
+                    .arg(self.ty_arg(f));
+                self.emit(msg);
+            }
+        }
+        v
+    }
+
+    /// `}` of an enumeration: the underlying type of an enumeration
+    /// without a fixed one ([dcl.enum]/7).
+    pub fn act_on_finish_enum_definition(&mut self, e: DeclId) {
+        self.scopes.pop();
+        let Some(build) = self.enums.pop() else { return };
+        self.ctx = self.ast.decls.lexical_ctx(e).or_else(|| self.ast.decls.get(e).ctx()).unwrap_or(self.ast.tu);
+        let computed = if build.fixed.is_some() {
+            None
+        } else {
+            let min = build.enumerators.iter().map(|x| x.1).min().unwrap_or(0);
+            let max = build.enumerators.iter().map(|x| x.1).max().unwrap_or(0);
+            let cands = [
+                QualType::INT,
+                QualType::UINT,
+                QualType::LONG,
+                QualType::ULONG,
+                QualType::LONGLONG,
+                QualType::ULONGLONG,
+            ];
+            let t = cands
+                .into_iter()
+                .find(|&t| self.fits(t, min) && self.fits(t, max))
+                .unwrap_or(QualType::ULONGLONG);
+            Some((t, t))
+        };
+        let _ = self.builder().complete_enum_definition(e, computed);
+    }
+
+    // -- namespaces and linkage --------------------------------------------------
+
+    /// `namespace N {` ([namespace.def]); `None` for an unnamed namespace.
+    pub fn act_on_start_namespace(&mut self, name: Option<(Symbol, Loc)>, inline: bool, loc: Loc) -> DeclId {
+        let mut prev = None;
+        if let Some((n, nloc)) = name {
+            for p in self.lookup_current_scope(n) {
+                if self.ast.decls.get(p).kind() == DeclKind::Namespace {
+                    prev = Some(p);
+                } else {
+                    let msg = self.diag(DiagId::sema_redefinition_different_kind, nloc).arg(sym_str(self, n));
+                    let msg = self.note_prev(msg, p, true);
+                    self.emit(msg);
+                }
+            }
+        }
+        let h = DeclHead::new(self.ctx, name.map_or(DeclName::EMPTY, |n| DeclName::ident(n.0)), name.map_or(loc, |n| n.1));
+        let ns = self.builder().namespace(h, inline, prev);
+        self.scopes.push(Scope::new(ScopeKind::Namespace, Some(ns)));
+        self.ctx = ns;
+        ns
+    }
+
+    /// `}` of a namespace.
+    pub fn act_on_finish_namespace(&mut self, ns: DeclId) {
+        self.scopes.pop();
+        self.ctx = self.ast.decls.get(ns).ctx().unwrap_or(self.ast.tu);
+    }
+
+    /// `extern "C"` / `extern "C++"` ([dcl.link]); `lang` is the string
+    /// literal's contents.
+    pub fn act_on_start_linkage_spec(&mut self, lang: &str, loc: Loc, lang_loc: Loc) -> DeclId {
+        let l = match lang {
+            "C" => LinkageLang::C,
+            "C++" => LinkageLang::Cxx,
+            _ => {
+                let msg = self.diag(DiagId::parse_unsupported, lang_loc).arg(format!("language linkage \"{lang}\""));
+                self.emit(msg);
+                LinkageLang::Cxx
+            }
+        };
+        let ls = self.builder().linkage_spec(self.ctx, l, loc);
+        self.scopes.push(Scope::new(ScopeKind::LinkageSpec, Some(ls)));
+        self.ctx = ls;
+        ls
+    }
+
+    /// The end of a linkage specification.
+    pub fn act_on_finish_linkage_spec(&mut self, ls: DeclId) {
+        self.scopes.pop();
+        self.ctx = self.ast.decls.get(ls).ctx().unwrap_or(self.ast.tu);
+    }
+
+    /// `using namespace N;` ([namespace.udir]). The nominated namespace is
+    /// stored in the payload word.
+    pub fn act_on_using_directive(&mut self, ns: DeclId, loc: Loc) -> DeclId {
+        let nominated = self.ast.first(ns);
+        let d = self.ast.decls.push(
+            kiln_ast::decl::NewDecl {
+                kind: DeclKind::UsingDirective,
+                flags: DeclFlags::empty(),
+                misc: kiln_ast::decl::DeclMisc::default(),
+                name: DeclName::EMPTY,
+                ctx: Some(self.ctx),
+                loc,
+                ty: None,
+            },
+            kiln_ast::decl::Payload::None(nominated.raw()),
+        );
+        if self.ast.decls.member_list(self.ctx).is_some() {
+            self.ast.decls.append_member(self.ctx, d);
+        }
+        if let Some(s) = self.scopes.iter_mut().rev().find(|s| s.kind != ScopeKind::LinkageSpec) {
+            s.using_dirs.push(nominated);
+        }
+        d
+    }
+
+    // -- static_assert and empty declarations ------------------------------------
+
+    /// `static_assert(cond, msg);` ([dcl.pre]/10).
+    pub fn act_on_static_assert(&mut self, cond: ExprId, msg: Option<ExprId>, loc: Loc) -> DeclId {
+        let c = match conv::contextually_convert_to_bool(self, cond) {
+            Ok(c) => c,
+            Err(err) => {
+                self.emit_conv_error(err, self.ast.exprs.get(cond).loc());
+                cond
+            }
+        };
+        let c = self.act_on_full_expr(c);
+        let cloc = self.ast.exprs.get(cond).loc();
+        if !self.has_errors_in(c) {
+            match self.evaluate(c) {
+                Ok(v) if v.truthy() => {}
+                Ok(_) => {
+                    let text = msg.and_then(|m| self.string_literal_text(m));
+                    let d = match text {
+                        Some(t) => self.diag(DiagId::sema_static_assert_failed_msg, cloc).arg(t),
+                        None => self.diag(DiagId::sema_static_assert_failed, cloc),
+                    };
+                    let d = self.explain_failed_comparison(d, c);
+                    self.emit(d);
+                }
+                Err(nc) => {
+                    let d = self.diag(DiagId::sema_static_assert_not_ice, cloc);
+                    let d = self.with_not_constant_notes(d, nc);
+                    self.emit(d);
+                }
+            }
+        }
+        self.builder().static_assert(self.ctx, loc, c, msg)
+    }
+
+    /// The contents of a narrow string literal, for messages.
+    fn string_literal_text(&self, e: ExprId) -> Option<String> {
+        let id = self.ast.exprs.string_literal(e)?;
+        let bytes = self.ast.strings.bytes(id);
+        Some(String::from_utf8_lossy(bytes).into_owned())
+    }
+
+    /// clang's "expression evaluates to 'L op R'" note for a failed
+    /// `static_assert` of a comparison.
+    fn explain_failed_comparison(&mut self, d: kiln_diag::Diag, c: ExprId) -> kiln_diag::Diag {
+        let Some((op, l, r)) = self.comparison_parts(c) else { return d };
+        let (Ok(lv), Ok(rv)) = (self.evaluate(l), self.evaluate(r)) else { return d };
+        let show = |v: ConstVal| match v {
+            ConstVal::Int(i) => i.to_string(),
+            ConstVal::Float(f) => format!("{f}"),
+            ConstVal::Null => "nullptr".to_owned(),
+        };
+        if Self::is_literal_expr(&self.ast, l) && Self::is_literal_expr(&self.ast, r) {
+            return d;
+        }
+        let note = self.diag(DiagId::note_expr_evaluates_to, self.ast.exprs.get(c).loc()).arg(show(lv)).arg(op).arg(show(rv));
+        d.with_note(note)
+    }
+
+    /// `;` or a declaration with no declarators (`struct S;`, `int;`).
+    pub fn act_on_decl_spec_only(&mut self, ds: &DeclSpec) {
+        if ds.tag.is_some() {
+            if ds.tag_declares {
+                return;
+            }
+            return;
+        }
+        if !ds.invalid {
+            self.error(DiagId::sema_no_declarators, ds.loc);
+        }
+    }
+
+    // -- name classification -----------------------------------------------------
+
+    /// What an identifier names here (for parser decisions,
+    /// [basic.lookup.unqual]); `qualifier` is the context named by a
+    /// preceding nested-name-specifier.
+    pub fn classify_name(&self, name: Symbol, qualifier: Option<DeclId>) -> NameClass {
+        let found = match qualifier {
+            Some(q) => self.lookup_qualified(q, name, LookupKind::Ordinary),
+            None => self.lookup_name(name, LookupKind::Ordinary),
+        };
+        let Some(&d) = found.decls.first() else { return NameClass::Undeclared };
+        let k = self.ast.decls.get(d).kind();
+        if k == DeclKind::Namespace {
+            return NameClass::Namespace(d);
+        }
+        if is_type_kind(k) {
+            let ty = if matches!(k, DeclKind::Typedef | DeclKind::TypeAlias) {
+                self.ast.decls.get(d).ty().unwrap_or(QualType::ERROR)
+            } else {
+                self.tag_type(d)
+            };
+            return NameClass::Type(ty, d);
+        }
+        NameClass::Value(d)
+    }
+
+    /// The context a nested-name-specifier component `name::` names
+    /// ([basic.lookup.qual]), diagnosing failure.
+    pub fn act_on_nested_name(&mut self, prefix: Option<DeclId>, name: Symbol, loc: Loc) -> Option<DeclId> {
+        let found = match prefix {
+            Some(q) => self.lookup_qualified(q, name, LookupKind::Nested),
+            None => self.lookup_name(name, LookupKind::Nested),
+        };
+        let Some(&d) = found.decls.first() else {
+            let msg = match prefix {
+                Some(q) => self.diag(DiagId::sema_no_member, loc).arg(sym_str(self, name)).arg(self.qualifier_desc(q)),
+                None => self.diag(DiagId::sema_undeclared_var_use, loc).arg(sym_str(self, name)),
+            };
+            self.emit(msg);
+            return None;
+        };
+        match self.ast.decls.get(d).kind() {
+            DeclKind::Namespace => Some(self.ast.first(d)),
+            DeclKind::CXXRecord | DeclKind::Enum => {
+                self.mark_type_referenced(d);
+                Some(self.ast.definition(d).unwrap_or(d))
+            }
+            DeclKind::Typedef | DeclKind::TypeAlias => {
+                self.mark_type_referenced(d);
+                let ty = self.ast.decls.get(d).ty().unwrap_or(QualType::ERROR);
+                let r = self.ast.types.as_record(ty).or_else(|| self.ast.types.as_enum(ty));
+                if r.is_none() {
+                    let msg = self.diag(DiagId::sema_not_a_type, loc).arg(sym_str(self, name));
+                    self.emit(msg);
+                }
+                r.map(|r| self.ast.definition(r).unwrap_or(r))
+            }
+            _ => None,
+        }
+    }
+
+    /// How a qualifier context is named in "no member named 'x' in ...".
+    pub(crate) fn qualifier_desc(&self, q: DeclId) -> String {
+        match self.ast.decls.get(q).kind() {
+            DeclKind::Namespace => format!("namespace '{}'", self.decl_name(q)),
+            DeclKind::TranslationUnit => "the global namespace".to_owned(),
+            _ => {
+                let t = self.tag_type(q);
+                self.ty_arg(t)
+            }
+        }
+    }
+
+    // -- attributes ----------------------------------------------------------------
+
+    /// One attribute ([dcl.attr]); `scope` is `gnu` for `gnu::x`, and
+    /// `GNU` syntax is `__attribute__((x))`. Returns `None` for ignored
+    /// attributes. Encoding of arguments: spec/abi.md §9 Q1, spec/sema.md
+    /// §7.
+    pub fn act_on_attribute(
+        &mut self,
+        syntax: AttrSyntax,
+        scope: Option<Symbol>,
+        name: Symbol,
+        args: &[AttrArg],
+        loc: Loc,
+    ) -> Option<AttrId> {
+        let raw = sym_str(self, name);
+        let scope_s = scope.map(|s| sym_str(self, s));
+        let n = raw.trim_start_matches("__").trim_end_matches("__").to_owned();
+        let gnu = syntax == AttrSyntax::Gnu || scope_s.as_deref() == Some("gnu");
+        let std = scope_s.is_none() && syntax != AttrSyntax::Gnu;
+        if scope_s.as_deref().is_some_and(|s| s != "gnu") {
+            let full = format!("{}::{raw}", scope_s.unwrap_or_default());
+            let msg = self.diag(DiagId::parse_unknown_attribute, loc).arg(full);
+            self.emit(msg);
+            return None;
+        }
+        let kind = match (n.as_str(), std, gnu) {
+            ("nodiscard", true, _) | ("warn_unused_result", _, true) => AttrKind::NODISCARD,
+            ("maybe_unused", true, _) => AttrKind::MAYBE_UNUSED,
+            ("unused", _, true) => AttrKind::UNUSED,
+            ("deprecated", _, _) => AttrKind::DEPRECATED,
+            ("noreturn", _, _) => AttrKind::NORETURN,
+            ("fallthrough", _, _) => AttrKind::FALLTHROUGH,
+            ("likely", true, _) => AttrKind::LIKELY,
+            ("unlikely", true, _) => AttrKind::UNLIKELY,
+            ("no_unique_address", true, _) => AttrKind::NO_UNIQUE_ADDRESS,
+            ("aligned", _, true) | ("alignas", _, _) => AttrKind::ALIGNED,
+            ("packed", _, true) => AttrKind::PACKED,
+            ("used", _, true) => AttrKind::USED,
+            ("noinline", _, true) => AttrKind::NOINLINE,
+            ("always_inline", _, true) => AttrKind::ALWAYS_INLINE,
+            ("weak", _, true) => AttrKind::WEAK,
+            ("const", _, true) => AttrKind::CONST,
+            ("pure", _, true) => AttrKind::PURE,
+            ("cold", _, true) => AttrKind::COLD,
+            ("visibility" | "section" | "format", _, true) => {
+                let msg = self.diag(DiagId::parse_attribute_ignored, loc).arg(raw);
+                self.emit(msg);
+                return None;
+            }
+            _ => {
+                let full = match &scope_s {
+                    Some(s) => format!("{s}::{raw}"),
+                    None => raw,
+                };
+                let msg = self.diag(DiagId::parse_unknown_attribute, loc).arg(full);
+                self.emit(msg);
+                return None;
+            }
+        };
+        let takes = match kind {
+            AttrKind::NODISCARD | AttrKind::DEPRECATED => 1,
+            AttrKind::ALIGNED => usize::from(syntax != AttrSyntax::Keyword) + usize::from(syntax == AttrSyntax::Keyword),
+            _ => 0,
+        };
+        if args.len() > takes {
+            let msg = self
+                .diag(DiagId::parse_attribute_wrong_arg_count, loc)
+                .arg(n.clone())
+                .arg(if takes == 0 { "0" } else { "1" });
+            self.emit(msg);
+            return None;
+        }
+        let (mut a, mut b) = (0u32, 0u32);
+        match (kind, args.first()) {
+            (AttrKind::ALIGNED, Some(AttrArg::Expr(e))) => {
+                let e = self.check_alignment_expr(*e)?;
+                a = e.raw();
+            }
+            (AttrKind::ALIGNED, Some(AttrArg::Type(t))) => b = t.to_raw(),
+            (AttrKind::NODISCARD | AttrKind::DEPRECATED, Some(AttrArg::Expr(e))) => {
+                if self.ast.exprs.string_literal(*e).is_none() {
+                    let msg = self.diag(DiagId::parse_attribute_requires_string, self.ast.exprs.get(*e).loc()).arg(n);
+                    self.emit(msg);
+                    return None;
+                }
+                a = e.raw();
+            }
+            (_, Some(AttrArg::Type(_))) => {
+                self.error(DiagId::parse_expected_expression, loc);
+                return None;
+            }
+            _ => {}
+        }
+        if kind == AttrKind::ALIGNED && args.is_empty() && syntax == AttrSyntax::Keyword {
+            self.error(DiagId::parse_expected_expression, loc);
+            return None;
+        }
+        let node = AttrNode { kind, syntax, flags: 0, loc, a, b };
+        Some(self.ast.attrs.push(node))
+    }
+
+    /// An alignment argument ([dcl.align]/2): an integral constant
+    /// expression whose value is a power of two (0 is ignored).
+    fn check_alignment_expr(&mut self, e: ExprId) -> Option<ExprId> {
+        let loc = self.ast.exprs.get(e).loc();
+        let c = conv::lvalue_to_rvalue(self, e);
+        let c = self.act_on_full_expr(c);
+        match self.evaluate(c) {
+            Ok(ConstVal::Int(v)) => {
+                if v != 0 && (v < 0 || (v & (v - 1)) != 0) {
+                    self.error(DiagId::sema_alignment_not_power_of_two, loc);
+                    return None;
+                }
+                if v > 1 << 32 {
+                    let msg = self.diag(DiagId::sema_alignment_too_big, loc).arg((1u64 << 32).to_string());
+                    self.emit(msg);
+                    return None;
+                }
+                let cv = self.int_const(self.ast.exprs.get(c).ty(), v);
+                Some(self.builder().constant_expr(c, Some(cv)))
+            }
+            _ => {
+                self.error(DiagId::sema_expr_not_ice, loc);
+                None
+            }
+        }
+    }
+
+    /// Checks attributes against the declaration they appertain to.
+    fn check_decl_attrs(&mut self, d: DeclId, attrs: &[AttrId]) {
+        let kind = self.ast.decls.get(d).kind();
+        for &a in attrs {
+            let node = *self.ast.attrs.get(a);
+            let bad = match node.kind {
+                AttrKind::NODISCARD | AttrKind::NORETURN => {
+                    (kind != DeclKind::Function).then_some("functions, classes, or enumerations")
+                }
+                AttrKind::ALIGNED => {
+                    if matches!(kind, DeclKind::Function | DeclKind::Typedef | DeclKind::TypeAlias)
+                        && node.syntax == AttrSyntax::Keyword
+                    {
+                        Some("variables, data members and tag types")
+                    } else if node.b != 0 || node.a != 0 {
+                        self.check_underaligned(d, node);
+                        None
+                    } else {
+                        None
+                    }
+                }
+                AttrKind::PACKED => {
+                    (kind != DeclKind::Field && kind != DeclKind::CXXRecord).then_some("structs, unions, classes and fields")
+                }
+                _ => None,
+            };
+            if let Some(what) = bad {
+                let name = match node.kind {
+                    AttrKind::NODISCARD => "'nodiscard'",
+                    AttrKind::NORETURN => "'noreturn'",
+                    AttrKind::PACKED => "'packed'",
+                    _ => "'alignas'",
+                };
+                let msg = self.diag(DiagId::sema_attribute_wrong_decl_type, node.loc).arg(name).arg(what);
+                self.emit(msg);
+            }
+        }
+    }
+
+    /// `alignas` may not weaken alignment ([dcl.align]/5).
+    fn check_underaligned(&mut self, d: DeclId, node: AttrNode) {
+        if node.syntax != AttrSyntax::Keyword {
+            return;
+        }
+        let Some(ty) = self.ast.decls.get(d).ty() else { return };
+        let Some((_, natural)) = target::size_align(&self.ast, ty, &self.target) else { return };
+        let requested = if node.b != 0 {
+            QualType::from_raw(node.b).and_then(|t| target::size_align(&self.ast, t, &self.target)).map(|x| x.1)
+        } else {
+            ExprId::from_raw(node.a).and_then(|e| match self.evaluate(e) {
+                Ok(ConstVal::Int(v)) => u64::try_from(v).ok(),
+                _ => None,
+            })
+        };
+        if let Some(r) = requested.filter(|&r| r != 0 && r < natural) {
+            let _ = r;
+            let msg = self.diag(DiagId::sema_alignas_underaligned, node.loc).arg(natural.to_string()).arg(self.ty_arg(ty));
+            self.emit(msg);
+        }
+    }
+
+    /// `#pragma pack` and other unsupported pragmas.
+    pub fn act_on_unsupported_pragma(&self, what: &str, loc: Loc) {
+        self.unsupported(&format!("'#pragma {what}'"), loc);
+    }
+}
+
+#[allow(dead_code)]
+fn unused_imports_guard(_: NonOdrUse, _: InitStyle) {}

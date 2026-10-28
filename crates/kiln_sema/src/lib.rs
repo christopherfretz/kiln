@@ -14,19 +14,23 @@ pub mod conv;
 pub mod decl;
 pub mod declspec;
 pub mod expr;
+pub mod init;
 pub mod literal;
 pub mod lookup;
 pub mod scope;
 pub mod stmt;
 pub mod target;
 
-use kiln_ast::types::{PrintOptions, TargetTypes, aka, print_type};
-use kiln_ast::{Ast, AstBuilder, DeclId, QualType};
+use kiln_abi::Target;
+use kiln_ast::types::{PrintOptions, aka, print_type};
+use kiln_ast::{Ast, AstBuilder, DeclId, ExprId, QualType};
 use kiln_diag::{Diag, DiagEngine, DiagId};
 use kiln_source::{Loc, Span};
 
 pub use constfold::{ConstEvaluator, ConstVal, NotConstant};
-pub use declspec::{Chunk, DeclSpec, Declarator, DeclaratorContext, ParamInfo};
+pub use declspec::{BaseSpec, Chunk, DeclSpec, Declarator, DeclaratorContext, ParamInfo, Sign, StorageSpec, Width};
+pub use decl::{NameClass, TagUse};
+pub use init::{Designator, InitItem, InitList, InitValue, Initializer};
 pub use scope::ScopeKind;
 
 /// The semantic-analysis state of one translation unit (spec/sema.md §1).
@@ -40,20 +44,29 @@ pub struct Sema<'a, 'sm> {
     pub ast: Ast,
     /// Where diagnostics go.
     pub diags: &'a DiagEngine<'sm>,
-    /// The target's builtin type properties.
-    pub target: TargetTypes,
+    /// The target (layout for `sizeof`/`alignof`, spec/abi.md).
+    pub target: Target,
     pub(crate) scopes: Vec<scope::Scope>,
     /// The current semantic declaration context.
     pub(crate) ctx: DeclId,
     pub(crate) func: Option<stmt::FnState>,
     /// Depth of unevaluated operands (`sizeof`, `alignof`).
     pub(crate) unevaluated: u32,
+    /// `DeclRefExpr`s of the current full-expression that are potential
+    /// odr-uses ([basic.def.odr]/4): resolved at the end of the
+    /// full-expression (spec/sema.md §5.2).
+    pub(crate) pending_odr: Vec<ExprId>,
+    /// Classes whose definitions are being processed (incomplete until
+    /// their closing brace).
+    pub(crate) defining: Vec<DeclId>,
+    /// Enumerations whose definitions are being processed.
+    pub(crate) enums: Vec<decl::EnumBuild>,
 }
 
 impl<'a, 'sm> Sema<'a, 'sm> {
     /// A `Sema` over `ast` (whose translation unit becomes the outermost
     /// scope) reporting to `diags`.
-    pub fn new(ast: Ast, diags: &'a DiagEngine<'sm>, target: TargetTypes) -> Self {
+    pub fn new(ast: Ast, diags: &'a DiagEngine<'sm>, target: Target) -> Self {
         let tu = ast.tu;
         Sema {
             ast,
@@ -63,6 +76,9 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             ctx: tu,
             func: None,
             unevaluated: 0,
+            pending_odr: Vec::new(),
+            defining: Vec::new(),
+            enums: Vec::new(),
         }
     }
 
@@ -76,8 +92,8 @@ impl<'a, 'sm> Sema<'a, 'sm> {
         self.ast.builder()
     }
 
-    /// The target's builtin type properties.
-    pub fn target(&self) -> &TargetTypes {
+    /// The target.
+    pub fn target(&self) -> &Target {
         &self.target
     }
 

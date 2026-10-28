@@ -97,6 +97,8 @@ pub enum BaseSpec {
     Double,
     /// `__float128`.
     Float128,
+    /// `auto` (a placeholder deduced from the initializer, [dcl.spec.auto]).
+    Auto,
     /// A type-name, class/enum specifier or elaborated-type-specifier:
     /// the type is in [`DeclSpec::named`].
     Named,
@@ -119,6 +121,7 @@ impl BaseSpec {
             BaseSpec::Float => "float",
             BaseSpec::Double => "double",
             BaseSpec::Float128 => "__float128",
+            BaseSpec::Auto => "auto",
         }
     }
 }
@@ -438,6 +441,9 @@ pub struct Declarator {
     pub loc: Loc,
     /// An error was already reported.
     pub invalid: bool,
+    /// The initializer syntax that follows (the parser peeks at `=`, `(`
+    /// or `{` before the declaration is created; [dcl.init]/1).
+    pub init_style: Option<kiln_ast::decl::InitStyle>,
 }
 
 impl Declarator {
@@ -452,6 +458,7 @@ impl Declarator {
             attrs: Vec::new(),
             loc,
             invalid: false,
+            init_style: None,
         }
     }
 
