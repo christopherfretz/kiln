@@ -20,4 +20,5 @@ say which in the PR. A spec change without tests is incomplete.
 | [types.md](types.md) | kiln_ast (`TypeContext`) | design |
 | [ast.md](ast.md) | kiln_ast | design |
 | [ast-dump.md](ast-dump.md) | kiln_ast (dump), xtask (`clang-ast`) | design |
-| parse, sema, abi, llvm, codegen, driver | | not started (M2) |
+| [abi.md](abi.md) | kiln_abi | implemented (M2: no bases) |
+| parse, sema, llvm, codegen, driver | | not started (M2) |

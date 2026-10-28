@@ -41,7 +41,7 @@ Format per `docs/AGENTS.md`. Ids are stable; status moves between
 | WP-047 | (merged into WP-046) | — |
 | WP-048 | H parser M2 (decls, declarators, exprs, stmts → sema actions) | in-progress |
 | WP-049 | I sema conversions (implicit casts, arithmetic conversions, literal typing) | in-progress |
-| WP-050 | J abi layout (`TargetTypes`, `record_layout` vs clang `-fdump-record-layouts`) | in-progress |
+| WP-050 | J abi layout (targets, Itanium record layout w/ bit-fields/packed/aligned/no_unique_address, clang-exact on 640 random records per run) | done (2026-10-28). Open: `#pragma pack` needs sema state; bases/vptr are M3 (spec/abi.md §8) | |
 | WP-051 | K Oven M2: KBC compiler + VM + abstract memory for the C-ish subset, tests via AstBuilder now and parsed sources when H lands | in-progress |
 | WP-053 | `kiln_llvm`: in-memory LLVM IR model (types, globals, functions, blocks, instructions, attributes, metadata) + textual printer validated by `llvm-as`/`opt -verify` round trips | in-progress |
 | WP-052 | L codegen M2 (AST → kiln_llvm; run tests vs clang) | todo (after H, J, WP-053) |
