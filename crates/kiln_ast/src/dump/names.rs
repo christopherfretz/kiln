@@ -680,14 +680,24 @@ impl TypeNames for AstNames<'_> {
                 | DeclKind::Enum
         );
         if tag && self.is_unnamed(decl) {
-            match self.ast.decls.typedef_for_anon(decl) {
-                Some(td) => {
-                    if scoped {
-                        self.append_scope(self.ast.decls.get(td).ctx(), 0, out);
-                    }
-                    self.write_name(td, out);
+            if let Some(td) = self.ast.decls.typedef_for_anon(decl) {
+                if scoped {
+                    self.append_scope(self.ast.decls.get(td).ctx(), 0, out);
                 }
-                None => self.write_unnamed_tag(decl, out),
+                self.write_name(td, out);
+            } else {
+                // An anonymous struct/union cannot be written, so its type
+                // only appears bare (the implicit member), which clang
+                // prints scoped.
+                let anonymous = self
+                    .ast
+                    .decls
+                    .record(decl)
+                    .is_some_and(|r| r.defn.contains(DefinitionBits::ANONYMOUS));
+                if scoped || anonymous {
+                    self.append_scope(n.ctx(), 0, out);
+                }
+                self.write_unnamed_tag(decl, out);
             }
             return;
         }

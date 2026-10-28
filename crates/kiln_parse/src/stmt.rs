@@ -37,13 +37,20 @@ impl Parser<'_, '_> {
         (self.s.act_on_compound(&stmts, lbrace, rbrace), rbrace)
     }
 
-    /// A sub-statement in its own block scope ([stmt.pre]/5); a dropped
-    /// statement becomes a null statement.
+    /// A sub-statement in its own block scope ([stmt.pre]/1); a dropped
+    /// statement becomes a null statement. A compound statement is that
+    /// block itself, so it sits directly in the control statement's scope
+    /// (clang's `InnerScope`, skipped before a `{`).
     fn parse_sub_statement(&mut self) -> StmtId {
         let loc = self.loc();
-        self.s.push_scope(ScopeKind::Block);
+        let implicit = !self.at(Punct::LBrace);
+        if implicit {
+            self.s.push_scope(ScopeKind::Block);
+        }
         let s = self.parse_statement();
-        self.s.pop_scope();
+        if implicit {
+            self.s.pop_scope();
+        }
         s.unwrap_or_else(|| self.s.act_on_null_stmt(loc))
     }
 
@@ -315,7 +322,7 @@ impl Parser<'_, '_> {
             self.skip_if_rest();
             return None;
         }
-        self.s.push_scope(ScopeKind::Block);
+        self.s.push_scope(ScopeKind::Control);
         let Some((init, (var, c))) = self.parse_paren_condition("if") else {
             self.s.pop_scope();
             self.skip_if_rest_after_cond();
@@ -367,7 +374,7 @@ impl Parser<'_, '_> {
     /// switch-statement ([stmt.switch]).
     fn parse_switch(&mut self) -> Option<StmtId> {
         let loc = self.bump().span.lo;
-        self.s.push_scope(ScopeKind::Block);
+        self.s.push_scope(ScopeKind::Control);
         let Some((init, (var, c))) = self.parse_paren_condition("switch") else {
             self.skip_sub_statement();
             self.s.pop_scope();
@@ -433,7 +440,7 @@ impl Parser<'_, '_> {
     /// while-statement ([stmt.while]).
     fn parse_while(&mut self) -> Option<StmtId> {
         let loc = self.bump().span.lo;
-        self.s.push_scope(ScopeKind::Block);
+        self.s.push_scope(ScopeKind::Control);
         let cond = self.parse_loop_condition("while", true);
         self.s.act_on_start_loop();
         let body = self.parse_sub_statement();
@@ -486,7 +493,7 @@ impl Parser<'_, '_> {
             self.skip_sub_statement();
             return None;
         }
-        self.s.push_scope(ScopeKind::Block);
+        self.s.push_scope(ScopeKind::Control);
         let r = self.parse_for_rest(open, loc);
         self.s.pop_scope();
         r

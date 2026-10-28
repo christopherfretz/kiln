@@ -64,7 +64,7 @@ impl Sema<'_, '_> {
         self.ast.symbols().intern(s)
     }
 
-    fn kind_of(&self, d: DeclId) -> DeclKind {
+    pub(crate) fn kind_of(&self, d: DeclId) -> DeclKind {
         self.ast.decls.get(d).kind()
     }
 
@@ -171,11 +171,22 @@ impl Sema<'_, '_> {
     /// checks, [basic.scope.declarative]): its locals, or the table of
     /// its entity.
     pub fn lookup_current_scope(&self, name: Symbol) -> Vec<DeclId> {
-        let Some(s) = self.scopes.iter().rev().find(|s| s.kind != ScopeKind::LinkageSpec) else {
+        let Some(i) = self.scopes.iter().rposition(|s| s.kind != ScopeKind::LinkageSpec) else {
             return Vec::new();
         };
+        let s = &self.scopes[i];
         if s.is_local() {
-            return s.locals.iter().filter(|e| e.0 == name).map(|e| e.1).collect();
+            let mut out: Vec<DeclId> = Vec::new();
+            // The outermost block of a control statement's sub-statement
+            // also conflicts with the condition's names ([basic.scope.block]/2).
+            if s.kind == ScopeKind::Block
+                && let Some(c) = i.checked_sub(1).map(|j| &self.scopes[j])
+                && c.kind == ScopeKind::Control
+            {
+                out.extend(c.locals.iter().filter(|e| e.0 == name).map(|e| e.1));
+            }
+            out.extend(s.locals.iter().filter(|e| e.0 == name).map(|e| e.1));
+            return out;
         }
         match s.entity {
             Some(e) => self.ast.lookup_local(e, DeclName::ident(name)).iter().collect(),

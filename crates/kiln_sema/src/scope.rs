@@ -25,8 +25,14 @@ pub enum ScopeKind {
     Prototype,
     /// A function body's outermost scope (holds the parameters).
     Function,
-    /// A compound statement or the scope of a control statement.
+    /// A compound statement, or the implicit block of a sub-statement
+    /// that is not one ([stmt.pre]/1).
     Block,
+    /// A selection or iteration statement's own scope, holding its
+    /// init-statement and condition declarations ([stmt.pre]/2). The
+    /// outermost block of its sub-statement may not redeclare them
+    /// ([basic.scope.block]/2).
+    Control,
 }
 
 /// One entry of the scope stack.
@@ -60,7 +66,10 @@ impl Scope {
 
     /// True for scopes whose names live in the scope itself.
     pub fn is_local(&self) -> bool {
-        matches!(self.kind, ScopeKind::Function | ScopeKind::Block | ScopeKind::Prototype)
+        matches!(
+            self.kind,
+            ScopeKind::Function | ScopeKind::Block | ScopeKind::Control | ScopeKind::Prototype
+        )
     }
 
     /// The most recent local `name` in name space `ns`.

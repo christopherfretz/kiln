@@ -291,12 +291,16 @@ diag_ids! {
     sema_redefinition_of_enumerator = Error (1) "redefinition of enumerator '{0}'";
     sema_redefinition_different_kind = Error (1) "redefinition of '{0}' as different kind of symbol";
     sema_redefinition_different_type = Error (3) "redefinition of '{0}' with a different type: {1} vs {2}";
+    sema_redeclaration_different_type = Error (3) "redeclaration of '{0}' with a different type: {1} vs {2}";
     sema_redefinition_different_typedef = Error (3) "{0:typedef|type alias} redefinition with different types ({1} vs {2})";
     sema_ovl_diff_return_type = Error (0) "functions that differ only in their return type cannot be overloaded";
     sema_overload_unsupported = Error (1) "overloading '{0}' is not supported yet";
     sema_static_non_static = Error (1) "static declaration of '{0}' follows non-static declaration";
     sema_param_redefinition = Error (1) "redefinition of parameter '{0}'";
     sema_duplicate_member = Error (1) "duplicate member '{0}'";
+    sema_anon_struct_not_member = Error (0) "anonymous structs and classes must be class members";
+    sema_anon_union_not_static = Error (0) "anonymous unions at namespace or global scope must be declared 'static'";
+    sema_anon_record_member_redecl = Error (2) "member of anonymous {0} redeclares '{1}'";
     sema_use_with_wrong_tag = Error (1) "use of '{0}' with tag type that does not match previous declaration";
     sema_enum_scoped_mismatch = Error (1) "enumeration previously declared with {0:non|}scoped underlying type";
     sema_enum_redeclare_type_mismatch = Error (2) "enumeration redeclared with different underlying type {0} (was {1})";
@@ -363,6 +367,8 @@ diag_ids! {
     note_constexpr_ltor_non_const_int = Note (1) "read of non-const variable '{0}' is not allowed in a constant expression";
     note_constexpr_ltor_non_constexpr = Note (1) "read of non-constexpr variable '{0}' is not allowed in a constant expression";
     note_constexpr_var_init_unknown = Note (1) "initializer of '{0}' is unknown";
+    note_constexpr_read_past_end = Note (0) "read of dereferenced one-past-the-end pointer is not allowed in a constant expression";
+    note_constexpr_array_index = Note (2) "cannot refer to element {0} of array of {1} elements in a constant expression";
     note_constexpr_function_param_value_unknown = Note (1) "function parameter '{0}' with unknown value cannot be used in a constant expression";
     note_declared_at = Note (0) "declared here";
     note_entity_declared_at = Note (1) "{0} declared here";

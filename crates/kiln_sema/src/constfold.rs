@@ -11,6 +11,7 @@
 
 use kiln_ast::consts::{FloatKind, Scalar};
 use kiln_ast::decl::DeclKind;
+use kiln_ast::decl::VarEvalState;
 use kiln_ast::expr::{BinaryOp, CastKind, ExprFlags, ExprKind, TraitKind, UnaryOp};
 use kiln_ast::stmt::StmtKind;
 use kiln_ast::types::{BuiltinType, TypeView};
@@ -397,12 +398,136 @@ impl Eval<'_> {
         }
     }
 
+    /// The constexpr aggregate value and byte offset the lvalue `e`
+    /// designates (spec/sema.md §8.3): a `constexpr` aggregate variable,
+    /// then `.field` and `[constant index]` steps into it. `None` if `e`
+    /// is not such a path (the caller evaluates it the ordinary way).
+    fn aggregate_place(&mut self, e: ExprId) -> Result<Option<(ConstValueId, u64)>, NotConstant> {
+        let n = *self.ast.exprs.get(e);
+        match n.kind() {
+            ExprKind::ParenExpr => self.aggregate_place(ExprId::new(n.a())),
+            ExprKind::DeclRefExpr => {
+                let d = DeclId::new(n.a());
+                if self.ast.decls.get(d).kind() != DeclKind::Var {
+                    return Ok(None);
+                }
+                let state = self.ast.decls.var(d).map(|v| v.eval.state());
+                Ok(match state {
+                    Some(VarEvalState::Value(id)) if self.ast.consts.aggregate(id).is_some() => {
+                        Some((id, 0))
+                    }
+                    _ => None,
+                })
+            }
+            ExprKind::MemberExpr if !n.has(ExprFlags::ARROW) => {
+                let m = DeclId::new(n.b());
+                let Some(field) = self.ast.decls.field(m) else { return Ok(None) };
+                if field.bit_width.is_some() {
+                    return Ok(None);
+                }
+                let Some((id, at)) = self.aggregate_place(ExprId::new(n.a()))? else {
+                    return Ok(None);
+                };
+                let Some(parent) = self.ast.decls.get(m).ctx() else { return Ok(None) };
+                let index = self
+                    .ast
+                    .members(parent)
+                    .filter(|&f| self.ast.decls.get(f).kind() == DeclKind::Field)
+                    .position(|f| f == m);
+                let layout = kiln_abi::record_layout(self.ast, parent, self.target);
+                Ok(index.and_then(|i| layout.fields.get(i)).map(|&bits| (id, at + bits / 8)))
+            }
+            ExprKind::ArraySubscriptExpr => {
+                let (mut base, mut idx) = (ExprId::new(n.a()), ExprId::new(n.b()));
+                if !self.ast.types.is_pointer(self.ast.exprs.get(base).ty()) {
+                    std::mem::swap(&mut base, &mut idx);
+                }
+                let b = *self.ast.exprs.get(base);
+                let decay = b.kind() == ExprKind::ImplicitCastExpr
+                    && CastKind::from_u8(b.aux()) == Some(CastKind::ArrayToPointerDecay);
+                if !decay {
+                    return Ok(None);
+                }
+                let array = ExprId::new(b.a());
+                let Some((id, at)) = self.aggregate_place(array)? else { return Ok(None) };
+                let TypeView::ConstantArray(a) =
+                    self.ast.types.canonical_view(self.ast.exprs.get(array).ty())
+                else {
+                    return Ok(None);
+                };
+                let i = self.eval(idx)?.as_int().ok_or_else(NotConstant::plain)?;
+                let Some(i) = u64::try_from(i).ok().filter(|&i| i < a.size) else {
+                    let loc = self.begin_loc(e);
+                    return Err(if u64::try_from(i) == Ok(a.size) {
+                        NotConstant::note(DiagId::note_constexpr_read_past_end, loc, vec![])
+                    } else {
+                        let args = vec![i.to_string(), a.size.to_string()];
+                        NotConstant::note(DiagId::note_constexpr_array_index, loc, args)
+                    });
+                };
+                let stride = kiln_abi::type_size_align(self.ast, a.elem, self.target).size;
+                Ok(Some((id, at + i * stride)))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    /// The first token of `e` (clang's `getBeginLoc`) for the shapes the
+    /// folder reports on.
+    fn begin_loc(&self, mut e: ExprId) -> Loc {
+        loop {
+            let n = self.ast.exprs.get(e);
+            match n.kind() {
+                ExprKind::ImplicitCastExpr
+                | ExprKind::ArraySubscriptExpr
+                | ExprKind::MemberExpr
+                | ExprKind::BinaryOperator => e = ExprId::new(n.a()),
+                _ => return n.loc(),
+            }
+        }
+    }
+
+    /// Reads the scalar of type `ty` at byte `at` of the aggregate `id`.
+    fn read_leaf(&self, id: ConstValueId, at: u64, ty: QualType) -> Result<ConstVal, NotConstant> {
+        let size = kiln_abi::type_size_align(self.ast, ty, self.target).size;
+        let start = usize::try_from(at).map_err(|_| NotConstant::plain())?;
+        let len = usize::try_from(size).map_err(|_| NotConstant::plain())?;
+        let bytes = self.ast.consts.bytes(id);
+        let raw = bytes.get(start..start + len).filter(|_| len <= 16);
+        let raw = raw.ok_or_else(NotConstant::plain)?;
+        let mut buf = [0u8; 16];
+        buf[..len].copy_from_slice(raw);
+        let word = u128::from_le_bytes(buf);
+        let t = &self.ast.types;
+        if t.is_pointer(ty) || t.builtin(ty) == Some(BuiltinType::NullPtr) {
+            let reloc = self.ast.consts.relocs(id).iter().find(|r| u64::from(r.at) == at);
+            return match reloc.and_then(|r| self.ast.consts.scalar(r.value)) {
+                Some(Scalar::Null { .. }) => Ok(ConstVal::Null),
+                _ => Err(NotConstant::plain()),
+            };
+        }
+        if let Some((w, signed)) = int_info(self.ast, ty) {
+            #[allow(clippy::cast_possible_wrap, reason = "two's-complement image bytes")]
+            return Ok(ConstVal::Int(wrap(word as i128, w, signed)));
+        }
+        #[allow(clippy::cast_possible_truncation, reason = "len is the float's width")]
+        match len {
+            4 => Ok(ConstVal::Float(f64::from(f32::from_bits(word as u32)))),
+            8 => Ok(ConstVal::Float(f64::from_bits(word as u64))),
+            _ => Err(NotConstant::plain()),
+        }
+    }
+
     fn cast(&mut self, e: ExprId) -> Result<ConstVal, NotConstant> {
         let n = *self.ast.exprs.get(e);
         let sub = ExprId::new(n.a());
         let ck = CastKind::from_u8(n.aux()).ok_or_else(NotConstant::plain)?;
         match ck {
-            CastKind::LValueToRValue | CastKind::NoOp => self.eval(sub),
+            CastKind::LValueToRValue => match self.aggregate_place(sub)? {
+                Some((id, at)) => self.read_leaf(id, at, n.ty()),
+                None => self.eval(sub),
+            },
+            CastKind::NoOp => self.eval(sub),
             CastKind::IntegralCast
             | CastKind::IntegralToBoolean
             | CastKind::IntegralToFloating

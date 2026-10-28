@@ -503,7 +503,9 @@ impl<'a, W: io::Write> Dumper<'a, W> {
             }
             StmtKind::DeclStmt => {
                 for d in lists.iter::<DeclId>(stmts.decl_stmt_decls(s)) {
-                    kids.push((Node::Decl(d), None));
+                    if self.opts.implicit || !names::is_implicit(self.ast, d) {
+                        kids.push((Node::Decl(d), None));
+                    }
                 }
             }
             StmtKind::ExprStmt => expr(Some(stmts.expr_stmt_expr(s)), kids),

@@ -487,7 +487,8 @@ impl Parser<'_, '_> {
                 scoped = EnumData::SCOPED | EnumData::SCOPED_STRUCT;
             }
         }
-        self.skip_attributes();
+        let mut attrs = Vec::new();
+        self.parse_attributes(&mut attrs);
         let mut qualifier = None;
         if self.at(Punct::ColonColon)
             || (self.ident().is_some() && self.peek_is(1, Punct::ColonColon))
@@ -532,6 +533,7 @@ impl Parser<'_, '_> {
             return;
         }
         let d = self.s.act_on_tag(keyword, name, qualifier, use_, scoped, fixed, kw_loc);
+        self.s.act_on_tag_attrs(d, &attrs);
         if use_ == TagUse::Definition {
             if keyword == TagKeyword::Enum {
                 self.parse_enum_body(d);
@@ -557,7 +559,8 @@ impl Parser<'_, '_> {
             self.parse_member_declaration();
         }
         self.expect_closing(Punct::RBrace, Punct::LBrace, open);
-        self.s.act_on_finish_record_definition(r);
+        let then_semi = self.at(Punct::Semi);
+        self.s.act_on_finish_record_definition(r, then_semi);
     }
 
     /// member-declaration ([class.mem]).
@@ -596,7 +599,7 @@ impl Parser<'_, '_> {
         }
         let ds = self.parse_decl_specifiers(DeclaratorContext::Member);
         if self.eat(Punct::Semi).is_some() {
-            self.s.act_on_decl_spec_only(&ds);
+            let _ = self.s.act_on_decl_spec_only(&ds);
             return;
         }
         if ds.is_empty() {
@@ -973,7 +976,7 @@ impl Parser<'_, '_> {
             decls.push(t);
         }
         if self.eat(Punct::Semi).is_some() {
-            self.s.act_on_decl_spec_only(&ds);
+            decls.extend(self.s.act_on_decl_spec_only(&ds));
             return decls;
         }
         if ds.is_empty() {

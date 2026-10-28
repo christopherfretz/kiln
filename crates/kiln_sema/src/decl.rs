@@ -787,10 +787,11 @@ impl Sema<'_, '_> {
             }
         }
         if let Some(n) = name
-            && !self.lookup_in(ctx, n, LookupKind::Ordinary).is_empty()
+            && let Some(&prev) = self.lookup_in(ctx, n, LookupKind::Ordinary).decls.first()
         {
+            let note = self.diag(DiagId::note_previous_declaration, self.ast.decls.get(prev).loc());
             let msg = self.diag(DiagId::sema_duplicate_member, d.name_loc()).arg(sym_str(self, n));
-            self.emit(msg);
+            self.emit(msg.with_note(note));
         }
         if !invalid && !self.is_complete(ty) && !self.ast.types.is_reference(ty) {
             let msg = self.diag(DiagId::sema_field_incomplete, d.name_loc()).arg(self.ty_arg(ty));
@@ -926,12 +927,22 @@ impl Sema<'_, '_> {
                         && t.element(pty).zip(t.element(ty)).is_some_and(|(a, b)| t.same_type(a, b))
                 };
                 if !compatible {
+                    // clang's `diagnoseVarDeclTypeMismatch`: "redefinition" if
+                    // the new declaration is a definition (judged before its
+                    // initializer is seen), and the note says whether the
+                    // old one was.
+                    let new_def = spec.storage() != VarStorage::Extern;
+                    let id = if new_def {
+                        DiagId::sema_redefinition_different_type
+                    } else {
+                        DiagId::sema_redeclaration_different_type
+                    };
                     let msg = self
-                        .diag(DiagId::sema_redefinition_different_type, d.name_loc())
+                        .diag(id, d.name_loc())
                         .arg(sym_str(self, name))
                         .arg(self.ty_arg(ty))
                         .arg(self.ty_arg(pty));
-                    let msg = self.note_prev(msg, p, true);
+                    let msg = self.note_prev(msg, p, self.is_var_definition(p));
                     self.emit(msg);
                 } else if spec.storage() != VarStorage::Extern && self.is_var_definition(p) {
                     let msg =
@@ -1407,7 +1418,10 @@ impl Sema<'_, '_> {
     }
 
     /// `}` of a class definition ([class.mem]/8: complete from here).
-    pub fn act_on_finish_record_definition(&mut self, r: DeclId) {
+    /// `then_semi` says the `}` is followed by `;`: an unnamed class so
+    /// followed is an anonymous struct/union ([class.union.anon]), which
+    /// must be known before the definition's bits freeze.
+    pub fn act_on_finish_record_definition(&mut self, r: DeclId, then_semi: bool) {
         self.scopes.pop();
         self.defining.retain(|&d| d != r);
         self.ctx = self
@@ -1438,6 +1452,19 @@ impl Sema<'_, '_> {
             if fd.is_some_and(|x| x.flags & FieldData::MUTABLE != 0) {
                 bits = bits.with(DefinitionBits::HAS_MUTABLE_FIELDS);
             }
+            let anon_union = self
+                .ast
+                .decls
+                .get(f)
+                .ty()
+                .and_then(|t| self.ast.types.as_record(t))
+                .and_then(|d| self.ast.decls.record(d))
+                .is_some_and(|x| {
+                    x.tag == TagKind::Union && x.defn.contains(DefinitionBits::ANONYMOUS)
+                });
+            if anon_union {
+                bits = bits.with(DefinitionBits::HAS_VARIANT_MEMBERS);
+            }
             if !(fd.is_some_and(|x| x.bit_width.is_some())
                 && self.ast.decls.get(f).name().is_empty())
             {
@@ -1449,6 +1476,9 @@ impl Sema<'_, '_> {
         }
         if self.ast.decls.record(r).is_some_and(|x| x.tag == TagKind::Union) {
             bits = bits.with(DefinitionBits::HAS_VARIANT_MEMBERS);
+        }
+        if then_semi && self.ast.decls.get(r).name() == DeclName::EMPTY {
+            bits = bits.with(DefinitionBits::ANONYMOUS);
         }
         self.builder().complete_record_definition(r, bits);
     }
@@ -1700,6 +1730,13 @@ impl Sema<'_, '_> {
                     self.emit(msg);
                 }
             }
+        } else {
+            // [namespace.unnamed]/1: every unnamed namespace of a scope is
+            // the same namespace.
+            prev = self.ast.decls.members(self.ctx).find(|&m| {
+                let n = self.ast.decls.get(m);
+                n.kind() == DeclKind::Namespace && n.name() == DeclName::EMPTY
+            });
         }
         let h = DeclHead::new(
             self.ctx,
@@ -1707,6 +1744,10 @@ impl Sema<'_, '_> {
             name.map_or(loc, |n| n.1),
         );
         let ns = self.builder().namespace(h, inline, prev);
+        if name.is_none() && prev.is_none() {
+            // ... followed by an implicit `using namespace unique;`.
+            let _ = self.using_directive(ns, loc, DeclFlags::IMPLICIT);
+        }
         self.scopes.push(Scope::new(ScopeKind::Namespace, Some(ns)));
         self.ctx = ns;
         ns
@@ -1748,11 +1789,15 @@ impl Sema<'_, '_> {
     /// `using namespace N;` ([namespace.udir]). The nominated namespace is
     /// stored in the payload word.
     pub fn act_on_using_directive(&mut self, ns: DeclId, loc: Loc) -> DeclId {
+        self.using_directive(ns, loc, DeclFlags::empty())
+    }
+
+    fn using_directive(&mut self, ns: DeclId, loc: Loc, flags: DeclFlags) -> DeclId {
         let nominated = self.ast.first(ns);
         let d = self.ast.decls.push(
             kiln_ast::decl::NewDecl {
                 kind: DeclKind::UsingDirective,
-                flags: DeclFlags::empty(),
+                flags,
                 misc: kiln_ast::decl::DeclMisc::default(),
                 name: DeclName::EMPTY,
                 ctx: Some(self.ctx),
@@ -1891,16 +1936,102 @@ impl Sema<'_, '_> {
     }
 
     /// `;` or a declaration with no declarators (`struct S;`, `int;`).
-    pub fn act_on_decl_spec_only(&mut self, ds: &DeclSpec) {
-        if ds.tag.is_some() {
-            if ds.tag_declares {
-                return;
+    /// An unnamed class definition is an anonymous union or struct
+    /// ([class.union.anon]); the implicit object it declares (a `Field` in
+    /// a class, else a `Var`) is returned so that a block's `DeclStmt`
+    /// can own it.
+    pub fn act_on_decl_spec_only(&mut self, ds: &DeclSpec) -> Option<DeclId> {
+        if let Some(t) = ds.tag {
+            let n = *self.ast.decls.get(t);
+            if ds.tag_declares
+                && n.kind() == DeclKind::CXXRecord
+                && self
+                    .ast
+                    .decls
+                    .record(t)
+                    .is_some_and(|r| r.defn.contains(DefinitionBits::ANONYMOUS))
+                && !ds.invalid
+            {
+                return Some(self.act_on_anonymous_record(ds, t));
             }
-            return;
+            return None;
         }
         if !ds.invalid {
             self.error(DiagId::sema_no_declarators, ds.loc);
         }
+        None
+    }
+
+    /// An anonymous union (or, in a class, an anonymous struct)
+    /// ([class.union.anon]): declares an unnamed object of the record's
+    /// type and injects each member's name into the enclosing scope as an
+    /// `IndirectField` (spec/sema.md §4.4).
+    fn act_on_anonymous_record(&mut self, ds: &DeclSpec, rec: DeclId) -> DeclId {
+        let ctx = self.ctx;
+        let union = ds.keyword == TagKeyword::Union;
+        let in_class = self.ast.decls.get(ctx).kind() == DeclKind::CXXRecord;
+        let local = self.in_local_scope();
+        let mut invalid = false;
+        if !in_class && !union {
+            self.error(DiagId::sema_anon_struct_not_member, ds.loc);
+            invalid = true;
+        } else if !in_class && !local {
+            let anon_ns = self.ast.decls.get(ctx).kind() == DeclKind::Namespace
+                && self.ast.decls.get(ctx).name() == DeclName::EMPTY;
+            let is_static = matches!(ds.storage, Some((StorageSpec::Static, _)));
+            if !is_static && !anon_ns {
+                self.error(DiagId::sema_anon_union_not_static, ds.loc);
+                invalid = true;
+            }
+        }
+        let ty = self.tag_type(rec);
+        let h = DeclHead::new(ctx, DeclName::EMPTY, ds.loc).flags(DeclFlags::IMPLICIT);
+        let obj = if in_class {
+            self.builder().field(h, ty, None, 0)
+        } else {
+            let storage = match ds.storage {
+                Some((StorageSpec::Static, _)) => VarStorage::Static,
+                _ => VarStorage::None,
+            };
+            let h = if invalid { h.flags(DeclFlags::IMPLICIT.with(DeclFlags::INVALID)) } else { h };
+            self.builder().var(h, ty, VarSpec::new().with_storage(storage), None)
+        };
+        let members: Vec<DeclId> = self.ast.decls.members(rec).collect();
+        for m in members {
+            let mn = *self.ast.decls.get(m);
+            let Some(name) = mn.name().as_ident() else { continue };
+            let chain: Vec<DeclId> = match mn.kind() {
+                DeclKind::Field => vec![obj, m],
+                DeclKind::IndirectField => {
+                    let inner = self.ast.indirect_field_chain(m);
+                    std::iter::once(obj).chain(self.ast.lists.iter::<DeclId>(inner)).collect()
+                }
+                _ => continue,
+            };
+            let prev = if in_class || !local {
+                self.ast.lookup_local(ctx, DeclName::ident(name)).iter().collect()
+            } else {
+                self.lookup_current_scope(name)
+            }
+            .into_iter()
+            .find(|&d| !is_tag_kind(self.kind_of(d)));
+            if let Some(p) = prev {
+                let msg = self
+                    .diag(DiagId::sema_anon_record_member_redecl, mn.loc())
+                    .arg(if union { "union" } else { "struct" })
+                    .arg(sym_str(self, name))
+                    .with_note(
+                        self.diag(DiagId::note_previous_declaration, self.ast.decls.get(p).loc()),
+                    );
+                self.emit(msg);
+                continue;
+            }
+            let fty = mn.ty().unwrap_or(QualType::ERROR);
+            let ih = DeclHead::new(ctx, DeclName::ident(name), mn.loc());
+            let ind = self.builder().indirect_field(ih, fty, &chain);
+            self.register_local(name, ind);
+        }
+        obj
     }
 
     // -- name classification -----------------------------------------------------
@@ -2111,13 +2242,27 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// The attributes of a class-head or enum-head (`struct alignas(8)
+    /// [[nodiscard]] S`, [class.pre]/1, [dcl.enum]/1).
+    pub fn act_on_tag_attrs(&mut self, d: DeclId, attrs: &[AttrId]) {
+        if attrs.is_empty() {
+            return;
+        }
+        self.check_decl_attrs(d, attrs);
+        let _ = self.builder().attach_attrs(d, attrs);
+    }
+
     /// Checks attributes against the declaration they appertain to.
     fn check_decl_attrs(&mut self, d: DeclId, attrs: &[AttrId]) {
         let kind = self.ast.decls.get(d).kind();
         for &a in attrs {
             let node = *self.ast.attrs.get(a);
             let bad = match node.kind {
-                AttrKind::NODISCARD | AttrKind::NORETURN => {
+                AttrKind::NODISCARD => {
+                    (!matches!(kind, DeclKind::Function | DeclKind::CXXRecord | DeclKind::Enum))
+                        .then_some("functions, classes, or enumerations")
+                }
+                AttrKind::NORETURN => {
                     (kind != DeclKind::Function).then_some("functions, classes, or enumerations")
                 }
                 AttrKind::ALIGNED => {

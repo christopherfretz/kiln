@@ -542,7 +542,14 @@ impl Sema<'_, '_> {
                 let callee = self.ignore_paren_imp_casts(self.ast.exprs.callee(x));
                 if self.ast.exprs.get(callee).kind() == ExprKind::DeclRefExpr {
                     let f = self.ast.exprs.decl(callee);
-                    if let Some(a) = self.find_attr(f, AttrKind::NODISCARD) {
+                    // A nodiscard class or enumeration returned by value
+                    // counts too ([dcl.attr.nodiscard]/2).
+                    let by_type = || {
+                        let t = n.ty();
+                        let tag = self.ast.types.as_record(t).or_else(|| self.ast.types.as_enum(t));
+                        tag.and_then(|d| self.find_attr(d, AttrKind::NODISCARD))
+                    };
+                    if let Some(a) = self.find_attr(f, AttrKind::NODISCARD).or_else(by_type) {
                         // clang points at the callee and appends the
                         // attribute's message ([dcl.attr.nodiscard]/4).
                         let at = self.begin_loc(callee);
@@ -696,6 +703,17 @@ impl Sema<'_, '_> {
         let n = *self.ast.decls.get(d);
         match n.kind() {
             DeclKind::Var | DeclKind::ParmVar | DeclKind::Function | DeclKind::EnumConstant => {}
+            DeclKind::IndirectField
+                if self
+                    .ast
+                    .lists
+                    .iter::<DeclId>(self.ast.indirect_field_chain(d))
+                    .next()
+                    .map(|h| self.kind_of(h))
+                    == Some(DeclKind::Var) =>
+            {
+                return self.anonymous_member_ref(d, loc);
+            }
             DeclKind::Field | DeclKind::IndirectField => {
                 self.unsupported("implicit member access", loc);
                 return self.recover_err(&[], loc);
@@ -1965,6 +1983,21 @@ impl Sema<'_, '_> {
             self.unsupported("this kind of member access", loc);
             self.recover_err(&[base], loc)
         })
+    }
+
+    /// A name declared by an anonymous union outside a class
+    /// ([class.union.anon]/1): a member access chain rooted at the
+    /// union's implicit variable.
+    fn anonymous_member_ref(&mut self, d: DeclId, loc: Loc) -> ExprId {
+        let chain: Vec<DeclId> =
+            self.ast.lists.iter::<DeclId>(self.ast.indirect_field_chain(d)).collect();
+        self.ast.decls.set_flags(d, DeclFlags::REFERENCED);
+        let mut cur = self.build_decl_ref(chain[0], loc);
+        for &f in &chain[1..] {
+            let q = self.ast.types.effective_quals(self.ety(cur));
+            cur = self.field_access(cur, f, q, false, loc);
+        }
+        cur
     }
 
     fn field_access(
