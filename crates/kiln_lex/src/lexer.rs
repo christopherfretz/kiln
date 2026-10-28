@@ -212,39 +212,73 @@ impl<'a> Lexer<'a> {
         self.pos as u32
     }
 
-    /// Fast path for skipped groups ([cpp.cond]/13): if the rest of the
-    /// current line (up to its terminator) holds no byte that could start
-    /// a comment, a literal, a line splice or a trigraph (`/ " ' \\ ?`),
-    /// moves to the terminator without forming the tokens and returns
-    /// true; otherwise does nothing and returns false. Lexing on from
-    /// there gives the same following tokens as lexing the skipped ones
-    /// would have; no diagnostics are recorded for the skipped bytes.
+    /// Fast path for skipped groups ([cpp.cond]/13): moves to the end of
+    /// the current logical line without forming its tokens, if that end is
+    /// the next line terminator, and returns true; otherwise does nothing
+    /// and returns false. Only a token can carry a logical line past a
+    /// terminator, and only three can: a block comment, a raw string
+    /// literal and a line splice. So the rest of the line qualifies unless
+    /// it holds a `/*` with no `*/` after it on the line (or one that a
+    /// `/*/` could reopen), an `R"`, a `\` as its last non-blank byte, or
+    /// (with trigraphs) a `??/`. Lexing on from there gives the same
+    /// following tokens as lexing the skipped ones would have; no
+    /// diagnostics are recorded and nothing is interned for the skipped
+    /// bytes.
     pub fn skip_plain_line_rest(&mut self) -> bool {
         // Only after a token on this line, in the ordinary mode: a `#` at
         // the start of a line is never skipped.
         if self.at_line_start || self.mode != LexMode::Normal {
             return false;
         }
-        let bytes = self.src.bytes;
         let from = self.pos;
-        let Some(rest) = bytes.get(from..) else {
+        let Some(rest) = self.src.bytes.get(from..) else {
             return false;
         };
-        let mut end = rest.len();
-        for (k, &c) in rest.iter().enumerate() {
+        let at = |k: usize| rest.get(k).copied();
+        let trigraphs = self.opts.trigraphs;
+        // `R"` or `??/` at `k`: both can matter even inside what looks
+        // like a comment here (the `/*` may be inside a literal).
+        let opener = |k: usize| match at(k) {
+            Some(b'"') => k > 0 && at(k - 1) == Some(b'R'),
+            Some(b'?') => trigraphs && at(k + 1) == Some(b'?') && at(k + 2) == Some(b'/'),
+            _ => false,
+        };
+        let mut k = 0;
+        let mut last = b' ';
+        while let Some(c) = at(k) {
             match c {
-                b'\n' | b'\r' => {
-                    end = k;
-                    break;
+                b'\n' | b'\r' => break,
+                b'/' if at(k + 1) == Some(b'*') => {
+                    // A comment (or `/*` in a literal) must close on this
+                    // line; the first `*/` after it is where a comment
+                    // opened here or anywhere before that `*/` closes,
+                    // except one opened by its own `/` (`/*/`).
+                    let mut q = k + 2;
+                    loop {
+                        match at(q) {
+                            None | Some(b'\n' | b'\r') => return false,
+                            Some(b'*') if at(q + 1) == Some(b'/') => break,
+                            _ if opener(q) => return false,
+                            _ => q += 1,
+                        }
+                    }
+                    if q >= k + 3 && at(q - 1) == Some(b'/') {
+                        return false;
+                    }
+                    k = q + 2;
+                    last = b'/';
+                    continue;
                 }
-                b'/' | b'"' | b'\'' | b'\\' | b'?' => return false,
-                _ => {}
+                _ if opener(k) => return false,
+                b' ' | b'\t' | 0x0B | 0x0C => {}
+                _ => last = c,
             }
+            k += 1;
         }
-        if end == 0 {
+        if k == 0 || last == b'\\' {
             return false;
         }
-        self.pos = from + end;
+        self.pos = from + k;
         self.at_line_start = false;
         self.leading_space = true;
         true

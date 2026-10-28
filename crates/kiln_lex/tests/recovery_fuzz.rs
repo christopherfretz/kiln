@@ -359,10 +359,10 @@ fn cpp_cond_skip_plain_line_rest_preserves_line_starts() {
     const LINE_PIECES: &[&str] = &[
         "a", "_b", " ", "\t", "12", "1'0", "+", "#", "%:", "(", ")", ",", ";", "\n", "\n", "\r\n",
         "\r", "/", "*", "/*", "*/", "//", "\"", "'", "R\"x(", ")x\"", "\\", "\\\n", "??/", "??=",
-        "?", "\u{e9}", "\u{3000}", "\0",
+        "?", "\u{e9}", "\u{3000}", "\0", "/*/", "/* c */", "\\ ", "u8R\"(", ")\"",
     ];
     let mut rng = Rng(0x0DDB_A11D_EAD5_EED5);
-    for iter in 0..3000 {
+    for iter in 0..6000 {
         let len = rng.below(60);
         let text: String = (0..len).map(|_| LINE_PIECES[rng.below(LINE_PIECES.len())]).collect();
         let opts = if iter % 2 == 0 { cxx26() } else { LexOptions { trigraphs: true, ..cxx26() } };

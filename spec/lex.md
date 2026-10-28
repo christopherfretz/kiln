@@ -179,17 +179,22 @@ tokens with the usual flags.
   `__has_include(`, `__has_embed(`, `import`. Module directives need nothing
   more from the lexer than exact `START_OF_LINE`.
 - `skip_plain_line_rest` (for skipped groups, [cpp.cond]/13): when the
-  lexer is in `LexMode::Normal`, not at the start of a line, and the bytes
-  from `offset()` to the next `\n`/`\r` (exclusive) are non-empty and contain
-  none of `/ " ' \ ?` (so no comment, literal, splice or trigraph can
-  start there), it moves to that terminator and returns true; otherwise
-  it changes nothing and returns false. Afterwards `next()` yields exactly
-  the tokens (kinds, spans, flags, `Eod` placement) it would have
+  lexer is in `LexMode::Normal` and not at the start of a line, and the
+  logical line provably ends at the next `\n`/`\r`, it moves to that
+  terminator and returns true; otherwise it changes nothing and returns
+  false. Only a block comment, a raw string literal or a line splice can
+  carry a logical line past a terminator, so the rest of the line (`R`)
+  qualifies when it is non-empty and holds no `R"`, no `??/` (trigraphs
+  on), no `\` as its last non-blank byte, and every `/*` in it is
+  followed on the line by a `*/` whose preceding byte is not a `/` that
+  could itself open a comment (`/*/`) -- rules that hold whether a given
+  `/*` is a comment or sits inside a literal. Afterwards `next()` yields
+  exactly the tokens (kinds, spans, flags, `Eod` placement) it would have
   yielded after lexing the skipped tokens (the next token is an `Eod`, a
   line-initial token or `Eof`; only `Eof`'s `LEADING_SPACE` may differ).
-  No diagnostics or interning happen for the skipped bytes. kiln_pp uses it only where the
-  skipped tokens are discarded unseen (excluded groups; the rest of a
-  directive line in a skipped group).
+  No diagnostics or interning happen for the skipped bytes. kiln_pp uses
+  it only where the skipped tokens are discarded unseen (excluded groups;
+  the rest of a directive line in a skipped group).
 - [lex.header]/2: each `'`, `\`, `//`, `/*` in a header name (and `"` in
   `<…>`) is conditionally-supported and accepted with
   `HeaderNameSpecialChars { seq }` (Extension) on that sequence.
