@@ -1,6 +1,6 @@
 # spec: the kiln AST dump format
 
-Status: **design** (WP-040); §6/§7 implemented (WP-046, `xtask/src/clang_ast/`, `xtask/src/test/`). Normative for M2 (§1–§4, §6, §7); §5 is a
+Status: **design** (WP-040); §1–§4 implemented (WP-044, `crates/kiln_ast/src/dump/`); §6/§7 implemented (WP-046, `xtask/src/clang_ast/`, `xtask/src/test/`). Normative for M2 (§1–§4, §6, §7); §5 is a
 sketch finalized by the M3 dump work package. The dump renders the AST of
 `spec/ast.md`; types print per `spec/types.md` §12. Node class names,
 children order and tree glyphs are clang 19's (`-ast-dump`), so clang is
@@ -29,15 +29,45 @@ as clang's `-ast-dump-filter` prints it. The search does not descend into
 a printed tree, and still skips implicit decls and (without `all-files`)
 top-level decls of other files.
 
+Library API (`kiln_ast::dump`; the driver calls `dump_to_string`):
+```
+pub fn dump<W: io::Write>(ast: &Ast, opts: &DumpOptions<'_>, out: W) -> io::Result<()>
+pub fn dump_to_string(ast: &Ast, opts: &DumpOptions<'_>) -> String
+pub struct DumpOptions<'a> {
+    ids, locs, canonical_types, implicit, all_files: bool,  // the opts above
+    filter: Option<Filter>,
+    sources: Option<&'a SourceManager>,  // needed by `locs` and main-file filtering
+    main_file: Option<FileId>,           // None: no main-file filtering, every loc names its file
+}
+pub struct Filter { name: Option<String>, kind: Option<DeclKind> }
+```
+`Filter::name` is `-fdump-ast-filter`; `Filter::kind` (library only)
+additionally requires the decl's kind, and with no name it matches every
+decl of that kind (the header still prints the qualified name). Without
+`sources` no location prints and nothing is filtered by file. The writer
+is fed whole lines from one reused buffer; output is a pure function of
+the AST and the options.
+
 ## 2. Lines
 ```
 dump   := tree*
 tree   := line(root) child*
-line   := prefix Class [' #'id] [' @'loc] (' ' field)*   -- no trailing whitespace
+line   := prefix [label ': '] Class [' #'id] [' @'loc] [' prev=#d'id] (' ' field)*   -- no trailing whitespace
+loc    := [file ':'] L ':' C ['[' [file ':'] L ':' C ']'] | '<invalid>'
 prefix := ('| ' | '  ')* ('|-' | '`-')                  -- clang's glyphs; empty for a root
 field  := flag | 'name' | name | type | '<' CastKind '>' | key '=' value | 'op' | label
 type   := "'" printed-type "'" [":'" desugared "'"]     -- only when the strings differ
 ```
+- Ids: `#dN` decls, `#eN` expressions, `#sN` statements, `#aN`
+  attributes (`N` is the raw arena index). `prev=#dN` (a redeclaration's
+  previous declaration) prints only with `ids`, as clang's `prev 0x...`
+  prints only with addresses.
+- Locations: `file:` is omitted for the main file (`DumpOptions::main_file`,
+  compared after `#line` presumption). A location inside a macro
+  expansion prints `expansion[spelling]` (`@3:1[2:15]`: the decl's name
+  was spelled in the `#define` on line 2 and expanded on line 3). An
+  unresolvable location prints `<invalid>`; an invalid (absent) location
+  prints nothing.
 - The second half of a type pair is clang's `desugaredQualType`: the type
   desugared **at the top level only** (`QualType::getSplitDesugaredType`),
   so `'Ptr':'const Int *'` keeps the pointee's sugar, and `'struct
@@ -71,23 +101,29 @@ type   := "'" printed-type "'" [":'" desugared "'"]     -- only when the strings
 - Types print per spec/types.md §12 (as clang).
 
 ## 3. M2 node lines (normative)
-Every decl line starts `Class [implicit] [used|referenced]` (clang's
-`isImplicit`, `isUsed`, `isReferenced`; `used` wins). Every expression
+Every decl line starts `Class [implicit] [used|referenced] [invalid]`
+(clang's `isImplicit`, `isUsed`, `isReferenced`, `isInvalidDecl`; `used`
+wins); this is `<head>` below, after the §2 ids and location.
+Dependence flags are not printed (clang prints them only on dependent
+expressions, M3). Every expression
 line starts `Class 'type' [lvalue|xvalue [bitfield]]` (§2; prvalues print
 no category).
 | class | line (fields in this order; `[]` = optional) |
 |---|---|
 | `TranslationUnitDecl` | `TranslationUnitDecl` |
 | `TypedefDecl`, `TypeAliasDecl` | `TypedefDecl <head> Name 'type'` (no type-tree children) |
-| `CXXRecordDecl` | `CXXRecordDecl <head> struct\|class\|union [Name] [definition]` |
-| `FieldDecl` | `FieldDecl <head> [name] 'type'` [child: bit-width `ConstantExpr`] (an unnamed bit-field has no name) |
+| `NamespaceDecl` | `NamespaceDecl <head> [Name] [inline] [original Namespace 'Name']` (`original` on a reopening names the first declaration) |
+| `CXXRecordDecl` | `CXXRecordDecl <head> struct\|class\|union [Name] [definition]`; children: base-specifiers, attributes, members |
+| base-specifier | `[virtual ]public\|protected\|private 'type'[...]` (no class name; the semantic access: defaulted is `private` in a `class`, else `public`) |
+| `FieldDecl` | `FieldDecl <head> [name] 'type' [mutable]` [child: bit-width `ConstantExpr`] [child: default member initializer] (an unnamed bit-field has no name) |
 | `EnumDecl` | `EnumDecl <head> [class\|struct] Name ['fixed-underlying-type']` |
 | `EnumConstantDecl` | `EnumConstantDecl <head> Name 'type' value=N` [child: initializer] |
 | `LinkageSpecDecl` | `LinkageSpecDecl <head> C\|C++` (no flag for the braced form) |
-| `FunctionDecl` | `FunctionDecl <head> [constexpr\|consteval] name 'type' [static\|extern] [inline] [delete] [implicit-inline]`; children: `ParmVarDecl`s, body. `inline` = the specifier was written; `implicit-inline` = inline without it (constexpr, consteval, deleted, or a redeclaration of an inline function) |
-| `ParmVarDecl` | `ParmVarDecl <head> [name] 'type'` |
-| `VarDecl` | `VarDecl <head> name 'type' [static\|extern] [nrvo] [inline] [constexpr] [cinit\|callinit\|listinit] [value=V]`; `value=` only on a `constexpr` variable with an initializer (a `const int` initialized by a constant prints none, as in clang) |
+| `FunctionDecl` | `FunctionDecl <head> [constexpr\|consteval\|immediate] name 'type' [static\|extern] [inline] [virtual] [pure] [default\|default_delete] [delete] [trivial] [implicit-inline]`; children: `ParmVarDecl`s, body, attributes (clang's order). `immediate` = an escalated immediate function. `inline` = the specifier was written; `implicit-inline` = inline without it (constexpr, consteval, deleted, or a redeclaration of an inline function) |
+| `ParmVarDecl` | `ParmVarDecl <head> [name] 'type' [cinit] [pack]` (`cinit`: has a default argument, its child) |
+| `VarDecl` | `VarDecl <head> name 'type' [static\|extern\|register] [tls\|tls_dynamic] [nrvo] [inline] [constexpr] [cinit\|callinit\|listinit\|parenlistinit] [value=V]` (the init style only with an initializer; `constinit` is an attribute in clang and is not printed); `value=` only on a `constexpr` variable with an initializer (a `const int` initialized by a constant prints none, as in clang) |
 | `StaticAssertDecl` | `StaticAssertDecl <head>` children: condition, [message (`StringLiteral unevaluated "msg"`)] |
+| attribute | `<Name>Attr [#aN] [@loc] [Inherited] [Implicit]` with clang's class name (`[[nodiscard]]` → `WarnUnusedResultAttr`); a kind without one prints `UnknownAttr kind=N`. Arguments are not printed (M2). Implicit attributes print only with `implicit` |
 | `IntegerLiteral` | `IntegerLiteral 'type' N` |
 | `FloatingLiteral` | `FloatingLiteral 'type' 1.5e0` |
 | `CharacterLiteral` | `CharacterLiteral 'type' N` (the code unit value, decimal) |
@@ -111,6 +147,8 @@ Notes:
 - Since C++23 a `return` of a local variable or parameter is an implicit
   move: the operand is `ImplicitCastExpr 'T' xvalue <NoOp>` around the
   `DeclRefExpr`, under the `LValueToRValue` cast, also for scalars.
+- The kiln dump prints namespaces, `mutable`, attributes and
+  base-specifiers (lines above), but they are not in the M2 goldens.
 - Not in the M2 dump (an error in the clang normalizer, §6; out of scope
   for M2 kiln): namespaces, member functions and constructors (including
   the implicit ones' `CXXConstructExpr`s: a default-initialized class

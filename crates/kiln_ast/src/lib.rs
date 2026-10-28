@@ -16,6 +16,7 @@ pub mod attr;
 pub mod builder;
 pub mod consts;
 pub mod decl;
+pub mod dump;
 pub mod expr;
 pub mod ids;
 pub mod lists;
