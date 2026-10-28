@@ -976,10 +976,17 @@ impl Compiler<'_> {
                     "kiln: a 'case' label outside its switch body is not supported yet".into(),
                 );
             }
-            StmtKind::GotoStmt | StmtKind::IndirectGotoStmt | StmtKind::LabelStmt => {
+            // [expr.const]/5: evaluating a goto statement is not a core
+            // constant expression (clang: the generic note at the `goto`).
+            StmtKind::GotoStmt | StmtKind::IndirectGotoStmt => {
+                self.trap_loc(n.loc(), "subexpression not valid in a constant expression".into());
+            }
+            // The payload of labelled and attributed statements is not yet
+            // defined by kiln_ast (spec/ast.md §6; no builder exists).
+            StmtKind::LabelStmt | StmtKind::AttributedStmt => {
                 self.trap_loc(
                     n.loc(),
-                    "kiln: constant evaluation of 'goto' is not supported yet".into(),
+                    format!("kiln: constant evaluation of {:?} is not supported yet", n.kind()),
                 );
             }
             k => {
