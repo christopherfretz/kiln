@@ -45,7 +45,8 @@ Format per `docs/AGENTS.md`. Ids are stable; status moves between
 | WP-050 | J abi layout (targets, Itanium record layout w/ bit-fields/packed/aligned/no_unique_address, clang-exact on 640 random records per run) | done (2026-10-28). Open: `#pragma pack` needs sema state; bases/vptr are M3 (spec/abi.md §8) | |
 | WP-051 | K Oven M2 (KBC, VM, abstract memory, 56-case UB catalogue, exact clang step parity, memo, report; fib/sieve/sort 19–47x faster than clang) | done (2026-10-28). Open: string-literal identity needs `PtrBase::StringLit` to carry the literal ExprId; labels/goto (builders now exist from WP-048); MaterializeTemporaryExpr untested; enum range check stricter than clang |
 | WP-053 | `kiln_llvm` IR model + builder + verifier + printer (40 corpus modules verified; 16 C programs match clang -O0 through `opt -S`) | done (2026-10-28) |
-| WP-052 | L codegen M2 (AST → kiln_llvm, `-S -emit-llvm`/`-c`/link via clang; `run` tests vs clang oracle) | in-progress |
+| WP-052 | L codegen M2 part 1: kiln_abi mangling + call ABI, Fir buffer, module/function emission, constants from byte images, fold prepass, clang -O0 lowering rules (spec/codegen.md §3), expr.rs + stmt.rs lowering | in-progress (scope cut 2026-10-28 17:40; agent context compacted once) |
+| WP-052b | L codegen M2 part 2 (resumes from wp/052): driver `-S/-c/link`, `codegen_cmd.rs`/`link.rs`, `write_report` on all paths, ~40 `tests/codegen` IR-diff programs vs clang via `opt -S`, ~30 `run` tests, `cargo xtask ci` green through kiln | todo (after WP-052) |
 | WP-054 | Oven↔sema integration (one Oven per TU via SemaBridge; folder/aggval deleted; `-fconstexpr-*` flags + report; references; string-literal identity; labels/goto; 99 expr.const source tests; oven baselines: kiln 0.02x clang time, 0.04x memory) | done (2026-10-28). Open: codegen path must call `write_report`; `constinit` not wired; sema rejects temporaries (M3) |
 | WP-055 | parser consumes kiln_pp tokens (8-token lookahead window), pragmas, module/import stubs, shared driver pp construction; libc++ first blockers in `docs/status/libcxx-syntax.md` (templates, using-declarations, exception specs, asm labels, `__builtin_is_constant_evaluated`) | done (2026-10-28). Open: system-header warning suppression; sema diagnostics lack source ranges (no outer "expanded from macro" notes); `clang diagnostic` pragmas not applied |
 | WP-056 | preprocessor performance: headers 3.56x→1.42x, repetition 171x→0.52x, xmacro 5.22x→0.99x of clang (`cargo xtask bench`, load ~8); per-inclusion source ranges + "In file included from" notes; release profile: `codegen-units=1` for kiln_lex/source/pp | done (2026-10-28). Follow-ups: `Lexer::next` ~185 instr/token (rare paths out of line, `check_poison`, double macro lookup, resolver allocations); unknown-directive warnings in skipped groups; backslash-space column off by one |
@@ -54,6 +55,9 @@ Format per `docs/AGENTS.md`. Ids are stable; status moves between
 | id | scope | status |
 |---|---|---|
 | WP-060 | Oven M3 memory design (BLOCKS the Oven M3 implementation package): transient allocator inside the arena with free-on-delete, size-class free lists, compaction/coalescing policy for long evaluations, provenance+generation preserved; frozen-result bytes reported separately in the constexpr report; churn benchmarks (construct/destroy loops, vector-growth patterns, string building) added to `bench/oven` with `peak_bytes`/`allocs` gates BEFORE implementation | todo |
+
+## Lessons
+- Size packages so one agent finishes well within a session: codegen should have been ABI+mangling / lowering / driver+tests from the start (the pp engine ended up split the same way). Prefer 3 small briefs over 1 large one; a brief that lists >5 deliverables is too big.
 
 ## Cross-cutting
 | id | scope | status |
