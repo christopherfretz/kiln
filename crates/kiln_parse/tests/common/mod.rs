@@ -72,18 +72,18 @@ fn render(sm: &SourceManager, d: &Diagnostic, out: &mut Vec<String>) {
 
 /// Parses `src` as `t.cpp` for x86-64.
 pub fn parse(src: &str) -> Parsed {
-    parse_with(src, &ParseOptions::default())
+    parse_with(src, ParseOptions::default())
 }
 
 /// Parses `src` as `t.cpp` for x86-64 with `opts`.
-pub fn parse_with(src: &str, opts: &ParseOptions) -> Parsed {
+pub fn parse_with(src: &str, opts: ParseOptions) -> Parsed {
     let sm = SourceManager::new();
     let file = sm.add_virtual("t.cpp", src.to_owned()).expect("location space");
     let interner = Arc::new(Interner::new());
     let sink = MemorySink::new();
     let engine = DiagEngine::new(&sm, &DiagOptions::default(), sink.clone());
     let target = Target::for_arch(Arch::X86_64);
-    let ast = parse_file(&sm, &interner, file, &engine, target, opts);
+    let ast = parse_file(&sm, &interner, file, &engine, target, &opts);
     let opts = DumpOptions { sources: Some(&sm), main_file: Some(file), ..DumpOptions::default() };
     let mut buf = Vec::new();
     dump(&ast, &opts, &mut buf).expect("dump to memory");

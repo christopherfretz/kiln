@@ -579,7 +579,7 @@ impl Parser<'_, '_> {
                 }
                 Some(Kw::Explicit | Kw::Constexpr | Kw::Consteval | Kw::Inline) => i += 1,
                 Some(Kw::Attribute | Kw::Alignas | Kw::Declspec) => {
-                    i = self.skip_balanced_at(i + 1)
+                    i = self.skip_balanced_at(i + 1);
                 }
                 _ if t.kind == TokKind::Punct(Punct::LSquare)
                     && self.tok_at(i + 1).kind == TokKind::Punct(Punct::LSquare) =>

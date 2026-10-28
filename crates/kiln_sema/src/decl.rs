@@ -575,9 +575,9 @@ impl Sema<'_, '_> {
             };
             found.into_iter().rev().find(|&p| {
                 let n = self.ast.decls.get(p);
-                !is_tag_kind(n.kind())
-                    && !(matches!(n.kind(), DeclKind::Typedef | DeclKind::TypeAlias)
-                        && n.has(DeclFlags::INVALID))
+                let invalid_typedef = matches!(n.kind(), DeclKind::Typedef | DeclKind::TypeAlias)
+                    && n.has(DeclFlags::INVALID);
+                !is_tag_kind(n.kind()) && !invalid_typedef
             })
         };
         // `typedef struct { } T;`: T names the class for linkage purposes

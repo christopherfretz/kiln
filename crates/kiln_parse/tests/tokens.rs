@@ -2,6 +2,8 @@
 //! preprocessor ([lex.pptoken], [cpp]), pragmas ([cpp.pragma]) and module
 //! directives ([cpp.module], [cpp.import]).
 
+use std::fmt::Write as _;
+
 mod common;
 use common::{parse, parse_with};
 use kiln_parse::ParseOptions;
@@ -103,11 +105,12 @@ fn module_declaration_unsupported() {
 fn window_matches_whole_buffer() {
     let mut src = String::from("#define F(n) int f##n(int a) { return a + n; }\n");
     for i in 0..600 {
-        src.push_str(&format!("F({i})\nstatic_assert(sizeof(int) == 4, \"{i}\");\n"));
+        writeln!(src, "F({i})\nstatic_assert(sizeof(int) == 4, \"{i}\");")
+            .expect("write to String");
     }
     src.push_str("struct S { S(int); int a; };\n");
     let window = parse(&src);
-    let whole = parse_with(&src, &ParseOptions { keep_tokens: true, ..ParseOptions::default() });
+    let whole = parse_with(&src, ParseOptions { keep_tokens: true, ..ParseOptions::default() });
     assert_eq!(window.diags, whole.diags);
     assert_eq!(window.dump, whole.dump);
     window.assert_dump("FunctionDecl f599");
