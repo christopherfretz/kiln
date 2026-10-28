@@ -56,7 +56,6 @@ dependencies = [
 name = "kiln_lex"
 version = "0.0.1"
 dependencies = [
- "kiln_diag",
  "kiln_source",
 ]
 
