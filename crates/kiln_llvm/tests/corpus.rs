@@ -1009,3 +1009,317 @@ fn atomics() {
     let w: Vec<&str> = want.iter().map(String::as_str).collect();
     check(&m, &w);
 }
+
+/// §4: `getelementptr` with flags, mixed index types and vector indices.
+#[test]
+fn getelementptr() {
+    let mut m = aarch64();
+    let s = m.types.named_struct("struct.P");
+    let arr = m.types.array(TypeId::I16, 8);
+    m.types.set_body(s, &[TypeId::I32, arr], false).unwrap();
+    let v2p = m.types.vector(TypeId::PTR, 2);
+    let v2i = m.types.vector(TypeId::I64, 2);
+    let mut b = define(&mut m, "gep", TypeId::VOID, &[TypeId::PTR, TypeId::I64, TypeId::I32, v2i]);
+    let (p, i, j, vi) = (arg(&b, 0), arg(&b, 1), arg(&b, 2), arg(&b, 3));
+    b.struct_gep(s, p, 0).unwrap();
+    let c1 = b.module().const_int(TypeId::I32, 1);
+    let c0 = b.module().const_int(TypeId::I64, 0);
+    b.gep(s, p, &[i, c1, j], GepFlags::INBOUNDS).unwrap();
+    b.gep(TypeId::I8, p, &[i], GepFlags::NONE).unwrap();
+    b.gep(TypeId::I8, p, &[i], GepFlags::NUW).unwrap();
+    b.gep(TypeId::I8, p, &[i], GepFlags::NUSW.with(GepFlags::NUW)).unwrap();
+    b.gep(TypeId::I8, p, &[i], GepFlags::INBOUNDS.with(GepFlags::NUW)).unwrap();
+    b.gep(s, p, &[c0], GepFlags::NONE).unwrap();
+    let r = b.gep(TypeId::I32, p, &[vi], GepFlags::INBOUNDS).unwrap();
+    assert_eq!(b.type_of(r), v2p);
+    b.ret_void().unwrap();
+    check(
+        &m,
+        &[
+            "%struct.P = type { i32, [8 x i16] }\n",
+            "  %5 = getelementptr inbounds %struct.P, ptr %0, i32 0, i32 0\n",
+            "  %6 = getelementptr inbounds %struct.P, ptr %0, i64 %1, i32 1, i32 %2\n",
+            "  %7 = getelementptr i8, ptr %0, i64 %1\n",
+            "  %8 = getelementptr nuw i8, ptr %0, i64 %1\n",
+            "  %9 = getelementptr nusw nuw i8, ptr %0, i64 %1\n",
+            "  %10 = getelementptr inbounds nuw i8, ptr %0, i64 %1\n",
+            "  %11 = getelementptr %struct.P, ptr %0, i64 0\n",
+            "  %12 = getelementptr inbounds i32, ptr %0, <2 x i64> %3\n",
+        ],
+    );
+}
+
+/// §4: `extractvalue`/`insertvalue` on nested aggregates.
+#[test]
+fn aggregate_values() {
+    let mut m = aarch64();
+    let inner = m.types.array(TypeId::FLOAT, 2);
+    let s = m.types.struct_literal(&[TypeId::I32, inner], false);
+    let mut b = define(&mut m, "agg", s, &[s, TypeId::FLOAT]);
+    let (a, f) = (arg(&b, 0), arg(&b, 1));
+    b.extract_value(a, &[0]).unwrap();
+    b.extract_value(a, &[1, 1]).unwrap();
+    let u = b.module().const_undef(s);
+    let x = b.insert_value(u, f, &[1, 0]).unwrap();
+    let y = b.insert_value(x, a, &[0]);
+    assert!(y.is_err(), "type mismatch must be an error");
+    b.ret(Some(x)).unwrap();
+    check(
+        &m,
+        &[
+            "define dso_local { i32, [2 x float] } @agg({ i32, [2 x float] } %0, float %1) {\n",
+            "  %3 = extractvalue { i32, [2 x float] } %0, 0\n",
+            "  %4 = extractvalue { i32, [2 x float] } %0, 1, 1\n",
+            "  %5 = insertvalue { i32, [2 x float] } undef, float %1, 1, 0\n",
+            "  ret { i32, [2 x float] } %5\n",
+        ],
+    );
+}
+
+/// §4: vector element operations and `shufflevector` (fixed and scalable).
+#[test]
+fn vector_operations() {
+    let mut m = aarch64();
+    let v4 = m.types.vector(TypeId::I32, 4);
+    let nx4 = m.types.scalable_vector(TypeId::I32, 4);
+    let mut b = define(&mut m, "vec", TypeId::VOID, &[v4, TypeId::I32, nx4]);
+    let (v, x, s) = (arg(&b, 0), arg(&b, 1), arg(&b, 2));
+    let k = b.module().const_int(TypeId::I64, 2);
+    b.extract_element(v, k).unwrap();
+    b.insert_element(v, x, k).unwrap();
+    b.extract_element(v, x).unwrap();
+    b.shuffle_vector(v, v, &[3, 2, 1, 0]).unwrap();
+    b.shuffle_vector(v, v, &[0, SHUFFLE_POISON, 7]).unwrap();
+    let pz = b.module().const_poison(v4);
+    b.shuffle_vector(v, pz, &[0, 0, 0, 0, 0, 0, 0, 0]).unwrap();
+    let ps = b.module().const_poison(nx4);
+    let z = b.module().const_int(TypeId::I64, 0);
+    let ins = b.insert_element(ps, x, z).unwrap();
+    b.shuffle_vector(ins, ps, &[0, 0, 0, 0]).unwrap();
+    b.binop(BinOp::Add, s, s).unwrap();
+    let cv = {
+        let m = b.module();
+        let e: Vec<Value> = (1..=4).map(|n| m.const_int(TypeId::I32, n)).collect();
+        m.const_vector(&e).unwrap()
+    };
+    b.binop(BinOp::Mul, v, cv).unwrap();
+    b.ret_void().unwrap();
+    check(
+        &m,
+        &[
+            "  %4 = extractelement <4 x i32> %0, i64 2\n",
+            "  %5 = insertelement <4 x i32> %0, i32 %1, i64 2\n",
+            "  %6 = extractelement <4 x i32> %0, i32 %1\n",
+            "  %7 = shufflevector <4 x i32> %0, <4 x i32> %0, <4 x i32> <i32 3, i32 2, i32 1, i32 0>\n",
+            "  %8 = shufflevector <4 x i32> %0, <4 x i32> %0, <3 x i32> <i32 0, i32 poison, i32 7>\n",
+            "  %9 = shufflevector <4 x i32> %0, <4 x i32> poison, <8 x i32> zeroinitializer\n",
+            "  %10 = insertelement <vscale x 4 x i32> poison, i32 %1, i64 0\n",
+            "  %11 = shufflevector <vscale x 4 x i32> %10, <vscale x 4 x i32> poison, \
+             <vscale x 4 x i32> zeroinitializer\n",
+            "  %12 = add <vscale x 4 x i32> %2, %2\n",
+            "  %13 = mul <4 x i32> %0, <i32 1, i32 2, i32 3, i32 4>\n",
+        ],
+    );
+}
+
+/// §4.1: a loop with phis over unnamed blocks; `select` and `freeze`.
+#[test]
+fn phi_select_freeze() {
+    let mut m = aarch64();
+    let mut b = define(&mut m, "sum", TypeId::I32, &[TypeId::I32]);
+    let n = arg(&b, 0);
+    let entry = b.current_block().unwrap();
+    let head = b.append_block("");
+    let body = b.append_block("");
+    let exit = b.append_block("");
+    b.br(head).unwrap();
+    b.position_at_end(head);
+    let zero = b.module().const_int(TypeId::I32, 0);
+    let one = b.module().const_int(TypeId::I32, 1);
+    let i = b.phi(TypeId::I32, &[(zero, entry)]).unwrap();
+    let acc = b.phi(TypeId::I32, &[(zero, entry)]).unwrap();
+    let c = b.icmp(IntPredicate::Slt, i, n).unwrap();
+    b.cond_br(c, body, exit).unwrap();
+    b.position_at_end(body);
+    let acc2 = b.add_nsw(acc, i).unwrap();
+    let i2 = b.add_nsw(i, one).unwrap();
+    b.add_incoming(i, i2, body).unwrap();
+    b.add_incoming(acc, acc2, body).unwrap();
+    b.br(head).unwrap();
+    b.position_at_end(exit);
+    let fr = b.freeze(acc).unwrap();
+    let s = b.select(c, fr, n).unwrap();
+    let fs = b.module().const_float(TypeId::FLOAT, 1.0);
+    let t = b.module().const_bool(true);
+    b.select_ex(FastMath::NNAN, t, fs, fs).unwrap();
+    b.ret(Some(s)).unwrap();
+    check(
+        &m,
+        &[
+            "  br label %2\n\n2:\n",
+            "  %3 = phi i32 [ 0, %1 ], [ %8, %6 ]\n",
+            "  %4 = phi i32 [ 0, %1 ], [ %7, %6 ]\n",
+            "  %5 = icmp slt i32 %3, %0\n  br i1 %5, label %6, label %9\n",
+            "\n6:\n",
+            "  %7 = add nsw i32 %4, %3\n  %8 = add nsw i32 %3, 1\n  br label %2\n",
+            "\n9:\n",
+            "  %10 = freeze i32 %4\n  %11 = select i1 %5, i32 %10, i32 %0\n",
+            "  %12 = select nnan i1 true, float 1.000000e+00, float 1.000000e+00\n",
+            "  ret i32 %11\n",
+        ],
+    );
+}
+
+/// §4: `switch`, `indirectbr`, `unreachable`.
+#[test]
+fn multiway_branches() {
+    let mut m = aarch64();
+    let mut b = define(&mut m, "sw", TypeId::I32, &[TypeId::I32, TypeId::PTR]);
+    let (x, p) = (arg(&b, 0), arg(&b, 1));
+    let a = b.append_block("a");
+    let c = b.append_block("c");
+    let d = b.append_block("d");
+    let ib = b.append_block("ib");
+    let cases: Vec<(Value, BlockId)> =
+        [(1, a), (-7, c), (42, a)].iter().map(|&(k, bb)| (b.module().const_int(TypeId::I32, k), bb)).collect();
+    b.switch(x, d, &cases).unwrap();
+    b.position_at_end(a);
+    b.ret(Some(x)).unwrap();
+    b.position_at_end(c);
+    b.indirect_br(p, &[a, d]).unwrap();
+    b.position_at_end(d);
+    b.unreachable().unwrap();
+    b.position_at_end(ib);
+    b.switch(x, d, &[]).unwrap();
+    check(
+        &m,
+        &[
+            "  switch i32 %0, label %d [\n    i32 1, label %a\n    i32 -7, label %c\n    \
+             i32 42, label %a\n  ]\n",
+            "\nc:\n  indirectbr ptr %1, [label %a, label %d]\n",
+            "\nd:\n  unreachable\n",
+            "\nib:\n  switch i32 %0, label %d [\n  ]\n",
+        ],
+    );
+}
+
+/// §4: calls: direct, indirect, varargs, tail kinds, calling conventions,
+/// call-site attributes, fast-math flags and operand bundles.
+#[test]
+fn calls() {
+    let mut m = aarch64();
+    let i2i = m.types.function(TypeId::I32, &[TypeId::I32], false);
+    let f = m.add_function("f", i2i).unwrap();
+    let pf = m.types.function(TypeId::I32, &[TypeId::PTR], true);
+    let printf = m.add_function("printf", pf).unwrap();
+    let dd = m.types.function(TypeId::DOUBLE, &[TypeId::DOUBLE], false);
+    let sq = m.add_function("sqrt", dd).unwrap();
+    let vv = m.types.function(TypeId::VOID, &[], false);
+    let fc = m.add_function("fc", vv).unwrap();
+    m.func_mut(fc).cc = CallConv::FAST;
+    let ss = m.types.named_struct("struct.S");
+    m.types.set_body(ss, &[TypeId::I64; 4], false).unwrap();
+    let sret_fn = m.types.function(TypeId::VOID, &[TypeId::PTR], false);
+    let mk = m.add_function("make", sret_fn).unwrap();
+    let mut b = define(&mut m, "caller", TypeId::I32, &[TypeId::I32, TypeId::PTR, TypeId::DOUBLE]);
+    let (x, fp, d) = (arg(&b, 0), arg(&b, 1), arg(&b, 2));
+    let r = b.call(f, &[x]).unwrap();
+    b.call_ex(i2i, fp, &[r], &CallOpts::default()).unwrap();
+    let fmt = b.module().const_null(TypeId::PTR);
+    b.call(printf, &[fmt, x, d]).unwrap();
+    let mut o = CallOpts { tail: TailKind::Tail, fmf: FastMath::FAST, ..CallOpts::default() };
+    b.call_ex(dd, Value::func(sq), &[d], &o).unwrap();
+    o.fmf = FastMath::NONE;
+    o.tail = TailKind::NoTail;
+    b.call_ex(i2i, Value::func(f), &[x], &o).unwrap();
+    b.call(fc, &[]).unwrap();
+    let tmp = b.alloca(ss, 8).unwrap();
+    let mut ca = CallOpts::default();
+    let nu = b.module().attr_set(&[Attr::Flag(AttrKind::NoUnwind)]);
+    let sret = b.module().attr_set(&[Attr::SRet(ss), Attr::Align(8)]);
+    let nz = b.module().attr_set(&[Attr::Flag(AttrKind::NoUndef)]);
+    ca.attrs.func = nu;
+    ca.attrs.set_param(0, sret);
+    b.call_ex(sret_fn, Value::func(mk), &[tmp], &ca).unwrap();
+    let mut cb = CallOpts::default();
+    cb.attrs.ret = nz;
+    cb.attrs.set_param(0, nz);
+    let one = b.module().const_int(TypeId::I32, 1);
+    cb.bundles = vec![
+        OperandBundle { tag: "deopt".into(), args: vec![one, x] },
+        OperandBundle { tag: "funclet".into(), args: vec![] },
+    ];
+    // A bundle with no operands is fine syntactically; use "deopt" only on a
+    // plain call so the verifier accepts it.
+    cb.bundles.pop();
+    let last = b.call_ex(i2i, Value::func(f), &[x], &cb).unwrap();
+    b.ret(Some(last)).unwrap();
+    // `musttail` requires matching prototypes.
+    let mut b = define(&mut m, "fwd", TypeId::I32, &[TypeId::I32]);
+    let x = arg(&b, 0);
+    let mt = CallOpts { tail: TailKind::MustTail, ..CallOpts::default() };
+    let t = b.call_ex(i2i, Value::func(f), &[x], &mt).unwrap();
+    b.ret(Some(t)).unwrap();
+    check(
+        &m,
+        &[
+            "  %4 = call i32 @f(i32 %0)\n",
+            "  %5 = call i32 %1(i32 %4)\n",
+            "  %6 = call i32 (ptr, ...) @printf(ptr null, i32 %0, double %2)\n",
+            "  %7 = tail call fast double @sqrt(double %2)\n",
+            "  %8 = notail call i32 @f(i32 %0)\n",
+            "  call fastcc void @fc()\n",
+            "  %9 = alloca %struct.S, align 8\n",
+            "  call void @make(ptr sret(%struct.S) align 8 %9) #0\n",
+            "  %10 = call noundef i32 @f(i32 noundef %0) [ \"deopt\"(i32 1, i32 %0) ]\n",
+            "  ret i32 %10\n",
+            "  %2 = musttail call i32 @f(i32 %0)\n  ret i32 %2\n",
+            "attributes #0 = { nounwind }\n",
+        ],
+    );
+}
+
+/// §2.5: inline assembly callees and module-level asm.
+#[test]
+fn inline_asm() {
+    let mut m = aarch64();
+    m.module_asm = vec!["\t.globl sym".into(), "sym = 0".into()];
+    let vty = m.types.function(TypeId::VOID, &[], false);
+    let barrier = m
+        .inline_asm(InlineAsm {
+            fn_ty: vty,
+            asm: "".into(),
+            constraints: "~{memory}".into(),
+            side_effect: true,
+            align_stack: false,
+            intel_dialect: false,
+            can_throw: false,
+        })
+        .unwrap();
+    let ity = m.types.function(TypeId::I32, &[TypeId::I32], false);
+    let add = m
+        .inline_asm(InlineAsm {
+            fn_ty: ity,
+            asm: "add $0, $1, #1 \"q\"\n".into(),
+            constraints: "=r,r".into(),
+            side_effect: false,
+            align_stack: true,
+            intel_dialect: true,
+            can_throw: true,
+        })
+        .unwrap();
+    let mut b = define(&mut m, "asm", TypeId::I32, &[TypeId::I32]);
+    let x = arg(&b, 0);
+    b.call_ex(vty, barrier, &[], &CallOpts::default()).unwrap();
+    let r = b.call_ex(ity, add, &[x], &CallOpts::default()).unwrap();
+    b.ret(Some(r)).unwrap();
+    check(
+        &m,
+        &[
+            "module asm \"\\09.globl sym\"\nmodule asm \"sym = 0\"\n",
+            "  call void asm sideeffect \"\", \"~{memory}\"()\n",
+            "  %2 = call i32 asm alignstack inteldialect unwind \"add $0, $1, #1 \\22q\\22\\0A\", \
+             \"=r,r\"(i32 %0)\n",
+        ],
+    );
+}
