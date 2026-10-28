@@ -40,8 +40,11 @@ pub enum LexDiagKind {
         /// The character.
         ch: char,
     },
-    /// A non-ASCII character in an identifier that is not `XID_Continue`
-    /// (`err_character_not_allowed_identifier`).
+    /// A non-ASCII character that is not allowed where it appears: inside
+    /// an identifier but not `XID_Continue` (kept in the identifier, as
+    /// clang does; `err_character_not_allowed_identifier`), or at the
+    /// start of a token, `XID_Continue` but not `XID_Start` (a lone
+    /// token; `err_character_not_allowed`).
     CharNotAllowedInIdentifier {
         /// The character.
         ch: char,
