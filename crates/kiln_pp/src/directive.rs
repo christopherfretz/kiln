@@ -933,7 +933,16 @@ impl Preprocessor<'_, '_> {
                     break;
                 }
                 TokKind::Punct(Punct::Hash) if t.flags.contains(TokFlags::START_OF_LINE) => {}
-                _ => continue,
+                _ => {
+                    // The rest of a non-directive line cannot matter
+                    // unless it could open a comment or a literal.
+                    if let Frame::File(f) = &mut self.frames[top]
+                        && f.back.is_empty()
+                    {
+                        f.lx.skip_plain_line_rest();
+                    }
+                    continue;
+                }
             }
             self.start_directive();
             let name = PpTok::new(self.lex_raw_from(top));

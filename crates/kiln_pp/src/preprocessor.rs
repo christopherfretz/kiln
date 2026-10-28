@@ -598,6 +598,16 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
         if !self.in_directive {
             return Token { kind: TokKind::Eod, span: Span::INVALID, flags: TokFlags::empty() };
         }
+        // In a skipped group (no diagnostics), a plain rest of the line is
+        // discarded without forming its tokens.
+        if self.quiet_lex
+            && self.dir_eod.is_none()
+            && let Some(Frame::File(f)) = self.frames.last_mut()
+            && f.back.is_empty()
+            && f.lx.skip_plain_line_rest()
+        {
+            f.mi.read_token();
+        }
         let eod = loop {
             if let Some(e) = self.dir_eod {
                 break e;

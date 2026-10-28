@@ -212,6 +212,44 @@ impl<'a> Lexer<'a> {
         self.pos as u32
     }
 
+    /// Fast path for skipped groups ([cpp.cond]/13): if the rest of the
+    /// current line (up to its terminator) holds no byte that could start
+    /// a comment, a literal, a line splice or a trigraph (`/ " ' \\ ?`),
+    /// moves to the terminator without forming the tokens and returns
+    /// true; otherwise does nothing and returns false. Lexing on from
+    /// there gives the same following tokens as lexing the skipped ones
+    /// would have; no diagnostics are recorded for the skipped bytes.
+    pub fn skip_plain_line_rest(&mut self) -> bool {
+        // Only after a token on this line, in the ordinary mode: a `#` at
+        // the start of a line is never skipped.
+        if self.at_line_start || self.mode != LexMode::Normal {
+            return false;
+        }
+        let bytes = self.src.bytes;
+        let from = self.pos;
+        let Some(rest) = bytes.get(from..) else {
+            return false;
+        };
+        let mut end = rest.len();
+        for (k, &c) in rest.iter().enumerate() {
+            match c {
+                b'\n' | b'\r' => {
+                    end = k;
+                    break;
+                }
+                b'/' | b'"' | b'\'' | b'\\' | b'?' => return false,
+                _ => {}
+            }
+        }
+        if end == 0 {
+            return false;
+        }
+        self.pos = from + end;
+        self.at_line_start = false;
+        self.leading_space = true;
+        true
+    }
+
     /// Diagnostics recorded so far.
     pub fn diagnostics(&self) -> &[LexDiag] {
         &self.diags

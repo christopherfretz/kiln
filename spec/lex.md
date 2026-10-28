@@ -39,6 +39,7 @@ impl<'a> Lexer<'a> {
     pub fn spelling(&self, &Token) -> Cow<'a, str>;
     pub fn diagnostics(&self) -> &[LexDiag]; pub fn take_diagnostics(&mut self) -> Vec<LexDiag>;
     pub fn offset(&self) -> u32; // + options(), file(), interner(), source_manager()
+    pub fn skip_plain_line_rest(&mut self) -> bool; // skipped-group fast path (WP-056)
 }
 pub struct Token { pub kind: TokKind, pub span: Span, pub flags: TokFlags } // Copy, <= 20 bytes
 pub enum TokKind {
@@ -177,6 +178,18 @@ tokens with the usual flags.
   lexes normally. kiln_pp sets it after `include`, `embed`,
   `__has_include(`, `__has_embed(`, `import`. Module directives need nothing
   more from the lexer than exact `START_OF_LINE`.
+- `skip_plain_line_rest` (for skipped groups, [cpp.cond]/13): when the
+  lexer is in `LexMode::Normal`, not at the start of a line, and the bytes
+  from `offset()` to the next `\n`/`\r` (exclusive) are non-empty and contain
+  none of `/ " ' \ ?` (so no comment, literal, splice or trigraph can
+  start there), it moves to that terminator and returns true; otherwise
+  it changes nothing and returns false. Afterwards `next()` yields exactly
+  the tokens (kinds, spans, flags, `Eod` placement) it would have
+  yielded after lexing the skipped tokens (the next token is an `Eod`, a
+  line-initial token or `Eof`; only `Eof`'s `LEADING_SPACE` may differ).
+  No diagnostics or interning happen for the skipped bytes. kiln_pp uses it only where the
+  skipped tokens are discarded unseen (excluded groups; the rest of a
+  directive line in a skipped group).
 - [lex.header]/2: each `'`, `\`, `//`, `/*` in a header name (and `"` in
   `<…>`) is conditionally-supported and accepted with
   `HeaderNameSpecialChars { seq }` (Extension) on that sequence.
@@ -245,7 +258,11 @@ kiln-only `raw_string_literal` (`wide_raw_string_literal`, …), `other`,
   inside the spelling, `has_error` consistent, and an error-free unsuffixed
   string re-encoded with `encode_string` decodes to the same units).
   Longer runs: `KILN_LEX_FUZZ_ITERS`, `KILN_LEX_FUZZ_SEED`,
-  `KILN_LEX_FUZZ_LEN`.
+  `KILN_LEX_FUZZ_LEN`. Every fuzzed token also checks
+  `NEEDS_CLEANING == (clean(raw) != raw)` (guards the clean-run cursor);
+  `lex_phases_sparse_splices_fuzz` covers long clean runs with rare
+  splices; `cpp_cond_skip_plain_line_rest_preserves_line_starts` checks
+  that skipping never moves a line-initial token or an `Eod`.
 - Later: `kiln -E -P` vs `clang -E -P` differential (tests/differential/pp/).
 
 ## Literals (`kiln_lex::literal`, [lex.ccon] [lex.string] [lex.icon] [lex.fcon] [lex.ext])
