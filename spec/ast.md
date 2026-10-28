@@ -421,39 +421,163 @@ lists its specializations in creation order (dump order, ast-dump.md §5).
   Oven needs a body: `SemaBridge::ensure_body`, §13 Q2).
 
 ## 9. Constant values
-### 9.1 `ConstStore`
+### 9.1 `ConstStore` (`kiln_ast::consts`, WP-043)
 All results of constant evaluation that the AST retains are **interned**
-`ConstValueId`s: equal values (same type, same bits, same relocations)
-have the same id, so template-argument equivalence ([temp.type]) and
-`ConstantExpr` comparisons are id equality.
+`ConstValueId`s: equal values (same type, same bits, same relocations,
+same padding, same active union members) have the same id, so
+template-argument equivalence ([temp.type]) and `ConstantExpr`
+comparisons are id equality. The store is append-only; ids are never
+invalidated.
 ```rust
-enum ConstValue {                 // logical view; storage: 12-byte ConstNode + words/blob pools
-    Int { ty: QualType, value: APInt /*≤64 bits inline*/ },   // integral, enum, bool, char
-    Float { ty: QualType, bits: APInt },                        // exact IEEE bits (−0.0 ≠ +0.0)
-    NullPtr { ty: QualType },                                   // null object/function/member pointer
-    Pointer { ty: QualType, base: PtrBase, offset: i64, path: Option<ListId> }, // also references
-    MemberPtr { ty: QualType, member: DeclId, path: ListId, derived: bool },
-    Reflection(ReflectionId),                                   // std::meta::info (M6)
-    Aggregate { ty: QualType, image: BlobId, relocs: ListId },  // class/array/union/complex/vector
+// Logical view (borrowing; the freeze/thaw boundary, not the storage).
+enum ConstValue<'a> { Scalar(Scalar<'a>), Aggregate(ByteImage<'a>) }
+enum Scalar<'a> {                       // `ty` is the canonical, cv-unqualified type
+    Int { ty, signed: bool, bits: IntBits<'a> },  // integral, enum, char; 1..=2^24-1 bits
+    Bool { ty, value: bool },
+    Float { ty, kind: FloatKind, bits: u128 },    // exact encoding (−0.0 ≠ +0.0, NaN payloads)
+    Null { ty, kind: NullKind },                  // Pointer | MemberData | MemberFunction
+    Pointer { ty, base: PtrBase, offset: u64 },   // also references; byte offset
+    MemberPtr { ty, member: DeclId, kind: MemberKind, derived: bool, path: &'a [DeclId] },
+    Reflection { ty, id: ReflectionId },          // std::meta::info (M6)
 }
-enum PtrBase {
-    Decl(DeclId),                      // variable/function/TemplateParamObject (first decl)
-    Temporary(DeclId),                 // LifetimeExtendedTemporary
-    StringLit(StringLitId),            // pointer into a string literal object
-    TypeInfo(QualType),                // &typeid(T)
-}
+enum PtrBase { Decl(DeclId), Function(DeclId), Temporary(DeclId),
+               StringLit(StringLitId), Const(ConstValueId), TypeInfo(QualType) }
+enum FloatKind { Half, BFloat16, Single, Double, X87Extended, Quad }
+struct ByteImage<'a> { ty: QualType, bytes: &'a [u8], relocs: &'a [Reloc],
+                       padding: &'a [ByteRange], unions: &'a [UnionMember] }
+struct Reloc { at: u32, value: ConstValueId }       // pointer-like subobject
+struct ByteRange { start: u32, len: u32 }           // padding run
+struct UnionMember { at: u32, field: DeclId }       // active member of the union at `at`
 ```
-- `Aggregate` is a **byte image** in target layout (`RecordLayout` from
-  `ast.layouts`) with padding bytes zeroed, plus relocations: `(byte
-  offset, ConstValueId)` for each pointer/reference/member-pointer/
-  reflection subobject (whose image bytes are zero) and `(byte offset,
-  FieldDecl)` for each active union member. This is what the Oven freezes
-  and thaws by `memcpy` (spec/oven.md "frozen result"); equality of images
-  + relocs is [temp.type] equivalence. The image is target-specific (one
-  target per compilation). A constant expression's result is fully
-  initialized ([expr.const]), so no init mask is stored.
-- Printing (dump, diagnostics, template arguments) decodes the image
-  using the layout and field list.
+- **Types.** Every value carries its canonical, cv-unqualified type; the
+  store does not canonicalize. The same bits with different types are
+  different values.
+- **Integers** are two's-complement `IntBits` (normalized `u64` words,
+  bits above the width zero) plus `signed`. Widths up to 64 bits are inline.
+  Wider ones (`__int128`, `_BitInt(N)` up to 2^24−1 bits) go to a word pool.
+- **Floats** are the exact encoding in their format, zero-extended to
+  `u128`. Bits above `kind.bits()` are `Malformed`. X87 is 80 bits with an
+  explicit integer bit. PPC double-double is not supported.
+- **Pointers** are `(base, byte offset)`, as in the Oven's memory model
+  (spec/oven.md). Identity is `(type, base, offset)`. The designator path
+  is not stored: printing recovers it from the type and offset (§9.3).
+  - `Function` bases require offset 0.
+  - A `Const(id)` base must already be in the store. It names a subobject
+    of another frozen value (an object with static storage and no
+    declaration of its own).
+  - `StringLit` ids are not validated against the `StringPool`.
+- **Member pointers** store the member's `DeclId` plus clang's
+  member-pointer path and the derived flag. They do not store an offset,
+  because union members share offsets and [temp.type] compares member
+  identity.
+- **Aggregates** (class, array, union, `_Complex`, vector) are a **byte
+  image** in target layout. A constant expression's result is fully
+  initialized ([expr.const]), so no init mask is stored. Images are
+  little-endian and target-specific (one target per compilation).
+  `push_aggregate` requires this canonical form and otherwise returns
+  `ConstError::Malformed`:
+  - **`bytes`:** the complete object, `sizeof(T)` bytes.
+  - **`relocs`:** one entry for **every** pointer-like subobject, null
+    included. Entries are sorted by `at`, non-overlapping and in bounds, and
+    the image bytes they cover are zero. The value must be pointer-like. Its
+    width is `reloc_width`:
+    - pointer, null pointer, data-member pointer: one pointer;
+    - member-function pointer, null or not: two pointers (Itanium);
+    - reflection: 8 bytes.
+  - **`padding`:** every byte that is not part of a value. That includes
+    alignment and tail padding, the unused bytes of `long double`, and union
+    bytes outside the active member (all of them when no member is active).
+    Runs are sorted, non-empty, coalesced (never adjacent), in bounds,
+    disjoint from relocations, and their bytes are zero. This is the
+    "shadow summary".
+  - **`unions`:** one entry per union subobject that has an active member,
+    sorted by `(at, field)`. The `FieldDecl` also identifies the union, so
+    nested unions at the same offset are unambiguous.
+- **Freeze and thaw (the Oven's use).**
+  - *Freeze* bottom-up:
+    1. Intern each pointer-like subobject with `push_scalar`.
+    2. Build the image, with zero bytes under relocations and padding.
+    3. Call `push_aggregate`.
+  - *Thaw*:
+    1. `memcpy` `bytes(id)` into a new allocation.
+    2. Walk `shadow(id)`. It yields maximal `Value`/`Padding` runs, plus
+       one `Pointer(ConstValueId)` run per relocation, in order, covering
+       the image exactly. Mark `Value` bytes initialized and `Padding`
+       bytes uninitialized, and write the provenance of each `Pointer`.
+    3. Set the active members from `unions(id)`.
+  - No layout is re-derived. The store contains no Oven logic.
+- **API.** `with_pointer_bytes(u8)`; `Default` is 8.
+  - `Ast::new` uses `ConstStore::with_pointer_bytes` with
+    `TargetTypes.pointer_bytes`.
+  - Interning: `push_scalar`, `push_aggregate` and `push` return
+    `Result<ConstValueId, ConstError>`. `lookup` finds an existing value
+    without inserting.
+  - Reading:
+    - `get` returns the whole `ConstValue`; `ty` and `kind` return parts of
+      it.
+    - `scalar` and `aggregate` return `Option`.
+    - `bytes`, `relocs`, `padding` and `unions` return the image tables
+      (empty for scalars). `shadow` iterates the runs above.
+    - `reloc_width`; `len` and `ids`.
+  - `ConstError` is either `Capacity` (an id space or a 4 GiB pool is full;
+    a fatal diagnostic) or `Malformed` (a canonical-form violation; an
+    internal error in the caller).
+- **Storage.** Each value has a 16-byte node (`NODE_BYTES`) holding the
+  type, a tag word with the kind, flags and a 24-bit extra field, and two
+  payload words. Per-value costs:
+
+  | value | bytes |
+  |---|---|
+  | int ≤ 64 bits, bool, float ≤ 64 bits, null, reflection | 16 |
+  | wider int | 16 + 8 per word |
+  | x87 or quad float | 16 + 16 |
+  | pointer | 16 (+8 if the offset is ≥ 2^32) |
+  | member pointer | 16 + 4 per path entry |
+  | aggregate | 16 + 24 (pool starts and cached 64-bit hash) + `sizeof(T)` + 8 per relocation, padding run and union entry |
+
+  - Every value also costs about 5 bytes of intern table. The table is a
+    hashbrown `HashTable<ConstValueId>` keyed by FxHash. It stores ids
+    only; keys are re-read from the pools.
+  - An aggregate's hash is cached, so growing the table never rehashes
+    images.
+  - Pools are `u32`-indexed: 4 GiB of image bytes in total.
+  - `HeapSize` reports these rows: `nodes`, `words`, `paths`, `aggs`,
+    `bytes`, `relocs`, `padding`, `unions`, `intern`.
+- **`StringPool`** (`kiln_ast::strings`, also WP-043).
+  - `intern(StringEncoding, code_units: &[u8]) -> StringLitId` dedups by
+    `(encoding, bytes)`. The code units are little-endian, `unit_bytes()`
+    each, and exclude the terminating null. `try_intern` reports errors
+    instead.
+  - `get(id) -> (StringEncoding, &[u8])`, `unit(id, i)`, `unit_count`,
+    `object_bytes` (`(units + 1) × unit size`), `write_literal`.
+  - `StringEncoding` is `Ordinary`, `Utf8`, `Utf16`, `Utf32`, `Wide16` or
+    `Wide32`.
+  - Dedup is **storage only**. Equal ids do not make two literal
+    evaluations the same object ([lex.string]), so the Oven must not fold
+    `"a" == "a"` from ids.
+- **Deviations from the original sketch, and open questions**
+  - **Node size and pools.** A node is 16 bytes, not 12. Values have no
+    `BlobId` or `ListId`: images, words and paths live in the store's own
+    pools. `BlobId` is unused.
+  - **Pointers.** Bases gained `Function` and `Const`; `Decl` is
+    variables and template parameter objects only. Pointers store no
+    `path`. The offset is unsigned: a pointer before its base is never a
+    constant.
+  - **Nulls and member pointers.** `NullPtr` became `Null { kind }` so that
+    the image width is known. Member pointers carry `kind`.
+  - **Shadow summary.** Only padding is stored. `Value` and `Pointer` runs
+    are derived.
+  - **Open: pointer identity.** `(void*)&s` and `(void*)&s.x` (same
+    type, base and offset) intern as equal. That is right for [expr.eq],
+    which compares addresses. [temp.type] treats them as different pointer
+    values, and clang keeps them apart through the lvalue path. If a
+    conformance test needs that, add a designator-depth disambiguator to
+    `Pointer`. Pointers of different types (`&arr` vs `&arr[0]`) are
+    already distinct.
+  - **Open: bit-fields.** Bit-level padding inside a bit-field storage unit
+    (unnamed bit-fields, unused high bits) is not tracked. Those bits must
+    be zero.
+  - **Open: byte order.** Big-endian targets are unsupported.
 
 ### 9.2 Where values are cached
 | cache | content |
@@ -467,16 +591,74 @@ enum PtrBase {
 | `Annotation` attr | annotation value (M6) |
 
 ### 9.3 Printing values
-Dump (`value=` fields): integers decimal (`-5`, `18446744073709551615`),
-`bool` as `true`/`false`; floats as the shortest round-trip form in Rust
-`{:e}` notation (`1.5e0`, `-0e0`, `inf`, `nan`); null pointers `nullptr`;
-pointers `&name+off` (`&a[1]` style when the path is an array element,
-`&"hi"[1]` for string literals); aggregates `{1, 2, {3}}` with union
-members as `.x = 1`. In type names (template arguments) values print as
-clang's `TemplateArgument::print`: integer suffixes `U`, `L`, `UL`, `LL`,
-`ULL` for non-`int` types, `char` as `'a'`, enumerators as `E::X` (or
-`(E)7` when no enumerator matches), `nullptr`, `&x`, class-type values as
-`S{1, 2}`.
+`ConstStore::print(id, &StringPool, &dyn PrintEnv, &PrintOptions, &mut
+String)` (or `display(..) -> String`). The store knows bytes, not types,
+so it reads type information through `PrintEnv`, whose methods all have
+context-free defaults (`NoEnv`):
+- `shape(ty) -> Shape` gives the layout facts the printer needs:
+  - `Int { width, signed, style }` (value bits; `_BitInt(N)` reads N bits
+    and its remaining object bits are padding), `Bool`, `Float(kind)`;
+  - `Pointer { pointee, reference }`, `MemberPointer`, `Reflection`,
+    `NullPtr`;
+  - `Array { elem, stride, len }`;
+  - `Record { members, union }`, with each `Member` carrying name, type,
+    bit offset, size, bit-field width and `FieldDecl`, bases first;
+  - `Unknown`.
+- Names: `decl_name` (default `#d17`), `decl_type`, `type_name` (default
+  `#t5`), `enumerator`, `reflection` (default `^^#r3`).
+
+`PrintOptions { style, max_depth: 10, max_elems: 32 }` are the defaults
+(`PrintOptions::DEFAULT`).
+
+**Dump** (`PrintStyle::Dump`, the `value=` fields):
+- **Integers:** decimal at any width (`-5`, `18446744073709551615`).
+  Characters and enums are numbers too.
+- **`bool`:** `true` or `false`.
+- **Floats:** the shortest round-trip form in Rust `{:e}` notation, for
+  every `FloatKind`: `1.5e0`, `1e-1`, `-0e0`, `inf`, `-inf`, `nan`.
+- **Null values of any kind:** `nullptr`.
+- **Pointers** print as `&name` plus a designator:
+  - The designator is recovered by walking the base's type
+    (`decl_type`, or the `Const` value's type) through array elements
+    `[i]` (one-past-the-end included) and fields `.f`. Bases add no
+    designator.
+  - The walk stops when the offset is 0 and the type equals the pointee:
+    `&arr` vs `&arr[0]`, `&s.in.y`, `&arr[3]`.
+  - If no designator can be recovered, the pointer prints as `&name+off`.
+  - String literals print as `"hi"` at offset 0, otherwise `&"hi"[1]`
+    (index in code units, with the `u8`/`u`/`U`/`L` prefix).
+  - Other bases: `&f` (function), `&#c12.a` (a `Const` base),
+    `&typeid(T)`.
+  - References print like pointers.
+- **Member pointers:** `&` followed by `decl_name(member)`.
+- **Reflections:** `env.reflection`.
+- **Aggregates:** `{1, 2, {3}}`.
+  - Bases are nested braces. Unnamed bit-fields are skipped, and named
+    bit-fields are decoded at bit offsets.
+  - A union with an active member prints `{.x = 1}`; with none, `{}`.
+  - An aggregate deeper than `max_depth` prints as `{...}`. After
+    `max_elems` elements the list ends with `, ...`.
+  - An aggregate of `Unknown` shape prints as `{...}`, and an undecodable
+    subobject as `?`.
+
+**Template arguments** (`PrintStyle::TemplateArg`), after clang's
+`TemplateArgument::print`:
+- **Integers** follow the type's `IntStyle`:
+  - `Plain { suffix }` gives `5U`, `5L`, `5UL`, `5LL`, `5ULL` (no suffix
+    for `int`).
+  - `Cast` gives `(short)5`.
+  - `Char(enc)` gives `'a'` or `u8'a'`, using the string escapes, with
+    `'` escaped.
+  - `Enum` gives the enumerator `E::X`, or `(E)7` when no enumerator
+    matches.
+- **References** print without `&` (`x`).
+- **Class values** print as `S{1, 2}`.
+- Everything else prints as in the dump.
+
+**String escapes** (`StringPool::write_literal`):
+- `\\ \" \n \t \r \0 \a \b \f \v` print as escapes.
+- Printable ASCII prints verbatim.
+- Every other code unit prints as `\x{hh}` (lowercase hex).
 
 ## 10. Reflection and injection (M6; representation fixed now)
 - `ReflectionTable` interns `ReflectionId → Reflectee`: `Type(QualType)`,

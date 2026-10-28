@@ -21,6 +21,8 @@ kiln_oven    = { path = "crates/kiln_oven" }
 kiln_abi     = { path = "crates/kiln_abi" }
 kiln_llvm    = { path = "crates/kiln_llvm" }
 kiln_codegen = { path = "crates/kiln_codegen" }
+# Third-party (each approved in its WP; see spec/types.md §17 T1).
+hashbrown    = { version = "0.15", default-features = false }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

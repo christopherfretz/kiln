@@ -9,6 +9,7 @@ license.workspace = true
 [dependencies]
 kiln_source.workspace = true
 kiln_diag.workspace = true
+hashbrown.workspace = true
 
 [lints]
 workspace = true
