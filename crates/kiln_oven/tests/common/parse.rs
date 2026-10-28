@@ -1541,7 +1541,16 @@ impl Parser<'_> {
         if tv.is_glvalue() && fv.is_glvalue() && self.canon(tt) == self.canon(ft) {
             return self.ast.builder().conditional(c, t, f, tt, l);
         }
-        let (t, f, ty) = if self.is_record(tt).is_some() {
+        let same = {
+            let (a, b) = (self.unqual(tt), self.unqual(ft));
+            a == b
+        };
+        let (t, f, ty) = if same && self.builtin(tt) != Some(B::Void) {
+            let u = self.unqual(tt);
+            let t = self.rvalue(t);
+            let f = self.rvalue(f);
+            (t, f, u)
+        } else if self.is_record(tt).is_some() {
             let u = self.unqual(tt);
             let t = self.rvalue(t);
             let f = self.rvalue(f);
@@ -1592,7 +1601,7 @@ impl Parser<'_> {
     }
 
     fn binary(&mut self, min: u32) -> ExprId {
-        let mut lhs = self.unary();
+        let mut lhs = self.cast_expr();
         while let Some((op, prec)) = self.bin_op() {
             if prec < min {
                 break;
@@ -1710,7 +1719,6 @@ impl Parser<'_> {
                 let e = self.to_bool(e);
                 self.ast.builder().unary(UnaryOp::LNot, e, QualType::BOOL, l, ExprFlags::NONE)
             }
-            "(" => self.cast_expr(),
             _ => self.postfix(),
         }
     }
@@ -1766,8 +1774,11 @@ impl Parser<'_> {
             if self.eat("[") {
                 let i = self.expr();
                 self.expect("]");
-                let b = self.rvalue(e);
-                let i = self.rvalue(i);
+                let mut b = self.rvalue(e);
+                let mut i = self.rvalue(i);
+                if !self.is_ptr(self.ety(b)) {
+                    std::mem::swap(&mut b, &mut i);
+                }
                 let t = self.pointee(self.ety(b)).expect("subscript of a non-pointer");
                 let bl = self.ast.exprs.get(b).loc();
                 e = self.ast.builder().subscript(b, i, t, bl);

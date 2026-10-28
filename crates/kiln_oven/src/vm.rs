@@ -13,7 +13,7 @@ use crate::arith::{self, FloatErr, IntErr, canon};
 use crate::compile::{FState, GState, float_of};
 use crate::failure::{EvalFailure, FailKind};
 use crate::kbc::{Op, ak, cmp};
-use crate::mem::{MemFault, Ptr, flags};
+use crate::mem::{Alloc, MemFault, Origin, Ptr, flags};
 use crate::memo::{MAX_ARGS, MemoKey, MemoVal};
 use crate::ty::{OTy, TyKind};
 use crate::{Oven, SemaBridge};
@@ -87,6 +87,12 @@ pub(crate) enum Fault {
         aux: u32,
     },
     Float(FloatErr),
+    /// A conversion to an enumeration outside its range of values.
+    EnumRange {
+        v: i128,
+        min: i128,
+        max: i128,
+    },
     /// Float-to-integer conversion out of range.
     FloatRange {
         kind: FloatKind,
@@ -208,7 +214,7 @@ impl Oven {
     }
 
     /// The live or dead (same generation) allocation `p` designates.
-    pub(crate) fn alloc_any(&self, p: Ptr) -> Option<&crate::mem::Alloc> {
+    pub(crate) fn alloc_any(&self, p: Ptr) -> Option<&Alloc> {
         if p.is_fn() {
             return None;
         }
@@ -342,6 +348,16 @@ impl Oven {
                 Op::ICast => {
                     reg!(0) = canon(reg!(1), aux >> 9 & 0xFF, aux >> 17 & 1 != 0);
                     pc += 3;
+                }
+                Op::EnumCheck => {
+                    let w = |i: usize| u64::from(self.code[pc + i]);
+                    let min = i128::from((w(2) | w(3) << 32).cast_signed());
+                    let max = i128::from((w(4) | w(5) << 32).cast_signed());
+                    let v = reg!(0).cast_signed();
+                    if v < min || v > max {
+                        fail!(Fault::EnumRange { v, min, max });
+                    }
+                    pc += 6;
                 }
                 Op::ToBool | Op::PtrToBool => {
                     reg!(0) = u128::from(reg!(1) != 0);
@@ -743,7 +759,7 @@ impl Oven {
 
     fn is_literal(&self, raw: u64) -> bool {
         let p = Ptr::decode(raw);
-        self.alloc_any(p).is_some_and(|a| matches!(a.origin, crate::mem::Origin::Str(_)))
+        self.alloc_any(p).is_some_and(|a| matches!(a.origin, Origin::Str(_)))
     }
 
     /// One past the end of a complete object.
@@ -922,8 +938,8 @@ impl Oven {
         let is_ptr = matches!(info.kind, TyKind::Ptr(_) | TyKind::NullPtr);
         let fault = |f| Fault::Mem { f, ak: k, ty, p: raw };
         let (st, abs, a) = self.mem.check(raw, len, true).map_err(fault)?;
-        if !init && a.flags & flags::CONST != 0 {
-            return Err(fault(MemFault::Const(ty)));
+        if !init && let Some(f) = write_fault(st, a, ty) {
+            return Err(fault(f));
         }
         if a.flags & flags::HAS_UNION != 0 {
             self.union_path(raw, ty, k)?;
@@ -971,8 +987,8 @@ impl Oven {
         let k = if init { ak::INIT } else { ak::ASSIGN };
         let fault = |f| Fault::Mem { f, ak: k, ty, p: raw };
         let (st, abs, a) = self.mem.check(raw, n, true).map_err(fault)?;
-        if !init && a.flags & flags::CONST != 0 {
-            return Err(fault(MemFault::Const(ty)));
+        if !init && let Some(f) = write_fault(st, a, ty) {
+            return Err(fault(f));
         }
         if a.flags & flags::HAS_UNION != 0 {
             self.union_path(raw, ty, k)?;
@@ -1006,8 +1022,8 @@ impl Oven {
         let k = if init { ak::INIT } else { ak::ASSIGN };
         let (ds, da, a) =
             self.mem.check(dst, size, true).map_err(|f| Fault::Mem { f, ak: k, ty, p: dst })?;
-        if !init && a.flags & flags::CONST != 0 {
-            return Err(Fault::Mem { f: MemFault::Const(ty), ak: k, ty, p: dst });
+        if !init && let Some(f) = write_fault(ds, a, ty) {
+            return Err(Fault::Mem { f, ak: k, ty, p: dst });
         }
         if size == 0 {
             return Ok(());
@@ -1082,8 +1098,8 @@ impl Oven {
             ty: uty,
             p: raw,
         })?;
-        if !init && a.flags & flags::CONST != 0 {
-            return Err(Fault::Mem { f: MemFault::Const(uty), ak: k, ty: uty, p: raw });
+        if !init && let Some(f) = write_fault(st, a, uty) {
+            return Err(Fault::Mem { f, ak: k, ty: uty, p: raw });
         }
         let off = u64::from(Ptr::decode(raw).off);
         let key = Ptr::union_key(raw, off);
@@ -1125,4 +1141,15 @@ impl Oven {
             active: active.and_then(|i| fields.get(i as usize)).map(|f| f.decl),
         })
     }
+}
+
+/// The fault of modifying allocation `a` (`stat`: in static space): an
+/// object whose lifetime began outside the evaluation ([expr.const]/5.16,
+/// clang's `note_constexpr_modify_global`) is diagnosed before a const one
+/// ([dcl.type.cv]/4).
+fn write_fault(stat: bool, a: &Alloc, ty: OTy) -> Option<MemFault> {
+    if stat && a.flags & flags::RESOLVING == 0 && matches!(a.origin, Origin::Global(_)) {
+        return Some(MemFault::ModifyGlobal);
+    }
+    (a.flags & flags::CONST != 0).then_some(MemFault::Const(ty))
 }

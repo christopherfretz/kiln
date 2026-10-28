@@ -1306,6 +1306,44 @@ fn int_of(k: TyKind) -> Option<(u32, bool)> {
     }
 }
 
+/// The range of values ([dcl.enum]/8) of an enumeration type without a
+/// fixed underlying type, as clang's `EnumDecl::getValueRange` computes it
+/// from the enumerators' significant bits; `None` for other types (and
+/// ranges beyond 64 bits).
+fn enum_range(ast: &kiln_ast::Ast, q: QualType) -> Option<(i64, i64)> {
+    let TypeView::Enum(d) = ast.types.canonical_view(q) else { return None };
+    let d = ast.definition(d).unwrap_or(d);
+    let data = ast.decls.enumeration(d)?;
+    if data.flags & kiln_ast::decl::EnumData::FIXED != 0 {
+        return None;
+    }
+    let (mut pos, mut neg) = (0u32, 0u32);
+    for m in ast.members(d) {
+        let Some(v) = ast.decls.enumerator(m).and_then(|x| x.value) else { continue };
+        let Some(Scalar::Int { bits, signed, .. }) = ast.consts.scalar(v) else { continue };
+        let w = bits.width();
+        let v = crate::arith::canon(bits.to_u128()?, w, signed).cast_signed();
+        if v >= 0 {
+            pos = pos.max(128 - v.leading_zeros()).max(1);
+        } else {
+            neg = neg.max(129 - v.leading_ones());
+        }
+    }
+    if neg == 0 {
+        if pos >= 64 {
+            return None;
+        }
+        Some((0, (1i64 << pos) - 1))
+    } else {
+        let n = (pos + 1).max(neg);
+        if n > 64 {
+            return None;
+        }
+        let m = 1i128 << (n - 1);
+        Some((i64::try_from(-m).ok()?, i64::try_from(m - 1).ok()?))
+    }
+}
+
 fn scalar_bits(s: &Scalar<'_>) -> Option<u128> {
     match s {
         Scalar::Int { bits, signed, .. } => {
@@ -1838,8 +1876,17 @@ impl Compiler<'_> {
                     self.emit(Op::Mov, 0, &[dst, r]);
                 }
             }
-            CastKind::IntegralCast
-            | CastKind::IntegralToBoolean
+            CastKind::IntegralCast => {
+                let from = self.ety(op);
+                let r = self.rv(op);
+                self.convert(r, from, ty, dst, e);
+                if let Some((min, max)) = enum_range(self.b.ast(), self.b.ast().exprs.get(e).ty()) {
+                    let lo = |v: i64| v.cast_unsigned() as u32;
+                    let hi = |v: i64| (v.cast_unsigned() >> 32) as u32;
+                    self.emit_at(Op::EnumCheck, 0, &[dst, lo(min), hi(min), lo(max), hi(max)], e);
+                }
+            }
+            CastKind::IntegralToBoolean
             | CastKind::IntegralToFloating
             | CastKind::FloatingToIntegral
             | CastKind::FloatingToBoolean

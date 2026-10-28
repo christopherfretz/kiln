@@ -80,6 +80,16 @@ impl Oven {
                 (site.loc, self.int_msg(ast, site, err, op, a, rhs, aux))
             }
             Fault::Float(e) => (site.loc, self.float_msg(ast, site, e)),
+            Fault::EnumRange { v, min, max } => {
+                let t =
+                    site.e.map_or_else(String::new, |e| Self::qname(ast, ast.exprs.get(e).ty()));
+                (
+                    site.loc,
+                    format!(
+                        "integer value {v} is outside the valid range of values [{min}, {max}] for the enumeration type '{t}'"
+                    ),
+                )
+            }
             Fault::FloatRange { kind, bits } => {
                 let t = site
                     .e
@@ -504,12 +514,13 @@ impl Oven {
                     Self::qname(ast, cq)
                 )
             }
-            MemFault::External(d, write) => {
+            MemFault::ModifyGlobal | MemFault::External(_, true) => {
+                "a constant expression cannot modify an object that is visible outside that expression".into()
+            }
+            MemFault::External(d, false) => {
                 extra.push(Note::new(ast.decls.get(d).loc(), "declared here"));
                 let name = name_of(ast, d);
-                if write {
-                    "a constant expression cannot modify an object that is visible outside that expression".into()
-                } else {
+                {
                     let vi = var_info(ast, d);
                     if vi.usable && vi.init.is_none() {
                         format!("initializer of '{name}' is unknown")

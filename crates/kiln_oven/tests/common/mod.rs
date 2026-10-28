@@ -3,6 +3,23 @@
 //! `static_assert` and namespace-scope constant initializer in order.
 
 #![allow(dead_code, reason = "each test binary uses a different subset of the harness")]
+#![allow(
+    clippy::many_single_char_names,
+    clippy::struct_excessive_bools,
+    clippy::match_same_arms,
+    clippy::too_many_lines,
+    clippy::while_let_loop,
+    clippy::collapsible_if,
+    clippy::needless_pass_by_value,
+    clippy::if_same_then_else,
+    clippy::single_match_else,
+    clippy::blocks_in_conditions,
+    clippy::manual_assert,
+    clippy::manual_let_else,
+    clippy::wrong_self_convention,
+    clippy::format_collect,
+    reason = "test-only recursive-descent DSL: short names mirror the grammar, shape follows the C++ grammar"
+)]
 
 mod lex;
 pub mod parse;

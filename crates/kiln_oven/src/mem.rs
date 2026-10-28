@@ -226,6 +226,8 @@ pub(crate) enum MemFault {
     OutOfBounds,
     Uninit,
     Const(OTy),
+    /// Modification of a namespace-scope or static variable.
+    ModifyGlobal,
     /// Read (`false`) or write (`true`) of an external variable.
     External(DeclId, bool),
     /// A pointer read from non-pointer bytes or vice versa.
