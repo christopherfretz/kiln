@@ -17,7 +17,7 @@ Format per `docs/AGENTS.md`. Ids are stable; status moves between
 | id | scope | status |
 |---|---|---|
 | WP-010 | `kiln_lex`: phases 1–2 + identifiers, punctuators, pp-numbers, comments, flags (`spec/lex.md`) | done (2026-10-28) |
-| WP-011 | `kiln_lex`: literal escapes validation (simple/octal/hex/`\o{}`/`\x{}`/`\u`/`\N{}`), full Unicode name table + aliases + Hangul + loose matching for `\N{}`, header-name diagnostics, encoding/multichar checks, NFC_QC=Maybe, literal *value* decoder shared with sema/oven, C mode flag | todo |
+| WP-011 | `kiln_lex`: literal escapes validation, `\N{}` full name table + loose matching, header-name diagnostics, literal value decoder (`kiln_lex::literal`), number classifier, full NFC | done (2026-10-28). Open: invalid-UCN-in-identifier recovery vs clang; C mode; GNU/MS suffixes | 
 | WP-012 | `kiln_pp` core: crate structure, lexer stack + `Eod` protocol, directive parsing, conditional stack (`#if` evaluator stubbed to a hook), `#define`/`#undef`/redefinition rules, the full macro engine (object-like + function-like, `#`, `##`, placemarkers, `__VA_OPT__`, rescan + hide sets, expansion locations + `<scratch space>`), builtin macros (`__LINE__`, `__FILE__`, `__COUNTER__`, `__DATE__`/`__TIME__`...), callbacks, `#error`/`#warning`/`#pragma` plumbing; include/`#if`-eval/`#embed`/printer left as module hooks | todo |
 | WP-013 | (merged into WP-012) | — |
 | WP-014 | `kiln_pp`: `#include` resolution, `#include_next`, `#pragma once`, include guards, `__has_include*`, include depth, callbacks | todo |
