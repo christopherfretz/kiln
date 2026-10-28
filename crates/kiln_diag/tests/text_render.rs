@@ -143,11 +143,17 @@ fn nested_macro_chain() {
     let _x2 = arg(s, y2, 1, sub(inner2, 1, 2));
 
     let out = text(s, &[], |e| {
-        err(INVALID_OPERANDS, sub(inner, 9, 10)).range(sub(inner, 5, 8)).range(sub(inner, 11, 12)).emit(e);
+        err(INVALID_OPERANDS, sub(inner, 9, 10))
+            .range(sub(inner, 5, 8))
+            .range(sub(inner, 11, 12))
+            .emit(e);
         err("use of undeclared identifier 'bad_name'", sub(bad, 0, 8)).emit(e);
         err("use of undeclared identifier 'nope'", sub(nope, 0, 4)).emit(e);
         err("use of undeclared identifier 'bad_name'", sub(bad2_arg, 0, 8)).emit(e);
-        err(INVALID_OPERANDS, sub(inner2, 9, 10)).range(sub(inner2, 5, 8)).range(sub(inner2, 11, 12)).emit(e);
+        err(INVALID_OPERANDS, sub(inner2, 9, 10))
+            .range(sub(inner2, 5, 8))
+            .range(sub(inner2, 11, 12))
+            .emit(e);
     });
     assert_text(
         &out,
@@ -207,7 +213,9 @@ fn macro_backtrace_limit() {
         last = Some(e);
     }
     let zz = last.unwrap();
-    let emit = |e: &kiln_diag::DiagEngine<'_>| err("use of undeclared identifier 'zz'", sub(zz, 0, 2)).emit(e);
+    let emit = |e: &kiln_diag::DiagEngine<'_>| {
+        err("use of undeclared identifier 'zz'", sub(zz, 0, 2)).emit(e);
+    };
     let note = |l: u32| {
         format!("deep.cpp:{l}:12: note: expanded from macro 'A{l}'\n    {l} | #define A{l} A{}\n      |            ^\n", l + 1)
             .replace("A9", "zz")
@@ -215,7 +223,12 @@ fn macro_backtrace_limit() {
     let head = "deep.cpp:9:9: error: use of undeclared identifier 'zz'\n    9 | int i = A1;\n      |         ^\n";
     let want = format!(
         "{head}{}{}{}note: (skipping 2 expansions in backtrace; use -fmacro-backtrace-limit=0 to see all)\n{}{}{}1 error generated.\n",
-        note(1), note(2), note(3), note(6), note(7), note(8)
+        note(1),
+        note(2),
+        note(3),
+        note(6),
+        note(7),
+        note(8)
     );
     assert_text(&text(s, &[], emit), &want);
     let all: String = (1..=8).map(note).collect();
@@ -312,14 +325,25 @@ fn display_flags() {
     let (sm, f) = source("t.cpp", "int x = \"a\" * 2;\n");
     let s = &sm;
     let emit = |e: &kiln_diag::DiagEngine<'_>| {
-        Diag::new(DiagId::pp_macro_redefined, sp(s, f, 1, 13, 1)).arg("A").range(sp(s, f, 1, 9, 3)).emit(e);
+        Diag::new(DiagId::pp_macro_redefined, sp(s, f, 1, 13, 1))
+            .arg("A")
+            .range(sp(s, f, 1, 9, 3))
+            .emit(e);
     };
     assert_text(
         &text(s, &["-fno-caret-diagnostics"], emit),
         "t.cpp:1:13: warning: 'A' macro redefined [-Wmacro-redefined]\n1 warning generated.\n",
     );
     assert_text(
-        &text(s, &["-fno-diagnostics-show-line-numbers", "-fno-diagnostics-show-option", "-fno-show-column"], emit),
+        &text(
+            s,
+            &[
+                "-fno-diagnostics-show-line-numbers",
+                "-fno-diagnostics-show-option",
+                "-fno-show-column",
+            ],
+            emit,
+        ),
         "t.cpp:1: warning: 'A' macro redefined\nint x = \"a\" * 2;\n        ~~~ ^\n1 warning generated.\n",
     );
     assert_text(&text(s, &["-w"], emit), "");
@@ -343,6 +367,8 @@ fn invalid_utf8_bytes() {
     let out = text(&sm, &[], |e| err("bad", Span::new(eq, eq.with_offset(1))).emit(e));
     assert_text(
         &out,
-        &format!("{name}:1:8: error: bad\n    1 | int <FF><FE> = 1;\n      |              ^\n1 error generated.\n"),
+        &format!(
+            "{name}:1:8: error: bad\n    1 | int <FF><FE> = 1;\n      |              ^\n1 error generated.\n"
+        ),
     );
 }

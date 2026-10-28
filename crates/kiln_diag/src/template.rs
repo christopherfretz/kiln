@@ -12,6 +12,17 @@
 
 /// True if `tmpl` is well-formed and uses every placeholder index in
 /// `0..nargs` and no other.
+///
+/// The id table asserts this in a `const` item for every id, so a
+/// mismatch is a build error:
+///
+/// ```compile_fail
+/// const _: () = assert!(kiln_diag::template::check("'{0}' and '{1}'", 1));
+/// ```
+///
+/// ```
+/// const _: () = assert!(kiln_diag::template::check("'{0}' and '{1}'", 2));
+/// ```
 pub const fn check(tmpl: &str, nargs: usize) -> bool {
     if nargs > 64 {
         return false;

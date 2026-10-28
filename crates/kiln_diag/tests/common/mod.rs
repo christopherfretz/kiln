@@ -73,7 +73,8 @@ pub fn json(sm: &SourceManager, args: &[&str], f: impl FnOnce(&DiagEngine<'_>)) 
 /// Asserts equality and prints both sides readably on failure.
 #[track_caller]
 pub fn assert_text(got: &str, want: &str) {
-    if got != want {
-        panic!("rendered text differs\n--- got ---\n{got}\n--- want ---\n{want}\n--- got (debug) ---\n{got:?}\n--- want (debug) ---\n{want:?}");
-    }
+    assert!(
+        got == want,
+        "rendered text differs\n--- got ---\n{got}\n--- want ---\n{want}\n--- got (debug) ---\n{got:?}\n--- want (debug) ---\n{want:?}"
+    );
 }
