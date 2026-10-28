@@ -16,6 +16,9 @@ use crate::macros::MacroDef;
 use crate::preprocessor::{Def, Frame, MacroFrame, Preprocessor, eof_tok};
 use crate::tok::{PpFlags, PpTok};
 
+/// Spare `bounds` and `pre` vectors of an [`Args`], kept for reuse.
+pub(crate) type ArgVecs = (Vec<usize>, Vec<Option<Vec<PpTok>>>);
+
 /// The actual arguments of one invocation (clang `MacroArgs`).
 pub(crate) struct Args {
     /// All argument tokens; each argument ends with an `Eof`.
@@ -297,8 +300,13 @@ impl Preprocessor<'_, '_> {
     fn free_args(&mut self, args: Option<Args>) {
         if let Some(a) = args {
             self.give_buf(a.toks);
-            for p in a.pre.into_iter().flatten() {
+            let (mut bounds, mut pre) = (a.bounds, a.pre);
+            for p in pre.drain(..).flatten() {
                 self.give_buf(p);
+            }
+            if self.arg_pool.len() < 16 {
+                bounds.clear();
+                self.arg_pool.push((bounds, pre));
             }
         }
     }
@@ -315,7 +323,7 @@ impl Preprocessor<'_, '_> {
             tok = self.lex_unexpanded();
         }
         let mut toks = self.take_buf();
-        let mut bounds = Vec::with_capacity(nparams + 1);
+        let (mut bounds, mut pre) = self.arg_pool.pop().unwrap_or_default();
         let mut found_elided_comma = false;
         let mut too_many_at: Option<Span> = None;
         let mut actuals = 0usize;
@@ -402,7 +410,7 @@ impl Preprocessor<'_, '_> {
             }
         }
         bounds.push(toks.len());
-        let pre = (0..nparams).map(|_| None).collect();
+        pre.resize_with(nparams, || None);
         Ok((Args { toks, bounds, pre, elided, va_nonempty: None }, tok.tok.span))
     }
 

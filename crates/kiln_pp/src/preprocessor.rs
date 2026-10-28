@@ -233,6 +233,8 @@ pub struct Preprocessor<'a, 'd> {
     pub(crate) scratch: HashMap<Box<str>, FileId>,
     /// Recycled token buffers.
     pub(crate) pool: Vec<Vec<PpTok>>,
+    /// Spare `bounds` / `pre` vectors of macro arguments (see `read_args`).
+    pub(crate) arg_pool: Vec<crate::expand::ArgVecs>,
     pub(crate) syms: Syms,
     /// Directive-name classification by symbol.
     pub(crate) dirs: crate::directive::DirTable,
@@ -317,6 +319,7 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
             pending: None,
             scratch: HashMap::new(),
             pool: Vec::new(),
+            arg_pool: Vec::new(),
             syms,
             dirs: crate::directive::DirTable::new(interner),
             counter: 0,

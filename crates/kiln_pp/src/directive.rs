@@ -393,7 +393,9 @@ impl<'a> Preprocessor<'a, '_> {
         } else {
             self.emit(Diag::new(DiagId::pp_missing_whitespace_after_name, tok.tok.span));
         }
-        let mut body: Vec<PpTok> = Vec::new();
+        // A pooled buffer: the definition keeps an exact-size copy, so the
+        // growth of the buffer is paid once, not per `#define`.
+        let mut body = self.take_buf();
         let mut has_comma_paste = false;
         if function_like {
             if !self.read_fn_body(tok, &params, &mut body, &mut has_comma_paste) {
@@ -432,6 +434,8 @@ impl<'a> Preprocessor<'a, '_> {
             }
             _ => (ntok.tok.span.lo, 0, Box::default()),
         };
+        let boxed: Box<[PpTok]> = body.as_slice().into();
+        self.give_buf(body);
         Some(MacroDef {
             name,
             name_span: ntok.tok.span,
@@ -439,7 +443,7 @@ impl<'a> Preprocessor<'a, '_> {
             function_like,
             variadic,
             named_variadic,
-            body: body.into_boxed_slice(),
+            body: boxed,
             rel,
             def_start,
             def_len,
@@ -1276,12 +1280,11 @@ impl Preprocessor<'_, '_> {
     /// it (clang `EvaluateHasIncludeCommon` / `EvaluateHasEmbed`, up to the
     /// header name). `Ok((lparen, header))`.
     fn has_open(&mut self, t: PpTok, lenient: bool) -> Result<(Span, PpTok), PpTok> {
-        let name = self.spelling(&t.tok).into_owned();
         if !self.parsing_if {
+            let name = self.spelling(&t.tok).into_owned();
             self.emit(Diag::new(DiagId::pp_has_include_outside_directive, t.tok.span).arg(&name));
             return Err(t);
         }
-        let quoted = format!("'{name}'");
         let mut h = if lenient {
             self.lex_header_name()?
         } else {
@@ -1297,6 +1300,7 @@ impl Preprocessor<'_, '_> {
             l
         } else {
             let at = if lenient { Span::new(t.tok.span.hi, t.tok.span.hi) } else { h.tok.span };
+            let quoted = format!("'{}'", self.spelling(&t.tok));
             self.emit(Diag::new(DiagId::pp_expected_after, at).arg(&quoted).arg("'('"));
             if !lenient || h.kind() != TokKind::HeaderName {
                 return Err(h);
