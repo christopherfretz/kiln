@@ -181,6 +181,8 @@ pub struct Preprocessor<'a, 'd> {
     /// `__VA_ARGS__` / `__VA_OPT__` are allowed (variadic `#define` body).
     pub(crate) va_scope: bool,
     pub(crate) date_time: Option<(String, String)>,
+    /// Reused buffer for token pasting.
+    pub(crate) paste_buf: String,
 }
 
 impl std::fmt::Debug for Preprocessor<'_, '_> {
@@ -242,6 +244,7 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
             parsing_if: false,
             va_scope: false,
             date_time: None,
+            paste_buf: String::new(),
         };
         pp.define_builtins();
         pp

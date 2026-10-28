@@ -19,6 +19,9 @@ impl PpFlags {
     pub(crate) const NOT_PASTE: PpFlags = PpFlags(2);
     /// The result of `#` (clang `Token::StringifiedInMacro`).
     pub(crate) const STRINGIFIED: PpFlags = PpFlags(4);
+    /// A `, ## __VA_ARGS__` comma after this token was removed (clang
+    /// `CommaAfterElided`).
+    pub(crate) const COMMA_AFTER_ELIDED: PpFlags = PpFlags(8);
 
     pub(crate) const fn empty() -> PpFlags {
         PpFlags(0)
