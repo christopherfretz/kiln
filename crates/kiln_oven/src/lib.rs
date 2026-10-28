@@ -50,7 +50,7 @@ use std::time::Instant;
 
 use kiln_ast::consts::ConstStore;
 use kiln_ast::types::RecordLayout;
-use kiln_ast::{Ast, ConstValueId, DeclId, ExprId, StmtId, StringLitId};
+use kiln_ast::{Ast, ConstValueId, DeclId, ExprId, StmtId};
 use kiln_diag::Diag;
 use kiln_source::Loc;
 use kiln_source::fx::FxHashMap;
@@ -125,17 +125,48 @@ pub struct EvalContext {
     /// The variable whose initializer this is, if any: names the result
     /// object in notes and guards against self-reference.
     pub object: Option<DeclId>,
+    /// Whether a cast of an out-of-range value to an unscoped enumeration
+    /// without a fixed underlying type is reported (as the
+    /// `-Wenum-constexpr-conversion` error, through
+    /// [`SemaBridge::diag`]; the evaluation goes on with the value).
+    /// clang 19 checks only where it evaluates a constant expression
+    /// proper: a `constexpr` variable's initializer, a converted constant
+    /// expression (`case` labels, enumerators of a fixed-type enumeration,
+    /// template arguments), immediate invocations and `if constexpr`
+    /// conditions — not integral constant expressions (`static_assert`,
+    /// array bounds, bit-field widths) or other initializers.
+    pub enum_range_check: bool,
 }
 
 impl EvalContext {
-    /// A context of `kind` at `loc`.
+    /// A context of `kind` at `loc` (enumeration ranges are checked for
+    /// template arguments, immediate invocations and `if constexpr`).
     pub fn new(kind: EvalKind, loc: Loc) -> Self {
-        EvalContext { kind, loc, object: None }
+        let enum_range_check =
+            matches!(kind, EvalKind::TemplateArg | EvalKind::Consteval | EvalKind::IfConstexpr);
+        EvalContext { kind, loc, object: None, enum_range_check }
     }
 
-    /// The initializer of `var`.
+    /// The initializer of the `constexpr` variable `var` (enumeration
+    /// ranges are checked; clear [`EvalContext::enum_range_check`] for a
+    /// `constinit` variable that is not `constexpr`).
     pub fn init(var: DeclId, loc: Loc) -> Self {
-        EvalContext { kind: EvalKind::Init, loc, object: Some(var) }
+        EvalContext { kind: EvalKind::Init, loc, object: Some(var), enum_range_check: true }
+    }
+
+    /// A converted constant expression ([expr.const]/12) that is not a
+    /// template argument (a `case` label, an enumerator of an enumeration
+    /// with a fixed underlying type): reported as [`EvalKind::Other`],
+    /// with enumeration ranges checked.
+    pub fn converted(loc: Loc) -> Self {
+        EvalContext { kind: EvalKind::Other, loc, object: None, enum_range_check: true }
+    }
+
+    /// `self` with [`EvalContext::enum_range_check`] set to `on`.
+    #[must_use]
+    pub fn with_enum_range_check(mut self, on: bool) -> Self {
+        self.enum_range_check = on;
+        self
     }
 }
 
@@ -168,6 +199,8 @@ pub trait SemaBridge {
 #[derive(Debug)]
 pub struct Oven {
     pub(crate) budget: Budget,
+    /// Call frames shown in a failure's backtrace (0: all).
+    pub(crate) backtrace_limit: usize,
     pub(crate) types: Types,
     pub(crate) code: Vec<u32>,
     pub(crate) sites: Vec<Site>,
@@ -179,8 +212,9 @@ pub struct Oven {
     pub(crate) thunks: FxHashMap<ExprId, u32>,
     pub(crate) globals: Vec<Global>,
     pub(crate) global_map: FxHashMap<DeclId, u32>,
-    /// String literal objects thawed from frozen pointers, by contents.
-    pub(crate) strings: FxHashMap<StringLitId, u64>,
+    /// Globals resolved to an unknown value because they had no
+    /// initializer yet: re-resolved by the next evaluation.
+    pub(crate) provisional: Vec<u32>,
     /// String literal objects of evaluated `StringLiteral` exprs, one per
     /// expression ([lex.string]/9: distinct evaluations need not share).
     pub(crate) lit_exprs: FxHashMap<ExprId, u32>,
@@ -199,6 +233,7 @@ impl Oven {
     pub fn new(budget: Budget) -> Self {
         Oven {
             budget,
+            backtrace_limit: notes::BACKTRACE_LIMIT,
             types: Types::default(),
             code: Vec::new(),
             sites: Vec::new(),
@@ -210,7 +245,7 @@ impl Oven {
             thunks: FxHashMap::default(),
             globals: Vec::new(),
             global_map: FxHashMap::default(),
-            strings: FxHashMap::default(),
+            provisional: Vec::new(),
             lit_exprs: FxHashMap::default(),
             thawed: FxHashMap::default(),
             mem: Memory::new(budget.bytes),
@@ -230,6 +265,18 @@ impl Oven {
         i
     }
 
+    /// Sets how many call frames a failure's backtrace shows
+    /// (`-fconstexpr-backtrace-limit=`; clang's default is 10, 0 shows
+    /// all). Elided frames are summarized in one "skipping" note.
+    pub fn set_backtrace_limit(&mut self, n: usize) {
+        self.backtrace_limit = n;
+    }
+
+    /// The backtrace limit ([`Oven::set_backtrace_limit`]).
+    pub fn backtrace_limit(&self) -> usize {
+        self.backtrace_limit
+    }
+
     /// The limits.
     pub fn budget(&self) -> Budget {
         self.budget
@@ -244,7 +291,7 @@ impl Oven {
         ctx: EvalContext,
     ) -> Result<ConstValueId, EvalFailure> {
         let start = Instant::now();
-        let r = self.eval_top(bridge, e, ctx.object, false);
+        let r = self.eval_top(bridge, e, ctx.object, false, ctx.enum_range_check);
         let wall_us = start.elapsed().as_micros() as u64;
         let c = self.run.counters;
         self.stats.push(EvalRecord {
@@ -264,7 +311,7 @@ impl Oven {
     /// Folds `e` if it is a constant expression; never reports anything
     /// and is not recorded in the statistics.
     pub fn try_fold(&mut self, bridge: &mut dyn SemaBridge, e: ExprId) -> Option<ConstValueId> {
-        self.eval_top(bridge, e, None, true).ok()
+        self.eval_top(bridge, e, None, true, false).ok()
     }
 
     /// Whether `var`'s initializer is a constant initializer
@@ -280,7 +327,7 @@ impl Oven {
             _ => {}
         }
         let Some(init) = data.init else { return false };
-        self.eval_top(bridge, init, Some(var), true).is_ok()
+        self.eval_top(bridge, init, Some(var), true, false).is_ok()
     }
 
     /// Per-evaluation records and totals.
@@ -309,7 +356,7 @@ impl Oven {
             + map(&self.thunks)
             + cap(&self.globals)
             + map(&self.global_map)
-            + map(&self.strings)
+            + cap(&self.provisional)
             + map(&self.lit_exprs)
             + map(&self.thawed)
             + self.mem.footprint()
@@ -331,8 +378,13 @@ impl Oven {
         e: ExprId,
         object: Option<DeclId>,
         silent: bool,
+        enum_check: bool,
     ) -> Result<ConstValueId, EvalFailure> {
+        for g in self.provisional.drain(..) {
+            self.globals[g as usize].state = compile::GState::Unresolved;
+        }
         self.run.silent = silent;
+        self.run.enum_check = enum_check;
         self.run.counters = vm::Counters::default();
         self.mem.allocated = 0;
         self.mem.peak = 0;

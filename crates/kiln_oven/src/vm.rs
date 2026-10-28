@@ -60,6 +60,9 @@ pub(crate) struct RunState {
     /// The variable being initialized (its frame object freezes as the
     /// variable itself).
     pub object: Option<DeclId>,
+    /// Out-of-range unscoped enumeration casts are reported
+    /// ([`crate::EvalContext::enum_range_check`]).
+    pub enum_check: bool,
     /// Nested global initializations in progress.
     pub nesting: u32,
 }
@@ -96,12 +99,6 @@ pub(crate) enum Fault {
         aux: u32,
     },
     Float(FloatErr),
-    /// A conversion to an enumeration outside its range of values.
-    EnumRange {
-        v: i128,
-        min: i128,
-        max: i128,
-    },
     /// Float-to-integer conversion out of range.
     FloatRange {
         kind: FloatKind,
@@ -184,6 +181,26 @@ fn compare(c: u32, o: Ordering) -> bool {
 impl Oven {
     /// Runs function `func` with its frame at register `fb` until it
     /// returns (the result is in `regs[fb]`).
+    /// Reports an out-of-range unscoped enumeration value (clang's
+    /// `warn_constexpr_unscoped_enum_out_of_range`).
+    fn enum_range_diag(&self, b: &mut dyn SemaBridge, pc: usize, v: i128, min: i128, max: i128) {
+        let site = self.site(pc);
+        let ast = b.ast();
+        let t = site.e.map_or_else(String::new, |e| {
+            let q = ast.exprs.get(e).ty();
+            Self::type_name(ast, q)
+        });
+        let d = kiln_diag::Diag::new(
+            kiln_diag::DiagId::oven_enum_constexpr_conversion,
+            kiln_source::Span::empty(site.loc),
+        )
+        .arg(v.to_string())
+        .arg(min.to_string())
+        .arg(max.to_string())
+        .arg(t);
+        b.diag(d);
+    }
+
     pub(crate) fn exec(
         &mut self,
         b: &mut dyn SemaBridge,
@@ -368,8 +385,12 @@ impl Oven {
                     let min = i128::from((w(2) | w(3) << 32).cast_signed());
                     let max = i128::from((w(4) | w(5) << 32).cast_signed());
                     let v = reg!(0).cast_signed();
-                    if v < min || v > max {
-                        fail!(Fault::EnumRange { v, min, max });
+                    // clang 19 accepts the value and reports it as an error
+                    // (`-Wenum-constexpr-conversion`) only where a constant
+                    // expression proper is required (spec/oven.md
+                    // "Integration"); elsewhere the cast is not checked.
+                    if (v < min || v > max) && self.run.enum_check && !self.run.silent {
+                        self.enum_range_diag(b, pc, v, min, max);
                     }
                     pc += 6;
                 }

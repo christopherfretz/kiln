@@ -44,11 +44,13 @@ pub struct Bridge<'a> {
     pub ast: &'a mut Ast,
     pub target: &'a Target,
     vt: VTableLayout,
+    /// Where `diag` puts each diagnostic (`Debug`-formatted), if anywhere.
+    sink: Option<&'a mut Vec<String>>,
 }
 
 impl<'a> Bridge<'a> {
     pub fn new(ast: &'a mut Ast, target: &'a Target) -> Self {
-        Bridge { ast, target, vt: VTableLayout::default() }
+        Bridge { ast, target, vt: VTableLayout::default(), sink: None }
     }
 }
 
@@ -69,7 +71,11 @@ impl SemaBridge for Bridge<'_> {
     fn consts(&mut self) -> &mut ConstStore {
         &mut self.ast.consts
     }
-    fn diag(&mut self, _d: Diag) {}
+    fn diag(&mut self, d: Diag) {
+        if let Some(s) = self.sink.as_mut() {
+            s.push(format!("{d:?}"));
+        }
+    }
 }
 
 /// The x86-64 Linux target every test uses unless it says otherwise.
@@ -84,6 +90,8 @@ pub struct Tu {
     pub src: String,
     pub items: Vec<Item>,
     pub names: HashMap<String, DeclId>,
+    /// Diagnostics the Oven emitted through the bridge (`Debug` form).
+    pub diags: Vec<String>,
 }
 
 /// The first failed item of a run.
@@ -101,11 +109,23 @@ impl Tu {
 
     pub fn with_target(src: &str, target: Target) -> Tu {
         let p = parse::parse(src, &target);
-        Tu { ast: p.ast, target, src: src.to_owned(), items: p.items, names: p.names }
+        Tu {
+            ast: p.ast,
+            target,
+            src: src.to_owned(),
+            items: p.items,
+            names: p.names,
+            diags: Vec::new(),
+        }
     }
 
     pub fn bridge(&mut self) -> Bridge<'_> {
-        Bridge::new(&mut self.ast, &self.target)
+        Bridge {
+            ast: &mut self.ast,
+            target: &self.target,
+            vt: VTableLayout::default(),
+            sink: Some(&mut self.diags),
+        }
     }
 
     /// `line:col` of a location (1-based).

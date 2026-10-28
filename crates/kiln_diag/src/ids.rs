@@ -470,6 +470,7 @@ diag_ids! {
     sema_static_assert_requirement_failed = Error (1) "static assertion failed due to requirement '{0}'";
     sema_static_assert_requirement_failed_msg = Error (2) "static assertion failed due to requirement '{0}': {1}";
     sema_static_assert_not_ice = Error (0) "static assertion expression is not an integral constant expression";
+    oven_enum_constexpr_conversion = WarningError [EnumConstexprConversion] (4) "integer value {0} is outside the valid range of values [{1}, {2}] for the enumeration type '{3}'";
     note_expr_evaluates_to = Note (3) "expression evaluates to '{0} {1} {2}'";
     note_constexpr_overflow = Note (2) "value {0} is outside the range of representable values of type {1}";
     note_expr_divide_by_zero = Note (0) "division by zero";

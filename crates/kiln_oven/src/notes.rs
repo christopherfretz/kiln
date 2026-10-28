@@ -20,7 +20,7 @@ use crate::vm::{Fault, value_len};
 use crate::{Oven, SemaBridge};
 
 /// clang's default `-fconstexpr-backtrace-limit`.
-const BACKTRACE_LIMIT: usize = 10;
+pub(crate) const BACKTRACE_LIMIT: usize = 10;
 
 /// Elements of an aggregate argument printed before eliding.
 const MAX_ELEMS: u64 = 16;
@@ -80,16 +80,6 @@ impl Oven {
                 (site.loc, self.int_msg(ast, site, err, op, a, rhs, aux))
             }
             Fault::Float(e) => (site.loc, self.float_msg(ast, site, e)),
-            Fault::EnumRange { v, min, max } => {
-                let t =
-                    site.e.map_or_else(String::new, |e| Self::qname(ast, ast.exprs.get(e).ty()));
-                (
-                    site.loc,
-                    format!(
-                        "integer value {v} is outside the valid range of values [{min}, {max}] for the enumeration type '{t}'"
-                    ),
-                )
-            }
             Fault::FloatRange { kind, bits } => {
                 let t = site
                     .e
@@ -196,15 +186,16 @@ impl Oven {
         let frames = &self.stack[self.run.entry + 1..];
         let active = frames.len();
         let (mut skip0, mut skip1) = (active, active);
-        if BACKTRACE_LIMIT < active {
-            skip0 = BACKTRACE_LIMIT / 2 + BACKTRACE_LIMIT % 2;
-            skip1 = active - BACKTRACE_LIMIT / 2;
+        let limit = self.backtrace_limit;
+        if limit != 0 && limit < active {
+            skip0 = limit / 2 + limit % 2;
+            skip1 = active - limit / 2;
         }
         for (i, fr) in frames.iter().rev().enumerate() {
             let loc = self.site(fr.call_pc as usize).loc;
             if i >= skip0 && i < skip1 {
                 if i == skip0 {
-                    let n = active - BACKTRACE_LIMIT;
+                    let n = active - limit;
                     notes.push(Note::new(
                         loc,
                         format!(

@@ -221,20 +221,6 @@ impl Oven {
         i
     }
 
-    pub(crate) fn string_index(&mut self, s: StringLitId, ty: OTy) -> u32 {
-        if let Some(&i) = self.strings.get(&s) {
-            return i as u32;
-        }
-        let i = self.globals.len() as u32;
-        self.globals.push(Global {
-            kind: GKind::Str(s, ty, None),
-            state: GState::Unresolved,
-            slot: 0,
-        });
-        self.strings.insert(s, u64::from(i));
-        i
-    }
-
     /// The string literal object of `StringLiteral` expr `e`: one object
     /// per expression, so `"a" == "a"` compares distinct objects (the
     /// pool's ids are storage dedup only; spec/ast.md §9.1).
@@ -661,6 +647,7 @@ impl Scan<'_> {
             }
             StmtKind::CaseStmt => self.stmt(ast.stmts.case_data(s).sub),
             StmtKind::DefaultStmt => self.stmt(ast.stmts.default_sub(s)),
+            StmtKind::LabelStmt => self.stmt(StmtId::new(n.b())),
             StmtKind::WhileStmt | StmtKind::DoStmt | StmtKind::ForStmt => {
                 let d = *ast.stmts.loop_data(s);
                 d.init.into_iter().for_each(|x| self.stmt(x));
@@ -780,6 +767,7 @@ fn hunt_cost(ast: &kiln_ast::Ast, s: StmtId, locs: &mut Vec<Loc>) {
     match n.kind() {
         StmtKind::CaseStmt => hunt_cost(ast, ast.stmts.case_data(s).sub, locs),
         StmtKind::DefaultStmt => hunt_cost(ast, ast.stmts.default_sub(s), locs),
+        StmtKind::LabelStmt => hunt_cost(ast, StmtId::new(n.b()), locs),
         StmtKind::CompoundStmt => {
             for &c in ast.lists.get(ast.stmts.compound_body(s)) {
                 hunt_cost(ast, StmtId::new(c), locs);
@@ -804,6 +792,7 @@ fn has_case(ast: &kiln_ast::Ast, s: StmtId) -> bool {
     let n = *ast.stmts.get(s);
     match n.kind() {
         StmtKind::CaseStmt | StmtKind::DefaultStmt => true,
+        StmtKind::LabelStmt => has_case(ast, StmtId::new(n.b())),
         StmtKind::CompoundStmt => {
             ast.lists.get(ast.stmts.compound_body(s)).iter().any(|&c| has_case(ast, StmtId::new(c)))
         }
@@ -902,7 +891,11 @@ impl Compiler<'_> {
         let ast = self.b.ast();
         let mut v = Vec::new();
         for &c in children {
-            let s = StmtId::new(c);
+            let mut s = StmtId::new(c);
+            // `l: int x = 1;` declares `x` in the enclosing block.
+            while ast.stmts.get(s).kind() == StmtKind::LabelStmt {
+                s = StmtId::new(ast.stmts.get(s).b());
+            }
             if ast.stmts.get(s).kind() == StmtKind::DeclStmt {
                 v.extend(
                     ast.lists.get(ast.stmts.decl_stmt_decls(s)).iter().map(|&d| DeclId::new(d)),
@@ -1065,9 +1058,12 @@ impl Compiler<'_> {
             StmtKind::GotoStmt | StmtKind::IndirectGotoStmt => {
                 self.trap_loc(n.loc(), "subexpression not valid in a constant expression".into());
             }
-            // The payload of labelled and attributed statements is not yet
-            // defined by kiln_ast (spec/ast.md §6; no builder exists).
-            StmtKind::LabelStmt | StmtKind::AttributedStmt => {
+            // A label is evaluated by evaluating its statement (clang
+            // charges a step for each: `EvaluateStmt` recurses).
+            StmtKind::LabelStmt => self.stmt(StmtId::new(n.b())),
+            // The payload of an attributed statement is not yet defined by
+            // kiln_ast (spec/ast.md §6; no builder exists).
+            StmtKind::AttributedStmt => {
                 self.trap_loc(
                     n.loc(),
                     format!("kiln: constant evaluation of {:?} is not supported yet", n.kind()),
@@ -2110,8 +2106,27 @@ impl Compiler<'_> {
                         Local::Mem(p) => Place::Mem(p),
                     };
                 }
-                if is_local_var(ast, d) {
-                    self.trap(e, "kiln: internal: a local variable without storage");
+                // A function parameter outside its call: an expression
+                // evaluated in the body (a `static_assert`, an array bound)
+                // has no frame for it. An automatic variable outside its
+                // frame is read like a global: usable if it is `constexpr`
+                // or a `const` integral with a constant initializer
+                // ([expr.const]/4), else its value is unknown.
+                if ast.decls.get(d).kind() == DeclKind::ParmVar {
+                    let name = {
+                        let mut s = String::new();
+                        kiln_ast::dump::AstNames::new(ast).write_name(d, &mut s);
+                        s
+                    };
+                    let dl = ast.decls.get(d).loc();
+                    let loc = ast.exprs.get(e).loc();
+                    self.trap_notes(
+                        loc,
+                        format!(
+                            "function parameter '{name}' with unknown value cannot be used in a constant expression"
+                        ),
+                        vec![Note::new(dl, "declared here")],
+                    );
                     return Place::Mem(self.reg());
                 }
                 if ast.decls.get(d).kind() != DeclKind::Var {
@@ -2405,7 +2420,7 @@ impl Compiler<'_> {
             ExprKind::StringLiteral => {
                 let sty = self.ety(e);
                 let s = self.ast().exprs.string_lit(e);
-                let g = self.o.string_index(s, sty);
+                let g = self.o.string_expr_index(e, s, sty);
                 let r = self.reg();
                 self.emit_at(Op::GlobalAddr, 0, &[r, g], e);
                 if self.o.types.size(sty) < self.o.types.size(ty) {
