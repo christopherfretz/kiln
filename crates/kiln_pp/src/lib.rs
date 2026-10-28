@@ -27,6 +27,7 @@ mod cond;
 mod diag_map;
 mod directive;
 mod expand;
+mod features;
 mod ifeval;
 mod include;
 mod macros;
@@ -41,6 +42,7 @@ pub use callbacks::{
     FileChange, NoCallbacks, PpCallbacks, PragmaInfo, PragmaIntroducer, PragmaMessageKind,
 };
 pub use cond::{IfContext, IfEvaluator, StubIfEvaluator};
+pub use features::{ClangFeatures, FeatureFlag};
 pub use ifeval::IfEval;
 pub use include::{
     EmbedData, EmbedRequest, IncludeKind, IncludeRequest, IncludeResolver, MemoryResolver,

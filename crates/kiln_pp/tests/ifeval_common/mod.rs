@@ -90,6 +90,20 @@ pub fn run_kiln(
     r: MemoryResolver,
     setup: impl FnOnce(&mut Preprocessor<'_, '_>),
 ) -> Out {
+    run_kiln_with(src, triple, std, true, args, r, setup)
+}
+
+/// [`run_kiln`], without clang's predefined macros if `!predefs`
+/// (`clang -undef`).
+pub fn run_kiln_with(
+    src: &str,
+    triple: &str,
+    std: Std,
+    predefs: bool,
+    args: &[&str],
+    r: MemoryResolver,
+    setup: impl FnOnce(&mut Preprocessor<'_, '_>),
+) -> Out {
     let interner = Interner::new();
     let sm = SourceManager::new();
     let main = sm.add_virtual("t.cpp", src.to_owned()).unwrap();
@@ -98,7 +112,9 @@ pub fn run_kiln(
     dopts.parse_arg("-ferror-limit=0");
     let engine = DiagEngine::new(&sm, &dopts, sink.clone());
     let mut opts = PpOptions::new(std);
-    predefines(triple, std).clone_into(&mut opts.predefines);
+    if predefs {
+        predefines(triple, std).clone_into(&mut opts.predefines);
+    }
     opts.reproducible_time = Some(("Jan  1 2000".to_owned(), "00:00:00".to_owned()));
     let mut pp = Preprocessor::new(&sm, &engine, &interner, opts);
     pp.set_include_resolver(Box::new(r));
@@ -131,8 +147,15 @@ pub fn run_clang(src: &str, triple: &str, std: Std, args: &[&str]) -> Option<Out
         .stderr(Stdio::piped())
         .spawn()
         .ok()?;
-    child.stdin.take()?.write_all(src.as_bytes()).ok()?;
+    // Feed stdin from a thread: a large output would otherwise fill the
+    // stdout pipe while we are still writing.
+    let mut stdin = child.stdin.take()?;
+    let input = src.to_owned();
+    let writer = std::thread::spawn(move || stdin.write_all(input.as_bytes()).is_ok());
     let out = child.wait_with_output().ok()?;
+    if !writer.join().unwrap_or(false) {
+        return None;
+    }
     let stderr = String::from_utf8_lossy(&out.stderr);
     let diags = stderr
         .lines()
