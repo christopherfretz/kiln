@@ -2783,7 +2783,10 @@ impl Compiler<'_> {
             // Sema materializes no temporaries yet (no
             // `MaterializeTemporaryExpr`).
             let loc = self.begin(init);
-            self.trap_loc(loc, "kiln: binding a reference to a temporary is not supported yet".into());
+            self.trap_loc(
+                loc,
+                "kiln: binding a reference to a temporary is not supported yet".into(),
+            );
         }
         self.next = m;
     }
