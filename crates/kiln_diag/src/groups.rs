@@ -44,7 +44,7 @@ macro_rules! diag_groups {
 
 diag_groups! {
     All = "all" [Most];
-    Most = "most" [UnknownPragmas];
+    Most = "most" [Comment, UnknownPragmas];
     Pragmas = "pragmas" [UnknownPragmas];
     Pedantic = "pedantic" [];
     BackslashNewlineEscape = "backslash-newline-escape" [];
@@ -82,12 +82,46 @@ diag_groups! {
     LiteralRange = "literal-range" [];
     Cxx11Narrowing = "c++11-narrowing" [];
     Narrowing = "narrowing" [Cxx11Narrowing];
+    BuiltinMacroRedefined = "builtin-macro-redefined" [];
+    Comment = "comment" [];
+    C23Extensions = "c23-extensions" [];
+    Cxx20Compat = "c++20-compat" [];
+    DateTime = "date-time" [];
+    DelimitedEscapeSequenceExtension = "delimited-escape-sequence-extension" [];
+    DisabledMacroExpansion = "disabled-macro-expansion" [];
+    DollarInIdentifierExtension = "dollar-in-identifier-extension" [];
+    EmbeddedDirective = "embedded-directive" [];
+    ExpansionToDefined = "expansion-to-defined" [];
+    GnuIncludeNext = "gnu-include-next" [];
+    GnuLineMarker = "gnu-line-marker" [];
+    GnuZeroLineDirective = "gnu-zero-line-directive" [];
+    GnuZeroVariadicMacroArguments = "gnu-zero-variadic-macro-arguments" [];
+    IncludeNextAbsPath = "include-next-absolute-path" [];
+    IncludeNextOutsideHeader = "include-next-outside-header" [];
+    KeywordAsMacro = "keyword-macro" [];
+    MalformedWarningCheck = "malformed-warning-check" [];
+    NewlineEof = "newline-eof" [];
+    NullCharacter = "null-character" [];
+    PragmaOnceOutsideHeader = "pragma-once-outside-header" [];
+    PragmaSystemHeaderOutsideHeader = "pragma-system-header-outside-header" [];
+    ReservedMacroIdentifier = "reserved-macro-identifier" [];
+    ReservedUserDefinedLiteral = "reserved-user-defined-literal" [];
+    Trigraphs = "trigraphs" [];
+    Unicode = "unicode" [];
+    UnicodeWhitespace = "unicode-whitespace" [];
+    VariadicMacros = "variadic-macros" [];
 }
 
 impl Group {
     /// Looks a kiln group up by option name.
     pub fn from_name(name: &str) -> Option<Group> {
         Group::ALL.iter().copied().find(|g| g.name() == name)
+    }
+
+    /// True if `name` (without `-W`) names a warning group clang 19
+    /// accepts, whether or not kiln has diagnostics in it (`__has_warning`).
+    pub fn is_known_name(name: &str) -> bool {
+        Group::from_name(name).is_some() || CLANG_GROUP_NAMES.binary_search(&name).is_ok()
     }
 
     /// True if `id` is a member of this group (directly, through a

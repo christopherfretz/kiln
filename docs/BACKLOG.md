@@ -18,13 +18,13 @@ Format per `docs/AGENTS.md`. Ids are stable; status moves between
 |---|---|---|
 | WP-010 | `kiln_lex`: phases 1–2 + identifiers, punctuators, pp-numbers, comments, flags (`spec/lex.md`) | done (2026-10-28) |
 | WP-011 | `kiln_lex`: literal escapes validation, `\N{}` full name table + loose matching, header-name diagnostics, literal value decoder (`kiln_lex::literal`), number classifier, full NFC | done (2026-10-28). Open: invalid-UCN-in-identifier recovery vs clang; C mode; GNU/MS suffixes | 
-| WP-012 | `kiln_pp` core: crate structure, lexer stack + `Eod` protocol, directive parsing, conditional stack (`#if` evaluator stubbed to a hook), `#define`/`#undef`/redefinition rules, the full macro engine (object-like + function-like, `#`, `##`, placemarkers, `__VA_OPT__`, rescan + hide sets, expansion locations + `<scratch space>`), builtin macros (`__LINE__`, `__FILE__`, `__COUNTER__`, `__DATE__`/`__TIME__`...), callbacks, `#error`/`#warning`/`#pragma` plumbing; include/`#if`-eval/`#embed`/printer left as module hooks | todo |
+| WP-012 | `kiln_pp` core + macro engine + builtins + pragmas + `-E` printer + include-guard optimization (226 tests vs clang) | done (2026-10-28). Open: `#embed` not streamed; per-inclusion source ranges; `-dD/-dI` placement |
 | WP-013 | (merged into WP-012) | — |
-| WP-014 | `kiln_pp`: `#include` resolution, `#include_next`, `#pragma once`, include guards, `__has_include*`, include depth, callbacks | todo |
-| WP-015 | `kiln_pp`: `#if` expression evaluator, `defined`, `__has_*` builtins table, `#line`, `#error/#warning`, pragmas, `_Pragma` | todo |
-| WP-016 | `kiln_pp`: `#embed` | todo |
-| WP-017 | `kiln_pp::print`: `-E` printer with clang line markers, `-P`, `-C/-CC`, `-dM/-dD` | todo |
-| WP-018 | driver: `kiln -E` flag parsing subset + `-M*` dependency output | todo |
+| WP-014 | `IncludeResolver` impl (clang search order from `resource/include-paths`, `-I/-isystem/-iquote/-idirafter/-isysroot/-nostdinc*`, `#include_next`, `__has_include*`, `-resource-dir`), driver `kiln -E` with the flag subset + `-M*`, predefines loading + `__KILN__`, and the first parity run over tests/differential/pp with `--report-parity` | in-progress |
+| WP-015 | `IfEvaluator` impl (full [cpp.cond]: intmax arithmetic, char literals via kiln_lex::literal, `defined`, `__has_*`, division by zero, unevaluated branches, clang diagnostics) + `FeatureQueries` tables (clang 19's `__has_feature/extension/builtin/attribute/cpp_attribute/declspec_attribute`, `__is_target_*`) | in-progress |
+| WP-016 | `#embed` resolver (part of WP-014's resolver) + streaming (WP-012 open item) | folded into WP-014 / later |
+| WP-017 | `-E` printer | done inside WP-012 (`-dD/-dI` placement open) |
+| WP-018 | driver `-E` | folded into WP-014; `-fsyntax-only -fdump-ast` wiring after WP-048 |
 | WP-019 | differential corpus: 223 generated header tests (libc++ 19 public + wrapped C + sysroot) + 48 torture cases, token-wise `-E` comparison via kiln_lex, `%{resource_dir}` placeholders, `--report-parity docs/status/pp-parity.md` | done (2026-10-28) |
 | WP-020 | **Decision (M1):** kiln predefines exactly clang 19's set for the target/std (differential `-E` parity requires it) plus `__KILN__`/`__KILN_MAJOR__`/`__KILN_MINOR__`; `__VERSION__`/`__clang_version__` stay clang's strings for now. Audit of `__cpp_*` claims deferred to M2+. predefined macro audit: `__cpp_*` values kiln claims for M1; decide `__VERSION__`/`__clang_version__` strings, GNU-mode (`gnu++NN`) macro delta, which macros the driver supplies from flags (`__OPTIMIZE__`, `__PIE__`, `__EXCEPTIONS`, `__GXX_RTTI`, `__GCC_HAVE_DWARF2_CFI_ASM`) vs the static files — see `resource/README.md` | todo |
 
