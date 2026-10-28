@@ -304,6 +304,7 @@ impl Preprocessor<'_, '_> {
         }
         if let Some(f) = self.cur_file() {
             f.system = true;
+            f.extern_c = false;
         }
         self.file_change(FileChange::SystemHeader { file, at: t.tok.span.lo });
     }

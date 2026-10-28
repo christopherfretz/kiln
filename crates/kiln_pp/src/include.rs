@@ -60,8 +60,13 @@ pub struct ResolvedInclude {
     /// Position in the search path where it was found (for
     /// `#include_next`); `None` if found relative to the includer.
     pub lookup_index: Option<u32>,
-    /// Found in a system directory (affects warnings; recorded for WP-014).
+    /// Found in a system directory, or relative to a system header
+    /// (suppresses warnings; line-marker flag 3).
     pub system: bool,
+    /// Found in an `extern "C"` system directory (clang
+    /// `C_ExternCSystem`, `-internal-externc-isystem`; line-marker flag
+    /// 4). Implies `system`.
+    pub extern_c: bool,
 }
 
 /// One `#embed` request ([cpp.embed]). The resource name is resolved like
@@ -188,17 +193,17 @@ impl IncludeResolver for MemoryResolver {
         if next {
             let text = self.next_headers.get(&req.name)?.clone();
             let file = self.load(sm, 2, &req.name, &text)?;
-            return Some(ResolvedInclude { file, lookup_index: Some(2), system: false });
+            return Some(ResolvedInclude { file, lookup_index: Some(2), system: false, extern_c: false });
         }
         if let Some(text) = self.headers.get(&req.name).cloned() {
             let file = self.load(sm, 0, &req.name, &text)?;
-            return Some(ResolvedInclude { file, lookup_index: Some(0), system: false });
+            return Some(ResolvedInclude { file, lookup_index: Some(0), system: false, extern_c: false });
         }
         if req.angled
             && let Some(text) = self.system_headers.get(&req.name).cloned()
         {
             let file = self.load(sm, 1, &req.name, &text)?;
-            return Some(ResolvedInclude { file, lookup_index: Some(1), system: true });
+            return Some(ResolvedInclude { file, lookup_index: Some(1), system: true, extern_c: false });
         }
         None
     }
