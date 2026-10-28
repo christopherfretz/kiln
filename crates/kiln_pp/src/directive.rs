@@ -1203,7 +1203,8 @@ impl Preprocessor<'_, '_> {
         }
         // clang: the characteristic is the max of the directory's and the
         // includer's (user < system < extern "C" system).
-        let (cur_sys, cur_c) = self.cur_file_ref().map_or((false, false), |f| (f.system, f.extern_c));
+        let (cur_sys, cur_c) =
+            self.cur_file_ref().map_or((false, false), |f| (f.system, f.extern_c));
         let extern_c = r.extern_c || cur_c;
         let system = r.system || cur_sys || extern_c;
         self.include_depth += 1;

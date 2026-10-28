@@ -193,17 +193,32 @@ impl IncludeResolver for MemoryResolver {
         if next {
             let text = self.next_headers.get(&req.name)?.clone();
             let file = self.load(sm, 2, &req.name, &text)?;
-            return Some(ResolvedInclude { file, lookup_index: Some(2), system: false, extern_c: false });
+            return Some(ResolvedInclude {
+                file,
+                lookup_index: Some(2),
+                system: false,
+                extern_c: false,
+            });
         }
         if let Some(text) = self.headers.get(&req.name).cloned() {
             let file = self.load(sm, 0, &req.name, &text)?;
-            return Some(ResolvedInclude { file, lookup_index: Some(0), system: false, extern_c: false });
+            return Some(ResolvedInclude {
+                file,
+                lookup_index: Some(0),
+                system: false,
+                extern_c: false,
+            });
         }
         if req.angled
             && let Some(text) = self.system_headers.get(&req.name).cloned()
         {
             let file = self.load(sm, 1, &req.name, &text)?;
-            return Some(ResolvedInclude { file, lookup_index: Some(1), system: true, extern_c: false });
+            return Some(ResolvedInclude {
+                file,
+                lookup_index: Some(1),
+                system: true,
+                extern_c: false,
+            });
         }
         None
     }
