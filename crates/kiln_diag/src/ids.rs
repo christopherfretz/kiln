@@ -288,6 +288,8 @@ diag_ids! {
     pp_malformed_ident = Error (0) "invalid #ident directive";
     pp_expr_unsupported = Error (0) "kiln: this #if expression needs the full evaluator (WP-015)";
     pp_include_unsupported = Fatal (0) "kiln: no include resolver is installed";
+    pp_expected = Error (1) "expected {0}";
+    pp_pragma_diagnostic_unknown_warning = Warning [UnknownWarningOption] (1) "unknown warning group '{0}', ignored";
 
     // ----- shared notes ------------------------------------------------
     note_previous_definition = Note (0) "previous definition is here";
