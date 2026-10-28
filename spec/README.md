@@ -23,4 +23,6 @@ say which in the PR. A spec change without tests is incomplete.
 | [abi.md](abi.md) | kiln_abi | implemented (M2: no bases) |
 | [sema-conv.md](sema-conv.md) | kiln_sema (`conv`, `literal`) | implemented |
 | [llvm.md](llvm.md) | kiln_llvm | implemented |
-| parse, sema, codegen, driver | | in progress (M2) |
+| [parse.md](parse.md) | kiln_parse | implemented (M2); M3+ listed |
+| [sema.md](sema.md) | kiln_sema | implemented (M2); M3+ listed |
+| codegen, driver | | in progress (M2) |
