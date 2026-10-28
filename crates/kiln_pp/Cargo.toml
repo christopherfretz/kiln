@@ -11,5 +11,9 @@ kiln_source.workspace = true
 kiln_diag.workspace = true
 kiln_lex.workspace = true
 
+[features]
+# Counters and phase timers printed with KILN_PP_PROFILE=1 (WP-056).
+pp-profile = []
+
 [lints]
 workspace = true

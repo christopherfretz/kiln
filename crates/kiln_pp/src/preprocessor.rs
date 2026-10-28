@@ -147,6 +147,10 @@ impl MiOpt {
 pub(crate) struct FileFrame<'a> {
     pub(crate) lx: Lexer<'a>,
     pub(crate) file: FileId,
+    /// Location of byte 0 of this inclusion of `file`: the buffer's own
+    /// range for the main file and virtual buffers, a fresh
+    /// `SourceManager::add_inclusion` range for an `#include`d file.
+    pub(crate) base: Loc,
     /// Tokens lexed ahead (by the `(` lookahead), last = next.
     pub(crate) back: Vec<Token>,
     /// Start-of-line / leading-space flags propagated from an ended macro
@@ -229,7 +233,11 @@ pub struct Preprocessor<'a, 'd> {
     pub(crate) scratch: HashMap<Box<str>, FileId>,
     /// Recycled token buffers.
     pub(crate) pool: Vec<Vec<PpTok>>,
+    /// Spare `bounds` / `pre` vectors of macro arguments (see `read_args`).
+    pub(crate) arg_pool: Vec<crate::expand::ArgVecs>,
     pub(crate) syms: Syms,
+    /// Directive-name classification by symbol.
+    pub(crate) dirs: crate::directive::DirTable,
     pub(crate) counter: u32,
     pub(crate) once_files: HashSet<FileId>,
     /// Files with a detected include guard, and its macro.
@@ -311,7 +319,9 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
             pending: None,
             scratch: HashMap::new(),
             pool: Vec::new(),
+            arg_pool: Vec::new(),
             syms,
+            dirs: crate::directive::DirTable::new(interner),
             counter: 0,
             once_files: HashSet::new(),
             guards: HashMap::new(),
@@ -396,7 +406,7 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
     pub fn enter_main_file(&mut self, file: FileId) {
         use std::fmt::Write as _;
         self.main_file = Some(file);
-        self.push_file(file, None, None, false, false);
+        self.push_file(file, None, None, None, false, false);
         let mut text = self.opts.predefines.clone();
         if !text.is_empty() && !text.ends_with('\n') {
             text.push('\n');
@@ -408,30 +418,46 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
             let _ = writeln!(text, "#undef {name}");
         }
         if let Ok(b) = self.sm.add_virtual("<built-in>", text) {
-            self.push_file(b, None, None, false, false);
+            self.push_file(b, None, None, None, false, false);
         }
     }
 
     /// Pushes a file frame for `file` (reporting its invalid UTF-8 once).
+    /// `inc` is the location of the header name of the `#include` that
+    /// enters it (clang's include position); the frame then lexes in a
+    /// fresh location range remembering it ([cpp.include]).
     pub(crate) fn push_file(
         &mut self,
         file: FileId,
         from: Option<Loc>,
+        inc: Option<Loc>,
         lookup: Option<u32>,
         system: bool,
         extern_c: bool,
     ) {
+        crate::profile::count!(files_entered);
+        if self.entered.contains(&file) {
+            crate::profile::count!(file_reentries);
+        }
+        // clang: the include position of a macro-expanded header name is
+        // the end of its expansion. If location space is exhausted the
+        // inclusion lexes in the buffer's own range (no include stack in
+        // its diagnostics) rather than failing.
+        let base = inc
+            .and_then(|at| self.sm.add_inclusion(file, self.sm.expansion_loc(at)).ok())
+            .unwrap_or_else(|| self.sm.loc(file, 0));
         if self.entered.insert(file) {
             for r in &self.sm.load_report(file).replacements {
-                let at = self.sm.loc(file, r.offset);
+                let at = base.with_offset(r.offset);
                 Diag::new(DiagId::lex_invalid_utf8, Span::new(at, at.with_offset(3)))
                     .emit(self.diags);
             }
         }
-        let lx = Lexer::new(self.sm, self.interner, file, self.sm.loc(file, 0), self.lex_opts);
+        let lx = Lexer::new(self.sm, self.interner, file, base, self.lex_opts);
         self.frames.push(Frame::File(Box::new(FileFrame {
             lx,
             file,
+            base,
             back: Vec::new(),
             pend: TokFlags::empty(),
             conds: Vec::new(),
@@ -539,6 +565,7 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
         let t = if let Some(t) = f.back.pop() {
             t
         } else {
+            crate::profile::count!(raw_tokens);
             let t = f.lx.next();
             if !f.lx.diagnostics().is_empty() {
                 let ds = f.lx.take_diagnostics();
@@ -576,6 +603,16 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
     pub(crate) fn finish_directive(&mut self) -> Token {
         if !self.in_directive {
             return Token { kind: TokKind::Eod, span: Span::INVALID, flags: TokFlags::empty() };
+        }
+        // In a skipped group (no diagnostics), a plain rest of the line is
+        // discarded without forming its tokens.
+        if self.quiet_lex
+            && self.dir_eod.is_none()
+            && let Some(Frame::File(f)) = self.frames.last_mut()
+            && f.back.is_empty()
+            && f.lx.skip_plain_line_rest()
+        {
+            f.mi.read_token();
         }
         let eod = loop {
             if let Some(e) = self.dir_eod {
@@ -836,7 +873,8 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
         }
         self.include_depth = self.include_depth.saturating_sub(1);
         if let Some(Frame::File(below)) = self.frames.last() {
-            let (file, system, extern_c) = (below.file, below.system, below.extern_c);
+            let (file, base, system, extern_c) =
+                (below.file, below.base, below.system, below.extern_c);
             // The includer resumes after the newline ending the `#include`
             // (clang's lexer has consumed it with the `eod`).
             let mut off = below.lx.offset();
@@ -846,7 +884,7 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
             } else if rest.starts_with(b"\n") || rest.starts_with(b"\r") {
                 off += 1;
             }
-            let resume = self.sm.loc(file, off);
+            let resume = base.with_offset(off);
             self.file_change(FileChange::Exit { file, exited, resume, system, extern_c });
         }
         false
@@ -854,7 +892,10 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
 
     /// A pooled, empty token buffer.
     pub(crate) fn take_buf(&mut self) -> Vec<PpTok> {
-        self.pool.pop().unwrap_or_default()
+        self.pool.pop().unwrap_or_else(|| {
+            crate::profile::count!(buf_new);
+            Vec::new()
+        })
     }
 
     /// Returns a token buffer to the pool.
@@ -862,6 +903,8 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
         v.clear();
         if self.pool.len() < 64 {
             self.pool.push(v);
+        } else {
+            crate::profile::count!(buf_dropped);
         }
     }
 
@@ -901,18 +944,30 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
 
     /// The base location of the source-manager entry containing `loc`.
     pub(crate) fn entry_of(&self, loc: Loc) -> Option<Loc> {
-        if loc.is_macro() {
-            self.sm.expansion_info(loc).map(|e| e.base)
-        } else {
-            self.sm.offset_of(loc).map(|(f, _)| self.sm.loc(f, 0))
-        }
+        crate::profile::count!(entry_of);
+        self.sm.entry_bounds(loc).map(|(base, _)| base)
     }
 
-    /// `hi - lo` for two locations in the same entry, walking spelling
-    /// chains down to a file (linear in the expansion depth).
+    /// The distance between the spellings of `lo` and `hi` when their
+    /// spelling chains end in the same file at the same depth (`None`
+    /// otherwise). O(1) when both are in the same entry.
     pub(crate) fn loc_diff(&self, lo: Loc, hi: Loc) -> Option<u32> {
+        crate::profile::count!(loc_diff);
+        if let Some(d) = self.sm.same_entry_distance(lo, hi) {
+            return Some(d);
+        }
+        crate::profile::count!(loc_diff_slow);
+        self.loc_diff_slow(lo, hi)
+    }
+
+    /// [`loc_diff`](Self::loc_diff) without the same-entry fast path:
+    /// walks both spelling chains in lockstep down to a file (linear in
+    /// the expansion depth). Kept for locations in different entries and
+    /// as the reference the fast path is tested against.
+    pub(crate) fn loc_diff_slow(&self, lo: Loc, hi: Loc) -> Option<u32> {
         let (mut a, mut b) = (lo, hi);
         while a.is_macro() && b.is_macro() {
+            crate::profile::count!(loc_diff_steps);
             a = self.sm.immediate_spelling_loc(a);
             b = self.sm.immediate_spelling_loc(b);
         }
@@ -932,6 +987,22 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
         {
             return std::borrow::Cow::Borrowed(self.interner.as_str(s));
         }
+        // A punctuator not spelled as a digraph and without splices or
+        // trigraphs is spelled exactly as its primary spelling
+        // ([lex.operators]): no source lookup needed.
+        if let TokKind::Punct(p) = t.kind
+            && !t.flags.contains(TokFlags::NEEDS_CLEANING)
+            && !t.flags.contains(TokFlags::DIGRAPH)
+        {
+            #[cfg(debug_assertions)]
+            if let Some(text) = self.sm.span_text(t.span)
+                && !text.is_empty()
+            {
+                debug_assert_eq!(text, p.as_str(), "punctuator spelling");
+            }
+            return std::borrow::Cow::Borrowed(p.as_str());
+        }
+        crate::profile::count!(spelling_slow);
         kiln_lex::spelling(self.sm, t, &self.lex_opts)
     }
 

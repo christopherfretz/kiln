@@ -36,6 +36,7 @@ mod pragma;
 mod predef;
 mod preprocessor;
 pub mod print;
+mod profile;
 mod resolver;
 mod search;
 mod tok;

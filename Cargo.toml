@@ -46,5 +46,19 @@ debug = 1
 lto = "thin"
 codegen-units = 4
 
+# The preprocessor's per-token path (Lexer::next -> Preprocessor::next ->
+# SourceManager lookups) spans these three crates; splitting them into several
+# codegen units costs ~8% of `kiln -E` wall clock on bench/pp/headers.cpp even
+# with thin LTO (WP-056, docs/status/perf.md). They are small, so one unit each
+# adds little build time.
+[profile.release.package.kiln_lex]
+codegen-units = 1
+
+[profile.release.package.kiln_source]
+codegen-units = 1
+
+[profile.release.package.kiln_pp]
+codegen-units = 1
+
 [profile.bench]
 inherits = "release"

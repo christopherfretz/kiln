@@ -234,3 +234,70 @@ fn verbose_search_lists_match_clang() {
     }
     assert!(n >= 4);
 }
+
+/// clang 19's stderr for `clang -E <dir>/a.cpp` with `<dir>` replaced by
+/// `@`: nested and repeated inclusions, a macro-expanded header name, a
+/// note (which prints no include stack of its own) and a diagnostic back
+/// in the main file.
+const INCLUDE_STACK_GOLDEN: &str = "\
+In file included from @/a.cpp:1:
+In file included from @/b.h:2:
+@/c.h:1:9: warning: 'M' macro redefined [-Wmacro-redefined]
+    1 | #define M 2
+      |         ^
+@/b.h:1:9: note: previous definition is here
+    1 | #define M 1
+      |         ^
+In file included from @/a.cpp:1:
+In file included from @/b.h:2:
+@/c.h:2:2: warning: in c [-W#warnings]
+    2 | #warning in c
+      |  ^
+In file included from @/a.cpp:1:
+@/b.h:3:2: warning: in b [-W#warnings]
+    3 | #warning in b
+      |  ^
+In file included from @/a.cpp:3:
+@/c.h:2:2: warning: in c [-W#warnings]
+    2 | #warning in c
+      |  ^
+@/a.cpp:4:2: error: main
+    4 | #error main
+      |  ^
+4 warnings and 1 error generated.
+";
+
+// spec: diag.md §9.6 (include stack); [cpp.include] (each inclusion is a
+// distinct location range, `SourceManager::add_inclusion`)
+#[test]
+fn include_stack_like_clang() {
+    let d = scratch("include-stack");
+    std::fs::write(
+        d.join("a.cpp"),
+        "#include \"b.h\"\n#define HDR \"c.h\"\n#include HDR\n#error main\n",
+    )
+    .unwrap();
+    std::fs::write(d.join("b.h"), "#define M 1\n#include \"c.h\"\n#warning in b\n").unwrap();
+    std::fs::write(d.join("c.h"), "#define M 2\n#warning in c\n").unwrap();
+    let a = d.join("a.cpp");
+    let o = kiln(&["-E", "-o", "/dev/null", a.to_str().unwrap()], "");
+    assert_eq!(o.code, 1);
+    let dir = d.to_str().unwrap();
+    assert_eq!(o.stderr, INCLUDE_STACK_GOLDEN.replace('@', dir));
+    // The line markers are unchanged (clang 19's).
+    let o = kiln(&["-E", a.to_str().unwrap()], "");
+    let markers: Vec<&str> =
+        o.stdout.lines().filter(|l| l.starts_with("# ") && !l.contains('<')).collect();
+    let want = [
+        "# 1 \"@/a.cpp\"",
+        "# 1 \"@/a.cpp\" 2",
+        "# 1 \"@/b.h\" 1",
+        "# 1 \"@/c.h\" 1",
+        "# 3 \"@/b.h\" 2",
+        "# 2 \"@/a.cpp\" 2",
+        "# 1 \"@/c.h\" 1",
+        "# 4 \"@/a.cpp\" 2",
+    ];
+    assert_eq!(markers, want.map(|m| m.replace('@', dir)));
+    let _ = std::fs::remove_dir_all(&d);
+}
