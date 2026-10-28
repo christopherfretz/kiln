@@ -190,8 +190,9 @@ impl Sema<'_, '_> {
     // -- switch -------------------------------------------------------------
 
     /// The condition of a `switch` ([stmt.switch]/2): converted to an
-    /// integral type and promoted. Starts the switch body.
-    pub fn act_on_start_switch(&mut self, cond: ExprId) -> ExprId {
+    /// integral type and promoted. Starts the switch body. `loc` is the
+    /// `switch` keyword, where clang reports a non-integral condition.
+    pub fn act_on_start_switch(&mut self, cond: ExprId, loc: Loc) -> ExprId {
         let ty0 = self.ast.exprs.get(cond).ty();
         let t = &self.ast.types;
         let ok = t.is_integral(ty0)
@@ -202,7 +203,6 @@ impl Sema<'_, '_> {
             let ty = self.ast.exprs.get(c).ty();
             (c, ty, false)
         } else {
-            let loc = self.ast.exprs.get(cond).loc();
             let d = self.diag(DiagId::sema_statement_requires_integer, loc).arg(self.ty_arg(ty0));
             self.emit(d);
             let c = conv::decay(self, cond);
@@ -284,7 +284,10 @@ impl Sema<'_, '_> {
                 ce
             }
             Err(nc) => {
-                let d = self.with_not_constant_notes(self.diag(DiagId::sema_case_not_ice, loc), nc);
+                // [stmt.switch]/2: a converted constant expression (clang's
+                // `CheckConvertedConstantExpression`, CCEK_CaseValue).
+                let msg = self.diag(DiagId::sema_expr_not_cce, loc).arg("case value");
+                let d = self.with_not_constant_notes(msg, nc);
                 self.emit(d);
                 self.act_on_full_expr(conv)
             }
@@ -314,7 +317,7 @@ impl Sema<'_, '_> {
             Some(prev) => {
                 let d = self
                     .diag(DiagId::sema_multiple_default_labels, loc)
-                    .with_note(self.diag(DiagId::note_previous_declaration, prev));
+                    .with_note(self.diag(DiagId::note_duplicate_case_prev, prev));
                 self.emit(d);
             }
             None => sw.default = Some(loc),
@@ -382,7 +385,7 @@ impl Sema<'_, '_> {
             let msg = self
                 .diag(DiagId::sema_redefinition_of_label, loc)
                 .arg(self.ast.symbols().as_str(name))
-                .with_note(self.diag(DiagId::note_previous_declaration, prev));
+                .with_note(self.diag(DiagId::note_previous_definition, prev));
             self.emit(msg);
         } else if let Some(l) =
             self.func.as_mut().and_then(|f| f.labels.iter_mut().find(|l| l.decl == d))
@@ -427,8 +430,7 @@ impl Sema<'_, '_> {
                 let ety = self.ast.exprs.get(e).ty();
                 if ret_void {
                     if !self.ast.types.is_void(ety) && !self.is_error_type(ety) {
-                        let eloc = self.ast.exprs.get(e).loc();
-                        let d = self.diag(DiagId::sema_return_has_expr, eloc).arg(fname);
+                        let d = self.diag(DiagId::sema_return_has_expr, loc).arg(fname);
                         self.emit(d);
                     }
                     Some(self.act_on_full_expr(e))

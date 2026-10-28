@@ -83,11 +83,17 @@ impl Sema<'_, '_> {
     /// The type named by the type-specifiers of `ds` ([dcl.type.simple]),
     /// cv-qualified.
     pub fn type_from_declspec(&mut self, ds: &DeclSpec) -> QualType {
+        self.type_from_declspec_at(ds, ds.loc)
+    }
+
+    /// [`Self::type_from_declspec`], reporting a missing type specifier
+    /// at `loc` (clang uses the first declarator's name).
+    pub fn type_from_declspec_at(&mut self, ds: &DeclSpec, loc: Loc) -> QualType {
         let unsigned = ds.sign == Sign::Unsigned;
         let base = match ds.base {
             BaseSpec::None if !ds.has_type_specifier() => {
                 if !ds.invalid {
-                    self.error(DiagId::parse_missing_type_specifier, ds.loc);
+                    self.error(DiagId::parse_missing_type_specifier, loc);
                 }
                 QualType::INT
             }
@@ -277,7 +283,7 @@ impl Sema<'_, '_> {
                         let msg = self
                             .diag(DiagId::sema_array_incomplete_type, *loc)
                             .arg(self.ty_arg(ty));
-                        self.emit(msg);
+                        self.emit(self.incomplete_note(msg, ty));
                         return QualType::ERROR;
                     }
                     ty = match size {
@@ -516,6 +522,28 @@ impl Sema<'_, '_> {
         msg.with_note(self.diag(id, loc))
     }
 
+    /// Adds clang's "forward declaration of 'X'" note to an
+    /// incomplete-type error when `ty` (or its array element) is a
+    /// declared but undefined class ([basic.types.general]/5).
+    pub(crate) fn incomplete_note(&self, msg: kiln_diag::Diag, ty: QualType) -> kiln_diag::Diag {
+        let mut t = ty;
+        while self.ast.types.is_array(t) {
+            match self.ast.types.element(t) {
+                Some(e) => t = e,
+                None => break,
+            }
+        }
+        let Some(rec) = self.ast.types.as_record(t) else { return msg };
+        if self.ast.definition(rec).is_some() {
+            return msg;
+        }
+        let loc = self.ast.decls.get(rec).loc();
+        msg.with_note(
+            self.diag(DiagId::note_forward_declaration, loc)
+                .arg(format!("'{}'", self.qualified_decl_name(rec))),
+        )
+    }
+
     fn register_local(&mut self, name: Symbol, d: DeclId) {
         if self.in_local_scope() {
             self.push_local(name, d);
@@ -642,6 +670,16 @@ impl Sema<'_, '_> {
         }
         let variadic = self.ast.types.proto(ty).is_some_and(|p| p.info().variadic());
         spec = spec.with_variadic(variadic);
+        // [basic.start.main]/2: `main` returns `int`.
+        if sym_str(self, name) == "main"
+            && self.ast.redecl_context(ctx) == self.ast.tu
+            && let Some(p) = self.ast.types.proto(ty)
+        {
+            let ret = p.ret();
+            if !self.ast.types.same_type(ret, QualType::INT) && !self.is_error_type(ret) {
+                self.error(DiagId::sema_main_returns_nonint, ds.type_loc.unwrap_or(ds.loc));
+            }
+        }
         let mut prev_ok = None;
         if let Some(p) = self.find_prev_linkage(name, d.qualifier) {
             let pn = *self.ast.decls.get(p);
@@ -756,17 +794,23 @@ impl Sema<'_, '_> {
         }
         if !invalid && !self.is_complete(ty) && !self.ast.types.is_reference(ty) {
             let msg = self.diag(DiagId::sema_field_incomplete, d.name_loc()).arg(self.ty_arg(ty));
-            self.emit(msg);
+            self.emit(self.incomplete_note(msg, ty));
         }
-        let width = d.bit_width.and_then(|w| self.bit_width(w, ty, nm.as_deref()));
+        let width = d.bit_width.and_then(|w| self.bit_width(w, ty, nm.as_deref(), d.name_loc()));
         let h = DeclHead::new(ctx, name.map_or(DeclName::EMPTY, DeclName::ident), d.name_loc());
         self.builder().field(h, ty, width, flags)
     }
 
     /// Checks a bit-field width ([class.bit]/1): an integral constant
     /// expression, wrapped in a `ConstantExpr`.
-    fn bit_width(&mut self, w: ExprId, ty: QualType, name: Option<&str>) -> Option<ExprId> {
-        let loc = self.ast.exprs.get(w).loc();
+    /// Diagnostics point at the field's location `loc`, as clang's do.
+    fn bit_width(
+        &mut self,
+        w: ExprId,
+        ty: QualType,
+        name: Option<&str>,
+        loc: Loc,
+    ) -> Option<ExprId> {
         let t = &self.ast.types;
         if !(t.is_integral(ty) || t.as_enum(ty).is_some() || self.is_error_type(ty)) {
             let msg = match name {
@@ -783,7 +827,7 @@ impl Sema<'_, '_> {
         let c = conv::decay(self, w);
         let c = self.act_on_full_expr(c);
         let Ok(ConstVal::Int(v)) = self.evaluate(c) else {
-            self.error(DiagId::sema_expr_not_ice, loc);
+            self.error(DiagId::sema_expr_not_ice, self.begin_loc(w));
             return None;
         };
         if v < 0 {
@@ -807,13 +851,15 @@ impl Sema<'_, '_> {
         }
         if let Some((bits, _)) = constfold::int_info(&self.ast, ty) {
             let bits = if self.ast.types.builtin(ty) == Some(BuiltinType::Bool) { 8 } else { bits };
-            if v > i128::from(bits) {
+            if v > i128::from(bits)
+                && let Some(n) = name
+            {
                 let msg = self
                     .diag(DiagId::sema_bitfield_width_exceeds, loc)
-                    .arg(name.unwrap_or(""))
+                    .arg(n)
                     .arg(v.to_string())
                     .arg(bits.to_string())
-                    .arg("");
+                    .arg(if bits == 1 { "" } else { "s" });
                 self.emit(msg);
             }
         }
@@ -895,12 +941,12 @@ impl Sema<'_, '_> {
                 } else {
                     prev_ok = Some(p);
                 }
-            } else if block && pn.kind() == DeclKind::Var {
+            } else if block && matches!(pn.kind(), DeclKind::Var | DeclKind::ParmVar) {
                 let msg =
                     self.diag(DiagId::sema_redefinition, d.name_loc()).arg(sym_str(self, name));
                 let msg = self.note_prev(msg, p, true);
                 self.emit(msg);
-            } else if pn.kind() != DeclKind::ParmVar || !block {
+            } else {
                 let msg = self
                     .diag(DiagId::sema_redefinition_different_kind, d.name_loc())
                     .arg(sym_str(self, name));
@@ -951,7 +997,8 @@ impl Sema<'_, '_> {
             };
             self.ast.decls.set_ty(v, ty);
         }
-        let e = self.perform_init(ty, init, loc);
+        let direct = spec.init_style() == kiln_ast::decl::InitStyle::List;
+        let e = self.perform_init(ty, init, loc, direct);
         let e = self.act_on_full_expr(e);
         let _ = self.builder().set_var_init(v, e);
         // An incomplete array takes its bound from the initializer.
@@ -1023,7 +1070,8 @@ impl Sema<'_, '_> {
                 if self.has_errors_in(e) {
                     return;
                 }
-                let loc = self.ast.exprs.get(e).loc();
+                // clang reports at the variable (`CheckCompleteVariableDeclaration`).
+                let loc = self.ast.decls.get(v).loc();
                 let name = self.decl_name(v);
                 let msg = self.diag(DiagId::sema_constexpr_var_non_constant, loc).arg(name);
                 let msg = self.with_not_constant_notes(msg, nc);
@@ -1070,7 +1118,7 @@ impl Sema<'_, '_> {
             } else {
                 self.diag(DiagId::sema_typecheck_decl_incomplete_type, loc).arg(self.ty_arg(ty))
             };
-            self.emit(msg);
+            self.emit(self.incomplete_note(msg, ty));
             self.ast.decls.set_flags(v, DeclFlags::INVALID);
             return;
         }
@@ -1124,7 +1172,7 @@ impl Sema<'_, '_> {
                 let msg = self
                     .diag(DiagId::sema_typecheck_decl_incomplete_type, self.ast.decls.get(p).loc())
                     .arg(self.ty_arg(pty));
-                self.emit(msg);
+                self.emit(self.incomplete_note(msg, pty));
             }
         }
         self.begin_function_body(f, ret);
@@ -1438,7 +1486,12 @@ impl Sema<'_, '_> {
             self.lookup_current_scope_outside_enum(name)
         };
         if let Some(p) = clash {
-            let msg = self.diag(DiagId::sema_redefinition, loc).arg(sym_str(self, name));
+            let id = if self.ast.decls.get(p).kind() == DeclKind::EnumConstant {
+                DiagId::sema_redefinition_of_enumerator
+            } else {
+                DiagId::sema_redefinition
+            };
+            let msg = self.diag(id, loc).arg(sym_str(self, name));
             let msg = self.note_prev(msg, p, true);
             self.emit(msg);
         }
@@ -1454,6 +1507,18 @@ impl Sema<'_, '_> {
             } else if !self.is_error_type(ity) {
                 let mut c = conv::lvalue_to_rvalue(self, ie);
                 let cty = if let Some(f) = build.fixed {
+                    // [dcl.enum]/5: a converted constant expression, so a
+                    // narrowing value is ill-formed ([expr.const]/12).
+                    if let Ok(ConstVal::Int(raw)) = self.evaluate(c)
+                        && !self.fits(f, raw)
+                    {
+                        let msg = self
+                            .diag(DiagId::sema_cce_narrowing_value, self.begin_loc(ie))
+                            .arg("enumerator value")
+                            .arg(raw.to_string())
+                            .arg(self.ty_arg(f));
+                        self.emit(msg);
+                    }
                     c = conv::implicit_convert(self, c, f, ConvCtx::Initialization).unwrap_or(c);
                     f
                 } else {
@@ -1723,11 +1788,35 @@ impl Sema<'_, '_> {
                 Ok(v) if v.truthy() => {}
                 Ok(_) => {
                     let text = msg.and_then(|m| self.string_literal_text(m));
-                    let d = match text {
-                        Some(t) => self.diag(DiagId::sema_static_assert_failed_msg, cloc).arg(t),
-                        None => self.diag(DiagId::sema_static_assert_failed, cloc),
+                    // clang's `findFailedBooleanCondition`: the failing
+                    // conjunct, printed unless it is a literal.
+                    let inner = self.failed_condition(c);
+                    let lit = matches!(
+                        self.ast.exprs.get(inner).kind(),
+                        ExprKind::CXXBoolLiteralExpr | ExprKind::IntegerLiteral
+                    );
+                    let d = if lit {
+                        match text {
+                            Some(t) => {
+                                self.diag(DiagId::sema_static_assert_failed_msg, cloc).arg(t)
+                            }
+                            None => self.diag(DiagId::sema_static_assert_failed, cloc),
+                        }
+                    } else {
+                        let mut req = String::new();
+                        kiln_ast::types::TypeNames::write_expr(&self.ast, inner, &mut req);
+                        let at = self.begin_loc(inner);
+                        match text {
+                            Some(t) => self
+                                .diag(DiagId::sema_static_assert_requirement_failed_msg, at)
+                                .arg(req)
+                                .arg(t),
+                            None => self
+                                .diag(DiagId::sema_static_assert_requirement_failed, at)
+                                .arg(req),
+                        }
                     };
-                    let d = self.explain_failed_comparison(d, c);
+                    let d = self.explain_failed_comparison(d, inner);
                     self.emit(d);
                 }
                 Err(nc) => {
@@ -1739,6 +1828,40 @@ impl Sema<'_, '_> {
         }
         let ctx = self.ctx;
         self.builder().static_assert(ctx, loc, c, msg)
+    }
+
+    /// The conjunct of the failed condition `c` that evaluates to false
+    /// (clang's `findFailedBooleanCondition`), without parentheses and
+    /// implicit conversions. Literal conjuncts are skipped.
+    fn failed_condition(&self, c: ExprId) -> ExprId {
+        let mut terms = Vec::new();
+        self.conjunction_terms(c, &mut terms);
+        for &t in &terms {
+            if matches!(
+                self.ast.exprs.get(t).kind(),
+                ExprKind::CXXBoolLiteralExpr | ExprKind::IntegerLiteral
+            ) {
+                continue;
+            }
+            if matches!(self.evaluate(t), Ok(v) if !v.truthy()) {
+                return t;
+            }
+        }
+        self.ignore_paren_imp_casts(c)
+    }
+
+    fn conjunction_terms(&self, e: ExprId, out: &mut Vec<ExprId>) {
+        let x = self.ignore_paren_imp_casts(e);
+        if self.ast.exprs.get(x).kind() == ExprKind::BinaryOperator
+            && self.ast.exprs.binary_op(x) == kiln_ast::expr::BinaryOp::LAnd
+            && out.len() < 1024
+        {
+            let [l, r] = self.ast.exprs.operands(x);
+            self.conjunction_terms(l, out);
+            self.conjunction_terms(r, out);
+        } else {
+            out.push(x);
+        }
     }
 
     /// The contents of a narrow string literal, for messages.
@@ -1866,7 +1989,7 @@ impl Sema<'_, '_> {
     /// One attribute ([dcl.attr]); `scope` is `gnu` for `gnu::x`, and
     /// `GNU` syntax is `__attribute__((x))`. Returns `None` for ignored
     /// attributes. Encoding of arguments: spec/abi.md §9 Q1, spec/sema.md
-    /// §7.
+    /// §4.5.
     pub fn act_on_attribute(
         &mut self,
         syntax: AttrSyntax,
@@ -1880,9 +2003,9 @@ impl Sema<'_, '_> {
         let n = raw.trim_start_matches("__").trim_end_matches("__").to_owned();
         let gnu = syntax == AttrSyntax::Gnu || scope_s.as_deref() == Some("gnu");
         let std = scope_s.is_none() && syntax != AttrSyntax::Gnu;
+        // clang 19 names only the attribute, not its scope.
         if scope_s.as_deref().is_some_and(|s| s != "gnu") {
-            let full = format!("{}::{raw}", scope_s.unwrap_or_default());
-            let msg = self.diag(DiagId::parse_unknown_attribute, loc).arg(full);
+            let msg = self.diag(DiagId::parse_unknown_attribute, loc).arg(raw);
             self.emit(msg);
             return None;
         }
@@ -1911,11 +2034,7 @@ impl Sema<'_, '_> {
                 return None;
             }
             _ => {
-                let full = match &scope_s {
-                    Some(s) => format!("{s}::{raw}"),
-                    None => raw,
-                };
-                let msg = self.diag(DiagId::parse_unknown_attribute, loc).arg(full);
+                let msg = self.diag(DiagId::parse_unknown_attribute, loc).arg(raw);
                 self.emit(msg);
                 return None;
             }

@@ -273,9 +273,9 @@ impl Parser<'_, '_> {
             self.error_here(DiagId::parse_expected_expression);
             return None;
         }
-        let base = self.s.type_from_declspec(&ds);
         let mut d = Declarator::new(ctx, self.loc());
         self.parse_declarator(&mut d);
+        let base = self.s.type_from_declspec_at(&ds, d.name_loc());
         if self.at_attr() {
             self.parse_attributes(&mut d.attrs);
         }
@@ -289,11 +289,12 @@ impl Parser<'_, '_> {
             Some(Punct::Equal) => Some(InitStyle::C),
             Some(Punct::LBrace) => Some(InitStyle::List),
             Some(Punct::LParen) => {
-                self.error_here(DiagId::parse_expected_init_in_condition_lparen);
+                self.s.error(DiagId::parse_expected_init_in_condition_lparen, name_loc);
                 return None;
             }
             _ => {
-                self.error_here(DiagId::parse_expected_init_in_condition);
+                // clang reports at the declarator's name.
+                self.s.error(DiagId::parse_expected_init_in_condition, name_loc);
                 return None;
             }
         };
@@ -372,7 +373,7 @@ impl Parser<'_, '_> {
             self.s.pop_scope();
             return None;
         };
-        let cond = self.s.act_on_start_switch(c);
+        let cond = self.s.act_on_start_switch(c, loc);
         let body = self.parse_sub_statement();
         let s = self.s.act_on_finish_switch(init, var, cond, body, loc);
         self.s.pop_scope();

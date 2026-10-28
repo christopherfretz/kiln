@@ -190,6 +190,7 @@ diag_ids! {
 
     // ----- shared notes ------------------------------------------------
     note_previous_definition = Note (0) "previous definition is here";
+    note_forward_declaration = Note (1) "forward declaration of {0}";
     note_macro_here = Note (1) "macro '{0}' defined here";
 
     // ----- driver and option parsing -----------------------------------
@@ -256,6 +257,7 @@ diag_ids! {
     parse_expected_init_in_condition_lparen = Error (0) "variable declaration in condition cannot have a parenthesized initializer";
     parse_expected_semi_after_stmt = Error (1) "expected ';' after {0} statement";
     parse_expected_expression = Error (0) "expected expression";
+    parse_expected_name_of_pack = Error (0) "expected the name of a parameter pack";
     parse_expected_unqualified_id = Error (0) "expected unqualified-id";
     parse_expected_type = Error (0) "expected a type";
     parse_expected_member_name = Error (0) "expected member name or ';' after declaration specifiers";
@@ -286,6 +288,7 @@ diag_ids! {
     note_ambiguous_candidate = Note (1) "candidate found by name lookup is '{0}'";
     sema_not_a_type = Error (1) "'{0}' does not name a type";
     sema_redefinition = Error (1) "redefinition of '{0}'";
+    sema_redefinition_of_enumerator = Error (1) "redefinition of enumerator '{0}'";
     sema_redefinition_different_kind = Error (1) "redefinition of '{0}' as different kind of symbol";
     sema_redefinition_different_type = Error (3) "redefinition of '{0}' with a different type: {1} vs {2}";
     sema_redefinition_different_typedef = Error (3) "{0:typedef|type alias} redefinition with different types ({1} vs {2})";
@@ -300,6 +303,7 @@ diag_ids! {
     sema_enum_fixed_redecl_unfixed = Error (0) "enumeration previously declared with fixed underlying type";
     sema_enum_unfixed_redecl_fixed = Error (0) "enumeration previously declared with nonfixed underlying type";
     sema_enum_invalid_underlying = Error (1) "non-integral type {0} is an invalid underlying type";
+    sema_cce_narrowing_value = Error (3) "{0} evaluates to {1}, which cannot be narrowed to type {2}";
     sema_enumerator_too_large = Error (2) "enumerator value {0} is not representable in the underlying type {1}";
     sema_enumerator_wrapped = Error (0) "enumerator value is not representable in any integral type";
     sema_no_declarators = ExtWarn [MissingDeclarations] (0) "declaration does not declare anything";
@@ -345,6 +349,8 @@ diag_ids! {
     sema_attribute_wrong_decl_type = Warning [IgnoredAttributes] (2) "{0} attribute only applies to {1}";
     sema_static_assert_failed = Error (0) "static assertion failed";
     sema_static_assert_failed_msg = Error (1) "static assertion failed: {0}";
+    sema_static_assert_requirement_failed = Error (1) "static assertion failed due to requirement '{0}'";
+    sema_static_assert_requirement_failed_msg = Error (2) "static assertion failed due to requirement '{0}': {1}";
     sema_static_assert_not_ice = Error (0) "static assertion expression is not an integral constant expression";
     note_expr_evaluates_to = Note (3) "expression evaluates to '{0} {1} {2}'";
     note_constexpr_overflow = Note (2) "value {0} is outside the range of representable values of type {1}";
@@ -394,6 +400,10 @@ diag_ids! {
     sema_incdec_enum = Error (2) "cannot {0:increment|decrement} expression of enum type {1}";
     sema_ovl_no_viable_function_in_call = Error (1) "no matching function for call to '{0}'";
     note_ovl_candidate_not_viable = Note (1) "candidate function not viable: {0}";
+    sema_sizeof_pack_no_pack = Error (1) "{0} does not refer to the name of a parameter pack";
+    sema_udl_no_operator = Error (2) "no matching literal operator for call to {0} with argument of type {1}";
+    sema_udl_no_operator_raw = Error (3) "no matching literal operator for call to {0} with argument of type {1} or {2}, and no matching literal operator template";
+    sema_udl_no_operator_string = Error (3) "no matching literal operator for call to {0} with arguments of types {1} and {2}, and no matching literal operator template";
     sema_unsupported_string_concat = Error (0) "unsupported non-standard concatenation of string literals";
     sema_ref_non_value = Error (1) "{0} does not refer to a value";
     // lexer and literal diagnostics the parser reports (a stopgap until the
@@ -408,6 +418,7 @@ diag_ids! {
     sema_incdec_invalid = Error (2) "cannot {0:increment|decrement} value of type {1}";
     sema_sizeof_incomplete = Error (2) "invalid application of '{0}' to an incomplete type {1}";
     sema_sizeof_function = Extension [PointerArith] (1) "invalid application of '{0}' to a function type";
+    sema_sizeof_function_expr = Error (1) "invalid application of '{0}' to a function type";
     sema_sizeof_void = Extension [PointerArith] (1) "invalid application of '{0}' to a void type";
     sema_sizeof_bitfield = Error (1) "invalid application of '{0}' to bit-field";
     sema_bad_cxx_cast = Error (3) "{0:const_cast|static_cast|reinterpret_cast|dynamic_cast|C-style cast|functional-style cast} from {1} to {2} is not allowed";
@@ -416,10 +427,14 @@ diag_ids! {
     sema_reinterpret_cast_small_int = Error (1) "cast from pointer to smaller type {0} loses information";
     sema_excess_initializers = Error (1) "excess elements in {0:array|vector|scalar|union|struct} initializer";
     sema_array_init_not_init_list = Error (1) "array initializer must be an initializer list{0:| or string literal| or wide string literal}";
-    sema_init_string_too_long = Error (0) "initializer-string for char array is too long";
+    sema_init_string_too_long = Error (2) "initializer-string for char array is too long, array size is {0} but initializer has size {1} (including the null terminating character)";
     sema_illegal_initializer_type = Error (1) "illegal initializer type {0}";
     sema_init_list_bad_dest = Error (1) "initializer list cannot be used on the left hand side of operator '{0}'";
+    sema_division_by_zero = Warning [DivisionByZero] (1) "{0} by zero is undefined";
+    sema_shift_negative = Warning [ShiftCountNegative] (0) "shift count is negative";
+    sema_shift_gt_typewidth = Warning [ShiftCountOverflow] (0) "shift count >= width of type";
     sema_unused_result = Warning [UnusedResult] (1) "ignoring return value of function declared with {0} attribute";
+    sema_unused_result_msg = Warning [UnusedResult] (2) "ignoring return value of function declared with {0} attribute: {1}";
     sema_unused_expr = Warning [UnusedValue] (0) "expression result unused";
     sema_unused_comparison = Warning [UnusedComparison] (1) "{0:equality|inequality|relational|three-way} comparison result unused";
     sema_deprecated = Warning [DeprecatedDeclarations] (1) "'{0}' is deprecated";
@@ -432,7 +447,7 @@ diag_ids! {
     note_duplicate_case_prev = Note (0) "previous case defined here";
     sema_multiple_default_labels = Error (0) "multiple default labels in one switch";
     sema_statement_requires_integer = Error (1) "statement requires expression of integer type ({0} invalid)";
-    sema_case_not_ice = Error (0) "expression is not an integral constant expression";
+    sema_expr_not_cce = Error (1) "{0} is not a constant expression";
     sema_undeclared_label = Error (1) "use of undeclared label '{0}'";
     sema_redefinition_of_label = Error (1) "redefinition of label '{0}'";
     sema_return_missing_expr = Error (1) "non-void function '{0}' should return a value";

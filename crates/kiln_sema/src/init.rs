@@ -97,8 +97,15 @@ impl Sema<'_, '_> {
     }
 
     /// The initialization of an object of type `ty` by `init`
-    /// ([dcl.init.general]/16).
-    pub fn perform_init(&mut self, ty: QualType, init: Initializer, loc: Loc) -> ExprId {
+    /// ([dcl.init.general]/16); `direct_list` for `T x{...}`
+    /// (direct-list-initialization, [dcl.init.list]/1).
+    pub fn perform_init(
+        &mut self,
+        ty: QualType,
+        init: Initializer,
+        loc: Loc,
+        direct_list: bool,
+    ) -> ExprId {
         if self.is_error_type(ty) {
             return match init {
                 Initializer::Expr(e) => e,
@@ -116,23 +123,27 @@ impl Sema<'_, '_> {
             };
         }
         match init {
-            Initializer::Expr(e) => self.init_from_expr(ty, e, ConvCtx::Initialization),
+            Initializer::Expr(e) => self.init_from_expr(ty, e, ConvCtx::Initialization, loc),
             Initializer::Paren(v, l, _) => {
                 if v.len() == 1 {
-                    self.init_from_expr(ty, v[0], ConvCtx::DirectInitialization)
+                    self.init_from_expr(ty, v[0], ConvCtx::DirectInitialization, loc)
                 } else {
                     self.unsupported("parenthesized initialization with multiple expressions", l);
                     self.recover(ty, &v, l)
                 }
             }
             Initializer::List(l) => {
-                let _ = loc;
+                if direct_list && let Some(e) = self.fixed_enum_list_init(ty, &l) {
+                    return e;
+                }
                 self.init_from_list(ty, &l)
             }
         }
     }
 
-    fn init_from_expr(&mut self, ty: QualType, e: ExprId, ctx: ConvCtx) -> ExprId {
+    /// A failed conversion is reported at `at`, the entity's location
+    /// (clang's `InitializationKind::getLocation`).
+    fn init_from_expr(&mut self, ty: QualType, e: ExprId, ctx: ConvCtx, at: Loc) -> ExprId {
         let ety = self.ast.exprs.get(e).ty();
         if self.is_error_type(ety) {
             return e;
@@ -151,7 +162,15 @@ impl Sema<'_, '_> {
             self.emit(msg);
             return e;
         }
-        self.convert_for_init(e, ty, ctx)
+        match conv::implicit_convert(self, e, ty, ctx) {
+            Ok(x) => x,
+            Err(err) => {
+                let d = err.args.into_iter().fold(self.diag(err.id, at), kiln_diag::Diag::arg);
+                self.emit(d);
+                let loc = self.ast.exprs.get(e).loc();
+                self.recover(ty, &[e], loc)
+            }
+        }
     }
 
     /// `char s[N] = "..."` ([dcl.init.string]).
@@ -162,7 +181,11 @@ impl Sema<'_, '_> {
             // `len` counts the terminating NUL, which must fit in C++
             // ([dcl.init.string]/2).
             if len > n {
-                self.error(DiagId::sema_init_string_too_long, self.ast.exprs.get(s).loc());
+                let msg = self
+                    .diag(DiagId::sema_init_string_too_long, self.ast.exprs.get(s).loc())
+                    .arg(n.to_string())
+                    .arg(len.to_string());
+                self.emit(msg);
             }
         }
         // The literal takes the (completed) array type as a prvalue.
@@ -214,7 +237,7 @@ impl Sema<'_, '_> {
                 let msg = self
                     .diag(DiagId::sema_typecheck_decl_incomplete_type, l.lbrace)
                     .arg(self.ty_arg(ty));
-                self.emit(msg);
+                self.emit(self.incomplete_note(msg, ty));
                 return self.recover(ty, &[], l.lbrace);
             }
             let mut pos = 0;
@@ -233,6 +256,7 @@ impl Sema<'_, '_> {
         match l.items.first() {
             None => {}
             Some(InitItem { value: InitValue::Expr(e), designator }) if designator.is_empty() => {
+                self.check_narrowing(*e, ty, ty);
                 inits.push(self.convert_for_init(*e, ty, ConvCtx::Initialization));
             }
             Some(item) => {
@@ -249,6 +273,70 @@ impl Sema<'_, '_> {
             self.emit(msg);
         }
         self.builder().init_list(ty, &inits, None, None, l.lbrace, l.rbrace)
+    }
+
+    /// `E e{v};` for an enumeration `E` with a fixed underlying type `U`
+    /// and `v` implicitly convertible to `U` ([dcl.init.list]/3.8): `v`
+    /// is converted to `U` (narrowing rejected), then to `E`.
+    fn fixed_enum_list_init(&mut self, ty: QualType, l: &InitList) -> Option<ExprId> {
+        let [InitItem { value: InitValue::Expr(e), designator }] = l.items.as_slice() else {
+            return None;
+        };
+        let e = *e;
+        if !designator.is_empty() {
+            return None;
+        }
+        let t = conv::strip_cv(self, ty);
+        let d = self.ast.types.as_enum(t)?;
+        let def = self.ast.definition(d).unwrap_or(d);
+        let data = self.ast.decls.enumeration(def)?;
+        if data.flags & kiln_ast::decl::EnumData::FIXED == 0 {
+            return None;
+        }
+        let u = data.int_type?;
+        let from = conv::strip_cv(self, self.ast.exprs.get(e).ty());
+        let unscoped_enum = self.ast.types.as_enum(from).is_some_and(|fd| {
+            let fd = self.ast.definition(fd).unwrap_or(fd);
+            self.ast.first(fd) != self.ast.first(def)
+                && self
+                    .ast
+                    .decls
+                    .enumeration(fd)
+                    .is_some_and(|x| x.flags & kiln_ast::decl::EnumData::SCOPED == 0)
+        });
+        if !self.ast.types.is_integral(from) && !unscoped_enum {
+            return None;
+        }
+        self.check_narrowing(e, u, ty);
+        let r = conv::lvalue_to_rvalue(self, e);
+        let c = conv::cast_to(self, kiln_ast::expr::CastKind::IntegralCast, r, t, None);
+        Some(self.builder().init_list(ty, &[c], None, None, l.lbrace, l.rbrace))
+    }
+
+    /// Rejects a narrowing conversion of the list element `e` to `to`
+    /// ([dcl.init.list]/7, clang's `-Wc++11-narrowing` errors).
+    /// `entity` is the initialized type as diagnosed (`to` itself, or
+    /// the enumeration for [dcl.init.list]/3.8).
+    fn check_narrowing(&mut self, e: ExprId, to: QualType, entity: QualType) {
+        let from = self.ast.exprs.get(e).ty();
+        if self.is_error_type(from) || self.is_error_type(to) {
+            return;
+        }
+        let t = conv::strip_cv(self, to);
+        if !self.ast.types.is_arithmetic(t) && self.ast.types.as_enum(t).is_none() {
+            return;
+        }
+        let Some(scs) = conv::standard_conversion(self, e, to, ConvCtx::Initialization) else {
+            return;
+        };
+        let value = match self.evaluate(e) {
+            Ok(v) => self.const_value(from, v),
+            Err(_) => None,
+        };
+        let n = conv::narrowing_kind(self, &scs, e, value);
+        if let Some(d) = conv::narrowing_diag(self, &n, e, entity) {
+            self.emit(d);
+        }
     }
 
     fn excess(&self, ty: QualType, item: &InitItem) {
@@ -301,7 +389,9 @@ impl Sema<'_, '_> {
                     self.check_aggregate(ty, items, pos, false, at, at)
                 } else {
                     *pos += 1;
-                    self.init_from_expr(ty, e, ConvCtx::Initialization)
+                    let at = self.begin_loc(e);
+                    self.check_narrowing(e, ty, ty);
+                    self.init_from_expr(ty, e, ConvCtx::Initialization, at)
                 }
             }
         }

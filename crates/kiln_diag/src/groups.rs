@@ -68,6 +68,9 @@ diag_groups! {
     VlaCxxExtension = "vla-cxx-extension" [];
     BitfieldWidth = "bitfield-width" [];
     PointerArith = "pointer-arith" [];
+    DivisionByZero = "division-by-zero" [];
+    ShiftCountNegative = "shift-count-negative" [];
+    ShiftCountOverflow = "shift-count-overflow" [];
     Unused = "unused" [UnusedValue];
     UnusedValue = "unused-value" [UnusedComparison, UnusedResult];
     UnusedComparison = "unused-comparison" [];

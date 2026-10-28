@@ -5,8 +5,9 @@
 //!
 //! It is a stand-in for the Oven (`kiln_oven`): sema only reaches it
 //! through [`ConstEvaluator`] and [`evaluator`], so switching to the Oven
-//! is a one-line change to [`evaluator`]. The folder executes no function
-//! calls (`constexpr` functions are the Oven's, M3).
+//! is a one-line change to [`evaluator`]. Calls to `constexpr` functions
+//! run in a small tree-walking interpreter over scalar parameters and
+//! locals (spec/sema.md §8.2); everything beyond that is the Oven's (M3).
 
 use kiln_ast::consts::{FloatKind, Scalar};
 use kiln_ast::decl::DeclKind;
@@ -383,11 +384,15 @@ impl Eval<'_> {
                     Err(nc)
                 }
             }
-            DeclKind::ParmVar => Err(NotConstant::note(
-                DiagId::note_constexpr_function_param_value_unknown,
-                loc,
-                vec![self.name(d)],
-            )),
+            DeclKind::ParmVar => {
+                let mut nc = NotConstant::note(
+                    DiagId::note_constexpr_function_param_value_unknown,
+                    loc,
+                    vec![self.name(d)],
+                );
+                nc.decl_note = Some((DiagId::note_declared_at, node.loc(), vec![]));
+                Err(nc)
+            }
             _ => Err(NotConstant::plain()),
         }
     }

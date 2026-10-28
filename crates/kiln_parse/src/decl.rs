@@ -604,12 +604,16 @@ impl Parser<'_, '_> {
             self.skip_to_semi();
             return;
         }
-        let base = self.s.type_from_declspec(&ds);
+        let mut base_ty: Option<QualType> = None;
         loop {
             let mut d = Declarator::new(DeclaratorContext::Member, self.loc());
             if !self.at(Punct::Colon) {
                 self.parse_declarator(&mut d);
             }
+            // The declspec's type is formed once the first declarator is
+            // known: clang reports a missing type specifier at its name.
+            let base =
+                *base_ty.get_or_insert_with(|| self.s.type_from_declspec_at(&ds, d.name_loc()));
             if self.eat(Punct::Colon).is_some() {
                 let Some(w) = self.parse_constant_expr() else {
                     self.skip_to_semi();
@@ -977,10 +981,14 @@ impl Parser<'_, '_> {
             self.skip_to_semi();
             return decls;
         }
-        let base = self.s.type_from_declspec(&ds);
+        let mut base_ty: Option<QualType> = None;
         loop {
             let mut d = Declarator::new(ctx, self.loc());
             self.parse_declarator(&mut d);
+            // The declspec's type is formed once the first declarator is
+            // known: clang reports a missing type specifier at its name.
+            let base =
+                *base_ty.get_or_insert_with(|| self.s.type_from_declspec_at(&ds, d.name_loc()));
             if self.at_kw(Kw::Asm) {
                 self.unsupported("asm labels", self.loc());
                 self.bump();

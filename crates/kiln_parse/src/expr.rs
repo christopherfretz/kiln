@@ -251,12 +251,30 @@ impl Parser<'_, '_> {
         Some(self.s.act_on_cast(CastStyle::CStyle, ty, e, open))
     }
 
+    /// `sizeof...(name)` ([expr.sizeof]/5). M2 has no packs, so Sema
+    /// rejects every name; the unparenthesized form is TODO(M3).
+    fn parse_sizeof_pack(&mut self, loc: Loc) -> PExpr {
+        let dots = self.bump().span.lo;
+        if !self.at(Punct::LParen) {
+            self.unsupported("'sizeof...' without parentheses", dots);
+            return None;
+        }
+        let open = self.bump().span.lo;
+        let Some(name) = self.ident() else {
+            self.error_here(DiagId::parse_expected_name_of_pack);
+            self.skip_until(&[Punct::RParen], true, true);
+            return Some(self.s.act_on_error_expr(&[], loc));
+        };
+        let name_loc = self.bump().span.lo;
+        self.expect_closing(Punct::RParen, Punct::LParen, open);
+        Some(self.s.act_on_sizeof_pack(name, name_loc, loc))
+    }
+
     /// `sizeof`/`alignof`/`__alignof` ([expr.sizeof], [expr.alignof]).
     fn parse_sizeof_alignof(&mut self, kind: TraitKind) -> PExpr {
         let loc = self.bump().span.lo;
         if kind == TraitKind::SizeOf && self.at(Punct::Ellipsis) {
-            self.unsupported("'sizeof...'", self.loc());
-            return None;
+            return self.parse_sizeof_pack(loc);
         }
         if self.at(Punct::LParen) && self.is_type_id_start(self.pos() + 1) {
             let open = self.bump().span.lo;
@@ -331,7 +349,7 @@ impl Parser<'_, '_> {
                         return None;
                     };
                     let nl = self.bump().span.lo;
-                    e = self.s.act_on_member(e, name, nl, p == Punct::Arrow);
+                    e = self.s.act_on_member(e, name, nl, loc, p == Punct::Arrow);
                 }
                 Some(Punct::PlusPlus) => {
                     self.bump();
@@ -511,8 +529,14 @@ impl Parser<'_, '_> {
             return self.s.act_on_error_expr(&[], t.span.lo);
         }
         match &n.class {
-            NumberClass::Integer(l) => self.s.act_on_integer_literal(l, t.span.lo),
-            NumberClass::Floating(l) => self.s.act_on_float_literal(l, t.span.lo),
+            NumberClass::Integer(l) => {
+                let ud = suffix_loc(t.span.hi, l.ud_suffix);
+                self.s.act_on_integer_literal(l, t.span.lo, ud)
+            }
+            NumberClass::Floating(l) => {
+                let ud = suffix_loc(t.span.hi, l.ud_suffix);
+                self.s.act_on_float_literal(l, t.span.lo, ud)
+            }
             NumberClass::Invalid => self.s.act_on_error_expr(&[], t.span.lo),
         }
     }
@@ -526,7 +550,8 @@ impl Parser<'_, '_> {
         if c.has_error {
             return self.s.act_on_error_expr(&[], t.span.lo);
         }
-        self.s.act_on_char_literal(&c, t.span.lo)
+        let ud = suffix_loc(t.span.hi, c.ud_suffix);
+        self.s.act_on_char_literal(&c, t.span.lo, ud)
     }
 
     /// True at a string literal.
@@ -562,7 +587,12 @@ impl Parser<'_, '_> {
         if error {
             return Some(self.s.act_on_error_expr(&[], toks[0].span.lo));
         }
-        Some(self.s.act_on_string_literal(&pieces, unevaluated))
+        let ud = toks
+            .iter()
+            .zip(&pieces)
+            .find(|(_, p)| p.0.ud_suffix.is_some())
+            .map_or(Loc::INVALID, |(t, p)| suffix_loc(t.span.hi, p.0.ud_suffix));
+        Some(self.s.act_on_string_literal(&pieces, unevaluated, ud))
     }
 
     /// The value of the unevaluated string literal at token `i` (for a
@@ -575,4 +605,11 @@ impl Parser<'_, '_> {
             _ => String::new(),
         }
     }
+}
+
+/// The location of a literal's ud-suffix: its last `suffix.len()` bytes
+/// before the token end `hi` ([lex.ext]).
+fn suffix_loc(hi: Loc, suffix: Option<&str>) -> Loc {
+    let n = suffix.map_or(0, str::len);
+    u32::try_from(n).ok().and_then(|n| hi.to_raw().checked_sub(n)).map_or(hi, Loc::from_raw)
 }

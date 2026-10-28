@@ -182,6 +182,14 @@ impl<'a, 'sm> Sema<'a, 'sm> {
         print_type(&self.ast.types, &names, q, PrintOptions::SUGARED)
     }
 
+    /// The qualified name of `d`, as clang prints a declaration argument.
+    pub fn qualified_decl_name(&self, d: DeclId) -> String {
+        use kiln_ast::types::TypeNames as _;
+        let mut s = String::new();
+        names::SemaNames::new(self).write_decl_name(d, true, &mut s);
+        s
+    }
+
     /// The simple name of `d` (empty when unnamed).
     pub fn decl_name(&self, d: DeclId) -> String {
         let name = self.ast.decls.get(d).name();
