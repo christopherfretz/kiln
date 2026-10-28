@@ -39,12 +39,14 @@ Format per `docs/AGENTS.md`. Ids are stable; status moves between
 | WP-045 | E dump loader (text → Ast) | deferred — parser (WP-048) is in progress; Oven/codegen test on parsed sources instead. Revive only if H slips |
 | WP-046 | F+G: `xtask clang-ast` normalizer + harness `expect: ast` + 32 AST goldens; ast-dump spec reconciled with clang | done (2026-10-28). Decisions: second type string = clang's top-level desugar (types.md §12 note); ParenExpr kept; values clang can't give (floats in ConstantExpr, pointers, long double) are checked by kiln-only `expect: ast` tests later |
 | WP-047 | (merged into WP-046) | — |
-| WP-048 | H parser M2 (decls, declarators, exprs, stmts → sema actions) | in-progress |
+| WP-048 | H parser M2 + Sema core (full M2 subset; `kiln -fsyntax-only -fdump-ast` end to end; 47 AST golden dirs, 74 diag tests) | done (2026-10-28). Open: parser lexes the file itself — must take kiln_pp tokens (WP-055); `aggval` unions/bit-fields; [dcl.align]/6; jumps past init | |
 | WP-049 | I sema conversions ([conv], [expr.arith.conv], [over.ics] ranking, narrowing, literal typing; 104 tests, clang wording) | done (2026-10-28). M3: user-defined conversions, temporaries, access checks | |
 | WP-050 | J abi layout (targets, Itanium record layout w/ bit-fields/packed/aligned/no_unique_address, clang-exact on 640 random records per run) | done (2026-10-28). Open: `#pragma pack` needs sema state; bases/vptr are M3 (spec/abi.md §8) | |
 | WP-051 | K Oven M2: KBC compiler + VM + abstract memory for the C-ish subset, tests via AstBuilder now and parsed sources when H lands | in-progress |
 | WP-053 | `kiln_llvm` IR model + builder + verifier + printer (40 corpus modules verified; 16 C programs match clang -O0 through `opt -S`) | done (2026-10-28) |
-| WP-052 | L codegen M2 (AST → kiln_llvm; run tests vs clang) | todo (after H, J, WP-053) |
+| WP-052 | L codegen M2 (AST → kiln_llvm, `-S -emit-llvm`/`-c`/link via clang; `run` tests vs clang oracle) | in-progress |
+| WP-054 | Oven↔sema integration: replace sema's `ConstEvaluator` Folder with the Oven via `SemaBridge`; `oven:` budgets + `-fconstexpr-report` end to end | todo (after WP-051) |
+| WP-055 | parser consumes kiln_pp tokens (`TokenSource` over `Preprocessor::next`), lexdiag.rs stopgap removed, `kiln -fsyntax-only` on files with `#include` | todo (after WP-014) |
 
 ## Cross-cutting
 | id | scope | status |
