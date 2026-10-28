@@ -8,6 +8,7 @@ license.workspace = true
 
 [dependencies]
 kiln_ast.workspace = true
+kiln_source.workspace = true
 
 [lints]
 workspace = true
