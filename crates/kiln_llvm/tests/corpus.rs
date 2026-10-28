@@ -1759,3 +1759,180 @@ fn debug_info() {
         ],
     );
 }
+
+/// §3.2/§7: every byte value in a `c"..."` initializer and in a metadata
+/// string, and quoted global names with escapes.
+#[test]
+fn byte_strings() {
+    let mut m = aarch64();
+    let all: Vec<u8> = (0..=255).collect();
+    let init = m.const_bytes(&all);
+    let ty = m.types.array(TypeId::I8, 256);
+    let g = m.add_global("all bytes", ty);
+    m.set_initializer(g, Some(init)).unwrap();
+    m.global_mut(g).is_constant = true;
+    let q = m.add_global("q\"\\\u{e9}", TypeId::I8);
+    let z = m.const_int(TypeId::I8, 0);
+    m.set_initializer(q, Some(z)).unwrap();
+    let s = m.md_string(&all);
+    let t = m.md_tuple(&[Some(s)]);
+    m.add_named_metadata("bytes", &[t]);
+    let text = check(
+        &m,
+        &[
+            "@\"all bytes\" = constant [256 x i8] c\"\\00\\01\\02",
+            "\\1F !\\22#$%&'()*+,-./0123456789:;<=>?@ABC",
+            "XYZ[\\\\]^_`abc",
+            "xyz{|}~\\7F\\80",
+            "\\FE\\FF\"\n",
+            "@\"q\\22\\\\\\C3\\A9\" = global i8 0\n",
+        ],
+    );
+    assert!(text.contains("!0 = !{!\"\\00\\01"));
+}
+
+/// §4.1/§7: numbering and printing stay linear and deterministic in a
+/// large function (200 blocks, ~1000 values).
+#[test]
+fn large_function() {
+    let mut m = aarch64();
+    let mut b = define(&mut m, "big", TypeId::I32, &[TypeId::I32]);
+    let entry = b.current_block().unwrap();
+    let blocks: Vec<BlockId> = (0..200).map(|_| b.append_block("")).collect();
+    b.br(blocks[0]).unwrap();
+    let mut acc = arg(&b, 0);
+    let mut prev = entry;
+    for (i, &bb) in blocks.iter().enumerate() {
+        b.position_at_end(bb);
+        let p = b.phi(TypeId::I32, &[(acc, prev)]).unwrap();
+        let mut v = p;
+        for k in 0..3 {
+            let c = b.module().const_int(TypeId::I32, i128::from(k + 1));
+            v = b.add(v, c).unwrap();
+        }
+        acc = v;
+        prev = bb;
+        match blocks.get(i + 1) {
+            Some(&next) => b.br(next).unwrap(),
+            None => b.ret(Some(v)).unwrap(),
+        };
+    }
+    let text = check(
+        &m,
+        &[
+            "define dso_local i32 @big(i32 %0) {\n  br label %2\n\n2:\n",
+            "  %3 = phi i32 [ %0, %1 ]\n  %4 = add i32 %3, 1\n",
+        ],
+    );
+    // Block k (k = 0..200) is %(2 + 5k) and defines four values after it.
+    assert!(text.contains("\n997:\n  %998 = phi i32 [ %996, %992 ]\n"));
+    assert!(text.ends_with("  ret i32 %1001\n}\n"));
+    assert_eq!(text, m.to_text(), "printing is deterministic");
+}
+
+/// §5/§9.2: the x86-64 System V signatures clang emits (`zeroext`/`signext`,
+/// `byval`, coerced aggregate returns, `nonnull`/`dereferenceable`).
+#[test]
+fn x86_64_signatures() {
+    let mut m = Module::with_target("x.c", X86_64_LINUX_GNU);
+    let s = m.types.named_struct("struct.S");
+    m.types.set_body(s, &[TypeId::I64, TypeId::I64, TypeId::I64], false).unwrap();
+    let pair = m.types.struct_literal(&[TypeId::I64, TypeId::I64], false);
+    let ptr = TypeId::PTR;
+    let fty = m.types.function(TypeId::I1, &[TypeId::I8, ptr, TypeId::I16, ptr], false);
+    let f = m.add_function("sig", fty).unwrap();
+    let nu = Attr::Flag(AttrKind::NoUndef);
+    let ret = m.attr_set(&[nu.clone(), Attr::Flag(AttrKind::ZExt)]);
+    let p0 = m.attr_set(&[nu.clone(), Attr::Flag(AttrKind::SExt)]);
+    let p1 = m.attr_set(&[nu.clone(), Attr::ByVal(s), Attr::Align(8)]);
+    let p2 = m.attr_set(&[nu.clone(), Attr::Flag(AttrKind::ZExt)]);
+    let p3 = m.attr_set(&[
+        nu,
+        Attr::Flag(AttrKind::NoCapture),
+        Attr::Flag(AttrKind::NonNull),
+        Attr::Flag(AttrKind::ReadOnly),
+        Attr::Dereferenceable(24),
+        Attr::Align(8),
+    ]);
+    let fa = m.attr_set(&[Attr::Flag(AttrKind::NoUnwind)]);
+    {
+        let func = m.func_mut(f);
+        func.dso_local = true;
+        func.attrs.ret = ret;
+        func.attrs.func = fa;
+        for (i, a) in [p0, p1, p2, p3].into_iter().enumerate() {
+            func.attrs.set_param(i, a);
+        }
+    }
+    let mut b = IrBuilder::new(&mut m, f);
+    let e = b.append_block("");
+    b.position_at_end(e);
+    let x = b.cast(CastOp::Trunc, arg(&b, 0), TypeId::I1).unwrap();
+    b.ret(Some(x)).unwrap();
+    let mut b = define(&mut m, "pair", pair, &[TypeId::I64]);
+    let u = b.module().const_undef(pair);
+    let v = b.insert_value(u, arg(&b, 0), &[0]).unwrap();
+    let v = b.insert_value(v, arg(&b, 0), &[1]).unwrap();
+    b.ret(Some(v)).unwrap();
+    check(
+        &m,
+        &[
+            "target triple = \"x86_64-unknown-linux-gnu\"\n\n%struct.S = type { i64, i64, i64 }\n",
+            "define dso_local noundef zeroext i1 @sig(i8 noundef signext %0, ptr noundef \
+             byval(%struct.S) align 8 %1, i16 noundef zeroext %2, ptr nocapture noundef \
+             nonnull readonly align 8 dereferenceable(24) %3) #0 {\n",
+            "define dso_local { i64, i64 } @pair(i64 %0) {\n",
+            "  %2 = insertvalue { i64, i64 } undef, i64 %0, 0\n",
+            "attributes #0 = { nounwind }\n",
+        ],
+    );
+}
+
+/// §4.1: unreachable blocks, a self loop, and a `phi` listing a
+/// predecessor once per `switch` edge.
+#[test]
+fn cfg_shapes() {
+    let mut m = aarch64();
+    let mut b = define(&mut m, "cfg", TypeId::I32, &[TypeId::I32]);
+    let entry = b.current_block().unwrap();
+    let [spin, join, dead] = [(); 3].map(|()| b.append_block(""));
+    let x = arg(&b, 0);
+    let (one, two) = (b.module().const_int(TypeId::I32, 1), b.module().const_int(TypeId::I32, 2));
+    b.switch(x, spin, &[(one, join), (two, join)]).unwrap();
+    b.position_at_end(spin);
+    b.br(spin).unwrap();
+    b.position_at_end(join);
+    let p = b.phi(TypeId::I32, &[(x, entry), (x, entry)]).unwrap();
+    b.ret(Some(p)).unwrap();
+    b.position_at_end(dead);
+    b.unreachable().unwrap();
+    check(
+        &m,
+        &[
+            "  switch i32 %0, label %2 [\n    i32 1, label %3\n    i32 2, label %3\n  ]\n",
+            "\n2:\n  br label %2\n",
+            "\n3:\n  %4 = phi i32 [ %0, %1 ], [ %0, %1 ]\n  ret i32 %4\n",
+            "\n5:\n  unreachable\n}\n",
+        ],
+    );
+}
+
+/// §2.4: `gc`, `section`, function alignment and a non-zero program
+/// address space on a definition.
+#[test]
+fn gc_section_align() {
+    let mut m = aarch64();
+    let mut b = define(&mut m, "managed", TypeId::VOID, &[]);
+    b.ret_void().unwrap();
+    let f = b.func_id();
+    let func = m.func_mut(f);
+    func.gc = Some("statepoint-example".into());
+    func.section = Some(".text.hot".into());
+    func.align = Some(16);
+    func.unnamed_addr = UnnamedAddr::Local;
+    check(
+        &m,
+        &["define dso_local void @managed() local_unnamed_addr section \".text.hot\" align 16 \
+           gc \"statepoint-example\" {\n  ret void\n}\n"],
+    );
+}
