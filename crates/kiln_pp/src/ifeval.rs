@@ -19,7 +19,6 @@ use kiln_lex::literal::{
 use kiln_lex::{Encoding, LexDiagKind, LexOptions, Punct, Std, Symbol, TokKind, Token};
 use kiln_source::Span;
 
-use crate::builtin::OPERATOR_NAMES;
 use crate::cond::{IfContext, IfEvaluator};
 
 /// clang's `#if` evaluator ([cpp.cond]).
@@ -137,27 +136,33 @@ struct Ev<'c> {
     tok: Token,
     params: EncodingParams,
     std: Std,
-    defined: Symbol,
-    true_: Symbol,
-    false_: Symbol,
-    /// The alternative tokens ([lex.digraph]) and their punctuators.
-    op_names: [(Symbol, Punct); OPERATOR_NAMES.len()],
+}
+
+/// The punctuator an alternative token ([lex.digraph]/2) stands for
+/// (`crate::builtin::OPERATOR_NAMES`, as a match: names are compared as
+/// text so that no symbol is interned per `#if`).
+fn op_punct(name: &str) -> Option<Punct> {
+    Some(match name {
+        "and" => Punct::AmpAmp,
+        "and_eq" => Punct::AmpEqual,
+        "bitand" => Punct::Amp,
+        "bitor" => Punct::Pipe,
+        "compl" => Punct::Tilde,
+        "not" => Punct::Exclaim,
+        "not_eq" => Punct::ExclaimEqual,
+        "or" => Punct::PipePipe,
+        "or_eq" => Punct::PipeEqual,
+        "xor" => Punct::Caret,
+        "xor_eq" => Punct::CaretEqual,
+        _ => return None,
+    })
 }
 
 impl<'c> Ev<'c> {
     fn new(cx: &'c mut dyn IfContext, params: EncodingParams) -> Self {
-        let i = cx.interner();
-        let defined = i.intern("defined");
-        let true_ = i.intern("true");
-        let false_ = i.intern("false");
-        let op_names = std::array::from_fn(|k| {
-            let (name, spelling) = OPERATOR_NAMES[k];
-            let p = Punct::ALL.iter().copied().find(|p| p.as_str() == spelling);
-            (i.intern(name), p.unwrap_or(Punct::Amp))
-        });
         let std = cx.std();
         let tok = cx.next();
-        Ev { cx, tok, params, std, defined, true_, false_, op_names }
+        Ev { cx, tok, params, std }
     }
 
     fn bump(&mut self) {
@@ -170,7 +175,12 @@ impl<'c> Ev<'c> {
 
     /// The operator name `sym` stands for, if it is one ([lex.digraph]/2).
     fn op_name(&self, sym: Symbol) -> Option<Punct> {
-        self.op_names.iter().find(|(s, _)| *s == sym).map(|&(_, p)| p)
+        op_punct(self.name(sym))
+    }
+
+    /// The text of an identifier.
+    fn name(&self, sym: Symbol) -> &str {
+        self.cx.interner().as_str(sym)
     }
 
     /// The punctuator the current token is (or stands for).
@@ -208,7 +218,7 @@ impl<'c> Ev<'c> {
     fn value(&mut self, live: bool) -> R<Val> {
         let tok = self.tok;
         let punct = match tok.kind {
-            TokKind::Identifier(s) if s == self.defined => return self.defined(),
+            TokKind::Identifier(s) if self.name(s) == "defined" => return self.defined(),
             TokKind::Identifier(s) => match self.op_name(s) {
                 Some(p) => Some(p),
                 None => return Ok(self.identifier(s, live)),
@@ -256,8 +266,10 @@ impl<'c> Ev<'c> {
     fn identifier(&mut self, s: Symbol, live: bool) -> Val {
         let span = self.tok.span;
         self.bump();
-        if s == self.true_ || s == self.false_ {
-            return Val::signed(u64::from(s == self.true_));
+        match self.name(s) {
+            "true" => return Val::signed(1),
+            "false" => return Val::signed(0),
+            _ => {}
         }
         if live && self.cx.is_enabled(DiagId::pp_undef_identifier) {
             let name = self.cx.interner().as_str(s).to_owned();
@@ -740,5 +752,22 @@ fn is_soft_error(d: &LitDiag, spelling: &str) -> bool {
         }
         LexDiagKind::OctalEscapeTooLarge => esc != Some('o'),
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::op_punct;
+    use crate::builtin::OPERATOR_NAMES;
+
+    /// [lex.digraph]/2: the evaluator's alternative-token table is the
+    /// crate's.
+    #[test]
+    fn op_punct_matches_operator_names() {
+        for (name, spelling) in OPERATOR_NAMES {
+            assert_eq!(op_punct(name).map(kiln_lex::Punct::as_str), Some(*spelling), "{name}");
+        }
+        assert_eq!(op_punct("defined"), None);
+        assert_eq!(op_punct("AND"), None);
     }
 }
