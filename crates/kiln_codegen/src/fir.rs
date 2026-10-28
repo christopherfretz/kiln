@@ -243,16 +243,19 @@ impl Fir {
         &self.blocks[b.0 as usize].insts
     }
 
-    /// The single predecessor of `b` (counting each branching block once).
+    /// The single predecessor of `b`, counting edges as LLVM's
+    /// `getSinglePredecessor` does (a `condbr` with both arms to `b` is two).
     pub fn single_predecessor(&self, b: Blk) -> Option<Blk> {
         let mut pred = None;
         for &bb in &self.layout {
             if let Some(t) = self.terminator(bb) {
-                if self.insts[t as usize].op.successors().contains(&b) {
-                    if pred.is_some() {
-                        return None;
+                for s in self.insts[t as usize].op.successors() {
+                    if s == b {
+                        if pred.is_some() {
+                            return None;
+                        }
+                        pred = Some(bb);
                     }
-                    pred = Some(bb);
                 }
             }
         }
