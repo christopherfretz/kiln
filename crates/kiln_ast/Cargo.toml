@@ -11,5 +11,12 @@ kiln_source.workspace = true
 kiln_diag.workspace = true
 hashbrown.workspace = true
 
+[features]
+# Selects the std-only fallback `InternTable` for type interning instead of
+# hashbrown's `HashTable` (spec/types.md §7.1, §17 T1). Same API, more bytes
+# per entry; kept compiling and tested so the dependency stays optional in
+# principle.
+std-intern = []
+
 [lints]
 workspace = true
