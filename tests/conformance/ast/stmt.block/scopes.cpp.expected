@@ -1,0 +1,29 @@
+TranslationUnitDecl
+`-FunctionDecl shadow 'int (int)'
+  |-ParmVarDecl used x 'int'
+  `-CompoundStmt
+    |-DeclStmt
+    | `-VarDecl used y 'int' cinit
+    |   `-ImplicitCastExpr 'int' <LValueToRValue>
+    |     `-DeclRefExpr 'int' lvalue ParmVar 'x' 'int'
+    |-CompoundStmt
+    | |-DeclStmt
+    | | `-VarDecl used x 'int' cinit
+    | |   `-IntegerLiteral 'int' 2
+    | |-CompoundAssignOperator 'int' lvalue '+=' ComputeLHSTy='int' ComputeResultTy='int'
+    | | |-DeclRefExpr 'int' lvalue Var 'y' 'int'
+    | | `-ImplicitCastExpr 'int' <LValueToRValue>
+    | |   `-DeclRefExpr 'int' lvalue Var 'x' 'int'
+    | `-CompoundStmt
+    |   |-DeclStmt
+    |   | `-VarDecl used y 'int' cinit
+    |   |   `-IntegerLiteral 'int' 5
+    |   `-CompoundAssignOperator 'int' lvalue '+=' ComputeLHSTy='int' ComputeResultTy='int'
+    |     |-DeclRefExpr 'int' lvalue Var 'x' 'int'
+    |     `-ImplicitCastExpr 'int' <LValueToRValue>
+    |       `-DeclRefExpr 'int' lvalue Var 'y' 'int'
+    |-NullStmt
+    `-ReturnStmt
+      `-ImplicitCastExpr 'int' <LValueToRValue>
+        `-ImplicitCastExpr 'int' xvalue <NoOp>
+          `-DeclRefExpr 'int' lvalue Var 'y' 'int'

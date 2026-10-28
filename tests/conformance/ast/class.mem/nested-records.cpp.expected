@@ -1,0 +1,50 @@
+TranslationUnitDecl
+|-CXXRecordDecl referenced struct Inner definition
+| |-FieldDecl referenced a 'short'
+| `-FieldDecl referenced b 'char'
+|-CXXRecordDecl referenced struct Outer definition
+| |-FieldDecl referenced in 'Inner'
+| |-FieldDecl referenced pin 'Inner *'
+| `-FieldDecl referenced arr 'int[2]'
+`-FunctionDecl sum 'int (Outer, Outer *)'
+  |-ParmVarDecl used o 'Outer'
+  |-ParmVarDecl used po 'Outer *'
+  `-CompoundStmt
+    `-ReturnStmt
+      `-BinaryOperator 'int' '+'
+        |-BinaryOperator 'int' '+'
+        | |-BinaryOperator 'int' '+'
+        | | |-BinaryOperator 'int' '+'
+        | | | |-ImplicitCastExpr 'int' <IntegralCast>
+        | | | | `-ImplicitCastExpr 'short' <LValueToRValue>
+        | | | |   `-MemberExpr 'short' lvalue .a
+        | | | |     `-MemberExpr 'Inner' lvalue .in
+        | | | |       `-DeclRefExpr 'Outer' lvalue ParmVar 'o' 'Outer'
+        | | | `-ImplicitCastExpr 'int' <IntegralCast>
+        | | |   `-ImplicitCastExpr 'char' <LValueToRValue>
+        | | |     `-MemberExpr 'char' lvalue ->b
+        | | |       `-ImplicitCastExpr 'Inner *' <LValueToRValue>
+        | | |         `-MemberExpr 'Inner *' lvalue .pin
+        | | |           `-DeclRefExpr 'Outer' lvalue ParmVar 'o' 'Outer'
+        | | `-ImplicitCastExpr 'int' <IntegralCast>
+        | |   `-ImplicitCastExpr 'short' <LValueToRValue>
+        | |     `-MemberExpr 'short' lvalue .a
+        | |       `-MemberExpr 'Inner' lvalue ->in
+        | |         `-ImplicitCastExpr 'Outer *' <LValueToRValue>
+        | |           `-DeclRefExpr 'Outer *' lvalue ParmVar 'po' 'Outer *'
+        | `-ImplicitCastExpr 'int' <LValueToRValue>
+        |   `-ArraySubscriptExpr 'int' lvalue
+        |     |-ImplicitCastExpr 'int *' <ArrayToPointerDecay>
+        |     | `-MemberExpr 'int[2]' lvalue ->arr
+        |     |   `-ImplicitCastExpr 'Outer *' <LValueToRValue>
+        |     |     `-DeclRefExpr 'Outer *' lvalue ParmVar 'po' 'Outer *'
+        |     `-IntegerLiteral 'int' 1
+        `-ImplicitCastExpr 'int' <LValueToRValue>
+          `-ArraySubscriptExpr 'int' lvalue
+            |-ImplicitCastExpr 'int *' <ArrayToPointerDecay>
+            | `-MemberExpr 'int[2]' lvalue .arr
+            |   `-ParenExpr 'Outer' lvalue
+            |     `-UnaryOperator 'Outer' lvalue prefix '*' cannot overflow
+            |       `-ImplicitCastExpr 'Outer *' <LValueToRValue>
+            |         `-DeclRefExpr 'Outer *' lvalue ParmVar 'po' 'Outer *'
+            `-IntegerLiteral 'int' 0

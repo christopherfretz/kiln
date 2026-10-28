@@ -1,0 +1,37 @@
+TranslationUnitDecl
+|-VarDecl used x 'int'
+|-VarDecl used p 'int *' cinit
+| `-UnaryOperator 'int *' prefix '&' cannot overflow
+|   `-DeclRefExpr 'int' lvalue Var 'x' 'int'
+|-VarDecl used pc 'const int *' cinit
+| `-ImplicitCastExpr 'const int *' <NoOp>
+|   `-ImplicitCastExpr 'int *' <LValueToRValue>
+|     `-DeclRefExpr 'int *' lvalue Var 'p' 'int *'
+|-VarDecl used cp 'int *const' cinit
+| `-UnaryOperator 'int *' prefix '&' cannot overflow
+|   `-DeclRefExpr 'int' lvalue Var 'x' 'int'
+|-VarDecl used pp 'int **' cinit
+| `-UnaryOperator 'int **' prefix '&' cannot overflow
+|   `-DeclRefExpr 'int *' lvalue Var 'p' 'int *'
+|-VarDecl pcv 'const volatile int *' cinit
+| `-ImplicitCastExpr 'const volatile int *' <NullToPointer>
+|   `-CXXNullPtrLiteralExpr 'std::nullptr_t'
+`-FunctionDecl deref 'int ()'
+  `-CompoundStmt
+    `-ReturnStmt
+      `-BinaryOperator 'int' '+'
+        |-BinaryOperator 'int' '+'
+        | |-ImplicitCastExpr 'int' <LValueToRValue>
+        | | `-UnaryOperator 'int' lvalue prefix '*' cannot overflow
+        | |   `-ImplicitCastExpr 'int *' <LValueToRValue>
+        | |     `-UnaryOperator 'int *' lvalue prefix '*' cannot overflow
+        | |       `-ImplicitCastExpr 'int **' <LValueToRValue>
+        | |         `-DeclRefExpr 'int **' lvalue Var 'pp' 'int **'
+        | `-ImplicitCastExpr 'int' <LValueToRValue>
+        |   `-UnaryOperator 'const int' lvalue prefix '*' cannot overflow
+        |     `-ImplicitCastExpr 'const int *' <LValueToRValue>
+        |       `-DeclRefExpr 'const int *' lvalue Var 'pc' 'const int *'
+        `-ImplicitCastExpr 'int' <LValueToRValue>
+          `-UnaryOperator 'int' lvalue prefix '*' cannot overflow
+            `-ImplicitCastExpr 'int *' <LValueToRValue>
+              `-DeclRefExpr 'int *const' lvalue Var 'cp' 'int *const'

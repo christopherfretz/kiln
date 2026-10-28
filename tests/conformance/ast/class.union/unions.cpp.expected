@@ -1,0 +1,28 @@
+TranslationUnitDecl
+|-CXXRecordDecl referenced union U definition
+| |-FieldDecl referenced i 'int'
+| |-FieldDecl referenced f 'float'
+| `-FieldDecl referenced bytes 'char[4]'
+`-FunctionDecl pun 'int (U)'
+  |-ParmVarDecl used u 'U'
+  `-CompoundStmt
+    |-DeclStmt
+    | `-VarDecl used v 'U' cinit
+    |   `-InitListExpr 'U' field=i
+    |     `-IntegerLiteral 'int' 7
+    |-BinaryOperator 'float' lvalue '='
+    | |-MemberExpr 'float' lvalue .f
+    | | `-DeclRefExpr 'U' lvalue Var 'v' 'U'
+    | `-FloatingLiteral 'float' 1e0
+    `-ReturnStmt
+      `-BinaryOperator 'int' '+'
+        |-ImplicitCastExpr 'int' <LValueToRValue>
+        | `-MemberExpr 'int' lvalue .i
+        |   `-DeclRefExpr 'U' lvalue ParmVar 'u' 'U'
+        `-ImplicitCastExpr 'int' <IntegralCast>
+          `-ImplicitCastExpr 'char' <LValueToRValue>
+            `-ArraySubscriptExpr 'char' lvalue
+              |-ImplicitCastExpr 'char *' <ArrayToPointerDecay>
+              | `-MemberExpr 'char[4]' lvalue .bytes
+              |   `-DeclRefExpr 'U' lvalue Var 'v' 'U'
+              `-IntegerLiteral 'int' 0

@@ -102,7 +102,8 @@ type   := "'" printed-type "'" [":'" desugared "'"]     -- only when the strings
 
 ## 3. M2 node lines (normative)
 Every decl line starts `Class [implicit] [used|referenced] [invalid]`
-(clang's `isImplicit`, `isUsed`, `isReferenced`, `isInvalidDecl`; `used`
+(clang's `isImplicit`, `isUsed` (of the first declaration),
+`isThisDeclarationReferenced`, `isInvalidDecl`; `used`
 wins); this is `<head>` below, after the §2 ids and location.
 Dependence flags are not printed (clang prints them only on dependent
 expressions, M3). Every expression

@@ -1,0 +1,43 @@
+TranslationUnitDecl
+`-FunctionDecl cmp 'bool (int, unsigned int, int *, int *, double)'
+  |-ParmVarDecl used a 'int'
+  |-ParmVarDecl used u 'unsigned int'
+  |-ParmVarDecl used p 'int *'
+  |-ParmVarDecl used q 'int *'
+  |-ParmVarDecl used d 'double'
+  `-CompoundStmt
+    `-ReturnStmt
+      `-BinaryOperator 'bool' '&&'
+        |-BinaryOperator 'bool' '&&'
+        | |-BinaryOperator 'bool' '&&'
+        | | |-BinaryOperator 'bool' '&&'
+        | | | |-BinaryOperator 'bool' '&&'
+        | | | | |-BinaryOperator 'bool' '<'
+        | | | | | |-ImplicitCastExpr 'int' <LValueToRValue>
+        | | | | | | `-DeclRefExpr 'int' lvalue ParmVar 'a' 'int'
+        | | | | | `-IntegerLiteral 'int' 3
+        | | | | `-BinaryOperator 'bool' '>='
+        | | | |   |-ImplicitCastExpr 'unsigned int' <LValueToRValue>
+        | | | |   | `-DeclRefExpr 'unsigned int' lvalue ParmVar 'u' 'unsigned int'
+        | | | |   `-IntegerLiteral 'unsigned int' 2
+        | | | `-BinaryOperator 'bool' '!='
+        | | |   |-ImplicitCastExpr 'int *' <LValueToRValue>
+        | | |   | `-DeclRefExpr 'int *' lvalue ParmVar 'p' 'int *'
+        | | |   `-ImplicitCastExpr 'int *' <LValueToRValue>
+        | | |     `-DeclRefExpr 'int *' lvalue ParmVar 'q' 'int *'
+        | | `-BinaryOperator 'bool' '=='
+        | |   |-ImplicitCastExpr 'int *' <LValueToRValue>
+        | |   | `-DeclRefExpr 'int *' lvalue ParmVar 'p' 'int *'
+        | |   `-ImplicitCastExpr 'int *' <NullToPointer>
+        | |     `-CXXNullPtrLiteralExpr 'std::nullptr_t'
+        | `-BinaryOperator 'bool' '>'
+        |   |-ImplicitCastExpr 'double' <LValueToRValue>
+        |   | `-DeclRefExpr 'double' lvalue ParmVar 'd' 'double'
+        |   `-ImplicitCastExpr 'double' <IntegralToFloating>
+        |     `-ImplicitCastExpr 'int' <LValueToRValue>
+        |       `-DeclRefExpr 'int' lvalue ParmVar 'a' 'int'
+        `-BinaryOperator 'bool' '<='
+          |-ImplicitCastExpr 'int *' <LValueToRValue>
+          | `-DeclRefExpr 'int *' lvalue ParmVar 'p' 'int *'
+          `-ImplicitCastExpr 'int *' <LValueToRValue>
+            `-DeclRefExpr 'int *' lvalue ParmVar 'q' 'int *'

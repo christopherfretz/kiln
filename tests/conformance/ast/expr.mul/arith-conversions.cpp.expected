@@ -1,0 +1,66 @@
+TranslationUnitDecl
+`-FunctionDecl mix 'double (int, unsigned int, long, float, char, short)'
+  |-ParmVarDecl used i 'int'
+  |-ParmVarDecl used u 'unsigned int'
+  |-ParmVarDecl used l 'long'
+  |-ParmVarDecl used f 'float'
+  |-ParmVarDecl used c 'char'
+  |-ParmVarDecl used s 'short'
+  `-CompoundStmt
+    |-DeclStmt
+    | `-VarDecl used a 'long' cinit
+    |   `-BinaryOperator 'long' '*'
+    |     |-ImplicitCastExpr 'long' <IntegralCast>
+    |     | `-ImplicitCastExpr 'int' <LValueToRValue>
+    |     |   `-DeclRefExpr 'int' lvalue ParmVar 'i' 'int'
+    |     `-ImplicitCastExpr 'long' <LValueToRValue>
+    |       `-DeclRefExpr 'long' lvalue ParmVar 'l' 'long'
+    |-DeclStmt
+    | `-VarDecl used b 'unsigned int' cinit
+    |   `-BinaryOperator 'unsigned int' '/'
+    |     |-ImplicitCastExpr 'unsigned int' <LValueToRValue>
+    |     | `-DeclRefExpr 'unsigned int' lvalue ParmVar 'u' 'unsigned int'
+    |     `-ImplicitCastExpr 'unsigned int' <IntegralCast>
+    |       `-ImplicitCastExpr 'int' <LValueToRValue>
+    |         `-DeclRefExpr 'int' lvalue ParmVar 'i' 'int'
+    |-DeclStmt
+    | `-VarDecl used g 'float' cinit
+    |   `-BinaryOperator 'float' '*'
+    |     |-ImplicitCastExpr 'float' <LValueToRValue>
+    |     | `-DeclRefExpr 'float' lvalue ParmVar 'f' 'float'
+    |     `-ImplicitCastExpr 'float' <IntegralToFloating>
+    |       `-ImplicitCastExpr 'int' <LValueToRValue>
+    |         `-DeclRefExpr 'int' lvalue ParmVar 'i' 'int'
+    |-DeclStmt
+    | `-VarDecl used h 'int' cinit
+    |   `-BinaryOperator 'int' '+'
+    |     |-ImplicitCastExpr 'int' <IntegralCast>
+    |     | `-ImplicitCastExpr 'char' <LValueToRValue>
+    |     |   `-DeclRefExpr 'char' lvalue ParmVar 'c' 'char'
+    |     `-ImplicitCastExpr 'int' <IntegralCast>
+    |       `-ImplicitCastExpr 'short' <LValueToRValue>
+    |         `-DeclRefExpr 'short' lvalue ParmVar 's' 'short'
+    `-ReturnStmt
+      `-ImplicitCastExpr 'double' <FloatingCast>
+        `-BinaryOperator 'float' '+'
+          |-BinaryOperator 'float' '+'
+          | |-BinaryOperator 'float' '+'
+          | | |-ImplicitCastExpr 'float' <IntegralToFloating>
+          | | | `-BinaryOperator 'long' '+'
+          | | |   |-ImplicitCastExpr 'long' <LValueToRValue>
+          | | |   | `-DeclRefExpr 'long' lvalue Var 'a' 'long'
+          | | |   `-ImplicitCastExpr 'long' <IntegralCast>
+          | | |     `-ImplicitCastExpr 'unsigned int' <LValueToRValue>
+          | | |       `-DeclRefExpr 'unsigned int' lvalue Var 'b' 'unsigned int'
+          | | `-ImplicitCastExpr 'float' <LValueToRValue>
+          | |   `-DeclRefExpr 'float' lvalue Var 'g' 'float'
+          | `-ImplicitCastExpr 'float' <IntegralToFloating>
+          |   `-ImplicitCastExpr 'int' <LValueToRValue>
+          |     `-DeclRefExpr 'int' lvalue Var 'h' 'int'
+          `-ImplicitCastExpr 'float' <IntegralToFloating>
+            `-BinaryOperator 'long' '%'
+              |-ImplicitCastExpr 'long' <LValueToRValue>
+              | `-DeclRefExpr 'long' lvalue ParmVar 'l' 'long'
+              `-ImplicitCastExpr 'long' <IntegralCast>
+                `-ImplicitCastExpr 'int' <LValueToRValue>
+                  `-DeclRefExpr 'int' lvalue ParmVar 'i' 'int'

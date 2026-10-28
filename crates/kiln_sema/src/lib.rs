@@ -74,6 +74,10 @@ pub struct Sema<'a, 'sm> {
     pub(crate) defining: Vec<DeclId>,
     /// Enumerations whose definitions are being processed.
     pub(crate) enums: Vec<decl::EnumBuild>,
+    /// Block-scope function and `extern` variable declarations, by
+    /// enclosing namespace and name: a later namespace-scope declaration
+    /// redeclares them ([basic.link]/6, clang's local extern decls).
+    pub(crate) local_externs: Vec<(DeclId, kiln_source::symbol::Symbol, DeclId)>,
 }
 
 impl<'a, 'sm> Sema<'a, 'sm> {
@@ -105,6 +109,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             pending_odr: Vec::new(),
             defining: Vec::new(),
             enums: Vec::new(),
+            local_externs: Vec::new(),
         }
     }
 

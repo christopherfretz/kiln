@@ -399,6 +399,56 @@ impl Sema<'_, '_> {
         found.into_iter().rev().find(|&d| !is_tag_kind(self.ast.decls.get(d).kind()))
     }
 
+    /// The previous declaration a function or `extern` variable
+    /// declaration redeclares: an ordinary previous declaration, else, at
+    /// block scope, one in the innermost enclosing namespace
+    /// ([basic.link]/6), else a block-scope declaration of the same entity
+    /// ([`Sema::local_externs`]).
+    fn find_prev_linkage(&self, name: Symbol, qualifier: Option<DeclId>) -> Option<DeclId> {
+        if let Some(p) = self.find_prev(name, qualifier) {
+            return Some(p);
+        }
+        if qualifier.is_some() {
+            return None;
+        }
+        let ns = self.enclosing_namespace()?;
+        if self.in_local_scope()
+            && let Some(p) =
+                self.lookup_in(ns, name, LookupKind::Ordinary).decls.into_iter().rev().find(|&d| {
+                    matches!(self.ast.decls.get(d).kind(), DeclKind::Var | DeclKind::Function)
+                })
+        {
+            return Some(p);
+        }
+        self.local_externs.iter().rev().find(|&&(n, s, _)| n == ns && s == name).map(|x| x.2)
+    }
+
+    /// The innermost namespace (or the translation unit) enclosing the
+    /// current context.
+    fn enclosing_namespace(&self) -> Option<DeclId> {
+        let mut ns = self.ctx;
+        for _ in 0..10_000 {
+            if matches!(
+                self.ast.decls.get(ns).kind(),
+                DeclKind::Namespace | DeclKind::TranslationUnit
+            ) {
+                return Some(ns);
+            }
+            ns = self.ast.decls.get(ns).ctx()?;
+        }
+        None
+    }
+
+    /// Records a block-scope function or `extern` variable declaration
+    /// for later namespace-scope redeclarations.
+    fn note_local_extern(&mut self, name: Symbol, d: DeclId) {
+        if self.in_local_scope()
+            && let Some(ns) = self.enclosing_namespace()
+        {
+            self.local_externs.push((ns, name, d));
+        }
+    }
+
     /// A declarator in a simple-declaration or member-declaration: creates
     /// the variable, function, typedef or field (spec/sema.md §4.2). The
     /// caller then supplies the initializer ([`Sema::act_on_init`] /
@@ -593,7 +643,7 @@ impl Sema<'_, '_> {
         let variadic = self.ast.types.proto(ty).is_some_and(|p| p.info().variadic());
         spec = spec.with_variadic(variadic);
         let mut prev_ok = None;
-        if let Some(p) = self.find_prev(name, d.qualifier) {
+        if let Some(p) = self.find_prev_linkage(name, d.qualifier) {
             let pn = *self.ast.decls.get(p);
             if pn.kind() == DeclKind::Function {
                 let pty = pn.ty().unwrap_or(QualType::ERROR);
@@ -647,6 +697,7 @@ impl Sema<'_, '_> {
         let mut h = DeclHead::new(ctx, DeclName::ident(name), d.name_loc());
         h.lexical = Some(lexical);
         let f = self.builder().function(h, DeclKind::Function, ty, spec, prev_ok);
+        self.note_local_extern(name, f);
         let params: Vec<ParamInfo> =
             d.function_params().map(<[ParamInfo]>::to_vec).unwrap_or_default();
         let mut ids = Vec::with_capacity(params.len());
@@ -809,9 +860,16 @@ impl Sema<'_, '_> {
         let (ctx, lexical) = self.decl_contexts(d);
         let spec = self.var_spec(ds, d);
         let mut prev_ok = None;
-        if let Some(p) = self.find_prev(name, d.qualifier) {
+        let local = self.find_prev(name, d.qualifier);
+        let prev = match local {
+            None if spec.storage() == VarStorage::Extern || !self.in_local_scope() => {
+                self.find_prev_linkage(name, d.qualifier)
+            }
+            p => p,
+        };
+        if let Some(p) = prev {
             let pn = *self.ast.decls.get(p);
-            let block = self.in_local_scope();
+            let block = local.is_some() && self.in_local_scope();
             if pn.kind() == DeclKind::Var && !block {
                 let pty = pn.ty().unwrap_or(QualType::ERROR);
                 let compatible = self.ast.types.same_type(pty, ty) || {
@@ -858,6 +916,9 @@ impl Sema<'_, '_> {
         h.lexical = Some(lexical);
         let v = self.builder().var(h, ty, spec, prev_ok);
         self.register_local(name, v);
+        if spec.storage() == VarStorage::Extern {
+            self.note_local_extern(name, v);
+        }
         v
     }
 
@@ -1656,7 +1717,7 @@ impl Sema<'_, '_> {
             }
         };
         let c = self.act_on_full_expr(c);
-        let cloc = self.ast.exprs.get(cond).loc();
+        let cloc = self.begin_loc(cond);
         if !self.has_errors_in(c) {
             match self.evaluate(c) {
                 Ok(v) if v.truthy() => {}

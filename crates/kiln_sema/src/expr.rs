@@ -348,6 +348,32 @@ impl Sema<'_, '_> {
         Some((op.spelling(), l, r))
     }
 
+    /// The location of the first token of `e` (clang's `getBeginLoc`):
+    /// a node whose own location is an operator or a name after its first
+    /// operand begins where that operand does.
+    pub(crate) fn begin_loc(&self, mut e: ExprId) -> Loc {
+        loop {
+            let n = self.ast.exprs.get(e);
+            let first = match n.kind() {
+                ExprKind::ImplicitCastExpr
+                | ExprKind::ConstantExpr
+                | ExprKind::BinaryOperator
+                | ExprKind::CompoundAssignOperator
+                | ExprKind::ConditionalOperator
+                | ExprKind::ArraySubscriptExpr
+                | ExprKind::CallExpr
+                | ExprKind::MemberExpr => true,
+                ExprKind::UnaryOperator => self.ast.exprs.unary_op(e).is_postfix(),
+                _ => false,
+            };
+            let kids = if first { self.ast.exprs.children(e, &self.ast.lists) } else { Vec::new() };
+            match kids.first() {
+                Some(&k) => e = k,
+                None => return n.loc(),
+            }
+        }
+    }
+
     // -- full-expressions --------------------------------------------------------
 
     /// The end of a full-expression ([intro.execution]/5): resolves the
@@ -378,7 +404,9 @@ impl Sema<'_, '_> {
         let pending = std::mem::take(&mut self.pending_odr);
         for r in pending {
             let d = self.ast.exprs.decl(r);
-            if constant.contains(&r) && self.usable_in_constant_expressions(d) {
+            let is_ref =
+                self.ast.types.is_reference(self.ast.decls.get(d).ty().unwrap_or(QualType::ERROR));
+            if (is_ref || constant.contains(&r)) && self.usable_in_constant_expressions(d) {
                 let _ = self.ast.exprs.set_non_odr_use(r, NonOdrUse::Constant);
                 continue;
             }
@@ -407,7 +435,9 @@ impl Sema<'_, '_> {
     }
 
     /// [expr.const]/4: a `constexpr` variable, or a `const`, non-volatile
-    /// integral or enumeration variable, with a constant initializer.
+    /// integral or enumeration variable, or a reference, with a constant
+    /// initializer. (A reference's initializer is constant in M2 when it
+    /// names a function or a variable with static storage duration.)
     fn usable_in_constant_expressions(&self, d: DeclId) -> bool {
         let n = self.ast.decls.get(d);
         if n.kind() != DeclKind::Var {
@@ -416,6 +446,9 @@ impl Sema<'_, '_> {
         let Some(v) = self.ast.decls.var(d) else { return false };
         let Some(init) = v.init else { return false };
         let ty = n.ty().unwrap_or(QualType::ERROR);
+        if self.ast.types.is_reference(ty) {
+            return self.is_static_lvalue(init);
+        }
         let q = self.ast.types.effective_quals(ty);
         let ok = v.spec.is_constexpr()
             || (q.is_const()
@@ -423,6 +456,51 @@ impl Sema<'_, '_> {
                 && self.is_integral_or_enum(ty)
                 && !self.ast.types.is_reference(ty));
         ok && self.evaluate(init).is_ok()
+    }
+
+    /// True if the glvalue `e` designates a function or a variable with
+    /// static storage duration (through parentheses and no-op casts).
+    fn is_static_lvalue(&self, mut e: ExprId) -> bool {
+        loop {
+            let n = self.ast.exprs.get(e);
+            match n.kind() {
+                ExprKind::ParenExpr => e = self.ast.exprs.operand(e),
+                ExprKind::ImplicitCastExpr
+                    if matches!(
+                        self.ast.exprs.cast_kind(e),
+                        CastKind::NoOp | CastKind::DerivedToBase | CastKind::UncheckedDerivedToBase
+                    ) =>
+                {
+                    e = self.ast.exprs.operand(e);
+                }
+                ExprKind::DeclRefExpr => {
+                    let d = self.ast.exprs.decl(e);
+                    return match self.ast.decls.get(d).kind() {
+                        DeclKind::Function => true,
+                        DeclKind::Var => self.has_static_storage(d),
+                        _ => false,
+                    };
+                }
+                _ => return false,
+            }
+        }
+    }
+
+    /// True if variable `d` has static storage duration ([basic.stc.static]):
+    /// a namespace-scope variable or a `static`/`extern` local, not
+    /// `thread_local`.
+    fn has_static_storage(&self, d: DeclId) -> bool {
+        let Some(v) = self.ast.decls.var(d) else { return false };
+        if v.spec.tls() != kiln_ast::decl::TlsKind::None {
+            return false;
+        }
+        let local =
+            self.ast.decls.get(d).ctx().is_some_and(|c| self.ast.decls.get(c).kind().is_function());
+        !local
+            || matches!(
+                v.spec.storage(),
+                kiln_ast::decl::VarStorage::Static | kiln_ast::decl::VarStorage::Extern
+            )
     }
 
     /// Marks `d` odr-used ([basic.def.odr]/5; clang's `markUsed`, kept on

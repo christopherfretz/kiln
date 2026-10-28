@@ -1,0 +1,49 @@
+TranslationUnitDecl
+`-FunctionDecl bits 'unsigned int (unsigned int, int, char)'
+  |-ParmVarDecl used u 'unsigned int'
+  |-ParmVarDecl used i 'int'
+  |-ParmVarDecl used c 'char'
+  `-CompoundStmt
+    |-DeclStmt
+    | `-VarDecl used a 'unsigned int' cinit
+    |   `-BinaryOperator 'unsigned int' '<<'
+    |     |-ImplicitCastExpr 'unsigned int' <LValueToRValue>
+    |     | `-DeclRefExpr 'unsigned int' lvalue ParmVar 'u' 'unsigned int'
+    |     `-IntegerLiteral 'int' 2
+    |-DeclStmt
+    | `-VarDecl used b 'int' cinit
+    |   `-BinaryOperator 'int' '>>'
+    |     |-ImplicitCastExpr 'int' <LValueToRValue>
+    |     | `-DeclRefExpr 'int' lvalue ParmVar 'i' 'int'
+    |     `-ImplicitCastExpr 'int' <IntegralCast>
+    |       `-ImplicitCastExpr 'char' <LValueToRValue>
+    |         `-DeclRefExpr 'char' lvalue ParmVar 'c' 'char'
+    |-DeclStmt
+    | `-VarDecl used m 'unsigned int' cinit
+    |   `-BinaryOperator 'unsigned int' '|'
+    |     |-ParenExpr 'unsigned int'
+    |     | `-BinaryOperator 'unsigned int' '&'
+    |     |   |-ImplicitCastExpr 'unsigned int' <LValueToRValue>
+    |     |   | `-DeclRefExpr 'unsigned int' lvalue ParmVar 'u' 'unsigned int'
+    |     |   `-ImplicitCastExpr 'unsigned int' <IntegralCast>
+    |     |     `-IntegerLiteral 'int' 255
+    |     `-ImplicitCastExpr 'unsigned int' <IntegralCast>
+    |       `-ParenExpr 'int'
+    |         `-BinaryOperator 'int' '^'
+    |           |-ImplicitCastExpr 'int' <LValueToRValue>
+    |           | `-DeclRefExpr 'int' lvalue ParmVar 'i' 'int'
+    |           `-IntegerLiteral 'int' 3
+    `-ReturnStmt
+      `-BinaryOperator 'unsigned int' '+'
+        |-BinaryOperator 'unsigned int' '+'
+        | |-BinaryOperator 'unsigned int' '+'
+        | | |-ImplicitCastExpr 'unsigned int' <LValueToRValue>
+        | | | `-DeclRefExpr 'unsigned int' lvalue Var 'a' 'unsigned int'
+        | | `-ImplicitCastExpr 'unsigned int' <IntegralCast>
+        | |   `-ImplicitCastExpr 'int' <LValueToRValue>
+        | |     `-DeclRefExpr 'int' lvalue Var 'b' 'int'
+        | `-ImplicitCastExpr 'unsigned int' <LValueToRValue>
+        |   `-DeclRefExpr 'unsigned int' lvalue Var 'm' 'unsigned int'
+        `-UnaryOperator 'unsigned int' prefix '~' cannot overflow
+          `-ImplicitCastExpr 'unsigned int' <LValueToRValue>
+            `-DeclRefExpr 'unsigned int' lvalue ParmVar 'u' 'unsigned int'

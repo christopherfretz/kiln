@@ -1,0 +1,38 @@
+TranslationUnitDecl
+|-VarDecl used g 'int'
+|-VarDecl referenced r 'int &' cinit
+| `-DeclRefExpr 'int' lvalue Var 'g' 'int'
+|-VarDecl referenced cr 'const int &' cinit
+| `-ImplicitCastExpr 'const int' lvalue <NoOp>
+|   `-DeclRefExpr 'int' lvalue Var 'g' 'int'
+|-FunctionDecl used pick 'int &(int &, int &, bool)'
+| |-ParmVarDecl used a 'int &'
+| |-ParmVarDecl used b 'int &'
+| |-ParmVarDecl used c 'bool'
+| `-CompoundStmt
+|   `-ReturnStmt
+|     `-ConditionalOperator 'int' lvalue
+|       |-ImplicitCastExpr 'bool' <LValueToRValue>
+|       | `-DeclRefExpr 'bool' lvalue ParmVar 'c' 'bool'
+|       |-DeclRefExpr 'int' lvalue ParmVar 'a' 'int &'
+|       `-DeclRefExpr 'int' lvalue ParmVar 'b' 'int &'
+`-FunctionDecl use 'int (int)'
+  |-ParmVarDecl used v 'int'
+  `-CompoundStmt
+    |-DeclStmt
+    | `-VarDecl used q 'int &' cinit
+    |   `-CallExpr 'int' lvalue
+    |     |-ImplicitCastExpr 'int &(*)(int &, int &, bool)' <FunctionToPointerDecay>
+    |     | `-DeclRefExpr 'int &(int &, int &, bool)' lvalue Function 'pick' 'int &(int &, int &, bool)'
+    |     |-DeclRefExpr 'int' lvalue Var 'r' 'int &' non_odr_use_constant
+    |     |-DeclRefExpr 'int' lvalue ParmVar 'v' 'int'
+    |     `-CXXBoolLiteralExpr 'bool' true
+    |-BinaryOperator 'int' lvalue '='
+    | |-DeclRefExpr 'int' lvalue Var 'q' 'int &'
+    | `-IntegerLiteral 'int' 3
+    `-ReturnStmt
+      `-BinaryOperator 'int' '+'
+        |-ImplicitCastExpr 'int' <LValueToRValue>
+        | `-DeclRefExpr 'const int' lvalue Var 'cr' 'const int &' non_odr_use_constant
+        `-ImplicitCastExpr 'int' <LValueToRValue>
+          `-DeclRefExpr 'int' lvalue Var 'q' 'int &'

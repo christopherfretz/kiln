@@ -663,7 +663,9 @@ impl<'a, W: io::Write> Dumper<'a, W> {
         if n.has(DeclFlags::IMPLICIT) {
             self.line.push_str(" implicit");
         }
-        if n.has(DeclFlags::USED) {
+        // clang: `isUsed` reads the first declaration,
+        // `isThisDeclarationReferenced` only this one.
+        if n.has(DeclFlags::USED) || decls.get(ast.first(d)).has(DeclFlags::USED) {
             self.line.push_str(" used");
         } else if n.has(DeclFlags::REFERENCED) {
             self.line.push_str(" referenced");

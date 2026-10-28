@@ -1,0 +1,62 @@
+TranslationUnitDecl
+|-VarDecl used a 'int[3]'
+|-VarDecl used b 'int[4]' cinit
+| `-InitListExpr 'int[4]'
+|   |-IntegerLiteral 'int' 1
+|   |-IntegerLiteral 'int' 2
+|   |-IntegerLiteral 'int' 3
+|   `-IntegerLiteral 'int' 4
+|-VarDecl used s 'char[3]' cinit
+| `-StringLiteral 'char[3]' "hi"
+|-VarDecl used m 'int[2][3]' cinit
+| `-InitListExpr 'int[2][3]'
+|   |-InitListExpr 'int[3]'
+|   | |-IntegerLiteral 'int' 1
+|   | |-IntegerLiteral 'int' 2
+|   | `-IntegerLiteral 'int' 3
+|   `-InitListExpr 'int[3]'
+|     |-array_filler: ImplicitValueInitExpr 'int'
+|     `-IntegerLiteral 'int' 4
+`-FunctionDecl total 'int ()'
+  `-CompoundStmt
+    `-ReturnStmt
+      `-ImplicitCastExpr 'int' <IntegralCast>
+        `-BinaryOperator 'unsigned long' '+'
+          |-ImplicitCastExpr 'unsigned long' <IntegralCast>
+          | `-BinaryOperator 'int' '+'
+          |   |-BinaryOperator 'int' '+'
+          |   | |-BinaryOperator 'int' '+'
+          |   | | |-ImplicitCastExpr 'int' <LValueToRValue>
+          |   | | | `-ArraySubscriptExpr 'int' lvalue
+          |   | | |   |-ImplicitCastExpr 'int *' <ArrayToPointerDecay>
+          |   | | |   | `-DeclRefExpr 'int[3]' lvalue Var 'a' 'int[3]'
+          |   | | |   `-IntegerLiteral 'int' 0
+          |   | | `-ImplicitCastExpr 'int' <LValueToRValue>
+          |   | |   `-ArraySubscriptExpr 'int' lvalue
+          |   | |     |-ImplicitCastExpr 'int *' <ArrayToPointerDecay>
+          |   | |     | `-DeclRefExpr 'int[4]' lvalue Var 'b' 'int[4]'
+          |   | |     `-IntegerLiteral 'int' 3
+          |   | `-ImplicitCastExpr 'int' <IntegralCast>
+          |   |   `-ImplicitCastExpr 'char' <LValueToRValue>
+          |   |     `-ArraySubscriptExpr 'char' lvalue
+          |   |       |-ImplicitCastExpr 'char *' <ArrayToPointerDecay>
+          |   |       | `-DeclRefExpr 'char[3]' lvalue Var 's' 'char[3]'
+          |   |       `-IntegerLiteral 'int' 1
+          |   `-ImplicitCastExpr 'int' <LValueToRValue>
+          |     `-ArraySubscriptExpr 'int' lvalue
+          |       |-ImplicitCastExpr 'int *' <ArrayToPointerDecay>
+          |       | `-ArraySubscriptExpr 'int[3]' lvalue
+          |       |   |-ImplicitCastExpr 'int (*)[3]' <ArrayToPointerDecay>
+          |       |   | `-DeclRefExpr 'int[2][3]' lvalue Var 'm' 'int[2][3]'
+          |       |   `-IntegerLiteral 'int' 1
+          |       `-IntegerLiteral 'int' 2
+          `-BinaryOperator 'unsigned long' '/'
+            |-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof
+            | `-ParenExpr 'int[4]' lvalue
+            |   `-DeclRefExpr 'int[4]' lvalue Var 'b' 'int[4]' non_odr_use_unevaluated
+            `-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof
+              `-ParenExpr 'int' lvalue
+                `-ArraySubscriptExpr 'int' lvalue
+                  |-ImplicitCastExpr 'int *' <ArrayToPointerDecay>
+                  | `-DeclRefExpr 'int[4]' lvalue Var 'b' 'int[4]' non_odr_use_unevaluated
+                  `-IntegerLiteral 'int' 0

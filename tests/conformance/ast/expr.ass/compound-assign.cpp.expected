@@ -1,0 +1,54 @@
+TranslationUnitDecl
+`-FunctionDecl ops 'void (int, double, unsigned int, int *, char)'
+  |-ParmVarDecl used i 'int'
+  |-ParmVarDecl used d 'double'
+  |-ParmVarDecl used u 'unsigned int'
+  |-ParmVarDecl used p 'int *'
+  |-ParmVarDecl used c 'char'
+  `-CompoundStmt
+    |-CompoundAssignOperator 'int' lvalue '+=' ComputeLHSTy='int' ComputeResultTy='int'
+    | |-DeclRefExpr 'int' lvalue ParmVar 'i' 'int'
+    | `-IntegerLiteral 'int' 2
+    |-CompoundAssignOperator 'int' lvalue '-=' ComputeLHSTy='int' ComputeResultTy='int'
+    | |-DeclRefExpr 'int' lvalue ParmVar 'i' 'int'
+    | `-ImplicitCastExpr 'int' <IntegralCast>
+    |   `-ImplicitCastExpr 'char' <LValueToRValue>
+    |     `-DeclRefExpr 'char' lvalue ParmVar 'c' 'char'
+    |-CompoundAssignOperator 'double' lvalue '*=' ComputeLHSTy='double' ComputeResultTy='double'
+    | |-DeclRefExpr 'double' lvalue ParmVar 'd' 'double'
+    | `-ImplicitCastExpr 'double' <IntegralToFloating>
+    |   `-ImplicitCastExpr 'int' <LValueToRValue>
+    |     `-DeclRefExpr 'int' lvalue ParmVar 'i' 'int'
+    |-CompoundAssignOperator 'unsigned int' lvalue '/=' ComputeLHSTy='unsigned int' ComputeResultTy='unsigned int'
+    | |-DeclRefExpr 'unsigned int' lvalue ParmVar 'u' 'unsigned int'
+    | `-ImplicitCastExpr 'unsigned int' <IntegralCast>
+    |   `-IntegerLiteral 'int' 3
+    |-CompoundAssignOperator 'int' lvalue '%=' ComputeLHSTy='int' ComputeResultTy='int'
+    | |-DeclRefExpr 'int' lvalue ParmVar 'i' 'int'
+    | `-IntegerLiteral 'int' 5
+    |-CompoundAssignOperator 'unsigned int' lvalue '<<=' ComputeLHSTy='unsigned int' ComputeResultTy='unsigned int'
+    | |-DeclRefExpr 'unsigned int' lvalue ParmVar 'u' 'unsigned int'
+    | `-IntegerLiteral 'int' 1
+    |-CompoundAssignOperator 'int' lvalue '>>=' ComputeLHSTy='int' ComputeResultTy='int'
+    | |-DeclRefExpr 'int' lvalue ParmVar 'i' 'int'
+    | `-IntegerLiteral 'int' 2
+    |-CompoundAssignOperator 'unsigned int' lvalue '&=' ComputeLHSTy='unsigned int' ComputeResultTy='unsigned int'
+    | |-DeclRefExpr 'unsigned int' lvalue ParmVar 'u' 'unsigned int'
+    | `-ImplicitCastExpr 'unsigned int' <IntegralCast>
+    |   `-ImplicitCastExpr 'int' <LValueToRValue>
+    |     `-DeclRefExpr 'int' lvalue ParmVar 'i' 'int'
+    |-CompoundAssignOperator 'unsigned int' lvalue '|=' ComputeLHSTy='unsigned int' ComputeResultTy='unsigned int'
+    | |-DeclRefExpr 'unsigned int' lvalue ParmVar 'u' 'unsigned int'
+    | `-ImplicitCastExpr 'unsigned int' <IntegralCast>
+    |   `-IntegerLiteral 'int' 1
+    |-CompoundAssignOperator 'unsigned int' lvalue '^=' ComputeLHSTy='unsigned int' ComputeResultTy='unsigned int'
+    | |-DeclRefExpr 'unsigned int' lvalue ParmVar 'u' 'unsigned int'
+    | `-ImplicitCastExpr 'unsigned int' <IntegralCast>
+    |   `-IntegerLiteral 'int' 2
+    |-CompoundAssignOperator 'int *' lvalue '+=' ComputeLHSTy='int *' ComputeResultTy='int *'
+    | |-DeclRefExpr 'int *' lvalue ParmVar 'p' 'int *'
+    | `-IntegerLiteral 'int' 3
+    `-CompoundAssignOperator 'char' lvalue '+=' ComputeLHSTy='double' ComputeResultTy='double'
+      |-DeclRefExpr 'char' lvalue ParmVar 'c' 'char'
+      `-ImplicitCastExpr 'double' <LValueToRValue>
+        `-DeclRefExpr 'double' lvalue ParmVar 'd' 'double'

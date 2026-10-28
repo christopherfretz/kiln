@@ -504,7 +504,9 @@ impl Sema<'_, '_> {
                 .get(state.decl)
                 .ctx()
                 .is_some_and(|c| self.ast.redecl_context(c) == self.ast.tu);
-        if is_main {
+        // clang skips its analysis-based warnings once an error occurred
+        // (`hasUncompilableErrorOccurred`).
+        if is_main || self.diags.error_count() > 0 {
             return;
         }
         match self.falls_off(body) {

@@ -1,0 +1,41 @@
+TranslationUnitDecl
+|-VarDecl used a 'int' cinit
+| `-IntegerLiteral 'int' 1
+|-VarDecl used b 'int' callinit
+| `-IntegerLiteral 'int' 2
+|-VarDecl used c 'int' listinit
+| `-InitListExpr 'int'
+|   `-IntegerLiteral 'int' 3
+|-VarDecl used d 'int' cinit
+| `-InitListExpr 'int'
+|   `-IntegerLiteral 'int' 4
+|-VarDecl used e 'double' listinit
+| `-InitListExpr 'double'
+|-VarDecl f 'int' cinit
+| `-ImplicitCastExpr 'int' <FloatingToIntegral>
+|   `-BinaryOperator 'double' '+'
+|     |-ImplicitCastExpr 'double' <IntegralToFloating>
+|     | `-BinaryOperator 'int' '+'
+|     |   |-BinaryOperator 'int' '+'
+|     |   | |-BinaryOperator 'int' '+'
+|     |   | | |-ImplicitCastExpr 'int' <LValueToRValue>
+|     |   | | | `-DeclRefExpr 'int' lvalue Var 'a' 'int'
+|     |   | | `-ImplicitCastExpr 'int' <LValueToRValue>
+|     |   | |   `-DeclRefExpr 'int' lvalue Var 'b' 'int'
+|     |   | `-ImplicitCastExpr 'int' <LValueToRValue>
+|     |   |   `-DeclRefExpr 'int' lvalue Var 'c' 'int'
+|     |   `-ImplicitCastExpr 'int' <LValueToRValue>
+|     |     `-DeclRefExpr 'int' lvalue Var 'd' 'int'
+|     `-ImplicitCastExpr 'double' <LValueToRValue>
+|       `-DeclRefExpr 'double' lvalue Var 'e' 'double'
+|-CXXRecordDecl referenced struct S definition
+| |-FieldDecl x 'int'
+| `-FieldDecl y 'double'
+|-VarDecl s1 'S' cinit
+| `-InitListExpr 'S'
+|   |-IntegerLiteral 'int' 1
+|   `-FloatingLiteral 'double' 2e0
+`-VarDecl s2 'S' listinit
+  `-InitListExpr 'S'
+    |-IntegerLiteral 'int' 3
+    `-ImplicitValueInitExpr 'double'
