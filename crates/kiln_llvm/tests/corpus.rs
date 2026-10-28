@@ -711,3 +711,301 @@ fn calling_conventions() {
     let lines: Vec<&str> = ccs.iter().map(|c| c.1).collect();
     check(&m, &lines);
 }
+
+/// §4: every binary operator with its flags, plus `fneg`.
+#[test]
+fn binary_operators() {
+    let mut m = aarch64();
+    let mut b = define(&mut m, "bin", TypeId::VOID, &[TypeId::I32, TypeId::I32, TypeId::DOUBLE]);
+    let (x, y, d) = (arg(&b, 0), arg(&b, 1), arg(&b, 2));
+    let nn = Flags::NUW.with(Flags::NSW);
+    let n = FastMath::NONE;
+    for (op, fl) in [
+        (BinOp::Add, nn),
+        (BinOp::Sub, Flags::NUW),
+        (BinOp::Mul, Flags::NSW),
+        (BinOp::UDiv, Flags::EXACT),
+        (BinOp::SDiv, Flags::NONE),
+        (BinOp::URem, Flags::NONE),
+        (BinOp::SRem, Flags::NONE),
+        (BinOp::Shl, nn),
+        (BinOp::LShr, Flags::EXACT),
+        (BinOp::AShr, Flags::NONE),
+        (BinOp::And, Flags::NONE),
+        (BinOp::Or, Flags::DISJOINT),
+        (BinOp::Xor, Flags::NONE),
+    ] {
+        b.binop_ex(op, fl, n, x, y).unwrap();
+    }
+    for (op, fmf) in [
+        (BinOp::FAdd, FastMath::NONE),
+        (BinOp::FSub, FastMath::FAST),
+        (BinOp::FMul, FastMath::NNAN.with(FastMath::NINF)),
+        (BinOp::FDiv, FastMath::ARCP.with(FastMath::REASSOC)),
+        (BinOp::FRem, FastMath::NSZ.with(FastMath::CONTRACT).with(FastMath::AFN)),
+    ] {
+        b.binop_ex(op, Flags::NONE, fmf, d, d).unwrap();
+    }
+    b.fneg(d, FastMath::NONE).unwrap();
+    b.fneg(d, FastMath::NNAN).unwrap();
+    b.ret_void().unwrap();
+    check(
+        &m,
+        &[
+            "  %4 = add nuw nsw i32 %0, %1\n",
+            "  %5 = sub nuw i32 %0, %1\n",
+            "  %6 = mul nsw i32 %0, %1\n",
+            "  %7 = udiv exact i32 %0, %1\n",
+            "  %8 = sdiv i32 %0, %1\n",
+            "  %9 = urem i32 %0, %1\n",
+            "  %10 = srem i32 %0, %1\n",
+            "  %11 = shl nuw nsw i32 %0, %1\n",
+            "  %12 = lshr exact i32 %0, %1\n",
+            "  %13 = ashr i32 %0, %1\n",
+            "  %14 = and i32 %0, %1\n",
+            "  %15 = or disjoint i32 %0, %1\n",
+            "  %16 = xor i32 %0, %1\n",
+            "  %17 = fadd double %2, %2\n",
+            "  %18 = fsub fast double %2, %2\n",
+            "  %19 = fmul nnan ninf double %2, %2\n",
+            "  %20 = fdiv reassoc arcp double %2, %2\n",
+            "  %21 = frem nsz contract afn double %2, %2\n",
+            "  %22 = fneg double %2\n",
+            "  %23 = fneg nnan double %2\n",
+        ],
+    );
+}
+
+/// §4: all integer and floating-point comparison predicates, scalar and
+/// vector.
+#[test]
+fn comparisons() {
+    let mut m = aarch64();
+    let v4 = m.types.vector(TypeId::FLOAT, 4);
+    let mut b =
+        define(&mut m, "cmp", TypeId::VOID, &[TypeId::I64, TypeId::PTR, TypeId::FLOAT, v4]);
+    let (i, p, f, v) = (arg(&b, 0), arg(&b, 1), arg(&b, 2), arg(&b, 3));
+    use IntPredicate as I;
+    for pr in [I::Eq, I::Ne, I::Ugt, I::Uge, I::Ult, I::Ule, I::Sgt, I::Sge, I::Slt, I::Sle] {
+        b.icmp(pr, i, i).unwrap();
+    }
+    b.icmp(I::Eq, p, p).unwrap();
+    use FloatPredicate as F;
+    for pr in [
+        F::False,
+        F::Oeq,
+        F::Ogt,
+        F::Oge,
+        F::Olt,
+        F::Ole,
+        F::One,
+        F::Ord,
+        F::Uno,
+        F::Ueq,
+        F::Ugt,
+        F::Uge,
+        F::Ult,
+        F::Ule,
+        F::Une,
+        F::True,
+    ] {
+        b.fcmp(pr, f, f).unwrap();
+    }
+    b.fcmp_ex(F::Olt, FastMath::FAST, v, v).unwrap();
+    b.ret_void().unwrap();
+    let preds = ["eq", "ne", "ugt", "uge", "ult", "ule", "sgt", "sge", "slt", "sle"];
+    let mut want: Vec<String> = preds
+        .iter()
+        .enumerate()
+        .map(|(k, p)| format!("  %{} = icmp {p} i64 %0, %0\n", k + 5))
+        .collect();
+    want.push("  %15 = icmp eq ptr %1, %1\n".into());
+    let fpreds = [
+        "false", "oeq", "ogt", "oge", "olt", "ole", "one", "ord", "uno", "ueq", "ugt", "uge",
+        "ult", "ule", "une", "true",
+    ];
+    for (k, p) in fpreds.iter().enumerate() {
+        want.push(format!("  %{} = fcmp {p} float %2, %2\n", k + 16));
+    }
+    want.push("  %32 = fcmp fast olt <4 x float> %3, %3\n".into());
+    let w: Vec<&str> = want.iter().map(String::as_str).collect();
+    check(&m, &w);
+}
+
+/// §4: every conversion, with `nuw`/`nsw` on `trunc` and `nneg` on `zext`.
+#[test]
+fn conversions() {
+    let mut m = aarch64();
+    let p1 = m.types.ptr(1);
+    let v2i32 = m.types.vector(TypeId::I32, 2);
+    let mut b = define(&mut m, "conv", TypeId::VOID, &[TypeId::I32, TypeId::DOUBLE, TypeId::PTR]);
+    let (i, d, p) = (arg(&b, 0), arg(&b, 1), arg(&b, 2));
+    b.cast(CastOp::Trunc, i, TypeId::I8).unwrap();
+    b.cast_ex(CastOp::Trunc, Flags::NUW.with(Flags::NSW), i, TypeId::I16).unwrap();
+    b.cast(CastOp::ZExt, i, TypeId::I64).unwrap();
+    b.cast_ex(CastOp::ZExt, Flags::NNEG, i, TypeId::I64).unwrap();
+    b.cast(CastOp::SExt, i, TypeId::I64).unwrap();
+    b.cast(CastOp::FPTrunc, d, TypeId::FLOAT).unwrap();
+    b.cast(CastOp::FPExt, d, TypeId::FP128).unwrap();
+    b.cast(CastOp::FPToUI, d, TypeId::I32).unwrap();
+    b.cast(CastOp::FPToSI, d, TypeId::I32).unwrap();
+    b.cast(CastOp::UIToFP, i, TypeId::FLOAT).unwrap();
+    b.cast_ex(CastOp::UIToFP, Flags::NNEG, i, TypeId::HALF).unwrap();
+    b.cast(CastOp::SIToFP, i, TypeId::DOUBLE).unwrap();
+    b.cast(CastOp::PtrToInt, p, TypeId::I64).unwrap();
+    let w = b.cast(CastOp::SExt, i, TypeId::I64).unwrap();
+    b.cast(CastOp::IntToPtr, w, TypeId::PTR).unwrap();
+    b.cast(CastOp::BitCast, w, v2i32).unwrap();
+    b.cast(CastOp::BitCast, d, TypeId::I64).unwrap();
+    b.cast(CastOp::AddrSpaceCast, p, p1).unwrap();
+    b.ret_void().unwrap();
+    check(
+        &m,
+        &[
+            "  %4 = trunc i32 %0 to i8\n",
+            "  %5 = trunc nuw nsw i32 %0 to i16\n",
+            "  %6 = zext i32 %0 to i64\n",
+            "  %7 = zext nneg i32 %0 to i64\n",
+            "  %8 = sext i32 %0 to i64\n",
+            "  %9 = fptrunc double %1 to float\n",
+            "  %10 = fpext double %1 to fp128\n",
+            "  %11 = fptoui double %1 to i32\n",
+            "  %12 = fptosi double %1 to i32\n",
+            "  %13 = uitofp i32 %0 to float\n",
+            "  %14 = uitofp nneg i32 %0 to half\n",
+            "  %15 = sitofp i32 %0 to double\n",
+            "  %16 = ptrtoint ptr %2 to i64\n",
+            "  %18 = inttoptr i64 %17 to ptr\n",
+            "  %19 = bitcast i64 %17 to <2 x i32>\n",
+            "  %20 = bitcast double %1 to i64\n",
+            "  %21 = addrspacecast ptr %2 to ptr addrspace(1)\n",
+        ],
+    );
+}
+
+/// §4: `alloca`, `load`, `store` with volatility, alignment, atomics and
+/// sync scopes; `fence`.
+#[test]
+fn memory_access() {
+    let mut m = aarch64();
+    let inalloca_ty = m.types.struct_literal(&[TypeId::I32, TypeId::I64], false);
+    let mut b = define(&mut m, "mem", TypeId::VOID, &[TypeId::I32]);
+    let n = arg(&b, 0);
+    let a = b.alloca(TypeId::I32, 4).unwrap();
+    b.alloca_ex(TypeId::I64, Some(n), 16, false).unwrap();
+    b.alloca_ex(inalloca_ty, None, 8, true).unwrap();
+    let one = b.module().const_int(TypeId::I32, 1);
+    b.store(one, a, 4).unwrap();
+    b.store_ex(one, a, MemOpts { align: 4, volatile: true, ..MemOpts::default() }).unwrap();
+    b.load(TypeId::I32, a, 4).unwrap();
+    b.load_ex(TypeId::I32, a, MemOpts { align: 4, volatile: true, ..MemOpts::default() })
+        .unwrap();
+    let at = |ord, scope| MemOpts { align: 4, volatile: false, ordering: ord, scope };
+    b.load_ex(TypeId::I32, a, at(Ordering::Acquire, SyncScope::SYSTEM)).unwrap();
+    b.load_ex(TypeId::I32, a, at(Ordering::Monotonic, SyncScope::SINGLE_THREAD)).unwrap();
+    b.store_ex(one, a, at(Ordering::SeqCst, SyncScope::SYSTEM)).unwrap();
+    b.store_ex(one, a, at(Ordering::Unordered, SyncScope::SYSTEM)).unwrap();
+    let agent = b.module().sync_scope("agent");
+    b.store_ex(one, a, MemOpts { volatile: true, ..at(Ordering::Release, agent) }).unwrap();
+    b.fence(Ordering::Acquire, SyncScope::SYSTEM).unwrap();
+    b.fence(Ordering::Release, SyncScope::SINGLE_THREAD).unwrap();
+    b.fence(Ordering::AcqRel, agent).unwrap();
+    b.fence(Ordering::SeqCst, SyncScope::SYSTEM).unwrap();
+    b.ret_void().unwrap();
+    check(
+        &m,
+        &[
+            "  %2 = alloca i32, align 4\n",
+            "  %3 = alloca i64, i32 %0, align 16\n",
+            "  %4 = alloca inalloca { i32, i64 }, align 8\n",
+            "  store i32 1, ptr %2, align 4\n",
+            "  store volatile i32 1, ptr %2, align 4\n",
+            "  %5 = load i32, ptr %2, align 4\n",
+            "  %6 = load volatile i32, ptr %2, align 4\n",
+            "  %7 = load atomic i32, ptr %2 acquire, align 4\n",
+            "  %8 = load atomic i32, ptr %2 syncscope(\"singlethread\") monotonic, align 4\n",
+            "  store atomic i32 1, ptr %2 seq_cst, align 4\n",
+            "  store atomic i32 1, ptr %2 unordered, align 4\n",
+            "  store atomic volatile i32 1, ptr %2 syncscope(\"agent\") release, align 4\n",
+            "  fence acquire\n",
+            "  fence syncscope(\"singlethread\") release\n",
+            "  fence syncscope(\"agent\") acq_rel\n",
+            "  fence seq_cst\n",
+        ],
+    );
+}
+
+/// §4: `cmpxchg` and every `atomicrmw` operation.
+#[test]
+fn atomics() {
+    let mut m = aarch64();
+    let mut b = define(&mut m, "atom", TypeId::VOID, &[TypeId::PTR, TypeId::I32, TypeId::FLOAT]);
+    let (p, i, f) = (arg(&b, 0), arg(&b, 1), arg(&b, 2));
+    let o = CmpXchgOpts {
+        align: 4,
+        success: Ordering::SeqCst,
+        failure: Ordering::Monotonic,
+        weak: false,
+        volatile: false,
+        scope: SyncScope::SYSTEM,
+    };
+    let pair = b.cmpxchg(p, i, i, o).unwrap();
+    b.extract_value(pair, &[1]).unwrap();
+    let o2 = CmpXchgOpts {
+        weak: true,
+        volatile: true,
+        scope: SyncScope::SINGLE_THREAD,
+        success: Ordering::AcqRel,
+        failure: Ordering::Acquire,
+        ..o
+    };
+    b.cmpxchg(p, i, i, o2).unwrap();
+    let mo = MemOpts { align: 4, ordering: Ordering::SeqCst, ..MemOpts::default() };
+    use RmwOp as R;
+    for op in [
+        R::Xchg,
+        R::Add,
+        R::Sub,
+        R::And,
+        R::Nand,
+        R::Or,
+        R::Xor,
+        R::Max,
+        R::Min,
+        R::UMax,
+        R::UMin,
+        R::UIncWrap,
+        R::UDecWrap,
+    ] {
+        b.atomicrmw(op, p, i, mo).unwrap();
+    }
+    for op in [R::FAdd, R::FSub, R::FMax, R::FMin, R::Xchg] {
+        b.atomicrmw(op, p, f, mo).unwrap();
+    }
+    let vo = MemOpts { volatile: true, ordering: Ordering::Monotonic, ..mo };
+    b.atomicrmw(R::Add, p, i, vo).unwrap();
+    b.ret_void().unwrap();
+    let mut want = vec![
+        "  %4 = cmpxchg ptr %0, i32 %1, i32 %1 seq_cst monotonic, align 4\n".to_string(),
+        "  %5 = extractvalue { i32, i1 } %4, 1\n".into(),
+        "  %6 = cmpxchg weak volatile ptr %0, i32 %1, i32 %1 syncscope(\"singlethread\") \
+         acq_rel acquire, align 4\n"
+            .into(),
+    ];
+    let ops = [
+        "xchg", "add", "sub", "and", "nand", "or", "xor", "max", "min", "umax", "umin",
+        "uinc_wrap", "udec_wrap",
+    ];
+    let mut k = 7;
+    for op in ops {
+        want.push(format!("  %{k} = atomicrmw {op} ptr %0, i32 %1 seq_cst, align 4\n"));
+        k += 1;
+    }
+    for op in ["fadd", "fsub", "fmax", "fmin", "xchg"] {
+        want.push(format!("  %{k} = atomicrmw {op} ptr %0, float %2 seq_cst, align 4\n"));
+        k += 1;
+    }
+    want.push(format!("  %{k} = atomicrmw volatile add ptr %0, i32 %1 monotonic, align 4\n"));
+    let w: Vec<&str> = want.iter().map(String::as_str).collect();
+    check(&m, &w);
+}
