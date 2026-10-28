@@ -349,6 +349,17 @@ diag_ids! {
     drv_invalid_int_value = Error (2) "invalid integral value '{1}' in '{0}'";
     drv_invalid_value = Error (2) "invalid value '{1}' in '{0}'";
     drv_ignoring_tabstop = Warning (2) "ignoring invalid -ftabstop value '{0}', using default value {1}";
+    drv_no_such_file = Error (1) "no such file or directory: '{0}'";
+    drv_missing_argument = Error (2) "argument to '{0}' is missing (expected {1} value)";
+    drv_argument_not_allowed_with = Error (2) "invalid argument '{0}' not allowed with '{1}'";
+    drv_invalid_stdlib_name = Error (1) "invalid library name in argument '{0}'";
+    drv_language_not_recognized = Error (1) "language not recognized: '{0}'";
+    drv_framework_dir_ignored = Warning (1) "ignoring framework directory '{0}' (kiln does not search frameworks)";
+    drv_not_implemented = Error (1) "{0} is not implemented yet";
+    drv_unsupported_target = Error (1) "unsupported target '{0}' (kiln supports aarch64 and x86_64 Linux)";
+    drv_cannot_open_output = Error (2) "unable to open output file '{0}': '{1}'";
+    drv_cannot_read_input = Fatal (2) "cannot read '{0}': {1}";
+    drv_cannot_read_predefines = Fatal (2) "cannot read the predefined macros '{0}': {1}";
 
     // ----- sema conversions (WP-049): [conv], [expr.arith.conv], [lex.*con] --
     // Type arguments are passed pre-quoted, with clang's `(aka '...')`
