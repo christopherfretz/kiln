@@ -1,0 +1,27 @@
+[package]
+name = "kiln_driver"
+description = "The `kiln` command-line driver (clang-compatible flags)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "kiln"
+path = "src/main.rs"
+
+[dependencies]
+kiln_source.workspace = true
+kiln_diag.workspace = true
+kiln_lex.workspace = true
+kiln_pp.workspace = true
+kiln_ast.workspace = true
+kiln_parse.workspace = true
+kiln_sema.workspace = true
+kiln_oven.workspace = true
+kiln_abi.workspace = true
+kiln_llvm.workspace = true
+kiln_codegen.workspace = true
+
+[lints]
+workspace = true

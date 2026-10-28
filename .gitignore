@@ -1,0 +1,5 @@
+# build output and workspace-local toolchain
+/target/
+/.toolchain/
+# supervisor-created worktrees for implementer agents
+/.worktrees/

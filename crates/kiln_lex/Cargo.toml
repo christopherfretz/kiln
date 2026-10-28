@@ -1,0 +1,14 @@
+[package]
+name = "kiln_lex"
+description = "Translation phases 1-3: decoding, line splicing, preprocessing tokens ([lex])."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+kiln_source.workspace = true
+kiln_diag.workspace = true
+
+[lints]
+workspace = true

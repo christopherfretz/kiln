@@ -1,0 +1,16 @@
+[package]
+name = "kiln_sema"
+description = "Semantic analysis: lookup, types, templates, overloads, conversions, initialization, reflection."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+kiln_source.workspace = true
+kiln_diag.workspace = true
+kiln_ast.workspace = true
+kiln_oven.workspace = true
+
+[lints]
+workspace = true

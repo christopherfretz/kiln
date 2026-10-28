@@ -1,0 +1,12 @@
+[package]
+name = "kiln_llvm"
+description = "In-memory model of LLVM IR with a textual printer. No FFI."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+
+[lints]
+workspace = true

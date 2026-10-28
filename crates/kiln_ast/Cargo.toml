@@ -1,0 +1,14 @@
+[package]
+name = "kiln_ast"
+description = "The typed AST: types, declarations, expressions, statements, templates; stable dump format."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+kiln_source.workspace = true
+kiln_diag.workspace = true
+
+[lints]
+workspace = true

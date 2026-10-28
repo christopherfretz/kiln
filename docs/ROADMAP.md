@@ -1,0 +1,102 @@
+# Kiln Roadmap
+
+Milestones are ordered so that each one produces a *measurable* artifact and
+unlocks parallel work for the next. Exit criteria are tests in the repo, not
+opinions. Status is tracked in `docs/BACKLOG.md`; this file is the plan.
+
+Targets: `aarch64-unknown-linux-gnu` (dev container) first, `x86_64` second.
+Oracle/backend: clang/LLVM 19. Reference library:
+the libc++ shipped with that LLVM.
+
+## M0 — Bootstrap (current)
+- Cargo workspace with every crate stubbed, `forbid(unsafe_code)`, clippy +
+  rustfmt clean, `cargo test` green.
+- `cargo xtask` harness skeleton: conformance test runner with the directive
+  format in `docs/VALIDATION.md`; perf recorder (wall clock + max RSS).
+- Provisioning script; CI workflow (GitHub Actions) running fmt/clippy/test.
+- Specs: `spec/source.md`, `spec/lex.md`, `spec/pp.md`, `spec/oven.md` drafted
+  enough to brief implementers.
+- Exit: `cargo xtask test` runs and passes an empty/sanity suite; first
+  work packages for M1 issued.
+
+## M1 — Preprocessor parity with clang
+The first fully-conformant, independently valuable component, and highly
+parallelizable (lexer, macro expander, directives, include resolution, `-E`
+printer, diagnostics are separate work packages).
+- `kiln -E` on every header of libc++ 19, every C header in the sysroot that
+  libc++ includes, and the conformance corpus produces token streams equal to
+  `clang -E` (compared token-wise, ignoring whitespace/line markers; and
+  exactly, with `-P`, for the printer test).
+- Full [lex] and [cpp]: UCNs, raw strings, user-defined literals, `#embed`,
+  `__VA_OPT__`, `_Pragma`, `#pragma once`, `__has_include`,
+  `__has_cpp_attribute`, `__has_builtin` (clang's list), `__COUNTER__`,
+  digit separators, alternative tokens, `import`/`module` directive tokens.
+- Diagnostics for every error in [cpp] with locations matching clang's.
+- Perf: preprocessing all libc++ headers within 1.5x of clang's `-E` time
+  and lower peak RSS. Recorded in `bench/baselines/pp.json`.
+
+## M2 — The C-ish subset, end to end, with the Oven
+A vertical slice that exercises every crate: parse, sema, Oven, ABI, codegen,
+driver. Scope: fundamental types, arithmetic and conversions, pointers,
+arrays, enums, structs (no members functions yet), functions, all C control
+flow, `constexpr` functions and variables, `static_assert`, string literals,
+`extern "C"`.
+- Programs in `tests/conformance/run/` compile with kiln, link against libc,
+  run, and produce the same output as when built with clang.
+- `static_assert` over constexpr functions evaluates in the Oven; every
+  [expr.const] undefined-behavior category reachable in this subset is
+  diagnosed (overflow, OOB, uninitialized read, lifetime).
+- Oven metrics are reported and recorded; first perf comparisons vs clang on
+  a C-subset constexpr corpus.
+- IR differential tests: kiln's `-S -emit-llvm` is semantically compared with
+  clang's via `opt`-normalized FileCheck goldens where structure matters.
+
+## M3 — Classes, overloading, templates
+Member functions, constructors/destructors, references, overload resolution,
+implicit conversion sequences, class templates, function templates, deduction,
+partial/explicit specialization, `auto`, variadic templates, fold expressions,
+`decltype`, `if constexpr`, lambdas, inheritance (non-virtual first, then
+virtual), operator overloading, RAII/`new`/`delete`, Itanium mangling and
+record layout matching clang (checked by layout-dump differential tests).
+- Oven: objects with lifetimes, constructors in constant evaluation,
+  `std::construct_at`-style, unions' active member, pointers-to-members,
+  virtual calls in constexpr, transient allocation, memoization.
+- Exit: `<type_traits>`, `<utility>`, `<array>`, `<string_view>`, `<span>`,
+  `<bit>`, `<limits>`, `<initializer_list>` from libc++ compile and their
+  libc++ tests pass.
+
+## M4 — The rest of the language
+Namespaces/ADL corner cases, exceptions, RTTI, concepts and constraints,
+coroutines, modules (at least header units and `import std;` consumption),
+`consteval`, `constinit`, structured bindings, designated initializers,
+three-way comparison, deducing this, pack indexing, attributes, `thread_local`,
+static initialization order, inline variables, `[[no_unique_address]]`.
+- Exit: `<vector>`, `<string>`, `<memory>`, `<optional>`, `<variant>`,
+  `<tuple>`, `<algorithm>`, `<ranges>`, `<format>` compile; their libc++
+  tests pass.
+
+## M5 — libc++ test suite
+Run the full libc++ lit suite with kiln as `%{cxx}` against the
+clang-built libc++ runtime. Track pass rate in `docs/status/libcxx.md`.
+- Exit: 100% of tests pass or are triaged as `UNSUPPORTED`/`XFAIL` with a
+  written reason that is not "kiln bug".
+- Stretch: build libc++ itself with kiln and run the suite against it.
+
+## M6 — C++26 reflection and mirrorbind
+P2996 reflection, `std::meta` runtime in the Oven, splicing, annotations
+(P3394), `define_aggregate`, expansion statements (P1306), plus whichever of
+token injection makes it into the IS. The oracle is clang-22's / bloomberg's
+P2996 implementation where available.
+- Exit: mirrorbind (`git@github.com:christopherfretz/mirrorbind.git`) builds
+  and its tests pass; its compile time and peak memory with kiln are recorded
+  against clang-p2996.
+
+## M7 — Performance campaign
+With correctness pinned by M5/M6, optimize the Oven and the frontend against
+the `bench/` corpus: template-heavy code, reflection-heavy mirrorbind, and
+synthetic constexpr workloads. Publish the numbers.
+
+## Continuous
+- Every milestone adds to `tests/conformance/` and `bench/`.
+- Diagnostics quality is tracked from M1 (locations, notes, fix-its later).
+- `x86_64` is kept building from M2 on via cross-compiled IR tests.

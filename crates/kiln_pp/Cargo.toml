@@ -1,0 +1,15 @@
+[package]
+name = "kiln_pp"
+description = "Translation phase 4: the preprocessor ([cpp])."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+kiln_source.workspace = true
+kiln_diag.workspace = true
+kiln_lex.workspace = true
+
+[lints]
+workspace = true

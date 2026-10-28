@@ -1,0 +1,13 @@
+[package]
+name = "kiln_abi"
+description = "Itanium C++ ABI: mangling, record and vtable layout, target argument lowering."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+kiln_ast.workspace = true
+
+[lints]
+workspace = true
