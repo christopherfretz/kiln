@@ -296,3 +296,42 @@ fn recovery_missing_semi() {
     let p = parse("int x\nint y;");
     p.assert_diag("expected ';' after top level declarator");
 }
+
+/// [dcl.fct.def.general]/1: a function body after a declarator that does
+/// not declare a function is diagnosed and skipped, without a crash.
+#[test]
+fn dcl_fct_def_body_on_non_function() {
+    let p = parse("inline constexpr Foo f(Foo v) { return v; }\nint after;");
+    p.assert_diag("unknown type name 'Foo'");
+    p.assert_dump("VarDecl after 'int'");
+}
+
+/// [class.ctor.general]/1: a constructor declaration (the class's own name
+/// followed by `(`) is recognised and reported as unsupported, not parsed
+/// as a member of the class's own type.
+#[test]
+fn class_ctor_declaration_unsupported() {
+    let p = parse("struct S { int a; explicit constexpr S(int v); [[nodiscard]] S(); };");
+    p.assert_diag("special member functions is not supported yet");
+    assert!(!p.diags.iter().any(|d| d.contains("incomplete type")), "{:?}", p.diags);
+    p.assert_dump("FieldDecl a 'int'");
+}
+
+/// [class.mem.general]/10: a non-static data member shall not have an
+/// incomplete type (here, its own class); the member is invalid, and the
+/// aggregate initialization of the class does not recurse into it.
+#[test]
+fn class_mem_self_typed_field() {
+    let p = parse("struct N { N n; };\nN x{};\nint after;");
+    p.assert_diag("field has incomplete type 'N'");
+    p.assert_dump("VarDecl after 'int'");
+}
+
+/// [dcl.typedef]/4: a diagnosed typedef redefinition is not the previous
+/// declaration of a later one.
+#[test]
+fn dcl_typedef_invalid_redefinition_not_previous() {
+    let p = parse("typedef int T;\ntypedef long T;\ntypedef short T;");
+    p.assert_diag("2:14 error: typedef redefinition with different types ('long' vs 'int')");
+    p.assert_diag("3:15 error: typedef redefinition with different types ('short' vs 'int')");
+}
