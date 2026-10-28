@@ -329,6 +329,7 @@ diag_ids! {
     pp_expr_unsupported = Error (0) "kiln: this #if expression needs the full evaluator (WP-015)";
     pp_include_unsupported = Fatal (0) "kiln: no include resolver is installed";
     pp_expected = Error (1) "expected {0}";
+    pp_pragma_non_macro = Error (1) "no macro named '{0}'";
     pp_pragma_diagnostic_unknown_warning = Warning [UnknownWarningOption] (1) "unknown warning group '{0}', ignored";
     pp_pragma_diagnostic_invalid = Warning [UnknownPragmas] (0) "pragma diagnostic expected 'error', 'warning', 'ignored', 'fatal', 'push', or 'pop'";
     pp_pragma_diagnostic_invalid_token = Warning [UnknownPragmas] (0) "unexpected token in pragma diagnostic";

@@ -216,6 +216,9 @@ impl Preprocessor<'_, '_> {
                     }
                     // Consumed; kiln does not check the file's date.
                     Some("dependency") => {}
+                    Some(k @ ("deprecated" | "final" | "restrict_expansion")) if ns == "clang" => {
+                        self.pragma_macro_annotation(k);
+                    }
                     Some("diagnostic") => {
                         if let Some(rest) = self.pragma_diagnostic() {
                             let mut toks = vec![first.tok, second.tok];
@@ -272,6 +275,40 @@ impl Preprocessor<'_, '_> {
         let info = PragmaInfo { introducer, span, tokens: &tokens };
         if !self.callbacks.pragma(&info) {
             self.queue(Marker::Pragma { introducer, span, tokens });
+        }
+    }
+
+    /// clang `HandleMacroAnnotationPragma` (`#pragma clang deprecated`,
+    /// `final` and `restrict_expansion`): validates `( macro [, "msg"] )`
+    /// and consumes the pragma (clang's `-E` does not print it). The
+    /// annotations' effects on later uses of the macro are not
+    /// implemented (spec/pp.md deviation 3).
+    fn pragma_macro_annotation(&mut self, kind: &str) {
+        let t = self.lex();
+        if !t.is_punct(Punct::LParen) {
+            self.emit(Diag::new(DiagId::pp_expected, t.tok.span).arg("("));
+            return;
+        }
+        let t = self.lex_unexpanded();
+        let Some(name) = t.ident() else {
+            self.emit(Diag::new(DiagId::pp_expected, t.tok.span).arg("identifier"));
+            return;
+        };
+        if !self.macros.is_defined(name) {
+            let n = self.interner.as_str(name).to_owned();
+            self.emit(Diag::new(DiagId::pp_pragma_non_macro, t.tok.span).arg(n));
+            return;
+        }
+        let mut t = self.lex();
+        if kind != "final" && t.is_punct(Punct::Comma) {
+            let first = self.lex();
+            let tag = format!("#pragma clang {kind}");
+            let mut strs = Vec::new();
+            let Some((_, next)) = self.finish_string(first, &tag, true, &mut strs) else { return };
+            t = next;
+        }
+        if !t.is_punct(Punct::RParen) {
+            self.emit(Diag::new(DiagId::pp_expected, t.tok.span).arg(")"));
         }
     }
 

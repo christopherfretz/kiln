@@ -455,7 +455,9 @@ belong to WP-017, which builds them on `macro_defined` and
    syntax and the group names. Changing diagnostic state is phase-7 work
    for the consumer of `PpCallbacks::pragma`.
 3. **`#pragma clang deprecated`, `final` and `restrict_expansion` are
-   passed through.** kiln does not implement their effects on macros.
+   validated and consumed, without effect.** As in clang, `-E` does not
+   print them, but kiln does not implement their warnings on later uses
+   of the macro.
 4. **`#pragma GCC dependency` is consumed without checking the file's
    date.**
 5. **`push_macro` does not suppress redefinition warnings.** It also does
