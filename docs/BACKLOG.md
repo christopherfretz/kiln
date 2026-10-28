@@ -49,6 +49,11 @@ Format per `docs/AGENTS.md`. Ids are stable; status moves between
 | WP-055 | parser consumes kiln_pp tokens (`TokenSource` over `Preprocessor::next`), lexdiag.rs stopgap removed, `kiln -fsyntax-only` on files with `#include`; `lex.digraph/alternative-tokens.cpp` passes; `-fsyntax-only` default std = clang's gnu++17 | in-progress |
 | WP-056 | macro-engine performance: `bench/pp/repetition` 147x and `xmacro` 5x slower than clang (suspect `expand.rs relocate()`/`loc_diff` walking location chains per token); target ≤1.5x clang on all pp entries; plus `SourceManager::add_inclusion` per-inclusion ranges + "In file included from" notes | in-progress |
 
+## M3 preparation
+| id | scope | status |
+|---|---|---|
+| WP-060 | Oven M3 memory design (BLOCKS the Oven M3 implementation package): transient allocator inside the arena with free-on-delete, size-class free lists, compaction/coalescing policy for long evaluations, provenance+generation preserved; frozen-result bytes reported separately in the constexpr report; churn benchmarks (construct/destroy loops, vector-growth patterns, string building) added to `bench/oven` with `peak_bytes`/`allocs` gates BEFORE implementation | todo |
+
 ## Cross-cutting
 | id | scope | status |
 |---|---|---|

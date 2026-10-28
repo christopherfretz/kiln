@@ -17,6 +17,11 @@ established and `docs/ROADMAP.md` for sequencing.
    No LLVM FFI: kiln writes LLVM IR itself (text now, bitcode later) and shells
    out to `llc`/`clang`/`lld`. Third-party dependencies are kept minimal and
    must themselves be safe or widely audited.
+   *Exception policy (operator decision, 2026-10-28):* `unsafe` may be
+   admitted only where a **measured** performance need dictates it, inside a
+   **hermetic, narrowly bounded, separately reviewed component** (e.g. a
+   future JIT for the Oven), with supervisor sign-off recorded in the spec.
+   It is never the first tool reached for; diversions require justification.
 2. **Index-based arenas, no pointer graphs.** Every compiler entity (token,
    declaration, type, expression, bytecode function, abstract allocation) is a
    `u32` id into a typed arena. This gives cheap copies, deterministic memory
@@ -126,11 +131,18 @@ is spelled out in detail in `spec/oven.md`; the summary:
   [expr.const] requires for rejecting undefined behavior. Invalid pointer
   arithmetic, out-of-bounds, use-after-lifetime, uninitialized reads, strict
   aliasing violations and overflow are all diagnosed, with the full call stack.
-- **One arena per top-level evaluation.** Frames, registers, allocations and
-  shadow live in a bump arena that is reset (not freed) after each evaluation,
-  so the per-evaluation overhead is near zero even for the millions of tiny
-  evaluations that template-heavy code triggers. Results that escape are
-  frozen into compact `ConstValue`s interned in the AST.
+- **Stack-disciplined frame memory, real allocator for transients.** Frame
+  objects live in a bump arena with mark/release at scope and call exit
+  (released slots are reused FIFO with generation bumps, so dangling
+  pointers are still detected); the arena is reset, not freed, between
+  top-level evaluations, so steady-state cost is zero. Transient
+  allocations (`new`/`delete`, `std::allocator`, M3) MUST be reclaimed on
+  `delete` by a size-class allocator inside the arena — reclaiming only at
+  the end of an evaluation is the g++ failure mode that motivates kiln and
+  is forbidden. `peak_bytes`/`allocs` are reported per evaluation and gated
+  by the bench on allocation-churn workloads. Results that escape are
+  frozen into compact `ConstValue`s interned in the AST (reported
+  separately).
 - **Deterministic budgets.** Steps and bytes are counted exactly; limits are
   user-configurable (`-fconstexpr-steps`, `-fconstexpr-memory`) and every
   evaluation can report its cost (`-fconstexpr-report`). The harness uses the
