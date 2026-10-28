@@ -17,7 +17,7 @@ use kiln_diag::DiagId;
 use kiln_source::Loc;
 use kiln_source::symbol::Symbol;
 
-use crate::constfold::{self, ConstVal};
+use crate::constfold;
 use crate::conv::{self, ConvCtx};
 use crate::declspec::{
     BaseSpec, Chunk, DeclSpec, Declarator, DeclaratorContext, ParamInfo, Sign, StorageSpec, Width,
@@ -26,6 +26,7 @@ use crate::init::Initializer;
 use crate::lookup::{LookupKind, is_tag_kind, is_type_kind};
 use crate::scope::{Scope, ScopeKind};
 use crate::{Sema, target};
+use kiln_oven::{EvalContext, EvalKind};
 
 /// How a class or enumeration name is used ([dcl.type.elab],
 /// [class.pre], [dcl.enum]).
@@ -332,8 +333,8 @@ impl Sema<'_, '_> {
         }
         let c = conv::decay(self, e);
         let c = self.act_on_full_expr(c);
-        match self.evaluate(c) {
-            Ok(ConstVal::Int(v)) if v < 0 => {
+        match self.eval_int(c, EvalContext::new(EvalKind::Other, loc)) {
+            Ok(v) if v < 0 => {
                 match d.name {
                     Some((n, _)) => {
                         let msg = self
@@ -345,7 +346,7 @@ impl Sema<'_, '_> {
                 }
                 None
             }
-            Ok(ConstVal::Int(v)) => {
+            Ok(v) => {
                 if v > i128::from(u64::MAX >> 4) {
                     let msg = self.diag(DiagId::sema_array_too_large, loc).arg(v.to_string());
                     self.emit(msg);
@@ -827,9 +828,14 @@ impl Sema<'_, '_> {
         }
         let c = conv::decay(self, w);
         let c = self.act_on_full_expr(c);
-        let Ok(ConstVal::Int(v)) = self.evaluate(c) else {
-            self.error(DiagId::sema_expr_not_ice, self.begin_loc(w));
-            return None;
+        let v = match self.eval_int(c, EvalContext::new(EvalKind::Other, self.begin_loc(w))) {
+            Ok(v) => v,
+            Err(f) => {
+                let d = self.diag(DiagId::sema_expr_not_ice, self.begin_loc(w));
+                let d = Self::with_failure_notes(d, f);
+                self.emit(d);
+                return None;
+            }
         };
         if v < 0 {
             let msg = match name {
@@ -1062,30 +1068,19 @@ impl Sema<'_, '_> {
         if self.ast.decls.begin_eval(v).is_err() {
             return;
         }
-        let ty = self.ast.decls.get(v).ty().unwrap_or(QualType::ERROR);
-        let result = if self.is_aggregate_object(ty) {
-            match self.fold_aggregate(ty, e) {
-                Ok(cv) => Ok(Some(cv)),
-                Err(crate::aggval::AggFail::Unsupported) => Ok(None),
-                Err(crate::aggval::AggFail::NotConstant(nc)) => Err(nc),
-            }
-        } else {
-            self.evaluate(e).map(|val| self.const_value(ty, val))
-        };
-        match result {
-            Ok(cv) => {
-                self.ast.decls.finish_eval(v, cv);
-            }
-            Err(nc) => {
+        // clang reports at the variable (`CheckCompleteVariableDeclaration`).
+        let loc = self.ast.decls.get(v).loc();
+        if self.has_errors_in(e) {
+            self.ast.decls.finish_eval(v, None);
+            return;
+        }
+        match self.eval_const(e, EvalContext::init(v, loc)) {
+            Ok(cv) => self.ast.decls.finish_eval(v, Some(cv)),
+            Err(f) => {
                 self.ast.decls.finish_eval(v, None);
-                if self.has_errors_in(e) {
-                    return;
-                }
-                // clang reports at the variable (`CheckCompleteVariableDeclaration`).
-                let loc = self.ast.decls.get(v).loc();
                 let name = self.decl_name(v);
                 let msg = self.diag(DiagId::sema_constexpr_var_non_constant, loc).arg(name);
-                let msg = self.with_not_constant_notes(msg, nc);
+                let msg = Self::with_failure_notes(msg, f);
                 self.emit(msg);
             }
         }
@@ -1496,6 +1491,65 @@ impl Sema<'_, '_> {
         self.ctx = e;
     }
 
+    /// The value and the converted initializer of an enumerator whose
+    /// initializer is `ie` ([dcl.enum]/5).
+    fn enumerator_init(&mut self, build: &EnumBuild, ie: ExprId) -> (Option<i128>, Option<ExprId>) {
+        let e = build.decl;
+        let mut value: Option<i128> = None;
+        let mut init_e = None;
+        let ity = self.ast.exprs.get(ie).ty();
+        let t = &self.ast.types;
+        let ok_ty = t.is_integral(ity)
+            || t.as_enum(ity).is_some_and(|en| !self.is_scoped_enum(en) || en == e);
+        if !ok_ty && !self.is_error_type(ity) {
+            self.error(DiagId::sema_expr_not_ice, self.ast.exprs.get(ie).loc());
+        } else if !self.is_error_type(ity) {
+            let mut c = conv::lvalue_to_rvalue(self, ie);
+            let cty = if let Some(f) = build.fixed {
+                // [dcl.enum]/5: a converted constant expression, so a
+                // narrowing value is ill-formed ([expr.const]/12).
+                if let Some(raw) = self.fold_int(c)
+                    && !self.fits(f, raw)
+                {
+                    let msg = self
+                        .diag(DiagId::sema_cce_narrowing_value, self.begin_loc(ie))
+                        .arg("enumerator value")
+                        .arg(raw.to_string())
+                        .arg(self.ty_arg(f));
+                    self.emit(msg);
+                }
+                c = conv::implicit_convert(self, c, f, ConvCtx::Initialization).unwrap_or(c);
+                f
+            } else {
+                let cty = self.ast.exprs.get(c).ty();
+                if self.ast.types.as_enum(cty).is_some() { QualType::INT } else { cty }
+            };
+            let c = self.act_on_full_expr(c);
+            // A converted constant expression for a fixed underlying
+            // type ([dcl.enum]/5), else an integral constant expression.
+            let at = self.begin_loc(ie);
+            let ctx = if build.fixed.is_some() {
+                EvalContext::converted(at)
+            } else {
+                EvalContext::new(EvalKind::Other, at)
+            };
+            match self.eval_int(c, ctx) {
+                Ok(v) => {
+                    let v = self.check_enumerator_range(v, build.fixed, ie);
+                    value = Some(v);
+                    let cv = self.int_const(cty, v);
+                    init_e = Some(self.builder().constant_expr(c, Some(cv)));
+                }
+                Err(f) => {
+                    let msg = self.diag(DiagId::sema_expr_not_ice, self.ast.exprs.get(ie).loc());
+                    let msg = Self::with_failure_notes(msg, f);
+                    self.emit(msg);
+                }
+            }
+        }
+        (value, init_e)
+    }
+
     /// An enumerator-definition ([dcl.enum]/2,5).
     pub fn act_on_enumerator(
         &mut self,
@@ -1525,48 +1579,10 @@ impl Sema<'_, '_> {
             let msg = self.note_prev(msg, p, true);
             self.emit(msg);
         }
-        let mut value: Option<i128> = None;
-        let mut init_e = None;
-        if let Some(ie) = init {
-            let ity = self.ast.exprs.get(ie).ty();
-            let t = &self.ast.types;
-            let ok_ty = t.is_integral(ity)
-                || t.as_enum(ity).is_some_and(|en| !self.is_scoped_enum(en) || en == e);
-            if !ok_ty && !self.is_error_type(ity) {
-                self.error(DiagId::sema_expr_not_ice, self.ast.exprs.get(ie).loc());
-            } else if !self.is_error_type(ity) {
-                let mut c = conv::lvalue_to_rvalue(self, ie);
-                let cty = if let Some(f) = build.fixed {
-                    // [dcl.enum]/5: a converted constant expression, so a
-                    // narrowing value is ill-formed ([expr.const]/12).
-                    if let Ok(ConstVal::Int(raw)) = self.evaluate(c)
-                        && !self.fits(f, raw)
-                    {
-                        let msg = self
-                            .diag(DiagId::sema_cce_narrowing_value, self.begin_loc(ie))
-                            .arg("enumerator value")
-                            .arg(raw.to_string())
-                            .arg(self.ty_arg(f));
-                        self.emit(msg);
-                    }
-                    c = conv::implicit_convert(self, c, f, ConvCtx::Initialization).unwrap_or(c);
-                    f
-                } else {
-                    let cty = self.ast.exprs.get(c).ty();
-                    if self.ast.types.as_enum(cty).is_some() { QualType::INT } else { cty }
-                };
-                let c = self.act_on_full_expr(c);
-                if let Ok(ConstVal::Int(v)) = self.evaluate(c) {
-                    let v = self.check_enumerator_range(v, build.fixed, ie);
-                    value = Some(v);
-                    let cv = self.int_const(cty, v);
-                    init_e = Some(self.builder().constant_expr(c, Some(cv)));
-                } else {
-                    let msg = self.diag(DiagId::sema_expr_not_ice, self.ast.exprs.get(ie).loc());
-                    self.emit(msg);
-                }
-            }
-        }
+        let (value, init_e) = match init {
+            Some(ie) => self.enumerator_init(&build, ie),
+            None => (None, None),
+        };
         let v = value.unwrap_or_else(|| match build.last {
             Some(l) => {
                 let next = l + 1;
@@ -1829,8 +1845,8 @@ impl Sema<'_, '_> {
         let c = self.act_on_full_expr(c);
         let cloc = self.begin_loc(cond);
         if !self.has_errors_in(c) {
-            match self.evaluate(c) {
-                Ok(v) if v.truthy() => {}
+            match self.eval_const(c, EvalContext::new(EvalKind::StaticAssert, loc)) {
+                Ok(v) if self.const_truth(v) != Some(false) => {}
                 Ok(_) => {
                     let text = msg.and_then(|m| self.string_literal_text(m));
                     // clang's `findFailedBooleanCondition`: the failing
@@ -1864,9 +1880,9 @@ impl Sema<'_, '_> {
                     let d = self.explain_failed_comparison(d, inner);
                     self.emit(d);
                 }
-                Err(nc) => {
+                Err(f) => {
                     let d = self.diag(DiagId::sema_static_assert_not_ice, cloc);
-                    let d = self.with_not_constant_notes(d, nc);
+                    let d = Self::with_failure_notes(d, f);
                     self.emit(d);
                 }
             }
@@ -1878,7 +1894,7 @@ impl Sema<'_, '_> {
     /// The conjunct of the failed condition `c` that evaluates to false
     /// (clang's `findFailedBooleanCondition`), without parentheses and
     /// implicit conversions. Literal conjuncts are skipped.
-    fn failed_condition(&self, c: ExprId) -> ExprId {
+    fn failed_condition(&mut self, c: ExprId) -> ExprId {
         let mut terms = Vec::new();
         self.conjunction_terms(c, &mut terms);
         for &t in &terms {
@@ -1888,7 +1904,7 @@ impl Sema<'_, '_> {
             ) {
                 continue;
             }
-            if matches!(self.evaluate(t), Ok(v) if !v.truthy()) {
+            if self.try_fold(t).is_some_and(|v| self.const_truth(v) == Some(false)) {
                 return t;
             }
         }
@@ -1918,20 +1934,15 @@ impl Sema<'_, '_> {
     /// `static_assert` of a comparison.
     fn explain_failed_comparison(&mut self, d: kiln_diag::Diag, c: ExprId) -> kiln_diag::Diag {
         let Some((op, l, r)) = self.comparison_parts(c) else { return d };
-        let (Ok(lv), Ok(rv)) = (self.evaluate(l), self.evaluate(r)) else { return d };
-        let show = |v: ConstVal| match v {
-            ConstVal::Int(i) => i.to_string(),
-            ConstVal::Float(f) => format!("{f}"),
-            ConstVal::Null => "nullptr".to_owned(),
-        };
         if Self::is_literal_expr(&self.ast, l) && Self::is_literal_expr(&self.ast, r) {
             return d;
         }
+        let (Some(lv), Some(rv)) = (self.try_fold(l), self.try_fold(r)) else { return d };
         let note = self
             .diag(DiagId::note_expr_evaluates_to, self.ast.exprs.get(c).loc())
-            .arg(show(lv))
+            .arg(self.const_display(lv))
             .arg(op)
-            .arg(show(rv));
+            .arg(self.const_display(rv));
         d.with_note(note)
     }
 
@@ -2223,7 +2234,8 @@ impl Sema<'_, '_> {
         let loc = self.ast.exprs.get(e).loc();
         let c = conv::lvalue_to_rvalue(self, e);
         let c = self.act_on_full_expr(c);
-        if let Ok(ConstVal::Int(v)) = self.evaluate(c) {
+        let r = self.eval_int(c, EvalContext::new(EvalKind::Other, self.begin_loc(e)));
+        if let Ok(v) = r {
             if v != 0 && (v < 0 || (v & (v - 1)) != 0) {
                 self.error(DiagId::sema_alignment_not_power_of_two, loc);
                 return None;
@@ -2236,8 +2248,12 @@ impl Sema<'_, '_> {
             }
             let cv = self.int_const(self.ast.exprs.get(c).ty(), v);
             Some(self.builder().constant_expr(c, Some(cv)))
+        } else if let Err(f) = r {
+            let d = self.diag(DiagId::sema_expr_not_ice, loc);
+            let d = Self::with_failure_notes(d, f);
+            self.emit(d);
+            None
         } else {
-            self.error(DiagId::sema_expr_not_ice, loc);
             None
         }
     }
@@ -2307,10 +2323,9 @@ impl Sema<'_, '_> {
                 .and_then(|t| target::size_align(&self.ast, t, &self.abi))
                 .map(|x| x.1)
         } else {
-            ExprId::from_raw(node.a).and_then(|e| match self.evaluate(e) {
-                Ok(ConstVal::Int(v)) => u64::try_from(v).ok(),
-                _ => None,
-            })
+            ExprId::from_raw(node.a)
+                .and_then(|e| self.fold_int(e))
+                .and_then(|v| u64::try_from(v).ok())
         };
         if let Some(r) = requested.filter(|&r| r != 0 && r < natural) {
             let _ = r;

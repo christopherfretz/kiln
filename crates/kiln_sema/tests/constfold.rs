@@ -1,6 +1,7 @@
-//! The M2 constant folder behind [`ConstEvaluator`] ([expr.const]):
-//! expressions are built through `Sema`'s `act_on_*` entry points, so the
-//! implicit conversions are the ones the parser would get, then folded.
+//! Constant evaluation through `Sema` ([expr.const]): expressions are
+//! built through `Sema`'s `act_on_*` entry points, so the implicit
+//! conversions are the ones the parser would get, then evaluated by the
+//! TU's Oven ([`Sema::eval_const`], [`Sema::try_fold`]).
 
 #![allow(clippy::many_single_char_names, reason = "short names mirror the C++ under test")]
 
@@ -9,12 +10,16 @@ mod conv_common;
 use conv_common::*;
 use kiln_ast::ExprId;
 use kiln_ast::QualType;
+use kiln_ast::consts::Scalar;
 use kiln_ast::expr::{BinaryOp, UnaryOp};
-use kiln_sema::constfold::{evaluator, fold_int_expr};
-use kiln_sema::{ConstEvaluator, ConstVal, Sema};
+use kiln_sema::{EvalContext, EvalKind, Sema};
 
-fn eval(s: &Sema<'_, '_>, e: ExprId) -> Result<ConstVal, kiln_sema::NotConstant> {
-    evaluator(&s.abi).evaluate(&s.ast, e)
+/// The integer value of `e`, or `Err` with the failure's notes.
+fn eval(s: &mut Sema<'_, '_>, e: ExprId) -> Result<i128, Vec<String>> {
+    match s.eval_const(e, EvalContext::new(EvalKind::Other, L)) {
+        Ok(v) => Ok(s.const_int(v).expect("an integer")),
+        Err(f) => Err(f.notes.into_iter().map(|n| n.msg).collect()),
+    }
 }
 
 fn int(s: &mut Sema<'_, '_>, v: u64) -> ExprId {
@@ -31,8 +36,8 @@ fn expr_arith_folds() {
         let prod = s.act_on_binary(BinaryOp::Mul, sum, c, L);
         let quot = s.act_on_binary(BinaryOp::Div, prod, d, L);
         let rem = s.act_on_binary(BinaryOp::Rem, quot, e, L);
-        assert_eq!(eval(s, rem), Ok(ConstVal::Int(3)));
-        assert_eq!(fold_int_expr(&s.ast, rem), Some(3));
+        assert_eq!(eval(s, rem), Ok(3));
+        assert_eq!(s.fold_int(rem), Some(3));
     });
 }
 
@@ -44,7 +49,7 @@ fn conv_integral_wraps() {
         let neg = s.act_on_unary(UnaryOp::Minus, one, L);
         let z = int_lit(s, QualType::UINT, 0);
         let u = s.act_on_binary(BinaryOp::Add, neg, z, L);
-        assert_eq!(eval(s, u), Ok(ConstVal::Int(i128::from(u32::MAX))));
+        assert_eq!(eval(s, u), Ok(i128::from(u32::MAX)));
     });
 }
 
@@ -55,7 +60,8 @@ fn expr_const_div_by_zero() {
         let (a, z) = (int(s, 1), int(s, 0));
         let q = s.act_on_binary(BinaryOp::Div, a, z, L);
         let err = eval(s, q).expect_err("1/0 must not fold");
-        assert!(err.note.is_some(), "a note explains why");
+        assert_eq!(err, ["division by zero"]);
+        assert_eq!(s.try_fold(q), None, "a silent fold fails too");
     });
 }
 
@@ -78,7 +84,7 @@ fn expr_shift_too_far() {
         assert!(eval(s, sh).is_err());
         let (a, b) = (int(s, 1), int(s, 31));
         let sh = s.act_on_binary(BinaryOp::Shl, a, b, L);
-        assert_eq!(eval(s, sh), Ok(ConstVal::Int(-0x8000_0000)));
+        assert_eq!(eval(s, sh), Ok(-0x8000_0000));
     });
 }
 
@@ -89,13 +95,13 @@ fn expr_cond_short_circuit() {
         let (f, one, zero) = (bool_lit(s, false), int(s, 1), int(s, 0));
         let bad = s.act_on_binary(BinaryOp::Div, one, zero, L);
         let and = s.act_on_binary(BinaryOp::LAnd, f, bad, L);
-        assert_eq!(eval(s, and), Ok(ConstVal::Int(0)));
+        assert_eq!(eval(s, and), Ok(0));
         let (c, t) = (bool_lit(s, true), int(s, 9));
         let one = int(s, 1);
         let zero = int(s, 0);
         let bad = s.act_on_binary(BinaryOp::Div, one, zero, L);
         let sel = s.act_on_conditional(c, t, bad, L);
-        assert_eq!(eval(s, sel), Ok(ConstVal::Int(9)));
+        assert_eq!(eval(s, sel), Ok(9));
     });
 }
 
@@ -117,6 +123,10 @@ fn conv_fpint_truncates() {
         let f = float_lit(s, QualType::DOUBLE, 2.5);
         let two = int(s, 2);
         let prod = s.act_on_binary(BinaryOp::Mul, f, two, L);
-        assert_eq!(eval(s, prod), Ok(ConstVal::Float(5.0)));
+        let v = s.try_fold(prod).expect("2.5 * 2 folds");
+        assert!(matches!(
+            s.ast.consts.scalar(v),
+            Some(Scalar::Float { bits, .. }) if bits == u128::from(5.0f64.to_bits())
+        ));
     });
 }

@@ -738,22 +738,39 @@ static_assert(e == 1);
 }
 
 /// [expr.static.cast]/9, [expr.const]/5.8: an unscoped enum value outside its range.
-/// Deviation: clang 19 diagnoses this only in a constexpr variable's
-/// initializer (`-Wenum-constexpr-conversion`, same wording); the cast is UB
-/// by [expr.static.cast]/9 wherever it is evaluated, so kiln rejects it.
+/// clang 19 behaviour (`-Wenum-constexpr-conversion`): the cast is not a
+/// failure of the evaluation; where a constant expression proper is
+/// required (a `constexpr` variable's initializer, a converted constant
+/// expression) it is reported as an error diagnostic and the value is
+/// kept; integral constant expressions (`static_assert`) do not check it.
 #[test]
 fn ub_enum_range() {
-    fails_exactly(
-        r"enum E { A, B };
+    let src = r"enum E { A, B };
 constexpr E f(int v) { return (E)v; }
-static_assert(f(5) == A);
-",
-        r"
-3:15: static assertion expression is not an integral constant expression
-2:31: integer value 5 is outside the valid range of values [0, 1] for the enumeration type 'E'
-3:15: in call to 'f(5)'
-",
-    );
+static_assert(f(5) == 5);
+";
+    let tu = ok(src);
+    assert!(tu.diags.is_empty(), "{:?}", tu.diags);
+    let src = r"enum E { A, B };
+constexpr E f(int v) { return (E)v; }
+constexpr E e = f(5);
+";
+    let tu = ok(src);
+    assert_eq!(tu.diags.len(), 1, "{:?}", tu.diags);
+    let d = &tu.diags[0];
+    assert!(d.contains("oven_enum_constexpr_conversion"), "{d}");
+    assert!(d.contains(r#"args: ["5", "0", "1", "E"]"#), "{d}");
+    // Memoization does not hide it: an unchecked evaluation of `f(5)` is
+    // not cached for a checked one, and clang reports every checked
+    // evaluation (tests/conformance/expr.const/5.8/enum-range.cpp).
+    let src = r"enum E { A, B };
+constexpr E f(int v) { return (E)v; }
+static_assert(f(5) == 5);
+constexpr E e = f(5);
+constexpr E e2 = f(5);
+";
+    let tu = ok(src);
+    assert_eq!(tu.diags.len(), 2, "{:?}", tu.diags);
 }
 
 /// [expr.unary.op]/1: `(*p).m` with p null reads through the null pointer.

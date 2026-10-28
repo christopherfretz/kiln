@@ -7,7 +7,7 @@
 
 use kiln_ast::dump::{DumpOptions, Filter, dump};
 use kiln_diag::{Diag, DiagId, DiagOptions};
-use kiln_parse::{ParseOptions, parse_file};
+use kiln_parse::{ParseOptions, parse_tu};
 use kiln_sema::target::Target;
 use kiln_source::{FileId, SourceManager, Span};
 
@@ -122,7 +122,9 @@ impl SyntaxJob<'_> {
             return;
         };
         let popts = ParseOptions { std: self.std.lex };
-        let ast = parse_file(sm, file, engine, target, &popts);
+        let tu = parse_tu(sm, file, engine, target, &popts, a.constexpr.limits());
+        a.constexpr.write_report(&tu.oven, sm, engine);
+        let ast = tu.ast;
         if let Some(d) = dump_opts {
             let mut out: Vec<u8> = Vec::new();
             if dump(&ast, &d, &mut out).is_ok() {

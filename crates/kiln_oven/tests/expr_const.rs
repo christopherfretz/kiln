@@ -531,3 +531,27 @@ constexpr int f() {
 static_assert(f() == 7);
 ");
 }
+
+/// [lex.string]/9: a pointer frozen into a `constexpr` variable keeps the
+/// identity of the literal evaluation that created it, so pointers into
+/// two equal literals compare unspecified (not equal through a shared
+/// object), and a pointer compares equal to itself.
+#[test]
+fn expr_const_5_24_frozen_string_literals() {
+    ok(r#"constexpr const char *p = "abc";
+constexpr const char *r = p;
+static_assert(p == r);
+static_assert(p + 1 == r + 1);
+static_assert(*(p + 1) == 'b');
+"#);
+    fails_exactly(
+        r#"constexpr const char *p = "abc";
+constexpr const char *q = "abc";
+static_assert(p + 1 != q);
+"#,
+        r"
+3:15: static assertion expression is not an integral constant expression
+3:21: comparison of addresses of literals has unspecified value
+",
+    );
+}

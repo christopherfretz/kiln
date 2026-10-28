@@ -21,6 +21,7 @@ Crate layout (each part is replaceable on its own):
 | `toolchain` | target, `-std=`, resource dir, GCC/libc++ detection, the system search directories |
 | `pp_cmd` | one `-E` job: predefines, search list, preprocessor (WP-015's `IfEval` and `ClangFeatures`), printer, dependency list |
 | `syntax_cmd` | one `-fsyntax-only` job: parser, Sema, AST dump |
+| `constexpr_opts` | the `-fconstexpr-*` flags: Oven limits for the parser's Sema, the report |
 | `deps` | Make-style dependency output |
 | `time` | reproducible `__DATE__`/`__TIME__`/`__TIMESTAMP__` |
 | `lib` (`run`) | orchestration, driver diagnostics, outputs, exit status |
@@ -56,6 +57,9 @@ starting with `-` are inputs.
 | `-O*`, `-f[no-]exceptions`, `-f[no-]cxx-exceptions`, `-f[no-]rtti`, `-f[no-]char8_t`, `-f[no-]pic/PIC/pie/PIE`, `-f[no-]fast-math`, `-ffreestanding`, `-fhosted`, `-pthread`, `-f[no-]threadsafe-statics`, `-f[no-]sized-deallocation` | change predefined macros only (see "Predefines") |
 | `-W...`, `-w`, `-pedantic`, `-ferror-limit=`, `-fdiagnostics-format=`, `-f[no-]color-diagnostics`, `-f[no-]caret-diagnostics`, ... | diagnostic options, validated and applied by `kiln_diag::DiagOptions` (`spec/diag.md`) |
 | `-fkiln-reproducible-time` | see "Reproducible time" |
+| `-fconstexpr-steps=N`, `-fconstexpr-depth=N`, `-fconstexpr-backtrace-limit=N` | constant-evaluation limits, as clang's (defaults 1048576, 512, 10; a backtrace limit of 0 shows every frame); `constexpr_opts`, spec/oven.md "Integration" |
+| `-fconstexpr-memory=N[k\|m\|g]` | kiln: live abstract-memory bytes per evaluation (default 256 MiB; binary suffixes) |
+| `-fconstexpr-report=<path>` | kiln: write the per-TU NDJSON constant-evaluation report (spec/oven.md "Reporting protocol"); `-fsyntax-only` only so far |
 | `-v`, `--verbose`, `--version`, `--help` | see below |
 | `-F <dir>` | accepted; warns `ignoring framework directory` |
 | `-fsyntax-only` | parse and check (see "Syntax checking") |

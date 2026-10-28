@@ -441,7 +441,8 @@ enum Scalar<'a> {                       // `ty` is the canonical, cv-unqualified
     Reflection { ty, id: ReflectionId },          // std::meta::info (M6)
 }
 enum PtrBase { Decl(DeclId), Function(DeclId), Temporary(DeclId),
-               StringLit(StringLitId), Const(ConstValueId), TypeInfo(QualType) }
+               StringLit { lit: StringLitId, origin: ExprId },
+               Const(ConstValueId), TypeInfo(QualType) }
 enum FloatKind { Half, BFloat16, Single, Double, X87Extended, Quad }
 struct ByteImage<'a> { ty: QualType, bytes: &'a [u8], relocs: &'a [Reloc],
                        padding: &'a [ByteRange], unions: &'a [UnionMember] }
@@ -465,7 +466,11 @@ struct UnionMember { at: u32, field: DeclId }       // active member of the unio
   - A `Const(id)` base must already be in the store. It names a subobject
     of another frozen value (an object with static storage and no
     declaration of its own).
-  - `StringLit` ids are not validated against the `StringPool`.
+  - A `StringLit` base is the array object created by evaluating the
+    `StringLiteral` expression `origin`; `lit` is its contents. Two
+    pointers into equal literals from different expressions are different
+    values, and comparing them is unspecified ([expr.const]/5.24). Neither
+    id is validated (against the `StringPool` or the expression arena).
 - **Member pointers** store the member's `DeclId` plus clang's
   member-pointer path and the derived flag. They do not store an offset,
   because union members share offsets and [temp.type] compares member

@@ -8,7 +8,7 @@
 
 use std::fmt;
 
-use crate::ids::{ConstValueId, DeclId, QualType, ReflectionId, StringLitId};
+use crate::ids::{ConstValueId, DeclId, ExprId, QualType, ReflectionId, StringLitId};
 
 /// Two's-complement integer bits of a fixed width (1 to
 /// [`IntBits::MAX_WIDTH`] bits), little-endian `u64` words.
@@ -251,7 +251,20 @@ pub enum PtrBase {
     /// A lifetime-extended temporary (`LifetimeExtendedTemporaryDecl`).
     Temporary(DeclId),
     /// A string literal object (offset in bytes from its first code unit).
-    StringLit(StringLitId),
+    ///
+    /// Each evaluation of a string literal may create a distinct object
+    /// ([lex.string]/9), so the object is identified by the
+    /// `StringLiteral` expression that created it (`origin`); `lit` is its
+    /// contents. Two pointers into equal literals from different
+    /// expressions are different values, and comparing them is
+    /// unspecified ([expr.const]/5.24).
+    StringLit {
+        /// The contents.
+        lit: StringLitId,
+        /// The `StringLiteral` expression whose evaluation created the
+        /// object.
+        origin: ExprId,
+    },
     /// A subobject of another frozen value of this store (an object with
     /// static storage that has no declaration of its own).
     Const(ConstValueId),
@@ -265,7 +278,7 @@ impl PtrBase {
             PtrBase::Decl(_) => 0,
             PtrBase::Function(_) => 1,
             PtrBase::Temporary(_) => 2,
-            PtrBase::StringLit(_) => 3,
+            PtrBase::StringLit { .. } => 3,
             PtrBase::Const(_) => 4,
             PtrBase::TypeInfo(_) => 5,
         }
@@ -274,9 +287,28 @@ impl PtrBase {
     pub(crate) fn raw(self) -> u32 {
         match self {
             PtrBase::Decl(d) | PtrBase::Function(d) | PtrBase::Temporary(d) => d.index(),
-            PtrBase::StringLit(s) => s.index(),
+            PtrBase::StringLit { lit, .. } => lit.index(),
             PtrBase::Const(c) => c.index(),
             PtrBase::TypeInfo(t) => t.to_raw(),
+        }
+    }
+
+    /// The second id of a base that has one (a string literal's origin).
+    pub(crate) fn aux(self) -> Option<u32> {
+        match self {
+            PtrBase::StringLit { origin, .. } => Some(origin.index()),
+            _ => None,
+        }
+    }
+
+    /// The base from its code, id and second id ([`PtrBase::aux`]).
+    pub(crate) fn from_parts_aux(code: u32, raw: u32, aux: u32) -> Option<Self> {
+        match code {
+            3 => Some(PtrBase::StringLit {
+                lit: StringLitId::try_new(raw)?,
+                origin: ExprId::try_new(aux)?,
+            }),
+            _ => Self::from_parts(code, raw),
         }
     }
 
@@ -285,7 +317,7 @@ impl PtrBase {
             0 => PtrBase::Decl(DeclId::try_new(raw)?),
             1 => PtrBase::Function(DeclId::try_new(raw)?),
             2 => PtrBase::Temporary(DeclId::try_new(raw)?),
-            3 => PtrBase::StringLit(StringLitId::try_new(raw)?),
+            // 3 was the retired string-literal base (now `Const`).
             4 => PtrBase::Const(ConstValueId::try_new(raw)?),
             5 => PtrBase::TypeInfo(QualType::from_raw(raw)?),
             _ => return None,

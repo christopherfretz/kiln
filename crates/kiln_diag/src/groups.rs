@@ -71,6 +71,7 @@ diag_groups! {
     DivisionByZero = "division-by-zero" [];
     ShiftCountNegative = "shift-count-negative" [];
     ShiftCountOverflow = "shift-count-overflow" [];
+    EnumConstexprConversion = "enum-constexpr-conversion" [];
     Unused = "unused" [UnusedValue];
     UnusedValue = "unused-value" [UnusedComparison, UnusedResult];
     UnusedComparison = "unused-comparison" [];

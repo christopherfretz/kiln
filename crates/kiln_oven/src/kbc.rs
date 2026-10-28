@@ -66,7 +66,8 @@ ops! {
     ToBool = 2,
     // [v, min lo, min hi, max lo, max hi]: [expr.static.cast]/10, the
     // value of a conversion to an enumeration without a fixed underlying
-    // type lies in its range ([dcl.enum]/8); bounds are 64-bit, sign-extended
+    // type lies in its range ([dcl.enum]/8); bounds are 64-bit, sign-extended;
+    // `v` is the operand (before the conversion), aux = its width | signed << 8
     EnumCheck = 5,
     // Float binary ops [dst, a, b]; aux = kind
     FAdd = 3,

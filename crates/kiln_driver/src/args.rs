@@ -145,6 +145,8 @@ pub enum ArgError {
     InvalidValue(String, String),
     /// `-stdlib=` with an unknown library.
     InvalidStdlib(String),
+    /// An option with a bad integer value: `(argument, value)`.
+    InvalidInt(String, String),
 }
 
 /// The parsed command line.
@@ -214,6 +216,8 @@ pub struct Args {
     pub reproducible_time: bool,
     /// Errors, in order.
     pub errors: Vec<ArgError>,
+    /// The `-fconstexpr-*` options.
+    pub constexpr: crate::constexpr_opts::ConstexprOpts,
 }
 
 /// Options taking a value, joined (`-Ifoo`) or separate (`-I foo`).
@@ -264,7 +268,9 @@ impl Args {
                 }
                 continue;
             }
-            if !a.flag(arg) && !a.predef_flag(arg) && !a.diag_flag(arg) {
+            if let Some(r) = a.constexpr.parse_arg(arg) {
+                a.errors.extend(r.err());
+            } else if !a.flag(arg) && !a.predef_flag(arg) && !a.diag_flag(arg) {
                 a.errors.push(ArgError::Unknown(arg.to_owned()));
             }
         }

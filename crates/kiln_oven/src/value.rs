@@ -241,7 +241,7 @@ impl Oven {
         if p.is_static() {
             let base = match a.origin {
                 Origin::Global(d) | Origin::External(d) => PtrBase::Decl(d),
-                Origin::Str(s, _) => PtrBase::StringLit(s),
+                Origin::Str(lit, Some(origin)) => PtrBase::StringLit { lit, origin },
                 Origin::Const(c) => PtrBase::Const(c),
                 _ => return Err(Freeze::Fault(FailKind::NotConstant)),
             };
@@ -483,7 +483,17 @@ impl Oven {
     pub(crate) fn resolve_global(&mut self, b: &mut dyn SemaBridge, g: u32, top: u32) -> u64 {
         let p = match self.globals[g as usize].kind {
             GKind::Str(s, ty, e) => self.alloc_string(b, s, ty, e),
-            GKind::Var(d) => self.resolve_var(b, g, d, top),
+            GKind::Var(d) => {
+                let p = self.resolve_var(b, g, d, top);
+                // A variable with no initializer yet (`extern const int
+                // n;` before its definition) may get one later in the
+                // translation unit: its unknown value is kept for this
+                // evaluation only.
+                if var_info(b.ast(), d).init.is_none() {
+                    self.provisional.push(g);
+                }
+                p
+            }
         };
         if let GState::Unresolved = self.globals[g as usize].state {
             self.globals[g as usize].state = GState::Resolved(p);
@@ -691,22 +701,26 @@ impl Oven {
                     GState::Unresolved => self.resolve_global(b, g, top),
                 }
             }
-            PtrBase::StringLit(s) => {
-                let g = if let Some(&g) = self.strings.get(&s) {
-                    g as u32
-                } else {
-                    let ast = b.ast();
-                    let (enc, units) = (ast.strings.encoding(s), ast.strings.unit_count(s));
-                    let cq = match enc {
-                        StringEncoding::Ordinary => QualType::CHAR,
-                        StringEncoding::Utf8 => QualType::CHAR8,
-                        StringEncoding::Utf16 => QualType::CHAR16,
-                        StringEncoding::Utf32 => QualType::CHAR32,
-                        StringEncoding::Wide16 | StringEncoding::Wide32 => QualType::WCHAR,
-                    };
-                    let et = self.types.intern(b, cq);
-                    let at = self.types.array_of(et, units + 1);
-                    self.string_index(s, at)
+            // The object of the literal's own evaluation: a pointer frozen
+            // from `"a"` thaws to the object `"a"` creates, so it compares
+            // equal to itself and unspecified to other literals.
+            PtrBase::StringLit { lit, origin } => {
+                let ast = b.ast();
+                let (enc, units) = (ast.strings.encoding(lit), ast.strings.unit_count(lit));
+                let cq = match enc {
+                    StringEncoding::Ordinary => QualType::CHAR,
+                    StringEncoding::Utf8 => QualType::CHAR8,
+                    StringEncoding::Utf16 => QualType::CHAR16,
+                    StringEncoding::Utf32 => QualType::CHAR32,
+                    StringEncoding::Wide16 | StringEncoding::Wide32 => QualType::WCHAR,
+                };
+                let g = match self.lit_exprs.get(&origin) {
+                    Some(&g) => g,
+                    None => {
+                        let et = self.types.intern(b, cq);
+                        let at = self.types.array_of(et, units + 1);
+                        self.string_expr_index(origin, lit, at)
+                    }
                 };
                 match self.globals[g as usize].state {
                     GState::Resolved(p) => p,
