@@ -494,13 +494,25 @@ belong to WP-017, which builds them on `macro_defined` and
   with `clang -E -dM`; see `resource/README.md`.
 
   `kiln_pp::build_predefines(base, &PredefConfig, &[CmdMacro])` (WP-014,
-  `predef.rs`) builds the buffer clang's way. It starts with
-  `# 1 "<built-in>" 3` and the sorted base macros, adjusted for the dialect
-  and the macro-changing flags (`PredefConfig`; the effects are measured
-  in `resource/README.md`), plus `__KILN__`, `__KILN_MAJOR__` and
-  `__KILN_MINOR__`. Then come `# 1 "<command line>" 1`, each `-D`
-  (`X` -> `X 1`, `X=v` -> `X v`) and `-U` in order, the driver's
-  `__GCC_HAVE_DWARF2_CFI_ASM`, and `# 1 "<built-in>" 2`. The flag-to-config
+  `predef.rs`) builds the buffer clang's way, in this order:
+  - `__KILN__`, `__KILN_MAJOR__` and `__KILN_MINOR__`;
+  - `# 1 "<built-in>" 3`;
+  - the sorted base macros, adjusted for the dialect and the
+    macro-changing flags (`PredefConfig`; the effects are measured in
+    `resource/README.md`);
+  - clang 19's `#pragma push_macro("__GCC_DESTRUCTIVE_SIZE")` and
+    `push_macro("__GCC_CONSTRUCTIVE_SIZE")`, so that `-D` may redefine
+    them without a warning;
+  - `# 1 "<command line>" 1`;
+  - each `-D` (`X` -> `X 1`, `X=v` -> `X v`) and `-U`, in order;
+  - the driver's `__GCC_HAVE_DWARF2_CFI_ASM`;
+  - `# 1 "<built-in>" 2`.
+
+  Keeping kiln's own macros ahead of the first line marker gives the
+  numbered part of `<built-in>` clang's line count. The
+  `# N "<built-in>" 3` marker before `<command line>` therefore matches
+  clang byte for byte. The printer emits that marker for a flag-1 line
+  marker, as clang's `EnterFile` does for its include location. The flag-to-config
   mapping is the driver's (`spec/driver.md` "Predefines").
   The builtin macros are entries in the macro table with
   `MacroDef::is_builtin` set, so `#ifdef __has_include` is true.
@@ -512,12 +524,8 @@ belong to WP-017, which builds them on `macro_defined` and
 
 ## Deviations from clang 19 (each covered by a test or a test note)
 
-1. **The `<built-in>` buffer in `-E` mode.** kiln prints the same
-   `<built-in>` and `<command line>` markers as clang except one.
-   Before `# 1 "<command line>" 1`, clang prints `# N "<built-in>" 3`
-   (N = 478 for C++17 on aarch64), the move back to its include location.
-   kiln does not, and its N would differ anyway because of the `__KILN__`
-   macros. Token-wise and `-P` output are unaffected.
+1. *(Resolved by WP-014.)* The `# N "<built-in>" 3` marker is now
+   printed as clang prints it (see "Predefined macros").
 2. **`#pragma clang|GCC diagnostic` is only validated.** kiln checks the
    syntax and the group names. Changing diagnostic state is phase-7 work
    for the consumer of `PpCallbacks::pragma`.
@@ -527,8 +535,9 @@ belong to WP-017, which builds them on `macro_defined` and
    of the macro.
 4. **`#pragma GCC dependency` is consumed without checking the file's
    date.**
-5. **`push_macro` does not suppress redefinition warnings.** It also does
-   not record the "macro was pushed" state.
+5. *(Resolved by WP-014.)* `push_macro` marks the pushed definition as
+   redefinable without a warning (clang
+   `setIsAllowRedefinitionsWithoutWarning`).
 6. **Poisoned identifiers are not checked inside `_Pragma` strings.**
 7. **`AvoidConcat` also separates `[:`, `:]` and `^^`.** This is for C++26
    reflection splicers. It always uses the C++11 and later rules, such as
@@ -657,10 +666,6 @@ it through kiln_diag's fatal handling; the core itself carries on.
   the item stream? clang interleaves them with the output text, which
   needs the printer to see them in stream order. Today callbacks run
   synchronously, before queued markers are printed.
-- **The `# N "<built-in>" 3` marker** (deviation 1). Should kiln print
-  it? A byte-identical marker would also need kiln's predefines to have
-  clang's line count, which means dropping or relocating the `__KILN__`
-  macros.
 - **`SourceManager::add_inclusion` was not added by WP-014** (see
   "Decisions" below). Every inclusion still starts at `sm.loc(file, 0)`.
   This needs an owner before "In file included from" notes for repeated

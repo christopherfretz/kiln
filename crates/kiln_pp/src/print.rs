@@ -621,6 +621,15 @@ impl Printer<'_, '_, '_, '_> {
             FileChange::Enter { from: Some(from), .. } => {
                 self.move_to_loc(from, false);
             }
+            // clang: a line marker with flag 1 is `EnterFile` whose include
+            // location is the marker's own line (`LineTableInfo::AddLineNote`).
+            FileChange::Rename { file, at, flag: Some(1), .. } => {
+                if let Some((_, off)) = self.sm.offset_of(at)
+                    && off > 0
+                {
+                    self.move_to_loc(self.sm.loc(file, off - 1), false);
+                }
+            }
             FileChange::SystemHeader { .. } => line += 1,
             _ => {}
         }

@@ -131,6 +131,7 @@ impl Preprocessor<'_, '_> {
                 builtin: Some(b),
                 enabled: Cell::new(true),
                 used: Cell::new(false),
+                allow_redef: Cell::new(false),
             };
             self.macros.map.insert(name, Rc::new(def));
         }

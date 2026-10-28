@@ -121,9 +121,21 @@ pub fn build_predefines(base: &str, cfg: &PredefConfig, cmdline: &[CmdMacro]) ->
     apply_flags(&mut m, cfg);
 
     let mut out = String::with_capacity(base.len() + 256);
+    // kiln's identity macros come before clang's first line, so the
+    // line markers that name `<built-in>` lines match clang's.
+    let _ = writeln!(out, "#define __KILN__ 1");
+    let _ = writeln!(out, "#define __KILN_MAJOR__ {}", cfg.kiln_version.0);
+    let _ = writeln!(out, "#define __KILN_MINOR__ {}", cfg.kiln_version.1);
     out.push_str("# 1 \"<built-in>\" 3\n");
     for (n, v) in &m {
         let _ = writeln!(out, "#define {n} {v}");
+    }
+    // clang 19 pushes these so that `-D` can redefine them without a
+    // warning (`InitializePredefinedMacros`).
+    for n in ["__GCC_DESTRUCTIVE_SIZE", "__GCC_CONSTRUCTIVE_SIZE"] {
+        if m.contains_key(n) {
+            let _ = writeln!(out, "#pragma push_macro(\"{n}\")");
+        }
     }
     out.push_str("# 1 \"<command line>\" 1\n");
     for c in cmdline {
@@ -150,7 +162,7 @@ fn set(m: &mut BTreeMap<String, String>, n: &str, v: &str) {
 }
 
 /// Applies the dialect and flag deltas (measured against clang 19; see
-/// `resource/README.md`) and kiln's identity macros.
+/// `resource/README.md`).
 fn apply_flags(m: &mut BTreeMap<String, String>, cfg: &PredefConfig) {
     if cfg.gnu {
         m.remove("__STRICT_ANSI__");
@@ -233,9 +245,6 @@ fn apply_flags(m: &mut BTreeMap<String, String>, cfg: &PredefConfig) {
     if cfg.pthread {
         set(m, "_REENTRANT", "1");
     }
-    set(m, "__KILN__", "1");
-    set(m, "__KILN_MAJOR__", &cfg.kiln_version.0.to_string());
-    set(m, "__KILN_MINOR__", &cfg.kiln_version.1.to_string());
 }
 
 /// clang `DefineBuiltinMacro`: `X` -> `X 1`, `X=v` -> `X v` (the value
@@ -274,7 +283,13 @@ mod tests {
                 CmdMacro::Undef("A".into()),
             ],
         );
-        assert!(s.starts_with("# 1 \"<built-in>\" 3\n#define __EXCEPTIONS 1\n"), "{s}");
+        assert!(
+            s.starts_with(
+                "#define __KILN__ 1\n#define __KILN_MAJOR__ 0\n#define __KILN_MINOR__ 0\n\
+                 # 1 \"<built-in>\" 3\n#define __EXCEPTIONS 1\n"
+            ),
+            "{s}"
+        );
         assert!(s.contains("#define __USER_LABEL_PREFIX__ \n"));
         assert!(s.ends_with(
             "# 1 \"<command line>\" 1\n#define A 1\n#define B 2\n#define F(x) x+1\n#define E \n\

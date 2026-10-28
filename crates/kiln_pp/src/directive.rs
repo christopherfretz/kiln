@@ -267,7 +267,7 @@ impl<'a> Preprocessor<'a, '_> {
         if !in_system && let Some(old) = self.macros.get_rc(name).cloned() {
             if self.is_language_builtin(&old) {
                 self.emit(Diag::new(DiagId::pp_builtin_macro_redefined, ntok.tok.span));
-            } else if !self.identical(&old, &def) {
+            } else if !old.allow_redef.get() && !self.identical(&old, &def) {
                 self.emit(
                     Diag::new(DiagId::pp_macro_redefined, def.name_span)
                         .arg(self.interner.as_str(name))
@@ -416,6 +416,7 @@ impl<'a> Preprocessor<'a, '_> {
             builtin: None,
             enabled: std::cell::Cell::new(true),
             used: std::cell::Cell::new(false),
+            allow_redef: std::cell::Cell::new(false),
         })
     }
 

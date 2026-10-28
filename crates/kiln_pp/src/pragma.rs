@@ -401,6 +401,10 @@ impl Preprocessor<'_, '_> {
         let name = self.interner.intern(text);
         if push {
             let cur = self.macros.get_rc(name).cloned();
+            if let Some(d) = &cur {
+                // Allow the pushed definition to be redefined later.
+                d.allow_redef.set(true);
+            }
             self.pushed.entry(name).or_default().push(cur);
             return;
         }
