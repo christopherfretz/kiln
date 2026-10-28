@@ -123,11 +123,9 @@ pub fn strip_comments(text: &str) -> String {
     out
 }
 
-/// The printer is a fixed point of `opt -S`: re-printing our text with
-/// LLVM's own writer changes nothing but comments (`spec/llvm.md` §7).
-pub fn assert_fixed_point(text: &str) {
-    let Some(c) = canonical(text) else { return };
-    let (ours, theirs) = (strip_comments(text), strip_comments(&c));
+/// Panic with both texts if `ours` and `theirs` differ, pointing at the
+/// first differing line.
+pub fn assert_same_text(what: &str, ours: &str, theirs: &str) {
     if ours != theirs {
         let first = ours
             .lines()
@@ -135,20 +133,35 @@ pub fn assert_fixed_point(text: &str) {
             .position(|(a, b)| a != b)
             .unwrap_or_else(|| ours.lines().count().min(theirs.lines().count()));
         panic!(
-            "printer output differs from opt -S at line {}:\n--- ours ---\n{}--- opt ---\n{}",
+            "{what}: texts differ at line {}:\n--- ours ---\n{}--- theirs ---\n{}",
             first + 1,
-            numbered(&ours),
-            numbered(&theirs)
+            numbered(ours),
+            numbered(theirs)
         );
     }
 }
 
-/// Compile a C file with clang 19 at -O0 for aarch64 Linux.
-pub fn clang_ir(path: &std::path::Path) -> Option<String> {
+/// The printer is a fixed point of `opt -S`: re-printing our text with
+/// LLVM's own writer changes nothing but comments (`spec/llvm.md` §7).
+pub fn assert_fixed_point(text: &str) {
+    let Some(c) = canonical(text) else { return };
+    assert_same_text("printer output vs opt -S", &strip_comments(text), &strip_comments(&c));
+}
+
+/// The directory of the differential C programs.
+pub fn cprogs_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests").join("cprogs")
+}
+
+/// Compile `tests/cprogs/<name>.c` with clang 19 at `-O0` for aarch64
+/// Linux. Clang runs inside the directory with the bare file name so the
+/// module's `source_filename` is `<name>.c`.
+pub fn clang_ir(name: &str) -> Option<String> {
     let clang = missing("clang")?;
     let out = Command::new(clang)
+        .current_dir(cprogs_dir())
         .args(["-S", "-emit-llvm", "-O0", "-fno-ident", "--target=aarch64-unknown-linux-gnu"])
-        .arg(path)
+        .arg(format!("{name}.c"))
         .args(["-o", "-"])
         .output()
         .expect("spawn clang");
