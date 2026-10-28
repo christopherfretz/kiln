@@ -9,9 +9,10 @@
 //! ([lex.digraph]/2: `and`, `bitor`, ...) become their punctuators here;
 //! other keywords stay identifiers for the parser to classify.
 //!
-//! Preprocessor markers become [`Event`]s keyed by the index of the token
-//! they precede; the parser handles them when it reaches that token
-//! (pragmas, spec/parse.md §2.3). A `module` / `import` directive is
+//! Pragmas are checked as they are read (`crate::pragma`); those with a
+//! semantic effect become [`Event`]s keyed by the index of the token they
+//! precede, which the parser acts on when it reaches that token
+//! (spec/parse.md §2.3). A `module` / `import` directive is
 //! reported and its tokens through the `;` dropped. After a fatal error
 //! (`fatal error: 'x' file not found`) the source ends: clang stops
 //! parsing there too.
@@ -21,22 +22,37 @@ use std::collections::VecDeque;
 use kiln_diag::DiagEngine;
 use kiln_lex::{LexOptions, Punct, TokKind, Token};
 use kiln_pp::{Marker, PpItem, Preprocessor};
-use kiln_source::Span;
 use kiln_source::symbol::Symbol;
+use kiln_source::{Loc, Span};
 
 use crate::keywords::ALTERNATIVE_TOKENS;
+use crate::pragma::{PragmaCx, classify};
 
-/// A preprocessor event the parser handles when it reaches the token
-/// after it.
+/// A preprocessor event the parser acts on when it reaches the token
+/// after it (clang's pragma annotation tokens).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Event {
-    /// A pragma the preprocessor passed through: the `pragma` / `_Pragma`
-    /// token and the tokens after it (unexpanded, without the end of line).
-    Pragma {
-        /// The `pragma` / `_Pragma` token.
-        span: Span,
-        /// The pragma's tokens.
-        tokens: Vec<Token>,
+    /// `#pragma pack(...)`.
+    PragmaPack {
+        /// The `pack` token.
+        loc: Loc,
+        /// The spelling of the tokens between the parentheses.
+        args: String,
+    },
+    /// `#pragma GCC visibility push(v)` / `pop`.
+    Visibility {
+        /// The `visibility` token.
+        loc: Loc,
+        /// The pushed visibility (`None` for `pop`).
+        push: Option<String>,
+    },
+    /// A pragma clang implements and kiln does not yet (`weak`,
+    /// `clang attribute`, ...).
+    UnsupportedPragma {
+        /// The pragma's name (`"weak"`, `"clang attribute"`).
+        what: String,
+        /// Its first token.
+        loc: Loc,
     },
     /// A `module` / `import` directive ([cpp.module], [cpp.import]),
     /// already removed from the token stream.
@@ -70,7 +86,7 @@ pub struct TokenSource<'a, 'sm> {
     events: VecDeque<(usize, Event)>,
     /// The alternative-token spellings' symbols and their punctuators.
     alternatives: Vec<(Symbol, Punct)>,
-    /// Never drop consumed tokens (`-fparse-window=whole`, for measuring).
+    /// Never drop consumed tokens ([`crate::ParseOptions::keep_tokens`]).
     keep_all: bool,
 }
 
@@ -207,7 +223,15 @@ impl<'a, 'sm> TokenSource<'a, 'sm> {
     fn marker(&mut self, m: Marker, next: usize) {
         match m {
             Marker::Pragma { span, tokens, .. } => {
-                self.events.push_back((next, Event::Pragma { span, tokens }));
+                let cx = PragmaCx {
+                    diags: self.diags,
+                    interner: self.pp.interner(),
+                    sm: self.pp.source_manager(),
+                    lex_opts: self.pp.lex_options(),
+                };
+                if let Some(e) = classify(&cx, span, &tokens) {
+                    self.events.push_back((next, e));
+                }
             }
             Marker::Module { span, import, .. } => {
                 // The directive's tokens end with `;` ([cpp.module],

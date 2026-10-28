@@ -794,10 +794,16 @@ impl Sema<'_, '_> {
             let msg = self.diag(DiagId::sema_duplicate_member, d.name_loc()).arg(sym_str(self, n));
             self.emit(msg.with_note(note));
         }
-        if !invalid && !self.is_complete(ty) && !self.ast.types.is_reference(ty) {
+        let ty = if !invalid && !self.is_complete(ty) && !self.ast.types.is_reference(ty) {
             let msg = self.diag(DiagId::sema_field_incomplete, d.name_loc()).arg(self.ty_arg(ty));
             self.emit(self.incomplete_note(msg, ty));
-        }
+            // clang marks the field invalid: initialization never
+            // descends into it (a field of the class's own type would
+            // recurse forever).
+            QualType::ERROR
+        } else {
+            ty
+        };
         let width = d.bit_width.and_then(|w| self.bit_width(w, ty, nm.as_deref(), d.name_loc()));
         let h = DeclHead::new(ctx, name.map_or(DeclName::EMPTY, DeclName::ident), d.name_loc());
         self.builder().field(h, ty, width, flags)
