@@ -1,4 +1,7 @@
 //@ expect: pp
+//@ args: --target=aarch64-unknown-linux-gnu
+// The target is pinned because '\377' < 0 depends on char signedness
+// (unsigned on aarch64, signed on x86_64); the golden is the aarch64 answer.
 // #if arithmetic: intmax_t/uintmax_t promotion, unsigned wraparound,
 // shifts, the conditional operator, character literals, identifiers that
 // are not macros (0), true/false in C++, short-circuiting of division by
