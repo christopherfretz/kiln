@@ -25,7 +25,7 @@ Format per `docs/AGENTS.md`. Ids are stable; status moves between
 | WP-016 | `kiln_pp`: `#embed` | todo |
 | WP-017 | `kiln_pp::print`: `-E` printer with clang line markers, `-P`, `-C/-CC`, `-dM/-dD` | todo |
 | WP-018 | driver: `kiln -E` flag parsing subset + `-M*` dependency output | todo |
-| WP-019 | differential corpus: all libc++ 19 headers + sysroot C headers + clang Preprocessor tests; `xtask test` pp-diff mode | todo |
+| WP-019 | differential corpus: 223 generated header tests (libc++ 19 public + wrapped C + sysroot) + 48 torture cases, token-wise `-E` comparison via kiln_lex, `%{resource_dir}` placeholders, `--report-parity docs/status/pp-parity.md` | done (2026-10-28) |
 | WP-020 | **Decision (M1):** kiln predefines exactly clang 19's set for the target/std (differential `-E` parity requires it) plus `__KILN__`/`__KILN_MAJOR__`/`__KILN_MINOR__`; `__VERSION__`/`__clang_version__` stay clang's strings for now. Audit of `__cpp_*` claims deferred to M2+. predefined macro audit: `__cpp_*` values kiln claims for M1; decide `__VERSION__`/`__clang_version__` strings, GNU-mode (`gnu++NN`) macro delta, which macros the driver supplies from flags (`__OPTIMIZE__`, `__PIE__`, `__EXCEPTIONS`, `__GXX_RTTI`, `__GCC_HAVE_DWARF2_CFI_ASM`) vs the static files — see `resource/README.md` | todo |
 
 ## M2 preparation
