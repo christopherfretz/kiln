@@ -62,6 +62,16 @@ fn json_field_extraction() {
     assert_eq!(json_string_field(j, "missing"), None);
 }
 
+/// The end-to-end tests need clang 19 (the default oracle and the compiler
+/// the fixtures are written for); without it they are skipped with a note.
+fn have_clang() -> bool {
+    let ok = detect_kind(Path::new("clang++-19")).is_ok();
+    if !ok {
+        eprintln!("clang++-19 not installed; skipping an end-to-end harness test");
+    }
+    ok
+}
+
 fn clang_opts(paths: &[PathBuf]) -> Options {
     Options {
         compiler: Some("clang++-19".into()),
@@ -79,6 +89,9 @@ fn report(results: &[TestResult]) -> String {
 /// must exercise every directive.
 #[test]
 fn seed_corpus_passes_with_clang() {
+    if !have_clang() {
+        return;
+    }
     let results = execute(&clang_opts(&[])).expect("runner infrastructure works");
     let all = report(&results);
     assert!(results.iter().all(|r| !r.status.is_failure()), "{all}");
@@ -108,8 +121,12 @@ fn seed_corpus_passes_with_clang() {
         flag(matches!(s.stdout, Some(StdoutExpect::Inline(_))), "stdout");
         flag(matches!(s.stdout, Some(StdoutExpect::File(_))), "stdout-file");
         flag(s.exit.is_some(), "exit");
+        flag(!s.run_args.is_empty(), "run-args");
+        flag(matches!(s.stdin, Some(directives::StdinInput::Inline(_))), "run-stdin");
+        flag(matches!(s.stdin, Some(directives::StdinInput::File(_))), "run-stdin-file");
+        flag(!s.env.is_empty(), "env");
         flag(src.contains("//@ oracle:"), "oracle");
-        flag(s.oven.is_some(), "oven");
+        flag(!s.oven.is_empty(), "oven");
         flag(!s.skip.is_empty(), "skip");
         flag(!s.xfail.is_empty(), "xfail");
         flag(
@@ -132,6 +149,7 @@ fn seed_corpus_passes_with_clang() {
         "compile-ok",
         "diag",
         "diag-note",
+        "env",
         "exit",
         "header-test",
         "oracle",
@@ -139,6 +157,9 @@ fn seed_corpus_passes_with_clang() {
         "pp",
         "pp-expected",
         "run",
+        "run-args",
+        "run-stdin",
+        "run-stdin-file",
         "skip",
         "std",
         "stdout",
@@ -176,12 +197,15 @@ fn check_fixture_statuses(results: &[TestResult], expected_count: usize) {
 
 #[test]
 fn fixtures_produce_expected_statuses() {
+    if !have_clang() {
+        return;
+    }
     let dir = repo_root().join("xtask/fixtures/basic");
     let mut o = clang_opts(&[dir]);
     o.run_timeout = Duration::from_secs(1);
     let results = execute(&o).unwrap();
-    // 21 tests: helper.h and Inputs/aux.h are not discovered.
-    check_fixture_statuses(&results, 21);
+    // 28 tests: helper.h and Inputs/* are not discovered.
+    check_fixture_statuses(&results, 28);
     let by_name = |n: &str| results.iter().find(|r| r.name.ends_with(n)).unwrap();
     assert!(by_name("fail-timeout.cpp").details.contains("timed out"));
     assert!(by_name("fail-crash.cpp").details.contains("signal"));
@@ -197,10 +221,47 @@ fn fixtures_produce_expected_statuses() {
         Some("not supported by this compiler (kiln-specific `oven:` directive)")
     );
     assert!(by_name("error-bad-directive.cpp").details.contains("unknown directive `frobnicate`"));
+    assert!(by_name("error-missing-stdin-file.cpp").details.contains("cannot read run-stdin-file"));
+    let hang = by_name("error-oracle-binary-hangs.cpp");
+    assert!(hang.details.contains("the oracle's binary") && hang.details.contains("timed out"));
+    let crash = by_name("error-oracle-binary-crashes.cpp");
+    assert!(crash.details.contains("the oracle's binary") && crash.details.contains("signal"));
+}
+
+/// `oven:` budgets against a stand-in kiln that compiles with clang and
+/// "reports" the canned `<test>.oven.jsonl` beside each fixture.
+#[test]
+fn oven_budgets_with_a_fake_kiln() {
+    if !have_clang() {
+        return;
+    }
+    let root = repo_root();
+    let mut o = clang_opts(&[root.join("xtask/fixtures/oven")]);
+    o.compiler = Some(root.join("xtask/fixtures/fake-kiln/kiln"));
+    o.no_oracle = true;
+    let results = execute(&o).unwrap();
+    check_fixture_statuses(&results, 9);
+    let by_name = |n: &str| results.iter().find(|r| r.name.ends_with(n)).unwrap();
+    let has = |n: &str, what: &str| {
+        let d = &by_name(n).details;
+        assert!(d.contains(what), "{n}: {what:?} not in\n{d}");
+    };
+    has("fail-over-total-budget.cpp", "oven: total: steps is 116, over the budget of 115");
+    has("fail-over-located-budget.cpp", "oven: at 4:15: calls is 1, over the budget of 0");
+    has("fail-no-evaluation-at-location.cpp", "no evaluation reported at 3 of the test file");
+    has("fail-located-budget-ignores-other-files.cpp", "no evaluation reported at 5");
+    has("fail-no-report.cpp", "wrote no readable constexpr report");
+    has("fail-malformed-report.cpp", "the total line disagrees with the evaluations");
+    has("fail-compile-error-wins.cpp", "expected compile-ok");
+    // The report total is logged for a passing test, too.
+    assert!(by_name("pass-budgets.cpp").log.iter().any(|l| l.contains("steps=116")), "log");
 }
 
 #[test]
 fn oracle_mismatches_are_detected() {
+    if !have_clang() {
+        return;
+    }
     if detect_kind(Path::new("clang++-22")).is_err() {
         eprintln!("clang++-22 not installed; skipping the oracle-mismatch test");
         return;
@@ -213,6 +274,9 @@ fn oracle_mismatches_are_detected() {
 
 #[test]
 fn filter_and_no_tests() {
+    if !have_clang() {
+        return;
+    }
     let mut o = clang_opts(&[repo_root().join("xtask/fixtures/basic")]);
     o.filter = Some("pass-qualified".into());
     let results = execute(&o).unwrap();
@@ -227,6 +291,9 @@ fn filter_and_no_tests() {
 /// `--update` rewrites an existing `.expected`; it never creates one.
 #[test]
 fn update_rewrites_existing_goldens() {
+    if !have_clang() {
+        return;
+    }
     let root = repo_root();
     let dir =
         target_dir(&root).unwrap().join(format!("xtask-selftest-update-{}", std::process::id()));

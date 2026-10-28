@@ -15,7 +15,7 @@ fn parses_the_command_line() {
     let o = parse_args(args(&[])).unwrap().unwrap();
     assert_eq!(o, Options::default());
     assert_eq!(o.runs, 5);
-    assert_eq!(o.thresholds, Thresholds { time_pct: 5.0, mem_pct: 2.0 });
+    assert_eq!(o.thresholds, ThresholdOverrides::default());
 
     let o = parse_args(args(&[
         "--compiler",
@@ -30,6 +30,9 @@ fn parses_the_command_line() {
         "--threshold-time=12.5",
         "--threshold-mem",
         "0",
+        "--threshold-steps=1",
+        "--threshold-bytes",
+        "3",
         "-v",
         "bench/oven",
     ]))
@@ -41,7 +44,15 @@ fn parses_the_command_line() {
     assert_eq!(o.compare_with, Some(PathBuf::from("clang++-22")));
     assert_eq!(o.filter.as_deref(), Some("oven"));
     assert_eq!(o.runs, 7);
-    assert_eq!(o.thresholds, Thresholds { time_pct: 12.5, mem_pct: 0.0 });
+    assert_eq!(
+        o.thresholds,
+        ThresholdOverrides {
+            time_pct: Some(12.5),
+            mem_pct: Some(0.0),
+            steps_pct: Some(1.0),
+            bytes_pct: Some(3.0)
+        }
+    );
     assert_eq!(o.paths, [PathBuf::from("bench/oven")]);
 
     assert_eq!(parse_args(args(&["-h"])).unwrap(), None);
@@ -50,6 +61,8 @@ fn parses_the_command_line() {
         &["--runs=x"],
         &["--threshold-time", "-1"],
         &["--threshold-mem=nan"],
+        &["--threshold-steps", "x"],
+        &["--threshold-bytes"],
         &["--record=yes"],
         &["--compiler"],
         &["--jobs", "2"],
@@ -137,7 +150,11 @@ fn smoke_record_compare_regress() {
     assert!(base.entries["answer"].contains_key("clang"));
 
     // 2. Compare against it (thresholds wide enough for any host noise).
-    let loose = Thresholds { time_pct: 1000.0, mem_pct: 1000.0 };
+    let loose = ThresholdOverrides {
+        time_pct: Some(1000.0),
+        mem_pct: Some(1000.0),
+        ..ThresholdOverrides::default()
+    };
     let opts = Options { runs: 3, thresholds: loose, ..Options::default() };
     let r = execute(&opts, &lay, clang, &tiny).unwrap();
     assert!(!r.failing, "{r:?}");
@@ -169,5 +186,84 @@ fn smoke_record_compare_regress() {
     assert!(!lay.baselines.join("broken.json").exists());
 
     assert!(!lay.scratch.exists(), "scratch is cleaned up");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// Constexpr counters, recorded and judged, with a stand-in kiln that
+/// compiles with clang and "reports" the canned `<entry>.oven.jsonl`.
+#[test]
+fn constexpr_counters_with_a_fake_kiln() {
+    if identify(Path::new("clang++-19")).is_err() {
+        eprintln!("skipping: clang++-19 not available");
+        return;
+    }
+    let dir = scratch("oven");
+    let lay = layout(&dir);
+    let kiln = lay.root.join("xtask/fixtures/fake-kiln/kiln");
+    let counted = [lay.bench.join("oven/counted.cpp")];
+    let loose = ThresholdOverrides {
+        time_pct: Some(1000.0),
+        mem_pct: Some(1000.0),
+        ..ThresholdOverrides::default()
+    };
+
+    // 1. Record: the report's total lands in the baseline; the report flag
+    //    is not part of the recorded flags.
+    let opts = Options { runs: 2, record: true, ..Options::default() };
+    let r = execute(&opts, &lay, &kiln, &counted).unwrap();
+    assert!(!r.failing && r.new == 1, "{r:?}");
+    let base_path = lay.baselines.join("oven.json");
+    let base = BaselineFile::load(&base_path, "oven").unwrap();
+    let m = &base.entries["counted"]["kiln"].measurement;
+    let counters = m.oven.expect("counters recorded");
+    assert_eq!(
+        (counters.steps, counters.bytes, counters.peak_bytes, counters.calls, counters.evaluations),
+        (116, 40, 32, 3, 2)
+    );
+    assert!(!m.flags.contains("constexpr-report"), "{}", m.flags);
+
+    // 2. Unchanged counters compare clean.
+    let opts = Options { runs: 2, thresholds: loose, ..Options::default() };
+    let r = execute(&opts, &lay, &kiln, &counted).unwrap();
+    assert!(!r.failing && r.regressed == 0, "{r:?}");
+
+    // 3. Bytes 33% worse than the baseline is inside the entry's
+    //    `threshold-bytes: 50`; one step more is past the 0% default.
+    let doctor = |steps: u64, bytes: u64| {
+        let mut file = BaselineFile::load(&base_path, "oven").unwrap();
+        let entry = file.entries.get_mut("counted").unwrap().get_mut("kiln").unwrap();
+        let counters = entry.measurement.oven.as_mut().unwrap();
+        (counters.steps, counters.bytes) = (steps, bytes);
+        std::fs::write(&base_path, file.to_json("oven").to_pretty()).unwrap();
+    };
+    doctor(116, 30);
+    let r = execute(&opts, &lay, &kiln, &counted).unwrap();
+    assert!(!r.failing && r.regressed == 0, "{r:?}");
+    doctor(115, 40);
+    let r = execute(&opts, &lay, &kiln, &counted).unwrap();
+    assert!(r.failing && r.regressed == 1, "{r:?}");
+    // ... unless the command line widens the step threshold.
+    let wide = ThresholdOverrides { steps_pct: Some(1.0), ..loose };
+    let o = Options { runs: 2, thresholds: wide, ..Options::default() };
+    let r = execute(&o, &lay, &kiln, &counted).unwrap();
+    assert!(!r.failing && r.regressed == 0, "{r:?}");
+    // Fewer steps than the baseline is an improvement.
+    doctor(200, 40);
+    let r = execute(&opts, &lay, &kiln, &counted).unwrap();
+    assert!(!r.failing && r.improved == 1, "{r:?}");
+
+    // 4. An `oven:` budget breach fails the entry.
+    let over = [lay.bench.join("oven/over-budget.cpp")];
+    let r = execute(&opts, &lay, &kiln, &over).unwrap();
+    assert!(r.failing && r.failed == 1, "{r:?}");
+
+    // 5. clang reports no counters: measured as usual, none recorded.
+    let clang = Path::new("clang++-19");
+    let opts = Options { runs: 2, record: true, ..Options::default() };
+    let r = execute(&opts, &lay, clang, &counted).unwrap();
+    assert!(!r.failing, "{r:?}");
+    let base = BaselineFile::load(&base_path, "oven").unwrap();
+    assert!(base.entries["counted"]["clang"].measurement.oven.is_none());
+
     std::fs::remove_dir_all(&dir).unwrap();
 }

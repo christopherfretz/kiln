@@ -1,0 +1,2 @@
+{"loc":"@SRC@:4:1","kind":"static_assert","steps":116,"bytes":0,"peak_bytes":0,"calls":1,"allocs":0,"wall_us":1}
+{"total":{"steps":116,"bytes":0,"peak_bytes":0,"calls":1,"allocs":0,"wall_us":1,"evaluations":1}}

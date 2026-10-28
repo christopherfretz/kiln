@@ -136,6 +136,15 @@ pub enum StdoutExpect {
     File(PathBuf),
 }
 
+/// Standard input of a `run` test's binary.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum StdinInput {
+    /// The `run-stdin:` lines, each `\n`-terminated.
+    Inline(String),
+    /// `run-stdin-file:`, relative to the directory containing the test.
+    File(PathBuf),
+}
+
 /// Everything the directive header says about one test.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TestSpec {
@@ -147,9 +156,17 @@ pub struct TestSpec {
     pub strict_diags: bool,
     pub stdout: Option<StdoutExpect>,
     pub exit: Option<i32>,
+    /// Arguments passed to the test binary (and the oracle's).
+    pub run_args: Vec<String>,
+    /// Standard input of the test binary (and the oracle's); `None` is empty.
+    pub stdin: Option<StdinInput>,
+    /// Extra environment variables of the test binary (and the oracle's), in
+    /// directive order; names are unique.
+    pub env: Vec<(String, String)>,
     /// Compare against the oracle compiler (default: on for `run`/`pp`).
     pub oracle: bool,
-    pub oven: Option<OvenBudget>,
+    /// `oven:` budgets: at most one unlocated, at most one per location.
+    pub oven: Vec<OvenBudget>,
     pub skip: Vec<Marker>,
     pub xfail: Vec<Marker>,
 }
@@ -167,7 +184,7 @@ impl TestSpec {
 
     /// Does this test use directives only kiln can check?
     pub fn is_kiln_specific(&self) -> bool {
-        self.oven.is_some()
+        !self.oven.is_empty()
     }
 }
 
@@ -202,14 +219,20 @@ struct Parser {
     stdout_lines: Option<String>,
     stdout_file: Option<PathBuf>,
     exit: Option<i32>,
+    run_args: Vec<String>,
+    stdin_lines: Option<String>,
+    stdin_file: Option<PathBuf>,
+    env: Vec<(String, String)>,
     oracle: Option<bool>,
-    oven: Option<OvenBudget>,
+    oven: Vec<OvenBudget>,
+    oven_lines: Vec<usize>,
     skip: Vec<Marker>,
     xfail: Vec<Marker>,
     /// Lines of directives whose validity depends on `expect`.
     run_only: Vec<(usize, &'static str)>,
     oracle_line: usize,
     stdout_file_line: usize,
+    stdin_file_line: usize,
 }
 
 impl Parser {
@@ -225,13 +248,19 @@ impl Parser {
             stdout_lines: None,
             stdout_file: None,
             exit: None,
+            run_args: Vec::new(),
+            stdin_lines: None,
+            stdin_file: None,
+            env: Vec::new(),
             oracle: None,
-            oven: None,
+            oven: Vec::new(),
+            oven_lines: Vec::new(),
             skip: Vec::new(),
             xfail: Vec::new(),
             run_only: Vec::new(),
             oracle_line: 0,
             stdout_file_line: 0,
+            stdin_file_line: 0,
         }
     }
 
@@ -284,10 +313,31 @@ impl Parser {
                     _ => self.err(line, format!("`exit` must be 0..=255, got `{value}`")),
                 }
             }
+            "run-args" => {
+                self.run_only.push((line, "run-args"));
+                match split_args(value) {
+                    Ok(mut a) => self.run_args.append(&mut a),
+                    Err(e) => self.err(line, e),
+                }
+            }
+            "run-stdin" => {
+                self.run_only.push((line, "run-stdin"));
+                let s = self.stdin_lines.get_or_insert_with(String::new);
+                s.push_str(value);
+                s.push('\n');
+            }
+            "run-stdin-file" => self.stdin_file_directive(line, value),
+            "env" => self.env_directive(line, value),
             "oracle" => self.oracle_directive(line, value),
             "oven" => match parse_oven(value) {
-                Ok(_) if self.oven.is_some() => self.err(line, "duplicate `oven`"),
-                Ok(b) => self.oven = Some(b),
+                Ok(b) if self.oven.iter().any(|o| o.at == b.at) => match b.at {
+                    Some(at) => self.err(line, format!("duplicate `oven` for location {at}")),
+                    None => self.err(line, "duplicate `oven` without a location"),
+                },
+                Ok(b) => {
+                    self.oven.push(b);
+                    self.oven_lines.push(line);
+                }
                 Err(e) => self.err(line, e),
             },
             "skip" | "xfail" => self.marker(line, name, qualifier, value),
@@ -347,6 +397,39 @@ impl Parser {
         } else {
             self.stdout_file = Some(PathBuf::from(value));
             self.stdout_file_line = line;
+        }
+    }
+
+    fn stdin_file_directive(&mut self, line: usize, value: &str) {
+        self.run_only.push((line, "run-stdin-file"));
+        if self.stdin_file.is_some() {
+            self.err(line, "duplicate `run-stdin-file`");
+        } else if value.is_empty() {
+            self.err(line, "`run-stdin-file` requires a path");
+        } else {
+            self.stdin_file = Some(PathBuf::from(value));
+            self.stdin_file_line = line;
+        }
+    }
+
+    /// `env: NAME=value`; the value is the rest of the line, verbatim.
+    fn env_directive(&mut self, line: usize, value: &str) {
+        self.run_only.push((line, "env"));
+        let Some((name, v)) = value.split_once('=') else {
+            self.err(line, format!("expected `env: NAME=value`, got `{value}`"));
+            return;
+        };
+        let valid = name.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
+            && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+        if !valid {
+            self.err(
+                line,
+                format!("bad environment variable name `{name}` ([A-Za-z_][A-Za-z0-9_]*)"),
+            );
+        } else if self.env.iter().any(|(n, _)| n == name) {
+            self.err(line, format!("duplicate `env` for `{name}`"));
+        } else {
+            self.env.push((name.to_owned(), v.to_owned()));
         }
     }
 
@@ -412,6 +495,21 @@ impl Parser {
         if self.oracle.is_some() && !matches!(expect, Expect::Run | Expect::Pp) {
             self.err(self.oracle_line, "`oracle` only applies to `run` and `pp` tests");
         }
+        if expect == Expect::Pp {
+            for line in std::mem::take(&mut self.oven_lines) {
+                self.err(line, "`oven` does not apply to `pp` tests (nothing is evaluated)");
+            }
+        }
+        let stdin = match (self.stdin_lines.take(), self.stdin_file.take()) {
+            (Some(_), Some(_)) => {
+                let line = self.stdin_file_line;
+                self.err(line, "`run-stdin` and `run-stdin-file` are mutually exclusive");
+                None
+            }
+            (Some(s), None) => Some(StdinInput::Inline(s)),
+            (None, Some(p)) => Some(StdinInput::File(p)),
+            (None, None) => None,
+        };
         let stdout = match (self.stdout_lines.take(), self.stdout_file.take()) {
             (Some(_), Some(_)) => {
                 let line = self.stdout_file_line;
@@ -437,6 +535,9 @@ impl Parser {
             strict_diags: self.strict_diags,
             stdout,
             exit: self.exit,
+            run_args: self.run_args,
+            stdin,
+            env: self.env,
             oracle: self.oracle.unwrap_or(matches!(expect, Expect::Run | Expect::Pp)),
             oven: self.oven,
             skip: self.skip,
@@ -455,6 +556,10 @@ fn is_known_key(k: &str) -> bool {
             | "stdout"
             | "stdout-file"
             | "exit"
+            | "run-args"
+            | "run-stdin"
+            | "run-stdin-file"
+            | "env"
             | "oracle"
             | "oven"
             | "skip"
@@ -633,12 +738,84 @@ mod tests {
 
     #[test]
     fn oven_budget() {
+        use crate::util::header::{Counter, OvenLoc};
         let s = ok("//@ oven: bytes<=4096 steps<=100\n");
-        assert_eq!(s.oven, Some(OvenBudget { steps: Some(100), bytes: Some(4096) }));
+        assert_eq!(
+            s.oven,
+            [OvenBudget { at: None, limits: vec![(Counter::Steps, 100), (Counter::Bytes, 4096)] }]
+        );
         assert!(s.is_kiln_specific());
+        assert!(!ok("int x;\n").is_kiln_specific());
+        let s = ok("//@ oven: evaluations<=3\n//@ oven: 12:1 steps<=5\n//@ oven: 13 calls<=1\n");
+        assert_eq!(s.oven.len(), 3);
+        assert_eq!(s.oven[1].at, Some(OvenLoc { line: 12, col: Some(1) }));
         assert!(errs("//@ oven: steps<100\n")[0].contains("bad budget"));
         assert!(errs("//@ oven: time<=1\n")[0].contains("unknown budget"));
         assert!(errs("//@ oven: steps<=1 steps<=2\n")[0].contains("duplicate"));
+        assert!(errs("//@ oven: steps<=1\n//@ oven: bytes<=2\n")[0].contains("without a location"));
+        assert!(
+            errs("//@ oven: 4:2 steps<=1\n//@ oven: 4:2 bytes<=2\n")[0]
+                .contains("duplicate `oven` for location 4:2")
+        );
+        // Different locations, including a line and a line:col on that line, are fine.
+        assert_eq!(ok("//@ oven: 4 steps<=1\n//@ oven: 4:2 bytes<=2\n").oven.len(), 2);
+        assert_eq!(
+            errs("//@ expect: pp\n//@ oven: steps<=1\n"),
+            ["line 2: `oven` does not apply to `pp` tests (nothing is evaluated)"]
+        );
+    }
+
+    #[test]
+    fn run_inputs() {
+        let s = ok(concat!(
+            "//@ expect: run\n",
+            "//@ run-args: a 'b c'\n",
+            "//@ run-args: -x\n",
+            "//@ run-stdin: line one\n",
+            "//@ run-stdin:\n",
+            "//@ env: KILN_A=1\n",
+            "//@ env: _B=x=y z\n",
+            "//@ env: EMPTY=\n",
+        ));
+        assert_eq!(s.run_args, ["a", "b c", "-x"]);
+        assert_eq!(s.stdin, Some(StdinInput::Inline("line one\n\n".into())));
+        assert_eq!(
+            s.env,
+            [
+                ("KILN_A".to_owned(), "1".to_owned()),
+                ("_B".to_owned(), "x=y z".to_owned()),
+                ("EMPTY".to_owned(), String::new())
+            ]
+        );
+        let s = ok("//@ expect: run\n//@ run-stdin-file: Inputs/in.txt\n");
+        assert_eq!(s.stdin, Some(StdinInput::File("Inputs/in.txt".into())));
+        let s = ok("//@ expect: run\n");
+        assert!(s.run_args.is_empty() && s.stdin.is_none() && s.env.is_empty());
+
+        let e = errs(concat!(
+            "//@ expect: run\n",
+            "//@ run-stdin: a\n",
+            "//@ run-stdin-file: f\n",
+            "//@ run-stdin-file: g\n",
+            "//@ env: 1X=a\n",
+            "//@ env: NOEQ\n",
+            "//@ env: A=1\n",
+            "//@ env: A=2\n",
+            "//@ run-args: 'open\n",
+        ));
+        assert_eq!(e.len(), 6, "{e:#?}");
+        assert!(e[0].contains("duplicate `run-stdin-file`"));
+        assert!(e[1].contains("bad environment variable name `1X`"));
+        assert!(e[2].contains("expected `env: NAME=value`"));
+        assert!(e[3].contains("duplicate `env` for `A`"));
+        assert!(e[4].contains("unterminated"));
+        assert!(e[5].starts_with("line 3:") && e[5].contains("mutually exclusive"));
+        let e = errs("//@ run-args: x\n//@ run-stdin: y\n//@ env: A=b\n");
+        assert_eq!(e.len(), 3, "{e:#?}");
+        assert!(errs("//@ run-stdin-file: z\n")[0].contains("only applies to `expect: run`"));
+        for (k, msg) in ["run-args", "run-stdin", "env"].iter().zip(&e) {
+            assert!(msg.contains(&format!("`{k}` only applies to `expect: run`")), "{msg}");
+        }
     }
 
     #[test]

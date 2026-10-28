@@ -62,13 +62,18 @@ directives are also ERRORs.
 | `stdout: <text>` | `run` only. Each line contributes its value, trimmed, plus `\n`. Repeated lines concatenate in order. |
 | `stdout-file: <path>` | `run` only. The expected stdout is the file's exact contents. The path is relative to the test's directory. It cannot be combined with `stdout:`. |
 | `exit: <code>` | `run` only. Expected exit code. Default 0. |
+| `run-args: <args>` | `run` only. Program arguments, split shell-style as for `args:`. It may be repeated, and the arguments accumulate. |
+| `run-stdin: <text>` | `run` only. Each line contributes its value, trimmed, plus `\n`, to the program's stdin, as for `stdout:`. Repeated lines concatenate in order. |
+| `run-stdin-file: <path>` | `run` only. The program's stdin is the file's exact contents. The path is relative to the test's directory (use `Inputs/`, which discovery skips). It cannot be combined with `run-stdin:`. A missing file is an ERROR. |
+| `env: <NAME>=<value>` | `run` only. Sets an environment variable for the program (the inherited environment is otherwise kept). `NAME` matches `[A-Za-z_][A-Za-z0-9_]*`; the value is the rest of the line, trimmed, and may be empty or contain `=`. It may be repeated, once per name. |
 | `oracle: clang \| none` | `run`/`pp` only. Whether to compare with the oracle. Defaults to `clang` for `run` and `pp`. |
-| `oven: steps<=N bytes<=M` | kiln-specific evaluation budget. Either bound may be omitted. See "kiln-specific tests". |
+| `oven: [<line>[:<col>]] <counter><=N ...` | kiln-specific constexpr budget; `<counter>` is `steps`, `bytes`, `peak_bytes`, `calls`, `allocs` or `evaluations`. Not for `pp`. See "kiln-specific tests". |
 | `skip[(kiln\|clang)]: <reason>` | Do not run. A qualified marker applies only to that compiler kind. |
 | `xfail[(kiln\|clang)]: <reason>` | Expected to FAIL. Qualified as for `skip`. |
 
-`expect`, `std`, `stdout-file`, `exit`, `oracle`, `oven` and each
-`skip`/`xfail` qualifier may appear at most once. If both a qualified marker
+`expect`, `std`, `stdout-file`, `run-stdin-file`, `exit`, `oracle`, and each
+`skip`/`xfail` qualifier may appear at most once; `oven` at most once per
+location (and once without one). If both a qualified marker
 and an unqualified marker apply, the qualified one's reason is reported.
 
 The compiler kind is detected from the first line of `<compiler> --version`.
@@ -115,7 +120,9 @@ repo-relative name:
 <compiler> [-x c | -x c++ (for .h)] -std=<std> <mode flags> <args...> <name> [-o <out>]
 ```
 
-`.c` files get `-x c`, and `.h` test files get `-x c++`.
+`.c` files get `-x c`, and `.h` test files get `-x c++`. A kiln-specific test
+compiled by kiln also gets `-fconstexpr-report=<scratch>/constexpr-report.jsonl`
+last (see "kiln-specific tests").
 
 Any compile ends as a **FAIL** ("compiler crashed" / "compiler hung") if:
 
@@ -132,21 +139,26 @@ satisfies `compile-fail`.
 | `run` | compile and link to `<scratch>/test.out` | the compile succeeds and the diags match; the binary exits normally within `--timeout`; stdout equals the expectation exactly (if one is given); the exit code equals `exit:` (default 0); the oracle agrees (below) |
 | `pp` | `-E -P` | exit 0; the diags match; the output equals `<test>.expected` after normalization (if that file exists); the oracle agrees (below) |
 
-The `run` binary runs with cwd = its scratch dir, an empty stdin, and no
-arguments. A `run-args:` directive does not exist yet.
+The `run` binary runs with cwd = its scratch dir, the `run-args:` arguments,
+the inherited environment plus `env:`, and the `run-stdin:` /
+`run-stdin-file:` bytes on stdin (empty without them). The oracle's binary
+gets the same.
 
 ### Oracle
 
 For `run`, the oracle compiles the test with the same flags into
 `oracle.out`, which is then run. Its stdout must be byte-identical to the test
-binary's, and so must its exit status.
+binary's, and so must its exit status. If the oracle's binary is killed by a
+signal or exceeds `--timeout`, the test is an **ERROR**: the reference itself
+is broken, so there is nothing to compare with.
 
 For `pp`, the oracle's `-E -P` output must equal the compiler's after
 normalization.
 
 The oracle is run even when the compiler under test is itself clang. This
-keeps the harness's own code paths exercised. If the oracle compile fails, the
-test is an **ERROR**: the test is wrong, not the compiler.
+keeps the harness's own code paths exercised. If the oracle compile fails or
+hangs (exceeds the compile timeout), the test is an **ERROR**: the test is
+wrong, not the compiler.
 
 ### pp normalization
 
@@ -170,9 +182,25 @@ A test with an `oven:` directive is kiln-specific. When the compiler is not
 kiln, the test is a SKIP with the reason "not supported by this compiler
 (kiln-specific `oven:` directive)".
 
-When the compiler is kiln, the test is currently also a SKIP, because the
-counters protocol between kiln and the harness is not defined yet. See the
-open questions.
+When the compiler is kiln, its compile gets
+`-fconstexpr-report=<scratch>/constexpr-report.jsonl` (a stale file is
+removed first), and the report is read in the format of `spec/oven.md`
+"Reporting protocol". Tests without `oven:` do not get the flag. Budgets are
+checked only after the test kind's own checks pass, so a test that fails to
+compile fails for that reason. Then:
+
+- No readable report, or a malformed one: **FAIL** (kiln broke the protocol).
+- `oven: <counter><=N ...` without a location bounds the report's `total`.
+  Its `peak_bytes` is the maximum over the evaluations, and `evaluations`
+  their count.
+- `oven: <line>[:<col>] <counter><=N ...` bounds the evaluations whose `loc`
+  is in the test file at that line (and column, if given), combined as for
+  the total (sums; maximum for `peak_bytes`; count for `evaluations`). If no
+  evaluation matches, the test FAILs: a budget on nothing is a stale budget.
+- Each bound is inclusive: a counter above it is a **FAIL**, naming the
+  location, the counter, its value and the budget.
+
+The report's total is listed with the commands under `-v`.
 
 ## Outcomes
 
@@ -181,8 +209,9 @@ The outcomes are evaluated in this order:
 1. The file cannot be read, or its directives are invalid: **ERROR**.
 2. A `skip` marker applies: **SKIP**.
 3. The test is kiln-specific and the compiler is not kiln: **SKIP**.
-4. The test runs. A broken test (missing `stdout-file`, oracle rejection, I/O
-   error) is **ERROR**, even when an `xfail` marker applies.
+4. The test runs. A broken test (missing `stdout-file` or `run-stdin-file`,
+   oracle rejection, oracle hang or crash, I/O error) is **ERROR**, even when
+   an `xfail` marker applies.
 5. Otherwise, a failure is **FAIL**, or **XFAIL** if an `xfail` marker
    applies. Success is **PASS**, or **XPASS** if an `xfail` marker applies.
    An XPASS counts as a failure, so the stale marker gets removed.
@@ -208,6 +237,19 @@ Scratch files live in `<target>/xtask-test/run-<pid>-<nanos>/t<index>/`. Each
 test's directory is removed when the test finishes, and the run directory is
 removed at the end of the run.
 
+## CI
+
+`cargo xtask ci` runs `cargo fmt --all --check`, `cargo clippy --workspace
+--all-targets -- -D warnings` and `cargo test --workspace`, then, as a corpus
+self-check, `cargo xtask test --compiler clang++-19`: the seed corpus must
+pass with the reference compiler, or the corpus is wrong. When `clang++-19`
+is not on PATH (`--version` cannot be run), that step is skipped with a note
+on stderr and `ci` still succeeds. The end-to-end tests in
+`xtask/src/test/tests.rs` and `xtask/src/bench/tests.rs` skip themselves with
+a note the same way. GitHub CI (`.github/workflows/ci.yml`, ubuntu-24.04)
+installs `clang-19 libc++-19-dev libc++abi-19-dev` and runs `cargo xtask ci`,
+so neither is skipped there.
+
 ## Tests backing this spec
 
 - `xtask/src/test/{directives,diag_parse,compare}.rs` and
@@ -217,7 +259,12 @@ removed at the end of the run.
 - `xtask/src/test/tests.rs`:
   - the seed corpus passes with clang, and every directive kind appears in it;
   - `xtask/fixtures/basic/` (one fixture per outcome, with the expected status
-    as the file-name prefix);
+    as the file-name prefix), including program arguments, stdin and
+    environment, and the oracle's binary hanging or crashing;
+  - `xtask/fixtures/oven/`: `oven:` budgets, run against
+    `xtask/fixtures/fake-kiln/kiln`, a shell script that identifies as kiln,
+    compiles with clang and writes the canned report `<test>.oven.jsonl`
+    (`@SRC@` replaced by the source path) to the `-fconstexpr-report=` path;
   - `xtask/fixtures/oracle/` (oracle disagreement, run with `--oracle
     clang++-22`; skipped if that compiler is absent);
   - `--filter`;
@@ -225,10 +272,8 @@ removed at the end of the run.
 
 ## Open questions
 
-- **oven counters protocol.** kiln needs to report constexpr steps and bytes
-  per evaluation, for example with `-fconstexpr-report=<file>` in a format the
-  harness parses. Until that exists, `oven:` tests are skipped on kiln too.
-- **`run-args:` / `run-stdin:`.** Programs cannot receive argv or stdin yet.
-  See `tests/conformance/basic.start.main/argv.cpp`.
-- **`xtask ci`** does not run `xtask test` yet. Add it once kiln compiles the
-  seed corpus, possibly with `--compiler clang++-19` as an interim self-check.
+- **`xtask ci` with kiln.** The corpus self-check uses clang++-19. Once kiln
+  compiles the seed corpus, `ci` should also run `xtask test` with kiln.
+- **Located `oven:` budgets in headers.** A location names a line of the test
+  file; there is no way yet to bound an evaluation located in an included
+  file, other than through the total.

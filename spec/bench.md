@@ -1,6 +1,7 @@
 # Bench: `cargo xtask bench`
 
-Status: implemented (WP-004). Code: `xtask/src/bench/`, with shared pieces in
+Status: implemented (WP-004; constexpr counters and per-entry thresholds
+WP-006). Code: `xtask/src/bench/`, with shared pieces in
 `xtask/src/util/` (`process.rs` measured runs, `header.rs` the `//@` scanner,
 `json.rs` the record format). Policy background is `docs/VALIDATION.md`
 "Performance tracking"; this file is the normative contract for the harness,
@@ -22,6 +23,11 @@ cargo xtask bench [options] [paths...]
 | `--runs <N>` | Runs per entry, N >= 1. Default 5. |
 | `--threshold-time <PCT>` | Allowed wall-clock regression, percent, >= 0. Default 5. |
 | `--threshold-mem <PCT>` | Allowed peak-RSS regression, percent, >= 0. Default 2. |
+| `--threshold-steps <PCT>` | Allowed constexpr `steps` regression, percent, >= 0. Default 0. |
+| `--threshold-bytes <PCT>` | Allowed constexpr `bytes`/`peak_bytes` regression, percent, >= 0. Default 2. |
+
+A `--threshold-*` option overrides the same entry's `threshold-*:` directive
+(below), which overrides the default. Options apply to every selected entry.
 | `-v, --verbose` | Print each compiler command. |
 | `-h, --help` | Usage. |
 
@@ -35,7 +41,7 @@ Exit status:
 | Code | Meaning |
 |---|---|
 | 0 | Every entry was measured, and none regressed beyond a threshold (or `--record` was given). |
-| 1 | An entry failed (directive error, compile error, crash, timeout) for either compiler, or an entry regressed and `--record` was not given. |
+| 1 | An entry failed (directive error, compile error, crash, timeout, a bad or over-budget constexpr report) for either compiler, or an entry regressed and `--record` was not given. |
 | 2 | Usage or infrastructure error: bad option, no entries selected, a compiler that cannot run `--version`, an unreadable baseline file, an unwritable output. |
 
 ## Entries
@@ -49,14 +55,17 @@ directly in `bench/` (no group) is an error. Entries are sorted by id and run
 other for the CPU.
 
 Every entry is self-contained: no includes outside the standard library, no
-generated inputs. An entry measures one thing; it should take 0.2–3 s with the
-reference compiler (the `pp` group is the exception: it measures header
-preprocessing, which is fast). Constant-evaluation entries end in
-`static_assert`s so that a compiler which skips the work cannot look fast.
+generated inputs. An entry may include itself (by its literal file name, not
+`__FILE__`) to repeat a workload; it stays one file. An entry measures one
+thing; it should take 0.5–3 s with the reference compiler: on a loaded host,
+~0.1 s entries are dominated by process start-up and scheduling noise.
+Constant-evaluation entries end in `static_assert`s so that a compiler which
+skips the work cannot look fast.
 
-Groups in the seed corpus: `pp` (preprocessing of heavy libc++ headers), `oven`
-(constant evaluation), `frontend` (template-heavy parsing and semantic
-analysis).
+Groups in the seed corpus: `pp` (preprocessing: the libc++ include graph with a
+header-style configuration layer, X-macro tables, Boost.PP-style recursive
+expansion), `oven` (constant evaluation), `frontend` (template-heavy parsing
+and semantic analysis).
 
 ## Directives
 
@@ -69,7 +78,11 @@ scanner is shared; the keys are not.
 | `std: <std>` | Language standard, one of the C++ values accepted by `cargo xtask test`. Default `c++26`. |
 | `args: <flags>` | Extra compiler flags, whitespace-split; may repeat (concatenated in order). |
 | `mode: syntax\|pp\|emit-llvm` | What the compiler does (below). Default `syntax`. |
-| `oven: steps=N bytes=N` | Accepted and validated, ignored for now (reserved for Oven budget counters). |
+| `oven: [<line>[:<col>]] <counter><=N ...` | A constexpr budget, as in `cargo xtask test` (`spec/harness.md` "kiln-specific tests"); may repeat, once per location. Checked on every kiln run; a breach fails the entry. An error with `mode: pp`. |
+| `threshold-time: <PCT>` | This entry's allowed wall-clock regression (default 5). |
+| `threshold-mem: <PCT>` | This entry's allowed peak-RSS regression (default 2). |
+| `threshold-steps: <PCT>` | This entry's allowed constexpr `steps` regression (default 0). |
+| `threshold-bytes: <PCT>` | This entry's allowed constexpr `bytes`/`peak_bytes` regression (default 2). |
 
 | Mode | Flags |
 |---|---|
@@ -80,19 +93,22 @@ scanner is shared; the keys are not.
 Output goes to `/dev/null` so disk I/O does not enter the timing.
 
 A `cargo xtask test` key (`expect`, `diag`, `strict-diags`, `stdout`,
-`stdout-file`, `exit`, `oracle`, `skip`, `xfail`) is an error, as is an
-unknown key, a missing value, or a repeated `std`/`mode`/`oven`. A directive
+`stdout-file`, `exit`, `run-args`, `run-stdin`, `run-stdin-file`, `env`,
+`oracle`, `skip`, `xfail`) is an error, as is an unknown key, a missing value,
+a repeated `std`/`mode`/`threshold-*`, an `oven` repeated for one location, or
+a threshold that is not a non-negative number. A directive
 error fails the entry (exit 1) and the entry is not measured.
 
 The command is
 
 ```
-<compiler> -std=<std> <mode flags> <args...> bench/<group>/<name>.cpp
+<compiler> -std=<std> <mode flags> <args...> [-fconstexpr-report=<scratch file>] bench/<group>/<name>.cpp
 ```
 
 run from the repo root, with stdin and stdout closed (`/dev/null`) and stderr
 captured (shown, first 5 lines, if the compile fails). The recorded `flags`
-string is everything between the compiler and the file name.
+string is everything between the compiler and the file name, except the
+report flag, which is a measurement detail rather than a configuration.
 
 ## Measurement
 
@@ -118,6 +134,15 @@ the fixed 300 s timeout) fails the entry, and its remaining runs are skipped.
   warning (`noisy`); raise `--runs` or rerun on a quieter host.
 - The 1-minute load average (`/proc/loadavg`) is printed and recorded; a load
   above the CPU count is warned about.
+- **Constexpr counters** (kiln only, not in `mode: pp`): every run gets
+  `-fconstexpr-report=<scratch>/constexpr-report.jsonl` (removed before the
+  run), and the report (`spec/oven.md` "Reporting protocol") is read after it.
+  A missing or malformed report, or an `oven:` budget breach, fails the entry.
+  The counters are deterministic, so every run must report the same total;
+  a difference fails the entry ("nondeterministic constexpr counters"). The
+  total's `steps`, `bytes`, `peak_bytes`, `calls`, `allocs` and `evaluations`
+  are recorded (`wall_us` is not: the wall clock is measured already). clang
+  and other compilers get no flag and record no counters.
 
 ## Regression policy
 
@@ -131,10 +156,17 @@ same compiler kind** (`kiln`, `clang` or `other`, from the first line of
 | `advisory` | The baseline differs in mode, flags, source hash, compiler version (first `--version` line), or host (arch, CPU count). Deltas are printed but not judged. | no |
 | `REGRESSED (time)` | `cur.min > base.median * (1 + t)` and `cur.min - base.median >= 2 ms`. | yes, unless `--record` |
 | `REGRESSED (mem)` | `cur.rss > base.rss * (1 + m)`, both sides measured. | yes, unless `--record` |
-| `improved` | `cur.median < base.min * (1 - t)` and `base.min - cur.median >= 2 ms`, or `cur.rss < base.rss * (1 - m)`. | no |
+| `REGRESSED (steps)` | `cur.steps > base.steps * (1 + s)`, both sides have counters. | yes, unless `--record` |
+| `REGRESSED (bytes)` | `cur.bytes > base.bytes * (1 + b)` or the same for `peak_bytes`, both sides have counters. | yes, unless `--record` |
+| `improved` | `cur.median < base.min * (1 - t)` and `base.min - cur.median >= 2 ms`, or `cur.rss < base.rss * (1 - m)`, or a counter below its baseline by the same rules. | no |
 | `ok` | Anything else. | no |
 
-`t` and `m` are `--threshold-time` and `--threshold-mem` as fractions. The
+Several regressions are reported together, e.g. `REGRESSED (time, steps)`.
+`t`, `m`, `s` and `b` are the effective time, memory, steps and bytes
+thresholds as fractions (option, else entry directive, else default). The
+counters are exact, so they need no floor and default to tight thresholds:
+any extra step is a regression. `calls`, `allocs` and `evaluations` are
+recorded for diagnosis but not judged. The
 time rule compares the **fastest** current run against the baseline's
 **typical** run: host noise only ever adds time, so a load spike moves the
 median but rarely every run, while a real slowdown moves them all. The 2 ms
@@ -208,6 +240,7 @@ A **measurement** object:
 | `wall_ms_median`, `wall_ms_min`, `wall_ms_max` | number | Milliseconds (µs precision) |
 | `spread_pct` | number | Percent, 2 decimals |
 | `max_rss_kb` | integer or null | Median peak RSS, KiB; null when not measured |
+| `oven` | object, optional | kiln's constexpr report total: `{"steps", "bytes", "peak_bytes", "calls", "allocs", "evaluations"}`, integers. Absent when the compiler reported none. |
 | `samples_wall_ms`, `samples_rss_kb` | arrays | Every run, in run order (results files only) |
 | `compiler` | string | The path or name the compiler was invoked as |
 | `compiler_version` | string | First line of `--version` |
@@ -258,6 +291,8 @@ kinds. `recorded` is the timestamp of the results file of the recording run.
   RSS, timeout killing the process group, a missing GNU time).
 - `xtask/src/bench/entry.rs`: directive defaults, every key, rejected headers,
   source hashes.
+- `xtask/src/util/oven_report.rs`: report parsing, every rejection, located
+  and total budgets.
 - `xtask/src/bench/stats.rs`: median after dropping min and max, spread.
 - `xtask/src/bench/record.rs`: results and baseline round-trips, timestamps.
 - `xtask/src/bench/compare.rs`: every verdict and threshold boundary, the
@@ -266,4 +301,7 @@ kinds. `recorded` is the timestamp of the results file of the recording run.
   and an end-to-end smoke test with `clang++-19` (skipped when absent) over
   `xtask/fixtures/bench/`: record (with perf.md), compare green, a doctored
   baseline regresses, re-recording replaces it, a broken entry fails and is
-  not recorded.
+  not recorded; and the constexpr counters with `xtask/fixtures/fake-kiln/kiln`
+  (see `spec/harness.md`): recorded, unchanged, within an entry's
+  `threshold-bytes:`, a one-step regression, a `--threshold-steps` override,
+  an improvement, an over-budget entry, and clang recording no counters.

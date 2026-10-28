@@ -16,13 +16,14 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use compare::{RatioRow, Thresholds, Verdict};
+use compare::{RatioRow, ThresholdOverrides, Thresholds, Verdict};
 use entry::{BenchSpec, Entry};
 use record::{Baseline, BaselineFile, CompilerRun, Host, Measurement, Outcome, RunRecord};
 use stats::{Summary, round_to};
 
+use crate::util::oven_report::{self, Counters};
 use crate::util::process::{self, RssProbe, Shown};
-use crate::util::{CompilerId, build_kiln, identify, repo_root, target_dir};
+use crate::util::{CompilerId, CompilerKind, build_kiln, identify, repo_root, target_dir};
 
 pub const USAGE: &str = "\
 usage: cargo xtask bench [options] [paths...]
@@ -43,6 +44,12 @@ options:
                            dropped when N >= 3)
   --threshold-time <PCT>   allowed wall-clock regression in percent (default: 5)
   --threshold-mem <PCT>    allowed peak-RSS regression in percent (default: 2)
+  --threshold-steps <PCT>  allowed constexpr-steps regression in percent (kiln
+                           only; default: 0)
+  --threshold-bytes <PCT>  allowed constexpr bytes/peak_bytes regression in
+                           percent (kiln only; default: 2)
+                           (each --threshold-* overrides the entries'
+                           threshold-* directives, which override the defaults)
   -v, --verbose            print the commands that were run
   -h, --help               this text
 
@@ -65,7 +72,8 @@ pub struct Options {
     pub compare_with: Option<PathBuf>,
     pub filter: Option<String>,
     pub runs: usize,
-    pub thresholds: Thresholds,
+    /// `--threshold-*`; they override the entries' `threshold-*:` directives.
+    pub thresholds: ThresholdOverrides,
     pub verbose: bool,
     pub paths: Vec<PathBuf>,
 }
@@ -79,17 +87,16 @@ impl Default for Options {
             compare_with: None,
             filter: None,
             runs: 5,
-            thresholds: Thresholds::default(),
+            thresholds: ThresholdOverrides::default(),
             verbose: false,
             paths: Vec::new(),
         }
     }
 }
 
-fn parse_pct(flag: &str, v: &str) -> Result<f64, String> {
-    v.parse()
-        .ok()
-        .filter(|p: &f64| p.is_finite() && *p >= 0.0)
+fn parse_pct(flag: &str, v: &str) -> Result<Option<f64>, String> {
+    compare::parse_pct(v)
+        .map(Some)
         .ok_or_else(|| format!("bad {flag} `{v}` (a non-negative percentage)"))
 }
 
@@ -116,11 +123,15 @@ pub fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Option<Optio
                 o.runs =
                     v.parse().ok().filter(|&n| n > 0).ok_or_else(|| format!("bad --runs `{v}`"))?;
             }
-            "--threshold-time" => {
-                o.thresholds.time_pct = parse_pct("--threshold-time", &value("--threshold-time")?)?;
-            }
-            "--threshold-mem" => {
-                o.thresholds.mem_pct = parse_pct("--threshold-mem", &value("--threshold-mem")?)?;
+            f @ ("--threshold-time" | "--threshold-mem" | "--threshold-steps"
+            | "--threshold-bytes") => {
+                let slot = match f {
+                    "--threshold-time" => &mut o.thresholds.time_pct,
+                    "--threshold-mem" => &mut o.thresholds.mem_pct,
+                    "--threshold-steps" => &mut o.thresholds.steps_pct,
+                    _ => &mut o.thresholds.bytes_pct,
+                };
+                *slot = parse_pct(f, &value(f)?)?;
             }
             "--record" | "-v" | "--verbose" if inline.is_some() => {
                 return Err(format!("`{flag}` takes no value"));
@@ -455,7 +466,11 @@ fn judge_all(
                 rows.push(row(e, specs.get(&e.id), base, None, &Verdict::Ok));
             }
             Outcome::Measured(m) => {
-                let v = compare::judge(base, m, opts.thresholds);
+                let mut t = Thresholds::default();
+                if let Some(spec) = specs.get(&e.id) {
+                    t = t.with(&spec.thresholds);
+                }
+                let v = compare::judge(base, m, t.with(&opts.thresholds));
                 match &v {
                     Verdict::New => report.new += 1,
                     Verdict::Ok => {}
@@ -467,8 +482,18 @@ fn judge_all(
             }
         }
     }
-    let header =
-        ["entry", "mode", "base ms", "ms", "time", "spread", "base MB", "MB", "mem", "status"];
+    let mut header =
+        vec!["entry", "mode", "base ms", "ms", "time", "spread", "base MB", "MB", "mem", "status"];
+    // Constexpr counters (kiln only): columns only when some entry has them.
+    let counters =
+        test_run.entries.values().any(|o| o.measurement().is_some_and(|m| m.oven.is_some()));
+    if counters {
+        header.splice(9..9, ["steps", "steps±", "ev bytes", "bytes±"]);
+    } else {
+        for r in &mut rows {
+            r.drain(9..13);
+        }
+    }
     println!();
     print!("{}", compare::render_table(&header, &rows));
     if let Some(r) = oracle_run {
@@ -536,14 +561,28 @@ fn measure(cx: &Ctx<'_>, e: &Entry, spec: &BenchSpec, hash: &str, s: &Subject) -
     flags.extend(spec.mode.flags().iter().map(|f| (*f).to_owned()));
     flags.extend(spec.args.iter().cloned());
     let mut cmd = Command::new(&s.path);
-    cmd.args(&flags).arg(&e.arg).current_dir(&cx.layout.root);
+    cmd.args(&flags);
+    // kiln reports its constexpr counters; the flag is not part of the
+    // recorded `flags`, so it never makes a baseline advisory.
+    let report = (s.id.kind == CompilerKind::Kiln && spec.mode != entry::Mode::Pp)
+        .then(|| cx.layout.scratch.join("constexpr-report.jsonl"));
+    if let Some(r) = &report {
+        let mut flag = std::ffi::OsString::from(oven_report::FLAG);
+        flag.push(r);
+        cmd.arg(flag);
+    }
+    cmd.arg(&e.arg).current_dir(&cx.layout.root);
     if cx.verbose {
         eprintln!("  $ {}", Shown(&cmd));
     }
     let rss_file = cx.layout.scratch.join("rss.txt");
     let mut walls = Vec::with_capacity(cx.runs);
     let mut rss = Vec::with_capacity(cx.runs);
-    for _ in 0..cx.runs {
+    let mut oven: Option<Counters> = None;
+    for run in 1..=cx.runs {
+        if let Some(r) = &report {
+            let _ = std::fs::remove_file(r);
+        }
         let m = match process::run_measured(&cmd, &cx.probe, &rss_file, RUN_TIMEOUT) {
             Ok(m) => m,
             Err(err) => return Outcome::Failed(format!("cannot run {}: {err}", s.path.display())),
@@ -561,6 +600,21 @@ fn measure(cx: &Ctx<'_>, e: &Entry, spec: &BenchSpec, hash: &str, s: &Subject) -
         walls.push(m.wall.as_secs_f64() * 1000.0);
         if let Some(k) = m.max_rss_kb {
             rss.push(k);
+        }
+        if let Some(r) = &report {
+            match read_counters(r, e, spec) {
+                Err(why) => return Outcome::Failed(format!("run {run}: {why}")),
+                Ok(c) => match oven {
+                    Some(first) if first != c => {
+                        return Outcome::Failed(format!(
+                            "nondeterministic constexpr counters: run 1 {}, run {run} {}",
+                            first.describe(),
+                            c.describe()
+                        ));
+                    }
+                    _ => oven = Some(c),
+                },
+            }
         }
     }
     let Some(w) = Summary::of(&walls) else { return Outcome::Failed("no runs".into()) };
@@ -582,12 +636,28 @@ fn measure(cx: &Ctx<'_>, e: &Entry, spec: &BenchSpec, hash: &str, s: &Subject) -
         wall_ms_max: round_to(w.max, 3),
         spread_pct: round_to(w.spread_pct(), 2),
         max_rss_kb,
+        oven,
         samples_wall_ms: walls.iter().map(|&x| round_to(x, 3)).collect(),
         samples_rss_kb: rss,
         compiler: s.path.display().to_string(),
         compiler_version: s.id.version.clone(),
         host: cx.host.clone(),
     })
+}
+
+/// Reads and checks one run's constexpr report: the total line, with
+/// `wall_us` dropped (it is noise, not a counter), after the entry's `oven:`
+/// budgets pass.
+fn read_counters(path: &Path, e: &Entry, spec: &BenchSpec) -> Result<Counters, String> {
+    let text = std::fs::read_to_string(path)
+        .map_err(|err| format!("the compiler wrote no readable constexpr report ({err})"))?;
+    let report = oven_report::Report::parse(&text)
+        .map_err(|err| format!("malformed constexpr report: {err}"))?;
+    let in_entry =
+        |f: &str| f == e.arg || std::fs::canonicalize(Path::new(f)).is_ok_and(|p| p == e.path);
+    oven_report::check_budgets(&report, &spec.oven, &in_entry)
+        .map_err(|err| err.trim_end().to_owned())?;
+    Ok(Counters { wall_us: 0, ..report.total })
 }
 
 fn describe_outcome(o: &Outcome) -> String {
@@ -630,6 +700,12 @@ fn row(
         status.push_str(" (noisy)");
     }
     let dash = || "-".to_owned();
+    let (bo, co) = (b.and_then(|b| b.oven), cur.and_then(|c| c.oven));
+    #[allow(clippy::cast_precision_loss)]
+    let counter_delta = |f: fn(&Counters) -> u64| match (&bo, &co) {
+        (Some(x), Some(y)) => compare::delta_pct(f(x) as f64, f(y) as f64),
+        _ => None,
+    };
     vec![
         entry.id.clone(),
         spec.map_or_else(dash, |s| s.mode.as_str().to_owned()),
@@ -642,6 +718,10 @@ fn row(
         b.map_or_else(dash, |b| compare::mb(b.max_rss_kb)),
         cur.map_or_else(dash, |c| compare::mb(c.max_rss_kb)),
         compare::pct(mem_delta),
+        co.map_or_else(dash, |c| c.steps.to_string()),
+        compare::pct(counter_delta(|c| c.steps)),
+        co.map_or_else(dash, |c| c.bytes.to_string()),
+        compare::pct(counter_delta(|c| c.bytes)),
         status,
     ]
 }
