@@ -1363,6 +1363,17 @@ impl<'a> AstBuilder<'a> {
         self.stmt(StmtKind::ForStmt, 0, loc, side, 0)
     }
 
+    /// A labeled statement `label: sub` ([stmt.label]); `label` is the
+    /// `Label` declaration (`a` = label, `b` = sub-statement).
+    pub fn label_stmt(&mut self, label: DeclId, sub: StmtId, loc: Loc) -> StmtId {
+        self.stmt(StmtKind::LabelStmt, 0, loc, label.raw(), sub.raw())
+    }
+
+    /// `goto label;` ([stmt.goto]); `a` = the `Label` declaration.
+    pub fn goto_stmt(&mut self, label: DeclId, loc: Loc) -> StmtId {
+        self.stmt(StmtKind::GotoStmt, 0, loc, label.raw(), 0)
+    }
+
     /// A `return` statement ([stmt.return]) with its NRVO candidate
     /// ([class.copy.elision]/1.1).
     pub fn return_stmt(&mut self, value: Option<ExprId>, nrvo: Option<DeclId>, loc: Loc) -> StmtId {

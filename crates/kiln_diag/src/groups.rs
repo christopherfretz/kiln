@@ -56,6 +56,22 @@ diag_groups! {
     ExtraTokens = "extra-tokens" [];
     UnknownPragmas = "unknown-pragmas" [];
     UnknownWarningOption = "unknown-warning-option" [];
+    // ----- WP-048 (parser and sema)
+    Attributes = "attributes" [UnknownAttributes, IgnoredAttributes];
+    UnknownAttributes = "unknown-attributes" [];
+    IgnoredAttributes = "ignored-attributes" [];
+    DuplicateDeclSpecifier = "duplicate-decl-specifier" [];
+    MissingDeclarations = "missing-declarations" [];
+    ExternInitializer = "extern-initializer" [];
+    VlaCxxExtension = "vla-cxx-extension" [];
+    BitfieldWidth = "bitfield-width" [];
+    PointerArith = "pointer-arith" [];
+    Unused = "unused" [UnusedValue];
+    UnusedValue = "unused-value" [UnusedComparison, UnusedResult];
+    UnusedComparison = "unused-comparison" [];
+    UnusedResult = "unused-result" [];
+    DeprecatedDeclarations = "deprecated-declarations" [];
+    ReturnType = "return-type" [];
 }
 
 impl Group {

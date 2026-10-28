@@ -985,6 +985,26 @@ impl ExprArena {
         NonOdrUse::from_u8(n.aux).expect("valid non-odr-use kind")
     }
 
+    /// Records why a `DeclRefExpr` / `MemberExpr` is not an odr-use (sema's
+    /// end-of-full-expression odr-use pass, [basic.def.odr]/5; clang's
+    /// `MaybeODRUseExprs`). Only `None` → non-`None` is allowed.
+    ///
+    /// # Panics
+    /// If `e` is not a `DeclRefExpr` / `MemberExpr`.
+    pub fn set_non_odr_use(&mut self, e: ExprId, v: NonOdrUse) -> Result<(), AlreadySet> {
+        let n = &mut self.nodes[e.index() as usize];
+        assert!(
+            matches!(n.kind, ExprKind::DeclRefExpr | ExprKind::MemberExpr),
+            "expected DeclRefExpr or MemberExpr, found {:?}",
+            n.kind
+        );
+        if n.aux != NonOdrUse::None as u8 {
+            return Err(AlreadySet { slot: "DeclRefExpr.non_odr_use", existing: u32::from(n.aux) });
+        }
+        n.aux = v as u8;
+        Ok(())
+    }
+
     /// The callee of a `CallExpr`.
     pub fn callee(&self, e: ExprId) -> ExprId {
         ExprId::new(self.expect_kind(e, ExprKind::CallExpr).a)

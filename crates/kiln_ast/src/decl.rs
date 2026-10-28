@@ -2043,6 +2043,15 @@ impl DeclArena {
         set_once(&mut self.enumerator_mut(e).value, v, "EnumeratorData.value", RawId::raw)
     }
 
+    /// Replaces an enumerator's initializer with `init`, which must wrap
+    /// the previous one: at the closing brace of an enumeration without a
+    /// fixed underlying type, sema converts each initializer to the
+    /// enumeration's integer type ([dcl.enum]/5, clang's
+    /// `ECD->setInitExpr` in `ActOnEnumBody`).
+    pub fn replace_enumerator_init(&mut self, e: DeclId, init: ExprId) {
+        self.enumerator_mut(e).init = Some(init);
+    }
+
     /// Sets a parameter's default argument (write-once).
     pub fn set_default_arg(&mut self, p: DeclId, arg: ExprId) -> Result<(), AlreadySet> {
         set_once(&mut self.param_mut(p).default_arg, arg, "ParamData.default_arg", RawId::raw)
