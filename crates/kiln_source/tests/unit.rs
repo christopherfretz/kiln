@@ -705,3 +705,37 @@ fn cpp_include_inclusion_ranges_alias_the_buffer() {
     // The include stack is followed through the includer's own range.
     assert_eq!(sm.include_loc(from1), Loc::INVALID);
 }
+
+// [lex.phases]/1 line terminators (`\n`, `\r\n`, lone `\r`): the
+// word-at-a-time line table agrees with a byte-at-a-time reference on
+// random texts dense and sparse in terminators, at every offset.
+#[test]
+fn lex_phases_line_table_matches_bytewise_reference() {
+    let sm = SourceManager::new();
+    let mut rng = Rng(0x2545_f491_4f6c_dd1d);
+    for case in 0..200 {
+        let len = rng.below(300) as usize;
+        let sparse = case % 2 == 0;
+        let text: String = (0..len)
+            .map(|_| match rng.below(if sparse { 40 } else { 6 }) {
+                0 => '\n',
+                1 => '\r',
+                2 => ' ',
+                _ => 'x',
+            })
+            .collect();
+        let f = sm.add_virtual(&format!("lines{case}"), text.clone()).unwrap();
+        let b = text.as_bytes();
+        let (mut line, mut col) = (1u32, 1u32);
+        for off in 0..=b.len() {
+            let lc = sm.line_col(sm.loc(f, off as u32)).unwrap();
+            assert_eq!((lc.line, lc.col), (line, col), "case {case} offset {off}: {text:?}");
+            match b.get(off) {
+                Some(b'\n') => (line, col) = (line + 1, 1),
+                Some(b'\r') if b.get(off + 1) != Some(&b'\n') => (line, col) = (line + 1, 1),
+                _ => col += 1,
+            }
+        }
+        assert_eq!(sm.line_count(f), line, "case {case}");
+    }
+}

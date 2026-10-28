@@ -23,9 +23,31 @@ fn in_table(table: &[(u32, u32)], c: u32) -> bool {
         .is_ok()
 }
 
+/// `IDENT_CONTINUE[b]`: `b` is `[A-Za-z0-9_]`.
+static IDENT_CONTINUE: [bool; 256] = {
+    let mut t = [false; 256];
+    let mut b = 0;
+    while b < 256 {
+        #[allow(clippy::cast_possible_truncation, reason = "b < 256")]
+        let c = b as u8;
+        t[b] = c.is_ascii_alphanumeric() || c == b'_';
+        b += 1;
+    }
+    t
+};
+
 /// ASCII identifier-continue: `[A-Za-z0-9_]`.
+#[inline]
 pub(crate) fn is_ascii_ident_continue(b: u8) -> bool {
-    b.is_ascii_alphanumeric() || b == b'_'
+    IDENT_CONTINUE[usize::from(b)]
+}
+
+/// The end of the run of `[A-Za-z0-9_]` bytes starting at `from`.
+#[inline]
+pub(crate) fn ascii_ident_end(bytes: &[u8], from: usize) -> usize {
+    bytes.get(from..).map_or(from, |rest| {
+        from + rest.iter().position(|&b| !is_ascii_ident_continue(b)).unwrap_or(rest.len())
+    })
 }
 
 /// [lex.name]: a non-ASCII character with the `XID_Start` property.

@@ -11,10 +11,33 @@ use crate::options::{LexMode, LexOptions, Std};
 use crate::phase::{Src, is_hws};
 use crate::token::{Encoding, Punct, TokFlags, TokKind, Token};
 use crate::unicode::{
-    NameMatch, is_ascii_ident_continue, is_nfc, is_unicode_whitespace, is_xid_continue,
-    is_xid_start, lookup_char_name,
+    NameMatch, ascii_ident_end, is_ascii_ident_continue, is_nfc, is_unicode_whitespace,
+    is_xid_continue, is_xid_start, lookup_char_name,
 };
 use kiln_source::symbol::Interner;
+
+/// The position of the first `\` or `?` at or after `from` (the bytes
+/// phase 2 can act on), or the end of `bytes`.
+fn next_special(bytes: &[u8], from: usize) -> usize {
+    const ONES: u64 = 0x0101_0101_0101_0101;
+    const HIGHS: u64 = 0x8080_8080_8080_8080;
+    // SWAR zero-byte test: nonzero iff some byte of `x` is zero.
+    let zero = |x: u64| x.wrapping_sub(ONES) & !x & HIGHS;
+    let mut i = from;
+    while let Some(w) = bytes.get(i..i + 8) {
+        let mut word = [0u8; 8];
+        word.copy_from_slice(w);
+        let w = u64::from_le_bytes(word);
+        if zero(w ^ (ONES * u64::from(b'\\'))) | zero(w ^ (ONES * u64::from(b'?'))) != 0 {
+            break;
+        }
+        i += 8;
+    }
+    bytes
+        .get(i..)
+        .and_then(|rest| rest.iter().position(|&c| c == b'\\' || c == b'?'))
+        .map_or(bytes.len(), |k| i + k)
+}
 
 /// Result of reading a universal-character-name at a decoded `\`.
 #[derive(Clone, Copy, Debug)]
@@ -65,6 +88,10 @@ pub struct Lexer<'a> {
     /// Raw-string body of the token being lexed: excluded from phase-2
     /// scanning (splices inside raw strings are reverted, [lex.pptoken]/3.1).
     raw_body: Option<(usize, usize)>,
+    /// No `\` or `?` occurs in `[pos, clean_until)`: tokens ending by
+    /// then need no phase-2 scan (the scan is the per-token hot spot on
+    /// splice-free text).
+    clean_until: usize,
     diags: Vec<LexDiag>,
     scratch: String,
 }
@@ -125,6 +152,7 @@ impl<'a> Lexer<'a> {
             whole_file: false,
             eof_seen: false,
             raw_body: None,
+            clean_until: 0,
             diags: Vec::new(),
             scratch: String::new(),
         }
@@ -318,7 +346,11 @@ impl<'a> Lexer<'a> {
                 | TokKind::RawStringLit(_)
                 | TokKind::Unknown
         );
+        if end > self.clean_until {
+            self.clean_until = next_special(self.src.bytes, start);
+        }
         let dirty = match self.raw_body.take() {
+            _ if end <= self.clean_until => false,
             Some((a, b)) => {
                 let x = self.phase2(start, a, literal, true);
                 self.phase2(b, end, literal, true) || x
@@ -655,9 +687,7 @@ impl<'a> Lexer<'a> {
         let mut p = p1;
         let simple_first = first.is_ascii() && first != '$' && !first_ucn && p1 == start + 1;
         if simple_first {
-            while p < bytes.len() && is_ascii_ident_continue(bytes[p]) {
-                p += 1;
-            }
+            p = ascii_ident_end(bytes, p);
             let slow = match bytes.get(p) {
                 Some(b'\\' | b'$' | 0x80..) => true,
                 Some(b'?') => self.opts.trigraphs,

@@ -6,7 +6,7 @@ use kiln_lex::literal::{
     LitDiag, LiteralOptions, classify_number, decode_char, decode_string,
     decode_unevaluated_string, encode_string,
 };
-use kiln_lex::{Interner, LexOptions, LexSeverity, Lexer, Std, TokKind, clean};
+use kiln_lex::{Interner, LexOptions, LexSeverity, Lexer, Std, TokFlags, TokKind, clean};
 use kiln_source::SourceManager;
 
 /// [lex.pptoken]/2: garbage still produces tokens and diagnostics.
@@ -180,6 +180,12 @@ fn check(text: &str, opts: LexOptions) {
         assert_eq!(clean(&sp, t.kind, false), sp, "spelling not idempotent on {text:?}");
         let raw = &text[lo as usize..hi as usize];
         assert_eq!(clean(raw, t.kind, opts.trigraphs), sp);
+        // The lexer's skip-the-scan cursor (WP-056) never hides a splice.
+        assert_eq!(
+            t.has(TokFlags::NEEDS_CLEANING),
+            clean(raw, t.kind, opts.trigraphs) != raw,
+            "NEEDS_CLEANING of {raw:?} in {text:?}"
+        );
         if matches!(
             t.kind,
             TokKind::StringLit(_)
@@ -222,6 +228,31 @@ fn lex_fuzz_random_bytes() {
             (0..len).map(|_| PIECES[rng.below(PIECES.len())]).collect()
         };
         check(&text, opts[iter % opts.len()]);
+    }
+}
+
+/// [lex.phases]/1.2: long mostly-clean inputs with rare splices and
+/// trigraphs, so that the lexer's clean-run cursor is reused across many
+/// tokens; every token's spelling and `NEEDS_CLEANING` stay exact.
+#[test]
+fn lex_phases_sparse_splices_fuzz() {
+    const CLEAN: &[&str] =
+        &["ab", " ", "\n", "12", "+", "/* c */", "\"s\"", "'c'", "R\"(x)\"", "_y"];
+    const DIRTY: &[&str] = &["\\\n", "\\ \n", "??/\n", "??=", "?", "\\", "R\"(\\\n)\""];
+    let mut rng = Rng(0x5851_F42D_4C95_7F2D);
+    for iter in 0..300 {
+        let len = 50 + rng.below(400);
+        let text: String = (0..len)
+            .map(|_| {
+                if rng.below(25) == 0 {
+                    DIRTY[rng.below(DIRTY.len())]
+                } else {
+                    CLEAN[rng.below(CLEAN.len())]
+                }
+            })
+            .collect();
+        let trigraphs = iter % 2 == 0;
+        check(&text, LexOptions { trigraphs, ..std(Std::Cxx11) });
     }
 }
 

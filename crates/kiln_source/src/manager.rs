@@ -831,9 +831,19 @@ fn line_col_in(starts: &[u32], off: u32) -> (u32, u32) {
 /// lone `\r`.
 fn compute_line_starts(text: &str) -> Box<[u32]> {
     let b = text.as_bytes();
-    let mut starts = vec![0u32];
+    let mut starts = Vec::with_capacity(b.len() / 32 + 1);
+    starts.push(0u32);
     let mut i = 0;
     while i < b.len() {
+        // Skip eight bytes at a time while none of them is `\n` or `\r`.
+        if let Some(w) = b.get(i..i + 8) {
+            let mut word = [0u8; 8];
+            word.copy_from_slice(w);
+            if !has_line_end(u64::from_le_bytes(word)) {
+                i += 8;
+                continue;
+            }
+        }
         match b[i] {
             b'\n' => starts.push(i as u32 + 1),
             b'\r' => {
@@ -847,6 +857,16 @@ fn compute_line_starts(text: &str) -> Box<[u32]> {
         i += 1;
     }
     starts.into_boxed_slice()
+}
+
+/// Whether any byte of `w` is `\n` or `\r` (SWAR zero-byte test; exact,
+/// since a byte only tests as zero if it is zero or a borrow came from a
+/// lower zero byte).
+fn has_line_end(w: u64) -> bool {
+    const ONES: u64 = 0x0101_0101_0101_0101;
+    const HIGHS: u64 = 0x8080_8080_8080_8080;
+    let zero = |x: u64| x.wrapping_sub(ONES) & !x & HIGHS;
+    zero(w ^ (ONES * u64::from(b'\n'))) | zero(w ^ (ONES * u64::from(b'\r'))) != 0
 }
 
 /// Decodes `bytes` as UTF-8, replacing each maximal invalid subsequence

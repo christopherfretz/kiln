@@ -127,16 +127,27 @@ thread_local! {
 fn str_hash(s: &str) -> u64 {
     let bytes = s.as_bytes();
     let len = bytes.len();
-    let (head, tail) = if len >= 8 {
-        let mut lo = [0u8; 8];
-        let mut hi = [0u8; 8];
-        lo.copy_from_slice(&bytes[..8]);
-        hi.copy_from_slice(&bytes[len - 8..]);
-        (u64::from_le_bytes(lo), u64::from_le_bytes(hi))
-    } else {
-        let mut word = [0u8; 8];
-        word[..len].copy_from_slice(bytes);
-        (u64::from_le_bytes(word), 0)
+    // Fixed-size reads only: a variable-length copy is a `memcpy` call.
+    let word8 = |at: usize| {
+        let mut w = [0u8; 8];
+        w.copy_from_slice(&bytes[at..at + 8]);
+        u64::from_le_bytes(w)
+    };
+    let word4 = |at: usize| {
+        let mut w = [0u8; 4];
+        w.copy_from_slice(&bytes[at..at + 4]);
+        u64::from(u32::from_le_bytes(w))
+    };
+    let (head, tail) = match len {
+        8.. => (word8(0), word8(len - 8)),
+        4..8 => (word4(0), word4(len - 4)),
+        1..4 => {
+            let three = u64::from(bytes[0]) << 16
+                | u64::from(bytes[len / 2]) << 8
+                | u64::from(bytes[len - 1]);
+            (three, 0)
+        }
+        0 => (0, 0),
     };
     let len_mix = (len as u64).wrapping_mul(0xe703_7ed1_a0b4_28db);
     let product = u128::from(head ^ 0xa076_1d64_78bd_642f)
