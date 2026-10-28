@@ -189,4 +189,11 @@ pub(crate) const TABLE: &[(&str, &str, u32, u32)] = &[
     ("has_feature", "ptrauth_intrinsics", 0, 0),
     ("has_feature", "ptrauth_type_info_vtable_pointer_discrimination", 0, 0),
     ("has_feature", "thread_sanitizer", 0, 0),
+    ("is_identifier", "B", 1, 1),
+    ("is_identifier", "_Atomic", 0, 0),
+    ("is_identifier", "__datasizeof", 0, 1),
+    ("is_identifier", "__reference_binds_to_temporary", 0, 1),
+    ("is_identifier", "__x", 1, 1),
+    ("is_identifier", "foo", 1, 1),
+    ("is_identifier", "int", 0, 0),
 ];

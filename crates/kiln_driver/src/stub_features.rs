@@ -80,6 +80,12 @@ impl FeatureQueries for StubFeatures {
         self.lookup("has_declspec_attribute", name) != 0
     }
 
+    fn is_keyword(&self, name: &str) -> bool {
+        let found =
+            table::TABLE.binary_search_by(|e| (e.0, e.1).cmp(&("is_identifier", name))).is_ok();
+        if found { self.lookup("is_identifier", name) == 0 } else { NoFeatures.is_keyword(name) }
+    }
+
     fn is_target(&self, query: TargetQuery, name: &str) -> bool {
         let t = &self.target;
         match query {
@@ -110,6 +116,9 @@ mod tests {
         assert_eq!(f.has_cpp_attribute(None, "nodiscard"), 201_907);
         assert!(f.has_feature("cxx_exceptions"));
         assert!(f.is_target(TargetQuery::Arch, "aarch64"));
+        assert!(f.is_keyword("__reference_binds_to_temporary"));
+        assert!(f.is_keyword("int"));
+        assert!(!f.is_keyword("__x"));
         let c = StubFeatures::new(false, false, false, false, t);
         assert!(!c.has_feature("cxx_exceptions"));
     }

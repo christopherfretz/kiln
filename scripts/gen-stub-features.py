@@ -25,6 +25,17 @@ for root in ROOTS:
                 continue
             for m in pat.finditer(data):
                 items.add((m.group(1).decode(), m.group(2).decode()))
+# libc++'s __has_keyword(x) is !__is_identifier(x).
+kw = re.compile(rb"__(?:has_keyword|is_identifier)\s*\(\s*([A-Za-z_][A-Za-z_0-9]*)\s*\)")
+for root in ROOTS:
+    for d, _, fs in os.walk(root):
+        for f in fs:
+            try:
+                data = open(os.path.join(d, f), "rb").read()
+            except OSError:
+                continue
+            for m in kw.finditer(data):
+                items.add(("is_identifier", m.group(1).decode()))
 items = sorted(items)
 
 def query(args, lang):
