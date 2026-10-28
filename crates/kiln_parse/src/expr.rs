@@ -19,7 +19,6 @@ use kiln_source::Loc;
 
 use crate::decl::is_type_specifier_kw;
 use crate::keywords::Kw;
-use crate::lexdiag::lex_diag;
 use crate::parser::{PExpr, Parser};
 
 /// clang's `prec::Level`.
@@ -500,31 +499,31 @@ impl Parser<'_, '_> {
 
     // -- literals ------------------------------------------------------------------------------
 
-    /// The spelling of the literal token at `i`.
-    fn spelling_at(&self, i: usize) -> String {
-        self.spellings[i].as_deref().unwrap_or_default().to_owned()
+    /// The spelling of token `t` (any token: from a file, a macro
+    /// definition or a scratch buffer of `#` / `##`).
+    pub(crate) fn spelling_of(&self, t: &Token) -> String {
+        kiln_lex::spelling(self.sm, t, &self.lex_opts).into_owned()
     }
 
-    /// Reports the literal diagnostics of token `t` (spelling diags `ds`).
-    fn literal_diags(&self, t: &Token, ds: &[kiln_lex::literal::LitDiag]) {
-        if ds.is_empty() {
-            return;
-        }
-        let text = self.sm.span_text(t.span).unwrap_or_default();
-        for d in ds {
-            let ld = d.locate(t, text, &self.lex_opts);
-            if let Some(diag) = lex_diag(self.sm, &ld) {
-                self.emit(diag);
-            }
+    /// Reports the literal diagnostics `ds` of token `t` with spelling
+    /// `sp` (`enc`: a character literal's encoding).
+    fn literal_diags(
+        &self,
+        t: &Token,
+        sp: &str,
+        ds: &[kiln_lex::literal::LitDiag],
+        enc: Option<kiln_lex::Encoding>,
+    ) {
+        for d in kiln_pp::literal_diags(self.sm, t, sp, ds, enc, &self.lex_opts) {
+            self.emit(d);
         }
     }
 
     fn parse_number(&mut self) -> kiln_ast::ExprId {
-        let i = self.pos();
         let t = self.bump();
-        let sp = self.spelling_at(i);
+        let sp = self.spelling_of(&t);
         let n = classify_number(&sp, self.std);
-        self.literal_diags(&t, &n.diags);
+        self.literal_diags(&t, &sp, &n.diags, None);
         if n.has_error {
             return self.s.act_on_error_expr(&[], t.span.lo);
         }
@@ -542,11 +541,10 @@ impl Parser<'_, '_> {
     }
 
     fn parse_char(&mut self) -> kiln_ast::ExprId {
-        let i = self.pos();
         let t = self.bump();
-        let sp = self.spelling_at(i);
+        let sp = self.spelling_of(&t);
         let c = decode_char(&sp, self.lit_opts);
-        self.literal_diags(&t, &c.diags);
+        self.literal_diags(&t, &sp, &c.diags, Some(c.encoding));
         if c.has_error {
             return self.s.act_on_error_expr(&[], t.span.lo);
         }
@@ -565,8 +563,9 @@ impl Parser<'_, '_> {
         let mut toks = Vec::new();
         let mut spellings = Vec::new();
         while self.at_string() {
-            spellings.push(self.spelling_at(self.pos()));
-            toks.push(self.bump());
+            let t = self.bump();
+            spellings.push(self.spelling_of(&t));
+            toks.push(t);
         }
         if toks.is_empty() {
             self.error_here(DiagId::parse_expected_expression);
@@ -580,7 +579,7 @@ impl Parser<'_, '_> {
             } else {
                 decode_string(sp, self.lit_opts)
             };
-            self.literal_diags(t, &s.diags);
+            self.literal_diags(t, sp, &s.diags, None);
             error |= s.has_error;
             pieces.push((s, t.span.lo));
         }
@@ -595,11 +594,12 @@ impl Parser<'_, '_> {
         Some(self.s.act_on_string_literal(&pieces, unevaluated, ud))
     }
 
-    /// The value of the unevaluated string literal at token `i` (for a
+    /// The value of the unevaluated string literal token `t` (for a
     /// linkage specification), lossily as UTF-8.
-    pub(crate) fn unevaluated_text(&self, i: usize) -> String {
-        let sp = self.spelling_at(i);
+    pub(crate) fn unevaluated_text(&self, t: &Token) -> String {
+        let sp = self.spelling_of(t);
         let s = decode_unevaluated_string(&sp, self.lit_opts);
+        self.literal_diags(t, &sp, &s.diags, None);
         match &s.units {
             CodeUnits::U8(b) => String::from_utf8_lossy(b).into_owned(),
             _ => String::new(),

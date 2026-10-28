@@ -412,92 +412,13 @@ impl<'c> Ev<'c> {
 
     /// Reports literal diagnostics with clang's wording and locations.
     fn lit_diags(&mut self, tok: &Token, spelling: &str, diags: &[LitDiag], enc: Option<Encoding>) {
-        use LexDiagKind as K;
         if diags.is_empty() {
             return;
         }
         let opts = LexOptions::new(self.std);
-        let text = self.cx.source_manager().span_text(tok.span).map(str::to_owned);
-        let text = text.as_deref().unwrap_or(spelling);
-        for d in diags {
-            let span = d.locate(tok, text, &opts).span;
-            let at = Span::new(span.lo, span.lo);
-            let start = Span::new(tok.span.lo, tok.span.lo);
-            let end = Span::new(span.hi, span.hi);
-            // The backslash of the escape sequence the range is in.
-            let backslash = || {
-                let b = spelling[..(d.range.start as usize).min(spelling.len())]
-                    .rfind('\\')
-                    .unwrap_or(0);
-                let b = u32::try_from(b).unwrap_or(0);
-                let l = LitDiag { kind: d.kind, range: b..b };
-                let lo = l.locate(tok, text, &opts).span.lo;
-                Span::new(lo, lo)
-            };
-            let range = spelling.get(d.range.start as usize..d.range.end as usize).unwrap_or("");
-            let diag = match d.kind {
-                K::InvalidDigit { ch, radix } => {
-                    Diag::new(DiagId::lit_invalid_digit, at).arg(ch).arg(match radix {
-                        2 => 0,
-                        8 => 1,
-                        _ => 2,
-                    })
-                }
-                K::InvalidSuffix { floating } => {
-                    Diag::new(DiagId::lit_invalid_suffix, at).arg(range).arg(i32::from(floating))
-                }
-                K::ExponentNoDigits => Diag::new(DiagId::lit_exponent_no_digits, at),
-                // clang points at the end of the digits read.
-                K::HexFloatNoExponent => Diag::new(DiagId::lit_hex_float_requires, end).arg(0),
-                K::HexFloatNoSignificand => Diag::new(DiagId::lit_hex_float_requires, end).arg(1),
-                K::DigitSeparatorPosition { at_end } => {
-                    Diag::new(DiagId::lit_digit_separator, at).arg(i32::from(at_end))
-                }
-                K::BinaryLiteralExtension => Diag::new(DiagId::lit_binary_ext, start),
-                K::HexFloatExtension => Diag::new(DiagId::lit_hex_float_ext, start),
-                K::SizeSuffixExtension => Diag::new(DiagId::lit_size_t_ext, start),
-                K::IntegerTooLarge => Diag::new(DiagId::sema_int_literal_too_large, start),
-                K::UnknownEscape { ch } => Diag::new(DiagId::lit_unknown_escape, at).arg(ch),
-                K::NonstandardEscape { ch } => {
-                    Diag::new(DiagId::lit_nonstandard_escape, at).arg(ch)
-                }
-                K::EscapeNoDigits { esc } => Diag::new(DiagId::lit_escape_no_digits, at).arg(esc),
-                K::EscapeMissingBrace { esc } => {
-                    Diag::new(DiagId::lit_escape_missing_brace, at).arg(esc)
-                }
-                K::DelimitedEscapeEmpty => Diag::new(DiagId::lit_delimited_escape_empty, at),
-                K::DelimitedEscapeUnterminated => Diag::new(DiagId::pp_expected, at).arg("'}'"),
-                K::DelimitedEscapeInvalidDigit { ch } => {
-                    Diag::new(DiagId::lit_delimited_escape_invalid, backslash()).arg(ch)
-                }
-                K::DelimitedEscapeExtension | K::UcnDelimitedExtension => {
-                    Diag::new(DiagId::lex_delimited_escape_ext, at).arg(0)
-                }
-                K::UcnNamedExtension => Diag::new(DiagId::lex_delimited_escape_ext, at).arg(1),
-                K::HexEscapeTooLarge => Diag::new(DiagId::lit_hex_escape_too_large, at),
-                K::OctalEscapeTooLarge => Diag::new(DiagId::lit_octal_escape_too_large, at),
-                K::UcnEscapeIncomplete => Diag::new(DiagId::lit_ucn_escape_incomplete, at),
-                K::UcnUnknownName => {
-                    Diag::new(DiagId::lex_ucn_unknown_name, at).arg(ucn_name(range))
-                }
-                K::UcnNameLooseMatch { .. } => Diag::new(DiagId::lex_ucn_unknown_name, at)
-                    .arg(ucn_name(range))
-                    .with_note(Diag::new(DiagId::note_ucn_name_loose_match, at)),
-                K::CharTooLarge => Diag::new(DiagId::lit_char_too_large, start),
-                K::MultiCharLiteral => Diag::new(DiagId::lit_multichar, start),
-                K::FourCharLiteral => Diag::new(DiagId::lit_four_char, start),
-                K::CharConstantTooLong => Diag::new(DiagId::lit_char_constant_too_long, start),
-                K::MultiCharNotAllowed => Diag::new(DiagId::lit_multichar_not_allowed, start)
-                    .arg(i32::from(enc != Some(Encoding::Wide))),
-                _ => {
-                    let lex = kiln_lex::LexDiag { kind: d.kind, span };
-                    match crate::diag_map::lex_diag(self.cx.source_manager(), &lex) {
-                        Some(diag) => diag,
-                        None => continue,
-                    }
-                }
-            };
-            self.cx.emit(diag);
+        let sm = self.cx.source_manager();
+        for d in crate::diag_map::literal_diags(sm, tok, spelling, diags, enc, &opts) {
+            self.cx.emit(d);
         }
     }
 
@@ -714,14 +635,6 @@ fn is_imaginary_suffix(s: Option<&str>) -> bool {
     }
     let im = s.bytes().filter(|b| matches!(b, b'i' | b'I' | b'j' | b'J')).count();
     im == 1 && s.bytes().all(|b| b"iIjJuUlLzZ".contains(&b))
-}
-
-/// The name in `\N{name}` (or the whole range if it has no braces).
-fn ucn_name(range: &str) -> &str {
-    match range.find('{') {
-        Some(i) => range[i + 1..].split('}').next().unwrap_or(""),
-        None => range,
-    }
 }
 
 /// Whether `d` is an error that clang's `CharLiteralParser` reports

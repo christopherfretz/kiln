@@ -216,7 +216,7 @@ impl Parser<'_, '_> {
     fn parse_linkage_spec(&mut self) {
         let loc = self.bump().span.lo;
         let lang_tok = self.bump();
-        let lang = self.unevaluated_text(self.pos() - 1);
+        let lang = self.unevaluated_text(&lang_tok);
         let ls = self.s.act_on_start_linkage_spec(&lang, loc, lang_tok.span.lo);
         if let Some(open) = self.eat(Punct::LBrace) {
             while !self.at(Punct::RBrace) && !self.at_eof() {

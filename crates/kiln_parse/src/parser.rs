@@ -1,5 +1,7 @@
 //! The parser state, token access and error recovery (spec/parse.md §3).
 
+use std::cell::RefCell;
+
 use kiln_ast::{DeclId, ExprId};
 use kiln_diag::{Diag, DiagId};
 use kiln_lex::literal::LiteralOptions;
@@ -9,6 +11,7 @@ use kiln_source::symbol::Symbol;
 use kiln_source::{Loc, SourceManager};
 
 use crate::keywords::{Keywords, Kw};
+use crate::tokens::TokenSource;
 
 /// The result of parsing an expression: `None` when a syntax error was
 /// reported (clang's invalid `ExprResult`); the caller recovers by
@@ -23,16 +26,22 @@ enum Bracket {
     Brace = 2,
 }
 
-/// A recursive-descent parser over one token buffer, driving [`Sema`].
+/// A recursive-descent parser over the preprocessor's token stream,
+/// driving [`Sema`].
 pub struct Parser<'a, 'sm> {
     /// Semantic analysis.
     pub(crate) s: Sema<'a, 'sm>,
     /// The sources (for literal spellings and diagnostics).
     pub(crate) sm: &'sm SourceManager,
-    toks: Vec<Token>,
-    /// Literal spellings, parallel to `toks`.
-    pub(crate) spellings: Vec<Option<Box<str>>>,
+    /// The token stream; lookahead (`&self`) fills its window lazily.
+    src: RefCell<TokenSource<'a, 'sm>>,
+    /// The token at `pos`.
+    cur: Token,
+    /// The end of the token before `pos`.
+    prev_hi: Loc,
     pos: usize,
+    /// Open `#pragma GCC visibility push`es.
+    pub(crate) visibility_depth: u32,
     /// Open `(`, `[`, `{` consumed and not yet closed (clang's
     /// `ParenCount`/`BracketCount`/`BraceCount`).
     depth: [u32; 3],
@@ -49,40 +58,67 @@ impl std::fmt::Debug for Parser<'_, '_> {
 }
 
 impl<'a, 'sm> Parser<'a, 'sm> {
-    /// A parser over `toks` (which end with `Eof`).
-    pub fn new(
-        s: Sema<'a, 'sm>,
-        sm: &'sm SourceManager,
-        toks: Vec<Token>,
-        spellings: Vec<Option<Box<str>>>,
-        lex_opts: LexOptions,
-        lit_opts: LiteralOptions,
-    ) -> Self {
+    /// A parser over `src`. `s`'s AST must use the preprocessor's
+    /// interner.
+    pub fn new(s: Sema<'a, 'sm>, mut src: TokenSource<'a, 'sm>, lit_opts: LiteralOptions) -> Self {
         let kw = Keywords::new(s.ast.symbols());
+        let lex_opts = src.lex_options();
         let std = lex_opts.std;
-        Parser { s, sm, toks, spellings, pos: 0, depth: [0; 3], kw, lex_opts, lit_opts, std }
+        let sm = src.source_manager();
+        let cur = src.get(0);
+        let mut p = Parser {
+            s,
+            sm,
+            src: RefCell::new(src),
+            cur,
+            prev_hi: Loc::INVALID,
+            pos: 0,
+            visibility_depth: 0,
+            depth: [0; 3],
+            kw,
+            lex_opts,
+            lit_opts,
+            std,
+        };
+        p.handle_events(0);
+        p
+    }
+
+    /// Finishes parsing (handling the events after the last token),
+    /// returning the semantic state and the token source.
+    pub fn finish(mut self) -> (Sema<'a, 'sm>, TokenSource<'a, 'sm>) {
+        self.handle_events(usize::MAX);
+        (self.s, self.src.into_inner())
     }
 
     /// Finishes parsing, returning the semantic state.
     pub fn into_sema(self) -> Sema<'a, 'sm> {
-        self.s
+        self.finish().0
+    }
+
+    /// Handles the preprocessor events before token `pos`.
+    fn handle_events(&mut self, pos: usize) {
+        while let Some(e) = self.src.get_mut().take_event(pos) {
+            self.on_event(e);
+        }
     }
 
     // -- token access -----------------------------------------------------------
 
     /// The current token.
     pub(crate) fn tok(&self) -> Token {
-        self.toks[self.pos]
+        self.cur
     }
 
     /// The token `n` ahead of the current one (`Eof` past the end).
     pub(crate) fn peek(&self, n: usize) -> Token {
-        self.toks[(self.pos + n).min(self.toks.len() - 1)]
+        self.tok_at(self.pos + n)
     }
 
-    /// The token at absolute index `i`.
+    /// The token at absolute index `i` (`Eof` past the end; at most
+    /// [`crate::tokens::KEEP_BEHIND`] tokens before the current one).
     pub(crate) fn tok_at(&self, i: usize) -> Token {
-        self.toks[i.min(self.toks.len() - 1)]
+        if i == self.pos { self.cur } else { self.src.borrow_mut().get(i) }
     }
 
     /// The current index (for lookahead scans).
@@ -98,7 +134,7 @@ impl<'a, 'sm> Parser<'a, 'sm> {
     /// The end of the previous token (where clang's `ExpectAndConsume`
     /// reports a missing token).
     pub(crate) fn prev_end(&self) -> Loc {
-        if self.pos == 0 { self.loc() } else { self.toks[self.pos - 1].span.hi }
+        if self.pos == 0 { self.loc() } else { self.prev_hi }
     }
 
     /// True at the end of input.
@@ -124,6 +160,13 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             }
         }
         self.pos += 1;
+        self.prev_hi = t.span.hi;
+        let src = self.src.get_mut();
+        src.release(self.pos);
+        self.cur = src.get(self.pos);
+        if src.has_event(self.pos) {
+            self.handle_events(self.pos);
+        }
         t
     }
 

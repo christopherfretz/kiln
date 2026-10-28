@@ -321,6 +321,9 @@ diag_ids! {
     lit_four_char = WarningOff [FourByteMultiChar] (0) "multi-character character constant";
     lit_char_constant_too_long = Warning (0) "character constant too long for its type";
     lit_multichar_not_allowed = Error (1) "{0:wide|Unicode} character literals may not contain multiple characters";
+    lit_unevaluated_prefix = Error (0) "an unevaluated string literal cannot have an encoding prefix";
+    lit_unevaluated_escape = Error (1) "invalid escape sequence '{0}' in an unevaluated string literal";
+    lit_unevaluated_udl = Error (0) "an unevaluated string literal cannot be a user-defined literal";
     note_ucn_name_loose_match = Note (0) "characters names in Unicode escape sequences are sensitive to case and whitespaces";
     pp_has_warning_invalid_option = ExtWarn [MalformedWarningCheck] (0) "__has_warning expected option name (e.g. \"-Wundef\")";
     pp_expected_string_literal = Error (1) "expected string literal in {0}";
@@ -440,6 +443,14 @@ diag_ids! {
     parse_attribute_requires_string = Error (1) "expected string literal as argument of '{0}' attribute";
     parse_unsupported = Error (1) "{0} is not supported yet";
     parse_expected_lbrace_after_base = Error (0) "expected '{{' after base class list";
+    // pragmas handled by the parser (WP-055; clang ParsePragma.cpp)
+    parse_pragma_expected_lparen = Warning [IgnoredPragmas] (1) "missing '(' after '#pragma {0}' - ignoring";
+    parse_pragma_expected_rparen = Warning [IgnoredPragmas] (1) "missing ')' after '#pragma {0}' - ignoring";
+    parse_pragma_expected_identifier = Warning [IgnoredPragmas] (1) "expected identifier in '#pragma {0}' - ignored";
+    parse_pragma_extra_tokens = Warning [IgnoredPragmas] (1) "extra tokens at end of '#pragma {0}' - ignored";
+    parse_pragma_stdc_unknown = ExtWarn [UnknownPragmas] (0) "unknown pragma in STDC namespace";
+    sema_unknown_visibility = Warning [IgnoredAttributes] (1) "unknown visibility '{0}'";
+    sema_visibility_pop_mismatch = Error (0) "#pragma visibility pop with no matching #pragma visibility push";
 
     // ----- sema (WP-048)
     sema_undeclared_var_use = Error (1) "use of undeclared identifier '{0}'";

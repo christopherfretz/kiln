@@ -59,6 +59,10 @@ pub struct Sema<'a, 'sm> {
     /// The full target description (layout for `sizeof`/`alignof`,
     /// spec/abi.md).
     pub abi: Target,
+    /// The `#pragma pack` directives seen, in order (location and the
+    /// spelling of the argument list), for `kiln_abi`'s record layout
+    /// once packing is supported (WP-055; reported as unsupported now).
+    pub pragma_packs: Vec<(Loc, String)>,
     pub(crate) scopes: Vec<scope::Scope>,
     /// The current semantic declaration context.
     pub(crate) ctx: DeclId,
@@ -104,6 +108,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             diags,
             target,
             abi,
+            pragma_packs: Vec::new(),
             scopes: vec![scope::Scope::new(ScopeKind::TranslationUnit, Some(tu))],
             ctx: tu,
             func: None,

@@ -2341,4 +2341,12 @@ impl Sema<'_, '_> {
     pub fn act_on_unsupported_pragma(&self, what: &str, loc: Loc) {
         self.unsupported(&format!("'#pragma {what}'"), loc);
     }
+
+    /// `#pragma pack(args)` at `loc` ([cpp.pragma]; clang's
+    /// `ActOnPragmaPack`): recorded in [`Sema::pragma_packs`] for the
+    /// layout and reported as not supported yet.
+    pub fn act_on_pragma_pack(&mut self, loc: Loc, args: String) {
+        self.act_on_unsupported_pragma("pack", loc);
+        self.pragma_packs.push((loc, args));
+    }
 }

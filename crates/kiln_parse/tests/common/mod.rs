@@ -4,11 +4,14 @@
 
 #![allow(dead_code, reason = "each test binary uses a subset")]
 
+use std::sync::Arc;
+
 use kiln_ast::dump::{DumpOptions, dump};
 use kiln_diag::{DiagEngine, DiagOptions, Diagnostic, Level, MemorySink};
 use kiln_parse::{ParseOptions, parse_file};
 use kiln_sema::target::{Arch, Target};
 use kiln_source::SourceManager;
+use kiln_source::symbol::Interner;
 
 /// The result of parsing one source string.
 pub struct Parsed {
@@ -71,10 +74,11 @@ fn render(sm: &SourceManager, d: &Diagnostic, out: &mut Vec<String>) {
 pub fn parse(src: &str) -> Parsed {
     let sm = SourceManager::new();
     let file = sm.add_virtual("t.cpp", src.to_owned()).expect("location space");
+    let interner = Arc::new(Interner::new());
     let sink = MemorySink::new();
     let engine = DiagEngine::new(&sm, &DiagOptions::default(), sink.clone());
-    let ast =
-        parse_file(&sm, file, &engine, Target::for_arch(Arch::X86_64), &ParseOptions::default());
+    let target = Target::for_arch(Arch::X86_64);
+    let ast = parse_file(&sm, &interner, file, &engine, target, &ParseOptions::default());
     let opts = DumpOptions { sources: Some(&sm), main_file: Some(file), ..DumpOptions::default() };
     let mut buf = Vec::new();
     dump(&ast, &opts, &mut buf).expect("dump to memory");

@@ -144,21 +144,26 @@ impl Keywords {
     }
 }
 
+/// The alternative tokens ([lex.digraph]/2) other than the digraphs (which
+/// the lexer maps itself), with the punctuators they stand for.
+pub const ALTERNATIVE_TOKENS: [(&str, kiln_lex::Punct); 11] = {
+    use kiln_lex::Punct as P;
+    [
+        ("and", P::AmpAmp),
+        ("or", P::PipePipe),
+        ("not", P::Exclaim),
+        ("bitand", P::Amp),
+        ("bitor", P::Pipe),
+        ("xor", P::Caret),
+        ("compl", P::Tilde),
+        ("and_eq", P::AmpEqual),
+        ("or_eq", P::PipeEqual),
+        ("xor_eq", P::CaretEqual),
+        ("not_eq", P::ExclaimEqual),
+    ]
+};
+
 /// The punctuator an alternative token ([lex.digraph]) stands for.
 pub fn alternative_token(s: &str) -> Option<kiln_lex::Punct> {
-    use kiln_lex::Punct as P;
-    Some(match s {
-        "and" => P::AmpAmp,
-        "or" => P::PipePipe,
-        "not" => P::Exclaim,
-        "bitand" => P::Amp,
-        "bitor" => P::Pipe,
-        "xor" => P::Caret,
-        "compl" => P::Tilde,
-        "and_eq" => P::AmpEqual,
-        "or_eq" => P::PipeEqual,
-        "xor_eq" => P::CaretEqual,
-        "not_eq" => P::ExclaimEqual,
-        _ => return None,
-    })
+    ALTERNATIVE_TOKENS.iter().find(|(a, _)| *a == s).map(|&(_, p)| p)
 }
