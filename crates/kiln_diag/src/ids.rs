@@ -200,6 +200,42 @@ diag_ids! {
     drv_invalid_value = Error (2) "invalid value '{1}' in '{0}'";
     drv_ignoring_tabstop = Warning (2) "ignoring invalid -ftabstop value '{0}', using default value {1}";
 
+    // ----- sema conversions (WP-049): [conv], [expr.arith.conv], [lex.*con] --
+    // Type arguments are passed pre-quoted, with clang's `(aka '...')`
+    // suffix when sugar hides the canonical type (`Sema::ty_arg`).
+    sema_int_literal_too_large = Error (0) "integer literal is too large to be represented in any integer type";
+    sema_int_literal_implicitly_unsigned = ExtWarn [ImplicitlyUnsignedLiteral] (0) "integer literal is too large to be represented in a signed integer type, interpreting as unsigned";
+    sema_size_t_literal_too_large = Error (1) "{0:signed |}'size_t' literal is out of range of possible {0:signed |}'size_t' values";
+    sema_float_literal_overflow = Warning [LiteralRange] (2) "magnitude of floating-point constant too large for type {0}; maximum is {1}";
+    sema_float_literal_underflow = Warning [LiteralRange] (2) "magnitude of floating-point constant too small for type {0}; minimum is {1}";
+    sema_invalid_float_suffix = Error (1) "invalid suffix '{0}' on floating constant";
+    sema_init_conversion_failed = Error (4) "cannot initialize {0:a variable|a parameter|return object|a value} of type {1} with an {2:rvalue|lvalue} of type {3}";
+    sema_no_viable_conversion = Error (2) "no viable conversion from {0} to {1}";
+    sema_no_viable_conversion_return = Error (2) "no viable conversion from returned value of type {0} to function return type {1}";
+    sema_assign_incompatible = Error (2) "assigning to {0} from incompatible type {1}";
+    sema_assign_discards_qualifiers = Error (2) "assigning to {0} from {1} discards qualifiers";
+    sema_assign_discards_nested_qualifiers = Error (2) "assigning to {0} from {1} discards qualifiers in nested pointer types";
+    sema_assign_incompatible_pointer = Error (2) "incompatible pointer types assigning to {0} from {1}";
+    sema_assign_int_to_pointer = Error (3) "incompatible integer to pointer conversion assigning to {0} from {1}{2:|; dereference with *|; take the address with &|; remove *|; remove &}";
+    sema_assign_pointer_to_int = Error (3) "incompatible pointer to integer conversion assigning to {0} from {1}{2:|; dereference with *|; take the address with &|; remove *|; remove &}";
+    sema_not_contextually_convertible_to_bool = Error (1) "value of type {0} is not contextually convertible to 'bool'";
+    sema_invalid_operands = Error (2) "invalid operands to binary expression ({0} and {1})";
+    sema_arith_enum_enum = Error (3) "invalid {0:arithmetic between|bitwise operation between|comparison of|conditional expression between|compound assignment to} different enumeration types ({1} and {2})";
+    sema_arith_enum_float = Error (4) "invalid {0:arithmetic between|bitwise operation between|comparison of|conditional expression between|compound assignment to} {1:floating-point|enumeration} type {2} {0:and|and|with|and|from} {1:enumeration|floating-point} type {3}";
+    sema_arith_float_unordered = Error (3) "invalid {0:arithmetic between|bitwise operation between|comparison of|conditional expression between|compound assignment to} floating-point types {1} and {2} with unordered conversion ranks";
+    sema_ambiguous_derived_to_base = Error (3) "ambiguous conversion from derived class {0} to base class {1}:{2}";
+    sema_ambiguous_member_pointer_conv = Error (4) "ambiguous conversion from pointer to member of {0:base|derived} class {1} to pointer to member of {0:derived|base} class {2}:{3}";
+    sema_member_pointer_conv_via_virtual = Error (3) "conversion from pointer to member of class {0} to pointer to member of class {1} via virtual base {2} is not allowed";
+    sema_init_list_type_narrowing = WarningError [Cxx11Narrowing] (2) "type {0} cannot be narrowed to {1} in initializer list";
+    sema_init_list_variable_narrowing = WarningError [Cxx11Narrowing] (2) "non-constant-expression cannot be narrowed from type {0} to {1} in initializer list";
+    sema_init_list_constant_narrowing = WarningError [Cxx11Narrowing] (2) "constant expression evaluates to {0} which cannot be narrowed to type {1}";
+    note_init_list_narrowing_silence = Note (0) "insert an explicit cast to silence this issue";
+    sema_lvalue_ref_bind_to_temporary = Error (3) "{0:non-const|volatile} lvalue reference to type {1} cannot bind to a temporary of type {2}";
+    sema_lvalue_ref_bind_to_unrelated = Error (3) "{0:non-const|volatile} lvalue reference to type {1} cannot bind to a value of unrelated type {2}";
+    sema_rvalue_ref_bind_to_lvalue = Error (2) "rvalue reference to type {0} cannot bind to lvalue of type {1}";
+    sema_reference_bind_drops_quals = Error (4) "binding reference of type {0} to value of type {1} drops {2} qualifier{3:|s}";
+    sema_conv_unsupported = Error (1) "{0} is not supported yet";
+
     // ----- produced by the diagnostics engine itself --------------------
     diag_unknown_warning_option = Warning [UnknownWarningOption] (4) "unknown {0:warning|remark} option '{1}'{2:|; did you mean '{3}'?}";
     diag_unknown_warning_specifier = Warning [UnknownWarningOption] (2) "unknown {0} warning specifier: '{1}'";
