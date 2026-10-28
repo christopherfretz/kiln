@@ -11,5 +11,10 @@ kiln_source.workspace = true
 kiln_diag.workspace = true
 kiln_ast.workspace = true
 
+[dev-dependencies]
+# Record layouts and target sizes for the test bridge (the real bridge is
+# kiln_sema, which owns the kiln_abi call).
+kiln_abi.workspace = true
+
 [lints]
 workspace = true
