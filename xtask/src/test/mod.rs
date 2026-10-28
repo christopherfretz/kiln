@@ -5,8 +5,9 @@
 
 mod compare;
 mod diag_parse;
-mod directives;
+pub(crate) mod directives;
 mod discover;
+mod pp_tokens;
 mod report;
 mod runner;
 
@@ -17,6 +18,7 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use directives::PpCompare;
 use runner::TestResult;
 
 #[cfg(test)]
@@ -36,6 +38,12 @@ options:
   --no-oracle         skip all oracle comparisons
   --filter <substr>   only tests whose path contains <substr>
   --update            rewrite existing pp `.expected` files with the actual output
+                      (only those that differ under the comparison rule)
+  --pp-compare <how>  compare pp output as `tokens` or `text`, overriding every
+                      test's `pp-compare:` directive
+  --report-parity <file>
+                      write per-directory pass/fail counts into <file> between
+                      its `<!-- parity:begin -->`/`<!-- parity:end -->` markers
   -j, --jobs <N>      parallel tests (default: min(available CPUs, 8))
   --timeout <secs>    run-time limit for test binaries (default: 10)
   -v, --verbose       print every result and the commands that were run
@@ -56,6 +64,8 @@ pub struct Options {
     pub jobs: Option<usize>,
     pub run_timeout: Duration,
     pub verbose: bool,
+    pub pp_compare: Option<PpCompare>,
+    pub report_parity: Option<PathBuf>,
     pub paths: Vec<PathBuf>,
 }
 
@@ -70,6 +80,8 @@ impl Default for Options {
             jobs: None,
             run_timeout: Duration::from_secs(10),
             verbose: false,
+            pp_compare: None,
+            report_parity: None,
             paths: Vec::new(),
         }
     }
@@ -107,6 +119,14 @@ pub fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Option<Optio
                     .ok_or_else(|| format!("bad --timeout `{v}`"))?;
                 o.run_timeout = Duration::from_secs_f64(secs);
             }
+            "--pp-compare" => {
+                let v = value("--pp-compare")?;
+                o.pp_compare = Some(
+                    PpCompare::parse(&v)
+                        .ok_or_else(|| format!("bad --pp-compare `{v}` (tokens|text)"))?,
+                );
+            }
+            "--report-parity" => o.report_parity = Some(PathBuf::from(value("--report-parity")?)),
             "--no-oracle" | "--update" | "-v" | "--verbose" if inline.is_some() => {
                 return Err(format!("`{flag}` takes no value"));
             }
@@ -167,7 +187,8 @@ pub fn execute(opts: &Options) -> Result<Vec<TestResult>, String> {
         Some(c) => c.clone(),
         None => build_kiln(&root, &target, "test", false)?,
     };
-    let compiler_kind = detect_kind(&compiler)?;
+    let compiler_id = crate::util::identify(&compiler)?;
+    let compiler_kind = compiler_id.kind;
     let oracle = if opts.no_oracle {
         None
     } else {
@@ -190,6 +211,7 @@ pub fn execute(opts: &Options) -> Result<Vec<TestResult>, String> {
         scratch,
         compile_timeout: Duration::from_secs(120),
         run_timeout: opts.run_timeout,
+        pp_compare: opts.pp_compare,
     };
     let jobs = opts
         .jobs
@@ -218,6 +240,18 @@ pub fn execute(opts: &Options) -> Result<Vec<TestResult>, String> {
     let counts = report::Counts::of(&results);
     text.push_str(&report::format_summary(&counts, results.len(), start.elapsed()));
     print!("{text}");
+    if let Some(path) = &opts.report_parity {
+        let path = if path.is_absolute() { path.clone() } else { cfg.root.join(path) };
+        let header = report::ParityHeader {
+            compiler: compiler_id.version.clone(),
+            oracle: cfg.oracle.as_ref().map(|o| o.display().to_string()),
+            pp_compare: opts.pp_compare,
+            date: SystemTime::now(),
+            elapsed: start.elapsed(),
+        };
+        report::write_parity(&path, &header, &results)?;
+        println!("wrote parity report to {}", path.display());
+    }
     Ok(results)
 }
 

@@ -3,6 +3,9 @@
 
 use std::fmt::Write as _;
 
+use super::directives::PpCompare;
+use super::pp_tokens;
+
 /// Whitespace normalization for `-E -P` output (`spec/harness.md`): collapse
 /// runs of spaces/tabs to one space, trim both ends of every line, drop blank
 /// lines. Each kept line is `\n`-terminated.
@@ -24,15 +27,35 @@ pub fn normalize_pp(s: &str) -> String {
     out
 }
 
-/// Are two preprocessed outputs equivalent?
-///
-/// TODO(`kiln_lex`): once `kiln_lex` exists, re-lex both sides and compare
-/// token sequences (kind + spelling), per `docs/VALIDATION.md` "Differential
-/// testing against clang"; whitespace normalization is the interim rule and
-/// can produce false mismatches where only token-internal spacing differs
-/// (`a+b` vs `a + b`). Keep this the single entry point so the swap is local.
-pub fn pp_equivalent(expected: &str, actual: &str) -> bool {
-    normalize_pp(expected) == normalize_pp(actual)
+/// Compares two preprocessed outputs the way `how` says (`spec/harness.md`
+/// "pp comparison"). `None` when they are equivalent, else a failure report
+/// that starts with a one-line summary. `std` is the test's `-std=` value
+/// (it selects the re-lexing rules); `markers` is set when the output was
+/// produced without `-P`. `labels` name the two sides.
+pub fn pp_diff(
+    how: PpCompare,
+    std: &str,
+    markers: bool,
+    expected: &str,
+    actual: &str,
+    labels: (&str, &str),
+) -> Option<String> {
+    match how {
+        PpCompare::Tokens => {
+            pp_tokens::diff(expected, actual, pp_tokens::lex_std(std), markers, labels)
+        }
+        PpCompare::Text => {
+            let (a, b) = (normalize_pp(expected), normalize_pp(actual));
+            (a != b).then(|| {
+                format!(
+                    "outputs differ after whitespace normalization (-{} +{}):\n{}",
+                    labels.0,
+                    labels.1,
+                    line_diff(&a, &b)
+                )
+            })
+        }
+    }
 }
 
 /// A line diff of `expected` vs `actual`: `-` lines are missing from actual,
@@ -118,8 +141,16 @@ mod tests {
     fn normalization() {
         assert_eq!(normalize_pp("  a \t+   b  \n\n\t\n c\r\n"), "a + b\nc\n");
         assert_eq!(normalize_pp(""), "");
-        assert!(pp_equivalent("x  y\n\n", "\n   x y"));
-        assert!(!pp_equivalent("x y", "xy"));
+        let text = |a: &str, b: &str| pp_diff(PpCompare::Text, "c++26", false, a, b, ("e", "a"));
+        assert_eq!(text("x  y\n\n", "\n   x y"), None);
+        assert!(
+            text("x y", "xy")
+                .unwrap()
+                .starts_with("outputs differ after whitespace normalization (-e +a):\n")
+        );
+        // The text rule sees spacing the token rule ignores.
+        assert!(text("a+b", "a + b").is_some());
+        assert_eq!(pp_diff(PpCompare::Tokens, "c++26", false, "a+b", "a + b", ("e", "a")), None);
     }
 
     #[test]

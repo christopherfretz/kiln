@@ -1,0 +1,7 @@
+a 4 "tests/differential/pp/torture/cpp.line-directive.cpp"
+b 100
+c 101
+d 200 "renamed.cpp"
+e 300 "macro-named.cpp"
+f 7 "with spaces and \"quotes\".cpp"
+g 50 "gnu-style.cpp"

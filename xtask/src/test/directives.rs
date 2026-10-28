@@ -49,6 +49,70 @@ impl Expect {
     }
 }
 
+/// How a `pp` test's output is compared (`pp-compare:`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum PpCompare {
+    /// Re-lex both outputs with `kiln_lex` and compare pp-token sequences.
+    #[default]
+    Tokens,
+    /// Whitespace-normalized text, line by line.
+    Text,
+}
+
+impl PpCompare {
+    pub fn parse(s: &str) -> Option<Self> {
+        Some(match s {
+            "tokens" => Self::Tokens,
+            "text" => Self::Text,
+            _ => return None,
+        })
+    }
+}
+
+/// The `%{name}` placeholders `args:` may use, substituted by the runner
+/// (`spec/harness.md` "Placeholders").
+pub const PLACEHOLDERS: &[&str] = &["repo_root", "resource_dir", "test_dir"];
+
+/// Checks that every `%{...}` in `arg` names a known placeholder.
+fn check_placeholders(arg: &str) -> Result<(), String> {
+    let mut rest = arg;
+    while let Some(i) = rest.find("%{") {
+        let after = &rest[i + 2..];
+        let Some(end) = after.find('}') else {
+            return Err(format!("unterminated placeholder in `{arg}`"));
+        };
+        let name = &after[..end];
+        if !PLACEHOLDERS.contains(&name) {
+            return Err(format!(
+                "unknown placeholder `%{{{name}}}` (known: {})",
+                PLACEHOLDERS.iter().map(|p| format!("%{{{p}}}")).collect::<Vec<_>>().join(", ")
+            ));
+        }
+        rest = &after[end + 1..];
+    }
+    Ok(())
+}
+
+/// Replaces the placeholders in `arg`; `value` maps a known name to its
+/// value. Unknown names were rejected by the parser and are left alone.
+pub fn substitute(arg: &str, value: impl Fn(&str) -> Option<String>) -> String {
+    let mut out = String::with_capacity(arg.len());
+    let mut rest = arg;
+    while let Some(i) = rest.find("%{") {
+        out.push_str(&rest[..i]);
+        let after = &rest[i + 2..];
+        if let Some((end, v)) = after.find('}').and_then(|end| Some((end, value(&after[..end])?))) {
+            out.push_str(&v);
+            rest = &after[end + 1..];
+        } else {
+            out.push_str("%{");
+            rest = after;
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
 /// Source language, from the file extension (`.c` is C, everything else C++).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Lang {
@@ -169,6 +233,10 @@ pub struct TestSpec {
     pub oven: Vec<OvenBudget>,
     pub skip: Vec<Marker>,
     pub xfail: Vec<Marker>,
+    /// `pp-compare:`: how `pp` output is compared (default token-wise).
+    pub pp_compare: PpCompare,
+    /// `pp-linemarkers`: preprocess without `-P` and compare line markers.
+    pub pp_linemarkers: bool,
 }
 
 impl TestSpec {
@@ -228,8 +296,11 @@ struct Parser {
     oven_lines: Vec<usize>,
     skip: Vec<Marker>,
     xfail: Vec<Marker>,
+    pp_compare: Option<PpCompare>,
+    pp_linemarkers: bool,
     /// Lines of directives whose validity depends on `expect`.
     run_only: Vec<(usize, &'static str)>,
+    pp_only: Vec<(usize, &'static str)>,
     oracle_line: usize,
     stdout_file_line: usize,
     stdin_file_line: usize,
@@ -257,7 +328,10 @@ impl Parser {
             oven_lines: Vec::new(),
             skip: Vec::new(),
             xfail: Vec::new(),
+            pp_compare: None,
+            pp_linemarkers: false,
             run_only: Vec::new(),
+            pp_only: Vec::new(),
             oracle_line: 0,
             stdout_file_line: 0,
             stdin_file_line: 0,
@@ -283,9 +357,24 @@ impl Parser {
             },
             "std" => self.std_directive(line, value),
             "args" => match split_args(value) {
-                Ok(mut a) => self.args.append(&mut a),
+                Ok(mut a) => {
+                    for e in a.iter().filter_map(|a| check_placeholders(a).err()) {
+                        self.err(line, e);
+                    }
+                    self.args.append(&mut a);
+                }
                 Err(e) => self.err(line, e),
             },
+            "pp-compare" => {
+                self.pp_only.push((line, "pp-compare"));
+                match PpCompare::parse(value) {
+                    Some(_) if self.pp_compare.is_some() => {
+                        self.err(line, "duplicate `pp-compare`");
+                    }
+                    Some(c) => self.pp_compare = Some(c),
+                    None => self.err(line, format!("unknown pp-compare `{value}` (tokens|text)")),
+                }
+            }
             "diag" => match parse_diag(value, line) {
                 Ok(d) => {
                     if d.severity == Severity::Note && self.diags.is_empty() {
@@ -375,6 +464,16 @@ impl Parser {
                 self.err(line, "duplicate `strict-diags`");
             }
             self.strict_diags = true;
+            return None;
+        }
+        if name == "pp-linemarkers" {
+            self.pp_only.push((line, "pp-linemarkers"));
+            if value.is_some() {
+                self.err(line, "`pp-linemarkers` takes no value");
+            } else if self.pp_linemarkers {
+                self.err(line, "duplicate `pp-linemarkers`");
+            }
+            self.pp_linemarkers = true;
             return None;
         }
         let Some(value) = value else {
@@ -492,6 +591,11 @@ impl Parser {
                 self.err(line, format!("`{key}` only applies to `expect: run`"));
             }
         }
+        if expect != Expect::Pp {
+            for (line, key) in std::mem::take(&mut self.pp_only) {
+                self.err(line, format!("`{key}` only applies to `expect: pp`"));
+            }
+        }
         if self.oracle.is_some() && !matches!(expect, Expect::Run | Expect::Pp) {
             self.err(self.oracle_line, "`oracle` only applies to `run` and `pp` tests");
         }
@@ -542,6 +646,8 @@ impl Parser {
             oven: self.oven,
             skip: self.skip,
             xfail: self.xfail,
+            pp_compare: self.pp_compare.unwrap_or_default(),
+            pp_linemarkers: self.pp_linemarkers,
         })
     }
 }
@@ -564,6 +670,7 @@ fn is_known_key(k: &str) -> bool {
             | "oven"
             | "skip"
             | "xfail"
+            | "pp-compare"
     )
 }
 
@@ -876,6 +983,35 @@ mod tests {
         assert!(e[0].contains("duplicate `xfail`"));
         let e = errs("//@ expect\n");
         assert!(e[0].contains("requires a value"));
+    }
+
+    #[test]
+    fn pp_directives_and_placeholders() {
+        let s = ok("//@ expect: pp\n");
+        assert_eq!((s.pp_compare, s.pp_linemarkers), (PpCompare::Tokens, false));
+        let s = ok("//@ expect: pp\n//@ pp-compare: text\n//@ pp-linemarkers\n");
+        assert_eq!((s.pp_compare, s.pp_linemarkers), (PpCompare::Text, true));
+        let e = errs("//@ pp-compare: text\n//@ pp-linemarkers\n");
+        assert_eq!(
+            e,
+            [
+                "line 1: `pp-compare` only applies to `expect: pp`",
+                "line 2: `pp-linemarkers` only applies to `expect: pp`"
+            ]
+        );
+        let e = errs("//@ expect: pp\n//@ pp-compare: bytes\n//@ pp-linemarkers: yes\n");
+        assert!(e[0].contains("unknown pp-compare `bytes`"), "{e:?}");
+        assert!(e[1].contains("takes no value"), "{e:?}");
+
+        let s = ok("//@ args: -I%{test_dir}/Inputs -resource-dir %{resource_dir}\n");
+        assert_eq!(s.args, ["-I%{test_dir}/Inputs", "-resource-dir", "%{resource_dir}"]);
+        let e = errs("//@ args: -I%{tests_dir} %{repo_root\n");
+        assert!(e[0].contains("unknown placeholder `%{tests_dir}`"), "{e:?}");
+        assert!(e[1].contains("unterminated placeholder"), "{e:?}");
+        let v = |n: &str| (n == "repo_root").then(|| "/r".to_owned());
+        assert_eq!(substitute("-I%{repo_root}/x%{repo_root}", v), "-I/r/x/r");
+        assert_eq!(substitute("%{other}%{repo_root}%{", v), "%{other}/r%{");
+        assert_eq!(substitute("plain", v), "plain");
     }
 
     #[test]

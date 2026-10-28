@@ -1,0 +1,5 @@
+has_x;
+no_y;
+has_x_not_z;
+defined() defined Y defined(foo_FLAG) defined
+all_forms;

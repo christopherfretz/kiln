@@ -18,6 +18,8 @@ cargo xtask test [options] [paths...]
 | `--no-oracle` | Skip all oracle comparisons. |
 | `--filter <substr>` | Keep only tests whose name (repo-relative path) contains `<substr>`. |
 | `--update` | Rewrite existing pp `.expected` goldens with the actual output. |
+| `--pp-compare tokens\|text` | Override every pp test's `pp-compare:` directive (see "pp comparison"). |
+| `--report-parity <file>` | After the run, write a parity table into `<file>` (see "Parity report"). A relative path is relative to the repo root. |
 | `-j, --jobs <N>` | Parallel tests. Default `min(available CPUs, 8)`, capped at the test count. |
 | `--timeout <secs>` | Run-time limit for test binaries (float seconds, default 10). Compiles have a fixed 120 s limit. |
 | `-v, --verbose` | Print every result and every command that was run. |
@@ -56,7 +58,7 @@ directives are also ERRORs.
 |---|---|
 | `expect: compile-ok \| compile-fail \| run \| pp` | Test kind. Default `compile-ok`. |
 | `std: <std>` | `c++98 c++03 c++11 c++14 c++17 c++20 c++23 c++26` (C++), `c89 c99 c11 c17 c23` (C). Default `c++26` / `c17`. Passed as `-std=<std>`. |
-| `args: <flags>` | Extra compiler flags, split shell-style (quotes, backslash). It may be repeated, and the flags accumulate. |
+| `args: <flags>` | Extra compiler flags, split shell-style (quotes, backslash). It may be repeated, and the flags accumulate. Placeholders are substituted in each flag (below). |
 | `diag: <line>[:<col>] <sev> "<substring>"` | Expected diagnostic. `<sev>` is one of `error fatal warning note remark`. If the column is omitted, any column matches. |
 | `strict-diags` | The `diag:` list is exhaustive for diagnostics located in the test file. |
 | `stdout: <text>` | `run` only. Each line contributes its value, trimmed, plus `\n`. Repeated lines concatenate in order. |
@@ -67,14 +69,31 @@ directives are also ERRORs.
 | `run-stdin-file: <path>` | `run` only. The program's stdin is the file's exact contents. The path is relative to the test's directory (use `Inputs/`, which discovery skips). It cannot be combined with `run-stdin:`. A missing file is an ERROR. |
 | `env: <NAME>=<value>` | `run` only. Sets an environment variable for the program (the inherited environment is otherwise kept). `NAME` matches `[A-Za-z_][A-Za-z0-9_]*`; the value is the rest of the line, trimmed, and may be empty or contain `=`. It may be repeated, once per name. |
 | `oracle: clang \| none` | `run`/`pp` only. Whether to compare with the oracle. Defaults to `clang` for `run` and `pp`. |
+| `pp-compare: tokens \| text` | `pp` only. How outputs are compared (see "pp comparison"). Default `tokens`. |
+| `pp-linemarkers` | `pp` only. Preprocess with `-E` instead of `-E -P`, so the output keeps line markers, and compare them (see "pp comparison"). |
 | `oven: [<line>[:<col>]] <counter><=N ...` | kiln-specific constexpr budget; `<counter>` is `steps`, `bytes`, `peak_bytes`, `calls`, `allocs` or `evaluations`. Not for `pp`. See "kiln-specific tests". |
 | `skip[(kiln\|clang)]: <reason>` | Do not run. A qualified marker applies only to that compiler kind. |
 | `xfail[(kiln\|clang)]: <reason>` | Expected to FAIL. Qualified as for `skip`. |
 
-`expect`, `std`, `stdout-file`, `run-stdin-file`, `exit`, `oracle`, and each
-`skip`/`xfail` qualifier may appear at most once; `oven` at most once per
+`expect`, `std`, `stdout-file`, `run-stdin-file`, `exit`, `oracle`,
+`pp-compare`, `pp-linemarkers`, and each `skip`/`xfail` qualifier may appear
+at most once; `oven` at most once per
 location (and once without one). If both a qualified marker
 and an unqualified marker apply, the qualified one's reason is reported.
+
+**Placeholders.** An `args:` flag may contain `%{name}`, replaced when the
+command is built:
+
+| Placeholder | Value |
+|---|---|
+| `%{repo_root}` | The repo root (absolute). |
+| `%{resource_dir}` | `<repo_root>/resource`, kiln's resource directory (the directory that contains `include/`, which is what `-resource-dir` expects). |
+| `%{test_dir}` | The directory containing the test (absolute). |
+
+An unknown name or a `%{` without a closing `}` is an ERROR at parse time.
+There is no escape for a literal `%{`. Values are absolute paths, so a
+`pp-linemarkers` test whose golden must not depend on the checkout location
+should name include directories repo-relative instead (cwd is the repo root).
 
 The compiler kind is detected from the first line of `<compiler> --version`.
 It is `kiln` if that line starts with `kiln version`, `clang` if it contains
@@ -137,7 +156,7 @@ satisfies `compile-fail`.
 | `compile-ok` | `-fsyntax-only` | exit 0, and the diags match |
 | `compile-fail` | `-fsyntax-only` | non-zero exit, at least one `error`/`fatal` located in the test file, and the diags match |
 | `run` | compile and link to `<scratch>/test.out` | the compile succeeds and the diags match; the binary exits normally within `--timeout`; stdout equals the expectation exactly (if one is given); the exit code equals `exit:` (default 0); the oracle agrees (below) |
-| `pp` | `-E -P` | exit 0; the diags match; the output equals `<test>.expected` after normalization (if that file exists); the oracle agrees (below) |
+| `pp` | `-E -P` (`-E` with `pp-linemarkers`) | exit 0; the diags match; the output is equivalent to `<test>.expected` (if that file exists); the oracle agrees (below). Equivalence is defined in "pp comparison". |
 
 The `run` binary runs with cwd = its scratch dir, the `run-args:` arguments,
 the inherited environment plus `env:`, and the `run-stdin:` /
@@ -152,27 +171,68 @@ binary's, and so must its exit status. If the oracle's binary is killed by a
 signal or exceeds `--timeout`, the test is an **ERROR**: the reference itself
 is broken, so there is nothing to compare with.
 
-For `pp`, the oracle's `-E -P` output must equal the compiler's after
-normalization.
+For `pp`, the oracle preprocesses with the same flags, and its output must be
+equivalent to the compiler's (see "pp comparison").
 
 The oracle is run even when the compiler under test is itself clang. This
 keeps the harness's own code paths exercised. If the oracle compile fails or
 hangs (exceeds the compile timeout), the test is an **ERROR**: the test is
 wrong, not the compiler.
 
-### pp normalization
+### pp comparison
 
-Runs of spaces and tabs collapse to one space, lines are trimmed, and blank
-lines are dropped. The function is `compare::pp_equivalent`.
+Two preprocessed outputs are compared in one of two modes, chosen by the
+`--pp-compare` option, else the test's `pp-compare:` directive, else
+`tokens`. The mismatch report names the mode.
 
-TODO(kiln_lex): replace this with a token-wise comparison, re-lexing both
-outputs, once `kiln_lex` exists. VALIDATION.md asks for that.
+**`tokens`** (the default; `xtask/src/test/pp_tokens.rs`). Both outputs are
+re-lexed with `kiln_lex` under the test's standard (`c++NN` as written; C
+standards use the C++98 rules until `kiln_lex` has a C mode) and compared as
+sequences of preprocessing tokens:
+
+- Whitespace, comments and line breaks are not compared, except as token
+  boundaries. `a+b` and `a + b` are equal; `++` and `+ +` are not.
+- Punctuators compare by kind, so a digraph equals its primary spelling
+  (`<:` equals `[`, `%:%:` equals `##`).
+- Every other token compares by category (identifier, pp-number, character
+  literal, string literal, raw string literal, header name, other character,
+  invalid) and spelling. The spelling is taken after removing line splices
+  (and trigraphs, where the standard has them), and is otherwise exact: a
+  UCN and the character it names are different spellings, as are `0x1F` and
+  `0X1f`.
+- Without `pp-linemarkers` (`-P`), nothing else is compared.
+- With `pp-linemarkers`, lines of the form `# N "file" flags` (and
+  `#line N "file"`) are parsed instead of compared as tokens. Every token
+  gets a presumed location (file, line) and the system-header flags (3, 4) in
+  effect, and those are compared too. A marker that enters (flag 1) or
+  leaves (flag 2) a file is itself an item, compared by line, file and
+  flags, except markers that enter or leave a pseudo-file (`<built-in>`,
+  `<command line>`), which differ between compilers. Markers without flag
+  1 or 2 only move the presumed location, so the choice between a marker and
+  blank lines is not compared. File names are normalized by collapsing
+  `//`, `/./` and `dir/..`.
+
+On a mismatch the report gives the index of the first differing item and
+the item counts, three items of context, then the differing items, `-` for
+the expected side (the golden or the oracle) and `+` for the actual one, as
+`line:col  spelling  (category)`; in marker mode each token also shows
+` [file:line]` (plus ` sys` or ` sys extern-C`), and a marker item shows as
+`# N file flags  (line marker)`. The
+items stop where the two sides agree again (8 equal items within 64 of
+each side), or after 10. The report ends with the physical output line of
+the first difference on each side.
+
+**`text`** (`compare::pp_diff`). Runs of spaces and tabs collapse to one
+space, lines are trimmed, and blank lines are dropped; the results must be
+equal, and the report is a line diff. Use it for a test whose point is the
+exact layout of the output (the printer's spacing), not its tokens.
 
 ### Goldens
 
 A pp golden is `<test file name>.expected`, for example
 `function-like.cpp.expected`, stored next to the test. `--update` rewrites an
-existing golden with the raw actual output when it differs, and reports
+existing golden with the raw actual output when the comparison above says it
+differs (so a golden is not churned by spacing changes), and reports
 "updated N .expected file(s)". It never creates a golden. To opt a test into a
 golden, create an empty file and run `--update`, then review the diff.
 
@@ -201,6 +261,50 @@ compile fails for that reason. Then:
   location, the counter, its value and the budget.
 
 The report's total is listed with the commands under `-v`.
+
+### Parity report
+
+`--report-parity <file>` writes, after the run, a markdown summary between
+the lines `<!-- parity:begin -->` and `<!-- parity:end -->` in `<file>`:
+the compiler, the oracle, the pp comparison mode, the run date, and one
+table row per directory of tests (the test's parent directory) plus a total,
+with columns tests, pass, fail, xfail, xpass, skip, error and pass rate
+(pass / (tests - skip)). Text outside the markers is kept, so the file can
+carry hand-written context. A file without the markers gets them appended; a
+missing file is created; a file with only one of the markers is an
+infrastructure error (exit 2). The report is written whatever the outcome.
+`docs/status/pp-parity.md` is the preprocessor parity page:
+
+```
+cargo xtask test tests/differential/pp --report-parity docs/status/pp-parity.md
+```
+
+## Generated pp corpus
+
+`cargo xtask gen-pp-corpus` (`xtask/src/gen_pp.rs`) writes one `pp` test
+per header to `tests/differential/pp/`, each `#include`-ing the header with
+`-stdlib=libc++ -resource-dir %{resource_dir}`, oracle clang, and no golden:
+
+| Directory | Headers |
+|---|---|
+| `libcxx/` | libc++'s public headers (files in its include dir without `.h`, plus `cxxabi.h`) |
+| `libcxx/experimental/` | libc++'s public `experimental/` headers |
+| `libcxx-c/` | the C headers libc++ wraps (its `.h` files) |
+| `sysroot/` | top-level `<sysroot>/*.h` headers that libc++ does not wrap |
+
+Excluded, with the reason printed by the generator: names starting with `__`
+(internal), `ext/` (deprecated GNU extensions), `libcxx.imp` and
+`module.modulemap` (not headers), and sysroot headers that cannot be
+included on their own (`gnumake.h`, `regexp.h`).
+
+Options: `--std <std>` (default `c++26`; any other standard goes to sibling
+files named `<header>.<std>.cpp`), `--libcxx <dir>` (default
+`/usr/lib/llvm-19/include/c++/v1`), `--sysroot <dir>` (default
+`/usr/include`), `--out <dir>`, and `--check` (write nothing; exit 1 if any
+file would change). The generator writes only changed files, removes stale
+generated files (those starting with its banner) in the directories it owns,
+and prints per-directory counts. Hand-written tests live in
+`tests/differential/pp/torture/`, which the generator does not touch.
 
 ## Outcomes
 
@@ -252,15 +356,21 @@ so neither is skipped there.
 
 ## Tests backing this spec
 
-- `xtask/src/test/{directives,diag_parse,compare}.rs` and
-  `xtask/src/util/process.rs`: unit tests for the directive parser, the
-  diagnostic parser and matcher, normalization and diffs, and process
-  timeouts.
+- `xtask/src/test/{directives,diag_parse,compare,pp_tokens,report}.rs` and
+  `xtask/src/util/process.rs`: unit tests for the directive parser and
+  placeholders, the diagnostic parser and matcher, normalization and diffs,
+  token-wise pp comparison (token boundaries, digraphs, `<::`, line markers,
+  mismatch reports), the parity report, and process timeouts.
+- `xtask/src/gen_pp.rs`: the generator's options, and idempotent generation
+  over a fake header tree.
 - `xtask/src/test/tests.rs`:
-  - the seed corpus passes with clang, and every directive kind appears in it;
+  - the seed corpus (`tests/conformance`, `tests/differential` except the
+    generated pp corpus, plus `tests/differential/pp/torture`) passes with
+    clang, and every directive kind appears in it;
   - `xtask/fixtures/basic/` (one fixture per outcome, with the expected status
     as the file-name prefix), including program arguments, stdin and
-    environment, and the oracle's binary hanging or crashing;
+    environment, the oracle's binary hanging or crashing, token-wise and text
+    pp comparison, `pp-linemarkers` goldens, and placeholders;
   - `xtask/fixtures/oven/`: `oven:` budgets, run against
     `xtask/fixtures/fake-kiln/kiln`, a shell script that identifies as kiln,
     compiles with clang and writes the canned report `<test>.oven.jsonl`

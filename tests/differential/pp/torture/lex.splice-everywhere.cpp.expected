@@ -1,0 +1,4 @@
+value value 1234 0x1F ++ -> <<= "string" 'c' u8"pref" L'w'
+  after_comment;
+in_header_with_trailing_splice
+ after_include;

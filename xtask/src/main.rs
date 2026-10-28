@@ -4,6 +4,7 @@
 use std::process::ExitCode;
 
 mod bench;
+mod gen_pp;
 mod test;
 mod util;
 
@@ -15,6 +16,9 @@ commands:
               (`cargo xtask test --help` for options; contract in spec/harness.md)
   bench       measure bench/ compile time and memory against bench/baselines
               (`cargo xtask bench --help` for options; contract in spec/bench.md)
+  gen-pp-corpus
+              write the generated per-header preprocessor corpus under
+              tests/differential/pp (`cargo xtask gen-pp-corpus --help`)
   libcxx      run the libc++ lit suite with kiln as the compiler
   ci          fmt --check, clippy -D warnings, cargo test, and (when clang++-19 is
               on PATH) xtask test --compiler clang++-19 as a corpus self-check
@@ -25,6 +29,7 @@ fn main() -> ExitCode {
     match args.next().as_deref() {
         Some("test") => test::main(args),
         Some("bench") => bench::main(args),
+        Some("gen-pp-corpus") => gen_pp::main(args),
         Some("libcxx") => {
             eprintln!("xtask: not implemented yet (M0 work package)");
             ExitCode::FAILURE

@@ -1,0 +1,6 @@
+a 0 1;
+b 2 2;
+c "__COUNTER__" v__COUNTER__;
+d "3" v4;
+f 6;
+g 7 8;

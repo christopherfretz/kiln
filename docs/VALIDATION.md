@@ -33,7 +33,8 @@ Directives (the full contract, including matching and outcome rules, is
 [spec/harness.md](../spec/harness.md)):
 - `expect: compile-ok | compile-fail | run | pp` (default `compile-ok`)
 - `std: c++98..c++26 | c89..c23` (default `c++26`, `c17` for `.c`),
-  `args: <extra flags>`
+  `args: <extra flags>` (which may use the placeholders `%{repo_root}`,
+  `%{resource_dir}` and `%{test_dir}`)
 - `diag: <line>[:<col>] <error|fatal|warning|note|remark> "<substring>"`.
   Every listed diagnostic must appear; `strict-diags` makes the list exhaustive.
   "In order" was left open here and is now settled. Each primary diagnostic
@@ -46,6 +47,9 @@ Directives (the full contract, including matching and outcome rules, is
   `run-stdin-file: <path>`, `env: NAME=value`
 - `oracle: clang | none` for `run`/`pp` tests: also build with clang and
   require identical output (`clang` is the default for `run` and `pp`)
+- `pp-compare: tokens | text` and `pp-linemarkers` for `pp` tests: how the
+  output is compared (token-wise by default) and whether line markers are
+  kept (`-E` instead of `-E -P`) and compared
 - `oven: [<line>[:<col>]] steps<=N bytes<=M ...` asserts a constexpr budget,
   on the whole TU or on the evaluations at one line of the test. It is
   kiln-specific and skipped elsewhere. kiln reports its counters with
@@ -59,8 +63,8 @@ Directives (the full contract, including matching and outcome rules, is
 The directive header must come first; a `//@` line after it is an error.
 A `.h` file is a test only if it has directives, and `Inputs/` directories
 hold auxiliary files, never tests. A pp golden is `<test file>.expected`, for
-example `foo.cpp.expected`. It is compared after whitespace normalization and
-refreshed by `cargo xtask test --update`.
+example `foo.cpp.expected`. It is compared token-wise (or as normalized text
+under `pp-compare: text`) and refreshed by `cargo xtask test --update`.
 
 The corpus validates itself: `cargo xtask ci` runs `cargo xtask test
 --compiler clang++-19` after the unit tests (skipped with a note when clang 19
@@ -75,10 +79,29 @@ a query, not a guess.
 ## Differential testing against clang
 
 `clang-19` is the oracle for everything that is not a kiln-specific feature.
-- `-E`: token-wise comparison after both outputs are re-lexed; whitespace
-  and line markers are normalized out except in printer tests. Until
-  `kiln_lex` exists, the harness compares `-E -P` output after whitespace
-  normalization (collapsed blanks, trimmed lines, no blank lines).
+- `-E`: token-wise comparison after both outputs are re-lexed with
+  `kiln_lex`. Identifiers and literals compare by spelling, punctuators by
+  kind (a digraph equals its primary spelling), and whitespace is ignored.
+  Tests run with `-E -P` by default; a `pp-linemarkers` test keeps the line
+  markers and compares the include enter/leave events and every token's
+  presumed file and line. Printer tests that care about spacing opt into
+  `pp-compare: text`. The rules are in spec/harness.md "pp comparison".
+  The preprocessor corpus is `tests/differential/pp/`:
+  - one generated test per header (`cargo xtask gen-pp-corpus`): every
+    libc++ 19 public header including `experimental/`, the C headers libc++
+    wraps, and the top-level `/usr/include/*.h` headers it does not. This is
+    the M1 exit criterion: `kiln -E` must agree with `clang -E` on all of
+    them;
+  - `torture/`: hand-written tests of the hard corners (hide sets,
+    placemarkers, `__VA_OPT__`, stringizing, `#include` of macro-expanded
+    names, `__COUNTER__`/`__LINE__`, `#line`, `_Pragma`, include guards and
+    `#pragma once`, `#embed`, UCNs, raw strings, digraphs, line splices,
+    files without a final newline, line markers), with goldens. Their intent
+    follows clang's `clang/test/Preprocessor/`, written independently.
+
+  `cargo xtask test tests/differential/pp --report-parity
+  docs/status/pp-parity.md` refreshes the parity table on
+  `docs/status/pp-parity.md`.
 - `run`: stdout and exit code must match a clang-built binary.
 - layout: `kiln -fdump-record-layouts` vs clang's for every class in the
   corpus; mangled names vs clang's for every external symbol.

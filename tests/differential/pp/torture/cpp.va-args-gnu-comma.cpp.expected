@@ -1,0 +1,4 @@
+call("a") call("a",) call("a", 1) call("a", 1, 2)
+call("a" ) call("a" ) call("a" , 1) call("a" , 1, 2)
+call(x) call(x,1) call(x,,)
+call() call(1, 2) call(f) call(f, 1)

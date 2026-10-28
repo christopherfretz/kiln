@@ -1,0 +1,16 @@
+before1
+#pragma kiln_torture plain
+                                      after1
+before2
+#pragma kiln_torture "from a macro" (1, 2)
+                                                      after2
+before3
+#pragma kiln_torture in argument
+        arg after3
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused"
+#pragma GCC diagnostic pop
+#pragma kiln_torture wide
+#pragma kiln_torture spaced
+#pragma kiln_torture "quoted" \ backslash
+#pragma kiln_torture direct spacing kept

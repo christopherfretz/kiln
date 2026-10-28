@@ -1,0 +1,6 @@
+self + 1; ping; pong;
+2*9*g;
+42;
+REC;
+1;
+0 LOOP LOOP(1)(2);

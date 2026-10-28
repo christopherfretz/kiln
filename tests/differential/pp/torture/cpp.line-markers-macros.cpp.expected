@@ -1,0 +1,24 @@
+# 1 "tests/differential/pp/torture/cpp.line-markers-macros.cpp"
+# 1 "<built-in>" 1
+# 1 "<built-in>" 3
+# 493 "<built-in>" 3
+# 1 "<command line>" 1
+# 1 "<built-in>" 2
+# 1 "tests/differential/pp/torture/cpp.line-markers-macros.cpp" 2
+
+
+
+
+
+
+1 + 2 after_f;
+
+next_line one two;
+one two + 3
+
+
+
+
+x + y tail;
+
+last;

@@ -1,0 +1,5 @@
+#line 1 "xtask/fixtures/basic/pass-pp-linemarkers.cpp"
+# 1 "xtask/fixtures/basic/./Inputs/aux.h" 1
+# 6 "xtask/fixtures/basic//pass-pp-linemarkers.cpp" 2
+# 8 "xtask/fixtures/basic/pass-pp-linemarkers.cpp"
+int after;

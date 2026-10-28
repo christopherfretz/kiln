@@ -1,0 +1,12 @@
+unsigned_compare;
+all_ones_equal;
+conditional_converts;
+char_unsigned_or_other;
+identifiers_are_zero;
+cxx_booleans;
+short_circuit;
+short_circuit_or;
+logical_results;
+shifts;
+division;
+literal_forms;

@@ -1,0 +1,9 @@
+int all[] = {97, 98, 99, 100, 101, 102 };
+int three[] = {97, 98, 99 };
+int macro_limit[] = {97, 98 };
+int wrapped[] = {100,97, 98 , 200};
+int empty_file[] = {42};
+int zero_limit[] = {7, 8};
+found;
+empty;
+not_found;
