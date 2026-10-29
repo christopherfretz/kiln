@@ -335,6 +335,9 @@ impl Sema<'_, '_> {
     /// (`non_odr_use_constant`); every other named variable is `used`.
     pub fn act_on_full_expr(&mut self, e: ExprId) -> ExprId {
         self.flush_member_refs();
+        if !self.special.pending_deleted.is_empty() {
+            self.flush_pending_deleted();
+        }
         if self.pending_odr.is_empty() {
             return e;
         }
@@ -738,7 +741,9 @@ impl Sema<'_, '_> {
         if self.is_class_member_ref(d) {
             return self.implicit_member_ref(d, loc, found.shadow(0), qualifier.is_some());
         }
-        self.build_decl_ref_via(d, loc, found.shadow(0))
+        let e = self.build_decl_ref_via(d, loc, found.shadow(0));
+        self.note_function_name_use(d, e, loc, qualifier.is_none());
+        e
     }
 
     /// A `DeclRefExpr` naming the value `d`.
@@ -2019,6 +2024,14 @@ impl Sema<'_, '_> {
             if !args.iter().any(|&a| self.expr_is_type_dependent(a)) {
                 self.ast.decls.set_flags(d, DeclFlags::REFERENCED);
             }
+        }
+        // [dcl.fct.def.delete]/2: a call of a deleted function by its
+        // unqualified name (spec/sema-class.md §4.3).
+        if !self.special.pending_deleted.is_empty() {
+            let invalid = self.is_err_expr(callee) || args.iter().any(|&a| self.is_err_expr(a));
+            let dependent = self.expr_is_type_dependent(callee)
+                || args.iter().any(|&a| self.expr_is_type_dependent(a));
+            self.act_on_deleted_callee(callee, dependent, invalid);
         }
         let mut kids = vec![callee];
         kids.extend_from_slice(args);

@@ -226,6 +226,7 @@ pub enum StdinInput {
 
 /// Everything the directive header says about one test.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[allow(clippy::struct_excessive_bools, reason = "independent directives")]
 pub struct TestSpec {
     pub expect: Expect,
     /// The `-std=` value, e.g. `c++26`.
@@ -255,6 +256,9 @@ pub struct TestSpec {
     /// `ast-filter:`: dump only the declarations whose qualified name
     /// contains this substring (`-fdump-ast-filter=`).
     pub ast_filter: Option<String>,
+    /// `ast-implicit`: include implicit declarations (`-fdump-ast=implicit`,
+    /// `xtask clang-ast --implicit`).
+    pub ast_implicit: bool,
 }
 
 impl TestSpec {
@@ -317,6 +321,7 @@ struct Parser {
     pp_compare: Option<PpCompare>,
     pp_linemarkers: bool,
     ast_filter: Option<String>,
+    ast_implicit: bool,
     /// Lines of directives whose validity depends on `expect`.
     run_only: Vec<(usize, &'static str)>,
     pp_only: Vec<(usize, &'static str)>,
@@ -351,6 +356,7 @@ impl Parser {
             pp_compare: None,
             pp_linemarkers: false,
             ast_filter: None,
+            ast_implicit: false,
             run_only: Vec::new(),
             pp_only: Vec::new(),
             ast_only: Vec::new(),
@@ -496,6 +502,16 @@ impl Parser {
                 self.err(line, "duplicate `strict-diags`");
             }
             self.strict_diags = true;
+            return None;
+        }
+        if name == "ast-implicit" {
+            self.ast_only.push((line, "ast-implicit"));
+            if value.is_some() {
+                self.err(line, "`ast-implicit` takes no value");
+            } else if self.ast_implicit {
+                self.err(line, "duplicate `ast-implicit`");
+            }
+            self.ast_implicit = true;
             return None;
         }
         if name == "pp-linemarkers" {
@@ -691,6 +707,7 @@ impl Parser {
             pp_compare: self.pp_compare.unwrap_or_default(),
             pp_linemarkers: self.pp_linemarkers,
             ast_filter: self.ast_filter,
+            ast_implicit: self.ast_implicit,
         })
     }
 }
@@ -1070,6 +1087,21 @@ mod tests {
         assert_eq!(
             errs("//@ ast-filter: f\n"),
             ["line 1: `ast-filter` only applies to `expect: ast`"]
+        );
+        let s = ok("//@ expect: ast\n//@ ast-implicit\n");
+        assert!(s.ast_implicit);
+        assert!(!ok("//@ expect: ast\n").ast_implicit);
+        assert_eq!(
+            errs("//@ ast-implicit\n"),
+            ["line 1: `ast-implicit` only applies to `expect: ast`"]
+        );
+        assert_eq!(
+            errs("//@ expect: ast\n//@ ast-implicit\n//@ ast-implicit\n"),
+            ["line 3: duplicate `ast-implicit`"]
+        );
+        assert_eq!(
+            errs("//@ expect: ast\n//@ ast-implicit: yes\n"),
+            ["line 2: `ast-implicit` takes no value"]
         );
         let e = errs("//@ expect: ast\n//@ ast-filter: a\n//@ ast-filter: b\n");
         assert_eq!(e, ["line 3: duplicate `ast-filter`"]);

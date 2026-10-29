@@ -592,7 +592,8 @@ impl Test<'_> {
         };
         let got = if self.cfg.compiler_kind == CompilerKind::Kiln {
             let filter = spec.ast_filter.as_ref().map(|f| format!("-fdump-ast-filter={f}"));
-            let mut mode = vec!["-fsyntax-only", "-fdump-ast"];
+            let dump = if spec.ast_implicit { "-fdump-ast=implicit" } else { "-fdump-ast" };
+            let mut mode = vec!["-fsyntax-only", dump];
             mode.extend(filter.as_deref());
             let o = self.compile(spec, &mode, None)?;
             self.ast_compiled(spec, &o)?;
@@ -660,7 +661,11 @@ impl Test<'_> {
             o
         }
         .stdout_str();
-        let opts = DumpOptions { filter: spec.ast_filter.clone(), ..DumpOptions::default() };
+        let opts = DumpOptions {
+            filter: spec.ast_filter.clone(),
+            implicit: spec.ast_implicit,
+            ..DumpOptions::default()
+        };
         let main_file = self.case.name.clone();
         let timeout = self.cfg.compile_timeout;
         let mut text = || {

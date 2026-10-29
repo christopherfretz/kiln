@@ -127,9 +127,10 @@ pub struct Sema<'a, 'sm> {
     /// Classes being defined, innermost last (spec/sema-class.md §8.3).
     pub(crate) classes: Vec<class::ClassBuild>,
     /// Which implicit special members each class has declared
-    /// ([`class::implicit`] bits; spec/sema-class.md §4.1).
-    #[expect(dead_code, reason = "filled by WP-067a's implicit special members")]
+    /// (`SpecialKind::bit`s; spec/sema-class.md §4.1).
     pub(crate) implicit_declared: kiln_source::fx::FxHashMap<DeclId, u8>,
+    /// Special-member state (spec/sema-class.md §8.3).
+    pub(crate) special: class::SpecialState,
     /// Access checks delayed until their declaration exists
     /// (spec/sema-class.md §2.4).
     pub(crate) delayed_access: Vec<class::AccessCheck>,
@@ -215,6 +216,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             deferred_call_refs: Vec::new(),
             classes: Vec::new(),
             implicit_declared: kiln_source::fx::FxHashMap::default(),
+            special: class::SpecialState::default(),
             delayed_access: Vec::new(),
             delayed_access_depth: Vec::new(),
             cleanup: class::CleanupState::default(),
@@ -316,7 +318,16 @@ impl<'a, 'sm> Sema<'a, 'sm> {
 
     /// The simple name of `d` (empty when unnamed).
     pub fn decl_name(&self, d: DeclId) -> String {
-        let name = self.ast.decls.get(d).name();
-        self.ast.names.simple_spelling(name, self.ast.symbols()).unwrap_or_default()
+        self.decl_name_str(self.ast.decls.get(d).name())
+    }
+
+    /// `name` as clang prints it in a diagnostic: identifiers, `operator+`,
+    /// the class name for constructors, `~X`, `operator int`.
+    pub fn decl_name_str(&self, name: kiln_ast::names::DeclName) -> String {
+        self.ast.names.simple_spelling(name, self.ast.symbols()).unwrap_or_else(|| {
+            let mut s = String::new();
+            kiln_ast::dump::AstNames::new(&self.ast).write_decl_name_value(name, &mut s);
+            s
+        })
     }
 }

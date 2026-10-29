@@ -3,7 +3,7 @@
 // found only by argument-dependent lookup.
 //@ expect: run
 //@ stdout: 3 4 5 6
-//@ xfail(kiln): needs WP-067a constructors and WP-068a ADL (hidden friend call)
+//@ xfail(kiln): needs ctor-initializers and constructor calls (WP-067b) and WP-068a ADL (hidden friend call)
 extern "C" int printf(const char*, ...);
 class A {
   int v;

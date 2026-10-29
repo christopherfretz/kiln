@@ -774,11 +774,18 @@ impl Sema<'_, '_> {
             self.unsupported(what, loc);
             return true;
         }
-        let specs = [(ds.explicit, "'explicit'"), (ds.consteval, "'consteval'")];
-        for (at, what) in specs {
-            if let Some(l) = at {
-                self.unsupported(what, l);
+        // `explicit` outside a constructor or conversion function is
+        // ill-formed ([dcl.fct.spec]/3); on a friend it is WP-068b.
+        if let Some(l) = ds.explicit {
+            if ds.friend.is_some() {
+                self.unsupported("'explicit'", l);
+            } else {
+                let function = d.is_function_declarator() && !ds.is_typedef();
+                self.check_explicit_spec(ds, d, function, false);
             }
+        }
+        if let Some(l) = ds.consteval {
+            self.unsupported("'consteval'", l);
         }
         // A friend function goes through `act_on_friend`; elsewhere
         // `friend` is not in a class.
@@ -909,7 +916,8 @@ impl Sema<'_, '_> {
     ) -> Option<DeclId> {
         self.finish_invented_head();
         let head = self.take_template_head(d.qualifier);
-        if d.dropped || self.unsupported_declarator(ds, d) {
+        let special = !d.dropped && self.handles_special_declarator(ds, d);
+        if d.dropped || !special && self.unsupported_declarator(ds, d) {
             self.templ.cur = None;
             return None;
         }
@@ -929,6 +937,9 @@ impl Sema<'_, '_> {
             }
         }
         let invalid = ds.invalid || d.invalid || self.is_error_type(ty);
+        if special {
+            return self.act_on_special_member_declarator(ds, ty, d, invalid);
+        }
         if !invalid {
             self.warn_ambiguous_function(ds, d, ty);
         }
@@ -993,6 +1004,40 @@ impl Sema<'_, '_> {
         if d.qualifier.is_none() && d.op_name.is_none() {
             self.check_using_shadow_conflict(decl, name);
         }
+        if !attrs.is_empty() {
+            self.check_decl_attrs(decl, &attrs);
+            let _ = self.builder().attach_attrs(decl, &attrs);
+        }
+        Some(decl)
+    }
+
+    /// [`Sema::act_on_declarator`] for a constructor, destructor,
+    /// conversion function or member `operator=` (WP-067a,
+    /// spec/sema-class.md §4.7).
+    fn act_on_special_member_declarator(
+        &mut self,
+        ds: &DeclSpec,
+        ty: QualType,
+        d: &Declarator,
+        invalid: bool,
+    ) -> Option<DeclId> {
+        if let Some(l) = ds.consteval {
+            self.unsupported("'consteval'", l);
+        }
+        let mut invalid = invalid;
+        let Some(decl) = self.act_on_special_declarator(ds, ty, d, &mut invalid) else {
+            self.templ.cur = None;
+            return None;
+        };
+        if let Some(r) = d.trailing_requires {
+            self.act_on_trailing_requires(decl, r);
+        }
+        self.set_member_access(decl);
+        if let Some(t) = self.finish_template_pattern(decl) {
+            self.set_member_access(t);
+        }
+        let mut attrs = ds.attrs.clone();
+        attrs.extend(d.attrs.iter().copied());
         if !attrs.is_empty() {
             self.check_decl_attrs(decl, &attrs);
             let _ = self.builder().attach_attrs(decl, &attrs);
@@ -1102,7 +1147,7 @@ impl Sema<'_, '_> {
 
     /// `exc` spelled as in a function type (`noexcept`, `throw()`,
     /// `noexcept(expr)`), without the leading space.
-    fn exc_spec_spelling(&self, exc: ExcSpec) -> String {
+    pub(crate) fn exc_spec_spelling(&self, exc: ExcSpec) -> String {
         match exc {
             ExcSpec::DynamicNone => "throw()".to_owned(),
             ExcSpec::NoexceptExpr { expr, .. } => {
@@ -1530,8 +1575,14 @@ impl Sema<'_, '_> {
             h.misc = h.misc.with_friend(k);
         }
         self.mark_pattern_next();
-        let site =
-            crate::class::VirtualSite { class: ctx, method, in_class, friend, prev: prev_ok, name };
+        let site = crate::class::VirtualSite {
+            class: ctx,
+            method,
+            in_class,
+            friend,
+            prev: prev_ok,
+            name: dname,
+        };
         let virt = self.virtual_decl(ds, d, ty, site, &mut spec);
         let f = self.builder().function(h, fkind, ty, spec, prev_ok);
         self.finish_virtual_decl(f, &virt);
@@ -1541,6 +1592,22 @@ impl Sema<'_, '_> {
         if d.op_name.is_none() {
             self.note_local_extern(name, f);
         }
+        self.create_params(f, &params, &defaults);
+        if d.op_name.is_none() {
+            self.register_local(name, f);
+        }
+        f
+    }
+
+    /// Creates the parameter declarations of function `f` from the
+    /// declarator's `params`, with the merged `defaults`
+    /// ([`Sema::merge_default_args`]), and attaches them.
+    pub(crate) fn create_params(
+        &mut self,
+        f: DeclId,
+        params: &[ParamInfo],
+        defaults: &[Option<ExprId>],
+    ) {
         let mut ids = Vec::with_capacity(params.len());
         let mut seen: Vec<Symbol> = Vec::new();
         for (i, p) in params.iter().enumerate() {
@@ -1587,10 +1654,6 @@ impl Sema<'_, '_> {
             ids.push(pd);
         }
         let _ = self.builder().set_params(f, &ids);
-        if d.op_name.is_none() {
-            self.register_local(name, f);
-        }
-        f
     }
 
     /// The default arguments of a function declaration's parameters
@@ -1601,7 +1664,7 @@ impl Sema<'_, '_> {
     /// Declarations in different scopes (a block-scope redeclaration of
     /// a namespace-scope function) have distinct sets. Then every
     /// parameter after one with a default argument needs one.
-    fn merge_default_args(
+    pub(crate) fn merge_default_args(
         &mut self,
         prev: Option<DeclId>,
         block: bool,
@@ -1756,7 +1819,11 @@ impl Sema<'_, '_> {
         };
         let width = d.bit_width.and_then(|w| self.bit_width(w, ty, nm.as_deref(), d.name_loc()));
         let h = DeclHead::new(ctx, name.map_or(DeclName::EMPTY, DeclName::ident), d.name_loc());
-        self.builder().field(h, ty, width, flags)
+        let f = self.builder().field(h, ty, width, flags);
+        if d.init_style.is_some() {
+            self.special.nsdmi.insert(f);
+        }
+        f
     }
 
     /// Checks a bit-field width ([class.bit]/1): an integral constant
@@ -2178,7 +2245,11 @@ impl Sema<'_, '_> {
             return;
         }
         let quals = self.ast.types.effective_quals(ty);
-        if quals.is_const() && self.ast.types.as_record(ty).is_none() {
+        let elem = self.base_element(ty);
+        if self.element_class(elem).is_some() {
+            // [dcl.init.general]/7–8, [class.dtor]/15 (WP-067a).
+            self.check_class_default_init(v, ty, loc);
+        } else if quals.is_const() {
             let msg = self.diag(DiagId::sema_default_init_const, loc).arg(self.ty_arg(ty));
             self.emit(msg);
         }
@@ -2189,7 +2260,9 @@ impl Sema<'_, '_> {
     /// Starts the definition of function `f` at `{`: checks for a
     /// redefinition, opens the function scope with the parameters.
     pub fn act_on_start_function_def(&mut self, f: DeclId) {
-        if let Some(prev) = self.ast.definition(f)
+        // A deleted function is defined by its first declaration.
+        let deleted = Some(self.ast.first(f)).filter(|&p| p != f && self.is_deleted_fn(p));
+        if let Some(prev) = deleted.or_else(|| self.ast.definition(f))
             && prev != f
         {
             let msg = self
@@ -2666,10 +2739,14 @@ impl Sema<'_, '_> {
         }
         let bits = self.class_bits(r, build.as_ref(), bits);
         let bits = self.virtual_class_bits(r, bits);
+        // Special members (spec/sema-class.md §4.1, §4.2, §4.4).
+        let bits = self.special_member_bits(r, bits);
+        let bits = self.finish_special_members(r, bits);
         if let Some(b) = &build {
             let _ = self.builder().set_friends(r, &b.friends);
         }
         self.builder().complete_record_definition(r, bits);
+        self.check_pending_defaulted(r);
         self.act_on_complete_virtual(r);
     }
 
@@ -3592,11 +3669,13 @@ impl Sema<'_, '_> {
             let node = *self.ast.attrs.get(a);
             let bad = match node.kind {
                 AttrKind::NODISCARD => {
-                    (!matches!(kind, DeclKind::Function | DeclKind::CXXRecord | DeclKind::Enum))
+                    // Every function kind, constructors included
+                    // ([dcl.attr.nodiscard]/1, /2 since P1771).
+                    (!(kind.is_function() || matches!(kind, DeclKind::CXXRecord | DeclKind::Enum)))
                         .then_some("functions, classes, or enumerations")
                 }
                 AttrKind::NORETURN => {
-                    (kind != DeclKind::Function).then_some("functions, classes, or enumerations")
+                    (!kind.is_function()).then_some("functions, classes, or enumerations")
                 }
                 AttrKind::ALIGNED => {
                     if matches!(kind, DeclKind::Function | DeclKind::Typedef | DeclKind::TypeAlias)

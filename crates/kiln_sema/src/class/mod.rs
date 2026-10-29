@@ -14,6 +14,7 @@ mod access;
 mod friend;
 mod member_expr;
 mod members;
+mod special;
 mod r#virtual;
 
 use kiln_ast::decl::{Access, DefinitionBits, TagKind};
@@ -125,6 +126,7 @@ impl ClassBuild {
 }
 
 pub(crate) use member_expr::MemberRef;
+pub(crate) use special::SpecialState;
 pub(crate) use r#virtual::{AbstractUse, VirtualSite, ensure_virtuals};
 
 /// Bits of [`Sema`]'s `implicit_declared` map: which implicit special
@@ -246,16 +248,14 @@ impl Sema<'_, '_> {
     /// ([dcl.fct.def.default], spec/sema-class.md §4.4; WP-067a). `loc` is
     /// the `default` keyword.
     pub fn act_on_defaulted(&mut self, f: DeclId, loc: Loc) {
-        let _ = f;
-        self.unsupported("defaulted functions", loc);
+        self.defaulted_impl(f, loc);
     }
 
     /// `= delete;` / `= delete("msg");` after the declarator of function
     /// `f` ([dcl.fct.def.delete], spec/sema-class.md §4.4; WP-067a). `msg`
     /// is the C++26 string-literal message.
     pub fn act_on_deleted(&mut self, f: DeclId, loc: Loc, msg: Option<ExprId>) {
-        let _ = (f, msg);
-        self.unsupported("deleted functions", loc);
+        self.deleted_impl(f, loc, msg);
     }
 
     /// The default argument `e` of parameter `p` ([dcl.fct.default]),

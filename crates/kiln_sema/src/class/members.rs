@@ -47,7 +47,11 @@ impl Sema<'_, '_> {
                     c = self.ast.decls.get(x).ctx();
                     depth += 1;
                 }
-                DeclKind::Function | DeclKind::CXXMethod => return true,
+                DeclKind::Function
+                | DeclKind::CXXMethod
+                | DeclKind::CXXConstructor
+                | DeclKind::CXXDestructor
+                | DeclKind::CXXConversion => return true,
                 _ => return false,
             }
         }
@@ -490,7 +494,14 @@ impl Sema<'_, '_> {
         let Some(ctx) = self.ast.decls.get(f).ctx() else { return 0 };
         let lexical = self.ast.decls.lexical_ctx(f).unwrap_or(ctx);
         if self.kind_of(lexical) == DeclKind::CXXRecord
-            && matches!(self.kind_of(f), DeclKind::CXXMethod | DeclKind::Function)
+            && matches!(
+                self.kind_of(f),
+                DeclKind::CXXMethod
+                    | DeclKind::Function
+                    | DeclKind::CXXConstructor
+                    | DeclKind::CXXDestructor
+                    | DeclKind::CXXConversion
+            )
         {
             self.ast
                 .decls
@@ -525,7 +536,13 @@ impl Sema<'_, '_> {
     /// The type of `this` in the body of `f` ([expr.prim.this]/2): `cv C*`
     /// for a non-static member function of `C` with cv-qualifiers `cv`.
     pub(crate) fn method_this_type(&mut self, f: DeclId) -> Option<QualType> {
-        if self.kind_of(f) != DeclKind::CXXMethod {
+        if !matches!(
+            self.kind_of(f),
+            DeclKind::CXXMethod
+                | DeclKind::CXXConstructor
+                | DeclKind::CXXDestructor
+                | DeclKind::CXXConversion
+        ) {
             return None;
         }
         if self

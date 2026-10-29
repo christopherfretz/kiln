@@ -87,6 +87,7 @@ After a node is created its header and side record are immutable, except:
 | cold `overrides` of a method, `friends` of a class | once (`set_overrides` at the declaration, `set_friends` at `}`) | sema |
 | `LetData.value` (`LifetimeExtendedTemporary`) | once | Oven via bridge |
 | `FnSpec::deleted` | once, at `}` (`= default` members found deleted; part of `FnSpec::LATE`) | sema |
+| `FnSpec` `defaulted` (`Explicit`), `constexpr` (`Constexpr`) | once, at `= default` after the declarator (WP-067a; part of `FnSpec::LATE`, ORed in from `No`/`None` only) | sema |
 | `ParamData::DEFAULT_ARG_PENDING`, `ParamData.default_arg` | the flag set at the declaration; the argument once, when the late-parsed tokens are parsed ([class.mem]/7) | parser / sema |
 | `DeclNode.ty` | re-pointed for deduced return types and resolved exception specs | sema |
 | `RedeclGroup.latest/definition` | on each redeclaration / definition | sema |
