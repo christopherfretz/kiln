@@ -524,10 +524,8 @@ impl Sema<'_, '_> {
             let msg = self.diag(DiagId::sema_new_incomplete_type, at).arg(self.ty_arg(t));
             self.emit(self.incomplete_note(msg, t));
             return false;
-        } else if self.require_non_abstract_alloc(at, t) {
-            return false;
         } else {
-            return true;
+            return !self.require_non_abstract_alloc(at, t);
         };
         let msg = self.diag(id, at).arg(self.ty_arg(t));
         self.emit(msg);

@@ -1392,17 +1392,11 @@ impl Sema<'_, '_> {
             };
             h.misc = h.misc.with_friend(k);
         }
-        let site = crate::class::VirtualSite {
-            class: ctx,
-            method,
-            in_class,
-            friend,
-            prev: prev_ok,
-            name,
-        };
+        let site =
+            crate::class::VirtualSite { class: ctx, method, in_class, friend, prev: prev_ok, name };
         let virt = self.virtual_decl(ds, d, ty, site, &mut spec);
         let f = self.builder().function(h, fkind, ty, spec, prev_ok);
-        self.finish_virtual_decl(f, virt);
+        self.finish_virtual_decl(f, &virt);
         if invalid_redecl {
             self.ast.decls.set_flags(f, DeclFlags::INVALID);
         }

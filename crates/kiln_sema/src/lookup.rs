@@ -387,13 +387,7 @@ impl Sema<'_, '_> {
 
     /// Every declaration set the search of `def` finds, with the path
     /// from `def` to the class it is found in (in base-specifier order).
-    fn class_leaves(
-        &self,
-        def: DeclId,
-        name: Symbol,
-        kind: LookupKind,
-        depth: usize,
-    ) -> Vec<Leaf> {
+    fn class_leaves(&self, def: DeclId, name: Symbol, kind: LookupKind, depth: usize) -> Vec<Leaf> {
         if depth > 256 {
             return Vec::new();
         }

@@ -69,17 +69,15 @@ impl Sema<'_, '_> {
             let x = conv::decay(self, e);
             self.mark_explicit(x, e);
             let xt = self.ety(x);
-            match self.ast.types.canonical_view(xt) {
-                TypeView::Pointer(p) => (x, p),
-                _ => {
-                    let msg = self
-                        .diag(DiagId::sema_dynamic_cast_not_ptr, loc)
-                        .arg(self.ty_arg(xt))
-                        .arg(self.ty_arg(ty));
-                    self.emit(msg);
-                    return self.dynamic_cast_recover(ty, e, loc);
-                }
-            }
+            let TypeView::Pointer(p) = self.ast.types.canonical_view(xt) else {
+                let msg = self
+                    .diag(DiagId::sema_dynamic_cast_not_ptr, loc)
+                    .arg(self.ty_arg(xt))
+                    .arg(self.ty_arg(ty));
+                self.emit(msg);
+                return self.dynamic_cast_recover(ty, e, loc);
+            };
+            (x, p)
         } else {
             let n = *self.ast.exprs.get(e);
             let mut x = e;
@@ -109,8 +107,10 @@ impl Sema<'_, '_> {
             return self.dynamic_cast_incomplete(src_pointee, ty, e, loc);
         }
         // [expr.dynamic.cast]/1: no casting away constness.
-        let (dq, sq) =
-            (self.ast.types.effective_quals(dest_pointee), self.ast.types.effective_quals(src_pointee));
+        let (dq, sq) = (
+            self.ast.types.effective_quals(dest_pointee),
+            self.ast.types.effective_quals(src_pointee),
+        );
         if !dq.contains(sq) {
             let from = self.ety(src);
             let msg = self

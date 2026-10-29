@@ -82,12 +82,15 @@ impl Sema<'_, '_> {
 
     /// clang `RequireNonAbstractType` for a declaration: `{use} type 'T'
     /// is an abstract class` at `loc` if `q` is an abstract class.
-    pub(crate) fn require_non_abstract(&mut self, loc: Loc, q: QualType, use_: AbstractUse) -> bool {
+    pub(crate) fn require_non_abstract(
+        &mut self,
+        loc: Loc,
+        q: QualType,
+        use_: AbstractUse,
+    ) -> bool {
         let Some(c) = self.abstract_class(q) else { return false };
-        let msg = self
-            .diag(DiagId::sema_abstract_type_in_decl, loc)
-            .arg(use_ as u8)
-            .arg(self.ty_arg(q));
+        let msg =
+            self.diag(DiagId::sema_abstract_type_in_decl, loc).arg(use_ as u8).arg(self.ty_arg(q));
         let msg = self.pure_virtual_notes(msg, c);
         self.emit(msg);
         true

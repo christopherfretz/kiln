@@ -29,8 +29,8 @@ use crate::Sema;
 use crate::conv::bases::{self, BaseSearch};
 use crate::declspec::{DeclSpec, Declarator};
 
-pub(crate) use graph::ensure_virtuals;
 pub(crate) use abstract_::AbstractUse;
+pub(crate) use graph::ensure_virtuals;
 pub(crate) use graph::{is_method_kind, is_pure, is_virtual, overridden};
 
 /// Where a member function is declared, for [`Sema::virtual_decl`].
@@ -159,7 +159,7 @@ impl Sema<'_, '_> {
 
     /// Records what `f` overrides (spec/sema-class.md `overrides`) and
     /// marks it invalid if [`Sema::virtual_decl`] said so.
-    pub(crate) fn finish_virtual_decl(&mut self, f: DeclId, v: VirtualDecl) {
+    pub(crate) fn finish_virtual_decl(&mut self, f: DeclId, v: &VirtualDecl) {
         if !v.overridden.is_empty() {
             let _ = self.builder().set_overrides(f, &v.overridden);
         } else if let Some(l) = v.inherited
@@ -265,16 +265,18 @@ impl Sema<'_, '_> {
     pub(crate) fn overridden_destructors(&self, class: DeclId) -> Vec<DeclId> {
         let mut out = Vec::new();
         let mut seen_v = FxHashSet::default();
-        self.overridden_walk(class, &mut seen_v, 0, &mut |s, b| {
-            match s.ast.destructor(b).map(|x| s.ast.first(x)) {
-                Some(m) if is_virtual(&s.ast, m) => {
-                    if !out.contains(&m) {
-                        out.push(m);
-                    }
-                    true
+        self.overridden_walk(class, &mut seen_v, 0, &mut |s, b| match s
+            .ast
+            .destructor(b)
+            .map(|x| s.ast.first(x))
+        {
+            Some(m) if is_virtual(&s.ast, m) => {
+                if !out.contains(&m) {
+                    out.push(m);
                 }
-                _ => false,
+                true
             }
+            _ => false,
         });
         out
     }
@@ -360,12 +362,7 @@ impl Sema<'_, '_> {
             | (TypeView::RValueRef(a), TypeView::RValueRef(b)) => Some((a, b)),
             _ => None,
         };
-        let is_class = |s: &Self, q: QualType| {
-            s.ast.types.as_record(q).is_some_and(|r| {
-                s.ast.decls.record(r).is_some_and(|x| x.tag != kiln_ast::decl::TagKind::Union)
-            })
-        };
-        let Some((nc, oc)) = classes.filter(|&(a, _)| is_class(self, a)) else {
+        let Some((nc, oc)) = classes else {
             let msg = self
                 .diag(DiagId::sema_override_return_differs, at)
                 .arg(nm)
@@ -376,25 +373,31 @@ impl Sema<'_, '_> {
             return false;
         };
         if !self.ast.types.same_unqualified(nc, oc) {
-            let nrec = self.ast.types.as_record(nc).unwrap_or(o);
-            let being_defined = self.defining.iter().any(|&x| self.ast.first(x) == self.ast.first(nrec));
-            if !being_defined && !self.is_complete(nc) {
-                let msg = self
-                    .diag(DiagId::sema_covariant_return_incomplete, at)
-                    .arg(nm)
-                    .arg(self.ty_arg(nc));
-                let msg = self.incomplete_note(msg, nc);
-                self.emit(msg);
-                return false;
+            // [class.virtual]/8: a differing class type must be complete
+            // (or the class being defined).
+            if let Some(nrec) = self.ast.types.as_record(nc) {
+                let being_defined =
+                    self.defining.iter().any(|&x| self.ast.first(x) == self.ast.first(nrec));
+                if !being_defined && !self.is_complete(nc) {
+                    let msg = self
+                        .diag(DiagId::sema_covariant_return_incomplete, at)
+                        .arg(nm)
+                        .arg(self.ty_arg(nc));
+                    let msg = self.incomplete_note(msg, nc);
+                    self.emit(msg);
+                    return false;
+                }
             }
-            let Some(orec) = self.ast.types.as_record(oc) else { return true };
-            match bases::find_base(self, nrec, orec) {
+            let recs = self.ast.types.as_record(nc).zip(self.ast.types.as_record(oc));
+            let search = recs
+                .map_or(BaseSearch::NotDerived, |(nrec, orec)| bases::find_base(self, nrec, orec));
+            match search {
                 BaseSearch::NotDerived => {
                     let msg = self
                         .diag(DiagId::sema_covariant_return_not_derived, at)
                         .arg(nm)
-                        .arg(self.ty_arg(nc))
-                        .arg(self.ty_arg(oc))
+                        .arg(self.ty_arg(nr))
+                        .arg(self.ty_arg(or))
                         .with_note(self.overridden_note(o));
                     self.emit(msg);
                     return false;
@@ -546,13 +549,19 @@ impl Sema<'_, '_> {
         if set.contains(&m) {
             return true;
         }
-        depth < 1024 && overridden(&self.ast, m).any(|o| self.reaches(self.ast.first(o), set, depth + 1))
+        depth < 1024
+            && overridden(&self.ast, m).any(|o| self.reaches(self.ast.first(o), set, depth + 1))
     }
 
     /// clang `NoteHiddenVirtualMethods`: a note per hidden function,
     /// saying how its type differs from `ty` (clang
     /// `HandleFunctionTypeMismatch`, the base's first).
-    pub(crate) fn hidden_virtual_notes(&self, mut msg: Diag, ty: QualType, hidden: &[DeclId]) -> Diag {
+    pub(crate) fn hidden_virtual_notes(
+        &self,
+        mut msg: Diag,
+        ty: QualType,
+        hidden: &[DeclId],
+    ) -> Diag {
         for &h in hidden {
             let hty = self.ast.decls.get(h).ty().unwrap_or(QualType::ERROR);
             let suffix = self.fn_type_mismatch(hty, ty);
@@ -591,11 +600,7 @@ impl Sema<'_, '_> {
         if !t.same_type(pt.ret(), pf.ret()) {
             let rt = self.written_ret(to).unwrap_or(pt.ret());
             let rf = self.written_ret(from).unwrap_or(pf.ret());
-            return format!(
-                ": different return type ({} vs {})",
-                self.ty_arg(rt),
-                self.ty_arg(rf)
-            );
+            return format!(": different return type ({} vs {})", self.ty_arg(rt), self.ty_arg(rf));
         }
         let (qt, qf) = (pt.info().this_quals(), pf.info().this_quals());
         if qt != qf {
@@ -653,13 +658,20 @@ impl Sema<'_, '_> {
     /// [class.mi]/3 (clang `warn_inaccessible_base_class`): a direct base
     /// that is also an indirect base in a distinct subobject cannot be
     /// named unambiguously.
-    pub(crate) fn check_inaccessible_bases(&mut self, r: DeclId, bases: &[kiln_ast::decl::BaseSpec]) {
+    pub(crate) fn check_inaccessible_bases(
+        &mut self,
+        r: DeclId,
+        bases: &[kiln_ast::decl::BaseSpec],
+    ) {
         let rty = self.tag_type(r);
         for b in bases {
             let Some(bd) = self.ast.types.as_record(b.ty) else { continue };
             if let BaseSearch::Ambiguous(paths) = bases::find_base(self, r, bd) {
                 let shown = bases::ambiguous_paths_string(self, rty, &paths);
-                let msg = self.diag(DiagId::sema_inaccessible_base, b.loc).arg(self.ty_arg(b.ty)).arg(shown);
+                let msg = self
+                    .diag(DiagId::sema_inaccessible_base, b.loc)
+                    .arg(self.ty_arg(b.ty))
+                    .arg(shown);
                 self.emit(msg);
             }
         }

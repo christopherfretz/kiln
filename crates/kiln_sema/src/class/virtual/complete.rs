@@ -155,11 +155,8 @@ impl Sema<'_, '_> {
     /// overriding one that is not, `-Woverloaded-virtual` and
     /// `-Winconsistent-missing-override`.
     fn report_overrides(&mut self, r: DeclId) {
-        let methods: Vec<DeclId> = self
-            .ast
-            .members(r)
-            .filter(|&m| is_method_kind(self.ast.decls.get(m).kind()))
-            .collect();
+        let methods: Vec<DeclId> =
+            self.ast.members(r).filter(|&m| is_method_kind(self.ast.decls.get(m).kind())).collect();
         let hidden_on = self.diags.is_enabled(DiagId::sema_hidden_overloaded_virtual);
         let mut any_override = false;
         let mut missing: Vec<DeclId> = Vec::new();
@@ -210,7 +207,8 @@ impl Sema<'_, '_> {
     /// clang `ReportOverrides` for the static, deleted and consteval
     /// mismatches of `m` against the functions it overrides.
     fn report_override_mismatch(&mut self, m: DeclId, os: &[DeclId]) {
-        let spec_of = |s: &Self, d: DeclId| s.ast.decls.function(d).map(|f| f.spec).unwrap_or_default();
+        let spec_of =
+            |s: &Self, d: DeclId| s.ast.decls.function(d).map(|f| f.spec).unwrap_or_default();
         let ms = spec_of(self, m);
         let name = self.decl_name(m);
         let loc = self.ast.decls.get(m).loc();
@@ -222,8 +220,11 @@ impl Sema<'_, '_> {
             self.emit(msg);
             return;
         }
-        let deleted: Vec<DeclId> =
-            os.iter().copied().filter(|&o| spec_of(self, o).is_deleted() != ms.is_deleted()).collect();
+        let deleted: Vec<DeclId> = os
+            .iter()
+            .copied()
+            .filter(|&o| spec_of(self, o).is_deleted() != ms.is_deleted())
+            .collect();
         if !deleted.is_empty() {
             let mut msg = self
                 .diag(DiagId::sema_deleted_overrides, loc)
@@ -239,10 +240,8 @@ impl Sema<'_, '_> {
         let consteval: Vec<DeclId> =
             os.iter().copied().filter(|&o| ce(spec_of(self, o)) != ce(ms)).collect();
         if !consteval.is_empty() {
-            let mut msg = self
-                .diag(DiagId::sema_consteval_overrides, loc)
-                .arg(u8::from(!ce(ms)))
-                .arg(name);
+            let mut msg =
+                self.diag(DiagId::sema_consteval_overrides, loc).arg(u8::from(!ce(ms))).arg(name);
             for o in consteval {
                 msg = msg.with_note(self.overridden_note(o));
             }
@@ -259,11 +258,8 @@ impl Sema<'_, '_> {
             return;
         }
         let members: Vec<DeclId> = self.ast.members(r).collect();
-        let polymorphic = self
-            .ast
-            .decls
-            .record(r)
-            .is_some_and(|x| x.defn.contains(DefinitionBits::POLYMORPHIC));
+        let polymorphic =
+            self.ast.decls.record(r).is_some_and(|x| x.defn.contains(DefinitionBits::POLYMORPHIC));
         for &m in &members {
             let k = self.ast.decls.get(m).kind();
             if is_method_kind(k) && overridden(&self.ast, m).next().is_some() {

@@ -435,7 +435,11 @@ mod tests {
         assert_eq!(fo(&v, 2, f), Some((bf, 1)));
         assert_eq!(fo(&v, 4, f), Some((f, 4)));
         assert_eq!(fo(&v, 1, bf), Some((bf, 1)));
-        assert!(all_final_overriders(&a, &v.subobjects).windows(2).all(|w| (w[0].0, w[0].1) != (w[1].0, w[1].1)));
+        assert!(
+            all_final_overriders(&a, &v.subobjects)
+                .windows(2)
+                .all(|w| (w[0].0, w[0].1) != (w[1].0, w[1].1))
+        );
     }
 
     #[test]
