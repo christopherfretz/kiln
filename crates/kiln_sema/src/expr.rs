@@ -789,6 +789,10 @@ impl Sema<'_, '_> {
     /// [`Self::build_decl_ref_via`] with the side record `extra` (a
     /// variable template specialization records the template as its
     /// found decl and the arguments as written).
+    #[allow(
+        clippy::too_many_lines,
+        reason = "the 074/087 use checks and the 070b variable-template record meet here"
+    )]
     pub(crate) fn build_decl_ref_extra(
         &mut self,
         d: DeclId,
