@@ -1574,6 +1574,17 @@ impl ExprArena {
                 v.extend(self.init_lists[n.b as usize].array_filler);
             }
             ExprKind::RecoveryExpr => v.extend(lists.iter::<ExprId>(ListId::new(n.a))),
+            // Template expressions (spec/sema-templates.md §2.4).
+            ExprKind::CXXDependentScopeMemberExpr | ExprKind::PackExpansionExpr => {
+                v.extend(id(n.a));
+            }
+            ExprKind::CXXFoldExpr => {
+                v.extend(id(n.a));
+                v.extend(id(n.b));
+            }
+            ExprKind::CXXUnresolvedConstructExpr | ExprKind::ParenListExpr => {
+                v.extend(lists.iter::<ExprId>(ListId::new(n.a)));
+            }
             ExprKind::CXXNewExpr => {
                 let x = &self.news[n.a as usize];
                 v.extend(x.array_size);

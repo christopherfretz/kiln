@@ -372,6 +372,11 @@ impl DeclFlags {
     pub const fn with(self, f: DeclFlags) -> Self {
         DeclFlags(self.0 | f.0)
     }
+    /// `self` with the bits of `f` cleared.
+    #[must_use]
+    pub const fn without(self, f: DeclFlags) -> Self {
+        DeclFlags(self.0 & !f.0)
+    }
 }
 
 /// Access of a member ([class.access]).
