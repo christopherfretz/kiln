@@ -29,6 +29,7 @@ pub mod init;
 pub mod literal;
 pub mod lookup;
 pub mod names;
+pub mod overload;
 pub mod new_delete;
 mod oven_bridge;
 mod rtti;

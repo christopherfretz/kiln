@@ -565,7 +565,6 @@ diag_ids! {
     sema_redeclaration_different_type = Error (3) "redeclaration of '{0}' with a different type: {1} vs {2}";
     sema_redefinition_different_typedef = Error (3) "{0:typedef|type alias} redefinition with different types ({1} vs {2})";
     sema_ovl_diff_return_type = Error (0) "functions that differ only in their return type cannot be overloaded";
-    sema_overload_unsupported = Error (1) "overloading '{0}' is not supported yet";
     sema_static_non_static = Error (1) "static declaration of '{0}' follows non-static declaration";
     sema_param_redefinition = Error (1) "redefinition of parameter '{0}'";
     sema_duplicate_member = Error (1) "duplicate member '{0}'";
@@ -1092,6 +1091,7 @@ diag_ids! {
     sema_dangling_field_param = Warning [DanglingField] (2) "binding reference member {0} to stack allocated parameter {1}";
     sema_dangling_field_param_addr = Warning [DanglingField] (2) "initializing pointer member {0} with the stack address of parameter {1}";
     note_ref_or_ptr_member_here = Note (1) "{0:reference|pointer} member declared here";
+    sema_ovl_static_nonstatic_member = Error (0) "static and non-static member functions with the same parameter types cannot be overloaded";
 }
 
 impl DiagId {
