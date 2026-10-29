@@ -463,6 +463,9 @@ pub struct Declarator {
     /// extension): an ordinary, non-empty `StringLiteral` expression and
     /// the extent of its tokens.
     pub asm_label: Option<(ExprId, kiln_source::Span)>,
+    /// The declarator-id is an operator-function-id (`operator new`):
+    /// `name` then holds the `operator` keyword and its location.
+    pub op_name: Option<kiln_ast::names::OverloadedOperator>,
 }
 
 impl Declarator {
@@ -479,6 +482,7 @@ impl Declarator {
             invalid: false,
             init_style: None,
             asm_label: None,
+            op_name: None,
         }
     }
 

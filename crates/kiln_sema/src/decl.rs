@@ -10,7 +10,7 @@ use kiln_ast::decl::{
 };
 use kiln_ast::expr::{CastKind, ExprKind};
 use kiln_ast::ids::RawId;
-use kiln_ast::names::DeclName;
+use kiln_ast::names::{DeclName, OverloadedOperator};
 use kiln_ast::types::{AutoKeyword, BuiltinType, ExcSpec, FuncInfo, Quals, TagKeyword, TypeView};
 use kiln_ast::{AttrId, DeclHead, DeclId, ExprId, QualType, StmtId};
 use kiln_diag::DiagId;
@@ -478,6 +478,17 @@ impl Sema<'_, '_> {
         let _ = name_loc;
         let mut attrs = ds.attrs.clone();
         attrs.extend(d.attrs.iter().copied());
+        if d.op_name.is_some()
+            && (ds.is_typedef()
+                || !self.ast.types.is_function(ty)
+                || d.ctx == DeclaratorContext::Member
+                || d.qualifier.is_some())
+        {
+            // An operator-function-id names a function at namespace scope
+            // here; member operators are WP-068b.
+            self.unsupported("this declaration of an operator function", d.loc);
+            return None;
+        }
         let decl = if ds.is_typedef() {
             self.act_on_typedef(ds, ty, d, name, false)
         } else if self.ast.types.is_function(ty) {
@@ -501,7 +512,7 @@ impl Sema<'_, '_> {
             self.ast.decls.set_flags(decl, DeclFlags::INVALID);
         }
         self.act_on_asm_label(ds, d, decl, &mut attrs);
-        if d.qualifier.is_none() {
+        if d.qualifier.is_none() && d.op_name.is_none() {
             self.check_using_shadow_conflict(decl, name);
         }
         if !attrs.is_empty() {
@@ -821,7 +832,25 @@ impl Sema<'_, '_> {
         }
         let mut prev_ok = None;
         let mut invalid_redecl = false;
-        if let Some(p) = self.find_prev_linkage(name, d.qualifier) {
+        let mut ty = ty;
+        if let Some(op) = d.op_name {
+            // A replaceable global allocation or deallocation function
+            // redeclares the implicit one ([new.delete]/2).
+            if matches!(
+                op,
+                OverloadedOperator::New
+                    | OverloadedOperator::ArrayNew
+                    | OverloadedOperator::Delete
+                    | OverloadedOperator::ArrayDelete
+            ) {
+                let (t, p) = self.act_on_global_new_delete_decl(op, ty);
+                ty = t;
+                prev_ok = p;
+            } else {
+                // todo(WP-068b): other operator functions.
+                self.unsupported("operator functions other than 'operator new' and 'operator delete'", d.name_loc());
+            }
+        } else if let Some(p) = self.find_prev_linkage(name, d.qualifier) {
             let pn = *self.ast.decls.get(p);
             if pn.kind() == DeclKind::Function {
                 let pty = pn.ty().unwrap_or(QualType::ERROR);
@@ -887,13 +916,16 @@ impl Sema<'_, '_> {
                 self.emit(msg);
             }
         }
-        let mut h = DeclHead::new(ctx, DeclName::ident(name), d.name_loc());
+        let dname = d.op_name.map_or(DeclName::ident(name), DeclName::operator);
+        let mut h = DeclHead::new(ctx, dname, d.name_loc());
         h.lexical = Some(lexical);
         let f = self.builder().function(h, DeclKind::Function, ty, spec, prev_ok);
         if invalid_redecl {
             self.ast.decls.set_flags(f, DeclFlags::INVALID);
         }
-        self.note_local_extern(name, f);
+        if d.op_name.is_none() {
+            self.note_local_extern(name, f);
+        }
         let params: Vec<ParamInfo> =
             d.function_params().map(<[ParamInfo]>::to_vec).unwrap_or_default();
         let mut ids = Vec::with_capacity(params.len());
@@ -922,7 +954,9 @@ impl Sema<'_, '_> {
             ids.push(pd);
         }
         let _ = self.builder().set_params(f, &ids);
-        self.register_local(name, f);
+        if d.op_name.is_none() {
+            self.register_local(name, f);
+        }
         f
     }
 

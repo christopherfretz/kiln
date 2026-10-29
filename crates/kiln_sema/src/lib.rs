@@ -25,6 +25,7 @@ pub mod init;
 pub mod literal;
 pub mod lookup;
 pub mod names;
+pub mod new_delete;
 mod oven_bridge;
 pub mod scope;
 pub mod stmt;
@@ -90,6 +91,8 @@ pub struct Sema<'a, 'sm> {
     pub(crate) local_externs: Vec<(DeclId, kiln_source::symbol::Symbol, DeclId)>,
     /// The constant evaluator of the translation unit (spec/sema.md §8).
     pub(crate) oven: Oven,
+    /// The implicitly declared global allocation functions.
+    pub(crate) global_ops: new_delete::GlobalOps,
 }
 
 impl<'a, 'sm> Sema<'a, 'sm> {
@@ -125,6 +128,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             enums: Vec::new(),
             local_externs: Vec::new(),
             oven: Oven::new(Budget::default()),
+            global_ops: new_delete::GlobalOps::default(),
         }
     }
 

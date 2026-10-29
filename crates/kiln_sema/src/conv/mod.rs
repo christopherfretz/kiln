@@ -414,7 +414,7 @@ fn entity_select(ctx: ConvCtx) -> &'static str {
     }
 }
 
-fn has_conversion_functions(s: &Sema<'_, '_>, q: QualType) -> bool {
+pub(crate) fn has_conversion_functions(s: &Sema<'_, '_>, q: QualType) -> bool {
     let Some(d) = s.ast.types.as_record(q) else { return false };
     let Some(def) = bases::complete_class(s, d) else { return false };
     s.ast

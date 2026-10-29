@@ -202,7 +202,7 @@ impl Sema<'_, '_> {
     /// A value-initialized member with no initializer: a nested list for a
     /// class, `ImplicitValueInitExpr` otherwise (clang's
     /// `InitListChecker` fillers).
-    fn filler(&mut self, ty: QualType, at: Loc) -> ExprId {
+    pub(crate) fn filler(&mut self, ty: QualType, at: Loc) -> ExprId {
         if self.ast.types.as_record(ty).is_some() {
             let empty = InitList { items: Vec::new(), lbrace: at, rbrace: at };
             return self.init_from_list(ty, &empty);
