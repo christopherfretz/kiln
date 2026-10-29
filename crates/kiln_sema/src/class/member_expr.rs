@@ -153,7 +153,7 @@ impl Sema<'_, '_> {
             // spec/sema-overload.md §2.3: resolved by the call.
             let set = crate::overload::OvlMember {
                 name,
-                decls: found.decls.to_vec(),
+                decls: found.decls.clone(),
                 found: (0..found.decls.len())
                     .map(|i| found.found.get(i).copied().unwrap_or(found.decls[i]))
                     .collect(),

@@ -49,7 +49,10 @@ pub(crate) enum SetKind {
         /// 1 or 2.
         phase: u8,
     },
-    /// [over.over]: the address of an overloaded function.
+    /// [over.over]: the address of an overloaded function. WP-068a
+    /// resolves non-template targets without a set (`address.rs`); the
+    /// kind is for WP-071's template candidates.
+    #[allow(dead_code, reason = "WP-071: [over.over] with function templates")]
     Address,
 }
 
@@ -92,8 +95,10 @@ pub(crate) enum CandidateFailure {
         arg: u16,
     },
     /// Template argument deduction failed (WP-071).
+    #[allow(dead_code, reason = "stub: WP-071 template candidates")]
     BadDeduction,
     /// The trailing requires-clause is not satisfied (WP-073).
+    #[allow(dead_code, reason = "stub: WP-073 constraints")]
     ConstraintsNotSatisfied,
     /// An `explicit` constructor or conversion function in
     /// copy-initialization ([over.match.copy]/1.1).
@@ -130,6 +135,7 @@ pub(crate) struct Candidate {
     /// Why not, when not viable.
     pub failure: CandidateFailure,
     /// The rewritten form (WP-068b).
+    #[allow(dead_code, reason = "stub: WP-068b rewritten operator candidates")]
     pub rewrite: Rewrite,
     /// Found only by argument-dependent lookup.
     pub adl_only: bool,
@@ -402,6 +408,21 @@ impl Sema<'_, '_> {
     /// The overload-resolution counters so far.
     pub fn overload_stats(&self) -> OverloadStats {
         self.ovl.stats
+    }
+
+    /// The memory overload resolution holds (spec/sema-overload.md §1.4):
+    /// the row `sema.ovl.pool`, whose count is the pooled candidate sets
+    /// (the deepest nesting so far) and whose bytes are the pool's heap.
+    pub fn overload_memory(&self) -> kiln_ast::mem::MemReport {
+        let bytes = self.ovl.heap_size() as u64;
+        let mut r = kiln_ast::mem::MemReport::new();
+        r.push(kiln_ast::mem::MemRow::new(
+            "sema.ovl.pool",
+            self.ovl.pool.len() as u64,
+            bytes,
+            bytes,
+        ));
+        r
     }
 
     /// The parameter types of function `f` (its declared type's), into

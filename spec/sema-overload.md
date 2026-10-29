@@ -1,7 +1,9 @@
 # spec: overload resolution (`kiln_sema::overload`)
 
-Status: **design** (WP-S3O). Implemented by WP-068, split into 068a/068b
-(§11); WP-071 (function templates) and WP-073 (concepts) plug in through
+Status: **partly implemented**: the core (named and member calls, ADL,
+ICS, §4, initialization by constructor and conversion, default arguments,
+§9.2 notes) landed with WP-068a (§10.5); operators and built-in candidates
+are WP-068b. Designed by WP-S3O, split into 068a/068b (§11); WP-071 (function templates) and WP-073 (concepts) plug in through
 §10.4. Normative for the `overload/` module of `kiln_sema`. Extends
 spec/sema-conv.md (standard conversions, ranking) and spec/sema.md (lookup,
 calls).
@@ -751,6 +753,65 @@ class query, and `perform_init` (sema.md §6) calls
   in §3.1 and `more_constrained(a, b)` in §4.1 step 6; note "candidate
   template ignored: constraints not satisfied" + satisfaction detail.
 - **WP-075** needs no hook (closures are classes, §2.4); **CTAD**: §2.8.
+
+### 10.5 Landed (WP-068a): how the core is built
+Where the code differs from (or details) the design above:
+- **Callees.** An unqualified, unparenthesized name of a namespace-scope
+  function that uses ADL, or any name denoting more than one function, is
+  an overload set (`overload_name_ref`, `call.rs`). One candidate found by
+  such a name still gets overload wording ("no matching function" plus the
+  candidate note, `OverloadScratch::adl_single`); a qualified,
+  parenthesized or block-scope name, and a member, take clang's direct
+  path ("cannot initialize a parameter of type …" + "passing argument to
+  parameter here"). `(g)(1)` keeps its `ParenExpr` (`try_member_call`
+  likewise).
+- **Newest-first order** (§13.1.1) is applied in `overload_name_ref`, which
+  reverses unqualified function results, not in `lookup_name`: no other
+  lookup consumer sees a changed order.
+- **Member calls (§2.3).** `member_access` of an overloaded member builds a
+  `MemberExpr` of type `QualType::OVERLOAD` (kiln's
+  `UnresolvedMemberExpr`) and records the set in `OverloadScratch::members`
+  (`OvlMember`), consumed by `resolve_member_call`; implicit `this->f`
+  likewise (`implicit_member_overload`). A static winner named through an
+  implicit `this` is a `DeclRefExpr`, as in clang.
+- **User-defined conversions** (`udc.rs`): `apply_udc` builds the
+  `before` sequence, the `CXXConstructExpr` or `CXXMemberCallExpr` of the
+  conversion function (`conversion_function_call`), and the `after`
+  sequence. A deleted conversion function reports
+  `sema_conv_deleted_ctor` naming the initialized type (the non-reference
+  target, cv kept). clang's CWG2327 workaround is kept: in an
+  initialization by constructor, a conversion function yielding the class
+  itself initializes the object directly (`best.rs`, `construct.rs`).
+- **`IcsOptions::CANDIDATE_ARG`**: an argument of a candidate. In a
+  reference binding, a deleted best [over.match.ref] conversion is no
+  conversion (clang `FindConversionForRefInit`), so the candidate is not
+  viable; a declaration's initialization still diagnoses the deleted
+  function.
+- **[over.match.list].** Phase 1 runs only when an initializer-list
+  constructor is viable for the arguments (`init_list_phase1_viable`; an
+  empty list with a default constructor value-initializes); otherwise
+  phase 2 over all constructors. Building the `std::initializer_list`
+  object itself is still unsupported.
+- **Casts.** `static_cast` / functional / C-style casts from a class to a
+  non-class type run the direct-initialization's user-defined conversion
+  (explicit conversion functions are candidates) with clang's
+  `tryDiagnoseOverloadedCast` errors (`sema_ovl_*_conversion_in_cast`).
+- **Accounting (§1.4).** `Sema::overload_stats()` returns the `ovl.*`
+  counters (`OverloadStats`); `Sema::overload_memory()` the
+  `sema.ovl.pool` row. There is no `Sema::memory()` yet, and the driver
+  does not print either, so `cargo xtask bench` records the `overload`
+  group's wall time and peak RSS but not `ovl.*` (an open item: a report
+  flag like `-fkiln-instantiation-report`). `sema.ovl.conv_types` and
+  `ovl.builtin_candidates` are WP-068b's.
+- **Bench** `bench/overload/`: `calls` (200 overloads × 3,000 calls) and
+  `ctors` (64 converting constructors, 5,440 copy/direct/list
+  initializations). The `->` chain and class `a < b` entries of §11 are
+  WP-068b's.
+- **Stubs.** `CandidateFailure::BadDeduction` (WP-071),
+  `ConstraintsNotSatisfied` (WP-073), `Candidate::rewrite` (WP-068b) and
+  `SetKind::Address` (WP-071: [over.over] of templates; non-template
+  targets are resolved without a set in `address.rs`) are declared and
+  unused.
 
 ## 11. Agent parallelization (WP-068 split)
 WP-068 has more than five deliverables, so it splits. 068a merges §10.1–10.3

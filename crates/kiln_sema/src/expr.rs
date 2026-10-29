@@ -195,7 +195,8 @@ impl Sema<'_, '_> {
 
     /// Emits a conversion error at `loc`.
     pub(crate) fn emit_conv_error(&self, err: ConvError, loc: Loc) {
-        self.emit(err.diag_at(self, loc));
+        let d = err.args.into_iter().fold(self.diag(err.id, loc), Diag::arg);
+        self.emit(err.notes.into_iter().fold(d, Diag::with_note));
     }
 
     /// Interns the integer (or `bool`) constant `v` of type `ty`.
@@ -743,17 +744,13 @@ impl Sema<'_, '_> {
             .filter(|&x| !self.ast.decls.get(x).has(DeclFlags::INVALID))
             .collect();
         if fns && (valid.len() > 1 || self.call_uses_adl(&valid, qualifier.is_none())) {
-            if let Some(e) =
-                self.overload_name_ref(name, &found, &valid, qualifier.is_none(), nns, loc)
+            let e = self.overload_name_ref(name, &found, &valid, qualifier.is_none(), nns, loc);
+            if let Some(b) = begin
+                && b != loc
             {
-                if let Some(b) = begin
-                    && b != loc
-                {
-                    let _ = self.ast.templates.expr_begin.insert(e, b);
-                }
-                return e;
+                let _ = self.ast.templates.expr_begin.insert(e, b);
             }
-            return self.recover_err(&[], loc);
+            return e;
         }
         if fns && valid.len() == 1 {
             d = valid[0];
@@ -838,9 +835,9 @@ impl Sema<'_, '_> {
         unqualified: bool,
         nns: Option<kiln_ast::NnsId>,
         loc: Loc,
-    ) -> Option<ExprId> {
+    ) -> ExprId {
         if let Some(e) = self.implicit_member_overload(name, found, valid, nns, loc) {
-            return Some(e);
+            return e;
         }
         let adl = found.naming.is_none() && self.call_uses_adl(valid, unqualified);
         let mut decls: Vec<DeclId> = Vec::with_capacity(valid.len());
@@ -855,7 +852,7 @@ impl Sema<'_, '_> {
             decls.reverse();
             via.reverse();
         }
-        Some(self.build_overload_ref(name, &decls, &via, found.naming, adl, nns, loc))
+        self.build_overload_ref(name, &decls, &via, found.naming, adl, nns, loc)
     }
 
     /// An overloaded member name used with an implicit object
@@ -2253,29 +2250,10 @@ impl Sema<'_, '_> {
         self.builder().subscript(b, i, elem, loc)
     }
 
-    /// Reports argument `a` (the `i`th, 0-based) not converting to its
-    /// parameter type `pt`: clang's "no matching function" with the
-    /// candidate's note for a named callee, else the conversion error.
-    fn bad_argument(
-        &mut self,
-        named: Option<DeclId>,
-        callee: ExprId,
-        a: ExprId,
-        pt: QualType,
-        i: usize,
-        err: &ConvError,
-        param_note: Option<Diag>,
-    ) {
-        let Some(d) = named else {
-            // A callee without overload resolution reports the
-            // conversion, noting the parameter (clang's direct path).
-            let mut msg = err.diag(self, a);
-            if let Some(n) = param_note {
-                msg = msg.with_note(n);
-            }
-            self.emit(msg);
-            return;
-        };
+    /// Reports argument `a` (the `i`th, 0-based) of a call of `d` (a
+    /// one-candidate overload set) not converting to its parameter type
+    /// `pt`: clang's "no matching function" with the candidate's note.
+    fn bad_argument(&mut self, d: DeclId, callee: ExprId, a: ExprId, pt: QualType, i: usize) {
         let msg = self
             .diag(DiagId::sema_ovl_no_viable_function_in_call, self.begin_loc(callee))
             .arg(self.decl_name(d));
@@ -2532,44 +2510,37 @@ impl Sema<'_, '_> {
                     // `FindConversionForRefInit`).
                     let info = self.arg_info(a);
                     let opts = crate::overload::IcsOptions::CANDIDATE_ARG;
-                    if self.try_implicit_conversion(&info, to, opts).is_bad() {
-                        let err =
-                            ConvError::new(DiagId::sema_ovl_no_viable_function_in_call, Vec::new());
-                        self.bad_argument(
-                            named.map(|c| c.decl),
-                            callee,
-                            a,
-                            params[i],
-                            i,
-                            &err,
-                            None,
-                        );
+                    if self.try_implicit_conversion(&info, to, opts).is_bad()
+                        && let Some(c) = named
+                    {
+                        self.bad_argument(c.decl, callee, a, params[i], i);
                         return None;
                     }
                 }
                 match conv::implicit_convert(self, a, to, ConvCtx::Argument) {
                     Ok(x) => conv_args.push(x),
-                    Err(err)
-                        if matches!(
+                    Err(err) => {
+                        // clang reports an ambiguous or deleted
+                        // user-defined conversion of the selected
+                        // function's argument as such, and so does a
+                        // callee without overload resolution (its direct
+                        // path, noting the parameter); otherwise "no
+                        // matching function".
+                        let as_such = matches!(
                             err.id,
                             DiagId::sema_ovl_ambiguous_conversion
                                 | DiagId::sema_ref_init_ambiguous
                                 | DiagId::sema_conv_deleted_ctor
-                        ) =>
-                    {
-                        // clang reports an ambiguous user-defined conversion
-                        // of the selected function's argument as such.
-                        let mut d = err.diag(self, a);
-                        if let Some(&p) = pdecls.get(i) {
-                            d = d.with_note(self.param_decl_note(p));
+                        );
+                        if let Some(c) = named.filter(|c| c.overloadable && !as_such) {
+                            self.bad_argument(c.decl, callee, a, params[i], i);
+                        } else {
+                            let mut d = err.diag(self, a);
+                            if let Some(&p) = pdecls.get(i) {
+                                d = d.with_note(self.param_decl_note(p));
+                            }
+                            self.emit(d);
                         }
-                        self.emit(d);
-                        return None;
-                    }
-                    Err(err) => {
-                        let ovl = named.filter(|c| c.overloadable).map(|c| c.decl);
-                        let note = pdecls.get(i).map(|&p| self.param_decl_note(p));
-                        self.bad_argument(ovl, callee, a, params[i], i, &err, note);
                         return None;
                     }
                 }
@@ -3061,9 +3032,8 @@ impl Sema<'_, '_> {
         if style.allows_static()
             && self.ast.types.as_record(ty).is_none()
             && self.ast.types.as_record(self.ety(e)).is_some()
-            && let Some(x) = self.cast_user_conversion(style, e, ty, loc, rparen)
         {
-            return x;
+            return self.cast_user_conversion(style, e, ty, loc, rparen);
         }
         if self.ast.types.as_record(ty).is_some() {
             self.unsupported("conversions of class types", loc);
@@ -3150,8 +3120,7 @@ impl Sema<'_, '_> {
     /// [expr.static.cast]/4 from a class to a non-class type `ty`: the
     /// user-defined conversion of the direct-initialization `ty t(e);`
     /// (explicit conversion functions are candidates), with clang's
-    /// `tryDiagnoseOverloadedCast` errors. `None` when the cast's other
-    /// readings should be tried (none does yet).
+    /// `tryDiagnoseOverloadedCast` errors.
     #[inline(never)]
     fn cast_user_conversion(
         &mut self,
@@ -3160,14 +3129,14 @@ impl Sema<'_, '_> {
         ty: QualType,
         loc: Loc,
         rparen: Loc,
-    ) -> Option<ExprId> {
+    ) -> ExprId {
         use crate::overload::{Ics, IcsOptions};
         let to = conv::strip_cv(self, ty);
         let from = self.ety(e);
         let a = self.arg_info(e);
         let id = match self.try_implicit_conversion(&a, to, IcsOptions::ALLOW_EXPLICIT) {
             Ics::UserDefined(u) if !u.func.is_some_and(|f| self.ovl_deleted(f)) => {
-                return Some(match self.user_convert(e, to, ConvCtx::Cast, loc) {
+                return match self.user_convert(e, to, ConvCtx::Cast, loc) {
                     Some(Ok(x)) if !self.is_err_expr(x) => {
                         self.mark_explicit(x, e);
                         self.explicit_cast(style, CastKind::NoOp, x, to, loc, rparen)
@@ -3181,7 +3150,7 @@ impl Sema<'_, '_> {
                         self.unsupported("this user-defined conversion", loc);
                         self.recover(ty, &[e], loc)
                     }
-                });
+                };
             }
             Ics::UserDefined(_) => DiagId::sema_ovl_deleted_conversion_in_cast,
             Ics::Ambiguous { .. } => DiagId::sema_ovl_ambiguous_conversion_in_cast,
@@ -3195,7 +3164,7 @@ impl Sema<'_, '_> {
                 };
                 let msg = self.diag(id, loc).arg(self.ty_arg(from)).arg(self.ty_arg(ty));
                 self.emit(msg);
-                return Some(self.recover(ty, &[e], loc));
+                return self.recover(ty, &[e], loc);
             }
             _ if conv::has_conversion_functions(self, from) => {
                 DiagId::sema_ovl_no_conversion_in_cast
@@ -3206,7 +3175,7 @@ impl Sema<'_, '_> {
                     .arg(self.ty_arg(from))
                     .arg(self.ty_arg(ty));
                 self.emit(msg);
-                return Some(self.recover(ty, &[e], loc));
+                return self.recover(ty, &[e], loc);
             }
         };
         let mut msg =
@@ -3216,7 +3185,7 @@ impl Sema<'_, '_> {
             msg = msg.with_note(n);
         }
         self.emit(msg);
-        Some(self.recover(ty, &[e], loc))
+        self.recover(ty, &[e], loc)
     }
 
     fn bad_cast(&mut self, style: CastStyle, e: ExprId, ty: QualType, loc: Loc) -> ExprId {

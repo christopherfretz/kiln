@@ -56,7 +56,11 @@ impl Sema<'_, '_> {
         // [basic.lookup.argdep]/3: an inline namespace adds its enclosing
         // namespace, and a namespace its inline namespaces.
         if self.kind_of(ns) == DeclKind::Namespace
-            && self.ast.decls.namespace(self.ast.first(ns)).is_some_and(|n| n.is_inline())
+            && self
+                .ast
+                .decls
+                .namespace(self.ast.first(ns))
+                .is_some_and(kiln_ast::decl::NamespaceData::is_inline)
             && let Some(p) = self.ast.decls.get(ns).ctx()
             && matches!(self.kind_of(p), DeclKind::Namespace | DeclKind::TranslationUnit)
         {

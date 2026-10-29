@@ -212,7 +212,7 @@ impl Sema<'_, '_> {
     /// `operator T`).
     pub(crate) fn conversion_result_type(&self, f: kiln_ast::DeclId) -> QualType {
         let fty = self.ast.decls.get(f).ty().unwrap_or(QualType::ERROR);
-        self.ast.types.proto(fty).map_or(QualType::ERROR, |p| p.ret())
+        self.ast.types.proto(fty).map_or(QualType::ERROR, kiln_ast::types::FuncProto::ret)
     }
 
     /// clang's ambiguity error for converting `a` to `to`, with a note

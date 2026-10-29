@@ -22,7 +22,7 @@ pub(crate) enum AddrCtx {
     /// `static_cast` / a cast to `void`: "cannot be {cast} to type"
     /// (the selector of `sema_addr_ovl_cast`: 0 `cast`, 1 `static_cast`).
     Cast(u8),
-    /// `reinterpret_cast`: "reinterpret_cast cannot resolve overloaded
+    /// `reinterpret_cast`: "`reinterpret_cast` cannot resolve overloaded
     /// function".
     Reinterpret,
 }

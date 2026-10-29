@@ -347,10 +347,13 @@ impl Sema<'_, '_> {
         }
         let suppress = opts.contains(IcsOptions::SUPPRESS_UDC);
         // /5.1.2: an lvalue result of a conversion function.
-        if lref && !related && class_src && !suppress {
-            if let Some(x) = self.ref_conversion(a, to, true, opts) {
-                return x;
-            }
+        if lref
+            && !related
+            && class_src
+            && !suppress
+            && let Some(x) = self.ref_conversion(a, to, true, opts)
+        {
+            return x;
         }
         let plain_lref = lref && (!q1.is_const() || q1.is_volatile());
         if plain_lref {
@@ -369,10 +372,12 @@ impl Sema<'_, '_> {
             ));
         }
         // /5.3.2: an rvalue result of a conversion function.
-        if !related && class_src && !suppress {
-            if let Some(x) = self.ref_conversion(a, to, false, opts) {
-                return x;
-            }
+        if !related
+            && class_src
+            && !suppress
+            && let Some(x) = self.ref_conversion(a, to, false, opts)
+        {
+            return x;
         }
         // /5.4.4: an rvalue reference to a related lvalue.
         if !lref && lv && related {
@@ -459,7 +464,7 @@ impl Sema<'_, '_> {
                 rb = rb.with(RefBinding::LVALUE_REF).with(RefBinding::OBJECT_NO_REF_QUAL);
             }
             RefQual::LValue => {
-                if !lv && !(q.is_const() && !q.is_volatile()) {
+                if !lv && (!q.is_const() || q.is_volatile()) {
                     return Ics::bad(BadKind::LvalueRequired, o.ty, param);
                 }
                 rb = rb.with(RefBinding::LVALUE_REF);
@@ -940,7 +945,11 @@ impl Sema<'_, '_> {
                     continue;
                 }
                 let fty = self.ast.decls.get(m).ty().unwrap_or(QualType::ERROR);
-                let ret = self.ast.types.proto(fty).map_or(QualType::ERROR, |p| p.ret());
+                let ret = self
+                    .ast
+                    .types
+                    .proto(fty)
+                    .map_or(QualType::ERROR, kiln_ast::types::FuncProto::ret);
                 let key = self.ast.types.canonical(ret);
                 if seen_types.contains(&key) {
                     continue;
@@ -986,7 +995,8 @@ impl Sema<'_, '_> {
             return;
         }
         let fty = self.ast.decls.get(f).ty().unwrap_or(QualType::ERROR);
-        let ret = self.ast.types.proto(fty).map_or(QualType::ERROR, |p| p.ret());
+        let ret =
+            self.ast.types.proto(fty).map_or(QualType::ERROR, kiln_ast::types::FuncProto::ret);
         if self.fn_spec(f).is_explicit() {
             // [over.match.conv]/1.2, [over.match.copy]/1.2: an explicit
             // conversion function is a candidate (of a direct-
@@ -1058,12 +1068,11 @@ impl Sema<'_, '_> {
                 }
             }
         };
-        match final_conv {
-            Some(s) => cand.final_conv = Some(s),
-            None => {
-                cand.viable = false;
-                cand.failure = CandidateFailure::BadFinalConversion;
-            }
+        if let Some(s) = final_conv {
+            cand.final_conv = Some(s);
+        } else {
+            cand.viable = false;
+            cand.failure = CandidateFailure::BadFinalConversion;
         }
         set.cands.push(cand);
     }

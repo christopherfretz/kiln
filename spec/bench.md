@@ -65,7 +65,9 @@ skips the work cannot look fast.
 Groups in the seed corpus: `pp` (preprocessing: the libc++ include graph with a
 header-style configuration layer, X-macro tables, Boost.PP-style recursive
 expansion), `oven` (constant evaluation), `frontend` (template-heavy parsing
-and semantic analysis).
+and semantic analysis), `overload` (overload resolution: named calls over
+large overload sets, constructor and conversion selection;
+spec/sema-overload.md §11).
 
 ## Directives
 

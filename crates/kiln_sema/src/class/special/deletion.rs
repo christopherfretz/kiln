@@ -174,10 +174,6 @@ impl Sema<'_, '_> {
         self.ast.types.proto(ty).map(FuncProto::info).unwrap_or_default()
     }
 
-    pub(crate) fn fn_variadic(&self, f: DeclId) -> bool {
-        self.fn_info(f).variadic()
-    }
-
     /// Whether the special member `f` (of kind `k`) is deleted when
     /// defaulted (clang `ShouldDeleteSpecialMember`). A selection that
     /// needs overload resolution reports `sema_unsupported` (Q7) and

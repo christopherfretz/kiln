@@ -50,17 +50,27 @@ Scoped enums never promote.
 `standard_conversion(s, e, to, ctx) -> Option<StandardConversion>` computes
 the sequence ([over.ics.scs]):
 - `first: FirstStep`: Identity, LvalueToRvalue, ArrayToPointer or FunctionToPointer;
-- `second: SecondStep`: Identity, IntegralPromotion, FloatingPromotion, IntegralConversion, FloatingConversion, FloatingIntegral, PointerConversion, MemberPointerConversion, BooleanConversion or NullPointer;
+- `second: SecondStep`: Identity, IntegralPromotion, FloatingPromotion, IntegralConversion, FloatingConversion, FloatingIntegral, PointerConversion, MemberPointerConversion, BooleanConversion, NullPointer or DerivedToBase (a class argument for a base-class parameter or reference, Conversion rank: [over.best.ics]/6, [over.ics.ref]/1; WP-068a);
 - `fn_ptr: bool`;
 - `third: ThirdStep`: Identity or Qualification;
 - the `rank()`: Exact, Promotion or Conversion;
+- `rb: RefBinding`, the reference binding the sequence performs (WP-068a;
+  clang's `StandardConversionSequence` binding bits): `IS_REF`, `DIRECT`,
+  `LVALUE_REF`, `BINDS_RVALUE`, `BINDS_FUNCTION_LVALUE`,
+  `OBJECT_NO_REF_QUAL` (an implicit object parameter of a member without a
+  ref-qualifier) and `IGNORED` (a static member's object parameter).
+  `StandardConversion::identity(from, to, rb)` is the identity sequence;
+  overload resolution (spec/sema-overload.md §3.3) fills `rb`;
 - the data the ranking rules need.
 
 `standard_conversion_from` does the same from a type and category, with no
 expression. `ctx` matters only for `nullptr_t → bool`, which is allowed
 only when `ctx` is a direct-initialization ([conv.bool]).
 
-`apply_standard_conversion(e, scs, to)` builds the casts. Cast targets:
+`apply_standard_conversion(e, scs, to)` builds the casts. A `DerivedToBase`
+second step casts a glvalue to its base with the path, checking access and
+reporting an ambiguous base (a class prvalue reaches a base by a
+constructor instead). Cast targets:
 1. The first step casts to the decayed or unqualified type.
 2. The second step casts to `to` **as written**, sugar kept.
 3. The qualification step adds a `NoOp` to `to` without top-level cv, and
@@ -91,14 +101,19 @@ the same virtual base count as one. Access is **not** checked (§10).
 
 ## 4. Ranking (`compare_standard_conversions`)
 `compare_standard_conversions(a, b) -> IcsCompare {Better, Worse,
-Indistinguishable}` implements these rules, in order:
+Indistinguishable}` implements these rules in clang 19's
+`CompareStandardConversionSequences` order (WP-068a; spec/sema-overload.md
+§13.2.1):
 - [over.ics.rank]/3.2.1: proper subsequence, with the lvalue transformation ignored;
 - /3.2.2: rank;
-- /3.2.5: same type except top-level cv, where the more cv-qualified one is worse (qualification-adjusted similarity);
 - /4.1: a conversion that does not convert a pointer, member pointer or `nullptr_t` to `bool` beats one that does;
 - /4.2: promotion to a fixed enum's underlying type beats promotion to its promoted type;
+- /4.4.1–4.4.2: conversions to `void*`, then the derived/base pointer orderings;
+- /3.2.5: same type except top-level cv, where the more cv-qualified one is worse (qualification-adjusted similarity);
+- /3.2.3, /3.2.4: the reference-binding kinds (rvalue reference to an rvalue over lvalue reference; lvalue reference to a function lvalue over rvalue reference), not for the object parameter of a member without a ref-qualifier;
+- /3.2.6: two reference bindings to the same type but for top-level cv, the less qualified referent better;
 - /4.3: for floating-point conversions between types of equal rank, the one whose target matches the source's conversion rank is better;
-- /4.4: the derived/base pointer, member-pointer and reference rules.
+- /4.4.3–4.4.8: the derived/base member-pointer, class (`DerivedToBase`) and reference rules.
 
 `float_order(a, b) -> FloatOrder {Less, Equal, Greater, Unordered}`
 compares floating-point conversion ranks ([conv.rank]/2) through the
@@ -108,8 +123,11 @@ target's formats (`format_subset`). bf16 and f16 are unordered.
 `implicit_convert(s, e, to, ctx) -> Result<ExprId, ConvError>`:
 - Error and dependent types pass through unchanged.
 - A reference target binds directly to a reference-compatible glvalue ([dcl.init.ref]/5.1, 5.3.1, the xvalue case). The result is `NoOp` or `DerivedToBase` (with path) to `cv T`, keeping the category.
-- A class target is the identity for a same-type prvalue; any other case returns `sema_conv_unsupported` (M3).
-- A class source returns "no viable conversion" if the class has no conversion functions, else `sema_conv_unsupported`.
+- A class target, or a class source, goes through overload resolution
+  (WP-068a, spec/sema-overload.md §10.3): `try_implicit_conversion` computes
+  the implicit conversion sequence and a user-defined one is applied by
+  `user_conversion` (constructor or conversion function, with the
+  candidates as notes of clang's error when there is none).
 - Otherwise the standard conversion sequence, or a `ConvError` worded for `ctx`.
 
 `ConvCtx` values:
@@ -121,8 +139,9 @@ target's formats (`format_subset`). bf16 and f16 are unordered.
 - `Condition`, which is contextual bool and counts as direct ([conv.general]/4);
 - `Cast`.
 
-`ConvError { id, args }` is emitted by the caller with
-`err.diag(s, e)`, which puts the caret at `e`.
+`ConvError { id, args, notes }` is emitted by the caller with
+`err.diag(s, e)`, which puts the caret at `e` (`err.diag_at(s, loc)` at
+`loc`); `notes` are the candidates of a failed user-defined conversion.
 
 Wording table (all verified against clang 19; tests in `conv_errors.rs`):
 - **Initialization, Argument, Return:** `sema_init_conversion_failed`, "cannot initialize {a variable|a parameter|return object|a value} of type T with an {rvalue|lvalue} of type U" plus, for member-pointer and pointer/reference-to-function pairs, clang's `HandleFunctionTypeMismatch` suffix (": different classes ('D' vs 'C')", ": different number of parameters (0 vs 1)", ": different qualifiers (unqualified vs 'const')", ...; WP-083). An xvalue prints as "rvalue", which covers the implicitly moved `return` operand. The caller marks that operand as an xvalue ([class.copy.elision]/3).
@@ -243,12 +262,11 @@ the target:
 12. The multicharacter-literal warning is the lexer's (`kiln_lex`).
 
 ## 10. Not yet (M3+)
-- User-defined conversions ([over.ics.user]), class initialization and
-  constructors.
-- Access checking of base conversions ([conv.ptr]/3, [class.access.base]).
-- MaterializeTemporaryExpr and reference binding to temporaries.
 - Conversion warnings (§9.3) and fix-its.
-- Overload resolution, user-defined ICS and reference-binding ranking: spec/sema-overload.md.
+
+User-defined conversions, class initialization, base access checks,
+temporaries and reference-binding ranking landed with WP-067/WP-068a
+(spec/sema-overload.md, spec/sema-class.md).
 
 ## 11. Tests
 All tests are in `crates/kiln_sema/tests/`, are built with `AstBuilder`,
