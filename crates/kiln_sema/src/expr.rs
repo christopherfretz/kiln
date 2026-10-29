@@ -94,11 +94,11 @@ impl Sema<'_, '_> {
         self.ast.exprs.get(e).ty()
     }
 
-    fn eloc(&self, e: ExprId) -> Loc {
+    pub(crate) fn eloc(&self, e: ExprId) -> Loc {
         self.ast.exprs.get(e).loc()
     }
 
-    fn is_err_expr(&self, e: ExprId) -> bool {
+    pub(crate) fn is_err_expr(&self, e: ExprId) -> bool {
         let n = self.ast.exprs.get(e);
         n.kind() == ExprKind::RecoveryExpr || self.is_error_type(n.ty())
     }
@@ -163,7 +163,7 @@ impl Sema<'_, '_> {
     }
 
     /// A `RecoveryExpr` of error type over `kids`.
-    fn recover_err(&mut self, kids: &[ExprId], loc: Loc) -> ExprId {
+    pub(crate) fn recover_err(&mut self, kids: &[ExprId], loc: Loc) -> ExprId {
         self.recover(QualType::ERROR, kids, loc)
     }
 
@@ -577,6 +577,7 @@ impl Sema<'_, '_> {
             | ExprKind::CXXBoolLiteralExpr
             | ExprKind::CXXNullPtrLiteralExpr
             | ExprKind::UnaryExprOrTypeTraitExpr
+            | ExprKind::CXXNoexceptExpr
             | ExprKind::CXXStaticCastExpr
             | ExprKind::CXXReinterpretCastExpr
             | ExprKind::CXXConstCastExpr => Some((DiagId::sema_unused_expr, loc, Vec::new())),

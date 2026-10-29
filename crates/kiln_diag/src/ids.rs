@@ -627,6 +627,12 @@ diag_ids! {
     sema_multiple_default_labels = Error (0) "multiple default labels in one switch";
     sema_statement_requires_integer = Error (1) "statement requires expression of integer type ({0} invalid)";
     sema_expr_not_cce = Error (1) "{0} is not a constant expression";
+    sema_cce_conversion_not_allowed = Error (2) "conversion from {0} to {1} is not allowed in a converted constant expression";
+    sema_cce_not_implicitly_convertible = Error (2) "value of type {0} is not implicitly convertible to {1}";
+    sema_dynamic_exception_spec = WarningError [DynamicExceptionSpec] (0) "ISO C++17 does not allow dynamic exception specifications";
+    note_use_noexcept_false = Note (0) "use 'noexcept(false)' instead";
+    sema_exception_spec_mismatch = Error (0) "exception specification in declaration does not match previous declaration";
+    sema_missing_exception_spec = Error (2) "'{0}' is missing exception specification '{1}'";
     sema_undeclared_label = Error (1) "use of undeclared label '{0}'";
     sema_redefinition_of_label = Error (1) "redefinition of label '{0}'";
     sema_return_missing_expr = Error (1) "non-void function '{0}' should return a value";

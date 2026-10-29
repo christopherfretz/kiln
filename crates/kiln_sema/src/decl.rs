@@ -295,7 +295,7 @@ impl Sema<'_, '_> {
                         },
                     };
                 }
-                Chunk::Function { params, variadic, loc, .. } => {
+                Chunk::Function { params, variadic, loc, exc, .. } => {
                     prev_ref = false;
                     if t.is_array(ty) || t.is_function(ty) {
                         let which = if t.is_array(ty) { "0" } else { "1" };
@@ -308,7 +308,7 @@ impl Sema<'_, '_> {
                     }
                     let ptys: Vec<QualType> = params.iter().map(|p| p.ty).collect();
                     let info = FuncInfo::new().with_variadic(*variadic);
-                    ty = self.ast.types.function(ty, &ptys, info, ExcSpec::None);
+                    ty = self.ast.types.function(ty, &ptys, info, *exc);
                 }
             }
         }
@@ -513,6 +513,41 @@ impl Sema<'_, '_> {
         self.emit(d);
     }
 
+    /// Whether function types `a` and `b` are the same apart from their
+    /// exception specifications.
+    fn same_ignoring_exc_spec(&mut self, a: QualType, b: QualType) -> bool {
+        let t = &self.ast.types;
+        let (Some(pa), Some(pb)) = (t.proto(a).copied(), t.proto(b).copied()) else {
+            return false;
+        };
+        let (ra, rb) = (t.params(&pa).to_vec(), t.params(&pb).to_vec());
+        let a = self.ast.types.function(pa.ret(), &ra, pa.info(), ExcSpec::None);
+        let b = self.ast.types.function(pb.ret(), &rb, pb.info(), ExcSpec::None);
+        self.ast.types.same_type(a, b)
+    }
+
+    /// The exception specification of function type `q` as written (the
+    /// canonical one when `q` is sugar over the function type).
+    pub(crate) fn written_exc_spec(&self, q: QualType) -> ExcSpec {
+        let t = &self.ast.types;
+        t.proto_of(q.ty()).or_else(|| t.proto(q)).map_or(ExcSpec::None, |p| t.exc_spec(p))
+    }
+
+    /// `exc` spelled as in a function type (`noexcept`, `throw()`,
+    /// `noexcept(expr)`), without the leading space.
+    fn exc_spec_spelling(&self, exc: ExcSpec) -> String {
+        match exc {
+            ExcSpec::DynamicNone => "throw()".to_owned(),
+            ExcSpec::NoexceptExpr { expr, .. } => {
+                let mut s = String::from("noexcept(");
+                kiln_ast::types::TypeNames::write_expr(&self.ast, expr, &mut s);
+                s.push(')');
+                s
+            }
+            _ => "noexcept".to_owned(),
+        }
+    }
+
     fn note_prev(&self, msg: kiln_diag::Diag, prev: DeclId, definition: bool) -> kiln_diag::Diag {
         let loc = self.ast.decls.get(prev).loc();
         let id = if definition {
@@ -701,6 +736,7 @@ impl Sema<'_, '_> {
             }
         }
         let mut prev_ok = None;
+        let mut invalid_redecl = false;
         if let Some(p) = self.find_prev_linkage(name, d.qualifier) {
             let pn = *self.ast.decls.get(p);
             if pn.kind() == DeclKind::Function {
@@ -721,6 +757,21 @@ impl Sema<'_, '_> {
                     if pspec.is_inline() {
                         spec = spec.with_implicit_inline(true);
                     }
+                } else if self.same_ignoring_exc_spec(pty, ty) {
+                    // [except.spec]/5: every declaration of a function with
+                    // a non-throwing specification has one, and only those.
+                    let msg = match self.written_exc_spec(ty) {
+                        ExcSpec::None => {
+                            let spelled = self.exc_spec_spelling(self.written_exc_spec(pty));
+                            self.diag(DiagId::sema_missing_exception_spec, d.name_loc())
+                                .arg(sym_str(self, name))
+                                .arg(spelled)
+                        }
+                        _ => self.diag(DiagId::sema_exception_spec_mismatch, d.name_loc()),
+                    };
+                    let msg = self.note_prev(msg, p, false);
+                    self.emit(msg);
+                    invalid_redecl = true;
                 } else {
                     let same_params = match (self.ast.types.proto(pty), self.ast.types.proto(ty)) {
                         (Some(a), Some(b)) => {
@@ -755,6 +806,9 @@ impl Sema<'_, '_> {
         let mut h = DeclHead::new(ctx, DeclName::ident(name), d.name_loc());
         h.lexical = Some(lexical);
         let f = self.builder().function(h, DeclKind::Function, ty, spec, prev_ok);
+        if invalid_redecl {
+            self.ast.decls.set_flags(f, DeclFlags::INVALID);
+        }
         self.note_local_extern(name, f);
         let params: Vec<ParamInfo> =
             d.function_params().map(<[ParamInfo]>::to_vec).unwrap_or_default();

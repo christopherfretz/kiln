@@ -644,6 +644,11 @@ impl<'a> AstNames<'a> {
                     }
                 }
             }
+            ExprKind::CXXNoexceptExpr => {
+                out.push_str("noexcept(");
+                self.expr(exprs.noexcept_operand(e), d, out);
+                out.push(')');
+            }
             ExprKind::InitListExpr => {
                 self.expr_list(exprs.init_list_inits(e), '{', '}', d, out);
             }

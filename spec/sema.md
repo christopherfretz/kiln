@@ -88,7 +88,10 @@ Constructors:
   the base type.
 - `Declarator` carries:
   - the name and an optional qualifier
-  - `chunks`, innermost first
+  - `chunks`, innermost first. `Chunk::Function` carries the
+    parameters, `variadic`, the parenthesis locations and `exc`, the
+    exception specification Sema built from the declarator (§4.7);
+    `ExcSpec::None` when none was written (WP-058 added the field)
   - attributes, bit-width, `init_style`, and context
 
 ### 4.2 Declarator to declaration
@@ -123,6 +126,16 @@ Redeclaration and linkage rules:
   definition, else `previous declaration is here`.
 - **Linkage** ([basic.link]): `static`, `extern`, `extern "C"`, members
   of unnamed namespaces, and `const` variables at namespace scope.
+- **Exception specifications** ([except.spec]/5): function types that
+  differ only in their exception specification are not "different
+  types". When the new declaration writes none and the previous one is
+  non-throwing the error is `'f' is missing exception specification
+  'noexcept'` (the previous specification as written); any other
+  difference is `exception specification in declaration does not
+  match previous declaration`. Both take a `previous declaration is
+  here` note, and the new declaration is marked invalid. Compatible
+  spellings (`noexcept`, `noexcept(true)`, `throw()`) compare equal
+  through the canonical type.
 
 ### 4.3 Functions
 - `act_on_start_function` and `act_on_finish_function` bracket a body.
@@ -214,6 +227,46 @@ Redeclaration and linkage rules:
     there is one.
   - Evaluation notes follow (§8).
 
+### 4.7 Exception specifications (`except.rs`)
+The parser calls these while parsing a function declarator, and stores
+the result in `Chunk::Function::exc`; the function type keeps the
+specification as written (`TypeNames` prints ` noexcept`,
+` noexcept(<expr>)`, ` throw()`), the canonical type folds it to
+`Nothrow` or `None`.
+- **`noexcept`** is `ExcSpec::BasicNoexcept`.
+- **`act_on_noexcept_spec(e, loc, start)`** ([except.spec]/2): `e` is
+  a contextually converted constant expression of type `bool`
+  ([expr.const]/12), evaluated with `EvalContext::converted(start)`.
+  The result is `NoexceptExpr { expr: ConstantExpr(e'), value }`.
+  Diagnostics point at `start`, the operand's first token, and follow
+  clang 19:
+  - an integral or unscoped-enumeration value other than 0 or 1:
+    `noexcept specifier argument evaluates to 2, which cannot be
+    narrowed to type 'bool'` (an error here; clang's is a default-error
+    `-Wc++11-narrowing` warning);
+  - a type whose conversion to `bool` is not allowed in a converted
+    constant expression (pointers, `std::nullptr_t`, floating point):
+    `conversion from 'T' to 'bool' is not allowed in a converted
+    constant expression`, with `T` as written (`int *const`);
+  - a class or scoped-enumeration type: `value of type 'T' is not
+    implicitly convertible to 'bool'`;
+  - a non-constant operand: `noexcept specifier argument is not a
+    constant expression`, plus the Oven's notes.
+
+  After an error the specification is `noexcept(false)`, as clang
+  recovers. A dependent operand would give `NoexceptValue::Dependent`
+  (no templates in M2).
+- **`act_on_dynamic_exception_spec(types, ok, loc, rparen)`**:
+  `throw()` is `DynamicNone`, accepted silently (clang 19 accepts it
+  in C++26 although P1152/C++20 removed it from the grammar). A
+  non-empty list is `ISO C++17 does not allow dynamic exception
+  specifications` (`-Wdynamic-exception-spec`, default error) with a
+  `use 'noexcept(false)' instead` note, then `Dynamic(types)`.
+- **Gaps:** the function's parameters are not yet in scope in the
+  specification (they are declared after the declarator is complete);
+  deferred specifications of member functions, `__attribute__((nothrow))`
+  and the implicit specifications of special members are M3.
+
 ## 5. Expressions (`expr.rs`, `conv/`)
 - **Typed nodes:** each `act_on_*` builds clang's typed node, with
   implicit conversions spelled out as `ImplicitCastExpr`
@@ -247,8 +300,8 @@ Redeclaration and linkage rules:
   over-wide shifts warn when the operands fold.
 
 ### 5.1 Unevaluated operands
-`unevaluated > 0` inside `sizeof` and `alignof` operands. Names there
-are not odr-used.
+`unevaluated > 0` inside `sizeof`, `alignof` and `noexcept` operands.
+Names there are not odr-used.
 
 ### 5.2 Odr-use
 - A DeclRefExpr to a variable is a *potential* odr-use, queued in
@@ -264,6 +317,31 @@ are not odr-used.
 - Names inside unevaluated operands are marked
   `non_odr_use_unevaluated`.
 - The dump reads `used` and `referenced` from the first declaration.
+
+### 5.3 The `noexcept` operator (`except.rs`)
+`act_on_noexcept_expr(e, loc, rparen)` ([expr.unary.noexcept]) builds
+a `CXXNoexceptExpr`: a `bool` prvalue whose operand is unevaluated
+(the parser brackets it with `enter_unevaluated`/`exit_unevaluated`).
+Its value is fixed at construction, `!can_throw(e)`, and stored on the
+node (`ExprStore::noexcept_value`); the Oven and codegen read it as a
+constant and never look at the operand.
+
+`can_throw(e)` is true when `e` is potentially-throwing
+([except.spec]/6), walking the operand and every subexpression:
+
+| construct | implemented |
+|---|---|
+| a call whose callee's function type (through a pointer or reference) is not non-throwing; a callee without a prototype throws | yes |
+| `throw` expression; `new` expression | yes (neither is produced by the M2 parser) |
+| `dynamic_cast` to a reference type needing a run-time check | yes (not produced by the M2 parser) |
+| `typeid` of a glvalue of polymorphic class type | M3 (no polymorphic classes in M2) |
+| implicit calls: constructors, destructors, conversion functions, allocation functions | M3 (none exist in M2) |
+| `__attribute__((nothrow))` on the callee | M3 (not parsed) |
+| a dependent operand (value-dependent `CXXNoexceptExpr`) | M3 (no templates) |
+
+The operands of nested `sizeof`, `alignof` and `noexcept` are not
+looked at (they are unevaluated). An erroneous operand gives an error
+expression.
 
 ## 6. Initialization (`init.rs`)
 - **`perform_init(ty, init, direct_list)`** implements [dcl.init]:
@@ -291,6 +369,26 @@ are not odr-used.
 - **`if`, `while`, `for`:** condition conversion to `bool` (contextual
   conversion), plus `cond_var` for condition declarations
   (`act_on_condition_var`).
+- **`act_on_if(kind, init, cond_var, cond, then, els, loc)`** builds
+  every `IfKind`:
+  - **`if constexpr`** ([stmt.if]/2): `act_on_constexpr_condition(e)`
+    converts the condition contextually to `bool` and evaluates it with
+    `EvalKind::IfConstexpr`; the result is `ConstantExpr(cond, value)`.
+    A failure is `constexpr if condition is not a constant expression`
+    at the condition's first token, with the Oven's notes. In M2 both
+    branches are analyzed and kept; the discarded statement
+    ([stmt.if]/2: not instantiated in a template, return statements not
+    used for deduction) is M3, with templates. Codegen and the Oven
+    emit only the selected branch.
+  - **`if consteval` / `if !consteval`** ([stmt.if]/4): no condition;
+    both substatements are compound statements (the parser enforces it:
+    `expected { after consteval` / `expected { after else`). The
+    compound executed when constant-evaluated (the `then` branch of
+    `if consteval`, the `else` branch of `if !consteval`) is an
+    immediate function context ([expr.const]/16):
+    `enter_immediate_context`/`exit_immediate_context` bracket it and
+    `in_immediate_context()` reports it. Nothing consumes it yet: the
+    immediate-invocation checks it relaxes are M3.
 - **`switch`:**
   - integral promotion of the condition
   - duplicate `case` values (with a note)
@@ -355,7 +453,8 @@ unscoped enumeration is reported (spec/oven.md "Integration").
 |---|---|
 | `static_assert` condition | `EvalKind::StaticAssert` |
 | initializer of a `constexpr` variable | `EvalContext::init(var, loc)`; on success the variable becomes `VarEvalState::Value(id)` |
-| `case` label, enumerator of an enumeration with a fixed underlying type | `EvalContext::converted(loc)`; a converted constant expression ([expr.const]/12) |
+| `case` label, enumerator of an enumeration with a fixed underlying type, `noexcept(e)` specifier | `EvalContext::converted(loc)`; a converted constant expression ([expr.const]/12) |
+| `if constexpr` condition | `EvalKind::IfConstexpr` |
 | array bound, bit-field width, enumerator without a fixed type, `alignas`, array designator | `EvalKind::Other` |
 
 - **Speculative folds (`try_fold`):**
@@ -393,13 +492,16 @@ unscoped enumeration is reported (spec/oven.md "Integration").
   conversions, operator overloading.
 - **Templates:** templates, concepts, packs; `auto` and `decltype`
   beyond the M2 basics.
-- **Other language features:** lambdas, exceptions, coroutines,
-  reflection, contracts.
+- **Other language features:** lambdas, exceptions (`throw`,
+  `try`/`catch`; exception specifications and the `noexcept` operator
+  are §4.7 and §5.3), coroutines, reflection, contracts.
 - **Constant evaluation** (what the Oven supports in M2 is in
   spec/oven.md):
-  - `consteval` and immediate invocations
-  - `if constexpr` and template arguments (`EvalKind::IfConstexpr`,
-    `EvalKind::TemplateArg`)
+  - `consteval` and immediate invocations (the immediate function
+    context of `if consteval` is tracked, §7, but not consulted)
+  - the discarded statement of `if constexpr` ([stmt.if]/2), with
+    templates
+  - template arguments (`EvalKind::TemplateArg`)
   - constant-initialization of `constinit` variables
   - Sema still rejects some M2 constructs before evaluation: a
     reference bound to a temporary, a cast to a reference type,

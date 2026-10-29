@@ -5,7 +5,7 @@
 //! [`DeclSpec`] into a type ([dcl.type.simple]) and a [`Declarator`] into
 //! a declaration.
 
-use kiln_ast::types::{Quals, TagKeyword};
+use kiln_ast::types::{ExcSpec, Quals, TagKeyword};
 use kiln_ast::{AttrId, DeclId, ExprId, QualType};
 use kiln_diag::DiagId;
 use kiln_source::Loc;
@@ -428,6 +428,10 @@ pub enum Chunk {
         loc: Loc,
         /// The `)`.
         rparen: Loc,
+        /// The exception specification ([except.spec]) as written, from
+        /// [`Sema::act_on_noexcept_spec`](crate::Sema::act_on_noexcept_spec)
+        /// and friends; `ExcSpec::None` when absent.
+        exc: ExcSpec,
     },
 }
 

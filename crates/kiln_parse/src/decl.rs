@@ -1,7 +1,7 @@
 //! Declarations ([dcl], [namespace], [class.mem]; spec/parse.md §4).
 
 use kiln_ast::decl::{EnumData, InitStyle};
-use kiln_ast::types::{Quals, TagKeyword};
+use kiln_ast::types::{ExcSpec, Quals, TagKeyword};
 use kiln_ast::{DeclId, QualType};
 use kiln_diag::DiagId;
 use kiln_lex::{Punct, TokKind};
@@ -957,14 +957,18 @@ impl Parser<'_, '_> {
             }
         }
         let rparen = self.expect_closing(Punct::RParen, Punct::LParen, open);
-        self.parse_function_qualifiers();
+        let exc = self.parse_function_qualifiers();
         let params = self.s.act_on_param_list(params);
-        d.chunks.push(Chunk::Function { params, variadic, loc: open, rparen });
+        d.chunks.push(Chunk::Function { params, variadic, loc: open, rparen, exc });
     }
 
-    /// cv- and ref-qualifiers, exception specifications and trailing return
-    /// types after a parameter list: all unsupported in M2.
-    fn parse_function_qualifiers(&mut self) {
+    /// cv- and ref-qualifiers, the exception specification and trailing
+    /// return types after a parameter list. Only the exception
+    /// specification ([except.spec]) is supported in M2; it is returned
+    /// (`ExcSpec::None` when absent). A second specification ends the
+    /// declarator (clang then expects a function body).
+    fn parse_function_qualifiers(&mut self) -> ExcSpec {
+        let mut exc = None;
         loop {
             let loc = self.loc();
             match self.kw() {
@@ -972,21 +976,66 @@ impl Parser<'_, '_> {
                     self.unsupported("member function qualifiers", loc);
                     self.bump();
                 }
-                Some(Kw::Noexcept | Kw::Throw) => {
-                    self.unsupported("exception specifications", loc);
-                    self.bump();
-                    if self.eat(Punct::LParen).is_some() {
-                        self.skip_until(&[Punct::RParen], false, true);
-                    }
+                Some(Kw::Noexcept | Kw::Throw) if exc.is_none() => {
+                    exc = Some(self.parse_exception_spec());
                 }
                 _ if self.at(Punct::Arrow) => {
                     self.unsupported("trailing return types", loc);
                     self.bump();
                     let _ = self.parse_type_id();
                 }
-                _ => return,
+                _ => return exc.unwrap_or_default(),
             }
         }
+    }
+
+    /// noexcept-specifier ([except.spec]/1): `noexcept`,
+    /// `noexcept ( constant-expression )`, or the dynamic `throw ( )` /
+    /// `throw ( type-id-list )` (C++17 removed the latter; it is
+    /// diagnosed by Sema). At the `noexcept` or `throw` keyword.
+    fn parse_exception_spec(&mut self) -> ExcSpec {
+        let is_throw = self.at_kw(Kw::Throw);
+        let loc = self.bump().span.lo;
+        if is_throw {
+            let Some(open) = self.eat(Punct::LParen) else {
+                let d = self
+                    .s
+                    .diag(DiagId::parse_expected_after, self.expected_loc())
+                    .arg("'throw'")
+                    .arg("'('");
+                self.emit(d);
+                return ExcSpec::None;
+            };
+            let mut types = Vec::new();
+            let mut ok = true;
+            while !self.at(Punct::RParen) && !self.at_eof() {
+                let Some(t) = self.parse_type_id() else {
+                    ok = false;
+                    self.skip_until(&[Punct::RParen], false, false);
+                    break;
+                };
+                types.push(t);
+                if self.at(Punct::Ellipsis) {
+                    self.unsupported("pack expansions", self.loc());
+                    self.bump();
+                }
+                if self.eat(Punct::Comma).is_none() {
+                    break;
+                }
+            }
+            let rparen = self.expect_closing(Punct::RParen, Punct::LParen, open);
+            return self.s.act_on_dynamic_exception_spec(&types, ok, loc, rparen);
+        }
+        let Some(open) = self.eat(Punct::LParen) else {
+            return ExcSpec::BasicNoexcept;
+        };
+        let start = self.loc();
+        let Some(e) = self.parse_constant_expr() else {
+            self.skip_until(&[Punct::RParen], false, true);
+            return ExcSpec::None;
+        };
+        self.expect_closing(Punct::RParen, Punct::LParen, open);
+        self.s.act_on_noexcept_spec(e, loc, start)
     }
 
     /// type-id ([dcl.name]).

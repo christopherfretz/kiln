@@ -18,6 +18,7 @@ pub mod constfold;
 pub mod conv;
 pub mod decl;
 pub mod declspec;
+pub mod except;
 pub mod expr;
 pub mod init;
 pub mod literal;
@@ -69,6 +70,9 @@ pub struct Sema<'a, 'sm> {
     pub(crate) func: Option<stmt::FnState>,
     /// Depth of unevaluated operands (`sizeof`, `alignof`).
     pub(crate) unevaluated: u32,
+    /// Depth of immediate function contexts ([expr.const]/16) entered
+    /// by `if consteval`.
+    pub(crate) immediate: u32,
     /// `DeclRefExpr`s of the current full-expression that are potential
     /// odr-uses ([basic.def.odr]/4): resolved at the end of the
     /// full-expression (spec/sema.md §5.2).
@@ -113,6 +117,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             ctx: tu,
             func: None,
             unevaluated: 0,
+            immediate: 0,
             pending_odr: Vec::new(),
             defining: Vec::new(),
             enums: Vec::new(),

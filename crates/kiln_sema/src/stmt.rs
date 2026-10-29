@@ -3,7 +3,7 @@
 //! `return` (spec/sema.md §7).
 
 use kiln_ast::decl::{DeclFlags, DeclKind, DeclMisc, NewDecl, Payload};
-use kiln_ast::expr::{CastKind, ExprKind, ValueCategory};
+use kiln_ast::expr::{CastKind, ExprDeps, ExprKind, ValueCategory};
 use kiln_ast::names::DeclName;
 use kiln_ast::stmt::{CaseData, IfData, IfKind, LoopData, StmtKind, SwitchData};
 use kiln_ast::types::BuiltinType;
@@ -123,19 +123,71 @@ impl Sema<'_, '_> {
         (Some(v), self.build_decl_ref(v, loc))
     }
 
-    /// `if (init; cond) then else els` ([stmt.if]); `cond_var` is the
-    /// condition variable, if declared.
+    /// The condition of `if constexpr` ([stmt.if]/2): contextually
+    /// converted to `bool` (narrowing allowed since P1401), then
+    /// evaluated by the Oven (`EvalKind::IfConstexpr`) and wrapped in a
+    /// `ConstantExpr` holding the value. A condition that is not a
+    /// constant expression is diagnosed and kept unwrapped.
+    pub fn act_on_constexpr_condition(&mut self, e: ExprId) -> ExprId {
+        let at = self.begin_loc(e);
+        let c = self.act_on_condition(e);
+        if self.is_err_expr(c) || self.ast.exprs.get(c).deps().intersects(ExprDeps::VALUE) {
+            return c;
+        }
+        match self.eval_const(c, kiln_oven::EvalContext::new(kiln_oven::EvalKind::IfConstexpr, at))
+        {
+            Ok(v) => {
+                let value = self.const_truth(v).unwrap_or(false);
+                let cv = self.int_const(QualType::BOOL, i128::from(value));
+                self.builder().constant_expr(c, Some(cv))
+            }
+            Err(f) => {
+                let d = self.diag(DiagId::sema_expr_not_cce, at).arg("constexpr if condition");
+                let d = Self::with_failure_notes(d, f);
+                self.emit(d);
+                c
+            }
+        }
+    }
+
+    /// An if-statement ([stmt.if]) of `kind`: `if (init; cond) then else
+    /// els`, `cond_var` being the condition variable if declared. `cond`
+    /// is `None` exactly for `if consteval` / `if !consteval`, whose
+    /// sub-statements are compound statements (checked by the parser).
+    /// M2 keeps both branches of `if constexpr`; discarding the other
+    /// branch matters only inside templates ([stmt.if]/2, M3).
+    #[allow(clippy::too_many_arguments, reason = "mirrors the grammar")]
     pub fn act_on_if(
         &mut self,
+        kind: IfKind,
         init: Option<StmtId>,
         cond_var: Option<DeclId>,
-        cond: ExprId,
+        cond: Option<ExprId>,
         then: StmtId,
         els: Option<StmtId>,
         loc: Loc,
     ) -> StmtId {
-        let data = IfData { init, cond_var, cond: Some(cond), then: Some(then), els };
-        self.builder().if_stmt(IfKind::Ordinary, data, loc)
+        let data = IfData { init, cond_var, cond, then: Some(then), els };
+        self.builder().if_stmt(kind, data, loc)
+    }
+
+    /// Enters an immediate function context ([expr.const]/16): the
+    /// compound statement of `if consteval` (or the `else` of
+    /// `if !consteval`). M2 has no consteval functions, so nothing
+    /// consults it yet beyond [`Sema::in_immediate_context`].
+    pub fn enter_immediate_context(&mut self) {
+        self.immediate += 1;
+    }
+
+    /// Leaves an immediate function context.
+    pub fn exit_immediate_context(&mut self) {
+        self.immediate = self.immediate.saturating_sub(1);
+    }
+
+    /// True inside an immediate function context entered with
+    /// [`Sema::enter_immediate_context`].
+    pub fn in_immediate_context(&self) -> bool {
+        self.immediate > 0
     }
 
     /// Marks the start of a loop body (for `break`/`continue`).

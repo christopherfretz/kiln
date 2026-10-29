@@ -224,7 +224,8 @@ impl Parser<'_, '_> {
                 self.bump();
                 return self.parse_cast_expr();
             }
-            Some(k @ (Kw::New | Kw::Delete | Kw::CoAwait | Kw::Noexcept)) => {
+            Some(Kw::Noexcept) => return self.parse_noexcept_expr(),
+            Some(k @ (Kw::New | Kw::Delete | Kw::CoAwait)) => {
                 self.unsupported(&format!("'{}' expressions", k.spelling()), loc);
                 return None;
             }
@@ -288,6 +289,27 @@ impl Parser<'_, '_> {
         let e = self.parse_cast_expr();
         self.s.exit_unevaluated();
         Some(self.s.act_on_trait_expr(kind, e?, loc))
+    }
+
+    /// `noexcept ( expression )` ([expr.unary.noexcept]); the operand is
+    /// unevaluated.
+    fn parse_noexcept_expr(&mut self) -> PExpr {
+        let loc = self.bump().span.lo;
+        let Some(open) = self.eat(Punct::LParen) else {
+            let d =
+                self.s.diag(DiagId::parse_expected_after, self.loc()).arg("'noexcept'").arg("'('");
+            self.emit(d);
+            return None;
+        };
+        self.s.enter_unevaluated();
+        let e = self.parse_expression();
+        self.s.exit_unevaluated();
+        let Some(e) = e else {
+            self.skip_until(&[Punct::RParen], false, true);
+            return Some(self.s.act_on_error_expr(&[], loc));
+        };
+        let rparen = self.expect_closing(Punct::RParen, Punct::LParen, open);
+        Some(self.s.act_on_noexcept_expr(e, loc, rparen))
     }
 
     // -- postfix expressions --------------------------------------------------------------

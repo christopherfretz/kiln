@@ -212,3 +212,17 @@ fn expr_const_folding() {
     p.assert_clean();
     p.assert_dump("VarDecl a 'int[8]'");
 }
+
+/// [expr.unary.noexcept]: a bool prvalue over an unevaluated operand.
+#[test]
+fn expr_unary_noexcept() {
+    let p = parse(
+        "int may(); int wont() noexcept;\n\
+         static_assert(!noexcept(may())); static_assert(noexcept(wont() + 1));\n\
+         static_assert(noexcept(1)); static_assert(!noexcept(may() + wont()));",
+    );
+    p.assert_clean();
+    p.assert_dump("CXXNoexceptExpr 'bool'");
+    let p = parse("bool b = noexcept 1;");
+    p.assert_diag("expected '(' after 'noexcept'");
+}

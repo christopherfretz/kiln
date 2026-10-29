@@ -92,7 +92,9 @@ impl TypeNames for SemaNames<'_> {
             ExprKind::ConstantExpr | ExprKind::ParenExpr | ExprKind::ImplicitCastExpr => {
                 self.write_expr(self.ast.exprs.operand(expr), out);
             }
-            _ => out.push_str("<expr>"),
+            // Everything else (`noexcept(sizeof(int) == 4)` in a
+            // function type, ...) prints as clang's `printPretty`.
+            _ => TypeNames::write_expr(self.ast, expr, out),
         }
     }
 

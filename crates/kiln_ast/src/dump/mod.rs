@@ -438,6 +438,7 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                     push(n.a());
                 }
             }
+            ExprKind::CXXNoexceptExpr => push(n.a()),
             ExprKind::BinaryOperator | ExprKind::ArraySubscriptExpr => {
                 push(n.a());
                 push(n.b());

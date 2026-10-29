@@ -150,3 +150,35 @@ fn stmt_recovery_missing_semi() {
     let p = parse("int f() { int a = 1 return a; }");
     p.assert_diag("expected ';' at end of declaration");
 }
+
+/// [stmt.if]/2: `if constexpr` folds its condition (with an init-statement).
+#[test]
+fn stmt_if_constexpr() {
+    let p = parse(
+        "int f(int v) { if constexpr (int k = 2; sizeof(int) == 4) { return v + k; } \
+         else { return v; } }",
+    );
+    p.assert_clean();
+    p.assert_dump("IfStmt has_init has_else constexpr");
+    p.assert_dump("ConstantExpr 'bool' value=true");
+    let p = parse("int n; void f() { if constexpr (n) {} }");
+    p.assert_diag("constexpr if condition is not a constant expression");
+    let p = parse("void f() { if constexpr 1; }");
+    p.assert_diag("expected '(' after 'if'");
+}
+
+/// [stmt.if]/4: `if consteval` / `if !consteval` with compound branches.
+#[test]
+fn stmt_if_consteval() {
+    let p = parse(
+        "constexpr int f(int v) { if consteval { return 1; } else { return v; } }\n\
+         int g() { if !consteval { return 2; } return 3; }",
+    );
+    p.assert_clean();
+    p.assert_dump("IfStmt has_else consteval");
+    p.assert_dump("IfStmt !consteval");
+    let p = parse("void f() { if consteval return; }");
+    p.assert_diag("expected { after consteval");
+    let p = parse("void f() { if consteval {} else return; }");
+    p.assert_diag("expected { after else");
+}

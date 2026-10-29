@@ -1078,6 +1078,17 @@ impl ExprArena {
         n.has(ExprFlags::ARG_IS_TYPE).then(|| QualType::from_raw(n.a)).flatten()
     }
 
+    /// The (unevaluated) operand of a `CXXNoexceptExpr`.
+    pub fn noexcept_operand(&self, e: ExprId) -> ExprId {
+        ExprId::new(self.expect_kind(e, ExprKind::CXXNoexceptExpr).a)
+    }
+
+    /// The value of a `CXXNoexceptExpr`: `true` unless its operand is
+    /// potentially-throwing ([expr.unary.noexcept]/3).
+    pub fn noexcept_value(&self, e: ExprId) -> bool {
+        self.expect_kind(e, ExprKind::CXXNoexceptExpr).b != 0
+    }
+
     /// The single operand of a unary operator, cast, `ParenExpr`,
     /// `ConstantExpr` or `MemberExpr` (its base).
     pub fn operand(&self, e: ExprId) -> ExprId {
@@ -1154,6 +1165,7 @@ impl ExprArena {
             ExprKind::UnaryExprOrTypeTraitExpr if !n.has(ExprFlags::ARG_IS_TYPE) => {
                 v.extend(id(n.a));
             }
+            ExprKind::CXXNoexceptExpr => v.extend(id(n.a)),
             ExprKind::BinaryOperator | ExprKind::ArraySubscriptExpr => {
                 v.extend(id(n.a));
                 v.extend(id(n.b));

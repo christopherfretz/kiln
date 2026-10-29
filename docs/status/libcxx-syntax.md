@@ -7,7 +7,8 @@ kiln -std=c++26 -stdlib=libc++ -fsyntax-only -ferror-limit=0 h.cpp
 ```
 
 The setup is libc++ 19.1.7 (Debian `libc++-19-dev`) on aarch64 Linux,
-with kiln at WP-055 (the parser reads `kiln_pp` tokens). "First
+with kiln at WP-058 (exception specifications, the `noexcept` operator,
+`if constexpr`/`if consteval`; previously WP-055). "First
 blocker" is the first error kiln reports. The counts are all the errors
 in the header's closure; most are follow-ons of the same unsupported
 feature. Every header preprocesses identically to clang (see
@@ -17,13 +18,13 @@ feature. Every header preprocesses identically to clang (see
 |---|---:|---:|---|---|
 | `<cstddef>` | 1 | 47 | `__type_traits/enable_if.h:20:1`: templates | templates 38, using-declarations 4 |
 | `<cstdint>` | 1 | 28 | `cstdint:161:1`: using-declarations (`using ::int8_t _LIBCPP_USING_IF_EXISTS;`) | using-declarations 28 |
-| `<climits>` | 1 | 1 | glibc `bits/pthread_stack_min-dynamic.h:24:40`: exception specifications (`__THROW` is `noexcept(true)`) | exception specifications 1 |
+| `<climits>` | 0 | 0 | none (clean; was blocked by glibc's `__THROW`, `noexcept(true)`, before WP-058) | |
 | `<cfloat>` | 0 | 0 | none (clean) | |
-| `<cstring>` | 1 | 137 | `__type_traits/is_constant_evaluated.h:21:69`: exception specifications (`_NOEXCEPT`) | exception specifications 81, using-declarations 23, asm labels 20, `__builtin_is_constant_evaluated` undeclared 2, overloading 2 |
+| `<cstring>` | 1 | 56 | `__type_traits/is_constant_evaluated.h:22:10`: `__builtin_is_constant_evaluated` undeclared | using-declarations 23, asm labels 20, overloading 10, `__builtin_is_constant_evaluated` undeclared 2, `decltype` 1 |
 | `<version>` | 0 | 0 | none (clean) | |
 | `<initializer_list>` | 1 | 50 | `__type_traits/enable_if.h:20:1`: templates | templates 41, using-declarations 4 |
-| `<compare>` | 1 | 485 | `__type_traits/enable_if.h:20:1`: templates | templates 284, exception specifications 34, using-declarations 32, special members 12, static data members 11 |
-| `<type_traits>` | 1 | 490 | `__fwd/functional.h:20:1`: templates | templates 436, using-declarations 32, special members 5 |
+| `<compare>` | 1 | 451 | `__type_traits/enable_if.h:20:1`: templates | templates 284, using-declarations 32, undeclared identifiers 25, overloading 14, special members 12 |
+| `<type_traits>` | 1 | 488 | `__fwd/functional.h:20:1`: templates | templates 436, using-declarations 32, special members 5 |
 
 ## What unblocks the most
 
@@ -32,10 +33,15 @@ feature. Every header preprocesses identically to clang (see
 2. **using-declarations** (`using ::name;`, with
    `__attribute__((__using_if_exists__))`): `<cstdint>`, `<cstring>`,
    and every C wrapper header.
-3. **Exception specifications** (`noexcept`, `noexcept(true)`, `throw()`):
-   `<climits>` (through glibc's `__THROW`), `<cstring>`.
-4. **asm labels** (`__asm__("name")` on glibc declarations) and
-   `__builtin_is_constant_evaluated`: `<cstring>`.
+3. **asm labels** (`__asm__("name")` on glibc declarations),
+   `__builtin_is_constant_evaluated`, and overloading (glibc's
+   C++ `const`/non-`const` pairs of `memchr`, `strchr`, ...):
+   `<cstring>`.
+
+Exception specifications (`noexcept`, `noexcept(true)`, `throw()`) no
+longer block anything (WP-058). Declarations that used to stop there
+now reach later gaps, so some counts rose (`<cstring>`'s overloading
+errors went from 2 to 10).
 
 ## Noise kiln emits and clang does not
 
@@ -48,4 +54,6 @@ these warnings appear only with kiln:
 - `'__visibility__' attribute ignored`
 
 No header in `bench/pp/headers.cpp` (99 libc++ headers) crashes the
-parser. `headers.cpp` as a whole exits 1, with 13 826 errors.
+parser. `headers.cpp` as a whole exits 1, with 16 182 errors (13 826
+before WP-058: getting past exception specifications exposes more
+follow-on errors).

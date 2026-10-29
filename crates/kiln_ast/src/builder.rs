@@ -1182,6 +1182,37 @@ impl<'a> AstBuilder<'a> {
         )
     }
 
+    /// `noexcept(operand)` ([expr.unary.noexcept]): a `bool` prvalue whose
+    /// `value` sema computed from the unevaluated `operand`; `rparen` is
+    /// the closing `)`. Value-dependent if `operand` is type- or
+    /// value-dependent ([temp.dep.constexpr]/3).
+    pub fn noexcept_expr(
+        &mut self,
+        operand: ExprId,
+        value: bool,
+        ty: QualType,
+        loc: Loc,
+        rparen: Loc,
+    ) -> ExprId {
+        let a = self.deps(operand);
+        let mut deps = self.type_deps(ty) | a.without(ExprDeps::TYPE).without(ExprDeps::VALUE);
+        if a.contains(ExprDeps::TYPE) || a.contains(ExprDeps::VALUE) {
+            deps |= ExprDeps::VALUE_INST;
+        }
+        let e = self.simple(
+            ExprKind::CXXNoexceptExpr,
+            ValueCategory::PRValue,
+            deps,
+            0,
+            ty,
+            loc,
+            operand.raw(),
+            u32::from(value),
+        );
+        self.ast.exprs.cold.end_loc.insert(e, rparen).expect("fresh expression");
+        e
+    }
+
     /// A semantic `InitListExpr` ([dcl.init.list], §5.6): a prvalue whose
     /// explicit initializers are `inits`; `array_filler` initializes the
     /// remaining elements; `union_field` is the initialized union member.
