@@ -231,12 +231,9 @@ const fn f(name: &'static str, status: Status, oven: Oven) -> Row {
 }
 
 const DONE: Status = Status::Done;
-const SRC_LOC: &str = "unowned: source-location builtins with __builtin_source_location";
-const SRC_LOC_WP: Status = Status::Owner(SRC_LOC);
-/// The owner of the §9.5 builtin declarations kiln does not declare yet.
-/// The spec gives them to WP-063's builtin declaration table, but WP-063
-/// shipped with `__builtin_is_constant_evaluated` only, so they need a new
-/// package (spec/sema-templates.md §11, "Landed (WP-074)").
+/// The owner of the §9.5 builtin declarations kiln does not declare yet:
+/// WP-088 landed the rest of §9.5; `__builtin_constant_p` has no package
+/// (spec/sema-templates.md §11, "Landed (WP-088)").
 const DECL_WP: Status = Status::Owner("unowned: proposed §9.5 builtin-functions WP");
 const OVEN_WP: &str = "unowned: proposed §9.5 builtin-functions WP";
 
@@ -254,66 +251,94 @@ pub static TABLE: &[Row] = &[
     f("__builtin_constant_p", DECL_WP, Oven::Stub(OVEN_WP)),
     // §9.5 object model
     f("__builtin_addressof", DONE, Oven::Yes),
-    f("__builtin_launder", DECL_WP, Oven::Stub(OVEN_WP)),
-    f("__builtin_bit_cast", DONE, Oven::Stub("unowned: Oven bit_cast through abi layout")),
-    f("__builtin_unreachable", DECL_WP, Oven::Stub(OVEN_WP)),
+    f("__builtin_launder", DONE, Oven::Yes),
+    f("__builtin_bit_cast", DONE, Oven::Yes),
+    f("__builtin_unreachable", DONE, Oven::Yes),
     // allocation
-    f("__builtin_operator_new", DECL_WP, Oven::Stub("WP-061b")),
-    f("__builtin_operator_delete", DECL_WP, Oven::Stub("WP-061b")),
+    f("__builtin_operator_new", DONE, Oven::Stub("WP-061b")),
+    f("__builtin_operator_delete", DONE, Oven::Stub("WP-061b")),
     // bits
-    f("__builtin_clz", DECL_WP, Oven::Stub(OVEN_WP)),
-    f("__builtin_clzl", DECL_WP, Oven::Stub(OVEN_WP)),
-    f("__builtin_clzll", DECL_WP, Oven::Stub(OVEN_WP)),
-    f("__builtin_ctz", DECL_WP, Oven::Stub(OVEN_WP)),
-    f("__builtin_ctzl", DECL_WP, Oven::Stub(OVEN_WP)),
-    f("__builtin_ctzll", DECL_WP, Oven::Stub(OVEN_WP)),
-    f("__builtin_popcount", DECL_WP, Oven::Stub(OVEN_WP)),
-    f("__builtin_popcountl", DECL_WP, Oven::Stub(OVEN_WP)),
-    f("__builtin_popcountll", DECL_WP, Oven::Stub(OVEN_WP)),
-    f("__builtin_clzg", DECL_WP, Oven::Stub(OVEN_WP)),
-    f("__builtin_ctzg", DECL_WP, Oven::Stub(OVEN_WP)),
-    f("__builtin_popcountg", DECL_WP, Oven::Stub(OVEN_WP)),
-    f("__builtin_bswap16", DECL_WP, Oven::Stub(OVEN_WP)),
-    f("__builtin_bswap32", DECL_WP, Oven::Stub(OVEN_WP)),
-    f("__builtin_bswap64", DECL_WP, Oven::Stub(OVEN_WP)),
+    f("__builtin_clz", DONE, Oven::Yes),
+    f("__builtin_clzl", DONE, Oven::Yes),
+    f("__builtin_clzll", DONE, Oven::Yes),
+    f("__builtin_ctz", DONE, Oven::Yes),
+    f("__builtin_ctzl", DONE, Oven::Yes),
+    f("__builtin_ctzll", DONE, Oven::Yes),
+    f("__builtin_popcount", DONE, Oven::Yes),
+    f("__builtin_popcountl", DONE, Oven::Yes),
+    f("__builtin_popcountll", DONE, Oven::Yes),
+    f("__builtin_clzg", DONE, Oven::Yes),
+    f("__builtin_ctzg", DONE, Oven::Yes),
+    f("__builtin_popcountg", DONE, Oven::Yes),
+    f("__builtin_bswap16", DONE, Oven::Yes),
+    f("__builtin_bswap32", DONE, Oven::Yes),
+    f("__builtin_bswap64", DONE, Oven::Yes),
     // memory and strings
-    f("__builtin_memcmp", DECL_WP, Oven::Stub(OVEN_WP)),
-    f("__builtin_memcpy", DECL_WP, Oven::Stub(OVEN_WP)),
-    f("__builtin_memmove", DECL_WP, Oven::Stub(OVEN_WP)),
-    f("__builtin_memchr", DECL_WP, Oven::Stub(OVEN_WP)),
-    f("__builtin_char_memchr", DECL_WP, Oven::Stub(OVEN_WP)),
-    f("__builtin_strlen", DECL_WP, Oven::Stub(OVEN_WP)),
-    f("__builtin_wcslen", DECL_WP, Oven::Stub(OVEN_WP)),
-    f("__builtin_wmemchr", DECL_WP, Oven::Stub(OVEN_WP)),
-    f("__builtin_wmemcmp", DECL_WP, Oven::Stub(OVEN_WP)),
+    f("__builtin_memcmp", DONE, Oven::Yes),
+    f("__builtin_memcpy", DONE, Oven::Yes),
+    f("__builtin_memmove", DONE, Oven::Yes),
+    f("__builtin_memchr", DONE, Oven::Yes),
+    f("__builtin_char_memchr", DONE, Oven::Yes),
+    f("__builtin_strlen", DONE, Oven::Yes),
+    f("__builtin_wcslen", DONE, Oven::Yes),
+    f("__builtin_wmemchr", DONE, Oven::Yes),
+    f("__builtin_wmemcmp", DONE, Oven::Yes),
     // float classification
-    f("__builtin_isfinite", DECL_WP, Oven::Stub(OVEN_WP)),
-    f("__builtin_isinf", DECL_WP, Oven::Stub(OVEN_WP)),
-    f("__builtin_isnan", DECL_WP, Oven::Stub(OVEN_WP)),
-    f("__builtin_isnormal", DECL_WP, Oven::Stub(OVEN_WP)),
-    f("__builtin_signbit", DECL_WP, Oven::Stub(OVEN_WP)),
-    f("__builtin_isgreater", DECL_WP, Oven::No),
-    f("__builtin_isgreaterequal", DECL_WP, Oven::No),
-    f("__builtin_isless", DECL_WP, Oven::No),
-    f("__builtin_islessequal", DECL_WP, Oven::No),
-    f("__builtin_islessgreater", DECL_WP, Oven::No),
-    f("__builtin_isunordered", DECL_WP, Oven::No),
+    f("__builtin_isfinite", DONE, Oven::Yes),
+    f("__builtin_isinf", DONE, Oven::Yes),
+    f("__builtin_isnan", DONE, Oven::Yes),
+    f("__builtin_isnormal", DONE, Oven::Yes),
+    f("__builtin_signbit", DONE, Oven::No),
+    f("__builtin_isgreater", DONE, Oven::No),
+    f("__builtin_isgreaterequal", DONE, Oven::No),
+    f("__builtin_isless", DONE, Oven::No),
+    f("__builtin_islessequal", DONE, Oven::No),
+    f("__builtin_islessgreater", DONE, Oven::No),
+    f("__builtin_isunordered", DONE, Oven::No),
     // float constants
-    f("__builtin_huge_val", DECL_WP, Oven::Stub(OVEN_WP)),
-    f("__builtin_huge_valf", DECL_WP, Oven::Stub(OVEN_WP)),
-    f("__builtin_huge_vall", DECL_WP, Oven::Stub(OVEN_WP)),
-    f("__builtin_nan", DECL_WP, Oven::Stub(OVEN_WP)),
-    f("__builtin_nanf", DECL_WP, Oven::Stub(OVEN_WP)),
-    f("__builtin_nanl", DECL_WP, Oven::Stub(OVEN_WP)),
-    f("__builtin_nans", DECL_WP, Oven::Stub(OVEN_WP)),
-    f("__builtin_nansf", DECL_WP, Oven::Stub(OVEN_WP)),
-    f("__builtin_nansl", DECL_WP, Oven::Stub(OVEN_WP)),
-    // source location
-    // These need the call-site context of a default argument (clang's
-    // `SourceLocExpr` under `CXXDefaultArgExpr`); libc++ 19 uses
-    // `__builtin_source_location` for `<source_location>` instead.
-    f("__builtin_FILE", SRC_LOC_WP, Oven::Stub(SRC_LOC)),
-    f("__builtin_LINE", SRC_LOC_WP, Oven::Stub(SRC_LOC)),
+    f("__builtin_huge_val", DONE, Oven::Yes),
+    f("__builtin_huge_valf", DONE, Oven::Yes),
+    f("__builtin_huge_vall", DONE, Oven::Yes),
+    f("__builtin_nan", DONE, Oven::Yes),
+    f("__builtin_nanf", DONE, Oven::Yes),
+    f("__builtin_nanl", DONE, Oven::Yes),
+    f("__builtin_nans", DONE, Oven::Yes),
+    f("__builtin_nansf", DONE, Oven::Yes),
+    f("__builtin_nansl", DONE, Oven::Yes),
+    // source location ([support.srcloc]; `SourceLocExpr`, values at the
+    // call site of a default argument)
+    f("__builtin_FILE", DONE, Oven::Yes),
+    f("__builtin_FILE_NAME", DONE, Oven::Yes),
+    f("__builtin_FUNCTION", DONE, Oven::Yes),
+    f("__builtin_LINE", DONE, Oven::Yes),
+    f("__builtin_COLUMN", DONE, Oven::Yes),
+    f("__builtin_source_location", DONE, Oven::Yes),
+    // math (lowered to libm calls / LLVM intrinsics; not constant in
+    // clang 19)
+    f("__builtin_exp", DONE, Oven::No),
+    f("__builtin_expf", DONE, Oven::No),
+    f("__builtin_expl", DONE, Oven::No),
+    f("__builtin_exp2", DONE, Oven::No),
+    f("__builtin_exp2f", DONE, Oven::No),
+    f("__builtin_exp2l", DONE, Oven::No),
+    f("__builtin_expm1", DONE, Oven::No),
+    f("__builtin_expm1f", DONE, Oven::No),
+    f("__builtin_expm1l", DONE, Oven::No),
+    f("__builtin_frexp", DONE, Oven::No),
+    f("__builtin_frexpf", DONE, Oven::No),
+    f("__builtin_frexpl", DONE, Oven::No),
+    f("__builtin_ldexp", DONE, Oven::No),
+    f("__builtin_ldexpf", DONE, Oven::No),
+    f("__builtin_ldexpl", DONE, Oven::No),
+    f("__builtin_pow", DONE, Oven::No),
+    f("__builtin_powf", DONE, Oven::No),
+    f("__builtin_powl", DONE, Oven::No),
+    f("__builtin_scalbn", DONE, Oven::No),
+    f("__builtin_scalbnf", DONE, Oven::No),
+    f("__builtin_scalbnl", DONE, Oven::No),
+    f("__builtin_scalbln", DONE, Oven::No),
+    f("__builtin_scalblnf", DONE, Oven::No),
+    f("__builtin_scalblnl", DONE, Oven::No),
 ];
 
 /// The row for builtin `name`, if `name` is in the table.
@@ -380,7 +405,10 @@ mod tests {
         assert_eq!(has_builtin_staged("__is_convertible"), Some(false));
         assert_eq!(has_builtin_staged("__is_same"), Some(true));
         assert_eq!(has_builtin_staged("__remove_cvref"), Some(true));
-        assert_eq!(has_builtin_staged("__builtin_memcpy"), Some(false));
+        assert_eq!(has_builtin_staged("__builtin_memcpy"), Some(true));
+        assert_eq!(has_builtin_staged("__builtin_constant_p"), Some(false));
+        assert_eq!(has_constexpr_builtin_staged("__builtin_strlen"), Some(true));
+        assert_eq!(has_constexpr_builtin_staged("__builtin_constant_p"), Some(false));
         assert_eq!(has_builtin_staged("__builtin_expect"), None);
         assert_eq!(has_builtin_staged("__make_integer_seq"), Some(true));
     }

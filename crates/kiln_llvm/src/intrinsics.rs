@@ -371,6 +371,27 @@ pub fn fabs(m: &mut Module, ty: TypeId) -> FuncId {
     unary(m, "llvm.fabs", ty)
 }
 
+/// `i1 @llvm.is.fpclass.T(T, i32 immarg test)` for a floating-point `T`.
+pub fn is_fpclass(m: &mut Module, ty: TypeId) -> FuncId {
+    let name = overloaded_name(m, "llvm.is.fpclass", &[ty]);
+    declare(
+        m,
+        &name,
+        TypeId::I1,
+        &[(ty, &[]), (TypeId::I32, &[Attr::Flag(ImmArg)])],
+        &[],
+        Shape::Pure,
+    )
+}
+
+/// `{ T, E } @llvm.frexp.T.E(T)`: the fraction and the exponent of a
+/// floating-point `T`, the exponent as integer type `exp`.
+pub fn frexp(m: &mut Module, ty: TypeId, exp: TypeId) -> FuncId {
+    let name = overloaded_name(m, "llvm.frexp", &[ty, exp]);
+    let ret = m.types.struct_literal(&[ty, exp], false);
+    declare(m, &name, ret, &[(ty, &[])], &[], Shape::Pure)
+}
+
 fn dbg(m: &mut Module, name: &str) -> FuncId {
     let md = TypeId::METADATA;
     declare(m, name, TypeId::VOID, &[(md, &[]), (md, &[]), (md, &[])], &[], Shape::Pure)

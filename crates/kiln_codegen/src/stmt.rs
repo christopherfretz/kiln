@@ -101,7 +101,21 @@ impl Cg<'_> {
                 }
                 Ok(())
             }
-            StmtKind::ExprStmt => self.emit_ignored(ast.stmts.expr_stmt_expr(s)),
+            StmtKind::ExprStmt => {
+                let incoming = self.f.fir.cur();
+                self.emit_ignored(ast.stmts.expr_stmt_expr(s))?;
+                // A noreturn call (`__builtin_unreachable()`) leaves the
+                // insertion point in a fresh block nothing branches to:
+                // drop it, so what follows is unreachable and skipped.
+                if let Some(out) = self.f.fir.cur()
+                    && Some(out) != incoming
+                    && self.f.fir.block_uses(out) == 0
+                    && out != self.f.fir.entry()
+                {
+                    self.f.fir.erase_block(out);
+                }
+                Ok(())
+            }
             StmtKind::AttributedStmt => self.emit_stmt(StmtId::new(n.b())),
             StmtKind::LabelStmt => {
                 let b = self.label_block(DeclId::new(n.a()));

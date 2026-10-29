@@ -2012,6 +2012,11 @@ impl Sema<'_, '_> {
         let width = d.bit_width.and_then(|w| self.bit_width(w, ty, nm.as_deref(), d.name_loc()));
         let h = DeclHead::new(ctx, name.map_or(DeclName::EMPTY, DeclName::ident), d.name_loc());
         let f = self.builder().field(h, ty, width, flags);
+        // The decl-specifiers' start (clang's `FieldDecl::getBeginLoc`;
+        // the Oven's `__builtin_bit_cast` notes point there).
+        if ds.loc.is_valid() && ds.loc != d.name_loc() {
+            let _ = self.ast.decls.cold.begin_loc.insert(f, ds.loc);
+        }
         if d.init_style.is_some() {
             self.special.nsdmi.insert(f);
         }
@@ -2048,8 +2053,9 @@ impl Sema<'_, '_> {
         let c = self.act_on_full_expr(c);
         let v = match self.eval_int(c, EvalContext::new(EvalKind::Other, self.begin_loc(w))) {
             Ok(v) => v,
-            Err(f) => {
-                let d = self.diag(DiagId::sema_expr_not_ice, self.begin_loc(w));
+            Err(mut f) => {
+                let at = Self::fold_lone_invalid(&mut f, self.begin_loc(w));
+                let d = self.diag(DiagId::sema_expr_not_ice, at);
                 let d = Self::with_failure_notes(d, f);
                 self.emit(d);
                 return None;
@@ -2411,10 +2417,11 @@ impl Sema<'_, '_> {
         }
         match self.eval_const(e, EvalContext::init(v, loc)) {
             Ok(cv) => self.ast.decls.finish_eval(v, Some(cv)),
-            Err(f) => {
+            Err(mut f) => {
                 self.ast.decls.finish_eval(v, None);
                 let name = self.decl_name(v);
-                let msg = self.diag(DiagId::sema_constexpr_var_non_constant, loc).arg(name);
+                let at = Self::fold_lone_invalid(&mut f, loc);
+                let msg = self.diag(DiagId::sema_constexpr_var_non_constant, at).arg(name);
                 let msg = Self::with_failure_notes(msg, f);
                 self.emit(msg);
             }
@@ -3089,8 +3096,9 @@ impl Sema<'_, '_> {
                     let cv = self.int_const(cty, v);
                     init_e = Some(self.builder().constant_expr(c, Some(cv)));
                 }
-                Err(f) => {
-                    let msg = self.diag(DiagId::sema_expr_not_ice, self.ast.exprs.get(ie).loc());
+                Err(mut f) => {
+                    let at = Self::fold_lone_invalid(&mut f, self.ast.exprs.get(ie).loc());
+                    let msg = self.diag(DiagId::sema_expr_not_ice, at);
                     let msg = Self::with_failure_notes(msg, f);
                     self.emit(msg);
                 }
@@ -3465,8 +3473,9 @@ impl Sema<'_, '_> {
                     let d = self.explain_failed_comparison(d, inner);
                     self.emit(d);
                 }
-                Err(f) => {
-                    let d = self.diag(DiagId::sema_static_assert_not_ice, cloc);
+                Err(mut f) => {
+                    let at = Self::fold_lone_invalid(&mut f, cloc);
+                    let d = self.diag(DiagId::sema_static_assert_not_ice, at);
                     let d = Self::with_failure_notes(d, f);
                     self.emit(d);
                 }
@@ -3976,8 +3985,9 @@ impl Sema<'_, '_> {
             }
             let cv = self.int_const(self.ast.exprs.get(c).ty(), v);
             Some(self.builder().constant_expr(c, Some(cv)))
-        } else if let Err(f) = r {
-            let d = self.diag(DiagId::sema_expr_not_ice, loc);
+        } else if let Err(mut f) = r {
+            let at = Self::fold_lone_invalid(&mut f, loc);
+            let d = self.diag(DiagId::sema_expr_not_ice, at);
             let d = Self::with_failure_notes(d, f);
             self.emit(d);
             None

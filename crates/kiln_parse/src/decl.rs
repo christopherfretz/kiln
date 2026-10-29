@@ -105,6 +105,9 @@ impl Parser<'_, '_> {
     }
 
     fn parse_external_declaration_inner(&mut self) {
+        if !self.stack_ok() {
+            return;
+        }
         let loc = self.loc();
         match (Self::punct_of(self.tok()), self.kw()) {
             (Some(Punct::Semi), _) => {
@@ -1023,6 +1026,9 @@ impl Parser<'_, '_> {
     /// innermost first: pointer operators after the declarator they apply
     /// to, suffixes as written.
     pub(crate) fn parse_declarator(&mut self, d: &mut Declarator) {
+        if !self.stack_ok() {
+            return;
+        }
         let loc = self.loc();
         match Self::punct_of(self.tok()) {
             Some(Punct::Star) => {
@@ -1881,6 +1887,9 @@ impl Parser<'_, '_> {
 
     /// braced-init-list ([dcl.init.general]), with C++20 designators.
     pub(crate) fn parse_init_list(&mut self) -> Result<InitList, ()> {
+        if !self.stack_ok() {
+            return Err(());
+        }
         let lbrace = self.bump().span.lo;
         let mut items = Vec::new();
         while !self.at(Punct::RBrace) && !self.at_eof() {

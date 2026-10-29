@@ -24,7 +24,12 @@ use crate::mem::{Origin, fn_ptr};
 use crate::ty::{OTy, Scal, TyKind, eval_int};
 use crate::{Oven, SemaBridge};
 
+mod bitcast;
+mod builtins;
 mod new_delete;
+
+pub(crate) use builtins::designator_type;
+pub(crate) use new_delete::is_std_named;
 
 /// `Func::entry` of a function not compiled yet.
 pub(crate) const UNCOMPILED: u32 = u32::MAX;
@@ -466,6 +471,10 @@ pub(crate) struct Compiler<'a> {
     /// The code reads the evaluation context (`Op::IsConstEval`): the
     /// function is not memoized.
     uses_cc: bool,
+    /// The outermost default argument being compiled that holds a
+    /// source-location builtin: the builtins in it take the values of
+    /// that use (clang `SourceLocExprScopeGuard`; spec/oven.md, Builtins).
+    srcloc: Option<ExprId>,
 }
 
 /// The value an `OpaqueValueExpr` stands for.
@@ -495,6 +504,7 @@ impl<'a> Compiler<'a> {
             has_temps: false,
             std_ice: false,
             uses_cc: false,
+            srcloc: None,
         }
     }
 
@@ -678,6 +688,16 @@ impl<'a> Compiler<'a> {
     }
 }
 
+/// Whether an object of type `q` is const: its type, or for an array its
+/// element type, is const-qualified ([basic.type.qualifier]/3).
+fn const_object(ast: &kiln_ast::Ast, q: QualType) -> bool {
+    let mut c = ast.types.canonical(q);
+    while let Some(e) = ast.types.element(c) {
+        c = ast.types.canonical(e);
+    }
+    c.has_const_bit()
+}
+
 /// clang's `note_constexpr_stmt_expr_unsupported`.
 const STMT_EXPR_UNSUPPORTED: &str =
     "this use of statement expressions is not supported in a constant expression";
@@ -748,6 +768,15 @@ impl Scan<'_> {
             return;
         }
         if let Some(init) = ast.decls.var(d).and_then(|v| v.init) {
+            // A `__builtin_bit_cast` result may be indeterminate
+            // ([bit.cast]/2): the variable is built in memory.
+            let mut x = init;
+            while matches!(ast.exprs.get(x).kind(), ExprKind::ParenExpr | ExprKind::ConstantExpr) {
+                x = ast.exprs.operand(x);
+            }
+            if ast.exprs.get(x).kind() == ExprKind::BuiltinBitCastExpr {
+                self.mem.insert(d);
+            }
             let saved = self.cur.replace(d);
             self.expr(init, false);
             self.cur = saved;
@@ -947,7 +976,7 @@ impl Compiler<'_> {
                 continue;
             }
             let q = ast.decls.get(d).ty().unwrap_or(QualType::INT);
-            let is_const = ast.types.canonical(q).has_const_bit();
+            let is_const = const_object(ast, q);
             let ty = self.ty(q);
             if self.needs_mem(d, ty) {
                 mem.push((d, ty, is_const));
@@ -1524,7 +1553,7 @@ impl Compiler<'_> {
             _ => {
                 if self.needs_mem(d, ty) {
                     // Not hoisted (a condition variable of a loop iteration).
-                    let is_const = self.b.ast().types.canonical(q).has_const_bit();
+                    let is_const = const_object(self.b.ast(), q);
                     let p = self.reg();
                     self.alloc_var(p, ty, d, is_const);
                     self.locals.insert(d, Local::Mem(p));
@@ -1759,9 +1788,14 @@ impl Compiler<'_> {
             }
             ExprKind::StmtExpr => self.stmt_expr(e, Some(dst)),
             ExprKind::CXXDefaultArgExpr => match default_arg_of(self.ast(), e) {
-                Some(d) => self.rv_inner(d, dst),
+                Some(d) => {
+                    let saved = self.enter_default_arg(e);
+                    self.rv_inner(d, dst);
+                    self.srcloc = saved;
+                }
                 None => self.unsupported(e),
             },
+            ExprKind::SourceLocExpr => self.source_loc(e, dst),
             ExprKind::ConstantExpr => {
                 let ast = self.ast();
                 let v = ast
@@ -2254,11 +2288,7 @@ impl Compiler<'_> {
                     _ => self.trap(e, "cast that performs the conversions of a reinterpret_cast is not allowed in a constant expression"),
                 }
             }
-            CastKind::LValueToRValueBitCast => {
-                // spec/sema-templates.md §9.5: the byte-level
-                // reinterpretation (through `abi` layout) is an Oven stub.
-                self.trap(e, "kiln: __builtin_bit_cast in a constant expression is not supported yet (Oven bit_cast; unowned, see spec/sema-templates.md §9.5)");
-            }
+            CastKind::LValueToRValueBitCast => self.bit_cast(e, dst, None),
             CastKind::IntegralToPointer | CastKind::PointerToIntegral => {
                 self.trap(e, "cast that performs the conversions of a reinterpret_cast is not allowed in a constant expression");
             }
@@ -2369,7 +2399,10 @@ impl Compiler<'_> {
             }
             ExprKind::CXXDefaultArgExpr if default_arg_of(self.ast(), e).is_some() => {
                 let d = default_arg_of(self.ast(), e).unwrap_or(e);
-                self.lv(d, acc)
+                let saved = self.enter_default_arg(e);
+                let r = self.lv(d, acc);
+                self.srcloc = saved;
+                r
             }
             ExprKind::DeclRefExpr => {
                 let ast = self.ast();
@@ -2545,6 +2578,22 @@ impl Compiler<'_> {
             k if k.is_cast() && self.ast().exprs.cast_kind(e) == CastKind::NoOp => {
                 let op = self.ast().exprs.operand(e);
                 self.lv(op, acc)
+            }
+            // A temporary destroyed at the end of its full-expression
+            // ([class.temporary]/4): an object in the current frame,
+            // released by the enclosing statement's temporaries scope.
+            ExprKind::MaterializeTemporaryExpr
+                if self.ast().exprs.temporary_storage(e)
+                    == kiln_ast::expr::StorageDuration::FullExpression =>
+            {
+                let sub = self.ast().exprs.operand(e);
+                let q = n.ty();
+                let is_const = const_object(self.ast(), q);
+                let ty = self.ty(q);
+                let r = self.reg();
+                self.alloc(r, ty, Origin::Temp(e), is_const, e);
+                self.init(sub, r, ty);
+                Place::Mem(r)
             }
             // A call returning a reference: the referent's address.
             ExprKind::CallExpr if n.value_category().is_glvalue() => Place::Mem(self.call(e, None)),
@@ -2727,7 +2776,10 @@ impl Compiler<'_> {
             }
             ExprKind::CXXDefaultArgExpr if default_arg_of(self.ast(), e).is_some() => {
                 let d = default_arg_of(self.ast(), e).unwrap_or(e);
-                return self.init_inner(d, p, ty);
+                let saved = self.enter_default_arg(e);
+                self.init_inner(d, p, ty);
+                self.srcloc = saved;
+                return;
             }
             ExprKind::ImplicitValueInitExpr => {
                 self.emit_at(Op::ZeroInit, 0, &[p, ty.0], e);
@@ -2738,6 +2790,12 @@ impl Compiler<'_> {
             // indeterminate.
             ExprKind::CXXConstructExpr if self.ast().is_trivial_default_construction(e) => return,
             _ => {}
+        }
+        if n.kind().is_cast() && self.ast().exprs.cast_kind(e) == CastKind::LValueToRValueBitCast {
+            // The result may hold indeterminate bytes ([bit.cast]/2).
+            let r = self.reg();
+            self.bit_cast(e, r, Some(p));
+            return;
         }
         if !self.o.types.is_aggregate(ty) {
             let r = self.rv(e);
@@ -2970,7 +3028,9 @@ impl Compiler<'_> {
             }
             ExprKind::CXXDefaultArgExpr if default_arg_of(self.ast(), e).is_some() => {
                 let d = default_arg_of(self.ast(), e).unwrap_or(e);
+                let saved = self.enter_default_arg(e);
                 self.effect(d);
+                self.srcloc = saved;
             }
             ExprKind::BinaryOperator => {
                 let op = self.ast().exprs.binary_op(e);
@@ -3124,6 +3184,13 @@ impl Compiler<'_> {
             }
             return self.lv_mem(x, Access::Addr);
         }
+        // Library builtins (spec/oven.md "Builtins").
+        if let Some(d) = direct
+            && let Some(bid) = ast.decls.builtin_id(d)
+            && let Some(r) = self.builtin_call(e, bid, &args)
+        {
+            return r;
+        }
         // `std::allocator<T>::allocate`/`deallocate` (spec/oven.md
         // "Transient allocation": deferred to the templates wave, so this
         // never holds yet).
@@ -3232,4 +3299,51 @@ fn is_reference_decl(ast: &kiln_ast::Ast, d: DeclId) -> bool {
 fn default_arg_of(ast: &kiln_ast::Ast, e: ExprId) -> Option<ExprId> {
     let p = ast.exprs.default_arg_param(e);
     ast.decls.param(p).and_then(|x| x.default_arg)
+}
+
+impl Compiler<'_> {
+    /// Enters default argument `e`: the source-location builtins in it
+    /// take the values of this use unless an enclosing default argument
+    /// already set them. Returns the scope to restore.
+    fn enter_default_arg(&mut self, e: ExprId) -> Option<ExprId> {
+        let saved = self.srcloc;
+        if saved.is_none() && self.ast().exprs.source_loc_values(e).is_some() {
+            self.srcloc = Some(e);
+        }
+        saved
+    }
+
+    /// `__builtin_LINE()` and the other source-location builtins
+    /// ([support.srcloc.cons]): the values sema recorded for the
+    /// expression, or for the default argument use enclosing it.
+    fn source_loc(&mut self, e: ExprId, dst: u32) {
+        use kiln_ast::expr::SourceLocKind as K;
+        let ast = self.ast();
+        let kind = ast.exprs.source_loc_kind(e);
+        let key = self.srcloc.unwrap_or(e);
+        let Some(v) = ast.exprs.source_loc_values(key).copied() else {
+            return self.unsupported(e);
+        };
+        let cv = match kind {
+            K::Line => return self.konst(dst, u128::from(v.line)),
+            K::Column => return self.konst(dst, u128::from(v.column)),
+            K::File => v.file,
+            K::FileName => v.file_name,
+            K::Function => v.function,
+            K::SourceLocStruct => match v.location {
+                Some(c) => c,
+                None => return self.unsupported(e),
+            },
+        };
+        let ty = self.ety(e);
+        let raw = kiln_ast::RawId::raw(cv);
+        let loc = self.begin(e);
+        self.emit_site(
+            Op::Builtin,
+            crate::kbc::bi::THAW_PTR,
+            &[dst, dst, dst, dst, raw, ty.0],
+            e,
+            loc,
+        );
+    }
 }

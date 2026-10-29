@@ -1059,6 +1059,33 @@ impl<'a> AstBuilder<'a> {
         self.simple(ExprKind::CXXNullPtrLiteralExpr, ValueCategory::PRValue, deps, 0, ty, loc, 0, 0)
     }
 
+    /// A source-location builtin call `kind()` ([support.srcloc.cons];
+    /// clang `SourceLocExpr`) of type `ty` written in context `ctx`, from
+    /// `loc` to the `)` at `rparen`: a non-dependent prvalue (sema keeps a
+    /// template pattern's context, spec/ast.md §5.8).
+    pub fn source_loc_expr(
+        &mut self,
+        kind: crate::expr::SourceLocKind,
+        ty: QualType,
+        ctx: DeclId,
+        loc: Loc,
+        rparen: Loc,
+    ) -> ExprId {
+        let deps = self.type_deps(ty);
+        let e = self.simple(
+            ExprKind::SourceLocExpr,
+            ValueCategory::PRValue,
+            deps,
+            kind as u8,
+            ty,
+            loc,
+            ctx.raw(),
+            0,
+        );
+        self.ast.exprs.cold.end_loc.insert(e, rparen).expect("fresh expression");
+        e
+    }
+
     /// The value category of an id-expression naming `d`
     /// ([expr.prim.id.unqual]/3): lvalue for variables, functions, data
     /// members and template parameter objects; prvalue for enumerators and

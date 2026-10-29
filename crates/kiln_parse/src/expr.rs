@@ -5,7 +5,7 @@
 //! descent. A `None` result ([`PExpr`]) means a syntax error was reported
 //! and the caller must recover; semantic errors yield an error expression.
 
-use kiln_ast::expr::{BinaryOp, ExprKind, TraitKind, TypeTrait, UnaryOp};
+use kiln_ast::expr::{BinaryOp, ExprKind, SourceLocKind, TraitKind, TypeTrait, UnaryOp};
 use kiln_ast::{ExprId, QualType};
 use kiln_diag::DiagId;
 use kiln_lex::literal::{
@@ -344,6 +344,9 @@ impl Parser<'_, '_> {
 
     /// cast-expression ([expr.cast]) and unary-expression ([expr.unary]).
     pub(crate) fn parse_cast_expr(&mut self) -> PExpr {
+        if !self.stack_ok() {
+            return None;
+        }
         let loc = self.loc();
         if self.at_global_new_delete() {
             return self.parse_new_delete_expr();
@@ -621,6 +624,29 @@ impl Parser<'_, '_> {
         ok.then(|| self.s.act_on_builtin_bit_cast(ty, e, loc, rparen))
     }
 
+    /// `__builtin_FILE ( )` and the other source-location builtins (clang
+    /// `ParseBuiltinPrimaryExpression`; [support.srcloc.cons]).
+    fn parse_source_loc_expr(&mut self, kind: SourceLocKind) -> PExpr {
+        let loc = self.bump().span.lo;
+        let Some(open) = self.eat(Punct::LParen) else {
+            let d = self
+                .s
+                .diag(DiagId::parse_expected_after, self.expected_loc())
+                .arg(format!("'{}'", kind.spelling()))
+                .arg("'('");
+            self.emit(d);
+            return None;
+        };
+        if !self.at(Punct::RParen) {
+            let d = self.s.diag(DiagId::parse_expected, self.expected_loc()).arg("')'");
+            self.emit(d);
+            self.skip_until(&[Punct::RParen], true, true);
+            return None;
+        }
+        let rparen = self.expect_closing(Punct::RParen, Punct::LParen, open);
+        Some(self.s.act_on_source_loc_expr(kind, loc, rparen))
+    }
+
     /// `__builtin_offsetof ( type-id , offsetof-member-designator )`
     /// (clang `ParseBuiltinPrimaryExpression`): the designator is an
     /// identifier followed by `.identifier` and `[expression]` parts.
@@ -860,6 +886,14 @@ impl Parser<'_, '_> {
                 Kw::Typeid => self.parse_typeid(),
                 Kw::BuiltinOffsetof => self.parse_builtin_offsetof(),
                 Kw::BuiltinBitCast => self.parse_builtin_bit_cast(),
+                Kw::BuiltinFile => self.parse_source_loc_expr(SourceLocKind::File),
+                Kw::BuiltinFileName => self.parse_source_loc_expr(SourceLocKind::FileName),
+                Kw::BuiltinFunction => self.parse_source_loc_expr(SourceLocKind::Function),
+                Kw::BuiltinLine => self.parse_source_loc_expr(SourceLocKind::Line),
+                Kw::BuiltinColumn => self.parse_source_loc_expr(SourceLocKind::Column),
+                Kw::BuiltinSourceLocation => {
+                    self.parse_source_loc_expr(SourceLocKind::SourceLocStruct)
+                }
                 Kw::Requires => Some(self.parse_requires_expression()),
                 // `typename T::type(e)` ([expr.type.conv]).
                 Kw::Typename => self.parse_functional_cast(),
@@ -948,13 +982,14 @@ impl Parser<'_, '_> {
             && class == NameClass::Undeclared
             && self.at(Punct::LParen)
             && self.s.in_template()
+            && !self.s.is_builtin_name(name)
         {
             return Some(self.s.act_on_undeclared_call_name(name, nl));
         }
         if qual.is_none() && self.at(Punct::LParen) && self.s.in_template() {
             return Some(self.s.act_on_call_name(name, nl));
         }
-        Some(self.s.act_on_id_expression(name, nl, qual.map(|q| q.ctx)))
+        Some(self.s.act_on_id_expression(name, nl, qual))
     }
 
     /// The rest of a parenthesized expression or fold-expression after

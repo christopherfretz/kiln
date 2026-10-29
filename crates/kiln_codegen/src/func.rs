@@ -263,6 +263,21 @@ impl Cg<'_> {
         }
         self.emit_return_block();
         self.emit_epilog();
+        // FinishFunction: an unreachable return block is deleted, and with
+        // it a return-value slot nothing else uses.
+        if let Some(rb) = self.f.ret_block
+            && self.f.fir.is_placed(rb)
+            && self.f.fir.block_uses(rb) == 0
+        {
+            self.f.fir.erase_block(rb);
+            self.f.ret_block = None;
+            if let Some(slot) = self.f.ret_slot
+                && let V::I(_) = slot.v
+                && self.f.fir.uses(slot.v) == 0
+            {
+                self.f.fir.erase(Fir::last_inst(slot.v));
+            }
+        }
 
         // Attributes.
         let nothrow_def = sig.nothrow || !self.opts.exceptions || self.no_throw_calls();
@@ -1006,6 +1021,28 @@ impl Cg<'_> {
                 _ => None,
             };
             if let Some(x) = x {
+                // APFloat, not the host: a NaN operand is the (quieted)
+                // result, the left one first; an invalid operation gives
+                // the default positive quiet NaN.
+                if x.is_nan() {
+                    let nan = |c: V| -> Option<u128> {
+                        let V::C(c) = c else { return None };
+                        match self.m.const_of(c)? {
+                            ConstData::Float { bits, .. } => Some(*bits),
+                            _ => None,
+                        }
+                    };
+                    let quiet: u128 = if single { 1 << 22 } else { 1 << 51 };
+                    let bits = if a.is_nan() {
+                        nan(l).map(|b| b | quiet)
+                    } else if b.is_nan() {
+                        nan(r).map(|b| b | quiet)
+                    } else {
+                        None
+                    };
+                    let bits = bits.unwrap_or(if single { 0x7fc0_0000 } else { 0x7ff8 << 48 });
+                    return V::C(self.m.const_float_bits(ty, bits));
+                }
                 return self.mk_float(ty, x);
             }
         }

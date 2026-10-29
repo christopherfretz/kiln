@@ -6,8 +6,12 @@
 //!   diagnostic's notes (clang's, 10; 0 shows all);
 //! - `-fkiln-instantiation-report[=all|json]`: the per-template report on
 //!   stderr at the end of each translation unit (the top 50 rows as text,
-//!   every row, or NDJSON).
+//!   every row, or NDJSON);
+//! - `-fkiln-stack-size=N[K|M|G]`: the compiling thread's stack (default
+//!   1 GiB, at least 4 MiB); the stack guard (§1 P4, §10.3) stops with a
+//!   fatal diagnostic before it runs out.
 
+use kiln_sema::stack_guard::{DEFAULT_STACK_SIZE, parse_stack_size};
 use kiln_sema::templ::report::ReportFormat;
 use kiln_sema::templ::stack::InstLimits;
 
@@ -22,6 +26,8 @@ pub struct TemplOpts {
     pub backtrace_limit: Option<u32>,
     /// `-fkiln-instantiation-report[=...]`.
     pub report: ReportFormat,
+    /// `-fkiln-stack-size=`, in bytes.
+    pub stack_size: Option<usize>,
 }
 
 impl TemplOpts {
@@ -36,6 +42,12 @@ impl TemplOpts {
         let ok = match flag {
             "-ftemplate-depth" => set(&mut self.depth, v.parse().ok()),
             "-ftemplate-backtrace-limit" => set(&mut self.backtrace_limit, v.parse().ok()),
+            "-fkiln-stack-size" => {
+                if !set(&mut self.stack_size, parse_stack_size(v)) {
+                    return Some(Err(ArgError::InvalidFlagValue(arg.to_owned(), v.to_owned())));
+                }
+                true
+            }
             "-fkiln-instantiation-report" => {
                 let f = match v {
                     "all" => Some(ReportFormat::All),
@@ -65,6 +77,18 @@ impl TemplOpts {
         }
         l
     }
+}
+
+/// The stack size the compiling thread is spawned with: the last valid
+/// `-fkiln-stack-size=` of `args`, else [`DEFAULT_STACK_SIZE`]. The
+/// executable reads it before the command line is parsed (invalid values
+/// are diagnosed by the parse, on that thread).
+pub fn stack_size_of(args: &[String]) -> usize {
+    args.iter()
+        .rev()
+        .filter_map(|a| a.strip_prefix("-fkiln-stack-size="))
+        .find_map(parse_stack_size)
+        .unwrap_or(DEFAULT_STACK_SIZE)
 }
 
 /// Stores `v` in `slot` if it is `Some`; returns whether it was.
@@ -104,6 +128,20 @@ mod tests {
         assert_eq!(o.report, ReportFormat::Json);
         assert_eq!(o.parse_arg("-fkiln-instantiation-report=all"), Some(Ok(())));
         assert_eq!(o.report, ReportFormat::All);
+    }
+
+    #[test]
+    fn stack_size() {
+        let mut o = TemplOpts::default();
+        assert_eq!(o.parse_arg("-fkiln-stack-size=64M"), Some(Ok(())));
+        assert_eq!(o.stack_size, Some(64 << 20));
+        assert!(matches!(o.parse_arg("-fkiln-stack-size=lots"), Some(Err(_))));
+        assert!(matches!(o.parse_arg("-fkiln-stack-size=0"), Some(Err(_))));
+        assert_eq!(o.stack_size, Some(64 << 20));
+        let args = |v: &[&str]| v.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
+        assert_eq!(stack_size_of(&args(&["a.cpp"])), DEFAULT_STACK_SIZE);
+        assert_eq!(stack_size_of(&args(&["-fkiln-stack-size=8M", "-fkiln-stack-size=x"])), 8 << 20);
+        assert_eq!(stack_size_of(&args(&["-fkiln-stack-size=1K"])), 4 << 20);
     }
 
     #[test]

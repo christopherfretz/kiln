@@ -107,11 +107,69 @@ impl Cg<'_> {
             PtrBase::Decl(d) => self.decl_addr_const(d),
             PtrBase::Function(d) => Ok(Value::func(self.get_fn(d)?)),
             PtrBase::StringLit { lit, .. } => Ok(gval(self.lit_global(lit))),
-            PtrBase::Temporary(_) | PtrBase::Const(_) => {
+            PtrBase::Const(c) => Ok(gval(self.const_object(c)?)),
+            PtrBase::Temporary(_) => {
                 err(None, "pointers to lifetime-extended temporaries are not supported yet (M3)")
             }
             PtrBase::TypeInfo(_) => err(None, "typeid constants are not supported yet (M3)"),
         }
+    }
+
+    /// The private `.constant` global holding frozen constant object
+    /// `c` (clang `GetAddrOfUnnamedGlobalConstantDecl`: the object of a
+    /// `__builtin_source_location()`); one per value. Its initializer is
+    /// built first, so the strings it points to are named before it.
+    fn const_object(&mut self, c: ConstValueId) -> R<kiln_llvm::GlobalId> {
+        if let Some(&g) = self.const_objects.get(&c) {
+            return Ok(g);
+        }
+        let ty = self.ast.consts.ty(c);
+        let init = self.const_value(c, ty, None, true)?;
+        let align = self.global_align(ty);
+        let g = self.private_const(".constant", init, align);
+        self.const_objects.insert(c, g);
+        Ok(g)
+    }
+
+    /// The value of source-location builtin `e` ([support.srcloc.cons]):
+    /// the values sema recorded for it, or for the default argument use
+    /// enclosing it.
+    pub(crate) fn source_loc_value(&mut self, e: ExprId) -> R<Value> {
+        use kiln_ast::expr::SourceLocKind as K;
+        let ast = self.ast;
+        let key = self.srcloc.unwrap_or(e);
+        let Some(v) = ast.exprs.source_loc_values(key).copied() else {
+            return err(None, "source-location builtin without recorded values");
+        };
+        let cv = match ast.exprs.source_loc_kind(e) {
+            K::Line | K::Column => {
+                let n = if ast.exprs.source_loc_kind(e) == K::Line { v.line } else { v.column };
+                let t = self.lty(ast.exprs.get(e).ty());
+                return Ok(self.m.const_int(t, i128::from(n)));
+            }
+            K::File => v.file,
+            K::FileName => v.file_name,
+            K::Function => v.function,
+            K::SourceLocStruct => match v.location {
+                Some(c) => c,
+                None => return err(None, "source-location object without recorded value"),
+            },
+        };
+        match ast.consts.scalar(cv) {
+            Some(s) => self.scalar_const(s, LTy::PTR),
+            None => err(None, "source-location value is not a pointer"),
+        }
+    }
+
+    /// Enters default argument `e` for emission: the source-location
+    /// builtins in it take the values of this use unless an enclosing
+    /// default argument already set them. Returns the scope to restore.
+    pub(crate) fn enter_default_arg(&mut self, e: ExprId) -> Option<ExprId> {
+        let saved = self.srcloc;
+        if saved.is_none() && self.ast.exprs.source_loc_values(e).is_some() {
+            self.srcloc = Some(e);
+        }
+        saved
     }
 
     /// The global holding string literal `lit`, terminator included.
