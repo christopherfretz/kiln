@@ -166,6 +166,21 @@ pub fn write_type(
     opts: PrintOptions,
     out: &mut String,
 ) {
+    write_declarator(ctx, names, q, opts, "", out);
+}
+
+/// Like [`write_type`], with `placeholder` (a declarator name such as
+/// `B::f()`) printed inside the type as clang's
+/// `QualType::getAsStringInternal(placeholder, policy)` does: `A *B::f()`,
+/// `int B::g()`.
+pub fn write_declarator(
+    ctx: &TypeContext,
+    names: &dyn TypeNames,
+    q: QualType,
+    opts: PrintOptions,
+    placeholder: &str,
+    out: &mut String,
+) {
     let mut q = q;
     if opts.canonical {
         q = ctx.canonical(q);
@@ -190,7 +205,7 @@ pub fn write_type(
         inside_cc_attr: false,
         depth: 0,
     };
-    p.print(q, "");
+    p.print(q, placeholder);
     *out = p.out;
 }
 
