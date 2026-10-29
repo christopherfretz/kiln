@@ -29,10 +29,10 @@ pub fn is_extern_c(ast: &Ast, d: DeclId) -> bool {
             DeclKind::LinkageSpec => {
                 return ast.decls.scope(ctx).is_some_and(|s| s.aux == LinkageLang::C as u32);
             }
-            DeclKind::TranslationUnit | DeclKind::Namespace => {
-                if n.kind() == DeclKind::TranslationUnit {
-                    return false;
-                }
+            DeclKind::TranslationUnit | DeclKind::Namespace
+                if n.kind() == DeclKind::TranslationUnit =>
+            {
+                return false;
             }
             _ => {}
         }
@@ -100,14 +100,13 @@ fn const_array(ast: &Ast, q: QualType) -> bool {
 /// The spelling of `d`'s name (empty for unnamed entities).
 pub fn decl_name(ast: &Ast, d: DeclId) -> String {
     let n = ast.decls.get(d);
-    match ast.names.view(n.name()) {
-        DeclNameView::Identifier(s) => ast.symbols().as_str(s).to_owned(),
-        _ => {
-            if let Some(td) = ast.decls.typedef_for_anon(d) {
-                return decl_name(ast, td);
-            }
-            ast.names.simple_spelling(n.name(), ast.symbols()).unwrap_or_default()
+    if let DeclNameView::Identifier(s) = ast.names.view(n.name()) {
+        ast.symbols().as_str(s).to_owned()
+    } else {
+        if let Some(td) = ast.decls.typedef_for_anon(d) {
+            return decl_name(ast, td);
         }
+        ast.names.simple_spelling(n.name(), ast.symbols()).unwrap_or_default()
     }
 }
 
@@ -184,12 +183,15 @@ pub fn mangle_decl(ast: &Ast, d: DeclId) -> String {
 /// The linkage name of a static local `d`, the `index`-th (0-based)
 /// static local of its function with the same name.
 pub fn mangle_static_local(ast: &Ast, d: DeclId, index: u32) -> String {
+    use std::fmt::Write as _;
     let mut s = mangle_decl(ast, d);
-    if index > 0 {
-        if index == 1 {
-            s.push_str("_0");
+    // <discriminator> := _ <number> (< 10) | __ <number> _ ; the first
+    // occurrence has none, the second is number 0.
+    if let Some(n) = index.checked_sub(1) {
+        if n < 10 {
+            let _ = write!(s, "_{n}");
         } else {
-            s.push_str(&format!("__{}_", index - 1));
+            let _ = write!(s, "__{n}_");
         }
     }
     s

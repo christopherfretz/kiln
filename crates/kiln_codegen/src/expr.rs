@@ -30,6 +30,7 @@ fn low_mask(bits: u32) -> u128 {
 }
 
 impl Cg<'_> {
+    #[allow(clippy::unnecessary_wraps, reason = "diagnostic location slot")]
     fn loc_of(&self, e: ExprId) -> Option<kiln_source::Loc> {
         Some(self.ast.exprs.get(e).loc())
     }
@@ -127,16 +128,15 @@ impl Cg<'_> {
                 Some(c) if !ast.types.is_void(q) => V::C(self.const_scalar_value(c, q)?),
                 _ => return self.emit_scalar_opt(ast.exprs.operand(e)),
             },
-            ExprKind::IntegerLiteral => match ast.exprs.int_value(e) {
-                Some(v) => {
+            ExprKind::IntegerLiteral => {
+                if let Some(v) = ast.exprs.int_value(e) {
                     let t = self.lty(q);
                     self.icn(t, i128::from(v))
-                }
-                None => {
+                } else {
                     let c = ast.exprs.literal_const(e).expect("wide literal");
                     V::C(self.const_scalar_value(c, q)?)
                 }
-            },
+            }
             ExprKind::FloatingLiteral => {
                 let c = ast.exprs.literal_const(e).expect("float literal");
                 V::C(self.const_scalar_value(c, q)?)
@@ -275,7 +275,7 @@ impl Cg<'_> {
             if self.is_bool(from) {
                 return v;
             }
-            return self.to_bool(v, from);
+            return self.conv_to_bool(v, from);
         }
         let ft = self.f.fir.ty(&self.m, v);
         if ft == tt {
@@ -310,7 +310,7 @@ impl Cg<'_> {
     }
 
     /// clang `EmitConversionToBool`.
-    fn to_bool(&mut self, v: V, from: QualType) -> V {
+    fn conv_to_bool(&mut self, v: V, from: QualType) -> V {
         let ft = self.f.fir.ty(&self.m, v);
         if ft == LTy::I1 {
             return v;
@@ -328,7 +328,7 @@ impl Cg<'_> {
     pub(crate) fn eval_bool(&mut self, e: ExprId) -> R<V> {
         let q = self.ast.exprs.get(e).ty();
         let v = self.emit_scalar(e)?;
-        Ok(if self.is_bool(q) { v } else { self.to_bool(v, q) })
+        Ok(if self.is_bool(q) { v } else { self.conv_to_bool(v, q) })
     }
 
     fn zext_or_same(&mut self, v: V, to: LTy) -> V {
@@ -345,10 +345,10 @@ impl Cg<'_> {
         let ck = ast.exprs.cast_kind(e);
         Ok(Some(match ck {
             CastKind::LValueToRValue => {
-                if let Some(c) = self.folds.get(e) {
-                    if !self.is_aggregate(q) {
-                        return Ok(Some(V::C(self.const_scalar_value(c, q)?)));
-                    }
+                if let Some(c) = self.folds.get(e)
+                    && !self.is_aggregate(q)
+                {
+                    return Ok(Some(V::C(self.const_scalar_value(c, q)?)));
                 }
                 return self.emit_scalar_opt(s);
             }
@@ -367,10 +367,14 @@ impl Cg<'_> {
                 self.emit_lvalue(s)?.addr.v
             }
             CastKind::NullToPointer => {
-                if !ast.exprs.get(s).value_category().eq(&ValueCategory::PRValue)
-                    || ast.exprs.get(s).kind() != ExprKind::CXXNullPtrLiteralExpr
-                {
-                    self.emit_ignored_if_side_effects(s)?;
+                // clang `MustVisitNullValue`: a `nullptr_t` operand is
+                // evaluated for its side effects.
+                let sq = ast.exprs.get(s).ty();
+                if matches!(
+                    ast.types.canonical_view(sq),
+                    kiln_ast::types::TypeView::Builtin(kiln_ast::types::BuiltinType::NullPtr)
+                ) {
+                    self.emit_ignored(s)?;
                 }
                 V::C(self.m.const_null(LTy::PTR))
             }
@@ -401,10 +405,6 @@ impl Cg<'_> {
             }
             k => return err(self.loc_of(e), format!("cast {k:?} is not supported yet")),
         }))
-    }
-
-    fn emit_ignored_if_side_effects(&mut self, _e: ExprId) -> R<()> {
-        Ok(())
     }
 
     /// `gep inbounds [N x T], p, i64 0, i64 0`.
@@ -478,7 +478,7 @@ impl Cg<'_> {
         } else {
             let t = self.f.fir.ty(&self.m, old);
             if self.is_float_ty(t) {
-                let c = self.fconst(t, amount as f64);
+                let c = self.fconst(t, if inc { 1.0 } else { -1.0 });
                 self.bin(BinOp::FAdd, Flags::NONE, old, c)
             } else {
                 let c = self.icn(t, amount);
@@ -1095,7 +1095,7 @@ impl Cg<'_> {
         let rty = self.record_ty(rd);
         let (is_union, idx, bf) = {
             let r = self.tys.record(rd);
-            (r.is_union, r.field_index.get(&field).copied(), r.bitfields.get(&field).cloned())
+            (r.is_union, r.field_index.get(&field).copied(), r.bitfields.get(&field).copied())
         };
         if let Some(bf) = bf {
             let mut v = base.v;
@@ -1210,7 +1210,7 @@ impl Cg<'_> {
                     ExprKind::ImplicitCastExpr
                         if ast.exprs.cast_kind(c) == CastKind::FunctionToPointerDecay =>
                     {
-                        c = ast.exprs.operand(c)
+                        c = ast.exprs.operand(c);
                     }
                     ExprKind::DeclRefExpr => {
                         let d = ast.exprs.decl(c);
@@ -1225,18 +1225,15 @@ impl Cg<'_> {
         }
         let args: Vec<ExprId> = ast.lists.iter(ast.exprs.call_args(e)).collect();
         let arg_tys: Vec<QualType> = args.iter().map(|&a| ast.exprs.get(a).ty()).collect();
-        let (callee, fty, extern_c, fid) = match direct {
-            Some(d) => {
-                let f = self.get_fn(d)?;
-                let fty = ast.decls.get(d).ty().expect("function type");
-                (V::C(Value::func(f)), fty, mangle::is_extern_c(ast, ast.first(d)), Some(f))
-            }
-            None => {
-                let p = self.emit_scalar(callee_e)?;
-                let pq = ast.exprs.get(callee_e).ty();
-                let fty = ast.types.pointee(pq).expect("function pointer");
-                (p, fty, false, None)
-            }
+        let (callee, fty, extern_c, fid) = if let Some(d) = direct {
+            let f = self.get_fn(d)?;
+            let fty = ast.decls.get(d).ty().expect("function type");
+            (V::C(Value::func(f)), fty, mangle::is_extern_c(ast, ast.first(d)), Some(f))
+        } else {
+            let p = self.emit_scalar(callee_e)?;
+            let pq = ast.exprs.get(callee_e).ty();
+            let fty = ast.types.pointee(pq).expect("function pointer");
+            (p, fty, false, None)
         };
         let sig = self.call_sig(fty, extern_c, &arg_tys);
         let rq = sig.ret;
@@ -1316,7 +1313,7 @@ impl Cg<'_> {
                 ExprKind::ParenExpr | ExprKind::ConstantExpr => e = ast.exprs.operand(e),
                 ExprKind::ExprWithCleanups | ExprKind::MaterializeTemporaryExpr => e = self.sub(e),
                 k if k.is_cast() && ast.exprs.cast_kind(e) == CastKind::NoOp => {
-                    e = ast.exprs.operand(e)
+                    e = ast.exprs.operand(e);
                 }
                 _ => return e,
             }
@@ -1724,6 +1721,7 @@ impl Cg<'_> {
     }
 
     /// `llvm::isBytewiseValue`: `Some(None)` is undef (any byte).
+    #[allow(clippy::option_option, reason = "None / undef / byte, as in LLVM")]
     fn bytewise(&mut self, k: Value) -> Option<Option<u8>> {
         if self.is_undef_const(k) {
             return Some(None);
@@ -1811,11 +1809,11 @@ impl Cg<'_> {
             }
             return Ok(());
         }
-        if size > 32 {
-            if let Some(b) = self.bytewise(k) {
-                self.memset(at, b.unwrap_or(0), size, vol);
-                return Ok(());
-            }
+        if size > 32
+            && let Some(b) = self.bytewise(k)
+        {
+            self.memset(at, b.unwrap_or(0), size, vol);
+            return Ok(());
         }
         let fname = self.f.func.map(|f| self.m.func(f).name().to_owned()).unwrap_or_default();
         let name = format!("__const.{fname}.{}", mangle::decl_name(self.ast, d));

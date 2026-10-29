@@ -260,14 +260,13 @@ impl Cg<'_> {
             self.f.mustprogress = false;
             return None;
         }
-        let mp = match self.f.loop_mp {
-            Some(m) => m,
-            None => {
-                let s = self.m.md_string(b"llvm.loop.mustprogress");
-                let m = self.m.md_tuple(&[Some(s)]);
-                self.f.loop_mp = Some(m);
-                m
-            }
+        let mp = if let Some(m) = self.f.loop_mp {
+            m
+        } else {
+            let s = self.m.md_string(b"llvm.loop.mustprogress");
+            let m = self.m.md_tuple(&[Some(s)]);
+            self.f.loop_mp = Some(m);
+            m
         };
         let node = self.m.md_distinct_tuple(&[None, Some(mp)]);
         self.m.md_set_operand(node, 0, Some(node)).expect("distinct loop id");

@@ -11,6 +11,7 @@
 //!
 //! `KILN_CASE=<name>` runs one case and prints both IR texts.
 
+use std::fmt::Write as _;
 use std::io::Write;
 use std::process::{Command, Stdio};
 use std::sync::Arc;
@@ -67,15 +68,14 @@ fn kiln_ir(src: &str) -> Result<String, String> {
 
 /// Runs `prog args` with `input` on stdin; `None` when `prog` is missing.
 fn pipe(prog: &str, args: &[&str], input: &str) -> Option<Result<String, String>> {
-    let mut child = match Command::new(prog)
+    let Ok(mut child) = Command::new(prog)
         .args(args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-    {
-        Ok(c) => c,
-        Err(_) => return None,
+    else {
+        return None;
     };
     {
         let mut stdin = child.stdin.take().expect("stdin");
@@ -158,10 +158,10 @@ fn diff(a: &str, b: &str) -> String {
     let lo = i.saturating_sub(3);
     let mut s = String::new();
     for l in &al[lo..al.len().min(i + 8)] {
-        s.push_str(&format!("kiln : {l}\n"));
+        let _ = writeln!(s, "kiln : {l}");
     }
     for l in &bl[lo..bl.len().min(i + 8)] {
-        s.push_str(&format!("clang: {l}\n"));
+        let _ = writeln!(s, "clang: {l}");
     }
     s
 }
@@ -395,6 +395,11 @@ const CASES: &[(&str, Mode, &str)] = &[
         "static_local",
         Exact,
         "int f() { static int n = 3; static const int k = 10; return ++n + k; }",
+    ),
+    (
+        "static_local_discriminators",
+        Exact,
+        "int f() { int r = 0; { static int s = 1; r += s; } { static int s = 2; r += s; } { static int s = 3; r += s; } { static int s = 4; r += s; } { static int s = 5; r += s; } { static int s = 6; r += s; } { static int s = 7; r += s; } { static int s = 8; r += s; } { static int s = 9; r += s; } { static int s = 10; r += s; } { static int s = 11; r += s; } { static int s = 12; r += s; } { static int s = 13; r += s; } return r; }",
     ),
     (
         "if_else_chain",

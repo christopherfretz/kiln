@@ -1,8 +1,11 @@
 //! Calling-convention lowering (clang `ABIInfo::computeInfo`) for the
 //! two supported targets: AAPCS64 (`AArch64ABIInfo`, kind AAPCS) and
-//! SysV x86-64 (`X86_64ABIInfo`, no AVX). The result says, for the
+//! `SysV` x86-64 (`X86_64ABIInfo`, no AVX). The result says, for the
 //! return value and each argument, how its C++ type is passed in IR.
 //! See spec/codegen.md §5.
+// Mirrors clang's classification functions 1:1 (long functions, arms kept
+// separate as in clang, short type/offset names).
+#![allow(clippy::too_many_lines, clippy::many_single_char_names, clippy::match_same_arms)]
 
 use kiln_ast::Ast;
 use kiln_ast::ids::{DeclId, QualType};
@@ -240,13 +243,10 @@ fn aarch64(t: &mut IrTypes<'_>, ret: QualType, args: &[QualType]) -> CallInfo {
 fn aarch64_arg(t: &mut IrTypes<'_>, q: QualType) -> ArgKind {
     if !is_aggregate(t, q) {
         let q = strip_enum(t, q);
-        if let TypeView::BitInt { width, .. } = view(t, q) {
-            if width > 128 {
-                return ArgKind::Indirect {
-                    byval: false,
-                    align: t.layouter().type_layout(q).align,
-                };
-            }
+        if let TypeView::BitInt { width, .. } = view(t, q)
+            && width > 128
+        {
+            return ArgKind::Indirect { byval: false, align: t.layouter().type_layout(q).align };
         }
         return direct(t.convert(q));
     }
@@ -285,10 +285,10 @@ fn aarch64_ret(t: &mut IrTypes<'_>, q: QualType) -> ArgKind {
     }
     if !is_aggregate(t, q) {
         let q = strip_enum(t, q);
-        if let TypeView::BitInt { width, .. } = view(t, q) {
-            if width > 128 {
-                return ArgKind::Indirect { byval: true, align: t.layouter().type_layout(q).align };
-            }
+        if let TypeView::BitInt { width, .. } = view(t, q)
+            && width > 128
+        {
+            return ArgKind::Indirect { byval: true, align: t.layouter().type_layout(q).align };
         }
         return direct(t.convert(q));
     }
@@ -351,7 +351,7 @@ fn is_empty_field(t: &mut IrTypes<'_>, f: &props::FieldDesc, allow_arrays: bool)
     is_empty_record(t, ft, allow_arrays)
 }
 
-/// clang `isHomogeneousAggregate` with AArch64's base-type and size rules.
+/// clang `isHomogeneousAggregate` with `AArch64`'s base-type and size rules.
 fn homogeneous(t: &mut IrTypes<'_>, q: QualType) -> Option<(QualType, u64)> {
     let mut base = None;
     let n = homog(t, q, &mut base)?;
@@ -450,6 +450,7 @@ fn homog(t: &mut IrTypes<'_>, q: QualType, base: &mut Option<QualType>) -> Optio
 // ---------------------------------------------------------------- x86-64
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[allow(clippy::enum_variant_names, reason = "clang's X86_64ABIInfo::Class names")]
 enum Class {
     Integer,
     Sse,
@@ -462,7 +463,7 @@ enum Class {
 }
 
 fn merge(accum: Class, field: Class) -> Class {
-    use Class::*;
+    use Class::{ComplexX87, Integer, Memory, NoClass, Sse, X87, X87Up};
     if accum == field || field == NoClass {
         return accum;
     }
@@ -482,7 +483,7 @@ fn merge(accum: Class, field: Class) -> Class {
 }
 
 fn post_merge(size: u64, lo: &mut Class, hi: &mut Class) {
-    use Class::*;
+    use Class::{Memory, Sse, SseUp, X87, X87Up};
     if *hi == Memory {
         *lo = Memory;
     }
@@ -498,7 +499,7 @@ fn post_merge(size: u64, lo: &mut Class, hi: &mut Class) {
 }
 
 fn classify(t: &mut IrTypes<'_>, q: QualType, off: u64) -> (Class, Class) {
-    use Class::*;
+    use Class::{ComplexX87, Integer, Memory, NoClass, Sse, SseUp, X87, X87Up};
     let mut lo = NoClass;
     let mut hi = NoClass;
     let lo_cur = off < 64;
@@ -520,7 +521,7 @@ fn classify(t: &mut IrTypes<'_>, q: QualType, off: u64) -> (Class, Class) {
             | BuiltinType::Double
             | BuiltinType::Float16
             | BuiltinType::BFloat16 => {
-                set_cur!(Sse)
+                set_cur!(Sse);
             }
             BuiltinType::Float128 => {
                 lo = Sse;
@@ -539,19 +540,19 @@ fn classify(t: &mut IrTypes<'_>, q: QualType, off: u64) -> (Class, Class) {
         | TypeView::LValueRef(_)
         | TypeView::RValueRef(_)
         | TypeView::Function(_) => {
-            set_cur!(Integer)
+            set_cur!(Integer);
         }
         TypeView::MemberPointer { pointee, .. } => {
             if matches!(ast.types.canonical_view(pointee), TypeView::Function(_)) {
                 lo = Integer;
                 hi = Integer;
             } else {
-                set_cur!(Integer)
+                set_cur!(Integer);
             }
         }
         TypeView::BitInt { width, .. } => {
             if width <= 64 {
-                set_cur!(Integer)
+                set_cur!(Integer);
             } else if width <= 128 {
                 lo = Integer;
                 hi = Integer;
@@ -564,7 +565,7 @@ fn classify(t: &mut IrTypes<'_>, q: QualType, off: u64) -> (Class, Class) {
                 TypeView::Builtin(
                     BuiltinType::Float | BuiltinType::Float16 | BuiltinType::BFloat16,
                 ) => {
-                    set_cur!(Sse)
+                    set_cur!(Sse);
                 }
                 TypeView::Builtin(BuiltinType::Double) => {
                     lo = Sse;
@@ -573,7 +574,7 @@ fn classify(t: &mut IrTypes<'_>, q: QualType, off: u64) -> (Class, Class) {
                 TypeView::Builtin(BuiltinType::LongDouble) => set_cur!(ComplexX87),
                 _ => {
                     if size <= 64 {
-                        set_cur!(Integer)
+                        set_cur!(Integer);
                     } else if size <= 128 {
                         lo = Integer;
                         hi = Integer;
@@ -589,15 +590,18 @@ fn classify(t: &mut IrTypes<'_>, q: QualType, off: u64) -> (Class, Class) {
             if size > 512 {
                 return (lo, hi);
             }
-            if off % type_align_bits(t, a.elem) != 0 {
+            if !off.is_multiple_of(type_align_bits(t, a.elem)) {
                 return (lo, hi);
             }
             set_cur!(NoClass);
-            let esize = type_bits(t, a.elem);
             let n = ast.types.array_size(q).unwrap_or(0);
-            if size > 128 && (size != esize || size > 128) {
+            // clang: `Size > 128 && (Size != elem size || Size > native
+            // vector size)`; without AVX the native vector size is 128, so
+            // the condition reduces to `Size > 128`.
+            if size > 128 {
                 return (lo, hi);
             }
+            let esize = type_bits(t, a.elem);
             let mut o = off;
             for _ in 0..n {
                 let (fl, fh) = classify(t, a.elem, o);
@@ -618,7 +622,6 @@ fn classify(t: &mut IrTypes<'_>, q: QualType, off: u64) -> (Class, Class) {
             let Some(def) = ast.definition(d) else { return (lo, hi) };
             let layout = t.layouter().record(def).clone();
             set_cur!(NoClass);
-            let is_union = props::class_desc(ast, def).is_union;
             for (i, b) in ast.decls.bases(def, &ast.lists).enumerate() {
                 let boff = layout.bases.get(i).map_or(0, |x| x.1 * 8);
                 let (fl, fh) = classify(t, b.ty, off + boff);
@@ -634,12 +637,14 @@ fn classify(t: &mut IrTypes<'_>, q: QualType, off: u64) -> (Class, Class) {
                 if f.bit_width.is_some() && !f.named {
                     continue;
                 }
-                if size > 128 && ((!is_union && size != type_bits(t, f.ty)) || size > 128) {
+                // clang: `Size > 128 && ((!IsUnion && Size != field size) ||
+                // Size > native vector size)`; 128 without AVX.
+                if size > 128 {
                     lo = Memory;
                     post_merge(size, &mut lo, &mut hi);
                     return (lo, hi);
                 }
-                let in_memory = foff % type_align_bits(t, f.ty) != 0;
+                let in_memory = !foff.is_multiple_of(type_align_bits(t, f.ty));
                 if f.bit_width.is_none() && in_memory {
                     lo = Memory;
                     post_merge(size, &mut lo, &mut hi);
@@ -706,7 +711,7 @@ fn x86_indirect(t: &mut IrTypes<'_>, q: QualType, free_int: u32) -> ArgKind {
 }
 
 fn x86_arg(t: &mut IrTypes<'_>, q: QualType, free_int: u32) -> (ArgKind, u32, u32) {
-    use Class::*;
+    use Class::{ComplexX87, Integer, Memory, NoClass, Sse, SseUp, X87, X87Up};
     let (lo, hi) = classify(t, q, 0);
     let mut ni = 0;
     let mut ns = 0;
@@ -774,7 +779,7 @@ fn x86_arg(t: &mut IrTypes<'_>, q: QualType, free_int: u32) -> (ArgKind, u32, u3
 }
 
 fn x86_ret(t: &mut IrTypes<'_>, q: QualType) -> ArgKind {
-    use Class::*;
+    use Class::{ComplexX87, Integer, Memory, NoClass, Sse, SseUp, X87, X87Up};
     let (lo, hi) = classify(t, q, 0);
     let natural = t.convert(q);
     let mut res: Option<IrType> = None;
@@ -823,14 +828,12 @@ fn x86_ret(t: &mut IrTypes<'_>, q: QualType) -> ArgKind {
             high = Some(h);
         }
         SseUp => res = Some(natural.clone()),
-        X87Up => {
-            if lo != X87 {
-                let h = sse_at(t, &natural, 8, q, 8);
-                if lo == NoClass {
-                    return ArgKind::Direct { coerce: h, offset: 8, flatten: true, align: None };
-                }
-                high = Some(h);
+        X87Up if lo != X87 => {
+            let h = sse_at(t, &natural, 8, q, 8);
+            if lo == NoClass {
+                return ArgKind::Direct { coerce: h, offset: 8, flatten: true, align: None };
             }
+            high = Some(h);
         }
         _ => {}
     }
@@ -855,10 +858,12 @@ fn pair(t: &mut IrTypes<'_>, lo: IrType, hi: IrType) -> IrType {
     let (lo_size, _) = t.size_align(&lo);
     let (_, hi_align) = t.size_align(&hi);
     let hi_start = lo_size.next_multiple_of(hi_align);
-    let lo = if hi_start != 8 {
-        if matches!(lo, IrType::Half | IrType::Float) { IrType::Double } else { IrType::Int(64) }
-    } else {
+    let lo = if hi_start == 8 {
         lo
+    } else if matches!(lo, IrType::Half | IrType::Float) {
+        IrType::Double
+    } else {
+        IrType::Int(64)
     };
     IrType::Struct(vec![lo, hi], false)
 }
@@ -898,23 +903,23 @@ fn integer_at(
         if matches!(ir, IrType::Ptr | IrType::Int(64)) {
             return ir.clone();
         }
-        if let IrType::Int(w @ (8 | 16 | 32)) = ir {
-            if bits_no_user_data(t, src, src_off * 8 + u64::from(*w), src_off * 8 + 64) {
-                return ir.clone();
-            }
+        if let IrType::Int(w @ (8 | 16 | 32)) = ir
+            && bits_no_user_data(t, src, src_off * 8 + u64::from(*w), src_off * 8 + 64)
+        {
+            return ir.clone();
         }
     }
     if let Some((m, p)) = struct_body(t, ir) {
         let (size, _) = t.size_align(ir);
-        if ir_off < size {
-            if let Some((e, o)) = element_at(t, &m, p, ir_off) {
-                return integer_at(t, &e, o, src, src_off);
-            }
+        if ir_off < size
+            && let Some((e, o)) = element_at(t, &m, p, ir_off)
+        {
+            return integer_at(t, &e, o, src, src_off);
         }
     }
     if let IrType::Array(e, _) = ir {
         let (es, _) = t.size_align(e);
-        let eo = if es == 0 { 0 } else { ir_off / es * es };
+        let eo = ir_off.checked_div(es).map_or(0, |q| q * es);
         return integer_at(t, e, ir_off - eo, src, src_off);
     }
     let size = t.layouter().type_layout(src).size;
@@ -932,7 +937,7 @@ fn fp_at(t: &mut IrTypes<'_>, ir: &IrType, off: u64) -> Option<IrType> {
     }
     if let IrType::Array(e, _) = ir {
         let (es, _) = t.size_align(e);
-        let o = if es == 0 { 0 } else { off - off / es * es };
+        let o = off.checked_rem(es).unwrap_or(0);
         return fp_at(t, e, o);
     }
     None

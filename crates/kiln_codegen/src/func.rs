@@ -1,6 +1,6 @@
 //! Function bodies (spec/codegen.md §5): clang's `StartFunction`,
 //! `FinishFunction`, the return block and the instruction helpers
-//! (with IRBuilder's constant folding).
+//! (with `IRBuilder`'s constant folding).
 
 use kiln_abi::call::ArgKind;
 use kiln_abi::irtype::IrType;
@@ -167,11 +167,9 @@ impl Cg<'_> {
                 }
             }
         }
-        if is_main {
-            if let Some(slot) = self.f.ret_slot {
-                let z = self.m.const_int(slot.ty, 0);
-                self.store(V::C(z), slot.v, slot.align, false);
-            }
+        if is_main && let Some(slot) = self.f.ret_slot {
+            let z = self.m.const_int(slot.ty, 0);
+            self.store(V::C(z), slot.v, slot.align, false);
         }
         // EmitFunctionProlog + EmitParmDecl.
         let param_decls: Vec<DeclId> = ast.lists.iter(fd.params).collect();
@@ -179,9 +177,7 @@ impl Cg<'_> {
             let pq = ast.decls.get(p).ty().expect("param type");
             let info = sig.info.args[i].clone();
             match info.kind {
-                ArgKind::Direct { coerce: _, .. } | ArgKind::Extend { coerce: _, .. }
-                    if !self.is_aggregate(pq) =>
-                {
+                ArgKind::Direct { .. } | ArgKind::Extend { .. } if !self.is_aggregate(pq) => {
                     let mt = self.mty(pq);
                     let (_, align) = self.size_align(pq);
                     let a = self.f.fir.alloca(mt, align);
@@ -290,15 +286,14 @@ impl Cg<'_> {
         }
         if self.f.fir.block_uses(rb) == 1 {
             let preds = self.f.fir.predecessors(rb);
-            if let Some(&p) = preds.first() {
-                if let Some(t) = self.f.fir.terminator(p) {
-                    if matches!(self.f.fir.op(t), Op::Br { .. }) {
-                        self.f.fir.erase(t);
-                        self.f.fir.set_cur(Some(p));
-                        self.f.ret_block = None;
-                        return;
-                    }
-                }
+            if let Some(&p) = preds.first()
+                && let Some(t) = self.f.fir.terminator(p)
+                && matches!(self.f.fir.op(t), Op::Br { .. })
+            {
+                self.f.fir.erase(t);
+                self.f.fir.set_cur(Some(p));
+                self.f.ret_block = None;
+                return;
             }
         }
         self.emit_block(rb, false);
@@ -364,10 +359,10 @@ impl Cg<'_> {
 
     /// clang `EmitBranch`.
     pub fn emit_branch(&mut self, target: Blk) {
-        if let Some(cur) = self.f.fir.cur() {
-            if !self.f.fir.is_terminated(cur) {
-                self.br(target);
-            }
+        if let Some(cur) = self.f.fir.cur()
+            && !self.f.fir.is_terminated(cur)
+        {
+            self.br(target);
         }
         self.f.fir.set_cur(None);
     }
@@ -379,7 +374,7 @@ impl Cg<'_> {
         self.loop_md(Fir::last_inst(v), &[target]);
     }
 
-    /// A conditional branch (constant conditions are kept, as IRBuilder
+    /// A conditional branch (constant conditions are kept, as `IRBuilder`
     /// does).
     pub fn cond_br(&mut self, c: V, t: Blk, f: Blk) {
         let v = self.f.fir.push(Op::CondBr { c, t, f }, LTy::VOID);
@@ -387,13 +382,12 @@ impl Cg<'_> {
     }
 
     fn loop_md(&mut self, i: u32, succ: &[Blk]) {
-        if let Some(l) = self.f.loops.last().copied() {
-            if let Some(md) = l.md {
-                if succ.contains(&l.header) {
-                    let k = self.m.md_kind("llvm.loop");
-                    self.f.fir.add_md(i, k, md);
-                }
-            }
+        if let Some(l) = self.f.loops.last().copied()
+            && let Some(md) = l.md
+            && succ.contains(&l.header)
+        {
+            let k = self.m.md_kind("llvm.loop");
+            self.f.fir.add_md(i, k, md);
         }
     }
 
@@ -762,10 +756,10 @@ impl Cg<'_> {
     }
 
     pub fn bin(&mut self, op: BinOp, flags: Flags, l: V, r: V) -> V {
-        if let (Some((ty, a, w)), Some((_, b, _))) = (self.cint(l), self.cint(r)) {
-            if let Some(x) = fold_int_bin(op, a, b, w) {
-                return V::C(self.m.const_int(ty, x as i128));
-            }
+        if let (Some((ty, a, w)), Some((_, b, _))) = (self.cint(l), self.cint(r))
+            && let Some(x) = fold_int_bin(op, a, b, w)
+        {
+            return V::C(self.m.const_int(ty, x as i128));
         }
         if let (Some((ty, a)), Some((_, b))) = (self.cfloat(l), self.cfloat(r)) {
             let single = ty == LTy::FLOAT;
@@ -805,6 +799,7 @@ impl Cg<'_> {
         self.f.fir.push(Op::ICmp { p, l, r }, LTy::I1)
     }
 
+    #[allow(clippy::float_cmp, reason = "constant folding is exact IEEE comparison")]
     pub fn fcmp(&mut self, p: FloatPredicate, l: V, r: V) -> V {
         if let (Some((_, a)), Some((_, b))) = (self.cfloat(l), self.cfloat(r)) {
             let uno = a.is_nan() || b.is_nan();
@@ -832,6 +827,7 @@ impl Cg<'_> {
         self.f.fir.push(Op::FNeg { v }, ty)
     }
 
+    #[allow(clippy::cast_precision_loss, reason = "int-to-float folds round like LLVM")]
     pub fn cast(&mut self, op: CastOp, v: V, to: LTy) -> V {
         let from = self.f.fir.ty(&self.m, v);
         if from == to && matches!(op, CastOp::BitCast | CastOp::ZExt | CastOp::SExt | CastOp::Trunc)
@@ -845,11 +841,17 @@ impl Cg<'_> {
                     Some(V::C(self.m.const_int(to, a as i128)))
                 }
                 (CastOp::SExt, Some(_)) => Some(V::C(self.m.const_int(to, sext(a, w)))),
-                (CastOp::SIToFP, None) if to == LTy::DOUBLE || to == LTy::FLOAT => {
+                // Rust's int-to-float `as` rounds to nearest even, like
+                // LLVM's folder; `float` is rounded once, not via `double`.
+                (CastOp::SIToFP, None) if to == LTy::DOUBLE => {
                     Some(self.mk_float(to, sext(a, w) as f64))
                 }
-                (CastOp::UIToFP, None) if to == LTy::DOUBLE || to == LTy::FLOAT => {
-                    Some(self.mk_float(to, a as f64))
+                (CastOp::UIToFP, None) if to == LTy::DOUBLE => Some(self.mk_float(to, a as f64)),
+                (CastOp::SIToFP, None) if to == LTy::FLOAT => {
+                    Some(self.mk_float(to, f64::from(sext(a, w) as f32)))
+                }
+                (CastOp::UIToFP, None) if to == LTy::FLOAT => {
+                    Some(self.mk_float(to, f64::from(a as f32)))
                 }
                 (CastOp::SIToFP | CastOp::UIToFP, None)
                     if self.m.types.float_width(to) == Some(128) =>
@@ -882,12 +884,11 @@ impl Cg<'_> {
                 return r;
             }
         }
-        if let V::C(c) = v {
-            if matches!(op, CastOp::PtrToInt | CastOp::IntToPtr) {
-                if let Ok(x) = self.m.const_cast(op, c, to) {
-                    return V::C(x);
-                }
-            }
+        if let V::C(c) = v
+            && matches!(op, CastOp::PtrToInt | CastOp::IntToPtr)
+            && let Ok(x) = self.m.const_cast(op, c, to)
+        {
+            return V::C(x);
         }
         self.f.fir.push(Op::Cast { op, flags: Flags::NONE, v, to }, to)
     }
@@ -910,16 +911,16 @@ impl Cg<'_> {
 
     pub fn gep(&mut self, src: LTy, base: V, idx: Vec<V>, inbounds: bool) -> V {
         let flags = if inbounds { GepFlags::INBOUNDS } else { GepFlags::NONE };
-        if let V::C(b) = base {
-            if idx.iter().all(|i| matches!(i, V::C(_))) {
-                if idx.iter().all(|&i| self.cint(i).is_some_and(|x| x.1 == 0)) {
-                    return base;
-                }
-                let iv: Vec<Value> =
-                    idx.iter().map(|i| if let V::C(c) = i { *c } else { unreachable!() }).collect();
-                if let Ok(c) = self.m.const_gep(src, b, &iv, flags, None) {
-                    return V::C(c);
-                }
+        if let V::C(b) = base
+            && idx.iter().all(|i| matches!(i, V::C(_)))
+        {
+            if idx.iter().all(|&i| self.cint(i).is_some_and(|x| x.1 == 0)) {
+                return base;
+            }
+            let iv: Vec<Value> =
+                idx.iter().map(|i| if let V::C(c) = i { *c } else { unreachable!() }).collect();
+            if let Ok(c) = self.m.const_gep(src, b, &iv, flags, None) {
+                return V::C(c);
             }
         }
         self.f.fir.push(Op::Gep { src, base, idx, flags }, LTy::PTR)
@@ -969,7 +970,7 @@ fn int_to_f128_bits(neg: bool, mag: u128) -> u128 {
         return 0;
     }
     let sign = u128::from(neg) << 127;
-    let e = 127 - mag.leading_zeros();
+    let e = mag.ilog2();
     let frac_mask = (1u128 << 112) - 1;
     if e <= 112 {
         let m = mag << (112 - e);

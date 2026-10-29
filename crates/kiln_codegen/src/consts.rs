@@ -94,7 +94,7 @@ impl Cg<'_> {
                 if offset == 0 {
                     return Ok(b);
                 }
-                let off = self.m.const_int(LTy::I64, offset as i128);
+                let off = self.m.const_int(LTy::I64, i128::from(offset));
                 self.m.const_gep(LTy::I8, b, &[off], GepFlags::NONE, None).map_err(|e| ir_err(&e))
             }
             Scalar::Reflection { .. } => err(None, "reflection values cannot be emitted"),
@@ -212,7 +212,7 @@ impl Cg<'_> {
                     return self.m.const_array(elt, &elems).map_err(|e| ir_err(&e));
                 }
                 let elt = self.ir(et);
-                self.array_const(t, elt, elems)
+                self.array_const(t, elt, &elems)
             }
             IrType::Record(d) => {
                 let rec = self.tys.record(*d).clone();
@@ -328,7 +328,7 @@ impl Cg<'_> {
     }
 
     /// clang `EmitArrayConstant` over fully expanded elements.
-    fn array_const(&mut self, t: LTy, elt: LTy, elems: Vec<Value>) -> R<Value> {
+    fn array_const(&mut self, t: LTy, elt: LTy, elems: &[Value]) -> R<Value> {
         let bound = elems.len();
         let mut nz = bound;
         while nz > 0 && self.is_null_value(elems[nz - 1]) {
@@ -351,9 +351,9 @@ impl Cg<'_> {
             return self.m.const_anon_struct(&out, true).map_err(|e| ir_err(&e));
         }
         if common {
-            return self.m.const_array(elt, &elems).map_err(|e| ir_err(&e));
+            return self.m.const_array(elt, elems).map_err(|e| ir_err(&e));
         }
-        self.m.const_anon_struct(&elems, true).map_err(|e| ir_err(&e))
+        self.m.const_anon_struct(elems, true).map_err(|e| ir_err(&e))
     }
 
     /// `Constant::isNullValue`.
@@ -375,7 +375,7 @@ impl Cg<'_> {
                 ExprKind::ParenExpr | ExprKind::ConstantExpr => e = self.ast.exprs.operand(e),
                 ExprKind::ExprWithCleanups => e = ExprId::new(n.a()),
                 ExprKind::ImplicitCastExpr if self.ast.exprs.cast_kind(e) == CastKind::NoOp => {
-                    e = self.ast.exprs.operand(e)
+                    e = self.ast.exprs.operand(e);
                 }
                 _ => return e,
             }

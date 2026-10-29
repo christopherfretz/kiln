@@ -4,6 +4,9 @@
 //! on the supported targets. `kiln_codegen` materialises these shapes as
 //! `kiln_llvm` types; `call` classifies arguments against them.
 //! See spec/codegen.md §2.
+// Mirrors clang's classification functions 1:1 (long functions, arms kept
+// separate as in clang, short type/offset names).
+#![allow(clippy::too_many_lines, clippy::many_single_char_names, clippy::match_same_arms)]
 
 use kiln_ast::Ast;
 use kiln_ast::decl::TagKind;
@@ -346,13 +349,11 @@ impl<'a> IrTypes<'a> {
         if members.last().is_some_and(|m| m.offset % alignment != 0) {
             packed = true;
         }
-        if nv_size % nv_alignment != 0 {
+        if !nv_size.is_multiple_of(nv_alignment) {
             packed = true;
         }
-        if !packed {
-            if let Some(last) = members.last_mut() {
-                last.data = Some(IrType::Int(u32::try_from(alignment * 8).unwrap_or(8)));
-            }
+        if !packed && let Some(last) = members.last_mut() {
+            last.data = Some(IrType::Int(u32::try_from(alignment * 8).unwrap_or(8)));
         }
         // insertPadding.
         let mut padding = Vec::new();
@@ -512,7 +513,7 @@ impl<'a> IrTypes<'a> {
         if layout_size > ss {
             out.members.push(IrType::bytes(layout_size - ss));
         }
-        if layout.data_size % sa != 0 {
+        if !layout.data_size.is_multiple_of(sa) {
             out.packed = true;
         }
     }
@@ -548,7 +549,7 @@ impl<'a> IrTypes<'a> {
                     best_end = begin;
                     begin_offset = bit_offset / 8;
                     bit_size_since_begin = 0;
-                } else if bit_offset % 8 != 0 {
+                } else if !bit_offset.is_multiple_of(8) {
                     // Continuing a run.
                 } else {
                     if fields[field].bit_width == Some(0) {
@@ -565,7 +566,7 @@ impl<'a> IrTypes<'a> {
             }
             let mut install_best = false;
             if at_aligned_boundary {
-                let access_size = (bit_size_since_begin + 7) / 8;
+                let access_size = bit_size_since_begin.div_ceil(8);
                 if best_end == begin {
                     best_end = field;
                     best_end_offset = begin_offset + access_size;
@@ -579,20 +580,19 @@ impl<'a> IrTypes<'a> {
                 if !install_best {
                     let ty = IrType::int_n(access_size * 8);
                     let mut limit = None;
-                    for p in field..end {
-                        if !self.is_empty_field(&fields[p]) {
+                    for (p, f) in fields.iter().enumerate().take(end).skip(field) {
+                        if !self.is_empty_field(f) {
                             limit = Some(layout.fields[p] / 8);
                             break;
                         }
                     }
-                    let limit = match limit {
-                        Some(l) => l,
-                        None => {
-                            if scissor == 0 {
-                                scissor = layout.nv_size;
-                            }
-                            scissor
+                    let limit = if let Some(l) = limit {
+                        l
+                    } else {
+                        if scissor == 0 {
+                            scissor = layout.nv_size;
                         }
+                        scissor
                     };
                     let (type_size, _) = self.size_align(&ty);
                     if begin_offset + type_size <= limit {

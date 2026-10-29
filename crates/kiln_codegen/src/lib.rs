@@ -4,6 +4,17 @@
 //! that kiln's output can be diffed against the clang oracle; see
 //! `spec/codegen.md` for the contract this crate implements.
 #![forbid(unsafe_code)]
+// The emitters mirror clang's CodeGen function by function: long
+// per-construct dispatch functions, case arms kept 1:1 with clang's even
+// when two bodies coincide, and the short operand names (`l`, `r`, `q`,
+// `t`, `v`) of IR builder code. Emitters return `R<_>` uniformly even
+// where the M2 subset cannot fail yet.
+#![allow(
+    clippy::too_many_lines,
+    clippy::many_single_char_names,
+    clippy::match_same_arms,
+    clippy::unnecessary_wraps
+)]
 
 mod consts;
 mod expr;

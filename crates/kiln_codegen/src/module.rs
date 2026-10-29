@@ -94,7 +94,7 @@ impl<'a> Cg<'a> {
     ) -> Self {
         let spec = match target.triple.arch {
             Arch::AArch64 => kiln_llvm::AARCH64_LINUX_GNU,
-            _ => kiln_llvm::X86_64_LINUX_GNU,
+            Arch::X86_64 => kiln_llvm::X86_64_LINUX_GNU,
         };
         Cg {
             ast,
@@ -143,7 +143,7 @@ impl<'a> Cg<'a> {
             }
             match n.kind() {
                 DeclKind::Namespace | DeclKind::LinkageSpec | DeclKind::Export => {
-                    self.emit_members(d)?
+                    self.emit_members(d)?;
                 }
                 DeclKind::Function => self.emit_global_fn(d)?,
                 DeclKind::Var => self.emit_global_var(d)?,
@@ -205,22 +205,19 @@ impl<'a> Cg<'a> {
         let cur = std::mem::take(&mut self.to_emit);
         for d in cur {
             let first = self.ast.first(d);
-            match self.ast.decls.get(d).kind() {
-                DeclKind::Function => {
-                    let still_decl =
-                        self.fns.get(&first).is_none_or(|&f| self.m.func(f).is_declaration());
-                    if still_decl {
-                        self.emit_fn_def(d)?;
-                    }
+            if self.ast.decls.get(d).kind() == DeclKind::Function {
+                let still_decl =
+                    self.fns.get(&first).is_none_or(|&f| self.m.func(f).is_declaration());
+                if still_decl {
+                    self.emit_fn_def(d)?;
                 }
-                _ => {
-                    let still_decl = self
-                        .gvars
-                        .get(&first)
-                        .is_none_or(|&g| self.m.global(g).initializer().is_none());
-                    if still_decl {
-                        self.emit_var_def(d)?;
-                    }
+            } else {
+                let still_decl = self
+                    .gvars
+                    .get(&first)
+                    .is_none_or(|&g| self.m.global(g).initializer().is_none());
+                if still_decl {
+                    self.emit_var_def(d)?;
                 }
             }
             if !self.to_emit.is_empty() {
@@ -462,7 +459,7 @@ impl<'a> Cg<'a> {
             }
             match &a.kind {
                 ArgKind::Extend { signed, .. } => {
-                    s.push(Attr::Flag(if *signed { AttrKind::SExt } else { AttrKind::ZExt }))
+                    s.push(Attr::Flag(if *signed { AttrKind::SExt } else { AttrKind::ZExt }));
                 }
                 ArgKind::Direct { coerce: IrType::Struct(fs, _), flatten: true, .. } => {
                     for _ in 1..fs.len() {
@@ -648,24 +645,21 @@ impl<'a> Cg<'a> {
             },
         };
         let ity = self.m.const_type(init);
-        let g = match self.gvars.get(&first) {
-            Some(&g) => {
-                if self.m.global(g).value_type() != ity {
-                    return err(loc, "global redeclared with a different IR type");
-                }
-                g
+        let g = if let Some(&g) = self.gvars.get(&first) {
+            if self.m.global(g).value_type() != ity {
+                return err(loc, "global redeclared with a different IR type");
             }
-            None => {
-                let name = mangle::mangle_decl(ast, first);
-                let g = self.m.add_global(&name, ity);
-                self.gvars.insert(first, g);
-                g
-            }
+            g
+        } else {
+            let name = mangle::mangle_decl(ast, first);
+            let g = self.m.add_global(&name, ity);
+            self.gvars.insert(first, g);
+            g
         };
         let internal = mangle::has_internal_linkage(ast, d);
         let inline = self.var_is_inline(d);
         let quals = ast.types.effective_quals(ty);
-        let constant = quals.is_const() && !self.has_mutable(ty);
+        let constant = quals.is_const() && !has_mutable(ty);
         let align = self.global_align(ty);
         let name = self.m.global(g).name().to_owned();
         let comdat =
@@ -688,10 +682,6 @@ impl<'a> Cg<'a> {
             gv.dso_local = true;
         }
         Ok(())
-    }
-
-    fn has_mutable(&self, _ty: QualType) -> bool {
-        false
     }
 
     /// A function-local `static` variable (clang `EmitStaticVarDecl`).
@@ -752,7 +742,7 @@ impl<'a> Cg<'a> {
         Ok(g)
     }
 
-    /// A private unnamed_addr constant named `base` (uniqued `.N`).
+    /// A private `unnamed_addr` constant named `base` (uniqued `.N`).
     pub fn private_const(&mut self, base: &str, init: Value, align: u64) -> GlobalId {
         let n = self.private_names.entry(base.to_owned()).or_insert(0);
         let name = if *n == 0 { base.to_owned() } else { format!("{base}.{n}") };
@@ -814,6 +804,12 @@ impl<'a> Cg<'a> {
         );
         m.add_ident(&self.opts.ident);
     }
+}
+
+/// Whether a record type has a `mutable` member (never in M2, which has no
+/// `mutable`), which keeps a const global out of read-only memory.
+fn has_mutable(_ty: QualType) -> bool {
+    false
 }
 
 /// `Value` of a global.

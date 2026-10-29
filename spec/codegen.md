@@ -76,7 +76,8 @@ panic and never silently wrong IR.
     call initializes an aggregate, otherwise into a temporary.
 - Names (via `kiln_abi::mangle`): namespace-scope variables with internal
   linkage are mangled (`_ZL1h`); static locals use 0-based
-  discriminators per (function, name): none, then `_0`, `__1_`, ...
+  discriminators per (function, name): none, then `_0` ... `_9`, then
+  `__10_`, `__11_`, ...
 - Local initialization (`EmitAutoVarInit`):
   - a constant aggregate goes through `emitStoresForConstant`. That means
     a single store, memset-0 plus a few stores, a bytewise memset, or a
@@ -121,7 +122,7 @@ panic and never silently wrong IR.
 - Every job calls `ConstexprOpts::write_report`.
 
 ## 6. Validation
-- **Unit corpus** (`crates/kiln_codegen/tests/lower.rs`, WP-052): 73
+- **Unit corpus** (`crates/kiln_codegen/tests/lower.rs`, WP-052): 74
   inline C++ programs, lowered for `aarch64-unknown-linux-gnu` straight
   from `parse_tu` (no driver). Every case must pass
   `opt-19 -S -passes=verify`. `Exact` cases must also equal
@@ -160,7 +161,7 @@ Written as a resume point for a fresh agent. Branch `wp/052`, worktree
 `kiln/.worktrees/wp-052`.
 
 **Done (WP-052 part 1):** `fir.rs`, `module.rs`, `func.rs`, `consts.rs`,
-`fold.rs`, `expr.rs` (§3) and `stmt.rs` (§4). The unit corpus is 72/73
+`fold.rs`, `expr.rs` (§3) and `stmt.rs` (§4). The unit corpus is 73/74
 exact against clang on aarch64; the one deviation is listed above.
 Additive `kiln_abi` fixes came with it: internal-linkage variable mangling,
 static-local discriminators, and indirect returns with `byval` (clang's
