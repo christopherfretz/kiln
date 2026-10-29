@@ -1,0 +1,29 @@
+TranslationUnitDecl
+|-ClassTemplateDecl Trip
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| |-TemplateTypeParmDecl referenced class depth 0 index 1 U
+| | `-TemplateArgument type 'T *'
+| |-NonTypeTemplateParmDecl referenced 'int' depth 0 index 2 N
+| | `-TemplateArgument expr
+| |   `-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof 'T'
+| |-CXXRecordDecl struct Trip definition
+| | |-FieldDecl p 'U'
+| | `-FieldDecl pad 'char[N]'
+| |-ClassTemplateSpecializationDecl struct Trip definition implicit_instantiation
+| | |-TemplateArgument type 'int'
+| | |-TemplateArgument type 'int *'
+| | |-TemplateArgument value 'int' 4
+| | |-FieldDecl p 'int *'
+| | `-FieldDecl pad 'char[4]'
+| `-ClassTemplateSpecializationDecl struct Trip definition implicit_instantiation
+|   |-TemplateArgument type 'char'
+|   |-TemplateArgument type 'long'
+|   |-TemplateArgument value 'int' 1
+|   |-FieldDecl p 'long'
+|   `-FieldDecl pad 'char[1]'
+|-VarDecl a 'int' cinit
+| `-ImplicitCastExpr 'int' <IntegralCast>
+|   `-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof 'Trip<int>'
+`-VarDecl b 'int' cinit
+  `-ImplicitCastExpr 'int' <IntegralCast>
+    `-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof 'Trip<char, long>'

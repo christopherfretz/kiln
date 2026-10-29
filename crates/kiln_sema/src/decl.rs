@@ -2727,6 +2727,25 @@ impl Sema<'_, '_> {
             let msg = self.note_prev(msg, p, true);
             self.emit(msg);
         }
+        // An enumerator of a dependent enumeration (a member of a template)
+        // keeps its initializer as written and has no value until
+        // instantiated (clang's `CheckEnumConstant`).
+        let dependent = self.ast.types.is_dependent(self.tag_type(e));
+        if dependent {
+            let h = DeclHead::new(e, DeclName::ident(name), loc);
+            let d = self.builder().enumerator(h, init);
+            let access = self.ast.decls.get(e).misc().access();
+            if access != kiln_ast::decl::Access::None {
+                self.ast.decls.set_access(d, access);
+            }
+            if !attrs.is_empty() {
+                let _ = self.builder().attach_attrs(d, attrs);
+            }
+            if !scoped && self.in_local_scope() {
+                self.push_local(name, d);
+            }
+            return d;
+        }
         let (value, init_e) = match init {
             Some(ie) => self.enumerator_init(&build, ie),
             None => (None, None),
@@ -2859,8 +2878,13 @@ impl Sema<'_, '_> {
             .lexical_ctx(e)
             .or_else(|| self.ast.decls.get(e).ctx())
             .unwrap_or(self.ast.tu);
+        let dependent = self.ast.types.is_dependent(self.tag_type(e));
         let computed = if build.fixed.is_some() {
             None
+        } else if dependent {
+            // clang's `ActOnEnumBody` stops here for a dependent
+            // enumeration; `int` stands in until it is instantiated.
+            Some((QualType::INT, QualType::INT))
         } else {
             let (best, promotion) = self.best_enum_types(&build.enumerators);
             // [dcl.enum]/5 (clang's `ActOnEnumBody`): each initializer is

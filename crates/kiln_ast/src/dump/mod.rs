@@ -44,7 +44,7 @@ use crate::expr::{
 use crate::ids::{AttrId, DeclId, ExprId, ListId, QualType, RawId, StmtId, StringLitId, TypeId};
 use crate::stmt::{IfKind, StmtKind};
 use crate::templates::{Requirement, SpecKind};
-use crate::types::{ArgView, ExcSpec, PrintOptions, TemplateArg, write_nns, write_type};
+use crate::types::{ArgView, ExcSpec, PrintOptions, TemplateArg, TypeKind, write_nns, write_type};
 
 /// Selects the declarations [`dump`] prints as separate trees (clang's
 /// `-ast-dump-filter`, spec/ast-dump.md §1). A declaration matches when
@@ -746,7 +746,15 @@ impl<'a, W: io::Write> Dumper<'a, W> {
         let types = &self.ast.types;
         self.line.push('\'');
         let s1 = self.line.len();
-        write_type(types, &self.names, q, PrintOptions::SUGARED, &mut self.line);
+        // A bare enumeration type is what an enumerator has (kiln wraps
+        // written names in no sugar, spec/types.md §15 R4): clang prints
+        // it with its scope, `'S::K'`.
+        let opts = if types.kind(q.ty()) == TypeKind::Enum {
+            PrintOptions { full_scope: true, ..PrintOptions::SUGARED }
+        } else {
+            PrintOptions::SUGARED
+        };
+        write_type(types, &self.names, q, opts, &mut self.line);
         let e1 = self.line.len();
         self.line.push_str("':'");
         let s2 = self.line.len();

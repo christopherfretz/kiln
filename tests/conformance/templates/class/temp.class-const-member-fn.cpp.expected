@@ -1,0 +1,42 @@
+TranslationUnitDecl
+|-ClassTemplateDecl Counter
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| |-CXXRecordDecl struct Counter definition
+| | |-FieldDecl referenced n 'T'
+| | |-CXXMethodDecl get 'T () const' implicit-inline
+| | | `-CompoundStmt
+| | |   `-ReturnStmt
+| | |     `-MemberExpr 'const T' lvalue ->n
+| | |       `-CXXThisExpr 'const Counter<T> *' this
+| | `-CXXMethodDecl bump 'void ()' implicit-inline
+| |   `-CompoundStmt
+| |     `-UnaryOperator '<dependent type>' lvalue prefix '++' cannot overflow
+| |       `-MemberExpr 'T' lvalue ->n
+| |         `-CXXThisExpr 'Counter<T> *' implicit this
+| `-ClassTemplateSpecializationDecl struct Counter definition implicit_instantiation
+|   |-TemplateArgument type 'long'
+|   |-FieldDecl referenced n 'long'
+|   |-CXXMethodDecl used get 'long () const' implicit-inline
+|   | `-CompoundStmt
+|   |   `-ReturnStmt
+|   |     `-ImplicitCastExpr 'long' <LValueToRValue>
+|   |       `-MemberExpr 'const long' lvalue ->n
+|   |         `-CXXThisExpr 'const Counter<long> *' this
+|   `-CXXMethodDecl used bump 'void ()' implicit-inline
+|     `-CompoundStmt
+|       `-UnaryOperator 'long' lvalue prefix '++'
+|         `-MemberExpr 'long' lvalue ->n
+|           `-CXXThisExpr 'Counter<long> *' implicit this
+`-FunctionDecl use 'long (Counter<long> *)'
+  |-ParmVarDecl used c 'Counter<long> *'
+  `-CompoundStmt
+    |-CXXMemberCallExpr 'void'
+    | `-MemberExpr '<bound member function type>' ->bump
+    |   `-ImplicitCastExpr 'Counter<long> *' <LValueToRValue>
+    |     `-DeclRefExpr 'Counter<long> *' lvalue ParmVar 'c' 'Counter<long> *'
+    `-ReturnStmt
+      `-CXXMemberCallExpr 'long'
+        `-MemberExpr '<bound member function type>' ->get
+          `-ImplicitCastExpr 'const Counter<long> *' <NoOp>
+            `-ImplicitCastExpr 'Counter<long> *' <LValueToRValue>
+              `-DeclRefExpr 'Counter<long> *' lvalue ParmVar 'c' 'Counter<long> *'

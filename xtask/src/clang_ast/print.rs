@@ -610,21 +610,26 @@ impl<'a> Printer<'a, '_> {
                         }
                         continue;
                     }
-                    let value = match kids(c).next() {
-                        Some(init) => enumerator_value(init)?,
-                        None => next,
-                    };
-                    next = value + 1;
                     table::check_keys(
                         "EnumConstantDecl",
                         c.as_obj().unwrap_or(&[]).iter().map(|(key, _)| key.as_str()),
                     )?;
-                    let line = format!(
-                        "{} {} {} value={value}",
+                    let mut line = format!(
+                        "{} {} {}",
                         decl_head(c, "EnumConstantDecl"),
                         name(c).unwrap_or(""),
                         type_pair(c.get("type"), "EnumConstantDecl")?
                     );
+                    // An enumeration in a template is dependent: its
+                    // enumerators have no value until instantiated.
+                    if !self.ix.templated.contains(id(c)) {
+                        let value = match kids(c).next() {
+                            Some(init) => enumerator_value(init)?,
+                            None => next,
+                        };
+                        next = value + 1;
+                        let _ = write!(line, " value={value}");
+                    }
                     kids_out.push(Tree { line, kids: self.kid_trees(c)? });
                 }
             }

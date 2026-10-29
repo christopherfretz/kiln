@@ -1,0 +1,13 @@
+TranslationUnitDecl
+|-ClassTemplateDecl Buf
+| |-NonTypeTemplateParmDecl referenced 'unsigned int' depth 0 index 0 N
+| |-CXXRecordDecl struct Buf definition
+| | |-FieldDecl bytes 'char[N]'
+| | `-FieldDecl words 'int[N / 2 + 1]'
+| `-ClassTemplateSpecializationDecl struct Buf definition implicit_instantiation
+|   |-TemplateArgument value 'unsigned int' 8
+|   |-FieldDecl bytes 'char[8]'
+|   `-FieldDecl words 'int[5]'
+`-VarDecl sz 'int' cinit
+  `-ImplicitCastExpr 'int' <IntegralCast>
+    `-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof 'Buf<8>'
