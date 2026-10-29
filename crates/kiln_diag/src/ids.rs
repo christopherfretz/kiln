@@ -1115,6 +1115,12 @@ diag_ids! {
     note_ovl_candidate_fn_param = Note (4) "candidate {0} has type mismatch at {1} parameter (expected {2} but has {3})";
     note_ovl_candidate_fn_return = Note (3) "candidate {0} has different return type ({1} expected but has {2})";
     note_ovl_candidate_fn_noexcept = Note (1) "candidate {0} has different exception specification";
+    sema_ref_init_ambiguous = Error (2) "reference initialization of type {0} with initializer of type {1} is ambiguous";
+    sema_ovl_no_conversion_in_cast = Error (3) "no matching conversion for {0:const_cast|static_cast|reinterpret_cast|dynamic_cast|C-style cast|functional-style cast} from {1} to {2}";
+    sema_ovl_ambiguous_conversion_in_cast = Error (3) "ambiguous conversion for {0:const_cast|static_cast|reinterpret_cast|dynamic_cast|C-style cast|functional-style cast} from {1} to {2}";
+    sema_nonviable_condition_no_candidates = Error (2) "cannot convert {0} to {1} without a conversion operator";
+    sema_bad_static_cast_pointer_nonpointer = Error (2) "cannot cast from type {0} to pointer type {1}";
+    sema_bad_static_cast_member_pointer_nonmp = Error (2) "cannot cast from type {0} to member pointer type {1}";
 }
 
 impl DiagId {

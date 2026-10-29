@@ -7,13 +7,14 @@
 //! [`Sema`] so steady-state resolution allocates nothing (§1.4).
 
 pub(crate) mod address;
-pub(crate) mod member;
 pub(crate) mod adl;
 pub(crate) mod best;
 pub(crate) mod call;
 pub(crate) mod diag;
 pub(crate) mod ics;
+pub(crate) mod member;
 pub(crate) mod redecl;
+pub(crate) mod udc;
 
 use std::ops::Range;
 
@@ -298,6 +299,9 @@ pub(crate) struct OverloadScratch {
     /// type [`QualType::OVERLOAD`], kiln's `UnresolvedMemberExpr`) names:
     /// consumed by [`Sema::resolve_member_call`].
     pub members: kiln_source::fx::FxHashMap<kiln_ast::ExprId, OvlMember>,
+    /// How many user-defined conversions are being applied
+    /// ([`Sema::user_convert`]).
+    pub udc_depth: u8,
 }
 
 /// An overloaded member access `b.f` / `b->f` / implicit `this->f`
@@ -354,7 +358,11 @@ impl OverloadScratch {
             + self.pool.iter().map(one).sum::<usize>()
             + self.failed.as_ref().map_or(0, one)
             + self.ule_found.capacity() * size_of::<(kiln_ast::ExprId, UleFound)>()
-            + self.ule_found.values().map(|u| u.found.capacity() * size_of::<DeclId>()).sum::<usize>()
+            + self
+                .ule_found
+                .values()
+                .map(|u| u.found.capacity() * size_of::<DeclId>())
+                .sum::<usize>()
             + self.members.capacity() * size_of::<(kiln_ast::ExprId, OvlMember)>()
             + self
                 .members
@@ -423,7 +431,8 @@ impl Sema<'_, '_> {
     /// ref-qualifier.
     pub(crate) fn method_object_quals(&self, m: DeclId) -> (kiln_ast::types::Quals, RefQual) {
         let ty = self.ast.decls.get(m).ty().unwrap_or(QualType::ERROR);
-        let info = self.ast.types.proto(ty).map(kiln_ast::types::FuncProto::info).unwrap_or_default();
+        let info =
+            self.ast.types.proto(ty).map(kiln_ast::types::FuncProto::info).unwrap_or_default();
         (info.this_quals(), info.ref_qual())
     }
 

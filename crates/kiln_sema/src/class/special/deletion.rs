@@ -6,7 +6,6 @@
 //! explicitly defaulted special member ([dcl.fct.def.default]/2–5; clang
 //! `ShouldDeleteSpecialMember`, `CheckExplicitlyDefaultedSpecialMember`).
 
-
 use kiln_ast::decl::{BaseSpec, DeclFlags, DeclKind, Defaulted, DefinitionBits, FnSpec};
 use kiln_ast::names::{DeclName, OverloadedOperator};
 use kiln_ast::types::{ExcSpec, FuncProto, Quals, TypeView};
@@ -132,15 +131,29 @@ impl Sema<'_, '_> {
             let mut found = std::mem::take(&mut set.found);
             found.clear();
             found.extend(self.ast.constructors(c).iter());
-            self.add_found_candidates(&mut set, &found, CandidateKind::Ctor, IcsOptions::SUPPRESS_UDC, false);
+            self.add_found_candidates(
+                &mut set,
+                &found,
+                CandidateKind::Ctor,
+                IcsOptions::SUPPRESS_UDC,
+                false,
+            );
             set.found = found;
         } else {
             let ty = self.ast.types.qualify(cty, lhs);
             set.object = Some(ArgInfo::of_type(ty, ValueCategory::LValue));
             let mut found = std::mem::take(&mut set.found);
             found.clear();
-            found.extend(self.ast.lookup_local(c, DeclName::operator(OverloadedOperator::Equal)).iter());
-            self.add_found_candidates(&mut set, &found, CandidateKind::Method, IcsOptions::SUPPRESS_UDC, false);
+            found.extend(
+                self.ast.lookup_local(c, DeclName::operator(OverloadedOperator::Equal)).iter(),
+            );
+            self.add_found_candidates(
+                &mut set,
+                &found,
+                CandidateKind::Method,
+                IcsOptions::SUPPRESS_UDC,
+                false,
+            );
             set.found = found;
         }
         let out = self.best_viable(&mut set);

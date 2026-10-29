@@ -5,9 +5,9 @@
 
 use kiln_ast::decl::{DeclKind, FnStorage, PayloadClass};
 use kiln_ast::expr::ExprKind;
+use kiln_ast::ids::RawId;
 use kiln_ast::templates::is_template_kind;
 use kiln_ast::types::ArgView;
-use kiln_ast::ids::RawId;
 use kiln_ast::{ArgListId, DeclId, ExprId, QualType, TemplateParamListId};
 
 use crate::Sema;
@@ -93,7 +93,8 @@ impl Sema<'_, '_> {
         {
             return false;
         }
-        let old_static = self.ast.decls.function(old).is_some_and(|f| f.spec.storage() == FnStorage::Static);
+        let old_static =
+            self.ast.decls.function(old).is_some_and(|f| f.spec.storage() == FnStorage::Static);
         if self.kind_of(old) == DeclKind::CXXMethod
             && !old_static
             && !new.is_static

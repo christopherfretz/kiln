@@ -267,11 +267,19 @@ impl Sema<'_, '_> {
                 return x;
             }
         }
-        match conv::implicit_convert(self, e, ty, ctx) {
+        let class_src = self.ast.types.as_record(ety).is_some()
+            && !self.ast.types.is_reference(ty)
+            && !self.expr_is_type_dependent(e)
+            && !self.ast.types.is_dependent(ty);
+        let r = if class_src {
+            conv::user_conversion(self, e, ty, ctx, at)
+        } else {
+            conv::implicit_convert(self, e, ty, ctx)
+        };
+        match r {
             Ok(x) => x,
             Err(err) => {
-                let d = err.args.into_iter().fold(self.diag(err.id, at), kiln_diag::Diag::arg);
-                self.emit(d);
+                self.emit(err.diag_at(self, at));
                 let loc = self.ast.exprs.get(e).loc();
                 self.recover(ty, &[e], loc)
             }

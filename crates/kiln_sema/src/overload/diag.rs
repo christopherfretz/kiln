@@ -87,7 +87,10 @@ impl Sema<'_, '_> {
                 let have = self.ast.types.effective_quals(b.from);
                 let want = self.ast.types.effective_quals(b.to);
                 let (s, _) = lost_quals(have - want, "or");
-                format!("'this' argument has type {}, but method is not marked {s}", self.ty_arg(b.from))
+                format!(
+                    "'this' argument has type {}, but method is not marked {s}",
+                    self.ty_arg(b.from)
+                )
             }
             BadKind::InitList => {
                 format!("cannot convert initializer list argument to {}", self.ty_arg(b.to))
@@ -256,7 +259,8 @@ impl Sema<'_, '_> {
                     (None, Some(_)) => return Ordering::Less,
                     (None, None) => {}
                 }
-                let bad = |c: &Candidate| matches!(c.failure, CandidateFailure::BadConversion { .. });
+                let bad =
+                    |c: &Candidate| matches!(c.failure, CandidateFailure::BadConversion { .. });
                 match (bad(l), bad(r)) {
                     (true, false) => return Ordering::Less,
                     (false, true) => return Ordering::Greater,

@@ -154,7 +154,9 @@ impl Sema<'_, '_> {
             let set = crate::overload::OvlMember {
                 name,
                 decls: found.decls.to_vec(),
-                found: (0..found.decls.len()).map(|i| found.found.get(i).copied().unwrap_or(found.decls[i])).collect(),
+                found: (0..found.decls.len())
+                    .map(|i| found.found.get(i).copied().unwrap_or(found.decls[i]))
+                    .collect(),
                 naming: found.naming.unwrap_or(def),
                 obj_ty,
                 def,
@@ -313,6 +315,16 @@ impl Sema<'_, '_> {
                 return b;
             }
             let ty = to_ty(self, obj_class);
+            // clang's `ImpCastExprToType` folds a no-op cast into the
+            // one below it (the xvalue of an implicit move).
+            let b = if !arrow
+                && self.ast.exprs.get(b).kind() == ExprKind::ImplicitCastExpr
+                && self.ast.exprs.cast_kind(b) == CastKind::NoOp
+            {
+                self.ast.exprs.operand(b)
+            } else {
+                b
+            };
             return self.builder().cast(
                 ExprKind::ImplicitCastExpr,
                 CastKind::NoOp,

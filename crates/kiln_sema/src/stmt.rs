@@ -216,11 +216,7 @@ impl Sema<'_, '_> {
             Ok(c) => c,
             Err(err) => {
                 let loc = self.ast.exprs.get(e).loc();
-                let mut d = self.diag(err.id, loc);
-                for a in err.args {
-                    d = d.arg(a);
-                }
-                self.emit(d);
+                self.emit(err.diag_at(self, loc));
                 e
             }
         };

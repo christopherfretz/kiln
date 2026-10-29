@@ -205,7 +205,12 @@ impl Sema<'_, '_> {
     /// including hidden friends of the associated classes, that `out`
     /// does not already hold (compared by first declaration). Appends
     /// `(decl, found)` pairs to `out`.
-    pub(crate) fn adl_lookup(&self, name: Symbol, args: &[ExprId], out: &mut Vec<(DeclId, DeclId)>) {
+    pub(crate) fn adl_lookup(
+        &self,
+        name: Symbol,
+        args: &[ExprId],
+        out: &mut Vec<(DeclId, DeclId)>,
+    ) {
         let mut assoc = AssocSet::default();
         for &a in args {
             self.assoc_arg(a, &mut assoc);

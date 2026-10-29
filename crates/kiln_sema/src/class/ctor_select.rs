@@ -71,8 +71,47 @@ impl Sema<'_, '_> {
             set.args.push(info);
         }
         self.add_ctor_candidates(&mut set, c, opts, false);
+        if let [arg] = args {
+            self.add_elision_candidates(&mut set, c, *arg, style);
+        }
         let out = self.best_viable(&mut set);
         self.selected_of(set, out)
+    }
+
+    /// clang's workaround for C++17 guaranteed copy elision (CWG2327):
+    /// when class `c` is initialized by constructor from one expression
+    /// of class type, that class's conversion functions yielding the
+    /// prvalue `cv T` are candidates too (explicit ones only in a
+    /// direct-initialization), and one that wins initializes the object
+    /// directly.
+    fn add_elision_candidates(
+        &mut self,
+        set: &mut OverloadCandidateSet,
+        c: DeclId,
+        arg: ExprId,
+        style: InitStyle,
+    ) {
+        let from = self.ety(arg);
+        if self.ast.types.as_record(from).is_none()
+            || !self.require_complete_silent(from, Loc::INVALID)
+        {
+            return;
+        }
+        let to = self.ast.types.canonical(self.class_type(c));
+        let direct = matches!(style, InitStyle::Direct | InitStyle::DirectList);
+        let opts = if direct { IcsOptions::ALLOW_EXPLICIT } else { IcsOptions::NONE };
+        for (found, f) in self.conversion_functions(from) {
+            if self.kind_of(f) != DeclKind::CXXConversion
+                || (!direct && self.fn_spec(f).is_explicit())
+            {
+                continue;
+            }
+            let ret = self.conversion_result_type(f);
+            if self.ast.types.is_reference(ret) || !self.ast.types.same_unqualified(ret, to) {
+                continue;
+            }
+            self.add_conversion_candidate(set, f, found, to, opts);
+        }
     }
 
     /// Maps the outcome of a constructor or special-member set to

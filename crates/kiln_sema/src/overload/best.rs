@@ -78,10 +78,12 @@ impl Sema<'_, '_> {
         cand.ics = start..start;
         if nargs > nparams && !variadic {
             cand.viable = false;
-            cand.failure = CandidateFailure::TooManyArgs { max: u16::try_from(nparams).unwrap_or(u16::MAX) };
+            cand.failure =
+                CandidateFailure::TooManyArgs { max: u16::try_from(nparams).unwrap_or(u16::MAX) };
         } else if nargs < min {
             cand.viable = false;
-            cand.failure = CandidateFailure::TooFewArgs { min: u16::try_from(min).unwrap_or(u16::MAX) };
+            cand.failure =
+                CandidateFailure::TooFewArgs { min: u16::try_from(min).unwrap_or(u16::MAX) };
         } else if kind == CandidateKind::Ctor
             && set.kind == SetKind::CopyInit
             && self.fn_spec(f).is_explicit()
@@ -117,8 +119,9 @@ impl Sema<'_, '_> {
                     set.ics.push(x);
                     if x.is_bad() {
                         cand.viable = false;
-                        cand.failure =
-                            CandidateFailure::BadConversion { arg: u16::try_from(i).unwrap_or(u16::MAX) };
+                        cand.failure = CandidateFailure::BadConversion {
+                            arg: u16::try_from(i).unwrap_or(u16::MAX),
+                        };
                         break;
                     }
                 }
@@ -151,6 +154,15 @@ impl Sema<'_, '_> {
             return true;
         }
         let (x, y) = (set.cand(c1), set.cand(c2));
+        // clang's CWG2327 workaround: in an initialization by constructor,
+        // a constructor over a conversion function.
+        if matches!(set.kind, SetKind::Normal | SetKind::ListCtor { .. })
+            && set.args.len() == 1
+            && (x.kind == CandidateKind::Ctor) != (y.kind == CandidateKind::Ctor)
+            && (x.kind == CandidateKind::ConvFn || y.kind == CandidateKind::ConvFn)
+        {
+            return x.kind == CandidateKind::Ctor;
+        }
         // /2.2: in a user-defined conversion, the better second standard
         // conversion.
         if let (Some(f1), Some(f2)) = (&x.final_conv, &y.final_conv) {

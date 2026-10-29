@@ -195,8 +195,7 @@ impl Sema<'_, '_> {
 
     /// Emits a conversion error at `loc`.
     pub(crate) fn emit_conv_error(&self, err: ConvError, loc: Loc) {
-        let d = err.args.into_iter().fold(self.diag(err.id, loc), Diag::arg);
-        self.emit(d);
+        self.emit(err.diag_at(self, loc));
     }
 
     /// Interns the integer (or `bool`) constant `v` of type `ty`.
@@ -744,7 +743,8 @@ impl Sema<'_, '_> {
             .filter(|&x| !self.ast.decls.get(x).has(DeclFlags::INVALID))
             .collect();
         if fns && (valid.len() > 1 || self.call_uses_adl(&valid, qualifier.is_none())) {
-            if let Some(e) = self.overload_name_ref(name, &found, &valid, qualifier.is_none(), nns, loc)
+            if let Some(e) =
+                self.overload_name_ref(name, &found, &valid, qualifier.is_none(), nns, loc)
             {
                 if let Some(b) = begin
                     && b != loc
@@ -873,7 +873,11 @@ impl Sema<'_, '_> {
         loc: Loc,
     ) -> Option<ExprId> {
         let instance = |s: &Self, d: DeclId| {
-            let d = if s.kind_of(d) == DeclKind::FunctionTemplate { s.pattern_of(d).unwrap_or(d) } else { d };
+            let d = if s.kind_of(d) == DeclKind::FunctionTemplate {
+                s.pattern_of(d).unwrap_or(d)
+            } else {
+                d
+            };
             s.is_instance_member(d)
         };
         let &first = valid.iter().find(|&&d| instance(self, d))?;
@@ -2510,6 +2514,23 @@ impl Sema<'_, '_> {
                 }
                 match conv::implicit_convert(self, a, to, ConvCtx::Argument) {
                     Ok(x) => conv_args.push(x),
+                    Err(err)
+                        if matches!(
+                            err.id,
+                            DiagId::sema_ovl_ambiguous_conversion
+                                | DiagId::sema_ref_init_ambiguous
+                                | DiagId::sema_conv_deleted_ctor
+                        ) =>
+                    {
+                        // clang reports an ambiguous user-defined conversion
+                        // of the selected function's argument as such.
+                        let mut d = err.diag(self, a);
+                        if let Some(&p) = pdecls.get(i) {
+                            d = d.with_note(self.param_decl_note(p));
+                        }
+                        self.emit(d);
+                        return None;
+                    }
                     Err(err) => {
                         self.bad_argument(named.map(|c| c.decl), callee, a, params[i], i, &err);
                         return None;
@@ -2963,10 +2984,7 @@ impl Sema<'_, '_> {
         }
         // [expr.static.cast]/4: `T(e)`, `(T)e`, `static_cast<T>(e)` for
         // a class `T` direct-initialize a temporary by a constructor.
-        if style.allows_static() && self.ast.types.as_record(ty).is_some() && {
-            let fr = self.ast.types.as_record(self.ety(e));
-            fr.is_none() || !conv::has_conversion_functions(self, self.ety(e))
-        } {
+        if style.allows_static() && self.ast.types.as_record(ty).is_some() {
             let d = self
                 .diag(DiagId::sema_ovl_deleted_conversion_in_cast, loc)
                 .arg(style.select())
@@ -2988,7 +3006,12 @@ impl Sema<'_, '_> {
                     return x;
                 }
                 // A parenthesized aggregate initialization (P0960) is a
-                // no-op cast of the initialized prvalue.
+                // no-op cast of the initialized prvalue, as is the result
+                // of a conversion function (CWG2327).
+                if self.ast.exprs.get(x).kind() == ExprKind::ImplicitCastExpr {
+                    self.mark_explicit(x, e);
+                    return self.explicit_cast(style, CastKind::NoOp, x, ty, loc, rparen);
+                }
                 let kind = if self.ast.exprs.get(x).kind() == ExprKind::CXXParenListInitExpr {
                     CastKind::NoOp
                 } else {
@@ -2998,8 +3021,14 @@ impl Sema<'_, '_> {
                 return self.explicit_cast(style, kind, x, ty, loc, rparen);
             }
         }
-        if self.ast.types.as_record(ty).is_some() || self.ast.types.as_record(self.ety(e)).is_some()
+        if style.allows_static()
+            && self.ast.types.as_record(ty).is_none()
+            && self.ast.types.as_record(self.ety(e)).is_some()
+            && let Some(x) = self.cast_user_conversion(style, e, ty, loc, rparen)
         {
+            return x;
+        }
+        if self.ast.types.as_record(ty).is_some() {
             self.unsupported("conversions of class types", loc);
             return self.recover(ty, &[e], loc);
         }
@@ -3079,6 +3108,78 @@ impl Sema<'_, '_> {
         } else {
             self.builder().cast(style.kind(), ck, sub, to, vk, None, loc, flags)
         }
+    }
+
+    /// [expr.static.cast]/4 from a class to a non-class type `ty`: the
+    /// user-defined conversion of the direct-initialization `ty t(e);`
+    /// (explicit conversion functions are candidates), with clang's
+    /// `tryDiagnoseOverloadedCast` errors. `None` when the cast's other
+    /// readings should be tried (none does yet).
+    #[inline(never)]
+    fn cast_user_conversion(
+        &mut self,
+        style: CastStyle,
+        e: ExprId,
+        ty: QualType,
+        loc: Loc,
+        rparen: Loc,
+    ) -> Option<ExprId> {
+        use crate::overload::{Ics, IcsOptions};
+        let to = conv::strip_cv(self, ty);
+        let from = self.ety(e);
+        let a = self.arg_info(e);
+        let id = match self.try_implicit_conversion(&a, to, IcsOptions::ALLOW_EXPLICIT) {
+            Ics::UserDefined(u) if !u.func.is_some_and(|f| self.ovl_deleted(f)) => {
+                return Some(match self.user_convert(e, to, ConvCtx::Cast, loc) {
+                    Some(Ok(x)) if !self.is_err_expr(x) => {
+                        self.mark_explicit(x, e);
+                        self.explicit_cast(style, CastKind::NoOp, x, to, loc, rparen)
+                    }
+                    Some(Ok(_)) => self.recover(ty, &[e], loc),
+                    Some(Err(err)) => {
+                        self.emit_conv_error(err, loc);
+                        self.recover(ty, &[e], loc)
+                    }
+                    None => {
+                        self.unsupported("this user-defined conversion", loc);
+                        self.recover(ty, &[e], loc)
+                    }
+                });
+            }
+            Ics::UserDefined(_) => DiagId::sema_ovl_deleted_conversion_in_cast,
+            Ics::Ambiguous { .. } => DiagId::sema_ovl_ambiguous_conversion_in_cast,
+            // clang's `TryStaticPointerDowncast` / `TryStaticMemberPointerUpcast`
+            // diagnose a class operand of a cast to a pointer first.
+            _ if self.ast.types.is_pointer(to) || self.is_member_pointer(to) => {
+                let id = if self.ast.types.is_pointer(to) {
+                    DiagId::sema_bad_static_cast_pointer_nonpointer
+                } else {
+                    DiagId::sema_bad_static_cast_member_pointer_nonmp
+                };
+                let msg = self.diag(id, loc).arg(self.ty_arg(from)).arg(self.ty_arg(ty));
+                self.emit(msg);
+                return Some(self.recover(ty, &[e], loc));
+            }
+            _ if conv::has_conversion_functions(self, from) => {
+                DiagId::sema_ovl_no_conversion_in_cast
+            }
+            _ => {
+                let msg = self
+                    .diag(DiagId::sema_nonviable_condition_no_candidates, loc)
+                    .arg(self.ty_arg(from))
+                    .arg(self.ty_arg(ty));
+                self.emit(msg);
+                return Some(self.recover(ty, &[e], loc));
+            }
+        };
+        let mut msg =
+            self.diag(id, loc).arg(style.select()).arg(self.ty_arg(from)).arg(self.ty_arg(ty));
+        let notes = self.udc_cast_notes(&a, to, id != DiagId::sema_ovl_no_conversion_in_cast);
+        for n in notes {
+            msg = msg.with_note(n);
+        }
+        self.emit(msg);
+        Some(self.recover(ty, &[e], loc))
     }
 
     fn bad_cast(&mut self, style: CastStyle, e: ExprId, ty: QualType, loc: Loc) -> ExprId {

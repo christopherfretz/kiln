@@ -291,7 +291,9 @@ impl Sema<'_, '_> {
         let t = &self.ast.types;
         match (t.as_record(t2), t.as_record(t1)) {
             (Some(d), Some(b)) if same_class(self, d, b) => (true, false),
-            (Some(d), Some(b)) if complete_class(self, d).is_some() && is_derived_from(self, d, b) => {
+            (Some(d), Some(b))
+                if complete_class(self, d).is_some() && is_derived_from(self, d, b) =>
+            {
                 (true, true)
             }
             _ => (false, false),
@@ -317,7 +319,8 @@ impl Sema<'_, '_> {
         let (related, derived) = self.ref_related(u1, u2);
         let compatible = related && q1.contains(q2);
         let lv = a.vk == ValueCategory::LValue;
-        let base = if lref { RefBinding::IS_REF.with(RefBinding::LVALUE_REF) } else { RefBinding::IS_REF };
+        let base =
+            if lref { RefBinding::IS_REF.with(RefBinding::LVALUE_REF) } else { RefBinding::IS_REF };
         let direct = |rb: RefBinding| {
             let mut s = if derived {
                 derived_to_base(u2, u1, rb)
@@ -356,7 +359,9 @@ impl Sema<'_, '_> {
         // /5.3.1: a reference-compatible xvalue, class or array prvalue,
         // or function lvalue.
         if !lv && compatible && (a.vk == ValueCategory::XValue || class_or_array) {
-            return Ics::Standard(direct(base.with(RefBinding::DIRECT).with(RefBinding::BINDS_RVALUE)));
+            return Ics::Standard(direct(
+                base.with(RefBinding::DIRECT).with(RefBinding::BINDS_RVALUE),
+            ));
         }
         // /5.3.2: an rvalue result of a conversion function.
         if !related && class_src && !suppress {
@@ -387,6 +392,19 @@ impl Sema<'_, '_> {
                 s.rb = temp_rb;
                 s.to_types[2] = t1;
                 Ics::Standard(s)
+            }
+            // [over.ics.ref]/3: an rvalue reference cannot bind to the
+            // lvalue a conversion function returns (clang
+            // `TryReferenceInit`).
+            Ics::UserDefined(u)
+                if !lref
+                    && u.via == UdcVia::ConvFn
+                    && u.func.is_some_and(|f| {
+                        let r = self.conversion_result_type(f);
+                        matches!(self.ast.types.canonical_view(r), TypeView::LValueRef(_))
+                    }) =>
+            {
+                Ics::bad(BadKind::NoConversion, a.ty, to)
             }
             Ics::UserDefined(mut u) => {
                 u.after.rb = temp_rb;
@@ -565,7 +583,13 @@ impl Sema<'_, '_> {
 
     /// The worst conversion of the elements of `l` to `elem`
     /// ([over.ics.list]/5-6).
-    fn worst_element(&mut self, l: &InitList, elem: QualType, to: QualType, opts: IcsOptions) -> Ics {
+    fn worst_element(
+        &mut self,
+        l: &InitList,
+        elem: QualType,
+        to: QualType,
+        opts: IcsOptions,
+    ) -> Ics {
         let mut worst = Ics::Standard(StandardConversion::identity(to, to, RefBinding::NONE));
         for item in &l.items {
             if !item.designator.is_empty() {
@@ -617,14 +641,23 @@ impl Sema<'_, '_> {
     /// [over.match.list] phase 2 as an ICS: the constructors of `c` with
     /// the elements of `l` as arguments (phase 1, initializer-list
     /// constructors, first).
-    fn list_ctor_conversion(&mut self, l: &InitList, c: DeclId, to: QualType, opts: IcsOptions) -> Ics {
+    fn list_ctor_conversion(
+        &mut self,
+        l: &InitList,
+        c: DeclId,
+        to: QualType,
+        opts: IcsOptions,
+    ) -> Ics {
         let mut set = self.begin_set(SetKind::ListCtor { phase: 1 }, Loc::INVALID);
         // Phase 1: the list as the only argument of an initializer-list
         // constructor.
         if !l.items.is_empty() || !self.has_default_ctor_cheap(c) {
             let idx = u32::try_from(self.ovl.lists.len()).unwrap_or(u32::MAX);
             self.ovl.lists.push(l.clone());
-            set.args.push(ArgInfo { list: Some(idx), ..ArgInfo::of_type(QualType::VOID, ValueCategory::PRValue) });
+            set.args.push(ArgInfo {
+                list: Some(idx),
+                ..ArgInfo::of_type(QualType::VOID, ValueCategory::PRValue)
+            });
             self.add_ctor_candidates(&mut set, c, IcsOptions::NONE, true);
             self.ovl.lists.pop();
             if set.viable().next().is_some() {
@@ -669,9 +702,9 @@ impl Sema<'_, '_> {
         let c = self.class_def(c);
         self.ensure_implicit(c, crate::class::SpecialKind::DefaultCtor);
         let ctors: Vec<DeclId> = self.ast.constructors(c).iter().collect();
-        ctors.into_iter().any(|f| {
-            self.kind_of(f) == DeclKind::CXXConstructor && self.fn_min_args(f) == 0
-        })
+        ctors
+            .into_iter()
+            .any(|f| self.kind_of(f) == DeclKind::CXXConstructor && self.fn_min_args(f) == 0)
     }
 
     /// Adds the constructors of class `c` to `set` (the set's arguments
@@ -709,7 +742,11 @@ impl Sema<'_, '_> {
         first_opts: IcsOptions,
         list_only: bool,
     ) {
-        let want = if kind == CandidateKind::Ctor { DeclKind::CXXConstructor } else { DeclKind::CXXMethod };
+        let want = if kind == CandidateKind::Ctor {
+            DeclKind::CXXConstructor
+        } else {
+            DeclKind::CXXMethod
+        };
         let mut seen: Vec<DeclId> = Vec::with_capacity(found.len());
         for &f in found {
             let k = self.kind_of(f);
@@ -751,7 +788,13 @@ impl Sema<'_, '_> {
     /// A user-defined conversion of `a` to `to` ([over.match.copy],
     /// [over.match.conv]): `kind` is `CopyInit` for a class target,
     /// `ConvToNonClass` otherwise.
-    fn user_conversion(&mut self, a: &ArgInfo, to: QualType, kind: SetKind, opts: IcsOptions) -> Ics {
+    fn user_conversion(
+        &mut self,
+        a: &ArgInfo,
+        to: QualType,
+        kind: SetKind,
+        opts: IcsOptions,
+    ) -> Ics {
         let mut set = self.begin_set(kind, Loc::INVALID);
         set.target = to;
         self.build_conversion_set(&mut set, a, to, opts);
@@ -777,10 +820,32 @@ impl Sema<'_, '_> {
         {
             let first = opts.with(IcsOptions::SUPPRESS_UDC);
             let n = set.cands.len();
-            self.add_ctor_candidates(set, t, first, false);
-            // [over.match.copy]/1.1: converting constructors only.
+            // [over.match.copy]/1.1: converting constructors only (clang
+            // `isConvertingConstructor`; an explicit one is noted).
+            let c = self.class_def(t);
+            self.ensure_implicit(c, crate::class::SpecialKind::DefaultCtor);
+            self.ensure_implicit(c, crate::class::SpecialKind::CopyCtor);
+            self.ensure_implicit(c, crate::class::SpecialKind::MoveCtor);
+            let mut found = std::mem::take(&mut set.found);
+            found.clear();
+            found.extend(self.ast.constructors(c).iter());
+            if a.list.is_none() {
+                let mut params = Vec::new();
+                found.retain(|&f| {
+                    if self.kind_of(f) != DeclKind::CXXConstructor {
+                        return true;
+                    }
+                    params.clear();
+                    let variadic = self.fn_param_types(f, &mut params);
+                    if params.is_empty() { variadic } else { self.fn_min_args(f) <= 1 }
+                });
+            }
+            self.add_found_candidates(set, &found, CandidateKind::Ctor, first, false);
+            set.found = found;
             for c in &mut set.cands[n..] {
-                if self.fn_spec(c.func()).is_explicit() && !opts.contains(IcsOptions::ALLOW_EXPLICIT) {
+                if self.fn_spec(c.func()).is_explicit()
+                    && !opts.contains(IcsOptions::ALLOW_EXPLICIT)
+                {
                     c.viable = false;
                     c.failure = CandidateFailure::Explicit;
                 }
@@ -824,7 +889,9 @@ impl Sema<'_, '_> {
             _ => StandardConversion::identity(from, from, RefBinding::NONE),
         };
         if cand.kind == CandidateKind::ConvFn {
-            let after = cand.final_conv.unwrap_or_else(|| StandardConversion::identity(to, to, RefBinding::NONE));
+            let after = cand
+                .final_conv
+                .unwrap_or_else(|| StandardConversion::identity(to, to, RefBinding::NONE));
             return Ics::UserDefined(UserConv {
                 before,
                 func: Some(f),
@@ -913,14 +980,29 @@ impl Sema<'_, '_> {
             set.cands.push(cand);
             return;
         }
-        if self.fn_spec(f).is_explicit() && !opts.contains(IcsOptions::ALLOW_EXPLICIT) {
-            cand.viable = false;
-            cand.failure = CandidateFailure::Explicit;
-            set.cands.push(cand);
-            return;
-        }
         let fty = self.ast.decls.get(f).ty().unwrap_or(QualType::ERROR);
         let ret = self.ast.types.proto(fty).map_or(QualType::ERROR, |p| p.ret());
+        if self.fn_spec(f).is_explicit() {
+            // [over.match.conv]/1.2, [over.match.copy]/1.2: an explicit
+            // conversion function is a candidate (of a direct-
+            // initialization) only when it yields the target type up to
+            // a qualification conversion (clang
+            // `isAllowableExplicitConversion`); in a copy-initialization
+            // it is then "not a candidate".
+            if !matches!(set.kind, SetKind::ConvToRef { .. })
+                && !self.allowable_explicit_conversion(ret, to)
+            {
+                self.ovl.stats.candidates -= 1;
+                set.ics.truncate(start as usize);
+                return;
+            }
+            if !opts.contains(IcsOptions::ALLOW_EXPLICIT) {
+                cand.viable = false;
+                cand.failure = CandidateFailure::Explicit;
+                set.cands.push(cand);
+                return;
+            }
+        }
         // The call's result: a glvalue of the referenced type or a
         // prvalue.
         let (rty, rvk) = match self.ast.types.canonical_view(ret) {
@@ -930,7 +1012,11 @@ impl Sema<'_, '_> {
         };
         let final_conv = match set.kind {
             SetKind::ConvToRef { lvalue } => {
-                let ok = if lvalue { rvk == ValueCategory::LValue } else { rvk != ValueCategory::LValue || self.ast.types.is_function(rty) };
+                let ok = if lvalue {
+                    rvk == ValueCategory::LValue
+                } else {
+                    rvk != ValueCategory::LValue || self.ast.types.is_function(rty)
+                };
                 if ok {
                     let r = ArgInfo::of_type(rty, rvk);
                     match self.ref_ics(&r, to, opts.with(IcsOptions::SUPPRESS_UDC)) {
@@ -943,7 +1029,9 @@ impl Sema<'_, '_> {
             }
             _ if self.ast.types.as_record(to).is_some() => {
                 // [over.match.copy]/1.2: yielding cv T or a derived class.
-                let (Some(tr), Some(rr)) = (self.ast.types.as_record(to), self.ast.types.as_record(rty)) else {
+                let (Some(tr), Some(rr)) =
+                    (self.ast.types.as_record(to), self.ast.types.as_record(rty))
+                else {
                     cand.viable = false;
                     cand.failure = CandidateFailure::BadFinalConversion;
                     set.cands.push(cand);
@@ -975,10 +1063,43 @@ impl Sema<'_, '_> {
         set.cands.push(cand);
     }
 
+    /// Whether an explicit conversion function returning `ret` may
+    /// convert to `to`: the same type (references and cv dropped), or a
+    /// qualification conversion of pointers ([over.match.conv]/1.2).
+    fn allowable_explicit_conversion(&mut self, ret: QualType, to: QualType) -> bool {
+        let r = conv::strip_cv(self, self.non_reference(ret));
+        let t = conv::strip_cv(self, self.non_reference(to));
+        let (cr, ct) = (self.ast.types.canonical(r), self.ast.types.canonical(t));
+        if self.ast.types.same_type(cr, ct) {
+            return true;
+        }
+        let a = ArgInfo::of_type(r, ValueCategory::PRValue);
+        match conv::standard_conversion_from(
+            self,
+            a.ty,
+            a.vk,
+            false,
+            None,
+            t,
+            conv::ConvCtx::Initialization,
+        ) {
+            Some(s) => {
+                s.second == conv::SecondStep::Identity && s.first == conv::FirstStep::Identity
+            }
+            None => false,
+        }
+    }
+
     /// [over.match.ref]: binding reference `to` to the result of a
     /// conversion function of `a`'s class yielding an lvalue (`lvalue`)
     /// or an rvalue. `None` when no candidate is viable.
-    fn ref_conversion(&mut self, a: &ArgInfo, to: QualType, lvalue: bool, opts: IcsOptions) -> Option<Ics> {
+    fn ref_conversion(
+        &mut self,
+        a: &ArgInfo,
+        to: QualType,
+        lvalue: bool,
+        opts: IcsOptions,
+    ) -> Option<Ics> {
         if !self.require_complete_silent(a.ty, Loc::INVALID) {
             return None;
         }

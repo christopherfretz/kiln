@@ -28,8 +28,8 @@ use crate::declspec::{
     StorageSpec, TypeSpecKind, Width,
 };
 use crate::init::{InitValue, Initializer};
-use crate::overload::redecl::NewFn;
 use crate::lookup::{LookupKind, is_tag_kind, is_type_kind};
+use crate::overload::redecl::NewFn;
 use crate::scope::{Scope, ScopeKind};
 use crate::{Sema, target};
 use kiln_ast::templates::is_template_kind;
@@ -693,10 +693,7 @@ impl Sema<'_, '_> {
                     match conv::implicit_convert(self, e, p.ty, ConvCtx::Argument) {
                         Ok(x) => x,
                         Err(err) => {
-                            let d = err
-                                .args
-                                .into_iter()
-                                .fold(self.diag(err.id, p.loc), kiln_diag::Diag::arg);
+                            let d = err.diag_at(self, p.loc);
                             let d = self.with_param_note(d, p);
                             self.emit(d);
                             let loc = self.ast.exprs.get(e).loc();
@@ -1587,7 +1584,8 @@ impl Sema<'_, '_> {
             None
         } else if friend && d.qualifier.is_none() {
             // Redeclaration lookup in the namespace sees hidden friends.
-            let found: Vec<DeclId> = self.ast.lookup_local(ctx, DeclName::ident(name)).iter().collect();
+            let found: Vec<DeclId> =
+                self.ast.lookup_local(ctx, DeclName::ident(name)).iter().collect();
             self.pick_prev_function(&found, new_fn)
         } else if method {
             let found = self.prev_candidates(name, d.qualifier);

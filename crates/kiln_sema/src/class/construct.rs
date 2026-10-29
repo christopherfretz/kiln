@@ -138,6 +138,13 @@ impl Sema<'_, '_> {
             let rparen = site.rparen.or(site.temp_end).unwrap_or(loc);
             return Some(self.paren_aggregate_init(ty, args, loc, rparen));
         }
+        if let Selected::Found(f) | Selected::Deleted(f) = sel
+            && let [arg] = args
+            && self.kind_of(f) == kiln_ast::decl::DeclKind::CXXConversion
+        {
+            // CWG2327: the conversion function initializes the object.
+            return Some(self.call_conversion_function(*arg, f, f, site.sites.access));
+        }
         let call = CtorCall {
             info: ConstructInfo { kind: ck, list: style.is_list(), ..ConstructInfo::COMPLETE },
             value_init: style.is_list() && args.is_empty(),
@@ -198,6 +205,20 @@ impl Sema<'_, '_> {
         if self.ast.types.as_record(self.ety(e)).is_some() {
             return None;
         }
+        self.construct_converted(e, to, ctx, at, deleted_as)
+    }
+
+    /// [`Sema::convert_to_class`] for any source `e` (a class source of
+    /// an unrelated class, when the user-defined conversion chose a
+    /// converting constructor: [over.match.copy]/1.1).
+    pub(crate) fn construct_converted(
+        &mut self,
+        e: ExprId,
+        to: QualType,
+        ctx: ConvCtx,
+        at: Loc,
+        deleted_as: DeletedAs,
+    ) -> Option<ExprId> {
         let deleted_as = match deleted_as {
             DeletedAs::Param(n) => DeletedAs::Conversion(Some(n)),
             DeletedAs::Call => DeletedAs::Conversion(None),

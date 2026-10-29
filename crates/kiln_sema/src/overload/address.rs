@@ -5,7 +5,7 @@
 //! "reference to overloaded function could not be resolved".
 
 use kiln_ast::decl::{DeclFlags, DeclKind};
-use kiln_ast::expr::{ExprFlags, ExprKind, UnaryOp};
+use kiln_ast::expr::{ExprKind, UnaryOp};
 use kiln_ast::types::TypeView;
 use kiln_ast::{DeclId, ExprId, QualType};
 use kiln_diag::{Diag, DiagId};
@@ -167,9 +167,7 @@ impl Sema<'_, '_> {
         let (fnty, _) = self.address_target(target);
         let (msg, detailed) = match ctx {
             AddrCtx::Convert => (
-                self.diag(DiagId::sema_addr_ovl_no_match, loc)
-                    .arg(name)
-                    .arg(self.ty_arg(fnty)),
+                self.diag(DiagId::sema_addr_ovl_no_match, loc).arg(name).arg(self.ty_arg(fnty)),
                 true,
             ),
             AddrCtx::Cast(which) => (
@@ -180,23 +178,22 @@ impl Sema<'_, '_> {
                 false,
             ),
             AddrCtx::Reinterpret => (
-                self.diag(DiagId::sema_addr_ovl_reinterpret, at)
-                    .arg(name)
-                    .arg(self.ty_arg(target)),
+                self.diag(DiagId::sema_addr_ovl_reinterpret, at).arg(name).arg(self.ty_arg(target)),
                 false,
             ),
         };
         let fn_target = detailed && self.ast.types.is_function(fnty);
-        let notes: Vec<Diag> = cands
-            .iter()
-            .map(|&(d, _)| {
-                if fn_target {
-                    self.mismatch_note(d, fnty)
-                } else {
-                    self.plain_candidate_note(d)
-                }
-            })
-            .collect();
+        let notes: Vec<Diag> =
+            cands
+                .iter()
+                .map(|&(d, _)| {
+                    if fn_target {
+                        self.mismatch_note(d, fnty)
+                    } else {
+                        self.plain_candidate_note(d)
+                    }
+                })
+                .collect();
         self.emit(notes.into_iter().fold(msg, Diag::with_note));
         None
     }
@@ -240,8 +237,11 @@ impl Sema<'_, '_> {
     /// "candidate function" at `d`.
     fn plain_candidate_note(&self, d: DeclId) -> Diag {
         let loc = self.ast.decls.get(d).loc();
-        let kind =
-            if self.kind_of(d) == DeclKind::FunctionTemplate { "function template" } else { "function" };
+        let kind = if self.kind_of(d) == DeclKind::FunctionTemplate {
+            "function template"
+        } else {
+            "function"
+        };
         self.diag(DiagId::note_ovl_candidate, loc).arg(kind)
     }
 
@@ -298,7 +298,9 @@ impl Sema<'_, '_> {
             let no_args = self.member_overload_decls(x).iter().any(|&d| {
                 self.ast.decls.function(d).is_some_and(|f| self.ast.lists.get(f.params).is_empty())
             });
-            let msg = self.diag(DiagId::sema_bound_member_not_called, self.eloc(x)).arg(u8::from(no_args));
+            let msg = self
+                .diag(DiagId::sema_bound_member_not_called, self.eloc(x))
+                .arg(u8::from(no_args));
             let notes: Vec<Diag> = self
                 .member_overload_decls(x)
                 .iter()

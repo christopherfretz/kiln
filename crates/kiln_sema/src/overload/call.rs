@@ -9,7 +9,9 @@ use kiln_ast::{DeclId, ExprId, QualType};
 use kiln_diag::DiagId;
 use kiln_source::Loc;
 
-use super::{ArgInfo, CandidateKind, IcsOptions, OverloadCandidateSet, OvlOutcome, SetKind, UleFound};
+use super::{
+    ArgInfo, CandidateKind, IcsOptions, OverloadCandidateSet, OvlOutcome, SetKind, UleFound,
+};
 use crate::Sema;
 use crate::init::InitList;
 
@@ -74,7 +76,8 @@ impl Sema<'_, '_> {
             return None;
         }
         let templates = cands.iter().any(|&(d, _)| self.kind_of(d) == DeclKind::FunctionTemplate);
-        let plain = cands.iter().filter(|&&(d, _)| self.kind_of(d) != DeclKind::FunctionTemplate).count();
+        let plain =
+            cands.iter().filter(|&&(d, _)| self.kind_of(d) != DeclKind::FunctionTemplate).count();
         if plain == 0 {
             self.templ_unimplemented("calls to function templates", n.loc());
             return None;
@@ -193,7 +196,9 @@ impl Sema<'_, '_> {
                 self.emit(msg);
                 return None;
             }
-            OvlOutcome::NoViable if member => (DiagId::sema_ovl_no_viable_member_function_in_call, false),
+            OvlOutcome::NoViable if member => {
+                (DiagId::sema_ovl_no_viable_member_function_in_call, false)
+            }
             OvlOutcome::NoViable => (DiagId::sema_ovl_no_viable_function_in_call, false),
             OvlOutcome::Ambiguous if member => (DiagId::sema_ovl_ambiguous_member_call, true),
             OvlOutcome::Ambiguous => (DiagId::sema_ovl_ambiguous_call, true),

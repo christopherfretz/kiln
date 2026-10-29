@@ -152,7 +152,8 @@ fn apply_second(
             // [over.best.ics]/6: a class prvalue converted to its base only
             // ranks as a conversion; initialization performs it through a
             // constructor, so only a glvalue view reaches here.
-            let (Some(d), Some(b)) = (s.ast.types.as_record(from), s.ast.types.as_record(to)) else {
+            let (Some(d), Some(b)) = (s.ast.types.as_record(from), s.ast.types.as_record(to))
+            else {
                 return Ok(e);
             };
             match find_base(s, d, b) {

@@ -66,7 +66,15 @@ impl Sema<'_, '_> {
         let nns = self.ovl.members.get(&x)?.nns?;
         let m = self.ovl.members.remove(&x)?;
         let loc = self.ast.exprs.get(x).loc();
-        Some(self.build_overload_ref(m.name, &m.decls, &m.found, Some(m.naming), false, Some(nns), loc))
+        Some(self.build_overload_ref(
+            m.name,
+            &m.decls,
+            &m.found,
+            Some(m.naming),
+            false,
+            Some(nns),
+            loc,
+        ))
     }
 
     /// Resolves the call of the overloaded member access `callee`
