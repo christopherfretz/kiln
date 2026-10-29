@@ -1,5 +1,5 @@
 //! new-expressions and delete-expressions ([expr.new], [expr.delete];
-//! spec/parse.md §5.9): clang's `ParseCXXNewExpression`,
+//! spec/parse.md §5.1): clang's `ParseCXXNewExpression`,
 //! `ParseDirectNewDeclarator` and `ParseCXXDeleteExpression`.
 
 use kiln_ast::ExprId;

@@ -366,6 +366,46 @@ needed later). Values of non-constant-context folding (`try_fold`) are
   beyond its one child (the semantic call), no `TypoExpr` (typo correction
   is resolved before the node is built).
 
+### 5.7 New- and delete-expressions (WP-061a)
+- **`CXXNewExpr`**: `ty` is the result pointer type (for an array new, a
+  pointer to the element type: `int (*)[3]` for `new int[n][3]`).
+  - `a` indexes the `news` side table of `NewExtra` records
+    (`Exprs::new_extra(e) -> &NewExtra`, `Copy`):
+    - `allocated_ty`: the created object's type, or for an array new the
+      element type (clang's `getAllocatedType`);
+    - `array_size: Option<ExprId>`: the first bound converted to
+      `size_t` (an `IntegerLiteral` synthesized from the initializer for
+      `new T[]{...}`); `None` for a non-array new;
+    - `init: Option<ExprId>`: the semantic initializer (`InitListExpr`
+      with `array_filler` for an array, `InitListExpr 'T'` for a scalar
+      `{x}`, `ImplicitValueInitExpr` for `()`, or the converted
+      expression); `None` for default-initialization;
+    - `placement: Option<ListId>`: the converted placement arguments;
+    - `operator_new`, `operator_delete: Option<DeclId>`: the allocation
+      function and the matching deallocation function (called if
+      initialization throws);
+    - `type_loc`: the start of the type-id.
+  - `aux` is the `NewInitStyle` (`None`, `Parens`, `Braces`;
+    `Exprs::new_init_style`).
+  - Flags: `GLOBAL` (`::new`), `ARRAY_FORM` (an array new) and
+    `PASS_ALIGN` (the allocated type is over-aligned, so the allocation
+    function takes `std::align_val_t`).
+  - The closing token (the initializer's `)`/`}` or the type-id's last
+    token) is in the cold `end_loc` map.
+  - Children (`Exprs::children`): array size, initializer, placement
+    arguments (clang's order).
+- **`CXXDeleteExpr`**: `ty` is `void`; `a` is the operand (converted to a
+  pointer prvalue; `Exprs::delete_operand`); `b` is the deallocation
+  function (`Exprs::operator_delete`, `None` for an erroneous operand);
+  `aux` bit 0 says it takes the size and bit 1 the alignment
+  (`Exprs::delete_passes`). Flags: `GLOBAL`, `ARRAY_FORM` (`delete[]`, or
+  an operand that points to an array: clang deletes it as an array) and
+  `ARRAY_AS_WRITTEN` (`delete[]` was written). `ARRAY_AS_WRITTEN` and
+  `PASS_ALIGN` share bit 6: they belong to different kinds.
+- Builders: `Builder::cxx_new(ty, flags, style, extra, loc, end)` and
+  `Builder::cxx_delete(operand, operator_delete, flags, sized, aligned,
+  ty, loc)`.
+
 ## 6. Statements
 ```rust
 struct StmtNode { kind: StmtKind /*u8*/, flags: u8, aux: u16, loc: Loc, a: u32, b: u32 }  // 16 bytes

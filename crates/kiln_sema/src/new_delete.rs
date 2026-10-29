@@ -1,6 +1,6 @@
 //! `new` and `delete` expressions ([expr.new], [expr.delete]) and the
 //! implicitly declared global allocation and deallocation functions
-//! ([basic.stc.dynamic.general]/2), spec/sema.md §5.10.
+//! ([basic.stc.dynamic.general]/2), spec/sema.md §5.5.
 //!
 //! clang's `Sema::ActOnCXXNew` / `BuildCXXNew` / `ActOnCXXDelete` for
 //! non-class and aggregate element types: class-scope `operator new` /

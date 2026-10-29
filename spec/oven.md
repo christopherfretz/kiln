@@ -342,7 +342,9 @@ average 8-9 during the run):
 
 *Status:* the heap space, the allocator and the counters are implemented
 (WP-061b part 1, `crates/kiln_oven/src/mem.rs`); the `New`/`Delete`
-operations, their checks and the churn benchmarks are WP-061b part 2. Until
+operations, their checks and the churn benchmarks are WP-061b part 2. The
+AST shapes they lower are fixed by WP-061a ("Operations (KBC)" below);
+until part 2 the Oven traps on them. Until
 then no evaluation allocates on the heap, so `allocs` is 0 and `peak_arena`
 equals `peak_bytes` on every program.
 
@@ -423,6 +425,44 @@ array of `n` `T`; `__builtin_operator_new` anywhere else is not a constant
 expression). That recognition needs class templates and is part of the M3
 Oven package; WP-061 covers `new`/`delete` expressions on the types the Oven
 supports in M2 (scalars, arrays, aggregates without constructors).
+
+*AST shapes the lowering consumes* (WP-061a; spec/ast.md §5.7). Until
+WP-061b part 2, `compile.rs` lowers a `CXXNewExpr` or `CXXDeleteExpr`
+(as a value or for effect) to a trap with the note `kiln: new/delete in
+constant evaluation lands with WP-061b part 2`, so the enclosing
+evaluation is not a constant expression.
+- `CXXNewExpr` (`ty` = `T*`), `new_extra(e)`:
+  - `allocated_ty` is `ty` for `New` (for an array new, the element
+    type: `int[3]` for `new int[n][3]`, so `New`'s `ty` is the element
+    type and `count` the first bound);
+  - `array_size` (`ARRAY_FORM`) is the `count` operand, already
+    converted to `size_t` (`IntegralCast`); a negative signed bound shows
+    as a huge unsigned value, so the "negative array bound" note needs the
+    operand under the cast;
+  - `init` is, by `new_init_style(e)`: `None` with no initializer
+    (default-initialization: the storage stays uninitialized, reads are
+    "read of uninitialized object"); `Parens` with
+    `ImplicitValueInitExpr` (`()`, zero) or the converted expression
+    (`(x)`); `Braces` with an `InitListExpr` of type `T` (scalar `{x}`,
+    an aggregate) or `T[k]` with `array_filler` for the elements beyond
+    the explicit ones (array new; `k` is the number of explicit
+    initializers, or the constant bound). Each is an ordinary store
+    sequence through the new pointer, element by element for arrays;
+  - `placement` holds the placement arguments. The reserved form `new (p)
+    T` (`operator_new` is the `(size_t, void*)` overload) is a P2747
+    constexpr placement new: no allocation, the object is created at `p`
+    (the pointer must point to a suitable object whose lifetime ends);
+    any other placement or a user-declared (replaced) `operator_new` is
+    not a constant expression ([expr.const]), with clang's note;
+  - `PASS_ALIGN` and `operator_delete` are codegen facts and do not
+    affect evaluation.
+- `CXXDeleteExpr` (`ty` = `void`): `delete_operand(e)` is the pointer
+  prvalue; `ARRAY_FORM` selects `Delete { array: true }` (also set for a
+  `delete` of a pointer to an array, which clang treats as `delete[]`;
+  `ARRAY_AS_WRITTEN` says what was written); `operator_delete(e)` must be
+  a replaceable global deallocation function for the delete to be
+  constant ([expr.const]); `delete_passes(e)` (size, alignment) is
+  a codegen fact.
 
 **Checks**, with clang 19's wording (`DiagnosticASTKinds.td`; the
 compile-fail tests compare against the oracle). *The quoted wording below

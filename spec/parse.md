@@ -357,6 +357,36 @@ harness ignores order.
     `'x' does not refer to the name of a parameter pack`.
   - The unparenthesized form is "not supported yet".
 
+### 5.1 New- and delete-expressions (`new_delete.rs`, WP-061a)
+clang's `ParseCXXNewExpression`, `ParseDirectNewDeclarator` and
+`ParseCXXDeleteExpression`; `parse_cast_expr` dispatches at `new`,
+`delete`, and `::` followed by either.
+- **Placement or type-id.** After `new (`, `paren_is_type_id` decides
+  without a tentative parse (clang's `isTypeIdInParens`; TODO(M3) for
+  the shapes needing one): the tokens must start a type-id; then
+  simple-type keywords and type names are skipped, and the next token
+  decides. `{` means an expression (`new (int{1}) T` is a placement); a
+  `(` is a type-id only when followed by `* & && ^ ) [ ( ...`, a type-id
+  start or a decl-specifier keyword, so `new (short(n), 'x') int` is a
+  placement and `new (int (*)[2])` a type-id. `decltype`, `typeof`,
+  `typename` and a class-key are always a type-id.
+- **new-type-id.** The decl-specifiers and an abstract new-declarator
+  (`*`, `&`-free ptr-operators, then `[expr]` bounds); the first bound
+  is an expression, the later ones constant expressions (checked by
+  Sema). A parenthesized `( type-id )` may follow a placement:
+  `new (p) (int)(5)`.
+- **new-initializer.** `( expression-list(opt) )` or a braced-init-list
+  (`parse_init_list`). The result goes to `Sema::act_on_cxx_new(global,
+  start, placement, NewTypeId, NewInit, end)`.
+- **delete.** `delete`, then `[` `]` for the array form (clang's lambda
+  disambiguation of `delete []{...}` is M3 with lambdas), then a
+  cast-expression; `Sema::act_on_cxx_delete`.
+- **No postfix suffix.** A new-expression is a unary-expression: a
+  following `[`, `(`, `++`, `--`, `.` or `->` reports `expression cannot be
+  followed by a postfix '[' operator; add parentheses` and parses the
+  suffix for recovery (except `[`/`(`/`++`/`--` at the start of a line,
+  where the caller's `expected ';'` is better).
+
 ## 6. Statements and attributes
 
 ### 6.1 Statements (`stmt.rs`)
@@ -465,7 +495,7 @@ in `kiln_diag` for now; nothing emits them.
 - **Templates:** declarations, template-ids, `typename`, `template`,
   packs, concepts, requires-clauses. Design: spec/sema-templates.md §2.
 - **Other expressions:**
-  - lambdas, `new`/`delete`, `throw`
+  - lambdas, `throw`
   - `typeid`, `dynamic_cast`
   - compound literals, statement expressions, the GNU `?:` and
     address-of-label operators

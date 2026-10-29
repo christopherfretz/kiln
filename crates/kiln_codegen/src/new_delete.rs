@@ -1,4 +1,4 @@
-//! `new` and `delete` expressions (spec/codegen.md §3.11): clang's
+//! `new` and `delete` expressions (spec/codegen.md §3.1): clang's
 //! `EmitCXXNewExpr`, `EmitCXXNewAllocSize`, `EmitNewArrayInitializer`,
 //! `EmitCXXDeleteExpr` and `EmitDeleteCall` at `-O0`, for non-class and
 //! aggregate element types (no array cookies, constructors or

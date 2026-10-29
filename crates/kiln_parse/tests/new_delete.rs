@@ -1,5 +1,5 @@
 //! Per-rule tests for new- and delete-expressions ([expr.new],
-//! [expr.delete]; spec/parse.md §5.9).
+//! [expr.delete]; spec/parse.md §5.1).
 
 mod common;
 use common::parse;

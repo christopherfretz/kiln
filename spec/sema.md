@@ -498,6 +498,78 @@ clang's `LazilyCreateBuiltin`. kiln knows one builtin,
   constant-evaluated context and `false` otherwise (spec/oven.md);
   codegen emits `i1 false` (spec/codegen.md).
 
+### 5.5 New- and delete-expressions (`new_delete.rs`, WP-061a)
+clang's `ActOnCXXNew`/`BuildCXXNew` and `ActOnCXXDelete` for non-class
+and aggregate element types.
+- **Implicit global operators** ([basic.stc.dynamic.general]/2):
+  `declare_global_new_delete` runs once, the first time a new- or
+  delete-expression or a declaration of a global `operator new`/`delete`
+  needs it (clang's `DeclareGlobalNewDelete`). It declares, as implicit
+  TU-scope functions in clang's order, `operator new`/`new[]` taking
+  `(size_t)` and `(size_t, std::align_val_t)`, and `operator
+  delete`/`delete[]` taking `(void*)`, `(void*, align_val_t)`,
+  `(void*, size_t)` and `(void*, size_t, align_val_t)`, all
+  `noexcept`. `std::align_val_t` is the program's own declaration, else
+  an implicit `enum class align_val_t : size_t` in an implicit
+  namespace `std` (clang's `getStdAlignValT`). The nothrow forms exist
+  only if the program (`<new>`) declares them.
+- **User declarations** of a global `operator new`/`delete`
+  (`act_on_global_new_delete_decl`) redeclare a matching implicit one; a
+  deallocation function without an exception specification is
+  implicitly `noexcept` ([except.spec]/11).
+- **The allocated type** ([expr.new]/1-2): not a function type, a
+  reference or an incomplete type; `auto` is deduced from a single
+  parenthesized or braced argument (`new auto(x)`; `new auto*(p)` is
+  unsupported). The new-declarator's first bound is converted to `size_t`
+  ([expr.new]/8: integral or unscoped enumeration, or a class with one
+  conversion, which is unsupported); a constant first bound that is
+  negative, too large, or smaller than the number of initializers is an
+  error; later bounds are converted constant expressions. A `new T[]`
+  takes its bound from the initializer. In a parenthesized type-id a
+  non-constant bound is clang's warning `when type is in parentheses,
+  array cannot have dynamic size` (see the gaps below).
+- **Allocation function** ([expr.new]/12-19): `PASS_ALIGN` when
+  `alignof(T)` exceeds `__STDCPP_DEFAULT_NEW_ALIGNMENT__` (16 on both
+  targets, `kiln_abi::Target::default_new_align`). Global lookup only
+  (class-scope `operator new` is `todo(WP-068b)`): the candidates whose
+  leading parameters are `size_t` (and `align_val_t` when aligned) and
+  that accept the placement arguments, preferring the most exact
+  matches; with `PASS_ALIGN` a second round without the alignment
+  argument follows (clang's two-phase lookup). Failure reports clang's
+  `no matching function for call to 'operator new'` with candidate notes,
+  or for a placement `new (p) T` with no `(size_t, void*)` form, `no
+  matching 'operator new' function for non-allocating placement new
+  expression; include <new>`.
+- **Deallocation function for new** ([expr.new]/28): for a placement
+  form, the one with the same extra parameters; otherwise the sized usual
+  one (with `align_val_t` when aligned).
+- **Initializer** ([expr.new]/23): none is default-initialization (a
+  `const` scalar or array is an error: `default initialization of an
+  object of const type 'const int[]'`, the array type printed for array
+  new); `()` is an `ImplicitValueInitExpr`; `(x)` copy-initializes a
+  scalar (more than one argument is clang's `excess elements in scalar
+  initializer`); `{...}` is list-initialization (§6) of
+  `T` or of the array `T[n]`, with an `array_filler` for the tail.
+  Class element types report "not supported yet" for default- and
+  parenthesized initialization (they need `CXXConstructExpr`,
+  WP-067b); braced aggregate initialization works.
+- **Delete** ([expr.delete]): the operand is converted to a pointer
+  prvalue (a class operand with a conversion function is unsupported).
+  Errors and warnings follow clang: `cannot delete expression of type`,
+  `cannot delete pointer to incomplete type 'void'` (an error for
+  `void*` in C++26), the incomplete-type warning, and `'delete' applied
+  to a pointer-to-array type ... treated as 'delete[]'` (then
+  `ARRAY_FORM`). The deallocation function is the usual one: sized when
+  the type is complete and the form is not array (no array cookies
+  without destructors), aligned when over-aligned. Class element types
+  with a non-trivial destructor are unsupported (WP-067b / WP-076);
+  class-scope `operator delete` is `todo(WP-068b)`.
+- Gaps: `-fno-sized-deallocation` only removes the macro (Sema always
+  selects the sized form, clang's C++14+ default); `-Wmismatched-new-delete`
+  is not reported; a non-constant bound in a parenthesized type-id is a
+  plain warning (clang's is an extension warning, so an error under
+  `-pedantic-errors`); `__hot_cold_t` overloads are not recognized.
+
 ## 6. Initialization (`init.rs`)
 - **`perform_init(ty, init, direct_list)`** implements [dcl.init]:
   - copy- and direct-initialization of scalars, through the implicit

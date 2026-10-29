@@ -777,7 +777,7 @@ impl NewInitStyle {
     }
 }
 
-/// Side record of a `CXXNewExpr` (spec/ast.md §5.9; [expr.new]).
+/// Side record of a `CXXNewExpr` (spec/ast.md §5.7; [expr.new]).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct NewExtra {
     /// The allocated type: the type of the created object, or for an array

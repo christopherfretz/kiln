@@ -116,6 +116,77 @@ panic and never silently wrong IR.
   match its IR type, else as a literal struct. Records with bit-fields and
   base classes are still M3 errors in constants.
 
+### 3.1 New- and delete-expressions (`new_delete.rs`, WP-061a)
+clang's `EmitCXXNewExpr`, `EmitCXXNewAllocSize`,
+`EmitNewArrayInitializer`, `EmitCXXDeleteExpr` and `EmitDeleteCall` at
+`-O0`, for element types without constructors or destructors (so no
+array cookies).
+- **Allocation functions.** `alloc_fn` classifies a global `operator
+  new`/`new[]`/`delete`/`delete[]` as clang does
+  (`isReplaceableGlobalAllocationFunction`: `size_t` or `void*` first,
+  then optionally `align_val_t`/`size_t`/`const std::nothrow_t&`;
+  `isReservedGlobalPlacementOperator`: `(size_t, void*)` and `(void*,
+  void*)`). A replaceable one's declaration or definition gets
+  `nobuiltin`, and `operator new` also `allocsize(0)` and the
+  `nonnull`/`noalias` return attributes clang adds implicitly
+  (`alloc_fn_attrs`, applied in `module.rs::get_fn` and
+  `func.rs::emit_fn_def`).
+- **Calls** (`emit_new_delete_call`, clang's `EmitNewDeleteCall`): a
+  replaceable callee called from a new- or delete-expression gets the
+  `builtin` call-site attribute; an `operator new` call also
+  `allocsize(0)` and the result attributes (`noalias`, `nonnull` unless
+  nothrow, `align N` with `N` the allocation alignment:
+  `default_new_align` (16) or the type's alignment when aligned, raised to
+  `bit_floor(min(16, sizeof(T)))` for a replaceable, unaligned
+  allocation, as clang's `EmitCXXNewExpr`). An
+  `align_val_t` argument is the constant alignment (a non-constant one
+  is unsupported).
+- **Size** (`EmitCXXNewAllocSize`): the count is Sema's `size_t`
+  conversion of the first bound. A constant count folds, to `-1` (all
+  ones) on overflow or when the count is below the number of explicit
+  initializers. A dynamic count compares `icmp ult` with that number
+  (when there are initializers) and, unless the element size (times the
+  constant inner bounds) is 1, is multiplied with
+  `llvm.umul.with.overflow.i64`; the overflow bits are or-ed and a
+  `select` gives `-1`, in clang's instruction order. The flattened
+  element count of a multidimensional new is the count times the inner
+  bounds.
+- **Null check.** A `noexcept` allocation function that is neither the
+  reserved placement form nor a replaceable non-nothrow `operator new`
+  may return null: when there is an initializer, the result is compared
+  with `null` and initialization runs in a not-null block, joined by a `phi`
+  of the result and `null`.
+- **Cleanup emulation.** clang pushes an EH cleanup that frees the memory
+  if initialization throws. kiln has no EH yet: when the initializer
+  cannot throw, the cleanup is never used, but clang's -O0 IR still shows
+  its traces. Inside a conditional evaluation (an arm of `?:`, the right
+  of `&&`/`||`; `FunctionCtx::conds`, pushed by `cond_eval`), the
+  allocation's pointer and the placement arguments not defined in the
+  entry block are saved to `alloca`s (preferred alignment:
+  `pref_align`: at least 4 for integers of 2 to 16 bits on aarch64),
+  and an `i1` active flag is stored `false` before the terminator of
+  the outermost conditional's start block and `true` after the call. A
+  may-throw initializer is unsupported.
+- **Initialization.** A scalar or aggregate initializer is stored
+  through the result (`EmitAggExpr` rules of §3). An array
+  (`EmitNewArrayInitializer`) stores the explicit elements, moving a
+  cursor with `gep i64 1`, then zeroes the tail with one `memset` when
+  the filler is value-initialization (`()`, `{}`, an implicit value
+  init, or a `struct` all of whose members are value-initialized:
+  clang's `struct`-only rule), else loops over the remaining elements up
+  to `gep base, count` with a `phi` cursor stepped by `gep i32 1`. A
+  multidimensional array new is flattened to its innermost element.
+- **Delete** (`EmitCXXDeleteExpr`): null check, a `gep inbounds` with `i32 0`
+  indices down to the first scalar element for a pointer-to-array
+  operand, then the call with the size (`i64`, the
+  object size) and the alignment as the deallocation function's
+  parameters require. The call is `nounwind` (the callee is `noexcept`).
+- **Unsupported** (`CodegenError`): member-pointer element types, string
+  literal array initializers, a placement argument of class type inside
+  a conditional, non-constant `align_val_t` arguments, the deallocation
+  functions clang does not treat as usual, and every construct Sema
+  reports as unsupported (classes needing constructors or destructors).
+
 ## 4. Statements
 - `stmt.rs` covers compound, declaration, expression, null, if (with
   init statement; constexpr and consteval if), switch (with case chains,
@@ -210,6 +281,16 @@ The normative description is spec/driver.md "Code generation". In short:
   reference to a temporary. In kiln_codegen itself, a constant
   initializer of an aggregate with bit-fields (`Flags f = {};`) reports
   `bit-field constants are not supported yet (M3)`, without a location.
+- **New/delete (§3.1).** The EH cleanup is emulated only for
+  initializers that cannot throw; clang's `invoke` + landing pad for a
+  throwing one waits for EH. The placement-argument alignment is
+  approximated by `pointer_with_align` (declaration alignment for named
+  variables, array elements and members; otherwise the pointee type's
+  alignment). Corpus cases do not use `alignas` on globals (ignored by
+  codegen, a pre-existing gap) or `if (c && new T)` (clang folds the
+  non-null `new` in `EmitBranchOnBoolExpr`; kiln emits the branch). The
+  `class` vs `struct` `memset` distinction is implemented but not
+  covered (access specifiers do not parse yet).
 - Parser gaps (kiln_parse) that keep cases out of the corpus: returning
   a braced-init-list, `consteval`, range-based `for`. (`noexcept` and
   `if constexpr`/`if consteval` landed with WP-058: `calls_noexcept`,
