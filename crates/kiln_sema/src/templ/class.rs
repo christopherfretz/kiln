@@ -179,7 +179,7 @@ impl Sema<'_, '_> {
     /// default (clang's `SuppressDefaultTemplateArgs`): the arguments a
     /// specialization's name prints with. The first `written` came from
     /// the source; a default is recomputed for those silently (SFINAE).
-    fn suppress_default_args(
+    pub(crate) fn suppress_default_args(
         &mut self,
         tmpl: DeclId,
         args: ArgListId,
@@ -415,13 +415,10 @@ impl Sema<'_, '_> {
         }
         // [temp.spec.partial.match]: the most specialized matching
         // partial specialization, else the primary template.
-        let matched = match self.match_partial_specs(tmpl, spec, poi) {
-            Ok(m) => m,
-            Err(()) => {
-                self.ast.decls.set_flags(spec, DeclFlags::INVALID);
-                self.inst.undefined_diagnosed.set(Some(spec));
-                return false;
-            }
+        let Ok(matched) = self.match_partial_specs(tmpl, spec, poi) else {
+            self.ast.decls.set_flags(spec, DeclFlags::INVALID);
+            self.inst.undefined_diagnosed.set(Some(spec));
+            return false;
         };
         let pattern = match matched {
             Some(m) => {
@@ -723,6 +720,10 @@ impl Sema<'_, '_> {
     /// one is found at the next reference or at the end of the TU).
     pub fn instantiate_static_member_def(&mut self, v: DeclId, poi: Loc) {
         if self.inst.fatal || !self.inst.member_defs.contains(&v) {
+            return;
+        }
+        if self.is_var_spec(v) {
+            self.instantiate_var_spec_init(v, poi);
             return;
         }
         let Some(pattern) = self.ast.instantiated_from(v) else { return };

@@ -164,8 +164,8 @@ pub const TABLE: &[(&str, Disposition)] = &[
     // explicit one and a partial specialization at their positions.
     ("ClassTemplateSpecializationDecl", Keep),
     ("ClassTemplatePartialSpecializationDecl", Keep),
-    ("VarTemplateSpecializationDecl", Unsupported(INSTANTIATION)),
-    ("VarTemplatePartialSpecializationDecl", Unsupported(INSTANTIATION)),
+    ("VarTemplateSpecializationDecl", Keep),
+    ("VarTemplatePartialSpecializationDecl", Keep),
     ("CXXDeductionGuideDecl", Unsupported(INSTANTIATION)),
     ("DecompositionDecl", Unsupported("structured bindings are not in the M2 dump")),
     ("BindingDecl", Unsupported("structured bindings are not in the M2 dump")),
@@ -307,7 +307,9 @@ fn specific_keys(kind: &str) -> Option<&'static [&'static str]> {
         // `init` (always `c`, printed `cinit`): the default argument is the
         // child.
         "ParmVarDecl" => &["type", "init", "isParameterPack"],
-        "VarDecl" => &["type", "storageClass", "nrvo", "inline", "constexpr", "init"],
+        "VarDecl" | "VarTemplateSpecializationDecl" | "VarTemplatePartialSpecializationDecl" => {
+            &["type", "storageClass", "nrvo", "inline", "constexpr", "init"]
+        }
         "StaticAssertDecl" => &[],
         "IntegerLiteral" | "FloatingLiteral" | "CharacterLiteral" | "StringLiteral"
         | "CXXBoolLiteralExpr" => &["value"],
@@ -485,6 +487,8 @@ pub const TEMPLATE_KINDS: &[&str] = &[
     "ClassTemplateDecl",
     "ClassTemplateSpecializationDecl",
     "ClassTemplatePartialSpecializationDecl",
+    "VarTemplateSpecializationDecl",
+    "VarTemplatePartialSpecializationDecl",
     "SubstNonTypeTemplateParmExpr",
     "FunctionTemplateDecl",
     "VarTemplateDecl",

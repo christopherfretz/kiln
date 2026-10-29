@@ -43,6 +43,12 @@ pub enum FrameKind {
     /// specialization while matching it ([temp.spec.partial.match]; not
     /// an instantiation). The frame's `args` are the deduced arguments.
     PartialSpecDeduction,
+    /// The declaration of a variable template specialization
+    /// ([temp.inst]/7).
+    VarTemplateInstantiation,
+    /// The initializer of a variable template specialization (charged
+    /// to the specialization's report row without counting it again).
+    VarTemplateInit,
 }
 
 impl FrameKind {
@@ -66,6 +72,9 @@ impl FrameKind {
             FrameKind::DefaultFunctionArg => DiagId::note_default_function_arg_instantiation_here,
             FrameKind::DefaultArgChecking => DiagId::note_template_default_arg_checking,
             FrameKind::PartialSpecDeduction => DiagId::note_partial_spec_deduct_here,
+            FrameKind::VarTemplateInstantiation | FrameKind::VarTemplateInit => {
+                DiagId::note_var_template_spec_here
+            }
         }
     }
 
@@ -84,6 +93,8 @@ impl FrameKind {
             FrameKind::DefaultFunctionArg => "default-arg",
             FrameKind::DefaultArgChecking => "checking",
             FrameKind::PartialSpecDeduction => "partial-deduction",
+            FrameKind::VarTemplateInstantiation => "var",
+            FrameKind::VarTemplateInit => "var-init",
         }
     }
 }
@@ -257,6 +268,8 @@ impl Sema<'_, '_> {
             | FrameKind::MemberFunction
             | FrameKind::FunctionSpec
             | FrameKind::StaticDataMember
+            | FrameKind::VarTemplateInstantiation
+            | FrameKind::VarTemplateInit
             | FrameKind::Enum
             | FrameKind::Nsdmi => Some(false),
             _ => None,
@@ -345,6 +358,12 @@ impl Sema<'_, '_> {
                 s
             }
             FrameKind::PartialSpecDeduction => self.partial_spec_desc(f.entity, f.args),
+            FrameKind::VarTemplateInstantiation | FrameKind::VarTemplateInit => {
+                match self.ast.spec_info(f.entity) {
+                    Some((_, i)) => self.spec_name(i.template, i.print_args),
+                    None => self.qualified_decl_name(f.entity),
+                }
+            }
             _ => self.qualified_decl_name(f.entity),
         }
     }

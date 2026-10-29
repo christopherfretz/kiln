@@ -5,6 +5,7 @@
 //! `sema_unimplemented_template_feature`.
 
 use kiln_ast::DeclId;
+use kiln_ast::decl::DeclKind;
 use kiln_ast::ids::ArgListId;
 use kiln_ast::types::{ArgView, TemplateArg};
 use kiln_diag::DiagId;
@@ -41,13 +42,28 @@ impl Sema<'_, '_> {
         spec: DeclId,
         poi: Loc,
     ) -> Result<Option<PartialMatch>, ()> {
+        let Some((_, info)) = self.ast.spec_info(spec) else { return Ok(None) };
+        let args = info.args;
+        self.match_partial_args(tmpl, args, spec, poi)
+    }
+
+    /// [`Self::match_partial_specs`] for the specialization of `tmpl`
+    /// with converted arguments `args`; `who` names it in the ambiguity
+    /// diagnostic (the class specialization, else the template).
+    #[allow(clippy::result_unit_err, reason = "`Err` means already diagnosed")]
+    pub(crate) fn match_partial_args(
+        &mut self,
+        tmpl: DeclId,
+        args: ArgListId,
+        who: DeclId,
+        poi: Loc,
+    ) -> Result<Option<PartialMatch>, ()> {
         let tmpl = self.ast.first(tmpl);
         let candidates: Vec<u32> = self.ast.templates.partials_of(tmpl).to_vec();
         if candidates.is_empty() {
             return Ok(None);
         }
-        let Some((_, info)) = self.ast.spec_info(spec) else { return Ok(None) };
-        let canonical = self.ast.types.canonical_args(info.args);
+        let canonical = self.ast.types.canonical_args(args);
         let as_: Vec<TemplateArg> = self.ast.types.args(canonical).to_vec();
         if as_.iter().any(|&a| self.is_pack_arg(a)) {
             self.templ_unimplemented("partial specialization matching with packs", poi);
@@ -78,7 +94,7 @@ impl Sema<'_, '_> {
         match matched.len() {
             0 => Ok(None),
             1 => Ok(Some(matched[0])),
-            _ => self.most_specialized_partial(spec, &matched, poi).map(Some),
+            _ => self.most_specialized_partial(who, args, &matched, poi).map(Some),
         }
     }
 
@@ -148,16 +164,12 @@ impl Sema<'_, '_> {
                     out.push(deduced_elems.get(usize::from(i)).copied().unwrap_or(a));
                     continue;
                 }
-                match s.template_arg(a, loc) {
-                    Ok(x) => {
-                        has_expr |= matches!(x.view(), ArgView::Expr { .. });
-                        out.push(x);
-                    }
-                    Err(_) => {
-                        failed = true;
-                        break;
-                    }
-                }
+                let Ok(x) = s.template_arg(a, loc) else {
+                    failed = true;
+                    break;
+                };
+                has_expr |= matches!(x.view(), ArgView::Expr { .. });
+                out.push(x);
             }
         }
         self.ast.templates.dependent_depth = saved;
@@ -187,7 +199,8 @@ impl Sema<'_, '_> {
     /// [temp.spec.partial.order]), else the ambiguity diagnostic.
     fn most_specialized_partial(
         &mut self,
-        spec: DeclId,
+        who: DeclId,
+        args: ArgListId,
         matched: &[PartialMatch],
         poi: Loc,
     ) -> Result<PartialMatch, ()> {
@@ -203,8 +216,12 @@ impl Sema<'_, '_> {
         if unique {
             return Ok(best);
         }
-        let t = self.tag_type(spec);
-        let mut d = self.diag(DiagId::sema_partial_spec_ambiguous, poi).arg(self.ty_str(t));
+        let name = if self.kind_of(who) == DeclKind::CXXRecord {
+            self.ty_str(self.tag_type(who))
+        } else {
+            self.spec_name(who, args)
+        };
+        let mut d = self.diag(DiagId::sema_partial_spec_ambiguous, poi).arg(name);
         for m in matched {
             let note = self
                 .diag(DiagId::note_partial_spec_match, self.ast.decls.get(m.partial).loc())

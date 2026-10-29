@@ -1010,6 +1010,10 @@ diag_ids! {
     sema_explicit_inst_declaration_after_definition = Error (0) "explicit instantiation declaration (with 'extern') follows explicit instantiation definition (without 'extern')";
     note_explicit_instantiation_definition_here = Note (0) "explicit instantiation definition is here";
     sema_redundant_constexpr_static_def = WarningOff [DeprecatedRedundantConstexprStaticDef] (0) "out-of-line definition of constexpr static data member is redundant in C++17 and is deprecated";
+    note_var_template_spec_here = Note (1) "in instantiation of variable template specialization '{0}' requested here";
+    sema_var_spec_not_in_enclosing_ns = Error (2) "variable template specialization of '{0}' not in a namespace enclosing '{1}'";
+    sema_var_partial_spec_redecl_scope = Error (2) "variable template partial specialization of '{0}' not in a namespace enclosing '{1}'";
+    sema_explicit_spec_storage_class = ExtWarn [ExplicitSpecializationStorageClass] (0) "explicit specialization cannot have a storage class";
 }
 
 impl DiagId {

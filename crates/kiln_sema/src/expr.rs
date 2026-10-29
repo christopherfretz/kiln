@@ -778,6 +778,26 @@ impl Sema<'_, '_> {
     /// A `DeclRefExpr` naming the value `d`, found through the
     /// using-shadow `shadow` when that is set (clang's `FoundDecl`).
     pub fn build_decl_ref_via(&mut self, d: DeclId, loc: Loc, shadow: Option<DeclId>) -> ExprId {
+        let extra = shadow.map(|s| kiln_ast::expr::DeclRefExtra {
+            qualifier: None,
+            template_args: None,
+            found_decl: Some(s),
+        });
+        self.build_decl_ref_extra(d, loc, extra)
+    }
+
+    /// [`Self::build_decl_ref_via`] with the side record `extra` (a
+    /// variable template specialization records the template as its
+    /// found decl and the arguments as written).
+    pub(crate) fn build_decl_ref_extra(
+        &mut self,
+        d: DeclId,
+        loc: Loc,
+        extra: Option<kiln_ast::expr::DeclRefExtra>,
+    ) -> ExprId {
+        let shadow = extra
+            .and_then(|x| x.found_decl)
+            .filter(|_| extra.is_some_and(|x| x.template_args.is_none()));
         let n = *self.ast.decls.get(d);
         match n.kind() {
             DeclKind::Var
@@ -837,11 +857,6 @@ impl Sema<'_, '_> {
         }
         self.diagnose_deprecated(d, loc);
         let nou = if self.unevaluated > 0 { NonOdrUse::Unevaluated } else { NonOdrUse::None };
-        let extra = shadow.map(|s| kiln_ast::expr::DeclRefExtra {
-            qualifier: None,
-            template_args: None,
-            found_decl: Some(s),
-        });
         let e = self.builder().decl_ref(d, ty, loc, extra, nou, ExprFlags::NONE);
         if defer {
             self.deferred_call_refs.push((e, d));

@@ -940,6 +940,9 @@ impl Sema<'_, '_> {
         if special {
             return self.act_on_special_member_declarator(ds, ty, d, invalid);
         }
+        if let Some(sid) = &d.spec_id {
+            return self.act_on_var_spec_declarator(ds, ty, d, sid, head);
+        }
         if !invalid {
             self.warn_ambiguous_function(ds, d, ty);
         }

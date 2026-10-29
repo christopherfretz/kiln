@@ -20,6 +20,7 @@ pub mod report;
 pub mod spec;
 pub mod stack;
 pub mod subst;
+pub mod var;
 
 use kiln_ast::decl::DeclKind;
 use kiln_ast::ids::{ArgListId, TemplateParamListId};
@@ -760,28 +761,50 @@ impl Sema<'_, '_> {
         self.ast.templates.defaults.get(p).copied()
     }
 
-    /// A declarator-id that is a template-id naming the function or
-    /// variable template `tmpl` (`f<T*>`, `v<int>`) after a template head
-    /// ([temp.expl.spec], [temp.spec.partial]): a function template
-    /// partial specialization is an error ([temp.spec.partial.general]/1
-    /// covers only class and variable templates; clang's
-    /// `err_function_template_partial_spec`); the other forms are
-    /// WP-070a's. Returns false when the declarator should be dropped.
-    pub fn act_on_specialization_declarator_id(&mut self, tmpl: DeclId, loc: Loc) -> bool {
-        let explicit = self.templ.heads.last().is_some_and(|h| !h.taken && h.params.is_empty());
+    /// A declarator-id that is a template-id `tmpl<args>` naming the
+    /// function or variable template `tmpl` (`f<T*>`, `v<int>`) after a
+    /// template head or `template<>` ([temp.expl.spec],
+    /// [temp.spec.partial]). A variable template's is returned for the
+    /// declarator ([`Declarator::spec_id`]); a function template partial
+    /// specialization is an error ([temp.spec.partial.general]/1 covers
+    /// only class and variable templates; clang's
+    /// `err_function_template_partial_spec`) and an explicit one is
+    /// WP-071's: `None`, and the declarator is dropped. The argument
+    /// locations are the ones the parser recorded; `r_angle` is the
+    /// closing `>`.
+    ///
+    /// [`Declarator::spec_id`]: crate::declspec::Declarator::spec_id
+    pub fn act_on_specialization_declarator_id(
+        &mut self,
+        tmpl: DeclId,
+        args: &[TemplateArg],
+        loc: Loc,
+        r_angle: Loc,
+    ) -> Option<spec::SpecDeclaratorId> {
+        let arg_locs = std::mem::take(&mut self.templ.arg_locs);
+        let explicit = !self.has_pending_head();
         match (self.kind_of(tmpl), explicit) {
             (DeclKind::FunctionTemplate, false) => {
                 self.error(DiagId::sema_function_partial_spec, loc);
+                None
             }
             (DeclKind::FunctionTemplate, true) => {
                 self.templ_unimplemented("explicit specialization of a function template", loc);
+                None
             }
-            (_, false) => self.templ_unimplemented("variable template partial specialization", loc),
-            (_, true) => {
-                self.templ_unimplemented("explicit specialization of a variable template", loc);
-            }
+            (_, _) => Some(spec::SpecDeclaratorId {
+                template: self.ast.first(tmpl),
+                args: args.to_vec(),
+                arg_locs,
+                loc,
+                range: kiln_source::Span::new(loc, r_angle.with_offset(1)),
+            }),
         }
-        false
+    }
+
+    /// True between `template<>` and the declaration it introduces.
+    pub fn has_explicit_spec_head(&self) -> bool {
+        self.templ.explicit_spec.is_some()
     }
 
     /// True while parsing between `template<...>` and the declaration it

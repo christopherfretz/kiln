@@ -87,7 +87,7 @@ impl Parser<'_, '_> {
             // explicit-specialization ([temp.expl.spec]/1).
             self.bump();
             self.bump();
-            if self.at_partial_specialization() {
+            if self.at_partial_specialization() || self.at_var_template_spec() {
                 self.s.act_explicit_spec_start(loc);
                 self.parse_spec_declaration(ctx);
                 self.s.act_explicit_spec_end();
@@ -154,6 +154,33 @@ impl Parser<'_, '_> {
             self.parse_member_declaration();
         } else {
             self.parse_simple_declaration(DeclaratorContext::File, true);
+        }
+    }
+
+    /// A simple-declaration whose declarator-id is a template-id naming
+    /// a variable template (`constexpr bool v<int> = true;`), scanned up
+    /// to its initializer or `;` ([temp.expl.spec]/1).
+    fn at_var_template_spec(&self) -> bool {
+        let mut i = self.pos();
+        loop {
+            let t = self.tok_at(i);
+            match t.kind {
+                TokKind::Eof
+                | TokKind::Punct(
+                    Punct::Semi | Punct::Equal | Punct::LBrace | Punct::LParen | Punct::LSquare,
+                ) => return false,
+                TokKind::Identifier(_) if self.kw_of(t).is_some() => i += 1,
+                TokKind::Identifier(_) | TokKind::Punct(Punct::ColonColon) => {
+                    let Some((end, _, class, _)) = self.scan_name_at(i) else { return false };
+                    if matches!(class, NameClass::VarTemplate(_))
+                        && (i..end).any(|j| self.tok_at(j).kind == TokKind::Punct(Punct::Less))
+                    {
+                        return true;
+                    }
+                    i = end.max(i + 1);
+                }
+                _ => i += 1,
+            }
         }
     }
 

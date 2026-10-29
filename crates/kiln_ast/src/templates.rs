@@ -988,9 +988,31 @@ impl AstBuilder<'_> {
             lambda: None,
             tag,
         });
-        let lexical = h.lexical.unwrap_or(h.ctx);
-        let d2 = self.add_pattern(h, DeclKind::CXXRecord, Some(ty), payload);
+        let d2 =
+            self.add_partial(h, tmpl, params, args, canonical, DeclKind::CXXRecord, ty, payload);
         debug_assert_eq!(d, d2);
+        d
+    }
+
+    /// Pushes partial specialization decl `payload` (whose
+    /// [`TemplLinkKind::PartialSpecialization`] link is the next
+    /// [`PartialSpecInfo`]), appends it to its lexical member list, and
+    /// registers it with the matching prefilter shapes (§4.4).
+    #[allow(clippy::too_many_arguments)]
+    fn add_partial(
+        &mut self,
+        h: DeclHead,
+        tmpl: DeclId,
+        params: TemplateParamListId,
+        args: ArgListId,
+        canonical: ArgListId,
+        kind: DeclKind,
+        ty: QualType,
+        payload: Payload,
+    ) -> DeclId {
+        let i = self.ast.templates.partials.len() as u32;
+        let lexical = h.lexical.unwrap_or(h.ctx);
+        let d = self.add_pattern(h, kind, Some(ty), payload);
         if self.ast.decls.member_list(lexical).is_some() {
             self.ast.decls.append_member(lexical, d);
         }
@@ -1028,6 +1050,107 @@ impl AstBuilder<'_> {
         d
     }
 
+    /// The specialization `v<args>` of variable template `template`
+    /// ([temp.spec], sema-templates.md §4.7, clang's
+    /// `VarTemplateSpecializationDecl`): a `Var` with a
+    /// [`TemplLink::Specialization`] link (`SpecKind::Undeclared`) and
+    /// declared type `ty`, in the template's semantic context but neither
+    /// a member nor a name. `canonical` is `types.canonical_args(args)`;
+    /// the caller has probed [`TemplateTables::find_spec`] first.
+    pub fn var_spec(
+        &mut self,
+        template: DeclId,
+        args: ArgListId,
+        canonical: ArgListId,
+        ty: QualType,
+        spec: crate::decl::VarSpec,
+    ) -> DeclId {
+        let tmpl = self.ast.first(template);
+        let n = *self.ast.decls.get(tmpl);
+        let ctx = n.ctx().unwrap_or(self.ast.tu);
+        let mut h = DeclHead::new(ctx, n.name(), n.loc());
+        h.misc = n.misc();
+        let i = self.ast.templates.specs.len() as u32;
+        let d = self.ast.decls.next_id();
+        let redecl = crate::decl::Redecl { prev: None, group: self.ast.redecls.new_group(d) };
+        let payload = Payload::Var(crate::decl::VarData {
+            redecl,
+            init: None,
+            spec,
+            eval: crate::decl::VarEval::default(),
+            templ: TemplLink::new(TemplLinkKind::Specialization, i),
+        });
+        let depth = std::mem::take(&mut self.ast.templates.dependent_depth);
+        let d2 = self.add_pattern(h, DeclKind::Var, Some(ty), payload);
+        self.ast.templates.dependent_depth = depth;
+        debug_assert_eq!(d, d2);
+        self.ast.templates.specs.push(SpecInfo {
+            template: tmpl,
+            args,
+            kind: SpecKind::Undeclared,
+            from: tmpl,
+            from_args: None,
+            point_of_instantiation: Loc::INVALID,
+            print_args: args,
+        });
+        let _ = self.ast.templates.specializations.insert((tmpl, canonical), d);
+        self.ast.templates.spec_order.entry(tmpl).or_default().push(d);
+        d
+    }
+
+    /// The variable template partial specialization `template<params> T
+    /// v<args>` ([temp.spec.partial], clang's
+    /// `VarTemplatePartialSpecializationDecl`): a `Var` named like the
+    /// primary `template`, otherwise as [`AstBuilder::class_partial_spec`].
+    pub fn var_partial_spec(
+        &mut self,
+        h: DeclHead,
+        template: DeclId,
+        params: TemplateParamListId,
+        args: ArgListId,
+        ty: QualType,
+        spec: crate::decl::VarSpec,
+    ) -> DeclId {
+        let tmpl = self.ast.first(template);
+        let canonical = self.ast.types.canonical_args(args);
+        let i = self.ast.templates.partials.len() as u32;
+        let d = self.ast.decls.next_id();
+        let redecl = crate::decl::Redecl { prev: None, group: self.ast.redecls.new_group(d) };
+        let payload = Payload::Var(crate::decl::VarData {
+            redecl,
+            init: None,
+            spec,
+            eval: crate::decl::VarEval::default(),
+            templ: TemplLink::new(TemplLinkKind::PartialSpecialization, i),
+        });
+        self.add_partial(h, tmpl, params, args, canonical, DeclKind::Var, ty, payload)
+    }
+
+    /// Appends implicit variable template specialization `spec`,
+    /// instantiated from `pattern` (the primary's variable or a partial
+    /// specialization), to the member list of the pattern's lexical
+    /// context: clang lists it there, after the decls present when it is
+    /// first referenced (spec/ast-dump.md §5), and locates it at the
+    /// pattern.
+    pub fn list_implicit_spec(&mut self, spec: DeclId, pattern: DeclId) {
+        let p = *self.ast.decls.get(pattern);
+        self.ast.decls.set_loc(spec, p.loc());
+        let ctx = self.ast.decls.get(spec).ctx().unwrap_or(self.ast.tu);
+        let lexical = self.ast.decls.lexical_ctx(pattern).unwrap_or(ctx);
+        // The primary's variable sits in its `VarTemplateDecl`.
+        let lexical = if self.ast.decls.get(lexical).kind() == DeclKind::VarTemplate {
+            self.ast.decls.lexical_ctx(lexical).unwrap_or(ctx)
+        } else {
+            lexical
+        };
+        if lexical != ctx {
+            let _ = self.ast.decls.set_lexical_ctx(spec, lexical);
+        }
+        if self.ast.decls.member_list(lexical).is_some() {
+            self.ast.decls.append_member(lexical, spec);
+        }
+    }
+
     /// Marks specialization `spec` as declared in lexical context
     /// `lexical` (an explicit specialization or instantiation, which
     /// clang lists among the decls of the context it appears in;
@@ -1039,7 +1162,7 @@ impl AstBuilder<'_> {
     pub fn declare_spec_in(&mut self, spec: DeclId, lexical: DeclId, loc: Loc) {
         self.ast.decls.set_loc(spec, loc);
         let ctx = self.ast.decls.get(spec).ctx().unwrap_or(self.ast.tu);
-        if lexical != ctx && self.ast.decls.lexical_ctx(spec).is_none() {
+        if lexical != ctx && !self.ast.decls.get(spec).has(DeclFlags::HAS_LEXICAL_CTX) {
             let _ = self.ast.decls.set_lexical_ctx(spec, lexical);
         }
         if self.ast.decls.member_list(lexical).is_some() {

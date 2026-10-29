@@ -146,6 +146,7 @@ diag_groups! {
     InstantiationAfterSpecialization = "instantiation-after-specialization" [];
     Deprecated = "deprecated" [DeprecatedDeclarations, DeprecatedRedundantConstexprStaticDef];
     DeprecatedRedundantConstexprStaticDef = "deprecated-redundant-constexpr-static-def" [];
+    ExplicitSpecializationStorageClass = "explicit-specialization-storage-class" [];
 }
 
 impl Group {

@@ -22,6 +22,23 @@ use crate::Sema;
 use crate::decl::TagUse;
 use crate::templ::deduce::{DeducedArgs, Tdk};
 
+/// A declarator-id `v<args>` naming variable template `template` after a
+/// template head or `template<>` (see
+/// [`Sema::act_on_specialization_declarator_id`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SpecDeclaratorId {
+    /// The variable template (its first declaration).
+    pub template: DeclId,
+    /// The arguments as written.
+    pub args: Vec<TemplateArg>,
+    /// Where each argument was written.
+    pub arg_locs: Vec<Loc>,
+    /// Where the template name was written.
+    pub loc: Loc,
+    /// The template-id, name to `>`.
+    pub range: Span,
+}
+
 /// What a class template-id after a class-key declares.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum TagForm {
@@ -164,7 +181,7 @@ impl Sema<'_, '_> {
     /// declared in the current context ([temp.expl.spec]/3,
     /// [temp.spec.partial.general]/4: a scope in which the primary
     /// template may be defined); diagnoses otherwise.
-    fn check_spec_scope(&mut self, tmpl: DeclId, partial: bool, loc: Loc) -> bool {
+    pub(crate) fn check_spec_scope(&mut self, tmpl: DeclId, partial: bool, loc: Loc) -> bool {
         let tctx = self.ast.decls.get(tmpl).ctx().unwrap_or(self.ast.tu);
         let tctx = self.ast.redecl_context(tctx);
         let cur = self.ast.redecl_context(self.ctx);
@@ -178,10 +195,12 @@ impl Sema<'_, '_> {
         {
             return true;
         }
-        let id = if partial {
-            DiagId::sema_partial_spec_redecl_scope
-        } else {
-            DiagId::sema_class_spec_not_in_enclosing_ns
+        let var = self.kind_of(tmpl) == DeclKind::VarTemplate;
+        let id = match (partial, var) {
+            (true, false) => DiagId::sema_partial_spec_redecl_scope,
+            (false, false) => DiagId::sema_class_spec_not_in_enclosing_ns,
+            (true, true) => DiagId::sema_var_partial_spec_redecl_scope,
+            (false, true) => DiagId::sema_var_spec_not_in_enclosing_ns,
         };
         let note =
             self.diag(DiagId::note_explicit_spec_template_declared, self.ast.decls.get(tmpl).loc());
@@ -207,47 +226,15 @@ impl Sema<'_, '_> {
     ) -> Result<DeclId, ()> {
         let name_loc = range.lo;
         let Some(head) = self.templ.cur else { return Err(()) };
-        let conv = self.check_template_args(tmpl, args, locs, name_loc)?;
-        let types = &self.ast.types;
-        if !types.arg_list_flags(conv.canonical).intersects(TypeFlags::DEPENDENT_INSTANTIATION) {
-            let d = self
-                .diag(DiagId::sema_partial_spec_fully_specialized, name_loc)
-                .arg(self.decl_name(tmpl));
-            self.emit(d);
-            return Err(());
-        }
-        if self.ast.templates.param_list(head).requires.is_some() {
-            // Constrained partial specializations order by constraints
-            // ([temp.spec.partial.order]/1, [temp.constr.order]: WP-073)
-            // and may repeat the primary's arguments
-            // ([temp.spec.partial.general]/9.3).
-            self.templ_unimplemented("constrained class template partial specialization", name_loc);
-            return Err(());
-        }
-        // [temp.spec.partial.general]/9.3: the arguments are not the
-        // primary template's own parameters in order.
-        let params = self.template_params(tmpl);
-        let conv_args: Vec<TemplateArg> = self.ast.types.args(conv.sugared).to_vec();
-        if params.len() == conv_args.len()
-            && params.iter().zip(&conv_args).all(|(&p, &a)| self.arg_names_param(p, a))
-        {
-            let def = use_ == TagUse::Definition;
-            let d = self
-                .diag(DiagId::sema_partial_spec_args_match_primary, name_loc)
-                .range(range)
-                .arg(0)
-                .arg(u32::from(def));
-            self.emit(d);
-            if def && let Some(prev) = self.pattern_of(tmpl).and_then(|p| self.ast.definition(p)) {
-                let d = self.diag(DiagId::sema_redefinition, name_loc).arg(self.decl_name(tmpl));
-                let d = self.note_prev(d, prev, true);
-                self.emit(d);
-            }
-            return Err(());
-        }
-        if !self.check_spec_scope(tmpl, true, name_loc) {
-            return Err(());
-        }
+        let conv = self.check_partial_args(
+            tmpl,
+            head,
+            args,
+            locs,
+            false,
+            use_ == TagUse::Definition,
+            range,
+        )?;
         if let Some(i) = self.ast.templates.find_partial(tmpl, conv.canonical) {
             let p = self.ast.templates.partial(i).map(|p| p.partial).ok_or(())?;
             if use_ == TagUse::Definition
@@ -278,11 +265,79 @@ impl Sema<'_, '_> {
         Ok(p)
     }
 
+    /// The checks every partial specialization `tmpl<args>` with head
+    /// `head` passes ([temp.spec.partial.general]/8-9,
+    /// [temp.spec.partial.general]/4): not fully specialized, not the
+    /// primary template's own arguments, in an enclosing scope. `var`: a
+    /// variable template's; `def`: a definition. The converted
+    /// arguments, `Err` after a diagnostic.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn check_partial_args(
+        &mut self,
+        tmpl: DeclId,
+        head: kiln_ast::ids::TemplateParamListId,
+        args: &[TemplateArg],
+        locs: &[Loc],
+        var: bool,
+        def: bool,
+        range: Span,
+    ) -> Result<crate::templ::args::ConvertedArgs, ()> {
+        let name_loc = range.lo;
+        let conv = self.check_template_args(tmpl, args, locs, name_loc)?;
+        let types = &self.ast.types;
+        if !types.arg_list_flags(conv.canonical).intersects(TypeFlags::DEPENDENT_INSTANTIATION) {
+            let d = self
+                .diag(DiagId::sema_partial_spec_fully_specialized, name_loc)
+                .arg(self.decl_name(tmpl));
+            self.emit(d);
+            return Err(());
+        }
+        if self.ast.templates.param_list(head).requires.is_some() {
+            // Constrained partial specializations order by constraints
+            // ([temp.spec.partial.order]/1, [temp.constr.order]: WP-073)
+            // and may repeat the primary's arguments
+            // ([temp.spec.partial.general]/9.3).
+            let what = if var { "variable" } else { "class" };
+            self.templ_unimplemented(
+                &format!("constrained {what} template partial specialization"),
+                name_loc,
+            );
+            return Err(());
+        }
+        // [temp.spec.partial.general]/9.3: the arguments are not the
+        // primary template's own parameters in order.
+        let params = self.template_params(tmpl);
+        let conv_args: Vec<TemplateArg> = self.ast.types.args(conv.sugared).to_vec();
+        if params.len() == conv_args.len()
+            && params.iter().zip(&conv_args).all(|(&p, &a)| self.arg_names_param(p, a))
+        {
+            let d = self
+                .diag(DiagId::sema_partial_spec_args_match_primary, name_loc)
+                .range(range)
+                .arg(u32::from(var))
+                .arg(u32::from(def));
+            self.emit(d);
+            if def
+                && !var
+                && let Some(prev) = self.pattern_of(tmpl).and_then(|p| self.ast.definition(p))
+            {
+                let d = self.diag(DiagId::sema_redefinition, name_loc).arg(self.decl_name(tmpl));
+                let d = self.note_prev(d, prev, true);
+                self.emit(d);
+            }
+            return Err(());
+        }
+        if !self.check_spec_scope(tmpl, true, name_loc) {
+            return Err(());
+        }
+        Ok(conv)
+    }
+
     /// [temp.spec.partial.general]/8 (clang's
     /// `checkTemplatePartialSpecialization`): every parameter of partial
     /// specialization `p` is deducible from its arguments, else it can
     /// never match (`-Wunusable-partial-specialization`).
-    fn check_partial_deducible(&mut self, p: DeclId, range: Span) {
+    pub(crate) fn check_partial_deducible(&mut self, p: DeclId, range: Span) {
         let loc = range.lo;
         let Some((_, info)) = self.ast.partial_spec_info(p) else { return };
         let info = *info;
@@ -308,10 +363,11 @@ impl Sema<'_, '_> {
         if missing.is_empty() {
             return;
         }
+        let var = self.kind_of(p) == DeclKind::Var;
         let mut msg = self
             .diag(DiagId::sema_partial_spec_not_deducible, loc)
             .range(range)
-            .arg(0)
+            .arg(u32::from(var))
             .arg(u32::from(missing.len() > 1));
         for &m in &missing {
             let note = self
@@ -355,8 +411,9 @@ impl Sema<'_, '_> {
     /// The deduction frame's description: `class template partial
     /// specialization 'X<T *>' [with T = int]`.
     pub(crate) fn partial_spec_desc(&self, p: DeclId, args: Option<ArgListId>) -> String {
+        let what = if self.kind_of(p) == DeclKind::Var { "variable" } else { "class" };
         let mut s =
-            format!("class template partial specialization '{}'", self.partial_spec_name(p));
+            format!("{what} template partial specialization '{}'", self.partial_spec_name(p));
         if let Some(a) = args {
             s.push(' ');
             s.push_str(&self.partial_spec_bindings(p, a));
@@ -449,7 +506,12 @@ impl Sema<'_, '_> {
         let (i, info) = self.ast.spec_info(spec).map(|(i, s)| (i, *s)).ok_or(())?;
         let t = self.tag_type(spec);
         match (info.kind, declaration) {
-            (SpecKind::ExplicitSpecialization, true) => return Ok(spec),
+            (
+                SpecKind::ExplicitSpecialization | SpecKind::ExplicitInstantiationDeclaration,
+                true,
+            ) => {
+                return Ok(spec);
+            }
             (SpecKind::ExplicitSpecialization, false) => {
                 // [temp.explicit]/8 (clang: no effect, a warning).
                 let note = self.diag(
@@ -488,7 +550,6 @@ impl Sema<'_, '_> {
                 self.emit(d);
                 return Err(());
             }
-            (SpecKind::ExplicitInstantiationDeclaration, true) => return Ok(spec),
             _ => {}
         }
         let first_explicit =
@@ -571,10 +632,8 @@ impl Sema<'_, '_> {
                 | DeclKind::CXXDestructor
                 | DeclKind::CXXConversion => self.instantiate_function_definition(m, loc),
                 DeclKind::Var => self.instantiate_static_member_init(m, loc),
-                DeclKind::CXXRecord => {
-                    if self.instantiate_class(m, loc, false) {
-                        self.instantiate_members_of(m, loc, depth + 1);
-                    }
+                DeclKind::CXXRecord if self.instantiate_class(m, loc, false) => {
+                    self.instantiate_members_of(m, loc, depth + 1);
                 }
                 _ => {}
             }

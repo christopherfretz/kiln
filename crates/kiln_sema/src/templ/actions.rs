@@ -270,9 +270,17 @@ impl Sema<'_, '_> {
                 ))
             }
             DeclKind::VarTemplate => {
-                if !dep_args {
-                    self.templ_unimplemented("variable template specialization", l);
-                    return Err(());
+                if !dep_args && !args.iter().any(|&a| self.is_pack_expansion_arg(a)) {
+                    // [temp.names]/1, [temp.inst]/7: names the
+                    // specialization (§4.7).
+                    let locs = std::mem::take(&mut self.templ.arg_locs);
+                    let v = self.get_var_spec(d, args, &locs, l)?;
+                    let extra = kiln_ast::expr::DeclRefExtra {
+                        qualifier: None,
+                        template_args: Some(list),
+                        found_decl: Some(self.ast.first(d)),
+                    };
+                    return Ok(TemplateIdRef::Value(self.build_decl_ref_extra(v, l, Some(extra))));
                 }
                 let n = self.decl_symbol(d);
                 let e = self.builder().unresolved_lookup(n, &[d], false, None, Some(list), l);
