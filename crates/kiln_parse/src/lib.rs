@@ -15,8 +15,8 @@ mod new_delete;
 mod parser;
 mod pragma;
 mod stmt;
-mod tentative;
 mod templ;
+mod tentative;
 pub mod tokens;
 
 use std::sync::Arc;

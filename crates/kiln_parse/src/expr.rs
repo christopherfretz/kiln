@@ -16,12 +16,13 @@ use kiln_lex::{Punct, TokKind, Token};
 use kiln_sema::expr::CastStyle;
 use kiln_sema::{DeclaratorContext, NameClass, OffsetofComponent};
 use kiln_source::Loc;
+use kiln_source::symbol::Symbol;
 
 use crate::decl::is_type_specifier_kw;
 use crate::keywords::Kw;
 use crate::parser::{PExpr, Parser, is_template_class};
-use kiln_sema::templ::actions::TemplateIdRef;
 use crate::tentative::TypeIdContext;
+use kiln_sema::templ::actions::TemplateIdRef;
 
 /// clang's `prec::Level`.
 pub(crate) mod prec {
@@ -202,6 +203,9 @@ impl Parser<'_, '_> {
             if p < min {
                 return Some(lhs);
             }
+            if op == Some(BinaryOp::LT) && self.diagnose_missing_template_kw(lhs) {
+                return None;
+            }
             let op_tok = self.bump();
             let op_loc = op_tok.span.lo;
             let mut middle = None;
@@ -251,6 +255,45 @@ impl Parser<'_, '_> {
                 (None, None) => unreachable!("'?' always has a middle operand"),
             };
         }
+    }
+
+    /// [temp.names]/3: a dependent name (`T::g`, `t.g`) followed by a `<`
+    /// that must start a template argument list -- `<>`, an unambiguous
+    /// type-id (`err_missing_dependent_template_keyword`), or a
+    /// list closing on `>` followed by `()` (`err_template_kw_missing`) --
+    /// is diagnosed as missing the `template` keyword at the name (clang's
+    /// `checkPotentialAngleBracket` and
+    /// `checkPotentialAngleBracketDelimiter`). Returns whether it was
+    /// diagnosed; the expression is then erroneous.
+    fn diagnose_missing_template_kw(&mut self, lhs: ExprId) -> bool {
+        let n = *self.s.ast.exprs.get(lhs);
+        if !matches!(
+            n.kind(),
+            ExprKind::DependentScopeDeclRefExpr | ExprKind::CXXDependentScopeMemberExpr
+        ) || self.s.ast.templates.expr_targs.contains(lhs)
+        {
+            return false;
+        }
+        let less = self.pos();
+        let next = Self::punct_of(self.tok_at(less + 1));
+        let id = if matches!(next, Some(Punct::Greater | Punct::GreaterGreater))
+            || self.is_cxx_type_id_at(less + 1, TypeIdContext::Unambiguous).0
+        {
+            DiagId::parse_missing_dependent_template_kw
+        } else if self.skip_template_args(less).is_some_and(|(close, split)| {
+            !split
+                && Self::punct_of(self.tok_at(close + 1)) == Some(Punct::LParen)
+                && Self::punct_of(self.tok_at(close + 2)) == Some(Punct::RParen)
+        }) {
+            DiagId::parse_template_kw_missing
+        } else {
+            return false;
+        };
+        let name = Symbol::from_index(n.b());
+        let text = self.s.ast.symbols().as_str(name).to_owned();
+        let d = self.s.diag(id, n.loc()).arg(text);
+        self.emit(d);
+        true
     }
 
     /// A braced-init-list right operand of the binary operator `op_tok`
@@ -605,7 +648,10 @@ impl Parser<'_, '_> {
                         };
                         let Some(m) = self.s.try_dependent_member(e, name, targs, true, nl, arrow)
                         else {
-                            self.unsupported("'template' member access on a non-dependent object", nl);
+                            self.unsupported(
+                                "'template' member access on a non-dependent object",
+                                nl,
+                            );
                             return None;
                         };
                         e = m;
@@ -714,7 +760,7 @@ impl Parser<'_, '_> {
                 }
                 Kw::Typeid => self.parse_typeid(),
                 Kw::BuiltinOffsetof => self.parse_builtin_offsetof(),
-                Kw::Requires => self.parse_requires_expression(),
+                Kw::Requires => Some(self.parse_requires_expression()),
                 // `typename T::type(e)` ([expr.type.conv]).
                 Kw::Typename => self.parse_functional_cast(),
                 Kw::CoYield | Kw::Template => {
@@ -815,9 +861,8 @@ impl Parser<'_, '_> {
     fn parse_paren_rest(&mut self, lparen: Loc) -> PExpr {
         // `( ... op e )`.
         if self.at(Punct::Ellipsis)
-            && let Some(op) = Self::punct_of(self.tok_at(self.pos() + 1))
-                .and_then(binop)
-                .and_then(|b| b.1)
+            && let Some(op) =
+                Self::punct_of(self.tok_at(self.pos() + 1)).and_then(binop).and_then(|b| b.1)
         {
             let ellipsis = self.bump().span.lo;
             self.bump();

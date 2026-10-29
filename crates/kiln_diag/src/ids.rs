@@ -861,6 +861,7 @@ diag_ids! {
     sema_trailing_requires_non_template = Error (0) "non-templated function cannot have a requires clause";
     parse_expected_qualified_after_typename = Error (0) "expected a qualified name after 'typename'";
     parse_expected_fold_operator = Error (0) "expected a foldable binary operator in fold expression";
+    parse_template_kw_missing = Error (1) "missing 'template' keyword prior to dependent template name '{0}'";
 }
 
 impl DiagId {

@@ -221,6 +221,23 @@ pub fn write_nns(ctx: &TypeContext, names: &dyn TypeNames, n: NnsId, out: &mut S
     *out = p.out;
 }
 
+/// Renders template-argument list `l` as written (clang's
+/// `printTemplateArgumentList`: `<int, N>`), appending to `out`.
+pub fn write_arg_list(ctx: &TypeContext, names: &dyn TypeNames, l: ArgListId, out: &mut String) {
+    let mut p = Printer {
+        ctx,
+        names,
+        out: std::mem::take(out),
+        empty_ph: true,
+        scope: false,
+        suppress_tag: false,
+        inside_cc_attr: false,
+        depth: 0,
+    };
+    p.arg_list(l, false);
+    *out = p.out;
+}
+
 /// The diagnostic `aka` string: the canonical type printed with every
 /// name scoped, when it differs textually from the type as written
 /// (`'S' (aka 'ns::S')`).

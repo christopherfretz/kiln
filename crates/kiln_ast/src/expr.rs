@@ -1181,7 +1181,10 @@ impl ExprArena {
             n.kind
         );
         if n.aux != 0 {
-            return Err(AlreadySet { slot: "UnresolvedLookupExpr.adl", existing: u32::from(n.aux) });
+            return Err(AlreadySet {
+                slot: "UnresolvedLookupExpr.adl",
+                existing: u32::from(n.aux),
+            });
         }
         n.aux = 1;
         Ok(())
@@ -1568,11 +1571,15 @@ impl ExprArena {
             ExprKind::UnaryExprOrTypeTraitExpr if !n.has(ExprFlags::ARG_IS_TYPE) => {
                 v.extend(id(n.a));
             }
+            // `CXXDependentScopeMemberExpr` and `PackExpansionExpr` are
+            // template expressions (spec/sema-templates.md §2.4).
             ExprKind::CXXNoexceptExpr
             | ExprKind::CXXThrowExpr
             | ExprKind::CompoundLiteralExpr
-            | ExprKind::CXXDeleteExpr => v.extend(id(n.a)),
-            ExprKind::BinaryOperator | ExprKind::ArraySubscriptExpr => {
+            | ExprKind::CXXDeleteExpr
+            | ExprKind::CXXDependentScopeMemberExpr
+            | ExprKind::PackExpansionExpr => v.extend(id(n.a)),
+            ExprKind::BinaryOperator | ExprKind::ArraySubscriptExpr | ExprKind::CXXFoldExpr => {
                 v.extend(id(n.a));
                 v.extend(id(n.b));
             }
@@ -1593,17 +1600,6 @@ impl ExprArena {
                 v.extend(self.init_lists[n.b as usize].array_filler);
             }
             ExprKind::RecoveryExpr => v.extend(lists.iter::<ExprId>(ListId::new(n.a))),
-            // Template expressions (spec/sema-templates.md §2.4).
-            ExprKind::CXXDependentScopeMemberExpr | ExprKind::PackExpansionExpr => {
-                v.extend(id(n.a));
-            }
-            ExprKind::CXXFoldExpr => {
-                v.extend(id(n.a));
-                v.extend(id(n.b));
-            }
-            ExprKind::CXXUnresolvedConstructExpr | ExprKind::ParenListExpr => {
-                v.extend(lists.iter::<ExprId>(ListId::new(n.a)));
-            }
             ExprKind::CXXNewExpr => {
                 let x = &self.news[n.a as usize];
                 v.extend(x.array_size);
@@ -1612,7 +1608,12 @@ impl ExprArena {
                     v.extend(lists.iter::<ExprId>(p));
                 }
             }
-            ExprKind::BinaryConditionalOperator | ExprKind::OffsetOfExpr => {
+            // `CXXUnresolvedConstructExpr` and `ParenListExpr` are template
+            // expressions (spec/sema-templates.md §2.4).
+            ExprKind::BinaryConditionalOperator
+            | ExprKind::OffsetOfExpr
+            | ExprKind::CXXUnresolvedConstructExpr
+            | ExprKind::ParenListExpr => {
                 v.extend(lists.iter::<ExprId>(ListId::new(n.a)));
             }
             _ => {}

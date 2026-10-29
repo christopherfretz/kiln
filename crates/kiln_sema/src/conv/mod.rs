@@ -297,7 +297,14 @@ pub fn decay_dependent(s: &mut Sema<'_, '_>, e: ExprId) -> ExprId {
     if types.is_function(t) {
         if n.value_category() == ValueCategory::LValue {
             let p = s.ast.types.pointer_to(t);
-            return raw_cast(s, CastKind::FunctionToPointerDecay, e, p, ValueCategory::PRValue, None);
+            return raw_cast(
+                s,
+                CastKind::FunctionToPointerDecay,
+                e,
+                p,
+                ValueCategory::PRValue,
+                None,
+            );
         }
         return e;
     }

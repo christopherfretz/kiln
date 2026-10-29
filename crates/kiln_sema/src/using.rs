@@ -57,7 +57,10 @@ impl Sema<'_, '_> {
                 Nns::NamespaceAlias { prefix, alias: spelled, ns: resolved }
             }
             k => {
-                let ty = if matches!(k, DeclKind::Typedef | DeclKind::TypeAlias | DeclKind::TemplateTypeParm) {
+                let ty = if matches!(
+                    k,
+                    DeclKind::Typedef | DeclKind::TypeAlias | DeclKind::TemplateTypeParm
+                ) {
                     self.ast.decls.get(spelled).ty().unwrap_or(QualType::ERROR)
                 } else {
                     self.tag_type(spelled)

@@ -496,6 +496,7 @@ pub enum Chunk {
 
 /// A declarator: a name plus the operators applied to it.
 #[derive(Clone, Debug)]
+#[allow(clippy::struct_excessive_bools, reason = "independent parser facts")]
 pub struct Declarator {
     /// Where it appears.
     pub ctx: DeclaratorContext,
@@ -555,6 +556,12 @@ pub struct Declarator {
     /// The trailing requires-clause of a function declarator
     /// ([dcl.decl.general]/4, [temp.pre]/9).
     pub trailing_requires: Option<ExprId>,
+    /// The declarator was diagnosed and declares nothing (a function
+    /// template partial specialization, or a specialization form that is
+    /// WP-070a's; [`Sema::act_on_specialization_declarator_id`]).
+    ///
+    /// [`Sema::act_on_specialization_declarator_id`]: crate::Sema::act_on_specialization_declarator_id
+    pub dropped: bool,
 }
 
 /// A declarator-id that is not an identifier ([dcl.decl]/4,
@@ -596,6 +603,7 @@ impl Declarator {
             op_name: None,
             ellipsis: None,
             trailing_requires: None,
+            dropped: false,
         }
     }
 

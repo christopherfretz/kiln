@@ -24,7 +24,7 @@ use kiln_source::symbol::Symbol;
 
 use crate::expr::prec;
 use crate::keywords::Kw;
-use crate::parser::{PExpr, Parser, is_template_class};
+use crate::parser::{Parser, is_template_class};
 use crate::tentative::TypeIdContext;
 
 /// The kind of a template-parameter ([temp.param]/1), decided from its
@@ -144,13 +144,24 @@ impl Parser<'_, '_> {
             return false;
         }
         let mut i = self.pos() + 1;
-        while self.tok_at(i).kind == TokKind::Punct(Punct::LSquare) {
-            // `[[attr]]`: skip to the matching `]]`.
+        loop {
+            // `[[attr]]`, `alignas(...)` or `__attribute__((...))`: skip to
+            // the matching close.
+            let (open, close) = if self.tok_at(i).kind == TokKind::Punct(Punct::LSquare) {
+                (Punct::LSquare, Punct::RSquare)
+            } else if matches!(self.kw_of(self.tok_at(i)), Some(Kw::Attribute | Kw::Alignas))
+                && self.tok_at(i + 1).kind == TokKind::Punct(Punct::LParen)
+            {
+                i += 1;
+                (Punct::LParen, Punct::RParen)
+            } else {
+                break;
+            };
             let mut depth = 0usize;
             loop {
                 match Self::punct_of(self.tok_at(i)) {
-                    Some(Punct::LSquare) => depth += 1,
-                    Some(Punct::RSquare) => {
+                    Some(p) if p == open => depth += 1,
+                    Some(p) if p == close => {
                         depth = depth.saturating_sub(1);
                         if depth == 0 {
                             i += 1;
@@ -192,9 +203,10 @@ impl Parser<'_, '_> {
     fn parse_concept_definition(&mut self, head: kiln_ast::ids::TemplateParamListId) {
         self.bump();
         if self.at_kw(Kw::Bool) {
-            // The Concepts TS form `concept bool`.
-            self.error_here(DiagId::parse_concept_legacy_bool);
+            // The Concepts TS form `concept bool`, diagnosed at the name
+            // (clang's `err_concept_legacy_bool_keyword`).
             self.bump();
+            self.error_here(DiagId::parse_concept_legacy_bool);
         }
         let Some(name) = self.ident() else {
             self.error_here(DiagId::parse_expected_unqualified_id);
@@ -202,6 +214,12 @@ impl Parser<'_, '_> {
             return;
         };
         let name_loc = self.bump().span.lo;
+        if self.s.ast.templates.param_list(head).requires.is_some() {
+            // [temp.concept]/4: a requires-clause in the template head,
+            // diagnosed at the name.
+            let d = self.s.diag(DiagId::parse_concept_has_constraints, name_loc);
+            self.emit(d);
+        }
         if self.at_kw(Kw::Requires) {
             // [temp.concept]/4.
             self.error_here(DiagId::parse_concept_has_constraints);
@@ -260,12 +278,10 @@ impl Parser<'_, '_> {
         match self.kw() {
             Some(Kw::Template) => return ParamKind::Template,
             Some(Kw::Class) => {
-                return if ends_type_param(next) || next == Some(Punct::Ellipsis) {
-                    ParamKind::Type
-                } else if self.ident_of(self.peek(1)).is_some()
+                let named = self.ident_of(self.peek(1)).is_some()
                     && self.kw_of(self.peek(1)).is_none()
-                    && ends_type_param(Self::punct_of(self.peek(2)))
-                {
+                    && ends_type_param(Self::punct_of(self.peek(2)));
+                return if ends_type_param(next) || next == Some(Punct::Ellipsis) || named {
                     ParamKind::Type
                 } else {
                     ParamKind::NonType
@@ -331,8 +347,12 @@ impl Parser<'_, '_> {
 
     /// `= type-id` of a type parameter `p` ([temp.param]/10).
     fn parse_type_param_default(&mut self, p: DeclId) -> bool {
-        let Some(eq) = self.eat(Punct::Equal) else { return true };
-        let Some(t) = self.with_greater_op(false, |s| s.parse_type_id()) else {
+        if self.eat(Punct::Equal).is_none() {
+            return true;
+        }
+        // The default argument's location (clang's diagnostics point there).
+        let eq = self.loc();
+        let Some(t) = self.with_greater_op(false, Self::parse_type_id) else {
             return false;
         };
         self.s.act_on_template_param_default(p, TemplateArg::ty(t), eq);
@@ -395,7 +415,11 @@ impl Parser<'_, '_> {
         self.bump();
         let (pack, name) = self.parse_param_pack_and_name();
         let p = self.s.act_on_template_template_param(params, typename_kw, kw.span.lo, pack, name);
-        let Some(eq) = self.eat(Punct::Equal) else { return true };
+        if self.eat(Punct::Equal).is_none() {
+            return true;
+        }
+        // The default argument's location (clang's diagnostics point there).
+        let eq = self.loc();
         let Ok(qual) = self.parse_nested_name_nns() else { return false };
         // `nns template name` with a dependent `nns` ([temp.names]/5).
         let dep = qual.as_ref().is_some_and(|q| self.s.is_dependent_ctx(q.ctx));
@@ -416,16 +440,13 @@ impl Parser<'_, '_> {
             self.s.act_on_template_param_default(p, TemplateArg::template(tn), eq);
             return true;
         }
-        match self.s.classify_name(n, qual.map(|q| q.ctx)) {
-            NameClass::TypeTemplate(d) => {
-                let tn = self.s.template_name_for(d);
-                self.s.act_on_template_param_default(p, TemplateArg::template(tn), eq);
-            }
-            _ => {
-                let text = self.s.ast.symbols().as_str(n).to_owned();
-                let d = self.s.diag(DiagId::sema_no_template_named, nl).arg(text);
-                self.emit(d);
-            }
+        if let NameClass::TypeTemplate(d) = self.s.classify_name(n, qual.map(|q| q.ctx)) {
+            let tn = self.s.template_name_for(d);
+            self.s.act_on_template_param_default(p, TemplateArg::template(tn), eq);
+        } else {
+            let text = self.s.ast.symbols().as_str(n).to_owned();
+            let d = self.s.diag(DiagId::sema_no_template_named, nl).arg(text);
+            self.emit(d);
         }
         true
     }
@@ -444,8 +465,9 @@ impl Parser<'_, '_> {
         let pack = d.ellipsis.take().is_some();
         let info = self.s.act_on_param_declarator(&ds, &d);
         let p = self.s.act_on_non_type_template_param(&info, pack);
-        if let Some(eq) = self.eat(Punct::Equal) {
-            let Some(e) = self.with_greater_op(false, |s| s.parse_constant_expr()) else {
+        if self.eat(Punct::Equal).is_some() {
+            let eq = self.loc();
+            let Some(e) = self.with_greater_op(false, Self::parse_constant_expr) else {
                 return false;
             };
             let a = self.s.builder().template_arg_expr(e);
@@ -466,13 +488,11 @@ impl Parser<'_, '_> {
         let mut ok = true;
         if !self.at_greater() {
             loop {
-                match self.parse_template_argument() {
-                    Some(a) => args.push(a),
-                    None => {
-                        ok = false;
-                        break;
-                    }
-                }
+                let Some(a) = self.parse_template_argument() else {
+                    ok = false;
+                    break;
+                };
+                args.push(a);
                 if self.eat(Punct::Comma).is_none() {
                     break;
                 }
@@ -501,11 +521,11 @@ impl Parser<'_, '_> {
     /// [temp.arg]/2: a type-id wins an ambiguity).
     fn parse_template_argument(&mut self) -> Option<TemplateArg> {
         let a = if self.is_cxx_type_id_at(self.pos(), TypeIdContext::AsTemplateArgument).0 {
-            TemplateArg::ty(self.with_greater_op(false, |s| s.parse_type_id())?)
+            TemplateArg::ty(self.with_greater_op(false, Self::parse_type_id)?)
         } else if let Some(t) = self.at_template_name_arg() {
             t
         } else {
-            let e = self.with_greater_op(false, |s| s.parse_constant_expr())?;
+            let e = self.with_greater_op(false, Self::parse_constant_expr)?;
             self.s.builder().template_arg_expr(e)
         };
         match self.eat(Punct::Ellipsis) {
@@ -549,7 +569,11 @@ impl Parser<'_, '_> {
             self.eat_kw(Kw::Template);
             let n = self.ident()?;
             self.bump();
-            let tn = self.s.ast.types.template_name(TemplateName::DependentIdentifier { nns: qual.nns, name: n });
+            let tn = self
+                .s
+                .ast
+                .types
+                .template_name(TemplateName::DependentIdentifier { nns: qual.nns, name: n });
             return Some(TemplateArg::template(tn));
         };
         while self.pos() < end {
@@ -567,17 +591,15 @@ impl Parser<'_, '_> {
         name_loc: Loc,
     ) -> Result<TemplateIdRef, ()> {
         let (args, l, r) = self.parse_template_arg_list().ok_or(())?;
-        let d = match class {
-            NameClass::TypeTemplate(d)
-            | NameClass::VarTemplate(d)
-            | NameClass::FunctionTemplate(d)
-            | NameClass::Concept(d) => d,
-            _ => {
-                let text = self.s.ast.symbols().as_str(name).to_owned();
-                let msg = self.s.diag(DiagId::sema_no_template_named, name_loc).arg(text);
-                self.emit(msg);
-                return Err(());
-            }
+        let (NameClass::TypeTemplate(d)
+        | NameClass::VarTemplate(d)
+        | NameClass::FunctionTemplate(d)
+        | NameClass::Concept(d)) = class
+        else {
+            let text = self.s.ast.symbols().as_str(name).to_owned();
+            let msg = self.s.diag(DiagId::sema_no_template_named, name_loc).arg(text);
+            self.emit(msg);
+            return Err(());
         };
         let tn = self.s.template_name_for(d);
         let _ = l;
@@ -632,28 +654,24 @@ impl Parser<'_, '_> {
                 _ => None,
             };
         }
-        match class {
-            NameClass::Type(t, d) => {
-                self.s.mark_type_referenced(d);
-                let kind = self.s.ast.decls.get(d).kind();
-                Some(if kiln_sema::lookup::is_tag_kind(kind) {
-                    self.s.elaborated_tag_type(d, TagKeyword::None)
-                } else {
-                    t
-                })
-            }
-            _ => {
-                let text = self.s.ast.symbols().as_str(name).to_owned();
-                let ctx = self.s.decl_name(q.ctx);
-                let d = self
-                    .s
-                    .diag(DiagId::sema_typename_nested_not_found, name_loc)
-                    .arg(text)
-                    .arg(format!("'{ctx}'"));
-                self.emit(d);
-                None
-            }
-        }
+        let NameClass::Type(t, d) = class else {
+            let text = self.s.ast.symbols().as_str(name).to_owned();
+            let ctx = self.s.decl_name(q.ctx);
+            let d = self
+                .s
+                .diag(DiagId::sema_typename_nested_not_found, name_loc)
+                .arg(text)
+                .arg(format!("'{ctx}'"));
+            self.emit(d);
+            return None;
+        };
+        self.s.mark_type_referenced(d);
+        let kind = self.s.ast.decls.get(d).kind();
+        Some(if kiln_sema::lookup::is_tag_kind(kind) {
+            self.s.elaborated_tag_type(d, TagKeyword::None)
+        } else {
+            t
+        })
     }
 
     /// True at a type-constraint followed by `auto` or `decltype(auto)`
@@ -797,26 +815,70 @@ impl Parser<'_, '_> {
         Some(lhs)
     }
 
-    /// A primary-expression of a requires-clause; another binary
+    /// A primary-expression of a requires-clause ([temp.pre]/9). A unary
+    /// expression, a postfix operator other than a call, or a binary
     /// operator binding tighter than `&&` needs parentheses (clang's
-    /// `err_requires_clause_must_be_parenthesized`), recovered by parsing
-    /// it anyway.
+    /// `err_unparenthesized_non_primary_expr_in_requires_clause`); it is
+    /// recovered by parsing the postfix suffix and the operators above
+    /// `&&`, and diagnosed at the result's expression location.
     fn parse_constraint_primary(&mut self) -> Option<ExprId> {
-        let start = self.loc();
-        let e = self.parse_primary_expr()?;
-        if let Some(p) = self.cur_binop_prec()
-            && p > prec::LAND
-        {
-            let d = self.s.diag(DiagId::parse_requires_clause_needs_parens, start);
-            self.emit(d);
-            return self.parse_rhs_from(e, prec::LAND + 1);
+        let non_primary = self.at_non_primary_constraint_start();
+        let e = if non_primary { self.parse_cast_expr()? } else { self.parse_primary_expr()? };
+        let postfix = self.at(Punct::Period)
+            || self.at(Punct::PlusPlus)
+            || self.at(Punct::MinusMinus)
+            || (self.at(Punct::LSquare) && !self.peek_is(1, Punct::LSquare));
+        let binary = self.cur_binop_prec().is_some_and(|p| p > prec::LAND);
+        if !(non_primary || postfix || binary) {
+            return Some(e);
         }
+        let e = if postfix { self.parse_postfix_suffix(e)? } else { e };
+        let e = self.parse_rhs_from(e, prec::LAND + 1)?;
+        let loc = self.s.ast.exprs.get(e).loc();
+        let d = self.s.diag(DiagId::parse_requires_clause_needs_parens, loc);
+        self.emit(d);
         Some(e)
+    }
+
+    /// Whether the current token starts an expression that is not a
+    /// primary-expression (clang's `NotPrimaryExpression` in
+    /// `PrimaryExprOnly` mode): a unary operator, `sizeof`, `alignof`,
+    /// `noexcept`, `new`, `delete`, a named cast or `typeid`.
+    fn at_non_primary_constraint_start(&self) -> bool {
+        if let Some(p) = Self::punct_of(self.tok()) {
+            return matches!(
+                p,
+                Punct::PlusPlus
+                    | Punct::MinusMinus
+                    | Punct::Amp
+                    | Punct::Star
+                    | Punct::Plus
+                    | Punct::Minus
+                    | Punct::Tilde
+                    | Punct::Exclaim
+            );
+        }
+        matches!(
+            self.kw(),
+            Some(
+                Kw::Sizeof
+                    | Kw::Alignof
+                    | Kw::GnuAlignof
+                    | Kw::Noexcept
+                    | Kw::New
+                    | Kw::Delete
+                    | Kw::StaticCast
+                    | Kw::ConstCast
+                    | Kw::ReinterpretCast
+                    | Kw::DynamicCast
+                    | Kw::Typeid
+            )
+        )
     }
 
     /// `requires (params)? { requirement-seq }` at `requires`
     /// ([expr.prim.req.general]/1).
-    pub(crate) fn parse_requires_expression(&mut self) -> PExpr {
+    pub(crate) fn parse_requires_expression(&mut self) -> ExprId {
         let loc = self.bump().span.lo;
         let body = self.s.act_on_requires_expr_start(loc);
         let mut params = Vec::new();
@@ -825,10 +887,8 @@ impl Parser<'_, '_> {
                 let start = self.loc();
                 let ds = self.parse_decl_specifiers(DeclaratorContext::Prototype);
                 if ds.is_empty() {
-                    let e = self
-                        .s
-                        .diag(DiagId::parse_expected, self.loc())
-                        .arg("parameter declarator");
+                    let e =
+                        self.s.diag(DiagId::parse_expected, self.loc()).arg("parameter declarator");
                     self.emit(e);
                     self.skip_until(&[Punct::RParen], false, false);
                     break;
@@ -846,8 +906,7 @@ impl Parser<'_, '_> {
         }
         let mut reqs = Vec::new();
         let Some(lbrace) = self.expect(Punct::LBrace) else {
-            let e = self.s.act_requires_expr(body, &params, &reqs, loc, self.prev_end());
-            return Some(e);
+            return self.s.act_requires_expr(body, &params, &reqs, loc, self.prev_end());
         };
         while !self.at(Punct::RBrace) && !self.at_eof() {
             match self.parse_requirement() {
@@ -858,7 +917,7 @@ impl Parser<'_, '_> {
             }
         }
         let rbrace = self.expect_closing(Punct::RBrace, Punct::LBrace, lbrace);
-        Some(self.s.act_requires_expr(body, &params, &reqs, loc, rbrace))
+        self.s.act_requires_expr(body, &params, &reqs, loc, rbrace)
     }
 
     /// One requirement ([expr.prim.req.general]/1) with its `;`.

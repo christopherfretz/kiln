@@ -847,10 +847,6 @@ impl<'a> Printer<'a, '_> {
                 // clang's text dump).
                 kids_out = self.kid_trees(n)?;
             }
-            "DependentScopeDeclRefExpr" | "PackExpansionExpr" => {
-                line = self.expr_head(n, k)?;
-                kids_out = self.kid_trees(n)?;
-            }
             "CXXUnresolvedConstructExpr" => {
                 let mut l = self.expr_head(n, k)?;
                 if flag(n, "list") {
@@ -1144,7 +1140,9 @@ impl<'a> Printer<'a, '_> {
             | "StmtExpr"
             | "CompoundLiteralExpr"
             | "BinaryConditionalOperator"
-            | "OffsetOfExpr" => {
+            | "OffsetOfExpr"
+            | "DependentScopeDeclRefExpr"
+            | "PackExpansionExpr" => {
                 line = self.expr_head(n, k)?;
                 kids_out = self.kid_trees(n)?;
             }

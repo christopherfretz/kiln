@@ -671,8 +671,7 @@ impl Sema<'_, '_> {
             return self.recover_err(&[], loc);
         };
         let mut d = d;
-        let any_tmpl =
-            found.decls.iter().any(|&x| self.kind_of(x) == DeclKind::FunctionTemplate);
+        let any_tmpl = found.decls.iter().any(|&x| self.kind_of(x) == DeclKind::FunctionTemplate);
         if any_tmpl
             && found.decls.iter().all(|&x| {
                 let k = self.kind_of(x);
@@ -790,9 +789,7 @@ impl Sema<'_, '_> {
         let mut declared = n.ty().unwrap_or(QualType::ERROR);
         // A pack names its pattern ([temp.variadic]/5): `Ts... x` gives `x`
         // the type `Ts`.
-        if let TypeView::PackExpansion { pattern, .. } =
-            self.ast.types.view(declared.ty())
-        {
+        if let TypeView::PackExpansion { pattern, .. } = self.ast.types.view(declared.ty()) {
             declared = pattern;
         }
         let ty = if self.ast.decls.builtin_id(d).is_some() {
@@ -1948,7 +1945,8 @@ impl Sema<'_, '_> {
         if let Some(e) = self.check_unresolved_callee(callee, args) {
             return e;
         }
-        if self.expr_is_type_dependent(callee) || args.iter().any(|&a| self.expr_is_type_dependent(a))
+        if self.expr_is_type_dependent(callee)
+            || args.iter().any(|&a| self.expr_is_type_dependent(a))
         {
             if braced.iter().any(Option::is_some) {
                 self.templ_unimplemented("braced arguments in a dependent call", loc);

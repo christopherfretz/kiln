@@ -29,9 +29,9 @@ use crate::declspec::{
 };
 use crate::init::{InitValue, Initializer};
 use crate::lookup::{LookupKind, is_tag_kind, is_type_kind};
-use kiln_ast::templates::is_template_kind;
 use crate::scope::{Scope, ScopeKind};
 use crate::{Sema, target};
+use kiln_ast::templates::is_template_kind;
 use kiln_oven::{EvalContext, EvalKind};
 
 /// How a class or enumeration name is used ([dcl.type.elab],
@@ -870,7 +870,7 @@ impl Sema<'_, '_> {
     ) -> Option<DeclId> {
         self.finish_invented_head();
         let head = self.take_template_head(d.qualifier);
-        if self.unsupported_declarator(ds, d) {
+        if d.dropped || self.unsupported_declarator(ds, d) {
             self.templ.cur = None;
             return None;
         }
@@ -903,7 +903,9 @@ impl Sema<'_, '_> {
             self.error(DiagId::parse_expected_unqualified_id, d.loc);
             return None;
         };
-        let _ = name_loc;
+        if d.qualifier.is_none() {
+            self.check_template_param_shadow(name, name_loc);
+        }
         let mut attrs = ds.attrs.clone();
         attrs.extend(d.attrs.iter().copied());
         if d.op_name.is_some()
@@ -1501,10 +1503,7 @@ impl Sema<'_, '_> {
             let idx = u16::try_from(i).unwrap_or(u16::MAX);
             // A function parameter pack ([temp.variadic]/3) has a pack
             // expansion type.
-            let pack = matches!(
-                self.ast.types.view(p.ty.ty()),
-                TypeView::PackExpansion { .. }
-            );
+            let pack = matches!(self.ast.types.view(p.ty.ty()), TypeView::PackExpansion { .. });
             let flags = if pack { kiln_ast::decl::ParamData::PACK } else { 0 };
             let pd = self.builder().param(f, pname, p.loc, p.ty, idx, flags);
             if p.invalid {
@@ -2068,6 +2067,16 @@ impl Sema<'_, '_> {
         if self.is_in_class_static(v) && !self.is_var_definition(v) {
             return;
         }
+        // [depr.static.constexpr]: a redundant out-of-class redeclaration
+        // of an inline static data member initialized in its class.
+        if !self.is_in_class_static(v)
+            && self
+                .ast
+                .redecls_of(v)
+                .any(|x| x != v && self.is_in_class_static(x) && self.is_var_definition(x))
+        {
+            return;
+        }
         let spec = self.ast.decls.var(v).map(|x| x.spec).unwrap_or_default();
         let ty = vn.ty().unwrap_or(QualType::ERROR);
         let loc = vn.loc();
@@ -2258,6 +2267,34 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// The declarations a tag named `n` may refer to or redeclare
+    /// ([dcl.type.elab]/2-3); `templ` when it has a template head
+    /// ([temp.class]: it redeclares the template's latest pattern).
+    fn tag_redecl_lookup(
+        &mut self,
+        n: Symbol,
+        qualifier: Option<DeclId>,
+        use_: TagUse,
+        templ: bool,
+        opaque_enum: bool,
+    ) -> Vec<DeclId> {
+        match (qualifier, use_) {
+            (None, _) if templ => self
+                .lookup_current_scope(n)
+                .into_iter()
+                .filter(|&d| self.kind_of(d) == DeclKind::ClassTemplate)
+                .filter_map(|d| self.pattern_of(d).map(|p| self.ast.latest(p)))
+                .collect(),
+            (Some(q), _) => self.lookup_qualified(q, n, LookupKind::Tag).decls,
+            (None, TagUse::Reference) if !opaque_enum => self.lookup_name(n, LookupKind::Tag).decls,
+            (None, _) => self
+                .lookup_current_scope(n)
+                .into_iter()
+                .filter(|&d| is_tag_kind(self.ast.decls.get(d).kind()))
+                .collect(),
+        }
+    }
+
     /// A class-key or `enum` followed by a name ([dcl.type.elab],
     /// [class.pre], [dcl.enum]). `scoped` is `EnumData::SCOPED[_STRUCT]`
     /// bits; `fixed` the enum-base. Returns the tag declaration.
@@ -2291,25 +2328,11 @@ impl Sema<'_, '_> {
         };
         let mut prev = None;
         if let Some((n, nloc)) = name {
-            let found: Vec<DeclId> = match (qualifier, use_) {
-                // [temp.class]: a class template redeclares the template
-                // (its latest pattern).
-                (None, _) if head.is_some() => self
-                    .lookup_current_scope(n)
-                    .into_iter()
-                    .filter(|&d| self.kind_of(d) == DeclKind::ClassTemplate)
-                    .filter_map(|d| self.pattern_of(d).map(|p| self.ast.latest(p)))
-                    .collect(),
-                (Some(q), _) => self.lookup_qualified(q, n, LookupKind::Tag).decls,
-                (None, TagUse::Reference) if !(is_enum && fixed.is_some()) => {
-                    self.lookup_name(n, LookupKind::Tag).decls
-                }
-                (None, _) => self
-                    .lookup_current_scope(n)
-                    .into_iter()
-                    .filter(|&d| is_tag_kind(self.ast.decls.get(d).kind()))
-                    .collect(),
-            };
+            if qualifier.is_none() && use_ != TagUse::Reference {
+                self.check_template_param_shadow(n, nloc);
+            }
+            let opaque_enum = is_enum && fixed.is_some();
+            let found = self.tag_redecl_lookup(n, qualifier, use_, head.is_some(), opaque_enum);
             if let Some(&p) = found.last() {
                 if self.tag_matches(p, keyword) {
                     prev = Some(p);
@@ -2336,7 +2359,15 @@ impl Sema<'_, '_> {
                         prev = None;
                     }
                 } else if use_ == TagUse::Declaration {
-                    self.templ.cur = None;
+                    // A redeclaration creates no new decl (a deviation:
+                    // clang adds a `ClassTemplateDecl` per redeclaration),
+                    // but its template head is still checked against the
+                    // template's ([temp.param]/12, /14).
+                    if let Some(list) = self.templ.cur.take()
+                        && let Some(t) = self.ast.described_template(p)
+                    {
+                        self.check_template_param_list(DeclKind::ClassTemplate, list, Some(t));
+                    }
                     return p;
                 }
             } else if qualifier.is_some() {
@@ -2761,11 +2792,8 @@ impl Sema<'_, '_> {
     }
 
     fn lookup_current_scope_outside_enum(&self, name: Symbol) -> Option<DeclId> {
-        let s = self
-            .scopes
-            .iter()
-            .rev()
-            .find(|s| !s.is_transparent() && s.kind != ScopeKind::Enum)?;
+        let s =
+            self.scopes.iter().rev().find(|s| !s.is_transparent() && s.kind != ScopeKind::Enum)?;
         if s.is_local() {
             return s
                 .locals
@@ -3189,8 +3217,10 @@ impl Sema<'_, '_> {
             return NameClass::TypeTemplate(t);
         }
         if is_type_kind(k) {
-            let ty = if matches!(k, DeclKind::Typedef | DeclKind::TypeAlias | DeclKind::TemplateTypeParm)
-            {
+            let ty = if matches!(
+                k,
+                DeclKind::Typedef | DeclKind::TypeAlias | DeclKind::TemplateTypeParm
+            ) {
                 self.ast.decls.get(d).ty().unwrap_or(QualType::ERROR)
             } else {
                 self.tag_type(d)
@@ -3198,15 +3228,19 @@ impl Sema<'_, '_> {
             return NameClass::Type(ty, d);
         }
         match k {
-            DeclKind::ClassTemplate | DeclKind::TypeAliasTemplate | DeclKind::TemplateTemplateParm => {
+            DeclKind::ClassTemplate
+            | DeclKind::TypeAliasTemplate
+            | DeclKind::TemplateTemplateParm => {
                 return NameClass::TypeTemplate(d);
             }
             DeclKind::VarTemplate => return NameClass::VarTemplate(d),
             DeclKind::Concept => return NameClass::Concept(d),
             _ => {}
         }
-        if let Some(&f) =
-            found.decls.iter().find(|&&x| self.kind_of(self.ast.strip_shadow(x)) == DeclKind::FunctionTemplate)
+        if let Some(&f) = found
+            .decls
+            .iter()
+            .find(|&&x| self.kind_of(self.ast.strip_shadow(x)) == DeclKind::FunctionTemplate)
         {
             return NameClass::FunctionTemplate(self.ast.strip_shadow(f));
         }

@@ -220,6 +220,12 @@ impl Sema<'_, '_> {
                                 .zip(t.element(ty))
                                 .is_some_and(|(a, b)| t.same_type(a, b)));
                     let prev_def = self.ast.redecls_of(p).find(|&x| self.is_var_definition(x));
+                    // [depr.static.constexpr]: an out-of-class declaration
+                    // without an initializer of an inline (constexpr)
+                    // static data member is a redundant redeclaration.
+                    let redundant = d.init_style.is_none()
+                        && prev_def.is_some_and(|x| self.is_in_class_static(x));
+                    let prev_def = prev_def.filter(|_| !redundant);
                     if !compatible {
                         let msg = self
                             .diag(DiagId::sema_redefinition_different_type, loc)

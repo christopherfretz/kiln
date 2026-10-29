@@ -16,7 +16,9 @@ use crate::expr::{CharKind, ExprFlags, ExprKind, TraitKind};
 use crate::ids::{ConstValueId, DeclId, ExprId, ListId, QualType, RawId, TypeId};
 use crate::names::{DeclName, DeclNameView};
 use crate::strings::{StringEncoding, push_unit};
-use crate::types::{FloatFormat, PrintOptions, TypeNames, TypeView, write_type};
+use crate::types::{
+    FloatFormat, PrintOptions, TypeNames, TypeView, write_arg_list, write_nns, write_type,
+};
 
 /// Scope chains and expressions nested deeper than this print `...`
 /// (no stack exhaustion on adversarial input).
@@ -659,12 +661,11 @@ impl<'a> AstNames<'a> {
             ExprKind::CXXUnresolvedConstructExpr => {
                 write_type(&ast.types, self, n.ty(), PrintOptions::SUGARED, out);
                 let (open, close) = if n.aux() != 0 { ('{', '}') } else { ('(', ')') };
-                match ListId::from_raw(n.a()) {
-                    Some(l) => self.expr_list(l, open, close, d, out),
-                    None => {
-                        out.push(open);
-                        out.push(close);
-                    }
+                if let Some(l) = ListId::from_raw(n.a()) {
+                    self.expr_list(l, open, close, d, out);
+                } else {
+                    out.push(open);
+                    out.push(close);
                 }
             }
             ExprKind::SizeOfPackExpr => {
@@ -688,7 +689,42 @@ impl<'a> AstNames<'a> {
                 }
                 out.push(')');
             }
+            // clang's `VisitDependentScopeDeclRefExpr` /
+            // `VisitUnresolvedLookupExpr`: `N::name<args>`.
+            ExprKind::DependentScopeDeclRefExpr => {
+                write_nns(&ast.types, self, crate::ids::NnsId::new(n.a()), out);
+                self.dependent_name(e, Symbol::from_index(n.b()), out);
+            }
+            ExprKind::UnresolvedLookupExpr => {
+                if let Some(&nns) = ast.templates.expr_nns.get(e) {
+                    write_nns(&ast.types, self, nns, out);
+                }
+                self.dependent_name(e, Symbol::from_index(n.a()), out);
+            }
+            // clang's `VisitCXXDependentScopeMemberExpr`.
+            ExprKind::CXXDependentScopeMemberExpr => {
+                if let Some(b) = ExprId::from_raw(n.a()) {
+                    self.expr(b, d, out);
+                    out.push_str(if n.aux() & 1 != 0 { "->" } else { "." });
+                }
+                if n.aux() & 2 != 0 {
+                    out.push_str("template ");
+                }
+                if let Some(&nns) = ast.templates.expr_nns.get(e) {
+                    write_nns(&ast.types, self, nns, out);
+                }
+                self.dependent_name(e, Symbol::from_index(n.b()), out);
+            }
             _ => out.push_str("..."),
+        }
+    }
+
+    /// The name and explicit template arguments of dependent name
+    /// expression `e`.
+    fn dependent_name(&self, e: ExprId, name: Symbol, out: &mut String) {
+        self.write_symbol(name, out);
+        if let Some(&l) = self.ast.templates.expr_targs.get(e) {
+            write_arg_list(&self.ast.types, self, l, out);
         }
     }
 
@@ -713,6 +749,7 @@ impl<'a> AstNames<'a> {
 impl AstNames<'_> {
     /// [`TypeNames::invented_parm`]: an implicit type template parameter
     /// and its type-constraint's concept and arguments.
+    #[allow(clippy::option_option, reason = "the TypeNames::invented_parm contract")]
     fn invented_parm_of(&self, decl: DeclId) -> Option<Option<(DeclId, crate::ids::ArgListId)>> {
         let n = self.ast.decls.get(decl);
         if n.kind() != DeclKind::TemplateTypeParm || !n.flags().contains(DeclFlags::IMPLICIT) {

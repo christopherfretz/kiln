@@ -46,12 +46,11 @@ impl Sema<'_, '_> {
             | DeclKind::TemplateTemplateParm
             | DeclKind::ClassTemplate
             | DeclKind::TypeAliasTemplate => true,
-            DeclKind::Typedef | DeclKind::TypeAlias => self
-                .ast
-                .decls
-                .get(d)
-                .ty()
-                .is_some_and(|t| self.is_dependent_type(t) && self.ast.types.as_record(t).is_none()),
+            DeclKind::Typedef | DeclKind::TypeAlias => {
+                self.ast.decls.get(d).ty().is_some_and(|t| {
+                    self.is_dependent_type(t) && self.ast.types.as_record(t).is_none()
+                })
+            }
             _ => false,
         }
     }
@@ -140,7 +139,10 @@ impl Sema<'_, '_> {
     /// and index (`info`).
     fn same_template_parm(&self, d: DeclId, p: DeclId, info: TemplateParmInfo) -> bool {
         self.kind_of(d) == self.kind_of(p)
-            && self.ast.template_parm(d).is_some_and(|i| i.depth == info.depth && i.index == info.index)
+            && self
+                .ast
+                .template_parm(d)
+                .is_some_and(|i| i.depth == info.depth && i.index == info.index)
     }
 
     fn arg_names_param(&self, p: DeclId, a: TemplateArg) -> bool {
@@ -165,7 +167,10 @@ impl Sema<'_, '_> {
                 self.ast.exprs.get(e).kind() == ExprKind::DeclRefExpr
                     && self.same_template_parm(self.ast.exprs.decl(e), p, info)
             }
-            (DeclKind::TemplateTemplateParm, ArgView::Template(n) | ArgView::TemplateExpansion { name: n, .. }) => {
+            (
+                DeclKind::TemplateTemplateParm,
+                ArgView::Template(n) | ArgView::TemplateExpansion { name: n, .. },
+            ) => {
                 matches!(self.ast.types.template_name_view(n), TemplateName::TemplateTemplateParm { decl, .. } if self.same_template_parm(decl, p, info))
             }
             _ => false,
@@ -204,6 +209,7 @@ impl Sema<'_, '_> {
     /// written; non-dependent class, alias and variable template
     /// specializations need the engine (WP-070) and report
     /// unimplemented.
+    #[allow(clippy::result_unit_err, reason = "`Err` means already diagnosed")]
     pub fn act_template_id(
         &mut self,
         name: TemplateNameId,
@@ -218,13 +224,15 @@ impl Sema<'_, '_> {
         let Some(d) = self.ast.types.template_decl(name) else {
             return Ok(TemplateIdRef::Type(match self.ast.types.template_name_view(name) {
                 // `TT<args>` for a template template parameter `TT`.
-                TemplateName::TemplateTemplateParm { .. } | TemplateName::CanonTemplateTemplateParm { .. } => {
+                TemplateName::TemplateTemplateParm { .. }
+                | TemplateName::CanonTemplateTemplateParm { .. } => {
                     self.ast.types.template_specialization(name, list, None, false)
                 }
                 // `T::template X<args>` ([temp.names]/5).
-                TemplateName::DependentIdentifier { nns, name: id } => {
-                    self.ast.types.dependent_template_specialization(TagKeyword::None, nns, id, list)
-                }
+                TemplateName::DependentIdentifier { nns, name: id } => self
+                    .ast
+                    .types
+                    .dependent_template_specialization(TagKeyword::None, nns, id, list),
                 _ => QualType::DEPENDENT,
             }));
         };
@@ -235,7 +243,9 @@ impl Sema<'_, '_> {
                     self.templ_unimplemented("class template specialization", l);
                     return Err(());
                 }
-                Ok(TemplateIdRef::Type(self.ast.types.template_specialization(name, list, None, false)))
+                Ok(TemplateIdRef::Type(
+                    self.ast.types.template_specialization(name, list, None, false),
+                ))
             }
             DeclKind::TypeAliasTemplate => {
                 if !dep_args {
@@ -244,7 +254,9 @@ impl Sema<'_, '_> {
                 }
                 // The underlying type needs substitution (WP-070); the
                 // dependent specialization stands for itself until then.
-                Ok(TemplateIdRef::Type(self.ast.types.template_specialization(name, list, None, true)))
+                Ok(TemplateIdRef::Type(
+                    self.ast.types.template_specialization(name, list, None, true),
+                ))
             }
             DeclKind::VarTemplate => {
                 if !dep_args {
@@ -266,7 +278,9 @@ impl Sema<'_, '_> {
                 Ok(TemplateIdRef::Value(e))
             }
             _ => {
-                let msg = self.diag(DiagId::sema_not_a_template, l).arg(format!("'{}'", self.decl_name(d)));
+                let msg = self
+                    .diag(DiagId::sema_not_a_template, l)
+                    .arg(format!("'{}'", self.decl_name(d)));
                 self.emit(msg);
                 Err(())
             }
@@ -309,7 +323,13 @@ impl Sema<'_, '_> {
 
     /// `template<params> concept name = e;` ([temp.concept]/1); the head
     /// was consumed by [`Sema::take_template_head`].
-    pub fn act_concept(&mut self, head: TemplateParamListId, name: Symbol, loc: Loc, e: ExprId) -> DeclId {
+    pub fn act_concept(
+        &mut self,
+        head: TemplateParamListId,
+        name: Symbol,
+        loc: Loc,
+        e: ExprId,
+    ) -> DeclId {
         let _ = self.take_template_head(None);
         self.templ.cur = None;
         if self.in_local_scope() || self.kind_of(self.ctx) == DeclKind::CXXRecord {
@@ -353,7 +373,9 @@ impl Sema<'_, '_> {
             // A non-dependent requires-expression is evaluated at once
             // ([expr.prim.req.general]/5): satisfaction is WP-073.
             let dep = reqs.iter().any(|r| match *r {
-                Requirement::Simple(e) | Requirement::Nested(e) => !self.ast.exprs.get(e).deps().is_none(),
+                Requirement::Simple(e) | Requirement::Nested(e) => {
+                    !self.ast.exprs.get(e).deps().is_none()
+                }
                 Requirement::Compound { expr, .. } => !self.ast.exprs.get(expr).deps().is_none(),
                 Requirement::Type(t) => self.is_dependent_type(t),
             });
@@ -452,7 +474,13 @@ impl Sema<'_, '_> {
     }
 
     /// `sizeof...(name)` ([expr.sizeof]/5): `name` must name a pack.
-    pub fn act_on_sizeof_pack_name(&mut self, name: Symbol, name_loc: Loc, loc: Loc, rparen: Loc) -> ExprId {
+    pub fn act_on_sizeof_pack_name(
+        &mut self,
+        name: Symbol,
+        name_loc: Loc,
+        loc: Loc,
+        rparen: Loc,
+    ) -> ExprId {
         let found = self.lookup_name(name, crate::lookup::LookupKind::Ordinary);
         let pack = found.decls.first().copied().filter(|&d| self.is_pack_decl(d));
         match pack {
@@ -471,19 +499,20 @@ impl Sema<'_, '_> {
             return i.pack;
         }
         self.kind_of(d) == DeclKind::ParmVar
-            && self
-                .ast
-                .decls
-                .get(d)
-                .ty()
-                .is_some_and(|t| matches!(self.ast.types.view(t.ty()), TypeView::PackExpansion { .. }))
+            && self.ast.decls.get(d).ty().is_some_and(|t| {
+                matches!(self.ast.types.view(t.ty()), TypeView::PackExpansion { .. })
+            })
     }
 
     // -- specializations, instantiations, guides -------------------------------------
 
     /// `[extern] template declaration` ([temp.explicit]): explicit
     /// instantiation is WP-070a.
-    pub fn act_explicit_instantiation(&mut self, extern_loc: Option<Loc>, loc: Loc) -> Option<DeclId> {
+    pub fn act_explicit_instantiation(
+        &mut self,
+        extern_loc: Option<Loc>,
+        loc: Loc,
+    ) -> Option<DeclId> {
         let what = if extern_loc.is_some() {
             "explicit instantiation declaration"
         } else {
@@ -497,7 +526,11 @@ impl Sema<'_, '_> {
     /// specialization `template<params> class X<args>`
     /// ([temp.spec.partial]): WP-070a.
     pub fn act_explicit_specialization(&mut self, partial: bool, loc: Loc) -> Option<DeclId> {
-        let what = if partial { "class template partial specialization" } else { "explicit specialization" };
+        let what = if partial {
+            "class template partial specialization"
+        } else {
+            "explicit specialization"
+        };
         self.templ_unimplemented(what, loc);
         None
     }
@@ -645,7 +678,8 @@ impl Sema<'_, '_> {
         let n = *self.ast.exprs.get(callee);
         if n.kind() == ExprKind::DeclRefExpr {
             let d = self.ast.exprs.decl(callee);
-            let qualified = self.ast.exprs.decl_ref_extra(callee).is_some_and(|x| x.qualifier.is_some());
+            let qualified =
+                self.ast.exprs.decl_ref_extra(callee).is_some_and(|x| x.qualifier.is_some());
             if self.kind_of(d) == DeclKind::Function && !qualified {
                 let name = self.ast.decls.get(d).name().as_ident();
                 if let Some(name) = name {
@@ -671,7 +705,11 @@ impl Sema<'_, '_> {
     /// dependent. An empty lookup is an undeclared identifier
     /// ([basic.lookup.argdep]); a function template needs deduction
     /// (WP-071).
-    pub(crate) fn check_unresolved_callee(&mut self, callee: ExprId, args: &[ExprId]) -> Option<ExprId> {
+    pub(crate) fn check_unresolved_callee(
+        &mut self,
+        callee: ExprId,
+        args: &[ExprId],
+    ) -> Option<ExprId> {
         let n = *self.ast.exprs.get(callee);
         if n.kind() != ExprKind::UnresolvedLookupExpr
             || args.iter().any(|&a| self.expr_is_type_dependent(a))
@@ -719,7 +757,8 @@ impl Sema<'_, '_> {
                 Some(bt)
             };
             if let Some(rec) = obj.and_then(|o| self.ast.types.as_record(o))
-                && self.lookup_in_class(rec, name, crate::lookup::LookupKind::Ordinary).decls.len() == 1
+                && self.lookup_in_class(rec, name, crate::lookup::LookupKind::Ordinary).decls.len()
+                    == 1
             {
                 return None;
             }
@@ -734,7 +773,12 @@ impl Sema<'_, '_> {
     /// Parameter `p` (the `idx`th) of the requires-expression whose body
     /// is `body` ([expr.prim.req.general]/4): a `ParmVarDecl` in the body,
     /// visible to the requirements.
-    pub fn act_on_requires_param(&mut self, body: DeclId, p: &crate::declspec::ParamInfo, idx: u16) -> DeclId {
+    pub fn act_on_requires_param(
+        &mut self,
+        body: DeclId,
+        p: &crate::declspec::ParamInfo,
+        idx: u16,
+    ) -> DeclId {
         let name = p.name.map_or(DeclName::EMPTY, |n| DeclName::ident(n.0));
         let d = self.builder().param(body, name, p.loc, p.ty, idx, 0);
         if p.invalid {
@@ -755,13 +799,11 @@ impl Sema<'_, '_> {
     /// The profile of a value-dependent expression `e` (for dependent
     /// array bounds and `noexcept` operands).
     pub(crate) fn dependent_profile(&mut self, e: ExprId) -> kiln_ast::ProfileId {
-        match self.builder().template_arg_expr(e).view() {
-            ArgView::Expr { profile: Some(p), .. } => p,
-            _ => {
-                let f = TypeFlags::DEPENDENT_INSTANTIATION;
-                self.ast.types.profile(&[e.index()], e, f)
-            }
+        if let ArgView::Expr { profile: Some(p), .. } = self.builder().template_arg_expr(e).view() {
+            return p;
         }
+        let f = TypeFlags::DEPENDENT_INSTANTIATION;
+        self.ast.types.profile(&[e.index()], e, f)
     }
 
     /// True if class template `tmpl`'s name, used without arguments here,
@@ -835,7 +877,11 @@ impl Sema<'_, '_> {
                 }
                 _ => {
                     let n = self.template_name_for(p);
-                    if pack { TemplateArg::template_expansion(n, None) } else { TemplateArg::template(n) }
+                    if pack {
+                        TemplateArg::template_expansion(n, None)
+                    } else {
+                        TemplateArg::template(n)
+                    }
                 }
             };
             args.push(a);

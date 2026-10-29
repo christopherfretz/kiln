@@ -1180,8 +1180,8 @@ impl<'a, W: io::Write> Dumper<'a, W> {
         };
         match n.kind() {
             // clang's dumps print no explicit template arguments of a
-            // `DependentScopeDeclRefExpr` or `CXXDependentScopeMemberExpr`.
-            ExprKind::DependentScopeDeclRefExpr => {}
+            // `DependentScopeDeclRefExpr` (the wildcard arm) or
+            // `CXXDependentScopeMemberExpr`.
             ExprKind::UnresolvedLookupExpr => targs(kids),
             ExprKind::CXXDependentScopeMemberExpr => {
                 if let Some(b) = ExprId::from_raw(n.a()) {
@@ -1260,7 +1260,7 @@ impl<'a, W: io::Write> Dumper<'a, W> {
     fn req_children(&self, e: ExprId, i: u32, kids: &mut Vec<(Node, Option<&'static str>)>) {
         match self.requirement(e, i) {
             Some(Requirement::Simple(x) | Requirement::Nested(x)) => {
-                kids.push((Node::Expr(x), None))
+                kids.push((Node::Expr(x), None));
             }
             Some(Requirement::Compound { expr, constraint, .. }) => {
                 kids.push((Node::Expr(expr), None));

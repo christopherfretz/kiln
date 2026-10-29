@@ -683,7 +683,9 @@ impl<'a, 'sm> Parser<'a, 'sm> {
                         }
                         // The name's own list took the first `>` of
                         // token `end`; the rest may close this one.
-                        if let Some(r) = close_angles(&mut stack, Self::punct_of(self.tok_at(end)), 1) {
+                        if let Some(r) =
+                            close_angles(&mut stack, Self::punct_of(self.tok_at(end)), 1)
+                        {
                             return Some((end, r));
                         }
                         j = end + 1;
@@ -735,7 +737,11 @@ impl<'a, 'sm> Parser<'a, 'sm> {
         };
         let lo = t.span.lo;
         let mid = lo.with_offset(1);
-        self.cur = Token { kind: TokKind::Punct(rest), span: Span::new(mid, t.span.hi), flags: TokFlags::empty() };
+        self.cur = Token {
+            kind: TokKind::Punct(rest),
+            span: Span::new(mid, t.span.hi),
+            flags: TokFlags::empty(),
+        };
         self.prev_hi = mid;
         lo
     }
@@ -792,7 +798,10 @@ impl<'a, 'sm> Parser<'a, 'sm> {
                 let text = self.s.ast.symbols().as_str(name).to_owned();
                 let d = self
                     .s
-                    .diag(DiagId::parse_missing_dependent_template_kw, self.tok_at(self.pos).span.lo)
+                    .diag(
+                        DiagId::parse_missing_dependent_template_kw,
+                        self.tok_at(self.pos).span.lo,
+                    )
                     .arg(text);
                 self.emit(d);
             }

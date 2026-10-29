@@ -300,7 +300,9 @@ impl Parser<'_, '_> {
             return vec![d];
         }
         if let Some(name) = self.ident()
-            && (self.peek_is(1, Punct::Equal) || self.peek_is(1, Punct::LSquare))
+            && (self.peek_is(1, Punct::Equal)
+                || self.peek_is(1, Punct::LSquare)
+                || self.kw_of(self.peek(1)) == Some(Kw::Attribute))
         {
             let nl = self.bump().span.lo;
             let mut attrs = Vec::new();
@@ -439,6 +441,7 @@ impl Parser<'_, '_> {
     // -- decl-specifiers ------------------------------------------------------------
 
     /// decl-specifier-seq ([dcl.spec]).
+    #[allow(clippy::too_many_lines, reason = "one arm per decl-specifier")]
     pub(crate) fn parse_decl_specifiers(&mut self, ctx: DeclaratorContext) -> DeclSpec {
         let mut ds = DeclSpec::new(self.loc());
         loop {
@@ -988,6 +991,9 @@ impl Parser<'_, '_> {
                     d.name = Some((n, l));
                 }
                 d.qualifier = qual;
+                if !ctor && self.at(Punct::Less) && self.s.has_pending_head() {
+                    self.parse_specialization_declarator_id(d, n, l);
+                }
             } else if qual.is_some() {
                 self.error_here(DiagId::parse_expected_unqualified_id);
                 d.invalid = true;
@@ -1048,6 +1054,26 @@ impl Parser<'_, '_> {
             } else {
                 break;
             }
+        }
+    }
+
+    /// `name<args>` as the declarator-id after a template head, when
+    /// `name` is a function or variable template: an explicit or partial
+    /// specialization ([temp.expl.spec]/1, [temp.spec.partial]/1). The
+    /// arguments are parsed and the declarator is dropped
+    /// ([`Sema::act_on_specialization_declarator_id`]).
+    fn parse_specialization_declarator_id(&mut self, d: &mut Declarator, name: Symbol, loc: Loc) {
+        let (NameClass::FunctionTemplate(t) | NameClass::VarTemplate(t)) =
+            self.s.classify_name(name, d.qualifier)
+        else {
+            return;
+        };
+        if self.parse_template_arg_list().is_none() {
+            d.invalid = true;
+            return;
+        }
+        if !self.s.act_on_specialization_declarator_id(t, loc) {
+            d.dropped = true;
         }
     }
 

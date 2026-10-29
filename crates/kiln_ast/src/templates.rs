@@ -13,11 +13,13 @@ use kiln_source::symbol::Symbol;
 
 use crate::ast::Ast;
 use crate::builder::{AstBuilder, DeclHead};
-use crate::decl::{DeclFlags, DeclKind, Members, NewDecl, Payload, ScopeData, TemplLink, TemplLinkKind};
-use crate::names::DeclName;
+use crate::decl::{
+    DeclFlags, DeclKind, Members, NewDecl, Payload, ScopeData, TemplLink, TemplLinkKind,
+};
 use crate::expr::{BinaryOp, ExprDeps, ExprFlags, ExprKind, ObjectKind, UnaryOp, ValueCategory};
 use crate::ids::{ArgListId, DeclId, ExprId, ListId, NnsId, QualType, RawId, TemplateParamListId};
 use crate::mem::{HeapSize, MemReport, MemRow};
+use crate::names::DeclName;
 use crate::slot::ColdMap;
 use crate::types::{ArgView, TemplateArg, TypeFlags};
 
@@ -298,26 +300,40 @@ impl Ast {
 
 /// The expression dependence of a template argument.
 fn arg_deps(b: &AstBuilder<'_>, a: TemplateArg) -> ExprDeps {
-    match a.view() {
-        ArgView::Expr { expr, .. } => b.deps(expr),
-        _ => {
-            let f = b.ast.types.arg_flags(a);
-            let mut d = ExprDeps::NONE;
-            if f.contains(TypeFlags::DEPENDENT) {
-                d |= ExprDeps::VALUE_INST;
-            }
-            if f.contains(TypeFlags::INSTANTIATION_DEPENDENT) {
-                d |= ExprDeps::INSTANTIATION;
-            }
-            if f.contains(TypeFlags::UNEXPANDED_PACK) {
-                d |= ExprDeps::UNEXPANDED_PACK;
-            }
-            d
-        }
+    if let ArgView::Expr { expr, .. } = a.view() {
+        return b.deps(expr);
     }
+    let f = b.ast.types.arg_flags(a);
+    let mut d = ExprDeps::NONE;
+    if f.contains(TypeFlags::DEPENDENT) {
+        d |= ExprDeps::VALUE_INST;
+    }
+    if f.contains(TypeFlags::INSTANTIATION_DEPENDENT) {
+        d |= ExprDeps::INSTANTIATION;
+    }
+    if f.contains(TypeFlags::UNEXPANDED_PACK) {
+        d |= ExprDeps::UNEXPANDED_PACK;
+    }
+    d
 }
 
 const DEP_ALL: ExprDeps = ExprDeps::TYPE_VALUE_INST;
+
+/// The pack and error bits a nested-name-specifier contributes to the
+/// expression it qualifies: `P::value` for a pack `P` contains an
+/// unexpanded pack ([temp.variadic]/7).
+fn nns_deps(b: &AstBuilder<'_>, nns: Option<NnsId>) -> ExprDeps {
+    let Some(n) = nns else { return ExprDeps::NONE };
+    let f = b.ast.types.nns_flags(n);
+    let mut d = ExprDeps::NONE;
+    if f.contains(TypeFlags::UNEXPANDED_PACK) {
+        d |= ExprDeps::UNEXPANDED_PACK;
+    }
+    if f.contains(TypeFlags::CONTAINS_ERROR) {
+        d |= ExprDeps::ERROR;
+    }
+    d
+}
 
 impl AstBuilder<'_> {
     // -------------------------------------------------------------------
@@ -540,6 +556,7 @@ impl AstBuilder<'_> {
     // dependent expressions (spec/sema-templates.md §2.4)
     // -------------------------------------------------------------------
 
+    #[allow(clippy::unused_self, reason = "one place to change the dependent type's identity")]
     fn dependent_ty(&self) -> QualType {
         QualType::DEPENDENT
     }
@@ -605,7 +622,7 @@ impl AstBuilder<'_> {
         loc: Loc,
     ) -> ExprId {
         let ty = self.dependent_ty();
-        let deps = DEP_ALL | self.targs_deps(targs);
+        let deps = DEP_ALL | self.targs_deps(targs) | nns_deps(self, Some(nns));
         let e = self.simple(
             ExprKind::DependentScopeDeclRefExpr,
             ValueCategory::LValue,
@@ -636,9 +653,11 @@ impl AstBuilder<'_> {
         let list = self.ast.lists.push(decls);
         let deps = self.targs_deps(targs);
         let deps = if deps.intersects(ExprDeps::VALUE) { deps | DEP_ALL } else { deps };
+        let deps = deps | nns_deps(self, nns);
         // clang's `OverloadExpr`: a type-dependent name (dependent explicit
         // arguments) has the dependent type.
-        let ty = if deps.contains(ExprDeps::TYPE) { self.dependent_ty() } else { QualType::OVERLOAD };
+        let ty =
+            if deps.contains(ExprDeps::TYPE) { self.dependent_ty() } else { QualType::OVERLOAD };
         let e = self.simple(
             ExprKind::UnresolvedLookupExpr,
             ValueCategory::LValue,
@@ -667,7 +686,10 @@ impl AstBuilder<'_> {
         loc: Loc,
     ) -> ExprId {
         let ty = self.dependent_ty();
-        let deps = DEP_ALL | base.map_or(ExprDeps::NONE, |b| self.deps(b)) | self.targs_deps(targs);
+        let deps = DEP_ALL
+            | base.map_or(ExprDeps::NONE, |b| self.deps(b))
+            | self.targs_deps(targs)
+            | nns_deps(self, nns);
         let aux = u8::from(arrow) | (u8::from(template_kw) << 1);
         let e = self.simple(
             ExprKind::CXXDependentScopeMemberExpr,
@@ -771,11 +793,26 @@ impl AstBuilder<'_> {
 
     /// `c ? t : e` with a type-dependent arm ([temp.dep.expr]/1): a
     /// `<dependent type>` prvalue.
-    pub fn dependent_conditional(&mut self, cond: ExprId, then: ExprId, els: ExprId, loc: Loc) -> ExprId {
+    pub fn dependent_conditional(
+        &mut self,
+        cond: ExprId,
+        then: ExprId,
+        els: ExprId,
+        loc: Loc,
+    ) -> ExprId {
         let deps = self.deps(cond) | self.deps(then) | self.deps(els) | DEP_ALL;
         let side = self.ast.exprs.push_cond_arms(then, els);
         let ty = self.dependent_ty();
-        self.simple(ExprKind::ConditionalOperator, ValueCategory::PRValue, deps, 0, ty, loc, cond.raw(), side)
+        self.simple(
+            ExprKind::ConditionalOperator,
+            ValueCategory::PRValue,
+            deps,
+            0,
+            ty,
+            loc,
+            cond.raw(),
+            side,
+        )
     }
 
     /// `( exprs )` kept unresolved as a dependent initializer

@@ -56,6 +56,9 @@ pub struct TemplState {
     pub(crate) invented: u16,
     /// The declaration contexts saved by open requires-expression bodies.
     pub(crate) req_ctx: Vec<DeclId>,
+    /// Where each template parameter's default argument starts (the
+    /// redefinition and missing-default diagnostics point there).
+    pub(crate) default_locs: kiln_source::fx::FxHashMap<DeclId, Loc>,
 }
 
 impl Sema<'_, '_> {
@@ -140,6 +143,25 @@ impl Sema<'_, '_> {
             return;
         }
         s.locals.push((n, p, Ns::Ordinary));
+    }
+
+    /// [temp.local]/6: a declaration of `name` (not a template
+    /// parameter) whose ordinary lookup finds a template parameter
+    /// redeclares it (clang's `DiagnoseTemplateParameterShadow`).
+    pub(crate) fn check_template_param_shadow(&self, name: Symbol, loc: Loc) {
+        if !self.in_template() {
+            return;
+        }
+        let found = self.lookup_name(name, crate::lookup::LookupKind::Ordinary);
+        let [p] = found.decls[..] else { return };
+        if !kiln_ast::templates::is_template_parm_kind(self.kind_of(p)) {
+            return;
+        }
+        let msg = self
+            .diag(DiagId::sema_template_param_shadow, loc)
+            .arg(format!("'{}'", self.ast.symbols().as_str(name)));
+        let msg = self.note_prev_loc(msg, p);
+        self.emit(msg);
     }
 
     fn note_prev_loc(&self, msg: kiln_diag::Diag, prev: DeclId) -> kiln_diag::Diag {
@@ -281,7 +303,9 @@ impl Sema<'_, '_> {
         }
         if self.builder().set_template_default(p, arg).is_err() {
             self.error(DiagId::sema_template_param_default_redefined, loc);
+            return;
         }
+        let _ = self.templ.default_locs.insert(p, loc);
     }
 
     /// `>` and the optional requires-clause of the innermost head
@@ -293,7 +317,11 @@ impl Sema<'_, '_> {
     /// `act_on_*_template_param` actions (they must be visible to the
     /// later parameters' defaults), so the head takes them from the
     /// innermost open list.
-    pub fn act_template_head(&mut self, requires: Option<ExprId>, r_angle: Loc) -> TemplateParamListId {
+    pub fn act_template_head(
+        &mut self,
+        requires: Option<ExprId>,
+        r_angle: Loc,
+    ) -> TemplateParamListId {
         let Some(h) = self.templ.heads.last().cloned() else {
             return self.builder().template_param_list(
                 Loc::INVALID,
@@ -304,7 +332,6 @@ impl Sema<'_, '_> {
                 requires,
             );
         };
-        self.check_template_param_order(&h.params);
         let l = self.builder().template_param_list(
             h.template_loc,
             h.l_angle,
@@ -319,25 +346,66 @@ impl Sema<'_, '_> {
         l
     }
 
-    /// [temp.param]/14: a pack is last in a primary class template's
-    /// list, and every parameter after one with a default has one.
-    fn check_template_param_order(&mut self, params: &[DeclId]) {
-        let mut seen_default: Option<DeclId> = None;
-        for &p in params {
-            let has = self.ast.templates.defaults.get(p).is_some();
+    /// clang's `CheckTemplateParameterList` for the template `kind` whose
+    /// head is `list`, redeclaring the template `prev` if any:
+    /// - [temp.param]/12: a default argument is not redefined by a
+    ///   redeclaration; one given earlier is inherited;
+    /// - [temp.param]/14: in a class, variable or alias template, every
+    ///   parameter after one with a (possibly inherited) default has one or
+    ///   is a pack, and a pack is the last parameter.
+    pub(crate) fn check_template_param_list(
+        &mut self,
+        kind: DeclKind,
+        list: TemplateParamListId,
+        prev: Option<DeclId>,
+    ) {
+        let params: Vec<DeclId> = {
+            let l = *self.ast.templates.param_list(list);
+            self.ast.lists.iter::<DeclId>(l.params).collect()
+        };
+        let old: Vec<DeclId> = prev
+            .and_then(|t| self.ast.template_info(t).copied())
+            .map(|i| {
+                let l = *self.ast.templates.param_list(i.params);
+                self.ast.lists.iter::<DeclId>(l.params).collect()
+            })
+            .unwrap_or_default();
+        let ordered = matches!(
+            kind,
+            DeclKind::ClassTemplate | DeclKind::VarTemplate | DeclKind::TypeAliasTemplate
+        );
+        let mut prev_default: Option<Loc> = None;
+        for (i, &p) in params.iter().enumerate() {
+            let new_loc = self.templ.default_locs.get(&p).copied();
+            let old_loc = old.get(i).and_then(|&o| self.templ.default_locs.get(&o).copied());
             let pack = self.ast.template_parm(p).is_some_and(|x| x.pack);
-            if has {
-                seen_default = Some(p);
-            } else if let Some(prev) = seen_default
-                && !pack
-            {
+            match (new_loc, old_loc) {
+                (Some(n), Some(o)) => {
+                    let d = self.diag(DiagId::sema_template_param_default_redefined, n).note(
+                        DiagId::note_template_param_prev_default,
+                        kiln_source::Span::empty(o),
+                    );
+                    self.emit(d);
+                    prev_default = Some(n);
+                }
+                (Some(l), None) | (None, Some(l)) => prev_default = Some(l),
+                (None, None) => {
+                    if ordered
+                        && !pack
+                        && let Some(l) = prev_default
+                    {
+                        let loc = self.ast.decls.get(p).loc();
+                        let d = self.diag(DiagId::sema_template_param_missing_default, loc).note(
+                            DiagId::note_template_param_has_default,
+                            kiln_source::Span::empty(l),
+                        );
+                        self.emit(d);
+                    }
+                }
+            }
+            if ordered && pack && i + 1 != params.len() {
                 let loc = self.ast.decls.get(p).loc();
-                let l = self.ast.decls.get(prev).loc();
-                let msg = self.diag(DiagId::sema_template_param_missing_default, loc).note(
-                    DiagId::note_template_param_has_default,
-                    kiln_source::Span::empty(l),
-                );
-                self.emit(msg);
+                self.error(DiagId::sema_template_param_pack_not_last, loc);
             }
         }
     }
@@ -347,7 +415,10 @@ impl Sema<'_, '_> {
     /// templates named by its qualifier (`template<class T> void
     /// A<T>::f()`, [temp.mem]/1; `match_template_lists_to_scope`). Sets
     /// [`TemplState::cur`].
-    pub(crate) fn take_template_head(&mut self, qualifier: Option<DeclId>) -> Option<TemplateParamListId> {
+    pub(crate) fn take_template_head(
+        &mut self,
+        qualifier: Option<DeclId>,
+    ) -> Option<TemplateParamListId> {
         self.templ.cur = None;
         // The untaken heads directly around this declaration.
         let mut open = Vec::new();
@@ -369,7 +440,7 @@ impl Sema<'_, '_> {
             }
         }
         let rest: Vec<usize> = it.collect();
-        let Some(&last) = rest.last() else { return None };
+        let &innermost = rest.last()?;
         if rest.len() > 1 {
             let loc = self.templ.heads[rest[0]].template_loc;
             self.error(DiagId::sema_extraneous_template_params, loc);
@@ -377,7 +448,7 @@ impl Sema<'_, '_> {
         for &i in &rest {
             self.templ.heads[i].taken = true;
         }
-        let list = self.templ.heads[last].list;
+        let list = self.templ.heads[innermost].list;
         self.templ.cur = list;
         list
     }
@@ -421,7 +492,9 @@ impl Sema<'_, '_> {
             DeclKind::CXXRecord => DeclKind::ClassTemplate,
             DeclKind::Var => DeclKind::VarTemplate,
             DeclKind::TypeAlias => DeclKind::TypeAliasTemplate,
-            k if k.payload() == kiln_ast::decl::PayloadClass::Function => DeclKind::FunctionTemplate,
+            k if k.payload() == kiln_ast::decl::PayloadClass::Function => {
+                DeclKind::FunctionTemplate
+            }
             _ => {
                 let loc = self.ast.decls.get(pattern).loc();
                 self.templ_unimplemented("this kind of template declaration", loc);
@@ -429,6 +502,7 @@ impl Sema<'_, '_> {
             }
         };
         let prev = self.ast.prev(pattern).and_then(|p| self.ast.described_template(p));
+        self.check_template_param_list(kind, list, prev);
         let t = self.builder().template_decl(kind, pattern, list, prev);
         Some(t)
     }
@@ -436,11 +510,7 @@ impl Sema<'_, '_> {
     /// The template decl `d` (a template, or the pattern of one) is part
     /// of, if any.
     pub fn template_of(&self, d: DeclId) -> Option<DeclId> {
-        if is_template_kind(self.kind_of(d)) {
-            Some(d)
-        } else {
-            self.ast.described_template(d)
-        }
+        if is_template_kind(self.kind_of(d)) { Some(d) } else { self.ast.described_template(d) }
     }
 
     /// The most recent pattern of template `t`.
@@ -489,7 +559,8 @@ impl Sema<'_, '_> {
                 self.scopes.pop();
             }
             self.templ.heads.pop();
-            self.ast.templates.dependent_depth = self.ast.templates.dependent_depth.saturating_sub(1);
+            self.ast.templates.dependent_depth =
+                self.ast.templates.dependent_depth.saturating_sub(1);
         }
     }
 
@@ -507,11 +578,8 @@ impl Sema<'_, '_> {
     ) -> QualType {
         // An explicit head is open once its list is built; an invented one
         // collects every `auto` parameter of the declarator.
-        let needs_new = self
-            .templ
-            .heads
-            .last()
-            .is_none_or(|h| h.taken || (!h.invented && h.list.is_none()));
+        let needs_new =
+            self.templ.heads.last().is_none_or(|h| h.taken || (!h.invented && h.list.is_none()));
         if needs_new {
             let depth = self.template_depth();
             self.templ.heads.push(HeadBuild {
@@ -564,7 +632,7 @@ impl Sema<'_, '_> {
             return;
         }
         let h = h.clone();
-        let requires = h.list.map(|l| self.ast.templates.param_list(l).requires).unwrap_or(None);
+        let requires = h.list.and_then(|l| self.ast.templates.param_list(l).requires);
         let r = h.list.map_or(h.l_angle, |l| self.ast.templates.param_list(l).r_angle);
         let l = self.builder().template_param_list(
             h.template_loc,
@@ -610,6 +678,30 @@ impl Sema<'_, '_> {
     /// The default argument recorded for template parameter `p`.
     pub fn template_default(&self, p: DeclId) -> Option<TemplateArg> {
         self.ast.templates.defaults.get(p).copied()
+    }
+
+    /// A declarator-id that is a template-id naming the function or
+    /// variable template `tmpl` (`f<T*>`, `v<int>`) after a template head
+    /// ([temp.expl.spec], [temp.spec.partial]): a function template
+    /// partial specialization is an error ([temp.spec.partial.general]/1
+    /// covers only class and variable templates; clang's
+    /// `err_function_template_partial_spec`); the other forms are
+    /// WP-070a's. Returns false when the declarator should be dropped.
+    pub fn act_on_specialization_declarator_id(&mut self, tmpl: DeclId, loc: Loc) -> bool {
+        let explicit = self.templ.heads.last().is_some_and(|h| !h.taken && h.params.is_empty());
+        match (self.kind_of(tmpl), explicit) {
+            (DeclKind::FunctionTemplate, false) => {
+                self.error(DiagId::sema_function_partial_spec, loc);
+            }
+            (DeclKind::FunctionTemplate, true) => {
+                self.templ_unimplemented("explicit specialization of a function template", loc);
+            }
+            (_, false) => self.templ_unimplemented("variable template partial specialization", loc),
+            (_, true) => {
+                self.templ_unimplemented("explicit specialization of a variable template", loc);
+            }
+        }
+        false
     }
 
     /// True while parsing between `template<...>` and the declaration it
