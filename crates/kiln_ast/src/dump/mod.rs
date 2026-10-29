@@ -878,6 +878,7 @@ impl<'a, W: io::Write> Dumper<'a, W> {
         self.name(d);
         self.opt_ty(n.ty());
         self.line.push_str(match spec.storage() {
+            _ if spec.storage_inherited() => "",
             FnStorage::None => "",
             FnStorage::Static => " static",
             FnStorage::Extern => " extern",

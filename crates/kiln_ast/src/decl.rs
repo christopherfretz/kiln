@@ -686,7 +686,7 @@ pub enum Defaulted {
 /// implicit_inline(1) constexpr_kind(2) virtual(1) pure(1) defaulted(2)
 /// deleted(1) explicit(1) trivial(1) immediate_escalating(1)
 /// has_contracts(1) is_coroutine(1) escalated(1) variadic(1) override(1)
-/// final(1) explicit_object(1) virtual_written(1)`.
+/// final(1) explicit_object(1) virtual_written(1) storage_inherited(1)`.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug)]
 pub struct FnSpec(u32);
 
@@ -803,6 +803,11 @@ bit_accessors!(FnSpec:
     /// (clang's dump prints `virtual` only when written; an implicit
     /// overrider has [`Self::is_virtual`] without this bit).
     virtual_written / with_virtual_written = 21;
+    /// The storage class was inherited from a previous declaration
+    /// ([dcl.stc]/4: `static void f(); void f() {}`, or an out-of-line
+    /// static member function) rather than written here; clang's dump
+    /// prints the written storage class only.
+    storage_inherited / with_storage_inherited = 22;
 );
 
 /// Hot payload of function kinds (24 bytes, spec/ast.md §4.2).

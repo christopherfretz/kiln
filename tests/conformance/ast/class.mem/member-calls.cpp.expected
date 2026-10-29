@@ -1,0 +1,63 @@
+TranslationUnitDecl
+|-CXXRecordDecl referenced struct S definition
+| |-FieldDecl referenced x 'int'
+| |-VarDecl used count 'int' static
+| |-CXXMethodDecl used get 'int (int)'
+| | `-ParmVarDecl k 'int'
+| `-CXXMethodDecl used bump 'int ()' static
+|-VarDecl parent used count 'int' cinit
+| `-IntegerLiteral 'int' 5
+|-CXXMethodDecl parent used get 'int (int)'
+| |-ParmVarDecl used k 'int'
+| `-CompoundStmt
+|   `-ReturnStmt
+|     `-BinaryOperator 'int' '+'
+|       |-BinaryOperator 'int' '+'
+|       | |-ImplicitCastExpr 'int' <LValueToRValue>
+|       | | `-MemberExpr 'int' lvalue ->x
+|       | |   `-CXXThisExpr 'S *' implicit this
+|       | `-ImplicitCastExpr 'int' <LValueToRValue>
+|       |   `-DeclRefExpr 'int' lvalue ParmVar 'k' 'int'
+|       `-ImplicitCastExpr 'int' <LValueToRValue>
+|         `-DeclRefExpr 'int' lvalue Var 'count' 'int'
+|-CXXMethodDecl parent used bump 'int ()'
+| `-CompoundStmt
+|   `-ReturnStmt
+|     `-ImplicitCastExpr 'int' <LValueToRValue>
+|       `-UnaryOperator 'int' lvalue prefix '++'
+|         `-DeclRefExpr 'int' lvalue Var 'count' 'int'
+`-FunctionDecl use 'int (S, S *)'
+  |-ParmVarDecl used s 'S'
+  |-ParmVarDecl used p 'S *'
+  `-CompoundStmt
+    `-ReturnStmt
+      `-BinaryOperator 'int' '+'
+        |-BinaryOperator 'int' '+'
+        | |-BinaryOperator 'int' '+'
+        | | |-BinaryOperator 'int' '+'
+        | | | |-BinaryOperator 'int' '+'
+        | | | | |-CXXMemberCallExpr 'int'
+        | | | | | |-MemberExpr '<bound member function type>' .get
+        | | | | | | `-DeclRefExpr 'S' lvalue ParmVar 's' 'S'
+        | | | | | `-IntegerLiteral 'int' 1
+        | | | | `-CXXMemberCallExpr 'int'
+        | | | |   |-MemberExpr '<bound member function type>' ->get
+        | | | |   | `-ImplicitCastExpr 'S *' <LValueToRValue>
+        | | | |   |   `-DeclRefExpr 'S *' lvalue ParmVar 'p' 'S *'
+        | | | |   `-ImplicitCastExpr 'int' <LValueToRValue>
+        | | | |     `-MemberExpr 'int' lvalue .x
+        | | | |       `-DeclRefExpr 'S' lvalue ParmVar 's' 'S'
+        | | | `-CallExpr 'int'
+        | | |   `-ImplicitCastExpr 'int (*)()' <FunctionToPointerDecay>
+        | | |     `-DeclRefExpr 'int ()' lvalue CXXMethod 'bump' 'int ()'
+        | | `-CallExpr 'int'
+        | |   `-ImplicitCastExpr 'int (*)()' <FunctionToPointerDecay>
+        | |     `-MemberExpr 'int ()' lvalue .bump
+        | |       `-DeclRefExpr 'S' lvalue ParmVar 's' 'S'
+        | `-ImplicitCastExpr 'int' <LValueToRValue>
+        |   `-MemberExpr 'int' lvalue .count
+        |     `-DeclRefExpr 'S' lvalue ParmVar 's' 'S'
+        `-ImplicitCastExpr 'int' <LValueToRValue>
+          `-MemberExpr 'int' lvalue ->count
+            `-ImplicitCastExpr 'S *' <LValueToRValue>
+              `-DeclRefExpr 'S *' lvalue ParmVar 'p' 'S *'

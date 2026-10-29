@@ -191,6 +191,8 @@ struct FunctionData {               // 24 bytes
                                     //   trivial(1) immediate_escalating(1) has_contracts(1) is_coroutine(1)
                                     //   escalated(1) variadic(1) override(1, bit 18) final(1, bit 19)
                                     //   explicit_object(1, bit 20) virtual_written(1, bit 21)
+                                    //   storage_inherited(1, bit 22: storage taken from a previous
+                                    //   declaration, not written; the dump omits it)
                                     //   (`virtual` is semantic: written or overriding; `virtual_written`
                                     //   is the specifier, which the dump prints. LATE bits, set after
                                     //   the body or at `}`: trivial, has_contracts, is_coroutine,

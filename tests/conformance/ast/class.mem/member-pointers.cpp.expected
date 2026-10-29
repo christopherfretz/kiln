@@ -1,0 +1,57 @@
+TranslationUnitDecl
+|-CXXRecordDecl referenced struct S definition
+| |-FieldDecl referenced x 'int'
+| `-CXXMethodDecl used get 'int (int)'
+|   `-ParmVarDecl k 'int'
+|-CXXMethodDecl parent used get 'int (int)'
+| |-ParmVarDecl used k 'int'
+| `-CompoundStmt
+|   `-ReturnStmt
+|     `-BinaryOperator 'int' '+'
+|       |-ImplicitCastExpr 'int' <LValueToRValue>
+|       | `-MemberExpr 'int' lvalue ->x
+|       |   `-CXXThisExpr 'S *' implicit this
+|       `-ImplicitCastExpr 'int' <LValueToRValue>
+|         `-DeclRefExpr 'int' lvalue ParmVar 'k' 'int'
+`-FunctionDecl use 'int (S, S *)'
+  |-ParmVarDecl used s 'S'
+  |-ParmVarDecl used p 'S *'
+  `-CompoundStmt
+    |-DeclStmt
+    | `-VarDecl used pm 'int S::*' cinit
+    |   `-UnaryOperator 'int S::*' prefix '&' cannot overflow
+    |     `-DeclRefExpr 'int' lvalue Field 'x' 'int'
+    |-DeclStmt
+    | `-VarDecl used pf 'int (S::*)(int)' cinit
+    |   `-UnaryOperator 'int (S::*)(int)' prefix '&' cannot overflow
+    |     `-DeclRefExpr 'int (int)' CXXMethod 'get' 'int (int)'
+    `-ReturnStmt
+      `-BinaryOperator 'int' '+'
+        |-BinaryOperator 'int' '+'
+        | |-BinaryOperator 'int' '+'
+        | | |-ImplicitCastExpr 'int' <LValueToRValue>
+        | | | `-BinaryOperator 'int' lvalue '.*'
+        | | |   |-DeclRefExpr 'S' lvalue ParmVar 's' 'S'
+        | | |   `-ImplicitCastExpr 'int S::*' <LValueToRValue>
+        | | |     `-DeclRefExpr 'int S::*' lvalue Var 'pm' 'int S::*'
+        | | `-ImplicitCastExpr 'int' <LValueToRValue>
+        | |   `-BinaryOperator 'int' lvalue '->*'
+        | |     |-ImplicitCastExpr 'S *' <LValueToRValue>
+        | |     | `-DeclRefExpr 'S *' lvalue ParmVar 'p' 'S *'
+        | |     `-ImplicitCastExpr 'int S::*' <LValueToRValue>
+        | |       `-DeclRefExpr 'int S::*' lvalue Var 'pm' 'int S::*'
+        | `-CXXMemberCallExpr 'int'
+        |   |-ParenExpr '<bound member function type>'
+        |   | `-BinaryOperator '<bound member function type>' '.*'
+        |   |   |-DeclRefExpr 'S' lvalue ParmVar 's' 'S'
+        |   |   `-ImplicitCastExpr 'int (S::*)(int)' <LValueToRValue>
+        |   |     `-DeclRefExpr 'int (S::*)(int)' lvalue Var 'pf' 'int (S::*)(int)'
+        |   `-IntegerLiteral 'int' 1
+        `-CXXMemberCallExpr 'int'
+          |-ParenExpr '<bound member function type>'
+          | `-BinaryOperator '<bound member function type>' '->*'
+          |   |-ImplicitCastExpr 'S *' <LValueToRValue>
+          |   | `-DeclRefExpr 'S *' lvalue ParmVar 'p' 'S *'
+          |   `-ImplicitCastExpr 'int (S::*)(int)' <LValueToRValue>
+          |     `-DeclRefExpr 'int (S::*)(int)' lvalue Var 'pf' 'int (S::*)(int)'
+          `-IntegerLiteral 'int' 2

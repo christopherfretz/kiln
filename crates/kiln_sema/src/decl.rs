@@ -944,13 +944,10 @@ impl Sema<'_, '_> {
                         self.emit(msg);
                     }
                     if pspec.storage() == FnStorage::Static && spec.storage() == FnStorage::None {
-                        spec = spec.with_storage(FnStorage::Static);
+                        spec = spec.with_storage(FnStorage::Static).with_storage_inherited(true);
                     }
                     if pspec.is_inline() {
                         spec = spec.with_implicit_inline(true);
-                    }
-                    if method && pspec.storage() == FnStorage::Static {
-                        spec = spec.with_storage(FnStorage::Static);
                     }
                 } else if self.same_ignoring_exc_spec(pty, ty) {
                     // [except.spec]/5: every declaration of a function with
