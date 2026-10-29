@@ -56,7 +56,9 @@ Format per `docs/AGENTS.md`. Ids are stable; status moves between
 ## M3 preparation
 | id | scope | status |
 |---|---|---|
-| WP-060 | Oven M3 memory design (BLOCKS the Oven M3 implementation package): transient allocator inside the arena with free-on-delete, size-class free lists, compaction/coalescing policy for long evaluations, provenance+generation preserved; frozen-result bytes reported separately in the constexpr report; churn benchmarks (construct/destroy loops, vector-growth patterns, string building) added to `bench/oven` with `peak_bytes`/`allocs` gates BEFORE implementation | todo |
+| WP-060 | Oven M3 memory design: `spec/oven.md` "Transient allocation" — heap space with `HEAP_BIT` slots, free-on-delete with exact/half-step size classes + coalesced large regions, `peak_arena`/`frozen_bytes` counters, churn benchmark table with gates fixed from live-object counts | done (2026-10-28, design) |
+| WP-061a | parse+sema `new`/`delete` expressions on non-class types ([expr.new]/[expr.delete]: `new T`, `new T[n]`, `new T(init)`/`{init}`, `delete`, `delete[]`, array-bound diagnostics as clang; `CXXNewExpr`/`CXXDeleteExpr` payload in `spec/ast.md`; `-fdump-ast` + codegen lowering to `operator new`/`operator delete` calls, Exact vs clang) | todo (after 052b lands) |
+| WP-061b | Oven heap space per `spec/oven.md` "Transient allocation": `mem.rs` heap space + size-class free lists + coalescing (unit-testable without 061a), `New`/`Delete` KBC ops + checks with clang wording, `peak_arena`/`frozen_bytes` in report/harness/bench, `-fconstexpr-memory` over `peak_arena`, the five `churn-*` benchmarks + `tests/conformance/expr.new/` with the spec's gates, footprint-flat test extended | todo (mem.rs part can start now; glue after 061a) |
 
 ## Lessons
 - Size packages so one agent finishes well within a session: codegen should have been ABI+mangling / lowering / driver+tests from the start (the pp engine ended up split the same way). Prefer 3 small briefs over 1 large one; a brief that lists >5 deliverables is too big.

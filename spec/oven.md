@@ -205,10 +205,12 @@ choice and must not move a budget.
 | `peak_bytes` | The maximum number of abstract-memory bytes live at once. |
 | `calls` | Function calls, memoized hits included. |
 | `allocs` | Dynamic allocations (`new` expressions and `std::allocator<T>::allocate`). |
+| `peak_arena` | (M3, WP-061) Maximum abstract-memory address space held, fragmentation included; see "Transient allocation". Absent until implemented. |
+| `frozen_bytes` | (M3, WP-061) Bytes added to the `ConstStore` by this evaluation. Absent until implemented. |
 | `wall_us` | Wall-clock microseconds, rounded down. |
 
 The `total` object has the same counters summed over the evaluations, except
-`peak_bytes`, which is the **maximum** over them (evaluations do not overlap,
+`peak_bytes` (and `peak_arena`), which is the **maximum** over them (evaluations do not overlap,
 so the TU's peak is the largest single peak), plus `evaluations`, the number
 of evaluation lines. All counters are integers in `[0, 2^53]`.
 
@@ -269,15 +271,113 @@ average 8-9 during the run):
 | `oven/table-nohdr` | 42.4 ms | 1369 ms | 4.2 | 90 |
 
 ### Design for M3+ *(design)*
-- Transient allocation (`new`/`delete`, `std::allocator`): a third space
-  with the same slot/generation scheme, `allocs` counted, leaks at the end
-  of the evaluation diagnosed ([expr.const]/5.20).
+- Transient allocation: see "Transient allocation" below (WP-060).
 - Classes: constructors/destructors as KBC functions, `BeginLife`/`EndLife`
   for subobjects, dynamic type in the allocation for virtual calls
   (`CallIndirect` through `SemaBridge::vtable`), `dynamic_cast`/`typeid`.
 - Memoization widens to pure functions taking pointers to immutable
   objects; results may be small frozen aggregates.
 - `std::bit_cast` uses the representation-compatibility shadow.
+
+### Transient allocation — normative for M3 (WP-060 design; WP-061a/b implement)
+
+The operator's requirement: memory that a constant evaluation allocates and
+frees **must be reclaimed while the evaluation is still running**, not at its
+end. A loop that builds and destroys a 100-node list 1000 times must peak at
+100 nodes, not 100 000. `peak_bytes` is the contract and the gate; the
+benchmarks below fix the targets before the implementation exists.
+
+**Heap space.** A third space, `heap`, with the same bytes/init/pointer
+shadow as `frame` and `static`. Pointer encoding is unchanged except that
+slot bit 20 (`HEAP_BIT`) marks a heap slot: frame slots are `< 2^20`, heap
+slots `2^20..2^21`, static slots have bit 21 set as now. Heap slots have
+their own `Alloc` table and free-slot queue with the frame space's
+generation scheme: `delete` marks the slot dead and keeps its `Alloc` (so a
+dangling pointer still names its origin in notes) until the slot is reused
+with a bumped generation; a slot whose generation would wrap is retired.
+`Origin::Heap(ExprId)` names the `new` expression (or the
+`std::allocator<T>::allocate` call) for notes.
+
+**Byte reuse.** Heap bytes are not a bump arena. Sizes are granule-rounded
+(8 bytes). Blocks of at most 256 bytes come from exact per-size free lists
+(32 classes, no internal waste). Blocks above 256 bytes and up to 1 MiB come
+from half-step power-of-two classes (256, 384, 512, 768, 1024, ...; internal
+waste at most one third). Larger blocks are carved best-fit from a sorted
+free list of large regions that are **coalesced** with free neighbours on
+`delete`, and a freed block at the top of the heap arena **lowers the top**
+(so a doubling buffer reclaims its address space). A free list is LIFO
+(last freed, first reused). An allocation that finds no block grows the
+arena top. The policy is observable only through the counters below and the
+memory limit; an implementation may tune the class boundaries, but the two
+gates (`peak_bytes`, `peak_arena`) in the churn benchmarks are the contract.
+
+**Counters.** `bytes` and `allocs` are as before (cumulative). `peak_bytes`
+is the maximum over the evaluation of `frame.top + heap_live`, where
+`heap_live` is the sum of the granule-rounded sizes of the live heap
+allocations. Two counters are added to the report and to the `oven:`
+directive (`spec/harness.md`), both deterministic:
+
+| Key | Meaning |
+|---|---|
+| `peak_arena` | The maximum over the evaluation of `frame.top + heap.top`: the abstract-memory address space held, fragmentation included. `peak_arena >= peak_bytes`; the ratio is the allocator's waste. |
+| `frozen_bytes` | Bytes this evaluation added to the `ConstStore` (its frozen result, byte image plus relocations), so the cost of keeping results is visible apart from the cost of computing them. |
+
+The `total` takes the maximum for `peak_arena` and the sum for
+`frozen_bytes`. `-fconstexpr-memory=` bounds `frame.top + heap.top` (that is,
+`peak_arena`), with clang's message.
+
+**Reset.** At the end of a top-level evaluation every heap allocation is
+either freed or diagnosed as a leak, so `reset()` truncates the heap slot
+table and clears the free lists at no cost; buffers are kept and the
+footprint stays flat (the 10k-evaluation test extends to a churning
+evaluation).
+
+**Operations (KBC).** `New { ty, count: Option<Reg>, array: bool }` yields
+a pointer to a fresh allocation of `ty` (or `ty[count]`), uninitialized
+(the initializer, if any, is ordinary stores through the pointer; lifetime
+of a trivially-constructible object begins at allocation; classes with
+constructors begin life in the constructor call, M3 Oven package).
+`Delete { array: bool }` takes the pointer. `std::allocator<T>::allocate(n)`
+and `deallocate(p, n)` and the `__builtin_operator_new`/
+`__builtin_operator_delete` calls libc++ makes inside them lower to the same
+two ops with `array: true` and `ty = T` (clang's rule: the allocation is an
+array of `n` `T`; `__builtin_operator_new` anywhere else is not a constant
+expression). That recognition needs class templates and is part of the M3
+Oven package; WP-061 covers `new`/`delete` expressions on the types the Oven
+supports in M2 (scalars, arrays, aggregates without constructors).
+
+**Checks**, with clang 19's wording (`DiagnosticASTKinds.td`; the
+compile-fail tests compare against the oracle):
+- `new` of a negative or too-large array bound, or one that would exceed the
+  memory limit: not constant, note at the `new`.
+- Access through a pointer to a deleted allocation: "read of (…) heap
+  allocated object that has been deleted", with "heap allocation performed
+  here" at the `new`.
+- `delete` of null: no-op. `delete` of a pointer that is not to a heap
+  allocation, to a subobject rather than the complete object, already
+  deleted (double delete), or with the wrong form (`delete[]` of a `new`,
+  `delete` of a `new[]`, `deallocate` of a `new`): each its own clang note.
+- A result that still points into the heap, or an allocation still live at
+  the end of the evaluation: not constant, "allocation performed here was
+  not deallocated" ([expr.const]/5.20).
+
+**Churn benchmarks (written first, gated).** `bench/oven/churn-*.cpp` and
+the same programs as kiln-specific tests under `tests/conformance/expr.new/`
+with `oven:` budgets. Each uses only `new`/`delete` of scalars and
+aggregates, so it runs before classes exist. The budgets are the design
+targets, set from the live-object count, not from a measurement:
+
+| Program | Pattern | Gate (per top-level evaluation) |
+|---|---|---|
+| `churn-list` | 1000 rounds of: build a 100-node singly linked list, sum it, destroy it | `allocs<=100000`, `peak_bytes<=4096`, `peak_arena<=8192` |
+| `churn-vector` | 64 rounds of: grow an `int` buffer by doubling from 1 to 65536 elements (allocate new, copy, delete old), then free | `allocs<=1088`, `peak_bytes<=786432` (3×256 KiB: old+new during the last copy), `peak_arena<=1048576` |
+| `churn-string` | build a 64 KiB `char` string by 4096 appends of 16 bytes with 1.5× growth, 16 rounds | `peak_bytes<=262144`, `peak_arena<=393216` |
+| `churn-tree` | 16 rounds of: build a complete binary tree of 4095 nodes (24 bytes each), count it, destroy it in post-order | `allocs<=65520`, `peak_bytes<=131072`, `peak_arena<=196608` |
+| `churn-mixed` | interleaved 8/24/40/200-byte allocations freed in a different order than allocated, 10 000 operations | `peak_arena<=2*peak_bytes` stated as an absolute: `peak_arena<=65536` with `peak_bytes<=32768` |
+
+The bench entries take the default thresholds (`threshold-bytes` 2%), so
+once recorded, any allocator change that raises `peak_bytes`, `peak_arena`
+or `allocs` fails the bench. `steps` is gated at 0% as everywhere.
 
 ### Reflection runtime (M6)
 - `std::meta::info` is a `ReflectionId(u32)` into sema's entity tables;
