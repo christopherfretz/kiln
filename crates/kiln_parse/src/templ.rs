@@ -72,13 +72,27 @@ impl Parser<'_, '_> {
         let extern_loc = self.eat_kw(Kw::Extern);
         let loc = self.bump().span.lo;
         if extern_loc.is_some() || !self.at(Punct::Less) {
-            // explicit-instantiation ([temp.explicit]/1): WP-070a.
+            // explicit-instantiation ([temp.explicit]/1).
+            if self.at_partial_specialization() {
+                self.s.act_explicit_inst_start(extern_loc, loc);
+                self.parse_spec_declaration(ctx);
+                self.s.act_explicit_inst_end();
+                return;
+            }
             let _ = self.s.act_explicit_instantiation(extern_loc, loc);
             self.skip_unsupported_declaration();
             return;
         }
         if self.peek_is(1, Punct::Greater) {
-            // explicit-specialization ([temp.expl.spec]/1): WP-070a.
+            // explicit-specialization ([temp.expl.spec]/1).
+            self.bump();
+            self.bump();
+            if self.at_partial_specialization() {
+                self.s.act_explicit_spec_start(loc);
+                self.parse_spec_declaration(ctx);
+                self.s.act_explicit_spec_end();
+                return;
+            }
             let _ = self.s.act_explicit_specialization(false, loc);
             self.skip_unsupported_declaration();
             return;
@@ -96,6 +110,16 @@ impl Parser<'_, '_> {
         self.trace(|_| "template_head".to_owned());
         self.parse_templated_declaration(ctx, head, loc);
         self.s.act_on_finish_template_decl();
+    }
+
+    /// The class declaration of an explicit specialization or explicit
+    /// instantiation ([temp.expl.spec]/1, [temp.explicit]/1).
+    fn parse_spec_declaration(&mut self, ctx: DeclaratorContext) {
+        if ctx == DeclaratorContext::Member {
+            self.parse_member_declaration();
+        } else {
+            self.parse_simple_declaration(DeclaratorContext::File, true);
+        }
     }
 
     /// The declaration after a template head ([temp.pre]/1: the
@@ -120,11 +144,7 @@ impl Parser<'_, '_> {
             }
             _ => {}
         }
-        if self.at_partial_specialization() {
-            let _ = self.s.act_explicit_specialization(true, loc);
-            self.skip_unsupported_declaration();
-            return;
-        }
+        let _ = loc;
         if self.at_friend_template() {
             self.s.templ_unimplemented("friend templates", self.loc());
             self.skip_unsupported_declaration();

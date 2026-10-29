@@ -143,6 +143,7 @@ diag_groups! {
     InaccessibleBase = "inaccessible-base" [];
     InvalidPartialSpecialization = "invalid-partial-specialization" [];
     UnusablePartialSpecialization = "unusable-partial-specialization" [];
+    InstantiationAfterSpecialization = "instantiation-after-specialization" [];
 }
 
 impl Group {

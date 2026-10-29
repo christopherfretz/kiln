@@ -988,7 +988,7 @@ diag_ids! {
     sema_partial_spec_not_more_specialized = WarningError [InvalidPartialSpecialization] (1) "{0:class|variable} template partial specialization is not more specialized than the primary template";
     sema_partial_spec_fully_specialized = Error (1) "partial specialization of '{0}' does not use any of its template parameters";
     sema_partial_spec_args_match_primary = Error (2) "{0:class|variable} template partial specialization does not specialize any template argument; to {1:declare|define} the primary template, remove the template argument list";
-    sema_partial_spec_not_deducible = Warning [UnusablePartialSpecialization] (2) "{0:class|variable} template partial specialization contains {1:a template parameter|template parameters} that cannot be deduced; this partial specialization will never be used";
+    sema_partial_spec_not_deducible = WarningError [UnusablePartialSpecialization] (2) "{0:class|variable} template partial specialization contains {1:a template parameter|template parameters} that cannot be deduced; this partial specialization will never be used";
     note_non_deducible_parameter = Note (1) "non-deducible template parameter '{0}'";
     note_partial_spec_deduct_here = Note (1) "during template argument deduction for {0}";
     sema_spec_after_instantiation = Error (1) "explicit specialization of '{0}' after instantiation";
@@ -1002,6 +1002,13 @@ diag_ids! {
     sema_explicit_inst_requires_name = Error (0) "explicit instantiation declaration requires a name";
     sema_explicit_spec_non_template = Error (1) "explicit specialization of non-template {0}";
     note_explicit_spec_template_declared = Note (0) "explicitly specialized declaration is here";
+    sema_template_spec_needs_header = Error (0) "template specialization requires 'template<>'";
+    sema_class_spec_not_in_enclosing_ns = Error (2) "class template specialization of '{0}' not in a namespace enclosing '{1}'";
+    sema_partial_spec_redecl_scope = Error (2) "class template partial specialization of '{0}' not in a namespace enclosing '{1}'";
+    sema_explicit_inst_after_spec_ignored = Warning [InstantiationAfterSpecialization] (1) "explicit instantiation of '{0}' that occurs after an explicit specialization has no effect";
+    note_previous_template_specialization = Note (0) "previous template specialization is here";
+    sema_explicit_inst_declaration_after_definition = Error (0) "explicit instantiation declaration (with 'extern') follows explicit instantiation definition (without 'extern')";
+    note_explicit_instantiation_definition_here = Note (0) "explicit instantiation definition is here";
 }
 
 impl DiagId {

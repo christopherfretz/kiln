@@ -377,7 +377,12 @@ impl Sema<'_, '_> {
         let tmpl = info.template;
         let depth = self.template_param_depth(tmpl);
         let mut args = Self::outer_levels(tmpl, depth);
-        args.push(info.args, tmpl, LevelMode::Substitute);
+        // Instantiated from a partial specialization: its deduced
+        // arguments ([temp.spec.partial.match]/2, [temp.inst]/2).
+        match (info.from_args, self.ast.partial_spec_info(info.from)) {
+            (Some(a), Some((_, p))) => args.push(a, p.partial, LevelMode::Substitute),
+            _ => args.push(info.args, tmpl, LevelMode::Substitute),
+        }
         Some((tmpl, args))
     }
 
@@ -396,21 +401,54 @@ impl Sema<'_, '_> {
         if self.ast.spec_info(spec).is_none() {
             return self.instantiate_member_class(spec, poi);
         }
-        let Some((tmpl, args)) = self.spec_args(spec) else { return false };
-        // [temp.spec.partial.match]: partial specializations are not
-        // matched yet (WP-070b) — the primary template is used.
-        if let Some((_, info)) = self.ast.spec_info(spec) {
-            let written = info.args;
-            let _ = self.match_partial_specs(tmpl, written, poi);
+        let Some((tmpl, mut args)) = self.spec_args(spec) else { return false };
+        let kind = self.ast.spec_info(spec).map(|(_, s)| s.kind);
+        if self.ast.decls.get(spec).has(DeclFlags::INVALID) {
+            self.inst.undefined_diagnosed.set(Some(spec));
+            return false;
         }
-        let Some(pattern) = self.ast.template_info(tmpl).and_then(|i| i.pattern) else {
+        if kind == Some(SpecKind::ExplicitSpecialization) {
+            // Declared, never defined ([temp.expl.spec]/1): the caller
+            // reports the incomplete type.
+            self.inst.undefined_diagnosed.set(None);
+            return false;
+        }
+        // [temp.spec.partial.match]: the most specialized matching
+        // partial specialization, else the primary template.
+        let matched = match self.match_partial_specs(tmpl, spec, poi) {
+            Ok(m) => m,
+            Err(()) => {
+                self.ast.decls.set_flags(spec, DeclFlags::INVALID);
+                self.inst.undefined_diagnosed.set(Some(spec));
+                return false;
+            }
+        };
+        let pattern = match matched {
+            Some(m) => {
+                let depth = self.template_param_depth(tmpl);
+                args = Self::outer_levels(tmpl, depth);
+                args.push(m.args, m.partial, LevelMode::Substitute);
+                Some(m.partial)
+            }
+            None => self.ast.template_info(tmpl).and_then(|i| i.pattern),
+        };
+        let Some(pattern) = pattern else {
             return false;
         };
         let Some(def) = self.ast.definition(pattern) else {
+            if let Some(m) = matched
+                && let Some((i, _)) = self.ast.spec_info(spec)
+            {
+                // Remembered for the explicit-instantiation diagnostic.
+                self.ast.templates.update_spec(i, |s| {
+                    s.from = m.partial;
+                    s.from_args = Some(m.args);
+                });
+            }
             if diagnose {
                 let t = self.tag_type(spec);
-                let note =
-                    self.diag(DiagId::note_template_decl_here, self.ast.decls.get(tmpl).loc());
+                let at = if matched.is_some() { pattern } else { tmpl };
+                let note = self.diag(DiagId::note_template_decl_here, self.ast.decls.get(at).loc());
                 let d = self
                     .diag(DiagId::sema_template_implicit_instantiate_undefined, poi)
                     .arg(self.ty_str(t))
@@ -426,10 +464,16 @@ impl Sema<'_, '_> {
             return false;
         }
         if let Some((i, _)) = self.ast.spec_info(spec) {
+            let from_args = matched.map(|m| m.args);
             self.ast.templates.update_spec(i, |s| {
-                s.kind = SpecKind::ImplicitInstantiation;
+                if s.kind == SpecKind::Undeclared {
+                    s.kind = SpecKind::ImplicitInstantiation;
+                }
                 s.from = def;
-                s.point_of_instantiation = poi;
+                s.from_args = from_args;
+                if s.point_of_instantiation == Loc::INVALID {
+                    s.point_of_instantiation = poi;
+                }
             });
         }
         let parent = self.ast.decls.get(spec).ctx().unwrap_or(self.ast.tu);
@@ -579,12 +623,7 @@ impl Sema<'_, '_> {
         // (a friend: the class that declared it).
         let Some(spec) = self.inst_owner(f) else { return };
         let Some((tmpl, args)) = self.spec_args(spec) else { return };
-        let Some(pclass) = self
-            .ast
-            .definition(self.ast.template_info(tmpl).and_then(|i| i.pattern).unwrap_or(spec))
-        else {
-            return;
-        };
+        let Some(pclass) = self.spec_pattern_class(spec, tmpl) else { return };
         if !self.push_inst_frame(FrameKind::MemberFunction, f, pattern, poi) {
             return;
         }
@@ -665,12 +704,7 @@ impl Sema<'_, '_> {
         let Some(pattern) = self.ast.instantiated_from(v) else { return };
         let Some(spec) = self.inst_owner(v) else { return };
         let Some((tmpl, args)) = self.spec_args(spec) else { return };
-        let Some(pclass) = self
-            .ast
-            .definition(self.ast.template_info(tmpl).and_then(|i| i.pattern).unwrap_or(spec))
-        else {
-            return;
-        };
+        let Some(pclass) = self.spec_pattern_class(spec, tmpl) else { return };
         if !self.push_inst_frame(FrameKind::StaticDataMember, v, pattern, poi) {
             return;
         }
@@ -688,6 +722,17 @@ impl Sema<'_, '_> {
             let _ = sub.var_init(pattern, v);
         });
         self.pop_inst_frame();
+    }
+
+    /// The class definition specialization `spec` of `tmpl` was
+    /// instantiated from: the matched partial specialization's
+    /// ([temp.spec.partial.match]) or the primary template's.
+    fn spec_pattern_class(&self, spec: DeclId, tmpl: DeclId) -> Option<DeclId> {
+        let from = self.ast.spec_info(spec).map(|(_, s)| s.from);
+        if let Some(from) = from.filter(|&f| self.ast.partial_spec_info(f).is_some()) {
+            return self.ast.definition(from);
+        }
+        self.ast.definition(self.ast.template_info(tmpl).and_then(|i| i.pattern).unwrap_or(spec))
     }
 
     /// The class template specialization member `f` was instantiated

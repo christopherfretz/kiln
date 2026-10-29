@@ -39,12 +39,16 @@ pub enum FrameKind {
     DefaultFunctionArg,
     /// Checking a default template argument (not an instantiation).
     DefaultArgChecking,
+    /// Deducing the arguments of a class template partial
+    /// specialization while matching it ([temp.spec.partial.match]; not
+    /// an instantiation). The frame's `args` are the deduced arguments.
+    PartialSpecDeduction,
 }
 
 impl FrameKind {
     /// Whether the frame counts toward the depth limit.
     pub const fn is_instantiation(self) -> bool {
-        !matches!(self, FrameKind::DefaultArgChecking)
+        !matches!(self, FrameKind::DefaultArgChecking | FrameKind::PartialSpecDeduction)
     }
 
     /// The context note clang prints for the frame.
@@ -61,6 +65,7 @@ impl FrameKind {
             FrameKind::DefaultTemplateArg => DiagId::note_default_arg_instantiation_here,
             FrameKind::DefaultFunctionArg => DiagId::note_default_function_arg_instantiation_here,
             FrameKind::DefaultArgChecking => DiagId::note_template_default_arg_checking,
+            FrameKind::PartialSpecDeduction => DiagId::note_partial_spec_deduct_here,
         }
     }
 
@@ -78,6 +83,7 @@ impl FrameKind {
             FrameKind::DefaultTemplateArg => "default-template-arg",
             FrameKind::DefaultFunctionArg => "default-arg",
             FrameKind::DefaultArgChecking => "checking",
+            FrameKind::PartialSpecDeduction => "partial-deduction",
         }
     }
 }
@@ -338,6 +344,7 @@ impl Sema<'_, '_> {
                 }
                 s
             }
+            FrameKind::PartialSpecDeduction => self.partial_spec_desc(f.entity, f.args),
             _ => self.qualified_decl_name(f.entity),
         }
     }

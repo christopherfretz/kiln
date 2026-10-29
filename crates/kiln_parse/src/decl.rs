@@ -779,6 +779,15 @@ impl Parser<'_, '_> {
             }
         }
         let is_class = keyword != TagKeyword::Enum;
+        if is_class
+            && self.at(Punct::Less)
+            && let Some((n, nloc)) = name
+            && let NameClass::TypeTemplate(t) = self.s.classify_name(n, qualifier)
+            && self.s.ast.decls.get(t).kind() == kiln_ast::decl::DeclKind::ClassTemplate
+        {
+            self.parse_class_template_id_tag(ds, keyword, t, qualifier, nloc, kw_loc, ctx);
+            return;
+        }
         let mut final_loc = None;
         if is_class && name.is_some() {
             final_loc = self.parse_class_virt_specifiers();
@@ -833,6 +842,91 @@ impl Parser<'_, '_> {
             };
             let could_be_bitfield = keyword == TagKeyword::Enum && ctx == DeclaratorContext::Member;
             self.check_after_tag_definition(spelling, could_be_bitfield);
+        }
+    }
+
+    /// `class-key X<args>` with `X` a class template: a partial or
+    /// explicit specialization, an explicit instantiation, or a
+    /// reference to a specialization ([class.pre]/1, [dcl.type.elab]/1,
+    /// [temp.spec.partial], [temp.expl.spec], [temp.explicit]).
+    #[allow(clippy::too_many_arguments)]
+    fn parse_class_template_id_tag(
+        &mut self,
+        ds: &mut DeclSpec,
+        keyword: TagKeyword,
+        tmpl: DeclId,
+        qualifier: Option<DeclId>,
+        name_loc: Loc,
+        kw_loc: Loc,
+        ctx: DeclaratorContext,
+    ) {
+        let _ = ctx;
+        let Some((args, _, r_angle)) = self.parse_template_arg_list() else {
+            ds.invalid = true;
+            let _ = ds.set_base(TypeSpecKind::Named, Some(QualType::ERROR), kw_loc);
+            return;
+        };
+        let final_loc = self.parse_class_virt_specifiers();
+        let mut use_ = if self.at(Punct::LBrace) || self.at(Punct::Colon) || final_loc.is_some() {
+            TagUse::Definition
+        } else if self.at(Punct::Semi) && ds.storage.is_none() {
+            if ds.friend.is_some() { TagUse::Friend } else { TagUse::Declaration }
+        } else {
+            TagUse::Reference
+        };
+        if use_ == TagUse::Definition && ds.friend.is_some() {
+            self.error_here(DiagId::parse_friend_decl_defines_type);
+            self.skip_until(&[Punct::Semi], false, false);
+            use_ = TagUse::Friend;
+        }
+        let r = self.s.act_on_class_template_id_tag(
+            keyword, tmpl, &args, qualifier, use_, name_loc, r_angle, kw_loc,
+        );
+        let ty = match r {
+            Ok((rec, ty)) => {
+                if use_ == TagUse::Definition {
+                    match rec {
+                        Some(d) => self.parse_record_body(d, final_loc),
+                        None => self.skip_class_body(),
+                    }
+                }
+                if use_ != TagUse::Reference
+                    && let Some(d) = rec
+                {
+                    ds.tag = Some(d);
+                    ds.tag_declares = true;
+                }
+                ty
+            }
+            Err(()) => {
+                if use_ == TagUse::Definition {
+                    self.skip_class_body();
+                }
+                ds.invalid = true;
+                QualType::ERROR
+            }
+        };
+        ds.keyword = keyword;
+        if let Err(e) = ds.set_base(TypeSpecKind::Named, Some(ty), kw_loc) {
+            ds.invalid = true;
+            self.spec_error(&e, kw_loc);
+        }
+        if use_ == TagUse::Definition {
+            let spelling = match keyword {
+                TagKeyword::Struct => "struct",
+                TagKeyword::Class => "class",
+                _ => "union",
+            };
+            self.check_after_tag_definition(spelling, false);
+        }
+    }
+
+    /// Skips a class body that is not defined (`[: bases] { ... }`).
+    fn skip_class_body(&mut self) {
+        self.skip_until(&[Punct::LBrace, Punct::Semi], true, false);
+        if self.at(Punct::LBrace) {
+            self.bump();
+            self.skip_until(&[Punct::RBrace], false, true);
         }
     }
 

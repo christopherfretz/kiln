@@ -1,42 +1,256 @@
-//! Partial ordering and partial specialization matching
-//! ([temp.func.order], [temp.spec.partial.match]; spec/sema-templates.md
-//! §7). WP-072 owns it; until then the queries report
+//! Partial specialization matching and partial ordering
+//! ([temp.spec.partial.match], [temp.spec.partial.order];
+//! spec/sema-templates.md §7). Partial ordering of function templates
+//! ([temp.func.order]) is WP-071/WP-072 and reports
 //! `sema_unimplemented_template_feature`.
 
 use kiln_ast::DeclId;
 use kiln_ast::ids::ArgListId;
+use kiln_ast::types::{ArgView, TemplateArg};
+use kiln_diag::DiagId;
 use kiln_source::Loc;
 
 use crate::Sema;
+use crate::templ::args::LevelMode;
+use crate::templ::deduce::{DeducedArgs, Tdk};
+use crate::templ::stack::{FrameKind, SfinaeState};
+use crate::templ::subst::Substituter;
+
+/// A partial specialization that matched, with its deduced arguments.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct PartialMatch {
+    /// The partial specialization (its first declaration).
+    pub partial: DeclId,
+    /// Its row in the partial table.
+    pub index: u32,
+    /// The arguments deduced for its parameters.
+    pub args: ArgListId,
+}
 
 impl Sema<'_, '_> {
-    /// The partial specialization of `tmpl` that matches `args`
-    /// ([temp.spec.partial.match]). Not implemented (WP-072): with
-    /// partial specializations declared, reports and uses the primary
-    /// template; without any, `None` (the primary) silently.
+    /// The partial specialization of class template `tmpl` that
+    /// specialization `spec` is instantiated from
+    /// ([temp.spec.partial.match]/1): `Ok(None)` for the primary
+    /// template, `Err` after the ambiguity diagnostic
+    /// ([temp.spec.partial.match]/1.3). `poi` is the point of
+    /// instantiation.
+    #[allow(clippy::result_unit_err, reason = "`Err` means already diagnosed")]
     pub(crate) fn match_partial_specs(
         &mut self,
         tmpl: DeclId,
-        args: ArgListId,
-        loc: Loc,
-    ) -> Option<DeclId> {
-        let _ = args;
-        if self.has_partial_specs(tmpl) {
-            self.templ_unimplemented("class template partial specialization matching", loc);
+        spec: DeclId,
+        poi: Loc,
+    ) -> Result<Option<PartialMatch>, ()> {
+        let tmpl = self.ast.first(tmpl);
+        let candidates: Vec<u32> = self.ast.templates.partials_of(tmpl).to_vec();
+        if candidates.is_empty() {
+            return Ok(None);
         }
-        None
+        let Some((_, info)) = self.ast.spec_info(spec) else { return Ok(None) };
+        let canonical = self.ast.types.canonical_args(info.args);
+        let as_: Vec<TemplateArg> = self.ast.types.args(canonical).to_vec();
+        if as_.iter().any(|&a| self.is_pack_arg(a)) {
+            self.templ_unimplemented("partial specialization matching with packs", poi);
+            return Ok(None);
+        }
+        let mut matched: Vec<PartialMatch> = Vec::new();
+        for i in candidates {
+            let Some(p) = self.ast.templates.partial(i).copied() else { continue };
+            // The prefilter (§7.1): the argument shapes reject most
+            // partial specializations without deduction.
+            let shapes = self.ast.templates.partial_shapes(&p);
+            if shapes.len() != as_.len()
+                || !shapes.iter().zip(&as_).all(|(s, &a)| s.admits(&self.ast.types, a))
+            {
+                continue;
+            }
+            if p.has_pack {
+                self.templ_unimplemented("class template partial specialization with a pack", poi);
+                continue;
+            }
+            if let Some(args) = self.deduce_partial(p.partial, i, &as_, canonical, poi) {
+                matched.push(PartialMatch { partial: p.partial, index: i, args });
+            }
+            if self.inst.fatal {
+                return Err(());
+            }
+        }
+        match matched.len() {
+            0 => Ok(None),
+            1 => Ok(Some(matched[0])),
+            _ => self.most_specialized_partial(spec, &matched, poi).map(Some),
+        }
     }
 
-    /// Whether `tmpl` has declared partial specializations.
-    pub(crate) fn has_partial_specs(&self, tmpl: DeclId) -> bool {
-        self.ast.templates.specs_of(tmpl).iter().any(|&s| {
-            self.ast.decls.get(s).kind()
-                == kiln_ast::decl::DeclKind::ClassTemplatePartialSpecialization
-        })
+    /// Deduces the arguments of partial specialization `partial` (row
+    /// `index`) from specialization arguments `as_` (canonical list
+    /// `canonical`) in a SFINAE context ([temp.spec.partial.match]/2,
+    /// [temp.deduct.type]): `None` when it does not match.
+    fn deduce_partial(
+        &mut self,
+        partial: DeclId,
+        index: u32,
+        as_: &[TemplateArg],
+        canonical: ArgListId,
+        poi: Loc,
+    ) -> Option<ArgListId> {
+        let p = *self.ast.templates.partial(index)?;
+        let tmpl = p.template;
+        let list = *self.ast.templates.param_list(p.params);
+        let n = self.ast.lists.len(list.params);
+        let ps: Vec<TemplateArg> = self.ast.types.args(p.canonical).to_vec();
+        if !self.push_inst_frame(FrameKind::PartialSpecDeduction, partial, tmpl, poi) {
+            return None;
+        }
+        if let Some(f) = self.inst.stack.frames.last_mut() {
+            f.sfinae = Some(true);
+        }
+        self.inst.sfinae.borrow_mut().push(SfinaeState::default());
+        let mut d = DeducedArgs::new(list.depth, n);
+        let ok = self.deduce_args(&ps, as_, true, &mut d, poi) == Tdk::Success
+            && d.first_undeduced().is_none();
+        let r = if ok {
+            let deduced = self.ast.types.arg_list(&d.args);
+            self.set_frame_args(deduced);
+            self.partial_args_match(&p, list.depth, deduced, canonical, poi).then_some(deduced)
+        } else {
+            None
+        };
+        let failed = self.inst.sfinae.borrow_mut().pop().is_some_and(|s| s.errors > 0);
+        self.pop_inst_frame();
+        r.filter(|_| !failed)
+    }
+
+    /// Whether the arguments of partial specialization `p`, with
+    /// `deduced` substituted, are the specialization's arguments
+    /// `canonical` ([temp.spec.partial.match]/2: non-deduced contexts
+    /// must match too).
+    fn partial_args_match(
+        &mut self,
+        p: &kiln_ast::templates::PartialSpecInfo,
+        depth: u16,
+        deduced: ArgListId,
+        canonical: ArgListId,
+        loc: Loc,
+    ) -> bool {
+        let written: Vec<TemplateArg> = self.ast.types.args(p.args).to_vec();
+        let deduced_elems: Vec<TemplateArg> = self.ast.types.args(deduced).to_vec();
+        let mut args = Self::outer_levels(p.template, depth);
+        args.push(deduced, p.partial, LevelMode::Substitute);
+        let saved = std::mem::take(&mut self.ast.templates.dependent_depth);
+        let mut out = Vec::with_capacity(written.len());
+        let mut has_expr = false;
+        let mut failed = false;
+        {
+            let mut s = Substituter::new(self, &args);
+            for &a in &written {
+                if let Some(i) = s.sema.bare_nttp_index(a, depth) {
+                    out.push(deduced_elems.get(usize::from(i)).copied().unwrap_or(a));
+                    continue;
+                }
+                match s.template_arg(a, loc) {
+                    Ok(x) => {
+                        has_expr |= matches!(x.view(), ArgView::Expr { .. });
+                        out.push(x);
+                    }
+                    Err(_) => {
+                        failed = true;
+                        break;
+                    }
+                }
+            }
+        }
+        self.ast.templates.dependent_depth = saved;
+        if failed {
+            return false;
+        }
+        let types = &self.ast.types;
+        let want = types.args(canonical);
+        if out.len() == want.len()
+            && out.iter().zip(want).all(|(&x, &y)| types.canonical_arg(x) == y)
+        {
+            return true;
+        }
+        if !has_expr {
+            return false;
+        }
+        // A substituted expression argument (`N + 1`) is converted to
+        // its value before comparing.
+        match self.check_template_args(p.template, &out, &[], loc) {
+            Ok(conv) => conv.canonical == canonical,
+            Err(()) => false,
+        }
+    }
+
+    /// The most specialized of the matching partial specializations
+    /// `matched` ([temp.spec.partial.match]/1.3,
+    /// [temp.spec.partial.order]), else the ambiguity diagnostic.
+    fn most_specialized_partial(
+        &mut self,
+        spec: DeclId,
+        matched: &[PartialMatch],
+        poi: Loc,
+    ) -> Result<PartialMatch, ()> {
+        let mut best = matched[0];
+        for &m in &matched[1..] {
+            if self.partial_more_specialized(m.index, best.index, poi) {
+                best = m;
+            }
+        }
+        let unique = matched.iter().all(|m| {
+            m.index == best.index || self.partial_more_specialized(best.index, m.index, poi)
+        });
+        if unique {
+            return Ok(best);
+        }
+        let t = self.tag_type(spec);
+        let mut d = self.diag(DiagId::sema_partial_spec_ambiguous, poi).arg(self.ty_str(t));
+        for m in matched {
+            let note = self
+                .diag(DiagId::note_partial_spec_match, self.ast.decls.get(m.partial).loc())
+                .arg(self.partial_spec_bindings(m.partial, m.args));
+            d = d.with_note(note);
+        }
+        self.emit(d);
+        Err(())
+    }
+
+    /// Whether partial specialization row `a` is more specialized than
+    /// row `b` ([temp.spec.partial.order]/1, [temp.func.order]/5).
+    fn partial_more_specialized(&mut self, a: u32, b: u32, loc: Loc) -> bool {
+        self.partial_at_least_as_specialized(a, b, loc)
+            && !self.partial_at_least_as_specialized(b, a, loc)
+    }
+
+    /// Whether partial specialization row `a` is at least as specialized
+    /// as row `b`: `b`'s parameters deduce from `a`'s arguments, with
+    /// `a`'s parameters as unique synthesized types
+    /// ([temp.spec.partial.order]/1.2, [temp.deduct.partial]). Cached.
+    fn partial_at_least_as_specialized(&mut self, a: u32, b: u32, loc: Loc) -> bool {
+        if let Some(&r) = self.templ.partial_order.get(&(a, b)) {
+            return r;
+        }
+        let (Some(pa), Some(pb)) =
+            (self.ast.templates.partial(a).copied(), self.ast.templates.partial(b).copied())
+        else {
+            return false;
+        };
+        let lb = *self.ast.templates.param_list(pb.params);
+        let ps: Vec<TemplateArg> = self.ast.types.args(pb.canonical).to_vec();
+        let as_: Vec<TemplateArg> = self.ast.types.args(pa.canonical).to_vec();
+        self.inst.sfinae.borrow_mut().push(SfinaeState::default());
+        let mut d = DeducedArgs::new(lb.depth, self.ast.lists.len(lb.params));
+        let ok = self.deduce_args(&ps, &as_, true, &mut d, loc) == Tdk::Success
+            && d.first_undeduced().is_none();
+        let failed = self.inst.sfinae.borrow_mut().pop().is_some_and(|s| s.errors > 0);
+        let r = ok && !failed;
+        let _ = self.templ.partial_order.insert((a, b), r);
+        r
     }
 
     /// Whether function template `a` is at least as specialized as `b`
-    /// ([temp.func.order]). Not implemented (WP-072): reports and says no.
+    /// ([temp.func.order]). Not implemented (WP-071/WP-072): reports and
+    /// says no.
     pub fn more_specialized(&mut self, a: DeclId, b: DeclId, loc: Loc) -> bool {
         let _ = (a, b);
         self.templ_unimplemented("partial ordering of function templates", loc);

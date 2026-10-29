@@ -616,6 +616,9 @@ pub enum TemplLinkKind {
     MemberOfSpecialization = 3,
     /// A dependent friend function template specialization.
     DependentFriend = 4,
+    /// A class template partial specialization (index into
+    /// `templates.partials`, WP-070b).
+    PartialSpecialization = 5,
 }
 
 impl TemplLink {
@@ -639,6 +642,7 @@ impl TemplLink {
             2 => Some((TemplLinkKind::Specialization, idx)),
             3 => Some((TemplLinkKind::MemberOfSpecialization, idx)),
             4 => Some((TemplLinkKind::DependentFriend, idx)),
+            5 => Some((TemplLinkKind::PartialSpecialization, idx)),
             _ => None,
         }
     }
@@ -2049,6 +2053,13 @@ impl DeclArena {
         assert!(DeclFlags::MONOTONE.contains(f), "only USED/REFERENCED/INVALID may be set late");
         let n = &mut self.nodes[d.index() as usize];
         n.flags = n.flags.with(f);
+    }
+
+    /// Re-points the location of `d` (a class template specialization
+    /// that becomes explicit is located at its explicit declaration, as
+    /// clang).
+    pub(crate) fn set_loc(&mut self, d: DeclId, loc: Loc) {
+        self.nodes[d.index() as usize].loc = loc;
     }
 
     /// Sets `HAS_ATTRS` (by `AttrArena::attach`).

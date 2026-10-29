@@ -17,6 +17,7 @@ pub mod deduce;
 pub mod order;
 pub mod pending;
 pub mod report;
+pub mod spec;
 pub mod stack;
 pub mod subst;
 
@@ -75,6 +76,17 @@ pub struct TemplState {
     /// Where each argument of the template-id being parsed starts (set by
     /// the parser right before `act_template_id`; consumed there).
     pub(crate) arg_locs: Vec<Loc>,
+    /// `template<>` was just parsed: the next class template-id declared
+    /// is an explicit specialization ([temp.expl.spec]; WP-070b).
+    pub(crate) explicit_spec: Option<Loc>,
+    /// `[extern] template` without `<` was just parsed (the `extern`
+    /// and `template` locations): the next class template-id declared
+    /// is explicitly instantiated ([temp.explicit]).
+    pub(crate) explicit_inst: Option<(Option<Loc>, Loc)>,
+    /// Partial ordering results of partial specializations, by index
+    /// pair: whether the first is at least as specialized as the second
+    /// ([temp.spec.partial.order], §4.4).
+    pub(crate) partial_order: kiln_source::fx::FxHashMap<(u32, u32), bool>,
 }
 
 /// The instantiation engine's state (spec/sema-templates.md §11.2).

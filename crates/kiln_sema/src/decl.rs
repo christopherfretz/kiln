@@ -2365,7 +2365,7 @@ impl Sema<'_, '_> {
         }
     }
 
-    fn tag_kind_of(keyword: TagKeyword) -> TagKind {
+    pub(crate) fn tag_kind_of(keyword: TagKeyword) -> TagKind {
         match keyword {
             TagKeyword::Class => TagKind::Class,
             TagKeyword::Union => TagKind::Union,
@@ -3418,7 +3418,7 @@ impl Sema<'_, '_> {
         // template ([temp.local]/1): `X` alone is `X<P...>`, `X<A>` a
         // template-id.
         if k == DeclKind::CXXRecord
-            && let Some(t) = self.ast.described_template(self.ast.first(d))
+            && let Some(t) = self.injected_template_of(d)
         {
             return NameClass::TypeTemplate(t);
         }

@@ -199,7 +199,7 @@ impl Sema<'_, '_> {
     }
 
     /// Whether `a` is a pack or a pack expansion (WP-072).
-    fn is_pack_arg(&self, a: TemplateArg) -> bool {
+    pub(crate) fn is_pack_arg(&self, a: TemplateArg) -> bool {
         let t = &self.ast.types;
         match a.view() {
             ArgView::Pack(_) | ArgView::TemplateExpansion { .. } => true,
@@ -281,6 +281,13 @@ impl Sema<'_, '_> {
                 Tdk::NonDeducedMismatch
             }
         }
+    }
+
+    /// The index of the non-type template parameter of depth `depth`
+    /// that argument `a` names as a bare (possibly converted) reference.
+    pub(crate) fn bare_nttp_index(&self, a: TemplateArg, depth: u16) -> Option<u16> {
+        let ArgView::Expr { expr, .. } = a.view() else { return None };
+        self.nttp_of_expr(expr).filter(|r| r.depth == depth).map(|r| r.index)
     }
 
     /// The non-type template parameter expression `e` names (through

@@ -58,7 +58,8 @@ impl RowKind {
             | FrameKind::Nsdmi => RowKind::Member,
             FrameKind::DefaultTemplateArg
             | FrameKind::DefaultFunctionArg
-            | FrameKind::DefaultArgChecking => RowKind::Default,
+            | FrameKind::DefaultArgChecking
+            | FrameKind::PartialSpecDeduction => RowKind::Default,
         }
     }
 }
