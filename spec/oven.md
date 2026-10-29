@@ -576,9 +576,11 @@ runs ([class.dtor]/5).
 **Destruction (cleanups).** `PushCleanup [p, dtor, ty]` registers the
 destruction of the object (or of each element of an array, aux 1: of a
 heap array whose count is the allocation's) on the Oven's cleanup stack
-(`Oven::cleanups`, entries `Cleanup { this, func, pc }`); each frame
-records the stack height at entry (`Frame::clean`). `ScopeExit` and `Ret`
-run the cleanups above their mark, last registered first, by entering
+(`Oven::cleanups`, entries `Cleanup { this, func, pc, depth }`, `depth`
+the call-stack depth of the registering frame; kept there rather than as
+a mark in `Frame`, which every call pushes and which stays at 32 bytes).
+`ScopeExit` runs the cleanups above the height `ScopeEnter` recorded,
+`Ret` those of its own depth; both run them last registered first, by entering
 the destructor and re-executing themselves on its return, so destruction
 is iterative and needs no native recursion. Locals are destroyed in
 reverse declaration order at scope exit, `break`/`continue`/`return`
@@ -651,6 +653,12 @@ and `steps`, heap objects are `allocs`. Entries `bench/oven/class-churn`
 `bench/oven/soa` (a 4096-row struct-of-arrays table, mirrorbind's
 binding-table shape); gated copies `tests/conformance/class.dtor/
 churn-objects.cpp` and `class.mem/soa-table.cpp` carry `oven:` budgets.
+The class ops must not tax evaluations that do not use them: the VM
+dispatch decodes an opcode by matching its discriminant (no table base
+held in a register), `enter` and `load` stay inlined into the run loop,
+and `Frame` stays at 32 bytes (a const assertion); together these kept
+bench/oven/churn-tree.cpp within 1% of its pre-WP-076 instruction count
+(it had grown 10%).
 
 **Left for later (owners).**
 - Virtual calls, virtual bases, virtual calls through member pointers,
