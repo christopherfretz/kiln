@@ -526,4 +526,40 @@ const CASES: &[(&str, Mode, &str)] = &[
         Exact,
         "int g(); void f(int a, int* p) { a; (void)a; g(); a + 1; *p; (void)g(); }",
     ),
+    // [expr.new], [expr.delete] (WP-061a).
+    (
+        "new_scalar",
+        Exact,
+        "int* f() { return new int(7); } double* g() { return new double{}; } void h(int* p) { delete p; }",
+    ),
+    (
+        "new_array_dynamic",
+        Exact,
+        "long* f(int n) { return new long[n]{1, 2, 3}; } void g(long* p) { delete[] p; }",
+    ),
+    (
+        "new_array_constant",
+        Exact,
+        "short* f() { return new short[4]{9}; } char* g() { return new char[-1 + 3]; }",
+    ),
+    (
+        "new_array_multidim",
+        Exact,
+        "int (*f(unsigned n))[2][3] { return new int[n][2][3]{{{1}}, {}}; } void g(int (*p)[3]) { delete[] p; }",
+    ),
+    (
+        "new_placement",
+        Exact,
+        "inline void* operator new(unsigned long, void* p) noexcept { return p; } struct B { int v[4]; }; B b; int* f() { return new (&b.v[1]) int(5); } int* g(int* q) { return new (q) int{}; }",
+    ),
+    (
+        "new_in_conditional",
+        Exact,
+        "int* f(bool c, int n) { return c ? new int[n] : nullptr; } bool g(bool c) { return c && new int(1); } int* h(bool c, int x) { return c ? new int(x) : nullptr; }",
+    ),
+    (
+        "new_overaligned",
+        Exact,
+        "struct alignas(64) L { char c[64]; }; L* f() { return new L{}; } L* g(int n) { return new L[n]{}; } void h(L* p) { delete p; } void k(L* p) { delete[] p; }",
+    ),
 ];

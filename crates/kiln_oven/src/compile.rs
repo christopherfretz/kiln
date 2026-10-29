@@ -1684,6 +1684,11 @@ impl Compiler<'_> {
                     None => self.konst(dst, 0),
                 }
             }
+            // Transient allocation (spec/oven.md "Transient allocation"):
+            // the KBC shapes are specified; execution is WP-061b part 2.
+            ExprKind::CXXNewExpr | ExprKind::CXXDeleteExpr => {
+                self.trap(e, "kiln: new/delete in constant evaluation lands with WP-061b part 2");
+            }
             k if k.is_cast() => self.cast(e, dst, ty),
             _ if n.value_category().is_glvalue() => {
                 // A glvalue used as a value (an lvalue-to-rvalue conversion
@@ -2772,6 +2777,9 @@ impl Compiler<'_> {
             _ if n.value_category().is_glvalue() => {
                 // A discarded glvalue is evaluated, not read.
                 let _ = self.lv(e, Access::Addr);
+            }
+            ExprKind::CXXDeleteExpr => {
+                self.trap(e, "kiln: new/delete in constant evaluation lands with WP-061b part 2");
             }
             _ if self.kind(ty) == TyKind::Void => self.unsupported(e),
             _ if self.o.types.is_aggregate(ty) => {
