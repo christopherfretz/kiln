@@ -1,0 +1,24 @@
+TranslationUnitDecl
+|-ClassTemplateDecl Maker
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| |-CXXRecordDecl struct Maker definition
+| | |-CXXMethodDecl zero 'T ()' static implicit-inline
+| | | `-CompoundStmt
+| | |   `-ReturnStmt
+| | |     `-CXXUnresolvedConstructExpr 'T'
+| | `-CXXMethodDecl one 'T ()' static implicit-inline
+| |   `-CompoundStmt
+| |     `-ReturnStmt
+| |       `-CXXUnresolvedConstructExpr 'T'
+| |         `-IntegerLiteral 'int' 1
+| `-ClassTemplateSpecializationDecl struct Maker definition implicit_instantiation
+|   |-TemplateArgument type 'long'
+|   |-CXXMethodDecl used zero 'long ()' static implicit-inline
+|   | `-CompoundStmt
+|   |   `-ReturnStmt
+|   |     `-CXXScalarValueInitExpr 'long'
+|   `-CXXMethodDecl one 'long ()' static implicit-inline
+`-VarDecl z 'long' cinit
+  `-CallExpr 'long'
+    `-ImplicitCastExpr 'long (*)()' <FunctionToPointerDecay>
+      `-DeclRefExpr 'long ()' lvalue CXXMethod 'zero' 'long ()'

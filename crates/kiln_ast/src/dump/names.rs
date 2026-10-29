@@ -346,8 +346,10 @@ impl<'a> AstNames<'a> {
             // char
             3 => (t.char_signed, IntStyle::Char(StringEncoding::Ordinary)),
             // signed char, short; unsigned char, unsigned short; __int128
-            4 | 10 | 18 => (true, IntStyle::Cast),
-            5 | 11 | 19 => (false, IntStyle::Cast),
+            4 => (true, IntStyle::SmallChar),
+            5 => (false, IntStyle::SmallChar),
+            10 | 18 => (true, IntStyle::Cast),
+            11 | 19 => (false, IntStyle::Cast),
             // wchar_t
             6 => (
                 t.wchar_signed,
@@ -824,7 +826,9 @@ impl TypeNames for AstNames<'_> {
     }
 
     fn write_value(&self, _ty: QualType, value: ConstValueId, out: &mut String) {
-        let opts = ValueOptions::with_style(PrintStyle::TemplateArg);
+        // A converted argument of a known parameter (clang's
+        // `IncludeType` is false unless the parameter is `auto`; WP-071).
+        let opts = ValueOptions { include_type: false, ..ValueOptions::with_style(PrintStyle::TemplateArg) };
         self.ast.consts.print(value, &self.ast.strings, self, &opts, out);
     }
 

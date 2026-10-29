@@ -1,0 +1,26 @@
+TranslationUnitDecl
+|-ClassTemplateDecl Box
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| |-CXXRecordDecl struct Box definition
+| | |-FieldDecl referenced value 'T'
+| | |-CXXMethodDecl get 'T () const' implicit-inline
+| | | `-CompoundStmt
+| | |   `-ReturnStmt
+| | |     `-MemberExpr 'const T' lvalue ->value
+| | |       `-CXXThisExpr 'const Box<T> *' implicit this
+| | `-CXXMethodDecl set 'void (T)' implicit-inline
+| |   |-ParmVarDecl referenced v 'T'
+| |   `-CompoundStmt
+| |     `-BinaryOperator '<dependent type>' '='
+| |       |-MemberExpr 'T' lvalue ->value
+| |       | `-CXXThisExpr 'Box<T> *' implicit this
+| |       `-DeclRefExpr 'T' lvalue ParmVar 'v' 'T'
+| `-ClassTemplateSpecializationDecl struct Box definition implicit_instantiation
+|   |-TemplateArgument type 'int'
+|   |-FieldDecl value 'int'
+|   |-CXXMethodDecl get 'int () const' implicit-inline
+|   `-CXXMethodDecl set 'void (int)' implicit-inline
+|     `-ParmVarDecl v 'int'
+`-VarDecl size 'int' cinit
+  `-ImplicitCastExpr 'int' <IntegralCast>
+    `-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof 'Box<int>'

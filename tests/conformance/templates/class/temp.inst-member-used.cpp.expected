@@ -1,0 +1,46 @@
+TranslationUnitDecl
+|-ClassTemplateDecl Box
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| |-CXXRecordDecl struct Box definition
+| | |-FieldDecl referenced value 'T'
+| | |-CXXMethodDecl get 'T () const' implicit-inline
+| | | `-CompoundStmt
+| | |   `-ReturnStmt
+| | |     `-MemberExpr 'const T' lvalue ->value
+| | |       `-CXXThisExpr 'const Box<T> *' implicit this
+| | `-CXXMethodDecl set 'void (T)' implicit-inline
+| |   |-ParmVarDecl referenced v 'T'
+| |   `-CompoundStmt
+| |     `-BinaryOperator '<dependent type>' '='
+| |       |-MemberExpr 'T' lvalue ->value
+| |       | `-CXXThisExpr 'Box<T> *' implicit this
+| |       `-DeclRefExpr 'T' lvalue ParmVar 'v' 'T'
+| `-ClassTemplateSpecializationDecl struct Box definition implicit_instantiation
+|   |-TemplateArgument type 'int'
+|   |-FieldDecl referenced value 'int'
+|   |-CXXMethodDecl used get 'int () const' implicit-inline
+|   | `-CompoundStmt
+|   |   `-ReturnStmt
+|   |     `-ImplicitCastExpr 'int' <LValueToRValue>
+|   |       `-MemberExpr 'const int' lvalue ->value
+|   |         `-CXXThisExpr 'const Box<int> *' implicit this
+|   `-CXXMethodDecl used set 'void (int)' implicit-inline
+|     |-ParmVarDecl used v 'int'
+|     `-CompoundStmt
+|       `-BinaryOperator 'int' lvalue '='
+|         |-MemberExpr 'int' lvalue ->value
+|         | `-CXXThisExpr 'Box<int> *' implicit this
+|         `-ImplicitCastExpr 'int' <LValueToRValue>
+|           `-DeclRefExpr 'int' lvalue ParmVar 'v' 'int'
+`-FunctionDecl f 'int (Box<int> &)'
+  |-ParmVarDecl used b 'Box<int> &'
+  `-CompoundStmt
+    |-CXXMemberCallExpr 'void'
+    | |-MemberExpr '<bound member function type>' .set
+    | | `-DeclRefExpr 'Box<int>' lvalue ParmVar 'b' 'Box<int> &'
+    | `-IntegerLiteral 'int' 3
+    `-ReturnStmt
+      `-CXXMemberCallExpr 'int'
+        `-MemberExpr '<bound member function type>' .get
+          `-ImplicitCastExpr 'const Box<int>' lvalue <NoOp>
+            `-DeclRefExpr 'Box<int>' lvalue ParmVar 'b' 'Box<int> &'

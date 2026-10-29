@@ -7,7 +7,7 @@
 
 use kiln_ast::decl::{DeclFlags, DeclKind, TagKind};
 use kiln_ast::expr::ExprKind;
-use kiln_ast::ids::TemplateNameId;
+use kiln_ast::ids::{ArgListId, TemplateNameId};
 use kiln_ast::templates::SpecKind;
 use kiln_ast::types::TemplateArg;
 use kiln_ast::{DeclId, QualType};
@@ -165,7 +165,52 @@ impl Sema<'_, '_> {
             .and_then(|p| self.ast.decls.record(p))
             .map_or(TagKind::Struct, |r| r.tag);
         let spec = self.builder().class_spec(tmpl, conv.sugared, conv.canonical, tag);
+        let print = self.suppress_default_args(tmpl, conv.sugared, written.len(), loc);
+        if let Some((i, _)) = self.ast.spec_info(spec) {
+            self.ast.templates.update_spec(i, |s| s.print_args = print);
+        }
         Ok(spec)
+    }
+
+    /// `args` without the trailing arguments equal to their parameter's
+    /// default (clang's `SuppressDefaultTemplateArgs`): the arguments a
+    /// specialization's name prints with. The first `written` came from
+    /// the source; a default is recomputed for those silently (SFINAE).
+    fn suppress_default_args(&mut self, tmpl: DeclId, args: ArgListId, written: usize, loc: Loc) -> ArgListId {
+        let params = self.template_params(tmpl);
+        let elems: Vec<TemplateArg> = self.ast.types.args(args).to_vec();
+        if elems.len() != params.len() {
+            return args;
+        }
+        let depth = self.template_param_depth(tmpl);
+        let mut n = elems.len();
+        while n > 0 {
+            let p = params[n - 1];
+            if self.ast.template_parm(p).is_none_or(|x| x.pack) {
+                break;
+            }
+            let Some(def) = self.template_default(p) else { break };
+            if n > written {
+                n -= 1;
+                continue;
+            }
+            if !self.push_inst_frame(FrameKind::DefaultArgChecking, p, tmpl, loc) {
+                break;
+            }
+            if let Some(f) = self.inst.stack.frames.last_mut() {
+                f.sfinae = Some(true);
+            }
+            self.inst.sfinae.borrow_mut().push(crate::templ::stack::SfinaeState::default());
+            let r = self.default_template_arg(tmpl, depth, p, def, loc, &elems[..n - 1]);
+            let failed = self.inst.sfinae.borrow_mut().pop().is_some_and(|s| s.errors > 0);
+            self.pop_inst_frame();
+            let types = &self.ast.types;
+            match r {
+                Ok(a) if !failed && types.canonical_arg(a) == types.canonical_arg(elems[n - 1]) => n -= 1,
+                _ => break,
+            }
+        }
+        if n == elems.len() { args } else { self.ast.types.arg_list(&elems[..n]) }
     }
 
     /// The type `name<args>` naming a specialization of class template

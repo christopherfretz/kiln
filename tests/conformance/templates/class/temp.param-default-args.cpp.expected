@@ -1,0 +1,26 @@
+TranslationUnitDecl
+|-ClassTemplateDecl Vec
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| |-NonTypeTemplateParmDecl referenced 'int' depth 0 index 1 N
+| | `-TemplateArgument expr
+| |   `-IntegerLiteral 'int' 3
+| |-CXXRecordDecl struct Vec definition
+| | `-FieldDecl data 'T[N]'
+| |-ClassTemplateSpecializationDecl struct Vec definition implicit_instantiation
+| | |-TemplateArgument type 'char'
+| | |-TemplateArgument value 'int' 3
+| | `-FieldDecl data 'char[3]'
+| `-ClassTemplateSpecializationDecl struct Vec definition implicit_instantiation
+|   |-TemplateArgument type 'char'
+|   |-TemplateArgument value 'int' 5
+|   `-FieldDecl data 'char[5]'
+|-StaticAssertDecl
+| `-BinaryOperator 'bool' '=='
+|   |-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof 'Vec<char>'
+|   `-ImplicitCastExpr 'unsigned long' <IntegralCast>
+|     `-IntegerLiteral 'int' 3
+`-StaticAssertDecl
+  `-BinaryOperator 'bool' '=='
+    |-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof 'Vec<char, 5>'
+    `-ImplicitCastExpr 'unsigned long' <IntegralCast>
+      `-IntegerLiteral 'int' 5

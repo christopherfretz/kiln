@@ -1,0 +1,24 @@
+TranslationUnitDecl
+|-ClassTemplateDecl Pair
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| |-CXXRecordDecl struct Pair definition
+| | |-FieldDecl first 'T'
+| | `-FieldDecl second 'T'
+| |-ClassTemplateSpecializationDecl struct Pair definition implicit_instantiation
+| | |-TemplateArgument type 'char'
+| | |-FieldDecl first 'char'
+| | `-FieldDecl second 'char'
+| `-ClassTemplateSpecializationDecl struct Pair definition implicit_instantiation
+|   |-TemplateArgument type 'int'
+|   |-FieldDecl first 'int'
+|   `-FieldDecl second 'int'
+|-StaticAssertDecl
+| `-BinaryOperator 'bool' '=='
+|   |-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof 'Pair<char>'
+|   `-ImplicitCastExpr 'unsigned long' <IntegralCast>
+|     `-IntegerLiteral 'int' 2
+`-StaticAssertDecl
+  `-BinaryOperator 'bool' '=='
+    |-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof 'Pair<int>'
+    `-ImplicitCastExpr 'unsigned long' <IntegralCast>
+      `-IntegerLiteral 'int' 8

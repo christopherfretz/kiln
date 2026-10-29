@@ -420,7 +420,7 @@ impl Sema<'_, '_> {
 
     /// The default argument of parameter `p`, substituted with the
     /// arguments before it ([temp.arg.general]/9) and converted.
-    fn default_template_arg(
+    pub(crate) fn default_template_arg(
         &mut self,
         tmpl: DeclId,
         depth: u16,

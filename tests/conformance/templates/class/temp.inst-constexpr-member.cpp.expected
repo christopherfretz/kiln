@@ -1,0 +1,29 @@
+TranslationUnitDecl
+|-ClassTemplateDecl Sq
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| |-CXXRecordDecl struct Sq definition
+| | `-CXXMethodDecl constexpr of 'T (T)' static implicit-inline
+| |   |-ParmVarDecl referenced x 'T'
+| |   `-CompoundStmt
+| |     `-ReturnStmt
+| |       `-BinaryOperator '<dependent type>' '*'
+| |         |-DeclRefExpr 'T' lvalue ParmVar 'x' 'T'
+| |         `-DeclRefExpr 'T' lvalue ParmVar 'x' 'T'
+| `-ClassTemplateSpecializationDecl struct Sq definition implicit_instantiation
+|   |-TemplateArgument type 'int'
+|   `-CXXMethodDecl used constexpr of 'int (int)' static implicit-inline
+|     |-ParmVarDecl used x 'int'
+|     `-CompoundStmt
+|       `-ReturnStmt
+|         `-BinaryOperator 'int' '*'
+|           |-ImplicitCastExpr 'int' <LValueToRValue>
+|           | `-DeclRefExpr 'int' lvalue ParmVar 'x' 'int'
+|           `-ImplicitCastExpr 'int' <LValueToRValue>
+|             `-DeclRefExpr 'int' lvalue ParmVar 'x' 'int'
+`-StaticAssertDecl
+  `-BinaryOperator 'bool' '=='
+    |-CallExpr 'int'
+    | |-ImplicitCastExpr 'int (*)(int)' <FunctionToPointerDecay>
+    | | `-DeclRefExpr 'int (int)' lvalue CXXMethod 'of' 'int (int)'
+    | `-IntegerLiteral 'int' 7
+    `-IntegerLiteral 'int' 49

@@ -1,0 +1,49 @@
+TranslationUnitDecl
+|-ClassTemplateDecl Flag
+| |-NonTypeTemplateParmDecl referenced 'bool' depth 0 index 0 B
+| |-CXXRecordDecl struct Flag definition
+| | `-VarDecl value 'const bool' static inline constexpr cinit
+| |   `-DeclRefExpr 'bool' NonTypeTemplateParm 'B' 'bool'
+| |-ClassTemplateSpecializationDecl struct Flag definition implicit_instantiation
+| | |-TemplateArgument value 'bool' 1
+| | `-VarDecl referenced value 'const bool' static inline constexpr cinit value=true
+| |   `-SubstNonTypeTemplateParmExpr 'bool'
+| |     |-NonTypeTemplateParmDecl referenced 'bool' depth 0 index 0 B
+| |     `-CXXBoolLiteralExpr 'bool' true
+| `-ClassTemplateSpecializationDecl struct Flag definition implicit_instantiation
+|   |-TemplateArgument value 'bool' 0
+|   `-VarDecl referenced value 'const bool' static inline constexpr cinit value=false
+|     `-SubstNonTypeTemplateParmExpr 'bool'
+|       |-NonTypeTemplateParmDecl referenced 'bool' depth 0 index 0 B
+|       `-CXXBoolLiteralExpr 'bool' false
+|-ClassTemplateDecl Size
+| |-NonTypeTemplateParmDecl 'unsigned long' depth 0 index 0 N
+| |-CXXRecordDecl struct Size definition
+| | `-FieldDecl c 'char'
+| `-ClassTemplateSpecializationDecl struct Size definition implicit_instantiation
+|   |-TemplateArgument value 'unsigned long' 18446744073709551615
+|   `-FieldDecl c 'char'
+|-ClassTemplateDecl Signed
+| |-NonTypeTemplateParmDecl 'int' depth 0 index 0 N
+| |-CXXRecordDecl struct Signed definition
+| | `-FieldDecl c 'char'
+| `-ClassTemplateSpecializationDecl struct Signed definition implicit_instantiation
+|   |-TemplateArgument value 'int' -3
+|   `-FieldDecl c 'char'
+|-StaticAssertDecl
+| `-ImplicitCastExpr 'bool' <LValueToRValue>
+|   `-DeclRefExpr 'const bool' lvalue Var 'value' 'const bool' non_odr_use_constant
+|-StaticAssertDecl
+| `-UnaryOperator 'bool' prefix '!' cannot overflow
+|   `-ImplicitCastExpr 'bool' <LValueToRValue>
+|     `-DeclRefExpr 'const bool' lvalue Var 'value' 'const bool' non_odr_use_constant
+|-StaticAssertDecl
+| `-BinaryOperator 'bool' '=='
+|   |-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof 'Size<18446744073709551615UL>':'Size<18446744073709551615>'
+|   `-ImplicitCastExpr 'unsigned long' <IntegralCast>
+|     `-IntegerLiteral 'int' 1
+`-StaticAssertDecl
+  `-BinaryOperator 'bool' '=='
+    |-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof 'Signed<-3>'
+    `-ImplicitCastExpr 'unsigned long' <IntegralCast>
+      `-IntegerLiteral 'int' 1
