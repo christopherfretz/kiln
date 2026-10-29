@@ -125,7 +125,9 @@ fn class_features_landed_in_066b() {
         assert!(s.is_error_expr(this));
         assert_eq!(
             messages(sink),
-            vec!["error: invalid use of 'this' outside of a non-static member function".to_string()]
+            vec![
+                "error: invalid use of 'this' outside of a non-static member function".to_string()
+            ]
         );
     });
 }

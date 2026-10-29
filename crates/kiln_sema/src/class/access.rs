@@ -306,8 +306,11 @@ impl Sema<'_, '_> {
         object: Option<DeclId>,
         loc: Loc,
     ) -> bool {
+        // A public member named in its own class is accessible; through a
+        // base its access is that along the path ([class.access.base]/1).
         let decl_access = self.ast.decls.get(found).misc().access();
-        if matches!(decl_access, Access::Public | Access::None) {
+        let own_class = self.declaring_class(found).is_some_and(|c| same_class(self, c, naming));
+        if decl_access == Access::None || decl_access == Access::Public && own_class {
             return true;
         }
         let check = AccessCheck { member: found, naming_class: naming, object_class: object, loc };
@@ -358,7 +361,7 @@ impl Sema<'_, '_> {
             .diag(DiagId::sema_access_member, c.loc)
             .arg(name)
             .arg(u8::from(unpriv == Access::Protected))
-            .arg(self.ty_arg(self.tag_type(naming)));
+            .arg(self.ty_arg(self.tag_type(t.declaring)));
         let msg = self.access_path_notes(msg, &ec, &t, naming);
         self.emit(msg);
         false
