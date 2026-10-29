@@ -493,3 +493,37 @@ fn dcl_asm_label_diagnostics() {
     let p = parse("int f() asm(\"x\") = 0;");
     p.assert_diag("1:5 error: illegal initializer (only variables can be initialized)");
 }
+
+/// [dcl.mptr]/1, [stmt.ambig]/1: a pointer-to-member operator whose
+/// nested-name-specifier has template-id components (`X<T>::*`,
+/// `X<T>::Y::*`, `::X<T>::*`, `N::Z<T>::*`, `T::template W<int>::*`) makes
+/// `I (declarator);` a declaration, also inside `sizeof`; with a variable
+/// `x`, `x<1>::y` is two comparisons ([temp.names]/3), so the statement is
+/// an expression.
+#[test]
+fn dcl_mptr_template_id_qualifier_disambiguation() {
+    let p = parse(
+        "template <class T> struct X { struct Y {}; };\n\
+         namespace N { template <class T> struct Z {}; }\n\
+         typedef int I;\n\
+         int x = 1, y = 2;\n\
+         template <class T> void f() {\n\
+         \x20 I (X<T>::*p1);\n\
+         \x20 I (X<T>::Y::*p2);\n\
+         \x20 I (::X<T>::*p3);\n\
+         \x20 I (N::Z<T>::*p4);\n\
+         \x20 I (T::template W<int>::*p5);\n\
+         \x20 (void)sizeof(I (X<T>::*));\n\
+         \x20 (void)I(x<1>::y);\n\
+         \x20 (void)p1; (void)p2; (void)p3; (void)p4; (void)p5;\n\
+         }\n",
+    );
+    p.assert_clean();
+    p.assert_dump("VarDecl referenced p1 'I X<T>::*'");
+    p.assert_dump("VarDecl referenced p2 'I X<T>::Y::*'");
+    p.assert_dump("VarDecl referenced p3 'I X<T>::*'");
+    p.assert_dump("VarDecl referenced p4 'I N::Z<T>::*'");
+    p.assert_dump("VarDecl referenced p5 ");
+    p.assert_dump("sizeof 'I X<T>::*'");
+    p.assert_dump("BinaryOperator 'bool' '>'");
+}

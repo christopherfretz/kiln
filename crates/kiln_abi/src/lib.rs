@@ -4,11 +4,13 @@
 //! this crate implements. M2 provides the target description
 //! ([`mod@target`]), type and record layout ([`layout`]) and the
 //! `-fdump-record-layouts` printer ([`dump`]). M3 adds the Itanium vtable
-//! interface ([`vtable`], implemented by WP-078b).
+//! interface ([`vtable`], implemented by WP-078b). [`dump_blocks`] splits
+//! both dumps into the blocks the clang differentials compare.
 #![forbid(unsafe_code)]
 
 pub mod call;
 pub mod dump;
+pub mod dump_blocks;
 pub mod irtype;
 pub mod layout;
 pub mod mangle;

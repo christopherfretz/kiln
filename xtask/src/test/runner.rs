@@ -15,6 +15,7 @@ use super::discover::TestCase;
 use crate::clang_ast::{DumpOptions, normalize};
 use crate::util::oven_report::{self, Report};
 use crate::util::process::{self, Output, Shown};
+use kiln_abi::dump_blocks::{record_layout_blocks, vtable_blocks};
 
 /// Everything a worker needs; shared read-only between threads.
 #[derive(Debug)]
@@ -148,12 +149,26 @@ impl Test<'_> {
             let reason = "not supported by this compiler (`expect: ast` needs kiln or clang)";
             return (Status::Skip, Some(reason.to_owned()), String::new());
         }
+        if let Some(dump) = DumpKind::of(spec.expect) {
+            let name = dump.expect();
+            if kind == CompilerKind::Other {
+                let reason =
+                    format!("not supported by this compiler (`{name}` needs kiln or clang)");
+                return (Status::Skip, Some(reason), String::new());
+            }
+            if self.cfg.oracle.is_none() {
+                let reason = format!("no oracle (`{name}` is checked against the oracle's dump)");
+                return (Status::Skip, Some(reason), String::new());
+            }
+        }
         let outcome = match spec.expect {
             Expect::CompileOk => self.compile_ok(&spec),
             Expect::CompileFail => self.compile_fail(&spec),
             Expect::Run => self.run(&spec),
             Expect::Pp => self.pp(&spec),
             Expect::Ast => self.ast(&spec),
+            Expect::Layout => self.dump(&spec, DumpKind::Layout),
+            Expect::Vtables => self.dump(&spec, DumpKind::Vtables),
         };
         // Budgets are checked once the kind's own checks pass.
         let outcome = outcome.and_then(|()| self.check_oven(&spec));
@@ -670,6 +685,219 @@ impl Test<'_> {
             ))
         })
     }
+}
+
+/// The dump an `expect: layout` or `expect: vtables` test compares
+/// (`spec/harness.md` "Layout and vtable tests").
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DumpKind {
+    Layout,
+    Vtables,
+}
+
+impl DumpKind {
+    fn of(expect: Expect) -> Option<Self> {
+        match expect {
+            Expect::Layout => Some(Self::Layout),
+            Expect::Vtables => Some(Self::Vtables),
+            _ => None,
+        }
+    }
+
+    /// The directive, for messages.
+    fn expect(self) -> &'static str {
+        match self {
+            Self::Layout => "expect: layout",
+            Self::Vtables => "expect: vtables",
+        }
+    }
+
+    /// What the dump holds, for messages.
+    fn noun(self) -> &'static str {
+        match self {
+            Self::Layout => "record layout",
+            Self::Vtables => "vtable",
+        }
+    }
+
+    /// The number of blocks of `dump`.
+    fn count(self, dump: &str) -> usize {
+        match self {
+            Self::Layout => record_layout_blocks(dump).len(),
+            Self::Vtables => vtable_blocks(dump).len(),
+        }
+    }
+
+    /// Compares `got` with the oracle's dump `want`; `None` when they agree.
+    fn diff(self, want: &str, got: &str) -> Option<String> {
+        match self {
+            Self::Layout => layout_diff(want, got),
+            Self::Vtables => vtables_diff(want, got),
+        }
+    }
+}
+
+impl Test<'_> {
+    /// `expect: layout` / `expect: vtables`: the compiler's dump against the
+    /// oracle's, in kiln's or clang's spelling of the dump flags. Only run
+    /// with an oracle (`evaluate` skips the test otherwise).
+    fn dump(&mut self, spec: &TestSpec, kind: DumpKind) -> Check {
+        let compiler = self.cfg.compiler.clone();
+        let got = self.dump_of(&compiler, spec, kind, false)?;
+        let noun = kind.noun();
+        if kind.count(&got) == 0 {
+            return Err(Problem::Fail(format!(
+                "the compiler dumped no {noun} (the test pins nothing)\n{}",
+                indent(&got)
+            )));
+        }
+        if let Some(oracle) = self.cfg.oracle.clone()
+            && (self.cfg.compiler_kind == CompilerKind::Kiln || oracle != self.cfg.compiler)
+        {
+            let theirs = self.dump_of(&oracle, spec, kind, true)?;
+            if kind.count(&theirs) == 0 {
+                let hint = match kind {
+                    DumpKind::Layout => "",
+                    DumpKind::Vtables => {
+                        "; clang dumps a vtable only when it emits it: give every dynamic \
+                         class a key function defined in the test"
+                    }
+                };
+                return Err(Problem::Broken(format!(
+                    "the oracle ({}) dumped no {noun}{hint}",
+                    oracle.display()
+                )));
+            }
+            if let Some(d) = kind.diff(&theirs, &got) {
+                return Err(Problem::Fail(d));
+            }
+        }
+        Ok(())
+    }
+
+    /// Runs `program` with the dump flags and returns its standard output.
+    /// kiln dumps under `-fsyntax-only`. clang dumps record layouts under
+    /// `-fsyntax-only -Xclang -fdump-record-layouts-complete`, but vtables
+    /// only while it emits them, so its vtable dump compiles to LLVM IR in
+    /// the scratch directory. As the compiler under test the exit status and
+    /// `diag:` lines are checked; as the oracle any failure is an ERROR.
+    fn dump_of(
+        &mut self,
+        program: &Path,
+        spec: &TestSpec,
+        kind: DumpKind,
+        oracle: bool,
+    ) -> Result<String, Problem> {
+        let kiln = !oracle && self.cfg.compiler_kind == CompilerKind::Kiln;
+        let mode: &[&str] = match (kiln, kind) {
+            (true, DumpKind::Layout) => &["-fsyntax-only", "-fdump-record-layouts"],
+            (true, DumpKind::Vtables) => &["-fsyntax-only", "-fdump-vtable-layouts"],
+            (false, DumpKind::Layout) => {
+                &["-fsyntax-only", "-Xclang", "-fdump-record-layouts-complete"]
+            }
+            (false, DumpKind::Vtables) => &["-S", "-emit-llvm", "-Xclang", "-fdump-vtable-layouts"],
+        };
+        let ir = match (kiln, kind) {
+            (false, DumpKind::Vtables) => {
+                Some(self.scratch()?.join(if oracle { "oracle.ll" } else { "test.ll" }))
+            }
+            _ => None,
+        };
+        if oracle {
+            return Ok(self.oracle_compile(program, spec, mode, ir.as_deref())?.stdout_str());
+        }
+        let o = self.compile(spec, mode, ir.as_deref())?;
+        if !o.success() {
+            return Err(Problem::Fail(format!(
+                "expected the {} dump, but the compiler failed ({})\n{}",
+                kind.noun(),
+                o.describe_end(),
+                indent(&o.stderr_str())
+            )));
+        }
+        self.check_diags(spec, &diag_parse::parse(&o.stderr_str()))?;
+        Ok(o.stdout_str())
+    }
+}
+
+/// Compares record-layout dumps block by block, in order (clang's builtin
+/// records dropped): the first differing block with both texts and a line
+/// diff, or `None` when they agree.
+fn layout_diff(want: &str, got: &str) -> Option<String> {
+    let (theirs, ours) = (record_layout_blocks(want), record_layout_blocks(got));
+    if theirs == ours {
+        return None;
+    }
+    let first = theirs.iter().zip(&ours).take_while(|(t, o)| t == o).count();
+    let oracle = theirs.get(first).copied().unwrap_or("");
+    let actual = ours.get(first).copied().unwrap_or("");
+    let shown =
+        |blk: &str| if blk.is_empty() { "    <no block>\n".to_owned() } else { indent(blk) };
+    Some(format!(
+        "record layout block {} differs from the oracle's ({} blocks, oracle {}):\n\
+         --- oracle ---\n{}--- actual ---\n{}--- diff (-oracle +actual) ---\n{}",
+        first + 1,
+        ours.len(),
+        theirs.len(),
+        shown(oracle),
+        shown(actual),
+        indent(&line_diff(oracle, actual))
+    ))
+}
+
+/// The most blocks shown on each side of a vtable mismatch.
+const MAX_SHOWN_BLOCKS: usize = 4;
+
+/// Compares vtable dumps as sets of blocks (`Original map` sections and
+/// repeats dropped). Blocks with the same first line on both sides are
+/// shown as a line diff; the rest are listed per side. `None` when the
+/// sets are equal.
+fn vtables_diff(want: &str, got: &str) -> Option<String> {
+    let (w, g) = (vtable_blocks(want), vtable_blocks(got));
+    if w == g {
+        return None;
+    }
+    let head = |b: &str| b.lines().next().unwrap_or_default().to_owned();
+    let only_w: Vec<&String> = w.difference(&g).collect();
+    let only_g: Vec<&String> = g.difference(&w).collect();
+    let mut out = format!(
+        "vtable dump differs from the oracle's, as sets of blocks ({} blocks, oracle {}):\n",
+        g.len(),
+        w.len()
+    );
+    let mut paired = Vec::new();
+    let mut shown = 0;
+    for a in &only_w {
+        if let Some(b) = only_g.iter().find(|b| head(b) == head(a)) {
+            paired.push(head(a));
+            if shown < MAX_SHOWN_BLOCKS {
+                let _ = write!(
+                    out,
+                    "block `{}` differs (-oracle +actual):\n{}",
+                    head(a),
+                    indent(&line_diff(a, b))
+                );
+            }
+            shown += 1;
+        }
+    }
+    for (side, blocks) in [("the oracle's", &only_w), ("the actual", &only_g)] {
+        let rest: Vec<&&String> = blocks.iter().filter(|b| !paired.contains(&head(b))).collect();
+        if rest.is_empty() {
+            continue;
+        }
+        let _ = writeln!(out, "only in {side} dump ({}):", rest.len());
+        for b in rest.iter().take(MAX_SHOWN_BLOCKS) {
+            out.push_str(&indent(b));
+        }
+        if rest.len() > MAX_SHOWN_BLOCKS {
+            let _ = writeln!(out, "    ... and {} more", rest.len() - MAX_SHOWN_BLOCKS);
+        }
+    }
+    if shown > MAX_SHOWN_BLOCKS {
+        let _ = writeln!(out, "... and {} more differing blocks", shown - MAX_SHOWN_BLOCKS);
+    }
+    Some(out)
 }
 
 /// A line diff of two dumps, or `None` when they are equal up to trailing

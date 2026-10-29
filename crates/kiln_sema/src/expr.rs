@@ -1673,6 +1673,9 @@ impl Sema<'_, '_> {
         let l2 = conv::decay(self, l);
         let r2 = conv::decay(self, r);
         let (lt, rt) = (self.ety(l2), self.ety(r2));
+        if self.is_member_pointer(lt) || self.is_member_pointer(rt) {
+            return self.member_pointer_comparison(op, l2, r2, loc);
+        }
         let ptr_like = |s: &Self, t: QualType| s.ast.types.is_pointer(t) || s.is_nullptr_type(t);
         if ptr_like(self, lt) || ptr_like(self, rt) {
             if let Some((l3, r3, _)) = self.composite_pointer(l2, r2) {
@@ -1699,6 +1702,90 @@ impl Sema<'_, '_> {
             Ok((l3, r3, _)) => self.builder().binary(op, l3, r3, QualType::BOOL, loc),
             Err(err) => self.conv_failed(&err, l, r, loc),
         }
+    }
+
+    fn is_member_pointer(&self, t: QualType) -> bool {
+        matches!(self.ast.types.canonical_view(t), TypeView::MemberPointer { .. })
+    }
+
+    /// A comparison with a pointer-to-member operand (`l` and `r` already
+    /// decayed), clang's `CheckCompareOperands` order: only `==` and `!=`
+    /// are defined ([expr.rel]/2 does not cover member pointers, so `<`
+    /// is `invalid operands`); a null pointer constant on the other side
+    /// converts to the member pointer type (`NullToMemberPointer`,
+    /// [expr.eq]/4); two member pointers are brought to their composite
+    /// pointer type ([expr.type]/4: the derived class's member pointer,
+    /// `BaseToDerivedMemberPointer`, [conv.mem]/2). No composite type,
+    /// or a pointer on the other side, is `comparison of distinct pointer
+    /// types`; anything else is `invalid operands`.
+    fn member_pointer_comparison(
+        &mut self,
+        op: BinaryOp,
+        l: ExprId,
+        r: ExprId,
+        loc: Loc,
+    ) -> ExprId {
+        if !matches!(op, BinaryOp::EQ | BinaryOp::NE) {
+            return self.invalid_operands(l, r, loc);
+        }
+        let (lt, rt) = (self.ety(l), self.ety(r));
+        let (lmp, rmp) = (self.is_member_pointer(lt), self.is_member_pointer(rt));
+        let to_null = |s: &mut Self, e: ExprId, to: QualType| {
+            conv::implicit_convert(s, e, to, ConvCtx::Comparison).ok()
+        };
+        if lmp
+            && !rmp
+            && conv::is_null_pointer_constant(self, r)
+            && let Some(r2) = to_null(self, r, lt)
+        {
+            return self.builder().binary(op, l, r2, QualType::BOOL, loc);
+        }
+        if rmp
+            && !lmp
+            && conv::is_null_pointer_constant(self, l)
+            && let Some(l2) = to_null(self, l, rt)
+        {
+            return self.builder().binary(op, l2, r, QualType::BOOL, loc);
+        }
+        if lmp && rmp {
+            if self.ast.types.same_type(lt, rt) {
+                return self.builder().binary(op, l, r, QualType::BOOL, loc);
+            }
+            // The composite type is the operand type the other operand
+            // converts to; a conversion that exists but is ill-formed
+            // (through a virtual base, ambiguous) is diagnosed at the
+            // converted operand before the comparison itself, as clang does.
+            let pair = if conv::standard_conversion(self, r, lt, ConvCtx::Comparison).is_some() {
+                Some((r, lt, true))
+            } else if conv::standard_conversion(self, l, rt, ConvCtx::Comparison).is_some() {
+                Some((l, rt, false))
+            } else {
+                None
+            };
+            if let Some((e, to, right)) = pair {
+                match conv::implicit_convert(self, e, to, ConvCtx::Comparison) {
+                    Ok(e2) => {
+                        let (l2, r2) = if right { (l, e2) } else { (e2, r) };
+                        return self.builder().binary(op, l2, r2, QualType::BOOL, loc);
+                    }
+                    Err(err) => {
+                        let at = self.begin_loc(e);
+                        self.emit_conv_error(err, at);
+                    }
+                }
+            }
+        }
+        let pointer_like =
+            |s: &Self, t: QualType| s.ast.types.is_pointer(t) || s.is_member_pointer(t);
+        if !(pointer_like(self, lt) && pointer_like(self, rt)) {
+            return self.invalid_operands(l, r, loc);
+        }
+        let msg = self
+            .diag(DiagId::sema_comparison_distinct_pointers, loc)
+            .arg(self.ty_arg(lt))
+            .arg(self.ty_arg(rt));
+        self.emit(msg);
+        self.recover_err(&[l, r], loc)
     }
 
     /// `c ? t : f` ([expr.cond]).

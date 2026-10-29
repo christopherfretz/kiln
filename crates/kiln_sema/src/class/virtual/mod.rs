@@ -18,7 +18,7 @@ mod graph;
 
 use kiln_ast::decl::{DeclFlags, FnSpec, FnStorage};
 use kiln_ast::names::DeclName;
-use kiln_ast::types::{ExcSpec, FuncProto, Quals, TypeView};
+use kiln_ast::types::{ExcSpec, FuncProto, Quals, TypeFlags, TypeView};
 use kiln_ast::{DeclId, ListId, QualType};
 use kiln_diag::{Diag, DiagId};
 use kiln_source::Loc;
@@ -599,6 +599,43 @@ impl Sema<'_, '_> {
             );
         }
         msg
+    }
+
+    /// Why `from` does not convert to `to` when both are (pointers or
+    /// references to, or member pointers to) function types, as clang's
+    /// `HandleFunctionTypeMismatch` suffixes; member pointers into
+    /// different classes say so whatever their pointee. Empty otherwise.
+    pub(crate) fn fn_mismatch_suffix(&self, from: QualType, to: QualType) -> String {
+        let t = &self.ast.types;
+        let (mut from, mut to) = (t.desugar_top(from), t.desugar_top(to));
+        if let (
+            TypeView::MemberPointer { pointee: pf, class: cf },
+            TypeView::MemberPointer { pointee: pt, class: ct },
+        ) = (t.view(from.ty()), t.view(to.ty()))
+        {
+            if !t.same_type(QualType::unqual(cf), QualType::unqual(ct)) {
+                return format!(
+                    ": different classes ({} vs {})",
+                    self.ty_arg(QualType::unqual(ct)),
+                    self.ty_arg(QualType::unqual(cf))
+                );
+            }
+            (from, to) = (pf, pt);
+        }
+        let strip = |q: QualType| {
+            let d = t.desugar_top(q);
+            match t.view(d.ty()) {
+                TypeView::Pointer(p) | TypeView::LValueRef(p) | TypeView::RValueRef(p) => p,
+                _ => q,
+            }
+        };
+        let (from, to) = (strip(from), strip(to));
+        if t.flags(from.ty()).intersects(TypeFlags::DEPENDENT_INSTANTIATION)
+            || t.same_type(from, to)
+        {
+            return String::new();
+        }
+        self.fn_type_mismatch(to, from)
     }
 
     /// How function type `to` (the hidden base function) differs from

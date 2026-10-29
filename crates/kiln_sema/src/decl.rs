@@ -322,6 +322,31 @@ impl Sema<'_, '_> {
                     ty = if quals.is_empty() { p } else { self.ast.types.qualify(p, *quals) };
                     prev_ref = false;
                 }
+                Chunk::MemberPointer { qual, quals, loc } => {
+                    prev_ref = false;
+                    let Some(qual) = qual else { return QualType::ERROR };
+                    let Some(class) = self.member_pointer_class(qual) else {
+                        let msg = self.diag(DiagId::sema_mptr_in_nonclass, *loc).arg(&name);
+                        self.emit(msg);
+                        return QualType::ERROR;
+                    };
+                    let t = &self.ast.types;
+                    if t.is_reference(ty) {
+                        let msg = self
+                            .diag(DiagId::sema_mptr_to_reference, *loc)
+                            .arg(&name)
+                            .arg(self.ty_arg(ty));
+                        self.emit(msg);
+                        return QualType::ERROR;
+                    }
+                    if t.is_void(ty) {
+                        let msg = self.diag(DiagId::sema_mptr_to_void, *loc).arg(&name);
+                        self.emit(msg);
+                        return QualType::ERROR;
+                    }
+                    let p = self.ast.types.member_pointer(ty, class.ty());
+                    ty = if quals.is_empty() { p } else { self.ast.types.qualify(p, *quals) };
+                }
                 Chunk::LRef { loc } | Chunk::RRef { loc } => {
                     if t.is_reference(ty) && prev_ref {
                         let msg = self.diag(DiagId::sema_reference_to_reference, *loc).arg(&name);
@@ -434,6 +459,23 @@ impl Sema<'_, '_> {
             }
         }
         ty
+    }
+
+    /// The class a member-pointer declarator's nested-name-specifier
+    /// names ([dcl.mptr]/1, clang's `GetFullTypeForDeclarator`): the type
+    /// of its last component as written when that is a class or a
+    /// dependent type, a dependent name for a dependent `T::X::`; `None`
+    /// for a namespace, `::` or a non-class type.
+    fn member_pointer_class(&mut self, qual: &crate::using::Qualifier) -> Option<QualType> {
+        match self.ast.types.nns_view(qual.nns) {
+            kiln_ast::types::Nns::Type { ty, .. } => {
+                (self.is_dependent_type(ty) || self.ast.types.as_record(ty).is_some()).then_some(ty)
+            }
+            kiln_ast::types::Nns::Identifier { prefix: Some(prefix), name } => {
+                Some(self.act_dependent_name(prefix, name, None, TagKeyword::None))
+            }
+            _ => None,
+        }
     }
 
     /// Evaluates an array bound ([dcl.array]/1): a converted constant
@@ -607,7 +649,7 @@ impl Sema<'_, '_> {
             return None;
         }
         match chunk {
-            Chunk::Pointer { .. } => Some(0),
+            Chunk::Pointer { .. } | Chunk::MemberPointer { .. } => Some(0),
             Chunk::LRef { .. } | Chunk::RRef { .. } => Some(1),
             Chunk::Array { .. } => Some(2),
             Chunk::Function { .. } => None,
@@ -617,6 +659,7 @@ impl Sema<'_, '_> {
     fn chunk_loc(chunk: &Chunk) -> Loc {
         match chunk {
             Chunk::Pointer { loc, .. }
+            | Chunk::MemberPointer { loc, .. }
             | Chunk::LRef { loc }
             | Chunk::RRef { loc }
             | Chunk::Array { loc, .. }
@@ -1402,14 +1445,24 @@ impl Sema<'_, '_> {
             let msg = self
                 .diag(DiagId::sema_friend_def_no_match, d.name_loc())
                 .arg(sym_str(self, name))
-                .arg(self.qualified_decl_name(ctx));
+                .arg(self.qualifier_desc(ctx));
             self.emit(msg);
             invalid_redecl = true;
-        } else if method && !in_class && !matches_member {
+        } else if method && !in_class && !matches_member
+            || !method && !friend && d.qualifier.is_some() && prev.is_none()
+        {
+            // [dcl.meaning.general]/2: a qualified declarator-id names a
+            // previously declared member of the nominated class or
+            // namespace.
+            let scope = if method {
+                format!("'{}'", self.qualified_decl_name(ctx))
+            } else {
+                self.qualifier_desc(ctx)
+            };
             let msg = self
                 .diag(DiagId::sema_member_def_no_match, d.name_loc())
                 .arg(sym_str(self, name))
-                .arg(self.qualified_decl_name(ctx));
+                .arg(scope);
             self.emit(msg);
             invalid_redecl = true;
         } else if let Some(p) = prev
@@ -3363,6 +3416,18 @@ impl Sema<'_, '_> {
             None => self.lookup_name(name, LookupKind::Nested),
         };
         let Some(&d) = found.decls.first() else {
+            // [basic.lookup.qual]/1 ignores names that are not types,
+            // templates or namespaces; one that ordinary lookup finds is
+            // "not a class, namespace, or enumeration" (clang's
+            // `BuildCXXNestedNameSpecifier` second lookup).
+            let ordinary = match prefix {
+                Some(q) => self.lookup_qualified(q, name, LookupKind::Ordinary),
+                None => self.lookup_name(name, LookupKind::Ordinary),
+            };
+            if !ordinary.decls.is_empty() {
+                self.not_a_nested_name(name, &ordinary.decls, loc);
+                return None;
+            }
             let msg = match prefix {
                 Some(q) => self
                     .diag(DiagId::sema_no_member, loc)
@@ -3400,20 +3465,45 @@ impl Sema<'_, '_> {
                 let ty = self.ast.decls.get(d).ty().unwrap_or(QualType::ERROR);
                 let r = self.ast.types.as_record(ty).or_else(|| self.ast.types.as_enum(ty));
                 if r.is_none() {
-                    let msg = self.diag(DiagId::sema_not_a_type, loc).arg(sym_str(self, name));
+                    let msg = self
+                        .diag(DiagId::sema_expected_class_or_namespace, loc)
+                        .arg(self.ty_arg(ty));
                     self.emit(msg);
                 }
                 r.map(|r| self.ast.definition(r).unwrap_or(r))
             }
-            _ => None,
+            _ => {
+                self.not_a_nested_name(name, &found.decls, loc);
+                None
+            }
         };
         ctx.map(|c| (c, d))
+    }
+
+    /// `'x' is not a class, namespace, or enumeration` for a
+    /// nested-name-specifier component `x::` that names something else,
+    /// with clang's `declared here` note when lookup found one declaration
+    /// that is not a function template (clang's `LookupResult` treats a
+    /// function template, like several functions, as an overload set).
+    fn not_a_nested_name(&mut self, name: Symbol, decls: &[DeclId], loc: Loc) {
+        let mut msg = self
+            .diag(DiagId::sema_expected_class_or_namespace, loc)
+            .arg(format!("'{}'", sym_str(self, name)));
+        if let [d] = decls
+            && self.kind_of(*d) != DeclKind::FunctionTemplate
+        {
+            msg = msg.with_note(
+                self.diag(DiagId::note_entity_declared_at, self.ast.decls.get(*d).loc())
+                    .arg(format!("'{}'", sym_str(self, name))),
+            );
+        }
+        self.emit(msg);
     }
 
     /// How a qualifier context is named in "no member named 'x' in ...".
     pub(crate) fn qualifier_desc(&self, q: DeclId) -> String {
         match self.ast.decls.get(q).kind() {
-            DeclKind::Namespace => format!("namespace '{}'", self.decl_name(q)),
+            DeclKind::Namespace => format!("namespace '{}'", self.qualified_decl_name(q)),
             DeclKind::TranslationUnit => "the global namespace".to_owned(),
             _ => {
                 let t = self.tag_type(q);

@@ -31,11 +31,14 @@ static_assert(f(2) == 5);
 
 Directives (the full contract, including matching and outcome rules, is
 [spec/harness.md](../spec/harness.md)):
-- `expect: compile-ok | compile-fail | run | pp | ast` (default `compile-ok`).
+- `expect: compile-ok | compile-fail | run | pp | ast | layout | vtables`
+  (default `compile-ok`).
   `ast` compares the AST dump (spec/ast-dump.md) with the required golden
   `<test>.expected`. Under clang the JSON dump is normalized by
   `cargo xtask clang-ast`, which also writes new goldens. `ast-filter:
-  <substr>` dumps only the matching declarations.
+  <substr>` dumps only the matching declarations. `layout` and `vtables`
+  have no golden: kiln's `-fdump-record-layouts` / `-fdump-vtable-layouts`
+  must agree with clang's dump (see "Differential testing" below).
 - `std: c++98..c++26 | c89..c23` (default `c++26`, `c17` for `.c`),
   `args: <extra flags>` (which may use the placeholders `%{repo_root}`,
   `%{resource_dir}` and `%{test_dir}`)
@@ -110,6 +113,18 @@ a query, not a guess.
 - `run`: stdout and exit code must match a clang-built binary.
 - layout: `kiln -fdump-record-layouts` vs clang's for every class in the
   corpus; mangled names vs clang's for every external symbol.
+  `expect: layout` and `expect: vtables` tests make this a corpus feature:
+  the harness runs kiln with `-fsyntax-only -fdump-record-layouts` (or
+  `-fdump-vtable-layouts`) and clang with `-fdump-record-layouts-complete`
+  (or `-fdump-vtable-layouts` while emitting IR, because clang dumps only
+  the vtables it emits, so every dynamic class needs a key function defined
+  in the test), splits both with `kiln_abi::dump_blocks`, and compares record
+  layouts block by block in order and vtables as a set of blocks (clang's
+  `Original map` sections and repeated construction vtables dropped). The
+  first differing block is reported with both texts. Without an oracle the
+  tests are a SKIP. The `kiln_driver` differentials
+  (`tests/record_layouts.rs`, `tests/vtable_layouts.rs`) share the same
+  splitter.
 - constexpr: a generator (`cargo xtask fuzz-constexpr`) produces random
   well-formed constexpr programs that print their results at runtime *and*
   `static_assert` them; both compilers must agree.

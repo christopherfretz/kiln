@@ -449,6 +449,19 @@ pub enum Chunk {
         /// The `*`.
         loc: Loc,
     },
+    /// `nested-name-specifier * cv` ([dcl.mptr]): a pointer to a member
+    /// of the class the qualifier names (checked by
+    /// [`Sema::type_for_declarator`](crate::Sema::type_for_declarator)).
+    MemberPointer {
+        /// The nested-name-specifier as the parser resolved it; `None`
+        /// after an error in it was reported (the declarator's type is
+        /// then the error type).
+        qual: Option<crate::using::Qualifier>,
+        /// The cv-qualifiers after the `*`.
+        quals: Quals,
+        /// Where the nested-name-specifier starts.
+        loc: Loc,
+    },
     /// `&`.
     LRef {
         /// The `&`.

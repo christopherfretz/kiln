@@ -900,14 +900,8 @@ impl Parser<'_, '_> {
                 d.chunks.push(Chunk::RRef { loc });
             }
             _ => {
-                if self.at_member_pointer() {
-                    self.unsupported("pointers to members", loc);
-                    while !self.at(Punct::Star) {
-                        self.bump();
-                    }
-                    self.bump();
-                    d.invalid = true;
-                    self.parse_declarator(d);
+                if let Some(star) = self.at_member_pointer() {
+                    self.parse_member_pointer(d, star, Self::parse_declarator);
                     return;
                 }
                 self.parse_direct_declarator(d);
@@ -915,20 +909,67 @@ impl Parser<'_, '_> {
         }
     }
 
-    /// True at `N::*` (a ptr-operator naming a member pointer).
-    fn at_member_pointer(&self) -> bool {
+    /// True at `N::*` (a ptr-operator naming a member pointer): the index
+    /// of the `*`. The components may be template-ids (`X<T>::*`).
+    pub(crate) fn at_member_pointer(&self) -> Option<usize> {
         let mut i = self.pos();
         if self.tok_at(i).kind == TokKind::Punct(Punct::ColonColon) {
             i += 1;
         }
         let mut any = false;
-        while self.ident_of(self.tok_at(i)).is_some()
-            && self.tok_at(i + 1).kind == TokKind::Punct(Punct::ColonColon)
-        {
-            i += 2;
+        loop {
+            let k = usize::from(any && self.kw_of(self.tok_at(i)) == Some(Kw::Template));
+            if self.ident_of(self.tok_at(i + k)).is_none() {
+                break;
+            }
+            let next = match Self::punct_of(self.tok_at(i + k + 1)) {
+                Some(Punct::ColonColon) => i + k + 1,
+                Some(Punct::Less) => match self.skip_template_args(i + k + 1) {
+                    Some((close, false)) => close + 1,
+                    _ => return None,
+                },
+                _ => break,
+            };
+            if self.tok_at(next).kind != TokKind::Punct(Punct::ColonColon) {
+                break;
+            }
+            i = next + 1;
             any = true;
         }
-        any && self.tok_at(i).kind == TokKind::Punct(Punct::Star)
+        (any && self.tok_at(i).kind == TokKind::Punct(Punct::Star)).then_some(i)
+    }
+
+    /// `nested-name-specifier * cv` ([dcl.mptr]) with the `*` at token
+    /// `star`, then the rest of the declarator by `rest` (clang's
+    /// `ParseDeclaratorInternal`). Sema checks that the qualifier names
+    /// a class; after an error in the qualifier the chunk has no
+    /// qualifier and the declarator is invalid.
+    pub(crate) fn parse_member_pointer(
+        &mut self,
+        d: &mut Declarator,
+        star: usize,
+        rest: fn(&mut Self, &mut Declarator),
+    ) {
+        let loc = self.loc();
+        let saved = self.s.set_entering_context(false);
+        let qual = self.parse_nested_name_nns();
+        self.s.set_entering_context(saved);
+        let qual = match qual {
+            Ok(Some(q)) if self.pos() == star => Some(q),
+            _ => {
+                d.invalid = true;
+                while self.pos() < star && !self.at_eof() {
+                    self.bump();
+                }
+                None
+            }
+        };
+        if self.pos() == star {
+            self.bump();
+        }
+        let quals = self.parse_ptr_cv();
+        rest(self, d);
+        d.chunks.push(Chunk::MemberPointer { qual, quals, loc });
     }
 
     /// The cv-qualifiers (and attributes) after a `*`.
