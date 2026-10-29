@@ -21,6 +21,7 @@ pub mod declspec;
 mod deduce;
 pub mod except;
 pub mod expr;
+mod forms;
 pub mod init;
 pub mod literal;
 pub mod lookup;
@@ -90,6 +91,9 @@ pub struct Sema<'a, 'sm> {
     pub(crate) local_externs: Vec<(DeclId, kiln_source::symbol::Symbol, DeclId)>,
     /// The constant evaluator of the translation unit (spec/sema.md §8).
     pub(crate) oven: Oven,
+    /// Braced-init-list call arguments awaiting their parameter types
+    /// (placeholders of [`Sema::act_on_braced_arg`]).
+    pub(crate) braced_args: Vec<(ExprId, InitList)>,
 }
 
 impl<'a, 'sm> Sema<'a, 'sm> {
@@ -125,6 +129,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             enums: Vec::new(),
             local_externs: Vec::new(),
             oven: Oven::new(Budget::default()),
+            braced_args: Vec::new(),
         }
     }
 

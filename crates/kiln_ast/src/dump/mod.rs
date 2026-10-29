@@ -1157,6 +1157,12 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                 self.bare_ty(x.result_ty);
             }
             k if k.is_cast() => {
+                if k == ExprKind::CXXFunctionalCastExpr {
+                    // clang prints the type as written (`getTypeAsWritten`).
+                    self.line.push_str(" functional cast to ");
+                    let types = &self.ast.types;
+                    write_type(types, &self.names, n.ty(), PrintOptions::SUGARED, &mut self.line);
+                }
                 let _ = write!(self.line, " <{}>", exprs.cast_kind(e).spelling());
                 if k == ExprKind::ImplicitCastExpr && n.has(ExprFlags::PART_OF_EXPLICIT_CAST) {
                     self.line.push_str(" part_of_explicit_cast");

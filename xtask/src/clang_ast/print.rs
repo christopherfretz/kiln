@@ -554,11 +554,13 @@ impl<'a> Printer<'a, '_> {
                 let mut l = decl_head(n, k);
                 push_opt(&mut l, name(n));
                 push_word(&mut l, &type_pair(n.get("type"), k)?);
+                match text(n, "init") {
+                    None => {}
+                    Some("c") => push_word(&mut l, "cinit"),
+                    Some(i) => return Err(format!("clang-ast: ParmVarDecl init style `{i}`")),
+                }
                 line = l;
                 kids_out = self.kid_trees(n)?;
-                if !kids_out.is_empty() {
-                    return Err("clang-ast: default arguments are not in the M2 dump".into());
-                }
             }
             "VarDecl" => {
                 line = self.var(n)?;
@@ -649,6 +651,14 @@ impl<'a> Printer<'a, '_> {
                 line = l;
                 kids_out = self.kid_trees(n)?;
             }
+            "CXXFunctionalCastExpr" => {
+                // The text dump's `functional cast to T` names the type as
+                // written, which is the expression's (sugared) type.
+                let ck = text(n, "castKind").ok_or("clang-ast: cast without a kind")?;
+                let to = qual_type(n);
+                line = format!("{} functional cast to {to} <{ck}>", self.expr_head(n, k)?);
+                kids_out = self.kid_trees(n)?;
+            }
             "UnaryOperator" => {
                 let op = text(n, "opcode").ok_or("clang-ast: operator without an opcode")?;
                 let fix = if flag(n, "isPostfix") { "postfix" } else { "prefix" };
@@ -716,7 +726,15 @@ impl<'a> Printer<'a, '_> {
             | "ParenExpr"
             | "ArraySubscriptExpr"
             | "CallExpr"
-            | "ImplicitValueInitExpr" => {
+            | "ImplicitValueInitExpr"
+            | "CXXScalarValueInitExpr"
+            | "CXXDefaultArgExpr"
+            | "CXXThrowExpr"
+            | "StmtExpr"
+            | "CompoundLiteralExpr"
+            | "OpaqueValueExpr"
+            | "BinaryConditionalOperator"
+            | "OffsetOfExpr" => {
                 line = self.expr_head(n, k)?;
                 kids_out = self.kid_trees(n)?;
             }

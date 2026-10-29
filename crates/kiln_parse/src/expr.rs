@@ -140,13 +140,17 @@ impl Parser<'_, '_> {
             let op_tok = self.bump();
             let op_loc = op_tok.span.lo;
             let mut middle = None;
+            let mut colon = None;
             if op.is_none() {
-                if self.at(Punct::Colon) {
-                    self.unsupported("the GNU '?:' operator", self.loc());
-                    return None;
+                if let Some(c) = self.eat(Punct::Colon) {
+                    // GNU `a ?: b`.
+                    let rhs = self.parse_assignment_expr()?;
+                    lhs = self.s.act_on_binary_conditional(lhs, rhs, op_loc, c);
+                    continue;
                 }
                 middle = Some(self.parse_expression()?);
-                if self.eat(Punct::Colon).is_none() {
+                colon = self.eat(Punct::Colon);
+                if colon.is_none() {
                     let note = self.s.diag(DiagId::note_matching, op_loc).arg("'?'");
                     let d = self
                         .s
@@ -159,11 +163,11 @@ impl Parser<'_, '_> {
             }
             // [expr.assign], [expr.cond]: the right operand of an assignment
             // and the third operand of `?:` are assignment-expressions.
+            if self.at(Punct::LBrace) {
+                lhs = self.parse_braced_rhs(lhs, p, op, &op_tok, colon)?;
+                continue;
+            }
             let mut rhs = if p <= prec::COND {
-                if self.at(Punct::LBrace) {
-                    self.unsupported("braced-init-list operands", self.loc());
-                    return None;
-                }
                 self.parse_assignment_expr()?
             } else {
                 self.parse_cast_expr()?
@@ -182,6 +186,50 @@ impl Parser<'_, '_> {
                 (None, None) => unreachable!("'?' always has a middle operand"),
             };
         }
+    }
+
+    /// A braced-init-list right operand of the binary operator `op_tok`
+    /// (precedence `p`; `op` is `None` for `?:`, whose `:` is at `colon`).
+    /// clang parses one after any operator and accepts it only as the
+    /// right operand of an assignment ([expr.assign]/8): elsewhere it
+    /// reports `err_init_list_bin_op` and the operation is erroneous.
+    fn parse_braced_rhs(
+        &mut self,
+        lhs: kiln_ast::ExprId,
+        p: u8,
+        op: Option<BinaryOp>,
+        op_tok: &Token,
+        colon: Option<Loc>,
+    ) -> PExpr {
+        let l = self.parse_init_list().ok()?;
+        // An operator binding tighter than this one (or a right-associative
+        // one of the same precedence) would take the list as its left
+        // operand.
+        let next = self.cur_binop().map(|(np, _)| np);
+        if let Some(np) = next
+            && (np > p || (np == p && p <= prec::COND))
+        {
+            let t = self.tok().clone();
+            let sp = self.spelling_of(&t);
+            let mut rhs = self.s.act_on_misplaced_init_list(lhs, l, false, &sp, t.span.lo);
+            while let Some((np, _)) = self.cur_binop() {
+                if np < p || (np == p && p > prec::COND) {
+                    break;
+                }
+                rhs = self.parse_rhs(rhs, if p <= prec::COND { p } else { p + 1 })?;
+            }
+            return Some(self.s.act_on_error_expr(&[lhs, rhs], op_tok.span.lo));
+        }
+        Some(match (op, colon) {
+            (Some(op), _) if p == prec::ASSIGN => {
+                self.s.act_on_assign_list(op, lhs, l, op_tok.span.lo)
+            }
+            (None, Some(c)) => self.s.act_on_misplaced_init_list(lhs, l, true, ":", c),
+            _ => {
+                let sp = self.spelling_of(op_tok);
+                self.s.act_on_misplaced_init_list(lhs, l, true, &sp, op_tok.span.lo)
+            }
+        })
     }
 
     // -- unary and cast expressions ----------------------------------------------------
@@ -342,9 +390,15 @@ impl Parser<'_, '_> {
                     if !self.at(Punct::RParen) {
                         loop {
                             if self.at(Punct::LBrace) {
-                                self.unsupported("braced-init-list arguments", self.loc());
-                                self.skip_until(&[Punct::RParen], false, true);
-                                return None;
+                                let Ok(l) = self.parse_init_list() else {
+                                    self.skip_until(&[Punct::RParen], false, true);
+                                    return None;
+                                };
+                                args.push(self.s.act_on_braced_arg(l));
+                                if self.eat(Punct::Comma).is_none() {
+                                    break;
+                                }
+                                continue;
                             }
                             let Some(a) = self.parse_assignment_expr() else {
                                 self.skip_until(&[Punct::RParen], false, true);
@@ -493,8 +547,8 @@ impl Parser<'_, '_> {
         let ds = self.parse_decl_specifiers(DeclaratorContext::TypeName);
         let ty: QualType = self.s.type_from_declspec(&ds);
         if self.at(Punct::LBrace) {
-            self.unsupported("list-initialization of a temporary", self.loc());
-            return None;
+            let l = self.parse_init_list().ok()?;
+            return Some(self.s.act_on_list_cast(ty, l, loc));
         }
         let Some(open) = self.eat(Punct::LParen) else {
             let d = self.s.diag(DiagId::parse_expected, self.expected_loc()).arg("'('");
@@ -502,21 +556,30 @@ impl Parser<'_, '_> {
             return None;
         };
         if self.at(Punct::RParen) {
-            self.unsupported("value-initialization of a temporary", loc);
-            self.bump();
-            return None;
+            let rparen = self.bump().span.lo;
+            return Some(self.s.act_on_value_init_cast(ty, loc, rparen));
         }
-        let Some(e) = self.parse_assignment_expr() else {
-            self.skip_until(&[Punct::RParen], false, true);
-            return None;
-        };
-        if self.at(Punct::Comma) {
-            self.unsupported("functional casts with several operands", self.loc());
-            self.skip_until(&[Punct::RParen], false, true);
-            return None;
+        let mut args = Vec::new();
+        loop {
+            if self.at(Punct::LBrace) {
+                self.unsupported("braced-init-list operands of a functional cast", self.loc());
+                self.skip_until(&[Punct::RParen], false, true);
+                return None;
+            }
+            let Some(e) = self.parse_assignment_expr() else {
+                self.skip_until(&[Punct::RParen], false, true);
+                return None;
+            };
+            args.push(e);
+            if self.eat(Punct::Comma).is_none() {
+                break;
+            }
         }
         self.expect_closing(Punct::RParen, Punct::LParen, open);
-        Some(self.s.act_on_cast(CastStyle::Functional, ty, e, loc))
+        if let [e] = args[..] {
+            return Some(self.s.act_on_cast(CastStyle::Functional, ty, e, loc));
+        }
+        Some(self.s.act_on_paren_list_cast(ty, &args, loc))
     }
 
     // -- literals ------------------------------------------------------------------------------

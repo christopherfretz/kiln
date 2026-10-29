@@ -25,6 +25,7 @@ use kiln_source::symbol::Symbol;
 use crate::Sema;
 use crate::constfold::int_info;
 use crate::conv::{self, ArithConvKind, ConvCtx, ConvError};
+use crate::init::InitList;
 use crate::literal;
 use crate::lookup::LookupKind;
 
@@ -130,7 +131,7 @@ impl Sema<'_, '_> {
 
     /// The type of a name or member of declared type `t`: references
     /// designate their referent ([expr.type]/1).
-    fn non_reference(&self, t: QualType) -> QualType {
+    pub(crate) fn non_reference(&self, t: QualType) -> QualType {
         if self.ast.types.is_reference(t) {
             self.pointee_sugared(t).unwrap_or(QualType::ERROR)
         } else {
@@ -1768,12 +1769,20 @@ impl Sema<'_, '_> {
     ) -> ExprId {
         let mut kids = vec![callee];
         kids.extend_from_slice(args);
+        // Braced-init-list arguments (placeholders until the parameter
+        // types are known, [dcl.init.list]/1).
+        let mut braced: Vec<Option<InitList>> =
+            args.iter().map(|&a| self.take_braced_arg(a)).collect();
         if self.is_err_expr(callee) || args.iter().any(|&a| self.is_err_expr(a)) {
             return self.recover_err(&kids, loc);
         }
+        // The function the callee names, if any (calls through pointers
+        // report conversions directly, not as overload candidates).
         let named = {
             let x = self.ignore_parens(callee);
-            (self.ast.exprs.get(x).kind() == ExprKind::DeclRefExpr).then(|| self.ast.exprs.decl(x))
+            (self.ast.exprs.get(x).kind() == ExprKind::DeclRefExpr)
+                .then(|| self.ast.exprs.decl(x))
+                .filter(|&d| self.ast.decls.function(d).is_some())
         };
         let f = conv::decay(self, callee);
         let ft = self.ety(f);
@@ -1827,6 +1836,17 @@ impl Sema<'_, '_> {
         }
         let mut conv_args = Vec::with_capacity(have);
         for (i, &a) in args.iter().enumerate() {
+            if let Some(l) = braced[i].take() {
+                if i >= n {
+                    self.braced_variadic_argument(&l);
+                    return self.recover_err(&kids, loc);
+                }
+                match self.braced_argument(named, callee, &l, params[i]) {
+                    Some(x) => conv_args.push(x),
+                    None => return self.recover_err(&kids, loc),
+                }
+                continue;
+            }
             if i < n {
                 let pt = conv::strip_cv(self, params[i]);
                 let to = if self.ast.types.is_reference(params[i]) { params[i] } else { pt };
@@ -2187,7 +2207,7 @@ impl Sema<'_, '_> {
         }
         if self.ast.types.is_reference(ty) {
             self.unsupported("casts to reference types", loc);
-            return self.recover(ty, &[e], loc);
+            return self.recover_err(&[e], loc);
         }
         if self.ast.types.as_record(ty).is_some() || self.ast.types.as_record(self.ety(e)).is_some()
         {

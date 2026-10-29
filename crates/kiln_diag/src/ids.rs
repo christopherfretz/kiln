@@ -510,6 +510,10 @@ diag_ids! {
     sema_throw_disabled = Error (0) "cannot use 'throw' with exceptions disabled";
     note_parameter_named_here = Note (1) "passing argument to parameter '{0}' here";
     note_parameter_here = Note (0) "passing argument to parameter here";
+    parse_init_list_bin_op = Error (2) "initializer list cannot be used on the {0:left|right} hand side of operator '{1}'";
+    sema_return_init_list = Error (1) "void function '{0}' must not return a value";
+    sema_init_list_variadic = Error (0) "cannot pass initializer list to variadic function";
+    sema_many_braces_around_scalar = Warning [ManyBracesAroundScalarInit] (0) "too many braces around scalar initializer";
     // ----- sema (WP-048)
     sema_undeclared_var_use = Error (1) "use of undeclared identifier '{0}'";
     sema_unknown_typename = Error (1) "unknown type name '{0}'";

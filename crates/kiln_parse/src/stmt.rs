@@ -621,9 +621,13 @@ impl Parser<'_, '_> {
         let loc = self.bump().span.lo;
         let mut value = None;
         if self.at(Punct::LBrace) {
-            self.unsupported("returning a braced-init-list", self.loc());
-            self.skip_to_semi();
-            return None;
+            let Ok(l) = self.parse_init_list() else {
+                self.skip_to_semi();
+                return None;
+            };
+            let s = self.s.act_on_return_list(l, loc);
+            self.expect_semi_after_stmt("return");
+            return Some(s);
         }
         if !self.at(Punct::Semi) {
             let Some(e) = self.parse_expression() else {

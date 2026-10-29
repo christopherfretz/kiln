@@ -92,7 +92,7 @@ impl Sema<'_, '_> {
     }
 
     /// True for class and array types (aggregates in M2, [dcl.init.aggr]/1).
-    fn is_aggregate(&self, t: QualType) -> bool {
+    pub(crate) fn is_aggregate(&self, t: QualType) -> bool {
         self.ast.types.is_array(t) || self.ast.types.as_record(t).is_some()
     }
 
@@ -230,7 +230,7 @@ impl Sema<'_, '_> {
 
     /// The members of a class that take part in aggregate initialization:
     /// fields, without unnamed bit-fields ([dcl.init.aggr]/2).
-    fn init_fields(&self, r: DeclId) -> Vec<DeclId> {
+    pub(crate) fn init_fields(&self, r: DeclId) -> Vec<DeclId> {
         let def = self.ast.definition(r).unwrap_or(r);
         self.ast
             .decls
@@ -291,13 +291,19 @@ impl Sema<'_, '_> {
                 self.check_narrowing(*e, ty, ty);
                 inits.push(self.convert_for_init(*e, ty, ConvCtx::Initialization));
             }
+            Some(InitItem { value: InitValue::List(inner), designator })
+                if designator.is_empty() =>
+            {
+                // `int x = {{1}};` ([dcl.init.list]/3.9 with a nested
+                // list): clang warns and initializes from the inner list.
+                let msg = self.diag(DiagId::sema_many_braces_around_scalar, inner.lbrace);
+                self.emit(msg);
+                let e = self.init_from_list_at(ty, inner, entity);
+                let list = self.ast.exprs.init_list_inits(e);
+                inits.extend(self.ast.lists.iter::<ExprId>(list));
+            }
             Some(item) => {
-                let what = if matches!(item.value, InitValue::List(_)) {
-                    "nested braces"
-                } else {
-                    "a designator"
-                };
-                self.unsupported(&format!("{what} in a scalar initializer"), item.value.loc(self));
+                self.unsupported("a designator in a scalar initializer", item.value.loc(self));
             }
         }
         if let Some(extra) = l.items.get(1) {

@@ -126,6 +126,7 @@ diag_groups! {
     // WP-064
     VexingParse = "vexing-parse" [];
     BracedScalarInit = "braced-scalar-init" [];
+    ManyBracesAroundScalarInit = "many-braces-around-scalar-init" [];
     // driver codegen path (WP-052b)
     UnusedCommandLineArgument = "unused-command-line-argument" [];
 }

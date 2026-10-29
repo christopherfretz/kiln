@@ -137,7 +137,7 @@ fn expr_const_cast() {
 fn expr_type_conv() {
     let p = parse("double f(int i) { return double(i); }");
     p.assert_clean();
-    p.assert_dump("CXXFunctionalCastExpr 'double' <NoOp>");
+    p.assert_dump("CXXFunctionalCastExpr 'double' functional cast to double <NoOp>");
 }
 
 /// [expr.unary.op]: address-of and indirection.
