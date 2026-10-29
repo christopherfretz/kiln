@@ -61,8 +61,9 @@ flow, `constexpr` functions and variables, `static_assert`, string literals,
 Member functions, constructors/destructors, references, overload resolution,
 implicit conversion sequences, class templates, function templates, deduction,
 partial/explicit specialization, `auto`, variadic templates, fold expressions,
-`decltype`, `if constexpr`, lambdas, inheritance (non-virtual first, then
-virtual), operator overloading, RAII/`new`/`delete`, Itanium mangling and
+`decltype`, `if constexpr`, concepts and constraints, pack indexing, lambdas,
+inheritance (non-virtual first, then virtual), operator overloading,
+RAII/`new`/`delete`, Itanium mangling and
 record layout matching clang (checked by layout-dump differential tests).
 - Oven: objects with lifetimes, constructors in constant evaluation,
   `std::construct_at`-style, unions' active member, pointers-to-members,
@@ -72,10 +73,9 @@ record layout matching clang (checked by layout-dump differential tests).
   libc++ tests pass.
 
 ## M4 — The rest of the language
-Namespaces/ADL corner cases, exceptions, RTTI, concepts and constraints,
-coroutines, modules (at least header units and `import std;` consumption),
+Namespaces/ADL corner cases, exceptions, RTTI, coroutines, modules (at least header units and `import std;` consumption),
 `consteval`, `constinit`, structured bindings, designated initializers,
-three-way comparison, deducing this, pack indexing, attributes, `thread_local`,
+three-way comparison, deducing this, attributes, `thread_local`,
 static initialization order, inline variables, `[[no_unique_address]]`.
 - Exit: `<vector>`, `<string>`, `<memory>`, `<optional>`, `<variant>`,
   `<tuple>`, `<algorithm>`, `<ranges>`, `<format>` compile; their libc++

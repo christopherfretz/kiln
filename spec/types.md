@@ -180,6 +180,8 @@ id each, no representation change.
 | `Paren`, `Decayed`, `Adjusted` | — | — | — | **not represented** (§15 R6): parameter types are stored adjusted; `ParmVar` keeps the written type if it differs |
 | `TemplateTypeParm` | D | S | data = `TemplateTypeParm` `DeclId` | the name a template uses; canonical = the canonical parm below |
 | `CanonTemplateTypeParm` dep | I | C | aux = depth (15 bits) \| pack bit, data = index | prints `type-parameter-D-I`; makes `template<class T> f(T)` and `template<class U> f(U)` the same type |
+
+Reserved depths (spec/sema-templates.md Q15, 2026-10-28): `AUTO_DEPTH = 0x7FFD` (placeholder deduction) and `SYNTH_DEPTH = 0x7FFE` (partial-ordering synthesized types); user templates are limited to depth `< 0x7FF0` ("template nesting too deep" otherwise).
 | `SubstTemplateTypeParm` | I | S | triples [replacement QualType, associated `DeclId`, index \| pack index] | "this `int` was `T`": diagnostics, warnings' template heuristics (*M3*; see open question in ast.md) |
 | `SubstTemplateTypeParmPack` dep | I | C | triples [associated `DeclId`, index, pack `ArgListId`] | an argument pack substituted before its expansion |
 | `TemplateSpecialization` | I | S or S/C | triples [TemplateNameId, ArgListId (as written), aliased QualType or 0] | `std::vector<int>` as written; canonical = the specialization's `Record` / the alias target; dependent (`vector<T>`) ⇒ canonical form has canonical name and args |

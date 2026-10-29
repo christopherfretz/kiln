@@ -272,6 +272,17 @@ average 8-9 during the run):
 
 ### Design for M3+ *(design)*
 - Transient allocation: see "Transient allocation" below (WP-060).
+- **Nested evaluation (R-OVEN-1, spec/sema-templates.md §4.11; WP-061b):**
+  `evaluate` may be re-entered from a bridge callback (`ensure_body`
+  instantiating a template whose definition needs a `static_assert`, a
+  template argument or `if constexpr`). Contexts form a stack; the frame
+  space is marked per context and reset only when the outermost context
+  ends; the budget is shared and `depth` counts nested contexts; the new
+  `EvalKind::Constraint` reports constraint satisfaction checks.
+  `SemaBridge::ensure_body(&mut self, f, oven: &mut Oven)` is the contract.
+- **Hash-consed frozen values (R-OVEN-2; WP-061b):** `ConstStore` interns
+  frozen aggregates by content so class-type template arguments compare by
+  `ConstValueId`; `frozen_bytes` counts only newly interned bytes.
 - Classes: constructors/destructors as KBC functions, `BeginLife`/`EndLife`
   for subobjects, dynamic type in the allocation for virtual calls
   (`CallIndirect` through `SemaBridge::vtable`), `dynamic_cast`/`typeid`.
