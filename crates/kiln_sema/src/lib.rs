@@ -144,6 +144,9 @@ pub struct Sema<'a, 'sm> {
     /// inside a template: a function it names is not marked referenced
     /// until the call is known to be non-dependent ([temp.dep.candidate]).
     pub(crate) deferring_call_ref: bool,
+    /// Overload resolution's pooled candidate sets and counters
+    /// (spec/sema-overload.md §1.4).
+    pub(crate) ovl: overload::OverloadScratch,
     /// Callees whose function is not marked referenced yet (see
     /// `deferring_call_ref`), resolved by [`Sema::act_on_call`].
     pub(crate) deferred_call_refs: Vec<(ExprId, DeclId)>,
@@ -270,6 +273,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             declared_returns: kiln_source::fx::FxHashMap::default(),
             group_placeholders: kiln_source::fx::FxHashMap::default(),
             deferring_call_ref: false,
+            ovl: overload::OverloadScratch::default(),
             deferred_call_refs: Vec::new(),
             classes: Vec::new(),
             implicit_declared: kiln_source::fx::FxHashMap::default(),

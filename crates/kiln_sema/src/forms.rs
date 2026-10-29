@@ -93,7 +93,7 @@ impl Sema<'_, '_> {
 
     /// The number of scalar subobjects of aggregate `ty` that brace
     /// elision can reach; `None` when unbounded or unknown.
-    fn scalar_leaves(&self, ty: QualType) -> Option<u64> {
+    pub(crate) fn scalar_leaves(&self, ty: QualType) -> Option<u64> {
         if self.ast.types.is_array(ty) {
             let n = self.ast.types.array_size(ty)?;
             let elem = self.ast.types.element(ty)?;
