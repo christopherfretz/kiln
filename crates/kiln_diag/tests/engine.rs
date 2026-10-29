@@ -253,22 +253,16 @@ fn system_header_warnings_suppressed() {
                2 warnings and 1 error generated.\n";
     assert_text(&text(&sm, &["-fno-caret-diagnostics", "-Wsystem-headers"], emit), all);
     // The last of -Wsystem-headers / -Wno-system-headers wins.
-    let got = text(
-        &sm,
-        &["-fno-caret-diagnostics", "-Wno-system-headers", "-Wsystem-headers"],
-        emit,
-    );
+    let got =
+        text(&sm, &["-fno-caret-diagnostics", "-Wno-system-headers", "-Wsystem-headers"], emit);
     assert_text(&got, all);
-    let got = text(
-        &sm,
-        &["-fno-caret-diagnostics", "-Wsystem-headers", "-Wno-system-headers"],
-        |e| {
+    let got =
+        text(&sm, &["-fno-caret-diagnostics", "-Wsystem-headers", "-Wno-system-headers"], |e| {
             assert!(e.suppress_system_warnings());
             assert!(!e.is_enabled_at(DiagId::lit_multichar, common::at(&sm, f, 2, 9)));
             assert!(e.is_enabled_at(DiagId::pp_warning_directive, common::at(&sm, f, 3, 2)));
             emit(e);
-        },
-    );
+        });
     assert!(!got.contains("multi-character"));
     // A user file and a macro expanded in a user file keep their warnings,
     // even when the macro was defined in a system header.

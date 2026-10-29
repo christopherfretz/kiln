@@ -296,7 +296,9 @@ impl<'a> Preprocessor<'a, '_> {
         // clang skips the redefinition checks in a system header when its
         // warnings are suppressed anyway (`-Wsystem-headers` keeps them).
         let in_system = self.cur_file_ref().is_some_and(|f| f.system);
-        if !(in_system && self.suppress_system_warnings()) && let Some(old) = self.macros.get_rc(name).cloned() {
+        if !(in_system && self.suppress_system_warnings())
+            && let Some(old) = self.macros.get_rc(name).cloned()
+        {
             if self.is_language_builtin(&old) {
                 self.emit(Diag::new(DiagId::pp_builtin_macro_redefined, ntok.tok.span));
             } else if !old.allow_redef.get() && !self.identical(&old, &def) {
