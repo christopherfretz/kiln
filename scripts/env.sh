@@ -13,7 +13,13 @@ for _cand in "$_WS/.toolchain" "$_MAIN/.toolchain" "$_MAIN/../.toolchain" "${KIL
     break
   fi
 done
-# Build output in fast local disk, one dir per checkout so worktrees do not
-# thrash each other. Override with CARGO_TARGET_DIR.
-export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-/var/tmp/kiln-target/$(basename "$_WS")}"
+# Build output: ONE shared target dir for every checkout/worktree, inside the
+# workspace (operator rule: keep build state in the workspace, not in the
+# container's overlay — per-worktree dirs in /var/tmp once grew to 37 GB).
+# Sharing means unchanged crates are compiled once for all worktrees; cargo
+# serializes concurrent builds with its lock. Override with CARGO_TARGET_DIR.
+_TGT="${KILN_BUILD_ROOT:-$_MAIN/.build}/target"
+case "$_MAIN" in /Volumes/AgentWork/kiln-helper/kiln) _TGT="/Volumes/AgentWork/kiln-helper/.build/target";; esac
+export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$_TGT}"
+unset _TGT
 unset _WS _MAIN _cand
