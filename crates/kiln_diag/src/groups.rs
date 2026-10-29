@@ -118,6 +118,7 @@ diag_groups! {
     FourByteMultiChar = "four-char-constants" [];
     Cxx11LongLong = "c++11-long-long" [];
     Cxx11Extensions = "c++11-extensions" [Cxx11LongLong];
+    CxxAttributeExtension = "cxx-attribute-extension" [];
     Cxx14BinaryLiteral = "c++14-binary-literal" [];
     Cxx14Extensions = "c++14-extensions" [Cxx14BinaryLiteral];
     Cxx17Extensions = "c++17-extensions" [];

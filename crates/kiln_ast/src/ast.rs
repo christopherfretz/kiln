@@ -127,6 +127,55 @@ impl Ast {
         crate::ids::ListId::new(n.data())
     }
 
+    /// The inline payload word of a using-family declaration
+    /// (spec/ast.md §4.2): a `UsingShadow`'s target, a `UsingEnum`'s
+    /// enumeration, a `NamespaceAlias`'s aliased namespace or alias as
+    /// written, a `UsingDirective`'s nominated namespace. `None` for other
+    /// kinds.
+    pub fn using_target(&self, d: DeclId) -> Option<DeclId> {
+        let n = self.decls.get(d);
+        match n.kind() {
+            DeclKind::UsingShadow
+            | DeclKind::UsingEnum
+            | DeclKind::NamespaceAlias
+            | DeclKind::UsingDirective => DeclId::try_new(n.data()),
+            _ => None,
+        }
+    }
+
+    /// The nested-name-specifier written in a `Using` declaration.
+    pub fn using_qualifier(&self, d: DeclId) -> Option<crate::ids::NnsId> {
+        let n = self.decls.get(d);
+        if n.kind() == DeclKind::Using { crate::ids::NnsId::try_new(n.data()) } else { None }
+    }
+
+    /// `d` with using-shadows looked through: the declaration a
+    /// `UsingShadow` introduces (an `UnresolvedUsingIfExists` for an
+    /// unresolved `using_if_exists` target), else `d`.
+    pub fn strip_shadow(&self, d: DeclId) -> DeclId {
+        if self.decls.get(d).kind() == DeclKind::UsingShadow {
+            self.using_target(d).unwrap_or(d)
+        } else {
+            d
+        }
+    }
+
+    /// The namespace a `NamespaceAlias` denotes (aliases of aliases
+    /// followed), as its first declaration; `d` itself otherwise.
+    pub fn resolve_alias(&self, d: DeclId) -> DeclId {
+        let mut cur = d;
+        for _ in 0..10_000 {
+            if self.decls.get(cur).kind() != DeclKind::NamespaceAlias {
+                break;
+            }
+            match self.using_target(cur) {
+                Some(t) => cur = t,
+                None => return d,
+            }
+        }
+        if self.decls.get(cur).kind() == DeclKind::Namespace { self.first(cur) } else { cur }
+    }
+
     /// The shared identifier interner (an `Arc` clone).
     pub fn symbols_arc(&self) -> Arc<Interner> {
         Arc::clone(&self.symbols)

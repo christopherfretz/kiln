@@ -194,6 +194,23 @@ pub fn write_type(
     *out = p.out;
 }
 
+/// Renders nested-name-specifier `n` as written (clang's
+/// `NestedNameSpecifier::print`: `N::M::`, `::`), appending to `out`.
+pub fn write_nns(ctx: &TypeContext, names: &dyn TypeNames, n: NnsId, out: &mut String) {
+    let mut p = Printer {
+        ctx,
+        names,
+        out: std::mem::take(out),
+        empty_ph: true,
+        scope: false,
+        suppress_tag: false,
+        inside_cc_attr: false,
+        depth: 0,
+    };
+    p.nns(n);
+    *out = p.out;
+}
+
 /// The diagnostic `aka` string: the canonical type printed with every
 /// name scoped, when it differs textually from the type as written
 /// (`'S' (aka 'ns::S')`).

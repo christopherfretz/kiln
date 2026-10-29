@@ -41,7 +41,7 @@ use crate::expr::{
 };
 use crate::ids::{AttrId, DeclId, ExprId, ListId, QualType, RawId, StmtId};
 use crate::stmt::{IfKind, StmtKind};
-use crate::types::{PrintOptions, write_type};
+use crate::types::{PrintOptions, write_nns, write_type};
 
 /// Selects the declarations [`dump`] prints as separate trees (clang's
 /// `-ast-dump-filter`, spec/ast-dump.md §1). A declaration matches when
@@ -878,6 +878,11 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                     self.decl_ref(first);
                 }
             }
+            DeclKind::Using
+            | DeclKind::NamespaceAlias
+            | DeclKind::UsingShadow
+            | DeclKind::UsingEnum
+            | DeclKind::UsingDirective => self.using_fields(d, n.kind()),
             DeclKind::LinkageSpec => {
                 let lang = decls.scope(d).map_or(0, |s| s.aux);
                 self.line.push_str(if lang == LinkageLang::C as u32 { " C" } else { " C++" });
@@ -896,6 +901,27 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                     self.opt_ty(n.ty());
                 }
             }
+        }
+    }
+
+    /// The fields of a using-family declaration (spec/ast-dump.md §3).
+    fn using_fields(&mut self, d: DeclId, kind: DeclKind) {
+        let ast = self.ast;
+        match kind {
+            DeclKind::Using => {
+                self.line.push(' ');
+                if let Some(q) = ast.using_qualifier(d) {
+                    write_nns(&ast.types, &self.names, q, &mut self.line);
+                }
+                self.names.write_name(d, &mut self.line);
+                return;
+            }
+            DeclKind::NamespaceAlias => self.name(d),
+            _ => {}
+        }
+        if let Some(t) = ast.using_target(d) {
+            self.line.push(' ');
+            self.decl_ref(t);
         }
     }
 

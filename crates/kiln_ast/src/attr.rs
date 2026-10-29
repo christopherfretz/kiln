@@ -54,6 +54,8 @@ impl AttrKind {
     pub const NO_SANITIZE: AttrKind = AttrKind(85);
     pub const MODE: AttrKind = AttrKind(86);
     pub const VECTOR_SIZE: AttrKind = AttrKind(87);
+    /// `clang::using_if_exists` on a using-declaration (WP-062).
+    pub const USING_IF_EXISTS: AttrKind = AttrKind(100);
 }
 
 /// Attribute syntax.

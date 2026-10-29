@@ -1,0 +1,24 @@
+TranslationUnitDecl
+|-NamespaceDecl A
+| |-NamespaceDecl B
+| | `-VarDecl used t 'int'
+| `-VarDecl used y 'int'
+|-NamespaceAliasDecl AB Namespace 'B'
+|-NamespaceAliasDecl AB2 NamespaceAlias 'AB'
+|-NamespaceAliasDecl AB Namespace 'B'
+|-VarDecl a 'int' cinit
+| `-BinaryOperator 'int' '+'
+|   |-ImplicitCastExpr 'int' <LValueToRValue>
+|   | `-DeclRefExpr 'int' lvalue Var 't' 'int'
+|   `-ImplicitCastExpr 'int' <LValueToRValue>
+|     `-DeclRefExpr 'int' lvalue Var 't' 'int'
+`-FunctionDecl f 'int ()'
+  `-CompoundStmt
+    |-DeclStmt
+    | `-NamespaceAliasDecl L Namespace 'A'
+    `-ReturnStmt
+      `-BinaryOperator 'int' '+'
+        |-ImplicitCastExpr 'int' <LValueToRValue>
+        | `-DeclRefExpr 'int' lvalue Var 'y' 'int'
+        `-ImplicitCastExpr 'int' <LValueToRValue>
+          `-DeclRefExpr 'int' lvalue Var 't' 'int'

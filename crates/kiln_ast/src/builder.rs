@@ -179,6 +179,87 @@ impl<'a> AstBuilder<'a> {
         d
     }
 
+    /// Pushes a declaration and links it into its lexical context's
+    /// member list without entering its name in any lookup table.
+    fn add_unregistered(
+        &mut self,
+        h: DeclHead,
+        kind: DeclKind,
+        payload: Payload,
+        member: bool,
+    ) -> DeclId {
+        let d = self.ast.decls.push(
+            NewDecl {
+                kind,
+                flags: h.flags,
+                misc: h.misc,
+                name: h.name,
+                ctx: Some(h.ctx),
+                loc: h.loc,
+                ty: None,
+            },
+            payload,
+        );
+        if let Some(lex) = h.lexical.filter(|&l| l != h.ctx) {
+            self.ast
+                .decls
+                .set_lexical_ctx(d, lex)
+                .expect("fresh declaration has no lexical context");
+        }
+        let lexical = h.lexical.unwrap_or(h.ctx);
+        if member && self.ast.decls.member_list(lexical).is_some() {
+            self.ast.decls.append_member(lexical, d);
+        }
+        d
+    }
+
+    /// A using-declarator `using qualifier name;` ([namespace.udecl]):
+    /// `h.name` is the member name, `qualifier` the nested-name-specifier
+    /// as written. The declaration itself is not entered in lookup; its
+    /// [`AstBuilder::using_shadow`]s are.
+    pub fn using_decl(&mut self, h: DeclHead, qualifier: Option<crate::ids::NnsId>) -> DeclId {
+        let q = qualifier.map_or(0, RawId::raw);
+        self.add_unregistered(h, DeclKind::Using, Payload::None(q), true)
+    }
+
+    /// The implicit `UsingShadow` a using-declaration (or `using enum`)
+    /// introduces for `target` into `h.ctx` ([namespace.udecl]/1). It is
+    /// entered in lookup, replacing `prev` (an earlier shadow of the same
+    /// target from a repeated using-declaration).
+    pub fn using_shadow(&mut self, h: DeclHead, target: DeclId, prev: Option<DeclId>) -> DeclId {
+        let d = self.add_unregistered(
+            h.flags(DeclFlags::IMPLICIT),
+            DeclKind::UsingShadow,
+            Payload::None(target.raw()),
+            true,
+        );
+        self.register_name(h.ctx, h.name, d, prev, false);
+        d
+    }
+
+    /// `using enum E;` ([enum.udecl]); `e` is the enumeration. Not
+    /// entered in lookup (its enumerators' shadows are).
+    pub fn using_enum(&mut self, h: DeclHead, e: DeclId) -> DeclId {
+        self.add_unregistered(h, DeclKind::UsingEnum, Payload::None(e.raw()), true)
+    }
+
+    /// `namespace h.name = target;` ([namespace.alias]); `target` is the
+    /// namespace or namespace alias as written. A redeclaration of the
+    /// same alias replaces `prev` in lookup.
+    pub fn namespace_alias(&mut self, h: DeclHead, target: DeclId, prev: Option<DeclId>) -> DeclId {
+        let d =
+            self.add_unregistered(h, DeclKind::NamespaceAlias, Payload::None(target.raw()), true);
+        self.register_name(h.ctx, h.name, d, prev, false);
+        d
+    }
+
+    /// The placeholder target of a `using_if_exists` using-declaration
+    /// whose name was not found (clang's `UnresolvedUsingIfExistsDecl`):
+    /// in no member list and no lookup table; its shadow is.
+    pub fn unresolved_using_if_exists(&mut self, h: DeclHead) -> DeclId {
+        self.add_unregistered(h, DeclKind::UnresolvedUsingIfExists, Payload::None(0), false)
+    }
+
     /// Inserts `d` into the lookup table of `ctx` (after skipping
     /// `LinkageSpec`/`Export`), then into enclosing tables for unscoped
     /// enumerations (their enumerators) and inline namespaces (§4.3).

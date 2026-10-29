@@ -462,6 +462,31 @@ diag_ids! {
     sema_unknown_visibility = Warning [IgnoredAttributes] (1) "unknown visibility '{0}'";
     sema_visibility_pop_mismatch = Error (0) "#pragma visibility pop with no matching #pragma visibility push";
 
+    // ----- using-declarations, namespace aliases (WP-062)
+    parse_cxx11_attr_placement = ExtWarn [CxxAttributeExtension] (0) "ISO C++ does not allow an attribute list to appear here";
+    sema_using_requires_qualname = Error (0) "using declaration requires a qualified name";
+    sema_using_decl_can_not_refer_to_namespace = Error (0) "using declaration cannot refer to a namespace";
+    note_namespace_using_decl = Note (0) "did you mean 'using namespace'?";
+    sema_using_decl_conflict = Error (0) "target of using declaration conflicts with declaration already in scope";
+    sema_using_decl_conflict_reverse = Error (0) "declaration conflicts with target of using declaration already in scope";
+    note_using_decl_target = Note (0) "target of using declaration";
+    note_using_decl_conflict = Note (0) "conflicting declaration";
+    note_using_decl = Note (0) "using declaration";
+    sema_use_of_empty_using_if_exists = Error (0) "reference to unresolved using declaration";
+    note_empty_using_if_exists_here = Note (0) "using declaration annotated with 'using_if_exists' here";
+    sema_using_enum_not_enum = Error (1) "'{0}' is not an enumerated type";
+    sema_using_enum_unknown_typename = Error (1) "unknown type name {0}";
+    sema_redefinition_different_namespace_alias = Error (1) "redefinition of '{0}' as an alias for a different namespace";
+    note_previous_namespace_alias = Note (1) "previously defined as an alias for '{0}'";
+    sema_using_decl_nested_name_specifier_is_not_class = Error (1) "using declaration in class refers into '{0}', which is not a class";
+    sema_using_decl_refers_to_own_class = Error (0) "using declaration refers to its own class";
+    sema_using_decl_not_base_class = Error (2) "using declaration refers into '{0}', which is not a base class of '{1}'";
+    sema_using_decl_can_not_refer_to_class_member = Error (0) "using declaration cannot refer to class member";
+    note_using_decl_class_member_alias = Note (0) "use an alias declaration instead";
+    note_using_decl_class_member_reference = Note (0) "use a reference instead";
+    sema_using_enum_incomplete = Error (1) "enumeration '{0}' is incomplete";
+    parse_using_enum_requires_name = Error (0) "using enum requires an enum or typedef name";
+
     // ----- sema (WP-048)
     sema_undeclared_var_use = Error (1) "use of undeclared identifier '{0}'";
     sema_unknown_typename = Error (1) "unknown type name '{0}'";

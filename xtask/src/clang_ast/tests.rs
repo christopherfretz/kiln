@@ -43,6 +43,25 @@ fn spec_example_reproduces() {
 }
 
 #[test]
+fn namespaces_and_using_declarations() {
+    let (r, calls) = run_fixture("using", &DumpOptions::default());
+    assert_eq!(r.unwrap(), fixture("using.expected"));
+    assert_eq!(calls, 0);
+    // A `UsingDecl` matches by its declaration name (`x`), not by the
+    // qualified name clang's JSON gives it (`N::x`).
+    let f = DumpOptions { filter: Some("x".into()), ..DumpOptions::default() };
+    assert_eq!(run_fixture("using", &f).0.unwrap(), fixture("using.filter-x.expected"));
+    let f = DumpOptions { filter: Some("N::x".into()), ..DumpOptions::default() };
+    assert_eq!(run_fixture("using", &f).0.unwrap(), "Dumping N::x:\nVarDecl used x 'int'\n\n");
+    // Implicit shadows print their target; a shadowed type's tree does not.
+    let f = DumpOptions { implicit: true, ..DumpOptions::default() };
+    let r = run_fixture("using", &f).0.unwrap();
+    assert!(r.contains("|-UsingShadowDecl implicit Var 'x' 'int'\n"), "{r}");
+    assert!(r.contains("|-UsingShadowDecl implicit Typedef 'I'\n"), "{r}");
+    assert!(r.contains("|-UsingDirectiveDecl implicit Namespace ''\n"), "{r}");
+}
+
+#[test]
 fn constexpr_values_come_from_the_text_dump() {
     let (r, calls) = run_fixture("values", &DumpOptions::default());
     assert_eq!(r.unwrap(), fixture("values.expected"));

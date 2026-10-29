@@ -2,10 +2,11 @@
 
 use std::cell::RefCell;
 
-use kiln_ast::{DeclId, ExprId};
+use kiln_ast::{DeclId, ExprId, NnsId};
 use kiln_diag::{Diag, DiagId};
 use kiln_lex::literal::LiteralOptions;
 use kiln_lex::{LexOptions, Punct, Std, TokKind, Token};
+use kiln_sema::using::Qualifier;
 use kiln_sema::{NameClass, Sema};
 use kiln_source::symbol::Symbol;
 use kiln_source::{Loc, SourceManager};
@@ -419,10 +420,17 @@ impl<'a, 'sm> Parser<'a, 'sm> {
     /// diagnosing unknown names. Returns `Ok(None)` when there is none,
     /// `Err(())` after an error.
     pub(crate) fn parse_nested_name(&mut self) -> Result<Option<DeclId>, ()> {
-        let mut qual: Option<DeclId> = None;
+        Ok(self.parse_nested_name_nns()?.map(|q| q.ctx))
+    }
+
+    /// [`Parser::parse_nested_name`], also building the specifier as
+    /// written (namespace aliases and typedef names kept).
+    pub(crate) fn parse_nested_name_nns(&mut self) -> Result<Option<Qualifier>, ()> {
+        let start = self.loc();
+        let mut qual: Option<(DeclId, NnsId)> = None;
         if self.at(Punct::ColonColon) {
             self.bump();
-            qual = Some(self.s.ast.tu);
+            qual = Some((self.s.ast.tu, self.s.nns_global()));
         }
         while let Some(name) = self.ident() {
             if !self.peek_is(1, Punct::ColonColon) {
@@ -430,12 +438,15 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             }
             let loc = self.bump().span.lo;
             self.bump();
-            match self.s.act_on_nested_name(qual, name, loc) {
-                Some(d) => qual = Some(d),
-                None => return Err(()),
-            }
+            let Some((ctx, spelled)) =
+                self.s.act_on_nested_name_spelled(qual.map(|q| q.0), name, loc)
+            else {
+                return Err(());
+            };
+            let nns = self.s.nns_component(qual.map(|q| q.1), ctx, spelled);
+            qual = Some((ctx, nns));
         }
-        Ok(qual)
+        Ok(qual.map(|(ctx, nns)| Qualifier { ctx, nns, loc: start }))
     }
 }
 

@@ -1,0 +1,6 @@
+Dumping N::x:
+VarDecl used x 'int'
+
+Dumping x:
+UsingDecl N::x
+

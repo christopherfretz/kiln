@@ -1,0 +1,28 @@
+TranslationUnitDecl
+|-EnumDecl referenced class Color 'int'
+| |-EnumConstantDecl referenced Red 'Color' value=0
+| `-EnumConstantDecl referenced Green 'Color' value=4
+|   `-ConstantExpr 'int' value=4
+|     `-IntegerLiteral 'int' 4
+|-EnumDecl referenced Fruit
+| `-EnumConstantDecl referenced Apple 'Fruit' value=0
+|-TypedefDecl referenced Paint 'Color'
+|-NamespaceDecl N
+| `-UsingEnumDecl Enum 'Color'
+|-VarDecl a 'int' cinit
+| `-CStyleCastExpr 'int' <IntegralCast>
+|   `-DeclRefExpr 'Color' EnumConstant 'Green' 'Color' (UsingShadow 'Green')
+|-FunctionDecl f 'int ()'
+| `-CompoundStmt
+|   |-DeclStmt
+|   | `-UsingEnumDecl Enum 'Color'
+|   `-ReturnStmt
+|     `-CStyleCastExpr 'int' <IntegralCast>
+|       `-DeclRefExpr 'Color' EnumConstant 'Red' 'Color' (UsingShadow 'Red')
+`-FunctionDecl g 'int ()'
+  `-CompoundStmt
+    |-DeclStmt
+    | `-UsingEnumDecl Enum 'Fruit'
+    `-ReturnStmt
+      `-ImplicitCastExpr 'int' <IntegralCast>
+        `-DeclRefExpr 'Fruit' EnumConstant 'Apple' 'Fruit' (UsingShadow 'Apple')
