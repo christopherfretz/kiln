@@ -240,6 +240,17 @@ impl Sema<'_, '_> {
                 self.emit(self.incomplete_note(msg, ty));
                 return self.recover(ty, &[], l.lbrace);
             }
+            if let Some(def) = self.ast.types.as_record(ty).and_then(|r| self.ast.definition(r))
+                && self.ast.decls.bases(def, &self.ast.lists).next().is_some()
+            {
+                self.unsupported("aggregate initialization of a class with base classes", l.lbrace);
+                let items: Vec<ExprId> = l
+                    .items
+                    .iter()
+                    .filter_map(|i| if let InitValue::Expr(e) = i.value { Some(e) } else { None })
+                    .collect();
+                return self.recover(ty, &items, l.lbrace);
+            }
             let mut pos = 0;
             let e = self.check_aggregate(ty, &l.items, &mut pos, true, l.lbrace, l.rbrace);
             if pos < l.items.len() {

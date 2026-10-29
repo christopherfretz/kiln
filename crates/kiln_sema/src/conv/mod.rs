@@ -614,6 +614,11 @@ fn bind_reference(s: &mut Sema<'_, '_>, e: ExprId, to: QualType) -> Result<ExprI
             }
         }
         BaseSearch::Unique(p) => {
+            // [dcl.init.ref]/5: the base must be accessible (diagnosed;
+            // the binding still applies).
+            let at = s.begin_loc(e);
+            let (d, b) = (strip_cv(s, from), strip_cv(s, referee));
+            s.check_base_access(d, b, &p, at);
             let list = path_list(s, &p);
             Ok(raw_cast(s, CastKind::DerivedToBase, e, target, out_vk, Some(list)))
         }

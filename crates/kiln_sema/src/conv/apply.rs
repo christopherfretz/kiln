@@ -128,6 +128,10 @@ fn apply_second(
             match classes {
                 Some((d, b, fp, tp)) => match find_base(s, d, b) {
                     BaseSearch::Unique(p) => {
+                        // [conv.ptr]/3: the base must be accessible
+                        // (diagnosed; the conversion still applies).
+                        let at = s.begin_loc(e);
+                        s.check_base_access(strip_cv(s, fp), strip_cv(s, tp), &p, at);
                         let list = path_list(s, &p);
                         cast_to(s, CastKind::DerivedToBase, e, to, Some(list))
                     }
