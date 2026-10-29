@@ -1,6 +1,6 @@
 //! Using-declarations ([namespace.udecl]), using-enum-declarations
 //! ([enum.udecl]) and namespace aliases ([namespace.alias]); spec/sema.md
-//! §4.7.
+//! §4.8.
 //!
 //! A using-declarator creates a `Using` declaration (not entered in
 //! lookup) and one implicit `UsingShadow` per declaration it names; the

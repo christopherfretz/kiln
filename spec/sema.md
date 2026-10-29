@@ -65,10 +65,36 @@ Constructors:
     [namespace.udir]/2 requires.
   - If several *different* entities are found at one level, lookup
     reports `reference to 'x' is ambiguous`, with candidate notes.
+- **Block-scope using-directives** ([namespace.udir]/2): a local
+  scope's `using namespace N;` is collected while walking outwards, and
+  `N`'s members are searched at the nearest enclosing namespace (or the
+  translation unit) that encloses `N`, together with that scope's own
+  using-directives.
 - **Qualified lookup** ([basic.lookup.qual]) searches one context's
   table, plus that namespace's using-directives.
+- **Using-shadows** (§4.8) are looked through. `Found` has two parallel
+  vectors:
+  - `decls`: the entities, shadows stripped (`AstBuilder::strip_shadow`).
+  - `found`: what lookup actually found (the `UsingShadow`, or the
+    declaration itself), clang's `FoundDecl`; `Found::shadow(i)` gives
+    the shadow, if any.
+  - The same entity reached by two paths (a declaration and a
+    using-declaration naming it) collapses to one result, the later
+    path.
+  - An unresolved `using_if_exists` target (`UnresolvedUsingIfExists`)
+    is dropped whenever anything else is found.
+- **Lookup kinds:** `Ordinary` (non-tags hide tags,
+  [basic.scope.hiding]/2), `Tag`, `Nested` (the name before `::`:
+  namespaces, namespace aliases and types) and `All` (a
+  using-declarator's target: every declaration, no hiding).
+- **Namespace aliases** are resolved wherever a namespace is expected:
+  `classify_name` reports an alias as `NameClass::Namespace` of the
+  aliased namespace, and `act_on_nested_name` resolves an alias
+  qualifier. `act_on_nested_name_spelled` also returns the declaration
+  as written, for `nns_component`.
 - **Redeclaration lookup** (`lookup_current_scope`) searches only the
-  current scope. If the current scope is the outermost block of a
+  current scope, and leaves out using-shadows
+  (`current_scope_shadows` returns those, for §4.8's conflict checks). If the current scope is the outermost block of a
   control statement (a Block directly above a Control scope), it also
   searches the Control scope, so `if (int x = 0) { int x; }` is
   diagnosed as [stmt.pre]/5 requires.
@@ -192,6 +218,9 @@ Redeclaration and linkage rules:
   - `no_unique_address`
   - `alignas`/`aligned`, `packed`
   - `used`, `noinline`, `always_inline`, `weak`, `const`, `pure`, `cold`
+  - `using_if_exists` (`__attribute__((using_if_exists))` or
+    `[[clang::using_if_exists]]`; other `clang::` attributes are still
+    ignored), on using-declarations (§4.8)
 - **Ignored with a warning:**
   - unknown attributes: `unknown attribute 'x' ignored`. Scoped names
     print without their scope, as clang 19 does.
@@ -266,6 +295,81 @@ specification as written (`TypeNames` prints ` noexcept`,
   specification (they are declared after the declarator is complete);
   deferred specifications of member functions, `__attribute__((nothrow))`
   and the implicit specifications of special members are M3.
+
+### 4.8 Using-declarations, `using enum`, namespace aliases (`using.rs`)
+- **Using-declarators** ([namespace.udecl]):
+  `act_on_using_declarator(using_loc, qual, name, name_loc, if_exists)`
+  handles one declarator of `using a::x, b::y;`.
+  - The name must be qualified: `using declaration requires a
+    qualified name`.
+  - The target is looked up with `LookupKind::All` in the qualifier's
+    context.
+  - Nothing found: `no member named 'x' in namespace 'N'`, unless the
+    declaration has `[[clang::using_if_exists]]` (§4.5). Then an
+    `UnresolvedUsingIfExists` declaration is introduced in place of a
+    target, and only a use of the name is an error: `reference to
+    unresolved using declaration`, with a note at the declaration.
+  - A namespace target ([namespace.udecl]/3): `using declaration cannot
+    refer to a namespace`, with a note suggesting `using namespace`.
+  - A class qualifier at namespace or block scope ([namespace.udecl]/8)
+    is allowed only for enumerators; otherwise `using declaration
+    cannot refer to class member`, with clang's note suggesting an alias
+    declaration (types) or a reference (variables).
+  - On success, a `Using` declaration (not entered in lookup) records
+    the qualifier, and one `UsingShadow` per declaration found is entered
+    in the current scope (a local scope's `locals`, or the context's
+    table).
+- **Conflicts** ([namespace.udecl]/11, [basic.scope.scope]/4), as in
+  clang's `CheckUsingShadowDecl`. Two distinct entities of one name in
+  one scope:
+  - an unresolved `using_if_exists` target conflicts with nothing;
+  - a tag conflicts only with a tag;
+  - two typedefs conflict unless they name the same type;
+  - two functions conflict iff their types are the same ignoring
+    exception specifications (else they overload);
+  - anything else conflicts.
+  - A new shadow that conflicts reports `target of using declaration
+    conflicts with declaration already in scope`, with notes at the
+    target and the conflicting declaration; no shadow is made.
+  - A later declaration that conflicts with a shadow
+    (`check_using_shadow_conflict`, from variable, function and typedef
+    declarations) reports `declaration conflicts with target of using
+    declaration already in scope`, and is marked invalid.
+  - Repeating a using-declaration of the same entity is allowed; the new
+    shadow redeclares the old one.
+- **Class scope:** kiln has no base classes yet (M3), so every
+  using-declarator in a class is ill-formed, and Sema reports clang's
+  diagnostic for the qualifier: `using declaration in class refers into
+  'N::', which is not a class`, `using declaration refers to its own
+  class`, or `using declaration refers into 'C::', which is not a base
+  class of 'D'`. A declarator qualified by an
+  enumeration works at class scope as anywhere else.
+- **`using enum`** ([enum.udecl]): `act_on_using_enum(qual, class, name,
+  name_loc)` takes the parser's classification of the (possibly
+  qualified) name.
+  - Not a type: `unknown type name E`; a type but not an enumeration:
+    `'X' is not an enumerated type`. A missing name is a parse error:
+    `using enum requires an enum or typedef name`.
+  - An incomplete enumeration ([enum.udecl]/2): `enumeration 'E' is
+    incomplete`, with a note; the `UsingEnum` declaration is made and marked invalid.
+  - Otherwise a `UsingEnum` declaration names the definition, and each
+    enumerator gets a `UsingShadow`, with the conflict checks above.
+- **Namespace aliases** ([namespace.alias]):
+  `act_on_namespace_alias(name, name_loc, qual, target, target_loc)`.
+  - The target is looked up with `LookupKind::Nested` and must be a
+    namespace or alias: `expected namespace name`.
+  - Redeclaring an alias to the same namespace is allowed (it links to
+    the previous one); to a different namespace: `redefinition of 'Q' as
+    an alias for a different namespace`, with a note; any other earlier
+    declaration of the name: `redefinition of 'Q'` (a namespace) or
+    `redefinition of 'Q' as different kind of symbol`.
+  - The alias is entered in lookup; at block scope, in `locals`.
+- **Nested-name-specifiers:** `nns_global` and
+  `nns_component(prefix, resolved, spelled)` build the `NnsId` the
+  `Using` declaration records, keeping an alias as written
+  (`Nns::NamespaceAlias`). `Sema::nns_str` prints one as written.
+- **Uses:** a `DeclRefExpr` found through a shadow records it as its
+  found declaration (`build_decl_ref_via`; `DeclRefExtra::found_decl`).
 
 ## 5. Expressions (`expr.rs`, `conv/`)
 - **Typed nodes:** each `act_on_*` builds clang's typed node, with
@@ -512,6 +616,15 @@ unscoped enumeration is reported (spec/oven.md "Integration").
   - [dcl.align]/6, that `alignas` must be on the definition
   - full [basic.def.odr] for inline functions and variables across
     redeclarations
+- **Using-declarations** (§4.8):
+  - using-declarators at class scope that name base-class members
+    (needs base classes), and their `typename`, `operator` and pack
+    (`...`) forms, which are diagnosed as unsupported
+  - overload sets through using-declarations beyond what M2 overloading
+    supports
+  - conflicts between a shadow and an enumerator of the same scope
+  - `previousDecl` links for redeclared shadows and aliases in the dump
+  - an attributed `[[...]] using` declaration as a block-scope statement
 
 ## 11. Tests
 - `crates/kiln_sema/tests/`: per-rule tests that drive `Sema`

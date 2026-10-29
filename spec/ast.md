@@ -151,6 +151,28 @@ Option<DeclId>, group: RedeclGroupId }`). `T` = may be templated (§8.2).
 | templates | `ClassTemplate`R, `FunctionTemplate`R, `VarTemplate`R, `TypeAliasTemplate`R, `Concept`, `BuiltinTemplate` (`__make_integer_seq`, `__type_pack_element`), `TemplateTypeParm`, `NonTypeTemplateParm`, `TemplateTemplateParm`, `ImplicitConceptSpecialization`, `RequiresExprBody`★ |
 | synthesized | `LifetimeExtendedTemporary` (value of a lifetime-extended temporary in a constant initializer), `TemplateParamObject` (class-type NTTP object: type + `ConstValueId`), `StaticAssert` (cond `ExprId`, message `ExprId`, P2741), `Label`, `ContractResultName` (P2900 `post(r: ...)`) |
 
+Using-family payloads (WP-062; one inline `Payload::None(u32)` word,
+read with `Ast::using_target`/`Ast::using_qualifier`):
+
+| kind | payload word | in lookup? | in member list? | builder |
+|---|---|---|---|---|
+| `UsingDirective` | nominated namespace (first declaration) | no | yes | pushed by Sema (`act_on_using_directive`) |
+| `Using` | `NnsId` of the qualifier as written (0: none) | no | yes | `using_decl` |
+| `UsingShadow` (implicit) | target declaration (or an `UnresolvedUsingIfExists`) | yes | yes | `using_shadow(h, target, prev)` |
+| `UsingEnum` | the enumeration's definition | no | yes | `using_enum` |
+| `NamespaceAlias` | aliased namespace or alias, as written | yes | yes | `namespace_alias(h, target, prev)` |
+| `UnresolvedUsingIfExists` | 0 | no | no | `unresolved_using_if_exists` |
+
+- `Ast::strip_shadow(d)` looks through a `UsingShadow`;
+  `Ast::resolve_alias(d)` follows alias chains to the namespace's first
+  declaration.
+- `prev` replaces an earlier shadow of the same target (or an earlier
+  alias to the same namespace) in the lookup table; it is not yet a
+  redeclaration-chain link (no `Redecl` payload for these kinds), so
+  the dump prints no `prev`.
+- `DeclRefExtra::found_decl` records the `UsingShadow` a `DeclRefExpr`'s
+  name was found through (clang's `FoundDecl`).
+
 Hot payloads (dense arenas, one record per decl of the kind):
 ```rust
 struct FunctionData {               // 24 bytes
