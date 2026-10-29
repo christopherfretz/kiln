@@ -255,14 +255,19 @@ pub(crate) fn is_pod(
     if class.has_bases || class.dynamic {
         return false;
     }
+    // [class.access]/3: members of a `class` are private by default. A
+    // field whose access is not recorded (`Access::None`) has the default.
+    let class_default_private = ast.decls.record(def).is_some_and(|r| r.tag == TagKind::Class);
     for f in fields {
         if f.bit_width.is_some() && !f.named {
             // Unnamed bit-fields are not members ([class.bit]/2).
             continue;
         }
         let node = ast.decls.get(f.decl);
-        if matches!(node.misc().access(), Access::Private | Access::Protected) {
-            return false;
+        match node.misc().access() {
+            Access::Private | Access::Protected => return false,
+            Access::None if class_default_private => return false,
+            _ => {}
         }
         if ast.decls.field(f.decl).is_some_and(|d| d.init.is_some() || (d.flags >> 2) & 3 != 0) {
             return false;

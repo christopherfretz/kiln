@@ -15,7 +15,10 @@ pub mod mangle;
 pub mod target;
 pub mod vtable;
 
-pub use dump::{DumpOptions, dump_record_layout, write_record_layout, write_record_layout_with};
+pub use dump::{
+    DumpOptions, dump_all_record_layouts, dump_record_layout, record_definitions,
+    write_record_layout, write_record_layout_with,
+};
 pub use layout::{
     Layouter, MAX_SUBOBJECTS, TypeLayout, array_layout, ensure_layout, record_layout, subobjects,
     type_size_align,

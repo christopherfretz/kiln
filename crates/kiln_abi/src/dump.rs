@@ -53,6 +53,74 @@ pub fn dump_record_layout(ast: &Ast, record: DeclId, target: &Target) -> String 
     out
 }
 
+/// The complete, valid, non-dependent class definitions of `ast` in the
+/// order their closing braces were seen, the order clang's
+/// `-fdump-record-layouts-complete` dumps them in: a class follows the
+/// classes defined lexically inside it; otherwise classes are in
+/// creation order. A class in a function body is ordered by itself
+/// (member function bodies are parsed after the class's `}`).
+pub fn record_definitions(ast: &Ast) -> Vec<DeclId> {
+    use kiln_ast::decl::DeclFlags;
+    let mut defs = Vec::new();
+    let mut index = std::collections::HashMap::new();
+    for d in ast.decls.ids() {
+        let Some(r) = ast.decls.record(d) else { continue };
+        let n = ast.decls.get(d);
+        if !r.defn.contains(DefinitionBits::COMPLETE)
+            || ast.definition(d) != Some(d)
+            || n.has(DeclFlags::INVALID)
+            || n.has(DeclFlags::DEPENDENT_CTX)
+            || n.ty().is_none_or(|t| ast.types.is_dependent(t))
+        {
+            continue;
+        }
+        index.insert(d, defs.len());
+        defs.push(d);
+    }
+    // The innermost enclosing class definition through lexical contexts
+    // (stopping at anything but a class).
+    let parent = |d: DeclId| -> Option<usize> {
+        let p = ast.decls.lexical_ctx(d)?;
+        ast.decls.record(p)?;
+        index.get(&p).copied()
+    };
+    let mut children: Vec<Vec<usize>> = vec![Vec::new(); defs.len()];
+    let mut roots = Vec::new();
+    for (i, &d) in defs.iter().enumerate() {
+        match parent(d) {
+            Some(p) => children[p].push(i),
+            None => roots.push(i),
+        }
+    }
+    let mut out = Vec::with_capacity(defs.len());
+    let mut stack: Vec<(usize, bool)> = roots.iter().rev().map(|&i| (i, false)).collect();
+    while let Some((i, expanded)) = stack.pop() {
+        if expanded {
+            out.push(defs[i]);
+            continue;
+        }
+        stack.push((i, true));
+        stack.extend(children[i].iter().rev().map(|&c| (c, false)));
+    }
+    out
+}
+
+/// The `-fdump-record-layouts-complete` output for `ast`: every class of
+/// [`record_definitions`], each named as at its closing brace.
+pub fn dump_all_record_layouts(
+    ast: &Ast,
+    target: &Target,
+    sources: Option<&SourceManager>,
+) -> String {
+    let mut lay = Layouter::new(ast, target);
+    let opts = DumpOptions { sources, at_definition: true };
+    let mut out = String::new();
+    for d in record_definitions(ast) {
+        write_record_layout_with(&mut lay, d, &opts, &mut out);
+    }
+    out
+}
+
 /// One pending piece of a dump.
 enum Item {
     /// A class at an absolute byte offset, indent level and description

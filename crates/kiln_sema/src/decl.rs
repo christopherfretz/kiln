@@ -1611,6 +1611,11 @@ impl Sema<'_, '_> {
 
     /// `{` of a class definition: the class becomes the current context.
     pub fn act_on_start_record_definition(&mut self, r: DeclId) {
+        // clang's `AddAlignmentAttributesForRecord`: the `#pragma pack`
+        // value in effect where the definition begins.
+        if self.pack.0 != 0 {
+            let _ = self.ast.decls.cold.record_pack.insert(r, self.pack.0);
+        }
         let _ = self.builder().begin_record_definition(r);
         let tag = self.ast.decls.record(r).map_or(TagKind::Struct, |x| x.tag);
         self.classes.push(ClassBuild::new(r, tag));
@@ -2580,10 +2585,74 @@ impl Sema<'_, '_> {
     }
 
     /// `#pragma pack(args)` at `loc` ([cpp.pragma]; clang's
-    /// `ActOnPragmaPack`): recorded in [`Sema::pragma_packs`] for the
-    /// layout and reported as not supported yet.
+    /// `ActOnPragmaPack`); `args` is the argument list's tokens spelled
+    /// without spaces. The forms clang accepts silently are applied:
+    /// `()` resets, `(N)` sets, `(push[, id][, N])` saves the current
+    /// value then sets `N`, `(pop[, id])` restores the value saved by the
+    /// innermost push (labelled `id`, popping everything above it; no
+    /// effect if no entry has that label). `N` is 1, 2, 4, 8 or 16; 0
+    /// means no packing. Forms clang diagnoses (`show`, an invalid `N`,
+    /// pop on an empty stack, an unknown action, pop with both a label
+    /// and `N`) are reported as not supported (spec/sema-class.md §6).
     pub fn act_on_pragma_pack(&mut self, loc: Loc, args: String) {
-        self.act_on_unsupported_pragma("pack", loc);
+        if !self.apply_pragma_pack(&args) {
+            self.act_on_unsupported_pragma("pack", loc);
+        }
         self.pragma_packs.push((loc, args));
+    }
+
+    /// Applies `#pragma pack(args)` to [`Sema::pack`]; false (and no
+    /// change) for a form clang diagnoses.
+    fn apply_pragma_pack(&mut self, args: &str) -> bool {
+        let value = |s: &str| -> Option<u16> {
+            let n: u16 = s.parse().ok()?;
+            (n == 0 || (n.is_power_of_two() && n <= 16)).then_some(n)
+        };
+        let is_ident = |s: &str| {
+            s.chars().next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+                && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+        };
+        let parts: Vec<&str> = if args.is_empty() { Vec::new() } else { args.split(',').collect() };
+        match parts.as_slice() {
+            [] => self.pack.0 = 0,
+            [n] if value(n).is_some() => self.pack.0 = value(n).unwrap_or(0),
+            ["push", rest @ ..] if rest.len() <= 2 => {
+                let (label, n) = match rest {
+                    [] => (None, None),
+                    [x] if is_ident(x) => (Some((*x).to_owned()), None),
+                    [x] => (None, Some(value(x))),
+                    [l, x] if is_ident(l) => (Some((*l).to_owned()), Some(value(x))),
+                    _ => return false,
+                };
+                if n == Some(None) {
+                    return false;
+                }
+                let current = self.pack.0;
+                self.pack.1.push((label, current));
+                if let Some(Some(n)) = n {
+                    self.pack.0 = n;
+                }
+            }
+            ["pop"] => match self.pack.1.pop() {
+                Some((_, v)) => self.pack.0 = v,
+                None => return false,
+            },
+            ["pop", l] if is_ident(l) => {
+                if self.pack.1.is_empty() {
+                    return false;
+                }
+                if let Some(i) = self.pack.1.iter().rposition(|(x, _)| x.as_deref() == Some(*l)) {
+                    self.pack.0 = self.pack.1[i].1;
+                    self.pack.1.truncate(i);
+                }
+            }
+            ["pop", n] => {
+                let Some(n) = value(n) else { return false };
+                let Some((_, _)) = self.pack.1.pop() else { return false };
+                self.pack.0 = n;
+            }
+            _ => return false,
+        }
+        true
     }
 }
