@@ -220,6 +220,8 @@ fn constexpr_counters_with_a_fake_kiln() {
         (counters.steps, counters.bytes, counters.peak_bytes, counters.calls, counters.evaluations),
         (116, 40, 32, 3, 2)
     );
+    assert_eq!((counters.peak_arena, counters.frozen_bytes), (32, 32));
+    assert_eq!(m.oven_missing, []);
     assert!(!m.flags.contains("constexpr-report"), "{}", m.flags);
 
     // 2. Unchanged counters compare clean.

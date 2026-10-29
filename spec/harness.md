@@ -72,7 +72,7 @@ directives are also ERRORs.
 | `ast-filter: <substr>` | `ast` only. Dump only the declarations whose qualified name contains `<substr>` (no whitespace): kiln gets `-fdump-ast-filter=<substr>`. |
 | `pp-compare: tokens \| text` | `pp` only. How outputs are compared (see "pp comparison"). Default `tokens`. |
 | `pp-linemarkers` | `pp` only. Preprocess with `-E` instead of `-E -P`, so the output keeps line markers, and compare them (see "pp comparison"). |
-| `oven: [<line>[:<col>]] <counter><=N ...` | kiln-specific constexpr budget; `<counter>` is `steps`, `bytes`, `peak_bytes`, `calls`, `allocs`, `evaluations`, or (from WP-061) `peak_arena`, `frozen_bytes`. Not for `pp`. See "kiln-specific tests". |
+| `oven: [<line>[:<col>]] <counter><=N ...` | kiln-specific constexpr budget; `<counter>` is `steps`, `bytes`, `peak_bytes`, `calls`, `allocs`, `peak_arena`, `frozen_bytes` or `evaluations`. Not for `pp`. See "kiln-specific tests". |
 | `skip[(kiln\|clang)]: <reason>` | Do not run. A qualified marker applies only to that compiler kind. |
 | `xfail[(kiln\|clang)]: <reason>` | Expected to FAIL. Qualified as for `skip`. |
 
@@ -279,7 +279,7 @@ compile fails for that reason. Then:
   and `evaluations` their count.
 - `oven: <line>[:<col>] <counter><=N ...` bounds the evaluations whose `loc`
   is in the test file at that line (and column, if given), combined as for
-  the total (sums; maximum for `peak_bytes`; count for `evaluations`). If no
+  the total (sums; maximum for `peak_bytes` and `peak_arena`; count for `evaluations`). If no
   evaluation matches, the test FAILs: a budget on nothing is a stale budget.
 - Each bound is inclusive: a counter above it is a **FAIL**, naming the
   location, the counter, its value and the budget.

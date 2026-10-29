@@ -570,6 +570,15 @@ struct UnionMember { at: u32, field: DeclId }       // active member of the unio
   - Pools are `u32`-indexed: 4 GiB of image bytes in total.
   - `HeapSize` reports these rows: `nodes`, `words`, `paths`, `aggs`,
     `bytes`, `relocs`, `padding`, `unions`, `intern`.
+  - `content_bytes() -> u64` is the interned content: the length of every
+    pool times its element size (the rows above except `intern`, without
+    spare capacity). It is deterministic on every 64-bit host and does not
+    change when a value already present is pushed again, so its difference
+    across a freeze is what the freeze added. The Oven reports that
+    difference as `frozen_bytes` (spec/oven.md, R-OVEN-2): freezing an
+    aggregate equal to one already frozen yields the same `ConstValueId`
+    and adds 0 bytes (`crates/kiln_ast/tests/consts.rs`,
+    `crates/kiln_oven/tests/nested.rs`).
 - **`StringPool`** (`kiln_ast::strings`, also WP-043).
   - `intern(StringEncoding, code_units: &[u8]) -> StringLitId` dedups by
     `(encoding, bytes)`. The code units are little-endian, `unit_bytes()`

@@ -1,3 +1,3 @@
-{"loc":"other.h:5:1","kind":"init","steps":1,"bytes":4,"peak_bytes":4,"calls":0,"allocs":0,"wall_us":0}
-{"loc":null,"kind":"other","steps":1,"bytes":0,"peak_bytes":0,"calls":0,"allocs":0,"wall_us":0}
-{"total":{"steps":2,"bytes":4,"peak_bytes":4,"calls":0,"allocs":0,"wall_us":0,"evaluations":2}}
+{"loc":"other.h:5:1","kind":"init","steps":1,"bytes":4,"peak_bytes":4,"calls":0,"allocs":0,"peak_arena":4,"frozen_bytes":16,"wall_us":0}
+{"loc":null,"kind":"constraint","steps":1,"bytes":0,"peak_bytes":0,"calls":0,"allocs":0,"peak_arena":0,"frozen_bytes":16,"wall_us":0}
+{"total":{"steps":2,"bytes":4,"peak_bytes":4,"calls":0,"allocs":0,"peak_arena":4,"frozen_bytes":32,"wall_us":0,"evaluations":2}}

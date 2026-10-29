@@ -4,6 +4,7 @@
 use std::fmt::Write as _;
 
 use super::record::{Baseline, Measurement};
+use crate::util::header::Counter;
 
 /// Regression thresholds in percent.
 #[allow(clippy::struct_field_names)]
@@ -154,9 +155,16 @@ pub fn judge(base: Option<&Baseline>, cur: &Measurement, t: Thresholds) -> Verdi
     let (steps_worse, steps_better, bytes_worse, bytes_better) = match (&b.oven, &cur.oven) {
         (Some(bo), Some(co)) => {
             let (sw, sb) = beyond(bo.steps, co.steps, t.steps_pct);
-            let (bw, bb) = beyond(bo.bytes, co.bytes, t.bytes_pct);
-            let (pw, pb) = beyond(bo.peak_bytes, co.peak_bytes, t.bytes_pct);
-            (sw, sb, bw || pw, bb || pb)
+            // The byte counters, minus those an older baseline lacks.
+            let (mut bw, mut bb) = (false, false);
+            for c in [Counter::Bytes, Counter::PeakBytes, Counter::PeakArena, Counter::FrozenBytes]
+            {
+                if !b.oven_missing.contains(&c) {
+                    let (w, better) = beyond(bo.get(c), co.get(c), t.bytes_pct);
+                    (bw, bb) = (bw || w, bb || better);
+                }
+            }
+            (sw, sb, bw, bb)
         }
         _ => (false, false, false, false),
     };
@@ -433,6 +441,8 @@ mod tests {
             peak_bytes,
             calls: 7,
             allocs: 3,
+            peak_arena: peak_bytes,
+            frozen_bytes: 16,
             wall_us: 0,
             evaluations: 2,
         };
@@ -455,6 +465,16 @@ mod tests {
         assert_eq!(judge(Some(&b), &m(Some(counters(1000, 10_201, 5000))), T), bytes);
         assert_eq!(judge(Some(&b), &m(Some(counters(1000, 10_000, 5101))), T), bytes);
         assert_eq!(judge(Some(&b), &m(Some(counters(1000, 9_000, 5000))), T), Verdict::Improved);
+        // So do the address-space peak and the frozen bytes ...
+        let arena = Counters { peak_arena: 5101, ..counters(1000, 10_000, 5000) };
+        assert_eq!(judge(Some(&b), &m(Some(arena)), T), bytes);
+        let frozen = Counters { frozen_bytes: 17, ..counters(1000, 10_000, 5000) };
+        assert_eq!(judge(Some(&b), &m(Some(frozen)), T), bytes);
+        // ... unless the baseline predates them.
+        let mut old = base(m(Some(counters(1000, 10_000, 5000))));
+        old.measurement.oven_missing = vec![Counter::PeakArena, Counter::FrozenBytes];
+        assert_eq!(judge(Some(&old), &m(Some(arena)), T), Verdict::Ok);
+        assert_eq!(judge(Some(&old), &m(Some(frozen)), T), Verdict::Ok);
         // Loosened thresholds; one side without counters is not judged.
         let loose = Thresholds { steps_pct: 10.0, bytes_pct: 50.0, ..T };
         assert_eq!(judge(Some(&b), &m(Some(counters(1100, 15_000, 7500))), loose), Verdict::Ok);

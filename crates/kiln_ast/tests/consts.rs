@@ -605,7 +605,11 @@ fn dedup_of_a_thousand_int_array() {
     let mut st = ConstStore::default();
     let words: Vec<u32> = (0..1000).collect();
     let bytes = le(&words);
+    assert_eq!(st.content_bytes(), 24); // the aggregate pool's sentinel
     let a = st.push_aggregate(agg(BIG, &bytes)).unwrap();
+    // A node (16), an aggregate record (24) and the image.
+    assert_eq!(st.content_bytes(), 24 + 16 + 24 + 4000);
+    let content = st.content_bytes();
     let before = st.heap_bytes();
     // A separately built, equal image (as a second evaluation would produce).
     let bytes2 = le(&words);
@@ -615,6 +619,8 @@ fn dedup_of_a_thousand_int_array() {
     let after = st.heap_bytes();
     assert_eq!(after.row("bytes").unwrap().live_bytes, 4000);
     assert_eq!(before.live_bytes(), after.live_bytes());
+    // Interning an equal value adds no content (the Oven's `frozen_bytes`).
+    assert_eq!(st.content_bytes(), content);
     // One different element is a different value.
     let mut words3 = words.clone();
     words3[999] = 0;

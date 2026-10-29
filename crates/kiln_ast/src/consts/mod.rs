@@ -214,6 +214,27 @@ impl ConstStore {
         (1..=self.pools.nodes.len() as u32).map(ConstValueId::new)
     }
 
+    /// Bytes of interned content: the length of every pool times its
+    /// element size (value headers, words, paths, aggregate records, image
+    /// bytes, relocations, padding and union tables), not capacities or the
+    /// intern table. Deterministic on every 64-bit host and unchanged by
+    /// pushing a value that is already present, so the difference across a
+    /// push is what interning it added (the Oven's `frozen_bytes`).
+    pub fn content_bytes(&self) -> u64 {
+        fn n<T>(v: &[T]) -> u64 {
+            size_of_val(v) as u64
+        }
+        let p = &self.pools;
+        n(&p.nodes)
+            + n(&p.words)
+            + n(&p.paths)
+            + n(&p.aggs)
+            + n(&p.bytes)
+            + n(&p.relocs)
+            + n(&p.padding)
+            + n(&p.unions)
+    }
+
     /// Interns a scalar.
     ///
     /// # Errors

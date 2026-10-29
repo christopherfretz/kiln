@@ -97,6 +97,9 @@ pub enum EvalKind {
     Consteval,
     /// The condition of an `if constexpr`.
     IfConstexpr,
+    /// An atomic constraint of a concept or `requires` clause
+    /// ([temp.constr.atomic]/3).
+    Constraint,
     /// Array bounds, enumerator values, `case` labels, bit-field widths, ...
     Other,
 }
@@ -110,6 +113,7 @@ impl EvalKind {
             EvalKind::TemplateArg => "template_arg",
             EvalKind::Consteval => "consteval",
             EvalKind::IfConstexpr => "if_constexpr",
+            EvalKind::Constraint => "constraint",
             EvalKind::Other => "other",
         }
     }
@@ -140,10 +144,16 @@ pub struct EvalContext {
 
 impl EvalContext {
     /// A context of `kind` at `loc` (enumeration ranges are checked for
-    /// template arguments, immediate invocations and `if constexpr`).
+    /// template arguments, immediate invocations, `if constexpr` and
+    /// atomic constraints).
     pub fn new(kind: EvalKind, loc: Loc) -> Self {
-        let enum_range_check =
-            matches!(kind, EvalKind::TemplateArg | EvalKind::Consteval | EvalKind::IfConstexpr);
+        let enum_range_check = matches!(
+            kind,
+            EvalKind::TemplateArg
+                | EvalKind::Consteval
+                | EvalKind::IfConstexpr
+                | EvalKind::Constraint
+        );
         EvalContext { kind, loc, object: None, enum_range_check }
     }
 
@@ -184,7 +194,10 @@ pub trait SemaBridge {
     /// The AST (re-borrowed per use, never held).
     fn ast(&self) -> &Ast;
     /// The body of function `f`'s definition, instantiating it if needed.
-    fn ensure_body(&mut self, f: DeclId) -> Option<StmtId>;
+    /// Called while an evaluation runs (the first call of `f`); sema may
+    /// evaluate nested constant expressions with `oven` meanwhile
+    /// (R-OVEN-1: spec/oven.md "Nested evaluation").
+    fn ensure_body(&mut self, f: DeclId, oven: &mut Oven) -> Option<StmtId>;
     /// The layout of a complete record (via `kiln_abi`).
     fn ensure_layout(&mut self, record: DeclId) -> &RecordLayout;
     /// The vtable of a dynamic class (M3).
@@ -226,6 +239,20 @@ pub struct Oven {
     pub(crate) stats: EvalStats,
     pub(crate) run: vm::RunState,
     pub(crate) scratch: value::Scratch,
+    /// Evaluation contexts in progress (R-OVEN-1: 0 between evaluations,
+    /// above 1 while a bridge callback evaluates a nested one).
+    pub(crate) ctx_depth: u32,
+    /// What the nested contexts of the running one cost, inclusively.
+    inner: Inner,
+}
+
+/// The inclusive cost of the nested evaluations run so far by the running
+/// context (subtracted from its own record).
+#[derive(Clone, Copy, Debug, Default)]
+struct Inner {
+    steps: u64,
+    frozen: u64,
+    wall_us: u64,
 }
 
 impl Oven {
@@ -255,6 +282,8 @@ impl Oven {
             stats: EvalStats::default(),
             run: vm::RunState::default(),
             scratch: value::Scratch::default(),
+            ctx_depth: 0,
+            inner: Inner::default(),
         }
     }
 
@@ -290,10 +319,7 @@ impl Oven {
         e: ExprId,
         ctx: EvalContext,
     ) -> Result<ConstValueId, EvalFailure> {
-        let start = Instant::now();
-        let r = self.eval_top(bridge, e, ctx.object, false, ctx.enum_range_check);
-        let wall_us = start.elapsed().as_micros() as u64;
-        let c = self.run.counters;
+        let (r, c) = self.eval_ctx(bridge, e, ctx.object, false, ctx.enum_range_check);
         self.stats.push(EvalRecord {
             loc: ctx.loc,
             kind: ctx.kind,
@@ -301,8 +327,10 @@ impl Oven {
             bytes: c.bytes,
             peak_bytes: c.peak,
             calls: c.calls,
-            allocs: 0,
-            wall_us,
+            allocs: c.allocs,
+            peak_arena: c.arena,
+            frozen_bytes: c.frozen,
+            wall_us: c.wall_us,
             ok: r.is_ok(),
         });
         r
@@ -311,7 +339,7 @@ impl Oven {
     /// Folds `e` if it is a constant expression; never reports anything
     /// and is not recorded in the statistics.
     pub fn try_fold(&mut self, bridge: &mut dyn SemaBridge, e: ExprId) -> Option<ConstValueId> {
-        self.eval_top(bridge, e, None, true, false).ok()
+        self.eval_ctx(bridge, e, None, true, false).0.ok()
     }
 
     /// Whether `var`'s initializer is a constant initializer
@@ -327,7 +355,7 @@ impl Oven {
             _ => {}
         }
         let Some(init) = data.init else { return false };
-        self.eval_top(bridge, init, Some(var), true, false).is_ok()
+        self.eval_ctx(bridge, init, Some(var), true, false).0.is_ok()
     }
 
     /// Per-evaluation records and totals.
@@ -372,27 +400,199 @@ impl Oven {
         kbc::disassemble(&self.code, 0, self.code.len())
     }
 
-    fn eval_top(
+    /// Runs one evaluation context: the outermost one, or one nested in a
+    /// bridge callback of the running one (R-OVEN-1). The cost is the
+    /// context's own: what its nested contexts cost is excluded (they have
+    /// records of their own), though the step budget is shared.
+    fn eval_ctx(
         &mut self,
         bridge: &mut dyn SemaBridge,
         e: ExprId,
         object: Option<DeclId>,
         silent: bool,
         enum_check: bool,
-    ) -> Result<ConstValueId, EvalFailure> {
+    ) -> (Result<ConstValueId, EvalFailure>, Cost) {
+        let start = Instant::now();
+        let frozen0 = bridge.consts().content_bytes();
+        let inner0 = std::mem::take(&mut self.inner);
+        let (r, c) = if self.ctx_depth == 0 {
+            self.eval_outermost(bridge, e, object, silent, enum_check)
+        } else {
+            self.eval_nested(bridge, e, object, silent, enum_check)
+        };
+        let wall_us = start.elapsed().as_micros() as u64;
+        let frozen = bridge.consts().content_bytes().saturating_sub(frozen0);
+        let inner = std::mem::replace(&mut self.inner, inner0);
+        if self.ctx_depth > 0 {
+            self.inner.steps += c.steps;
+            self.inner.frozen += frozen;
+            self.inner.wall_us += wall_us;
+        }
+        let cost = Cost {
+            steps: c.steps.saturating_sub(inner.steps),
+            bytes: c.bytes,
+            peak: c.peak,
+            arena: c.arena,
+            calls: c.calls,
+            allocs: c.allocs,
+            frozen: frozen.saturating_sub(inner.frozen),
+            wall_us: wall_us.saturating_sub(inner.wall_us),
+        };
+        (r, cost)
+    }
+
+    /// The outermost context: owns the frame and heap spaces, reset at its
+    /// end.
+    fn eval_outermost(
+        &mut self,
+        bridge: &mut dyn SemaBridge,
+        e: ExprId,
+        object: Option<DeclId>,
+        silent: bool,
+        enum_check: bool,
+    ) -> (Result<ConstValueId, EvalFailure>, vm::Counters) {
         for g in self.provisional.drain(..) {
             self.globals[g as usize].state = compile::GState::Unresolved;
         }
         self.run.silent = silent;
         self.run.enum_check = enum_check;
         self.run.counters = vm::Counters::default();
+        self.run.nesting = 0;
+        self.run.depth_base = 0;
         self.mem.allocated = 0;
         self.mem.peak = 0;
-        let r = self.eval_inner(bridge, e, object);
-        self.run.counters.bytes = self.mem.allocated;
-        self.run.counters.peak = self.mem.peak;
+        self.mem.arena_peak = 0;
+        self.mem.heap_allocs = 0;
+        self.mem.ctx = 0;
+        self.ctx_depth = 1;
+        let r = self.eval_inner(bridge, e, object, 0);
+        self.ctx_depth = 0;
+        let mut c = self.run.counters;
+        c.bytes = self.mem.allocated;
+        c.peak = self.mem.peak;
+        c.arena = self.mem.arena_peak;
+        c.allocs = self.mem.heap_allocs;
         self.mem.reset();
         self.stack.clear();
-        r
+        (r, c)
     }
+
+    /// A context nested in a bridge callback of the running one: runs on
+    /// the same spaces above everything live, and frees what it allocated
+    /// (frame objects by mark, heap allocations by context) at its end.
+    /// Its counters are its own; the step budget continues the enclosing
+    /// one's, and its calls count from the depth that started it.
+    fn eval_nested(
+        &mut self,
+        bridge: &mut dyn SemaBridge,
+        e: ExprId,
+        object: Option<DeclId>,
+        silent: bool,
+        enum_check: bool,
+    ) -> (Result<ConstValueId, EvalFailure>, vm::Counters) {
+        // The enclosing calls ran an evaluation a cached result would skip.
+        self.run.impure += 1;
+        let depth_base = self.active_calls() + 1;
+        if depth_base >= self.budget.depth {
+            let notes = if silent {
+                Vec::new()
+            } else {
+                let loc = bridge.ast().exprs.get(e).loc();
+                vec![Note::new(
+                    loc,
+                    format!(
+                        "constexpr evaluation exceeded maximum depth of {} calls",
+                        self.budget.depth
+                    ),
+                )]
+            };
+            let f = EvalFailure { kind: FailKind::DepthLimit, notes };
+            return (Err(f), vm::Counters::default());
+        }
+        let run = (
+            self.run.silent,
+            self.run.enum_check,
+            self.run.counters,
+            self.run.object,
+            self.run.maxd,
+            self.run.depth_base,
+        );
+        let mem = (
+            self.mem.allocated,
+            self.mem.peak,
+            self.mem.arena_peak,
+            self.mem.heap_allocs,
+            self.mem.ctx,
+            self.mem.cur_frame,
+        );
+        let sp = self.stack.len();
+        let mark = self.mem.mark();
+        let (live0, arena0, steps0) =
+            (self.mem.live_bytes(), self.mem.arena(), self.run.counters.steps);
+        // Registers above every live frame's.
+        let fb = self
+            .stack
+            .iter()
+            .map(|f| f.fb + self.funcs[f.func as usize].nregs + 1)
+            .max()
+            .unwrap_or(0);
+        let ctx = self.ctx_depth;
+        self.ctx_depth += 1;
+        self.run.silent = silent;
+        self.run.enum_check = enum_check;
+        self.run.counters = vm::Counters { steps: steps0, ..vm::Counters::default() };
+        self.run.maxd = 0;
+        self.run.depth_base = depth_base;
+        self.mem.allocated = 0;
+        self.mem.peak = live0;
+        self.mem.arena_peak = arena0;
+        self.mem.heap_allocs = 0;
+        self.mem.ctx = ctx;
+        let r = self.eval_inner(bridge, e, object, fb);
+        let steps1 = self.run.counters.steps;
+        let c = vm::Counters {
+            steps: steps1 - steps0,
+            bytes: self.mem.allocated,
+            peak: self.mem.peak.saturating_sub(live0),
+            calls: self.run.counters.calls,
+            arena: self.mem.arena_peak.saturating_sub(arena0),
+            allocs: self.mem.heap_allocs,
+        };
+        self.mem.free_heap_of(ctx, &self.types);
+        self.mem.release(mark, &self.types);
+        self.stack.truncate(sp);
+        self.ctx_depth -= 1;
+        let counters;
+        (
+            self.run.silent,
+            self.run.enum_check,
+            counters,
+            self.run.object,
+            self.run.maxd,
+            self.run.depth_base,
+        ) = run;
+        self.run.counters = vm::Counters { steps: steps1, ..counters };
+        (
+            self.mem.allocated,
+            self.mem.peak,
+            self.mem.arena_peak,
+            self.mem.heap_allocs,
+            self.mem.ctx,
+            self.mem.cur_frame,
+        ) = mem;
+        (r, c)
+    }
+}
+
+/// What one evaluation context cost on its own.
+#[derive(Clone, Copy, Debug, Default)]
+struct Cost {
+    steps: u64,
+    bytes: u64,
+    peak: u64,
+    arena: u64,
+    calls: u64,
+    allocs: u64,
+    frozen: u64,
+    wall_us: u64,
 }
