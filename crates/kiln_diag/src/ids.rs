@@ -863,6 +863,8 @@ diag_ids! {
     sema_dynamic_cast_not_ptr = Error (2) "cannot use dynamic_cast to convert from {0} to {1}";
     sema_dynamic_cast_rvalue_to_ref = Error (1) "dynamic_cast from rvalue to reference type {0}";
     sema_override_exception_spec = Error (0) "exception specification of overriding function is more lax than base version";
+    sema_dynamic_cast_no_rtti = Error (0) "use of dynamic_cast requires -frtti";
+    sema_inaccessible_base = Warning [InaccessibleBase] (2) "direct base {0} is inaccessible due to ambiguity:{1}";
 }
 
 impl DiagId {

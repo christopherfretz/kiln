@@ -648,3 +648,20 @@ impl Sema<'_, '_> {
 pub(crate) fn is_destructor(k: DeclKind) -> bool {
     k == DeclKind::CXXDestructor
 }
+
+impl Sema<'_, '_> {
+    /// [class.mi]/3 (clang `warn_inaccessible_base_class`): a direct base
+    /// that is also an indirect base in a distinct subobject cannot be
+    /// named unambiguously.
+    pub(crate) fn check_inaccessible_bases(&mut self, r: DeclId, bases: &[kiln_ast::decl::BaseSpec]) {
+        let rty = self.tag_type(r);
+        for b in bases {
+            let Some(bd) = self.ast.types.as_record(b.ty) else { continue };
+            if let BaseSearch::Ambiguous(paths) = bases::find_base(self, r, bd) {
+                let shown = bases::ambiguous_paths_string(self, rty, &paths);
+                let msg = self.diag(DiagId::sema_inaccessible_base, b.loc).arg(self.ty_arg(b.ty)).arg(shown);
+                self.emit(msg);
+            }
+        }
+    }
+}

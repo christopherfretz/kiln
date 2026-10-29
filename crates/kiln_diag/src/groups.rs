@@ -137,6 +137,7 @@ diag_groups! {
     OverloadedVirtual = "overloaded-virtual" [];
     InconsistentMissingOverride = "inconsistent-missing-override" [];
     AbstractFinalClass = "abstract-final-class" [];
+    InaccessibleBase = "inaccessible-base" [];
 }
 
 impl Group {
