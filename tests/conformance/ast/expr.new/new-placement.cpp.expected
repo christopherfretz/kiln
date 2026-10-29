@@ -1,0 +1,63 @@
+TranslationUnitDecl
+|-FunctionDecl used operator new 'void *(unsigned long, void *) noexcept' inline
+| |-ParmVarDecl 'unsigned long'
+| |-ParmVarDecl used p 'void *'
+| `-CompoundStmt
+|   `-ReturnStmt
+|     `-ImplicitCastExpr 'void *' <LValueToRValue>
+|       `-ImplicitCastExpr 'void *' xvalue <NoOp>
+|         `-DeclRefExpr 'void *' lvalue ParmVar 'p' 'void *'
+|-FunctionDecl used operator new[] 'void *(unsigned long, int, int)'
+| |-ParmVarDecl 'unsigned long'
+| |-ParmVarDecl 'int'
+| `-ParmVarDecl 'int'
+|-FunctionDecl used operator new 'void *(unsigned long, short, char) noexcept'
+| |-ParmVarDecl 'unsigned long'
+| |-ParmVarDecl 'short'
+| `-ParmVarDecl 'char'
+|-FunctionDecl a 'int *(int)'
+| |-ParmVarDecl used n 'int'
+| `-CompoundStmt
+|   `-ReturnStmt
+|     `-CXXNewExpr 'int *' Function 'operator new' 'void *(unsigned long, short, char) noexcept'
+|       |-IntegerLiteral 'int' 1
+|       |-CStyleCastExpr 'short' <NoOp>
+|       | `-ImplicitCastExpr 'short' <IntegralCast> part_of_explicit_cast
+|       |   `-ImplicitCastExpr 'int' <LValueToRValue> part_of_explicit_cast
+|       |     `-DeclRefExpr 'int' lvalue ParmVar 'n' 'int'
+|       `-CharacterLiteral 'char' 120
+|-FunctionDecl b 'int *(void *)'
+| |-ParmVarDecl used buf 'void *'
+| `-CompoundStmt
+|   `-ReturnStmt
+|     `-CXXNewExpr 'int *' Function 'operator new' 'void *(unsigned long, void *) noexcept'
+|       `-ImplicitCastExpr 'void *' <LValueToRValue>
+|         `-DeclRefExpr 'void *' lvalue ParmVar 'buf' 'void *'
+|-FunctionDecl c 'int *(int)'
+| |-ParmVarDecl used n 'int'
+| `-CompoundStmt
+|   `-ReturnStmt
+|     `-CXXNewExpr 'int *' array Function 'operator new[]' 'void *(unsigned long, int, int)'
+|       |-ImplicitCastExpr 'unsigned long' <IntegralCast>
+|       | `-ImplicitCastExpr 'int' <LValueToRValue>
+|       |   `-DeclRefExpr 'int' lvalue ParmVar 'n' 'int'
+|       |-IntegerLiteral 'int' 1
+|       `-IntegerLiteral 'int' 2
+|-CXXRecordDecl referenced struct P definition
+| |-FieldDecl x 'int'
+| `-FieldDecl y 'int'
+|-FunctionDecl d 'P *(void *)'
+| |-ParmVarDecl used buf 'void *'
+| `-CompoundStmt
+|   `-ReturnStmt
+|     `-CXXNewExpr 'P *' Function 'operator new' 'void *(unsigned long, void *) noexcept'
+|       |-InitListExpr 'P'
+|       | |-IntegerLiteral 'int' 7
+|       | `-IntegerLiteral 'int' 8
+|       `-ImplicitCastExpr 'void *' <LValueToRValue>
+|         `-DeclRefExpr 'void *' lvalue ParmVar 'buf' 'void *'
+`-FunctionDecl e 'double *()'
+  `-CompoundStmt
+    `-ReturnStmt
+      `-CXXNewExpr 'double *' Function 'operator new' 'void *(unsigned long)'
+        `-FloatingLiteral 'double' 2.5e0
