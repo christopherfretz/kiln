@@ -244,6 +244,8 @@ pub struct Oven {
     pub(crate) mem: Memory,
     pub(crate) regs: Vec<u128>,
     pub(crate) stack: Vec<Frame>,
+    /// Registered destructions, innermost last (`Op::PushCleanup`).
+    pub(crate) cleanups: Vec<vm::Cleanup>,
     pub(crate) memo: Memo,
     pub(crate) stats: EvalStats,
     pub(crate) run: vm::RunState,
@@ -287,6 +289,7 @@ impl Oven {
             mem: Memory::new(budget.bytes),
             regs: vec![0; 256],
             stack: Vec::with_capacity(64),
+            cleanups: Vec::new(),
             memo: Memo::new(budget.memo_entries),
             stats: EvalStats::default(),
             run: vm::RunState::default(),
@@ -415,6 +418,7 @@ impl Oven {
             + self.mem.footprint()
             + cap(&self.regs)
             + cap(&self.stack)
+            + cap(&self.cleanups)
             + self.memo.footprint()
             + self.run.footprint()
             + self.scratch.footprint()
@@ -502,6 +506,7 @@ impl Oven {
         c.allocs = self.mem.heap_allocs;
         self.mem.reset();
         self.stack.clear();
+        self.cleanups.clear();
         (r, c)
     }
 

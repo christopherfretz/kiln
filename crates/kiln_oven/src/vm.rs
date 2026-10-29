@@ -110,6 +110,18 @@ pub(crate) struct Frame {
     pub memo: bool,
     /// Unique per activation (see `Alloc::frame`).
     pub serial: u32,
+    /// `Oven::cleanups.len()` at entry: the registered destructions its
+    /// `Ret` runs first.
+    pub clean: u32,
+}
+
+/// A registered destruction (`Op::PushCleanup`): the destructor `func`
+/// of the object at `this`, registered by the instruction at `pc`.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Cleanup {
+    pub this: u64,
+    pub func: u32,
+    pub pc: u32,
 }
 
 /// Why execution stopped (rendered into notes by `notes`).
@@ -285,7 +297,9 @@ impl Oven {
         let saved_entry = self.run.entry;
         self.run.entry = entry;
         let pend = self.run.pending.len();
+        let clean = self.cleanups.len();
         let r = self.run_loop(b, func, fb);
+        self.cleanups.truncate(clean);
         let out = match r {
             Ok(()) => Ok(()),
             Err((fault, pc)) => {
@@ -335,6 +349,7 @@ impl Oven {
             call_pc: NO_CALL,
             memo: false,
             serial,
+            clean: self.cleanups.len() as u32,
         });
         loop {
             let w = self.code[pc];
@@ -688,12 +703,41 @@ impl Oven {
                     pc += 3;
                 }
                 Op::ScopeEnter => {
-                    reg!(0) = u128::from(self.mem.mark());
+                    reg!(0) = u128::from(self.mem.mark()) | (self.cleanups.len() as u128) << 64;
                     pc += 2;
                 }
                 Op::ScopeExit => {
-                    let m = reg!(0) as u64;
-                    self.mem.release(m, &self.types);
+                    let m = reg!(0);
+                    if self.cleanups.len() > (m >> 64) as usize {
+                        // Destroy the innermost registered object, then
+                        // execute this `ScopeExit` again.
+                        match self.run_cleanup(b, pc, fb) {
+                            Ok(Some((npc, nfb))) => {
+                                pc = npc;
+                                fb = nfb;
+                            }
+                            Ok(None) => {}
+                            Err((f, at)) => return Err((f, at)),
+                        }
+                        continue;
+                    }
+                    self.mem.release(m as u64, &self.types);
+                    pc += 2;
+                }
+                Op::PushCleanup => {
+                    let raw = reg!(0) as u64;
+                    if let Err(f) =
+                        self.push_cleanup(raw, arg!(1) as u32, OTy(arg!(2) as u32), aux, pc)
+                    {
+                        fail!(f);
+                    }
+                    pc += 4;
+                }
+                Op::MakeConst => {
+                    let p = Ptr::decode(reg!(0) as u64);
+                    if reg!(0) != 0 && self.mem.alloc_of(p).is_ok() {
+                        self.mem.alloc_of_mut(p).flags |= flags::CONST;
+                    }
                     pc += 2;
                 }
                 Op::SetActive => {
@@ -732,7 +776,7 @@ impl Oven {
                         }
                         p.off
                     };
-                    match self.enter(b, callee, pc, fb, arg!(1)) {
+                    match self.enter(b, callee, pc, pc + 3, fb, arg!(1)) {
                         Ok(Some((npc, nfb))) => {
                             pc = npc;
                             fb = nfb;
@@ -742,6 +786,20 @@ impl Oven {
                     }
                 }
                 Op::Ret => {
+                    let clean = self.stack.last().map_or(0, |f| f.clean as usize);
+                    if self.cleanups.len() > clean {
+                        // The frame's objects are destroyed after the
+                        // result is initialized ([stmt.return]/3).
+                        match self.run_cleanup(b, pc, fb) {
+                            Ok(Some((npc, nfb))) => {
+                                pc = npc;
+                                fb = nfb;
+                            }
+                            Ok(None) => {}
+                            Err((f, at)) => return Err((f, at)),
+                        }
+                        continue;
+                    }
                     let v = reg!(0);
                     self.regs[fb] = v;
                     let Some(fr) = self.stack.pop() else { return Ok(()) };
@@ -783,13 +841,70 @@ impl Oven {
         }
     }
 
-    /// Enters function `callee` (a call at `pc`, arguments at `fb + base`):
-    /// the new pc and frame base, or `None` if a memoized result was used.
+    /// Pops the innermost registered destruction and enters its
+    /// destructor from the instruction at `pc` (which executes again on
+    /// return); the frame of the running function is at `fb`.
+    fn run_cleanup(
+        &mut self,
+        b: &mut dyn SemaBridge,
+        pc: usize,
+        fb: usize,
+    ) -> Result<Option<(usize, usize)>, (Fault, usize)> {
+        let Some(c) = self.cleanups.pop() else { return Ok(None) };
+        let cur = self.stack.last().map_or(0, |f| f.func);
+        let base = self.funcs[cur as usize].nregs as usize;
+        self.grow_regs(fb + base + 2);
+        self.regs[fb + base] = u128::from(c.this);
+        self.enter(b, c.func, c.pc as usize, pc, fb, base).map_err(|f| (f, c.pc as usize))
+    }
+
+    /// `Op::PushCleanup`: registers the destruction of the object (or
+    /// each element of the array) of type `ty` at `raw`.
+    fn push_cleanup(
+        &mut self,
+        raw: u64,
+        func: u32,
+        ty: OTy,
+        aux: u32,
+        pc: usize,
+    ) -> Result<(), Fault> {
+        if raw == 0 {
+            return Ok(());
+        }
+        let (elem, n) = if aux & 1 != 0 {
+            let p = Ptr::decode(raw);
+            let n = match self.mem.alloc_of(p) {
+                Ok(a) => u64::from(a.size) / self.types.size(ty).max(1),
+                Err(f) => return Err(Fault::Mem { f, ak: ak::READ, ty, p: raw }),
+            };
+            (ty, n)
+        } else {
+            let (mut t, mut n) = (ty, 1u64);
+            while let TyKind::Array { elem, n: k } = self.types.kind(t) {
+                t = elem;
+                n *= k;
+            }
+            (t, n)
+        };
+        let es = self.types.size(elem);
+        let off = u64::from(Ptr::decode(raw).off);
+        self.cleanups.reserve(n as usize);
+        for i in 0..n {
+            let this = if i == 0 { raw } else { Ptr::with_off(raw, off + i * es, false) };
+            self.cleanups.push(Cleanup { this, func, pc: pc as u32 });
+        }
+        Ok(())
+    }
+
+    /// Enters function `callee` (called by the instruction at `pc`,
+    /// returning to `ret_pc`, arguments at `fb + base`): the new pc and
+    /// frame base, or `None` if a memoized result was used.
     fn enter(
         &mut self,
         b: &mut dyn SemaBridge,
         callee: u32,
         pc: usize,
+        ret_pc: usize,
         fb: usize,
         base: usize,
     ) -> Result<Option<(usize, usize)>, Fault> {
@@ -859,12 +974,13 @@ impl Oven {
         let serial = self.mem.next_frame();
         self.stack.push(Frame {
             func: callee,
-            ret_pc: (pc + 3) as u32,
+            ret_pc: ret_pc as u32,
             fb: nb as u32,
             mark,
             call_pc: pc as u32,
             memo,
             serial,
+            clean: self.cleanups.len() as u32,
         });
         Ok(Some((entry, nb)))
     }

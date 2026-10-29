@@ -143,6 +143,17 @@ ops! {
     New = 5,
     // [p, static pointee type]; aux = 1 for `delete[]`
     Delete = 2,
+    // [p, dtor func, type]: registers the destruction of the object at
+    // `p` (an array: of each element, in order) by the enclosing scope
+    // (spec/oven.md "Destruction"): the innermost `ScopeExit` or `Ret`
+    // whose mark is below it calls the destructor, last registered first.
+    // aux = 1: `p` is the first element of a heap array of `type`
+    // (`delete[]`), its count is the allocation's. A null `p` registers
+    // nothing.
+    PushCleanup = 3,
+    // [p]: the complete object at `p` is const from now on (a const
+    // object is modifiable during its construction, [class.ctor.general]/5).
+    MakeConst = 1,
 }
 
 /// The aux of `New`.
