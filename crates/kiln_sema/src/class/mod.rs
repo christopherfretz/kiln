@@ -10,6 +10,7 @@
 //! (`access`, `special`, `ctorinit`, `temporary`, `virtual`) arrive with
 //! those packages.
 
+mod access;
 mod members;
 
 use kiln_ast::decl::{Access, DefinitionBits, TagKind};
