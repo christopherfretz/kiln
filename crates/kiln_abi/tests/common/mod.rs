@@ -940,15 +940,63 @@ pub fn run_clang(triple: &str, src: &str) -> Result<String, String> {
     run_clang_with(triple, src, &["-fsyntax-only", "-Xclang", "-fdump-record-layouts"])
 }
 
-/// Runs clang's code generator (no output file) with
-/// `-fdump-vtable-layouts`, so every emitted vtable, and the
-/// construction vtables of every emitted VTT, are dumped.
+/// Runs clang's code generator with `-fdump-vtable-layouts`, so every
+/// emitted vtable, and the construction vtables of every emitted VTT, are
+/// dumped. Returns the dumps followed by the LLVM IR (from `; ModuleID`;
+/// written to a uniquely named temporary file, since clang's two stdout
+/// streams interleave): see [`vtable_blocks`] and [`ir_vtts`].
 pub fn run_clang_vtables(triple: &str, src: &str) -> Result<String, String> {
-    run_clang_with(
+    static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let ll = std::env::temp_dir().join(format!("kiln-abi-vtables-{}-{n}.ll", std::process::id()));
+    let ll_arg = ll.to_string_lossy().into_owned();
+    let dumps = run_clang_with(
         triple,
         src,
-        &["-S", "-emit-llvm", "-o", "/dev/null", "-Xclang", "-fdump-vtable-layouts"],
-    )
+        &["-S", "-emit-llvm", "-o", &ll_arg, "-Xclang", "-fdump-vtable-layouts"],
+    );
+    let ir = std::fs::read_to_string(&ll);
+    let _ = std::fs::remove_file(&ll);
+    let mut dumps = dumps?;
+    let ir = ir.map_err(|e| format!("{}: {e}", ll.display()))?;
+    if !ir.starts_with(IR_START) {
+        return Err(format!("{}: no `{IR_START}`", ll.display()));
+    }
+    dumps.push_str(&ir);
+    Ok(dumps)
+}
+
+/// The start of the IR in [`run_clang_vtables`]'s output.
+const IR_START: &str = "; ModuleID = ";
+
+/// One VTT entry as clang emits it: `(vtable symbol, vtable within the
+/// group, slot within that vtable)`, from `getelementptr inbounds ({..},
+/// ptr @sym, i32 0, i32 K, i32 N)`.
+pub type IrVttEntry = (String, u32, u32);
+
+/// Every `@_ZTT<class>` initializer in [`run_clang_vtables`]'s IR, keyed
+/// by the mangled class name (`1D` for `_ZTT1D`). An entry clang did not
+/// spell as a `getelementptr` of a vtable group is `("?", 0, 0)`.
+pub fn ir_vtts(text: &str) -> HashMap<String, Vec<IrVttEntry>> {
+    let mut map = HashMap::new();
+    let ir = text.find(IR_START).map_or("", |i| &text[i..]);
+    for line in ir.lines() {
+        let Some(rest) = line.strip_prefix("@_ZTT") else { continue };
+        let Some((class, init)) = rest.split_once(" = ") else { continue };
+        let Some((_, list)) = init.split_once("] [") else { continue };
+        let entries = list.split("ptr getelementptr").skip(1).map(|e| {
+            let parse = || {
+                let (_, e) = e.split_once("ptr @")?;
+                let (sym, e) = e.split_once(", i32 0, i32 ")?;
+                let (k, e) = e.split_once(", i32 ")?;
+                let n = e.split(')').next()?;
+                Some((sym.to_owned(), k.parse().ok()?, n.parse().ok()?))
+            };
+            parse().unwrap_or(("?".to_owned(), 0, 0))
+        });
+        map.insert(class.to_owned(), entries.collect());
+    }
+    map
 }
 
 fn run_clang_with(triple: &str, src: &str, mode: &[&str]) -> Result<String, String> {
@@ -994,7 +1042,8 @@ pub fn vtable_blocks(text: &str) -> HashMap<String, String> {
     let mut map = HashMap::new();
     let mut cur: Option<(String, String)> = None;
     let mut skipping = false;
-    for line in text.lines() {
+    let dumps = text.find(IR_START).map_or(text, |i| &text[..i]);
+    for line in dumps.lines() {
         if line == "Original map" || is_vtable_header(line) {
             if let Some((h, b)) = cur.take() {
                 map.insert(h, b);

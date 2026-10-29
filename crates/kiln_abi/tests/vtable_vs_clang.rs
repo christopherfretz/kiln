@@ -3,8 +3,9 @@
 //! `consteval` virtual functions, virtual destructors) are laid out by
 //! `kiln_abi::vtable` and by `clang++-19 -Xclang -fdump-vtable-layouts`
 //! for each supported target; every vtable and construction vtable dump
-//! must match byte for byte (spec/abi.md §7, §8.5). Skipped when
-//! `clang++-19` is not installed.
+//! must match byte for byte, and every VTT must hold the same address
+//! points as the `@_ZTT` initializer clang emits (spec/abi.md §7, §8.5).
+//! Skipped when `clang++-19` is not installed.
 //!
 //! `KILN_VTABLE_DIFF_SEED` overrides the seed; `KILN_VTABLE_DIFF_CLASSES`
 //! the number of classes per target; `KILN_ABI_DIFF_SHOW` prints every
@@ -15,13 +16,19 @@ mod common;
 use std::collections::{BTreeSet, HashSet};
 
 use common::{
-    CLANG, DtorDef, FieldDef, Item, MethodDef, MethodKind, Model, RecDef, Ty, clang_available,
-    is_vtable_header, run_clang_vtables, vtable_blocks,
+    CLANG, DtorDef, FieldDef, IrVttEntry, Item, MethodDef, MethodKind, Model, RecDef, Ty,
+    clang_available, ir_vtts, is_vtable_header, run_clang_vtables, vtable_blocks,
 };
-use kiln_abi::target::target;
-use kiln_abi::vtable::{VTableError, dump_construction_vtable, dump_vtable_layout, vtt_vtables};
+use kiln_abi::subobjects;
+use kiln_abi::target::{Target, target};
+use kiln_abi::vtable::{
+    VTableError, VTableLayout, construction_vtable, dump_construction_vtable, dump_vtable_layout,
+    vtable_layout, vtt, vtt_vtables,
+};
 use kiln_ast::decl::TagKind;
+use kiln_ast::dump::AstNames;
 use kiln_ast::types::BuiltinType as B;
+use kiln_ast::{Ast, DeclId};
 
 /// Classes per generated translation unit.
 const PER_TU: usize = 25;
@@ -426,13 +433,55 @@ struct Job {
     model: Model,
 }
 
+/// The Itanium `<source-name>` of a (non-nested) model class.
+fn source_name(ast: &Ast, d: DeclId) -> String {
+    let mut s = String::new();
+    AstNames::new(ast).write_qualified_name(d, &mut s);
+    format!("{}{s}", s.len())
+}
+
+/// Kiln's VTT of `md` in the form clang's IR spells it: per entry the
+/// vtable group's symbol (`_ZTV1D`, or `_ZTC1D16_1R` for the
+/// construction group of the `R` subobject at offset 16), the vtable
+/// of the group holding the address point, and the slot within it.
+fn kiln_ir_vtt(ast: &Ast, md: DeclId, tgt: &Target) -> Result<Vec<IrVttEntry>, VTableError> {
+    let groups = vtt_vtables(ast, md, tgt)?;
+    let subs = subobjects(ast, md, tgt);
+    let mut layouts: Vec<(String, VTableLayout)> = Vec::new();
+    for (i, &g) in groups.iter().enumerate() {
+        if i == 0 {
+            layouts.push((format!("_ZTV{}", source_name(ast, md)), vtable_layout(ast, md, tgt)?));
+        } else {
+            let (sub, off) = &subs[g.index()];
+            let sym = format!("_ZTC{}{off}_{}", source_name(ast, md), source_name(ast, sub.class));
+            layouts.push((sym, construction_vtable(ast, md, g, tgt)?));
+        }
+    }
+    vtt(ast, md, tgt)?
+        .into_iter()
+        .map(|e| {
+            let (sym, l) = layouts.get(e.vtable_index as usize).ok_or(VTableError::Incomplete)?;
+            let &(_, ap) = l
+                .address_points
+                .iter()
+                .find(|(s, _)| *s == e.base)
+                .ok_or(VTableError::Incomplete)?;
+            // The vtable whose slots precede the address point (an
+            // address point may sit at the very end of its vtable).
+            let k = l.vtable_starts.iter().rposition(|&st| st < ap).unwrap_or(0);
+            let n = ap - l.vtable_starts[k];
+            Ok((sym.clone(), u32::try_from(k).unwrap_or(u32::MAX), n))
+        })
+        .collect()
+}
+
 /// Compares one translation unit; returns `(vtables checked, failures)`.
 fn check(job: &Job) -> (usize, Vec<String>) {
     let tgt = target(job.triple).expect("target");
     let src = job.model.cpp();
     let ctx = |what: &str| format!("{} seed {:#x}: {what}", job.triple, job.seed);
-    let clang = match run_clang_vtables(job.triple, &src) {
-        Ok(s) => vtable_blocks(&s),
+    let (clang, mut clang_vtts) = match run_clang_vtables(job.triple, &src) {
+        Ok(s) => (vtable_blocks(&s), ir_vtts(&s)),
         Err(e) => return (0, vec![ctx(&format!("clang failed:\n{e}\n--- source ---\n{src}"))]),
     };
     let show = std::env::var_os("KILN_ABI_DIFF_SHOW").is_some();
@@ -490,6 +539,24 @@ fn check(job: &Job) -> (usize, Vec<String>) {
             }
         }
     }
+    // VTTs: every class clang emitted a VTT for, entry by entry.
+    for (i, r) in job.model.records() {
+        let Some(theirs) = clang_vtts.remove(&source_name(&ast, decls[i])) else { continue };
+        checked += 1;
+        match kiln_ir_vtt(&ast, decls[i], &tgt) {
+            Ok(ours) if ours == theirs => {}
+            Ok(ours) => failures.push(ctx(&format!(
+                "class {}: VTT differs\n--- kiln ---\n{ours:?}\n--- clang ---\n{theirs:?}",
+                r.name
+            ))),
+            Err(e) => failures.push(ctx(&format!("class {}: kiln VTT: {e:?}", r.name))),
+        }
+    }
+    let mut stray: Vec<&String> = clang_vtts.keys().collect();
+    stray.sort();
+    for c in stray {
+        failures.push(ctx(&format!("clang emitted _ZTT{c}, which no model class matches")));
+    }
     let mut missing: Vec<&String> =
         clang.keys().filter(|h| is_vtable_header(h) && !ours_heads.contains(*h)).collect();
     missing.sort();
@@ -534,7 +601,7 @@ fn vtables_match_clang() {
     let failures: Vec<&String> = results.iter().flat_map(|r| &r.1).collect();
     let classes = jobs.len() * PER_TU;
     eprintln!(
-        "vtable_vs_clang: {classes} classes, {checked} vtables checked, {} failures, {} xfail",
+        "vtable_vs_clang: {classes} classes, {checked} vtables and VTTs checked, {} failures, {} xfail",
         failures.len(),
         XFAIL.len()
     );
