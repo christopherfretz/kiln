@@ -90,16 +90,8 @@ impl Sema<'_, '_> {
             deleted: if variable { entity_at } else { at },
             deleted_as,
         };
-        let built = self.construct_special_at(
-            to,
-            class,
-            k,
-            Some(e),
-            ConstructionKind::Complete,
-            at,
-            InitEntity::Var,
-            sites,
-        );
+        let (entity, ck) = self.take_ctor_entity();
+        let built = self.construct_special_at(to, class, k, Some(e), ck, at, entity, sites);
         let Some(c) = built else {
             return Some(self.recover(to, &[e], at));
         };
@@ -124,6 +116,7 @@ impl Sema<'_, '_> {
         let target = self.ast.types.as_record(ty)?;
         let class = self.ast.definition(target)?;
         let class = conv::bases::complete_class(self, class)?;
+        let (entity, ck) = self.take_ctor_entity();
         let loc = site.loc;
         if style.is_list() && self.has_init_list_ctor(class) {
             // todo(WP-067b follow-up): initializer-list constructors
@@ -143,7 +136,7 @@ impl Sema<'_, '_> {
             return Some(self.paren_aggregate_init(ty, args, loc, rparen));
         }
         let call = CtorCall {
-            info: ConstructInfo { list: style.is_list(), ..ConstructInfo::COMPLETE },
+            info: ConstructInfo { kind: ck, list: style.is_list(), ..ConstructInfo::COMPLETE },
             value_init: style.is_list() && args.is_empty(),
             temp_end: site.temp_end,
             narrowing: style.is_list(),
@@ -151,8 +144,15 @@ impl Sema<'_, '_> {
             ..CtorCall::new(args)
         };
         let k = if args.is_empty() { SpecialKind::DefaultCtor } else { SpecialKind::CopyCtor };
-        let built = self.use_ctor(sel, ty, class, k, call, loc, InitEntity::Var, site.sites);
+        let built = self.use_ctor(sel, ty, class, k, call, loc, entity, site.sites);
         Some(built.unwrap_or_else(|| self.recover(ty, args, loc)))
+    }
+
+    /// The entity of the outermost constructor call being built: the
+    /// subobject of a mem-initializer ([`Sema::ctor_entity`]), else a
+    /// complete object.
+    pub(crate) fn take_ctor_entity(&mut self) -> (InitEntity, ConstructionKind) {
+        self.ctor_entity.take().unwrap_or((InitEntity::Var, ConstructionKind::Complete))
     }
 
     /// The value-initialization of an object of class type `ty`
@@ -163,19 +163,16 @@ impl Sema<'_, '_> {
         let target = self.ast.types.as_record(ty)?;
         let class = self.ast.definition(target)?;
         let class = conv::bases::complete_class(self, class)?;
+        let (entity, kind) = self.take_ctor_entity();
         let sel = self.resolve_ctor(class, &[], InitStyle::Direct);
-        let call = CtorCall { value_init: true, ..CtorCall::new(&[]) };
+        let call = CtorCall {
+            value_init: true,
+            info: ConstructInfo { kind, ..ConstructInfo::COMPLETE },
+            ..CtorCall::new(&[])
+        };
         let sites = ConstructSite::at(loc).sites;
-        let built = self.use_ctor(
-            sel,
-            ty,
-            class,
-            SpecialKind::DefaultCtor,
-            call,
-            loc,
-            InitEntity::Var,
-            sites,
-        );
+        let built =
+            self.use_ctor(sel, ty, class, SpecialKind::DefaultCtor, call, loc, entity, sites);
         Some(built.unwrap_or_else(|| self.recover(ty, &[], loc)))
     }
 

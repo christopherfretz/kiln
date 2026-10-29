@@ -449,7 +449,7 @@ impl Sema<'_, '_> {
     /// initialization ([dcl.init.general]/16.6.2.2, /9): a class by its
     /// default constructor (zero-initialized first unless that is
     /// user-provided), anything else as an `ImplicitValueInitExpr`.
-    fn paren_value_init(&mut self, ty: QualType, at: Loc) -> ExprId {
+    pub(crate) fn paren_value_init(&mut self, ty: QualType, at: Loc) -> ExprId {
         if self.ast.types.as_record(ty).is_some()
             && let Some(e) = self.value_init_class(ty, at)
         {

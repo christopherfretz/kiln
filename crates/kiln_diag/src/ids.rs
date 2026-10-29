@@ -960,7 +960,7 @@ diag_ids! {
     note_temp_member_ref_here = Note (0) "reference member declared here";
     sema_temp_dtor_access = Error (2) "temporary of type {0} has {1:private|protected} destructor";
     sema_init_mem_not_member_or_base = Error (1) "member initializer '{0}' does not name a non-static data member or base class";
-    sema_init_multiple_member = Error (1) "multiple initializations given for non-static member '{0}'";
+    sema_init_multiple_member = Error (1) "multiple initializations given for non-static member {0}";
     sema_init_multiple_base = Error (1) "multiple initializations given for base {0}";
     note_init_previous = Note (0) "previous initialization is here";
     sema_init_delegating_alone = Error (0) "an initializer for a delegating constructor must appear alone";
@@ -984,6 +984,17 @@ diag_ids! {
     sema_ctor_explicit_copy_list = Error (0) "chosen constructor is explicit in copy-initialization";
     note_explicit_ctor_here = Note (0) "explicit constructor declared here";
     sema_conv_deleted_ctor = Error (2) "conversion function from {0} to {1} invokes a deleted function";
+    sema_init_not_base = Error (2) "type {0} is not a direct or virtual base of {1}";
+    sema_init_base_direct_and_virtual = Error (1) "base class initializer {0} names both a direct base class and an inherited virtual base class";
+    sema_init_not_class = Error (1) "constructor initializer {0} does not name a class";
+    sema_ref_uninit_use = Warning [Uninitialized] (1) "reference {0} is not yet bound to a value when used here";
+    sema_base_uninit_use = Warning [Uninitialized] (2) "base class {0} is uninitialized when used here to access {1}";
+    note_uninit_in_ctor = Note (1) "during field initialization in {0:this|the implicit default} constructor";
+    sema_reorder_ctor_multiple = WarningOff [ReorderCtor] (0) "initializer order does not match the declaration order";
+    note_reorder_ctor = Note (4) "{0:field|base class} {1} will be initialized after {2:field|base} {3}";
+    sema_dangling_field_param = Warning [DanglingField] (2) "binding reference member {0} to stack allocated parameter {1}";
+    sema_dangling_field_param_addr = Warning [DanglingField] (2) "initializing pointer member {0} with the stack address of parameter {1}";
+    note_ref_or_ptr_member_here = Note (1) "{0:reference|pointer} member declared here";
 }
 
 impl DiagId {

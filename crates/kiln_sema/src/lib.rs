@@ -155,6 +155,14 @@ pub struct Sema<'a, 'sm> {
     /// Delegating constructors and their targets, checked for cycles at
     /// the end of the translation unit ([class.base.init]/6).
     pub(crate) delegating: Vec<(DeclId, DeclId, Loc)>,
+    /// The subobject the next constructor call initializes, set by a
+    /// mem-initializer and consumed by the outermost constructor call it
+    /// builds (clang's `InitializedEntity` for bases, members and
+    /// delegation; spec/sema-class.md §4.9).
+    pub(crate) ctor_entity: Option<(class::InitEntity, kiln_ast::expr::ConstructionKind)>,
+    /// The mem-initializers of the constructor definition being parsed
+    /// (spec/sema-class.md §4.9).
+    pub(crate) mem_inits: class::MemInitState,
     /// Materialized temporaries collected for P2718 range-for lifetime
     /// extension (spec/sema-class.md §5.4).
     #[expect(dead_code, reason = "WP-066a interface; read from WP-067b (P2718)")]
@@ -240,6 +248,8 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             synth_noted: std::cell::Cell::new(0),
             memcpy_decl: None,
             delegating: Vec::new(),
+            ctor_entity: None,
+            mem_inits: class::MemInitState::default(),
             extend_collector: None,
             unparsed_exc: kiln_source::fx::FxHashSet::default(),
             fn_saved: Vec::new(),

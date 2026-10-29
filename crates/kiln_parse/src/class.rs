@@ -721,13 +721,20 @@ impl Parser<'_, '_> {
         let had_colon = self.at(Punct::Colon);
         if had_colon {
             let colon = self.bump().span.lo;
-            let mut inits = Vec::new();
+            let mut count = 0usize;
             loop {
                 let (info, ok) = self.parse_mem_initializer();
                 // clang's sema rejects every mem-initializer of a
                 // non-constructor (reported once, below).
                 let valid = ok && ctor;
-                inits.extend(info);
+                // Each mem-initializer is a full-expression, built as soon
+                // as it is parsed ([class.base.init]/7).
+                if let Some(info) = info
+                    && ctor
+                {
+                    count += 1;
+                    self.s.act_on_mem_initializer(f, &info);
+                }
                 if self.eat(Punct::Comma).is_some() {
                     continue;
                 }
@@ -745,8 +752,8 @@ impl Parser<'_, '_> {
                 break;
             }
             if ctor {
-                self.trace(|_| format!("mem_initializers({})", inits.len()));
-                self.s.act_on_mem_initializers(f, &inits, colon);
+                self.trace(|_| format!("mem_initializers({count})"));
+                self.s.act_on_mem_initializers(f, &[], colon);
             } else {
                 self.s.error(DiagId::parse_only_constructors_take_base_inits, colon);
             }

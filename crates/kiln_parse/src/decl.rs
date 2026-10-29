@@ -87,6 +87,7 @@ impl Parser<'_, '_> {
         while !self.at_eof() {
             self.parse_external_declaration();
         }
+        self.s.act_on_end_of_translation_unit();
     }
 
     /// A declaration at namespace scope ([dcl.pre] declaration).

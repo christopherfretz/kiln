@@ -1327,9 +1327,16 @@ impl<'a, W: io::Write> Dumper<'a, W> {
         self.line.push_str("CXXCtorInitializer");
         let Some(ci) = self.ast.ctor_inits(c).nth(i as usize).copied() else { return };
         match ci.kind {
-            CtorInitKind::Field | CtorInitKind::IndirectField => {
+            CtorInitKind::Field => {
                 self.line.push(' ');
                 self.decl_ref(DeclId::new(ci.target));
+            }
+            // clang's `getAnyMember`: the last field of the chain.
+            CtorInitKind::IndirectField => {
+                let d = DeclId::new(ci.target);
+                let leaf = self.ast.lists.iter::<DeclId>(self.ast.indirect_field_chain(d)).last();
+                self.line.push(' ');
+                self.decl_ref(leaf.unwrap_or(d));
             }
             CtorInitKind::Base | CtorInitKind::VirtualBase => {
                 self.ty(QualType::unqual(TypeId::new(ci.target)));

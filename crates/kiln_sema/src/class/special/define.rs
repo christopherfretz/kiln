@@ -282,7 +282,11 @@ impl Sema<'_, '_> {
     }
 
     fn define_ctor(&mut self, f: DeclId, class: DeclId, iik: ImplicitInit) -> bool {
-        !self.complete_ctor_inits(f, class, &[], iik, false)
+        let ok = !self.complete_ctor_inits(f, class, &[], iik, false);
+        if ok && iik == ImplicitInit::Default {
+            self.check_uninitialized_fields(f);
+        }
+        ok
     }
 
     /// clang `SetCtorInitializers`: completes the ctor-initializer list of
@@ -339,6 +343,51 @@ impl Sema<'_, '_> {
                 CtorInitKind::Delegating => {}
             }
         }
+        let mut had_error = self.complete_base_inits(&mut info, class, bases, loc);
+        let members: Vec<DeclId> = self.ast.decls.members(class).collect();
+        for m in members {
+            match self.kind_of(m) {
+                DeclKind::Field => {
+                    if self.is_unnamed_bit_field(m)
+                        || self.is_anonymous_member(m) && !info.iik.copy_or_move()
+                    {
+                        continue;
+                    }
+                    had_error |= self.collect_field_init(&mut info, m, None, loc);
+                }
+                DeclKind::IndirectField if !info.iik.copy_or_move() => {
+                    let ty = self.ast.decls.get(m).ty().unwrap_or(QualType::ERROR);
+                    if matches!(self.ast.types.canonical_view(ty), TypeView::IncompleteArray(_)) {
+                        continue;
+                    }
+                    let chain = self.ast.indirect_field_chain(m);
+                    let Some(last) = self.ast.lists.iter::<DeclId>(chain).last() else {
+                        continue;
+                    };
+                    had_error |= self.collect_field_init(&mut info, last, Some(m), loc);
+                }
+                _ => {}
+            }
+        }
+        if !info.out.is_empty() {
+            let _ = self.builder().set_ctor_inits(ctor, &info.out);
+            self.mark_base_and_member_dtors_referenced(loc, class);
+        }
+        had_error
+    }
+
+    /// The base class initializers of `info.ctor` of `class`, in
+    /// initialization order: the written ones (`bases`, by first
+    /// declaration of the base class), else implicit ones unless a
+    /// mem-initializer failed. Returns whether an error was diagnosed.
+    fn complete_base_inits(
+        &mut self,
+        info: &mut InitInfo,
+        class: DeclId,
+        mut bases: Vec<(DeclId, CtorInit)>,
+        loc: Loc,
+    ) -> bool {
+        let any_errors = info.any_errors;
         let mut had_error = false;
         let abstract_class = self.defn_bits(class).contains(DefinitionBits::ABSTRACT);
         let direct = self.indexed_bases(class);
@@ -371,35 +420,6 @@ impl Sema<'_, '_> {
                     None => had_error = true,
                 }
             }
-        }
-        let members: Vec<DeclId> = self.ast.decls.members(class).collect();
-        for m in members {
-            match self.kind_of(m) {
-                DeclKind::Field => {
-                    if self.is_unnamed_bit_field(m)
-                        || self.is_anonymous_member(m) && !info.iik.copy_or_move()
-                    {
-                        continue;
-                    }
-                    had_error |= self.collect_field_init(&mut info, m, None, loc);
-                }
-                DeclKind::IndirectField if !info.iik.copy_or_move() => {
-                    let ty = self.ast.decls.get(m).ty().unwrap_or(QualType::ERROR);
-                    if matches!(self.ast.types.canonical_view(ty), TypeView::IncompleteArray(_)) {
-                        continue;
-                    }
-                    let chain = self.ast.indirect_field_chain(m);
-                    let Some(last) = self.ast.lists.iter::<DeclId>(chain).last() else {
-                        continue;
-                    };
-                    had_error |= self.collect_field_init(&mut info, last, Some(m), loc);
-                }
-                _ => {}
-            }
-        }
-        if !info.out.is_empty() {
-            let _ = self.builder().set_ctor_inits(ctor, &info.out);
-            self.mark_base_and_member_dtors_referenced(loc, class);
         }
         had_error
     }
@@ -977,7 +997,11 @@ impl Sema<'_, '_> {
                 self.emit(msg);
                 None
             }
-            Selected::Missing if k == SpecialKind::DefaultCtor && entity != InitEntity::Var => {
+            Selected::Missing
+                if k == SpecialKind::DefaultCtor
+                    && entity != InitEntity::Var
+                    && !call.value_init =>
+            {
                 self.missing_default_ctor(ty, class, entity, loc);
                 None
             }

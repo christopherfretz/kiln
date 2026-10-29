@@ -147,6 +147,8 @@ diag_groups! {
     Uninitialized = "uninitialized" [];
     DelegatingCtorCycles = "delegating-ctor-cycles" [];
     CallToPureVirtualFromCtorDtor = "call-to-pure-virtual-from-ctor-dtor" [];
+    Dangling = "dangling" [DanglingField, ReturnStackAddress];
+    DanglingField = "dangling-field" [];
 }
 
 impl Group {

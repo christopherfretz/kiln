@@ -26,9 +26,6 @@ use crate::Sema;
 /// would not live long enough (clang `checkExprLifetime`'s entity kinds).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum BindingSite {
-    /// A variable (or a reference member of an aggregate variable):
-    /// the temporaries are extended.
-    Var(DeclId),
     /// A `return` operand of a function returning a reference.
     Return,
     /// A mem-initializer of reference member `field`.
@@ -202,7 +199,6 @@ impl Sema<'_, '_> {
         let Some(&mte) = found.first() else { return };
         let loc = self.begin_loc(mte);
         match site {
-            BindingSite::Var(_) => {}
             BindingSite::Return => {
                 // [stmt.return]/6 (P2748): ill-formed; clang points at the
                 // returned expression.
