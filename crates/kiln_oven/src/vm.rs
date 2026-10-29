@@ -329,6 +329,33 @@ impl Oven {
         self.mem.alloc_any(p)
     }
 
+    /// The `Builtin` instruction at `pc` in the frame at `fb`, out of line
+    /// so that the dispatch loop's code is unaffected by it.
+    #[inline(never)]
+    fn exec_builtin(
+        &mut self,
+        b: &mut dyn SemaBridge,
+        pc: usize,
+        fb: usize,
+        aux: u32,
+    ) -> Result<u128, Fault> {
+        let arg = |i: usize| self.code[pc + 1 + i] as usize;
+        let reg = |i: usize| self.regs[fb + arg(i)];
+        let (a, bb, c) = (reg(1), reg(2), reg(3));
+        let (t1, t2) = (arg(4) as u32, arg(5) as u32);
+        if aux & 0xff == crate::kbc::bi::THAW_PTR {
+            let cur = self.stack[self.stack.len() - 1].func;
+            let top = fb + self.funcs[cur as usize].nregs as usize + 1;
+            let p = match <kiln_ast::ConstValueId as kiln_ast::RawId>::from_raw(t1) {
+                Some(cv) => self.thaw_ptr(b, cv, OTy(t2), top as u32),
+                None => 0,
+            };
+            Ok(u128::from(p))
+        } else {
+            self.builtin(b.ast(), aux, a, bb, c, t1, t2)
+        }
+    }
+
     fn run_loop(&mut self, b: &mut dyn SemaBridge, func: u32, fb0: u32) -> Exit {
         let mut pc = self.funcs[func as usize].entry as usize;
         let mut fb = fb0 as usize;
@@ -695,21 +722,9 @@ impl Oven {
                     pc += 3;
                 }
                 Op::Builtin => {
-                    let (a, bb, c) = (reg!(1), reg!(2), reg!(3));
-                    let (t1, t2) = (arg!(4) as u32, arg!(5) as u32);
-                    if aux & 0xff == crate::kbc::bi::THAW_PTR {
-                        let cur = self.stack[self.stack.len() - 1].func;
-                        let top = fb + self.funcs[cur as usize].nregs as usize + 1;
-                        let p = match <kiln_ast::ConstValueId as kiln_ast::RawId>::from_raw(t1) {
-                            Some(cv) => self.thaw_ptr(b, cv, OTy(t2), top as u32),
-                            None => 0,
-                        };
-                        reg!(0) = u128::from(p);
-                    } else {
-                        match self.builtin(b.ast(), aux, a, bb, c, t1, t2) {
-                            Ok(v) => reg!(0) = v,
-                            Err(f) => fail!(f),
-                        }
+                    match self.exec_builtin(b, pc, fb, aux) {
+                        Ok(v) => reg!(0) = v,
+                        Err(f) => fail!(f),
                     }
                     pc += 7;
                 }
