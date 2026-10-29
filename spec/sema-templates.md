@@ -2618,6 +2618,19 @@ Goldens mask `*_us`.
   typical uses);
 - the mirrorbind synthetic corpus, when WP-030 delivers it.
 
+*Landed (WP-086).* `cargo xtask bench` passes kiln
+`-fkiln-instantiation-report=json` for every entry of the `frontend`
+group and records the totals row as `inst: {count, nodes, bytes}` in the
+results and baselines (bench.md "Measurement", "Records"). `inst.count`
+is judged exactly (`REGRESSED (inst)` on any increase, `improved` on a
+decrease), `inst.bytes` against the bytes threshold (2%); a total that
+differs between runs fails the entry. `--record` writes them into the
+baselines and as the `kiln instantiations` column (`count / KiB`) of
+`docs/status/perf.md`. Not yet: `ast.bytes` (the totals row has no
+whole-TU AST size; adding one would churn every `inst-report:` golden on
+any AST change) and `sat.count` (no satisfaction counter until WP-073);
+`--clang-inst` below is not built.
+
 **Laziness parity.** `cargo xtask bench --clang-inst` counts
 `InstantiateClass` and `InstantiateFunction` events in clang 19's
 `-ftime-trace -ftime-trace-granularity=0` output. The gate is
