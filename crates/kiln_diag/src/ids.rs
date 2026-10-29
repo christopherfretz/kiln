@@ -825,6 +825,51 @@ diag_ids! {
     // clang: an ExtWarn with no group (kiln prints ExtWarn as -Wpedantic).
     sema_new_paren_array_nonconst = Warning (0) "when type is in parentheses, array cannot have dynamic size";
     sema_placement_new_no_operator = Error (1) "no matching {0} function for non-allocating placement new expression; include <new>";
+    // WP-067a: special member functions (spec/sema-class.md §4)
+    sema_ctor_return_type = Error (0) "constructor cannot have a return type";
+    sema_dtor_return_type = Error (0) "destructor cannot have a return type";
+    sema_conv_return_type = Error (0) "conversion function cannot have a return type";
+    sema_ctor_dtor_cannot_be = Error (2) "{0:constructor|destructor} cannot be declared '{1}'";
+    sema_ctor_dtor_qualifier = Error (2) "'{0}' qualifier is not allowed on a {1:constructor|destructor}";
+    sema_ctor_dtor_ref_qualifier = Error (2) "ref-qualifier '{0}' is not allowed on a {1:constructor|destructor}";
+    sema_copy_ctor_by_value = Error (0) "copy constructor must pass its first argument by reference";
+    sema_dtor_params = Error (0) "destructor cannot have any parameters";
+    sema_dtor_variadic = Error (0) "destructor cannot be variadic";
+    sema_dtor_class_name = Error (0) "expected the class name after '~' to name the enclosing class";
+    sema_conv_params = Error (0) "conversion function cannot have any parameters";
+    sema_conv_variadic = Error (0) "conversion function cannot be variadic";
+    sema_conv_not_member = Error (0) "conversion function must be a non-static member function";
+    sema_explicit_non_function = Error (0) "'explicit' can only appear on non-static member functions";
+    sema_explicit_non_ctor_or_conv = Error (0) "'explicit' can only be applied to a constructor or conversion function";
+    sema_explicit_out_of_class = Error (0) "'explicit' can only be specified inside the class definition";
+    sema_special_redeclared = Error (1) "{0:constructor|destructor|conversion function} cannot be redeclared";
+    sema_define_implicit_member = Error (1) "definition of implicitly declared {0:default constructor|copy constructor|move constructor|copy assignment operator|move assignment operator|destructor}";
+    sema_conv_to_self = Warning [ClassConversion] (1) "conversion function converting {0} to itself will never be used";
+    sema_conv_to_base = Warning [ClassConversion] (2) "conversion function converting {0} to its base class {1} will never be used";
+    sema_conv_to_void = Warning [ClassConversion] (2) "conversion function converting {0} to {1} will never be used";
+    sema_default_not_special = Error (0) "only special member functions and comparison operators may be defaulted";
+    sema_deleted_not_first = Error (0) "deleted definition must be first declaration";
+    sema_defaulted_deleted = Warning [DefaultedFunctionDeleted] (1) "explicitly defaulted {0:default constructor|copy constructor|move constructor|copy assignment operator|move assignment operator|destructor} is implicitly deleted";
+    note_defaulted_type_mismatch = Note (1) "function is implicitly deleted because its declared type does not match the type of an implicit {0:default constructor|copy constructor|move constructor|copy assignment operator|move assignment operator|destructor}";
+    note_replace_default_with_delete = Note (0) "replace 'default' with 'delete'";
+    sema_defaulted_assign_return = Error (2) "explicitly-defaulted {0:copy|move} assignment operator must return {1}";
+    sema_defaulted_copy_assign_not_ref = Error (0) "the parameter for an explicitly-defaulted copy assignment operator must be an lvalue reference type";
+    sema_defaulted_default_args = Error (1) "an explicitly-defaulted {0:default constructor|copy constructor|move constructor|copy assignment operator|move assignment operator|destructor} cannot have default arguments";
+    sema_out_of_line_default_deletes = Error (1) "defaulting this {0:default constructor|copy constructor|move constructor|copy assignment operator|move assignment operator|destructor} would delete it after its first declaration";
+    note_defaulted_deleted_here = Note (0) "explicitly defaulted function was implicitly deleted here";
+    note_explicitly_deleted_here = Note (1) "{0} has been explicitly marked deleted here";
+    note_candidate_explicitly_deleted = Note (0) "candidate function has been explicitly deleted";
+    note_deleted_subobject = Note (6) "{0:default constructor|copy constructor|move constructor|copy assignment operator|move assignment operator|destructor} of {1} is implicitly deleted because {2:base class|field|variant field} {3} has {4:no|a deleted|multiple|an inaccessible|a non-trivial} {5}";
+    note_deleted_uninit_field = Note (4) "default constructor of {0} is implicitly deleted because field {1} of {2:reference|const-qualified} type {3} would not be initialized";
+    note_deleted_rvalue_ref_field = Note (3) "copy constructor of {0} is implicitly deleted because field {1} is of rvalue reference type {2}";
+    note_deleted_assign_field = Note (5) "{0:copy|move} assignment operator of {1} is implicitly deleted because field {2} is of {3:reference|const-qualified} type {4}";
+    note_deleted_copy_user_declared_move = Note (3) "copy {0:constructor|assignment operator} is implicitly deleted because {1} has a user-declared move {2:constructor|assignment operator}";
+    note_deleted_all_const = Note (2) "default constructor of {0} is implicitly deleted because all {1:data members|data members of an anonymous union member} are const-qualified";
+    sema_call_implicitly_deleted_ctor = Error (2) "call to implicitly-deleted {0:default constructor|copy constructor|move constructor|copy assignment operator|move assignment operator|destructor} of {1}";
+    sema_call_deleted_ctor = Error (2) "call to deleted constructor of {0}{1}";
+    sema_call_deleted_function = Error (2) "call to deleted function {0}{1}";
+    sema_use_deleted_function = Error (1) "attempt to use a deleted function{0}";
+    sema_dtor_access_var = Error (2) "variable of type {0} has {1:private|protected} destructor";
 }
 
 impl DiagId {
