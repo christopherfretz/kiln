@@ -296,11 +296,6 @@ impl<'a, 'sm> Parser<'a, 'sm> {
         done
     }
 
-    /// True while re-parsing saved tokens.
-    pub(crate) fn replaying(&self) -> bool {
-        self.replay.iter().any(|r| !r.inject)
-    }
-
     /// Records an `act_on_*` call for the sequence tests (a no-op
     /// outside tests).
     #[cfg_attr(not(test), allow(clippy::unused_self))]

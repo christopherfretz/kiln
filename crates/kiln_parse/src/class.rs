@@ -12,17 +12,19 @@
 use std::mem;
 
 use kiln_ast::decl::{Access, DeclFlags, DeclKind, FriendTarget, InitStyle};
+use kiln_ast::names::OverloadedOperator;
 use kiln_ast::types::TagKeyword;
 use kiln_ast::{DeclId, QualType};
 use kiln_diag::DiagId;
 use kiln_lex::{Punct, TokKind, Token};
 use kiln_sema::{
-    BaseSpecInfo, DeclSpec, Declarator, DeclaratorContext, Initializer, MemInitId, MemInitInfo,
-    NameClass, SpecialName, StorageSpec,
+    BaseSpecInfo, Chunk, DeclSpec, Declarator, DeclaratorContext, Initializer, MemInitId,
+    MemInitInfo, NameClass, SpecialName, StorageSpec,
 };
 use kiln_source::Loc;
 use kiln_source::symbol::Symbol;
 
+use crate::decl::is_untyped_special;
 use crate::keywords::Kw;
 use crate::parser::{Parser, quote};
 
@@ -330,10 +332,7 @@ impl Parser<'_, '_> {
             if !is_paren && !might_be_template {
                 let named = prev.is_some_and(|t| {
                     self.ident_of(t).is_some()
-                        || matches!(
-                            Self::punct_of(t),
-                            Some(Punct::Greater | Punct::GreaterGreater)
-                        )
+                        || matches!(Self::punct_of(t), Some(Punct::Greater | Punct::GreaterGreater))
                 });
                 if !named && self.brace_starts_body() {
                     // A malformed initializer before the body: the `{`
@@ -434,7 +433,7 @@ impl Parser<'_, '_> {
 
     /// clang's `SkipDeletedFunctionBody`: after `= delete` where it is not
     /// allowed, skips a following `( message )`.
-    fn skip_deleted_function_body(&mut self) {
+    pub(crate) fn skip_deleted_function_body(&mut self) {
         if self.at(Punct::LParen) {
             self.bump();
             self.skip_until(&[Punct::RParen, Punct::Comma], true, false);
@@ -457,8 +456,7 @@ impl Parser<'_, '_> {
                     return;
                 }
                 Some(Punct::LParen | Punct::LSquare) => {
-                    let close =
-                        if self.at(Punct::LParen) { Punct::RParen } else { Punct::RSquare };
+                    let close = if self.at(Punct::LParen) { Punct::RParen } else { Punct::RSquare };
                     self.bump();
                     self.skip_until(&[close], false, true);
                 }
@@ -553,7 +551,9 @@ impl Parser<'_, '_> {
     }
 
     /// Replays the items of phase `ph` of `class` and its nested classes,
-    /// in declaration order, each class's inside its re-entered scope.
+    /// in declaration order, each class's inside its re-entered scope
+    /// (clang's `ParseLexedMethodDeclarations` / `ParseLexedMemberInitializers`
+    /// / `ParseLexedMethodDefs`).
     fn replay_phase(&mut self, class: &mut LateClass, ph: Phase) {
         if !class.has(ph) {
             return;
@@ -562,24 +562,1112 @@ impl Parser<'_, '_> {
         self.trace(|p| format!("start_delayed_class({})", p.decl_name(r)));
         self.s.act_on_start_delayed_class(r);
         for item in &mut class.items {
-            match (item, ph) {
-                (LateItem::Method { f, parts }, Phase::Method) => {
-                    let f = *f;
+            match item {
+                LateItem::Method { f, parts } if ph == Phase::Method => {
                     let parts = mem::take(parts);
-                    self.replay_method(f, parts);
+                    self.replay_method(*f, parts);
                 }
-                (LateItem::Nsdmi { field, toks }, Phase::Nsdmi) => {
-                    let field = *field;
-                    let toks = mem::take(&mut toks.toks);
-                    let end = match item_end(class_end_dummy()) {
-                        _ => Loc::INVALID,
-                    };
-                    let _ = (field, toks, end);
+                LateItem::Nsdmi { field, toks } if ph == Phase::Nsdmi => {
+                    let t = mem::take(&mut toks.toks);
+                    self.replay_nsdmi(*field, t, toks.end);
                 }
+                LateItem::Body { f, ctor, toks } if ph == Phase::Body => {
+                    let t = mem::take(&mut toks.toks);
+                    self.begin_replay(t, toks.end);
+                    self.parse_function_definition(*f, *ctor);
+                    self.finish_replay();
+                }
+                LateItem::Nested(c) => self.replay_phase(c, ph),
                 _ => {}
             }
         }
         self.trace(|p| format!("finish_delayed_class({})", p.decl_name(r)));
         self.s.act_on_finish_delayed_class(r);
+    }
+
+    /// Skips what is left of the saved tokens and ends the replay.
+    fn finish_replay(&mut self) {
+        while !self.at_eof() {
+            self.bump();
+        }
+        self.end_replay();
+    }
+
+    /// The default arguments and *noexcept-specifier* of `f`
+    /// (clang's `ParseLexedMethodDeclaration`).
+    fn replay_method(&mut self, f: DeclId, parts: LateFnParts) {
+        self.trace(|p| format!("start_delayed_method({})", p.decl_name(f)));
+        self.s.act_on_start_delayed_method(f);
+        let params: Vec<DeclId> = self
+            .s
+            .ast
+            .decls
+            .function(f)
+            .map(|x| self.s.ast.lists.iter::<DeclId>(x.params).collect())
+            .unwrap_or_default();
+        for (i, t) in parts.default_args {
+            self.begin_replay(t.toks, t.end);
+            self.bump();
+            if self.at(Punct::LBrace) {
+                self.unsupported("braced default arguments", self.loc());
+            } else if let Some(e) = self.parse_assignment_expr() {
+                if !self.at_eof() {
+                    self.error_here(DiagId::parse_default_arg_unparsed);
+                }
+                if let Some(&p) = params.get(i) {
+                    self.trace(|_| format!("default_arg({i})"));
+                    self.s.act_on_param_default_arg(p, e);
+                }
+            }
+            self.finish_replay();
+        }
+        if let Some(t) = parts.noexcept {
+            self.begin_replay(t.toks, t.end);
+            let spec = self.parse_exception_spec();
+            if !self.at_eof() {
+                self.error_here(DiagId::parse_except_spec_unparsed);
+            }
+            self.trace(|_| "exception_spec".to_owned());
+            self.s.act_on_exception_spec(f, spec);
+            self.finish_replay();
+        }
+        self.trace(|p| format!("finish_delayed_method({})", p.decl_name(f)));
+        self.s.act_on_finish_delayed_method(f);
+    }
+
+    /// The default member initializer of `field` (clang's
+    /// `ParseLexedMemberInitializer`).
+    fn replay_nsdmi(&mut self, field: DeclId, toks: Vec<Token>, end: Loc) {
+        if self.s.ast.decls.get(field).has(DeclFlags::INVALID) {
+            return;
+        }
+        self.begin_replay(toks, end);
+        self.trace(|p| format!("start_field_init({})", p.decl_name(field)));
+        self.s.act_on_start_field_init(field);
+        if let Some(init) = self.parse_member_initializer(false) {
+            self.trace(|p| format!("field_init({})", p.decl_name(field)));
+            self.s.act_on_field_init(field, init);
+            if !self.at_eof() {
+                self.s.error(DiagId::parse_expected_semi_decl_list, self.prev_end());
+            }
+        }
+        self.finish_replay();
+    }
+
+    /// brace-or-equal-initializer of a member declarator (clang's
+    /// `ParseCXXMemberInitializer`), at `=` or `{`. `= delete` and
+    /// `= default` are reported here: they can only define the first
+    /// declarator of a function.
+    fn parse_member_initializer(&mut self, is_fn: bool) -> Option<Initializer> {
+        if self.at(Punct::Equal) {
+            self.bump();
+            if self.at_kw(Kw::Delete)
+                && (is_fn
+                    || matches!(Self::punct_of(self.peek(1)), Some(Punct::Semi | Punct::Comma))
+                    || self.peek(1).kind == TokKind::Eof)
+            {
+                let l = self.bump().span.lo;
+                if is_fn {
+                    let d = self
+                        .s
+                        .diag(DiagId::parse_default_delete_in_multiple_declaration, l)
+                        .arg("delete");
+                    self.emit(d);
+                } else {
+                    self.s.error(DiagId::parse_deleted_non_function, l);
+                }
+                self.skip_deleted_function_body();
+                return None;
+            }
+            if self.at_kw(Kw::Default) {
+                if is_fn {
+                    let d = self
+                        .s
+                        .diag(DiagId::parse_default_delete_in_multiple_declaration, self.loc())
+                        .arg("default");
+                    self.emit(d);
+                } else {
+                    let l = self.bump().span.lo;
+                    self.s.error(DiagId::parse_default_special_members, l);
+                }
+                return None;
+            }
+        }
+        if self.at(Punct::LBrace) {
+            self.parse_init_list().ok().map(Initializer::List)
+        } else {
+            self.parse_assignment_expr().map(Initializer::Expr)
+        }
+    }
+
+    // -- function definitions -----------------------------------------------------------
+
+    /// The function-body of the function definition `f` ([dcl.fct.def.general],
+    /// [class.base.init]), at `:`, `try` or `{`; `ctor` if `f` declares a
+    /// constructor.
+    pub(crate) fn parse_function_definition(&mut self, f: DeclId, ctor: bool) {
+        if self.at_kw(Kw::Try) {
+            self.unsupported("function try blocks", self.loc());
+            self.skip_function_body();
+            return;
+        }
+        self.trace(|p| format!("start_function_def({})", p.decl_name(f)));
+        self.s.act_on_start_function_def(f);
+        let had_colon = self.at(Punct::Colon);
+        if had_colon {
+            let colon = self.bump().span.lo;
+            let mut inits = Vec::new();
+            loop {
+                let (info, ok) = self.parse_mem_initializer();
+                // clang's sema rejects every mem-initializer of a
+                // non-constructor (reported once, below).
+                let valid = ok && ctor;
+                inits.extend(info);
+                if self.eat(Punct::Comma).is_some() {
+                    continue;
+                }
+                if self.at(Punct::LBrace) {
+                    break;
+                }
+                if valid && (self.ident().is_some() || self.at(Punct::ColonColon)) {
+                    self.s.error(DiagId::parse_ctor_init_missing_comma, self.prev_end());
+                    continue;
+                }
+                if valid {
+                    self.expected_here("'{' or ','");
+                }
+                self.skip_until(&[Punct::LBrace], true, false);
+                break;
+            }
+            if ctor {
+                self.trace(|_| format!("mem_initializers({})", inits.len()));
+                self.s.act_on_mem_initializers(f, &inits, colon);
+            } else {
+                self.s.error(DiagId::parse_only_constructors_take_base_inits, colon);
+            }
+        } else if ctor {
+            self.trace(|_| "mem_initializers(0)".to_owned());
+            self.s.act_on_mem_initializers(f, &[], self.loc());
+        }
+        if !self.at(Punct::LBrace) {
+            if !had_colon {
+                self.expected_here("'{'");
+            }
+            let l = self.loc();
+            let body = self.s.act_on_compound(&[], l, l);
+            self.trace(|p| format!("finish_function_def({})", p.decl_name(f)));
+            self.s.act_on_finish_function_def(f, body, l);
+            return;
+        }
+        let (body, rbrace) = self.parse_compound(false);
+        self.trace(|p| format!("finish_function_def({})", p.decl_name(f)));
+        self.s.act_on_finish_function_def(f, body, rbrace);
+    }
+
+    /// mem-initializer ([class.base.init]): the initializer (when sema can
+    /// take it) and whether it parsed.
+    fn parse_mem_initializer(&mut self) -> (Option<MemInitInfo>, bool) {
+        let Ok(q) = self.parse_nested_name() else {
+            return (None, false);
+        };
+        let loc = self.loc();
+        if self.at_kw(Kw::Decltype) {
+            self.unsupported("'decltype'", loc);
+            self.bump();
+            if self.at(Punct::LParen) {
+                self.bump();
+                self.skip_until(&[Punct::RParen], false, true);
+            }
+            let ok = self.parse_mem_init_args().is_some();
+            self.eat(Punct::Ellipsis);
+            return (None, ok);
+        }
+        let Some(name) = self.ident() else {
+            self.error_here(DiagId::parse_expected_member_or_base_name);
+            return (None, false);
+        };
+        self.bump();
+        let Some(init) = self.parse_mem_init_args() else {
+            return (None, false);
+        };
+        let pack_expansion = self.eat(Punct::Ellipsis).is_some();
+        let id = match q {
+            None => MemInitId::Ident(name),
+            Some(q) => match self.s.classify_name(name, Some(q)) {
+                NameClass::Type(ty, d) => MemInitId::Type(self.named_type(ty, d)),
+                _ => {
+                    self.unsupported("qualified member initializers", loc);
+                    return (None, true);
+                }
+            },
+        };
+        (Some(MemInitInfo { id, loc, init, pack_expansion }), true)
+    }
+
+    /// The `( expression-list )` or braced-init-list of a mem-initializer.
+    fn parse_mem_init_args(&mut self) -> Option<Initializer> {
+        if self.at(Punct::LBrace) {
+            return self.parse_init_list().ok().map(Initializer::List);
+        }
+        if self.at(Punct::LParen) {
+            return self.parse_initializer(Some(InitStyle::Call), false).ok().flatten();
+        }
+        self.expected_here("'(' or '{'");
+        None
+    }
+
+    /// The type a class-name names, as a type-specifier would write it.
+    fn named_type(&mut self, ty: QualType, d: DeclId) -> QualType {
+        self.s.mark_type_referenced(d);
+        if kiln_sema::lookup::is_tag_kind(self.s.ast.decls.get(d).kind()) {
+            self.s.elaborated_tag_type(d, TagKeyword::None)
+        } else {
+            ty
+        }
+    }
+
+    /// `= default ;` / `= delete ;` / `= delete ( string-literal ) ;` after
+    /// the first declarator of a function ([dcl.fct.def.general]), at `=`;
+    /// `f` is the function (`None` when sema made none).
+    pub(crate) fn parse_defaulted_or_deleted(&mut self, f: Option<DeclId>) {
+        self.bump();
+        let kw = self.bump();
+        let is_delete = self.kw_of(kw) == Some(Kw::Delete);
+        let what = if is_delete { "delete" } else { "default" };
+        let mut msg = None;
+        if is_delete && self.at(Punct::LParen) {
+            let open = self.bump().span.lo;
+            if self.at_string() {
+                msg = self.parse_string_literal(true);
+            } else {
+                let d = self
+                    .s
+                    .diag(DiagId::parse_expected_string_literal_in, self.loc())
+                    .arg("'delete'");
+                self.emit(d);
+                self.skip_until(&[Punct::RParen], true, false);
+            }
+            self.expect_closing(Punct::RParen, Punct::LParen, open);
+        }
+        if let Some(f) = f {
+            if is_delete {
+                self.trace(|_| "deleted".to_owned());
+                self.s.act_on_deleted(f, kw.span.lo, msg);
+            } else {
+                self.trace(|_| "defaulted".to_owned());
+                self.s.act_on_defaulted(f, kw.span.lo);
+            }
+        }
+        match Self::punct_of(self.tok()) {
+            Some(Punct::Comma) => {
+                let d = self
+                    .s
+                    .diag(DiagId::parse_default_delete_in_multiple_declaration, kw.span.lo)
+                    .arg(what);
+                self.emit(d);
+                self.skip_until(&[Punct::Semi], false, true);
+            }
+            Some(Punct::Semi) => {
+                self.bump();
+            }
+            Some(Punct::Colon) => {
+                let d = self.s.diag(DiagId::parse_expected_after, self.loc()).arg(what).arg("';'");
+                self.emit(d);
+                self.bump();
+            }
+            _ => {
+                let d =
+                    self.s.diag(DiagId::parse_expected_after, self.prev_end()).arg(what).arg("';'");
+                self.emit(d);
+                self.skip_until(&[Punct::Semi], false, true);
+            }
+        }
+    }
+
+    // -- member declarations ------------------------------------------------------------
+
+    /// The member-declarations that a leading token decides (empty
+    /// declarations, access specifiers, `static_assert`, `using`,
+    /// templates): parses one and returns true, or returns false.
+    fn parse_member_declaration_leader(&mut self) -> bool {
+        let loc = self.loc();
+        match (Self::punct_of(self.tok()), self.kw()) {
+            (Some(Punct::Semi), _) => {
+                self.bump();
+                true
+            }
+            (_, Some(k @ (Kw::Public | Kw::Private | Kw::Protected))) => {
+                let access = match k {
+                    Kw::Public => Access::Public,
+                    Kw::Protected => Access::Protected,
+                    _ => Access::Private,
+                };
+                self.bump();
+                if self.eat(Punct::Colon).is_none() {
+                    if self.at(Punct::Semi) {
+                        self.expected_here("':'");
+                        self.bump();
+                    } else {
+                        let d = self.s.diag(DiagId::parse_expected, self.prev_end()).arg("':'");
+                        self.emit(d);
+                    }
+                }
+                self.trace(|_| "access_spec".to_owned());
+                let _ = self.s.act_on_access_spec(access, loc);
+                true
+            }
+            (_, Some(Kw::StaticAssert)) => {
+                self.parse_static_assert();
+                true
+            }
+            (_, Some(Kw::Using)) => {
+                self.parse_using();
+                true
+            }
+            (Some(Punct::LSquare), _) if self.at_attributed_using() => {
+                self.parse_attributed_using();
+                true
+            }
+            (_, Some(Kw::Template)) => {
+                self.unsupported("templates", loc);
+                self.skip_unsupported_declaration();
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// member-declaration ([class.mem]; clang's
+    /// `ParseCXXClassMemberDeclaration`).
+    fn parse_member_declaration(&mut self) {
+        if self.parse_member_declaration_leader() {
+            return;
+        }
+        let ds = self.parse_decl_specifiers(DeclaratorContext::Member);
+        if self.at(Punct::Semi) {
+            self.bump();
+            if let Some(fl) = ds.friend {
+                self.trace(|_| "friend".to_owned());
+                let base = self.s.type_from_declspec(&ds);
+                let _ = self.s.act_on_friend(&ds, base, None, fl);
+            } else {
+                self.trace(|_| "decl_spec_only".to_owned());
+                let _ = self.s.act_on_decl_spec_only(&ds);
+            }
+            return;
+        }
+        if ds.is_empty() && !self.at_special_declarator(DeclaratorContext::Member) {
+            self.error_here(DiagId::parse_expected_member_name);
+            self.skip_to_semi();
+            return;
+        }
+        let is_static = matches!(ds.storage, Some((StorageSpec::Static, _)));
+        let is_typedef = ds.is_typedef();
+        let mut base_ty: Option<QualType> = None;
+        let mut first = true;
+        loop {
+            let mut d = Declarator::new(DeclaratorContext::Member, self.loc());
+            self.late_fn = LateFnParts {
+                delay_args: !is_typedef,
+                delay_noexcept: !is_typedef && ds.friend.is_none(),
+                ..LateFnParts::default()
+            };
+            if !self.at(Punct::Colon) {
+                self.parse_declarator(&mut d);
+            }
+            let parts = mem::take(&mut self.late_fn);
+            let untyped_special = !ds.has_type_specifier() && is_untyped_special(&d);
+            let base = match base_ty {
+                Some(b) => b,
+                None => {
+                    // The declspec's type is formed once the first
+                    // declarator is known: clang reports a missing type
+                    // specifier at its name.
+                    let b = if untyped_special {
+                        QualType::VOID
+                    } else {
+                        self.s.type_from_declspec_at(&ds, d.name_loc())
+                    };
+                    base_ty = Some(b);
+                    b
+                }
+            };
+            let is_fn = d.is_function_declarator();
+            // clang's `ParseCXXMemberDeclaratorBeforeInitializer`.
+            let mut has_width = false;
+            let mut width_failed = false;
+            if !is_fn && self.at(Punct::Colon) {
+                self.bump();
+                has_width = true;
+                if let Some(w) = self.parse_constant_expr() {
+                    d.bit_width = Some(w);
+                } else {
+                    width_failed = true;
+                    self.skip_until(&[Punct::Comma], true, false);
+                }
+            } else {
+                self.parse_virt_specifiers(&mut d, ds.friend.is_some());
+            }
+            match self.parse_asm_label() {
+                Ok(l) => d.asm_label = l,
+                Err(()) => {
+                    self.skip_until(&[Punct::Comma], true, false);
+                }
+            }
+            if self.at_attr() {
+                self.parse_attributes(&mut d.attrs);
+            }
+            if !has_width && d.virt_final.is_none() && d.virt_override.is_none() {
+                self.parse_virt_specifiers(&mut d, ds.friend.is_some());
+            }
+            if !d.has_name() && !has_width {
+                if !d.invalid {
+                    self.error_here(DiagId::parse_expected_member_name);
+                }
+                self.skip_until(&[Punct::RBrace], true, false);
+                if first {
+                    self.eat(Punct::Semi);
+                    return;
+                }
+                break;
+            }
+            if first && is_fn && self.at_function_definition() {
+                self.parse_member_function_definition(&ds, base, &d, parts);
+                return;
+            }
+            // clang's in-class initializer classification.
+            let mut nsdmi = false;
+            let mut init = false;
+            if self.at(Punct::Equal) || self.at(Punct::LBrace) {
+                if has_width && !d.has_name() {
+                    self.error_here(DiagId::parse_anon_bitfield_member_init);
+                    self.skip_until(&[Punct::Comma], true, false);
+                } else if is_fn {
+                    if let Some(z) = self.try_pure_specifier() {
+                        d.pure = Some(z);
+                    } else {
+                        init = true;
+                    }
+                } else {
+                    d.init_style =
+                        Some(if self.at(Punct::Equal) { InitStyle::C } else { InitStyle::List });
+                    if !is_static && !is_typedef && ds.friend.is_none() {
+                        nsdmi = true;
+                    } else {
+                        init = true;
+                    }
+                }
+            }
+            let (decl, target) =
+                if width_failed { (None, None) } else { self.act_on_member(&ds, base, &d) };
+            let is_var = decl.is_some_and(|v| self.s.ast.decls.get(v).kind() == DeclKind::Var);
+            if nsdmi {
+                let mut toks = Vec::new();
+                if self.at(Punct::Equal) {
+                    self.take_into(&mut toks);
+                    self.capture_initializer(InitKind::Nsdmi, &mut toks);
+                } else {
+                    self.take_into(&mut toks);
+                    self.capture_until(&[Punct::RBrace], &mut toks, true, true);
+                }
+                let end = self.loc();
+                if let Some(field) = decl
+                    && self.s.ast.decls.get(field).kind() == DeclKind::Field
+                {
+                    self.push_late(LateItem::Nsdmi { field, toks: LateToks { toks, end } });
+                }
+            } else if init {
+                match self.parse_member_initializer(is_fn) {
+                    Some(i) if is_fn => {
+                        let _ = i;
+                        if !d.invalid {
+                            self.s.error(DiagId::parse_bad_pure_specifier, d.name_loc());
+                        }
+                    }
+                    Some(i) => {
+                        if let Some(v) = decl
+                            && is_var
+                        {
+                            self.trace(|_| "init".to_owned());
+                            self.s.act_on_init(v, i);
+                        }
+                    }
+                    None => {
+                        if let Some(v) = decl
+                            && is_var
+                        {
+                            self.s.act_on_uninit(v);
+                        }
+                        self.skip_until(&[Punct::Comma], true, false);
+                    }
+                }
+            } else if is_static
+                && let Some(v) = decl
+                && is_var
+            {
+                self.s.act_on_uninit(v);
+            }
+            if !parts.is_empty()
+                && let Some(f) = target
+            {
+                self.push_late(LateItem::Method { f, parts });
+            }
+            if self.eat(Punct::Comma).is_none() {
+                break;
+            }
+            first = false;
+        }
+        if self.eat(Punct::Semi).is_none() {
+            self.s.error(DiagId::parse_expected_semi_decl_list, self.expected_loc());
+            self.skip_until(&[Punct::RBrace], true, false);
+            self.eat(Punct::Semi);
+        }
+    }
+
+    /// True at the start of a function definition after a declarator:
+    /// `{`, `:`, `try`, `= default` or `= delete`.
+    fn at_function_definition(&self) -> bool {
+        self.at(Punct::LBrace)
+            || self.at(Punct::Colon)
+            || self.at_kw(Kw::Try)
+            || (self.at(Punct::Equal)
+                && matches!(self.kw_of(self.peek(1)), Some(Kw::Default | Kw::Delete)))
+    }
+
+    /// A member function definition in a class (clang's
+    /// `ParseCXXInlineMethodDef`): declares it, then saves its body for
+    /// the replay after the outermost class.
+    fn parse_member_function_definition(
+        &mut self,
+        ds: &DeclSpec,
+        base: QualType,
+        d: &Declarator,
+        parts: LateFnParts,
+    ) {
+        let (_, target) = self.act_on_member(ds, base, d);
+        if !parts.is_empty()
+            && let Some(f) = target
+        {
+            self.push_late(LateItem::Method { f, parts });
+        }
+        if self.at(Punct::Equal) {
+            self.parse_defaulted_or_deleted(target);
+            return;
+        }
+        let ctor = matches!(d.special, Some((SpecialName::Constructor(_), _)));
+        let is_try = self.at_kw(Kw::Try);
+        let mut toks = Vec::new();
+        if !self.capture_function_prologue(&mut toks) {
+            self.skip_malformed_decl();
+            return;
+        }
+        self.capture_until(&[Punct::RBrace], &mut toks, false, true);
+        if is_try {
+            while self.at_kw(Kw::Catch) {
+                self.capture_until(&[Punct::LBrace], &mut toks, false, true);
+                self.capture_until(&[Punct::RBrace], &mut toks, false, true);
+            }
+        }
+        if let Some(f) = target {
+            let end = toks.last().map_or(self.loc(), |t| t.span.hi);
+            self.push_late(LateItem::Body { f, ctor, toks: LateToks { toks, end } });
+        }
+        self.eat(Punct::Semi);
+    }
+
+    /// Declares a member declarator (or a friend function): returns the
+    /// declaration and the function it declares or befriends.
+    fn act_on_member(
+        &mut self,
+        ds: &DeclSpec,
+        base: QualType,
+        d: &Declarator,
+    ) -> (Option<DeclId>, Option<DeclId>) {
+        let decl = if let Some(fl) = ds.friend {
+            self.trace(|_| "friend".to_owned());
+            self.s.act_on_friend(ds, base, Some(d), fl)
+        } else {
+            self.trace(|p| format!("declarator({})", p.declarator_name(d)));
+            self.s.act_on_declarator(ds, base, d)
+        };
+        let target = decl.and_then(|x| {
+            let decls = &self.s.ast.decls;
+            if decls.get(x).kind() == DeclKind::Friend {
+                match decls.friend_target(x) {
+                    FriendTarget::Decl(t) if decls.function(t).is_some() => Some(t),
+                    _ => None,
+                }
+            } else {
+                decls.function(x).map(|_| x)
+            }
+        });
+        (decl, target)
+    }
+
+    /// The declarator's name, for traces.
+    fn declarator_name(&self, d: &Declarator) -> String {
+        let sym = |s: Symbol| self.s.ast.symbols().as_str(s).to_owned();
+        match (d.name, &d.special) {
+            (Some((n, _)), _) => sym(n),
+            (None, Some((SpecialName::Constructor(n), _))) => sym(*n),
+            (None, Some((SpecialName::Destructor(n), _))) => format!("~{}", sym(*n)),
+            (None, Some((SpecialName::Conversion(_), _))) => "operator <conv>".to_owned(),
+            (None, Some((SpecialName::Operator(_), _))) => "operator".to_owned(),
+            (None, None) => "<anon>".to_owned(),
+        }
+    }
+
+    /// Adds a saved complete-class context to the innermost class.
+    fn push_late(&mut self, item: LateItem) {
+        if let Some(c) = self.late.last_mut() {
+            c.items.push(item);
+        }
+    }
+
+    /// pure-specifier `= 0` before `;` or `,` ([class.mem.general];
+    /// clang's `TryConsumePureSpecifier`): consumes it and returns the
+    /// `0`'s location.
+    fn try_pure_specifier(&mut self) -> Option<Loc> {
+        if !self.at(Punct::Equal) {
+            return None;
+        }
+        let zero = self.peek(1);
+        if zero.kind != TokKind::PpNumber
+            || self.spelling_of(&zero) != "0"
+            || !matches!(Self::punct_of(self.peek(2)), Some(Punct::Semi | Punct::Comma))
+        {
+            return None;
+        }
+        self.bump();
+        self.bump();
+        Some(zero.span.lo)
+    }
+
+    /// virt-specifier-seq ([class.mem.general]; clang's
+    /// `ParseOptionalCXX11VirtSpecifierSeq`).
+    fn parse_virt_specifiers(&mut self, d: &mut Declarator, is_friend: bool) {
+        loop {
+            let t = self.tok();
+            let (is_final, sp) = if self.is_final_tok(t) {
+                (true, "final")
+            } else if self.is_override_tok(t) {
+                (false, "override")
+            } else {
+                return;
+            };
+            let loc = self.bump().span.lo;
+            if is_friend {
+                let diag = self.s.diag(DiagId::parse_friend_decl_spec, loc).arg(sp);
+                self.emit(diag);
+                continue;
+            }
+            let slot = if is_final { &mut d.virt_final } else { &mut d.virt_override };
+            if slot.is_some() {
+                let diag = self.s.diag(DiagId::parse_duplicate_virt_specifier, loc).arg(sp);
+                self.emit(diag);
+            } else {
+                *slot = Some(loc);
+            }
+        }
+    }
+
+    /// True if a declarator naming a constructor, destructor, conversion
+    /// function or operator starts here, so that a decl-specifier-seq may
+    /// be empty ([class.ctor.general]/1, [class.dtor]/1, [class.conv.fct];
+    /// clang's `isConstructorDeclarator` and friends). Unqualified
+    /// constructors only in the class's own member-specification.
+    pub(crate) fn at_special_declarator(&self, ctx: DeclaratorContext) -> bool {
+        if !matches!(ctx, DeclaratorContext::File | DeclaratorContext::Member) {
+            return false;
+        }
+        let mut i = self.pos();
+        if Self::punct_of(self.tok_at(i)) == Some(Punct::ColonColon) {
+            i += 1;
+        }
+        let mut last = None;
+        while let Some(n) = self.ident_of(self.tok_at(i))
+            && Self::punct_of(self.tok_at(i + 1)) == Some(Punct::ColonColon)
+        {
+            last = Some(n);
+            i += 2;
+        }
+        let t = self.tok_at(i);
+        if Self::punct_of(t) == Some(Punct::Tilde) || self.kw_of(t) == Some(Kw::Operator) {
+            return true;
+        }
+        let Some(n) = self.ident_of(t) else {
+            return false;
+        };
+        if Self::punct_of(self.tok_at(i + 1)) != Some(Punct::LParen) {
+            return false;
+        }
+        match last {
+            Some(q) => q == n,
+            None => {
+                ctx == DeclaratorContext::Member
+                    && self.current_class_name() == Some(n)
+                    && !matches!(
+                        Self::punct_of(self.tok_at(i + 2)),
+                        Some(Punct::Star | Punct::Amp | Punct::AmpAmp)
+                    )
+            }
+        }
+    }
+
+    // -- special declarator-ids ----------------------------------------------------------
+
+    /// The last name in the nested-name-specifier starting here (`B` in
+    /// `A::B::f`), for recognising `C::C` ([class.ctor.general]/1).
+    pub(crate) fn last_qualifier_name(&self) -> Option<Symbol> {
+        let mut i = self.pos();
+        if Self::punct_of(self.tok_at(i)) == Some(Punct::ColonColon) {
+            i += 1;
+        }
+        let mut last = None;
+        while let Some(n) = self.ident_of(self.tok_at(i))
+            && Self::punct_of(self.tok_at(i + 1)) == Some(Punct::ColonColon)
+        {
+            last = Some(n);
+            i += 2;
+        }
+        last
+    }
+
+    /// True if identifier `n`, which is at the current token, names a
+    /// constructor: `C::C(` after a qualifier ending in `C`, or `C(` in
+    /// the member-specification of class `C` (clang's
+    /// `isConstructorDeclarator`, simplified: `C (*p)` and `C (&r)` are
+    /// data members).
+    pub(crate) fn names_constructor(
+        &self,
+        n: Symbol,
+        last_qual: Option<Symbol>,
+        ctx: DeclaratorContext,
+    ) -> bool {
+        if Self::punct_of(self.peek(1)) != Some(Punct::LParen) {
+            return false;
+        }
+        match last_qual {
+            Some(q) => q == n,
+            None => {
+                ctx == DeclaratorContext::Member
+                    && self.current_class_name() == Some(n)
+                    && !matches!(
+                        Self::punct_of(self.peek(2)),
+                        Some(Punct::Star | Punct::Amp | Punct::AmpAmp)
+                    )
+            }
+        }
+    }
+
+    /// A destructor or operator-function-id / conversion-function-id
+    /// declarator-id ([class.dtor]/1, [over.oper.general]/1,
+    /// [class.conv.fct]/1), at `~` or `operator`. Sets `d.special`.
+    pub(crate) fn parse_special_declarator_id(&mut self, d: &mut Declarator) {
+        let loc = self.loc();
+        if self.at(Punct::Tilde) {
+            self.bump();
+            match self.ident() {
+                Some(n) => {
+                    self.bump();
+                    d.special = Some((SpecialName::Destructor(n), loc));
+                }
+                None => {
+                    self.error_here(DiagId::parse_destructor_tilde_identifier);
+                    d.invalid = true;
+                }
+            }
+            return;
+        }
+        self.bump();
+        if let Some(op) = self.parse_operator_symbol() {
+            d.special = Some((SpecialName::Operator(op), loc));
+            return;
+        }
+        if matches!(self.tok().kind, TokKind::StringLit(_)) {
+            self.unsupported("literal operators", loc);
+            self.bump();
+            if self.ident().is_some() {
+                self.bump();
+            }
+            d.invalid = true;
+            return;
+        }
+        // conversion-type-id: type-specifier-seq conversion-declarator(opt).
+        let ds = self.parse_decl_specifiers(DeclaratorContext::TypeName);
+        if !ds.has_type_specifier() {
+            self.error_here(DiagId::parse_expected_type);
+            d.invalid = true;
+            return;
+        }
+        let mut cd = Declarator::new(DeclaratorContext::TypeName, self.loc());
+        self.parse_conversion_declarator(&mut cd);
+        let base = self.s.type_from_declspec(&ds);
+        let ty = self.s.type_for_declarator(base, &cd);
+        if ds.invalid || cd.invalid {
+            d.invalid = true;
+        }
+        d.special = Some((SpecialName::Conversion(ty), loc));
+    }
+
+    /// conversion-declarator ([class.conv.fct]/1): ptr-operators only,
+    /// taken greedily.
+    fn parse_conversion_declarator(&mut self, d: &mut Declarator) {
+        let loc = self.loc();
+        match Self::punct_of(self.tok()) {
+            Some(Punct::Star) => {
+                self.bump();
+                let quals = self.parse_ptr_cv();
+                self.parse_conversion_declarator(d);
+                d.chunks.push(Chunk::Pointer { quals, loc });
+            }
+            Some(Punct::Amp) => {
+                self.bump();
+                self.parse_conversion_declarator(d);
+                d.chunks.push(Chunk::LRef { loc });
+            }
+            Some(Punct::AmpAmp) => {
+                self.bump();
+                self.parse_conversion_declarator(d);
+                d.chunks.push(Chunk::RRef { loc });
+            }
+            _ => {}
+        }
+    }
+
+    /// The operator of an operator-function-id ([over.oper.general]/1),
+    /// after `operator`; consumes it.
+    fn parse_operator_symbol(&mut self) -> Option<OverloadedOperator> {
+        use OverloadedOperator as O;
+        if let Some(k @ (Kw::New | Kw::Delete)) = self.kw() {
+            self.bump();
+            let array = self.at(Punct::LSquare) && self.peek_is(1, Punct::RSquare);
+            if array {
+                self.bump();
+                self.bump();
+            }
+            return Some(match (k, array) {
+                (Kw::New, false) => O::New,
+                (Kw::New, true) => O::ArrayNew,
+                (_, false) => O::Delete,
+                (_, true) => O::ArrayDelete,
+            });
+        }
+        if self.at_kw(Kw::CoAwait) {
+            self.bump();
+            return Some(O::Coawait);
+        }
+        let p = Self::punct_of(self.tok())?;
+        let op = match p {
+            Punct::LParen if self.peek_is(1, Punct::RParen) => {
+                self.bump();
+                O::Call
+            }
+            Punct::LSquare if self.peek_is(1, Punct::RSquare) => {
+                self.bump();
+                O::Subscript
+            }
+            Punct::Plus => O::Plus,
+            Punct::Minus => O::Minus,
+            Punct::Star => O::Star,
+            Punct::Slash => O::Slash,
+            Punct::Percent => O::Percent,
+            Punct::Caret => O::Caret,
+            Punct::Amp => O::Amp,
+            Punct::Pipe => O::Pipe,
+            Punct::Tilde => O::Tilde,
+            Punct::Exclaim => O::Exclaim,
+            Punct::Equal => O::Equal,
+            Punct::Less => O::Less,
+            Punct::Greater => O::Greater,
+            Punct::PlusEqual => O::PlusEqual,
+            Punct::MinusEqual => O::MinusEqual,
+            Punct::StarEqual => O::StarEqual,
+            Punct::SlashEqual => O::SlashEqual,
+            Punct::PercentEqual => O::PercentEqual,
+            Punct::CaretEqual => O::CaretEqual,
+            Punct::AmpEqual => O::AmpEqual,
+            Punct::PipeEqual => O::PipeEqual,
+            Punct::LessLess => O::LessLess,
+            Punct::GreaterGreater => O::GreaterGreater,
+            Punct::LessLessEqual => O::LessLessEqual,
+            Punct::GreaterGreaterEqual => O::GreaterGreaterEqual,
+            Punct::EqualEqual => O::EqualEqual,
+            Punct::ExclaimEqual => O::ExclaimEqual,
+            Punct::LessEqual => O::LessEqual,
+            Punct::GreaterEqual => O::GreaterEqual,
+            Punct::Spaceship => O::Spaceship,
+            Punct::AmpAmp => O::AmpAmp,
+            Punct::PipePipe => O::PipePipe,
+            Punct::PlusPlus => O::PlusPlus,
+            Punct::MinusMinus => O::MinusMinus,
+            Punct::Comma => O::Comma,
+            Punct::ArrowStar => O::ArrowStar,
+            Punct::Arrow => O::Arrow,
+            _ => return None,
+        };
+        self.bump();
+        Some(op)
+    }
+
+    // -- base clauses -------------------------------------------------------------------
+
+    /// base-clause ([class.derived.general]), at `:`.
+    fn parse_base_clause(&mut self, bases: &mut Vec<BaseSpecInfo>) {
+        self.bump();
+        loop {
+            match self.parse_base_specifier() {
+                Some(b) => bases.push(b),
+                None => {
+                    self.skip_until(&[Punct::Comma, Punct::LBrace], true, false);
+                }
+            }
+            if self.eat(Punct::Comma).is_none() {
+                break;
+            }
+        }
+    }
+
+    /// base-specifier, with a trailing `...` (clang's `ParseBaseSpecifier`).
+    fn parse_base_specifier(&mut self) -> Option<BaseSpecInfo> {
+        let loc = self.loc();
+        let mut attrs = Vec::new();
+        if self.at_cxx11_attr() {
+            self.parse_attributes(&mut attrs);
+        }
+        let mut is_virtual = self.eat_kw(Kw::Virtual).is_some();
+        let access = match self.kw() {
+            Some(Kw::Public) => Access::Public,
+            Some(Kw::Protected) => Access::Protected,
+            Some(Kw::Private) => Access::Private,
+            _ => Access::None,
+        };
+        if access != Access::None {
+            self.bump();
+        }
+        if let Some(l) = self.eat_kw(Kw::Virtual) {
+            if is_virtual {
+                self.s.error(DiagId::parse_dup_virtual_base, l);
+            }
+            is_virtual = true;
+        }
+        if self.at_kw(Kw::Decltype) {
+            self.unsupported("'decltype'", self.loc());
+            self.bump();
+            if self.at(Punct::LParen) {
+                self.bump();
+                self.skip_until(&[Punct::RParen], false, true);
+            }
+            return None;
+        }
+        let Ok(q) = self.parse_nested_name() else {
+            return None;
+        };
+        let Some(name) = self.ident() else {
+            self.error_here(DiagId::parse_expected_class_name);
+            return None;
+        };
+        let id_loc = self.bump().span.lo;
+        let ty = match self.s.classify_name(name, q) {
+            NameClass::Type(ty, d) => self.named_type(ty, d),
+            _ => {
+                self.s.error(DiagId::parse_expected_class_name, id_loc);
+                return None;
+            }
+        };
+        let pack_expansion = self.eat(Punct::Ellipsis).is_some();
+        Some(BaseSpecInfo { ty, loc, is_virtual, access, pack_expansion, attrs })
+    }
+
+    // -- after a class or enum definition ---------------------------------------------
+
+    /// After a class or enum definition used as a type-specifier: if the
+    /// next token cannot follow one, reports the missing `;` and inserts
+    /// it (clang's `isValidAfterTypeSpecifier` recovery). `spelling` is
+    /// the class-key or `enum`.
+    pub(crate) fn check_after_tag_definition(&mut self, spelling: &str, could_be_bitfield: bool) {
+        if self.is_valid_after_tag(could_be_bitfield) {
+            return;
+        }
+        if self.at(Punct::Colon) {
+            let d = self.s.diag(DiagId::parse_expected_after, self.loc()).arg(spelling).arg("';'");
+            self.emit(d);
+            self.bump();
+        } else {
+            let d =
+                self.s.diag(DiagId::parse_expected_after, self.prev_end()).arg(spelling).arg("';'");
+            self.emit(d);
+        }
+        self.inject_semi();
+    }
+
+    fn is_valid_after_tag(&self, could_be_bitfield: bool) -> bool {
+        let t = self.tok();
+        if let Some(p) = Self::punct_of(t) {
+            return match p {
+                Punct::Semi
+                | Punct::Star
+                | Punct::Amp
+                | Punct::AmpAmp
+                | Punct::RParen
+                | Punct::ColonColon
+                | Punct::LParen
+                | Punct::Comma
+                | Punct::LSquare
+                | Punct::Ellipsis
+                | Punct::Greater => true,
+                Punct::Colon => could_be_bitfield,
+                _ => false,
+            };
+        }
+        match self.kw_of(t) {
+            None => self.ident_of(t).is_some(),
+            Some(Kw::Decltype | Kw::Operator | Kw::Declspec | Kw::Attribute) => true,
+            Some(
+                Kw::Const
+                | Kw::Volatile
+                | Kw::Restrict
+                | Kw::Inline
+                | Kw::Virtual
+                | Kw::Friend
+                | Kw::Static
+                | Kw::Extern
+                | Kw::Typedef
+                | Kw::Register
+                | Kw::Auto
+                | Kw::Mutable
+                | Kw::ThreadLocal
+                | Kw::Constexpr
+                | Kw::Consteval
+                | Kw::Constinit,
+            ) => !self.kw_of(self.peek(1)).is_some_and(|k| {
+                matches!(
+                    k,
+                    Kw::Short
+                        | Kw::Long
+                        | Kw::Signed
+                        | Kw::Unsigned
+                        | Kw::Void
+                        | Kw::Char
+                        | Kw::WChar
+                        | Kw::Char8
+                        | Kw::Char16
+                        | Kw::Char32
+                        | Kw::Int
+                        | Kw::Int128
+                        | Kw::Float
+                        | Kw::Double
+                        | Kw::Float128
+                        | Kw::Bool
+                        | Kw::Class
+                        | Kw::Struct
+                        | Kw::Union
+                        | Kw::Enum
+                        | Kw::Decltype
+                        | Kw::Typename
+                )
+            }),
+            Some(_) => false,
+        }
     }
 }
