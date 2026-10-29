@@ -1,0 +1,39 @@
+TranslationUnitDecl
+|-NamespaceDecl N
+| |-VarDecl used x 'int'
+| `-TypedefDecl referenced I 'int'
+|-NamespaceDecl N original Namespace 'N'
+| `-VarDecl used y 'int'
+|-NamespaceDecl V inline
+| `-VarDecl w 'int'
+|-NamespaceDecl
+| `-VarDecl u 'int'
+|-NamespaceDecl A
+| `-NamespaceDecl B
+|   `-VarDecl used t 'int'
+|-UsingDirectiveDecl Namespace 'N'
+|-NamespaceAliasDecl R Namespace 'B'
+|-NamespaceAliasDecl R2 NamespaceAlias 'R'
+|-UsingDecl N::x
+|-UsingDecl N::I
+|-EnumDecl referenced class E 'int'
+| `-EnumConstantDecl referenced P 'E' value=0
+`-FunctionDecl g 'void ()'
+  `-CompoundStmt
+    |-DeclStmt
+    | `-UsingEnumDecl Enum 'E'
+    |-DeclStmt
+    | `-NamespaceAliasDecl L Namespace 'N'
+    `-DeclStmt
+      `-VarDecl k 'I':'int' cinit
+        `-BinaryOperator 'int' '+'
+          |-BinaryOperator 'int' '+'
+          | |-BinaryOperator 'int' '+'
+          | | |-CStyleCastExpr 'int' <IntegralCast>
+          | | | `-DeclRefExpr 'E' EnumConstant 'P' 'E' (UsingShadow 'P')
+          | | `-ImplicitCastExpr 'int' <LValueToRValue>
+          | |   `-DeclRefExpr 'int' lvalue Var 'x' 'int' (UsingShadow 'x')
+          | `-ImplicitCastExpr 'int' <LValueToRValue>
+          |   `-DeclRefExpr 'int' lvalue Var 'y' 'int'
+          `-ImplicitCastExpr 'int' <LValueToRValue>
+            `-DeclRefExpr 'int' lvalue Var 't' 'int'

@@ -37,7 +37,8 @@ undeclared, which resolves the C++ declaration/expression ambiguities.
   - qualified declarator-ids
   - exception specifications: `noexcept`, `noexcept(e)`, `throw()`
     (and `throw(type-ids)`, diagnosed)
-  - `using namespace`
+  - `using namespace`, using-declarations, `using enum`, namespace
+    aliases (WP-062)
   - `static_assert`
 - **Attributes:** standard and GNU attributes (§6.2).
 - **Statements:** every C control-flow statement, with C++
@@ -257,6 +258,24 @@ harness ignores order.
     `union { int a; };`) goes to `act_on_decl_spec_only`.
   - That call returns the implicit object of an anonymous union, if
     any, which then joins the `DeclStmt`.
+- **GNU asm labels** (`parse_asm_label`, clang's
+  `ParseSimpleAsm(ForAsmLabel)`): `asm`/`__asm`/`__asm__` `(`
+  string-literal... `)` after a declarator, before its attributes and
+  initializer. Adjacent literals concatenate ([lex.string]/7); the
+  result is stored in `Declarator::asm_label` (the literal's `ExprId`
+  and the span of its tokens) for Sema (spec/sema.md §4.2).
+  - A missing `(` is `expected '(' after 'asm'`; a missing literal is
+    `expected string literal in 'asm'`; a wide, Unicode or empty literal
+    is `cannot use {unicode|wide|an empty} string literal in 'asm'`.
+  - In a simple declaration a malformed label drops the declarator (the
+    parser skips to the `;`, clang's `ParseAsmAttributesAfterDeclarator`);
+    in a member declaration it skips to the next `,`.
+  - A function declarator with a label is never a definition: a
+    following `{` is parsed as an initializer, which Sema rejects
+    (`illegal initializer`).
+  - A malformed braced initializer without `=` (`T x{…}`) is skipped
+    through its `}` and the declaration continues, as clang's
+    `ParseBraceInitializer` does.
 - **Tags** (`parse_tag_specifier`):
   - `act_on_tag(kind, name, TagUse, …)`. `TagUse` is reference,
     declaration or definition, decided by the next token, as in
@@ -274,6 +293,30 @@ harness ignores order.
     unnamed namespaces (§sema 4.6)
   - `extern "C" { }` and `extern "C" decl` (`parse_linkage_spec`)
   - `using namespace N;`
+- **Using-declarations and aliases** (`parse_using`, spec/sema.md §4.8):
+  - `using a::x, ::b::y;`: each declarator is a nested-name-specifier
+    (`parse_nested_name_nns`, which also builds the specifier as
+    written) and an identifier, passed to
+    `Sema::act_on_using_declarator` one at a time.
+    - `typename` declarators, `operator`/destructor names and pack
+      expansions (`x...`) are "not supported yet" (they need classes
+      with bases and templates).
+    - A missing name is `expected unqualified-id`; a missing `;` is
+      `expected ';' after using declaration`.
+  - `[[clang::using_if_exists]]` is accepted before `using` (at
+    namespace and class scope; `at_attributed_using`) and after a
+    declarator. Both placements are a clang extension and warn `ISO C++
+    does not allow an attribute list to appear here`, as clang does;
+    GNU `__attribute__((using_if_exists))` after the declarator does
+    not warn.
+  - `using enum [qual] name;` classifies the name and calls
+    `Sema::act_on_using_enum`. No name: `using enum requires an enum or
+    typedef name`. Missing `;`: `expected ';' after using-enum
+    declaration`.
+  - `namespace Q = [qual] target;` at namespace and block scope calls
+    `Sema::act_on_namespace_alias`. A target that is not a name is
+    `expected namespace name`; a missing `;` is `expected ';' after
+    namespace name`.
 - **`static_assert(cond[, msg])`:** the message is optional (C++17).
 - **Initializers** (`parse_initializer`, crate-visible):
   - `= expr`, `= { … }`, `( expr )` and `{ … }`
@@ -434,13 +477,14 @@ in `kiln_diag` for now; nothing emits them.
   - `co_await`/`co_yield`
 - **Statements:** range-based `for`, `try`/`catch`, `co_return`, contracts.
 - **Other declarations:**
-  - pointers to members, asm labels
+  - pointers to members
   - pack expansions in dynamic exception specifications
   - default arguments
   - trailing return types
   - `auto` deduction beyond `auto x = e`
-  - namespace aliases, `using` declarations, `using enum`
-  - `asm`, modules, `__declspec`
+  - `typename`, `operator` and pack forms of using-declarators, and an
+    attributed `[[...]] using` as a block-scope statement
+  - `asm` declarations, modules, `__declspec`
 
 ## 10. Tests
 - **Per-rule tests** in `crates/kiln_parse/tests/`, each tagged with

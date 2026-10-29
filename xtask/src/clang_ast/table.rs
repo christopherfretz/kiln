@@ -36,6 +36,13 @@ pub const TABLE: &[(&str, Disposition)] = &[
     ("EnumDecl", Keep),
     ("EnumConstantDecl", Keep),
     ("LinkageSpecDecl", Keep),
+    // Namespaces and using-declarations (WP-062, spec/ast-dump.md §3).
+    ("NamespaceDecl", Keep),
+    ("NamespaceAliasDecl", Keep),
+    ("UsingDecl", Keep),
+    ("UsingDirectiveDecl", Keep),
+    ("UsingShadowDecl", Keep),
+    ("UsingEnumDecl", Keep),
     ("FunctionDecl", Keep),
     ("CXXMethodDecl", Keep),
     ("CXXConstructorDecl", Keep),
@@ -119,12 +126,6 @@ pub const TABLE: &[(&str, Disposition)] = &[
     ("HTMLEndTagComment", Drop),
     // Declarations kiln does not dump in M2.
     ("RecordDecl", Unsupported("C struct declarations (RecordDecl) are not in the M2 dump")),
-    ("NamespaceDecl", Unsupported("namespaces are not in the M2 dump")),
-    ("NamespaceAliasDecl", Unsupported(NOT_M2)),
-    ("UsingDecl", Unsupported(NOT_M2)),
-    ("UsingDirectiveDecl", Unsupported(NOT_M2)),
-    ("UsingShadowDecl", Unsupported(NOT_M2)),
-    ("UsingEnumDecl", Unsupported(NOT_M2)),
     ("IndirectFieldDecl", Unsupported("anonymous struct/union members are not in the M2 dump")),
     ("ClassTemplateDecl", Unsupported(TEMPLATES)),
     ("ClassTemplateSpecializationDecl", Unsupported(TEMPLATES)),
@@ -253,6 +254,13 @@ fn specific_keys(kind: &str) -> Option<&'static [&'static str]> {
         "EnumDecl" => &["scopedEnumTag", "fixedUnderlyingType"],
         "EnumConstantDecl" => &["type"],
         "LinkageSpecDecl" => &["language", "hasBraces"],
+        // `isNested`: `namespace A::B` (not printed, as in clang's text dump).
+        "NamespaceDecl" => &["isInline", "isNested", "originalNamespace"],
+        "NamespaceAliasDecl" => &["aliasedNamespace"],
+        "UsingDecl" => &[],
+        "UsingDirectiveDecl" => &["nominatedNamespace"],
+        "UsingShadowDecl" => &["target"],
+        "UsingEnumDecl" => &["target"],
         // `immediate`: kiln prints clang's text-dump `consteval` instead;
         // `variadic` is part of the printed type; `deletedMessage` becomes
         // the `delete message:` child.
@@ -278,7 +286,7 @@ fn specific_keys(kind: &str) -> Option<&'static [&'static str]> {
         "IntegerLiteral" | "FloatingLiteral" | "CharacterLiteral" | "StringLiteral"
         | "CXXBoolLiteralExpr" => &["value"],
         "CXXNullPtrLiteralExpr" | "CXXNoexceptExpr" => &[],
-        "DeclRefExpr" => &["referencedDecl", "nonOdrUseReason"],
+        "DeclRefExpr" => &["referencedDecl", "foundReferencedDecl", "nonOdrUseReason"],
         "MemberExpr" => &["name", "isArrow", "referencedMemberDecl"],
         // `conversionFunc` is the child's callee (not printed by clang).
         "ImplicitCastExpr" => &["castKind", "path", "isPartOfExplicitCast", "conversionFunc"],
@@ -392,7 +400,8 @@ pub const CLASS_KINDS: &[&str] = &[
     "OpaqueValueExpr",
 ];
 
-/// The kinds §3 of `spec/ast-dump.md` defines lines for (the M2 kinds).
+/// The kinds §3 of `spec/ast-dump.md` defines lines for (the M2 kinds, with
+/// the namespace and using-declaration kinds of WP-062).
 #[cfg(test)]
 pub const M2_KINDS: &[&str] = &[
     "TranslationUnitDecl",
@@ -403,6 +412,12 @@ pub const M2_KINDS: &[&str] = &[
     "EnumDecl",
     "EnumConstantDecl",
     "LinkageSpecDecl",
+    "NamespaceDecl",
+    "NamespaceAliasDecl",
+    "UsingDecl",
+    "UsingDirectiveDecl",
+    "UsingShadowDecl",
+    "UsingEnumDecl",
     "FunctionDecl",
     "ParmVarDecl",
     "VarDecl",

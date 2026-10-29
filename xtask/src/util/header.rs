@@ -83,12 +83,22 @@ pub enum Counter {
     PeakBytes,
     Calls,
     Allocs,
+    PeakArena,
+    FrozenBytes,
     Evaluations,
 }
 
 impl Counter {
-    pub const ALL: [Self; 6] =
-        [Self::Steps, Self::Bytes, Self::PeakBytes, Self::Calls, Self::Allocs, Self::Evaluations];
+    pub const ALL: [Self; 8] = [
+        Self::Steps,
+        Self::Bytes,
+        Self::PeakBytes,
+        Self::Calls,
+        Self::Allocs,
+        Self::PeakArena,
+        Self::FrozenBytes,
+        Self::Evaluations,
+    ];
 
     /// The report's field name (and the budget key).
     pub fn name(self) -> &'static str {
@@ -98,6 +108,8 @@ impl Counter {
             Self::PeakBytes => "peak_bytes",
             Self::Calls => "calls",
             Self::Allocs => "allocs",
+            Self::PeakArena => "peak_arena",
+            Self::FrozenBytes => "frozen_bytes",
             Self::Evaluations => "evaluations",
         }
     }
@@ -136,7 +148,7 @@ pub struct OvenBudget {
 /// `[<line>[:<col>]] <counter><=N...` (any order; at least one bound).
 pub fn parse_oven(value: &str) -> Result<OvenBudget, String> {
     let usage = "expected `oven: [<line>[:<col>]] <counter><=N...` with counters \
-                 steps|bytes|peak_bytes|calls|allocs|evaluations";
+                 steps|bytes|peak_bytes|calls|allocs|peak_arena|frozen_bytes|evaluations";
     let mut items = value.split_whitespace().peekable();
     let at = match items.peek() {
         Some(first) if first.starts_with(|c: char| c.is_ascii_digit()) => {
@@ -269,7 +281,10 @@ mod tests {
             parse_oven("bytes<=7").unwrap(),
             OvenBudget { at: None, limits: vec![(Counter::Bytes, 7)] }
         );
-        let b = parse_oven("evaluations<=2 steps<=10 peak_bytes<=3 calls<=4 allocs<=5").unwrap();
+        let b = parse_oven(
+            "evaluations<=2 frozen_bytes<=7 steps<=10 peak_bytes<=3 calls<=4 allocs<=5 peak_arena<=6",
+        )
+        .unwrap();
         assert_eq!(b.at, None);
         assert_eq!(
             b.limits,
@@ -278,6 +293,8 @@ mod tests {
                 (Counter::PeakBytes, 3),
                 (Counter::Calls, 4),
                 (Counter::Allocs, 5),
+                (Counter::PeakArena, 6),
+                (Counter::FrozenBytes, 7),
                 (Counter::Evaluations, 2)
             ]
         );

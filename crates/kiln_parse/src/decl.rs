@@ -1,8 +1,11 @@
 //! Declarations ([dcl], [namespace], [class.mem]; spec/parse.md §4).
 
+use kiln_ast::attr::AttrKind;
 use kiln_ast::decl::{EnumData, InitStyle};
+use kiln_ast::expr::ExprKind;
+use kiln_ast::strings::StringEncoding;
 use kiln_ast::types::{ExcSpec, Quals, TagKeyword};
-use kiln_ast::{DeclId, QualType};
+use kiln_ast::{AttrId, DeclId, ExprId, QualType};
 use kiln_diag::DiagId;
 use kiln_lex::{Punct, TokKind};
 use kiln_sema::declspec::SpecError;
@@ -10,7 +13,8 @@ use kiln_sema::{
     Chunk, DeclSpec, Declarator, DeclaratorContext, Designator, InitItem, InitList, InitValue,
     Initializer, NameClass, Sign, StorageSpec, TagUse, TypeSpecKind, Width,
 };
-use kiln_source::Loc;
+use kiln_source::symbol::Symbol;
+use kiln_source::{Loc, Span};
 
 use crate::keywords::Kw;
 use crate::parser::Parser;
@@ -125,6 +129,9 @@ impl Parser<'_, '_> {
                 self.unsupported("asm declarations", loc);
                 self.skip_unsupported_declaration();
             }
+            (Some(Punct::LSquare), _) if self.at_attributed_using() => {
+                self.parse_attributed_using();
+            }
             _ => {
                 self.parse_simple_declaration(DeclaratorContext::File, true);
             }
@@ -170,9 +177,13 @@ impl Parser<'_, '_> {
         let inline = self.eat_kw(Kw::Inline).is_some();
         let ns_loc = self.bump().span.lo;
         self.skip_attributes();
-        if self.ident().is_some() && self.peek_is(1, Punct::Equal) {
-            self.unsupported("namespace aliases", ns_loc);
-            self.skip_to_semi();
+        if let Some(name) = self.ident()
+            && self.peek_is(1, Punct::Equal)
+        {
+            let _ = ns_loc;
+            let nl = self.bump().span.lo;
+            self.bump();
+            let _ = self.parse_namespace_alias(name, nl);
             return;
         }
         let mut names = Vec::new();
@@ -229,9 +240,34 @@ impl Parser<'_, '_> {
         self.s.act_on_finish_linkage_spec(ls);
     }
 
-    /// `using namespace N;`, `using X = T;`, using-declarations
-    /// (unsupported). Returns the declarations.
+    /// The rest of `namespace name = [qual] target;` after the `=`
+    /// ([namespace.alias]).
+    pub(crate) fn parse_namespace_alias(&mut self, name: Symbol, name_loc: Loc) -> Option<DeclId> {
+        let Ok(qual) = self.parse_nested_name_nns() else {
+            self.skip_to_semi();
+            return None;
+        };
+        let Some(target) = self.ident() else {
+            self.error_here(DiagId::parse_expected_namespace_name);
+            self.skip_to_semi();
+            return None;
+        };
+        let tl = self.bump().span.lo;
+        let d = self.s.act_on_namespace_alias(name, name_loc, qual, target, tl);
+        self.expect_semi_after("namespace name");
+        d
+    }
+
+    /// `using namespace N;`, `using X = T;`, `using enum E;` and
+    /// using-declarations ([namespace.udir], [dcl.typedef],
+    /// [enum.udecl], [namespace.udecl]). Returns the declarations.
     pub(crate) fn parse_using(&mut self) -> Vec<DeclId> {
+        self.parse_using_attrs(&[])
+    }
+
+    /// [`Parser::parse_using`] with the attribute-specifier-seq written
+    /// before `using` (`leading`).
+    pub(crate) fn parse_using_attrs(&mut self, leading: &[AttrId]) -> Vec<DeclId> {
         let loc = self.bump().span.lo;
         if self.eat_kw(Kw::Namespace).is_some() {
             let Ok(qual) = self.parse_nested_name() else {
@@ -271,13 +307,83 @@ impl Parser<'_, '_> {
             self.expect_semi_after("alias declaration");
             return vec![d];
         }
-        if self.at_kw(Kw::Enum) {
-            self.unsupported("'using enum'", loc);
-        } else {
-            self.unsupported("using-declarations", loc);
+        if self.eat_kw(Kw::Enum).is_some() {
+            return self.parse_using_enum();
         }
-        self.skip_to_semi();
-        Vec::new()
+        let if_exists = self.has_using_if_exists(leading);
+        self.parse_using_declaration(loc, if_exists)
+    }
+
+    fn has_using_if_exists(&self, attrs: &[AttrId]) -> bool {
+        attrs.iter().any(|&a| self.s.ast.attrs.get(a).kind == AttrKind::USING_IF_EXISTS)
+    }
+
+    /// `using enum [qual] name;` after `enum` ([enum.udecl]).
+    fn parse_using_enum(&mut self) -> Vec<DeclId> {
+        let Ok(qual) = self.parse_nested_name_nns() else {
+            self.skip_to_semi();
+            return Vec::new();
+        };
+        let Some(name) = self.ident() else {
+            self.error_here(DiagId::parse_using_enum_requires_name);
+            self.skip_to_semi();
+            return Vec::new();
+        };
+        let nl = self.bump().span.lo;
+        let class = self.s.classify_name(name, qual.map(|q| q.ctx));
+        let d = self.s.act_on_using_enum(qual, class, name, nl);
+        self.expect_semi_after("using-enum declaration");
+        d.into_iter().collect()
+    }
+
+    /// `using-declarator-list ;` ([namespace.udecl]): each declarator is
+    /// `[typename] nested-name-specifier unqualified-id [...]`, here
+    /// optionally followed by an attribute-specifier-seq (a clang
+    /// extension for `using_if_exists`).
+    fn parse_using_declaration(&mut self, using_loc: Loc, leading_if_exists: bool) -> Vec<DeclId> {
+        let mut out = Vec::new();
+        loop {
+            if let Some(l) = self.eat_kw(Kw::Typename) {
+                self.unsupported("'typename' using-declarators", l);
+                self.skip_to_semi();
+                return out;
+            }
+            let Ok(qual) = self.parse_nested_name_nns() else {
+                self.skip_to_semi();
+                return out;
+            };
+            let Some(name) = self.ident() else {
+                if self.at_kw(Kw::Operator) || self.at(Punct::Tilde) {
+                    let l = self.loc();
+                    self.unsupported("this kind of name in a using-declarator", l);
+                } else {
+                    self.error_here(DiagId::parse_expected_unqualified_id);
+                }
+                self.skip_to_semi();
+                return out;
+            };
+            let nl = self.bump().span.lo;
+            if let Some(l) = self.eat(Punct::Ellipsis) {
+                self.unsupported("pack expansions in using-declarations", l);
+                self.skip_to_semi();
+                return out;
+            }
+            let mut attrs = Vec::new();
+            if self.at_cxx11_attr() {
+                let at = self.peek(2).span.lo;
+                self.s.error(DiagId::parse_cxx11_attr_placement, at);
+            }
+            self.parse_attributes(&mut attrs);
+            let if_exists = leading_if_exists || self.has_using_if_exists(&attrs);
+            if let Some(d) = self.s.act_on_using_declarator(using_loc, qual, name, nl, if_exists) {
+                out.push(d);
+            }
+            if self.eat(Punct::Comma).is_none() {
+                break;
+            }
+        }
+        self.expect_semi_after("using declaration");
+        out
     }
 
     /// Expects `;` after `what` (`expected ';' after {what}`).
@@ -613,45 +719,59 @@ impl Parser<'_, '_> {
         }
     }
 
-    /// member-declaration ([class.mem]) of the class `r`.
-    fn parse_member_declaration(&mut self, r: DeclId) {
+    /// The member-declarations of class `r` that a leading token decides
+    /// (empty declarations, access specifiers, `static_assert`, `using`,
+    /// and the unsupported constructor, destructor, operator and template
+    /// members): parses one and returns true, or returns false.
+    fn parse_member_declaration_leader(&mut self, r: DeclId) -> bool {
         let loc = self.loc();
         if self.at_constructor_declaration(r) {
             // Not a field of the class's own type ([class.ctor.general]).
             self.unsupported("special member functions", loc);
             self.skip_unsupported_declaration();
-            return;
+            return true;
         }
         match (Self::punct_of(self.tok()), self.kw()) {
             (Some(Punct::Semi), _) => {
                 self.bump();
-                return;
+                true
             }
             (_, Some(Kw::Public | Kw::Private | Kw::Protected)) => {
                 self.unsupported("access specifiers", loc);
                 self.bump();
                 self.expect(Punct::Colon);
-                return;
+                true
             }
             (_, Some(Kw::StaticAssert)) => {
                 self.parse_static_assert();
-                return;
+                true
             }
             (_, Some(Kw::Using)) => {
                 self.parse_using();
-                return;
+                true
+            }
+            (Some(Punct::LSquare), _) if self.at_attributed_using() => {
+                self.parse_attributed_using();
+                true
             }
             (_, Some(Kw::Template)) => {
                 self.unsupported("templates", loc);
                 self.skip_unsupported_declaration();
-                return;
+                true
             }
             (Some(Punct::Tilde), _) | (_, Some(Kw::Operator)) => {
                 self.unsupported("special member functions", loc);
                 self.skip_unsupported_declaration();
-                return;
+                true
             }
-            _ => {}
+            _ => false,
+        }
+    }
+
+    /// member-declaration ([class.mem]) of the class `r`.
+    fn parse_member_declaration(&mut self, r: DeclId) {
+        if self.parse_member_declaration_leader(r) {
+            return;
         }
         let ds = self.parse_decl_specifiers(DeclaratorContext::Member);
         if self.eat(Punct::Semi).is_some() {
@@ -679,6 +799,13 @@ impl Parser<'_, '_> {
                     return;
                 };
                 d.bit_width = Some(w);
+            }
+            // clang's `ParseCXXMemberDeclaratorBeforeInitializer`: a
+            // malformed asm label skips to the next declarator.
+            if let Ok(l) = self.parse_asm_label() {
+                d.asm_label = l;
+            } else {
+                self.skip_until(&[Punct::Comma], true, false);
             }
             if self.at_attr() {
                 self.parse_attributes(&mut d.attrs);
@@ -1097,13 +1224,13 @@ impl Parser<'_, '_> {
             // known: clang reports a missing type specifier at its name.
             let base =
                 *base_ty.get_or_insert_with(|| self.s.type_from_declspec_at(&ds, d.name_loc()));
-            if self.at_kw(Kw::Asm) {
-                self.unsupported("asm labels", self.loc());
-                self.bump();
-                if self.eat(Punct::LParen).is_some() {
-                    self.skip_until(&[Punct::RParen], false, true);
-                }
-            }
+            // GNU asm label (clang's `ParseAsmAttributesAfterDeclarator`):
+            // a malformed one drops the declarator.
+            let Ok(label) = self.parse_asm_label() else {
+                self.skip_until(&[], true, false);
+                break;
+            };
+            d.asm_label = label;
             if self.at_attr() {
                 self.parse_attributes(&mut d.attrs);
             }
@@ -1114,7 +1241,9 @@ impl Parser<'_, '_> {
                 self.skip_to_semi();
                 return decls;
             }
-            if d.is_function_declarator() && self.at(Punct::LBrace) {
+            // A function definition has no asm label: after one, `{` is
+            // an initializer (clang's order of checks).
+            if d.is_function_declarator() && d.asm_label.is_none() && self.at(Punct::LBrace) {
                 if !allow_fn_def {
                     self.error_here(DiagId::parse_function_definition_not_allowed);
                     self.skip_unsupported_declaration();
@@ -1143,15 +1272,21 @@ impl Parser<'_, '_> {
                 _ => None,
             };
             let v = self.s.act_on_declarator(&ds, base, &d);
-            let Ok(init) = self.parse_initializer(d.init_style) else {
-                decls.extend(v);
-                self.skip_to_semi();
-                return decls;
-            };
-            match (v, init) {
-                (Some(v), Some(i)) => self.s.act_on_init(v, i),
-                (Some(v), None) => self.s.act_on_uninit(v),
-                _ => {}
+            match self.parse_initializer(d.init_style) {
+                Ok(init) => match (v, init) {
+                    (Some(v), Some(i)) => self.s.act_on_init(v, i),
+                    (Some(v), None) => self.s.act_on_uninit(v),
+                    _ => {}
+                },
+                // A malformed braced-init-list without `=` was skipped
+                // through its `}` (clang's `ParseBraceInitializer`); the
+                // declaration continues.
+                Err(()) if d.init_style == Some(InitStyle::List) => {}
+                Err(()) => {
+                    decls.extend(v);
+                    self.skip_to_semi();
+                    return decls;
+                }
             }
             decls.extend(v);
             if self.eat(Punct::Comma).is_none() {
@@ -1170,6 +1305,56 @@ impl Parser<'_, '_> {
             }
         }
         decls
+    }
+
+    /// A GNU asm label after a declarator (`asm("name")`, also spelled
+    /// `__asm`/`__asm__`; clang's `ParseSimpleAsm(ForAsmLabel)`): `Ok(None)`
+    /// when there is none, `Err` (reported) when it is malformed. The
+    /// adjacent string literals concatenate ([lex.string]/7); the result
+    /// must be an ordinary, non-empty literal.
+    pub(crate) fn parse_asm_label(&mut self) -> Result<Option<(ExprId, Span)>, ()> {
+        if !self.at_kw(Kw::Asm) {
+            return Ok(None);
+        }
+        self.bump();
+        let Some(lparen) = self.eat(Punct::LParen) else {
+            let d = self.s.diag(DiagId::parse_expected_after, self.loc()).arg("'asm'").arg("'('");
+            self.emit(d);
+            return Err(());
+        };
+        let start = self.loc();
+        let label = if self.at_string() {
+            self.parse_string_literal(false).and_then(|e| {
+                let span = Span::new(start, self.prev_end());
+                let ast = &self.s.ast;
+                if ast.exprs.get(e).kind() != ExprKind::StringLiteral {
+                    return None;
+                }
+                let lit = ast.exprs.string_lit(e);
+                let which = match ast.strings.encoding(lit) {
+                    StringEncoding::Ordinary if ast.strings.unit_count(lit) == 0 => "2",
+                    StringEncoding::Ordinary => return Some((e, span)),
+                    StringEncoding::Wide16 | StringEncoding::Wide32 => "1",
+                    _ => "0",
+                };
+                let d =
+                    self.s.diag(DiagId::parse_asm_string_kind, self.loc()).arg(which).range(span);
+                self.emit(d);
+                None
+            })
+        } else {
+            let d = self.s.diag(DiagId::parse_expected_string_literal_in, self.loc()).arg("'asm'");
+            self.emit(d);
+            None
+        };
+        let Some(l) = label else {
+            if self.skip_until(&[Punct::RParen], true, false) {
+                self.bump();
+            }
+            return Err(());
+        };
+        self.expect_closing(Punct::RParen, Punct::LParen, lparen);
+        Ok(Some(l))
     }
 
     /// True if the current token can start a decl-specifier-seq.
@@ -1258,7 +1443,13 @@ impl Parser<'_, '_> {
                 return Err(());
             }
             let value = if self.at(Punct::LBrace) {
-                InitValue::List(self.parse_init_list()?)
+                let Ok(l) = self.parse_init_list() else {
+                    // The inner list skipped through its `}`; skip
+                    // through ours too (clang's `ParseBraceInitializer`).
+                    self.skip_until(&[Punct::RBrace], false, true);
+                    return Err(());
+                };
+                InitValue::List(l)
             } else {
                 let Some(e) = self.parse_assignment_expr() else {
                     self.skip_until(&[Punct::RBrace], false, true);

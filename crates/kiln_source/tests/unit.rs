@@ -8,7 +8,7 @@
 use std::fs;
 use std::path::PathBuf;
 
-use kiln_source::{ExpansionKind, FileId, LineCol, LoadError, Loc, SourceManager, Span};
+use kiln_source::{ExpansionKind, FileId, FileKind, LineCol, LoadError, Loc, SourceManager, Span};
 
 /// A scratch directory under cargo's per-target temp dir, removed on drop.
 struct TempDir(PathBuf);
@@ -704,6 +704,57 @@ fn cpp_include_inclusion_ranges_alias_the_buffer() {
     assert_eq!(sm.include_loc(m), from2);
     // The include stack is followed through the includer's own range.
     assert_eq!(sm.include_loc(from1), Loc::INVALID);
+}
+
+// spec: source.md "File kinds"; [cpp.include] (system headers are an
+// implementation notion: clang's file characteristic per inclusion).
+#[test]
+fn cpp_include_file_kind_marks_per_inclusion() {
+    let sm = SourceManager::new();
+    let main = sm.add_virtual("main.cpp", "#include <h>\n#include \"h\"\nint z;\n".into()).unwrap();
+    let h = sm.add_virtual("h", "int a;\n#pragma GCC system_header\nint b;\n".into()).unwrap();
+    let i1 = sm.add_inclusion(h, sm.loc(main, 9)).unwrap();
+    let i2 = sm.add_inclusion(h, sm.loc(main, 22)).unwrap();
+    let len = sm.text(h).len() as u32;
+    // Nothing marked: everything is a user file.
+    assert_eq!(sm.file_kind(i1), FileKind::User);
+    assert_eq!(sm.file_kind(Loc::INVALID), FileKind::User);
+    // The first inclusion is a system header from its start; the second
+    // becomes one at the pragma (offset 7).
+    sm.set_file_kind(i1, FileKind::System);
+    sm.set_file_kind(i2.with_offset(7), FileKind::System);
+    for off in [0, 4, 7, 20, len] {
+        assert!(sm.is_in_system_header(i1.with_offset(off)), "{off}");
+        assert_eq!(sm.is_in_system_header(i2.with_offset(off)), off >= 7, "{off}");
+    }
+    // Neither the buffer's own range nor the includer is affected.
+    assert!(!sm.is_in_system_header(sm.loc(h, 10)));
+    assert!(!sm.is_in_system_header(sm.loc(main, 30)));
+    // A later mark (a line marker without flag 3) ends the system part;
+    // re-marking a location replaces its mark.
+    sm.set_file_kind(i1.with_offset(14), FileKind::User);
+    assert!(sm.is_in_system_header(i1.with_offset(13)));
+    assert!(!sm.is_in_system_header(i1.with_offset(14)));
+    sm.set_file_kind(i1.with_offset(14), FileKind::ExternCSystem);
+    assert_eq!(sm.file_kind(i1.with_offset(20)), FileKind::ExternCSystem);
+    // Marks in the main file's own range (line markers) work the same.
+    sm.set_file_kind(sm.loc(main, 26), FileKind::System);
+    assert!(!sm.is_in_system_header(sm.loc(main, 25)));
+    assert!(sm.is_in_system_header(sm.loc(main, 26)));
+    // A macro location takes the kind of its expansion location.
+    let m = sm
+        .add_expansion(
+            sm.loc(main, 30),
+            1,
+            Span::new(i2.with_offset(1), i2.with_offset(2)),
+            ExpansionKind::Macro { name: Span::new(i2.with_offset(1), i2.with_offset(2)) },
+        )
+        .unwrap();
+    assert!(!sm.is_in_system_header(m));
+    // Macro locations cannot be marked.
+    sm.set_file_kind(m, FileKind::System);
+    assert!(!sm.is_in_system_header(m));
+    assert!(FileKind::User < FileKind::System && FileKind::System < FileKind::ExternCSystem);
 }
 
 // [lex.phases]/1 line terminators (`\n`, `\r\n`, lone `\r`): the

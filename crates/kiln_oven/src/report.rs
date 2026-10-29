@@ -19,21 +19,31 @@ pub fn render(stats: &EvalStats, loc: &dyn Fn(Loc) -> Option<String>) -> String 
         }
         let _ = writeln!(
             s,
-            ",\"kind\":\"{}\",\"steps\":{},\"bytes\":{},\"peak_bytes\":{},\"calls\":{},\"allocs\":{},\"wall_us\":{}}}",
+            ",\"kind\":\"{}\",\"steps\":{},\"bytes\":{},\"peak_bytes\":{},\"calls\":{},\"allocs\":{},\"peak_arena\":{},\"frozen_bytes\":{},\"wall_us\":{}}}",
             r.kind.as_str(),
             r.steps,
             r.bytes,
             r.peak_bytes,
             r.calls,
             r.allocs,
+            r.peak_arena,
+            r.frozen_bytes,
             r.wall_us
         );
     }
     let t = stats.totals();
     let _ = writeln!(
         s,
-        "{{\"total\":{{\"steps\":{},\"bytes\":{},\"peak_bytes\":{},\"calls\":{},\"allocs\":{},\"wall_us\":{},\"evaluations\":{}}}}}",
-        t.steps, t.bytes, t.peak_bytes, t.calls, t.allocs, t.wall_us, t.evaluations
+        "{{\"total\":{{\"steps\":{},\"bytes\":{},\"peak_bytes\":{},\"calls\":{},\"allocs\":{},\"peak_arena\":{},\"frozen_bytes\":{},\"wall_us\":{},\"evaluations\":{}}}}}",
+        t.steps,
+        t.bytes,
+        t.peak_bytes,
+        t.calls,
+        t.allocs,
+        t.peak_arena,
+        t.frozen_bytes,
+        t.wall_us,
+        t.evaluations
     );
     s
 }

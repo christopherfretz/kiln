@@ -54,6 +54,15 @@ impl AttrKind {
     pub const NO_SANITIZE: AttrKind = AttrKind(85);
     pub const MODE: AttrKind = AttrKind(86);
     pub const VECTOR_SIZE: AttrKind = AttrKind(87);
+    /// GNU asm label (`asm("name")` after a declarator): `a` = the
+    /// label's `StringLitId`. Keyword syntax.
+    pub const ASM_LABEL: AttrKind = AttrKind(88);
+    /// The implicit attribute of a lazily declared builtin function
+    /// (clang's `BuiltinAttr`): `a` = its builtin id
+    /// ([`crate::decl::builtin`]). Always implicit.
+    pub const BUILTIN: AttrKind = AttrKind(89);
+    /// `clang::using_if_exists` on a using-declaration (WP-062).
+    pub const USING_IF_EXISTS: AttrKind = AttrKind(100);
 }
 
 /// Attribute syntax.

@@ -64,6 +64,10 @@ pub struct Measurement {
     /// The total line of kiln's constexpr report (identical in every run;
     /// `wall_us` is not kept). `None` for other compilers.
     pub oven: Option<Counters>,
+    /// Counters a baseline recorded before they existed lacks
+    /// ([`OPTIONAL_COUNTERS`]): read as 0, not judged, not written back.
+    /// Empty for a fresh measurement.
+    pub oven_missing: Vec<Counter>,
     /// Per-run samples, in run order. Results keep them; baselines do not.
     pub samples_wall_ms: Vec<f64>,
     pub samples_rss_kb: Vec<u64>,
@@ -93,7 +97,8 @@ impl Measurement {
             ("max_rss_kb", self.max_rss_kb.map_or(Json::Null, num_u)),
         ];
         if let Some(c) = &self.oven {
-            p.push(("oven", Json::obj(Counter::ALL.map(|k| (k.name(), num_u(c.get(k)))))));
+            let keys = Counter::ALL.into_iter().filter(|k| !self.oven_missing.contains(k));
+            p.push(("oven", Json::obj(keys.map(|k| (k.name(), num_u(c.get(k)))))));
         }
         if samples {
             p.push((
@@ -123,6 +128,10 @@ impl Measurement {
         };
         let mode = s("mode")?;
         let rss = field(j, "max_rss_kb")?;
+        let (oven, oven_missing) = match j.get("oven") {
+            Some(o) => oven_from_json(o).map(|(c, m)| (Some(c), m))?,
+            None => (None, Vec::new()),
+        };
         let nums = |k: &str| -> Result<Vec<&Json>, String> {
             Ok(match j.get(k) {
                 None => Vec::new(),
@@ -145,7 +154,8 @@ impl Measurement {
                 Json::Null => None,
                 r => Some(r.as_u64().ok_or("`max_rss_kb` must be an integer or null")?),
             },
-            oven: j.get("oven").map(oven_from_json).transpose()?,
+            oven,
+            oven_missing,
             samples_wall_ms: nums("samples_wall_ms")?
                 .into_iter()
                 .map(|x| x.as_f64().ok_or("`samples_wall_ms` must hold numbers"))
@@ -161,21 +171,37 @@ impl Measurement {
     }
 }
 
-fn oven_from_json(j: &Json) -> Result<Counters, String> {
-    let n = |c: Counter| -> Result<u64, String> {
-        field(j, c.name())?
-            .as_u64()
-            .ok_or_else(|| format!("`oven.{}` must be a non-negative integer", c.name()))
+/// Counters added after baselines were first recorded: a baseline without
+/// them still loads and is compared on the counters it has.
+pub const OPTIONAL_COUNTERS: [Counter; 2] = [Counter::PeakArena, Counter::FrozenBytes];
+
+/// The counters, and which optional ones are absent.
+fn oven_from_json(j: &Json) -> Result<(Counters, Vec<Counter>), String> {
+    let mut missing = Vec::new();
+    let mut n = |c: Counter| -> Result<u64, String> {
+        match j.get(c.name()) {
+            None if OPTIONAL_COUNTERS.contains(&c) => {
+                missing.push(c);
+                Ok(0)
+            }
+            None => Err(format!("missing `{}`", c.name())),
+            Some(v) => v
+                .as_u64()
+                .ok_or_else(|| format!("`oven.{}` must be a non-negative integer", c.name())),
+        }
     };
-    Ok(Counters {
+    let c = Counters {
         steps: n(Counter::Steps)?,
         bytes: n(Counter::Bytes)?,
         peak_bytes: n(Counter::PeakBytes)?,
         calls: n(Counter::Calls)?,
         allocs: n(Counter::Allocs)?,
+        peak_arena: n(Counter::PeakArena)?,
+        frozen_bytes: n(Counter::FrozenBytes)?,
         wall_us: 0,
         evaluations: n(Counter::Evaluations)?,
-    })
+    };
+    Ok((c, missing))
 }
 
 fn field<'j>(j: &'j Json, key: &str) -> Result<&'j Json, String> {
@@ -450,6 +476,7 @@ pub(super) mod tests {
             spread_pct: 2.04,
             max_rss_kb: rss,
             oven: None,
+            oven_missing: Vec::new(),
             samples_wall_ms: vec![median * 1.1, median, median * 0.98],
             samples_rss_kb: rss.into_iter().collect(),
             compiler: compiler.into(),
@@ -485,6 +512,8 @@ pub(super) mod tests {
             peak_bytes: 3,
             calls: 4,
             allocs: 5,
+            peak_arena: 7,
+            frozen_bytes: 8,
             wall_us: 0,
             evaluations: 6,
         });
@@ -527,6 +556,7 @@ pub(super) mod tests {
             k.contains(
                 "\"oven\": {\n          \"steps\": 1,\n          \"bytes\": 2,\n          \
                  \"peak_bytes\": 3,\n          \"calls\": 4,\n          \"allocs\": 5,\n          \
+                 \"peak_arena\": 7,\n          \"frozen_bytes\": 8,\n          \
                  \"evaluations\": 6\n        }"
             ),
             "{k}"
@@ -564,5 +594,33 @@ pub(super) mod tests {
             BaselineFile::load(Path::new("/nonexistent/x.json"), "oven").unwrap(),
             BaselineFile::default()
         );
+    }
+
+    #[test]
+    fn baselines_without_the_newer_counters_still_load() {
+        let mut meas = sample("kiln", 9.0, Some(1000));
+        meas.oven =
+            Some(Counters { steps: 1, peak_arena: 7, frozen_bytes: 8, ..Counters::default() });
+        let mut file = BaselineFile::default();
+        let base = Baseline { measurement: meas, recorded: "2026-10-28T000000".into() };
+        file.entries.entry("e".into()).or_default().insert("kiln".into(), base);
+        let text = file.to_json("oven").to_pretty();
+        let back = BaselineFile::from_json(&Json::parse(&text).unwrap(), "oven").unwrap();
+        assert_eq!(back.entries["e"]["kiln"].measurement.oven_missing, []);
+        // An older baseline has neither key: read as 0, marked missing, and
+        // written back without them.
+        let old = text.replace("\"peak_arena\": 7,", "").replace("\"frozen_bytes\": 8,", "");
+        assert!(!old.contains("peak_arena") && !old.contains("frozen_bytes"), "{old}");
+        let back = BaselineFile::from_json(&Json::parse(&old).unwrap(), "oven").unwrap();
+        let got = &back.entries["e"]["kiln"].measurement;
+        assert_eq!(got.oven_missing, OPTIONAL_COUNTERS);
+        let counters = got.oven.unwrap();
+        assert_eq!((counters.steps, counters.peak_arena, counters.frozen_bytes), (1, 0, 0));
+        let again = back.to_json("oven").to_pretty();
+        assert!(!again.contains("peak_arena"), "{again}");
+        // The counters that existed from the start stay required.
+        let bad = text.replace("\"allocs\": 0,", "");
+        let err = BaselineFile::from_json(&Json::parse(&bad).unwrap(), "oven").unwrap_err();
+        assert!(err.contains("missing `allocs`"), "{err}");
     }
 }

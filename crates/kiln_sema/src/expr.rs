@@ -265,7 +265,7 @@ impl Sema<'_, '_> {
         e
     }
 
-    fn ignore_parens(&self, e: ExprId) -> ExprId {
+    pub(crate) fn ignore_parens(&self, e: ExprId) -> ExprId {
         let mut e = e;
         for _ in 0..256 {
             if self.ast.exprs.get(e).kind() == ExprKind::ParenExpr {
@@ -621,6 +621,11 @@ impl Sema<'_, '_> {
             None => self.lookup_name(name, LookupKind::Ordinary),
         };
         let Some(&d) = found.decls.first() else {
+            if qualifier.is_none()
+                && let Some(b) = self.lazily_create_builtin(name, loc)
+            {
+                return self.build_decl_ref(b, loc);
+            }
             let text = self.ast.symbols().as_str(name).to_owned();
             let msg = match qualifier {
                 Some(q) => {
@@ -648,11 +653,21 @@ impl Sema<'_, '_> {
             self.emit(msg);
             return self.recover_err(&[], loc);
         }
-        self.build_decl_ref(d, loc)
+        if self.kind_of(d) == DeclKind::UnresolvedUsingIfExists {
+            self.diag_unresolved_using(d, loc);
+            return self.recover_err(&[], loc);
+        }
+        self.build_decl_ref_via(d, loc, found.shadow(0))
     }
 
     /// A `DeclRefExpr` naming the value `d`.
     pub fn build_decl_ref(&mut self, d: DeclId, loc: Loc) -> ExprId {
+        self.build_decl_ref_via(d, loc, None)
+    }
+
+    /// A `DeclRefExpr` naming the value `d`, found through the
+    /// using-shadow `shadow` when that is set (clang's `FoundDecl`).
+    pub fn build_decl_ref_via(&mut self, d: DeclId, loc: Loc, shadow: Option<DeclId>) -> ExprId {
         let n = *self.ast.decls.get(d);
         match n.kind() {
             DeclKind::Var | DeclKind::ParmVar | DeclKind::Function | DeclKind::EnumConstant => {}
@@ -684,11 +699,20 @@ impl Sema<'_, '_> {
             }
         }
         let declared = n.ty().unwrap_or(QualType::ERROR);
-        let ty = self.non_reference(declared);
+        let ty = if self.ast.decls.builtin_id(d).is_some() {
+            QualType::BUILTIN_FN
+        } else {
+            self.non_reference(declared)
+        };
         self.ast.decls.set_flags(d, DeclFlags::REFERENCED);
         self.diagnose_deprecated(d, loc);
         let nou = if self.unevaluated > 0 { NonOdrUse::Unevaluated } else { NonOdrUse::None };
-        let e = self.builder().decl_ref(d, ty, loc, None, nou, ExprFlags::NONE);
+        let extra = shadow.map(|s| kiln_ast::expr::DeclRefExtra {
+            qualifier: None,
+            template_args: None,
+            found_decl: Some(s),
+        });
+        let e = self.builder().decl_ref(d, ty, loc, extra, nou, ExprFlags::NONE);
         if self.unevaluated == 0 {
             match n.kind() {
                 DeclKind::Function => {
@@ -1098,6 +1122,9 @@ impl Sema<'_, '_> {
     }
 
     fn address_of(&mut self, e: ExprId, loc: Loc) -> ExprId {
+        if self.check_builtin_fn_use(e) {
+            return self.recover_err(&[e], loc);
+        }
         let n = *self.ast.exprs.get(e);
         if n.object_kind() == ObjectKind::BitField {
             self.error(DiagId::sema_addrof_bitfield, loc);
@@ -1745,7 +1772,10 @@ impl Sema<'_, '_> {
             let x = self.ignore_parens(callee);
             (self.ast.exprs.get(x).kind() == ExprKind::DeclRefExpr).then(|| self.ast.exprs.decl(x))
         };
-        let f = conv::decay(self, callee);
+        let f = match self.builtin_callee(callee) {
+            Some(b) => self.builtin_fn_to_ptr(callee, b),
+            None => conv::decay(self, callee),
+        };
         let ft = self.ety(f);
         let fn_ty = self.pointee_sugared(ft).filter(|p| self.ast.types.is_function(*p));
         let Some(fn_ty) = fn_ty else {

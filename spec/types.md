@@ -556,6 +556,11 @@ stores ids.
   kiln creates `Elaborated` only for a written keyword or qualifier; the
   printer's `full_scope` rule (§12) yields the same strings. The dump
   prints the written form, which in the M2 subset coincides with clang's.
+  Known exception (found by WP-062's namespace goldens, not yet fixed):
+  for an enumeration declared in a namespace or class, an enumerator's
+  type, and a written qualified type `N::E`, print `'E':'N::E'` in kiln
+  but `'N::E'` in clang (kiln makes no `Elaborated` node carrying the
+  qualifier there).
 - **R5 A thread-safe `&self` interner (sharded locks, as
   `kiln_lex::Interner`).** Sema is single-threaded per TU (spec/ast.md
   §13 Q8); parallelism is across TUs. A lock per type construction costs

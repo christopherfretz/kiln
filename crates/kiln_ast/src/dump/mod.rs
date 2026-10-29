@@ -30,6 +30,7 @@ use kiln_source::{FileId, Loc, SourceManager};
 pub use names::AstNames;
 
 use crate::Ast;
+use crate::attr::AttrKind;
 use crate::consts::PrintOptions as ValueOptions;
 use crate::decl::{
     Access, ConstexprKind, CtorInitKind, DeclFlags, DeclKind, Defaulted, DefinitionBits, EnumData,
@@ -39,9 +40,9 @@ use crate::decl::{
 use crate::expr::{
     ExprDeps, ExprFlags, ExprKind, NonOdrUse, ObjectKind, StringKind, ValueCategory,
 };
-use crate::ids::{AttrId, DeclId, ExprId, ListId, QualType, RawId, StmtId, TypeId};
+use crate::ids::{AttrId, DeclId, ExprId, ListId, QualType, RawId, StmtId, StringLitId, TypeId};
 use crate::stmt::{IfKind, StmtKind};
-use crate::types::{ExcSpec, PrintOptions, write_type};
+use crate::types::{ExcSpec, PrintOptions, write_nns, write_type};
 
 /// Selects the declarations [`dump`] prints as separate trees (clang's
 /// `-ast-dump-filter`, spec/ast-dump.md §1). A declaration matches when
@@ -1005,6 +1006,11 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                     self.decl_ref(first);
                 }
             }
+            DeclKind::Using
+            | DeclKind::NamespaceAlias
+            | DeclKind::UsingShadow
+            | DeclKind::UsingEnum
+            | DeclKind::UsingDirective => self.using_fields(d, n.kind()),
             DeclKind::LinkageSpec => {
                 let lang = decls.scope(d).map_or(0, |s| s.aux);
                 self.line.push_str(if lang == LinkageLang::C as u32 { " C" } else { " C++" });
@@ -1028,6 +1034,27 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                     self.opt_ty(n.ty());
                 }
             }
+        }
+    }
+
+    /// The fields of a using-family declaration (spec/ast-dump.md §3).
+    fn using_fields(&mut self, d: DeclId, kind: DeclKind) {
+        let ast = self.ast;
+        match kind {
+            DeclKind::Using => {
+                self.line.push(' ');
+                if let Some(q) = ast.using_qualifier(d) {
+                    write_nns(&ast.types, &self.names, q, &mut self.line);
+                }
+                self.names.write_name(d, &mut self.line);
+                return;
+            }
+            DeclKind::NamespaceAlias => self.name(d),
+            _ => {}
+        }
+        if let Some(t) = ast.using_target(d) {
+            self.line.push(' ');
+            self.decl_ref(t);
         }
     }
 
@@ -1112,6 +1139,17 @@ impl<'a, W: io::Write> Dumper<'a, W> {
         }
         if node.flags & 1 != 0 {
             self.line.push_str(" Implicit");
+        }
+        if node.kind == AttrKind::ASM_LABEL
+            && let Some(l) = StringLitId::from_raw(node.a)
+        {
+            // clang prints the label's bytes unescaped.
+            self.line.push_str(" \"");
+            self.line.push_str(&String::from_utf8_lossy(self.ast.strings.bytes(l)));
+            self.line.push_str("\" IsLiteralLabel");
+        }
+        if node.kind == AttrKind::BUILTIN {
+            let _ = write!(self.line, " {}", node.a);
         }
     }
 

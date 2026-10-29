@@ -116,6 +116,11 @@ no category).
 | `TranslationUnitDecl` | `TranslationUnitDecl` |
 | `TypedefDecl`, `TypeAliasDecl` | `TypedefDecl <head> Name 'type'` (no type-tree children) |
 | `NamespaceDecl` | `NamespaceDecl <head> [Name] [inline] [original Namespace 'Name']` (`original` on a reopening names the first declaration) |
+| `NamespaceAliasDecl` | `NamespaceAliasDecl <head> Name Namespace 'Target'` or `... NamespaceAlias 'Target'` (the namespace or alias as written) |
+| `UsingDirectiveDecl` | `UsingDirectiveDecl <head> Namespace 'Name'` (an unnamed namespace's implicit directive prints `implicit` and `Namespace ''`) |
+| `UsingDecl` | `UsingDecl <head> qualifier::name` (the nested-name-specifier as written, `::N::x` or `N::x`) |
+| `UsingShadowDecl` | `UsingShadowDecl <head> Kind 'name'[ 'type'[:'canonical']]` (always `implicit`, so printed only with implicit nodes; the target's kind, name and, for a value or typedef, its type) |
+| `UsingEnumDecl` | `UsingEnumDecl <head> Enum 'Name'` |
 | `CXXRecordDecl` | `CXXRecordDecl <head> [friend_undeclared] struct\|class\|union [Name] [definition]`; children: base-specifiers, attributes, `FinalAttr final` (the class-virt-specifier; clang adds it after the head's attributes), members. `friend_undeclared`: first declared by a `friend` declaration (it prints under its `FriendDecl`) |
 | base-specifier | `[virtual ]public\|protected\|private 'type'[...]` (no class name; the semantic access: defaulted is `private` in a `class`, else `public`) |
 | `FieldDecl` | `FieldDecl <head> [name] 'type' [mutable]` [child: bit-width `ConstantExpr`] [child: default member initializer] (an unnamed bit-field has no name) |
@@ -130,13 +135,13 @@ no category).
 | `ParmVarDecl` | `ParmVarDecl <head> [name] 'type' [cinit] [pack]` (`cinit`: has a default argument, its child) |
 | `VarDecl` | `VarDecl <head> name 'type' [static\|extern\|register] [tls\|tls_dynamic] [nrvo] [inline] [constexpr] [cinit\|callinit\|listinit\|parenlistinit] [value=V]` (the init style only with an initializer; `constinit` is an attribute in clang and is not printed); `value=` only on a `constexpr` variable with an initializer (a `const int` initialized by a constant prints none, as in clang) |
 | `StaticAssertDecl` | `StaticAssertDecl <head>` children: condition, [message (`StringLiteral unevaluated "msg"`)] |
-| attribute | `<Name>Attr [#aN] [@loc] [Inherited] [Implicit]` with clang's class name (`[[nodiscard]]` → `WarnUnusedResultAttr`); a kind without one prints `UnknownAttr kind=N`. Arguments are not printed (M2). Implicit attributes print only with `implicit` |
+| attribute | `<Name>Attr [#aN] [@loc] [Inherited] [Implicit]` with clang's class name (`[[nodiscard]]` → `WarnUnusedResultAttr`); a kind without one prints `UnknownAttr kind=N`. Arguments are not printed (M2), except: `AsmLabelAttr [Inherited] "label" IsLiteralLabel` (the label's bytes unescaped, as clang) and `BuiltinAttr Implicit N` (the builtin id; the implicit builtin decl and its `extern "C"` `LinkageSpecDecl` print only with `implicit`). Implicit attributes print only with `implicit` |
 | `IntegerLiteral` | `IntegerLiteral 'type' N` |
 | `FloatingLiteral` | `FloatingLiteral 'type' 1.5e0` |
 | `CharacterLiteral` | `CharacterLiteral 'type' N` (the code unit value, decimal) |
 | `StringLiteral` | `StringLiteral 'type' lvalue "text"` (as an initializer of a `char` array clang 19 prints it as a prvalue) |
 | `CXXBoolLiteralExpr`, `CXXNullPtrLiteralExpr` | `... 'bool' true`, `... 'std::nullptr_t'` |
-| `DeclRefExpr` | `DeclRefExpr 'type' [lvalue] Kind 'name' 'type' [non_odr_use_constant\|non_odr_use_unevaluated\|non_odr_use_discarded]` |
+| `DeclRefExpr` | `DeclRefExpr 'type' [lvalue] Kind 'name' 'type' [(UsingShadow 'name')] [non_odr_use_constant\|non_odr_use_unevaluated\|non_odr_use_discarded]` (`(UsingShadow 'name')`: the name was found through a using-declaration, clang's `FoundDecl`) |
 | `MemberExpr` | `MemberExpr 'type' [lvalue [bitfield]] .name\|->name` |
 | `ImplicitCastExpr` | `ImplicitCastExpr 'type' [lvalue\|xvalue] <Kind> [part_of_explicit_cast]` |
 | `CStyleCastExpr` | `CStyleCastExpr 'type' [lvalue\|xvalue] <Kind>` |
@@ -168,17 +173,27 @@ Notes:
 - Since C++23 a `return` of a local variable or parameter is an implicit
   move: the operand is `ImplicitCastExpr 'T' xvalue <NoOp>` around the
   `DeclRefExpr`, under the `LValueToRValue` cast, also for scalars.
-- The kiln dump prints namespaces and attributes (lines above), but they
-  are not in the M2 goldens.
+- The kiln dump prints `mutable`, attributes and base-specifiers (lines
+  above), but they are not in the M2 goldens.
+- Namespaces, namespace aliases, using-directives, using-declarations,
+  using-shadows and `using enum` are in the dump and the clang
+  normalizer since WP-062 (goldens under
+  `tests/conformance/ast/{namespace.udecl,namespace.alias,enum.udecl}/`).
+  A namespace's members are found by `--filter N::x`; an inline
+  namespace is transparent to the filter. Known difference: an
+  enumerator's type, and a qualified enumeration type as written, print
+  `'E':'N::E'` in kiln and `'N::E'` in clang when the enumeration is in
+  a namespace or class (spec/types.md §15 R4), so goldens use global
+  enumerations.
 - The class-feature lines (member functions, ctor-initializers, access
   and friend declarations, bases, `Overrides:`, named and functional
   casts and the construction and temporary expressions, spec/sema-class.md
   §8.1) are WP-066a; kiln produces them once sema builds them (WP-065,
   066b/c, 078a).
-- Not in the dump (an error in the clang normalizer, §6): namespaces,
-  attributes other than `override`/`final`, `thread_local`, overloaded
-  operator calls (`CXXOperatorCallExpr`), `new`/`delete`, `throw`,
-  lambdas, `ConstantExpr` values of floating, pointer or lvalue type, and
+- Not in the dump (an error in the clang normalizer, §6): attributes
+  other than `override`/`final`, `thread_local`, overloaded operator calls
+  (`CXXOperatorCallExpr`), `new`/`delete`, `throw`, lambdas,
+  `ConstantExpr` values of floating, pointer or lvalue type, and
   `long double` values; also clang's `noexcept-uninstantiated`,
   `ineligible` and `not_selected` member-function words (templates and
   constrained special members, M3) and a block-scope `extern`

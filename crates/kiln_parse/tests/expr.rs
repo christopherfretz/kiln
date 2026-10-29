@@ -226,3 +226,24 @@ fn expr_unary_noexcept() {
     let p = parse("bool b = noexcept 1;");
     p.assert_diag("expected '(' after 'noexcept'");
 }
+
+/// `__builtin_is_constant_evaluated` is declared on first use (clang
+/// `LazilyCreateBuiltin`); its name must be called directly.
+#[test]
+fn builtin_is_constant_evaluated() {
+    let p = parse("bool f() { return __builtin_is_constant_evaluated(); }");
+    p.assert_clean();
+    p.assert_dump(
+        "ImplicitCastExpr 'bool (*)() noexcept' <BuiltinFnToFnPtr>\n\
+         \x20         `-DeclRefExpr '<builtin fn type>' Function '__builtin_is_constant_evaluated' 'bool () noexcept'",
+    );
+    let p = parse(
+        "auto p = &__builtin_is_constant_evaluated;\nvoid g() { __builtin_is_constant_evaluated; }",
+    );
+    p.assert_diag("1:11 error: builtin functions must be directly called");
+    p.assert_diag("2:12 error: builtin functions must be directly called");
+    let p = parse("bool (*q)() = __builtin_is_constant_evaluated;");
+    p.assert_diag("1:15 error: builtin functions must be directly called");
+    let p = parse("static_assert(__builtin_is_constant_evaluated());");
+    p.assert_diag("1:15 warning: '__builtin_is_constant_evaluated' will always evaluate to 'true'");
+}

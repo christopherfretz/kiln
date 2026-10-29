@@ -162,8 +162,22 @@ struct Mangler<'a> {
     subs: Vec<Sub>,
 }
 
+/// The GNU asm label of `d`'s entity (recorded on its first declaration),
+/// which replaces its linkage name. clang's `MangleContext::mangleName`
+/// prefixes LLVM's `\x01` "no global prefix" marker when the target's
+/// user-label prefix is non-empty (Mach-O's `_`); every kiln target is
+/// ELF, whose prefix is empty, so the label is the symbol verbatim (a
+/// `\x01` the user wrote stays: LLVM strips it when emitting).
+pub fn asm_label(ast: &Ast, d: DeclId) -> Option<String> {
+    let l = ast.decls.cold.asm_label.get(ast.first(d))?;
+    Some(String::from_utf8_lossy(ast.strings.bytes(*l)).into_owned())
+}
+
 /// The linkage name of a namespace-scope function or variable.
 pub fn mangle_decl(ast: &Ast, d: DeclId) -> String {
+    if let Some(l) = asm_label(ast, d) {
+        return l;
+    }
     if is_unmangled(ast, d) {
         return decl_name(ast, d);
     }
@@ -184,6 +198,9 @@ pub fn mangle_decl(ast: &Ast, d: DeclId) -> String {
 /// static local of its function with the same name.
 pub fn mangle_static_local(ast: &Ast, d: DeclId, index: u32) -> String {
     use std::fmt::Write as _;
+    if let Some(l) = asm_label(ast, d) {
+        return l;
+    }
     let mut s = mangle_decl(ast, d);
     // <discriminator> := _ <number> (< 10) | __ <number> _ ; the first
     // occurrence has none, the second is number 0.

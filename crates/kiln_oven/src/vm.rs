@@ -13,7 +13,7 @@ use crate::arith::{self, FloatErr, IntErr, canon};
 use crate::compile::{FState, GState, float_of};
 use crate::failure::{EvalFailure, FailKind};
 use crate::kbc::{Op, ak, cmp};
-use crate::mem::{Alloc, MemFault, Origin, Ptr, flags};
+use crate::mem::{Alloc, MemFault, Origin, Ptr, Sp, flags};
 use crate::memo::{MAX_ARGS, MemoKey, MemoVal};
 use crate::ty::{OTy, TyKind};
 use crate::{Oven, SemaBridge};
@@ -30,6 +30,10 @@ pub(crate) struct Counters {
     pub bytes: u64,
     pub peak: u64,
     pub calls: u64,
+    /// Peak address space (`peak_arena`).
+    pub arena: u64,
+    /// Heap allocations (`allocs`).
+    pub allocs: u64,
 }
 
 /// A memoizable call in progress: what it will be charged.
@@ -39,13 +43,19 @@ struct Pending {
     steps0: u64,
     calls0: u64,
     bytes0: u64,
+    /// Live bytes at entry.
     live0: u64,
+    /// Address space at entry.
+    arena0: u64,
     peak_saved: u64,
+    arena_saved: u64,
     maxd_saved: u32,
     /// The call's own depth (active calls including it).
     d0: u32,
-    /// `RunState::enum_oob` at entry.
-    oob0: u64,
+    /// `RunState::impure` at entry.
+    impure0: u64,
+    /// `Memory::heap_ops` at entry.
+    heap0: u64,
 }
 
 /// The state of the running evaluation.
@@ -57,7 +67,7 @@ pub(crate) struct RunState {
     /// `stack.len()` at the start of the innermost `exec`.
     pub entry: usize,
     /// Deepest active-call count since the innermost pending memo call.
-    maxd: u32,
+    pub maxd: u32,
     pending: Vec<Pending>,
     /// The variable being initialized (its frame object freezes as the
     /// variable itself).
@@ -65,12 +75,21 @@ pub(crate) struct RunState {
     /// Out-of-range unscoped enumeration casts are reported
     /// ([`crate::EvalContext::enum_range_check`]).
     pub enum_check: bool,
-    /// Out-of-range enumeration casts executed so far. A call that executed
-    /// one is not memoized: clang reports the conversion on every
-    /// evaluation that checks it, and a cached result would skip it.
-    enum_oob: u64,
+    /// Effects a cached result would skip, executed so far: out-of-range
+    /// enumeration casts (clang reports the conversion on every evaluation
+    /// that checks it) and nested evaluations (R-OVEN-1: their records and
+    /// diagnostics). A call that executed one is not memoized.
+    pub impure: u64,
     /// Nested global initializations in progress.
     pub nesting: u32,
+    /// The evaluation is manifestly constant-evaluated ([expr.const]/20):
+    /// `__builtin_is_constant_evaluated()` yields true. A trial fold
+    /// ([`crate::Oven::try_fold`]) yields false.
+    pub const_context: bool,
+    /// Depth charged to the enclosing evaluation contexts (R-OVEN-1): a
+    /// nested evaluation's calls count from the depth of the call that
+    /// started it, plus one for the context itself.
+    pub depth_base: u32,
 }
 
 impl RunState {
@@ -185,6 +204,31 @@ fn compare(c: u32, o: Ordering) -> bool {
 }
 
 impl Oven {
+    /// clang's `warn_is_constant_evaluated_always_true_constexpr`: the
+    /// builtin called directly by the top-level expression, or through
+    /// `std::is_constant_evaluated` (`aux` = 1) called directly by it,
+    /// in an evaluation that is always constant.
+    fn always_true_diag(&self, b: &mut dyn SemaBridge, pc: usize, aux: u32) {
+        let depth = self.stack.len() - self.run.entry;
+        let (name, at) = match (depth, aux) {
+            (1, _) => ("__builtin_is_constant_evaluated", pc),
+            (2, 1) => match self.stack.last() {
+                Some(f) if f.call_pc != NO_CALL => {
+                    ("std::is_constant_evaluated", f.call_pc as usize)
+                }
+                _ => return,
+            },
+            _ => return,
+        };
+        let loc = self.site(at).loc;
+        let d = kiln_diag::Diag::new(
+            kiln_diag::DiagId::oven_constant_evaluated_always_true,
+            kiln_source::Span::empty(loc),
+        )
+        .arg(name);
+        b.diag(d);
+    }
+
     /// Runs function `func` with its frame at register `fb` until it
     /// returns (the result is in `regs[fb]`).
     /// Reports an out-of-range unscoped enumeration value (clang's
@@ -232,6 +276,7 @@ impl Oven {
                 while self.run.pending.len() > pend {
                     if let Some(p) = self.run.pending.pop() {
                         self.mem.peak = self.mem.peak.max(p.peak_saved);
+                        self.mem.arena_peak = self.mem.arena_peak.max(p.arena_saved);
                         self.run.maxd = self.run.maxd.max(p.maxd_saved);
                     }
                 }
@@ -252,13 +297,7 @@ impl Oven {
 
     /// The live or dead (same generation) allocation `p` designates.
     pub(crate) fn alloc_any(&self, p: Ptr) -> Option<&Alloc> {
-        if p.is_fn() {
-            return None;
-        }
-        if p.is_static() {
-            return self.mem.statics.get((p.slot & !crate::mem::STATIC_BIT) as usize);
-        }
-        self.mem.slots.get(p.slot as usize).filter(|a| a.generation == p.generation && p.slot != 0)
+        self.mem.alloc_any(p)
     }
 
     fn run_loop(&mut self, b: &mut dyn SemaBridge, func: u32, fb0: u32) -> Exit {
@@ -408,7 +447,7 @@ impl Oven {
                     // expression proper is required (spec/oven.md
                     // "Integration"); elsewhere the cast is not checked.
                     if oob {
-                        self.run.enum_oob += 1;
+                        self.run.impure += 1;
                         if self.run.enum_check && !self.run.silent {
                             let v =
                                 if fs { raw.cast_signed().to_string() } else { raw.to_string() };
@@ -616,6 +655,14 @@ impl Oven {
                     }
                     pc += 4;
                 }
+                Op::IsConstEval => {
+                    let cc = self.run.const_context;
+                    reg!(0) = u128::from(cc);
+                    if cc && !self.run.silent {
+                        self.always_true_diag(b, pc, aux);
+                    }
+                    pc += 2;
+                }
                 Op::Call | Op::CallInd => {
                     let callee = if op == Op::Call {
                         arg!(0) as u32
@@ -695,7 +742,7 @@ impl Oven {
         if f.state != FState::Ready {
             return Err(Fault::Callee(callee));
         }
-        let active = (self.stack.len() - self.run.entry - 1) as u32;
+        let active = self.active_calls();
         if active >= self.budget.depth {
             return Err(Fault::Depth);
         }
@@ -703,38 +750,48 @@ impl Oven {
         let memo = f.memo && self.memo.enabled();
         let (entry, nregs) = (f.entry as usize, f.nregs as usize);
         if memo {
-            let mut key = MemoKey { func: callee, args: [0; MAX_ARGS] };
+            // A call's result can depend on the evaluation context
+            // (`__builtin_is_constant_evaluated` in a callee): the context
+            // is part of the key.
+            let func = callee | u32::from(self.run.const_context) << 31;
+            let mut key = MemoKey { func, args: [0; MAX_ARGS] };
             for (i, p) in f.params.iter().enumerate() {
                 key.args[i] = self.regs[nb + p.reg as usize];
             }
             let c = self.run.counters;
             if let Some(v) = self.memo.get(&key) {
-                let top = self.mem.frame.top;
+                let (live, arena) = (self.mem.live_bytes(), self.mem.arena());
                 if c.steps + v.steps <= self.budget.steps
                     && active + v.depth <= self.budget.depth
-                    && top + v.peak <= self.mem.limit
+                    && arena + v.arena <= self.mem.limit
                 {
                     self.run.counters.steps += v.steps;
                     self.run.counters.calls += v.calls;
                     self.mem.allocated += v.bytes;
-                    self.mem.peak = self.mem.peak.max(top + v.peak);
+                    self.mem.peak = self.mem.peak.max(live + v.peak);
+                    self.mem.arena_peak = self.mem.arena_peak.max(arena + v.arena);
                     self.run.maxd = self.run.maxd.max(active + v.depth);
                     self.regs[nb] = v.result;
                     return Ok(None);
                 }
             }
+            let (live, arena) = (self.mem.live_bytes(), self.mem.arena());
             self.run.pending.push(Pending {
                 key,
                 steps0: c.steps,
                 calls0: c.calls,
                 bytes0: self.mem.allocated,
-                live0: self.mem.frame.top,
+                live0: live,
+                arena0: arena,
                 peak_saved: self.mem.peak,
+                arena_saved: self.mem.arena_peak,
                 maxd_saved: self.run.maxd,
                 d0: active + 1,
-                oob0: self.run.enum_oob,
+                impure0: self.run.impure,
+                heap0: self.mem.heap_ops,
             });
-            self.mem.peak = self.mem.frame.top;
+            self.mem.peak = live;
+            self.mem.arena_peak = arena;
             self.run.maxd = active + 1;
         }
         self.run.counters.calls += 1;
@@ -763,13 +820,25 @@ impl Oven {
             calls: c.calls - p.calls0,
             bytes: self.mem.allocated - p.bytes0,
             peak: self.mem.peak.saturating_sub(p.live0),
+            arena: self.mem.arena_peak.saturating_sub(p.arena0),
             depth: self.run.maxd.saturating_sub(p.d0) + 1,
         };
-        if self.run.enum_oob == p.oob0 {
+        // A call that allocated or freed heap memory is not pure (a cached
+        // result would skip the allocation's accounting, or return a
+        // pointer to an object a later delete frees).
+        if self.run.impure == p.impure0 && self.mem.heap_ops == p.heap0 {
             self.memo.insert(p.key, val);
         }
         self.mem.peak = self.mem.peak.max(p.peak_saved);
+        self.mem.arena_peak = self.mem.arena_peak.max(p.arena_saved);
         self.run.maxd = self.run.maxd.max(p.maxd_saved);
+    }
+
+    /// Active calls of the running evaluation, counting those of the
+    /// evaluation contexts it is nested in (`RunState::depth_base`).
+    pub(crate) fn active_calls(&self) -> u32 {
+        let own = self.stack.len().saturating_sub(self.run.entry + 1) as u32;
+        own + self.run.depth_base
     }
 
     // ---- pointers ---------------------------------------------------------
@@ -988,7 +1057,7 @@ impl Oven {
     /// (`k` other than [`ak::READ`]) is checked as the write it precedes, so
     /// modifying an object visible outside the evaluation is diagnosed
     /// before reading it ([expr.const]/5.16).
-    fn rmw_check(&self, raw: u64, len: u64, ty: OTy, k: u32) -> Result<(bool, u64, &Alloc), Fault> {
+    fn rmw_check(&self, raw: u64, len: u64, ty: OTy, k: u32) -> Result<(Sp, u64, &Alloc), Fault> {
         let fault = |f| Fault::Mem { f, ak: k, ty, p: raw };
         let w = k != ak::READ;
         let (st, abs, a) = self.mem.check(raw, len, w).map_err(fault)?;
@@ -1232,12 +1301,13 @@ impl Oven {
     }
 }
 
-/// The fault of modifying allocation `a` (`stat`: in static space): an
+/// The fault of modifying allocation `a` (in space `sp`): an
 /// object whose lifetime began outside the evaluation ([expr.const]/5.16,
 /// clang's `note_constexpr_modify_global`) is diagnosed before a const one
 /// ([dcl.type.cv]/4).
-fn write_fault(stat: bool, a: &Alloc, ty: OTy) -> Option<MemFault> {
-    if stat && a.flags & flags::RESOLVING == 0 && matches!(a.origin, Origin::Global(_)) {
+fn write_fault(sp: Sp, a: &Alloc, ty: OTy) -> Option<MemFault> {
+    if sp == Sp::Static && a.flags & flags::RESOLVING == 0 && matches!(a.origin, Origin::Global(_))
+    {
         return Some(MemFault::ModifyGlobal);
     }
     if let Origin::Str(_, e) = a.origin {

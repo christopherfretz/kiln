@@ -158,6 +158,28 @@ Option<DeclId>, group: RedeclGroupId }`). `T` = may be templated (§8.2).
 | templates | `ClassTemplate`R, `FunctionTemplate`R, `VarTemplate`R, `TypeAliasTemplate`R, `Concept`, `BuiltinTemplate` (`__make_integer_seq`, `__type_pack_element`), `TemplateTypeParm`, `NonTypeTemplateParm`, `TemplateTemplateParm`, `ImplicitConceptSpecialization`, `RequiresExprBody`★ |
 | synthesized | `LifetimeExtendedTemporary` (payload `LetData { extending: DeclId, mangling_index: u32, value: Option<ConstValueId> }`; context the extending declaration's, in no member list or lookup table), `TemplateParamObject` (class-type NTTP object: type + `ConstValueId`), `StaticAssert` (cond `ExprId`, message `ExprId`, P2741), `Label`, `ContractResultName` (P2900 `post(r: ...)`) |
 
+Using-family payloads (WP-062; one inline `Payload::None(u32)` word,
+read with `Ast::using_target`/`Ast::using_qualifier`):
+
+| kind | payload word | in lookup? | in member list? | builder |
+|---|---|---|---|---|
+| `UsingDirective` | nominated namespace (first declaration) | no | yes | pushed by Sema (`act_on_using_directive`) |
+| `Using` | `NnsId` of the qualifier as written (0: none) | no | yes | `using_decl` |
+| `UsingShadow` (implicit) | target declaration (or an `UnresolvedUsingIfExists`) | yes | yes | `using_shadow(h, target, prev)` |
+| `UsingEnum` | the enumeration's definition | no | yes | `using_enum` |
+| `NamespaceAlias` | aliased namespace or alias, as written | yes | yes | `namespace_alias(h, target, prev)` |
+| `UnresolvedUsingIfExists` | 0 | no | no | `unresolved_using_if_exists` |
+
+- `Ast::strip_shadow(d)` looks through a `UsingShadow`;
+  `Ast::resolve_alias(d)` follows alias chains to the namespace's first
+  declaration.
+- `prev` replaces an earlier shadow of the same target (or an earlier
+  alias to the same namespace) in the lookup table; it is not yet a
+  redeclaration-chain link (no `Redecl` payload for these kinds), so
+  the dump prints no `prev`.
+- `DeclRefExtra::found_decl` records the `UsingShadow` a `DeclRefExpr`'s
+  name was found through (clang's `FoundDecl`).
+
 Hot payloads (dense arenas, one record per decl of the kind):
 ```rust
 struct FunctionData {               // 24 bytes
@@ -205,6 +227,19 @@ pre|post, cond: ExprId, result_name: Option<DeclId> }`), `asm` labels,
 default arguments of templates, alignment overrides, deprecation messages.
 A cold map costs ~16 B per *entry* and nothing for decls without one;
 fields used by fewer than ~5% of decls of a kind go there.
+
+- `asm_label: ColdMap<DeclId, StringLitId>` (WP-063): the GNU asm label
+  of a function or variable, keyed by the entity's *first* declaration
+  (a label on any redeclaration names the entity); each declaration
+  also carries an `AsmLabel` attribute (§7).
+- `builtin_id: ColdMap<DeclId, u32>` (WP-063): the builtin id of an
+  implicit builtin `Function` decl, read through
+  `DeclArena::builtin_id(d)`. Ids and spellings are in
+  `kiln_ast::decl::builtin` (`IS_CONSTANT_EVALUATED = 722`, clang's
+  numbering; `ALL`; `by_name`).
+- `AstBuilder::linkage_spec_head(head, lang)` creates a
+  `LinkageSpecDecl` from a full `DeclHead`, so implicit ones get
+  `IMPLICIT` at creation (`linkage_spec` delegates to it).
 
 ### 4.3 DeclContext lookup tables
 - **One global table** `FxHashMap<(DeclId /*semantic ctx*/, DeclName),
@@ -407,6 +442,9 @@ with attributes have `HAS_ATTRS` and an entry in `decl_attrs: FxHashMap<
 DeclId, ListId>`. Annotations (P3394, M6) are `AttrKind::Annotation` with
 `a` = `ConstValueId` (the annotation value, evaluated when not
 dependent). Unknown attributes are diagnosed and dropped (not stored).
+`AttrKind::ASM_LABEL` (88): `a` = raw `StringLitId` of the label,
+flags bit 1 = inherited from the previous declaration.
+`AttrKind::BUILTIN` (89): implicit, `a` = builtin id, invalid location.
 
 ## 8. Templates (M3; representation fixed now)
 ### 8.1 Parameters
@@ -591,6 +629,15 @@ struct UnionMember { at: u32, field: DeclId }       // active member of the unio
   - Pools are `u32`-indexed: 4 GiB of image bytes in total.
   - `HeapSize` reports these rows: `nodes`, `words`, `paths`, `aggs`,
     `bytes`, `relocs`, `padding`, `unions`, `intern`.
+  - `content_bytes() -> u64` is the interned content: the length of every
+    pool times its element size (the rows above except `intern`, without
+    spare capacity). It is deterministic on every 64-bit host and does not
+    change when a value already present is pushed again, so its difference
+    across a freeze is what the freeze added. The Oven reports that
+    difference as `frozen_bytes` (spec/oven.md, R-OVEN-2): freezing an
+    aggregate equal to one already frozen yields the same `ConstValueId`
+    and adds 0 bytes (`crates/kiln_ast/tests/consts.rs`,
+    `crates/kiln_oven/tests/nested.rs`).
 - **`StringPool`** (`kiln_ast::strings`, also WP-043).
   - `intern(StringEncoding, code_units: &[u8]) -> StringLitId` dedups by
     `(encoding, bytes)`. The code units are little-endian, `unit_bytes()`

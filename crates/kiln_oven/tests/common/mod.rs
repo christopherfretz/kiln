@@ -57,7 +57,7 @@ impl SemaBridge for Bridge<'_> {
     fn ast(&self) -> &Ast {
         self.ast
     }
-    fn ensure_body(&mut self, f: DeclId) -> Option<StmtId> {
+    fn ensure_body(&mut self, f: DeclId, _oven: &mut Oven) -> Option<StmtId> {
         let d = self.ast.definition(f)?;
         self.ast.decls.function(d)?.body
     }

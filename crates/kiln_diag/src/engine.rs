@@ -100,6 +100,28 @@ impl<'sm> DiagEngine<'sm> {
         self.policy.severity(id)
     }
 
+    /// Whether warnings located in system headers are dropped: true
+    /// unless `-Wsystem-headers` (clang `getSuppressSystemWarnings`).
+    pub fn suppress_system_warnings(&self) -> bool {
+        self.policy.suppress_system
+    }
+
+    /// Whether `id` located at `loc` would be emitted: enabled
+    /// ([`Self::is_enabled`]) and not suppressed in a system header (§5.4).
+    pub fn is_enabled_at(&self, id: DiagId, loc: kiln_source::Loc) -> bool {
+        self.is_enabled(id) && !self.suppressed_in_system_header(id, loc)
+    }
+
+    /// clang's system-header rule (the tail of `getDiagnosticSeverity`):
+    /// a diagnostic that does not show in system headers, whose location's
+    /// expansion is in one, is ignored unless `-Wsystem-headers`.
+    fn suppressed_in_system_header(&self, id: DiagId, loc: kiln_source::Loc) -> bool {
+        self.policy.suppress_system
+            && !id.shows_in_system_header()
+            && loc.is_valid()
+            && self.sm.is_in_system_header(loc)
+    }
+
     /// Whether `id` would be emitted at all. Use it to skip expensive
     /// checks for disabled warnings.
     pub fn is_enabled(&self, id: DiagId) -> bool {
@@ -167,6 +189,9 @@ impl<'sm> DiagEngine<'sm> {
             Severity::Error => Level::Error,
             Severity::Fatal => Level::Fatal,
         };
+        if self.suppressed_in_system_header(id, d.span.lo) {
+            return;
+        }
         let mut st = self.lock();
         // Re-check under the lock: another thread may have gone fatal.
         if self.has_fatal() {

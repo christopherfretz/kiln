@@ -136,7 +136,8 @@ the evaluator's flattened type table.
   as the referred-to object (`bad(a[1], 0)`), as clang prints them.
 - `-fconstexpr-backtrace-limit=N` (`Oven::set_backtrace_limit`) sets the
   frame limit; 0 shows every frame.
-- `try_fold` and `is_constant_initialized` never render notes (`silent`).
+- `try_fold`, `is_constant_initialized` and `fold_constant_init` never
+  render notes or warnings (`silent`).
 - An out-of-range conversion to an unscoped enumeration without a fixed
   underlying type ([expr.static.cast]/10) is accepted with the value, and
   reported only where clang 19 reports it ("Integration").
@@ -155,6 +156,42 @@ the evaluator's flattened type table.
   expressions ([expr.const]/4) when its initializer folds; its value is
   evaluated on demand when first read (nested initializations are capped
   at 512 deep and then read as unknown).
+- `Oven::fold_constant_init(bridge, e, var) -> Option<ConstValueId>`
+  (WP-063): folds `var`'s initializer `e` as a constant initializer
+  ([basic.start.static]/2): manifestly constant-evaluated, but silent and
+  not recorded, like `try_fold`. Codegen uses it for the initializers it
+  emits as constants (spec/codegen.md).
+
+### Manifestly constant-evaluated context — normative (WP-063)
+`__builtin_is_constant_evaluated()` ([expr.const]/20, [meta.const.eval])
+asks whether the evaluation is manifestly constant-evaluated.
+- `RunState::const_context` holds the answer for one top-level
+  evaluation: true for `evaluate`, `is_constant_initialized` and
+  `fold_constant_init`, false for `try_fold` (a trial fold is not
+  manifestly constant-evaluated). The nested initialization of a variable
+  read during an evaluation (`resolve_var`) is a constant initializer:
+  it runs with `const_context` true and restores the outer value after.
+  A nested evaluation context (R-OVEN-1, a bridge callback's `evaluate`
+  or `try_fold`) sets the flag by its own entry point and restores the
+  enclosing context's value at its end, with the rest of the run state.
+- A call to the builtin (a `CallExpr` whose callee is a
+  `BuiltinFnToFnPtr` cast of a builtin's name) compiles to
+  `IsConstEval [dst]`, which writes the flag as a `bool`. Its `aux` is 1
+  when the enclosing function is `std::is_constant_evaluated` (a function
+  of that name in `std`, through inline namespaces).
+- **Warning** (`-Wconstant-evaluated`, clang's
+  `warn_is_constant_evaluated_always_true_constexpr`): when the answer is
+  true in a non-silent evaluation, and the builtin is called directly by
+  the evaluated expression (frame depth 1), the warning names
+  `__builtin_is_constant_evaluated` at the begin of the call's callee;
+  when it is called from `std::is_constant_evaluated` at depth 2, it
+  names `std::is_constant_evaluated` at that call's site. Deeper calls do
+  not warn. The warning goes through `SemaBridge::diag`, so it obeys
+  `-Wno-`/`-Werror=` and system-header suppression.
+- **Memoization:** a function whose body uses `IsConstEval` is never
+  memoized, and every memo key carries the context (bit 31 of the
+  function word), so a call cached in one context is never replayed in
+  the other.
 
 ### Limits and metrics — normative for M2
 - `Budget { steps: 1048576, depth: 512, bytes: 256 MiB, memo_entries:
@@ -169,9 +206,12 @@ the evaluator's flattened type table.
   step count would exceed the budget fails with "constexpr evaluation hit
   maximum step limit; possible infinite loop?".
 - **Depth** counts active calls as clang's `-fconstexpr-depth` does ("constexpr
-  evaluation exceeded maximum depth of N calls").
-- **Bytes** bounds live frame-space bytes ("constexpr evaluation exceeded
-  the memory limit of N bytes", at the object's declaration).
+  evaluation exceeded maximum depth of N calls"); a nested evaluation counts
+  from the depth of the call that started it, plus one (see "Nested
+  evaluation").
+- **Bytes** bounds the abstract-memory address space held,
+  `frame.top + heap.top` ("constexpr evaluation exceeded the memory limit
+  of N bytes", at the object's declaration); nested evaluations share it.
 - `EvalStats` holds one `EvalRecord` per `evaluate` call and TU totals.
   `Oven::footprint()` is the evaluator's own heap (code, memory, caches).
 
@@ -187,31 +227,39 @@ The format is NDJSON (UTF-8, one JSON object per `\n`-terminated line), one
 line per **top-level evaluation** in the order the evaluations finished,
 then exactly one `total` line, which is the last line:
 ```
-{"loc":"a.cpp:12:1","kind":"static_assert","steps":116,"bytes":40,"peak_bytes":32,"calls":3,"allocs":0,"wall_us":4}
-{"total":{"steps":116,"bytes":40,"peak_bytes":32,"calls":3,"allocs":0,"wall_us":4,"evaluations":1}}
+{"loc":"a.cpp:12:1","kind":"static_assert","steps":116,"bytes":40,"peak_bytes":32,"calls":3,"allocs":0,"peak_arena":32,"frozen_bytes":16,"wall_us":4}
+{"total":{"steps":116,"bytes":40,"peak_bytes":32,"calls":3,"allocs":0,"peak_arena":32,"frozen_bytes":16,"wall_us":4,"evaluations":1}}
 ```
 A top-level evaluation is one call of an evaluation entry point that the
 language requires (a manifestly constant-evaluated context): it includes
-everything it calls, so nested calls are never separate lines. `try_fold`
+everything it calls, so nested calls are never separate lines. A **nested
+evaluation** (one that a bridge callback starts while another is running,
+see "Nested evaluation") is its own line, written when it finishes (so
+before the line of the evaluation that started it), and the line of the
+enclosing evaluation counts only the enclosing evaluation's own work: every
+counter of a line is exclusive of the nested evaluations it contains, so
+the `total` sums never count work twice. `try_fold`
 (opportunistic folding) is not reported: what it folds is an implementation
 choice and must not move a budget.
 
 | Key | Meaning |
 |---|---|
 | `loc` | `"file:line:col"` of the evaluated construct (1-based line and column; the file as the driver names it in diagnostics, so it may itself contain `:`), or `null` when there is none (a compiler-synthesized evaluation). For a template instantiation, the point of the construct in the template, not the point of instantiation. |
-| `kind` | `static_assert`; `init` (the initializer of a `constexpr`/`constinit` variable or a constant initialization); `template_arg` (a template argument, including default arguments); `consteval` (an immediate invocation); `if_constexpr` (the condition); `other` (array bounds, enumerator values, `case` labels, `alignas`, `noexcept` and `explicit` specifiers, bit-field widths, splices, ...). |
+| `kind` | `static_assert`; `init` (the initializer of a `constexpr`/`constinit` variable or a constant initialization); `template_arg` (a template argument, including default arguments); `consteval` (an immediate invocation); `if_constexpr` (the condition); `constraint` (a constraint satisfaction check, M3); `other` (array bounds, enumerator values, `case` labels, `alignas`, `noexcept` and `explicit` specifiers, bit-field widths, splices, ...). |
 | `steps` | Statements executed, counted exactly as clang counts `-fconstexpr-steps` (see "Limits and metrics"), including the recorded steps of memoized calls (as for the budget, so the count does not depend on cache state). |
 | `bytes` | Abstract-memory bytes allocated over the evaluation (cumulative, each object rounded up to the 8-byte granule: frames, temporaries and dynamic allocations; a freed byte stays counted). |
-| `peak_bytes` | The maximum number of abstract-memory bytes live at once. |
+| `peak_bytes` | The maximum number of abstract-memory bytes live at once (`frame.top + heap_live`, see "Transient allocation"). |
 | `calls` | Function calls, memoized hits included. |
 | `allocs` | Dynamic allocations (`new` expressions and `std::allocator<T>::allocate`). |
-| `peak_arena` | (M3, WP-061) Maximum abstract-memory address space held, fragmentation included; see "Transient allocation". Absent until implemented. |
-| `frozen_bytes` | (M3, WP-061) Bytes added to the `ConstStore` by this evaluation. Absent until implemented. |
+| `peak_arena` | The maximum abstract-memory address space held at once (`frame.top + heap.top`), fragmentation included; see "Transient allocation". `peak_arena >= peak_bytes`. |
+| `frozen_bytes` | Bytes this evaluation added to the `ConstStore`: only newly interned bytes, so a result equal to one already frozen adds 0 (spec/ast.md §9). |
 | `wall_us` | Wall-clock microseconds, rounded down. |
 
 The `total` object has the same counters summed over the evaluations, except
-`peak_bytes` (and `peak_arena`), which is the **maximum** over them (evaluations do not overlap,
-so the TU's peak is the largest single peak), plus `evaluations`, the number
+`peak_bytes` and `peak_arena`, which are the **maximum** over them (top-level
+evaluations do not overlap, so the TU's peak is the largest single peak;
+a nested evaluation's peaks are exclusive, see "Nested evaluation"), plus
+`evaluations`, the number
 of evaluation lines. All counters are integers in `[0, 2^53]`.
 
 Every counter except `wall_us` is **deterministic**: the same compiler on the
@@ -222,7 +270,7 @@ moves them is a measured change in the evaluator, not noise.
 Consumers must reject a report that is not this format: a line that is not
 an object with the keys above (each of the right type), a `kind` outside the
 list, a missing or repeated `total`, text after it, or a `total` that does not
-match the evaluations (sums, maximum for `peak_bytes`, count for
+match the evaluations (sums, maximum for `peak_bytes` and `peak_arena`, count for
 `evaluations`; `wall_us` is not cross-checked, since rounding makes its sum
 inexact). They ignore unknown keys (so the format can grow) and blank lines.
 
@@ -236,11 +284,16 @@ inexact). They ignore unknown keys (so the format can grow) and blank lines.
   this when pointers to transient allocations can be passed.)
 - Calls are cached in a bounded LRU (`Budget::memo_entries`, 0 disables;
   table allocated once, least recently used evicted) keyed by `(function,
-  argument bits)`. Only successful calls are cached, and not a call that
+  argument bits)`, with the manifestly-constant-evaluated flag in bit 31
+  of the function word (WP-063). Only successful calls are cached, and not a call that
   converted a value out of an enumeration's range (its diagnostic must
-  recur on every evaluation that checks it).
+  recur on every evaluation that checks it), that started a nested
+  evaluation (its side effects on sema and its separate report line must
+  recur), or that allocated or freed heap memory.
 - A hit charges everything the call cost when it ran: steps, calls,
-  cumulative bytes, peak bytes above the live bytes at the call, and depth.
+  cumulative bytes, peak bytes above the live bytes at the call, arena
+  above the arena at the call (checked against the memory limit), and
+  depth.
   Every counter and every budget decision is therefore identical with the
   cache on or off (tested).
 
@@ -272,17 +325,12 @@ average 8-9 during the run):
 
 ### Design for M3+ *(design)*
 - Transient allocation: see "Transient allocation" below (WP-060).
-- **Nested evaluation (R-OVEN-1, spec/sema-templates.md §4.11; WP-061b):**
-  `evaluate` may be re-entered from a bridge callback (`ensure_body`
-  instantiating a template whose definition needs a `static_assert`, a
-  template argument or `if constexpr`). Contexts form a stack; the frame
-  space is marked per context and reset only when the outermost context
-  ends; the budget is shared and `depth` counts nested contexts; the new
-  `EvalKind::Constraint` reports constraint satisfaction checks.
-  `SemaBridge::ensure_body(&mut self, f, oven: &mut Oven)` is the contract.
-- **Hash-consed frozen values (R-OVEN-2; WP-061b):** `ConstStore` interns
-  frozen aggregates by content so class-type template arguments compare by
-  `ConstValueId`; `frozen_bytes` counts only newly interned bytes.
+- **Nested evaluation (R-OVEN-1, spec/sema-templates.md §4.11):**
+  implemented (WP-061b); normative in "Integration" → "Nested evaluation".
+- **Hash-consed frozen values (R-OVEN-2):** implemented; `ConstStore`
+  interns every frozen value by content (spec/ast.md §9), so class-type
+  template arguments compare by `ConstValueId`, and `frozen_bytes` counts
+  only newly interned bytes.
 - Classes: constructors/destructors as KBC functions, `BeginLife`/`EndLife`
   for subobjects, dynamic type in the allocation for virtual calls
   (`CallIndirect` through `SemaBridge::vtable`), `dynamic_cast`/`typeid`.
@@ -291,6 +339,12 @@ average 8-9 during the run):
 - `std::bit_cast` uses the representation-compatibility shadow.
 
 ### Transient allocation — normative for M3 (WP-060 design; WP-061a/b implement)
+
+*Status:* the heap space, the allocator and the counters are implemented
+(WP-061b part 1, `crates/kiln_oven/src/mem.rs`); the `New`/`Delete`
+operations, their checks and the churn benchmarks are WP-061b part 2. Until
+then no evaluation allocates on the heap, so `allocs` is 0 and `peak_arena`
+equals `peak_bytes` on every program.
 
 The operator's requirement: memory that a constant evaluation allocates and
 frees **must be reclaimed while the evaluation is still running**, not at its
@@ -310,13 +364,23 @@ with a bumped generation; a slot whose generation would wrap is retired.
 `std::allocator<T>::allocate` call) for notes.
 
 **Byte reuse.** Heap bytes are not a bump arena. Sizes are granule-rounded
-(8 bytes). Blocks of at most 256 bytes come from exact per-size free lists
-(32 classes, no internal waste). Blocks above 256 bytes and up to 1 MiB come
-from half-step power-of-two classes (256, 384, 512, 768, 1024, ...; internal
-waste at most one third). Larger blocks are carved best-fit from a sorted
-free list of large regions that are **coalesced** with free neighbours on
-`delete`, and a freed block at the top of the heap arena **lowers the top**
-(so a doubling buffer reclaims its address space). A free list is LIFO
+(8 bytes), then served by size class:
+
+| Request (rounded) | Classes | Block | Internal waste |
+|---|---|---|---|
+| 8 ..= 256 B | 32 exact classes, one per granule (8, 16, ..., 256) | the request | none |
+| 257 B ..= 1 MiB | 24 half-step classes: for `2^p < n <= 2^(p+1)` (`p` = 8..=19), `3·2^(p-1)` if `n` fits, else `2^(p+1)` (384, 512, 768, 1024, ..., 786432, 1048576) | the class size | at most 1/3 of the block |
+| > 1 MiB | none: a *large* block of exactly the request | the request | none |
+
+A class request takes the last freed block of its class, else is carved
+(like a large request) from a free large region, else grows the top. A
+freed class block goes back on its class's list (it is never split or
+merged, and only its own class reuses it) unless it ends at the top.
+Large blocks are carved best-fit (the smallest fitting region, then the
+lowest) from a sorted free list of large regions that are **coalesced**
+with free neighbours on `delete`, and a freed block at the top of the heap
+arena **lowers the top**, then again past any free large region that now
+ends at the top (so a doubling buffer reclaims its address space). A free list is LIFO
 (last freed, first reused). An allocation that finds no block grows the
 arena top. The policy is observable only through the counters below and the
 memory limit; an implementation may tune the class boundaries, but the two
@@ -341,7 +405,10 @@ The `total` takes the maximum for `peak_arena` and the sum for
 either freed or diagnosed as a leak, so `reset()` truncates the heap slot
 table and clears the free lists at no cost; buffers are kept and the
 footprint stays flat (the 10k-evaluation test extends to a churning
-evaluation).
+evaluation). Each heap allocation records the evaluation context that made
+it (`Memory::ctx`); a nested evaluation frees what it still holds when it
+ends (`free_heap_of`), after its own leak check, so its blocks return to
+the free lists for the enclosing evaluation.
 
 **Operations (KBC).** `New { ty, count: Option<Reg>, array: bool }` yields
 a pointer to a fresh allocation of `ty` (or `ty[count]`), uninitialized
@@ -358,7 +425,10 @@ Oven package; WP-061 covers `new`/`delete` expressions on the types the Oven
 supports in M2 (scalars, arrays, aggregates without constructors).
 
 **Checks**, with clang 19's wording (`DiagnosticASTKinds.td`; the
-compile-fail tests compare against the oracle):
+compile-fail tests compare against the oracle). *The quoted wording below
+is a placeholder until WP-061b part 2 verifies each note against
+clang 19; part 1 only defines the faults (`MemFault::{NotHeap,
+DoubleDelete, Subobject, DeleteMismatch}`, `Dead(Origin::Heap(e))`).*
 - `new` of a negative or too-large array bound, or one that would exceed the
   memory limit: not constant, note at the `new`.
 - Access through a pointer to a deleted allocation: "read of (…) heap
@@ -408,7 +478,7 @@ bridge; it stores only ids, which are stable by spec/ast.md §2.4.
 ```rust
 pub trait SemaBridge {
     fn ast(&self) -> &Ast;                                        // re-borrowed per use, never held
-    fn ensure_body(&mut self, f: DeclId) -> Option<StmtId>;       // instantiates / defines implicit members if needed
+    fn ensure_body(&mut self, f: DeclId, oven: &mut Oven) -> Option<StmtId>; // instantiates / defines implicit members if needed; may evaluate (nested)
     fn ensure_layout(&mut self, record: DeclId) -> &RecordLayout; // via kiln_abi
     fn final_overrider(&mut self, most_derived: DeclId, at: SubobjectId, method: DeclId)
         -> Option<(DeclId, SubobjectId)>;                         // spec/sema-class.md §3.5
@@ -423,6 +493,7 @@ impl Oven {
     pub fn evaluate(&mut self, bridge: &mut dyn SemaBridge, e: ExprId, ctx: EvalContext) -> Result<ConstValueId, EvalFailure>;
     pub fn try_fold(&mut self, bridge: &mut dyn SemaBridge, e: ExprId) -> Option<ConstValueId>;
     pub fn is_constant_initialized(&mut self, bridge: &mut dyn SemaBridge, var: DeclId) -> bool;
+    pub fn fold_constant_init(&mut self, bridge: &mut dyn SemaBridge, e: ExprId, var: DeclId) -> Option<ConstValueId>;
     pub fn stats(&self) -> &EvalStats;
     pub fn footprint(&self) -> usize;
     pub fn disassemble(&self) -> String;                          // debugging aid
@@ -462,7 +533,45 @@ sema.
   | `EvalContext::new(StaticAssert, loc)` | `static_assert` | no | `static_assert` |
   | `EvalContext::new(Other, loc)` | `other` | no | array bounds, bit-field widths, other enumerators, `alignas`, array designators |
   | `EvalContext::new(TemplateArg / Consteval / IfConstexpr, loc)` | as named | yes | M3 |
+  | `EvalContext::new(Constraint, loc)` | `constraint` | yes | M3: constraint satisfaction (an atomic constraint's value) |
 
+- **Nested evaluation** (R-OVEN-1, spec/sema-templates.md §4.11). The
+  Oven calls `SemaBridge::ensure_body(f, oven)` the first time it compiles
+  a call to `f`, passing itself, and sema may evaluate through that `oven`
+  while instantiating (a `static_assert`, a template argument, an
+  `if constexpr` condition or a constraint in the instantiated definition).
+  `evaluate`, `try_fold` and `is_constant_initialized` are re-entrant:
+  - **Contexts form a stack.** The outermost evaluation (depth 0) starts
+    from an empty frame space and resets it when it ends. A nested one
+    saves the enclosing evaluation's state, takes a mark of the frame space
+    and allocates its registers and frames above everything live, so the
+    enclosing evaluation's objects are untouched; when it ends (success or
+    failure) it frees the heap allocations it still holds, releases the
+    frame space to its mark and restores the enclosing state.
+  - **One budget.** The step budget is shared: a nested evaluation starts
+    its step counter at the enclosing total, so the steps of every context
+    together are bounded by `Budget::steps`; the memory limit bounds the
+    combined address space. **Depth**: a nested evaluation starts at the
+    enclosing evaluation's active call depth plus one (the nested context
+    itself counts as a level); if that already reaches `Budget::depth` it
+    fails at once with clang's depth note at the evaluated expression.
+  - **Reporting.** A nested `evaluate` is recorded and reported as its own
+    line with its own `kind` and `loc`, written when it finishes; the
+    enclosing line excludes its cost (steps, bytes, calls, allocs,
+    `frozen_bytes`, `wall_us`, and the memory it held: the enclosing peaks
+    do not include it). The nested line's `peak_bytes` and `peak_arena` are
+    measured above the live bytes and arena at its start, so they too are
+    exclusive; the TU's true combined peak can exceed the `total` maximum
+    (the memory limit still bounds the combined amount). Nested `try_fold`
+    and `is_constant_initialized` are not reported, and their cost is
+    excluded from the enclosing line too.
+  - **Recursion through the body.** While `ensure_body(f)` runs, `f` is in
+    the `Compiling` state: a call to `f` evaluated inside it fails as a
+    call to an undefined function ("undefined function 'f' cannot be used
+    in a constant expression" + declared here), which is clang's behavior
+    for a function whose definition is not yet available.
+  - **Memoization.** A call during which a nested evaluation ran is not
+    memoized (see "Memoization").
 - **Enumeration range.** Where the check is on, an out-of-range value
   gives the `-Wenum-constexpr-conversion` error ("integer value V is
   outside the valid range of values [MIN, MAX] for the enumeration type
@@ -518,6 +627,12 @@ initializers; `& * [] . ->` and lvalue-to-rvalue; every [expr.const]/5
 bullet reachable in M2 (5.2, 5.3, 5.4, 5.7, 5.8, 5.9, 5.10, 5.11, 5.14,
 5.15, 5.16, 5.24).
 
+Implemented (M3, WP-061b part 1): the heap space with its size-class
+allocator and the `peak_arena`/`frozen_bytes` counters ("Transient
+allocation"; no operation allocates on it yet); re-entrant nested
+evaluation through `ensure_body` and `EvalKind::Constraint` ("Nested
+evaluation"); content-interned frozen values (R-OVEN-2).
+
 Remaining (each traps with a `kiln:` note today):
 - Binding a reference to a temporary (a prvalue). Sema rejects these
   before evaluation in M2 anyway.
@@ -537,6 +652,12 @@ Remaining (each traps with a `kiln:` note today):
 - `limits.rs`: step and depth counts equal to clang's, limit notes, the
   memory budget, memo transparency and purity, the report golden, and the
   memory-reset test (flat footprint over 10k evaluations).
+- `nested.rs`: nested evaluation from `ensure_body` (separate records with
+  exclusive costs, shared step budget, depth from the starting call, a
+  function whose body is being made available, no memoization through it)
+  and content interning of frozen aggregates.
+- `src/mem.rs` unit tests: the size classes, LIFO reuse, best-fit carving,
+  coalescing, top lowering, heap counters and per-context freeing.
 - `bench.rs` (ignored): the benchmarks above.
 - `common/`: a small recursive-descent C++ subset parser building kiln_ast
   directly (test-only; replaced by the real front end as it lands).

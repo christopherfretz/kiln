@@ -1255,7 +1255,10 @@ impl Cg<'_> {
                 match n.kind() {
                     ExprKind::ParenExpr => c = ast.exprs.operand(c),
                     ExprKind::ImplicitCastExpr
-                        if ast.exprs.cast_kind(c) == CastKind::FunctionToPointerDecay =>
+                        if matches!(
+                            ast.exprs.cast_kind(c),
+                            CastKind::FunctionToPointerDecay | CastKind::BuiltinFnToFnPtr
+                        ) =>
                     {
                         c = ast.exprs.operand(c);
                     }
@@ -1269,6 +1272,14 @@ impl Cg<'_> {
                     _ => break,
                 }
             }
+        }
+        // A builtin is never emitted as a function (spec/codegen.md):
+        // `__builtin_is_constant_evaluated()` at run time is false (clang
+        // folds it to `i1 false`; constant initializers were folded by the
+        // prepass in a manifestly constant-evaluated context).
+        if let Some(id) = direct.and_then(|d| ast.decls.builtin_id(d)) {
+            debug_assert_eq!(id, kiln_ast::decl::builtin::IS_CONSTANT_EVALUATED);
+            return Ok(Some(V::C(self.m.const_bool(false))));
         }
         let args: Vec<ExprId> = ast.lists.iter(ast.exprs.call_args(e)).collect();
         let arg_tys: Vec<QualType> = args.iter().map(|&a| ast.exprs.get(a).ty()).collect();

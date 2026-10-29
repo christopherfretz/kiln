@@ -87,15 +87,16 @@ enum Freeze {
 }
 
 impl Oven {
-    /// A top-level evaluation: `object` is the variable initialized.
+    /// A top-level evaluation with registers from `fb`: `object` is the
+    /// variable initialized.
     pub(crate) fn eval_inner(
         &mut self,
         b: &mut dyn SemaBridge,
         e: ExprId,
         object: Option<DeclId>,
+        fb: u32,
     ) -> Result<ConstValueId, EvalFailure> {
         self.run.object = object;
-        self.run.nesting = 0;
         let mut pre = None;
         if let Some(d) = object {
             let ast = b.ast();
@@ -110,7 +111,7 @@ impl Oven {
                 }
             }
         }
-        let r = self.eval_at(b, e, object, 0);
+        let r = self.eval_at(b, e, object, fb);
         if let Some(g) = pre {
             self.globals[g as usize].state = GState::Unresolved;
         }
@@ -278,6 +279,15 @@ impl Oven {
                 ));
                 notes.push(Note::new(ast.exprs.get(e).loc(), "temporary created here"));
             }
+            // clang's note_constexpr_dynamic_alloc; the leak check (WP-061b
+            // part 2) reports a live allocation first.
+            Origin::Heap(e) => {
+                notes.push(Note::new(
+                    loc,
+                    format!("pointer to {what}heap-allocated object is not a constant expression"),
+                ));
+                notes.push(Note::new(ast.exprs.get(e).loc(), "heap allocation performed here"));
+            }
             _ => notes.push(Note::new(
                 loc,
                 "pointer to an object outside its lifetime is not a constant expression",
@@ -374,7 +384,7 @@ impl Oven {
         let Some(a) = self.alloc_any(p).copied() else {
             return Err(Freeze::Fault(FailKind::NotConstant));
         };
-        let st = p.is_static();
+        let st = p.space();
         let abs = u64::from(a.base) + u64::from(p.off);
         match info.kind {
             TyKind::Bool | TyKind::Int { .. } | TyKind::Float(_) => {
@@ -462,7 +472,7 @@ impl Oven {
             return Err(Freeze::Fault(FailKind::NotConstant));
         };
         let abs = u64::from(a.base) + u64::from(p.off) + f.offset;
-        let sp = self.mem.space(p.is_static());
+        let sp = self.mem.space(p.space());
         if !sp.is_init(abs, n) {
             return Err(self.uninit(b, Some(f.decl), f.ty, loc));
         }
@@ -565,12 +575,15 @@ impl Oven {
                     self.mem.peak,
                     self.run.object,
                     self.run.silent,
+                    self.run.const_context,
                 );
                 let mark = self.mem.mark();
                 self.run.nesting += 1;
                 self.run.counters = Counters::default();
                 self.run.object = Some(d);
                 self.run.silent = true;
+                // Constant initialization is manifestly constant-evaluated.
+                self.run.const_context = true;
                 let r = self.eval_at(b, init, Some(d), top);
                 self.mem.release(mark, &self.types);
                 self.run.nesting -= 1;
@@ -580,6 +593,7 @@ impl Oven {
                     self.mem.peak,
                     self.run.object,
                     self.run.silent,
+                    self.run.const_context,
                 ) = saved;
                 // The placeholder's storage now belongs to the variable.
                 self.globals[g as usize].slot = 0;

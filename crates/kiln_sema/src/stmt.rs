@@ -111,7 +111,9 @@ impl Sema<'_, '_> {
     /// An expression statement ([stmt.expr]): `e` is a discarded-value
     /// full-expression.
     pub fn act_on_expr_stmt(&mut self, e: ExprId) -> StmtId {
-        self.diagnose_unused(e);
+        if !self.check_builtin_fn_use(e) {
+            self.diagnose_unused(e);
+        }
         let e = self.act_on_full_expr(e);
         self.builder().expr_stmt(e)
     }

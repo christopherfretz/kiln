@@ -479,6 +479,10 @@ pub struct Declarator {
     /// The initializer syntax that follows (the parser peeks at `=`, `(`
     /// or `{` before the declaration is created; [dcl.init]/1).
     pub init_style: Option<kiln_ast::decl::InitStyle>,
+    /// The GNU asm label (`asm("name")` after the declarator, [dcl.asm]
+    /// extension): an ordinary, non-empty `StringLiteral` expression and
+    /// the extent of its tokens.
+    pub asm_label: Option<(ExprId, kiln_source::Span)>,
 }
 
 impl Declarator {
@@ -494,6 +498,7 @@ impl Declarator {
             loc,
             invalid: false,
             init_style: None,
+            asm_label: None,
         }
     }
 

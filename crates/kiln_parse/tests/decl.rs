@@ -196,6 +196,103 @@ fn basic_lookup_ambiguous() {
     p.assert_diag("reference to 'v' is ambiguous");
 }
 
+/// [namespace.udecl]: a using-declarator list, global and nested
+/// qualifiers; references record the shadow they were found through.
+#[test]
+fn namespace_udecl_declarators() {
+    let p = parse(
+        "namespace n { int a; int b; namespace m { int c; } }\n\
+         using n::a, n::b; using ::n::m::c;\nint w = a + b + c;",
+    );
+    p.assert_clean();
+    p.assert_dump("UsingDecl n::a");
+    p.assert_dump("UsingDecl n::b");
+    p.assert_dump("UsingDecl ::n::m::c");
+    p.assert_dump("DeclRefExpr 'int' lvalue Var 'c' 'int' (UsingShadow 'c')");
+}
+
+/// [namespace.udecl]: an unqualified name, a namespace, a missing member.
+#[test]
+fn namespace_udecl_errors() {
+    let p = parse("int x; using x;");
+    p.assert_diag("error: using declaration requires a qualified name");
+    let p = parse("namespace n { namespace m {} } using n::m;");
+    p.assert_diag("error: using declaration cannot refer to a namespace");
+    p.assert_diag("note: did you mean 'using namespace'?");
+    let p = parse("namespace n {} using n::nope;");
+    p.assert_diag("error: no member named 'nope' in namespace 'n'");
+    let p = parse("namespace n { int x; } using n::x int y;");
+    p.assert_diag("error: expected ';' after using declaration");
+    let p = parse("namespace n { int x; } using n::operator+;");
+    p.assert_diag("error:");
+}
+
+/// [namespace.udecl]/11: conflicts in both directions.
+#[test]
+fn namespace_udecl_conflicts() {
+    let p = parse("namespace n { int v; } int v; using n::v;");
+    p.assert_diag("error: target of using declaration conflicts with declaration already in scope");
+    let p = parse("namespace n { int v; } using n::v; int v;");
+    p.assert_diag("error: declaration conflicts with target of using declaration already in scope");
+    let p = parse("namespace n { int v; } void f() { using n::v; int v; }");
+    p.assert_diag("note: using declaration");
+}
+
+/// clang's `using_if_exists`: silent until the name is used.
+#[test]
+fn namespace_udecl_using_if_exists() {
+    let p = parse("namespace n {} using n::gone __attribute__((__using_if_exists__));");
+    p.assert_clean();
+    let p = parse("namespace n {} [[clang::using_if_exists]] using n::gone; int k = gone;");
+    p.assert_diag("warning: ISO C++ does not allow an attribute list to appear here");
+    p.assert_diag("error: reference to unresolved using declaration");
+    p.assert_diag("note: using declaration annotated with 'using_if_exists' here");
+}
+
+/// [namespace.udecl]/3: in a class, the qualifier must name a base class.
+#[test]
+fn namespace_udecl_class_scope() {
+    let p = parse("namespace n { int x; } struct S { using n::x; };");
+    p.assert_diag("error: using declaration in class refers into 'n::', which is not a class");
+    let p = parse("struct S { int a; using S::a; };");
+    p.assert_diag("error: using declaration refers to its own class");
+    let p = parse("struct S { enum E { A }; }; using S::A; int k = A;");
+    p.assert_clean();
+}
+
+/// [enum.udecl]: the enumerators are introduced as shadows.
+#[test]
+fn enum_udecl() {
+    let p = parse("enum class E { A, B }; void f() { using enum E; E e = B; }");
+    p.assert_clean();
+    p.assert_dump("UsingEnumDecl Enum 'E'");
+    p.assert_dump("EnumConstant 'B' 'E' (UsingShadow 'B')");
+    let p = parse("struct S {}; using enum S;");
+    p.assert_diag("error: 'S' is not an enumerated type");
+    let p = parse("using enum ;");
+    p.assert_diag("error: using enum requires an enum or typedef name");
+    let p = parse("enum F : int; using enum F;");
+    p.assert_diag("error: enumeration 'F' is incomplete");
+}
+
+/// [namespace.alias]: aliases, aliases of aliases, redefinitions.
+#[test]
+fn namespace_alias() {
+    let p = parse(
+        "namespace a { namespace b { int t; } }\nnamespace ab = a::b; namespace ab2 = ab;\n\
+         namespace ab = a::b; int k = ab2::t;\nint f() { namespace l = a; return l::b::t; }",
+    );
+    p.assert_clean();
+    p.assert_dump("NamespaceAliasDecl ab Namespace 'b'");
+    p.assert_dump("NamespaceAliasDecl ab2 NamespaceAlias 'ab'");
+    p.assert_dump("NamespaceAliasDecl l Namespace 'a'");
+    let p = parse("namespace a {} namespace b {} namespace c = a; namespace c = b;");
+    p.assert_diag("error: redefinition of 'c' as an alias for a different namespace");
+    p.assert_diag("note: previously defined as an alias for 'a'");
+    let p = parse("int y; namespace c = y;");
+    p.assert_diag("error: expected namespace name");
+}
+
 /// [dcl.attr.nodiscard]: discarding a nodiscard result warns.
 #[test]
 fn dcl_attr_nodiscard() {
@@ -354,4 +451,45 @@ fn except_spec_forms() {
     p.assert_diag("noexcept specifier argument evaluates to 2");
     let p = parse("void a() noexcept; void a();");
     p.assert_diag("'a' is missing exception specification 'noexcept'");
+}
+
+/// [dcl.asm] GNU asm labels: concatenated, stored as `AsmLabelAttr`
+/// (first, as clang orders it) and inherited by later redeclarations.
+#[test]
+fn dcl_asm_label() {
+    let p = parse(
+        "__attribute__((noinline)) int g() asm(\"g\" \"l\");\n\
+         int g();\n\
+         extern int v __asm__(\"vl\");\n\
+         typedef int T asm(\"ignored\");",
+    );
+    p.assert_clean();
+    p.assert_dump(
+        "FunctionDecl g 'int ()'\n| |-AsmLabelAttr \"gl\" IsLiteralLabel\n| `-NoInlineAttr",
+    );
+    p.assert_dump("FunctionDecl g 'int ()'\n| `-AsmLabelAttr Inherited \"gl\" IsLiteralLabel");
+    p.assert_dump("VarDecl v 'int' extern\n| `-AsmLabelAttr \"vl\" IsLiteralLabel");
+    p.assert_dump("TypedefDecl T 'int'\n");
+}
+
+/// [dcl.asm] GNU asm labels on redeclarations and automatic variables
+/// (clang's `mergeDeclAttributes`, `warn_asm_label_on_auto_decl`).
+#[test]
+fn dcl_asm_label_diagnostics() {
+    let p = parse("int f() asm(\"a\");\nint f() asm(\"b\");");
+    p.assert_diag("2:5 error: conflicting asm label");
+    p.assert_diag("1:13 note: previous declaration is here");
+    let p = parse("int f();\nint u() { return f(); }\nint f() asm(\"late\");");
+    p.assert_diag("3:5 error: cannot apply asm label to function after its first use");
+    let p = parse("int f();\nint f() asm(\"ok\");\nint u() { return f(); }");
+    p.assert_clean();
+    let p = parse("void f() { int x asm(\"r\"); static int s asm(\"s\"); (void)x; }");
+    p.assert_diag("1:22 warning: ignored asm label 'r' on automatic variable");
+    let p = parse("int a asm(L\"w\");\nint b asm(u8\"u\");\nint c asm(\"\");\nint d asm(1);");
+    p.assert_diag("1:15 error: cannot use wide string literal in 'asm'");
+    p.assert_diag("2:16 error: cannot use unicode string literal in 'asm'");
+    p.assert_diag("3:13 error: cannot use an empty string literal in 'asm'");
+    p.assert_diag("4:11 error: expected string literal in 'asm'");
+    let p = parse("int f() asm(\"x\") = 0;");
+    p.assert_diag("1:5 error: illegal initializer (only variables can be initialized)");
 }

@@ -1915,6 +1915,12 @@ impl DeclArena {
         .filter(|r| r.group != DUMMY_GROUP)
     }
 
+    /// The builtin id of `d` if it is an implicit builtin function
+    /// declaration ([`builtin`], §5.3).
+    pub fn builtin_id(&self, d: DeclId) -> Option<u32> {
+        self.cold.builtin_id.get(d).copied()
+    }
+
     /// The member list of context `ctx` (`None` if `ctx` owns none).
     pub fn member_list(&self, ctx: DeclId) -> Option<Members> {
         let n = self.get(ctx);
@@ -2419,5 +2425,21 @@ impl HeapSize for DeclArena {
             r.push(row.prefixed("cold"));
         }
         r
+    }
+}
+
+/// Builtin function ids (the `builtin_id` cold data of an implicit builtin
+/// `Function` decl, §5.3). The numbering is clang 19's `Builtin::ID` (its
+/// target-independent part), so a `BuiltinAttr` dumps as clang's does.
+pub mod builtin {
+    /// `bool __builtin_is_constant_evaluated() noexcept` ([meta.const.eval]).
+    pub const IS_CONSTANT_EVALUATED: u32 = 722;
+
+    /// The id and spelling of every builtin function kiln declares.
+    pub const ALL: &[(u32, &str)] = &[(IS_CONSTANT_EVALUATED, "__builtin_is_constant_evaluated")];
+
+    /// The builtin function spelled `name`, if kiln declares one.
+    pub fn by_name(name: &str) -> Option<u32> {
+        ALL.iter().find(|e| e.1 == name).map(|e| e.0)
     }
 }
