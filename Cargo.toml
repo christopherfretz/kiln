@@ -21,6 +21,7 @@ kiln_oven    = { path = "crates/kiln_oven" }
 kiln_abi     = { path = "crates/kiln_abi" }
 kiln_llvm    = { path = "crates/kiln_llvm" }
 kiln_codegen = { path = "crates/kiln_codegen" }
+kiln_driver  = { path = "crates/kiln_driver" }
 # Third-party (each approved in a work package; see docs/AGENTS.md rule 7).
 # hashbrown: `HashTable` for key-in-arena interning (spec/types.md §7.1, §17 T1).
 hashbrown = { version = "0.15", default-features = false, features = ["inline-more"] }

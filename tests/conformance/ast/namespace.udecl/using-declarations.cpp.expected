@@ -1,0 +1,40 @@
+TranslationUnitDecl
+|-NamespaceDecl N
+| |-VarDecl used x 'int'
+| |-FunctionDecl used twice 'int (int)'
+| | |-ParmVarDecl used n 'int'
+| | `-CompoundStmt
+| |   `-ReturnStmt
+| |     `-BinaryOperator 'int' '*'
+| |       |-ImplicitCastExpr 'int' <LValueToRValue>
+| |       | `-DeclRefExpr 'int' lvalue ParmVar 'n' 'int'
+| |       `-IntegerLiteral 'int' 2
+| |-TypedefDecl referenced I 'int'
+| |-CXXRecordDecl referenced struct S definition
+| | `-FieldDecl m 'int'
+| `-NamespaceDecl M
+|   `-VarDecl used z 'int'
+|-UsingDecl N::x
+|-UsingDecl N::twice
+|-UsingDecl N::I
+|-UsingDecl N::S
+|-UsingDecl ::N::M::z
+|-VarDecl a 'int' cinit
+| `-BinaryOperator 'int' '+'
+|   |-ImplicitCastExpr 'int' <LValueToRValue>
+|   | `-DeclRefExpr 'int' lvalue Var 'x' 'int' (UsingShadow 'x')
+|   `-CallExpr 'int'
+|     |-ImplicitCastExpr 'int (*)(int)' <FunctionToPointerDecay>
+|     | `-DeclRefExpr 'int (int)' lvalue Function 'twice' 'int (int)' (UsingShadow 'twice')
+|     `-ImplicitCastExpr 'int' <LValueToRValue>
+|       `-DeclRefExpr 'int' lvalue Var 'z' 'int' (UsingShadow 'z')
+|-VarDecl b 'I':'int' cinit
+| `-IntegerLiteral 'int' 2
+|-VarDecl p 'S *'
+`-FunctionDecl g 'int ()'
+  `-CompoundStmt
+    |-DeclStmt
+    | `-UsingDecl N::M::z
+    `-ReturnStmt
+      `-ImplicitCastExpr 'int' <LValueToRValue>
+        `-DeclRefExpr 'int' lvalue Var 'z' 'int' (UsingShadow 'z')

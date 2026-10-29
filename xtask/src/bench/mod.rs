@@ -46,8 +46,9 @@ options:
   --threshold-mem <PCT>    allowed peak-RSS regression in percent (default: 2)
   --threshold-steps <PCT>  allowed constexpr-steps regression in percent (kiln
                            only; default: 0)
-  --threshold-bytes <PCT>  allowed constexpr bytes/peak_bytes regression in
-                           percent (kiln only; default: 2)
+  --threshold-bytes <PCT>  allowed constexpr bytes/peak_bytes/peak_arena/
+                           frozen_bytes regression in percent (kiln only;
+                           default: 2)
                            (each --threshold-* overrides the entries'
                            threshold-* directives, which override the defaults)
   -v, --verbose            print the commands that were run
@@ -637,6 +638,7 @@ fn measure(cx: &Ctx<'_>, e: &Entry, spec: &BenchSpec, hash: &str, s: &Subject) -
         spread_pct: round_to(w.spread_pct(), 2),
         max_rss_kb,
         oven,
+        oven_missing: Vec::new(),
         samples_wall_ms: walls.iter().map(|&x| round_to(x, 3)).collect(),
         samples_rss_kb: rss,
         compiler: s.path.display().to_string(),

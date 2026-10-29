@@ -33,7 +33,7 @@ impl SemaBridge for Bridge<'_, '_, '_> {
         self.ast
     }
 
-    fn ensure_body(&mut self, f: DeclId) -> Option<StmtId> {
+    fn ensure_body(&mut self, f: DeclId, _oven: &mut Oven) -> Option<StmtId> {
         // M2 has no templates: a body exists once its definition has been
         // parsed (a later definition is picked up by the next evaluation).
         let d = self.ast.definition(f)?;

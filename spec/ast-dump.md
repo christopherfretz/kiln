@@ -114,6 +114,11 @@ no category).
 | `TranslationUnitDecl` | `TranslationUnitDecl` |
 | `TypedefDecl`, `TypeAliasDecl` | `TypedefDecl <head> Name 'type'` (no type-tree children) |
 | `NamespaceDecl` | `NamespaceDecl <head> [Name] [inline] [original Namespace 'Name']` (`original` on a reopening names the first declaration) |
+| `NamespaceAliasDecl` | `NamespaceAliasDecl <head> Name Namespace 'Target'` or `... NamespaceAlias 'Target'` (the namespace or alias as written) |
+| `UsingDirectiveDecl` | `UsingDirectiveDecl <head> Namespace 'Name'` (an unnamed namespace's implicit directive prints `implicit` and `Namespace ''`) |
+| `UsingDecl` | `UsingDecl <head> qualifier::name` (the nested-name-specifier as written, `::N::x` or `N::x`) |
+| `UsingShadowDecl` | `UsingShadowDecl <head> Kind 'name'[ 'type'[:'canonical']]` (always `implicit`, so printed only with implicit nodes; the target's kind, name and, for a value or typedef, its type) |
+| `UsingEnumDecl` | `UsingEnumDecl <head> Enum 'Name'` |
 | `CXXRecordDecl` | `CXXRecordDecl <head> struct\|class\|union [Name] [definition]`; children: base-specifiers, attributes, members |
 | base-specifier | `[virtual ]public\|protected\|private 'type'[...]` (no class name; the semantic access: defaulted is `private` in a `class`, else `public`) |
 | `FieldDecl` | `FieldDecl <head> [name] 'type' [mutable]` [child: bit-width `ConstantExpr`] [child: default member initializer] (an unnamed bit-field has no name) |
@@ -130,7 +135,7 @@ no category).
 | `CharacterLiteral` | `CharacterLiteral 'type' N` (the code unit value, decimal) |
 | `StringLiteral` | `StringLiteral 'type' lvalue "text"` (as an initializer of a `char` array clang 19 prints it as a prvalue) |
 | `CXXBoolLiteralExpr`, `CXXNullPtrLiteralExpr` | `... 'bool' true`, `... 'std::nullptr_t'` |
-| `DeclRefExpr` | `DeclRefExpr 'type' [lvalue] Kind 'name' 'type' [non_odr_use_constant\|non_odr_use_unevaluated\|non_odr_use_discarded]` |
+| `DeclRefExpr` | `DeclRefExpr 'type' [lvalue] Kind 'name' 'type' [(UsingShadow 'name')] [non_odr_use_constant\|non_odr_use_unevaluated\|non_odr_use_discarded]` (`(UsingShadow 'name')`: the name was found through a using-declaration, clang's `FoundDecl`) |
 | `MemberExpr` | `MemberExpr 'type' [lvalue [bitfield]] .name\|->name` |
 | `ImplicitCastExpr` | `ImplicitCastExpr 'type' [lvalue\|xvalue] <Kind> [part_of_explicit_cast]` |
 | `CStyleCastExpr` | `CStyleCastExpr 'type' [lvalue\|xvalue] <Kind>` |
@@ -149,10 +154,20 @@ Notes:
 - Since C++23 a `return` of a local variable or parameter is an implicit
   move: the operand is `ImplicitCastExpr 'T' xvalue <NoOp>` around the
   `DeclRefExpr`, under the `LValueToRValue` cast, also for scalars.
-- The kiln dump prints namespaces, `mutable`, attributes and
-  base-specifiers (lines above), but they are not in the M2 goldens.
+- The kiln dump prints `mutable`, attributes and base-specifiers (lines
+  above), but they are not in the M2 goldens.
+- Namespaces, namespace aliases, using-directives, using-declarations,
+  using-shadows and `using enum` are in the dump and the clang
+  normalizer since WP-062 (goldens under
+  `tests/conformance/ast/{namespace.udecl,namespace.alias,enum.udecl}/`).
+  A namespace's members are found by `--filter N::x`; an inline
+  namespace is transparent to the filter. Known difference: an
+  enumerator's type, and a qualified enumeration type as written, print
+  `'E':'N::E'` in kiln and `'N::E'` in clang when the enumeration is in
+  a namespace or class (spec/types.md §15 R4), so goldens use global
+  enumerations.
 - Not in the M2 dump (an error in the clang normalizer, §6; out of scope
-  for M2 kiln): namespaces, member functions and constructors (including
+  for M2 kiln): member functions and constructors (including
   the implicit ones' `CXXConstructExpr`s: a default-initialized class
   object `P p;`, a class copy such as `return q;`),
   default member initializers, `mutable`, default arguments, attributes,

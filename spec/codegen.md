@@ -1,6 +1,6 @@
 # spec: kiln_codegen — typed AST to LLVM IR (M2)
 
-Status: **in progress** (WP-052 part 1 done; driver and corpora are WP-052b). This spec is normative for `crates/kiln_codegen`.
+Status: **M2 subset implemented** (WP-052 lowering, WP-052b driver, IR-diff corpus and `run` tests). Deviations are listed in §6. This spec is normative for `crates/kiln_codegen`.
 Reference: for every construct, the reference output is clang 19's
 `-S -emit-llvm -O0 -std=c++26 --target=<triple>`. Targets are
 `x86_64-unknown-linux-gnu` and `aarch64-unknown-linux-gnu`.
@@ -14,7 +14,11 @@ The M2 subset covers the following:
 - structs without member functions;
 - functions and all of C's control flow;
 - constexpr functions and variables, and `static_assert`;
-- string literals and `extern "C"`.
+- string literals and `extern "C"`;
+- lvalue and rvalue references as parameters, return types and locals
+  (WP-052b), lowered as clang does: a `ptr` with `nonnull`,
+  `dereferenceable(N)` and `align A` for a complete object referee, an
+  `.addr` slot, and a load of the pointer at every use.
 
 A construct outside M2 is a `CodegenError` ("not supported in M2"), never a
 panic and never silently wrong IR.
@@ -130,13 +134,18 @@ panic and never silently wrong IR.
 - Case ranges (GNU) are an error.
 
 ## 5. Driver (`kiln_driver::codegen_cmd`, `link`)
-- `-S -emit-llvm` writes a `.ll` file.
-- `-S` runs `llc-19`.
-- `-c` runs `llc-19 -filetype=obj`.
-- Linking runs `clang++-19` and passes `-fuse-ld=`, `-l`, `-L`, `-Wl,`,
-  `-static` and `-nostdlib` through.
-- `-O<n>` is passed through, `-g` is ignored, and `-###` and `-v` print the
-  subcommands.
+The normative description is spec/driver.md "Code generation". In short:
+- `-S -emit-llvm` writes a `.ll` file; `-c -emit-llvm` pipes it to
+  `llvm-as-19`.
+- `-S` pipes the IR to `llc-19`; `-c` to `llc-19 -filetype=obj`.
+- Linking compiles each source to a temporary object, then runs
+  `clang++-19`, passing `-fuse-ld=`, `-l`, `-L`, `-Wl,`, `-static`,
+  `-nostdlib`, `-shared`, `-rdynamic`, `-pie` and `-no-pie` through in
+  command-line order.
+- Tools come from `$KILN_LLVM_DIR/bin` (default `/usr/lib/llvm-19`), else
+  the versioned name on `PATH`.
+- `-O<n>` selects `llc`'s level and is passed to the link; the IR is
+  always the `-O0` IR. `-g` is ignored. `-###` and `-v` print the steps.
 - Every job calls `ConstexprOpts::write_report`.
 
 ## 6. Validation
@@ -155,43 +164,82 @@ panic and never silently wrong IR.
   normalized: attributes, metadata, alignment, names and declaration
   order must match.
 - **IR-diff corpus** (WP-052b): `crates/kiln_codegen/tests/ir_vs_clang.rs`
-  compiles each `tests/codegen/*.cpp` through the driver with kiln and
-  with clang on both triples, under the same normalization.
-- The `run` conformance tests (`basic.start.main`, `stmt.ranged`, printf
-  tests) run through kiln.
+  compiles each `tests/codegen/*.cpp` in process through
+  `kiln_driver::run` (`-S -emit-llvm -O0 -std=c++26 --target=<t> -o -`)
+  and through `clang++-19` with the same flags, on
+  `aarch64-unknown-linux-gnu` and `x86_64-unknown-linux-gnu`, under the
+  same normalization. A `(case, triple)` pair in its `DEVIATIONS` table
+  must only verify; every other pair must be identical. `KILN_CASE=<stem>`
+  prints both texts; without `opt-19`/`clang++-19` it is skipped. The
+  corpus is 46 programs (ABI classification of 1- to 32-byte structs,
+  HFAs, byval, varargs, `__int128`, `long double`, bit-fields, static
+  locals, string literals, references, control flow): 92/92 pairs exact,
+  `DEVIATIONS` is empty.
+- **`run` tests:** 33 printf-based programs (`extern "C" int printf`, no
+  headers) under `tests/conformance/<section>/`, each naming its section,
+  are compiled, linked and run by kiln and by clang, and their stdout and
+  exit status compared. The 5 header-dependent `run` tests
+  (`basic.start.main` argv/environment/return-value/stdin and
+  `stmt.ranged/constexpr-sum`) are `xfail(kiln)`: libstdc++'s
+  `c++config.h` uses `decltype`, which kiln_parse does not support yet.
 
 ### Deviations
-- None open. The former parser gaps are closed (WP-058): `calls_noexcept`,
+- **Constant-initialized reference variables are not folded.** clang
+  emits a use of a reference that is usable in constant expressions as a
+  direct use of its referee (`load i32, ptr @g`); kiln loads the
+  reference's slot. The Oven does not fold reference initializers yet,
+  so `fold.rs` has nothing to substitute. No corpus case covers it.
+- **Namespace-scope and static reference variables** are diagnosed
+  (`dynamic initialization of a global is not supported yet (M3)`), even
+  when clang would constant-initialize them, for the same reason.
+- **Reference members** (`struct S { int& r; }`) are diagnosed (`a
+  reference member is not supported yet`).
+- **`dereferenceable(N)` of a reference to a class** uses the class's
+  non-virtual size (`nv_size`, at least 1). clang's
+  `getMinimumObjectSize` uses the full size for a `final` class; with no
+  virtual bases in M2 the two agree.
+- **Call results stored through a coercion** (`CreateCoercedStore`) use
+  the object size, where clang uses the type's data size. They differ
+  only for a class with tail padding reusable by a derived class, which
+  M2 does not have.
+- Sema gaps (kiln_sema) that keep `run` tests and corpus cases simple:
+  casts to reference types (`static_cast<int&&>`), binding
+  `const T(&)[N]` to a `T[N]` argument, copy-initializing a class object
+  from an lvalue (so a function cannot return a named local or a
+  parameter of class type), `S{...}` temporaries, and binding a
+  reference to a temporary. In kiln_codegen itself, a constant
+  initializer of an aggregate with bit-fields (`Flags f = {};`) reports
+  `bit-field constants are not supported yet (M3)`, without a location.
+- Parser gaps (kiln_parse) that keep cases out of the corpus: returning
+  a braced-init-list, `consteval`, range-based `for`. (`noexcept` and
+  `if constexpr`/`if consteval` landed with WP-058: `calls_noexcept`,
   `noexcept_operator`, `if_constexpr_true`, `if_constexpr_false` and
-  `if_consteval` are exact. A `CXXNoexceptExpr` lowers to its stored
-  `bool` constant; its operand is never emitted, and `fold.rs` does
-  not look inside it.
+  `if_consteval` are exact; a `CXXNoexceptExpr` lowers to its stored
+  `bool` constant and `fold.rs` does not look inside it.)
 
 ## Status and what remains
-Written as a resume point for a fresh agent. Branch `wp/052`, worktree
-`kiln/.worktrees/wp-052`.
+**Done:** WP-052 (lowering, §2–§4; unit corpus 79/79 exact on aarch64)
+and WP-052b (driver §5; IR-diff corpus 92/92 exact on both triples; 33
+`run` tests). WP-052b also fixed, additively: `kiln_llvm`
+`Module::set_global_value_type` (a static local retyped by its
+initializer keeps its position, as clang's), and kiln_sema's implicit
+move, which no longer treats an lvalue-reference variable as movable.
 
-**Done (WP-052 part 1):** `fir.rs`, `module.rs`, `func.rs`, `consts.rs`,
-`fold.rs`, `expr.rs` (§3) and `stmt.rs` (§4). The unit corpus is 79/79
-exact against clang on aarch64 (`bitfields_compound` became exact with
-WP-057; WP-058 added five cases).
-Additive `kiln_abi` fixes came with part 1: internal-linkage variable mangling,
-static-local discriminators, and indirect returns with `byval` (clang's
-`getNaturalAlignIndirect`, so no `result.ptr` spill).
+**Done (WP-052 + WP-052b):** `fir.rs`, `module.rs`, `func.rs`, `consts.rs`,
+`fold.rs`, `expr.rs` (§3), `stmt.rs` (§4), the driver path (§5) and the
+IR-diff corpus (§6: 46 programs, exact on both triples). The unit corpus
+is 79/79 exact against clang on aarch64 (`bitfields_compound` became exact
+with WP-057; WP-058 added five cases). Additive `kiln_abi` fixes came with
+part 1: internal-linkage variable mangling, static-local discriminators,
+and indirect returns with `byval` (clang's `getNaturalAlignIndirect`, so
+no `result.ptr` spill).
 
-**Remaining for WP-052b, in order:**
-1. Driver: `crates/kiln_driver/src/codegen_cmd.rs` and `link.rs` (§5).
-   Edits to `lib.rs` and `args.rs` must be additive only. The pipeline
-   mirrors `syntax_cmd.rs`: `Job::build_preprocessor`, then
-   `parse_preprocessed`, then `kiln_codegen::emit`, then
-   `constexpr.write_report`.
-2. IR-diff corpus: about 40 `tests/codegen/*.cpp` programs plus
-   `ir_vs_clang.rs`, on **both** triples. The unit corpus only checks
-   aarch64. On x86_64 the ABI paths (`kiln_abi::call` x86 classification,
-   align-16 local arrays of 16 bytes or more) are unverified against
-   clang.
-3. `run` tests: about 30 printf tests, plus `//@ xfail(kiln)` markers for
-   the header-dependent tests in basic.start.main (argv, environment,
-   return-value, stdin) and for stmt.ranged/constexpr-sum.
-   `CXXForRangeStmt` is never produced by sema yet.
-4. Out of M2 but noted: bit-field and base-class constants, case ranges.
+**Remaining (M3):**
+1. Oven folding of constant-initialized references; then global and
+   static reference variables and the direct-referee use (deviations
+   above).
+2. The Sema gaps above, then corpus cases for them: class copy-init,
+   braced returns, reference casts, temporaries, range-for over arrays.
+3. Bit-field and base-class constants, case ranges, reference members.
+4. Header-dependent `run` tests, once `decltype` parses (drop their
+   `xfail(kiln)`).

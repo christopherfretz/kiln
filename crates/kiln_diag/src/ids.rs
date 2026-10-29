@@ -365,6 +365,16 @@ diag_ids! {
     drv_cannot_open_output = Error (2) "unable to open output file '{0}': '{1}'";
     drv_cannot_read_input = Fatal (2) "cannot read '{0}': {1}";
     drv_cannot_read_predefines = Fatal (2) "cannot read the predefined macros '{0}': {1}";
+    // driver codegen path (WP-052b), clang's wording
+    drv_out_file_multiple = Error (0) "cannot specify -o when generating multiple output files";
+    drv_emit_llvm_link = Error (0) "-emit-llvm cannot be used when linking";
+    drv_unable_to_execute = Error (1) "unable to execute command: Executable \"{0}\" doesn't exist!";
+    drv_command_failed = Error (2) "{0} command failed with exit code {1} (use -v to see invocation)";
+    drv_command_signalled = Error (1) "{0} command failed due to signal (use -v to see invocation)";
+    drv_cannot_execute = Error (2) "unable to execute command: {0}: {1}";
+    drv_linker_input_unused = Warning [UnusedCommandLineArgument] (1) "{0}: 'linker' input unused";
+    drv_argument_unused = Warning [UnusedCommandLineArgument] (1) "argument unused during compilation: '{0}'";
+    cg_error = Error (1) "{0}";
 
     // ----- sema conversions (WP-049): [conv], [expr.arith.conv], [lex.*con] --
     // Type arguments are passed pre-quoted, with clang's `(aka '...')`
@@ -458,6 +468,31 @@ diag_ids! {
     parse_pragma_stdc_unknown = ExtWarn [UnknownPragmas] (0) "unknown pragma in STDC namespace";
     sema_unknown_visibility = Warning [IgnoredAttributes] (1) "unknown visibility '{0}'";
     sema_visibility_pop_mismatch = Error (0) "#pragma visibility pop with no matching #pragma visibility push";
+
+    // ----- using-declarations, namespace aliases (WP-062)
+    parse_cxx11_attr_placement = ExtWarn [CxxAttributeExtension] (0) "ISO C++ does not allow an attribute list to appear here";
+    sema_using_requires_qualname = Error (0) "using declaration requires a qualified name";
+    sema_using_decl_can_not_refer_to_namespace = Error (0) "using declaration cannot refer to a namespace";
+    note_namespace_using_decl = Note (0) "did you mean 'using namespace'?";
+    sema_using_decl_conflict = Error (0) "target of using declaration conflicts with declaration already in scope";
+    sema_using_decl_conflict_reverse = Error (0) "declaration conflicts with target of using declaration already in scope";
+    note_using_decl_target = Note (0) "target of using declaration";
+    note_using_decl_conflict = Note (0) "conflicting declaration";
+    note_using_decl = Note (0) "using declaration";
+    sema_use_of_empty_using_if_exists = Error (0) "reference to unresolved using declaration";
+    note_empty_using_if_exists_here = Note (0) "using declaration annotated with 'using_if_exists' here";
+    sema_using_enum_not_enum = Error (1) "'{0}' is not an enumerated type";
+    sema_using_enum_unknown_typename = Error (1) "unknown type name {0}";
+    sema_redefinition_different_namespace_alias = Error (1) "redefinition of '{0}' as an alias for a different namespace";
+    note_previous_namespace_alias = Note (1) "previously defined as an alias for '{0}'";
+    sema_using_decl_nested_name_specifier_is_not_class = Error (1) "using declaration in class refers into '{0}', which is not a class";
+    sema_using_decl_refers_to_own_class = Error (0) "using declaration refers to its own class";
+    sema_using_decl_not_base_class = Error (2) "using declaration refers into '{0}', which is not a base class of '{1}'";
+    sema_using_decl_can_not_refer_to_class_member = Error (0) "using declaration cannot refer to class member";
+    note_using_decl_class_member_alias = Note (0) "use an alias declaration instead";
+    note_using_decl_class_member_reference = Note (0) "use a reference instead";
+    sema_using_enum_incomplete = Error (1) "enumeration '{0}' is incomplete";
+    parse_using_enum_requires_name = Error (0) "using enum requires an enum or typedef name";
 
     // ----- sema (WP-048)
     sema_undeclared_var_use = Error (1) "use of undeclared identifier '{0}'";

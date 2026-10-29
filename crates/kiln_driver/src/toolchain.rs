@@ -343,6 +343,59 @@ impl Toolchain {
     }
 }
 
+/// An external LLVM tool the driver runs (`spec/codegen.md` §5).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Tool {
+    /// `llc`: IR to assembly (`-S`) or an object file (`-c`, linking).
+    Llc,
+    /// `llvm-as`: IR to bitcode (`-c -emit-llvm`).
+    LlvmAs,
+    /// `clang++`: the link step.
+    Linker,
+}
+
+impl Tool {
+    /// The versioned name on `PATH` (`llc-19`), as diagnostics name it.
+    pub fn name(self) -> &'static str {
+        match self {
+            Tool::Llc => "llc-19",
+            Tool::LlvmAs => "llvm-as-19",
+            Tool::Linker => "clang++-19",
+        }
+    }
+
+    /// The name in an LLVM installation's `bin/` directory.
+    fn llvm_bin_name(self) -> &'static str {
+        match self {
+            Tool::Llc => "llc",
+            Tool::LlvmAs => "llvm-as",
+            Tool::Linker => "clang++",
+        }
+    }
+
+    /// The failure wording's stage: `<stage> command failed ...`.
+    pub fn stage(self) -> &'static str {
+        match self {
+            Tool::Llc | Tool::LlvmAs => "backend",
+            Tool::Linker => "linker",
+        }
+    }
+}
+
+impl Toolchain {
+    /// Where `tool` is: `<llvm_dir>/bin/<tool>` (`KILN_LLVM_DIR`, default
+    /// `/usr/lib/llvm-19`), else the versioned name (`llc-19`) on `PATH`.
+    /// `None` if neither exists.
+    pub fn find_tool(&self, tool: Tool) -> Option<PathBuf> {
+        let in_llvm = Path::new(&self.llvm_dir).join("bin").join(tool.llvm_bin_name());
+        if in_llvm.is_file() {
+            return Some(in_llvm);
+        }
+        let path = std::env::var_os("PATH")?;
+        std::env::split_paths(&path).map(|d| d.join(tool.name())).find(|p| p.is_file())
+    }
+}
+
 /// The newest GCC under `<sysroot>/usr/lib/gcc/<triple>/<version>` (with a
 /// `crtbegin.o`) for the target's candidate triples.
 fn detect_gcc(sysroot: &str, target: &Target) -> Option<GccInstall> {

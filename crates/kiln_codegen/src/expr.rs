@@ -14,7 +14,7 @@ use kiln_llvm::{
 
 use crate::fir::{Fir, Op, V};
 use crate::fold::is_local;
-use crate::func::{Addr, min_align};
+use crate::func::{Addr, CallArg, min_align};
 use crate::module::{Cg, R, err, gval};
 
 /// An lvalue: an address, its source type and the bit-field access.
@@ -915,6 +915,19 @@ impl Cg<'_> {
                 })
             }
             DeclKind::Var | DeclKind::ParmVar => {
+                let dq = ast.decls.get(d).ty().unwrap_or(q);
+                if self.referee(dq).is_some() {
+                    // clang `EmitLoadOfReferenceLValue`: the slot holds the
+                    // address of the referee.
+                    let slot = if let Some(&a) = self.f.locals.get(&d) {
+                        a
+                    } else {
+                        let g = self.ref_var_global(e, d)?;
+                        Addr { v: V::C(gval(g)), ty: LTy::PTR, align: self.global_align(dq) }
+                    };
+                    let p = self.load(LTy::PTR, slot.v, slot.align, false);
+                    return Ok(self.ref_lvalue(p, q));
+                }
                 if let Some(&a) = self.f.locals.get(&d) {
                     return Ok(LV { addr: a, q, bf: None });
                 }
@@ -933,6 +946,26 @@ impl Cg<'_> {
             }
             k => err(self.loc_of(e), format!("reference to {k:?} is not supported yet")),
         }
+    }
+
+    /// The global holding a namespace-scope or static reference variable.
+    fn ref_var_global(&mut self, e: ExprId, d: DeclId) -> R<kiln_llvm::GlobalId> {
+        let ast = self.ast;
+        let st = ast.decls.var(d).map(|v| v.spec.storage());
+        if is_local(ast, d) && st == Some(VarStorage::Static) {
+            self.static_local(d)
+        } else if is_local(ast, d) && st != Some(VarStorage::Extern) {
+            err(self.loc_of(e), "reference to an unemitted local variable")
+        } else {
+            self.get_gvar(d)
+        }
+    }
+
+    /// The lvalue of type `q` at the address `p` a reference holds.
+    pub(crate) fn ref_lvalue(&mut self, p: V, q: QualType) -> LV {
+        let ty = if self.ast.types.is_function(q) { LTy::PTR } else { self.mty(q) };
+        let (_, align) = self.pointee_layout(q);
+        LV { addr: Addr { v: p, ty, align }, q, bf: None }
     }
 
     /// clang `EmitLValue`.
@@ -993,6 +1026,13 @@ impl Cg<'_> {
             }
             ExprKind::CompoundAssignOperator => Ok(self.emit_compound_assign(e)?.0),
             ExprKind::ConditionalOperator => self.cond_lvalue(e),
+            ExprKind::CallExpr if self.is_glvalue(e) => {
+                // A call returning a reference.
+                let Some(p) = self.emit_call(e, None)? else {
+                    return err(self.loc_of(e), "reference-returning call produced no value");
+                };
+                Ok(self.ref_lvalue(p, q))
+            }
             ExprKind::MaterializeTemporaryExpr | ExprKind::CallExpr | ExprKind::InitListExpr => {
                 let s =
                     if n.kind() == ExprKind::MaterializeTemporaryExpr { self.sub(e) } else { e };
@@ -1108,6 +1148,12 @@ impl Cg<'_> {
             }
             let st = self.m.types.int(bf.storage_size);
             return Ok(LV { addr: Addr { v, ty: st, align }, q, bf: Some(bf) });
+        }
+        if ast.decls.get(field).ty().is_some_and(|t| self.referee(t).is_some()) {
+            return err(
+                Some(ast.decls.get(field).loc()),
+                "a reference member is not supported yet",
+            );
         }
         let ty = self.mty(q);
         if is_union {
@@ -1248,7 +1294,24 @@ impl Cg<'_> {
             (p, fty, false, None)
         };
         let sig = self.call_sig(fty, extern_c, &arg_tys);
+        self.f.vector_width = self.f.vector_width.max(sig.info.max_vector_width);
         let rq = sig.ret;
+        // EmitCallArgs: evaluate every argument, aggregates into `agg.tmp`.
+        let mut vals = Vec::with_capacity(args.len());
+        for (i, &a) in args.iter().enumerate() {
+            let v = if self.referee(sig.params[i]).is_some() {
+                // A reference parameter binds the argument glvalue.
+                CallArg::Scalar(self.emit_lvalue(a)?.addr.v)
+            } else if self.is_aggregate(arg_tys[i]) {
+                let t = self.temp(arg_tys[i]);
+                self.emit_agg(a, t, false)?;
+                CallArg::Agg(t)
+            } else {
+                CallArg::Scalar(self.emit_scalar(a)?)
+            };
+            vals.push(v);
+        }
+        // EmitCall.
         let mut ir_args = Vec::new();
         let mut sret_addr = None;
         if sig.sret() {
@@ -1259,18 +1322,13 @@ impl Cg<'_> {
             ir_args.push(a.v);
             sret_addr = Some(a);
         }
-        for (i, &a) in args.iter().enumerate() {
-            let kind = sig.info.args.get(i).map(|x| x.kind.clone());
-            match kind {
-                Some(ArgKind::Ignore) => self.emit_ignored(a)?,
-                Some(ArgKind::Direct { .. } | ArgKind::Extend { .. })
-                    if !self.is_aggregate(arg_tys[i]) =>
-                {
-                    let v = self.emit_scalar(a)?;
-                    ir_args.push(v);
-                }
-                _ => return err(self.loc_of(a), "class-type arguments are not supported yet (M3)"),
-            }
+        for (i, &v) in vals.iter().enumerate() {
+            let Some(info) = sig.info.args.get(i) else {
+                return err(self.loc_of(args[i]), "call argument without ABI information");
+            };
+            let kind = info.kind.clone();
+            let loc = self.loc_of(args[i]);
+            self.call_arg(&kind, sig.params[i], v, &mut ir_args, loc)?;
         }
         let rty = match &sig.info.ret.kind {
             ArgKind::Direct { coerce, .. } | ArgKind::Extend { coerce, .. } => {
@@ -1308,8 +1366,29 @@ impl Cg<'_> {
             else {
                 unreachable!()
             };
-            self.coerced_store(r, &coerce, d);
+            if self.ir(&coerce) == self.mty(rq) {
+                // EmitAggregateStore: element-wise for a first-class struct.
+                self.aggregate_store(r, &coerce, d);
+            } else {
+                // (Empty records are returned `Ignore` on both targets, so
+                // clang's empty-record skip cannot arise here.)
+                let (size, _) = self.size_align(rq);
+                self.coerced_store_sized(r, &coerce, d, size);
+            }
             return Ok(None);
+        }
+        if rty != self.lty(rq) {
+            // A coerced scalar (x86-64 `__int128` as `{ i64, i64 }`):
+            // through a `coerce` temporary.
+            let (ArgKind::Direct { coerce, .. } | ArgKind::Extend { coerce, .. }) =
+                sig.info.ret.kind.clone()
+            else {
+                unreachable!()
+            };
+            let t = self.temp(rq);
+            let (size, _) = self.size_align(rq);
+            self.coerced_store_sized(r, &coerce, t, size);
+            return Ok(Some(self.load_scalar(t, rq)));
         }
         Ok(Some(r))
     }
@@ -1440,6 +1519,12 @@ impl Cg<'_> {
                     self.record_init(e, dest, zeroed)
                 }
             }
+            ExprKind::CallExpr if self.is_glvalue(e) => {
+                let lv = self.emit_lvalue(e)?;
+                let size = self.size_align(q).0;
+                self.memcpy(dest, lv.addr.v, lv.addr.align, size, false);
+                Ok(())
+            }
             ExprKind::CallExpr => {
                 self.emit_call(e, Some(dest))?;
                 Ok(())
@@ -1479,6 +1564,15 @@ impl Cg<'_> {
                 self.emit_ignored(l)?;
                 self.ensure_insert_point();
                 self.agg_visit(r, dest, zeroed)
+            }
+            ExprKind::StringLiteral => {
+                // A literal initializing a (possibly longer) char array:
+                // copy from the literal's constant padded to the array.
+                let size = self.size_align(q).0;
+                let g = self.lit_global_sized(ast.exprs.string_lit(e), size);
+                let align = self.m.global(g).align.unwrap_or(1);
+                self.memcpy(dest, V::C(gval(g)), align, size, false);
+                Ok(())
             }
             k => err(self.loc_of(e), format!("aggregate expression {k:?} is not supported yet")),
         }
@@ -1650,12 +1744,24 @@ impl Cg<'_> {
         }
         let q = ast.decls.get(d).ty().expect("var type");
         let ty = self.mty(q);
-        let (_, align) = self.size_align(q);
+        let align = self.global_align(q);
         let a = self.f.fir.alloca(ty, align);
         let addr = Addr { v: a, ty, align };
         self.f.locals.insert(d, addr);
         let Some(init) = v.init else { return Ok(()) };
         if self.f.fir.cur().is_none() {
+            return Ok(());
+        }
+        if self.referee(q).is_some() {
+            // A reference binds the address of its initializer glvalue.
+            if !self.is_glvalue(init) {
+                return err(
+                    self.loc_of(init),
+                    "binding a reference to a temporary is not supported yet",
+                );
+            }
+            let lv = self.emit_lvalue(init)?;
+            self.store(lv.addr.v, a, align, false);
             return Ok(());
         }
         let fold = self.folds.get(init);

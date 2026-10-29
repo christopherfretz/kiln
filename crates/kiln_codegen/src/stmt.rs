@@ -165,8 +165,13 @@ impl Cg<'_> {
         let rv = ast.stmts.return_value(s);
         if let Some(e) = rv {
             let q = ast.exprs.get(e).ty();
+            let ret_ref = self.f.sig.as_ref().is_some_and(|g| self.referee(g.ret).is_some());
             if ast.types.is_void(q) || self.f.ret_slot.is_none() {
                 self.emit_ignored(e)?;
+            } else if ret_ref {
+                let lv = self.emit_lvalue(e)?;
+                let slot = self.f.ret_slot.expect("return slot");
+                self.store(lv.addr.v, slot.v, slot.align, false);
             } else if self.is_aggregate(q) {
                 let slot = self.f.ret_slot.expect("return slot");
                 self.emit_agg(e, slot, false)?;

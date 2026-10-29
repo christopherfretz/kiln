@@ -74,7 +74,7 @@ pub struct EnumBuild {
     enumerators: Vec<(DeclId, i128)>,
 }
 
-fn sym_str(s: &Sema<'_, '_>, sym: Symbol) -> String {
+pub(crate) fn sym_str(s: &Sema<'_, '_>, sym: Symbol) -> String {
     s.ast.symbols().as_str(sym).to_string()
 }
 
@@ -501,6 +501,9 @@ impl Sema<'_, '_> {
             self.ast.decls.set_flags(decl, DeclFlags::INVALID);
         }
         self.act_on_asm_label(ds, d, decl, &mut attrs);
+        if d.qualifier.is_none() {
+            self.check_using_shadow_conflict(decl, name);
+        }
         if !attrs.is_empty() {
             self.check_decl_attrs(decl, &attrs);
             let _ = self.builder().attach_attrs(decl, &attrs);
@@ -590,7 +593,7 @@ impl Sema<'_, '_> {
 
     /// Whether function types `a` and `b` are the same apart from their
     /// exception specifications.
-    fn same_ignoring_exc_spec(&mut self, a: QualType, b: QualType) -> bool {
+    pub(crate) fn same_ignoring_exc_spec(&mut self, a: QualType, b: QualType) -> bool {
         let t = &self.ast.types;
         let (Some(pa), Some(pb)) = (t.proto(a).copied(), t.proto(b).copied()) else {
             return false;
@@ -623,7 +626,12 @@ impl Sema<'_, '_> {
         }
     }
 
-    fn note_prev(&self, msg: kiln_diag::Diag, prev: DeclId, definition: bool) -> kiln_diag::Diag {
+    pub(crate) fn note_prev(
+        &self,
+        msg: kiln_diag::Diag,
+        prev: DeclId,
+        definition: bool,
+    ) -> kiln_diag::Diag {
         let loc = self.ast.decls.get(prev).loc();
         let id = if definition {
             DiagId::note_previous_definition
@@ -758,6 +766,7 @@ impl Sema<'_, '_> {
         d.name = Some((name, name_loc));
         let ds = DeclSpec::new(name_loc);
         let td = self.act_on_typedef(&ds, ty, &d, name, true);
+        self.check_using_shadow_conflict(td, name);
         if !attrs.is_empty() {
             let _ = self.builder().attach_attrs(td, attrs);
         }
@@ -1522,6 +1531,12 @@ impl Sema<'_, '_> {
         {
             self.push_local(n, d);
         }
+        if let Some((n, _)) = name
+            && qualifier.is_none()
+            && prev.is_none()
+        {
+            self.check_using_shadow_conflict(d, n);
+        }
         d
     }
 
@@ -1825,14 +1840,18 @@ impl Sema<'_, '_> {
                 .locals
                 .iter()
                 .rev()
-                .find(|e| e.0 == name && e.2 == crate::scope::Ns::Ordinary)
+                .find(|e| {
+                    e.0 == name
+                        && e.2 == crate::scope::Ns::Ordinary
+                        && self.kind_of(e.1) != DeclKind::UsingShadow
+                })
                 .map(|e| e.1);
         }
         let ent = s.entity?;
-        self.ast
-            .lookup_local(ent, DeclName::ident(name))
-            .iter()
-            .find(|&d| !is_tag_kind(self.ast.decls.get(d).kind()))
+        self.ast.lookup_local(ent, DeclName::ident(name)).iter().find(|&d| {
+            let k = self.ast.decls.get(d).kind();
+            !is_tag_kind(k) && k != DeclKind::UsingShadow
+        })
     }
 
     fn fits(&self, ty: QualType, v: i128) -> bool {
@@ -2220,6 +2239,10 @@ impl Sema<'_, '_> {
         if k == DeclKind::Namespace {
             return NameClass::Namespace(d);
         }
+        if k == DeclKind::NamespaceAlias {
+            // [namespace.alias]/2: an alias names its namespace.
+            return NameClass::Namespace(self.ast.resolve_alias(d));
+        }
         if is_type_kind(k) {
             let ty = if matches!(k, DeclKind::Typedef | DeclKind::TypeAlias) {
                 self.ast.decls.get(d).ty().unwrap_or(QualType::ERROR)
@@ -2239,6 +2262,18 @@ impl Sema<'_, '_> {
         name: Symbol,
         loc: Loc,
     ) -> Option<DeclId> {
+        self.act_on_nested_name_spelled(prefix, name, loc).map(|r| r.0)
+    }
+
+    /// [`Sema::act_on_nested_name`], also returning the declaration the
+    /// name found (a namespace alias or typedef as written), for building
+    /// the nested-name-specifier ([`Sema::nns_component`]).
+    pub fn act_on_nested_name_spelled(
+        &mut self,
+        prefix: Option<DeclId>,
+        name: Symbol,
+        loc: Loc,
+    ) -> Option<(DeclId, DeclId)> {
         let found = match prefix {
             Some(q) => self.lookup_qualified(q, name, LookupKind::Nested),
             None => self.lookup_name(name, LookupKind::Nested),
@@ -2254,8 +2289,9 @@ impl Sema<'_, '_> {
             self.emit(msg);
             return None;
         };
-        match self.ast.decls.get(d).kind() {
+        let ctx = match self.ast.decls.get(d).kind() {
             DeclKind::Namespace => Some(self.ast.first(d)),
+            DeclKind::NamespaceAlias => Some(self.ast.resolve_alias(d)),
             DeclKind::CXXRecord | DeclKind::Enum => {
                 self.mark_type_referenced(d);
                 Some(self.ast.definition(d).unwrap_or(d))
@@ -2271,7 +2307,8 @@ impl Sema<'_, '_> {
                 r.map(|r| self.ast.definition(r).unwrap_or(r))
             }
             _ => None,
-        }
+        };
+        ctx.map(|c| (c, d))
     }
 
     /// How a qualifier context is named in "no member named 'x' in ...".
@@ -2305,8 +2342,11 @@ impl Sema<'_, '_> {
         let n = raw.trim_start_matches("__").trim_end_matches("__").to_owned();
         let gnu = syntax == AttrSyntax::Gnu || scope_s.as_deref() == Some("gnu");
         let std = scope_s.is_none() && syntax != AttrSyntax::Gnu;
+        let clang_scope = scope_s.as_deref() == Some("clang");
         // clang 19 names only the attribute, not its scope.
-        if scope_s.as_deref().is_some_and(|s| s != "gnu") {
+        if scope_s.as_deref().is_some_and(|s| s != "gnu")
+            && !(clang_scope && n == "using_if_exists")
+        {
             let msg = self.diag(DiagId::parse_unknown_attribute, loc).arg(raw);
             self.emit(msg);
             return None;
@@ -2330,6 +2370,8 @@ impl Sema<'_, '_> {
             ("const", _, true) => AttrKind::CONST,
             ("pure", _, true) => AttrKind::PURE,
             ("cold", _, true) => AttrKind::COLD,
+            ("using_if_exists", _, true) => AttrKind::USING_IF_EXISTS,
+            ("using_if_exists", _, _) if clang_scope => AttrKind::USING_IF_EXISTS,
             ("visibility" | "section" | "format", _, true) => {
                 let msg = self.diag(DiagId::parse_attribute_ignored, loc).arg(raw);
                 self.emit(msg);

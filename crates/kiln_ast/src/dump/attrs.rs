@@ -50,6 +50,7 @@ pub(super) fn class_name(a: &AttrNode) -> Option<&'static str> {
         AttrKind::VECTOR_SIZE => "VectorSize",
         AttrKind::ASM_LABEL => "AsmLabel",
         AttrKind::BUILTIN => "Builtin",
+        AttrKind::USING_IF_EXISTS => "UsingIfExists",
         _ => return None,
     })
 }

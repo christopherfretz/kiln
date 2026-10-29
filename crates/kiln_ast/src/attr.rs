@@ -61,6 +61,8 @@ impl AttrKind {
     /// (clang's `BuiltinAttr`): `a` = its builtin id
     /// ([`crate::decl::builtin`]). Always implicit.
     pub const BUILTIN: AttrKind = AttrKind(89);
+    /// `clang::using_if_exists` on a using-declaration (WP-062).
+    pub const USING_IF_EXISTS: AttrKind = AttrKind(100);
 }
 
 /// Attribute syntax.

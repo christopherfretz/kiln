@@ -28,6 +28,47 @@ impl Parser<'_, '_> {
         self.at(Punct::LSquare) && self.peek_is(1, Punct::LSquare)
     }
 
+    /// True at `[[...]]` attribute-specifiers followed by `using` (an
+    /// attribute-specifier-seq written before a using-declaration).
+    pub(crate) fn at_attributed_using(&self) -> bool {
+        let mut i = self.pos();
+        loop {
+            let t = self.tok_at(i);
+            let two = Self::punct_of(t) == Some(Punct::LSquare)
+                && Self::punct_of(self.tok_at(i + 1)) == Some(Punct::LSquare);
+            if !two {
+                return self.kw_of(t) == Some(Kw::Using);
+            }
+            let mut depth = 0usize;
+            loop {
+                let t = self.tok_at(i);
+                match Self::punct_of(t) {
+                    Some(Punct::LSquare) => depth += 1,
+                    Some(Punct::RSquare) => {
+                        depth = depth.saturating_sub(1);
+                        if depth == 0 {
+                            i += 1;
+                            break;
+                        }
+                    }
+                    _ if t.kind == TokKind::Eof => return false,
+                    _ => {}
+                }
+                i += 1;
+            }
+        }
+    }
+
+    /// `[[...]] using ...`: the attributes (an extension clang warns
+    /// about), then the using-declaration they apply to.
+    pub(crate) fn parse_attributed_using(&mut self) -> Vec<kiln_ast::DeclId> {
+        let at = self.peek(2).span.lo;
+        self.s.error(DiagId::parse_cxx11_attr_placement, at);
+        let mut attrs = Vec::new();
+        self.parse_attributes(&mut attrs);
+        self.parse_using_attrs(&attrs)
+    }
+
     /// True at any attribute-specifier.
     pub(crate) fn at_attr(&self) -> bool {
         self.at_cxx11_attr() || matches!(self.kw(), Some(Kw::Alignas | Kw::Attribute))

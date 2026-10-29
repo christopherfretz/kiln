@@ -38,10 +38,12 @@ printer, diagnostics are separate work packages).
 - Perf: preprocessing all libc++ headers within 1.5x of clang's `-E` time
   and lower peak RSS. Recorded in `bench/baselines/pp.json`.
 
-## M2 — The C-ish subset, end to end, with the Oven — in progress (codegen pending)
-Status: parse/sema/Oven/dump done; `kiln -fsyntax-only -fdump-ast` matches
-clang on 47 golden directories; 99 [expr.const] source tests; Oven 0.02x clang
-time / 0.04x memory on `bench/oven`. Codegen + `run` tests: WP-052.
+## M2 — The C-ish subset, end to end, with the Oven — done (2026-10-28)
+Status: done. `kiln -fsyntax-only -fdump-ast` matches clang on 47 golden
+directories; 99 [expr.const] source tests; Oven 0.02x clang time / 0.04x
+memory on `bench/oven`; codegen byte-identical to clang -O0 on the IR-diff
+corpus (46 programs × 2 triples) and the 79-case unit corpus; 33 printf
+`run` tests pass vs the oracle through `kiln` driving `llc-19`/`clang++-19`.
 A vertical slice that exercises every crate: parse, sema, Oven, ABI, codegen,
 driver. Scope: fundamental types, arithmetic and conversions, pointers,
 arrays, enums, structs (no members functions yet), functions, all C control
@@ -61,8 +63,9 @@ flow, `constexpr` functions and variables, `static_assert`, string literals,
 Member functions, constructors/destructors, references, overload resolution,
 implicit conversion sequences, class templates, function templates, deduction,
 partial/explicit specialization, `auto`, variadic templates, fold expressions,
-`decltype`, `if constexpr`, lambdas, inheritance (non-virtual first, then
-virtual), operator overloading, RAII/`new`/`delete`, Itanium mangling and
+`decltype`, `if constexpr`, concepts and constraints, pack indexing, lambdas,
+inheritance (non-virtual first, then virtual), operator overloading,
+RAII/`new`/`delete`, Itanium mangling and
 record layout matching clang (checked by layout-dump differential tests).
 - Oven: objects with lifetimes, constructors in constant evaluation,
   `std::construct_at`-style, unions' active member, pointers-to-members,
@@ -72,11 +75,10 @@ record layout matching clang (checked by layout-dump differential tests).
   libc++ tests pass.
 
 ## M4 — The rest of the language
-Namespaces/ADL corner cases, exceptions, RTTI, concepts and constraints,
-coroutines, modules (at least header units and `import std;` consumption),
-`consteval`, `constinit`, structured bindings, designated initializers,
-three-way comparison, deducing this, pack indexing, attributes, `thread_local`,
-static initialization order, inline variables, `[[no_unique_address]]`.
+Namespaces/ADL corner cases, exceptions, RTTI, coroutines, modules (at least header units and `import std;` consumption),
+`consteval`, `constinit`, structured bindings,
+three-way comparison, deducing this, attributes, `thread_local`,
+static initialization order, inline variables.
 - Exit: `<vector>`, `<string>`, `<memory>`, `<optional>`, `<variant>`,
   `<tuple>`, `<algorithm>`, `<ranges>`, `<format>` compile; their libc++
   tests pass.

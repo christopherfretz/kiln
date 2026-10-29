@@ -37,7 +37,8 @@ undeclared, which resolves the C++ declaration/expression ambiguities.
   - qualified declarator-ids
   - exception specifications: `noexcept`, `noexcept(e)`, `throw()`
     (and `throw(type-ids)`, diagnosed)
-  - `using namespace`
+  - `using namespace`, using-declarations, `using enum`, namespace
+    aliases (WP-062)
   - `static_assert`
 - **Attributes:** standard and GNU attributes (§6.2).
 - **Statements:** every C control-flow statement, with C++
@@ -292,6 +293,30 @@ harness ignores order.
     unnamed namespaces (§sema 4.6)
   - `extern "C" { }` and `extern "C" decl` (`parse_linkage_spec`)
   - `using namespace N;`
+- **Using-declarations and aliases** (`parse_using`, spec/sema.md §4.8):
+  - `using a::x, ::b::y;`: each declarator is a nested-name-specifier
+    (`parse_nested_name_nns`, which also builds the specifier as
+    written) and an identifier, passed to
+    `Sema::act_on_using_declarator` one at a time.
+    - `typename` declarators, `operator`/destructor names and pack
+      expansions (`x...`) are "not supported yet" (they need classes
+      with bases and templates).
+    - A missing name is `expected unqualified-id`; a missing `;` is
+      `expected ';' after using declaration`.
+  - `[[clang::using_if_exists]]` is accepted before `using` (at
+    namespace and class scope; `at_attributed_using`) and after a
+    declarator. Both placements are a clang extension and warn `ISO C++
+    does not allow an attribute list to appear here`, as clang does;
+    GNU `__attribute__((using_if_exists))` after the declarator does
+    not warn.
+  - `using enum [qual] name;` classifies the name and calls
+    `Sema::act_on_using_enum`. No name: `using enum requires an enum or
+    typedef name`. Missing `;`: `expected ';' after using-enum
+    declaration`.
+  - `namespace Q = [qual] target;` at namespace and block scope calls
+    `Sema::act_on_namespace_alias`. A target that is not a name is
+    `expected namespace name`; a missing `;` is `expected ';' after
+    namespace name`.
 - **`static_assert(cond[, msg])`:** the message is optional (C++17).
 - **Initializers** (`parse_initializer`, crate-visible):
   - `= expr`, `= { … }`, `( expr )` and `{ … }`
@@ -438,7 +463,7 @@ in `kiln_diag` for now; nothing emits them.
   - operator function names, conversion functions
   - deleted and defaulted functions
 - **Templates:** declarations, template-ids, `typename`, `template`,
-  packs, concepts, requires-clauses.
+  packs, concepts, requires-clauses. Design: spec/sema-templates.md §2.
 - **Other expressions:**
   - lambdas, `new`/`delete`, `throw`
   - `typeid`, `dynamic_cast`
@@ -457,7 +482,8 @@ in `kiln_diag` for now; nothing emits them.
   - default arguments
   - trailing return types
   - `auto` deduction beyond `auto x = e`
-  - namespace aliases, `using` declarations, `using enum`
+  - `typename`, `operator` and pack forms of using-declarators, and an
+    attributed `[[...]] using` as a block-scope statement
   - `asm` declarations, modules, `__declspec`
 
 ## 10. Tests

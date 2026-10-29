@@ -309,6 +309,9 @@ impl<'a> Printer<'a, '_> {
         if k.ends_with("Decl")
             && let Some(nm) = name(n)
         {
+            // A `UsingDecl`'s JSON name is as written (`N::x`); its
+            // declaration name is `x`.
+            let nm = if k == "UsingDecl" { nm.rsplit("::").next().unwrap_or(nm) } else { nm };
             let q = qualified(ctx, nm)?;
             if q.contains(f) {
                 if let Some(t) = self.node(n)? {
@@ -327,6 +330,11 @@ impl<'a> Printer<'a, '_> {
                 Some(name(n).map_or(Ctx::Unnamed, |s| Ctx::Named(s.into())))
             }
             "EnumDecl" | "LinkageSpecDecl" => Some(Ctx::Transparent),
+            // `NamedDecl::printQualifiedName` skips inline namespaces.
+            "NamespaceDecl" if flag(n, "isInline") => Some(Ctx::Transparent),
+            "NamespaceDecl" => {
+                Some(Ctx::Named(name(n).unwrap_or("(anonymous namespace)").to_owned()))
+            }
             "FunctionDecl" => Some(Ctx::Function(signature(n))),
             _ => None,
         };
@@ -492,6 +500,52 @@ impl<'a> Printer<'a, '_> {
                 line = l;
                 kids_out = self.kid_trees(n)?;
             }
+            "NamespaceDecl" => {
+                let mut l = decl_head(n, k);
+                push_opt(&mut l, name(n));
+                if flag(n, "isInline") {
+                    push_word(&mut l, "inline");
+                }
+                if let Some(o) = n.get("originalNamespace") {
+                    l.push_str(" original ");
+                    l.push_str(&bare_ref(o)?);
+                }
+                line = l;
+                kids_out = self.kid_trees(n)?;
+            }
+            "NamespaceAliasDecl" | "UsingDirectiveDecl" | "UsingShadowDecl" | "UsingEnumDecl" => {
+                let mut l = decl_head(n, k);
+                if k == "NamespaceAliasDecl" {
+                    push_opt(&mut l, name(n));
+                }
+                let key = match k {
+                    "NamespaceAliasDecl" => "aliasedNamespace",
+                    "UsingDirectiveDecl" => "nominatedNamespace",
+                    _ => "target",
+                };
+                let t = n.get(key).ok_or_else(|| format!("clang-ast: {k} without `{key}`"))?;
+                l.push(' ');
+                l.push_str(&bare_ref(t)?);
+                if k == "UsingShadowDecl" && t.get("type").is_some() {
+                    push_word(&mut l, &type_pair(t.get("type"), "shadowed declaration")?);
+                }
+                line = l;
+                for c in kids(n) {
+                    // A shadow of a type carries the type's tree (not printed).
+                    if !kind(c).ends_with("Type")
+                        && let Some(t) = self.node(c)?
+                    {
+                        kids_out.push(t);
+                    }
+                }
+            }
+            "UsingDecl" => {
+                // clang's `name` is the qualified name as written (`N::x`).
+                let mut l = decl_head(n, k);
+                push_opt(&mut l, name(n));
+                line = l;
+                kids_out = self.kid_trees(n)?;
+            }
             "FunctionDecl" => {
                 line = self.function(n)?;
                 kids_out = self.kid_trees(n)?;
@@ -565,6 +619,11 @@ impl<'a> Printer<'a, '_> {
                     text(r, "name").unwrap_or(""),
                     type_pair(r.get("type"), "referenced declaration")?
                 );
+                if let Some(f) = n.get("foundReferencedDecl") {
+                    l.push_str(" (");
+                    l.push_str(&bare_ref(f)?);
+                    l.push(')');
+                }
                 if let Some(why) = text(n, "nonOdrUseReason") {
                     l.push_str(" non_odr_use_");
                     l.push_str(why);
@@ -871,6 +930,14 @@ fn push_opt(l: &mut String, w: Option<&str>) {
     if let Some(w) = w {
         push_word(l, w);
     }
+}
+
+/// `Kind 'name'`: a reference to a declaration without its type (clang's
+/// `dumpBareDeclRef` of a non-value declaration).
+fn bare_ref(r: &Json) -> Res<String> {
+    let rk = kind(r);
+    let rk = rk.strip_suffix("Decl").ok_or_else(|| format!("clang-ast: `{rk}` is not a decl"))?;
+    Ok(format!("{rk} '{}'", text(r, "name").unwrap_or("")))
 }
 
 /// `Class [implicit] [used|referenced]`.

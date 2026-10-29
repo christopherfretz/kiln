@@ -40,4 +40,6 @@ pub use layout::{FloatFormat, LayoutCache, RecordLayout, TargetTypes};
 pub use names::{DeclSet, TemplateName};
 pub use nns::{Nns, NnsKind};
 pub use node::{ConstArray, TypeNode};
-pub use print::{PrintOptions, RawNames, TypeNames, aka, dump_strings, print_type, write_type};
+pub use print::{
+    PrintOptions, RawNames, TypeNames, aka, dump_strings, print_type, write_nns, write_type,
+};

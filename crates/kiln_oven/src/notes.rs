@@ -13,7 +13,7 @@ use crate::arith::{self, FloatErr, IntErr};
 use crate::compile::{FState, Site};
 use crate::failure::Note;
 use crate::kbc::{Op, ak};
-use crate::mem::{MemFault, Origin, Ptr, flags};
+use crate::mem::{HEAP_BIT, MemFault, Origin, Ptr, Sp, flags};
 use crate::ty::{OTy, TyKind};
 use crate::value::var_info;
 use crate::vm::{Fault, value_len};
@@ -373,6 +373,10 @@ impl Oven {
             }
             Origin::Str(id, _) => ast.strings.write_literal(id, &mut s),
             Origin::Temp(_) | Origin::Const(_) | Origin::None => s.push_str("{temporary}"),
+            // clang: `{*new T#N}`, N its allocation number.
+            Origin::Heap(_) => {
+                let _ = write!(s, "{{*new {}#{}}}", self.tname(ast, a.ty), p.slot - HEAP_BIT);
+            }
         }
         let (mut t, mut rel) = (a.ty, u64::from(p.off));
         loop {
@@ -463,8 +467,11 @@ impl Oven {
     /// Whether the call that created dead frame object `p` is running.
     fn frame_alive(&self, p: u64) -> bool {
         let p = Ptr::decode(p);
+        if p.is_fn() || p.space() != Sp::Frame {
+            return false;
+        }
         let fr = match self.mem.slots.get(p.slot as usize) {
-            Some(a) if !p.is_static() && a.frame != 0 => a.frame,
+            Some(a) if a.frame != 0 => a.frame,
             _ => return false,
         };
         self.stack.iter().any(|f| f.serial == fr)
@@ -492,6 +499,12 @@ impl Oven {
                 format!(
                     "{verb} object outside its lifetime is not allowed in a constant expression"
                 )
+            }
+            // Placeholder wording (clang's note_constexpr_access_deleted_object
+            // and note_constexpr_heap_alloc_here), checked by WP-061b part 2.
+            MemFault::Dead(Origin::Heap(e)) => {
+                extra.push(Note::new(ast.exprs.get(e).loc(), "heap allocation performed here"));
+                format!("{verb} heap allocated object that has been deleted")
             }
             MemFault::Dead(Origin::Var(d)) => {
                 extra.push(Note::new(ast.decls.get(d).loc(), "declared here"));
@@ -568,6 +581,24 @@ impl Oven {
             ),
             MemFault::Memory(n) => {
                 format!("constexpr evaluation exceeded the memory limit of {n} bytes")
+            }
+            // Placeholder wording after clang's note_constexpr_delete_*
+            // and note_constexpr_new_delete_mismatch notes; the `delete`
+            // operation and its oracle tests are WP-061b part 2.
+            MemFault::NotHeap => format!(
+                "delete of pointer '{}' that does not point to a heap-allocated object",
+                self.ptr_string(ast, p, ty)
+            ),
+            MemFault::DoubleDelete => "delete of pointer that has already been deleted".into(),
+            MemFault::Subobject => format!(
+                "delete of pointer to subobject '{}'",
+                self.ptr_string(ast, p, ty)
+            ),
+            MemFault::DeleteMismatch { array_new: true } => {
+                format!("non-array delete used to delete pointer to array object of type '{}'", self.tname(ast, ty))
+            }
+            MemFault::DeleteMismatch { array_new: false } => {
+                format!("array delete used to delete pointer to non-array object of type '{}'", self.tname(ast, ty))
             }
         };
         (site.loc, msg)

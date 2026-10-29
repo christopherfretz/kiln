@@ -16,6 +16,7 @@ kiln_oven.workspace = true
 
 [dev-dependencies]
 kiln_parse.workspace = true
+kiln_driver.workspace = true
 
 [lints]
 workspace = true

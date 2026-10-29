@@ -29,6 +29,7 @@ mod oven_bridge;
 pub mod scope;
 pub mod stmt;
 pub mod target;
+pub mod using;
 
 use kiln_abi::Target;
 use kiln_ast::types::{PrintOptions, TargetTypes, aka, print_type};
@@ -201,6 +202,13 @@ impl<'a, 'sm> Sema<'a, 'sm> {
         use kiln_ast::types::TypeNames as _;
         let mut s = String::new();
         names::SemaNames::new(self).write_decl_name(d, true, &mut s);
+        s
+    }
+
+    /// A nested-name-specifier as written (`N::M::`, `::`).
+    pub fn nns_str(&self, n: kiln_ast::ids::NnsId) -> String {
+        let mut s = String::new();
+        kiln_ast::types::write_nns(&self.ast.types, &names::SemaNames::new(self), n, &mut s);
         s
     }
 

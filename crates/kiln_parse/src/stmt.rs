@@ -126,6 +126,16 @@ impl Parser<'_, '_> {
                     }
                     return Some(self.s.act_on_decl_stmt(&ds, loc));
                 }
+                Kw::Namespace
+                    if self.ident_of(self.peek(1)).is_some() && self.peek_is(2, Punct::Equal) =>
+                {
+                    self.bump();
+                    let name = self.ident()?;
+                    let nl = self.bump().span.lo;
+                    self.bump();
+                    let d = self.parse_namespace_alias(name, nl)?;
+                    return Some(self.s.act_on_decl_stmt(&[d], loc));
+                }
                 Kw::Namespace | Kw::Template => {
                     self.unsupported(&format!("'{}' here", k.spelling()), loc);
                     self.skip_statement();
