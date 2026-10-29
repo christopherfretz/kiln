@@ -484,6 +484,28 @@ specification as written (`TypeNames` prints ` noexcept`,
     `mark_part_of_explicit_cast`
 - **Constant-folding warnings:** division by zero, negative shifts and
   over-wide shifts warn when the operands fold.
+- **Member-pointer equality** ([expr.eq]/4, clang's
+  `CheckCompareOperands`, WP-085): when either operand of a comparison
+  is a member pointer:
+  - `<`, `>`, `<=`, `>=` (and `<=>`, not yet distinguished) are
+    `invalid operands to binary expression ('int B::*' and 'int B::*')`;
+  - a null pointer constant on either side (`0`, `nullptr`, checked
+    right operand first) converts to the other operand's type
+    (`NullToMemberPointer`); the result is `bool`;
+  - two member pointers of the same type compare directly; otherwise
+    the right operand converts to the left's type, then the left to the
+    right's, by a standard conversion (`BaseToDerivedMemberPointer` from
+    the base's to the derived class's member pointer, plus
+    qualification conversions). A conversion through a virtual base
+    reports its conversion error at the operand, followed by the
+    distinct-pointer error below;
+  - no conversion either way: `comparison of distinct pointer types
+    ('int B::*' and 'int O::*')` when both are pointers or member
+    pointers, otherwise (a non-null integer, `nullptr` as a non-null
+    operand of a different kind) `invalid operands`.
+  Not yet: the composite type that needs a cv-union of both sides
+  (`const int B::*` vs `volatile int D::*`; [expr.type]/4.6) and
+  constant evaluation of the comparison (WP-076).
 
 ### 5.1 Unevaluated operands
 `unevaluated > 0` inside `sizeof`, `alignof` and `noexcept` operands.

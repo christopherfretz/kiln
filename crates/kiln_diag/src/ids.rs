@@ -792,7 +792,7 @@ diag_ids! {
     sema_member_redeclared = Error (0) "class member cannot be redeclared";
     sema_storage_class_for_member = Error (0) "storage class specified for a member declaration";
     sema_nonstatic_member_out_of_line = Error (0) "non-static data member defined out-of-line";
-    sema_member_def_no_match = Error (2) "out-of-line definition of '{0}' does not match any declaration in '{1}'";
+    sema_member_def_no_match = Error (2) "out-of-line definition of '{0}' does not match any declaration in {1}";
     sema_friend_def_no_match = Error (2) "friend declaration of '{0}' does not match any declaration in {1}";
     sema_friend_not_class_or_fn = Error (0) "friends can only be classes or functions";
     sema_const_member_assign = Error (1) "cannot assign to non-static data member within const member function '{0}'";

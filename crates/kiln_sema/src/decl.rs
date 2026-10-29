@@ -1403,11 +1403,21 @@ impl Sema<'_, '_> {
                 .arg(self.qualifier_desc(ctx));
             self.emit(msg);
             invalid_redecl = true;
-        } else if method && !in_class && !matches_member {
+        } else if method && !in_class && !matches_member
+            || !method && !friend && d.qualifier.is_some() && prev.is_none()
+        {
+            // [dcl.meaning.general]/2: a qualified declarator-id names a
+            // previously declared member of the nominated class or
+            // namespace.
+            let scope = if method {
+                format!("'{}'", self.qualified_decl_name(ctx))
+            } else {
+                self.qualifier_desc(ctx)
+            };
             let msg = self
                 .diag(DiagId::sema_member_def_no_match, d.name_loc())
                 .arg(sym_str(self, name))
-                .arg(self.qualified_decl_name(ctx));
+                .arg(scope);
             self.emit(msg);
             invalid_redecl = true;
         } else if let Some(p) = prev
@@ -3329,6 +3339,18 @@ impl Sema<'_, '_> {
             None => self.lookup_name(name, LookupKind::Nested),
         };
         let Some(&d) = found.decls.first() else {
+            // [basic.lookup.qual]/1 ignores names that are not types,
+            // templates or namespaces; one that ordinary lookup finds is
+            // "not a class, namespace, or enumeration" (clang's
+            // `BuildCXXNestedNameSpecifier` second lookup).
+            let ordinary = match prefix {
+                Some(q) => self.lookup_qualified(q, name, LookupKind::Ordinary),
+                None => self.lookup_name(name, LookupKind::Ordinary),
+            };
+            if !ordinary.decls.is_empty() {
+                self.not_a_nested_name(name, &ordinary.decls, loc);
+                return None;
+            }
             let msg = match prefix {
                 Some(q) => self
                     .diag(DiagId::sema_no_member, loc)
@@ -3373,15 +3395,38 @@ impl Sema<'_, '_> {
                 }
                 r.map(|r| self.ast.definition(r).unwrap_or(r))
             }
-            _ => None,
+            _ => {
+                self.not_a_nested_name(name, &found.decls, loc);
+                None
+            }
         };
         ctx.map(|c| (c, d))
+    }
+
+    /// `'x' is not a class, namespace, or enumeration` for a
+    /// nested-name-specifier component `x::` that names something else,
+    /// with clang's `declared here` note when lookup found one declaration
+    /// that is not a function template (clang's `LookupResult` treats a
+    /// function template, like several functions, as an overload set).
+    fn not_a_nested_name(&mut self, name: Symbol, decls: &[DeclId], loc: Loc) {
+        let mut msg = self
+            .diag(DiagId::sema_expected_class_or_namespace, loc)
+            .arg(format!("'{}'", sym_str(self, name)));
+        if let [d] = decls
+            && self.kind_of(*d) != DeclKind::FunctionTemplate
+        {
+            msg = msg.with_note(
+                self.diag(DiagId::note_entity_declared_at, self.ast.decls.get(*d).loc())
+                    .arg(format!("'{}'", sym_str(self, name))),
+            );
+        }
+        self.emit(msg);
     }
 
     /// How a qualifier context is named in "no member named 'x' in ...".
     pub(crate) fn qualifier_desc(&self, q: DeclId) -> String {
         match self.ast.decls.get(q).kind() {
-            DeclKind::Namespace => format!("namespace '{}'", self.decl_name(q)),
+            DeclKind::Namespace => format!("namespace '{}'", self.qualified_decl_name(q)),
             DeclKind::TranslationUnit => "the global namespace".to_owned(),
             _ => {
                 let t = self.tag_type(q);
