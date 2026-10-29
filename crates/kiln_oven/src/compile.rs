@@ -812,7 +812,10 @@ impl Scan<'_> {
             }
             ExprKind::UnaryExprOrTypeTraitExpr
             | ExprKind::CXXNoexceptExpr
-            | ExprKind::OffsetOfExpr => {}
+            | ExprKind::OffsetOfExpr
+            | ExprKind::TypeTraitExpr
+            | ExprKind::ArrayTypeTraitExpr
+            | ExprKind::ExpressionTraitExpr => {}
             ExprKind::CallExpr => {
                 let ty = n.ty();
                 if matches!(
@@ -1717,6 +1720,16 @@ impl Compiler<'_> {
             ExprKind::CXXNoexceptExpr => {
                 let v = self.ast().exprs.noexcept_value(e);
                 self.konst(dst, u128::from(v));
+            }
+            // spec/sema-templates.md §9.1, §9.4: Sema evaluated the trait.
+            ExprKind::TypeTraitExpr | ExprKind::ExpressionTraitExpr => {
+                let v = self.ast().exprs.type_trait_value(e);
+                self.konst(dst, u128::from(v));
+            }
+            ExprKind::ArrayTypeTraitExpr => {
+                let v = self.ast().exprs.array_trait(e).value;
+                let (w, s) = int_of(self.kind(ty)).unwrap_or((64, false));
+                self.konst(dst, crate::arith::canon(u128::from(v), w, s));
             }
             ExprKind::CXXNullPtrLiteralExpr
             | ExprKind::GNUNullExpr

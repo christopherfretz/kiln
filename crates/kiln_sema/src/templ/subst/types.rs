@@ -224,6 +224,11 @@ impl Substituter<'_, '_, '_> {
                 let t = self.decl_type(d);
                 Ok(self.sema.ast.types.elaborated(kiln_ast::types::TagKeyword::None, Some(n), t))
             }
+            // spec/sema-templates.md §9.2.
+            TypeView::UnaryTransform { kind, base, .. } => {
+                let b = self.ty(base, loc)?;
+                self.sema.build_unary_transform(kind, b, loc).ok_or(SubstFail)
+            }
             TypeView::Decltype { expr, .. } => {
                 let e = self.expr(expr)?;
                 self.sema.act_on_decltype(e, loc, loc).ok_or(SubstFail)

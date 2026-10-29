@@ -1533,10 +1533,12 @@ impl<'a> AstBuilder<'a> {
     /// `bool` prvalue whose `value` sema computed from the unevaluated
     /// type operands `args`. Value-dependent if any operand is dependent
     /// ([temp.dep.constexpr]/3); `rparen` is the closing `)`.
+    #[allow(clippy::too_many_arguments, reason = "one per field of the node")]
     pub fn type_trait_expr(
         &mut self,
         trait_: TypeTrait,
         args: &[QualType],
+        rhs_loc: Option<Loc>,
         value: bool,
         ty: QualType,
         loc: Loc,
@@ -1562,6 +1564,9 @@ impl<'a> AstBuilder<'a> {
             u32::from(value),
         );
         self.ast.exprs.cold.end_loc.insert(e, rparen).expect("fresh expression");
+        if let Some(l) = rhs_loc {
+            self.ast.exprs.cold.trait_rhs_loc.insert(e, l).expect("fresh expression");
+        }
         e
     }
 

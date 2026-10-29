@@ -260,7 +260,7 @@ impl Job<'_> {
             Diag::new(DiagId::drv_unsupported_target, Span::INVALID).arg(triple).emit(engine);
             return None;
         };
-        pp.set_feature_queries(Box::new(features));
+        pp.set_feature_queries(Box::new(StagedFeatures(features)));
         if let Some(d) = &deps {
             pp.set_callbacks(Box::new(DepCallbacks { list: Rc::clone(d), sm }));
         }
@@ -297,4 +297,59 @@ impl Job<'_> {
 /// The language of an input.
 pub fn input_lang(lang: Option<Lang>, path: &str) -> Lang {
     lang.unwrap_or_else(|| if path == "-" { Lang::Cxx } else { Lang::from_path(path) })
+}
+
+/// clang 19's feature answers with kiln's builtin staging applied
+/// (spec/sema-templates.md §13.3): `__has_builtin` and
+/// `__has_constexpr_builtin` answer 0 for a trait, transform, builtin
+/// template or `__builtin_*` function kiln does not implement yet, so
+/// libc++ takes its library fallback instead of reaching
+/// `sema_unimplemented_template_feature`.
+struct StagedFeatures(ClangFeatures);
+
+impl kiln_pp::FeatureQueries for StagedFeatures {
+    fn has_feature(&self, name: &str) -> bool {
+        self.0.has_feature(name)
+    }
+
+    fn has_extension(&self, name: &str) -> bool {
+        self.0.has_extension(name)
+    }
+
+    fn has_builtin(&self, name: &str) -> u32 {
+        let v = self.0.has_builtin(name);
+        match kiln_sema::templ::builtins::table::has_builtin_staged(name) {
+            Some(false) => 0,
+            _ => v,
+        }
+    }
+
+    fn has_constexpr_builtin(&self, name: &str) -> bool {
+        self.0.has_constexpr_builtin(name)
+            && kiln_sema::templ::builtins::table::has_constexpr_builtin_staged(name) != Some(false)
+    }
+
+    fn has_attribute(&self, name: &str) -> u32 {
+        self.0.has_attribute(name)
+    }
+
+    fn has_cpp_attribute(&self, scope: Option<&str>, name: &str) -> u32 {
+        self.0.has_cpp_attribute(scope, name)
+    }
+
+    fn has_declspec_attribute(&self, name: &str) -> bool {
+        self.0.has_declspec_attribute(name)
+    }
+
+    fn is_keyword(&self, name: &str) -> bool {
+        self.0.is_keyword(name)
+    }
+
+    fn is_target(&self, query: kiln_pp::TargetQuery, name: &str) -> bool {
+        self.0.is_target(query, name)
+    }
+
+    fn flt_eval_method(&self) -> i32 {
+        self.0.flt_eval_method()
+    }
 }

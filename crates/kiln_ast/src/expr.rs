@@ -1097,6 +1097,10 @@ pub struct ColdExprData {
     /// `ArrayTypeTraitExpr`: the dimension operand of `__array_extent`
     /// (unevaluated by codegen; kept for substitution) and the value.
     pub array_trait: ColdMap<ExprId, ArrayTraitExtra>,
+    /// `TypeTraitExpr`: the location of the second type argument of a
+    /// binary trait (clang reports `__is_base_of`'s incomplete derived
+    /// type there).
+    pub trait_rhs_loc: ColdMap<ExprId, Loc>,
 }
 
 /// The cold record of an `ArrayTypeTraitExpr` (§9.4).
@@ -1115,6 +1119,7 @@ impl Default for ColdExprData {
             member_extra: ColdMap::new("member_extra"),
             designators: ColdMap::new("designators"),
             array_trait: ColdMap::new("array_trait"),
+            trait_rhs_loc: ColdMap::new("trait_rhs_loc"),
         }
     }
 }
@@ -1657,6 +1662,19 @@ impl ExprArena {
         ListId::new(self.expect_kind(e, ExprKind::TypeTraitExpr).a)
     }
 
+    /// The location of the second type operand of a binary
+    /// `TypeTraitExpr` (where `__is_base_of`'s incomplete-type error
+    /// points).
+    pub fn type_trait_rhs_loc(&self, e: ExprId) -> Option<Loc> {
+        self.expect_kind(e, ExprKind::TypeTraitExpr);
+        self.cold.trait_rhs_loc.get(e).copied()
+    }
+
+    /// The operand of an `ExpressionTraitExpr`.
+    pub fn expression_trait_operand(&self, e: ExprId) -> ExprId {
+        ExprId::new(self.expect_kind(e, ExprKind::ExpressionTraitExpr).a)
+    }
+
     /// The value of a `TypeTraitExpr` or `ExpressionTraitExpr` (`false`
     /// while value-dependent).
     pub fn type_trait_value(&self, e: ExprId) -> bool {
@@ -1897,6 +1915,7 @@ impl HeapSize for ExprArena {
         r.push(self.cold.member_extra.mem_row().prefixed("cold"));
         r.push(self.cold.designators.mem_row().prefixed("cold"));
         r.push(self.cold.array_trait.mem_row().prefixed("cold"));
+        r.push(self.cold.trait_rhs_loc.mem_row().prefixed("cold"));
         r
     }
 }

@@ -324,7 +324,7 @@ pub fn decay_dependent(s: &mut Sema<'_, '_>, e: ExprId) -> ExprId {
 
 /// The value of the integral constant expression `w` (a bit-field width:
 /// a `ConstantExpr`, a literal, or casts and parentheses around one).
-fn eval_width(s: &Sema<'_, '_>, w: ExprId) -> Option<u32> {
+pub(crate) fn eval_width(s: &Sema<'_, '_>, w: ExprId) -> Option<u32> {
     let mut cur = w;
     for _ in 0..64 {
         let n = s.ast.exprs.get(cur);

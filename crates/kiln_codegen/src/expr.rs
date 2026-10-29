@@ -162,6 +162,13 @@ impl Cg<'_> {
             }
             ExprKind::CXXBoolLiteralExpr => V::C(self.m.const_bool(ast.exprs.bool_value(e))),
             ExprKind::CXXNoexceptExpr => V::C(self.m.const_bool(ast.exprs.noexcept_value(e))),
+            ExprKind::TypeTraitExpr | ExprKind::ExpressionTraitExpr => {
+                V::C(self.m.const_bool(ast.exprs.type_trait_value(e)))
+            }
+            ExprKind::ArrayTypeTraitExpr => {
+                let t = self.lty(q);
+                V::C(self.m.const_int(t, i128::from(ast.exprs.array_trait(e).value)))
+            }
             ExprKind::CXXNullPtrLiteralExpr => V::C(self.m.const_null(LTy::PTR)),
             ExprKind::ImplicitValueInitExpr | ExprKind::CXXScalarValueInitExpr => {
                 if ast.types.is_void(q) {

@@ -5,7 +5,7 @@
 //! descent. A `None` result ([`PExpr`]) means a syntax error was reported
 //! and the caller must recover; semantic errors yield an error expression.
 
-use kiln_ast::expr::{BinaryOp, ExprKind, TraitKind, UnaryOp};
+use kiln_ast::expr::{BinaryOp, ExprKind, TraitKind, TypeTrait, UnaryOp};
 use kiln_ast::{ExprId, QualType};
 use kiln_diag::DiagId;
 use kiln_lex::literal::{
@@ -375,6 +375,11 @@ impl Parser<'_, '_> {
                 return self.parse_c_style_cast();
             }
         }
+        if let Some(crate::keywords::BuiltinKw::Trait(t)) = self.builtin_kw_at(self.pos()) {
+            // clang's `ParseTypeTrait` / `ParseArrayTypeTrait` /
+            // `ParseExpressionTrait`: no postfix suffix follows.
+            return self.parse_type_trait(t);
+        }
         match self.kw() {
             Some(Kw::Sizeof) => return self.parse_sizeof_alignof(TraitKind::SizeOf),
             Some(Kw::Alignof) => return self.parse_sizeof_alignof(TraitKind::AlignOf),
@@ -471,6 +476,69 @@ impl Parser<'_, '_> {
         let e = self.parse_cast_expr();
         self.s.exit_unevaluated();
         Some(self.s.act_on_trait_expr(kind, e?, loc))
+    }
+
+    /// A builtin type trait `__trait ( ... )` (spec/sema-templates.md
+    /// §9.1, §9.4): a type-id list (each possibly a pack expansion), the
+    /// type and dimension of `__array_extent`, or the unevaluated operand
+    /// of `__is_lvalue_expr` / `__is_rvalue_expr`.
+    fn parse_type_trait(&mut self, t: TypeTrait) -> PExpr {
+        let loc = self.bump().span.lo;
+        let open = self.bump().span.lo;
+        match t {
+            TypeTrait::IsLvalueExpr | TypeTrait::IsRvalueExpr => {
+                self.s.enter_unevaluated();
+                let e = self.parse_expression();
+                self.s.exit_unevaluated();
+                let Some(e) = e else {
+                    self.skip_until(&[Punct::RParen], true, true);
+                    return Some(self.s.act_on_error_expr(&[], loc));
+                };
+                let rparen = self.expect_closing(Punct::RParen, Punct::LParen, open);
+                Some(self.s.build_expression_trait(t, e, loc, rparen))
+            }
+            TypeTrait::ArrayRank | TypeTrait::ArrayExtent => {
+                let Some(ty) = self.parse_type_id() else {
+                    self.skip_until(&[Punct::RParen], true, true);
+                    return Some(self.s.act_on_error_expr(&[], loc));
+                };
+                let mut dim = None;
+                if t == TypeTrait::ArrayExtent {
+                    if self.eat(Punct::Comma).is_none() {
+                        let d = self.s.diag(DiagId::parse_expected, self.expected_loc()).arg("','");
+                        self.emit(d);
+                        self.skip_until(&[Punct::RParen], true, true);
+                        return Some(self.s.act_on_error_expr(&[], loc));
+                    }
+                    let Some(e) = self.parse_expression() else {
+                        self.skip_until(&[Punct::RParen], true, true);
+                        return Some(self.s.act_on_error_expr(&[], loc));
+                    };
+                    dim = Some(e);
+                }
+                let rparen = self.expect_closing(Punct::RParen, Punct::LParen, open);
+                Some(self.s.build_array_type_trait(t, ty, dim, loc, rparen))
+            }
+            _ => {
+                let mut args = Vec::new();
+                loop {
+                    let at = self.loc();
+                    let Some(mut ty) = self.parse_type_id() else {
+                        self.skip_until(&[Punct::RParen], true, true);
+                        return Some(self.s.act_on_error_expr(&[], loc));
+                    };
+                    if let Some(l) = self.eat(Punct::Ellipsis) {
+                        ty = self.s.act_pack_expansion_type(ty, l);
+                    }
+                    args.push((ty, at));
+                    if self.eat(Punct::Comma).is_none() {
+                        break;
+                    }
+                }
+                let rparen = self.expect_closing(Punct::RParen, Punct::LParen, open);
+                Some(self.s.act_type_trait(t, &args, loc, rparen))
+            }
+        }
     }
 
     /// `noexcept ( expression )` ([expr.unary.noexcept]); the operand is

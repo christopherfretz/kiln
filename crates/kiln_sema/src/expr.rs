@@ -602,6 +602,9 @@ impl Sema<'_, '_> {
             | ExprKind::CXXNullPtrLiteralExpr
             | ExprKind::UnaryExprOrTypeTraitExpr
             | ExprKind::CXXNoexceptExpr
+            | ExprKind::TypeTraitExpr
+            | ExprKind::ArrayTypeTraitExpr
+            | ExprKind::ExpressionTraitExpr
             | ExprKind::CXXTypeidExpr
             | ExprKind::CXXStaticCastExpr
             | ExprKind::CXXReinterpretCastExpr

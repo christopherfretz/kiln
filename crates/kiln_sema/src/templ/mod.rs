@@ -12,6 +12,7 @@
 
 pub mod actions;
 pub mod args;
+pub mod builtins;
 pub mod class;
 pub mod deduce;
 pub mod order;

@@ -203,6 +203,9 @@ impl Sema<'_, '_> {
             match n.kind() {
                 ExprKind::UnaryExprOrTypeTraitExpr
                 | ExprKind::CXXNoexceptExpr
+                | ExprKind::TypeTraitExpr
+                | ExprKind::ArrayTypeTraitExpr
+                | ExprKind::ExpressionTraitExpr
                 | ExprKind::CXXTypeidExpr => continue,
                 ExprKind::CXXThrowExpr | ExprKind::CXXNewExpr => return true,
                 ExprKind::CallExpr if self.callee_can_throw(exprs.callee(x)) => return true,

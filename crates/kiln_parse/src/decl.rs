@@ -4,7 +4,7 @@ use kiln_ast::attr::AttrKind;
 use kiln_ast::decl::{EnumData, InitStyle};
 use kiln_ast::expr::ExprKind;
 use kiln_ast::strings::StringEncoding;
-use kiln_ast::types::{ExcSpec, Quals, RefQual, TagKeyword};
+use kiln_ast::types::{ExcSpec, Quals, RefQual, TagKeyword, UnaryTransformKind};
 use kiln_ast::{AttrId, DeclId, ExprId, QualType};
 use kiln_diag::DiagId;
 use kiln_lex::{Punct, TokKind};
@@ -456,6 +456,12 @@ impl Parser<'_, '_> {
                 continue;
             }
             if !ds.has_type_specifier()
+                && let Some(k) = self.transform_at(self.pos())
+            {
+                self.parse_unary_transform_into(&mut ds, k, loc);
+                continue;
+            }
+            if !ds.has_type_specifier()
                 && ds.auto_constraint.is_none()
                 && (self.at(Punct::ColonColon) || self.ident().is_some())
                 && self.at_constrained_placeholder()
@@ -567,6 +573,32 @@ impl Parser<'_, '_> {
             }
         }
         ds
+    }
+
+    /// A unary type transform `__transform ( type-id )` (spec/sema-templates.md
+    /// §9.2) added to `ds` as a named type.
+    fn parse_unary_transform_into(&mut self, ds: &mut DeclSpec, k: UnaryTransformKind, loc: Loc) {
+        let ty = self.parse_unary_transform(k);
+        if ty.is_none() {
+            ds.invalid = true;
+        }
+        if let Err(e) = ds.set_base(TypeSpecKind::Named, Some(ty.unwrap_or(QualType::ERROR)), loc) {
+            ds.invalid = true;
+            self.spec_error(&e, loc);
+        }
+    }
+
+    /// `__transform ( type-id )`, at the name: the `UnaryTransform` type,
+    /// `None` after an error.
+    pub(crate) fn parse_unary_transform(&mut self, k: UnaryTransformKind) -> Option<QualType> {
+        let loc = self.bump().span.lo;
+        let open = self.bump().span.lo;
+        let Some(ty) = self.parse_type_id() else {
+            self.skip_until(&[Punct::RParen], true, true);
+            return None;
+        };
+        self.expect_closing(Punct::RParen, Punct::LParen, open);
+        self.s.build_unary_transform(k, ty, loc)
     }
 
     /// A `decltype` type-specifier added to `ds`.

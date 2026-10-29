@@ -127,6 +127,8 @@ impl ClassBuild {
 
 pub(crate) use member_expr::MemberRef;
 pub(crate) use special::SpecialState;
+// WP-074: the builtin type traits select special members.
+pub(crate) use special::{Selected, SpecialKind};
 pub(crate) use r#virtual::{AbstractUse, VirtualSite, ensure_virtuals};
 
 /// Bits of [`Sema`]'s `implicit_declared` map: which implicit special

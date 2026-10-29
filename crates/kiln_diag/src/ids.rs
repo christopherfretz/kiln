@@ -979,6 +979,17 @@ diag_ids! {
     sema_nested_name_spec_non_tag = Error (1) "type {0} cannot be used prior to '::' because it has no members";
     sema_mempointer_in_nonclass_type = Error (1) "member pointer refers into non-class type {0}";
     note_typename_member_refers_here = Note (1) "referenced member '{0}' is declared here";
+    // WP-074: builtin type traits, transforms and templates (spec/sema-templates.md §9)
+    sema_type_trait_arity = Error (5) "type trait requires {0}{1:| or more} argument{2:|s}; have {3} argument{4:|s}";
+    sema_incomplete_type_trait = Error (1) "incomplete type {0} used in type trait expression";
+    sema_deprecated_builtin = Warning [DeprecatedBuiltins] (2) "builtin {0} is deprecated; use {1} instead";
+    sema_dimension_expr_not_const = Error (0) "dimension expression does not evaluate to a constant unsigned int";
+    sema_make_signed_bad_type = Error (2) "'{0:make_signed|make_unsigned}' is only compatible with non-bool integers and enum types, but was given {1}";
+    sema_only_enums_have_underlying = Error (0) "only enumeration types have underlying types";
+    sema_pack_index_out_of_bounds = Error (0) "a parameter pack may not be accessed at an out of bounds index";
+    sema_integer_seq_negative_length = Error (0) "integer sequences must have non-negative sequence length";
+    sema_bit_cast_size_mismatch = Error (2) "__builtin_bit_cast source size does not equal destination size ({0} vs {1})";
+    sema_bit_cast_not_trivially_copyable = Error (1) "__builtin_bit_cast {0:source|destination} type must be trivially copyable";
 }
 
 impl DiagId {
