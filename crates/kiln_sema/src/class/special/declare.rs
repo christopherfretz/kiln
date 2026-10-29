@@ -5,8 +5,8 @@
 //! `explicit` specifier ([dcl.fct.spec]/3).
 
 use kiln_ast::decl::{ConstexprKind, DeclFlags, DeclKind, FnSpec};
-use kiln_ast::types::BuiltinType;
 use kiln_ast::names::{DeclName, OverloadedOperator};
+use kiln_ast::types::BuiltinType;
 use kiln_ast::types::{ExcSpec, FuncInfo, RefQual};
 use kiln_ast::{DeclHead, DeclId, QualType};
 use kiln_diag::DiagId;
@@ -15,7 +15,9 @@ use kiln_source::symbol::Symbol;
 
 use super::SpecialKind;
 use crate::Sema;
-use crate::declspec::{Chunk, DeclSpec, Declarator, DeclaratorContext, ParamInfo, SpecialName, StorageSpec};
+use crate::declspec::{
+    Chunk, DeclSpec, Declarator, DeclaratorContext, ParamInfo, SpecialName, StorageSpec,
+};
 use crate::lookup::LookupKind;
 
 /// What a special declarator declares.
@@ -58,7 +60,9 @@ impl Sema<'_, '_> {
         }
         match d.special {
             Some((
-                SpecialName::Constructor(_) | SpecialName::Destructor(_) | SpecialName::Conversion(_),
+                SpecialName::Constructor(_)
+                | SpecialName::Destructor(_)
+                | SpecialName::Conversion(_),
                 _,
             )) => true,
             Some((SpecialName::Operator(OverloadedOperator::Equal), _)) => {
@@ -183,7 +187,10 @@ impl Sema<'_, '_> {
                 }
                 if ds.virtual_.is_some() {
                     if !*invalid {
-                        let m = self.diag(DiagId::sema_ctor_dtor_cannot_be, sloc).arg("0").arg("virtual");
+                        let m = self
+                            .diag(DiagId::sema_ctor_dtor_cannot_be, sloc)
+                            .arg("0")
+                            .arg("virtual");
                         self.emit(m);
                     }
                     *invalid = true;
@@ -193,7 +200,10 @@ impl Sema<'_, '_> {
                 }
                 if is_static {
                     if !*invalid {
-                        let m = self.diag(DiagId::sema_ctor_dtor_cannot_be, sloc).arg("0").arg("static");
+                        let m = self
+                            .diag(DiagId::sema_ctor_dtor_cannot_be, sloc)
+                            .arg("0")
+                            .arg("static");
                         self.emit(m);
                     }
                     *invalid = true;
@@ -203,10 +213,14 @@ impl Sema<'_, '_> {
             Shape::Dtor => {
                 if is_static {
                     if !*invalid {
-                        let m = self.diag(DiagId::sema_ctor_dtor_cannot_be, sloc).arg("1").arg("static");
+                        let m = self
+                            .diag(DiagId::sema_ctor_dtor_cannot_be, sloc)
+                            .arg("1")
+                            .arg("static");
                         self.emit(m);
                     }
-                    *invalid = true;
+                    // clang `CheckDestructorDeclarator` drops `static`
+                    // without invalidating the declarator.
                 }
                 if !*invalid && ds.has_type_specifier() {
                     self.error(DiagId::sema_dtor_return_type, sloc);
@@ -282,7 +296,9 @@ impl Sema<'_, '_> {
         if !in_class && !self.is_dependent_ctx(class) {
             match shape {
                 Shape::Ctor => {
-                    for k in [SpecialKind::DefaultCtor, SpecialKind::CopyCtor, SpecialKind::MoveCtor] {
+                    for k in
+                        [SpecialKind::DefaultCtor, SpecialKind::CopyCtor, SpecialKind::MoveCtor]
+                    {
                         self.ensure_implicit(class, k);
                     }
                 }
@@ -362,11 +378,7 @@ impl Sema<'_, '_> {
                     }
                 }
                 None => {
-                    let what = if templ {
-                        None
-                    } else {
-                        Some(self.decl_name_str(name))
-                    };
+                    let what = if templ { None } else { Some(self.decl_name_str(name)) };
                     let what = what.unwrap_or_else(|| self.decl_name_str(name));
                     let m = self
                         .diag(DiagId::sema_member_def_no_match, sloc)
@@ -393,7 +405,8 @@ impl Sema<'_, '_> {
         if is_static && !in_class {
             self.error(DiagId::sema_static_out_of_class, static_loc_of(ds));
         }
-        let explicit = self.check_explicit_spec(ds, d, true, matches!(shape, Shape::Ctor | Shape::Conv(_)));
+        let explicit =
+            self.check_explicit_spec(ds, d, true, matches!(shape, Shape::Ctor | Shape::Conv(_)));
         let explicit_value = match (explicit, ds.explicit_expr) {
             (true, Some(e)) => self.explicit_value(e),
             (e, _) => Some(e),
@@ -631,9 +644,7 @@ impl Sema<'_, '_> {
         };
         let mut info = p.info();
         if strip {
-            info = info
-                .with_this_quals(kiln_ast::types::Quals::NONE)
-                .with_ref_qual(RefQual::None);
+            info = info.with_this_quals(kiln_ast::types::Quals::NONE).with_ref_qual(RefQual::None);
         }
         if params.is_some() {
             info = info.with_variadic(false);

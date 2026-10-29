@@ -651,6 +651,11 @@ impl Sema<'_, '_> {
     /// After a declaration with invented parameters only (no written
     /// head) is complete: drops its invented head.
     pub fn act_on_end_abbreviated(&mut self) {
+        // Also the end of a declaration: uses of deleted functions that
+        // no full-expression reported (spec/sema-class.md §4.3).
+        if !self.special.pending_deleted.is_empty() {
+            self.flush_pending_deleted();
+        }
         if self.templ.heads.last().is_some_and(|h| h.invented) {
             self.templ.heads.pop();
             self.ast.templates.dependent_depth =

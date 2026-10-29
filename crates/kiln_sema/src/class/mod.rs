@@ -14,8 +14,8 @@ mod access;
 mod friend;
 mod member_expr;
 mod members;
-mod r#virtual;
 mod special;
+mod r#virtual;
 
 use kiln_ast::decl::{Access, DefinitionBits, TagKind};
 use kiln_ast::types::ExcSpec;
@@ -126,7 +126,7 @@ impl ClassBuild {
 }
 
 pub(crate) use member_expr::MemberRef;
-pub(crate) use special::{DeleteReason, PendingDeleted, SpecialKind, SpecialState};
+pub(crate) use special::SpecialState;
 pub(crate) use r#virtual::{AbstractUse, VirtualSite, ensure_virtuals};
 
 /// Bits of [`Sema`]'s `implicit_declared` map: which implicit special

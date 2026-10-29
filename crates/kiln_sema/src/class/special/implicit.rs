@@ -68,8 +68,6 @@ struct Declared {
     user: u8,
     /// Kinds with a declared member that is not trivial.
     non_trivial: u8,
-    /// A user-declared default constructor exists.
-    default_ctor: bool,
     /// Some user-declared constructor (template included) is `constexpr`
     /// and not a copy/move constructor.
     constexpr_ctor: bool,
@@ -82,10 +80,6 @@ struct Declared {
     /// The user-declared destructor is `constexpr` (or defaulted in
     /// class, decided by [`Sema::defaulted_is_constexpr`]).
     dtor_constexpr: Option<bool>,
-    /// The declared copy constructors / assignments with a `const`
-    /// parameter (clang `HasDeclaredCopy*WithConstParam`).
-    copy_ctor_const: bool,
-    copy_assign_const: bool,
 }
 
 impl Sema<'_, '_> {
@@ -128,7 +122,8 @@ impl Sema<'_, '_> {
     pub(crate) fn has_special(&self, r: DeclId, k: SpecialKind) -> bool {
         let bits = self.defn_bits(r);
         let implicit = self.implicit_bits(r);
-        declared(bits, implicit, k) && !(k == SpecialKind::DefaultCtor && !self.has_default_ctor_decl(r))
+        declared(bits, implicit, k)
+            && !(k == SpecialKind::DefaultCtor && !self.has_default_ctor_decl(r))
             || needs_from(bits, implicit, k)
     }
 
@@ -207,21 +202,6 @@ impl Sema<'_, '_> {
         }
     }
 
-    /// Whether class `r` has a `constexpr` destructor (clang
-    /// `hasConstexprDestructor`).
-    fn has_constexpr_dtor(&self, r: DeclId) -> bool {
-        let d = self.class_def(r);
-        match self.ast.destructor(d) {
-            Some(x) => self.ast.decls.function(x).is_some_and(|f| {
-                f.spec.constexpr_kind() != ConstexprKind::None
-                    || f.spec.defaulted() == Defaulted::Explicit
-                        && self.ast.prev(x).is_none()
-                        && !self.defn_bits(d).contains(DefinitionBits::HAS_VIRTUAL_BASES)
-            }),
-            None => !self.defn_bits(d).contains(DefinitionBits::HAS_VIRTUAL_BASES),
-        }
-    }
-
     /// Whether class `r` can be const-default-initialized (clang
     /// `allowConstDefaultInit`, [dcl.init.general]/8).
     fn can_const_default_init(&self, r: DeclId) -> bool {
@@ -288,8 +268,7 @@ impl Sema<'_, '_> {
 
     /// Whether field `f` has a default member initializer.
     pub(crate) fn field_has_nsdmi(&self, f: DeclId) -> bool {
-        self.special.nsdmi.contains(&f)
-            || self.ast.decls.field(f).is_some_and(|x| x.init.is_some())
+        self.special.nsdmi.contains(&f) || self.ast.decls.field(f).is_some_and(|x| x.init.is_some())
     }
 
     /// Whether field `f` is `mutable`.
@@ -414,7 +393,6 @@ impl Sema<'_, '_> {
             out.user |= k.bit();
             match k {
                 SpecialKind::DefaultCtor => {
-                    out.default_ctor = true;
                     if in_class_default {
                         out.defaulted_default_ctor = true;
                     }
@@ -426,10 +404,6 @@ impl Sema<'_, '_> {
                     out.dtor_constexpr = Some(
                         spec.constexpr_kind() != ConstexprKind::None || in_class_default && !vbases,
                     );
-                }
-                SpecialKind::CopyCtor if self.copy_param_is_const(f) => out.copy_ctor_const = true,
-                SpecialKind::CopyAssign if self.copy_param_is_const(f) => {
-                    out.copy_assign_const = true;
                 }
                 _ => {}
             }
@@ -449,7 +423,11 @@ impl Sema<'_, '_> {
     /// [`Sema::virtual_class_bits`] (spec/sema-class.md §4.1–4.3, §4.6;
     /// clang `addedMember` / `addedClassSubobject`).
     #[allow(clippy::too_many_lines, reason = "one pass, as clang's addedMember")]
-    pub(crate) fn special_member_bits(&mut self, r: DeclId, mut bits: DefinitionBits) -> DefinitionBits {
+    pub(crate) fn special_member_bits(
+        &mut self,
+        r: DeclId,
+        mut bits: DefinitionBits,
+    ) -> DefinitionBits {
         use SpecialKind as K;
         let union = self.is_union(r);
         // The trivial bits so far say whether every subobject's
@@ -470,11 +448,8 @@ impl Sema<'_, '_> {
                 self.element_class(t).map(|c| (f, c))
             })
             .collect();
-        let subobjects: Vec<DeclId> = base_classes
-            .iter()
-            .map(|x| x.0)
-            .chain(field_classes.iter().map(|x| x.1))
-            .collect();
+        let subobjects: Vec<DeclId> =
+            base_classes.iter().map(|x| x.0).chain(field_classes.iter().map(|x| x.1)).collect();
         for &s in &subobjects {
             for k in [K::MoveCtor, K::MoveAssign] {
                 if !self.has_trivial(s, k) {
@@ -493,8 +468,10 @@ impl Sema<'_, '_> {
             .collect();
         for s in ovl_subobjects {
             for k in [K::CopyCtor, K::MoveCtor, K::CopyAssign, K::MoveAssign] {
-                if !self.has_simple(s, k) {
-                    bits = bits.with(k.needs_ovl_bit().unwrap_or(bits));
+                if let Some(b) = k.needs_ovl_bit()
+                    && !self.has_simple(s, k)
+                {
+                    bits = bits.with(b);
                 }
             }
             if !self.has_simple(s, K::Dtor) {
@@ -685,7 +662,6 @@ impl Sema<'_, '_> {
         if assign_const {
             bits = bits.with(DefinitionBits::IMPLICIT_COPY_ASSIGN_CONST_PARAM);
         }
-        let _ = (decl.copy_ctor_const, decl.copy_assign_const);
         // `constexpr` and literal types (§4.6, [basic.types.general]/10).
         let no_vbases = !bits.contains(DefinitionBits::HAS_VIRTUAL_BASES);
         if no_vbases {
@@ -707,7 +683,6 @@ impl Sema<'_, '_> {
         if !uninit_fields || !(decl.defaulted_default_ctor || needs_default) {
             bits = bits.with(DefinitionBits::CAN_CONST_DEFAULT_INIT);
         }
-        let _ = decl.default_ctor;
         bits
     }
 
@@ -715,7 +690,11 @@ impl Sema<'_, '_> {
     /// `AddImplicitlyDeclaredMembersToClass`; spec/sema-class.md §4.1),
     /// with its definition bits `bits` not yet stored. Returns the bits,
     /// updated by the declarations.
-    pub(crate) fn finish_special_members(&mut self, r: DeclId, bits: DefinitionBits) -> DefinitionBits {
+    pub(crate) fn finish_special_members(
+        &mut self,
+        r: DeclId,
+        bits: DefinitionBits,
+    ) -> DefinitionBits {
         use SpecialKind as K;
         self.special.finishing.push((r, bits));
         let flags = self.ast.decls.get(r).flags();
@@ -762,11 +741,45 @@ impl Sema<'_, '_> {
         }
     }
 
-    /// Declares every implicit special member class `class` still needs.
-    pub(crate) fn ensure_all_implicit(&mut self, class: DeclId) {
-        for k in SpecialKind::ALL {
-            self.ensure_implicit(class, k);
+    /// Whether the implicit copy/move `k` of class `d`, which needs
+    /// overload resolution, is trivial ([class.copy.ctor]/11,
+    /// [class.copy.assign]/9; clang `SpecialMemberIsTrivial`): no virtual
+    /// functions or bases, and the member selected for each direct base
+    /// and class-type field is trivial. A failed selection does not make
+    /// it non-trivial (the member is deleted then, as clang).
+    fn selected_all_trivial(&mut self, d: DeclId, k: SpecialKind, const_arg: bool) -> bool {
+        let bits = self.defn_bits(d);
+        if bits.contains(DefinitionBits::POLYMORPHIC)
+            || bits.contains(DefinitionBits::HAS_VIRTUAL_BASES)
+        {
+            return false;
         }
+        let arg = if const_arg { Quals::CONST } else { Quals::NONE };
+        let bases: Vec<BaseSpec> = self.ast.decls.bases(d, &self.ast.lists).copied().collect();
+        // (class, argument quals, object quals), as `walk_subobjects`.
+        let mut subs: Vec<(DeclId, Quals, Quals)> = bases
+            .iter()
+            .filter_map(|b| self.base_class(b))
+            .map(|c| (c, arg, Quals::NONE))
+            .collect();
+        for f in self.special_fields(d) {
+            let Some(t) = self.ast.decls.get(f).ty() else { continue };
+            if self.ast.types.is_reference(t) {
+                continue;
+            }
+            let elem = self.base_element(t);
+            let Some(c) = self.element_class(elem) else { continue };
+            let q = self.ast.types.effective_quals(elem) & Quals::CV;
+            let rhs = if const_arg && !self.field_is_mutable(f) { q | Quals::CONST } else { q };
+            subs.push((c, rhs, if k.is_assign() { q } else { Quals::NONE }));
+        }
+        subs.into_iter().all(|(c, rhs, lhs)| match self.select_special(c, k, rhs, lhs) {
+            super::deletion::Selected::Found(m) | super::deletion::Selected::Deleted(m) => {
+                self.ast.decls.function(m).is_some_and(|x| x.spec.is_trivial())
+            }
+            super::deletion::Selected::Unsupported => self.has_trivial(c, k),
+            _ => true,
+        })
     }
 
     /// Declares the implicit special member `k` of class `r` (clang
@@ -785,20 +798,37 @@ impl Sema<'_, '_> {
             s.ast.types.lvalue_ref_to(t)
         };
         let (kind, name, ret, params): (DeclKind, DeclName, QualType, Vec<QualType>) = match k {
-            K::DefaultCtor => {
-                (DeclKind::CXXConstructor, self.ast.names.constructor(canon), QualType::VOID, vec![])
-            }
+            K::DefaultCtor => (
+                DeclKind::CXXConstructor,
+                self.ast.names.constructor(canon),
+                QualType::VOID,
+                vec![],
+            ),
             K::CopyCtor => {
-                let p = copy_param(self, bits.contains(DefinitionBits::IMPLICIT_COPY_CTOR_CONST_PARAM));
-                (DeclKind::CXXConstructor, self.ast.names.constructor(canon), QualType::VOID, vec![p])
+                let p =
+                    copy_param(self, bits.contains(DefinitionBits::IMPLICIT_COPY_CTOR_CONST_PARAM));
+                (
+                    DeclKind::CXXConstructor,
+                    self.ast.names.constructor(canon),
+                    QualType::VOID,
+                    vec![p],
+                )
             }
             K::MoveCtor => {
                 let p = self.ast.types.rvalue_ref_to(class_ty);
-                (DeclKind::CXXConstructor, self.ast.names.constructor(canon), QualType::VOID, vec![p])
+                (
+                    DeclKind::CXXConstructor,
+                    self.ast.names.constructor(canon),
+                    QualType::VOID,
+                    vec![p],
+                )
             }
             K::CopyAssign | K::MoveAssign => {
                 let p = if k == K::CopyAssign {
-                    copy_param(self, bits.contains(DefinitionBits::IMPLICIT_COPY_ASSIGN_CONST_PARAM))
+                    copy_param(
+                        self,
+                        bits.contains(DefinitionBits::IMPLICIT_COPY_ASSIGN_CONST_PARAM),
+                    )
                 } else {
                     self.ast.types.rvalue_ref_to(class_ty)
                 };
@@ -814,7 +844,17 @@ impl Sema<'_, '_> {
         if Self::defaulted_is_constexpr(bits, k) {
             spec = spec.with_constexpr_kind(ConstexprKind::Constexpr);
         }
-        if bits.contains(k.trivial_bit()) {
+        let trivial = match k.needs_ovl_bit() {
+            Some(n) if k != K::Dtor && bits.contains(n) => {
+                let const_arg = k == K::CopyCtor
+                    && bits.contains(DefinitionBits::IMPLICIT_COPY_CTOR_CONST_PARAM)
+                    || k == K::CopyAssign
+                        && bits.contains(DefinitionBits::IMPLICIT_COPY_ASSIGN_CONST_PARAM);
+                self.selected_all_trivial(d, k, const_arg)
+            }
+            _ => bits.contains(k.trivial_bit()),
+        };
+        if trivial {
             spec = spec.with_trivial(true);
         }
         let overridden = if k == K::Dtor { self.overridden_destructors(d) } else { Vec::new() };

@@ -87,6 +87,9 @@ impl<'a, 'sm> Sema<'a, 'sm> {
     /// failure's notes explain why ([`Sema::with_failure_notes`]).
     pub fn eval_const(&mut self, e: ExprId, ctx: EvalContext) -> Result<ConstValueId, EvalFailure> {
         self.flush_member_refs();
+        if !self.special.pending_deleted.is_empty() {
+            self.flush_pending_deleted();
+        }
         let (oven, mut b) = self.oven_parts();
         oven.evaluate(&mut b, e, ctx)
     }

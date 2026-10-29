@@ -858,7 +858,7 @@ diag_ids! {
     sema_out_of_line_default_deletes = Error (1) "defaulting this {0:default constructor|copy constructor|move constructor|copy assignment operator|move assignment operator|destructor} would delete it after its first declaration";
     note_defaulted_deleted_here = Note (0) "explicitly defaulted function was implicitly deleted here";
     note_explicitly_deleted_here = Note (1) "{0} has been explicitly marked deleted here";
-    note_candidate_explicitly_deleted = Note (0) "candidate function has been explicitly deleted";
+    note_candidate_deleted = Note (1) "candidate function has been {0:explicitly|implicitly} deleted";
     note_deleted_subobject = Note (6) "{0:default constructor|copy constructor|move constructor|copy assignment operator|move assignment operator|destructor} of {1} is implicitly deleted because {2:base class|field|variant field} {3} has {4:no|a deleted|multiple|an inaccessible|a non-trivial} {5}";
     note_deleted_uninit_field = Note (4) "default constructor of {0} is implicitly deleted because field {1} of {2:reference|const-qualified} type {3} would not be initialized";
     note_deleted_rvalue_ref_field = Note (3) "copy constructor of {0} is implicitly deleted because field {1} is of rvalue reference type {2}";

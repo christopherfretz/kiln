@@ -127,7 +127,7 @@ pub struct Sema<'a, 'sm> {
     /// Classes being defined, innermost last (spec/sema-class.md §8.3).
     pub(crate) classes: Vec<class::ClassBuild>,
     /// Which implicit special members each class has declared
-    /// ([`class::SpecialKind::bit`]s; spec/sema-class.md §4.1).
+    /// (`SpecialKind::bit`s; spec/sema-class.md §4.1).
     pub(crate) implicit_declared: kiln_source::fx::FxHashMap<DeclId, u8>,
     /// Special-member state (spec/sema-class.md §8.3).
     pub(crate) special: class::SpecialState,

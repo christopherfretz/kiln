@@ -19,9 +19,7 @@ mod deletion;
 mod implicit;
 mod uses;
 
-use kiln_ast::decl::{
-    ConstexprKind, DeclFlags, DeclKind, Defaulted, DefinitionBits, FnSpec, ParamData,
-};
+use kiln_ast::decl::{DeclFlags, DeclKind, Defaulted, DefinitionBits, FnSpec, ParamData};
 use kiln_ast::names::DeclNameView;
 use kiln_ast::types::TypeView;
 use kiln_ast::{DeclId, ExprId, QualType};
@@ -31,8 +29,7 @@ use kiln_source::fx::{FxHashMap, FxHashSet};
 
 use crate::Sema;
 
-pub(crate) use deletion::DeleteReason;
-pub(crate) use uses::PendingDeleted;
+use uses::PendingDeleted;
 
 /// The six special member functions ([special]/1), in clang's
 /// `CXXSpecialMemberKind` order, which is also the `%select` index of the
@@ -204,10 +201,9 @@ impl Sema<'_, '_> {
     /// Whether parameter `p` has a default argument (possibly not parsed
     /// yet).
     pub(crate) fn param_has_default(&self, p: DeclId) -> bool {
-        self.ast
-            .decls
-            .param(p)
-            .is_some_and(|x| x.default_arg.is_some() || x.flags & ParamData::DEFAULT_ARG_PENDING != 0)
+        self.ast.decls.param(p).is_some_and(|x| {
+            x.default_arg.is_some() || x.flags & ParamData::DEFAULT_ARG_PENDING != 0
+        })
     }
 
     /// Which special member function `f` is, if any ([special]/1;
@@ -324,6 +320,17 @@ impl Sema<'_, '_> {
     /// `= delete;` / `= delete("msg");` ([dcl.fct.def.delete]/4: the first
     /// declaration).
     pub(crate) fn deleted_impl(&mut self, f: DeclId, loc: Loc, msg: Option<ExprId>) {
+        // A deleted definition is a definition ([dcl.fct.def.general]/1).
+        let first = self.ast.first(f);
+        if first != f && self.is_deleted_fn(first) {
+            let m = self
+                .diag(DiagId::sema_redefinition, self.ast.decls.get(f).loc())
+                .arg(self.decl_name(f));
+            let m = self.note_prev(m, first, true);
+            self.emit(m);
+            self.ast.decls.set_flags(f, DeclFlags::INVALID);
+            return;
+        }
         if let Some(p) = self.ast.prev(f)
             && self.ast.definition(p).is_none_or(|d| d == f)
         {
@@ -343,6 +350,7 @@ impl Sema<'_, '_> {
     /// implicit definitions (member-wise construction, copy, assignment
     /// and destruction) are a later work package; a use that needs one
     /// reports `{what} is not supported yet`.
+    #[expect(dead_code, reason = "called once constructor calls are built (WP-067b)")]
     pub(crate) fn define_implicit_special(&mut self, f: DeclId, kind: SpecialKind, loc: Loc) {
         let _ = f;
         let what = format!("implicit definition of a {}", kind.spelling());
@@ -353,5 +361,14 @@ impl Sema<'_, '_> {
 /// `==`, `!=`, `<`, `>`, `<=`, `>=`, `<=>` ([class.compare]).
 fn is_comparison(op: kiln_ast::names::OverloadedOperator) -> bool {
     use kiln_ast::names::OverloadedOperator as O;
-    matches!(op, O::EqualEqual | O::ExclaimEqual | O::Less | O::Greater | O::LessEqual | O::GreaterEqual | O::Spaceship)
+    matches!(
+        op,
+        O::EqualEqual
+            | O::ExclaimEqual
+            | O::Less
+            | O::Greater
+            | O::LessEqual
+            | O::GreaterEqual
+            | O::Spaceship
+    )
 }

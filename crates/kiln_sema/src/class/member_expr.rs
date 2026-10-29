@@ -104,6 +104,9 @@ impl Sema<'_, '_> {
         let declared = self.ast.decls.get(d).ty().unwrap_or(QualType::ERROR);
         let ty = self.non_reference(declared);
         self.ast.decls.set_flags(d, DeclFlags::REFERENCED);
+        if self.ast.decls.get(d).kind().is_function() {
+            self.diagnose_deleted_use(d, loc);
+        }
         let nou = if self.unevaluated > 0 { NonOdrUse::Unevaluated } else { NonOdrUse::None };
         let extra = shadow.map(|s| DeclRefExtra {
             qualifier: None,
@@ -225,6 +228,9 @@ impl Sema<'_, '_> {
                 if kind != DeclKind::CXXMethod || self.is_static_method(m) =>
             {
                 self.ast.decls.set_flags(m, DeclFlags::REFERENCED);
+                if kind == DeclKind::CXXMethod {
+                    self.diagnose_deleted_use(m, loc);
+                }
                 let ty = self.non_reference(self.ast.decls.get(m).ty().unwrap_or(QualType::ERROR));
                 let e = self.builder().member(b, m, ty, arrow, loc, extra);
                 if self.unevaluated == 0 && kind != DeclKind::EnumConstant {
@@ -234,6 +240,7 @@ impl Sema<'_, '_> {
             }
             k if k.is_function() && k != DeclKind::Function => {
                 self.ast.decls.set_flags(m, DeclFlags::REFERENCED);
+                self.diagnose_deleted_use(m, loc);
                 self.builder().member(b, m, QualType::BOUND_MEMBER, arrow, loc, extra)
             }
             _ => {
