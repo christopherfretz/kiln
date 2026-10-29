@@ -72,16 +72,10 @@ fn ci() -> ExitCode {
         return ExitCode::SUCCESS;
     }
     eprintln!("xtask ci: cargo xtask test --compiler {CORPUS_COMPILER}");
-    let exe = match std::env::current_exe() {
-        Ok(p) => p,
-        Err(e) => {
-            eprintln!("xtask ci: cannot locate the xtask binary: {e}");
-            return ExitCode::FAILURE;
-        }
-    };
-    let mut cmd = std::process::Command::new(exe);
-    cmd.args(["test", "--compiler", CORPUS_COMPILER]);
-    if ci_step(&mut cmd) { ExitCode::SUCCESS } else { ExitCode::FAILURE }
+    // In-process, not a re-exec of `current_exe()`: the `cargo test` step
+    // above may have rebuilt and replaced this very binary (its path is
+    // then "<exe> (deleted)" and the exec fails).
+    test::main(["--compiler".to_owned(), CORPUS_COMPILER.to_owned()])
 }
 
 fn ci_step(cmd: &mut std::process::Command) -> bool {
