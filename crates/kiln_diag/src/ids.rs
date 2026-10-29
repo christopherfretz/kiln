@@ -1016,6 +1016,7 @@ diag_ids! {
     sema_explicit_spec_storage_class = ExtWarn [ExplicitSpecializationStorageClass] (0) "explicit specialization cannot have a storage class";
     sema_template_kw_refers_to_non_template = Error (1) "'{0}' following the 'template' keyword does not refer to a template";
     note_declared_non_template = Note (0) "declared as a non-template here";
+    sema_default_arg_in_partial_spec = Error (0) "default template argument in a class template partial specialization";
 }
 
 impl DiagId {

@@ -313,13 +313,20 @@ impl Sema<'_, '_> {
     }
 
     /// The template parameter a template name names.
+    /// Packs are not deduced here (WP-072).
     fn template_parm_of_name(&self, n: kiln_ast::ids::TemplateNameId) -> Option<ParmRef> {
-        let decl = self.ast.types.template_decl(n)?;
-        if self.ast.decls.get(decl).kind() != DeclKind::TemplateTemplateParm {
-            return None;
+        let t = &self.ast.types;
+        match t.template_name_view(t.canonical_template_name(n)) {
+            kiln_ast::types::TemplateName::CanonTemplateTemplateParm {
+                depth,
+                index,
+                pack: false,
+            } => Some(ParmRef {
+                depth: u16::try_from(depth).ok()?,
+                index: u16::try_from(index).ok()?,
+            }),
+            _ => None,
         }
-        let i = self.ast.template_parm(decl)?;
-        Some(ParmRef { depth: i.depth, index: i.index })
     }
 
     fn deduce_template_name(

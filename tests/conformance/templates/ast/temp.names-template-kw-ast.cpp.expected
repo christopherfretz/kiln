@@ -1,0 +1,24 @@
+TranslationUnitDecl
+|-ClassTemplateDecl copy_cv
+| |-TemplateTypeParmDecl class depth 0 index 0 From
+| |-CXXRecordDecl struct copy_cv definition
+| | `-TypeAliasTemplateDecl apply
+| |   |-TemplateTypeParmDecl referenced class depth 1 index 0 To
+| |   `-TypeAliasDecl apply 'const To'
+| `-ClassTemplateSpecializationDecl struct copy_cv definition implicit_instantiation
+|   |-TemplateArgument type 'int'
+|   `-TypeAliasTemplateDecl apply
+|     |-TemplateTypeParmDecl class depth 0 index 0 To
+|     `-TypeAliasDecl apply 'const To'
+|-ClassTemplateDecl S
+| |-TemplateTypeParmDecl class depth 0 index 0 T
+| |-TemplateTypeParmDecl referenced class depth 0 index 1 U
+| |-CXXRecordDecl struct S definition
+| | `-TypeAliasDecl type 'typename T::template apply<U>'
+| `-ClassTemplateSpecializationDecl struct S definition implicit_instantiation
+|   |-TemplateArgument type 'copy_cv<int>'
+|   |-TemplateArgument type 'long'
+|   `-TypeAliasDecl referenced type 'typename copy_cv<int>::template apply<long>':'const long'
+`-VarDecl v 'S<copy_cv<int>, long>::type':'const long' cinit
+  `-ImplicitCastExpr 'S<copy_cv<int>, long>::type':'const long' <IntegralCast>
+    `-IntegerLiteral 'int' 1

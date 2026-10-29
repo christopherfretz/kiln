@@ -226,6 +226,17 @@ impl Sema<'_, '_> {
     ) -> Result<DeclId, ()> {
         let name_loc = range.lo;
         let Some(head) = self.templ.cur else { return Err(()) };
+        // [temp.spec.partial.general]/9.5 (clang checks class templates
+        // only): no default template arguments.
+        let params: Vec<DeclId> = {
+            let l = *self.ast.templates.param_list(head);
+            self.ast.lists.iter::<DeclId>(l.params).collect()
+        };
+        for p in params {
+            if let Some(at) = self.templ.default_locs.get(&p).copied() {
+                self.error(DiagId::sema_default_arg_in_partial_spec, at);
+            }
+        }
         let conv = self.check_partial_args(
             tmpl,
             head,

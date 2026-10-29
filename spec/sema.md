@@ -841,12 +841,19 @@ covers the Oven's side). `constfold.rs` keeps only integer helpers
 interpreter and `aggval` were removed by WP-054.
 
 ### 8.1 One Oven per translation unit
-- `Sema` owns one `Oven`. Compiled bytecode, resolved globals and the
-  memo cache are shared by every evaluation in the TU.
-- `oven_bridge.rs` implements `SemaBridge` over the `Sema`'s AST,
-  target and diagnostics engine for the duration of one call:
-  - `ensure_body` returns the body of the function's definition
-    (there are no templates in M2);
+- `Sema` owns one `Oven`, in `Sema.oven: Option<Oven>`. Compiled
+  bytecode, resolved globals and the memo cache are shared by every
+  evaluation in the TU.
+- `oven_bridge.rs` implements `SemaBridge` for the duration of one call.
+  `with_oven` takes the Oven out of its `Option` and hands the call a
+  `Bridge` that holds `&mut Sema`:
+  - `ensure_body(f, oven)` returns the body of the function's
+    definition. Since WP-070b, a never-marked specialization or member
+    of a class specialization is instantiated first, during a
+    manifestly constant-evaluated evaluation only. Sema lends the
+    Oven back by swapping it into `Sema.oven` while it instantiates, so
+    nested evaluations run on the same Oven (R-OVEN-1;
+    spec/sema-templates.md §4.11);
   - `ensure_layout` uses `kiln_abi::ensure_layout`;
   - `diag` emits into the engine (for `-Wenum-constexpr-conversion`).
 - `set_constexpr_limits(Budget, backtrace_limit)` applies the driver's

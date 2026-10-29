@@ -172,6 +172,24 @@ impl Substituter<'_, '_, '_> {
                     };
                     return Ok(self.sema.act_dependent_scope_ref(nns, name, targs, begin, loc));
                 }
+                // `T::template x<args>` ([temp.names]/5, /6): the member
+                // template the name finds after substitution.
+                if let Some(l) = self.sema.ast.templates.expr_targs.get(e).copied() {
+                    let t = self.member_template_named(nns, name, loc)?;
+                    let l = self.args(l, loc)?;
+                    let args = self.sema.ast.types.args(l).to_vec();
+                    let tn = self.sema.template_name_for(t);
+                    return match self.sema.act_template_id(tn, &args, loc, loc) {
+                        Ok(
+                            crate::templ::actions::TemplateIdRef::Value(x)
+                            | crate::templ::actions::TemplateIdRef::Overload(x),
+                        ) => Ok(x),
+                        Ok(crate::templ::actions::TemplateIdRef::Type(_)) => {
+                            self.unimplemented("a type template-id as an expression", loc)
+                        }
+                        Err(()) => Err(SubstFail),
+                    };
+                }
                 let ctx = self.nns_context(nns, begin)?;
                 Ok(self.sema.act_on_id_expression(name, loc, Some(ctx)))
             }

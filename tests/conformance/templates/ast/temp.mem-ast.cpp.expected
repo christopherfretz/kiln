@@ -1,0 +1,29 @@
+TranslationUnitDecl
+|-ClassTemplateDecl A
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| |-CXXRecordDecl struct A definition
+| | |-ClassTemplateDecl B
+| | | |-TemplateTypeParmDecl referenced class depth 1 index 0 U
+| | | `-CXXRecordDecl struct B definition
+| | |   |-FieldDecl t 'T'
+| | |   `-FieldDecl u 'U'
+| | `-TypeAliasTemplateDecl X
+| |   |-TemplateTypeParmDecl class depth 1 index 0 U
+| |   `-TypeAliasDecl X 'T *'
+| `-ClassTemplateSpecializationDecl struct A definition implicit_instantiation
+|   |-TemplateArgument type 'int'
+|   |-ClassTemplateDecl B
+|   | |-TemplateTypeParmDecl class depth 0 index 0 U
+|   | |-CXXRecordDecl struct B
+|   | `-ClassTemplateSpecializationDecl struct B definition implicit_instantiation
+|   |   |-TemplateArgument type 'char'
+|   |   |-FieldDecl t 'int'
+|   |   `-FieldDecl u 'char'
+|   `-TypeAliasTemplateDecl X
+|     |-TemplateTypeParmDecl class depth 0 index 0 U
+|     `-TypeAliasDecl X 'int *'
+|-VarDecl b 'A<int>::B<char> *'
+|-VarDecl s 'int' cinit
+| `-ImplicitCastExpr 'int' <IntegralCast>
+|   `-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof 'A<int>::B<char>'
+`-VarDecl x 'A<int>::X<long>':'int *'

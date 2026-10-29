@@ -3540,6 +3540,11 @@ impl Sema<'_, '_> {
             DeclKind::Typedef | DeclKind::TypeAlias => {
                 self.mark_type_referenced(d);
                 let ty = self.ast.decls.get(d).ty().unwrap_or(QualType::ERROR);
+                // [temp.inst]/2: a specialization named through an alias
+                // is instantiated like one named by its template-id.
+                if self.undefined_spec(ty).is_some() && !self.require_complete_nns(ty, loc) {
+                    return None;
+                }
                 let r = self.ast.types.as_record(ty).or_else(|| self.ast.types.as_enum(ty));
                 if r.is_none() {
                     let msg = self

@@ -820,6 +820,18 @@ impl Sema<'_, '_> {
             _ if self.is_class_member_ref(d) => {
                 return self.implicit_member_ref(d, loc, shadow, false);
             }
+            // [temp.names]/1: a variable template is named with arguments
+            // (clang's `diagnoseMissingTemplateArguments`).
+            DeclKind::VarTemplate => {
+                let note = self.diag(DiagId::note_template_decl_here, n.loc());
+                let msg = self
+                    .diag(DiagId::sema_template_requires_args, loc)
+                    .arg("variable template")
+                    .arg(format!("'{}'", self.decl_name(d)))
+                    .with_note(note);
+                self.emit(msg);
+                return self.recover_err(&[], loc);
+            }
             k if crate::lookup::is_type_kind(k) || k == DeclKind::Namespace => {
                 let msg = self
                     .diag(DiagId::sema_ref_non_value, loc)

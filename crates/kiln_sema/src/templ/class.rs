@@ -323,7 +323,7 @@ impl Sema<'_, '_> {
 
     /// The class template specialization, or member class of one, that
     /// `q` names (through sugar and arrays), if any and not yet defined.
-    fn undefined_spec(&self, q: QualType) -> Option<DeclId> {
+    pub(crate) fn undefined_spec(&self, q: QualType) -> Option<DeclId> {
         let mut t = q;
         while let Some(e) = self.ast.types.element(t) {
             if !self.ast.types.is_array(t) {
