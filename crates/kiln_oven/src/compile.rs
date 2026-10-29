@@ -24,6 +24,8 @@ use crate::mem::{Origin, fn_ptr};
 use crate::ty::{OTy, Scal, TyKind, eval_int};
 use crate::{Oven, SemaBridge};
 
+mod new_delete;
+
 /// `Func::entry` of a function not compiled yet.
 pub(crate) const UNCOMPILED: u32 = u32::MAX;
 
@@ -1825,11 +1827,9 @@ impl Compiler<'_> {
                     None => self.konst(dst, 0),
                 }
             }
-            // Transient allocation (spec/oven.md "Transient allocation"):
-            // the KBC shapes are specified; execution is WP-061b part 2.
-            ExprKind::CXXNewExpr | ExprKind::CXXDeleteExpr => {
-                self.trap(e, "kiln: new/delete in constant evaluation lands with WP-061b part 2");
-            }
+            // Transient allocation (spec/oven.md "Transient allocation").
+            ExprKind::CXXNewExpr => self.new_expr(e, dst),
+            ExprKind::CXXDeleteExpr => self.delete_expr(e),
             k if k.is_cast() => self.cast(e, dst, ty),
             _ if n.value_category().is_glvalue() => {
                 // A glvalue used as a value (an lvalue-to-rvalue conversion
@@ -2984,9 +2984,7 @@ impl Compiler<'_> {
                 // A discarded glvalue is evaluated, not read.
                 let _ = self.lv(e, Access::Addr);
             }
-            ExprKind::CXXDeleteExpr => {
-                self.trap(e, "kiln: new/delete in constant evaluation lands with WP-061b part 2");
-            }
+            ExprKind::CXXDeleteExpr => self.delete_expr(e),
             _ if self.kind(ty) == TyKind::Void => self.unsupported(e),
             _ if self.o.types.is_aggregate(ty) => {
                 let r = self.reg();
@@ -3067,6 +3065,18 @@ impl Compiler<'_> {
             }
             self.uses_cc = true;
             return r;
+        }
+        // `std::allocator<T>::allocate`/`deallocate` (spec/oven.md
+        // "Transient allocation": deferred to the templates wave, so this
+        // never holds yet).
+        if let Some(d) = direct
+            && new_delete::is_std_allocator_call(self.ast(), d)
+        {
+            self.trap(
+                e,
+                "kiln: std::allocator in constant evaluation lands with the templates wave",
+            );
+            return self.reg();
         }
         let fp = if direct.is_none() { Some(self.rv_copy(callee)) } else { None };
         let is_sret = self.o.types.is_aggregate(ty);

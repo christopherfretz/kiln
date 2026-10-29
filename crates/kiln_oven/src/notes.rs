@@ -13,10 +13,10 @@ use crate::arith::{self, FloatErr, IntErr};
 use crate::compile::{FState, Site};
 use crate::failure::Note;
 use crate::kbc::{Op, ak};
-use crate::mem::{HEAP_BIT, MemFault, Origin, Ptr, Sp, flags};
+use crate::mem::{MemFault, Origin, Ptr, Sp, flags};
 use crate::ty::{OTy, TyKind};
 use crate::value::var_info;
-use crate::vm::{Fault, value_len};
+use crate::vm::{BoundErr, Fault, value_len};
 use crate::{Oven, SemaBridge};
 
 /// clang's default `-fconstexpr-backtrace-limit`.
@@ -44,7 +44,12 @@ impl Oven {
         Self::type_name(ast, q)
     }
 
-    fn tname(&self, ast: &Ast, t: OTy) -> String {
+    pub(crate) fn tname(&self, ast: &Ast, t: OTy) -> String {
+        if let TyKind::Array { elem, n } = self.types.kind(t)
+            && self.types.is_synthetic_array(t)
+        {
+            return array_name(&self.tname(ast, elem), n);
+        }
         Self::type_name(ast, self.types.info(t).q)
     }
 
@@ -159,6 +164,21 @@ impl Oven {
                 let callee =
                     site.e.and_then(|e| callee_name(ast, e)).unwrap_or_else(|| "callee".into());
                 (site.loc, format!("'{callee}' evaluates to a null function pointer"))
+            }
+            Fault::NewBound { err, v, signed, k } => {
+                let v = arith::int_to_string(v, signed);
+                let what = match err {
+                    BoundErr::Negative => "is negative".to_owned(),
+                    BoundErr::TooLarge => "is too large".to_owned(),
+                    BoundErr::Limit => format!(
+                        "exceeds the limit ({}); use '-fconstexpr-steps' to increase this limit",
+                        self.budget.steps
+                    ),
+                    BoundErr::TooSmall => {
+                        format!("is too small to hold {k} explicitly initialized elements")
+                    }
+                };
+                (site.loc, format!("cannot allocate array; evaluated array bound {v} {what}"))
             }
             Fault::Callee(f) => {
                 let func = &self.funcs[f as usize];
@@ -374,8 +394,8 @@ impl Oven {
             Origin::Str(id, _) => ast.strings.write_literal(id, &mut s),
             Origin::Temp(_) | Origin::Const(_) | Origin::None => s.push_str("{temporary}"),
             // clang: `{*new T#N}`, N its allocation number.
-            Origin::Heap(_) => {
-                let _ = write!(s, "{{*new {}#{}}}", self.tname(ast, a.ty), p.slot - HEAP_BIT);
+            Origin::Heap(_, n) => {
+                let _ = write!(s, "{{*new {}#{n}}}", self.tname(ast, a.ty));
             }
         }
         let (mut t, mut rel) = (a.ty, u64::from(p.off));
@@ -500,10 +520,13 @@ impl Oven {
                     "{verb} object outside its lifetime is not allowed in a constant expression"
                 )
             }
-            // Placeholder wording (clang's note_constexpr_access_deleted_object
-            // and note_constexpr_heap_alloc_here), checked by WP-061b part 2.
-            MemFault::Dead(Origin::Heap(e)) => {
-                extra.push(Note::new(ast.exprs.get(e).loc(), "heap allocation performed here"));
+            // clang's note_constexpr_access_deleted_object (no note on the
+            // allocation: clang has forgotten it). A heap slot dies only by
+            // `delete`, so a stale heap pointer is to a deleted object too.
+            MemFault::Dead(Origin::Heap(..)) => {
+                format!("{verb} heap allocated object that has been deleted")
+            }
+            MemFault::Stale if is_heap_ptr(p) => {
                 format!("{verb} heap allocated object that has been deleted")
             }
             MemFault::Dead(Origin::Var(d)) => {
@@ -582,27 +605,65 @@ impl Oven {
             MemFault::Memory(n) => {
                 format!("constexpr evaluation exceeded the memory limit of {n} bytes")
             }
-            // Placeholder wording after clang's note_constexpr_delete_*
-            // and note_constexpr_new_delete_mismatch notes; the `delete`
-            // operation and its oracle tests are WP-061b part 2.
-            MemFault::NotHeap => format!(
-                "delete of pointer '{}' that does not point to a heap-allocated object",
-                self.ptr_string(ast, p, ty)
-            ),
-            MemFault::DoubleDelete => "delete of pointer that has already been deleted".into(),
-            MemFault::Subobject => format!(
-                "delete of pointer to subobject '{}'",
-                self.ptr_string(ast, p, ty)
-            ),
-            MemFault::DeleteMismatch { array_new: true } => {
-                format!("non-array delete used to delete pointer to array object of type '{}'", self.tname(ast, ty))
+            // clang's CheckDeleteKind notes (note_constexpr_delete_not_heap_alloc,
+            // _double_delete, _new_delete_mismatch, _delete_subobject).
+            MemFault::NotHeap => {
+                if let Some(a) = self.alloc_any(Ptr::decode(p)) {
+                    match a.origin {
+                        Origin::Var(d) | Origin::Global(d) | Origin::External(d) => {
+                            extra.push(Note::new(ast.decls.get(d).loc(), "declared here"));
+                        }
+                        Origin::Temp(e) | Origin::Str(_, Some(e)) => {
+                            extra.push(Note::new(ast.exprs.get(e).loc(), "temporary created here"));
+                        }
+                        _ => {}
+                    }
+                }
+                format!(
+                    "delete of pointer '{}' that does not point to a heap-allocated object",
+                    self.ptr_string(ast, p, ty)
+                )
             }
-            MemFault::DeleteMismatch { array_new: false } => {
-                format!("array delete used to delete pointer to non-array object of type '{}'", self.tname(ast, ty))
+            MemFault::DoubleDelete => "delete of pointer that has already been deleted".into(),
+            MemFault::Subobject if Ptr::decode(p).past => format!(
+                "delete of pointer '{}' that does not point to complete object",
+                self.ptr_string(ast, p, ty)
+            ),
+            // clang's format leaves a trailing space here.
+            MemFault::Subobject => {
+                format!("delete of pointer to subobject '{}' ", self.ptr_string(ast, p, ty))
+            }
+            MemFault::DeleteMismatch { array_new } => {
+                let a = self.alloc_any(Ptr::decode(p)).copied();
+                let t = a.map_or_else(|| self.tname(ast, ty), |a| self.tname(ast, a.ty));
+                if let Some(Origin::Heap(e, _)) = a.map(|a| a.origin) {
+                    extra.push(Note::new(ast.exprs.get(e).loc(), "heap allocation performed here"));
+                }
+                if array_new {
+                    format!("non-array delete used to delete pointer to array object of type '{t}'")
+                } else {
+                    format!("array delete used to delete pointer to non-array object of type '{t}'")
+                }
             }
         };
         (site.loc, msg)
     }
+}
+
+/// Whether `raw` is a (possibly dangling) heap pointer.
+fn is_heap_ptr(raw: u64) -> bool {
+    let p = Ptr::decode(raw);
+    raw != 0 && !p.is_fn() && p.is_heap()
+}
+
+/// The name of an array of `n` elements of type `elem` (named `elem`), as
+/// clang prints it: `int[3]`, `int[3][2]`, `int *[3]`, `int (*[3])(int)`.
+pub(crate) fn array_name(elem: &str, n: u64) -> String {
+    let at = match elem.find("(*") {
+        Some(i) => i + 2 + elem[i + 2..].bytes().take_while(|&c| c == b'*').count(),
+        None => elem.find('[').unwrap_or(elem.len()),
+    };
+    format!("{}[{n}]{}", &elem[..at], &elem[at..])
 }
 
 /// The callee's spelling for "'f' evaluates to a null function pointer".
