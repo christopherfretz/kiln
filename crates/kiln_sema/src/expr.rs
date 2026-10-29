@@ -311,6 +311,7 @@ impl Sema<'_, '_> {
                 | ExprKind::BinaryOperator
                 | ExprKind::CompoundAssignOperator
                 | ExprKind::ConditionalOperator
+                | ExprKind::BinaryConditionalOperator
                 | ExprKind::ArraySubscriptExpr
                 | ExprKind::CallExpr
                 | ExprKind::MemberExpr => true,

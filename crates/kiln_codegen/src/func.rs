@@ -100,6 +100,9 @@ pub(crate) struct Fx {
     /// Calls: (instruction, callee, call-site nounwind).
     pub calls: Vec<(u32, Option<FuncId>, bool)>,
     pub loop_mp: Option<MetadataId>,
+    /// The bound common expressions of the enclosing GNU binary
+    /// conditionals (clang `OpaqueValueMapping`).
+    pub opaque: FxHashMap<kiln_ast::ExprId, crate::expr::Opaque>,
 }
 
 impl Fx {
@@ -123,6 +126,7 @@ impl Fx {
             vector_width: 0,
             calls: Vec::new(),
             loop_mp: None,
+            opaque: FxHashMap::default(),
         }
     }
 }

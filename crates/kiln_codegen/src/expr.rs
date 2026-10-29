@@ -17,6 +17,13 @@ use crate::fold::is_local;
 use crate::func::{Addr, CallArg, min_align};
 use crate::module::{Cg, R, err, gval};
 
+/// The value an `OpaqueValueExpr` stands for.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum Opaque {
+    Rv(Option<V>),
+    Lv(LV),
+}
+
 /// An lvalue: an address, its source type and the bit-field access.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct LV {
@@ -182,8 +189,33 @@ impl Cg<'_> {
                 let (lv, v) = self.emit_compound_assign(e)?;
                 if self.is_volatile(lv.q) { self.load_lv(lv) } else { v }
             }
-            ExprKind::ConditionalOperator => return self.emit_conditional(e),
+            ExprKind::ConditionalOperator => {
+                let [a, b] = ast.exprs.cond_arms(e);
+                return self.emit_conditional(self.sub(e), a, b);
+            }
+            ExprKind::BinaryConditionalOperator => {
+                let [common, c, a, b] = self.bind_common(e)?;
+                let r = self.emit_conditional(c, a, b);
+                self.f.opaque.remove(&common);
+                return r;
+            }
+            ExprKind::OpaqueValueExpr => match self.opaque_of(e) {
+                Some(Opaque::Rv(v)) => return Ok(v),
+                Some(Opaque::Lv(lv)) => self.load_lv(lv),
+                None => return err(self.loc_of(e), "unbound OpaqueValueExpr"),
+            },
             ExprKind::CallExpr => return self.emit_call(e, None),
+            // A scalar initializer list (clang `VisitInitListExpr`): its
+            // single element, or zero.
+            ExprKind::InitListExpr if !self.is_aggregate(q) => {
+                match ast.lists.get(ast.exprs.init_list_inits(e)).first() {
+                    Some(&x) => return self.emit_scalar_opt(ExprId::new(x)),
+                    None => {
+                        let t = self.lty(q);
+                        V::C(self.m.const_zero(t))
+                    }
+                }
+            }
             ExprKind::DeclRefExpr
             | ExprKind::MemberExpr
             | ExprKind::ArraySubscriptExpr
@@ -835,11 +867,28 @@ impl Cg<'_> {
         }
     }
 
-    /// clang `VisitAbstractConditionalOperator`.
-    fn emit_conditional(&mut self, e: ExprId) -> R<Option<V>> {
+    /// clang `OpaqueValueMapping` for a `BinaryConditionalOperator`:
+    /// evaluates the common expression once and binds it; returns the
+    /// operands `[common, cond, then, else]`.
+    fn bind_common(&mut self, e: ExprId) -> R<[ExprId; 4]> {
         let ast = self.ast;
-        let c = self.sub(e);
-        let [a, b] = ast.exprs.cond_arms(e);
+        let ops = ast.exprs.binary_conditional_operands(e, &ast.lists);
+        let v = if self.is_glvalue(ops[0]) {
+            Opaque::Lv(self.emit_lvalue(ops[0])?)
+        } else {
+            Opaque::Rv(self.emit_scalar_opt(ops[0])?)
+        };
+        self.f.opaque.insert(ops[0], v);
+        Ok(ops)
+    }
+
+    fn opaque_of(&self, e: ExprId) -> Option<Opaque> {
+        let src = self.ast.exprs.opaque_source(e)?;
+        self.f.opaque.get(&src).copied()
+    }
+
+    /// clang `VisitAbstractConditionalOperator`.
+    fn emit_conditional(&mut self, c: ExprId, a: ExprId, b: ExprId) -> R<Option<V>> {
         if let Some(x) = self.fold_bool(c) {
             return self.emit_scalar_opt(if x { a } else { b });
         }
@@ -1033,7 +1082,20 @@ impl Cg<'_> {
                 }
             }
             ExprKind::CompoundAssignOperator => Ok(self.emit_compound_assign(e)?.0),
-            ExprKind::ConditionalOperator => self.cond_lvalue(e),
+            ExprKind::ConditionalOperator => {
+                let [a, b] = ast.exprs.cond_arms(e);
+                self.cond_lvalue(e, self.sub(e), a, b)
+            }
+            ExprKind::BinaryConditionalOperator => {
+                let [common, c, a, b] = self.bind_common(e)?;
+                let r = self.cond_lvalue(e, c, a, b);
+                self.f.opaque.remove(&common);
+                r
+            }
+            ExprKind::OpaqueValueExpr => match self.opaque_of(e) {
+                Some(Opaque::Lv(lv)) => Ok(lv),
+                _ => err(self.loc_of(e), "unbound glvalue OpaqueValueExpr"),
+            },
             ExprKind::CallExpr if self.is_glvalue(e) => {
                 // A call returning a reference.
                 let Some(p) = self.emit_call(e, None)? else {
@@ -1069,10 +1131,8 @@ impl Cg<'_> {
         }
     }
 
-    fn cond_lvalue(&mut self, e: ExprId) -> R<LV> {
+    fn cond_lvalue(&mut self, e: ExprId, c: ExprId, a: ExprId, b: ExprId) -> R<LV> {
         let ast = self.ast;
-        let c = self.sub(e);
-        let [a, b] = ast.exprs.cond_arms(e);
         if let Some(x) = self.fold_bool(c) {
             return self.emit_lvalue(if x { a } else { b });
         }

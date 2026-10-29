@@ -439,6 +439,17 @@ pub(crate) struct Compiler<'a> {
     /// The operator location of the innermost read-modify-write being
     /// compiled (clang reports union active-member faults there).
     rmw_loc: Option<Loc>,
+    /// The evaluated common expressions of the enclosing GNU binary
+    /// conditionals, keyed by the expression (an `OpaqueValueExpr` names
+    /// its source).
+    opaque: FxHashMap<ExprId, Opaque>,
+}
+
+/// The value an `OpaqueValueExpr` stands for.
+#[derive(Clone, Copy)]
+enum Opaque {
+    Rv(u32),
+    Lv(Place),
 }
 
 impl<'a> Compiler<'a> {
@@ -452,6 +463,7 @@ impl<'a> Compiler<'a> {
             mem_vars: FxHashSet::default(),
             pending: Vec::new(),
             rmw_loc: None,
+            opaque: FxHashMap::default(),
             breakables: Vec::new(),
             scopes: Vec::new(),
             ret: RetKind::Void,
@@ -522,6 +534,9 @@ impl<'a> Compiler<'a> {
                 | ExprKind::ConditionalOperator
                 | ExprKind::MaterializeTemporaryExpr => ExprId::new(n.a()),
                 ExprKind::CallExpr => ast.exprs.callee(e),
+                ExprKind::BinaryConditionalOperator => {
+                    ast.exprs.binary_conditional_operands(e, &ast.lists)[0]
+                }
                 ExprKind::ImplicitCastExpr | ExprKind::ConstantExpr => ast.exprs.operand(e),
                 ExprKind::MemberExpr => {
                     let base = ast.exprs.operand(e);
@@ -1665,6 +1680,29 @@ impl Compiler<'_> {
                 self.rv_into(f, dst);
                 self.patch_here(end);
             }
+            ExprKind::BinaryConditionalOperator => {
+                let [common, cond, t, f] = self.bind_common(e, Access::Read);
+                let c = self.rv(cond);
+                let j = self.jmp_if(c, false);
+                self.rv_into(t, dst);
+                let end = self.jmp();
+                self.patch_here(j);
+                self.rv_into(f, dst);
+                self.patch_here(end);
+                self.opaque.remove(&common);
+            }
+            ExprKind::OpaqueValueExpr if !n.value_category().is_glvalue() => {
+                match self.opaque_of(e) {
+                    Some(Opaque::Rv(r)) => {
+                        if r != dst {
+                            self.emit(Op::Mov, 0, &[dst, r]);
+                        }
+                    }
+                    Some(Opaque::Lv(p)) => self.load(p, ty, ak::READ, e, dst),
+                    None => self.unsupported(e),
+                }
+            }
+            ExprKind::CXXScalarValueInitExpr => self.konst(dst, 0),
             ExprKind::CallExpr if !n.value_category().is_glvalue() => {
                 let r = self.call(e, None);
                 if r != dst {
@@ -2146,6 +2184,27 @@ impl Compiler<'_> {
     }
 
     /// A glvalue that must have an address.
+    /// Evaluates the common expression of a GNU binary conditional once
+    /// and binds it for the `OpaqueValueExpr`s naming it; returns the
+    /// operands.
+    fn bind_common(&mut self, e: ExprId, acc: Access) -> [ExprId; 4] {
+        let ast = self.ast();
+        let ops = ast.exprs.binary_conditional_operands(e, &ast.lists);
+        let common = ops[0];
+        let v = if self.node(common).value_category().is_glvalue() {
+            Opaque::Lv(self.lv(common, acc))
+        } else {
+            Opaque::Rv(self.rv(common))
+        };
+        self.opaque.insert(common, v);
+        ops
+    }
+
+    fn opaque_of(&self, e: ExprId) -> Option<Opaque> {
+        let src = self.ast().exprs.opaque_source(e)?;
+        self.opaque.get(&src).copied()
+    }
+
     fn lv_mem(&mut self, e: ExprId, acc: Access) -> u32 {
         match self.lv(e, acc) {
             Place::Mem(p) => p,
@@ -2298,6 +2357,28 @@ impl Compiler<'_> {
                 }
             }
             ExprKind::CompoundAssignOperator => self.compound_assign(e),
+            ExprKind::OpaqueValueExpr => match self.opaque_of(e) {
+                Some(Opaque::Lv(p)) => p,
+                _ => {
+                    self.unsupported(e);
+                    Place::Mem(self.reg())
+                }
+            },
+            ExprKind::BinaryConditionalOperator => {
+                let [common, cond, t, f] = self.bind_common(e, acc);
+                let c = self.rv(cond);
+                let r = self.reg();
+                let j = self.jmp_if(c, false);
+                let pt = self.lv_mem(t, acc);
+                self.emit(Op::Mov, 0, &[r, pt]);
+                let end = self.jmp();
+                self.patch_here(j);
+                let pf = self.lv_mem(f, acc);
+                self.emit(Op::Mov, 0, &[r, pf]);
+                self.patch_here(end);
+                self.opaque.remove(&common);
+                Place::Mem(r)
+            }
             ExprKind::ConditionalOperator => {
                 let c = self.rv(ExprId::new(n.a()));
                 let [t, f] = self.ast().exprs.cond_arms(e);
