@@ -2264,9 +2264,15 @@ impl Sema<'_, '_> {
         pt: QualType,
         i: usize,
         err: &ConvError,
+        param_note: Option<Diag>,
     ) {
         let Some(d) = named else {
-            let msg = err.diag(self, a);
+            // A callee without overload resolution reports the
+            // conversion, noting the parameter (clang's direct path).
+            let mut msg = err.diag(self, a);
+            if let Some(n) = param_note {
+                msg = msg.with_note(n);
+            }
             self.emit(msg);
             return;
         };
@@ -2386,8 +2392,11 @@ impl Sema<'_, '_> {
             self.unsupported("calls through this function type", loc);
             return self.recover_err(&kids, loc);
         };
-        let callee_info = named
-            .map(|d| CallCallee { decl: d, overloadable: self.kind_of(d) == DeclKind::Function });
+        let adl_single = self.ovl.adl_single.take();
+        let callee_info = named.map(|d| CallCallee {
+            decl: d,
+            overloadable: self.kind_of(d) == DeclKind::Function && adl_single == Some(callee),
+        });
         let Some(conv_args) =
             self.convert_call_args(callee_info, callee, args, &mut braced, &proto, loc, rparen)
         else {
@@ -2526,7 +2535,15 @@ impl Sema<'_, '_> {
                     if self.try_implicit_conversion(&info, to, opts).is_bad() {
                         let err =
                             ConvError::new(DiagId::sema_ovl_no_viable_function_in_call, Vec::new());
-                        self.bad_argument(named.map(|c| c.decl), callee, a, params[i], i, &err);
+                        self.bad_argument(
+                            named.map(|c| c.decl),
+                            callee,
+                            a,
+                            params[i],
+                            i,
+                            &err,
+                            None,
+                        );
                         return None;
                     }
                 }
@@ -2550,7 +2567,9 @@ impl Sema<'_, '_> {
                         return None;
                     }
                     Err(err) => {
-                        self.bad_argument(named.map(|c| c.decl), callee, a, params[i], i, &err);
+                        let ovl = named.filter(|c| c.overloadable).map(|c| c.decl);
+                        let note = pdecls.get(i).map(|&p| self.param_decl_note(p));
+                        self.bad_argument(ovl, callee, a, params[i], i, &err, note);
                         return None;
                     }
                 }

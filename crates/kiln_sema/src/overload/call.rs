@@ -87,7 +87,9 @@ impl Sema<'_, '_> {
             // One candidate: the direct path's conversions and
             // diagnostics are clang's for a one-candidate set.
             let (d, f) = cands[0];
-            return Some(self.finish_overload_ref(d, f, naming, n.loc(), nns, ule, true));
+            let e = self.finish_overload_ref(d, f, naming, n.loc(), nns, ule, true);
+            self.ovl.adl_single = adl.then_some(e);
+            return Some(e);
         }
         let mut set = self.begin_set(SetKind::Normal, at);
         let base = self.push_call_args(&mut set, args, braced);

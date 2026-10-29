@@ -302,6 +302,13 @@ pub(crate) struct OverloadScratch {
     /// How many user-defined conversions are being applied
     /// ([`Sema::user_convert`]).
     pub udc_depth: u8,
+    /// The `DeclRefExpr` a one-candidate call through an
+    /// argument-dependent name resolved to (clang's
+    /// `UnresolvedLookupExpr` callee): its argument errors are
+    /// overload-resolution ones ("no matching function"), where a name
+    /// without ADL (qualified, parenthesized, block-scope) reports the
+    /// conversion directly. Consumed by [`Sema::act_on_call`].
+    pub adl_single: Option<kiln_ast::ExprId>,
 }
 
 /// An overloaded member access `b.f` / `b->f` / implicit `this->f`
