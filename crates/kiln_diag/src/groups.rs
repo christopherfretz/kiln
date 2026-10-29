@@ -141,6 +141,8 @@ diag_groups! {
     InconsistentMissingOverride = "inconsistent-missing-override" [];
     AbstractFinalClass = "abstract-final-class" [];
     InaccessibleBase = "inaccessible-base" [];
+    InvalidPartialSpecialization = "invalid-partial-specialization" [];
+    UnusablePartialSpecialization = "unusable-partial-specialization" [];
 }
 
 impl Group {
