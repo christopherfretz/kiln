@@ -485,22 +485,61 @@ impl<'a, W: io::Write> Dumper<'a, W> {
             | ExprKind::CXXBindTemporaryExpr
             | ExprKind::ExprWithCleanups => push(n.a()),
             k if k.is_cast() => push(n.a()),
-            ExprKind::CXXTypeidExpr => {
-                if !n.has(ExprFlags::ARG_IS_TYPE) {
-                    push(n.a());
-                }
-            }
             ExprKind::CXXConstructExpr | ExprKind::CXXTemporaryObjectExpr => {
                 for c in lists.iter::<ExprId>(exprs.construct_args(e)) {
                     push(c.raw());
                 }
             }
-            ExprKind::CXXMemberCallExpr => {
+            ExprKind::UnaryExprOrTypeTraitExpr | ExprKind::CXXTypeidExpr => {
+                if !n.has(ExprFlags::ARG_IS_TYPE) {
+                    push(n.a());
+                }
+            }
+            ExprKind::CXXNoexceptExpr => push(n.a()),
+            ExprKind::BinaryOperator | ExprKind::ArraySubscriptExpr => {
+                push(n.a());
+                push(n.b());
+            }
+            ExprKind::CompoundAssignOperator => {
+                push(n.a());
+                push(exprs.compound_assign(e).rhs.raw());
+            }
+            ExprKind::ConditionalOperator => {
+                push(n.a());
+                for c in exprs.cond_arms(e) {
+                    push(c.raw());
+                }
+            }
+            ExprKind::CallExpr | ExprKind::CXXMemberCallExpr => {
                 push(n.a());
                 for c in lists.iter::<ExprId>(exprs.call_args(e)) {
                     push(c.raw());
                 }
             }
+            ExprKind::InitListExpr => {
+                if let Some(f) = exprs.init_list(e).array_filler {
+                    kids.push((Node::Expr(f), Some("array_filler")));
+                }
+                for c in lists.iter::<ExprId>(exprs.init_list_inits(e)) {
+                    kids.push((Node::Expr(c), None));
+                }
+            }
+            ExprKind::RecoveryExpr => {
+                if let Some(l) = ListId::from_raw(n.a()) {
+                    for c in lists.iter::<ExprId>(l) {
+                        kids.push((Node::Expr(c), None));
+                    }
+                }
+            }
+            _ => self.class_expr_children(e, kids),
+        }
+    }
+
+    /// The children of the class-feature expressions (sema-class.md §5.1).
+    fn class_expr_children(&self, e: ExprId, kids: &mut Vec<(Node, Option<&'static str>)>) {
+        let exprs = &self.ast.exprs;
+        let lists = &self.ast.lists;
+        match exprs.get(e).kind() {
             ExprKind::CXXParenListInitExpr => {
                 if let Some(f) = exprs.paren_list_filler(e) {
                     kids.push((Node::Expr(f), Some("array_filler")));
@@ -530,47 +569,6 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                 let param = exprs.default_arg_param(e);
                 if let Some(c) = self.ast.decls.param(param).and_then(|p| p.default_arg) {
                     kids.push((Node::Expr(c), None));
-                }
-            }
-            ExprKind::UnaryExprOrTypeTraitExpr => {
-                if !n.has(ExprFlags::ARG_IS_TYPE) {
-                    push(n.a());
-                }
-            }
-            ExprKind::CXXNoexceptExpr => push(n.a()),
-            ExprKind::BinaryOperator | ExprKind::ArraySubscriptExpr => {
-                push(n.a());
-                push(n.b());
-            }
-            ExprKind::CompoundAssignOperator => {
-                push(n.a());
-                push(exprs.compound_assign(e).rhs.raw());
-            }
-            ExprKind::ConditionalOperator => {
-                push(n.a());
-                for c in exprs.cond_arms(e) {
-                    push(c.raw());
-                }
-            }
-            ExprKind::CallExpr => {
-                push(n.a());
-                for c in lists.iter::<ExprId>(exprs.call_args(e)) {
-                    push(c.raw());
-                }
-            }
-            ExprKind::InitListExpr => {
-                if let Some(f) = exprs.init_list(e).array_filler {
-                    kids.push((Node::Expr(f), Some("array_filler")));
-                }
-                for c in lists.iter::<ExprId>(exprs.init_list_inits(e)) {
-                    kids.push((Node::Expr(c), None));
-                }
-            }
-            ExprKind::RecoveryExpr => {
-                if let Some(l) = ListId::from_raw(n.a()) {
-                    for c in lists.iter::<ExprId>(l) {
-                        kids.push((Node::Expr(c), None));
-                    }
                 }
             }
             _ => {}

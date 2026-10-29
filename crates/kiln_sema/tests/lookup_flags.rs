@@ -8,7 +8,7 @@ mod conv_common;
 
 use conv_common::{L, fn_type, name, with_sema};
 use kiln_ast::decl::{DeclKind, DeclMisc, FnSpec, FriendKind, TagKind};
-use kiln_ast::{DeclHead, QualType};
+use kiln_ast::{DeclHead, DeclId, QualType};
 use kiln_sema::lookup::{LookupFlags, LookupKind};
 
 /// `struct C { friend void f(); };` then `void f();`.
@@ -28,8 +28,8 @@ fn hidden_friend_is_adl_only_namespace_memdef_3() {
         let f = s.ast.builder().function(h, DeclKind::Function, ft, FnSpec::new(), None);
         let entries: Vec<_> = s.ast.lookup_local(tu, fname).iter_with_flags().collect();
         assert_eq!(entries, vec![(f, LookupFlags::ADL_ONLY)]);
-        assert!(s.lookup_name(sym, LookupKind::Ordinary).decls.is_empty());
-        assert!(s.lookup_qualified(tu, sym, LookupKind::Ordinary).decls.is_empty());
+        assert_eq!(s.lookup_name(sym, LookupKind::Ordinary).decls, Vec::<DeclId>::new());
+        assert_eq!(s.lookup_qualified(tu, sym, LookupKind::Ordinary).decls, Vec::<DeclId>::new());
         assert_eq!(s.lookup_current_scope(sym), vec![f]);
         // `void f();` at namespace scope makes it visible.
         let h = DeclHead::new(tu, fname, L);

@@ -121,7 +121,7 @@ fn expr_static_cast() {
 fn expr_reinterpret_cast() {
     let p = parse("long f(int *p) { return reinterpret_cast<long>(p); }");
     p.assert_clean();
-    p.assert_dump("CXXReinterpretCastExpr 'long' <PointerToIntegral>");
+    p.assert_dump("CXXReinterpretCastExpr 'long' reinterpret_cast<long> <PointerToIntegral>");
 }
 
 /// [expr.const.cast].
@@ -129,7 +129,7 @@ fn expr_reinterpret_cast() {
 fn expr_const_cast() {
     let p = parse("int *f(const int *p) { return const_cast<int *>(p); }");
     p.assert_clean();
-    p.assert_dump("CXXConstCastExpr 'int *' <NoOp>");
+    p.assert_dump("CXXConstCastExpr 'int *' const_cast<int *> <NoOp>");
 }
 
 /// [expr.type.conv]: functional casts.
@@ -137,7 +137,7 @@ fn expr_const_cast() {
 fn expr_type_conv() {
     let p = parse("double f(int i) { return double(i); }");
     p.assert_clean();
-    p.assert_dump("CXXFunctionalCastExpr 'double' <NoOp>");
+    p.assert_dump("CXXFunctionalCastExpr 'double' functional cast to double <NoOp>");
 }
 
 /// [expr.unary.op]: address-of and indirection.

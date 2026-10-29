@@ -338,7 +338,7 @@ fn class_expressions() {
     let got = dump_to_string(&ast, &DumpOptions::default());
     check(
         &got,
-        r#"TranslationUnitDecl
+        r"TranslationUnitDecl
 |-CXXRecordDecl struct V definition
 |-CXXRecordDecl struct B definition
 | |-virtual public 'V'
@@ -387,6 +387,6 @@ fn class_expressions() {
 | `-CXXTypeidExpr 'int' lvalue type_operand='int'
 `-VarDecl th 'B *' cinit
   `-CXXThisExpr 'B *' implicit this
-"#,
+",
     );
 }
