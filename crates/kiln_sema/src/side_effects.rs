@@ -31,8 +31,9 @@ impl Sema<'_, '_> {
         for _ in 0..256 {
             let exprs = &self.ast.exprs;
             match exprs.get(e).kind() {
-                ExprKind::ArraySubscriptExpr => e = exprs.children(e, &self.ast.lists)[0],
-                ExprKind::CXXMemberCallExpr => e = exprs.children(e, &self.ast.lists)[0],
+                ExprKind::ArraySubscriptExpr | ExprKind::CXXMemberCallExpr => {
+                    e = exprs.children(e, &self.ast.lists)[0];
+                }
                 ExprKind::UnaryOperator
                 | ExprKind::BinaryOperator
                 | ExprKind::CompoundAssignOperator

@@ -1498,6 +1498,16 @@ impl Parser<'_, '_> {
         }
     }
 
+    /// The initializer form the current token starts, if any.
+    fn init_style_here(&self) -> Option<InitStyle> {
+        match Self::punct_of(self.tok()) {
+            Some(Punct::Equal) => Some(InitStyle::C),
+            Some(Punct::LParen) => Some(InitStyle::Call),
+            Some(Punct::LBrace) => Some(InitStyle::List),
+            _ => None,
+        }
+    }
+
     /// simple-declaration or function-definition ([dcl.pre], [dcl.fct.def]):
     /// returns the declarations made (including a tag the decl-specifiers
     /// declare), for a declaration statement.
@@ -1579,12 +1589,7 @@ impl Parser<'_, '_> {
                 }
             }
             first = false;
-            d.init_style = match Self::punct_of(self.tok()) {
-                Some(Punct::Equal) => Some(InitStyle::C),
-                Some(Punct::LParen) => Some(InitStyle::Call),
-                Some(Punct::LBrace) => Some(InitStyle::List),
-                _ => None,
-            };
+            d.init_style = self.init_style_here();
             let v = self.s.act_on_declarator(&ds, base, &d);
             if let Some(v) = v {
                 self.s.act_on_group_declarator(&mut group, v);

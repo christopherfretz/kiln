@@ -387,17 +387,18 @@ impl Sema<'_, '_> {
     /// type) of function `prev`, whose return type was deduced: `ty` with
     /// the deduced return type (clang's `MergeFunctionDecl`).
     pub(crate) fn adopt_deduced_return(&mut self, prev: DeclId, ty: QualType) -> QualType {
-        let Some(pty) = self.ast.decls.get(prev).ty() else { return ty };
-        let Some(pret) = self.ast.types.proto(pty).map(kiln_ast::types::FuncProto::ret) else {
+        let Some(prev_ty) = self.ast.decls.get(prev).ty() else { return ty };
+        let Some(deduced) = self.ast.types.proto(prev_ty).map(kiln_ast::types::FuncProto::ret)
+        else {
             return ty;
         };
         let TypeView::Function(p) = self.ast.types.view(ty.ty()) else { return ty };
-        if !self.contains_undeduced_auto(p.ret()) || self.contains_undeduced_auto(pret) {
+        if !self.contains_undeduced_auto(p.ret()) || self.contains_undeduced_auto(deduced) {
             return ty;
         }
         let params = self.ast.types.params(&p).to_vec();
         let exc = self.ast.types.exc_spec(&p);
-        self.ast.types.function(pret, &params, p.info(), exc)
+        self.ast.types.function(deduced, &params, p.info(), exc)
     }
 
     /// Uses of a function whose return type is still undeduced
