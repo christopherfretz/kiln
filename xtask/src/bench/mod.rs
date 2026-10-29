@@ -5,12 +5,13 @@
 
 mod compare;
 mod entry;
+mod perf_md;
 pub(crate) mod record;
 mod stats;
 #[cfg(test)]
 mod tests;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
@@ -36,7 +37,8 @@ options:
   --compiler <path>        compiler to measure (default: build and use a release kiln)
   --baseline <dir>         baseline directory (default: bench/baselines)
   --record                 write the measurements as the new baselines; with
-                           --compare-with, also write docs/status/perf.md
+                           --compare-with, also merge the ratio table into
+                           docs/status/perf.md
   --compare-with <path>    also measure this compiler (e.g. clang++-19) and print
                            the time and memory ratios
   --filter <substr>        only entries whose id (<group>/<name>) contains <substr>
@@ -332,7 +334,7 @@ fn measure_and_report(
     }
 
     if let (Some(o), Some(orun)) = (oracle, &rec.oracle) {
-        oracle_report(opts, cx, entries, &specs, (test, &rec.test), (o, orun), now)?;
+        oracle_report(opts, cx, entries, &specs, (test, &rec.test), (o, orun), (now, &stamp))?;
     }
 
     report.failing = report.failed > 0 || (report.regressed > 0 && !opts.record);
@@ -511,7 +513,7 @@ fn judge_all(
     Ok((report, files))
 }
 
-/// Prints the ratio table and, with `--record`, writes `perf.md`.
+/// Prints the ratio table and, with `--record`, merges it into `perf.md`.
 fn oracle_report(
     opts: &Options,
     cx: &Ctx<'_>,
@@ -519,40 +521,72 @@ fn oracle_report(
     specs: &Specs,
     (test, test_run): (&Subject, &CompilerRun),
     (o, orun): (&Subject, &CompilerRun),
-    now: SystemTime,
+    (now, stamp): (SystemTime, &str),
 ) -> Result<(), String> {
-    {
-        let ratio_rows: Vec<RatioRow> = entries
-            .iter()
-            .map(|e| RatioRow {
-                id: e.id.clone(),
-                mode: specs.get(&e.id).map_or("-", |s| s.mode.as_str()).to_owned(),
-                test: test_run.entries[&e.id].measurement().cloned(),
-                oracle: orun.entries[&e.id].measurement().cloned(),
-            })
-            .collect();
-        let (tl, ol) = compare::ratio_labels(test.kind(), o.kind());
-        println!();
-        print!("{}", compare::render_ratio_table(&ratio_rows, &tl, &ol));
-        if opts.record {
-            let tpath = test.path.display().to_string();
-            let opath = o.path.display().to_string();
-            let md = compare::render_perf_md(
-                &ratio_rows,
-                &compare::PerfContext {
-                    when: &record::human_time(now),
-                    test: (&tpath, test.kind(), &test.id.version),
-                    oracle: (&opath, o.kind(), &o.id.version),
-                    host: format!("{}, {} CPUs", cx.host.arch, cx.host.cpus),
-                    runs: cx.runs,
-                    rss: cx.probe.source_id(),
-                    filter: opts.filter.as_deref(),
-                },
-            );
-            write_file(&cx.layout.perf_md, &md)?;
-            println!("wrote {}", shown_path(&cx.layout.root, &cx.layout.perf_md));
-        }
+    let ratio_rows: Vec<RatioRow> = entries
+        .iter()
+        .map(|e| RatioRow {
+            id: e.id.clone(),
+            mode: specs.get(&e.id).map_or("-", |s| s.mode.as_str()).to_owned(),
+            test: test_run.entries[&e.id].measurement().cloned(),
+            oracle: orun.entries[&e.id].measurement().cloned(),
+        })
+        .collect();
+    let (tl, ol) = compare::ratio_labels(test.kind(), o.kind());
+    println!();
+    print!("{}", compare::render_ratio_table(&ratio_rows, &tl, &ol));
+    if !opts.record {
+        return Ok(());
     }
+    let page = &cx.layout.perf_md;
+    let shown = shown_path(&cx.layout.root, page);
+    // The page's other rows are kept (spec/bench.md "Recording"); one that
+    // cannot be read back is rewritten from this run alone.
+    let old = match std::fs::read_to_string(page) {
+        Ok(page_text) => perf_md::parse(&page_text, &tl, &ol).unwrap_or_else(|why| {
+            println!(
+                "warning: {shown} cannot be merged into ({why}); writing it from this run only"
+            );
+            Vec::new()
+        }),
+        Err(e) => {
+            println!("warning: cannot read {shown} ({e}); writing it from this run only");
+            Vec::new()
+        }
+    };
+    let corpus: BTreeSet<String> = entry::discover(
+        &cx.layout.root,
+        &cx.layout.bench,
+        std::slice::from_ref(&cx.layout.bench),
+        None,
+    )?
+    .into_iter()
+    .map(|e| e.id)
+    .collect();
+    let full = corpus.iter().all(|id| test_run.entries.contains_key(id));
+    let tpath = test.path.display().to_string();
+    let opath = o.path.display().to_string();
+    let merged = perf_md::merge(
+        old,
+        &ratio_rows,
+        &corpus,
+        full,
+        &perf_md::PerfContext {
+            when: &record::human_time(now),
+            stamp,
+            test: (&tpath, test.kind(), &test.id.version),
+            oracle: (&opath, o.kind(), &o.id.version),
+            host: format!("{}, {} CPUs", cx.host.arch, cx.host.cpus),
+            runs: cx.runs,
+            rss: cx.probe.source_id(),
+        },
+    );
+    write_file(page, &merged.text)?;
+    println!(
+        "wrote {shown}: {} row(s) recorded, {} kept from earlier recordings ({} stale), {} \
+         stale dropped",
+        merged.recorded, merged.kept, merged.stale, merged.dropped
+    );
     Ok(())
 }
 
