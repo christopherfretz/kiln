@@ -1,0 +1,110 @@
+TranslationUnitDecl
+|-EnumDecl referenced E
+| |-EnumConstantDecl E0 'E' value=0
+| `-EnumConstantDecl E1 'E' value=1
+|-CXXRecordDecl referenced struct B definition
+| |-FieldDecl referenced c 'unsigned int'
+| | `-ConstantExpr 'int' value=9
+| |   `-IntegerLiteral 'int' 9
+| |-FieldDecl referenced s 'int'
+| | `-ConstantExpr 'int' value=7
+| |   `-IntegerLiteral 'int' 7
+| |-FieldDecl referenced w 'unsigned int'
+| | `-ConstantExpr 'int' value=32
+| |   `-IntegerLiteral 'int' 32
+| |-FieldDecl referenced ul 'unsigned long'
+| | `-ConstantExpr 'int' value=40
+| |   `-IntegerLiteral 'int' 40
+| |-FieldDecl referenced b 'bool'
+| | `-ConstantExpr 'int' value=1
+| |   `-IntegerLiteral 'int' 1
+| `-FieldDecl referenced e 'E'
+|   `-ConstantExpr 'int' value=2
+|     `-IntegerLiteral 'int' 2
+`-FunctionDecl g 'void (B *)'
+  |-ParmVarDecl used p 'B *'
+  `-CompoundStmt
+    |-CStyleCastExpr 'void' <ToVoid>
+    | `-ParenExpr 'int'
+    |   `-BinaryOperator 'int' '+'
+    |     |-ImplicitCastExpr 'int' <IntegralCast>
+    |     | `-ImplicitCastExpr 'unsigned int' <LValueToRValue>
+    |     |   `-MemberExpr 'unsigned int' lvalue bitfield ->c
+    |     |     `-ImplicitCastExpr 'B *' <LValueToRValue>
+    |     |       `-DeclRefExpr 'B *' lvalue ParmVar 'p' 'B *'
+    |     `-IntegerLiteral 'int' 2
+    |-CStyleCastExpr 'void' <ToVoid>
+    | `-ParenExpr 'unsigned int'
+    |   `-BinaryOperator 'unsigned int' '+'
+    |     |-ImplicitCastExpr 'unsigned int' <IntegralCast>
+    |     | `-ImplicitCastExpr 'unsigned int' <LValueToRValue>
+    |     |   `-MemberExpr 'unsigned int' lvalue bitfield ->c
+    |     |     `-ImplicitCastExpr 'B *' <LValueToRValue>
+    |     |       `-DeclRefExpr 'B *' lvalue ParmVar 'p' 'B *'
+    |     `-IntegerLiteral 'unsigned int' 2
+    |-CStyleCastExpr 'void' <ToVoid>
+    | `-ParenExpr 'unsigned int'
+    |   `-BinaryOperator 'unsigned int' '+'
+    |     |-ImplicitCastExpr 'unsigned int' <LValueToRValue>
+    |     | `-MemberExpr 'unsigned int' lvalue bitfield ->w
+    |     |   `-ImplicitCastExpr 'B *' <LValueToRValue>
+    |     |     `-DeclRefExpr 'B *' lvalue ParmVar 'p' 'B *'
+    |     `-ImplicitCastExpr 'unsigned int' <IntegralCast>
+    |       `-IntegerLiteral 'int' 1
+    |-CStyleCastExpr 'void' <ToVoid>
+    | `-ParenExpr 'unsigned long'
+    |   `-BinaryOperator 'unsigned long' '+'
+    |     |-ImplicitCastExpr 'unsigned long' <LValueToRValue>
+    |     | `-MemberExpr 'unsigned long' lvalue bitfield ->ul
+    |     |   `-ImplicitCastExpr 'B *' <LValueToRValue>
+    |     |     `-DeclRefExpr 'B *' lvalue ParmVar 'p' 'B *'
+    |     `-ImplicitCastExpr 'unsigned long' <IntegralCast>
+    |       `-IntegerLiteral 'int' 1
+    |-CStyleCastExpr 'void' <ToVoid>
+    | `-ParenExpr 'int'
+    |   `-BinaryOperator 'int' '+'
+    |     |-ImplicitCastExpr 'int' <IntegralCast>
+    |     | `-ImplicitCastExpr 'bool' <LValueToRValue>
+    |     |   `-MemberExpr 'bool' lvalue bitfield ->b
+    |     |     `-ImplicitCastExpr 'B *' <LValueToRValue>
+    |     |       `-DeclRefExpr 'B *' lvalue ParmVar 'p' 'B *'
+    |     `-ImplicitCastExpr 'int' <IntegralCast>
+    |       `-ImplicitCastExpr 'bool' <LValueToRValue>
+    |         `-MemberExpr 'bool' lvalue bitfield ->b
+    |           `-ImplicitCastExpr 'B *' <LValueToRValue>
+    |             `-DeclRefExpr 'B *' lvalue ParmVar 'p' 'B *'
+    |-CStyleCastExpr 'void' <ToVoid>
+    | `-ParenExpr 'int'
+    |   `-BinaryOperator 'int' '+'
+    |     |-ImplicitCastExpr 'int' <IntegralCast>
+    |     | `-ImplicitCastExpr 'E' <LValueToRValue>
+    |     |   `-MemberExpr 'E' lvalue bitfield ->e
+    |     |     `-ImplicitCastExpr 'B *' <LValueToRValue>
+    |     |       `-DeclRefExpr 'B *' lvalue ParmVar 'p' 'B *'
+    |     `-IntegerLiteral 'int' 1
+    |-CStyleCastExpr 'void' <ToVoid>
+    | `-UnaryOperator 'int' prefix '-'
+    |   `-ImplicitCastExpr 'int' <IntegralCast>
+    |     `-ImplicitCastExpr 'unsigned int' <LValueToRValue>
+    |       `-MemberExpr 'unsigned int' lvalue bitfield ->c
+    |         `-ImplicitCastExpr 'B *' <LValueToRValue>
+    |           `-DeclRefExpr 'B *' lvalue ParmVar 'p' 'B *'
+    |-CStyleCastExpr 'void' <ToVoid>
+    | `-UnaryOperator 'int' prefix '~' cannot overflow
+    |   `-ImplicitCastExpr 'int' <IntegralCast>
+    |     `-ImplicitCastExpr 'unsigned int' <LValueToRValue>
+    |       `-MemberExpr 'unsigned int' lvalue bitfield ->c
+    |         `-ImplicitCastExpr 'B *' <LValueToRValue>
+    |           `-DeclRefExpr 'B *' lvalue ParmVar 'p' 'B *'
+    |-UnaryOperator 'unsigned int' lvalue bitfield prefix '++'
+    | `-MemberExpr 'unsigned int' lvalue bitfield ->c
+    |   `-ImplicitCastExpr 'B *' <LValueToRValue>
+    |     `-DeclRefExpr 'B *' lvalue ParmVar 'p' 'B *'
+    |-UnaryOperator 'int' postfix '--'
+    | `-MemberExpr 'int' lvalue bitfield ->s
+    |   `-ImplicitCastExpr 'B *' <LValueToRValue>
+    |     `-DeclRefExpr 'B *' lvalue ParmVar 'p' 'B *'
+    `-UnaryOperator 'unsigned int' postfix '++'
+      `-MemberExpr 'unsigned int' lvalue bitfield ->w
+        `-ImplicitCastExpr 'B *' <LValueToRValue>
+          `-DeclRefExpr 'B *' lvalue ParmVar 'p' 'B *'

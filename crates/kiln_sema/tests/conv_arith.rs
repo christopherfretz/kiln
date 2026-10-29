@@ -483,6 +483,116 @@ fn compound_assign_left_untouched_expr_ass_7() {
     });
 }
 
+/// `l op= r` in clang's `CompoundAssign` mode: the computation type
+/// (`ComputeLHSTy`) and the casts on the right operand. The left operand is
+/// never converted.
+fn compound(s: &mut Sema<'_, '_>, l: ExprId, r: ExprId) -> (String, Vec<String>) {
+    let (l2, r2, t) = usual_arithmetic_conversions_kind(s, l, r, ArithConvKind::CompoundAssign)
+        .expect("arithmetic operands");
+    assert_eq!(l2, l, "the left operand of a compound assignment is not converted");
+    (s.ty_str(t), dump_casts(s, r2))
+}
+
+/// [expr.ass]/6, [conv.prom]/5: `E1 op= E2` computes `E1 op E2`, so a
+/// bit-field left operand takes part promoted by its width, in type only.
+/// clang 19, `struct { unsigned c:9; long l3:3; unsigned w:32;
+/// unsigned long ul:40; bool b:1; unsigned short us:5; char32_t c32:5; } x;`
+/// - `x.c += 2`: `ComputeLHSTy='int'`, `2` unconverted;
+/// - `x.c += 2u`: `'unsigned int'` (same unpromoted type, kept);
+/// - `x.l3 += 1`: `'int'`; `x.l3 += 1L`: `'long'`;
+/// - `x.w += 1`: `'unsigned int'`, `1` `IntegralCast` to it;
+/// - `x.ul += 1`: `'unsigned long'` (wider than int: no promotion);
+/// - `x.b += 1`, `x.us += 1`, `x.c32 += 1`: `'int'`.
+#[test]
+fn compound_assign_promotes_bit_field_lhs_expr_ass_6() {
+    with_sema(|s, _| {
+        let c = bit_field(s, "c", QualType::UINT, 9);
+        let two = int_lit(s, QualType::INT, 2);
+        assert_eq!(compound(s, c, two), ("int".into(), vec![]));
+        let c = bit_field(s, "c", QualType::UINT, 9);
+        let two_u = int_lit(s, QualType::UINT, 2);
+        assert_eq!(compound(s, c, two_u), ("unsigned int".into(), vec![]));
+        let u = lvalue(s, "u", QualType::UINT);
+        let c = bit_field(s, "c", QualType::UINT, 9);
+        assert_eq!(
+            compound(s, c, u),
+            ("unsigned int".into(), vec!["'unsigned int' <LValueToRValue>".into()])
+        );
+        let l3 = bit_field(s, "l3", QualType::LONG, 3);
+        let one = int_lit(s, QualType::INT, 1);
+        assert_eq!(compound(s, l3, one), ("int".into(), vec![]));
+        let l3 = bit_field(s, "l3", QualType::LONG, 3);
+        let one_l = int_lit(s, QualType::LONG, 1);
+        assert_eq!(compound(s, l3, one_l), ("long".into(), vec![]));
+        let w = bit_field(s, "w", QualType::UINT, 32);
+        let one = int_lit(s, QualType::INT, 1);
+        assert_eq!(
+            compound(s, w, one),
+            ("unsigned int".into(), vec!["'unsigned int' <IntegralCast>".into()])
+        );
+        let ul = bit_field(s, "ul", QualType::ULONG, 40);
+        let one = int_lit(s, QualType::INT, 1);
+        assert_eq!(
+            compound(s, ul, one),
+            ("unsigned long".into(), vec!["'unsigned long' <IntegralCast>".into()])
+        );
+        for (t, n, w) in
+            [(QualType::BOOL, "b", 1), (QualType::USHORT, "us", 5), (QualType::CHAR32, "c32", 5)]
+        {
+            let e = bit_field(s, n, t, w);
+            let one = int_lit(s, QualType::INT, 1);
+            assert_eq!(compound(s, e, one), ("int".into(), vec![]), "{n}");
+        }
+        // A floating right operand wins whatever the promotion:
+        // `x.c *= 2.0` computes in double.
+        let c = bit_field(s, "c", QualType::UINT, 9);
+        let d = float_lit(s, QualType::DOUBLE, 2.0);
+        assert_eq!(compound(s, c, d), ("double".into(), vec![]));
+    });
+}
+
+/// [expr.ass]/6, [conv.prom]/1-3: a promotable left operand that is not a
+/// bit-field is promoted in type too. clang 19:
+/// - `char32_t x; x += 1`: `ComputeLHSTy='unsigned int'`, `1`
+///   `IntegralCast` to it (`char32_t` promotes to `unsigned int`);
+/// - `short sh; sh += sh`: `'int'`; `bool bb; bb += bb`: `'int'`;
+/// - `enum E { e0 } e; e += 1`: `'int'` (the assignment back is then
+///   ill-formed, which `compound_assign` diagnoses).
+#[test]
+fn compound_assign_promotes_lhs_type_expr_ass_6() {
+    with_sema(|s, _| {
+        let x = lvalue(s, "x", QualType::CHAR32);
+        let one = int_lit(s, QualType::INT, 1);
+        assert_eq!(
+            compound(s, x, one),
+            ("unsigned int".into(), vec!["'unsigned int' <IntegralCast>".into()])
+        );
+        let sh = lvalue(s, "sh", QualType::SHORT);
+        let sh2 = lvalue(s, "sh", QualType::SHORT);
+        assert_eq!(
+            compound(s, sh, sh2),
+            ("int".into(), vec!["'int' <IntegralCast>".into(), "'short' <LValueToRValue>".into()]),
+            "the right operand is promoted, so the left one is too"
+        );
+        let sh = lvalue(s, "sh", QualType::SHORT);
+        let one = int_lit(s, QualType::INT, 1);
+        assert_eq!(compound(s, sh, one), ("int".into(), vec![]));
+        let et = enumeration(s, "E", false, None, (QualType::UINT, QualType::INT));
+        let e = lvalue(s, "e", et);
+        let one = int_lit(s, QualType::INT, 1);
+        assert_eq!(compound(s, e, one), ("int".into(), vec![]));
+    });
+    // aarch64: wchar_t is unsigned 32-bit and promotes to unsigned int.
+    with_target(aarch64(), |s, _| {
+        let w = lvalue(s, "w", QualType::WCHAR);
+        let one = int_lit(s, QualType::INT, 1);
+        assert_eq!(
+            compound(s, w, one),
+            ("unsigned int".into(), vec!["'unsigned int' <IntegralCast>".into()])
+        );
+    });
+}
+
 /// [expr.arith.conv]: non-arithmetic operands: `p + d` on an `int*` is not
 /// an arithmetic conversion.
 #[test]

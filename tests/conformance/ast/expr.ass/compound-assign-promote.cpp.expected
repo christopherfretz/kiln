@@ -1,0 +1,137 @@
+TranslationUnitDecl
+|-CXXRecordDecl referenced struct B definition
+| |-FieldDecl referenced c 'unsigned int'
+| | `-ConstantExpr 'int' value=9
+| |   `-IntegerLiteral 'int' 9
+| |-FieldDecl referenced s 'int'
+| | `-ConstantExpr 'int' value=7
+| |   `-IntegerLiteral 'int' 7
+| |-FieldDecl referenced w 'unsigned int'
+| | `-ConstantExpr 'int' value=32
+| |   `-IntegerLiteral 'int' 32
+| |-FieldDecl referenced iw 'int'
+| | `-ConstantExpr 'int' value=32
+| |   `-IntegerLiteral 'int' 32
+| |-FieldDecl referenced l3 'long'
+| | `-ConstantExpr 'int' value=3
+| |   `-IntegerLiteral 'int' 3
+| |-FieldDecl referenced ul 'unsigned long'
+| | `-ConstantExpr 'int' value=40
+| |   `-IntegerLiteral 'int' 40
+| |-FieldDecl referenced b 'bool'
+| | `-ConstantExpr 'int' value=1
+| |   `-IntegerLiteral 'int' 1
+| |-FieldDecl referenced us 'unsigned short'
+| | `-ConstantExpr 'int' value=5
+| |   `-IntegerLiteral 'int' 5
+| `-FieldDecl referenced c32 'char32_t'
+|   `-ConstantExpr 'int' value=5
+|     `-IntegerLiteral 'int' 5
+`-FunctionDecl f 'void (B *, char32_t, short, bool, unsigned int)'
+  |-ParmVarDecl used p 'B *'
+  |-ParmVarDecl used x 'char32_t'
+  |-ParmVarDecl used sh 'short'
+  |-ParmVarDecl used bb 'bool'
+  |-ParmVarDecl used u 'unsigned int'
+  `-CompoundStmt
+    |-CompoundAssignOperator 'unsigned int' lvalue bitfield '+=' ComputeLHSTy='int' ComputeResultTy='int'
+    | |-MemberExpr 'unsigned int' lvalue bitfield ->c
+    | | `-ImplicitCastExpr 'B *' <LValueToRValue>
+    | |   `-DeclRefExpr 'B *' lvalue ParmVar 'p' 'B *'
+    | `-IntegerLiteral 'int' 2
+    |-CompoundAssignOperator 'unsigned int' lvalue bitfield '+=' ComputeLHSTy='unsigned int' ComputeResultTy='unsigned int'
+    | |-MemberExpr 'unsigned int' lvalue bitfield ->c
+    | | `-ImplicitCastExpr 'B *' <LValueToRValue>
+    | |   `-DeclRefExpr 'B *' lvalue ParmVar 'p' 'B *'
+    | `-IntegerLiteral 'unsigned int' 2
+    |-CompoundAssignOperator 'unsigned int' lvalue bitfield '-=' ComputeLHSTy='unsigned int' ComputeResultTy='unsigned int'
+    | |-MemberExpr 'unsigned int' lvalue bitfield ->c
+    | | `-ImplicitCastExpr 'B *' <LValueToRValue>
+    | |   `-DeclRefExpr 'B *' lvalue ParmVar 'p' 'B *'
+    | `-ImplicitCastExpr 'unsigned int' <LValueToRValue>
+    |   `-DeclRefExpr 'unsigned int' lvalue ParmVar 'u' 'unsigned int'
+    |-CompoundAssignOperator 'unsigned int' lvalue bitfield '*=' ComputeLHSTy='double' ComputeResultTy='double'
+    | |-MemberExpr 'unsigned int' lvalue bitfield ->c
+    | | `-ImplicitCastExpr 'B *' <LValueToRValue>
+    | |   `-DeclRefExpr 'B *' lvalue ParmVar 'p' 'B *'
+    | `-FloatingLiteral 'double' 2e0
+    |-CompoundAssignOperator 'unsigned int' lvalue bitfield '&=' ComputeLHSTy='int' ComputeResultTy='int'
+    | |-MemberExpr 'unsigned int' lvalue bitfield ->c
+    | | `-ImplicitCastExpr 'B *' <LValueToRValue>
+    | |   `-DeclRefExpr 'B *' lvalue ParmVar 'p' 'B *'
+    | `-IntegerLiteral 'int' 3
+    |-CompoundAssignOperator 'unsigned int' lvalue bitfield '<<=' ComputeLHSTy='int' ComputeResultTy='int'
+    | |-MemberExpr 'unsigned int' lvalue bitfield ->c
+    | | `-ImplicitCastExpr 'B *' <LValueToRValue>
+    | |   `-DeclRefExpr 'B *' lvalue ParmVar 'p' 'B *'
+    | `-IntegerLiteral 'int' 1
+    |-CompoundAssignOperator 'int' lvalue bitfield '+=' ComputeLHSTy='int' ComputeResultTy='int'
+    | |-MemberExpr 'int' lvalue bitfield ->s
+    | | `-ImplicitCastExpr 'B *' <LValueToRValue>
+    | |   `-DeclRefExpr 'B *' lvalue ParmVar 'p' 'B *'
+    | `-IntegerLiteral 'int' 1
+    |-CompoundAssignOperator 'unsigned int' lvalue bitfield '+=' ComputeLHSTy='unsigned int' ComputeResultTy='unsigned int'
+    | |-MemberExpr 'unsigned int' lvalue bitfield ->w
+    | | `-ImplicitCastExpr 'B *' <LValueToRValue>
+    | |   `-DeclRefExpr 'B *' lvalue ParmVar 'p' 'B *'
+    | `-ImplicitCastExpr 'unsigned int' <IntegralCast>
+    |   `-IntegerLiteral 'int' 1
+    |-CompoundAssignOperator 'int' lvalue bitfield '+=' ComputeLHSTy='int' ComputeResultTy='int'
+    | |-MemberExpr 'int' lvalue bitfield ->iw
+    | | `-ImplicitCastExpr 'B *' <LValueToRValue>
+    | |   `-DeclRefExpr 'B *' lvalue ParmVar 'p' 'B *'
+    | `-IntegerLiteral 'int' 1
+    |-CompoundAssignOperator 'long' lvalue bitfield '+=' ComputeLHSTy='int' ComputeResultTy='int'
+    | |-MemberExpr 'long' lvalue bitfield ->l3
+    | | `-ImplicitCastExpr 'B *' <LValueToRValue>
+    | |   `-DeclRefExpr 'B *' lvalue ParmVar 'p' 'B *'
+    | `-IntegerLiteral 'int' 1
+    |-CompoundAssignOperator 'long' lvalue bitfield '+=' ComputeLHSTy='long' ComputeResultTy='long'
+    | |-MemberExpr 'long' lvalue bitfield ->l3
+    | | `-ImplicitCastExpr 'B *' <LValueToRValue>
+    | |   `-DeclRefExpr 'B *' lvalue ParmVar 'p' 'B *'
+    | `-IntegerLiteral 'long' 1
+    |-CompoundAssignOperator 'unsigned long' lvalue bitfield '+=' ComputeLHSTy='unsigned long' ComputeResultTy='unsigned long'
+    | |-MemberExpr 'unsigned long' lvalue bitfield ->ul
+    | | `-ImplicitCastExpr 'B *' <LValueToRValue>
+    | |   `-DeclRefExpr 'B *' lvalue ParmVar 'p' 'B *'
+    | `-ImplicitCastExpr 'unsigned long' <IntegralCast>
+    |   `-IntegerLiteral 'int' 1
+    |-CompoundAssignOperator 'bool' lvalue bitfield '+=' ComputeLHSTy='int' ComputeResultTy='int'
+    | |-MemberExpr 'bool' lvalue bitfield ->b
+    | | `-ImplicitCastExpr 'B *' <LValueToRValue>
+    | |   `-DeclRefExpr 'B *' lvalue ParmVar 'p' 'B *'
+    | `-IntegerLiteral 'int' 1
+    |-CompoundAssignOperator 'bool' lvalue bitfield '+=' ComputeLHSTy='int' ComputeResultTy='int'
+    | |-MemberExpr 'bool' lvalue bitfield ->b
+    | | `-ImplicitCastExpr 'B *' <LValueToRValue>
+    | |   `-DeclRefExpr 'B *' lvalue ParmVar 'p' 'B *'
+    | `-ImplicitCastExpr 'int' <IntegralCast>
+    |   `-CXXBoolLiteralExpr 'bool' true
+    |-CompoundAssignOperator 'unsigned short' lvalue bitfield '+=' ComputeLHSTy='int' ComputeResultTy='int'
+    | |-MemberExpr 'unsigned short' lvalue bitfield ->us
+    | | `-ImplicitCastExpr 'B *' <LValueToRValue>
+    | |   `-DeclRefExpr 'B *' lvalue ParmVar 'p' 'B *'
+    | `-IntegerLiteral 'int' 1
+    |-CompoundAssignOperator 'char32_t' lvalue bitfield '+=' ComputeLHSTy='int' ComputeResultTy='int'
+    | |-MemberExpr 'char32_t' lvalue bitfield ->c32
+    | | `-ImplicitCastExpr 'B *' <LValueToRValue>
+    | |   `-DeclRefExpr 'B *' lvalue ParmVar 'p' 'B *'
+    | `-IntegerLiteral 'int' 1
+    |-CompoundAssignOperator 'char32_t' lvalue '+=' ComputeLHSTy='unsigned int' ComputeResultTy='unsigned int'
+    | |-DeclRefExpr 'char32_t' lvalue ParmVar 'x' 'char32_t'
+    | `-ImplicitCastExpr 'unsigned int' <IntegralCast>
+    |   `-IntegerLiteral 'int' 1
+    |-CompoundAssignOperator 'short' lvalue '+=' ComputeLHSTy='int' ComputeResultTy='int'
+    | |-DeclRefExpr 'short' lvalue ParmVar 'sh' 'short'
+    | `-ImplicitCastExpr 'int' <IntegralCast>
+    |   `-ImplicitCastExpr 'short' <LValueToRValue>
+    |     `-DeclRefExpr 'short' lvalue ParmVar 'sh' 'short'
+    |-CompoundAssignOperator 'short' lvalue '+=' ComputeLHSTy='int' ComputeResultTy='int'
+    | |-DeclRefExpr 'short' lvalue ParmVar 'sh' 'short'
+    | `-IntegerLiteral 'int' 1
+    `-CompoundAssignOperator 'bool' lvalue '+=' ComputeLHSTy='int' ComputeResultTy='int'
+      |-DeclRefExpr 'bool' lvalue ParmVar 'bb' 'bool'
+      `-ImplicitCastExpr 'int' <IntegralCast>
+        `-ImplicitCastExpr 'bool' <LValueToRValue>
+          `-DeclRefExpr 'bool' lvalue ParmVar 'bb' 'bool'
