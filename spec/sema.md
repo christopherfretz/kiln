@@ -385,7 +385,7 @@ unscoped enumeration is reported (spec/oven.md "Integration").
 
 ## 10. To be implemented (M3+)
 - **Classes:** member functions, special members, `this`, access
-  control, bases and virtual functions.
+  control, bases and virtual functions. Design: [sema-class.md](sema-class.md).
 - **Overloading:** overload resolution beyond arity, user-defined
   conversions, operator overloading.
 - **Templates:** templates, concepts, packs; `auto` and `decltype`
