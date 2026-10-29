@@ -281,7 +281,10 @@ impl<'a> Cg<'a> {
                 let e = self.ir(e);
                 self.m.types.array(e, *n)
             }
-            IrType::Vector(_, _) => LTy::I8,
+            IrType::Vector(e, n) => {
+                let e = self.ir(e);
+                self.m.types.vector(e, u32::try_from(*n).unwrap_or(u32::MAX))
+            }
             IrType::Record(d) => self.record_ty(*d),
             IrType::Struct(fs, packed) => {
                 let fs: Vec<LTy> = fs.iter().map(|x| self.ir(x)).collect();
@@ -452,7 +455,7 @@ impl<'a> Cg<'a> {
             }
             ArgKind::Ignore => {}
         }
-        for a in sig.info.args.iter().take(n_args) {
+        for (i, a) in sig.info.args.iter().take(n_args).enumerate() {
             let mut s = Vec::new();
             if a.noundef {
                 s.push(Attr::Flag(AttrKind::NoUndef));
@@ -461,6 +464,12 @@ impl<'a> Cg<'a> {
                 ArgKind::Extend { signed, .. } => {
                     s.push(Attr::Flag(if *signed { AttrKind::SExt } else { AttrKind::ZExt }));
                 }
+                ArgKind::Indirect { byval: true, align } => {
+                    let t = self.mty(sig.params[i]);
+                    s.push(Attr::ByVal(t));
+                    s.push(Attr::Align(*align));
+                }
+                ArgKind::Direct { align: Some(n), .. } => s.push(Attr::AlignStack(*n)),
                 ArgKind::Direct { coerce: IrType::Struct(fs, _), flatten: true, .. } => {
                     for _ in 1..fs.len() {
                         params.push(self.m.attr_set(&s));

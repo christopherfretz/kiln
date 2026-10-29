@@ -1638,7 +1638,7 @@ impl Cg<'_> {
         }
         let q = ast.decls.get(d).ty().expect("var type");
         let ty = self.mty(q);
-        let (_, align) = self.size_align(q);
+        let align = self.global_align(q);
         let a = self.f.fir.alloca(ty, align);
         let addr = Addr { v: a, ty, align };
         self.f.locals.insert(d, addr);
