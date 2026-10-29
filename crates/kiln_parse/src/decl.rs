@@ -533,16 +533,13 @@ impl Parser<'_, '_> {
             self.spec_error(&e, loc);
         }
         let open = self.bump().span.lo;
-        match self.parse_constant_expr() {
-            Some(e) => {
-                ds.explicit_expr = Some(e);
-                self.expect_closing(Punct::RParen, Punct::LParen, open);
-            }
-            None => {
-                ds.invalid = true;
-                self.skip_until(&[Punct::RParen], false, false);
-                self.eat(Punct::RParen);
-            }
+        if let Some(e) = self.parse_constant_expr() {
+            ds.explicit_expr = Some(e);
+            self.expect_closing(Punct::RParen, Punct::LParen, open);
+        } else {
+            ds.invalid = true;
+            self.skip_until(&[Punct::RParen], false, false);
+            self.eat(Punct::RParen);
         }
     }
 

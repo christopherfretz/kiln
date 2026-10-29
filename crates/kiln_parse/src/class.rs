@@ -793,13 +793,14 @@ impl Parser<'_, '_> {
         let pack_expansion = self.eat(Punct::Ellipsis).is_some();
         let id = match q {
             None => MemInitId::Ident(name),
-            Some(q) => match self.s.classify_name(name, Some(q)) {
-                NameClass::Type(ty, d) => MemInitId::Type(self.named_type(ty, d)),
-                _ => {
+            Some(q) => {
+                if let NameClass::Type(ty, d) = self.s.classify_name(name, Some(q)) {
+                    MemInitId::Type(self.named_type(ty, d))
+                } else {
                     self.unsupported("qualified member initializers", loc);
                     return (None, true);
                 }
-            },
+            }
         };
         (Some(MemInitInfo { id, loc, init, pack_expansion }), true)
     }
@@ -937,6 +938,128 @@ impl Parser<'_, '_> {
         }
     }
 
+    /// The part of a member-declarator after the declarator itself, up to
+    /// its initializer ([class.mem.general]; clang's
+    /// `ParseCXXMemberDeclaratorBeforeInitializer`): a bit-width or
+    /// virt-specifiers, an asm label and attributes. Returns whether a
+    /// bit-width was present and whether it failed to parse.
+    fn parse_member_declarator_tail(&mut self, d: &mut Declarator, friend: bool) -> (bool, bool) {
+        let mut has_width = false;
+        let mut width_failed = false;
+        if !d.is_function_declarator() && self.at(Punct::Colon) {
+            self.bump();
+            has_width = true;
+            if let Some(w) = self.parse_constant_expr() {
+                d.bit_width = Some(w);
+            } else {
+                width_failed = true;
+                self.skip_until(&[Punct::Comma], true, false);
+            }
+        } else {
+            self.parse_virt_specifiers(d, friend);
+        }
+        match self.parse_asm_label() {
+            Ok(l) => d.asm_label = l,
+            Err(()) => {
+                self.skip_until(&[Punct::Comma], true, false);
+            }
+        }
+        if self.at_attr() {
+            self.parse_attributes(&mut d.attrs);
+        }
+        if !has_width && d.virt_final.is_none() && d.virt_override.is_none() {
+            self.parse_virt_specifiers(d, friend);
+        }
+        (has_width, width_failed)
+    }
+
+    /// Saves a default member initializer (`= x` or `{x}`) for replay
+    /// after the outermost class ([class.mem.general]/7, spec/parse.md
+    /// §4.1).
+    fn save_nsdmi(&mut self, decl: Option<DeclId>) {
+        let mut toks = Vec::new();
+        if self.at(Punct::Equal) {
+            self.take_into(&mut toks);
+            self.capture_initializer(InitKind::Nsdmi, &mut toks);
+        } else {
+            self.take_into(&mut toks);
+            self.capture_until(&[Punct::RBrace], &mut toks, true, true);
+        }
+        let end = self.loc();
+        if let Some(field) = decl
+            && self.s.ast.decls.get(field).kind() == DeclKind::Field
+        {
+            self.push_late(LateItem::Nsdmi { field, toks: LateToks { toks, end } });
+        }
+    }
+
+    /// A member initializer parsed in place: a static data member's
+    /// ([class.static.data]/3) or a function's non-pure `= x`. With no
+    /// initializer, a static data member is uninitialized.
+    fn parse_member_init_in_place(
+        &mut self,
+        d: &Declarator,
+        decl: Option<DeclId>,
+        init: bool,
+        is_static: bool,
+    ) {
+        let is_fn = d.is_function_declarator();
+        let var = decl.filter(|&v| self.s.ast.decls.get(v).kind() == DeclKind::Var);
+        if !init {
+            if is_static && let Some(v) = var {
+                self.s.act_on_uninit(v);
+            }
+            return;
+        }
+        match self.parse_member_initializer(is_fn) {
+            Some(_) if is_fn => {
+                if !d.invalid {
+                    self.s.error(DiagId::parse_bad_pure_specifier, d.name_loc());
+                }
+            }
+            Some(i) => {
+                if let Some(v) = var {
+                    self.trace(|_| "init".to_owned());
+                    self.s.act_on_init(v, i);
+                }
+            }
+            None => {
+                if let Some(v) = var {
+                    self.s.act_on_uninit(v);
+                }
+                self.skip_until(&[Punct::Comma], true, false);
+            }
+        }
+    }
+
+    /// The type named by a member declaration's decl-specifiers, formed
+    /// once the first declarator is known: clang reports a missing type
+    /// specifier at its name.
+    fn member_base_type(&mut self, ds: &DeclSpec, d: &Declarator) -> QualType {
+        if !ds.has_type_specifier() && is_untyped_special(d) {
+            QualType::VOID
+        } else if d.invalid && !ds.has_type_specifier() {
+            // A malformed special declarator-id (`operator;`) is reported;
+            // clang adds nothing about the type.
+            QualType::ERROR
+        } else {
+            self.s.type_from_declspec_at(ds, d.name_loc())
+        }
+    }
+
+    /// `decl-specifier-seq ;` in a class: a friend class declaration or a
+    /// declaration with no declarator ([class.mem.general]/3).
+    fn act_on_member_decl_spec_only(&mut self, ds: &DeclSpec) {
+        if let Some(fl) = ds.friend {
+            self.trace(|_| "friend".to_owned());
+            let base = self.s.type_from_declspec(ds);
+            let _ = self.s.act_on_friend(ds, base, None, fl);
+        } else {
+            self.trace(|_| "decl_spec_only".to_owned());
+            let _ = self.s.act_on_decl_spec_only(ds);
+        }
+    }
+
     /// member-declaration ([class.mem]; clang's
     /// `ParseCXXClassMemberDeclaration`).
     fn parse_member_declaration(&mut self) {
@@ -946,14 +1069,7 @@ impl Parser<'_, '_> {
         let ds = self.parse_decl_specifiers(DeclaratorContext::Member);
         if self.at(Punct::Semi) {
             self.bump();
-            if let Some(fl) = ds.friend {
-                self.trace(|_| "friend".to_owned());
-                let base = self.s.type_from_declspec(&ds);
-                let _ = self.s.act_on_friend(&ds, base, None, fl);
-            } else {
-                self.trace(|_| "decl_spec_only".to_owned());
-                let _ = self.s.act_on_decl_spec_only(&ds);
-            }
+            self.act_on_member_decl_spec_only(&ds);
             return;
         }
         if ds.is_empty() && !self.at_special_declarator(DeclaratorContext::Member) {
@@ -976,54 +1092,10 @@ impl Parser<'_, '_> {
                 self.parse_declarator(&mut d);
             }
             let parts = mem::take(&mut self.late_fn);
-            let untyped_special = !ds.has_type_specifier() && is_untyped_special(&d);
-            let base = match base_ty {
-                Some(b) => b,
-                None => {
-                    // The declspec's type is formed once the first
-                    // declarator is known: clang reports a missing type
-                    // specifier at its name.
-                    let b = if untyped_special {
-                        QualType::VOID
-                    } else if d.invalid && !ds.has_type_specifier() {
-                        // A malformed special declarator-id (`operator;`)
-                        // is reported; clang adds nothing about the type.
-                        QualType::ERROR
-                    } else {
-                        self.s.type_from_declspec_at(&ds, d.name_loc())
-                    };
-                    base_ty = Some(b);
-                    b
-                }
-            };
+            let base = *base_ty.get_or_insert_with(|| self.member_base_type(&ds, &d));
             let is_fn = d.is_function_declarator();
-            // clang's `ParseCXXMemberDeclaratorBeforeInitializer`.
-            let mut has_width = false;
-            let mut width_failed = false;
-            if !is_fn && self.at(Punct::Colon) {
-                self.bump();
-                has_width = true;
-                if let Some(w) = self.parse_constant_expr() {
-                    d.bit_width = Some(w);
-                } else {
-                    width_failed = true;
-                    self.skip_until(&[Punct::Comma], true, false);
-                }
-            } else {
-                self.parse_virt_specifiers(&mut d, ds.friend.is_some());
-            }
-            match self.parse_asm_label() {
-                Ok(l) => d.asm_label = l,
-                Err(()) => {
-                    self.skip_until(&[Punct::Comma], true, false);
-                }
-            }
-            if self.at_attr() {
-                self.parse_attributes(&mut d.attrs);
-            }
-            if !has_width && d.virt_final.is_none() && d.virt_override.is_none() {
-                self.parse_virt_specifiers(&mut d, ds.friend.is_some());
-            }
+            let (has_width, width_failed) =
+                self.parse_member_declarator_tail(&mut d, ds.friend.is_some());
             if !d.has_name() && !has_width {
                 if !d.invalid {
                     self.error_here(DiagId::parse_expected_member_name);
@@ -1064,52 +1136,10 @@ impl Parser<'_, '_> {
             }
             let (decl, target) =
                 if width_failed { (None, None) } else { self.act_on_member(&ds, base, &d) };
-            let is_var = decl.is_some_and(|v| self.s.ast.decls.get(v).kind() == DeclKind::Var);
             if nsdmi {
-                let mut toks = Vec::new();
-                if self.at(Punct::Equal) {
-                    self.take_into(&mut toks);
-                    self.capture_initializer(InitKind::Nsdmi, &mut toks);
-                } else {
-                    self.take_into(&mut toks);
-                    self.capture_until(&[Punct::RBrace], &mut toks, true, true);
-                }
-                let end = self.loc();
-                if let Some(field) = decl
-                    && self.s.ast.decls.get(field).kind() == DeclKind::Field
-                {
-                    self.push_late(LateItem::Nsdmi { field, toks: LateToks { toks, end } });
-                }
-            } else if init {
-                match self.parse_member_initializer(is_fn) {
-                    Some(i) if is_fn => {
-                        let _ = i;
-                        if !d.invalid {
-                            self.s.error(DiagId::parse_bad_pure_specifier, d.name_loc());
-                        }
-                    }
-                    Some(i) => {
-                        if let Some(v) = decl
-                            && is_var
-                        {
-                            self.trace(|_| "init".to_owned());
-                            self.s.act_on_init(v, i);
-                        }
-                    }
-                    None => {
-                        if let Some(v) = decl
-                            && is_var
-                        {
-                            self.s.act_on_uninit(v);
-                        }
-                        self.skip_until(&[Punct::Comma], true, false);
-                    }
-                }
-            } else if is_static
-                && let Some(v) = decl
-                && is_var
-            {
-                self.s.act_on_uninit(v);
+                self.save_nsdmi(decl);
+            } else {
+                self.parse_member_init_in_place(&d, decl, init, is_static);
             }
             if !parts.is_empty()
                 && let Some(f) = target
@@ -1371,15 +1401,12 @@ impl Parser<'_, '_> {
         let loc = self.loc();
         if self.at(Punct::Tilde) {
             self.bump();
-            match self.ident() {
-                Some(n) => {
-                    self.bump();
-                    d.special = Some((SpecialName::Destructor(n), loc));
-                }
-                None => {
-                    self.error_here(DiagId::parse_destructor_tilde_identifier);
-                    d.invalid = true;
-                }
+            if let Some(n) = self.ident() {
+                self.bump();
+                d.special = Some((SpecialName::Destructor(n), loc));
+            } else {
+                self.error_here(DiagId::parse_destructor_tilde_identifier);
+                d.invalid = true;
             }
             return;
         }
@@ -1572,13 +1599,11 @@ impl Parser<'_, '_> {
             return None;
         };
         let id_loc = self.bump().span.lo;
-        let ty = match self.s.classify_name(name, q) {
-            NameClass::Type(ty, d) => self.named_type(ty, d),
-            _ => {
-                self.s.error(DiagId::parse_expected_class_name, id_loc);
-                return None;
-            }
+        let NameClass::Type(ty, d) = self.s.classify_name(name, q) else {
+            self.s.error(DiagId::parse_expected_class_name, id_loc);
+            return None;
         };
+        let ty = self.named_type(ty, d);
         let pack_expansion = self.eat(Punct::Ellipsis).is_some();
         Some(BaseSpecInfo { ty, loc, is_virtual, access, pack_expansion, attrs })
     }
@@ -1799,7 +1824,7 @@ mod tests {
 
     /// [class.mem.general]/7: default member initializers are parsed after
     /// the outermost class is complete, nested classes first, each class's
-    /// in a start/finish_delayed_class pair; only the outermost class
+    /// in a `start/finish_delayed_class` pair; only the outermost class
     /// finishes its complete-class contexts.
     #[test]
     fn seq_nested_nsdmi_phase() {
@@ -1832,14 +1857,14 @@ mod tests {
     /// declared after it (it is replayed once the class is complete).
     #[test]
     fn nsdmi_sees_later_members() {
-        let (_, diags) = with_parser("struct S { int x = y; static const int y = 1; };", |p| {
+        let ((), diags) = with_parser("struct S { int x = y; static const int y = 1; };", |p| {
             p.parse_translation_unit();
         });
         assert!(!diags.iter().any(|d| d.contains("undeclared")), "{diags:?}");
     }
 
     /// [dcl.fct.def.general]: a namespace-scope definition is bracketed by
-    /// start/finish_function_def; `= delete` is reported as such.
+    /// `start/finish_function_def`; `= delete` is reported as such.
     #[test]
     fn seq_function_definitions() {
         trace_is("void f() {}", &["start_function_def(f)", "finish_function_def(f)"]);
