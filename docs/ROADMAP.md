@@ -74,9 +74,9 @@ record layout matching clang (checked by layout-dump differential tests).
 
 ## M4 — The rest of the language
 Namespaces/ADL corner cases, exceptions, RTTI, coroutines, modules (at least header units and `import std;` consumption),
-`consteval`, `constinit`, structured bindings, designated initializers,
+`consteval`, `constinit`, structured bindings,
 three-way comparison, deducing this, attributes, `thread_local`,
-static initialization order, inline variables, `[[no_unique_address]]`.
+static initialization order, inline variables.
 - Exit: `<vector>`, `<string>`, `<memory>`, `<optional>`, `<variant>`,
   `<tuple>`, `<algorithm>`, `<ranges>`, `<format>` compile; their libc++
   tests pass.
