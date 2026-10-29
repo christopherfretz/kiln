@@ -47,20 +47,22 @@ impl Sema<'_, '_> {
     }
 
     /// The function type a target type asks an overload set for
-    /// ([over.over]/1: the pointee of a pointer or reference to function,
-    /// or a function type), else the target itself.
-    fn address_target(&self, target: QualType) -> QualType {
+    /// ([over.over]/1: the pointee of a pointer or reference to function
+    /// or of a pointer to member function, or a function type), else the
+    /// target itself; and whether it is a pointer to member.
+    fn address_target(&self, target: QualType) -> (QualType, bool) {
         let t = &self.ast.types;
         let mut c = t.canonical(target);
         if let TypeView::LValueRef(p) | TypeView::RValueRef(p) = t.canonical_view(c) {
             c = t.canonical(p);
         }
-        if let TypeView::Pointer(p) = t.canonical_view(c)
-            && t.is_function(p)
-        {
-            return t.canonical(p).without_quals();
+        match t.canonical_view(c) {
+            TypeView::Pointer(p) if t.is_function(p) => (t.canonical(p).without_quals(), false),
+            TypeView::MemberPointer { pointee, .. } if t.is_function(pointee) => {
+                (t.canonical(pointee).without_quals(), true)
+            }
+            _ => (c.without_quals(), false),
         }
-        c.without_quals()
     }
 
     /// The candidates of `ule` (function, found declaration), in
@@ -79,10 +81,10 @@ impl Sema<'_, '_> {
     /// Whether the non-template function `d` matches the function type
     /// `fnty` ([over.over]/2, /5): equal, or equal after the function
     /// pointer conversion. Non-static members match only a pointer to
-    /// member (WP-068a: not yet).
-    fn address_matches(&mut self, d: DeclId, fnty: QualType) -> bool {
+    /// member function, the others only a non-member target.
+    fn address_matches(&mut self, d: DeclId, (fnty, member): (QualType, bool)) -> bool {
         if !matches!(self.kind_of(d), DeclKind::Function | DeclKind::CXXMethod)
-            || self.is_instance_member(d)
+            || self.is_instance_member(d) != member
         {
             return false;
         }
@@ -128,7 +130,12 @@ impl Sema<'_, '_> {
         ctx: AddrCtx,
         at: Loc,
     ) -> Option<ExprId> {
-        let (ule, _) = self.overload_operand(e)?;
+        let Some((ule, _)) = self.overload_operand(e) else {
+            if complain {
+                self.check_overload_use(e);
+            }
+            return None;
+        };
         let matches = self.address_candidates(ule, target);
         if let [(d, f)] = matches[..] {
             let naming = self.ovl.ule_found.get(&ule).and_then(|x| x.naming);
@@ -157,7 +164,7 @@ impl Sema<'_, '_> {
             self.emit(notes.into_iter().fold(msg, Diag::with_note));
             return None;
         }
-        let fnty = self.address_target(target);
+        let (fnty, _) = self.address_target(target);
         let (msg, detailed) = match ctx {
             AddrCtx::Convert => (
                 self.diag(DiagId::sema_addr_ovl_no_match, loc)
@@ -211,12 +218,23 @@ impl Sema<'_, '_> {
             ExprKind::UnaryOperator => {
                 let inner = self.ast.exprs.operand(e);
                 let x = self.rebuild_over(inner, ule, r);
-                let t = self.ety(x);
-                let ty = self.ast.types.pointer_to(t);
-                self.builder().unary(UnaryOp::AddrOf, x, ty, n.loc(), ExprFlags::CANNOT_OVERFLOW)
+                // `&C::m` of a non-static member: a pointer to member.
+                self.act_on_unary(UnaryOp::AddrOf, x, n.loc())
             }
             _ => r,
         }
+    }
+
+    /// `e` (parentheses around an overloaded name) with the name replaced
+    /// by its resolution `r`.
+    pub(crate) fn rebuild_parens(&mut self, e: ExprId, r: ExprId) -> ExprId {
+        let n = *self.ast.exprs.get(e);
+        if n.kind() != ExprKind::ParenExpr {
+            return r;
+        }
+        let x = self.rebuild_parens(self.ast.exprs.operand(e), r);
+        let rp = self.ast.exprs.end_loc(e).unwrap_or(n.loc());
+        self.builder().paren(x, n.loc(), rp)
     }
 
     /// "candidate function" at `d`.
@@ -275,6 +293,20 @@ impl Sema<'_, '_> {
     /// resolved" with a "possible target for call" per candidate. True
     /// if `e` was one (and is now diagnosed).
     pub(crate) fn check_overload_use(&mut self, e: ExprId) -> bool {
+        if let Some(x) = self.member_overload(e) {
+            // [expr.ref]/7.3.2: a member function can only be called.
+            let no_args = self.member_overload_decls(x).iter().any(|&d| {
+                self.ast.decls.function(d).is_some_and(|f| self.ast.lists.get(f.params).is_empty())
+            });
+            let msg = self.diag(DiagId::sema_bound_member_not_called, self.eloc(x)).arg(u8::from(no_args));
+            let notes: Vec<Diag> = self
+                .member_overload_decls(x)
+                .iter()
+                .map(|&d| self.diag(DiagId::note_possible_target, self.ast.decls.get(d).loc()))
+                .collect();
+            self.emit(notes.into_iter().fold(msg, Diag::with_note));
+            return true;
+        }
         let Some((ule, _)) = self.overload_operand(e) else { return false };
         let loc = self.begin_loc(e);
         let msg = self.diag(DiagId::sema_ovl_unresolvable, loc).arg(0u8);

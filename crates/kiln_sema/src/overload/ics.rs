@@ -269,7 +269,11 @@ impl Sema<'_, '_> {
         };
         let ft = self.ast.decls.get(d).ty().unwrap_or(QualType::ERROR);
         let addr = self.overload_operand(e).is_some_and(|(_, addr)| addr);
-        let f = if addr {
+        let class = self.is_instance_member(d).then(|| self.declaring_class(d)).flatten();
+        let f = if let Some(c) = class {
+            let ct = self.tag_type(c).ty();
+            ArgInfo::of_type(self.ast.types.member_pointer(ft, ct), ValueCategory::PRValue)
+        } else if addr {
             ArgInfo::of_type(self.ast.types.pointer_to(ft), ValueCategory::PRValue)
         } else {
             ArgInfo::of_type(ft, ValueCategory::LValue)

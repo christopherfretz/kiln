@@ -817,6 +817,12 @@ pub fn implicit_convert(
             s.resolve_address_of_overloaded(e, to, true, crate::overload::address::AddrCtx::Convert, at)
         };
         return match resolved {
+            // A non-static member without an object: reported at the end
+            // of the full-expression ([expr.prim.id.general]/4).
+            Some(x) if s.member_refs.get(&x).is_some_and(|r| r.error) => {
+                let loc = s.eloc(x);
+                Ok(s.recover_err(&[x], loc))
+            }
             Some(x) => implicit_convert(s, x, to, ctx),
             None => {
                 let loc = s.eloc(e);

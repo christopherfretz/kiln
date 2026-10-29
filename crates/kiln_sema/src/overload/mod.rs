@@ -7,6 +7,7 @@
 //! [`Sema`] so steady-state resolution allocates nothing (§1.4).
 
 pub(crate) mod address;
+pub(crate) mod member;
 pub(crate) mod adl;
 pub(crate) mod best;
 pub(crate) mod call;
@@ -293,6 +294,39 @@ pub(crate) struct OverloadScratch {
     /// decls, kept only when there is something to keep (a using-shadow
     /// or a naming class): consumed by [`Sema::resolve_unresolved_call`].
     pub ule_found: kiln_source::fx::FxHashMap<kiln_ast::ExprId, UleFound>,
+    /// The overload set an overloaded member access (a `MemberExpr` of
+    /// type [`QualType::OVERLOAD`], kiln's `UnresolvedMemberExpr`) names:
+    /// consumed by [`Sema::resolve_member_call`].
+    pub members: kiln_source::fx::FxHashMap<kiln_ast::ExprId, OvlMember>,
+}
+
+/// An overloaded member access `b.f` / `b->f` / implicit `this->f`
+/// (spec/sema-overload.md §2.3).
+#[derive(Clone, Debug)]
+pub(crate) struct OvlMember {
+    /// The member name.
+    pub name: kiln_source::symbol::Symbol,
+    /// The member functions (and member function templates), in
+    /// declaration order.
+    pub decls: Vec<DeclId>,
+    /// Parallel to `decls`: the declaration lookup found.
+    pub found: Vec<DeclId>,
+    /// The naming class ([class.access.base]/5).
+    pub naming: DeclId,
+    /// The object expression's class type (the pointee for `->`).
+    pub obj_ty: QualType,
+    /// The object's complete class.
+    pub def: DeclId,
+    /// The object expression (a pointer for `arrow`).
+    pub base: kiln_ast::ExprId,
+    /// `->` (or an implicit `this->`).
+    pub arrow: bool,
+    /// The nested-name-specifier of a qualified-id (`C::f(…)`: no virtual
+    /// dispatch).
+    pub nns: Option<kiln_ast::NnsId>,
+    /// The object is an implicit `this` (a static winner is then named
+    /// by a `DeclRefExpr`, as clang does).
+    pub implicit: bool,
 }
 
 /// The lookup details of an `UnresolvedLookupExpr` its decl list does not
@@ -321,6 +355,12 @@ impl OverloadScratch {
             + self.failed.as_ref().map_or(0, one)
             + self.ule_found.capacity() * size_of::<(kiln_ast::ExprId, UleFound)>()
             + self.ule_found.values().map(|u| u.found.capacity() * size_of::<DeclId>()).sum::<usize>()
+            + self.members.capacity() * size_of::<(kiln_ast::ExprId, OvlMember)>()
+            + self
+                .members
+                .values()
+                .map(|m| (m.decls.capacity() + m.found.capacity()) * size_of::<DeclId>())
+                .sum::<usize>()
     }
 }
 

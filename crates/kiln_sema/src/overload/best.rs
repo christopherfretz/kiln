@@ -8,9 +8,49 @@ use super::{
     SetKind,
 };
 use crate::Sema;
-use crate::conv::{IcsCompare, compare_standard_conversions};
+use crate::conv::{IcsCompare, RefBinding, compare_standard_conversions};
 
 impl Sema<'_, '_> {
+    /// Whether no function template specialization could be a better
+    /// candidate than the non-template candidate `b` of `set`, so that
+    /// skipping the set's templates (until WP-071) cannot change the
+    /// result: every conversion sequence of `b` is an identity no other
+    /// sequence beats ([over.ics.rank]/3.2.1, /3.2.3-3.2.6), and a
+    /// template that ties loses to it ([over.match.best.general]/2.4).
+    pub(crate) fn template_cannot_win(&self, set: &OverloadCandidateSet, b: u32) -> bool {
+        let c = set.cand(b);
+        if c.final_conv.is_some_and(|f| !f.is_identity()) {
+            return false;
+        }
+        let r = c.ics.start as usize..c.ics.end as usize;
+        set.ics.get(r).is_some_and(|xs| xs.iter().all(|x| self.unbeatable_ics(x)))
+    }
+
+    fn unbeatable_ics(&self, x: &Ics) -> bool {
+        let Ics::Standard(s) = x else { return false };
+        if s.rb.contains(RefBinding::IGNORED) {
+            return true;
+        }
+        if !s.is_identity() {
+            return false;
+        }
+        if !s.rb.contains(RefBinding::IS_REF) {
+            return true;
+        }
+        let cv = |q| self.ast.types.effective_quals(q) & kiln_ast::types::Quals::CV;
+        if cv(s.to_types[2]) != cv(s.from) {
+            return false;
+        }
+        let lref = s.rb.contains(RefBinding::LVALUE_REF);
+        if s.rb.contains(RefBinding::OBJECT_NO_REF_QUAL) {
+            true
+        } else if s.rb.contains(RefBinding::BINDS_FUNCTION_LVALUE) {
+            lref
+        } else {
+            lref != s.rb.contains(RefBinding::BINDS_RVALUE)
+        }
+    }
+
     /// Adds function `f` (found as `found`) to `set` as a candidate of
     /// kind `kind` for the set's arguments (and object argument): checks
     /// arity ([over.match.viable]/2), then computes one conversion

@@ -87,20 +87,7 @@ impl Sema<'_, '_> {
             return Some(self.finish_overload_ref(d, f, naming, n.loc(), nns, ule, true));
         }
         let mut set = self.begin_set(SetKind::Normal, at);
-        let base = self.ovl.lists.len();
-        for (i, &a) in args.iter().enumerate() {
-            match braced.get(i).and_then(Option::as_ref) {
-                Some(l) => {
-                    let idx = u32::try_from(self.ovl.lists.len()).unwrap_or(u32::MAX);
-                    self.ovl.lists.push(l.clone());
-                    set.args.push(ArgInfo {
-                        list: Some(idx),
-                        ..ArgInfo::of_type(QualType::VOID, ValueCategory::PRValue)
-                    });
-                }
-                None => set.args.push(self.arg_info(a)),
-            }
-        }
+        let base = self.push_call_args(&mut set, args, braced);
         for (i, &(d, f)) in cands.iter().enumerate() {
             if self.kind_of(d) == DeclKind::FunctionTemplate {
                 set.skipped_templates = true;
@@ -123,6 +110,31 @@ impl Sema<'_, '_> {
         r
     }
 
+    /// Adds the call arguments `args` (`braced` the braced-init-list ones)
+    /// to `set`; returns the mark to truncate `ovl.lists` back to.
+    pub(crate) fn push_call_args(
+        &mut self,
+        set: &mut OverloadCandidateSet,
+        args: &[ExprId],
+        braced: &[Option<InitList>],
+    ) -> usize {
+        let base = self.ovl.lists.len();
+        for (i, &a) in args.iter().enumerate() {
+            match braced.get(i).and_then(Option::as_ref) {
+                Some(l) => {
+                    let idx = u32::try_from(self.ovl.lists.len()).unwrap_or(u32::MAX);
+                    self.ovl.lists.push(l.clone());
+                    set.args.push(ArgInfo {
+                        list: Some(idx),
+                        ..ArgInfo::of_type(QualType::VOID, ValueCategory::PRValue)
+                    });
+                }
+                None => set.args.push(self.arg_info(a)),
+            }
+        }
+        base
+    }
+
     #[allow(clippy::too_many_arguments, reason = "the call's parts")]
     fn finish_overloaded_call(
         &mut self,
@@ -135,9 +147,30 @@ impl Sema<'_, '_> {
         nns: Option<kiln_ast::NnsId>,
         ule: ExprId,
     ) -> Option<ExprId> {
+        let b = self.call_winner(set, out, name, at, loc, false)?;
+        let c = set.cand(b);
+        let (d, f) = (c.func(), c.found);
+        Some(self.finish_overload_ref(d, f, naming, loc, nns, ule, false))
+    }
+
+    /// The best viable candidate of the call set `set` of the function
+    /// named `name` (`member`: a member function call), or `None` after
+    /// diagnosing the failure at `at` (§9.1; `loc` the name, for the
+    /// unimplemented-feature reports).
+    pub(crate) fn call_winner(
+        &mut self,
+        set: &OverloadCandidateSet,
+        out: OvlOutcome,
+        name: kiln_source::symbol::Symbol,
+        at: Loc,
+        loc: Loc,
+        member: bool,
+    ) -> Option<u32> {
         let text = self.ast.symbols().as_str(name).to_owned();
         let undecided = set.uncertain
-            || (set.skipped_templates && !matches!(out, OvlOutcome::Success(_) | OvlOutcome::Deleted(_)));
+            || (set.skipped_templates
+                && !matches!(out, OvlOutcome::Success(b) | OvlOutcome::Deleted(b)
+                    if self.template_cannot_win(set, b)));
         if undecided {
             if set.skipped_templates {
                 self.templ_unimplemented("calls to function templates", loc);
@@ -146,35 +179,29 @@ impl Sema<'_, '_> {
             }
             return None;
         }
-        match out {
-            OvlOutcome::Success(b) => {
-                let c = set.cand(b);
-                let (d, f) = (c.func(), c.found);
-                Some(self.finish_overload_ref(d, f, naming, loc, nns, ule, false))
-            }
+        let (id, ambiguous) = match out {
+            OvlOutcome::Success(b) => return Some(b),
             OvlOutcome::Deleted(b) => {
                 let d = set.cand(b).func();
-                let msg = self
-                    .diag(DiagId::sema_call_deleted_function, at)
-                    .arg(self.decl_arg(d))
-                    .arg(self.delete_message_suffix(d));
+                let (id, name) = if member {
+                    (DiagId::sema_ovl_deleted_member_call, text)
+                } else {
+                    (DiagId::sema_call_deleted_function, self.decl_arg(d))
+                };
+                let msg = self.diag(id, at).arg(name).arg(self.delete_message_suffix(d));
                 let msg = self.with_ovl_notes(msg, set, false);
                 self.emit(msg);
-                None
+                return None;
             }
-            OvlOutcome::NoViable => {
-                let msg = self.diag(DiagId::sema_ovl_no_viable_function_in_call, at).arg(text);
-                let msg = self.with_ovl_notes(msg, set, false);
-                self.emit(msg);
-                None
-            }
-            OvlOutcome::Ambiguous => {
-                let msg = self.diag(DiagId::sema_ovl_ambiguous_call, at).arg(text);
-                let msg = self.with_ovl_notes(msg, set, true);
-                self.emit(msg);
-                None
-            }
-        }
+            OvlOutcome::NoViable if member => (DiagId::sema_ovl_no_viable_member_function_in_call, false),
+            OvlOutcome::NoViable => (DiagId::sema_ovl_no_viable_function_in_call, false),
+            OvlOutcome::Ambiguous if member => (DiagId::sema_ovl_ambiguous_member_call, true),
+            OvlOutcome::Ambiguous => (DiagId::sema_ovl_ambiguous_call, true),
+        };
+        let msg = self.diag(id, at).arg(text);
+        let msg = self.with_ovl_notes(msg, set, ambiguous);
+        self.emit(msg);
+        None
     }
 
     /// The `DeclRefExpr` naming the selected function `d` (found as
@@ -192,10 +219,19 @@ impl Sema<'_, '_> {
         ule: ExprId,
         single: bool,
     ) -> ExprId {
+        let instance = self.is_class_member_ref(d);
         if let Some(naming) = naming {
-            self.check_member_access(found, naming, None, loc);
+            // [class.access.base]/5: the object is `*this` for an
+            // implicit member access.
+            let object = if instance { self.implicit_object_class(d) } else { None };
+            self.check_member_access(found, naming, object, loc);
         }
         let shadow = (found != d).then_some(found);
+        if instance {
+            // A non-static member without an object: `&C::f`, or "call to
+            // non-static member function without an object argument".
+            return self.implicit_member_ref(d, loc, shadow, nns.is_some());
+        }
         let e = self.build_decl_ref_qualified(d, loc, shadow, nns);
         if let Some(&b) = self.ast.templates.expr_begin.get(ule)
             && b != loc

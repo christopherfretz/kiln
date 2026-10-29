@@ -839,11 +839,8 @@ impl Sema<'_, '_> {
         nns: Option<kiln_ast::NnsId>,
         loc: Loc,
     ) -> Option<ExprId> {
-        if valid.iter().any(|&d| self.is_instance_member(d)) {
-            // Overloaded non-static members: an `UnresolvedMemberExpr`
-            // (spec/sema-overload.md §2.3).
-            self.unsupported("overloaded member functions", loc);
-            return None;
+        if let Some(e) = self.implicit_member_overload(name, found, valid, nns, loc) {
+            return Some(e);
         }
         let adl = found.naming.is_none() && self.call_uses_adl(valid, unqualified);
         let mut decls: Vec<DeclId> = Vec::with_capacity(valid.len());
@@ -859,6 +856,57 @@ impl Sema<'_, '_> {
             via.reverse();
         }
         Some(self.build_overload_ref(name, &decls, &via, found.naming, adl, nns, loc))
+    }
+
+    /// An overloaded member name used with an implicit object
+    /// ([class.mfct.non.static]/2, [over.match.call]/2.2): `this->f` where
+    /// `this` may be used and its class is (derived from) the members'
+    /// class (spec/sema-overload.md §2.3). Without such a `this` the set
+    /// stays an `UnresolvedLookupExpr`, and a non-static winner is "call
+    /// to non-static member function without an object argument".
+    fn implicit_member_overload(
+        &mut self,
+        name: Symbol,
+        found: &crate::lookup::Found,
+        valid: &[DeclId],
+        nns: Option<kiln_ast::NnsId>,
+        loc: Loc,
+    ) -> Option<ExprId> {
+        let instance = |s: &Self, d: DeclId| {
+            let d = if s.kind_of(d) == DeclKind::FunctionTemplate { s.pattern_of(d).unwrap_or(d) } else { d };
+            s.is_instance_member(d)
+        };
+        let &first = valid.iter().find(|&&d| instance(self, d))?;
+        let first = if self.kind_of(first) == DeclKind::FunctionTemplate {
+            self.pattern_of(first).unwrap_or(first)
+        } else {
+            first
+        };
+        let class = self.implicit_object_class(first)?;
+        let (this_ty, _) = self.this_class()?;
+        let mut decls = Vec::with_capacity(valid.len());
+        let mut via = Vec::with_capacity(valid.len());
+        for (i, &d) in found.decls.iter().enumerate() {
+            if valid.contains(&d) {
+                decls.push(d);
+                via.push(found.found.get(i).copied().unwrap_or(d));
+            }
+        }
+        let this = self.builder().this_expr(this_ty, true, loc);
+        let obj_ty = self.ast.types.pointee(this_ty).unwrap_or(QualType::ERROR);
+        let set = crate::overload::OvlMember {
+            name,
+            decls,
+            found: via,
+            naming: found.naming.unwrap_or(class),
+            obj_ty,
+            def: class,
+            base: this,
+            arrow: true,
+            nns,
+            implicit: true,
+        };
+        Some(self.build_member_overload(set, loc))
     }
 
     /// A `DeclRefExpr` naming the value `d`.
@@ -1419,6 +1467,24 @@ impl Sema<'_, '_> {
     }
 
     fn address_of(&mut self, e: ExprId, loc: Loc) -> ExprId {
+        if let Some(x) = self.member_overload(e) {
+            if x == e
+                && let Some(ule) = self.member_overload_as_lookup(x)
+            {
+                // `&C::f` in a member function of `C`: the overload set
+                // a pointer to member is taken from ([expr.unary.op]/3).
+                return self.builder().unary(
+                    UnaryOp::AddrOf,
+                    ule,
+                    QualType::OVERLOAD,
+                    loc,
+                    ExprFlags::CANNOT_OVERFLOW,
+                );
+            }
+            // [expr.unary.op]/4: `&b.f` is not a pointer to member.
+            self.error(DiagId::sema_nonconst_member_fn_ptr, loc);
+            return self.recover_err(&[e], loc);
+        }
         if self.overload_operand(e).is_some_and(|(_, addr)| !addr) {
             // [over.over]: `&f` of an overload set is resolved by its target.
             return self.builder().unary(
@@ -2259,6 +2325,13 @@ impl Sema<'_, '_> {
         {
             match self.resolve_unresolved_call(callee, args, &braced) {
                 Some(e) if !self.is_err_expr(e) => e,
+                _ => return self.recover_err(&kids, loc),
+            }
+        } else if self.member_overload(callee).is_some()
+            && !args.iter().any(|&a| self.expr_is_type_dependent(a))
+        {
+            match self.resolve_member_call(callee, args, &braced) {
+                Some(e) if !self.is_err_expr(e) => self.rebuild_parens(callee, e),
                 _ => return self.recover_err(&kids, loc),
             }
         } else {

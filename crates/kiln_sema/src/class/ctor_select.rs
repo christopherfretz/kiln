@@ -82,6 +82,11 @@ impl Sema<'_, '_> {
         let skipped = set.skipped_templates;
         let r = match out {
             _ if unsure => Selected::Unsupported,
+            OvlOutcome::Success(b) | OvlOutcome::Deleted(b)
+                if skipped && !self.template_cannot_win(&set, b) =>
+            {
+                Selected::Unsupported
+            }
             OvlOutcome::Success(b) => Selected::Found(set.cand(b).func()),
             OvlOutcome::Deleted(b) => Selected::Deleted(set.cand(b).func()),
             OvlOutcome::NoViable | OvlOutcome::Ambiguous if skipped => Selected::Unsupported,
