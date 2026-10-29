@@ -162,11 +162,18 @@ impl Sema<'_, '_> {
                 }
             }
             TypeSpecKind::Float128 => QualType::FLOAT128,
-            TypeSpecKind::Auto => {
-                self.ast.types.auto_type(AutoKeyword::Auto, None, None, None, false)
-            }
-            TypeSpecKind::DecltypeAuto => {
-                self.ast.types.auto_type(AutoKeyword::DecltypeAuto, None, None, None, false)
+            TypeSpecKind::Auto | TypeSpecKind::DecltypeAuto => {
+                let kw = if ds.base == TypeSpecKind::Auto {
+                    AutoKeyword::Auto
+                } else {
+                    AutoKeyword::DecltypeAuto
+                };
+                let (c, args) = match &ds.auto_constraint {
+                    Some((c, a)) if a.is_empty() => (Some(*c), None),
+                    Some((c, a)) => (Some(*c), Some(self.ast.types.arg_list(a))),
+                    None => (None, None),
+                };
+                self.ast.types.auto_type(kw, None, c, args, false)
             }
             TypeSpecKind::Named => ds.named.unwrap_or(QualType::ERROR),
         };

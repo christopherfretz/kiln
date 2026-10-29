@@ -194,6 +194,9 @@ pub struct DeclSpec {
     pub loc: Loc,
     /// An error was already reported.
     pub invalid: bool,
+    /// The type-constraint `C<args>` of a placeholder `C auto`
+    /// ([dcl.spec.auto.general]/1).
+    pub auto_constraint: Option<(DeclId, Vec<kiln_ast::types::TemplateArg>)>,
 }
 
 impl DeclSpec {

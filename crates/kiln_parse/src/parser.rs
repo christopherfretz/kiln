@@ -91,6 +91,10 @@ pub struct Parser<'a, 'sm> {
     /// argument instead of being an operator ([temp.names]/4, clang's
     /// `GreaterThanIsOperator`). Brackets restore it.
     pub(crate) greater_is_op: bool,
+    /// The parameter-declaration being parsed declares a type with an
+    /// unexpanded pack (or `auto`): a `...` before its `)` belongs to the
+    /// declarator, not the parameter list ([dcl.fct]/14).
+    pub(crate) pack_hint: bool,
 }
 
 impl std::fmt::Debug for Parser<'_, '_> {
@@ -128,6 +132,7 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             trace: Vec::new(),
             in_stmt_expr: false,
             greater_is_op: true,
+            pack_hint: false,
         };
         p.handle_events(0);
         p
@@ -751,19 +756,84 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             self.bump();
             qual = Some((self.s.ast.tu, self.s.nns_global()));
         }
-        while let Some(name) = self.ident() {
-            if !self.peek_is(1, Punct::ColonColon) {
+        loop {
+            // `nns template name<args>::` ([temp.names]/5).
+            let template_kw = qual.is_some()
+                && self.kw_of(self.tok_at(self.pos)) == Some(Kw::Template)
+                && self.ident_of(self.tok_at(self.pos + 1)).is_some();
+            let k = usize::from(template_kw);
+            let Some(name) = self.ident_of(self.tok_at(self.pos + k)) else { break };
+            let next = self.tok_at(self.pos + k + 1).kind;
+            if !template_kw && next == TokKind::Punct(Punct::ColonColon) {
+                let loc = self.bump().span.lo;
+                self.bump();
+                qual = Some(self.s.act_on_nested_name_component(qual, name, loc).ok_or(())?);
+                continue;
+            }
+            if next != TokKind::Punct(Punct::Less) {
                 break;
             }
-            let loc = self.bump().span.lo;
-            self.bump();
-            let Some((ctx, spelled)) =
-                self.s.act_on_nested_name_spelled(qual.map(|q| q.0), name, loc)
-            else {
-                return Err(());
+            // `name < args > ::` with the list closing on a whole `>`.
+            match self.skip_template_args(self.pos + k + 1) {
+                Some((close, false))
+                    if self.tok_at(close + 1).kind == TokKind::Punct(Punct::ColonColon) => {}
+                _ => break,
+            }
+            let dep_prefix = qual.is_some_and(|(c, _)| self.s.is_dependent_ctx(c));
+            let class = if dep_prefix {
+                NameClass::Dependent
+            } else {
+                self.s.classify_name(name, qual.map(|q| q.0))
             };
-            let nns = self.s.nns_component(qual.map(|q| q.1), ctx, spelled);
-            qual = Some((ctx, nns));
+            if !template_kw && !is_template_class(class) {
+                if class != NameClass::Dependent {
+                    break;
+                }
+                let text = self.s.ast.symbols().as_str(name).to_owned();
+                let d = self
+                    .s
+                    .diag(DiagId::parse_missing_dependent_template_kw, self.tok_at(self.pos).span.lo)
+                    .arg(text);
+                self.emit(d);
+            }
+            if template_kw {
+                self.bump();
+            }
+            let loc = self.bump().span.lo;
+            let Some((args, _, _)) = self.parse_template_arg_list() else { return Err(()) };
+            self.expect(Punct::ColonColon);
+            let prefix_nns = qual.map(|q| q.1);
+            qual = Some(match (class, qual) {
+                (NameClass::TypeTemplate(d), _) if !dep_prefix => {
+                    let tn = self.s.template_name_for(d);
+                    let Ok(kiln_sema::templ::actions::TemplateIdRef::Type(ty)) =
+                        self.s.act_template_id(tn, &args, loc, loc)
+                    else {
+                        return Err(());
+                    };
+                    self.s
+                        .act_on_nested_name_template_id(prefix_nns, d, ty, template_kw, loc)
+                        .ok_or(())?
+                }
+                (_, Some((c, pn))) if dep_prefix || class == NameClass::Dependent => {
+                    let list = self.s.ast.types.arg_list(&args);
+                    let ty = self.s.act_dependent_name(
+                        pn,
+                        name,
+                        Some(list),
+                        kiln_ast::types::TagKeyword::None,
+                    );
+                    self.s
+                        .act_on_nested_name_template_id(Some(pn), c, ty, template_kw, loc)
+                        .ok_or(())?
+                }
+                _ => {
+                    let text = self.s.ast.symbols().as_str(name).to_owned();
+                    let d = self.s.diag(DiagId::sema_no_template_named, loc).arg(text);
+                    self.emit(d);
+                    return Err(());
+                }
+            });
         }
         Ok(qual.map(|(ctx, nns)| Qualifier { ctx, nns, loc: start }))
     }

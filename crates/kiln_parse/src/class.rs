@@ -517,6 +517,7 @@ impl Parser<'_, '_> {
             let open = self.bump().span.lo;
             while !self.at(Punct::RBrace) && !self.at_eof() {
                 self.parse_member_declaration();
+                self.s.act_on_end_abbreviated();
             }
             self.expect_closing(Punct::RBrace, Punct::LBrace, open);
         } else {

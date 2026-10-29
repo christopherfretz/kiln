@@ -666,4 +666,53 @@ impl Sema<'_, '_> {
             }
         }
     }
+
+    /// True if class template `tmpl`'s name, used without arguments here,
+    /// is its injected-class-name: inside its definition ([temp.local]/1).
+    pub fn names_injected_class(&self, tmpl: DeclId) -> bool {
+        self.kind_of(tmpl) == DeclKind::ClassTemplate
+            && self.pattern_of(tmpl).is_some_and(|p| self.encloses(p, self.ctx))
+    }
+
+    /// The injected-class-name of class template `tmpl` used without
+    /// arguments inside its own definition ([temp.local]/1): `X<P...>`
+    /// for its parameters `P`, as an `InjectedClassNameType`. `None`
+    /// outside the definition.
+    pub fn injected_class_type(&mut self, tmpl: DeclId) -> Option<QualType> {
+        if !self.names_injected_class(tmpl) {
+            return None;
+        }
+        let pat = self.pattern_of(tmpl)?;
+        let info = self.ast.template_info(tmpl).copied()?;
+        let list = *self.ast.templates.param_list(info.params);
+        let params: Vec<DeclId> = self.ast.lists.iter::<DeclId>(list.params).collect();
+        let mut args = Vec::with_capacity(params.len());
+        for p in params {
+            let pack = self.ast.template_parm(p).is_some_and(|i| i.pack);
+            let loc = self.ast.decls.get(p).loc();
+            let a = match self.kind_of(p) {
+                DeclKind::TemplateTypeParm => {
+                    let t = self.ast.decls.get(p).ty().unwrap_or(QualType::ERROR);
+                    TemplateArg::ty(if pack { self.ast.types.pack_expansion(t, None) } else { t })
+                }
+                DeclKind::NonTypeTemplateParm => {
+                    let mut e = self.build_decl_ref(p, loc);
+                    if pack {
+                        e = self.act_pack_expansion(e, loc);
+                    }
+                    self.builder().template_arg_expr(e)
+                }
+                _ => {
+                    let n = self.template_name_for(p);
+                    if pack { TemplateArg::template_expansion(n, None) } else { TemplateArg::template(n) }
+                }
+            };
+            args.push(a);
+        }
+        let name = self.template_name_for(tmpl);
+        let list = self.ast.types.arg_list(&args);
+        let spec = self.ast.types.template_specialization(name, list, None, false);
+        let pat = self.ast.definition(pat).unwrap_or(pat);
+        Some(self.ast.types.injected_class_name(pat, spec.ty()).into())
+    }
 }

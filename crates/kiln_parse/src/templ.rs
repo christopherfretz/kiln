@@ -558,7 +558,7 @@ impl Parser<'_, '_> {
     /// `typename nested-name-specifier template? name (< args >)?`
     /// ([temp.res.general]/3) at `typename`.
     pub(crate) fn parse_typename_specifier(&mut self) -> Option<QualType> {
-        let kw_loc = self.bump().span.lo;
+        self.bump();
         let qual = self.parse_nested_name_nns().ok()?;
         let Some(q) = qual else {
             let d = self.s.diag(DiagId::parse_expected_qualified_after_typename, self.loc());
@@ -568,6 +568,17 @@ impl Parser<'_, '_> {
             }
             return None;
         };
+        self.parse_qualified_type_rest(q, TagKeyword::Typename)
+    }
+
+    /// The `template? name (< args >)?` after qualifier `q` naming a type:
+    /// a dependent name type (with keyword `kw`) when `q` is dependent,
+    /// else the type found by qualified lookup.
+    pub(crate) fn parse_qualified_type_rest(
+        &mut self,
+        q: kiln_sema::using::Qualifier,
+        kw: TagKeyword,
+    ) -> Option<QualType> {
         let template_kw = self.eat_kw(Kw::Template).is_some();
         let Some(name) = self.ident() else {
             self.error_here(DiagId::parse_expected_unqualified_id);
@@ -581,7 +592,7 @@ impl Parser<'_, '_> {
             } else {
                 None
             };
-            return Some(self.s.act_dependent_name(q.nns, name, targs, TagKeyword::Typename));
+            return Some(self.s.act_dependent_name(q.nns, name, targs, kw));
         }
         let class = self.s.classify_name(name, Some(q.ctx));
         if self.at(Punct::Less) && (template_kw || is_template_class(class)) {
@@ -609,8 +620,113 @@ impl Parser<'_, '_> {
                     .arg(text)
                     .arg(format!("'{ctx}'"));
                 self.emit(d);
-                let _ = kw_loc;
                 None
+            }
+        }
+    }
+
+    /// True at a type-constraint followed by `auto` or `decltype(auto)`
+    /// (a constrained placeholder, [dcl.spec.auto.general]/1).
+    pub(crate) fn at_constrained_placeholder(&self) -> bool {
+        let Some((end, false, NameClass::Concept(_), _)) = self.scan_name_at(self.pos()) else {
+            return false;
+        };
+        match self.kw_of(self.tok_at(end)) {
+            Some(Kw::Auto) => true,
+            Some(Kw::Decltype) => {
+                Self::punct_of(self.tok_at(end + 1)) == Some(Punct::LParen)
+                    && self.kw_of(self.tok_at(end + 2)) == Some(Kw::Auto)
+            }
+            _ => false,
+        }
+    }
+
+    /// True at a type-name that [`Parser::parse_template_type_name`]
+    /// parses: one with a template argument list or `template` keyword,
+    /// or a dependent qualified name that is a type here (followed by a
+    /// declarator, [temp.res.general]/4).
+    pub(crate) fn at_template_type_name(&self, ctx: DeclaratorContext) -> bool {
+        let start = self.pos();
+        let Some((end, split, class, _)) = self.scan_name_at(start) else { return false };
+        let templ = split
+            || (start..end).any(|j| {
+                let t = self.tok_at(j);
+                Self::punct_of(t) == Some(Punct::Less) || self.kw_of(t) == Some(Kw::Template)
+            });
+        match class {
+            NameClass::Type(..) => templ,
+            NameClass::Dependent if end > start + 1 => {
+                if split {
+                    return true;
+                }
+                let next = self.tok_at(end);
+                if self.ident_of(next).is_some() {
+                    return true;
+                }
+                match ctx {
+                    DeclaratorContext::TypeName => true,
+                    DeclaratorContext::Block
+                    | DeclaratorContext::Condition
+                    | DeclaratorContext::ForInit => false,
+                    _ => matches!(
+                        Self::punct_of(next),
+                        Some(
+                            Punct::Star
+                                | Punct::Amp
+                                | Punct::AmpAmp
+                                | Punct::Comma
+                                | Punct::RParen
+                                | Punct::Ellipsis
+                                | Punct::Greater
+                                | Punct::GreaterGreater
+                                | Punct::Equal
+                        )
+                    ),
+                }
+            }
+            _ => false,
+        }
+    }
+
+    /// A type-name spelled with a template-id or a dependent qualifier in
+    /// a decl-specifier-seq: `X<args>`, `N::X<args>::Y`, `T::type`. A
+    /// dependent qualified name without `typename` is a type only where
+    /// [temp.res.general]/4 (P0634) makes it one; elsewhere (block scope)
+    /// it is diagnosed and parsed as if `typename` were written.
+    pub(crate) fn parse_template_type_name(&mut self, ctx: DeclaratorContext) -> Option<QualType> {
+        let start = self.loc();
+        let q = self.parse_nested_name_nns().ok()?;
+        match q {
+            None => {
+                let name = self.ident()?;
+                let name_loc = self.bump().span.lo;
+                let class = self.s.classify_name(name, None);
+                match self.parse_template_id_rest(class, name, name_loc) {
+                    Ok(TemplateIdRef::Type(t)) => Some(t),
+                    _ => None,
+                }
+            }
+            Some(q) => {
+                if self.s.is_dependent_ctx(q.ctx)
+                    && matches!(
+                        ctx,
+                        DeclaratorContext::Block
+                            | DeclaratorContext::Condition
+                            | DeclaratorContext::ForInit
+                    )
+                {
+                    let k = usize::from(self.at_kw(Kw::Template));
+                    if let Some(name) = self.ident_of(self.tok_at(self.pos() + k)) {
+                        let text = format!(
+                            "{}{}",
+                            self.s.nns_str(q.nns),
+                            self.s.ast.symbols().as_str(name)
+                        );
+                        let d = self.s.diag(DiagId::parse_missing_typename, start).arg(text);
+                        self.emit(d);
+                    }
+                }
+                self.parse_qualified_type_rest(q, TagKeyword::None)
             }
         }
     }
