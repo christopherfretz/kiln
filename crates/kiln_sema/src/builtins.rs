@@ -9,11 +9,15 @@
 //! it with `BuiltinFnToFnPtr` ([`Sema::act_on_call`]), and any other use is
 //! an error.
 
+use crate::lookup::LookupKind;
 use kiln_ast::attr::{AttrKind, AttrNode, AttrSyntax};
+use kiln_ast::consts::{PtrBase, Scalar};
 use kiln_ast::decl::{DeclFlags, DeclKind, FnSpec, FnStorage, LinkageLang, builtin};
 use kiln_ast::expr::{CastKind, ExprFlags, ExprKind, ValueCategory};
+use kiln_ast::expr::{SourceLocKind, SourceLocValues};
 use kiln_ast::names::{DeclName, OverloadedOperator};
 use kiln_ast::types::{BuiltinType, ExcSpec, FuncInfo, Quals};
+use kiln_ast::types::{Nns, TagKeyword};
 use kiln_ast::{DeclHead, DeclId, ExprId, QualType};
 use kiln_diag::DiagId;
 use kiln_source::Loc;
@@ -794,5 +798,355 @@ impl Sema<'_, '_> {
             loc,
             ExprFlags::NONE,
         )
+    }
+}
+
+// ---- source-location builtins -------------------------------------------
+
+/// Per-TU state of the source-location builtins (clang
+/// `StdSourceLocationImplDecl` and `UniqueStringLiterals`).
+#[derive(Debug, Default)]
+pub(crate) struct SrcLocCache {
+    /// `std::source_location::__impl` once found and checked.
+    impl_decl: Option<DeclId>,
+    /// The string literal object every source-location string with this
+    /// content points into: one `StringLiteral` expression per content
+    /// (clang `getPredefinedStringLiteralFromCache`).
+    strings: kiln_source::fx::FxHashMap<kiln_ast::StringLitId, ExprId>,
+    /// Which builtins a parameter's default argument evaluates,
+    /// transitively through the default arguments of the calls in it
+    /// (bit `1 << kind`; computed once per parameter).
+    param_kinds: kiln_source::fx::FxHashMap<DeclId, u8>,
+}
+
+/// The bit of `SourceLocKind::SourceLocStruct` in a kinds mask.
+const SRC_LOC_STRUCT_BIT: u8 = 1 << SourceLocKind::SourceLocStruct as u8;
+
+impl Sema<'_, '_> {
+    /// `__builtin_FILE()`, `__builtin_FILE_NAME()`, `__builtin_FUNCTION()`,
+    /// `__builtin_LINE()`, `__builtin_COLUMN()` and
+    /// `__builtin_source_location()` (clang `ActOnSourceLocExpr`;
+    /// [support.srcloc.cons]): a prvalue of type `const char *`,
+    /// `unsigned int` or `const std::source_location::__impl *`. The values
+    /// at the expression itself are computed now (§9.5); a use of a default
+    /// argument holding one gets the values of the call
+    /// ([`Self::note_default_arg_use`]).
+    pub fn act_on_source_loc_expr(&mut self, kind: SourceLocKind, loc: Loc, rparen: Loc) -> ExprId {
+        let ty = match kind {
+            SourceLocKind::File | SourceLocKind::FileName | SourceLocKind::Function => {
+                self.const_char_ptr(QualType::CHAR)
+            }
+            SourceLocKind::Line | SourceLocKind::Column => QualType::UINT,
+            SourceLocKind::SourceLocStruct => match self.std_source_location_impl(loc) {
+                Some(t) => {
+                    let c = self.ast.types.qualify(t, Quals::CONST);
+                    self.ast.types.pointer_to(c)
+                }
+                None => return self.recover_err(&[], loc),
+            },
+        };
+        let ctx = self.ctx;
+        let e = self.builder().source_loc_expr(kind, ty, ctx, loc, rparen);
+        self.record_source_loc(e, loc, ctx, kind == SourceLocKind::SourceLocStruct);
+        e
+    }
+
+    /// The type `std::source_location::__impl`, spelled with its scope as
+    /// clang prints it (clang `LookupStdSourceLocationImpl`): it must be a
+    /// complete standard-layout class without bases whose only fields are
+    /// `const char *_M_file_name`, `const char *_M_function_name` and
+    /// integral `_M_line` and `_M_column`.
+    fn std_source_location_impl(&mut self, loc: Loc) -> Option<QualType> {
+        let found = match self.srcloc.impl_decl {
+            Some(d) => Some(d),
+            None => self.lookup_source_location_impl(),
+        };
+        let Some(d) = found else {
+            self.error(DiagId::sema_std_source_location_impl_not_found, loc);
+            return None;
+        };
+        if self.srcloc.impl_decl.is_none() {
+            if !self.source_location_impl_ok(d) {
+                self.error(DiagId::sema_std_source_location_impl_malformed, loc);
+                return None;
+            }
+            self.srcloc.impl_decl = Some(d);
+        }
+        let rec = self.ast.types.canonical(self.tag_type(d));
+        let outer = self.ast.decls.get(d).ctx()?;
+        let ns = self.ast.decls.get(outer).ctx()?;
+        let outer_ty = self.tag_type(outer);
+        let nns_ns = self.ast.types.nns(Nns::Namespace { prefix: None, ns: self.ast.first(ns) });
+        let nns = self.ast.types.nns(Nns::Type {
+            prefix: Some(nns_ns),
+            ty: outer_ty,
+            template_kw: false,
+        });
+        Some(self.ast.types.elaborated(TagKeyword::None, Some(nns), rec))
+    }
+
+    /// The complete class `std::source_location::__impl`, if declared.
+    fn lookup_source_location_impl(&self) -> Option<DeclId> {
+        let std = self.intern("std");
+        let ns = self
+            .lookup_in(self.ast.tu, std, LookupKind::Nested)
+            .single()
+            .filter(|&d| self.ast.decls.get(d).kind() == DeclKind::Namespace)?;
+        let sl = self.intern("source_location");
+        let outer = self.lookup_qualified(ns, sl, LookupKind::Tag).single()?;
+        let outer = self.ast.definition(outer)?;
+        let imp = self.intern("__impl");
+        let d = self.lookup_qualified(outer, imp, LookupKind::Tag).single()?;
+        let d = self.ast.definition(d)?;
+        self.ast.decls.record(d)?;
+        Some(d)
+    }
+
+    /// Whether `__impl` definition `d` has the shape clang requires.
+    fn source_location_impl_ok(&mut self, d: DeclId) -> bool {
+        let Some(r) = self.ast.decls.record(d) else { return false };
+        if self.is_union(d)
+            || !r.defn.contains(kiln_ast::decl::DefinitionBits::STANDARD_LAYOUT)
+            || self.ast.decls.bases(d, &self.ast.lists).next().is_some()
+        {
+            return false;
+        }
+        let char_ptr = self.const_char_ptr(QualType::CHAR);
+        let char_ptr = self.ast.types.canonical(char_ptr);
+        let fields: Vec<DeclId> = self
+            .ast
+            .members(d)
+            .filter(|&m| self.ast.decls.get(m).kind() == DeclKind::Field)
+            .collect();
+        let mut count = 0;
+        for f in fields {
+            let n = *self.ast.decls.get(f);
+            let Some(t) = n.ty() else { return false };
+            let t = self.ast.types.canonical(t);
+            let name = match n.name().as_ident() {
+                Some(s) => self.ast.symbols().as_str(s).to_owned(),
+                None => return false,
+            };
+            let ok = match name.as_str() {
+                "_M_file_name" | "_M_function_name" => t == char_ptr,
+                "_M_line" | "_M_column" => self.ast.types.is_integral(t),
+                _ => return false,
+            };
+            if !ok {
+                return false;
+            }
+            count += 1;
+        }
+        count == 4
+    }
+
+    /// Records the values of every source-location builtin for a use `e`
+    /// at `loc` in context `ctx` (clang `SourceLocExpr::EvaluateInContext`
+    /// with `getExpansionRange(Loc).getEnd()`, kiln's expansion location);
+    /// `location` builds the `__impl` object too.
+    fn record_source_loc(&mut self, e: ExprId, loc: Loc, ctx: DeclId, location: bool) {
+        let (file, line, column) = match self.diags.sm().presumed_line_col(loc) {
+            Some(p) => (p.file_name.to_owned(), p.line, p.col),
+            None => (String::new(), 0, 0),
+        };
+        let file_name = file.rsplit('/').next().unwrap_or(&file).to_owned();
+        let (plain, pretty) = self.predefined_function_names(ctx);
+        let Some(file_p) = self.srcloc_string(&file) else { return };
+        let Some(file_name_p) = self.srcloc_string(&file_name) else { return };
+        let Some(function_p) = self.srcloc_string(&plain) else { return };
+        let location = if location {
+            let Some(pretty_p) = self.srcloc_string(&pretty) else { return };
+            self.source_location_object(file_p, pretty_p, line, column)
+        } else {
+            None
+        };
+        let v = SourceLocValues {
+            file: file_p,
+            file_name: file_name_p,
+            function: function_p,
+            line,
+            column,
+            location,
+        };
+        let _ = self.ast.exprs.set_source_loc_values(e, v);
+    }
+
+    /// The `const char *` value pointing to the string literal object
+    /// holding `s` (one object per content).
+    fn srcloc_string(&mut self, s: &str) -> Option<kiln_ast::ConstValueId> {
+        let lit =
+            self.ast.strings.intern(kiln_ast::strings::StringEncoding::Ordinary, s.as_bytes());
+        let origin = match self.srcloc.strings.get(&lit) {
+            Some(&e) => e,
+            None => {
+                let ty = crate::literal::string_literal_type(
+                    self,
+                    kiln_lex::Encoding::Ordinary,
+                    s.len() as u64 + 1,
+                );
+                let e = self.builder().string_literal(
+                    ty,
+                    kiln_ast::expr::StringKind::Ordinary,
+                    lit,
+                    Loc::INVALID,
+                );
+                self.srcloc.strings.insert(lit, e);
+                e
+            }
+        };
+        let ty = self.const_char_ptr(QualType::CHAR);
+        let ty = self.ast.types.canonical(ty);
+        let base = PtrBase::StringLit { lit, origin };
+        self.ast.consts.push_scalar(Scalar::Pointer { ty, base, offset: 0 }).ok()
+    }
+
+    /// The `const std::source_location::__impl *` value pointing to the
+    /// frozen `__impl` object `{file, function, line, column}` (clang's
+    /// `UnnamedGlobalConstantDecl`): equal values share one object.
+    fn source_location_object(
+        &mut self,
+        file: kiln_ast::ConstValueId,
+        function: kiln_ast::ConstValueId,
+        line: u32,
+        column: u32,
+    ) -> Option<kiln_ast::ConstValueId> {
+        let d = self.srcloc.impl_decl?;
+        let rec = self.ast.types.canonical(self.tag_type(d));
+        let fields: Vec<DeclId> = self
+            .ast
+            .members(d)
+            .filter(|&m| self.ast.decls.get(m).kind() == DeclKind::Field)
+            .collect();
+        let layout = kiln_abi::ensure_layout(&mut self.ast, d, &self.abi);
+        let size = layout.size as usize;
+        let offsets: Vec<u64> = layout.fields.to_vec();
+        let mut bytes = vec![0u8; size];
+        let mut covered = vec![false; size];
+        let mut relocs = Vec::new();
+        let ptr_bytes = usize::from(self.ast.consts.pointer_bytes());
+        for (f, off) in fields.into_iter().zip(offsets) {
+            let at = (off / 8) as usize;
+            let n = self.ast.decls.get(f);
+            let name = n.name().as_ident().map(|s| self.ast.symbols().as_str(s).to_owned());
+            let fty = n.ty().unwrap_or(QualType::UINT);
+            match name.as_deref() {
+                Some("_M_file_name" | "_M_function_name") => {
+                    let value =
+                        if name.as_deref() == Some("_M_file_name") { file } else { function };
+                    relocs.push(kiln_ast::consts::Reloc { at: at as u32, value });
+                    covered.get_mut(at..at + ptr_bytes)?.fill(true);
+                }
+                _ => {
+                    let v = if name.as_deref() == Some("_M_line") { line } else { column };
+                    let (w, _) = crate::target::size_align(&self.ast, fty, &self.abi)?;
+                    let w = usize::try_from(w).ok()?;
+                    let le = u64::from(v).to_le_bytes();
+                    for i in 0..w {
+                        *bytes.get_mut(at + i)? = le.get(i).copied().unwrap_or(0);
+                    }
+                    covered.get_mut(at..at + w)?.fill(true);
+                }
+            }
+        }
+        relocs.sort_by_key(|r| r.at);
+        let mut padding = Vec::new();
+        let mut i = 0;
+        while i < size {
+            if covered[i] {
+                i += 1;
+                continue;
+            }
+            let start = i;
+            while i < size && !covered[i] {
+                i += 1;
+            }
+            padding
+                .push(kiln_ast::consts::ByteRange { start: start as u32, len: (i - start) as u32 });
+        }
+        let img = kiln_ast::consts::ByteImage {
+            ty: rec,
+            bytes: &bytes,
+            relocs: &relocs,
+            padding: &padding,
+            unions: &[],
+        };
+        let obj = self.ast.consts.push_aggregate(img).ok()?;
+        let cq = self.ast.types.qualify(rec, Quals::CONST);
+        let pty = self.ast.types.pointer_to(cq);
+        let pty = self.ast.types.canonical(pty);
+        self.ast
+            .consts
+            .push_scalar(Scalar::Pointer { ty: pty, base: PtrBase::Const(obj), offset: 0 })
+            .ok()
+    }
+
+    /// clang `PredefinedExpr::ComputeName` of context `ctx` for
+    /// `__builtin_FUNCTION` (`Function`: the unqualified name) and
+    /// `_M_function_name` (`PrettyFunction`); both empty outside a
+    /// function. Gap: the ` [T = int]` suffix of template specializations
+    /// is not printed (spec/sema-templates.md §9.5).
+    fn predefined_function_names(&self, ctx: DeclId) -> (String, String) {
+        let n = self.ast.decls.get(ctx);
+        if !n.kind().is_function() {
+            return (String::new(), String::new());
+        }
+        let names = kiln_ast::dump::AstNames::new(&self.ast);
+        let mut plain = String::new();
+        names.write_name(ctx, &mut plain);
+        let mut pretty = String::new();
+        if let Some(f) = self.ast.decls.function(ctx)
+            && n.kind() == DeclKind::CXXMethod
+        {
+            if f.spec.is_virtual() {
+                pretty.push_str("virtual ");
+            }
+            if f.spec.storage() == FnStorage::Static {
+                pretty.push_str("static ");
+            }
+        }
+        pretty.push_str(&kiln_abi::vtable::pretty_function(&self.ast, ctx));
+        (plain, pretty)
+    }
+
+    /// Records the source-location values at a use of `param`'s default
+    /// argument (the `CXXDefaultArgExpr` `e`, in the current context, for
+    /// the call beginning at `call_begin`) when the argument evaluates a
+    /// source-location builtin ([support.srcloc.cons]/2: the location of
+    /// the call; clang `CXXDefaultArgExpr::getUsedLocation`).
+    pub(crate) fn note_default_arg_use(&mut self, e: ExprId, param: DeclId, call_begin: Loc) {
+        let kinds = self.default_arg_srcloc_kinds(param);
+        if kinds != 0 {
+            let ctx = self.ctx;
+            self.record_source_loc(e, call_begin, ctx, kinds & SRC_LOC_STRUCT_BIT != 0);
+        }
+    }
+
+    /// The source-location builtins `param`'s default argument evaluates
+    /// (a mask of `1 << kind`), through nested default arguments.
+    fn default_arg_srcloc_kinds(&mut self, param: DeclId) -> u8 {
+        if let Some(&k) = self.srcloc.param_kinds.get(&param) {
+            return k;
+        }
+        // Guards recursion through `void f(int = f())`.
+        self.srcloc.param_kinds.insert(param, 0);
+        let Some(init) = self.ast.decls.param(param).and_then(|p| p.default_arg) else {
+            return 0;
+        };
+        let mut kinds = 0u8;
+        let mut stack = vec![init];
+        while let Some(x) = stack.pop() {
+            match self.ast.exprs.get(x).kind() {
+                ExprKind::SourceLocExpr => {
+                    kinds |= 1 << self.ast.exprs.source_loc_kind(x) as u8;
+                }
+                ExprKind::CXXDefaultArgExpr => {
+                    let p = self.ast.exprs.default_arg_param(x);
+                    kinds |= self.default_arg_srcloc_kinds(p);
+                }
+                _ => stack.extend(self.ast.exprs.children(x, &self.ast.lists)),
+            }
+        }
+        self.srcloc.param_kinds.insert(param, kinds);
+        kinds
     }
 }

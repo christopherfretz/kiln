@@ -177,6 +177,10 @@ pub(crate) mod bi {
     /// `__builtin_bit_cast` of the object at `a` (type `t1`) to `t2`:
     /// into the object at `b` when sub = `TO_MEM`, else as `dst`.
     pub const BIT_CAST: u32 = 9;
+    /// The pointer stored as constant `t1` (a raw `ConstValueId`) of
+    /// pointer type `t2`, thawed: the value of a source-location builtin
+    /// (spec/oven.md, Builtins).
+    pub const THAW_PTR: u32 = 10;
 
     /// sub of `MEMCMP`/`MEMCHR`: the `w` form (elements compared as
     /// `wchar_t`, no narrow-character restriction).

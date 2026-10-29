@@ -471,6 +471,10 @@ pub(crate) struct Compiler<'a> {
     /// The code reads the evaluation context (`Op::IsConstEval`): the
     /// function is not memoized.
     uses_cc: bool,
+    /// The outermost default argument being compiled that holds a
+    /// source-location builtin: the builtins in it take the values of
+    /// that use (clang `SourceLocExprScopeGuard`; spec/oven.md, Builtins).
+    srcloc: Option<ExprId>,
 }
 
 /// The value an `OpaqueValueExpr` stands for.
@@ -500,6 +504,7 @@ impl<'a> Compiler<'a> {
             has_temps: false,
             std_ice: false,
             uses_cc: false,
+            srcloc: None,
         }
     }
 
@@ -1783,9 +1788,14 @@ impl Compiler<'_> {
             }
             ExprKind::StmtExpr => self.stmt_expr(e, Some(dst)),
             ExprKind::CXXDefaultArgExpr => match default_arg_of(self.ast(), e) {
-                Some(d) => self.rv_inner(d, dst),
+                Some(d) => {
+                    let saved = self.enter_default_arg(e);
+                    self.rv_inner(d, dst);
+                    self.srcloc = saved;
+                }
                 None => self.unsupported(e),
             },
+            ExprKind::SourceLocExpr => self.source_loc(e, dst),
             ExprKind::ConstantExpr => {
                 let ast = self.ast();
                 let v = ast
@@ -2389,7 +2399,10 @@ impl Compiler<'_> {
             }
             ExprKind::CXXDefaultArgExpr if default_arg_of(self.ast(), e).is_some() => {
                 let d = default_arg_of(self.ast(), e).unwrap_or(e);
-                self.lv(d, acc)
+                let saved = self.enter_default_arg(e);
+                let r = self.lv(d, acc);
+                self.srcloc = saved;
+                r
             }
             ExprKind::DeclRefExpr => {
                 let ast = self.ast();
@@ -2763,7 +2776,10 @@ impl Compiler<'_> {
             }
             ExprKind::CXXDefaultArgExpr if default_arg_of(self.ast(), e).is_some() => {
                 let d = default_arg_of(self.ast(), e).unwrap_or(e);
-                return self.init_inner(d, p, ty);
+                let saved = self.enter_default_arg(e);
+                self.init_inner(d, p, ty);
+                self.srcloc = saved;
+                return;
             }
             ExprKind::ImplicitValueInitExpr => {
                 self.emit_at(Op::ZeroInit, 0, &[p, ty.0], e);
@@ -3002,7 +3018,9 @@ impl Compiler<'_> {
             }
             ExprKind::CXXDefaultArgExpr if default_arg_of(self.ast(), e).is_some() => {
                 let d = default_arg_of(self.ast(), e).unwrap_or(e);
+                let saved = self.enter_default_arg(e);
                 self.effect(d);
+                self.srcloc = saved;
             }
             ExprKind::BinaryOperator => {
                 let op = self.ast().exprs.binary_op(e);
@@ -3271,4 +3289,51 @@ fn is_reference_decl(ast: &kiln_ast::Ast, d: DeclId) -> bool {
 fn default_arg_of(ast: &kiln_ast::Ast, e: ExprId) -> Option<ExprId> {
     let p = ast.exprs.default_arg_param(e);
     ast.decls.param(p).and_then(|x| x.default_arg)
+}
+
+impl Compiler<'_> {
+    /// Enters default argument `e`: the source-location builtins in it
+    /// take the values of this use unless an enclosing default argument
+    /// already set them. Returns the scope to restore.
+    fn enter_default_arg(&mut self, e: ExprId) -> Option<ExprId> {
+        let saved = self.srcloc;
+        if saved.is_none() && self.ast().exprs.source_loc_values(e).is_some() {
+            self.srcloc = Some(e);
+        }
+        saved
+    }
+
+    /// `__builtin_LINE()` and the other source-location builtins
+    /// ([support.srcloc.cons]): the values sema recorded for the
+    /// expression, or for the default argument use enclosing it.
+    fn source_loc(&mut self, e: ExprId, dst: u32) {
+        use kiln_ast::expr::SourceLocKind as K;
+        let ast = self.ast();
+        let kind = ast.exprs.source_loc_kind(e);
+        let key = self.srcloc.unwrap_or(e);
+        let Some(v) = ast.exprs.source_loc_values(key).copied() else {
+            return self.unsupported(e);
+        };
+        let cv = match kind {
+            K::Line => return self.konst(dst, u128::from(v.line)),
+            K::Column => return self.konst(dst, u128::from(v.column)),
+            K::File => v.file,
+            K::FileName => v.file_name,
+            K::Function => v.function,
+            K::SourceLocStruct => match v.location {
+                Some(c) => c,
+                None => return self.unsupported(e),
+            },
+        };
+        let ty = self.ety(e);
+        let raw = kiln_ast::RawId::raw(cv);
+        let loc = self.begin(e);
+        self.emit_site(
+            Op::Builtin,
+            crate::kbc::bi::THAW_PTR,
+            &[dst, dst, dst, dst, raw, ty.0],
+            e,
+            loc,
+        );
+    }
 }

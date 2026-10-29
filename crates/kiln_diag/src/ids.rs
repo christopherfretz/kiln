@@ -534,6 +534,8 @@ diag_ids! {
     sema_need_header_before_typeid = Error (0) "you need to include <typeinfo> before using the 'typeid' operator";
     sema_typeid_no_rtti = Error (0) "use of typeid requires -frtti";
     sema_typeid_incomplete = Error (1) "'typeid' of incomplete type {0}";
+    sema_std_source_location_impl_not_found = Error (0) "'std::source_location::__impl' was not found; it must be defined before '__builtin_source_location' is called";
+    sema_std_source_location_impl_malformed = Error (0) "'std::source_location::__impl' must be standard-layout and have only two 'const char *' fields '_M_file_name' and '_M_function_name', and two integral fields '_M_line' and '_M_column'";
     sema_offsetof_record_type = Error (1) "offsetof requires struct, union, or class type, {0} invalid";
     sema_offsetof_incomplete_type = Error (1) "offsetof of incomplete type {0}";
     sema_offsetof_array_type = Error (1) "offsetof requires array type, {0} invalid";

@@ -937,7 +937,7 @@ impl Sema<'_, '_> {
     }
 
     /// `const elem *`.
-    fn const_char_ptr(&mut self, elem: QualType) -> QualType {
+    pub(crate) fn const_char_ptr(&mut self, elem: QualType) -> QualType {
         let c = self.ast.types.qualify(elem, kiln_ast::types::Quals::CONST);
         self.ast.types.pointer_to(c)
     }
@@ -2264,6 +2264,8 @@ impl Sema<'_, '_> {
             let x = *self.ast.exprs.get(e);
             let used = self.ctx;
             let arg = self.builder().default_arg(p, used, x.ty(), x.value_category(), Loc::INVALID);
+            let call_begin = self.begin_loc(callee);
+            self.note_default_arg_use(arg, p, call_begin);
             conv_args.push(arg);
         }
         Some(conv_args)

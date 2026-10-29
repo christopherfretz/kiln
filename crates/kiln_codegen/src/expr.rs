@@ -135,9 +135,15 @@ impl Cg<'_> {
                 return self.emit_scalar_opt(ast.exprs.compound_literal_init(e));
             }
             ExprKind::CXXDefaultArgExpr => match default_arg_of(ast, e) {
-                Some(d) => return self.emit_scalar_opt(d),
+                Some(d) => {
+                    let saved = self.enter_default_arg(e);
+                    let r = self.emit_scalar_opt(d);
+                    self.srcloc = saved;
+                    return r;
+                }
                 None => return err(self.loc_of(e), "default argument not yet parsed"),
             },
+            ExprKind::SourceLocExpr => V::C(self.source_loc_value(e)?),
             ExprKind::ExprWithCleanups => return self.emit_scalar_opt(self.sub(e)),
             ExprKind::ConstantExpr => match ast.exprs.constant_value(e) {
                 Some(c) if !ast.types.is_void(q) => V::C(self.const_scalar_value(c, q)?),
@@ -1090,7 +1096,12 @@ impl Cg<'_> {
         match n.kind() {
             ExprKind::ParenExpr => self.emit_lvalue(ast.exprs.operand(e)),
             ExprKind::CXXDefaultArgExpr => match default_arg_of(ast, e) {
-                Some(d) => self.emit_lvalue(d),
+                Some(d) => {
+                    let saved = self.enter_default_arg(e);
+                    let r = self.emit_lvalue(d);
+                    self.srcloc = saved;
+                    r
+                }
                 None => err(self.loc_of(e), "default argument not yet parsed"),
             },
             ExprKind::ExprWithCleanups => self.emit_lvalue(self.sub(e)),
@@ -1690,7 +1701,12 @@ impl Cg<'_> {
                 self.agg_visit(ast.exprs.operand(e), dest, zeroed)
             }
             ExprKind::CXXDefaultArgExpr => match default_arg_of(ast, e) {
-                Some(d) => self.agg_visit(d, dest, zeroed),
+                Some(d) => {
+                    let saved = self.enter_default_arg(e);
+                    let r = self.agg_visit(d, dest, zeroed);
+                    self.srcloc = saved;
+                    r
+                }
                 None => err(self.loc_of(e), "default argument not yet parsed"),
             },
             ExprKind::ExprWithCleanups | ExprKind::MaterializeTemporaryExpr => {

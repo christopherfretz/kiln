@@ -697,9 +697,19 @@ impl Oven {
                 Op::Builtin => {
                     let (a, bb, c) = (reg!(1), reg!(2), reg!(3));
                     let (t1, t2) = (arg!(4) as u32, arg!(5) as u32);
-                    match self.builtin(b.ast(), aux, a, bb, c, t1, t2) {
-                        Ok(v) => reg!(0) = v,
-                        Err(f) => fail!(f),
+                    if aux & 0xff == crate::kbc::bi::THAW_PTR {
+                        let cur = self.stack[self.stack.len() - 1].func;
+                        let top = fb + self.funcs[cur as usize].nregs as usize + 1;
+                        let p = match <kiln_ast::ConstValueId as kiln_ast::RawId>::from_raw(t1) {
+                            Some(cv) => self.thaw_ptr(b, cv, OTy(t2), top as u32),
+                            None => 0,
+                        };
+                        reg!(0) = u128::from(p);
+                    } else {
+                        match self.builtin(b.ast(), aux, a, bb, c, t1, t2) {
+                            Ok(v) => reg!(0) = v,
+                            Err(f) => fail!(f),
+                        }
                     }
                     pc += 7;
                 }

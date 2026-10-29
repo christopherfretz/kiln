@@ -552,6 +552,10 @@ impl<'a> AstNames<'a> {
                 out.push_str(if exprs.bool_value(e) { "true" } else { "false" });
             }
             ExprKind::CXXNullPtrLiteralExpr => out.push_str("nullptr"),
+            ExprKind::SourceLocExpr => {
+                out.push_str(exprs.source_loc_kind(e).spelling());
+                out.push_str("()");
+            }
             ExprKind::DeclRefExpr => self.write_name(exprs.decl(e), out),
             ExprKind::MemberExpr => {
                 self.expr(exprs.operand(e), d, out);

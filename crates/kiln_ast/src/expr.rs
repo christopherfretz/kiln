@@ -1101,6 +1101,79 @@ pub struct ColdExprData {
     /// binary trait (clang reports `__is_base_of`'s incomplete derived
     /// type there).
     pub trait_rhs_loc: ColdMap<ExprId, Loc>,
+    /// The values of the source-location builtins at a use (§5.10): for a
+    /// `SourceLocExpr` its own location and context, for a
+    /// `CXXDefaultArgExpr` / `CXXDefaultInitExpr` whose initializer holds
+    /// one, the location and context of the use. Computed by sema (which
+    /// owns the source manager and the function-name printer).
+    pub source_loc: ColdMap<ExprId, SourceLocValues>,
+}
+
+/// The builtin a `SourceLocExpr` names (clang `SourceLocIdentKind`).
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[repr(u8)]
+pub enum SourceLocKind {
+    /// `__builtin_FILE()`: `const char *`.
+    File,
+    /// `__builtin_FILE_NAME()`: the last path component, `const char *`.
+    FileName,
+    /// `__builtin_FUNCTION()`: `const char *`.
+    Function,
+    /// `__builtin_LINE()`: `unsigned int`.
+    Line,
+    /// `__builtin_COLUMN()`: `unsigned int`.
+    Column,
+    /// `__builtin_source_location()`: `const std::source_location::__impl *`.
+    SourceLocStruct,
+}
+
+impl SourceLocKind {
+    /// Every kind, in `repr` order.
+    pub const ALL: [SourceLocKind; 6] = [
+        SourceLocKind::File,
+        SourceLocKind::FileName,
+        SourceLocKind::Function,
+        SourceLocKind::Line,
+        SourceLocKind::Column,
+        SourceLocKind::SourceLocStruct,
+    ];
+
+    /// The builtin's name.
+    pub const fn spelling(self) -> &'static str {
+        match self {
+            SourceLocKind::File => "__builtin_FILE",
+            SourceLocKind::FileName => "__builtin_FILE_NAME",
+            SourceLocKind::Function => "__builtin_FUNCTION",
+            SourceLocKind::Line => "__builtin_LINE",
+            SourceLocKind::Column => "__builtin_COLUMN",
+            SourceLocKind::SourceLocStruct => "__builtin_source_location",
+        }
+    }
+
+    fn from_aux(a: u8) -> SourceLocKind {
+        Self::ALL.get(usize::from(a)).copied().unwrap_or(SourceLocKind::File)
+    }
+}
+
+/// The values every source-location builtin has at one location in one
+/// context (clang `SourceLocExpr::EvaluateInContext`): the pointers are
+/// interned [`Scalar::Pointer`](crate::consts::Scalar) values into string
+/// literal objects (and, for `location`, into the frozen
+/// `std::source_location::__impl` object).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct SourceLocValues {
+    /// `__builtin_FILE()`.
+    pub file: ConstValueId,
+    /// `__builtin_FILE_NAME()`.
+    pub file_name: ConstValueId,
+    /// `__builtin_FUNCTION()`.
+    pub function: ConstValueId,
+    /// `__builtin_LINE()`.
+    pub line: u32,
+    /// `__builtin_COLUMN()`.
+    pub column: u32,
+    /// `__builtin_source_location()`, when the use needs it.
+    pub location: Option<ConstValueId>,
 }
 
 /// The cold record of an `ArrayTypeTraitExpr` (§9.4).
@@ -1120,6 +1193,7 @@ impl Default for ColdExprData {
             designators: ColdMap::new("designators"),
             array_trait: ColdMap::new("array_trait"),
             trait_rhs_loc: ColdMap::new("trait_rhs_loc"),
+            source_loc: ColdMap::new("source_loc"),
         }
     }
 }
@@ -1560,6 +1634,36 @@ impl ExprArena {
         DeclId::new(self.expect_kind(e, ExprKind::CXXDefaultArgExpr).a)
     }
 
+    /// The builtin a `SourceLocExpr` names.
+    pub fn source_loc_kind(&self, e: ExprId) -> SourceLocKind {
+        SourceLocKind::from_aux(self.expect_kind(e, ExprKind::SourceLocExpr).aux)
+    }
+
+    /// The declaration context a `SourceLocExpr` appears in (clang
+    /// `getParentContext`).
+    pub fn source_loc_context(&self, e: ExprId) -> DeclId {
+        DeclId::new(self.expect_kind(e, ExprKind::SourceLocExpr).a)
+    }
+
+    /// The source-location values of `e` (a `SourceLocExpr`, or a default
+    /// argument or member initializer use that holds one), if sema
+    /// computed them.
+    pub fn source_loc_values(&self, e: ExprId) -> Option<&SourceLocValues> {
+        self.cold.source_loc.get(e)
+    }
+
+    /// Records the source-location values of `e` (once).
+    ///
+    /// # Errors
+    /// If they are already recorded.
+    pub fn set_source_loc_values(
+        &mut self,
+        e: ExprId,
+        v: SourceLocValues,
+    ) -> Result<(), AlreadySet> {
+        self.cold.source_loc.insert(e, v)
+    }
+
     /// The declaration context in which a `CXXDefaultInitExpr` /
     /// `CXXDefaultArgExpr` is used.
     pub fn used_context(&self, e: ExprId) -> DeclId {
@@ -1916,6 +2020,7 @@ impl HeapSize for ExprArena {
         r.push(self.cold.designators.mem_row().prefixed("cold"));
         r.push(self.cold.array_trait.mem_row().prefixed("cold"));
         r.push(self.cold.trait_rhs_loc.mem_row().prefixed("cold"));
+        r.push(self.cold.source_loc.mem_row().prefixed("cold"));
         r
     }
 }
