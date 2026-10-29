@@ -92,7 +92,7 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-061b | Oven heap (see M3 preparation) | 061a | todo |
 | WP-076 | Oven classes: ctors/dtors/`this`/member calls, `BeginLife`/`EndLife` subobjects (`SubobjectId`), temporaries, unions with ctors, pointers to members, `std::construct_at`/allocator recognition, iterative `compile.rs` walkers (Q16) | 067b, 061b | todo |
 | WP-077 | Oven virtual + RTTI: dynamic type in allocations, virtual calls via `SemaBridge::final_overrider`, `dynamic_cast`/`typeid` in constant evaluation | 076, 078a | todo |
-| WP-078a | virtual functions in sema: overriding, `final`/`override`, covariance, abstract classes, key function, deleting dtor, subobjects + final overriders (`Ast.virtuals`), `dynamic_cast`/`typeid` sema, virtual bases | 066b (067b for vbase ctors) | todo |
+| WP-078a | virtual functions in sema: overriding, `final`/`override`, covariance, abstract classes, key function, deleting dtor, subobjects + final overriders (`Ast.virtuals`), `dynamic_cast`/`typeid` sema, virtual bases | 066b (067b for vbase ctors) | done (2026-10-29) |
 | WP-078b | virtual layout in `kiln_abi`: primary base, vptr, vbases, `kiln_abi::vtable` (Itanium), VTT, vtable dump, differentials with `virtual` | 066c, 078a | todo |
 | WP-079 | codegen classes: record types with bases, member functions/`this`, ctors/dtors (complete/base variants), `new`/`delete`, member pointers, temporaries; mangling for classes/templates in kiln_abi | 067b, 061a | todo |
 | WP-080 | codegen virtual: vtables, RTTI, virtual calls, thunks; template instantiation emission (linkonce_odr) | 078b, 079 | todo |
