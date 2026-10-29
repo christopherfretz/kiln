@@ -185,10 +185,9 @@ impl Compiler<'_> {
         }
         match storage {
             StorageDuration::FullExpression => Place::Mem(self.materialize(x, ty)),
-            // Extended by a variable outside this evaluation (static or
-            // thread storage, [class.temporary]/6), or by one whose
-            // storage was not preallocated: lives until the evaluation
-            // ends.
+            // Extended by a variable outside this evaluation, or by one
+            // whose storage was not preallocated: lives until the
+            // evaluation ends.
             _ => {
                 let r = self.reg();
                 self.alloc(r, ty, Origin::Temp(x), false, x);
@@ -201,7 +200,7 @@ impl Compiler<'_> {
     /// The `MaterializeTemporaryExpr`s whose temporaries initializer
     /// `init` of a local variable extends ([class.temporary]/6), with
     /// their types.
-    fn extended_temps(&mut self, init: ExprId) -> Vec<(ExprId, ExprId)> {
+    fn extended_temps(&mut self, init: ExprId, sd: StorageDuration) -> Vec<(ExprId, ExprId)> {
         let ast = self.ast();
         let mut out = Vec::new();
         let mut work = vec![init];
@@ -209,7 +208,7 @@ impl Compiler<'_> {
             let n = ast.exprs.get(e);
             match n.kind() {
                 ExprKind::MaterializeTemporaryExpr => {
-                    if ast.exprs.temporary_storage(e) == StorageDuration::Automatic {
+                    if ast.exprs.temporary_storage(e) == sd {
                         out.push((e, ast.exprs.operand(e)));
                     }
                     work.push(ast.exprs.operand(e));
@@ -230,7 +229,7 @@ impl Compiler<'_> {
             return Vec::new();
         }
         let mut out = Vec::new();
-        for (mte, x) in self.extended_temps(init) {
+        for (mte, x) in self.extended_temps(init, StorageDuration::Automatic) {
             let ty = self.ety(x);
             let r = self.reg();
             self.alloc(r, ty, Origin::Temp(x), false, x);
@@ -239,6 +238,30 @@ impl Compiler<'_> {
             out.push((r, ty, loc));
         }
         out
+    }
+
+    /// Allocates the storage of the temporaries initializer `init` of
+    /// variable `d` (static storage duration) extends
+    /// ([class.temporary]/6): objects of their own, outliving the
+    /// initializer's full-expression, which `d`'s constant value may
+    /// point to (frozen into their `LetData.value`s).
+    pub(super) fn begin_static_extended(&mut self, init: ExprId, d: DeclId) {
+        let temps = self.extended_temps(init, StorageDuration::Static);
+        for (mte, x) in temps {
+            let ast = self.ast();
+            let Some(t) = ast.exprs.lifetime_extended_temporary(mte) else { continue };
+            let extends = ast
+                .decls
+                .lifetime_extended(t)
+                .is_some_and(|l| ast.first(l.extending) == ast.first(d));
+            if !extends {
+                continue;
+            }
+            let ty = self.ety(x);
+            let r = self.reg();
+            self.alloc(r, ty, Origin::Let(t), false, x);
+            self.ext_temps.insert(mte, r);
+        }
     }
 
     /// Registers the destruction of the extended temporaries (after the

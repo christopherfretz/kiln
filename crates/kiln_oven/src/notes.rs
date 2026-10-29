@@ -445,7 +445,9 @@ impl Oven {
                 s.push_str(&name_of(ast, d));
             }
             Origin::Str(id, _) => ast.strings.write_literal(id, &mut s),
-            Origin::Temp(_) | Origin::Const(_) | Origin::None => s.push_str("{temporary}"),
+            Origin::Temp(_) | Origin::Let(_) | Origin::Const(_) | Origin::None => {
+                s.push_str("{temporary}");
+            }
             // clang: `{*new T#N}`, N its allocation number.
             Origin::Heap(_, n) => {
                 let _ = write!(s, "{{*new {}#{n}}}", self.tname(ast, a.ty));
@@ -641,6 +643,15 @@ impl Oven {
             }
             MemFault::ModifyGlobal | MemFault::External(_, true) => {
                 "a constant expression cannot modify an object that is visible outside that expression".into()
+            }
+            // clang's note_constexpr_access_static_temporary.
+            MemFault::Temporary(t) => {
+                if let Some(e) = crate::value::let_mte(ast, t) {
+                    extra.push(Note::new(ast.exprs.get(e).loc(), "temporary created here"));
+                }
+                format!(
+                    "{verb} temporary is not allowed in a constant expression outside the expression that created the temporary"
+                )
             }
             MemFault::External(d, false) => {
                 extra.push(Note::new(ast.decls.get(d).loc(), "declared here"));

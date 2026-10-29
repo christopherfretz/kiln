@@ -1368,7 +1368,7 @@ impl Oven {
         Ok((st, abs, a))
     }
 
-    fn load(&self, raw: u64, ty: OTy, k: u32) -> Result<u128, Fault> {
+    pub(crate) fn load(&self, raw: u64, ty: OTy, k: u32) -> Result<u128, Fault> {
         let info = self.types.info(ty);
         let len = value_len(info.size, info.kind);
         let is_ptr = matches!(info.kind, TyKind::Ptr(_) | TyKind::NullPtr);

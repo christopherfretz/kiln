@@ -138,6 +138,11 @@ pub(crate) enum Origin {
     Str(StringLitId, Option<ExprId>),
     /// An anonymous constant thawed from the store.
     Const(ConstValueId),
+    /// A temporary with static storage duration, extended by a reference
+    /// (its `LifetimeExtendedTemporary`): created by the extending
+    /// variable's initializer, or thawed from `LetData.value` (external
+    /// unless usable in constant expressions, [expr.const]/4).
+    Let(DeclId),
     /// A transient allocation: the `new` expression (or the
     /// `std::allocator<T>::allocate` call) that made it, and its number in
     /// its evaluation context (clang's `{*new T#N}`; the leak check
@@ -276,6 +281,10 @@ pub(crate) enum MemFault {
     ModifyGlobal,
     /// Read (`false`) or write (`true`) of an external variable.
     External(DeclId, bool),
+    /// Access of a static temporary not usable in constant expressions
+    /// outside the evaluation that created it (its
+    /// `LifetimeExtendedTemporary`).
+    Temporary(DeclId),
     /// A pointer read from non-pointer bytes or vice versa.
     Incompatible,
     Memory(u64),
@@ -588,10 +597,12 @@ impl Memory {
                 MemFault::OutOfBounds
             });
         }
-        if a.flags & flags::EXTERNAL != 0
-            && let Origin::External(d) = a.origin
-        {
-            return Err(MemFault::External(d, write));
+        if a.flags & flags::EXTERNAL != 0 {
+            match a.origin {
+                Origin::External(d) => return Err(MemFault::External(d, write)),
+                Origin::Let(t) => return Err(MemFault::Temporary(t)),
+                _ => {}
+            }
         }
         Ok((p.space(), u64::from(a.base) + u64::from(p.off), a))
     }

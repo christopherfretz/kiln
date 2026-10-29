@@ -587,6 +587,7 @@ diag_ids! {
     sema_reference_var_requires_init = Error (1) "declaration of reference variable '{0}' requires an initializer";
     sema_default_init_const = Error (1) "default initialization of an object of const type {0}";
     sema_constexpr_var_non_constant = Error (1) "constexpr variable '{0}' must be initialized by a constant expression";
+    sema_constexpr_var_requires_const_destruction = Error (1) "constexpr variable '{0}' must have constant destruction";
     sema_constexpr_non_literal = Error (0) "constexpr can only be used in variable and function declarations";
     sema_extern_init = Warning [ExternInitializer] (0) "'extern' variable has an initializer";
     sema_block_extern_init = Error (0) "declaration of block scope identifier with linkage cannot have an initializer";

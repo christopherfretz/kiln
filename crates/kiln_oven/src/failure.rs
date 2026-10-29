@@ -33,6 +33,10 @@ pub enum FailKind {
     DepthLimit,
     /// The abstract-memory budget was exhausted (`-fconstexpr-memory`).
     MemoryLimit,
+    /// The value is constant but the variable's destruction is not
+    /// ([dcl.constexpr]/6, "must have constant destruction"); the notes
+    /// say why.
+    Destruction,
 }
 
 /// Why an evaluation failed: the reason (the first note) followed by the

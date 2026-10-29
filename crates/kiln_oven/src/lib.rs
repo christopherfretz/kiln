@@ -216,6 +216,15 @@ pub trait SemaBridge {
     fn consts(&mut self) -> &mut ConstStore;
     /// Emits a diagnostic (unused by M2 evaluation, which returns notes).
     fn diag(&mut self, d: Diag);
+    /// Records the constant value of lifetime-extended temporary `t` (a
+    /// `LifetimeExtendedTemporary` with static storage duration, frozen
+    /// with its extending variable's initializer: `LetData.value`,
+    /// write-once — a second write of the same temporary is ignored). A
+    /// bridge without a mutable AST (tests) may ignore it: reads of the
+    /// temporary from later evaluations then see an external object.
+    fn set_temporary_value(&mut self, t: DeclId, v: ConstValueId) {
+        let _ = (t, v);
+    }
 }
 
 /// The constant evaluator of one translation unit.
@@ -242,6 +251,11 @@ pub struct Oven {
     /// expression ([lex.string]/9: distinct evaluations need not share).
     pub(crate) lit_exprs: FxHashMap<ExprId, u32>,
     pub(crate) thawed: FxHashMap<ConstValueId, u64>,
+    /// The static objects of thawed lifetime-extended temporaries.
+    pub(crate) lets: FxHashMap<DeclId, u64>,
+    /// The static temporaries a frozen result points to, with their
+    /// objects: frozen into `LetData.value` once the result is.
+    pub(crate) let_pending: Vec<(DeclId, u64)>,
     pub(crate) mem: Memory,
     pub(crate) regs: Vec<u128>,
     pub(crate) stack: Vec<Frame>,
@@ -289,6 +303,8 @@ impl Oven {
             provisional: Vec::new(),
             lit_exprs: FxHashMap::default(),
             thawed: FxHashMap::default(),
+            lets: FxHashMap::default(),
+            let_pending: Vec::new(),
             mem: Memory::new(budget.bytes),
             regs: vec![0; 256],
             stack: Vec::with_capacity(64),
@@ -419,6 +435,8 @@ impl Oven {
             + cap(&self.provisional)
             + map(&self.lit_exprs)
             + map(&self.thawed)
+            + map(&self.lets)
+            + cap(&self.let_pending)
             + self.mem.footprint()
             + cap(&self.regs)
             + cap(&self.stack)

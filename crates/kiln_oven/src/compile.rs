@@ -313,6 +313,9 @@ impl Oven {
         let entry = c.here();
         let ty = c.ety(e);
         let glvalue = c.b.ast().exprs.get(e).value_category().is_glvalue();
+        if let Some(d) = object {
+            c.begin_static_extended(e, d);
+        }
 
         let ref_object = object.filter(|&d| is_reference_var(c.b.ast(), d));
         let ret = if let Some(d) = ref_object {
@@ -364,6 +367,40 @@ impl Oven {
         f.ret = ret;
         self.thunks.insert(e, idx);
         idx
+    }
+
+    /// A function destroying the object of type `ty` whose address is in
+    /// its register 0 (the constant destruction of `constexpr` variable
+    /// `d`, [dcl.constexpr]/6), or `None` if destroying it does nothing.
+    pub(crate) fn compile_destroy(
+        &mut self,
+        b: &mut dyn SemaBridge,
+        d: DeclId,
+        ty: OTy,
+    ) -> Option<u32> {
+        let mut c = Compiler::new(self, b);
+        let f = c.dtor_of(ty)?;
+        let entry = c.here();
+        let p = c.reg();
+        debug_assert_eq!(p, 0);
+        // clang's `in call to 'v.~T()'` points at the variable.
+        let loc = c.b.ast().decls.get(d).loc();
+        c.emit_loc(Op::PushCleanup, 0, &[p, f, ty.0], loc);
+        c.emit(Op::Ret, 1, &[p]);
+        let nregs = c.max;
+        let idx = self.funcs.len() as u32;
+        self.funcs.push(Func {
+            decl: None,
+            entry,
+            state: FState::Ready,
+            nregs,
+            ret: RetKind::Void,
+            params: Vec::new(),
+            memo: false,
+            this_reg: None,
+            this_ty: None,
+        });
+        Some(idx)
     }
 
     /// Compiles function `idx` if it can be: sets its state.

@@ -344,9 +344,9 @@ average 8-9 during the run):
 WP-061b part 1 (`crates/kiln_oven/src/mem.rs`); the `New`/`Delete`
 operations, their checks, the leak check and the churn benchmarks are
 WP-061b part 2 (`crates/kiln_oven/src/compile/new_delete.rs`, `vm.rs`,
-`value.rs`). Classes with a constructor or destructor (WP-076),
-`std::allocator` and `__builtin_operator_new` (the templates wave) are not
-yet constant; see "Status and what remains".
+`value.rs`). Classes with a constructor or destructor landed with WP-076
+("Classes"); `std::allocator` and `__builtin_operator_new` (the templates
+wave) are not yet constant; see "Status and what remains".
 
 The operator's requirement: memory that a constant evaluation allocates and
 frees **must be reclaimed while the evaluation is still running**, not at its
@@ -419,7 +419,7 @@ a pointer to a fresh allocation of `ty` (or, with aux `ARRAY`,
 `ty[count]`), uninitialized unless aux `ZERO` (the initializer, if any, is
 ordinary stores through the pointer; the lifetime of a
 trivially-constructible object begins at allocation; classes with
-constructors begin life in the constructor call, WP-076). For an array,
+constructors begin life in the constructor call, "Classes"). For an array,
 `count` is the bound as written (before the `size_t` conversion; aux
 `SIGNED` says whether it is signed) and `k` the number of explicit
 initializers; the bound is checked in clang's order: negative, too large
@@ -532,6 +532,147 @@ targets, set from the live-object count, not from a measurement:
 The bench entries take the default thresholds (`threshold-bytes` 2%), so
 once recorded, any allocator change that raises `peak_bytes`, `peak_arena`
 or `allocs` fails the bench. `steps` is gated at 0% as everywhere.
+
+### Classes — Landed (WP-076)
+
+*Status:* implemented in `crates/kiln_oven/src/compile/class.rs`
+(construction, destruction, temporaries), `compile/mptr.rs` and
+`memptr.rs` (member pointers), `compile/new_delete.rs` (class `new`/
+`delete`), `vm.rs` (cleanups, downcasts) and `value.rs` (constant
+destruction, static temporaries). Virtual dispatch, virtual bases,
+`dynamic_cast` and `typeid` are WP-077's; builtins are WP-088's.
+
+**Object model.** A class object is one allocation of its record type;
+`ty.rs` lays a record out as its direct non-virtual base subobjects
+(`Field::base`, in declaration order, before the members) and then its
+fields, at the offsets of kiln_abi's record layout, so a subobject is a
+byte offset plus a type, and a pointer to it is the allocation plus that
+offset (no `SubobjectId` is materialized: the path is recovered from the
+offset with `Types::has_subobject`/the most-derived-object walk when a
+downcast or a derived member pointer needs it). Lifetime is per
+allocation (the `live` bit and generation of `mem.rs`); a union's active
+member is tracked per union subobject as in M2 ([class.union]/6: a
+mem-initializer or an assignment to a member of non-class type activates
+it, also through an anonymous union). `BeginLife`/`EndLife` per subobject
+are not separate operations: a member's lifetime is its complete
+object's, which is precise for constant evaluation because no constant
+expression can end a subobject's lifetime independently except through a
+union (tracked) or an explicit destructor call (not yet parsed, below).
+
+**Construction.** `CXXConstructExpr` (complete, base and delegating; a
+prvalue initializes its target object directly, [dcl.init.general]/17.6.1;
+a trivial copy or move constructor copies the object representation,
+[class.copy.ctor]/14), `CXXTemporaryObjectExpr`,
+ctor-initializers in initialization order (bases, then members, with
+`CXXDefaultInitExpr` for the rest), `CXXParenListInitExpr`,
+`ArrayInitLoopExpr`/`ArrayInitIndexExpr` (implicit copies of array
+members), default construction of arrays of class type (an element loop),
+and the implicit special members obtained from `SemaBridge::ensure_body`.
+A `const` complete object is writable while it is constructed and
+destroyed: `MakeConst [p]` sets `CONST` once the constructor returns
+([class.ctor.general]/5), `run_cleanup` clears it before the destructor
+runs ([class.dtor]/5).
+
+**Destruction (cleanups).** `PushCleanup [p, dtor, ty]` registers the
+destruction of the object (or of each element of an array, aux 1: of a
+heap array whose count is the allocation's) on the Oven's cleanup stack
+(`Oven::cleanups`, entries `Cleanup { this, func, pc }`); each frame
+records the stack height at entry (`Frame::clean`). `ScopeExit` and `Ret`
+run the cleanups above their mark, last registered first, by entering
+the destructor and re-executing themselves on its return, so destruction
+is iterative and needs no native recursion. Locals are destroyed in
+reverse declaration order at scope exit, `break`/`continue`/`return`
+included; temporaries at the end of their full-expression
+(`ExprWithCleanups`); members and bases after the destructor body, in
+reverse construction order; array elements from the last. A class
+without a user-provided destructor and with trivially destructible
+members registers nothing.
+
+**Temporaries.** `MaterializeTemporaryExpr` by storage duration:
+full-expression temporaries are frame allocations released at the end of
+the full-expression; temporaries extended by a local (automatic) are
+allocated before the initializer runs and destroyed with the variable
+(`ext_temps`); temporaries extended by a variable of static storage
+duration whose initializer is being evaluated are allocated before the
+initializer with `Origin::Let(t)` (`t` the `LifetimeExtendedTemporary`),
+outlive the initializer's full-expression, and are frozen after the
+result: a pointer to one freezes as `PtrBase::Temporary(t)` and its value
+is written to `LetData.value` through the new
+`SemaBridge::set_temporary_value(t, v)` (write-once). Reading one later
+thaws it from `LetData.value` when it is usable in constant expressions
+([expr.const]/4: const non-volatile type, extended by a variable usable
+in constant expressions); otherwise it is an external object and a read
+is clang's `read of temporary is not allowed in a constant expression
+outside the expression that created the temporary` with `temporary
+created here` (`MemFault::Temporary`). A reference variable counts as
+potentially-constant ([expr.const]/3), so `const int &c = 6;` makes `c`
+usable. `CXXBindTemporaryExpr` is transparent: a temporary's destruction
+is registered where the prvalue is materialized.
+
+**Constant destruction ([dcl.constexpr]/6, [expr.const]/7).** After a
+constexpr variable of class (or class array) type is initialized and
+frozen, `Oven::compile_destroy` builds a thunk that registers and runs its
+destruction (`PushCleanup` + `Ret`); a fault there is
+`FailKind::Destruction`, which sema reports as `constexpr variable 'x'
+must have constant destruction` with the fault's note and `in call to
+'x.~T()'` (`arr[1].~A()` for an element). Destructors may modify the
+object (it is no longer const). Default-initialized constexpr class
+variables are checked for const-default-constructibility and then
+evaluated like any other initializer.
+
+**Member pointers.** Values are interned per Oven as clang's
+`APValue::MemberPointer` (member, `derived` flag, class path;
+`memptr.rs`), so freeze/thaw maps 1:1 to `Scalar::MemberPtr`. Ops:
+`MpCast [mp, class]` (castToDerived aux 0, castToBase aux 1, in place),
+`MpAddr [dst, obj, mp]` (`obj.*mp`, checking derived-member containment;
+`Fault::NullBase` for a base step through a null object), `MpActive
+[p, mp]` (a union member reached through `.*` must be active), `MpFn
+[dst, mp, trap]` (the callee of a pointer to member function; a virtual
+one traps to WP-077). `Downcast [dst, p, off, ty]` is
+`static_cast` from a base pointer or glvalue to a derived one
+([expr.static.cast]/2, /11), checking that the base subobject is part of
+an object of the derived type.
+
+**Heap class objects.** `new T(args)`, `new T{...}`, `new T[n]` (with
+explicit initializers and a default-constructed tail) construct in place;
+`delete`/`delete[]` make the 061b checks first (`Delete` aux 2: checks
+only), then run the destructors (array elements from the last), then
+free. The leak check and the heap-result note are 061b's.
+
+**Iterative walkers (Q16, R-WALK).** Left- and right-deep spines of
+builtin binary operators, `&&`/`||` and comma are lowered with explicit
+loops and worklists (`binary`, `logical`, `arith_spine`, `effect`, the
+address-taken pre-scan); a 262144-term chain costs 34 MB end to end (was
+168 MB), the rest being parse and sema.
+
+**Counters and benchmarks.** No new counters: construction is `calls`
+and `steps`, heap objects are `allocs`. Entries `bench/oven/class-churn`
+(10000 heap objects per round with owning destructors, 8 rounds) and
+`bench/oven/soa` (a 4096-row struct-of-arrays table, mirrorbind's
+binding-table shape); gated copies `tests/conformance/class.dtor/
+churn-objects.cpp` and `class.mem/soa-table.cpp` carry `oven:` budgets.
+
+**Left for later (owners).**
+- Virtual calls, virtual bases, virtual calls through member pointers,
+  `dynamic_cast`, `typeid`, `delete` through a base with a virtual
+  destructor: WP-077 (they trap with a `kiln:` note).
+- `std::construct_at`/`destroy_at`/`std::allocator`: need function
+  templates (WP-071) and the library; the `is_std_allocator_call` hook
+  still returns false.
+- Class assignment (`a = b` of class type) is rejected by sema before
+  evaluation; explicit destructor calls (`p->~T()`) and
+  `::operator new`/`::operator delete` are not parsed; inheriting
+  constructors (`using B::B`) are not in sema: front-end gaps, not Oven
+  work.
+- Constant destruction of a non-trivially-destructible temporary bound to
+  a constexpr reference is not checked (clang 19 rejects it as "not yet
+  supported"; kiln accepts it).
+- Codegen of `PtrBase::Temporary` (a constexpr reference to a static
+  temporary used at run time) is WP-079's ("pointers to lifetime-extended
+  temporaries are not supported yet").
+- Spec gap: `SubobjectId` (spec/sema-class.md §3.5) is not used by the
+  Oven; offsets suffice until virtual bases (WP-077) make the path
+  dynamic.
 
 ### Reflection runtime (M6)
 - `std::meta::info` is a `ReflectionId(u32)` into sema's entity tables;
@@ -717,26 +858,23 @@ the five churn benchmarks, all within their gates (measured: list
 393216/524288; string 336 allocations, 118048/257368; tree 65520,
 98280/98280; mixed 5014 allocations, 5064/5416).
 
+Implemented (M3, WP-076): classes in constant evaluation — construction,
+destruction, temporaries (static ones frozen into `LetData.value`),
+constant destruction, member pointers, class `new`/`delete` and the
+iterative spine walkers; see "Classes — Landed (WP-076)".
+
 Remaining (each traps with a `kiln:` note today):
-- `new`/`delete` of a class with a non-trivial default constructor or
-  destructor, or initialized by a `CXXConstructExpr`: "kiln: constant
-  evaluation of constructors and destructors in new/delete lands with
-  WP-076".
 - `std::allocator<T>::allocate`/`deallocate` and
   `__builtin_operator_new`/`__builtin_operator_delete`: need class
   templates; the `is_std_allocator_call` hook is in place and returns
   false ("kiln: std::allocator in constant evaluation lands with the
   templates wave").
 - `delete` through `void*`, and P2747 placement new (see above).
-- Front-end gaps that keep some `new` forms from reaching the Oven (not
-  Oven work): default- or paren-initialized class `new` (`new S[2]`,
-  `new U`) is rejected by sema; `delete[] (expr)` is parsed as a lambda;
-  class-specific `operator new`, special members, binding a reference to
-  a temporary and `new char[n]{"hi"}` are not supported yet.
-- Binding a reference to a temporary (a prvalue). Sema rejects these
-  before evaluation in M2 anyway.
-- `MaterializeTemporaryExpr`: kiln_sema never builds one in M2, and the
-  compiler has no lowering for it. It comes with temporaries in M3.
+- Front-end gaps that keep some forms from reaching the Oven (not
+  Oven work): class assignment, explicit destructor calls,
+  `::operator new`/`delete`, class-specific `operator new`, inheriting
+  constructors, `delete[] (expr)` (parsed as a lambda) and
+  `new char[n]{"hi"}`.
 - Volatile objects: reads are diagnosed ([expr.const]/5.9) only where the
   front end puts the volatile qualifier on the read expression's type.
 
@@ -755,6 +893,9 @@ Remaining (each traps with a `kiln:` note today):
   delete and bound notes, the `allocs`/peak counters, and memo purity
   (an allocating call is evaluated every time: two leaking calls report
   two leaks with the cache on).
+- `crates/kiln_driver/tests/oven_classes.rs` (WP-076, through the real
+  front end): member pointer freeze/thaw/cast round trips, 20000-operand
+  spines, static temporaries, constant destruction, class `allocs`.
 - `nested.rs`: nested evaluation from `ensure_body` (separate records with
   exclusive costs, shared step budget, depth from the starting call, a
   function whose body is being made available, no memoization through it)
