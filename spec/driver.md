@@ -8,7 +8,8 @@ implement is an error, never silently ignored. The oracle is Debian's
 Three actions are implemented:
 
 - preprocessing: `-E`, `-M`, `-MM`, and `-MD`/`-MMD` alongside `-E`;
-- `-fsyntax-only [-fdump-ast]`, which runs WP-048's parser and Sema;
+- `-fsyntax-only [-fdump-ast] [-fdump-record-layouts]`, which runs
+  WP-048's parser and Sema;
 - code generation (WP-052b): `-S -emit-llvm`, `-c -emit-llvm`, `-S`, `-c`
   and linking (see "Code generation").
 
@@ -19,7 +20,7 @@ Crate layout (each part is replaceable on its own):
 | `args` | parse argv into `Args`: no file system, no diagnostics |
 | `toolchain` | target, `-std=`, resource dir, GCC/libc++ detection, the system search directories |
 | `pp_cmd` | one `-E` job: predefines, search list, preprocessor (WP-015's `IfEval` and `ClangFeatures`), printer, dependency list |
-| `syntax_cmd` | one `-fsyntax-only` job: parser, Sema, AST dump |
+| `syntax_cmd` | one `-fsyntax-only` job: parser, Sema, record-layout dump, AST dump |
 | `codegen_cmd` | the codegen path: phases, output names, the step plan, `-###`, the in-process frontend (parser, Sema, `kiln_codegen::emit`) |
 | `link` | the external commands (`llc`, `llvm-as`, `clang++`): rendering and running them |
 | `constexpr_opts` | the `-fconstexpr-*` flags: Oven limits for the parser's Sema, the report |
@@ -66,6 +67,7 @@ starting with `-` are inputs.
 | `-F <dir>` | accepted; warns `ignoring framework directory` |
 | `-fsyntax-only` | parse and check (see "Syntax checking") |
 | `-fdump-ast[=ids,locs,canonical,implicit,all-files]`, `-fdump-ast-filter=<s>` | with `-fsyntax-only`: the AST dump (`spec/ast-dump.md`) to the output |
+| `-fdump-record-layouts`, `-fdump-record-layouts-complete` | with `-fsyntax-only`: the record layouts (`spec/abi.md` §6, §8.4) to the output |
 | `-c`, `-S`, `-emit-llvm` | code generation (see "Code generation") |
 | `-###` | with a codegen action: print the steps instead of running them |
 | `-g`, `-g0`..`-g3`, `-ggdb`, `-ggdb0`..`-ggdb3` | accepted and ignored (no debug info yet) |
@@ -177,6 +179,14 @@ output and status follow the `-E` rules:
 - diagnostics, then the error summary, go to standard error;
 - `-fdump-ast` writes the dump to the output. It covers the main file's
   declarations; `-fdump-ast=all-files` adds those of included files;
+- `-fdump-record-layouts` and `-fdump-record-layouts-complete` (clang
+  spells the second `-Xclang -fdump-record-layouts-complete`; kiln
+  accepts it directly) are the same flag. They write
+  `kiln_abi::dump_all_record_layouts` for the `-target` triple to the
+  output, before any `-fdump-ast` dump: every complete, valid,
+  non-template class of the translation unit, in clang's `-complete`
+  order. Unnamed classes print their `at F:L:C` location. The dump is
+  written even when there are errors;
 - the parser's Sema evaluates constants under the `-fconstexpr-*`
   limits; after the parse `-fconstexpr-report=` writes the Oven's report
   (`constexpr_opts`);
@@ -186,7 +196,8 @@ An unknown `-fdump-ast` option gives `invalid value '<opt>' in
 '-fdump-ast=<opts>'`.
 
 C inputs (`-x c`, `.c`), `-MD`/`-MMD` with `-fsyntax-only`, and
-`-fdump-ast` without `-fsyntax-only` are "not implemented yet".
+`-fdump-ast` or `-fdump-record-layouts` without `-fsyntax-only` are "not
+implemented yet".
 
 ## Code generation
 
@@ -387,6 +398,9 @@ Each deviation is covered by a test or a test note.
 13. **`-MD`/`-MMD` with a codegen action is "not implemented yet"**
     (clang writes the dependency file alongside the object).
 14. **No debug information:** `-g*` is accepted and ignored.
+15. **`-fdump-record-layouts` dumps every complete class**, as
+    `-fdump-record-layouts-complete` does. clang dumps only the classes
+    it lays out, in the order it lays them out (spec/abi.md A5).
 
 ## Tests
 
@@ -402,6 +416,13 @@ Each deviation is covered by a test or a test note.
   (`.ll`, `.s`, `.o`, linking and running, output naming, `-###`, `-v`,
   unused-input warnings, missing tools). Steps needing `llc-19`/`clang++-19`
   are skipped without them.
+- `crates/kiln_driver/tests/record_layouts.rs`: the `tests/layout/`
+  corpus (at least 40 programs). Each is dumped by
+  `kiln -fdump-record-layouts` and by `clang -Xclang
+  -fdump-record-layouts-complete` on both triples, and the dumps are
+  compared byte for byte (clang's builtin records are dropped). The test
+  also covers both spellings and the "not implemented" error with
+  `-S -emit-llvm`.
 - `crates/kiln_codegen/tests/ir_vs_clang.rs`: the IR-diff corpus through
   `kiln_driver::run` (spec/codegen.md §6).
 - `run` conformance tests compile and link through the driver.
