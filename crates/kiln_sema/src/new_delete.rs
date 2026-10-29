@@ -10,11 +10,12 @@
 use kiln_ast::decl::{DeclFlags, DeclKind, DefinitionBits, EnumData, FnSpec};
 use kiln_ast::expr::{ExprFlags, ExprKind, NewExtra, NewInitStyle, Radix};
 use kiln_ast::names::{DeclName, OverloadedOperator};
-use kiln_ast::types::{ExcSpec, FuncInfo, Nns, TagKeyword};
+use kiln_ast::types::{ExcSpec, FuncInfo, Nns, Quals, TagKeyword};
 use kiln_ast::{DeclHead, DeclId, ExprId, QualType};
 use kiln_diag::DiagId;
 use kiln_source::Loc;
 
+use crate::class::{CtorCall, DeletedAs, DiagSites, InitEntity, Selected, SpecialKind};
 use crate::conv::{self, ConvCtx};
 use crate::declspec::{Chunk, Declarator};
 use crate::init::{InitList, InitValue, Initializer};
@@ -650,8 +651,10 @@ impl Sema<'_, '_> {
         bits > MAX_BITS
     }
 
-    /// Reports the class element types kiln cannot allocate yet; true if
-    /// one was reported (the node is built without an initializer).
+    /// Diagnoses the default-initialization of a const class object
+    /// without a user-provided default constructor ([dcl.init.general]/8);
+    /// true if one was reported (the node is built without an
+    /// initializer).
     fn new_class_unsupported(
         &mut self,
         elem: QualType,
@@ -659,42 +662,59 @@ impl Sema<'_, '_> {
         init: &NewInit,
         at: Loc,
     ) -> bool {
-        let mut t = elem;
-        while let Some(e) = self.ast.types.element(t).filter(|_| self.ast.types.is_array(t)) {
-            t = e;
-        }
-        let Some(rec) = self.ast.types.as_record(t) else { return false };
+        let Some(rec) = self.ast.types.as_record(elem) else { return false };
         let Some(def) = self.ast.definition(rec) else { return false };
         let defn = self.ast.decls.record(def).map(|r| r.defn).unwrap_or_default();
-        let what = if defn.contains(DefinitionBits::USER_DECLARED_CTOR) {
-            "new-expression of a class type with constructors"
-        } else if array_form && !defn.contains(DefinitionBits::TRIVIAL_DTOR) {
-            "array new-expression of a class type with a non-trivial destructor"
-        } else {
-            match init {
-                NewInit::List(_) => return false,
-                NewInit::None => {
-                    let is_const = self.ast.types.effective_quals(elem).is_const();
-                    if is_const && array_form {
-                        // `new_initializer` diagnoses the const array.
-                        return false;
-                    }
-                    if is_const {
-                        let msg = self
-                            .diag(DiagId::sema_default_init_const_no_ctor, at)
-                            .arg(self.ty_arg(elem));
-                        self.emit(msg);
-                        return true;
-                    }
-                    "default-initialization of a class type in a new-expression"
-                }
-                NewInit::Paren(..) => {
-                    "parenthesized initialization of a class type in a new-expression"
-                }
-            }
-        };
-        self.unsupported(what, at);
+        // `new_initializer` diagnoses the const array.
+        if !matches!(init, NewInit::None)
+            || array_form
+            || !self.ast.types.effective_quals(elem).is_const()
+            || defn.contains(DefinitionBits::CAN_CONST_DEFAULT_INIT)
+        {
+            return false;
+        }
+        let msg = self.diag(DiagId::sema_default_init_const_no_ctor, at).arg(self.ty_arg(elem));
+        self.emit(msg);
         true
+    }
+
+    /// The default- or value-initialization of the class elements of a
+    /// new-expression by their default constructor ([expr.new]/23,
+    /// [dcl.init.general]/7, /9): a `CXXConstructExpr` of type `ty` (the
+    /// element, or the array of them). `None` when the element type is
+    /// not a class, or a default-initialization needs no constructor call
+    /// (a trivial default constructor). `Some(Err)` after an error.
+    fn new_class_default(
+        &mut self,
+        elem: QualType,
+        ty: QualType,
+        value_init: bool,
+        at: Loc,
+    ) -> Option<Result<ExprId, ()>> {
+        let rec = self.ast.types.as_record(elem)?;
+        self.instantiate_for_init(rec, at);
+        let class = self.ast.definition(rec)?;
+        let class = conv::bases::complete_class(self, class)?;
+        let defn = self.ast.decls.record(class).map(|r| r.defn).unwrap_or_default();
+        if defn.contains(DefinitionBits::TRIVIAL_DEFAULT_CTOR) {
+            // Default-initialization does nothing; value-initialization
+            // zero-initializes ([dcl.init.general]/9.1.2).
+            return value_init.then(|| Ok(self.builder().implicit_value_init(ty)));
+        }
+        let sel = self.select_special(class, SpecialKind::DefaultCtor, Quals::NONE, Quals::NONE);
+        let call = CtorCall { value_init, ..CtorCall::new(&[]) };
+        let sites = DiagSites { access: at, deleted: at, deleted_as: DeletedAs::Call };
+        let e = self.use_ctor(
+            sel,
+            ty,
+            class,
+            SpecialKind::DefaultCtor,
+            call,
+            at,
+            InitEntity::Var,
+            sites,
+        );
+        Some(e.ok_or(()))
     }
 
     /// The allocation function for `op` with `place` arguments, and
@@ -917,7 +937,12 @@ impl Sema<'_, '_> {
                     self.emit(msg);
                     return Err(());
                 }
-                Ok((None, None))
+                let ty = if array_form { array_ty(self) } else { elem };
+                match self.new_class_default(elem, ty, false, at) {
+                    Some(Ok(e)) => Ok((Some(e), None)),
+                    Some(Err(())) => Err(()),
+                    None => Ok((None, None)),
+                }
             }
             NewInit::Paren(v, l, r) => {
                 if array_form {
@@ -926,7 +951,27 @@ impl Sema<'_, '_> {
                         return Err(());
                     }
                     let t = array_ty(self);
-                    return Ok((Some(self.builder().implicit_value_init(t)), None));
+                    return match self.new_class_default(elem, t, true, at) {
+                        Some(Ok(e)) => Ok((Some(e), None)),
+                        Some(Err(())) => Err(()),
+                        None => Ok((Some(self.builder().implicit_value_init(t)), None)),
+                    };
+                }
+                if self.ast.types.as_record(elem).is_some() {
+                    // A constructor call, or an aggregate's parenthesized
+                    // initialization ([dcl.init.general]/16.6).
+                    let e = if v.is_empty() {
+                        match self.value_init_class(elem, at) {
+                            Some(e) => e,
+                            None => self.builder().implicit_value_init(elem),
+                        }
+                    } else {
+                        self.perform_init(elem, Initializer::Paren(v, l, r), at, false)
+                    };
+                    if self.is_err_expr(e) {
+                        return Err(());
+                    }
+                    return Ok((Some(e), None));
                 }
                 match v.len() {
                     0 => Ok((Some(self.builder().implicit_value_init(elem)), None)),
@@ -1090,13 +1135,13 @@ impl Sema<'_, '_> {
             && let Some(def) = self.ast.definition(rec)
         {
             let defn = self.ast.decls.record(def).map(|r| r.defn).unwrap_or_default();
-            if !defn.contains(DefinitionBits::TRIVIAL_DTOR) {
-                // WP-067b / WP-076: destructor calls and array cookies.
-                self.unsupported(
-                    "deleting an object of a class type with a non-trivial destructor",
-                    loc,
-                );
-                return self.recover_err(&[operand], loc);
+            if !defn.contains(DefinitionBits::TRIVIAL_DTOR)
+                && let Selected::Found(m) =
+                    self.select_special(def, SpecialKind::Dtor, Quals::NONE, Quals::NONE)
+            {
+                // [expr.delete]/6: the destructor is invoked (odr-used,
+                // [basic.def.odr]/8).
+                self.mark_function_referenced(m, loc);
             }
             // todo(WP-068b): unless `::delete`, the class's own
             // `operator delete` is looked up first ([expr.delete]/9).

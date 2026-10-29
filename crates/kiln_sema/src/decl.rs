@@ -2482,7 +2482,12 @@ impl Sema<'_, '_> {
                 self.ast.decls.finish_eval(v, None);
                 let name = self.decl_name(v);
                 let at = Self::fold_lone_invalid(&mut f, loc);
-                let msg = self.diag(DiagId::sema_constexpr_var_non_constant, at).arg(name);
+                let id = if f.kind == kiln_oven::FailKind::Destruction {
+                    DiagId::sema_constexpr_var_requires_const_destruction
+                } else {
+                    DiagId::sema_constexpr_var_non_constant
+                };
+                let msg = self.diag(id, at).arg(name);
                 let msg = Self::with_failure_notes(msg, f);
                 self.emit(msg);
             }
@@ -2570,13 +2575,28 @@ impl Sema<'_, '_> {
             self.ast.decls.set_flags(v, DeclFlags::INVALID);
             return;
         }
+        let quals = self.ast.types.effective_quals(ty);
+        let elem = self.base_element(ty);
         if spec.is_constexpr() {
+            // [dcl.constexpr]/6: a default-initialized `constexpr` object
+            // of class type is initialized by its default constructor,
+            // which must be a constant expression; anything else has no
+            // initializer at all.
+            if self.element_class(elem).is_some() {
+                let errors = self.diags.error_count();
+                self.check_class_default_init(v, ty, loc);
+                if self.diags.error_count() > errors {
+                    return;
+                }
+                if let Some(init) = self.ast.decls.var(v).and_then(|x| x.init) {
+                    self.check_constexpr_init(v, init);
+                }
+                return;
+            }
             let msg = self.diag(DiagId::sema_constexpr_var_non_constant, loc).arg(name);
             self.emit(msg);
             return;
         }
-        let quals = self.ast.types.effective_quals(ty);
-        let elem = self.base_element(ty);
         if self.element_class(elem).is_some() {
             // [dcl.init.general]/7–8, [class.dtor]/15 (WP-067a).
             self.check_class_default_init(v, ty, loc);

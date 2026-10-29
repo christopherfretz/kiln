@@ -30,6 +30,12 @@ impl SemaBridge for Bridge<'_, '_, '_> {
         &self.sema.ast
     }
 
+    fn set_temporary_value(&mut self, t: DeclId, v: ConstValueId) {
+        // Write-once: a re-evaluation of the same initializer (a fold,
+        // then the check) computes the same value.
+        let _ = self.sema.ast.decls.set_lifetime_extended_value(t, v);
+    }
+
     fn ensure_body(&mut self, f: DeclId, oven: &mut Oven) -> Option<StmtId> {
         // A body exists once its definition has been parsed or
         // instantiated (a later definition is picked up by the next

@@ -38,6 +38,7 @@ mod failure;
 mod kbc;
 mod mem;
 mod memo;
+mod memptr;
 mod notes;
 pub mod report;
 mod softfloat;
@@ -215,6 +216,15 @@ pub trait SemaBridge {
     fn consts(&mut self) -> &mut ConstStore;
     /// Emits a diagnostic (unused by M2 evaluation, which returns notes).
     fn diag(&mut self, d: Diag);
+    /// Records the constant value of lifetime-extended temporary `t` (a
+    /// `LifetimeExtendedTemporary` with static storage duration, frozen
+    /// with its extending variable's initializer: `LetData.value`,
+    /// write-once — a second write of the same temporary is ignored). A
+    /// bridge without a mutable AST (tests) may ignore it: reads of the
+    /// temporary from later evaluations then see an external object.
+    fn set_temporary_value(&mut self, t: DeclId, v: ConstValueId) {
+        let _ = (t, v);
+    }
 }
 
 /// The constant evaluator of one translation unit.
@@ -241,13 +251,22 @@ pub struct Oven {
     /// expression ([lex.string]/9: distinct evaluations need not share).
     pub(crate) lit_exprs: FxHashMap<ExprId, u32>,
     pub(crate) thawed: FxHashMap<ConstValueId, u64>,
+    /// The static objects of thawed lifetime-extended temporaries.
+    pub(crate) lets: FxHashMap<DeclId, u64>,
+    /// The static temporaries a frozen result points to, with their
+    /// objects: frozen into `LetData.value` once the result is.
+    pub(crate) let_pending: Vec<(DeclId, u64)>,
     pub(crate) mem: Memory,
     pub(crate) regs: Vec<u128>,
     pub(crate) stack: Vec<Frame>,
+    /// Registered destructions, innermost last (`Op::PushCleanup`).
+    pub(crate) cleanups: Vec<vm::Cleanup>,
     pub(crate) memo: Memo,
     pub(crate) stats: EvalStats,
     pub(crate) run: vm::RunState,
     pub(crate) scratch: value::Scratch,
+    /// The interned pointer-to-member values.
+    pub(crate) mp: memptr::MemPtrs,
     /// Evaluation contexts in progress (R-OVEN-1: 0 between evaluations,
     /// above 1 while a bridge callback evaluates a nested one).
     pub(crate) ctx_depth: u32,
@@ -284,13 +303,17 @@ impl Oven {
             provisional: Vec::new(),
             lit_exprs: FxHashMap::default(),
             thawed: FxHashMap::default(),
+            lets: FxHashMap::default(),
+            let_pending: Vec::new(),
             mem: Memory::new(budget.bytes),
             regs: vec![0; 256],
             stack: Vec::with_capacity(64),
+            cleanups: Vec::new(),
             memo: Memo::new(budget.memo_entries),
             stats: EvalStats::default(),
             run: vm::RunState::default(),
             scratch: value::Scratch::default(),
+            mp: memptr::MemPtrs::default(),
             ctx_depth: 0,
             inner: Inner::default(),
         }
@@ -412,12 +435,16 @@ impl Oven {
             + cap(&self.provisional)
             + map(&self.lit_exprs)
             + map(&self.thawed)
+            + map(&self.lets)
+            + cap(&self.let_pending)
             + self.mem.footprint()
             + cap(&self.regs)
             + cap(&self.stack)
+            + cap(&self.cleanups)
             + self.memo.footprint()
             + self.run.footprint()
             + self.scratch.footprint()
+            + self.mp.footprint()
     }
 
     /// The disassembly of everything compiled so far (debugging aid).
@@ -502,6 +529,7 @@ impl Oven {
         c.allocs = self.mem.heap_allocs;
         self.mem.reset();
         self.stack.clear();
+        self.cleanups.clear();
         (r, c)
     }
 

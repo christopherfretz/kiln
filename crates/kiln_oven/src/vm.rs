@@ -117,6 +117,24 @@ pub(crate) struct Frame {
     pub serial: u32,
 }
 
+// Every call pushes a `Frame`: growing it past 32 bytes cost ~5% of the
+// wall clock of call-heavy evaluations (bench/oven/churn-tree.cpp).
+const _: () = assert!(size_of::<Frame>() <= 32);
+
+/// A registered destruction (`Op::PushCleanup`): the destructor `func`
+/// of the object at `this`, registered by the instruction at `pc` of the
+/// frame at stack depth `depth` (whose `Ret` runs it if no `ScopeExit`
+/// did). Kept here rather than as a mark in `Frame`, which every call
+/// pushes: `exec` drops the registrations a failed evaluation left, and
+/// a `Ret` drains all of its depth, so the depth names one activation.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Cleanup {
+    pub this: u64,
+    pub func: u32,
+    pub pc: u32,
+    pub depth: u32,
+}
+
 /// Why execution stopped (rendered into notes by `notes`).
 #[derive(Clone, Debug)]
 pub(crate) enum Fault {
@@ -160,7 +178,17 @@ pub(crate) enum Fault {
     },
     LiteralCmp,
     NullField,
+    /// A base-class step of a member pointer access through a null
+    /// object pointer.
+    NullBase,
     PastField,
+    /// A base-to-derived conversion of a pointer to (or glvalue of) a
+    /// base subobject that is not part of an object of the derived type
+    /// ([expr.static.cast]/2, /11): the type of the designated object.
+    BadDowncast {
+        dynamic: OTy,
+        to: OTy,
+    },
     Union {
         ak: u32,
         field: DeclId,
@@ -292,7 +320,9 @@ impl Oven {
         let saved_entry = self.run.entry;
         self.run.entry = entry;
         let pend = self.run.pending.len();
+        let clean = self.cleanups.len();
         let r = self.run_loop(b, func, fb);
+        self.cleanups.truncate(clean);
         let out = match r {
             Ok(()) => Ok(()),
             Err((fault, pc)) => {
@@ -611,6 +641,22 @@ impl Oven {
                     }
                     pc += 4;
                 }
+                Op::Downcast => {
+                    let raw = reg!(1) as u64;
+                    let to = OTy(arg!(3) as u32);
+                    if raw == 0 {
+                        if aux == 0 {
+                            fail!(Fault::NullField);
+                        }
+                        reg!(0) = 0;
+                    } else {
+                        match self.downcast(raw, arg!(2) as u64, to) {
+                            Ok(q) => reg!(0) = u128::from(q),
+                            Err(f) => fail!(f),
+                        }
+                    }
+                    pc += 5;
+                }
                 Op::Load => {
                     let ty = OTy(arg!(2) as u32);
                     let raw = reg!(1) as u64;
@@ -714,9 +760,13 @@ impl Oven {
                 Op::Delete => {
                     let raw = reg!(0) as u64;
                     let pointee = OTy(arg!(1) as u32);
-                    if let Err(f) =
+                    // aux 2: the checks only (before the destructors run).
+                    let r = if aux & 2 != 0 {
+                        self.mem.heap_check(raw, aux & 1 != 0, Some(pointee), &self.types).map(drop)
+                    } else {
                         self.mem.heap_free(raw, aux & 1 != 0, Some(pointee), &self.types)
-                    {
+                    };
+                    if let Err(f) = r {
                         fail!(Fault::Mem { f, ak: ak::READ, ty: pointee, p: raw });
                     }
                     pc += 3;
@@ -729,12 +779,41 @@ impl Oven {
                     pc += 7;
                 }
                 Op::ScopeEnter => {
-                    reg!(0) = u128::from(self.mem.mark());
+                    reg!(0) = u128::from(self.mem.mark()) | (self.cleanups.len() as u128) << 64;
                     pc += 2;
                 }
                 Op::ScopeExit => {
-                    let m = reg!(0) as u64;
-                    self.mem.release(m, &self.types);
+                    let m = reg!(0);
+                    if self.cleanups.len() > (m >> 64) as usize {
+                        // Destroy the innermost registered object, then
+                        // execute this `ScopeExit` again.
+                        match self.run_cleanup(b, pc, fb) {
+                            Ok(Some((npc, nfb))) => {
+                                pc = npc;
+                                fb = nfb;
+                            }
+                            Ok(None) => {}
+                            Err((f, at)) => return Err((f, at)),
+                        }
+                        continue;
+                    }
+                    self.mem.release(m as u64, &self.types);
+                    pc += 2;
+                }
+                Op::PushCleanup => {
+                    let raw = reg!(0) as u64;
+                    if let Err(f) =
+                        self.push_cleanup(raw, arg!(1) as u32, OTy(arg!(2) as u32), aux, pc)
+                    {
+                        fail!(f);
+                    }
+                    pc += 4;
+                }
+                Op::MakeConst => {
+                    let p = Ptr::decode(reg!(0) as u64);
+                    if reg!(0) != 0 && self.mem.alloc_of(p).is_ok() {
+                        self.mem.alloc_of_mut(p).flags |= flags::CONST;
+                    }
                     pc += 2;
                 }
                 Op::SetActive => {
@@ -754,6 +833,44 @@ impl Oven {
                     }
                     pc += 4;
                 }
+                Op::MpCast => {
+                    let v = reg!(0);
+                    let class = DeclId::new(arg!(1) as u32);
+                    match self.mp_cast(b, v, class, aux == 1) {
+                        Some(r) => reg!(0) = r,
+                        None => fail!(Fault::Invalid),
+                    }
+                    pc += 3;
+                }
+                Op::MpAddr => {
+                    let (raw, v) = (reg!(1) as u64, reg!(2));
+                    match self.mp_addr(raw, v) {
+                        Ok(q) => reg!(0) = u128::from(q),
+                        Err(f) => fail!(f),
+                    }
+                    pc += 4;
+                }
+                Op::MpActive => {
+                    if let Some(e) = self.mp.get(reg!(1))
+                        && e.union
+                        && let Some((_, _, idx)) = e.field
+                    {
+                        // A union's members are all at its offset 0.
+                        let cls = e.cls;
+                        if let Err(f) = self.active_check(reg!(0) as u64, idx, cls, aux) {
+                            fail!(f);
+                        }
+                    }
+                    pc += 3;
+                }
+                Op::MpFn => match self.mp.get(reg!(1)) {
+                    Some(e) if e.virt => fail!(Fault::Trap(arg!(2) as u32)),
+                    Some(e) => {
+                        reg!(0) = u128::from(crate::mem::fn_ptr(e.fn_index));
+                        pc += 4;
+                    }
+                    None => fail!(Fault::Invalid),
+                },
                 Op::IsConstEval => {
                     let cc = self.run.const_context;
                     reg!(0) = u128::from(cc);
@@ -773,7 +890,7 @@ impl Oven {
                         }
                         p.off
                     };
-                    match self.enter(b, callee, pc, fb, arg!(1)) {
+                    match self.enter(b, callee, pc, pc + 3, fb, arg!(1)) {
                         Ok(Some((npc, nfb))) => {
                             pc = npc;
                             fb = nfb;
@@ -783,6 +900,19 @@ impl Oven {
                     }
                 }
                 Op::Ret => {
+                    if self.cleanups.last().is_some_and(|c| c.depth as usize == self.stack.len()) {
+                        // The frame's objects are destroyed after the
+                        // result is initialized ([stmt.return]/3).
+                        match self.run_cleanup(b, pc, fb) {
+                            Ok(Some((npc, nfb))) => {
+                                pc = npc;
+                                fb = nfb;
+                            }
+                            Ok(None) => {}
+                            Err((f, at)) => return Err((f, at)),
+                        }
+                        continue;
+                    }
                     let v = reg!(0);
                     self.regs[fb] = v;
                     let Some(fr) = self.stack.pop() else { return Ok(()) };
@@ -824,13 +954,84 @@ impl Oven {
         }
     }
 
-    /// Enters function `callee` (a call at `pc`, arguments at `fb + base`):
-    /// the new pc and frame base, or `None` if a memoized result was used.
+    /// Pops the innermost registered destruction and enters its
+    /// destructor from the instruction at `pc` (which executes again on
+    /// return); the frame of the running function is at `fb`.
+    #[inline(never)]
+    fn run_cleanup(
+        &mut self,
+        b: &mut dyn SemaBridge,
+        pc: usize,
+        fb: usize,
+    ) -> Result<Option<(usize, usize)>, (Fault, usize)> {
+        let Some(c) = self.cleanups.pop() else { return Ok(None) };
+        // A const object is modifiable during its destruction
+        // ([class.dtor]/5).
+        let p = Ptr::decode(c.this);
+        if c.this != 0 && self.mem.alloc_of(p).is_ok() {
+            self.mem.alloc_of_mut(p).flags &= !flags::CONST;
+        }
+        let cur = self.stack.last().map_or(0, |f| f.func);
+        let base = self.funcs[cur as usize].nregs as usize;
+        self.grow_regs(fb + base + 2);
+        self.regs[fb + base] = u128::from(c.this);
+        self.enter(b, c.func, c.pc as usize, pc, fb, base).map_err(|f| (f, c.pc as usize))
+    }
+
+    /// `Op::PushCleanup`: registers the destruction of the object (or
+    /// each element of the array) of type `ty` at `raw`.
+    #[inline(never)]
+    fn push_cleanup(
+        &mut self,
+        raw: u64,
+        func: u32,
+        ty: OTy,
+        aux: u32,
+        pc: usize,
+    ) -> Result<(), Fault> {
+        if raw == 0 {
+            return Ok(());
+        }
+        let (elem, n) = if aux & 1 != 0 {
+            let p = Ptr::decode(raw);
+            let n = match self.mem.alloc_of(p) {
+                Ok(a) => u64::from(a.size) / self.types.size(ty).max(1),
+                Err(f) => return Err(Fault::Mem { f, ak: ak::READ, ty, p: raw }),
+            };
+            (ty, n)
+        } else {
+            let (mut t, mut n) = (ty, 1u64);
+            while let TyKind::Array { elem, n: k } = self.types.kind(t) {
+                t = elem;
+                n *= k;
+            }
+            (t, n)
+        };
+        let es = self.types.size(elem);
+        let off = u64::from(Ptr::decode(raw).off);
+        let depth = self.stack.len() as u32;
+        self.cleanups.reserve(n as usize);
+        for i in 0..n {
+            let this = if i == 0 { raw } else { Ptr::with_off(raw, off + i * es, false) };
+            self.cleanups.push(Cleanup { this, func, pc: pc as u32, depth });
+        }
+        Ok(())
+    }
+
+    /// Enters function `callee` (called by the instruction at `pc`,
+    /// returning to `ret_pc`, arguments at `fb + base`): the new pc and
+    /// frame base, or `None` if a memoized result was used.
+    // Always inlined: `run_cleanup` is a second caller, and an
+    // outlined `enter` costs ~6% of the instructions of a call-heavy
+    // evaluation (bench/oven/churn-tree.cpp).
+    #[allow(clippy::inline_always)]
+    #[inline(always)]
     fn enter(
         &mut self,
         b: &mut dyn SemaBridge,
         callee: u32,
         pc: usize,
+        ret_pc: usize,
         fb: usize,
         base: usize,
     ) -> Result<Option<(usize, usize)>, Fault> {
@@ -900,7 +1101,7 @@ impl Oven {
         let serial = self.mem.next_frame();
         self.stack.push(Frame {
             func: callee,
-            ret_pc: (pc + 3) as u32,
+            ret_pc: ret_pc as u32,
             fb: nb as u32,
             mark,
             call_pc: pc as u32,
@@ -1219,7 +1420,11 @@ impl Oven {
         Ok((st, abs, a))
     }
 
-    fn load(&self, raw: u64, ty: OTy, k: u32) -> Result<u128, Fault> {
+    // Always inlined into the `Load` op: `freeze_object` is a second
+    // caller, which otherwise outlines it from the hot loop.
+    #[allow(clippy::inline_always)]
+    #[inline(always)]
+    pub(crate) fn load(&self, raw: u64, ty: OTy, k: u32) -> Result<u128, Fault> {
         let info = self.types.info(ty);
         let len = value_len(info.size, info.kind);
         let is_ptr = matches!(info.kind, TyKind::Ptr(_) | TyKind::NullPtr);
@@ -1399,6 +1604,59 @@ impl Oven {
         }
     }
 
+    /// `Op::Downcast`: the object of type `to` whose base subobject is
+    /// `d` bytes into it, at `raw` ([expr.static.cast]/2, /11).
+    fn downcast(&self, raw: u64, d: u64, to: OTy) -> Result<u64, Fault> {
+        let p = Ptr::decode(raw);
+        let a = self.mem.alloc_of(p).map_err(|f| Fault::Mem { f, ak: ak::READ, ty: to, p: raw })?;
+        let off = u64::from(p.off);
+        match off.checked_sub(d) {
+            Some(o) if !p.past && self.types.has_subobject(a.ty, o, to) => {
+                Ok(Ptr::with_off(raw, o, false))
+            }
+            _ => Err(Fault::BadDowncast { dynamic: self.dynamic_type(a.ty, off), to }),
+        }
+    }
+
+    /// The most derived object containing the byte at `off` of an object
+    /// of type `t` (a complete object, member or array element of class
+    /// type; base subobjects belong to their derived object).
+    fn dynamic_type(&self, mut t: OTy, mut off: u64) -> OTy {
+        loop {
+            match self.types.kind(t) {
+                TyKind::Array { elem, n } => {
+                    let es = self.types.size(elem);
+                    if es == 0 || off / es >= n {
+                        return t;
+                    }
+                    off %= es;
+                    t = elem;
+                }
+                TyKind::Record { .. } => {
+                    let f = self.types.fields(t).iter().find(|f| {
+                        f.width.is_none()
+                            && off >= f.offset
+                            && off < f.offset + self.types.size(f.ty).max(1)
+                    });
+                    match f {
+                        Some(f)
+                            if !f.base
+                                && matches!(
+                                    self.types.kind(f.ty),
+                                    TyKind::Record { .. } | TyKind::Array { .. }
+                                ) =>
+                        {
+                            off -= f.offset;
+                            t = f.ty;
+                        }
+                        _ => return t,
+                    }
+                }
+                _ => return t,
+            }
+        }
+    }
+
     fn set_active(&mut self, raw: u64, idx: u32, uty: OTy, init: bool) -> Result<(), Fault> {
         let size = self.types.size(uty);
         let k = if init { ak::INIT } else { ak::ASSIGN };
@@ -1428,6 +1686,53 @@ impl Oven {
         }
         self.mem.unions.insert(key, idx);
         Ok(())
+    }
+
+    /// `Op::MpAddr`: the member of the object at `raw` that member
+    /// pointer `v` designates (clang's `HandleMemberPointerAccess`).
+    fn mp_addr(&mut self, raw: u64, v: u128) -> Result<u64, Fault> {
+        // [expr.mptr.oper]/6: a null member pointer (clang's generic
+        // note at the operand).
+        let Some(e) = self.mp.get(v) else { return Err(Fault::Invalid) };
+        let (derived, adj, cls, field) = (e.derived, e.adj, e.cls, e.field);
+        let e_path_empty = e.path.is_empty();
+        if raw == 0 {
+            // clang steps a null object along the member pointer's base
+            // path (failing on the first step) and otherwise reports it at
+            // its use: the read, write or call, not the `.*`.
+            return if derived {
+                Err(Fault::Invalid)
+            } else if !e_path_empty {
+                Err(Fault::NullBase)
+            } else {
+                Ok(0)
+            };
+        }
+        let obj = if derived {
+            // The object must be the base subobject of an object of the
+            // member's class along the path (clang: generic note).
+            let p = Ptr::decode(raw);
+            let a = self.mem.alloc_of(p).map_err(|f| Fault::Mem {
+                f,
+                ak: ak::READ,
+                ty: cls,
+                p: raw,
+            })?;
+            match u64::from(p.off).checked_sub(adj) {
+                Some(o) if !p.past && self.types.has_subobject(a.ty, o, cls) => {
+                    Ptr::with_off(raw, o, false)
+                }
+                _ => return Err(Fault::Invalid),
+            }
+        } else if adj == 0 {
+            raw
+        } else {
+            let p = Ptr::decode(raw);
+            Ptr::with_off(raw, u64::from(p.off) + adj, false)
+        };
+        let Some((off, _, _)) = field else { return Ok(obj) };
+        let p = Ptr::decode(obj);
+        Ok(Ptr::with_off(obj, u64::from(p.off) + off, false))
     }
 
     fn active_check(&self, raw: u64, idx: u32, uty: OTy, k: u32) -> Result<(), Fault> {

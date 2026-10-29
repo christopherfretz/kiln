@@ -133,7 +133,7 @@ pub(crate) use construct::ConstructSite;
 pub(crate) use ctor_select::InitStyle;
 pub(crate) use ctorinit::MemInitState;
 pub(crate) use member_expr::MemberRef;
-pub(crate) use special::{DeletedAs, DiagSites, InitEntity, SpecialState, SynthContext};
+pub(crate) use special::{CtorCall, DeletedAs, DiagSites, InitEntity, SpecialState, SynthContext};
 // WP-074: the builtin type traits select special members.
 pub(crate) use special::{Selected, SpecialKind};
 pub(crate) use temporary::BindingSite;

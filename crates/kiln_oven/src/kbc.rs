@@ -16,10 +16,26 @@ macro_rules! ops {
         pub(crate) enum Op { $($name,)* }
 
         impl Op {
-            /// Every opcode, indexed by its discriminant.
-            pub const ALL: &'static [Op] = &[$(Op::$name,)*];
             /// Operand words of each opcode, indexed by its discriminant.
             pub const OPERANDS: &'static [u8] = &[$($n,)*];
+
+            /// The opcode with discriminant `b`. A `match` on the
+            /// discriminants rather than a table lookup: LLVM folds it to
+            /// a range check, so the VM's dispatch jump table is indexed by
+            /// the byte itself, with no table base held in a register in
+            /// the hot loop (that register cost ~3% of the wall clock of
+            /// every evaluation once the op set outgrew it, WP-076).
+            #[inline]
+            pub fn from_u8(b: u8) -> Op {
+                #[allow(non_upper_case_globals)]
+                mod disc {
+                    $(pub const $name: u8 = super::Op::$name as u8;)*
+                }
+                match b {
+                    $(disc::$name => Op::$name,)*
+                    _ => panic!("invalid KBC opcode {b}"),
+                }
+            }
         }
     };
 }
@@ -96,6 +112,10 @@ ops! {
     PtrToBool = 2,
     // [dst, p, byte offset]
     Field = 3,
+    // [dst, p, byte offset, derived type]: the derived-class object whose
+    // base subobject is at `p` (`offset` bytes into it); aux 1 = a null
+    // pointer stays null
+    Downcast = 4,
     // [dst, p, type]; aux = access kind
     Load = 3,
     // [p, src, type]; aux = access kind
@@ -141,8 +161,35 @@ ops! {
     // initializer's array type): the bound is checked and the allocation
     // is an array of `count` elements; `dst` points to its first.
     New = 5,
-    // [p, static pointee type]; aux = 1 for `delete[]`
+    // [p, static pointee type]; aux 1 = `delete[]`; aux 2 = the checks
+    // only (made before the destructors run)
     Delete = 2,
+    // [p, dtor func, type]: registers the destruction of the object at
+    // `p` (an array: of each element, in order) by the enclosing scope
+    // (spec/oven.md "Destruction"): the innermost `ScopeExit` or `Ret`
+    // whose mark is below it calls the destructor, last registered first.
+    // aux = 1: `p` is the first element of a heap array of `type`
+    // (`delete[]`), its count is the allocation's. A null `p` registers
+    // nothing.
+    PushCleanup = 3,
+    // [p]: the complete object at `p` is const from now on (a const
+    // object is modifiable during its construction, [class.ctor.general]/5).
+    MakeConst = 1,
+    // [mp reg, class decl]: clang's `MemberPtr::castToDerived` (aux 0)
+    // or `castToBase` (aux 1) of the member pointer in the register, in
+    // place ([conv.mem]/2, [expr.static.cast]/12)
+    MpCast = 2,
+    // [dst, object p, mp]: `obj.*mp` ([expr.mptr.oper]): the member's
+    // address (a member function: the adjusted object)
+    MpAddr = 3,
+    // [member p, mp]: the access (aux: its kind) of the member `MpAddr`
+    // found, when it is a union's: the member must be active
+    // ([class.union]/2; an access through `.*` never activates one,
+    // [class.union]/6)
+    MpActive = 2,
+    // [dst, mp, trap]: the function of a pointer to member function
+    // (`trap`: the note for a virtual one, dispatch lands with WP-077)
+    MpFn = 3,
     // [dst, a, b, c, t1, t2]: a library builtin evaluated natively
     // (spec/oven.md "Builtins"); aux = kind (`bi`) | sub << 8, `a`..`c`
     // registers, `t1`/`t2` types (`bi::DYN`: the designated object's).
@@ -213,10 +260,6 @@ pub(crate) mod new_aux {
 }
 
 impl Op {
-    pub fn from_u8(b: u8) -> Op {
-        Op::ALL[b as usize]
-    }
-
     pub fn operands(self) -> usize {
         usize::from(Op::OPERANDS[self as usize])
     }
