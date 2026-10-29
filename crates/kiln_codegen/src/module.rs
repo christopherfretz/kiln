@@ -75,8 +75,12 @@ pub(crate) struct Cg<'a> {
     pub named: FxHashMap<DeclId, LTy>,
     /// Names already used for named struct types.
     pub struct_names: FxHashMap<String, u32>,
-    /// Private globals by name, for `.str.N` / `__const` uniquing.
-    pub private_names: FxHashMap<String, u32>,
+    /// The `.constant` globals of frozen constant objects (clang
+    /// `GetAddrOfUnnamedGlobalConstantDecl`), by value.
+    pub const_objects: FxHashMap<kiln_ast::ConstValueId, GlobalId>,
+    /// The outermost default argument being emitted that holds a
+    /// source-location builtin (clang `SourceLocExprScopeGuard`).
+    pub srcloc: Option<kiln_ast::ExprId>,
     /// Static locals already emitted.
     pub static_locals: FxHashMap<DeclId, GlobalId>,
     /// Static locals emitted per (function, name), for discriminators.
@@ -111,7 +115,8 @@ impl<'a> Cg<'a> {
             strings: FxHashMap::default(),
             named: FxHashMap::default(),
             struct_names: FxHashMap::default(),
-            private_names: FxHashMap::default(),
+            const_objects: FxHashMap::default(),
+            srcloc: None,
             static_locals: FxHashMap::default(),
             static_local_names: FxHashMap::default(),
             f: Fx::empty(),
@@ -814,13 +819,12 @@ impl<'a> Cg<'a> {
         Ok(g)
     }
 
-    /// A private `unnamed_addr` constant named `base` (uniqued `.N`).
+    /// A private `unnamed_addr` constant named `base`, uniqued `.N` by the
+    /// module's one counter as LLVM's `ValueSymbolTable::makeUniqueName`
+    /// (`.str.1`, `.constant.2`, `.str.3`).
     pub fn private_const(&mut self, base: &str, init: Value, align: u64) -> GlobalId {
-        let n = self.private_names.entry(base.to_owned()).or_insert(0);
-        let name = if *n == 0 { base.to_owned() } else { format!("{base}.{n}") };
-        *n += 1;
         let ty = self.m.const_type(init);
-        let g = self.m.add_global(&name, ty);
+        let g = self.m.add_global(base, ty);
         let _ = self.m.set_initializer(g, Some(init));
         let gv = self.m.global_mut(g);
         gv.linkage = Linkage::Private;

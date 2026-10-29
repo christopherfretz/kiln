@@ -1006,7 +1006,7 @@ impl Sema<'_, '_> {
     }
 
     /// `const elem *`.
-    fn const_char_ptr(&mut self, elem: QualType) -> QualType {
+    pub(crate) fn const_char_ptr(&mut self, elem: QualType) -> QualType {
         let c = self.ast.types.qualify(elem, kiln_ast::types::Quals::CONST);
         self.ast.types.pointer_to(c)
     }
@@ -2174,13 +2174,11 @@ impl Sema<'_, '_> {
             return self.dependent_call(callee, args, loc, rparen);
         }
         if let Some(b) = self.builtin_callee(callee)
-            && self.ast.decls.builtin_id(b) == Some(kiln_ast::decl::builtin::ADDRESSOF)
+            && let Some(id) = self.ast.decls.builtin_id(b)
+            && kiln_ast::decl::builtin::is_custom(id)
         {
             let has_braced = braced.iter().any(Option::is_some);
-            return match self.builtin_addressof_call(callee, b, args, has_braced, loc, rparen) {
-                Some(e) => e,
-                None => self.recover_err(&kids, loc),
-            };
+            return self.builtin_custom_call(callee, b, id, args, has_braced, loc, rparen);
         }
         if let Some(e) = self.try_member_call(callee, args, &mut braced, loc, rparen) {
             return e;
@@ -2209,8 +2207,13 @@ impl Sema<'_, '_> {
             self.unsupported("calls through this function type", loc);
             return self.recover_err(&kids, loc);
         };
-        let callee_info = named
-            .map(|d| CallCallee { decl: d, overloadable: self.kind_of(d) == DeclKind::Function });
+        // A builtin is not overloadable, and its diagnostics name no
+        // declaration (clang's `ConvertArgumentsForCall`).
+        let callee_info = named.map(|d| CallCallee {
+            decl: d,
+            overloadable: self.kind_of(d) == DeclKind::Function
+                && self.ast.decls.builtin_id(d).is_none(),
+        });
         let Some(conv_args) =
             self.convert_call_args(callee_info, callee, args, &mut braced, &proto, loc, rparen)
         else {
@@ -2286,7 +2289,7 @@ impl Sema<'_, '_> {
                         None => loc,
                     };
                     let mut msg = self.diag(id, at).arg(expected).arg(have);
-                    if let Some(c) = named {
+                    if let Some(c) = named.filter(|c| self.ast.decls.builtin_id(c.decl).is_none()) {
                         let d = c.decl;
                         let note = self
                             .diag(DiagId::note_entity_declared_here, self.ast.decls.get(d).loc())
@@ -2338,7 +2341,10 @@ impl Sema<'_, '_> {
                 match conv::implicit_convert(self, a, to, ConvCtx::Argument) {
                     Ok(x) => conv_args.push(x),
                     Err(err) => {
-                        self.bad_argument(named.map(|c| c.decl), callee, a, params[i], i, &err);
+                        let d = named
+                            .map(|c| c.decl)
+                            .filter(|&d| self.ast.decls.builtin_id(d).is_none());
+                        self.bad_argument(d, callee, a, params[i], i, &err);
                         return None;
                     }
                 }
@@ -2351,6 +2357,8 @@ impl Sema<'_, '_> {
             let x = *self.ast.exprs.get(e);
             let used = self.ctx;
             let arg = self.builder().default_arg(p, used, x.ty(), x.value_category(), Loc::INVALID);
+            let call_begin = self.begin_loc(callee);
+            self.note_default_arg_use(arg, p, call_begin);
             conv_args.push(arg);
         }
         Some(conv_args)
@@ -2721,6 +2729,9 @@ impl Sema<'_, '_> {
         // [expr.static.cast]/6: any expression can be converted to cv void.
         if self.ast.types.is_void(ty) {
             if style.allows_static() {
+                if self.check_builtin_fn_use(e) {
+                    return self.recover(ty, &[e], loc);
+                }
                 return self.explicit_cast(style, CastKind::ToVoid, e, ty, loc, rparen);
             }
             return self.bad_cast(style, e, ty, loc);

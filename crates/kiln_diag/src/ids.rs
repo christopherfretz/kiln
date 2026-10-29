@@ -534,6 +534,8 @@ diag_ids! {
     sema_need_header_before_typeid = Error (0) "you need to include <typeinfo> before using the 'typeid' operator";
     sema_typeid_no_rtti = Error (0) "use of typeid requires -frtti";
     sema_typeid_incomplete = Error (1) "'typeid' of incomplete type {0}";
+    sema_std_source_location_impl_not_found = Error (0) "'std::source_location::__impl' was not found; it must be defined before '__builtin_source_location' is called";
+    sema_std_source_location_impl_malformed = Error (0) "'std::source_location::__impl' must be standard-layout and have only two 'const char *' fields '_M_file_name' and '_M_function_name', and two integral fields '_M_line' and '_M_column'";
     sema_offsetof_record_type = Error (1) "offsetof requires struct, union, or class type, {0} invalid";
     sema_offsetof_incomplete_type = Error (1) "offsetof of incomplete type {0}";
     sema_offsetof_array_type = Error (1) "offsetof requires array type, {0} invalid";
@@ -990,6 +992,15 @@ diag_ids! {
     sema_integer_seq_negative_length = Error (0) "integer sequences must have non-negative sequence length";
     sema_bit_cast_size_mismatch = Error (2) "__builtin_bit_cast source size does not equal destination size ({0} vs {1})";
     sema_bit_cast_not_trivially_copyable = Error (1) "__builtin_bit_cast {0:source|destination} type must be trivially copyable";
+    // Builtin function calls with custom type-checking (WP-088,
+    // spec/sema-templates.md §9.5; clang's `SemaChecking.cpp`).
+    sema_call_too_many_args_at_most = Error (2) "too many arguments to function call, expected at most {0}, have {1}";
+    sema_builtin_invalid_arg_type = Error (3) "{0:1st|2nd} argument must be {1:an unsigned integer|an 'int'} (was {2})";
+    sema_builtin_fp_class_arg = Error (1) "floating point classification requires argument of floating point type (passed in {0})";
+    sema_builtin_ordered_compare = Error (2) "ordered compare requires two args of floating point type ({0} and {1})";
+    sema_builtin_launder_invalid_arg = Error (1) "{0:non-pointer|function pointer|void pointer} argument to '__builtin_launder' is not allowed";
+    sema_builtin_new_delete_not_usual = Error (1) "call to '{0:__builtin_operator_new|__builtin_operator_delete}' selects non-usual {0:allocation|deallocation} function";
+    note_builtin_non_usual_declared_here = Note (1) "non-usual {0} declared here";
     sema_integer_seq_integral_element_type = Error (0) "integer sequences must have integral element type";
     sema_integer_seq_too_long = Error (2) "integer sequence length {0} exceeds the implementation limit of {1}";
     sema_auto_var_requires_init = Error (2) "declaration of variable '{0}' with deduced type {1} requires an initializer";

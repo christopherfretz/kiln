@@ -34,7 +34,11 @@ panic and never silently wrong IR.
   `Oven::fold_constant_init`, so `__builtin_is_constant_evaluated()` is
   true in it; the other foldable initializers (local `const` arrays,
   records and references) use `try_fold`, where it is false (WP-063,
-  matching clang's IR).
+  matching clang's IR). Calls of builtins with an integral or floating
+  result are candidates too (clang `EmitBuiltinExpr` tries
+  `EvaluateAsRValue` first), except `__builtin_is_constant_evaluated()`
+  (WP-088).
+- `builtins.rs`: builtin calls (§3, "Calls"; WP-088).
 - `consts.rs`: turns Oven byte images into `kiln_llvm` constants. It has a
   memory form (bool is `i8`) and a scalar form (bool is `i1`), plus string
   literal globals.
@@ -84,15 +88,72 @@ panic and never silently wrong IR.
   - a variadic call prints its function type;
   - an indirect (sret) return writes into the destination slot when the
     call initializes an aggregate, otherwise into a temporary.
-  - a call to `__builtin_is_constant_evaluated` (callee a
-    `BuiltinFnToFnPtr` cast) emits no call: it is the constant `i1 false`,
-    since code that runs is not manifestly constant-evaluated (clang's
-    `CGBuiltin`). Every other builtin is a sema-level unknown, so none
-    reaches codegen.
+  - a call of a builtin (callee a `BuiltinFnToFnPtr` cast of a
+    `kiln_ast::decl::builtin` function) is never a call of the builtin
+    (`builtins.rs`, clang `EmitBuiltinExpr`; landed in WP-088):
+    - a call with an integral or floating result is a fold candidate
+      (§3, `fold.rs`); if the Oven folds it, it is that constant;
+    - `__builtin_is_constant_evaluated()` is `i1 false`, since code that
+      runs is not manifestly constant-evaluated (it is never a fold
+      candidate);
+    - `__builtin_addressof(x)` is `&x`, `__builtin_launder(p)` is `p`;
+    - clz/ctz (`l`/`ll`/`g`) are `llvm.ctlz`/`llvm.cttz` with
+      is-zero-poison true on x86_64 and false on AArch64
+      (`isCLZForZeroUndef`), the result cast unsigned to the call type;
+      the `g` forms with a fallback use true and `select (x == 0)`;
+      popcount is `llvm.ctpop`, bswap `llvm.bswap`;
+    - isfinite/isinf/isnan/isnormal are `llvm.is.fpclass` (tests 504,
+      516, 3, 264) zero-extended; signbit bitcasts to an integer of the
+      float's width and tests `slt 0`; the isgreater family is one
+      `fcmp` (`ogt oge olt ole one uno`) zero-extended;
+    - memcpy/memmove are `llvm.memcpy`/`llvm.memmove` (`i64` length,
+      not volatile) with each pointer's known alignment as a parameter
+      `align` (clang `EmitPointerWithAlignment`: implicit casts and
+      casts of a declaration keep the inner alignment, other casts take
+      the target's pointee alignment, `&x` and array decay the lvalue's,
+      otherwise the pointee's natural alignment, 1 for `void`/incomplete);
+      the value is the destination pointer;
+    - frexp is `llvm.frexp`, the exponent stored at `int` alignment;
+    - `__builtin_operator_new`/`_delete` call the global replaceable
+      function sema chose, as a new-expression does (`builtin` call-site
+      attribute, `allocsize`, `noalias nonnull`);
+    - `__builtin_unreachable()` is `unreachable` followed by a fresh
+      block; an expression statement that leaves a fresh block with no
+      predecessors erases it (clang `EmitStmt`), and `FinishFunction`
+      erases a return block without predecessors (and a then-unused
+      `retval` slot);
+    - the library builtins (memcmp, memchr, char_memchr→`memchr`, strlen,
+      wcslen, wmemchr, wmemcmp, nan*/nans* of a non-literal, and the math
+      functions exp/exp2/expm1/ldexp/pow/scalbn/scalbln with their
+      `f`/`l` forms) call the function of the unprefixed name, declared
+      with the builtin's type, `nounwind`, and `willreturn
+      memory(read)` / `memory(none)` for `Pure` / `Const` builtins (on the
+      call site too).
+  - a source-location builtin (`SourceLocExpr`, spec/ast.md §5.8) is
+    the value sema recorded for it: `__builtin_LINE`/`_COLUMN` an
+    integer constant; `__builtin_FILE`/`_FILE_NAME`/`_FUNCTION` a
+    pointer to the string literal's global; `__builtin_source_location()`
+    a pointer to a private `unnamed_addr constant` named `.constant`
+    holding the frozen `__impl` object (clang
+    `GetAddrOfUnnamedGlobalConstantDecl`), one per frozen value
+    (`ModuleGen::const_object`), its initializer, and so its strings,
+    emitted first. Inside a `CXXDefaultArgExpr` (and nested default
+    arguments) the outermost use's recorded values are taken
+    (`enter_default_arg`), so each call site gets its own location.
+  - a conversion to bool of a `zext` from `i1` is the `i1`, and the
+    `zext` is erased when unused (clang `EmitIntToBoolConversion`);
+  - the IR constant folder propagates NaNs as APFloat does: a NaN
+    operand's payload (quieted), the left one first; an invalid
+    operation of non-NaN operands gives the positive default NaN.
 - Names (via `kiln_abi::mangle`): namespace-scope variables with internal
   linkage are mangled (`_ZL1h`); static locals use 0-based
   discriminators per (function, name): none, then `_0` ... `_9`, then
   `__10_`, `__11_`, ...
+- Private unnamed constants (`.str`, `.constant`) are uniqued by
+  `kiln_llvm`'s one module-wide counter, as LLVM's
+  `ValueSymbolTable::makeUniqueName`: a clashing name gets `.N` with the
+  next counter value (`.str`, `.str.1`, `.constant`, `.str.2`), so names
+  follow emission order exactly as clang's do.
 - A GNU asm label (`asm("name")`, recorded on the entity's first
   declaration, spec/ast.md §4.2) replaces the function's or variable's
   linkage name (`kiln_abi::mangle::asm_label`). clang prefixes LLVM's
@@ -242,11 +303,12 @@ The normative description is spec/driver.md "Code generation". In short:
   same normalization. A `(case, triple)` pair in its `DEVIATIONS` table
   must only verify; every other pair must be identical. `KILN_CASE=<stem>`
   prints both texts; without `opt-19`/`clang++-19` it is skipped. The
-  corpus is 46 programs (ABI classification of 1- to 32-byte structs,
+  corpus is 57 programs (ABI classification of 1- to 32-byte structs,
   HFAs, byval, varargs, `__int128`, `long double`, bit-fields, static
-  locals, string literals, references, control flow): 92/92 pairs exact,
-  `DEVIATIONS` is empty.
-- **`run` tests:** 33 printf-based programs (`extern "C" int printf`, no
+  locals, string literals, references, control flow, new/delete, and the
+  WP-088 `builtins_{bits,mem,fp,misc,srcloc}` cases): 114/114 pairs
+  exact, `DEVIATIONS` is empty.
+- **`run` tests:** 35 printf-based programs (`extern "C" int printf`, no
   headers) under `tests/conformance/<section>/`, each naming its section,
   are compiled, linked and run by kiln and by clang, and their stdout and
   exit status compared. The 5 header-dependent `run` tests
@@ -308,7 +370,8 @@ move, which no longer treats an lvalue-reference variable as movable.
 
 **Done (WP-052 + WP-052b):** `fir.rs`, `module.rs`, `func.rs`, `consts.rs`,
 `fold.rs`, `expr.rs` (§3), `stmt.rs` (§4), the driver path (§5) and the
-IR-diff corpus (§6: 46 programs, exact on both triples). The unit corpus
+IR-diff corpus (§6: then 46 programs, exact on both triples; see §6 for
+the current count). The unit corpus
 is 79/79 exact against clang on aarch64 (`bitfields_compound` became exact
 with WP-057; WP-058 added five cases). Additive `kiln_abi` fixes came with
 part 1: internal-linkage variable mangling, static-local discriminators,

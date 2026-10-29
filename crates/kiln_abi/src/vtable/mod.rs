@@ -21,6 +21,7 @@ mod builder;
 mod classes;
 mod overriders;
 mod print;
+pub use print::pretty_function;
 mod vtt;
 
 pub use kiln_ast::class::{

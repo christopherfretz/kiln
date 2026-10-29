@@ -757,7 +757,13 @@ impl Oven {
     }
 
     /// The VM pointer for stored pointer value `cv` of type `ty`.
-    fn thaw_ptr(&mut self, b: &mut dyn SemaBridge, cv: ConstValueId, ty: OTy, top: u32) -> u64 {
+    pub(crate) fn thaw_ptr(
+        &mut self,
+        b: &mut dyn SemaBridge,
+        cv: ConstValueId,
+        ty: OTy,
+        top: u32,
+    ) -> u64 {
         let Some(Scalar::Pointer { base, offset, .. }) = b.consts().scalar(cv) else { return 0 };
         let pointee = match self.types.kind(ty) {
             TyKind::Ptr(p) => Some(p),

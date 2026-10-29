@@ -1739,16 +1739,47 @@ records it in `TABLE`.
 | Group | Builtins | Oven | Lowering |
 |---|---|---|---|
 | object model | `__builtin_addressof`†, `__builtin_launder`†, `__builtin_bit_cast`† (keyword form: `T` and the operand must be trivially copyable and the same size; `abi` layout gives the bytes), `__builtin_unreachable` | yes (`unreachable`: a non-constant diagnostic) | intrinsic / no-op |
-| allocation | `__builtin_operator_new`, `__builtin_operator_delete` | yes (WP-060/061b transient allocation) | `operator new`/`delete` call |
+| allocation | `__builtin_operator_new`, `__builtin_operator_delete` | yes in clang 19; the Oven side is WP-061b's (transient allocation) | `operator new`/`delete` call |
 | bits | `__builtin_clz`/`l`/`ll`, `__builtin_ctz`/`l`/`ll`, `__builtin_popcount`/`l`/`ll`, `__builtin_clzg`†/`ctzg`†/`popcountg`† (type-generic, with an optional fallback argument), `__builtin_bswap16`/`32`/`64` | yes | `llvm.ctlz`/`cttz`/`ctpop`/`bswap` |
 | memory and strings | `__builtin_memcmp`, `__builtin_memcpy`, `__builtin_memmove`, `__builtin_memchr`, `__builtin_char_memchr`, `__builtin_strlen`, `__builtin_wcslen`, `__builtin_wmemchr`, `__builtin_wmemcmp` | yes (for trivially copyable element types) | libcall or `llvm.mem*` |
-| float classification | `__builtin_isfinite`, `__builtin_isinf`, `__builtin_isnan`, `__builtin_isnormal`, `__builtin_signbit`†, `__builtin_isgreater`, `isgreaterequal`, `isless`, `islessequal`, `islessgreater`, `isunordered` | yes for the classification and `signbit`; the comparisons per the probe | `fcmp` / `llvm.is.fpclass` |
+| float classification | `__builtin_isfinite`, `__builtin_isinf`, `__builtin_isnan`, `__builtin_isnormal`, `__builtin_signbit`†, `__builtin_isgreater`, `isgreaterequal`, `isless`, `islessequal`, `islessgreater`, `isunordered` | yes for `isfinite`/`isinf`/`isnan`/`isnormal`; no for `signbit` and the six comparisons (the clang 19 probe rejects them) | `fcmp` / `llvm.is.fpclass` |
 | float constants | `__builtin_huge_val`/`f`/`l`, `__builtin_nan`/`f`/`l`, `__builtin_nans`/`f`/`l` | yes | constants |
 | math | `__builtin_exp`/`exp2`/`expm1`/`frexp`/`ldexp`/`pow`/`scalbn`/`scalbln`, each with the `f` and `l` forms | no (clang 19) | libcall / LLVM intrinsic |
+| source location | `__builtin_FILE`, `__builtin_FILE_NAME`, `__builtin_FUNCTION`, `__builtin_LINE`, `__builtin_COLUMN`, `__builtin_source_location`† (keywords: a `SourceLocExpr`; in a default argument, the location of the call that uses it) | yes | constants; a private `.constant` `__impl` object per location |
+
+**Landed (WP-088).** Every row above is implemented in sema, the Oven
+and codegen, with these exceptions, each matching clang 19:
+`__builtin_signbit` and the six ordered comparisons are not
+constant-evaluated (the probe says clang 19 rejects them), and the math
+row is sema and codegen only. `__builtin_operator_new`/`_delete` are
+implemented in sema and codegen; their Oven side stays with WP-061b
+(`__has_constexpr_builtin` answers 0). Probes:
+`tests/conformance/expr.const/builtins-*.cpp` (constant evaluation,
+`static_assert` against clang 19, plus the compile-fail and run tests),
+`tests/codegen/builtins_*.cpp` (IR-diff), and
+`bench/oven/builtins-{memcpy,strlen,popcount}.cpp`. Oven behaviour
+(byte-level `memcpy`/`memmove` on trivially copyable element arrays,
+`bit_cast` through the ABI layout, source-location objects) is in
+spec/oven.md "Builtins".
+
+**Source location.** Sema computes the values once, when it builds the
+`SourceLocExpr` (spec/ast.md §5.8): `LINE`/`COLUMN` from the presumed
+location, `FILE` as written and `FILE_NAME` as its last path component,
+`FUNCTION` from the enclosing function's name (empty at namespace scope),
+and `__builtin_source_location()` as a frozen `std::source_location::__impl`
+built from that record's layout. When a default argument containing a
+`SourceLocExpr` is used by a call, sema records the call's values on the
+`CXXDefaultArgExpr`; the Oven and codegen read them from the outermost
+such default argument in scope. `std::source_location::__impl` must be a
+complete, standard-layout, non-union class without bases whose only
+fields are `_M_file_name`, `_M_function_name` (`const char *`), `_M_line`
+and `_M_column` (integral); otherwise clang's
+`sema_std_source_location_impl_not_found`/`_malformed` errors.
 
 The counts are 49 type predicates (§9.1), `__array_extent`, 15 transforms,
 2 builtin templates and 76 `__builtin_*` names (2 of them in §9.4). That gives 143
-builtins in total (§13.3).
+builtins in total (§13.3). `TABLE` also holds the 6 source-location
+names, for 82 function rows.
 
 ## 10. Diagnostics
 
@@ -2352,7 +2383,7 @@ Overload-resolution traits and pack arguments are stubs (below).
   `act_on_decltype`, `decltype_of`, `deduce_placeholder`, `deduce_from`,
   `deduce_return`, `set_deduced_return`, `check_undeduced_use`.
 - `kiln_sema/src/builtins.rs`: `__builtin_addressof`,
-  `act_on_builtin_bit_cast`.
+  `act_on_builtin_bit_cast` (and the §9.5 functions, WP-088 below).
 - `kiln_ast`: `TypeTraitExpr`, `ArrayTypeTraitExpr` and
   `ExpressionTraitExpr` (`ExprArena::type_trait_*`, `array_trait`), the
   `UnaryTransform` type print, `BuiltinTemplate` decls,
@@ -2457,12 +2488,12 @@ pub fn has_constexpr_builtin_staged(name: &str) -> Option<bool>;
 | `__is_layout_compatible`, `__is_pointer_interconvertible_base_of`, `__can_pass_in_regs`, `__is_bitwise_cloneable` | M4 (unassigned) |
 | `__is_trivially_relocatable` (`TRIVIALLY_RELOCATABLE` is never set) | unowned: S3C canPassInRegisters |
 | `__type_pack_element` and `__make_integer_seq` with pack arguments | WP-072 |
-| The §9.5 functions other than `is_constant_evaluated`, `addressof` and `bit_cast` | unowned: proposed §9.5 builtin-functions WP |
-| `__builtin_operator_new` / `__builtin_operator_delete` in the Oven | WP-061b |
-| `__builtin_FILE` / `__builtin_LINE` / … | unowned: source-location builtins with `__builtin_source_location` |
-| `__builtin_bit_cast` in the Oven (aggregates through the ABI layout) | unowned: Oven bit_cast through ABI layout |
+| `__builtin_constant_p` (sema and Oven) | unowned: not in WP-088 |
+| `__builtin_operator_new` / `__builtin_operator_delete` in the Oven (sema and codegen landed in WP-088) | WP-061b |
 
-In all, 79 table names answer yes and 75 are staged off.
+The other §9.5 functions, the source-location builtins and
+`__builtin_bit_cast` in the Oven landed in WP-088 (§9.5). In all, 157
+table names answer yes and 25 are staged off.
 
 *Gaps* (each reports a diagnostic or is a known divergence):
 - Substituted types carry no argument locations, so the columns of
@@ -2713,6 +2744,38 @@ explicit specialization errors remain. The blockers are:
 | ~15 | Overloaded operators and function overloading | WP-068 |
 | — | Function templates (`declval<_Tp>()`, `forward`, `__invokable`) | WP-071 |
 | 4 | Constrained class template partial specializations | WP-073 |
+**Landed (WP-088): the §9.5 builtin functions.**
+- `kiln_ast::decl::builtin`: one `pub const` id per §9.5 function, the
+  `attr` bits (`NOTHROW`, `CONST`, `PURE`, `NORETURN`, `CUSTOM`) and
+  `Info { id, name, sig, .. }` with clang's `Builtins.td` signature; sema
+  declares each from it on first lookup (`Sema::is_builtin_name`).
+- `kiln_sema/src/builtins.rs`: custom type-checking for the † rows
+  (`builtin_custom_call`: `clzg`/`ctzg`/`popcountg`, the classification
+  and ordered-compare families, `launder`, `operator_new`/`_delete`
+  selecting the usual replaceable functions), `act_on_source_loc_expr`,
+  `note_default_arg_use` (called from `convert_call_args` for every
+  defaulted argument) and the `std::source_location::__impl` check.
+  `Sema::fold_lone_invalid` keeps clang's single "subexpression not
+  valid" note for `__builtin_unreachable`.
+- `kiln_ast`: `ExprKind::SourceLocExpr`, `SourceLocKind`,
+  `SourceLocValues` and `exprs.cold.source_loc` (spec/ast.md §5.8);
+  `kiln_parse` parses the six keywords.
+- Diagnostics (`kiln_diag::ids`): `sema_call_too_many_args_at_most`,
+  `sema_builtin_invalid_arg_type`, `sema_builtin_fp_class_arg`,
+  `sema_builtin_ordered_compare`, `sema_builtin_launder_invalid_arg`,
+  `sema_builtin_new_delete_not_usual`,
+  `note_builtin_non_usual_declared_here`,
+  `sema_std_source_location_impl_not_found`/`_malformed`, all with
+  clang's texts.
+- Tests: `tests/conformance/expr.const/builtins-*.cpp` (11: constant
+  evaluation, compile-fail and run), `tests/codegen/builtins_*.cpp` (5
+  IR-diff programs), the `templates/builtins/has-builtin-*` probes, and
+  three `bench/oven/builtins-*` entries.
+- Gaps: `__builtin_FUNCTION` in a function with a deduced return type
+  prints `auto` (clang prints the deduced type), and the
+  `[T = int]` template-argument suffix clang appends inside templates
+  is not produced. A `CXXDefaultInitExpr` does not yet take the
+  location of the constructor that uses it (owner: WP-067b).
 
 ### 11.3 Instantiation report and memory accounting
 
