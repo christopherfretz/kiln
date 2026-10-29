@@ -116,11 +116,8 @@ pub fn write_record_layout_with(
         let mut bases: Vec<(DeclId, u64)> = layout.bases.to_vec();
         bases.sort_by_key(|&(_, o)| o);
         for (b, boff) in bases {
-            let desc = if layout.primary_base == Some((b, false)) {
-                "(primary base)"
-            } else {
-                "(base)"
-            };
+            let desc =
+                if layout.primary_base == Some((b, false)) { "(primary base)" } else { "(base)" };
             frames.push(Item::Record {
                 d: b,
                 off: off + boff,
@@ -213,12 +210,7 @@ impl std::fmt::Debug for Names<'_> {
     }
 }
 
-impl<'a> Names<'a> {
-    /// Names without locations.
-    pub(crate) fn new(ast: &'a Ast) -> Self {
-        Names { ast, sources: None, as_defined: None }
-    }
-
+impl Names<'_> {
     /// The typedef naming the unnamed class `d` for linkage purposes,
     /// unless `d` is named as at its definition.
     fn typedef_for_anon(&self, d: DeclId) -> Option<DeclId> {

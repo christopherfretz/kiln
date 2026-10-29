@@ -133,7 +133,8 @@ pub(super) fn layout_record(lay: &mut Layouter<'_>, def: DeclId) -> RecordFacts 
     // clang `EmptySubobjectMap::ComputeEmptySubobjectSizes`: every base
     // (virtual ones included) and every field of class or array-of-class
     // type.
-    let empty_size = |r: DeclId| facts_of(r).map(|f| if f.is_empty { f.layout.size } else { f.largest_empty });
+    let empty_size =
+        |r: DeclId| facts_of(r).map(|f| if f.is_empty { f.layout.size } else { f.largest_empty });
     let largest_empty = bases
         .iter()
         .filter_map(|b| b.class)
@@ -264,11 +265,7 @@ fn layout_field(b: &mut Builder, lay: &Layouter<'_>, map: &mut EmptySubobjectMap
     let attr = f.max_align / 8 * 8;
     // The maximum field alignment (`#pragma pack`) overrides even the
     // field's own `aligned` attribute.
-    let field_align = if field_packed {
-        b.cap(attr.max(8))
-    } else {
-        b.cap(f.info.align.max(attr))
-    };
+    let field_align = if field_packed { b.cap(attr.max(8)) } else { b.cap(f.info.align.max(attr)) };
 
     off = align_to(off, field_align);
     if !b.is_union {

@@ -65,6 +65,10 @@ impl Layouter<'_> {
 
 /// The base-subobject table of `record` on `target`
 /// ([`Layouter::subobjects`]).
-pub fn subobjects(ast: &kiln_ast::Ast, record: DeclId, target: &crate::target::Target) -> Vec<(Subobject, u64)> {
+pub fn subobjects(
+    ast: &kiln_ast::Ast,
+    record: DeclId,
+    target: &crate::target::Target,
+) -> Vec<(Subobject, u64)> {
     Layouter::new(ast, target).subobjects(record)
 }
