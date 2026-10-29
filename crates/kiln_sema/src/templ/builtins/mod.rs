@@ -8,3 +8,5 @@ mod builtin_templates;
 pub mod table;
 mod traits;
 mod transforms;
+
+pub(crate) use builtin_templates::declare_builtin_templates;

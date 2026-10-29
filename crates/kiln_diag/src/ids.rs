@@ -990,6 +990,15 @@ diag_ids! {
     sema_integer_seq_negative_length = Error (0) "integer sequences must have non-negative sequence length";
     sema_bit_cast_size_mismatch = Error (2) "__builtin_bit_cast source size does not equal destination size ({0} vs {1})";
     sema_bit_cast_not_trivially_copyable = Error (1) "__builtin_bit_cast {0:source|destination} type must be trivially copyable";
+    sema_integer_seq_integral_element_type = Error (0) "integer sequences must have integral element type";
+    sema_integer_seq_too_long = Error (2) "integer sequence length {0} exceeds the implementation limit of {1}";
+    sema_auto_var_requires_init = Error (2) "declaration of variable '{0}' with deduced type {1} requires an initializer";
+    sema_auto_var_init_multiple_expressions = Error (2) "initializer for variable '{0}' with type {1} contains multiple expressions";
+    sema_auto_var_init_no_expression = Error (2) "initializer for variable '{0}' with type {1} is empty";
+    sema_auto_inconsistent_deduction = Error (2) "deduced conflicting types ({0} vs {1}) for initializer list element type";
+    sema_auto_var_deduction_failure_from_init_list = Error (2) "cannot deduce actual type for variable '{0}' with type {1} from initializer list";
+    sema_decltype_auto_initializer_list = Error (0) "cannot deduce 'decltype(auto)' from initializer list";
+    sema_decltype_auto_cannot_be_combined = Error (0) "'decltype(auto)' cannot be combined with other type specifiers";
 }
 
 impl DiagId {

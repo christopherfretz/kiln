@@ -188,8 +188,14 @@ impl<'a, 'sm> Sema<'a, 'sm> {
         Self::with_abi(ast, diags, abi, types)
     }
 
-    fn with_abi(ast: Ast, diags: &'a DiagEngine<'sm>, abi: Target, target: TargetTypes) -> Self {
+    fn with_abi(
+        mut ast: Ast,
+        diags: &'a DiagEngine<'sm>,
+        abi: Target,
+        target: TargetTypes,
+    ) -> Self {
         let tu = ast.tu;
+        templ::builtins::declare_builtin_templates(&mut ast);
         Sema {
             ast,
             diags,

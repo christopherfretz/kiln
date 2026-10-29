@@ -3436,7 +3436,8 @@ impl Sema<'_, '_> {
         match k {
             DeclKind::ClassTemplate
             | DeclKind::TypeAliasTemplate
-            | DeclKind::TemplateTemplateParm => {
+            | DeclKind::TemplateTemplateParm
+            | DeclKind::BuiltinTemplate => {
                 return NameClass::TypeTemplate(d);
             }
             DeclKind::VarTemplate => return NameClass::VarTemplate(d),

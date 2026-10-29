@@ -224,6 +224,18 @@ impl<'a> AstBuilder<'a> {
         d
     }
 
+    /// The builtin template `name` (`__make_integer_seq`,
+    /// `__type_pack_element`; spec/sema-templates.md §9.3) in `ctx`:
+    /// implicit, entered in `ctx`'s lookup table but not in its member
+    /// list (clang's builtin template decls are not printed). `which`
+    /// is the inline payload naming the builtin.
+    pub fn builtin_template(&mut self, ctx: DeclId, name: DeclName, which: u32) -> DeclId {
+        let h = DeclHead::new(ctx, name, Loc::INVALID).flags(DeclFlags::IMPLICIT);
+        let d = self.add_unregistered(h, DeclKind::BuiltinTemplate, Payload::None(which), false);
+        self.register_name(ctx, name, d, None, false, false);
+        d
+    }
+
     /// A using-declarator `using qualifier name;` ([namespace.udecl]):
     /// `h.name` is the member name, `qualifier` the nested-name-specifier
     /// as written. The declaration itself is not entered in lookup; its
