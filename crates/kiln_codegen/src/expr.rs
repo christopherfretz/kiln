@@ -167,6 +167,10 @@ impl Cg<'_> {
                 let t = self.lty(q);
                 V::C(self.m.const_zero(t))
             }
+            ExprKind::OffsetOfExpr => {
+                let t = self.lty(q);
+                V::C(self.m.const_int(t, i128::from(ast.exprs.offsetof_value(e))))
+            }
             ExprKind::UnaryExprOrTypeTraitExpr => match self.folds.get(e) {
                 Some(c) => V::C(self.const_scalar_value(c, q)?),
                 None => return err(self.loc_of(e), "unfolded type trait expression"),

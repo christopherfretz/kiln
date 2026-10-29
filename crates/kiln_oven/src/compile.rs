@@ -788,7 +788,9 @@ impl Scan<'_> {
                 self.expr(ExprId::new(n.a()), ok);
                 self.expr(ast.exprs.compound_assign(e).rhs, false);
             }
-            ExprKind::UnaryExprOrTypeTraitExpr | ExprKind::CXXNoexceptExpr => {}
+            ExprKind::UnaryExprOrTypeTraitExpr
+            | ExprKind::CXXNoexceptExpr
+            | ExprKind::OffsetOfExpr => {}
             ExprKind::CallExpr => {
                 let ty = n.ty();
                 if matches!(
@@ -1746,6 +1748,11 @@ impl Compiler<'_> {
                 }
             }
             ExprKind::UnaryExprOrTypeTraitExpr => self.trait_expr(e, dst, ty),
+            ExprKind::OffsetOfExpr => {
+                let v = u128::from(self.ast().exprs.offsetof_value(e));
+                let (w, s) = int_of(self.kind(ty)).unwrap_or((64, false));
+                self.konst(dst, crate::arith::canon(v, w, s));
+            }
             ExprKind::UnaryOperator => self.unary(e, dst, ty),
             ExprKind::BinaryOperator => self.binary(e, dst, ty),
             ExprKind::CompoundAssignOperator => {

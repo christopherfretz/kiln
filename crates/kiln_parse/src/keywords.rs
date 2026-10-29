@@ -118,6 +118,7 @@ keywords! {
     Attribute = "__attribute__" | "__attribute";
     Declspec = "__declspec";
     Extension = "__extension__";
+    BuiltinOffsetof = "__builtin_offsetof";
 }
 
 /// Symbol-to-keyword map for one interner.

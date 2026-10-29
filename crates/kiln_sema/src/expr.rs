@@ -154,7 +154,7 @@ impl Sema<'_, '_> {
         self.ast.types.builtin(t) == Some(BuiltinType::NullPtr)
     }
 
-    fn size_type(&self) -> QualType {
+    pub(crate) fn size_type(&self) -> QualType {
         QualType::unqual(self.target.size_t)
     }
 

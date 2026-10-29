@@ -510,8 +510,12 @@ diag_ids! {
     sema_need_header_before_typeid = Error (0) "you need to include <typeinfo> before using the 'typeid' operator";
     sema_typeid_no_rtti = Error (0) "use of typeid requires -frtti";
     sema_typeid_incomplete = Error (1) "'typeid' of incomplete type {0}";
-    sema_bad_offsetof_type = Error (1) "offsetof requires struct, union, or class type, {0} invalid";
-    sema_no_member_offsetof = Error (2) "no member named '{0}' in {1}";
+    sema_offsetof_record_type = Error (1) "offsetof requires struct, union, or class type, {0} invalid";
+    sema_offsetof_incomplete_type = Error (1) "offsetof of incomplete type {0}";
+    sema_offsetof_array_type = Error (1) "offsetof requires array type, {0} invalid";
+    sema_offsetof_bitfield = Error (1) "cannot compute offset of bit-field '{0}'";
+    sema_offsetof_non_standard_layout = ExtWarn [InvalidOffsetof] (1) "offset of on non-standard-layout type {0}";
+    note_bitfield_decl = Note (0) "bit-field is declared here";
     sema_stmtexpr_file_scope = Error (0) "statement expression not allowed at file scope";
     sema_throw_disabled = Error (0) "cannot use 'throw' with exceptions disabled";
     sema_throw_incomplete = Error (1) "cannot throw object of incomplete type {0}";

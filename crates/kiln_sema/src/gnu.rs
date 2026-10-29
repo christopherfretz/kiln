@@ -2,13 +2,18 @@
 //! expressions `({ ... })`, `__builtin_offsetof` and compound literals
 //! `( T ) { ... }`. Each matches clang's behaviour for C++.
 
+use kiln_ast::decl::{DeclKind, DefinitionBits};
+use kiln_ast::ids::RawId;
 use kiln_ast::stmt::StmtKind;
-use kiln_ast::{ExprId, QualType, StmtId};
+use kiln_ast::{DeclId, ExprId, ListId, QualType, StmtId};
 use kiln_diag::DiagId;
 use kiln_source::Loc;
+use kiln_source::symbol::Symbol;
 
 use crate::Sema;
 use crate::conv::{self, ConvCtx};
+use crate::lookup::LookupKind;
+use crate::target;
 
 /// The state saved across a statement expression
 /// ([`Sema::act_on_start_stmt_expr`]): the enclosing full-expression's
@@ -17,6 +22,31 @@ use crate::conv::{self, ConvCtx};
 #[derive(Debug)]
 pub struct StmtExprScope {
     outer_odr: Vec<ExprId>,
+}
+
+/// One part of a `__builtin_offsetof` designator (clang
+/// `Sema::OffsetOfComponent`).
+#[derive(Clone, Copy, Debug)]
+pub enum OffsetofComponent {
+    /// A member name: the leading identifier (`start` = `end` = its
+    /// location) or `.identifier` (`start` is the `.`).
+    Field {
+        /// The member name.
+        name: Symbol,
+        /// The `.`, or the name for the leading identifier.
+        start: Loc,
+        /// The name.
+        end: Loc,
+    },
+    /// `[ index ]`.
+    Index {
+        /// The index expression.
+        index: ExprId,
+        /// The `[`.
+        start: Loc,
+        /// The `]`.
+        end: Loc,
+    },
 }
 
 impl Sema<'_, '_> {
@@ -146,5 +176,246 @@ impl Sema<'_, '_> {
             loc,
             Vec::new(),
         ))
+    }
+
+    /// `__builtin_offsetof(ty, comps...)` at `loc` (clang
+    /// `BuildBuiltinOffsetOf`): a `std::size_t` prvalue holding the byte
+    /// offset of the designated subobject. Indices must be constant.
+    pub fn act_on_builtin_offsetof(
+        &mut self,
+        loc: Loc,
+        ty: QualType,
+        comps: &[OffsetofComponent],
+        rparen: Loc,
+    ) -> ExprId {
+        let mut indices = Vec::new();
+        let offset = self.offsetof_value(loc, ty, comps, &mut indices);
+        let fits = offset.and_then(|v| u32::try_from(v).ok());
+        if offset.is_some() && fits.is_none() {
+            self.unsupported("a '__builtin_offsetof' value outside 0 to 2^32 - 1", loc);
+        }
+        match fits {
+            Some(v) => {
+                let st = self.size_type();
+                self.builder().offsetof(st, &indices, v, loc, rparen)
+            }
+            None => self.recover_err(&indices, loc),
+        }
+    }
+
+    /// The offset in bytes `__builtin_offsetof(ty, comps...)` designates,
+    /// or `None` after an error. The converted indices go to `indices`.
+    fn offsetof_value(
+        &mut self,
+        loc: Loc,
+        ty: QualType,
+        comps: &[OffsetofComponent],
+        indices: &mut Vec<ExprId>,
+    ) -> Option<i128> {
+        if self.is_error_type(ty) {
+            return None;
+        }
+        if self.ast.types.as_record(ty).is_none() {
+            let d = self.diag(DiagId::sema_offsetof_record_type, loc).arg(self.ty_arg(ty));
+            self.emit(d);
+            return None;
+        }
+        if !self.is_complete(ty) {
+            let d = self.diag(DiagId::sema_offsetof_incomplete_type, loc).arg(self.ty_arg(ty));
+            self.emit(self.incomplete_note(d, ty));
+            return None;
+        }
+        let mut cur = ty;
+        let mut bits: i128 = 0;
+        let mut warned = false;
+        for &c in comps {
+            match c {
+                OffsetofComponent::Index { index, end, .. } => {
+                    let Some(elem) =
+                        self.ast.types.is_array(cur).then(|| self.ast.types.element(cur)).flatten()
+                    else {
+                        let d =
+                            self.diag(DiagId::sema_offsetof_array_type, end).arg(self.ty_arg(cur));
+                        self.emit(d);
+                        return None;
+                    };
+                    let idx = conv::lvalue_to_rvalue(self, index);
+                    indices.push(idx);
+                    let it = self.ast.exprs.get(idx).ty();
+                    if self.is_error_type(it) {
+                        return None;
+                    }
+                    if !self.ast.types.is_integral(it) && !conv::is_unscoped_enum(self, it) {
+                        self.error(DiagId::sema_subscript_not_integer, self.begin_loc(idx));
+                        return None;
+                    }
+                    let Some(i) = self.fold_int(idx) else {
+                        self.unsupported(
+                            "a non-constant array index in '__builtin_offsetof'",
+                            self.begin_loc(idx),
+                        );
+                        return None;
+                    };
+                    let size = target::size_align(&self.ast, elem, &self.abi).map_or(0, |x| x.0);
+                    bits += i * i128::from(size) * 8;
+                    cur = elem;
+                }
+                OffsetofComponent::Field { name, start, end } => {
+                    let (b, next) = self.offsetof_field(loc, cur, name, start, end, &mut warned)?;
+                    bits += b;
+                    cur = next;
+                }
+            }
+        }
+        Some(bits / 8)
+    }
+
+    /// One `name` component of an offsetof designator into `cur`: the
+    /// member's bit offset and type, or `None` after an error.
+    fn offsetof_field(
+        &mut self,
+        loc: Loc,
+        cur: QualType,
+        name: Symbol,
+        start: Loc,
+        end: Loc,
+        warned: &mut bool,
+    ) -> Option<(i128, QualType)> {
+        if !self.is_complete(cur) {
+            let d = self.diag(DiagId::sema_offsetof_incomplete_type, start).arg(self.ty_arg(cur));
+            self.emit(self.incomplete_note(d, cur));
+            return None;
+        }
+        let Some(def) = self.ast.types.as_record(cur).and_then(|r| self.ast.definition(r)) else {
+            let d = self.diag(DiagId::sema_offsetof_record_type, end).arg(self.ty_arg(cur));
+            self.emit(d);
+            return None;
+        };
+        // [support.types.layout]/1: conditionally-supported unless
+        // standard-layout (clang warns once, in evaluated contexts).
+        if !*warned && self.unevaluated == 0 && !self.is_standard_layout(def) {
+            let d = self.diag(DiagId::sema_offsetof_non_standard_layout, loc).arg(self.ty_arg(cur));
+            self.emit(d);
+            *warned = true;
+        }
+        let found = self.lookup_in(def, name, LookupKind::Ordinary);
+        let member = found.decls.iter().copied().find(|&m| {
+            matches!(self.ast.decls.get(m).kind(), DeclKind::Field | DeclKind::IndirectField)
+        });
+        let chain: Vec<DeclId> = match member {
+            Some(m) if self.ast.decls.get(m).kind() == DeclKind::IndirectField => {
+                ListId::from_raw(self.ast.decls.get(m).data())
+                    .map(|l| self.ast.lists.iter::<DeclId>(l).collect())
+                    .unwrap_or_default()
+            }
+            Some(m) => vec![m],
+            None => Vec::new(),
+        };
+        let Some(&field) = chain.last() else {
+            let d = self
+                .diag(DiagId::sema_no_member, loc)
+                .arg(self.ast.symbols().as_str(name).to_owned())
+                .arg(self.ty_arg(cur));
+            self.emit(d);
+            return None;
+        };
+        if self.ast.decls.field(field).is_some_and(|f| f.bit_width.is_some()) {
+            let note = self.diag(DiagId::note_bitfield_decl, self.ast.decls.get(field).loc());
+            let d = self
+                .diag(DiagId::sema_offsetof_bitfield, end)
+                .arg(self.ast.symbols().as_str(name).to_owned())
+                .with_note(note);
+            self.emit(d);
+            return None;
+        }
+        let mut bits = 0i128;
+        for f in chain {
+            bits += i128::from(self.field_bit_offset(f));
+        }
+        let fty = self.ast.decls.get(field).ty().unwrap_or(QualType::ERROR);
+        let fty = if self.ast.types.is_reference(fty) {
+            self.ast.types.pointee(fty).unwrap_or(fty)
+        } else {
+            fty
+        };
+        Some((bits, fty))
+    }
+
+    /// The bit offset of non-static data member `f` in its class.
+    fn field_bit_offset(&mut self, f: DeclId) -> u64 {
+        let Some(parent) = self.ast.decls.get(f).ctx() else { return 0 };
+        let def = self.ast.definition(parent).unwrap_or(parent);
+        let Some(i) = self
+            .ast
+            .members(def)
+            .filter(|&m| self.ast.decls.get(m).kind() == DeclKind::Field)
+            .position(|m| m == f)
+        else {
+            return 0;
+        };
+        kiln_abi::ensure_layout(&mut self.ast, def, &self.abi).fields.get(i).copied().unwrap_or(0)
+    }
+
+    /// Whether class definition `def` is standard-layout ([class.prop]/3).
+    /// Kiln's definition bits do not track it yet (base classes and access
+    /// are not supported), so this computes it from the members and bases.
+    pub(crate) fn is_standard_layout(&self, def: DeclId) -> bool {
+        let rec = self.ast.decls.record(def);
+        if rec.is_some_and(|r| r.defn.contains(DefinitionBits::POLYMORPHIC)) {
+            return false;
+        }
+        let mut bases_with_fields = 0;
+        for b in self.ast.decls.bases(def, &self.ast.lists) {
+            let Some(bd) = self.ast.types.as_record(b.ty).and_then(|r| self.ast.definition(r))
+            else {
+                return false;
+            };
+            if b.is_virtual || !self.is_standard_layout(bd) {
+                return false;
+            }
+            if self.has_fields(bd) {
+                bases_with_fields += 1;
+            }
+        }
+        let mut access = None;
+        for m in self.ast.members(def) {
+            if self.ast.decls.get(m).kind() != DeclKind::Field {
+                continue;
+            }
+            let a = self.ast.decls.get(m).misc().access();
+            if access.is_some_and(|x| x != a) {
+                return false;
+            }
+            access = Some(a);
+            let mut t = self.ast.decls.get(m).ty().unwrap_or(QualType::INT);
+            if self.ast.types.is_reference(t) {
+                return false;
+            }
+            while let Some(e) =
+                self.ast.types.is_array(t).then(|| self.ast.types.element(t)).flatten()
+            {
+                t = e;
+            }
+            if let Some(fd) = self.ast.types.as_record(t).and_then(|r| self.ast.definition(r))
+                && fd != def
+                && !self.is_standard_layout(fd)
+            {
+                return false;
+            }
+        }
+        bases_with_fields + usize::from(access.is_some()) <= 1
+    }
+
+    /// Whether class definition `def` or one of its bases has a
+    /// non-static data member.
+    fn has_fields(&self, def: DeclId) -> bool {
+        self.ast.members(def).any(|m| self.ast.decls.get(m).kind() == DeclKind::Field)
+            || self.ast.decls.bases(def, &self.ast.lists).any(|b| {
+                self.ast
+                    .types
+                    .as_record(b.ty)
+                    .and_then(|r| self.ast.definition(r))
+                    .is_some_and(|d| self.has_fields(d))
+            })
     }
 }

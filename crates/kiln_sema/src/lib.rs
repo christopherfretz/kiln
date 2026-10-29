@@ -44,7 +44,7 @@ pub use decl::{NameClass, TagUse};
 pub use declspec::{
     BaseSpec, Chunk, DeclSpec, Declarator, DeclaratorContext, ParamInfo, Sign, StorageSpec, Width,
 };
-pub use gnu::StmtExprScope;
+pub use gnu::{OffsetofComponent, StmtExprScope};
 pub use init::{Designator, InitItem, InitList, InitValue, Initializer};
 pub use kiln_oven::{Budget, EvalContext, EvalFailure, EvalKind, Oven};
 pub use scope::ScopeKind;

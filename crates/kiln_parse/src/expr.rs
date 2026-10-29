@@ -14,7 +14,7 @@ use kiln_lex::literal::{
 };
 use kiln_lex::{Punct, TokKind, Token};
 use kiln_sema::expr::CastStyle;
-use kiln_sema::{DeclaratorContext, NameClass};
+use kiln_sema::{DeclaratorContext, NameClass, OffsetofComponent};
 use kiln_source::Loc;
 
 use crate::decl::is_type_specifier_kw;
@@ -431,6 +431,65 @@ impl Parser<'_, '_> {
         Some(self.s.act_on_typeid(Ok(e), loc, rparen))
     }
 
+    /// `__builtin_offsetof ( type-id , offsetof-member-designator )`
+    /// (clang `ParseBuiltinPrimaryExpression`): the designator is an
+    /// identifier followed by `.identifier` and `[expression]` parts.
+    fn parse_builtin_offsetof(&mut self) -> PExpr {
+        let loc = self.bump().span.lo;
+        let Some(open) = self.eat(Punct::LParen) else {
+            let d = self
+                .s
+                .diag(DiagId::parse_expected_after, self.expected_loc())
+                .arg("'__builtin_offsetof'")
+                .arg("'('");
+            self.emit(d);
+            return None;
+        };
+        let Some(ty) = self.parse_type_id() else {
+            self.skip_until(&[Punct::RParen], true, true);
+            return None;
+        };
+        if self.expect(Punct::Comma).is_none() {
+            self.skip_until(&[Punct::RParen], true, true);
+            return None;
+        }
+        let mut comps = Vec::new();
+        let Some(name) = self.ident() else {
+            return self.offsetof_expected_identifier();
+        };
+        let at = self.bump().span.lo;
+        comps.push(OffsetofComponent::Field { name, start: at, end: at });
+        loop {
+            if let Some(dot) = self.eat(Punct::Period) {
+                let Some(name) = self.ident() else {
+                    return self.offsetof_expected_identifier();
+                };
+                let end = self.bump().span.lo;
+                comps.push(OffsetofComponent::Field { name, start: dot, end });
+            } else if self.at(Punct::LSquare) {
+                let start = self.bump().span.lo;
+                let Some(index) = self.parse_expression() else {
+                    self.skip_until(&[Punct::RParen], true, true);
+                    return None;
+                };
+                let end = self.expect_closing(Punct::RSquare, Punct::LSquare, start);
+                comps.push(OffsetofComponent::Index { index, start, end });
+            } else {
+                let ok = self.at(Punct::RParen);
+                let rparen = self.expect_closing(Punct::RParen, Punct::LParen, open);
+                return ok.then(|| self.s.act_on_builtin_offsetof(loc, ty, &comps, rparen));
+            }
+        }
+    }
+
+    /// `expected identifier` in an offsetof designator, then skip past `)`.
+    fn offsetof_expected_identifier(&mut self) -> PExpr {
+        let d = self.s.diag(DiagId::parse_expected, self.loc()).arg("identifier");
+        self.emit(d);
+        self.skip_until(&[Punct::RParen], true, true);
+        None
+    }
+
     // -- postfix expressions --------------------------------------------------------------
 
     /// postfix-expression ([expr.post]).
@@ -564,6 +623,7 @@ impl Parser<'_, '_> {
                 }
                 _ if is_simple_type_kw(k) => self.parse_functional_cast(),
                 Kw::Typeid => self.parse_typeid(),
+                Kw::BuiltinOffsetof => self.parse_builtin_offsetof(),
                 Kw::This | Kw::Requires | Kw::CoYield | Kw::Typename | Kw::Template => {
                     self.unsupported(&format!("'{}' expressions", k.spelling()), loc);
                     None
