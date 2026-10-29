@@ -46,8 +46,8 @@ use kiln_source::{Loc, Span};
 pub use class::{BaseSpecInfo, MemInitId, MemInitInfo};
 pub use decl::{NameClass, TagUse};
 pub use declspec::{
-    Chunk, DeclSpec, Declarator, DeclaratorContext, DefaultArg, ParamInfo, Sign, StorageSpec,
-    TypeSpecKind, Width,
+    Chunk, DeclSpec, Declarator, DeclaratorContext, DefaultArg, ParamInfo, Sign, SpecialName,
+    StorageSpec, TypeSpecKind, Width,
 };
 pub use gnu::{OffsetofComponent, StmtExprScope};
 pub use init::{Designator, InitItem, InitList, InitValue, Initializer};

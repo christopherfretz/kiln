@@ -1166,6 +1166,8 @@ impl Parser<'_, '_> {
             loc: open,
             rparen,
             exc,
+            quals: Quals::NONE,
+            ref_qual: kiln_ast::types::RefQual::None,
             trailing,
             ambiguous,
         });

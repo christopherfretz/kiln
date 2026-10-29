@@ -349,9 +349,12 @@ impl Sema<'_, '_> {
                         },
                     };
                 }
-                Chunk::Function { params, variadic, loc, exc, trailing, .. } => {
+                Chunk::Function { params, variadic, loc, exc, quals, ref_qual, trailing, .. } => {
                     prev_ref = false;
-                    let mut info = FuncInfo::new().with_variadic(*variadic);
+                    let mut info = FuncInfo::new()
+                        .with_variadic(*variadic)
+                        .with_this_quals(*quals)
+                        .with_ref_qual(*ref_qual);
                     if let Some((ret, _)) = *trailing {
                         // [dcl.fct]/2: the declared return type is `auto`.
                         if !self.is_plain_auto(ty) {
