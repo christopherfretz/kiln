@@ -884,6 +884,10 @@ impl AstBuilder<'_> {
         self.ast.templates.dependent_depth = depth;
         debug_assert_eq!(d, d2);
         let _ = self.ast.decls.set_templ(pattern, TemplLink::new(TemplLinkKind::Pattern, i));
+        if self.ast.decls.get(d).has(DeclFlags::DEPENDENT_CTX) {
+            let first = prev.map_or(d, |p| self.ast.first(p));
+            self.ast.types.mark_dependent_template(first);
+        }
         d
     }
 
@@ -1303,8 +1307,25 @@ impl AstBuilder<'_> {
         targs: Option<ArgListId>,
         loc: Loc,
     ) -> ExprId {
+        self.unresolved_lookup_in(name, decls, adl, nns, targs, false, loc)
+    }
+
+    /// [`Self::unresolved_lookup`]; `dependent` for a name that is
+    /// type-dependent itself (a member template of the current
+    /// instantiation, [temp.dep.expr]/3).
+    #[allow(clippy::too_many_arguments, reason = "the lookup fields")]
+    pub fn unresolved_lookup_in(
+        &mut self,
+        name: Symbol,
+        decls: &[DeclId],
+        adl: bool,
+        nns: Option<NnsId>,
+        targs: Option<ArgListId>,
+        dependent: bool,
+        loc: Loc,
+    ) -> ExprId {
         let list = self.ast.lists.push(decls);
-        let deps = self.targs_deps(targs);
+        let deps = self.targs_deps(targs) | if dependent { DEP_ALL } else { ExprDeps::NONE };
         let deps = if deps.intersects(ExprDeps::VALUE) { deps | DEP_ALL } else { deps };
         let deps = deps | nns_deps(self, nns);
         // clang's `OverloadExpr`: a type-dependent name (dependent explicit

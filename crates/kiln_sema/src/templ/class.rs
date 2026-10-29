@@ -375,8 +375,7 @@ impl Sema<'_, '_> {
     pub(crate) fn spec_args(&self, spec: DeclId) -> Option<(DeclId, MultiLevelArgs)> {
         let (_, info) = self.ast.spec_info(spec)?;
         let tmpl = info.template;
-        let depth = self.template_param_depth(tmpl);
-        let mut args = Self::outer_levels(tmpl, depth);
+        let mut args = self.base_levels(tmpl);
         // Instantiated from a partial specialization: its deduced
         // arguments ([temp.spec.partial.match]/2, [temp.inst]/2).
         match (info.from_args, self.ast.partial_spec_info(info.from)) {
@@ -384,6 +383,58 @@ impl Sema<'_, '_> {
             _ => args.push(info.args, tmpl, LevelMode::Substitute),
         }
         Some((tmpl, args))
+    }
+
+    /// The template whose pattern instantiates the specializations of
+    /// `tmpl`: the member template of a class template `tmpl` was
+    /// instantiated from ([temp.mem]; its pattern is never substituted
+    /// on its own, as clang's `getTemplateInstantiationPattern`), else
+    /// `tmpl`.
+    pub(crate) fn inst_template(&self, tmpl: DeclId) -> DeclId {
+        self.ast
+            .templates
+            .instantiated_from_map(tmpl)
+            .filter(|&t| kiln_ast::templates::is_template_kind(self.kind_of(t)))
+            .unwrap_or(tmpl)
+    }
+
+    /// The argument levels enclosing `tmpl`'s own parameters: those of
+    /// the specialization `tmpl` is a member of when it is an
+    /// instantiated member template ([temp.mem]), else retained.
+    pub(crate) fn base_levels(&self, tmpl: DeclId) -> MultiLevelArgs {
+        if self.inst_template(tmpl) != tmpl {
+            let mut c = self.ast.decls.get(tmpl).ctx();
+            while let Some(x) = c.filter(|&x| self.kind_of(x) == DeclKind::CXXRecord) {
+                if let Some((_, a)) = self.spec_args(x) {
+                    return a;
+                }
+                c = self.ast.decls.get(x).ctx();
+            }
+        }
+        Self::outer_levels(tmpl, self.template_param_depth(tmpl))
+    }
+
+    /// The instantiated classes from `x` outwards (stopping at the first
+    /// context that is not a class), each paired with the pattern class
+    /// it was instantiated from: member lookups into the patterns go to
+    /// the instantiations (§5.6).
+    pub(crate) fn inst_context_pairs(&self, x: DeclId) -> Vec<(DeclId, DeclId)> {
+        let mut out = Vec::new();
+        let mut c = Some(x);
+        while let Some(r) = c.filter(|&r| self.kind_of(r) == DeclKind::CXXRecord) {
+            let p = match self.ast.spec_info(r) {
+                Some((_, s)) => self.spec_pattern_class(r, s.template),
+                None => self.ast.instantiated_from(r),
+            };
+            if let Some(p) = p {
+                out.push((p, r));
+            }
+            if out.len() > 1024 {
+                break;
+            }
+            c = self.ast.decls.get(r).ctx();
+        }
+        out
     }
 
     /// Instantiates the definition of class template specialization
@@ -422,12 +473,11 @@ impl Sema<'_, '_> {
         };
         let pattern = match matched {
             Some(m) => {
-                let depth = self.template_param_depth(tmpl);
-                args = Self::outer_levels(tmpl, depth);
+                args = self.base_levels(tmpl);
                 args.push(m.args, m.partial, LevelMode::Substitute);
                 Some(m.partial)
             }
-            None => self.ast.template_info(tmpl).and_then(|i| i.pattern),
+            None => self.pattern_of(self.inst_template(tmpl)),
         };
         let Some(pattern) = pattern else {
             return false;
@@ -474,7 +524,8 @@ impl Sema<'_, '_> {
             });
         }
         let parent = self.ast.decls.get(spec).ctx().unwrap_or(self.ast.tu);
-        self.in_inst_context(parent, |s| s.instantiate_class_body(spec, def, &args, &[]));
+        let outer = self.inst_context_pairs(parent);
+        self.in_inst_context(parent, |s| s.instantiate_class_body(spec, def, &args, &outer));
         self.pop_inst_frame();
         self.ast.definition(spec).is_some()
     }
@@ -525,18 +576,8 @@ impl Sema<'_, '_> {
         self.act_on_start_record_definition(spec);
         let mut sub = Substituter::new(self, args);
         sub.entity = Some(spec);
-        for &(p, x) in outer.iter().rev() {
-            sub.map_context(p, x);
-            let first = sub.sema.ast.first(p);
-            if first != p {
-                sub.map_context(first, x);
-            }
-        }
-        sub.map_context(def, spec);
-        let first = sub.sema.ast.first(def);
-        if first != def {
-            sub.map_context(first, spec);
-        }
+        sub.map_contexts(outer);
+        sub.map_contexts(&[(def, spec)]);
         // Base classes ([temp.inst]/3: the base-clause is instantiated
         // with the class).
         let bases: Vec<kiln_ast::decl::BaseSpec> =
@@ -621,6 +662,10 @@ impl Sema<'_, '_> {
         let Some(spec) = self.inst_owner(f) else { return };
         let Some((tmpl, args)) = self.spec_args(spec) else { return };
         let Some(pclass) = self.spec_pattern_class(spec, tmpl) else { return };
+        let mut pairs = self.inst_context_pairs(spec);
+        if pairs.first().is_none_or(|&(_, x)| x != spec) {
+            pairs.insert(0, (pclass, spec));
+        }
         if !self.push_inst_frame(FrameKind::MemberFunction, f, pattern, poi) {
             return;
         }
@@ -657,11 +702,7 @@ impl Sema<'_, '_> {
             }
             let mut sub = Substituter::new(s, &args);
             sub.entity = Some(spec);
-            sub.map_context(pclass, spec);
-            let first = sub.sema.ast.first(pclass);
-            if first != pclass {
-                sub.map_context(first, spec);
-            }
+            sub.map_contexts(&pairs);
             for (a, b) in pp.into_iter().zip(fp) {
                 sub.locals.insert(a, crate::templ::subst::DeclOrPack::Decl(b));
             }
@@ -738,6 +779,10 @@ impl Sema<'_, '_> {
         let Some(spec) = self.inst_owner(v) else { return };
         let Some((tmpl, args)) = self.spec_args(spec) else { return };
         let Some(pclass) = self.spec_pattern_class(spec, tmpl) else { return };
+        let mut pairs = self.inst_context_pairs(spec);
+        if pairs.first().is_none_or(|&(_, x)| x != spec) {
+            pairs.insert(0, (pclass, spec));
+        }
         if !self.push_inst_frame(FrameKind::StaticDataMember, v, pdef, poi) {
             return;
         }
@@ -757,11 +802,7 @@ impl Sema<'_, '_> {
         self.in_inst_context(spec, |s| {
             let mut sub = Substituter::new(s, &args);
             sub.entity = Some(spec);
-            sub.map_context(pclass, spec);
-            let first = sub.sema.ast.first(pclass);
-            if first != pclass {
-                sub.map_context(first, spec);
-            }
+            sub.map_contexts(&pairs);
             // [class.static.data]/3: the initializer is in the scope of
             // the class.
             sub.sema.initializing = Some(d);
@@ -780,6 +821,10 @@ impl Sema<'_, '_> {
         let Some(spec) = self.inst_owner(v) else { return };
         let Some((tmpl, args)) = self.spec_args(spec) else { return };
         let Some(pclass) = self.spec_pattern_class(spec, tmpl) else { return };
+        let mut pairs = self.inst_context_pairs(spec);
+        if pairs.first().is_none_or(|&(_, x)| x != spec) {
+            pairs.insert(0, (pclass, spec));
+        }
         if !self.push_inst_frame(FrameKind::StaticDataMember, v, pattern, poi) {
             return;
         }
@@ -788,11 +833,7 @@ impl Sema<'_, '_> {
         self.in_inst_context(ctx, |s| {
             let mut sub = Substituter::new(s, &args);
             sub.entity = Some(spec);
-            sub.map_context(pclass, spec);
-            let first = sub.sema.ast.first(pclass);
-            if first != pclass {
-                sub.map_context(first, spec);
-            }
+            sub.map_contexts(&pairs);
             // A failure was diagnosed; the variable is left uninitialized.
             let _ = sub.var_init(pattern, v);
         });
@@ -807,7 +848,7 @@ impl Sema<'_, '_> {
         if let Some(from) = from.filter(|&f| self.ast.partial_spec_info(f).is_some()) {
             return self.ast.definition(from);
         }
-        self.ast.definition(self.ast.template_info(tmpl).and_then(|i| i.pattern).unwrap_or(spec))
+        self.ast.definition(self.pattern_of(self.inst_template(tmpl)).unwrap_or(spec))
     }
 
     /// The class template specialization member `f` was instantiated
@@ -851,7 +892,14 @@ impl Sema<'_, '_> {
                 )
         });
         if constexpr {
+            // Instantiated now, so the evaluator never has to (clang's
+            // `MarkFunctionReferenced`); if its pattern is not defined
+            // yet, it is retried at end of TU (and stays undefined for
+            // constant evaluation, spec/sema-templates.md §4.11).
             self.instantiate_function_definition(f, loc);
+            if self.ast.definition(f).is_none() {
+                self.queue_instantiation(f, loc);
+            }
         } else {
             self.queue_instantiation(f, loc);
         }
@@ -861,7 +909,7 @@ impl Sema<'_, '_> {
 impl Substituter<'_, '_, '_> {
     /// A member class is declared with its class; its definition is
     /// instantiated when it is required to be complete ([temp.inst]/3).
-    fn member_class_decl(&mut self, m: DeclId) -> Result<DeclId, SubstFail> {
+    pub(crate) fn member_class_decl(&mut self, m: DeclId) -> Result<DeclId, SubstFail> {
         let n = *self.sema.ast.decls.get(m);
         let loc = n.loc();
         let Some(name) = n.name().as_ident().filter(|_| !n.name().is_empty()) else {
@@ -922,7 +970,7 @@ impl Substituter<'_, '_, '_> {
             DeclKind::ClassTemplate
             | DeclKind::FunctionTemplate
             | DeclKind::VarTemplate
-            | DeclKind::TypeAliasTemplate => return self.unimplemented("member templates", loc),
+            | DeclKind::TypeAliasTemplate => self.member_template(m)?,
             k => return self.unimplemented(&format!("{k:?} members of class templates"), loc),
         }))
     }

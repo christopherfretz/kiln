@@ -108,7 +108,10 @@ pub struct Sema<'a, 'sm> {
     /// redeclares them ([basic.link]/6, clang's local extern decls).
     pub(crate) local_externs: Vec<(DeclId, kiln_source::symbol::Symbol, DeclId)>,
     /// The constant evaluator of the translation unit (spec/sema.md §8).
-    pub(crate) oven: Oven,
+    /// Taken out for the duration of an evaluation, so the bridge can
+    /// reach the rest of `Sema` (`ensure_body` instantiates through it,
+    /// spec/sema-templates.md §4.11); `None` only while one runs.
+    pub(crate) oven: Option<Oven>,
     /// The implicitly declared global allocation functions.
     pub(crate) global_ops: new_delete::GlobalOps,
     /// Braced-init-list call arguments awaiting their parameter types
@@ -208,7 +211,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             defining: Vec::new(),
             enums: Vec::new(),
             local_externs: Vec::new(),
-            oven: Oven::new(Budget::default()),
+            oven: Some(Oven::new(Budget::default())),
             global_ops: new_delete::GlobalOps::default(),
             braced_args: Vec::new(),
             prototype_params: Vec::new(),

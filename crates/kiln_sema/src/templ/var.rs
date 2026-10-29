@@ -94,10 +94,13 @@ impl Sema<'_, '_> {
         poi: Loc,
     ) -> Result<DeclId, ()> {
         let matched = self.match_partial_args(tmpl, args, tmpl, poi);
-        let pattern = match matched {
-            Ok(Some(m)) => Some(m.partial),
-            Ok(None) => self.pattern_of(tmpl),
-            Err(()) => None,
+        // A specialization of an instantiated member template is
+        // instantiated from the member template's pattern ([temp.mem]);
+        // it is listed with the instantiated one.
+        let (pattern, listed) = match matched {
+            Ok(Some(m)) => (Some(m.partial), Some(m.partial)),
+            Ok(None) => (self.pattern_of(self.inst_template(tmpl)), self.pattern_of(tmpl)),
+            Err(()) => (None, None),
         };
         let pspec = pattern.and_then(|p| self.ast.decls.var(p)).map(|x| x.spec).unwrap_or_default();
         let spec = self.builder().var_spec(tmpl, args, canonical, QualType::ERROR, pspec);
@@ -121,7 +124,7 @@ impl Sema<'_, '_> {
             });
         }
         let ploc = self.ast.decls.get(pattern).loc();
-        self.builder().list_implicit_spec(spec, pattern);
+        self.builder().list_implicit_spec(spec, listed.unwrap_or(pattern));
         let Some((_, args)) = self.spec_args(spec) else { return Err(()) };
         if !self.push_inst_frame(FrameKind::VarTemplateInstantiation, spec, tmpl, poi) {
             self.ast.decls.set_flags(spec, DeclFlags::INVALID);
@@ -129,8 +132,10 @@ impl Sema<'_, '_> {
         }
         let pty = self.ast.decls.get(pattern).ty().unwrap_or(QualType::ERROR);
         let ctx = self.ast.decls.get(spec).ctx().unwrap_or(self.ast.tu);
+        let pairs = self.inst_context_pairs(ctx);
         let ty = self.in_inst_context(ctx, |s| {
             let mut sub = Substituter::new(s, &args);
+            sub.map_contexts(&pairs);
             sub.ty(pty, ploc)
         });
         self.pop_inst_frame();
@@ -159,8 +164,10 @@ impl Sema<'_, '_> {
             return;
         }
         let ctx = self.ast.decls.get(v).ctx().unwrap_or(self.ast.tu);
+        let pairs = self.inst_context_pairs(ctx);
         self.in_inst_context(ctx, |s| {
             let mut sub = Substituter::new(s, &args);
+            sub.map_contexts(&pairs);
             sub.sema.initializing = Some(v);
             // A failure was diagnosed; the variable is left uninitialized.
             let _ = sub.var_init(pattern, v);

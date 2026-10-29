@@ -700,7 +700,14 @@ impl Parser<'_, '_> {
         let class = self.s.classify_name(name, Some(q.ctx));
         if self.at(Punct::Less) && (template_kw || is_template_class(class)) {
             return match self.parse_template_id_rest(class, name, name_loc) {
-                Ok(TemplateIdRef::Type(t)) => Some(t),
+                // The qualifier as written is sugar: `'O::I<int>'`.
+                Ok(TemplateIdRef::Type(t)) => {
+                    let named = match self.s.ast.types.view(t.ty()) {
+                        kiln_ast::types::TypeView::Elaborated { nns: None, named, .. } => named,
+                        _ => t,
+                    };
+                    Some(self.s.ast.types.elaborated(kw, Some(q.nns), named))
+                }
                 _ => None,
             };
         }

@@ -14,6 +14,7 @@ pub mod actions;
 pub mod args;
 pub mod class;
 pub mod deduce;
+pub mod member;
 pub mod order;
 pub mod pending;
 pub mod report;
@@ -129,6 +130,10 @@ pub struct InstState {
     pub(crate) undefined_diagnosed: std::cell::Cell<Option<DeclId>>,
     /// Drop the next error passed to `emit` (set by `incomplete_note`).
     pub(crate) suppress_next_error: std::cell::Cell<bool>,
+    /// The location of the innermost running constant evaluation: the
+    /// point of instantiation of a definition `ensure_body` instantiates
+    /// (§4.11).
+    pub(crate) eval_loc: Option<Loc>,
 }
 
 impl Sema<'_, '_> {

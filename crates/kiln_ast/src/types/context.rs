@@ -221,6 +221,9 @@ pub struct TypeContext {
     pub(crate) intern: InternTable,
     pub(crate) names: KeyedTable,
     pub(crate) name_decls: Vec<DeclId>,
+    /// Templates declared in a dependent context (members of class
+    /// templates): their names are dependent ([temp.dep.type]/9).
+    pub(crate) dependent_templates: kiln_source::fx::FxHashSet<DeclId>,
     pub(crate) nns: KeyedTable,
     pub(crate) args: ArgTable,
     pub(crate) profiles: ProfileTable,
@@ -267,6 +270,7 @@ impl TypeContext {
             intern: InternTable::default(),
             names: KeyedTable::new(),
             name_decls: Vec::new(),
+            dependent_templates: kiln_source::fx::FxHashSet::default(),
             nns: KeyedTable::new(),
             args: ArgTable::new(),
             profiles: ProfileTable::new(),
@@ -1032,6 +1036,7 @@ impl TypeContext {
         r.push(MemRow::of_vec("arrays", &s.arrays));
         self.names.memory("names", &mut r);
         r.push(MemRow::of_vec("names.decls", &self.name_decls));
+        r.push(MemRow::of_set("names.dependent_templates", &self.dependent_templates));
         self.nns.memory("nns", &mut r);
         self.args.memory(&mut r);
         self.profiles.memory(&mut r);

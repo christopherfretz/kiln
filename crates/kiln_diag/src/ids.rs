@@ -1014,6 +1014,8 @@ diag_ids! {
     sema_var_spec_not_in_enclosing_ns = Error (2) "variable template specialization of '{0}' not in a namespace enclosing '{1}'";
     sema_var_partial_spec_redecl_scope = Error (2) "variable template partial specialization of '{0}' not in a namespace enclosing '{1}'";
     sema_explicit_spec_storage_class = ExtWarn [ExplicitSpecializationStorageClass] (0) "explicit specialization cannot have a storage class";
+    sema_template_kw_refers_to_non_template = Error (1) "'{0}' following the 'template' keyword does not refer to a template";
+    note_declared_non_template = Note (0) "declared as a non-template here";
 }
 
 impl DiagId {

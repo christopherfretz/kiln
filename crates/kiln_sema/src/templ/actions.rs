@@ -226,8 +226,11 @@ impl Sema<'_, '_> {
     ) -> Result<TemplateIdRef, ()> {
         let _ = r;
         let list = self.ast.types.arg_list(args);
-        let dep_args =
-            self.ast.types.arg_list_flags(list).intersects(TypeFlags::DEPENDENT_INSTANTIATION);
+        // A member template of a class template's pattern is dependent
+        // too ([temp.dep.type]/9).
+        let dep_args = (self.ast.types.arg_list_flags(list)
+            | self.ast.types.template_name_flags(name))
+        .intersects(TypeFlags::DEPENDENT_INSTANTIATION);
         let Some(d) = self.ast.types.template_decl(name) else {
             return Ok(TemplateIdRef::Type(match self.ast.types.template_name_view(name) {
                 // `TT<args>` for a template template parameter `TT`.
@@ -283,7 +286,20 @@ impl Sema<'_, '_> {
                     return Ok(TemplateIdRef::Value(self.build_decl_ref_extra(v, l, Some(extra))));
                 }
                 let n = self.decl_symbol(d);
-                let e = self.builder().unresolved_lookup(n, &[d], false, None, Some(list), l);
+                let dep_name = self
+                    .ast
+                    .types
+                    .template_name_flags(name)
+                    .intersects(TypeFlags::DEPENDENT_INSTANTIATION);
+                let e = self.builder().unresolved_lookup_in(
+                    n,
+                    &[d],
+                    false,
+                    None,
+                    Some(list),
+                    dep_name,
+                    l,
+                );
                 Ok(TemplateIdRef::Value(e))
             }
             DeclKind::FunctionTemplate => {
