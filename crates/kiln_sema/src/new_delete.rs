@@ -674,7 +674,12 @@ impl Sema<'_, '_> {
             match init {
                 NewInit::List(_) => return false,
                 NewInit::None => {
-                    if !self.ast.types.effective_quals(elem).is_const() || array_form {
+                    let is_const = self.ast.types.effective_quals(elem).is_const();
+                    if is_const && array_form {
+                        // `new_initializer` diagnoses the const array.
+                        return false;
+                    }
+                    if !is_const {
                         "default-initialization of a class type in a new-expression"
                     } else {
                         let msg = self
@@ -904,9 +909,11 @@ impl Sema<'_, '_> {
         match init {
             NewInit::None => {
                 if self.ast.types.effective_quals(elem).is_const()
-                    && self.ast.types.as_record(elem).is_none()
+                    && (array_form || self.ast.types.as_record(elem).is_none())
                 {
-                    let msg = self.diag(DiagId::sema_default_init_const, at).arg(self.ty_arg(elem));
+                    // clang names the whole array type (`const int[]`).
+                    let ty = if array_form { array_ty(self) } else { elem };
+                    let msg = self.diag(DiagId::sema_default_init_const, at).arg(self.ty_arg(ty));
                     self.emit(msg);
                     return Err(());
                 }
