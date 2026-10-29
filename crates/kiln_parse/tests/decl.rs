@@ -355,3 +355,44 @@ fn except_spec_forms() {
     let p = parse("void a() noexcept; void a();");
     p.assert_diag("'a' is missing exception specification 'noexcept'");
 }
+
+/// [dcl.asm] GNU asm labels: concatenated, stored as `AsmLabelAttr`
+/// (first, as clang orders it) and inherited by later redeclarations.
+#[test]
+fn dcl_asm_label() {
+    let p = parse(
+        "__attribute__((noinline)) int g() asm(\"g\" \"l\");\n\
+         int g();\n\
+         extern int v __asm__(\"vl\");\n\
+         typedef int T asm(\"ignored\");",
+    );
+    p.assert_clean();
+    p.assert_dump(
+        "FunctionDecl g 'int ()'\n| |-AsmLabelAttr \"gl\" IsLiteralLabel\n| `-NoInlineAttr",
+    );
+    p.assert_dump("FunctionDecl g 'int ()'\n| `-AsmLabelAttr Inherited \"gl\" IsLiteralLabel");
+    p.assert_dump("VarDecl v 'int' extern\n| `-AsmLabelAttr \"vl\" IsLiteralLabel");
+    p.assert_dump("TypedefDecl T 'int'\n");
+}
+
+/// [dcl.asm] GNU asm labels on redeclarations and automatic variables
+/// (clang's `mergeDeclAttributes`, `warn_asm_label_on_auto_decl`).
+#[test]
+fn dcl_asm_label_diagnostics() {
+    let p = parse("int f() asm(\"a\");\nint f() asm(\"b\");");
+    p.assert_diag("2:5 error: conflicting asm label");
+    p.assert_diag("1:13 note: previous declaration is here");
+    let p = parse("int f();\nint u() { return f(); }\nint f() asm(\"late\");");
+    p.assert_diag("3:5 error: cannot apply asm label to function after its first use");
+    let p = parse("int f();\nint f() asm(\"ok\");\nint u() { return f(); }");
+    p.assert_clean();
+    let p = parse("void f() { int x asm(\"r\"); static int s asm(\"s\"); (void)x; }");
+    p.assert_diag("1:22 warning: ignored asm label 'r' on automatic variable");
+    let p = parse("int a asm(L\"w\");\nint b asm(u8\"u\");\nint c asm(\"\");\nint d asm(1);");
+    p.assert_diag("1:15 error: cannot use wide string literal in 'asm'");
+    p.assert_diag("2:16 error: cannot use unicode string literal in 'asm'");
+    p.assert_diag("3:13 error: cannot use an empty string literal in 'asm'");
+    p.assert_diag("4:11 error: expected string literal in 'asm'");
+    let p = parse("int f() asm(\"x\") = 0;");
+    p.assert_diag("1:5 error: illegal initializer (only variables can be initialized)");
+}

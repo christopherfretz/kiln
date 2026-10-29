@@ -1,8 +1,10 @@
 //! Declarations ([dcl], [namespace], [class.mem]; spec/parse.md §4).
 
 use kiln_ast::decl::{EnumData, InitStyle};
+use kiln_ast::expr::ExprKind;
+use kiln_ast::strings::StringEncoding;
 use kiln_ast::types::{ExcSpec, Quals, TagKeyword};
-use kiln_ast::{DeclId, QualType};
+use kiln_ast::{DeclId, ExprId, QualType};
 use kiln_diag::DiagId;
 use kiln_lex::{Punct, TokKind};
 use kiln_sema::declspec::SpecError;
@@ -10,7 +12,7 @@ use kiln_sema::{
     BaseSpec, Chunk, DeclSpec, Declarator, DeclaratorContext, Designator, InitItem, InitList,
     InitValue, Initializer, NameClass, Sign, StorageSpec, TagUse, Width,
 };
-use kiln_source::Loc;
+use kiln_source::{Loc, Span};
 
 use crate::keywords::Kw;
 use crate::parser::Parser;
@@ -680,6 +682,13 @@ impl Parser<'_, '_> {
                 };
                 d.bit_width = Some(w);
             }
+            // clang's `ParseCXXMemberDeclaratorBeforeInitializer`: a
+            // malformed asm label skips to the next declarator.
+            if let Ok(l) = self.parse_asm_label() {
+                d.asm_label = l;
+            } else {
+                self.skip_until(&[Punct::Comma], true, false);
+            }
             if self.at_attr() {
                 self.parse_attributes(&mut d.attrs);
             }
@@ -1097,11 +1106,13 @@ impl Parser<'_, '_> {
             // known: clang reports a missing type specifier at its name.
             let base =
                 *base_ty.get_or_insert_with(|| self.s.type_from_declspec_at(&ds, d.name_loc()));
-            if self.at_kw(Kw::Asm) {
-                self.unsupported("asm labels", self.loc());
-                self.bump();
-                if self.eat(Punct::LParen).is_some() {
-                    self.skip_until(&[Punct::RParen], false, true);
+            // GNU asm label (clang's `ParseAsmAttributesAfterDeclarator`):
+            // a malformed one drops the declarator.
+            match self.parse_asm_label() {
+                Ok(l) => d.asm_label = l,
+                Err(()) => {
+                    self.skip_until(&[], true, false);
+                    break;
                 }
             }
             if self.at_attr() {
@@ -1114,7 +1125,9 @@ impl Parser<'_, '_> {
                 self.skip_to_semi();
                 return decls;
             }
-            if d.is_function_declarator() && self.at(Punct::LBrace) {
+            // A function definition has no asm label: after one, `{` is
+            // an initializer (clang's order of checks).
+            if d.is_function_declarator() && d.asm_label.is_none() && self.at(Punct::LBrace) {
                 if !allow_fn_def {
                     self.error_here(DiagId::parse_function_definition_not_allowed);
                     self.skip_unsupported_declaration();
@@ -1143,15 +1156,21 @@ impl Parser<'_, '_> {
                 _ => None,
             };
             let v = self.s.act_on_declarator(&ds, base, &d);
-            let Ok(init) = self.parse_initializer(d.init_style) else {
-                decls.extend(v);
-                self.skip_to_semi();
-                return decls;
-            };
-            match (v, init) {
-                (Some(v), Some(i)) => self.s.act_on_init(v, i),
-                (Some(v), None) => self.s.act_on_uninit(v),
-                _ => {}
+            match self.parse_initializer(d.init_style) {
+                Ok(init) => match (v, init) {
+                    (Some(v), Some(i)) => self.s.act_on_init(v, i),
+                    (Some(v), None) => self.s.act_on_uninit(v),
+                    _ => {}
+                },
+                // A malformed braced-init-list without `=` was skipped
+                // through its `}` (clang's `ParseBraceInitializer`); the
+                // declaration continues.
+                Err(()) if d.init_style == Some(InitStyle::List) => {}
+                Err(()) => {
+                    decls.extend(v);
+                    self.skip_to_semi();
+                    return decls;
+                }
             }
             decls.extend(v);
             if self.eat(Punct::Comma).is_none() {
@@ -1170,6 +1189,60 @@ impl Parser<'_, '_> {
             }
         }
         decls
+    }
+
+    /// A GNU asm label after a declarator (`asm("name")`, also spelled
+    /// `__asm`/`__asm__`; clang's `ParseSimpleAsm(ForAsmLabel)`): `Ok(None)`
+    /// when there is none, `Err` (reported) when it is malformed. The
+    /// adjacent string literals concatenate ([lex.string]/7); the result
+    /// must be an ordinary, non-empty literal.
+    pub(crate) fn parse_asm_label(&mut self) -> Result<Option<(ExprId, Span)>, ()> {
+        if !self.at_kw(Kw::Asm) {
+            return Ok(None);
+        }
+        self.bump();
+        let Some(lparen) = self.eat(Punct::LParen) else {
+            let d = self.s.diag(DiagId::parse_expected_after, self.loc()).arg("'asm'").arg("'('");
+            self.emit(d);
+            return Err(());
+        };
+        let start = self.loc();
+        let label = if self.at_string() {
+            self.parse_string_literal(false).and_then(|e| {
+                let span = Span::new(start, self.prev_end());
+                let ast = &self.s.ast;
+                if ast.exprs.get(e).kind() != ExprKind::StringLiteral {
+                    return None;
+                }
+                let lit = ast.exprs.string_lit(e);
+                let which = match ast.strings.encoding(lit) {
+                    StringEncoding::Ordinary if ast.strings.unit_count(lit) == 0 => "2",
+                    StringEncoding::Ordinary => return Some((e, span)),
+                    StringEncoding::Wide16 | StringEncoding::Wide32 => "1",
+                    _ => "0",
+                };
+                let d =
+                    self.s.diag(DiagId::parse_asm_string_kind, self.loc()).arg(which).range(span);
+                self.emit(d);
+                None
+            })
+        } else {
+            let d = self.s.diag(DiagId::parse_expected_string_literal_in, self.loc()).arg("'asm'");
+            self.emit(d);
+            None
+        };
+        match label {
+            Some(l) => {
+                self.expect_closing(Punct::RParen, Punct::LParen, lparen);
+                Ok(Some(l))
+            }
+            None => {
+                if self.skip_until(&[Punct::RParen], true, false) {
+                    self.bump();
+                }
+                Err(())
+            }
+        }
     }
 
     /// True if the current token can start a decl-specifier-seq.
@@ -1258,7 +1331,13 @@ impl Parser<'_, '_> {
                 return Err(());
             }
             let value = if self.at(Punct::LBrace) {
-                InitValue::List(self.parse_init_list()?)
+                let Ok(l) = self.parse_init_list() else {
+                    // The inner list skipped through its `}`; skip
+                    // through ours too (clang's `ParseBraceInitializer`).
+                    self.skip_until(&[Punct::RBrace], false, true);
+                    return Err(());
+                };
+                InitValue::List(l)
             } else {
                 let Some(e) = self.parse_assignment_expr() else {
                     self.skip_until(&[Punct::RBrace], false, true);

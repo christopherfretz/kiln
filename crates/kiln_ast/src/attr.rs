@@ -54,6 +54,9 @@ impl AttrKind {
     pub const NO_SANITIZE: AttrKind = AttrKind(85);
     pub const MODE: AttrKind = AttrKind(86);
     pub const VECTOR_SIZE: AttrKind = AttrKind(87);
+    /// GNU asm label (`asm("name")` after a declarator): `a` = the
+    /// label's `StringLitId`. Keyword syntax.
+    pub const ASM_LABEL: AttrKind = AttrKind(88);
 }
 
 /// Attribute syntax.

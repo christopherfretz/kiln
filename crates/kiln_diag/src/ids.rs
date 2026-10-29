@@ -369,6 +369,10 @@ diag_ids! {
     // ----- sema conversions (WP-049): [conv], [expr.arith.conv], [lex.*con] --
     // Type arguments are passed pre-quoted, with clang's `(aka '...')`
     // suffix when sugar hides the canonical type (`Sema::ty_arg`).
+    sema_illegal_initializer = Error (0) "illegal initializer (only variables can be initialized)";
+    sema_different_asm_label = Error (0) "conflicting asm label";
+    sema_late_asm_label = Error (1) "cannot apply asm label to {0:variable|function} after its first use";
+    sema_asm_label_on_auto_decl = Warning (1) "ignored asm label '{0}' on automatic variable";
     sema_int_literal_too_large = Error (0) "integer literal is too large to be represented in any integer type";
     sema_int_literal_implicitly_unsigned = ExtWarn [ImplicitlyUnsignedLiteral] (0) "integer literal is too large to be represented in a signed integer type, interpreting as unsigned";
     sema_size_t_literal_too_large = Error (1) "{0:signed |}'size_t' literal is out of range of possible {0:signed |}'size_t' values";
@@ -431,6 +435,8 @@ diag_ids! {
     parse_expected_namespace_name = Error (0) "expected namespace name";
     parse_expected_string_literal = Error (0) "expected string literal for diagnostic message in static_assert";
     parse_expected_class_name = Error (0) "expected class name";
+    parse_expected_string_literal_in = Error (1) "expected string literal in {0}";
+    parse_asm_string_kind = Error (1) "cannot use {0:unicode|wide|an empty} string literal in 'asm'";
     parse_missing_type_specifier = Error (0) "a type specifier is required for all declarations";
     parse_extraneous_closing_brace = Error (0) "extraneous closing brace ('}}')";
     parse_extraneous_rparen = Error (0) "extraneous ')' before ';'";

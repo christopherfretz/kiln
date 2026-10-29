@@ -500,11 +500,86 @@ impl Sema<'_, '_> {
         if invalid {
             self.ast.decls.set_flags(decl, DeclFlags::INVALID);
         }
+        self.act_on_asm_label(ds, d, decl, &mut attrs);
         if !attrs.is_empty() {
             self.check_decl_attrs(decl, &attrs);
             let _ = self.builder().attach_attrs(decl, &attrs);
         }
         Some(decl)
+    }
+
+    /// The GNU asm label of declarator `d` declaring `decl`, and the one
+    /// `decl` inherits from its previous declaration (clang's
+    /// `ActOn{Function,Variable}Declarator` and `mergeDeclAttributes`):
+    /// prepends the `AsmLabel` attribute to `attrs` (an inherited one
+    /// precedes the declaration's own attributes, as clang orders them)
+    /// and records the entity's label on its first declaration for the
+    /// mangler. Only functions and variables take one; a typedef's is
+    /// ignored, as clang ignores it.
+    fn act_on_asm_label(
+        &mut self,
+        ds: &DeclSpec,
+        d: &Declarator,
+        decl: DeclId,
+        attrs: &mut Vec<AttrId>,
+    ) {
+        let kind = self.ast.decls.get(decl).kind();
+        if !matches!(kind, DeclKind::Function | DeclKind::Var) {
+            return;
+        }
+        let prev_attr = self.ast.prev(decl).and_then(|p| {
+            self.ast
+                .lists
+                .iter::<AttrId>(self.ast.attrs.of_decl(p))
+                .find(|&a| self.ast.attrs.get(a).kind == AttrKind::ASM_LABEL)
+        });
+        let Some((e, span)) = d.asm_label else {
+            if let Some(a) = prev_attr {
+                let mut node = *self.ast.attrs.get(a);
+                node.flags |= 2;
+                let id = self.ast.attrs.push(node);
+                attrs.insert(0, id);
+            }
+            return;
+        };
+        let lit = self.ast.exprs.string_lit(e);
+        let loc = self.ast.exprs.get(e).loc();
+        if let Some(a) = prev_attr {
+            let old = *self.ast.attrs.get(a);
+            if old.a != lit.raw() {
+                let note = self.diag(DiagId::note_previous_declaration, old.loc);
+                let msg = self.diag(DiagId::sema_different_asm_label, d.name_loc());
+                self.emit(msg.with_note(note));
+            }
+        } else if self.ast.prev(decl).is_some()
+            && self.ast.decls.get(self.ast.first(decl)).flags().contains(DeclFlags::USED)
+        {
+            let what = if kind == DeclKind::Function { "1" } else { "0" };
+            let msg = self.diag(DiagId::sema_late_asm_label, d.name_loc()).arg(what).range(span);
+            self.emit(msg);
+        }
+        // [dcl.asm] GNU: a label on an automatic variable is ignored.
+        if kind == DeclKind::Var
+            && self.in_local_scope()
+            && ds.storage.is_none()
+            && ds.thread_local.is_none()
+        {
+            let text = String::from_utf8_lossy(self.ast.strings.bytes(lit)).into_owned();
+            let msg = self.diag(DiagId::sema_asm_label_on_auto_decl, loc).arg(text);
+            self.emit(msg);
+        }
+        let node = AttrNode {
+            kind: AttrKind::ASM_LABEL,
+            syntax: AttrSyntax::Keyword,
+            flags: 0,
+            loc,
+            a: lit.raw(),
+            b: 0,
+        };
+        let id = self.ast.attrs.push(node);
+        attrs.insert(0, id);
+        let first = self.ast.first(decl);
+        let _ = self.ast.decls.cold.asm_label.insert(first, lit);
     }
 
     /// Reports an unsupported construct (`{what} is not supported yet`).
@@ -1071,6 +1146,12 @@ impl Sema<'_, '_> {
     pub fn act_on_init(&mut self, v: DeclId, init: Initializer) {
         let vn = *self.ast.decls.get(v);
         if vn.kind() != DeclKind::Var {
+            // clang's `AddInitializerToDecl`: only variables have an
+            // initializer ([dcl.init]/1).
+            if matches!(vn.kind(), DeclKind::Function | DeclKind::Typedef) {
+                self.error(DiagId::sema_illegal_initializer, vn.loc());
+                self.ast.decls.set_flags(v, DeclFlags::INVALID);
+            }
             if let Initializer::Expr(e) = init {
                 self.act_on_full_expr(e);
             }

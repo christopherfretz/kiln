@@ -30,6 +30,7 @@ use kiln_source::{FileId, Loc, SourceManager};
 pub use names::AstNames;
 
 use crate::Ast;
+use crate::attr::AttrKind;
 use crate::consts::PrintOptions as ValueOptions;
 use crate::decl::{
     Access, ConstexprKind, DeclFlags, DeclKind, Defaulted, DefinitionBits, EnumData, FieldData,
@@ -39,7 +40,7 @@ use crate::decl::{
 use crate::expr::{
     ExprDeps, ExprFlags, ExprKind, NonOdrUse, ObjectKind, StringKind, ValueCategory,
 };
-use crate::ids::{AttrId, DeclId, ExprId, ListId, QualType, RawId, StmtId};
+use crate::ids::{AttrId, DeclId, ExprId, ListId, QualType, RawId, StmtId, StringLitId};
 use crate::stmt::{IfKind, StmtKind};
 use crate::types::{PrintOptions, write_type};
 
@@ -938,6 +939,14 @@ impl<'a, W: io::Write> Dumper<'a, W> {
         }
         if node.flags & 1 != 0 {
             self.line.push_str(" Implicit");
+        }
+        if node.kind == AttrKind::ASM_LABEL
+            && let Some(l) = StringLitId::from_raw(node.a)
+        {
+            // clang prints the label's bytes unescaped.
+            self.line.push_str(" \"");
+            self.line.push_str(&String::from_utf8_lossy(self.ast.strings.bytes(l)));
+            self.line.push_str("\" IsLiteralLabel");
         }
     }
 

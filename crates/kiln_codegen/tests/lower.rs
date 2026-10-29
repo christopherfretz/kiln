@@ -480,6 +480,18 @@ const CASES: &[(&str, Mode, &str)] = &[
     ("void_return_falloff", Exact, "void g(int*); void f(int* p) { if (!p) return; g(p); }"),
     ("main_fn", Exact, "int main() { int x = 3; return x - 3; }"),
     ("main_no_return", Exact, "int puts(const char*); int main() { puts(\"hi\"); }"),
+    // GNU asm labels replace the linkage name; ELF adds no `\01` marker,
+    // a written one is kept (clang `MangleContext::mangleName`).
+    (
+        "asm_labels",
+        Exact,
+        "extern \"C\" int foo(int) __asm__(\"\" \"bar\"); int baz(int) asm(\"qux\"); extern int gv asm(\"my_gv\"); int gv2 __asm(\"\\01raw_name\") = 3; int baz(int x) { return x; } static int sfn() asm(\"static_label\"); static int sfn() { return 1; } int f() { static int s asm(\"ss\") = 4; return foo(1) + baz(2) + gv + gv2 + sfn() + s; }",
+    ),
+    (
+        "asm_label_redecl",
+        Exact,
+        "int f3(); int f3() asm(\"ok3\"); extern int v; extern int v asm(\"vl\"); int v = 2; int f() { return f3() + v; }",
+    ),
     (
         "fn_returning_ptr_to_array",
         Exact,

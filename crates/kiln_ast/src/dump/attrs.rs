@@ -48,6 +48,7 @@ pub(super) fn class_name(a: &AttrNode) -> Option<&'static str> {
         AttrKind::NO_SANITIZE => "NoSanitize",
         AttrKind::MODE => "Mode",
         AttrKind::VECTOR_SIZE => "VectorSize",
+        AttrKind::ASM_LABEL => "AsmLabel",
         _ => return None,
     })
 }
