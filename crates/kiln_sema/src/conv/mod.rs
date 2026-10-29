@@ -20,11 +20,11 @@
 
 mod apply;
 mod arith;
-mod bases;
+pub(crate) mod bases;
 pub(crate) mod narrow;
 mod qual;
 pub(crate) mod rank;
-mod scs;
+pub(crate) mod scs;
 pub(crate) mod soft;
 
 use kiln_ast::expr::{CastKind, ExprKind, ObjectKind, ValueCategory};
@@ -414,7 +414,7 @@ fn entity_select(ctx: ConvCtx) -> &'static str {
     }
 }
 
-fn has_conversion_functions(s: &Sema<'_, '_>, q: QualType) -> bool {
+pub(crate) fn has_conversion_functions(s: &Sema<'_, '_>, q: QualType) -> bool {
     let Some(d) = s.ast.types.as_record(q) else { return false };
     let Some(def) = bases::complete_class(s, d) else { return false };
     s.ast
@@ -614,6 +614,11 @@ fn bind_reference(s: &mut Sema<'_, '_>, e: ExprId, to: QualType) -> Result<ExprI
             }
         }
         BaseSearch::Unique(p) => {
+            // [dcl.init.ref]/5: the base must be accessible (diagnosed;
+            // the binding still applies).
+            let at = s.begin_loc(e);
+            let (d, b) = (strip_cv(s, from), strip_cv(s, referee));
+            s.check_base_access(d, b, &p, at);
             let list = path_list(s, &p);
             Ok(raw_cast(s, CastKind::DerivedToBase, e, target, out_vk, Some(list)))
         }

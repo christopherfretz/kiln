@@ -494,7 +494,6 @@ pub(crate) const CLANG_GROUP_NAMES: &[&str] = &[
     "invalid-ios-deployment-target",
     "invalid-no-builtin-names",
     "invalid-noreturn",
-    "invalid-offsetof",
     "invalid-or-nonexistent-directory",
     "invalid-partial-specialization",
     "invalid-pch",

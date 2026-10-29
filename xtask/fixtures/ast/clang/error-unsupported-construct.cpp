@@ -1,4 +1,4 @@
 //@ expect: ast
-// A throw expression: clang's CXXThrowExpr is not in the mapping table, so
+// A labeled statement: clang's LabelStmt is not in the mapping table, so
 // the dump cannot be normalized.
-void f() { throw 1; }
+void f() { l: goto l; }

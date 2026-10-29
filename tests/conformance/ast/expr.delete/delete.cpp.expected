@@ -1,0 +1,33 @@
+TranslationUnitDecl
+|-CXXRecordDecl referenced struct S definition
+| `-FieldDecl a 'int'
+|-FunctionDecl a 'void (int *)'
+| |-ParmVarDecl used p 'int *'
+| `-CompoundStmt
+|   `-CXXDeleteExpr 'void' Function 'operator delete' 'void (void *, unsigned long) noexcept'
+|     `-ImplicitCastExpr 'int *' <LValueToRValue>
+|       `-DeclRefExpr 'int *' lvalue ParmVar 'p' 'int *'
+|-FunctionDecl b 'void (int *)'
+| |-ParmVarDecl used p 'int *'
+| `-CompoundStmt
+|   `-CXXDeleteExpr 'void' array Function 'operator delete[]' 'void (void *) noexcept'
+|     `-ImplicitCastExpr 'int *' <LValueToRValue>
+|       `-DeclRefExpr 'int *' lvalue ParmVar 'p' 'int *'
+|-FunctionDecl c 'void (S *)'
+| |-ParmVarDecl used s 'S *'
+| `-CompoundStmt
+|   `-CXXDeleteExpr 'void' global Function 'operator delete' 'void (void *, unsigned long) noexcept'
+|     `-ImplicitCastExpr 'S *' <LValueToRValue>
+|       `-DeclRefExpr 'S *' lvalue ParmVar 's' 'S *'
+|-FunctionDecl d 'void (int (*)[3])'
+| |-ParmVarDecl used m 'int (*)[3]'
+| `-CompoundStmt
+|   `-CXXDeleteExpr 'void' array Function 'operator delete[]' 'void (void *) noexcept'
+|     `-ImplicitCastExpr 'int (*)[3]' <LValueToRValue>
+|       `-DeclRefExpr 'int (*)[3]' lvalue ParmVar 'm' 'int (*)[3]'
+`-FunctionDecl e 'void (const double *)'
+  |-ParmVarDecl used q 'const double *'
+  `-CompoundStmt
+    `-CXXDeleteExpr 'void' global array Function 'operator delete[]' 'void (void *) noexcept'
+      `-ImplicitCastExpr 'const double *' <LValueToRValue>
+        `-DeclRefExpr 'const double *' lvalue ParmVar 'q' 'const double *'

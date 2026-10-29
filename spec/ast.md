@@ -191,6 +191,8 @@ struct FunctionData {               // 24 bytes
                                     //   trivial(1) immediate_escalating(1) has_contracts(1) is_coroutine(1)
                                     //   escalated(1) variadic(1) override(1, bit 18) final(1, bit 19)
                                     //   explicit_object(1, bit 20) virtual_written(1, bit 21)
+                                    //   storage_inherited(1, bit 22: storage taken from a previous
+                                    //   declaration, not written; the dump omits it)
                                     //   (`virtual` is semantic: written or overriding; `virtual_written`
                                     //   is the specifier, which the dump prints. LATE bits, set after
                                     //   the body or at `}`: trivial, has_contracts, is_coroutine,
@@ -306,6 +308,18 @@ struct ExprNode {        // 20 bytes
   `DeclRefExpr`: `a` = `DeclId`, `b` = side index for qualifier/template
   args/found-decl (0 if none); `MemberExpr`: `a` = base, `b` = member decl
   (rare extras in a cold map).
+- WP-064 forms, each read through an `ExprArena` accessor
+  (`CXXDefaultArgExpr`, `OpaqueValueExpr` and `CXXTypeidExpr` are
+  class-feature payloads, below):
+
+  | kind | `a` | `b` / `aux` | accessor |
+  |---|---|---|---|
+  | `BinaryConditionalOperator` | `ListId` of [common, condition, true arm, false arm] | | `binary_conditional_operands` |
+  | `CXXThrowExpr` | operand or none (rethrow) | | `throw_operand` |
+  | `StmtExpr` | the `CompoundStmt` | | `stmt_expr_body` |
+  | `OffsetOfExpr` | `ListId` of the array index expressions | `b` = byte offset (`u32`) | `offsetof_value` |
+  | `CompoundLiteralExpr` | the `InitListExpr` | | `compound_literal_init` |
+  | `CXXScalarValueInitExpr` | none | | |
 - Source ranges are computed (`begin(e)` walks to the leftmost child;
   kinds ending in a closing token store it in their side record or cold
   map); no stored ranges.
@@ -325,17 +339,17 @@ Names are clang's (the dump prints them). (M2) marks the M2 subset.
 |---|---|
 | literals | `IntegerLiteral` (M2), `FloatingLiteral` (M2), `CharacterLiteral` (M2: kind ascii/wide/utf8/16/32), `StringLiteral` (M2: `StringLitId`, kind), `CXXBoolLiteralExpr` (M2), `CXXNullPtrLiteralExpr` (M2), `UserDefinedLiteral`, `ImaginaryLiteral`, `EmbedExpr` (`#embed`), `GNUNullExpr` (`__null`, glibc `NULL`) |
 | names | `DeclRefExpr` (M2), `MemberExpr` (M2), `CXXThisExpr`, `PredefinedExpr` (`__func__`, `__PRETTY_FUNCTION__`), `SourceLocExpr` (`__builtin_source_location`, `__builtin_LINE`...), `UnresolvedLookupExpr`, `UnresolvedMemberExpr`, `DependentScopeDeclRefExpr`, `CXXDependentScopeMemberExpr`, `SubstNonTypeTemplateParmExpr`, `SubstNonTypeTemplateParmPackExpr`, `FunctionParmPackExpr` |
-| operators | `UnaryOperator` (M2), `BinaryOperator` (M2; incl. `,` and assignment), `CompoundAssignOperator` (M2; computation types in side record), `ConditionalOperator` (M2), `BinaryConditionalOperator` (GNU `?:`), `ArraySubscriptExpr` (M2), `ParenExpr` (M2), `CallExpr` (M2), `CXXMemberCallExpr`, `CXXOperatorCallExpr`, `CXXRewrittenBinaryOperator` (`<=>`/`==` rewrites), `ParenListExpr` (dependent init) |
-| casts | `ImplicitCastExpr` (M2), `CStyleCastExpr` (M2), `CXXFunctionalCastExpr`, `CXXStaticCastExpr`, `CXXConstCastExpr`, `CXXReinterpretCastExpr`, `CXXDynamicCastExpr`, `BuiltinBitCastExpr` (`__builtin_bit_cast`) |
-| initialization | `InitListExpr` (M2; semantic form, §5.6), `ImplicitValueInitExpr` (M2), `CXXConstructExpr`, `CXXTemporaryObjectExpr`, `CXXInheritedCtorInitExpr`, `CXXDefaultArgExpr`, `CXXDefaultInitExpr`, `CXXScalarValueInitExpr`, `CXXParenListInitExpr` (P0960), `ArrayInitLoopExpr`, `ArrayInitIndexExpr`, `CXXStdInitializerListExpr`, `CompoundLiteralExpr` (GNU), `NoInitExpr` |
-| temporaries | `MaterializeTemporaryExpr` (extending decl / `LifetimeExtendedTemporary`), `CXXBindTemporaryExpr`, `ExprWithCleanups`, `OpaqueValueExpr` |
+| operators | `UnaryOperator` (M2), `BinaryOperator` (M2; incl. `,` and assignment), `CompoundAssignOperator` (M2; computation types in side record), `ConditionalOperator` (M2), `BinaryConditionalOperator` (GNU `?:`; M2), `ArraySubscriptExpr` (M2), `ParenExpr` (M2), `CallExpr` (M2), `CXXMemberCallExpr`, `CXXOperatorCallExpr`, `CXXRewrittenBinaryOperator` (`<=>`/`==` rewrites), `ParenListExpr` (dependent init) |
+| casts | `ImplicitCastExpr` (M2), `CStyleCastExpr` (M2), `CXXFunctionalCastExpr` (M2), `CXXStaticCastExpr`, `CXXConstCastExpr`, `CXXReinterpretCastExpr`, `CXXDynamicCastExpr`, `BuiltinBitCastExpr` (`__builtin_bit_cast`) |
+| initialization | `InitListExpr` (M2; semantic form, §5.6), `ImplicitValueInitExpr` (M2), `CXXConstructExpr`, `CXXTemporaryObjectExpr`, `CXXInheritedCtorInitExpr`, `CXXDefaultArgExpr` (M2), `CXXDefaultInitExpr`, `CXXScalarValueInitExpr` (M2), `CXXParenListInitExpr` (P0960), `ArrayInitLoopExpr`, `ArrayInitIndexExpr`, `CXXStdInitializerListExpr`, `CompoundLiteralExpr` (GNU; M2), `NoInitExpr` |
+| temporaries | `MaterializeTemporaryExpr` (extending decl / `LifetimeExtendedTemporary`), `CXXBindTemporaryExpr`, `ExprWithCleanups`, `OpaqueValueExpr` (M2) |
 | memory | `CXXNewExpr` (incl. placement, P2747 constexpr placement new), `CXXDeleteExpr`, `CXXPseudoDestructorExpr` |
-| exceptions/RTTI | `CXXThrowExpr` (P3068 constexpr exceptions), `CXXNoexceptExpr`, `CXXTypeidExpr` |
-| traits | `UnaryExprOrTypeTraitExpr` (M2: `sizeof`, `alignof`, `__alignof`), `TypeTraitExpr` (`__is_same`, ..., `__builtin_is_within_lifetime` is a call), `ArrayTypeTraitExpr`, `ExpressionTraitExpr`, `OffsetOfExpr`, `SizeOfPackExpr`, `RequiresExpr`, `ConceptSpecializationExpr` |
+| exceptions/RTTI | `CXXThrowExpr` (P3068 constexpr exceptions; M2), `CXXNoexceptExpr`, `CXXTypeidExpr` (M2) |
+| traits | `UnaryExprOrTypeTraitExpr` (M2: `sizeof`, `alignof`, `__alignof`), `TypeTraitExpr` (`__is_same`, ..., `__builtin_is_within_lifetime` is a call), `ArrayTypeTraitExpr`, `ExpressionTraitExpr`, `OffsetOfExpr` (M2), `SizeOfPackExpr`, `RequiresExpr`, `ConceptSpecializationExpr` |
 | lambdas, packs | `LambdaExpr`, `PackExpansionExpr`, `CXXFoldExpr`, `PackIndexingExpr` (P2662), `CXXUnresolvedConstructExpr` |
 | coroutines | `CoawaitExpr`, `DependentCoawaitExpr`, `CoyieldExpr` |
 | constant | `ConstantExpr` (M2; caches the value, §9.2) |
-| GNU / builtins | `StmtExpr`, `ChooseExpr`, `VAArgExpr`, `AtomicExpr` (`__c11_atomic_*`, `__atomic_*`), `ShuffleVectorExpr`, `ConvertVectorExpr`, `ExtVectorElementExpr` |
+| GNU / builtins | `StmtExpr` (M2), `ChooseExpr`, `VAArgExpr`, `AtomicExpr` (`__c11_atomic_*`, `__atomic_*`), `ShuffleVectorExpr`, `ConvertVectorExpr`, `ExtVectorElementExpr` |
 | reflection (M6) | `CXXReflectExpr` (`^^`: operand type/decl/namespace/expr → `ReflectionId` when non-dependent), `CXXSpliceExpr` (`[: e :]` in expression position; designated entity once evaluated) |
 | recovery | `RecoveryExpr` (children kept; `ERROR` dependence; type if known) |
 
@@ -408,6 +422,46 @@ needed later). Values of non-constant-context folding (`try_fold`) are
 - No `DesignatedInitExpr`, no `CXXRewrittenBinaryOperator` syntactic form
   beyond its one child (the semantic call), no `TypoExpr` (typo correction
   is resolved before the node is built).
+
+### 5.7 New- and delete-expressions (WP-061a)
+- **`CXXNewExpr`**: `ty` is the result pointer type (for an array new, a
+  pointer to the element type: `int (*)[3]` for `new int[n][3]`).
+  - `a` indexes the `news` side table of `NewExtra` records
+    (`Exprs::new_extra(e) -> &NewExtra`, `Copy`):
+    - `allocated_ty`: the created object's type, or for an array new the
+      element type (clang's `getAllocatedType`);
+    - `array_size: Option<ExprId>`: the first bound converted to
+      `size_t` (an `IntegerLiteral` synthesized from the initializer for
+      `new T[]{...}`); `None` for a non-array new;
+    - `init: Option<ExprId>`: the semantic initializer (`InitListExpr`
+      with `array_filler` for an array, `InitListExpr 'T'` for a scalar
+      `{x}`, `ImplicitValueInitExpr` for `()`, or the converted
+      expression); `None` for default-initialization;
+    - `placement: Option<ListId>`: the converted placement arguments;
+    - `operator_new`, `operator_delete: Option<DeclId>`: the allocation
+      function and the matching deallocation function (called if
+      initialization throws);
+    - `type_loc`: the start of the type-id.
+  - `aux` is the `NewInitStyle` (`None`, `Parens`, `Braces`;
+    `Exprs::new_init_style`).
+  - Flags: `GLOBAL` (`::new`), `ARRAY_FORM` (an array new) and
+    `PASS_ALIGN` (the allocated type is over-aligned, so the allocation
+    function takes `std::align_val_t`).
+  - The closing token (the initializer's `)`/`}` or the type-id's last
+    token) is in the cold `end_loc` map.
+  - Children (`Exprs::children`): array size, initializer, placement
+    arguments (clang's order).
+- **`CXXDeleteExpr`**: `ty` is `void`; `a` is the operand (converted to a
+  pointer prvalue; `Exprs::delete_operand`); `b` is the deallocation
+  function (`Exprs::operator_delete`, `None` for an erroneous operand);
+  `aux` bit 0 says it takes the size and bit 1 the alignment
+  (`Exprs::delete_passes`). Flags: `GLOBAL`, `ARRAY_FORM` (`delete[]`, or
+  an operand that points to an array: clang deletes it as an array) and
+  `ARRAY_AS_WRITTEN` (`delete[]` was written). `ARRAY_AS_WRITTEN` and
+  `PASS_ALIGN` share bit 6: they belong to different kinds.
+- Builders: `Builder::cxx_new(ty, flags, style, extra, loc, end)` and
+  `Builder::cxx_delete(operand, operator_delete, flags, sized, aligned,
+  ty, loc)`.
 
 ## 6. Statements
 ```rust

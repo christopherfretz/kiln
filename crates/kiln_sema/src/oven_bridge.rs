@@ -87,6 +87,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
     /// If `e` is not a constant expression or exceeds a limit; the
     /// failure's notes explain why ([`Sema::with_failure_notes`]).
     pub fn eval_const(&mut self, e: ExprId, ctx: EvalContext) -> Result<ConstValueId, EvalFailure> {
+        self.flush_member_refs();
         let (oven, mut b) = self.oven_parts();
         oven.evaluate(&mut b, e, ctx)
     }

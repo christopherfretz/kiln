@@ -1,8 +1,15 @@
 //! The empty-subobject map (Itanium ABI §2.4 "empty subobject"
 //! conflicts; clang `EmptySubobjectMap`): two distinct subobjects of the
 //! same empty class type must not share an address ([intro.object]/9),
-//! so a field whose empty subobjects would land on an offset already
-//! holding an empty subobject of the same type is moved.
+//! so a base or field whose empty subobjects would land on an offset
+//! already holding an empty subobject of the same type is moved.
+//!
+//! A class subobject's own subobjects are its non-virtual bases (at
+//! their offsets in its layout) and its fields of class or array-of-class
+//! type; bit-fields are skipped. Only offsets below the size of the
+//! largest empty subobject are recorded, except while placing an empty
+//! base or a `[[no_unique_address]]` field (clang's cut-off: a later
+//! subobject is only ever tried at 0 or at `dsize` onwards).
 //!
 //! The traversals use explicit stacks, so deeply nested classes cannot
 //! exhaust the native stack.
@@ -30,6 +37,23 @@ impl EmptySubobjectMap {
     /// clang `AnyEmptySubobjectsBeyondOffset`.
     fn any_beyond(&self, off: u64) -> bool {
         off <= self.max_offset
+    }
+
+    /// clang `CanPlaceBaseAtOffset`: checks the base subobject of class
+    /// `class` at byte offset `off` and, on success, records its empty
+    /// subobjects (all of them when the base itself is empty).
+    pub(super) fn can_place_base(&mut self, lay: &Layouter<'_>, class: DeclId, off: u64) -> bool {
+        // A class without empty subobjects cannot conflict.
+        if self.largest == 0 {
+            return true;
+        }
+        let target = FieldTarget::Record(class);
+        if !self.can_place(lay, target, off) {
+            return false;
+        }
+        let empty = lay.facts(class).is_some_and(|f| f.is_empty);
+        self.update(lay, target, off, empty);
+        true
     }
 
     /// clang `CanPlaceFieldAtOffset`: checks, and on success records the
@@ -89,6 +113,12 @@ impl EmptySubobjectMap {
             if facts.is_empty && self.offsets.get(&off).is_some_and(|v| v.contains(&r)) {
                 return false;
             }
+            for &(base, bo) in &facts.layout.bases {
+                let bo = off.saturating_add(bo);
+                if self.any_beyond(bo) {
+                    stack.push((base, bo));
+                }
+            }
             for (i, f) in facts.field_targets.iter().enumerate() {
                 let fo = off.saturating_add(facts.layout.fields.get(i).copied().unwrap_or(0) / 8);
                 Self::push_target(lay, &mut stack, *f, fo, |o| self.any_beyond(o));
@@ -112,6 +142,12 @@ impl EmptySubobjectMap {
                 if !v.contains(&r) {
                     v.push(r);
                     self.max_offset = self.max_offset.max(off);
+                }
+            }
+            for &(base, bo) in &facts.layout.bases {
+                let bo = off.saturating_add(bo);
+                if keep(bo) {
+                    stack.push((base, bo));
                 }
             }
             for (i, f) in facts.field_targets.iter().enumerate() {

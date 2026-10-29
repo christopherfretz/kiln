@@ -718,10 +718,42 @@ evaluated; the result is an lvalue `const std::type_info`.
 All from the `Ast` (kiln_abi never sees sema): `RecordData.bases`, definition
 bits (`DYNAMIC`, `POLYMORPHIC`, `HAS_VIRTUAL_BASES`, `EMPTY`), fields and their
 flags, `alignas`/`packed` attributes, and the `#pragma pack` value current at
-the class definition, which sema now records in cold map `record_pack: DeclId →
-u16` (abi.md A3 sources `ClassDesc.max_field_align` from it).
+the class definition, which sema records in cold map `record_pack: DeclId →
+u16` (abi.md §8.2 sources `ClassDesc.max_field_align` from it).
+
+**`#pragma pack` state (WP-066c; clang `Sema::ActOnPragmaPack`).**
+- **State.** Sema keeps the current value N (bytes, 0 = none) and a
+  stack of `(label, value)` entries.
+- **Applying it.** `act_on_start_record_definition` stores a nonzero N
+  in `record_pack` for the class being defined. A class template's
+  pattern gets it too; instantiation must copy it from the pattern
+  (WP-066b/templates; not done yet).
+- **Forms** (the argument text of `#pragma pack(...)` and
+  `_Pragma("pack(...)")`):
+  - `()` resets N to 0;
+  - `(N)` sets N;
+  - `(push)`, `(push, id)`, `(push, N)` and `(push, id, N)` push the
+    current value (with `id`), then set N if given;
+  - `(pop)` restores the top entry;
+  - `(pop, id)` pops through the nearest entry labelled `id`, or does
+    nothing if there is none;
+  - `(pop, N)` pops, then sets N.
+  - N must be one of 0, 1, 2, 4, 8 or 16.
+- **Rejected forms.** These are reported through the
+  unsupported-pragma diagnostic (`#pragma pack ... is not supported
+  yet`; an error), where clang 19 warns and ignores them:
+  - `show`;
+  - any other N;
+  - `pop` on an empty stack;
+  - `pop` with both a label and N;
+  - an unknown action.
+- **Not implemented.** clang's end-of-file `-Wpragma-pack` "unterminated
+  push" warning and the include-boundary warnings are missing.
 
 ### 6.2 Algorithm (Itanium §2.4, clang `ItaniumRecordLayoutBuilder`)
+Status: steps 3–5 and 7 are implemented for non-virtual bases (WP-066c,
+abi.md §8.1). Steps 1, 2 and 6 and the vptr are WP-078b (abi.md §8.5).
+
 1. **Primary base** (II.1): the first non-virtual dynamic base; else the first
    nearly-empty virtual base that is not an indirect primary base; else the
    first nearly-empty virtual base that is (an indirect primary).
@@ -755,8 +787,11 @@ two spaces of indent per nesting level, `(empty)` after an empty class's name,
 virtual bases of a base printed once, at the end of the most-derived layout
 (`struct D` prints `struct A (virtual base)` after `int d`, not inside
 `B`/`C`), footer `[sizeof=48, dsize=44, align=8,` / `nvsize=32, nvalign=8]`.
-Clang dumps each record when first laid out (bases before derived); the
-differential compares per record, keyed by name, ignoring order.
+Clang's plain flag dumps each record when first laid out (bases before
+derived). The driver's dump instead follows clang's
+`-fdump-record-layouts-complete` order: every complete class, in lexical
+post-order, each named as at its `}`. The corpus differential compares
+against `-complete` block by block, in order (abi.md §8.4).
 
 ### 6.4 Differential tests
 - `kiln_abi/tests/layout_vs_clang.rs` (abi.md §7) extends its generator
@@ -764,7 +799,10 @@ differential compares per record, keyed by name, ignoring order.
   each, `virtual` with p = 0.3 (after WP-078b; 0 before), empty classes,
   repeated bases, polymorphic classes, non-POD bases with tail padding,
   `[[no_unique_address]]`, bit-fields after bases, `alignas`, `#pragma pack`.
-  CI: fixed seed, 2000 records; XFAIL list empty.
+  CI: fixed seed, 2000 records; XFAIL list empty. WP-066c implements this
+  for non-virtual bases and `#pragma pack` (1–3 bases per class, depth
+  bounded by the item count). Virtual bases and polymorphic classes come
+  with WP-078b.
 - `kiln_abi/tests/vtable_vs_clang.rs` (WP-078b): `-fdump-vtable-layouts` vs
   `kiln_abi::dump_vtable_layout`, byte-identical (`Vtable for 'B' (13
   entries).`, `vbase_offset (8)`, `-- (A, 8) vtable address --`, `[this
@@ -884,9 +922,10 @@ fn current_class(&self) -> Option<&ClassBuild>;
 ```
 Parser-facing additions outside `class/`: `ParamInfo.default_arg:
 DefaultArg { None | Parsed(ExprId) | Unparsed(Loc /* = */) }` (set by the
-parser after `act_on_param_declarator`; `act_on_declarator` applies
-`Parsed` through `act_on_param_default_arg` and marks `Unparsed`
-parameters `DEFAULT_ARG_PENDING`), and `TagUse::Friend` for the
+parser after `act_on_param_declarator`; a `Parsed` default is already
+converted by `act_on_param_default_init` (sema.md §4.3), which
+`act_on_declarator` stores, and `Unparsed` parameters are marked
+`DEFAULT_ARG_PENDING`), and `TagUse::Friend` for the
 elaborated-type-specifier of `friend class X;`. Calling protocol: the
 parser calls `act_on_base_specifiers` for every class definition (empty
 slice when there is no base-clause), `act_on_mem_initializers` for every
@@ -895,6 +934,64 @@ there is no ctor-initializer) and `act_on_finish_class_contexts` for every
 outermost class; those calls are silent on the stubs, so M2 programs are
 unaffected. `ClassBuild` is pushed and popped by
 `act_on_{start,finish}_record_definition` already.
+
+**Landed (WP-066b).** Modules `kiln_sema/src/class/{members,access,
+member_expr,friend}.rs`; the WP-066a stubs for base specifiers, access
+specifiers, friends, default arguments, NSDMIs and `this` now have bodies.
+- §2.3: static data members (`act_on_static_member`: in-class declaration
+  vs `inline`/`constexpr` definition, `static const` integral/enum
+  initializers usable in constant expressions, local-class and
+  unnamed-class errors, out-of-line `int S::s = 1;` redeclaration whose
+  initializer is checked in the class's access context); member function
+  declarations (cv/ref-qualifiers, `static` with qualifiers diagnosed,
+  in-class definition implicitly inline — `FnSpec::implicit_inline` joins
+  `FnSpec::LATE`); out-of-line definitions enter the class scope and its
+  bases for the body (`enter_definition_scopes`), and a local class's
+  member function body saves the enclosing function (`Sema.fn_saved`).
+- §2.4: `check_member_access` / `check_base_access` port `SemaAccess`
+  (naming class, [class.access.base]/5 paths, [class.protected], friends
+  from `ClassBuild.friends` stored at `}`). `err_access`'s class argument is
+  the declaring class (clang). Delay points for the parser:
+  `pub fn begin_delayed_access(&mut self)` /
+  `pub fn end_delayed_access(&mut self, decl: Option<DeclId>)`.
+- §2.5: `act_on_this`; NSDMI replay brackets the initializer with
+  `pub fn act_on_start_field_init(&mut self, field: DeclId)` (pushes `C*` on
+  `Sema.nsdmi_this`) and `act_on_field_init` (pops it). Implicit `this->`,
+  `const` member assignment notes, and "must be called" for bound member
+  functions.
+- §2.6: `&C::m`, `.*`/`->*` (`act_on_ptr_mem`), member-pointer
+  conversions. A name of a non-static member is held in `Sema.member_refs`
+  until its operand is known (`&C::m` vs an object use); unresolved
+  entries are flushed (diagnosed) at the end of the full-expression.
+- §3.1: `attach_bases` (every §3.1 check except virtual bases, which stay
+  `sema_unsupported`); §3.2: `Sema::lookup_in_class(c, name, kind) ->
+  Found`, with `Found.naming: Option<DeclId>` and `Found.ambiguity:
+  Option<MemberAmbiguity { Types(Vec<DeclId>) | Subobjects { decl, paths }
+  }>` in place of a separate `MemberLookup` type, diagnosed by
+  `diagnose_member_ambiguity`; §3.3: base access and ambiguity checks on
+  every derived-to-base conversion.
+- Member calls (single candidate until WP-068a): `obj.f(args)` /
+  `p->f(args)` is `CXXMemberCallExpr` whose callee is `MemberExpr` of type
+  `<bound member function type>` over the object converted to `cv C`
+  (`NoOp`, or `UncheckedDerivedToBase` when `f` is in a base; a prvalue
+  object is materialized), arguments converted to the parameter types,
+  default arguments as `CXXDefaultArgExpr`; a static member function call
+  is `CallExpr(FunctionToPointerDecay(DeclRefExpr | MemberExpr))`; a call
+  through a member pointer is `CXXMemberCallExpr(ParenExpr(BinaryOperator
+  .*|->*))`. More than one candidate is `overloaded member functions is not
+  supported yet`.
+- `kiln_ast` additions: `DeclArena::set_access(d, Access)`;
+  `FnSpec::storage_inherited` (bit 22: `static` inherited from a previous
+  declaration, which clang's dump omits; also fixes the free-function
+  `static void f(); void f() {}` dump); `ValueCategory` of a non-static
+  member function name is prvalue.
+- Sema state: `fn_saved`, `member_refs`, `friend_tag`, `nsdmi_this`,
+  `initializing` (the out-of-line static member whose initializer is being
+  analysed: the [class.access]/7 context).
+- Not done (owners): aggregate initialization of a class with bases
+  (including `D d{}`) is `sema_unsupported` (WP-067b); the `POD` bit is not
+  computed (§2.9); P0847 explicit object parameters wait for WP-065's
+  syntax (Q4); virtual bases (WP-078a).
 
 ### 8.4 `SemaBridge` (kiln_oven) — public-interface change
 Replace `fn vtable(&mut self, record) -> &VTableLayout` with
@@ -1050,3 +1147,22 @@ polymorphic classes) for `final_overrider`/vtable cache size.
 4. No `elidable` `CXXConstructExpr`, no pre-C++17 elision modes (kiln is C++20
    and later).
 5. Access-check results are not cached (Q6); diagnostics are identical.
+6. (WP-066b) Misuse of a non-static member name (`invalid use of
+   non-static data member`, "must be called") is diagnosed at the end of
+   the enclosing full-expression rather than at the name, so the order of
+   diagnostics within one full-expression can differ; where clang emits
+   two "reference to non-static member function must be called" errors
+   for one misuse, kiln emits one.
+7. (WP-066b) `DeclRefExpr`/`MemberExpr` carry no nested-name-specifier;
+   `(a.f)()` loses the parentheses when the call is rebuilt. Dumps that
+   would show either differ.
+8. (WP-066b) Access of type names found by qualified lookup (`A::In`) is
+   not checked; `&B::m`'s [class.protected] rule and member-pointer
+   base-to-derived conversion access are not re-checked; an unqualified
+   `&f` naming a member function gets no `must explicitly qualify name of
+   member function` diagnostic; calls through member pointers get no
+   cv/ref-qualifier check; storage class specifiers on friends are not
+   diagnosed.
+9. (WP-066b) Out-of-line static data member initializers and the parameter
+   types of out-of-line member definitions are not looked up in class
+   scope (names before the declarator-id's class are); the body is.

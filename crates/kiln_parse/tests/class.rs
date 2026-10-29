@@ -2,10 +2,11 @@
 //! [class.mem], [class.derived], [class.friend], [dcl.fct.def]).
 //!
 //! Member functions, static data members, bases, friends, access labels
-//! and default member initializers are WP-066b's sema: until it lands,
-//! their productions parse and sema reports "... is not supported yet".
-//! These tests pin that the parser accepts each form (only those stub
-//! diagnostics appear) and pin the parser's own diagnostics against clang.
+//! and default member initializers are WP-066b's sema; special members,
+//! virtual functions and operators are still sema stubs that report
+//! "... is not supported yet". These tests pin that the parser accepts
+//! each form (only those stub diagnostics appear) and pin the parser's own
+//! diagnostics against clang.
 
 mod common;
 use common::{Parsed, parse};
@@ -28,8 +29,22 @@ fn class_special_declarator_ids() {
            explicit(false) S(int); explicit S(char); operator const int *(); };",
     );
     assert_parsed(&p);
-    p.assert_diag("1:12 error: member functions is not supported yet");
-    p.assert_diag("1:18 error: member functions is not supported yet");
+    p.assert_diag("1:12 error: destructors is not supported yet");
+    p.assert_diag("1:18 error: conversion functions is not supported yet");
+    p.assert_diag("1:38 error: overloaded operators is not supported yet");
+    p.assert_diag("2:28 error: constructors is not supported yet");
+}
+
+/// [class.friend]: friend declarations with special declarator-ids reach
+/// sema's stubs by name.
+#[test]
+fn class_friend_special_names() {
+    let p = parse(
+        "struct P { friend P operator<(P, int); friend constexpr P operator<=>(P v, int) noexcept \
+         { return v; } friend P::operator int(); };",
+    );
+    assert_parsed(&p);
+    p.assert_diag("1:21 error: overloaded operators is not supported yet");
 }
 
 /// [over.literal]: literal operators are not supported.
@@ -47,7 +62,7 @@ fn class_constexpr_specifiers() {
         "struct S { consteval int f(); constexpr static int v = 1; constinit static int w; };",
     );
     assert_parsed(&p);
-    p.assert_diag("static data members is not supported yet");
+    p.assert_diag("1:12 error: 'consteval' is not supported yet");
     let p = parse("struct S { consteval constexpr int m(); };");
     p.assert_diag("1:22 error: cannot combine with previous 'consteval' declaration specifier");
 }
@@ -111,8 +126,7 @@ fn class_final() {
 #[test]
 fn class_bit_fields() {
     let p = parse("struct S { enum G : int { g0 } : 3; unsigned u : 2 = 1, v : 3 {2}; };");
-    assert_parsed(&p);
-    p.assert_diag("1:46 error: default member initializers is not supported yet");
+    p.assert_clean();
     let p = parse("struct S { int : 3 = 1; };");
     p.assert_diag("1:20 error: anonymous bit-field cannot have a default member initializer");
     let p = parse("struct S { int a : ; };");
@@ -179,14 +193,24 @@ fn class_ctor_initializers() {
 fn class_out_of_line_definitions() {
     let p = parse("struct S { int a; S(); void f(); }; S::S() : a(1) {} void S::f() {}");
     assert_parsed(&p);
-    p.assert_diag("out-of-line definitions of class members is not supported yet");
+    p.assert_diag("1:19 error: constructors is not supported yet");
+    p.assert_diag("1:40 error: constructors is not supported yet");
 }
 
-/// [expr.prim.this]: `this` reaches sema.
+/// [expr.prim.this]: `this` reaches sema (outside a member function).
 #[test]
 fn expr_prim_this() {
     let p = parse("int x = this;");
-    p.assert_diag("1:9 error: 'this' is not supported yet");
+    p.assert_diag("1:9 error: invalid use of 'this' outside of a non-static member function");
+}
+
+/// [expr.ref]/1: a qualified-id after `.`/`->` is reported unsupported
+/// (no cascade of parse errors).
+#[test]
+fn expr_ref_qualified_member() {
+    let p = parse("struct B { int x; }; struct D : B {}; int f(D d) { return d.B::x; }");
+    p.assert_diag("1:61 error: qualified member access is not supported yet");
+    assert_eq!(p.problems().len(), 1, "{:?}", p.problems());
 }
 
 /// [class.pre], [dcl.enum]: a missing `;` after a definition is diagnosed
@@ -221,8 +245,7 @@ fn class_unterminated() {
 #[test]
 fn class_nsdmi_deferred() {
     let p = parse("struct S { int x = sizeof(S); };");
-    assert_parsed(&p);
-    p.assert_diag("1:16 error: default member initializers is not supported yet");
+    p.assert_clean();
     let p = parse("struct S { int x = y; };");
     p.assert_diag("1:20 error: use of undeclared identifier 'y'");
 }

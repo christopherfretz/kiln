@@ -484,7 +484,10 @@ impl<'a, W: io::Write> Dumper<'a, W> {
             | ExprKind::ConstantExpr
             | ExprKind::MaterializeTemporaryExpr
             | ExprKind::CXXBindTemporaryExpr
-            | ExprKind::ExprWithCleanups => push(n.a()),
+            | ExprKind::ExprWithCleanups
+            | ExprKind::CXXNoexceptExpr
+            | ExprKind::CXXThrowExpr
+            | ExprKind::CompoundLiteralExpr => push(n.a()),
             k if k.is_cast() => push(n.a()),
             ExprKind::CXXConstructExpr | ExprKind::CXXTemporaryObjectExpr => {
                 for c in lists.iter::<ExprId>(exprs.construct_args(e)) {
@@ -496,7 +499,6 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                     push(n.a());
                 }
             }
-            ExprKind::CXXNoexceptExpr => push(n.a()),
             ExprKind::BinaryOperator | ExprKind::ArraySubscriptExpr => {
                 push(n.a());
                 push(n.b());
@@ -532,6 +534,15 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                     }
                 }
             }
+            ExprKind::BinaryConditionalOperator
+            | ExprKind::OffsetOfExpr
+            | ExprKind::CXXNewExpr
+            | ExprKind::CXXDeleteExpr => {
+                for c in exprs.children(e, lists) {
+                    kids.push((Node::Expr(c), None));
+                }
+            }
+            ExprKind::StmtExpr => kids.push((self.stmt_node(exprs.stmt_expr_body(e)), None)),
             _ => self.class_expr_children(e, kids),
         }
     }
@@ -878,6 +889,7 @@ impl<'a, W: io::Write> Dumper<'a, W> {
         self.name(d);
         self.opt_ty(n.ty());
         self.line.push_str(match spec.storage() {
+            _ if spec.storage_inherited() => "",
             FnStorage::None => "",
             FnStorage::Static => " static",
             FnStorage::Extern => " extern",
@@ -1403,6 +1415,23 @@ impl<'a, W: io::Write> Dumper<'a, W> {
             ExprKind::ConstantExpr => {
                 if let Some(v) = exprs.constant_value(e) {
                     self.value(v);
+                }
+            }
+            ExprKind::CXXNewExpr | ExprKind::CXXDeleteExpr => {
+                if n.has(ExprFlags::GLOBAL) {
+                    self.line.push_str(" global");
+                }
+                if n.has(ExprFlags::ARRAY_FORM) {
+                    self.line.push_str(" array");
+                }
+                let f = if kind == ExprKind::CXXNewExpr {
+                    exprs.new_extra(e).operator_new
+                } else {
+                    exprs.operator_delete(e)
+                };
+                if let Some(f) = f {
+                    self.line.push(' ');
+                    self.decl_ref(f);
                 }
             }
             _ => {}

@@ -197,24 +197,44 @@ impl Types {
         t
     }
 
-    /// A synthetic array of `n` elements of scalar type `elem` (string
-    /// literal objects thawed from the store; its `q` is the element's).
+    /// A synthetic array of `n` elements of `elem` (string literal objects
+    /// thawed from the store, array `new`); its `q` is the element's, so
+    /// notes name it with [`Types::array_name`].
     pub fn array_of(&mut self, elem: OTy, n: u64) -> OTy {
         if let Some(&t) = self.arrays.get(&(elem, n)) {
             return t;
         }
         let e = *self.info(elem);
+        let start = self.union_pos.len() as u32;
+        if e.has_union {
+            for i in 0..n {
+                for k in e.upos.0..e.upos.1 {
+                    let (o, u) = self.union_pos[k as usize];
+                    self.union_pos.push((i * e.size + o, u));
+                }
+            }
+        }
+        let end = self.union_pos.len() as u32;
         let t = self.push(TyInfo {
             q: e.q,
             size: e.size.saturating_mul(n),
             align: e.align,
             kind: TyKind::Array { elem, n },
-            has_union: false,
-            has_ptr: false,
-            upos: (0, 0),
+            has_union: e.has_union,
+            has_ptr: e.has_ptr || matches!(e.kind, TyKind::Ptr(_) | TyKind::NullPtr),
+            upos: (start, end),
         });
         self.arrays.insert((elem, n), t);
         t
+    }
+
+    /// Whether `t` is a synthetic array (made by [`Types::array_of`]), whose
+    /// `q` names its element type.
+    pub fn is_synthetic_array(&self, t: OTy) -> bool {
+        match self.kind(t) {
+            TyKind::Array { elem, n } => self.arrays.get(&(elem, n)) == Some(&t),
+            _ => false,
+        }
     }
 
     fn push(&mut self, info: TyInfo) -> OTy {

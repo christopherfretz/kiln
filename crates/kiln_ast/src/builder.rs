@@ -23,8 +23,9 @@ use crate::decl::{
 };
 use crate::expr::{
     BinaryOp, CastKind, CharKind, CompoundAssignExtra, ConstructInfo, ConstructionKind,
-    DeclRefExtra, ExprDeps, ExprFlags, ExprKind, ExprNode, InitListExtra, NonOdrUse, ObjectKind,
-    Radix, StorageDuration, StringKind, TraitKind, TypeidOperand, UnaryOp, ValueCategory,
+    DeclRefExtra, ExprDeps, ExprFlags, ExprKind, ExprNode, InitListExtra, NewExtra, NewInitStyle,
+    NonOdrUse, ObjectKind, Radix, StorageDuration, StringKind, TraitKind, TypeidOperand, UnaryOp,
+    ValueCategory,
 };
 use crate::ids::{
     AttrId, ConstValueId, DeclId, ExprId, ListId, QualType, RawId, StmtId, StringLitId, TypeId,
@@ -596,9 +597,15 @@ impl<'a> AstBuilder<'a> {
         index: u16,
         flags: u16,
     ) -> DeclId {
+        self.param_head(DeclHead::new(func, name, loc), ty, index, flags)
+    }
+
+    /// A parameter declared by `head` (whose context is the function), for
+    /// implicit parameters (`DeclFlags::IMPLICIT`).
+    pub fn param_head(&mut self, head: DeclHead, ty: QualType, index: u16, flags: u16) -> DeclId {
         let payload =
             Payload::Param(ParamData { default_arg: None, original_ty: None, index, flags });
-        self.add(DeclHead::new(func, name, loc), DeclKind::ParmVar, Some(ty), payload, None)
+        self.add(head, DeclKind::ParmVar, Some(ty), payload, None)
     }
 
     /// Sets the parameter list of `func`.
@@ -995,6 +1002,21 @@ impl<'a> AstBuilder<'a> {
             // A builtin function's name has the placeholder type
             // `<builtin fn type>` and is a prvalue (as clang).
             DeclKind::Function if self.ast.decls.builtin_id(d).is_some() => ValueCategory::PRValue,
+            // A non-static member function is a prvalue ([expr.prim.id.qual]/5,
+            // [expr.ref]/7.3); constructors, destructors and conversion
+            // functions never are static.
+            DeclKind::CXXMethod
+                if self
+                    .ast
+                    .decls
+                    .function(d)
+                    .is_some_and(|f| f.spec.storage() != crate::decl::FnStorage::Static) =>
+            {
+                ValueCategory::PRValue
+            }
+            DeclKind::CXXConstructor | DeclKind::CXXDestructor | DeclKind::CXXConversion => {
+                ValueCategory::PRValue
+            }
             _ => ValueCategory::LValue,
         }
     }
@@ -1248,7 +1270,13 @@ impl<'a> AstBuilder<'a> {
         loc: Loc,
     ) -> ExprId {
         let (tv, ev) = (self.vk(then), self.vk(els));
-        let vk = if tv == ev && tv.is_glvalue() { tv } else { ValueCategory::PRValue };
+        // [expr.cond]/2.1: a throw-expression arm takes the other's category.
+        let vk = match (self.is_throw(then), self.is_throw(els)) {
+            (true, false) => ev,
+            (false, true) => tv,
+            _ if tv == ev && tv.is_glvalue() => tv,
+            _ => ValueCategory::PRValue,
+        };
         let deps = self.deps(cond) | self.deps(then) | self.deps(els) | self.type_deps(ty);
         let side = self.ast.exprs.push_cond_arms(then, els);
         self.simple(ExprKind::ConditionalOperator, vk, deps, 0, ty, loc, cond.raw(), side)
@@ -1496,6 +1524,76 @@ impl<'a> AstBuilder<'a> {
         )
     }
 
+    /// A `CXXNewExpr` ([expr.new], §5.9): a prvalue of pointer type `ty`
+    /// starting at `loc` (`::` or `new`); `extra` holds the allocated type,
+    /// the converted array size, initializer and placement arguments and the
+    /// allocation / deallocation functions; `end` is the last token.
+    pub fn cxx_new(
+        &mut self,
+        ty: QualType,
+        flags: ExprFlags,
+        style: NewInitStyle,
+        extra: NewExtra,
+        loc: Loc,
+        end: Loc,
+    ) -> ExprId {
+        let mut deps = self.type_deps(ty) | self.type_deps(extra.allocated_ty);
+        for e in [extra.array_size, extra.init].into_iter().flatten() {
+            deps |= self.deps(e);
+        }
+        if let Some(p) = extra.placement {
+            let args: Vec<ExprId> = self.ast.lists.iter::<ExprId>(p).collect();
+            for e in args {
+                deps |= self.deps(e);
+            }
+        }
+        let side = self.ast.exprs.push_new_extra(extra);
+        let e = self.push_expr(
+            ExprKind::CXXNewExpr,
+            ValueCategory::PRValue,
+            ObjectKind::Ordinary,
+            flags,
+            deps,
+            style as u8,
+            ty,
+            loc,
+            side,
+            0,
+        );
+        self.ast.exprs.cold.end_loc.insert(e, end).expect("fresh expression");
+        e
+    }
+
+    /// A `CXXDeleteExpr` ([expr.delete], §5.9): a `void` prvalue deleting
+    /// `operand` with `operator_delete`; `sized`/`aligned` say whether the
+    /// size and the alignment are passed to it.
+    #[allow(clippy::too_many_arguments, reason = "one per payload field")]
+    pub fn cxx_delete(
+        &mut self,
+        operand: ExprId,
+        operator_delete: Option<DeclId>,
+        flags: ExprFlags,
+        sized: bool,
+        aligned: bool,
+        ty: QualType,
+        loc: Loc,
+    ) -> ExprId {
+        let deps = self.type_deps(ty) | self.deps(operand);
+        let aux = u8::from(sized) | (u8::from(aligned) << 1);
+        self.push_expr(
+            ExprKind::CXXDeleteExpr,
+            ValueCategory::PRValue,
+            ObjectKind::Ordinary,
+            flags,
+            deps,
+            aux,
+            ty,
+            loc,
+            operand.raw(),
+            operator_delete.map_or(0, DeclId::raw),
+        )
+    }
+
     /// A `ConstantExpr` wrapping a constant expression ([expr.const]) with
     /// its value when known (§5.5; also settable later with
     /// [`crate::expr::ExprArena::set_constant_value`]).
@@ -1541,6 +1639,141 @@ impl<'a> AstBuilder<'a> {
         }
         let list = self.ast.lists.push(children);
         self.simple(ExprKind::RecoveryExpr, vk, deps, 0, ty, loc, list.raw(), 0)
+    }
+
+    // ----- WP-064: expression forms ---------------------------------------
+
+    /// `T()` for a non-class type `T` ([expr.type.conv]/2): a prvalue
+    /// value-initialized `ty`; `loc` is the type's location, `rparen`
+    /// the closing `)`.
+    pub fn scalar_value_init(&mut self, ty: QualType, loc: Loc, rparen: Loc) -> ExprId {
+        let deps = self.type_deps(ty);
+        let e = self.simple(
+            ExprKind::CXXScalarValueInitExpr,
+            ValueCategory::PRValue,
+            deps,
+            0,
+            ty,
+            loc,
+            0,
+            0,
+        );
+        self.ast.exprs.cold.end_loc.insert(e, rparen).expect("fresh expression");
+        e
+    }
+
+    /// True if `e` is a (possibly parenthesized) `CXXThrowExpr`.
+    fn is_throw(&self, mut e: ExprId) -> bool {
+        loop {
+            match self.ast.exprs.get(e).kind() {
+                ExprKind::ParenExpr => e = self.ast.exprs.operand(e),
+                k => return k == ExprKind::CXXThrowExpr,
+            }
+        }
+    }
+
+    /// `throw` / `throw e` ([expr.throw]): a prvalue of type `void`
+    /// (`ty`); `operand` is the copy-initialized exception object's
+    /// source, already converted.
+    pub fn throw_expr(&mut self, operand: Option<ExprId>, ty: QualType, loc: Loc) -> ExprId {
+        let deps = self.type_deps(ty) | operand.map_or(ExprDeps::NONE, |o| self.deps(o));
+        self.simple(
+            ExprKind::CXXThrowExpr,
+            ValueCategory::PRValue,
+            deps,
+            0,
+            ty,
+            loc,
+            operand.map_or(0, RawId::raw),
+            0,
+        )
+    }
+
+    /// GNU `x ?: y` ([`ExprKind::BinaryConditionalOperator`]): `common`
+    /// is `x`, `opaque` an [`AstBuilder::opaque_value`] of it, `cond` the
+    /// contextual conversion of `opaque` to `bool`, `els` the converted
+    /// `y`; the true arm is `opaque` (converted to `ty` if needed:
+    /// `then`). `vk` is the result's category.
+    #[allow(clippy::too_many_arguments, reason = "the four operands plus the header")]
+    pub fn binary_conditional(
+        &mut self,
+        common: ExprId,
+        cond: ExprId,
+        then: ExprId,
+        els: ExprId,
+        ty: QualType,
+        vk: ValueCategory,
+        loc: Loc,
+    ) -> ExprId {
+        let deps = self.deps(common) | self.deps(els) | self.type_deps(ty);
+        let list = self.ast.lists.push(&[common, cond, then, els]);
+        self.simple(ExprKind::BinaryConditionalOperator, vk, deps, 0, ty, loc, list.raw(), 0)
+    }
+
+    /// A GNU statement expression `({ ... })`: `body` is the compound
+    /// statement; the value is its last expression statement's (`ty`,
+    /// `void` when there is none). `loc` is the `(`, `rparen` the `)`.
+    pub fn stmt_expr(&mut self, body: StmtId, ty: QualType, loc: Loc, rparen: Loc) -> ExprId {
+        let deps = self.type_deps(ty);
+        let e = self.simple(
+            ExprKind::StmtExpr,
+            ValueCategory::PRValue,
+            deps,
+            0,
+            ty,
+            loc,
+            body.raw(),
+            0,
+        );
+        self.ast.exprs.cold.end_loc.insert(e, rparen).expect("fresh expression");
+        e
+    }
+
+    /// `__builtin_offsetof(T, designator)` ([support.types.layout]/1):
+    /// a prvalue of type `std::size_t` (`ty`) whose value is `offset`
+    /// bytes. `indices` are the array subscripts written in the
+    /// designator (dumped as children, as clang).
+    pub fn offsetof(
+        &mut self,
+        ty: QualType,
+        indices: &[ExprId],
+        offset: u32,
+        loc: Loc,
+        rparen: Loc,
+    ) -> ExprId {
+        let mut deps = self.type_deps(ty);
+        for &i in indices {
+            deps |= self.deps(i);
+        }
+        let list = self.ast.lists.push(indices);
+        let e = self.simple(
+            ExprKind::OffsetOfExpr,
+            ValueCategory::PRValue,
+            deps,
+            0,
+            ty,
+            loc,
+            list.raw(),
+            offset,
+        );
+        self.ast.exprs.cold.end_loc.insert(e, rparen).expect("fresh expression");
+        e
+    }
+
+    /// A compound literal `( T ) { ... }` (C99 6.5.2.5, a GNU extension in
+    /// C++): `init` is the `InitListExpr`; a prvalue of type `ty`.
+    pub fn compound_literal(&mut self, ty: QualType, init: ExprId, loc: Loc) -> ExprId {
+        let deps = self.type_deps(ty) | self.deps(init);
+        self.simple(
+            ExprKind::CompoundLiteralExpr,
+            ValueCategory::PRValue,
+            deps,
+            0,
+            ty,
+            loc,
+            init.raw(),
+            0,
+        )
     }
 
     // ---------------------------------------------------------------------

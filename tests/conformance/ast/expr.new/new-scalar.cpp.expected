@@ -1,0 +1,38 @@
+TranslationUnitDecl
+|-FunctionDecl a 'int *()'
+| `-CompoundStmt
+|   `-ReturnStmt
+|     `-CXXNewExpr 'int *' Function 'operator new' 'void *(unsigned long)'
+|-FunctionDecl b 'int *()'
+| `-CompoundStmt
+|   `-ReturnStmt
+|     `-CXXNewExpr 'int *' Function 'operator new' 'void *(unsigned long)'
+|       `-IntegerLiteral 'int' 3
+|-FunctionDecl c 'int *()'
+| `-CompoundStmt
+|   `-ReturnStmt
+|     `-CXXNewExpr 'int *' Function 'operator new' 'void *(unsigned long)'
+|       `-InitListExpr 'int'
+|         `-IntegerLiteral 'int' 4
+|-FunctionDecl d 'int *()'
+| `-CompoundStmt
+|   `-ReturnStmt
+|     `-CXXNewExpr 'int *' Function 'operator new' 'void *(unsigned long)'
+|       `-ImplicitValueInitExpr 'int'
+|-FunctionDecl e 'long *()'
+| `-CompoundStmt
+|   `-ReturnStmt
+|     `-CXXNewExpr 'long *' global Function 'operator new' 'void *(unsigned long)'
+|       `-InitListExpr 'long'
+|-FunctionDecl f 'const int *()'
+| `-CompoundStmt
+|   `-ReturnStmt
+|     `-CXXNewExpr 'const int *' Function 'operator new' 'void *(unsigned long)'
+|       `-IntegerLiteral 'int' 5
+`-FunctionDecl g 'int **(int *)'
+  |-ParmVarDecl used p 'int *'
+  `-CompoundStmt
+    `-ReturnStmt
+      `-CXXNewExpr 'int **' Function 'operator new' 'void *(unsigned long)'
+        `-ImplicitCastExpr 'int *' <LValueToRValue>
+          `-DeclRefExpr 'int *' lvalue ParmVar 'p' 'int *'

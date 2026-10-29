@@ -28,7 +28,7 @@ use std::collections::VecDeque;
 use kiln_ast::{ConstValueId, DeclId, ExprId, StringLitId};
 use kiln_source::fx::FxHashMap;
 
-use crate::ty::{OTy, Types};
+use crate::ty::{OTy, TyKind, Types};
 
 pub(crate) const GRAN: u64 = 8;
 const OFF_MASK: u64 = 0xFFFF_FFFF;
@@ -139,9 +139,10 @@ pub(crate) enum Origin {
     /// An anonymous constant thawed from the store.
     Const(ConstValueId),
     /// A transient allocation: the `new` expression (or the
-    /// `std::allocator<T>::allocate` call) that made it.
-    #[allow(dead_code, reason = "the New/Delete operations that use it are WP-061b part 2")]
-    Heap(ExprId),
+    /// `std::allocator<T>::allocate` call) that made it, and its number in
+    /// its evaluation context (clang's `{*new T#N}`; the leak check
+    /// reports the lowest).
+    Heap(ExprId, u32),
 }
 
 pub(crate) mod flags {
@@ -279,16 +280,13 @@ pub(crate) enum MemFault {
     Incompatible,
     Memory(u64),
     /// `delete` of a pointer that is not to a heap allocation.
-    #[allow(dead_code, reason = "the New/Delete operations that use it are WP-061b part 2")]
     NotHeap,
     /// `delete` of an allocation already deleted.
-    #[allow(dead_code, reason = "the New/Delete operations that use it are WP-061b part 2")]
     DoubleDelete,
-    /// `delete` of a pointer to a subobject of a heap allocation.
-    #[allow(dead_code, reason = "the New/Delete operations that use it are WP-061b part 2")]
+    /// `delete` of a pointer to a subobject of a heap allocation (or one
+    /// past its end).
     Subobject,
     /// The wrong `delete` form; the allocation was made by an array form.
-    #[allow(dead_code, reason = "the New/Delete operations that use it are WP-061b part 2")]
     DeleteMismatch {
         array_new: bool,
     },
@@ -668,7 +666,6 @@ impl Memory {
 
 // ---- heap -------------------------------------------------------------------
 
-#[allow(dead_code, reason = "the New/Delete operations that use it are WP-061b part 2")]
 impl Memory {
     /// Allocates a heap object of `size` bytes (uninitialized) for the
     /// `new` expression or `allocate` call `origin`; `fl` may include
@@ -732,8 +729,17 @@ impl Memory {
 
     /// Deallocates the heap object `raw` points to (`array`: by an array
     /// form). Null is a no-op. Checked in clang's order: not a heap
-    /// allocation, already deleted, wrong form, not the complete object.
-    pub fn heap_free(&mut self, raw: u64, array: bool, types: &Types) -> Result<(), MemFault> {
+    /// allocation, already deleted, wrong form, not the complete object
+    /// (with `pointee`, the operand's static pointee type: a non-array
+    /// delete needs a pointer to the allocated object itself, an array
+    /// delete one to its first element).
+    pub fn heap_free(
+        &mut self,
+        raw: u64,
+        array: bool,
+        pointee: Option<OTy>,
+        types: &Types,
+    ) -> Result<(), MemFault> {
         if raw == 0 {
             return Ok(());
         }
@@ -752,6 +758,16 @@ impl Memory {
         }
         if p.off != 0 || p.past {
             return Err(MemFault::Subobject);
+        }
+        if let Some(t) = pointee {
+            let whole = if array {
+                matches!(types.kind(a.ty), TyKind::Array { elem, .. } if elem == t)
+            } else {
+                a.ty == t
+            };
+            if !whole {
+                return Err(MemFault::Subobject);
+            }
         }
         self.release_heap(i);
         if a.flags & flags::HAS_UNION != 0 {
@@ -799,7 +815,7 @@ impl Memory {
             if a.live && a.frame == ctx {
                 let slot = i as u32 | HEAP_BIT;
                 let raw = Ptr { slot, generation: a.generation, past: false, off: 0 }.encode();
-                let _ = self.heap_free(raw, a.flags & flags::ARRAY_NEW != 0, types);
+                let _ = self.heap_free(raw, a.flags & flags::ARRAY_NEW != 0, None, types);
             }
         }
     }
@@ -808,19 +824,15 @@ impl Memory {
 // ---- heap blocks ------------------------------------------------------------
 
 /// Largest block served by an exact per-size class.
-#[allow(dead_code, reason = "the New/Delete operations that use it are WP-061b part 2")]
 pub(crate) const SMALL_MAX: u64 = 256;
 /// Largest block served by a half-step power-of-two class.
-#[allow(dead_code, reason = "the New/Delete operations that use it are WP-061b part 2")]
 pub(crate) const MEDIUM_MAX: u64 = 1 << 20;
 /// 32 exact classes (8..=256 bytes) and 24 half-step classes (384, 512,
 /// 768, 1024, ..., 786432, 1048576).
-#[allow(dead_code, reason = "the New/Delete operations that use it are WP-061b part 2")]
 const NCLASS: usize = 32 + 24;
 
 /// The class of a granule-rounded request of `n` bytes and its block
 /// size; `None` above [`MEDIUM_MAX`] (a large block of exactly `n` bytes).
-#[allow(dead_code, reason = "the New/Delete operations that use it are WP-061b part 2")]
 pub(crate) fn size_class(n: u64) -> Option<(usize, u64)> {
     if n <= SMALL_MAX {
         return Some(((n / GRAN - 1) as usize, n));
@@ -836,7 +848,6 @@ pub(crate) fn size_class(n: u64) -> Option<(usize, u64)> {
 }
 
 /// The block size of a granule-rounded request.
-#[allow(dead_code, reason = "the New/Delete operations that use it are WP-061b part 2")]
 pub(crate) fn block_size(n: u64) -> u64 {
     size_class(n).map_or(n, |(_, b)| b)
 }
@@ -849,7 +860,6 @@ struct Bins {
     large: Vec<(u64, u64)>,
 }
 
-#[allow(dead_code, reason = "the New/Delete operations that use it are WP-061b part 2")]
 impl Bins {
     fn footprint(&self) -> usize {
         self.lists.capacity() * size_of::<Vec<u32>>()
@@ -941,11 +951,11 @@ mod tests {
     const MIB: u64 = 1 << 20;
 
     fn heap(m: &mut Memory, size: u64) -> u64 {
-        m.heap_alloc(OTy(0), size, 0, Origin::Heap(ExprId::new(7))).unwrap()
+        m.heap_alloc(OTy(0), size, 0, Origin::Heap(ExprId::new(7), 0)).unwrap()
     }
 
     fn free(m: &mut Memory, p: u64) {
-        m.heap_free(p, false, &Types::default()).unwrap();
+        m.heap_free(p, false, None, &Types::default()).unwrap();
     }
 
     fn base(m: &Memory, p: u64) -> u64 {
@@ -1092,18 +1102,18 @@ mod tests {
     fn deleted_objects_are_detected() {
         let mut m = Memory::new(256 * MIB);
         let e = ExprId::new(3);
-        let p = m.heap_alloc(OTy(0), 16, 0, Origin::Heap(e)).unwrap();
+        let p = m.heap_alloc(OTy(0), 16, 0, Origin::Heap(e, 0)).unwrap();
         assert!(Ptr::decode(p).is_heap() && Ptr::decode(p).space() == Sp::Heap);
         assert!(m.check(p, 8, false).is_ok());
         free(&mut m, p);
-        assert_eq!(m.check(p, 8, false).err(), Some(MemFault::Dead(Origin::Heap(e))));
-        assert_eq!(m.heap_free(p, false, &Types::default()), Err(MemFault::DoubleDelete));
+        assert_eq!(m.check(p, 8, false).err(), Some(MemFault::Dead(Origin::Heap(e, 0))));
+        assert_eq!(m.heap_free(p, false, None, &Types::default()), Err(MemFault::DoubleDelete));
         // The slot is reused with a new generation: the old pointer is stale.
         let q = heap(&mut m, 16);
         assert_eq!(Ptr::decode(q).slot, Ptr::decode(p).slot);
         assert_ne!(q, p);
         assert_eq!(m.check(p, 8, false).err(), Some(MemFault::Stale));
-        assert_eq!(m.heap_free(p, false, &Types::default()), Err(MemFault::DoubleDelete));
+        assert_eq!(m.heap_free(p, false, None, &Types::default()), Err(MemFault::DoubleDelete));
         assert!(m.check(q, 16, true).is_ok());
     }
 
@@ -1111,19 +1121,31 @@ mod tests {
     fn delete_faults() {
         let mut m = Memory::new(256 * MIB);
         let t = Types::default();
-        assert_eq!(m.heap_free(0, true, &t), Ok(()));
+        assert_eq!(m.heap_free(0, true, None, &t), Ok(()));
         let f = m.alloc(OTy(0), 8, 0, Origin::None).unwrap();
-        assert_eq!(m.heap_free(f, false, &t), Err(MemFault::NotHeap));
-        assert_eq!(m.heap_free(fn_ptr(3), false, &t), Err(MemFault::NotHeap));
+        assert_eq!(m.heap_free(f, false, None, &t), Err(MemFault::NotHeap));
+        assert_eq!(m.heap_free(fn_ptr(3), false, None, &t), Err(MemFault::NotHeap));
         let s = m.alloc_static(OTy(0), 8, 0, Origin::None);
-        assert_eq!(m.heap_free(s, false, &t), Err(MemFault::NotHeap));
+        assert_eq!(m.heap_free(s, false, None, &t), Err(MemFault::NotHeap));
         let a = m.heap_alloc(OTy(0), 32, flags::ARRAY_NEW, Origin::None).unwrap();
-        assert_eq!(m.heap_free(a, false, &t), Err(MemFault::DeleteMismatch { array_new: true }));
-        assert_eq!(m.heap_free(Ptr::with_off(a, 8, false), true, &t), Err(MemFault::Subobject));
-        assert_eq!(m.heap_free(Ptr::with_off(a, 32, true), true, &t), Err(MemFault::Subobject));
-        assert_eq!(m.heap_free(a, true, &t), Ok(()));
+        assert_eq!(
+            m.heap_free(a, false, None, &t),
+            Err(MemFault::DeleteMismatch { array_new: true })
+        );
+        assert_eq!(
+            m.heap_free(Ptr::with_off(a, 8, false), true, None, &t),
+            Err(MemFault::Subobject)
+        );
+        assert_eq!(
+            m.heap_free(Ptr::with_off(a, 32, true), true, None, &t),
+            Err(MemFault::Subobject)
+        );
+        assert_eq!(m.heap_free(a, true, None, &t), Ok(()));
         let b = heap(&mut m, 8);
-        assert_eq!(m.heap_free(b, true, &t), Err(MemFault::DeleteMismatch { array_new: false }));
+        assert_eq!(
+            m.heap_free(b, true, None, &t),
+            Err(MemFault::DeleteMismatch { array_new: false })
+        );
         assert_eq!(m.heap_count, 1);
     }
 

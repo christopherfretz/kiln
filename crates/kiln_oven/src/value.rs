@@ -153,7 +153,12 @@ impl Oven {
         let f = self.compile_thunk(b, e, object);
         self.exec(b, f, fb)?;
         let v = self.regs[fb as usize];
-        let loc = b.ast().exprs.get(e).loc();
+        // clang's `CheckConstantExpression` location: the variable for an
+        // initializer (`EvaluateAsInitializer`), else the expression.
+        let loc = match object {
+            Some(d) => b.ast().decls.get(d).loc(),
+            None => b.ast().exprs.get(e).loc(),
+        };
         let r = match self.funcs[f as usize].ret {
             RetKind::Void => {
                 Err(Freeze::Notes(vec![Note::new(loc, "expression of type 'void' has no value")]))
@@ -161,6 +166,12 @@ impl Oven {
             RetKind::Scalar(ty) => self.freeze_scalar(b, ty, v, loc),
             RetKind::Sret(ty) => self.freeze_aggregate(b, ty, v as u64, loc),
         };
+        // [expr.const]/5.20: every allocation is deallocated within the
+        // evaluation (checked after the result, as clang).
+        let r = r.and_then(|cv| match self.leak_notes(b) {
+            None => Ok(cv),
+            Some(n) => Err(Freeze::Notes(n)),
+        });
         r.map_err(|f| match f {
             Freeze::Fault(k) => EvalFailure::silent(k),
             Freeze::Notes(n) if self.run.silent => {
@@ -169,6 +180,35 @@ impl Oven {
             }
             Freeze::Notes(notes) => EvalFailure { kind: FailKind::NotConstant, notes },
         })
+    }
+
+    /// clang's `note_constexpr_memory_leak` for the allocations of the
+    /// running context still live: the first made, and how many others.
+    fn leak_notes(&self, b: &dyn SemaBridge) -> Option<Vec<Note>> {
+        if self.mem.heap_count == 0 {
+            return None;
+        }
+        let mut first: Option<(u32, ExprId)> = None;
+        let mut n = 0u64;
+        for (_, a) in self.mem.heap_live_of(self.mem.ctx) {
+            if let Origin::Heap(e, k) = a.origin {
+                n += 1;
+                if first.is_none_or(|(f, _)| k < f) {
+                    first = Some((k, e));
+                }
+            }
+        }
+        let (_, e) = first?;
+        if self.run.silent {
+            return Some(Vec::new());
+        }
+        let others = match n - 1 {
+            0 => String::new(),
+            1 => " (along with 1 other memory leak)".into(),
+            k => format!(" (along with {k} other memory leaks)"),
+        };
+        let loc = b.ast().exprs.get(e).loc();
+        Some(vec![Note::new(loc, format!("allocation performed here was not deallocated{others}"))])
     }
 
     fn freeze_scalar(
@@ -234,6 +274,14 @@ impl Oven {
         }
         let offset = u64::from(p.off);
         let Some(a) = self.alloc_any(p).copied() else {
+            if p.is_heap() && !self.run.silent {
+                // A deleted allocation whose slot was reused.
+                let what = if offset != 0 || p.past { "subobject of " } else { "" };
+                return Err(Freeze::Notes(vec![Note::new(
+                    loc,
+                    format!("pointer to {what}heap-allocated object is not a constant expression"),
+                )]));
+            }
             return Err(Freeze::Notes(vec![Note::new(
                 loc,
                 "pointer to an object outside its lifetime is not a constant expression",
@@ -279,14 +327,16 @@ impl Oven {
                 ));
                 notes.push(Note::new(ast.exprs.get(e).loc(), "temporary created here"));
             }
-            // clang's note_constexpr_dynamic_alloc; the leak check (WP-061b
-            // part 2) reports a live allocation first.
-            Origin::Heap(e) => {
+            // clang's note_constexpr_dynamic_alloc, before the leak check;
+            // the allocation is noted while it is live.
+            Origin::Heap(e, _) => {
                 notes.push(Note::new(
                     loc,
                     format!("pointer to {what}heap-allocated object is not a constant expression"),
                 ));
-                notes.push(Note::new(ast.exprs.get(e).loc(), "heap allocation performed here"));
+                if a.live {
+                    notes.push(Note::new(ast.exprs.get(e).loc(), "heap allocation performed here"));
+                }
             }
             _ => notes.push(Note::new(
                 loc,
@@ -578,6 +628,13 @@ impl Oven {
                     self.run.const_context,
                 );
                 let mark = self.mem.mark();
+                // Its own evaluation context: its allocations are numbered
+                // from 0, leak-checked and freed at its end.
+                let heap = (self.mem.heap_allocs, self.mem.ctx);
+                let ctx = self.ctx_depth;
+                self.ctx_depth += 1;
+                self.mem.ctx = ctx;
+                self.mem.heap_allocs = 0;
                 self.run.nesting += 1;
                 self.run.counters = Counters::default();
                 self.run.object = Some(d);
@@ -585,7 +642,10 @@ impl Oven {
                 // Constant initialization is manifestly constant-evaluated.
                 self.run.const_context = true;
                 let r = self.eval_at(b, init, Some(d), top);
+                self.mem.free_heap_of(ctx, &self.types);
                 self.mem.release(mark, &self.types);
+                self.ctx_depth -= 1;
+                (self.mem.heap_allocs, self.mem.ctx) = heap;
                 self.run.nesting -= 1;
                 (
                     self.run.counters,

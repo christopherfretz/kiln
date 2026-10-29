@@ -29,6 +29,9 @@ source manager it reports against.
 | `defining` | classes being defined (incomplete until `}`) |
 | `enums` | enumerations being defined (`EnumBuild`: running value, best type) |
 | `local_externs` | block-scope `extern` variables and functions, keyed by enclosing namespace and name (§3) |
+| `exceptions`, `rtti` | `-f[no-]exceptions`, `-f[no-]rtti` (default on; §5.5, §5.6) |
+| `braced_args` | braced-init-list call arguments awaiting their parameter types (§6.1) |
+| `prototype_params` | parameter names of each parameter-declaration-clause being parsed (§4.3) |
 | `pragma_packs` | `#pragma pack` directives seen, with their location and argument text (recorded for the class layout, sema-class.md §6.1) |
 | `immediate` | depth of immediate function contexts ([expr.const]/16) entered by `if consteval` |
 | `oven` | the constant evaluator and its budget |
@@ -201,6 +204,50 @@ Redeclaration and linkage rules:
     function had errors.
 - `main` must return `int` ([basic.start.main]/2). Falling off the end
   of `main` returns 0, so it never warns.
+- **Default arguments** (`act_on_param_default_init`,
+  [dcl.fct.default]): copy-initialization of the parameter's type,
+  from an expression or a braced list, stored in the `ParamInfo` as
+  `DefaultArg::Parsed`; `act_on_declarator` merges them with the previous
+  declaration's and sets each `ParmVar`'s. (A member function's default
+  argument saved for the complete-class context is `DefaultArg::Unparsed`
+  and replayed through `act_on_param_default_arg`, sema-class.md §2.7.)
+  Calls fill omitted trailing arguments with `CXXDefaultArgExpr`.
+- **Trailing return types** (`Chunk::Function::trailing`,
+  [dcl.fct]/2): the function's return type, and an error
+  (`function with trailing return type must specify return type 'auto'`)
+  unless the decl-specifier is a lone `auto`.
+- **Prototype scope:** the parser brackets each
+  parameter-declaration-clause with `act_on_start_prototype`,
+  `act_on_prototype_param` and `act_on_end_prototype`, which keep
+  the parameter names in `prototype_params`. Parameters are not
+  declarations before their function is, so an unqualified name
+  that matches one inside the declarator (a trailing return type, a
+  later parameter, a default argument) is reported as "not supported
+  yet" rather than looked up in an outer scope.
+- **`-Wvexing-parse`**: a function declarator the parser chose over a
+  direct initializer by [dcl.ambig.res]/1 warns as clang does, with
+  its fix-it notes (`add a pair of parentheses`, `replace parentheses
+  with an initializer`, `remove parentheses`).
+
+### 4.3.1 `decltype` and placeholder types (`deduce.rs`)
+- `act_on_decltype(e)` ([dcl.type.decltype]): `DecltypeType` sugar
+  over the declared type of an unparenthesized id-expression or member
+  access, else `T&&`/`T&`/`T` by value category. The operand is
+  unevaluated.
+- `auto` and `decltype(auto)` variables ([dcl.type.auto.deduct]): a
+  top-level placeholder deduces the decayed, cv-stripped initializer
+  type plus the written cv-qualifiers, or `decltype(e)`. A
+  placeholder under pointer and reference declarators (`auto *`,
+  `const auto &`, `auto &&`) is deduced as for a function call
+  ([temp.deduct.call]/2-4) with `auto` as the template parameter.
+- Deduced return types ([dcl.spec.auto.general]/9-11): the first
+  `return` deduces, later ones must agree (clang's
+  `'auto' in return type deduced as ... here but deduced as ...`),
+  every redeclaration gets the deduced type, and a use before
+  deduction is `function 'f' with deduced return type cannot be used
+  before it is defined`.
+- Braced initializers (`auto x = {1}`, `std::initializer_list`) are
+  §10.
 
 ### 4.4 Tags, enumerations, bit-fields and anonymous records
 - **`act_on_tag(kind, name, TagUse, …)`** implements [dcl.type.elab]
@@ -422,7 +469,13 @@ specification as written (`TypeNames` prints ` noexcept`,
   - **calls:** argument conversion, arity notes, variadic default
     promotions
   - **member access:** `.` and `->` on records and through
-    `IndirectField`
+    `IndirectField`; members found in base classes, static members,
+    enumerators and member functions, implicit `this->`, `this`,
+    `.*`/`->*` and `&C::m`, all access-checked (sema-class.md §2.4–§2.6,
+    WP-066b)
+  - **member calls:** `CXXMemberCallExpr` for a single candidate
+    (sema-class.md §8.3, "Landed (WP-066b)"); overloaded member
+    functions wait for WP-068a
   - **subscripts:** either operand order
   - **`sizeof`/`alignof`:** of types and expressions, using
     `kiln_abi` layout
@@ -501,6 +554,165 @@ clang's `LazilyCreateBuiltin`. kiln knows one builtin,
 - **Evaluation:** the Oven answers `true` in a manifestly
   constant-evaluated context and `false` otherwise (spec/oven.md);
   codegen emits `i1 false` (spec/codegen.md).
+### 5.5 `throw` (`except.rs`)
+`act_on_throw(operand, loc)` ([expr.throw]) builds a `void`
+`CXXThrowExpr`:
+- With `-fno-exceptions` it is an error
+  (`cannot use 'throw' with exceptions disabled`).
+- The exception object's type is the operand's, with arrays and
+  functions decayed and top-level cv removed; it must not be (a
+  pointer to) an incomplete type other than cv `void` (clang's
+  `CheckCXXThrowOperand`).
+- The operand is copy-initialized into it after the implicit move
+  ([class.copy.elision]/3).
+- In `?:`, a throw operand gives the other operand's type and value
+  category ([expr.cond]/2).
+- clang's exemption for system headers is not implemented. The Oven
+  treats a `throw` it reaches as not a constant expression; codegen
+  does not lower it yet.
+
+### 5.6 `typeid` (`rtti.rs`)
+`act_on_typeid(Ok(expr) | Err(type), loc, rparen)` ([expr.typeid]):
+an lvalue of type `const std::type_info`.
+- `std::type_info` must have been declared (clang's
+  `you need to include <typeinfo> before using the 'typeid' operator`),
+  and RTTI enabled.
+- References and top-level cv are ignored; a cv-qualified expression
+  operand gets a `NoOp` cast to its unqualified type, as in clang.
+- A class type must be complete.
+- The operand is always unevaluated: M2 has no polymorphic classes, so
+  the node (`typeid_expr`, sema-class.md §5.1) is built with
+  `potentially_evaluated` false. The Oven and codegen do not evaluate
+  `typeid` yet.
+
+### 5.7 `dynamic_cast`
+Parsed; `act_on_cast` reports `dynamic_cast` as not supported
+yet (it needs polymorphic classes).
+
+### 5.8 GNU extensions (`gnu.rs`)
+Kiln accepts these GNU extensions in C++ and matches clang's behaviour
+for them.
+
+- **Statement expressions** `({ ... })`:
+  - `check_stmt_expr_allowed` rejects them outside a function body
+    (`statement expression not allowed at file scope`).
+  - `act_on_start_stmt_expr` sets aside the enclosing
+    full-expression's pending odr-uses (§5.2), and `act_on_stmt_expr`
+    restores them.
+  - The final expression statement goes through
+    `act_on_stmt_expr_result`: decay, then copy-initialization of a
+    prvalue of its cv-unqualified type.
+  - The type is that of the last non-null statement, looking through
+    labels, when that is an expression statement; otherwise `void`.
+    The result is always a prvalue.
+  - An unused statement expression warns as clang's
+    `isUnusedResultAWarning` does.
+  - In a default argument, the parser reports
+    `default argument may not use a GNU statement expression`.
+- **`__builtin_offsetof(T, designator)`** (`act_on_builtin_offsetof`
+  with `OffsetofComponent`s; clang's `BuildBuiltinOffsetOf`): a
+  `size_t` prvalue `OffsetOfExpr`.
+  - The byte offset is computed from `kiln_abi` layout.
+  - `T`, and every class it steps into, must be a complete class
+    type; a bit-field member is an error. Array indices must be
+    integral constants; a non-constant index, and a result outside
+    0 to 2^32 - 1 (which a negative index gives), are unsupported.
+    clang's error for a member of a virtual base is not implemented.
+  - For a class that is not standard-layout it warns
+    `-Winvalid-offsetof`. Standard-layout is computed from members
+    and bases (`is_standard_layout`) until the definition bits track
+    it.
+- **Binary conditional** `x ?: y` (`act_on_binary_conditional`, in
+  `forms.rs`): a `BinaryConditionalOperator` with `x` shared through an
+  `OpaqueValueExpr`. Unless both operands are glvalues of the same
+  type, `x` gets the usual unary conversions first.
+- **Compound literals** `( T ) { ... }` (`act_on_compound_literal`;
+  clang's `BuildCompoundLiteralExpr`): a prvalue
+  `CompoundLiteralExpr` of the written type, holding the
+  list-initialization of cv-unqualified `T`, done as if by a C-style
+  cast at the `(`. clang's diagnostics follow from that:
+  - a reference type cannot bind to an initializer list;
+  - more than one element for a scalar is a function-style cast
+    error;
+  - an incomplete type is diagnosed with the forward-declaration note.
+
+  Class and array literals (temporary materialization) and literals
+  at namespace scope (constant elements, `ConstantExpr` wrapping) are
+  reported as not supported yet.
+
+### 5.9 New- and delete-expressions (`new_delete.rs`, WP-061a)
+clang's `ActOnCXXNew`/`BuildCXXNew` and `ActOnCXXDelete` for non-class
+and aggregate element types.
+- **Implicit global operators** ([basic.stc.dynamic.general]/2):
+  `declare_global_new_delete` runs once, the first time a new- or
+  delete-expression or a declaration of a global `operator new`/`delete`
+  needs it (clang's `DeclareGlobalNewDelete`). It declares, as implicit
+  TU-scope functions in clang's order, `operator new`/`new[]` taking
+  `(size_t)` and `(size_t, std::align_val_t)`, and `operator
+  delete`/`delete[]` taking `(void*)`, `(void*, align_val_t)`,
+  `(void*, size_t)` and `(void*, size_t, align_val_t)`, all
+  `noexcept`. `std::align_val_t` is the program's own declaration, else
+  an implicit `enum class align_val_t : size_t` in an implicit
+  namespace `std` (clang's `getStdAlignValT`). The nothrow forms exist
+  only if the program (`<new>`) declares them.
+- **User declarations** of a global `operator new`/`delete`
+  (`act_on_global_new_delete_decl`) redeclare a matching implicit one; a
+  deallocation function without an exception specification is
+  implicitly `noexcept` ([except.spec]/11).
+- **The allocated type** ([expr.new]/1-2): not a function type, a
+  reference or an incomplete type; `auto` is deduced from a single
+  parenthesized or braced argument (`new auto(x)`; `new auto*(p)` is
+  unsupported). The new-declarator's first bound is converted to `size_t`
+  ([expr.new]/8: integral or unscoped enumeration, or a class with one
+  conversion, which is unsupported); a constant first bound that is
+  negative, too large, or smaller than the number of initializers is an
+  error; later bounds are converted constant expressions. A `new T[]`
+  takes its bound from the initializer. In a parenthesized type-id a
+  non-constant bound is clang's warning `when type is in parentheses,
+  array cannot have dynamic size` (see the gaps below).
+- **Allocation function** ([expr.new]/12-19): `PASS_ALIGN` when
+  `alignof(T)` exceeds `__STDCPP_DEFAULT_NEW_ALIGNMENT__` (16 on both
+  targets, `kiln_abi::Target::default_new_align`). Global lookup only
+  (class-scope `operator new` is `todo(WP-068b)`): the candidates whose
+  leading parameters are `size_t` (and `align_val_t` when aligned) and
+  that accept the placement arguments, preferring the most exact
+  matches; with `PASS_ALIGN` a second round without the alignment
+  argument follows (clang's two-phase lookup). Failure reports clang's
+  `no matching function for call to 'operator new'` with candidate notes,
+  or for a placement `new (p) T` with no `(size_t, void*)` form, `no
+  matching 'operator new' function for non-allocating placement new
+  expression; include <new>`.
+- **Deallocation function for new** ([expr.new]/28): for a placement
+  form, the one with the same extra parameters; otherwise the sized usual
+  one (with `align_val_t` when aligned).
+- **Initializer** ([expr.new]/23): none is default-initialization (a
+  `const` scalar or array is an error: `default initialization of an
+  object of const type 'const int[]'`, the array type printed for array
+  new); `()` is an `ImplicitValueInitExpr`; `(x)` copy-initializes a
+  scalar (more than one argument is clang's `excess elements in scalar
+  initializer`); `{...}` is list-initialization (§6) of
+  `T` or of the array `T[n]`, with an `array_filler` for the tail.
+  Class element types report "not supported yet" for default- and
+  parenthesized initialization (they need `CXXConstructExpr`,
+  WP-067b); braced aggregate initialization works.
+- **Delete** ([expr.delete]): the operand is converted to a pointer
+  prvalue (a class operand with a conversion function is unsupported).
+  Errors and warnings follow clang: `cannot delete expression of type`,
+  `cannot delete pointer to incomplete type 'void'` (an error for
+  `void*` in C++26), the incomplete-type warning, and `'delete' applied
+  to a pointer-to-array type ... treated as 'delete[]'` (then
+  `ARRAY_FORM`). The deallocation function is the usual one: sized when
+  the type is complete and the form is not array (no array cookies
+  without destructors), aligned when over-aligned. Class element types
+  with a non-trivial destructor are unsupported (WP-067b / WP-076);
+  class-scope `operator delete` is `todo(WP-068b)`.
+- Gaps: `-fno-sized-deallocation` only removes the macro (Sema always
+  selects the sized form, clang's C++14+ default); `-Wmismatched-new-delete`
+  is not reported; a non-constant bound in a parenthesized type-id is a
+  plain warning (clang's is an extension warning, so an error under
+  `-pedantic-errors`); `__hot_cold_t` overloads are not recognized;
+  default arguments of a user-declared allocation function are not
+  used (every parameter must be matched by an argument).
 
 ## 6. Initialization (`init.rs`)
 - **`perform_init(ty, init, direct_list)`** implements [dcl.init]:
@@ -522,6 +734,33 @@ clang's `LazilyCreateBuiltin`. kiln knows one builtin,
   initializer of a `constexpr` variable, and of a const integral
   variable, which is usable in constant expressions. The value is
   stored (§8.3).
+
+### 6.1 Braced lists in expressions and explicit type conversions (`forms.rs`)
+- **Call arguments** `f({...})` ([expr.call]/7):
+  - `act_on_braced_arg` returns a `void` `InitListExpr` placeholder,
+    kept in `braced_args`.
+  - `act_on_call` replaces it by the list-initialization of the
+    parameter.
+  - Viability follows [over.ics.list]: a scalar takes at most one
+    unbraced, convertible element; an aggregate at most as many
+    elements as brace elision reaches. A non-viable list is clang's
+    `cannot convert initializer list argument to 'T'` candidate note.
+  - A list for the ellipsis of a variadic function is an error.
+- **`return {...};`** ([stmt.return]/2, `act_on_return_list`):
+  copy-list-initialization of the returned object.
+- **`x = {...}`** ([expr.assign]/8, `act_on_assign_list`): the list
+  initializes a temporary of the left operand's type, which is then
+  assigned.
+- **Other operators:** a braced list as their operand is ill-formed
+  (`act_on_misplaced_init_list`).
+- **Functional casts** ([expr.type.conv]):
+  - `T()` (`act_on_value_init_cast`) value-initializes; `void()` is
+    a `void` prvalue.
+  - `T{...}` (`act_on_list_cast`) is direct-list-initialization.
+  - `T(a, b)` (`act_on_paren_list_cast`) is ill-formed for a scalar.
+  - Class, array and reference `T` need temporaries and are
+    unsupported (`temporary_unsupported`) until classes have
+    constructors (WP-065).
 
 ## 7. Statements (`stmt.rs`)
 - **Compound statements and scopes:** see §2.
@@ -645,15 +884,26 @@ unscoped enumeration is reported (spec/oven.md "Integration").
 - Layout is `kiln_abi`'s Itanium implementation (spec/abi.md).
 
 ## 10. To be implemented (M3+)
-- **Classes:** member functions, special members, `this`, access
-  control, bases and virtual functions. Design: [sema-class.md](sema-class.md).
+- **Classes:** special members and construction (WP-067), virtual
+  functions and virtual bases (WP-078); members, `this`, access control
+  and non-virtual bases landed in WP-066b. Design:
+  [sema-class.md](sema-class.md).
 - **Overloading:** overload resolution beyond arity, user-defined
   conversions, operator overloading.
 - **Templates:** templates, concepts, packs; `auto` and `decltype`
   beyond the M2 basics. Design: spec/sema-templates.md.
-- **Other language features:** lambdas, exceptions (`throw`,
-  `try`/`catch`; exception specifications and the `noexcept` operator
-  are §4.7 and §5.3), coroutines, reflection, contracts.
+- **Other language features:** lambdas, exceptions (`try`/`catch`
+  and lowering `throw`; exception specifications, the `noexcept`
+  operator and `throw` are §4.7, §5.3 and §5.5), coroutines,
+  reflection, contracts.
+- **WP-064 follow-ups:**
+  - prototype scope (§4.3)
+  - `dynamic_cast` and polymorphic `typeid`
+  - class and array temporaries (§6.1) and compound literals (§5.8)
+  - `-Wconstant-conversion` and `-Wliteral-conversion` alongside
+    narrowing errors in list-initialization
+  - statement expressions: `-Wgnu-statement-expression`, jumps into
+    one, and class-glvalue results
 - **Constant evaluation** (what the Oven supports in M2 is in
   spec/oven.md):
   - `consteval` and immediate invocations (the immediate function

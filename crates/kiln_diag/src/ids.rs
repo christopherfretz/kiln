@@ -428,6 +428,7 @@ diag_ids! {
     // ----- parser
     parse_expected = Error (1) "expected {0}";
     parse_expected_after = Error (2) "expected {1} after {0}";
+    parse_expected_lparen_after_type = Error (0) "expected '(' for function-style cast or type construction";
     parse_expected_semi_declaration = Error (0) "expected ';' at end of declaration";
     parse_expected_semi_decl_list = Error (0) "expected ';' at end of declaration list";
     parse_expected_semi_after_expr = Error (0) "expected ';' after expression";
@@ -438,6 +439,7 @@ diag_ids! {
     parse_expected_semi_after_stmt = Error (1) "expected ';' after {0} statement";
     parse_expected_expression = Error (0) "expected expression";
     parse_expected_name_of_pack = Error (0) "expected the name of a parameter pack";
+    parse_stmt_expr_in_default_arg = Error (0) "default argument may not use a GNU statement expression";
     parse_expected_unqualified_id = Error (0) "expected unqualified-id";
     parse_expected_type = Error (0) "expected a type";
     parse_expected_member_name = Error (0) "expected member name or ';' after declaration specifiers";
@@ -511,8 +513,46 @@ diag_ids! {
     sema_using_enum_incomplete = Error (1) "enumeration '{0}' is incomplete";
     parse_using_enum_requires_name = Error (0) "using enum requires an enum or typedef name";
 
+    // ----- disambiguation, expression forms, declarators (WP-064)
+    parse_vexing_parse = Warning [VexingParse] (0) "parentheses were disambiguated as a function declaration";
+    parse_empty_parens_vexing = Warning [VexingParse] (0) "empty parentheses interpreted as a function declaration";
+    note_additional_parens_for_variable_declaration = Note (0) "add a pair of parentheses to declare a variable";
+    note_empty_parens_default_ctor = Note (0) "remove parentheses to declare a variable";
+    note_empty_parens_zero_initialize = Note (0) "replace parentheses with an initializer to declare a variable";
+    sema_braces_around_init = Warning [BracedScalarInit] (0) "braces around scalar initializer";
+    sema_default_arg_redefinition = Error (0) "redefinition of default argument";
+    sema_missing_default_arg = Error (1) "missing default argument on parameter '{0}'";
+    sema_missing_default_arg_unnamed = Error (0) "missing default argument on parameter";
+    sema_trailing_return_without_auto = Error (1) "function with trailing return type must specify return type 'auto', not {0}";
+    sema_auto_fn_different_deductions = Error (3) "'{0:auto|decltype(auto)}' in return type deduced as {1} here but deduced as {2} in earlier return statement";
+    sema_auto_fn_used_before_defined = Error (1) "function '{0}' with deduced return type cannot be used before it is defined";
+    sema_auto_fn_init_list = Error (0) "cannot deduce return type from initializer list";
+    sema_auto_fn_deduction_failure = Error (2) "cannot deduce return type {0} from returned value of type {1}";
+    sema_auto_var_deduction_failure = Error (3) "variable '{0}' with type {1} has incompatible initializer of type {2}";
+    sema_auto_init_list_deduction = Error (0) "cannot deduce type of initializer list because std::initializer_list was not found; include <initializer_list>";
+    sema_decltype_auto_compound = Error (1) "cannot form {0:pointer to|reference to|array of} 'decltype(auto)'";
+    sema_need_header_before_typeid = Error (0) "you need to include <typeinfo> before using the 'typeid' operator";
+    sema_typeid_no_rtti = Error (0) "use of typeid requires -frtti";
+    sema_typeid_incomplete = Error (1) "'typeid' of incomplete type {0}";
+    sema_offsetof_record_type = Error (1) "offsetof requires struct, union, or class type, {0} invalid";
+    sema_offsetof_incomplete_type = Error (1) "offsetof of incomplete type {0}";
+    sema_offsetof_array_type = Error (1) "offsetof requires array type, {0} invalid";
+    sema_offsetof_bitfield = Error (1) "cannot compute offset of bit-field '{0}'";
+    sema_offsetof_non_standard_layout = ExtWarn [InvalidOffsetof] (1) "offset of on non-standard-layout type {0}";
+    note_bitfield_decl = Note (0) "bit-field is declared here";
+    sema_stmtexpr_file_scope = Error (0) "statement expression not allowed at file scope";
+    sema_throw_disabled = Error (0) "cannot use 'throw' with exceptions disabled";
+    sema_throw_incomplete = Error (1) "cannot throw object of incomplete type {0}";
+    sema_throw_incomplete_ptr = Error (1) "cannot throw pointer to object of incomplete type {0}";
+    note_parameter_named_here = Note (1) "passing argument to parameter '{0}' here";
+    note_parameter_here = Note (0) "passing argument to parameter here";
+    parse_init_list_bin_op = Error (2) "initializer list cannot be used on the {0:left|right} hand side of operator '{1}'";
+    sema_return_init_list = Error (1) "void function '{0}' must not return a value";
+    sema_init_list_variadic = Error (0) "cannot pass initializer list to variadic function";
+    sema_many_braces_around_scalar = Warning [ManyBracesAroundScalarInit] (0) "too many braces around scalar initializer";
     // ----- sema (WP-048)
     sema_undeclared_var_use = Error (1) "use of undeclared identifier '{0}'";
+    sema_unexpected_typedef_ident = Error (1) "unexpected type name '{0}': expected expression";
     sema_unknown_typename = Error (1) "unknown type name '{0}'";
     sema_no_member = Error (2) "no member named '{0}' in {1}";
     sema_ambiguous_reference = Error (1) "reference to '{0}' is ambiguous";
@@ -610,6 +650,8 @@ diag_ids! {
     note_var_declared_const = Note (1) "variable '{0}' declared const here";
     note_marked_deprecated = Note (1) "'{0}' has been explicitly marked deprecated here";
     sema_not_assignable = Error (0) "expression is not assignable";
+    sema_non_object_not_modifiable = Error (1) "non-object type {0} is not assignable";
+    sema_array_not_modifiable = Error (1) "array type {0} is not assignable";
     sema_assign_const_var = Error (2) "cannot assign to variable '{0}' with const-qualified type {1}";
     sema_read_only_not_assignable = Error (0) "read-only variable is not assignable";
     sema_indirection_requires_pointer = Error (1) "indirection requires pointer operand ({0} invalid)";
@@ -627,6 +669,7 @@ diag_ids! {
     sema_member_reference_incomplete = Error (1) "incomplete definition of type {0}";
     sema_invalid_unary_operand = Error (1) "invalid argument type {0} to unary expression";
     sema_incompatible_cond_operands = Error (2) "incompatible operand types ({0} and {1})";
+    sema_conditional_void_nonvoid = Error (2) "{0:left|right} operand to ? is void, but {0:right|left} operand is of type {1}";
     sema_sub_ptr_compatible = Error (2) "{0} and {1} are not pointers to compatible types";
     sema_comparison_distinct_pointers = Error (2) "comparison of distinct pointer types ({0} and {1})";
     sema_comparison_pointer_integer = Error (2) "comparison between pointer and integer ({0} and {1})";
@@ -665,6 +708,8 @@ diag_ids! {
     sema_bad_const_cast_dest = Error (2) "{0:const_cast|static_cast|reinterpret_cast|dynamic_cast|C-style cast|functional-style cast} to {1}, which is not a reference, pointer-to-object, or pointer-to-data-member";
     sema_reinterpret_cast_small_int = Error (1) "cast from pointer to smaller type {0} loses information";
     sema_excess_initializers = Error (1) "excess elements in {0:array|vector|scalar|union|struct} initializer";
+    sema_builtin_func_cast_more_than_one_arg = Error (0) "function-style cast to a builtin type can only take one argument";
+    sema_reference_bind_to_init_list = Error (1) "reference to type {0} cannot bind to an initializer list";
     sema_array_init_not_init_list = Error (1) "array initializer must be an initializer list{0:| or string literal| or wide string literal}";
     sema_init_string_too_long = Error (2) "initializer-string for char array is too long, array size is {0} but initializer has size {1} (including the null terminating character)";
     sema_illegal_initializer_type = Error (1) "illegal initializer type {0}";
@@ -704,6 +749,82 @@ diag_ids! {
     sema_switch_into_protected_scope = Error (0) "cannot jump from switch statement to this case label";
     sema_goto_into_protected_scope = Error (0) "cannot jump from this goto statement to its label";
     note_protected_by_variable_init = Note (0) "jump bypasses variable initialization";
+    // ----- classes (WP-066b; clang SemaDeclCXX.cpp, SemaAccess.cpp,
+    // SemaExprMember.cpp, SemaExprCXX.cpp)
+    sema_base_not_class = Error (0) "base specifier must name a class";
+    sema_base_incomplete = Error (0) "base class has incomplete type";
+    sema_base_is_union = Error (0) "unions cannot be base classes";
+    sema_union_has_base = Error (0) "unions cannot have base classes";
+    sema_base_final = Error (1) "base {0} is marked 'final'";
+    note_entity_declared_here = Note (1) "{0} declared here";
+    sema_base_duplicate = Error (1) "base class {0} specified more than once as a direct base class";
+    sema_access_member = Error (3) "'{0}' is a {1:private|protected} member of {2}";
+    note_access_declared = Note (1) "declared {0:private|protected} here";
+    note_access_implicit = Note (1) "implicitly declared {0:private|protected} here";
+    note_access_constrained_by_path = Note (2) "constrained by {0:|implicitly }{1:private|protected} inheritance here";
+    note_access_member_declared = Note (0) "member is declared here";
+    note_access_protected_object = Note (1) "can only access this member on an object of type {0}";
+    note_access_protected_noobject = Note (1) "must name member using the type of the current context {0}";
+    sema_access_base_conv = Error (3) "cannot cast {0} to its {1:private|protected} base class {2}";
+    sema_ambiguous_member_types = Error (1) "member '{0}' found in multiple base classes of different types";
+    sema_ambiguous_member_subobjects = Error (3) "non-static member '{0}' found in multiple base-class subobjects of type {1}:{2}";
+    note_ambiguous_member_found = Note (0) "member found by ambiguous name lookup";
+    sema_this_outside_member = Error (0) "invalid use of 'this' outside of a non-static member function";
+    sema_mutable_const = Error (0) "'mutable' and 'const' cannot be mixed";
+    sema_mutable_reference = Error (0) "'mutable' cannot be applied to references";
+    sema_mutable_function = Error (0) "'mutable' cannot be applied to functions";
+    sema_static_member_nonconst_init = Error (0) "non-const static data member must be initialized out of line";
+    sema_static_member_init_not_ice = Error (0) "in-class initializer for static data member is not a constant expression";
+    sema_static_float_init = WarningError [StaticFloatInit] (1) "in-class initializer for static data member of type {0} requires 'constexpr' specifier";
+    note_add_constexpr = Note (0) "add 'constexpr'";
+    sema_static_member_volatile_init = Error (0) "static const volatile data member must be initialized out of line";
+    sema_static_member_literal_init = Error (1) "in-class initializer for static data member of type {0} requires 'constexpr' specifier";
+    sema_static_member_bad_init = Error (1) "static data member of type {0} must be initialized out of line";
+    note_definition_not_complete = Note (1) "definition of {0} is not complete until the closing '}}'";
+    sema_static_member_fn_quals = Error (1) "static member function cannot have '{0}' qualifier";
+    sema_static_out_of_class = Error (0) "'static' can only be specified inside the class definition";
+    sema_static_member_local_class = Error (3) "static data member '{0}' not allowed in local {1} '{2}'";
+    sema_static_member_anon_class = Error (2) "static data member '{0}' not allowed in anonymous {1}";
+    sema_constexpr_nonstatic_member = Error (0) "non-static data member cannot be constexpr; did you intend to make it static?";
+    sema_member_redeclared = Error (0) "class member cannot be redeclared";
+    sema_storage_class_for_member = Error (0) "storage class specified for a member declaration";
+    sema_nonstatic_member_out_of_line = Error (0) "non-static data member defined out-of-line";
+    sema_member_def_no_match = Error (2) "out-of-line definition of '{0}' does not match any declaration in '{1}'";
+    sema_friend_def_no_match = Error (2) "friend declaration of '{0}' does not match any declaration in '{1}'";
+    sema_friend_not_class_or_fn = Error (0) "friends can only be classes or functions";
+    sema_const_member_assign = Error (1) "cannot assign to non-static data member within const member function '{0}'";
+    note_member_fn_declared_const = Note (1) "member function '{0}' is declared const here";
+    sema_invalid_nonstatic_member_use = Error (1) "invalid use of non-static data member '{0}'";
+    sema_invalid_member_in_static = Error (1) "invalid use of member '{0}' in static member function";
+    sema_member_call_without_object = Error (0) "call to non-static member function without an object argument";
+    sema_bound_member_not_called = Error (1) "reference to non-static member function must be called{0:|; did you mean to call it with no arguments?}";
+    sema_nonconst_member_fn_ptr = Error (0) "cannot create a non-constant pointer to member function";
+    sema_ptrmem_rhs_not_member_pointer = Error (2) "right hand operand to {0} has non-pointer-to-member type {1}";
+    sema_ptrmem_lhs_incompatible = Error (3) "left hand operand to {0} must be a {1:|pointer to }class compatible with the right hand operand, but is {2}";
+    sema_member_fn_ref_qual_mismatch = Error (3) "'this' argument to member function '{0}' is an {1:lvalue|rvalue}, but function has {2:non-const lvalue|rvalue} ref-qualifier";
+    sema_member_fn_drops_quals = Error (3) "'this' argument to member function '{0}' has type {1}, but function is not marked {2}";
+    sema_member_type_via_access = Error (3) "cannot refer to type member '{0}' in {1} with '{2:.|->}'";
+    note_member_declared_named = Note (1) "member '{0}' declared here";
+    // WP-061a: new and delete expressions ([expr.new], [expr.delete]).
+    parse_postfix_after_unary_requires_parens = Error (1) "expression cannot be followed by a postfix {0} operator; add parentheses";
+    sema_converting_to_incompatible = Error (2) "converting {0} to incompatible type {1}";
+    sema_new_array_size_unknown = Error (0) "array size must be specified in new expression with no initializer";
+    sema_new_auto_requires_ctor_arg = Error (1) "new expression for type {0} requires a constructor argument";
+    sema_new_auto_multiple_args = Error (1) "new expression for type {0} contains multiple constructor arguments";
+    sema_new_incomplete_type = Error (1) "allocation of incomplete type {0}";
+    sema_new_reference_type = Error (1) "cannot allocate reference type {0} with new";
+    sema_default_init_const_no_ctor = Error (1) "default initialization of an object of const type {0} without a user-provided default constructor";
+    sema_delete_operand = Error (1) "cannot delete expression of type {0}";
+    sema_delete_incomplete = Error (1) "cannot delete pointer to incomplete type {0}";
+    sema_delete_void_ptr_warn = Warning [DeleteIncomplete] (1) "cannot delete expression with pointer-to-'void' type {0}";
+    sema_delete_incomplete_warn = Warning [DeleteIncomplete] (1) "deleting pointer to incomplete type {0} is incompatible with C++2c and may cause undefined behavior";
+    sema_delete_array_type = Warning (1) "'delete' applied to a pointer-to-array type {0} treated as 'delete[]'";
+    sema_converting_pointer_to_int = Error (2) "incompatible pointer to integer conversion converting {0} to type {1}";
+    sema_new_array_of_auto = Error (0) "cannot allocate array of 'auto'";
+    sema_new_function_type = Error (1) "cannot allocate function type {0} with new";
+    // clang: an ExtWarn with no group (kiln prints ExtWarn as -Wpedantic).
+    sema_new_paren_array_nonconst = Warning (0) "when type is in parentheses, array cannot have dynamic size";
+    sema_placement_new_no_operator = Error (1) "no matching {0} function for non-allocating placement new expression; include <new>";
 }
 
 impl DiagId {

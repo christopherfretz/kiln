@@ -1,0 +1,38 @@
+TranslationUnitDecl
+|-CXXRecordDecl referenced struct In definition
+| |-FieldDecl c 'char'
+| `-FieldDecl arr 'int[4]'
+|-CXXRecordDecl referenced struct S definition
+| |-FieldDecl a 'int'
+| |-FieldDecl d 'double'
+| |-FieldDecl in 'In[3]'
+| |-CXXRecordDecl struct definition
+| | |-FieldDecl u 'short'
+| | `-FieldDecl v 'short'
+| `-CXXRecordDecl union definition
+|   |-FieldDecl w 'int'
+|   `-FieldDecl f 'float'
+|-VarDecl od 'const unsigned long' constexpr cinit value=8
+| `-OffsetOfExpr 'unsigned long'
+|-VarDecl oi 'const unsigned long' constexpr cinit value=48
+| `-OffsetOfExpr 'unsigned long'
+|   |-IntegerLiteral 'int' 1
+|   `-IntegerLiteral 'int' 2
+|-VarDecl ov 'const unsigned long' constexpr cinit value=78
+| `-OffsetOfExpr 'unsigned long'
+|-VarDecl of 'const unsigned long' constexpr cinit value=80
+| `-OffsetOfExpr 'unsigned long'
+`-FunctionDecl g 'void ()'
+  `-CompoundStmt
+    |-DeclStmt
+    | `-VarDecl referenced k 'const int' constexpr cinit value=1
+    |   `-IntegerLiteral 'int' 1
+    |-DeclStmt
+    | `-VarDecl used x 'unsigned long' cinit
+    |   `-OffsetOfExpr 'unsigned long'
+    |     `-BinaryOperator 'int' '+'
+    |       |-ImplicitCastExpr 'int' <LValueToRValue>
+    |       | `-DeclRefExpr 'const int' lvalue Var 'k' 'const int' non_odr_use_constant
+    |       `-IntegerLiteral 'int' 1
+    `-CStyleCastExpr 'void' <ToVoid>
+      `-DeclRefExpr 'unsigned long' lvalue Var 'x' 'unsigned long'

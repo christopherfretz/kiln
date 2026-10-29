@@ -954,8 +954,31 @@ impl<'a> Printer<'a, '_> {
             | "CXXInheritedCtorInitExpr"
             | "ArrayInitLoopExpr"
             | "ArrayInitIndexExpr"
-            | "OpaqueValueExpr" => {
+            | "OpaqueValueExpr"
+            | "CXXScalarValueInitExpr"
+            | "CXXThrowExpr"
+            | "StmtExpr"
+            | "CompoundLiteralExpr"
+            | "BinaryConditionalOperator"
+            | "OffsetOfExpr" => {
                 line = self.expr_head(n, k)?;
+                kids_out = self.kid_trees(n)?;
+            }
+            "CXXNewExpr" | "CXXDeleteExpr" => {
+                let mut l = self.expr_head(n, k)?;
+                for (key, word) in [("isGlobal", " global"), ("isArray", " array")] {
+                    if flag(n, key) {
+                        l.push_str(word);
+                    }
+                }
+                let key = if k == "CXXNewExpr" { "operatorNewDecl" } else { "operatorDeleteDecl" };
+                if let Some(r) = n.get(key) {
+                    l.push(' ');
+                    l.push_str(&bare_ref(r)?);
+                    l.push(' ');
+                    l.push_str(&type_pair(r.get("type"), "allocation function")?);
+                }
+                line = l;
                 kids_out = self.kid_trees(n)?;
             }
             "IfStmt" => {

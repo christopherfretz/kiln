@@ -686,7 +686,7 @@ pub enum Defaulted {
 /// implicit_inline(1) constexpr_kind(2) virtual(1) pure(1) defaulted(2)
 /// deleted(1) explicit(1) trivial(1) immediate_escalating(1)
 /// has_contracts(1) is_coroutine(1) escalated(1) variadic(1) override(1)
-/// final(1) explicit_object(1) virtual_written(1)`.
+/// final(1) explicit_object(1) virtual_written(1) storage_inherited(1)`.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug)]
 pub struct FnSpec(u32);
 
@@ -758,9 +758,12 @@ impl FnSpec {
     }
     /// The bits [`DeclArena::mark_function`] may set after creation
     /// (properties known only after the body or the class is complete:
-    /// trivial, contracts, coroutine, escalated, and `deleted` for
-    /// `= default` members found deleted at `}`, spec/sema-class.md §8.2).
-    pub const LATE: FnSpec = FnSpec((1 << 10) | (1 << 12) | (1 << 14) | (1 << 15) | (1 << 16));
+    /// trivial, contracts, coroutine, escalated, `deleted` for
+    /// `= default` members found deleted at `}`, spec/sema-class.md §8.2,
+    /// and `implicit_inline` for a member function defined in its class,
+    /// known only at its body, [class.mfct]/1).
+    pub const LATE: FnSpec =
+        FnSpec((1 << 3) | (1 << 10) | (1 << 12) | (1 << 14) | (1 << 15) | (1 << 16));
 }
 
 bit_accessors!(FnSpec:
@@ -800,6 +803,11 @@ bit_accessors!(FnSpec:
     /// (clang's dump prints `virtual` only when written; an implicit
     /// overrider has [`Self::is_virtual`] without this bit).
     virtual_written / with_virtual_written = 21;
+    /// The storage class was inherited from a previous declaration
+    /// ([dcl.stc]/4: `static void f(); void f() {}`, or an out-of-line
+    /// static member function) rather than written here; clang's dump
+    /// prints the written storage class only.
+    storage_inherited / with_storage_inherited = 22;
 );
 
 /// Hot payload of function kinds (24 bytes, spec/ast.md §4.2).
@@ -2058,6 +2066,14 @@ impl DeclArena {
         );
         n.misc =
             n.misc.with_field(9, 3, u16::from(linkage)).with_field(12, 2, u16::from(visibility));
+    }
+
+    /// Sets the access of member `d` ([class.access]), right after the
+    /// builder created it: sema knows the current access-specifier, the
+    /// typed constructors take only a [`crate::builder::DeclHead`] (WP-066b).
+    pub fn set_access(&mut self, d: DeclId, a: Access) {
+        let n = &mut self.nodes[d.index() as usize];
+        n.misc = n.misc.with_access(a);
     }
 
     /// Sets a function's body (write-once, §2.4).

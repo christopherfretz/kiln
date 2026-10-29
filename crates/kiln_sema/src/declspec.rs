@@ -99,6 +99,8 @@ pub enum TypeSpecKind {
     Float128,
     /// `auto` (a placeholder deduced from the initializer, [dcl.spec.auto]).
     Auto,
+    /// `decltype(auto)` ([dcl.type.auto.deduct]/5).
+    DecltypeAuto,
     /// A type-name, class/enum specifier or elaborated-type-specifier:
     /// the type is in [`DeclSpec::named`].
     Named,
@@ -122,6 +124,7 @@ impl TypeSpecKind {
             TypeSpecKind::Double => "double",
             TypeSpecKind::Float128 => "__float128",
             TypeSpecKind::Auto => "auto",
+            TypeSpecKind::DecltypeAuto => "decltype(auto)",
         }
     }
 }
@@ -407,8 +410,14 @@ pub struct ParamInfo {
     /// An error was reported in the parameter.
     pub invalid: bool,
     /// The default argument, set by the parser after
-    /// [`crate::Sema::act_on_param_declarator`] returns.
+    /// [`crate::Sema::act_on_param_declarator`] returns (a default parsed
+    /// in place is already converted to the parameter's type by
+    /// [`crate::Sema::act_on_param_default_init`]).
     pub default_arg: DefaultArg,
+    /// Where the parameter-declaration starts and ends (just past its
+    /// last token, default argument included; the `-Wvexing-parse`
+    /// fix-its, [dcl.ambig.res]).
+    pub range: (Loc, Loc),
 }
 
 /// The default argument of a [`ParamInfo`] ([dcl.fct.default]).
@@ -417,8 +426,8 @@ pub enum DefaultArg {
     /// None written.
     #[default]
     None,
-    /// `= e`, parsed in place; applied with
-    /// [`crate::Sema::act_on_param_default_arg`] once the parameter exists.
+    /// `= e`, parsed in place and converted to the parameter's type
+    /// ([`crate::Sema::act_on_param_default_init`]).
     Parsed(ExprId),
     /// `=` at this location in a member function declared in a class
     /// being defined: the tokens are saved and replayed in the
@@ -472,6 +481,13 @@ pub enum Chunk {
         quals: Quals,
         /// ref-qualifier after the parameter list.
         ref_qual: RefQual,
+        /// The trailing return type ([dcl.fct]/2) and its `->`.
+        trailing: Option<(QualType, Loc)>,
+        /// The parentheses could also have been a direct initializer:
+        /// the parameter clause was ambiguous and resolved as a
+        /// declaration ([dcl.ambig.res]/1, clang's
+        /// `hasAmbiguousFunctionDeclarator`; `-Wvexing-parse`).
+        ambiguous: bool,
     },
 }
 
@@ -499,6 +515,13 @@ pub struct Declarator {
     /// The initializer syntax that follows (the parser peeks at `=`, `(`
     /// or `{` before the declaration is created; [dcl.init]/1).
     pub init_style: Option<kiln_ast::decl::InitStyle>,
+    /// The declarator may be followed by a direct initializer `( ... )`
+    /// (clang's `mayBeFollowedByCXXDirectInit`, less the grouping-paren
+    /// and name checks): a variable declaration that is not a `typedef`
+    /// or a block-scope `extern`. Set by the parser.
+    pub direct_init: bool,
+    /// Grouping parentheses were parsed (`int (x)`).
+    pub grouping: bool,
     /// The GNU asm label (`asm("name")` after the declarator, [dcl.asm]
     /// extension): an ordinary, non-empty `StringLiteral` expression and
     /// the extent of its tokens.
@@ -514,12 +537,15 @@ pub struct Declarator {
     pub pure: Option<Loc>,
     /// The function's own `noexcept ( constant-expression )`, saved for
     /// replay in a complete-class context ([class.mem]/7; spec/parse.md
-    /// §2.7): where `noexcept` is. The `Chunk::Function`'s `exc` is
+    /// §2.4): where `noexcept` is. The `Chunk::Function`'s `exc` is
     /// `ExcSpec::None` meanwhile; sema makes it `ExcSpec::Deferred(f)`.
     pub late_noexcept: Option<Loc>,
     /// `this` before a parameter-declaration (an explicit object
     /// parameter, P0847 [dcl.fct]/6).
     pub explicit_object: Option<Loc>,
+    /// The declarator-id is an operator-function-id (`operator new`):
+    /// `name` then holds the `operator` keyword and its location.
+    pub op_name: Option<OverloadedOperator>,
 }
 
 /// A declarator-id that is not an identifier ([dcl.decl]/4,
@@ -549,6 +575,8 @@ impl Declarator {
             loc,
             invalid: false,
             init_style: None,
+            direct_init: false,
+            grouping: false,
             asm_label: None,
             special: None,
             virt_override: None,
@@ -556,6 +584,7 @@ impl Declarator {
             pure: None,
             late_noexcept: None,
             explicit_object: None,
+            op_name: None,
         }
     }
 

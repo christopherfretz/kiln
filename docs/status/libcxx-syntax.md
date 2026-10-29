@@ -7,24 +7,41 @@ kiln -std=c++26 -stdlib=libc++ -fsyntax-only -ferror-limit=0 h.cpp
 ```
 
 The setup is libc++ 19.1.7 (Debian `libc++-19-dev`) on aarch64 Linux,
-with kiln at WP-065 (class syntax: member functions, special member
-names, friends, access labels, bases, deferred member parsing) on top of
-WP-063 and WP-062. "First blocker" is the first error kiln reports. The
-counts are all the errors in the header's closure; most are follow-ons
-of the same unsupported feature. Every header preprocesses identically
-to clang (see `pp-parity.md`), so these are all parser or Sema gaps.
+with kiln at WP-065 (the parser side of classes: member functions,
+special member names, friends, access labels, bases, deferred member
+parsing) merged with main at WP-066b (class members in Sema: member
+lookup through bases, access control, `this`, member access and calls,
+pointers to members, static data members, friends), WP-064, WP-061a and
+WP-061b. "First
+blocker" is the first error kiln reports. The counts are all the errors
+in the header's closure; most are follow-ons of the same unsupported
+feature. Every header preprocesses identically to clang (see
+`pp-parity.md`), so these are all parser or Sema gaps.
 
-| header | exit | errors | was (WP-063) | first blocker | main error kinds |
+| header | exit | errors | was (main at WP-066b) | first blocker | main error kinds |
 |---|---:|---:|---:|---|---|
-| `<cstddef>` | 1 | 54 | 43 | `__type_traits/enable_if.h:20:1`: templates | templates 43, overloaded operators 7, `decltype` 1 |
+| `<cstddef>` | 1 | 53 | 42 | `__type_traits/enable_if.h:20:1`: templates | templates 43, overloaded operators 7 |
 | `<cstdint>` | 0 | 0 | 0 | none (clean since WP-062; no warnings since WP-063) | |
 | `<climits>` | 0 | 0 | 0 | none (clean; was blocked by glibc's `__THROW`, `noexcept(true)`, before WP-058) | |
 | `<cfloat>` | 0 | 0 | 0 | none (clean) | |
-| `<cstring>` | 1 | 11 | 11 | `stddef.h:41:9`: `decltype` (`typedef decltype(nullptr) nullptr_t;`) | overloading 10, `decltype` 1 |
+| `<cstring>` | 1 | 10 | 10 | `string.h:89:20`: overloading `memchr` | overloading 10 |
 | `<version>` | 0 | 0 | 0 | none (clean) | |
-| `<initializer_list>` | 1 | 57 | 46 | `__type_traits/enable_if.h:20:1`: templates | templates 46, overloaded operators 7 |
-| `<compare>` | 1 | 447 | 419 | `__type_traits/enable_if.h:20:1`: templates | templates 289, friend declarations 36, undeclared identifiers 25 (`__builtin_isnan`, ...), static data members 11, out-of-line member definitions 11, member functions 9 |
-| `<type_traits>` | 1 | 465 | 454 | `__fwd/functional.h:20:1`: templates | templates 441, overloaded operators 7, member functions 4 |
+| `<initializer_list>` | 1 | 56 | 45 | `__type_traits/enable_if.h:20:1`: templates | templates 46, overloaded operators 7 |
+| `<compare>` | 1 | 417 | 385 | `__type_traits/enable_if.h:20:1`: templates | templates 289, overloaded operators 43, undeclared identifiers 25 (`__builtin_isnan`, ...), class-object initialization 11, constructors 5 |
+| `<type_traits>` | 1 | 464 | 453 | `__fwd/functional.h:20:1`: templates | templates 441, overloaded operators 8, constructors 2 |
+
+The single-header counts rose a little: before WP-065 the parser gave
+up on a class at its first constructor or operator (one "special member
+functions" error, then the rest of the class skipped), so the templates
+and operators later in those classes went unreported. Now every member
+is parsed and each special member reports its own Sema stub
+("constructors", "overloaded operators", ... "is not supported yet").
+The libc++-wide count fell by a third (below).
+
+No header reports a `decltype` error any more (WP-064): libc++'s
+`stddef.h` `typedef decltype(nullptr) nullptr_t;` now declares
+`std::nullptr_t`, which removes one error from each header that
+includes it.
 
 No header reports a using-declaration error any more (WP-062): the C
 wrapper headers' `using ::name _LIBCPP_USING_IF_EXISTS;` lists resolve,
@@ -33,30 +50,32 @@ and a name glibc does not declare becomes an unresolved
 clang. No header reports an asm-label or `__builtin_is_constant_evaluated`
 error any more (WP-063).
 
-WP-065 parses the class syntax that used to stop a declaration
-(`operator|`, constructors, destructors, friends, defaulted members), so
-errors now come from Sema's per-feature stubs ("member functions",
-"overloaded operators", "friend declarations", ... "is not supported
-yet") and parsing continues with the next declaration. That is why
-counts rose: `<cstddef>`'s seven `std::byte` operators were one
-`special member functions` error that skipped the declarations after
-it, and are now seven `overloaded operators` errors followed by the
-templates they used to hide. No parser error kind is new.
-
 ## What unblocks the most
 
 1. **Templates** (M3): `<cstddef>`, `<initializer_list>`, `<compare>`,
    `<type_traits>`, and through them almost every other header.
 2. **Overloading** (glibc's C++ `const`/non-`const` pairs of
-   `memchr`, `strchr`, ...) and `decltype` (`decltype(nullptr)` in
-   libc++'s `stddef.h`): all that is left in `<cstring>`.
-3. **Class members** (default member initializers, special member
-   functions, member functions, static data members): the largest
-   non-template error kinds across `bench/pp/headers.cpp`.
+   `memchr`, `strchr`, ...): all that is left in `<cstring>`.
+3. **Special members and operators**: with WP-065 and WP-066b merged,
+   no class *syntax* is rejected any more. Default member initializers
+   (5 227 errors on main), member functions (214), member function
+   qualifiers (204), access specifiers (168) and base classes (45) are
+   gone, and so are the 37 `'x' is a private member of 'C'` follow-ons
+   of the old `public:` rejection. Across `headers.cpp` the largest
+   class-related kinds are now Sema stubs: overloaded operators 362
+   (WP-068b), constructors 283 and destructors 63 (WP-067a), overloaded
+   member functions 62, class-object initialization 53 (WP-067).
+4. **Parameter recovery**: the 105 `expected ')'` errors come from
+   parameters whose type names something undeclared, mostly a template
+   kiln could not declare (`const string&` in `<stdexcept>`,
+   `const chrono::nanoseconds&`, `days __d`): clang reports
+   `unknown type name` there and carries on, while kiln's
+   decl-specifier recovery does not yet take an unknown `T` in
+   `const T &` as a type.
 
 using-declarations (WP-062), asm labels and
 `__builtin_is_constant_evaluated` (WP-063) no longer block anything:
-`<cstdint>` is clean, and `<cstring>` went from 56 errors (WP-058) to 11.
+`<cstdint>` is clean, and `<cstring>` went from 56 errors (WP-058) to 11 (10 after WP-064).
 Exception specifications (`noexcept`, `noexcept(true)`, `throw()`) no
 longer block anything (WP-058). Declarations that used to stop there
 now reach later gaps, so some counts rose (`<cstring>`'s overloading
@@ -67,9 +86,13 @@ kiln suppresses warnings in system headers the way clang does
 `unknown attribute '__type_visibility__'`-style noise is gone).
 
 No header in `bench/pp/headers.cpp` (99 libc++ headers) crashes the
-parser. `headers.cpp` as a whole exits 1, with 15 731 errors and no
-warnings (15 534 at WP-063, 15 632 at WP-062, 16 182 at WP-058, 13 826
-before it). The largest kinds are templates (6 854), default member
-initializers (5 140, almost all the one `Pass::level` line the file's
-x-macro section repeats), member functions (884), overloading (195),
-access specifiers (187) and overloaded operators (171).
+parser. `headers.cpp` as a whole exits 1, with 9 891 errors and no
+warnings (15 198 on main at WP-066b, 15 492 before it, 15 534 before
+WP-064, 15 632 at WP-062, 16 182 at WP-058, 13 826 before it: getting
+past exception specifications exposed more follow-on errors;
+using-declarations, asm labels, `__builtin_is_constant_evaluated`, the
+WP-064 expressions, the WP-066b class members and the WP-065 class
+syntax removed some). Its largest error kinds are templates (6 870),
+overloaded operators (362), `a type specifier is required` (332, mostly
+template follow-ons), undeclared identifiers (309), constructors (283)
+and expected unqualified-id (272).

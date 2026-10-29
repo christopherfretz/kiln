@@ -16,6 +16,7 @@ use kiln_ast::names::DeclName;
 use kiln_source::symbol::Symbol;
 
 use crate::Sema;
+use crate::conv::bases::{BasePath, subobject_key};
 use crate::scope::{Ns, ScopeKind};
 
 /// What a lookup is for: which declarations it may find.
@@ -47,6 +48,41 @@ pub struct Found {
     /// using-declaration, else the same declaration), clang's
     /// `FoundDecl`.
     pub found: Vec<DeclId>,
+    /// The naming class ([class.access.base]/5) when the name was found
+    /// by class member lookup: the class searched (the qualifier's class,
+    /// the object expression's class, or the class whose scope contained
+    /// the unqualified name).
+    pub naming: Option<DeclId>,
+    /// Set when class member lookup is ambiguous
+    /// ([class.member.lookup]/6); the diagnostic is
+    /// [`Sema::diagnose_member_ambiguity`]'s.
+    pub ambiguity: Option<MemberAmbiguity>,
+}
+
+/// Why a class member lookup is ambiguous ([class.member.lookup]/6).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum MemberAmbiguity {
+    /// Different declaration sets were found in different base classes
+    /// (clang `AmbiguousBaseSubobjectTypes`): every declaration found.
+    Types(Vec<DeclId>),
+    /// The same non-static member was found in distinct base class
+    /// subobjects (clang `AmbiguousBaseSubobjects`): the member and the
+    /// paths from the naming class to each subobject.
+    Subobjects {
+        /// The member found.
+        decl: DeclId,
+        /// The paths to the subobjects it was found in.
+        paths: Vec<BasePath>,
+    },
+}
+
+/// One result of the recursive class member search: the declarations
+/// found in some class, and the paths from the searched class to it.
+struct ClassHit {
+    found: Found,
+    paths: Vec<BasePath>,
+    /// Different declaration sets met: the lookup is ambiguous.
+    mixed: bool,
 }
 
 impl Found {
@@ -153,6 +189,9 @@ impl Sema<'_, '_> {
     /// [class.qual]). Namespaces nominated by using-directives in `ctx`
     /// are searched when `ctx` itself has no result.
     pub fn lookup_qualified(&self, ctx: DeclId, name: Symbol, kind: LookupKind) -> Found {
+        if self.kind_of(ctx) == DeclKind::CXXRecord {
+            return self.lookup_in_class(ctx, name, kind);
+        }
         let found = self.lookup_in(ctx, name, kind);
         if !found.is_empty() {
             return found;
@@ -216,6 +255,13 @@ impl Sema<'_, '_> {
                 continue;
             }
             let Some(entity) = s.entity else { continue };
+            if s.kind == ScopeKind::Record {
+                let found = self.lookup_in_class(entity, name, kind);
+                if !found.is_empty() || found.ambiguity.is_some() {
+                    return found;
+                }
+                continue;
+            }
             let mut v: Vec<DeclId> =
                 self.ast.lookup_local(entity, DeclName::ident(name)).iter_ordinary().collect();
             let own = self.filter(v.clone(), kind);
@@ -245,8 +291,182 @@ impl Sema<'_, '_> {
         Found::default()
     }
 
+    /// Class member lookup of `name` in class `c` ([class.member.lookup]):
+    /// the class's own members (its injected-class-name included,
+    /// [class.pre]/2), else the members found in its direct bases,
+    /// searched recursively. A name found in a class hides the same name
+    /// in that class's bases. Different declaration sets found through
+    /// different bases, or one non-static member found in distinct base
+    /// subobjects, make the lookup ambiguous ([`Found::ambiguity`]); a
+    /// static member, type or enumerator found in several subobjects of
+    /// the same type is not ([class.member.lookup]/6). Virtual base
+    /// classes are not supported (WP-078a), so no declaration dominates
+    /// another.
+    pub fn lookup_in_class(&self, c: DeclId, name: Symbol, kind: LookupKind) -> Found {
+        let def = self.ast.definition(c).unwrap_or(c);
+        let Some(hit) = self.class_hit(def, name, kind, 0) else {
+            return Found { naming: Some(def), ..Found::default() };
+        };
+        let mut found = hit.found;
+        found.naming = Some(def);
+        if hit.mixed {
+            found.ambiguity = Some(MemberAmbiguity::Types(found.decls.clone()));
+            return found;
+        }
+        let mut keys: Vec<(Option<DeclId>, Vec<u32>)> = Vec::new();
+        for p in &hit.paths {
+            let k = subobject_key(self, p);
+            if !keys.contains(&k) {
+                keys.push(k);
+            }
+        }
+        if keys.len() > 1
+            && !found.decls.iter().all(|&d| self.is_static_member_kind(d))
+            && let Some(&decl) = found.decls.first()
+        {
+            found.ambiguity = Some(MemberAmbiguity::Subobjects { decl, paths: hit.paths });
+        }
+        found
+    }
+
+    /// clang's `HasOnlyStaticMembers` test for one declaration: a static
+    /// data member, a static member function, a type or an enumerator.
+    fn is_static_member_kind(&self, d: DeclId) -> bool {
+        match self.kind_of(d) {
+            DeclKind::Var | DeclKind::EnumConstant => true,
+            k if is_type_kind(k) => true,
+            DeclKind::CXXMethod => self
+                .ast
+                .decls
+                .function(d)
+                .is_some_and(|f| f.spec.storage() == kiln_ast::decl::FnStorage::Static),
+            _ => false,
+        }
+    }
+
+    fn class_hit(
+        &self,
+        def: DeclId,
+        name: Symbol,
+        kind: LookupKind,
+        depth: usize,
+    ) -> Option<ClassHit> {
+        if depth > 256 {
+            return None;
+        }
+        let mut own = self.filter(
+            self.ast.lookup_local(def, DeclName::ident(name)).iter_ordinary().collect(),
+            kind,
+        );
+        if own.is_empty()
+            && self.ast.decls.get(def).name() == DeclName::ident(name)
+            && !matches!(kind, LookupKind::All)
+        {
+            // The injected-class-name ([class.pre]/2).
+            own.decls.push(def);
+            own.found.push(def);
+        }
+        if !own.is_empty() {
+            let empty = BasePath {
+                specs: Vec::new(),
+                classes: Vec::new(),
+                written: Vec::new(),
+                last_virtual: None,
+                first_virtual: None,
+            };
+            return Some(ClassHit { found: own, paths: vec![empty], mixed: false });
+        }
+        let rec = self.ast.decls.record(def)?;
+        let idx: Vec<u32> = self.ast.lists.get(rec.bases).to_vec();
+        let specs: Vec<kiln_ast::decl::BaseSpec> =
+            self.ast.decls.bases(def, &self.ast.lists).copied().collect();
+        let mut acc: Option<ClassHit> = None;
+        for (&i, spec) in idx.iter().zip(specs) {
+            let Some(b) = self.ast.types.as_record(spec.ty) else { continue };
+            let Some(bdef) = self.ast.definition(b) else { continue };
+            let Some(mut sub) = self.class_hit(bdef, name, kind, depth + 1) else { continue };
+            for p in &mut sub.paths {
+                p.specs.insert(0, i);
+                p.classes.insert(0, b);
+                p.written.insert(0, spec.ty);
+                if spec.is_virtual {
+                    p.first_virtual = Some(b);
+                    p.last_virtual = p.last_virtual.or(Some(b));
+                }
+            }
+            acc = Some(match acc {
+                None => sub,
+                Some(mut a) => {
+                    let firsts = |f: &Found| -> Vec<DeclId> {
+                        let mut v: Vec<DeclId> =
+                            f.decls.iter().map(|&d| self.ast.first(d)).collect();
+                        v.sort_unstable();
+                        v
+                    };
+                    if !(a.mixed || sub.mixed) && firsts(&a.found) == firsts(&sub.found) {
+                        a.paths.extend(sub.paths);
+                    } else {
+                        a.mixed = true;
+                        for (j, &d) in sub.found.decls.iter().enumerate() {
+                            let f = self.ast.first(d);
+                            if !a.found.decls.iter().any(|&o| self.ast.first(o) == f) {
+                                a.found.decls.push(d);
+                                a.found.found.push(sub.found.found[j]);
+                            }
+                        }
+                        a.paths.extend(sub.paths);
+                    }
+                    a
+                }
+            });
+        }
+        acc
+    }
+
+    /// Reports an ambiguous class member lookup ([class.member.lookup]/6)
+    /// with clang's diagnostics; true if `found` was ambiguous.
+    pub(crate) fn diagnose_member_ambiguity(
+        &self,
+        found: &Found,
+        name: Symbol,
+        loc: kiln_source::Loc,
+    ) -> bool {
+        let Some(amb) = &found.ambiguity else { return false };
+        let text = self.ast.symbols().as_str(name).to_owned();
+        match amb {
+            MemberAmbiguity::Types(decls) => {
+                let mut msg =
+                    self.diag(kiln_diag::DiagId::sema_ambiguous_member_types, loc).arg(text);
+                for &d in decls {
+                    let loc = self.ast.decls.get(d).loc();
+                    msg = msg
+                        .with_note(self.diag(kiln_diag::DiagId::note_ambiguous_member_found, loc));
+                }
+                self.emit(msg);
+            }
+            MemberAmbiguity::Subobjects { decl, paths } => {
+                let naming = found.naming.unwrap_or(*decl);
+                let nty = self.tag_type(naming);
+                let base_ty = paths.first().and_then(|p| p.written.last().copied()).unwrap_or(nty);
+                let display = crate::conv::bases::ambiguous_paths_string(self, nty, paths);
+                let note = self.diag(
+                    kiln_diag::DiagId::note_ambiguous_member_found,
+                    self.ast.decls.get(*decl).loc(),
+                );
+                let msg = self
+                    .diag(kiln_diag::DiagId::sema_ambiguous_member_subobjects, loc)
+                    .arg(text)
+                    .arg(self.ty_arg(base_ty))
+                    .arg(display)
+                    .with_note(note);
+                self.emit(msg);
+            }
+        }
+        true
+    }
+
     /// True if namespace `outer` is `inner` or encloses it.
-    fn encloses(&self, outer: DeclId, inner: DeclId) -> bool {
+    pub(crate) fn encloses(&self, outer: DeclId, inner: DeclId) -> bool {
         let outer = self.ast.first(outer);
         let mut cur = Some(inner);
         for _ in 0..10_000 {

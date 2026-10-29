@@ -67,6 +67,31 @@ fn calls_every_class_makes_are_silent() {
 fn class_features_report_unsupported() {
     with_sema(|s, sink| {
         let (r, f) = open_class(s, TagKind::Struct);
+        s.act_on_defaulted(f, L);
+        assert_eq!(messages(sink), unsupported("defaulted functions"));
+        s.act_on_deleted(f, L, None);
+        assert_eq!(messages(sink), unsupported("deleted functions"));
+        s.act_on_exception_spec(f, ExcSpec::BasicNoexcept);
+        assert_eq!(messages(sink), unsupported("exception specifications of member functions"));
+        let one = int_lit(s, QualType::INT, 1);
+        let init = MemInitInfo {
+            id: MemInitId::Ident(name(s, "x").as_ident().unwrap()),
+            loc: L,
+            init: Initializer::Paren(vec![one], L, L),
+            pack_expansion: false,
+        };
+        s.act_on_mem_initializers(f, &[init], L);
+        assert_eq!(messages(sink), unsupported("constructor initializers"));
+        s.act_on_finish_record_definition(r, true);
+    });
+}
+
+/// WP-066b: base-clauses, access specifiers, friends, default member
+/// initializers, default arguments and `this` are implemented.
+#[test]
+fn class_features_landed_in_066b() {
+    with_sema(|s, sink| {
+        let (r, f) = open_class(s, TagKind::Struct);
         let base = BaseSpecInfo {
             ty: QualType::INT,
             loc: L,
@@ -76,37 +101,33 @@ fn class_features_report_unsupported() {
             attrs: Vec::new(),
         };
         s.act_on_base_specifiers(r, &[base]);
-        assert_eq!(messages(sink), unsupported("base classes"));
-        assert_eq!(s.act_on_access_spec(Access::Private, L), None);
-        assert_eq!(messages(sink), unsupported("access specifiers"));
-        assert_eq!(s.act_on_friend(&DeclSpec::default(), QualType::INT, None, L), None);
-        assert_eq!(messages(sink), unsupported("friend declarations"));
-        s.act_on_defaulted(f, L);
-        assert_eq!(messages(sink), unsupported("defaulted functions"));
-        s.act_on_deleted(f, L, None);
-        assert_eq!(messages(sink), unsupported("deleted functions"));
-        s.act_on_exception_spec(f, ExcSpec::BasicNoexcept);
-        assert_eq!(messages(sink), unsupported("exception specifications of member functions"));
+        assert_eq!(messages(sink), vec!["error: base specifier must name a class".to_string()]);
+        let a = s.act_on_access_spec(Access::Private, L).expect("AccessSpec decl");
+        assert_eq!(s.ast.decls.get(a).kind(), DeclKind::AccessSpec);
+        assert_eq!(s.current_class().map(|c| c.access), Some(Access::Private));
+        assert!(s.act_on_friend(&DeclSpec::default(), QualType::INT, None, L).is_some());
+        assert_eq!(messages(sink), Vec::<String>::new());
         let h = DeclHead::new(r, name(s, "x"), L);
         let x = s.ast.builder().field(h, QualType::INT, None, 0);
+        s.act_on_start_field_init(x);
+        let this = s.act_on_this(L);
+        assert!(!s.is_error_expr(this));
         let one = int_lit(s, QualType::INT, 1);
         s.act_on_field_init(x, Initializer::Expr(one));
-        assert_eq!(messages(sink), unsupported("default member initializers"));
+        assert_eq!(messages(sink), Vec::<String>::new());
         let pn = name(s, "p");
         let p = s.ast.builder().param(f, pn, L, QualType::INT, 0, 0);
-        s.act_on_param_default_arg(p, one);
-        assert_eq!(messages(sink), unsupported("default arguments"));
-        let init = MemInitInfo {
-            id: MemInitId::Ident(name(s, "x").as_ident().unwrap()),
-            loc: L,
-            init: Initializer::Paren(vec![one], L, L),
-            pack_expansion: false,
-        };
-        s.act_on_mem_initializers(f, &[init], L);
-        assert_eq!(messages(sink), unsupported("constructor initializers"));
+        let two = int_lit(s, QualType::INT, 2);
+        s.act_on_param_default_arg(p, two);
+        assert_eq!(messages(sink), Vec::<String>::new());
+        s.act_on_finish_record_definition(r, true);
         let this = s.act_on_this(L);
         assert!(s.is_error_expr(this));
-        assert_eq!(messages(sink), unsupported("'this'"));
-        s.act_on_finish_record_definition(r, true);
+        assert_eq!(
+            messages(sink),
+            vec![
+                "error: invalid use of 'this' outside of a non-static member function".to_string()
+            ]
+        );
     });
 }
