@@ -66,6 +66,8 @@ impl Sema<'_, '_> {
     ) -> Option<ExprId> {
         let target = self.ast.types.as_record(to)?;
         let source = self.ast.types.as_record(self.ety(e))?;
+        self.instantiate_for_init(target, entity_at);
+        self.instantiate_for_init(source, self.begin_loc(e));
         let class = self.ast.definition(target)?;
         let src = conv::bases::complete_class(self, source)?;
         if !conv::bases::same_class(self, src, class)
@@ -114,6 +116,7 @@ impl Sema<'_, '_> {
         site: ConstructSite,
     ) -> Option<ExprId> {
         let target = self.ast.types.as_record(ty)?;
+        self.instantiate_for_init(target, site.loc);
         let class = self.ast.definition(target)?;
         let class = conv::bases::complete_class(self, class)?;
         let (entity, ck) = self.take_ctor_entity();
@@ -161,6 +164,7 @@ impl Sema<'_, '_> {
     /// `None` when `ty` is not a complete class.
     pub(crate) fn value_init_class(&mut self, ty: QualType, loc: Loc) -> Option<ExprId> {
         let target = self.ast.types.as_record(ty)?;
+        self.instantiate_for_init(target, loc);
         let class = self.ast.definition(target)?;
         let class = conv::bases::complete_class(self, class)?;
         let (entity, kind) = self.take_ctor_entity();
@@ -232,6 +236,7 @@ impl Sema<'_, '_> {
         rparen: Loc,
     ) -> Option<ExprId> {
         let target = self.ast.types.as_record(ty)?;
+        self.instantiate_for_init(target, loc);
         let class = self.ast.definition(target)?;
         let class = conv::bases::complete_class(self, class)?;
         let c = self.construct_special(

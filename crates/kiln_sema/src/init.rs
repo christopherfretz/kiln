@@ -122,6 +122,10 @@ impl Sema<'_, '_> {
         at: Loc,
         temp_end: Option<Loc>,
     ) -> Option<ExprId> {
+        if let Some(r) = self.ast.types.as_record(ty) {
+            // Whether it is an aggregate needs its definition.
+            self.instantiate_for_init(r, at);
+        }
         if self.is_error_type(ty) || self.ast.types.as_record(ty).is_none() || self.is_aggregate(ty)
         {
             return None;
@@ -528,6 +532,10 @@ impl Sema<'_, '_> {
         l: &InitList,
         entity: Option<Loc>,
     ) -> ExprId {
+        if let Some(r) = self.ast.types.as_record(ty) {
+            // Whether it is an aggregate needs its definition.
+            self.instantiate_for_init(r, l.lbrace);
+        }
         if self.is_aggregate(ty) {
             if self.ast.types.as_record(ty).is_some() && !self.require_complete(ty, l.lbrace) {
                 let msg = self

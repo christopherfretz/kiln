@@ -357,6 +357,20 @@ impl Sema<'_, '_> {
         self.is_complete(q)
     }
 
+    /// Instantiates class `d` at `loc` if it is an undefined class
+    /// template specialization or member class of one ([temp.inst]/2;
+    /// clang's `RequireCompleteType` in `TryConstructorInitialization`,
+    /// `isCompleteType` in `TryUserDefinedConversion`), before an
+    /// initialization looks at its constructors. An undefined template is
+    /// not diagnosed: the caller reports the incomplete class.
+    pub(crate) fn instantiate_for_init(&mut self, d: DeclId, loc: Loc) {
+        if (self.ast.spec_info(d).is_some() || self.ast.instantiated_from(d).is_some())
+            && self.ast.definition(d).is_none()
+        {
+            let _ = self.instantiate_class(d, loc, false);
+        }
+    }
+
     /// A class named in a nested-name-specifier must be complete
     /// ([expr.prim.id.qual]/1); false after a diagnostic.
     pub fn require_complete_nns(&mut self, q: QualType, loc: Loc) -> bool {

@@ -238,6 +238,11 @@ impl Sema<'_, '_> {
         let ar = self.ast.types.as_record(aty);
         let pr = self.ast.types.as_record(referent);
         if let Some(pr) = pr {
+            let at = self.begin_loc(a);
+            self.instantiate_for_init(pr, at);
+            if let Some(ar) = ar {
+                self.instantiate_for_init(ar, at);
+            }
             let pc = self.class_def(pr);
             if let Some(ar) = ar
                 && let Some(ac) = conv::bases::complete_class(self, ar)
@@ -345,6 +350,7 @@ impl Sema<'_, '_> {
     /// the class `pc` ([over.ics.user]/1): none means no conversion
     /// sequence; a deleted one still forms one.
     fn converting_ctor_fit(&mut self, a: ExprId, pc: DeclId) -> Option<Fit> {
+        self.instantiate_for_init(pc, self.begin_loc(a));
         let Some(pc) = conv::bases::complete_class(self, pc) else {
             return Some(Fit::User { known: false });
         };
