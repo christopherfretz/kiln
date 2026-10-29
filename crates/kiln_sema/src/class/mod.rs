@@ -19,6 +19,7 @@ use kiln_source::symbol::Symbol;
 use crate::Sema;
 use crate::declspec::{DeclSpec, Declarator};
 use crate::init::Initializer;
+use crate::scope::{Scope, ScopeKind};
 
 /// One base-specifier as parsed ([class.derived.general]/1), the input of
 /// [`Sema::act_on_base_specifiers`] (spec/sema-class.md §3.1).
@@ -165,6 +166,20 @@ impl Sema<'_, '_> {
         self.classes.last()
     }
 
+    /// The class-virt-specifier `final` at `loc` of class `r`
+    /// ([class.pre]/1, spec/sema-class.md §2.1 step 2a): called after
+    /// `act_on_start_record_definition` and before
+    /// [`Sema::act_on_base_specifiers`]. Sets `DefinitionBits::FINAL`,
+    /// merged into the definition at `}`.
+    pub fn act_on_class_final(&mut self, r: DeclId, loc: Loc) {
+        let _ = loc;
+        if let Some(c) = self.classes.last_mut()
+            && c.record == r
+        {
+            c.bits = c.bits.with(DefinitionBits::FINAL);
+        }
+    }
+
     /// The base-clause of class `r` (spec/sema-class.md §3.1; WP-066b,
     /// virtual bases WP-078a). Called once per class definition, after
     /// `act_on_start_record_definition` and before any member, with an
@@ -280,6 +295,65 @@ impl Sema<'_, '_> {
     /// `ActOnFinishCXXNonNestedClass` checks.
     pub fn act_on_finish_class_contexts(&mut self, r: DeclId) {
         let _ = r;
+    }
+
+    /// Re-enters the scope of class `r` to replay its saved complete-class
+    /// contexts after the outermost class's `}` (spec/sema-class.md §2.7,
+    /// clang `ActOnStartDelayedMemberDeclarations`). Paired with
+    /// [`Sema::act_on_finish_delayed_class`]; nests for nested classes.
+    pub fn act_on_start_delayed_class(&mut self, r: DeclId) {
+        self.scopes.push(Scope::new(ScopeKind::Record, Some(r)));
+        self.ctx = r;
+    }
+
+    /// Leaves the scope entered by [`Sema::act_on_start_delayed_class`].
+    pub fn act_on_finish_delayed_class(&mut self, r: DeclId) {
+        if self.scopes.last().is_some_and(|s| s.kind == ScopeKind::Record && s.entity == Some(r)) {
+            self.scopes.pop();
+        }
+        self.ctx = self
+            .ast
+            .decls
+            .lexical_ctx(r)
+            .or_else(|| self.ast.decls.get(r).ctx())
+            .unwrap_or(self.ast.tu);
+    }
+
+    /// Re-enters the parameter scope of member function `f` to replay its
+    /// default arguments and *noexcept-specifier* (spec/sema-class.md §2.7,
+    /// clang `ActOnReenterCXXMethodParameter`): the earlier parameters are
+    /// visible ([basic.scope.param]). Paired with
+    /// [`Sema::act_on_finish_delayed_method`].
+    pub fn act_on_start_delayed_method(&mut self, f: DeclId) {
+        self.scopes.push(Scope::new(ScopeKind::Prototype, None));
+        let params: Vec<DeclId> = self
+            .ast
+            .decls
+            .function(f)
+            .map(|x| self.ast.lists.iter::<DeclId>(x.params).collect())
+            .unwrap_or_default();
+        for p in params {
+            if let Some(sym) = self.ast.decls.get(p).name().as_ident() {
+                self.push_local(sym, p);
+            }
+        }
+    }
+
+    /// Leaves the scope entered by [`Sema::act_on_start_delayed_method`].
+    pub fn act_on_finish_delayed_method(&mut self, f: DeclId) {
+        let _ = f;
+        if self.scopes.last().is_some_and(|s| s.kind == ScopeKind::Prototype) {
+            self.scopes.pop();
+        }
+    }
+
+    /// Before the replayed default member initializer of `field` is parsed
+    /// (spec/sema-class.md §2.7): the hook where WP-066b makes `this`
+    /// usable and opens the initializer's full-expression context. The
+    /// parser follows it with [`Sema::act_on_field_init`] when the
+    /// initializer parsed (after a syntax error there is no second call).
+    pub fn act_on_start_field_init(&mut self, field: DeclId) {
+        let _ = field;
     }
 
     /// `this` at `loc` ([expr.prim.this], spec/sema-class.md §2.5;

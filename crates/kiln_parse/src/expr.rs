@@ -440,8 +440,11 @@ impl Parser<'_, '_> {
                     None
                 }
                 _ if is_simple_type_kw(k) => self.parse_functional_cast(),
-                Kw::This
-                | Kw::Throw
+                Kw::This => {
+                    self.bump();
+                    Some(self.s.act_on_this(loc))
+                }
+                Kw::Throw
                 | Kw::Typeid
                 | Kw::Requires
                 | Kw::CoYield

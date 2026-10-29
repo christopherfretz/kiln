@@ -11,7 +11,7 @@ use kiln_ast::decl::{
 use kiln_ast::expr::{CastKind, ExprKind};
 use kiln_ast::ids::RawId;
 use kiln_ast::names::DeclName;
-use kiln_ast::types::{AutoKeyword, BuiltinType, ExcSpec, FuncInfo, Quals, TagKeyword, TypeView};
+use kiln_ast::types::{AutoKeyword, BuiltinType, ExcSpec, FuncInfo, Quals, RefQual, TagKeyword, TypeView};
 use kiln_ast::{AttrId, DeclHead, DeclId, ExprId, QualType, StmtId};
 use kiln_diag::DiagId;
 use kiln_source::Loc;
@@ -21,8 +21,8 @@ use crate::class::ClassBuild;
 use crate::constfold;
 use crate::conv::{self, ConvCtx};
 use crate::declspec::{
-    Chunk, DeclSpec, Declarator, DeclaratorContext, DefaultArg, ParamInfo, Sign, StorageSpec,
-    TypeSpecKind, Width,
+    Chunk, DeclSpec, Declarator, DeclaratorContext, DefaultArg, ParamInfo, Sign, SpecialName,
+    StorageSpec, TypeSpecKind, Width,
 };
 use crate::init::Initializer;
 use crate::lookup::{LookupKind, is_tag_kind, is_type_kind};
@@ -180,6 +180,14 @@ impl Sema<'_, '_> {
     }
 
     fn declarator_name(&self, d: &Declarator) -> String {
+        if let Some((sp, _)) = d.special {
+            return match sp {
+                SpecialName::Constructor(n) => sym_str(self, n),
+                SpecialName::Destructor(n) => format!("~{}", sym_str(self, n)),
+                SpecialName::Operator(op) => format!("operator{}", op.spelling()),
+                SpecialName::Conversion(t) => format!("operator {}", self.ty_arg(t)),
+            };
+        }
         d.name.map_or_else(|| "type name".to_owned(), |(n, _)| sym_str(self, n))
     }
 
@@ -304,7 +312,7 @@ impl Sema<'_, '_> {
                         },
                     };
                 }
-                Chunk::Function { params, variadic, loc, exc, .. } => {
+                Chunk::Function { params, variadic, loc, exc, quals, ref_qual, .. } => {
                     prev_ref = false;
                     if t.is_array(ty) || t.is_function(ty) {
                         let which = if t.is_array(ty) { "0" } else { "1" };
@@ -316,7 +324,10 @@ impl Sema<'_, '_> {
                         return QualType::ERROR;
                     }
                     let ptys: Vec<QualType> = params.iter().map(|p| p.ty).collect();
-                    let info = FuncInfo::new().with_variadic(*variadic);
+                    let info = FuncInfo::new()
+                        .with_variadic(*variadic)
+                        .with_this_quals(*quals)
+                        .with_ref_qual(*ref_qual);
                     ty = self.ast.types.function(ty, &ptys, info, *exc);
                 }
             }
@@ -378,6 +389,10 @@ impl Sema<'_, '_> {
     /// A parameter-declaration ([dcl.fct]/3): its type, adjusted
     /// ([dcl.fct]/5: arrays and functions become pointers).
     pub fn act_on_param_declarator(&mut self, ds: &DeclSpec, d: &Declarator) -> ParamInfo {
+        if let Some(l) = d.explicit_object {
+            // P0847 (spec/sema-class.md §2.5, Q4).
+            self.unsupported("explicit object parameters", l);
+        }
         let base = self.type_from_declspec(ds);
         let mut ty = self.type_for_declarator(base, d);
         if let Some((s, loc)) = ds.storage
@@ -472,6 +487,54 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// The declarator forms the parser accepts but sema does not handle yet
+    /// (spec/parse.md §9): reports `{what} is not supported yet`, returning
+    /// true when the declaration is dropped. Member functions are reported
+    /// as a whole by [`Sema::act_on_declarator`] (WP-066b); elsewhere the
+    /// function specifiers are reported and ignored.
+    fn unsupported_declarator(&mut self, ds: &DeclSpec, d: &Declarator) -> bool {
+        if let Some(q) = d.qualifier
+            && self.ast.decls.record(q).is_some()
+        {
+            self.unsupported("out-of-line definitions of class members", d.name_loc());
+            return true;
+        }
+        let member_fn = d.ctx == DeclaratorContext::Member
+            && d.is_function_declarator()
+            && !ds.is_typedef();
+        if member_fn {
+            return false;
+        }
+        if let Some((sp, loc)) = d.special {
+            let what = match sp {
+                SpecialName::Constructor(_) => "constructors",
+                SpecialName::Destructor(_) => "destructors",
+                SpecialName::Conversion(_) => "conversion functions",
+                SpecialName::Operator(_) => "overloaded operators",
+            };
+            self.unsupported(what, loc);
+            return true;
+        }
+        let specs = [
+            (ds.virtual_, "'virtual'"),
+            (ds.explicit, "'explicit'"),
+            (ds.consteval, "'consteval'"),
+            (ds.friend, "'friend'"),
+        ];
+        for (at, what) in specs {
+            if let Some(l) = at {
+                self.unsupported(what, l);
+            }
+        }
+        if !ds.is_typedef()
+            && let Some(Chunk::Function { quals, ref_qual, .. }) = d.chunks.first()
+            && (!quals.is_empty() || *ref_qual != RefQual::None)
+        {
+            self.unsupported("member function qualifiers", d.name_loc());
+        }
+        false
+    }
+
     /// A declarator in a simple-declaration or member-declaration: creates
     /// the variable, function, typedef or field (spec/sema.md §4.2). The
     /// caller then supplies the initializer ([`Sema::act_on_init`] /
@@ -482,7 +545,15 @@ impl Sema<'_, '_> {
         base: QualType,
         d: &Declarator,
     ) -> Option<DeclId> {
+        if self.unsupported_declarator(ds, d) {
+            return None;
+        }
         let ty = self.type_for_declarator(base, d);
+        if d.ctx == DeclaratorContext::Member && !ds.is_typedef() && self.ast.types.is_function(ty)
+        {
+            self.unsupported("member functions", d.loc);
+            return None;
+        }
         let invalid = ds.invalid || d.invalid || self.is_error_type(ty);
         let Some((name, name_loc)) = d.name else {
             if d.ctx == DeclaratorContext::Member && d.bit_width.is_some() {
@@ -497,10 +568,6 @@ impl Sema<'_, '_> {
         let decl = if ds.is_typedef() {
             self.act_on_typedef(ds, ty, d, name, false)
         } else if self.ast.types.is_function(ty) {
-            if d.ctx == DeclaratorContext::Member {
-                self.unsupported("member functions", d.loc);
-                return None;
-            }
             self.act_on_function(ds, ty, d, name)
         } else if d.ctx == DeclaratorContext::Member {
             self.act_on_field(ds, ty, d, invalid)
@@ -1625,8 +1692,11 @@ impl Sema<'_, '_> {
     /// must be known before the definition's bits freeze.
     pub fn act_on_finish_record_definition(&mut self, r: DeclId, then_semi: bool) {
         self.scopes.pop();
-        if self.classes.last().is_some_and(|c| c.record == r) {
-            self.classes.pop();
+        let mut built = DefinitionBits::empty();
+        if self.classes.last().is_some_and(|c| c.record == r)
+            && let Some(c) = self.classes.pop()
+        {
+            built = c.bits;
         }
         self.defining.retain(|&d| d != r);
         self.ctx = self
@@ -1635,7 +1705,8 @@ impl Sema<'_, '_> {
             .lexical_ctx(r)
             .or_else(|| self.ast.decls.get(r).ctx())
             .unwrap_or(self.ast.tu);
-        let mut bits = DefinitionBits::COMPLETE
+        let mut bits = built
+            .with(DefinitionBits::COMPLETE)
             .with(DefinitionBits::AGGREGATE)
             .with(DefinitionBits::STANDARD_LAYOUT)
             .with(DefinitionBits::TRIVIALLY_COPYABLE)

@@ -7,6 +7,7 @@
 #![forbid(unsafe_code)]
 
 mod attr;
+mod class;
 mod decl;
 mod expr;
 pub mod keywords;

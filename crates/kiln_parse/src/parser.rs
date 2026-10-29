@@ -5,12 +5,13 @@ use std::cell::RefCell;
 use kiln_ast::{DeclId, ExprId, NnsId};
 use kiln_diag::{Diag, DiagId};
 use kiln_lex::literal::LiteralOptions;
-use kiln_lex::{LexOptions, Punct, Std, TokKind, Token};
+use kiln_lex::{LexOptions, Punct, Std, TokFlags, TokKind, Token};
 use kiln_sema::using::Qualifier;
 use kiln_sema::{NameClass, Sema};
 use kiln_source::symbol::Symbol;
-use kiln_source::{Loc, SourceManager};
+use kiln_source::{Loc, SourceManager, Span};
 
+use crate::class::LateClass;
 use crate::keywords::{Keywords, Kw};
 use crate::tokens::TokenSource;
 
@@ -25,6 +26,25 @@ enum Bracket {
     Paren = 0,
     Square = 1,
     Brace = 2,
+}
+
+/// A saved token buffer being re-parsed (spec/parse.md §2.7): while one
+/// is active, [`Parser::tok_at`] and [`Parser::bump`] read its tokens
+/// (indices from 0) and then an `Eof` sentinel, and the state of the
+/// interrupted stream is restored by [`Parser::end_replay`].
+///
+/// An `inject` frame instead holds tokens inserted before the current
+/// one (clang's `EnterToken`, [`Parser::inject_semi`]): after them the
+/// interrupted stream continues, and the frame pops itself once they are
+/// consumed.
+struct Replay {
+    toks: Vec<Token>,
+    eof: Token,
+    pos: usize,
+    cur: Token,
+    prev_hi: Loc,
+    depth: [u32; 3],
+    inject: bool,
 }
 
 /// A recursive-descent parser over the preprocessor's token stream,
@@ -50,6 +70,18 @@ pub struct Parser<'a, 'sm> {
     pub(crate) lex_opts: LexOptions,
     pub(crate) lit_opts: LiteralOptions,
     pub(crate) std: Std,
+    /// Active token replays, innermost last.
+    replay: Vec<Replay>,
+    /// The classes being defined whose complete-class contexts are saved
+    /// for replay (clang's `ParsingClassStack`), innermost last.
+    pub(crate) late: Vec<LateClass>,
+    /// The saved default arguments and *noexcept-specifier* of the member
+    /// function declarator being parsed, taken by the member-declaration.
+    pub(crate) late_fn: crate::class::LateFnParts,
+    /// The `act_on_*` calls the class parser made, in order (for the
+    /// sequence tests of spec/sema-class.md §2.1).
+    #[cfg(test)]
+    pub(crate) trace: Vec<String>,
 }
 
 impl std::fmt::Debug for Parser<'_, '_> {
@@ -80,6 +112,11 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             lex_opts,
             lit_opts,
             std,
+            replay: Vec::new(),
+            late: Vec::new(),
+            late_fn: crate::class::LateFnParts::default(),
+            #[cfg(test)]
+            trace: Vec::new(),
         };
         p.handle_events(0);
         p
@@ -119,7 +156,20 @@ impl<'a, 'sm> Parser<'a, 'sm> {
     /// The token at absolute index `i` (`Eof` past the end; at most
     /// [`crate::tokens::KEEP_BEHIND`] tokens before the current one).
     pub(crate) fn tok_at(&self, i: usize) -> Token {
-        if i == self.pos { self.cur } else { self.src.borrow_mut().get(i) }
+        if i == self.pos { self.cur } else { self.tok_in(self.replay.len(), i) }
+    }
+
+    /// The token at index `i` of the stream `level` replays deep (0 is the
+    /// token source).
+    fn tok_in(&self, level: usize, i: usize) -> Token {
+        let Some(r) = level.checked_sub(1).and_then(|l| self.replay.get(l)) else {
+            return self.src.borrow_mut().get(i);
+        };
+        match r.toks.get(i) {
+            Some(t) => *t,
+            None if r.inject => self.tok_in(level - 1, r.pos + (i - r.toks.len())),
+            None => r.eof,
+        }
     }
 
     /// The current index (for lookahead scans).
@@ -135,7 +185,7 @@ impl<'a, 'sm> Parser<'a, 'sm> {
     /// The end of the previous token (where clang's `ExpectAndConsume`
     /// reports a missing token).
     pub(crate) fn prev_end(&self) -> Loc {
-        if self.pos == 0 { self.loc() } else { self.prev_hi }
+        if self.prev_hi == Loc::INVALID { self.loc() } else { self.prev_hi }
     }
 
     /// True at the end of input.
@@ -162,6 +212,18 @@ impl<'a, 'sm> Parser<'a, 'sm> {
         }
         self.pos += 1;
         self.prev_hi = t.span.hi;
+        if let Some(r) = self.replay.last() {
+            if r.inject && self.pos >= r.toks.len() {
+                // The inserted tokens are consumed: resume the stream.
+                if let Some(r) = self.replay.pop() {
+                    self.pos = r.pos;
+                    self.cur = r.cur;
+                }
+                return t;
+            }
+            self.cur = r.toks.get(self.pos).copied().unwrap_or(r.eof);
+            return t;
+        }
         let src = self.src.get_mut();
         src.release(self.pos);
         self.cur = src.get(self.pos);
@@ -169,6 +231,99 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             self.handle_events(self.pos);
         }
         t
+    }
+
+    /// Starts re-parsing `toks` (spec/parse.md §2.7): the current token
+    /// becomes `toks[0]`, and after the last one an `Eof` sentinel at
+    /// `end` (the token that ended the saved range) stops every rule.
+    /// Paired with [`Parser::end_replay`].
+    pub(crate) fn begin_replay(&mut self, toks: Vec<Token>, end: Loc) {
+        let eof = Token { kind: TokKind::Eof, span: Span::new(end, end), flags: TokFlags::empty() };
+        let cur = toks.first().copied().unwrap_or(eof);
+        let saved = Replay {
+            toks,
+            eof,
+            pos: self.pos,
+            cur: self.cur,
+            prev_hi: self.prev_hi,
+            depth: self.depth,
+            inject: false,
+        };
+        self.replay.push(saved);
+        self.pos = 0;
+        self.cur = cur;
+        self.prev_hi = Loc::INVALID;
+        self.depth = [0; 3];
+    }
+
+    /// Inserts a `;` before the current token (at its location), as clang
+    /// does to recover from a missing `;` after a class or enum definition
+    /// (`PP.EnterToken` + `Tok.setKind(tok::semi)`).
+    pub(crate) fn inject_semi(&mut self) {
+        let at = self.loc();
+        let semi = Token {
+            kind: TokKind::Punct(Punct::Semi),
+            span: Span::new(at, at),
+            flags: TokFlags::empty(),
+        };
+        let saved = Replay {
+            toks: vec![semi],
+            eof: semi,
+            pos: self.pos,
+            cur: self.cur,
+            prev_hi: self.prev_hi,
+            depth: self.depth,
+            inject: true,
+        };
+        self.replay.push(saved);
+        self.pos = 0;
+        self.cur = semi;
+    }
+
+    /// Ends the innermost replay, restoring the interrupted stream, and
+    /// returns true if the saved tokens were all consumed.
+    pub(crate) fn end_replay(&mut self) -> bool {
+        while self.replay.last().is_some_and(|r| r.inject) {
+            self.replay.pop();
+        }
+        let done = self.at_eof();
+        if let Some(r) = self.replay.pop() {
+            self.pos = r.pos;
+            self.cur = r.cur;
+            self.prev_hi = r.prev_hi;
+            self.depth = r.depth;
+        }
+        done
+    }
+
+    /// True while re-parsing saved tokens.
+    pub(crate) fn replaying(&self) -> bool {
+        self.replay.iter().any(|r| !r.inject)
+    }
+
+    /// Records an `act_on_*` call for the sequence tests (a no-op
+    /// outside tests).
+    #[cfg_attr(not(test), allow(clippy::unused_self))]
+    pub(crate) fn trace(&mut self, what: impl FnOnce(&Self) -> String) {
+        #[cfg(test)]
+        {
+            let s = what(self);
+            self.trace.push(s);
+        }
+        #[cfg(not(test))]
+        let _ = what;
+    }
+
+    /// How many brackets of the kind `close` closes the parser has open
+    /// (0 for a non-closer).
+    pub(crate) fn depth_of(&self, close: Punct) -> u32 {
+        let b = match close {
+            Punct::RParen => Bracket::Paren,
+            Punct::RSquare => Bracket::Square,
+            Punct::RBrace => Bracket::Brace,
+            _ => return 0,
+        };
+        self.depth[b as usize]
     }
 
     fn close(&mut self, b: Bracket) {
@@ -218,6 +373,17 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             TokKind::Identifier(s) if self.kw.get(s).is_none() => Some(s),
             _ => None,
         }
+    }
+
+    /// True if `t` is the contextual keyword `final` ([class.pre]/1,
+    /// [class.mem.general]: an identifier with special meaning).
+    pub(crate) fn is_final_tok(&self, t: Token) -> bool {
+        t.kind == TokKind::Identifier(self.kw.final_)
+    }
+
+    /// True if `t` is the contextual keyword `override`.
+    pub(crate) fn is_override_tok(&self, t: Token) -> bool {
+        t.kind == TokKind::Identifier(self.kw.override_)
     }
 
     /// The current token as an identifier.

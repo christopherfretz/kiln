@@ -5,7 +5,8 @@
 //! [`DeclSpec`] into a type ([dcl.type.simple]) and a [`Declarator`] into
 //! a declaration.
 
-use kiln_ast::types::{ExcSpec, Quals, TagKeyword};
+use kiln_ast::names::OverloadedOperator;
+use kiln_ast::types::{ExcSpec, Quals, RefQual, TagKeyword};
 use kiln_ast::{AttrId, DeclId, ExprId, QualType};
 use kiln_diag::DiagId;
 use kiln_source::Loc;
@@ -153,6 +154,17 @@ pub struct DeclSpec {
     pub inline: Option<Loc>,
     /// `thread_local` written at.
     pub thread_local: Option<Loc>,
+    /// `consteval` written at.
+    pub consteval: Option<Loc>,
+    /// `virtual` written at ([dcl.fct.spec]).
+    pub virtual_: Option<Loc>,
+    /// `explicit` or `explicit ( constant-expression )` written at
+    /// ([dcl.fct.spec]/3); the operand is in `explicit_expr`.
+    pub explicit: Option<Loc>,
+    /// The operand of `explicit(bool)`, parsed in place.
+    pub explicit_expr: Option<ExprId>,
+    /// `friend` written at ([class.friend]).
+    pub friend: Option<Loc>,
     /// cv-qualifiers.
     pub cv: Quals,
     /// `short`/`long`.
@@ -201,6 +213,10 @@ impl DeclSpec {
             && self.inline.is_none()
             && self.thread_local.is_none()
             && self.cv.is_empty()
+            && self.consteval.is_none()
+            && self.virtual_.is_none()
+            && self.explicit.is_none()
+            && self.friend.is_none()
     }
 
     /// True if this is a `typedef` declaration.
@@ -452,6 +468,10 @@ pub enum Chunk {
         /// [`Sema::act_on_noexcept_spec`](crate::Sema::act_on_noexcept_spec)
         /// and friends; `ExcSpec::None` when absent.
         exc: ExcSpec,
+        /// cv-qualifier-seq after the parameter list ([dcl.fct]/1).
+        quals: Quals,
+        /// ref-qualifier after the parameter list.
+        ref_qual: RefQual,
     },
 }
 
@@ -483,6 +503,37 @@ pub struct Declarator {
     /// extension): an ordinary, non-empty `StringLiteral` expression and
     /// the extent of its tokens.
     pub asm_label: Option<(ExprId, kiln_source::Span)>,
+    /// A constructor, destructor, conversion-function or operator-function
+    /// declarator-id and where it was written (`name` is `None` then).
+    pub special: Option<(SpecialName, Loc)>,
+    /// The virt-specifier `override` ([class.virtual]/1).
+    pub virt_override: Option<Loc>,
+    /// The virt-specifier `final`.
+    pub virt_final: Option<Loc>,
+    /// The pure-specifier `= 0` ([class.abstract]/2): where the `0` is.
+    pub pure: Option<Loc>,
+    /// The function's own `noexcept ( constant-expression )`, saved for
+    /// replay in a complete-class context ([class.mem]/7; spec/parse.md
+    /// §2.7): where `noexcept` is. The `Chunk::Function`'s `exc` is
+    /// `ExcSpec::None` meanwhile; sema makes it `ExcSpec::Deferred(f)`.
+    pub late_noexcept: Option<Loc>,
+    /// `this` before a parameter-declaration (an explicit object
+    /// parameter, P0847 [dcl.fct]/6).
+    pub explicit_object: Option<Loc>,
+}
+
+/// A declarator-id that is not an identifier ([dcl.decl]/4,
+/// [class.ctor], [class.dtor], [class.conv.fct], [over.oper]).
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum SpecialName {
+    /// The injected-class-name of the class (`S(...)`, `S::S(...)`).
+    Constructor(Symbol),
+    /// `~S` (the class name as written).
+    Destructor(Symbol),
+    /// `operator conversion-type-id`.
+    Conversion(QualType),
+    /// `operator @`.
+    Operator(OverloadedOperator),
 }
 
 impl Declarator {
@@ -499,12 +550,24 @@ impl Declarator {
             invalid: false,
             init_style: None,
             asm_label: None,
+            special: None,
+            virt_override: None,
+            virt_final: None,
+            pure: None,
+            late_noexcept: None,
+            explicit_object: None,
         }
+    }
+
+    /// True if the declarator has a declarator-id (an identifier or a
+    /// [`SpecialName`]).
+    pub fn has_name(&self) -> bool {
+        self.name.is_some() || self.special.is_some()
     }
 
     /// The location of the name, or of the declarator.
     pub fn name_loc(&self) -> Loc {
-        self.name.map_or(self.loc, |n| n.1)
+        self.name.map(|n| n.1).or(self.special.map(|s| s.1)).unwrap_or(self.loc)
     }
 
     /// True if the outermost operator applied to the name is a function
