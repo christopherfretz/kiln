@@ -429,6 +429,10 @@ pub(crate) struct Compiler<'a> {
     mem_vars: FxHashSet<DeclId>,
     pending: Vec<Loc>,
     breakables: Vec<Breakable>,
+    /// The enclosing statement expressions: the start of the statement of
+    /// each being evaluated, and how many breakables were open outside it
+    /// (a `return`, or a `break`/`continue` leaving it, is unsupported).
+    stmt_exprs: Vec<(Loc, usize)>,
     /// Mark registers of the open scopes (`None`: allocates nothing).
     scopes: Vec<Option<u32>>,
     ret: RetKind,
@@ -465,6 +469,7 @@ impl<'a> Compiler<'a> {
             rmw_loc: None,
             opaque: FxHashMap::default(),
             breakables: Vec::new(),
+            stmt_exprs: Vec::new(),
             scopes: Vec::new(),
             ret: RetKind::Void,
             ret_ref: false,
@@ -652,6 +657,10 @@ impl<'a> Compiler<'a> {
     }
 }
 
+/// clang's `note_constexpr_stmt_expr_unsupported`.
+const STMT_EXPR_UNSUPPORTED: &str =
+    "this use of statement expressions is not supported in a constant expression";
+
 // ---- pre-scan: which locals need an address ----------------------------
 
 struct Scan<'x> {
@@ -796,6 +805,7 @@ impl Scan<'_> {
                     self.expr(c, false);
                 }
             }
+            ExprKind::StmtExpr => self.stmt(ast.exprs.stmt_expr_body(e)),
             ExprKind::MaterializeTemporaryExpr | ExprKind::CompoundLiteralExpr => {
                 self.temps = true;
                 for c in ast.exprs.children(e, &ast.lists) {
@@ -943,6 +953,60 @@ impl Compiler<'_> {
         }
     }
 
+    /// A GNU statement expression (clang `VisitStmtExpr`): the statements
+    /// of its block in order, then its last statement, which must be an
+    /// expression statement, as the value (into `dst` when given). A
+    /// statement that leaves it by `return`, `break` or `continue` is not
+    /// supported, as in clang: the note is at that top-level statement.
+    fn stmt_expr(&mut self, e: ExprId, dst: Option<u32>) {
+        let ast = self.b.ast();
+        let body = ast.exprs.stmt_expr_body(e);
+        let children = ast.lists.get(ast.stmts.compound_body(body)).to_vec();
+        let Some((&last, init)) = children.split_last() else { return };
+        let last = StmtId::new(last);
+        let m = self.next;
+        let decls = self.block_decls(&children);
+        self.open_scope(&decls, false);
+        for &c in init {
+            let c = StmtId::new(c);
+            let at = self.stmt_begin(c);
+            self.stmt_exprs.push((at, self.breakables.len()));
+            self.stmt(c);
+            self.stmt_exprs.pop();
+        }
+        let ast = self.b.ast();
+        if ast.stmts.get(last).kind() == StmtKind::ExprStmt {
+            let x = ast.stmts.expr_stmt_expr(last);
+            self.step(last);
+            let temps = self.has_temps;
+            if temps {
+                self.open_scope(&[], true);
+            }
+            match dst {
+                Some(dst) => self.rv_into(x, dst),
+                None => self.effect(x),
+            }
+            if temps {
+                self.close_scope();
+            }
+        } else {
+            let at = self.stmt_begin(last);
+            self.trap_loc(at, STMT_EXPR_UNSUPPORTED.into());
+        }
+        self.close_scope();
+        self.next = m;
+    }
+
+    /// Where statement `s` begins.
+    fn stmt_begin(&self, s: StmtId) -> Loc {
+        let ast = self.b.ast();
+        if ast.stmts.get(s).kind() == StmtKind::ExprStmt {
+            self.begin(ast.stmts.expr_stmt_expr(s))
+        } else {
+            ast.stmts.get(s).loc()
+        }
+    }
+
     fn block_decls(&self, children: &[u32]) -> Vec<DeclId> {
         let ast = self.b.ast();
         let mut v = Vec::new();
@@ -1072,6 +1136,12 @@ impl Compiler<'_> {
                     self.trap_loc(n.loc(), "kiln: 'break' or 'continue' outside a loop".into());
                     return;
                 };
+                if let Some(&(at, outside)) = self.stmt_exprs.last()
+                    && idx < outside
+                {
+                    self.trap_loc(at, STMT_EXPR_UNSUPPORTED.into());
+                    return;
+                }
                 let depth =
                     if brk { self.breakables[idx].depth } else { self.breakables[idx].cont_depth };
                 self.exit_scopes(depth);
@@ -1084,6 +1154,10 @@ impl Compiler<'_> {
                 }
             }
             StmtKind::ReturnStmt => {
+                if let Some(&(at, _)) = self.stmt_exprs.last() {
+                    self.trap_loc(at, STMT_EXPR_UNSUPPORTED.into());
+                    return;
+                }
                 let v = ast.stmts.return_value(s);
                 match (self.ret, v) {
                     (RetKind::Sret(ty), Some(v)) => {
@@ -1638,6 +1712,7 @@ impl Compiler<'_> {
                 let op = self.ast().exprs.operand(e);
                 self.rv_inner(op, dst);
             }
+            ExprKind::StmtExpr => self.stmt_expr(e, Some(dst)),
             ExprKind::CXXDefaultArgExpr => match default_arg_of(self.ast(), e) {
                 Some(d) => self.rv_inner(d, dst),
                 None => self.unsupported(e),
@@ -2808,6 +2883,7 @@ impl Compiler<'_> {
         let ty = self.ety(e);
         match n.kind() {
             ExprKind::CXXThrowExpr => self.throw_invalid(e),
+            ExprKind::StmtExpr => self.stmt_expr(e, None),
             ExprKind::ParenExpr => {
                 let op = self.ast().exprs.operand(e);
                 self.effect(op);

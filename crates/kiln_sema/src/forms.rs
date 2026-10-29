@@ -16,7 +16,7 @@ use crate::init::{InitItem, InitList, InitValue};
 impl Sema<'_, '_> {
     /// The top-level expressions of `l` (nested lists and designators
     /// dropped), for placeholders and recovery.
-    fn list_exprs(l: &InitList) -> Vec<ExprId> {
+    pub(crate) fn list_exprs(l: &InitList) -> Vec<ExprId> {
         l.items
             .iter()
             .filter_map(|i| match i.value {

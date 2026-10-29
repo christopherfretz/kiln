@@ -487,7 +487,7 @@ impl Sema<'_, '_> {
         }
     }
 
-    fn unused_warning(&self, e: ExprId) -> Option<(DiagId, Loc, Vec<String>)> {
+    pub(crate) fn unused_warning(&self, e: ExprId) -> Option<(DiagId, Loc, Vec<String>)> {
         let x = self.ignore_parens(e);
         let n = *self.ast.exprs.get(x);
         let loc = n.loc();
@@ -571,6 +571,7 @@ impl Sema<'_, '_> {
                 != CastKind::ToVoid)
                 .then_some((DiagId::sema_unused_expr, loc, Vec::new())),
             ExprKind::ImplicitCastExpr => self.unused_warning(self.ast.exprs.operand(x)),
+            ExprKind::StmtExpr => self.unused_stmt_expr(x, loc),
             ExprKind::DeclRefExpr | ExprKind::MemberExpr | ExprKind::ArraySubscriptExpr => {
                 if self.ast.types.effective_quals(n.ty()).is_volatile() {
                     None
@@ -589,7 +590,8 @@ impl Sema<'_, '_> {
             | ExprKind::CXXTypeidExpr
             | ExprKind::CXXStaticCastExpr
             | ExprKind::CXXReinterpretCastExpr
-            | ExprKind::CXXConstCastExpr => Some((DiagId::sema_unused_expr, loc, Vec::new())),
+            | ExprKind::CXXConstCastExpr
+            | ExprKind::CompoundLiteralExpr => Some((DiagId::sema_unused_expr, loc, Vec::new())),
             _ => None,
         }
     }

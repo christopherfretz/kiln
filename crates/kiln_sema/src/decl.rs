@@ -1443,6 +1443,23 @@ impl Sema<'_, '_> {
                 None => QualType::ERROR,
             };
             self.ast.decls.set_ty(v, ty);
+            // `auto x = f();` with a `void` f deduces an incomplete
+            // object type (clang `DeduceVariableDeclarationType`, then
+            // `err_typecheck_decl_incomplete_type`); `x` gets no initializer.
+            if self.ast.types.is_void(ty) {
+                let msg = self.diag(DiagId::sema_void_var, loc).arg(self.ty_arg(ty));
+                self.emit(msg);
+                self.ast.decls.set_flags(v, DeclFlags::INVALID);
+                let es = match &init {
+                    Initializer::Expr(e) => vec![*e],
+                    Initializer::Paren(es, ..) => es.clone(),
+                    Initializer::List(l) => Self::list_exprs(l),
+                };
+                for e in es {
+                    self.act_on_full_expr(e);
+                }
+                return;
+            }
         }
         let e = self.perform_init(ty, init, loc, direct);
         let e = self.act_on_full_expr(e);

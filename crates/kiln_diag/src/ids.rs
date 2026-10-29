@@ -434,6 +434,7 @@ diag_ids! {
     parse_expected_semi_after_stmt = Error (1) "expected ';' after {0} statement";
     parse_expected_expression = Error (0) "expected expression";
     parse_expected_name_of_pack = Error (0) "expected the name of a parameter pack";
+    parse_stmt_expr_in_default_arg = Error (0) "default argument may not use a GNU statement expression";
     parse_expected_unqualified_id = Error (0) "expected unqualified-id";
     parse_expected_type = Error (0) "expected a type";
     parse_expected_member_name = Error (0) "expected member name or ';' after declaration specifiers";

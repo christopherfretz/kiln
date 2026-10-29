@@ -22,6 +22,7 @@ mod deduce;
 pub mod except;
 pub mod expr;
 mod forms;
+mod gnu;
 pub mod init;
 pub mod literal;
 pub mod lookup;
@@ -43,6 +44,7 @@ pub use decl::{NameClass, TagUse};
 pub use declspec::{
     BaseSpec, Chunk, DeclSpec, Declarator, DeclaratorContext, ParamInfo, Sign, StorageSpec, Width,
 };
+pub use gnu::StmtExprScope;
 pub use init::{Designator, InitItem, InitList, InitValue, Initializer};
 pub use kiln_oven::{Budget, EvalContext, EvalFailure, EvalKind, Oven};
 pub use scope::ScopeKind;

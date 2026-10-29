@@ -308,6 +308,21 @@ impl Parser<'_, '_> {
         self.parse_postfix_expr()
     }
 
+    /// The rest of a GNU statement expression `( compound-statement )`
+    /// after the `(` at `lparen` (clang's `ParseParenExpression`,
+    /// `CompoundStmt` case). Only allowed in a function body; elsewhere
+    /// it is skipped up to and including the `)`.
+    fn parse_stmt_expr(&mut self, lparen: Loc) -> PExpr {
+        if !self.s.check_stmt_expr_allowed(lparen) {
+            self.skip_until(&[Punct::RParen], true, true);
+            return None;
+        }
+        let scope = self.s.act_on_start_stmt_expr();
+        let (body, _) = self.parse_compound_in(true, true);
+        let rparen = self.expect_closing(Punct::RParen, Punct::LParen, lparen);
+        Some(self.s.act_on_stmt_expr(scope, body, lparen, rparen))
+    }
+
     /// `( type-id ) cast-expression`.
     fn parse_c_style_cast(&mut self) -> PExpr {
         let open = self.bump().span.lo;
@@ -510,9 +525,7 @@ impl Parser<'_, '_> {
             TokKind::Punct(Punct::LParen) => {
                 self.bump();
                 if self.at(Punct::LBrace) {
-                    self.unsupported("statement expressions", loc);
-                    self.skip_until(&[Punct::RParen], false, true);
-                    return None;
+                    return self.parse_stmt_expr(loc);
                 }
                 let Some(e) = self.parse_expression() else {
                     self.skip_until(&[Punct::RParen], false, true);

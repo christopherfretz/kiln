@@ -234,6 +234,7 @@ impl Collect<'_> {
                 self.out.push(ast.exprs.operand(e));
             }
             ExprKind::UnaryExprOrTypeTraitExpr => self.out.push(e),
+            ExprKind::StmtExpr => self.stmt(ast.exprs.stmt_expr_body(e)),
             ExprKind::ImplicitCastExpr
                 if ast.exprs.cast_kind(e) == CastKind::LValueToRValue
                     && refers_to_const_var(ast, ast.exprs.operand(e)) =>

@@ -50,6 +50,10 @@ pub struct Parser<'a, 'sm> {
     pub(crate) lex_opts: LexOptions,
     pub(crate) lit_opts: LiteralOptions,
     pub(crate) std: Std,
+    /// The next statement parsed is directly in a statement expression's
+    /// compound statement (clang's `ParsedStmtContext::InStmtExpr`); taken
+    /// by `parse_statement`, passed on through labels.
+    pub(crate) in_stmt_expr: bool,
 }
 
 impl std::fmt::Debug for Parser<'_, '_> {
@@ -80,6 +84,7 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             lex_opts,
             lit_opts,
             std,
+            in_stmt_expr: false,
         };
         p.handle_events(0);
         p

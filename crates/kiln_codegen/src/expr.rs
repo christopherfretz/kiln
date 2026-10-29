@@ -6,7 +6,8 @@ use kiln_abi::irtype::BitFieldInfo;
 use kiln_abi::mangle;
 use kiln_ast::decl::{DeclKind, VarStorage};
 use kiln_ast::expr::{BinaryOp, CastKind, ExprFlags, ExprKind, UnaryOp, ValueCategory};
-use kiln_ast::{DeclId, ExprId, QualType};
+use kiln_ast::stmt::StmtKind;
+use kiln_ast::{DeclId, ExprId, QualType, StmtId};
 use kiln_llvm::{
     Attr, AttrKind, AttrList, BinOp, CallOpts, CastOp, ConstData, Flags, FloatPredicate,
     IntPredicate, TypeId as LTy, Value,
@@ -205,6 +206,7 @@ impl Cg<'_> {
                 None => return err(self.loc_of(e), "unbound OpaqueValueExpr"),
             },
             ExprKind::CallExpr => return self.emit_call(e, None),
+            ExprKind::StmtExpr => return self.emit_stmt_expr(e),
             // A scalar initializer list (clang `VisitInitListExpr`): its
             // single element, or zero.
             ExprKind::InitListExpr if !self.is_aggregate(q) => {
@@ -1287,6 +1289,46 @@ impl Cg<'_> {
         };
         let v = self.gep(addr.ty, addr.v, indices, true);
         Ok(LV { addr: Addr { v, ty: ety, align }, q, bf: None })
+    }
+
+    // ---- statement expressions -----------------------------------------
+
+    /// A GNU statement expression with a scalar or `void` value (clang
+    /// `EmitCompoundStmt` with `GetLast`): the statements in order; the
+    /// result statement (the last non-null one, through labels) is
+    /// evaluated as the value.
+    fn emit_stmt_expr(&mut self, e: ExprId) -> R<Option<V>> {
+        let ast = self.ast;
+        let body = ast.exprs.stmt_expr_body(e);
+        if ast.types.is_void(ast.exprs.get(e).ty()) {
+            self.emit_stmt(body)?;
+            return Ok(None);
+        }
+        let children: Vec<StmtId> = ast.lists.iter(ast.stmts.compound_body(body)).collect();
+        let Some(result) =
+            children.iter().rposition(|&c| ast.stmts.get(c).kind() != StmtKind::NullStmt)
+        else {
+            return err(self.loc_of(e), "statement expression without a result");
+        };
+        for &c in &children[..result] {
+            self.emit_stmt(c)?;
+        }
+        let mut s = children[result];
+        loop {
+            let n = *ast.stmts.get(s);
+            match n.kind() {
+                StmtKind::LabelStmt => {
+                    let b = self.label_block(DeclId::new(n.a()));
+                    self.emit_block(b, false);
+                    s = StmtId::new(n.b());
+                }
+                StmtKind::AttributedStmt => s = StmtId::new(n.b()),
+                StmtKind::ExprStmt => break,
+                _ => return err(self.loc_of(e), "statement expression without a result"),
+            }
+        }
+        self.ensure_insert_point();
+        self.emit_scalar_opt(ast.stmts.expr_stmt_expr(s))
     }
 
     // ---- ignored expressions -------------------------------------------

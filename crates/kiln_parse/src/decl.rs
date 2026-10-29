@@ -1148,6 +1148,14 @@ impl Parser<'_, '_> {
     /// ([dcl.fct.default]/1). At the `=`.
     fn parse_default_argument(&mut self, p: &mut ParamInfo) {
         let eq = self.bump().span.lo;
+        // clang rejects a default argument that starts with `({` outright
+        // (`err_stmt_expr_in_default_arg`), skipping to the next `,`/`)`.
+        if self.at(Punct::LParen) && self.peek_is(1, Punct::LBrace) {
+            self.error_here(DiagId::parse_stmt_expr_in_default_arg);
+            p.invalid = true;
+            self.skip_until(&[Punct::Comma, Punct::RParen], true, false);
+            return;
+        }
         let init = if self.at(Punct::LBrace) {
             self.parse_init_list().ok().map(Initializer::List)
         } else {
