@@ -182,6 +182,30 @@ pub(crate) fn float_of(c: u32) -> FloatKind {
 }
 
 /// Strips parentheses.
+/// Whether `e` is a builtin binary operator `op`.
+fn is_binary(ast: &kiln_ast::Ast, e: ExprId, op: BinaryOp) -> bool {
+    ast.exprs.get(e).kind() == ExprKind::BinaryOperator && ast.exprs.binary_op(e) == op
+}
+
+/// Whether `e` is a builtin `&&` or `||`.
+fn is_logical(ast: &kiln_ast::Ast, e: ExprId) -> bool {
+    ast.exprs.get(e).kind() == ExprKind::BinaryOperator
+        && matches!(ast.exprs.binary_op(e), BinaryOp::LAnd | BinaryOp::LOr)
+}
+
+/// Whether `e` is a builtin binary operator `binary_node` evaluates (a
+/// prvalue of arithmetic, comparison or pointer arithmetic).
+fn is_plain_binary(ast: &kiln_ast::Ast, e: ExprId) -> bool {
+    let n = ast.exprs.get(e);
+    if n.kind() != ExprKind::BinaryOperator || n.value_category().is_glvalue() {
+        return false;
+    }
+    let op = ast.exprs.binary_op(e);
+    !matches!(op, BinaryOp::Comma | BinaryOp::LAnd | BinaryOp::LOr | BinaryOp::Assign)
+        && !op.is_compound_assignment()
+        && !op.is_ptr_mem()
+}
+
 pub(crate) fn skip_parens(ast: &kiln_ast::Ast, mut e: ExprId) -> ExprId {
     loop {
         match ast.exprs.get(e).kind() {
@@ -846,19 +870,24 @@ impl Scan<'_> {
                 }
             }
             ExprKind::BinaryOperator => {
-                let [a, b] = ast.exprs.operands(e);
-                match ast.exprs.binary_op(e) {
-                    BinaryOp::Assign => {
-                        self.expr(a, ok);
-                        self.expr(b, false);
+                // R-WALK: binary spines of any depth, with a worklist
+                // (the scan only collects a set, so order is free).
+                let mut work = vec![(e, ok)];
+                while let Some((x, ok)) = work.pop() {
+                    let k = ast.exprs.get(x).kind();
+                    if k == ExprKind::ParenExpr {
+                        work.push((ast.exprs.operand(x), ok));
+                        continue;
                     }
-                    BinaryOp::Comma => {
-                        self.expr(a, true);
-                        self.expr(b, ok);
+                    if k != ExprKind::BinaryOperator {
+                        self.expr(x, ok);
+                        continue;
                     }
-                    _ => {
-                        self.expr(a, false);
-                        self.expr(b, false);
+                    let [a, b] = ast.exprs.operands(x);
+                    match ast.exprs.binary_op(x) {
+                        BinaryOp::Assign => work.extend([(a, ok), (b, false)]),
+                        BinaryOp::Comma => work.extend([(a, true), (b, ok)]),
+                        _ => work.extend([(a, false), (b, false)]),
                     }
                 }
             }
@@ -2133,15 +2162,23 @@ impl Compiler<'_> {
         let [a, b] = self.ast().exprs.operands(e);
         match op {
             BinaryOp::Comma => {
-                self.effect(a);
-                self.rv_inner(b, dst);
+                // R-WALK (sema-templates.md Q16): a comma fold is a spine
+                // of any depth; every operand but the last is a discarded
+                // value, in order.
+                let ast = self.ast();
+                let mut rest = vec![a];
+                let mut last = b;
+                let mut c = skip_parens(ast, b);
+                while is_binary(ast, c, BinaryOp::Comma) {
+                    let [x, y] = ast.exprs.operands(c);
+                    rest.push(x);
+                    last = y;
+                    c = skip_parens(ast, y);
+                }
+                self.effects(&rest);
+                self.rv_inner(last, dst);
             }
-            BinaryOp::LAnd | BinaryOp::LOr => {
-                self.rv_into(a, dst);
-                let j = self.jmp_if(dst, op == BinaryOp::LOr);
-                self.rv_into(b, dst);
-                self.patch_here(j);
-            }
+            BinaryOp::LAnd | BinaryOp::LOr => self.logical(e, dst),
             BinaryOp::Assign => {
                 let place = self.assign(e);
                 self.load(place, ty, ak::READ, e, dst);
@@ -2150,71 +2187,220 @@ impl Compiler<'_> {
                 let place = self.compound_assign(e);
                 self.load(place, ty, ak::READ, e, dst);
             }
-            _ => {
-                let at = self.ety(a);
-                let bt = self.ety(b);
-                let (ak_, bk) = (self.kind(at), self.kind(bt));
-                if let Some(c) = cmp_of(op) {
-                    let ra = self.rv(a);
-                    let rb = self.rv(b);
-                    match (ak_, bk) {
-                        (TyKind::Float(k), _) => {
-                            self.emit_at(Op::FCmp, float_code(k) | c << 4, &[dst, ra, rb], e);
-                        }
-                        (TyKind::Ptr(p), _) | (_, TyKind::Ptr(p)) => {
-                            self.emit_at(Op::PtrCmp, c, &[dst, ra, rb, p.0], e);
-                        }
-                        (TyKind::NullPtr, _) => {
-                            self.konst(dst, u128::from(matches!(c, cmp::EQ | cmp::LE | cmp::GE)));
-                        }
-                        // Interned member pointers: equal values share an index.
-                        (TyKind::MemPtr { .. }, _) | (_, TyKind::MemPtr { .. }) => {
-                            self.emit(Op::ICmp, int_aux(64, false) | c << 9, &[dst, ra, rb]);
-                        }
-                        (k, _) => {
-                            let (w, s) = int_of(k).unwrap_or((32, true));
-                            self.emit(Op::ICmp, int_aux(w as u8, s) | c << 9, &[dst, ra, rb]);
-                        }
-                    }
-                    return;
+            _ => self.arith_spine(e, dst, ty),
+        }
+    }
+
+    /// `&&` / `||` chain `e` into `dst`, iterating along both spines
+    /// (R-WALK): a left-deep chain `((a && b) || c)` evaluates its
+    /// leftmost operand and then each right operand behind a
+    /// short-circuit jump; a right-deep tail `a && (b && c)` jumps
+    /// straight to the end.
+    fn logical(&mut self, e: ExprId, dst: u32) {
+        let ast = self.ast();
+        let mut left = vec![e];
+        let mut cur = skip_parens(ast, ast.exprs.operands(e)[0]);
+        while is_logical(ast, cur) {
+            left.push(cur);
+            cur = skip_parens(ast, ast.exprs.operands(cur)[0]);
+        }
+        self.rv_into(cur, dst);
+        // Bottom-up along the left spine; the top node's right operand
+        // opens the right spine.
+        for &n in left[1..].iter().rev() {
+            let ast = self.ast();
+            let lor = ast.exprs.binary_op(n) == BinaryOp::LOr;
+            let rhs = ast.exprs.operands(n)[1];
+            let j = self.jmp_if(dst, lor);
+            self.rv_into(rhs, dst);
+            self.patch_here(j);
+        }
+        let mut ends = Vec::new();
+        let mut n = e;
+        loop {
+            let ast = self.ast();
+            let lor = ast.exprs.binary_op(n) == BinaryOp::LOr;
+            let rhs = skip_parens(ast, ast.exprs.operands(n)[1]);
+            ends.push(self.jmp_if(dst, lor));
+            let ast = self.ast();
+            if !is_logical(ast, rhs) {
+                self.rv_into(rhs, dst);
+                break;
+            }
+            // `rhs` is itself a chain: its left spine, then its tail.
+            let mut l = vec![rhs];
+            let mut c = skip_parens(ast, ast.exprs.operands(rhs)[0]);
+            while is_logical(ast, c) {
+                l.push(c);
+                c = skip_parens(ast, ast.exprs.operands(c)[0]);
+            }
+            self.rv_into(c, dst);
+            for &m in l[1..].iter().rev() {
+                let ast = self.ast();
+                let lor = ast.exprs.binary_op(m) == BinaryOp::LOr;
+                let r = ast.exprs.operands(m)[1];
+                let j = self.jmp_if(dst, lor);
+                self.rv_into(r, dst);
+                self.patch_here(j);
+            }
+            n = rhs;
+        }
+        for j in ends {
+            self.patch_here(j);
+        }
+    }
+
+    /// The discarded-value expressions `xs`, in order.
+    fn effects(&mut self, xs: &[ExprId]) {
+        for &x in xs {
+            self.effect(x);
+        }
+    }
+
+    /// A non-logical, non-assigning builtin binary operator `e` into
+    /// `dst`, iterating along a left-deep (`((a + b) + c) + d`) or a
+    /// right-deep (`a + (b + (c + d))`) spine of such operators (R-WALK,
+    /// sema-templates.md Q16: fold expressions over 65,536 elements).
+    fn arith_spine(&mut self, e: ExprId, dst: u32, ty: OTy) {
+        let ast = self.ast();
+        let [a, b] = ast.exprs.operands(e);
+        let (la, rb) = (skip_parens(ast, a), skip_parens(ast, b));
+        if is_plain_binary(ast, la) {
+            // Left spine, bottom-up, results ping-ponging between two
+            // registers.
+            let mut spine = vec![la];
+            let mut c = skip_parens(ast, ast.exprs.operands(la)[0]);
+            while is_plain_binary(ast, c) {
+                spine.push(c);
+                c = skip_parens(ast, ast.exprs.operands(c)[0]);
+            }
+            let m = self.next.max(dst + 1);
+            self.next = m;
+            let regs = [self.reg(), self.reg()];
+            let base = self.next;
+            let mut prev = None;
+            for (i, &n) in spine.iter().rev().enumerate() {
+                let r = regs[i & 1];
+                let nty = self.ety(n);
+                self.next = base;
+                self.binary_node(n, r, nty, prev, None);
+                prev = Some(r);
+            }
+            self.next = base;
+            self.binary_node(e, dst, ty, prev, None);
+            self.next = m;
+            return;
+        }
+        if is_plain_binary(ast, rb) {
+            // Right spine: every left operand first, in order, then the
+            // innermost node and the rest bottom-up.
+            let mut spine = vec![e];
+            let mut c = rb;
+            while is_plain_binary(self.ast(), c) {
+                spine.push(c);
+                c = skip_parens(self.ast(), self.ast().exprs.operands(c)[1]);
+            }
+            let m = self.next.max(dst + 1);
+            self.next = m;
+            let lefts: Vec<u32> = spine
+                .iter()
+                .map(|&n| {
+                    let x = self.ast().exprs.operands(n)[0];
+                    self.rv_copy(x)
+                })
+                .collect();
+            let regs = [self.reg(), self.reg()];
+            let base = self.next;
+            let mut prev = None;
+            for (i, (&n, &l)) in spine.iter().zip(&lefts).enumerate().rev() {
+                let (r, nty) = if i == 0 { (dst, ty) } else { (regs[i & 1], self.ety(n)) };
+                self.next = base;
+                self.binary_node(n, r, nty, Some(l), prev);
+                prev = Some(r);
+            }
+            self.next = m;
+            return;
+        }
+        self.binary_node(e, dst, ty, None, None);
+    }
+
+    /// Operand `x`, or the register `given` already holding its value
+    /// (`copy`: into a fresh register, not a local's own).
+    fn opnd(&mut self, x: ExprId, given: Option<u32>, copy: bool) -> u32 {
+        match given {
+            Some(r) => r,
+            None if copy => self.rv_copy(x),
+            None => self.rv(x),
+        }
+    }
+
+    /// One builtin binary operator `e` into `dst`; `ga` / `gb` hold its
+    /// operands' values when a spine walk evaluated them already.
+    fn binary_node(&mut self, e: ExprId, dst: u32, ty: OTy, ga: Option<u32>, gb: Option<u32>) {
+        let op = self.ast().exprs.binary_op(e);
+        let [a, b] = self.ast().exprs.operands(e);
+        let at = self.ety(a);
+        let bt = self.ety(b);
+        let (ak_, bk) = (self.kind(at), self.kind(bt));
+        if let Some(c) = cmp_of(op) {
+            let ra = self.opnd(a, ga, false);
+            let rb = self.opnd(b, gb, false);
+            match (ak_, bk) {
+                (TyKind::Float(k), _) => {
+                    self.emit_at(Op::FCmp, float_code(k) | c << 4, &[dst, ra, rb], e);
                 }
-                if matches!(op, BinaryOp::Add | BinaryOp::Sub) {
-                    if let (TyKind::Ptr(pa), TyKind::Ptr(_)) = (ak_, bk) {
-                        let ra = self.rv(a);
-                        let rb = self.rv(b);
-                        self.emit_at(Op::PtrSub, 0, &[dst, ra, rb, pa.0], e);
-                        return;
-                    }
-                    let ptr_side = match (ak_, bk) {
-                        (TyKind::Ptr(p), k) => Some((a, b, p, k)),
-                        (k, TyKind::Ptr(p)) => Some((b, a, p, k)),
-                        _ => None,
-                    };
-                    if let Some((pe, ie, pointee, ik)) = ptr_side {
-                        let (rp, ri) = if pe == a {
-                            let rp = self.rv(pe);
-                            (rp, self.rv(ie))
-                        } else {
-                            let ri = self.rv(ie);
-                            (self.rv(pe), ri)
-                        };
-                        let (w, s) = int_of(ik).unwrap_or((64, true));
-                        let aux = int_aux(w as u8, s) | u32::from(op == BinaryOp::Sub) << 9;
-                        self.emit_at(Op::PtrAdd, aux, &[dst, rp, ri, pointee.0], e);
-                        return;
-                    }
+                (TyKind::Ptr(p), _) | (_, TyKind::Ptr(p)) => {
+                    self.emit_at(Op::PtrCmp, c, &[dst, ra, rb, p.0], e);
                 }
-                let Some(iop) = int_op(op) else {
-                    self.unsupported(e);
-                    return;
+                (TyKind::NullPtr, _) => {
+                    self.konst(dst, u128::from(matches!(c, cmp::EQ | cmp::LE | cmp::GE)));
+                }
+                // Interned member pointers: equal values share an index.
+                (TyKind::MemPtr { .. }, _) | (_, TyKind::MemPtr { .. }) => {
+                    self.emit(Op::ICmp, int_aux(64, false) | c << 9, &[dst, ra, rb]);
+                }
+                (k, _) => {
+                    let (w, s) = int_of(k).unwrap_or((32, true));
+                    self.emit(Op::ICmp, int_aux(w as u8, s) | c << 9, &[dst, ra, rb]);
+                }
+            }
+            return;
+        }
+        if matches!(op, BinaryOp::Add | BinaryOp::Sub) {
+            if let (TyKind::Ptr(pa), TyKind::Ptr(_)) = (ak_, bk) {
+                let ra = self.opnd(a, ga, false);
+                let rb = self.opnd(b, gb, false);
+                self.emit_at(Op::PtrSub, 0, &[dst, ra, rb, pa.0], e);
+                return;
+            }
+            let ptr_side = match (ak_, bk) {
+                (TyKind::Ptr(p), k) => Some((a, b, p, k)),
+                (k, TyKind::Ptr(p)) => Some((b, a, p, k)),
+                _ => None,
+            };
+            if let Some((pe, _ie, pointee, ik)) = ptr_side {
+                let (rp, ri) = if pe == a {
+                    let rp = self.opnd(a, ga, false);
+                    (rp, self.opnd(b, gb, false))
+                } else {
+                    let ri = self.opnd(a, ga, false);
+                    (self.opnd(b, gb, false), ri)
                 };
-                let shift = matches!(iop, Op::IShl | Op::IShr);
-                // [expr.shift]/4: the left operand is sequenced first.
-                let ra = if shift { self.rv_copy(a) } else { self.rv(a) };
-                let rb = self.rv(b);
-                self.arith(iop, ty, bt, dst, ra, rb, e);
+                let (w, s) = int_of(ik).unwrap_or((64, true));
+                let aux = int_aux(w as u8, s) | u32::from(op == BinaryOp::Sub) << 9;
+                self.emit_at(Op::PtrAdd, aux, &[dst, rp, ri, pointee.0], e);
+                return;
             }
         }
+        let Some(iop) = int_op(op) else {
+            self.unsupported(e);
+            return;
+        };
+        let shift = matches!(iop, Op::IShl | Op::IShr);
+        // [expr.shift]/4: the left operand is sequenced first.
+        let ra = self.opnd(a, ga, shift);
+        let rb = self.opnd(b, gb, false);
+        self.arith(iop, ty, bt, dst, ra, rb, e);
     }
 
     /// `dst = a op b` in type `ty` (`bt`: the right operand's type, for
@@ -3245,9 +3431,19 @@ impl Compiler<'_> {
                 let op = self.ast().exprs.binary_op(e);
                 match op {
                     BinaryOp::Comma => {
-                        let [a, b] = self.ast().exprs.operands(e);
-                        self.effect(a);
-                        self.effect(b);
+                        // R-WALK: a comma fold of any shape, in order.
+                        let mut work = vec![e];
+                        while let Some(x) = work.pop() {
+                            let ast = self.ast();
+                            let x = skip_parens(ast, x);
+                            if is_binary(ast, x, BinaryOp::Comma) {
+                                let [a, b] = ast.exprs.operands(x);
+                                work.push(b);
+                                work.push(a);
+                            } else {
+                                self.effect(x);
+                            }
+                        }
                     }
                     BinaryOp::Assign => {
                         self.assign(e);
