@@ -127,6 +127,9 @@ pub struct Sema<'a, 'sm> {
     /// they appear in (spec/sema-class.md §2.5/§2.6): `&C::m` forms a
     /// pointer to member, anything else needs an object.
     pub(crate) member_refs: kiln_source::fx::FxHashMap<ExprId, class::MemberRef>,
+    /// The class the last `friend class X;` declared ([`TagUse::Friend`]),
+    /// taken by [`Sema::act_on_friend`] as the `FriendDecl`'s owned tag.
+    pub(crate) friend_tag: Option<DeclId>,
     /// The `this` type of the default member initializers being parsed,
     /// innermost last, with their fields (`C*`, spec/sema-class.md §2.5).
     pub(crate) nsdmi_this: Vec<(DeclId, QualType)>,
@@ -178,6 +181,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             unparsed_exc: kiln_source::fx::FxHashSet::default(),
             fn_saved: Vec::new(),
             member_refs: kiln_source::fx::FxHashMap::default(),
+            friend_tag: None,
             nsdmi_this: Vec::new(),
             initializing: None,
         }

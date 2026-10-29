@@ -11,6 +11,7 @@
 //! those packages.
 
 mod access;
+mod friend;
 mod member_expr;
 mod members;
 
@@ -221,9 +222,7 @@ impl Sema<'_, '_> {
         d: Option<&Declarator>,
         friend_loc: Loc,
     ) -> Option<DeclId> {
-        let _ = (ds, base, d);
-        self.unsupported("friend declarations", friend_loc);
-        None
+        self.declare_friend(ds, base, d, friend_loc)
     }
 
     /// `= default;` after the declarator of function `f`

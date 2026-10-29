@@ -6,10 +6,11 @@
 use kiln_ast::attr::{AttrKind, AttrNode, AttrSyntax};
 use kiln_ast::decl::{
     ConstexprKind, DeclFlags, DeclKind, DefinitionBits, EnumData, FieldData, FnSpec, FnStorage,
-    LinkageLang, TagKind, TlsKind, VarSpec, VarStorage,
+    FriendKind, LinkageLang, TagKind, TlsKind, VarSpec, VarStorage,
 };
 use kiln_ast::expr::{CastKind, ExprKind};
 use kiln_ast::ids::RawId;
+use kiln_ast::lookup::LookupFlags;
 use kiln_ast::names::DeclName;
 use kiln_ast::types::{AutoKeyword, BuiltinType, ExcSpec, FuncInfo, Quals, TagKeyword, TypeView};
 use kiln_ast::{AttrId, DeclHead, DeclId, ExprId, QualType, StmtId};
@@ -506,7 +507,7 @@ impl Sema<'_, '_> {
         let decl = if ds.is_typedef() {
             self.act_on_typedef(ds, ty, d, name, false)
         } else if self.ast.types.is_function(ty) {
-            self.act_on_function(ds, ty, d, name)
+            self.act_on_function(ds, ty, d, name, false)
         } else if d.ctx == DeclaratorContext::Member
             && !matches!(ds.storage, Some((StorageSpec::Static, _)))
         {
@@ -801,19 +802,30 @@ impl Sema<'_, '_> {
         clippy::too_many_lines,
         reason = "[dcl.fct.spec], [dcl.link] and redeclaration checks in order"
     )]
-    fn act_on_function(
+    /// A function declarator; `friend` for the declarator of a friend
+    /// declaration ([class.friend]/6-7): an unqualified one declares a
+    /// function of the innermost enclosing namespace, lexically in the
+    /// class, hidden from ordinary lookup unless declared there before
+    /// ([namespace.memdef]/3).
+    pub(crate) fn act_on_function(
         &mut self,
         ds: &DeclSpec,
         ty: QualType,
         d: &Declarator,
         name: Symbol,
+        friend: bool,
     ) -> DeclId {
         let (ctx, lexical) = self.decl_contexts(d);
+        let ctx = if friend && d.qualifier.is_none() {
+            self.enclosing_namespace().unwrap_or(self.ast.tu)
+        } else {
+            ctx
+        };
         // A member function ([class.mfct]): declared in its class, or
         // defined out of line with the class as qualifier.
         let method = self.kind_of(ctx) == DeclKind::CXXRecord;
         let ctx = if method { self.ast.definition(ctx).unwrap_or(ctx) } else { ctx };
-        let in_class = method && d.qualifier.is_none();
+        let in_class = method && d.qualifier.is_none() && !friend;
         let mut spec = FnSpec::new();
         let block = self.in_local_scope();
         match ds.storage {
@@ -865,7 +877,16 @@ impl Sema<'_, '_> {
         let mut prev_ok = None;
         let mut invalid_redecl = false;
         let fkind = if method { DeclKind::CXXMethod } else { DeclKind::Function };
-        let prev = if method {
+        let prev = if friend && d.qualifier.is_none() {
+            // Redeclaration lookup in the namespace sees hidden friends.
+            self.ast
+                .lookup_local(ctx, DeclName::ident(name))
+                .iter()
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .find(|&p| !is_tag_kind(self.kind_of(p)))
+        } else if method {
             self.find_prev(name, d.qualifier)
         } else {
             self.find_prev_linkage(name, d.qualifier)
@@ -879,7 +900,14 @@ impl Sema<'_, '_> {
                     .ty()
                     .is_some_and(|pty| self.same_ignoring_exc_spec(pty, ty))
         });
-        if method && !in_class && !matches_member {
+        if friend && d.qualifier.is_some() && (prev.is_none() || method && !matches_member) {
+            let msg = self
+                .diag(DiagId::sema_friend_def_no_match, d.name_loc())
+                .arg(sym_str(self, name))
+                .arg(self.qualified_decl_name(ctx));
+            self.emit(msg);
+            invalid_redecl = true;
+        } else if method && !in_class && !matches_member {
             let msg = self
                 .diag(DiagId::sema_member_def_no_match, d.name_loc())
                 .arg(sym_str(self, name))
@@ -972,6 +1000,22 @@ impl Sema<'_, '_> {
         }
         let mut h = DeclHead::new(ctx, DeclName::ident(name), d.name_loc());
         h.lexical = Some(lexical);
+        if friend {
+            // [namespace.memdef]/3: visible to ordinary lookup only if
+            // declared outside the class (before or after).
+            let visible = prev_ok.is_some_and(|p| {
+                self.ast
+                    .lookup_local(ctx, DeclName::ident(name))
+                    .iter_with_flags()
+                    .any(|(x, fl)| x == p && !fl.contains(LookupFlags::ADL_ONLY))
+            });
+            let k = if visible || d.qualifier.is_some() {
+                FriendKind::Declared
+            } else {
+                FriendKind::Undeclared
+            };
+            h.misc = h.misc.with_friend(k);
+        }
         let f = self.builder().function(h, fkind, ty, spec, prev_ok);
         if invalid_redecl {
             self.ast.decls.set_flags(f, DeclFlags::INVALID);
@@ -1604,12 +1648,9 @@ impl Sema<'_, '_> {
         fixed: Option<QualType>,
         loc: Loc,
     ) -> DeclId {
-        let use_ = if use_ == TagUse::Friend {
-            self.unsupported("friend class declarations", loc);
-            TagUse::Reference
-        } else {
-            use_
-        };
+        if use_ == TagUse::Friend {
+            return self.act_on_friend_tag(keyword, name, qualifier, scoped, fixed, loc);
+        }
         let is_enum = keyword == TagKeyword::Enum;
         let fixed = fixed.or(if is_enum && scoped != 0 { Some(QualType::INT) } else { None });
         if let Some(f) = fixed {
@@ -1678,6 +1719,9 @@ impl Sema<'_, '_> {
         } else {
             self.builder().record(h, Self::tag_kind_of(keyword), prev)
         };
+        if qualifier.is_none() {
+            self.set_member_access(d);
+        }
         if let Some((n, _)) = name
             && self.in_local_scope()
             && qualifier.is_none()
@@ -1690,6 +1734,71 @@ impl Sema<'_, '_> {
         {
             self.check_using_shadow_conflict(d, n);
         }
+        d
+    }
+
+    /// The elaborated-type-specifier of `friend class X;`
+    /// ([dcl.type.elab]/4, [class.friend]/11): an unqualified name refers
+    /// to a class found without looking beyond the innermost enclosing
+    /// namespace, else declares one there, hidden from ordinary lookup.
+    fn act_on_friend_tag(
+        &mut self,
+        keyword: TagKeyword,
+        name: Option<(Symbol, Loc)>,
+        qualifier: Option<DeclId>,
+        scoped: u32,
+        fixed: Option<QualType>,
+        loc: Loc,
+    ) -> DeclId {
+        let ns = self.enclosing_namespace().unwrap_or(self.ast.tu);
+        let (Some((n, nloc)), None, false) = (name, qualifier, keyword == TagKeyword::Enum) else {
+            return self.act_on_tag(
+                keyword,
+                name,
+                qualifier,
+                TagUse::Reference,
+                scoped,
+                fixed,
+                loc,
+            );
+        };
+        let within = |s: &Self, d: DeclId| {
+            let mut c = s.ast.decls.get(d).ctx();
+            for _ in 0..10_000 {
+                match c {
+                    Some(x) if s.ast.redecl_context(x) == s.ast.redecl_context(ns) => return true,
+                    Some(x) if s.kind_of(x) == DeclKind::Namespace => return false,
+                    Some(x) => c = s.ast.decls.get(x).ctx(),
+                    None => return false,
+                }
+            }
+            false
+        };
+        let found = self.lookup_name(n, LookupKind::Tag).decls;
+        let hidden = || {
+            self.ast
+                .lookup_local(ns, DeclName::ident(n))
+                .iter()
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .find(|&d| is_tag_kind(self.kind_of(d)))
+        };
+        let prev = found.last().copied().filter(|&p| within(self, p)).or_else(hidden);
+        if let Some(p) = prev {
+            if self.tag_matches(p, keyword) {
+                self.mark_type_referenced(p);
+                return p;
+            }
+            let msg = self.diag(DiagId::sema_use_with_wrong_tag, nloc).arg(sym_str(self, n));
+            let msg = self.note_prev(msg, p, false);
+            self.emit(msg);
+        }
+        let mut h = DeclHead::new(ns, DeclName::ident(n), nloc);
+        h.lexical = Some(self.ctx);
+        h.misc = h.misc.with_friend(FriendKind::Undeclared);
+        let d = self.builder().record(h, Self::tag_kind_of(keyword), None);
+        self.friend_tag = Some(d);
         d
     }
 
@@ -1945,6 +2054,12 @@ impl Sema<'_, '_> {
         });
         let h = DeclHead::new(e, DeclName::ident(name), loc);
         let d = self.builder().enumerator(h, init_e);
+        // An enumerator of a member enumeration has the enumeration's
+        // access (clang `ActOnEnumConstant`; [class.access]/1).
+        let access = self.ast.decls.get(e).misc().access();
+        if access != kiln_ast::decl::Access::None {
+            self.ast.decls.set_access(d, access);
+        }
         let vty = build.fixed.unwrap_or(if self.fits(QualType::INT, v) {
             QualType::INT
         } else {
@@ -2640,7 +2755,7 @@ impl Sema<'_, '_> {
     }
 
     /// Checks attributes against the declaration they appertain to.
-    fn check_decl_attrs(&mut self, d: DeclId, attrs: &[AttrId]) {
+    pub(crate) fn check_decl_attrs(&mut self, d: DeclId, attrs: &[AttrId]) {
         let kind = self.ast.decls.get(d).kind();
         for &a in attrs {
             let node = *self.ast.attrs.get(a);
