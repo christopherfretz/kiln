@@ -389,7 +389,7 @@ unscoped enumeration is reported (spec/oven.md "Integration").
 - **Overloading:** overload resolution beyond arity, user-defined
   conversions, operator overloading.
 - **Templates:** templates, concepts, packs; `auto` and `decltype`
-  beyond the M2 basics.
+  beyond the M2 basics. Design: spec/sema-templates.md.
 - **Other language features:** lambdas, exceptions, coroutines,
   reflection, contracts.
 - **Constant evaluation** (what the Oven supports in M2 is in

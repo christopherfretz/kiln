@@ -25,4 +25,5 @@ say which in the PR. A spec change without tests is incomplete.
 | [llvm.md](llvm.md) | kiln_llvm | implemented |
 | [parse.md](parse.md) | kiln_parse | implemented (M2); M3+ listed |
 | [sema.md](sema.md) | kiln_sema | implemented (M2); M3+ listed |
+| [sema-templates.md](sema-templates.md) | kiln_sema (`templ`), kiln_parse, kiln_ast (templates) | design |
 | codegen, driver | | in progress (M2) |
