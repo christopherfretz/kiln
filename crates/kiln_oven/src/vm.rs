@@ -13,7 +13,7 @@ use crate::arith::{self, FloatErr, IntErr, canon};
 use crate::compile::{FState, GState, float_of};
 use crate::failure::{EvalFailure, FailKind};
 use crate::kbc::{Op, ak, cmp};
-use crate::mem::{Alloc, MemFault, Origin, Ptr, flags};
+use crate::mem::{Alloc, MemFault, Origin, Ptr, Sp, flags};
 use crate::memo::{MAX_ARGS, MemoKey, MemoVal};
 use crate::ty::{OTy, TyKind};
 use crate::{Oven, SemaBridge};
@@ -252,13 +252,7 @@ impl Oven {
 
     /// The live or dead (same generation) allocation `p` designates.
     pub(crate) fn alloc_any(&self, p: Ptr) -> Option<&Alloc> {
-        if p.is_fn() {
-            return None;
-        }
-        if p.is_static() {
-            return self.mem.statics.get((p.slot & !crate::mem::STATIC_BIT) as usize);
-        }
-        self.mem.slots.get(p.slot as usize).filter(|a| a.generation == p.generation && p.slot != 0)
+        self.mem.alloc_any(p)
     }
 
     fn run_loop(&mut self, b: &mut dyn SemaBridge, func: u32, fb0: u32) -> Exit {
@@ -988,7 +982,7 @@ impl Oven {
     /// (`k` other than [`ak::READ`]) is checked as the write it precedes, so
     /// modifying an object visible outside the evaluation is diagnosed
     /// before reading it ([expr.const]/5.16).
-    fn rmw_check(&self, raw: u64, len: u64, ty: OTy, k: u32) -> Result<(bool, u64, &Alloc), Fault> {
+    fn rmw_check(&self, raw: u64, len: u64, ty: OTy, k: u32) -> Result<(Sp, u64, &Alloc), Fault> {
         let fault = |f| Fault::Mem { f, ak: k, ty, p: raw };
         let w = k != ak::READ;
         let (st, abs, a) = self.mem.check(raw, len, w).map_err(fault)?;
@@ -1232,12 +1226,13 @@ impl Oven {
     }
 }
 
-/// The fault of modifying allocation `a` (`stat`: in static space): an
+/// The fault of modifying allocation `a` (in space `sp`): an
 /// object whose lifetime began outside the evaluation ([expr.const]/5.16,
 /// clang's `note_constexpr_modify_global`) is diagnosed before a const one
 /// ([dcl.type.cv]/4).
-fn write_fault(stat: bool, a: &Alloc, ty: OTy) -> Option<MemFault> {
-    if stat && a.flags & flags::RESOLVING == 0 && matches!(a.origin, Origin::Global(_)) {
+fn write_fault(sp: Sp, a: &Alloc, ty: OTy) -> Option<MemFault> {
+    if sp == Sp::Static && a.flags & flags::RESOLVING == 0 && matches!(a.origin, Origin::Global(_))
+    {
         return Some(MemFault::ModifyGlobal);
     }
     if let Origin::Str(_, e) = a.origin {
