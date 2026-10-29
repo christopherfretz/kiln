@@ -132,12 +132,22 @@ impl Substituter<'_, '_, '_> {
         self.sema.ast.decls.get(d).ty().unwrap_or(QualType::ERROR)
     }
 
+    /// `t`, the type of pattern declaration `d`, substituted with `d`'s
+    /// name available to diagnostics.
+    fn named_decl_ty(&mut self, d: DeclId, t: QualType, loc: Loc) -> SubstResult<QualType> {
+        let name = self.sema.ast.decls.get(d).name().as_ident().map(|n| (n, loc));
+        let saved = std::mem::replace(&mut self.declarator_name, name);
+        let r = self.ty(t, loc);
+        self.declarator_name = saved;
+        r
+    }
+
     /// A variable of the pattern (local or static data member): declared
     /// with the substituted type, then initialized (§5.6).
     pub(crate) fn var_decl(&mut self, d: DeclId, ctx: DeclaratorContext) -> SubstResult<DeclId> {
         let loc = self.sema.ast.decls.get(d).loc();
         let t = self.decl_ty(d);
-        let ty = self.ty(t, loc)?;
+        let ty = self.named_decl_ty(d, t, loc)?;
         let ds = self.pattern_declspec(d, ty);
         let dr = self.pattern_declarator(d, ctx)?;
         let Some(v) = self.sema.act_on_declarator(&ds, ty, &dr) else { return Err(SubstFail) };
@@ -168,7 +178,7 @@ impl Substituter<'_, '_, '_> {
     pub(crate) fn deferred_static_member(&mut self, d: DeclId) -> SubstResult<DeclId> {
         let loc = self.sema.ast.decls.get(d).loc();
         let t = self.decl_ty(d);
-        let ty = self.ty(t, loc)?;
+        let ty = self.named_decl_ty(d, t, loc)?;
         let mut ds = self.pattern_declspec(d, ty);
         ds.inline = None;
         let dr = self.pattern_declarator(d, DeclaratorContext::Member)?;
@@ -363,7 +373,7 @@ impl Substituter<'_, '_, '_> {
     pub(crate) fn field_decl(&mut self, d: DeclId) -> SubstResult<DeclId> {
         let loc = self.sema.ast.decls.get(d).loc();
         let t = self.decl_ty(d);
-        let ty = self.ty(t, loc)?;
+        let ty = self.named_decl_ty(d, t, loc)?;
         let ds = self.pattern_declspec(d, ty);
         let mut dr = self.pattern_declarator(d, DeclaratorContext::Member)?;
         let fd: Option<FieldData> = self.sema.ast.decls.field(d).copied();

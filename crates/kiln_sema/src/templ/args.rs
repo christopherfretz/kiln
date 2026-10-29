@@ -231,8 +231,10 @@ impl Sema<'_, '_> {
     }
 
     fn diag_template_arity(&self, tmpl: DeclId, too_many: bool, loc: Loc) {
-        let name = self.report_template_name(tmpl);
-        let at = self.pattern_of(tmpl).map_or_else(|| self.ast.decls.get(tmpl).loc(), |p| self.ast.decls.get(p).loc());
+        let name = self.qualified_decl_name(tmpl);
+        let at = self
+            .pattern_of(tmpl)
+            .map_or_else(|| self.ast.decls.get(tmpl).loc(), |p| self.ast.decls.get(p).loc());
         let d = self
             .diag(DiagId::sema_template_arg_list_different_arity, loc)
             .arg(u32::from(too_many))
@@ -440,13 +442,17 @@ impl Sema<'_, '_> {
         if !self.push_inst_frame(FrameKind::DefaultTemplateArg, p, tmpl, loc) {
             return Err(());
         }
+        let so_far = self.ast.types.arg_list(prior);
+        self.set_frame_args(so_far);
         let args = self.prior_levels(tmpl, depth, prior);
+        // Errors point into the default argument, as clang's do.
+        let at = self.templ.default_locs.get(&p).copied().unwrap_or(loc);
         let r = {
             let mut s = Substituter::new(self, &args);
-            s.template_arg(def, loc)
+            s.template_arg(def, at)
         };
         let r = match r {
-            Ok(a) => self.check_template_arg(tmpl, depth, p, a, loc, prior),
+            Ok(a) => self.check_template_arg(tmpl, depth, p, a, at, prior),
             Err(_) => Err(()),
         };
         self.pop_inst_frame();

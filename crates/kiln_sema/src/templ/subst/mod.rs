@@ -20,6 +20,7 @@ use kiln_ast::types::{ArgView, Nns, TemplateArg, TemplateName, TypeFlags};
 use kiln_ast::DeclId;
 use kiln_source::fx::FxHashMap;
 use kiln_source::Loc;
+use kiln_source::symbol::Symbol;
 
 use crate::Sema;
 use crate::templ::args::{ArgLookup, MultiLevelArgs};
@@ -56,6 +57,10 @@ pub struct Substituter<'s, 'a, 'sm> {
     /// Pattern contexts and their instantiations (the pattern class and
     /// its specialization), innermost last.
     pub(crate) pairs: Vec<(DeclId, DeclId)>,
+    /// The name of the declaration whose type is being substituted
+    /// (clang's diagnostics name it: "'a' declared as an array with a
+    /// negative size").
+    pub(crate) declarator_name: Option<(Symbol, Loc)>,
 }
 
 impl std::fmt::Debug for Substituter<'_, '_, '_> {
@@ -78,6 +83,7 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
             pack_index: None,
             entity: None,
             pairs: Vec::new(),
+            declarator_name: None,
         }
     }
 
@@ -248,7 +254,7 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
                 let Some(r) = t.as_record(ty).or_else(|| t.as_enum(ty)) else {
                     let d = self
                         .sema
-                        .diag(kiln_diag::DiagId::sema_expected_class_or_namespace, loc)
+                        .diag(kiln_diag::DiagId::sema_nested_name_spec_non_tag, loc)
                         .arg(self.sema.ty_arg(ty));
                     self.sema.emit(d);
                     return Err(SubstFail);

@@ -36,6 +36,7 @@ impl Substituter<'_, '_, '_> {
     /// checks.
     fn chunk(&mut self, base: QualType, chunk: Chunk, loc: Loc) -> SubstResult<QualType> {
         let mut d = Declarator::new(DeclaratorContext::TypeName, loc);
+        d.name = self.declarator_name;
         d.chunks.push(chunk);
         let t = self.sema.type_for_declarator_at(base, loc, &d);
         if self.sema.is_error_type(t) { Err(SubstFail) } else { Ok(t) }
@@ -87,7 +88,7 @@ impl Substituter<'_, '_, '_> {
                 if t.as_record(c).is_none() && !self.sema.is_dependent_type(c) {
                     let d = self
                         .sema
-                        .diag(DiagId::sema_expected_class_or_namespace, loc)
+                        .diag(DiagId::sema_mempointer_in_nonclass_type, loc)
                         .arg(self.sema.ty_arg(c));
                     self.sema.emit(d);
                     return Err(SubstFail);
@@ -201,11 +202,15 @@ impl Substituter<'_, '_, '_> {
                         | DeclKind::CXXRecord
                         | DeclKind::Enum
                 ) {
+                    let at = self.sema.ast.decls.get(d).loc();
+                    let n = crate::decl::sym_str(self.sema, name);
+                    let note = self.sema.diag(DiagId::note_typename_member_refers_here, at).arg(n);
                     let d = self
                         .sema
                         .diag(DiagId::sema_typename_nested_not_type, loc)
                         .arg(crate::decl::sym_str(self.sema, name))
-                        .arg(self.ctx_arg(ctx));
+                        .arg(self.ctx_arg(ctx))
+                        .with_note(note);
                     self.sema.emit(d);
                     return Err(SubstFail);
                 }

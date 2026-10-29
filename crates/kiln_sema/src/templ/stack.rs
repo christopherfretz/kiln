@@ -6,6 +6,7 @@ use std::cell::Cell;
 use std::time::Instant;
 
 use kiln_ast::DeclId;
+use kiln_ast::ids::ArgListId;
 use kiln_diag::{Diag, DiagId};
 use kiln_source::Loc;
 
@@ -96,6 +97,9 @@ pub struct InstFrame {
     /// ends one (a definition instantiated from inside SFINAE), `None`
     /// to inherit.
     pub sfinae: Option<bool>,
+    /// The arguments converted so far, for a default-argument frame
+    /// (its note names `D<void>`).
+    pub args: Option<ArgListId>,
     pub(crate) start: Instant,
     pub(crate) start_bytes: u64,
     pub(crate) start_nodes: u64,
@@ -237,16 +241,6 @@ impl Sema<'_, '_> {
         if self.inst.fatal {
             return false;
         }
-        if kind.is_instantiation() && self.inst.stack.depth() >= self.inst.limits.depth {
-            let note = self.diag(DiagId::note_template_recursion_depth, poi);
-            let d = self
-                .diag(DiagId::sema_template_recursion_depth, poi)
-                .arg(self.inst.limits.depth)
-                .with_note(note);
-            self.emit(d);
-            self.inst.fatal = true;
-            return false;
-        }
         let sfinae = match kind {
             FrameKind::ClassInstantiation
             | FrameKind::MemberClass
@@ -257,6 +251,31 @@ impl Sema<'_, '_> {
             | FrameKind::Nsdmi => Some(false),
             _ => None,
         };
+        if kind.is_instantiation() && self.inst.stack.depth() >= self.inst.limits.depth {
+            // As clang, the frame that exceeds the limit is part of the
+            // backtrace (`R<1024>` with the default depth).
+            self.inst.stack.push(InstFrame {
+                kind,
+                entity,
+                template,
+                poi,
+                sfinae,
+                args: None,
+                start: Instant::now(),
+                start_bytes: 0,
+                start_nodes: 0,
+                child_ns: 0,
+            });
+            let note = self.diag(DiagId::note_template_recursion_depth, poi);
+            let d = self
+                .diag(DiagId::sema_template_recursion_depth, poi)
+                .arg(self.inst.limits.depth)
+                .with_note(note);
+            self.emit(d);
+            let _ = self.inst.stack.pop();
+            self.inst.fatal = true;
+            return false;
+        }
         if kind.is_instantiation() {
             self.inst.report.open();
         }
@@ -269,6 +288,7 @@ impl Sema<'_, '_> {
             template,
             poi,
             sfinae,
+            args: None,
             start: Instant::now(),
             start_bytes,
             start_nodes,
@@ -306,7 +326,22 @@ impl Sema<'_, '_> {
                 let t = self.ast.decls.get(f.entity).ty().unwrap_or(kiln_ast::QualType::ERROR);
                 self.ty_str(t)
             }
+            FrameKind::DefaultTemplateArg if f.args.is_some() => {
+                let mut s = self.qualified_decl_name(f.template);
+                if let Some(l) = f.args {
+                    let names = crate::names::SemaNames::new(self);
+                    kiln_ast::types::write_arg_list(&self.ast.types, &names, l, &mut s);
+                }
+                s
+            }
             _ => self.qualified_decl_name(f.entity),
+        }
+    }
+
+    /// Records the arguments converted so far on the innermost frame.
+    pub(crate) fn set_frame_args(&mut self, args: ArgListId) {
+        if let Some(f) = self.inst.stack.frames.last_mut() {
+            f.args = Some(args);
         }
     }
 }
@@ -332,6 +367,7 @@ mod tests {
             template: DeclId::new(1),
             poi: Loc::from_raw(poi),
             sfinae: None,
+            args: None,
             start: Instant::now(),
             start_bytes: 0,
             start_nodes: 0,

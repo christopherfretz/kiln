@@ -600,6 +600,10 @@ impl<'a> AstNames<'a> {
             ExprKind::ImplicitCastExpr | ExprKind::ConstantExpr => {
                 self.expr(exprs.operand(e), depth, out);
             }
+            // clang prints the replacement of a substituted parameter.
+            ExprKind::SubstNonTypeTemplateParmExpr => {
+                self.expr(exprs.subst_replacement(e), depth, out);
+            }
             ExprKind::CStyleCastExpr => {
                 out.push('(');
                 write_type(&ast.types, self, n.ty(), PrintOptions::SUGARED, out);

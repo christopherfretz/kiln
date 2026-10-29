@@ -659,12 +659,12 @@ impl Parser<'_, '_> {
         }
         let NameClass::Type(t, d) = class else {
             let text = self.s.ast.symbols().as_str(name).to_owned();
-            let ctx = self.s.decl_name(q.ctx);
+            let ctx = self.s.qualifier_desc(q.ctx);
             let d = self
                 .s
                 .diag(DiagId::sema_typename_nested_not_found, name_loc)
                 .arg(text)
-                .arg(format!("'{ctx}'"));
+                .arg(ctx);
             self.emit(d);
             return None;
         };

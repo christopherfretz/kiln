@@ -440,7 +440,7 @@ impl Sema<'_, '_> {
     /// expression of type `std::size_t`.
     fn array_bound(&mut self, e: ExprId, d: &Declarator) -> Option<u64> {
         let ety = self.ast.exprs.get(e).ty();
-        let loc = self.ast.exprs.get(e).loc();
+        let loc = self.begin_loc(e);
         if self.is_error_type(ety) {
             return None;
         }
@@ -3387,7 +3387,7 @@ impl Sema<'_, '_> {
     }
 
     /// How a qualifier context is named in "no member named 'x' in ...".
-    pub(crate) fn qualifier_desc(&self, q: DeclId) -> String {
+    pub fn qualifier_desc(&self, q: DeclId) -> String {
         match self.ast.decls.get(q).kind() {
             DeclKind::Namespace => format!("namespace '{}'", self.decl_name(q)),
             DeclKind::TranslationUnit => "the global namespace".to_owned(),

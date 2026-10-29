@@ -926,6 +926,9 @@ diag_ids! {
     sema_incomplete_nested_name_spec = Error (1) "incomplete type {0} named in nested name specifier";
     sema_expected_class_or_namespace = Error (1) "{0} is not a class, namespace, or enumeration";
     sema_typename_nested_not_type = Error (2) "typename specifier refers to non-type member '{0}' in {1}";
+    sema_nested_name_spec_non_tag = Error (1) "type {0} cannot be used prior to '::' because it has no members";
+    sema_mempointer_in_nonclass_type = Error (1) "member pointer refers into non-class type {0}";
+    note_typename_member_refers_here = Note (1) "referenced member '{0}' is declared here";
 }
 
 impl DiagId {
