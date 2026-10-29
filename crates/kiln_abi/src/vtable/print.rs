@@ -36,7 +36,7 @@ fn sugared_proto(ast: &Ast, m: DeclId) -> Option<&kiln_ast::types::FuncProto> {
 /// clang `PredefinedExpr::ComputeName(PrettyFunctionNoVirtual, m)`:
 /// `int A::f(int) const`. Gap: the ` [T = int]` suffix of members of
 /// class template specializations is not printed.
-pub(crate) fn pretty_function(ast: &Ast, m: DeclId) -> String {
+pub fn pretty_function(ast: &Ast, m: DeclId) -> String {
     let mut proto = qualified_name(ast, m);
     proto.push('(');
     let fp = sugared_proto(ast, m);

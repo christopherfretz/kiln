@@ -135,9 +135,15 @@ impl Cg<'_> {
                 return self.emit_scalar_opt(ast.exprs.compound_literal_init(e));
             }
             ExprKind::CXXDefaultArgExpr => match default_arg_of(ast, e) {
-                Some(d) => return self.emit_scalar_opt(d),
+                Some(d) => {
+                    let saved = self.enter_default_arg(e);
+                    let r = self.emit_scalar_opt(d);
+                    self.srcloc = saved;
+                    return r;
+                }
                 None => return err(self.loc_of(e), "default argument not yet parsed"),
             },
+            ExprKind::SourceLocExpr => V::C(self.source_loc_value(e)?),
             ExprKind::ExprWithCleanups => return self.emit_scalar_opt(self.sub(e)),
             ExprKind::ConstantExpr => match ast.exprs.constant_value(e) {
                 Some(c) if !ast.types.is_void(q) => V::C(self.const_scalar_value(c, q)?),
@@ -376,6 +382,21 @@ impl Cg<'_> {
             return self.fcmp(FloatPredicate::Une, v, z);
         }
         let _ = from;
+        // clang `EmitIntToBoolConversion`: a logical value zero-extended
+        // and wanted as a logical value again is the `i1` itself (the
+        // `zext` is zapped when nothing else uses it).
+        if let V::I(_) = v {
+            let i = Fir::last_inst(v);
+            if let Op::Cast { op: CastOp::ZExt, v: inner, .. } = *self.f.fir.op(i)
+                && self.f.fir.ty(&self.m, inner) == LTy::I1
+            {
+                let last = self.f.fir.cur().and_then(|b| self.f.fir.block_insts(b).last().copied());
+                if last == Some(i) || self.f.fir.uses(v) == 0 {
+                    self.f.fir.erase(i);
+                }
+                return inner;
+            }
+        }
         let z = if ft == LTy::PTR { V::C(self.m.const_null(LTy::PTR)) } else { self.icn(ft, 0) };
         self.icmp(IntPredicate::Ne, v, z)
     }
@@ -1075,7 +1096,12 @@ impl Cg<'_> {
         match n.kind() {
             ExprKind::ParenExpr => self.emit_lvalue(ast.exprs.operand(e)),
             ExprKind::CXXDefaultArgExpr => match default_arg_of(ast, e) {
-                Some(d) => self.emit_lvalue(d),
+                Some(d) => {
+                    let saved = self.enter_default_arg(e);
+                    let r = self.emit_lvalue(d);
+                    self.srcloc = saved;
+                    r
+                }
                 None => err(self.loc_of(e), "default argument not yet parsed"),
             },
             ExprKind::ExprWithCleanups => self.emit_lvalue(self.sub(e)),
@@ -1428,23 +1454,24 @@ impl Cg<'_> {
                 }
             }
         }
-        // A builtin is never emitted as a function (spec/codegen.md):
-        // `__builtin_is_constant_evaluated()` at run time is false (clang
-        // folds it to `i1 false`; constant initializers were folded by the
-        // prepass in a manifestly constant-evaluated context).
-        // `__builtin_addressof(x)` is `&x` ([specialized.addressof]).
-        if let Some(id) = direct.and_then(|d| ast.decls.builtin_id(d)) {
-            if id == kiln_ast::decl::builtin::ADDRESSOF {
-                let x = ast.lists.iter::<ExprId>(ast.exprs.call_args(e)).next().expect("one arg");
-                return Ok(Some(self.emit_lvalue(x)?.addr.v));
+        // A builtin is never emitted as a function (spec/codegen.md §3, "Calls"):
+        // it folds, lowers inline, or calls the library function it names.
+        let mut lib = None;
+        if let Some(d) = direct
+            && let Some(id) = ast.decls.builtin_id(d)
+        {
+            match self.emit_builtin(id, e)? {
+                crate::builtins::BuiltinCall::Emitted(v) => return Ok(v),
+                crate::builtins::BuiltinCall::Library => lib = Some(self.lib_fn(d, id)?),
             }
-            debug_assert_eq!(id, kiln_ast::decl::builtin::IS_CONSTANT_EVALUATED);
-            return Ok(Some(V::C(self.m.const_bool(false))));
         }
         let args: Vec<ExprId> = ast.lists.iter(ast.exprs.call_args(e)).collect();
         let arg_tys: Vec<QualType> = args.iter().map(|&a| ast.exprs.get(a).ty()).collect();
         let (callee, fty, extern_c, fid) = if let Some(d) = direct {
-            let f = self.get_fn(d)?;
+            let f = match &lib {
+                Some((f, _)) => *f,
+                None => self.get_fn(d)?,
+            };
             let fty = ast.decls.get(d).ty().expect("function type");
             (V::C(Value::func(f)), fty, mangle::is_extern_c(ast, ast.first(d)), Some(f))
         } else {
@@ -1499,7 +1526,11 @@ impl Cg<'_> {
         };
         let (ret, params) = self.sig_attrs(&sig, args.len(), false);
         let func = if sig.nothrow {
-            self.m.attr_set(&[Attr::Flag(AttrKind::NoUnwind)])
+            let mut fa = vec![Attr::Flag(AttrKind::NoUnwind)];
+            if let Some((_, extra)) = &lib {
+                fa.extend(extra.iter().cloned());
+            }
+            self.m.attr_set(&fa)
         } else {
             AttrList::default().func
         };
@@ -1670,7 +1701,12 @@ impl Cg<'_> {
                 self.agg_visit(ast.exprs.operand(e), dest, zeroed)
             }
             ExprKind::CXXDefaultArgExpr => match default_arg_of(ast, e) {
-                Some(d) => self.agg_visit(d, dest, zeroed),
+                Some(d) => {
+                    let saved = self.enter_default_arg(e);
+                    let r = self.agg_visit(d, dest, zeroed);
+                    self.srcloc = saved;
+                    r
+                }
                 None => err(self.loc_of(e), "default argument not yet parsed"),
             },
             ExprKind::ExprWithCleanups | ExprKind::MaterializeTemporaryExpr => {

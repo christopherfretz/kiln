@@ -560,6 +560,10 @@ impl<'a> AstNames<'a> {
                 }
                 self.write_name(exprs.decl(e), out);
             }
+            ExprKind::SourceLocExpr => {
+                out.push_str(exprs.source_loc_kind(e).spelling());
+                out.push_str("()");
+            }
             ExprKind::MemberExpr => {
                 self.expr(exprs.operand(e), d, out);
                 out.push_str(if n.has(ExprFlags::ARROW) { "->" } else { "." });

@@ -122,6 +122,12 @@ keywords! {
     Extension = "__extension__";
     BuiltinOffsetof = "__builtin_offsetof";
     BuiltinBitCast = "__builtin_bit_cast";
+    BuiltinFile = "__builtin_FILE";
+    BuiltinFileName = "__builtin_FILE_NAME";
+    BuiltinFunction = "__builtin_FUNCTION";
+    BuiltinLine = "__builtin_LINE";
+    BuiltinColumn = "__builtin_COLUMN";
+    BuiltinSourceLocation = "__builtin_source_location";
 }
 
 /// Symbol-to-keyword map for one interner.

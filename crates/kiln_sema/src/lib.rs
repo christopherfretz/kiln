@@ -222,6 +222,8 @@ pub struct Sema<'a, 'sm> {
     /// were already noted (clang notes them on the first abstract-type
     /// diagnostic per class only; WP-078a).
     pub(crate) abstract_noted: kiln_source::fx::FxHashSet<DeclId>,
+    /// State of the source-location builtins (`builtins.rs`).
+    pub(crate) srcloc: builtins::SrcLocCache,
 }
 
 impl<'a, 'sm> Sema<'a, 'sm> {
@@ -299,6 +301,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             templ: templ::TemplState::default(),
             inst: templ::InstState::default(),
             abstract_noted: kiln_source::fx::FxHashSet::default(),
+            srcloc: builtins::SrcLocCache::default(),
         }
     }
 
