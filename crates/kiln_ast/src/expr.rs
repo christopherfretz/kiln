@@ -661,6 +661,194 @@ u8_enum!(
     }
 );
 
+u8_enum!(
+    /// The clang type-trait keywords (spec/sema-templates.md §9.1, §9.4):
+    /// the `aux` of `TypeTraitExpr`, `ArrayTypeTraitExpr` and
+    /// `ExpressionTraitExpr`. Spellings are the keywords; aliases
+    /// (`__is_same_as`, `__is_convertible_to`, `__is_literal`) are their
+    /// own rows because clang dumps the spelling's trait. Arity, status and
+    /// the evaluator live in `kiln_sema::templ::builtins::TABLE`.
+    TypeTrait {
+        /// `__has_nothrow_assign`.
+        HasNothrowAssign = "__has_nothrow_assign",
+        /// `__has_nothrow_constructor`.
+        HasNothrowConstructor = "__has_nothrow_constructor",
+        /// `__has_nothrow_copy`.
+        HasNothrowCopy = "__has_nothrow_copy",
+        /// `__has_nothrow_move_assign`.
+        HasNothrowMoveAssign = "__has_nothrow_move_assign",
+        /// `__has_trivial_assign`.
+        HasTrivialAssign = "__has_trivial_assign",
+        /// `__has_trivial_constructor`.
+        HasTrivialDefaultConstructor = "__has_trivial_constructor",
+        /// `__has_trivial_copy`.
+        HasTrivialCopy = "__has_trivial_copy",
+        /// `__has_trivial_destructor`.
+        HasTrivialDestructor = "__has_trivial_destructor",
+        /// `__has_trivial_move_assign`.
+        HasTrivialMoveAssign = "__has_trivial_move_assign",
+        /// `__has_trivial_move_constructor`.
+        HasTrivialMoveConstructor = "__has_trivial_move_constructor",
+        /// `__has_unique_object_representations`.
+        HasUniqueObjectRepresentations = "__has_unique_object_representations",
+        /// `__has_virtual_destructor`.
+        HasVirtualDestructor = "__has_virtual_destructor",
+        /// `__is_abstract`.
+        IsAbstract = "__is_abstract",
+        /// `__is_aggregate`.
+        IsAggregate = "__is_aggregate",
+        /// `__is_arithmetic`.
+        IsArithmetic = "__is_arithmetic",
+        /// `__is_array`.
+        IsArray = "__is_array",
+        /// `__is_bounded_array`.
+        IsBoundedArray = "__is_bounded_array",
+        /// `__is_class`.
+        IsClass = "__is_class",
+        /// `__is_complete_type`.
+        IsCompleteType = "__is_complete_type",
+        /// `__is_compound`.
+        IsCompound = "__is_compound",
+        /// `__is_const`.
+        IsConst = "__is_const",
+        /// `__is_destructible`.
+        IsDestructible = "__is_destructible",
+        /// `__is_empty`.
+        IsEmpty = "__is_empty",
+        /// `__is_enum`.
+        IsEnum = "__is_enum",
+        /// `__is_final`.
+        IsFinal = "__is_final",
+        /// `__is_floating_point`.
+        IsFloatingPoint = "__is_floating_point",
+        /// `__is_function`.
+        IsFunction = "__is_function",
+        /// `__is_fundamental`.
+        IsFundamental = "__is_fundamental",
+        /// `__is_integral`.
+        IsIntegral = "__is_integral",
+        /// `__is_literal` (an alias of `__is_literal_type`).
+        IsLiteral = "__is_literal",
+        /// `__is_literal_type`.
+        IsLiteralType = "__is_literal_type",
+        /// `__is_lvalue_reference`.
+        IsLvalueReference = "__is_lvalue_reference",
+        /// `__is_member_function_pointer`.
+        IsMemberFunctionPointer = "__is_member_function_pointer",
+        /// `__is_member_object_pointer`.
+        IsMemberObjectPointer = "__is_member_object_pointer",
+        /// `__is_member_pointer`.
+        IsMemberPointer = "__is_member_pointer",
+        /// `__is_nothrow_destructible`.
+        IsNothrowDestructible = "__is_nothrow_destructible",
+        /// `__is_nullptr`.
+        IsNullptr = "__is_nullptr",
+        /// `__is_object`.
+        IsObject = "__is_object",
+        /// `__is_pod`.
+        IsPod = "__is_pod",
+        /// `__is_pointer`.
+        IsPointer = "__is_pointer",
+        /// `__is_polymorphic`.
+        IsPolymorphic = "__is_polymorphic",
+        /// `__is_reference`.
+        IsReference = "__is_reference",
+        /// `__is_referenceable`.
+        IsReferenceable = "__is_referenceable",
+        /// `__is_rvalue_reference`.
+        IsRvalueReference = "__is_rvalue_reference",
+        /// `__is_scalar`.
+        IsScalar = "__is_scalar",
+        /// `__is_scoped_enum`.
+        IsScopedEnum = "__is_scoped_enum",
+        /// `__is_signed`.
+        IsSigned = "__is_signed",
+        /// `__is_standard_layout`.
+        IsStandardLayout = "__is_standard_layout",
+        /// `__is_trivial`.
+        IsTrivial = "__is_trivial",
+        /// `__is_trivially_copyable`.
+        IsTriviallyCopyable = "__is_trivially_copyable",
+        /// `__is_trivially_destructible`.
+        IsTriviallyDestructible = "__is_trivially_destructible",
+        /// `__is_trivially_equality_comparable`.
+        IsTriviallyEqualityComparable = "__is_trivially_equality_comparable",
+        /// `__is_trivially_relocatable`.
+        IsTriviallyRelocatable = "__is_trivially_relocatable",
+        /// `__is_unbounded_array`.
+        IsUnboundedArray = "__is_unbounded_array",
+        /// `__is_union`.
+        IsUnion = "__is_union",
+        /// `__is_unsigned`.
+        IsUnsigned = "__is_unsigned",
+        /// `__is_void`.
+        IsVoid = "__is_void",
+        /// `__is_volatile`.
+        IsVolatile = "__is_volatile",
+        /// `__can_pass_in_regs`.
+        CanPassInRegs = "__can_pass_in_regs",
+        /// `__is_bitwise_cloneable`.
+        IsBitwiseCloneable = "__is_bitwise_cloneable",
+        /// `__is_base_of`.
+        IsBaseOf = "__is_base_of",
+        /// `__is_same`.
+        IsSame = "__is_same",
+        /// `__is_same_as` (an alias of `__is_same`).
+        IsSameAs = "__is_same_as",
+        /// `__is_assignable`.
+        IsAssignable = "__is_assignable",
+        /// `__is_convertible`.
+        IsConvertible = "__is_convertible",
+        /// `__is_convertible_to` (an alias of `__is_convertible`).
+        IsConvertibleTo = "__is_convertible_to",
+        /// `__is_layout_compatible`.
+        IsLayoutCompatible = "__is_layout_compatible",
+        /// `__is_nothrow_assignable`.
+        IsNothrowAssignable = "__is_nothrow_assignable",
+        /// `__is_nothrow_convertible`.
+        IsNothrowConvertible = "__is_nothrow_convertible",
+        /// `__is_pointer_interconvertible_base_of`.
+        IsPointerInterconvertibleBaseOf = "__is_pointer_interconvertible_base_of",
+        /// `__is_trivially_assignable`.
+        IsTriviallyAssignable = "__is_trivially_assignable",
+        /// `__reference_binds_to_temporary`.
+        ReferenceBindsToTemporary = "__reference_binds_to_temporary",
+        /// `__reference_constructs_from_temporary`.
+        ReferenceConstructsFromTemporary = "__reference_constructs_from_temporary",
+        /// `__reference_converts_from_temporary`.
+        ReferenceConvertsFromTemporary = "__reference_converts_from_temporary",
+        /// `__is_constructible`.
+        IsConstructible = "__is_constructible",
+        /// `__is_nothrow_constructible`.
+        IsNothrowConstructible = "__is_nothrow_constructible",
+        /// `__is_trivially_constructible`.
+        IsTriviallyConstructible = "__is_trivially_constructible",
+        /// `__array_rank` (`ArrayTypeTraitExpr`).
+        ArrayRank = "__array_rank",
+        /// `__array_extent` (`ArrayTypeTraitExpr`).
+        ArrayExtent = "__array_extent",
+        /// `__is_lvalue_expr` (`ExpressionTraitExpr`).
+        IsLvalueExpr = "__is_lvalue_expr",
+        /// `__is_rvalue_expr` (`ExpressionTraitExpr`).
+        IsRvalueExpr = "__is_rvalue_expr",
+    }
+);
+
+impl TypeTrait {
+    /// Every trait, in discriminant order.
+    pub fn all() -> &'static [TypeTrait] {
+        Self::ALL
+    }
+
+    /// The trait spelled `name`, if any.
+    pub fn from_name(name: &str) -> Option<TypeTrait> {
+        if !name.starts_with("__") {
+            return None;
+        }
+        Self::ALL.iter().copied().find(|t| t.spelling() == name)
+    }
+}
+
 /// The flags of a `CXXConstructExpr` / `CXXTemporaryObjectExpr`
 /// (sema-class.md §5.1), packed into `aux`: bits 0-1 the
 /// [`ConstructionKind`], bit 2 `list`, bit 3 `std_init_list`, bit 4
@@ -906,6 +1094,18 @@ pub struct ColdExprData {
     pub member_extra: ColdMap<ExprId, DeclRefExtra>,
     /// Designators as written for `InitListExpr` (§5.6).
     pub designators: ColdMap<ExprId, ListId>,
+    /// `ArrayTypeTraitExpr`: the dimension operand of `__array_extent`
+    /// (unevaluated by codegen; kept for substitution) and the value.
+    pub array_trait: ColdMap<ExprId, ArrayTraitExtra>,
+}
+
+/// The cold record of an `ArrayTypeTraitExpr` (§9.4).
+#[derive(Clone, Copy, Debug)]
+pub struct ArrayTraitExtra {
+    /// The converted dimension of `__array_extent(T, I)`.
+    pub dim: Option<ExprId>,
+    /// The value (0 while value-dependent).
+    pub value: u64,
 }
 
 impl Default for ColdExprData {
@@ -914,6 +1114,7 @@ impl Default for ColdExprData {
             end_loc: ColdMap::new("end_loc"),
             member_extra: ColdMap::new("member_extra"),
             designators: ColdMap::new("designators"),
+            array_trait: ColdMap::new("array_trait"),
         }
     }
 }
@@ -1440,6 +1641,42 @@ impl ExprArena {
         self.expect_kind(e, ExprKind::CXXNoexceptExpr).b != 0
     }
 
+    /// The trait of a `TypeTraitExpr`, `ArrayTypeTraitExpr` or
+    /// `ExpressionTraitExpr`.
+    pub fn type_trait(&self, e: ExprId) -> TypeTrait {
+        let n = self.get(e);
+        debug_assert!(matches!(
+            n.kind,
+            ExprKind::TypeTraitExpr | ExprKind::ArrayTypeTraitExpr | ExprKind::ExpressionTraitExpr
+        ));
+        TypeTrait::from_u8(n.aux).expect("valid type trait")
+    }
+
+    /// The type operands of a `TypeTraitExpr` (a `ListId` of `QualType`s).
+    pub fn type_trait_args(&self, e: ExprId) -> ListId {
+        ListId::new(self.expect_kind(e, ExprKind::TypeTraitExpr).a)
+    }
+
+    /// The value of a `TypeTraitExpr` or `ExpressionTraitExpr` (`false`
+    /// while value-dependent).
+    pub fn type_trait_value(&self, e: ExprId) -> bool {
+        let n = self.get(e);
+        debug_assert!(matches!(n.kind, ExprKind::TypeTraitExpr | ExprKind::ExpressionTraitExpr));
+        n.b != 0
+    }
+
+    /// The queried type of an `ArrayTypeTraitExpr`.
+    pub fn array_trait_type(&self, e: ExprId) -> QualType {
+        QualType::from_raw(self.expect_kind(e, ExprKind::ArrayTypeTraitExpr).a)
+            .expect("array trait type")
+    }
+
+    /// The cold record of an `ArrayTypeTraitExpr`.
+    pub fn array_trait(&self, e: ExprId) -> ArrayTraitExtra {
+        self.expect_kind(e, ExprKind::ArrayTypeTraitExpr);
+        self.cold.array_trait.get(e).copied().unwrap_or(ArrayTraitExtra { dim: None, value: 0 })
+    }
+
     /// The side record of a `CXXNewExpr`.
     pub fn new_extra(&self, e: ExprId) -> &NewExtra {
         &self.news[self.expect_kind(e, ExprKind::CXXNewExpr).a as usize]
@@ -1586,6 +1823,7 @@ impl ExprArena {
             // `CXXDependentScopeMemberExpr` and `PackExpansionExpr` are
             // template expressions (spec/sema-templates.md §2.4).
             ExprKind::CXXNoexceptExpr
+            | ExprKind::ExpressionTraitExpr
             | ExprKind::CXXThrowExpr
             | ExprKind::CompoundLiteralExpr
             | ExprKind::CXXDeleteExpr
@@ -1658,6 +1896,7 @@ impl HeapSize for ExprArena {
         r.push(self.cold.end_loc.mem_row().prefixed("cold"));
         r.push(self.cold.member_extra.mem_row().prefixed("cold"));
         r.push(self.cold.designators.mem_row().prefixed("cold"));
+        r.push(self.cold.array_trait.mem_row().prefixed("cold"));
         r
     }
 }

@@ -510,6 +510,7 @@ impl<'a, W: io::Write> Dumper<'a, W> {
             | ExprKind::CXXBindTemporaryExpr
             | ExprKind::ExprWithCleanups
             | ExprKind::CXXNoexceptExpr
+            | ExprKind::ExpressionTraitExpr
             | ExprKind::CXXThrowExpr
             | ExprKind::CompoundLiteralExpr => push(n.a()),
             ExprKind::SubstNonTypeTemplateParmExpr => {
@@ -1684,6 +1685,23 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                     self.line.push_str(" type_operand=");
                     self.bare_ty(t);
                 }
+            }
+            // clang prints only the trait; kiln adds the type operands.
+            ExprKind::TypeTraitExpr => {
+                self.line.push(' ');
+                self.line.push_str(exprs.type_trait(e).spelling());
+                for t in ast.lists.iter::<QualType>(exprs.type_trait_args(e)) {
+                    self.ty(t);
+                }
+            }
+            ExprKind::ArrayTypeTraitExpr => {
+                self.line.push(' ');
+                self.line.push_str(exprs.type_trait(e).spelling());
+                self.ty(exprs.array_trait_type(e));
+            }
+            ExprKind::ExpressionTraitExpr => {
+                self.line.push(' ');
+                self.line.push_str(exprs.type_trait(e).spelling());
             }
             ExprKind::UnaryExprOrTypeTraitExpr => {
                 self.line.push(' ');

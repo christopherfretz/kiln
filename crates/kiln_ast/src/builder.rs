@@ -22,9 +22,10 @@ use crate::decl::{
     StaticAssertData, TagKind, TemplLink, TypedefData, VarData, VarEval, VarSpec,
 };
 use crate::expr::{
-    BinaryOp, CastKind, CharKind, CompoundAssignExtra, ConstructInfo, ConstructionKind,
+    ArrayTraitExtra, BinaryOp, CastKind, CharKind, CompoundAssignExtra, ConstructInfo, ConstructionKind,
     DeclRefExtra, ExprDeps, ExprFlags, ExprKind, ExprNode, InitListExtra, NewExtra, NewInitStyle,
-    NonOdrUse, ObjectKind, Radix, StorageDuration, StringKind, TraitKind, TypeidOperand, UnaryOp,
+    NonOdrUse, ObjectKind, Radix, StorageDuration, StringKind, TraitKind, TypeTrait, TypeidOperand,
+    UnaryOp,
     ValueCategory,
 };
 use crate::ids::{
@@ -1519,6 +1520,117 @@ impl<'a> AstBuilder<'a> {
             ValueCategory::PRValue,
             deps,
             0,
+            ty,
+            loc,
+            operand.raw(),
+            u32::from(value),
+        );
+        self.ast.exprs.cold.end_loc.insert(e, rparen).expect("fresh expression");
+        e
+    }
+
+    /// `__trait(T...)` ([meta.unary], spec/sema-templates.md §9.1): a
+    /// `bool` prvalue whose `value` sema computed from the unevaluated
+    /// type operands `args`. Value-dependent if any operand is dependent
+    /// ([temp.dep.constexpr]/3); `rparen` is the closing `)`.
+    pub fn type_trait_expr(
+        &mut self,
+        trait_: TypeTrait,
+        args: &[QualType],
+        value: bool,
+        ty: QualType,
+        loc: Loc,
+        rparen: Loc,
+    ) -> ExprId {
+        let mut deps = self.type_deps(ty);
+        for &a in args {
+            let d = self.type_deps(a);
+            deps |= d.without(ExprDeps::TYPE);
+            if d.contains(ExprDeps::TYPE) {
+                deps |= ExprDeps::VALUE_INST;
+            }
+        }
+        let list = self.ast.lists.push(args);
+        let e = self.simple(
+            ExprKind::TypeTraitExpr,
+            ValueCategory::PRValue,
+            deps,
+            trait_ as u8,
+            ty,
+            loc,
+            list.raw(),
+            u32::from(value),
+        );
+        self.ast.exprs.cold.end_loc.insert(e, rparen).expect("fresh expression");
+        e
+    }
+
+    /// `__array_rank(T)` / `__array_extent(T, dim)` (§9.4): a `size_t`
+    /// prvalue. Value-dependent if `arg` or `dim` is.
+    #[allow(clippy::too_many_arguments, reason = "one per field of the node")]
+    pub fn array_type_trait_expr(
+        &mut self,
+        trait_: TypeTrait,
+        arg: QualType,
+        dim: Option<ExprId>,
+        value: u64,
+        ty: QualType,
+        loc: Loc,
+        rparen: Loc,
+    ) -> ExprId {
+        let a = self.type_deps(arg);
+        let mut deps = self.type_deps(ty) | a.without(ExprDeps::TYPE);
+        if a.contains(ExprDeps::TYPE) {
+            deps |= ExprDeps::VALUE_INST;
+        }
+        if let Some(d) = dim {
+            let dd = self.deps(d);
+            deps |= dd.without(ExprDeps::TYPE);
+            if dd.contains(ExprDeps::TYPE) {
+                deps |= ExprDeps::VALUE_INST;
+            }
+        }
+        let e = self.simple(
+            ExprKind::ArrayTypeTraitExpr,
+            ValueCategory::PRValue,
+            deps,
+            trait_ as u8,
+            ty,
+            loc,
+            arg.to_raw(),
+            0,
+        );
+        self.ast.exprs.cold.end_loc.insert(e, rparen).expect("fresh expression");
+        self.ast
+            .exprs
+            .cold
+            .array_trait
+            .insert(e, ArrayTraitExtra { dim, value })
+            .expect("fresh expression");
+        e
+    }
+
+    /// `__is_lvalue_expr(e)` / `__is_rvalue_expr(e)`: a `bool` prvalue;
+    /// value-dependent if `operand` is type-dependent.
+    pub fn expression_trait_expr(
+        &mut self,
+        trait_: TypeTrait,
+        operand: ExprId,
+        value: bool,
+        ty: QualType,
+        loc: Loc,
+        rparen: Loc,
+    ) -> ExprId {
+        let a = self.deps(operand);
+        let mut deps = self.type_deps(ty) | a.without(ExprDeps::TYPE).without(ExprDeps::VALUE);
+        if a.contains(ExprDeps::TYPE) {
+            deps |= ExprDeps::VALUE_INST;
+        }
+        let e = self.simple(
+            ExprKind::ExpressionTraitExpr,
+            ValueCategory::PRValue,
+            deps,
+            trait_ as u8,
             ty,
             loc,
             operand.raw(),

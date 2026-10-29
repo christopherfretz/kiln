@@ -655,6 +655,33 @@ impl<'a> AstNames<'a> {
                     }
                 }
             }
+            ExprKind::TypeTraitExpr => {
+                out.push_str(exprs.type_trait(e).spelling());
+                out.push('(');
+                for (i, t) in ast.lists.iter::<QualType>(exprs.type_trait_args(e)).enumerate() {
+                    if i > 0 {
+                        out.push_str(", ");
+                    }
+                    write_type(&ast.types, self, t, PrintOptions::SUGARED, out);
+                }
+                out.push(')');
+            }
+            ExprKind::ArrayTypeTraitExpr => {
+                out.push_str(exprs.type_trait(e).spelling());
+                out.push('(');
+                write_type(&ast.types, self, exprs.array_trait_type(e), PrintOptions::SUGARED, out);
+                if let Some(dim) = exprs.array_trait(e).dim {
+                    out.push_str(", ");
+                    self.expr(dim, d, out);
+                }
+                out.push(')');
+            }
+            ExprKind::ExpressionTraitExpr => {
+                out.push_str(exprs.type_trait(e).spelling());
+                out.push('(');
+                self.expr(ExprId::new(n.a()), d, out);
+                out.push(')');
+            }
             ExprKind::CXXNoexceptExpr => {
                 out.push_str("noexcept(");
                 self.expr(exprs.noexcept_operand(e), d, out);
