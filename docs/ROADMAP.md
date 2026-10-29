@@ -38,7 +38,7 @@ printer, diagnostics are separate work packages).
 - Perf: preprocessing all libc++ headers within 1.5x of clang's `-E` time
   and lower peak RSS. Recorded in `bench/baselines/pp.json`.
 
-## M2 — The C-ish subset, end to end, with the Oven — in progress (codegen pending)
+## M2 — The C-ish subset, end to end, with the Oven — done (2026-10-28)
 Status: parse/sema/Oven/dump done; `kiln -fsyntax-only -fdump-ast` matches
 clang on 47 golden directories; 99 [expr.const] source tests; Oven 0.02x clang
 time / 0.04x memory on `bench/oven`. Codegen + `run` tests: WP-052.
