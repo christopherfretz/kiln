@@ -293,8 +293,10 @@ impl<'a> Preprocessor<'a, '_> {
         let def = self.read_definition(name, &ntok);
         self.va_scope = old_scope;
         let Some(def) = def else { return };
+        // clang skips the redefinition checks in a system header when its
+        // warnings are suppressed anyway (`-Wsystem-headers` keeps them).
         let in_system = self.cur_file_ref().is_some_and(|f| f.system);
-        if !in_system && let Some(old) = self.macros.get_rc(name).cloned() {
+        if !(in_system && self.suppress_system_warnings()) && let Some(old) = self.macros.get_rc(name).cloned() {
             if self.is_language_builtin(&old) {
                 self.emit(Diag::new(DiagId::pp_builtin_macro_redefined, ntok.tok.span));
             } else if !old.allow_redef.get() && !self.identical(&old, &def) {
@@ -1812,6 +1814,9 @@ impl Preprocessor<'_, '_> {
         let at = u32::try_from(at.min(text.len())).unwrap_or(off);
         self.sm.add_line_directive(file, at, line, name);
         let loc = base.with_offset(at);
+        if kind.is_some() {
+            self.sm.set_file_kind(loc, crate::preprocessor::file_kind(system, extern_c));
+        }
         self.file_change(FileChange::Rename { file, at: loc, system, extern_c, flag });
     }
 

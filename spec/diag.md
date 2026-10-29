@@ -145,7 +145,8 @@ applied in order, followed by all `-R` options. For a `-W` option
 (after stripping `no-`, which makes it negative; `format=0` means
 `no-format`):
 
-- `system-headers`: accepted, no effect (kiln has no system headers yet).
+- `system-headers`: positive clears, negative sets the global
+  suppress-system-warnings flag (default set; §5.4). The last one wins.
 - `everything`: positive sets the global `enable_all`; negative maps every
   warning/extension to Ignored.
 - `error`: sets/clears the global warnings-as-errors flag.
@@ -198,6 +199,33 @@ option. These are produced, in option order:
   name's length (a tie suggests nothing);
 - `unknown -Werror warning specifier: '-W<x>'` (and `-Wfatal-errors`).
 
+### 5.4 System headers
+
+clang's `SuppressSystemWarnings` rule (the end of
+`getDiagnosticSeverity`). A diagnostic is dropped, after §5.2 (so a
+warning made an error by `-Werror`, `-Werror=G` or `-pedantic-errors` is
+dropped too), when all of these hold:
+
+- the flag is set (no `-Wsystem-headers`);
+- the id does not show in system headers. `DiagId::shows_in_system_header`
+  is true for hard errors (`Error`, `Fatal`) and for the warnings clang
+  marks `ShowInSystemHeader`: `pp_warning_directive` (`#warning`) and
+  `oven_enum_constexpr_conversion` (checked against clang 19). Every other
+  warning, `DefaultError` warnings included, is suppressed;
+- the primary span is valid and `SourceManager::is_in_system_header(lo)`:
+  the expansion location of the caret is in a system header as the
+  preprocessor marked it (spec/source.md "File kinds": `-isystem` and the
+  default system directories, `#pragma GCC system_header` from the pragma
+  on, line-marker flag 3 from the next line on).
+
+A warning in a user file produced by a macro defined in a system header
+is kept (its expansion location is in the user file). clang also drops
+`SuppressInSystemMacro` warnings whose spelling is in a system macro;
+kiln has none of those ids yet. Notes go with their parent.
+`DiagEngine::suppress_system_warnings()` exposes the flag (kiln_pp skips
+macro-redefinition checks in system headers when it is set, as clang
+does) and `is_enabled_at(id, loc)` combines §5.2 with this rule.
+
 ## 6. Building diagnostics
 
 ```rust
@@ -227,7 +255,7 @@ Diag::new(DiagId::pp_macro_redefined, name_span)
 DiagEngine::new(&sm, &opts, sink) // sink: impl DiagSink + Send
 DiagEngine::with_stderr(&sm, &opts) // TextSink or JsonSink per opts.format
 engine.emit(diag) / diag.emit(&engine)
-engine.severity(id) / is_enabled(id)
+engine.severity(id) / is_enabled(id) / is_enabled_at(id, loc) / suppress_system_warnings()
 engine.error_count() / warning_count() / has_fatal() / summary() / flush()
 ```
 
@@ -242,7 +270,8 @@ record; renderers derive them, §8). Provided sinks: `TextSink<W>`,
 `emit` processes a diagnostic in this order:
 
 1. If a fatal error was emitted, drop it (§7.2).
-2. Compute the severity (§5.2); drop if Ignored.
+2. Compute the severity (§5.2); drop if Ignored, or if the system-header
+   rule drops it (§5.4).
 3. Deduplicate (§7.4).
 4. Apply the error limit (§7.3).
 5. Count: Error and Fatal count as errors, Warning as warnings.

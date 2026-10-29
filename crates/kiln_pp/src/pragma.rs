@@ -343,6 +343,7 @@ impl Preprocessor<'_, '_> {
             f.system = true;
             f.extern_c = false;
         }
+        self.sm.set_file_kind(self.sm.expansion_loc(t.tok.span.lo), kiln_source::FileKind::System);
         self.file_change(FileChange::SystemHeader { file, at: t.tok.span.lo });
     }
 

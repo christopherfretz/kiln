@@ -446,6 +446,9 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
         let base = inc
             .and_then(|at| self.sm.add_inclusion(file, self.sm.expansion_loc(at)).ok())
             .unwrap_or_else(|| self.sm.loc(file, 0));
+        if system {
+            self.sm.set_file_kind(base, file_kind(system, extern_c));
+        }
         if self.entered.insert(file) {
             for r in &self.sm.load_report(file).replacements {
                 let at = base.with_offset(r.offset);
@@ -468,6 +471,12 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
             mi: MiOpt::default(),
         })));
         self.file_change(FileChange::Enter { file, from, system, extern_c });
+    }
+
+    /// Whether warnings located in system headers are dropped (no
+    /// `-Wsystem-headers`): checks done only to warn can be skipped there.
+    pub(crate) fn suppress_system_warnings(&self) -> bool {
+        self.diags.suppress_system_warnings()
     }
 
     /// Records a file change (callback and marker).
@@ -1033,3 +1042,12 @@ pub(crate) fn eof_tok(span: Span) -> Token {
 
 /// Re-export for the other modules.
 pub(crate) type Def = Rc<MacroDef>;
+
+/// The source manager's kind for a frame's `system` / `extern_c` flags.
+pub(crate) fn file_kind(system: bool, extern_c: bool) -> kiln_source::FileKind {
+    match (system, extern_c) {
+        (_, true) => kiln_source::FileKind::ExternCSystem,
+        (true, false) => kiln_source::FileKind::System,
+        (false, false) => kiln_source::FileKind::User,
+    }
+}

@@ -672,6 +672,14 @@ impl DiagId {
         matches!(self.default_severity(), Severity::Error | Severity::Fatal)
     }
 
+    /// True if the id is reported even when located in a system header
+    /// (clang's `ShowInSystemHeader`): hard errors, and the few warnings
+    /// clang marks so (checked against clang 19 with `-isystem`).
+    pub const fn shows_in_system_header(self) -> bool {
+        matches!(self.class(), DiagClass::Error)
+            || matches!(self, DiagId::pp_warning_directive | DiagId::oven_enum_constexpr_conversion)
+    }
+
     /// The group whose name is shown in `[-W...]` and in JSON output:
     /// [`group`](Self::group), or `pedantic` for an extension diagnostic
     /// without a group (clang puts those in `-Wpedantic`).

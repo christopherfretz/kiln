@@ -244,6 +244,28 @@ struct FileRange {
     included_from: Loc,
 }
 
+/// Whether a location is in a user or a system header (clang
+/// `SrcMgr::CharacteristicKind`). Ordered: `User < System < ExternCSystem`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+pub enum FileKind {
+    /// An ordinary source file.
+    #[default]
+    User,
+    /// A system header: found in a system directory, marked by
+    /// `#pragma GCC system_header` or by line-marker flag 3. Warnings in it
+    /// are suppressed unless `-Wsystem-headers`.
+    System,
+    /// An `extern "C"` system header (line-marker flags `3 4`).
+    ExternCSystem,
+}
+
+impl FileKind {
+    /// `System` or `ExternCSystem`.
+    pub const fn is_system(self) -> bool {
+        !matches!(self, FileKind::User)
+    }
+}
+
 #[derive(Debug)]
 struct Alloc {
     next_file: u64,
@@ -272,6 +294,10 @@ pub struct SourceManager {
     /// (and so base) order.
     macro_names: AppendVec<(Loc, Span)>,
     presumed_names: AppendVec<Box<str>>,
+    /// File-kind marks `(raw file location, kind)`, sorted by location:
+    /// a mark sets the kind from its location to the end of its range or
+    /// the next mark in the range ([`set_file_kind`](Self::set_file_kind)).
+    kinds: RwLock<Vec<(u32, FileKind)>>,
     by_path: Mutex<HashMap<PathBuf, FileId>>,
     alloc: Mutex<Alloc>,
     /// Index of the range found by the last lookup (clang's
@@ -311,6 +337,7 @@ impl SourceManager {
             expansions: AppendVec::new(),
             macro_names: AppendVec::new(),
             presumed_names: AppendVec::new(),
+            kinds: RwLock::new(Vec::new()),
             by_path: Mutex::new(HashMap::new()),
             alloc: Mutex::new(Alloc { next_file: 1, next_macro: u64::from(MACRO_BIT) }),
             last_file: AtomicU32::new(0),
@@ -420,6 +447,44 @@ impl SourceManager {
     /// unknown locations.
     pub fn include_loc(&self, loc: Loc) -> Loc {
         self.find_range(self.expansion_loc(loc)).map_or(Loc::INVALID, |(r, _)| r.included_from)
+    }
+
+    /// Makes the file location `at`, and every later location of its
+    /// range up to the next mark, of kind `kind` (clang adds a line-table
+    /// entry with a `FileKind`: entering a system header, `#pragma GCC
+    /// system_header`, a line marker). A range starts as
+    /// [`FileKind::User`]. Marking the same location again replaces the
+    /// mark. Macro and invalid locations are ignored.
+    pub fn set_file_kind(&self, at: Loc, kind: FileKind) {
+        if !at.is_file() || self.find_range(at).is_none() {
+            return;
+        }
+        let mut kinds = self.kinds.write().unwrap_or_else(PoisonError::into_inner);
+        let pos = kinds.partition_point(|&(l, _)| l < at.0);
+        match kinds.get_mut(pos) {
+            Some(m) if m.0 == at.0 => m.1 = kind,
+            _ => kinds.insert(pos, (at.0, kind)),
+        }
+    }
+
+    /// The kind of `loc`'s file at `loc` (clang `getFileCharacteristic`):
+    /// macro locations use their [`expansion_loc`](Self::expansion_loc).
+    /// `User` for invalid and unknown locations.
+    pub fn file_kind(&self, loc: Loc) -> FileKind {
+        let loc = self.expansion_loc(loc);
+        let Some((r, _)) = self.find_range(loc) else { return FileKind::User };
+        let kinds = self.kinds.read().unwrap_or_else(PoisonError::into_inner);
+        let i = kinds.partition_point(|&(l, _)| l <= loc.0);
+        match i.checked_sub(1).map(|i| kinds[i]) {
+            Some((l, k)) if l >= r.start => k,
+            _ => FileKind::User,
+        }
+    }
+
+    /// Whether `loc` (its expansion location) is in a system header
+    /// (clang `isInSystemHeader`).
+    pub fn is_in_system_header(&self, loc: Loc) -> bool {
+        self.file_kind(loc).is_system()
     }
 
     fn file(&self, id: FileId) -> &FileEntry {
