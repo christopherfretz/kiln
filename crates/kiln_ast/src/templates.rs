@@ -567,8 +567,9 @@ impl AstBuilder<'_> {
     /// ([expr.prim.req]/5): the parameters' declaration context.
     pub fn requires_body(&mut self, ctx: DeclId, loc: Loc) -> DeclId {
         let payload = Payload::Scope(ScopeData { members: Members::default(), aux: 0 });
+        // Not a member of `ctx` (clang never lists it among its decls).
         let h = DeclHead::new(ctx, DeclName::EMPTY, loc);
-        self.add(h, DeclKind::RequiresExprBody, None, payload, None)
+        self.add_unregistered(h, DeclKind::RequiresExprBody, payload, false)
     }
 
     /// A template argument for expression `e`: dependent expressions get

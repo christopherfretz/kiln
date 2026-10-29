@@ -733,6 +733,16 @@ impl Parser<'_, '_> {
 
     // -- requires-clauses and requires-expressions -------------------------------------
 
+    /// The trailing requires-clause of function declarator `d`
+    /// ([dcl.decl.general]/1: `declarator requires-clause`).
+    pub(crate) fn parse_trailing_requires(&mut self, d: &mut Declarator) {
+        if !self.at_kw(Kw::Requires) || !d.is_function_declarator() {
+            return;
+        }
+        self.bump();
+        d.trailing_requires = self.parse_requires_clause();
+    }
+
     /// The constraint-logical-or-expression of a requires-clause after
     /// `requires` ([temp.pre]/1, [temp.pre]/9): primary expressions
     /// joined by `&&` and `||`.

@@ -337,9 +337,8 @@ impl Sema<'_, '_> {
         loc: Loc,
     ) -> ExprId {
         let depth = self.template_depth();
-        let h = DeclHead::new(self.ctx, DeclName::EMPTY, loc);
+        let h = DeclHead::new(self.ctx, DeclName::EMPTY, loc).flags(DeclFlags::IMPLICIT);
         let p = self.builder().template_type_parm(h, depth, 0, false, false);
-        self.ast.decls.set_flags(p, DeclFlags::IMPLICIT);
         let ty = self.ast.decls.get(p).ty().unwrap_or(QualType::ERROR);
         self.immediately_declared_constraint(concept, ty, args, loc)
     }

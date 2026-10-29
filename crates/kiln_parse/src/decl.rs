@@ -1388,6 +1388,7 @@ impl Parser<'_, '_> {
             let mut d = Declarator::new(ctx, self.loc());
             d.direct_init = direct_init;
             self.parse_declarator(&mut d);
+            self.parse_trailing_requires(&mut d);
             // The declspec's type is formed once the first declarator is
             // known: clang reports a missing type specifier at its name.
             // Constructors, destructors and conversion functions have

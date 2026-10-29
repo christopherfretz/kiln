@@ -482,7 +482,13 @@ impl Sema<'_, '_> {
         pack: bool,
         constraint: Option<(DeclId, Vec<TemplateArg>)>,
     ) -> QualType {
-        let needs_new = self.templ.heads.last().is_none_or(|h| h.taken || h.list.is_none());
+        // An explicit head is open once its list is built; an invented one
+        // collects every `auto` parameter of the declarator.
+        let needs_new = self
+            .templ
+            .heads
+            .last()
+            .is_none_or(|h| h.taken || (!h.invented && h.list.is_none()));
         if needs_new {
             let depth = self.template_depth();
             self.templ.heads.push(HeadBuild {
@@ -500,10 +506,10 @@ impl Sema<'_, '_> {
         let n = self.templ.invented;
         self.templ.invented += 1;
         let name = self.intern(&format!("auto:{}", n + 1));
-        let h = DeclHead::new(self.ctx, DeclName::ident(name), loc);
+        let h = DeclHead::new(self.ctx, DeclName::ident(name), loc)
+            .flags(kiln_ast::decl::DeclFlags::IMPLICIT);
         let (depth, index) = (self.cur_depth(), self.next_param_index());
         let p = self.builder().template_type_parm(h, depth, index, pack, false);
-        self.ast.decls.set_flags(p, kiln_ast::decl::DeclFlags::IMPLICIT);
         if let Some(head) = self.templ.heads.last_mut() {
             head.params.push(p);
         }

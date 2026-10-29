@@ -1095,6 +1095,7 @@ impl Parser<'_, '_> {
             };
             if !self.at(Punct::Colon) {
                 self.parse_declarator(&mut d);
+                self.parse_trailing_requires(&mut d);
             }
             let parts = mem::take(&mut self.late_fn);
             let base = *base_ty.get_or_insert_with(|| self.member_base_type(&ds, &d));
