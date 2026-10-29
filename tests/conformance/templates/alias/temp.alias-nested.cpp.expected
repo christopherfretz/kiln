@@ -1,0 +1,8 @@
+TranslationUnitDecl
+|-TypeAliasTemplateDecl Ptr
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| `-TypeAliasDecl Ptr 'T *'
+|-TypeAliasTemplateDecl PtrPtr
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| `-TypeAliasDecl PtrPtr 'Ptr<Ptr<T>>':'type-parameter-0-0 **'
+`-VarDecl pp 'PtrPtr<int>':'int **'

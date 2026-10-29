@@ -8,7 +8,9 @@ use kiln_ast::expr::{BinaryOp, ExprDeps, ExprKind};
 use kiln_ast::ids::{ArgListId, NnsId, TemplateNameId, TemplateParamListId};
 use kiln_ast::names::DeclName;
 use kiln_ast::templates::{Requirement, TemplateParmInfo};
-use kiln_ast::types::{ArgView, Nns, TagKeyword, TemplateArg, TemplateName, TypeFlags, TypeView};
+use kiln_ast::types::{
+    ArgView, Nns, TagKeyword, TemplateArg, TemplateName, TypeFlags, TypeKind, TypeView,
+};
 use kiln_ast::{DeclHead, DeclId, ExprId, QualType};
 use kiln_diag::DiagId;
 use kiln_source::Loc;
@@ -252,13 +254,15 @@ impl Sema<'_, '_> {
                 ))
             }
             DeclKind::TypeAliasTemplate => {
-                if !dep_args {
+                // [temp.alias]/2: the alias is substituted even with
+                // dependent arguments; an argument that is a pack expansion
+                // cannot be matched to parameters yet (WP-071), so that
+                // specialization stands for itself.
+                if !args.iter().any(|&a| self.is_pack_expansion_arg(a)) {
                     let locs = std::mem::take(&mut self.templ.arg_locs);
                     let t = self.alias_template_type(name, d, args, &locs, l)?;
                     return Ok(TemplateIdRef::Type(t));
                 }
-                // The underlying type needs substitution (WP-070); the
-                // dependent specialization stands for itself until then.
                 Ok(TemplateIdRef::Type(
                     self.ast.types.template_specialization(name, list, None, true),
                 ))
@@ -289,6 +293,18 @@ impl Sema<'_, '_> {
                 self.emit(msg);
                 Err(())
             }
+        }
+    }
+
+    /// Whether `a` is a pack expansion (`T...`, `TT...`, `e...`).
+    pub(crate) fn is_pack_expansion_arg(&self, a: TemplateArg) -> bool {
+        match a.view() {
+            ArgView::Type(q) => self.ast.types.kind(q.ty()) == TypeKind::PackExpansion,
+            ArgView::TemplateExpansion { .. } => true,
+            ArgView::Expr { expr, .. } => {
+                self.ast.exprs.get(expr).kind() == ExprKind::PackExpansionExpr
+            }
+            _ => false,
         }
     }
 

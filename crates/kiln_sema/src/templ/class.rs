@@ -9,7 +9,7 @@ use kiln_ast::decl::{DeclFlags, DeclKind, TagKind};
 use kiln_ast::expr::ExprKind;
 use kiln_ast::ids::{ArgListId, TemplateNameId};
 use kiln_ast::templates::SpecKind;
-use kiln_ast::types::{TagKeyword, TemplateArg};
+use kiln_ast::types::{ArgView, TagKeyword, TemplateArg, TypeView};
 use kiln_ast::{DeclId, QualType};
 use kiln_diag::DiagId;
 use kiln_source::Loc;
@@ -256,7 +256,10 @@ impl Sema<'_, '_> {
         let Some(u) = self.ast.decls.typedef(pattern).map(|t| t.underlying) else { return Err(()) };
         let depth = self.template_param_depth(tmpl);
         let mut args = self.outer_levels(tmpl, depth);
-        args.push(conv.sugared, tmpl, LevelMode::Substitute);
+        // clang 19 substitutes an alias with the canonical arguments: the
+        // aliased type of `Ptr<I>` is `int *`, not `I *`.
+        let subst_args = self.alias_subst_args(conv.sugared);
+        args.push(subst_args, tmpl, LevelMode::Substitute);
         if !self.push_inst_frame(FrameKind::AliasTemplate, pattern, tmpl, loc) {
             return Err(());
         }
@@ -271,6 +274,40 @@ impl Sema<'_, '_> {
         let Ok(u) = r else { return Err(()) };
         let _ = self.inst.alias_cache.insert((tmpl, conv.canonical), u);
         Ok(self.ast.types.template_specialization(name, list, Some(u), true))
+    }
+
+    /// The arguments an alias template is substituted with: canonical,
+    /// except that an injected-class-name argument stays one (clang's
+    /// canonical `InjectedClassNameType` prints as `X<T>`, where kiln's
+    /// canonical form is the dependent specialization).
+    fn alias_subst_args(&mut self, sugared: ArgListId) -> ArgListId {
+        let out: Vec<TemplateArg> = self
+            .ast
+            .types
+            .args(sugared)
+            .to_vec()
+            .into_iter()
+            .map(|a| match a.view() {
+                ArgView::Type(q) if q.quals().is_empty() => {
+                    let mut t = q;
+                    loop {
+                        if matches!(
+                            self.ast.types.view(t.ty()),
+                            TypeView::InjectedClassName { .. }
+                        ) {
+                            break TemplateArg::ty(t);
+                        }
+                        let n = self.ast.types.desugar_once(t);
+                        if n == t {
+                            break self.ast.types.canonical_arg(a);
+                        }
+                        t = n;
+                    }
+                }
+                _ => self.ast.types.canonical_arg(a),
+            })
+            .collect();
+        self.ast.types.arg_list(&out)
     }
 
     /// The class template specialization, or member class of one, that

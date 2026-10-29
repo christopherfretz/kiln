@@ -1,0 +1,9 @@
+TranslationUnitDecl
+|-EnumDecl referenced Color
+| |-EnumConstantDecl Red 'Color' value=0
+| `-EnumConstantDecl referenced Green 'Color' value=1
+|-TypeAliasTemplateDecl Same
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| `-TypeAliasDecl Same 'T'
+`-VarDecl c 'Same<Color>':'Color' cinit
+  `-DeclRefExpr 'Color' EnumConstant 'Green' 'Color'

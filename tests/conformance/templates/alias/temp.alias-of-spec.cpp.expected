@@ -1,0 +1,22 @@
+TranslationUnitDecl
+|-ClassTemplateDecl Pair
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| |-TemplateTypeParmDecl referenced class depth 0 index 1 U
+| |-CXXRecordDecl struct Pair definition
+| | |-FieldDecl a 'T'
+| | `-FieldDecl b 'U'
+| |-ClassTemplateSpecializationDecl struct Pair
+| | |-TemplateArgument type 'int'
+| | `-TemplateArgument type 'int'
+| `-ClassTemplateSpecializationDecl struct Pair definition implicit_instantiation
+|   |-TemplateArgument type 'short'
+|   |-TemplateArgument type 'short'
+|   |-FieldDecl a 'short'
+|   `-FieldDecl b 'short'
+|-TypeAliasTemplateDecl Twin
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| `-TypeAliasDecl Twin 'Pair<T, T>'
+|-VarDecl tp 'Twin<int> *'
+`-VarDecl sz 'int' cinit
+  `-ImplicitCastExpr 'int' <IntegralCast>
+    `-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof 'Twin<short>':'Pair<short, short>'

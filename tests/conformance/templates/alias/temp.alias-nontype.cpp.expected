@@ -1,0 +1,9 @@
+TranslationUnitDecl
+|-TypeAliasTemplateDecl Arr
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| |-NonTypeTemplateParmDecl referenced 'int' depth 0 index 1 N
+| `-TypeAliasDecl Arr 'T[N]'
+|-VarDecl a 'Arr<int, 4>':'int[4]'
+`-VarDecl n 'int' cinit
+  `-ImplicitCastExpr 'int' <IntegralCast>
+    `-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof 'Arr<char, 7>':'char[7]'

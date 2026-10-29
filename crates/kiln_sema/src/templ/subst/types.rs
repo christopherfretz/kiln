@@ -209,6 +209,7 @@ impl Substituter<'_, '_, '_> {
                     self.sema.emit(d);
                     return Err(SubstFail);
                 }
+                self.sema.mark_type_referenced(d);
                 let t = self.decl_type(d);
                 Ok(self.sema.ast.types.elaborated(kiln_ast::types::TagKeyword::None, Some(n), t))
             }
