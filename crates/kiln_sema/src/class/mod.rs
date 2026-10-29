@@ -86,6 +86,18 @@ pub struct ClassBuild {
     /// Parameters of member functions whose default argument is saved for
     /// replay (§2.7).
     pub pending_default_args: u32,
+    /// The first declarations befriended by this class, in order; stored
+    /// in `RecordCold.friends` at `}`.
+    pub friends: Vec<DeclId>,
+}
+
+/// The function being defined when a nested function definition starts
+/// (a member function defined inside a local class), and the number of
+/// class/namespace scopes entered for an out-of-line member definition.
+#[derive(Debug)]
+pub(crate) struct SavedFn {
+    pub(crate) func: Option<crate::stmt::FnState>,
+    pub(crate) pushed: usize,
 }
 
 impl ClassBuild {
@@ -99,6 +111,7 @@ impl ClassBuild {
             first_virtual: None,
             pending_nsdmi: 0,
             pending_default_args: 0,
+            friends: Vec::new(),
         }
     }
 }

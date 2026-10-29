@@ -687,6 +687,56 @@ diag_ids! {
     sema_switch_into_protected_scope = Error (0) "cannot jump from switch statement to this case label";
     sema_goto_into_protected_scope = Error (0) "cannot jump from this goto statement to its label";
     note_protected_by_variable_init = Note (0) "jump bypasses variable initialization";
+    // ----- classes (WP-066b; clang SemaDeclCXX.cpp, SemaAccess.cpp,
+    // SemaExprMember.cpp, SemaExprCXX.cpp)
+    sema_base_not_class = Error (0) "base specifier must name a class";
+    sema_base_incomplete = Error (0) "base class has incomplete type";
+    sema_base_is_union = Error (0) "unions cannot be base classes";
+    sema_union_has_base = Error (0) "unions cannot have base classes";
+    sema_base_final = Error (1) "base {0} is marked 'final'";
+    note_entity_declared_here = Note (1) "{0} declared here";
+    sema_base_duplicate = Error (1) "base class {0} specified more than once as a direct base class";
+    sema_access_member = Error (3) "'{0}' is a {1:private|protected} member of {2}";
+    note_access_declared = Note (1) "declared {0:private|protected} here";
+    note_access_implicit = Note (1) "implicitly declared {0:private|protected} here";
+    note_access_constrained_by_path = Note (2) "constrained by {0:|implicitly }{1:private|protected} inheritance here";
+    note_access_member_declared = Note (0) "member is declared here";
+    note_access_protected_object = Note (1) "can only access this member on an object of type {0}";
+    note_access_protected_noobject = Note (1) "must name member using the type of the current context {0}";
+    sema_access_base_conv = Error (3) "cannot cast {0} to its {1:private|protected} base class {2}";
+    sema_ambiguous_member_types = Error (1) "member '{0}' found in multiple base classes of different types";
+    sema_ambiguous_member_subobjects = Error (3) "non-static member '{0}' found in multiple base-class subobjects of type {1}:{2}";
+    note_ambiguous_member_found = Note (0) "member found by ambiguous name lookup";
+    sema_this_outside_member = Error (0) "invalid use of 'this' outside of a non-static member function";
+    sema_mutable_const = Error (0) "'mutable' and 'const' cannot be mixed";
+    sema_mutable_reference = Error (0) "'mutable' cannot be applied to references";
+    sema_mutable_function = Error (0) "'mutable' cannot be applied to functions";
+    sema_static_member_nonconst_init = Error (0) "non-const static data member must be initialized out of line";
+    sema_static_member_init_not_ice = Error (0) "in-class initializer for static data member is not a constant expression";
+    sema_static_float_init = WarningError [StaticFloatInit] (1) "in-class initializer for static data member of type {0} requires 'constexpr' specifier";
+    note_add_constexpr = Note (0) "add 'constexpr'";
+    sema_static_member_fn_quals = Error (1) "static member function cannot have '{0}' qualifier";
+    sema_static_out_of_class = Error (0) "'static' can only be specified inside the class definition";
+    sema_static_member_local_class = Error (3) "static data member '{0}' not allowed in local {1} '{2}'";
+    sema_static_member_anon_class = Error (2) "static data member '{0}' not allowed in anonymous {1}";
+    sema_constexpr_nonstatic_member = Error (0) "non-static data member cannot be constexpr; did you intend to make it static?";
+    sema_member_redeclared = Error (0) "class member cannot be redeclared";
+    sema_member_def_no_match = Error (2) "out-of-line definition of '{0}' does not match any declaration in '{1}'";
+    sema_friend_def_no_match = Error (2) "friend declaration of '{0}' does not match any declaration in '{1}'";
+    sema_friend_not_class_or_fn = Error (0) "friends can only be classes or functions";
+    sema_const_member_assign = Error (1) "cannot assign to non-static data member within const member function '{0}'";
+    note_member_fn_declared_const = Note (1) "member function '{0}' is declared const here";
+    sema_invalid_nonstatic_member_use = Error (1) "invalid use of non-static data member '{0}'";
+    sema_invalid_member_in_static = Error (1) "invalid use of member '{0}' in static member function";
+    sema_member_call_without_object = Error (0) "call to non-static member function without an object argument";
+    sema_bound_member_not_called = Error (1) "reference to non-static member function must be called{0:|; did you mean to call it with no arguments?}";
+    sema_nonconst_member_fn_ptr = Error (0) "cannot create a non-constant pointer to member function";
+    sema_ptrmem_rhs_not_member_pointer = Error (2) "right hand operand to {0} has non-pointer-to-member type {1}";
+    sema_ptrmem_lhs_incompatible = Error (3) "left hand operand to {0} must be a {1:|pointer to }class compatible with the right hand operand, but is {2}";
+    sema_member_fn_ref_qual_mismatch = Error (3) "'this' argument to member function '{0}' is an {1:lvalue|rvalue}, but function has {2:non-const lvalue|rvalue} ref-qualifier";
+    sema_member_fn_drops_quals = Error (3) "'this' argument to member function '{0}' has type {1}, but function is not marked {2}";
+    sema_member_type_via_access = Error (3) "cannot refer to type member '{0}' in {1} with '{2:.|->}'";
+    note_member_declared_named = Note (1) "member '{0}' declared here";
 }
 
 impl DiagId {

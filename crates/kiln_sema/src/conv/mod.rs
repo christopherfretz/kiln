@@ -20,7 +20,7 @@
 
 mod apply;
 mod arith;
-mod bases;
+pub(crate) mod bases;
 pub(crate) mod narrow;
 mod qual;
 pub(crate) mod rank;

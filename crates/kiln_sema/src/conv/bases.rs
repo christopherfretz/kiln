@@ -53,7 +53,17 @@ pub(crate) fn complete_class(s: &Sema<'_, '_>, d: DeclId) -> Option<DeclId> {
     r.defn.contains(DefinitionBits::COMPLETE).then_some(def)
 }
 
-fn same_class(s: &Sema<'_, '_>, a: DeclId, b: DeclId) -> bool {
+/// The definition of class `d` once its base-clause is known: complete,
+/// or being defined (clang's `IsDerivedFrom` needs only
+/// `hasDefinition`: the bases of a class are known from its `{`).
+fn defined_class(s: &Sema<'_, '_>, d: DeclId) -> Option<DeclId> {
+    let def = s.ast.definition(d)?;
+    let r = s.ast.decls.record(def)?;
+    (r.defn.contains(DefinitionBits::COMPLETE) || r.defn.contains(DefinitionBits::BEING_DEFINED))
+        .then_some(def)
+}
+
+pub(crate) fn same_class(s: &Sema<'_, '_>, a: DeclId, b: DeclId) -> bool {
     a == b || s.ast.first(a) == s.ast.first(b)
 }
 
@@ -63,7 +73,7 @@ fn walk(s: &Sema<'_, '_>, cur: DeclId, base: DeclId, path: &mut BasePath, out: &
     if path.specs.len() > MAX_DEPTH || out.len() > 64 {
         return;
     }
-    let Some(def) = complete_class(s, cur) else { return };
+    let Some(def) = defined_class(s, cur) else { return };
     let Some(rec) = s.ast.decls.record(def) else { return };
     let idx = s.ast.lists.get(rec.bases);
     let specs: Vec<_> = s.ast.decls.bases(def, &s.ast.lists).copied().collect();
@@ -91,7 +101,7 @@ fn walk(s: &Sema<'_, '_>, cur: DeclId, base: DeclId, path: &mut BasePath, out: &
 
 /// The subobject a path designates: paths through the same virtual base
 /// share their prefix up to it.
-fn subobject_key(s: &Sema<'_, '_>, p: &BasePath) -> (Option<DeclId>, Vec<u32>) {
+pub(crate) fn subobject_key(s: &Sema<'_, '_>, p: &BasePath) -> (Option<DeclId>, Vec<u32>) {
     match p.last_virtual {
         Some(v) => {
             let at = p.classes.iter().rposition(|&c| same_class(s, c, v)).unwrap_or(0);
@@ -125,6 +135,25 @@ pub fn find_base(s: &Sema<'_, '_>, derived: DeclId, base: DeclId) -> BaseSearch 
     } else {
         BaseSearch::Ambiguous(out)
     }
+}
+
+/// Every path from `derived` to its base class `base` (empty if `derived`
+/// is `base` or not derived from it), for access checking's best-path
+/// search (clang `FindBestPath`).
+pub(crate) fn base_paths(s: &Sema<'_, '_>, derived: DeclId, base: DeclId) -> Vec<BasePath> {
+    let mut out = Vec::new();
+    if same_class(s, derived, base) {
+        return out;
+    }
+    let mut path = BasePath {
+        specs: Vec::new(),
+        classes: Vec::new(),
+        written: Vec::new(),
+        last_virtual: None,
+        first_virtual: None,
+    };
+    walk(s, derived, base, &mut path, &mut out);
+    out
 }
 
 /// True if `derived` is derived (unambiguously or not) from `base`.

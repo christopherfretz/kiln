@@ -86,6 +86,7 @@ diag_groups! {
     Cxx11Narrowing = "c++11-narrowing" [];
     Narrowing = "narrowing" [Cxx11Narrowing];
     DynamicExceptionSpec = "dynamic-exception-spec" [];
+    StaticFloatInit = "static-float-init" [];
     BuiltinMacroRedefined = "builtin-macro-redefined" [];
     Comment = "comment" [];
     C23Extensions = "c23-extensions" [];

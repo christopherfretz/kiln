@@ -758,9 +758,12 @@ impl FnSpec {
     }
     /// The bits [`DeclArena::mark_function`] may set after creation
     /// (properties known only after the body or the class is complete:
-    /// trivial, contracts, coroutine, escalated, and `deleted` for
-    /// `= default` members found deleted at `}`, spec/sema-class.md §8.2).
-    pub const LATE: FnSpec = FnSpec((1 << 10) | (1 << 12) | (1 << 14) | (1 << 15) | (1 << 16));
+    /// trivial, contracts, coroutine, escalated, `deleted` for
+    /// `= default` members found deleted at `}`, spec/sema-class.md §8.2,
+    /// and `implicit_inline` for a member function defined in its class,
+    /// known only at its body, [class.mfct]/1).
+    pub const LATE: FnSpec =
+        FnSpec((1 << 3) | (1 << 10) | (1 << 12) | (1 << 14) | (1 << 15) | (1 << 16));
 }
 
 bit_accessors!(FnSpec:

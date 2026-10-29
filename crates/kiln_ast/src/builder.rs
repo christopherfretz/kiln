@@ -995,6 +995,21 @@ impl<'a> AstBuilder<'a> {
             // A builtin function's name has the placeholder type
             // `<builtin fn type>` and is a prvalue (as clang).
             DeclKind::Function if self.ast.decls.builtin_id(d).is_some() => ValueCategory::PRValue,
+            // A non-static member function is a prvalue ([expr.prim.id.qual]/5,
+            // [expr.ref]/7.3); constructors, destructors and conversion
+            // functions never are static.
+            DeclKind::CXXMethod
+                if self
+                    .ast
+                    .decls
+                    .function(d)
+                    .is_some_and(|f| f.spec.storage() != crate::decl::FnStorage::Static) =>
+            {
+                ValueCategory::PRValue
+            }
+            DeclKind::CXXConstructor | DeclKind::CXXDestructor | DeclKind::CXXConversion => {
+                ValueCategory::PRValue
+            }
             _ => ValueCategory::LValue,
         }
     }

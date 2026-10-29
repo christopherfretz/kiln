@@ -53,11 +53,9 @@ pub struct FnState {
     pub(crate) breakables: Vec<bool>,
     /// The type of `this` in this function (`cv C*`), `None` outside a
     /// non-static member function (spec/sema-class.md §2.5).
-    #[expect(dead_code, reason = "WP-066a interface; read from WP-066b")]
     pub(crate) this_ty: Option<QualType>,
     /// A `this` type that overrides `this_ty` while parsing an NSDMI or a
     /// trailing return type (clang `CXXThisScopeRAII`).
-    #[expect(dead_code, reason = "WP-066a interface; read from WP-066b")]
     pub(crate) this_override: Option<QualType>,
 }
 

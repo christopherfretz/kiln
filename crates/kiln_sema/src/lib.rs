@@ -101,14 +101,11 @@ pub struct Sema<'a, 'sm> {
     pub(crate) classes: Vec<class::ClassBuild>,
     /// Which implicit special members each class has declared
     /// ([`class::implicit`] bits; spec/sema-class.md §4.1).
-    #[expect(dead_code, reason = "WP-066a interface; read from WP-066b/067a/067b")]
     pub(crate) implicit_declared: kiln_source::fx::FxHashMap<DeclId, u8>,
     /// Access checks delayed until their declaration exists
     /// (spec/sema-class.md §2.4).
-    #[expect(dead_code, reason = "WP-066a interface; read from WP-066b/067a/067b")]
     pub(crate) delayed_access: Vec<class::AccessCheck>,
     /// `delayed_access.len()` at each open delay point, innermost last.
-    #[expect(dead_code, reason = "WP-066a interface; read from WP-066b/067a/067b")]
     pub(crate) delayed_access_depth: Vec<usize>,
     /// The current full-expression's cleanup state (spec/sema-class.md
     /// §5.3).
@@ -121,6 +118,21 @@ pub struct Sema<'a, 'sm> {
     /// Member functions whose *noexcept-specifier* awaits replay
     /// (`ExcSpec::Deferred`, spec/sema-class.md §2.7).
     pub(crate) unparsed_exc: kiln_source::fx::FxHashSet<DeclId>,
+    /// The enclosing function's state and the scopes pushed for a member
+    /// function definition, saved by `act_on_start_function_def` while a
+    /// (local class's or out-of-line) member function body is analysed.
+    pub(crate) fn_saved: Vec<class::SavedFn>,
+    /// Names of non-static members whose meaning depends on the operand
+    /// they appear in (spec/sema-class.md §2.5/§2.6): `&C::m` forms a
+    /// pointer to member, anything else needs an object. `true` marks a
+    /// reference that is an error unless `&` consumes it.
+    pub(crate) member_refs: kiln_source::fx::FxHashMap<ExprId, (DeclId, bool)>,
+    /// The `this` type of the default member initializers being parsed,
+    /// innermost last (`C*`, spec/sema-class.md §2.5).
+    pub(crate) nsdmi_this: Vec<QualType>,
+    /// The static data member whose out-of-line initializer is being
+    /// analysed: its class is the access context ([class.access]/7).
+    pub(crate) initializing: Option<DeclId>,
 }
 
 impl<'a, 'sm> Sema<'a, 'sm> {
@@ -164,6 +176,10 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             cleanup: class::CleanupState::default(),
             extend_collector: None,
             unparsed_exc: kiln_source::fx::FxHashSet::default(),
+            fn_saved: Vec::new(),
+            member_refs: kiln_source::fx::FxHashMap::default(),
+            nsdmi_this: Vec::new(),
+            initializing: None,
         }
     }
 
