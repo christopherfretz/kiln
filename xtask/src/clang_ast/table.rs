@@ -480,6 +480,8 @@ pub const CLASS_KINDS: &[&str] = &[
 #[cfg(test)]
 pub const TEMPLATE_KINDS: &[&str] = &[
     "ClassTemplateDecl",
+    "ClassTemplateSpecializationDecl",
+    "SubstNonTypeTemplateParmExpr",
     "FunctionTemplateDecl",
     "VarTemplateDecl",
     "TypeAliasTemplateDecl",

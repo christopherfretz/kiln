@@ -12,6 +12,7 @@ use super::directives::{
     self, CompilerKind, Expect, Lang, PpCompare, Severity, StdinInput, StdoutExpect, TestSpec,
 };
 use super::discover::TestCase;
+use super::inst_report;
 use crate::clang_ast::{DumpOptions, normalize};
 use crate::util::oven_report::{self, Report};
 use crate::util::process::{self, Output, Shown};
@@ -96,6 +97,7 @@ pub fn run_test(cfg: &Config, case: &TestCase, index: usize) -> TestResult {
         dir: cfg.scratch.join(format!("t{index}")),
         log: Vec::new(),
         updated: false,
+        inst_report: None,
     };
     let (status, reason, details) = t.evaluate();
     if t.dir.exists() {
@@ -118,6 +120,8 @@ struct Test<'a> {
     dir: PathBuf,
     log: Vec<String>,
     updated: bool,
+    /// The last compile's masked instantiation report (`inst-report:`).
+    inst_report: Option<String>,
 }
 
 impl Test<'_> {
@@ -141,8 +145,10 @@ impl Test<'_> {
             return (Status::Skip, Some(r.to_owned()), String::new());
         }
         if spec.is_kiln_specific() && kind != CompilerKind::Kiln {
-            let reason = "not supported by this compiler (kiln-specific `oven:` directive)";
-            return (Status::Skip, Some(reason.to_owned()), String::new());
+            let directive = if spec.oven.is_empty() { "inst-report:" } else { "oven:" };
+            let reason =
+                format!("not supported by this compiler (kiln-specific `{directive}` directive)");
+            return (Status::Skip, Some(reason), String::new());
         }
         if spec.expect == Expect::Ast && kind == CompilerKind::Other {
             let reason = "not supported by this compiler (`expect: ast` needs kiln or clang)";
@@ -157,6 +163,7 @@ impl Test<'_> {
         };
         // Budgets are checked once the kind's own checks pass.
         let outcome = outcome.and_then(|()| self.check_oven(&spec));
+        let outcome = outcome.and_then(|()| self.check_inst_report(&spec));
         let xfail = spec.xfail_reason(kind).map(str::to_owned);
         match (outcome, xfail) {
             (Ok(()), None) => (Status::Pass, None, String::new()),
@@ -229,7 +236,10 @@ impl Test<'_> {
         out: Option<&Path>,
     ) -> Result<Output, Problem> {
         let mut cmd = self.command(&self.cfg.compiler, spec, mode, out);
-        if spec.is_kiln_specific() {
+        if spec.inst_report.is_some() {
+            cmd.arg("-fkiln-instantiation-report=json");
+        }
+        if !spec.oven.is_empty() {
             // Only kiln gets here (`evaluate` skips the rest). A stale report
             // must not pass for this compile's.
             let report = self.report_path()?;
@@ -244,6 +254,9 @@ impl Test<'_> {
         }
         let o = self.exec(cmd, self.cfg.compile_timeout).map_err(Problem::Broken)?;
         let stderr = o.stderr_str();
+        if spec.inst_report.is_some() {
+            self.inst_report = Some(inst_report::extract(&stderr));
+        }
         let crashed = o.code().is_none()
             || stderr.contains("panicked at")
             || stderr.contains("PLEASE submit a bug report");
@@ -357,7 +370,7 @@ impl Test<'_> {
     /// Reads the constexpr report of the compile and checks the `oven:`
     /// budgets. A missing or malformed report is kiln's fault: FAIL.
     fn check_oven(&mut self, spec: &TestSpec) -> Check {
-        if !spec.is_kiln_specific() {
+        if spec.oven.is_empty() {
             return Ok(());
         }
         let path = self.report_path()?;
@@ -373,6 +386,35 @@ impl Test<'_> {
         self.log.push(format!("# constexpr report total: {}", report.total.describe()));
         oven_report::check_budgets(&report, &spec.oven, &|f| self.in_test_file(f))
             .map_err(Problem::Fail)
+    }
+
+    /// Compares the compile's instantiation report with the
+    /// `inst-report:` golden, timings masked (`--update` rewrites it).
+    fn check_inst_report(&mut self, spec: &TestSpec) -> Check {
+        let Some(rel) = &spec.inst_report else { return Ok(()) };
+        let path = self.case.path.parent().unwrap_or(Path::new(".")).join(rel);
+        let got = self.inst_report.take().unwrap_or_default();
+        if self.cfg.update {
+            fs::write(&path, &got).map_err(|e| {
+                Problem::Broken(format!("cannot write inst-report {}: {e}", path.display()))
+            })?;
+            self.updated = true;
+            return Ok(());
+        }
+        let want = fs::read_to_string(&path).map_err(|e| {
+            Problem::Broken(format!("cannot read inst-report {}: {e}", path.display()))
+        })?;
+        let want = inst_report::mask(&want);
+        if want == got {
+            Ok(())
+        } else {
+            Err(Problem::Fail(format!(
+                "inst-report: the instantiation report differs from {}\nexpected:\n{}got:\n{}",
+                path.display(),
+                indent(&want),
+                indent(&got)
+            )))
+        }
     }
 
     /// The stdin bytes of a `run` test (empty without `run-stdin*`).

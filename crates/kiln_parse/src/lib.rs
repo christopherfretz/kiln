@@ -50,11 +50,22 @@ pub struct ParseOptions {
     /// Run-time type information is enabled (`-f[no-]rtti`): `typeid`
     /// is an error otherwise (clang's `err_no_typeid_with_fno_rtti`).
     pub rtti: bool,
+    /// `-ftemplate-depth=` / `-ftemplate-backtrace-limit=`.
+    pub inst_limits: kiln_sema::templ::stack::InstLimits,
+    /// `-fkiln-instantiation-report[=all|json]`.
+    pub inst_report: kiln_sema::templ::report::ReportFormat,
 }
 
 impl Default for ParseOptions {
     fn default() -> Self {
-        ParseOptions { std: Std::Cxx26, keep_tokens: false, exceptions: true, rtti: true }
+        ParseOptions {
+            std: Std::Cxx26,
+            keep_tokens: false,
+            exceptions: true,
+            rtti: true,
+            inst_limits: kiln_sema::templ::stack::InstLimits::default(),
+            inst_report: kiln_sema::templ::report::ReportFormat::Off,
+        }
     }
 }
 
@@ -95,6 +106,9 @@ pub struct ParsedTu {
     pub ast: Ast,
     /// The TU's constant evaluator.
     pub oven: Oven,
+    /// The template instantiation report (spec/sema-templates.md
+    /// §11.3), empty unless [`ParseOptions::inst_report`] asked for it.
+    pub inst_report: String,
 }
 
 /// Parses and analyses the translation unit whose main file is `file`,
@@ -162,11 +176,16 @@ pub fn parse_preprocessed<'a, 'sm>(
     s.set_constexpr_limits(limits.budget, limits.backtrace_limit);
     s.exceptions = opts.exceptions;
     s.rtti = opts.rtti;
+    s.inst.limits = opts.inst_limits;
+    s.inst.report.format = opts.inst_report;
+    let main = pp.main_file().map(|f| diags.sm().file_name(f).to_owned()).unwrap_or_default();
     let mut src = TokenSource::new(pp, diags);
     src.keep_all(opts.keep_tokens);
     let mut p = Parser::new(s, src, lit_opts);
     p.parse_translation_unit();
     let (s, src) = p.finish();
+    let name = main.rsplit('/').next().unwrap_or(&main);
+    let inst_report = s.instantiation_report(name);
     let (ast, oven) = s.into_parts();
-    (ParsedTu { ast, oven }, src.into_preprocessor())
+    (ParsedTu { ast, oven, inst_report }, src.into_preprocessor())
 }

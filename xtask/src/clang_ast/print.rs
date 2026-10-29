@@ -1541,7 +1541,11 @@ impl<'a> Printer<'a, '_> {
     /// when defined, the converted arguments, then the members. `params`
     /// holds each template parameter's type (`None` for a type or
     /// template parameter), or is `None` when it has a pack.
-    fn specialization(&mut self, n: &'a Json, params: Option<&[Option<String>]>) -> Res<Option<Tree>> {
+    fn specialization(
+        &mut self,
+        n: &'a Json,
+        params: Option<&[Option<String>]>,
+    ) -> Res<Option<Tree>> {
         let nm = name(n).unwrap_or("");
         if text(n, "tagUsed").is_none() {
             // A reference to an explicit specialization declared elsewhere.
@@ -1557,7 +1561,10 @@ impl<'a> Printer<'a, '_> {
         if self.implicit_dropped(n) {
             return Ok(None);
         }
-        table::check_keys("ClassTemplateSpecializationDecl", n.as_obj().unwrap_or(&[]).iter().map(|(key, _)| key.as_str()))?;
+        table::check_keys(
+            "ClassTemplateSpecializationDecl",
+            n.as_obj().unwrap_or(&[]).iter().map(|(key, _)| key.as_str()),
+        )?;
         let mut l = decl_head(n, "ClassTemplateSpecializationDecl");
         push_word(&mut l, text(n, "tagUsed").unwrap_or(""));
         push_word(&mut l, nm);
@@ -1644,9 +1651,7 @@ fn spec_arg(n: &Json, param: Option<&str>) -> Res<Tree> {
     }
     // Numbers parse as `f64`: exact within 2^53, enough for the corpus.
     let as_i64 = |j: &Json| {
-        j.as_f64()
-            .filter(|f| f.fract() == 0.0 && f.abs() <= (1u64 << 53) as f64)
-            .map(|f| f as i64)
+        j.as_f64().filter(|f| f.fract() == 0.0 && f.abs() <= (1u64 << 53) as f64).map(|f| f as i64)
     };
     let (Some(v), Some(p)) = (n.get("value").and_then(as_i64), param) else {
         return Err("clang-ast: unsupported non-integral template argument of a \
@@ -1659,7 +1664,9 @@ fn spec_arg(n: &Json, param: Option<&str>) -> Res<Tree> {
         "unsigned short" | "char16_t" => i128::from(v as u16),
         "unsigned int" | "char32_t" => i128::from(v as u32),
         "unsigned long" | "unsigned long long" | "size_t" | "std::size_t" => i128::from(v as u64),
-        "int" | "long" | "long long" | "short" | "signed char" | "char" | "wchar_t" => i128::from(v),
+        "int" | "long" | "long long" | "short" | "signed char" | "char" | "wchar_t" => {
+            i128::from(v)
+        }
         _ => {
             return Err(format!(
                 "clang-ast: unsupported template argument of type `{p}` in a specialization"
@@ -1830,9 +1837,7 @@ fn is_null_pointer_constant(n: &Json) -> bool {
         "ImplicitCastExpr" | "ParenExpr" | "CStyleCastExpr" => {
             kids(n).next().is_some_and(is_null_pointer_constant)
         }
-        "SubstNonTypeTemplateParmExpr" => {
-            kids(n).nth(1).is_some_and(is_null_pointer_constant)
-        }
+        "SubstNonTypeTemplateParmExpr" => kids(n).nth(1).is_some_and(is_null_pointer_constant),
         _ => false,
     }
 }

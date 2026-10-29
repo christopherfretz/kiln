@@ -73,11 +73,12 @@ directives are also ERRORs.
 | `pp-compare: tokens \| text` | `pp` only. How outputs are compared (see "pp comparison"). Default `tokens`. |
 | `pp-linemarkers` | `pp` only. Preprocess with `-E` instead of `-E -P`, so the output keeps line markers, and compare them (see "pp comparison"). |
 | `oven: [<line>[:<col>]] <counter><=N ...` | kiln-specific constexpr budget; `<counter>` is `steps`, `bytes`, `peak_bytes`, `calls`, `allocs`, `peak_arena`, `frozen_bytes` or `evaluations`. Not for `pp`. See "kiln-specific tests". |
+| `inst-report: <golden.json>` | kiln-specific: the compile's template instantiation report must equal the golden, timings masked. Only `compile-ok`/`compile-fail`. See "kiln-specific tests". |
 | `skip[(kiln\|clang)]: <reason>` | Do not run. A qualified marker applies only to that compiler kind. |
 | `xfail[(kiln\|clang)]: <reason>` | Expected to FAIL. Qualified as for `skip`. |
 
 `expect`, `std`, `stdout-file`, `run-stdin-file`, `exit`, `oracle`,
-`pp-compare`, `pp-linemarkers`, `ast-filter`, and each `skip`/`xfail` qualifier may appear
+`pp-compare`, `pp-linemarkers`, `ast-filter`, `inst-report`, and each `skip`/`xfail` qualifier may appear
 at most once; `oven` at most once per
 location (and once without one). If both a qualified marker
 and an unqualified marker apply, the qualified one's reason is reported.
@@ -285,6 +286,21 @@ compile fails for that reason. Then:
   location, the counter, its value and the budget.
 
 The report's total is listed with the commands under `-v`.
+
+A test with an `inst-report:` directive is kiln-specific in the same way
+(the SKIP reason names `inst-report:`). Its kiln compile gets
+`-fkiln-instantiation-report=json`, which prints the template instantiation
+report (`spec/sema-templates.md` §12) on stderr as NDJSON: one
+`{"template":…}` row per template, then one `{"total":…}` row. The runner
+takes exactly those lines from stderr, replaces the value of every
+`"<name>_us":<digits>` field with `0` (wall-clock timings are not
+reproducible), and compares the result line by line with the golden, a path
+relative to the test's directory (blank golden lines ignored, golden timings
+masked the same way). A mismatch is a **FAIL** showing both; a missing
+golden is an **ERROR**. `--update` rewrites the golden from the masked
+report. The check runs after the test kind's own checks pass. Row order is
+the report's own (bytes descending, then count, then first instantiated),
+so it is deterministic.
 
 ### Parity report
 

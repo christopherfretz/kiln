@@ -111,6 +111,11 @@ pub struct InstReport {
 }
 
 impl InstReport {
+    /// Whether frames are timed (only when a report is printed).
+    pub fn timed(&self) -> bool {
+        self.format != ReportFormat::Off
+    }
+
     /// Opens a frame's self accounting (its children's bytes and nodes).
     pub(crate) fn open(&mut self) {
         self.child_bytes.push((0, 0));

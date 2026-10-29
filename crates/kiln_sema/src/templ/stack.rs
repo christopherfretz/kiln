@@ -100,7 +100,8 @@ pub struct InstFrame {
     /// The arguments converted so far, for a default-argument frame
     /// (its note names `D<void>`).
     pub args: Option<ArgListId>,
-    pub(crate) start: Instant,
+    /// Set only when the report is on (timing is opt-in, §11.3).
+    pub(crate) start: Option<Instant>,
     pub(crate) start_bytes: u64,
     pub(crate) start_nodes: u64,
     pub(crate) child_ns: u64,
@@ -264,7 +265,7 @@ impl Sema<'_, '_> {
                 poi,
                 sfinae,
                 args: None,
-                start: Instant::now(),
+                start: None,
                 start_bytes: 0,
                 start_nodes: 0,
                 child_ns: 0,
@@ -292,7 +293,7 @@ impl Sema<'_, '_> {
             poi,
             sfinae,
             args: None,
-            start: Instant::now(),
+            start: self.inst.report.timed().then(Instant::now),
             start_bytes,
             start_nodes,
             child_ns: 0,
@@ -305,7 +306,7 @@ impl Sema<'_, '_> {
     pub(crate) fn pop_inst_frame(&mut self) {
         let Some(f) = self.inst.stack.pop() else { return };
         self.ast.end_instantiation();
-        let incl = u64::try_from(f.start.elapsed().as_nanos()).unwrap_or(u64::MAX);
+        let incl = f.start.map_or(0, |t| u64::try_from(t.elapsed().as_nanos()).unwrap_or(u64::MAX));
         let bytes = self.ast.node_live_bytes().saturating_sub(f.start_bytes);
         let nodes = self.ast.node_count().saturating_sub(f.start_nodes);
         if let Some(parent) = self.inst.stack.frames.last_mut() {
@@ -371,7 +372,7 @@ mod tests {
             poi: Loc::from_raw(poi),
             sfinae: None,
             args: None,
-            start: Instant::now(),
+            start: None,
             start_bytes: 0,
             start_nodes: 0,
             child_ns: 0,
