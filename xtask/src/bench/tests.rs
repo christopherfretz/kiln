@@ -269,3 +269,87 @@ fn constexpr_counters_with_a_fake_kiln() {
 
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+/// `--record` with `--compare-with` merges into `perf.md` (spec/bench.md
+/// "Recording"): a fresh page when there is none, a filtered recording keeps
+/// the other rows, a re-recording replaces its row, stale rows are marked
+/// and left out of the means, and a recording of the whole corpus drops them.
+/// clang is both compilers (skipped when clang++-19 is not installed).
+#[test]
+fn perf_md_merges_across_recordings() {
+    let clang = Path::new("clang++-19");
+    if identify(clang).is_err() {
+        eprintln!("skipping: clang++-19 not available");
+        return;
+    }
+    let dir = scratch("perf-md");
+    let lay = layout(&dir);
+    let all = [lay.bench.clone()];
+    let record = |filter: Option<&str>| {
+        let opts = Options {
+            runs: 1,
+            record: true,
+            compare_with: Some(clang.into()),
+            filter: filter.map(str::to_owned),
+            ..Options::default()
+        };
+        execute(&opts, &lay, clang, &all).unwrap();
+        std::fs::read_to_string(&lay.perf_md).unwrap()
+    };
+    let rows = |page: &str| -> Vec<String> {
+        page.lines().filter(|l| l.starts_with("| `")).map(str::to_owned).collect()
+    };
+    let ids = |page: &str| -> Vec<String> {
+        rows(page).iter().filter_map(|l| l[3..].split('`').next().map(str::to_owned)).collect()
+    };
+    let row = |page: &str, id: &str| -> String {
+        let found: Vec<String> =
+            rows(page).into_iter().filter(|l| l.starts_with(&format!("| `{id}`"))).collect();
+        assert_eq!(found.len(), 1, "{id} in\n{page}");
+        found[0].clone()
+    };
+
+    // 1. No page yet: written from this run alone.
+    assert!(!lay.perf_md.exists());
+    let page = record(Some("counted"));
+    assert_eq!(ids(&page), ["oven/counted"], "{page}");
+    assert!(row(&page, "oven/counted").starts_with("| `oven/counted` | syntax | "), "{page}");
+    assert!(page.contains("| test/oracle memory | Recorded |"), "{page}");
+
+    // 2. A filtered recording of another group keeps the oven row verbatim.
+    let counted = row(&page, "oven/counted");
+    let page = record(Some("tiny"));
+    assert_eq!(ids(&page), ["oven/counted", "tiny/answer"], "{page}");
+    assert_eq!(row(&page, "oven/counted"), counted);
+    assert!(row(&page, "tiny/answer").starts_with("| `tiny/answer` | emit-llvm | "), "{page}");
+    assert!(page.contains(" over 2 entries, memory "), "{page}");
+
+    // 3. Re-recording replaces the row; an entry gone from bench/ is kept,
+    //    marked stale, and left out of the means (2 entries, not 3).
+    let doctored = "| `oven/counted` | syntax | 99999.0 | 1.0 | 99999.00x | 1.0 | 1.0 | 1.00x | \
+                    2000-01-01T000000 |";
+    let gone = "| `gone/old` | syntax | 1.0 | 2.0 | 0.50x | 1.0 | 1.0 | 1.00x | \
+                2000-01-01T000000 |";
+    let tiny = row(&page, "tiny/answer");
+    std::fs::write(&lay.perf_md, page.replace(&counted, &format!("{doctored}\n{gone}"))).unwrap();
+    let page = record(Some("counted"));
+    assert_eq!(ids(&page), ["gone/old", "oven/counted", "tiny/answer"], "{page}");
+    let counted = row(&page, "oven/counted");
+    assert!(!counted.contains("99999") && !counted.contains("2000-01-01"), "{page}");
+    assert_eq!(row(&page, "gone/old"), gone.replace("`gone/old`", "`gone/old` (stale)"));
+    assert_eq!(row(&page, "tiny/answer"), tiny);
+    assert!(page.contains(" over 2 entries, memory "), "{page}");
+
+    // 4. A recording of the whole corpus drops the stale row; a failed entry
+    //    shows FAIL.
+    let page = record(None);
+    assert_eq!(ids(&page), ["broken/error", "oven/counted", "oven/over-budget", "tiny/answer"]);
+    assert!(row(&page, "broken/error").contains("| FAIL | FAIL |"), "{page}");
+
+    // 5. A page that cannot be read back is rewritten from this run alone.
+    std::fs::write(&lay.perf_md, "hand-written notes\n").unwrap();
+    let page = record(Some("tiny"));
+    assert_eq!(ids(&page), ["tiny/answer"], "{page}");
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
