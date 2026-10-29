@@ -2213,6 +2213,22 @@ Each question has a recommendation (R).
 
 ### Supervisor decisions
 
-| Q | Decision | Date |
-|---|---|---|
-| Q1–Q17 | *pending* | |
+| Q | Decision (2026-10-28, binding) |
+|---|---|
+| Q1 | Concepts are M3. ROADMAP M3/M4 edited. |
+| Q2 | Pack indexing (P2662) is M3, in WP-072. ROADMAP edited. |
+| Q3 | Implement non-dependent subtree sharing in WP-070a behind `-fno-share-nondependent`; `ExprDeps::LOCAL` is added to ast.md §5 by that WP; keep it only if the report shows ≥15% `inst.bytes` saved on `libcxx_m3.cpp`, else remove the code (no dead flags). |
+| Q4 | Dedicated sema thread (256 MiB reserved stack, `std::thread::Builder::stack_size`) plus `StackGuard` with a 1 MiB red zone. The whole front end (parser + sema + Oven) runs on that thread, since the parser calls sema. No segmented stacks, no `unsafe`. |
+| Q5 | R-OVEN-1 accepted: the Oven supports nested `evaluate` from bridge callbacks (a stack of `EvalContext`s; the frame space uses marks per context and is reset only when the outermost context ends; budget shared, `depth` counts nested contexts). It lands in **WP-061b** (which already reworks `mem.rs` reset) with `EvalKind::Constraint`; `ensure_body(&mut self, f, oven: &mut Oven)` is the contract. No fallback. |
+| Q6 | R-OVEN-2 accepted: frozen values are hash-consed by content in `ConstStore` (WP-061b, `frozen_bytes` counts only new values). |
+| Q7 | Constexpr function templates are instantiated immediately at odr-use, as clang. |
+| Q8 | WP-070 splits into 070a/070b as §12; CTAD moves to WP-071b. BACKLOG edited. |
+| Q9 | WP-069 needs WP-064. BACKLOG edited. |
+| Q10 | `__has_builtin` answers from `TABLE`'s implemented column; WP-081 requires every §9 row implemented. |
+| Q11 | `-fkiln-instantiation-report[=json\|all]`; counts and bytes always on, timing only with the flag. The JSON schema is a report golden under `tests/conformance/templates/report/`. |
+| Q12 | Follow clang 19 (constraint check after substitution of the function type). |
+| Q13 | Deduction memo cache deferred to M7, decided from report data. |
+| Q14 | Subsumption cap 65,536 clauses, diagnosed as an error. |
+| Q15 | Reserved depths recorded in types.md §5.3; user templates limited to depth < 0x7FF0. |
+| Q16 | Dumper, Oven lowering and codegen are iterative along binary spines in M3, tested by `fold-65536.cpp` (owner: WP-072 adds the test; each walker's owner crate fixes its walker; the Oven's `compile.rs` is WP-076's). |
+| Q17 | P1061, P2963, P2893, P2841 deferred to M4/M5. |
