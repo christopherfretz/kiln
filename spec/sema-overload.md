@@ -808,8 +808,29 @@ Unit tests (`kiln_sema/tests/overload_*.rs`): `compare_ics` pairs,
     arguments; recommend 068a after 067, or 068a scoped to non-class
     arguments first.
 
-### 13.1 Supervisor decisions
-_(placeholder: decisions on 1–10, dated)_
+### 13.1 Supervisor decisions (2026-10-28, binding)
+1. **Accepted.** `lookup_name` yields unqualified-lookup results newest-first
+   along the scope chain; ast.md §4.3 storage order is unchanged.
+2. **Accepted.** Keep the reversed-`==` ambiguity extension with
+   `-Wambiguous-reversed-operator`.
+3. **Accepted.** `StandardConversion` gains the reference-binding record and
+   `SecondStep::DerivedToBase`; sema-conv.md §3/§4 are amended by WP-068a,
+   which also fixes the /3.2.5-vs-/4.x ordering (§13.2.1) to clang's order.
+4. **WP-067 owns** `MaterializeTemporaryExpr`/`ExprWithCleanups`; `perform_ics`
+   calls its `materialize_temporary`. No interim version: see 10.
+5. **Accepted.** `-fshow-overloads=best` is rejected as unsupported; all
+   candidates are always shown.
+6. **Accepted.** Generate all of clang's built-in candidates; the §1.4 caches
+   are obligatory, and `bench/overload` gates them.
+7. **Accepted and binding on S3C:** hidden friends live in the namespace
+   lookup table with `LookupFlags::ADL_ONLY`; no side table.
+8. **Accepted.** C++23 static `operator()` takes clang 19's dump shape via a
+   068b golden.
+9. **Accepted.** The direct-call wording is fixed in 068a; M2 goldens that
+   captured the overload wording are regenerated from clang.
+10. **068a runs after 067** (needs class temporaries); 068b after 068a. The
+    BACKLOG rows are split accordingly. ADL (`adl.rs`) is part of 068a and
+    sema.md §3 is amended by it (§13.2.4).
 
 ### 13.2 Inconsistencies found in existing specs and code
 1. sema-conv.md §4 (l. 95–101) orders 3.2.5 before 4.1–4.4;
