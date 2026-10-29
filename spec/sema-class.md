@@ -178,6 +178,30 @@ per [expr.mptr.oper]; conversions `DerivedToBaseMemberPointer` /
 `BaseToDerivedMemberPointer` (sema-conv rank rules apply; virtual-base path is
 ill-formed). The constant form is ast.md §9's `MemberPtr` scalar.
 
+**Landed (WP-083): member-pointer declarators.** The parser emits
+`Chunk::MemberPointer { qual: Option<Qualifier>, quals, loc }` (parse.md
+§4) for `T C::* cv` in named, abstract and new-declarators; Sema
+(`type_for_declarator_at`) takes the class from the nested-name-specifier's
+last component (a `Nns::Type` that is a record or dependent, or a dependent
+`Nns::Identifier`, which becomes a `DependentName`, so `T::*` stays
+dependent) and checks, in clang's order and at the nested-name-specifier's
+start: not a class (`'p' does not point into a class`; a typedef to a
+non-class prefix is `'I' (aka 'int') is not a class, namespace, or
+enumeration`), a reference pointee (`'p' declared as a member pointer to a
+reference of type 'int &'`), and `void` (`'p' declared as a member pointer
+to void`); abstract declarators name `'type name'`. A `qual: None` chunk
+(the prefix error was already reported) makes the type the error type.
+Function member pointers keep their cv/ref-qualifiers.
+`sema_init_conversion_failed` gained a fifth argument, clang's
+`HandleFunctionTypeMismatch` suffix (`fn_mismatch_suffix`: `different
+classes ('D' vs 'C')`, number of parameters, Nth parameter, return type,
+qualifiers, exception specification) for member-pointer and
+pointer/reference-to-function pairs. The Oven's type table gives
+`MemberPointer` the Itanium size and alignment (8 / 16, pointer-aligned)
+so `sizeof`/`alignof`/layout agree with kiln_abi; the value itself stays
+opaque to the evaluator (constant evaluation of member pointers is WP-076).
+`[dcl.mptr]` tests: `tests/conformance/dcl.mptr/`.
+
 ### 2.7 Complete-class contexts ([class.mem]/7)
 The parser (WP-065) saves the tokens of member function bodies (with
 ctor-initializers), default arguments, *noexcept-specifier*s, NSDMIs and

@@ -562,10 +562,13 @@ fn conversion_error(s: &mut Sema<'_, '_>, e: ExprId, to: QualType, ctx: ConvCtx)
                 ConvError::new(DiagId::sema_no_viable_conversion, vec![fa, ta])
             }
         }
-        _ => ConvError::new(
-            DiagId::sema_init_conversion_failed,
-            vec![entity_select(ctx).into(), ta, category_select(s, e).into(), fa],
-        ),
+        _ => {
+            let suffix = s.fn_mismatch_suffix(from, to);
+            ConvError::new(
+                DiagId::sema_init_conversion_failed,
+                vec![entity_select(ctx).into(), ta, category_select(s, e).into(), fa, suffix],
+            )
+        }
     }
 }
 

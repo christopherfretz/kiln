@@ -328,6 +328,14 @@ impl Types {
             }
             TypeView::Function(_) => self.simple(c, 1, 1, TyKind::Func),
             TypeView::Record(d) => self.record(bridge, c, d),
+            // A member pointer has the Itanium size (one pointer-sized
+            // offset for data, pointer + adjustment for functions) so
+            // `sizeof`/`alignof` and record layout agree with kiln_abi;
+            // its value stays opaque to the evaluator ([dcl.mptr]).
+            TypeView::MemberPointer { pointee, .. } => {
+                let n = if ast.types.is_function(pointee) { 2 } else { 1 };
+                self.simple(c, pbytes * n, pbytes as u32, TyKind::Opaque)
+            }
             _ => self.simple(c, 0, 1, TyKind::Opaque),
         }
     }
