@@ -99,7 +99,7 @@ impl Sema<'_, '_> {
     /// sugar over the computed type, or `None` when `e` is erroneous.
     /// `e` was parsed as an unevaluated operand.
     pub fn act_on_decltype(&mut self, e: ExprId, _loc: Loc, _rparen: Loc) -> Option<QualType> {
-        if self.is_err_expr(e) {
+        if self.is_err_expr(e) || self.check_overload_use(e) {
             return None;
         }
         self.check_unevaluated_side_effects(e);

@@ -981,12 +981,11 @@ impl Parser<'_, '_> {
         if qual.is_none()
             && class == NameClass::Undeclared
             && self.at(Punct::LParen)
-            && self.s.in_template()
             && !self.s.is_builtin_name(name)
         {
             return Some(self.s.act_on_undeclared_call_name(name, nl));
         }
-        if qual.is_none() && self.at(Punct::LParen) && self.s.in_template() {
+        if qual.is_none() && self.at(Punct::LParen) {
             return Some(self.s.act_on_call_name(name, nl));
         }
         Some(self.s.act_on_id_expression(name, nl, qual))

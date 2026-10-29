@@ -29,6 +29,7 @@ use crate::declspec::{
 };
 use crate::init::{InitValue, Initializer};
 use crate::lookup::{LookupKind, is_tag_kind, is_type_kind};
+use crate::overload::redecl::NewFn;
 use crate::scope::{Scope, ScopeKind};
 use crate::{Sema, target};
 use kiln_ast::templates::is_template_kind;
@@ -692,10 +693,7 @@ impl Sema<'_, '_> {
                     match conv::implicit_convert(self, e, p.ty, ConvCtx::Argument) {
                         Ok(x) => x,
                         Err(err) => {
-                            let d = err
-                                .args
-                                .into_iter()
-                                .fold(self.diag(err.id, p.loc), kiln_diag::Diag::arg);
+                            let d = err.diag_at(self, p.loc);
                             let d = self.with_param_note(d, p);
                             self.emit(d);
                             let loc = self.ast.exprs.get(e).loc();
@@ -815,9 +813,10 @@ impl Sema<'_, '_> {
         }
     }
 
-    /// Previous declarations of `name` that `d` may redeclare.
-    pub(crate) fn find_prev(&self, name: Symbol, qualifier: Option<DeclId>) -> Option<DeclId> {
-        let found: Vec<DeclId> = match qualifier {
+    /// The declarations of `name` a declaration may redeclare (redeclaration
+    /// lookup, declaration order).
+    pub(crate) fn prev_candidates(&self, name: Symbol, qualifier: Option<DeclId>) -> Vec<DeclId> {
+        match qualifier {
             // [class.mfct]/3, [class.static.data]/3: an out-of-line
             // definition redeclares a member of that class itself, never
             // one inherited from a base.
@@ -827,10 +826,14 @@ impl Sema<'_, '_> {
             }
             Some(q) => self.lookup_qualified(q, name, LookupKind::Ordinary).decls,
             None => self.lookup_current_scope(name),
-        };
+        }
+    }
+
+    /// Previous declarations of `name` that `d` may redeclare.
+    pub(crate) fn find_prev(&self, name: Symbol, qualifier: Option<DeclId>) -> Option<DeclId> {
+        let found = self.prev_candidates(name, qualifier);
         // A template declaration redeclares a template (its latest
-        // pattern); any other declaration skips templates (overloading
-        // with templates is WP-071).
+        // pattern); any other declaration skips templates.
         let templ = self.templ.cur.is_some();
         found.into_iter().rev().find_map(|d| {
             let k = self.ast.decls.get(d).kind();
@@ -846,11 +849,10 @@ impl Sema<'_, '_> {
         })
     }
 
-    /// The previous declaration a function or `extern` variable
-    /// declaration redeclares: an ordinary previous declaration, else, at
-    /// block scope, one in the innermost enclosing namespace
-    /// ([basic.link]/6), else a block-scope declaration of the same entity
-    /// ([`Sema::local_externs`]).
+    /// The previous declaration an `extern` variable declaration
+    /// redeclares: an ordinary previous declaration, else, at block scope,
+    /// one in the innermost enclosing namespace ([basic.link]/6), else a
+    /// block-scope declaration of the same entity ([`Sema::local_externs`]).
     fn find_prev_linkage(&self, name: Symbol, qualifier: Option<DeclId>) -> Option<DeclId> {
         if let Some(p) = self.find_prev(name, qualifier) {
             return Some(p);
@@ -868,6 +870,41 @@ impl Sema<'_, '_> {
             return Some(p);
         }
         self.local_externs.iter().rev().find(|&&(n, s, _)| n == ns && s == name).map(|x| x.2)
+    }
+
+    /// The previous declaration a function declaration `new` redeclares
+    /// ([basic.scope.scope]/4): a corresponding ordinary previous
+    /// declaration, else, at block scope, one in the innermost enclosing
+    /// namespace ([basic.link]/6), else a block-scope declaration of the
+    /// same entity ([`Sema::local_externs`]).
+    fn find_prev_function(
+        &mut self,
+        name: Symbol,
+        qualifier: Option<DeclId>,
+        new: NewFn,
+    ) -> Option<DeclId> {
+        let found = self.prev_candidates(name, qualifier);
+        if let Some(p) = self.pick_prev_function(&found, new) {
+            return Some(p);
+        }
+        if qualifier.is_some() {
+            return None;
+        }
+        let ns = self.enclosing_namespace()?;
+        if self.in_local_scope() {
+            let mut outer = self.lookup_in(ns, name, LookupKind::Ordinary).decls;
+            outer.retain(|&d| matches!(self.kind_of(d), DeclKind::Var | DeclKind::Function));
+            if let Some(p) = self.pick_prev_function(&outer, new) {
+                return Some(p);
+            }
+        }
+        let locals: Vec<DeclId> = self
+            .local_externs
+            .iter()
+            .filter(|&&(n, s, _)| n == ns && s == name)
+            .map(|x| x.2)
+            .collect();
+        self.pick_prev_function(&locals, new)
     }
 
     /// The innermost namespace (or the translation unit) enclosing the
@@ -1537,21 +1574,24 @@ impl Sema<'_, '_> {
         let mut prev_ok = None;
         let mut invalid_redecl = false;
         let fkind = if method { DeclKind::CXXMethod } else { DeclKind::Function };
+        let new_fn = NewFn {
+            ty,
+            is_static: spec.storage() == FnStorage::Static,
+            head: self.templ.cur,
+            requires: d.trailing_requires,
+        };
         let prev = if d.op_name.is_some() {
             None
         } else if friend && d.qualifier.is_none() {
             // Redeclaration lookup in the namespace sees hidden friends.
-            self.ast
-                .lookup_local(ctx, DeclName::ident(name))
-                .iter()
-                .collect::<Vec<_>>()
-                .into_iter()
-                .rev()
-                .find(|&p| !is_tag_kind(self.kind_of(p)))
+            let found: Vec<DeclId> =
+                self.ast.lookup_local(ctx, DeclName::ident(name)).iter().collect();
+            self.pick_prev_function(&found, new_fn)
         } else if method {
-            self.find_prev(name, d.qualifier)
+            let found = self.prev_candidates(name, d.qualifier);
+            self.pick_prev_function(&found, new_fn)
         } else {
-            self.find_prev_linkage(name, d.qualifier)
+            self.find_prev_function(name, d.qualifier, new_fn)
         };
         let matches_member = prev.is_some_and(|p| {
             self.kind_of(p) == DeclKind::CXXMethod
@@ -1612,14 +1652,25 @@ impl Sema<'_, '_> {
             && self.kind_of(p) == DeclKind::CXXMethod
         {
             // [class.mem.general]/5: a member function is declared once
-            // in its class (overloads are WP-068).
-            let pty = self.ast.decls.get(p).ty().unwrap_or(QualType::ERROR);
-            let msg = if self.ast.types.same_type(pty, ty) {
-                self.diag(DiagId::sema_member_redeclared, d.name_loc())
-            } else {
-                self.diag(DiagId::sema_overload_unsupported, d.name_loc()).arg(sym_str(self, name))
+            // in its class; corresponding declarations that differ only in
+            // the return type or in `static` cannot be overloaded
+            // ([over.load]/2; clang's `MergeFunctionDecl` order).
+            let pty = self.declared_fn_type(p).unwrap_or(QualType::ERROR);
+            let same_ret = match (self.ast.types.proto(pty), self.ast.types.proto(ty)) {
+                (Some(a), Some(b)) => self.ast.types.same_type(a.ret(), b.ret()),
+                _ => true,
             };
-            let msg = self.note_prev(msg, p, false);
+            let old_static =
+                self.ast.decls.function(p).is_some_and(|f| f.spec.storage() == FnStorage::Static);
+            let (msg, def) = if !same_ret {
+                let def = self.ast.decls.function(p).is_some_and(|f| f.body.is_some());
+                (self.diag(DiagId::sema_ovl_diff_return_type, d.name_loc()), def)
+            } else if old_static != (spec.storage() == FnStorage::Static) {
+                (self.diag(DiagId::sema_ovl_static_nonstatic_member, d.name_loc()), false)
+            } else {
+                (self.diag(DiagId::sema_member_redeclared, d.name_loc()), false)
+            };
+            let msg = self.note_prev(msg, p, def);
             self.emit(msg);
             invalid_redecl = true;
         } else if let Some(p) = prev {
@@ -1677,8 +1728,7 @@ impl Sema<'_, '_> {
                     let msg = if same_params {
                         self.diag(DiagId::sema_ovl_diff_return_type, d.name_loc())
                     } else {
-                        self.diag(DiagId::sema_overload_unsupported, d.name_loc())
-                            .arg(sym_str(self, name))
+                        self.diag(DiagId::sema_ovl_static_nonstatic_member, d.name_loc())
                     };
                     // clang's `getNoteDiagForInvalidRedeclaration`.
                     let def = self.ast.decls.function(p).is_some_and(|f| f.body.is_some());
@@ -2361,9 +2411,20 @@ impl Sema<'_, '_> {
             Initializer::List(l) if direct => (list_items(l), AutoInit::DirectList, Some(l.lbrace)),
             Initializer::List(l) => (list_items(l), AutoInit::CopyList, Some(l.lbrace)),
         };
-        let fail = match self.deduce_auto(declared, &items, kind) {
-            Ok(t) => return Some(t),
-            Err(f) => f,
+        // [temp.deduct.call]/6: every member of an overload set deduces
+        // `auto`, so nothing is deduced (a placeholder in a function
+        // declarator selecting one member is not implemented).
+        let overload = items
+            .iter()
+            .flatten()
+            .copied()
+            .find(|&e| self.ast.exprs.get(e).ty() == QualType::OVERLOAD);
+        let fail = match overload {
+            Some(e) => AutoFail::Incompatible(e),
+            None => match self.deduce_auto(declared, &items, kind) {
+                Ok(t) => return Some(t),
+                Err(f) => f,
+            },
         };
         let lbrace = lbrace.unwrap_or(loc);
         let name = self.decl_name(v);

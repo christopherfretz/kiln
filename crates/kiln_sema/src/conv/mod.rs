@@ -23,6 +23,7 @@ mod arith;
 pub(crate) mod bases;
 pub(crate) mod narrow;
 mod qual;
+pub(crate) use qual::drop_noexcept;
 pub(crate) mod rank;
 pub(crate) mod scs;
 pub(crate) mod soft;
@@ -31,6 +32,7 @@ use kiln_ast::expr::{CastKind, ExprKind, ObjectKind, ValueCategory};
 use kiln_ast::types::{Quals, TypeView};
 use kiln_ast::{ExprId, QualType};
 use kiln_diag::DiagId;
+use kiln_source::Loc;
 
 use crate::Sema;
 
@@ -47,8 +49,9 @@ pub use rank::{
     is_integral_or_unscoped_enum, is_scoped_enum, is_unscoped_enum, promoted_type,
 };
 pub use scs::{
-    ConvRank, FirstStep, FixedEnumPromotion, IcsCompare, SecondStep, StandardConversion, ThirdStep,
-    compare_standard_conversions, standard_conversion, standard_conversion_from,
+    ConvRank, FirstStep, FixedEnumPromotion, IcsCompare, RefBinding, SecondStep,
+    StandardConversion, ThirdStep, compare_standard_conversions, standard_conversion,
+    standard_conversion_from,
 };
 
 /// Where a conversion happens: selects the conversions allowed and
@@ -83,24 +86,31 @@ impl ConvCtx {
 
 /// A conversion that cannot be made: `id` with `args`, to be emitted at
 /// the expression.
-#[derive(Clone, PartialEq, Eq, Debug)]
+#[derive(Clone, Debug)]
 pub struct ConvError {
     /// The diagnostic.
     pub id: DiagId,
     /// Its arguments, in order (type arguments pre-quoted, as
     /// [`Sema::ty_arg`] prints them).
     pub args: Vec<String>,
+    /// Its notes (the candidates of a failed user-defined conversion).
+    pub notes: Vec<kiln_diag::Diag>,
 }
 
 impl ConvError {
     pub(crate) fn new(id: DiagId, args: Vec<String>) -> ConvError {
-        ConvError { id, args }
+        ConvError { id, args, notes: Vec::new() }
     }
 
     /// The diagnostic, with its caret at `e`'s location.
     pub fn diag(&self, s: &Sema<'_, '_>, e: ExprId) -> kiln_diag::Diag {
-        let loc = s.ast.exprs.get(e).loc();
-        self.args.iter().fold(s.diag(self.id, loc), kiln_diag::Diag::arg)
+        self.diag_at(s, s.ast.exprs.get(e).loc())
+    }
+
+    /// The diagnostic, with its caret at `loc`.
+    pub fn diag_at(&self, s: &Sema<'_, '_>, loc: Loc) -> kiln_diag::Diag {
+        let d = self.args.iter().fold(s.diag(self.id, loc), kiln_diag::Diag::arg);
+        self.notes.iter().cloned().fold(d, kiln_diag::Diag::with_note)
     }
 }
 
@@ -252,7 +262,7 @@ pub fn decay(s: &mut Sema<'_, '_>, e: ExprId) -> ExprId {
     if s.ast.types.is_dependent(t) {
         return e;
     }
-    if s.check_builtin_fn_use(e) {
+    if s.check_builtin_fn_use(e) || s.check_overload_use(e) {
         let loc = s.eloc(e);
         return s.recover_err(&[e], loc);
     }
@@ -635,6 +645,24 @@ fn bind_reference(s: &mut Sema<'_, '_>, e: ExprId, to: QualType) -> Result<ExprI
         return Ok(x);
     }
     if !related {
+        // [dcl.init.ref]/5.1.2, 5.3.2: a conversion function's result;
+        // /5.4.1: a temporary initialized by a user-defined conversion.
+        let class_src = s.ast.types.as_record(f_un).is_some();
+        let class_ref = s.ast.types.as_record(r_un).is_some();
+        if class_src || (class_ref && !plain_lref) {
+            let at = s.begin_loc(e);
+            if let Some(r) = s.user_convert(e, to, ConvCtx::Initialization, at) {
+                return r;
+            }
+            if !plain_lref {
+                let mut err = ConvError::new(
+                    DiagId::sema_no_viable_conversion,
+                    vec![s.ty_arg(from), s.ty_arg(referee)],
+                );
+                err.notes = s.udc_failure_notes(e, to, ConvCtx::Initialization);
+                return Err(err);
+            }
+        }
         if plain_lref {
             let sel = if rq.contains(Quals::VOLATILE) { "1" } else { "0" };
             let id = if vk == ValueCategory::LValue {
@@ -770,7 +798,12 @@ fn qualify_prvalue(s: &mut Sema<'_, '_>, e: ExprId, to: QualType) -> ExprId {
     }
     let n = *s.ast.exprs.get(e);
     if n.kind() == ExprKind::ImplicitCastExpr
-        && s.ast.exprs.cast_kind(e) != CastKind::LValueToRValue
+        && !matches!(
+            s.ast.exprs.cast_kind(e),
+            CastKind::LValueToRValue
+                | CastKind::UserDefinedConversion
+                | CastKind::ConstructorConversion
+        )
     {
         let ck = s.ast.exprs.cast_kind(e);
         let op = s.ast.exprs.operand(e);
@@ -806,6 +839,35 @@ pub fn implicit_convert(
         let loc = s.eloc(e);
         return Ok(s.recover_err(&[e], loc));
     }
+    if from == QualType::OVERLOAD {
+        // [over.over]: the target selects the function.
+        let resolved = if ctx == ConvCtx::Condition {
+            s.check_overload_use(e);
+            None
+        } else {
+            let at = s.begin_loc(e);
+            s.resolve_address_of_overloaded(
+                e,
+                to,
+                true,
+                crate::overload::address::AddrCtx::Convert,
+                at,
+            )
+        };
+        return match resolved {
+            // A non-static member without an object: reported at the end
+            // of the full-expression ([expr.prim.id.general]/4).
+            Some(x) if s.member_refs.get(&x).is_some_and(|r| r.error) => {
+                let loc = s.eloc(x);
+                Ok(s.recover_err(&[x], loc))
+            }
+            Some(x) => implicit_convert(s, x, to, ctx),
+            None => {
+                let loc = s.eloc(e);
+                Ok(s.recover_err(&[e], loc))
+            }
+        };
+    }
     if s.ast.types.is_reference(to) {
         return bind_reference(s, e, to);
     }
@@ -815,28 +877,23 @@ pub fn implicit_convert(
         if prvalue && s.ast.types.same_unqualified(from, to) {
             return Ok(e);
         }
+        let at = s.begin_loc(e);
         if fr.is_some() {
-            let at = s.begin_loc(e);
             if let Some(x) = s.construct_from_class(e, to, ctx, at, crate::class::DeletedAs::Call) {
                 return Ok(x);
             }
+            // [over.match.copy]: an unrelated class source.
+            return user_conversion(s, e, to, ctx, at);
         }
-        if fr.is_none() {
-            let at = s.begin_loc(e);
-            if let Some(x) = s.convert_to_class(e, to, ctx, at, crate::class::DeletedAs::Call) {
-                return Ok(x);
-            }
-        }
-        if fr.is_none() && !has_constructors_or_unknown(s, to) {
-            return Err(conversion_error(s, e, to, ctx));
+        if let Some(x) = s.convert_to_class(e, to, ctx, at, crate::class::DeletedAs::Call) {
+            return Ok(x);
         }
         return Err(unsupported("initialization of a class object"));
     }
     if fr.is_some() {
-        if has_conversion_functions(s, from) {
-            return Err(unsupported("a user-defined conversion"));
-        }
-        return Err(conversion_error(s, e, to, ctx));
+        // [over.match.conv]: a conversion function.
+        let at = s.begin_loc(e);
+        return user_conversion(s, e, to, ctx, at);
     }
     match standard_conversion(s, e, to, ctx) {
         Some(scs) => apply_standard_conversion(s, e, &scs, to),
@@ -844,9 +901,27 @@ pub fn implicit_convert(
     }
 }
 
-/// Conservatively true: class initialization is M3 work.
-fn has_constructors_or_unknown(_s: &Sema<'_, '_>, _to: QualType) -> bool {
-    true
+/// Converts `e` to `to` by a user-defined conversion ([class.conv];
+/// `at` as for [`Sema::user_convert`]); when there is none, clang's error
+/// for `ctx` with the candidates as notes.
+pub(crate) fn user_conversion(
+    s: &mut Sema<'_, '_>,
+    e: ExprId,
+    to: QualType,
+    ctx: ConvCtx,
+    at: Loc,
+) -> Result<ExprId, ConvError> {
+    if let Some(r) = s.user_convert(e, to, ctx, at) {
+        return r;
+    }
+    let mut err = conversion_error(s, e, to, ctx);
+    if matches!(
+        err.id,
+        DiagId::sema_no_viable_conversion | DiagId::sema_no_viable_conversion_return
+    ) {
+        err.notes = s.udc_failure_notes(e, to, ctx);
+    }
+    Err(err)
 }
 
 /// The usual arithmetic conversions ([expr.arith.conv]) for a binary

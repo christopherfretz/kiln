@@ -121,9 +121,13 @@ impl Sema<'_, '_> {
         let class = conv::bases::complete_class(self, class)?;
         let (entity, ck) = self.take_ctor_entity();
         let loc = site.loc;
-        if style.is_list() && self.has_init_list_ctor(class) {
-            // todo(WP-067b follow-up): initializer-list constructors
-            // ([dcl.init.list]/3.7, [over.match.list]/1.1).
+        if style.is_list()
+            && self.has_init_list_ctor(class)
+            && self.init_list_phase1_viable(class, args)
+        {
+            // todo(WP-067b follow-up): building the initializer_list
+            // object for an initializer-list constructor
+            // ([dcl.init.list]/3.7, [over.match.list]/1.1; phase 2 below).
             self.unsupported("initialization by an initializer-list constructor", loc);
             return Some(self.recover(ty, args, loc));
         }
@@ -137,6 +141,13 @@ impl Sema<'_, '_> {
             // the aggregate is initialized from the parenthesized list.
             let rparen = site.rparen.or(site.temp_end).unwrap_or(loc);
             return Some(self.paren_aggregate_init(ty, args, loc, rparen));
+        }
+        if let Selected::Found(f) | Selected::Deleted(f) = sel
+            && let [arg] = args
+            && self.kind_of(f) == kiln_ast::decl::DeclKind::CXXConversion
+        {
+            // CWG2327: the conversion function initializes the object.
+            return Some(self.call_conversion_function(*arg, f, f, site.sites.access));
         }
         let call = CtorCall {
             info: ConstructInfo { kind: ck, list: style.is_list(), ..ConstructInfo::COMPLETE },
@@ -198,6 +209,20 @@ impl Sema<'_, '_> {
         if self.ast.types.as_record(self.ety(e)).is_some() {
             return None;
         }
+        self.construct_converted(e, to, ctx, at, deleted_as)
+    }
+
+    /// [`Sema::convert_to_class`] for any source `e` (a class source of
+    /// an unrelated class, when the user-defined conversion chose a
+    /// converting constructor: [over.match.copy]/1.1).
+    pub(crate) fn construct_converted(
+        &mut self,
+        e: ExprId,
+        to: QualType,
+        ctx: ConvCtx,
+        at: Loc,
+        deleted_as: DeletedAs,
+    ) -> Option<ExprId> {
         let deleted_as = match deleted_as {
             DeletedAs::Param(n) => DeletedAs::Conversion(Some(n)),
             DeletedAs::Call => DeletedAs::Conversion(None),
