@@ -6,7 +6,7 @@
 use std::path::PathBuf;
 
 use super::side::{self, VNode};
-use super::table::{self, Disposition, M2_KINDS, TABLE};
+use super::table::{self, CLASS_KINDS, Disposition, M2_KINDS, TABLE};
 use super::values::{self, Field, Literals, Record, Shape, Types, Value};
 use super::{DumpOptions, escape, normalize};
 
@@ -40,6 +40,22 @@ fn spec_example_reproduces() {
     let mut text = || Err("unused".to_owned());
     let r = normalize(&json, "other.cpp", &DumpOptions::default(), &mut text).unwrap();
     assert_eq!(r, "TranslationUnitDecl\n");
+}
+
+#[test]
+fn class_features_reproduce() {
+    let (r, calls) = run_fixture("class", &DumpOptions::default());
+    assert_eq!(r.unwrap(), fixture("class.expected"));
+    assert_eq!(calls, 1, "member functions need the text dump");
+    let i = DumpOptions { implicit: true, ..DumpOptions::default() };
+    assert_eq!(run_fixture("class", &i).0.unwrap(), fixture("class.implicit.expected"));
+    // An out-of-line member is named by its semantic context, as clang does.
+    let f = DumpOptions { filter: Some("D::s".into()), ..DumpOptions::default() };
+    assert_eq!(
+        run_fixture("class", &f).0.unwrap(),
+        "Dumping D::s:\nCXXMethodDecl s 'void ()' static\n\n\
+         Dumping D::s:\nCXXMethodDecl parent s 'void ()'\n`-CompoundStmt\n\n"
+    );
 }
 
 #[test]
@@ -106,8 +122,8 @@ fn unmapped_input_is_an_error_naming_it() {
     let e = norm(&var("", &lit.replace("IntegerLiteral", "FrobExpr"))).unwrap_err();
     assert!(e.contains("clang node kind `FrobExpr` is not in the clang-ast mapping table"), "{e}");
     assert!(e.contains("in top-level VarDecl `v`"), "{e}");
-    let e = norm(&var("", &lit.replace("IntegerLiteral", "CXXConstructExpr"))).unwrap_err();
-    assert!(e.contains("unsupported CXXConstructExpr"), "{e}");
+    let e = norm(&var("", &lit.replace("IntegerLiteral", "LambdaExpr"))).unwrap_err();
+    assert!(e.contains("unsupported LambdaExpr"), "{e}");
     let e = norm(&var(r#","tls":"static""#, lit)).unwrap_err();
     assert!(e.contains("`VarDecl` attribute `tls` is not in the mapping table"), "{e}");
     let e = norm(&var(r#","init":"parenlist""#, lit)).unwrap_err();
@@ -121,14 +137,17 @@ fn unmapped_input_is_an_error_naming_it() {
 
 #[test]
 fn mapping_table_covers_m2() {
-    for k in M2_KINDS {
+    for k in M2_KINDS.iter().chain(CLASS_KINDS) {
         assert!(matches!(table::lookup(k), Ok(Disposition::Keep)), "{k} must be kept");
         // Every kept kind has an attribute list.
         table::check_keys(k, ["id", "kind"].iter()).unwrap();
     }
     for (k, d) in TABLE {
         if matches!(d, Disposition::Keep) {
-            assert!(M2_KINDS.contains(k), "{k} is kept but not an M2 kind");
+            assert!(
+                M2_KINDS.contains(k) || CLASS_KINDS.contains(k),
+                "{k} is kept but not an M2 or class kind"
+            );
         }
         assert_eq!(TABLE.iter().filter(|(x, _)| x == k).count(), 1, "{k} listed twice");
     }
@@ -141,7 +160,7 @@ fn mapping_table_covers_m2() {
     // Decl keys are not expression keys.
     assert!(table::check_keys("IntegerLiteral", ["isUsed"].iter()).is_err());
     let (keep, drop, unsupported) = table::counts();
-    assert_eq!(keep, M2_KINDS.len());
+    assert_eq!(keep, M2_KINDS.len() + CLASS_KINDS.len());
     assert_eq!(keep + drop + unsupported, TABLE.len());
     eprintln!("mapping table: {keep} keep, {drop} drop, {unsupported} unsupported");
 }
@@ -183,6 +202,7 @@ TranslationUnitDecl 0x1 <<invalid sloc>> <invalid sloc>
     assert!(d[0].has_flag("constexpr") && d[0].has_flag("implicit-inline"));
     assert!(!d[0].has_flag("int") && !d[0].has_flag("consteval"));
     assert!(d[2].value.is_none());
+    assert!(d.iter().all(|d| d.overrides.is_none()));
     let v = values::parse(d[1].value.as_ref().unwrap()).unwrap();
     assert_eq!(
         v,
@@ -192,6 +212,38 @@ TranslationUnitDecl 0x1 <<invalid sloc>> <invalid sloc>
             Value::Float("1.500000e+00".into())
         ])
     );
+}
+
+#[test]
+fn side_channel_methods() {
+    // clang prints a function's later words after a delete message, on the
+    // message's line; `Overrides:` names each method with its address.
+    let text = "\
+TranslationUnitDecl 0x1 <<invalid sloc>> <invalid sloc>
+`-CXXRecordDecl 0x2 <t.cpp:1:1, col:9> col:8 struct Q definition
+  |-CXXMethodDecl 0x3 <col:3, col:8> col:8 p 'void (int)' delete
+  | |-delete message: StringLiteral 0x4 <col:9> 'NULL TYPE' lvalue \"x'y\" implicit-inline
+  | |-Overrides: [ 0xaa R::p 'void (int)', 0xbb S::p 'void (int)' ]
+  | `-ParmVarDecl 0x5 <col:3> col:3 'int'
+  |-CXXDestructorDecl 0x6 <col:8> col:8 implicit constexpr ~Q 'void ()' inline default trivial noexcept-unevaluated 0x6
+  `-FunctionDecl 0x7 parent 0x1 <col:3> col:3 friend_undeclared trivial 'void ()'
+";
+    let d = side::parse(text).unwrap();
+    assert_eq!(d.len(), 3);
+    assert_eq!(
+        (d[0].class, d[1].class, d[2].class),
+        ("CXXMethodDecl", "CXXDestructorDecl", "FunctionDecl")
+    );
+    assert!(d[0].has_flag("implicit-inline") && d[0].has_trailing_flag("delete"));
+    assert_eq!(
+        d[0].overrides.as_deref(),
+        Some("Overrides: [ R::p 'void (int)', S::p 'void (int)' ]")
+    );
+    assert!(d[1].has_trailing_flag("trivial") && d[1].has_trailing_flag("noexcept-unevaluated"));
+    assert!(d[1].overrides.is_none());
+    // A name before the type is not a trailing word.
+    assert!(d[2].names("trivial") && !d[2].has_trailing_flag("trivial"));
+    assert!(d[2].has_flag("friend_undeclared") && !d[2].has_flag("friend"));
 }
 
 fn types() -> Types {

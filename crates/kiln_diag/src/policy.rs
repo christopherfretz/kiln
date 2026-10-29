@@ -43,6 +43,8 @@ pub(crate) struct Policy {
     errors_as_fatal: bool,
     enable_all: bool,
     ext_behavior: Severity,
+    /// Drop warnings located in system headers (no `-Wsystem-headers`).
+    pub(crate) suppress_system: bool,
 }
 
 impl Policy {
@@ -74,6 +76,7 @@ impl Policy {
             errors_as_fatal: false,
             enable_all: false,
             ext_behavior,
+            suppress_system: true,
         };
         let mut reports = Vec::new();
         for report in [false, true] {
@@ -95,7 +98,10 @@ impl Policy {
             None => (true, opt),
         };
         if opt == "system-headers" {
-            // Accepted; kiln has no system-header suppression yet.
+            // clang `setSuppressSystemWarnings(!positive)`.
+            if !report {
+                self.suppress_system = !positive;
+            }
             return;
         }
         if opt == "everything" {

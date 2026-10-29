@@ -237,14 +237,15 @@ impl Sema<'_, '_> {
         if self.is_err_expr(init) {
             return self.recover(ty, &[init], loc);
         }
-        self.builder().cast(
-            ExprKind::CXXFunctionalCastExpr,
+        // clang's `RParenLoc` of `T{...}` is the `}`.
+        self.builder().functional_cast(
             CastKind::NoOp,
             init,
             to,
             ValueCategory::PRValue,
             None,
             loc,
+            l.rbrace,
             ExprFlags::NONE,
         )
     }

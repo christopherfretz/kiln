@@ -3,7 +3,8 @@
 //! See `docs/ARCHITECTURE.md` and `spec/abi.md` for the contract
 //! this crate implements. M2 provides the target description
 //! ([`mod@target`]), type and record layout ([`layout`]) and the
-//! `-fdump-record-layouts` printer ([`dump`]).
+//! `-fdump-record-layouts` printer ([`dump`]). M3 adds the Itanium vtable
+//! interface ([`vtable`], implemented by WP-078b).
 #![forbid(unsafe_code)]
 
 pub mod call;
@@ -12,9 +13,14 @@ pub mod irtype;
 pub mod layout;
 pub mod mangle;
 pub mod target;
+pub mod vtable;
 
-pub use dump::{dump_record_layout, write_record_layout};
+pub use dump::{
+    DumpOptions, dump_all_record_layouts, dump_record_layout, record_definitions,
+    write_record_layout, write_record_layout_with,
+};
 pub use layout::{
-    Layouter, TypeLayout, array_layout, ensure_layout, record_layout, type_size_align,
+    Layouter, MAX_SUBOBJECTS, TypeLayout, array_layout, ensure_layout, record_layout, subobjects,
+    type_size_align,
 };
 pub use target::{Arch, Target, Triple, TripleError, target};

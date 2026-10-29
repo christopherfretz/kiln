@@ -219,3 +219,59 @@ fn shared_across_threads() {
     assert_eq!(d[5].id, Some(DiagId::diag_too_many_errors));
     assert_eq!(e.error_count(), 6);
 }
+
+// spec: diag.md §5.4 (system headers): warnings located in a system
+// header are dropped unless `-Wsystem-headers`, even when `-Werror` made
+// them errors; hard errors and the ids clang shows in system headers
+// (`#warning`) are kept; a macro location counts by its expansion.
+#[test]
+fn system_header_warnings_suppressed() {
+    use kiln_source::FileKind;
+    let (sm, f) = source("s.h", "#endif\nint x = 'ab';\n#warning w\n");
+    sm.set_file_kind(common::at(&sm, f, 1, 1), FileKind::System);
+    let emit = |e: &DiagEngine<'_>| {
+        endif(e, f, 1);
+        Diag::new(DiagId::lit_multichar, sp(&sm, f, 2, 9, 4)).emit(e);
+        Diag::new(DiagId::pp_warning_directive, sp(&sm, f, 3, 2, 7)).arg("w").emit(e);
+    };
+    let base = ["-fno-caret-diagnostics"];
+    assert_text(
+        &text(&sm, &base, emit),
+        "s.h:1:2: error: #endif without #if\n\
+         s.h:3:2: warning: w [-W#warnings]\n\
+         1 warning and 1 error generated.\n",
+    );
+    assert_text(
+        &text(&sm, &["-fno-caret-diagnostics", "-Werror", "-Wmultichar"], emit),
+        "s.h:1:2: error: #endif without #if\n\
+         s.h:3:2: error: w [-Werror,-W#warnings]\n\
+         2 errors generated.\n",
+    );
+    let all = "s.h:1:2: error: #endif without #if\n\
+               s.h:2:9: warning: multi-character character constant [-Wmultichar]\n\
+               s.h:3:2: warning: w [-W#warnings]\n\
+               2 warnings and 1 error generated.\n";
+    assert_text(&text(&sm, &["-fno-caret-diagnostics", "-Wsystem-headers"], emit), all);
+    // The last of -Wsystem-headers / -Wno-system-headers wins.
+    let got =
+        text(&sm, &["-fno-caret-diagnostics", "-Wno-system-headers", "-Wsystem-headers"], emit);
+    assert_text(&got, all);
+    let got =
+        text(&sm, &["-fno-caret-diagnostics", "-Wsystem-headers", "-Wno-system-headers"], |e| {
+            assert!(e.suppress_system_warnings());
+            assert!(!e.is_enabled_at(DiagId::lit_multichar, common::at(&sm, f, 2, 9)));
+            assert!(e.is_enabled_at(DiagId::pp_warning_directive, common::at(&sm, f, 3, 2)));
+            emit(e);
+        });
+    assert!(!got.contains("multi-character"));
+    // A user file and a macro expanded in a user file keep their warnings,
+    // even when the macro was defined in a system header.
+    let (sm2, u) = source("u.cpp", "int y = M;\n");
+    let s = sm2.add_virtual("s.h", "#define M 'ab'\n".into()).unwrap();
+    sm2.set_file_kind(sm2.loc(s, 0), FileKind::System);
+    let m = common::mac(&sm2, sm2.loc(s, 10), 4, sp(&sm2, u, 1, 9, 1), sp(&sm2, u, 1, 9, 1));
+    let got = text(&sm2, &base, |e| {
+        Diag::new(DiagId::lit_multichar, Span::new(m, m.with_offset(4))).emit(e);
+    });
+    assert!(got.contains("u.cpp:1:9: warning: multi-character"), "{got}");
+}

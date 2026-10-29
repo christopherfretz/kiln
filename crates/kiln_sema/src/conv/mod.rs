@@ -252,6 +252,10 @@ pub fn decay(s: &mut Sema<'_, '_>, e: ExprId) -> ExprId {
     if s.ast.types.is_dependent(t) {
         return e;
     }
+    if s.check_builtin_fn_use(e) {
+        let loc = s.eloc(e);
+        return s.recover_err(&[e], loc);
+    }
     if s.ast.types.is_function(t) {
         if n.value_category() == ValueCategory::LValue {
             let p = s.ast.types.pointer_to(t);
@@ -645,6 +649,10 @@ pub fn implicit_convert(
     }
     if s.ast.types.is_dependent(from) || s.ast.types.is_dependent(to) {
         return Ok(e);
+    }
+    if s.check_builtin_fn_use(e) {
+        let loc = s.eloc(e);
+        return Ok(s.recover_err(&[e], loc));
     }
     if s.ast.types.is_reference(to) {
         return bind_reference(s, e, to);

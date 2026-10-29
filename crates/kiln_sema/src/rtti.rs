@@ -1,9 +1,9 @@
 //! Run-time type identification: `typeid` ([expr.typeid]; spec/sema.md
-//! §5.5). Kiln checks and builds the expression; the Oven and codegen do
+//! §5.6). Kiln checks and builds the expression; the Oven and codegen do
 //! not evaluate it yet.
 
 use kiln_ast::decl::DeclKind;
-use kiln_ast::expr::CastKind;
+use kiln_ast::expr::{CastKind, TypeidOperand};
 use kiln_ast::types::{Nns, Quals, TagKeyword};
 use kiln_ast::{DeclId, ExprId, QualType};
 use kiln_diag::DiagId;
@@ -77,9 +77,10 @@ impl Sema<'_, '_> {
         let operand = match operand {
             Ok(e) if !self.ast.types.effective_quals(written).is_empty() => {
                 let vk = self.ast.exprs.get(e).value_category();
-                Ok(conv::raw_cast(self, CastKind::NoOp, e, unqual, vk, None))
+                TypeidOperand::Expr(conv::raw_cast(self, CastKind::NoOp, e, unqual, vk, None))
             }
-            o => o,
+            Ok(e) => TypeidOperand::Expr(e),
+            Err(t) => TypeidOperand::Type(t),
         };
         // clang's type is the bare `RecordType`, printed with its scope:
         // kiln spells that `std::type_info` (spec/types.md §15 R4).
@@ -87,6 +88,7 @@ impl Sema<'_, '_> {
         let nns = self.ast.types.nns(Nns::Namespace { prefix: None, ns: self.ast.first(std) });
         let named = self.ast.types.elaborated(TagKeyword::None, Some(nns), rec);
         let ty = self.ast.types.qualify(named, Quals::CONST);
-        self.builder().typeid_expr(operand, ty, loc, rparen)
+        // Never potentially evaluated: no polymorphic classes yet.
+        self.builder().typeid_expr(operand, false, ty, loc, rparen)
     }
 }

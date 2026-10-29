@@ -101,8 +101,10 @@ type   := "'" printed-type "'" [":'" desugared "'"]     -- only when the strings
 - Types print per spec/types.md §12 (as clang).
 
 ## 3. M2 node lines (normative)
-Every decl line starts `Class [implicit] [used|referenced] [invalid]`
-(clang's `isImplicit`, `isUsed` (of the first declaration),
+Every decl line starts `Class [parent] [implicit] [used|referenced]
+[invalid]` (`parent`: the semantic context differs from the lexical one —
+an out-of-line member definition, a befriended declaration; with `ids`
+`parent=#dN`; clang's `isImplicit`, `isUsed` (of the first declaration),
 `isThisDeclarationReferenced`, `isInvalidDecl`; `used`
 wins); this is `<head>` below, after the §2 ids and location.
 Dependence flags are not printed (clang prints them only on dependent
@@ -119,17 +121,21 @@ no category).
 | `UsingDecl` | `UsingDecl <head> qualifier::name` (the nested-name-specifier as written, `::N::x` or `N::x`) |
 | `UsingShadowDecl` | `UsingShadowDecl <head> Kind 'name'[ 'type'[:'canonical']]` (always `implicit`, so printed only with implicit nodes; the target's kind, name and, for a value or typedef, its type) |
 | `UsingEnumDecl` | `UsingEnumDecl <head> Enum 'Name'` |
-| `CXXRecordDecl` | `CXXRecordDecl <head> struct\|class\|union [Name] [definition]`; children: base-specifiers, attributes, members |
+| `CXXRecordDecl` | `CXXRecordDecl <head> [friend_undeclared] struct\|class\|union [Name] [definition]`; children: base-specifiers, attributes, `FinalAttr final` (the class-virt-specifier; clang adds it after the head's attributes), members. `friend_undeclared`: first declared by a `friend` declaration (it prints under its `FriendDecl`) |
 | base-specifier | `[virtual ]public\|protected\|private 'type'[...]` (no class name; the semantic access: defaulted is `private` in a `class`, else `public`) |
 | `FieldDecl` | `FieldDecl <head> [name] 'type' [mutable]` [child: bit-width `ConstantExpr`] [child: default member initializer] (an unnamed bit-field has no name) |
 | `EnumDecl` | `EnumDecl <head> [class\|struct] Name ['fixed-underlying-type']` |
 | `EnumConstantDecl` | `EnumConstantDecl <head> Name 'type' value=N` [child: initializer] |
 | `LinkageSpecDecl` | `LinkageSpecDecl <head> C\|C++` (no flag for the braced form) |
-| `FunctionDecl` | `FunctionDecl <head> [constexpr\|consteval\|immediate] name 'type' [static\|extern] [inline] [virtual] [pure] [default\|default_delete] [delete] [trivial] [implicit-inline]`; children: `ParmVarDecl`s, body, attributes (clang's order). `immediate` = an escalated immediate function. `inline` = the specifier was written; `implicit-inline` = inline without it (constexpr, consteval, deleted, or a redeclaration of an inline function) |
+| `FunctionDecl`, `CXXMethodDecl`, `CXXConstructorDecl`, `CXXDestructorDecl`, `CXXConversionDecl` | `Class <head> [constexpr\|consteval\|immediate] [friend\|friend_undeclared] name 'type' [static\|extern] [inline] [virtual] [pure] [default\|default_delete] [delete] [trivial] [noexcept-unevaluated] [implicit-inline]`; children: [`delete message:` `StringLiteral unevaluated "msg"`], [`Overrides:` line], `ParmVarDecl`s, `CXXCtorInitializer`s, body, attributes (clang's order: written attributes, then `OverrideAttr`, then `FinalAttr final`). `immediate` = an escalated immediate function. `friend` = declared by a friend declaration and also declared elsewhere, `friend_undeclared` = first declared by one (it prints under its `FriendDecl`). `virtual` = the specifier was written; `default` = `= default` (`default_delete`: found deleted); `delete` = `= delete`; `trivial` = a trivial special member; `noexcept-unevaluated` = the exception specification is not yet computed (an implicit or defaulted special member; with `ids` `noexcept-unevaluated #dN` names the member it belongs to). `inline` = the specifier was written; `implicit-inline` = inline without it (constexpr, consteval, deleted, defaulted on its first declaration, defined in its class, or a redeclaration of an inline function) |
+| overridden methods | `Overrides: [ B::f 'type', C::f 'type' ]` (each overridden method by its class's simple name; the sugared type) |
+| `CXXCtorInitializer` | `CXXCtorInitializer Field\|IndirectField 'name' 'type'` (a member), `CXXCtorInitializer 'B'` (a base, the canonical type) or `CXXCtorInitializer 'D'` (delegating); child: the initializer. Every member and base with an initialization has one, implicit ones included, in initialization order |
+| `AccessSpecDecl` | `AccessSpecDecl <head> public\|protected\|private` |
+| `FriendDecl` | `FriendDecl <head> ['type']` (a friend type; with no child unless the type is first declared here) or `FriendDecl <head>` with the befriended declaration as its child |
 | `ParmVarDecl` | `ParmVarDecl <head> [name] 'type' [cinit] [pack]` (`cinit`: has a default argument, its child) |
 | `VarDecl` | `VarDecl <head> name 'type' [static\|extern\|register] [tls\|tls_dynamic] [nrvo] [inline] [constexpr] [cinit\|callinit\|listinit\|parenlistinit] [value=V]` (the init style only with an initializer; `constinit` is an attribute in clang and is not printed); `value=` only on a `constexpr` variable with an initializer (a `const int` initialized by a constant prints none, as in clang) |
 | `StaticAssertDecl` | `StaticAssertDecl <head>` children: condition, [message (`StringLiteral unevaluated "msg"`)] |
-| attribute | `<Name>Attr [#aN] [@loc] [Inherited] [Implicit]` with clang's class name (`[[nodiscard]]` → `WarnUnusedResultAttr`); a kind without one prints `UnknownAttr kind=N`. Arguments are not printed (M2). Implicit attributes print only with `implicit` |
+| attribute | `<Name>Attr [#aN] [@loc] [Inherited] [Implicit]` with clang's class name (`[[nodiscard]]` → `WarnUnusedResultAttr`); a kind without one prints `UnknownAttr kind=N`. Arguments are not printed (M2), except: `AsmLabelAttr [Inherited] "label" IsLiteralLabel` (the label's bytes unescaped, as clang) and `BuiltinAttr Implicit N` (the builtin id; the implicit builtin decl and its `extern "C"` `LinkageSpecDecl` print only with `implicit`). Implicit attributes print only with `implicit` |
 | `IntegerLiteral` | `IntegerLiteral 'type' N` |
 | `FloatingLiteral` | `FloatingLiteral 'type' 1.5e0` |
 | `CharacterLiteral` | `CharacterLiteral 'type' N` (the code unit value, decimal) |
@@ -146,6 +152,19 @@ no category).
 | `ConditionalOperator`, `ParenExpr`, `ArraySubscriptExpr`, `CallExpr` | class, type, category; children in source order (callee first) |
 | `UnaryExprOrTypeTraitExpr` | `UnaryExprOrTypeTraitExpr 'type' sizeof\|alignof 'operand-type'` (or expression child) |
 | `CXXNoexceptExpr` | `CXXNoexceptExpr 'bool'`; one child, the unevaluated operand. The value is not printed (clang prints none) |
+| `CXXStaticCastExpr`, `CXXDynamicCastExpr`, `CXXConstCastExpr`, `CXXReinterpretCastExpr` | `Class 'type' [lvalue\|xvalue] static_cast<T> <Kind [(path)]>` (the written type, as `'type'` plus `&` for an lvalue and `&&` for an xvalue result) |
+| `CXXFunctionalCastExpr` | `CXXFunctionalCastExpr 'type' [lvalue\|xvalue] functional cast to T <Kind>` |
+| cast paths | a derived-to-base or base-to-derived cast kind prints its path: `<DerivedToBase (A -> virtual V)>` (each base class, `virtual` on a virtual step), also on `ImplicitCastExpr` and `CStyleCastExpr` |
+| `CXXConstructExpr`, `CXXTemporaryObjectExpr` | `Class 'type' 'ctor-type' [list] [std::initializer_list] [zeroing] [immediate-escalating]`; children: the arguments |
+| `CXXMemberCallExpr` | `CXXMemberCallExpr 'type' [lvalue\|xvalue]`; children: the `MemberExpr` callee, the arguments |
+| `CXXThisExpr` | `CXXThisExpr 'type' [implicit] this` |
+| `CXXDefaultArgExpr`, `CXXDefaultInitExpr` | `CXXDefaultArgExpr 'type'`; `CXXDefaultInitExpr 'type' has rewritten init`; child: the parameter's default argument or the member's initializer (printed under every use, as clang) |
+| `MaterializeTemporaryExpr` | `MaterializeTemporaryExpr 'type' lvalue\|xvalue [extended by Var 'name' 'type']` |
+| `CXXBindTemporaryExpr` | `CXXBindTemporaryExpr 'type' (CXXTemporary)` (clang adds an address) |
+| `ExprWithCleanups` | `ExprWithCleanups 'type' [lvalue\|xvalue]` |
+| `CXXTypeidExpr` | `CXXTypeidExpr 'type' lvalue [type_operand='T']` (or an expression child; `type_operand` is a kiln addition: clang 19 prints nothing) |
+| `CXXParenListInitExpr` | `CXXParenListInitExpr 'type'`; `array_filler:` child first, then elements |
+| `CXXInheritedCtorInitExpr`, `ArrayInitLoopExpr`, `ArrayInitIndexExpr`, `OpaqueValueExpr` | class and type; an `ArrayInitLoopExpr` has the `OpaqueValueExpr` and the per-element initializer as children; an `OpaqueValueExpr` prints its source expression under every use (as clang) |
 | `InitListExpr` | `InitListExpr 'type' [field=name]`; `array_filler:` child first, then elements; `field=` names the initialized member of a union |
 | `ImplicitValueInitExpr` | `ImplicitValueInitExpr 'type'` |
 | WP-064 forms | `CXXScalarValueInitExpr`, `CXXDefaultArgExpr`, `CXXThrowExpr`, `StmtExpr`, `CompoundLiteralExpr`, `OpaqueValueExpr`, `BinaryConditionalOperator`, `OffsetOfExpr`, `CXXTypeidExpr`: class, type, category only. Children: a `CXXDefaultArgExpr` the parameter's default argument; a `CXXThrowExpr` its operand, if any; a `StmtExpr` its `CompoundStmt`; a `CompoundLiteralExpr` its `InitListExpr`; an `OpaqueValueExpr` its source expression; a `BinaryConditionalOperator` the common expression, condition, true arm and false arm; an `OffsetOfExpr` its array index expressions; a `CXXTypeidExpr` its expression operand (a type operand is not printed) |
@@ -168,14 +187,20 @@ Notes:
   `'E':'N::E'` in kiln and `'N::E'` in clang when the enumeration is in
   a namespace or class (spec/types.md §15 R4), so goldens use global
   enumerations.
-- Not in the M2 dump (an error in the clang normalizer, §6; out of scope
-  for M2 kiln): member functions and constructors (including
-  the implicit ones' `CXXConstructExpr`s: a default-initialized class
-  object `P p;`, a class copy such as `return q;`),
-  default member initializers, `mutable`, attributes,
-  `thread_local`, named casts (`static_cast` etc.; clang prints the
-  written cast after the type), `ConstantExpr` values of
-  floating, pointer or lvalue type, and `long double` values.
+- The class-feature lines (member functions, ctor-initializers, access
+  and friend declarations, bases, `Overrides:`, named and functional
+  casts and the construction and temporary expressions, spec/sema-class.md
+  §8.1) are WP-066a; kiln produces them once sema builds them (WP-065,
+  066b/c, 078a).
+- Not in the dump (an error in the clang normalizer, §6): attributes
+  other than `override`/`final`, `thread_local`, overloaded operator calls
+  (`CXXOperatorCallExpr`), `new`/`delete`, lambdas,
+  `ConstantExpr` values of floating, pointer or lvalue type, and
+  `long double` values; also clang's `noexcept-uninstantiated`,
+  `ineligible` and `not_selected` member-function words (templates and
+  constrained special members, M3) and a block-scope `extern`
+  declaration's `parent` (clang prints it; kiln's dump does not model the
+  separate semantic context and the normalizer drops it).
 
 ## 4. M2 example
 This is the conformance test `tests/conformance/ast/dcl.dcl/spec-example.cpp`;
@@ -342,8 +367,8 @@ contract:
 - **Mapping table** (`xtask/src/clang_ast/table.rs`). Every clang node
   kind has an explicit disposition: *keep* (printed per §3), *drop*
   (skipped with its subtree: implicit-only nodes, type trees, comments)
-  or *unsupported* (an error with the reason: templates, classes beyond
-  aggregates, named casts, ...). A kind missing from the table is an
+  or *unsupported* (an error with the reason: templates, namespaces,
+  new/delete, throw, lambdas, ...). A kind missing from the table is an
   error naming it. Each kept kind also lists the JSON keys it maps; an
   unknown key (a flag the dump would silently lose, such as a VarDecl's
   `tls`) is an error naming it. A unit test pins that every M2 kind of
@@ -357,11 +382,25 @@ contract:
   enumerator values come from the initializer's `ConstantExpr` (or the
   previous value + 1).
 - **Side channel.** The JSON lacks the `value:` of a constexpr variable,
-  so when one is present the tool also runs `clang -Xclang -ast-dump` and
-  pairs that dump's `FunctionDecl`/`VarDecl` lines with the JSON's in
-  pre-order, checking each pair by class and name; a misalignment is an
-  error. The same pairing cross-checks the derived `constexpr`,
-  `consteval` and `implicit-inline` function flags.
+  a member function's `trivial`, `noexcept-unevaluated`, `friend` /
+  `friend_undeclared` words, its `Overrides:` line and the exact text of
+  a `delete("msg")` message, so when one is present the tool also runs
+  `clang -Xclang -ast-dump` and pairs that dump's function lines
+  (`FunctionDecl`, `CXXMethodDecl`, `CXXConstructorDecl`,
+  `CXXDestructorDecl`, `CXXConversionDecl`) and `VarDecl` lines with the
+  JSON's in pre-order, checking each pair by class and name; a
+  misalignment is an error. The same pairing cross-checks the derived
+  `constexpr`, `consteval` and `implicit-inline` function flags. A word
+  the dump does not model (`noexcept-uninstantiated`, `ineligible`,
+  `not_selected`) is an error.
+- **Reconstructed fields.** clang's JSON has no written type for a named
+  cast: the tool prints the cast's type plus `&`/`&&` by value category
+  (clang's text prints the type as written, `static_cast<R>` through a
+  typedef `R`). A base `CXXCtorInitializer` prints the canonical base
+  type. clang's `elidable` construct flag and a `destroyed` bind flag are
+  errors (C++17 guaranteed elision leaves no elidable constructs in the
+  supported subset). A befriended class that redeclares an earlier
+  declaration is an error.
 - **Values** print as ast.md §9.3, walking the declared type alongside
   clang's untyped tree (`Int 1` of a `bool` is `true`, of a pointer
   `nullptr`). clang prints floats with 7 significant digits, so a
@@ -371,7 +410,9 @@ contract:
   non-null pointer values and lvalue `ConstantExpr`s are errors.
 - **Selection.** The main file is the file as named on the command line;
   top-level decls of other files and implicit decls are dropped unless
-  `--all-files`/`--implicit`. `--filter` follows §1.
+  `--all-files`/`--implicit`. `--filter` follows §1; a declaration's
+  qualified name is built from its semantic context (`D::s` matches the
+  in-class declaration and the out-of-line definition of `s`).
 
 Anything the tool cannot render exactly is an error naming the construct
 and the enclosing top-level decl. It never prints a guess, so a mismatch

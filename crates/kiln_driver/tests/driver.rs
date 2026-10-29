@@ -301,3 +301,66 @@ fn include_stack_like_clang() {
     assert_eq!(markers, want.map(|m| m.replace('@', dir)));
     let _ = std::fs::remove_dir_all(&d);
 }
+
+// clang 19's stderr for the files of `system_header_warnings_like_clang`
+// (`@` is the scratch directory), without and with `-Wsystem-headers`.
+const SYSTEM_HEADER_GOLDEN: &str = r"In file included from @/a.cpp:1:
+@/sys/s.h:1:2: warning: in s [-W#warnings]
+    1 | #warning in s
+      |  ^
+In file included from @/a.cpp:2:
+@/u.h:1:10: warning: multi-character character constant [-Wmultichar]
+    1 | int u1 = 'ef';
+      |          ^
+@/a.cpp:3:9: warning: multi-character character constant [-Wmultichar]
+    3 | int m = M;
+      |         ^
+@/sys/s.h:2:11: note: expanded from macro 'M'
+    2 | #define M 'ab'
+      |           ^
+3 warnings generated.
+";
+const SYSTEM_HEADER_ALL_GOLDEN: &str = r"In file included from @/a.cpp:1:
+@/sys/s.h:1:2: warning: in s [-W#warnings]
+    1 | #warning in s
+      |  ^
+@/sys/s.h:3:9: warning: multi-character character constant [-Wmultichar]
+    3 | int s = 'cd';
+      |         ^
+In file included from @/a.cpp:2:
+@/u.h:1:10: warning: multi-character character constant [-Wmultichar]
+    1 | int u1 = 'ef';
+      |          ^
+@/u.h:3:10: warning: multi-character character constant [-Wmultichar]
+    3 | int u2 = 'gh';
+      |          ^
+@/a.cpp:3:9: warning: multi-character character constant [-Wmultichar]
+    3 | int m = M;
+      |         ^
+@/sys/s.h:2:11: note: expanded from macro 'M'
+    2 | #define M 'ab'
+      |           ^
+5 warnings generated.
+";
+
+// spec: diag.md §5.4 (warnings in system headers); spec/source.md "File
+// kinds"; spec/pp.md (`#pragma GCC system_header`, `-isystem`)
+#[test]
+fn system_header_warnings_like_clang() {
+    let d = scratch("system-headers");
+    std::fs::create_dir_all(d.join("sys")).unwrap();
+    std::fs::write(d.join("a.cpp"), "#include <s.h>\n#include \"u.h\"\nint m = M;\n").unwrap();
+    std::fs::write(d.join("sys/s.h"), "#warning in s\n#define M 'ab'\nint s = 'cd';\n").unwrap();
+    std::fs::write(d.join("u.h"), "int u1 = 'ef';\n#pragma GCC system_header\nint u2 = 'gh';\n")
+        .unwrap();
+    let (a, sys) = (d.join("a.cpp"), d.join("sys"));
+    let (a, sys) = (a.to_str().unwrap(), sys.to_str().unwrap());
+    let dir = d.to_str().unwrap();
+    let o = kiln(&["-fsyntax-only", "-isystem", sys, a], "");
+    assert_eq!(o.code, 0);
+    assert_eq!(o.stderr, SYSTEM_HEADER_GOLDEN.replace('@', dir));
+    let o = kiln(&["-fsyntax-only", "-Wsystem-headers", "-isystem", sys, a], "");
+    assert_eq!(o.code, 0);
+    assert_eq!(o.stderr, SYSTEM_HEADER_ALL_GOLDEN.replace('@', dir));
+    let _ = std::fs::remove_dir_all(&d);
+}

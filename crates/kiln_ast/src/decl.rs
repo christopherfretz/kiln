@@ -81,9 +81,11 @@ pub enum DeclKind {
     /// A member of an anonymous struct/union seen from the enclosing scope;
     /// `data` is the raw `ListId` of the chain of fields (outermost first).
     IndirectField,
-    /// `public:` / `protected:` / `private:`.
+    /// `public:` / `protected:` / `private:` (the access is
+    /// `DeclNode.misc`'s; no payload).
     AccessSpec,
-    /// A friend declaration.
+    /// A friend declaration: `data` is the raw `DeclId` of the befriended
+    /// declaration (0 for a friend type, which is `DeclNode.ty`).
     Friend,
     /// A friend template declaration.
     FriendTemplate,
@@ -180,6 +182,8 @@ pub enum PayloadClass {
     Scope,
     /// [`StaticAssertData`].
     StaticAssert,
+    /// [`LetData`] (`LifetimeExtendedTemporary`).
+    Let,
 }
 
 impl DeclKind {
@@ -209,6 +213,7 @@ impl DeclKind {
                 PayloadClass::Scope
             }
             K::StaticAssert => PayloadClass::StaticAssert,
+            K::LifetimeExtendedTemporary => PayloadClass::Let,
             _ => PayloadClass::None,
         }
     }
@@ -680,7 +685,8 @@ pub enum Defaulted {
 /// `FunctionData.spec` (spec/ast.md §4.2): `storage(2) inline(1)
 /// implicit_inline(1) constexpr_kind(2) virtual(1) pure(1) defaulted(2)
 /// deleted(1) explicit(1) trivial(1) immediate_escalating(1)
-/// has_contracts(1) is_coroutine(1) escalated(1) variadic(1)`.
+/// has_contracts(1) is_coroutine(1) escalated(1) variadic(1) override(1)
+/// final(1) explicit_object(1) virtual_written(1)`.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug)]
 pub struct FnSpec(u32);
 
@@ -751,8 +757,10 @@ impl FnSpec {
         FnSpec((self.0 & !(3 << 8)) | ((d as u32) << 8))
     }
     /// The bits [`DeclArena::mark_function`] may set after creation
-    /// (properties known only after the body or the class is complete).
-    pub const LATE: FnSpec = FnSpec((1 << 12) | (1 << 14) | (1 << 15) | (1 << 16));
+    /// (properties known only after the body or the class is complete:
+    /// trivial, contracts, coroutine, escalated, and `deleted` for
+    /// `= default` members found deleted at `}`, spec/sema-class.md §8.2).
+    pub const LATE: FnSpec = FnSpec((1 << 10) | (1 << 12) | (1 << 14) | (1 << 15) | (1 << 16));
 }
 
 bit_accessors!(FnSpec:
@@ -760,7 +768,8 @@ bit_accessors!(FnSpec:
     is_inline / with_inline = 2;
     /// Implicitly inline (defined in class, constexpr, ...).
     implicit_inline / with_implicit_inline = 3;
-    /// `virtual` (written or overriding).
+    /// Virtual: `virtual` written or overriding a virtual function
+    /// ([class.virtual]/2). Semantic; see [`Self::virtual_written`].
     is_virtual / with_virtual = 6;
     /// Pure virtual (`= 0`).
     is_pure / with_pure = 7;
@@ -781,6 +790,16 @@ bit_accessors!(FnSpec:
     escalated / with_escalated = 16;
     /// C-style variadic (`...`).
     is_variadic / with_variadic = 17;
+    /// `override` written (virt-specifier, [class.virtual]).
+    is_override / with_override = 18;
+    /// `final` written on a member function ([class.virtual]/4).
+    is_final / with_final = 19;
+    /// Has an explicit object parameter (P0847, [dcl.fct]/6).
+    has_explicit_object / with_explicit_object = 20;
+    /// The `virtual` function-specifier was written on this declaration
+    /// (clang's dump prints `virtual` only when written; an implicit
+    /// overrider has [`Self::is_virtual`] without this bit).
+    virtual_written / with_virtual_written = 21;
 );
 
 /// Hot payload of function kinds (24 bytes, spec/ast.md §4.2).
@@ -1047,6 +1066,61 @@ impl DefinitionBits {
     pub const HAS_VIRTUAL_BASES: DefinitionBits = DefinitionBits(1 << 22);
     /// Trivially relocatable (P2786).
     pub const TRIVIALLY_RELOCATABLE: DefinitionBits = DefinitionBits(1 << 23);
+    /// A user-declared copy constructor (clang `UserDeclaredSpecialMembers`).
+    pub const USER_DECLARED_COPY_CTOR: DefinitionBits = DefinitionBits(1 << 24);
+    /// A user-declared move constructor.
+    pub const USER_DECLARED_MOVE_CTOR: DefinitionBits = DefinitionBits(1 << 25);
+    /// A user-declared copy assignment operator.
+    pub const USER_DECLARED_COPY_ASSIGN: DefinitionBits = DefinitionBits(1 << 26);
+    /// A user-declared move assignment operator.
+    pub const USER_DECLARED_MOVE_ASSIGN: DefinitionBits = DefinitionBits(1 << 27);
+    /// A user-declared destructor.
+    pub const USER_DECLARED_DTOR: DefinitionBits = DefinitionBits(1 << 28);
+    /// A user-provided default constructor (clang `user_provided`).
+    pub const USER_PROVIDED_DEFAULT_CTOR: DefinitionBits = DefinitionBits(1 << 29);
+    /// Some non-static data member has a default member initializer.
+    pub const HAS_IN_CLASS_INIT: DefinitionBits = DefinitionBits(1 << 30);
+    /// Inherits constructors (`using B::B`).
+    pub const HAS_INHERITED_CTOR: DefinitionBits = DefinitionBits(1 << 31);
+    /// Inherits an assignment operator (`using B::operator=`).
+    pub const HAS_INHERITED_ASSIGN: DefinitionBits = DefinitionBits(1 << 32);
+    /// The implicit copy constructor takes `const C&` ([class.copy.ctor]/7).
+    pub const IMPLICIT_COPY_CTOR_CONST_PARAM: DefinitionBits = DefinitionBits(1 << 33);
+    /// The implicit copy assignment takes `const C&` ([class.copy.assign]/2).
+    pub const IMPLICIT_COPY_ASSIGN_CONST_PARAM: DefinitionBits = DefinitionBits(1 << 34);
+    /// A defaulted default constructor would be constexpr (clang `defaulted_is_constexpr`).
+    pub const DEFAULTED_DEFAULT_CTOR_CONSTEXPR: DefinitionBits = DefinitionBits(1 << 35);
+    /// Selecting a subobject's copy constructor needs overload resolution.
+    pub const NEEDS_OVL_COPY_CTOR: DefinitionBits = DefinitionBits(1 << 36);
+    /// Selecting a subobject's move constructor needs overload resolution.
+    pub const NEEDS_OVL_MOVE_CTOR: DefinitionBits = DefinitionBits(1 << 37);
+    /// Selecting a subobject's copy assignment needs overload resolution.
+    pub const NEEDS_OVL_COPY_ASSIGN: DefinitionBits = DefinitionBits(1 << 38);
+    /// Selecting a subobject's move assignment needs overload resolution.
+    pub const NEEDS_OVL_MOVE_ASSIGN: DefinitionBits = DefinitionBits(1 << 39);
+    /// Selecting a subobject's destructor needs overload resolution.
+    pub const NEEDS_OVL_DTOR: DefinitionBits = DefinitionBits(1 << 40);
+    /// A defaulted default constructor is known deleted (clang `DefaultedDefaultConstructorIsDeleted`).
+    pub const DEFAULTED_DEFAULT_CTOR_DELETED: DefinitionBits = DefinitionBits(1 << 41);
+    /// A defaulted copy constructor is known deleted.
+    pub const DEFAULTED_COPY_CTOR_DELETED: DefinitionBits = DefinitionBits(1 << 42);
+    /// A defaulted move constructor is known deleted.
+    pub const DEFAULTED_MOVE_CTOR_DELETED: DefinitionBits = DefinitionBits(1 << 43);
+    /// A defaulted destructor is known deleted.
+    pub const DEFAULTED_DTOR_DELETED: DefinitionBits = DefinitionBits(1 << 44);
+    /// A reference or const-without-default-init field without a default member initializer.
+    pub const HAS_UNINIT_REF_OR_CONST: DefinitionBits = DefinitionBits(1 << 45);
+    /// Has a private direct non-static data member.
+    pub const HAS_PRIVATE_FIELDS: DefinitionBits = DefinitionBits(1 << 46);
+    /// Has a protected direct non-static data member.
+    pub const HAS_PROTECTED_FIELDS: DefinitionBits = DefinitionBits(1 << 47);
+    /// POD class ([class.prop]/9; dump `pod`).
+    pub const POD: DefinitionBits = DefinitionBits(1 << 48);
+    /// Const-default-constructible ([dcl.init.general]/8).
+    pub const CAN_CONST_DEFAULT_INIT: DefinitionBits = DefinitionBits(1 << 49);
+    /// The class was declared with the `final` class-virt-specifier
+    /// ([class.pre]; clang dumps a `FinalAttr final` child).
+    pub const FINAL: DefinitionBits = DefinitionBits(1 << 50);
 
     /// No bits.
     pub const fn empty() -> Self {
@@ -1069,6 +1143,11 @@ impl DefinitionBits {
     #[must_use]
     pub const fn without(self, f: DefinitionBits) -> Self {
         DefinitionBits(self.0 & !f.0)
+    }
+    /// A dynamic class: polymorphic or with virtual bases (clang
+    /// `isDynamicClass`; not stored, spec/sema-class.md §2.9).
+    pub const fn is_dynamic(self) -> bool {
+        self.0 & (Self::POLYMORPHIC.0 | Self::HAS_VIRTUAL_BASES.0) != 0
     }
 }
 
@@ -1198,8 +1277,8 @@ pub struct ParamData {
     pub original_ty: Option<QualType>,
     /// The parameter's position.
     pub index: u16,
-    /// Reserved flags (`this` parameter of explicit-object member
-    /// functions: bit 0; pack: bit 1).
+    /// Flags: [`ParamData::EXPLICIT_OBJECT`], [`ParamData::PACK`],
+    /// [`ParamData::DEFAULT_ARG_PENDING`].
     pub flags: u16,
 }
 
@@ -1208,6 +1287,10 @@ impl ParamData {
     pub const EXPLICIT_OBJECT: u16 = 1;
     /// A function parameter pack.
     pub const PACK: u16 = 2;
+    /// The parameter has a default argument whose tokens are parsed late
+    /// (in-class member functions, [class.mem]/7); `default_arg` is set
+    /// when parsing finishes.
+    pub const DEFAULT_ARG_PENDING: u16 = 4;
 }
 
 /// Payload of `Typedef` / `TypeAlias` (16 bytes).
@@ -1274,6 +1357,89 @@ pub struct StaticAssertData {
     pub message: Option<ExprId>,
 }
 
+/// What a `Friend` declaration befriends ([class.friend]).
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum FriendTarget {
+    /// A function or function template (its declaration, whose lexical
+    /// context is the class).
+    Decl(DeclId),
+    /// `friend T;` / `friend class C;` (a type, possibly not a class).
+    Type {
+        /// The befriended type as written (an `Elaborated` type for
+        /// `friend class C;`).
+        ty: QualType,
+        /// The class declaration the elaborated-type-specifier introduced
+        /// (`friend struct H;` with no prior `H`: semantic context the
+        /// innermost enclosing namespace, lexical context the class,
+        /// `FriendKind::Undeclared`); the dump prints it as the
+        /// `FriendDecl`'s child, as clang.
+        owned_tag: Option<DeclId>,
+    },
+}
+
+/// Payload of `LifetimeExtendedTemporary` (12 bytes, spec/sema-class.md
+/// §5.1): a temporary whose lifetime is extended by a reference
+/// ([class.temporary]/6).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct LetData {
+    /// The variable (or field) whose reference binding extends it.
+    pub extending: DeclId,
+    /// The Itanium `_ZGR` mangling index among the temporaries extended
+    /// by `extending`.
+    pub mangling_index: u32,
+    /// The constant value (write-once, by the Oven for constant-initialized
+    /// static-storage references, ast.md §9).
+    pub value: Option<ConstValueId>,
+}
+
+/// What a ctor-initializer initializes (`CtorInit::kind`).
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[repr(u8)]
+pub enum CtorInitKind {
+    /// A direct non-virtual base: `target` is the base type's raw
+    /// `TypeId` (canonical; dependent in a template pattern).
+    Base = 0,
+    /// A virtual base (direct or indirect): `target` is the base type's
+    /// raw `TypeId`.
+    VirtualBase = 1,
+    /// A field: `target` is the raw `DeclId` of the `Field`.
+    Field = 2,
+    /// A member of an anonymous union/struct: `target` is the raw `DeclId`
+    /// of the `IndirectField`.
+    IndirectField = 3,
+    /// A delegating constructor call: `target` is 0.
+    Delegating = 4,
+}
+
+/// One ctor-initializer ([class.base.init], 16 bytes): written or implicit
+/// (`written_index == CtorInit::IMPLICIT`), in initialization order.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct CtorInit {
+    /// The initialized subobject (see [`CtorInitKind`]).
+    pub target: u32,
+    /// What `target` names.
+    pub kind: CtorInitKind,
+    /// The position among the written mem-initializers, or
+    /// [`CtorInit::IMPLICIT`].
+    pub written_index: u8,
+    /// The initializer (a `CXXConstructExpr`, `ParenListExpr`-style
+    /// conversion, `InitListExpr`, `CXXDefaultInitExpr`, ...).
+    pub init: ExprId,
+    /// The mem-initializer-id's location (the constructor's for implicit
+    /// ones).
+    pub loc: Loc,
+}
+
+impl CtorInit {
+    /// `written_index` of an implicit initializer.
+    pub const IMPLICIT: u8 = u8::MAX;
+
+    /// True if written by the user.
+    pub const fn is_written(&self) -> bool {
+        self.written_index != Self::IMPLICIT
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Cold data
 // ---------------------------------------------------------------------------
@@ -1287,10 +1453,27 @@ pub struct ColdDeclData {
     /// The begin location (decl-specifiers start) when it differs from the
     /// name's location.
     pub begin_loc: ColdMap<DeclId, Loc>,
-    /// `= delete("reason")` messages (P2573).
+    /// `= delete("reason")` messages (P2573; spec/sema-class.md
+    /// `deleted_msg`).
     pub delete_message: ColdMap<DeclId, ExprId>,
-    /// `explicit(expr)`.
+    /// `explicit(expr)` (spec/sema-class.md `explicit_spec`).
     pub explicit_expr: ColdMap<DeclId, ExprId>,
+    /// Constructor → its ctor-initializers: a 1-based `ListId` of indices
+    /// into `DeclArena::ctor_inits` (write-once, with the body).
+    pub ctor_inits: ColdMap<DeclId, ListId>,
+    /// Virtual member function → the methods it overrides (`ListId` of
+    /// `DeclId`s; write-once at `}`).
+    pub overrides: ColdMap<DeclId, ListId>,
+    /// Class → its `Friend` declarations (`ListId` of `DeclId`s; write-once
+    /// at `}`).
+    pub friends: ColdMap<DeclId, ListId>,
+    /// Dynamic class → its key function (Itanium §5.2.3).
+    pub key_function: ColdMap<DeclId, DeclId>,
+    /// Virtual destructor → the `operator delete` its deleting destructor
+    /// calls ([class.dtor]/16).
+    pub dtor_delete: ColdMap<DeclId, DeclId>,
+    /// Class → the `#pragma pack` value in effect at its definition.
+    pub record_pack: ColdMap<DeclId, u16>,
     /// Trailing requires-clauses.
     pub requires_clause: ColdMap<DeclId, ExprId>,
     /// Contract assertions (P2900): `ListId` of contract-spec indices.
@@ -1320,6 +1503,12 @@ impl Default for ColdDeclData {
             begin_loc: ColdMap::new("begin_loc"),
             delete_message: ColdMap::new("delete_message"),
             explicit_expr: ColdMap::new("explicit_expr"),
+            ctor_inits: ColdMap::new("ctor_inits"),
+            overrides: ColdMap::new("overrides"),
+            friends: ColdMap::new("friends"),
+            key_function: ColdMap::new("key_function"),
+            dtor_delete: ColdMap::new("dtor_delete"),
+            record_pack: ColdMap::new("record_pack"),
             requires_clause: ColdMap::new("requires_clause"),
             contracts: ColdMap::new("contracts"),
             asm_label: ColdMap::new("asm_label"),
@@ -1334,12 +1523,18 @@ impl Default for ColdDeclData {
 }
 
 impl ColdDeclData {
-    fn rows(&self) -> [MemRow; 13] {
+    fn rows(&self) -> [MemRow; 19] {
         [
             self.lexical_ctx.mem_row(),
             self.begin_loc.mem_row(),
             self.delete_message.mem_row(),
             self.explicit_expr.mem_row(),
+            self.ctor_inits.mem_row(),
+            self.overrides.mem_row(),
+            self.friends.mem_row(),
+            self.key_function.mem_row(),
+            self.dtor_delete.mem_row(),
+            self.record_pack.mem_row(),
             self.requires_clause.mem_row(),
             self.contracts.mem_row(),
             self.asm_label.mem_row(),
@@ -1377,6 +1572,8 @@ pub struct DeclArena {
     scopes: Vec<ScopeData>,
     static_asserts: Vec<StaticAssertData>,
     base_specs: Vec<BaseSpec>,
+    lets: Vec<LetData>,
+    ctor_inits: Vec<CtorInit>,
     /// Cold per-declaration data.
     pub cold: ColdDeclData,
 }
@@ -1453,6 +1650,18 @@ impl Default for DeclArena {
                 access: Access::None,
                 pack_expansion: false,
             }],
+            lets: vec![LetData {
+                extending: DeclId::new(DeclId::MAX_INDEX),
+                mangling_index: 0,
+                value: None,
+            }],
+            ctor_inits: vec![CtorInit {
+                target: 0,
+                kind: CtorInitKind::Delegating,
+                written_index: CtorInit::IMPLICIT,
+                init: ExprId::new(u32::MAX),
+                loc: Loc::INVALID,
+            }],
             cold: ColdDeclData::default(),
         }
     }
@@ -1485,6 +1694,8 @@ pub enum Payload {
     Scope(ScopeData),
     /// `StaticAssert`.
     StaticAssert(StaticAssertData),
+    /// `LifetimeExtendedTemporary`.
+    Let(LetData),
 }
 
 impl Payload {
@@ -1502,6 +1713,7 @@ impl Payload {
             Payload::Namespace(_) => PayloadClass::Namespace,
             Payload::Scope(_) => PayloadClass::Scope,
             Payload::StaticAssert(_) => PayloadClass::StaticAssert,
+            Payload::Let(_) => PayloadClass::Let,
         }
     }
 }
@@ -1612,6 +1824,7 @@ impl DeclArena {
             Payload::Namespace(x) => push_payload(&mut self.namespaces, x),
             Payload::Scope(x) => push_payload(&mut self.scopes, x),
             Payload::StaticAssert(x) => push_payload(&mut self.static_asserts, x),
+            Payload::Let(x) => push_payload(&mut self.lets, x),
         };
         let id = DeclId::new(self.nodes.len() as u32);
         self.nodes.push(DeclNode {
@@ -1678,6 +1891,10 @@ impl DeclArena {
         /// The `static_assert` payload of `d`.
         static_assert, static_assert_mut, static_asserts, StaticAssert, StaticAssertData
     );
+    payload_getter!(
+        /// The `LifetimeExtendedTemporary` payload of `d`.
+        lifetime_extended, lifetime_extended_mut, lets, Let, LetData
+    );
 
     /// The redeclaration link of a redeclarable `d`.
     pub fn redecl(&self, d: DeclId) -> Option<Redecl> {
@@ -1696,6 +1913,12 @@ impl DeclArena {
             _ => None,
         }
         .filter(|r| r.group != DUMMY_GROUP)
+    }
+
+    /// The builtin id of `d` if it is an implicit builtin function
+    /// declaration ([`builtin`], §5.3).
+    pub fn builtin_id(&self, d: DeclId) -> Option<u32> {
+        self.cold.builtin_id.get(d).copied()
     }
 
     /// The member list of context `ctx` (`None` if `ctx` owns none).
@@ -1843,7 +2066,7 @@ impl DeclArena {
     }
 
     /// Sets late specifier bits ([`FnSpec::LATE`]: trivial, contracts,
-    /// coroutine, escalated).
+    /// coroutine, escalated, deleted).
     ///
     /// # Panics
     /// If `bits` contains other bits.
@@ -1999,6 +2222,12 @@ impl DeclArena {
         Ok(())
     }
 
+    /// The base-specifier at global index `i` (a value of a record's
+    /// `bases` list or of a cast's base path, `ExprArena::cast_path`).
+    pub fn base_spec(&self, i: u32) -> &BaseSpec {
+        &self.base_specs[i as usize]
+    }
+
     /// The base-specifiers of class `r`.
     pub fn bases<'a>(
         &'a self,
@@ -2079,12 +2308,77 @@ impl DeclArena {
         set_once(&mut self.param_mut(p).default_arg, arg, "ParamData.default_arg", RawId::raw)
     }
 
+    /// Marks a parameter's default argument as pending late parsing
+    /// ([`ParamData::DEFAULT_ARG_PENDING`]; set before the class is
+    /// complete, cleared implicitly by reading `default_arg` once set).
+    pub fn mark_default_arg_pending(&mut self, p: DeclId) {
+        self.param_mut(p).flags |= ParamData::DEFAULT_ARG_PENDING;
+    }
+
+    /// Sets the constant value of a lifetime-extended temporary
+    /// (write-once, by the Oven through the bridge).
+    pub fn set_lifetime_extended_value(
+        &mut self,
+        d: DeclId,
+        v: ConstValueId,
+    ) -> Result<(), AlreadySet> {
+        set_once(&mut self.lifetime_extended_mut(d).value, v, "LetData.value", RawId::raw)
+    }
+
+    /// Sets the ctor-initializers of constructor `ctor` (write-once, with
+    /// the body; spec/sema-class.md §8.2). An empty slice records nothing.
+    pub fn set_ctor_inits(
+        &mut self,
+        ctor: DeclId,
+        inits: &[CtorInit],
+        lists: &mut crate::lists::IdLists,
+    ) -> Result<(), AlreadySet> {
+        assert!(
+            self.get(ctor).kind() == DeclKind::CXXConstructor,
+            "ctor-initializers on a non-constructor"
+        );
+        if let Some(&l) = self.cold.ctor_inits.get(ctor) {
+            return Err(AlreadySet { slot: "ctor_inits", existing: l.raw() });
+        }
+        if inits.is_empty() {
+            return Ok(());
+        }
+        let start = self.ctor_inits.len() as u32;
+        self.ctor_inits.extend_from_slice(inits);
+        let list = lists.push_raw(&(start..start + inits.len() as u32).collect::<Vec<_>>());
+        self.cold.ctor_inits.insert(ctor, list)
+    }
+
+    /// The ctor-initializers of constructor `ctor`, in initialization
+    /// order (empty if none were set).
+    pub fn ctor_inits<'a>(
+        &'a self,
+        ctor: DeclId,
+        lists: &'a crate::lists::IdLists,
+    ) -> impl ExactSizeIterator<Item = &'a CtorInit> + 'a {
+        let list = self.cold.ctor_inits.get(ctor).copied().unwrap_or(ListId::EMPTY);
+        lists.get(list).iter().map(|&i| &self.ctor_inits[i as usize])
+    }
+
+    /// What the `Friend` declaration `d` befriends.
+    ///
+    /// # Panics
+    /// If `d` is not a `Friend` declaration.
+    pub fn friend_target(&self, d: DeclId) -> FriendTarget {
+        let n = self.get(d);
+        assert!(n.kind() == DeclKind::Friend, "expected Friend, found {:?}", n.kind());
+        match n.ty() {
+            Some(ty) => FriendTarget::Type { ty, owned_tag: DeclId::from_raw(n.data()) },
+            None => FriendTarget::Decl(DeclId::new(n.data())),
+        }
+    }
+
     /// Bytes of the node and payload vectors (instantiation meter).
     pub(crate) fn live_bytes(&self) -> u64 {
         self.vec_rows().iter().map(|r| r.live_bytes).sum()
     }
 
-    fn vec_rows(&self) -> [MemRow; 13] {
+    fn vec_rows(&self) -> [MemRow; 15] {
         [
             MemRow::of_vec("nodes", &self.nodes),
             MemRow::of_vec("functions", &self.functions),
@@ -2099,6 +2393,8 @@ impl DeclArena {
             MemRow::of_vec("scopes", &self.scopes),
             MemRow::of_vec("static_asserts", &self.static_asserts),
             MemRow::of_vec("base_specs", &self.base_specs),
+            MemRow::of_vec("lets", &self.lets),
+            MemRow::of_vec("ctor_inits", &self.ctor_inits),
         ]
     }
 }
@@ -2129,5 +2425,21 @@ impl HeapSize for DeclArena {
             r.push(row.prefixed("cold"));
         }
         r
+    }
+}
+
+/// Builtin function ids (the `builtin_id` cold data of an implicit builtin
+/// `Function` decl, §5.3). The numbering is clang 19's `Builtin::ID` (its
+/// target-independent part), so a `BuiltinAttr` dumps as clang's does.
+pub mod builtin {
+    /// `bool __builtin_is_constant_evaluated() noexcept` ([meta.const.eval]).
+    pub const IS_CONSTANT_EVALUATED: u32 = 722;
+
+    /// The id and spelling of every builtin function kiln declares.
+    pub const ALL: &[(u32, &str)] = &[(IS_CONSTANT_EVALUATED, "__builtin_is_constant_evaluated")];
+
+    /// The builtin function spelled `name`, if kiln declares one.
+    pub fn by_name(name: &str) -> Option<u32> {
+        ALL.iter().find(|e| e.1 == name).map(|e| e.0)
     }
 }

@@ -223,7 +223,9 @@ fn check_action(args: &Args, drv: &DiagEngine<'_>) {
         .or(args.print.includes_too.then_some("-dI"))
         .or((action != Action::SyntaxOnly
             && (args.dump_ast.is_some() || args.dump_ast_filter.is_some()))
-        .then_some("-fdump-ast without -fsyntax-only"));
+        .then_some("-fdump-ast without -fsyntax-only"))
+        .or((action != Action::SyntaxOnly && args.dump_record_layouts)
+            .then_some("-fdump-record-layouts without -fsyntax-only"));
     if let Some(what) = not_impl {
         Diag::new(DiagId::drv_not_implemented, Span::INVALID).arg(what).emit(drv);
     }

@@ -70,7 +70,7 @@ impl Sema<'_, '_> {
 
     /// The class whose member-specification is being parsed, if the
     /// innermost scope is a class scope.
-    fn current_class(&self) -> Option<DeclId> {
+    fn member_spec_class(&self) -> Option<DeclId> {
         let s = self.scopes.iter().rev().find(|s| s.kind != ScopeKind::LinkageSpec)?;
         if s.kind == ScopeKind::Record { s.entity } else { None }
     }
@@ -95,7 +95,7 @@ impl Sema<'_, '_> {
             return None;
         };
         let qk = self.kind_of(q.ctx);
-        if let Some(class) = self.current_class()
+        if let Some(class) = self.member_spec_class()
             && qk != DeclKind::Enum
         {
             self.class_using_declarator(class, q, name, name_loc);

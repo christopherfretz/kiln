@@ -86,6 +86,23 @@ Inclusions ([cpp.include]; clang allocates a `FileID` per `#include`):
   location of the header-name token. kiln_diag prints "In file included
   from" lines from it (spec/diag.md §9.6).
 
+File kinds (clang `SrcMgr::CharacteristicKind`, WP-063):
+- `FileKind { User, System, ExternCSystem }` (ordered; `is_system()`).
+- `set_file_kind(at: Loc, kind)`: from the file location `at` to the end
+  of its range, or to the next mark in that range, locations are of kind
+  `kind` (clang's line-table entry with a `FileKind`). Every range starts
+  `User`; re-marking a location replaces its mark; macro, invalid and
+  unknown locations are ignored. Marks are per range, so two inclusions
+  of one header can differ.
+- `file_kind(Loc) -> FileKind` (clang `getFileCharacteristic`): of
+  `expansion_loc(loc)`; `User` for invalid/unknown locations.
+  `is_in_system_header(Loc)` is `file_kind(loc).is_system()`.
+- kiln_pp marks: the start of an inclusion range entered as a system
+  header, the `system_header` token of `#pragma GCC system_header`, and
+  the line after a line marker (flags 3 / `3 4`, or neither: `User`).
+  `#line` keeps the kind. kiln_diag suppresses warnings located in system
+  headers (spec/diag.md §5.4).
+
 Lines (tables built lazily, once per buffer, `OnceLock`):
 - Line terminators are `\n`, `\r\n` and lone `\r` (clang's line table and
   lexer agree). The terminator belongs to the line it ends; the EOF location
@@ -232,5 +249,6 @@ entries another 2^31 (`len + 1` each). Exhaustion is reported as
 2. **Scratch buffer.** `##`/`#`/builtin-macro results need spelling text.
    `add_virtual` per result works but costs one entry per pasted token; a
    chunked scratch buffer (clang's `ScratchBuffer`) would be cheaper.
-3. GNU line-marker flags (`# 33 "x.h" 1 3`: system header, enter/leave)
-   are not stored; needed only for preprocessed input.
+3. GNU line-marker flags 1/2 (`# 33 "x.h" 1`: enter/leave) are not
+   stored; needed only for preprocessed input. Flags 3/4 are file-kind
+   marks (WP-063).

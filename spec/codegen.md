@@ -29,6 +29,12 @@ panic and never silently wrong IR.
   constant-reference loads (the `Folds` table). A const var is foldable
   only when it is non-volatile and either static storage, integral or enum
   (this mirrors clang's `isUsableInConstantExpressions` + `tryEmitAsConstant`).
+  A constant initializer ([basic.start.static]/2: static storage,
+  `constexpr`, or a `const` non-volatile integral/enum local) folds with
+  `Oven::fold_constant_init`, so `__builtin_is_constant_evaluated()` is
+  true in it; the other foldable initializers (local `const` arrays,
+  records and references) use `try_fold`, where it is false (WP-063,
+  matching clang's IR).
 - `consts.rs`: turns Oven byte images into `kiln_llvm` constants. It has a
   memory form (bool is `i8`) and a scalar form (bool is `i1`), plus string
   literal globals.
@@ -78,10 +84,22 @@ panic and never silently wrong IR.
   - a variadic call prints its function type;
   - an indirect (sret) return writes into the destination slot when the
     call initializes an aggregate, otherwise into a temporary.
+  - a call to `__builtin_is_constant_evaluated` (callee a
+    `BuiltinFnToFnPtr` cast) emits no call: it is the constant `i1 false`,
+    since code that runs is not manifestly constant-evaluated (clang's
+    `CGBuiltin`). Every other builtin is a sema-level unknown, so none
+    reaches codegen.
 - Names (via `kiln_abi::mangle`): namespace-scope variables with internal
   linkage are mangled (`_ZL1h`); static locals use 0-based
   discriminators per (function, name): none, then `_0` ... `_9`, then
   `__10_`, `__11_`, ...
+- A GNU asm label (`asm("name")`, recorded on the entity's first
+  declaration, spec/ast.md §4.2) replaces the function's or variable's
+  linkage name (`kiln_abi::mangle::asm_label`). clang prefixes LLVM's
+  `\01` "no global prefix" marker only when the target's user-label
+  prefix is non-empty (Mach-O); every kiln target is ELF, so the label
+  is the symbol verbatim, and a `\01` the user wrote is kept (LLVM
+  strips it when emitting).
 - Local initialization (`EmitAutoVarInit`):
   - a constant aggregate goes through `emitStoresForConstant`. That means
     a single store, memset-0 plus a few stores, a bytewise memset, or a

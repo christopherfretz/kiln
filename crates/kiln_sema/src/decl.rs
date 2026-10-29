@@ -17,10 +17,12 @@ use kiln_diag::{DiagId, FixIt};
 use kiln_source::symbol::Symbol;
 use kiln_source::{Loc, Span};
 
+use crate::class::ClassBuild;
 use crate::constfold;
 use crate::conv::{self, ConvCtx};
 use crate::declspec::{
-    BaseSpec, Chunk, DeclSpec, Declarator, DeclaratorContext, ParamInfo, Sign, StorageSpec, Width,
+    Chunk, DeclSpec, Declarator, DeclaratorContext, DefaultArg, ParamInfo, Sign, StorageSpec,
+    TypeSpecKind, Width,
 };
 use crate::init::{InitValue, Initializer};
 use crate::lookup::{LookupKind, is_tag_kind, is_type_kind};
@@ -38,6 +40,11 @@ pub enum TagUse {
     Declaration,
     /// `struct S { ... }`: defines `S`.
     Definition,
+    /// `friend class S;` ([dcl.type.elab]/4, [class.friend]/11): refers to
+    /// `S`, else declares it in the innermost enclosing namespace without
+    /// making it visible (WP-066b; until then reported unsupported and
+    /// treated as [`TagUse::Reference`]).
+    Friend,
 }
 
 /// What a name denotes, for the parser's decisions
@@ -92,13 +99,13 @@ impl Sema<'_, '_> {
     pub fn type_from_declspec_at(&mut self, ds: &DeclSpec, loc: Loc) -> QualType {
         let unsigned = ds.sign == Sign::Unsigned;
         let base = match ds.base {
-            BaseSpec::None if !ds.has_type_specifier() => {
+            TypeSpecKind::None if !ds.has_type_specifier() => {
                 if !ds.invalid {
                     self.error(DiagId::parse_missing_type_specifier, loc);
                 }
                 QualType::INT
             }
-            BaseSpec::None | BaseSpec::Int => match (ds.width, unsigned) {
+            TypeSpecKind::None | TypeSpecKind::Int => match (ds.width, unsigned) {
                 (Width::Short, false) => QualType::SHORT,
                 (Width::Short, true) => QualType::USHORT,
                 (Width::Long, false) => QualType::LONG,
@@ -108,38 +115,40 @@ impl Sema<'_, '_> {
                 (Width::None, false) => QualType::INT,
                 (Width::None, true) => QualType::UINT,
             },
-            BaseSpec::Void => QualType::VOID,
-            BaseSpec::Bool => QualType::BOOL,
-            BaseSpec::Char => match ds.sign {
+            TypeSpecKind::Void => QualType::VOID,
+            TypeSpecKind::Bool => QualType::BOOL,
+            TypeSpecKind::Char => match ds.sign {
                 Sign::None => QualType::CHAR,
                 Sign::Signed => QualType::SCHAR,
                 Sign::Unsigned => QualType::UCHAR,
             },
-            BaseSpec::WChar => QualType::WCHAR,
-            BaseSpec::Char8 => QualType::CHAR8,
-            BaseSpec::Char16 => QualType::CHAR16,
-            BaseSpec::Char32 => QualType::CHAR32,
-            BaseSpec::Int128 => {
+            TypeSpecKind::WChar => QualType::WCHAR,
+            TypeSpecKind::Char8 => QualType::CHAR8,
+            TypeSpecKind::Char16 => QualType::CHAR16,
+            TypeSpecKind::Char32 => QualType::CHAR32,
+            TypeSpecKind::Int128 => {
                 if unsigned {
                     QualType::UINT128
                 } else {
                     QualType::INT128
                 }
             }
-            BaseSpec::Float => QualType::FLOAT,
-            BaseSpec::Double => {
+            TypeSpecKind::Float => QualType::FLOAT,
+            TypeSpecKind::Double => {
                 if ds.width == Width::Long {
                     QualType::LONGDOUBLE
                 } else {
                     QualType::DOUBLE
                 }
             }
-            BaseSpec::Float128 => QualType::FLOAT128,
-            BaseSpec::Auto => self.ast.types.auto_type(AutoKeyword::Auto, None, None, None, false),
-            BaseSpec::DecltypeAuto => {
+            TypeSpecKind::Float128 => QualType::FLOAT128,
+            TypeSpecKind::Auto => {
+                self.ast.types.auto_type(AutoKeyword::Auto, None, None, None, false)
+            }
+            TypeSpecKind::DecltypeAuto => {
                 self.ast.types.auto_type(AutoKeyword::DecltypeAuto, None, None, None, false)
             }
-            BaseSpec::Named => ds.named.unwrap_or(QualType::ERROR),
+            TypeSpecKind::Named => ds.named.unwrap_or(QualType::ERROR),
         };
         let cv = ds.cv;
         if cv.is_empty() { base } else { self.ast.types.qualify(base, cv) }
@@ -450,17 +459,20 @@ impl Sema<'_, '_> {
             loc: d.name_loc(),
             attrs,
             invalid: ds.invalid || d.invalid,
-            default_arg: None,
+            default_arg: DefaultArg::None,
             range: (ds.loc, d.name_loc()),
         }
     }
 
-    /// The default argument `= init` of parameter `p` ([dcl.fct.default]):
-    /// copy-initialization of the parameter's type ([dcl.fct.default]/5).
-    pub fn act_on_param_default_arg(&mut self, p: &mut ParamInfo, init: Initializer, eq: Loc) {
+    /// The default argument `= init` of parameter `p` ([dcl.fct.default]),
+    /// parsed in place: copy-initialization of the parameter's type
+    /// ([dcl.fct.default]/5), stored as [`DefaultArg::Parsed`]. (A default
+    /// argument replayed in a complete-class context goes through
+    /// [`Sema::act_on_param_default_arg`] instead.)
+    pub fn act_on_param_default_init(&mut self, p: &mut ParamInfo, init: Initializer) {
         if p.invalid || self.is_error_type(p.ty) {
             if let Initializer::Expr(e) = init {
-                p.default_arg = Some((e, eq));
+                p.default_arg = DefaultArg::Parsed(e);
             }
             return;
         }
@@ -501,7 +513,7 @@ impl Sema<'_, '_> {
             Initializer::Paren(v, l, _) => self.recover(p.ty, &v, l),
         };
         let e = self.act_on_full_expr(e);
-        p.default_arg = Some((e, eq));
+        p.default_arg = DefaultArg::Parsed(e);
     }
 
     /// Attaches clang's "passing argument to parameter 'p' here" note.
@@ -764,6 +776,7 @@ impl Sema<'_, '_> {
         if invalid {
             self.ast.decls.set_flags(decl, DeclFlags::INVALID);
         }
+        self.act_on_asm_label(ds, d, decl, &mut attrs);
         if d.qualifier.is_none() {
             self.check_using_shadow_conflict(decl, name);
         }
@@ -772,6 +785,80 @@ impl Sema<'_, '_> {
             let _ = self.builder().attach_attrs(decl, &attrs);
         }
         Some(decl)
+    }
+
+    /// The GNU asm label of declarator `d` declaring `decl`, and the one
+    /// `decl` inherits from its previous declaration (clang's
+    /// `ActOn{Function,Variable}Declarator` and `mergeDeclAttributes`):
+    /// prepends the `AsmLabel` attribute to `attrs` (an inherited one
+    /// precedes the declaration's own attributes, as clang orders them)
+    /// and records the entity's label on its first declaration for the
+    /// mangler. Only functions and variables take one; a typedef's is
+    /// ignored, as clang ignores it.
+    fn act_on_asm_label(
+        &mut self,
+        ds: &DeclSpec,
+        d: &Declarator,
+        decl: DeclId,
+        attrs: &mut Vec<AttrId>,
+    ) {
+        let kind = self.ast.decls.get(decl).kind();
+        if !matches!(kind, DeclKind::Function | DeclKind::Var) {
+            return;
+        }
+        let prev_attr = self.ast.prev(decl).and_then(|p| {
+            self.ast
+                .lists
+                .iter::<AttrId>(self.ast.attrs.of_decl(p))
+                .find(|&a| self.ast.attrs.get(a).kind == AttrKind::ASM_LABEL)
+        });
+        let Some((e, span)) = d.asm_label else {
+            if let Some(a) = prev_attr {
+                let mut node = *self.ast.attrs.get(a);
+                node.flags |= 2;
+                let id = self.ast.attrs.push(node);
+                attrs.insert(0, id);
+            }
+            return;
+        };
+        let lit = self.ast.exprs.string_lit(e);
+        let loc = self.ast.exprs.get(e).loc();
+        if let Some(a) = prev_attr {
+            let old = *self.ast.attrs.get(a);
+            if old.a != lit.raw() {
+                let note = self.diag(DiagId::note_previous_declaration, old.loc);
+                let msg = self.diag(DiagId::sema_different_asm_label, d.name_loc());
+                self.emit(msg.with_note(note));
+            }
+        } else if self.ast.prev(decl).is_some()
+            && self.ast.decls.get(self.ast.first(decl)).flags().contains(DeclFlags::USED)
+        {
+            let what = if kind == DeclKind::Function { "1" } else { "0" };
+            let msg = self.diag(DiagId::sema_late_asm_label, d.name_loc()).arg(what).range(span);
+            self.emit(msg);
+        }
+        // [dcl.asm] GNU: a label on an automatic variable is ignored.
+        if kind == DeclKind::Var
+            && self.in_local_scope()
+            && ds.storage.is_none()
+            && ds.thread_local.is_none()
+        {
+            let text = String::from_utf8_lossy(self.ast.strings.bytes(lit)).into_owned();
+            let msg = self.diag(DiagId::sema_asm_label_on_auto_decl, loc).arg(text);
+            self.emit(msg);
+        }
+        let node = AttrNode {
+            kind: AttrKind::ASM_LABEL,
+            syntax: AttrSyntax::Keyword,
+            flags: 0,
+            loc,
+            a: lit.raw(),
+            b: 0,
+        };
+        let id = self.ast.attrs.push(node);
+        attrs.insert(0, id);
+        let first = self.ast.first(decl);
+        let _ = self.ast.decls.cold.asm_label.insert(first, lit);
     }
 
     /// Reports an unsupported construct (`{what} is not supported yet`).
@@ -1115,8 +1202,19 @@ impl Sema<'_, '_> {
             if !p.attrs.is_empty() {
                 let _ = self.builder().attach_attrs(pd, &p.attrs);
             }
-            if let Some(e) = defaults[i] {
-                let _ = self.ast.decls.set_default_arg(pd, e);
+            match p.default_arg {
+                DefaultArg::Unparsed(eq) => {
+                    self.ast.decls.mark_default_arg_pending(pd);
+                    self.unsupported("default arguments", eq);
+                }
+                // A default parsed in place was converted by
+                // `act_on_param_default_init`; `defaults` also holds the
+                // inherited ones ([dcl.fct.default]/4).
+                DefaultArg::None | DefaultArg::Parsed(_) => {
+                    if let Some(e) = defaults[i] {
+                        let _ = self.ast.decls.set_default_arg(pd, e);
+                    }
+                }
             }
             ids.push(pd);
         }
@@ -1139,8 +1237,13 @@ impl Sema<'_, '_> {
         block: bool,
         params: &[ParamInfo],
     ) -> (Vec<Option<ExprId>>, bool) {
-        let mut out: Vec<Option<ExprId>> =
-            params.iter().map(|p| p.default_arg.map(|x| x.0)).collect();
+        let mut out: Vec<Option<ExprId>> = params
+            .iter()
+            .map(|p| match p.default_arg {
+                DefaultArg::Parsed(e) => Some(e),
+                DefaultArg::None | DefaultArg::Unparsed(_) => None,
+            })
+            .collect();
         let mut redefined = false;
         let cur = self.ctx;
         let old = prev.and_then(|p| {
@@ -1164,7 +1267,9 @@ impl Sema<'_, '_> {
                 let Some(od) = self.ast.decls.param(op).and_then(|x| x.default_arg) else {
                     continue;
                 };
-                if p.default_arg.is_some() {
+                if p.default_arg == DefaultArg::None {
+                    out[i] = Some(od);
+                } else {
                     // The note names the declaration that wrote it.
                     let origin = self
                         .ast
@@ -1181,14 +1286,12 @@ impl Sema<'_, '_> {
                     let msg = self.diag(DiagId::sema_default_arg_redefinition, p.loc);
                     self.emit(msg.with_note(note));
                     redefined = true;
-                } else {
-                    out[i] = Some(od);
                 }
             }
         }
         if let Some(first) = out.iter().position(Option::is_some) {
             for (i, p) in params.iter().enumerate().skip(first + 1) {
-                if out[i].is_some() || p.invalid {
+                if out[i].is_some() || p.default_arg != DefaultArg::None || p.invalid {
                     continue;
                 }
                 let msg = match p.name {
@@ -1444,6 +1547,12 @@ impl Sema<'_, '_> {
     pub fn act_on_init(&mut self, v: DeclId, init: Initializer) {
         let vn = *self.ast.decls.get(v);
         if vn.kind() != DeclKind::Var {
+            // clang's `AddInitializerToDecl`: only variables have an
+            // initializer ([dcl.init]/1).
+            if matches!(vn.kind(), DeclKind::Function | DeclKind::Typedef) {
+                self.error(DiagId::sema_illegal_initializer, vn.loc());
+                self.ast.decls.set_flags(v, DeclFlags::INVALID);
+            }
             if let Initializer::Expr(e) = init {
                 self.act_on_full_expr(e);
             }
@@ -1772,6 +1881,12 @@ impl Sema<'_, '_> {
         fixed: Option<QualType>,
         loc: Loc,
     ) -> DeclId {
+        let use_ = if use_ == TagUse::Friend {
+            self.unsupported("friend class declarations", loc);
+            TagUse::Reference
+        } else {
+            use_
+        };
         let is_enum = keyword == TagKeyword::Enum;
         let fixed = fixed.or(if is_enum && scoped != 0 { Some(QualType::INT) } else { None });
         if let Some(f) = fixed {
@@ -1896,7 +2011,14 @@ impl Sema<'_, '_> {
 
     /// `{` of a class definition: the class becomes the current context.
     pub fn act_on_start_record_definition(&mut self, r: DeclId) {
+        // clang's `AddAlignmentAttributesForRecord`: the `#pragma pack`
+        // value in effect where the definition begins.
+        if self.pack.0 != 0 {
+            let _ = self.ast.decls.cold.record_pack.insert(r, self.pack.0);
+        }
         let _ = self.builder().begin_record_definition(r);
+        let tag = self.ast.decls.record(r).map_or(TagKind::Struct, |x| x.tag);
+        self.classes.push(ClassBuild::new(r, tag));
         self.defining.push(r);
         self.scopes.push(Scope::new(ScopeKind::Record, Some(r)));
         self.ctx = r;
@@ -1908,6 +2030,9 @@ impl Sema<'_, '_> {
     /// must be known before the definition's bits freeze.
     pub fn act_on_finish_record_definition(&mut self, r: DeclId, then_semi: bool) {
         self.scopes.pop();
+        if self.classes.last().is_some_and(|c| c.record == r) {
+            self.classes.pop();
+        }
         self.defining.retain(|&d| d != r);
         self.ctx = self
             .ast
@@ -2860,10 +2985,74 @@ impl Sema<'_, '_> {
     }
 
     /// `#pragma pack(args)` at `loc` ([cpp.pragma]; clang's
-    /// `ActOnPragmaPack`): recorded in [`Sema::pragma_packs`] for the
-    /// layout and reported as not supported yet.
+    /// `ActOnPragmaPack`); `args` is the argument list's tokens spelled
+    /// without spaces. The forms clang accepts silently are applied:
+    /// `()` resets, `(N)` sets, `(push[, id][, N])` saves the current
+    /// value then sets `N`, `(pop[, id])` restores the value saved by the
+    /// innermost push (labelled `id`, popping everything above it; no
+    /// effect if no entry has that label). `N` is 1, 2, 4, 8 or 16; 0
+    /// means no packing. Forms clang diagnoses (`show`, an invalid `N`,
+    /// pop on an empty stack, an unknown action, pop with both a label
+    /// and `N`) are reported as not supported (spec/sema-class.md §6).
     pub fn act_on_pragma_pack(&mut self, loc: Loc, args: String) {
-        self.act_on_unsupported_pragma("pack", loc);
+        if !self.apply_pragma_pack(&args) {
+            self.act_on_unsupported_pragma("pack", loc);
+        }
         self.pragma_packs.push((loc, args));
+    }
+
+    /// Applies `#pragma pack(args)` to [`Sema::pack`]; false (and no
+    /// change) for a form clang diagnoses.
+    fn apply_pragma_pack(&mut self, args: &str) -> bool {
+        let value = |s: &str| -> Option<u16> {
+            let n: u16 = s.parse().ok()?;
+            (n == 0 || (n.is_power_of_two() && n <= 16)).then_some(n)
+        };
+        let is_ident = |s: &str| {
+            s.chars().next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+                && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+        };
+        let parts: Vec<&str> = if args.is_empty() { Vec::new() } else { args.split(',').collect() };
+        match parts.as_slice() {
+            [] => self.pack.0 = 0,
+            [n] if value(n).is_some() => self.pack.0 = value(n).unwrap_or(0),
+            ["push", rest @ ..] if rest.len() <= 2 => {
+                let (label, n) = match rest {
+                    [] => (None, None),
+                    [x] if is_ident(x) => (Some((*x).to_owned()), None),
+                    [x] => (None, Some(value(x))),
+                    [l, x] if is_ident(l) => (Some((*l).to_owned()), Some(value(x))),
+                    _ => return false,
+                };
+                if n == Some(None) {
+                    return false;
+                }
+                let current = self.pack.0;
+                self.pack.1.push((label, current));
+                if let Some(Some(n)) = n {
+                    self.pack.0 = n;
+                }
+            }
+            ["pop"] => match self.pack.1.pop() {
+                Some((_, v)) => self.pack.0 = v,
+                None => return false,
+            },
+            ["pop", l] if is_ident(l) => {
+                if self.pack.1.is_empty() {
+                    return false;
+                }
+                if let Some(i) = self.pack.1.iter().rposition(|(x, _)| x.as_deref() == Some(*l)) {
+                    self.pack.0 = self.pack.1[i].1;
+                    self.pack.1.truncate(i);
+                }
+            }
+            ["pop", n] => {
+                let Some(n) = value(n) else { return false };
+                let Some((_, _)) = self.pack.1.pop() else { return false };
+                self.pack.0 = n;
+            }
+            _ => return false,
+        }
+        true
     }
 }

@@ -16,19 +16,20 @@ use kiln_source::Loc;
 
 use crate::ast::Ast;
 use crate::decl::{
-    Access, DeclFlags, DeclKind, DeclMisc, DefinitionBits, EnumData, EnumeratorData, FieldData,
-    FnSpec, FunctionData, LinkageLang, Members, NamespaceData, NewDecl, ParamData, Payload,
-    PayloadClass, RecordData, Redecl, ScopeData, StaticAssertData, TagKind, TemplLink, TypedefData,
-    VarData, VarEval, VarSpec,
+    Access, CtorInit, DeclFlags, DeclKind, DeclMisc, DefinitionBits, EnumData, EnumeratorData,
+    FieldData, FnSpec, FriendKind, FriendTarget, FunctionData, LetData, LinkageLang, Members,
+    NamespaceData, NewDecl, ParamData, Payload, PayloadClass, RecordData, Redecl, ScopeData,
+    StaticAssertData, TagKind, TemplLink, TypedefData, VarData, VarEval, VarSpec,
 };
 use crate::expr::{
-    BinaryOp, CastKind, CharKind, CompoundAssignExtra, DeclRefExtra, ExprDeps, ExprFlags, ExprKind,
-    ExprNode, InitListExtra, NonOdrUse, ObjectKind, Radix, StringKind, TraitKind, UnaryOp,
-    ValueCategory,
+    BinaryOp, CastKind, CharKind, CompoundAssignExtra, ConstructInfo, ConstructionKind,
+    DeclRefExtra, ExprDeps, ExprFlags, ExprKind, ExprNode, InitListExtra, NonOdrUse, ObjectKind,
+    Radix, StorageDuration, StringKind, TraitKind, TypeidOperand, UnaryOp, ValueCategory,
 };
 use crate::ids::{
     AttrId, ConstValueId, DeclId, ExprId, ListId, QualType, RawId, StmtId, StringLitId, TypeId,
 };
+use crate::lookup::LookupFlags;
 use crate::names::DeclName;
 use crate::slot::AlreadySet;
 use crate::stmt::{CaseData, IfData, IfKind, LoopData, StmtKind, StmtNode, SwitchData};
@@ -175,7 +176,8 @@ impl<'a> AstBuilder<'a> {
         if self.ast.decls.member_list(lexical).is_some() {
             self.ast.decls.append_member(lexical, d);
         }
-        self.register_name(h.ctx, h.name, d, prev, h.misc.name_independent());
+        let adl_only = h.misc.friend() == FriendKind::Undeclared;
+        self.register_name(h.ctx, h.name, d, prev, h.misc.name_independent(), adl_only);
         d
     }
 
@@ -233,7 +235,7 @@ impl<'a> AstBuilder<'a> {
             Payload::None(target.raw()),
             true,
         );
-        self.register_name(h.ctx, h.name, d, prev, false);
+        self.register_name(h.ctx, h.name, d, prev, false, false);
         d
     }
 
@@ -249,7 +251,7 @@ impl<'a> AstBuilder<'a> {
     pub fn namespace_alias(&mut self, h: DeclHead, target: DeclId, prev: Option<DeclId>) -> DeclId {
         let d =
             self.add_unregistered(h, DeclKind::NamespaceAlias, Payload::None(target.raw()), true);
-        self.register_name(h.ctx, h.name, d, prev, false);
+        self.register_name(h.ctx, h.name, d, prev, false, false);
         d
     }
 
@@ -263,6 +265,9 @@ impl<'a> AstBuilder<'a> {
     /// Inserts `d` into the lookup table of `ctx` (after skipping
     /// `LinkageSpec`/`Export`), then into enclosing tables for unscoped
     /// enumerations (their enumerators) and inline namespaces (§4.3).
+    /// A friend first declared by its friend declaration
+    /// ([`FriendKind::Undeclared`]) is entered with
+    /// [`LookupFlags::ADL_ONLY`] ([namespace.memdef]/3).
     fn register_name(
         &mut self,
         ctx: DeclId,
@@ -270,6 +275,7 @@ impl<'a> AstBuilder<'a> {
         d: DeclId,
         prev: Option<DeclId>,
         name_independent: bool,
+        adl_only: bool,
     ) {
         if name.is_empty() {
             return;
@@ -283,7 +289,11 @@ impl<'a> AstBuilder<'a> {
                 return;
             }
             let table = self.ast.primary_context(cur);
-            self.ast.lookup.insert(table, name, d, replaces, via_inline);
+            let mut flags = if adl_only { LookupFlags::ADL_ONLY } else { LookupFlags::NONE };
+            if via_inline {
+                flags = flags.with(LookupFlags::VIA_INLINE);
+            }
+            self.ast.lookup.insert_with_flags(table, name, d, replaces, flags);
             let next = if self.ast.is_transparent(table) {
                 // Unscoped enumeration: enumerators are also members of
                 // the enclosing scope ([dcl.enum]/11).
@@ -355,14 +365,15 @@ impl<'a> AstBuilder<'a> {
     /// A linkage specification `extern "C" { }` ([dcl.link]). Transparent:
     /// its declarations are named in the enclosing context.
     pub fn linkage_spec(&mut self, ctx: DeclId, lang: LinkageLang, loc: Loc) -> DeclId {
+        self.linkage_spec_head(DeclHead::new(ctx, DeclName::EMPTY, loc), lang)
+    }
+
+    /// A linkage specification with head `h` (its name is ignored; an
+    /// implicit one surrounds a lazily declared builtin).
+    pub fn linkage_spec_head(&mut self, h: DeclHead, lang: LinkageLang) -> DeclId {
         let payload = Payload::Scope(ScopeData { members: Members::default(), aux: lang as u32 });
-        self.add(
-            DeclHead::new(ctx, DeclName::EMPTY, loc),
-            DeclKind::LinkageSpec,
-            None,
-            payload,
-            None,
-        )
+        let h = DeclHead { name: DeclName::EMPTY, ..h };
+        self.add(h, DeclKind::LinkageSpec, None, payload, None)
     }
 
     /// An export declaration `export { }` ([module.interface]).
@@ -667,6 +678,147 @@ impl<'a> AstBuilder<'a> {
         Ok(())
     }
 
+    // ---------------------------------------------------------------------
+    // Classes (spec/sema-class.md §8.1)
+    // ---------------------------------------------------------------------
+
+    /// An access specifier `public:` / `protected:` / `private:`
+    /// ([class.access.spec]) in class `record`; the access is the
+    /// declaration's `misc` access.
+    pub fn access_spec(&mut self, record: DeclId, access: Access, loc: Loc) -> DeclId {
+        let h = DeclHead::new(record, DeclName::EMPTY, loc).access(access);
+        self.add(h, DeclKind::AccessSpec, None, Payload::None(0), None)
+    }
+
+    /// A friend declaration ([class.friend]) in class `record` at `loc`
+    /// (the `friend` keyword). A befriended function or class is declared
+    /// first (semantic context its namespace, lexical context `record`,
+    /// `misc.friend()` set); a hidden friend enters its namespace's table
+    /// with `LookupFlags::ADL_ONLY` (`FriendKind::Undeclared`). The class's
+    /// `friends` list is written once at `}` ([`AstBuilder::set_friends`]).
+    pub fn friend(&mut self, record: DeclId, loc: Loc, target: FriendTarget) -> DeclId {
+        let h = DeclHead::new(record, DeclName::EMPTY, loc).access(Access::Public);
+        match target {
+            FriendTarget::Decl(d) => {
+                self.add(h, DeclKind::Friend, None, Payload::None(d.raw()), None)
+            }
+            FriendTarget::Type { ty, owned_tag } => self.add(
+                h,
+                DeclKind::Friend,
+                Some(ty),
+                Payload::None(owned_tag.map_or(0, RawId::raw)),
+                None,
+            ),
+        }
+    }
+
+    /// Records the befriended entities of class `record` (write-once at
+    /// `}`; first declarations of functions and classes, used only by
+    /// access checks, spec/sema-class.md §2.4). An empty slice records
+    /// nothing.
+    ///
+    /// # Errors
+    /// If already set.
+    pub fn set_friends(&mut self, record: DeclId, friends: &[DeclId]) -> Result<(), AlreadySet> {
+        if friends.is_empty() {
+            return Ok(());
+        }
+        let list = self.ast.lists.push(friends);
+        self.ast.decls.cold.friends.insert(record, list)
+    }
+
+    /// Sets the ctor-initializers of constructor `ctor` in initialization
+    /// order, implicit ones included (write-once, with the body;
+    /// spec/sema-class.md §8.2).
+    ///
+    /// # Errors
+    /// If already set.
+    ///
+    /// # Panics
+    /// If `ctor` is not a constructor.
+    pub fn set_ctor_inits(&mut self, ctor: DeclId, inits: &[CtorInit]) -> Result<(), AlreadySet> {
+        self.ast.decls.set_ctor_inits(ctor, inits, &mut self.ast.lists)
+    }
+
+    /// Records the virtual functions `method` overrides ([class.virtual]/2;
+    /// write-once, at its declaration). An empty slice records nothing.
+    ///
+    /// # Errors
+    /// If already set.
+    pub fn set_overrides(
+        &mut self,
+        method: DeclId,
+        overridden: &[DeclId],
+    ) -> Result<(), AlreadySet> {
+        if overridden.is_empty() {
+            return Ok(());
+        }
+        let list = self.ast.lists.push(overridden);
+        self.ast.decls.cold.overrides.insert(method, list)
+    }
+
+    /// The `LifetimeExtendedTemporary` of a temporary of type `ty` whose
+    /// lifetime is extended by `extending` ([class.temporary]/6;
+    /// `mangling_index` numbers the temporaries extended by `extending`).
+    /// It lives in `extending`'s context but joins no member list or
+    /// lookup table; its value is written later by the Oven.
+    pub fn lifetime_extended_temporary(
+        &mut self,
+        extending: DeclId,
+        mangling_index: u32,
+        ty: QualType,
+        loc: Loc,
+    ) -> DeclId {
+        let ctx = self.ast.decls.get(extending).ctx();
+        self.ast.decls.push(
+            NewDecl {
+                kind: DeclKind::LifetimeExtendedTemporary,
+                flags: DeclFlags::IMPLICIT,
+                misc: DeclMisc::new(),
+                name: DeclName::EMPTY,
+                ctx,
+                loc,
+                ty: Some(ty),
+            },
+            Payload::Let(LetData { extending, mangling_index, value: None }),
+        )
+    }
+
+    /// Declares an implicit special member or inheriting constructor of
+    /// class `h.ctx` ([class.default.ctor], [class.copy.ctor],
+    /// [class.copy.assign], [class.dtor], [namespace.udecl]/16), possibly
+    /// after the class is complete (lazy declaration, spec/sema-class.md
+    /// §4.1 and §8.2): it is appended to the member list and the class's
+    /// lookup table. Parameters follow with [`AstBuilder::param`] /
+    /// [`AstBuilder::set_params`].
+    ///
+    /// # Panics
+    /// If `h.flags` lacks `IMPLICIT` or `kind` is not a constructor,
+    /// method or destructor.
+    pub fn append_implicit_member(
+        &mut self,
+        h: DeclHead,
+        kind: DeclKind,
+        ty: QualType,
+        spec: FnSpec,
+    ) -> DeclId {
+        assert!(h.flags.contains(DeclFlags::IMPLICIT), "implicit member without IMPLICIT");
+        assert!(
+            matches!(
+                kind,
+                DeclKind::CXXConstructor | DeclKind::CXXMethod | DeclKind::CXXDestructor
+            ),
+            "not a special member kind: {kind:?}"
+        );
+        self.function(h, kind, ty, spec, None)
+    }
+
+    /// Marks variable `v` as the named return value of its function
+    /// ([class.copy.elision]/1.1; once, at its scope exit).
+    pub fn set_nrvo(&mut self, v: DeclId) {
+        self.ast.decls.mark_var(v, VarSpec::new().with_nrvo(true));
+    }
+
     // =====================================================================
     // Expressions
     // =====================================================================
@@ -840,6 +992,9 @@ impl<'a> AstBuilder<'a> {
     fn decl_ref_category(&self, d: DeclId) -> ValueCategory {
         match self.ast.decls.get(d).kind() {
             DeclKind::EnumConstant | DeclKind::NonTypeTemplateParm => ValueCategory::PRValue,
+            // A builtin function's name has the placeholder type
+            // `<builtin fn type>` and is a prvalue (as clang).
+            DeclKind::Function if self.ast.decls.builtin_id(d).is_some() => ValueCategory::PRValue,
             _ => ValueCategory::LValue,
         }
     }
@@ -1442,59 +1597,6 @@ impl<'a> AstBuilder<'a> {
         )
     }
 
-    /// `typeid ( type-id )` / `typeid ( expression )` ([expr.typeid]):
-    /// an lvalue of type `const std::type_info` (`ty`). `operand` is the
-    /// (unevaluated) expression, or `Err` with the type-id's type.
-    pub fn typeid_expr(
-        &mut self,
-        operand: Result<ExprId, QualType>,
-        ty: QualType,
-        loc: Loc,
-        rparen: Loc,
-    ) -> ExprId {
-        let (deps, aux, a) = match operand {
-            Ok(e) => (self.type_deps(ty) | self.deps(e), 0, e.raw()),
-            Err(t) => (self.type_deps(ty) | self.type_deps(t), 1, t.to_raw()),
-        };
-        let e =
-            self.simple(ExprKind::CXXTypeidExpr, ValueCategory::LValue, deps, aux, ty, loc, a, 0);
-        self.ast.exprs.cold.end_loc.insert(e, rparen).expect("fresh expression");
-        e
-    }
-
-    /// A use of `param`'s default argument ([dcl.fct.default]) in context
-    /// `used_ctx` (the argument is the parameter's shared one); `ty`/`vk`
-    /// are the default argument's (sema-overload.md §7).
-    pub fn default_arg(
-        &mut self,
-        param: DeclId,
-        used_ctx: DeclId,
-        ty: QualType,
-        vk: ValueCategory,
-        loc: Loc,
-    ) -> ExprId {
-        let deps = self.type_deps(ty);
-        self.simple(ExprKind::CXXDefaultArgExpr, vk, deps, 0, ty, loc, param.raw(), used_ctx.raw())
-    }
-
-    /// An `OpaqueValueExpr` standing for `source` (same type, category,
-    /// object kind and dependence); `source` is shared, not a child.
-    pub fn opaque_value(&mut self, source: ExprId) -> ExprId {
-        let n = *self.ast.exprs.get(source);
-        self.push_expr(
-            ExprKind::OpaqueValueExpr,
-            n.value_category(),
-            n.object_kind(),
-            ExprFlags::NONE,
-            n.deps(),
-            0,
-            n.ty(),
-            n.loc(),
-            source.raw(),
-            0,
-        )
-    }
-
     /// GNU `x ?: y` ([`ExprKind::BinaryConditionalOperator`]): `common`
     /// is `x`, `opaque` an [`AstBuilder::opaque_value`] of it, `cond` the
     /// contextual conversion of `opaque` to `bool`, `els` the converted
@@ -1580,6 +1682,416 @@ impl<'a> AstBuilder<'a> {
             init.raw(),
             0,
         )
+    }
+
+    // ---------------------------------------------------------------------
+    // Object construction and temporaries (spec/sema-class.md §5.1)
+    // ---------------------------------------------------------------------
+
+    #[allow(clippy::too_many_arguments, reason = "the construct header fields")]
+    fn construct_like(
+        &mut self,
+        kind: ExprKind,
+        ty: QualType,
+        ctor: DeclId,
+        args: &[ExprId],
+        info: ConstructInfo,
+        flags: ExprFlags,
+        loc: Loc,
+        end: Option<Loc>,
+    ) -> ExprId {
+        let mut deps = self.type_deps(ty);
+        for &a in args {
+            deps |= self.deps(a);
+        }
+        let list = self.ast.lists.push(args);
+        let e = self.push_expr(
+            kind,
+            ValueCategory::PRValue,
+            ObjectKind::Ordinary,
+            flags,
+            deps,
+            info.to_aux(),
+            ty,
+            loc,
+            ctor.raw(),
+            list.raw(),
+        );
+        if let Some(end) = end {
+            self.ast.exprs.cold.end_loc.insert(e, end).expect("fresh expression");
+        }
+        e
+    }
+
+    /// A `CXXConstructExpr` ([class.ctor], [dcl.init]): a prvalue of class
+    /// type `ty` calling `ctor` with `args`. `flags` may carry
+    /// `HAD_MULTIPLE_CANDIDATES`; `end` is the closing `)`/`}` of a
+    /// written initializer.
+    #[allow(clippy::too_many_arguments, reason = "the construct header fields")]
+    pub fn construct(
+        &mut self,
+        ty: QualType,
+        ctor: DeclId,
+        args: &[ExprId],
+        info: ConstructInfo,
+        flags: ExprFlags,
+        loc: Loc,
+        end: Option<Loc>,
+    ) -> ExprId {
+        self.construct_like(ExprKind::CXXConstructExpr, ty, ctor, args, info, flags, loc, end)
+    }
+
+    /// A `CXXTemporaryObjectExpr`: `T(args)` / `T{args}` with other than
+    /// one argument ([expr.type.conv]/2); `loc` is the type's location,
+    /// `end` the closing `)`/`}`.
+    #[allow(clippy::too_many_arguments, reason = "the construct header fields")]
+    pub fn temporary_object(
+        &mut self,
+        ty: QualType,
+        ctor: DeclId,
+        args: &[ExprId],
+        info: ConstructInfo,
+        flags: ExprFlags,
+        loc: Loc,
+        end: Loc,
+    ) -> ExprId {
+        self.construct_like(
+            ExprKind::CXXTemporaryObjectExpr,
+            ty,
+            ctor,
+            args,
+            info,
+            flags,
+            loc,
+            Some(end),
+        )
+    }
+
+    /// A `CXXInheritedCtorInitExpr`: the base construction in an
+    /// inheriting constructor ([class.inhctor.init]); a prvalue of type
+    /// `ty`.
+    pub fn inherited_ctor_init(
+        &mut self,
+        ty: QualType,
+        ctor: DeclId,
+        kind: ConstructionKind,
+        inherited_from_vbase: bool,
+        loc: Loc,
+    ) -> ExprId {
+        let deps = self.type_deps(ty);
+        let aux = kind as u8 | (u8::from(inherited_from_vbase) << 2);
+        self.simple(
+            ExprKind::CXXInheritedCtorInitExpr,
+            ValueCategory::PRValue,
+            deps,
+            aux,
+            ty,
+            loc,
+            ctor.raw(),
+            0,
+        )
+    }
+
+    /// A functional-notation cast `T(x)` / `T{x}` ([expr.type.conv]);
+    /// `loc` is the type's location, `rparen` the closing `)`/`}`.
+    /// Dependence as [`AstBuilder::cast`].
+    #[allow(clippy::too_many_arguments, reason = "the cast header fields")]
+    pub fn functional_cast(
+        &mut self,
+        ck: CastKind,
+        sub: ExprId,
+        ty: QualType,
+        vk: ValueCategory,
+        path: Option<ListId>,
+        loc: Loc,
+        rparen: Loc,
+        flags: ExprFlags,
+    ) -> ExprId {
+        let e = self.cast(ExprKind::CXXFunctionalCastExpr, ck, sub, ty, vk, path, loc, flags);
+        self.ast.exprs.cold.end_loc.insert(e, rparen).expect("fresh expression");
+        e
+    }
+
+    /// `dynamic_cast<T>(v)` ([expr.dynamic.cast]); `ck` is `Dynamic`, or
+    /// `DerivedToBase` / `NoOp` for the statically resolved forms;
+    /// `rparen` is the closing `)`.
+    #[allow(clippy::too_many_arguments, reason = "the cast header fields")]
+    pub fn dynamic_cast(
+        &mut self,
+        ck: CastKind,
+        sub: ExprId,
+        ty: QualType,
+        vk: ValueCategory,
+        path: Option<ListId>,
+        loc: Loc,
+        rparen: Loc,
+    ) -> ExprId {
+        let e =
+            self.cast(ExprKind::CXXDynamicCastExpr, ck, sub, ty, vk, path, loc, ExprFlags::NONE);
+        self.ast.exprs.cold.end_loc.insert(e, rparen).expect("fresh expression");
+        e
+    }
+
+    /// Temporary materialization ([conv.rval]): `sub` (a prvalue) as a
+    /// glvalue of type `ty`, an lvalue if bound to an lvalue reference,
+    /// else an xvalue. `extended_by` is the `LifetimeExtendedTemporary`
+    /// of a lifetime-extended temporary ([`AstBuilder::lifetime_extended_temporary`]).
+    ///
+    /// # Panics
+    /// If `extended_by` is given with `FullExpression` storage or omitted
+    /// with another storage duration.
+    pub fn materialize_temporary(
+        &mut self,
+        sub: ExprId,
+        ty: QualType,
+        bound_to_lvalue_ref: bool,
+        storage: StorageDuration,
+        extended_by: Option<DeclId>,
+    ) -> ExprId {
+        assert!(
+            extended_by.is_some() == (storage != StorageDuration::FullExpression),
+            "lifetime extension and storage duration disagree"
+        );
+        let n = *self.ast.exprs.get(sub);
+        let vk = if bound_to_lvalue_ref { ValueCategory::LValue } else { ValueCategory::XValue };
+        let aux = storage as u8 | (u8::from(bound_to_lvalue_ref) << 2);
+        self.simple(
+            ExprKind::MaterializeTemporaryExpr,
+            vk,
+            n.deps() | self.type_deps(ty),
+            aux,
+            ty,
+            n.loc(),
+            sub.raw(),
+            extended_by.map_or(0, RawId::raw),
+        )
+    }
+
+    /// Binds the class prvalue `sub` to a temporary destroyed by `dtor`
+    /// at the end of the full-expression ([class.temporary]/4).
+    pub fn bind_temporary(&mut self, sub: ExprId, dtor: DeclId) -> ExprId {
+        let n = *self.ast.exprs.get(sub);
+        self.simple(
+            ExprKind::CXXBindTemporaryExpr,
+            ValueCategory::PRValue,
+            n.deps(),
+            0,
+            n.ty(),
+            n.loc(),
+            sub.raw(),
+            dtor.raw(),
+        )
+    }
+
+    /// A full-expression with cleanups ([intro.execution]/5): same type,
+    /// category and object kind as `sub`.
+    pub fn expr_with_cleanups(&mut self, sub: ExprId, side_effects: bool) -> ExprId {
+        let n = *self.ast.exprs.get(sub);
+        self.push_expr(
+            ExprKind::ExprWithCleanups,
+            n.value_category(),
+            n.object_kind(),
+            ExprFlags::NONE,
+            n.deps(),
+            u8::from(side_effects),
+            n.ty(),
+            n.loc(),
+            sub.raw(),
+            0,
+        )
+    }
+
+    /// A use of `field`'s default member initializer ([class.base.init]/9)
+    /// in context `used_ctx`; `ty` is the field's type without
+    /// references and `vk` the category its declared type implies. Always
+    /// `rewritten` (as clang 19 dumps it); the initializer is the field's
+    /// shared one.
+    pub fn default_init(
+        &mut self,
+        field: DeclId,
+        used_ctx: DeclId,
+        ty: QualType,
+        vk: ValueCategory,
+        loc: Loc,
+    ) -> ExprId {
+        let deps = self.type_deps(ty);
+        self.simple(ExprKind::CXXDefaultInitExpr, vk, deps, 1, ty, loc, field.raw(), used_ctx.raw())
+    }
+
+    /// A use of `param`'s default argument ([dcl.fct.default]) in context
+    /// `used_ctx` (the argument is the parameter's shared one); `ty`/`vk`
+    /// are the default argument's (sema-overload.md §7).
+    pub fn default_arg(
+        &mut self,
+        param: DeclId,
+        used_ctx: DeclId,
+        ty: QualType,
+        vk: ValueCategory,
+        loc: Loc,
+    ) -> ExprId {
+        let deps = self.type_deps(ty);
+        self.simple(ExprKind::CXXDefaultArgExpr, vk, deps, 0, ty, loc, param.raw(), used_ctx.raw())
+    }
+
+    /// `this` ([expr.prim.this]): a prvalue of pointer type `ty`;
+    /// `implicit` for a member named without `this->`.
+    pub fn this_expr(&mut self, ty: QualType, implicit: bool, loc: Loc) -> ExprId {
+        let deps = self.type_deps(ty);
+        self.simple(
+            ExprKind::CXXThisExpr,
+            ValueCategory::PRValue,
+            deps,
+            u8::from(implicit),
+            ty,
+            loc,
+            0,
+            0,
+        )
+    }
+
+    /// A call of a non-static member function ([expr.call]/2): `callee`
+    /// is the `MemberExpr` (or `.*`/`->*` operator) whose base is the
+    /// object argument. Type and category as [`AstBuilder::call`].
+    #[allow(clippy::too_many_arguments, reason = "as AstBuilder::call")]
+    pub fn member_call(
+        &mut self,
+        callee: ExprId,
+        args: &[ExprId],
+        ty: QualType,
+        vk: ValueCategory,
+        loc: Loc,
+        rparen: Loc,
+        flags: ExprFlags,
+    ) -> ExprId {
+        let mut deps = self.deps(callee) | self.type_deps(ty);
+        for &a in args {
+            deps |= self.deps(a);
+        }
+        let list = self.ast.lists.push(args);
+        let e = self.push_expr(
+            ExprKind::CXXMemberCallExpr,
+            vk,
+            ObjectKind::Ordinary,
+            flags,
+            deps,
+            0,
+            ty,
+            loc,
+            callee.raw(),
+            list.raw(),
+        );
+        self.ast.exprs.cold.end_loc.insert(e, rparen).expect("fresh expression");
+        e
+    }
+
+    /// Parenthesized aggregate initialization (P0960, [dcl.init.general]/
+    /// 16.6.2.2): a prvalue of type `ty`; `filler` initializes the
+    /// remaining array elements; `rparen` is the closing `)`.
+    pub fn paren_list_init(
+        &mut self,
+        ty: QualType,
+        inits: &[ExprId],
+        filler: Option<ExprId>,
+        loc: Loc,
+        rparen: Loc,
+    ) -> ExprId {
+        let mut deps = self.type_deps(ty);
+        for &i in inits.iter().chain(filler.as_ref()) {
+            deps |= self.deps(i);
+        }
+        let list = self.ast.lists.push(inits);
+        let e = self.simple(
+            ExprKind::CXXParenListInitExpr,
+            ValueCategory::PRValue,
+            deps,
+            0,
+            ty,
+            loc,
+            list.raw(),
+            filler.map_or(0, RawId::raw),
+        );
+        self.ast.exprs.cold.end_loc.insert(e, rparen).expect("fresh expression");
+        e
+    }
+
+    /// An `OpaqueValueExpr` standing for `source` (same type, category,
+    /// object kind and dependence); `source` is shared, not a child.
+    pub fn opaque_value(&mut self, source: ExprId) -> ExprId {
+        let n = *self.ast.exprs.get(source);
+        self.push_expr(
+            ExprKind::OpaqueValueExpr,
+            n.value_category(),
+            n.object_kind(),
+            ExprFlags::NONE,
+            n.deps(),
+            0,
+            n.ty(),
+            n.loc(),
+            source.raw(),
+            0,
+        )
+    }
+
+    /// Element-wise array copy ([class.copy.ctor]/14, [expr.prim.lambda.capture]/
+    /// 10, structured bindings): `common` is the `OpaqueValueExpr` of the
+    /// source array, `elem` the initializer of one element (indexed by an
+    /// [`AstBuilder::array_init_index`]); a prvalue of array type `ty`.
+    pub fn array_init_loop(&mut self, ty: QualType, common: ExprId, elem: ExprId) -> ExprId {
+        let deps = self.type_deps(ty) | self.deps(common) | self.deps(elem);
+        let loc = self.ast.exprs.get(common).loc();
+        self.simple(
+            ExprKind::ArrayInitLoopExpr,
+            ValueCategory::PRValue,
+            deps,
+            0,
+            ty,
+            loc,
+            common.raw(),
+            elem.raw(),
+        )
+    }
+
+    /// The current index of the innermost `ArrayInitLoopExpr` (a
+    /// `std::size_t` prvalue of type `ty`).
+    pub fn array_init_index(&mut self, ty: QualType, loc: Loc) -> ExprId {
+        let deps = self.type_deps(ty);
+        self.simple(ExprKind::ArrayInitIndexExpr, ValueCategory::PRValue, deps, 0, ty, loc, 0, 0)
+    }
+
+    /// `typeid(operand)` ([expr.typeid]): an lvalue of type `ty` (`const
+    /// std::type_info`); `potentially_evaluated` for a glvalue of
+    /// polymorphic class type. Never type-dependent; value-dependent if
+    /// the operand is dependent.
+    pub fn typeid_expr(
+        &mut self,
+        operand: TypeidOperand,
+        potentially_evaluated: bool,
+        ty: QualType,
+        loc: Loc,
+        rparen: Loc,
+    ) -> ExprId {
+        let (a, raw, flags) = match operand {
+            TypeidOperand::Type(t) => (self.type_deps(t), t.to_raw(), ExprFlags::ARG_IS_TYPE),
+            TypeidOperand::Expr(x) => (self.deps(x), x.raw(), ExprFlags::NONE),
+        };
+        let mut deps = self.type_deps(ty) | a.without(ExprDeps::TYPE);
+        if a.contains(ExprDeps::TYPE) {
+            deps |= ExprDeps::VALUE_INST;
+        }
+        let e = self.push_expr(
+            ExprKind::CXXTypeidExpr,
+            ValueCategory::LValue,
+            ObjectKind::Ordinary,
+            flags,
+            deps,
+            u8::from(potentially_evaluated),
+            ty,
+            loc,
+            raw,
+            0,
+        );
+        self.ast.exprs.cold.end_loc.insert(e, rparen).expect("fresh expression");
+        e
     }
 
     // =====================================================================

@@ -351,6 +351,21 @@ impl NameTable {
         self.intern(DeclNameKind::Destructor, class.index())
     }
 
+    /// The constructor name of `class` if it was ever interned (a read:
+    /// no class without a constructor name has constructors).
+    pub fn find_constructor(&self, class: TypeId) -> Option<DeclName> {
+        self.index
+            .get(&(DeclNameKind::Constructor, class.index()))
+            .map(|&i| DeclName::pack(DeclNameKind::Constructor, i))
+    }
+
+    /// The destructor name of `class` if it was ever interned.
+    pub fn find_destructor(&self, class: TypeId) -> Option<DeclName> {
+        self.index
+            .get(&(DeclNameKind::Destructor, class.index()))
+            .map(|&i| DeclName::pack(DeclNameKind::Destructor, i))
+    }
+
     /// The name of a conversion function to canonical type `target`.
     pub fn conversion(&mut self, target: QualType) -> DeclName {
         self.intern(DeclNameKind::Conversion, target.to_raw())

@@ -37,6 +37,10 @@ pub(crate) enum FState {
     /// Declared but not defined (yet): retried on every call.
     Undefined,
     Deleted,
+    /// Its body is being made available (`SemaBridge::ensure_body` is
+    /// running, and may evaluate nested constant expressions): a call to it
+    /// meanwhile fails as a call to an undefined function.
+    Compiling,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -338,7 +342,8 @@ impl Oven {
             self.funcs[idx as usize].state = FState::NotConstexpr;
             return;
         }
-        let Some(body) = b.ensure_body(d) else {
+        self.funcs[idx as usize].state = FState::Compiling;
+        let Some(body) = b.ensure_body(d, self) else {
             self.funcs[idx as usize].state = FState::Undefined;
             return;
         };
@@ -354,7 +359,9 @@ impl Oven {
             TypeView::Function(p) => p.ret(),
             _ => QualType::INT,
         };
+        let std_ice = is_std_is_constant_evaluated(ast, def);
         let mut c = Compiler::new(self, b);
+        c.std_ice = std_ice;
         let rty = c.ty(ret_q);
         let ret = if c.o.types.is_aggregate(rty) {
             RetKind::Sret(rty)
@@ -404,6 +411,7 @@ impl Oven {
         }
         let nregs = c.max;
         let memo = c.o.budget.memo_entries > 0
+            && !c.uses_cc
             && !matches!(ret, RetKind::Sret(_) | RetKind::Void)
             && infos.len() <= 4
             && infos.iter().all(|p| {
@@ -447,6 +455,11 @@ pub(crate) struct Compiler<'a> {
     /// conditionals, keyed by the expression (an `OpaqueValueExpr` names
     /// its source).
     opaque: FxHashMap<ExprId, Opaque>,
+    /// The function being compiled is `std::is_constant_evaluated`.
+    std_ice: bool,
+    /// The code reads the evaluation context (`Op::IsConstEval`): the
+    /// function is not memoized.
+    uses_cc: bool,
 }
 
 /// The value an `OpaqueValueExpr` stands for.
@@ -474,6 +487,8 @@ impl<'a> Compiler<'a> {
             ret: RetKind::Void,
             ret_ref: false,
             has_temps: false,
+            std_ice: false,
+            uses_cc: false,
         }
     }
 
@@ -3023,13 +3038,28 @@ impl Compiler<'_> {
         // The direct callee, if any.
         let mut c = skip_parens(ast, callee);
         while ast.exprs.get(c).kind().is_cast()
-            && matches!(ast.exprs.cast_kind(c), CastKind::FunctionToPointerDecay | CastKind::NoOp)
+            && matches!(
+                ast.exprs.cast_kind(c),
+                CastKind::FunctionToPointerDecay | CastKind::BuiltinFnToFnPtr | CastKind::NoOp
+            )
         {
             c = skip_parens(ast, ast.exprs.operand(c));
         }
         let direct = (ast.exprs.get(c).kind() == ExprKind::DeclRefExpr
             && ast.decls.get(ast.exprs.decl(c)).kind().is_function())
         .then(|| ast.exprs.decl(c));
+        if let Some(d) = direct
+            && ast.decls.builtin_id(d) == Some(kiln_ast::decl::builtin::IS_CONSTANT_EVALUATED)
+        {
+            let r = self.reg();
+            let pc = self.emit_at(Op::IsConstEval, u32::from(self.std_ice), &[r], e);
+            let loc = self.begin(e);
+            if let Some(site) = self.o.sites.last_mut().filter(|x| x.pc == pc as u32) {
+                site.loc = loc;
+            }
+            self.uses_cc = true;
+            return r;
+        }
         let fp = if direct.is_none() { Some(self.rv_copy(callee)) } else { None };
         let is_sret = self.o.types.is_aggregate(ty);
         let base = self.next;
@@ -3081,6 +3111,33 @@ impl Compiler<'_> {
         self.next = base + 1;
         base
     }
+}
+
+/// Whether function `d` is `std::is_constant_evaluated` (clang's
+/// `isInStdNamespace`: a function of that name in namespace `std` at
+/// translation-unit scope, possibly through inline namespaces).
+fn is_std_is_constant_evaluated(ast: &kiln_ast::Ast, d: DeclId) -> bool {
+    let decls = &ast.decls;
+    let named = |d: DeclId, n: &str| {
+        decls.get(d).name().as_ident().is_some_and(|s| ast.symbols().as_str(s) == n)
+    };
+    if !named(d, "is_constant_evaluated") {
+        return false;
+    }
+    let mut ns = decls.get(d).ctx();
+    while let Some(n) = ns
+        && decls.namespace(n).is_some_and(kiln_ast::decl::NamespaceData::is_inline)
+    {
+        ns = decls.get(n).ctx();
+    }
+    ns.is_some_and(|n| {
+        decls.get(n).kind() == DeclKind::Namespace
+            && named(n, "std")
+            && decls
+                .get(n)
+                .ctx()
+                .is_some_and(|tu| decls.get(tu).kind() == DeclKind::TranslationUnit)
+    })
 }
 
 /// Whether `d` is a variable of reference type.

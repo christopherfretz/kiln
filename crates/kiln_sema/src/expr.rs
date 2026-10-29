@@ -266,7 +266,7 @@ impl Sema<'_, '_> {
         e
     }
 
-    fn ignore_parens(&self, e: ExprId) -> ExprId {
+    pub(crate) fn ignore_parens(&self, e: ExprId) -> ExprId {
         let mut e = e;
         for _ in 0..256 {
             if self.ast.exprs.get(e).kind() == ExprKind::ParenExpr {
@@ -636,6 +636,11 @@ impl Sema<'_, '_> {
             None => self.lookup_name(name, LookupKind::Ordinary),
         };
         let Some(&d) = found.decls.first() else {
+            if qualifier.is_none()
+                && let Some(b) = self.lazily_create_builtin(name, loc)
+            {
+                return self.build_decl_ref(b, loc);
+            }
             let text = self.ast.symbols().as_str(name).to_owned();
             let msg = match qualifier {
                 Some(q) => {
@@ -724,7 +729,11 @@ impl Sema<'_, '_> {
             return self.recover_err(&[], loc);
         }
         let declared = n.ty().unwrap_or(QualType::ERROR);
-        let ty = self.non_reference(declared);
+        let ty = if self.ast.decls.builtin_id(d).is_some() {
+            QualType::BUILTIN_FN
+        } else {
+            self.non_reference(declared)
+        };
         self.ast.decls.set_flags(d, DeclFlags::REFERENCED);
         self.diagnose_deprecated(d, loc);
         let nou = if self.unevaluated > 0 { NonOdrUse::Unevaluated } else { NonOdrUse::None };
@@ -1150,6 +1159,9 @@ impl Sema<'_, '_> {
     }
 
     fn address_of(&mut self, e: ExprId, loc: Loc) -> ExprId {
+        if self.check_builtin_fn_use(e) {
+            return self.recover_err(&[e], loc);
+        }
         let n = *self.ast.exprs.get(e);
         if n.object_kind() == ObjectKind::BitField {
             self.error(DiagId::sema_addrof_bitfield, loc);
@@ -1833,7 +1845,10 @@ impl Sema<'_, '_> {
                 .then(|| self.ast.exprs.decl(x))
                 .filter(|&d| self.ast.decls.function(d).is_some())
         };
-        let f = conv::decay(self, callee);
+        let f = match self.builtin_callee(callee) {
+            Some(b) => self.builtin_fn_to_ptr(callee, b),
+            None => conv::decay(self, callee),
+        };
         let ft = self.ety(f);
         let fn_ty = self.pointee_sugared(ft).filter(|p| self.ast.types.is_function(*p));
         let Some(fn_ty) = fn_ty else {
@@ -2242,9 +2257,17 @@ impl Sema<'_, '_> {
 
     /// An explicit type conversion `style<ty>(e)` ([expr.cast],
     /// [expr.static.cast], [expr.reinterpret.cast], [expr.const.cast],
-    /// [expr.type.conv]). `loc` is the cast's start.
+    /// [expr.type.conv]). `loc` is the cast's start, `rparen` its closing
+    /// `)`.
     #[allow(clippy::too_many_lines, reason = "one step per paragraph of [expr.cast]/4")]
-    pub fn act_on_cast(&mut self, style: CastStyle, ty: QualType, e: ExprId, loc: Loc) -> ExprId {
+    pub fn act_on_cast(
+        &mut self,
+        style: CastStyle,
+        ty: QualType,
+        e: ExprId,
+        loc: Loc,
+        rparen: Loc,
+    ) -> ExprId {
         if self.is_err_expr(e) || self.is_error_type(ty) {
             return self.recover(ty, &[e], loc);
         }
@@ -2256,21 +2279,10 @@ impl Sema<'_, '_> {
             self.unsupported("casts to reference types", loc);
             return self.recover_err(&[e], loc);
         }
-        let kind = style.kind();
-        let flags = ExprFlags::NONE;
         // [expr.static.cast]/6: any expression can be converted to cv void.
         if self.ast.types.is_void(ty) {
             if style.allows_static() {
-                return self.builder().cast(
-                    kind,
-                    CastKind::ToVoid,
-                    e,
-                    ty,
-                    ValueCategory::PRValue,
-                    None,
-                    loc,
-                    flags,
-                );
+                return self.explicit_cast(style, CastKind::ToVoid, e, ty, loc, rparen);
             }
             return self.bad_cast(style, e, ty, loc);
         }
@@ -2297,16 +2309,7 @@ impl Sema<'_, '_> {
                 && self.similar_pointers(xt, to)
             {
                 self.mark_explicit(x, e);
-                return self.builder().cast(
-                    kind,
-                    CastKind::NoOp,
-                    x,
-                    to,
-                    ValueCategory::PRValue,
-                    None,
-                    loc,
-                    flags,
-                );
+                return self.explicit_cast(style, CastKind::NoOp, x, to, loc, rparen);
             }
             if style == CastStyle::Const {
                 return self.bad_cast(style, e, ty, loc);
@@ -2320,16 +2323,7 @@ impl Sema<'_, '_> {
             match conv::apply_standard_conversion(self, e, &scs, to) {
                 Ok(x) => {
                     self.mark_explicit(x, e);
-                    return self.builder().cast(
-                        kind,
-                        CastKind::NoOp,
-                        x,
-                        to,
-                        ValueCategory::PRValue,
-                        None,
-                        loc,
-                        flags,
-                    );
+                    return self.explicit_cast(style, CastKind::NoOp, x, to, loc, rparen);
                 }
                 Err(err) => {
                     self.emit_conv_error(err, loc);
@@ -2344,15 +2338,35 @@ impl Sema<'_, '_> {
         if style.allows_static()
             && let Some(ck) = self.static_inverse(xt, to, style)
         {
-            return self.builder().cast(kind, ck, x, to, ValueCategory::PRValue, None, loc, flags);
+            return self.explicit_cast(style, ck, x, to, loc, rparen);
         }
         // reinterpret_cast ([expr.reinterpret.cast]).
         if style.allows_reinterpret()
             && let Some(ck) = self.reinterpret(xt, to, style, loc)
         {
-            return self.builder().cast(kind, ck, x, to, ValueCategory::PRValue, None, loc, flags);
+            return self.explicit_cast(style, ck, x, to, loc, rparen);
         }
         self.bad_cast(style, e, ty, loc)
+    }
+
+    /// The node of an explicit cast `style` that succeeded with kind `ck`:
+    /// a prvalue of `to`. A functional cast records its `)` (`rparen`).
+    fn explicit_cast(
+        &mut self,
+        style: CastStyle,
+        ck: CastKind,
+        sub: ExprId,
+        to: QualType,
+        loc: Loc,
+        rparen: Loc,
+    ) -> ExprId {
+        let vk = ValueCategory::PRValue;
+        let flags = ExprFlags::NONE;
+        if style == CastStyle::Functional {
+            self.builder().functional_cast(ck, sub, to, vk, None, loc, rparen, flags)
+        } else {
+            self.builder().cast(style.kind(), ck, sub, to, vk, None, loc, flags)
+        }
     }
 
     fn bad_cast(&mut self, style: CastStyle, e: ExprId, ty: QualType, loc: Loc) -> ExprId {

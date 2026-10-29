@@ -689,10 +689,42 @@ evaluated; the result is an lvalue `const std::type_info`.
 All from the `Ast` (kiln_abi never sees sema): `RecordData.bases`, definition
 bits (`DYNAMIC`, `POLYMORPHIC`, `HAS_VIRTUAL_BASES`, `EMPTY`), fields and their
 flags, `alignas`/`packed` attributes, and the `#pragma pack` value current at
-the class definition, which sema now records in cold map `record_pack: DeclId →
-u16` (abi.md A3 sources `ClassDesc.max_field_align` from it).
+the class definition, which sema records in cold map `record_pack: DeclId →
+u16` (abi.md §8.2 sources `ClassDesc.max_field_align` from it).
+
+**`#pragma pack` state (WP-066c; clang `Sema::ActOnPragmaPack`).**
+- **State.** Sema keeps the current value N (bytes, 0 = none) and a
+  stack of `(label, value)` entries.
+- **Applying it.** `act_on_start_record_definition` stores a nonzero N
+  in `record_pack` for the class being defined. A class template's
+  pattern gets it too; instantiation must copy it from the pattern
+  (WP-066b/templates; not done yet).
+- **Forms** (the argument text of `#pragma pack(...)` and
+  `_Pragma("pack(...)")`):
+  - `()` resets N to 0;
+  - `(N)` sets N;
+  - `(push)`, `(push, id)`, `(push, N)` and `(push, id, N)` push the
+    current value (with `id`), then set N if given;
+  - `(pop)` restores the top entry;
+  - `(pop, id)` pops through the nearest entry labelled `id`, or does
+    nothing if there is none;
+  - `(pop, N)` pops, then sets N.
+  - N must be one of 0, 1, 2, 4, 8 or 16.
+- **Rejected forms.** These are reported through the
+  unsupported-pragma diagnostic (`#pragma pack ... is not supported
+  yet`; an error), where clang 19 warns and ignores them:
+  - `show`;
+  - any other N;
+  - `pop` on an empty stack;
+  - `pop` with both a label and N;
+  - an unknown action.
+- **Not implemented.** clang's end-of-file `-Wpragma-pack` "unterminated
+  push" warning and the include-boundary warnings are missing.
 
 ### 6.2 Algorithm (Itanium §2.4, clang `ItaniumRecordLayoutBuilder`)
+Status: steps 3–5 and 7 are implemented for non-virtual bases (WP-066c,
+abi.md §8.1). Steps 1, 2 and 6 and the vptr are WP-078b (abi.md §8.5).
+
 1. **Primary base** (II.1): the first non-virtual dynamic base; else the first
    nearly-empty virtual base that is not an indirect primary base; else the
    first nearly-empty virtual base that is (an indirect primary).
@@ -726,8 +758,11 @@ two spaces of indent per nesting level, `(empty)` after an empty class's name,
 virtual bases of a base printed once, at the end of the most-derived layout
 (`struct D` prints `struct A (virtual base)` after `int d`, not inside
 `B`/`C`), footer `[sizeof=48, dsize=44, align=8,` / `nvsize=32, nvalign=8]`.
-Clang dumps each record when first laid out (bases before derived); the
-differential compares per record, keyed by name, ignoring order.
+Clang's plain flag dumps each record when first laid out (bases before
+derived). The driver's dump instead follows clang's
+`-fdump-record-layouts-complete` order: every complete class, in lexical
+post-order, each named as at its `}`. The corpus differential compares
+against `-complete` block by block, in order (abi.md §8.4).
 
 ### 6.4 Differential tests
 - `kiln_abi/tests/layout_vs_clang.rs` (abi.md §7) extends its generator
@@ -735,7 +770,10 @@ differential compares per record, keyed by name, ignoring order.
   each, `virtual` with p = 0.3 (after WP-078b; 0 before), empty classes,
   repeated bases, polymorphic classes, non-POD bases with tail padding,
   `[[no_unique_address]]`, bit-fields after bases, `alignas`, `#pragma pack`.
-  CI: fixed seed, 2000 records; XFAIL list empty.
+  CI: fixed seed, 2000 records; XFAIL list empty. WP-066c implements this
+  for non-virtual bases and `#pragma pack` (1–3 bases per class, depth
+  bounded by the item count). Virtual bases and polymorphic classes come
+  with WP-078b.
 - `kiln_abi/tests/vtable_vs_clang.rs` (WP-078b): `-fdump-vtable-layouts` vs
   `kiln_abi::dump_vtable_layout`, byte-identical (`Vtable for 'B' (13
   entries).`, `vbase_offset (8)`, `-- (A, 8) vtable address --`, `[this
@@ -823,6 +861,40 @@ New parser entry points (WP-065's contract): `act_on_base_specifiers`,
 Modules: `kiln_sema/src/class/{mod,access,special,ctorinit,temporary,virtual}.rs`
 (§9).
 
+**Landed signatures (WP-066a, `kiln_sema::class`; bodies report
+`{what} is not supported yet` until the owning WP):**
+```
+pub struct BaseSpecInfo { ty: QualType, loc: Loc, is_virtual: bool, access: Access, pack_expansion: bool, attrs: Vec<AttrId> }
+pub enum MemInitId { Ident(Symbol), Type(QualType) }
+pub struct MemInitInfo { id: MemInitId, loc: Loc, init: Initializer, pack_expansion: bool }
+fn act_on_base_specifiers(&mut self, r: DeclId, specs: &[BaseSpecInfo]);
+fn act_on_access_spec(&mut self, access: Access, loc: Loc) -> Option<DeclId>;
+fn act_on_friend(&mut self, ds: &DeclSpec, base: QualType, d: Option<&Declarator>, friend_loc: Loc) -> Option<DeclId>;
+fn act_on_defaulted(&mut self, f: DeclId, loc: Loc);
+fn act_on_deleted(&mut self, f: DeclId, loc: Loc, msg: Option<ExprId>);
+fn act_on_param_default_arg(&mut self, p: DeclId, e: ExprId);
+fn act_on_exception_spec(&mut self, f: DeclId, spec: ExcSpec);
+fn act_on_field_init(&mut self, field: DeclId, init: Initializer);
+fn act_on_mem_initializers(&mut self, ctor: DeclId, inits: &[MemInitInfo], colon_loc: Loc);
+fn act_on_finish_class_contexts(&mut self, r: DeclId);
+fn act_on_this(&mut self, loc: Loc) -> ExprId;
+fn current_class(&self) -> Option<&ClassBuild>;
+```
+Parser-facing additions outside `class/`: `ParamInfo.default_arg:
+DefaultArg { None | Parsed(ExprId) | Unparsed(Loc /* = */) }` (set by the
+parser after `act_on_param_declarator`; a `Parsed` default is already
+converted by `act_on_param_default_init` (sema.md §4.3), which
+`act_on_declarator` stores, and `Unparsed` parameters are marked
+`DEFAULT_ARG_PENDING`), and `TagUse::Friend` for the
+elaborated-type-specifier of `friend class X;`. Calling protocol: the
+parser calls `act_on_base_specifiers` for every class definition (empty
+slice when there is no base-clause), `act_on_mem_initializers` for every
+constructor definition (empty slice, `colon_loc` = the body's `{`, when
+there is no ctor-initializer) and `act_on_finish_class_contexts` for every
+outermost class; those calls are silent on the stubs, so M2 programs are
+unaffected. `ClassBuild` is pushed and popped by
+`act_on_{start,finish}_record_definition` already.
+
 ### 8.4 `SemaBridge` (kiln_oven) — public-interface change
 Replace `fn vtable(&mut self, record) -> &VTableLayout` with
 ```
@@ -835,6 +907,19 @@ demand (sema `define_implicit_*`). `kiln_oven::VTableLayout` is deleted; the
 Itanium `VTableLayout` lives in `kiln_abi` for codegen. Implementers to update:
 `kiln_sema/src/oven_bridge.rs`, `kiln_codegen/src/fold.rs`,
 `kiln_oven/tests/common/mod.rs`.
+
+Landed (WP-066a): `kiln_oven` re-exports `kiln_ast::class::{Subobject,
+SubobjectId}`; all three bridges read `Ast::virtuals` (keyed by first
+declaration), answering `None` / `&[]` until sema fills it (WP-078a).
+`kiln_abi::vtable` re-exports the vtable types and declares
+`vtable_layout(&Ast, record, &Target) -> Result<VTableLayout,
+VTableError>`, `ensure_vtable(&mut Ast, record, &Target) ->
+Result<&VTableLayout, VTableError>` (caches in `Ast::vtables`),
+`construction_vtable(&Ast, most_derived, base: SubobjectId, &Target)`,
+`vtt(&Ast, record, &Target) -> Result<Vec<VttComponent>, VTableError>`
+and `dump_vtable_layout(&Ast, record, &Target) -> Result<String,
+VTableError>`, with `VTableError { NotDynamic | Incomplete | Unsupported
+}`; every body answers `Unsupported` until WP-078b.
 
 ### 8.5 What codegen reads (WP-079/080)
 `RecordLayout` (bases, vbases, vptr, primary base); `VTableLayout` and VTT;

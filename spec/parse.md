@@ -272,7 +272,7 @@ harness ignores order.
     declaration` / `empty parentheses interpreted as a function
     declaration`, with clang's fix-it notes).
   - Parameters: `= initializer-clause` default arguments go to
-    `act_on_param_default_arg` (a default argument starting with `({`
+    `act_on_param_default_init` (a default argument starting with `({`
     is `err_stmt_expr_in_default_arg`, skipped to `,`/`)`). The
     parameter-declaration-clause brackets `act_on_start_prototype` /
     `act_on_prototype_param` / `act_on_end_prototype` (closed after the
@@ -303,6 +303,24 @@ harness ignores order.
     `union { int a; };`) goes to `act_on_decl_spec_only`.
   - That call returns the implicit object of an anonymous union, if
     any, which then joins the `DeclStmt`.
+- **GNU asm labels** (`parse_asm_label`, clang's
+  `ParseSimpleAsm(ForAsmLabel)`): `asm`/`__asm`/`__asm__` `(`
+  string-literal... `)` after a declarator, before its attributes and
+  initializer. Adjacent literals concatenate ([lex.string]/7); the
+  result is stored in `Declarator::asm_label` (the literal's `ExprId`
+  and the span of its tokens) for Sema (spec/sema.md §4.2).
+  - A missing `(` is `expected '(' after 'asm'`; a missing literal is
+    `expected string literal in 'asm'`; a wide, Unicode or empty literal
+    is `cannot use {unicode|wide|an empty} string literal in 'asm'`.
+  - In a simple declaration a malformed label drops the declarator (the
+    parser skips to the `;`, clang's `ParseAsmAttributesAfterDeclarator`);
+    in a member declaration it skips to the next `,`.
+  - A function declarator with a label is never a definition: a
+    following `{` is parsed as an initializer, which Sema rejects
+    (`illegal initializer`).
+  - A malformed braced initializer without `=` (`T x{…}`) is skipped
+    through its `}` and the declaration continues, as clang's
+    `ParseBraceInitializer` does.
 - **Tags** (`parse_tag_specifier`):
   - `act_on_tag(kind, name, TagUse, …)`. `TagUse` is reference,
     declaration or definition, decided by the next token, as in
@@ -532,12 +550,12 @@ in `kiln_diag` for now; nothing emits them.
   - `co_await`/`co_yield`
 - **Statements:** range-based `for`, `try`/`catch`, `co_return`, contracts.
 - **Other declarations:**
-  - pointers to members, asm labels
+  - pointers to members
   - pack expansions in dynamic exception specifications
   - `auto` deduction from braced lists (`std::initializer_list`)
   - `typename`, `operator` and pack forms of using-declarators, and an
     attributed `[[...]] using` as a block-scope statement
-  - `asm`, modules, `__declspec`
+  - `asm` declarations, modules, `__declspec`
 
 ## 10. Tests
 - **Per-rule tests** in `crates/kiln_parse/tests/`, each tagged with

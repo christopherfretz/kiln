@@ -331,7 +331,7 @@ impl Parser<'_, '_> {
             self.skip_until(&[Punct::RParen], false, true);
             return None;
         };
-        self.expect_closing(Punct::RParen, Punct::LParen, open);
+        let rparen = self.expect_closing(Punct::RParen, Punct::LParen, open);
         if self.at(Punct::LBrace) {
             // GNU/C99 compound literal `( type-id ) braced-init-list`, a
             // postfix-expression (clang's `ParseCompoundLiteralExpression`).
@@ -340,7 +340,7 @@ impl Parser<'_, '_> {
             return self.parse_postfix_suffix(e);
         }
         let e = self.parse_cast_expr()?;
-        Some(self.s.act_on_cast(CastStyle::CStyle, ty, e, open))
+        Some(self.s.act_on_cast(CastStyle::CStyle, ty, e, open, rparen))
     }
 
     /// `sizeof...(name)` ([expr.sizeof]/5). M2 has no packs, so Sema
@@ -685,8 +685,8 @@ impl Parser<'_, '_> {
             self.skip_until(&[Punct::RParen], false, true);
             return None;
         };
-        self.expect_closing(Punct::RParen, Punct::LParen, open);
-        Some(self.s.act_on_cast(style, ty, e, loc))
+        let rparen = self.expect_closing(Punct::RParen, Punct::LParen, open);
+        Some(self.s.act_on_cast(style, ty, e, loc, rparen))
     }
 
     /// `T(e)` ([expr.type.conv]) with one operand.
@@ -723,9 +723,9 @@ impl Parser<'_, '_> {
                 break;
             }
         }
-        self.expect_closing(Punct::RParen, Punct::LParen, open);
+        let rparen = self.expect_closing(Punct::RParen, Punct::LParen, open);
         if let [e] = args[..] {
-            return Some(self.s.act_on_cast(CastStyle::Functional, ty, e, loc));
+            return Some(self.s.act_on_cast(CastStyle::Functional, ty, e, loc, rparen));
         }
         Some(self.s.act_on_paren_list_cast(ty, &args, loc))
     }

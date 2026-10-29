@@ -1,4 +1,4 @@
-//! GNU extensions kiln accepts in C++ (spec/sema.md §5.7): statement
+//! GNU extensions kiln accepts in C++ (spec/sema.md §5.8): statement
 //! expressions `({ ... })`, `__builtin_offsetof` and compound literals
 //! `( T ) { ... }`. Each matches clang's behaviour for C++.
 

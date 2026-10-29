@@ -32,7 +32,7 @@ use kiln_ast::types::RecordLayout;
 use kiln_ast::{Ast, ConstValueId, DeclId, ExprId, StmtId};
 use kiln_diag::Diag;
 use kiln_oven::{
-    Budget, EvalContext, EvalFailure, EvalKind, FailKind, Oven, SemaBridge, VTableLayout,
+    Budget, EvalContext, EvalFailure, EvalKind, FailKind, Oven, SemaBridge, Subobject, SubobjectId,
 };
 use kiln_source::Loc;
 
@@ -43,14 +43,13 @@ pub use parse::Item;
 pub struct Bridge<'a> {
     pub ast: &'a mut Ast,
     pub target: &'a Target,
-    vt: VTableLayout,
     /// Where `diag` puts each diagnostic (`Debug`-formatted), if anywhere.
     sink: Option<&'a mut Vec<String>>,
 }
 
 impl<'a> Bridge<'a> {
     pub fn new(ast: &'a mut Ast, target: &'a Target) -> Self {
-        Bridge { ast, target, vt: VTableLayout::default(), sink: None }
+        Bridge { ast, target, sink: None }
     }
 }
 
@@ -58,15 +57,25 @@ impl SemaBridge for Bridge<'_> {
     fn ast(&self) -> &Ast {
         self.ast
     }
-    fn ensure_body(&mut self, f: DeclId) -> Option<StmtId> {
+    fn ensure_body(&mut self, f: DeclId, _oven: &mut Oven) -> Option<StmtId> {
         let d = self.ast.definition(f)?;
         self.ast.decls.function(d)?.body
     }
     fn ensure_layout(&mut self, record: DeclId) -> &RecordLayout {
         kiln_abi::ensure_layout(&mut *self.ast, record, self.target)
     }
-    fn vtable(&mut self, _record: DeclId) -> &VTableLayout {
-        &self.vt
+    fn final_overrider(
+        &mut self,
+        most_derived: DeclId,
+        at: SubobjectId,
+        method: DeclId,
+    ) -> Option<(DeclId, SubobjectId)> {
+        let first = self.ast.first(most_derived);
+        self.ast.virtuals.get(first)?.final_overrider(at, method)
+    }
+    fn subobjects(&mut self, record: DeclId) -> &[Subobject] {
+        let first = self.ast.first(record);
+        self.ast.virtuals.get(first).map_or(&[], |v| &v.subobjects)
     }
     fn consts(&mut self) -> &mut ConstStore {
         &mut self.ast.consts
@@ -120,12 +129,7 @@ impl Tu {
     }
 
     pub fn bridge(&mut self) -> Bridge<'_> {
-        Bridge {
-            ast: &mut self.ast,
-            target: &self.target,
-            vt: VTableLayout::default(),
-            sink: Some(&mut self.diags),
-        }
+        Bridge { ast: &mut self.ast, target: &self.target, sink: Some(&mut self.diags) }
     }
 
     /// `line:col` of a location (1-based).

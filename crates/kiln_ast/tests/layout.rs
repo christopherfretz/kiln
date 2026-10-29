@@ -38,3 +38,10 @@ fn ids_are_niche_optimized_spec_ast_2_1() {
     assert_eq!(size_of::<Option<QualType>>(), 4);
     assert_eq!(size_of::<DeclName>(), 4);
 }
+
+#[test]
+fn class_side_records_spec_sema_class_8_1() {
+    use kiln_ast::decl::{CtorInit, LetData};
+    assert_eq!(size_of::<CtorInit>(), 16);
+    assert_eq!(size_of::<LetData>(), 12);
+}

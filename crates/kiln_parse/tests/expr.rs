@@ -121,7 +121,7 @@ fn expr_static_cast() {
 fn expr_reinterpret_cast() {
     let p = parse("long f(int *p) { return reinterpret_cast<long>(p); }");
     p.assert_clean();
-    p.assert_dump("CXXReinterpretCastExpr 'long' <PointerToIntegral>");
+    p.assert_dump("CXXReinterpretCastExpr 'long' reinterpret_cast<long> <PointerToIntegral>");
 }
 
 /// [expr.const.cast].
@@ -129,7 +129,7 @@ fn expr_reinterpret_cast() {
 fn expr_const_cast() {
     let p = parse("int *f(const int *p) { return const_cast<int *>(p); }");
     p.assert_clean();
-    p.assert_dump("CXXConstCastExpr 'int *' <NoOp>");
+    p.assert_dump("CXXConstCastExpr 'int *' const_cast<int *> <NoOp>");
 }
 
 /// [expr.type.conv]: functional casts.
@@ -288,4 +288,25 @@ fn throw_and_typeid() {
     p.assert_dump("CXXThrowExpr");
     let p = parse("void f() { throw; }");
     p.assert_clean();
+}
+
+/// `__builtin_is_constant_evaluated` is declared on first use (clang
+/// `LazilyCreateBuiltin`); its name must be called directly.
+#[test]
+fn builtin_is_constant_evaluated() {
+    let p = parse("bool f() { return __builtin_is_constant_evaluated(); }");
+    p.assert_clean();
+    p.assert_dump(
+        "ImplicitCastExpr 'bool (*)() noexcept' <BuiltinFnToFnPtr>\n\
+         \x20         `-DeclRefExpr '<builtin fn type>' Function '__builtin_is_constant_evaluated' 'bool () noexcept'",
+    );
+    let p = parse(
+        "auto p = &__builtin_is_constant_evaluated;\nvoid g() { __builtin_is_constant_evaluated; }",
+    );
+    p.assert_diag("1:11 error: builtin functions must be directly called");
+    p.assert_diag("2:12 error: builtin functions must be directly called");
+    let p = parse("bool (*q)() = __builtin_is_constant_evaluated;");
+    p.assert_diag("1:15 error: builtin functions must be directly called");
+    let p = parse("static_assert(__builtin_is_constant_evaluated());");
+    p.assert_diag("1:15 warning: '__builtin_is_constant_evaluated' will always evaluate to 'true'");
 }

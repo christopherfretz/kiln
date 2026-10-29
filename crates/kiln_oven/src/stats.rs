@@ -19,8 +19,14 @@ pub struct EvalRecord {
     pub peak_bytes: u64,
     /// Function calls (memoized hits count their recorded calls).
     pub calls: u64,
-    /// Dynamic allocations (M3: `new`; always 0 in M2).
+    /// Dynamic allocations (`new`, `std::allocator<T>::allocate`).
     pub allocs: u64,
+    /// Maximum abstract-memory address space held (frame top plus heap
+    /// top: live bytes plus fragmentation); at least `peak_bytes`.
+    pub peak_arena: u64,
+    /// Bytes this evaluation added to the `ConstStore` (newly interned
+    /// content only).
+    pub frozen_bytes: u64,
     /// Wall-clock microseconds (not deterministic).
     pub wall_us: u64,
     /// Whether the evaluation produced a value.
@@ -28,7 +34,7 @@ pub struct EvalRecord {
 }
 
 /// The counters summed over a translation unit's evaluations (`peak_bytes`
-/// is the maximum).
+/// and `peak_arena` are the maximum).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct EvalTotals {
     /// Sum of `steps`.
@@ -41,6 +47,10 @@ pub struct EvalTotals {
     pub calls: u64,
     /// Sum of `allocs`.
     pub allocs: u64,
+    /// Maximum of `peak_arena`.
+    pub peak_arena: u64,
+    /// Sum of `frozen_bytes`.
+    pub frozen_bytes: u64,
     /// Sum of `wall_us`.
     pub wall_us: u64,
     /// Number of evaluations.
@@ -63,6 +73,8 @@ impl EvalStats {
         t.peak_bytes = t.peak_bytes.max(r.peak_bytes);
         t.calls += r.calls;
         t.allocs += r.allocs;
+        t.peak_arena = t.peak_arena.max(r.peak_arena);
+        t.frozen_bytes += r.frozen_bytes;
         t.wall_us += r.wall_us;
         t.evaluations += 1;
         self.records.push(r);

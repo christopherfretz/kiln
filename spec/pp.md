@@ -81,6 +81,17 @@ The core does the following itself:
 The core marks a header `extern_c` (line-marker flags `3 4`) when the
 resolver says so or when its includer is extern-C itself.
 
+The core records file kinds in the source manager (spec/source.md "File
+kinds", WP-063), which kiln_diag uses to suppress warnings in system
+headers (spec/diag.md §5.4): the start of an inclusion entered as a
+system header (the max of the directory's characteristic and the
+includer's), the `system_header` token's expansion location for
+`#pragma GCC system_header` (ignored, with a warning, in the main file),
+and the line after a line marker (flag 3 or `3 4`, else user; `#line`
+keeps the kind). When system warnings are suppressed, `#define` skips
+the redefinition checks in a system header, as clang does; under
+`-Wsystem-headers` it diagnoses them.
+
 #### Header search (WP-014): `HeaderSearch`, `SearchList`, `HeaderFs`
 
 `kiln_pp::HeaderSearch<F: HeaderFs>` is the clang 19

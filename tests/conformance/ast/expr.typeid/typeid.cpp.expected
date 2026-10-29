@@ -9,11 +9,11 @@ TranslationUnitDecl
 |-VarDecl referenced arr 'int[3]'
 |-FunctionDecl referenced fn 'void ()'
 |-VarDecl t1 'const std::type_info &' cinit
-| `-CXXTypeidExpr 'const std::type_info' lvalue
+| `-CXXTypeidExpr 'const std::type_info' lvalue type_operand='int'
 |-VarDecl t2 'const std::type_info &' cinit
-| `-CXXTypeidExpr 'const std::type_info' lvalue
+| `-CXXTypeidExpr 'const std::type_info' lvalue type_operand='const int &'
 |-VarDecl t3 'const std::type_info &' cinit
-| `-CXXTypeidExpr 'const std::type_info' lvalue
+| `-CXXTypeidExpr 'const std::type_info' lvalue type_operand='S'
 |-VarDecl t4 'const std::type_info &' cinit
 | `-CXXTypeidExpr 'const std::type_info' lvalue
 |   `-DeclRefExpr 'int' lvalue Var 'x' 'int' non_odr_use_unevaluated
@@ -38,16 +38,16 @@ TranslationUnitDecl
 |   `-ParenExpr 'int' lvalue
 |     `-DeclRefExpr 'int' lvalue Var 'x' 'int' non_odr_use_unevaluated
 |-VarDecl t10 'const std::type_info &' cinit
-| `-CXXTypeidExpr 'const std::type_info' lvalue
+| `-CXXTypeidExpr 'const std::type_info' lvalue type_operand='int'
 |-VarDecl same 'bool' cinit
 | `-BinaryOperator 'bool' '=='
 |   |-UnaryOperator 'const std::type_info *' prefix '&' cannot overflow
-|   | `-CXXTypeidExpr 'const std::type_info' lvalue
+|   | `-CXXTypeidExpr 'const std::type_info' lvalue type_operand='int'
 |   `-UnaryOperator 'const std::type_info *' prefix '&' cannot overflow
 |     `-CXXTypeidExpr 'const std::type_info' lvalue
 |       `-DeclRefExpr 'int' lvalue Var 'x' 'int' non_odr_use_unevaluated
 `-FunctionDecl f 'void ()'
   `-CompoundStmt
-    |-CXXTypeidExpr 'const std::type_info' lvalue
+    |-CXXTypeidExpr 'const std::type_info' lvalue type_operand='S'
     `-CStyleCastExpr 'void' <ToVoid>
-      `-CXXTypeidExpr 'const std::type_info' lvalue
+      `-CXXTypeidExpr 'const std::type_info' lvalue type_operand='int'

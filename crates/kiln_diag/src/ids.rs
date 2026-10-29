@@ -379,6 +379,11 @@ diag_ids! {
     // ----- sema conversions (WP-049): [conv], [expr.arith.conv], [lex.*con] --
     // Type arguments are passed pre-quoted, with clang's `(aka '...')`
     // suffix when sugar hides the canonical type (`Sema::ty_arg`).
+    sema_illegal_initializer = Error (0) "illegal initializer (only variables can be initialized)";
+    sema_different_asm_label = Error (0) "conflicting asm label";
+    sema_late_asm_label = Error (1) "cannot apply asm label to {0:variable|function} after its first use";
+    sema_asm_label_on_auto_decl = Warning (1) "ignored asm label '{0}' on automatic variable";
+    sema_builtin_fn_use = Error (0) "builtin functions must be directly called";
     sema_int_literal_too_large = Error (0) "integer literal is too large to be represented in any integer type";
     sema_int_literal_implicitly_unsigned = ExtWarn [ImplicitlyUnsignedLiteral] (0) "integer literal is too large to be represented in a signed integer type, interpreting as unsigned";
     sema_size_t_literal_too_large = Error (1) "{0:signed |}'size_t' literal is out of range of possible {0:signed |}'size_t' values";
@@ -443,6 +448,8 @@ diag_ids! {
     parse_expected_namespace_name = Error (0) "expected namespace name";
     parse_expected_string_literal = Error (0) "expected string literal for diagnostic message in static_assert";
     parse_expected_class_name = Error (0) "expected class name";
+    parse_expected_string_literal_in = Error (1) "expected string literal in {0}";
+    parse_asm_string_kind = Error (1) "cannot use {0:unicode|wide|an empty} string literal in 'asm'";
     parse_missing_type_specifier = Error (0) "a type specifier is required for all declarations";
     parse_extraneous_closing_brace = Error (0) "extraneous closing brace ('}}')";
     parse_extraneous_rparen = Error (0) "extraneous ')' before ';'";
@@ -604,6 +611,7 @@ diag_ids! {
     sema_static_assert_requirement_failed_msg = Error (2) "static assertion failed due to requirement '{0}': {1}";
     sema_static_assert_not_ice = Error (0) "static assertion expression is not an integral constant expression";
     oven_enum_constexpr_conversion = WarningError [EnumConstexprConversion] (4) "integer value {0} is outside the valid range of values [{1}, {2}] for the enumeration type '{3}'";
+    oven_constant_evaluated_always_true = Warning [ConstantEvaluated] (1) "'{0}' will always evaluate to 'true' in a manifestly constant-evaluated expression";
     note_expr_evaluates_to = Note (3) "expression evaluates to '{0} {1} {2}'";
     note_constexpr_overflow = Note (2) "value {0} is outside the range of representable values of type {1}";
     note_expr_divide_by_zero = Note (0) "division by zero";
@@ -750,6 +758,14 @@ impl DiagId {
     /// `isDefaultMappingAsError`).
     pub const fn is_default_error(self) -> bool {
         matches!(self.default_severity(), Severity::Error | Severity::Fatal)
+    }
+
+    /// True if the id is reported even when located in a system header
+    /// (clang's `ShowInSystemHeader`): hard errors, and the few warnings
+    /// clang marks so (checked against clang 19 with `-isystem`).
+    pub const fn shows_in_system_header(self) -> bool {
+        matches!(self.class(), DiagClass::Error)
+            || matches!(self, DiagId::pp_warning_directive | DiagId::oven_enum_constexpr_conversion)
     }
 
     /// The group whose name is shown in `[-W...]` and in JSON output:

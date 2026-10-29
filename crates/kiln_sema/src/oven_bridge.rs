@@ -15,7 +15,7 @@ use kiln_ast::consts::{ConstStore, PrintOptions, Scalar};
 use kiln_ast::types::RecordLayout;
 use kiln_ast::{Ast, ConstValueId, DeclId, ExprId, StmtId};
 use kiln_diag::{Diag, DiagEngine};
-use kiln_oven::{Budget, EvalContext, EvalFailure, Oven, SemaBridge, VTableLayout};
+use kiln_oven::{Budget, EvalContext, EvalFailure, Oven, SemaBridge, Subobject, SubobjectId};
 use kiln_source::Span;
 
 use crate::Sema;
@@ -25,7 +25,6 @@ struct Bridge<'s, 'a, 'sm> {
     ast: &'s mut Ast,
     abi: &'s Target,
     diags: &'a DiagEngine<'sm>,
-    vt: VTableLayout,
 }
 
 impl SemaBridge for Bridge<'_, '_, '_> {
@@ -33,9 +32,11 @@ impl SemaBridge for Bridge<'_, '_, '_> {
         self.ast
     }
 
-    fn ensure_body(&mut self, f: DeclId) -> Option<StmtId> {
+    fn ensure_body(&mut self, f: DeclId, _oven: &mut Oven) -> Option<StmtId> {
         // M2 has no templates: a body exists once its definition has been
         // parsed (a later definition is picked up by the next evaluation).
+        // Implicit and defaulted members are defined here on demand from
+        // WP-067b.
         let d = self.ast.definition(f)?;
         self.ast.decls.function(d)?.body
     }
@@ -44,8 +45,21 @@ impl SemaBridge for Bridge<'_, '_, '_> {
         kiln_abi::ensure_layout(&mut *self.ast, record, self.abi)
     }
 
-    fn vtable(&mut self, _record: DeclId) -> &VTableLayout {
-        &self.vt
+    // Final overriders are read from `Ast::virtuals`; computing them on
+    // demand is WP-078a (spec/sema-class.md §3.5).
+    fn final_overrider(
+        &mut self,
+        most_derived: DeclId,
+        at: SubobjectId,
+        method: DeclId,
+    ) -> Option<(DeclId, SubobjectId)> {
+        let first = self.ast.first(most_derived);
+        self.ast.virtuals.get(first)?.final_overrider(at, method)
+    }
+
+    fn subobjects(&mut self, record: DeclId) -> &[Subobject] {
+        let first = self.ast.first(record);
+        self.ast.virtuals.get(first).map_or(&[], |v| &v.subobjects)
     }
 
     fn consts(&mut self) -> &mut ConstStore {
@@ -60,12 +74,7 @@ impl SemaBridge for Bridge<'_, '_, '_> {
 impl<'a, 'sm> Sema<'a, 'sm> {
     /// Splits `self` into the Oven and a bridge over the rest.
     fn oven_parts(&mut self) -> (&mut Oven, Bridge<'_, 'a, 'sm>) {
-        let bridge = Bridge {
-            ast: &mut self.ast,
-            abi: &self.abi,
-            diags: self.diags,
-            vt: VTableLayout::default(),
-        };
+        let bridge = Bridge { ast: &mut self.ast, abi: &self.abi, diags: self.diags };
         (&mut self.oven, bridge)
     }
 

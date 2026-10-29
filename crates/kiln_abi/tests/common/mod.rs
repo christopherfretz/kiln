@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 use kiln_abi::target::Target;
 use kiln_ast::attr::{AttrKind, AttrNode, AttrSyntax};
-use kiln_ast::decl::{Access, DeclKind, DefinitionBits, FieldData, FnSpec, TagKind};
+use kiln_ast::decl::{Access, BaseSpec, DeclKind, DefinitionBits, FieldData, FnSpec, TagKind};
 use kiln_ast::expr::Radix;
 use kiln_ast::names::DeclName;
 use kiln_ast::types::{BuiltinType, ExcSpec, FuncInfo, Quals, TypeContext, VectorKind};
@@ -114,6 +114,10 @@ pub struct RecDef {
     pub alignas: Option<u64>,
     /// A user-provided default constructor `S() {}` (not POD).
     pub user_ctor: bool,
+    /// Non-virtual public base classes: model item indices, in order.
+    pub bases: Vec<usize>,
+    /// `#pragma pack(push, N)` in effect at the definition (bytes).
+    pub pack: Option<u16>,
 }
 
 impl RecDef {
@@ -126,6 +130,8 @@ impl RecDef {
             aligned: None,
             alignas: None,
             user_ctor: false,
+            bases: Vec::new(),
+            pack: None,
         }
     }
 }
@@ -311,7 +317,14 @@ impl Model {
         if let Some(n) = r.alignas {
             let _ = write!(head, " alignas({n})");
         }
-        let _ = writeln!(s, "{head} {} {{", r.name);
+        if let Some(n) = r.pack {
+            let _ = writeln!(s, "#pragma pack(push, {n})");
+        }
+        let bases: Vec<String> =
+            r.bases.iter().map(|&i| format!("public {}", self.name_of(i))).collect();
+        let base_clause =
+            if bases.is_empty() { String::new() } else { format!(" : {}", bases.join(", ")) };
+        let _ = writeln!(s, "{head} {}{base_clause} {{", r.name);
         for f in &r.fields {
             let access = if f.private { "private" } else { "public" };
             let mut line = format!("{access}: ");
@@ -341,6 +354,9 @@ impl Model {
             let _ = writeln!(s, "public: {}() {{}}", r.name);
         }
         let _ = writeln!(s, "}};");
+        if r.pack.is_some() {
+            let _ = writeln!(s, "#pragma pack(pop)");
+        }
     }
 
     // ------------------------------------------------------------------
@@ -408,7 +424,24 @@ impl Model {
         if !attrs.is_empty() {
             ast.builder().attach_attrs(d, &attrs).expect("attrs");
         }
+        if let Some(n) = r.pack {
+            ast.decls.cold.record_pack.insert(d, n).expect("pack");
+        }
         ast.builder().begin_record_definition(d).expect("def");
+        if !r.bases.is_empty() {
+            let specs: Vec<BaseSpec> = r
+                .bases
+                .iter()
+                .map(|&i| BaseSpec {
+                    ty: ast.decls.get(decls[i]).ty().expect("base type"),
+                    loc: L,
+                    is_virtual: false,
+                    access: Access::Public,
+                    pack_expansion: false,
+                })
+                .collect();
+            ast.decls.set_bases(d, &specs, &mut ast.lists).expect("bases");
+        }
         for f in &r.fields {
             let ty = lower(ast, decls, f.ty());
             let name = match &f.name {

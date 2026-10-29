@@ -29,9 +29,13 @@ source manager it reports against.
 | `defining` | classes being defined (incomplete until `}`) |
 | `enums` | enumerations being defined (`EnumBuild`: running value, best type) |
 | `local_externs` | block-scope `extern` variables and functions, keyed by enclosing namespace and name (§3) |
-| `exceptions`, `rtti` | `-f[no-]exceptions`, `-f[no-]rtti` (default on; §5.4, §5.5) |
+| `exceptions`, `rtti` | `-f[no-]exceptions`, `-f[no-]rtti` (default on; §5.5, §5.6) |
 | `braced_args` | braced-init-list call arguments awaiting their parameter types (§6.1) |
 | `prototype_params` | parameter names of each parameter-declaration-clause being parsed (§4.3) |
+| `pragma_packs` | `#pragma pack` directives seen, with their location and argument text (recorded for the class layout, sema-class.md §6.1) |
+| `immediate` | depth of immediate function contexts ([expr.const]/16) entered by `if consteval` |
+| `oven` | the constant evaluator and its budget |
+| `classes`, `implicit_declared`, `delayed_access` (+ `delayed_access_depth`), `cleanup`, `extend_collector`, `unparsed_exc` | class state, sema-class.md §8.3 (`FnState` gains `this_ty`/`this_override`, `Scope` gains `nrvo`) |
 
 Constructors:
 - `Sema::new(ast, diags, TargetTypes)` picks the layout target from the
@@ -165,6 +169,29 @@ Redeclaration and linkage rules:
   here` note, and the new declaration is marked invalid. Compatible
   spellings (`noexcept`, `noexcept(true)`, `throw()`) compare equal
   through the canonical type.
+- **GNU asm labels** (`act_on_asm_label`, clang's
+  `ActOn{Function,Variable}Declarator` and `mergeDeclAttributes`): a
+  function or variable declarator's label becomes an `AsmLabel`
+  attribute, first in the declaration's attribute list, and its
+  `StringLitId` is recorded in the `asm_label` cold data of the entity's
+  first declaration, which the mangler reads (spec/abi.md). A typedef's
+  label is ignored, as clang ignores it.
+  - A redeclaration without a label inherits the previous declaration's
+    `AsmLabel` (a copy with the inherited flag, ahead of its own
+    attributes, as clang orders them).
+  - A label differing from the previous declaration's is
+    `conflicting asm label`, with a `previous declaration is here` note
+    at the old label.
+  - A label first written on a redeclaration of an entity that is
+    already used is `cannot apply asm label to {variable|function}
+    after its first use`.
+  - A label on an automatic variable (local, no storage class, not
+    `thread_local`) warns `ignored asm label '…' on automatic variable`.
+- **Initializing a non-variable** (clang's `AddInitializerToDecl`): an
+  initializer on a function or typedef declarator (reachable after an
+  asm label, where `{` is not a body) is
+  `illegal initializer (only variables can be initialized)` at the
+  declaration, which becomes invalid.
 
 ### 4.3 Functions
 - `act_on_start_function` and `act_on_finish_function` bracket a body.
@@ -177,10 +204,14 @@ Redeclaration and linkage rules:
     function had errors.
 - `main` must return `int` ([basic.start.main]/2). Falling off the end
   of `main` returns 0, so it never warns.
-- **Default arguments** (`act_on_param_default_arg`,
+- **Default arguments** (`act_on_param_default_init`,
   [dcl.fct.default]): copy-initialization of the parameter's type,
-  from an expression or a braced list. Calls fill omitted trailing
-  arguments with `CXXDefaultArgExpr`.
+  from an expression or a braced list, stored in the `ParamInfo` as
+  `DefaultArg::Parsed`; `act_on_declarator` merges them with the previous
+  declaration's and sets each `ParmVar`'s. (A member function's default
+  argument saved for the complete-class context is `DefaultArg::Unparsed`
+  and replayed through `act_on_param_default_arg`, sema-class.md §2.7.)
+  Calls fill omitted trailing arguments with `CXXDefaultArgExpr`.
 - **Trailing return types** (`Chunk::Function::trailing`,
   [dcl.fct]/2): the function's return type, and an error
   (`function with trailing return type must specify return type 'auto'`)
@@ -274,6 +305,8 @@ Redeclaration and linkage rules:
   |---|---|---|
   | ALIGNED | `ExprId` of the alignment expression | raw `QualType` of `alignas(type-id)` |
   | NODISCARD, DEPRECATED | `ExprId` of the string-literal message | — |
+  | ASM_LABEL | raw `StringLitId` of the label (flags bit 1: inherited) | — |
+  | BUILTIN | the builtin id (`kiln_ast::decl::builtin`; implicit, §5.4) | — |
 
 - **Semantics:**
   - `nodiscard` applies to functions, records and enumerations. A
@@ -490,7 +523,32 @@ The operands of nested `sizeof`, `alignof` and `noexcept` are not
 looked at (they are unevaluated). An erroneous operand gives an error
 expression.
 
-### 5.4 `throw` (`except.rs`)
+### 5.4 Builtin functions (`builtins.rs`)
+clang's `LazilyCreateBuiltin`. kiln knows one builtin,
+`bool __builtin_is_constant_evaluated() noexcept` (id 722, clang's
+`BIis_constant_evaluated`; `kiln_ast::decl::builtin`).
+- **Declaration:** when an unqualified id-expression's lookup finds
+  nothing and the name is a builtin (`lazily_create_builtin`), Sema
+  declares it in the translation unit: an implicit `LinkageSpecDecl`
+  (`extern "C"`) holding an implicit `extern` `FunctionDecl` with the
+  builtin's function type, its id in the `builtin_id` cold data, an
+  implicit `Builtin` attribute (invalid location, `a` = id) and an
+  implicit `NoThrow` attribute. Later lookups find that declaration.
+- **Name:** a `DeclRefExpr` to a builtin is a prvalue of the
+  placeholder type `QualType::BUILTIN_FN` (`<builtin fn type>`).
+- **Calls:** `act_on_call` converts the callee with
+  `BuiltinFnToFnPtr` (a pointer to the builtin's function type) and
+  type-checks the call as an ordinary one.
+- **Any other use** is `builtin functions must be directly called`
+  (`check_builtin_fn_use`), reported at the name by
+  `implicit_convert` and `decay` (initialization, operands,
+  arguments), by unary `&`, and by an expression statement (which then
+  gets no unused-result warning). The expression recovers as an error
+  expression.
+- **Evaluation:** the Oven answers `true` in a manifestly
+  constant-evaluated context and `false` otherwise (spec/oven.md);
+  codegen emits `i1 false` (spec/codegen.md).
+### 5.5 `throw` (`except.rs`)
 `act_on_throw(operand, loc)` ([expr.throw]) builds a `void`
 `CXXThrowExpr`:
 - With `-fno-exceptions` it is an error
@@ -507,7 +565,7 @@ expression.
   treats a `throw` it reaches as not a constant expression; codegen
   does not lower it yet.
 
-### 5.5 `typeid` (`rtti.rs`)
+### 5.6 `typeid` (`rtti.rs`)
 `act_on_typeid(Ok(expr) | Err(type), loc, rparen)` ([expr.typeid]):
 an lvalue of type `const std::type_info`.
 - `std::type_info` must have been declared (clang's
@@ -516,14 +574,16 @@ an lvalue of type `const std::type_info`.
 - References and top-level cv are ignored; a cv-qualified expression
   operand gets a `NoOp` cast to its unqualified type, as in clang.
 - A class type must be complete.
-- The operand is always unevaluated: M2 has no polymorphic classes.
-  The Oven and codegen do not evaluate `typeid` yet.
+- The operand is always unevaluated: M2 has no polymorphic classes, so
+  the node (`typeid_expr`, sema-class.md §5.1) is built with
+  `potentially_evaluated` false. The Oven and codegen do not evaluate
+  `typeid` yet.
 
-### 5.6 `dynamic_cast`
+### 5.7 `dynamic_cast`
 Parsed; `act_on_cast` reports `dynamic_cast` as not supported
 yet (it needs polymorphic classes).
 
-### 5.7 GNU extensions (`gnu.rs`)
+### 5.8 GNU extensions (`gnu.rs`)
 Kiln accepts these GNU extensions in C++ and matches clang's behaviour
 for them.
 
@@ -752,12 +812,12 @@ unscoped enumeration is reported (spec/oven.md "Integration").
   beyond the M2 basics. Design: spec/sema-templates.md.
 - **Other language features:** lambdas, exceptions (`try`/`catch`
   and lowering `throw`; exception specifications, the `noexcept`
-  operator and `throw` are §4.7, §5.3 and §5.4), coroutines,
+  operator and `throw` are §4.7, §5.3 and §5.5), coroutines,
   reflection, contracts.
 - **WP-064 follow-ups:**
   - prototype scope (§4.3)
   - `dynamic_cast` and polymorphic `typeid`
-  - class and array temporaries (§6.1) and compound literals (§5.7)
+  - class and array temporaries (§6.1) and compound literals (§5.8)
   - `-Wconstant-conversion` and `-Wliteral-conversion` alongside
     narrowing errors in list-initialization
   - statement expressions: `-Wgnu-statement-expression`, jumps into
@@ -770,6 +830,12 @@ unscoped enumeration is reported (spec/oven.md "Integration").
     templates
   - template arguments (`EvalKind::TemplateArg`)
   - constant-initialization of `constinit` variables
+  - constant-initialization checks of non-`constexpr` variables with
+    static storage and of local `const` integral variables
+    ([basic.start.static]/2): codegen folds them with
+    `fold_constant_init` (spec/oven.md), but Sema does not evaluate
+    them, so `-Wconstant-evaluated` is not reported in their
+    initializers as clang reports it
   - Sema still rejects some M2 constructs before evaluation: a
     reference bound to a temporary, a cast to a reference type,
     list-initialization of a temporary, and initialization of a class
