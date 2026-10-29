@@ -11,6 +11,7 @@
 mod empty;
 pub(crate) mod props;
 mod record;
+mod subobject;
 
 use kiln_ast::types::{BuiltinType, RecordLayout, TypeView};
 use kiln_ast::{Ast, DeclId, QualType};
@@ -18,6 +19,7 @@ use kiln_source::fx::{FxHashMap, FxHashSet};
 
 use crate::target::Target;
 use props::max_align_attr;
+pub use subobject::{MAX_SUBOBJECTS, subobjects};
 
 /// Size and alignment of a type, in bytes.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]

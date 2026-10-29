@@ -1,13 +1,18 @@
-//! The Itanium C++ ABI §2.4 class layout algorithm for classes without
+//! The Itanium C++ ABI §2.4 class layout algorithm with non-virtual
 //! bases (clang `ItaniumRecordLayoutBuilder`: `InitializeLayout`,
-//! `LayoutField`, `LayoutBitField`, `LayoutWideBitField`,
-//! `FinishLayout`). All quantities are in bits unless named `_bytes`.
+//! `LayoutNonVirtualBases`, `LayoutBase`, `LayoutField`,
+//! `LayoutBitField`, `LayoutWideBitField`, `FinishLayout`). All
+//! quantities are in bits unless named `_bytes`.
+//!
+//! Not yet: the primary base, the vptr and virtual bases (Itanium §2.4
+//! II.1, II.2 for dynamic classes, III; WP-078b). A dynamic class is laid
+//! out as if it had neither, and virtual base-specifiers are skipped.
 
 use kiln_ast::types::{BuiltinType, RecordLayout, TypeView};
 use kiln_ast::{Ast, DeclId, QualType};
 
 use super::empty::EmptySubobjectMap;
-use super::props::{self, ClassDesc, FieldDesc};
+use super::props::{self, BaseDesc, ClassDesc, FieldDesc};
 use super::{FieldTarget, Info, Layouter, RecordFacts, align_to};
 
 /// What the algorithm needs to know about one field, gathered before
@@ -42,7 +47,12 @@ struct Builder {
     padded_field_size: u64,
     /// `Alignment`, in bits (a multiple of 8).
     align: u64,
+    /// `MaxFieldAlignment` (`#pragma pack`), bits; 0 = none.
+    max_field_align: u64,
     offsets: Vec<u64>,
+    /// `Bases`: direct non-virtual bases with their byte offsets, in
+    /// declaration order.
+    bases: Vec<(DeclId, u64)>,
 }
 
 impl Builder {
@@ -50,6 +60,11 @@ impl Builder {
     fn update_align(&mut self, bits: u64) {
         let bytes_as_bits = bits / 8 * 8;
         self.align = self.align.max(bytes_as_bits);
+    }
+
+    /// `min(a, MaxFieldAlignment)` when a `#pragma pack` is in effect.
+    fn cap(&self, a: u64) -> u64 {
+        if self.max_field_align == 0 { a } else { a.min(self.max_field_align) }
     }
 }
 
@@ -113,13 +128,17 @@ pub(super) fn layout_record(lay: &mut Layouter<'_>, def: DeclId) -> RecordFacts 
     let is_pod = props::is_pod(ast, def, class, &descs, &|r| facts_of(r).is_some_and(|f| f.is_pod));
     let is_empty =
         props::is_empty(ast, def, class, &descs, &|r| facts_of(r).is_some_and(|f| f.is_empty));
+    let bases = props::bases(ast, def);
 
-    // clang `ComputeEmptySubobjectSizes` (fields only in M2).
-    let largest_empty = descs
+    // clang `EmptySubobjectMap::ComputeEmptySubobjectSizes`: every base
+    // (virtual ones included) and every field of class or array-of-class
+    // type.
+    let empty_size = |r: DeclId| facts_of(r).map(|f| if f.is_empty { f.layout.size } else { f.largest_empty });
+    let largest_empty = bases
         .iter()
-        .filter_map(|d| props::base_element_record(ast, d.ty))
-        .filter_map(facts_of)
-        .map(|f| if f.is_empty { f.layout.size } else { f.largest_empty })
+        .filter_map(|b| b.class)
+        .chain(descs.iter().filter_map(|d| props::base_element_record(ast, d.ty)))
+        .filter_map(empty_size)
         .max()
         .unwrap_or(0);
 
@@ -132,11 +151,17 @@ pub(super) fn layout_record(lay: &mut Layouter<'_>, def: DeclId) -> RecordFacts 
         unfilled: 0,
         padded_field_size: 0,
         align: 8,
+        max_field_align: class.max_field_align,
         offsets: Vec::with_capacity(ins.len()),
+        bases: Vec::new(),
     };
     b.update_align(record_align_attr);
 
     let mut empty_map = EmptySubobjectMap::new(largest_empty);
+    // LayoutNonVirtualBases (no primary base or vptr yet: WP-078b).
+    for base in &bases {
+        layout_base(&mut b, lay, &mut empty_map, base);
+    }
     for f in &ins {
         match f.desc.bit_width {
             Some(w) => layout_bit_field(&mut b, lay, f, w),
@@ -169,6 +194,7 @@ pub(super) fn layout_record(lay: &mut Layouter<'_>, def: DeclId) -> RecordFacts 
             nv_size,
             nv_align,
             fields: b.offsets.into_boxed_slice(),
+            bases: b.bases.into_boxed_slice(),
             ..RecordLayout::default()
         },
         is_pod,
@@ -177,6 +203,44 @@ pub(super) fn layout_record(lay: &mut Layouter<'_>, def: DeclId) -> RecordFacts 
         largest_empty,
         field_targets: ins.iter().map(|f| f.target).collect(),
     }
+}
+
+/// clang `LayoutBase` for a direct non-virtual base (Itanium §2.4
+/// II.2): an empty base goes at offset 0 unless another empty subobject
+/// of the same type is already there; any other base goes at `dsize`
+/// rounded up to its `nvalign`, moving up by `nvalign` while an empty
+/// subobject conflicts. The base adds its `nvsize` to `dsize`, so later
+/// members reuse its tail padding when it is not POD for layout.
+fn layout_base(b: &mut Builder, lay: &Layouter<'_>, map: &mut EmptySubobjectMap, base: &BaseDesc) {
+    if base.is_virtual {
+        return;
+    }
+    let Some(class) = base.class else { return };
+    let Some(facts) = lay.facts(class) else { return };
+    let base_size = facts.layout.size.saturating_mul(8);
+    let nv_size = facts.layout.nv_size.saturating_mul(8);
+    // `packed` does not apply to bases (clang >= 7 outside PS/AIX).
+    let base_align = u64::from(facts.layout.nv_align).saturating_mul(8);
+    if facts.is_empty && map.can_place_base(lay, class, 0) {
+        b.size = b.size.max(base_size);
+        b.update_align(base_align);
+        b.bases.push((class, 0));
+        return;
+    }
+    let base_align = b.cap(base_align).max(8);
+    let mut off = align_to(b.data_size, base_align);
+    // Terminates: past the last empty subobject every offset fits.
+    while !map.can_place_base(lay, class, off / 8) {
+        off = off.saturating_add(base_align);
+    }
+    if facts.is_empty {
+        b.size = b.size.max(off.saturating_add(base_size));
+    } else {
+        b.data_size = off.saturating_add(nv_size);
+        b.size = b.size.max(b.data_size);
+    }
+    b.update_align(base_align);
+    b.bases.push((class, off / 8));
 }
 
 /// clang `LayoutField` for a non-bit-field member.
@@ -198,7 +262,13 @@ fn layout_field(b: &mut Builder, lay: &Layouter<'_>, map: &mut EmptySubobjectMap
         && (f.class.is_none() || class_facts.is_some_and(|c| c.is_pod || c.packed)))
         || f.desc.packed;
     let attr = f.max_align / 8 * 8;
-    let field_align = if field_packed { attr.max(8) } else { f.info.align.max(attr) };
+    // The maximum field alignment (`#pragma pack`) overrides even the
+    // field's own `aligned` attribute.
+    let field_align = if field_packed {
+        b.cap(attr.max(8))
+    } else {
+        b.cap(f.info.align.max(attr))
+    };
 
     off = align_to(off, field_align);
     if !b.is_union {
@@ -238,13 +308,24 @@ fn layout_bit_field(b: &mut Builder, lay: &Layouter<'_>, f: &FieldIn, width: u64
     if field_packed && width != 0 {
         field_align = 1;
     }
+    let mut unpacked_align = f.info.align.max(1);
     let explicit = f.max_align;
     if explicit != 0 {
         field_align = field_align.max(explicit);
+        unpacked_align = unpacked_align.max(explicit);
     }
-    if width == 0 || (off % field_align) + width > storage_unit {
+    // A `#pragma pack` overrides even `aligned`, for non-zero widths.
+    let mfa = b.max_field_align;
+    if mfa != 0 && width != 0 {
+        unpacked_align = unpacked_align.min(mfa);
+        field_align = if field_packed { unpacked_align } else { field_align.min(mfa) };
+    }
+    // Any `#pragma pack` suppresses the padding that keeps a bit-field
+    // within one aligned unit.
+    let allow_padding = mfa == 0;
+    if width == 0 || (allow_padding && (off % field_align) + width > storage_unit) {
         off = align_to(off, field_align);
-    } else if explicit != 0 {
+    } else if explicit != 0 && (mfa == 0 || explicit <= mfa) {
         off = align_to(off, explicit);
     }
     b.offsets.push(off);

@@ -156,10 +156,13 @@ pub(crate) struct ClassDesc {
     pub is_union: bool,
     /// `__attribute__((packed))` on the class.
     pub packed: bool,
-    /// Has at least one base class (laid out in M3; spec/abi.md §8).
+    /// Has at least one base class.
     pub has_bases: bool,
     /// Polymorphic ([class.virtual]/1) or has a virtual base.
     pub dynamic: bool,
+    /// The `#pragma pack` value in effect at the definition, in bits
+    /// (clang `MaxFieldAlignment`; 0 = none).
+    pub max_field_align: u64,
 }
 
 pub(crate) fn class_desc(ast: &Ast, def: DeclId) -> ClassDesc {
@@ -175,7 +178,34 @@ pub(crate) fn class_desc(ast: &Ast, def: DeclId) -> ClassDesc {
         dynamic: has_virtual_fn
             || defn.contains(DefinitionBits::POLYMORPHIC)
             || defn.contains(DefinitionBits::HAS_VIRTUAL_BASES),
+        max_field_align: ast.decls.cold.record_pack.get(def).map_or(0, |&n| u64::from(n) * 8),
     }
+}
+
+/// One direct base-specifier of a class, as the layout sees it.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct BaseDesc {
+    /// The base class (first declaration); `None` for a dependent or
+    /// otherwise non-class base type, which is skipped.
+    pub class: Option<DeclId>,
+    /// `virtual` ([class.mi]/4).
+    pub is_virtual: bool,
+    /// The index of the base-specifier in the class's base list.
+    pub index: u16,
+}
+
+/// The base-specifiers of the class definition `def`, in declaration
+/// order ([class.derived]/1).
+pub(crate) fn bases(ast: &Ast, def: DeclId) -> Vec<BaseDesc> {
+    ast.decls
+        .bases(def, &ast.lists)
+        .enumerate()
+        .map(|(i, b)| BaseDesc {
+            class: as_record(ast, b.ty),
+            is_virtual: b.is_virtual,
+            index: u16::try_from(i).unwrap_or(u16::MAX),
+        })
+        .collect()
 }
 
 /// The record a field's type designates through arrays (clang
