@@ -88,6 +88,11 @@ impl Sema<'_, '_> {
                     .and_then(|d| self.ast.decls.record(d))
                     .is_some_and(|r| r.defn.contains(DefinitionBits::POLYMORPHIC))
         });
+        if let Ok(e) = operand
+            && !evaluated
+        {
+            self.check_unevaluated_side_effects(e);
+        }
         let operand = match operand {
             Ok(e) if !self.ast.types.effective_quals(written).is_empty() => {
                 let vk = self.ast.exprs.get(e).value_category();

@@ -2559,6 +2559,7 @@ impl Sema<'_, '_> {
             self.emit(msg);
             return self.recover_err(&[e], loc);
         }
+        self.check_unevaluated_side_effects(e);
         let ty = self.ety(e);
         // [expr.sizeof]/1: in C++ an expression of function type is an
         // error, not the GNU extension the type form gets.

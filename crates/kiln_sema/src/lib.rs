@@ -33,6 +33,7 @@ pub mod new_delete;
 mod oven_bridge;
 mod rtti;
 pub mod scope;
+mod side_effects;
 pub mod stmt;
 pub mod target;
 pub mod templ;

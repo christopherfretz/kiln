@@ -102,6 +102,7 @@ impl Sema<'_, '_> {
         if self.is_err_expr(e) {
             return None;
         }
+        self.check_unevaluated_side_effects(e);
         // An instantiation-dependent operand: the type is computed at
         // instantiation, canonically `DependentDecltype` (clang's
         // `getDecltypeType`; the underlying type is `<dependent type>` for a

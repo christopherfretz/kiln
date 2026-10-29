@@ -175,6 +175,7 @@ impl Sema<'_, '_> {
         if self.is_err_expr(e) {
             return self.recover_err(&[e], loc);
         }
+        self.check_unevaluated_side_effects(e);
         let value = !self.can_throw(e);
         self.builder().noexcept_expr(e, value, QualType::BOOL, loc, rparen)
     }
