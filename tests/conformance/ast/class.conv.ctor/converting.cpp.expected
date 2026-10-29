@@ -1,0 +1,53 @@
+TranslationUnitDecl
+|-CXXRecordDecl referenced struct A definition
+| `-CXXConstructorDecl used A 'void (int)'
+|   `-ParmVarDecl 'int'
+|-CXXRecordDecl referenced struct B definition
+| `-CXXConversionDecl used operator A 'A ()'
+|-CXXRecordDecl referenced struct C definition
+| `-CXXConstructorDecl used C 'void (B)'
+|   `-ParmVarDecl 'B'
+|-FunctionDecl used g 'void (const A &)'
+| `-ParmVarDecl 'const A &'
+|-FunctionDecl used h 'void (C)'
+| `-ParmVarDecl 'C'
+`-FunctionDecl t 'void (B)'
+  |-ParmVarDecl used b 'B'
+  `-CompoundStmt
+    |-DeclStmt
+    | `-VarDecl r 'const A &' cinit
+    |   `-ExprWithCleanups 'const A' lvalue
+    |     `-MaterializeTemporaryExpr 'const A' lvalue extended by Var 'r' 'const A &'
+    |       `-CXXConstructExpr 'const A' 'void (int)'
+    |         `-IntegerLiteral 'int' 1
+    |-ExprWithCleanups 'void'
+    | `-CallExpr 'void'
+    |   |-ImplicitCastExpr 'void (*)(const A &)' <FunctionToPointerDecay>
+    |   | `-DeclRefExpr 'void (const A &)' lvalue Function 'g' 'void (const A &)'
+    |   `-MaterializeTemporaryExpr 'const A' lvalue
+    |     `-CXXConstructExpr 'const A' 'void (int)'
+    |       `-IntegerLiteral 'int' 1
+    |-DeclStmt
+    | `-VarDecl r2 'const A &' cinit
+    |   `-ExprWithCleanups 'const A' lvalue
+    |     `-MaterializeTemporaryExpr 'const A' lvalue extended by Var 'r2' 'const A &'
+    |       `-ImplicitCastExpr 'const A' <NoOp>
+    |         `-ImplicitCastExpr 'A' <UserDefinedConversion>
+    |           `-CXXMemberCallExpr 'A'
+    |             `-MemberExpr '<bound member function type>' .operator A
+    |               `-DeclRefExpr 'B' lvalue ParmVar 'b' 'B'
+    |-CallExpr 'void'
+    | |-ImplicitCastExpr 'void (*)(C)' <FunctionToPointerDecay>
+    | | `-DeclRefExpr 'void (C)' lvalue Function 'h' 'void (C)'
+    | `-ImplicitCastExpr 'C' <ConstructorConversion>
+    |   `-CXXConstructExpr 'C' 'void (B)'
+    |     `-CXXConstructExpr 'B' 'void (const B &) noexcept'
+    |       `-ImplicitCastExpr 'const B' lvalue <NoOp>
+    |         `-DeclRefExpr 'B' lvalue ParmVar 'b' 'B'
+    `-DeclStmt
+      `-VarDecl c 'C' cinit
+        `-ImplicitCastExpr 'C' <ConstructorConversion>
+          `-CXXConstructExpr 'C' 'void (B)'
+            `-CXXConstructExpr 'B' 'void (const B &) noexcept'
+              `-ImplicitCastExpr 'const B' lvalue <NoOp>
+                `-DeclRefExpr 'B' lvalue ParmVar 'b' 'B'

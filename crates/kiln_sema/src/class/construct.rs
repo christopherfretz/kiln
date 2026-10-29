@@ -121,9 +121,13 @@ impl Sema<'_, '_> {
         let class = conv::bases::complete_class(self, class)?;
         let (entity, ck) = self.take_ctor_entity();
         let loc = site.loc;
-        if style.is_list() && self.has_init_list_ctor(class) {
-            // todo(WP-067b follow-up): initializer-list constructors
-            // ([dcl.init.list]/3.7, [over.match.list]/1.1).
+        if style.is_list()
+            && self.has_init_list_ctor(class)
+            && self.init_list_phase1_viable(class, args)
+        {
+            // todo(WP-067b follow-up): building the initializer_list
+            // object for an initializer-list constructor
+            // ([dcl.init.list]/3.7, [over.match.list]/1.1; phase 2 below).
             self.unsupported("initialization by an initializer-list constructor", loc);
             return Some(self.recover(ty, args, loc));
         }

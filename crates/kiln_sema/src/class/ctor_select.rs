@@ -182,4 +182,42 @@ impl Sema<'_, '_> {
         }
         false
     }
+
+    /// Whether [over.match.list]/1.1 (phase 1) would select an
+    /// initializer-list constructor of `class` for the list elements
+    /// `args`: some initializer-list constructor's element type is
+    /// reachable from every element ([over.ics.list]/5). An empty list
+    /// with a default constructor value-initializes ([dcl.init.list]/3.5);
+    /// a constructor template or a nested braced list is assumed viable.
+    pub(crate) fn init_list_phase1_viable(&mut self, class: DeclId, args: &[ExprId]) -> bool {
+        let c = self.class_def(class);
+        if args.is_empty() && self.has_default_ctor_cheap(c) {
+            return false;
+        }
+        if args
+            .iter()
+            .any(|&a| self.ast.exprs.get(a).kind() == kiln_ast::expr::ExprKind::InitListExpr)
+        {
+            return true;
+        }
+        for f in self.ast.constructors(c).iter().collect::<Vec<_>>() {
+            match self.kind_of(f) {
+                DeclKind::FunctionTemplate => return true,
+                DeclKind::CXXConstructor if self.is_init_list_ctor(f) => {}
+                _ => continue,
+            }
+            let params = self.param_decls(f);
+            let pty = self.ast.decls.get(params[0]).ty().unwrap_or(QualType::ERROR);
+            let t = self.non_reference(pty);
+            let Some(elem) = self.initializer_list_element(t) else { continue };
+            let ok = args.iter().all(|&a| {
+                let info = self.arg_info(a);
+                !self.try_implicit_conversion(&info, elem, IcsOptions::NONE).is_bad()
+            });
+            if ok {
+                return true;
+            }
+        }
+        false
+    }
 }

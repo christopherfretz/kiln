@@ -1,0 +1,116 @@
+TranslationUnitDecl
+|-CXXRecordDecl referenced struct E definition
+| `-CXXConversionDecl used operator bool 'bool () const'
+|-CXXRecordDecl referenced struct I definition
+| `-CXXConversionDecl used operator int 'int () const'
+|-CXXRecordDecl referenced struct Pp definition
+| `-CXXConversionDecl used operator int * 'int *()'
+|-FunctionDecl g 'bool (E, I, Pp)'
+| |-ParmVarDecl used e 'E'
+| |-ParmVarDecl used i 'I'
+| |-ParmVarDecl used p 'Pp'
+| `-CompoundStmt
+|   |-IfStmt
+|   | |-ImplicitCastExpr 'bool' <UserDefinedConversion>
+|   | | `-CXXMemberCallExpr 'bool'
+|   | |   `-MemberExpr '<bound member function type>' .operator bool
+|   | |     `-ImplicitCastExpr 'const E' lvalue <NoOp>
+|   | |       `-DeclRefExpr 'E' lvalue ParmVar 'e' 'E'
+|   | `-CompoundStmt
+|   |-WhileStmt
+|   | |-ImplicitCastExpr 'bool' <IntegralToBoolean>
+|   | | `-ImplicitCastExpr 'int' <UserDefinedConversion>
+|   | |   `-CXXMemberCallExpr 'int'
+|   | |     `-MemberExpr '<bound member function type>' .operator int
+|   | |       `-ImplicitCastExpr 'const I' lvalue <NoOp>
+|   | |         `-DeclRefExpr 'I' lvalue ParmVar 'i' 'I'
+|   | `-CompoundStmt
+|   |-DeclStmt
+|   | `-VarDecl a 'bool' cinit
+|   |   `-UnaryOperator 'bool' prefix '!' cannot overflow
+|   |     `-ImplicitCastExpr 'bool' <UserDefinedConversion>
+|   |       `-CXXMemberCallExpr 'bool'
+|   |         `-MemberExpr '<bound member function type>' .operator bool
+|   |           `-ImplicitCastExpr 'const E' lvalue <NoOp>
+|   |             `-DeclRefExpr 'E' lvalue ParmVar 'e' 'E'
+|   |-DeclStmt
+|   | `-VarDecl b 'bool' cinit
+|   |   `-BinaryOperator 'bool' '&&'
+|   |     |-ImplicitCastExpr 'bool' <UserDefinedConversion>
+|   |     | `-CXXMemberCallExpr 'bool'
+|   |     |   `-MemberExpr '<bound member function type>' .operator bool
+|   |     |     `-ImplicitCastExpr 'const E' lvalue <NoOp>
+|   |     |       `-DeclRefExpr 'E' lvalue ParmVar 'e' 'E'
+|   |     `-ImplicitCastExpr 'bool' <IntegralToBoolean>
+|   |       `-ImplicitCastExpr 'int' <UserDefinedConversion>
+|   |         `-CXXMemberCallExpr 'int'
+|   |           `-MemberExpr '<bound member function type>' .operator int
+|   |             `-ImplicitCastExpr 'const I' lvalue <NoOp>
+|   |               `-DeclRefExpr 'I' lvalue ParmVar 'i' 'I'
+|   |-DeclStmt
+|   | `-VarDecl c 'bool' cinit
+|   |   `-BinaryOperator 'bool' '||'
+|   |     |-ImplicitCastExpr 'bool' <UserDefinedConversion>
+|   |     | `-CXXMemberCallExpr 'bool'
+|   |     |   `-MemberExpr '<bound member function type>' .operator bool
+|   |     |     `-ImplicitCastExpr 'const E' lvalue <NoOp>
+|   |     |       `-DeclRefExpr 'E' lvalue ParmVar 'e' 'E'
+|   |     `-ImplicitCastExpr 'bool' <PointerToBoolean>
+|   |       `-ImplicitCastExpr 'int *' <UserDefinedConversion>
+|   |         `-CXXMemberCallExpr 'int *'
+|   |           `-MemberExpr '<bound member function type>' .operator int *
+|   |             `-DeclRefExpr 'Pp' lvalue ParmVar 'p' 'Pp'
+|   |-DeclStmt
+|   | `-VarDecl d 'int' cinit
+|   |   `-ConditionalOperator 'int'
+|   |     |-ImplicitCastExpr 'bool' <UserDefinedConversion>
+|   |     | `-CXXMemberCallExpr 'bool'
+|   |     |   `-MemberExpr '<bound member function type>' .operator bool
+|   |     |     `-ImplicitCastExpr 'const E' lvalue <NoOp>
+|   |     |       `-DeclRefExpr 'E' lvalue ParmVar 'e' 'E'
+|   |     |-IntegerLiteral 'int' 1
+|   |     `-IntegerLiteral 'int' 2
+|   |-ForStmt has_cond
+|   | |-ImplicitCastExpr 'bool' <PointerToBoolean>
+|   | | `-ImplicitCastExpr 'int *' <UserDefinedConversion>
+|   | |   `-CXXMemberCallExpr 'int *'
+|   | |     `-MemberExpr '<bound member function type>' .operator int *
+|   | |       `-DeclRefExpr 'Pp' lvalue ParmVar 'p' 'Pp'
+|   | `-CompoundStmt
+|   |-DoStmt
+|   | |-CompoundStmt
+|   | `-ImplicitCastExpr 'bool' <UserDefinedConversion>
+|   |   `-CXXMemberCallExpr 'bool'
+|   |     `-MemberExpr '<bound member function type>' .operator bool
+|   |       `-ImplicitCastExpr 'const E' lvalue <NoOp>
+|   |         `-DeclRefExpr 'E' lvalue ParmVar 'e' 'E'
+|   `-ReturnStmt
+|     `-CXXStaticCastExpr 'bool' static_cast<bool> <NoOp>
+|       `-ImplicitCastExpr 'bool' <UserDefinedConversion> part_of_explicit_cast
+|         `-CXXMemberCallExpr 'bool'
+|           `-MemberExpr '<bound member function type>' .operator bool
+|             `-ImplicitCastExpr 'const E' lvalue <NoOp>
+|               `-DeclRefExpr 'E' lvalue ParmVar 'e' 'E'
+|-FunctionDecl h 'long (I)'
+| |-ParmVarDecl used i 'I'
+| `-CompoundStmt
+|   `-ReturnStmt
+|     `-ImplicitCastExpr 'long' <IntegralCast>
+|       `-ImplicitCastExpr 'int' <UserDefinedConversion>
+|         `-CXXMemberCallExpr 'int'
+|           `-MemberExpr '<bound member function type>' .operator int
+|             `-ImplicitCastExpr 'const I' xvalue <NoOp>
+|               `-DeclRefExpr 'I' lvalue ParmVar 'i' 'I'
+|-FunctionDecl used mk 'I ()'
+`-FunctionDecl k 'int ()'
+  `-CompoundStmt
+    `-ReturnStmt
+      `-ExprWithCleanups 'int'
+        `-ImplicitCastExpr 'int' <UserDefinedConversion>
+          `-CXXMemberCallExpr 'int'
+            `-MemberExpr '<bound member function type>' .operator int
+              `-ImplicitCastExpr 'const I' lvalue <NoOp>
+                `-MaterializeTemporaryExpr 'I' lvalue
+                  `-CallExpr 'I'
+                    `-ImplicitCastExpr 'I (*)()' <FunctionToPointerDecay>
+                      `-DeclRefExpr 'I ()' lvalue Function 'mk' 'I ()'

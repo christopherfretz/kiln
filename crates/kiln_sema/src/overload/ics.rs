@@ -703,7 +703,7 @@ impl Sema<'_, '_> {
 
     /// Whether `c` has a default constructor (a cheap check for the
     /// `{}` rule of [dcl.init.list]/3.5).
-    fn has_default_ctor_cheap(&mut self, c: DeclId) -> bool {
+    pub(crate) fn has_default_ctor_cheap(&mut self, c: DeclId) -> bool {
         let c = self.class_def(c);
         self.ensure_implicit(c, crate::class::SpecialKind::DefaultCtor);
         let ctors: Vec<DeclId> = self.ast.constructors(c).iter().collect();
@@ -1079,18 +1079,8 @@ impl Sema<'_, '_> {
             return true;
         }
         let a = ArgInfo::of_type(r, ValueCategory::PRValue);
-        match conv::standard_conversion_from(
-            self,
-            a.ty,
-            a.vk,
-            false,
-            None,
-            t,
-            conv::ConvCtx::Initialization,
-        ) {
-            Some(s) => {
-                s.second == conv::SecondStep::Identity && s.first == conv::FirstStep::Identity
-            }
+        match standard_conversion_from(self, a.ty, a.vk, false, None, t, ConvCtx::Initialization) {
+            Some(s) => s.second == SecondStep::Identity && s.first == conv::FirstStep::Identity,
             None => false,
         }
     }

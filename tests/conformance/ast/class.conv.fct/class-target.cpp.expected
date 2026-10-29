@@ -1,0 +1,77 @@
+TranslationUnitDecl
+|-CXXRecordDecl referenced struct B definition
+| `-FieldDecl referenced v 'int'
+|-CXXRecordDecl referenced struct P definition
+| `-CXXConversionDecl used operator B 'B ()'
+|-CXXRecordDecl referenced struct R definition
+| `-CXXConversionDecl used operator B & 'B &()'
+|-FunctionDecl used take 'void (B)'
+| `-ParmVarDecl 'B'
+|-FunctionDecl used takec 'void (const B &)'
+| `-ParmVarDecl 'const B &'
+|-FunctionDecl f 'void (P, R)'
+| |-ParmVarDecl used p 'P'
+| |-ParmVarDecl used r 'R'
+| `-CompoundStmt
+|   |-DeclStmt
+|   | `-VarDecl a 'B' cinit
+|   |   `-CXXStaticCastExpr 'B' static_cast<B> <NoOp>
+|   |     `-ImplicitCastExpr 'B' <UserDefinedConversion> part_of_explicit_cast
+|   |       `-CXXMemberCallExpr 'B'
+|   |         `-MemberExpr '<bound member function type>' .operator B
+|   |           `-DeclRefExpr 'P' lvalue ParmVar 'p' 'P'
+|   |-DeclStmt
+|   | `-VarDecl c 'B' cinit
+|   |   `-ImplicitCastExpr 'B' <UserDefinedConversion>
+|   |     `-CXXMemberCallExpr 'B'
+|   |       `-MemberExpr '<bound member function type>' .operator B
+|   |         `-DeclRefExpr 'P' lvalue ParmVar 'p' 'P'
+|   |-DeclStmt
+|   | `-VarDecl d 'B' callinit
+|   |   `-ImplicitCastExpr 'B' <UserDefinedConversion>
+|   |     `-CXXMemberCallExpr 'B'
+|   |       `-MemberExpr '<bound member function type>' .operator B
+|   |         `-DeclRefExpr 'P' lvalue ParmVar 'p' 'P'
+|   |-DeclStmt
+|   | `-VarDecl e 'B' cinit
+|   |   `-CStyleCastExpr 'B' <ConstructorConversion>
+|   |     `-CXXConstructExpr 'B' 'void (const B &) noexcept'
+|   |       `-ImplicitCastExpr 'const B' lvalue <NoOp>
+|   |         `-ImplicitCastExpr 'B' lvalue <UserDefinedConversion>
+|   |           `-CXXMemberCallExpr 'B' lvalue
+|   |             `-MemberExpr '<bound member function type>' .operator B &
+|   |               `-DeclRefExpr 'R' lvalue ParmVar 'r' 'R'
+|   |-CallExpr 'void'
+|   | |-ImplicitCastExpr 'void (*)(B)' <FunctionToPointerDecay>
+|   | | `-DeclRefExpr 'void (B)' lvalue Function 'take' 'void (B)'
+|   | `-ImplicitCastExpr 'B' <UserDefinedConversion>
+|   |   `-CXXMemberCallExpr 'B'
+|   |     `-MemberExpr '<bound member function type>' .operator B
+|   |       `-DeclRefExpr 'P' lvalue ParmVar 'p' 'P'
+|   |-ExprWithCleanups 'void'
+|   | `-CallExpr 'void'
+|   |   |-ImplicitCastExpr 'void (*)(const B &)' <FunctionToPointerDecay>
+|   |   | `-DeclRefExpr 'void (const B &)' lvalue Function 'takec' 'void (const B &)'
+|   |   `-MaterializeTemporaryExpr 'const B' lvalue
+|   |     `-ImplicitCastExpr 'const B' <NoOp>
+|   |       `-ImplicitCastExpr 'B' <UserDefinedConversion>
+|   |         `-CXXMemberCallExpr 'B'
+|   |           `-MemberExpr '<bound member function type>' .operator B
+|   |             `-DeclRefExpr 'P' lvalue ParmVar 'p' 'P'
+|   `-CallExpr 'void'
+|     |-ImplicitCastExpr 'void (*)(const B &)' <FunctionToPointerDecay>
+|     | `-DeclRefExpr 'void (const B &)' lvalue Function 'takec' 'void (const B &)'
+|     `-ImplicitCastExpr 'const B' lvalue <NoOp>
+|       `-ImplicitCastExpr 'B' lvalue <UserDefinedConversion>
+|         `-CXXMemberCallExpr 'B' lvalue
+|           `-MemberExpr '<bound member function type>' .operator B &
+|             `-DeclRefExpr 'R' lvalue ParmVar 'r' 'R'
+`-FunctionDecl ret 'B (P)'
+  |-ParmVarDecl used p 'P'
+  `-CompoundStmt
+    `-ReturnStmt
+      `-ImplicitCastExpr 'B' <UserDefinedConversion>
+        `-CXXMemberCallExpr 'B'
+          `-MemberExpr '<bound member function type>' .operator B
+            `-ImplicitCastExpr 'P' xvalue <NoOp>
+              `-DeclRefExpr 'P' lvalue ParmVar 'p' 'P'

@@ -11,7 +11,7 @@ use kiln_source::Loc;
 
 use crate::Sema;
 use crate::conv;
-use crate::init::{InitItem, InitList, InitValue};
+use crate::init::{InitList, InitValue};
 
 impl Sema<'_, '_> {
     /// The top-level expressions of `l` (nested lists and designators
@@ -70,25 +70,21 @@ impl Sema<'_, '_> {
     }
 
     /// Whether list-initialization of `ty` from `l` is a viable implicit
-    /// conversion sequence ([over.ics.list]): a scalar takes at most one
-    /// convertible, unbraced element; an aggregate at most as many
-    /// elements as it has scalar subobjects (brace elision).
+    /// conversion sequence ([over.ics.list]): the one-candidate set's
+    /// argument conversion.
     fn list_viable(&mut self, ty: QualType, l: &InitList) -> bool {
-        if self.is_error_type(ty) || self.ast.types.is_reference(ty) {
+        if self.is_error_type(ty) {
             return true;
         }
-        if self.is_aggregate(ty) {
-            return self.scalar_leaves(ty).is_none_or(|m| l.items.len() as u64 <= m);
-        }
-        match l.items.as_slice() {
-            [] => true,
-            [InitItem { value: InitValue::Expr(e), designator }] if designator.is_empty() => {
-                let e = *e;
-                self.is_err_expr(e)
-                    || conv::implicit_convert(self, e, ty, conv::ConvCtx::Initialization).is_ok()
-            }
-            _ => false,
-        }
+        let idx = u32::try_from(self.ovl.lists.len()).unwrap_or(u32::MAX);
+        self.ovl.lists.push(l.clone());
+        let a = crate::overload::ArgInfo {
+            list: Some(idx),
+            ..crate::overload::ArgInfo::of_type(QualType::VOID, ValueCategory::PRValue)
+        };
+        let ics = self.try_implicit_conversion(&a, ty, crate::overload::IcsOptions::CANDIDATE_ARG);
+        self.ovl.lists.pop();
+        !ics.is_bad()
     }
 
     /// The number of scalar subobjects of aggregate `ty` that brace
