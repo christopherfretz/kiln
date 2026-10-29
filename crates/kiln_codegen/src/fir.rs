@@ -291,6 +291,20 @@ impl Fir {
         &self.insts[i as usize].op
     }
 
+    /// LLVM `getOrEnforceKnownAlignment` on a pointer: raises the
+    /// alignment of an `alloca` to at least `align` and returns the
+    /// resulting alignment, or `None` if `p` is not an `alloca`.
+    pub fn enforce_alloca_align(&mut self, p: V, align: u64) -> Option<u64> {
+        let V::I(i) = p else { return None };
+        match &mut self.insts[i as usize].op {
+            Op::Alloca { align: a, .. } => {
+                *a = (*a).max(align);
+                Some(*a)
+            }
+            _ => None,
+        }
+    }
+
     /// Adds a case to switch `i`.
     pub fn add_switch_case(&mut self, i: u32, v: V, d: Blk) {
         if let Op::Switch { cases, .. } = &mut self.insts[i as usize].op {

@@ -11,6 +11,7 @@ use kiln_llvm::{
     Attr, AttrKind, AttrList, BinOp, CallOpts, CastOp, ConstData, Flags, FloatPredicate, FuncId,
     GepFlags, IntPredicate, IntValue, MemOpts, MetadataId, TypeId as LTy, Value,
 };
+use kiln_source::Loc;
 use kiln_source::fx::FxHashMap;
 
 use crate::fir::{Blk, Fir, Op, V};
@@ -46,6 +47,25 @@ pub(crate) struct LoopFrame {
     pub md: Option<MetadataId>,
 }
 
+/// A parameter's value after clang `EmitFunctionProlog`.
+enum ParamVal {
+    /// A scalar value, spilled to a `.addr` alloca by `EmitParmDecl`.
+    Direct(V),
+    /// The parameter's storage; `spill` for a non-`byval` indirect
+    /// argument, whose pointer `EmitParmDecl` stores to an
+    /// `.indirect_addr` alloca.
+    Indirect(Addr, bool),
+}
+
+/// An evaluated call argument (clang `CallArg`).
+#[derive(Clone, Copy)]
+pub(crate) enum CallArg {
+    /// A scalar value.
+    Scalar(V),
+    /// An aggregate in memory (`agg.tmp`).
+    Agg(Addr),
+}
+
 /// How the function returns.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum RetKind {
@@ -74,6 +94,9 @@ pub(crate) struct Fx {
     pub sw: Option<SwitchCtx>,
     pub loops: Vec<LoopFrame>,
     pub mustprogress: bool,
+    /// clang `LargestVectorWidth`: the widest vector in the signature or
+    /// any call's IR arguments and result (x86 `min-legal-vector-width`).
+    pub vector_width: u64,
     /// Calls: (instruction, callee, call-site nounwind).
     pub calls: Vec<(u32, Option<FuncId>, bool)>,
     pub loop_mp: Option<MetadataId>,
@@ -97,6 +120,7 @@ impl Fx {
             sw: None,
             loops: Vec::new(),
             mustprogress: true,
+            vector_width: 0,
             calls: Vec::new(),
             loop_mp: None,
         }
@@ -135,6 +159,7 @@ impl Cg<'_> {
         self.f.func = Some(f);
         self.f.is_main = is_main;
         self.f.sig = Some(sig.clone());
+        self.f.vector_width = sig.info.max_vector_width;
         self.set_def_linkage(f, d);
 
         // StartFunction.
@@ -171,34 +196,36 @@ impl Cg<'_> {
             let z = self.m.const_int(slot.ty, 0);
             self.store(V::C(z), slot.v, slot.align, false);
         }
-        // EmitFunctionProlog + EmitParmDecl.
+        // EmitFunctionProlog: every argument first, then EmitParmDecl for
+        // each parameter in order.
         let param_decls: Vec<DeclId> = ast.lists.iter(fd.params).collect();
+        let mut vals = Vec::with_capacity(param_decls.len());
         for (i, &p) in param_decls.iter().enumerate() {
             let pq = ast.decls.get(p).ty().expect("param type");
             let info = sig.info.args[i].clone();
-            match info.kind {
-                ArgKind::Direct { .. } | ArgKind::Extend { .. } if !self.is_aggregate(pq) => {
+            let loc = Some(ast.decls.get(p).loc());
+            vals.push(self.prolog_arg(&info.kind, pq, &mut arg_no, loc)?);
+        }
+        for (&p, val) in param_decls.iter().zip(vals) {
+            let pq = ast.decls.get(p).ty().expect("param type");
+            let addr = match val {
+                ParamVal::Indirect(a, spill) => {
+                    if spill {
+                        let p = self.f.fir.alloca(LTy::PTR, 8);
+                        self.store(a.v, p, 8, false);
+                    }
+                    a
+                }
+                ParamVal::Direct(v) => {
                     let mt = self.mty(pq);
                     let (_, align) = self.size_align(pq);
                     let a = self.f.fir.alloca(mt, align);
                     let addr = Addr { v: a, ty: mt, align };
-                    self.store_scalar(V::Arg(arg_no), addr, pq);
-                    self.f.locals.insert(p, addr);
-                    arg_no += 1;
+                    self.store_scalar(v, addr, pq);
+                    addr
                 }
-                ArgKind::Ignore => {
-                    let mt = self.mty(pq);
-                    let (_, align) = self.size_align(pq);
-                    let a = self.f.fir.alloca(mt, align);
-                    self.f.locals.insert(p, Addr { v: a, ty: mt, align });
-                }
-                _ => {
-                    return err(
-                        Some(ast.decls.get(p).loc()),
-                        "class-type parameters are not supported yet (M3)",
-                    );
-                }
-            }
+            };
+            self.f.locals.insert(p, addr);
         }
 
         self.emit_body(body)?;
@@ -231,7 +258,7 @@ impl Cg<'_> {
 
         // Attributes.
         let nothrow_def = sig.nothrow || !self.opts.exceptions || self.no_throw_calls();
-        let fa = self.def_fn_attrs(is_main, nothrow_def, self.f.mustprogress);
+        let fa = self.def_fn_attrs(is_main, nothrow_def, self.f.mustprogress, self.f.vector_width);
         let (ret, params) = self.sig_attrs(&sig, sig.params.len(), true);
         {
             let func = self.m.func_mut(f);
@@ -541,6 +568,175 @@ impl Cg<'_> {
         self.f.calls.push((Fir::last_inst(c), Some(f), true));
     }
 
+    /// One argument of clang `EmitFunctionProlog`: the parameter's value
+    /// (scalars) or address (aggregates and coerced scalars' memory).
+    fn prolog_arg(
+        &mut self,
+        kind: &ArgKind,
+        pq: QualType,
+        arg_no: &mut u32,
+        loc: Option<Loc>,
+    ) -> R<ParamVal> {
+        let mt = self.mty(pq);
+        let agg = self.is_aggregate(pq);
+        match kind {
+            ArgKind::Ignore => {
+                if agg {
+                    let (_, align) = self.size_align(pq);
+                    let a = self.f.fir.alloca(mt, align);
+                    Ok(ParamVal::Indirect(Addr { v: a, ty: mt, align }, false))
+                } else {
+                    err(loc, "an ignored scalar parameter is not supported yet")
+                }
+            }
+            ArgKind::Indirect { byval, align } => {
+                let addr = Addr { v: V::Arg(*arg_no), ty: mt, align: *align };
+                *arg_no += 1;
+                if agg {
+                    Ok(ParamVal::Indirect(addr, !*byval))
+                } else {
+                    Ok(ParamVal::Direct(self.load_scalar(addr, pq)))
+                }
+            }
+            ArgKind::Direct { coerce, .. } | ArgKind::Extend { coerce, .. } => {
+                let offset = if let ArgKind::Direct { offset, .. } = kind { *offset } else { 0 };
+                let ct = self.ir(coerce);
+                let is_struct = matches!(coerce, IrType::Struct(..));
+                if !agg && !is_struct && ct == self.lty(pq) && offset == 0 {
+                    let v = V::Arg(*arg_no);
+                    *arg_no += 1;
+                    return Ok(ParamVal::Direct(v));
+                }
+                if offset != 0 {
+                    return err(loc, "an argument at a nonzero ABI offset is not supported yet");
+                }
+                let align = self.global_align(pq);
+                let a = self.f.fir.alloca(mt, align);
+                let alloca = Addr { v: a, ty: mt, align };
+                match kind {
+                    ArgKind::Direct {
+                        coerce: IrType::Struct(fs, packed), flatten: true, ..
+                    } if fs.len() > 1 => {
+                        let src_size = self.alloc_size(ct);
+                        let dst_size = self.alloc_size(mt);
+                        let into = if src_size <= dst_size {
+                            alloca.v
+                        } else {
+                            self.f.fir.alloca(ct, alloca.align)
+                        };
+                        let offs = self.tys.struct_offsets(fs, *packed);
+                        for (j, off) in offs.iter().enumerate() {
+                            let p = self.struct_gep(ct, into, j as u32);
+                            self.store(V::Arg(*arg_no), p, min_align(alloca.align, *off), false);
+                            *arg_no += 1;
+                        }
+                        if src_size > dst_size {
+                            self.memcpy_v(alloca, into, alloca.align, dst_size);
+                        }
+                    }
+                    _ => {
+                        let (size, _) = self.size_align(pq);
+                        self.coerced_store_sized(V::Arg(*arg_no), coerce, alloca, size);
+                        *arg_no += 1;
+                    }
+                }
+                if agg {
+                    Ok(ParamVal::Indirect(alloca, false))
+                } else {
+                    Ok(ParamVal::Direct(self.load_scalar(alloca, pq)))
+                }
+            }
+        }
+    }
+
+    /// The IR arguments for one call argument (clang `EmitCall`'s
+    /// per-argument lowering), appended to `out`.
+    pub(crate) fn call_arg(
+        &mut self,
+        kind: &ArgKind,
+        q: QualType,
+        arg: CallArg,
+        out: &mut Vec<V>,
+        loc: Option<Loc>,
+    ) -> R<()> {
+        match kind {
+            ArgKind::Ignore => Ok(()),
+            ArgKind::Indirect { byval, align } => {
+                match arg {
+                    CallArg::Agg(a) => {
+                        if *byval && a.align < *align {
+                            let got = self.f.fir.enforce_alloca_align(a.v, *align);
+                            if got.is_none_or(|g| g < *align) {
+                                return err(
+                                    loc,
+                                    "copying an under-aligned byval argument is not supported yet",
+                                );
+                            }
+                        }
+                        out.push(a.v);
+                    }
+                    CallArg::Scalar(v) => {
+                        let mt = self.mty(q);
+                        let t = self.f.fir.alloca(mt, *align);
+                        self.store_scalar(v, Addr { v: t, ty: mt, align: *align }, q);
+                        out.push(t);
+                    }
+                }
+                Ok(())
+            }
+            ArgKind::Direct { coerce, .. } | ArgKind::Extend { coerce, .. } => {
+                let offset = if let ArgKind::Direct { offset, .. } = kind { *offset } else { 0 };
+                let ct = self.ir(coerce);
+                let is_struct = matches!(coerce, IrType::Struct(..));
+                let src = match arg {
+                    CallArg::Scalar(v) => {
+                        if !is_struct && ct == self.lty(q) && offset == 0 {
+                            out.push(v);
+                            return Ok(());
+                        }
+                        let t = self.temp(q);
+                        self.store_scalar(v, t, q);
+                        t
+                    }
+                    CallArg::Agg(a) => a,
+                };
+                if offset != 0 {
+                    return err(loc, "an argument at a nonzero ABI offset is not supported yet");
+                }
+                if let ArgKind::Direct {
+                    coerce: IrType::Struct(fs, packed), flatten: true, ..
+                } = kind
+                {
+                    let src_size = self.alloc_size(src.ty);
+                    let dst_size = self.alloc_size(ct);
+                    let from = if src_size < dst_size {
+                        let t = self.f.fir.alloca(ct, src.align);
+                        self.memcpy_v(
+                            Addr { v: t, ty: ct, align: src.align },
+                            src.v,
+                            src.align,
+                            src_size,
+                        );
+                        t
+                    } else {
+                        src.v
+                    };
+                    let offs = self.tys.struct_offsets(fs, *packed);
+                    for (j, f) in fs.iter().enumerate() {
+                        let ft = self.ir(f);
+                        let p = self.struct_gep(ct, from, j as u32);
+                        let v = self.load(ft, p, min_align(src.align, offs[j]), false);
+                        out.push(v);
+                    }
+                } else {
+                    let v = self.coerced_load(src, coerce);
+                    out.push(v);
+                }
+                Ok(())
+            }
+        }
+    }
+
     /// clang `CreateCoercedLoad` from `src` to the ABI type `ct`.
     pub fn coerced_load(&mut self, src: Addr, ct: &IrType) -> V {
         let dt = self.ir(ct);
@@ -565,47 +761,72 @@ impl Cg<'_> {
         self.load(dt, tmp, tmp_align, false)
     }
 
-    /// clang `CreateCoercedStore` of `v` (ABI type `ct`) into `dst`.
-    pub fn coerced_store(&mut self, v: V, ct: &IrType, dst: Addr) {
+    /// clang 19 `CreateCoercedStore(Src, Dst, DstSize)` as used by
+    /// `EmitFunctionProlog`: `dst_size` is the size of the object, not of
+    /// its IR type, and a wider integer is truncated to it.
+    pub fn coerced_store_sized(&mut self, v: V, ct: &IrType, dst: Addr, dst_size: u64) {
+        if dst_size == 0 {
+            return;
+        }
         let st = self.ir(ct);
-        if st == dst.ty {
-            self.store(v, dst.v, dst.align, false);
-            return;
-        }
         let (ssize, salign) = self.tys.size_align(ct);
-        let dst = self.enter_struct_for_coerce(dst, ssize);
-        let is_ip = |m: &kiln_llvm::Module, t: LTy| m.types.is_int(t) || m.types.is_ptr(t);
-        if is_ip(&self.m, st) && is_ip(&self.m, dst.ty) {
-            let c = self.coerce_int_ptr(v, st, dst.ty);
-            self.store(c, dst.v, dst.align, false);
-            return;
+        let mut dst = dst;
+        if st != dst.ty {
+            dst = self.enter_struct_for_coerce(dst, ssize);
         }
-        let dsize = self.alloc_size(dst.ty);
-        if ssize <= dsize {
-            self.aggregate_store(v, ct, dst);
+        if ssize <= dst_size {
+            if self.m.types.is_int(st)
+                && self.m.types.is_ptr(dst.ty)
+                && ssize == self.alloc_size(dst.ty)
+            {
+                let c = self.coerce_int_ptr(v, st, dst.ty);
+                self.store(c, dst.v, dst.align, false);
+            } else {
+                self.aggregate_store(v, ct, dst);
+            }
+        } else if self.m.types.is_int(st) {
+            let it = self.m.types.int(u32::try_from(dst_size * 8).unwrap_or(u32::MAX));
+            let c = self.coerce_int_ptr(v, st, it);
+            self.store(c, dst.v, dst.align, false);
         } else {
             let a = salign.max(dst.align);
             let tmp = self.f.fir.alloca(st, a);
             self.store(v, tmp, a, false);
-            self.memcpy_v(dst, tmp, a, dsize);
+            self.memcpy_v(dst, tmp, a, dst_size);
         }
     }
 
     /// clang `EmitAggregateStore`: element-wise for first-class structs.
-    fn aggregate_store(&mut self, v: V, ct: &IrType, dst: Addr) {
-        if let IrType::Struct(fs, packed) = ct {
-            let st = self.ir(ct);
-            let offs = self.tys.struct_offsets(fs, *packed);
-            for (i, f) in fs.iter().enumerate() {
-                let p = self.struct_gep(st, dst.v, i as u32);
-                let ft = self.ir(f);
-                let e = self.f.fir.push(Op::ExtractValue { agg: v, idx: i as u32 }, ft);
-                let al = min_align(dst.align, offs[i]);
-                self.store(e, p, al, false);
-            }
-        } else {
+    pub(crate) fn aggregate_store(&mut self, v: V, ct: &IrType, dst: Addr) {
+        let st = self.ir(ct);
+        let Some(fields) = self.struct_fields(st) else {
             self.store(v, dst.v, dst.align, false);
+            return;
+        };
+        let offs = self.struct_field_offsets(st);
+        for (i, &ft) in fields.iter().enumerate() {
+            let p = self.struct_gep(st, dst.v, i as u32);
+            let e = self.f.fir.push(Op::ExtractValue { agg: v, idx: i as u32 }, ft);
+            let al = min_align(dst.align, offs[i]);
+            self.store(e, p, al, false);
         }
+    }
+
+    /// `StructLayout::getElementOffset` for every field of struct type `t`.
+    pub fn struct_field_offsets(&self, t: LTy) -> Vec<u64> {
+        let ty = &self.m.types;
+        let Some(fields) = ty.struct_fields(t) else { return Vec::new() };
+        let packed = ty.struct_is_packed(t);
+        let mut off = 0u64;
+        let mut v = Vec::with_capacity(fields.len());
+        for &f in fields {
+            let (s, a) = self.ir_layout(f);
+            let a = if packed { 1 } else { a };
+            off = off.div_ceil(a) * a;
+            v.push(off);
+            off += s;
+        }
+        v
     }
 
     fn coerce_int_ptr(&mut self, v: V, from: LTy, to: LTy) -> V {
@@ -860,6 +1081,17 @@ impl Cg<'_> {
                     let mag = if neg { sext(a, w).unsigned_abs() } else { a };
                     Some(V::C(self.m.const_float_bits(to, int_to_f128_bits(neg, mag))))
                 }
+                (CastOp::SIToFP | CastOp::UIToFP, None)
+                    if self.m.types.float_width(to) == Some(80) =>
+                {
+                    let neg = op == CastOp::SIToFP && sext(a, w) < 0;
+                    let mag = if neg { sext(a, w).unsigned_abs() } else { a };
+                    // Exact (64-bit significand) up to 2^64; wider values
+                    // would need rounding and are left to LLVM.
+                    u64::try_from(mag)
+                        .ok()
+                        .map(|m| V::C(self.m.const_float_bits(to, int_to_x87_bits(neg, m))))
+                }
                 _ => None,
             };
             if let Some(r) = r {
@@ -963,7 +1195,18 @@ fn fold_int_bin(op: BinOp, a: u128, b: u128, w: u32) -> Option<u128> {
     Some(r & mask)
 }
 
-/// Sign-extends the low `w` bits of `a`.
+/// The `x86_fp80` bits (sign and biased exponent in bits 64..80, explicit
+/// integer bit at 63) of the exactly representable integer `mag`.
+fn int_to_x87_bits(neg: bool, mag: u64) -> u128 {
+    if mag == 0 {
+        return 0;
+    }
+    let n = mag.ilog2();
+    let exp = 16383 + u128::from(n);
+    let sign = if neg { 1u128 << 79 } else { 0 };
+    sign | (exp << 64) | u128::from(mag << (63 - n))
+}
+
 /// The IEEE binary128 encoding of `±mag` (round to nearest, ties to even).
 fn int_to_f128_bits(neg: bool, mag: u128) -> u128 {
     if mag == 0 {
@@ -991,6 +1234,7 @@ fn int_to_f128_bits(neg: bool, mag: u128) -> u128 {
     sign | (u128::from(e + 16383) << 112) | (m & frac_mask)
 }
 
+/// Sign-extends the low `w` bits of `a`.
 pub(crate) fn sext(a: u128, w: u32) -> i128 {
     if w == 0 || w >= 128 {
         return a as i128;

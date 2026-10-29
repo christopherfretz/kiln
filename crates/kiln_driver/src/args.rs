@@ -123,15 +123,52 @@ pub struct PredefArgs {
 /// What to do.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Action {
-    /// No action flag: compile and link (not implemented).
+    /// No action flag: compile and link (`codegen_cmd`).
     #[default]
     Link,
     /// `-E` (or `-M` / `-MM`).
     Preprocess,
     /// `-fsyntax-only` (not implemented yet; WP-048).
     SyntaxOnly,
-    /// `-c` / `-S` / `-emit-llvm` (not implemented yet).
+    /// `-c` / `-S` / `-emit-llvm` (`codegen_cmd`; [`CompileArgs`] says
+    /// which).
     Compile,
+}
+
+/// Which of `-c`, `-S` and `-emit-llvm` were given (`spec/driver.md`
+/// "Code generation"). `-S` wins over `-c`, as in clang.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CompileArgs {
+    /// `-c`: stop after the object file.
+    pub object: bool,
+    /// `-S`: stop after the assembly (or `.ll` with `-emit-llvm`).
+    pub assembly: bool,
+    /// `-emit-llvm`: LLVM IR instead of assembly (`-S`) or an object (`-c`).
+    pub emit_llvm: bool,
+}
+
+/// A linker option, passed through to the link step in command-line order.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LinkOpt {
+    /// How many inputs precede it on the command line.
+    pub pos: usize,
+    /// The option as passed on (`-lm`, `-L/dir`, `-Wl,...`, `-fuse-ld=...`,
+    /// `-static`, ...; a separate `-l m` becomes `-lm`).
+    pub arg: String,
+    /// What a compile-only run (`-c`, `-S`) says about it.
+    pub kind: LinkOptKind,
+}
+
+/// How a compile-only run reports an unused [`LinkOpt`], as clang does.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LinkOptKind {
+    /// `<opt>: 'linker' input unused` (`-l`, `-Wl,`).
+    Input,
+    /// `argument unused during compilation: '<opt>'` (`-L`, `-fuse-ld=`,
+    /// `-shared`, `-rdynamic`, `-pie`, `-no-pie`).
+    Option,
+    /// Nothing (`-static`, `-nostdlib`).
+    Silent,
 }
 
 /// A command-line error.
@@ -218,6 +255,14 @@ pub struct Args {
     pub errors: Vec<ArgError>,
     /// The `-fconstexpr-*` options.
     pub constexpr: crate::constexpr_opts::ConstexprOpts,
+    /// `-c`, `-S`, `-emit-llvm`.
+    pub compile: CompileArgs,
+    /// Linker options, in order.
+    pub link: Vec<LinkOpt>,
+    /// The last `-O<level>` as written (`-O2`, `-Os`, ...).
+    pub opt_flag: Option<String>,
+    /// `-###`: print the commands instead of running them.
+    pub print_commands: bool,
 }
 
 /// Options taking a value, joined (`-Ifoo`) or separate (`-I foo`).
@@ -233,7 +278,9 @@ const JOINED_OR_SEPARATE: &[&str] = &[
     "-D",
     "-F",
     "-I",
+    "-L",
     "-U",
+    "-l",
     "-o",
     "-x",
 ];
@@ -294,6 +341,11 @@ impl Args {
             "-target" | "--target" => self.target = Some(v_owned),
             "-std" | "--std" => self.std = Some(v_owned),
             "-o" => self.output = Some(v_owned),
+            "-l" | "-L" => self.link.push(LinkOpt {
+                pos: self.inputs.len(),
+                arg: format!("{opt}{v}"),
+                kind: if opt == "-l" { LinkOptKind::Input } else { LinkOptKind::Option },
+            }),
             "-MF" => self.deps.file = Some(v_owned),
             "-MT" => self.deps.targets.push((v_owned, false)),
             "-MQ" => self.deps.targets.push((v_owned, true)),
@@ -311,7 +363,21 @@ impl Args {
         match arg {
             "-E" => self.action = Action::Preprocess,
             "-fsyntax-only" => self.action = Action::SyntaxOnly,
-            "-c" | "-S" | "-emit-llvm" => self.action = Action::Compile,
+            "-c" => (self.action, self.compile.object) = (Action::Compile, true),
+            "-S" => (self.action, self.compile.assembly) = (Action::Compile, true),
+            "-emit-llvm" => (self.action, self.compile.emit_llvm) = (Action::Compile, true),
+            "-###" => self.print_commands = true,
+            // Debug information is not generated (spec/codegen.md §5).
+            "-g" | "-g0" | "-g1" | "-g2" | "-g3" | "-ggdb" | "-ggdb0" | "-ggdb1" | "-ggdb2"
+            | "-ggdb3" => {}
+            "-static" | "-nostdlib" | "-shared" | "-rdynamic" | "-pie" | "-no-pie" => {
+                let kind = if matches!(arg, "-static" | "-nostdlib") {
+                    LinkOptKind::Silent
+                } else {
+                    LinkOptKind::Option
+                };
+                self.link.push(LinkOpt { pos: self.inputs.len(), arg: arg.to_owned(), kind });
+            }
             "--version" => self.version = true,
             "-v" | "--verbose" => self.verbose = true,
             "--help" | "-help" => self.help = true,
@@ -351,6 +417,16 @@ impl Args {
                     self.dump_ast_filter = Some(v.to_owned());
                 } else if let Some(v) = arg.strip_prefix("-fdump-ast=") {
                     self.dump_ast = Some(v.to_owned());
+                } else if arg.starts_with("-Wl,") || arg.starts_with("-fuse-ld=") {
+                    self.link.push(LinkOpt {
+                        pos: self.inputs.len(),
+                        arg: arg.to_owned(),
+                        kind: if arg.starts_with("-Wl,") {
+                            LinkOptKind::Input
+                        } else {
+                            LinkOptKind::Option
+                        },
+                    });
                 } else {
                     return false;
                 }
@@ -361,6 +437,12 @@ impl Args {
 
     /// Flags that change predefined macros.
     fn predef_flag(&mut self, arg: &str) -> bool {
+        if matches!(
+            arg,
+            "-O0" | "-O" | "-O1" | "-O2" | "-O3" | "-O4" | "-Og" | "-Ofast" | "-Os" | "-Oz"
+        ) {
+            self.opt_flag = Some(arg.to_owned());
+        }
         let p = &mut self.predef;
         match arg {
             "-O0" => (p.opt, p.ofast) = (OptLevel::None, false),

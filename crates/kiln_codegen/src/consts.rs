@@ -116,9 +116,20 @@ impl Cg<'_> {
 
     /// The global holding string literal `lit`, terminator included.
     pub(crate) fn lit_global(&mut self, lit: kiln_ast::StringLitId) -> kiln_llvm::GlobalId {
+        self.lit_global_sized(lit, 0)
+    }
+
+    /// The string literal's constant zero-padded to at least `min_bytes`
+    /// (clang gives a literal initializing a longer array that array's
+    /// type).
+    pub(crate) fn lit_global_sized(
+        &mut self,
+        lit: kiln_ast::StringLitId,
+        min_bytes: u64,
+    ) -> kiln_llvm::GlobalId {
         let unit = u64::from(self.ast.strings.encoding(lit).unit_bytes());
         let mut bytes = self.ast.strings.bytes(lit).to_vec();
-        let total = self.ast.strings.object_bytes(lit);
+        let total = self.ast.strings.object_bytes(lit).max(min_bytes);
         bytes.resize(total as usize, 0);
         self.string_global(&bytes, unit, total / unit)
     }

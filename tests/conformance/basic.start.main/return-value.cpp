@@ -2,6 +2,7 @@
 //@ expect: run
 //@ stdout: before return
 //@ exit: 3
+//@ xfail(kiln): libstdc++ headers do not parse yet: kiln_parse does not support decltype (c++config.h)
 #include <cstdio>
 
 int main() {

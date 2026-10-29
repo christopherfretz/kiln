@@ -500,6 +500,16 @@ impl Module {
         Ok(())
     }
 
+    /// Change a global's value type in place, clearing its initializer
+    /// (clang replaces a static local whose initializer has a different
+    /// IR type by a new global at the same position; pointers are opaque,
+    /// so existing uses stay valid).
+    pub fn set_global_value_type(&mut self, g: GlobalId, value_type: TypeId) {
+        let gv = &mut self.globals[g.index()];
+        gv.value_type = value_type;
+        gv.init = None;
+    }
+
     /// Attach metadata to a global variable (`, !dbg !N`).
     pub fn add_global_metadata(&mut self, g: GlobalId, kind: MdKindId, md: MetadataId) {
         set_attachment(&mut self.globals[g.index()].md, kind, md);

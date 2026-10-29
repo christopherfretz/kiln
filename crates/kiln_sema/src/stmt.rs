@@ -6,7 +6,7 @@ use kiln_ast::decl::{DeclFlags, DeclKind, DeclMisc, NewDecl, Payload};
 use kiln_ast::expr::{CastKind, ExprDeps, ExprKind, ValueCategory};
 use kiln_ast::names::DeclName;
 use kiln_ast::stmt::{CaseData, IfData, IfKind, LoopData, StmtKind, SwitchData};
-use kiln_ast::types::BuiltinType;
+use kiln_ast::types::{BuiltinType, TypeView};
 use kiln_ast::{DeclId, ExprId, QualType, StmtId};
 use kiln_diag::DiagId;
 use kiln_source::Loc;
@@ -522,10 +522,12 @@ impl Sema<'_, '_> {
             _ => false,
         };
         let ty = n.ty();
-        if !local
-            || self.ast.types.effective_quals(ty).is_volatile()
-            || self.ast.types.is_reference(ty)
-        {
+        // The entity is an object or an rvalue reference to one: the
+        // expression's type is the referee's, so ask the declaration.
+        let lref = dn
+            .ty()
+            .is_some_and(|t| matches!(self.ast.types.canonical_view(t), TypeView::LValueRef(_)));
+        if !local || lref || self.ast.types.effective_quals(ty).is_volatile() {
             return e;
         }
         self.builder().implicit_cast(CastKind::NoOp, e, ty, ValueCategory::XValue)

@@ -5,13 +5,12 @@ for preprocessing means the same thing to kiln. An option kiln does not
 implement is an error, never silently ignored. The oracle is Debian's
 `clang++-19` / `clang-19` on aarch64 and x86_64 Linux.
 
-Two actions are implemented:
+Three actions are implemented:
 
 - preprocessing: `-E`, `-M`, `-MM`, and `-MD`/`-MMD` alongside `-E`;
-- `-fsyntax-only [-fdump-ast]`, which runs WP-048's parser and Sema.
-
-`-c`/`-S`/`-emit-llvm` and linking parse, then report
-`<action> is not implemented yet` and exit 1.
+- `-fsyntax-only [-fdump-ast]`, which runs WP-048's parser and Sema;
+- code generation (WP-052b): `-S -emit-llvm`, `-c -emit-llvm`, `-S`, `-c`
+  and linking (see "Code generation").
 
 Crate layout (each part is replaceable on its own):
 
@@ -21,6 +20,8 @@ Crate layout (each part is replaceable on its own):
 | `toolchain` | target, `-std=`, resource dir, GCC/libc++ detection, the system search directories |
 | `pp_cmd` | one `-E` job: predefines, search list, preprocessor (WP-015's `IfEval` and `ClangFeatures`), printer, dependency list |
 | `syntax_cmd` | one `-fsyntax-only` job: parser, Sema, AST dump |
+| `codegen_cmd` | the codegen path: phases, output names, the step plan, `-###`, the in-process frontend (parser, Sema, `kiln_codegen::emit`) |
+| `link` | the external commands (`llc`, `llvm-as`, `clang++`): rendering and running them |
 | `constexpr_opts` | the `-fconstexpr-*` flags: Oven limits for the parser's Sema, the report |
 | `deps` | Make-style dependency output |
 | `time` | reproducible `__DATE__`/`__TIME__`/`__TIMESTAMP__` |
@@ -54,17 +55,21 @@ starting with `-` are inputs.
 | `-M`, `-MM`, `-MD`, `-MMD`, `-MF`, `-MT`, `-MQ`, `-MP` | dependency output (see below) |
 | `-trigraphs`, `-ftrigraphs`, `-fno-trigraphs` | trigraphs (default: on only for strict C and C++ before 17) |
 | `-f[no-]dollars-in-identifiers` | `$` in identifiers (default on) |
+| `-O*` | also selects `llc`'s level and is passed to the link (see "Code generation") |
 | `-O*`, `-f[no-]exceptions`, `-f[no-]cxx-exceptions`, `-f[no-]rtti`, `-f[no-]char8_t`, `-f[no-]pic/PIC/pie/PIE`, `-f[no-]fast-math`, `-ffreestanding`, `-fhosted`, `-pthread`, `-f[no-]threadsafe-statics`, `-f[no-]sized-deallocation` | change predefined macros only (see "Predefines") |
 | `-W...`, `-w`, `-pedantic`, `-ferror-limit=`, `-fdiagnostics-format=`, `-f[no-]color-diagnostics`, `-f[no-]caret-diagnostics`, ... | diagnostic options, validated and applied by `kiln_diag::DiagOptions` (`spec/diag.md`) |
 | `-fkiln-reproducible-time` | see "Reproducible time" |
 | `-fconstexpr-steps=N`, `-fconstexpr-depth=N`, `-fconstexpr-backtrace-limit=N` | constant-evaluation limits, as clang's (defaults 1048576, 512, 10; a backtrace limit of 0 shows every frame); `constexpr_opts`, spec/oven.md "Integration" |
 | `-fconstexpr-memory=N[k\|m\|g]` | kiln: live abstract-memory bytes per evaluation (default 256 MiB; binary suffixes) |
-| `-fconstexpr-report=<path>` | kiln: write the per-TU NDJSON constant-evaluation report (spec/oven.md "Reporting protocol"); `-fsyntax-only` only so far |
+| `-fconstexpr-report=<path>` | kiln: write the per-TU NDJSON constant-evaluation report (spec/oven.md "Reporting protocol"); `-fsyntax-only` and every codegen job |
 | `-v`, `--verbose`, `--version`, `--help` | see below |
 | `-F <dir>` | accepted; warns `ignoring framework directory` |
 | `-fsyntax-only` | parse and check (see "Syntax checking") |
 | `-fdump-ast[=ids,locs,canonical,implicit,all-files]`, `-fdump-ast-filter=<s>` | with `-fsyntax-only`: the AST dump (`spec/ast-dump.md`) to the output |
-| `-c`, `-S`, `-emit-llvm` | parsed; "not implemented yet" |
+| `-c`, `-S`, `-emit-llvm` | code generation (see "Code generation") |
+| `-###` | with a codegen action: print the steps instead of running them |
+| `-g`, `-g0`..`-g3`, `-ggdb`, `-ggdb0`..`-ggdb3` | accepted and ignored (no debug info yet) |
+| `-l<lib>`, `-L<dir>`, `-Wl,<args>`, `-fuse-ld=<ld>`, `-static`, `-nostdlib`, `-shared`, `-rdynamic`, `-pie`, `-no-pie` | passed to the link command, in command-line order relative to the inputs |
 | `-dD`, `-dI` | parsed; "not implemented yet" (WP-017) |
 
 Language of an input: `-x`, else the extension (`.c` and `.i` are C;
@@ -183,6 +188,70 @@ An unknown `-fdump-ast` option gives `invalid value '<opt>' in
 C inputs (`-x c`, `.c`), `-MD`/`-MMD` with `-fsyntax-only`, and
 `-fdump-ast` without `-fsyntax-only` are "not implemented yet".
 
+## Code generation
+
+`codegen_cmd::compile` runs when the action is `-c`, `-S`, `-emit-llvm`
+or linking (no action option). The phase is:
+
+| options | phase | output (default name) |
+|---|---|---|
+| `-S -emit-llvm` | textual IR, written by kiln | `<stem>.ll` |
+| `-c -emit-llvm` | bitcode, through `llvm-as` | `<stem>.bc` |
+| `-S` | assembly, through `llc` | `<stem>.s` |
+| `-c` | object, through `llc -filetype=obj` | `<stem>.o` |
+| none | objects in a temporary directory, then `clang++` links | `a.out` |
+
+`-S` wins over `-c`, as in clang. `<stem>` is the input's file stem in
+the current directory (standard input is `-`). `-o -` is standard output.
+
+- **Inputs.** A source (`.c .i .cc .cp .cpp .CPP .cxx .c++ .C .ii .cppm
+  .ixx .h .hh .hpp .hxx .H .inc`, any input after `-x`, and `-`) is
+  compiled; anything else is a linker input. A C source reports
+  `compiling C is not implemented yet`.
+- **Frontend.** The preprocessor is built as for `-E`
+  (`Job::build_preprocessor`), then `parse_preprocessed`, then
+  `kiln_codegen::emit` (spec/codegen.md) with the target's data layout,
+  `source_filename` = the input path, and `!llvm.ident` =
+  `kiln version <v>`. A `CodegenError` is reported at its location as an
+  error (`cg_error`). The `-fconstexpr-report` is written for every job.
+  With an error, nothing is written to the output and no further step of
+  that input runs; other inputs still compile; the link does not run.
+- **Tools.** Each tool is `$KILN_LLVM_DIR/bin/<tool>` (default
+  `/usr/lib/llvm-19`), else the versioned name (`llc-19`, `llvm-as-19`,
+  `clang++-19`) on `PATH`. The IR is piped to the tool's standard input
+  (`-o <out> -`).
+- **`llc`** gets `-O0` (default), `-O1` (`-O`, `-O1`, `-Og`), `-O2`
+  (`-O2`, `-Os`, `-Oz`) or `-O3` (`-O3`, `-O4`, `-Ofast`), then
+  `-relocation-model=static` with `-fno-pic`/`-fno-pie`, else
+  `-relocation-model=pic` (clang's default PIE), then `-filetype=obj`
+  unless `-S`.
+- **Link.** `clang++` with `--target=<triple>` (only if given),
+  `--sysroot=`, the `-O` flag, `-pthread`, `-stdlib=`, then the objects,
+  linker inputs and link options in command-line order, then
+  `-o <out>` (default `a.out`). The temporary objects are removed
+  afterwards (by their directory's explicit path).
+- **`-###`** prints, to standard error, the `--version` block, then one
+  line per step. An external step is clang's format: a leading space, then
+  every argument quoted (`"`, `\` and `$` escaped). The frontend step is
+  ` (in-process) frontend "<input>" -> "<out>"`, where `<out>` is `|` when
+  the IR is piped to the next step. Nothing runs; the exit status is 0.
+- **`-v`** prints the `--version` block and each external command before
+  running it, quoted only where needed (`llvm::sys::printArg`).
+- **Unused inputs.** In a compile-only phase, linker inputs and link
+  options are unused, warned in command-line order with clang's wording
+  (`-Wunused-command-line-argument`): `<x>: 'linker' input unused` for
+  linker inputs, `-l` and `-Wl,`; `argument unused during compilation:
+  '<o>'` for `-L`, `-fuse-ld=`, `-shared`, `-rdynamic`, `-pie`, `-no-pie`.
+  `-static` and `-nostdlib` are silent, as in clang.
+- **Errors.** `-o` with several sources in a compile-only phase is an
+  error, as is `-emit-llvm` when linking. A tool that is missing, cannot
+  start, fails or is killed is a driver error (below); the exit status is
+  then 1.
+
+Not implemented: `-MD`/`-MMD` when compiling ("not implemented yet"),
+`-###` with `-E` or `-fsyntax-only` (likewise), debug information, and
+IR-level optimization (spec/codegen.md).
+
 ## Dependency output
 
 This is clang's `DependencyCollector` and `DependencyFileGenerator`.
@@ -234,6 +303,14 @@ Driver diagnostics, in clang's wording:
 - `no input files`
 - `unsupported target '<t>'` (kiln only)
 - `<action> is not implemented yet` (kiln only)
+- `cannot specify -o when generating multiple output files`
+- `-emit-llvm cannot be used when linking`
+- `unable to execute command: Executable "<tool>" doesn't exist!`
+- `unable to execute command: <program>: <reason>`
+- `<backend|linker> command failed with exit code <n> (use -v to see invocation)`
+- `<backend|linker> command failed due to signal (use -v to see invocation)`
+- warning `<x>: 'linker' input unused [-Wunused-command-line-argument]`
+- warning `argument unused during compilation: '<o>' [-Wunused-command-line-argument]`
 
 ## `-v`, `--version`, `--help`
 
@@ -298,6 +375,18 @@ Each deviation is covered by a test or a test note.
    C++ configurations, so a C input gets the answers of its lexer
    standard (deviation 1). For example, `__has_feature(cxx_exceptions)`
    follows `-fexceptions`, where clang answers 0 in C.
+10. **No `cc1` frontend command in `-###`/`-v`.** The frontend runs in
+    process and prints as ` (in-process) frontend "<in>" -> "<out>"`;
+    the backend is a separate `llc` (clang runs it inside `cc1`), and
+    the assembler is `llc -filetype=obj`, not `cc1as`.
+11. **`-O1` and above do not optimize the IR.** `-S -emit-llvm -O2` emits
+    the `-O0` IR; `-O<n>` only selects
+    `llc`'s level. The IR-diff corpus runs at `-O0`.
+12. **`.ll` and `.bc` inputs are linker inputs**, not compiled (clang
+    would run its backend on them).
+13. **`-MD`/`-MMD` with a codegen action is "not implemented yet"**
+    (clang writes the dependency file alongside the object).
+14. **No debug information:** `-g*` is accepted and ignored.
 
 ## Tests
 
@@ -309,6 +398,13 @@ Each deviation is covered by a test or a test note.
   - `-M*` rules;
   - `-v` against clang's search block;
   - reproducible time.
+- `crates/kiln_driver/tests/codegen.rs`: the codegen path end to end
+  (`.ll`, `.s`, `.o`, linking and running, output naming, `-###`, `-v`,
+  unused-input warnings, missing tools). Steps needing `llc-19`/`clang++-19`
+  are skipped without them.
+- `crates/kiln_codegen/tests/ir_vs_clang.rs`: the IR-diff corpus through
+  `kiln_driver::run` (spec/codegen.md §6).
+- `run` conformance tests compile and link through the driver.
 - Unit tests sit in each module.
 - Parity: `cargo xtask test tests/differential/pp tests/conformance/cpp.*
   tests/conformance/lex* --report-parity docs/status/pp-parity.md`. This
