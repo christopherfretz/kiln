@@ -13,8 +13,9 @@ use kiln_source::symbol::Symbol;
 
 use crate::ast::Ast;
 use crate::builder::{AstBuilder, DeclHead};
-use crate::decl::{DeclFlags, DeclKind, NewDecl, Payload, TemplLink, TemplLinkKind};
-use crate::expr::{BinaryOp, ExprDeps, ExprFlags, ExprKind, ObjectKind, ValueCategory};
+use crate::decl::{DeclFlags, DeclKind, Members, NewDecl, Payload, ScopeData, TemplLink, TemplLinkKind};
+use crate::names::DeclName;
+use crate::expr::{BinaryOp, ExprDeps, ExprFlags, ExprKind, ObjectKind, UnaryOp, ValueCategory};
 use crate::ids::{ArgListId, DeclId, ExprId, ListId, NnsId, QualType, RawId, TemplateParamListId};
 use crate::mem::{HeapSize, MemReport, MemRow};
 use crate::slot::ColdMap;
@@ -266,6 +267,26 @@ impl Ast {
             Some((TemplLinkKind::Pattern, i)) => self.templates.info(i).map(|t| t.decl),
             _ => None,
         }
+    }
+
+    /// The name an `UnresolvedLookupExpr` looks up.
+    ///
+    /// # Panics
+    /// If `e` is not an `UnresolvedLookupExpr`.
+    pub fn unresolved_name(&self, e: ExprId) -> Symbol {
+        let n = self.exprs.get(e);
+        assert_eq!(n.kind(), ExprKind::UnresolvedLookupExpr, "not an UnresolvedLookupExpr");
+        Symbol::from_index(n.a())
+    }
+
+    /// The declarations an `UnresolvedLookupExpr` found.
+    ///
+    /// # Panics
+    /// If `e` is not an `UnresolvedLookupExpr`.
+    pub fn unresolved_decls(&self, e: ExprId) -> Vec<DeclId> {
+        let n = self.exprs.get(e);
+        assert_eq!(n.kind(), ExprKind::UnresolvedLookupExpr, "not an UnresolvedLookupExpr");
+        self.lists.iter::<DeclId>(ListId::new(n.b())).collect()
     }
 
     /// The requires-expression record of `RequiresExpr` `e`.
@@ -542,6 +563,14 @@ impl AstBuilder<'_> {
         d
     }
 
+    /// The `RequiresExprBody` of a requires-expression in context `ctx`
+    /// ([expr.prim.req]/5): the parameters' declaration context.
+    pub fn requires_body(&mut self, ctx: DeclId, loc: Loc) -> DeclId {
+        let payload = Payload::Scope(ScopeData { members: Members::default(), aux: 0 });
+        let h = DeclHead::new(ctx, DeclName::EMPTY, loc);
+        self.add(h, DeclKind::RequiresExprBody, None, payload, None)
+    }
+
     /// A template argument for expression `e`: dependent expressions get
     /// a stub profile carrying their dependence (WP-070 replaces it with
     /// the canonical profile, spec/types.md §7.2).
@@ -688,6 +717,62 @@ impl AstBuilder<'_> {
             TypeView::RValueRef(_) => ValueCategory::XValue,
             _ => ValueCategory::PRValue,
         }
+    }
+
+    /// A built-in unary operator on a type-dependent operand
+    /// ([temp.dep.expr]/1, resolved at instantiation): `<dependent type>`,
+    /// an lvalue for prefix `++`/`--` (clang's `CreateOverloadedUnaryOp`
+    /// with no visible operator functions), else a prvalue.
+    pub fn dependent_unary(&mut self, op: UnaryOp, operand: ExprId, loc: Loc) -> ExprId {
+        let vk = if matches!(op, UnaryOp::PreInc | UnaryOp::PreDec) {
+            ValueCategory::LValue
+        } else {
+            ValueCategory::PRValue
+        };
+        let deps = self.deps(operand) | DEP_ALL;
+        self.push_expr(
+            ExprKind::UnaryOperator,
+            vk,
+            ObjectKind::Ordinary,
+            ExprFlags::CANNOT_OVERFLOW,
+            deps,
+            op as u8,
+            self.dependent_ty(),
+            loc,
+            operand.raw(),
+            0,
+        )
+    }
+
+    /// A built-in binary operator with a type-dependent operand
+    /// ([temp.dep.expr]/1): a `<dependent type>` prvalue, or for a
+    /// compound assignment an lvalue whose computation types are
+    /// dependent too.
+    pub fn dependent_binary(&mut self, op: BinaryOp, lhs: ExprId, rhs: ExprId, loc: Loc) -> ExprId {
+        let ty = self.dependent_ty();
+        if op.is_compound_assignment() {
+            return self.compound_assign(op, lhs, rhs, ty, ty, ty, loc);
+        }
+        let deps = self.deps(lhs) | self.deps(rhs) | DEP_ALL;
+        self.simple(
+            ExprKind::BinaryOperator,
+            ValueCategory::PRValue,
+            deps,
+            op as u8,
+            ty,
+            loc,
+            lhs.raw(),
+            rhs.raw(),
+        )
+    }
+
+    /// `c ? t : e` with a type-dependent arm ([temp.dep.expr]/1): a
+    /// `<dependent type>` prvalue.
+    pub fn dependent_conditional(&mut self, cond: ExprId, then: ExprId, els: ExprId, loc: Loc) -> ExprId {
+        let deps = self.deps(cond) | self.deps(then) | self.deps(els) | DEP_ALL;
+        let side = self.ast.exprs.push_cond_arms(then, els);
+        let ty = self.dependent_ty();
+        self.simple(ExprKind::ConditionalOperator, ValueCategory::PRValue, deps, 0, ty, loc, cond.raw(), side)
     }
 
     /// `( exprs )` kept unresolved as a dependent initializer

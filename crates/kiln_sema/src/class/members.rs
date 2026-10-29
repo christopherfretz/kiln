@@ -258,6 +258,7 @@ impl Sema<'_, '_> {
         }
         let mut h = DeclHead::new(ctx, DeclName::ident(name), loc);
         h.lexical = Some(lexical);
+        self.mark_pattern_next();
         let v = self.builder().var(h, ty, spec, prev_ok);
         if invalid {
             self.ast.decls.set_flags(v, kiln_ast::decl::DeclFlags::INVALID);

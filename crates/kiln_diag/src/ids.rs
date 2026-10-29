@@ -850,10 +850,14 @@ diag_ids! {
     sema_template_decl_in_local = Error (0) "templates cannot be declared inside of a local class";
     sema_template_outside_namespace_or_class = Error (0) "templates can only be declared in namespace or class scope";
     sema_typename_nested_not_found = Error (2) "no type named '{0}' in {1}";
-    sema_pack_expansion_without_packs = Error (0) "pattern contains no parameter packs";
-    sema_unexpanded_pack = Error (0) "expression contains unexpanded parameter pack";
+    sema_pack_expansion_without_packs = Error (0) "pack expansion does not contain any unexpanded parameter packs";
+    sema_unexpanded_pack = Error (2) "{0} contains unexpanded parameter pack {1}";
     sema_not_a_template = Error (1) "{0} is not a template";
     parse_template_args_expected_gt = Error (0) "expected '>'";
+    sema_fold_packs_both_sides = Error (0) "binary fold expression has unexpanded parameter packs in both operands";
+    sema_template_requires_args = Error (2) "use of {0} {1} requires template arguments";
+    sema_typedef_template = Error (0) "a typedef cannot be a template";
+    sema_member_template_field = Error (1) "data member {0} cannot be a member template";
 }
 
 impl DiagId {

@@ -1646,6 +1646,9 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                 self.line.push_str(if n.aux() != 0 { " (ADL) = '" } else { " (no ADL) = '" });
                 self.line.push_str(ast.symbols().as_str(Symbol::from_index(n.a())));
                 self.line.push('\'');
+                if ast.unresolved_decls(e).is_empty() {
+                    self.line.push_str(" empty");
+                }
             }
             ExprKind::CXXUnresolvedConstructExpr => {
                 if n.aux() != 0 {

@@ -546,6 +546,9 @@ pub struct Declarator {
     /// The declarator-id is an operator-function-id (`operator new`):
     /// `name` then holds the `operator` keyword and its location.
     pub op_name: Option<OverloadedOperator>,
+    /// `...` before the declarator-id: a function or template parameter
+    /// pack ([dcl.fct]/16, [temp.variadic]/3).
+    pub ellipsis: Option<Loc>,
 }
 
 /// A declarator-id that is not an identifier ([dcl.decl]/4,
@@ -585,6 +588,7 @@ impl Declarator {
             late_noexcept: None,
             explicit_object: None,
             op_name: None,
+            ellipsis: None,
         }
     }
 

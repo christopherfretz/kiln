@@ -29,6 +29,7 @@ use crate::declspec::{
 };
 use crate::init::{InitValue, Initializer};
 use crate::lookup::{LookupKind, is_tag_kind, is_type_kind};
+use kiln_ast::templates::is_template_kind;
 use crate::scope::{Scope, ScopeKind};
 use crate::{Sema, target};
 use kiln_oven::{EvalContext, EvalKind};
@@ -62,6 +63,22 @@ pub enum NameClass {
     Value(DeclId),
     /// Nothing was found.
     Undeclared,
+    /// A class template, alias template or template template parameter
+    /// ([temp.names]/3): `<` starts its template arguments.
+    TypeTemplate(DeclId),
+    /// A variable template.
+    VarTemplate(DeclId),
+    /// A function template (one of the declarations found is one).
+    FunctionTemplate(DeclId),
+    /// A concept ([temp.concept]).
+    Concept(DeclId),
+    /// An undeclared name the parser treats as a template name
+    /// ([temp.names]/3.3: followed by `<` in a function call). Produced
+    /// by the parser, never by [`Sema::classify_name`].
+    UndeclaredTemplate,
+    /// A name after a dependent qualifier ([temp.dep.type]/6): its
+    /// meaning is known only at instantiation.
+    Dependent,
 }
 
 /// An attribute argument.
@@ -471,6 +488,10 @@ impl Sema<'_, '_> {
         } else if self.ast.types.is_function(ty) {
             ty = self.ast.types.pointer_to(ty);
         }
+        if let Some(l) = d.ellipsis {
+            // [dcl.fct]/16: a function parameter pack `T... x`.
+            ty = self.act_pack_expansion_type(ty, l);
+        }
         let mut attrs = ds.attrs.clone();
         attrs.extend(d.attrs.iter().copied());
         ParamInfo {
@@ -607,7 +628,22 @@ impl Sema<'_, '_> {
             Some(q) => self.lookup_qualified(q, name, LookupKind::Ordinary).decls,
             None => self.lookup_current_scope(name),
         };
-        found.into_iter().rev().find(|&d| !is_tag_kind(self.ast.decls.get(d).kind()))
+        // A template declaration redeclares a template (its latest
+        // pattern); any other declaration skips templates (overloading
+        // with templates is WP-071).
+        let templ = self.templ.cur.is_some();
+        found.into_iter().rev().find_map(|d| {
+            let k = self.ast.decls.get(d).kind();
+            if is_tag_kind(k) {
+                None
+            } else if is_template_kind(k) {
+                if templ { self.pattern_of(d).map(|p| self.ast.latest(p)) } else { None }
+            } else if templ {
+                None
+            } else {
+                Some(d)
+            }
+        })
     }
 
     /// The previous declaration a function or `extern` variable
@@ -816,15 +852,33 @@ impl Sema<'_, '_> {
         base: QualType,
         d: &Declarator,
     ) -> Option<DeclId> {
+        self.finish_invented_head();
+        let head = self.take_template_head(d.qualifier);
         if self.unsupported_declarator(ds, d) {
+            self.templ.cur = None;
             return None;
         }
         let ty = self.type_for_declarator_at(base, ds.type_loc.unwrap_or(ds.loc), d);
+        if head.is_some() {
+            if ds.is_typedef() {
+                self.error(DiagId::sema_typedef_template, d.loc);
+                self.templ.cur = None;
+            } else if d.ctx == DeclaratorContext::Member
+                && !self.ast.types.is_function(ty)
+                && !matches!(ds.storage, Some((StorageSpec::Static, _)))
+            {
+                let n = d.name.map_or(String::new(), |n| format!("'{}'", sym_str(self, n.0)));
+                let msg = self.diag(DiagId::sema_member_template_field, d.name_loc()).arg(n);
+                self.emit(msg);
+                self.templ.cur = None;
+            }
+        }
         let invalid = ds.invalid || d.invalid || self.is_error_type(ty);
         if !invalid {
             self.warn_ambiguous_function(ds, d, ty);
         }
         let Some((name, name_loc)) = d.name else {
+            self.templ.cur = None;
             if d.ctx == DeclaratorContext::Member && d.bit_width.is_some() {
                 let f = self.act_on_field(ds, ty, d, invalid);
                 self.set_member_access(f);
@@ -844,6 +898,7 @@ impl Sema<'_, '_> {
         {
             // An operator-function-id names a function at namespace scope
             // here; member operators are WP-068b.
+            self.templ.cur = None;
             self.unsupported("this declaration of an operator function", d.loc);
             return None;
         }
@@ -868,6 +923,9 @@ impl Sema<'_, '_> {
             self.ast.decls.set_flags(decl, DeclFlags::INVALID);
         }
         self.set_member_access(decl);
+        if let Some(t) = self.finish_template_pattern(decl) {
+            self.set_member_access(t);
+        }
         self.act_on_asm_label(ds, d, decl, &mut attrs);
         if d.qualifier.is_none() && d.op_name.is_none() {
             self.check_using_shadow_conflict(decl, name);
@@ -1111,6 +1169,7 @@ impl Sema<'_, '_> {
         let kind = if alias { DeclKind::TypeAlias } else { DeclKind::Typedef };
         let mut h = DeclHead::new(ctx, DeclName::ident(name), d.name_loc());
         h.lexical = Some(lexical);
+        self.mark_pattern_next();
         let td = self.builder().typedef(h, kind, underlying, prev_ok);
         if invalid {
             self.ast.decls.set_flags(td, DeclFlags::INVALID);
@@ -1133,7 +1192,11 @@ impl Sema<'_, '_> {
         let mut d = Declarator::new(DeclaratorContext::File, name_loc);
         d.name = Some((name, name_loc));
         let ds = DeclSpec::new(name_loc);
+        let _ = self.take_template_head(None);
         let td = self.act_on_typedef(&ds, ty, &d, name, true);
+        if let Some(t) = self.finish_template_pattern(td) {
+            self.set_member_access(t);
+        }
         self.check_using_shadow_conflict(td, name);
         if !attrs.is_empty() {
             let _ = self.builder().attach_attrs(td, attrs);
@@ -1393,6 +1456,7 @@ impl Sema<'_, '_> {
             };
             h.misc = h.misc.with_friend(k);
         }
+        self.mark_pattern_next();
         let f = self.builder().function(h, fkind, ty, spec, prev_ok);
         if invalid_redecl {
             self.ast.decls.set_flags(f, DeclFlags::INVALID);
@@ -1789,6 +1853,7 @@ impl Sema<'_, '_> {
         }
         let mut h = DeclHead::new(ctx, DeclName::ident(name), d.name_loc());
         h.lexical = Some(lexical);
+        self.mark_pattern_next();
         let v = self.builder().var(h, ty, spec, prev_ok);
         self.register_local(name, v);
         if spec.storage() == VarStorage::Extern {
@@ -2176,9 +2241,22 @@ impl Sema<'_, '_> {
                 self.emit(msg);
             }
         }
+        let head = if !is_enum && matches!(use_, TagUse::Definition | TagUse::Declaration) {
+            self.take_template_head(qualifier)
+        } else {
+            None
+        };
         let mut prev = None;
         if let Some((n, nloc)) = name {
             let found: Vec<DeclId> = match (qualifier, use_) {
+                // [temp.class]: a class template redeclares the template
+                // (its latest pattern).
+                (None, _) if head.is_some() => self
+                    .lookup_current_scope(n)
+                    .into_iter()
+                    .filter(|&d| self.kind_of(d) == DeclKind::ClassTemplate)
+                    .filter_map(|d| self.pattern_of(d).map(|p| self.ast.latest(p)))
+                    .collect(),
                 (Some(q), _) => self.lookup_qualified(q, n, LookupKind::Tag).decls,
                 (None, TagUse::Reference) if !(is_enum && fixed.is_some()) => {
                     self.lookup_name(n, LookupKind::Tag).decls
@@ -2215,6 +2293,7 @@ impl Sema<'_, '_> {
                         prev = None;
                     }
                 } else if use_ == TagUse::Declaration {
+                    self.templ.cur = None;
                     return p;
                 }
             } else if qualifier.is_some() {
@@ -2233,10 +2312,16 @@ impl Sema<'_, '_> {
             let fx = fixed.map(|f| (f, self.enum_promotion(f)));
             self.builder().enumeration(h, scoped, fx, prev)
         } else {
+            self.mark_pattern_next();
             self.builder().record(h, Self::tag_kind_of(keyword), prev)
         };
         if qualifier.is_none() {
             self.set_member_access(d);
+        }
+        if let Some(t) = self.finish_template_pattern(d)
+            && qualifier.is_none()
+        {
+            self.set_member_access(t);
         }
         if let Some((n, _)) = name
             && self.in_local_scope()
@@ -2634,7 +2719,7 @@ impl Sema<'_, '_> {
             .scopes
             .iter()
             .rev()
-            .find(|s| !matches!(s.kind, ScopeKind::LinkageSpec | ScopeKind::Enum))?;
+            .find(|s| !s.is_transparent() && s.kind != ScopeKind::Enum)?;
         if s.is_local() {
             return s
                 .locals
@@ -2804,7 +2889,7 @@ impl Sema<'_, '_> {
         if self.ast.decls.member_list(self.ctx).is_some() {
             self.ast.decls.append_member(self.ctx, d);
         }
-        if let Some(s) = self.scopes.iter_mut().rev().find(|s| s.kind != ScopeKind::LinkageSpec) {
+        if let Some(s) = self.scopes.iter_mut().rev().find(|s| !s.is_transparent()) {
             s.using_dirs.push(nominated);
         }
         d
@@ -3030,6 +3115,11 @@ impl Sema<'_, '_> {
     /// [basic.lookup.unqual]); `qualifier` is the context named by a
     /// preceding nested-name-specifier.
     pub fn classify_name(&self, name: Symbol, qualifier: Option<DeclId>) -> NameClass {
+        if let Some(q) = qualifier
+            && self.is_dependent_ctx(q)
+        {
+            return NameClass::Dependent;
+        }
         let found = match qualifier {
             Some(q) => self.lookup_qualified(q, name, LookupKind::Ordinary),
             None => self.lookup_name(name, LookupKind::Ordinary),
@@ -3044,12 +3134,26 @@ impl Sema<'_, '_> {
             return NameClass::Namespace(self.ast.resolve_alias(d));
         }
         if is_type_kind(k) {
-            let ty = if matches!(k, DeclKind::Typedef | DeclKind::TypeAlias) {
+            let ty = if matches!(k, DeclKind::Typedef | DeclKind::TypeAlias | DeclKind::TemplateTypeParm)
+            {
                 self.ast.decls.get(d).ty().unwrap_or(QualType::ERROR)
             } else {
                 self.tag_type(d)
             };
             return NameClass::Type(ty, d);
+        }
+        match k {
+            DeclKind::ClassTemplate | DeclKind::TypeAliasTemplate | DeclKind::TemplateTemplateParm => {
+                return NameClass::TypeTemplate(d);
+            }
+            DeclKind::VarTemplate => return NameClass::VarTemplate(d),
+            DeclKind::Concept => return NameClass::Concept(d),
+            _ => {}
+        }
+        if let Some(&f) =
+            found.decls.iter().find(|&&x| self.kind_of(self.ast.strip_shadow(x)) == DeclKind::FunctionTemplate)
+        {
+            return NameClass::FunctionTemplate(self.ast.strip_shadow(f));
         }
         NameClass::Value(d)
     }
@@ -3096,6 +3200,21 @@ impl Sema<'_, '_> {
                 self.mark_type_referenced(d);
                 Some(self.ast.definition(d).unwrap_or(d))
             }
+            DeclKind::TemplateTypeParm | DeclKind::TemplateTemplateParm => Some(d),
+            DeclKind::ClassTemplate | DeclKind::TypeAliasTemplate => {
+                let what = if self.kind_of(d) == DeclKind::ClassTemplate {
+                    "class template"
+                } else {
+                    "alias template"
+                };
+                let msg = self
+                    .diag(DiagId::sema_template_requires_args, loc)
+                    .arg(what)
+                    .arg(format!("'{}'", sym_str(self, name)));
+                self.emit(msg);
+                None
+            }
+            DeclKind::Typedef | DeclKind::TypeAlias if self.is_dependent_ctx(d) => Some(d),
             DeclKind::Typedef | DeclKind::TypeAlias => {
                 self.mark_type_referenced(d);
                 let ty = self.ast.decls.get(d).ty().unwrap_or(QualType::ERROR);

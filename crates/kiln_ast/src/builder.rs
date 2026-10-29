@@ -1039,6 +1039,13 @@ impl<'a> AstBuilder<'a> {
         if n.has(DeclFlags::DEPENDENT_CTX) {
             deps |= ExprDeps::INSTANTIATION;
         }
+        // A function or template parameter pack names an unexpanded pack
+        // ([temp.variadic]/5); its type is the pack expansion.
+        if n.ty().is_some_and(|t| {
+            matches!(self.ast.types.view(t.ty()), crate::types::TypeView::PackExpansion { .. })
+        }) {
+            deps |= ExprDeps::UNEXPANDED_PACK | ExprDeps::INSTANTIATION;
+        }
         match n.kind() {
             DeclKind::NonTypeTemplateParm => deps |= ExprDeps::VALUE_INST,
             DeclKind::Var => {

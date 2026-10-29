@@ -565,7 +565,9 @@ impl Parser<'_, '_> {
             match item {
                 LateItem::Method { f, parts } if ph == Phase::Method => {
                     let parts = mem::take(parts);
+                    let n = self.s.act_on_reenter_template_scopes(*f);
                     self.replay_method(*f, parts);
+                    self.s.act_on_exit_reentered_template_scopes(n);
                 }
                 LateItem::Nsdmi { field, toks } if ph == Phase::Nsdmi => {
                     let t = mem::take(&mut toks.toks);
@@ -574,7 +576,9 @@ impl Parser<'_, '_> {
                 LateItem::Body { f, ctor, toks } if ph == Phase::Body => {
                     let t = mem::take(&mut toks.toks);
                     self.begin_replay(t, toks.end);
+                    let n = self.s.act_on_reenter_template_scopes(*f);
                     self.parse_function_definition(*f, *ctor);
+                    self.s.act_on_exit_reentered_template_scopes(n);
                     self.finish_replay();
                 }
                 LateItem::Nested(c) => self.replay_phase(c, ph),

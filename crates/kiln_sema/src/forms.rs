@@ -210,6 +210,9 @@ impl Sema<'_, '_> {
         if self.is_error_type(ty) {
             return self.recover(ty, &[], loc);
         }
+        if self.ast.types.is_dependent(ty) {
+            return self.builder().unresolved_construct(ty, &[], false, loc, rparen);
+        }
         if let Some(what) = self.temporary_unsupported(ty) {
             self.unsupported(&format!("value-initialization of {what}"), loc);
             return self.recover(ty, &[], loc);
@@ -223,6 +226,10 @@ impl Sema<'_, '_> {
         if self.is_error_type(ty) {
             let flat = Self::list_exprs(l);
             return self.recover(ty, &flat, loc);
+        }
+        if self.ast.types.is_dependent(ty) || self.init_list_type_dependent(l) {
+            let il = self.dependent_init_list(l);
+            return self.builder().unresolved_construct(ty, &[il], true, loc, l.rbrace);
         }
         if let Some(what) = self
             .temporary_unsupported(ty)
@@ -256,6 +263,10 @@ impl Sema<'_, '_> {
     pub fn act_on_paren_list_cast(&mut self, ty: QualType, args: &[ExprId], loc: Loc) -> ExprId {
         if self.is_error_type(ty) || args.iter().any(|&a| self.is_err_expr(a)) {
             return self.recover(ty, args, loc);
+        }
+        if self.ast.types.is_dependent(ty) || args.iter().any(|&a| self.expr_is_type_dependent(a)) {
+            let rparen = args.last().map_or(loc, |&a| self.eloc(a));
+            return self.builder().unresolved_construct(ty, args, false, loc, rparen);
         }
         if let Some(what) = self.temporary_unsupported(ty) {
             self.unsupported(&format!("direct-initialization of {what}"), loc);

@@ -61,7 +61,7 @@ impl CastStyle {
         }
     }
 
-    fn kind(self) -> ExprKind {
+    pub(crate) fn kind(self) -> ExprKind {
         match self {
             CastStyle::Const => ExprKind::CXXConstCastExpr,
             CastStyle::Static => ExprKind::CXXStaticCastExpr,
@@ -712,7 +712,11 @@ impl Sema<'_, '_> {
     pub fn build_decl_ref_via(&mut self, d: DeclId, loc: Loc, shadow: Option<DeclId>) -> ExprId {
         let n = *self.ast.decls.get(d);
         match n.kind() {
-            DeclKind::Var | DeclKind::ParmVar | DeclKind::Function | DeclKind::EnumConstant => {}
+            DeclKind::Var
+            | DeclKind::ParmVar
+            | DeclKind::Function
+            | DeclKind::EnumConstant
+            | DeclKind::NonTypeTemplateParm => {}
             DeclKind::IndirectField
                 if self
                     .ast
@@ -743,7 +747,14 @@ impl Sema<'_, '_> {
         if n.kind() == DeclKind::Function && self.check_undeduced_use(d, loc) {
             return self.recover_err(&[], loc);
         }
-        let declared = n.ty().unwrap_or(QualType::ERROR);
+        let mut declared = n.ty().unwrap_or(QualType::ERROR);
+        // A pack names its pattern ([temp.variadic]/5): `Ts... x` gives `x`
+        // the type `Ts`.
+        if let TypeView::PackExpansion { pattern, .. } =
+            self.ast.types.view(declared.ty())
+        {
+            declared = pattern;
+        }
         let ty = if self.ast.decls.builtin_id(d).is_some() {
             QualType::BUILTIN_FN
         } else {
@@ -758,7 +769,9 @@ impl Sema<'_, '_> {
             found_decl: Some(s),
         });
         let e = self.builder().decl_ref(d, ty, loc, extra, nou, ExprFlags::NONE);
-        if self.unevaluated == 0 {
+        // Inside a template definition a use is only a reference; odr-use
+        // happens at instantiation ([temp.res.general]/6).
+        if self.unevaluated == 0 && !self.in_template() {
             match n.kind() {
                 DeclKind::Function | DeclKind::CXXMethod => {
                     let own = self
@@ -1104,6 +1117,9 @@ impl Sema<'_, '_> {
             return self.recover_err(&[e], loc);
         }
         let t0 = self.ety(e);
+        if self.is_dependent_overloadable(t0) {
+            return self.builder().dependent_unary(op, e, loc);
+        }
         let bad = |s: &mut Self, e: ExprId| {
             let msg = s.diag(DiagId::sema_invalid_unary_operand, loc).arg(s.ty_arg(t0));
             s.emit(msg);
@@ -1277,6 +1293,9 @@ impl Sema<'_, '_> {
     pub fn act_on_binary(&mut self, op: BinaryOp, l: ExprId, r: ExprId, loc: Loc) -> ExprId {
         if self.is_err_expr(l) || self.is_err_expr(r) {
             return self.recover_err(&[l, r], loc);
+        }
+        if self.expr_is_type_dependent(l) || self.expr_is_type_dependent(r) {
+            return self.builder().dependent_binary(op, l, r, loc);
         }
         match op {
             BinaryOp::Assign => self.assign(l, r, loc),
@@ -1638,14 +1657,21 @@ impl Sema<'_, '_> {
         if self.is_err_expr(c) || self.is_err_expr(t) || self.is_err_expr(f) {
             return self.recover_err(&[c, t, f], loc);
         }
-        let c2 = match conv::contextually_convert_to_bool(self, c) {
-            Ok(x) => x,
-            Err(err) => {
-                let d = err.diag(self, c);
-                self.emit(d);
-                return self.recover_err(&[c, t, f], loc);
+        let c2 = if self.expr_is_type_dependent(c) {
+            c
+        } else {
+            match conv::contextually_convert_to_bool(self, c) {
+                Ok(x) => x,
+                Err(err) => {
+                    let d = err.diag(self, c);
+                    self.emit(d);
+                    return self.recover_err(&[c, t, f], loc);
+                }
             }
         };
+        if self.expr_is_type_dependent(t) || self.expr_is_type_dependent(f) {
+            return self.builder().dependent_conditional(c2, t, f, loc);
+        }
         let (tn, fnn) = (*self.ast.exprs.get(t), *self.ast.exprs.get(f));
         let (tt, ft) = (tn.ty(), fnn.ty());
         let (tv, fv) = (self.ast.types.is_void(tt), self.ast.types.is_void(ft));
@@ -1779,6 +1805,11 @@ impl Sema<'_, '_> {
         if self.is_err_expr(base) || self.is_err_expr(idx) {
             return self.recover_err(&[base, idx], loc);
         }
+        if self.is_dependent_overloadable(self.ety(base))
+            || self.is_dependent_overloadable(self.ety(idx))
+        {
+            return self.builder().subscript(base, idx, QualType::DEPENDENT, loc);
+        }
         let b = conv::decay(self, base);
         let i = conv::decay(self, idx);
         let (bt, it) = (self.ety(b), self.ety(i));
@@ -1855,6 +1886,17 @@ impl Sema<'_, '_> {
             args.iter().map(|&a| self.take_braced_arg(a)).collect();
         if self.is_err_expr(callee) || args.iter().any(|&a| self.is_err_expr(a)) {
             return self.recover_err(&kids, loc);
+        }
+        if let Some(e) = self.check_unresolved_callee(callee, args) {
+            return e;
+        }
+        if self.expr_is_type_dependent(callee) || args.iter().any(|&a| self.expr_is_type_dependent(a))
+        {
+            if braced.iter().any(Option::is_some) {
+                self.templ_unimplemented("braced arguments in a dependent call", loc);
+                return self.recover_err(&kids, loc);
+            }
+            return self.dependent_call(callee, args, loc, rparen);
         }
         if let Some(e) = self.try_member_call(callee, args, &mut braced, loc, rparen) {
             return e;
@@ -2100,6 +2142,9 @@ impl Sema<'_, '_> {
         if self.is_err_expr(base) {
             return self.recover_err(&[base], loc);
         }
+        if let Some(e) = self.try_dependent_member(base, name, None, false, loc, arrow) {
+            return e;
+        }
         let (b, obj_ty) = if arrow {
             let b = conv::decay(self, base);
             let bt = self.ety(b);
@@ -2321,6 +2366,9 @@ impl Sema<'_, '_> {
     ) -> ExprId {
         if self.is_err_expr(e) || self.is_error_type(ty) {
             return self.recover(ty, &[e], loc);
+        }
+        if self.ast.types.is_dependent(ty) || self.expr_is_type_dependent(e) {
+            return self.dependent_cast(style, ty, e, loc, rparen);
         }
         if style == CastStyle::Dynamic {
             self.unsupported("dynamic_cast", loc);

@@ -35,6 +35,7 @@ mod rtti;
 pub mod scope;
 pub mod stmt;
 pub mod target;
+pub mod templ;
 pub mod using;
 
 use kiln_abi::Target;
@@ -155,6 +156,9 @@ pub struct Sema<'a, 'sm> {
     /// The static data member whose out-of-line initializer is being
     /// analysed: its class is the access context ([class.access]/7).
     pub(crate) initializing: Option<DeclId>,
+    /// Template heads and parse-time template state (WP-069,
+    /// spec/sema-templates.md §11.2).
+    pub(crate) templ: templ::TemplState,
 }
 
 impl<'a, 'sm> Sema<'a, 'sm> {
@@ -208,6 +212,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             friend_tag: None,
             nsdmi_this: Vec::new(),
             initializing: None,
+            templ: templ::TemplState::default(),
         }
     }
 
