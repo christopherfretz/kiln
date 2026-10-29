@@ -918,12 +918,11 @@ impl Cg<'_> {
                 if self.referee(dq).is_some() {
                     // clang `EmitLoadOfReferenceLValue`: the slot holds the
                     // address of the referee.
-                    let slot = match self.f.locals.get(&d) {
-                        Some(&a) => a,
-                        None => {
-                            let g = self.ref_var_global(e, d)?;
-                            Addr { v: V::C(gval(g)), ty: LTy::PTR, align: self.global_align(dq) }
-                        }
+                    let slot = if let Some(&a) = self.f.locals.get(&d) {
+                        a
+                    } else {
+                        let g = self.ref_var_global(e, d)?;
+                        Addr { v: V::C(gval(g)), ty: LTy::PTR, align: self.global_align(dq) }
                     };
                     let p = self.load(LTy::PTR, slot.v, slot.align, false);
                     return Ok(self.ref_lvalue(p, q));

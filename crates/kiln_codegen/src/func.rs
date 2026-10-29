@@ -703,36 +703,34 @@ impl Cg<'_> {
                 if offset != 0 {
                     return err(loc, "an argument at a nonzero ABI offset is not supported yet");
                 }
-                match kind {
-                    ArgKind::Direct {
-                        coerce: IrType::Struct(fs, packed), flatten: true, ..
-                    } => {
-                        let src_size = self.alloc_size(src.ty);
-                        let dst_size = self.alloc_size(ct);
-                        let from = if src_size < dst_size {
-                            let t = self.f.fir.alloca(ct, src.align);
-                            self.memcpy_v(
-                                Addr { v: t, ty: ct, align: src.align },
-                                src.v,
-                                src.align,
-                                src_size,
-                            );
-                            t
-                        } else {
-                            src.v
-                        };
-                        let offs = self.tys.struct_offsets(fs, *packed);
-                        for (j, f) in fs.iter().enumerate() {
-                            let ft = self.ir(f);
-                            let p = self.struct_gep(ct, from, j as u32);
-                            let v = self.load(ft, p, min_align(src.align, offs[j]), false);
-                            out.push(v);
-                        }
-                    }
-                    _ => {
-                        let v = self.coerced_load(src, coerce);
+                if let ArgKind::Direct {
+                    coerce: IrType::Struct(fs, packed), flatten: true, ..
+                } = kind
+                {
+                    let src_size = self.alloc_size(src.ty);
+                    let dst_size = self.alloc_size(ct);
+                    let from = if src_size < dst_size {
+                        let t = self.f.fir.alloca(ct, src.align);
+                        self.memcpy_v(
+                            Addr { v: t, ty: ct, align: src.align },
+                            src.v,
+                            src.align,
+                            src_size,
+                        );
+                        t
+                    } else {
+                        src.v
+                    };
+                    let offs = self.tys.struct_offsets(fs, *packed);
+                    for (j, f) in fs.iter().enumerate() {
+                        let ft = self.ir(f);
+                        let p = self.struct_gep(ct, from, j as u32);
+                        let v = self.load(ft, p, min_align(src.align, offs[j]), false);
                         out.push(v);
                     }
+                } else {
+                    let v = self.coerced_load(src, coerce);
+                    out.push(v);
                 }
                 Ok(())
             }
@@ -1197,20 +1195,19 @@ fn fold_int_bin(op: BinOp, a: u128, b: u128, w: u32) -> Option<u128> {
     Some(r & mask)
 }
 
-/// Sign-extends the low `w` bits of `a`.
-/// The IEEE binary128 encoding of `±mag` (round to nearest, ties to even).
 /// The `x86_fp80` bits (sign and biased exponent in bits 64..80, explicit
 /// integer bit at 63) of the exactly representable integer `mag`.
 fn int_to_x87_bits(neg: bool, mag: u64) -> u128 {
     if mag == 0 {
         return 0;
     }
-    let n = 63 - mag.leading_zeros();
+    let n = mag.ilog2();
     let exp = 16383 + u128::from(n);
     let sign = if neg { 1u128 << 79 } else { 0 };
     sign | (exp << 64) | u128::from(mag << (63 - n))
 }
 
+/// The IEEE binary128 encoding of `±mag` (round to nearest, ties to even).
 fn int_to_f128_bits(neg: bool, mag: u128) -> u128 {
     if mag == 0 {
         return 0;
@@ -1237,6 +1234,7 @@ fn int_to_f128_bits(neg: bool, mag: u128) -> u128 {
     sign | (u128::from(e + 16383) << 112) | (m & frac_mask)
 }
 
+/// Sign-extends the low `w` bits of `a`.
 pub(crate) fn sext(a: u128, w: u32) -> i128 {
     if w == 0 || w >= 128 {
         return a as i128;
