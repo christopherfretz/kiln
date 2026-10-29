@@ -143,6 +143,8 @@ impl Substituter<'_, '_, '_> {
                 if ctx_is_record || self.locals.contains_key(&decl) {
                     let d = self.find_instantiated_decl(decl, loc)?;
                     if d != decl {
+                        // Naming it in the instantiation is a use.
+                        self.sema.mark_type_referenced(d);
                         return Ok(self.decl_type(d));
                     }
                 }

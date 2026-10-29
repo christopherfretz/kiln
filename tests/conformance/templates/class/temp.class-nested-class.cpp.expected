@@ -1,0 +1,18 @@
+TranslationUnitDecl
+|-ClassTemplateDecl Outer
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| |-CXXRecordDecl struct Outer definition
+| | |-CXXRecordDecl referenced struct Inner definition
+| | | `-FieldDecl x 'T'
+| | `-FieldDecl in 'Inner *'
+| |-ClassTemplateSpecializationDecl struct Outer
+| | `-TemplateArgument type 'int'
+| `-ClassTemplateSpecializationDecl struct Outer definition implicit_instantiation
+|   |-TemplateArgument type 'long'
+|   |-CXXRecordDecl referenced struct Inner definition
+|   | `-FieldDecl x 'long'
+|   `-FieldDecl in 'Inner *'
+|-VarDecl o 'Outer<int> *'
+`-VarDecl sz 'int' cinit
+  `-ImplicitCastExpr 'int' <IntegralCast>
+    `-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof 'Outer<long>::Inner'

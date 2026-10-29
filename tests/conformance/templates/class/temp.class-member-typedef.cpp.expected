@@ -1,0 +1,21 @@
+TranslationUnitDecl
+|-ClassTemplateDecl Traits
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| |-CXXRecordDecl struct Traits definition
+| | |-TypedefDecl referenced pointer 'T *'
+| | |-TypeAliasDecl ref 'const T &'
+| | `-FieldDecl p 'pointer':'T *'
+| |-ClassTemplateSpecializationDecl struct Traits definition implicit_instantiation
+| | |-TemplateArgument type 'int'
+| | |-TypedefDecl referenced pointer 'int *'
+| | |-TypeAliasDecl ref 'const int &'
+| | `-FieldDecl p 'pointer':'int *'
+| `-ClassTemplateSpecializationDecl struct Traits definition implicit_instantiation
+|   |-TemplateArgument type 'char'
+|   |-TypedefDecl referenced pointer 'char *'
+|   |-TypeAliasDecl referenced ref 'const char &'
+|   `-FieldDecl p 'pointer':'char *'
+|-VarDecl gp 'Traits<int>::pointer':'int *'
+`-VarDecl sz 'int' cinit
+  `-ImplicitCastExpr 'int' <IntegralCast>
+    `-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof 'Traits<char>::ref':'const char &'

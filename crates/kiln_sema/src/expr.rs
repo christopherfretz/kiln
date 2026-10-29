@@ -1726,7 +1726,12 @@ impl Sema<'_, '_> {
                 }
             }
         };
-        if self.expr_is_type_dependent(t) || self.expr_is_type_dependent(f) {
+        // [temp.dep.expr]/1: type-dependent if any operand is, the
+        // condition included.
+        if self.expr_is_type_dependent(c)
+            || self.expr_is_type_dependent(t)
+            || self.expr_is_type_dependent(f)
+        {
             return self.builder().dependent_conditional(c2, t, f, loc);
         }
         let (tn, fnn) = (*self.ast.exprs.get(t), *self.ast.exprs.get(f));

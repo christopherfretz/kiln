@@ -3353,10 +3353,9 @@ impl Sema<'_, '_> {
         let ctx = match self.ast.decls.get(d).kind() {
             DeclKind::Namespace => Some(self.ast.first(d)),
             DeclKind::NamespaceAlias => Some(self.ast.resolve_alias(d)),
-            DeclKind::CXXRecord | DeclKind::Enum => {
-                self.mark_type_referenced(d);
-                Some(self.ast.definition(d).unwrap_or(d))
-            }
+            // A class named only as a qualifier is not marked referenced
+            // (clang's `isReferenced`).
+            DeclKind::CXXRecord | DeclKind::Enum => Some(self.ast.definition(d).unwrap_or(d)),
             DeclKind::TemplateTypeParm | DeclKind::TemplateTemplateParm => Some(d),
             DeclKind::ClassTemplate | DeclKind::TypeAliasTemplate => {
                 let what = if self.kind_of(d) == DeclKind::ClassTemplate {
