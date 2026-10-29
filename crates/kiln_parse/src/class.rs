@@ -1675,3 +1675,239 @@ impl Parser<'_, '_> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    //! `act_on_*` sequence tests (spec/parse.md §9) and the token capture
+    //! and replay machinery (§2.7), driven through a real [`Parser`].
+
+    use std::sync::Arc;
+
+    use kiln_ast::Ast;
+    use kiln_ast::types::TypeContext;
+    use kiln_diag::{DiagEngine, DiagOptions, MemorySink};
+    use kiln_lex::literal::LiteralOptions;
+    use kiln_lex::{Punct, Std};
+    use kiln_pp::{PpOptions, Preprocessor};
+    use kiln_sema::Sema;
+    use kiln_sema::target::{Arch, Target};
+    use kiln_source::SourceManager;
+    use kiln_source::symbol::Interner;
+
+    use crate::parser::Parser;
+    use crate::tokens::TokenSource;
+
+    /// Runs `f` on a parser positioned at the first token of `src`, and
+    /// returns its result and the diagnostics' messages.
+    fn with_parser<R>(src: &str, f: impl FnOnce(&mut Parser<'_, '_>) -> R) -> (R, Vec<String>) {
+        let sm = SourceManager::new();
+        let file = sm.add_virtual("t.cpp", src.to_owned()).expect("location space");
+        let interner = Arc::new(Interner::new());
+        let sink = MemorySink::new();
+        let diags = DiagEngine::new(&sm, &DiagOptions::default(), sink.clone());
+        let target = Target::for_arch(Arch::X86_64);
+        let mut pp = Preprocessor::new(&sm, &diags, &interner, PpOptions::new(Std::Cxx26));
+        pp.enter_main_file(file);
+        let lit = LiteralOptions::new(Std::Cxx26, crate::encoding_params(&target));
+        let ast = Ast::new(Arc::clone(&interner), TypeContext::new(target.types.clone()));
+        let s = Sema::for_target(ast, &diags, target);
+        let mut p = Parser::new(s, TokenSource::new(pp, &diags), lit);
+        let r = f(&mut p);
+        drop(p);
+        (r, sink.take().into_iter().map(|d| d.message).collect())
+    }
+
+    /// The trace of parsing `src` as a translation unit.
+    fn trace(src: &str) -> Vec<String> {
+        with_parser(src, |p| {
+            p.parse_translation_unit();
+            std::mem::take(&mut p.trace)
+        })
+        .0
+    }
+
+    fn trace_is(src: &str, want: &[&str]) {
+        assert_eq!(trace(src), want, "trace of {src:?}");
+    }
+
+    /// [class.pre]: the sequence for a plain class definition.
+    #[test]
+    fn seq_simple_class() {
+        trace_is(
+            "struct S { int a; };",
+            &[
+                "start_record_definition(S)",
+                "base_specifiers(0)",
+                "declarator(a)",
+                "finish_record_definition(S, semi)",
+                "finish_class_contexts(S)",
+            ],
+        );
+    }
+
+    /// [class.pre]/3: `final` is reported before the base clause, and a
+    /// declarator after `}` means no `;` directly follows it.
+    #[test]
+    fn seq_final_and_declarator() {
+        trace_is(
+            "struct S final { int a; } s;",
+            &[
+                "start_record_definition(S)",
+                "class_final",
+                "base_specifiers(0)",
+                "declarator(a)",
+                "finish_record_definition(S, nosemi)",
+                "finish_class_contexts(S)",
+            ],
+        );
+    }
+
+    /// [class.derived], [class.access.spec]: bases and access labels.
+    #[test]
+    fn seq_bases_and_access() {
+        let t =
+            trace("struct B {}; struct C {}; struct S : B, virtual public C { public: int a; };");
+        let s = t.iter().position(|x| x == "start_record_definition(S)").expect("S");
+        assert_eq!(
+            t[s..],
+            [
+                "start_record_definition(S)",
+                "base_specifiers(2)",
+                "access_spec",
+                "declarator(a)",
+                "finish_record_definition(S, semi)",
+                "finish_class_contexts(S)",
+            ]
+        );
+    }
+
+    /// [class.friend]: friend type and friend function declarations.
+    #[test]
+    fn seq_friends() {
+        trace_is(
+            "struct S { friend class F; friend int g(); };",
+            &[
+                "start_record_definition(S)",
+                "base_specifiers(0)",
+                "friend",
+                "friend",
+                "finish_record_definition(S, semi)",
+                "finish_class_contexts(S)",
+            ],
+        );
+    }
+
+    /// [class.mem.general]/7: default member initializers are parsed after
+    /// the outermost class is complete, nested classes first, each class's
+    /// in a start/finish_delayed_class pair; only the outermost class
+    /// finishes its complete-class contexts.
+    #[test]
+    fn seq_nested_nsdmi_phase() {
+        trace_is(
+            "struct O { struct I { int x = 1; }; int y = 2; };",
+            &[
+                "start_record_definition(O)",
+                "base_specifiers(0)",
+                "start_record_definition(I)",
+                "base_specifiers(0)",
+                "declarator(x)",
+                "finish_record_definition(I, semi)",
+                "decl_spec_only",
+                "declarator(y)",
+                "finish_record_definition(O, semi)",
+                "start_delayed_class(O)",
+                "start_delayed_class(I)",
+                "start_field_init(x)",
+                "field_init(x)",
+                "finish_delayed_class(I)",
+                "start_field_init(y)",
+                "field_init(y)",
+                "finish_delayed_class(O)",
+                "finish_class_contexts(O)",
+            ],
+        );
+    }
+
+    /// [class.mem.general]/7: a default member initializer sees members
+    /// declared after it (it is replayed once the class is complete).
+    #[test]
+    fn nsdmi_sees_later_members() {
+        let (_, diags) = with_parser("struct S { int x = y; static const int y = 1; };", |p| {
+            p.parse_translation_unit();
+        });
+        assert!(!diags.iter().any(|d| d.contains("undeclared")), "{diags:?}");
+    }
+
+    /// [dcl.fct.def.general]: a namespace-scope definition is bracketed by
+    /// start/finish_function_def; `= delete` is reported as such.
+    #[test]
+    fn seq_function_definitions() {
+        trace_is("void f() {}", &["start_function_def(f)", "finish_function_def(f)"]);
+        trace_is("void f() = delete;", &["deleted"]);
+    }
+
+    /// [class.pre]: a missing `;` after `}` finishes the class with
+    /// `nosemi` and parsing continues with the next declaration.
+    #[test]
+    fn seq_missing_semi_recovers() {
+        let t = trace("struct S { int a; } struct T {};");
+        assert!(t.contains(&"finish_record_definition(S, nosemi)".to_owned()), "{t:?}");
+        assert!(t.contains(&"finish_class_contexts(T)".to_owned()), "{t:?}");
+    }
+
+    /// [class.mem.general]: an unterminated class still finishes its
+    /// definition and contexts (no panic, no unbalanced replay).
+    #[test]
+    fn seq_unterminated_class() {
+        let t = trace("struct S { int a = 1; int f(int = 2) {}");
+        assert_eq!(t.first().map(String::as_str), Some("start_record_definition(S)"));
+        assert_eq!(t.last().map(String::as_str), Some("finish_class_contexts(S)"));
+    }
+
+    /// spec/parse.md §2.7: a saved default argument stops at the `,` that
+    /// ends it (balancing brackets), and replay restores the stream.
+    #[test]
+    fn capture_and_replay_default_arg() {
+        let ((n, after, all, back), _) = with_parser("= g(1, 2) + a[3] , next", |p| {
+            let late = p.capture_default_arg();
+            let after = p.at(Punct::Comma);
+            let n = late.toks.len();
+            p.begin_replay(late.toks, late.end);
+            while !p.at_eof() {
+                p.bump();
+            }
+            let all = p.end_replay();
+            (n, after, all, p.at(Punct::Comma))
+        });
+        // `= g ( 1 , 2 ) + a [ 3 ]`
+        assert_eq!(n, 12);
+        assert!(after && all && back);
+    }
+
+    /// spec/parse.md §2.7: a default argument ends at the `)` of its
+    /// parameter list, and a `?:` keeps its `:` inside.
+    #[test]
+    fn capture_default_arg_conditional() {
+        let ((n, closed), _) = with_parser("= b ? 1 : 2 )", |p| {
+            let late = p.capture_default_arg();
+            (late.toks.len(), p.at(Punct::RParen))
+        });
+        assert_eq!(n, 6);
+        assert!(closed);
+    }
+
+    /// spec/parse.md §2.7: replay that does not consume every saved token
+    /// reports it, and still restores the interrupted stream.
+    #[test]
+    fn replay_partial_consumption() {
+        let ((all, back), _) = with_parser("= 1 2 ) tail", |p| {
+            let late = p.capture_default_arg();
+            p.begin_replay(late.toks, late.end);
+            p.bump();
+            let all = p.end_replay();
+            (all, p.at(Punct::RParen))
+        });
+        assert!(!all);
+        assert!(back);
+    }
+}
