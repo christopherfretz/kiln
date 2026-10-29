@@ -28,7 +28,7 @@ enum Bracket {
     Brace = 2,
 }
 
-/// A saved token buffer being re-parsed (spec/parse.md §2.7): while one
+/// A saved token buffer being re-parsed (spec/parse.md §2.4): while one
 /// is active, [`Parser::tok_at`] and [`Parser::bump`] read its tokens
 /// (indices from 0) and then an `Eof` sentinel, and the state of the
 /// interrupted stream is restored by [`Parser::end_replay`].
@@ -233,7 +233,7 @@ impl<'a, 'sm> Parser<'a, 'sm> {
         t
     }
 
-    /// Starts re-parsing `toks` (spec/parse.md §2.7): the current token
+    /// Starts re-parsing `toks` (spec/parse.md §2.4): the current token
     /// becomes `toks[0]`, and after the last one an `Eof` sentinel at
     /// `end` (the token that ended the saved range) stops every rule.
     /// Paired with [`Parser::end_replay`].

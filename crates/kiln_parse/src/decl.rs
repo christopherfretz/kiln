@@ -991,7 +991,7 @@ impl Parser<'_, '_> {
             if self.at(Punct::Equal) {
                 if delay_args {
                     // Complete-class context ([class.mem.general]/7):
-                    // replayed after the class (spec/parse.md §2.7).
+                    // replayed after the class (spec/parse.md §2.4).
                     late = Some((self.loc(), self.capture_default_arg()));
                 } else {
                     self.unsupported("default arguments", self.loc());
@@ -1032,7 +1032,7 @@ impl Parser<'_, '_> {
     /// The exception specification is returned (`ExcSpec::None` when
     /// absent); for a delayable member declarator (see
     /// [`Self::parse_function_suffix`]) a parenthesized one is saved in
-    /// `late_fn` and `d.late_noexcept` set instead (spec/parse.md §2.7).
+    /// `late_fn` and `d.late_noexcept` set instead (spec/parse.md §2.4).
     /// A second specification ends the declarator (clang then expects a
     /// function body).
     fn parse_function_qualifiers(

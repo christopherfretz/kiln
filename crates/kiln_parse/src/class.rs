@@ -1,5 +1,5 @@
 //! Classes ([class], [class.mem], [class.derived], [class.base.init];
-//! spec/parse.md §2.7, §4.5): class-specifier bodies, base clauses,
+//! spec/parse.md §2.4, §4.1): class-specifier bodies, base clauses,
 //! member-declarations, ctor-initializers, and the delayed parsing of
 //! complete-class contexts ([class.mem.general]/7).
 //!
@@ -235,7 +235,7 @@ impl Parser<'_, '_> {
         }
     }
 
-    /// Saves a delayed default argument at `=` (spec/parse.md §2.7; clang's
+    /// Saves a delayed default argument at `=` (spec/parse.md §2.4; clang's
     /// `ParseParameterDeclarationClause` in a member declarator). The
     /// sentinel sits at the token that ends it.
     pub(crate) fn capture_default_arg(&mut self) -> LateToks {
@@ -1679,7 +1679,7 @@ impl Parser<'_, '_> {
 #[cfg(test)]
 mod tests {
     //! `act_on_*` sequence tests (spec/parse.md §9) and the token capture
-    //! and replay machinery (§2.7), driven through a real [`Parser`].
+    //! and replay machinery (§2.4), driven through a real [`Parser`].
 
     use std::sync::Arc;
 
@@ -1864,7 +1864,7 @@ mod tests {
         assert_eq!(t.last().map(String::as_str), Some("finish_class_contexts(S)"));
     }
 
-    /// spec/parse.md §2.7: a saved default argument stops at the `,` that
+    /// spec/parse.md §2.4: a saved default argument stops at the `,` that
     /// ends it (balancing brackets), and replay restores the stream.
     #[test]
     fn capture_and_replay_default_arg() {
@@ -1884,7 +1884,7 @@ mod tests {
         assert!(after && all && back);
     }
 
-    /// spec/parse.md §2.7: a default argument ends at the `)` of its
+    /// spec/parse.md §2.4: a default argument ends at the `)` of its
     /// parameter list, and a `?:` keeps its `:` inside.
     #[test]
     fn capture_default_arg_conditional() {
@@ -1896,7 +1896,7 @@ mod tests {
         assert!(closed);
     }
 
-    /// spec/parse.md §2.7: replay that does not consume every saved token
+    /// spec/parse.md §2.4: replay that does not consume every saved token
     /// reports it, and still restores the interrupted stream.
     #[test]
     fn replay_partial_consumption() {

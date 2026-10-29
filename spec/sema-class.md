@@ -55,6 +55,10 @@ Principles:
    `Record` scope, appends the injected-class-name (§2.2), and now also pushes
    a `ClassBuild` (§8.3) with the default access (`private` for `class`, else
    `public`).
+   2a. `act_on_class_final(r, loc)` (WP-065) when the class-head has a
+   class-virt-specifier `final` ([class.pre]/1): sets
+   `DefinitionBits::FINAL` on the `ClassBuild`, merged into the record's
+   definition data at `}`.
 3. `act_on_base_specifiers(r, &[BaseSpecInfo])` (new, §3.1) — once, before any
    member, even when the clause is absent (empty slice).
 4. Member declarations in order (§2.3): `act_on_access_spec`,
@@ -190,6 +194,31 @@ declaration order:
    full-expression, §5.3);
 3. bodies → `act_on_start_function_def`, `act_on_mem_initializers` (§4.9),
    body, `act_on_finish_function_def`.
+
+Delayed entry points (WP-065), which put Sema back into the scopes the
+replayed tokens were written in:
+- `act_on_start_delayed_class(r)` / `act_on_finish_delayed_class(r)`
+  wrap each class in each phase that has items of that phase, nested
+  classes inside their parent's (clang's `ReenterClassScopeRAII`). The
+  stub pushes a `Record` scope for `r` and makes it the context; finish
+  pops it and restores the lexical context.
+- `act_on_start_delayed_method(f)` / `act_on_finish_delayed_method(f)`
+  wrap phase 1 of one function (clang's
+  `ActOnReenterCXXMethodParameter` and `ActOnFinishDelayedCXXMethodDeclaration`):
+  a `Prototype` scope with all of `f`'s parameters visible. (clang makes
+  a parameter visible only after its own default argument; the stub does
+  not.)
+- `act_on_start_field_init(field)` precedes each NSDMI (clang's
+  `ActOnStartCXXInClassMemberInitializer`); `act_on_field_init` follows
+  it only when the initializer parsed.
+
+Per outermost class the parser calls, after
+`act_on_finish_record_definition(r, _)`: for each phase in order,
+`act_on_start_delayed_class(r)`, the phase's items in declaration order
+(a nested class's items wrapped in its own
+`act_on_start/finish_delayed_class`), `act_on_finish_delayed_class(r)`;
+then `act_on_finish_class_contexts(r)`. The pinned sequences are the
+trace tests in `kiln_parse/src/class.rs` (parse.md §10).
 
 Needing an unparsed NSDMI earlier (a nested class's implicit default ctor used
 in the enclosing class) is an error: `default member initializer for 'x'
@@ -819,7 +848,18 @@ differential compares per record, keyed by name, ignoring order.
 New parser entry points (WP-065's contract): `act_on_base_specifiers`,
 `act_on_access_spec`, `act_on_friend`, `act_on_defaulted`, `act_on_deleted`,
 `act_on_param_default_arg`, `act_on_exception_spec`, `act_on_field_init`,
-`act_on_mem_initializers`, `act_on_finish_class_contexts`, `act_on_this`.
+`act_on_mem_initializers`, `act_on_finish_class_contexts`, `act_on_this`,
+and (added by WP-065) `act_on_class_final` (§2.1), `act_on_start_delayed_class`,
+`act_on_finish_delayed_class`, `act_on_start_delayed_method`,
+`act_on_finish_delayed_method`, `act_on_start_field_init` (§2.7):
+```
+fn act_on_class_final(&mut self, r: DeclId, loc: Loc);
+fn act_on_start_delayed_class(&mut self, r: DeclId);
+fn act_on_finish_delayed_class(&mut self, r: DeclId);
+fn act_on_start_delayed_method(&mut self, f: DeclId);
+fn act_on_finish_delayed_method(&mut self, f: DeclId);
+fn act_on_start_field_init(&mut self, field: DeclId);
+```
 Modules: `kiln_sema/src/class/{mod,access,special,ctorinit,temporary,virtual}.rs`
 (§9).
 
