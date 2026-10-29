@@ -310,6 +310,9 @@ impl Sema<'_, '_> {
             let first = match n.kind() {
                 ExprKind::ImplicitCastExpr
                 | ExprKind::ConstantExpr
+                | ExprKind::MaterializeTemporaryExpr
+                | ExprKind::CXXBindTemporaryExpr
+                | ExprKind::ExprWithCleanups
                 | ExprKind::BinaryOperator
                 | ExprKind::CompoundAssignOperator
                 | ExprKind::ConditionalOperator
@@ -340,6 +343,9 @@ impl Sema<'_, '_> {
         if !self.special.pending_deleted.is_empty() {
             self.flush_pending_deleted();
         }
+        // [intro.execution]/5: the temporaries of the full-expression are
+        // destroyed at its end (spec/sema-class.md §5.3).
+        let e = self.finish_cleanups(e);
         if self.pending_odr.is_empty() {
             return e;
         }
@@ -900,13 +906,8 @@ impl Sema<'_, '_> {
         if self.unevaluated == 0 && !self.in_template() {
             match n.kind() {
                 DeclKind::Function | DeclKind::CXXMethod => {
-                    let own = self
-                        .func
-                        .as_ref()
-                        .is_some_and(|f| self.ast.first(f.decl) == self.ast.first(d));
-                    if !own {
-                        self.mark_used_at(d, loc);
-                    }
+                    let at = self.eloc(e);
+                    self.mark_function_referenced(d, at);
                 }
                 DeclKind::Var | DeclKind::ParmVar => self.pending_odr.push(e),
                 _ => {}
@@ -2191,7 +2192,8 @@ impl Sema<'_, '_> {
         };
         let at = self.begin_loc(callee);
         let (ty, vk) = self.call_result_of(proto.ret(), loc, named, at);
-        self.builder().call(f, &conv_args, ty, vk, loc, rparen, ExprFlags::NONE)
+        let call = self.builder().call(f, &conv_args, ty, vk, loc, rparen, ExprFlags::NONE);
+        self.maybe_bind_temporary(call)
     }
 
     /// Converts the arguments of a call through a function of type `proto`
@@ -2199,7 +2201,11 @@ impl Sema<'_, '_> {
     /// trailing parameters ([dcl.fct.default]/1) when the callee is known.
     /// `braced` holds the braced-init-list arguments, parallel to `args`.
     /// Diagnoses and returns `None` on an arity or conversion error.
-    #[allow(clippy::too_many_arguments, reason = "one per part of the call")]
+    #[allow(
+        clippy::too_many_arguments,
+        clippy::too_many_lines,
+        reason = "one per part of the call; one step per paragraph of [expr.call]"
+    )]
     pub(crate) fn convert_call_args(
         &mut self,
         named: Option<CallCallee>,
@@ -2284,6 +2290,25 @@ impl Sema<'_, '_> {
             if i < n {
                 let pt = conv::strip_cv(self, params[i]);
                 let to = if self.ast.types.is_reference(params[i]) { params[i] } else { pt };
+                if self.ast.types.as_record(to).is_some()
+                    && !self.is_err_expr(a)
+                    && !self.expr_is_type_dependent(a)
+                {
+                    let note = match pdecls.get(i) {
+                        Some(&p) => crate::class::DeletedAs::Param(self.param_decl_note(p)),
+                        None => crate::class::DeletedAs::Call,
+                    };
+                    let at = self.begin_loc(a);
+                    let built = if self.ast.types.as_record(self.ety(a)).is_some() {
+                        self.construct_from_class(a, to, ConvCtx::Argument, at, note)
+                    } else {
+                        self.convert_to_class(a, to, ConvCtx::Argument, at, note)
+                    };
+                    if let Some(x) = built {
+                        conv_args.push(x);
+                        continue;
+                    }
+                }
                 match conv::implicit_convert(self, a, to, ConvCtx::Argument) {
                     Ok(x) => conv_args.push(x),
                     Err(err) => {
@@ -2393,7 +2418,7 @@ impl Sema<'_, '_> {
 
     /// The default argument promotions for a variadic argument
     /// ([expr.call]/12).
-    fn default_argument_promotion(&mut self, a: ExprId) -> ExprId {
+    pub(crate) fn default_argument_promotion(&mut self, a: ExprId) -> ExprId {
         let x = conv::decay(self, a);
         let t = self.ety(x);
         if self.ast.types.builtin(t) == Some(BuiltinType::Float) {
@@ -2522,11 +2547,15 @@ impl Sema<'_, '_> {
     /// Enters an unevaluated operand ([expr.context]/1).
     pub fn enter_unevaluated(&mut self) {
         self.unevaluated += 1;
+        self.push_cleanups();
     }
 
-    /// Leaves an unevaluated operand.
+    /// Leaves an unevaluated operand: its temporaries are never created,
+    /// so they add no cleanups to the enclosing full-expression (clang
+    /// restores the parent's `CleanupInfo`).
     pub fn exit_unevaluated(&mut self) {
         self.unevaluated = self.unevaluated.saturating_sub(1);
+        self.pop_cleanups();
     }
 
     fn trait_name(kind: TraitKind) -> &'static str {
@@ -2669,6 +2698,72 @@ impl Sema<'_, '_> {
                 return self.explicit_cast(style, CastKind::ToVoid, e, ty, loc, rparen);
             }
             return self.bad_cast(style, e, ty, loc);
+        }
+        // [expr.static.cast]/4 with a class target: direct-initialization
+        // of a temporary from an object of the same or a derived class
+        // ([dcl.init.general]/16.6.2; clang's `ConstructorConversion`).
+        if style.allows_static()
+            && self.ast.types.as_record(ty).is_some()
+            && let Some(x) = {
+                let d = self
+                    .diag(DiagId::sema_ovl_deleted_conversion_in_cast, loc)
+                    .arg(style.select())
+                    .arg(self.ty_arg(self.ety(e)))
+                    .arg(self.ty_arg(ty));
+                self.construct_from_class(
+                    e,
+                    ty,
+                    ConvCtx::Cast,
+                    loc,
+                    crate::class::DeletedAs::Cast(d),
+                )
+            }
+        {
+            if self.is_err_expr(x) {
+                return x;
+            }
+            if x == e {
+                return self.explicit_cast(style, CastKind::NoOp, x, ty, loc, rparen);
+            }
+            let x = self.maybe_bind_temporary(x);
+            return self.explicit_cast(style, CastKind::ConstructorConversion, x, ty, loc, rparen);
+        }
+        // [expr.static.cast]/4: `T(e)`, `(T)e`, `static_cast<T>(e)` for
+        // a class `T` direct-initialize a temporary by a constructor.
+        if style.allows_static() && self.ast.types.as_record(ty).is_some() && {
+            let fr = self.ast.types.as_record(self.ety(e));
+            fr.is_none() || !conv::has_conversion_functions(self, self.ety(e))
+        } {
+            let d = self
+                .diag(DiagId::sema_ovl_deleted_conversion_in_cast, loc)
+                .arg(style.select())
+                .arg(self.ty_arg(self.ety(e)))
+                .arg(self.ty_arg(ty));
+            let site = crate::class::ConstructSite {
+                loc: self.begin_loc(e),
+                temp_end: None,
+                rparen: None,
+                sites: crate::class::DiagSites {
+                    access: loc,
+                    deleted: loc,
+                    deleted_as: crate::class::DeletedAs::Cast(d),
+                },
+            };
+            let to = conv::strip_cv(self, ty);
+            if let Some(x) = self.construct_class(to, &[e], crate::class::InitStyle::Direct, site) {
+                if self.is_err_expr(x) {
+                    return x;
+                }
+                // A parenthesized aggregate initialization (P0960) is a
+                // no-op cast of the initialized prvalue.
+                let kind = if self.ast.exprs.get(x).kind() == ExprKind::CXXParenListInitExpr {
+                    CastKind::NoOp
+                } else {
+                    CastKind::ConstructorConversion
+                };
+                let x = self.maybe_bind_temporary(x);
+                return self.explicit_cast(style, kind, x, ty, loc, rparen);
+            }
         }
         if self.ast.types.as_record(ty).is_some() || self.ast.types.as_record(self.ety(e)).is_some()
         {

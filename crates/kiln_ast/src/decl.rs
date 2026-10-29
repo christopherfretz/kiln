@@ -939,9 +939,12 @@ impl VarSpec {
         VarSpec((self.0 & !(3 << 5)) | ((s as u32) << 5))
     }
     /// The bits [`DeclArena::mark_var`] may set after creation: `nrvo`,
-    /// and `inline` (an instantiated static data member becomes inline
-    /// with its deferred initializer, [temp.inst]/4).
-    pub const LATE: VarSpec = VarSpec((1 << 10) | (1 << 9));
+    /// the `Call` init style of a default-initialized class variable
+    /// (set over `C` only, with its `CXXConstructExpr`), `ParenList` (set
+    /// over `Call` once the parenthesized initializer turns out to
+    /// initialize an aggregate), and `inline` (an instantiated static data
+    /// member becomes inline with its deferred initializer, [temp.inst]/4).
+    pub const LATE: VarSpec = VarSpec((1 << 10) | (1 << 9) | (1 << 6) | (1 << 5));
 }
 
 bit_accessors!(VarSpec:
@@ -2494,6 +2497,13 @@ pub mod builtin {
     /// `void *__builtin_addressof(void &) noexcept` ([specialized.addressof];
     /// custom type-checking: the result is a pointer to the operand's type).
     pub const ADDRESSOF: u32 = 200;
+
+    /// `void *__builtin_memcpy(void *, const void *, size_t) noexcept`, as
+    /// sema declares it internally for the memberwise copy of arrays in
+    /// implicit assignment operators ([class.copy.assign]/12; clang
+    /// `buildMemcpyForAssignmentOp`). Not in [`ALL`]: a user call is not
+    /// supported yet.
+    pub const MEMCPY: u32 = 865;
 
     /// The id and spelling of every builtin function kiln declares.
     pub const ALL: &[(u32, &str)] = &[

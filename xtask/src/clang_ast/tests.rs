@@ -229,21 +229,21 @@ TranslationUnitDecl 0x1 <<invalid sloc>> <invalid sloc>
   `-FunctionDecl 0x7 parent 0x1 <col:3> col:3 friend_undeclared trivial 'void ()'
 ";
     let d = side::parse(text).unwrap();
-    assert_eq!(d.len(), 3);
+    assert_eq!(d.len(), 4);
     assert_eq!(
-        (d[0].class, d[1].class, d[2].class),
-        ("CXXMethodDecl", "CXXDestructorDecl", "FunctionDecl")
+        (d[0].class, d[1].class, d[2].class, d[3].class),
+        ("CXXMethodDecl", "ParmVarDecl", "CXXDestructorDecl", "FunctionDecl")
     );
     assert!(d[0].has_flag("implicit-inline") && d[0].has_trailing_flag("delete"));
     assert_eq!(
         d[0].overrides.as_deref(),
         Some("Overrides: [ R::p 'void (int)', S::p 'void (int)' ]")
     );
-    assert!(d[1].has_trailing_flag("trivial") && d[1].has_trailing_flag("noexcept-unevaluated"));
-    assert!(d[1].overrides.is_none());
+    assert!(d[2].has_trailing_flag("trivial") && d[2].has_trailing_flag("noexcept-unevaluated"));
+    assert!(d[2].overrides.is_none());
     // A name before the type is not a trailing word.
-    assert!(d[2].names("trivial") && !d[2].has_trailing_flag("trivial"));
-    assert!(d[2].has_flag("friend_undeclared") && !d[2].has_flag("friend"));
+    assert!(d[3].names("trivial") && !d[3].has_trailing_flag("trivial"));
+    assert!(d[3].has_flag("friend_undeclared") && !d[3].has_flag("friend"));
 }
 
 fn types() -> Types {

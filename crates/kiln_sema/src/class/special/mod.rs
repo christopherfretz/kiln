@@ -11,11 +11,15 @@
 //! - `deletion`: `should_delete` ([class.default.ctor]/2,
 //!   [class.copy.ctor]/10, [class.copy.assign]/7, [class.dtor]/7) and
 //!   its notes, `= default` checks.
+//! - `excspec`: the implicit exception specifications of special
+//!   members ([except.spec]/7-8), resolved when the member is used.
 //! - `uses`: uses of deleted functions ([dcl.fct.def.delete]/2) and the
 //!   default-initialization checks of variables of class type.
 
 mod declare;
+mod define;
 mod deletion;
+mod excspec;
 mod implicit;
 mod uses;
 
@@ -29,6 +33,7 @@ use kiln_source::fx::{FxHashMap, FxHashSet};
 
 use crate::Sema;
 
+pub(crate) use define::{CtorCall, DeletedAs, DiagSites, ImplicitInit, InitEntity, SynthContext};
 pub(crate) use deletion::Selected;
 use uses::PendingDeleted;
 
@@ -177,6 +182,9 @@ pub(crate) struct SpecialState {
     /// Fields declared with a default member initializer
     /// ([class.mem.general]/11), whose initializer is parsed later.
     pub nsdmi: FxHashSet<DeclId>,
+    /// The shared `false` operand of the resolved `noexcept(false)`
+    /// specifications of implicit special members (`excspec`).
+    pub noexcept_false: Option<ExprId>,
 }
 
 impl Sema<'_, '_> {
@@ -382,17 +390,6 @@ impl Sema<'_, '_> {
         if let Some(m) = msg {
             let _ = self.ast.decls.cold.delete_message.insert(f, m);
         }
-    }
-
-    /// The `define_implicit_*` hooks of spec/sema-class.md §4.5: the
-    /// implicit definitions (member-wise construction, copy, assignment
-    /// and destruction) are a later work package; a use that needs one
-    /// reports `{what} is not supported yet`.
-    #[expect(dead_code, reason = "called once constructor calls are built (WP-067b)")]
-    pub(crate) fn define_implicit_special(&mut self, f: DeclId, kind: SpecialKind, loc: Loc) {
-        let _ = f;
-        let what = format!("implicit definition of a {}", kind.spelling());
-        self.unsupported(&what, loc);
     }
 }
 

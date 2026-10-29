@@ -357,6 +357,20 @@ impl Sema<'_, '_> {
         self.is_complete(q)
     }
 
+    /// Instantiates class `d` at `loc` if it is an undefined class
+    /// template specialization or member class of one ([temp.inst]/2;
+    /// clang's `RequireCompleteType` in `TryConstructorInitialization`,
+    /// `isCompleteType` in `TryUserDefinedConversion`), before an
+    /// initialization looks at its constructors. An undefined template is
+    /// not diagnosed: the caller reports the incomplete class.
+    pub(crate) fn instantiate_for_init(&mut self, d: DeclId, loc: Loc) {
+        if (self.ast.spec_info(d).is_some() || self.ast.instantiated_from(d).is_some())
+            && self.ast.definition(d).is_none()
+        {
+            let _ = self.instantiate_class(d, loc, false);
+        }
+    }
+
     /// A class named in a nested-name-specifier must be complete
     /// ([expr.prim.id.qual]/1); false after a diagnostic.
     pub fn require_complete_nns(&mut self, q: QualType, loc: Loc) -> bool {
@@ -697,14 +711,29 @@ impl Sema<'_, '_> {
             } else {
                 lbrace
             };
-            if s.kind_of(f) == DeclKind::CXXConstructor {
-                s.act_on_mem_initializers(f, &[], lbrace);
-            }
             let mut sub = Substituter::new(s, &args);
             sub.entity = Some(spec);
             sub.map_contexts(&pairs);
             for (a, b) in pp.into_iter().zip(fp) {
                 sub.locals.insert(a, crate::templ::subst::DeclOrPack::Decl(b));
+            }
+            if sub.sema.kind_of(f) == DeclKind::CXXConstructor {
+                // The pattern's ctor-initializer, substituted and checked
+                // as the parser's would be (spec/sema-class.md §4.9).
+                let (inits, colon) = sub
+                    .sema
+                    .inst
+                    .pattern_mem_inits
+                    .get(&pdef)
+                    .cloned()
+                    .unwrap_or((Vec::new(), lbrace));
+                for info in &inits {
+                    match sub.mem_initializer(info) {
+                        Ok(i) => sub.sema.act_on_mem_initializer(f, &i),
+                        Err(_) => sub.sema.note_failed_mem_initializer(f),
+                    }
+                }
+                sub.sema.act_on_mem_initializers(f, &[], colon);
             }
             let b = sub.body(body);
             s.act_on_finish_function_def(f, b, rbrace);

@@ -91,6 +91,9 @@ impl Parser<'_, '_> {
         // [temp.point]/7: the end of the translation unit is a point of
         // instantiation of every pending definition.
         self.s.end_of_tu_instantiations();
+        // Then clang's `ActOnEndOfTranslationUnit` checks (delegating
+        // constructor cycles), after the pending instantiations as there.
+        self.s.act_on_end_of_translation_unit();
     }
 
     /// A declaration at namespace scope ([dcl.pre] declaration).

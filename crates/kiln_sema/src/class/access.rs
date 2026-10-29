@@ -394,16 +394,43 @@ impl Sema<'_, '_> {
         Some(self.access_path_notes(msg, &ec, &t, naming))
     }
 
+    /// clang `CheckConstructorAccess` for constructor `m` of a base class
+    /// (`base`) or member subobject initialized by the constructor being
+    /// defined (the current context): a base class constructor is named
+    /// with the derived class as the object class (clang's `ObjectClass`
+    /// for `EK_Base`), so a protected one is accessible; a member's with
+    /// its own class. `None` if accessible, else `mk(protected)` with the
+    /// access-path notes.
+    pub(crate) fn subobject_member_access(
+        &self,
+        m: DeclId,
+        base: bool,
+        mk: impl FnOnce(&Self, bool) -> Diag,
+    ) -> Option<Diag> {
+        let declaring = self.declaring_class(m)?;
+        let declaring = self.ast.definition(declaring).unwrap_or(declaring);
+        let ec = self.effective_context();
+        let object = if base { ec.records.first().copied() } else { Some(declaring) };
+        let t = self.member_target(m, object)?;
+        let unpriv = self.unprivileged_access(declaring, t.declaring, t.decl_access);
+        if self.is_accessible(&ec, &t, declaring, unpriv) {
+            return None;
+        }
+        let msg = mk(self, unpriv == Access::Protected);
+        Some(self.access_path_notes(msg, &ec, &t, declaring))
+    }
+
     /// Whether special member `m` of the class of a subobject is
     /// accessible from a member of class `from` (clang
     /// `SpecialMemberDeletionInfo::isAccessible`, [class.default.ctor]/2,
     /// [class.copy.ctor]/10): for a base class subobject (`base`) its
-    /// members are named in the base, without an object expression;
-    /// for a member subobject, through an object of its class.
+    /// members are named through an object of the derived class `from`;
+    /// for a member subobject, through an object of its own class.
     pub(crate) fn special_accessible_from(&self, m: DeclId, from: DeclId, base: bool) -> bool {
         let Some(declaring) = self.declaring_class(m) else { return true };
         let declaring = self.ast.definition(declaring).unwrap_or(declaring);
-        let Some(t) = self.member_target(m, (!base).then_some(declaring)) else { return true };
+        let object = if base { Some(self.ast.first(from)) } else { Some(declaring) };
+        let Some(t) = self.member_target(m, object) else { return true };
         let ec = self.effective_context_at(from);
         let unpriv = self.unprivileged_access(declaring, t.declaring, t.decl_access);
         self.is_accessible(&ec, &t, declaring, unpriv)

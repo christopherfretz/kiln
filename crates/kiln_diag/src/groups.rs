@@ -44,7 +44,7 @@ macro_rules! diag_groups {
 
 diag_groups! {
     All = "all" [Most];
-    Most = "most" [Comment, UnknownPragmas, OverloadedVirtual, UnevaluatedExpression];
+    Most = "most" [Comment, UnknownPragmas, OverloadedVirtual, UnevaluatedExpression, Reorder, Uninitialized];
     Pragmas = "pragmas" [UnknownPragmas, IgnoredPragmas];
     Pedantic = "pedantic" [];
     BackslashNewlineEscape = "backslash-newline-escape" [];
@@ -151,6 +151,14 @@ diag_groups! {
     Deprecated = "deprecated" [DeprecatedDeclarations, DeprecatedRedundantConstexprStaticDef];
     DeprecatedRedundantConstexprStaticDef = "deprecated-redundant-constexpr-static-def" [];
     ExplicitSpecializationStorageClass = "explicit-specialization-storage-class" [];
+    ReturnStackAddress = "return-stack-address" [];
+    Reorder = "reorder" [ReorderCtor];
+    ReorderCtor = "reorder-ctor" [];
+    Uninitialized = "uninitialized" [];
+    DelegatingCtorCycles = "delegating-ctor-cycles" [];
+    CallToPureVirtualFromCtorDtor = "call-to-pure-virtual-from-ctor-dtor" [];
+    Dangling = "dangling" [DanglingField, ReturnStackAddress];
+    DanglingField = "dangling-field" [];
 }
 
 impl Group {

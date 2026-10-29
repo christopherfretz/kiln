@@ -76,8 +76,15 @@ fn class_features_report_unsupported() {
             init: Initializer::Paren(vec![one], L, L),
             pack_expansion: false,
         };
+        // WP-067b: ctor-initializers are implemented; `x` names nothing.
         s.act_on_mem_initializers(f, &[init], L);
-        assert_eq!(messages(sink), unsupported("constructor initializers"));
+        assert_eq!(
+            messages(sink),
+            vec![
+                "error: member initializer 'x' does not name a non-static data member or base class"
+                    .to_owned()
+            ]
+        );
         s.act_on_finish_record_definition(r, true);
     });
 }

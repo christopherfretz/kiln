@@ -263,7 +263,7 @@ impl Substituter<'_, '_, '_> {
                 Ok(match args.as_slice() {
                     [] => self.sema.act_on_value_init_cast(ty, loc, end),
                     [a] => self.sema.act_on_cast(CastStyle::Functional, ty, *a, loc, end),
-                    _ => self.sema.act_on_paren_list_cast(ty, &args, loc),
+                    _ => self.sema.act_on_paren_list_cast(ty, &args, loc, end),
                 })
             }
             ExprKind::UnaryExprOrTypeTraitExpr => {
@@ -332,6 +332,22 @@ impl Substituter<'_, '_, '_> {
                 self.unimplemented("constraint satisfaction", loc)
             }
             ExprKind::LambdaExpr => self.unimplemented("lambda expressions in templates", loc),
+            ExprKind::CXXConstructExpr => self.construct_expr(e, loc),
+            ExprKind::CXXTemporaryObjectExpr => {
+                // `T(a, b)` / `T()` / `T{...}` ([expr.type.conv]/2): rebuilt
+                // as written (clang `TransformCXXTemporaryObjectExpr`).
+                let ty = self.ty(n.ty(), loc)?;
+                if ex(self).construct_info(e).list {
+                    let l = self.construct_list(e, loc, end)?;
+                    return Ok(self.sema.act_on_list_cast(ty, &l, loc));
+                }
+                let args = self.expr_list(ex(self).construct_args(e))?;
+                Ok(match args.as_slice() {
+                    [] => self.sema.act_on_value_init_cast(ty, loc, end),
+                    [a] => self.sema.act_on_cast(CastStyle::Functional, ty, *a, loc, end),
+                    _ => self.sema.act_on_paren_list_cast(ty, &args, loc, end),
+                })
+            }
             _ => self.unimplemented(&format!("substitution into {k:?}"), loc),
         }
     }
@@ -516,33 +532,182 @@ impl Substituter<'_, '_, '_> {
         Ok(InitList { items: out, lbrace: n.loc(), rbrace })
     }
 
+    /// A braced-init-list as the parser built it (a mem-initializer's).
+    fn written_list(&mut self, l: &InitList) -> SubstResult<InitList> {
+        let mut items = Vec::with_capacity(l.items.len());
+        for it in &l.items {
+            if !it.designator.is_empty() {
+                return self.unimplemented("designated initializers in a template", l.lbrace);
+            }
+            let value = match &it.value {
+                InitValue::Expr(e) => InitValue::Expr(self.written_arg(*e)?),
+                InitValue::List(n) => InitValue::List(self.written_list(n)?),
+            };
+            items.push(InitItem { designator: Vec::new(), value });
+        }
+        Ok(InitList { items, lbrace: l.lbrace, rbrace: l.rbrace })
+    }
+
+    fn written_arg(&mut self, e: ExprId) -> SubstResult<ExprId> {
+        if self.sema.ast.exprs.get(e).kind() == ExprKind::PackExpansionExpr {
+            let loc = self.sema.ast.exprs.get(e).loc();
+            return self.unimplemented("pack expansion", loc);
+        }
+        self.expr(e)
+    }
+
+    /// A mem-initializer of a constructor of the pattern, as the parser
+    /// handed it to `act_on_mem_initializer` (clang
+    /// `InstantiateMemInitializers`): the id's type and the initializer's
+    /// expressions are substituted; the id is resolved again in the
+    /// instantiated class.
+    pub(crate) fn mem_initializer(
+        &mut self,
+        info: &crate::class::MemInitInfo,
+    ) -> SubstResult<crate::class::MemInitInfo> {
+        use crate::class::MemInitId;
+        if info.pack_expansion {
+            // Reported by `act_on_mem_initializer` (WP-070).
+            return Ok(info.clone());
+        }
+        let id = match info.id {
+            MemInitId::Ident(s) => MemInitId::Ident(s),
+            MemInitId::Type(t) => MemInitId::Type(self.ty(t, info.loc)?),
+        };
+        let init = match &info.init {
+            Initializer::Expr(e) => Initializer::Expr(self.written_arg(*e)?),
+            Initializer::Paren(v, l, r) => {
+                let mut out = Vec::with_capacity(v.len());
+                for &e in v {
+                    out.push(self.written_arg(e)?);
+                }
+                Initializer::Paren(out, *l, *r)
+            }
+            Initializer::List(l) => Initializer::List(self.written_list(l)?),
+        };
+        Ok(crate::class::MemInitInfo { id, loc: info.loc, init, pack_expansion: false })
+    }
+
     /// The initializer of a variable of the pattern, in the form the
     /// parser hands to `act_on_init` (§5.6).
+    /// `None`: a default-initialized variable (its pattern initializer is
+    /// the implicit `CXXConstructExpr` of [dcl.init.general]/7).
     pub(crate) fn initializer(
         &mut self,
         init: ExprId,
         style: kiln_ast::decl::InitStyle,
-    ) -> SubstResult<Initializer> {
+    ) -> SubstResult<Option<Initializer>> {
+        use kiln_ast::decl::InitStyle;
+        // clang `TransformInitializer`: strip the implicit full-expression
+        // and temporary nodes; a construction (or a parenthesized
+        // aggregate initialization) other than copy-initialization goes
+        // back to its parenthesized or braced list of arguments, and the
+        // initialization is redone for the instantiated variable.
+        let peeled = self.peel_initializer(init);
+        let pk = self.sema.ast.exprs.get(peeled).kind();
+        let list_construct =
+            pk == ExprKind::CXXConstructExpr && self.sema.ast.exprs.construct_info(peeled).list;
+        if pk == ExprKind::CXXConstructExpr && (style != InitStyle::C || list_construct) {
+            let pn = *self.sema.ast.exprs.get(peeled);
+            let end = self.sema.ast.exprs.end_loc(peeled);
+            if list_construct {
+                let l = self.construct_list(peeled, pn.loc(), end.unwrap_or(pn.loc()))?;
+                return Ok(Some(Initializer::List(l)));
+            }
+            let args = self.expr_list(self.sema.ast.exprs.construct_args(peeled))?;
+            // No parentheses: the variable was default-initialized.
+            let Some(r) = end else { return Ok(None) };
+            return Ok(Some(Initializer::Paren(args, pn.loc(), r)));
+        }
+        if pk == ExprKind::CXXParenListInitExpr && style != InitStyle::C {
+            let pn = *self.sema.ast.exprs.get(peeled);
+            let args = self.expr_list(self.sema.ast.exprs.paren_list_inits(peeled))?;
+            let r = self.sema.ast.exprs.end_loc(peeled).unwrap_or(pn.loc());
+            return Ok(Some(Initializer::Paren(args, pn.loc(), r)));
+        }
         let n = *self.sema.ast.exprs.get(init);
-        match n.kind() {
+        Ok(Some(match n.kind() {
             ExprKind::ParenListExpr => {
                 let l = kiln_ast::ids::ListId::new(n.a());
                 let args = self.expr_list(l)?;
                 let r = self.sema.ast.exprs.end_loc(init).unwrap_or(n.loc());
-                Ok(Initializer::Paren(args, n.loc(), r))
+                Initializer::Paren(args, n.loc(), r)
             }
             // `= {…}` and `{…}` alike: list-initialization ([dcl.init.list]/1).
-            ExprKind::InitListExpr => Ok(Initializer::List(self.init_list(init)?)),
+            ExprKind::InitListExpr => Initializer::List(self.init_list(init)?),
             _ => {
                 let e = self.expr(init)?;
-                Ok(match style {
-                    kiln_ast::decl::InitStyle::Call => {
+                match style {
+                    InitStyle::Call | InitStyle::ParenList => {
                         let r = self.sema.ast.exprs.end_loc(init).unwrap_or(n.loc());
                         Initializer::Paren(vec![e], n.loc(), r)
                     }
                     _ => Initializer::Expr(e),
-                })
+                }
+            }
+        }))
+    }
+
+    /// The initializer `init` without the implicit nodes clang's
+    /// `TransformInitializer` strips: the full-expression, a
+    /// materialization, temporary bindings and an implicit conversion.
+    pub(crate) fn peel_initializer(&self, mut init: ExprId) -> ExprId {
+        let ex = &self.sema.ast.exprs;
+        if ex.get(init).kind() == ExprKind::ExprWithCleanups {
+            init = ex.operand(init);
+        }
+        if ex.get(init).kind() == ExprKind::MaterializeTemporaryExpr {
+            init = ex.operand(init);
+        }
+        while ex.get(init).kind() == ExprKind::CXXBindTemporaryExpr {
+            init = ex.operand(init);
+        }
+        if ex.get(init).kind() == ExprKind::ImplicitCastExpr {
+            init = ex.operand(init);
+        }
+        init
+    }
+
+    /// A `CXXConstructExpr` that must be rebuilt ([class.ctor], [dcl.init];
+    /// spec/sema-templates.md §5.4). As an implicit node it is stripped:
+    /// with one argument it is the conversion of that argument, which the
+    /// enclosing action redoes. Other forms appear only as initializers
+    /// (see [`Self::initializer`]).
+    fn construct_expr(&mut self, e: ExprId, loc: Loc) -> SubstResult<ExprId> {
+        let ast = &self.sema.ast;
+        let ex = &ast.exprs;
+        if !ex.construct_info(e).list {
+            let args: Vec<ExprId> = ast
+                .lists
+                .iter::<ExprId>(ex.construct_args(e))
+                .take_while(|&a| ex.get(a).kind() != ExprKind::CXXDefaultArgExpr)
+                .collect();
+            if let [a] = args.as_slice() {
+                return self.expr(*a);
             }
         }
+        self.unimplemented("substitution into this CXXConstructExpr", loc)
+    }
+
+    /// The braced list of list-initializing construct expression `e`
+    /// (clang `TransformInitializer` reverting it to syntactic form).
+    pub(crate) fn construct_list(
+        &mut self,
+        e: ExprId,
+        lbrace: Loc,
+        rbrace: Loc,
+    ) -> SubstResult<InitList> {
+        let items: Vec<ExprId> = self
+            .sema
+            .ast
+            .lists
+            .iter::<ExprId>(self.sema.ast.exprs.construct_args(e))
+            .take_while(|&a| self.sema.ast.exprs.get(a).kind() != ExprKind::CXXDefaultArgExpr)
+            .collect();
+        let mut out = Vec::with_capacity(items.len());
+        for x in items {
+            out.push(self.init_value(x)?);
+        }
+        Ok(InitList { items: out, lbrace, rbrace })
     }
 }

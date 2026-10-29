@@ -2733,6 +2733,10 @@ impl Compiler<'_> {
                 self.emit_at(Op::ZeroInit, 0, &[p, ty.0], e);
                 return;
             }
+            // Default-initialization by a trivial constructor performs no
+            // initialization ([dcl.init.general]/7.1): the object stays
+            // indeterminate.
+            ExprKind::CXXConstructExpr if self.ast().is_trivial_default_construction(e) => return,
             _ => {}
         }
         if !self.o.types.is_aggregate(ty) {
@@ -2866,7 +2870,13 @@ impl Compiler<'_> {
                     self.emit_at(Op::ZeroInit, 0, &[q, fi.ty.0], e);
                 }
             }
-            TyKind::Record { .. } => {
+            TyKind::Record { decl, .. } => {
+                if self.ast().decls.bases(decl, &self.ast().lists).next().is_some() {
+                    // todo(WP-076): base subobjects of an aggregate (the
+                    // list's first elements, [dcl.init.aggr]/2).
+                    self.unsupported(e);
+                    return;
+                }
                 let fields = self.o.types.fields(ty).to_vec();
                 let mut it = inits.iter();
                 for fi in fields {

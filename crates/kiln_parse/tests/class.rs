@@ -196,9 +196,8 @@ fn class_ctor_initializers() {
 fn class_out_of_line_definitions() {
     let p = parse("struct S { int a; S(); void f(); }; S::S() : a(1) {} void S::f() {}");
     assert_parsed(&p);
-    // Constructors are declared (WP-067a); ctor-initializers are WP-067b.
-    p.assert_diag("1:44 error: constructor initializers is not supported yet");
-    assert_eq!(p.problems().len(), 1, "{:?}", p.problems());
+    // Constructors (WP-067a) and ctor-initializers (WP-067b) are supported.
+    assert!(p.problems().is_empty(), "{:?}", p.problems());
 }
 
 /// [expr.prim.this]: `this` reaches sema (outside a member function).

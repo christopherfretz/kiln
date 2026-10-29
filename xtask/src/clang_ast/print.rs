@@ -134,6 +134,10 @@ struct Index<'a> {
     templated: HashSet<&'a str>,
     /// The template declarations enclosing the walk's current node.
     template_depth: usize,
+    /// Some class has a non-trivial destructor, so a variable or
+    /// parameter may print clang's `destroyed` (read from the side
+    /// channel only then).
+    nontrivial_dtor: bool,
     /// Each class template specialization's `ClassTemplateDecl` (by the
     /// specialization's id; an explicit one is listed under its template
     /// by reference).
@@ -141,6 +145,14 @@ struct Index<'a> {
     /// The `ClassTemplateDecl`s by name, with their lexical contexts (a
     /// partial specialization's JSON does not name its template).
     templates_by_name: HashMap<&'a str, Vec<&'a Json>>,
+}
+
+/// Whether `n` is a `CXXRecordDecl` whose destructor is non-trivial.
+fn has_nontrivial_dtor(n: &Json, k: &str) -> bool {
+    k == "CXXRecordDecl"
+        && n.get("definitionData")
+            .and_then(|d| d.get("dtor"))
+            .is_some_and(|d| flag(d, "nonTrivial"))
 }
 
 impl<'a> Index<'a> {
@@ -216,6 +228,7 @@ impl<'a> Index<'a> {
                 inner_dc = n;
             }
         }
+        self.nontrivial_dtor |= has_nontrivial_dtor(n, k);
         self.note_template(n, k);
         if parent == "FriendDecl" {
             self.befriended.insert(id(n));
@@ -778,6 +791,9 @@ impl<'a> Printer<'a, '_> {
                     Some(other) => {
                         return Err(format!("clang-ast: default argument init style `{other}`"));
                     }
+                }
+                if self.destroyed(n)? {
+                    push_word(&mut l, "destroyed");
                 }
                 if flag(n, "isParameterPack") {
                     push_word(&mut l, "pack");
@@ -1590,7 +1606,20 @@ impl<'a> Printer<'a, '_> {
                 l.push_str(&v);
             }
         }
+        if self.destroyed(n)? {
+            push_word(&mut l, "destroyed");
+        }
         Ok(l)
+    }
+
+    /// clang's `destroyed` (`VarDecl::needsDestruction`), which only the
+    /// text dump shows.
+    fn destroyed(&mut self, n: &'a Json) -> Res<bool> {
+        if !self.ix.nontrivial_dtor {
+            return Ok(false);
+        }
+        let Some(&pos) = self.ix.order.get(id(n)) else { return Ok(false) };
+        Ok(self.side()?[pos].has_trailing_flag("destroyed"))
     }
 
     /// The `value=` of a constexpr variable, from the side channel (none

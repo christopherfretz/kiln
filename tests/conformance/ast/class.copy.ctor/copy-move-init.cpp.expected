@@ -1,0 +1,124 @@
+Dumping q::f:
+FunctionDecl f 'void (S, D, T, const S)'
+|-ParmVarDecl used a 'S':'q::S' destroyed
+|-ParmVarDecl used d 'D':'q::D' destroyed
+|-ParmVarDecl used t 'T':'q::T'
+|-ParmVarDecl used cs 'const S':'const q::S' destroyed
+`-CompoundStmt
+  |-DeclStmt
+  | `-VarDecl b 'S':'q::S' cinit destroyed
+  |   `-CXXConstructExpr 'S':'q::S' 'void (const S &) noexcept'
+  |     `-ImplicitCastExpr 'const S':'const q::S' lvalue <NoOp>
+  |       `-DeclRefExpr 'S':'q::S' lvalue ParmVar 'a' 'S':'q::S'
+  |-DeclStmt
+  | `-VarDecl c 'S':'q::S' callinit destroyed
+  |   `-CXXConstructExpr 'S':'q::S' 'void (const S &) noexcept'
+  |     `-ImplicitCastExpr 'const S':'const q::S' lvalue <NoOp>
+  |       `-DeclRefExpr 'S':'q::S' lvalue ParmVar 'a' 'S':'q::S'
+  |-DeclStmt
+  | `-VarDecl e 'S':'q::S' cinit destroyed
+  |   `-CXXConstructExpr 'S':'q::S' 'void (const S &) noexcept'
+  |     `-ImplicitCastExpr 'const S':'const q::S' xvalue <NoOp>
+  |       `-CallExpr 'S':'q::S' xvalue
+  |         `-ImplicitCastExpr 'S &&(*)()' <FunctionToPointerDecay>
+  |           `-DeclRefExpr 'S &&()' lvalue Function 'xv' 'S &&()'
+  |-DeclStmt
+  | `-VarDecl g 'S':'q::S' cinit destroyed
+  |   `-CXXConstructExpr 'S':'q::S' 'void (const S &) noexcept'
+  |     `-ImplicitCastExpr 'const S':'const q::S' lvalue <DerivedToBase (S)>
+  |       `-ImplicitCastExpr 'const D':'const q::D' lvalue <NoOp>
+  |         `-DeclRefExpr 'D':'q::D' lvalue ParmVar 'd' 'D':'q::D'
+  |-DeclStmt
+  | `-VarDecl h 'S':'q::S' cinit destroyed
+  |   `-ExprWithCleanups 'S':'q::S'
+  |     `-CXXConstructExpr 'S':'q::S' 'void (const S &) noexcept'
+  |       `-ImplicitCastExpr 'const S':'const q::S' lvalue <DerivedToBase (S)>
+  |         `-MaterializeTemporaryExpr 'const D':'const q::D' lvalue
+  |           `-ImplicitCastExpr 'const D':'const q::D' <NoOp>
+  |             `-CXXBindTemporaryExpr 'D':'q::D' (CXXTemporary)
+  |               `-CallExpr 'D':'q::D'
+  |                 `-ImplicitCastExpr 'D (*)()' <FunctionToPointerDecay>
+  |                   `-DeclRefExpr 'D ()' lvalue Function 'mkd' 'D ()'
+  |-DeclStmt
+  | `-VarDecl i 'S':'q::S' cinit destroyed
+  |   `-ExprWithCleanups 'S':'q::S'
+  |     `-CXXBindTemporaryExpr 'S':'q::S' (CXXTemporary)
+  |       `-CallExpr 'S':'q::S'
+  |         `-ImplicitCastExpr 'S (*)()' <FunctionToPointerDecay>
+  |           `-DeclRefExpr 'S ()' lvalue Function 'mk' 'S ()'
+  |-DeclStmt
+  | `-VarDecl j 'T':'q::T' cinit
+  |   `-CXXConstructExpr 'T':'q::T' 'void (const T &) noexcept'
+  |     `-ImplicitCastExpr 'const T':'const q::T' lvalue <NoOp>
+  |       `-DeclRefExpr 'T':'q::T' lvalue ParmVar 't' 'T':'q::T'
+  |-DeclStmt
+  | `-VarDecl k 'const S':'const q::S' cinit destroyed
+  |   `-CXXConstructExpr 'const S':'const q::S' 'void (const S &) noexcept'
+  |     `-ImplicitCastExpr 'const S':'const q::S' lvalue <NoOp>
+  |       `-DeclRefExpr 'S':'q::S' lvalue ParmVar 'a' 'S':'q::S'
+  |-ExprWithCleanups 'void'
+  | `-CallExpr 'void'
+  |   |-ImplicitCastExpr 'void (*)(S)' <FunctionToPointerDecay>
+  |   | `-DeclRefExpr 'void (S)' lvalue Function 'take' 'void (S)'
+  |   `-CXXBindTemporaryExpr 'S':'q::S' (CXXTemporary)
+  |     `-CXXConstructExpr 'S':'q::S' 'void (const S &) noexcept'
+  |       `-ImplicitCastExpr 'const S':'const q::S' lvalue <NoOp>
+  |         `-DeclRefExpr 'S':'q::S' lvalue ParmVar 'a' 'S':'q::S'
+  |-ExprWithCleanups 'void'
+  | `-CallExpr 'void'
+  |   |-ImplicitCastExpr 'void (*)(const S)' <FunctionToPointerDecay>
+  |   | `-DeclRefExpr 'void (const S)' lvalue Function 'takec' 'void (const S)'
+  |   `-CXXBindTemporaryExpr 'S':'q::S' (CXXTemporary)
+  |     `-CXXConstructExpr 'S':'q::S' 'void (const S &) noexcept'
+  |       `-ImplicitCastExpr 'const S':'const q::S' lvalue <NoOp>
+  |         `-DeclRefExpr 'S':'q::S' lvalue ParmVar 'a' 'S':'q::S'
+  |-ExprWithCleanups 'void'
+  | `-CallExpr 'void'
+  |   |-ImplicitCastExpr 'void (*)(S)' <FunctionToPointerDecay>
+  |   | `-DeclRefExpr 'void (S)' lvalue Function 'take' 'void (S)'
+  |   `-CXXBindTemporaryExpr 'S':'q::S' (CXXTemporary)
+  |     `-CXXConstructExpr 'S':'q::S' 'void (const S &) noexcept'
+  |       `-ImplicitCastExpr 'const S':'const q::S' lvalue <DerivedToBase (S)>
+  |         `-ImplicitCastExpr 'const D':'const q::D' lvalue <NoOp>
+  |           `-DeclRefExpr 'D':'q::D' lvalue ParmVar 'd' 'D':'q::D'
+  |-ExprWithCleanups 'void'
+  | `-CStyleCastExpr 'void' <ToVoid>
+  |   `-CXXFunctionalCastExpr 'S':'q::S' functional cast to S <ConstructorConversion>
+  |     `-CXXBindTemporaryExpr 'S':'q::S' (CXXTemporary)
+  |       `-CXXConstructExpr 'S':'q::S' 'void (const S &) noexcept'
+  |         `-ImplicitCastExpr 'const S':'const q::S' lvalue <NoOp>
+  |           `-DeclRefExpr 'S':'q::S' lvalue ParmVar 'a' 'S':'q::S'
+  |-ExprWithCleanups 'void'
+  | `-CStyleCastExpr 'void' <ToVoid>
+  |   `-CXXStaticCastExpr 'S':'q::S' static_cast<S> <ConstructorConversion>
+  |     `-CXXBindTemporaryExpr 'S':'q::S' (CXXTemporary)
+  |       `-CXXConstructExpr 'S':'q::S' 'void (const S &) noexcept'
+  |         `-ImplicitCastExpr 'const S':'const q::S' lvalue <DerivedToBase (S)>
+  |           `-ImplicitCastExpr 'const D':'const q::D' lvalue <NoOp>
+  |             `-DeclRefExpr 'D':'q::D' lvalue ParmVar 'd' 'D':'q::D'
+  |-ExprWithCleanups 'void'
+  | `-CStyleCastExpr 'void' <ToVoid>
+  |   `-CStyleCastExpr 'S':'q::S' <ConstructorConversion>
+  |     `-CXXBindTemporaryExpr 'S':'q::S' (CXXTemporary)
+  |       `-CXXConstructExpr 'S':'q::S' 'void (const S &) noexcept'
+  |         `-DeclRefExpr 'const S':'const q::S' lvalue ParmVar 'cs' 'const S':'const q::S'
+  |-CStyleCastExpr 'void' <ToVoid>
+  | `-CXXFunctionalCastExpr 'T':'q::T' functional cast to T <ConstructorConversion>
+  |   `-CXXConstructExpr 'T':'q::T' 'void (const T &) noexcept'
+  |     `-ImplicitCastExpr 'const T':'const q::T' lvalue <NoOp>
+  |       `-DeclRefExpr 'T':'q::T' lvalue ParmVar 't' 'T':'q::T'
+  |-ExprWithCleanups 'void'
+  | `-CStyleCastExpr 'void' <ToVoid>
+  |   `-CXXFunctionalCastExpr 'S':'q::S' functional cast to S <NoOp>
+  |     `-CXXBindTemporaryExpr 'S':'q::S' (CXXTemporary)
+  |       `-CallExpr 'S':'q::S'
+  |         `-ImplicitCastExpr 'S (*)()' <FunctionToPointerDecay>
+  |           `-DeclRefExpr 'S ()' lvalue Function 'mk' 'S ()'
+  `-ExprWithCleanups 'void'
+    `-CStyleCastExpr 'void' <ToVoid>
+      `-CXXStaticCastExpr 'const S':'const q::S' static_cast<const S> <ConstructorConversion>
+        `-CXXBindTemporaryExpr 'const S':'const q::S' (CXXTemporary)
+          `-CXXConstructExpr 'const S':'const q::S' 'void (const S &) noexcept'
+            `-ImplicitCastExpr 'const S':'const q::S' lvalue <NoOp>
+              `-DeclRefExpr 'S':'q::S' lvalue ParmVar 'a' 'S':'q::S'
+

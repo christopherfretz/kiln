@@ -616,8 +616,14 @@ impl Sema<'_, '_> {
         } else {
             Ns::Ordinary
         };
+        // Every local variable may take the return slot (clang
+        // `Scope::AddDecl` fills `ReturnSlots`; parameters do not).
+        let var = self.kind_of(d) == DeclKind::Var;
         if let Some(s) = self.scopes.iter_mut().rev().find(|s| s.is_local()) {
             s.locals.push((name, d, ns));
+            if var {
+                s.nrvo.slots.push(d);
+            }
         }
     }
 

@@ -1,0 +1,76 @@
+Dumping f:
+FunctionDecl f 'void ()'
+`-CompoundStmt
+  |-DeclStmt
+  | `-VarDecl r 'P' listinit
+  |   `-InitListExpr 'P'
+  |     |-InitListExpr 'B'
+  |     | `-IntegerLiteral 'int' 1
+  |     |-InitListExpr 'C'
+  |     | `-IntegerLiteral 'int' 2
+  |     |-IntegerLiteral 'int' 3
+  |     |-IntegerLiteral 'long' 4
+  |     `-IntegerLiteral 'int' 5
+  |-DeclStmt
+  | `-VarDecl s 'P' listinit
+  |   `-InitListExpr 'P'
+  |     |-InitListExpr 'B'
+  |     | `-ImplicitValueInitExpr 'int'
+  |     |-InitListExpr 'C'
+  |     | `-CXXDefaultInitExpr 'int' has rewritten init
+  |     |   `-IntegerLiteral 'int' 7
+  |     |-IntegerLiteral 'int' 1
+  |     |-ImplicitValueInitExpr 'long'
+  |     `-IntegerLiteral 'int' 3
+  |-DeclStmt
+  | `-VarDecl t 'P' listinit
+  |   `-ExprWithCleanups 'P'
+  |     `-InitListExpr 'P'
+  |       |-CXXConstructExpr 'B' 'void (B &&) noexcept'
+  |       | `-MaterializeTemporaryExpr 'B' xvalue
+  |       |   `-CXXFunctionalCastExpr 'B' functional cast to B <NoOp>
+  |       |     `-InitListExpr 'B'
+  |       |       `-IntegerLiteral 'int' 1
+  |       |-InitListExpr 'C'
+  |       | `-CXXDefaultInitExpr 'int' has rewritten init
+  |       |   `-IntegerLiteral 'int' 7
+  |       |-CXXDefaultInitExpr 'int' has rewritten init
+  |       | `-IntegerLiteral 'int' 5
+  |       |-ImplicitValueInitExpr 'long'
+  |       `-ImplicitValueInitExpr 'int'
+  |-DeclStmt
+  | `-VarDecl u 'P' listinit
+  |   `-InitListExpr 'P'
+  |     |-InitListExpr 'B'
+  |     | `-IntegerLiteral 'int' 1
+  |     |-InitListExpr 'C'
+  |     | `-IntegerLiteral 'int' 2
+  |     |-CXXDefaultInitExpr 'int' has rewritten init
+  |     | `-IntegerLiteral 'int' 5
+  |     |-ImplicitValueInitExpr 'long'
+  |     `-ImplicitValueInitExpr 'int'
+  |-DeclStmt
+  | `-VarDecl d 'D' listinit
+  |   `-ExprWithCleanups 'D'
+  |     `-InitListExpr 'D'
+  |       |-CXXConstructExpr 'P' 'void (P &&) noexcept'
+  |       | `-MaterializeTemporaryExpr 'P' xvalue
+  |       |   `-CallExpr 'P'
+  |       |     `-ImplicitCastExpr 'P (*)()' <FunctionToPointerDecay>
+  |       |       `-DeclRefExpr 'P ()' lvalue Function 'mk' 'P ()'
+  |       `-IntegerLiteral 'int' 9
+  `-DeclStmt
+    `-VarDecl e 'D' listinit
+      `-InitListExpr 'D'
+        |-InitListExpr 'P'
+        | |-InitListExpr 'B'
+        | | `-ImplicitValueInitExpr 'int'
+        | |-InitListExpr 'C'
+        | | `-CXXDefaultInitExpr 'int' has rewritten init
+        | |   `-IntegerLiteral 'int' 7
+        | |-CXXDefaultInitExpr 'int' has rewritten init
+        | | `-IntegerLiteral 'int' 5
+        | |-ImplicitValueInitExpr 'long'
+        | `-ImplicitValueInitExpr 'int'
+        `-ImplicitValueInitExpr 'int'
+

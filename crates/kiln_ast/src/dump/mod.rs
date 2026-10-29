@@ -904,12 +904,18 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                     self.value(c);
                 }
             }
+            if n.ty().is_some_and(|t| needs_destruction(ast, t)) {
+                self.line.push_str(" destroyed");
+            }
         } else if let Some(p) = decls.param(d) {
             let p = *p;
             self.name(d);
             self.opt_ty(n.ty());
             if p.default_arg.is_some() {
                 self.line.push_str(" cinit");
+            }
+            if n.ty().is_some_and(|t| needs_destruction(ast, t)) {
+                self.line.push_str(" destroyed");
             }
             if p.flags & ParamData::PACK != 0 {
                 self.line.push_str(" pack");
@@ -1490,9 +1496,16 @@ impl<'a, W: io::Write> Dumper<'a, W> {
         self.line.push_str("CXXCtorInitializer");
         let Some(ci) = self.ast.ctor_inits(c).nth(i as usize).copied() else { return };
         match ci.kind {
-            CtorInitKind::Field | CtorInitKind::IndirectField => {
+            CtorInitKind::Field => {
                 self.line.push(' ');
                 self.decl_ref(DeclId::new(ci.target));
+            }
+            // clang's `getAnyMember`: the last field of the chain.
+            CtorInitKind::IndirectField => {
+                let d = DeclId::new(ci.target);
+                let leaf = self.ast.lists.iter::<DeclId>(self.ast.indirect_field_chain(d)).last();
+                self.line.push(' ');
+                self.decl_ref(leaf.unwrap_or(d));
             }
             CtorInitKind::Base | CtorInitKind::VirtualBase => {
                 self.ty(QualType::unqual(TypeId::new(ci.target)));
@@ -1940,4 +1953,24 @@ fn is_value_decl(k: DeclKind) -> bool {
                 | DeclKind::IndirectField
                 | DeclKind::TemplateParamObject
         )
+}
+
+/// clang `VarDecl::needsDestruction`: the (array element) type is a class
+/// with a non-trivial destructor ([basic.life]/1). Sema declares the
+/// destructor of every variable's class (spec/sema-class.md §4.8), so a
+/// class without a declared destructor is not destroyed.
+fn needs_destruction(ast: &Ast, t: QualType) -> bool {
+    let mut t = t;
+    for _ in 0..256 {
+        match ast.types.element(t) {
+            Some(e) if ast.types.is_array(t) => t = e,
+            _ => break,
+        }
+    }
+    let Some(def) = ast.types.as_record(t).and_then(|r| ast.definition(r)) else { return false };
+    ast.decls.record(def).is_some_and(|x| !x.defn.contains(DefinitionBits::TRIVIAL_DTOR))
+        && ast
+            .destructor(def)
+            .and_then(|d| ast.decls.function(d))
+            .is_some_and(|f| !f.spec.is_trivial())
 }
