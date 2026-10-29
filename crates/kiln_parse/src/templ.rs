@@ -485,9 +485,11 @@ impl Parser<'_, '_> {
         let end = self.skip_template_args(self.pos());
         let l = self.bump().span.lo;
         let mut args = Vec::new();
+        let mut locs = Vec::new();
         let mut ok = true;
         if !self.at_greater() {
             loop {
+                locs.push(self.loc());
                 let Some(a) = self.parse_template_argument() else {
                     ok = false;
                     break;
@@ -500,6 +502,7 @@ impl Parser<'_, '_> {
         }
         if ok && self.at_greater() {
             let r = self.split_greater();
+            self.s.set_template_arg_locs(locs);
             return Some((args, l, r));
         }
         if ok {
@@ -656,22 +659,17 @@ impl Parser<'_, '_> {
         }
         let NameClass::Type(t, d) = class else {
             let text = self.s.ast.symbols().as_str(name).to_owned();
-            let ctx = self.s.decl_name(q.ctx);
-            let d = self
-                .s
-                .diag(DiagId::sema_typename_nested_not_found, name_loc)
-                .arg(text)
-                .arg(format!("'{ctx}'"));
+            let ctx = self.s.qualifier_desc(q.ctx);
+            let d =
+                self.s.diag(DiagId::sema_typename_nested_not_found, name_loc).arg(text).arg(ctx);
             self.emit(d);
             return None;
         };
         self.s.mark_type_referenced(d);
         let kind = self.s.ast.decls.get(d).kind();
-        Some(if kiln_sema::lookup::is_tag_kind(kind) {
-            self.s.elaborated_tag_type(d, TagKeyword::None)
-        } else {
-            t
-        })
+        let named = if kiln_sema::lookup::is_tag_kind(kind) { self.s.tag_type(d) } else { t };
+        // The qualifier as written is sugar: `'S::P':'int *'`.
+        Some(self.s.ast.types.elaborated(kw, Some(q.nns), named))
     }
 
     /// True at a type-constraint followed by `auto` or `decltype(auto)`

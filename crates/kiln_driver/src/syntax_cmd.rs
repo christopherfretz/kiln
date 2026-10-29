@@ -5,6 +5,7 @@
 //! AST dumps (`spec/driver.md` "Syntax checking", `spec/ast-dump.md`,
 //! `spec/abi.md` §8).
 
+use std::io::Write as _;
 use std::sync::Arc;
 
 use kiln_ast::dump::{DumpOptions, Filter, dump};
@@ -104,19 +105,26 @@ impl SyntaxJob<'_> {
             return;
         };
         // `-MD` with `-fsyntax-only` is rejected before this (no deps).
-        let Some((pp, _deps)) = job.build_preprocessor(sm, engine, interner, inputs) else {
+        let Some((pp, _deps)) = job.build_preprocessor(sm, engine, interner, inputs, true) else {
             return;
         };
         let popts = ParseOptions {
             std: job.std.lex,
             exceptions: a.predef.exceptions.unwrap_or(true),
             rtti: a.predef.rtti.unwrap_or(true),
+            inst_limits: a.templ.limits(),
+            inst_report: a.templ.report,
             ..ParseOptions::default()
         };
         let limits = a.constexpr.limits();
         let (tu, _pp) =
             parse_preprocessed(pp, Arc::clone(interner), engine, target.clone(), &popts, limits);
         a.constexpr.write_report(&tu.oven, sm, engine);
+        if !tu.inst_report.is_empty() {
+            engine.flush();
+            let mut err = job.stderr.clone();
+            let _ = err.write_all(tu.inst_report.as_bytes());
+        }
         let ast = tu.ast;
         if a.dump_record_layouts {
             // clang prints each class as Sema completes it, before any

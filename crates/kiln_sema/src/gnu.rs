@@ -221,7 +221,7 @@ impl Sema<'_, '_> {
             self.emit(d);
             return None;
         }
-        if !self.is_complete(ty) {
+        if !self.require_complete(ty, loc) {
             let d = self.diag(DiagId::sema_offsetof_incomplete_type, loc).arg(self.ty_arg(ty));
             self.emit(self.incomplete_note(d, ty));
             return None;
@@ -282,7 +282,7 @@ impl Sema<'_, '_> {
         end: Loc,
         warned: &mut bool,
     ) -> Option<(i128, QualType)> {
-        if !self.is_complete(cur) {
+        if !self.require_complete(cur, start) {
             let d = self.diag(DiagId::sema_offsetof_incomplete_type, start).arg(self.ty_arg(cur));
             self.emit(self.incomplete_note(d, cur));
             return None;
@@ -445,7 +445,7 @@ impl Sema<'_, '_> {
             self.emit(msg);
             return self.recover(ty, &flat, lparen);
         }
-        if !self.is_complete(ty) {
+        if !self.require_complete(ty, lparen) {
             let msg =
                 self.diag(DiagId::sema_typecheck_decl_incomplete_type, lparen).arg(self.ty_arg(ty));
             self.emit(self.incomplete_note(msg, ty));

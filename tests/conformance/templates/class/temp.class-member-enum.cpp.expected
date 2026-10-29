@@ -1,0 +1,33 @@
+TranslationUnitDecl
+|-ClassTemplateDecl Flags
+| |-NonTypeTemplateParmDecl referenced 'int' depth 0 index 0 N
+| |-CXXRecordDecl struct Flags definition
+| | |-EnumDecl referenced Kind
+| | | |-EnumConstantDecl A 'Flags::Kind'
+| | | | `-DeclRefExpr 'int' NonTypeTemplateParm 'N' 'int'
+| | | `-EnumConstantDecl B 'Flags::Kind'
+| | |   `-BinaryOperator 'int' '+'
+| | |     |-DeclRefExpr 'int' NonTypeTemplateParm 'N' 'int'
+| | |     `-IntegerLiteral 'int' 1
+| | `-FieldDecl k 'Kind':'Flags::Kind'
+| `-ClassTemplateSpecializationDecl struct Flags definition implicit_instantiation
+|   |-TemplateArgument value 'int' 4
+|   |-EnumDecl Kind
+|   | |-EnumConstantDecl A 'Flags<4>::Kind' value=4
+|   | | `-ImplicitCastExpr 'unsigned int' <IntegralCast>
+|   | |   `-ConstantExpr 'int' value=4
+|   | |     `-SubstNonTypeTemplateParmExpr 'int'
+|   | |       |-NonTypeTemplateParmDecl referenced 'int' depth 0 index 0 N
+|   | |       `-IntegerLiteral 'int' 4
+|   | `-EnumConstantDecl referenced B 'Flags<4>::Kind' value=5
+|   |   `-ImplicitCastExpr 'unsigned int' <IntegralCast>
+|   |     `-ConstantExpr 'int' value=5
+|   |       `-BinaryOperator 'int' '+'
+|   |         |-SubstNonTypeTemplateParmExpr 'int'
+|   |         | |-NonTypeTemplateParmDecl referenced 'int' depth 0 index 0 N
+|   |         | `-IntegerLiteral 'int' 4
+|   |         `-IntegerLiteral 'int' 1
+|   `-FieldDecl k 'Kind':'Flags<4>::Kind'
+`-VarDecl v 'int' cinit
+  `-ImplicitCastExpr 'int' <IntegralCast>
+    `-DeclRefExpr 'Flags<4>::Kind' EnumConstant 'B' 'Flags<4>::Kind'

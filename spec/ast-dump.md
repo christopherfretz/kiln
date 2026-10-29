@@ -358,7 +358,8 @@ dependent types print with the parameter names (sugar), and
 `nullptr`/`structural value` lines.
 
 **Templates as written (landed, WP-069).** The lines below are normative;
-specializations and instantiations remain the sketch above (WP-070).
+specializations other than implicit class instantiations remain the
+sketch above (WP-070b/071/072).
 - `ClassTemplateDecl` / `FunctionTemplateDecl` / `VarTemplateDecl` /
   `TypeAliasTemplateDecl` `<name>`. The children are the parameters,
   then the pattern (`CXXRecordDecl`, `FunctionDecl`, `VarDecl`,
@@ -412,6 +413,22 @@ Known gaps:
 - A function parameter named inside its own declarator's trailing
   return type (`auto f(T t) -> decltype(t.x)`) is unsupported, so the
   type prints with `...` for the expression.
+
+**Implicit class instantiations (landed, WP-070a).** Normative:
+- `ClassTemplateSpecializationDecl <tag> <name>`, plus `definition
+  implicit_instantiation` once instantiated, is printed under its
+  `ClassTemplateDecl` after the pattern, in creation order. A
+  specialization that was named but never instantiated prints only the
+  head. Children: one `TemplateArgument` per converted argument
+  (`type '<type>'`, or `value '<param type>' <integer>` for an integral
+  argument), the bases, then the instantiated members. There is no
+  `instantiated` marker; it is the sketch's, not clang's.
+- `SubstNonTypeTemplateParmExpr '<type>'` replaces a reference to a
+  non-type parameter. Its children are the `NonTypeTemplateParmDecl`,
+  then the replacement expression.
+- Type names print as written with the canonical type after `:` when
+  they differ (`'Arr<1 + 4>':'Arr<5>'`), and canonical argument lists
+  omit defaulted arguments as clang 19 does.
 
 ## 6. Differential testing against clang
 `cargo xtask clang-ast <file> [--compiler=] [--std=] [--implicit]
@@ -478,11 +495,14 @@ between kiln and the tool is a real difference. Known-divergent constructs
 are rejected in the table, never patched in goldens by hand.
 
 Rejected by the table:
-- Template specializations and instantiations
-  (`ClassTemplate[Partial]SpecializationDecl`,
+- Template specializations other than the implicit instantiation of a
+  non-variadic class template with type and integral arguments
+  (`ClassTemplatePartialSpecializationDecl`, explicit specializations,
   `VarTemplate[Partial]SpecializationDecl`, `CXXDeductionGuideDecl`,
-  `SubstNonTypeTemplateParmExpr`, and a `TemplateArgument` outside the
-  template nodes that print theirs): WP-070.
+  and a `TemplateArgument` outside the template nodes that print
+  theirs): WP-070b/071/072. Implicit `ClassTemplateSpecializationDecl`s
+  under their `ClassTemplateDecl` and `SubstNonTypeTemplateParmExpr`
+  are compared (§5, WP-070a).
 - `UnresolvedMemberExpr` (member function template names).
 - `ImplicitConceptSpecializationDecl` is dropped. These are clang's
   converted concept arguments; the written ones are the

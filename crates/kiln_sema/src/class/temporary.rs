@@ -124,7 +124,9 @@ impl Sema<'_, '_> {
                 }
             }
         }
-        self.mark_used(f);
+        // A member function of a class template specialization is
+        // instantiated ([temp.inst]/5).
+        self.mark_used_at(f, loc);
     }
 
     /// The end of a full-expression: wraps `e` in an `ExprWithCleanups`

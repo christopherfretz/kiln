@@ -1,0 +1,7 @@
+TranslationUnitDecl
+|-TypedefDecl referenced I 'int'
+|-TypeAliasTemplateDecl Ptr
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| `-TypeAliasDecl Ptr 'T *'
+|-VarDecl p 'Ptr<I>':'int *'
+`-VarDecl cp 'Ptr<const I>':'const int *'

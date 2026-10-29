@@ -4,11 +4,12 @@ use kiln_ast::attr::AttrKind;
 use kiln_ast::decl::{EnumData, InitStyle};
 use kiln_ast::expr::ExprKind;
 use kiln_ast::strings::StringEncoding;
-use kiln_ast::types::{ExcSpec, Quals, RefQual, TagKeyword};
+use kiln_ast::types::{ExcSpec, Quals, RefQual, TagKeyword, UnaryTransformKind};
 use kiln_ast::{AttrId, DeclId, ExprId, QualType};
 use kiln_diag::DiagId;
 use kiln_lex::{Punct, TokKind};
 use kiln_sema::declspec::SpecError;
+use kiln_sema::templ::auto::AutoGroup;
 use kiln_sema::{
     Chunk, DeclSpec, Declarator, DeclaratorContext, DefaultArg, Designator, InitItem, InitList,
     InitValue, Initializer, NameClass, ParamInfo, Sign, SpecialName, StorageSpec, TagUse,
@@ -87,6 +88,11 @@ impl Parser<'_, '_> {
         while !self.at_eof() {
             self.parse_external_declaration();
         }
+        // [temp.point]/7: the end of the translation unit is a point of
+        // instantiation of every pending definition.
+        self.s.end_of_tu_instantiations();
+        // Then clang's `ActOnEndOfTranslationUnit` checks (delegating
+        // constructor cycles), after the pending instantiations as there.
         self.s.act_on_end_of_translation_unit();
     }
 
@@ -454,6 +460,12 @@ impl Parser<'_, '_> {
                 continue;
             }
             if !ds.has_type_specifier()
+                && let Some(k) = self.transform_at(self.pos())
+            {
+                self.parse_unary_transform_into(&mut ds, k, loc);
+                continue;
+            }
+            if !ds.has_type_specifier()
                 && ds.auto_constraint.is_none()
                 && (self.at(Punct::ColonColon) || self.ident().is_some())
                 && self.at_constrained_placeholder()
@@ -567,6 +579,32 @@ impl Parser<'_, '_> {
         ds
     }
 
+    /// A unary type transform `__transform ( type-id )` (spec/sema-templates.md
+    /// §9.2) added to `ds` as a named type.
+    fn parse_unary_transform_into(&mut self, ds: &mut DeclSpec, k: UnaryTransformKind, loc: Loc) {
+        let ty = self.parse_unary_transform(k);
+        if ty.is_none() {
+            ds.invalid = true;
+        }
+        if let Err(e) = ds.set_base(TypeSpecKind::Named, Some(ty.unwrap_or(QualType::ERROR)), loc) {
+            ds.invalid = true;
+            self.spec_error(&e, loc);
+        }
+    }
+
+    /// `__transform ( type-id )`, at the name: the `UnaryTransform` type,
+    /// `None` after an error.
+    pub(crate) fn parse_unary_transform(&mut self, k: UnaryTransformKind) -> Option<QualType> {
+        let loc = self.bump().span.lo;
+        let open = self.bump().span.lo;
+        let Some(ty) = self.parse_type_id() else {
+            self.skip_until(&[Punct::RParen], true, true);
+            return None;
+        };
+        self.expect_closing(Punct::RParen, Punct::LParen, open);
+        self.s.build_unary_transform(k, ty, loc)
+    }
+
     /// A `decltype` type-specifier added to `ds`.
     fn parse_decltype_into(&mut self, ds: &mut DeclSpec, loc: Loc) {
         let (base, ty) = self.parse_decltype_specifier();
@@ -619,9 +657,9 @@ impl Parser<'_, '_> {
             self.bump();
             return (TypeSpecKind::DecltypeAuto, None);
         }
-        self.s.enter_unevaluated();
+        self.s.enter_decltype();
         let e = self.parse_expression();
-        self.s.exit_unevaluated();
+        self.s.exit_decltype(e);
         let Some(e) = e else {
             self.skip_until(&[Punct::RParen], false, true);
             return (TypeSpecKind::Named, None);
@@ -658,6 +696,24 @@ impl Parser<'_, '_> {
             return true;
         }
         match self.scan_name(start) {
+            Some((end, NameClass::Type(..), _)) if end > start + 1 => {
+                // A qualified name: the qualifier is formed (and kept as
+                // sugar) by the parse proper.
+                let ty = match self.parse_nested_name_nns() {
+                    Ok(Some(q)) => self.parse_qualified_type_rest(q, TagKeyword::None),
+                    _ => None,
+                };
+                if ty.is_none() {
+                    ds.invalid = true;
+                }
+                if let Err(e) =
+                    ds.set_base(TypeSpecKind::Named, Some(ty.unwrap_or(QualType::ERROR)), loc)
+                {
+                    ds.invalid = true;
+                    self.spec_error(&e, loc);
+                }
+                true
+            }
             Some((end, NameClass::Type(ty, d), _)) => {
                 while self.pos() < end {
                     self.bump();
@@ -1461,6 +1517,8 @@ impl Parser<'_, '_> {
         let mut base_ty: Option<QualType> = None;
         let mut first = true;
         let direct_init = Self::may_have_direct_init(ctx, ds.storage);
+        // [dcl.spec.auto.general]/8: one placeholder deduction per group.
+        let (mut group, type_at) = (AutoGroup::default(), ds.type_loc.unwrap_or(ds.loc));
         loop {
             let mut d = Declarator::new(ctx, self.loc());
             d.direct_init = direct_init;
@@ -1522,7 +1580,7 @@ impl Parser<'_, '_> {
             let v = self.s.act_on_declarator(&ds, base, &d);
             match self.parse_initializer(d.init_style, d.is_function_declarator()) {
                 Ok(init) => match (v, init) {
-                    (Some(v), Some(i)) => self.s.act_on_init(v, i),
+                    (Some(v), Some(i)) => self.s.act_on_init_in_group(&mut group, v, i, type_at),
                     (Some(v), None) => self.s.act_on_uninit(v),
                     _ => {}
                 },

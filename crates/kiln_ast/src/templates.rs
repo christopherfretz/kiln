@@ -4,11 +4,13 @@
 //! template decls' [`TemplateInfo`], template parameter records, the cold
 //! default-argument and trailing-requires maps, requires-expression
 //! requirements, and the [`AstBuilder`] constructors for template decls and
-//! the dependent expression nodes of sema-templates.md §2.4. Specialization
-//! tables (`specs`, `member_specs`, `specializations`, `partials`, ...) are
-//! WP-070's.
+//! the dependent expression nodes of sema-templates.md §2.4. WP-070a adds
+//! the specialization tables (`specs`, `member_specs`, `specializations`,
+//! `instantiated_from`, `member_map`; sema-templates.md §4.1) and their
+//! constructors ([`AstBuilder::class_spec`], [`AstBuilder::member_of_spec`]).
 
 use kiln_source::Loc;
+use kiln_source::fx::FxHashMap;
 use kiln_source::symbol::Symbol;
 
 use crate::ast::Ast;
@@ -111,6 +113,63 @@ pub struct RequiresData {
     len: u32,
 }
 
+/// How a specialization came to be (spec/ast.md §8.2, clang's
+/// `TemplateSpecializationKind`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[repr(u8)]
+pub enum SpecKind {
+    /// Named (`X<int>`) but neither instantiated nor explicitly
+    /// specialized yet.
+    Undeclared,
+    /// Implicitly instantiated ([temp.inst]).
+    ImplicitInstantiation,
+    /// `template<> struct X<int> {...}` ([temp.expl.spec]).
+    ExplicitSpecialization,
+    /// `extern template struct X<int>;` ([temp.explicit]).
+    ExplicitInstantiationDeclaration,
+    /// `template struct X<int>;` ([temp.explicit]).
+    ExplicitInstantiationDefinition,
+}
+
+/// A class, function or variable template specialization (24 bytes,
+/// spec/ast.md §8.2). Indexed by the specialization's
+/// [`TemplLink::Specialization`] payload.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SpecInfo {
+    /// The primary template (its first declaration).
+    pub template: DeclId,
+    /// The converted arguments, as written (sugared); the canonical list
+    /// is `types.canonical_args(args)`.
+    pub args: ArgListId,
+    /// How the specialization came to be.
+    pub kind: SpecKind,
+    /// The pattern its definition was instantiated from (the primary
+    /// template's pattern definition or a partial specialization); the
+    /// template decl until instantiated.
+    pub from: DeclId,
+    /// The deduced arguments of the partial specialization `from`.
+    pub from_args: Option<ArgListId>,
+    /// Where the definition was first required ([temp.point]).
+    pub point_of_instantiation: Loc,
+    /// The arguments names print with: `args` without the trailing
+    /// arguments that equal their parameter's default (clang's
+    /// `SuppressDefaultTemplateArgs`).
+    pub print_args: ArgListId,
+}
+
+/// A member of a class template specialization (12 bytes, clang's
+/// `MemberSpecializationInfo`). Indexed by the member's
+/// [`TemplLink::MemberOfSpecialization`] payload.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MemberSpecInfo {
+    /// The member of the pattern it was instantiated from.
+    pub instantiated_from: DeclId,
+    /// How the member came to be.
+    pub kind: SpecKind,
+    /// Where its definition was first required.
+    pub point_of_instantiation: Loc,
+}
+
 /// Template tables (spec/ast.md §8, M3).
 #[derive(Debug)]
 pub struct TemplateTables {
@@ -129,6 +188,9 @@ pub struct TemplateTables {
     pub expr_targs: ColdMap<ExprId, ArgListId>,
     /// Nested-name-specifiers of dependent and unresolved names.
     pub expr_nns: ColdMap<ExprId, NnsId>,
+    /// The first token of a qualified dependent name whose qualifier is
+    /// not its own location (clang's `getBeginLoc`).
+    pub expr_begin: ColdMap<ExprId, Loc>,
     /// Set by sema right before it creates a template's pattern: the next
     /// declaration the builder adds is neither a member nor a name (its
     /// template decl is both, [`AstBuilder::template_decl`]).
@@ -136,6 +198,20 @@ pub struct TemplateTables {
     /// The number of enclosing template parameter scopes; while non-zero
     /// new declarations get `DEPENDENT_CTX` ([temp.dep]).
     pub dependent_depth: u32,
+    specs: Vec<SpecInfo>,
+    member_specs: Vec<MemberSpecInfo>,
+    /// `(first decl of template, canonical args) -> specialization`
+    /// (spec/ast.md §8.3).
+    specializations: FxHashMap<(DeclId, ArgListId), DeclId>,
+    /// Each template's specializations in creation order (dump order,
+    /// ast-dump.md §5), by first decl of the template.
+    spec_order: FxHashMap<DeclId, Vec<DeclId>>,
+    /// The pattern of instantiated decls without a [`TemplLink`] (fields,
+    /// enumerators, parameters, typedefs, locals; spec/ast.md §8.2).
+    instantiated_from: FxHashMap<DeclId, DeclId>,
+    /// `(specialization, pattern member) -> instantiated member`
+    /// (`find_instantiated_decl`, sema-templates.md §5.3).
+    member_map: FxHashMap<(DeclId, DeclId), DeclId>,
 }
 
 impl Default for TemplateTables {
@@ -165,9 +241,16 @@ impl Default for TemplateTables {
             defaults: ColdMap::new("template_defaults"),
             trailing_requires: ColdMap::new("trailing_requires"),
             expr_targs: ColdMap::new("expr_targs"),
+            expr_begin: ColdMap::new("expr_begin"),
             expr_nns: ColdMap::new("expr_nns"),
             pattern_next: false,
             dependent_depth: 0,
+            specs: Vec::new(),
+            member_specs: Vec::new(),
+            specializations: FxHashMap::default(),
+            spec_order: FxHashMap::default(),
+            instantiated_from: FxHashMap::default(),
+            member_map: FxHashMap::default(),
         }
     }
 }
@@ -194,6 +277,77 @@ impl TemplateTables {
         self.requires.get(i as usize)
     }
 
+    /// Specialization record `i` (a [`TemplLink::Specialization`] index).
+    pub fn spec(&self, i: u32) -> Option<&SpecInfo> {
+        self.specs.get(i as usize)
+    }
+
+    /// Updates specialization record `i` after instantiation (`kind`,
+    /// `from`, `from_args`, point of instantiation). The template and
+    /// arguments never change.
+    pub fn update_spec(&mut self, i: u32, f: impl FnOnce(&mut SpecInfo)) {
+        if let Some(s) = self.specs.get_mut(i as usize) {
+            let (t, a) = (s.template, s.args);
+            f(s);
+            s.template = t;
+            s.args = a;
+        }
+    }
+
+    /// Member-of-specialization record `i`.
+    pub fn member_spec(&self, i: u32) -> Option<&MemberSpecInfo> {
+        self.member_specs.get(i as usize)
+    }
+
+    /// Updates member record `i` (`kind`, point of instantiation).
+    pub fn update_member_spec(&mut self, i: u32, f: impl FnOnce(&mut MemberSpecInfo)) {
+        if let Some(s) = self.member_specs.get_mut(i as usize) {
+            let from = s.instantiated_from;
+            f(s);
+            s.instantiated_from = from;
+        }
+    }
+
+    /// The specialization of `template` (its first decl) for the
+    /// canonical argument list `canonical`.
+    pub fn find_spec(&self, template: DeclId, canonical: ArgListId) -> Option<DeclId> {
+        self.specializations.get(&(template, canonical)).copied()
+    }
+
+    /// The specializations of `template` (its first decl) in creation
+    /// order.
+    pub fn specs_of(&self, template: DeclId) -> &[DeclId] {
+        self.spec_order.get(&template).map_or(&[], Vec::as_slice)
+    }
+
+    /// The number of specializations (of every template).
+    pub fn spec_count(&self) -> usize {
+        self.specs.len()
+    }
+
+    /// The member of specialization `spec` instantiated from the pattern
+    /// member `pattern`.
+    pub fn find_member(&self, spec: DeclId, pattern: DeclId) -> Option<DeclId> {
+        self.member_map.get(&(spec, pattern)).copied()
+    }
+
+    /// Records that `inst`, a member of specialization `spec`, was
+    /// instantiated from the pattern member `pattern`.
+    pub fn record_member(&mut self, spec: DeclId, pattern: DeclId, inst: DeclId) {
+        let _ = self.member_map.insert((spec, pattern), inst);
+    }
+
+    /// Records the pattern of an instantiated decl that has no
+    /// [`TemplLink`] (fields, enumerators, parameters, typedefs, locals).
+    pub fn set_instantiated_from(&mut self, inst: DeclId, pattern: DeclId) {
+        let _ = self.instantiated_from.insert(inst, pattern);
+    }
+
+    /// The pattern recorded by [`TemplateTables::set_instantiated_from`].
+    pub fn instantiated_from_map(&self, inst: DeclId) -> Option<DeclId> {
+        self.instantiated_from.get(&inst).copied()
+    }
+
     /// `h` with `DEPENDENT_CTX` added while inside a template.
     pub(crate) fn dependent_head(&self, mut h: DeclHead) -> DeclHead {
         if self.dependent_depth > 0 {
@@ -214,7 +368,18 @@ impl HeapSize for TemplateTables {
         r.push(self.defaults.mem_row());
         r.push(self.trailing_requires.mem_row());
         r.push(self.expr_targs.mem_row());
+        r.push(self.expr_begin.mem_row());
         r.push(self.expr_nns.mem_row());
+        r.push(MemRow::of_vec("templ.specs", &self.specs));
+        r.push(MemRow::of_vec("templ.member_specs", &self.member_specs));
+        r.push(MemRow::of_map("templ.specializations", &self.specializations));
+        let order = self.spec_order.values().map(|v| v.capacity() * 4).sum::<usize>() as u64;
+        let mut row = MemRow::of_map("templ.spec_order", &self.spec_order);
+        row.live_bytes += order;
+        row.reserved_bytes += order;
+        r.push(row);
+        r.push(MemRow::of_map("templ.instantiated_from", &self.instantiated_from));
+        r.push(MemRow::of_map("templ.member_map", &self.member_map));
         r
     }
 }
@@ -256,15 +421,69 @@ impl Ast {
         }
     }
 
+    /// The [`TemplLink`] of `d` ([`TemplLink::NONE`] for kinds without
+    /// one).
+    pub fn templ_link(&self, d: DeclId) -> TemplLink {
+        let link = match self.decls.get(d).kind().payload() {
+            crate::decl::PayloadClass::Function => self.decls.function(d).map(|x| x.templ),
+            crate::decl::PayloadClass::Var => self.decls.var(d).map(|x| x.templ),
+            crate::decl::PayloadClass::Record => self.decls.record(d).map(|x| x.templ),
+            crate::decl::PayloadClass::Enum => self.decls.enumeration(d).map(|x| x.templ),
+            crate::decl::PayloadClass::Typedef => self.decls.typedef(d).map(|x| x.templ),
+            _ => None,
+        };
+        link.unwrap_or(TemplLink::NONE)
+    }
+
+    /// The specialization record of `d` with its index, when `d` is a
+    /// class, function or variable template specialization.
+    pub fn spec_info(&self, d: DeclId) -> Option<(u32, &SpecInfo)> {
+        match self.templ_link(d).get() {
+            Some((TemplLinkKind::Specialization, i)) => Some((i, self.templates.spec(i)?)),
+            _ => None,
+        }
+    }
+
+    /// The template arguments a class template specialization's name
+    /// prints with (`None` for other declarations).
+    pub fn spec_print_args(&self, d: DeclId) -> Option<ArgListId> {
+        if self.decls.get(d).kind() != DeclKind::CXXRecord {
+            return None;
+        }
+        self.spec_info(d).map(|(_, s)| s.print_args)
+    }
+
+    /// The member record of `d` with its index, when `d` is a member of a
+    /// class template specialization.
+    pub fn member_spec_info(&self, d: DeclId) -> Option<(u32, &MemberSpecInfo)> {
+        match self.templ_link(d).get() {
+            Some((TemplLinkKind::MemberOfSpecialization, i)) => {
+                Some((i, self.templates.member_spec(i)?))
+            }
+            _ => None,
+        }
+    }
+
+    /// The pattern `d` was instantiated from (spec/ast.md §8.2): a
+    /// specialization's `from`, a member's `instantiated_from`, or the
+    /// sparse map.
+    pub fn instantiated_from(&self, d: DeclId) -> Option<DeclId> {
+        match self.templ_link(d).get() {
+            Some((TemplLinkKind::Specialization, i)) => self
+                .templates
+                .spec(i)
+                .map(|s| s.from)
+                .filter(|&f| !is_template_kind(self.decls.get(f).kind())),
+            Some((TemplLinkKind::MemberOfSpecialization, i)) => {
+                self.templates.member_spec(i).map(|s| s.instantiated_from)
+            }
+            _ => self.templates.instantiated_from_map(d),
+        }
+    }
+
     /// The template decl whose pattern is `d`.
     pub fn described_template(&self, d: DeclId) -> Option<DeclId> {
-        let link = match self.decls.get(d).kind().payload() {
-            crate::decl::PayloadClass::Function => self.decls.function(d)?.templ,
-            crate::decl::PayloadClass::Var => self.decls.var(d)?.templ,
-            crate::decl::PayloadClass::Record => self.decls.record(d)?.templ,
-            crate::decl::PayloadClass::Typedef => self.decls.typedef(d)?.templ,
-            _ => return None,
-        };
+        let link = self.templ_link(d);
         match link.get() {
             Some((TemplLinkKind::Pattern, i)) => self.templates.info(i).map(|t| t.decl),
             _ => None,
@@ -552,6 +771,89 @@ impl AstBuilder<'_> {
         d2
     }
 
+    /// The specialization `template<args>` of class template `template`
+    /// (sema-templates.md §4.2, clang's `ClassTemplateSpecializationDecl`):
+    /// a `CXXRecord` with a [`TemplLink::Specialization`] link
+    /// (`SpecKind::Undeclared`), in the template's semantic context but
+    /// neither a member nor a name. `canonical` is
+    /// `types.canonical_args(args)`; the caller has probed
+    /// [`TemplateTables::find_spec`] first.
+    pub fn class_spec(
+        &mut self,
+        template: DeclId,
+        args: ArgListId,
+        canonical: ArgListId,
+        tag: crate::decl::TagKind,
+    ) -> DeclId {
+        let tmpl = self.ast.first(template);
+        let n = *self.ast.decls.get(tmpl);
+        let ctx = n.ctx().unwrap_or(self.ast.tu);
+        let mut h = DeclHead::new(ctx, n.name(), n.loc());
+        h.misc = n.misc();
+        let i = self.ast.templates.specs.len() as u32;
+        let d = self.ast.decls.next_id();
+        let ty = QualType::unqual(self.ast.types.record_type(d));
+        let redecl = crate::decl::Redecl { prev: None, group: self.ast.redecls.new_group(d) };
+        let payload = Payload::Record(crate::decl::RecordData {
+            redecl,
+            members: Members::default(),
+            bases: ListId::EMPTY,
+            defn: crate::decl::DefinitionBits::empty(),
+            templ: TemplLink::new(TemplLinkKind::Specialization, i),
+            lambda: None,
+            tag,
+        });
+        // Specializations are never dependent-context decls: they exist
+        // only for non-dependent arguments.
+        let depth = std::mem::take(&mut self.ast.templates.dependent_depth);
+        let d2 = self.add_pattern(h, DeclKind::CXXRecord, Some(ty), payload);
+        self.ast.templates.dependent_depth = depth;
+        debug_assert_eq!(d, d2);
+        self.ast.templates.specs.push(SpecInfo {
+            template: tmpl,
+            args,
+            kind: SpecKind::Undeclared,
+            from: tmpl,
+            from_args: None,
+            point_of_instantiation: Loc::INVALID,
+            print_args: args,
+        });
+        let _ = self.ast.templates.specializations.insert((tmpl, canonical), d);
+        self.ast.templates.spec_order.entry(tmpl).or_default().push(d);
+        d
+    }
+
+    /// Links `member`, a member of a class template specialization, to the
+    /// pattern member `pattern` it was instantiated from
+    /// ([`TemplLink::MemberOfSpecialization`]); records it in the member
+    /// map of `spec`. Members of kinds without a [`TemplLink`] go to the
+    /// sparse `instantiated_from` map instead.
+    pub fn member_of_spec(&mut self, spec: DeclId, member: DeclId, pattern: DeclId) {
+        use crate::decl::PayloadClass;
+        self.ast.templates.record_member(spec, pattern, member);
+        let templatable = matches!(
+            self.ast.decls.get(member).kind().payload(),
+            PayloadClass::Function | PayloadClass::Var | PayloadClass::Record | PayloadClass::Enum
+        );
+        if templatable {
+            let i = self.ast.templates.member_specs.len() as u32;
+            if self
+                .ast
+                .decls
+                .set_templ(member, TemplLink::new(TemplLinkKind::MemberOfSpecialization, i))
+                .is_ok()
+            {
+                self.ast.templates.member_specs.push(MemberSpecInfo {
+                    instantiated_from: pattern,
+                    kind: SpecKind::ImplicitInstantiation,
+                    point_of_instantiation: Loc::INVALID,
+                });
+                return;
+            }
+        }
+        self.ast.templates.set_instantiated_from(member, pattern);
+    }
+
     // -------------------------------------------------------------------
     // dependent expressions (spec/sema-templates.md §2.4)
     // -------------------------------------------------------------------
@@ -619,6 +921,7 @@ impl AstBuilder<'_> {
         nns: NnsId,
         name: Symbol,
         targs: Option<ArgListId>,
+        begin: Loc,
         loc: Loc,
     ) -> ExprId {
         let ty = self.dependent_ty();
@@ -634,6 +937,9 @@ impl AstBuilder<'_> {
             name.index(),
         );
         self.side(e, None, targs);
+        if begin != loc {
+            let _ = self.ast.templates.expr_begin.insert(e, begin);
+        }
         e
     }
 
@@ -941,6 +1247,27 @@ impl AstBuilder<'_> {
         );
         let _ = self.ast.exprs.cold.end_loc.insert(e, rbrace);
         e
+    }
+
+    /// A substituted non-type template parameter reference
+    /// ([temp.inst]; clang's `SubstNonTypeTemplateParmExpr`): `param` is
+    /// the `NonTypeTemplateParmDecl` the pattern named and `replacement`
+    /// the converted argument expression. It has the replacement's
+    /// category and type and none of the pattern's dependence.
+    pub fn subst_nttp_expr(&mut self, param: DeclId, replacement: ExprId, loc: Loc) -> ExprId {
+        let n = *self.ast.exprs.get(replacement);
+        self.push_expr(
+            ExprKind::SubstNonTypeTemplateParmExpr,
+            n.value_category(),
+            n.object_kind(),
+            ExprFlags::NONE,
+            n.deps(),
+            0,
+            n.ty(),
+            loc,
+            param.raw(),
+            replacement.raw(),
+        )
     }
 
     /// `C<args>` naming concept `c` ([temp.names]/8): a

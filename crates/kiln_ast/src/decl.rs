@@ -936,10 +936,11 @@ impl VarSpec {
     }
     /// The bits [`DeclArena::mark_var`] may set after creation: `nrvo`,
     /// the `Call` init style of a default-initialized class variable
-    /// (set over `C` only, with its `CXXConstructExpr`), and
-    /// `ParenList` (set over `Call` once the parenthesized initializer
-    /// turns out to initialize an aggregate).
-    pub const LATE: VarSpec = VarSpec(1 << 10 | 1 << 6 | 1 << 5);
+    /// (set over `C` only, with its `CXXConstructExpr`), `ParenList` (set
+    /// over `Call` once the parenthesized initializer turns out to
+    /// initialize an aggregate), and `inline` (an instantiated static data
+    /// member becomes inline with its deferred initializer, [temp.inst]/4).
+    pub const LATE: VarSpec = VarSpec((1 << 10) | (1 << 9) | (1 << 6) | (1 << 5));
 }
 
 bit_accessors!(VarSpec:
@@ -2465,6 +2466,9 @@ impl HeapSize for DeclArena {
 pub mod builtin {
     /// `bool __builtin_is_constant_evaluated() noexcept` ([meta.const.eval]).
     pub const IS_CONSTANT_EVALUATED: u32 = 722;
+    /// `void *__builtin_addressof(void &) noexcept` ([specialized.addressof];
+    /// custom type-checking: the result is a pointer to the operand's type).
+    pub const ADDRESSOF: u32 = 200;
 
     /// `void *__builtin_memcpy(void *, const void *, size_t) noexcept`, as
     /// sema declares it internally for the memberwise copy of arrays in
@@ -2474,7 +2478,10 @@ pub mod builtin {
     pub const MEMCPY: u32 = 865;
 
     /// The id and spelling of every builtin function kiln declares.
-    pub const ALL: &[(u32, &str)] = &[(IS_CONSTANT_EVALUATED, "__builtin_is_constant_evaluated")];
+    pub const ALL: &[(u32, &str)] = &[
+        (IS_CONSTANT_EVALUATED, "__builtin_is_constant_evaluated"),
+        (ADDRESSOF, "__builtin_addressof"),
+    ];
 
     /// The builtin function spelled `name`, if kiln declares one.
     pub fn by_name(name: &str) -> Option<u32> {

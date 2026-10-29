@@ -1,0 +1,17 @@
+TranslationUnitDecl
+|-ClassTemplateDecl List
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| |-CXXRecordDecl struct List definition
+| | |-FieldDecl head 'T'
+| | |-FieldDecl tail 'List<T> *'
+| | `-FieldDecl deeper 'List<T *> *'
+| |-ClassTemplateSpecializationDecl struct List definition implicit_instantiation
+| | |-TemplateArgument type 'int'
+| | |-FieldDecl head 'int'
+| | |-FieldDecl tail 'List<int> *'
+| | `-FieldDecl deeper 'List<int *> *'
+| `-ClassTemplateSpecializationDecl struct List
+|   `-TemplateArgument type 'int *'
+`-VarDecl sz 'int' cinit
+  `-ImplicitCastExpr 'int' <IntegralCast>
+    `-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof 'List<int>'

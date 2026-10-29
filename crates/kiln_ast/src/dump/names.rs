@@ -34,6 +34,10 @@ pub struct AstNames<'a> {
     pub ast: &'a Ast,
     /// The source manager for unnamed-tag locations.
     pub sources: Option<&'a SourceManager>,
+    /// How types written inside expressions print (`sizeof(T)`, casts,
+    /// type traits): as written, or canonical for a failed
+    /// `static_assert` requirement (clang's `PrintCanonicalTypes`).
+    pub expr_types: PrintOptions,
 }
 
 impl std::fmt::Debug for AstNames<'_> {
@@ -45,12 +49,21 @@ impl std::fmt::Debug for AstNames<'_> {
 impl<'a> AstNames<'a> {
     /// Names over `ast` without locations.
     pub fn new(ast: &'a Ast) -> Self {
-        AstNames { ast, sources: None }
+        AstNames { ast, sources: None, expr_types: PrintOptions::SUGARED }
     }
 
     /// Names over `ast` printing unnamed tags with their location.
     pub fn with_sources(ast: &'a Ast, sources: &'a SourceManager) -> Self {
-        AstNames { ast, sources: Some(sources) }
+        AstNames { ast, sources: Some(sources), expr_types: PrintOptions::SUGARED }
+    }
+
+    /// These names, printing the types written in expressions canonical
+    /// (clang's `PrintCanonicalTypes`, used for a failed `static_assert`
+    /// requirement).
+    #[must_use]
+    pub fn canonical_expr_types(mut self) -> Self {
+        self.expr_types = PrintOptions { canonical: true, ..PrintOptions::CANONICAL };
+        self
     }
 
     /// Appends the unqualified name of `d` as the dump prints it
@@ -268,6 +281,9 @@ impl<'a> AstNames<'a> {
                 if !self.is_unnamed(ctx) =>
             {
                 self.write_name(ctx, out);
+                if let Some(args) = self.ast.spec_print_args(ctx) {
+                    write_arg_list(&self.ast.types, self, args, out);
+                }
                 out.push_str("::");
             }
             _ => {}
@@ -343,8 +359,10 @@ impl<'a> AstNames<'a> {
             // char
             3 => (t.char_signed, IntStyle::Char(StringEncoding::Ordinary)),
             // signed char, short; unsigned char, unsigned short; __int128
-            4 | 10 | 18 => (true, IntStyle::Cast),
-            5 | 11 | 19 => (false, IntStyle::Cast),
+            4 => (true, IntStyle::SmallChar),
+            5 => (false, IntStyle::SmallChar),
+            10 | 18 => (true, IntStyle::Cast),
+            11 | 19 => (false, IntStyle::Cast),
             // wchar_t
             6 => (
                 t.wchar_signed,
@@ -595,14 +613,18 @@ impl<'a> AstNames<'a> {
             ExprKind::ImplicitCastExpr | ExprKind::ConstantExpr => {
                 self.expr(exprs.operand(e), depth, out);
             }
+            // clang prints the replacement of a substituted parameter.
+            ExprKind::SubstNonTypeTemplateParmExpr => {
+                self.expr(exprs.subst_replacement(e), depth, out);
+            }
             ExprKind::CStyleCastExpr => {
                 out.push('(');
-                write_type(&ast.types, self, n.ty(), PrintOptions::SUGARED, out);
+                write_type(&ast.types, self, n.ty(), self.expr_types, out);
                 out.push(')');
                 self.expr(exprs.operand(e), d, out);
             }
             ExprKind::CXXFunctionalCastExpr => {
-                write_type(&ast.types, self, n.ty(), PrintOptions::SUGARED, out);
+                write_type(&ast.types, self, n.ty(), self.expr_types, out);
                 let sub = exprs.operand(e);
                 let braced = exprs.get(sub).kind() == ExprKind::InitListExpr;
                 if !braced {
@@ -625,7 +647,7 @@ impl<'a> AstNames<'a> {
                     ExprKind::CXXDynamicCastExpr => "dynamic_cast<",
                     _ => "__builtin_bit_cast(",
                 });
-                write_type(&ast.types, self, n.ty(), PrintOptions::SUGARED, out);
+                write_type(&ast.types, self, n.ty(), self.expr_types, out);
                 out.push_str(if k == ExprKind::BuiltinBitCastExpr { ", " } else { ">(" });
                 self.expr(exprs.operand(e), d, out);
                 out.push(')');
@@ -635,7 +657,7 @@ impl<'a> AstNames<'a> {
                 out.push_str(kind.spelling());
                 if let Some(t) = exprs.trait_type_arg(e) {
                     out.push('(');
-                    write_type(&ast.types, self, t, PrintOptions::SUGARED, out);
+                    write_type(&ast.types, self, t, self.expr_types, out);
                     out.push(')');
                 } else {
                     let paren = kind != TraitKind::SizeOf;
@@ -645,6 +667,33 @@ impl<'a> AstNames<'a> {
                         out.push(')');
                     }
                 }
+            }
+            ExprKind::TypeTraitExpr => {
+                out.push_str(exprs.type_trait(e).spelling());
+                out.push('(');
+                for (i, t) in ast.lists.iter::<QualType>(exprs.type_trait_args(e)).enumerate() {
+                    if i > 0 {
+                        out.push_str(", ");
+                    }
+                    write_type(&ast.types, self, t, self.expr_types, out);
+                }
+                out.push(')');
+            }
+            ExprKind::ArrayTypeTraitExpr => {
+                out.push_str(exprs.type_trait(e).spelling());
+                out.push('(');
+                write_type(&ast.types, self, exprs.array_trait_type(e), self.expr_types, out);
+                if let Some(dim) = exprs.array_trait(e).dim {
+                    out.push_str(", ");
+                    self.expr(dim, d, out);
+                }
+                out.push(')');
+            }
+            ExprKind::ExpressionTraitExpr => {
+                out.push_str(exprs.type_trait(e).spelling());
+                out.push('(');
+                self.expr(ExprId::new(n.a()), d, out);
+                out.push(')');
             }
             ExprKind::CXXNoexceptExpr => {
                 out.push_str("noexcept(");
@@ -659,7 +708,7 @@ impl<'a> AstNames<'a> {
                 out.push_str("...");
             }
             ExprKind::CXXUnresolvedConstructExpr => {
-                write_type(&ast.types, self, n.ty(), PrintOptions::SUGARED, out);
+                write_type(&ast.types, self, n.ty(), self.expr_types, out);
                 let (open, close) = if n.aux() != 0 { ('{', '}') } else { ('(', ')') };
                 if let Some(l) = ListId::from_raw(n.a()) {
                     self.expr_list(l, open, close, d, out);
@@ -771,6 +820,10 @@ impl AstNames<'_> {
 }
 
 impl TypeNames for AstNames<'_> {
+    fn specialization_args(&self, decl: DeclId) -> Option<crate::ids::ArgListId> {
+        self.ast.spec_print_args(decl)
+    }
+
     fn invented_parm(&self, decl: DeclId) -> Option<Option<(DeclId, crate::ids::ArgListId)>> {
         self.invented_parm_of(decl)
     }
@@ -817,7 +870,12 @@ impl TypeNames for AstNames<'_> {
     }
 
     fn write_value(&self, _ty: QualType, value: ConstValueId, out: &mut String) {
-        let opts = ValueOptions::with_style(PrintStyle::TemplateArg);
+        // A converted argument of a known parameter (clang's
+        // `IncludeType` is false unless the parameter is `auto`; WP-071).
+        let opts = ValueOptions {
+            include_type: false,
+            ..ValueOptions::with_style(PrintStyle::TemplateArg)
+        };
         self.ast.consts.print(value, &self.ast.strings, self, &opts, out);
     }
 
@@ -868,6 +926,10 @@ impl PrintEnv for AstNames<'_> {
 }
 
 impl TypeNames for Ast {
+    fn specialization_args(&self, decl: DeclId) -> Option<crate::ids::ArgListId> {
+        self.spec_print_args(decl)
+    }
+
     fn invented_parm(&self, decl: DeclId) -> Option<Option<(DeclId, crate::ids::ArgListId)>> {
         AstNames::new(self).invented_parm_of(decl)
     }

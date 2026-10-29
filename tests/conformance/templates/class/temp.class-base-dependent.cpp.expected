@@ -1,0 +1,22 @@
+TranslationUnitDecl
+|-ClassTemplateDecl Base
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| |-CXXRecordDecl struct Base definition
+| | `-FieldDecl b 'T'
+| `-ClassTemplateSpecializationDecl struct Base definition implicit_instantiation
+|   |-TemplateArgument type 'int'
+|   `-FieldDecl b 'int'
+|-ClassTemplateDecl Derived
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| |-CXXRecordDecl struct Derived definition
+| | |-public 'Base<T>'
+| | `-FieldDecl d 'T'
+| `-ClassTemplateSpecializationDecl struct Derived definition implicit_instantiation
+|   |-TemplateArgument type 'int'
+|   |-public 'Base<int>'
+|   `-FieldDecl d 'int'
+`-StaticAssertDecl
+  `-BinaryOperator 'bool' '=='
+    |-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof 'Derived<int>'
+    `-ImplicitCastExpr 'unsigned long' <IntegralCast>
+      `-IntegerLiteral 'int' 8

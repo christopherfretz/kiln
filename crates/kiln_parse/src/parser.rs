@@ -2,6 +2,7 @@
 
 use std::cell::RefCell;
 
+use kiln_ast::types::UnaryTransformKind;
 use kiln_ast::{DeclId, ExprId, NnsId};
 use kiln_diag::{Diag, DiagId};
 use kiln_lex::literal::LiteralOptions;
@@ -376,6 +377,22 @@ impl<'a, 'sm> Parser<'a, 'sm> {
     /// True if the current token is keyword `k`.
     pub(crate) fn at_kw(&self, k: Kw) -> bool {
         self.kw() == Some(k)
+    }
+
+    /// The builtin type trait or transform at token `i`: its name
+    /// followed by `(` (spec/sema-templates.md §9).
+    pub(crate) fn builtin_kw_at(&self, i: usize) -> Option<crate::keywords::BuiltinKw> {
+        let TokKind::Identifier(s) = self.tok_at(i).kind else { return None };
+        let b = self.kw.builtin(s)?;
+        (self.tok_at(i + 1).kind == TokKind::Punct(Punct::LParen)).then_some(b)
+    }
+
+    /// The type transform (`__remove_cv(`...) at token `i`.
+    pub(crate) fn transform_at(&self, i: usize) -> Option<UnaryTransformKind> {
+        match self.builtin_kw_at(i)? {
+            crate::keywords::BuiltinKw::Transform(k) => Some(k),
+            crate::keywords::BuiltinKw::Trait(_) => None,
+        }
     }
 
     /// The identifier (not a keyword) `t` is.

@@ -171,11 +171,13 @@ impl CodegenJob<'_> {
                 .emit(engine);
             return None;
         };
-        let (pp, _deps) = job.build_preprocessor(sm, engine, interner, inputs)?;
+        let (pp, _deps) = job.build_preprocessor(sm, engine, interner, inputs, true)?;
         let popts = ParseOptions {
             std: job.std.lex,
             exceptions: a.predef.exceptions.unwrap_or(true),
             rtti: a.predef.rtti.unwrap_or(true),
+            inst_limits: a.templ.limits(),
+            inst_report: a.templ.report,
             ..ParseOptions::default()
         };
         let limits = a.constexpr.limits();
@@ -198,6 +200,11 @@ impl CodegenJob<'_> {
         }
         // After IR generation too: it can evaluate more constants.
         a.constexpr.write_report(&tu.oven, sm, engine);
+        if !tu.inst_report.is_empty() {
+            engine.flush();
+            let mut err = job.stderr.clone();
+            let _ = err.write_all(tu.inst_report.as_bytes());
+        }
         ir
     }
 }

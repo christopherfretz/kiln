@@ -1,0 +1,35 @@
+TranslationUnitDecl
+|-ClassTemplateDecl Arr
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| |-NonTypeTemplateParmDecl referenced 'int' depth 0 index 1 N
+| |-CXXRecordDecl struct Arr definition
+| | |-StaticAssertDecl
+| | | |-BinaryOperator 'bool' '>'
+| | | | |-DeclRefExpr 'int' NonTypeTemplateParm 'N' 'int'
+| | | | `-IntegerLiteral 'int' 0
+| | | `-StringLiteral unevaluated "positive"
+| | |-StaticAssertDecl
+| | | `-BinaryOperator 'bool' '>='
+| | |   |-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof 'T'
+| | |   `-ImplicitCastExpr 'unsigned long' <IntegralCast>
+| | |     `-IntegerLiteral 'int' 1
+| | `-FieldDecl data 'T[N]'
+| `-ClassTemplateSpecializationDecl struct Arr definition implicit_instantiation
+|   |-TemplateArgument type 'short'
+|   |-TemplateArgument value 'int' 3
+|   |-StaticAssertDecl
+|   | |-BinaryOperator 'bool' '>'
+|   | | |-SubstNonTypeTemplateParmExpr 'int'
+|   | | | |-NonTypeTemplateParmDecl referenced 'int' depth 0 index 1 N
+|   | | | `-IntegerLiteral 'int' 3
+|   | | `-IntegerLiteral 'int' 0
+|   | `-StringLiteral unevaluated "positive"
+|   |-StaticAssertDecl
+|   | `-BinaryOperator 'bool' '>='
+|   |   |-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof 'short'
+|   |   `-ImplicitCastExpr 'unsigned long' <IntegralCast>
+|   |     `-IntegerLiteral 'int' 1
+|   `-FieldDecl data 'short[3]'
+`-VarDecl sz 'int' cinit
+  `-ImplicitCastExpr 'int' <IntegralCast>
+    `-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof 'Arr<short, 3>'

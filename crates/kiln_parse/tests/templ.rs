@@ -25,7 +25,7 @@ fn param_kind_decision() {
     p.assert_dump("TemplateTypeParmDecl typename depth 0 index 8\n");
     // Rule 2: `typename` followed by a nested-name-specifier starts a
     // non-type parameter whose type is a dependent-or-not typename type.
-    p.assert_dump("NonTypeTemplateParmDecl 'type':'int' depth 0 index 2 N");
+    p.assert_dump("NonTypeTemplateParmDecl 'typename S::type':'int' depth 0 index 2 N");
     // Rule 3: an elaborated `struct Q` is a non-type parameter.
     p.assert_dump("NonTypeTemplateParmDecl 'struct Q *' depth 0 index 3 q");
     // Rule 4: a concept name not followed by `auto` is a constrained type

@@ -520,7 +520,7 @@ impl Sema<'_, '_> {
             DiagId::sema_new_function_type
         } else if self.ast.types.is_reference(t) {
             DiagId::sema_new_reference_type
-        } else if !self.is_complete(t) {
+        } else if !self.require_complete(t, at) {
             let msg = self.diag(DiagId::sema_new_incomplete_type, at).arg(self.ty_arg(t));
             self.emit(self.incomplete_note(msg, t));
             return false;
@@ -1060,7 +1060,7 @@ impl Sema<'_, '_> {
             }
             let msg = self.diag(DiagId::sema_delete_void_ptr_warn, loc).arg(self.ty_arg(ety));
             self.emit(msg);
-        } else if !self.is_complete(pointee) {
+        } else if !self.require_complete(pointee, loc) {
             complete = false;
             let id = if cxx26 {
                 DiagId::sema_delete_incomplete

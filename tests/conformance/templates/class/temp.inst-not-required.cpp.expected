@@ -1,0 +1,17 @@
+TranslationUnitDecl
+|-ClassTemplateDecl Box
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| |-CXXRecordDecl struct Box definition
+| | `-FieldDecl value 'T'
+| |-ClassTemplateSpecializationDecl struct Box
+| | `-TemplateArgument type 'int'
+| `-ClassTemplateSpecializationDecl struct Box
+|   `-TemplateArgument type 'char'
+|-VarDecl p 'Box<int> *' cinit
+| `-ImplicitCastExpr 'Box<int> *' <NullToPointer>
+|   `-CXXNullPtrLiteralExpr 'std::nullptr_t'
+`-VarDecl r 'Box<char> &' cinit
+  `-UnaryOperator 'Box<char>' lvalue prefix '*' cannot overflow
+    `-CStyleCastExpr 'Box<char> *' <NoOp>
+      `-ImplicitCastExpr 'Box<char> *' <NullToPointer> part_of_explicit_cast
+        `-CXXNullPtrLiteralExpr 'std::nullptr_t'

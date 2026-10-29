@@ -405,7 +405,7 @@ impl Sema<'_, '_> {
             if let Some(nrec) = self.ast.types.as_record(nc) {
                 let being_defined =
                     self.defining.iter().any(|&x| self.ast.first(x) == self.ast.first(nrec));
-                if !being_defined && !self.is_complete(nc) {
+                if !being_defined && !self.require_complete(nc, at) {
                     let msg = self
                         .diag(DiagId::sema_covariant_return_incomplete, at)
                         .arg(nm)

@@ -274,6 +274,18 @@ impl<'x, 'a, 'sm> Scan<'x, 'a, 'sm> {
                 _ => Tpr::False,
             };
         }
+        // spec/sema-templates.md §9: `__remove_cv(T)` is a type
+        // specifier, `__is_same(T, U)` an expression.
+        match self.p.builtin_kw_at(self.i) {
+            Some(crate::keywords::BuiltinKw::Transform(_)) => {
+                return match self.skip_group(self.i + 1) {
+                    Some(j) => self.after_simple_type(j, braced),
+                    None => Tpr::Error,
+                };
+            }
+            Some(crate::keywords::BuiltinKw::Trait(_)) => return Tpr::False,
+            None => {}
+        }
         if self.ident_at(self.i).is_none() && !self.at(Punct::ColonColon) {
             return Tpr::False;
         }
@@ -307,13 +319,23 @@ impl<'x, 'a, 'sm> Scan<'x, 'a, 'sm> {
         match self.kw() {
             Some(Kw::Const | Kw::Volatile | Kw::Restrict) => false,
             Some(k) => crate::decl::is_type_specifier_kw(k),
-            None => matches!(self.name_here(), Some((_, NameClass::Type(..)))),
+            None => {
+                self.p.transform_at(self.i).is_some()
+                    || matches!(self.name_here(), Some((_, NameClass::Type(..))))
+            }
         }
     }
 
     /// clang's `TryConsumeDeclarationSpecifier`: skips one
     /// simple-type-specifier (or other decl-specifier).
     fn consume_decl_specifier(&mut self) -> Tpr {
+        if self.p.transform_at(self.i).is_some() {
+            self.i += 1;
+            if !self.skip_group_here() {
+                return Tpr::Error;
+            }
+            return Tpr::Ambiguous;
+        }
         match self.kw() {
             Some(Kw::Decltype | Kw::Typeof) => {
                 self.i += 1;
@@ -348,8 +370,9 @@ impl<'x, 'a, 'sm> Scan<'x, 'a, 'sm> {
         match self.kw() {
             Some(k) => is_decl_specifier_kw(k),
             None => {
-                (self.ident_at(self.i).is_some() || self.at(Punct::ColonColon))
-                    && matches!(self.name_here(), Some((_, NameClass::Type(..))))
+                self.p.transform_at(self.i).is_some()
+                    || (self.ident_at(self.i).is_some() || self.at(Punct::ColonColon))
+                        && matches!(self.name_here(), Some((_, NameClass::Type(..))))
             }
         }
     }

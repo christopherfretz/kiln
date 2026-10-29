@@ -91,6 +91,10 @@ pub struct Sema<'a, 'sm> {
     pub(crate) func: Option<stmt::FnState>,
     /// Depth of unevaluated operands (`sizeof`, `alignof`).
     pub(crate) unevaluated: u32,
+    /// The operands of the `decltype`s being parsed, innermost last: the
+    /// unevaluated depth of each and the calls with an incomplete class
+    /// prvalue result it deferred ([dcl.type.decltype]/2).
+    pub(crate) decltype_calls: Vec<(u32, Vec<deduce::DeferredCall>)>,
     /// Depth of immediate function contexts ([expr.const]/16) entered
     /// by `if consteval`.
     pub(crate) immediate: u32,
@@ -165,7 +169,6 @@ pub struct Sema<'a, 'sm> {
     pub(crate) mem_inits: class::MemInitState,
     /// Materialized temporaries collected for P2718 range-for lifetime
     /// extension (spec/sema-class.md §5.4).
-    #[expect(dead_code, reason = "WP-066a interface; read from WP-067b (P2718)")]
     pub(crate) extend_collector: Option<Vec<ExprId>>,
     /// Member functions whose *noexcept-specifier* awaits replay
     /// (`ExcSpec::Deferred`, spec/sema-class.md §2.7).
@@ -190,6 +193,8 @@ pub struct Sema<'a, 'sm> {
     /// Template heads and parse-time template state (WP-069,
     /// spec/sema-templates.md §11.2).
     pub(crate) templ: templ::TemplState,
+    /// The instantiation engine (spec/sema-templates.md §11.2; WP-070a).
+    pub inst: templ::InstState,
     /// The abstract classes whose unimplemented pure virtual functions
     /// were already noted (clang notes them on the first abstract-type
     /// diagnostic per class only; WP-078a).
@@ -211,8 +216,14 @@ impl<'a, 'sm> Sema<'a, 'sm> {
         Self::with_abi(ast, diags, abi, types)
     }
 
-    fn with_abi(ast: Ast, diags: &'a DiagEngine<'sm>, abi: Target, target: TargetTypes) -> Self {
+    fn with_abi(
+        mut ast: Ast,
+        diags: &'a DiagEngine<'sm>,
+        abi: Target,
+        target: TargetTypes,
+    ) -> Self {
         let tu = ast.tu;
+        templ::builtins::declare_builtin_templates(&mut ast);
         Sema {
             ast,
             diags,
@@ -226,6 +237,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             ctx: tu,
             func: None,
             unevaluated: 0,
+            decltype_calls: Vec::new(),
             immediate: 0,
             pending_odr: Vec::new(),
             defining: Vec::new(),
@@ -258,6 +270,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             nsdmi_this: Vec::new(),
             initializing: None,
             templ: templ::TemplState::default(),
+            inst: templ::InstState::default(),
             abstract_noted: kiln_source::fx::FxHashSet::default(),
         }
     }
@@ -304,8 +317,35 @@ impl<'a, 'sm> Sema<'a, 'sm> {
         Diag::new(id, Span::empty(loc))
     }
 
-    /// Emits `d`.
-    pub fn emit(&self, d: Diag) {
+    /// Emits `d`. Inside an instantiation (spec/sema-templates.md §10.2)
+    /// the context notes are added to a diagnostic that shows, and a
+    /// SFINAE context captures errors instead (§5.7). Inside an implicit
+    /// special member definition the `in implicit ... first required
+    /// here` note (spec/sema-class.md §4.5) goes first, as the innermost
+    /// code-synthesis context.
+    pub fn emit(&self, mut d: Diag) {
+        if self.inst.suppress_next_error.replace(false) {
+            return;
+        }
+        if !self.inst.stack.is_empty()
+            && let Some(id) = d.id()
+        {
+            let sev = self.diags.severity(id);
+            if self.inst.stack.is_sfinae() {
+                if sev >= kiln_diag::Severity::Error
+                    && let Some(s) = self.inst.sfinae.borrow_mut().last_mut()
+                {
+                    s.errors += 1;
+                    if s.first.is_none() {
+                        s.first = Some(d);
+                    }
+                }
+                return;
+            }
+            if sev != kiln_diag::Severity::Ignored {
+                d.prepend_notes(self.inst_context_notes());
+            }
+        }
         let d = self.with_synth_note(d);
         d.emit(self.diags);
     }

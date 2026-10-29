@@ -1,0 +1,21 @@
+TranslationUnitDecl
+|-ClassTemplateDecl Arr
+| |-NonTypeTemplateParmDecl referenced 'int' depth 0 index 0 N
+| |-CXXRecordDecl struct Arr definition
+| | `-FieldDecl data 'char[N]'
+| |-ClassTemplateSpecializationDecl struct Arr definition implicit_instantiation
+| | |-TemplateArgument value 'int' 3
+| | `-FieldDecl data 'char[3]'
+| `-ClassTemplateSpecializationDecl struct Arr definition implicit_instantiation
+|   |-TemplateArgument value 'int' 5
+|   `-FieldDecl data 'char[5]'
+|-StaticAssertDecl
+| `-BinaryOperator 'bool' '=='
+|   |-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof 'Arr<3>'
+|   `-ImplicitCastExpr 'unsigned long' <IntegralCast>
+|     `-IntegerLiteral 'int' 3
+`-StaticAssertDecl
+  `-BinaryOperator 'bool' '=='
+    |-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof 'Arr<1 + 4>':'Arr<5>'
+    `-ImplicitCastExpr 'unsigned long' <IntegralCast>
+      `-IntegerLiteral 'int' 5

@@ -245,7 +245,10 @@ impl Collect<'_> {
         let n = ast.exprs.get(e);
         match n.kind() {
             // The operand is unevaluated: nothing in it is emitted.
-            ExprKind::CXXNoexceptExpr => return,
+            ExprKind::CXXNoexceptExpr
+            | ExprKind::TypeTraitExpr
+            | ExprKind::ArrayTypeTraitExpr
+            | ExprKind::ExpressionTraitExpr => return,
             ExprKind::BinaryOperator
                 if matches!(ast.exprs.binary_op(e), BinaryOp::LAnd | BinaryOp::LOr) =>
             {

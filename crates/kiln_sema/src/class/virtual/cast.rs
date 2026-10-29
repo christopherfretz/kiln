@@ -54,7 +54,7 @@ impl Sema<'_, '_> {
         };
         let dest_record = self.ast.types.as_record(dest_pointee);
         if dest_record.is_some() {
-            if !self.is_complete(dest_pointee) {
+            if !self.require_complete(dest_pointee, loc) {
                 return self.dynamic_cast_incomplete(dest_pointee, ty, e, loc);
             }
         } else if !self.ast.types.is_void(dest_pointee) {
@@ -97,7 +97,7 @@ impl Sema<'_, '_> {
         let Some(src_record) = self.ast.types.as_record(src_pointee) else {
             return self.dynamic_cast_not_class(src_pointee, ty, e, loc);
         };
-        if !self.is_complete(src_pointee) {
+        if !self.require_complete(src_pointee, loc) {
             return self.dynamic_cast_incomplete(src_pointee, ty, e, loc);
         }
         // [expr.dynamic.cast]/1: no casting away constness.

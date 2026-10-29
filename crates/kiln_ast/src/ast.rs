@@ -351,7 +351,7 @@ impl Ast {
     /// expressions, statements, attributes, lists, lookup, redeclaration
     /// groups). Types and constants interned during an instantiation are
     /// shared and not attributed to it.
-    fn node_live_bytes(&self) -> u64 {
+    pub fn node_live_bytes(&self) -> u64 {
         self.decls.live_bytes()
             + self.exprs.live_bytes()
             + self.stmts.live_bytes()
@@ -359,6 +359,12 @@ impl Ast {
             + self.lists.live_bytes()
             + self.lookup.live_bytes()
             + self.redecls.live_bytes()
+    }
+
+    /// The number of declaration, expression and statement nodes (the
+    /// instantiation report's `nodes`, sema-templates.md §11.3).
+    pub fn node_count(&self) -> u64 {
+        (self.decls.len() + self.exprs.len() + self.stmts.len()) as u64
     }
 
     /// The identifier interner shared with the lexer and preprocessor.

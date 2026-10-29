@@ -203,6 +203,9 @@ impl Sema<'_, '_> {
             match n.kind() {
                 ExprKind::UnaryExprOrTypeTraitExpr
                 | ExprKind::CXXNoexceptExpr
+                | ExprKind::TypeTraitExpr
+                | ExprKind::ArrayTypeTraitExpr
+                | ExprKind::ExpressionTraitExpr
                 | ExprKind::CXXTypeidExpr => continue,
                 ExprKind::CXXThrowExpr | ExprKind::CXXNewExpr => return true,
                 ExprKind::CallExpr if self.callee_can_throw(exprs.callee(x)) => return true,
@@ -292,7 +295,7 @@ impl Sema<'_, '_> {
         };
         if (!pointer || !self.ast.types.is_void(checked))
             && !self.ast.types.is_function(checked)
-            && !self.is_complete(checked)
+            && !self.require_complete(checked, loc)
         {
             let id = if pointer {
                 DiagId::sema_throw_incomplete_ptr

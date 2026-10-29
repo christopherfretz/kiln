@@ -227,6 +227,9 @@ impl Sema<'_, '_> {
                 if kind != DeclKind::CXXMethod || self.is_static_method(m) =>
             {
                 self.ast.decls.set_flags(m, DeclFlags::REFERENCED);
+                if kind == DeclKind::Var {
+                    self.note_var_referenced(m, loc);
+                }
                 if kind == DeclKind::CXXMethod {
                     self.diagnose_deleted_use(m, loc);
                 }
@@ -235,7 +238,7 @@ impl Sema<'_, '_> {
                 if self.unevaluated == 0 && kind == DeclKind::CXXMethod {
                     self.mark_function_referenced(m, loc);
                 } else if self.unevaluated == 0 && kind != DeclKind::EnumConstant {
-                    self.mark_used(m);
+                    self.mark_used_at(m, loc);
                 }
                 e
             }

@@ -174,11 +174,14 @@ fn seed_corpus_passes_with_clang() {
         flag(s.args.iter().any(|a| a.contains("%{")), "placeholder");
         flag(c.lang == directives::Lang::C, "c-test");
         flag(s.ast_filter.is_some(), "ast-filter");
+        flag(s.ast_implicit, "ast-implicit");
+        flag(s.inst_report.is_some(), "inst-report");
     }
     let want = [
         "args",
         "ast",
         "ast-filter",
+        "ast-implicit",
         "c-test",
         "compile-fail",
         "compile-ok",
@@ -187,6 +190,7 @@ fn seed_corpus_passes_with_clang() {
         "env",
         "exit",
         "header-test",
+        "inst-report",
         "layout",
         "oracle",
         "oven",

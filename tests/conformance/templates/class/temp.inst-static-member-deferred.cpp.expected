@@ -1,0 +1,21 @@
+TranslationUnitDecl
+|-ClassTemplateDecl Traits
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| |-CXXRecordDecl struct Traits definition
+| | |-VarDecl size 'const int' static inline constexpr cinit
+| | | `-ImplicitCastExpr 'const int' <IntegralCast>
+| | |   `-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof 'T'
+| | `-VarDecl align 'const int' static inline constexpr cinit
+| |   `-ImplicitCastExpr 'const int' <IntegralCast>
+| |     `-UnaryExprOrTypeTraitExpr 'unsigned long' alignof 'T'
+| `-ClassTemplateSpecializationDecl struct Traits definition implicit_instantiation
+|   |-TemplateArgument type 'int'
+|   |-VarDecl referenced size 'const int' static inline constexpr cinit value=4
+|   | `-ImplicitCastExpr 'const int' <IntegralCast>
+|   |   `-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof 'int'
+|   `-VarDecl align 'const int' static constexpr
+`-StaticAssertDecl
+  `-BinaryOperator 'bool' '=='
+    |-ImplicitCastExpr 'int' <LValueToRValue>
+    | `-DeclRefExpr 'const int' lvalue Var 'size' 'const int' non_odr_use_constant
+    `-IntegerLiteral 'int' 4

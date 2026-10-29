@@ -5,6 +5,8 @@
 
 use std::collections::HashMap;
 
+use kiln_ast::expr::TypeTrait;
+use kiln_ast::types::UnaryTransformKind;
 use kiln_source::symbol::{Interner, Symbol};
 
 macro_rules! keywords {
@@ -119,6 +121,7 @@ keywords! {
     Declspec = "__declspec";
     Extension = "__extension__";
     BuiltinOffsetof = "__builtin_offsetof";
+    BuiltinBitCast = "__builtin_bit_cast";
 }
 
 /// Symbol-to-keyword map for one interner.
@@ -129,6 +132,20 @@ pub struct Keywords {
     pub final_: Symbol,
     /// The contextual keyword `override`.
     pub override_: Symbol,
+    /// The clang type-trait and type-transform names
+    /// (spec/sema-templates.md §9.1, §9.2, §9.4). They are identifiers
+    /// unless followed by `(` (clang's revertible type-trait keywords), so
+    /// libc++'s fallbacks such as `__make_signed<T>` still parse.
+    builtins: HashMap<Symbol, BuiltinKw>,
+}
+
+/// A builtin type-trait or type-transform name.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum BuiltinKw {
+    /// A `TypeTraitExpr`, `ArrayTypeTraitExpr` or `ExpressionTraitExpr`.
+    Trait(TypeTrait),
+    /// A `UnaryTransform` type-specifier.
+    Transform(UnaryTransformKind),
 }
 
 impl Keywords {
@@ -140,7 +157,25 @@ impl Keywords {
                 map.insert(interner.intern(s), *k);
             }
         }
-        Keywords { map, final_: interner.intern("final"), override_: interner.intern("override") }
+        let mut builtins = HashMap::new();
+        for &t in TypeTrait::all() {
+            builtins.insert(interner.intern(t.spelling()), BuiltinKw::Trait(t));
+        }
+        for v in 0..=u8::MAX {
+            let Some(k) = UnaryTransformKind::from_u8(v) else { break };
+            builtins.insert(interner.intern(k.spelling()), BuiltinKw::Transform(k));
+        }
+        Keywords {
+            map,
+            final_: interner.intern("final"),
+            override_: interner.intern("override"),
+            builtins,
+        }
+    }
+
+    /// The builtin trait or transform `sym` names, if any.
+    pub fn builtin(&self, sym: Symbol) -> Option<BuiltinKw> {
+        self.builtins.get(&sym).copied()
     }
 
     /// The keyword `sym` spells, if any.

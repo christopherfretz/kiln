@@ -109,6 +109,7 @@ pub(crate) fn eval_int(ast: &Ast, mut e: ExprId) -> Option<u128> {
                 };
             }
             ExprKind::ParenExpr => e = ast.exprs.operand(e),
+            ExprKind::SubstNonTypeTemplateParmExpr => e = ast.exprs.subst_replacement(e),
             k if k.is_cast() => e = ast.exprs.operand(e),
             _ => return None,
         }

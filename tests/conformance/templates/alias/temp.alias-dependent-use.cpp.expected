@@ -1,0 +1,16 @@
+TranslationUnitDecl
+|-TypeAliasTemplateDecl Ptr
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| `-TypeAliasDecl Ptr 'T *'
+|-ClassTemplateDecl Node
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| |-CXXRecordDecl struct Node definition
+| | |-FieldDecl next 'Ptr<Node<T>>':'Node<T> *'
+| | `-FieldDecl value 'Ptr<T>':'type-parameter-0-0 *'
+| `-ClassTemplateSpecializationDecl struct Node definition implicit_instantiation
+|   |-TemplateArgument type 'int'
+|   |-FieldDecl next 'Ptr<Node<int>>':'Node<int> *'
+|   `-FieldDecl value 'Ptr<int>':'int *'
+`-VarDecl sz 'int' cinit
+  `-ImplicitCastExpr 'int' <IntegralCast>
+    `-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof 'Node<int>'

@@ -176,8 +176,12 @@ pub(crate) fn float_of(c: u32) -> FloatKind {
 
 /// Strips parentheses.
 fn skip_parens(ast: &kiln_ast::Ast, mut e: ExprId) -> ExprId {
-    while ast.exprs.get(e).kind() == ExprKind::ParenExpr {
-        e = ast.exprs.operand(e);
+    loop {
+        match ast.exprs.get(e).kind() {
+            ExprKind::ParenExpr => e = ast.exprs.operand(e),
+            ExprKind::SubstNonTypeTemplateParmExpr => e = ast.exprs.subst_replacement(e),
+            _ => break,
+        }
     }
     e
 }
@@ -761,6 +765,7 @@ impl Scan<'_> {
                 }
             }
             ExprKind::ParenExpr => self.expr(ast.exprs.operand(e), ok),
+            ExprKind::SubstNonTypeTemplateParmExpr => self.expr(ast.exprs.subst_replacement(e), ok),
             ExprKind::CXXDefaultArgExpr => {
                 if let Some(d) = default_arg_of(ast, e) {
                     self.expr(d, false);
@@ -807,7 +812,10 @@ impl Scan<'_> {
             }
             ExprKind::UnaryExprOrTypeTraitExpr
             | ExprKind::CXXNoexceptExpr
-            | ExprKind::OffsetOfExpr => {}
+            | ExprKind::OffsetOfExpr
+            | ExprKind::TypeTraitExpr
+            | ExprKind::ArrayTypeTraitExpr
+            | ExprKind::ExpressionTraitExpr => {}
             ExprKind::CallExpr => {
                 let ty = n.ty();
                 if matches!(
@@ -1713,6 +1721,16 @@ impl Compiler<'_> {
                 let v = self.ast().exprs.noexcept_value(e);
                 self.konst(dst, u128::from(v));
             }
+            // spec/sema-templates.md §9.1, §9.4: Sema evaluated the trait.
+            ExprKind::TypeTraitExpr | ExprKind::ExpressionTraitExpr => {
+                let v = self.ast().exprs.type_trait_value(e);
+                self.konst(dst, u128::from(v));
+            }
+            ExprKind::ArrayTypeTraitExpr => {
+                let v = self.ast().exprs.array_trait(e).value;
+                let (w, s) = int_of(self.kind(ty)).unwrap_or((64, false));
+                self.konst(dst, crate::arith::canon(u128::from(v), w, s));
+            }
             ExprKind::CXXNullPtrLiteralExpr
             | ExprKind::GNUNullExpr
             | ExprKind::ImplicitValueInitExpr => {
@@ -1729,6 +1747,10 @@ impl Compiler<'_> {
             }
             ExprKind::ParenExpr => {
                 let op = self.ast().exprs.operand(e);
+                self.rv_inner(op, dst);
+            }
+            ExprKind::SubstNonTypeTemplateParmExpr => {
+                let op = self.ast().exprs.subst_replacement(e);
                 self.rv_inner(op, dst);
             }
             ExprKind::CompoundLiteralExpr => {
@@ -2232,6 +2254,11 @@ impl Compiler<'_> {
                     _ => self.trap(e, "cast that performs the conversions of a reinterpret_cast is not allowed in a constant expression"),
                 }
             }
+            CastKind::LValueToRValueBitCast => {
+                // spec/sema-templates.md §9.5: the byte-level
+                // reinterpretation (through `abi` layout) is an Oven stub.
+                self.trap(e, "kiln: __builtin_bit_cast in a constant expression is not supported yet (Oven bit_cast; unowned, see spec/sema-templates.md §9.5)");
+            }
             CastKind::IntegralToPointer | CastKind::PointerToIntegral => {
                 self.trap(e, "cast that performs the conversions of a reinterpret_cast is not allowed in a constant expression");
             }
@@ -2334,6 +2361,10 @@ impl Compiler<'_> {
         match n.kind() {
             ExprKind::ParenExpr => {
                 let op = self.ast().exprs.operand(e);
+                self.lv(op, acc)
+            }
+            ExprKind::SubstNonTypeTemplateParmExpr => {
+                let op = self.ast().exprs.subst_replacement(e);
                 self.lv(op, acc)
             }
             ExprKind::CXXDefaultArgExpr if default_arg_of(self.ast(), e).is_some() => {
@@ -2929,6 +2960,10 @@ impl Compiler<'_> {
                 let op = self.ast().exprs.operand(e);
                 self.effect(op);
             }
+            ExprKind::SubstNonTypeTemplateParmExpr => {
+                let op = self.ast().exprs.subst_replacement(e);
+                self.effect(op);
+            }
             ExprKind::CompoundLiteralExpr => {
                 let init = self.ast().exprs.compound_literal_init(e);
                 self.effect(init);
@@ -3075,6 +3110,19 @@ impl Compiler<'_> {
             }
             self.uses_cc = true;
             return r;
+        }
+        // `__builtin_addressof(x)`: the address of the lvalue `x`, as
+        // `&x` without a user `operator&` ([specialized.addressof]).
+        if let Some(d) = direct
+            && ast.decls.builtin_id(d) == Some(kiln_ast::decl::builtin::ADDRESSOF)
+            && let [x] = args[..]
+        {
+            let x0 = skip_parens(ast, x);
+            let xty = self.ety(x0);
+            if self.kind(xty) == TyKind::Func {
+                return self.fn_lv(x0);
+            }
+            return self.lv_mem(x, Access::Addr);
         }
         // `std::allocator<T>::allocate`/`deallocate` (spec/oven.md
         // "Transient allocation": deferred to the templates wave, so this

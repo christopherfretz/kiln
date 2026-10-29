@@ -677,6 +677,7 @@ fn callee_name(ast: &Ast, call: ExprId) -> Option<String> {
         match k {
             ExprKind::DeclRefExpr => return Some(name_of(ast, ast.exprs.decl(e))),
             ExprKind::ParenExpr => e = ast.exprs.operand(e),
+            ExprKind::SubstNonTypeTemplateParmExpr => e = ast.exprs.subst_replacement(e),
             _ if k.is_cast() => e = ast.exprs.operand(e),
             ExprKind::UnaryOperator => e = ast.exprs.operand(e),
             _ => return None,

@@ -1,0 +1,25 @@
+TranslationUnitDecl
+|-ClassTemplateDecl Node
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| |-CXXRecordDecl struct Node definition
+| | |-FieldDecl referenced next 'Node<T> *'
+| | |-FieldDecl prev 'Node<T> *'
+| | `-CXXMethodDecl count 'int (const Node<T> &)' static implicit-inline
+| |   |-ParmVarDecl referenced n 'const Node<T> &'
+| |   `-CompoundStmt
+| |     `-ReturnStmt
+| |       `-ConditionalOperator '<dependent type>'
+| |         |-MemberExpr 'Node<T> *const' lvalue .next
+| |         | `-DeclRefExpr 'const Node<T>' lvalue ParmVar 'n' 'const Node<T> &'
+| |         |-IntegerLiteral 'int' 1
+| |         `-IntegerLiteral 'int' 0
+| `-ClassTemplateSpecializationDecl struct Node definition implicit_instantiation
+|   |-TemplateArgument type 'int'
+|   |-FieldDecl next 'Node<int> *'
+|   |-FieldDecl prev 'Node<int> *'
+|   `-CXXMethodDecl count 'int (const Node<int> &)' static implicit-inline
+|     `-ParmVarDecl n 'const Node<int> &'
+|-VarDecl head 'Node<int> *'
+`-VarDecl k 'int' cinit
+  `-ImplicitCastExpr 'int' <IntegralCast>
+    `-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof 'Node<int>'

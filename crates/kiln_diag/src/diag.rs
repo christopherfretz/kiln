@@ -160,6 +160,11 @@ impl Diag {
         self
     }
 
+    /// The diagnostic's id (`None` for a free-text note).
+    pub fn id(&self) -> Option<DiagId> {
+        self.id
+    }
+
     /// Adds a secondary span with a label (the label shows in JSON only).
     pub fn span(mut self, span: Span, label: impl Into<String>) -> Diag {
         self.labels.push(Label { span, text: label.into() });
@@ -204,14 +209,24 @@ impl Diag {
         self
     }
 
-    /// The diagnostic's id (`None` for a free-text note).
-    pub const fn id(&self) -> Option<DiagId> {
-        self.id
-    }
-
     /// Where the caret goes.
     pub const fn loc(&self) -> Loc {
         self.span.lo
+    }
+
+    /// Inserts `notes` before the diagnostic's own notes (the template
+    /// instantiation context precedes them, spec/sema-templates.md §10.2).
+    pub fn prepend_notes(&mut self, notes: Vec<Diag>) {
+        if notes.is_empty() {
+            return;
+        }
+        let own = std::mem::replace(&mut self.notes, notes);
+        self.notes.extend(own);
+    }
+
+    /// Whether the diagnostic has notes attached.
+    pub fn has_notes(&self) -> bool {
+        !self.notes.is_empty()
     }
 
     /// Adds a fix-it hint.

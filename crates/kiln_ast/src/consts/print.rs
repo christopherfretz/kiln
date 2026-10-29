@@ -40,12 +40,17 @@ pub struct PrintOptions {
     pub max_depth: u32,
     /// Arrays and records print at most this many elements, then `...`.
     pub max_elems: u32,
+    /// [`PrintStyle::TemplateArg`]: whether an integer shows its type
+    /// (suffix or cast; clang's `IncludeType`). False for the argument of
+    /// a known non-`auto` parameter: a specialization's name prints
+    /// `A<5, 'x'>`, not `A<5UL, (unsigned char)'x'>`.
+    pub include_type: bool,
 }
 
 impl PrintOptions {
     /// The default limits: depth 10, 32 elements.
     pub const DEFAULT: PrintOptions =
-        PrintOptions { style: PrintStyle::Dump, max_depth: 10, max_elems: 32 };
+        PrintOptions { style: PrintStyle::Dump, max_depth: 10, max_elems: 32, include_type: true };
 
     /// The defaults in `style`.
     pub const fn with_style(style: PrintStyle) -> Self {
@@ -71,6 +76,8 @@ pub enum IntStyle {
     },
     /// No literal form exists: `(short)5`.
     Cast,
+    /// `signed char` / `unsigned char`: `(unsigned char)'a'`.
+    SmallChar,
     /// A character type: `'a'` with the encoding's prefix.
     Char(StringEncoding),
     /// An enumeration: its enumerator ([`PrintEnv::enumerator`]) or `(E)7`.
@@ -327,10 +334,22 @@ impl Printer<'_> {
             Shape::Int { style, .. } => style,
             _ => IntStyle::Plain { suffix: "" },
         };
+        let typed = self.opts.include_type;
         match style {
             IntStyle::Plain { suffix } => {
                 bits.write_decimal(signed, out);
-                out.push_str(suffix);
+                if typed {
+                    out.push_str(suffix);
+                }
+            }
+            IntStyle::SmallChar => {
+                if typed {
+                    out.push_str(if signed { "(signed char)" } else { "(unsigned char)" });
+                }
+                out.push('\'');
+                let u = bits.to_u128().map_or(0, |v| v as u32 & 0xff);
+                push_unit(u, '\'', out);
+                out.push('\'');
             }
             IntStyle::Char(enc) => {
                 out.push_str(enc.prefix());
@@ -340,6 +359,7 @@ impl Printer<'_> {
                 out.push('\'');
             }
             IntStyle::Enum if self.env.enumerator(ty, bits, out) => {}
+            IntStyle::Enum | IntStyle::Cast if !typed => bits.write_decimal(signed, out),
             IntStyle::Enum | IntStyle::Cast => {
                 out.push('(');
                 self.env.type_name(ty, out);

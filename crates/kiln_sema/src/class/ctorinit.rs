@@ -890,7 +890,7 @@ impl Sema<'_, '_> {
         depth: u32,
     ) {
         let mut field_me = me;
-        let mut all_pod = self.is_pod_type(self.ety(me));
+        let mut all_pod = self.is_pod_for_uninit_check(self.ety(me));
         let mut base = me;
         loop {
             let sub = self.strip_paren_imp_casts(base);
@@ -903,7 +903,7 @@ impl Sema<'_, '_> {
                 DeclKind::Field if !self.is_anonymous_member(d) => field_me = sub,
                 _ => {}
             }
-            if !self.is_pod_type(self.ety(field_me)) {
+            if !self.is_pod_for_uninit_check(self.ety(field_me)) {
                 all_pod = false;
             }
             base = self.ast.exprs.operand(sub);
@@ -959,7 +959,7 @@ impl Sema<'_, '_> {
 
     /// clang `QualType::isPODType` (C++11 POD: scalar, or a trivial
     /// standard-layout class, or an array of such).
-    fn is_pod_type(&self, ty: QualType) -> bool {
+    fn is_pod_for_uninit_check(&self, ty: QualType) -> bool {
         let t = self.base_element(ty);
         if self.ast.types.is_reference(t) {
             return false;

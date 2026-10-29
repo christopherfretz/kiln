@@ -141,6 +141,8 @@ diag_groups! {
     InconsistentMissingOverride = "inconsistent-missing-override" [];
     AbstractFinalClass = "abstract-final-class" [];
     InaccessibleBase = "inaccessible-base" [];
+    // WP-074
+    DeprecatedBuiltins = "deprecated-builtins" [];
     ReturnStackAddress = "return-stack-address" [];
     Reorder = "reorder" [ReorderCtor];
     ReorderCtor = "reorder-ctor" [];
