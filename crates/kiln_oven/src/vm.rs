@@ -110,18 +110,24 @@ pub(crate) struct Frame {
     pub memo: bool,
     /// Unique per activation (see `Alloc::frame`).
     pub serial: u32,
-    /// `Oven::cleanups.len()` at entry: the registered destructions its
-    /// `Ret` runs first.
-    pub clean: u32,
 }
 
+// Every call pushes a `Frame`: growing it past 32 bytes cost ~5% of the
+// wall clock of call-heavy evaluations (bench/oven/churn-tree.cpp).
+const _: () = assert!(size_of::<Frame>() <= 32);
+
 /// A registered destruction (`Op::PushCleanup`): the destructor `func`
-/// of the object at `this`, registered by the instruction at `pc`.
+/// of the object at `this`, registered by the instruction at `pc` of the
+/// frame at stack depth `depth` (whose `Ret` runs it if no `ScopeExit`
+/// did). Kept here rather than as a mark in `Frame`, which every call
+/// pushes: `exec` drops the registrations a failed evaluation left, and
+/// a `Ret` drains all of its depth, so the depth names one activation.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Cleanup {
     pub this: u64,
     pub func: u32,
     pub pc: u32,
+    pub depth: u32,
 }
 
 /// Why execution stopped (rendered into notes by `notes`).
@@ -359,7 +365,6 @@ impl Oven {
             call_pc: NO_CALL,
             memo: false,
             serial,
-            clean: self.cleanups.len() as u32,
         });
         loop {
             let w = self.code[pc];
@@ -854,8 +859,7 @@ impl Oven {
                     }
                 }
                 Op::Ret => {
-                    let clean = self.stack.last().map_or(0, |f| f.clean as usize);
-                    if self.cleanups.len() > clean {
+                    if self.cleanups.last().is_some_and(|c| c.depth as usize == self.stack.len()) {
                         // The frame's objects are destroyed after the
                         // result is initialized ([stmt.return]/3).
                         match self.run_cleanup(b, pc, fb) {
@@ -912,6 +916,7 @@ impl Oven {
     /// Pops the innermost registered destruction and enters its
     /// destructor from the instruction at `pc` (which executes again on
     /// return); the frame of the running function is at `fb`.
+    #[inline(never)]
     fn run_cleanup(
         &mut self,
         b: &mut dyn SemaBridge,
@@ -934,6 +939,7 @@ impl Oven {
 
     /// `Op::PushCleanup`: registers the destruction of the object (or
     /// each element of the array) of type `ty` at `raw`.
+    #[inline(never)]
     fn push_cleanup(
         &mut self,
         raw: u64,
@@ -962,10 +968,11 @@ impl Oven {
         };
         let es = self.types.size(elem);
         let off = u64::from(Ptr::decode(raw).off);
+        let depth = self.stack.len() as u32;
         self.cleanups.reserve(n as usize);
         for i in 0..n {
             let this = if i == 0 { raw } else { Ptr::with_off(raw, off + i * es, false) };
-            self.cleanups.push(Cleanup { this, func, pc: pc as u32 });
+            self.cleanups.push(Cleanup { this, func, pc: pc as u32, depth });
         }
         Ok(())
     }
@@ -973,6 +980,11 @@ impl Oven {
     /// Enters function `callee` (called by the instruction at `pc`,
     /// returning to `ret_pc`, arguments at `fb + base`): the new pc and
     /// frame base, or `None` if a memoized result was used.
+    // Always inlined: `run_cleanup` is a second caller, and an
+    // outlined `enter` costs ~6% of the instructions of a call-heavy
+    // evaluation (bench/oven/churn-tree.cpp).
+    #[allow(clippy::inline_always)]
+    #[inline(always)]
     fn enter(
         &mut self,
         b: &mut dyn SemaBridge,
@@ -1054,7 +1066,6 @@ impl Oven {
             call_pc: pc as u32,
             memo,
             serial,
-            clean: self.cleanups.len() as u32,
         });
         Ok(Some((entry, nb)))
     }
@@ -1368,6 +1379,10 @@ impl Oven {
         Ok((st, abs, a))
     }
 
+    // Always inlined into the `Load` op: `freeze_object` is a second
+    // caller, which otherwise outlines it from the hot loop.
+    #[allow(clippy::inline_always)]
+    #[inline(always)]
     pub(crate) fn load(&self, raw: u64, ty: OTy, k: u32) -> Result<u128, Fault> {
         let info = self.types.info(ty);
         let len = value_len(info.size, info.kind);

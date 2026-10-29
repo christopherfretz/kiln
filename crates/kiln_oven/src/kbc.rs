@@ -16,10 +16,26 @@ macro_rules! ops {
         pub(crate) enum Op { $($name,)* }
 
         impl Op {
-            /// Every opcode, indexed by its discriminant.
-            pub const ALL: &'static [Op] = &[$(Op::$name,)*];
             /// Operand words of each opcode, indexed by its discriminant.
             pub const OPERANDS: &'static [u8] = &[$($n,)*];
+
+            /// The opcode with discriminant `b`. A `match` on the
+            /// discriminants rather than a table lookup: LLVM folds it to
+            /// a range check, so the VM's dispatch jump table is indexed by
+            /// the byte itself, with no table base held in a register in
+            /// the hot loop (that register cost ~3% of the wall clock of
+            /// every evaluation once the op set outgrew it, WP-076).
+            #[inline]
+            pub fn from_u8(b: u8) -> Op {
+                #[allow(non_upper_case_globals)]
+                mod disc {
+                    $(pub const $name: u8 = super::Op::$name as u8;)*
+                }
+                match b {
+                    $(disc::$name => Op::$name,)*
+                    _ => panic!("invalid KBC opcode {b}"),
+                }
+            }
         }
     };
 }
@@ -189,10 +205,6 @@ pub(crate) mod new_aux {
 }
 
 impl Op {
-    pub fn from_u8(b: u8) -> Op {
-        Op::ALL[b as usize]
-    }
-
     pub fn operands(self) -> usize {
         usize::from(Op::OPERANDS[self as usize])
     }
