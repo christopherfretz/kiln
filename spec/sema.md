@@ -422,7 +422,13 @@ specification as written (`TypeNames` prints ` noexcept`,
   - **calls:** argument conversion, arity notes, variadic default
     promotions
   - **member access:** `.` and `->` on records and through
-    `IndirectField`
+    `IndirectField`; members found in base classes, static members,
+    enumerators and member functions, implicit `this->`, `this`,
+    `.*`/`->*` and `&C::m`, all access-checked (sema-class.md §2.4–§2.6,
+    WP-066b)
+  - **member calls:** `CXXMemberCallExpr` for a single candidate
+    (sema-class.md §8.3, "Landed (WP-066b)"); overloaded member
+    functions wait for WP-068a
   - **subscripts:** either operand order
   - **`sizeof`/`alignof`:** of types and expressions, using
     `kiln_abi` layout
@@ -645,8 +651,10 @@ unscoped enumeration is reported (spec/oven.md "Integration").
 - Layout is `kiln_abi`'s Itanium implementation (spec/abi.md).
 
 ## 10. To be implemented (M3+)
-- **Classes:** member functions, special members, `this`, access
-  control, bases and virtual functions. Design: [sema-class.md](sema-class.md).
+- **Classes:** special members and construction (WP-067), virtual
+  functions and virtual bases (WP-078); members, `this`, access control
+  and non-virtual bases landed in WP-066b. Design:
+  [sema-class.md](sema-class.md).
 - **Overloading:** overload resolution beyond arity, user-defined
   conversions, operator overloading.
 - **Templates:** templates, concepts, packs; `auto` and `decltype`

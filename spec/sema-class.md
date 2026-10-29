@@ -894,6 +894,64 @@ outermost class; those calls are silent on the stubs, so M2 programs are
 unaffected. `ClassBuild` is pushed and popped by
 `act_on_{start,finish}_record_definition` already.
 
+**Landed (WP-066b).** Modules `kiln_sema/src/class/{members,access,
+member_expr,friend}.rs`; the WP-066a stubs for base specifiers, access
+specifiers, friends, default arguments, NSDMIs and `this` now have bodies.
+- §2.3: static data members (`act_on_static_member`: in-class declaration
+  vs `inline`/`constexpr` definition, `static const` integral/enum
+  initializers usable in constant expressions, local-class and
+  unnamed-class errors, out-of-line `int S::s = 1;` redeclaration whose
+  initializer is checked in the class's access context); member function
+  declarations (cv/ref-qualifiers, `static` with qualifiers diagnosed,
+  in-class definition implicitly inline — `FnSpec::implicit_inline` joins
+  `FnSpec::LATE`); out-of-line definitions enter the class scope and its
+  bases for the body (`enter_definition_scopes`), and a local class's
+  member function body saves the enclosing function (`Sema.fn_saved`).
+- §2.4: `check_member_access` / `check_base_access` port `SemaAccess`
+  (naming class, [class.access.base]/5 paths, [class.protected], friends
+  from `ClassBuild.friends` stored at `}`). `err_access`'s class argument is
+  the declaring class (clang). Delay points for the parser:
+  `pub fn begin_delayed_access(&mut self)` /
+  `pub fn end_delayed_access(&mut self, decl: Option<DeclId>)`.
+- §2.5: `act_on_this`; NSDMI replay brackets the initializer with
+  `pub fn act_on_start_field_init(&mut self, field: DeclId)` (pushes `C*` on
+  `Sema.nsdmi_this`) and `act_on_field_init` (pops it). Implicit `this->`,
+  `const` member assignment notes, and "must be called" for bound member
+  functions.
+- §2.6: `&C::m`, `.*`/`->*` (`act_on_ptr_mem`), member-pointer
+  conversions. A name of a non-static member is held in `Sema.member_refs`
+  until its operand is known (`&C::m` vs an object use); unresolved
+  entries are flushed (diagnosed) at the end of the full-expression.
+- §3.1: `attach_bases` (every §3.1 check except virtual bases, which stay
+  `sema_unsupported`); §3.2: `Sema::lookup_in_class(c, name, kind) ->
+  Found`, with `Found.naming: Option<DeclId>` and `Found.ambiguity:
+  Option<MemberAmbiguity { Types(Vec<DeclId>) | Subobjects { decl, paths }
+  }>` in place of a separate `MemberLookup` type, diagnosed by
+  `diagnose_member_ambiguity`; §3.3: base access and ambiguity checks on
+  every derived-to-base conversion.
+- Member calls (single candidate until WP-068a): `obj.f(args)` /
+  `p->f(args)` is `CXXMemberCallExpr` whose callee is `MemberExpr` of type
+  `<bound member function type>` over the object converted to `cv C`
+  (`NoOp`, or `UncheckedDerivedToBase` when `f` is in a base; a prvalue
+  object is materialized), arguments converted to the parameter types,
+  default arguments as `CXXDefaultArgExpr`; a static member function call
+  is `CallExpr(FunctionToPointerDecay(DeclRefExpr | MemberExpr))`; a call
+  through a member pointer is `CXXMemberCallExpr(ParenExpr(BinaryOperator
+  .*|->*))`. More than one candidate is `overloaded member functions is not
+  supported yet`.
+- `kiln_ast` additions: `DeclArena::set_access(d, Access)`;
+  `FnSpec::storage_inherited` (bit 22: `static` inherited from a previous
+  declaration, which clang's dump omits; also fixes the free-function
+  `static void f(); void f() {}` dump); `ValueCategory` of a non-static
+  member function name is prvalue.
+- Sema state: `fn_saved`, `member_refs`, `friend_tag`, `nsdmi_this`,
+  `initializing` (the out-of-line static member whose initializer is being
+  analysed: the [class.access]/7 context).
+- Not done (owners): aggregate initialization of a class with bases
+  (including `D d{}`) is `sema_unsupported` (WP-067b); the `POD` bit is not
+  computed (§2.9); P0847 explicit object parameters wait for WP-065's
+  syntax (Q4); virtual bases (WP-078a).
+
 ### 8.4 `SemaBridge` (kiln_oven) — public-interface change
 Replace `fn vtable(&mut self, record) -> &VTableLayout` with
 ```
@@ -1048,3 +1106,22 @@ polymorphic classes) for `final_overrider`/vtable cache size.
 4. No `elidable` `CXXConstructExpr`, no pre-C++17 elision modes (kiln is C++20
    and later).
 5. Access-check results are not cached (Q6); diagnostics are identical.
+6. (WP-066b) Misuse of a non-static member name (`invalid use of
+   non-static data member`, "must be called") is diagnosed at the end of
+   the enclosing full-expression rather than at the name, so the order of
+   diagnostics within one full-expression can differ; where clang emits
+   two "reference to non-static member function must be called" errors
+   for one misuse, kiln emits one.
+7. (WP-066b) `DeclRefExpr`/`MemberExpr` carry no nested-name-specifier;
+   `(a.f)()` loses the parentheses when the call is rebuilt. Dumps that
+   would show either differ.
+8. (WP-066b) Access of type names found by qualified lookup (`A::In`) is
+   not checked; `&B::m`'s [class.protected] rule and member-pointer
+   base-to-derived conversion access are not re-checked; an unqualified
+   `&f` naming a member function gets no `must explicitly qualify name of
+   member function` diagnostic; calls through member pointers get no
+   cv/ref-qualifier check; storage class specifiers on friends are not
+   diagnosed.
+9. (WP-066b) Out-of-line static data member initializers and the parameter
+   types of out-of-line member definitions are not looked up in class
+   scope (names before the declarator-id's class are); the body is.
