@@ -125,6 +125,10 @@ pub struct Sema<'a, 'sm> {
     /// Parameters created by [`Sema::act_on_prototype_param`] that no
     /// function has adopted yet ([`Sema::create_params`]).
     pub(crate) unowned_params: std::collections::HashSet<DeclId>,
+    /// The declared (placeholder) return type of each function whose
+    /// return type was deduced, by first declaration: redeclarations are
+    /// matched against it ([dcl.spec.auto.general]/13).
+    pub(crate) declared_returns: kiln_source::fx::FxHashMap<DeclId, QualType>,
     /// Set while [`Sema::act_on_call_name`] builds an unqualified callee
     /// inside a template: a function it names is not marked referenced
     /// until the call is known to be non-dependent ([temp.dep.candidate]).
@@ -228,6 +232,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             braced_args: Vec::new(),
             prototype_params: Vec::new(),
             unowned_params: std::collections::HashSet::new(),
+            declared_returns: kiln_source::fx::FxHashMap::default(),
             deferring_call_ref: false,
             deferred_call_refs: Vec::new(),
             classes: Vec::new(),

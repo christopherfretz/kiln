@@ -1541,12 +1541,8 @@ impl Sema<'_, '_> {
         };
         let matches_member = prev.is_some_and(|p| {
             self.kind_of(p) == DeclKind::CXXMethod
-                && self
-                    .ast
-                    .decls
-                    .get(p)
-                    .ty()
-                    .is_some_and(|pty| self.same_ignoring_exc_spec(pty, ty))
+                && self.ast.decls.get(p).ty().is_some()
+                && self.declared_fn_type(p).is_some_and(|pty| self.same_ignoring_exc_spec(pty, ty))
         });
         let mut ty = ty;
         if let Some(op) = d.op_name {
@@ -1615,9 +1611,12 @@ impl Sema<'_, '_> {
         } else if let Some(p) = prev {
             let pn = *self.ast.decls.get(p);
             if pn.kind() == fkind {
-                let pty = pn.ty().unwrap_or(QualType::ERROR);
+                let pty = self.declared_fn_type(p).unwrap_or(QualType::ERROR);
                 if self.ast.types.same_type(pty, ty) {
                     prev_ok = Some(p);
+                    // [dcl.spec.auto.general]/13: the redeclaration has
+                    // the deduced return type.
+                    ty = self.adopt_deduced_return(p, ty);
                     let pspec = self.ast.decls.function(p).map(|f| f.spec).unwrap_or_default();
                     if spec.storage() == FnStorage::Static && pspec.storage() != FnStorage::Static {
                         let msg = self
