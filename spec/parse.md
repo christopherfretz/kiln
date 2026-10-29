@@ -357,9 +357,11 @@ outermost class is complete, so their tokens are saved and re-parsed
     replay. The
     parameter-declaration-clause brackets `act_on_start_prototype` /
     `act_on_prototype_param` / `act_on_end_prototype` (closed after the
-    trailing return type): naming a parameter inside its own
-    declarator is reported "not supported yet" (no prototype scope;
-    parameters become declarations with their function).
+    trailing return type): each parameter is declared at its point of
+    declaration and is in scope in the rest of the declarator
+    (sema.md §4.3); a member's exception specification and trailing
+    return type are bracketed by `act_on_start_this_scope` /
+    `act_on_end_this_scope`.
   - `-> type-id` after the exception specification is a trailing
     return type (`Chunk::Function::trailing`), required with a
     leading `auto` and diagnosed otherwise by Sema.
@@ -730,9 +732,6 @@ in `kiln_diag` for now; nothing emits them.
 - **Pragmas:** applying `#pragma pack` to layout, `GCC visibility` to
   linkage, `clang diagnostic` to the diagnostic engine; `weak` and the
   other unsupported pragmas of §2.3.
-- **Prototype scope:** parameters in scope within their own declarator
-  (`decltype(n)` in a trailing return type or a later parameter;
-  clang's "default argument references parameter").
 - **Classes** (parsed by WP-065; their Sema is WP-066b):
   - template-id and `decltype` base-specifiers, qualified non-type and
     `decltype` mem-initializer-ids, braced default arguments

@@ -101,8 +101,18 @@ impl Substituter<'_, '_, '_> {
                     .iter::<DeclId>(self.sema.ast.stmts.decl_stmt_decls(s))
                     .collect();
                 let mut out = Vec::with_capacity(ds.len());
-                for d in ds {
+                for &d in &ds {
                     out.push(self.local_decl(d)?);
+                }
+                if out.len() > 1 {
+                    // [dcl.spec.auto.general]/8 with the substituted
+                    // initializers' deductions.
+                    let items: Vec<_> = ds
+                        .iter()
+                        .zip(&out)
+                        .map(|(&d, &v)| (v, self.sema.group_placeholder(d)))
+                        .collect();
+                    self.sema.check_auto_group(&items);
                 }
                 Ok(self.sema.act_on_decl_stmt(&out, loc))
             }

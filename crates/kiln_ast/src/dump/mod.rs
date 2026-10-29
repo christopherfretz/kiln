@@ -148,6 +148,10 @@ enum Node {
     Arg(TemplateArg),
     /// Requirement `i` of `RequiresExpr` `e` (`SimpleRequirement`, ...).
     Req(ExprId, u32),
+    /// An explicit specialization or instantiation listed under its
+    /// template (`ClassTemplateSpecialization 'X'`); its tree prints at
+    /// its lexical position.
+    SpecRef(DeclId),
 }
 
 /// A pending line.
@@ -353,6 +357,18 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                 Node::Fixed(text) => self.line.push_str(text),
                 Node::Arg(a) => self.arg_line(a),
                 Node::Req(e, i) => self.req_line(e, i),
+                Node::SpecRef(d) => {
+                    self.line.push_str(self.class_name(d));
+                    self.id('d', d.raw());
+                    self.line.push_str(" '");
+                    self.names.write_name(d, &mut self.line);
+                    self.line.push('\'');
+                    if self.ast.decls.var(d).is_some()
+                        && let Some(t) = self.ast.decls.get(d).ty()
+                    {
+                        self.ty(t);
+                    }
+                }
             }
             debug_assert!(!self.line.ends_with(' '), "trailing whitespace: {:?}", self.line);
             self.line.push('\n');
@@ -394,7 +410,11 @@ impl<'a, W: io::Write> Dumper<'a, W> {
             }
             Node::Arg(a) => self.arg_children(a, kids),
             Node::Req(e, i) => self.req_children(e, i, kids),
-            Node::Attr(_) | Node::Base(..) | Node::Overrides(_) | Node::Fixed(_) => {}
+            Node::Attr(_)
+            | Node::Base(..)
+            | Node::Overrides(_)
+            | Node::Fixed(_)
+            | Node::SpecRef(_) => {}
         }
     }
 
@@ -442,7 +462,11 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                 FriendTarget::Type { owned_tag: None, .. } => {}
             }
         } else if let Some(v) = decls.var(d) {
-            expr(v.init);
+            let init = v.init;
+            self.spec_children(d, kids);
+            if let Some(e) = init {
+                kids.push((Node::Expr(e), None));
+            }
         } else if let Some(p) = decls.param(d) {
             expr(p.default_arg);
         } else if let Some(f) = decls.field(d) {
@@ -454,12 +478,7 @@ impl<'a, W: io::Write> Dumper<'a, W> {
             expr(Some(s.cond));
             expr(s.message);
         } else if decls.record(d).is_some() {
-            // A specialization's converted arguments (§5).
-            if let Some((_, i)) = ast.spec_info(d) {
-                for &a in ast.types.args(i.args) {
-                    kids.push((Node::Arg(a), None));
-                }
-            }
+            self.spec_children(d, kids);
             for i in 0..decls.bases(d, &ast.lists).count() {
                 kids.push((Node::Base(d, i as u32), None));
             }
@@ -784,7 +803,7 @@ impl<'a, W: io::Write> Dumper<'a, W> {
     /// clang's `dumpBareDeclRef`: `Kind [#dN] 'name' ['type']`.
     fn decl_ref(&mut self, d: DeclId) {
         let n = self.ast.decls.get(d);
-        self.line.push_str(n.kind().name());
+        self.line.push_str(self.class_name(d));
         self.id('d', d.raw());
         self.line.push_str(" '");
         self.names.write_name(d, &mut self.line);
@@ -805,11 +824,7 @@ impl<'a, W: io::Write> Dumper<'a, W> {
         let decls = &ast.decls;
         let n = *decls.get(d);
         let kind = n.kind();
-        if kind == DeclKind::CXXRecord && ast.spec_info(d).is_some() {
-            self.line.push_str("ClassTemplateSpecialization");
-        } else {
-            self.line.push_str(kind.name());
-        }
+        self.line.push_str(self.class_name(d));
         self.line.push_str("Decl");
         self.id('d', d.raw());
         self.loc(n.loc());
@@ -851,6 +866,10 @@ impl<'a, W: io::Write> Dumper<'a, W> {
             let v = *v;
             self.name(d);
             self.opt_ty(n.ty());
+            if let Some(w) = self.var_spec_word(d) {
+                self.line.push(' ');
+                self.line.push_str(w);
+            }
             let spec = v.spec;
             self.line.push_str(match spec.storage() {
                 VarStorage::None => "",
@@ -1033,6 +1052,23 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                             self.line.push_str(" implicit_instantiation");
                         }
                     }
+                    // clang's specialization kind word (an implicit
+                    // instantiation's is printed once defined, above).
+                    let explicit = match ast.spec_info(d).map(|(_, i)| i.kind) {
+                        Some(SpecKind::ExplicitSpecialization) => Some("explicit_specialization"),
+                        Some(SpecKind::ExplicitInstantiationDefinition) => {
+                            Some("explicit_instantiation_definition")
+                        }
+                        Some(SpecKind::ExplicitInstantiationDeclaration) => {
+                            Some("explicit_instantiation_declaration")
+                        }
+                        _ if ast.partial_spec_info(d).is_some() => Some("explicit_specialization"),
+                        _ => None,
+                    };
+                    if let Some(w) = explicit {
+                        self.line.push(' ');
+                        self.line.push_str(w);
+                    }
                 } else {
                     self.name(d);
                 }
@@ -1113,6 +1149,70 @@ impl<'a, W: io::Write> Dumper<'a, W> {
 
     // ----- templates (spec/ast-dump.md §5) ---------------------------------
 
+    /// A specialization's converted arguments; a partial specialization's
+    /// canonical arguments and template parameters (a class's arguments
+    /// first, a variable's parameters first, as clang).
+    fn spec_children(&self, d: DeclId, kids: &mut Vec<(Node, Option<&'static str>)>) {
+        let ast = self.ast;
+        if let Some((_, i)) = ast.spec_info(d) {
+            for &a in ast.types.args(i.args) {
+                kids.push((Node::Arg(a), None));
+            }
+        } else if let Some((_, p)) = ast.partial_spec_info(d) {
+            let list = ast.templates.param_list(p.params);
+            let mut params = Vec::new();
+            for q in ast.lists.iter::<DeclId>(list.params) {
+                params.push((Node::Decl(q), None));
+            }
+            if let Some(r) = list.requires {
+                params.push((Node::Expr(r), None));
+            }
+            let var = ast.decls.var(d).is_some();
+            if var {
+                kids.append(&mut params);
+            }
+            // clang prints the converted (canonical) argument, an
+            // expression as written.
+            let written = ast.types.args(p.args);
+            for (i, &a) in ast.types.args(p.canonical).iter().enumerate() {
+                let a = match (a.view(), written.get(i)) {
+                    (ArgView::Profile(_), Some(&w)) => w,
+                    _ => a,
+                };
+                kids.push((Node::Arg(a), None));
+            }
+            kids.append(&mut params);
+        }
+    }
+
+    /// clang's class of declaration `d` without `Decl`: a specialization's
+    /// (`ClassTemplateSpecialization`, `VarTemplatePartialSpecialization`,
+    /// ...) or its kind's name.
+    fn class_name(&self, d: DeclId) -> &'static str {
+        let kind = self.ast.decls.get(d).kind();
+        match (kind, self.ast.spec_info(d).is_some(), self.ast.partial_spec_info(d).is_some()) {
+            (DeclKind::CXXRecord, true, _) => "ClassTemplateSpecialization",
+            (DeclKind::CXXRecord, _, true) => "ClassTemplatePartialSpecialization",
+            (DeclKind::Var, true, _) => "VarTemplateSpecialization",
+            (DeclKind::Var, _, true) => "VarTemplatePartialSpecialization",
+            _ => kind.name(),
+        }
+    }
+
+    /// A variable template specialization's kind word (clang prints it
+    /// after the type).
+    fn var_spec_word(&self, d: DeclId) -> Option<&'static str> {
+        if self.ast.partial_spec_info(d).is_some() {
+            return Some("explicit_specialization");
+        }
+        Some(match self.ast.spec_info(d)?.1.kind {
+            SpecKind::Undeclared | SpecKind::ImplicitInstantiation => "implicit_instantiation",
+            SpecKind::ExplicitSpecialization => "explicit_specialization",
+            SpecKind::ExplicitInstantiationDefinition => "explicit_instantiation_definition",
+            SpecKind::ExplicitInstantiationDeclaration => "explicit_instantiation_declaration",
+        })
+    }
+
     /// A template decl's children: its parameters, the head's
     /// requires-clause, then the pattern (a concept: its constraint).
     fn template_children(&self, d: DeclId, kids: &mut Vec<(Node, Option<&'static str>)>) {
@@ -1131,13 +1231,17 @@ impl<'a, W: io::Write> Dumper<'a, W> {
         if let Some(c) = info.constraint {
             kids.push((Node::Expr(c), None));
         }
-        // The implicit instantiations, in creation order (§5): each is
-        // printed in full once, under its template.
+        // The specializations, in creation order (§5): an implicit
+        // instantiation is printed in full once, under its template; an
+        // explicit specialization or instantiation is a reference line
+        // (its tree prints at its lexical position).
         for &s in ast.templates.specs_of(d) {
-            if ast.spec_info(s).is_some_and(|(_, i)| {
-                matches!(i.kind, SpecKind::Undeclared | SpecKind::ImplicitInstantiation)
-            }) {
-                kids.push((Node::Decl(s), None));
+            match ast.spec_info(s).map(|(_, i)| i.kind) {
+                Some(SpecKind::Undeclared | SpecKind::ImplicitInstantiation) => {
+                    kids.push((Node::Decl(s), None));
+                }
+                Some(_) => kids.push((Node::SpecRef(s), None)),
+                None => {}
             }
         }
     }

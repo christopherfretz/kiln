@@ -139,7 +139,7 @@ impl Sema<'_, '_> {
         }
     }
 
-    fn is_integral_or_enum(&self, t: QualType) -> bool {
+    pub(crate) fn is_integral_or_enum(&self, t: QualType) -> bool {
         self.ast.types.is_integral(t) || self.ast.types.as_enum(t).is_some()
     }
 
@@ -408,18 +408,33 @@ impl Sema<'_, '_> {
             return false;
         }
         let Some(v) = self.ast.decls.var(d) else { return false };
-        let Some(init) = v.init else { return false };
+        // The initializer may be on another declaration (an out-of-line
+        // definition of a static data member, [class.static.data]/3).
+        let spec = v.spec;
+        let holder = if v.init.is_some() {
+            d
+        } else {
+            let Some(x) = self
+                .ast
+                .redecls_of(d)
+                .find(|&x| self.ast.decls.var(x).is_some_and(|y| y.init.is_some()))
+            else {
+                return false;
+            };
+            x
+        };
+        let Some(init) = self.ast.decls.var(holder).and_then(|y| y.init) else { return false };
         let ty = n.ty().unwrap_or(QualType::ERROR);
         if self.ast.types.is_reference(ty) {
             return self.is_static_lvalue(init);
         }
         let q = self.ast.types.effective_quals(ty);
-        let ok = v.spec.is_constexpr()
+        let ok = spec.is_constexpr()
             || (q.is_const()
                 && !q.is_volatile()
                 && self.is_integral_or_enum(ty)
                 && !self.ast.types.is_reference(ty));
-        ok && self.is_constant_initialized(d)
+        ok && self.is_constant_initialized(holder)
     }
 
     /// True if the glvalue `e` designates a function or a variable with
@@ -665,10 +680,6 @@ impl Sema<'_, '_> {
         loc: Loc,
         qualifier: Option<DeclId>,
     ) -> ExprId {
-        if qualifier.is_none() && self.prototype_params.iter().any(|f| f.contains(&name)) {
-            self.unsupported("naming a parameter within its function declarator", loc);
-            return self.recover_err(&[], loc);
-        }
         let found = match qualifier {
             Some(q) => self.lookup_qualified(q, name, LookupKind::Ordinary),
             None => self.lookup_name(name, LookupKind::Ordinary),
@@ -773,6 +784,30 @@ impl Sema<'_, '_> {
     /// A `DeclRefExpr` naming the value `d`, found through the
     /// using-shadow `shadow` when that is set (clang's `FoundDecl`).
     pub fn build_decl_ref_via(&mut self, d: DeclId, loc: Loc, shadow: Option<DeclId>) -> ExprId {
+        let extra = shadow.map(|s| kiln_ast::expr::DeclRefExtra {
+            qualifier: None,
+            template_args: None,
+            found_decl: Some(s),
+        });
+        self.build_decl_ref_extra(d, loc, extra)
+    }
+
+    /// [`Self::build_decl_ref_via`] with the side record `extra` (a
+    /// variable template specialization records the template as its
+    /// found decl and the arguments as written).
+    #[allow(
+        clippy::too_many_lines,
+        reason = "the 074/087 use checks and the 070b variable-template record meet here"
+    )]
+    pub(crate) fn build_decl_ref_extra(
+        &mut self,
+        d: DeclId,
+        loc: Loc,
+        extra: Option<kiln_ast::expr::DeclRefExtra>,
+    ) -> ExprId {
+        let shadow = extra
+            .and_then(|x| x.found_decl)
+            .filter(|_| extra.is_some_and(|x| x.template_args.is_none()));
         let n = *self.ast.decls.get(d);
         match n.kind() {
             DeclKind::Var
@@ -794,6 +829,18 @@ impl Sema<'_, '_> {
             DeclKind::CXXMethod if self.is_static_method(d) => {}
             _ if self.is_class_member_ref(d) => {
                 return self.implicit_member_ref(d, loc, shadow, false);
+            }
+            // [temp.names]/1: a variable template is named with arguments
+            // (clang's `diagnoseMissingTemplateArguments`).
+            DeclKind::VarTemplate => {
+                let note = self.diag(DiagId::note_template_decl_here, n.loc());
+                let msg = self
+                    .diag(DiagId::sema_template_requires_args, loc)
+                    .arg("variable template")
+                    .arg(format!("'{}'", self.decl_name(d)))
+                    .with_note(note);
+                self.emit(msg);
+                return self.recover_err(&[], loc);
             }
             k if crate::lookup::is_type_kind(k) || k == DeclKind::Namespace => {
                 let msg = self
@@ -850,11 +897,6 @@ impl Sema<'_, '_> {
         }
         self.diagnose_deprecated(d, loc);
         let nou = if self.unevaluated > 0 { NonOdrUse::Unevaluated } else { NonOdrUse::None };
-        let extra = shadow.map(|s| kiln_ast::expr::DeclRefExtra {
-            qualifier: None,
-            template_args: None,
-            found_decl: Some(s),
-        });
         let e = self.builder().decl_ref(d, ty, loc, extra, nou, ExprFlags::NONE);
         if defer {
             self.deferred_call_refs.push((e, d));
@@ -2446,8 +2488,12 @@ impl Sema<'_, '_> {
             (base, bt)
         };
         let rec = self.ast.types.as_record(obj_ty).expect("checked above");
-        // [expr.ref]/4 (clang diagnoses at the operator).
-        let complete = self.require_complete(obj_ty, op_loc);
+        // [expr.ref]/4 (clang diagnoses at the operator). A class being
+        // defined is complete enough: its members declared so far are
+        // found (a trailing return type naming `this->m`, [class.mem]/7).
+        let first = self.ast.first(rec);
+        let complete = self.defining.iter().any(|&d| self.ast.first(d) == first)
+            || self.require_complete(obj_ty, op_loc);
         let Some(def) = self.ast.definition(rec).filter(|_| complete) else {
             let msg = self
                 .diag(DiagId::sema_member_reference_incomplete, op_loc)
@@ -2588,6 +2634,7 @@ impl Sema<'_, '_> {
             self.emit(msg);
             return self.recover_err(&[e], loc);
         }
+        self.check_unevaluated_side_effects(e);
         let ty = self.ety(e);
         // [expr.sizeof]/1: in C++ an expression of function type is an
         // error, not the GNU extension the type form gets.

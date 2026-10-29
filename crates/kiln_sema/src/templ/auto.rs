@@ -20,17 +20,19 @@ use kiln_source::Loc;
 
 use kiln_diag::DiagId;
 
+use crate::Sema;
+use crate::declspec::{DeclSpec, TypeSpecKind};
 use crate::lookup::LookupKind;
 use crate::templ::actions::TemplateIdRef;
-use crate::{Initializer, Sema};
 
-/// One declarator group's placeholder deductions
-/// ([dcl.spec.auto.general]/8), kept by the parser across
-/// [`Sema::act_on_init_in_group`] calls.
+/// One declarator group's declarations, kept by the parser across
+/// [`Sema::act_on_group_declarator`] calls and checked by
+/// [`Sema::act_on_end_group`] ([dcl.spec.auto.general]/3, /8).
+/// Parser-local, so nested declarations in an initializer do not
+/// interfere.
 #[derive(Debug, Default)]
 pub struct AutoGroup {
-    first: Option<(DeclId, QualType)>,
-    failed: bool,
+    decls: Vec<(DeclId, Option<QualType>)>,
 }
 
 /// The form of a placeholder variable's initializer
@@ -149,70 +151,148 @@ impl Sema<'_, '_> {
         }
     }
 
-    /// [`Sema::act_on_init`] for a declarator of a group, then the
-    /// group's placeholder check ([`Sema::check_auto_group`]) at `at`
-    /// (the decl-specifiers' type). `group` is parser-local, so nested
-    /// declarations in an initializer do not interfere.
-    pub fn act_on_init_in_group(
-        &mut self,
-        group: &mut AutoGroup,
-        v: DeclId,
-        init: Initializer,
-        at: Loc,
-    ) {
-        let declared = self.ast.decls.get(v).ty();
-        self.act_on_init(v, init);
-        if !group.failed
-            && let Some(t) = declared
-        {
-            group.failed = !self.check_auto_group(&mut group.first, v, t, at);
+    /// Records declarator declaration `v` of `group` with its type
+    /// before any initializer deduces it. The parser calls this after
+    /// each declarator's `act_on_declarator` / `act_on_member`, before
+    /// its initializer.
+    pub fn act_on_group_declarator(&self, group: &mut AutoGroup, v: DeclId) {
+        group.decls.push((v, self.ast.decls.get(v).ty()));
+    }
+
+    /// The end of a declarator group with decl-specifiers `ds` (clang's
+    /// `FinalizeDeclaratorGroup`): a declarator that uses `auto` other
+    /// than to declare a deduced variable must be alone in its group
+    /// ([dcl.spec.auto.general]/3, clang's `err_auto_non_deduced_not_alone`),
+    /// and the placeholder must deduce the same type in each declarator
+    /// ([dcl.spec.auto.general]/8, [`Sema::check_auto_group`]).
+    pub fn act_on_end_group(&mut self, group: AutoGroup, ds: &DeclSpec) {
+        let decls = group.decls;
+        if decls.len() < 2 {
+            return;
+        }
+        if matches!(ds.base, TypeSpecKind::Auto | TypeSpecKind::DecltypeAuto) {
+            self.check_non_deduced_alone(&decls);
+        }
+        let at = ds.type_loc.unwrap_or(ds.loc);
+        let items: Vec<_> = decls.iter().map(|&(v, t)| (v, t.map(|t| (t, at)))).collect();
+        if self.check_auto_group(&items) && self.in_template() {
+            // Instantiation checks the group again with the deductions
+            // its substituted initializers make (clang's
+            // `BuildDeclaratorGroup` from `TransformDeclStmt`).
+            for (v, d) in items {
+                if let Some((t, at)) = d
+                    && self.placeholder_keyword(t).is_some()
+                {
+                    self.group_placeholders.insert(v, (t, at));
+                }
+            }
         }
     }
 
-    /// [dcl.spec.auto.general]/8: in a declaration with several
-    /// declarators, the placeholder must deduce the same type in each.
-    /// Called by the parser after each declarator's initializer with the
-    /// type `declared` the declarator had before deduction; `first` is
-    /// the group's first deduction (parser-local, so nested declarations
-    /// in an initializer do not interfere). Reports clang's
-    /// `err_auto_different_deductions` once, at `at` (the
-    /// decl-specifiers' type), and returns `false` then: the caller stops
-    /// checking the group (clang's `BuildDeclaratorGroup`).
-    pub(crate) fn check_auto_group(
-        &mut self,
-        first: &mut Option<(DeclId, QualType)>,
-        v: DeclId,
-        declared: QualType,
-        at: Loc,
-    ) -> bool {
-        let n = *self.ast.decls.get(v);
-        if n.kind() != DeclKind::Var || n.has(DeclFlags::INVALID) {
-            return true;
+    /// The declared placeholder type of pattern variable `d` of a
+    /// declarator group, and its decl-specifiers' type location
+    /// ([`Sema::act_on_end_group`]).
+    pub(crate) fn group_placeholder(&self, d: DeclId) -> Option<(QualType, Loc)> {
+        self.group_placeholders.get(&d).copied()
+    }
+
+    /// clang's `err_auto_non_deduced_not_alone`, reported once at the
+    /// first declarator of `decls` that is not a variable with a deduced
+    /// type, when the group has another declarator.
+    fn check_non_deduced_alone(&mut self, decls: &[(DeclId, Option<QualType>)]) {
+        let mut first_non_deduced = None;
+        for (i, &(d, t)) in decls.iter().enumerate() {
+            let kind = self.kind_of(d);
+            if !matches!(
+                kind,
+                DeclKind::Var
+                    | DeclKind::Field
+                    | DeclKind::Function
+                    | DeclKind::CXXMethod
+                    | DeclKind::CXXConstructor
+                    | DeclKind::CXXDestructor
+                    | DeclKind::CXXConversion
+            ) {
+                continue;
+            }
+            let trailing = t.is_some_and(|t| self.has_auto_for_trailing_return(t));
+            if first_non_deduced.is_none() && (kind != DeclKind::Var || trailing) {
+                first_non_deduced = Some((d, trailing));
+            }
+            if i > 0
+                && let Some((n, trailing)) = first_non_deduced
+            {
+                let loc = self.ast.decls.get(n).loc();
+                let msg =
+                    self.diag(DiagId::sema_auto_non_deduced_not_alone, loc).arg(u8::from(trailing));
+                self.emit(msg);
+                return;
+            }
         }
-        let Some(actual) = n.ty() else { return true };
-        let Some((kw, deduced)) = self.placeholder_deduction(declared, actual) else {
-            return true;
-        };
-        if self.is_error_type(deduced) || self.ast.types.is_dependent(deduced) {
-            return true;
+    }
+
+    /// clang's `Type::hasAutoForTrailingReturnType`: the first function
+    /// type under pointer, reference, array and member-pointer
+    /// declarators of `t` was written with a trailing return type.
+    fn has_auto_for_trailing_return(&self, t: QualType) -> bool {
+        let mut cur = t;
+        for _ in 0..256 {
+            match self.ast.types.view(cur.ty()) {
+                TypeView::Function(p) => return p.info().trailing_return(),
+                TypeView::Pointer(p)
+                | TypeView::LValueRef(p)
+                | TypeView::RValueRef(p)
+                | TypeView::IncompleteArray(p)
+                | TypeView::MemberPointer { pointee: p, .. } => cur = p,
+                TypeView::ConstantArray(a) => cur = a.elem,
+                _ => return false,
+            }
         }
-        let Some((d0, t0)) = *first else {
-            *first = Some((v, deduced));
-            return true;
-        };
-        if self.ast.types.canonical(t0) == self.ast.types.canonical(deduced) {
-            return true;
-        }
-        let msg = self
-            .diag(DiagId::sema_auto_var_different_deductions, at)
-            .arg(u8::from(kw == AutoKeyword::DecltypeAuto))
-            .arg(self.ty_arg(t0))
-            .arg(self.decl_name(d0))
-            .arg(self.ty_arg(deduced))
-            .arg(self.decl_name(v));
-        self.emit(msg);
-        self.ast.decls.set_flags(v, DeclFlags::INVALID);
         false
+    }
+
+    /// [dcl.spec.auto.general]/8: in a declaration with several
+    /// declarators, the placeholder must deduce the same type in each
+    /// (clang's `BuildDeclaratorGroup`, DR1347). `items` are the group's
+    /// declarations, each with its declared placeholder type and the
+    /// location of its decl-specifiers' type when it had one. The check
+    /// stops at the first declaration that is not a valid variable.
+    /// Reports clang's `err_auto_different_deductions` once and returns
+    /// `false` then.
+    pub(crate) fn check_auto_group(&mut self, items: &[(DeclId, Option<(QualType, Loc)>)]) -> bool {
+        let mut first: Option<(DeclId, QualType)> = None;
+        for &(v, declared) in items {
+            let n = *self.ast.decls.get(v);
+            if n.kind() != DeclKind::Var || n.has(DeclFlags::INVALID) {
+                break;
+            }
+            let Some((declared, at)) = declared else { continue };
+            let Some(actual) = n.ty() else { continue };
+            let Some((kw, deduced)) = self.placeholder_deduction(declared, actual) else {
+                continue;
+            };
+            if self.is_error_type(deduced) || self.ast.types.is_dependent(deduced) {
+                continue;
+            }
+            let Some((d0, t0)) = first else {
+                first = Some((v, deduced));
+                continue;
+            };
+            if self.ast.types.canonical(t0) == self.ast.types.canonical(deduced) {
+                continue;
+            }
+            let msg = self
+                .diag(DiagId::sema_auto_var_different_deductions, at)
+                .arg(u8::from(kw == AutoKeyword::DecltypeAuto))
+                .arg(self.ty_arg(t0))
+                .arg(self.decl_name(d0))
+                .arg(self.ty_arg(deduced))
+                .arg(self.decl_name(v));
+            self.emit(msg);
+            self.ast.decls.set_flags(v, DeclFlags::INVALID);
+            return false;
+        }
+        true
     }
 
     /// The type the placeholder in `declared` (under pointer and

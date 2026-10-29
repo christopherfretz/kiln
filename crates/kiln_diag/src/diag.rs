@@ -137,6 +137,10 @@ pub struct Diag {
     pub(crate) fixits: Vec<FixIt>,
     pub(crate) notes: Vec<Diag>,
     pub(crate) allow_duplicate: bool,
+    /// Part of the deduplication key: the context the diagnostic was
+    /// emitted in (sema's instantiation stack; 0 = none). The same
+    /// `(id, span)` under two contexts prints twice.
+    pub(crate) context: u64,
 }
 
 impl Diag {
@@ -151,6 +155,7 @@ impl Diag {
             fixits: Vec::new(),
             notes: Vec::new(),
             allow_duplicate: false,
+            context: 0,
         }
     }
 
@@ -235,7 +240,16 @@ impl Diag {
         self
     }
 
-    /// Exempts this diagnostic from `(id, span)` deduplication.
+    /// Sets the emission context that joins `(id, span)` in the
+    /// deduplication key (spec/diag.md §7.4): sema passes a hash of the
+    /// instantiation stack, so an error inside a template prints once per
+    /// instantiation rather than once per source location.
+    pub fn context(mut self, key: u64) -> Diag {
+        self.context = key;
+        self
+    }
+
+    /// Exempts this diagnostic from `(id, span, context)` deduplication.
     pub fn allow_duplicate(mut self) -> Diag {
         self.allow_duplicate = true;
         self

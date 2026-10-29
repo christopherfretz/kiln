@@ -616,6 +616,9 @@ pub enum TemplLinkKind {
     MemberOfSpecialization = 3,
     /// A dependent friend function template specialization.
     DependentFriend = 4,
+    /// A class template partial specialization (index into
+    /// `templates.partials`, WP-070b).
+    PartialSpecialization = 5,
 }
 
 impl TemplLink {
@@ -639,6 +642,7 @@ impl TemplLink {
             2 => Some((TemplLinkKind::Specialization, idx)),
             3 => Some((TemplLinkKind::MemberOfSpecialization, idx)),
             4 => Some((TemplLinkKind::DependentFriend, idx)),
+            5 => Some((TemplLinkKind::PartialSpecialization, idx)),
             _ => None,
         }
     }
@@ -2004,14 +2008,17 @@ impl DeclArena {
     /// # Panics
     /// If `ctx` owns no member list, `d` is already linked, or `ctx` is a
     /// complete record or enumeration and `d` is neither `IMPLICIT` (lazily
-    /// declared special members) nor `INJECTED` (`define_aggregate`, §10):
-    /// a class's member list is frozen at `}` (§2.4).
+    /// declared special members), `INJECTED` (`define_aggregate`, §10) nor
+    /// a variable (an implicit specialization of a member variable
+    /// template, listed when first referenced): a class's member list is
+    /// frozen at `}` (§2.4).
     pub fn append_member(&mut self, ctx: DeclId, d: DeclId) {
         let dn = *self.get(d);
         assert!(dn.next.is_none(), "decl is already in a member list");
         let n = *self.get(ctx);
         let i = n.data as usize;
-        let late_ok = dn.has(DeclFlags::IMPLICIT) || dn.has(DeclFlags::INJECTED);
+        let late_ok =
+            dn.has(DeclFlags::IMPLICIT) || dn.has(DeclFlags::INJECTED) || dn.kind == DeclKind::Var;
         let members = match n.kind.payload() {
             PayloadClass::Record => {
                 let r = &mut self.records[i];
@@ -2054,10 +2061,31 @@ impl DeclArena {
         n.flags = n.flags.with(f);
     }
 
+    /// Re-points the location of `d` (a class template specialization
+    /// that becomes explicit is located at its explicit declaration, as
+    /// clang).
+    pub(crate) fn set_loc(&mut self, d: DeclId, loc: Loc) {
+        self.nodes[d.index() as usize].loc = loc;
+    }
+
     /// Sets `HAS_ATTRS` (by `AttrArena::attach`).
     pub(crate) fn set_has_attrs(&mut self, d: DeclId) {
         let n = &mut self.nodes[d.index() as usize];
         n.flags = n.flags.with(DeclFlags::HAS_ATTRS);
+    }
+
+    /// Moves parameter `p` into function `func`: a parameter is created
+    /// while its declarator is parsed, so that it is in scope in the
+    /// rest of the declarator ([basic.scope.param]), and adopted by the
+    /// function once that exists (clang's `setDeclContext` in
+    /// `ActOnFunctionDeclarator`).
+    ///
+    /// # Panics
+    /// If `p` is not a `ParmVar`.
+    pub fn set_param_owner(&mut self, p: DeclId, func: DeclId) {
+        let n = &mut self.nodes[p.index() as usize];
+        assert!(n.kind == DeclKind::ParmVar, "set_param_owner on a {:?}", n.kind);
+        n.ctx = Some(func);
     }
 
     /// Re-points the declared type (deduced return types, resolved

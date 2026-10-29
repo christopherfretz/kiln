@@ -33,6 +33,7 @@ pub mod new_delete;
 mod oven_bridge;
 mod rtti;
 pub mod scope;
+mod side_effects;
 pub mod stmt;
 pub mod target;
 pub mod templ;
@@ -112,15 +113,31 @@ pub struct Sema<'a, 'sm> {
     /// redeclares them ([basic.link]/6, clang's local extern decls).
     pub(crate) local_externs: Vec<(DeclId, kiln_source::symbol::Symbol, DeclId)>,
     /// The constant evaluator of the translation unit (spec/sema.md §8).
-    pub(crate) oven: Oven,
+    /// Taken out for the duration of an evaluation, so the bridge can
+    /// reach the rest of `Sema` (`ensure_body` instantiates through it,
+    /// spec/sema-templates.md §4.11); `None` only while one runs.
+    pub(crate) oven: Option<Oven>,
     /// The implicitly declared global allocation functions.
     pub(crate) global_ops: new_delete::GlobalOps,
     /// Braced-init-list call arguments awaiting their parameter types
     /// (placeholders of [`Sema::act_on_braced_arg`]).
     pub(crate) braced_args: Vec<(ExprId, InitList)>,
-    /// The names of the parameters declared so far in each enclosing
-    /// parameter-declaration-clause being parsed ([`Sema::act_on_start_prototype`]).
-    pub(crate) prototype_params: Vec<Vec<kiln_source::symbol::Symbol>>,
+    /// The parameters declared so far in each enclosing
+    /// parameter-declaration-clause being parsed
+    /// ([`Sema::act_on_start_prototype`]).
+    pub(crate) prototype_params: Vec<decl::PrototypeFrame>,
+    /// Parameters created by [`Sema::act_on_prototype_param`] that no
+    /// function has adopted yet ([`Sema::create_params`]).
+    pub(crate) unowned_params: std::collections::HashSet<DeclId>,
+    /// The declared (placeholder) return type of each function whose
+    /// return type was deduced, by first declaration: redeclarations are
+    /// matched against it ([dcl.spec.auto.general]/13).
+    pub(crate) declared_returns: kiln_source::fx::FxHashMap<DeclId, QualType>,
+    /// The declared placeholder type and decl-specifiers' type location
+    /// of each variable of a multi-declarator group in a template
+    /// pattern: instantiation checks the group's deductions again
+    /// ([dcl.spec.auto.general]/8).
+    pub(crate) group_placeholders: kiln_source::fx::FxHashMap<DeclId, (QualType, Loc)>,
     /// Set while [`Sema::act_on_call_name`] builds an unqualified callee
     /// inside a template: a function it names is not marked referenced
     /// until the call is known to be non-dependent ([temp.dep.candidate]).
@@ -243,10 +260,13 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             defining: Vec::new(),
             enums: Vec::new(),
             local_externs: Vec::new(),
-            oven: Oven::new(Budget::default()),
+            oven: Some(Oven::new(Budget::default())),
             global_ops: new_delete::GlobalOps::default(),
             braced_args: Vec::new(),
             prototype_params: Vec::new(),
+            unowned_params: std::collections::HashSet::new(),
+            declared_returns: kiln_source::fx::FxHashMap::default(),
+            group_placeholders: kiln_source::fx::FxHashMap::default(),
             deferring_call_ref: false,
             deferred_call_refs: Vec::new(),
             classes: Vec::new(),
@@ -330,6 +350,8 @@ impl<'a, 'sm> Sema<'a, 'sm> {
         if !self.inst.stack.is_empty()
             && let Some(id) = d.id()
         {
+            // Dedup is per instantiation (spec/diag.md §7.4).
+            d = d.context(self.inst.stack.context_key());
             let sev = self.diags.severity(id);
             if self.inst.stack.is_sfinae() {
                 if sev >= kiln_diag::Severity::Error
@@ -342,7 +364,9 @@ impl<'a, 'sm> Sema<'a, 'sm> {
                 }
                 return;
             }
-            if sev != kiln_diag::Severity::Ignored {
+            // Only a diagnostic that will print takes the context notes,
+            // which print once per depth (§10.2).
+            if self.diags.would_emit(&d) {
                 d.prepend_notes(self.inst_context_notes());
             }
         }

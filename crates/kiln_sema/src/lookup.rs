@@ -241,7 +241,18 @@ impl Sema<'_, '_> {
         // namespace that contains both the directive and the nominated
         // namespace ([namespace.udir]/2).
         let mut local_dirs: Vec<DeclId> = Vec::new();
-        for s in self.scopes.iter().rev() {
+        for (i, s) in self.scopes.iter().enumerate().rev() {
+            // [basic.scope.param]: the parameters of a declarator being
+            // parsed, before the scope the declarator appears in.
+            if kind != LookupKind::Tag
+                && !self.prototype_params.is_empty()
+                && let Some(d) = self.prototype_param_named(i + 1, name)
+            {
+                let found = self.filter(vec![d], kind);
+                if !found.is_empty() {
+                    return found;
+                }
+            }
             if s.kind == ScopeKind::TemplateParams {
                 // [temp.local]/6: template parameter names.
                 if kind != LookupKind::Tag

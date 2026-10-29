@@ -1,0 +1,23 @@
+TranslationUnitDecl
+|-ClassTemplateDecl P
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| |-CXXRecordDecl struct P definition
+| | `-FieldDecl v 'T'
+| |-ClassTemplateSpecializationDecl struct P definition implicit_instantiation
+| | |-TemplateArgument type 'int *'
+| | |-FieldDecl p 'int *'
+| | `-FieldDecl n 'int'
+| `-ClassTemplateSpecializationDecl struct P definition implicit_instantiation
+|   |-TemplateArgument type 'char'
+|   `-FieldDecl v 'char'
+|-ClassTemplatePartialSpecializationDecl struct P definition explicit_specialization
+| |-TemplateArgument type 'type-parameter-0-0 *'
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| |-FieldDecl p 'T *'
+| `-FieldDecl n 'int'
+|-VarDecl x 'int' cinit
+| `-ImplicitCastExpr 'int' <IntegralCast>
+|   `-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof 'P<int *>'
+`-VarDecl y 'int' cinit
+  `-ImplicitCastExpr 'int' <IntegralCast>
+    `-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof 'P<char>'

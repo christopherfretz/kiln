@@ -3,12 +3,14 @@
 //! context notes with backtrace elision, and the SFINAE context flag.
 
 use std::cell::Cell;
+use std::hash::{Hash, Hasher};
 use std::time::Instant;
 
 use kiln_ast::DeclId;
 use kiln_ast::ids::ArgListId;
 use kiln_diag::{Diag, DiagId};
 use kiln_source::Loc;
+use kiln_source::fx::FxHasher;
 
 use crate::Sema;
 
@@ -39,12 +41,22 @@ pub enum FrameKind {
     DefaultFunctionArg,
     /// Checking a default template argument (not an instantiation).
     DefaultArgChecking,
+    /// Deducing the arguments of a class template partial
+    /// specialization while matching it ([temp.spec.partial.match]; not
+    /// an instantiation). The frame's `args` are the deduced arguments.
+    PartialSpecDeduction,
+    /// The declaration of a variable template specialization
+    /// ([temp.inst]/7).
+    VarTemplateInstantiation,
+    /// The initializer of a variable template specialization (charged
+    /// to the specialization's report row without counting it again).
+    VarTemplateInit,
 }
 
 impl FrameKind {
     /// Whether the frame counts toward the depth limit.
     pub const fn is_instantiation(self) -> bool {
-        !matches!(self, FrameKind::DefaultArgChecking)
+        !matches!(self, FrameKind::DefaultArgChecking | FrameKind::PartialSpecDeduction)
     }
 
     /// The context note clang prints for the frame.
@@ -61,6 +73,10 @@ impl FrameKind {
             FrameKind::DefaultTemplateArg => DiagId::note_default_arg_instantiation_here,
             FrameKind::DefaultFunctionArg => DiagId::note_default_function_arg_instantiation_here,
             FrameKind::DefaultArgChecking => DiagId::note_template_default_arg_checking,
+            FrameKind::PartialSpecDeduction => DiagId::note_partial_spec_deduct_here,
+            FrameKind::VarTemplateInstantiation | FrameKind::VarTemplateInit => {
+                DiagId::note_var_template_spec_here
+            }
         }
     }
 
@@ -78,6 +94,9 @@ impl FrameKind {
             FrameKind::DefaultTemplateArg => "default-template-arg",
             FrameKind::DefaultFunctionArg => "default-arg",
             FrameKind::DefaultArgChecking => "checking",
+            FrameKind::PartialSpecDeduction => "partial-deduction",
+            FrameKind::VarTemplateInstantiation => "var",
+            FrameKind::VarTemplateInit => "var-init",
         }
     }
 }
@@ -159,6 +178,23 @@ impl InstantiationStack {
     /// Whether `entity` is being instantiated as `kind` (a cycle).
     pub fn contains(&self, kind: FrameKind, entity: DeclId) -> bool {
         self.frames.iter().any(|f| f.kind == kind && f.entity == entity)
+    }
+
+    /// The diagnostic deduplication context for the current stack
+    /// (spec/diag.md §7.4): a hash of every frame's kind, entity,
+    /// arguments and point of instantiation; 0 when the stack is empty.
+    /// Two instantiations of one pattern hash differently, so an error in
+    /// the pattern prints once per instantiation.
+    pub(crate) fn context_key(&self) -> u64 {
+        if self.frames.is_empty() {
+            return 0;
+        }
+        let mut h = FxHasher::default();
+        for f in &self.frames {
+            (f.kind, f.entity, f.args, f.poi).hash(&mut h);
+        }
+        // 0 means "no context"; keep it reserved.
+        h.finish().max(1)
     }
 
     pub(crate) fn push(&mut self, f: InstFrame) {
@@ -251,6 +287,8 @@ impl Sema<'_, '_> {
             | FrameKind::MemberFunction
             | FrameKind::FunctionSpec
             | FrameKind::StaticDataMember
+            | FrameKind::VarTemplateInstantiation
+            | FrameKind::VarTemplateInit
             | FrameKind::Enum
             | FrameKind::Nsdmi => Some(false),
             _ => None,
@@ -337,6 +375,13 @@ impl Sema<'_, '_> {
                     kiln_ast::types::write_arg_list(&self.ast.types, &names, l, &mut s);
                 }
                 s
+            }
+            FrameKind::PartialSpecDeduction => self.partial_spec_desc(f.entity, f.args),
+            FrameKind::VarTemplateInstantiation | FrameKind::VarTemplateInit => {
+                match self.ast.spec_info(f.entity) {
+                    Some((_, i)) => self.spec_name(i.template, i.print_args),
+                    None => self.qualified_decl_name(f.entity),
+                }
             }
             _ => self.qualified_decl_name(f.entity),
         }

@@ -35,7 +35,11 @@ impl Sema<'_, '_> {
                 self.inst.pending.clear();
                 return;
             }
-            self.instantiate_function_definition(p.decl, p.poi);
+            if self.kind_of(p.decl) == kiln_ast::decl::DeclKind::Var {
+                self.instantiate_static_member_def(p.decl, p.poi);
+            } else {
+                self.instantiate_function_definition(p.decl, p.poi);
+            }
         }
     }
 }

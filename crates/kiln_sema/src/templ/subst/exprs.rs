@@ -8,7 +8,7 @@ use kiln_ast::decl::DeclKind;
 use kiln_ast::expr::{CastKind, CharKind, ExprDeps, ExprFlags, ExprKind, Radix, ValueCategory};
 use kiln_ast::ids::RawId;
 use kiln_ast::types::{ArgView, BuiltinType, Nns};
-use kiln_ast::{ExprId, QualType};
+use kiln_ast::{DeclId, ExprId, QualType};
 use kiln_source::Loc;
 
 use super::{SubstFail, SubstResult, Substituter};
@@ -171,6 +171,24 @@ impl Substituter<'_, '_, '_> {
                         None => None,
                     };
                     return Ok(self.sema.act_dependent_scope_ref(nns, name, targs, begin, loc));
+                }
+                // `T::template x<args>` ([temp.names]/5, /6): the member
+                // template the name finds after substitution.
+                if let Some(l) = self.sema.ast.templates.expr_targs.get(e).copied() {
+                    let t = self.member_template_named(nns, name, loc)?;
+                    let l = self.args(l, loc)?;
+                    let args = self.sema.ast.types.args(l).to_vec();
+                    let tn = self.sema.template_name_for(t);
+                    return match self.sema.act_template_id(tn, &args, loc, loc) {
+                        Ok(
+                            crate::templ::actions::TemplateIdRef::Value(x)
+                            | crate::templ::actions::TemplateIdRef::Overload(x),
+                        ) => Ok(x),
+                        Ok(crate::templ::actions::TemplateIdRef::Type(_)) => {
+                            self.unimplemented("a type template-id as an expression", loc)
+                        }
+                        Err(()) => Err(SubstFail),
+                    };
                 }
                 let ctx = self.nns_context(nns, begin)?;
                 Ok(self.sema.act_on_id_expression(name, loc, Some(ctx)))
@@ -369,6 +387,19 @@ impl Substituter<'_, '_, '_> {
             // scope; rebuild the reference as written.
             if let [d] = decls.as_slice() {
                 let d = self.find_instantiated_decl(*d, n.loc())?;
+                // `v<args>` naming a member variable template of the
+                // current instantiation ([temp.dep.expr]/3).
+                if self.sema.kind_of(d) == DeclKind::VarTemplate
+                    && let Some(&targs) = self.sema.ast.templates.expr_targs.get(c)
+                {
+                    let l = self.args(targs, n.loc())?;
+                    let args = self.sema.ast.types.args(l).to_vec();
+                    let name = self.sema.template_name_for(d);
+                    return match self.sema.act_template_id(name, &args, n.loc(), n.loc()) {
+                        Ok(crate::templ::actions::TemplateIdRef::Value(e)) => Ok(e),
+                        _ => Err(SubstFail),
+                    };
+                }
                 return Ok(self.sema.build_decl_ref(d, n.loc()));
             }
             return self.unimplemented("calls to overload sets", n.loc());
@@ -386,7 +417,15 @@ impl Substituter<'_, '_, '_> {
         let a = match self.lookup(info.depth, info.index) {
             ArgLookup::Arg(a) => self.element(a, loc)?,
             ArgLookup::Retain(d) if d == info.depth => return Ok(e),
-            ArgLookup::Retain(_) => return self.unimplemented("member templates", loc),
+            // A parameter of a member template redeclared one level
+            // shallower ([temp.mem]; §4.6).
+            ArgLookup::Retain(_) => {
+                let np = self.find_instantiated_decl(p, loc)?;
+                if np == p {
+                    return self.unimplemented("member templates", loc);
+                }
+                return Ok(self.sema.build_decl_ref(np, loc));
+            }
             ArgLookup::Missing => return Err(SubstFail),
         };
         let r = match a.view() {
@@ -394,7 +433,18 @@ impl Substituter<'_, '_, '_> {
             ArgView::Expr { expr, .. } => expr,
             _ => return self.unimplemented("non-type template argument of this kind", loc),
         };
-        Ok(self.sema.ast.builder().subst_nttp_expr(p, r, loc))
+        // The parameter of the level's template (an instantiated member
+        // template's own parameter, as clang).
+        let shown = self
+            .assoc(info.depth)
+            .and_then(|a| self.sema.ast.template_info(a).copied())
+            .and_then(|i| {
+                let l = *self.sema.ast.templates.param_list(i.params);
+                self.sema.ast.lists.iter::<DeclId>(l.params).nth(usize::from(info.index))
+            })
+            .filter(|&x| self.sema.kind_of(x) == DeclKind::NonTypeTemplateParm)
+            .unwrap_or(p);
+        Ok(self.sema.ast.builder().subst_nttp_expr(shown, r, loc))
     }
 
     /// The literal for a non-type template argument value
@@ -661,5 +711,3 @@ impl Substituter<'_, '_, '_> {
         Ok(InitList { items: out, lbrace, rbrace })
     }
 }
-
-use kiln_ast::DeclId;

@@ -44,7 +44,7 @@ macro_rules! diag_groups {
 
 diag_groups! {
     All = "all" [Most];
-    Most = "most" [Comment, UnknownPragmas, OverloadedVirtual, Reorder, Uninitialized];
+    Most = "most" [Comment, UnknownPragmas, OverloadedVirtual, UnevaluatedExpression, Reorder, Uninitialized];
     Pragmas = "pragmas" [UnknownPragmas, IgnoredPragmas];
     Pedantic = "pedantic" [];
     BackslashNewlineEscape = "backslash-newline-escape" [];
@@ -143,6 +143,14 @@ diag_groups! {
     InaccessibleBase = "inaccessible-base" [];
     // WP-074
     DeprecatedBuiltins = "deprecated-builtins" [];
+    // WP-087
+    UnevaluatedExpression = "unevaluated-expression" [];
+    InvalidPartialSpecialization = "invalid-partial-specialization" [];
+    UnusablePartialSpecialization = "unusable-partial-specialization" [];
+    InstantiationAfterSpecialization = "instantiation-after-specialization" [];
+    Deprecated = "deprecated" [DeprecatedDeclarations, DeprecatedRedundantConstexprStaticDef];
+    DeprecatedRedundantConstexprStaticDef = "deprecated-redundant-constexpr-static-def" [];
+    ExplicitSpecializationStorageClass = "explicit-specialization-storage-class" [];
     ReturnStackAddress = "return-stack-address" [];
     Reorder = "reorder" [ReorderCtor];
     ReorderCtor = "reorder-ctor" [];

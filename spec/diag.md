@@ -236,6 +236,7 @@ Diag::new(DiagId::pp_macro_redefined, name_span)
     .note(DiagId::note_previous_definition, prev) // argument-less note id or free text
     .with_note(Diag::new(DiagId::note_macro_here, s).arg("FOO")) // full note
     .fixit(FixIt::replace(span, "text"))          // also FixIt::insert / FixIt::remove
+    .context(key)                                 // dedup context, §7.4
     .allow_duplicate()                            // opt out of §7.4
     .emit(&engine);
 ```
@@ -256,6 +257,7 @@ DiagEngine::new(&sm, &opts, sink) // sink: impl DiagSink + Send
 DiagEngine::with_stderr(&sm, &opts) // TextSink or JsonSink per opts.format
 engine.emit(diag) / diag.emit(&engine)
 engine.severity(id) / is_enabled(id) / is_enabled_at(id, loc) / suppress_system_warnings()
+engine.would_emit(&diag) // §7.4
 engine.error_count() / warning_count() / has_fatal() / summary() / flush()
 ```
 
@@ -303,10 +305,36 @@ fatal, and `20 errors generated.`
 
 ### 7.4 Deduplication
 
-A diagnostic with a valid primary span is dropped if one with the same
-`(id, span)` was already emitted, unless it is `allow_duplicate`.
+The deduplication key is `(id, span, context)`. `context` is a `u64`
+set with `Diag::context(key)` (default 0, "no context"); sema sets it to
+a hash of the template instantiation stack (every frame's kind, entity,
+arguments and point of instantiation; never 0 for a non-empty stack,
+spec/sema-templates.md §10.2). A diagnostic with a valid primary span is
+dropped, unless it is `allow_duplicate`, if
+
+- one with the same `(id, span, context)` was already emitted, or
+- its context is not 0 and one with the same `(id, span)` and context 0
+  was already emitted.
+
+So an error in a template prints once per instantiation that hits it,
+each with its own context notes, even when the messages are identical
+(clang does not deduplicate at all); one instantiation reaching the same
+location twice prints once; and a diagnostic already reported in the
+template definition is not repeated by an instantiation that re-checks
+the same non-dependent construct (clang reuses non-dependent nodes
+instead of rebuilding them, so it never re-diagnoses them). The reverse
+does not hold: a context-free diagnostic after an instantiation's still
+prints.
+
 Diagnostics with invalid spans are never deduplicated. Ignored
 diagnostics are not recorded.
+
+`engine.would_emit(&diag)` answers, without recording anything, whether
+`emit` would hand `diag` to the sink now: false after a fatal error, when
+Ignored, when the system-header rule drops it, or when it is a duplicate
+(the error limit is not considered). Sema uses it to attach the
+once-per-depth instantiation-context notes only to a diagnostic that
+will print, so a dropped duplicate does not consume them.
 
 ### 7.5 Summary
 

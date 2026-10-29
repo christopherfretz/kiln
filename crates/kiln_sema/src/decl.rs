@@ -101,6 +101,19 @@ pub struct EnumBuild {
     enumerators: Vec<(DeclId, i128)>,
 }
 
+/// The parameters declared so far in a parameter-declaration-clause
+/// being parsed ([`Sema::act_on_start_prototype`]).
+#[derive(Clone, Debug, Default)]
+pub struct PrototypeFrame {
+    /// The scope depth when the clause opened: its parameters are found
+    /// before the scopes below it ([basic.scope.param]).
+    pub(crate) depth: usize,
+    /// The named parameters, in order.
+    pub(crate) params: Vec<(Symbol, DeclId)>,
+    /// The number of parameters declared so far.
+    pub(crate) index: usize,
+}
+
 pub(crate) fn sym_str(s: &Sema<'_, '_>, sym: Symbol) -> String {
     s.ast.symbols().as_str(sym).to_string()
 }
@@ -237,17 +250,74 @@ impl Sema<'_, '_> {
     /// The `(` of a parameter-declaration-clause. Until the matching
     /// [`Sema::act_on_end_prototype`] (after the trailing return type),
     /// each parameter declared ([`Sema::act_on_prototype_param`]) is in
-    /// scope ([basic.scope.param]); kiln only creates parameters with
-    /// their function, so such uses are reported as unsupported rather
-    /// than resolved to an outer name.
+    /// scope ([basic.scope.param]): unqualified lookup finds it before
+    /// the scope the declarator appears in ([`Sema::lookup_name`]).
     pub fn act_on_start_prototype(&mut self) {
-        self.prototype_params.push(Vec::new());
+        self.prototype_params.push(PrototypeFrame {
+            depth: self.scopes.len(),
+            params: Vec::new(),
+            index: 0,
+        });
     }
 
-    /// Parameter `p` of the innermost parameter-declaration-clause.
-    pub fn act_on_prototype_param(&mut self, p: &ParamInfo) {
-        if let (Some((name, _)), Some(frame)) = (p.name, self.prototype_params.last_mut()) {
-            frame.push(name);
+    /// Parameter `p` of the innermost parameter-declaration-clause, at its
+    /// point of declaration (before its default argument,
+    /// [basic.scope.pdecl]/1): creates its declaration (`p.decl`), which
+    /// the function adopts ([`Sema::create_params`]).
+    pub fn act_on_prototype_param(&mut self, p: &mut ParamInfo) {
+        let Some(frame) = self.prototype_params.last() else { return };
+        let idx = u16::try_from(frame.index).unwrap_or(u16::MAX);
+        let name = p.name.map_or(DeclName::EMPTY, |(n, _)| DeclName::ident(n));
+        let pack = matches!(self.ast.types.view(p.ty.ty()), TypeView::PackExpansion { .. });
+        let flags = if pack { kiln_ast::decl::ParamData::PACK } else { 0 };
+        let ctx = self.ctx;
+        let pd = self.builder().prototype_param(ctx, name, p.loc, p.ty, idx, flags);
+        if p.invalid {
+            self.ast.decls.set_flags(pd, DeclFlags::INVALID);
+        }
+        self.unowned_params.insert(pd);
+        p.decl = Some(pd);
+        if let Some(frame) = self.prototype_params.last_mut() {
+            frame.index += 1;
+            if let Some((n, _)) = p.name {
+                frame.params.push((n, pd));
+            }
+        }
+    }
+
+    /// The innermost parameter named `name` of the
+    /// parameter-declaration-clauses opened at scope depth `depth`
+    /// ([basic.scope.param]).
+    pub(crate) fn prototype_param_named(&self, depth: usize, name: Symbol) -> Option<DeclId> {
+        self.prototype_params
+            .iter()
+            .rev()
+            .filter(|f| f.depth == depth)
+            .find_map(|f| f.params.iter().rev().find(|e| e.0 == name).map(|e| e.1))
+    }
+
+    /// The exception specification or trailing return type of a function
+    /// declarator with cv-qualifiers `quals`, in a member-declaration
+    /// when `member`: there `this` may appear, with type "pointer to cv
+    /// `C`" ([expr.prim.this]/2; clang's `CXXThisScopeRAII`). Returns
+    /// whether a `this` scope was entered, for
+    /// [`Sema::act_on_end_this_scope`].
+    pub fn act_on_start_this_scope(&mut self, member: bool, quals: Quals) -> bool {
+        if !member || self.kind_of(self.ctx) != DeclKind::CXXRecord {
+            return false;
+        }
+        let class = self.ctx;
+        let t = self.this_class_type(class);
+        let t = if quals.is_empty() { t } else { self.ast.types.qualify(t, quals) };
+        let p = self.ast.types.pointer_to(t);
+        self.nsdmi_this.push((class, p));
+        true
+    }
+
+    /// Leaves the scope [`Sema::act_on_start_this_scope`] entered.
+    pub fn act_on_end_this_scope(&mut self, entered: bool) {
+        if entered {
+            self.nsdmi_this.pop();
         }
     }
 
@@ -572,6 +642,7 @@ impl Sema<'_, '_> {
             invalid: ds.invalid || d.invalid,
             default_arg: DefaultArg::None,
             range: (ds.loc, d.name_loc()),
+            decl: None,
         }
     }
 
@@ -581,6 +652,18 @@ impl Sema<'_, '_> {
     /// argument replayed in a complete-class context goes through
     /// [`Sema::act_on_param_default_arg`] instead.)
     pub fn act_on_param_default_init(&mut self, p: &mut ParamInfo, init: Initializer) {
+        let roots: Vec<ExprId> = match &init {
+            Initializer::Expr(e) => vec![*e],
+            Initializer::Paren(v, _, _) => v.clone(),
+            // (A braced default argument is not searched: a gap.)
+            Initializer::List(_) => Vec::new(),
+        };
+        if !roots.into_iter().all(|e| self.check_default_arg_refs(e)) {
+            p.invalid = true;
+            if let Some(d) = p.decl {
+                self.ast.decls.set_flags(d, DeclFlags::INVALID);
+            }
+        }
         if p.invalid || self.is_error_type(p.ty) {
             if let Initializer::Expr(e) = init {
                 p.default_arg = DefaultArg::Parsed(e);
@@ -625,6 +708,41 @@ impl Sema<'_, '_> {
         };
         let e = self.act_on_full_expr(e);
         p.default_arg = DefaultArg::Parsed(e);
+    }
+
+    /// [dcl.fct.default]/9: a parameter shall not appear as a
+    /// potentially-evaluated expression in a default argument (clang's
+    /// `CheckDefaultArgumentVisitor`: "default argument references
+    /// parameter"). False after a diagnostic, for the first such use.
+    /// Lambda bodies are not searched (their captures are checked with
+    /// the lambda).
+    pub fn check_default_arg_refs(&mut self, e: ExprId) -> bool {
+        let mut stack = vec![e];
+        while let Some(x) = stack.pop() {
+            let n = self.ast.exprs.get(x);
+            match n.kind() {
+                ExprKind::LambdaExpr => continue,
+                ExprKind::DeclRefExpr => {
+                    let d = self.ast.exprs.decl(x);
+                    if self.kind_of(d) == DeclKind::ParmVar
+                        && self.ast.exprs.non_odr_use(x) != kiln_ast::expr::NonOdrUse::Unevaluated
+                    {
+                        let name = self.ast.decls.get(d).name();
+                        let text = self.decl_name_str(name);
+                        let msg = self
+                            .diag(DiagId::sema_param_default_argument_references_param, n.loc())
+                            .arg(text);
+                        self.emit(msg);
+                        return false;
+                    }
+                }
+                _ => {}
+            }
+            let mut kids = self.ast.exprs.children(x, &self.ast.lists);
+            kids.reverse();
+            stack.extend(kids);
+        }
+        true
     }
 
     /// Attaches clang's "passing argument to parameter 'p' here" note.
@@ -959,6 +1077,9 @@ impl Sema<'_, '_> {
         let invalid = ds.invalid || d.invalid || self.is_error_type(ty);
         if special {
             return self.act_on_special_member_declarator(ds, ty, d, invalid);
+        }
+        if let Some(sid) = &d.spec_id {
+            return self.act_on_var_spec_declarator(ds, ty, d, sid, head);
         }
         if !invalid {
             self.warn_ambiguous_function(ds, d, ty);
@@ -1434,12 +1555,8 @@ impl Sema<'_, '_> {
         };
         let matches_member = prev.is_some_and(|p| {
             self.kind_of(p) == DeclKind::CXXMethod
-                && self
-                    .ast
-                    .decls
-                    .get(p)
-                    .ty()
-                    .is_some_and(|pty| self.same_ignoring_exc_spec(pty, ty))
+                && self.ast.decls.get(p).ty().is_some()
+                && self.declared_fn_type(p).is_some_and(|pty| self.same_ignoring_exc_spec(pty, ty))
         });
         let mut ty = ty;
         if let Some(op) = d.op_name {
@@ -1508,9 +1625,12 @@ impl Sema<'_, '_> {
         } else if let Some(p) = prev {
             let pn = *self.ast.decls.get(p);
             if pn.kind() == fkind {
-                let pty = pn.ty().unwrap_or(QualType::ERROR);
+                let pty = self.declared_fn_type(p).unwrap_or(QualType::ERROR);
                 if self.ast.types.same_type(pty, ty) {
                     prev_ok = Some(p);
+                    // [dcl.spec.auto.general]/13: the redeclaration has
+                    // the deduced return type.
+                    ty = self.adopt_deduced_return(p, ty);
                     let pspec = self.ast.decls.function(p).map(|f| f.spec).unwrap_or_default();
                     if spec.storage() == FnStorage::Static && pspec.storage() != FnStorage::Static {
                         let msg = self
@@ -1642,7 +1762,8 @@ impl Sema<'_, '_> {
     }
 
     /// Creates the parameter declarations of function `f` from the
-    /// declarator's `params`, with the merged `defaults`
+    /// declarator's `params` (adopting those created at their point of
+    /// declaration, [`Sema::act_on_prototype_param`]), with the merged `defaults`
     /// ([`Sema::merge_default_args`]), and attaches them.
     pub(crate) fn create_params(
         &mut self,
@@ -1670,7 +1791,16 @@ impl Sema<'_, '_> {
             // expansion type.
             let pack = matches!(self.ast.types.view(p.ty.ty()), TypeView::PackExpansion { .. });
             let flags = if pack { kiln_ast::decl::ParamData::PACK } else { 0 };
-            let pd = self.builder().param(f, pname, p.loc, p.ty, idx, flags);
+            let pd = match p.decl.filter(|d| self.unowned_params.remove(d)) {
+                Some(pd) => {
+                    // [basic.scope.param]: the parameter named in the rest
+                    // of the declarator is the function's.
+                    self.ast.decls.set_param_owner(pd, f);
+                    self.ast.decls.set_ty(pd, p.ty);
+                    pd
+                }
+                None => self.builder().param(f, pname, p.loc, p.ty, idx, flags),
+            };
             if p.range.0.is_valid() && p.range.0 != p.loc {
                 let _ = self.ast.decls.cold.begin_loc.insert(pd, p.range.0);
             }
@@ -1855,7 +1985,8 @@ impl Sema<'_, '_> {
                     .diag(DiagId::sema_auto_not_allowed_field, ds.type_loc.unwrap_or(ds.loc))
                     .arg(u8::from(kw == AutoKeyword::DecltypeAuto))
                     .arg(tag as u8);
-                self.emit(msg);
+                // Once per declarator of a group (as clang).
+                self.emit(msg.allow_duplicate());
             }
             kw.is_some()
         };
@@ -2309,13 +2440,26 @@ impl Sema<'_, '_> {
         }
         // [depr.static.constexpr]: a redundant out-of-class redeclaration
         // of an inline static data member initialized in its class.
-        if !self.is_in_class_static(v)
-            && self
+        if !self.is_in_class_static(v) {
+            let in_class = self
                 .ast
                 .redecls_of(v)
-                .any(|x| x != v && self.is_in_class_static(x) && self.is_var_definition(x))
-        {
-            return;
+                .find(|&x| x != v && self.is_in_class_static(x) && self.is_var_definition(x));
+            if let Some(x) = in_class {
+                if self.ast.decls.var(x).is_some_and(|y| y.spec.is_constexpr()) {
+                    self.error(DiagId::sema_redundant_constexpr_static_def, vn.loc());
+                }
+                return;
+            }
+            // [class.static.data]/4: the definition of a `const` static
+            // data member initialized in its class has no initializer.
+            if self
+                .ast
+                .redecls_of(v)
+                .any(|x| x != v && self.ast.decls.var(x).is_some_and(|y| y.init.is_some()))
+            {
+                return;
+            }
         }
         let spec = self.ast.decls.var(v).map(|x| x.spec).unwrap_or_default();
         let ty = vn.ty().unwrap_or(QualType::ERROR);
@@ -2484,7 +2628,7 @@ impl Sema<'_, '_> {
         }
     }
 
-    fn tag_kind_of(keyword: TagKeyword) -> TagKind {
+    pub(crate) fn tag_kind_of(keyword: TagKeyword) -> TagKind {
         match keyword {
             TagKeyword::Class => TagKind::Class,
             TagKeyword::Union => TagKind::Union,
@@ -3541,7 +3685,7 @@ impl Sema<'_, '_> {
         // template ([temp.local]/1): `X` alone is `X<P...>`, `X<A>` a
         // template-id.
         if k == DeclKind::CXXRecord
-            && let Some(t) = self.ast.described_template(self.ast.first(d))
+            && let Some(t) = self.injected_template_of(d)
         {
             return NameClass::TypeTemplate(t);
         }
@@ -3648,6 +3792,11 @@ impl Sema<'_, '_> {
             DeclKind::Typedef | DeclKind::TypeAlias => {
                 self.mark_type_referenced(d);
                 let ty = self.ast.decls.get(d).ty().unwrap_or(QualType::ERROR);
+                // [temp.inst]/2: a specialization named through an alias
+                // is instantiated like one named by its template-id.
+                if self.undefined_spec(ty).is_some() && !self.require_complete_nns(ty, loc) {
+                    return None;
+                }
                 let r = self.ast.types.as_record(ty).or_else(|| self.ast.types.as_enum(ty));
                 if r.is_none() {
                     let msg = self

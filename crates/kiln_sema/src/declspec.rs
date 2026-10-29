@@ -421,6 +421,11 @@ pub struct ParamInfo {
     /// last token, default argument included; the `-Wvexing-parse`
     /// fix-its, [dcl.ambig.res]).
     pub range: (Loc, Loc),
+    /// The parameter declaration created at its point of declaration
+    /// ([basic.scope.pdecl]/1) by [`crate::Sema::act_on_prototype_param`],
+    /// so that it is in scope in the rest of the declarator
+    /// ([basic.scope.param]); the function adopts it.
+    pub decl: Option<DeclId>,
 }
 
 /// The default argument of a [`ParamInfo`] ([dcl.fct.default]).
@@ -575,6 +580,13 @@ pub struct Declarator {
     ///
     /// [`Sema::act_on_specialization_declarator_id`]: crate::Sema::act_on_specialization_declarator_id
     pub dropped: bool,
+    /// The declarator-id is a template-id naming a variable template
+    /// after a template head or `template<>`: a partial or explicit
+    /// specialization ([temp.spec.partial], [temp.expl.spec];
+    /// [`Sema::act_on_specialization_declarator_id`]).
+    ///
+    /// [`Sema::act_on_specialization_declarator_id`]: crate::Sema::act_on_specialization_declarator_id
+    pub spec_id: Option<crate::templ::spec::SpecDeclaratorId>,
 }
 
 /// A declarator-id that is not an identifier ([dcl.decl]/4,
@@ -617,6 +629,7 @@ impl Declarator {
             ellipsis: None,
             trailing_requires: None,
             dropped: false,
+            spec_id: None,
         }
     }
 

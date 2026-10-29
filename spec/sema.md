@@ -31,7 +31,10 @@ source manager it reports against.
 | `local_externs` | block-scope `extern` variables and functions, keyed by enclosing namespace and name (§3) |
 | `exceptions`, `rtti` | `-f[no-]exceptions`, `-f[no-]rtti` (default on; §5.5, §5.6) |
 | `braced_args` | braced-init-list call arguments awaiting their parameter types (§6.1) |
-| `prototype_params` | parameter names of each parameter-declaration-clause being parsed (§4.3) |
+| `prototype_params` | the parameters (`PrototypeFrame`: `ParmVar` ids) of each parameter-declaration-clause being parsed (§4.3) |
+| `unowned_params` | prototype parameters not yet adopted by a function (§4.3) |
+| `declared_returns` | the declared (placeholder) function type of a deduced-return function, for its redeclarations (§4.3.1) |
+| `group_placeholders` | placeholder types of instantiation-pattern variables whose declarator group passed the one-deduction check, for the re-check at instantiation (§4.3.1) |
 | `pragma_packs` | `#pragma pack` directives seen, with their location and argument text (recorded for the class layout, sema-class.md §6.1) |
 | `immediate` | depth of immediate function contexts ([expr.const]/16) entered by `if consteval` |
 | `oven` | the constant evaluator and its budget |
@@ -216,14 +219,29 @@ Redeclaration and linkage rules:
   [dcl.fct]/2): the function's return type, and an error
   (`function with trailing return type must specify return type 'auto'`)
   unless the decl-specifier is a lone `auto`.
-- **Prototype scope:** the parser brackets each
+- **Prototype scope** ([basic.scope.param]): the parser brackets each
   parameter-declaration-clause with `act_on_start_prototype`,
-  `act_on_prototype_param` and `act_on_end_prototype`, which keep
-  the parameter names in `prototype_params`. Parameters are not
-  declarations before their function is, so an unqualified name
-  that matches one inside the declarator (a trailing return type, a
-  later parameter, a default argument) is reported as "not supported
-  yet" rather than looked up in an outer scope.
+  `act_on_prototype_param(&mut ParamInfo)` and `act_on_end_prototype`.
+  `act_on_prototype_param` creates the `ParmVar` at its point of
+  declaration (`AstBuilder::prototype_param`, provisionally owned by the
+  enclosing context; `ParamInfo.decl`) and pushes it on
+  `prototype_params`; unqualified lookup finds it in the rest of the
+  declarator: later parameters, default arguments, the exception
+  specification and the trailing return type. When the function is
+  declared, `create_params` adopts the prototype parameters
+  (`DeclArena::set_param_owner`), so the `DeclRefExpr`s in the
+  declarator name the function's own parameters; a parameter left
+  unadopted (a declarator that is not a function declaration) stays in
+  `unowned_params`.
+- **Default arguments** ([dcl.fct.default]/9): `check_default_arg_refs`
+  reports `default argument references parameter 'x'` for a potentially
+  evaluated reference (not inside `sizeof`, `decltype`, … ), on the
+  argument as written and on one replayed in the complete-class context.
+- **`this` in the declarator** ([expr.prim.this]/2):
+  `act_on_start_this_scope(member, quals)` / `act_on_end_this_scope`
+  bracket a member function's exception specification and trailing
+  return type, where `this` has type `cv X*`; member access into the
+  class being defined is allowed there.
 - **`-Wvexing-parse`**: a function declarator the parser chose over a
   direct initializer by [dcl.ambig.res]/1 warns as clang does, with
   its fix-it notes (`add a pair of parentheses`, `replace parentheses
@@ -243,9 +261,31 @@ Redeclaration and linkage rules:
 - Deduced return types ([dcl.spec.auto.general]/9-11): the first
   `return` deduces, later ones must agree (clang's
   `'auto' in return type deduced as ... here but deduced as ...`),
-  every redeclaration gets the deduced type, and a use before
-  deduction is `function 'f' with deduced return type cannot be used
-  before it is defined`.
+  and a use before deduction is `function 'f' with deduced return type
+  cannot be used before it is defined`. A redeclaration
+  ([dcl.spec.auto.general]/13) is matched against the declared
+  placeholder type (`declared_fn_type`, kept in `declared_returns`), not
+  the deduced one, and then adopts the deduced type
+  (`adopt_deduced_return`), so `auto f(); auto f() { return 1; } auto
+  f();` is valid and `int f();` after it is not.
+- Declarator groups ([dcl.spec.auto.general]/3, /8): the parser records
+  each declarator of a simple-declaration or member-declaration with
+  `act_on_group_declarator(&mut AutoGroup, d)` and closes the group with
+  `act_on_end_group(group, &ds)`, which reports, at the end of the group
+  as clang does, a function with a deduced return type or a trailing
+  return type that is not alone in its group
+  (`sema_auto_non_deduced_not_alone`) and placeholders deduced to
+  different types (`check_auto_group`). A local group in a template is
+  checked again on each instantiation (`group_placeholders`); a class
+  template's static members are not (as in clang).
+- `-Wunevaluated-expression` ([expr.context]/1; `side_effects.rs`, in
+  `-Wmost`): an operand of `sizeof`, `alignof`, `decltype`, `noexcept`
+  or an unevaluated `typeid` with side effects (increment, assignment,
+  `new`, `delete`, `throw`, `co_await`/`co_yield`, a potentially
+  evaluated `typeid`; calls only through their arguments) warns
+  `expression with side effects has no effect in an unevaluated
+  context`, at clang's expression location. Not in instantiations, not
+  for type- or value-dependent operands, not for macro locations.
 - Braced initializers (`auto x = {1}`, `std::initializer_list`) are
   §10.
 
@@ -367,9 +407,7 @@ specification as written (`TypeNames` prints ` noexcept`,
   non-empty list is `ISO C++17 does not allow dynamic exception
   specifications` (`-Wdynamic-exception-spec`, default error) with a
   `use 'noexcept(false)' instead` note, then `Dynamic(types)`.
-- **Gaps:** the function's parameters are not yet in scope in the
-  specification (they are declared after the declarator is complete);
-  deferred specifications of member functions, `__attribute__((nothrow))`
+- **Gaps:** deferred specifications of member functions, `__attribute__((nothrow))`
   and the implicit specifications of special members are M3.
 
 ### 4.8 Using-declarations, `using enum`, namespace aliases (`using.rs`)
@@ -841,12 +879,19 @@ covers the Oven's side). `constfold.rs` keeps only integer helpers
 interpreter and `aggval` were removed by WP-054.
 
 ### 8.1 One Oven per translation unit
-- `Sema` owns one `Oven`. Compiled bytecode, resolved globals and the
-  memo cache are shared by every evaluation in the TU.
-- `oven_bridge.rs` implements `SemaBridge` over the `Sema`'s AST,
-  target and diagnostics engine for the duration of one call:
-  - `ensure_body` returns the body of the function's definition
-    (there are no templates in M2);
+- `Sema` owns one `Oven`, in `Sema.oven: Option<Oven>`. Compiled
+  bytecode, resolved globals and the memo cache are shared by every
+  evaluation in the TU.
+- `oven_bridge.rs` implements `SemaBridge` for the duration of one call.
+  `with_oven` takes the Oven out of its `Option` and hands the call a
+  `Bridge` that holds `&mut Sema`:
+  - `ensure_body(f, oven)` returns the body of the function's
+    definition. Since WP-070b, a never-marked specialization or member
+    of a class specialization is instantiated first, during a
+    manifestly constant-evaluated evaluation only. Sema lends the
+    Oven back by swapping it into `Sema.oven` while it instantiates, so
+    nested evaluations run on the same Oven (R-OVEN-1;
+    spec/sema-templates.md §4.11);
   - `ensure_layout` uses `kiln_abi::ensure_layout`;
   - `diag` emits into the engine (for `-Wenum-constexpr-conversion`).
 - `set_constexpr_limits(Budget, backtrace_limit)` applies the driver's

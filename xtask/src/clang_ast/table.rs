@@ -160,11 +160,12 @@ pub const TABLE: &[(&str, Disposition)] = &[
     // Declarations kiln does not dump in M2.
     ("RecordDecl", Unsupported("C struct declarations (RecordDecl) are not in the M2 dump")),
     ("IndirectFieldDecl", Unsupported("anonymous struct/union members are not in the M2 dump")),
-    // Printed by its `ClassTemplateDecl` (an implicit instantiation).
+    // An implicit instantiation is printed by its `ClassTemplateDecl`; an
+    // explicit one and a partial specialization at their positions.
     ("ClassTemplateSpecializationDecl", Keep),
-    ("ClassTemplatePartialSpecializationDecl", Unsupported(INSTANTIATION)),
-    ("VarTemplateSpecializationDecl", Unsupported(INSTANTIATION)),
-    ("VarTemplatePartialSpecializationDecl", Unsupported(INSTANTIATION)),
+    ("ClassTemplatePartialSpecializationDecl", Keep),
+    ("VarTemplateSpecializationDecl", Keep),
+    ("VarTemplatePartialSpecializationDecl", Keep),
     ("CXXDeductionGuideDecl", Unsupported(INSTANTIATION)),
     ("DecompositionDecl", Unsupported("structured bindings are not in the M2 dump")),
     ("BindingDecl", Unsupported("structured bindings are not in the M2 dump")),
@@ -266,7 +267,9 @@ fn specific_keys(kind: &str) -> Option<&'static [&'static str]> {
         "TranslationUnitDecl" => &[],
         "TypedefDecl" | "TypeAliasDecl" => &["type", "typeAliasDeclId"],
         // `definitionData` is clang's DefinitionData block (not dumped).
-        "CXXRecordDecl" | "ClassTemplateSpecializationDecl" => {
+        "CXXRecordDecl"
+        | "ClassTemplateSpecializationDecl"
+        | "ClassTemplatePartialSpecializationDecl" => {
             &["tagUsed", "completeDefinition", "definitionData", "bases"]
         }
         "AccessSpecDecl" => &["access"],
@@ -304,7 +307,9 @@ fn specific_keys(kind: &str) -> Option<&'static [&'static str]> {
         // `init` (always `c`, printed `cinit`): the default argument is the
         // child.
         "ParmVarDecl" => &["type", "init", "isParameterPack"],
-        "VarDecl" => &["type", "storageClass", "nrvo", "inline", "constexpr", "init"],
+        "VarDecl" | "VarTemplateSpecializationDecl" | "VarTemplatePartialSpecializationDecl" => {
+            &["type", "storageClass", "nrvo", "inline", "constexpr", "init"]
+        }
         "StaticAssertDecl" => &[],
         "IntegerLiteral" | "FloatingLiteral" | "CharacterLiteral" | "StringLiteral"
         | "CXXBoolLiteralExpr" => &["value"],
@@ -481,6 +486,9 @@ pub const CLASS_KINDS: &[&str] = &[
 pub const TEMPLATE_KINDS: &[&str] = &[
     "ClassTemplateDecl",
     "ClassTemplateSpecializationDecl",
+    "ClassTemplatePartialSpecializationDecl",
+    "VarTemplateSpecializationDecl",
+    "VarTemplatePartialSpecializationDecl",
     "SubstNonTypeTemplateParmExpr",
     "FunctionTemplateDecl",
     "VarTemplateDecl",
