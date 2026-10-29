@@ -11,10 +11,14 @@
 //! those packages.
 
 mod access;
+mod construct;
+mod ctor_select;
+mod ctorinit;
 mod friend;
 mod member_expr;
 mod members;
 mod special;
+mod temporary;
 mod r#virtual;
 
 use kiln_ast::decl::{Access, DefinitionBits, TagKind};
@@ -125,10 +129,14 @@ impl ClassBuild {
     }
 }
 
+pub(crate) use construct::ConstructSite;
+pub(crate) use ctor_select::InitStyle;
+pub(crate) use ctorinit::MemInitState;
 pub(crate) use member_expr::MemberRef;
-pub(crate) use special::SpecialState;
+pub(crate) use special::{DeletedAs, DiagSites, InitEntity, SpecialState, SynthContext};
 // WP-074: the builtin type traits select special members.
 pub(crate) use special::{Selected, SpecialKind};
+pub(crate) use temporary::BindingSite;
 pub(crate) use r#virtual::{AbstractUse, VirtualSite, ensure_virtuals};
 
 /// Bits of [`Sema`]'s `implicit_declared` map: which implicit special
@@ -174,17 +182,16 @@ pub struct CleanupState {
     pub side_effects: bool,
 }
 
-/// The NRVO candidate of a block scope (spec/sema-class.md §5.5;
-/// WP-067b, clang `Scope::updateNRVOCandidate`).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum NrvoState {
-    /// No `return` seen in this scope.
-    #[default]
-    None,
-    /// Every `return` so far returned this candidate variable.
-    Candidate(DeclId),
-    /// Some `return` returned something else: no NRVO through this scope.
-    Disabled,
+/// The NRVO state of a local scope (spec/sema-class.md §5.5; clang 19
+/// `Scope::ReturnSlots` / `Scope::NRVO`).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct NrvoState {
+    /// The variables declared in this scope that may still occupy the
+    /// return slot (clang `ReturnSlots`; parameters are never added).
+    pub slots: Vec<DeclId>,
+    /// `None`: no `return` reached this scope; `Some(None)`: NRVO is
+    /// disabled through it; `Some(Some(x))`: `x` is the candidate.
+    pub nrvo: Option<Option<DeclId>>,
 }
 
 impl Sema<'_, '_> {
@@ -315,20 +322,6 @@ impl Sema<'_, '_> {
         let t = self.this_class_type(class);
         let p = self.ast.types.pointer_to(t);
         self.nsdmi_this.push((field, p));
-    }
-
-    /// The ctor-initializer of constructor definition `ctor`
-    /// ([class.base.init], spec/sema-class.md §4.9; WP-067b), between
-    /// `act_on_start_function_def` and the body. The parser calls it for
-    /// every constructor definition: with the mem-initializers and the
-    /// `:` location, or with an empty slice and the body's `{` when there
-    /// is no ctor-initializer, so the implicit initializers are always
-    /// completed here.
-    pub fn act_on_mem_initializers(&mut self, ctor: DeclId, inits: &[MemInitInfo], colon_loc: Loc) {
-        let _ = ctor;
-        if !inits.is_empty() {
-            self.unsupported("constructor initializers", colon_loc);
-        }
     }
 
     /// After the outermost class `r` (not nested in a class being defined)

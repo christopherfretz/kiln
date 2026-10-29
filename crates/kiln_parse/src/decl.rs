@@ -91,6 +91,9 @@ impl Parser<'_, '_> {
         // [temp.point]/7: the end of the translation unit is a point of
         // instantiation of every pending definition.
         self.s.end_of_tu_instantiations();
+        // Then clang's `ActOnEndOfTranslationUnit` checks (delegating
+        // constructor cycles), after the pending instantiations as there.
+        self.s.act_on_end_of_translation_unit();
     }
 
     /// A declaration at namespace scope ([dcl.pre] declaration).
@@ -815,26 +818,20 @@ impl Parser<'_, '_> {
             }
         }
         let is_class = keyword != TagKeyword::Enum;
+        if is_class
+            && self.at(Punct::Less)
+            && let Some((n, nloc)) = name
+            && let NameClass::TypeTemplate(t) = self.s.classify_name(n, qualifier)
+            && self.s.ast.decls.get(t).kind() == kiln_ast::decl::DeclKind::ClassTemplate
+        {
+            self.parse_class_template_id_tag(ds, keyword, t, qualifier, nloc, kw_loc, ctx);
+            return;
+        }
         let mut final_loc = None;
         if is_class && name.is_some() {
             final_loc = self.parse_class_virt_specifiers();
         }
-        let mut use_ =
-            if self.at(Punct::LBrace) || (is_class && self.at(Punct::Colon)) || final_loc.is_some()
-            {
-                TagUse::Definition
-            } else if self.at(Punct::Semi) && ds.storage.is_none() {
-                if ds.friend.is_some() { TagUse::Friend } else { TagUse::Declaration }
-            } else {
-                TagUse::Reference
-            };
-        if use_ == TagUse::Definition && ds.friend.is_some() {
-            // [class.friend]/2; clang skips the body and treats the
-            // specifier as a reference.
-            self.error_here(DiagId::parse_friend_decl_defines_type);
-            self.skip_until(&[Punct::Semi], false, false);
-            use_ = TagUse::Friend;
-        }
+        let use_ = self.tag_use(ds, is_class, final_loc);
         if name.is_none() && use_ != TagUse::Definition {
             if !ds.invalid {
                 self.error_here(DiagId::parse_expected_unqualified_id);
@@ -869,6 +866,99 @@ impl Parser<'_, '_> {
             };
             let could_be_bitfield = keyword == TagKeyword::Enum && ctx == DeclaratorContext::Member;
             self.check_after_tag_definition(spelling, could_be_bitfield);
+        }
+    }
+
+    /// How the tag specifier just parsed (up to its name and any
+    /// class-virt-specifiers) is used, from the next token.
+    fn tag_use(&mut self, ds: &DeclSpec, is_class: bool, final_loc: Option<Loc>) -> TagUse {
+        let use_ =
+            if self.at(Punct::LBrace) || (is_class && self.at(Punct::Colon)) || final_loc.is_some()
+            {
+                TagUse::Definition
+            } else if self.at(Punct::Semi) && ds.storage.is_none() {
+                if ds.friend.is_some() { TagUse::Friend } else { TagUse::Declaration }
+            } else {
+                TagUse::Reference
+            };
+        if use_ == TagUse::Definition && ds.friend.is_some() {
+            // [class.friend]/2; clang skips the body and treats the
+            // specifier as a reference.
+            self.error_here(DiagId::parse_friend_decl_defines_type);
+            self.skip_until(&[Punct::Semi], false, false);
+            return TagUse::Friend;
+        }
+        use_
+    }
+
+    /// `class-key X<args>` with `X` a class template: a partial or
+    /// explicit specialization, an explicit instantiation, or a
+    /// reference to a specialization ([class.pre]/1, [dcl.type.elab]/1,
+    /// [temp.spec.partial], [temp.expl.spec], [temp.explicit]).
+    #[allow(clippy::too_many_arguments)]
+    fn parse_class_template_id_tag(
+        &mut self,
+        ds: &mut DeclSpec,
+        keyword: TagKeyword,
+        tmpl: DeclId,
+        qualifier: Option<DeclId>,
+        name_loc: Loc,
+        kw_loc: Loc,
+        ctx: DeclaratorContext,
+    ) {
+        let _ = ctx;
+        let Some((args, _, r_angle)) = self.parse_template_arg_list() else {
+            ds.invalid = true;
+            let _ = ds.set_base(TypeSpecKind::Named, Some(QualType::ERROR), kw_loc);
+            return;
+        };
+        let final_loc = self.parse_class_virt_specifiers();
+        let use_ = self.tag_use(ds, true, final_loc);
+        let r = self.s.act_on_class_template_id_tag(
+            keyword, tmpl, &args, qualifier, use_, name_loc, r_angle, kw_loc,
+        );
+        let ty = if let Ok((rec, ty)) = r {
+            if use_ == TagUse::Definition {
+                match rec {
+                    Some(d) => self.parse_record_body(d, final_loc),
+                    None => self.skip_class_body(),
+                }
+            }
+            if use_ != TagUse::Reference
+                && let Some(d) = rec
+            {
+                ds.tag = Some(d);
+                ds.tag_declares = true;
+            }
+            ty
+        } else {
+            if use_ == TagUse::Definition {
+                self.skip_class_body();
+            }
+            ds.invalid = true;
+            QualType::ERROR
+        };
+        ds.keyword = keyword;
+        if let Err(e) = ds.set_base(TypeSpecKind::Named, Some(ty), kw_loc) {
+            ds.invalid = true;
+            self.spec_error(&e, kw_loc);
+        }
+        if use_ == TagUse::Definition {
+            let spelling = match keyword {
+                TagKeyword::Struct => "struct",
+                TagKeyword::Class => "class",
+                _ => "union",
+            };
+            self.check_after_tag_definition(spelling, false);
+        }
+    }
+
+    /// Skips a class body that is not defined (`[: bases] { ... }`).
+    fn skip_class_body(&mut self) {
+        self.skip_until(&[Punct::LBrace, Punct::Semi], true, false);
+        if self.at(Punct::LBrace) {
+            self.bump();
+            self.skip_until(&[Punct::RBrace], false, true);
         }
     }
 
@@ -1092,7 +1182,10 @@ impl Parser<'_, '_> {
                     d.name = Some((n, l));
                 }
                 d.qualifier = qual;
-                if !ctor && self.at(Punct::Less) && self.s.has_pending_head() {
+                if !ctor
+                    && self.at(Punct::Less)
+                    && (self.s.has_pending_head() || self.s.has_explicit_spec_head())
+                {
                     self.parse_specialization_declarator_id(d, n, l);
                 }
             } else if qual.is_some() {
@@ -1161,19 +1254,20 @@ impl Parser<'_, '_> {
     /// `name<args>` as the declarator-id after a template head, when
     /// `name` is a function or variable template: an explicit or partial
     /// specialization ([temp.expl.spec]/1, [temp.spec.partial]/1). The
-    /// arguments are parsed and the declarator is dropped
-    /// ([`Sema::act_on_specialization_declarator_id`]).
+    /// arguments are parsed and recorded on the declarator, or it is
+    /// dropped ([`Sema::act_on_specialization_declarator_id`]).
     fn parse_specialization_declarator_id(&mut self, d: &mut Declarator, name: Symbol, loc: Loc) {
         let (NameClass::FunctionTemplate(t) | NameClass::VarTemplate(t)) =
             self.s.classify_name(name, d.qualifier)
         else {
             return;
         };
-        if self.parse_template_arg_list().is_none() {
+        let Some((args, _, r)) = self.parse_template_arg_list() else {
             d.invalid = true;
             return;
-        }
-        if !self.s.act_on_specialization_declarator_id(t, loc) {
+        };
+        d.spec_id = self.s.act_on_specialization_declarator_id(t, &args, loc, r);
+        if d.spec_id.is_none() {
             d.dropped = true;
         }
     }

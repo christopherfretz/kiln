@@ -139,7 +139,7 @@ impl Sema<'_, '_> {
         }
     }
 
-    fn is_integral_or_enum(&self, t: QualType) -> bool {
+    pub(crate) fn is_integral_or_enum(&self, t: QualType) -> bool {
         self.ast.types.is_integral(t) || self.ast.types.as_enum(t).is_some()
     }
 
@@ -310,6 +310,9 @@ impl Sema<'_, '_> {
             let first = match n.kind() {
                 ExprKind::ImplicitCastExpr
                 | ExprKind::ConstantExpr
+                | ExprKind::MaterializeTemporaryExpr
+                | ExprKind::CXXBindTemporaryExpr
+                | ExprKind::ExprWithCleanups
                 | ExprKind::BinaryOperator
                 | ExprKind::CompoundAssignOperator
                 | ExprKind::ConditionalOperator
@@ -340,6 +343,9 @@ impl Sema<'_, '_> {
         if !self.special.pending_deleted.is_empty() {
             self.flush_pending_deleted();
         }
+        // [intro.execution]/5: the temporaries of the full-expression are
+        // destroyed at its end (spec/sema-class.md §5.3).
+        let e = self.finish_cleanups(e);
         if self.pending_odr.is_empty() {
             return e;
         }
@@ -402,18 +408,33 @@ impl Sema<'_, '_> {
             return false;
         }
         let Some(v) = self.ast.decls.var(d) else { return false };
-        let Some(init) = v.init else { return false };
+        // The initializer may be on another declaration (an out-of-line
+        // definition of a static data member, [class.static.data]/3).
+        let spec = v.spec;
+        let holder = if v.init.is_some() {
+            d
+        } else {
+            let Some(x) = self
+                .ast
+                .redecls_of(d)
+                .find(|&x| self.ast.decls.var(x).is_some_and(|y| y.init.is_some()))
+            else {
+                return false;
+            };
+            x
+        };
+        let Some(init) = self.ast.decls.var(holder).and_then(|y| y.init) else { return false };
         let ty = n.ty().unwrap_or(QualType::ERROR);
         if self.ast.types.is_reference(ty) {
             return self.is_static_lvalue(init);
         }
         let q = self.ast.types.effective_quals(ty);
-        let ok = v.spec.is_constexpr()
+        let ok = spec.is_constexpr()
             || (q.is_const()
                 && !q.is_volatile()
                 && self.is_integral_or_enum(ty)
                 && !self.ast.types.is_reference(ty));
-        ok && self.is_constant_initialized(d)
+        ok && self.is_constant_initialized(holder)
     }
 
     /// True if the glvalue `e` designates a function or a variable with
@@ -788,6 +809,31 @@ impl Sema<'_, '_> {
         shadow: Option<DeclId>,
         nns: Option<kiln_ast::ids::NnsId>,
     ) -> ExprId {
+        let extra = (shadow.is_some() || nns.is_some()).then_some(kiln_ast::expr::DeclRefExtra {
+            qualifier: nns,
+            template_args: None,
+            found_decl: shadow,
+        });
+        self.build_decl_ref_extra(d, loc, extra)
+    }
+
+    /// [`Self::build_decl_ref_via`] with the side record `extra` (a
+    /// variable template specialization records the template as its
+    /// found decl and the arguments as written; a qualified name its
+    /// nested-name-specifier).
+    #[allow(
+        clippy::too_many_lines,
+        reason = "the 074/087 use checks and the 070b variable-template record meet here"
+    )]
+    pub(crate) fn build_decl_ref_extra(
+        &mut self,
+        d: DeclId,
+        loc: Loc,
+        extra: Option<kiln_ast::expr::DeclRefExtra>,
+    ) -> ExprId {
+        let shadow = extra
+            .and_then(|x| x.found_decl)
+            .filter(|_| extra.is_some_and(|x| x.template_args.is_none()));
         let n = *self.ast.decls.get(d);
         match n.kind() {
             DeclKind::Var
@@ -809,6 +855,18 @@ impl Sema<'_, '_> {
             DeclKind::CXXMethod if self.is_static_method(d) => {}
             _ if self.is_class_member_ref(d) => {
                 return self.implicit_member_ref(d, loc, shadow, false);
+            }
+            // [temp.names]/1: a variable template is named with arguments
+            // (clang's `diagnoseMissingTemplateArguments`).
+            DeclKind::VarTemplate => {
+                let note = self.diag(DiagId::note_template_decl_here, n.loc());
+                let msg = self
+                    .diag(DiagId::sema_template_requires_args, loc)
+                    .arg("variable template")
+                    .arg(format!("'{}'", self.decl_name(d)))
+                    .with_note(note);
+                self.emit(msg);
+                return self.recover_err(&[], loc);
             }
             k if crate::lookup::is_type_kind(k) || k == DeclKind::Namespace => {
                 let msg = self
@@ -865,11 +923,6 @@ impl Sema<'_, '_> {
         }
         self.diagnose_deprecated(d, loc);
         let nou = if self.unevaluated > 0 { NonOdrUse::Unevaluated } else { NonOdrUse::None };
-        let extra = (shadow.is_some() || nns.is_some()).then_some(kiln_ast::expr::DeclRefExtra {
-            qualifier: nns,
-            template_args: None,
-            found_decl: shadow,
-        });
         let e = self.builder().decl_ref(d, ty, loc, extra, nou, ExprFlags::NONE);
         if defer {
             self.deferred_call_refs.push((e, d));
@@ -879,13 +932,8 @@ impl Sema<'_, '_> {
         if self.unevaluated == 0 && !self.in_template() {
             match n.kind() {
                 DeclKind::Function | DeclKind::CXXMethod => {
-                    let own = self
-                        .func
-                        .as_ref()
-                        .is_some_and(|f| self.ast.first(f.decl) == self.ast.first(d));
-                    if !own {
-                        self.mark_used_at(d, loc);
-                    }
+                    let at = self.eloc(e);
+                    self.mark_function_referenced(d, at);
                 }
                 DeclKind::Var | DeclKind::ParmVar => self.pending_odr.push(e),
                 _ => {}
@@ -2170,7 +2218,8 @@ impl Sema<'_, '_> {
         };
         let at = self.begin_loc(callee);
         let (ty, vk) = self.call_result_of(proto.ret(), loc, named, at);
-        self.builder().call(f, &conv_args, ty, vk, loc, rparen, ExprFlags::NONE)
+        let call = self.builder().call(f, &conv_args, ty, vk, loc, rparen, ExprFlags::NONE);
+        self.maybe_bind_temporary(call)
     }
 
     /// Converts the arguments of a call through a function of type `proto`
@@ -2178,7 +2227,11 @@ impl Sema<'_, '_> {
     /// trailing parameters ([dcl.fct.default]/1) when the callee is known.
     /// `braced` holds the braced-init-list arguments, parallel to `args`.
     /// Diagnoses and returns `None` on an arity or conversion error.
-    #[allow(clippy::too_many_arguments, reason = "one per part of the call")]
+    #[allow(
+        clippy::too_many_arguments,
+        clippy::too_many_lines,
+        reason = "one per part of the call; one step per paragraph of [expr.call]"
+    )]
     pub(crate) fn convert_call_args(
         &mut self,
         named: Option<CallCallee>,
@@ -2263,6 +2316,25 @@ impl Sema<'_, '_> {
             if i < n {
                 let pt = conv::strip_cv(self, params[i]);
                 let to = if self.ast.types.is_reference(params[i]) { params[i] } else { pt };
+                if self.ast.types.as_record(to).is_some()
+                    && !self.is_err_expr(a)
+                    && !self.expr_is_type_dependent(a)
+                {
+                    let note = match pdecls.get(i) {
+                        Some(&p) => crate::class::DeletedAs::Param(self.param_decl_note(p)),
+                        None => crate::class::DeletedAs::Call,
+                    };
+                    let at = self.begin_loc(a);
+                    let built = if self.ast.types.as_record(self.ety(a)).is_some() {
+                        self.construct_from_class(a, to, ConvCtx::Argument, at, note)
+                    } else {
+                        self.convert_to_class(a, to, ConvCtx::Argument, at, note)
+                    };
+                    if let Some(x) = built {
+                        conv_args.push(x);
+                        continue;
+                    }
+                }
                 match conv::implicit_convert(self, a, to, ConvCtx::Argument) {
                     Ok(x) => conv_args.push(x),
                     Err(err) => {
@@ -2372,7 +2444,7 @@ impl Sema<'_, '_> {
 
     /// The default argument promotions for a variadic argument
     /// ([expr.call]/12).
-    fn default_argument_promotion(&mut self, a: ExprId) -> ExprId {
+    pub(crate) fn default_argument_promotion(&mut self, a: ExprId) -> ExprId {
         let x = conv::decay(self, a);
         let t = self.ety(x);
         if self.ast.types.builtin(t) == Some(BuiltinType::Float) {
@@ -2501,11 +2573,15 @@ impl Sema<'_, '_> {
     /// Enters an unevaluated operand ([expr.context]/1).
     pub fn enter_unevaluated(&mut self) {
         self.unevaluated += 1;
+        self.push_cleanups();
     }
 
-    /// Leaves an unevaluated operand.
+    /// Leaves an unevaluated operand: its temporaries are never created,
+    /// so they add no cleanups to the enclosing full-expression (clang
+    /// restores the parent's `CleanupInfo`).
     pub fn exit_unevaluated(&mut self) {
         self.unevaluated = self.unevaluated.saturating_sub(1);
+        self.pop_cleanups();
     }
 
     fn trait_name(kind: TraitKind) -> &'static str {
@@ -2648,6 +2724,72 @@ impl Sema<'_, '_> {
                 return self.explicit_cast(style, CastKind::ToVoid, e, ty, loc, rparen);
             }
             return self.bad_cast(style, e, ty, loc);
+        }
+        // [expr.static.cast]/4 with a class target: direct-initialization
+        // of a temporary from an object of the same or a derived class
+        // ([dcl.init.general]/16.6.2; clang's `ConstructorConversion`).
+        if style.allows_static()
+            && self.ast.types.as_record(ty).is_some()
+            && let Some(x) = {
+                let d = self
+                    .diag(DiagId::sema_ovl_deleted_conversion_in_cast, loc)
+                    .arg(style.select())
+                    .arg(self.ty_arg(self.ety(e)))
+                    .arg(self.ty_arg(ty));
+                self.construct_from_class(
+                    e,
+                    ty,
+                    ConvCtx::Cast,
+                    loc,
+                    crate::class::DeletedAs::Cast(d),
+                )
+            }
+        {
+            if self.is_err_expr(x) {
+                return x;
+            }
+            if x == e {
+                return self.explicit_cast(style, CastKind::NoOp, x, ty, loc, rparen);
+            }
+            let x = self.maybe_bind_temporary(x);
+            return self.explicit_cast(style, CastKind::ConstructorConversion, x, ty, loc, rparen);
+        }
+        // [expr.static.cast]/4: `T(e)`, `(T)e`, `static_cast<T>(e)` for
+        // a class `T` direct-initialize a temporary by a constructor.
+        if style.allows_static() && self.ast.types.as_record(ty).is_some() && {
+            let fr = self.ast.types.as_record(self.ety(e));
+            fr.is_none() || !conv::has_conversion_functions(self, self.ety(e))
+        } {
+            let d = self
+                .diag(DiagId::sema_ovl_deleted_conversion_in_cast, loc)
+                .arg(style.select())
+                .arg(self.ty_arg(self.ety(e)))
+                .arg(self.ty_arg(ty));
+            let site = crate::class::ConstructSite {
+                loc: self.begin_loc(e),
+                temp_end: None,
+                rparen: None,
+                sites: crate::class::DiagSites {
+                    access: loc,
+                    deleted: loc,
+                    deleted_as: crate::class::DeletedAs::Cast(d),
+                },
+            };
+            let to = conv::strip_cv(self, ty);
+            if let Some(x) = self.construct_class(to, &[e], crate::class::InitStyle::Direct, site) {
+                if self.is_err_expr(x) {
+                    return x;
+                }
+                // A parenthesized aggregate initialization (P0960) is a
+                // no-op cast of the initialized prvalue.
+                let kind = if self.ast.exprs.get(x).kind() == ExprKind::CXXParenListInitExpr {
+                    CastKind::NoOp
+                } else {
+                    CastKind::ConstructorConversion
+                };
+                let x = self.maybe_bind_temporary(x);
+                return self.explicit_cast(style, kind, x, ty, loc, rparen);
+            }
         }
         if self.ast.types.as_record(ty).is_some() || self.ast.types.as_record(self.ety(e)).is_some()
         {

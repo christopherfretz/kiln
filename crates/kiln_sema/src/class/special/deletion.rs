@@ -260,7 +260,7 @@ impl Sema<'_, '_> {
         ok.then_some(ArgConv { rank, base, binding: Some((rref, rq)) })
     }
 
-    fn fn_spec(&self, f: DeclId) -> FnSpec {
+    pub(crate) fn fn_spec(&self, f: DeclId) -> FnSpec {
         self.ast.decls.function(f).map(|x| x.spec).unwrap_or_default()
     }
 
@@ -269,7 +269,7 @@ impl Sema<'_, '_> {
         self.ast.types.proto(ty).map(FuncProto::info).unwrap_or_default()
     }
 
-    fn fn_variadic(&self, f: DeclId) -> bool {
+    pub(crate) fn fn_variadic(&self, f: DeclId) -> bool {
         self.fn_info(f).variadic()
     }
 
@@ -403,7 +403,7 @@ impl Sema<'_, '_> {
     }
 
     /// Whether the first parameter of `f` is a reference to `const`.
-    fn copy_param_is_const_ref(&self, f: DeclId) -> bool {
+    pub(super) fn copy_param_is_const_ref(&self, f: DeclId) -> bool {
         let Some(&p) = self.param_decls(f).first() else { return false };
         let ty = self.ast.decls.get(p).ty().unwrap_or(QualType::ERROR);
         match self.ast.types.canonical_view(ty) {

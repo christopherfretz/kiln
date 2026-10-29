@@ -73,7 +73,13 @@ pub enum Ns {
 impl Scope {
     /// A fresh scope of `kind` for `entity`.
     pub fn new(kind: ScopeKind, entity: Option<DeclId>) -> Self {
-        Scope { kind, entity, locals: Vec::new(), using_dirs: Vec::new(), nrvo: NrvoState::None }
+        Scope {
+            kind,
+            entity,
+            locals: Vec::new(),
+            using_dirs: Vec::new(),
+            nrvo: NrvoState::default(),
+        }
     }
 
     /// True for scopes whose names live in the scope itself.

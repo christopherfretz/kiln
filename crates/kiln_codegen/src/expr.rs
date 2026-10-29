@@ -1676,6 +1676,9 @@ impl Cg<'_> {
             ExprKind::ExprWithCleanups | ExprKind::MaterializeTemporaryExpr => {
                 self.agg_visit(self.sub(e), dest, zeroed)
             }
+            // Default-initialization by a trivial constructor: no code
+            // (clang `EmitCXXConstructExpr` skips trivial default ctors).
+            ExprKind::CXXConstructExpr if ast.is_trivial_default_construction(e) => Ok(()),
             ExprKind::InitListExpr => {
                 if ast.types.is_array(q) {
                     self.array_init(e, dest, zeroed)
@@ -1803,6 +1806,11 @@ impl Cg<'_> {
                 None => self.null_init_lvalue(lv, zeroed),
             };
         }
+        if ast.decls.bases(ast.definition(rd).unwrap_or(rd), &ast.lists).next().is_some() {
+            // todo(WP-079): base subobjects of an aggregate (the list's
+            // first elements, [dcl.init.aggr]/2).
+            return err(self.loc_of(e), "aggregate initialization of a class with base classes");
+        }
         let fields: Vec<DeclId> =
             ast.decls.members(rd).filter(|&m| ast.decls.get(m).kind() == DeclKind::Field).collect();
         let mut k = 0usize;
@@ -1915,7 +1923,10 @@ impl Cg<'_> {
         let a = self.f.fir.alloca(ty, align);
         let addr = Addr { v: a, ty, align };
         self.f.locals.insert(d, addr);
-        let Some(init) = v.init else { return Ok(()) };
+        // Default-initialization by a trivial constructor emits nothing.
+        let Some(init) = v.init.filter(|&i| !ast.is_trivial_default_construction(i)) else {
+            return Ok(());
+        };
         if self.f.fir.cur().is_none() {
             return Ok(());
         }

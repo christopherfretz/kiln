@@ -6,8 +6,7 @@
 
 use kiln_ast::decl::{DeclFlags, DeclKind, FnStorage};
 use kiln_ast::expr::{
-    BinaryOp, CastKind, DeclRefExtra, ExprFlags, ExprKind, NonOdrUse, StorageDuration, UnaryOp,
-    ValueCategory,
+    BinaryOp, CastKind, DeclRefExtra, ExprFlags, ExprKind, NonOdrUse, UnaryOp, ValueCategory,
 };
 use kiln_ast::types::{Quals, RefQual};
 use kiln_ast::{DeclId, ExprId, QualType};
@@ -236,7 +235,9 @@ impl Sema<'_, '_> {
                 }
                 let ty = self.non_reference(self.ast.decls.get(m).ty().unwrap_or(QualType::ERROR));
                 let e = self.builder().member(b, m, ty, arrow, loc, extra);
-                if self.unevaluated == 0 && kind != DeclKind::EnumConstant {
+                if self.unevaluated == 0 && kind == DeclKind::CXXMethod {
+                    self.mark_function_referenced(m, loc);
+                } else if self.unevaluated == 0 && kind != DeclKind::EnumConstant {
                     self.mark_used_at(m, loc);
                 }
                 e
@@ -262,13 +263,7 @@ impl Sema<'_, '_> {
         {
             return e;
         }
-        self.builder().materialize_temporary(
-            e,
-            n.ty(),
-            false,
-            StorageDuration::FullExpression,
-            None,
-        )
+        self.materialize_temporary(e, n.ty(), false)
     }
 
     /// Converts the object `b` (a pointer for `arrow`) of class
@@ -377,6 +372,7 @@ impl Sema<'_, '_> {
         let (call_callee, method, fn_ty) = match n.kind() {
             ExprKind::MemberExpr => {
                 let m = self.ast.exprs.decl(x);
+                self.check_pure_virtual_call_in_cdtor(x, m);
                 let Some(mem) = self.bind_object_argument(x, m) else {
                     return Some(self.recover_err(&kids, loc));
                 };
@@ -407,14 +403,10 @@ impl Sema<'_, '_> {
         if let Some(m) = method
             && self.unevaluated == 0
         {
-            let own =
-                self.func.as_ref().is_some_and(|f| self.ast.first(f.decl) == self.ast.first(m));
-            if !own {
-                self.mark_used_at(m, loc);
-            }
+            self.mark_function_referenced(m, loc);
         }
         let (ty, vk) = self.call_result(proto.ret(), loc);
-        Some(self.builder().member_call(
+        let call = self.builder().member_call(
             call_callee,
             &conv_args,
             ty,
@@ -422,7 +414,45 @@ impl Sema<'_, '_> {
             loc,
             rparen,
             ExprFlags::NONE,
-        ))
+        );
+        Some(self.maybe_bind_temporary(call))
+    }
+
+    /// [class.cdtor]/4 (spec/sema-class.md §4.11, clang
+    /// `BuildCallToMemberFunction`): a virtual call of a pure virtual
+    /// function `m` on `this` from a constructor or destructor has
+    /// undefined behavior. The member access `x` must name `m` without a
+    /// qualifier (a qualified name does not dispatch virtually).
+    fn check_pure_virtual_call_in_cdtor(&mut self, x: ExprId, m: DeclId) {
+        if !matches!(self.kind_of(self.ctx), DeclKind::CXXConstructor | DeclKind::CXXDestructor)
+            || !self.ast.decls.function(self.ast.first(m)).is_some_and(|f| f.spec.is_pure())
+            || self.member_refs.get(&x).is_some_and(|r| r.qualified)
+        {
+            return;
+        }
+        let mut base = self.ast.exprs.operand(x);
+        while matches!(
+            self.ast.exprs.get(base).kind(),
+            ExprKind::ParenExpr | ExprKind::ImplicitCastExpr
+        ) {
+            base = self.ast.exprs.operand(base);
+        }
+        if self.ast.exprs.get(base).kind() != ExprKind::CXXThisExpr {
+            return;
+        }
+        let dtor = u8::from(self.kind_of(self.ctx) == DeclKind::CXXDestructor);
+        let Some(class) = self.ast.decls.get(m).ctx() else { return };
+        let name = self.decl_arg(m);
+        let at =
+            self.ast.decls.cold.begin_loc.get(m).copied().unwrap_or(self.ast.decls.get(m).loc());
+        let note = self.diag(DiagId::note_entity_declared_at, at).arg(name.clone());
+        let d = self
+            .diag(DiagId::sema_pure_virtual_call_in_cdtor, self.ast.exprs.get(base).loc())
+            .arg(name)
+            .arg(dtor)
+            .arg(self.decl_arg(class))
+            .with_note(note);
+        self.emit(d);
     }
 
     /// The implicit object argument of a call of method `m` through the
@@ -600,7 +630,8 @@ impl Sema<'_, '_> {
             self.builder().decl_ref(d, declared, at, None, nou, ExprFlags::NONE)
         };
         if self.kind_of(d) == DeclKind::CXXMethod && self.unevaluated == 0 {
-            self.mark_used_at(d, loc);
+            let at = self.eloc(e);
+            self.mark_function_referenced(d, at);
         }
         let class_ty = self.tag_type(class).ty();
         let mp = self.ast.types.member_pointer(declared, class_ty);

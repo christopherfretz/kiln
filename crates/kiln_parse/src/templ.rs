@@ -72,13 +72,27 @@ impl Parser<'_, '_> {
         let extern_loc = self.eat_kw(Kw::Extern);
         let loc = self.bump().span.lo;
         if extern_loc.is_some() || !self.at(Punct::Less) {
-            // explicit-instantiation ([temp.explicit]/1): WP-070a.
+            // explicit-instantiation ([temp.explicit]/1).
+            if self.at_partial_specialization() {
+                self.s.act_explicit_inst_start(extern_loc, loc);
+                self.parse_spec_declaration(ctx);
+                self.s.act_explicit_inst_end();
+                return;
+            }
             let _ = self.s.act_explicit_instantiation(extern_loc, loc);
             self.skip_unsupported_declaration();
             return;
         }
         if self.peek_is(1, Punct::Greater) {
-            // explicit-specialization ([temp.expl.spec]/1): WP-070a.
+            // explicit-specialization ([temp.expl.spec]/1).
+            self.bump();
+            self.bump();
+            if self.at_partial_specialization() || self.at_var_template_spec() {
+                self.s.act_explicit_spec_start(loc);
+                self.parse_spec_declaration(ctx);
+                self.s.act_explicit_spec_end();
+                return;
+            }
             let _ = self.s.act_explicit_specialization(false, loc);
             self.skip_unsupported_declaration();
             return;
@@ -96,6 +110,16 @@ impl Parser<'_, '_> {
         self.trace(|_| "template_head".to_owned());
         self.parse_templated_declaration(ctx, head, loc);
         self.s.act_on_finish_template_decl();
+    }
+
+    /// The class declaration of an explicit specialization or explicit
+    /// instantiation ([temp.expl.spec]/1, [temp.explicit]/1).
+    fn parse_spec_declaration(&mut self, ctx: DeclaratorContext) {
+        if ctx == DeclaratorContext::Member {
+            self.parse_member_declaration();
+        } else {
+            self.parse_simple_declaration(DeclaratorContext::File, true);
+        }
     }
 
     /// The declaration after a template head ([temp.pre]/1: the
@@ -120,11 +144,7 @@ impl Parser<'_, '_> {
             }
             _ => {}
         }
-        if self.at_partial_specialization() {
-            let _ = self.s.act_explicit_specialization(true, loc);
-            self.skip_unsupported_declaration();
-            return;
-        }
+        let _ = loc;
         if self.at_friend_template() {
             self.s.templ_unimplemented("friend templates", self.loc());
             self.skip_unsupported_declaration();
@@ -134,6 +154,33 @@ impl Parser<'_, '_> {
             self.parse_member_declaration();
         } else {
             self.parse_simple_declaration(DeclaratorContext::File, true);
+        }
+    }
+
+    /// A simple-declaration whose declarator-id is a template-id naming
+    /// a variable template (`constexpr bool v<int> = true;`), scanned up
+    /// to its initializer or `;` ([temp.expl.spec]/1).
+    fn at_var_template_spec(&self) -> bool {
+        let mut i = self.pos();
+        loop {
+            let t = self.tok_at(i);
+            match t.kind {
+                TokKind::Eof
+                | TokKind::Punct(
+                    Punct::Semi | Punct::Equal | Punct::LBrace | Punct::LParen | Punct::LSquare,
+                ) => return false,
+                TokKind::Identifier(_) if self.kw_of(t).is_some() => i += 1,
+                TokKind::Identifier(_) | TokKind::Punct(Punct::ColonColon) => {
+                    let Some((end, _, class, _)) = self.scan_name_at(i) else { return false };
+                    if matches!(class, NameClass::VarTemplate(_))
+                        && (i..end).any(|j| self.tok_at(j).kind == TokKind::Punct(Punct::Less))
+                    {
+                        return true;
+                    }
+                    i = end.max(i + 1);
+                }
+                _ => i += 1,
+            }
         }
     }
 
@@ -656,7 +703,14 @@ impl Parser<'_, '_> {
         let class = self.s.classify_name(name, Some(q.ctx));
         if self.at(Punct::Less) && (template_kw || is_template_class(class)) {
             return match self.parse_template_id_rest(class, name, name_loc) {
-                Ok(TemplateIdRef::Type(t)) => Some(t),
+                // The qualifier as written is sugar: `'O::I<int>'`.
+                Ok(TemplateIdRef::Type(t)) => {
+                    let named = match self.s.ast.types.view(t.ty()) {
+                        kiln_ast::types::TypeView::Elaborated { nns: None, named, .. } => named,
+                        _ => t,
+                    };
+                    Some(self.s.ast.types.elaborated(kw, Some(q.nns), named))
+                }
                 _ => None,
             };
         }

@@ -83,6 +83,9 @@ After a node is created its header and side record are immutable, except:
 | `RecordData` definition data, `members` | while the class is being defined; frozen at `}` (except `define_aggregate`, §10, and the row below) | sema |
 | `RecordData.members.last` of a complete class | append-only: implicit special members and inheriting constructors, declared lazily (`append_implicit_member`, spec/sema-class.md §4.1) | sema |
 | `VarData` `nrvo` bit | once, at the variable's scope exit (`set_nrvo`) | sema |
+| `VarSpec` `init_style` `Call` | once, with the `CXXConstructExpr` of a default-initialized class variable (WP-067b; part of `VarSpec::LATE`, ORed in from `C` only) | sema |
+| `VarSpec` `init_style` `ParenList` | once, over `Call`, when a parenthesized initializer turns out to initialize an aggregate (P0960; WP-067b) | sema |
+| `ReturnStmt` NRVO candidate (`b`) | cleared once at the end of the function body when its variable is not `nrvo` (`clear_return_nrvo`, clang `computeNRVO`; WP-067b) | sema |
 | cold `ctor_inits` of a constructor | once, with the body (`set_ctor_inits`; implicit initializers included) | sema |
 | cold `overrides` of a method, `friends` of a class | once (`set_overrides` at the declaration, `set_friends` at `}`) | sema |
 | `LetData.value` (`LifetimeExtendedTemporary`) | once | Oven via bridge |

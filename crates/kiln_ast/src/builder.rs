@@ -887,6 +887,13 @@ impl<'a> AstBuilder<'a> {
         self.ast.decls.mark_var(v, VarSpec::new().with_nrvo(true));
     }
 
+    /// Drops the NRVO candidate of `return` statement `r` once its
+    /// variable turned out not to be the named return value (clang
+    /// `computeNRVO`, at the end of the function body).
+    pub fn clear_return_nrvo(&mut self, r: StmtId) {
+        self.ast.stmts.clear_return_nrvo(r);
+    }
+
     // =====================================================================
     // Expressions
     // =====================================================================
@@ -1167,7 +1174,8 @@ impl<'a> AstBuilder<'a> {
     /// A class member access `base.m` / `base->m` ([expr.ref]); `base` is
     /// the object expression (for `->`, the pointer). Category
     /// ([expr.ref]/6): static data members and `->` accesses to fields
-    /// are lvalues; `.` on a field takes the base's category, a prvalue
+    /// and members of reference type are lvalues; `.` on another field
+    /// takes the base's category, a prvalue
     /// base being materialized to an xvalue; enumerators and non-static
     /// member functions are prvalues. A bit-field gets object kind
     /// `BitField`.
@@ -1191,6 +1199,12 @@ impl<'a> AstBuilder<'a> {
             }
         };
         let (vk, ok) = match mn.kind() {
+            // A member of reference type is an lvalue ([expr.ref]/6.1).
+            DeclKind::Field | DeclKind::IndirectField
+                if mn.ty().is_some_and(|t| self.ast.types.is_reference(t)) =>
+            {
+                (ValueCategory::LValue, ObjectKind::Ordinary)
+            }
             DeclKind::Field => {
                 let bitfield = self.ast.decls.field(m).is_some_and(|f| f.bit_width.is_some());
                 (field_vk, if bitfield { ObjectKind::BitField } else { ObjectKind::Ordinary })
@@ -1381,7 +1395,18 @@ impl<'a> AstBuilder<'a> {
     /// A subscript `base[idx]` ([expr.sub]/2): an xvalue if an operand is
     /// an xvalue (array xvalue), else an lvalue.
     pub fn subscript(&mut self, base: ExprId, idx: ExprId, ty: QualType, loc: Loc) -> ExprId {
-        let x = self.vk(base) == ValueCategory::XValue || self.vk(idx) == ValueCategory::XValue;
+        // [expr.sub]/2: the result is an xvalue if the array operand is
+        // an xvalue (seen through its array-to-pointer conversion).
+        let array_xvalue = |b: &Self, e: ExprId| {
+            let n = b.ast.exprs.get(e);
+            n.kind() == ExprKind::ImplicitCastExpr
+                && b.ast.exprs.cast_kind(e) == CastKind::ArrayToPointerDecay
+                && b.vk(ExprId::new(n.a())) == ValueCategory::XValue
+        };
+        let x = self.vk(base) == ValueCategory::XValue
+            || self.vk(idx) == ValueCategory::XValue
+            || array_xvalue(self, base)
+            || array_xvalue(self, idx);
         let vk = if x { ValueCategory::XValue } else { ValueCategory::LValue };
         let deps = self.deps(base) | self.deps(idx) | self.type_deps(ty);
         self.simple(ExprKind::ArraySubscriptExpr, vk, deps, 0, ty, loc, base.raw(), idx.raw())

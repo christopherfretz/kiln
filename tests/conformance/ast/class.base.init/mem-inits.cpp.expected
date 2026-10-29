@@ -1,0 +1,102 @@
+Dumping S::S:
+CXXConstructorDecl used S 'void (int)' implicit-inline
+|-ParmVarDecl used i 'int'
+|-CXXCtorInitializer 'V'
+| `-InitListExpr 'V'
+|   `-IntegerLiteral 'int' 2
+|-CXXCtorInitializer 'B'
+| `-CXXConstructExpr 'B' 'void (int)'
+|   `-ImplicitCastExpr 'int' <LValueToRValue>
+|     `-DeclRefExpr 'int' lvalue ParmVar 'i' 'int'
+|-CXXCtorInitializer Field 'x' 'int'
+| `-ImplicitCastExpr 'int' <LValueToRValue>
+|   `-DeclRefExpr 'int' lvalue ParmVar 'i' 'int'
+|-CXXCtorInitializer Field 'r' 'int &'
+| `-MemberExpr 'int' lvalue ->x
+|   `-CXXThisExpr 'S *' implicit this
+|-CXXCtorInitializer Field 'c' 'C'
+| `-CXXConstructExpr 'C' 'void (int, int)'
+|   |-IntegerLiteral 'int' 1
+|   `-IntegerLiteral 'int' 2
+|-CXXCtorInitializer Field 'agg' 'A'
+| `-InitListExpr 'A'
+|   |-IntegerLiteral 'int' 1
+|   `-IntegerLiteral 'int' 2
+|-CXXCtorInitializer Field 'y' 'long'
+| `-CXXDefaultInitExpr 'long' has rewritten init
+|   `-ImplicitCastExpr 'long' <IntegralCast>
+|     `-IntegerLiteral 'int' 3
+|-CXXCtorInitializer Field 'e' 'E'
+| `-CXXConstructExpr 'E' 'void ()'
+|-CXXCtorInitializer Field 'u' 'int'
+| `-IntegerLiteral 'int' 4
+`-CompoundStmt
+
+Dumping S::S:
+CXXConstructorDecl S 'void ()' implicit-inline
+|-CXXCtorInitializer 'S'
+| `-CXXConstructExpr 'S' 'void (int)'
+|   `-IntegerLiteral 'int' 1
+`-CompoundStmt
+
+Dumping S::S:
+CXXConstructorDecl S 'void (long)' implicit-inline
+|-ParmVarDecl used l 'long'
+|-CXXCtorInitializer 'V'
+| `-CXXConstructExpr 'V' 'void () noexcept'
+|-CXXCtorInitializer 'B'
+| `-CXXConstructExpr 'B' 'void ()'
+|-CXXCtorInitializer Field 'x' 'int'
+| `-InitListExpr 'int'
+|-CXXCtorInitializer Field 'r' 'int &'
+| `-MemberExpr 'int' lvalue ->x
+|   `-CXXThisExpr 'S *' implicit this
+|-CXXCtorInitializer Field 'c' 'C'
+| `-CXXConstructExpr 'C' 'void (int, int)' list
+|   |-IntegerLiteral 'int' 3
+|   `-IntegerLiteral 'int' 4
+|-CXXCtorInitializer Field 'agg' 'A'
+| `-CXXParenListInitExpr 'A'
+|   |-IntegerLiteral 'int' 5
+|   `-IntegerLiteral 'int' 6
+|-CXXCtorInitializer Field 'y' 'long'
+| `-ImplicitCastExpr 'long' <LValueToRValue>
+|   `-DeclRefExpr 'long' lvalue ParmVar 'l' 'long'
+|-CXXCtorInitializer Field 'e' 'E'
+| `-CXXConstructExpr 'E' 'void ()'
+|-CXXCtorInitializer Field 'f' 'float'
+| `-ImplicitValueInitExpr 'float'
+`-CompoundStmt
+
+Dumping S::S:
+CXXConstructorDecl S 'void (char)' implicit-inline
+|-ParmVarDecl used k 'char'
+|-CXXCtorInitializer 'V'
+| `-CXXConstructExpr 'V' 'void () noexcept'
+|-CXXCtorInitializer 'B'
+| `-CXXConstructExpr 'B' 'void ()'
+|-CXXCtorInitializer Field 'x' 'int'
+| `-ImplicitCastExpr 'int' <IntegralCast>
+|   `-ImplicitCastExpr 'char' <LValueToRValue>
+|     `-DeclRefExpr 'char' lvalue ParmVar 'k' 'char'
+|-CXXCtorInitializer Field 'r' 'int &'
+| `-MemberExpr 'int' lvalue ->x
+|   `-CXXThisExpr 'S *' implicit this
+|-CXXCtorInitializer Field 'c' 'C'
+| `-CXXConstructExpr 'C' 'void (int, int)'
+|   |-ImplicitCastExpr 'int' <IntegralCast>
+|   | `-ImplicitCastExpr 'char' <LValueToRValue>
+|   |   `-DeclRefExpr 'char' lvalue ParmVar 'k' 'char'
+|   `-ImplicitCastExpr 'int' <IntegralCast>
+|     `-ImplicitCastExpr 'char' <LValueToRValue>
+|       `-DeclRefExpr 'char' lvalue ParmVar 'k' 'char'
+|-CXXCtorInitializer Field 'agg' 'A'
+| `-CXXConstructExpr 'A' 'void () noexcept'
+|-CXXCtorInitializer Field 'y' 'long'
+| `-CXXDefaultInitExpr 'long' has rewritten init
+|   `-ImplicitCastExpr 'long' <IntegralCast>
+|     `-IntegerLiteral 'int' 3
+|-CXXCtorInitializer Field 'e' 'E'
+| `-CXXConstructExpr 'E' 'void ()'
+`-CompoundStmt
+

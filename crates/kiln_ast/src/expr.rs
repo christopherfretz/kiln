@@ -1427,6 +1427,36 @@ impl ExprArena {
         }
     }
 
+    /// Extends the lifetime of the full-expression temporary `e` (a
+    /// `MaterializeTemporaryExpr`) to that of a reference
+    /// ([class.temporary]/6; clang's `setExtendingDecl`): `extended_by` is
+    /// its `LifetimeExtendedTemporary` and `storage` the extending
+    /// declaration's storage duration. Sema extends after the initializer
+    /// is built, as clang does (spec/sema-class.md §5.4, §8.2). Write-once.
+    ///
+    /// # Errors
+    /// If `e` is already extended.
+    ///
+    /// # Panics
+    /// If `e` is not a `MaterializeTemporaryExpr` or `storage` is
+    /// `FullExpression`.
+    pub fn extend_temporary(
+        &mut self,
+        e: ExprId,
+        extended_by: DeclId,
+        storage: StorageDuration,
+    ) -> Result<(), AlreadySet> {
+        assert!(storage != StorageDuration::FullExpression, "extension needs a storage duration");
+        let n = &mut self.nodes[e.index() as usize];
+        assert!(n.kind == ExprKind::MaterializeTemporaryExpr, "not a MaterializeTemporaryExpr");
+        if n.b != 0 {
+            return Err(AlreadySet { slot: "MaterializeTemporaryExpr.extended_by", existing: n.b });
+        }
+        n.aux = (n.aux & !3) | storage as u8;
+        n.b = extended_by.raw();
+        Ok(())
+    }
+
     /// Marks the `ImplicitCastExpr` `e` as part of an explicit cast
     /// (`part_of_explicit_cast`): sema builds the implicit conversion
     /// sequence of a C-style or functional cast first and marks it

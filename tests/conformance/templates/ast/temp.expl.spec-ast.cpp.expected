@@ -1,0 +1,21 @@
+TranslationUnitDecl
+|-ClassTemplateDecl E
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| |-CXXRecordDecl struct E definition
+| | `-FieldDecl v 'T'
+| |-ClassTemplateSpecialization 'E'
+| |-ClassTemplateSpecialization 'E'
+| `-ClassTemplateSpecialization 'E'
+|-ClassTemplateSpecializationDecl struct E definition explicit_specialization
+| |-TemplateArgument type 'int'
+| `-FieldDecl w 'long'
+|-ClassTemplateSpecializationDecl struct E definition explicit_instantiation_definition
+| |-TemplateArgument type 'char'
+| `-FieldDecl v 'char'
+|-ClassTemplateSpecializationDecl struct E definition explicit_instantiation_declaration
+| |-TemplateArgument type 'short'
+| `-FieldDecl v 'short'
+|-VarDecl e 'E<int> *'
+`-VarDecl s 'int' cinit
+  `-ImplicitCastExpr 'int' <IntegralCast>
+    `-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof 'E<int>'

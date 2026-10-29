@@ -62,6 +62,9 @@ pub struct FnState {
     /// A `this` type that overrides `this_ty` while parsing an NSDMI or a
     /// trailing return type (clang `CXXThisScopeRAII`).
     pub(crate) this_override: Option<QualType>,
+    /// The `return`s with an NRVO candidate, re-checked at the end of
+    /// the body (clang `FunctionScopeInfo::Returns`, §5.5).
+    pub(crate) returns: Vec<StmtId>,
 }
 
 impl FnState {
@@ -76,6 +79,7 @@ impl FnState {
             breakables: Vec::new(),
             this_ty: None,
             this_override: None,
+            returns: Vec::new(),
         }
     }
 }
@@ -91,9 +95,92 @@ impl Sema<'_, '_> {
 
     /// Leaves the innermost scope.
     pub fn pop_scope(&mut self) {
-        if self.scopes.len() > 1 {
-            self.scopes.pop();
+        if self.scopes.len() > 1
+            && let Some(s) = self.scopes.pop()
+        {
+            self.apply_nrvo(&s);
         }
+    }
+
+    /// clang `Scope::applyNRVO` on scope exit (spec/sema-class.md §5.5):
+    /// the candidate declared in this scope becomes the named return
+    /// value; a block passes its state (candidate or disabled) up to the
+    /// enclosing scope, overwriting it.
+    fn apply_nrvo(&mut self, s: &Scope) {
+        let Some(nrvo) = s.nrvo.nrvo else { return };
+        if let Some(v) = nrvo
+            && s.locals.iter().any(|l| l.1 == v)
+        {
+            self.builder().set_nrvo(v);
+        }
+        if matches!(s.kind, ScopeKind::Block | ScopeKind::Control)
+            && let Some(parent) = self.scopes.last_mut()
+        {
+            parent.nrvo.nrvo = Some(nrvo);
+        }
+    }
+
+    /// clang `Scope::updateNRVOCandidate` at a `return` returning the
+    /// copy-elision candidate `v` (`None` for any other operand): the
+    /// candidate keeps its return slot in each scope out to the function
+    /// scope that declared it, every other variable loses it.
+    fn update_nrvo_candidate(&mut self, v: Option<DeclId>) {
+        let mut can_be_put = false;
+        for s in self.scopes.iter_mut().rev() {
+            let found = v.is_some_and(|v| s.nrvo.slots.contains(&v));
+            s.nrvo.slots.clear();
+            if found {
+                s.nrvo.slots.extend(v);
+            }
+            can_be_put |= found;
+            if !matches!(s.kind, ScopeKind::Block | ScopeKind::Control) {
+                break;
+            }
+        }
+        if let Some(s) = self.scopes.last_mut() {
+            s.nrvo.nrvo = Some(if can_be_put { v } else { None });
+        }
+    }
+
+    /// The copy-elision candidate of `return e;` ([class.copy.elision]/1.1,
+    /// clang `getNamedReturnInfo` + `getCopyElisionCandidate`): a possibly
+    /// parenthesized id-expression naming a non-volatile automatic
+    /// variable of the function (not a parameter or exception variable)
+    /// whose type is the class return type ignoring cv.
+    fn copy_elision_candidate(&self, e: ExprId, ret: QualType) -> Option<DeclId> {
+        let mut id = e;
+        while self.ast.exprs.get(id).kind() == ExprKind::ParenExpr {
+            id = self.ast.exprs.operand(id);
+        }
+        if self.ast.exprs.get(id).kind() != ExprKind::DeclRefExpr {
+            return None;
+        }
+        let d = self.ast.exprs.decl(id);
+        let dn = *self.ast.decls.get(d);
+        if dn.kind() != DeclKind::Var {
+            return None;
+        }
+        let v = self.ast.decls.var(d)?;
+        let automatic = matches!(
+            v.spec.storage(),
+            kiln_ast::decl::VarStorage::None | kiln_ast::decl::VarStorage::Register
+        ) && v.spec.tls() == kiln_ast::decl::TlsKind::None
+            && dn.ctx().is_some_and(|c| self.ast.decls.get(c).kind().is_function());
+        if !automatic || v.spec.is_exception_var() {
+            return None;
+        }
+        let vty = dn.ty()?;
+        if self.ast.types.is_reference(vty) || self.ast.types.effective_quals(vty).is_volatile() {
+            return None;
+        }
+        let dependent = self.ast.types.is_dependent(ret) || self.ast.types.is_dependent(vty);
+        if !self.ast.types.is_dependent(ret) && self.ast.types.as_record(ret).is_none() {
+            return None;
+        }
+        if !dependent && !self.ast.types.same_unqualified(ret, vty) {
+            return None;
+        }
+        Some(d)
     }
 
     // -- simple statements ------------------------------------------------
@@ -500,6 +587,7 @@ impl Sema<'_, '_> {
         }
         let ret_void = self.ast.types.is_void(ret);
         let fname = self.decl_name(fdecl);
+        let mut candidate = None;
         let value = match value {
             None => {
                 if !ret_void && !self.is_error_type(ret) {
@@ -521,13 +609,29 @@ impl Sema<'_, '_> {
                     self.emit(d);
                     Some(self.act_on_full_expr(e))
                 } else {
+                    candidate = self.copy_elision_candidate(e, ret);
                     let e = self.implicit_move(e);
                     let c = self.convert_for_init(e, ret, ConvCtx::Return);
+                    if self.ast.types.is_reference(ret) && !self.is_err_expr(c) {
+                        self.check_dangling_temporary(crate::class::BindingSite::Return, c);
+                    }
                     Some(self.act_on_full_expr(c))
                 }
             }
         };
-        self.builder().return_stmt(value, None, loc)
+        self.update_nrvo_candidate(candidate);
+        let r = self.builder().return_stmt(value, candidate, loc);
+        // clang `computeNRVO`: a candidate that does not end up as the
+        // named return value is dropped from its return at the function's
+        // end (only class-returning non-template functions are tracked).
+        if candidate.is_some()
+            && !self.in_template()
+            && self.ast.types.as_record(ret).is_some()
+            && let Some(f) = self.func.as_mut()
+        {
+            f.returns.push(r);
+        }
+        r
     }
 
     /// C++23 implicit move ([expr.prim.id.unqual]/4, [class.copy.elision]/3):
@@ -579,6 +683,18 @@ impl Sema<'_, '_> {
 
     /// Ends the body: undefined labels and fall-off-the-end checks.
     pub(crate) fn end_function_body(&mut self, body: StmtId, rbrace: Loc) {
+        // The function scope's own NRVO candidate is marked before the
+        // returns are re-checked (clang exits the body scope first).
+        if let Some(s) = self.scopes.last_mut()
+            && s.kind == ScopeKind::Function
+        {
+            let nrvo = std::mem::take(&mut s.nrvo);
+            if let Some(Some(v)) = nrvo.nrvo
+                && s.locals.iter().any(|l| l.1 == v)
+            {
+                self.builder().set_nrvo(v);
+            }
+        }
         // No return statement: the placeholder deduces `void`
         // ([dcl.spec.auto.general]/10).
         if let Some(st) = self.func.as_ref()
@@ -589,6 +705,13 @@ impl Sema<'_, '_> {
             self.set_deduced_return(f, QualType::VOID);
         }
         let Some(state) = self.func.take() else { return };
+        for &r in &state.returns {
+            if let Some(v) = self.ast.stmts.return_nrvo(r)
+                && !self.ast.decls.var(v).is_some_and(|x| x.spec.is_nrvo())
+            {
+                self.builder().clear_return_nrvo(r);
+            }
+        }
         for l in &state.labels {
             if l.defined.is_none() {
                 let msg = self

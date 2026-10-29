@@ -217,6 +217,7 @@ impl TypeContext {
         let dep = TypeFlags::DEPENDENT_INSTANTIATION;
         let pack = |p: bool| if p { TypeFlags::UNEXPANDED_PACK } else { TypeFlags::NONE };
         let (canon, flags): (Option<TemplateNameId>, TypeFlags) = match n {
+            TemplateName::Template(d) if self.dependent_templates.contains(&d) => (None, dep),
             TemplateName::Template(_) | TemplateName::Overloaded(_) => (None, TypeFlags::NONE),
             TemplateName::Qualified { nns, underlying, .. } => (
                 Some(self.canonical_template_name(underlying)),
@@ -320,6 +321,14 @@ impl TypeContext {
             TemplateName::Template(d) => Some(d),
             _ => None,
         }
+    }
+
+    /// Marks template `d` as declared in a dependent context (a member
+    /// template of a class template's pattern): `Template(d)` names are
+    /// dependent, so `B<char>` inside `A<T>` is a dependent type
+    /// ([temp.dep.type]/9). Called before any name of `d` is formed.
+    pub fn mark_dependent_template(&mut self, d: DeclId) {
+        self.dependent_templates.insert(d);
     }
 
     /// The dependence flags of `n`.

@@ -97,7 +97,7 @@ TranslationUnitDecl
 | |   `-ParmVarDecl 'int'
 | |-FriendDecl
 | | `-FunctionDecl parent constexpr friend_undeclared k 'int (D)' implicit-inline
-| |   |-ParmVarDecl 'D'
+| |   |-ParmVarDecl 'D' destroyed
 | |   `-CompoundStmt
 | |     `-ReturnStmt
 | |       `-IntegerLiteral 'int' 0
@@ -206,14 +206,14 @@ TranslationUnitDecl
     |           `-ImplicitCastExpr 'S (*)()' <FunctionToPointerDecay>
     |             `-DeclRefExpr 'S ()' lvalue Function 'make' 'S ()'
     |-DeclStmt
-    | `-VarDecl s1 'S' cinit
+    | `-VarDecl s1 'S' cinit destroyed
     |   `-ExprWithCleanups 'S'
     |     `-CXXBindTemporaryExpr 'S' (CXXTemporary)
     |       `-CXXTemporaryObjectExpr 'S' 'void (int, int)'
     |         |-IntegerLiteral 'int' 1
     |         `-IntegerLiteral 'int' 2
     |-DeclStmt
-    | `-VarDecl s2 'S' listinit
+    | `-VarDecl s2 'S' listinit destroyed
     |   `-CXXConstructExpr 'S' 'void (int, int)' list
     |     |-IntegerLiteral 'int' 1
     |     `-IntegerLiteral 'int' 2

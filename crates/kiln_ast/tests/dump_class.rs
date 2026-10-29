@@ -345,7 +345,7 @@ fn class_expressions() {
 | |-FieldDecl x 'int'
 | | `-IntegerLiteral 'int' 1
 | `-CXXMethodDecl get 'int ()'
-|-VarDecl b 'B'
+|-VarDecl b 'B' destroyed
 |-VarDecl rv 'V &' cinit
 | `-CXXStaticCastExpr 'V' lvalue static_cast<V &> <DerivedToBase (virtual V)>
 |   `-DeclRefExpr 'B' lvalue Var 'b' 'B'
@@ -356,7 +356,7 @@ fn class_expressions() {
 | `-MaterializeTemporaryExpr 'const B' lvalue extended by Var 'r' 'const B &'
 |   `-ImplicitCastExpr 'const B' <NoOp>
 |     `-CXXTemporaryObjectExpr 'B' 'void () noexcept' list zeroing
-|-VarDecl t 'B' cinit
+|-VarDecl t 'B' cinit destroyed
 | `-ExprWithCleanups 'B'
 |   `-CXXBindTemporaryExpr 'B' (CXXTemporary)
 |     `-CXXTemporaryObjectExpr 'B' 'void () noexcept' zeroing

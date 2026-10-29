@@ -756,6 +756,17 @@ impl Sema<'_, '_> {
         d.with_note(note)
     }
 
+    /// clang's "passing argument to parameter 'p' here" note (the name is
+    /// optional) for the parameter declaration `p`.
+    pub(crate) fn param_decl_note(&self, p: DeclId) -> kiln_diag::Diag {
+        let n = self.ast.decls.get(p);
+        if n.name().is_empty() {
+            return self.diag(DiagId::note_parameter_here, n.loc());
+        }
+        self.diag(DiagId::note_parameter_named_here, n.loc())
+            .arg(self.decl_arg(p).trim_matches('\'').to_string())
+    }
+
     /// True if `q` is an undeduced plain `auto` (not `decltype(auto)`).
     fn is_plain_auto(&self, q: QualType) -> bool {
         q.quals().is_empty()
@@ -1066,6 +1077,9 @@ impl Sema<'_, '_> {
         let invalid = ds.invalid || d.invalid || self.is_error_type(ty);
         if special {
             return self.act_on_special_member_declarator(ds, ty, d, invalid);
+        }
+        if let Some(sid) = &d.spec_id {
+            return self.act_on_var_spec_declarator(ds, ty, d, sid, head);
         }
         if !invalid {
             self.warn_ambiguous_function(ds, d, ty);
@@ -1726,6 +1740,14 @@ impl Sema<'_, '_> {
         }
         let f = self.builder().function(h, fkind, ty, spec, prev_ok);
         self.finish_virtual_decl(f, &virt);
+        // A pure virtual function's notes point at its decl-specifiers
+        // (clang `getBeginLoc`, §4.11).
+        if self.ast.decls.function(f).is_some_and(|x| x.spec.is_pure())
+            && ds.loc.is_valid()
+            && ds.loc != self.ast.decls.get(f).loc()
+        {
+            let _ = self.ast.decls.cold.begin_loc.insert(f, ds.loc);
+        }
         if invalid_redecl {
             self.ast.decls.set_flags(f, DeclFlags::INVALID);
         }
@@ -2274,8 +2296,21 @@ impl Sema<'_, '_> {
             return;
         }
         let e = self.perform_init(ty, init, loc, direct);
+        if self.ast.exprs.get(e).kind() == ExprKind::CXXParenListInitExpr {
+            // P0960 (clang's `parenlistinit`).
+            let style = VarSpec::new().with_init_style(kiln_ast::decl::InitStyle::ParenList);
+            self.ast.decls.mark_var(v, style);
+        }
         let e = self.act_on_full_expr(e);
         let _ = self.builder().set_var_init(v, e);
+        // [class.temporary]/6: the temporaries the variable binds live as
+        // long as it does (spec/sema-class.md §5.4).
+        if !self.is_err_expr(e) {
+            self.extend_temporaries(v, e);
+            // [class.dtor]/15 (spec/sema-class.md §4.8).
+            let vty = self.ast.decls.get(v).ty().unwrap_or(QualType::ERROR);
+            self.check_var_destructor(v, vty, loc);
+        }
         // An incomplete array takes its bound from the initializer.
         let ety = self.ast.exprs.get(e).ty();
         if self.ast.types.is_array(ty)
@@ -2405,13 +2440,26 @@ impl Sema<'_, '_> {
         }
         // [depr.static.constexpr]: a redundant out-of-class redeclaration
         // of an inline static data member initialized in its class.
-        if !self.is_in_class_static(v)
-            && self
+        if !self.is_in_class_static(v) {
+            let in_class = self
                 .ast
                 .redecls_of(v)
-                .any(|x| x != v && self.is_in_class_static(x) && self.is_var_definition(x))
-        {
-            return;
+                .find(|&x| x != v && self.is_in_class_static(x) && self.is_var_definition(x));
+            if let Some(x) = in_class {
+                if self.ast.decls.var(x).is_some_and(|y| y.spec.is_constexpr()) {
+                    self.error(DiagId::sema_redundant_constexpr_static_def, vn.loc());
+                }
+                return;
+            }
+            // [class.static.data]/4: the definition of a `const` static
+            // data member initialized in its class has no initializer.
+            if self
+                .ast
+                .redecls_of(v)
+                .any(|x| x != v && self.ast.decls.var(x).is_some_and(|y| y.init.is_some()))
+            {
+                return;
+            }
         }
         let spec = self.ast.decls.var(v).map(|x| x.spec).unwrap_or_default();
         let ty = vn.ty().unwrap_or(QualType::ERROR);
@@ -2530,6 +2578,15 @@ impl Sema<'_, '_> {
         if self.ast.definition(f).is_none() {
             let _ = self.builder().set_body(f, body);
         }
+        if self.kind_of(f) == DeclKind::CXXDestructor
+            && let Some(class) = self.ast.decls.get(f).ctx()
+            && !self.in_template()
+        {
+            // [class.dtor]/13: the subobject destructors are odr-used by a
+            // destructor definition (clang `ActOnFinishFunctionBody`).
+            let loc = self.ast.decls.get(f).loc();
+            self.mark_base_and_member_dtors_referenced(loc, class);
+        }
         self.pop_scope();
         if let Some(saved) = self.fn_saved.pop() {
             for _ in 0..saved.pushed {
@@ -2571,7 +2628,7 @@ impl Sema<'_, '_> {
         }
     }
 
-    fn tag_kind_of(keyword: TagKeyword) -> TagKind {
+    pub(crate) fn tag_kind_of(keyword: TagKeyword) -> TagKind {
         match keyword {
             TagKeyword::Class => TagKind::Class,
             TagKeyword::Union => TagKind::Union,
@@ -3628,7 +3685,7 @@ impl Sema<'_, '_> {
         // template ([temp.local]/1): `X` alone is `X<P...>`, `X<A>` a
         // template-id.
         if k == DeclKind::CXXRecord
-            && let Some(t) = self.ast.described_template(self.ast.first(d))
+            && let Some(t) = self.injected_template_of(d)
         {
             return NameClass::TypeTemplate(t);
         }
@@ -3735,6 +3792,11 @@ impl Sema<'_, '_> {
             DeclKind::Typedef | DeclKind::TypeAlias => {
                 self.mark_type_referenced(d);
                 let ty = self.ast.decls.get(d).ty().unwrap_or(QualType::ERROR);
+                // [temp.inst]/2: a specialization named through an alias
+                // is instantiated like one named by its template-id.
+                if self.undefined_spec(ty).is_some() && !self.require_complete_nns(ty, loc) {
+                    return None;
+                }
                 let r = self.ast.types.as_record(ty).or_else(|| self.ast.types.as_enum(ty));
                 if r.is_none() {
                     let msg = self

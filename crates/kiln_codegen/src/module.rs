@@ -694,7 +694,9 @@ impl<'a> Cg<'a> {
         let v = ast.decls.var(d).expect("var");
         let ty = ast.decls.get(d).ty().expect("var type");
         let loc = Some(ast.decls.get(d).loc());
-        let init = match v.init {
+        // A trivial default constructor does nothing; the static object
+        // is zero-initialized ([basic.start.static]/2).
+        let init = match v.init.filter(|&i| !ast.is_trivial_default_construction(i)) {
             None => {
                 let t = self.mty(ty);
                 self.m.const_zero(t)

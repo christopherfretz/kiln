@@ -16,11 +16,14 @@ pub mod auto;
 pub mod builtins;
 pub mod class;
 pub mod deduce;
+pub mod member;
 pub mod order;
 pub mod pending;
 pub mod report;
+pub mod spec;
 pub mod stack;
 pub mod subst;
+pub mod var;
 
 use kiln_ast::decl::DeclKind;
 use kiln_ast::ids::{ArgListId, TemplateParamListId};
@@ -77,6 +80,17 @@ pub struct TemplState {
     /// Where each argument of the template-id being parsed starts (set by
     /// the parser right before `act_template_id`; consumed there).
     pub(crate) arg_locs: Vec<Loc>,
+    /// `template<>` was just parsed: the next class template-id declared
+    /// is an explicit specialization ([temp.expl.spec]; WP-070b).
+    pub(crate) explicit_spec: Option<Loc>,
+    /// `[extern] template` without `<` was just parsed (the `extern`
+    /// and `template` locations): the next class template-id declared
+    /// is explicitly instantiated ([temp.explicit]).
+    pub(crate) explicit_inst: Option<(Option<Loc>, Loc)>,
+    /// Partial ordering results of partial specializations, by index
+    /// pair: whether the first is at least as specialized as the second
+    /// ([temp.spec.partial.order], §4.4).
+    pub(crate) partial_order: kiln_source::fx::FxHashMap<(u32, u32), bool>,
 }
 
 /// The instantiation engine's state (spec/sema-templates.md §11.2).
@@ -103,6 +117,11 @@ pub struct InstState {
     /// Inline static data members of specializations whose initializer
     /// is not instantiated yet ([temp.inst]/4: on first reference).
     pub(crate) deferred_inits: kiln_source::fx::FxHashSet<DeclId>,
+    /// Non-inline static data members of specializations whose
+    /// definition (the pattern's out-of-line one, [class.static.data]/3)
+    /// is not instantiated yet ([temp.inst]/4: when odr-used or needed
+    /// for constant evaluation).
+    pub(crate) member_defs: kiln_source::fx::FxHashSet<DeclId>,
     /// Declaring such a member: its `constexpr` does not imply `inline`
     /// until the initializer is instantiated (as clang).
     pub(crate) deferring_init: bool,
@@ -113,6 +132,15 @@ pub struct InstState {
     pub(crate) undefined_diagnosed: std::cell::Cell<Option<DeclId>>,
     /// Drop the next error passed to `emit` (set by `incomplete_note`).
     pub(crate) suppress_next_error: std::cell::Cell<bool>,
+    /// The mem-initializers of constructor definitions in a template, as
+    /// parsed, and their `:` (clang keeps the pattern's unresolved
+    /// `CXXCtorInitializer`s for `InstantiateMemInitializers`).
+    pub(crate) pattern_mem_inits:
+        kiln_source::fx::FxHashMap<DeclId, (Vec<crate::class::MemInitInfo>, Loc)>,
+    /// The location of the innermost running constant evaluation: the
+    /// point of instantiation of a definition `ensure_body` instantiates
+    /// (§4.11).
+    pub(crate) eval_loc: Option<Loc>,
     /// The thread's stack guard (P4 (c)): the one installed when the
     /// state was created.
     pub(crate) guard: crate::stack_guard::StackGuard,
@@ -751,28 +779,50 @@ impl Sema<'_, '_> {
         self.ast.templates.defaults.get(p).copied()
     }
 
-    /// A declarator-id that is a template-id naming the function or
-    /// variable template `tmpl` (`f<T*>`, `v<int>`) after a template head
-    /// ([temp.expl.spec], [temp.spec.partial]): a function template
-    /// partial specialization is an error ([temp.spec.partial.general]/1
-    /// covers only class and variable templates; clang's
-    /// `err_function_template_partial_spec`); the other forms are
-    /// WP-070a's. Returns false when the declarator should be dropped.
-    pub fn act_on_specialization_declarator_id(&mut self, tmpl: DeclId, loc: Loc) -> bool {
-        let explicit = self.templ.heads.last().is_some_and(|h| !h.taken && h.params.is_empty());
+    /// A declarator-id that is a template-id `tmpl<args>` naming the
+    /// function or variable template `tmpl` (`f<T*>`, `v<int>`) after a
+    /// template head or `template<>` ([temp.expl.spec],
+    /// [temp.spec.partial]). A variable template's is returned for the
+    /// declarator ([`Declarator::spec_id`]); a function template partial
+    /// specialization is an error ([temp.spec.partial.general]/1 covers
+    /// only class and variable templates; clang's
+    /// `err_function_template_partial_spec`) and an explicit one is
+    /// WP-071's: `None`, and the declarator is dropped. The argument
+    /// locations are the ones the parser recorded; `r_angle` is the
+    /// closing `>`.
+    ///
+    /// [`Declarator::spec_id`]: crate::declspec::Declarator::spec_id
+    pub fn act_on_specialization_declarator_id(
+        &mut self,
+        tmpl: DeclId,
+        args: &[TemplateArg],
+        loc: Loc,
+        r_angle: Loc,
+    ) -> Option<spec::SpecDeclaratorId> {
+        let arg_locs = std::mem::take(&mut self.templ.arg_locs);
+        let explicit = !self.has_pending_head();
         match (self.kind_of(tmpl), explicit) {
             (DeclKind::FunctionTemplate, false) => {
                 self.error(DiagId::sema_function_partial_spec, loc);
+                None
             }
             (DeclKind::FunctionTemplate, true) => {
                 self.templ_unimplemented("explicit specialization of a function template", loc);
+                None
             }
-            (_, false) => self.templ_unimplemented("variable template partial specialization", loc),
-            (_, true) => {
-                self.templ_unimplemented("explicit specialization of a variable template", loc);
-            }
+            (_, _) => Some(spec::SpecDeclaratorId {
+                template: self.ast.first(tmpl),
+                args: args.to_vec(),
+                arg_locs,
+                loc,
+                range: kiln_source::Span::new(loc, r_angle.with_offset(1)),
+            }),
         }
-        false
+    }
+
+    /// True between `template<>` and the declaration it introduces.
+    pub fn has_explicit_spec_head(&self) -> bool {
+        self.templ.explicit_spec.is_some()
     }
 
     /// True while parsing between `template<...>` and the declaration it

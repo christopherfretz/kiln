@@ -114,7 +114,10 @@ pub struct Sema<'a, 'sm> {
     /// redeclares them ([basic.link]/6, clang's local extern decls).
     pub(crate) local_externs: Vec<(DeclId, kiln_source::symbol::Symbol, DeclId)>,
     /// The constant evaluator of the translation unit (spec/sema.md §8).
-    pub(crate) oven: Oven,
+    /// Taken out for the duration of an evaluation, so the bridge can
+    /// reach the rest of `Sema` (`ensure_body` instantiates through it,
+    /// spec/sema-templates.md §4.11); `None` only while one runs.
+    pub(crate) oven: Option<Oven>,
     /// The implicitly declared global allocation functions.
     pub(crate) global_ops: new_delete::GlobalOps,
     /// Braced-init-list call arguments awaiting their parameter types
@@ -158,6 +161,30 @@ pub struct Sema<'a, 'sm> {
     /// The current full-expression's cleanup state (spec/sema-class.md
     /// §5.3).
     pub(crate) cleanup: class::CleanupState,
+    /// The cleanup states of the enclosing full-expressions around
+    /// unevaluated operands, innermost last.
+    pub(crate) cleanup_saved: Vec<class::CleanupState>,
+    /// Implicit special members being defined (spec/sema-class.md §4.5),
+    /// innermost last: diagnostics emitted meanwhile get the note `in
+    /// implicit ... for 'T' first required here`.
+    pub(crate) synth: Vec<class::SynthContext>,
+    /// The depth of `synth` whose notes were last printed (clang
+    /// `LastEmittedCodeSynthesisContextDepth`).
+    pub(crate) synth_noted: std::cell::Cell<usize>,
+    /// The internal `__builtin_memcpy` declaration (spec/sema-class.md
+    /// §4.5), once declared.
+    pub(crate) memcpy_decl: Option<DeclId>,
+    /// Delegating constructors and their targets, checked for cycles at
+    /// the end of the translation unit ([class.base.init]/6).
+    pub(crate) delegating: Vec<(DeclId, DeclId, Loc)>,
+    /// The subobject the next constructor call initializes, set by a
+    /// mem-initializer and consumed by the outermost constructor call it
+    /// builds (clang's `InitializedEntity` for bases, members and
+    /// delegation; spec/sema-class.md §4.9).
+    pub(crate) ctor_entity: Option<(class::InitEntity, kiln_ast::expr::ConstructionKind)>,
+    /// The mem-initializers of the constructor definition being parsed
+    /// (spec/sema-class.md §4.9).
+    pub(crate) mem_inits: class::MemInitState,
     /// Materialized temporaries collected for P2718 range-for lifetime
     /// extension (spec/sema-class.md §5.4).
     pub(crate) extend_collector: Option<Vec<ExprId>>,
@@ -234,7 +261,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             defining: Vec::new(),
             enums: Vec::new(),
             local_externs: Vec::new(),
-            oven: Oven::new(Budget::default()),
+            oven: Some(Oven::new(Budget::default())),
             global_ops: new_delete::GlobalOps::default(),
             braced_args: Vec::new(),
             prototype_params: Vec::new(),
@@ -249,6 +276,13 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             delayed_access: Vec::new(),
             delayed_access_depth: Vec::new(),
             cleanup: class::CleanupState::default(),
+            cleanup_saved: Vec::new(),
+            synth: Vec::new(),
+            synth_noted: std::cell::Cell::new(0),
+            memcpy_decl: None,
+            delegating: Vec::new(),
+            ctor_entity: None,
+            mem_inits: class::MemInitState::default(),
             extend_collector: None,
             unparsed_exc: kiln_source::fx::FxHashSet::default(),
             fn_saved: Vec::new(),
@@ -306,7 +340,10 @@ impl<'a, 'sm> Sema<'a, 'sm> {
 
     /// Emits `d`. Inside an instantiation (spec/sema-templates.md §10.2)
     /// the context notes are added to a diagnostic that shows, and a
-    /// SFINAE context captures errors instead (§5.7).
+    /// SFINAE context captures errors instead (§5.7). Inside an implicit
+    /// special member definition the `in implicit ... first required
+    /// here` note (spec/sema-class.md §4.5) goes first, as the innermost
+    /// code-synthesis context.
     pub fn emit(&self, mut d: Diag) {
         if self.inst.suppress_next_error.replace(false) {
             return;
@@ -334,6 +371,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
                 d.prepend_notes(self.inst_context_notes());
             }
         }
+        let d = self.with_synth_note(d);
         d.emit(self.diags);
     }
 

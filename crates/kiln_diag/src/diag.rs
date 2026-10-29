@@ -204,6 +204,21 @@ impl Diag {
         self
     }
 
+    /// Inserts `notes` (context notes such as clang's `in implicit ...
+    /// first required here`) before this diagnostic's other notes, as
+    /// clang prints the code-synthesis context right after the
+    /// diagnostic itself.
+    pub fn with_context_notes(mut self, notes: Vec<Diag>) -> Diag {
+        let rest = std::mem::replace(&mut self.notes, notes);
+        self.notes.extend(rest);
+        self
+    }
+
+    /// Where the caret goes.
+    pub const fn loc(&self) -> Loc {
+        self.span.lo
+    }
+
     /// Inserts `notes` before the diagnostic's own notes (the template
     /// instantiation context precedes them, spec/sema-templates.md §10.2).
     pub fn prepend_notes(&mut self, notes: Vec<Diag>) {

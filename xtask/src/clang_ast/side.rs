@@ -1,6 +1,7 @@
 //! The side channel: clang's text dump (`-Xclang -ast-dump`) of the same
 //! compile, for what the JSON dump omits — the `value:` child of constexpr
-//! variables; a function's `trivial`, `noexcept-unevaluated` and friend
+//! variables and the `destroyed` word of variables and parameters; a
+//! function's `trivial`, `noexcept-unevaluated` and friend
 //! words and its `Overrides:` child — and to cross-check the function
 //! flags the normalizer derives from the JSON (`constexpr`, `consteval`,
 //! `implicit-inline`).
@@ -19,8 +20,8 @@ pub struct VNode {
     pub children: Vec<VNode>,
 }
 
-/// The declaration classes the side channel aligns: the function kinds
-/// and `VarDecl`.
+/// The declaration classes the side channel aligns: the function kinds,
+/// `VarDecl`, the template specialization classes and `ParmVarDecl`.
 pub const CLASSES: &[&str] = &[
     "FunctionDecl",
     "CXXMethodDecl",
@@ -28,9 +29,27 @@ pub const CLASSES: &[&str] = &[
     "CXXDestructorDecl",
     "CXXConversionDecl",
     "VarDecl",
+    "ClassTemplateSpecializationDecl",
+    "ClassTemplatePartialSpecializationDecl",
+    "VarTemplateSpecializationDecl",
+    "VarTemplatePartialSpecializationDecl",
+    "ParmVarDecl",
 ];
 
-/// A function or `VarDecl` line of the text dump.
+/// Whether `class` is one of the class template specialization classes
+/// (aligned for their specialization kind, which the JSON lacks).
+pub fn is_record(class: &str) -> bool {
+    class.starts_with("ClassTemplate")
+}
+
+/// Whether `class` is `VarDecl` or a variable template specialization
+/// class (which carry a `value:` child).
+pub fn is_var(class: &str) -> bool {
+    class == "VarDecl" || class.starts_with("VarTemplate")
+}
+
+/// A function, `VarDecl`, `ParmVarDecl` or class template specialization
+/// line of the text dump.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TextDecl {
     /// One of [`CLASSES`].
@@ -49,7 +68,10 @@ pub struct TextDecl {
 impl TextDecl {
     /// Whether the line names declaration `name` (` name 'type'`).
     pub fn names(&self, name: &str) -> bool {
-        self.line.contains(&format!(" {name} '"))
+        if is_record(self.class) {
+            return self.has_flag(name);
+        }
+        name.is_empty() || self.line.contains(&format!(" {name} '"))
     }
 
     /// Whether the line carries the bare word `flag` outside its quoted
@@ -148,7 +170,7 @@ pub fn parse(text: &str) -> Result<Vec<TextDecl>, String> {
         let mut line = content.to_owned();
         let mut value = None;
         let mut overrides = None;
-        if class != "VarDecl" {
+        if !is_var(class) && class != "ParmVarDecl" {
             // The `delete message:` and `Overrides:` children come first.
             while let Some(&(d, c)) = lines.get(i)
                 && d == depth + 1
@@ -167,7 +189,7 @@ pub fn parse(text: &str) -> Result<Vec<TextDecl>, String> {
                 i += 1;
             }
         }
-        if class == "VarDecl"
+        if is_var(class)
             && let Some(&(d, c)) = lines.get(i)
             && d == depth + 1
             && c.starts_with("value: ")

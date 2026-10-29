@@ -291,6 +291,16 @@ impl Ast {
         self.lookup_local(record, name).iter().next()
     }
 
+    /// True if `e` is a `CXXConstructExpr` calling a trivial constructor
+    /// with no arguments: default-initialization that performs no
+    /// initialization ([dcl.init.general]/7, [class.default.ctor]/3).
+    /// Codegen and the Oven leave the object uninitialized.
+    pub fn is_trivial_default_construction(&self, e: crate::ids::ExprId) -> bool {
+        self.exprs.get(e).kind() == crate::expr::ExprKind::CXXConstructExpr
+            && self.lists.is_empty(self.exprs.construct_args(e))
+            && self.decls.function(self.exprs.constructor(e)).is_some_and(|f| f.spec.is_trivial())
+    }
+
     /// The constructors of class `record` declared so far (a table read:
     /// never declares implicit constructors), in order of first
     /// declaration; templates included.

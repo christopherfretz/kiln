@@ -52,13 +52,15 @@ impl RowKind {
             FrameKind::FunctionSpec => RowKind::Function,
             FrameKind::StaticDataMember => RowKind::Static,
             FrameKind::AliasTemplate => RowKind::Alias,
+            FrameKind::VarTemplateInstantiation | FrameKind::VarTemplateInit => RowKind::Var,
             FrameKind::MemberClass
             | FrameKind::MemberFunction
             | FrameKind::Enum
             | FrameKind::Nsdmi => RowKind::Member,
             FrameKind::DefaultTemplateArg
             | FrameKind::DefaultFunctionArg
-            | FrameKind::DefaultArgChecking => RowKind::Default,
+            | FrameKind::DefaultArgChecking
+            | FrameKind::PartialSpecDeduction => RowKind::Default,
         }
     }
 }
@@ -137,6 +139,7 @@ impl InstReport {
             p.0 = p.0.saturating_add(bytes);
             p.1 = p.1.saturating_add(nodes);
         }
+        let counted = kind != FrameKind::VarTemplateInit;
         let kind = RowKind::of(kind);
         let i = if let Some(&i) = self.index.get(&(template, kind)) {
             i as usize
@@ -155,12 +158,12 @@ impl InstReport {
             i
         };
         let r = &mut self.rows[i];
-        r.count = r.count.saturating_add(1);
+        r.count = r.count.saturating_add(u32::from(counted));
         r.nodes = r.nodes.saturating_add(nodes.saturating_sub(cn));
         r.bytes = r.bytes.saturating_add(bytes.saturating_sub(cb));
         r.incl_ns = r.incl_ns.saturating_add(incl_ns);
         r.self_ns = r.self_ns.saturating_add(incl_ns.saturating_sub(child_ns));
-        self.count += 1;
+        self.count += u64::from(counted);
     }
 
     /// The rows, by bytes descending (ties: count, then first seen).

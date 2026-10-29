@@ -1,14 +1,15 @@
 //! Initialization ([dcl.init]): copy-, direct- and list-initialization
 //! of scalars, references, arrays and aggregates (spec/sema.md §6).
 
-use kiln_ast::decl::{DeclKind, FieldData, TagKind};
-use kiln_ast::expr::ExprKind;
+use kiln_ast::decl::{DeclKind, DefinitionBits, FieldData, TagKind};
+use kiln_ast::expr::{ExprKind, ValueCategory};
 use kiln_ast::{DeclId, ExprId, QualType};
 use kiln_diag::DiagId;
 use kiln_source::Loc;
 use kiln_source::symbol::Symbol;
 
 use crate::Sema;
+use crate::class::{ConstructSite, DeletedAs, InitStyle};
 use crate::conv::{self, ConvCtx};
 
 /// An initializer as written ([dcl.init.general]/1).
@@ -91,9 +92,63 @@ impl Sema<'_, '_> {
         )
     }
 
-    /// True for class and array types (aggregates in M2, [dcl.init.aggr]/1).
+    /// True for array types and aggregate classes ([dcl.init.aggr]/1);
+    /// an incomplete class counts as one (its initialization is
+    /// diagnosed as incomplete).
     pub(crate) fn is_aggregate(&self, t: QualType) -> bool {
-        self.ast.types.is_array(t) || self.ast.types.as_record(t).is_some()
+        if self.ast.types.is_array(t) {
+            return true;
+        }
+        let Some(r) = self.ast.types.as_record(t) else { return false };
+        match self.ast.definition(r) {
+            Some(d) => {
+                let bits = self.defn_bits(d);
+                !bits.contains(DefinitionBits::COMPLETE) || bits.contains(DefinitionBits::AGGREGATE)
+            }
+            None => true,
+        }
+    }
+
+    /// List-initialization of a non-aggregate class `ty` by a constructor
+    /// ([dcl.init.list]/3.5, /3.7): the elements are the arguments (an
+    /// empty list value-initializes). `None` when `ty` is not such a
+    /// class. `at` is the entity; `temp_end` makes the call a
+    /// `CXXTemporaryObjectExpr` (`T{...}`).
+    pub(crate) fn list_construct(
+        &mut self,
+        ty: QualType,
+        l: &InitList,
+        style: InitStyle,
+        at: Loc,
+        temp_end: Option<Loc>,
+    ) -> Option<ExprId> {
+        if let Some(r) = self.ast.types.as_record(ty) {
+            // Whether it is an aggregate needs its definition.
+            self.instantiate_for_init(r, at);
+        }
+        if self.is_error_type(ty) || self.ast.types.as_record(ty).is_none() || self.is_aggregate(ty)
+        {
+            return None;
+        }
+        let mut args = Vec::with_capacity(l.items.len());
+        for item in &l.items {
+            match item.value {
+                InitValue::Expr(e) if item.designator.is_empty() => args.push(e),
+                _ => {
+                    // todo(WP-067b follow-up): nested braced arguments
+                    // ([over.ics.list]) and designators of a non-aggregate.
+                    self.unsupported("this list-initialization of a class", item.value.loc(self));
+                    let flat = Self::list_exprs(l);
+                    return Some(self.recover(ty, &flat, l.lbrace));
+                }
+            }
+        }
+        if args.iter().any(|&a| self.expr_is_type_dependent(a)) {
+            return None;
+        }
+        let mut site = ConstructSite::at(at);
+        site.temp_end = temp_end;
+        self.construct_class(ty, &args, style, site)
     }
 
     /// The initialization of an object of type `ty` by `init`
@@ -124,7 +179,35 @@ impl Sema<'_, '_> {
         }
         match init {
             Initializer::Expr(e) => self.init_from_expr(ty, e, ConvCtx::Initialization, loc),
-            Initializer::Paren(v, l, _) => {
+            Initializer::Paren(v, l, r) => {
+                let settled = !v
+                    .iter()
+                    .any(|&a| self.expr_is_type_dependent(a) || self.is_error_type(self.ety(a)));
+                if settled
+                    && self.ast.types.is_array(ty)
+                    && !(v.len() == 1 && self.string_lit_of(v[0]).is_some())
+                {
+                    // [dcl.init.general]/16.5: `T a[N](x, y)`.
+                    return self.paren_aggregate_init(ty, &v, loc, r);
+                }
+                if settled && self.ast.types.as_record(ty).is_some() {
+                    if v.len() == 1
+                        && let Some(x) = self.construct_from_class(
+                            v[0],
+                            ty,
+                            ConvCtx::DirectInitialization,
+                            loc,
+                            DeletedAs::Call,
+                        )
+                    {
+                        return x;
+                    }
+                    let mut site = ConstructSite::at(loc);
+                    site.rparen = Some(r);
+                    if let Some(x) = self.construct_class(ty, &v, InitStyle::Direct, site) {
+                        return x;
+                    }
+                }
                 if v.len() == 1 {
                     self.init_from_expr(ty, v[0], ConvCtx::DirectInitialization, loc)
                 } else if !self.is_aggregate(ty) && !self.ast.types.is_reference(ty) {
@@ -139,6 +222,10 @@ impl Sema<'_, '_> {
             }
             Initializer::List(l) => {
                 if direct_list && let Some(e) = self.fixed_enum_list_init(ty, &l) {
+                    return e;
+                }
+                let style = if direct_list { InitStyle::DirectList } else { InitStyle::CopyList };
+                if let Some(e) = self.list_construct(ty, &l, style, loc, None) {
                     return e;
                 }
                 self.init_from_list_at(ty, &l, Some(loc))
@@ -166,6 +253,19 @@ impl Sema<'_, '_> {
                 .arg(which);
             self.emit(msg);
             return e;
+        }
+        if let Some(x) = self.construct_from_class(e, ty, ctx, at, DeletedAs::Call) {
+            return x;
+        }
+        if self.ast.types.as_record(ty).is_some() && !self.expr_is_type_dependent(e) {
+            if ctx == ConvCtx::DirectInitialization {
+                let site = ConstructSite::at(at);
+                if let Some(x) = self.construct_class(ty, &[e], InitStyle::Direct, site) {
+                    return x;
+                }
+            } else if let Some(x) = self.convert_to_class(e, ty, ctx, at, DeletedAs::Call) {
+                return x;
+            }
         }
         match conv::implicit_convert(self, e, ty, ctx) {
             Ok(x) => x,
@@ -233,6 +333,169 @@ impl Sema<'_, '_> {
         self.builder().implicit_value_init(ty)
     }
 
+    /// A field with no initializer in an aggregate initialization: its
+    /// default member initializer ([dcl.init.aggr]/5.1, a
+    /// `CXXDefaultInitExpr`), else the value-initializing [`Sema::filler`].
+    pub(crate) fn field_filler(&mut self, f: DeclId, at: Loc) -> ExprId {
+        let fty = self.ast.decls.get(f).ty().unwrap_or(QualType::ERROR);
+        if self.field_has_nsdmi(f) {
+            let ctx = self.context();
+            if let Some(e) = self.default_member_init(f, ctx, at) {
+                return e;
+            }
+            return self.recover(fty, &[], at);
+        }
+        self.filler(fty, at)
+    }
+
+    /// Parenthesized aggregate initialization ([dcl.init.general]/16.5,
+    /// /16.6.2.2, P0960) of the array or class `ty` from `args`: each
+    /// element is copy-initialized from its argument (no brace elision,
+    /// narrowing allowed); the rest take their default member initializer
+    /// or are value-initialized. `at` is the entity (where an excess
+    /// argument is reported), `rparen` the `)`.
+    pub(crate) fn paren_aggregate_init(
+        &mut self,
+        ty: QualType,
+        args: &[ExprId],
+        at: Loc,
+        rparen: Loc,
+    ) -> ExprId {
+        if self.ast.types.is_array(ty) {
+            let elem = self.ast.types.element(ty).unwrap_or(QualType::ERROR);
+            let bound = self.ast.types.array_size(ty);
+            if bound.is_some_and(|n| args.len() as u64 > n) {
+                let msg = self.diag(DiagId::sema_excess_initializers, at).arg("0");
+                self.emit(msg);
+                return self.recover(ty, args, at);
+            }
+            let inits: Vec<ExprId> = args
+                .iter()
+                .map(|&a| {
+                    let loc = self.begin_loc(a);
+                    self.init_from_expr(elem, a, ConvCtx::Initialization, loc)
+                })
+                .collect();
+            if inits.iter().any(|&e| self.is_err_expr(e)) {
+                return self.recover(ty, args, at);
+            }
+            let n = bound.unwrap_or(args.len() as u64);
+            let filler = if n > args.len() as u64 {
+                if self.ast.types.as_record(self.base_element(elem)).is_some() {
+                    // todo(WP-067b follow-up): value-initialized class
+                    // elements of a parenthesized array initialization.
+                    self.unsupported("parenthesized initialization of an array of classes", at);
+                    return self.recover(ty, args, at);
+                }
+                Some(self.builder().implicit_value_init(elem))
+            } else {
+                None
+            };
+            let ty =
+                if bound.is_none() { self.ast.types.constant_array(elem, n, None) } else { ty };
+            return self.builder().paren_list_init(ty, &inits, filler, at, rparen);
+        }
+        let Some(r) = self.ast.types.as_record(ty) else {
+            return self.recover(ty, args, at);
+        };
+        let def = self.ast.definition(r).unwrap_or(r);
+        if self.ast.decls.record(def).is_some_and(|x| x.tag == TagKind::Union) {
+            // todo(WP-067b follow-up): the builder records no active member
+            // of a `CXXParenListInitExpr`.
+            self.unsupported("parenthesized initialization of a union", at);
+            return self.recover(ty, args, at);
+        }
+        let bases = self.init_bases(def);
+        let fields = self.init_fields(def);
+        let nb = bases.len();
+        if args.len() > nb + fields.len() {
+            let msg = self.diag(DiagId::sema_excess_initializers, at).arg("4");
+            self.emit(msg);
+            return self.recover(ty, args, at);
+        }
+        let mut inits = Vec::with_capacity(nb + fields.len());
+        for i in 0..nb + fields.len() {
+            let ety = if i < nb {
+                bases[i]
+            } else {
+                self.ast.decls.get(fields[i - nb]).ty().unwrap_or(QualType::ERROR)
+            };
+            let e = match args.get(i) {
+                Some(&a) if i < nb => self.init_base_element(ety, a),
+                Some(&a) => {
+                    let loc = self.begin_loc(a);
+                    self.init_from_expr(ety, a, ConvCtx::Initialization, loc)
+                }
+                None if i < nb => self.paren_value_init(ety, at),
+                None => {
+                    let f = fields[i - nb];
+                    if self.field_has_nsdmi(f) {
+                        self.field_filler(f, rparen)
+                    } else if self.ast.types.is_reference(ety) {
+                        // todo(WP-067b follow-up): clang's
+                        // `err_init_reference_member_uninitialized`.
+                        self.unsupported("an uninitialized reference member", at);
+                        return self.recover(ty, args, at);
+                    } else {
+                        self.paren_value_init(ety, at)
+                    }
+                }
+            };
+            inits.push(e);
+        }
+        if inits.iter().any(|&e| self.is_err_expr(e)) {
+            return self.recover(ty, args, at);
+        }
+        self.builder().paren_list_init(ty, &inits, None, at, rparen)
+    }
+
+    /// A value-initialized element of a parenthesized aggregate
+    /// initialization ([dcl.init.general]/16.6.2.2, /9): a class by its
+    /// default constructor (zero-initialized first unless that is
+    /// user-provided), anything else as an `ImplicitValueInitExpr`.
+    pub(crate) fn paren_value_init(&mut self, ty: QualType, at: Loc) -> ExprId {
+        if self.ast.types.as_record(ty).is_some()
+            && let Some(e) = self.value_init_class(ty, at)
+        {
+            return e;
+        }
+        self.builder().implicit_value_init(ty)
+    }
+
+    /// Whether `e` is a prvalue of the class type `ty`.
+    fn is_prvalue_of_class(&self, e: ExprId, ty: QualType) -> bool {
+        self.ast.exprs.get(e).value_category() == ValueCategory::PRValue
+            && self
+                .ast
+                .types
+                .as_record(self.ety(e))
+                .zip(self.ast.types.as_record(ty))
+                .is_some_and(|(a, b)| self.ast.first(a) == self.ast.first(b))
+    }
+
+    /// A base element initialized from the expression `e`: a prvalue of
+    /// the base class is materialized and moved from (clang does not
+    /// elide into a base subobject, which may overlap other members).
+    fn init_base_element(&mut self, bty: QualType, e: ExprId) -> ExprId {
+        let ety = self.ety(e);
+        let loc = self.begin_loc(e);
+        if self.is_prvalue_of_class(e, bty) {
+            let m = self.materialize_temporary(e, ety, false);
+            if let Some(x) =
+                self.construct_from_class(m, bty, ConvCtx::Initialization, loc, DeletedAs::Call)
+            {
+                return x;
+            }
+        }
+        self.init_from_expr(bty, e, ConvCtx::Initialization, loc)
+    }
+
+    /// The direct base classes of the aggregate `def`, as the types of
+    /// its first elements ([dcl.init.aggr]/2).
+    pub(crate) fn init_bases(&self, def: DeclId) -> Vec<QualType> {
+        self.ast.decls.bases(def, &self.ast.lists).map(|b| b.ty).collect()
+    }
+
     /// The members of a class that take part in aggregate initialization:
     /// fields, without unnamed bit-fields ([dcl.init.aggr]/2).
     pub(crate) fn init_fields(&self, r: DeclId) -> Vec<DeclId> {
@@ -269,6 +532,10 @@ impl Sema<'_, '_> {
         l: &InitList,
         entity: Option<Loc>,
     ) -> ExprId {
+        if let Some(r) = self.ast.types.as_record(ty) {
+            // Whether it is an aggregate needs its definition.
+            self.instantiate_for_init(r, l.lbrace);
+        }
         if self.is_aggregate(ty) {
             if self.ast.types.as_record(ty).is_some() && !self.require_complete(ty, l.lbrace) {
                 let msg = self
@@ -277,22 +544,16 @@ impl Sema<'_, '_> {
                 self.emit(self.incomplete_note(msg, ty));
                 return self.recover(ty, &[], l.lbrace);
             }
-            if let Some(def) = self.ast.types.as_record(ty).and_then(|r| self.ast.definition(r))
-                && self.ast.decls.bases(def, &self.ast.lists).next().is_some()
-            {
-                self.unsupported("aggregate initialization of a class with base classes", l.lbrace);
-                let items: Vec<ExprId> = l
-                    .items
-                    .iter()
-                    .filter_map(|i| if let InitValue::Expr(e) = i.value { Some(e) } else { None })
-                    .collect();
-                return self.recover(ty, &items, l.lbrace);
-            }
             let mut pos = 0;
             let e = self.check_aggregate(ty, &l.items, &mut pos, true, l.lbrace, l.rbrace);
             if pos < l.items.len() {
                 self.excess(ty, &l.items[pos]);
             }
+            return e;
+        }
+        if let Some(e) =
+            self.list_construct(ty, l, InitStyle::CopyList, entity.unwrap_or(l.lbrace), None)
+        {
             return e;
         }
         if self.ast.types.is_reference(ty) {
@@ -373,6 +634,15 @@ impl Sema<'_, '_> {
     /// `entity` is the initialized type as diagnosed (`to` itself, or
     /// the enumeration for [dcl.init.list]/3.8).
     fn check_narrowing(&mut self, e: ExprId, to: QualType, entity: QualType) {
+        self.check_narrowing_impl(e, to, entity);
+    }
+
+    /// [`Sema::check_narrowing`] of a constructor argument from a list.
+    pub(crate) fn check_list_narrowing(&mut self, e: ExprId, to: QualType) {
+        self.check_narrowing_impl(e, to, to);
+    }
+
+    fn check_narrowing_impl(&mut self, e: ExprId, to: QualType, entity: QualType) {
         let from = self.ast.exprs.get(e).ty();
         if self.is_error_type(from) || self.is_error_type(to) {
             return;
@@ -429,11 +699,9 @@ impl Sema<'_, '_> {
                     let elem = self.ast.types.element(ty).unwrap_or(QualType::ERROR);
                     !(self.is_char_type(elem) && self.string_lit_of(e).is_some())
                 } else if let Some(r) = self.ast.types.as_record(ty) {
-                    self.ast
-                        .types
-                        .as_record(ety)
-                        .is_none_or(|x| self.ast.first(x) != self.ast.first(r))
-                        && !self.is_error_type(ety)
+                    self.ast.types.as_record(ety).is_none_or(|x| {
+                        self.ast.first(x) != self.ast.first(r) && !conv::is_derived_from(self, x, r)
+                    }) && !self.is_error_type(ety)
                 } else {
                     false
                 };
@@ -470,7 +738,12 @@ impl Sema<'_, '_> {
         let fields = self.init_fields(r);
         let def = self.ast.definition(r).unwrap_or(r);
         let union = self.ast.decls.record(def).is_some_and(|x| x.tag == TagKind::Union);
-        let mut slots: Vec<Option<ExprId>> = vec![None; fields.len()];
+        // [dcl.init.aggr]/2: the direct bases, in declaration order, then
+        // the fields (a union has no bases).
+        let bases = self.init_bases(def);
+        let nb = bases.len();
+        let total = nb + fields.len();
+        let mut slots: Vec<Option<ExprId>> = vec![None; total];
         let mut cur = 0usize;
         let mut union_field = None;
         while *pos < items.len() {
@@ -501,23 +774,31 @@ impl Sema<'_, '_> {
                     *pos += 1;
                     continue;
                 };
-                cur = idx;
+                cur = nb + idx;
             }
-            if cur >= fields.len() || (union && union_field.is_some() && item.designator.is_empty())
-            {
+            if cur >= total || (union && union_field.is_some() && item.designator.is_empty()) {
                 if braced {
                     self.excess(ty, item);
                     *pos = items.len();
                 }
                 break;
             }
-            let f = fields[cur];
-            let fty = self.ast.decls.get(f).ty().unwrap_or(QualType::ERROR);
-            let e = self.init_element(fty, items, pos, lbrace);
+            let ety = if cur < nb {
+                bases[cur]
+            } else {
+                self.ast.decls.get(fields[cur - nb]).ty().unwrap_or(QualType::ERROR)
+            };
+            let e = match items[*pos].value {
+                InitValue::Expr(x) if cur < nb && self.is_prvalue_of_class(x, ety) => {
+                    *pos += 1;
+                    self.init_base_element(ety, x)
+                }
+                _ => self.init_element(ety, items, pos, lbrace),
+            };
             slots[cur] = Some(e);
             if union {
-                union_field = Some(f);
-                slots = vec![None; fields.len()];
+                union_field = Some(fields[cur]);
+                slots = vec![None; total];
                 slots[cur] = Some(e);
             }
             cur += 1;
@@ -534,11 +815,10 @@ impl Sema<'_, '_> {
             }
         } else {
             for (i, slot) in slots.into_iter().enumerate() {
-                let e = if let Some(e) = slot {
-                    e
-                } else {
-                    let fty = self.ast.decls.get(fields[i]).ty().unwrap_or(QualType::ERROR);
-                    self.filler(fty, rbrace)
+                let e = match slot {
+                    Some(e) => e,
+                    None if i < nb => self.filler(bases[i], rbrace),
+                    None => self.field_filler(fields[i - nb], rbrace),
                 };
                 inits.push(e);
             }

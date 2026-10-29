@@ -226,8 +226,11 @@ impl Sema<'_, '_> {
     ) -> Result<TemplateIdRef, ()> {
         let _ = r;
         let list = self.ast.types.arg_list(args);
-        let dep_args =
-            self.ast.types.arg_list_flags(list).intersects(TypeFlags::DEPENDENT_INSTANTIATION);
+        // A member template of a class template's pattern is dependent
+        // too ([temp.dep.type]/9).
+        let dep_args = (self.ast.types.arg_list_flags(list)
+            | self.ast.types.template_name_flags(name))
+        .intersects(TypeFlags::DEPENDENT_INSTANTIATION);
         let Some(d) = self.ast.types.template_decl(name) else {
             return Ok(TemplateIdRef::Type(match self.ast.types.template_name_view(name) {
                 // `TT<args>` for a template template parameter `TT`.
@@ -275,12 +278,33 @@ impl Sema<'_, '_> {
                 ))
             }
             DeclKind::VarTemplate => {
-                if !dep_args {
-                    self.templ_unimplemented("variable template specialization", l);
-                    return Err(());
+                if !dep_args && !args.iter().any(|&a| self.is_pack_expansion_arg(a)) {
+                    // [temp.names]/1, [temp.inst]/7: names the
+                    // specialization (§4.7).
+                    let locs = std::mem::take(&mut self.templ.arg_locs);
+                    let v = self.get_var_spec(d, args, &locs, l)?;
+                    let extra = kiln_ast::expr::DeclRefExtra {
+                        qualifier: None,
+                        template_args: Some(list),
+                        found_decl: Some(self.ast.first(d)),
+                    };
+                    return Ok(TemplateIdRef::Value(self.build_decl_ref_extra(v, l, Some(extra))));
                 }
                 let n = self.decl_symbol(d);
-                let e = self.builder().unresolved_lookup(n, &[d], false, None, Some(list), l);
+                let dep_name = self
+                    .ast
+                    .types
+                    .template_name_flags(name)
+                    .intersects(TypeFlags::DEPENDENT_INSTANTIATION);
+                let e = self.builder().unresolved_lookup_in(
+                    n,
+                    &[d],
+                    false,
+                    None,
+                    Some(list),
+                    dep_name,
+                    l,
+                );
                 Ok(TemplateIdRef::Value(e))
             }
             DeclKind::FunctionTemplate => {
@@ -839,8 +863,39 @@ impl Sema<'_, '_> {
     /// True if class template `tmpl`'s name, used without arguments here,
     /// is its injected-class-name: inside its definition ([temp.local]/1).
     pub fn names_injected_class(&self, tmpl: DeclId) -> bool {
-        self.kind_of(tmpl) == DeclKind::ClassTemplate
-            && self.pattern_of(tmpl).is_some_and(|p| self.encloses(p, self.ctx))
+        self.kind_of(tmpl) == DeclKind::ClassTemplate && self.injected_class_for(tmpl).is_some()
+    }
+
+    /// The class template whose injected-class-name class `d` declares
+    /// ([temp.local]/1): the template of a pattern, a partial
+    /// specialization or a specialization.
+    pub(crate) fn injected_template_of(&self, d: DeclId) -> Option<DeclId> {
+        let first = self.ast.first(d);
+        if let Some(t) = self.ast.described_template(first) {
+            return Some(t);
+        }
+        if let Some((_, p)) = self.ast.partial_spec_info(first) {
+            return Some(p.template);
+        }
+        self.ast.spec_info(first).map(|(_, s)| s.template)
+    }
+
+    /// The innermost class enclosing the current context whose
+    /// injected-class-name names class template `tmpl` ([temp.local]/1):
+    /// its pattern, one of its partial specializations or one of its
+    /// specializations.
+    fn injected_class_for(&self, tmpl: DeclId) -> Option<DeclId> {
+        let tmpl = self.ast.first(tmpl);
+        let mut c = Some(self.ctx);
+        while let Some(x) = c {
+            if self.kind_of(x) == DeclKind::CXXRecord
+                && self.injected_template_of(x).is_some_and(|t| self.ast.first(t) == tmpl)
+            {
+                return Some(x);
+            }
+            c = self.ast.decls.lexical_ctx(x).or_else(|| self.ast.decls.get(x).ctx());
+        }
+        None
     }
 
     /// The injected-class-name of class template `tmpl` used without
@@ -848,10 +903,28 @@ impl Sema<'_, '_> {
     /// for its parameters `P`, as an `InjectedClassNameType`. `None`
     /// outside the definition.
     pub fn injected_class_type(&mut self, tmpl: DeclId) -> Option<QualType> {
-        if !self.names_injected_class(tmpl) {
+        if self.kind_of(tmpl) != DeclKind::ClassTemplate {
             return None;
         }
-        self.injected_type_of(tmpl)
+        let c = self.injected_class_for(tmpl)?;
+        let first = self.ast.first(c);
+        if self.ast.described_template(first).is_some() {
+            return self.injected_type_of(tmpl);
+        }
+        if self.ast.partial_spec_info(first).is_some() {
+            return self.partial_injected_type(first);
+        }
+        Some(self.tag_type(c))
+    }
+
+    /// `X<A...>` for partial specialization `p`'s own arguments `A`, as
+    /// an `InjectedClassNameType` ([temp.local]/1).
+    fn partial_injected_type(&mut self, p: DeclId) -> Option<QualType> {
+        let (_, info) = self.ast.partial_spec_info(p)?;
+        let (tmpl, args) = (info.template, info.args);
+        let name = self.template_name_for(tmpl);
+        let spec = self.ast.types.template_specialization(name, args, None, false);
+        Some(self.ast.types.injected_class_name(p, spec.ty()).into())
     }
 
     /// The type of `this`'s pointee in a member of class `class`
@@ -862,6 +935,11 @@ impl Sema<'_, '_> {
         if self.kind_of(class) == DeclKind::CXXRecord
             && let Some(t) = self.ast.described_template(first)
             && let Some(q) = self.injected_type_of(t)
+        {
+            return q;
+        }
+        if self.ast.partial_spec_info(first).is_some()
+            && let Some(q) = self.partial_injected_type(first)
         {
             return q;
         }

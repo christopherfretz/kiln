@@ -5,8 +5,8 @@
 //! declaration with substituted types.
 
 use kiln_ast::decl::{
-    ConstexprKind, DeclKind, EnumData, FieldData, FnStorage, FriendTarget, InitStyle, ParamData,
-    TlsKind, VarStorage,
+    ConstexprKind, DeclFlags, DeclKind, EnumData, FieldData, FnStorage, FriendTarget, InitStyle,
+    ParamData, TlsKind, VarStorage,
 };
 use kiln_ast::names::DeclNameKind;
 use kiln_ast::types::TypeView;
@@ -212,10 +212,15 @@ impl Substituter<'_, '_, '_> {
         };
         let style = data.spec.init_style();
         if let Ok(i) = self.initializer(init, style) {
-            self.sema.act_on_init(v, i);
+            match i {
+                Some(i) => self.sema.act_on_init(v, i),
+                None => self.sema.act_on_uninit(v),
+            }
             Ok(())
         } else {
-            self.sema.act_on_uninit(v);
+            // clang marks the declaration invalid: no follow-up
+            // "must be initialized" diagnostic.
+            self.sema.ast.decls.set_flags(v, DeclFlags::INVALID);
             Err(SubstFail)
         }
     }
