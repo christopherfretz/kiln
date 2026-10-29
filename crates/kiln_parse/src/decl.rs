@@ -653,9 +653,9 @@ impl Parser<'_, '_> {
             self.bump();
             return (TypeSpecKind::DecltypeAuto, None);
         }
-        self.s.enter_unevaluated();
+        self.s.enter_decltype();
         let e = self.parse_expression();
-        self.s.exit_unevaluated();
+        self.s.exit_decltype(e);
         let Some(e) = e else {
             self.skip_until(&[Punct::RParen], false, true);
             return (TypeSpecKind::Named, None);

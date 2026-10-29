@@ -999,6 +999,8 @@ diag_ids! {
     sema_auto_var_deduction_failure_from_init_list = Error (2) "cannot deduce actual type for variable '{0}' with type {1} from initializer list";
     sema_decltype_auto_initializer_list = Error (0) "cannot deduce 'decltype(auto)' from initializer list";
     sema_decltype_auto_cannot_be_combined = Error (0) "'decltype(auto)' cannot be combined with other type specifiers";
+    sema_call_incomplete_return = Error (2) "calling {0} with incomplete return type {1}";
+    sema_call_function_incomplete_return = Error (1) "calling function with incomplete return type {0}";
 }
 
 impl DiagId {

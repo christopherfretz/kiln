@@ -9,7 +9,92 @@ use kiln_source::Loc;
 
 use crate::Sema;
 
+/// A call whose incomplete class prvalue result is checked at the end of
+/// the enclosing `decltype` operand ([dcl.type.decltype]/2).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct DeferredCall {
+    /// The call's location (its node's).
+    pub loc: Loc,
+    /// The result type.
+    pub ty: QualType,
+    /// The function the callee names.
+    pub callee: Option<DeclId>,
+    /// Where the callee begins (the diagnostic's location).
+    pub at: Loc,
+}
+
 impl Sema<'_, '_> {
+    /// Enters the operand of `decltype(e)`: unevaluated, and calls of an
+    /// incomplete class result deferred ([dcl.type.decltype]/2).
+    pub fn enter_decltype(&mut self) {
+        self.enter_unevaluated();
+        self.decltype_calls.push((self.unevaluated, Vec::new()));
+    }
+
+    /// Leaves the operand `e` (`None` after a parse error) of
+    /// `decltype(e)`: the deferred calls other than `e` itself (under
+    /// parentheses and as the right operand of a comma) need a complete
+    /// result type (clang `ActOnDecltypeExpression`).
+    pub fn exit_decltype(&mut self, e: Option<ExprId>) {
+        self.exit_unevaluated();
+        let Some((_, calls)) = self.decltype_calls.pop() else { return };
+        if calls.is_empty() {
+            return;
+        }
+        let exempt = e.and_then(|e| self.decltype_top_call(e));
+        for c in calls {
+            if Some(c.loc) != exempt {
+                let _ = self.check_call_return(c);
+            }
+        }
+    }
+
+    /// The location of the call `e` denotes for [dcl.type.decltype]/2.
+    fn decltype_top_call(&self, e: ExprId) -> Option<Loc> {
+        let mut e = e;
+        for _ in 0..1024 {
+            let n = self.ast.exprs.get(e);
+            match n.kind() {
+                ExprKind::ParenExpr => e = self.ast.exprs.operand(e),
+                ExprKind::BinaryOperator
+                    if self.ast.exprs.binary_op(e) == kiln_ast::expr::BinaryOp::Comma =>
+                {
+                    e = self.ast.exprs.operands(e)[1];
+                }
+                ExprKind::CallExpr
+                | ExprKind::CXXMemberCallExpr
+                | ExprKind::CXXOperatorCallExpr => return Some(n.loc()),
+                _ => return None,
+            }
+        }
+        None
+    }
+
+    /// clang's `CheckCallReturnType`: a prvalue result needs a complete
+    /// type ([expr.call]/14). False after reporting that it does not.
+    pub(crate) fn check_call_return(&mut self, c: DeferredCall) -> bool {
+        if self.require_complete(c.ty, c.loc) {
+            return true;
+        }
+        let msg = match c.callee {
+            Some(d) => {
+                let name = self.decl_name(d);
+                let note = self
+                    .diag(DiagId::note_entity_declared_at, self.ast.decls.get(d).loc())
+                    .arg(format!("'{name}'"));
+                self.diag(DiagId::sema_call_incomplete_return, c.at)
+                    .arg(format!("'{name}'"))
+                    .arg(self.ty_arg(c.ty))
+                    .with_note(note)
+            }
+            None => self
+                .diag(DiagId::sema_call_function_incomplete_return, c.at)
+                .arg(self.ty_arg(c.ty)),
+        };
+        self.emit(self.incomplete_note(msg, c.ty));
+        false
+    }
+
     /// `decltype ( e )` ([dcl.type.decltype]/1): the type `decltype(e)`
     /// sugar over the computed type, or `None` when `e` is erroneous.
     /// `e` was parsed as an unevaluated operand.

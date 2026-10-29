@@ -2108,7 +2108,8 @@ impl Sema<'_, '_> {
         else {
             return self.recover_err(&kids, loc);
         };
-        let (ty, vk) = self.call_result(proto.ret(), loc);
+        let at = self.begin_loc(callee);
+        let (ty, vk) = self.call_result_of(proto.ret(), loc, named, at);
         self.builder().call(f, &conv_args, ty, vk, loc, rparen, ExprFlags::NONE)
     }
 
@@ -2226,6 +2227,20 @@ impl Sema<'_, '_> {
     /// The type and value category of a call returning `ret`
     /// ([expr.call]/14), diagnosing an incomplete class result.
     pub(crate) fn call_result(&mut self, ret: QualType, loc: Loc) -> (QualType, ValueCategory) {
+        self.call_result_of(ret, loc, None, loc)
+    }
+
+    /// [`Self::call_result`] for a call at `loc` of `callee` (the named
+    /// function, if any) beginning at `at`: an incomplete class prvalue
+    /// result is clang's `CheckCallReturnType` error at `at`, deferred to
+    /// the end of an enclosing `decltype` operand ([dcl.type.decltype]/2).
+    pub(crate) fn call_result_of(
+        &mut self,
+        ret: QualType,
+        loc: Loc,
+        callee: Option<DeclId>,
+        at: Loc,
+    ) -> (QualType, ValueCategory) {
         let (ty, vk) = if self.ast.types.is_reference(ret) {
             let lvalue = matches!(self.ast.types.canonical_view(ret), TypeView::LValueRef(_));
             (
@@ -2235,13 +2250,18 @@ impl Sema<'_, '_> {
         } else {
             (conv::strip_cv(self, ret), ValueCategory::PRValue)
         };
-        if vk == ValueCategory::PRValue
-            && self.ast.types.as_record(ty).is_some()
-            && !self.require_complete(ty, loc)
-        {
-            let msg =
-                self.diag(DiagId::sema_typecheck_decl_incomplete_type, loc).arg(self.ty_arg(ty));
-            self.emit(self.incomplete_note(msg, ty));
+        if vk == ValueCategory::PRValue && self.ast.types.as_record(ty).is_some() {
+            let call = crate::deduce::DeferredCall { loc, ty, callee, at };
+            let unevaluated = self.unevaluated;
+            if let Some((depth, calls)) = self.decltype_calls.last_mut()
+                && *depth == unevaluated
+            {
+                calls.push(call);
+            } else if !self.check_call_return(call) {
+                // An invalid call (clang's `ExprError`): no follow-on
+                // diagnostics.
+                return (QualType::ERROR, vk);
+            }
         }
         (ty, vk)
     }

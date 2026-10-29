@@ -230,10 +230,19 @@ impl Substituter<'_, '_, '_> {
                 self.sema.build_unary_transform(kind, b, loc).ok_or(SubstFail)
             }
             TypeView::Decltype { expr, .. } => {
-                let e = self.expr(expr)?;
+                self.sema.enter_decltype();
+                let e = self.expr(expr);
+                self.sema.exit_decltype(e.ok());
+                let e = e?;
                 self.sema.act_on_decltype(e, loc, loc).ok_or(SubstFail)
             }
             TypeView::Auto { keyword, deduced, concept, args, pack } => match deduced {
+                // Deduced from a type-dependent initializer
+                // (`Sema::dependent_auto`): deduced again from the
+                // substituted one.
+                Some(d) if d == QualType::DEPENDENT => {
+                    Ok(self.sema.ast.types.auto_type(keyword, None, concept, args, pack))
+                }
                 Some(d) => {
                     let d = self.ty(d, loc)?;
                     Ok(self.sema.ast.types.auto_type(keyword, Some(d), concept, args, pack))
