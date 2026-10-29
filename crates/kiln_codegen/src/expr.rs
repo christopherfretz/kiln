@@ -411,6 +411,14 @@ impl Cg<'_> {
             CastKind::NoOp | CastKind::BitCast | CastKind::LValueBitCast => {
                 return self.emit_scalar_opt(s);
             }
+            // `__builtin_bit_cast` ([bit.cast]): the operand's bytes
+            // loaded as the destination type (clang `EmitLoadOfLValue` of
+            // the reinterpreted address).
+            CastKind::LValueToRValueBitCast => {
+                let lv = self.emit_lvalue(s)?;
+                let a = Addr { ty: self.mty(q), ..lv.addr };
+                return Ok(Some(self.load_scalar(a, q)));
+            }
             CastKind::ToVoid => {
                 self.emit_ignored(s)?;
                 return Ok(None);
@@ -1424,7 +1432,12 @@ impl Cg<'_> {
         // `__builtin_is_constant_evaluated()` at run time is false (clang
         // folds it to `i1 false`; constant initializers were folded by the
         // prepass in a manifestly constant-evaluated context).
+        // `__builtin_addressof(x)` is `&x` ([specialized.addressof]).
         if let Some(id) = direct.and_then(|d| ast.decls.builtin_id(d)) {
+            if id == kiln_ast::decl::builtin::ADDRESSOF {
+                let x = ast.lists.iter::<ExprId>(ast.exprs.call_args(e)).next().expect("one arg");
+                return Ok(Some(self.emit_lvalue(x)?.addr.v));
+            }
             debug_assert_eq!(id, kiln_ast::decl::builtin::IS_CONSTANT_EVALUATED);
             return Ok(Some(V::C(self.m.const_bool(false))));
         }
@@ -1688,7 +1701,10 @@ impl Cg<'_> {
                 Ok(())
             }
             k if k.is_cast()
-                && matches!(ast.exprs.cast_kind(e), CastKind::NoOp | CastKind::LValueToRValue) =>
+                && matches!(
+                    ast.exprs.cast_kind(e),
+                    CastKind::NoOp | CastKind::LValueToRValue | CastKind::LValueToRValueBitCast
+                ) =>
             {
                 let s = ast.exprs.operand(e);
                 if self.is_glvalue(s) {

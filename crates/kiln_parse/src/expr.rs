@@ -590,6 +590,37 @@ impl Parser<'_, '_> {
         Some(self.s.act_on_typeid(Ok(e), loc, rparen))
     }
 
+    /// `__builtin_bit_cast ( type-id , expression )` (clang
+    /// `ParseBuiltinBitCast`; [bit.cast]).
+    fn parse_builtin_bit_cast(&mut self) -> PExpr {
+        let loc = self.bump().span.lo;
+        let Some(open) = self.eat(Punct::LParen) else {
+            let d = self
+                .s
+                .diag(DiagId::parse_expected_after, self.expected_loc())
+                .arg("'__builtin_bit_cast'")
+                .arg("'('");
+            self.emit(d);
+            return None;
+        };
+        let ty = self.parse_type_id();
+        if self.eat(Punct::Comma).is_none() {
+            // clang reports the missing `,` twice (`ExpectAndConsume`,
+            // then its own `err_expected`).
+            for _ in 0..2 {
+                let d = self.s.diag(DiagId::parse_expected, self.expected_loc()).arg("','");
+                self.emit(d.allow_duplicate());
+            }
+            self.skip_until(&[Punct::RParen], true, true);
+            return None;
+        }
+        let e = self.parse_expression();
+        let ok = self.at(Punct::RParen);
+        let rparen = self.expect_closing(Punct::RParen, Punct::LParen, open);
+        let (ty, e) = (ty?, e?);
+        ok.then(|| self.s.act_on_builtin_bit_cast(ty, e, loc, rparen))
+    }
+
     /// `__builtin_offsetof ( type-id , offsetof-member-designator )`
     /// (clang `ParseBuiltinPrimaryExpression`): the designator is an
     /// identifier followed by `.identifier` and `[expression]` parts.
@@ -828,6 +859,7 @@ impl Parser<'_, '_> {
                 }
                 Kw::Typeid => self.parse_typeid(),
                 Kw::BuiltinOffsetof => self.parse_builtin_offsetof(),
+                Kw::BuiltinBitCast => self.parse_builtin_bit_cast(),
                 Kw::Requires => Some(self.parse_requires_expression()),
                 // `typename T::type(e)` ([expr.type.conv]).
                 Kw::Typename => self.parse_functional_cast(),

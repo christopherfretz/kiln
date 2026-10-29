@@ -105,7 +105,7 @@ impl SyntaxJob<'_> {
             return;
         };
         // `-MD` with `-fsyntax-only` is rejected before this (no deps).
-        let Some((pp, _deps)) = job.build_preprocessor(sm, engine, interner, inputs) else {
+        let Some((pp, _deps)) = job.build_preprocessor(sm, engine, interner, inputs, true) else {
             return;
         };
         let popts = ParseOptions {

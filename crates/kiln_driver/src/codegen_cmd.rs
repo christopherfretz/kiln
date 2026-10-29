@@ -171,7 +171,7 @@ impl CodegenJob<'_> {
                 .emit(engine);
             return None;
         };
-        let (pp, _deps) = job.build_preprocessor(sm, engine, interner, inputs)?;
+        let (pp, _deps) = job.build_preprocessor(sm, engine, interner, inputs, true)?;
         let popts = ParseOptions {
             std: job.std.lex,
             exceptions: a.predef.exceptions.unwrap_or(true),

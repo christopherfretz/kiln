@@ -222,6 +222,13 @@ impl Substituter<'_, '_, '_> {
                 let o = self.expr(o)?;
                 Ok(self.sema.act_on_cast(style, ty, o, loc, end))
             }
+            ExprKind::BuiltinBitCastExpr => {
+                // WP-074: `__builtin_bit_cast(T, e)` (a dependent one keeps
+                // `T` as its type and `e` unmaterialized).
+                let ty = self.ty(n.ty(), loc)?;
+                let o = self.expr(ex(self).operand(e))?;
+                Ok(self.sema.act_on_builtin_bit_cast(ty, o, loc, end))
+            }
             ExprKind::CXXUnresolvedConstructExpr => {
                 let ty = self.ty(n.ty(), loc)?;
                 let l = kiln_ast::ids::ListId::new(n.a());

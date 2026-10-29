@@ -227,13 +227,17 @@ impl Job<'_> {
     /// (header search, `#if` evaluation, `__has_feature` and friends,
     /// dependency collection), with the main file entered. Shared by
     /// `-E`, `-M` and `-fsyntax-only` (spec/driver.md). `None` after
-    /// reporting an error.
+    /// reporting an error. `staged` applies kiln's builtin staging to
+    /// `__has_builtin` (spec/sema-templates.md §9, Q10): on for the
+    /// modes that run sema, off for `-E`/`-M`, whose output stays
+    /// token-identical to clang's.
     pub(crate) fn build_preprocessor<'a, 'd>(
         &self,
         sm: &'a SourceManager,
         engine: &'d DiagEngine<'a>,
         interner: &'a Interner,
         inputs: PpInputs,
+        staged: bool,
     ) -> Option<(Preprocessor<'a, 'd>, Option<SharedDeps>)> {
         let a = self.args;
         let PpInputs { list, main, predefines } = inputs;
@@ -260,7 +264,11 @@ impl Job<'_> {
             Diag::new(DiagId::drv_unsupported_target, Span::INVALID).arg(triple).emit(engine);
             return None;
         };
-        pp.set_feature_queries(Box::new(StagedFeatures(features)));
+        if staged {
+            pp.set_feature_queries(Box::new(StagedFeatures(features)));
+        } else {
+            pp.set_feature_queries(Box::new(features));
+        }
         if let Some(d) = &deps {
             pp.set_callbacks(Box::new(DepCallbacks { list: Rc::clone(d), sm }));
         }
@@ -277,7 +285,7 @@ impl Job<'_> {
         result: &mut JobResult,
     ) {
         let a = self.args;
-        let Some((mut pp, deps)) = self.build_preprocessor(sm, engine, interner, inputs) else {
+        let Some((mut pp, deps)) = self.build_preprocessor(sm, engine, interner, inputs, false) else {
             return;
         };
         if a.deps.only.is_some() {

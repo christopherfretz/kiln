@@ -121,6 +121,7 @@ keywords! {
     Declspec = "__declspec";
     Extension = "__extension__";
     BuiltinOffsetof = "__builtin_offsetof";
+    BuiltinBitCast = "__builtin_bit_cast";
 }
 
 /// Symbol-to-keyword map for one interner.

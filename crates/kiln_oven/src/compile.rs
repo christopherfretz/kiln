@@ -2254,6 +2254,11 @@ impl Compiler<'_> {
                     _ => self.trap(e, "cast that performs the conversions of a reinterpret_cast is not allowed in a constant expression"),
                 }
             }
+            CastKind::LValueToRValueBitCast => {
+                // spec/sema-templates.md §9.5: the byte-level
+                // reinterpretation (through `abi` layout) is an Oven stub.
+                self.trap(e, "kiln: __builtin_bit_cast in a constant expression is not supported yet (Oven bit_cast; unowned, see spec/sema-templates.md §9.5)");
+            }
             CastKind::IntegralToPointer | CastKind::PointerToIntegral => {
                 self.trap(e, "cast that performs the conversions of a reinterpret_cast is not allowed in a constant expression");
             }
@@ -3095,6 +3100,19 @@ impl Compiler<'_> {
             }
             self.uses_cc = true;
             return r;
+        }
+        // `__builtin_addressof(x)`: the address of the lvalue `x`, as
+        // `&x` without a user `operator&` ([specialized.addressof]).
+        if let Some(d) = direct
+            && ast.decls.builtin_id(d) == Some(kiln_ast::decl::builtin::ADDRESSOF)
+            && let [x] = args[..]
+        {
+            let x0 = skip_parens(ast, x);
+            let xty = self.ety(x0);
+            if self.kind(xty) == TyKind::Func {
+                return self.fn_lv(x0);
+            }
+            return self.lv_mem(x, Access::Addr);
         }
         // `std::allocator<T>::allocate`/`deallocate` (spec/oven.md
         // "Transient allocation": deferred to the templates wave, so this

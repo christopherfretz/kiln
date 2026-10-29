@@ -1001,6 +1001,8 @@ diag_ids! {
     sema_decltype_auto_cannot_be_combined = Error (0) "'decltype(auto)' cannot be combined with other type specifiers";
     sema_call_incomplete_return = Error (2) "calling {0} with incomplete return type {1}";
     sema_call_function_incomplete_return = Error (1) "calling function with incomplete return type {0}";
+    sema_cast_to_incomplete = Error (1) "cast to incomplete type {0}";
+    sema_incomplete_type_required = Error (1) "incomplete type {0} where a complete type is required";
 }
 
 impl DiagId {

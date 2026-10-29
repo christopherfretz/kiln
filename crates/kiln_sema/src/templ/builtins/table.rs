@@ -227,10 +227,14 @@ const fn f(name: &'static str, status: Status, oven: Oven) -> Row {
 }
 
 const DONE: Status = Status::Done;
-/// The owner of the §9.5 builtin declarations kiln does not declare yet
-/// (WP-063's builtin declaration table).
-const DECL_WP: Status = Status::Owner("WP-063");
-const OVEN_WP: &str = "WP-063";
+const SRC_LOC: &str = "unowned: source-location builtins with __builtin_source_location";
+const SRC_LOC_WP: Status = Status::Owner(SRC_LOC);
+/// The owner of the §9.5 builtin declarations kiln does not declare yet.
+/// The spec gives them to WP-063's builtin declaration table, but WP-063
+/// shipped with `__builtin_is_constant_evaluated` only, so they need a new
+/// package (spec/sema-templates.md §11, "Landed (WP-074)").
+const DECL_WP: Status = Status::Owner("unowned: proposed §9.5 builtin-functions WP");
+const OVEN_WP: &str = "unowned: proposed §9.5 builtin-functions WP";
 
 /// The non-trait rows: §9.3 templates, then §9.4-9.5 functions.
 pub static TABLE: &[Row] = &[
@@ -252,7 +256,7 @@ pub static TABLE: &[Row] = &[
     // §9.5 object model
     f("__builtin_addressof", DONE, Oven::Yes),
     f("__builtin_launder", DECL_WP, Oven::Stub(OVEN_WP)),
-    f("__builtin_bit_cast", DONE, Oven::Stub("WP-063 (bit_cast evaluation)")),
+    f("__builtin_bit_cast", DONE, Oven::Stub("unowned: Oven bit_cast through abi layout")),
     f("__builtin_unreachable", DECL_WP, Oven::Stub(OVEN_WP)),
     // allocation
     f("__builtin_operator_new", DECL_WP, Oven::Stub("WP-061b")),
@@ -306,8 +310,11 @@ pub static TABLE: &[Row] = &[
     f("__builtin_nansf", DECL_WP, Oven::Stub(OVEN_WP)),
     f("__builtin_nansl", DECL_WP, Oven::Stub(OVEN_WP)),
     // source location
-    f("__builtin_FILE", DONE, Oven::Yes),
-    f("__builtin_LINE", DONE, Oven::Yes),
+    // These need the call-site context of a default argument (clang's
+    // `SourceLocExpr` under `CXXDefaultArgExpr`); libc++ 19 uses
+    // `__builtin_source_location` for `<source_location>` instead.
+    f("__builtin_FILE", SRC_LOC_WP, Oven::Stub(SRC_LOC)),
+    f("__builtin_LINE", SRC_LOC_WP, Oven::Stub(SRC_LOC)),
 ];
 
 /// The row for builtin `name`, if `name` is in the table.

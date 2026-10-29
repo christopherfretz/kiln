@@ -1258,21 +1258,32 @@ impl Sema<'_, '_> {
         if let Some(mp) = self.member_pointer_of(e, loc) {
             return mp;
         }
-        if self.check_builtin_fn_use(e) {
+        let Some(t) = self.check_addressable(e, loc) else {
             return self.recover_err(&[e], loc);
+        };
+        let ty = self.ast.types.pointer_to(t);
+        self.builder().unary(UnaryOp::AddrOf, e, ty, loc, ExprFlags::CANNOT_OVERFLOW)
+    }
+
+    /// clang's `CheckAddressOfOperand` for an operand that is not a
+    /// member-pointer name ([expr.unary.op]/3): the operand's type, or
+    /// `None` after reporting a builtin function name, a bit-field or an
+    /// rvalue at `loc`.
+    pub(crate) fn check_addressable(&mut self, e: ExprId, loc: Loc) -> Option<QualType> {
+        if self.check_builtin_fn_use(e) {
+            return None;
         }
         let n = *self.ast.exprs.get(e);
         if n.object_kind() == ObjectKind::BitField {
             self.error(DiagId::sema_addrof_bitfield, loc);
-            return self.recover_err(&[e], loc);
+            return None;
         }
         if n.value_category() != ValueCategory::LValue {
             let msg = self.diag(DiagId::sema_addrof_rvalue, loc).arg(self.ty_arg(n.ty()));
             self.emit(msg);
-            return self.recover_err(&[e], loc);
+            return None;
         }
-        let ty = self.ast.types.pointer_to(n.ty());
-        self.builder().unary(UnaryOp::AddrOf, e, ty, loc, ExprFlags::CANNOT_OVERFLOW)
+        Some(n.ty())
     }
 
     fn inc_dec(&mut self, op: UnaryOp, e: ExprId, loc: Loc) -> ExprId {
@@ -2073,6 +2084,15 @@ impl Sema<'_, '_> {
                 return self.recover_err(&kids, loc);
             }
             return self.dependent_call(callee, args, loc, rparen);
+        }
+        if let Some(b) = self.builtin_callee(callee)
+            && self.ast.decls.builtin_id(b) == Some(kiln_ast::decl::builtin::ADDRESSOF)
+        {
+            let has_braced = braced.iter().any(Option::is_some);
+            return match self.builtin_addressof_call(callee, b, args, has_braced, loc, rparen) {
+                Some(e) => e,
+                None => self.recover_err(&kids, loc),
+            };
         }
         if let Some(e) = self.try_member_call(callee, args, &mut braced, loc, rparen) {
             return e;
