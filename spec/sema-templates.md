@@ -2398,8 +2398,6 @@ pub fn has_constexpr_builtin_staged(name: &str) -> Option<bool>;
 In all, 79 table names answer yes and 75 are staged off.
 
 *Gaps* (each reports a diagnostic or is a known divergence):
-- `DiagEngine` deduplicates on `(id, span)`. The same error from two
-  instantiations prints once, but clang prints it twice.
 - Substituted types carry no argument locations, so the columns of
   some trait errors inside instantiations differ from clang.
 - An array of an incomplete type is rejected when the declarator is
@@ -2408,21 +2406,12 @@ In all, 79 table names answer yes and 75 are staged off.
   trait operands.
 - `ExcSpec::Deferred` is not resolved. `dtor_nothrow` computes the
   implicit destructor's exception specification itself.
-- `set_deduced_return` rewrites the return type of every
-  redeclaration, so `auto f(); auto f() { return 1; } auto f();` rejects
-  the third declaration.
-- `-Wunevaluated-expression` (side effects in `decltype`) is not
-  implemented.
 - `x.f()` with `f` an undeduced member goes through
   `class/member_expr.rs` (WP-067b). That path has no
   `check_undeduced_use` and does not instantiate on use; its return
   type should come from `call_result_of`.
 - Inline member functions defined in the class are not emitted by
   codegen, so the `run` tests use namespace-scope functions.
-- The multi-declarator check runs only in `parse_simple_declaration`,
-  not for member declarator groups or instantiated groups.
-- A trailing return type cannot name a parameter: the `ParmVarDecl`s
-  are not in scope yet. This causes 17 `<type_traits>` errors.
 - `auto x = {1, 2}` deduces `std::initializer_list<int>`. The
   initialization of the `initializer_list` object belongs to WP-068a.
 - A failed member typedef in an instantiation is dropped, which causes
@@ -2436,12 +2425,87 @@ WP-074, 148 after. None of the remaining errors is a §9 builtin:
 |---:|---|---|
 | 64 + 2 | Partial specializations (class, variable) | WP-070b / WP-072 |
 | 27 | Explicit specializations | WP-070b |
-| 17 | Parameters named in a trailing return type | parser/sema (gap above) |
+| 17 | Parameters named in a trailing return type | fixed by WP-087 (131 after) |
 | 20 | Overloaded operators and overloading | WP-068 |
 | 4 | Declarations that differ only in return type (overloading) | WP-068 |
 | 7 + 1 | `common_reference.h`: `typename` on an alias template-id, and the `?:` operand types | WP-070b / WP-068 |
 | 4 | Dependent template specialization type | WP-070b |
 | 2 | "this kind of name" | WP-070b |
+
+**Landed (WP-087).** The `auto`/`decltype` follow-ups to WP-074; the
+four gaps above that they close are removed.
+
+- *Parameters in their declarator* ([basic.scope.param],
+  [dcl.fct.default]/9, [expr.prim.this]/2): sema.md §4.3. Instantiated
+  member signatures substitute the parameters before the return type,
+  so `-> decltype(x)` sees the substituted parameter.
+- *Deduced-return redeclarations* ([dcl.spec.auto.general]/13):
+  redeclarations compare the declared placeholder type and adopt the
+  deduced one (sema.md §4.3.1); `set_deduced_return` no longer makes a
+  later `auto f();` an error.
+- *One deduction per declarator group* ([dcl.spec.auto.general]/3, /8):
+  member groups, `static constexpr auto x = …, y = …;` and local groups
+  re-checked at instantiation, plus clang's "function with deduced
+  return type must be the only declaration in its group" (sema.md
+  §4.3.1).
+- *`-Wunevaluated-expression`* ([expr.context]/1), in `-Wmost` (sema.md
+  §4.3.1).
+- *Deduplication per instantiation*: §10.2 and spec/diag.md §7.4.
+
+*Interface changes.*
+- `kiln_ast`: `AstBuilder::prototype_param`,
+  `DeclArena::set_param_owner`.
+- `kiln_sema`: `ParamInfo.decl`; `act_on_prototype_param` takes
+  `&mut ParamInfo`; `act_on_start_this_scope` /
+  `act_on_end_this_scope`; `check_default_arg_refs`;
+  `AutoGroup { decls }` with `act_on_group_declarator` and
+  `act_on_end_group` (replacing `act_on_init_in_group`; callers use
+  plain `act_on_init`); `Sema` fields `prototype_params` (now
+  `PrototypeFrame`s of `ParmVar` ids), `unowned_params`,
+  `declared_returns`, `group_placeholders`;
+  `InstantiationStack::context_key`.
+- `kiln_diag`: `Diag::context(u64)`, `DiagEngine::would_emit`; the
+  dedup key is `(id, span, context)`; ids `sema_auto_non_deduced_not_alone`
+  and `sema_side_effects_unevaluated_context`, group
+  `-Wunevaluated-expression`.
+- Touchpoints in other packages' files (one or a few lines each):
+  `templ/class.rs` (`SavedState` keeps `prototype_params`),
+  `templ/subst/decls.rs` (parameters before the return type),
+  `templ/subst/stmts.rs` (the group re-check), `kiln_parse/src/class.rs`
+  (member groups; the replayed default argument's check).
+
+*Tests:* `dcl.fct/trailing-return-params.cpp`,
+`dcl.fct/default-arg-references-param.cpp`,
+`dcl.spec.auto/redeclaration-chain.cpp`,
+`dcl.spec.auto/group-members.cpp`,
+`expr.sizeof/unevaluated-side-effects.cpp`,
+`templates/diag/repeat-across-instantiations.cpp`;
+`basic.scope.param/param-in-declarator.cpp` is no longer xfail;
+`kiln_diag/tests/engine.rs` `dedup_context`. Each passes under
+`--compiler clang++-19`.
+
+*Remaining gaps.*
+- An out-of-line member declarator (`auto X::f() -> T`) does not enter
+  the class scope for its trailing return type.
+- `this` is accepted in the trailing return type of a static member
+  function or a friend.
+- Side effects inside `CXXDefaultArgExpr`, statement expressions and
+  lambda init-captures are not inspected; an operand that is only
+  instantiation-dependent may warn where clang does not; clang's
+  `warn_side_effects_typeid` (a potentially evaluated `typeid` operand)
+  is not implemented.
+- Braced default arguments are not checked by
+  `check_default_arg_refs`.
+- The parameters of a nested function declarator (a function-pointer
+  parameter's own parameters) and of a destructor declarator are never
+  adopted: they keep their provisional context (`unowned_params`).
+- `decltype(param)` in a dependent return type profiles the
+  `DeclRefExpr` by declaration, not by parameter index as clang does,
+  so two redeclarations of a function template with such a return type
+  may not match.
+- A non-dependent `static_assert` in a template definition is evaluated
+  in the definition; clang (CWG2518) waits for an instantiation, and
+  then reports it once per instantiation.
 
 ### 11.3 Instantiation report and memory accounting
 
