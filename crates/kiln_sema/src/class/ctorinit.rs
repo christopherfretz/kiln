@@ -39,6 +39,9 @@ pub(crate) struct MemInitState {
     any_errors: bool,
     /// The list is not checked (an invalid constructor, a template).
     skip: bool,
+    /// The mem-initializers of a constructor in a template, kept for its
+    /// instantiation (when `skip`).
+    pattern: Vec<MemInitInfo>,
 }
 
 /// What a mem-initializer-id names.
@@ -90,6 +93,7 @@ impl Sema<'_, '_> {
         let index = u8::try_from(self.mem_inits.count).unwrap_or(CtorInit::IMPLICIT - 1);
         self.mem_inits.count += 1;
         if self.mem_inits.skip {
+            self.mem_inits.pattern.push(info.clone());
             self.cleanup = super::CleanupState::default();
             return;
         }
@@ -122,7 +126,6 @@ impl Sema<'_, '_> {
     /// parser calls it for every constructor definition, with the `:`
     /// location, or the body's `{` when there is no ctor-initializer.
     pub fn act_on_mem_initializers(&mut self, ctor: DeclId, inits: &[MemInitInfo], colon_loc: Loc) {
-        let _ = colon_loc;
         for info in inits {
             self.act_on_mem_initializer(ctor, info);
         }
@@ -132,10 +135,30 @@ impl Sema<'_, '_> {
             MemInitState { skip: !self.check_mem_inits_of(ctor), ..MemInitState::default() }
         };
         if st.skip {
+            // A template: the instantiation substitutes into the list
+            // (`templ/class.rs`).
+            if !st.pattern.is_empty()
+                && !self.ast.decls.get(ctor).flags().contains(DeclFlags::INVALID)
+            {
+                self.inst.pattern_mem_inits.insert(ctor, (st.pattern, colon_loc));
+            }
             return;
         }
         let Some(class) = self.ast.decls.get(ctor).ctx() else { return };
         self.finish_mem_inits(ctor, class, &st.inits, st.any_errors);
+    }
+
+    /// A mem-initializer of the instantiation of `ctor` whose substitution
+    /// failed (already diagnosed): counted, and no implicit initializers
+    /// are added (clang's `AnyErrors`).
+    pub(crate) fn note_failed_mem_initializer(&mut self, ctor: DeclId) {
+        if self.mem_inits.ctor != Some(ctor) {
+            self.mem_inits = MemInitState { ctor: Some(ctor), ..MemInitState::default() };
+            self.mem_inits.skip = !self.check_mem_inits_of(ctor);
+        }
+        self.mem_inits.count += 1;
+        self.mem_inits.any_errors = true;
+        self.cleanup = super::CleanupState::default();
     }
 
     /// Whether the mem-initializers of `ctor` are checked: not for an

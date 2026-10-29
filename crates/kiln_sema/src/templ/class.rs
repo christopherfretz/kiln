@@ -616,9 +616,6 @@ impl Sema<'_, '_> {
             } else {
                 lbrace
             };
-            if s.kind_of(f) == DeclKind::CXXConstructor {
-                s.act_on_mem_initializers(f, &[], lbrace);
-            }
             let mut sub = Substituter::new(s, &args);
             sub.entity = Some(spec);
             sub.map_context(pclass, spec);
@@ -628,6 +625,24 @@ impl Sema<'_, '_> {
             }
             for (a, b) in pp.into_iter().zip(fp) {
                 sub.locals.insert(a, crate::templ::subst::DeclOrPack::Decl(b));
+            }
+            if sub.sema.kind_of(f) == DeclKind::CXXConstructor {
+                // The pattern's ctor-initializer, substituted and checked
+                // as the parser's would be (spec/sema-class.md §4.9).
+                let (inits, colon) = sub
+                    .sema
+                    .inst
+                    .pattern_mem_inits
+                    .get(&pdef)
+                    .cloned()
+                    .unwrap_or((Vec::new(), lbrace));
+                for info in &inits {
+                    match sub.mem_initializer(info) {
+                        Ok(i) => sub.sema.act_on_mem_initializer(f, &i),
+                        Err(_) => sub.sema.note_failed_mem_initializer(f),
+                    }
+                }
+                sub.sema.act_on_mem_initializers(f, &[], colon);
             }
             let b = sub.body(body);
             s.act_on_finish_function_def(f, b, rbrace);

@@ -113,6 +113,11 @@ pub struct InstState {
     pub(crate) undefined_diagnosed: std::cell::Cell<Option<DeclId>>,
     /// Drop the next error passed to `emit` (set by `incomplete_note`).
     pub(crate) suppress_next_error: std::cell::Cell<bool>,
+    /// The mem-initializers of constructor definitions in a template, as
+    /// parsed, and their `:` (clang keeps the pattern's unresolved
+    /// `CXXCtorInitializer`s for `InstantiateMemInitializers`).
+    pub(crate) pattern_mem_inits:
+        kiln_source::fx::FxHashMap<DeclId, (Vec<crate::class::MemInitInfo>, Loc)>,
 }
 
 impl Sema<'_, '_> {

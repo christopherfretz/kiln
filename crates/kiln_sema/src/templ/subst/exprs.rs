@@ -482,6 +482,62 @@ impl Substituter<'_, '_, '_> {
         Ok(InitList { items: out, lbrace: n.loc(), rbrace })
     }
 
+    /// A braced-init-list as the parser built it (a mem-initializer's).
+    fn written_list(&mut self, l: &InitList) -> SubstResult<InitList> {
+        let mut items = Vec::with_capacity(l.items.len());
+        for it in &l.items {
+            if !it.designator.is_empty() {
+                return self.unimplemented("designated initializers in a template", l.lbrace);
+            }
+            let value = match &it.value {
+                InitValue::Expr(e) => InitValue::Expr(self.written_arg(*e)?),
+                InitValue::List(n) => InitValue::List(self.written_list(n)?),
+            };
+            items.push(InitItem { designator: Vec::new(), value });
+        }
+        Ok(InitList { items, lbrace: l.lbrace, rbrace: l.rbrace })
+    }
+
+    fn written_arg(&mut self, e: ExprId) -> SubstResult<ExprId> {
+        if self.sema.ast.exprs.get(e).kind() == ExprKind::PackExpansionExpr {
+            let loc = self.sema.ast.exprs.get(e).loc();
+            return self.unimplemented("pack expansion", loc);
+        }
+        self.expr(e)
+    }
+
+    /// A mem-initializer of a constructor of the pattern, as the parser
+    /// handed it to `act_on_mem_initializer` (clang
+    /// `InstantiateMemInitializers`): the id's type and the initializer's
+    /// expressions are substituted; the id is resolved again in the
+    /// instantiated class.
+    pub(crate) fn mem_initializer(
+        &mut self,
+        info: &crate::class::MemInitInfo,
+    ) -> SubstResult<crate::class::MemInitInfo> {
+        use crate::class::MemInitId;
+        if info.pack_expansion {
+            // Reported by `act_on_mem_initializer` (WP-070).
+            return Ok(info.clone());
+        }
+        let id = match info.id {
+            MemInitId::Ident(s) => MemInitId::Ident(s),
+            MemInitId::Type(t) => MemInitId::Type(self.ty(t, info.loc)?),
+        };
+        let init = match &info.init {
+            Initializer::Expr(e) => Initializer::Expr(self.written_arg(*e)?),
+            Initializer::Paren(v, l, r) => {
+                let mut out = Vec::with_capacity(v.len());
+                for &e in v {
+                    out.push(self.written_arg(e)?);
+                }
+                Initializer::Paren(out, *l, *r)
+            }
+            Initializer::List(l) => Initializer::List(self.written_list(l)?),
+        };
+        Ok(crate::class::MemInitInfo { id, loc: info.loc, init, pack_expansion: false })
+    }
+
     /// The initializer of a variable of the pattern, in the form the
     /// parser hands to `act_on_init` (§5.6).
     /// `None`: a default-initialized variable (its pattern initializer is
