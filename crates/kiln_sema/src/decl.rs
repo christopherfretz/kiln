@@ -1059,7 +1059,7 @@ impl Sema<'_, '_> {
 
     /// `exc` spelled as in a function type (`noexcept`, `throw()`,
     /// `noexcept(expr)`), without the leading space.
-    fn exc_spec_spelling(&self, exc: ExcSpec) -> String {
+    pub(crate) fn exc_spec_spelling(&self, exc: ExcSpec) -> String {
         match exc {
             ExcSpec::DynamicNone => "throw()".to_owned(),
             ExcSpec::NoexceptExpr { expr, .. } => {
@@ -1721,7 +1721,11 @@ impl Sema<'_, '_> {
         };
         let width = d.bit_width.and_then(|w| self.bit_width(w, ty, nm.as_deref(), d.name_loc()));
         let h = DeclHead::new(ctx, name.map_or(DeclName::EMPTY, DeclName::ident), d.name_loc());
-        self.builder().field(h, ty, width, flags)
+        let f = self.builder().field(h, ty, width, flags);
+        if d.init_style.is_some() {
+            self.special.nsdmi.insert(f);
+        }
+        f
     }
 
     /// Checks a bit-field width ([class.bit]/1): an integral constant
