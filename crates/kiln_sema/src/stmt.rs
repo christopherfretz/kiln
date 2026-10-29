@@ -51,11 +51,27 @@ pub struct FnState {
     pub(crate) switches: Vec<SwitchState>,
     /// Enclosing loops and switches (innermost last; `true` = loop).
     pub(crate) breakables: Vec<bool>,
+    /// The type of `this` in this function (`cv C*`), `None` outside a
+    /// non-static member function (spec/sema-class.md §2.5).
+    #[expect(dead_code, reason = "WP-066a interface; read from WP-066b")]
+    pub(crate) this_ty: Option<QualType>,
+    /// A `this` type that overrides `this_ty` while parsing an NSDMI or a
+    /// trailing return type (clang `CXXThisScopeRAII`).
+    #[expect(dead_code, reason = "WP-066a interface; read from WP-066b")]
+    pub(crate) this_override: Option<QualType>,
 }
 
 impl FnState {
     pub(crate) fn new(decl: DeclId, ret: QualType) -> Self {
-        FnState { decl, ret, labels: Vec::new(), switches: Vec::new(), breakables: Vec::new() }
+        FnState {
+            decl,
+            ret,
+            labels: Vec::new(),
+            switches: Vec::new(),
+            breakables: Vec::new(),
+            this_ty: None,
+            this_override: None,
+        }
     }
 }
 

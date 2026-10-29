@@ -7,8 +7,8 @@ use kiln_diag::DiagId;
 use kiln_lex::{Punct, TokKind};
 use kiln_sema::declspec::SpecError;
 use kiln_sema::{
-    BaseSpec, Chunk, DeclSpec, Declarator, DeclaratorContext, Designator, InitItem, InitList,
-    InitValue, Initializer, NameClass, Sign, StorageSpec, TagUse, Width,
+    Chunk, DeclSpec, Declarator, DeclaratorContext, Designator, InitItem, InitList, InitValue,
+    Initializer, NameClass, Sign, StorageSpec, TagUse, TypeSpecKind, Width,
 };
 use kiln_source::Loc;
 
@@ -362,19 +362,19 @@ impl Parser<'_, '_> {
                 Kw::Long => ds.set_width(Width::Long, loc),
                 Kw::Signed => ds.set_sign(Sign::Signed, loc),
                 Kw::Unsigned => ds.set_sign(Sign::Unsigned, loc),
-                Kw::Void => ds.set_base(BaseSpec::Void, None, loc),
-                Kw::Bool => ds.set_base(BaseSpec::Bool, None, loc),
-                Kw::Char => ds.set_base(BaseSpec::Char, None, loc),
-                Kw::WChar => ds.set_base(BaseSpec::WChar, None, loc),
-                Kw::Char8 => ds.set_base(BaseSpec::Char8, None, loc),
-                Kw::Char16 => ds.set_base(BaseSpec::Char16, None, loc),
-                Kw::Char32 => ds.set_base(BaseSpec::Char32, None, loc),
-                Kw::Int => ds.set_base(BaseSpec::Int, None, loc),
-                Kw::Int128 => ds.set_base(BaseSpec::Int128, None, loc),
-                Kw::Float => ds.set_base(BaseSpec::Float, None, loc),
-                Kw::Double => ds.set_base(BaseSpec::Double, None, loc),
-                Kw::Float128 => ds.set_base(BaseSpec::Float128, None, loc),
-                Kw::Auto => ds.set_base(BaseSpec::Auto, None, loc),
+                Kw::Void => ds.set_base(TypeSpecKind::Void, None, loc),
+                Kw::Bool => ds.set_base(TypeSpecKind::Bool, None, loc),
+                Kw::Char => ds.set_base(TypeSpecKind::Char, None, loc),
+                Kw::WChar => ds.set_base(TypeSpecKind::WChar, None, loc),
+                Kw::Char8 => ds.set_base(TypeSpecKind::Char8, None, loc),
+                Kw::Char16 => ds.set_base(TypeSpecKind::Char16, None, loc),
+                Kw::Char32 => ds.set_base(TypeSpecKind::Char32, None, loc),
+                Kw::Int => ds.set_base(TypeSpecKind::Int, None, loc),
+                Kw::Int128 => ds.set_base(TypeSpecKind::Int128, None, loc),
+                Kw::Float => ds.set_base(TypeSpecKind::Float, None, loc),
+                Kw::Double => ds.set_base(TypeSpecKind::Double, None, loc),
+                Kw::Float128 => ds.set_base(TypeSpecKind::Float128, None, loc),
+                Kw::Auto => ds.set_base(TypeSpecKind::Auto, None, loc),
                 Kw::Struct | Kw::Class | Kw::Union | Kw::Enum => {
                     self.parse_tag_specifier(&mut ds, k);
                     continue;
@@ -391,7 +391,7 @@ impl Parser<'_, '_> {
                         }
                     }
                     ds.invalid = true;
-                    if let Err(e) = ds.set_base(BaseSpec::Named, Some(QualType::ERROR), loc) {
+                    if let Err(e) = ds.set_base(TypeSpecKind::Named, Some(QualType::ERROR), loc) {
                         self.spec_error(&e, loc);
                     }
                     continue;
@@ -436,7 +436,7 @@ impl Parser<'_, '_> {
                 } else {
                     ty
                 };
-                if let Err(e) = ds.set_base(BaseSpec::Named, Some(ty), loc) {
+                if let Err(e) = ds.set_base(TypeSpecKind::Named, Some(ty), loc) {
                     ds.invalid = true;
                     self.spec_error(&e, loc);
                 }
@@ -460,7 +460,7 @@ impl Parser<'_, '_> {
                 self.emit(d);
                 self.bump();
                 ds.invalid = true;
-                let _ = ds.set_base(BaseSpec::Named, Some(QualType::ERROR), loc);
+                let _ = ds.set_base(TypeSpecKind::Named, Some(QualType::ERROR), loc);
                 true
             }
             _ => false,
@@ -529,7 +529,7 @@ impl Parser<'_, '_> {
                 self.error_here(DiagId::parse_expected_unqualified_id);
             }
             ds.invalid = true;
-            let _ = ds.set_base(BaseSpec::Named, Some(QualType::ERROR), kw_loc);
+            let _ = ds.set_base(TypeSpecKind::Named, Some(QualType::ERROR), kw_loc);
             return;
         }
         let d = self.s.act_on_tag(keyword, name, qualifier, use_, scoped, fixed, kw_loc);
@@ -545,7 +545,7 @@ impl Parser<'_, '_> {
         ds.tag_declares = use_ != TagUse::Reference;
         ds.keyword = keyword;
         let ty = self.s.elaborated_tag_type(d, keyword);
-        if let Err(e) = ds.set_base(BaseSpec::Named, Some(ty), kw_loc) {
+        if let Err(e) = ds.set_base(TypeSpecKind::Named, Some(ty), kw_loc) {
             ds.invalid = true;
             self.spec_error(&e, kw_loc);
         }

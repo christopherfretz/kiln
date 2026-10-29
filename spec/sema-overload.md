@@ -544,8 +544,14 @@ non-explicit conversion function whose result satisfies `pred`; several is
 clang's `err_*_multiple_conversions` + one note per function.
 
 ## 7. Default arguments ([dcl.fct.default])
-`ParamData.default_arg: Option<ExprId>` (ast.md §16.10), parsed late in
-complete-class contexts (WP-064/066). **Redeclarations**
+`ParamData.default_arg: Option<ExprId>` (ast.md §16.10), write-once.
+**Ownership**: parsing is WP-065 (in place at namespace and block scope,
+`DefaultArg::Parsed` in `ParamInfo`; saved and replayed in complete-class
+contexts for member functions, `DefaultArg::Unparsed` → `ParamData::
+DEFAULT_ARG_PENDING`, sema-class.md §2.7); sema
+(`act_on_param_default_arg(p, e)`, the checks and merging below) is
+WP-066b, temporaries and cleanups in default arguments WP-067b.
+**Redeclarations**
 (`merge_default_args(new, old)` from redeclaration merging): a same-scope
 redeclaration may add defaults to parameters without one, and shares the
 old `ExprId` with `ParamFlags::INHERITED_DEFAULT`; giving one again is

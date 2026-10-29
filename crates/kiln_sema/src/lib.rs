@@ -14,6 +14,7 @@
     reason = "sema code uses the standard's short names (e, t, d, l, r)"
 )]
 
+pub mod class;
 pub mod constfold;
 pub mod conv;
 pub mod decl;
@@ -35,9 +36,11 @@ use kiln_ast::{Ast, AstBuilder, DeclId, ExprId, QualType};
 use kiln_diag::{Diag, DiagEngine, DiagId};
 use kiln_source::{Loc, Span};
 
+pub use class::{BaseSpecInfo, MemInitId, MemInitInfo};
 pub use decl::{NameClass, TagUse};
 pub use declspec::{
-    BaseSpec, Chunk, DeclSpec, Declarator, DeclaratorContext, ParamInfo, Sign, StorageSpec, Width,
+    Chunk, DeclSpec, Declarator, DeclaratorContext, DefaultArg, ParamInfo, Sign, StorageSpec,
+    TypeSpecKind, Width,
 };
 pub use init::{Designator, InitItem, InitList, InitValue, Initializer};
 pub use kiln_oven::{Budget, EvalContext, EvalFailure, EvalKind, Oven};
@@ -88,6 +91,30 @@ pub struct Sema<'a, 'sm> {
     pub(crate) local_externs: Vec<(DeclId, kiln_source::symbol::Symbol, DeclId)>,
     /// The constant evaluator of the translation unit (spec/sema.md §8).
     pub(crate) oven: Oven,
+    /// Classes being defined, innermost last (spec/sema-class.md §8.3).
+    pub(crate) classes: Vec<class::ClassBuild>,
+    /// Which implicit special members each class has declared
+    /// ([`class::implicit`] bits; spec/sema-class.md §4.1).
+    #[expect(dead_code, reason = "WP-066a interface; read from WP-066b/067a/067b")]
+    pub(crate) implicit_declared: kiln_source::fx::FxHashMap<DeclId, u8>,
+    /// Access checks delayed until their declaration exists
+    /// (spec/sema-class.md §2.4).
+    #[expect(dead_code, reason = "WP-066a interface; read from WP-066b/067a/067b")]
+    pub(crate) delayed_access: Vec<class::AccessCheck>,
+    /// `delayed_access.len()` at each open delay point, innermost last.
+    #[expect(dead_code, reason = "WP-066a interface; read from WP-066b/067a/067b")]
+    pub(crate) delayed_access_depth: Vec<usize>,
+    /// The current full-expression's cleanup state (spec/sema-class.md
+    /// §5.3).
+    #[expect(dead_code, reason = "WP-066a interface; read from WP-066b/067a/067b")]
+    pub(crate) cleanup: class::CleanupState,
+    /// Materialized temporaries collected for P2718 range-for lifetime
+    /// extension (spec/sema-class.md §5.4).
+    #[expect(dead_code, reason = "WP-066a interface; read from WP-066b/067a/067b")]
+    pub(crate) extend_collector: Option<Vec<ExprId>>,
+    /// Member functions whose *noexcept-specifier* awaits replay
+    /// (`ExcSpec::Deferred`, spec/sema-class.md §2.7).
+    pub(crate) unparsed_exc: kiln_source::fx::FxHashSet<DeclId>,
 }
 
 impl<'a, 'sm> Sema<'a, 'sm> {
@@ -123,6 +150,13 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             enums: Vec::new(),
             local_externs: Vec::new(),
             oven: Oven::new(Budget::default()),
+            classes: Vec::new(),
+            implicit_declared: kiln_source::fx::FxHashMap::default(),
+            delayed_access: Vec::new(),
+            delayed_access_depth: Vec::new(),
+            cleanup: class::CleanupState::default(),
+            extend_collector: None,
+            unparsed_exc: kiln_source::fx::FxHashSet::default(),
         }
     }
 

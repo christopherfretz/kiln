@@ -29,6 +29,10 @@ source manager it reports against.
 | `defining` | classes being defined (incomplete until `}`) |
 | `enums` | enumerations being defined (`EnumBuild`: running value, best type) |
 | `local_externs` | block-scope `extern` variables and functions, keyed by enclosing namespace and name (§3) |
+| `pragma_packs` | `#pragma pack` directives seen, with their location and argument text (recorded for the class layout, sema-class.md §6.1) |
+| `immediate` | depth of immediate function contexts ([expr.const]/16) entered by `if consteval` |
+| `oven` | the constant evaluator and its budget |
+| `classes`, `implicit_declared`, `delayed_access` (+ `delayed_access_depth`), `cleanup`, `extend_collector`, `unparsed_exc` | class state, sema-class.md §8.3 (`FnState` gains `this_ty`/`this_override`, `Scope` gains `nrvo`) |
 
 Constructors:
 - `Sema::new(ast, diags, TargetTypes)` picks the layout target from the

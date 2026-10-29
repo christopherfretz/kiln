@@ -17,10 +17,12 @@ use kiln_diag::DiagId;
 use kiln_source::Loc;
 use kiln_source::symbol::Symbol;
 
+use crate::class::ClassBuild;
 use crate::constfold;
 use crate::conv::{self, ConvCtx};
 use crate::declspec::{
-    BaseSpec, Chunk, DeclSpec, Declarator, DeclaratorContext, ParamInfo, Sign, StorageSpec, Width,
+    Chunk, DeclSpec, Declarator, DeclaratorContext, DefaultArg, ParamInfo, Sign, StorageSpec,
+    TypeSpecKind, Width,
 };
 use crate::init::Initializer;
 use crate::lookup::{LookupKind, is_tag_kind, is_type_kind};
@@ -38,6 +40,11 @@ pub enum TagUse {
     Declaration,
     /// `struct S { ... }`: defines `S`.
     Definition,
+    /// `friend class S;` ([dcl.type.elab]/4, [class.friend]/11): refers to
+    /// `S`, else declares it in the innermost enclosing namespace without
+    /// making it visible (WP-066b; until then reported unsupported and
+    /// treated as [`TagUse::Reference`]).
+    Friend,
 }
 
 /// What a name denotes, for the parser's decisions
@@ -92,13 +99,13 @@ impl Sema<'_, '_> {
     pub fn type_from_declspec_at(&mut self, ds: &DeclSpec, loc: Loc) -> QualType {
         let unsigned = ds.sign == Sign::Unsigned;
         let base = match ds.base {
-            BaseSpec::None if !ds.has_type_specifier() => {
+            TypeSpecKind::None if !ds.has_type_specifier() => {
                 if !ds.invalid {
                     self.error(DiagId::parse_missing_type_specifier, loc);
                 }
                 QualType::INT
             }
-            BaseSpec::None | BaseSpec::Int => match (ds.width, unsigned) {
+            TypeSpecKind::None | TypeSpecKind::Int => match (ds.width, unsigned) {
                 (Width::Short, false) => QualType::SHORT,
                 (Width::Short, true) => QualType::USHORT,
                 (Width::Long, false) => QualType::LONG,
@@ -108,35 +115,37 @@ impl Sema<'_, '_> {
                 (Width::None, false) => QualType::INT,
                 (Width::None, true) => QualType::UINT,
             },
-            BaseSpec::Void => QualType::VOID,
-            BaseSpec::Bool => QualType::BOOL,
-            BaseSpec::Char => match ds.sign {
+            TypeSpecKind::Void => QualType::VOID,
+            TypeSpecKind::Bool => QualType::BOOL,
+            TypeSpecKind::Char => match ds.sign {
                 Sign::None => QualType::CHAR,
                 Sign::Signed => QualType::SCHAR,
                 Sign::Unsigned => QualType::UCHAR,
             },
-            BaseSpec::WChar => QualType::WCHAR,
-            BaseSpec::Char8 => QualType::CHAR8,
-            BaseSpec::Char16 => QualType::CHAR16,
-            BaseSpec::Char32 => QualType::CHAR32,
-            BaseSpec::Int128 => {
+            TypeSpecKind::WChar => QualType::WCHAR,
+            TypeSpecKind::Char8 => QualType::CHAR8,
+            TypeSpecKind::Char16 => QualType::CHAR16,
+            TypeSpecKind::Char32 => QualType::CHAR32,
+            TypeSpecKind::Int128 => {
                 if unsigned {
                     QualType::UINT128
                 } else {
                     QualType::INT128
                 }
             }
-            BaseSpec::Float => QualType::FLOAT,
-            BaseSpec::Double => {
+            TypeSpecKind::Float => QualType::FLOAT,
+            TypeSpecKind::Double => {
                 if ds.width == Width::Long {
                     QualType::LONGDOUBLE
                 } else {
                     QualType::DOUBLE
                 }
             }
-            BaseSpec::Float128 => QualType::FLOAT128,
-            BaseSpec::Auto => self.ast.types.auto_type(AutoKeyword::Auto, None, None, None, false),
-            BaseSpec::Named => ds.named.unwrap_or(QualType::ERROR),
+            TypeSpecKind::Float128 => QualType::FLOAT128,
+            TypeSpecKind::Auto => {
+                self.ast.types.auto_type(AutoKeyword::Auto, None, None, None, false)
+            }
+            TypeSpecKind::Named => ds.named.unwrap_or(QualType::ERROR),
         };
         let cv = ds.cv;
         if cv.is_empty() { base } else { self.ast.types.qualify(base, cv) }
@@ -384,7 +393,14 @@ impl Sema<'_, '_> {
         }
         let mut attrs = ds.attrs.clone();
         attrs.extend(d.attrs.iter().copied());
-        ParamInfo { name: d.name, ty, loc: d.name_loc(), attrs, invalid: ds.invalid || d.invalid }
+        ParamInfo {
+            name: d.name,
+            ty,
+            loc: d.name_loc(),
+            attrs,
+            invalid: ds.invalid || d.invalid,
+            default_arg: DefaultArg::None,
+        }
     }
 
     // -- declarations ------------------------------------------------------------
@@ -834,6 +850,14 @@ impl Sema<'_, '_> {
             }
             if !p.attrs.is_empty() {
                 let _ = self.builder().attach_attrs(pd, &p.attrs);
+            }
+            match p.default_arg {
+                DefaultArg::None => {}
+                DefaultArg::Parsed(e) => self.act_on_param_default_arg(pd, e),
+                DefaultArg::Unparsed(eq) => {
+                    self.ast.decls.mark_default_arg_pending(pd);
+                    self.unsupported("default arguments", eq);
+                }
             }
             ids.push(pd);
         }
@@ -1367,6 +1391,12 @@ impl Sema<'_, '_> {
         fixed: Option<QualType>,
         loc: Loc,
     ) -> DeclId {
+        let use_ = if use_ == TagUse::Friend {
+            self.unsupported("friend class declarations", loc);
+            TagUse::Reference
+        } else {
+            use_
+        };
         let is_enum = keyword == TagKeyword::Enum;
         let fixed = fixed.or(if is_enum && scoped != 0 { Some(QualType::INT) } else { None });
         if let Some(f) = fixed {
@@ -1486,6 +1516,8 @@ impl Sema<'_, '_> {
     /// `{` of a class definition: the class becomes the current context.
     pub fn act_on_start_record_definition(&mut self, r: DeclId) {
         let _ = self.builder().begin_record_definition(r);
+        let tag = self.ast.decls.record(r).map_or(TagKind::Struct, |x| x.tag);
+        self.classes.push(ClassBuild::new(r, tag));
         self.defining.push(r);
         self.scopes.push(Scope::new(ScopeKind::Record, Some(r)));
         self.ctx = r;
@@ -1497,6 +1529,9 @@ impl Sema<'_, '_> {
     /// must be known before the definition's bits freeze.
     pub fn act_on_finish_record_definition(&mut self, r: DeclId, then_semi: bool) {
         self.scopes.pop();
+        if self.classes.last().is_some_and(|c| c.record == r) {
+            self.classes.pop();
+        }
         self.defining.retain(|&d| d != r);
         self.ctx = self
             .ast
