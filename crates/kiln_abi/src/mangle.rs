@@ -1,22 +1,41 @@
-//! Itanium C++ name mangling ([abi:mangling]) for the M2 subset: free
-//! functions and variables in namespaces, internal-linkage names
-//! (`_ZL`), static locals (`_ZZ...E`), and the types of the M2 type
-//! system (builtins, pointers, references, arrays, function types,
-//! classes and enumerations) with substitutions. See spec/codegen.md §3.
+//! Itanium C++ name mangling ([abi:mangling]): functions, variables and
+//! static data members in namespaces and classes, member functions with
+//! cv- and ref-qualifiers, constructors and destructors (`C1`/`C2`,
+//! `D0`/`D1`/`D2`), conversion functions, class, function and variable
+//! template specializations (type, integral, enumeration, `nullptr`,
+//! declaration and template template arguments, packs), local entities
+//! (`Z...E`), member pointers, guard variables (`_ZGV`) and reference
+//! temporaries (`_ZGR`), with substitutions as clang 19 makes them. See
+//! spec/abi.md §"Mangling".
 
 use kiln_ast::Ast;
-use kiln_ast::decl::{DeclKind, FnStorage, LinkageLang, NamespaceData, VarStorage};
-use kiln_ast::ids::{DeclId, QualType};
+use kiln_ast::consts::{ConstValue, PtrBase, Scalar};
+use kiln_ast::decl::{DeclKind, FnStorage, LinkageLang, NamespaceData, TemplLinkKind, VarStorage};
+use kiln_ast::ids::{ArgListId, ConstValueId, DeclId, QualType, TemplateNameId};
 use kiln_ast::names::{DeclNameView, OverloadedOperator};
-use kiln_ast::types::{BuiltinType, TypeView};
+use kiln_ast::types::{ArgView, BuiltinType, RefQual, TemplateName, TypeView};
 
 /// A substitution candidate ([abi:mangling.compression]).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Sub {
-    /// A class, enumeration or namespace prefix.
+    /// A namespace, class or enumeration (also as a type).
     Decl(DeclId),
+    /// A template (as a template prefix or template template argument).
+    Template(DeclId),
     /// A (canonical, possibly qualified) type.
     Type(QualType),
+}
+
+/// The constructor or destructor variant of a symbol ([abi:mangling]
+/// <ctor-dtor-name>).
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum Structor {
+    /// `C1` / `D1`: the complete-object constructor or destructor.
+    Complete,
+    /// `C2` / `D2`: the base-object constructor or destructor.
+    Base,
+    /// `D0`: the deleting destructor.
+    Deleting,
 }
 
 /// True if `d` is declared inside an `extern "C"` linkage specification
@@ -29,11 +48,10 @@ pub fn is_extern_c(ast: &Ast, d: DeclId) -> bool {
             DeclKind::LinkageSpec => {
                 return ast.decls.scope(ctx).is_some_and(|s| s.aux == LinkageLang::C as u32);
             }
-            DeclKind::TranslationUnit | DeclKind::Namespace
-                if n.kind() == DeclKind::TranslationUnit =>
-            {
-                return false;
-            }
+            DeclKind::TranslationUnit => return false,
+            // Class members and local entities never have C language
+            // linkage.
+            k if is_record_kind(k) || is_function_kind(k) => return false,
             _ => {}
         }
         c = n.ctx();
@@ -41,45 +59,106 @@ pub fn is_extern_c(ast: &Ast, d: DeclId) -> bool {
     false
 }
 
+fn is_record_kind(k: DeclKind) -> bool {
+    matches!(
+        k,
+        DeclKind::CXXRecord
+            | DeclKind::ClassTemplateSpecialization
+            | DeclKind::ClassTemplatePartialSpecialization
+    )
+}
+
+fn is_function_kind(k: DeclKind) -> bool {
+    matches!(
+        k,
+        DeclKind::Function
+            | DeclKind::CXXMethod
+            | DeclKind::CXXConstructor
+            | DeclKind::CXXDestructor
+            | DeclKind::CXXConversion
+    )
+}
+
 /// True if `ns` is an unnamed namespace.
 fn is_anon_ns(ast: &Ast, ns: DeclId) -> bool {
     ast.decls.namespace(ns).is_some_and(|n| n.flags & NamespaceData::ANONYMOUS != 0)
 }
 
-/// True if `d` (a function or variable at namespace scope) has internal
-/// linkage ([basic.link]/4): `static`, a non-`extern`/non-`inline`
-/// `const` variable, or a member of an unnamed namespace.
-pub fn has_internal_linkage(ast: &Ast, d: DeclId) -> bool {
-    let first = ast.first(d);
-    let n = ast.decls.get(first);
-    match n.kind() {
-        DeclKind::Function => {
-            if ast.decls.function(first).is_some_and(|f| f.spec.storage() == FnStorage::Static) {
-                return true;
-            }
-        }
-        DeclKind::Var => {
-            if let Some(v) = ast.decls.var(first) {
-                if v.spec.storage() == VarStorage::Static {
-                    return true;
-                }
-                let q = ast.types.canonical(n.ty().unwrap_or(QualType::INT));
-                let is_const = ast.types.effective_quals(q).is_const() || const_array(ast, q);
-                if is_const
-                    && !v.spec.is_inline()
-                    && v.spec.storage() != VarStorage::Extern
-                    && !is_extern_c(ast, first)
-                {
-                    return true;
-                }
-            }
-        }
-        _ => {}
-    }
-    let mut c = n.ctx();
+/// True if some enclosing namespace of `d` is unnamed.
+fn in_anon_ns(ast: &Ast, d: DeclId) -> bool {
+    let mut c = ast.decls.get(d).ctx();
     while let Some(ctx) = c {
         if ast.decls.get(ctx).kind() == DeclKind::Namespace && is_anon_ns(ast, ctx) {
             return true;
+        }
+        c = ast.decls.get(ctx).ctx();
+    }
+    false
+}
+
+/// True if the namespace-scope function or variable `d` has internal
+/// linkage by its own declaration ([basic.link]/3): `static`, or a
+/// non-`extern`/non-`inline` `const` variable.
+fn internal_by_storage(ast: &Ast, d: DeclId) -> bool {
+    let first = ast.first(d);
+    let n = ast.decls.get(first);
+    if !is_file_context(ast, first) {
+        return false;
+    }
+    match n.kind() {
+        DeclKind::Function => {
+            ast.decls.function(first).is_some_and(|f| f.spec.storage() == FnStorage::Static)
+        }
+        DeclKind::Var | DeclKind::VarTemplateSpecialization => {
+            let Some(v) = ast.decls.var(first) else { return false };
+            if v.spec.storage() == VarStorage::Static {
+                return true;
+            }
+            let q = ast.types.canonical(n.ty().unwrap_or(QualType::INT));
+            let is_const = ast.types.effective_quals(q).is_const() || const_array(ast, q);
+            is_const
+                && !v.spec.is_inline()
+                && v.spec.storage() != VarStorage::Extern
+                && !is_extern_c(ast, first)
+                && !matches!(v.templ.get(), Some((TemplLinkKind::Specialization, _)))
+        }
+        _ => false,
+    }
+}
+
+/// True if `d`'s semantic context is a namespace (or the translation
+/// unit), looking through linkage specifications.
+fn is_file_context(ast: &Ast, d: DeclId) -> bool {
+    let mut c = ast.decls.get(d).ctx();
+    while let Some(ctx) = c {
+        match ast.decls.get(ctx).kind() {
+            DeclKind::TranslationUnit | DeclKind::Namespace => return true,
+            DeclKind::LinkageSpec | DeclKind::Export => c = ast.decls.get(ctx).ctx(),
+            _ => return false,
+        }
+    }
+    true
+}
+
+/// True if `d` (a function, member function, variable or static data
+/// member) has internal linkage ([basic.link]/4): `static` or `const` at
+/// namespace scope, a member of an unnamed namespace (or of a class in
+/// one), or a member of a local class of a function with internal
+/// linkage.
+pub fn has_internal_linkage(ast: &Ast, d: DeclId) -> bool {
+    let first = ast.first(d);
+    if internal_by_storage(ast, first) || in_anon_ns(ast, first) {
+        return true;
+    }
+    // A member of a local class takes the linkage of the function.
+    let mut c = ast.decls.get(first).ctx();
+    while let Some(ctx) = c {
+        let k = ast.decls.get(ctx).kind();
+        if is_function_kind(k) {
+            return has_internal_linkage(ast, ctx);
+        }
+        if !is_record_kind(k) {
+            break;
         }
         c = ast.decls.get(ctx).ctx();
     }
@@ -143,23 +222,17 @@ fn is_local(ast: &Ast, d: DeclId) -> bool {
     enclosing_function(ast, d).is_some()
 }
 
-/// The function whose body declares `d`, if any.
+/// The function whose body declares `d` (directly or in a local class),
+/// if any.
 pub fn enclosing_function(ast: &Ast, d: DeclId) -> Option<DeclId> {
     let mut c = ast.decls.get(d).ctx();
     while let Some(ctx) = c {
-        if matches!(ast.decls.get(ctx).kind(), DeclKind::Function | DeclKind::CXXMethod) {
+        if is_function_kind(ast.decls.get(ctx).kind()) {
             return Some(ctx);
         }
         c = ast.decls.get(ctx).ctx();
     }
     None
-}
-
-/// The Itanium mangler state for one symbol.
-struct Mangler<'a> {
-    ast: &'a Ast,
-    out: String,
-    subs: Vec<Sub>,
 }
 
 /// The GNU asm label of `d`'s entity (recorded on its first declaration),
@@ -173,37 +246,41 @@ pub fn asm_label(ast: &Ast, d: DeclId) -> Option<String> {
     Some(String::from_utf8_lossy(ast.strings.bytes(*l)).into_owned())
 }
 
-/// The linkage name of a namespace-scope function or variable.
+/// The linkage name of a function, variable or static data member (a
+/// constructor or destructor gets its complete-object variant).
 pub fn mangle_decl(ast: &Ast, d: DeclId) -> String {
+    mangle_structor(ast, d, Structor::Complete)
+}
+
+/// The linkage name of `d` with constructor/destructor variant `v`
+/// (ignored for other functions).
+pub fn mangle_structor(ast: &Ast, d: DeclId, v: Structor) -> String {
     if let Some(l) = asm_label(ast, d) {
         return l;
     }
     if is_unmangled(ast, d) {
         return decl_name(ast, d);
     }
-    let mut m = Mangler { ast, out: String::from("_Z"), subs: Vec::new() };
-    if let Some(f) = enclosing_function(ast, d) {
-        // A static local variable: Z <function encoding> E <name> [_<n>].
-        m.out.push('Z');
-        m.encoding(f);
-        m.out.push('E');
-        m.source_name(&decl_name(ast, d));
-        return m.out;
-    }
-    m.encoding(d);
+    let mut m = Mangler::new(ast, "_Z");
+    m.encoding(d, v);
     m.out
 }
 
 /// The linkage name of a static local `d`, the `index`-th (0-based)
 /// static local of its function with the same name.
 pub fn mangle_static_local(ast: &Ast, d: DeclId, index: u32) -> String {
-    use std::fmt::Write as _;
     if let Some(l) = asm_label(ast, d) {
         return l;
     }
     let mut s = mangle_decl(ast, d);
-    // <discriminator> := _ <number> (< 10) | __ <number> _ ; the first
-    // occurrence has none, the second is number 0.
+    push_discriminator(&mut s, index);
+    s
+}
+
+/// <discriminator> := _ <number> (< 10) | __ <number> _ ; the first
+/// occurrence has none, the second is number 0.
+fn push_discriminator(s: &mut String, index: u32) {
+    use std::fmt::Write as _;
     if let Some(n) = index.checked_sub(1) {
         if n < 10 {
             let _ = write!(s, "_{n}");
@@ -211,135 +288,349 @@ pub fn mangle_static_local(ast: &Ast, d: DeclId, index: u32) -> String {
             let _ = write!(s, "__{n}_");
         }
     }
+}
+
+/// The guard variable of static-storage variable `d` (`_ZGV <name>`);
+/// `index` is the static-local discriminator index (0 elsewhere).
+pub fn mangle_guard(ast: &Ast, d: DeclId, index: u32) -> String {
+    let name = mangle_static_local(ast, d, index);
+    match name.strip_prefix("_Z") {
+        Some(rest) => format!("_ZGV{rest}"),
+        None => format!("_ZGV{}{name}", name.len()),
+    }
+}
+
+/// The reference temporary `index` (clang's mangling number) extended by
+/// variable `d`: `_ZGR <name> [<seq-id>] _` ([abi:mangling]
+/// <special-name>).
+pub fn mangle_ref_temporary(ast: &Ast, d: DeclId, local_index: u32, index: u32) -> String {
+    let name = mangle_static_local(ast, d, local_index);
+    let mut s = match name.strip_prefix("_Z") {
+        Some(rest) => format!("_ZGR{rest}"),
+        None => format!("_ZGR{}{name}", name.len()),
+    };
+    if let Some(n) = index.checked_sub(1) {
+        s.push_str(&base36(n as usize));
+    }
+    s.push('_');
     s
 }
 
-impl Mangler<'_> {
-    fn encoding(&mut self, d: DeclId) {
-        let ast = self.ast;
-        let n = ast.decls.get(d);
-        let is_fn = matches!(n.kind(), DeclKind::Function | DeclKind::CXXMethod);
-        if is_fn && (is_extern_c(ast, d) || (decl_name(ast, d) == "main" && in_global_ns(ast, d))) {
-            // Unmangled functions appear in local names by source name only.
-            self.source_name(&decl_name(ast, d));
-            return;
-        }
-        self.name(d, has_internal_linkage(ast, d));
-        if is_fn {
-            let ty = n.ty().map(|t| ast.types.canonical(t));
-            if let Some(p) = ty.and_then(|t| ast.types.proto(t)) {
-                let params: Vec<QualType> = ast.types.params(p).to_vec();
-                let variadic = p.variadic();
-                if params.is_empty() && !variadic {
-                    self.out.push('v');
-                }
-                for q in params {
-                    self.ty(q.without_quals());
-                }
-                if variadic {
-                    self.out.push('z');
-                }
-            }
-        }
+/// The <type> mangling of `q` on its own (no substitutions shared with
+/// an enclosing symbol).
+pub fn mangle_type(ast: &Ast, q: QualType) -> String {
+    let mut m = Mangler::new(ast, "");
+    m.ty(q);
+    m.out
+}
+
+/// The Itanium mangler state for one symbol.
+struct Mangler<'a> {
+    ast: &'a Ast,
+    out: String,
+    subs: Vec<Sub>,
+}
+
+impl<'a> Mangler<'a> {
+    fn new(ast: &'a Ast, prefix: &str) -> Self {
+        Mangler { ast, out: String::from(prefix), subs: Vec::new() }
     }
 
-    /// <name> for an entity: unscoped or nested.
-    fn name(&mut self, d: DeclId, internal: bool) {
-        let prefixes = self.prefix_chain(d);
-        if prefixes.is_empty() {
-            if internal {
-                self.out.push('L');
-            }
-            self.unqualified_name(d);
-            return;
-        }
-        if prefixes.len() == 1 && self.is_std(prefixes[0]) {
-            self.out.push_str("St");
-            if internal {
-                self.out.push('L');
-            }
-            self.unqualified_name(d);
-            return;
-        }
-        self.out.push('N');
-        self.prefix(&prefixes);
-        if internal {
-            self.out.push('L');
-        }
-        self.unqualified_name(d);
-        self.out.push('E');
-    }
-
-    /// The enclosing namespaces/classes of `d`, outermost first, skipping
-    /// linkage specifications and inline namespaces' transparency (inline
-    /// namespaces are still mangled).
-    fn prefix_chain(&self, d: DeclId) -> Vec<DeclId> {
-        let mut v = Vec::new();
+    /// The semantic parent of `d`, looking through linkage
+    /// specifications and `export`.
+    fn parent(&self, d: DeclId) -> Option<DeclId> {
         let mut c = self.ast.decls.get(d).ctx();
         while let Some(ctx) = c {
             match self.ast.decls.get(ctx).kind() {
-                DeclKind::Namespace | DeclKind::CXXRecord | DeclKind::Enum => v.push(ctx),
-                DeclKind::TranslationUnit => break,
-                _ => {}
+                DeclKind::LinkageSpec | DeclKind::Export => c = self.ast.decls.get(ctx).ctx(),
+                _ => return Some(ctx),
             }
-            c = self.ast.decls.get(ctx).ctx();
         }
-        v.reverse();
-        v
+        None
+    }
+
+    /// The template and arguments of `d` when it is a class, function or
+    /// variable template specialization.
+    fn spec_of(&self, d: DeclId) -> Option<(DeclId, ArgListId)> {
+        let (_, s) = self.ast.spec_info(d)?;
+        Some((s.template, s.args))
     }
 
     fn is_std(&self, ns: DeclId) -> bool {
         self.ast.decls.get(ns).kind() == DeclKind::Namespace
             && decl_name(self.ast, ns) == "std"
-            && self.prefix_chain(ns).is_empty()
+            && self
+                .parent(ns)
+                .is_none_or(|p| self.ast.decls.get(p).kind() == DeclKind::TranslationUnit)
     }
 
-    /// Emits a nested-name prefix, using and recording substitutions.
-    fn prefix(&mut self, chain: &[DeclId]) {
-        // Find the longest already-substituted prefix.
-        let mut start = 0;
-        for i in (0..chain.len()).rev() {
-            if let Some(k) = self.find(Sub::Decl(self.ast.first(chain[i]))) {
-                self.sub_ref(k);
-                start = i + 1;
-                break;
-            }
-        }
-        for (i, &p) in chain.iter().enumerate().skip(start) {
-            if i == 0 && self.is_std(p) {
-                self.out.push_str("St");
-                continue;
-            }
-            let nm = self.component_name(p);
-            self.source_name(&nm);
-            self.subs.push(Sub::Decl(self.ast.first(p)));
-        }
-    }
+    // ---- encodings -----------------------------------------------------
 
-    fn component_name(&self, d: DeclId) -> String {
-        if self.ast.decls.get(d).kind() == DeclKind::Namespace && is_anon_ns(self.ast, d) {
-            return "_GLOBAL__N_1".to_owned();
-        }
-        decl_name(self.ast, d)
-    }
-
-    /// <unqualified-name>: an <operator-name> for an operator function,
-    /// else the <source-name>.
-    fn unqualified_name(&mut self, d: DeclId) {
-        let n = self.ast.decls.get(d);
-        if let DeclNameView::Operator(op) = self.ast.names.view(n.name()) {
-            let explicit = n
-                .ty()
-                .and_then(|t| self.ast.types.proto(t))
-                .map_or(0, |p| self.ast.types.params(p).len());
-            // The implicit object parameter counts towards the arity
-            // (static member operators are arity-independent).
-            let arity = explicit + usize::from(n.kind() == DeclKind::CXXMethod);
-            self.out.push_str(operator_code(op, arity));
+    /// <encoding> ::= <name> <bare-function-type> | <name>
+    fn encoding(&mut self, d: DeclId, v: Structor) {
+        let ast = self.ast;
+        let n = ast.decls.get(d);
+        let is_fn = is_function_kind(n.kind());
+        if is_fn && (is_extern_c(ast, d) || (decl_name(ast, d) == "main" && in_global_ns(ast, d))) {
+            // Unmangled functions appear in local names by source name only.
+            self.source_name(&decl_name(ast, d));
             return;
         }
-        let nm = decl_name(self.ast, d);
-        self.source_name(&nm);
+        self.name(d, v);
+        if is_fn {
+            self.bare_function_type(d);
+        }
+    }
+
+    /// <bare-function-type> of function `d`; a function template
+    /// specialization mangles its template's signature with the return
+    /// type first.
+    fn bare_function_type(&mut self, d: DeclId) {
+        let ast = self.ast;
+        let kind = ast.decls.get(d).kind();
+        let mut src = d;
+        let mut with_ret = false;
+        if let Some((t, _)) = self.spec_of(d) {
+            if let Some(p) = ast.template_info(t).and_then(|i| i.pattern) {
+                src = p;
+            }
+            with_ret = !matches!(
+                kind,
+                DeclKind::CXXConstructor | DeclKind::CXXDestructor | DeclKind::CXXConversion
+            );
+        }
+        let Some(ty) = ast.decls.get(src).ty() else { return };
+        let ty = ast.types.canonical(ty);
+        let Some(p) = ast.types.proto(ty).copied() else { return };
+        if with_ret {
+            self.ty(p.ret());
+        }
+        let params: Vec<QualType> = ast.types.params(&p).to_vec();
+        if params.is_empty() && !p.variadic() {
+            self.out.push('v');
+        }
+        for q in params {
+            self.ty(self.param_type(q));
+        }
+        if p.variadic() {
+            self.out.push('z');
+        }
+    }
+
+    /// The signature type of a parameter: top-level cv-qualifiers
+    /// dropped.
+    fn param_type(&self, q: QualType) -> QualType {
+        let q = self.ast.types.canonical(q);
+        if self.ast.types.element(q).is_some() {
+            return q;
+        }
+        q.without_quals()
+    }
+
+    // ---- names ---------------------------------------------------------
+
+    /// <name> of an entity.
+    fn name(&mut self, d: DeclId, v: Structor) {
+        let ast = self.ast;
+        if let Some(f) = enclosing_function(ast, d) {
+            // <local-name> := Z <function encoding> E <entity name>
+            self.out.push('Z');
+            self.encoding(f, Structor::Complete);
+            self.out.push('E');
+            self.name_in(d, v, Some(f));
+            return;
+        }
+        self.name_in(d, v, None);
+    }
+
+    /// The name of `d` relative to `stop` (the enclosing function of a
+    /// local entity, or the translation unit).
+    fn name_in(&mut self, d: DeclId, v: Structor, stop: Option<DeclId>) {
+        let parent = self.parent(d);
+        let at_top = parent.is_none_or(|p| {
+            Some(p) == stop || self.ast.decls.get(p).kind() == DeclKind::TranslationUnit
+        });
+        let spec = self.spec_of(d);
+        if at_top || parent.is_some_and(|p| self.is_std(p)) {
+            // <unscoped-name> / <unscoped-template-name> <template-args>
+            let std = !at_top;
+            if let Some((t, args)) = spec {
+                self.unscoped_template(t, std);
+                self.template_args(args);
+            } else {
+                if std {
+                    self.out.push_str("St");
+                }
+                self.l_prefix(d);
+                self.unqualified(d, v);
+            }
+            return;
+        }
+        // <nested-name>
+        self.out.push('N');
+        self.method_quals(d);
+        let p = parent.expect("nested name has a parent");
+        if let Some((t, args)) = spec {
+            self.template_prefix(t, stop);
+            self.template_args(args);
+        } else {
+            self.prefix(p, stop);
+            self.l_prefix(d);
+            self.unqualified(d, v);
+        }
+        self.out.push('E');
+    }
+
+    /// `L` for an internal-linkage name at namespace scope outside an
+    /// unnamed namespace (clang `isInternalLinkageDecl`).
+    fn l_prefix(&mut self, d: DeclId) {
+        if internal_by_storage(self.ast, d) && !in_anon_ns(self.ast, d) {
+            self.out.push('L');
+        }
+    }
+
+    /// The cv- and ref-qualifiers (and `H` for an explicit object
+    /// parameter) of a member function's nested name.
+    fn method_quals(&mut self, d: DeclId) {
+        let ast = self.ast;
+        let n = ast.decls.get(d);
+        if !matches!(n.kind(), DeclKind::CXXMethod | DeclKind::CXXConversion) {
+            return;
+        }
+        if ast.decls.function(d).is_some_and(|f| f.spec.has_explicit_object()) {
+            self.out.push('H');
+            return;
+        }
+        let Some(p) = n.ty().and_then(|t| ast.types.proto(ast.types.canonical(t))) else { return };
+        let info = p.info();
+        let q = info.this_quals();
+        if q.is_restrict() {
+            self.out.push('r');
+        }
+        if q.is_volatile() {
+            self.out.push('V');
+        }
+        if q.is_const() {
+            self.out.push('K');
+        }
+        match info.ref_qual() {
+            RefQual::LValue => self.out.push('R'),
+            RefQual::RValue => self.out.push('O'),
+            RefQual::None => {}
+        }
+    }
+
+    /// <prefix> for context `dc` (a namespace or class), using and
+    /// recording substitutions; nothing for the translation unit or
+    /// `stop`.
+    fn prefix(&mut self, dc: DeclId, stop: Option<DeclId>) {
+        let ast = self.ast;
+        let k = ast.decls.get(dc).kind();
+        if Some(dc) == stop || k == DeclKind::TranslationUnit {
+            return;
+        }
+        if matches!(k, DeclKind::LinkageSpec | DeclKind::Export) {
+            if let Some(p) = self.parent(dc) {
+                self.prefix(p, stop);
+            }
+            return;
+        }
+        if self.is_std(dc) {
+            self.out.push_str("St");
+            return;
+        }
+        let key = Sub::Decl(ast.first(dc));
+        if self.try_sub(key) {
+            return;
+        }
+        if let Some((t, args)) = self.spec_of(dc) {
+            self.template_prefix(t, stop);
+            self.template_args(args);
+        } else {
+            if let Some(p) = self.parent(dc) {
+                self.prefix(p, stop);
+            }
+            self.unqualified(dc, Structor::Complete);
+        }
+        self.subs.push(key);
+    }
+
+    /// <template-prefix> of template `t` within a nested name.
+    fn template_prefix(&mut self, t: DeclId, stop: Option<DeclId>) {
+        let key = Sub::Template(self.ast.first(t));
+        if self.try_sub(key) {
+            return;
+        }
+        if let Some(p) = self.parent(t) {
+            self.prefix(p, stop);
+        }
+        self.unqualified(t, Structor::Complete);
+        self.subs.push(key);
+    }
+
+    /// <unscoped-template-name> of template `t` (`St`-prefixed in `std`).
+    fn unscoped_template(&mut self, t: DeclId, std: bool) {
+        let key = Sub::Template(self.ast.first(t));
+        if self.try_sub(key) {
+            return;
+        }
+        if std {
+            self.out.push_str("St");
+        }
+        self.unqualified(t, Structor::Complete);
+        self.subs.push(key);
+    }
+
+    /// <unqualified-name>: operator, constructor, destructor, conversion
+    /// or literal-operator names, else the <source-name>.
+    fn unqualified(&mut self, d: DeclId, v: Structor) {
+        let ast = self.ast;
+        let n = ast.decls.get(d);
+        match ast.names.view(n.name()) {
+            DeclNameView::Operator(op) => {
+                let explicit = n
+                    .ty()
+                    .and_then(|t| ast.types.proto(ast.types.canonical(t)))
+                    .map_or(0, |p| ast.types.params(p).len());
+                // The implicit object parameter counts towards the arity
+                // (static member operators are arity-independent).
+                let implicit = n.kind() == DeclKind::CXXMethod
+                    && ast.decls.function(d).is_some_and(|f| {
+                        f.spec.storage() != FnStorage::Static && !f.spec.has_explicit_object()
+                    });
+                self.out.push_str(operator_code(op, explicit + usize::from(implicit)));
+            }
+            DeclNameView::Constructor(_) => {
+                self.out.push_str(if v == Structor::Base { "C2" } else { "C1" });
+            }
+            DeclNameView::Destructor(_) => self.out.push_str(match v {
+                Structor::Complete => "D1",
+                Structor::Base => "D2",
+                Structor::Deleting => "D0",
+            }),
+            DeclNameView::Conversion(q) => {
+                self.out.push_str("cv");
+                self.ty(q);
+            }
+            DeclNameView::LiteralOperator(s) => {
+                self.out.push_str("li");
+                let s = ast.symbols().as_str(s).to_owned();
+                self.source_name(&s);
+            }
+            _ => {
+                if n.kind() == DeclKind::Namespace && is_anon_ns(ast, d) {
+                    self.source_name("_GLOBAL__N_1");
+                    return;
+                }
+                let nm = decl_name(ast, d);
+                if nm.is_empty() {
+                    // An unnamed class without a typedef name for linkage.
+                    self.out.push_str("Ut_");
+                } else {
+                    self.source_name(&nm);
+                }
+            }
+        }
     }
 
     fn source_name(&mut self, s: &str) {
@@ -347,8 +638,15 @@ impl Mangler<'_> {
         self.out.push_str(s);
     }
 
-    fn find(&self, s: Sub) -> Option<usize> {
-        self.subs.iter().position(|&x| x == s)
+    /// Emits a back-reference if `s` is a recorded candidate.
+    fn try_sub(&mut self, s: Sub) -> bool {
+        match self.subs.iter().position(|&x| x == s) {
+            Some(k) => {
+                self.sub_ref(k);
+                true
+            }
+            None => false,
+        }
     }
 
     fn sub_ref(&mut self, k: usize) {
@@ -361,28 +659,153 @@ impl Mangler<'_> {
         }
     }
 
-    /// A tag type: its (possibly nested) name.
+    // ---- template arguments ---------------------------------------------
+
+    fn template_args(&mut self, list: ArgListId) {
+        self.out.push('I');
+        let args: Vec<_> = self.ast.types.args(list).to_vec();
+        for a in args {
+            self.template_arg(a.view());
+        }
+        self.out.push('E');
+    }
+
+    fn template_arg(&mut self, a: ArgView) {
+        match a {
+            ArgView::Type(q) => self.ty(q),
+            ArgView::Value { ty, value } => self.value_arg(ty, value),
+            ArgView::Template(n) | ArgView::TemplateExpansion { name: n, .. } => {
+                if matches!(a, ArgView::TemplateExpansion { .. }) {
+                    self.out.push_str("Dp");
+                }
+                self.template_name(n);
+            }
+            ArgView::Pack(l) => {
+                self.out.push('J');
+                let args: Vec<_> = self.ast.types.args(l).to_vec();
+                for x in args {
+                    self.template_arg(x.view());
+                }
+                self.out.push('E');
+            }
+            ArgView::Null | ArgView::Expr { .. } | ArgView::Profile(_) => {
+                self.out.push_str("XLi0EE");
+            }
+        }
+    }
+
+    /// A template template argument.
+    fn template_name(&mut self, n: TemplateNameId) {
+        let ast = self.ast;
+        let n = ast.types.canonical_template_name(n);
+        match ast.types.template_name_view(n) {
+            TemplateName::Template(t) => {
+                let key = Sub::Template(ast.first(t));
+                if self.try_sub(key) {
+                    return;
+                }
+                let parent = self.parent(t);
+                let top =
+                    parent.is_none_or(|p| ast.decls.get(p).kind() == DeclKind::TranslationUnit);
+                if top {
+                    self.unqualified(t, Structor::Complete);
+                } else if parent.is_some_and(|p| self.is_std(p)) {
+                    self.out.push_str("St");
+                    self.unqualified(t, Structor::Complete);
+                } else {
+                    self.out.push('N');
+                    if let Some(p) = parent {
+                        self.prefix(p, None);
+                    }
+                    self.unqualified(t, Structor::Complete);
+                    self.out.push('E');
+                }
+                self.subs.push(key);
+            }
+            TemplateName::TemplateTemplateParm { decl, .. } => {
+                let idx = ast.template_parm(decl).map_or(0, |p| u32::from(p.index));
+                self.template_param(idx);
+            }
+            _ => self.out.push_str("u7unknown"),
+        }
+    }
+
+    /// A non-type template argument value: `L <type> <value> E`, or
+    /// `L <mangled-name> E` for a reference to an entity.
+    fn value_arg(&mut self, ty: QualType, value: ConstValueId) {
+        let ast = self.ast;
+        match ast.consts.get(value) {
+            ConstValue::Scalar(Scalar::Int { signed, bits, .. }) => {
+                self.out.push('L');
+                self.ty(ty);
+                let v = if signed {
+                    bits.to_i128().map(|v| (v < 0, v.unsigned_abs()))
+                } else {
+                    bits.to_u128().map(|v| (false, v))
+                };
+                if let Some((neg, mag)) = v {
+                    if neg {
+                        self.out.push('n');
+                    }
+                    self.out.push_str(&mag.to_string());
+                }
+                self.out.push('E');
+            }
+            ConstValue::Scalar(Scalar::Bool { value, .. }) => {
+                self.out.push_str(if value { "Lb1E" } else { "Lb0E" });
+            }
+            ConstValue::Scalar(Scalar::Null { .. }) => {
+                if matches!(ast.types.canonical_view(ty), TypeView::Builtin(BuiltinType::NullPtr)) {
+                    self.out.push_str("LDn0E");
+                } else {
+                    self.out.push('L');
+                    self.ty(ty);
+                    self.out.push_str("0E");
+                }
+            }
+            ConstValue::Scalar(Scalar::Pointer { base, offset: 0, .. }) => {
+                let d = match base {
+                    PtrBase::Decl(d) | PtrBase::Function(d) => Some(d),
+                    _ => None,
+                };
+                let is_ref = matches!(
+                    ast.types.canonical_view(ty),
+                    TypeView::LValueRef(_) | TypeView::RValueRef(_)
+                );
+                match d {
+                    Some(d) => {
+                        // The entity's encoding shares this symbol's
+                        // substitutions.
+                        self.out.push_str(if is_ref { "L_Z" } else { "XadL_Z" });
+                        self.encoding(d, Structor::Complete);
+                        self.out.push_str(if is_ref { "E" } else { "EE" });
+                    }
+                    None => self.out.push_str("XLi0EE"),
+                }
+            }
+            _ => self.out.push_str("XLi0EE"),
+        }
+    }
+
+    fn template_param(&mut self, index: u32) {
+        if index == 0 {
+            self.out.push_str("T_");
+        } else {
+            self.out.push('T');
+            self.out.push_str(&(index - 1).to_string());
+            self.out.push('_');
+        }
+    }
+
+    // ---- types -----------------------------------------------------------
+
+    /// A tag type: its name (a candidate keyed by the declaration).
     fn tag(&mut self, d: DeclId) {
         let key = Sub::Decl(self.ast.first(d));
-        if let Some(k) = self.find(key) {
-            self.sub_ref(k);
+        if self.try_sub(key) {
             return;
         }
-        let chain = self.prefix_chain(d);
-        if chain.is_empty() {
-            let nm = self.component_name(d);
-            self.source_name(&nm);
-        } else if chain.len() == 1 && self.is_std(chain[0]) {
-            self.out.push_str("St");
-            let nm = self.component_name(d);
-            self.source_name(&nm);
-        } else {
-            self.out.push('N');
-            self.prefix(&chain);
-            let nm = self.component_name(d);
-            self.source_name(&nm);
-            self.out.push('E');
-        }
+        self.name(d, Structor::Complete);
         self.subs.push(key);
     }
 
@@ -390,11 +813,10 @@ impl Mangler<'_> {
         let ast = self.ast;
         let q = ast.types.canonical(q);
         let quals = ast.types.effective_quals(q);
-        let unq = q.without_quals();
-        if !quals.is_empty() {
+        let is_array = ast.types.element(q).is_some();
+        if !quals.is_empty() && !is_array {
             let key = Sub::Type(q);
-            if let Some(k) = self.find(key) {
-                self.sub_ref(k);
+            if self.try_sub(key) {
                 return;
             }
             if quals.is_restrict() {
@@ -406,65 +828,149 @@ impl Mangler<'_> {
             if quals.is_const() {
                 self.out.push('K');
             }
-            self.ty(unq);
+            self.ty(q.without_quals());
             self.subs.push(key);
             return;
         }
-        match ast.types.canonical_view(unq) {
-            TypeView::Builtin(b) => self.out.push_str(builtin_code(b)),
-            TypeView::Record(d) | TypeView::Enum(d) => self.tag(d),
-            view => {
-                let key = Sub::Type(unq);
-                if let Some(k) = self.find(key) {
-                    self.sub_ref(k);
-                    return;
-                }
-                match view {
-                    TypeView::Pointer(p) => {
-                        self.out.push('P');
-                        self.ty(p);
-                    }
-                    TypeView::LValueRef(p) => {
-                        self.out.push('R');
-                        self.ty(p);
-                    }
-                    TypeView::RValueRef(p) => {
-                        self.out.push('O');
-                        self.ty(p);
-                    }
-                    TypeView::ConstantArray(_) => {
-                        let n = ast.types.array_size(unq).unwrap_or(0);
-                        self.out.push('A');
-                        self.out.push_str(&n.to_string());
-                        self.out.push('_');
-                        if let Some(e) = ast.types.element(unq) {
-                            self.ty(e);
-                        }
-                    }
-                    TypeView::IncompleteArray(e) => {
-                        self.out.push_str("A_");
-                        self.ty(e);
-                    }
-                    TypeView::Function(p) => {
-                        self.out.push('F');
-                        self.ty(p.ret());
-                        let params: Vec<QualType> = ast.types.params(&p).to_vec();
-                        if params.is_empty() && !p.variadic() {
-                            self.out.push('v');
-                        }
-                        for x in params {
-                            self.ty(x.without_quals());
-                        }
-                        if p.variadic() {
-                            self.out.push('z');
-                        }
-                        self.out.push('E');
-                    }
-                    _ => self.out.push_str("u7unknown"),
-                }
-                self.subs.push(key);
+        let view = ast.types.canonical_view(q);
+        match view {
+            TypeView::Builtin(b) => {
+                self.out.push_str(builtin_code(b));
+                return;
             }
+            TypeView::Record(d) | TypeView::Enum(d) => {
+                self.tag(d);
+                return;
+            }
+            _ => {}
         }
+        let key = Sub::Type(q);
+        if self.try_sub(key) {
+            return;
+        }
+        self.compound(q, view);
+        self.subs.push(key);
+    }
+
+    /// A substitutable type other than a qualified type, builtin or tag.
+    fn compound(&mut self, q: QualType, view: TypeView) {
+        let ast = self.ast;
+        match view {
+            TypeView::Pointer(p) => {
+                self.out.push('P');
+                self.ty(p);
+            }
+            TypeView::LValueRef(p) => {
+                self.out.push('R');
+                self.ty(p);
+            }
+            TypeView::RValueRef(p) => {
+                self.out.push('O');
+                self.ty(p);
+            }
+            TypeView::ConstantArray(_) => {
+                let n = ast.types.array_size(q).unwrap_or(0);
+                self.out.push('A');
+                self.out.push_str(&n.to_string());
+                self.out.push('_');
+                if let Some(e) = ast.types.element(q) {
+                    self.ty(e);
+                }
+            }
+            TypeView::IncompleteArray(_) => {
+                self.out.push_str("A_");
+                if let Some(e) = ast.types.element(q) {
+                    self.ty(e);
+                }
+            }
+            TypeView::Function(p) => self.function_type(q, &p),
+            TypeView::MemberPointer { pointee, class } => self.member_pointer(pointee, class),
+            TypeView::Complex(e) => {
+                self.out.push('C');
+                self.ty(e);
+            }
+            TypeView::Atomic(e) => {
+                self.out.push_str("U7_Atomic");
+                self.ty(e);
+            }
+            TypeView::Vector { elem, count, .. } => {
+                self.out.push_str("Dv");
+                self.out.push_str(&count.to_string());
+                self.out.push('_');
+                self.ty(elem);
+            }
+            TypeView::BitInt { signed, width } => {
+                self.out.push_str(if signed { "DB" } else { "DU" });
+                self.out.push_str(&width.to_string());
+                self.out.push('_');
+            }
+            TypeView::TemplateTypeParm(d) => {
+                let idx = ast.template_parm(d).map_or(0, |p| u32::from(p.index));
+                self.template_param(idx);
+            }
+            TypeView::CanonTemplateTypeParm { index, .. } => self.template_param(index),
+            TypeView::PackExpansion { pattern, .. } => {
+                self.out.push_str("Dp");
+                self.ty(pattern);
+            }
+            TypeView::Auto { .. } => self.out.push_str("Da"),
+            _ => self.out.push_str("u7unknown"),
+        }
+    }
+
+    /// <pointer-to-member-type> ::= M <class type> <member type>; a
+    /// member function's cv-qualifiers precede its function type.
+    fn member_pointer(&mut self, pointee: QualType, class: kiln_ast::ids::TypeId) {
+        let ast = self.ast;
+        self.out.push('M');
+        self.ty(QualType::unqual(class));
+        let pointee = ast.types.canonical(pointee);
+        if let Some(p) = ast.types.proto(pointee).copied() {
+            let mq = p.info().this_quals();
+            if mq.is_restrict() {
+                self.out.push('r');
+            }
+            if mq.is_volatile() {
+                self.out.push('V');
+            }
+            if mq.is_const() {
+                self.out.push('K');
+            }
+            let fkey = Sub::Type(pointee);
+            if !self.try_sub(fkey) {
+                self.function_type(pointee, &p);
+                self.subs.push(fkey);
+            }
+        } else {
+            self.ty(pointee);
+        }
+    }
+
+    /// <function-type> ::= [<CV>] [Do] F [Y] <return> <params> [<ref>] E
+    /// (method cv-qualifiers are written by the member-pointer caller).
+    fn function_type(&mut self, _q: QualType, p: &kiln_ast::types::FuncProto) {
+        let ast = self.ast;
+        if ast.types.exc_spec(p).is_nothrow() {
+            self.out.push_str("Do");
+        }
+        self.out.push('F');
+        self.ty(p.ret());
+        let params: Vec<QualType> = ast.types.params(p).to_vec();
+        if params.is_empty() && !p.variadic() {
+            self.out.push('v');
+        }
+        for x in params {
+            self.ty(self.param_type(x));
+        }
+        if p.variadic() {
+            self.out.push('z');
+        }
+        match p.info().ref_qual() {
+            RefQual::LValue => self.out.push('R'),
+            RefQual::RValue => self.out.push('O'),
+            RefQual::None => {}
+        }
+        self.out.push('E');
     }
 }
 
