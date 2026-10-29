@@ -395,7 +395,10 @@ mod tests {
         let e = Report::parse(&bad).unwrap_err();
         assert!(e.contains("`steps` is 117 but the sum over the evaluations is 116"), "{e}");
         assert!(e.contains("`peak_bytes` is 90 but the maximum over the evaluations is 50"), "{e}");
-        let bad = GOOD.replace(r#""peak_arena":64,"frozen_bytes":140"#, r#""peak_arena":65,"frozen_bytes":139"#);
+        let bad = GOOD.replace(
+            r#""peak_arena":64,"frozen_bytes":140"#,
+            r#""peak_arena":65,"frozen_bytes":139"#,
+        );
         let e = Report::parse(&bad).unwrap_err();
         assert!(e.contains("`peak_arena` is 65 but the maximum over the evaluations is 64"), "{e}");
         assert!(e.contains("`frozen_bytes` is 139 but the sum over the evaluations is 140"), "{e}");
