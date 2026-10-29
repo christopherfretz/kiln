@@ -687,6 +687,24 @@ diag_ids! {
     sema_switch_into_protected_scope = Error (0) "cannot jump from switch statement to this case label";
     sema_goto_into_protected_scope = Error (0) "cannot jump from this goto statement to its label";
     note_protected_by_variable_init = Note (0) "jump bypasses variable initialization";
+    // WP-061a: new and delete expressions ([expr.new], [expr.delete]).
+    parse_postfix_after_unary_requires_parens = Error (1) "expression cannot be followed by a postfix {0} operator; add parentheses";
+    sema_converting_to_incompatible = Error (2) "converting {0} to incompatible type {1}";
+    sema_new_array_size_unknown = Error (0) "array size must be specified in new expression with no initializer";
+    sema_new_auto_requires_ctor_arg = Error (1) "new expression for type {0} requires a constructor argument";
+    sema_new_auto_multiple_args = Error (1) "new expression for type {0} contains multiple constructor arguments";
+    sema_new_incomplete_type = Error (1) "allocation of incomplete type {0}";
+    sema_new_reference_type = Error (1) "cannot allocate reference type {0} with new";
+    sema_default_init_const_no_ctor = Error (1) "default initialization of an object of const type {0} without a user-provided default constructor";
+    sema_delete_operand = Error (1) "cannot delete expression of type {0}";
+    sema_delete_incomplete = Error (1) "cannot delete pointer to incomplete type {0}";
+    sema_delete_void_ptr_warn = Warning [DeleteIncomplete] (1) "cannot delete expression with pointer-to-'void' type {0}";
+    sema_delete_incomplete_warn = Warning [DeleteIncomplete] (1) "deleting pointer to incomplete type {0} is incompatible with C++2c and may cause undefined behavior";
+    sema_delete_array_type = Warning (1) "'delete' applied to a pointer-to-array type {0} treated as 'delete[]'";
+    sema_converting_pointer_to_int = Error (2) "incompatible pointer to integer conversion converting {0} to type {1}";
+    sema_new_array_of_auto = Error (0) "cannot allocate array of 'auto'";
+    sema_new_function_type = Error (1) "cannot allocate function type {0} with new";
+    sema_placement_new_no_operator = Error (1) "no matching {0} function for non-allocating placement new expression; include <new>";
 }
 
 impl DiagId {

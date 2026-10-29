@@ -126,6 +126,7 @@ diag_groups! {
     Cxx23Extensions = "c++23-extensions" [];
     // driver codegen path (WP-052b)
     UnusedCommandLineArgument = "unused-command-line-argument" [];
+    DeleteIncomplete = "delete-incomplete" [];
 }
 
 impl Group {
