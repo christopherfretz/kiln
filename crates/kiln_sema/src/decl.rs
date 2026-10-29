@@ -1081,7 +1081,9 @@ impl Sema<'_, '_> {
                 StorageSpec::Extern | StorageSpec::Register | StorageSpec::Static => {
                     self.error(DiagId::sema_storage_class_for_member, loc);
                 }
-                _ => self.error(DiagId::sema_invalid_storage_class_in_func_decl, loc),
+                StorageSpec::Typedef => {
+                    self.error(DiagId::sema_invalid_storage_class_in_func_decl, loc);
+                }
             }
         }
         if let Some(loc) = ds.constexpr {

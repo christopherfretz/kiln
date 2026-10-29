@@ -324,12 +324,11 @@ impl Sema<'_, '_> {
     /// `this` at `loc` ([expr.prim.this], spec/sema-class.md §2.5;
     /// WP-066b).
     pub fn act_on_this(&mut self, loc: Loc) -> ExprId {
-        match self.current_this() {
-            Some(t) => self.builder().this_expr(t, false, loc),
-            None => {
-                self.error(DiagId::sema_this_outside_member, loc);
-                self.act_on_error_expr(&[], loc)
-            }
+        if let Some(t) = self.current_this() {
+            self.builder().this_expr(t, false, loc)
+        } else {
+            self.error(DiagId::sema_this_outside_member, loc);
+            self.act_on_error_expr(&[], loc)
         }
     }
 

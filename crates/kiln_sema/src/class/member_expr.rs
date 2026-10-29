@@ -386,9 +386,9 @@ impl Sema<'_, '_> {
             return Some(self.recover_err(&kids, loc));
         };
         let named = method.map(|d| CallCallee { decl: d, overloadable: false });
-        let conv_args = match self.convert_call_args(named, callee, args, &proto, loc, rparen) {
-            Some(a) => a,
-            None => return Some(self.recover_err(&kids, loc)),
+        let Some(conv_args) = self.convert_call_args(named, callee, args, &proto, loc, rparen)
+        else {
+            return Some(self.recover_err(&kids, loc));
         };
         if let Some(m) = method
             && self.unevaluated == 0
@@ -479,7 +479,7 @@ impl Sema<'_, '_> {
         if b == base {
             return Some(x);
         }
-        let extra = self.ast.exprs.decl_ref_extra(x).cloned();
+        let extra = self.ast.exprs.decl_ref_extra(x).copied();
         Some(self.builder().member(b, m, QualType::BOUND_MEMBER, arrow, n.loc(), extra))
     }
 

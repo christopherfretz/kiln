@@ -20,13 +20,13 @@ use kiln_diag::MemorySink;
 use kiln_sema::Sema;
 
 fn messages(sink: &MemorySink) -> Vec<String> {
-    let mut out = Vec::new();
     fn walk(d: &kiln_diag::Diagnostic, out: &mut Vec<String>) {
         out.push(format!("{}: {}", d.level.text_name(), d.message));
         for n in &d.notes {
             walk(n, out);
         }
     }
+    let mut out = Vec::new();
     for d in sink.take() {
         walk(&d, &mut out);
     }

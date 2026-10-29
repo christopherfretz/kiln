@@ -137,6 +137,10 @@ impl Sema<'_, '_> {
 
     /// A static data member: declared in its class ([class.static.data]/2),
     /// or defined out of line with the class as qualifier (/3).
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one check per paragraph of [class.static.data], in clang's order"
+    )]
     pub(crate) fn act_on_static_member(
         &mut self,
         ds: &DeclSpec,
@@ -523,6 +527,10 @@ impl Sema<'_, '_> {
     /// bases, member access and default member initializers ([class.prop],
     /// [dcl.init.aggr]/1, [temp.param]/7), on top of `bits` (computed from
     /// the fields alone). clang's `CXXRecordDecl::setBases` / `addedMember`.
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one pass over bases and members, as clang's addedMember"
+    )]
     pub(crate) fn class_bits(
         &self,
         r: DeclId,
