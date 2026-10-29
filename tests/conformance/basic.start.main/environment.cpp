@@ -3,7 +3,7 @@
 //@ env: KILN_GREETING=hello
 //@ run-stdin: world
 //@ stdout: hello world
-//@ xfail(kiln): libstdc++ headers do not parse yet: kiln_parse does not support decltype (c++config.h)
+//@ xfail(kiln): libstdc++ headers do not parse yet: function overloading (c++config.h), __builtin_va_list and asm labels (stdio.h)
 #include <cstdio>
 #include <cstdlib>
 
