@@ -155,6 +155,10 @@ pub struct Sema<'a, 'sm> {
     /// The static data member whose out-of-line initializer is being
     /// analysed: its class is the access context ([class.access]/7).
     pub(crate) initializing: Option<DeclId>,
+    /// The abstract classes whose unimplemented pure virtual functions
+    /// were already noted (clang notes them on the first abstract-type
+    /// diagnostic per class only; WP-078a).
+    pub(crate) abstract_noted: kiln_source::fx::FxHashSet<DeclId>,
 }
 
 impl<'a, 'sm> Sema<'a, 'sm> {
@@ -208,6 +212,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             friend_tag: None,
             nsdmi_this: Vec::new(),
             initializing: None,
+            abstract_noted: kiln_source::fx::FxHashSet::default(),
         }
     }
 

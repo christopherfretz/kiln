@@ -379,6 +379,30 @@ impl Sema<'_, '_> {
         path: &BasePath,
         loc: Loc,
     ) -> bool {
+        self.check_base_access_impl(derived_ty, base_ty, path, loc, false)
+    }
+
+    /// [`Self::check_base_access`] for a covariant return type
+    /// ([class.virtual]/8): `invalid covariant return for virtual
+    /// function: 'B' is a private base class of 'D'` (WP-078a).
+    pub(crate) fn check_covariant_base_access(
+        &mut self,
+        derived_ty: QualType,
+        base_ty: QualType,
+        path: &BasePath,
+        loc: Loc,
+    ) -> bool {
+        self.check_base_access_impl(derived_ty, base_ty, path, loc, true)
+    }
+
+    fn check_base_access_impl(
+        &mut self,
+        derived_ty: QualType,
+        base_ty: QualType,
+        path: &BasePath,
+        loc: Loc,
+        covariant: bool,
+    ) -> bool {
         let Some(derived) = self.ast.types.as_record(self.ast.types.canonical(derived_ty)) else {
             return true;
         };
@@ -403,11 +427,17 @@ impl Sema<'_, '_> {
         if self.is_accessible(&ec, &t, derived, acc) {
             return true;
         }
-        let msg = self
-            .diag(DiagId::sema_access_base_conv, loc)
-            .arg(self.ty_arg(derived_ty))
-            .arg(u8::from(acc == Access::Protected))
-            .arg(self.ty_arg(base_ty));
+        let msg = if covariant {
+            self.diag(DiagId::sema_covariant_return_inaccessible, loc)
+                .arg(self.ty_arg(base_ty))
+                .arg(u8::from(acc == Access::Protected))
+                .arg(self.ty_arg(derived_ty))
+        } else {
+            self.diag(DiagId::sema_access_base_conv, loc)
+                .arg(self.ty_arg(derived_ty))
+                .arg(u8::from(acc == Access::Protected))
+                .arg(self.ty_arg(base_ty))
+        };
         let msg = self.access_path_notes(msg, &ec, &t, derived);
         self.emit(msg);
         false

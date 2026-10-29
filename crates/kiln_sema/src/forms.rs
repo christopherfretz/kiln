@@ -210,6 +210,10 @@ impl Sema<'_, '_> {
         if self.is_error_type(ty) {
             return self.recover(ty, &[], loc);
         }
+        // [class.abstract]/3 (clang `BuildCXXTypeConstructExpr`).
+        if self.require_non_abstract_alloc(loc, ty) {
+            return self.recover(QualType::ERROR, &[], loc);
+        }
         if let Some(what) = self.temporary_unsupported(ty) {
             self.unsupported(&format!("value-initialization of {what}"), loc);
             return self.recover(ty, &[], loc);
@@ -223,6 +227,10 @@ impl Sema<'_, '_> {
         if self.is_error_type(ty) {
             let flat = Self::list_exprs(l);
             return self.recover(ty, &flat, loc);
+        }
+        if self.require_non_abstract_alloc(loc, ty) {
+            let flat = Self::list_exprs(l);
+            return self.recover(QualType::ERROR, &flat, loc);
         }
         if let Some(what) = self
             .temporary_unsupported(ty)
@@ -256,6 +264,9 @@ impl Sema<'_, '_> {
     pub fn act_on_paren_list_cast(&mut self, ty: QualType, args: &[ExprId], loc: Loc) -> ExprId {
         if self.is_error_type(ty) || args.iter().any(|&a| self.is_err_expr(a)) {
             return self.recover(ty, args, loc);
+        }
+        if self.require_non_abstract_alloc(loc, ty) {
+            return self.recover(QualType::ERROR, args, loc);
         }
         if let Some(what) = self.temporary_unsupported(ty) {
             self.unsupported(&format!("direct-initialization of {what}"), loc);

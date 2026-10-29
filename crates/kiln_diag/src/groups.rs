@@ -44,7 +44,7 @@ macro_rules! diag_groups {
 
 diag_groups! {
     All = "all" [Most];
-    Most = "most" [Comment, UnknownPragmas];
+    Most = "most" [Comment, UnknownPragmas, OverloadedVirtual];
     Pragmas = "pragmas" [UnknownPragmas, IgnoredPragmas];
     Pedantic = "pedantic" [];
     BackslashNewlineEscape = "backslash-newline-escape" [];
@@ -133,6 +133,10 @@ diag_groups! {
     // driver codegen path (WP-052b)
     UnusedCommandLineArgument = "unused-command-line-argument" [];
     DeleteIncomplete = "delete-incomplete" [];
+    // WP-078a
+    OverloadedVirtual = "overloaded-virtual" [];
+    InconsistentMissingOverride = "inconsistent-missing-override" [];
+    AbstractFinalClass = "abstract-final-class" [];
 }
 
 impl Group {

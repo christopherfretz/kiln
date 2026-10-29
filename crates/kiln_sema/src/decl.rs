@@ -351,6 +351,9 @@ impl Sema<'_, '_> {
                         self.emit(self.incomplete_note(msg, ty));
                         return QualType::ERROR;
                     }
+                    if self.require_non_abstract_element(*loc, ty) {
+                        return QualType::ERROR;
+                    }
                     ty = match size {
                         None => self.ast.types.incomplete_array(ty),
                         Some(e) => match self.array_bound(*e, d) {
@@ -663,8 +666,8 @@ impl Sema<'_, '_> {
     /// The declarator forms the parser accepts but sema does not handle yet
     /// (spec/parse.md §9): reports `{what} is not supported yet`, returning
     /// true when the declaration is dropped. Constructors, destructors and
-    /// conversion functions are WP-067a, operator functions WP-068b,
-    /// virtual functions WP-078a; the specifiers are reported and ignored.
+    /// conversion functions are WP-067a, operator functions WP-068b; the
+    /// specifiers are reported and ignored.
     pub(crate) fn unsupported_declarator(&mut self, ds: &DeclSpec, d: &Declarator) -> bool {
         if let Some((sp, loc)) = d.special {
             let what = match sp {
@@ -676,14 +679,7 @@ impl Sema<'_, '_> {
             self.unsupported(what, loc);
             return true;
         }
-        let specs = [
-            (ds.virtual_, "'virtual'"),
-            (ds.explicit, "'explicit'"),
-            (ds.consteval, "'consteval'"),
-            (d.virt_override, "'override'"),
-            (d.virt_final, "'final'"),
-            (d.pure, "pure virtual functions"),
-        ];
+        let specs = [(ds.explicit, "'explicit'"), (ds.consteval, "'consteval'")];
         for (at, what) in specs {
             if let Some(l) = at {
                 self.unsupported(what, l);
@@ -846,6 +842,9 @@ impl Sema<'_, '_> {
             // here; member operators are WP-068b.
             self.unsupported("this declaration of an operator function", d.loc);
             return None;
+        }
+        if ds.is_typedef() || !self.ast.types.is_function(ty) {
+            self.virtual_on_non_function(ds, d);
         }
         let decl = if ds.is_typedef() {
             self.act_on_typedef(ds, ty, d, name, false)
@@ -1393,7 +1392,17 @@ impl Sema<'_, '_> {
             };
             h.misc = h.misc.with_friend(k);
         }
+        let site = crate::class::VirtualSite {
+            class: ctx,
+            method,
+            in_class,
+            friend,
+            prev: prev_ok,
+            name,
+        };
+        let virt = self.virtual_decl(ds, d, ty, site, &mut spec);
         let f = self.builder().function(h, fkind, ty, spec, prev_ok);
+        self.finish_virtual_decl(f, virt);
         if invalid_redecl {
             self.ast.decls.set_flags(f, DeclFlags::INVALID);
         }
@@ -1417,6 +1426,9 @@ impl Sema<'_, '_> {
             };
             let idx = u16::try_from(i).unwrap_or(u16::MAX);
             let pd = self.builder().param(f, pname, p.loc, p.ty, idx, 0);
+            if p.range.0.is_valid() && p.range.0 != p.loc {
+                let _ = self.ast.decls.cold.begin_loc.insert(pd, p.range.0);
+            }
             if p.invalid {
                 self.ast.decls.set_flags(pd, DeclFlags::INVALID);
             }
@@ -1598,6 +1610,10 @@ impl Sema<'_, '_> {
             // clang marks the field invalid: initialization never
             // descends into it (a field of the class's own type would
             // recurse forever).
+            QualType::ERROR
+        } else if !invalid
+            && self.require_non_abstract(d.name_loc(), ty, crate::class::AbstractUse::Field)
+        {
             QualType::ERROR
         } else {
             ty
@@ -1790,6 +1806,7 @@ impl Sema<'_, '_> {
         let mut h = DeclHead::new(ctx, DeclName::ident(name), d.name_loc());
         h.lexical = Some(lexical);
         let v = self.builder().var(h, ty, spec, prev_ok);
+        self.check_abstract_var(v);
         self.register_local(name, v);
         if spec.storage() == VarStorage::Extern {
             self.note_local_extern(name, v);
@@ -2046,6 +2063,7 @@ impl Sema<'_, '_> {
                 self.emit(self.incomplete_note(msg, pty));
             }
         }
+        self.check_abstract_signature(f);
         self.begin_function_body(f, ret);
         if let Some(t) = self.method_this_type(f)
             && let Some(state) = self.func.as_mut()
@@ -2441,10 +2459,12 @@ impl Sema<'_, '_> {
             bits = bits.with(DefinitionBits::ANONYMOUS);
         }
         let bits = self.class_bits(r, build.as_ref(), bits);
+        let bits = self.virtual_class_bits(r, bits);
         if let Some(b) = &build {
             let _ = self.builder().set_friends(r, &b.friends);
         }
         self.builder().complete_record_definition(r, bits);
+        self.act_on_complete_virtual(r);
     }
 
     /// `{` of an enumeration definition.
