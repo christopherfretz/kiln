@@ -8,8 +8,8 @@ use kiln_ast::decl::{DeclKind, VarStorage};
 use kiln_ast::expr::{BinaryOp, CastKind, ExprFlags, ExprKind, UnaryOp, ValueCategory};
 use kiln_ast::{DeclId, ExprId, QualType};
 use kiln_llvm::{
-    Attr, AttrKind, AttrList, BinOp, CallOpts, CastOp, ConstData, Flags, FloatPredicate, IntPredicate,
-    TypeId as LTy, Value,
+    Attr, AttrKind, AttrList, BinOp, CallOpts, CastOp, ConstData, Flags, FloatPredicate,
+    IntPredicate, TypeId as LTy, Value,
 };
 
 use crate::fir::{Fir, Op, V};
@@ -158,8 +158,12 @@ impl Cg<'_> {
                 Some(c) => V::C(self.const_scalar_value(c, q)?),
                 None => return err(self.loc_of(e), "unfolded type trait expression"),
             },
-            ExprKind::SubstNonTypeTemplateParmExpr => return self.emit_scalar_opt(ExprId::new(n.b())),
-            ExprKind::DeclRefExpr if ast.decls.get(ast.exprs.decl(e)).kind() == DeclKind::EnumConstant => {
+            ExprKind::SubstNonTypeTemplateParmExpr => {
+                return self.emit_scalar_opt(ExprId::new(n.b()));
+            }
+            ExprKind::DeclRefExpr
+                if ast.decls.get(ast.exprs.decl(e)).kind() == DeclKind::EnumConstant =>
+            {
                 let d = ast.exprs.decl(e);
                 match ast.decls.enumerator(d).and_then(|x| x.value) {
                     Some(c) => V::C(self.const_scalar_value(c, q)?),
@@ -294,7 +298,11 @@ impl Cg<'_> {
             return self.cast(if signed { CastOp::SIToFP } else { CastOp::UIToFP }, v, tt);
         }
         if ti {
-            return self.cast(if self.is_signed(to) { CastOp::FPToSI } else { CastOp::FPToUI }, v, tt);
+            return self.cast(
+                if self.is_signed(to) { CastOp::FPToSI } else { CastOp::FPToUI },
+                v,
+                tt,
+            );
         }
         let fw = self.m.types.float_width(ft).unwrap_or(0);
         let tw = self.m.types.float_width(tt).unwrap_or(0);
@@ -344,7 +352,9 @@ impl Cg<'_> {
                 }
                 return self.emit_scalar_opt(s);
             }
-            CastKind::NoOp | CastKind::BitCast | CastKind::LValueBitCast => return self.emit_scalar_opt(s),
+            CastKind::NoOp | CastKind::BitCast | CastKind::LValueBitCast => {
+                return self.emit_scalar_opt(s);
+            }
             CastKind::ToVoid => {
                 self.emit_ignored(s)?;
                 return Ok(None);
@@ -353,7 +363,9 @@ impl Cg<'_> {
                 let lv = self.emit_lvalue(s)?;
                 self.decay(lv.addr)
             }
-            CastKind::FunctionToPointerDecay | CastKind::BuiltinFnToFnPtr => self.emit_lvalue(s)?.addr.v,
+            CastKind::FunctionToPointerDecay | CastKind::BuiltinFnToFnPtr => {
+                self.emit_lvalue(s)?.addr.v
+            }
             CastKind::NullToPointer => {
                 if !ast.exprs.get(s).value_category().eq(&ValueCategory::PRValue)
                     || ast.exprs.get(s).kind() != ExprKind::CXXNullPtrLiteralExpr
@@ -456,7 +468,11 @@ impl Cg<'_> {
             V::C(self.m.const_bool(true))
         } else if ast.types.is_pointer(q) {
             let pq = ast.types.pointee(q).expect("pointee");
-            let et = if ast.types.is_void(pq) || ast.types.is_function(pq) { LTy::I8 } else { self.mty(pq) };
+            let et = if ast.types.is_void(pq) || ast.types.is_function(pq) {
+                LTy::I8
+            } else {
+                self.mty(pq)
+            };
             let c = self.icn(LTy::I32, amount);
             self.gep(et, old, vec![c], true)
         } else {
@@ -510,7 +526,16 @@ impl Cg<'_> {
     /// Binary arithmetic, comparison and pointer arithmetic on emitted
     /// operands (`q` is the computation type).
     #[allow(clippy::too_many_arguments)]
-    fn arith(&mut self, e: ExprId, op: BinaryOp, l: V, r: V, lq: QualType, rq: QualType, q: QualType) -> R<V> {
+    fn arith(
+        &mut self,
+        e: ExprId,
+        op: BinaryOp,
+        l: V,
+        r: V,
+        lq: QualType,
+        rq: QualType,
+        q: QualType,
+    ) -> R<V> {
         let ast = self.ast;
         let lp = ast.types.is_pointer(lq);
         let rp = ast.types.is_pointer(rq);
@@ -524,7 +549,11 @@ impl Cg<'_> {
                 let b = self.cast(CastOp::PtrToInt, r, LTy::I64);
                 let d = self.bin(BinOp::Sub, Flags::NONE, a, b);
                 let pq = ast.types.pointee(lq).expect("pointee");
-                let sz = if ast.types.is_void(pq) || ast.types.is_function(pq) { 1 } else { self.size_align(pq).0 };
+                let sz = if ast.types.is_void(pq) || ast.types.is_function(pq) {
+                    1
+                } else {
+                    self.size_align(pq).0
+                };
                 if sz == 1 {
                     d
                 } else {
@@ -542,7 +571,11 @@ impl Cg<'_> {
                     idx = self.bin(BinOp::Sub, Flags::NONE, z, idx);
                 }
                 let et = ast.types.pointee(pq).expect("pointee");
-                let ety = if ast.types.is_void(et) || ast.types.is_function(et) { LTy::I8 } else { self.mty(et) };
+                let ety = if ast.types.is_void(et) || ast.types.is_function(et) {
+                    LTy::I8
+                } else {
+                    self.mty(et)
+                };
                 self.gep(ety, p, vec![idx], true)
             }
             BinaryOp::Add => {
@@ -566,7 +599,11 @@ impl Cg<'_> {
                 }
             }
             BinaryOp::Mul => {
-                if float { self.bin(BinOp::FMul, Flags::NONE, l, r) } else { self.bin(BinOp::Mul, nsw, l, r) }
+                if float {
+                    self.bin(BinOp::FMul, Flags::NONE, l, r)
+                } else {
+                    self.bin(BinOp::Mul, nsw, l, r)
+                }
             }
             BinaryOp::Div => {
                 if float {
@@ -597,7 +634,12 @@ impl Cg<'_> {
             BinaryOp::And => self.bin(BinOp::And, Flags::NONE, l, r),
             BinaryOp::Or => self.bin(BinOp::Or, Flags::NONE, l, r),
             BinaryOp::Xor => self.bin(BinOp::Xor, Flags::NONE, l, r),
-            BinaryOp::LT | BinaryOp::GT | BinaryOp::LE | BinaryOp::GE | BinaryOp::EQ | BinaryOp::NE => {
+            BinaryOp::LT
+            | BinaryOp::GT
+            | BinaryOp::LE
+            | BinaryOp::GE
+            | BinaryOp::EQ
+            | BinaryOp::NE => {
                 if float {
                     let p = match op {
                         BinaryOp::LT => FloatPredicate::Olt,
@@ -672,7 +714,8 @@ impl Cg<'_> {
         let ty = self.f.fir.ty(&self.m, addend);
         let name = kiln_llvm::intrinsics::overloaded_name(&self.m, "llvm.fmuladd", &[ty]);
         let fn_ty = self.m.types.function(ty, &[ty, ty, ty], false);
-        let f = kiln_llvm::intrinsics::intrinsic(&mut self.m, &name, fn_ty).expect("fmuladd declaration");
+        let f = kiln_llvm::intrinsics::intrinsic(&mut self.m, &name, fn_ty)
+            .expect("fmuladd declaration");
         let fa = self.m.attr_set(&[
             Attr::Flag(AttrKind::NoCallback),
             Attr::Flag(AttrKind::NoFree),
@@ -684,7 +727,12 @@ impl Cg<'_> {
         ]);
         self.m.func_mut(f).attrs.func = fa;
         let c = self.f.fir.push(
-            Op::Call { fn_ty, callee: V::C(Value::func(f)), args: vec![a, b, addend], opts: Box::default() },
+            Op::Call {
+                fn_ty,
+                callee: V::C(Value::func(f)),
+                args: vec![a, b, addend],
+                opts: Box::default(),
+            },
             ty,
         );
         self.f.calls.push((Fir::last_inst(c), Some(f), true));
@@ -713,7 +761,11 @@ impl Cg<'_> {
         }
         let preds = self.f.fir.predecessors(end);
         let k = V::C(self.m.const_bool(!and));
-        let phi = self.f.fir.push_in(end, Op::Phi { ty: LTy::I1, inc: preds.iter().map(|&p| (k, p)).collect() }, LTy::I1);
+        let phi = self.f.fir.push_in(
+            end,
+            Op::Phi { ty: LTy::I1, inc: preds.iter().map(|&p| (k, p)).collect() },
+            LTy::I1,
+        );
         self.emit_block(rhs, false);
         let v = self.eval_bool(r)?;
         let rb = self.f.fir.cur().expect("insert point");
@@ -723,7 +775,12 @@ impl Cg<'_> {
     }
 
     /// clang `EmitBranchOnBoolExpr`.
-    pub(crate) fn branch_on_bool(&mut self, e: ExprId, t: crate::fir::Blk, f: crate::fir::Blk) -> R<()> {
+    pub(crate) fn branch_on_bool(
+        &mut self,
+        e: ExprId,
+        t: crate::fir::Blk,
+        f: crate::fir::Blk,
+    ) -> R<()> {
         let ast = self.ast;
         let mut e = e;
         while ast.exprs.get(e).kind() == ExprKind::ParenExpr {
@@ -850,7 +907,11 @@ impl Cg<'_> {
         match ast.decls.get(d).kind() {
             DeclKind::Function | DeclKind::CXXMethod => {
                 let f = self.get_fn(d)?;
-                Ok(LV { addr: Addr { v: V::C(Value::func(f)), ty: LTy::PTR, align: 1 }, q, bf: None })
+                Ok(LV {
+                    addr: Addr { v: V::C(Value::func(f)), ty: LTy::PTR, align: 1 },
+                    q,
+                    bf: None,
+                })
             }
             DeclKind::Var | DeclKind::ParmVar => {
                 if let Some(&a) = self.f.locals.get(&d) {
@@ -932,7 +993,8 @@ impl Cg<'_> {
             ExprKind::CompoundAssignOperator => Ok(self.emit_compound_assign(e)?.0),
             ExprKind::ConditionalOperator => self.cond_lvalue(e),
             ExprKind::MaterializeTemporaryExpr | ExprKind::CallExpr | ExprKind::InitListExpr => {
-                let s = if n.kind() == ExprKind::MaterializeTemporaryExpr { self.sub(e) } else { e };
+                let s =
+                    if n.kind() == ExprKind::MaterializeTemporaryExpr { self.sub(e) } else { e };
                 let sq = ast.exprs.get(s).ty();
                 let tmp = self.temp(sq);
                 if self.is_aggregate(sq) {
@@ -977,7 +1039,10 @@ impl Cg<'_> {
         let y = self.emit_lvalue(b)?;
         let rb = self.f.fir.cur().expect("insert point");
         self.emit_block(cont, false);
-        let p = self.f.fir.push(Op::Phi { ty: LTy::PTR, inc: vec![(x.addr.v, lb), (y.addr.v, rb)] }, LTy::PTR);
+        let p = self
+            .f
+            .fir
+            .push(Op::Phi { ty: LTy::PTR, inc: vec![(x.addr.v, lb), (y.addr.v, rb)] }, LTy::PTR);
         let align = x.addr.align.min(y.addr.align);
         Ok(LV { addr: Addr { v: p, ty: x.addr.ty, align }, q: ast.exprs.get(e).ty(), bf: None })
     }
@@ -1059,7 +1124,9 @@ impl Cg<'_> {
     fn simple_decay_operand(&self, e: ExprId) -> Option<ExprId> {
         let ast = self.ast;
         let n = ast.exprs.get(e);
-        if n.kind() == ExprKind::ImplicitCastExpr && ast.exprs.cast_kind(e) == CastKind::ArrayToPointerDecay {
+        if n.kind() == ExprKind::ImplicitCastExpr
+            && ast.exprs.cast_kind(e) == CastKind::ArrayToPointerDecay
+        {
             return Some(ast.exprs.operand(e));
         }
         None
@@ -1070,7 +1137,8 @@ impl Cg<'_> {
         let ast = self.ast;
         let q = ast.exprs.get(e).ty();
         let [l, r] = ast.exprs.operands(e);
-        let swapped = !ast.types.is_pointer(ast.exprs.get(l).ty()) && self.simple_decay_operand(l).is_none();
+        let swapped =
+            !ast.types.is_pointer(ast.exprs.get(l).ty()) && self.simple_decay_operand(l).is_none();
         let (base, idx) = if swapped { (r, l) } else { (l, r) };
         let pre = if swapped { Some(self.emit_scalar(idx)?) } else { None };
         let iq = ast.exprs.get(idx).ty();
@@ -1139,7 +1207,9 @@ impl Cg<'_> {
                 let n = ast.exprs.get(c);
                 match n.kind() {
                     ExprKind::ParenExpr => c = ast.exprs.operand(c),
-                    ExprKind::ImplicitCastExpr if ast.exprs.cast_kind(c) == CastKind::FunctionToPointerDecay => {
+                    ExprKind::ImplicitCastExpr
+                        if ast.exprs.cast_kind(c) == CastKind::FunctionToPointerDecay =>
+                    {
                         c = ast.exprs.operand(c)
                     }
                     ExprKind::DeclRefExpr => {
@@ -1184,7 +1254,9 @@ impl Cg<'_> {
             let kind = sig.info.args.get(i).map(|x| x.kind.clone());
             match kind {
                 Some(ArgKind::Ignore) => self.emit_ignored(a)?,
-                Some(ArgKind::Direct { .. } | ArgKind::Extend { .. }) if !self.is_aggregate(arg_tys[i]) => {
+                Some(ArgKind::Direct { .. } | ArgKind::Extend { .. })
+                    if !self.is_aggregate(arg_tys[i]) =>
+                {
                     let v = self.emit_scalar(a)?;
                     ir_args.push(v);
                 }
@@ -1205,7 +1277,10 @@ impl Cg<'_> {
             AttrList::default().func
         };
         let opts = CallOpts { attrs: AttrList { func, ret, params }, ..CallOpts::default() };
-        let r = self.f.fir.push(Op::Call { fn_ty: sig.fn_ty, callee, args: ir_args, opts: Box::new(opts) }, rty);
+        let r = self
+            .f
+            .fir
+            .push(Op::Call { fn_ty: sig.fn_ty, callee, args: ir_args, opts: Box::new(opts) }, rty);
         self.f.calls.push((Fir::last_inst(r), fid, sig.nothrow));
         if let Some(a) = sret_addr {
             let _ = a;
@@ -1219,7 +1294,9 @@ impl Cg<'_> {
                 Some(d) => d,
                 None => self.temp(rq),
             };
-            let (ArgKind::Direct { coerce, .. } | ArgKind::Extend { coerce, .. }) = sig.info.ret.kind.clone() else {
+            let (ArgKind::Direct { coerce, .. } | ArgKind::Extend { coerce, .. }) =
+                sig.info.ret.kind.clone()
+            else {
                 unreachable!()
             };
             self.coerced_store(r, &coerce, d);
@@ -1238,7 +1315,9 @@ impl Cg<'_> {
             match n.kind() {
                 ExprKind::ParenExpr | ExprKind::ConstantExpr => e = ast.exprs.operand(e),
                 ExprKind::ExprWithCleanups | ExprKind::MaterializeTemporaryExpr => e = self.sub(e),
-                k if k.is_cast() && ast.exprs.cast_kind(e) == CastKind::NoOp => e = ast.exprs.operand(e),
+                k if k.is_cast() && ast.exprs.cast_kind(e) == CastKind::NoOp => {
+                    e = ast.exprs.operand(e)
+                }
                 _ => return e,
             }
         }
@@ -1272,9 +1351,10 @@ impl Cg<'_> {
                 ExprKind::FloatingLiteral => {
                     let c = ast.exprs.literal_const(e);
                     return c.is_some_and(|c| match ast.consts.get(c) {
-                        kiln_ast::consts::ConstValue::Scalar(kiln_ast::consts::Scalar::Float { bits, .. }) => {
-                            bits == 0
-                        }
+                        kiln_ast::consts::ConstValue::Scalar(kiln_ast::consts::Scalar::Float {
+                            bits,
+                            ..
+                        }) => bits == 0,
                         _ => false,
                     });
                 }
@@ -1300,8 +1380,11 @@ impl Cg<'_> {
         if let Some(rd) = ast.types.as_record(q) {
             let is_union = self.tys.record(rd).is_union;
             if !is_union {
-                let fields: Vec<DeclId> =
-                    ast.decls.members(rd).filter(|&m| ast.decls.get(m).kind() == DeclKind::Field).collect();
+                let fields: Vec<DeclId> = ast
+                    .decls
+                    .members(rd)
+                    .filter(|&m| ast.decls.get(m).kind() == DeclKind::Field)
+                    .collect();
                 let mut total = 0;
                 for (k, _) in fields.iter().enumerate() {
                     if k >= inits.len() {
@@ -1335,7 +1418,9 @@ impl Cg<'_> {
         let n = *ast.exprs.get(e);
         let q = n.ty();
         match n.kind() {
-            ExprKind::ParenExpr | ExprKind::ConstantExpr => self.agg_visit(ast.exprs.operand(e), dest, zeroed),
+            ExprKind::ParenExpr | ExprKind::ConstantExpr => {
+                self.agg_visit(ast.exprs.operand(e), dest, zeroed)
+            }
             ExprKind::ExprWithCleanups | ExprKind::MaterializeTemporaryExpr => {
                 self.agg_visit(self.sub(e), dest, zeroed)
             }
@@ -1357,7 +1442,9 @@ impl Cg<'_> {
                 }
                 Ok(())
             }
-            k if k.is_cast() && matches!(ast.exprs.cast_kind(e), CastKind::NoOp | CastKind::LValueToRValue) => {
+            k if k.is_cast()
+                && matches!(ast.exprs.cast_kind(e), CastKind::NoOp | CastKind::LValueToRValue) =>
+            {
                 let s = ast.exprs.operand(e);
                 if self.is_glvalue(s) {
                     let lv = self.emit_lvalue(s)?;
@@ -1369,7 +1456,10 @@ impl Cg<'_> {
                     self.agg_visit(s, dest, zeroed)
                 }
             }
-            ExprKind::DeclRefExpr | ExprKind::MemberExpr | ExprKind::ArraySubscriptExpr | ExprKind::UnaryOperator => {
+            ExprKind::DeclRefExpr
+            | ExprKind::MemberExpr
+            | ExprKind::ArraySubscriptExpr
+            | ExprKind::UnaryOperator => {
                 let lv = self.emit_lvalue(e)?;
                 let size = self.size_align(q).0;
                 self.memcpy(dest, lv.addr.v, lv.addr.align, size, false);
@@ -1448,7 +1538,8 @@ impl Cg<'_> {
         let mut k = 0usize;
         for f in fields {
             let fd = ast.decls.field(f);
-            let unnamed_bf = fd.is_some_and(|x| x.bit_width.is_some()) && mangle::decl_name(ast, f).is_empty();
+            let unnamed_bf =
+                fd.is_some_and(|x| x.bit_width.is_some()) && mangle::decl_name(ast, f).is_empty();
             if unnamed_bf {
                 continue;
             }
@@ -1576,7 +1667,9 @@ impl Cg<'_> {
 
     fn const_elems(&mut self, k: Value) -> Option<Vec<Value>> {
         match self.m.const_of(k)?.clone() {
-            ConstData::Array { elems, .. } | ConstData::Struct { elems, .. } => Some(elems.to_vec()),
+            ConstData::Array { elems, .. } | ConstData::Struct { elems, .. } => {
+                Some(elems.to_vec())
+            }
             ConstData::Bytes { bytes, .. } => {
                 Some(bytes.iter().map(|&b| self.m.const_int(LTy::I8, i128::from(b))).collect())
             }
@@ -1585,8 +1678,16 @@ impl Cg<'_> {
     }
 
     fn is_scalar_const(&self, k: Value) -> bool {
-        matches!(self.m.const_of(k), Some(ConstData::Int { .. } | ConstData::Float { .. } | ConstData::Gep { .. } | ConstData::Cast { .. } | ConstData::Binary { .. }))
-            || matches!(self.m.const_of(k), Some(ConstData::Null(_)))
+        matches!(
+            self.m.const_of(k),
+            Some(
+                ConstData::Int { .. }
+                    | ConstData::Float { .. }
+                    | ConstData::Gep { .. }
+                    | ConstData::Cast { .. }
+                    | ConstData::Binary { .. }
+            )
+        ) || matches!(self.m.const_of(k), Some(ConstData::Null(_)))
     }
 
     fn is_undef_const(&self, k: Value) -> bool {
@@ -1678,7 +1779,12 @@ impl Cg<'_> {
             let z = self.icn(LTy::I32, 0);
             let iv = self.icn(LTy::I32, i as i128);
             let p = self.f.fir.push(
-                Op::Gep { src: at.ty, base: at.v, idx: vec![z, iv], flags: kiln_llvm::GepFlags::INBOUNDS },
+                Op::Gep {
+                    src: at.ty,
+                    base: at.v,
+                    idx: vec![z, iv],
+                    flags: kiln_llvm::GepFlags::INBOUNDS,
+                },
                 LTy::PTR,
             );
             self.stores_after_bzero(x, Addr { v: p, ty: et, align: min_align(at.align, off) }, vol);

@@ -93,7 +93,8 @@ impl Cg<'_> {
                 Ok(())
             }
             StmtKind::DeclStmt => {
-                for d in ast.lists.iter::<DeclId>(ast.stmts.decl_stmt_decls(s)).collect::<Vec<_>>() {
+                for d in ast.lists.iter::<DeclId>(ast.stmts.decl_stmt_decls(s)).collect::<Vec<_>>()
+                {
                     if ast.decls.get(d).kind() == DeclKind::Var {
                         self.emit_var_decl(d)?;
                     }
@@ -123,7 +124,13 @@ impl Cg<'_> {
             }
             StmtKind::ContinueStmt => {
                 if self.f.fir.cur().is_some() {
-                    let c = self.f.jumps.iter().rev().find_map(|j| j.cont).expect("continue outside a loop");
+                    let c = self
+                        .f
+                        .jumps
+                        .iter()
+                        .rev()
+                        .find_map(|j| j.cont)
+                        .expect("continue outside a loop");
                     self.emit_branch(c);
                 }
                 Ok(())
@@ -230,7 +237,9 @@ impl Cg<'_> {
                 let n = self.ast.stmts.get(b);
                 match n.kind() {
                     StmtKind::NullStmt => true,
-                    StmtKind::CompoundStmt => self.ast.lists.get(self.ast.stmts.compound_body(b)).is_empty(),
+                    StmtKind::CompoundStmt => {
+                        self.ast.lists.get(self.ast.stmts.compound_body(b)).is_empty()
+                    }
                     _ => false,
                 }
             }
@@ -238,7 +247,11 @@ impl Cg<'_> {
     }
 
     /// clang `checkIfLoopMustProgress` plus the `LoopAttributes` metadata.
-    fn new_loop_md(&mut self, cond: Option<ExprId>, body: Option<StmtId>) -> Option<kiln_llvm::MetadataId> {
+    fn new_loop_md(
+        &mut self,
+        cond: Option<ExprId>,
+        body: Option<StmtId>,
+    ) -> Option<kiln_llvm::MetadataId> {
         let cond_true = match cond {
             None => true,
             Some(c) => self.fold_bool(c) == Some(true),
@@ -376,12 +389,8 @@ impl Cg<'_> {
         let epilog = self.f.fir.create_block();
         let outer_cont = self.f.jumps.iter().rev().find_map(|j| j.cont);
         self.f.jumps.push(Jump { brk: epilog, cont: outer_cont });
-        let saved = self.f.sw.replace(SwitchCtx {
-            inst: crate::fir::Fir::last_inst(sw),
-            cond_ty,
-            default,
-            last_case: None,
-        });
+        let saved =
+            self.f.sw.replace(SwitchCtx { inst: crate::fir::Fir::last_inst(sw), cond_ty, default });
         self.emit_stmt(d.body)?;
         self.f.jumps.pop();
         if !self.f.fir.is_placed(default) {
@@ -406,7 +415,9 @@ impl Cg<'_> {
             let v = self.fold_int(cd.lhs).expect("case value folds");
             let k = V::C(self.m.const_int(sw.cond_ty, v));
             self.f.fir.add_switch_case(sw.inst, k, b);
-            if ast.stmts.get(cd.sub).kind() == StmtKind::CaseStmt && ast.stmts.case_data(cd.sub).rhs.is_none() {
+            if ast.stmts.get(cd.sub).kind() == StmtKind::CaseStmt
+                && ast.stmts.case_data(cd.sub).rhs.is_none()
+            {
                 s = cd.sub;
                 continue;
             }

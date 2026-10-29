@@ -58,7 +58,12 @@ impl std::error::Error for CodegenError {}
 ///
 /// `ast` must be free of errors. Constant expressions are folded with
 /// `oven` first (which may cache values in `ast`).
-pub fn emit(ast: &mut Ast, oven: &mut Oven, target: &Target, opts: &CodegenOptions) -> Result<Module, CodegenError> {
+pub fn emit(
+    ast: &mut Ast,
+    oven: &mut Oven,
+    target: &Target,
+    opts: &CodegenOptions,
+) -> Result<Module, CodegenError> {
     let folds = fold::prepass(ast, oven, target);
     module::Cg::new(&*ast, &folds, target, opts).run()
 }

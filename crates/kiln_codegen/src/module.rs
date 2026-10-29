@@ -6,7 +6,7 @@ use kiln_abi::call::{ArgKind, CallInfo, classify_call};
 use kiln_abi::irtype::{IrType, IrTypes, record_kind_prefix};
 use kiln_abi::mangle;
 use kiln_abi::{Arch, Target};
-use kiln_ast::decl::{ConstexprKind, DeclFlags, DeclKind, FnStorage, TemplLinkKind, VarStorage};
+use kiln_ast::decl::{ConstexprKind, DeclFlags, DeclKind, TemplLinkKind, VarStorage};
 use kiln_ast::types::{BuiltinType, TypeView};
 use kiln_ast::{Ast, DeclId, QualType};
 use kiln_llvm::{
@@ -42,8 +42,6 @@ pub(crate) struct Sig {
     pub params: Vec<QualType>,
     /// The prototype is `noexcept`.
     pub nothrow: bool,
-    /// The prototype is variadic.
-    pub variadic: bool,
 }
 
 impl Sig {
@@ -88,7 +86,12 @@ pub(crate) struct Cg<'a> {
 }
 
 impl<'a> Cg<'a> {
-    pub fn new(ast: &'a Ast, folds: &'a Folds, target: &'a Target, opts: &'a CodegenOptions) -> Self {
+    pub fn new(
+        ast: &'a Ast,
+        folds: &'a Folds,
+        target: &'a Target,
+        opts: &'a CodegenOptions,
+    ) -> Self {
         let spec = match target.triple.arch {
             Arch::AArch64 => kiln_llvm::AARCH64_LINUX_GNU,
             _ => kiln_llvm::X86_64_LINUX_GNU,
@@ -139,7 +142,9 @@ impl<'a> Cg<'a> {
                 continue;
             }
             match n.kind() {
-                DeclKind::Namespace | DeclKind::LinkageSpec | DeclKind::Export => self.emit_members(d)?,
+                DeclKind::Namespace | DeclKind::LinkageSpec | DeclKind::Export => {
+                    self.emit_members(d)?
+                }
                 DeclKind::Function => self.emit_global_fn(d)?,
                 DeclKind::Var => self.emit_global_var(d)?,
                 DeclKind::FunctionTemplate | DeclKind::ClassTemplate | DeclKind::VarTemplate => {}
@@ -202,13 +207,17 @@ impl<'a> Cg<'a> {
             let first = self.ast.first(d);
             match self.ast.decls.get(d).kind() {
                 DeclKind::Function => {
-                    let still_decl = self.fns.get(&first).is_none_or(|&f| self.m.func(f).is_declaration());
+                    let still_decl =
+                        self.fns.get(&first).is_none_or(|&f| self.m.func(f).is_declaration());
                     if still_decl {
                         self.emit_fn_def(d)?;
                     }
                 }
                 _ => {
-                    let still_decl = self.gvars.get(&first).is_none_or(|&g| self.m.global(g).initializer().is_none());
+                    let still_decl = self
+                        .gvars
+                        .get(&first)
+                        .is_none_or(|&g| self.m.global(g).initializer().is_none());
                     if still_decl {
                         self.emit_var_def(d)?;
                     }
@@ -227,7 +236,9 @@ impl<'a> Cg<'a> {
         let ast = self.ast;
         ast.redecls_of(d).any(|r| {
             ast.decls.function(r).is_some_and(|f| {
-                f.spec.is_inline() || f.spec.implicit_inline() || f.spec.constexpr_kind() != ConstexprKind::None
+                f.spec.is_inline()
+                    || f.spec.implicit_inline()
+                    || f.spec.constexpr_kind() != ConstexprKind::None
             })
         })
     }
@@ -288,7 +299,8 @@ impl<'a> Cg<'a> {
         if let Some(&t) = self.named.get(&first) {
             return t;
         }
-        let base = format!("{}.{}", record_kind_prefix(self.ast, first), self.qualified_name(first));
+        let base =
+            format!("{}.{}", record_kind_prefix(self.ast, first), self.qualified_name(first));
         let n = self.struct_names.entry(base.clone()).or_insert(0);
         let name = if *n == 0 { base } else { format!("{base}.{n}") };
         *n += 1;
@@ -362,7 +374,7 @@ impl<'a> Cg<'a> {
         let variadic = p.variadic();
         let info = classify_call(&mut self.tys, ret, &params, params.len(), !extern_c);
         let fn_ty = self.fn_type(&info, ret, variadic);
-        Sig { info, fn_ty, ret, params, nothrow, variadic }
+        Sig { info, fn_ty, ret, params, nothrow }
     }
 
     /// The signature of a call with the given argument types (variadic
@@ -377,7 +389,7 @@ impl<'a> Cg<'a> {
         let info = classify_call(&mut self.tys, ret, &all, params.len(), !extern_c);
         let decl_info = classify_call(&mut self.tys, ret, &params, params.len(), !extern_c);
         let fn_ty = self.fn_type(&decl_info, ret, p.variadic());
-        Sig { info, fn_ty, ret, params: all, nothrow: ast.types.exc_spec(&p).is_nothrow(), variadic: p.variadic() }
+        Sig { info, fn_ty, ret, params: all, nothrow: ast.types.exc_spec(&p).is_nothrow() }
     }
 
     fn fn_type(&mut self, info: &CallInfo, _ret: QualType, variadic: bool) -> LTy {
@@ -410,7 +422,12 @@ impl<'a> Cg<'a> {
     }
 
     /// The return and parameter attributes of `sig` (`ConstructAttributeList`).
-    pub fn sig_attrs(&mut self, sig: &Sig, n_args: usize, def: bool) -> (AttrSetId, Vec<AttrSetId>) {
+    pub fn sig_attrs(
+        &mut self,
+        sig: &Sig,
+        n_args: usize,
+        def: bool,
+    ) -> (AttrSetId, Vec<AttrSetId>) {
         let mut ret = Vec::new();
         let mut params = Vec::new();
         match &sig.info.ret.kind {
@@ -491,11 +508,18 @@ impl<'a> Cg<'a> {
             return Ok(f);
         }
         let name = mangle::mangle_decl(ast, first);
-        let Some(fty) = ast.decls.get(first).ty() else { return err(None, "function without type") };
+        let Some(fty) = ast.decls.get(first).ty() else {
+            return err(None, "function without type");
+        };
         let sig = self.sig(fty, mangle::is_extern_c(ast, first));
         let f = match self.m.add_function(&name, sig.fn_ty) {
             Ok(f) => f,
-            Err(e) => return err(Some(ast.decls.get(first).loc()), format!("cannot declare {name}: {e:?}")),
+            Err(e) => {
+                return err(
+                    Some(ast.decls.get(first).loc()),
+                    format!("cannot declare {name}: {e:?}"),
+                );
+            }
         };
         let (ret, params) = self.sig_attrs(&sig, sig.params.len(), false);
         let mut fa = Vec::new();
@@ -523,7 +547,8 @@ impl<'a> Cg<'a> {
         let internal = self.fn_internal(d);
         let inline = self.fn_is_inline(d);
         let name = self.m.func(f).name().to_owned();
-        let comdat = if !internal && inline { Some(self.m.comdat(&name, ComdatKind::Any)) } else { None };
+        let comdat =
+            if !internal && inline { Some(self.m.comdat(&name, ComdatKind::Any)) } else { None };
         let func = self.m.func_mut(f);
         if internal {
             func.linkage = Linkage::Internal;
@@ -614,7 +639,12 @@ impl<'a> Cg<'a> {
             }
             Some(e) => match self.folds.get(e) {
                 Some(c) => self.const_value(c, ty, Some(e), true)?,
-                None => return err(loc, "dynamic initialization of a global is not supported yet (M3)"),
+                None => {
+                    return err(
+                        loc,
+                        "dynamic initialization of a global is not supported yet (M3)",
+                    );
+                }
             },
         };
         let ity = self.m.const_type(init);
@@ -638,7 +668,8 @@ impl<'a> Cg<'a> {
         let constant = quals.is_const() && !self.has_mutable(ty);
         let align = self.global_align(ty);
         let name = self.m.global(g).name().to_owned();
-        let comdat = if inline && !internal { Some(self.m.comdat(&name, ComdatKind::Any)) } else { None };
+        let comdat =
+            if inline && !internal { Some(self.m.comdat(&name, ComdatKind::Any)) } else { None };
         if let Err(e) = self.m.set_initializer(g, Some(init)) {
             return err(loc, format!("bad initializer: {e:?}"));
         }
@@ -680,7 +711,12 @@ impl<'a> Cg<'a> {
             }
             Some(e) => match self.folds.get(e) {
                 Some(c) => self.const_value(c, ty, Some(e), true)?,
-                None => return err(loc, "dynamic initialization of a static local is not supported yet (M3)"),
+                None => {
+                    return err(
+                        loc,
+                        "dynamic initialization of a static local is not supported yet (M3)",
+                    );
+                }
             },
         };
         let ity = self.m.const_type(init);
@@ -771,12 +807,12 @@ impl<'a> Cg<'a> {
         m.add_module_flag_i32(8, "PIC Level", 2);
         m.add_module_flag_i32(7, "PIE Level", 2);
         m.add_module_flag_i32(7, "uwtable", 2);
-        m.add_module_flag_i32(7, "frame-pointer", if self.target.triple.arch == Arch::X86_64 { 2 } else { 1 });
+        m.add_module_flag_i32(
+            7,
+            "frame-pointer",
+            if self.target.triple.arch == Arch::X86_64 { 2 } else { 1 },
+        );
         m.add_ident(&self.opts.ident);
-    }
-
-    pub fn fn_storage_static(&self, d: DeclId) -> bool {
-        self.ast.decls.function(d).is_some_and(|f| f.spec.storage() == FnStorage::Static)
     }
 }
 

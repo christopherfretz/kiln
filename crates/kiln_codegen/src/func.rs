@@ -37,9 +37,6 @@ pub(crate) struct SwitchCtx {
     pub inst: u32,
     pub cond_ty: LTy,
     pub default: Blk,
-    /// The last `sw.bb` emitted and whether nothing was emitted after it
-    /// (consecutive case labels share it).
-    pub last_case: Option<Blk>,
 }
 
 /// An active loop (clang `LoopInfo`).
@@ -213,11 +210,20 @@ impl Cg<'_> {
         // GenerateCode: falling off the end of a value-returning function.
         if !is_main && self.f.ret_kind != RetKind::Void && self.f.fir.cur().is_some() {
             let trap = kiln_llvm::intrinsics::trap(&mut self.m);
-            let fa = self.m.attr_set(&[Attr::Flag(AttrKind::NoReturn), Attr::Flag(AttrKind::NoUnwind)]);
+            let fa =
+                self.m.attr_set(&[Attr::Flag(AttrKind::NoReturn), Attr::Flag(AttrKind::NoUnwind)]);
             let fn_ty = self.m.func(trap).ty();
-            let opts = CallOpts { attrs: AttrList { func: fa, ..AttrList::default() }, ..CallOpts::default() };
+            let opts = CallOpts {
+                attrs: AttrList { func: fa, ..AttrList::default() },
+                ..CallOpts::default()
+            };
             let c = self.f.fir.push(
-                Op::Call { fn_ty, callee: V::C(Value::func(trap)), args: Vec::new(), opts: Box::new(opts) },
+                Op::Call {
+                    fn_ty,
+                    callee: V::C(Value::func(trap)),
+                    args: Vec::new(),
+                    opts: Box::new(opts),
+                },
                 LTy::VOID,
             );
             self.f.calls.push((Fir::last_inst(c), Some(trap), true));
@@ -330,7 +336,9 @@ impl Cg<'_> {
         let fir = &self.f.fir;
         let cur = fir.cur()?;
         let valid = |i: u32| match fir.op(i) {
-            Op::Store { ptr, val, .. } if *ptr == slot.v && fir.ty(&self.m, *val) == slot.ty => Some(i),
+            Op::Store { ptr, val, .. } if *ptr == slot.v && fir.ty(&self.m, *val) == slot.ty => {
+                Some(i)
+            }
             _ => None,
         };
         let users = fir.users(slot.v);
@@ -477,7 +485,12 @@ impl Cg<'_> {
             ..CallOpts::default()
         };
         let c = self.f.fir.push(
-            Op::Call { fn_ty, callee: V::C(Value::func(f)), args: vec![dst.v, src, V::C(n), V::C(vb)], opts: Box::new(opts) },
+            Op::Call {
+                fn_ty,
+                callee: V::C(Value::func(f)),
+                args: vec![dst.v, src, V::C(n), V::C(vb)],
+                opts: Box::new(opts),
+            },
             LTy::VOID,
         );
         let _ = (c, src);
@@ -498,7 +511,12 @@ impl Cg<'_> {
             ..CallOpts::default()
         };
         let c = self.f.fir.push(
-            Op::Call { fn_ty, callee: V::C(Value::func(f)), args: vec![dst.v, src, V::C(nv), V::C(vb)], opts: Box::new(opts) },
+            Op::Call {
+                fn_ty,
+                callee: V::C(Value::func(f)),
+                args: vec![dst.v, src, V::C(nv), V::C(vb)],
+                opts: Box::new(opts),
+            },
             LTy::VOID,
         );
         self.f.calls.push((Fir::last_inst(c), Some(f), true));
@@ -518,7 +536,12 @@ impl Cg<'_> {
             ..CallOpts::default()
         };
         let c = self.f.fir.push(
-            Op::Call { fn_ty, callee: V::C(Value::func(f)), args: vec![dst.v, V::C(bv), V::C(nv), V::C(vb)], opts: Box::new(opts) },
+            Op::Call {
+                fn_ty,
+                callee: V::C(Value::func(f)),
+                args: vec![dst.v, V::C(bv), V::C(nv), V::C(vb)],
+                opts: Box::new(opts),
+            },
             LTy::VOID,
         );
         self.f.calls.push((Fir::last_inst(c), Some(f), true));
@@ -608,7 +631,11 @@ impl Cg<'_> {
         if from != dest_int {
             let fw = self.m.types.int_width(from).unwrap_or(64);
             let tw = self.m.types.int_width(dest_int).unwrap_or(64);
-            v = if fw > tw { self.cast(CastOp::Trunc, v, dest_int) } else { self.cast(CastOp::ZExt, v, dest_int) };
+            v = if fw > tw {
+                self.cast(CastOp::Trunc, v, dest_int)
+            } else {
+                self.cast(CastOp::ZExt, v, dest_int)
+            };
         }
         if self.m.types.is_ptr(to) {
             v = self.cast(CastOp::IntToPtr, v, to);
@@ -715,7 +742,9 @@ impl Cg<'_> {
     fn cfloat(&self, v: V) -> Option<(LTy, f64)> {
         let V::C(c) = v else { return None };
         match self.m.const_of(c)? {
-            ConstData::Float { ty, bits } if *ty == LTy::DOUBLE => Some((*ty, f64::from_bits(*bits as u64))),
+            ConstData::Float { ty, bits } if *ty == LTy::DOUBLE => {
+                Some((*ty, f64::from_bits(*bits as u64)))
+            }
             ConstData::Float { ty, bits } if *ty == LTy::FLOAT => {
                 Some((*ty, f64::from(f32::from_bits(*bits as u32))))
             }
@@ -724,7 +753,11 @@ impl Cg<'_> {
     }
 
     fn mk_float(&mut self, ty: LTy, x: f64) -> V {
-        let bits = if ty == LTy::FLOAT { u128::from((x as f32).to_bits()) } else { u128::from(x.to_bits()) };
+        let bits = if ty == LTy::FLOAT {
+            u128::from((x as f32).to_bits())
+        } else {
+            u128::from(x.to_bits())
+        };
         V::C(self.m.const_float_bits(ty, bits))
     }
 
@@ -801,19 +834,26 @@ impl Cg<'_> {
 
     pub fn cast(&mut self, op: CastOp, v: V, to: LTy) -> V {
         let from = self.f.fir.ty(&self.m, v);
-        if from == to && matches!(op, CastOp::BitCast | CastOp::ZExt | CastOp::SExt | CastOp::Trunc) {
+        if from == to && matches!(op, CastOp::BitCast | CastOp::ZExt | CastOp::SExt | CastOp::Trunc)
+        {
             return v;
         }
         if let Some((_, a, w)) = self.cint(v) {
             let tw = self.m.types.int_width(to);
             let r = match (op, tw) {
-                (CastOp::Trunc | CastOp::ZExt, Some(_)) => Some(V::C(self.m.const_int(to, a as i128))),
+                (CastOp::Trunc | CastOp::ZExt, Some(_)) => {
+                    Some(V::C(self.m.const_int(to, a as i128)))
+                }
                 (CastOp::SExt, Some(_)) => Some(V::C(self.m.const_int(to, sext(a, w)))),
                 (CastOp::SIToFP, None) if to == LTy::DOUBLE || to == LTy::FLOAT => {
                     Some(self.mk_float(to, sext(a, w) as f64))
                 }
-                (CastOp::UIToFP, None) if to == LTy::DOUBLE || to == LTy::FLOAT => Some(self.mk_float(to, a as f64)),
-                (CastOp::SIToFP | CastOp::UIToFP, None) if self.m.types.float_width(to) == Some(128) => {
+                (CastOp::UIToFP, None) if to == LTy::DOUBLE || to == LTy::FLOAT => {
+                    Some(self.mk_float(to, a as f64))
+                }
+                (CastOp::SIToFP | CastOp::UIToFP, None)
+                    if self.m.types.float_width(to) == Some(128) =>
+                {
                     let neg = op == CastOp::SIToFP && sext(a, w) < 0;
                     let mag = if neg { sext(a, w).unsigned_abs() } else { a };
                     Some(V::C(self.m.const_float_bits(to, int_to_f128_bits(neg, mag))))
@@ -830,8 +870,12 @@ impl Cg<'_> {
                     let _ = fty;
                     Some(self.mk_float(to, x))
                 }
-                CastOp::FPToSI if x.is_finite() => Some(V::C(self.m.const_int(to, x.trunc() as i128))),
-                CastOp::FPToUI if x.is_finite() && x >= 0.0 => Some(V::C(self.m.const_int(to, x.trunc() as i128))),
+                CastOp::FPToSI if x.is_finite() => {
+                    Some(V::C(self.m.const_int(to, x.trunc() as i128)))
+                }
+                CastOp::FPToUI if x.is_finite() && x >= 0.0 => {
+                    Some(V::C(self.m.const_int(to, x.trunc() as i128)))
+                }
                 _ => None,
             };
             if let Some(r) = r {
@@ -871,7 +915,8 @@ impl Cg<'_> {
                 if idx.iter().all(|&i| self.cint(i).is_some_and(|x| x.1 == 0)) {
                     return base;
                 }
-                let iv: Vec<Value> = idx.iter().map(|i| if let V::C(c) = i { *c } else { unreachable!() }).collect();
+                let iv: Vec<Value> =
+                    idx.iter().map(|i| if let V::C(c) = i { *c } else { unreachable!() }).collect();
                 if let Ok(c) = self.m.const_gep(src, b, &iv, flags, None) {
                     return V::C(c);
                 }
@@ -903,8 +948,12 @@ fn fold_int_bin(op: BinOp, a: u128, b: u128, w: u32) -> Option<u128> {
         BinOp::Xor => a ^ b,
         BinOp::UDiv if b != 0 => a / b,
         BinOp::URem if b != 0 => a % b,
-        BinOp::SDiv if sb != 0 && !(sb == -1 && sa == sext(1u128 << (w - 1), w)) => (sa / sb) as u128,
-        BinOp::SRem if sb != 0 && !(sb == -1 && sa == sext(1u128 << (w - 1), w)) => (sa % sb) as u128,
+        BinOp::SDiv if sb != 0 && !(sb == -1 && sa == sext(1u128 << (w - 1), w)) => {
+            (sa / sb) as u128
+        }
+        BinOp::SRem if sb != 0 && !(sb == -1 && sa == sext(1u128 << (w - 1), w)) => {
+            (sa % sb) as u128
+        }
         BinOp::Shl if b < u128::from(w) => a << b,
         BinOp::LShr if b < u128::from(w) => a >> b,
         BinOp::AShr if b < u128::from(w) => (sa >> b) as u128,

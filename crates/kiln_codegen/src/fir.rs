@@ -54,7 +54,11 @@ impl Op {
     fn is_terminator(&self) -> bool {
         matches!(
             self,
-            Op::Br { .. } | Op::CondBr { .. } | Op::Switch { .. } | Op::Ret { .. } | Op::Unreachable
+            Op::Br { .. }
+                | Op::CondBr { .. }
+                | Op::Switch { .. }
+                | Op::Ret { .. }
+                | Op::Unreachable
         )
     }
 
@@ -88,31 +92,19 @@ impl Op {
             Op::Store { val, ptr, .. } => vec![*val, *ptr],
             Op::Bin { l, r, .. } | Op::ICmp { l, r, .. } | Op::FCmp { l, r, .. } => vec![*l, *r],
             Op::FNeg { v } | Op::Cast { v, .. } => vec![*v],
-            Op::Gep { base, idx, .. } => std::iter::once(*base).chain(idx.iter().copied()).collect(),
+            Op::Gep { base, idx, .. } => {
+                std::iter::once(*base).chain(idx.iter().copied()).collect()
+            }
             Op::Phi { inc, .. } => inc.iter().map(|x| x.0).collect(),
             Op::Select { c, t, f } => vec![*c, *t, *f],
-            Op::Call { callee, args, .. } => std::iter::once(*callee).chain(args.iter().copied()).collect(),
+            Op::Call { callee, args, .. } => {
+                std::iter::once(*callee).chain(args.iter().copied()).collect()
+            }
             Op::CondBr { c, .. } => vec![*c],
-            Op::Switch { c, cases, .. } => std::iter::once(*c).chain(cases.iter().map(|x| x.0)).collect(),
+            Op::Switch { c, cases, .. } => {
+                std::iter::once(*c).chain(cases.iter().map(|x| x.0)).collect()
+            }
             Op::Ret { v } => v.iter().copied().collect(),
-        }
-    }
-
-    fn operands_mut(&mut self) -> Vec<&mut V> {
-        match self {
-            Op::Alloca { .. } | Op::Br { .. } | Op::Unreachable => Vec::new(),
-            Op::ExtractValue { agg, .. } => vec![agg],
-            Op::Load { ptr, .. } => vec![ptr],
-            Op::Store { val, ptr, .. } => vec![val, ptr],
-            Op::Bin { l, r, .. } | Op::ICmp { l, r, .. } | Op::FCmp { l, r, .. } => vec![l, r],
-            Op::FNeg { v } | Op::Cast { v, .. } => vec![v],
-            Op::Gep { base, idx, .. } => std::iter::once(base).chain(idx.iter_mut()).collect(),
-            Op::Phi { inc, .. } => inc.iter_mut().map(|x| &mut x.0).collect(),
-            Op::Select { c, t, f } => vec![c, t, f],
-            Op::Call { callee, args, .. } => std::iter::once(callee).chain(args.iter_mut()).collect(),
-            Op::CondBr { c, .. } => vec![c],
-            Op::Switch { c, cases, .. } => std::iter::once(c).chain(cases.iter_mut().map(|x| &mut x.0)).collect(),
-            Op::Ret { v } => v.iter_mut().collect(),
         }
     }
 }
@@ -238,7 +230,11 @@ impl Fir {
 
     /// The terminator of `b`.
     pub fn terminator(&self, b: Blk) -> Option<u32> {
-        self.blocks[b.0 as usize].insts.last().copied().filter(|&i| self.insts[i as usize].op.is_terminator())
+        self.blocks[b.0 as usize]
+            .insts
+            .last()
+            .copied()
+            .filter(|&i| self.insts[i as usize].op.is_terminator())
     }
 
     /// The instructions of `b`.
@@ -295,22 +291,6 @@ impl Fir {
         &self.insts[i as usize].op
     }
 
-    /// Mutable access to instruction `i` (successor edits must keep the
-    /// use counts: use [`Fir::set_switch_default`]).
-    pub fn op_mut(&mut self, i: u32) -> &mut Op {
-        &mut self.insts[i as usize].op
-    }
-
-    /// Sets the default destination of switch `i`.
-    pub fn set_switch_default(&mut self, i: u32, d: Blk) {
-        if let Op::Switch { default, .. } = &mut self.insts[i as usize].op {
-            let old = *default;
-            *default = d;
-            self.blocks[old.0 as usize].uses -= 1;
-            self.blocks[d.0 as usize].uses += 1;
-        }
-    }
-
     /// Adds a case to switch `i`.
     pub fn add_switch_case(&mut self, i: u32, v: V, d: Blk) {
         if let Op::Switch { cases, .. } = &mut self.insts[i as usize].op {
@@ -363,17 +343,6 @@ impl Fir {
                 x.block.is_some() && x.op.operands().contains(&v)
             })
             .collect()
-    }
-
-    /// Replaces every use of `from` with `to`.
-    pub fn replace_uses(&mut self, from: V, to: V) {
-        for inst in &mut self.insts {
-            for o in inst.op.operands_mut() {
-                if *o == from {
-                    *o = to;
-                }
-            }
-        }
     }
 
     /// The block holding instruction `i`.
@@ -439,7 +408,12 @@ impl Fir {
     pub fn alloca(&mut self, ty: TypeId, align: u64) -> V {
         let n = self.insts.len() as u32;
         let e = self.entry();
-        self.insts.push(Inst { op: Op::Alloca { ty, align }, ty: TypeId::PTR, block: Some(e), md: Vec::new() });
+        self.insts.push(Inst {
+            op: Op::Alloca { ty, align },
+            ty: TypeId::PTR,
+            block: Some(e),
+            md: Vec::new(),
+        });
         let pos = self.allocas.len();
         self.blocks[e.0 as usize].insts.insert(pos, n);
         self.allocas.push(n);
@@ -465,14 +439,16 @@ impl Fir {
         }
         let mut vmap: Vec<Option<Value>> = vec![None; self.insts.len()];
         let mut phis: Vec<(Value, u32)> = Vec::new();
-        let blk = |x: Blk| bmap[x.0 as usize].unwrap_or_else(|| panic!("branch to unplaced block {x:?}"));
+        let blk =
+            |x: Blk| bmap[x.0 as usize].unwrap_or_else(|| panic!("branch to unplaced block {x:?}"));
         for &bb in &self.layout {
             b.position_at_end(blk(bb));
             for &i in &self.blocks[bb.0 as usize].insts {
                 let inst = &self.insts[i as usize];
                 let val = |v: V| -> Value {
                     match v {
-                        V::I(n) => vmap[n as usize].unwrap_or_else(|| panic!("use of %{n} before definition")),
+                        V::I(n) => vmap[n as usize]
+                            .unwrap_or_else(|| panic!("use of %{n} before definition")),
                         V::Arg(n) => Value::arg(n),
                         V::C(c) => c,
                     }
@@ -481,7 +457,9 @@ impl Fir {
                     Op::Alloca { ty, align } => b.alloca(*ty, *align)?,
                     Op::Load { ty, ptr, mem } => b.load_ex(*ty, val(*ptr), *mem)?,
                     Op::Store { val: v, ptr, mem } => b.store_ex(val(*v), val(*ptr), *mem)?,
-                    Op::Bin { op, flags, l, r } => b.binop_ex(*op, *flags, FastMath::NONE, val(*l), val(*r))?,
+                    Op::Bin { op, flags, l, r } => {
+                        b.binop_ex(*op, *flags, FastMath::NONE, val(*l), val(*r))?
+                    }
                     Op::FNeg { v } => b.fneg(val(*v), FastMath::NONE)?,
                     Op::ICmp { p, l, r } => b.icmp(*p, val(*l), val(*r))?,
                     Op::FCmp { p, l, r } => b.fcmp(*p, val(*l), val(*r))?,
@@ -503,7 +481,8 @@ impl Fir {
                     Op::Br { dest } => b.br(blk(*dest))?,
                     Op::CondBr { c, t, f } => b.cond_br(val(*c), blk(*t), blk(*f))?,
                     Op::Switch { c, default, cases } => {
-                        let cases: Vec<(Value, BlockId)> = cases.iter().map(|&(v, d)| (val(v), blk(d))).collect();
+                        let cases: Vec<(Value, BlockId)> =
+                            cases.iter().map(|&(v, d)| (val(v), blk(d))).collect();
                         b.switch(val(*c), blk(*default), &cases)?
                     }
                     Op::Ret { v } => b.ret(v.map(val))?,
@@ -522,7 +501,9 @@ impl Fir {
             if let Op::Phi { inc, .. } = &self.insts[i as usize].op {
                 for &(v, bb) in inc {
                     let v = match v {
-                        V::I(n) => vmap[n as usize].unwrap_or_else(|| panic!("phi operand %{n} undefined")),
+                        V::I(n) => {
+                            vmap[n as usize].unwrap_or_else(|| panic!("phi operand %{n} undefined"))
+                        }
                         V::Arg(n) => Value::arg(n),
                         V::C(c) => c,
                     };

@@ -5,14 +5,14 @@
 //! `kiln_llvm` types; `call` classifies arguments against them.
 //! See spec/codegen.md §2.
 
+use kiln_ast::Ast;
 use kiln_ast::decl::TagKind;
 use kiln_ast::ids::{DeclId, QualType};
 use kiln_ast::types::{BuiltinType, TypeView};
-use kiln_ast::Ast;
 use kiln_source::fx::FxHashMap;
 
-use crate::layout::props::{self, FieldDesc};
 use crate::layout::Layouter;
+use crate::layout::props::{self, FieldDesc};
 use crate::target::{Arch, Target};
 
 /// An LLVM IR type shape.
@@ -63,7 +63,12 @@ impl IrType {
     pub fn is_fp(&self) -> bool {
         matches!(
             self,
-            IrType::Half | IrType::BFloat | IrType::Float | IrType::Double | IrType::X86Fp80 | IrType::Fp128
+            IrType::Half
+                | IrType::BFloat
+                | IrType::Float
+                | IrType::Double
+                | IrType::X86Fp80
+                | IrType::Fp128
         )
     }
 }
@@ -315,7 +320,12 @@ impl<'a> IrTypes<'a> {
         }
         members.sort_by_key(|m| (m.offset, m.seq));
         // Capstone.
-        members.push(Member { offset: layout.size, data: Some(IrType::Int(8)), field: None, seq: u32::MAX });
+        members.push(Member {
+            offset: layout.size,
+            data: Some(IrType::Int(8)),
+            field: None,
+            seq: u32::MAX,
+        });
         // determinePacked.
         let mut packed = false;
         let mut alignment = 1u64;
@@ -396,7 +406,8 @@ impl<'a> IrTypes<'a> {
         let storage_size = u32::try_from(ssize * 8).unwrap_or(0);
         let width = u32::try_from(f.bit_width.unwrap_or(0)).unwrap_or(0);
         BitFieldInfo {
-            offset: u32::try_from(offsets.get(i).copied().unwrap_or(0) - storage_offset * 8).unwrap_or(0),
+            offset: u32::try_from(offsets.get(i).copied().unwrap_or(0) - storage_offset * 8)
+                .unwrap_or(0),
             size: width.min(storage_size),
             storage_size,
             storage_offset,
@@ -438,7 +449,12 @@ impl<'a> IrTypes<'a> {
         IrType::int_n(f.bit_width.unwrap_or(0).min(s * 8))
     }
 
-    fn lower_union(&mut self, fields: &[FieldDesc], layout: &kiln_ast::types::RecordLayout, out: &mut IrRecord) {
+    fn lower_union(
+        &mut self,
+        fields: &[FieldDesc],
+        layout: &kiln_ast::types::RecordLayout,
+        out: &mut IrRecord,
+    ) {
         let layout_size = layout.size;
         let mut storage: Option<IrType> = None;
         for f in fields {
@@ -465,7 +481,11 @@ impl<'a> IrTypes<'a> {
                 );
             }
             out.field_index.insert(f.decl, 0);
-            let ft = if f.bit_width.is_some() { self.bitfield_storage_type(f) } else { self.convert_mem(f.ty) };
+            let ft = if f.bit_width.is_some() {
+                self.bitfield_storage_type(f)
+            } else {
+                self.convert_mem(f.ty)
+            };
             let better = match &storage {
                 None => true,
                 Some(s) => {
@@ -590,12 +610,26 @@ impl<'a> IrTypes<'a> {
             if install_best {
                 let access_size = best_end_offset - begin_offset;
                 if access_size != 0 {
-                    let ty = if best_clipped { IrType::bytes(access_size) } else { IrType::int_n(access_size * 8) };
-                    members.push(Member { offset: begin_offset, data: Some(ty), field: None, seq: *seq });
+                    let ty = if best_clipped {
+                        IrType::bytes(access_size)
+                    } else {
+                        IrType::int_n(access_size * 8)
+                    };
+                    members.push(Member {
+                        offset: begin_offset,
+                        data: Some(ty),
+                        field: None,
+                        seq: *seq,
+                    });
                     *seq += 1;
                     for f in &fields[begin..best_end] {
                         if f.bit_width != Some(0) {
-                            members.push(Member { offset: begin_offset, data: None, field: Some(f.decl), seq: *seq });
+                            members.push(Member {
+                                offset: begin_offset,
+                                data: None,
+                                field: Some(f.decl),
+                                seq: *seq,
+                            });
                             *seq += 1;
                         }
                     }

@@ -4,11 +4,11 @@
 //! system (builtins, pointers, references, arrays, function types,
 //! classes and enumerations) with substitutions. See spec/codegen.md §3.
 
+use kiln_ast::Ast;
 use kiln_ast::decl::{DeclKind, FnStorage, LinkageLang, NamespaceData, VarStorage};
 use kiln_ast::ids::{DeclId, QualType};
 use kiln_ast::names::DeclNameView;
 use kiln_ast::types::{BuiltinType, TypeView};
-use kiln_ast::Ast;
 
 /// A substitution candidate ([abi:mangling.compression]).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

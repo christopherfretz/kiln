@@ -10,10 +10,10 @@
 
 use kiln_abi::Target;
 use kiln_ast::consts::ConstStore;
-use kiln_ast::types::{RecordLayout, TypeView};
 use kiln_ast::decl::{DeclFlags, DeclKind, VarStorage};
 use kiln_ast::expr::{BinaryOp, CastKind, ExprKind, UnaryOp};
 use kiln_ast::stmt::StmtKind;
+use kiln_ast::types::{RecordLayout, TypeView};
 use kiln_ast::{Ast, ConstValueId, DeclId, ExprId, StmtId};
 use kiln_diag::Diag;
 use kiln_oven::{Oven, SemaBridge, VTableLayout};
@@ -203,8 +203,7 @@ impl Collect<'_> {
         let ast = self.ast;
         if ast.decls.get(d).kind() == DeclKind::Var {
             let is_static = ast.decls.var(d).is_some_and(|v| {
-                v.spec.storage() == VarStorage::Static
-                    || v.spec.storage() == VarStorage::Extern
+                v.spec.storage() == VarStorage::Static || v.spec.storage() == VarStorage::Extern
             });
             self.var(d, is_static);
         }

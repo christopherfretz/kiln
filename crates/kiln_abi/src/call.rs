@@ -4,9 +4,9 @@
 //! return value and each argument, how its C++ type is passed in IR.
 //! See spec/codegen.md §5.
 
+use kiln_ast::Ast;
 use kiln_ast::ids::{DeclId, QualType};
 use kiln_ast::types::{BuiltinType, TypeView};
-use kiln_ast::Ast;
 
 use crate::irtype::{IrType, IrTypes};
 use crate::layout::props;
@@ -136,7 +136,10 @@ fn type_align_bits(t: &mut IrTypes<'_>, q: QualType) -> u64 {
 /// clang `isAggregateTypeForABI`.
 fn is_aggregate(t: &IrTypes<'_>, q: QualType) -> bool {
     match view(t, q) {
-        TypeView::Record(_) | TypeView::ConstantArray(_) | TypeView::IncompleteArray(_) | TypeView::Complex(_) => true,
+        TypeView::Record(_)
+        | TypeView::ConstantArray(_)
+        | TypeView::IncompleteArray(_)
+        | TypeView::Complex(_) => true,
         TypeView::MemberPointer { pointee, .. } => {
             matches!(t.ast().types.canonical_view(pointee), TypeView::Function(_))
         }
@@ -239,7 +242,10 @@ fn aarch64_arg(t: &mut IrTypes<'_>, q: QualType) -> ArgKind {
         let q = strip_enum(t, q);
         if let TypeView::BitInt { width, .. } = view(t, q) {
             if width > 128 {
-                return ArgKind::Indirect { byval: false, align: t.layouter().type_layout(q).align };
+                return ArgKind::Indirect {
+                    byval: false,
+                    align: t.layouter().type_layout(q).align,
+                };
             }
         }
         return direct(t.convert(q));
@@ -510,7 +516,10 @@ fn classify(t: &mut IrTypes<'_>, q: QualType, off: u64) -> (Class, Class) {
                 lo = Integer;
                 hi = Integer;
             }
-            BuiltinType::Float | BuiltinType::Double | BuiltinType::Float16 | BuiltinType::BFloat16 => {
+            BuiltinType::Float
+            | BuiltinType::Double
+            | BuiltinType::Float16
+            | BuiltinType::BFloat16 => {
                 set_cur!(Sse)
             }
             BuiltinType::Float128 => {
@@ -526,7 +535,10 @@ fn classify(t: &mut IrTypes<'_>, q: QualType, off: u64) -> (Class, Class) {
             _ => {}
         },
         TypeView::Enum(d) => return classify(t, enum_int(ast, d), off),
-        TypeView::Pointer(_) | TypeView::LValueRef(_) | TypeView::RValueRef(_) | TypeView::Function(_) => {
+        TypeView::Pointer(_)
+        | TypeView::LValueRef(_)
+        | TypeView::RValueRef(_)
+        | TypeView::Function(_) => {
             set_cur!(Integer)
         }
         TypeView::MemberPointer { pointee, .. } => {
@@ -549,7 +561,9 @@ fn classify(t: &mut IrTypes<'_>, q: QualType, off: u64) -> (Class, Class) {
             let size = type_bits(t, q);
             let esize = type_bits(t, e);
             match view(t, e) {
-                TypeView::Builtin(BuiltinType::Float | BuiltinType::Float16 | BuiltinType::BFloat16) => {
+                TypeView::Builtin(
+                    BuiltinType::Float | BuiltinType::Float16 | BuiltinType::BFloat16,
+                ) => {
                     set_cur!(Sse)
                 }
                 TypeView::Builtin(BuiltinType::Double) => {
@@ -728,7 +742,11 @@ fn x86_arg(t: &mut IrTypes<'_>, q: QualType, free_int: u32) -> (ArgKind, u32, u3
             ni += 1;
             let h = integer_at(t, &natural, 8, q, 8);
             if lo == NoClass {
-                return (ArgKind::Direct { coerce: h, offset: 8, flatten: true, align: None }, ni, ns);
+                return (
+                    ArgKind::Direct { coerce: h, offset: 8, flatten: true, align: None },
+                    ni,
+                    ns,
+                );
             }
             high = Some(h);
         }
@@ -736,7 +754,11 @@ fn x86_arg(t: &mut IrTypes<'_>, q: QualType, free_int: u32) -> (ArgKind, u32, u3
             ns += 1;
             let h = sse_at(t, &natural, 8, q, 8);
             if lo == NoClass {
-                return (ArgKind::Direct { coerce: h, offset: 8, flatten: true, align: None }, ni, ns);
+                return (
+                    ArgKind::Direct { coerce: h, offset: 8, flatten: true, align: None },
+                    ni,
+                    ns,
+                );
             }
             high = Some(h);
         }
@@ -842,7 +864,12 @@ fn pair(t: &mut IrTypes<'_>, lo: IrType, hi: IrType) -> IrType {
 }
 
 /// The struct element containing byte `off` and the offset within it.
-fn element_at(t: &mut IrTypes<'_>, members: &[IrType], packed: bool, off: u64) -> Option<(IrType, u64)> {
+fn element_at(
+    t: &mut IrTypes<'_>,
+    members: &[IrType],
+    packed: bool,
+    off: u64,
+) -> Option<(IrType, u64)> {
     let offs = t.struct_offsets(members, packed);
     let i = offs.partition_point(|&o| o <= off).checked_sub(1)?;
     Some((members[i].clone(), off - offs[i]))
@@ -860,7 +887,13 @@ fn struct_body(t: &mut IrTypes<'_>, ty: &IrType) -> Option<(Vec<IrType>, bool)> 
 }
 
 /// clang `GetINTEGERTypeAtOffset`.
-fn integer_at(t: &mut IrTypes<'_>, ir: &IrType, ir_off: u64, src: QualType, src_off: u64) -> IrType {
+fn integer_at(
+    t: &mut IrTypes<'_>,
+    ir: &IrType,
+    ir_off: u64,
+    src: QualType,
+    src_off: u64,
+) -> IrType {
     if ir_off == 0 {
         if matches!(ir, IrType::Ptr | IrType::Int(64)) {
             return ir.clone();

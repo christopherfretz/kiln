@@ -21,7 +21,13 @@ impl Cg<'_> {
     /// Lowers the folded constant `c` of type `ty` in its in-memory form
     /// (clang `tryEmitPrivateForMemory`); `e` is the expression it was
     /// folded from, which decides the shape of string-literal arrays.
-    pub(crate) fn const_value(&mut self, c: ConstValueId, ty: QualType, e: Option<ExprId>, top: bool) -> R<Value> {
+    pub(crate) fn const_value(
+        &mut self,
+        c: ConstValueId,
+        ty: QualType,
+        e: Option<ExprId>,
+        top: bool,
+    ) -> R<Value> {
         let _ = top;
         match self.ast.consts.get(c) {
             ConstValue::Scalar(s) => {
@@ -61,7 +67,10 @@ impl Cg<'_> {
                     }
                     if self.m.types.is_ptr(t) {
                         let i = self.m.const_int(LTy::I64, v as i128);
-                        return self.m.const_cast(kiln_llvm::CastOp::IntToPtr, i, t).map_err(|e| ir_err(&e));
+                        return self
+                            .m
+                            .const_cast(kiln_llvm::CastOp::IntToPtr, i, t)
+                            .map_err(|e| ir_err(&e));
                     }
                     return err(None, "integer constant of non-integer type");
                 }
@@ -77,7 +86,9 @@ impl Cg<'_> {
             }
             Scalar::Float { bits, .. } => Ok(self.m.const_float_bits(t, bits)),
             Scalar::Null { kind: NullKind::Pointer, .. } => Ok(self.m.const_null(LTy::PTR)),
-            Scalar::Null { .. } | Scalar::MemberPtr { .. } => err(None, "pointer-to-member constants are not supported yet (M3)"),
+            Scalar::Null { .. } | Scalar::MemberPtr { .. } => {
+                err(None, "pointer-to-member constants are not supported yet (M3)")
+            }
             Scalar::Pointer { base, offset, .. } => {
                 let b = self.ptr_base(base)?;
                 if offset == 0 {
@@ -127,7 +138,9 @@ impl Cg<'_> {
                     Ok(gval(self.get_gvar(d)?))
                 }
             }
-            _ => err(Some(ast.decls.get(d).loc()), "constant address of an unsupported declaration"),
+            _ => {
+                err(Some(ast.decls.get(d).loc()), "constant address of an unsupported declaration")
+            }
         }
     }
 
@@ -151,7 +164,12 @@ impl Cg<'_> {
                     Ok(self.m.const_int_words(t, &words))
                 }
             }
-            IrType::Half | IrType::BFloat | IrType::Float | IrType::Double | IrType::X86Fp80 | IrType::Fp128 => {
+            IrType::Half
+            | IrType::BFloat
+            | IrType::Float
+            | IrType::Double
+            | IrType::X86Fp80
+            | IrType::Fp128 => {
                 let n = match it {
                     IrType::Half | IrType::BFloat => 2,
                     IrType::Float => 4,
@@ -175,7 +193,8 @@ impl Cg<'_> {
             IrType::Array(et, n) => {
                 let (es, _) = self.tys.size_align(et);
                 let e = e.map(|x| self.strip_init(x));
-                let is_string = e.is_some_and(|x| self.ast.exprs.get(x).kind() == ExprKind::StringLiteral);
+                let is_string =
+                    e.is_some_and(|x| self.ast.exprs.get(x).kind() == ExprKind::StringLiteral);
                 let inits: Vec<ExprId> = match e {
                     Some(x) if self.ast.exprs.get(x).kind() == ExprKind::InitListExpr => {
                         let l = self.ast.exprs.init_list_inits(x);
@@ -235,7 +254,10 @@ impl Cg<'_> {
                             elems.push(self.m.const_zero(mt));
                             continue;
                         }
-                        return err(None, "base-class subobjects in constants are not supported yet (M3)");
+                        return err(
+                            None,
+                            "base-class subobjects in constants are not supported yet (M3)",
+                        );
                     }
                     elems.push(self.image_const(img, off + offs[i], m, sub)?);
                 }
@@ -257,14 +279,23 @@ impl Cg<'_> {
                 }
                 self.m.const_struct(t, &elems).map_err(|e| ir_err(&e))
             }
-            IrType::Void | IrType::Vector(..) => err(None, "vector constants are not supported yet (M3)"),
+            IrType::Void | IrType::Vector(..) => {
+                err(None, "vector constants are not supported yet (M3)")
+            }
         }
     }
 
     /// A union constant (clang `ConstStructBuilder` for unions): the active
     /// member then `undef` padding, as the union's IR type when the element
     /// types match it, else a literal struct.
-    fn union_const(&mut self, img: &Img, off: u64, t: LTy, size: u64, e: Option<ExprId>) -> R<Value> {
+    fn union_const(
+        &mut self,
+        img: &Img,
+        off: u64,
+        t: LTy,
+        size: u64,
+        e: Option<ExprId>,
+    ) -> R<Value> {
         let e = e.map(|x| self.strip_init(x));
         let ile = e.filter(|&x| self.ast.exprs.get(x).kind() == ExprKind::InitListExpr);
         let active = ile.and_then(|x| self.ast.exprs.init_list(x).union_field);
