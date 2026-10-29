@@ -365,6 +365,16 @@ diag_ids! {
     drv_cannot_open_output = Error (2) "unable to open output file '{0}': '{1}'";
     drv_cannot_read_input = Fatal (2) "cannot read '{0}': {1}";
     drv_cannot_read_predefines = Fatal (2) "cannot read the predefined macros '{0}': {1}";
+    // driver codegen path (WP-052b), clang's wording
+    drv_out_file_multiple = Error (0) "cannot specify -o when generating multiple output files";
+    drv_emit_llvm_link = Error (0) "-emit-llvm cannot be used when linking";
+    drv_unable_to_execute = Error (1) "unable to execute command: Executable \"{0}\" doesn't exist!";
+    drv_command_failed = Error (2) "{0} command failed with exit code {1} (use -v to see invocation)";
+    drv_command_signalled = Error (1) "{0} command failed due to signal (use -v to see invocation)";
+    drv_cannot_execute = Error (2) "unable to execute command: {0}: {1}";
+    drv_linker_input_unused = Warning [UnusedCommandLineArgument] (1) "{0}: 'linker' input unused";
+    drv_argument_unused = Warning [UnusedCommandLineArgument] (1) "argument unused during compilation: '{0}'";
+    cg_error = Error (1) "{0}";
 
     // ----- sema conversions (WP-049): [conv], [expr.arith.conv], [lex.*con] --
     // Type arguments are passed pre-quoted, with clang's `(aka '...')`

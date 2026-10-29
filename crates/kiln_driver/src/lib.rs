@@ -1,14 +1,16 @@
 //! The `kiln` driver: a clang-compatible command line over the frontend.
 //! See `spec/driver.md` and `docs/ARCHITECTURE.md` ("Driver").
 //!
-//! Preprocessing (`-E`, `-M`, `-MM`) and `-fsyntax-only [-fdump-ast]`
-//! (WP-048's parser) are implemented; `-c`, `-S` and linking report "not
-//! implemented yet".
+//! Preprocessing (`-E`, `-M`, `-MM`), `-fsyntax-only [-fdump-ast]`
+//! (WP-048's parser) and code generation (`-S -emit-llvm`, `-S`, `-c`,
+//! linking; WP-052b, [`codegen_cmd`]) are implemented.
 #![forbid(unsafe_code)]
 
 pub mod args;
+pub mod codegen_cmd;
 pub mod constexpr_opts;
 pub mod deps;
+pub mod link;
 pub mod pp_cmd;
 pub mod syntax_cmd;
 pub mod time;
@@ -103,7 +105,7 @@ pub fn make_engine<'sm>(
 }
 
 const HELP: &str = "\
-OVERVIEW: kiln, a C++26 frontend (preprocessing and -fsyntax-only so far)
+OVERVIEW: kiln, a C++26 frontend emitting LLVM IR
 
 USAGE: kiln [options] file...
 
@@ -114,7 +116,9 @@ Implemented: -E -P -C -CC -dM -o -x -std= -D -U -I -isystem -iquote
 -fdiagnostics-format= -f[no-]color-diagnostics -fkiln-reproducible-time
 -fsyntax-only -fdump-ast[=...] -fdump-ast-filter= -fconstexpr-steps=
 -fconstexpr-depth= -fconstexpr-memory= -fconstexpr-backtrace-limit=
--fconstexpr-report= -v --version.
+-fconstexpr-report= -c -S -emit-llvm -O<n> -g (ignored) -l -L -Wl,
+-fuse-ld= -static -nostdlib -shared -rdynamic -pie -no-pie -pthread -###
+-v --version.
 See spec/driver.md.
 ";
 
@@ -137,7 +141,7 @@ fn emit_arg_error(e: &ArgError, engine: &DiagEngine<'_>) {
     d.emit(engine);
 }
 
-fn print_version(w: &mut dyn Write, tc: &Toolchain, verbose: bool) {
+pub(crate) fn print_version(w: &mut dyn Write, tc: &Toolchain, verbose: bool) {
     let dir = std::env::current_exe()
         .ok()
         .and_then(|e| e.parent().map(|p| p.display().to_string()))
@@ -160,7 +164,7 @@ fn print_version(w: &mut dyn Write, tc: &Toolchain, verbose: bool) {
 }
 
 /// The standard of an input in `lang`, or the error to report.
-fn input_std(args: &Args, lang: Lang) -> Result<LangStd, Box<Diag>> {
+pub(crate) fn input_std(args: &Args, lang: Lang) -> Result<LangStd, Box<Diag>> {
     let cplusplus = lang == Lang::Cxx;
     let Some(s) = &args.std else { return Ok(LangStd::default_for(cplusplus)) };
     let std = LangStd::parse(s).ok_or_else(|| {
@@ -179,7 +183,11 @@ fn input_std(args: &Args, lang: Lang) -> Result<LangStd, Box<Diag>> {
 }
 
 /// Writes `text` to `path` (`-` is standard output).
-fn write_output(path: Option<&str>, text: &str, stdout: &mut dyn Write) -> Result<(), String> {
+pub(crate) fn write_output(
+    path: Option<&str>,
+    text: &str,
+    stdout: &mut dyn Write,
+) -> Result<(), String> {
     match path {
         None | Some("-") => stdout
             .write_all(text.as_bytes())
@@ -203,11 +211,14 @@ fn check_action(args: &Args, drv: &DiagEngine<'_>) {
     }
     let not_impl = match action {
         Action::SyntaxOnly if args.deps.side.is_some() => Some("-MD / -MMD with -fsyntax-only"),
-        Action::Preprocess | Action::SyntaxOnly => None,
-        Action::Compile => Some("compiling (-c, -S, -emit-llvm)"),
-        Action::Link => Some("linking (kiln only preprocesses so far: pass -E)"),
+        Action::Compile | Action::Link if args.deps.side.is_some() => {
+            Some("-MD / -MMD when compiling")
+        }
+        Action::Preprocess | Action::SyntaxOnly | Action::Compile | Action::Link => None,
     };
     let not_impl = not_impl
+        .or((args.print_commands && matches!(action, Action::Preprocess | Action::SyntaxOnly))
+            .then_some("-### with -E or -fsyntax-only"))
         .or(args.print.defines_too.then_some("-dD"))
         .or(args.print.includes_too.then_some("-dI"))
         .or((action != Action::SyntaxOnly
@@ -301,6 +312,7 @@ fn existing_inputs<'a>(args: &'a Args, drv: &DiagEngine<'_>) -> Vec<&'a args::In
 
 /// Runs the driver on `argv` (without the program name). Returns the exit
 /// code: 0 on success, 1 on any error (clang's convention).
+#[allow(clippy::too_many_lines, reason = "the driver's phases in order, one dispatch per action")]
 pub fn run(command_line: &[String], mut io: Io) -> i32 {
     let args = Args::parse(command_line);
     let diag_opts = DiagOptions::from_args(&args.diag_args);
@@ -351,6 +363,16 @@ pub fn run(command_line: &[String], mut io: Io) -> i32 {
     drop(drv);
 
     let stdin_text = inputs.iter().any(|i| i.path == "-").then(|| read_stdin(&mut io.stdin));
+    if matches!(args.action, Action::Compile | Action::Link) && args.deps.only.is_none() {
+        return codegen_cmd::compile(
+            &args,
+            &tc,
+            &inputs,
+            stdin_text.as_deref(),
+            &diag_opts,
+            &mut io,
+        );
+    }
 
     let mut output = String::new();
     let mut errors = 0u32;
@@ -399,7 +421,7 @@ pub fn run(command_line: &[String], mut io: Io) -> i32 {
     write_results(&args, &diag_opts, &mut io, &output, errors, side_deps)
 }
 
-fn report_output_error(opts: &DiagOptions, stderr: &SharedWriter, path: &str, e: &str) {
+pub(crate) fn report_output_error(opts: &DiagOptions, stderr: &SharedWriter, path: &str, e: &str) {
     let sm = SourceManager::new();
     let engine = make_engine(&sm, opts, stderr.clone(), None);
     Diag::new(DiagId::drv_cannot_open_output, Span::INVALID).arg(path).arg(e).emit(&engine);

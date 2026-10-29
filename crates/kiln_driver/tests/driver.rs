@@ -63,10 +63,10 @@ fn argument_errors() {
     assert_eq!((o.code, o.stderr.as_str()), (1, "error: invalid value 'c++27' in '-std=c++27'\n"));
     let o = kiln(&["-E", "-std=c11", "-"], "");
     assert_eq!(o.stderr, "error: invalid argument '-std=c11' not allowed with 'C++'\n");
-    let o = kiln(&["-c", "-"], "");
+    let o = kiln(&["-emit-llvm", "-"], "");
     assert_eq!(
         (o.code, o.stderr.as_str()),
-        (1, "kiln: error: compiling (-c, -S, -emit-llvm) is not implemented yet\n")
+        (1, "kiln: error: -emit-llvm cannot be used when linking\n")
     );
 }
 
