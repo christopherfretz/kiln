@@ -1,0 +1,76 @@
+TranslationUnitDecl
+|-FunctionDecl referenced may 'int ()'
+|-FunctionDecl referenced wont 'void () noexcept'
+|-FunctionDecl referenced add 'int (int, int) noexcept'
+| |-ParmVarDecl used a 'int'
+| |-ParmVarDecl used b 'int'
+| `-CompoundStmt
+|   `-ReturnStmt
+|     `-BinaryOperator 'int' '+'
+|       |-ImplicitCastExpr 'int' <LValueToRValue>
+|       | `-DeclRefExpr 'int' lvalue ParmVar 'a' 'int'
+|       `-ImplicitCastExpr 'int' <LValueToRValue>
+|         `-DeclRefExpr 'int' lvalue ParmVar 'b' 'int'
+|-VarDecl referenced pm 'void (*)()'
+|-VarDecl referenced pw 'void (*)() noexcept'
+|-VarDecl a 'const bool' constexpr cinit value=false
+| `-CXXNoexceptExpr 'bool'
+|   `-CallExpr 'int'
+|     `-ImplicitCastExpr 'int (*)()' <FunctionToPointerDecay>
+|       `-DeclRefExpr 'int ()' lvalue Function 'may' 'int ()' non_odr_use_unevaluated
+|-VarDecl b 'const bool' constexpr cinit value=true
+| `-CXXNoexceptExpr 'bool'
+|   `-CallExpr 'void'
+|     `-ImplicitCastExpr 'void (*)() noexcept' <FunctionToPointerDecay>
+|       `-DeclRefExpr 'void () noexcept' lvalue Function 'wont' 'void () noexcept' non_odr_use_unevaluated
+|-VarDecl c 'const bool' constexpr cinit value=true
+| `-CXXNoexceptExpr 'bool'
+|   `-BinaryOperator 'int' '+'
+|     |-IntegerLiteral 'int' 1
+|     `-IntegerLiteral 'int' 2
+|-VarDecl d 'const bool' constexpr cinit value=true
+| `-CXXNoexceptExpr 'bool'
+|   `-BinaryOperator 'int' '+'
+|     |-CallExpr 'int'
+|     | |-ImplicitCastExpr 'int (*)(int, int) noexcept' <FunctionToPointerDecay>
+|     | | `-DeclRefExpr 'int (int, int) noexcept' lvalue Function 'add' 'int (int, int) noexcept' non_odr_use_unevaluated
+|     | |-IntegerLiteral 'int' 1
+|     | `-IntegerLiteral 'int' 2
+|     `-CallExpr 'int'
+|       |-ImplicitCastExpr 'int (*)(int, int) noexcept' <FunctionToPointerDecay>
+|       | `-DeclRefExpr 'int (int, int) noexcept' lvalue Function 'add' 'int (int, int) noexcept' non_odr_use_unevaluated
+|       |-IntegerLiteral 'int' 3
+|       `-IntegerLiteral 'int' 4
+|-VarDecl e 'const bool' constexpr cinit value=false
+| `-CXXNoexceptExpr 'bool'
+|   `-CallExpr 'void'
+|     `-ImplicitCastExpr 'void (*)()' <LValueToRValue>
+|       `-DeclRefExpr 'void (*)()' lvalue Var 'pm' 'void (*)()' non_odr_use_unevaluated
+|-VarDecl f 'const bool' constexpr cinit value=true
+| `-CXXNoexceptExpr 'bool'
+|   `-CallExpr 'void'
+|     `-ImplicitCastExpr 'void (*)() noexcept' <LValueToRValue>
+|       `-DeclRefExpr 'void (*)() noexcept' lvalue Var 'pw' 'void (*)() noexcept' non_odr_use_unevaluated
+|-VarDecl g 'const bool' constexpr cinit value=true
+| `-CXXNoexceptExpr 'bool'
+|   `-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof
+|     `-ParenExpr 'int'
+|       `-CallExpr 'int'
+|         `-ImplicitCastExpr 'int (*)()' <FunctionToPointerDecay>
+|           `-DeclRefExpr 'int ()' lvalue Function 'may' 'int ()' non_odr_use_unevaluated
+|-VarDecl h 'const bool' constexpr cinit value=true
+| `-CXXNoexceptExpr 'bool'
+|   `-CXXNoexceptExpr 'bool'
+|     `-CallExpr 'int'
+|       `-ImplicitCastExpr 'int (*)()' <FunctionToPointerDecay>
+|         `-DeclRefExpr 'int ()' lvalue Function 'may' 'int ()' non_odr_use_unevaluated
+`-FunctionDecl use 'int ()'
+  `-CompoundStmt
+    `-ReturnStmt
+      `-ConditionalOperator 'int'
+        |-CXXNoexceptExpr 'bool'
+        | `-CallExpr 'int'
+        |   `-ImplicitCastExpr 'int (*)()' <FunctionToPointerDecay>
+        |     `-DeclRefExpr 'int ()' lvalue Function 'may' 'int ()' non_odr_use_unevaluated
+        |-IntegerLiteral 'int' 1
+        `-IntegerLiteral 'int' 0

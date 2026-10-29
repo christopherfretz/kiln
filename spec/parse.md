@@ -35,15 +35,19 @@ undeclared, which resolves the C++ declaration/expression ambiguities.
   - `extern "C"`/`"C++"` blocks and declarations
   - namespaces (named, unnamed, `inline`, nested `A::B`)
   - qualified declarator-ids
+  - exception specifications: `noexcept`, `noexcept(e)`, `throw()`
+    (and `throw(type-ids)`, diagnosed)
   - `using namespace`
   - `static_assert`
 - **Attributes:** standard and GNU attributes (§6.2).
 - **Statements:** every C control-flow statement, with C++
-  init-statements and condition declarations.
+  init-statements and condition declarations; `if constexpr`,
+  `if consteval` and `if !consteval`.
 - **Expressions:**
   - every built-in operator, with clang's precedence
   - calls, subscripts, `.`, `->`
   - `sizeof`, `alignof`, and `sizeof...` (diagnosed: M2 has no packs)
+  - the `noexcept(e)` operator
   - C-style, functional, `static_cast`, `reinterpret_cast` and
     `const_cast`
   - `nullptr`, `true`, `false`
@@ -227,12 +231,23 @@ harness ignores order.
 - **`parse_declarator`** fills a `Declarator`:
   - the name, its qualifier and its location
   - `chunks`, innermost first: pointer/reference with cv, array with
-    bound, function with parameters and variadic flag
+    bound, function with parameters, variadic flag and exception
+    specification
   - the bit-width, attributes, and `init_style`
 
   The parser peeks at `=`, `(` or `{` to set `init_style` *before* the
   declaration exists, because Sema needs it to create the `VarDecl`.
   Sema builds the type from the last chunk outwards ([dcl.meaning]).
+- **Exception specifications** (`parse_exception_spec`, after the
+  function parameters, [except.spec]/1): at most one per declarator.
+  - `noexcept` is `ExcSpec::BasicNoexcept`.
+  - `noexcept ( constant-expression )` goes to
+    `act_on_noexcept_spec(e, loc, start)` (spec/sema.md §4.7).
+  - `throw ( [type-id-list] )` goes to `act_on_dynamic_exception_spec`;
+    a missing `(` is `expected '(' after 'throw'`, and a pack expansion
+    `...` in the list is "not supported yet".
+  - A second specification is not consumed: the declarator ends and
+    the next token is diagnosed by the caller.
 - **`parse_simple_declaration`** handles the decl-specifiers, then
   init-declarators. Each one goes to `Sema::act_on_declarator`, then
   `parse_initializer`/`act_on_init` or `act_on_uninit`. For a
@@ -273,7 +288,10 @@ harness ignores order.
   - The middle operand of `?:` is a full expression.
 - **Below a cast-expression**, parsing is recursive descent:
   - `parse_cast_expr` handles the unary operators, `sizeof`/`alignof`,
-    and `(type-id) cast-expression` when the parenthesized tokens name
+    `noexcept ( expression )` (`parse_noexcept_expr`: the operand is
+    parsed between `enter_unevaluated`/`exit_unevaluated`, then
+    `act_on_noexcept_expr`; a missing `(` is `expected '(' after
+    'noexcept'`), and `(type-id) cast-expression` when the parenthesized tokens name
     a type (`scan_name` → `NameClass::Type`, or a type keyword).
   - Then postfix operators: calls, subscripts, `.`, `->`, `++`, `--`.
   - Then primary expressions:
@@ -329,9 +347,22 @@ harness ignores order.
   - `case`, `default`, `identifier:`
   - A label at the end of a block labels a null statement (C++23).
 - **Jumps:** `goto`, `break`, `continue`, `return`.
-- **Unsupported:** case ranges, computed goto, statement expressions,
-  range-based `for`, and `if constexpr`/`consteval` are "not supported
-  yet".
+- **`if constexpr`, `if consteval`, `if !consteval`** ([stmt.if]):
+  - `if constexpr ( [init-statement] condition )` takes the ordinary
+    `if` path; the condition goes to `act_on_constexpr_condition`
+    instead of `act_on_condition`, and the statement is built with
+    `IfKind::Constexpr`.
+  - `if [!] consteval compound [else compound]`
+    (`parse_if_consteval`): both substatements must be compound
+    statements; otherwise `expected { after consteval` (at the
+    `consteval` keyword) or `expected { after else` (at the `else`),
+    and the statement is dropped. The branch run under constant
+    evaluation is parsed between `enter_immediate_context` and
+    `exit_immediate_context`.
+  - `if constexpr` or `if !` not followed by `(` (or `consteval`) is
+    `expected '(' after 'if'`; the parser skips to the next `;`.
+- **Unsupported:** case ranges, computed goto, statement expressions
+  and range-based `for` are "not supported yet".
 
 ### 6.2 Attributes (`attr.rs`)
 - **Syntax:** `[[ ]]` (with `using ns:`), `alignas(…)`, and GNU
@@ -401,11 +432,10 @@ in `kiln_diag` for now; nothing emits them.
   - pointer-to-member operators on classes
   - reflection (`^^`, `[: :]`)
   - `co_await`/`co_yield`
-- **Statements:** range-based `for`, `if constexpr`/`consteval`,
-  `try`/`catch`, `co_return`, contracts.
+- **Statements:** range-based `for`, `try`/`catch`, `co_return`, contracts.
 - **Other declarations:**
   - pointers to members, asm labels
-  - exception specifications
+  - pack expansions in dynamic exception specifications
   - default arguments
   - trailing return types
   - `auto` deduction beyond `auto x = e`

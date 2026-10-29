@@ -271,8 +271,17 @@ const CASES: &[(&str, Mode, &str)] = &[
         Exact,
         "static int sq(int a) { return a * a; } int f(int x) { return sq(x) + sq(3); }",
     ),
-    // `noexcept` is not parsed yet (kiln_parse); the call shape is the same.
     ("calls_void", Exact, "void g(int); void h(); void f() { g(1); h(); }"),
+    (
+        "calls_noexcept",
+        Exact,
+        "void g(int) noexcept; int h() noexcept(true); int k(); int f() { g(1); return h() + k(); }",
+    ),
+    (
+        "noexcept_operator",
+        Exact,
+        "int may(); int wont() noexcept; bool f() { return noexcept(may()); } bool g() { return noexcept(wont()); }",
+    ),
     (
         "calls_variadic",
         Exact,
@@ -406,7 +415,21 @@ const CASES: &[(&str, Mode, &str)] = &[
         Exact,
         "int f(int a) { if (a < 0) return -1; else if (a == 0) return 0; else { a = a * 2; } return a; }",
     ),
-    // `if constexpr` is not parsed yet (kiln_parse); stmt.rs handles it.
+    (
+        "if_constexpr_true",
+        Exact,
+        "int f(int a) { if constexpr (sizeof(int) == 4) { return a + 1; } else { return a - 1; } }",
+    ),
+    (
+        "if_constexpr_false",
+        Exact,
+        "int f(int a) { if constexpr (sizeof(int) == 8) { a = a * 3; } else { a = a - 1; } return a; }",
+    ),
+    (
+        "if_consteval",
+        Exact,
+        "int f(int a) { if consteval { return 1; } else { return a; } } int g(int a) { if !consteval { a += 2; } return a; }",
+    ),
     (
         "if_init",
         Exact,

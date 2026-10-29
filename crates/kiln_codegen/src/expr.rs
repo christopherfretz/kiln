@@ -146,6 +146,7 @@ impl Cg<'_> {
                 self.icn(t, i128::from(ast.exprs.char_value(e)))
             }
             ExprKind::CXXBoolLiteralExpr => V::C(self.m.const_bool(ast.exprs.bool_value(e))),
+            ExprKind::CXXNoexceptExpr => V::C(self.m.const_bool(ast.exprs.noexcept_value(e))),
             ExprKind::CXXNullPtrLiteralExpr => V::C(self.m.const_null(LTy::PTR)),
             ExprKind::ImplicitValueInitExpr | ExprKind::CXXScalarValueInitExpr => {
                 if ast.types.is_void(q) {

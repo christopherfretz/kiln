@@ -752,7 +752,7 @@ impl Scan<'_> {
                 self.expr(ExprId::new(n.a()), ok);
                 self.expr(ast.exprs.compound_assign(e).rhs, false);
             }
-            ExprKind::UnaryExprOrTypeTraitExpr => {}
+            ExprKind::UnaryExprOrTypeTraitExpr | ExprKind::CXXNoexceptExpr => {}
             ExprKind::CallExpr => {
                 let ty = n.ty();
                 if matches!(
@@ -1587,6 +1587,10 @@ impl Compiler<'_> {
             }
             ExprKind::CXXBoolLiteralExpr => {
                 let v = self.ast().exprs.bool_value(e);
+                self.konst(dst, u128::from(v));
+            }
+            ExprKind::CXXNoexceptExpr => {
+                let v = self.ast().exprs.noexcept_value(e);
                 self.konst(dst, u128::from(v));
             }
             ExprKind::CXXNullPtrLiteralExpr

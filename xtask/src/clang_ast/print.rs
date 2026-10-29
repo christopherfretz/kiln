@@ -652,6 +652,7 @@ impl<'a> Printer<'a, '_> {
                 kids_out = self.kid_trees(n)?;
             }
             "CXXNullPtrLiteralExpr"
+            | "CXXNoexceptExpr"
             | "ConditionalOperator"
             | "ParenExpr"
             | "ArraySubscriptExpr"

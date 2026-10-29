@@ -1,0 +1,22 @@
+TranslationUnitDecl
+|-FunctionDecl used f0 'void () noexcept'
+|-FunctionDecl f1 'void () noexcept(true)'
+|-FunctionDecl f2 'void () noexcept(false)'
+|-FunctionDecl f3 'void () noexcept(sizeof(int) == 4)'
+|-FunctionDecl f4 'void () throw()'
+|-VarDecl referenced yes 'const bool' constexpr cinit value=true
+| `-CXXBoolLiteralExpr 'bool' true
+|-FunctionDecl f5 'void () noexcept(yes)'
+|-FunctionDecl f6 'void () noexcept(1)'
+|-VarDecl fp 'void (*)() noexcept' cinit
+| `-ImplicitCastExpr 'void (*)() noexcept' <FunctionToPointerDecay>
+|   `-DeclRefExpr 'void () noexcept' lvalue Function 'f0' 'void () noexcept'
+|-FunctionDecl used f0 'void () noexcept'
+| `-CompoundStmt
+`-FunctionDecl g 'int (int) noexcept(noexcept(f0()))'
+  |-ParmVarDecl used x 'int'
+  `-CompoundStmt
+    `-ReturnStmt
+      `-ImplicitCastExpr 'int' <LValueToRValue>
+        `-ImplicitCastExpr 'int' xvalue <NoOp>
+          `-DeclRefExpr 'int' lvalue ParmVar 'x' 'int'

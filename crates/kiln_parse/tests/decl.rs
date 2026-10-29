@@ -335,3 +335,23 @@ fn dcl_typedef_invalid_redefinition_not_previous() {
     p.assert_diag("2:14 error: typedef redefinition with different types ('long' vs 'int')");
     p.assert_diag("3:15 error: typedef redefinition with different types ('short' vs 'int')");
 }
+
+/// [except.spec]/1-2: exception specifications are part of the function type.
+#[test]
+fn except_spec_forms() {
+    let p = parse(
+        "void a() noexcept; void b() noexcept(false); void c() throw();\n\
+         void d() noexcept(sizeof(int) == 4); void (*fp)() noexcept = a;",
+    );
+    p.assert_clean();
+    p.assert_dump("FunctionDecl used a 'void () noexcept'");
+    p.assert_dump("FunctionDecl b 'void () noexcept(false)'");
+    p.assert_dump("FunctionDecl c 'void () throw()'");
+    p.assert_dump("FunctionDecl d 'void () noexcept(sizeof(int) == 4)'");
+    let p = parse("void a() throw(int);");
+    p.assert_diag("ISO C++17 does not allow dynamic exception specifications");
+    let p = parse("void a() noexcept(2);");
+    p.assert_diag("noexcept specifier argument evaluates to 2");
+    let p = parse("void a() noexcept; void a();");
+    p.assert_diag("'a' is missing exception specification 'noexcept'");
+}

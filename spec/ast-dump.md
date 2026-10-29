@@ -139,6 +139,7 @@ no category).
 | `CompoundAssignOperator` | `CompoundAssignOperator 'type' lvalue [bitfield] 'op' ComputeLHSTy='T' ComputeResultTy='T'` |
 | `ConditionalOperator`, `ParenExpr`, `ArraySubscriptExpr`, `CallExpr` | class, type, category; children in source order (callee first) |
 | `UnaryExprOrTypeTraitExpr` | `UnaryExprOrTypeTraitExpr 'type' sizeof\|alignof 'operand-type'` (or expression child) |
+| `CXXNoexceptExpr` | `CXXNoexceptExpr 'bool'`; one child, the unevaluated operand. The value is not printed (clang prints none) |
 | `InitListExpr` | `InitListExpr 'type' [field=name]`; `array_filler:` child first, then elements; `field=` names the initialized member of a union |
 | `ImplicitValueInitExpr` | `ImplicitValueInitExpr 'type'` |
 | `ConstantExpr` | `ConstantExpr 'type' value=V` (M2: integral, `bool` and enumeration values) |

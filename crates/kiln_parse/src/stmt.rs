@@ -1,6 +1,7 @@
 //! Statements ([stmt]; spec/parse.md §6).
 
 use kiln_ast::decl::InitStyle;
+use kiln_ast::stmt::IfKind;
 use kiln_ast::{DeclId, ExprId, StmtId};
 use kiln_diag::DiagId;
 use kiln_lex::{Punct, TokKind};
@@ -314,12 +315,21 @@ impl Parser<'_, '_> {
         Some(self.s.act_on_condition_var(v, name_loc))
     }
 
-    /// if-statement ([stmt.if]).
+    /// if-statement ([stmt.if]): `if constexpr? ( init-statement?
+    /// condition ) statement (else statement)?` and `if !? consteval
+    /// compound-statement (else statement)?`.
     fn parse_if(&mut self) -> Option<StmtId> {
         let loc = self.bump().span.lo;
-        if self.at_kw(Kw::Constexpr) || self.at_kw(Kw::Consteval) || self.at(Punct::Exclaim) {
-            self.unsupported("'if constexpr' and 'if consteval'", self.loc());
-            self.skip_if_rest();
+        let constexpr = self.eat_kw(Kw::Constexpr).is_some();
+        let negated = self.eat(Punct::Exclaim).is_some();
+        if !constexpr && self.at_kw(Kw::Consteval) {
+            return self.parse_if_consteval(loc, negated);
+        }
+        if (constexpr || negated) && !self.at(Punct::LParen) {
+            // clang: at the current token, then skip to the next `;`.
+            let d = self.s.diag(DiagId::parse_expected_after, self.loc()).arg("'if'").arg("'('");
+            self.emit(d);
+            self.skip_until(&[Punct::Semi], false, true);
             return None;
         }
         self.s.push_scope(ScopeKind::Control);
@@ -328,12 +338,61 @@ impl Parser<'_, '_> {
             self.skip_if_rest_after_cond();
             return None;
         };
-        let cond = self.s.act_on_condition(c);
+        let (kind, cond) = if constexpr {
+            (IfKind::Constexpr, self.s.act_on_constexpr_condition(c))
+        } else {
+            (IfKind::Ordinary, self.s.act_on_condition(c))
+        };
         let then = self.parse_sub_statement();
         let els =
             if self.eat_kw(Kw::Else).is_some() { Some(self.parse_sub_statement()) } else { None };
         self.s.pop_scope();
-        Some(self.s.act_on_if(init, var, cond, then, els, loc))
+        Some(self.s.act_on_if(kind, init, var, Some(cond), then, els, loc))
+    }
+
+    /// `if !? consteval compound-statement (else statement)?`
+    /// ([stmt.if]/4), at `consteval`. Both sub-statements must be compound
+    /// statements (checked after parsing them, as clang does); the one
+    /// that runs during constant evaluation is an immediate function
+    /// context ([expr.const]/16).
+    fn parse_if_consteval(&mut self, loc: Loc, negated: bool) -> Option<StmtId> {
+        let consteval_loc = self.bump().span.lo;
+        let then_ok = self.at(Punct::LBrace);
+        if !negated {
+            self.s.enter_immediate_context();
+        }
+        let then = self.parse_sub_statement();
+        if !negated {
+            self.s.exit_immediate_context();
+        }
+        let mut else_bad = None;
+        let els = if let Some(else_loc) = self.eat_kw(Kw::Else) {
+            if !self.at(Punct::LBrace) {
+                else_bad = Some(else_loc);
+            }
+            if negated {
+                self.s.enter_immediate_context();
+            }
+            let e = self.parse_sub_statement();
+            if negated {
+                self.s.exit_immediate_context();
+            }
+            Some(e)
+        } else {
+            None
+        };
+        let bad = if then_ok {
+            else_bad.map(|l| (l, "else"))
+        } else {
+            Some((consteval_loc, "consteval"))
+        };
+        if let Some((at, what)) = bad {
+            let d = self.s.diag(DiagId::parse_expected_after, at).arg(what).arg("{");
+            self.emit(d);
+            return None;
+        }
+        let kind = if negated { IfKind::NotConsteval } else { IfKind::Consteval };
+        Some(self.s.act_on_if(kind, None, None, None, then, els, loc))
     }
 
     /// Recovery after an unsupported `if` head: skip the condition and

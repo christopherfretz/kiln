@@ -150,11 +150,11 @@ panic and never silently wrong IR.
   `unsigned c : 9`, `c += 2` computes in `unsigned` (`add`) where clang
   computes in `int` (`add nsw`). The value is the same; only the flag
   differs. The fix belongs in kiln_sema.
-- Parser gaps (kiln_parse), which keep cases out of the corpus rather
-  than deviating: `noexcept` exception specifications and
-  `if constexpr`/`if consteval` are not parsed yet. `stmt.rs` already
-  lowers constexpr and consteval if, and call sites already honour a
-  nothrow prototype; add cases when the parser accepts them.
+- The former parser gaps are closed (WP-058): `calls_noexcept`,
+  `noexcept_operator`, `if_constexpr_true`, `if_constexpr_false` and
+  `if_consteval` are exact. A `CXXNoexceptExpr` lowers to its stored
+  `bool` constant; its operand is never emitted, and `fold.rs` does
+  not look inside it.
 
 ## Status and what remains
 Written as a resume point for a fresh agent. Branch `wp/052`, worktree
@@ -162,7 +162,8 @@ Written as a resume point for a fresh agent. Branch `wp/052`, worktree
 
 **Done (WP-052 part 1):** `fir.rs`, `module.rs`, `func.rs`, `consts.rs`,
 `fold.rs`, `expr.rs` (§3) and `stmt.rs` (§4). The unit corpus is 73/74
-exact against clang on aarch64; the one deviation is listed above.
+exact against clang on aarch64 (78/79 after WP-058's five cases); the
+one deviation is listed above.
 Additive `kiln_abi` fixes came with it: internal-linkage variable mangling,
 static-local discriminators, and indirect returns with `byval` (clang's
 `getNaturalAlignIndirect`, so no `result.ptr` spill).
