@@ -182,7 +182,7 @@ impl Oven {
         })
     }
 
-    /// clang's note_constexpr_memory_leak for the allocations of the
+    /// clang's `note_constexpr_memory_leak` for the allocations of the
     /// running context still live: the first made, and how many others.
     fn leak_notes(&self, b: &dyn SemaBridge) -> Option<Vec<Note>> {
         if self.mem.heap_count == 0 {

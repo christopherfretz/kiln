@@ -160,7 +160,7 @@ static_assert(churn(3) + churn(3) == 6);
     let a = run(src, no_memo());
     let b = run(src, Budget::default());
     assert!(a.0.is_ok() && b.0.is_ok());
-    let (a, b) = (a.1.last().unwrap().clone(), b.1.last().unwrap().clone());
+    let (a, b) = (*a.1.last().unwrap(), *b.1.last().unwrap());
     assert_eq!((a.allocs, a.calls, a.steps), (2, 2, b.steps));
     assert_eq!((b.allocs, b.calls), (2, 2));
 }
