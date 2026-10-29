@@ -9,7 +9,8 @@ Format per `docs/AGENTS.md`. Ids are stable; status moves between
 | WP-001 | `kiln_source`: implement `spec/source.md` with unit tests | done (2026-10-28) |
 | WP-002 | `kiln_diag`: implement `spec/diag.md` (engine, ids table skeleton, text + JSON renderers) | done (2026-10-28) |
 | WP-003 | `xtask test`: conformance runner implementing the directive format in `docs/VALIDATION.md` (see `spec/harness.md`) | done (2026-10-28) |
-| WP-006b | bench: `--record` must MERGE rows into `docs/status/perf.md` instead of regenerating from the filtered run (a `--filter` record currently wipes other groups' rows); intern-cache TLS 32 KB could be inverted to leave initialised data | todo |
+| WP-006b | bench: `--record` merges rows into `docs/status/perf.md` (`Recorded` column, stale marking, means recomputed over the merged table; spec/bench.md "Recording") | done (2026-10-29) |
+| WP-006c | intern-cache TLS 32 KB could be inverted to leave initialised data (split from 006b) | todo (small) |
 | WP-006 | harness follow-ups: `run-args:`/`run-stdin:`/`env:`, ci corpus self-check, oracle hang=ERROR, `-fconstexpr-report` protocol (`spec/oven.md`), bench per-entry thresholds + oven counters, heavier pp entries. **Still open:** re-record all `bench/baselines/*.json` on a quiet host (load < 4; durable reminder set) | done except baseline re-record (2026-10-28) |
 | WP-004 | `xtask bench`: run `bench/` entries, record wall/RSS/oven stats, compare with baselines (see `spec/bench.md`) | done (2026-10-28) |
 | WP-005 | `resource/`: import clang 19 builtin headers + generated predefines for aarch64/x86_64 linux; script to regenerate | done (2026-10-28) |
