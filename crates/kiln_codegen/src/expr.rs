@@ -131,6 +131,9 @@ impl Cg<'_> {
         let q = n.ty();
         Ok(Some(match n.kind() {
             ExprKind::ParenExpr => return self.emit_scalar_opt(ast.exprs.operand(e)),
+            ExprKind::CompoundLiteralExpr => {
+                return self.emit_scalar_opt(ast.exprs.compound_literal_init(e));
+            }
             ExprKind::CXXDefaultArgExpr => match default_arg_of(ast, e) {
                 Some(d) => return self.emit_scalar_opt(d),
                 None => return err(self.loc_of(e), "default argument not yet parsed"),

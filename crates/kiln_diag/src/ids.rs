@@ -680,6 +680,8 @@ diag_ids! {
     sema_bad_const_cast_dest = Error (2) "{0:const_cast|static_cast|reinterpret_cast|dynamic_cast|C-style cast|functional-style cast} to {1}, which is not a reference, pointer-to-object, or pointer-to-data-member";
     sema_reinterpret_cast_small_int = Error (1) "cast from pointer to smaller type {0} loses information";
     sema_excess_initializers = Error (1) "excess elements in {0:array|vector|scalar|union|struct} initializer";
+    sema_builtin_func_cast_more_than_one_arg = Error (0) "function-style cast to a builtin type can only take one argument";
+    sema_reference_bind_to_init_list = Error (1) "reference to type {0} cannot bind to an initializer list";
     sema_array_init_not_init_list = Error (1) "array initializer must be an initializer list{0:| or string literal| or wide string literal}";
     sema_init_string_too_long = Error (2) "initializer-string for char array is too long, array size is {0} but initializer has size {1} (including the null terminating character)";
     sema_illegal_initializer_type = Error (1) "illegal initializer type {0}";

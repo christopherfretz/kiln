@@ -311,7 +311,7 @@ impl Sema<'_, '_> {
     /// Why a temporary of type `ty` cannot be created yet (class types
     /// need constructors, WP-065; arrays and references are rare in
     /// functional casts), or `None`.
-    fn temporary_unsupported(&self, ty: QualType) -> Option<&'static str> {
+    pub(crate) fn temporary_unsupported(&self, ty: QualType) -> Option<&'static str> {
         if self.ast.types.as_record(ty).is_some() {
             Some("a class temporary")
         } else if self.ast.types.is_array(ty) {

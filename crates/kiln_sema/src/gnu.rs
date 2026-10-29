@@ -12,6 +12,7 @@ use kiln_source::symbol::Symbol;
 
 use crate::Sema;
 use crate::conv::{self, ConvCtx};
+use crate::init::InitList;
 use crate::lookup::LookupKind;
 use crate::target;
 
@@ -417,5 +418,56 @@ impl Sema<'_, '_> {
                     .and_then(|r| self.ast.definition(r))
                     .is_some_and(|d| self.has_fields(d))
             })
+    }
+
+    /// `( T ) { ... }`, a GNU/C99 compound literal in C++ (clang's
+    /// `BuildCompoundLiteralExpr`): a prvalue of the written type `T`
+    /// holding the list-initialization of cv-unqualified `T`, done as if
+    /// by a C-style cast at `lparen`. Hence a reference `T` cannot bind
+    /// to the list and more than one element for a scalar is reported
+    /// as a function-style cast's. Class and array literals need
+    /// temporary materialization and namespace-scope literals constant
+    /// elements; both are unsupported.
+    pub fn act_on_compound_literal(&mut self, ty: QualType, l: &InitList, lparen: Loc) -> ExprId {
+        let flat = Self::list_exprs(l);
+        if self.is_error_type(ty) {
+            return self.recover(ty, &flat, lparen);
+        }
+        if self.ast.types.is_array(ty) || self.ast.types.is_function(ty) {
+            let what = self.temporary_unsupported(ty).unwrap_or("a temporary");
+            self.unsupported(&format!("compound literals of {what}"), lparen);
+            return self.recover(ty, &flat, lparen);
+        }
+        if self.ast.types.is_reference(ty) {
+            let to = self.non_reference(ty);
+            let msg =
+                self.diag(DiagId::sema_reference_bind_to_init_list, lparen).arg(self.ty_arg(to));
+            self.emit(msg);
+            return self.recover(ty, &flat, lparen);
+        }
+        if !self.is_complete(ty) {
+            let msg =
+                self.diag(DiagId::sema_typecheck_decl_incomplete_type, lparen).arg(self.ty_arg(ty));
+            self.emit(self.incomplete_note(msg, ty));
+            return self.recover(ty, &flat, lparen);
+        }
+        if let Some(what) = self.temporary_unsupported(ty) {
+            self.unsupported(&format!("compound literals of {what}"), lparen);
+            return self.recover(ty, &flat, lparen);
+        }
+        if l.items.len() > 1 {
+            self.error(DiagId::sema_builtin_func_cast_more_than_one_arg, lparen);
+            return self.recover(ty, &flat, lparen);
+        }
+        if self.func.is_none() {
+            self.unsupported("compound literals at namespace scope", lparen);
+            return self.recover(ty, &flat, lparen);
+        }
+        let to = conv::strip_cv(self, ty);
+        let init = self.init_from_list_at(to, l, Some(lparen));
+        if self.is_err_expr(init) {
+            return self.recover(ty, &[init], lparen);
+        }
+        self.builder().compound_literal(ty, init, lparen)
     }
 }

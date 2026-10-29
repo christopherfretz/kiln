@@ -1,0 +1,77 @@
+TranslationUnitDecl
+|-EnumDecl referenced E
+| |-EnumConstantDecl A 'E' value=0
+| `-EnumConstantDecl referenced B 'E' value=1
+`-FunctionDecl f 'int (int)'
+  |-ParmVarDecl used a 'int'
+  `-CompoundStmt
+    |-DeclStmt
+    | `-VarDecl used x 'int' cinit
+    |   `-CompoundLiteralExpr 'int'
+    |     `-InitListExpr 'int'
+    |       `-IntegerLiteral 'int' 4
+    |-DeclStmt
+    | `-VarDecl used c 'const long' cinit
+    |   `-CompoundLiteralExpr 'const long'
+    |     `-InitListExpr 'long'
+    |       `-ImplicitCastExpr 'const long' <IntegralCast>
+    |         `-ImplicitCastExpr 'int' <LValueToRValue>
+    |           `-DeclRefExpr 'int' lvalue ParmVar 'a' 'int'
+    |-DeclStmt
+    | `-VarDecl used z 'int' cinit
+    |   `-CompoundLiteralExpr 'int'
+    |     `-InitListExpr 'int'
+    |-DeclStmt
+    | `-VarDecl used e 'E' cinit
+    |   `-CompoundLiteralExpr 'E'
+    |     `-InitListExpr 'E'
+    |       `-DeclRefExpr 'E' EnumConstant 'B' 'E'
+    |-DeclStmt
+    | `-VarDecl used p 'int *' cinit
+    |   `-CompoundLiteralExpr 'int *'
+    |     `-InitListExpr 'int *'
+    |       `-ImplicitCastExpr 'int *' <NullToPointer>
+    |         `-CXXNullPtrLiteralExpr 'std::nullptr_t'
+    |-DeclStmt
+    | `-VarDecl used s 'int' cinit
+    |   `-BinaryOperator 'int' '+'
+    |     |-CompoundLiteralExpr 'int'
+    |     | `-InitListExpr 'int'
+    |     |   `-IntegerLiteral 'int' 1
+    |     `-BinaryOperator 'int' '*'
+    |       |-CompoundLiteralExpr 'const int'
+    |       | `-InitListExpr 'int'
+    |       |   `-IntegerLiteral 'int' 2
+    |       `-IntegerLiteral 'int' 3
+    |-CStyleCastExpr 'void' <ToVoid>
+    | `-CompoundLiteralExpr 'int'
+    |   `-InitListExpr 'int'
+    |     `-IntegerLiteral 'int' 5
+    `-ReturnStmt
+      `-ImplicitCastExpr 'int' <IntegralCast>
+        `-BinaryOperator 'long' '+'
+          |-BinaryOperator 'long' '+'
+          | |-BinaryOperator 'long' '+'
+          | | |-BinaryOperator 'long' '+'
+          | | | |-BinaryOperator 'long' '+'
+          | | | | |-ImplicitCastExpr 'long' <IntegralCast>
+          | | | | | `-ImplicitCastExpr 'int' <LValueToRValue>
+          | | | | |   `-DeclRefExpr 'int' lvalue Var 'x' 'int'
+          | | | | `-ImplicitCastExpr 'long' <LValueToRValue>
+          | | | |   `-DeclRefExpr 'const long' lvalue Var 'c' 'const long'
+          | | | `-ImplicitCastExpr 'long' <IntegralCast>
+          | | |   `-ImplicitCastExpr 'int' <LValueToRValue>
+          | | |     `-DeclRefExpr 'int' lvalue Var 'z' 'int'
+          | | `-ImplicitCastExpr 'long' <IntegralCast>
+          | |   `-ImplicitCastExpr 'E' <LValueToRValue>
+          | |     `-DeclRefExpr 'E' lvalue Var 'e' 'E'
+          | `-ImplicitCastExpr 'long' <IntegralCast>
+          |   `-ParenExpr 'bool'
+          |     `-BinaryOperator 'bool' '=='
+          |       |-ImplicitCastExpr 'int *' <LValueToRValue>
+          |       | `-DeclRefExpr 'int *' lvalue Var 'p' 'int *'
+          |       `-ImplicitCastExpr 'int *' <NullToPointer>
+          |         `-CXXNullPtrLiteralExpr 'std::nullptr_t'
+          `-ImplicitCastExpr 'long' <IntegralCast>
+            `-ImplicitCastExpr 'int' <LValueToRValue>
+              `-DeclRefExpr 'int' lvalue Var 's' 'int'

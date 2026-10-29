@@ -5,8 +5,8 @@
 //! descent. A `None` result ([`PExpr`]) means a syntax error was reported
 //! and the caller must recover; semantic errors yield an error expression.
 
-use kiln_ast::QualType;
 use kiln_ast::expr::{BinaryOp, TraitKind, UnaryOp};
+use kiln_ast::{ExprId, QualType};
 use kiln_diag::DiagId;
 use kiln_lex::literal::{
     CodeUnits, NumberClass, StringLiteral, classify_number, decode_char, decode_string,
@@ -155,7 +155,7 @@ impl Parser<'_, '_> {
     }
 
     /// clang's `ParseRHSOfBinaryExpression`.
-    fn parse_rhs(&mut self, mut lhs: kiln_ast::ExprId, min: u8) -> PExpr {
+    fn parse_rhs(&mut self, mut lhs: ExprId, min: u8) -> PExpr {
         loop {
             let Some((p, op)) = self.cur_binop() else { return Some(lhs) };
             if p < min {
@@ -219,7 +219,7 @@ impl Parser<'_, '_> {
     /// reports `err_init_list_bin_op` and the operation is erroneous.
     fn parse_braced_rhs(
         &mut self,
-        lhs: kiln_ast::ExprId,
+        lhs: ExprId,
         p: u8,
         op: Option<BinaryOp>,
         op_tok: &Token,
@@ -333,8 +333,11 @@ impl Parser<'_, '_> {
         };
         self.expect_closing(Punct::RParen, Punct::LParen, open);
         if self.at(Punct::LBrace) {
-            self.unsupported("compound literals", open);
-            return None;
+            // GNU/C99 compound literal `( type-id ) braced-init-list`, a
+            // postfix-expression (clang's `ParseCompoundLiteralExpression`).
+            let l = self.parse_init_list().ok()?;
+            let e = self.s.act_on_compound_literal(ty, &l, open);
+            return self.parse_postfix_suffix(e);
         }
         let e = self.parse_cast_expr()?;
         Some(self.s.act_on_cast(CastStyle::CStyle, ty, e, open))
@@ -494,7 +497,13 @@ impl Parser<'_, '_> {
 
     /// postfix-expression ([expr.post]).
     fn parse_postfix_expr(&mut self) -> PExpr {
-        let mut e = self.parse_primary_expr()?;
+        let e = self.parse_primary_expr()?;
+        self.parse_postfix_suffix(e)
+    }
+
+    /// The postfix operators applied to `e` (clang's
+    /// `ParsePostfixExpressionSuffix`).
+    fn parse_postfix_suffix(&mut self, mut e: ExprId) -> PExpr {
         loop {
             let loc = self.loc();
             match Self::punct_of(self.tok()) {
@@ -728,7 +737,7 @@ impl Parser<'_, '_> {
         }
     }
 
-    fn parse_number(&mut self) -> kiln_ast::ExprId {
+    fn parse_number(&mut self) -> ExprId {
         let t = self.bump();
         let sp = self.spelling_of(&t);
         let n = classify_number(&sp, self.std);
@@ -749,7 +758,7 @@ impl Parser<'_, '_> {
         }
     }
 
-    fn parse_char(&mut self) -> kiln_ast::ExprId {
+    fn parse_char(&mut self) -> ExprId {
         let t = self.bump();
         let sp = self.spelling_of(&t);
         let c = decode_char(&sp, self.lit_opts);

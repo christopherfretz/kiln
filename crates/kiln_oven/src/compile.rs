@@ -1714,6 +1714,10 @@ impl Compiler<'_> {
                 let op = self.ast().exprs.operand(e);
                 self.rv_inner(op, dst);
             }
+            ExprKind::CompoundLiteralExpr => {
+                let init = self.ast().exprs.compound_literal_init(e);
+                self.rv_inner(init, dst);
+            }
             ExprKind::StmtExpr => self.stmt_expr(e, Some(dst)),
             ExprKind::CXXDefaultArgExpr => match default_arg_of(self.ast(), e) {
                 Some(d) => self.rv_inner(d, dst),
@@ -2894,6 +2898,10 @@ impl Compiler<'_> {
             ExprKind::ParenExpr => {
                 let op = self.ast().exprs.operand(e);
                 self.effect(op);
+            }
+            ExprKind::CompoundLiteralExpr => {
+                let init = self.ast().exprs.compound_literal_init(e);
+                self.effect(init);
             }
             ExprKind::CXXDefaultArgExpr if default_arg_of(self.ast(), e).is_some() => {
                 let d = default_arg_of(self.ast(), e).unwrap_or(e);
