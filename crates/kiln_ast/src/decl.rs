@@ -2057,6 +2057,20 @@ impl DeclArena {
         n.flags = n.flags.with(DeclFlags::HAS_ATTRS);
     }
 
+    /// Moves parameter `p` into function `func`: a parameter is created
+    /// while its declarator is parsed, so that it is in scope in the
+    /// rest of the declarator ([basic.scope.param]), and adopted by the
+    /// function once that exists (clang's `setDeclContext` in
+    /// `ActOnFunctionDeclarator`).
+    ///
+    /// # Panics
+    /// If `p` is not a `ParmVar`.
+    pub fn set_param_owner(&mut self, p: DeclId, func: DeclId) {
+        let n = &mut self.nodes[p.index() as usize];
+        assert!(n.kind == DeclKind::ParmVar, "set_param_owner on a {:?}", n.kind);
+        n.ctx = Some(func);
+    }
+
     /// Re-points the declared type (deduced return types, resolved
     /// exception specifications; §2.4).
     pub fn set_ty(&mut self, d: DeclId, ty: QualType) {

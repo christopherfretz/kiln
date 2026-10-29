@@ -44,7 +44,7 @@ macro_rules! diag_groups {
 
 diag_groups! {
     All = "all" [Most];
-    Most = "most" [Comment, UnknownPragmas, OverloadedVirtual];
+    Most = "most" [Comment, UnknownPragmas, OverloadedVirtual, UnevaluatedExpression];
     Pragmas = "pragmas" [UnknownPragmas, IgnoredPragmas];
     Pedantic = "pedantic" [];
     BackslashNewlineEscape = "backslash-newline-escape" [];
@@ -143,6 +143,8 @@ diag_groups! {
     InaccessibleBase = "inaccessible-base" [];
     // WP-074
     DeprecatedBuiltins = "deprecated-builtins" [];
+    // WP-087
+    UnevaluatedExpression = "unevaluated-expression" [];
 }
 
 impl Group {

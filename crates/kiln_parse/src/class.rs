@@ -621,7 +621,13 @@ impl Parser<'_, '_> {
                 }
                 if let Some(&p) = params.get(i) {
                     self.trace(|_| format!("default_arg({i})"));
-                    self.s.act_on_param_default_arg(p, e);
+                    // [dcl.fct.default]/9 (checked on the written
+                    // argument, as for one parsed in place).
+                    if self.s.check_default_arg_refs(e) {
+                        self.s.act_on_param_default_arg(p, e);
+                    } else {
+                        self.s.ast.decls.set_flags(p, DeclFlags::INVALID);
+                    }
                 }
             }
             self.finish_replay();

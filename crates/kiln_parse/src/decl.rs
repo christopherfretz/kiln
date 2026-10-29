@@ -1268,6 +1268,9 @@ impl Parser<'_, '_> {
                 self.parse_attributes(&mut pd.attrs);
             }
             let mut p = self.s.act_on_param_declarator(&ds, &pd);
+            // The point of declaration: before the default argument
+            // ([basic.scope.pdecl]/1).
+            self.s.act_on_prototype_param(&mut p);
             if self.at(Punct::Equal) {
                 if delay_args {
                     // Complete-class context ([class.mem.general]/7):
@@ -1281,7 +1284,6 @@ impl Parser<'_, '_> {
                 }
             }
             p.range = (start, self.prev_end());
-            self.s.act_on_prototype_param(&p);
             params.push(p);
             if self.eat(Punct::Ellipsis).is_some() {
                 variadic = true;
@@ -1374,7 +1376,11 @@ impl Parser<'_, '_> {
                         self.late_fn.noexcept = Some(self.capture_exception_spec());
                         exc = Some(ExcSpec::None);
                     } else {
+                        let this = self
+                            .s
+                            .act_on_start_this_scope(d.ctx == DeclaratorContext::Member, quals);
                         exc = Some(self.parse_exception_spec());
+                        self.s.act_on_end_this_scope(this);
                     }
                 }
                 _ if exc.is_none()
@@ -1388,7 +1394,12 @@ impl Parser<'_, '_> {
                     self.bump();
                     // A failed type-id was diagnosed: the declarator is
                     // invalid.
+                    // [expr.prim.this]/2: `this` may appear in a member
+                    // function's trailing return type.
+                    let this =
+                        self.s.act_on_start_this_scope(d.ctx == DeclaratorContext::Member, quals);
                     let ty = self.parse_type_id().unwrap_or(QualType::ERROR);
+                    self.s.act_on_end_this_scope(this);
                     trailing = Some((ty, loc));
                     return (exc.unwrap_or_default(), quals, ref_qual, trailing);
                 }

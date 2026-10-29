@@ -628,6 +628,39 @@ impl<'a> AstBuilder<'a> {
         self.param_head(DeclHead::new(func, name, loc), ty, index, flags)
     }
 
+    /// A parameter created while its function declarator is parsed, so
+    /// that it is in scope in the rest of the declarator
+    /// ([basic.scope.param]). Its context is provisionally `ctx` (the
+    /// context the declarator appears in) until the function adopts it
+    /// ([`crate::decl::DeclArena::set_param_owner`]); like every
+    /// parameter it joins no member list or lookup table (§4.3), and it
+    /// does not consume a pending template-pattern mark.
+    pub fn prototype_param(
+        &mut self,
+        ctx: DeclId,
+        name: DeclName,
+        loc: Loc,
+        ty: QualType,
+        index: u16,
+        flags: u16,
+    ) -> DeclId {
+        let h = self.ast.templates.dependent_head(DeclHead::new(ctx, name, loc));
+        let payload =
+            Payload::Param(ParamData { default_arg: None, original_ty: None, index, flags });
+        self.ast.decls.push(
+            NewDecl {
+                kind: DeclKind::ParmVar,
+                flags: h.flags,
+                misc: h.misc,
+                name: h.name,
+                ctx: Some(h.ctx),
+                loc: h.loc,
+                ty: Some(ty),
+            },
+            payload,
+        )
+    }
+
     /// A parameter declared by `head` (whose context is the function), for
     /// implicit parameters (`DeclFlags::IMPLICIT`).
     pub fn param_head(&mut self, head: DeclHead, ty: QualType, index: u16, flags: u16) -> DeclId {
