@@ -1,0 +1,30 @@
+TranslationUnitDecl
+|-FunctionTemplateDecl dm
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| `-FunctionDecl dm 'int (T *)'
+|   |-ParmVarDecl referenced p 'T *'
+|   `-CompoundStmt
+|     `-ReturnStmt
+|       `-BinaryOperator '<dependent type>' '+'
+|         |-CallExpr '<dependent type>'
+|         | `-CXXDependentScopeMemberExpr '<dependent type>' lvalue ->get
+|         |   `-ImplicitCastExpr 'T *' <LValueToRValue>
+|         |     `-DeclRefExpr 'T *' lvalue ParmVar 'p' 'T *'
+|         `-CXXDependentScopeMemberExpr '<dependent type>' lvalue ->x
+|           `-ImplicitCastExpr 'T *' <LValueToRValue>
+|             `-DeclRefExpr 'T *' lvalue ParmVar 'p' 'T *'
+|-FunctionTemplateDecl dot
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| `-FunctionDecl dot 'int (T)'
+|   |-ParmVarDecl referenced t 'T'
+|   `-CompoundStmt
+|     `-ReturnStmt
+|       `-CallExpr '<dependent type>'
+|         `-CXXDependentScopeMemberExpr '<dependent type>' lvalue .get
+|           `-DeclRefExpr 'T' lvalue ParmVar 't' 'T'
+`-FunctionTemplateDecl scoped
+  |-TemplateTypeParmDecl class depth 0 index 0 T
+  `-FunctionDecl scoped 'int ()'
+    `-CompoundStmt
+      `-ReturnStmt
+        `-DependentScopeDeclRefExpr '<dependent type>' lvalue

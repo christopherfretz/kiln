@@ -379,6 +379,18 @@ plus `vtt(record) -> Vec<VttComponent>` and construction vtables for classes
 with virtual bases (Itanium §2.6). The current
 `kiln_oven::VTableLayout { slots }` is replaced (§8.4).
 
+Landed (WP-078b): the struct also carries
+- `vtable_starts: Vec<u32>`: the first component of each vtable in the
+  group;
+- `method_thunks: Vec<(DeclId, Thunk)>`: the thunks to emit per
+  overrider, as clang's `Thunks`.
+
+`Thunk` gains `method: Option<DeclId>` and `this_class: Option<DeclId>`
+(clang `ThunkInfo::{Method, ThisType}`) and `is_empty()`. The
+`address_points` name subobjects of the group's most-derived class and
+point after the RTTI slot. The `method_indices` include the methods of
+the primary-base chain. Full contract and signatures: abi.md §1, §8.5.
+
 ## 4. Special member functions
 ### 4.1 Implicit declaration
 | member | declared implicitly when | parameter |
@@ -809,6 +821,17 @@ against `-complete` block by block, in order (abi.md §8.4).
   adjustment: 0 non-virtual, -24 vcall offset offset]`, and the `Thunks
   for`, `VTable indices for`, `Virtual base offset offsets for` tables); same
   generator, 500 classes.
+  Landed (WP-078b):
+  - `layout_vs_clang` runs 2000 records per target with virtual bases
+    (p = 0.3) and polymorphic classes (p = 0.2). Its XFAIL list is
+    empty.
+  - `vtable_vs_clang` runs 500 classes per target through its own
+    polymorphic generator. It compares every vtable and construction
+    vtable dump, and every VTT against clang's `@_ZTT` IR. Its XFAIL
+    list is empty.
+  - `vtable_rules.rs` adds the hand-written thunk, VTT and destructor
+    probes.
+  - See abi.md §7.
 - `kiln_abi/tests/layout_rules.rs`: one named test per probe in §6.2.
 
 ## 7. Diagnostics
@@ -1096,6 +1119,18 @@ Result<&VTableLayout, VTableError>` (caches in `Ast::vtables`),
 and `dump_vtable_layout(&Ast, record, &Target) -> Result<String,
 VTableError>`, with `VTableError { NotDynamic | Incomplete | Unsupported
 }`; every body answers `Unsupported` until WP-078b.
+
+Landed (WP-078b): every body is implemented. `VTableError` gains
+`TooComplex`, and `Unsupported` is now unused. New functions:
+- `vtt_vtables(&Ast, record, &Target) -> Result<Vec<SubobjectId>,
+  VTableError>`;
+- `dump_construction_vtable`;
+- `dump_vtable_group`;
+- `dump_all_vtable_layouts`.
+
+`kiln_oven` has no `VTableLayout` (nor any vtable reference) in its
+sources: the deletion this section asks for has already happened, and
+nothing in the Oven reads `kiln_abi::vtable` yet (WP-077).
 
 ### 8.5 What codegen reads (WP-079/080)
 `RecordLayout` (bases, vbases, vptr, primary base); `VTableLayout` and VTT;

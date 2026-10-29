@@ -1,0 +1,16 @@
+TranslationUnitDecl
+|-ClassTemplateDecl Const
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| |-NonTypeTemplateParmDecl referenced 'T' depth 0 index 1 V
+| `-CXXRecordDecl struct Const definition
+|   `-CXXMethodDecl get 'T ()' implicit-inline
+|     `-CompoundStmt
+|       `-ReturnStmt
+|         `-DeclRefExpr 'T' NonTypeTemplateParm 'V' 'T'
+|-ClassTemplateDecl PtrC
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| |-NonTypeTemplateParmDecl 'T *' depth 0 index 1 P
+| `-CXXRecordDecl struct PtrC definition
+`-ClassTemplateDecl Auto
+  |-NonTypeTemplateParmDecl 'auto' depth 0 index 0 V
+  `-CXXRecordDecl struct Auto definition

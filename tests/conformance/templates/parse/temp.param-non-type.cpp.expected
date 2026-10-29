@@ -1,0 +1,21 @@
+TranslationUnitDecl
+|-ClassTemplateDecl A
+| |-NonTypeTemplateParmDecl 'int' depth 0 index 0 N
+| `-CXXRecordDecl struct A definition
+|-ClassTemplateDecl B
+| |-NonTypeTemplateParmDecl 'int' depth 0 index 0 N
+| |-NonTypeTemplateParmDecl 'bool' depth 0 index 1 F
+| | `-TemplateArgument expr
+| |   `-CXXBoolLiteralExpr 'bool' true
+| |-NonTypeTemplateParmDecl 'unsigned long' depth 0 index 2 M
+| | `-TemplateArgument expr
+| |   `-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof 'int'
+| `-CXXRecordDecl struct B definition
+|-ClassTemplateDecl C
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| |-NonTypeTemplateParmDecl 'T' depth 0 index 1 V
+| `-CXXRecordDecl struct C definition
+`-ClassTemplateDecl D
+  |-NonTypeTemplateParmDecl 'const char *' depth 0 index 0 P
+  |-NonTypeTemplateParmDecl 'int &' depth 0 index 1 R
+  `-CXXRecordDecl struct D definition

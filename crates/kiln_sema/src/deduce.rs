@@ -17,6 +17,20 @@ impl Sema<'_, '_> {
         if self.is_err_expr(e) {
             return None;
         }
+        // An instantiation-dependent operand: the type is computed at
+        // instantiation, canonically `DependentDecltype` (clang's
+        // `getDecltypeType`; the underlying type is `<dependent type>` for a
+        // type-dependent operand).
+        let deps = self.ast.exprs.get(e).deps();
+        if deps.contains(kiln_ast::expr::ExprDeps::INSTANTIATION) {
+            let u = if deps.contains(kiln_ast::expr::ExprDeps::TYPE) {
+                QualType::DEPENDENT
+            } else {
+                self.decltype_of(e)
+            };
+            let p = self.dependent_profile(e);
+            return Some(self.ast.types.decltype_type(e, u, Some(p)));
+        }
         let u = self.decltype_of(e);
         Some(self.ast.types.decltype_type(e, u, None))
     }
@@ -180,6 +194,20 @@ impl Sema<'_, '_> {
         let (fdecl, ret, done) = (state.decl, state.ret, state.deduced);
         let Some(declared) = state.auto_ret else { return ret };
         let kw = self.undeduced_keyword(declared).unwrap_or(AutoKeyword::Auto);
+        // A type-dependent operand defers the deduction to instantiation
+        // ([dcl.spec.auto.general]/12): the declared type keeps its
+        // placeholder (clang prints `auto`).
+        if let Some(e) = value
+            && self.expr_is_type_dependent(e)
+        {
+            if let Some(st) = self.func.as_mut()
+                && !st.deduced
+            {
+                st.deduced = true;
+                st.ret = QualType::DEPENDENT;
+            }
+            return QualType::DEPENDENT;
+        }
         let deduced = match value {
             None => QualType::VOID,
             Some(e) if kw == AutoKeyword::DecltypeAuto => {
@@ -212,6 +240,7 @@ impl Sema<'_, '_> {
         }
         if !self.is_error_type(deduced)
             && !self.is_error_type(ret)
+            && !self.ast.types.is_dependent(ret)
             && self.ast.types.canonical(deduced) != self.ast.types.canonical(ret)
         {
             let sel = u8::from(kw == AutoKeyword::DecltypeAuto);

@@ -1,0 +1,24 @@
+TranslationUnitDecl
+|-ConceptDecl Addable
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| `-RequiresExpr 'bool'
+|   |-ParmVarDecl referenced a 'T'
+|   |-ParmVarDecl referenced b 'T'
+|   |-SimpleRequirement dependent
+|   | `-BinaryOperator '<dependent type>' '+'
+|   |   |-DeclRefExpr 'T' lvalue ParmVar 'a' 'T' non_odr_use_unevaluated
+|   |   `-DeclRefExpr 'T' lvalue ParmVar 'b' 'T' non_odr_use_unevaluated
+|   `-SimpleRequirement dependent
+|     `-CallExpr '<dependent type>'
+|       `-CXXDependentScopeMemberExpr '<dependent type>' lvalue .size
+|         `-DeclRefExpr 'T' lvalue ParmVar 'a' 'T' non_odr_use_unevaluated
+`-ConceptDecl Derefable
+  |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+  `-RequiresExpr 'bool'
+    |-ParmVarDecl referenced p 'T'
+    |-SimpleRequirement dependent
+    | `-UnaryOperator '<dependent type>' lvalue prefix '*' cannot overflow
+    |   `-DeclRefExpr 'T' lvalue ParmVar 'p' 'T' non_odr_use_unevaluated
+    `-SimpleRequirement dependent
+      `-CXXDependentScopeMemberExpr '<dependent type>' lvalue ->x
+        `-DeclRefExpr 'T' lvalue ParmVar 'p' 'T' non_odr_use_unevaluated

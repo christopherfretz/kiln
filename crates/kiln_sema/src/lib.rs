@@ -35,6 +35,7 @@ mod rtti;
 pub mod scope;
 pub mod stmt;
 pub mod target;
+pub mod templ;
 pub mod using;
 
 use kiln_abi::Target;
@@ -116,6 +117,13 @@ pub struct Sema<'a, 'sm> {
     /// The names of the parameters declared so far in each enclosing
     /// parameter-declaration-clause being parsed ([`Sema::act_on_start_prototype`]).
     pub(crate) prototype_params: Vec<Vec<kiln_source::symbol::Symbol>>,
+    /// Set while [`Sema::act_on_call_name`] builds an unqualified callee
+    /// inside a template: a function it names is not marked referenced
+    /// until the call is known to be non-dependent ([temp.dep.candidate]).
+    pub(crate) deferring_call_ref: bool,
+    /// Callees whose function is not marked referenced yet (see
+    /// `deferring_call_ref`), resolved by [`Sema::act_on_call`].
+    pub(crate) deferred_call_refs: Vec<(ExprId, DeclId)>,
     /// Classes being defined, innermost last (spec/sema-class.md §8.3).
     pub(crate) classes: Vec<class::ClassBuild>,
     /// Which implicit special members each class has declared
@@ -155,6 +163,9 @@ pub struct Sema<'a, 'sm> {
     /// The static data member whose out-of-line initializer is being
     /// analysed: its class is the access context ([class.access]/7).
     pub(crate) initializing: Option<DeclId>,
+    /// Template heads and parse-time template state (WP-069,
+    /// spec/sema-templates.md §11.2).
+    pub(crate) templ: templ::TemplState,
     /// The abstract classes whose unimplemented pure virtual functions
     /// were already noted (clang notes them on the first abstract-type
     /// diagnostic per class only; WP-078a).
@@ -200,6 +211,8 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             global_ops: new_delete::GlobalOps::default(),
             braced_args: Vec::new(),
             prototype_params: Vec::new(),
+            deferring_call_ref: false,
+            deferred_call_refs: Vec::new(),
             classes: Vec::new(),
             implicit_declared: kiln_source::fx::FxHashMap::default(),
             delayed_access: Vec::new(),
@@ -212,6 +225,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             friend_tag: None,
             nsdmi_this: Vec::new(),
             initializing: None,
+            templ: templ::TemplState::default(),
             abstract_noted: kiln_source::fx::FxHashSet::default(),
         }
     }

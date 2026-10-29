@@ -1,0 +1,14 @@
+TranslationUnitDecl
+|-FunctionTemplateDecl f
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| `-FunctionDecl f 'void (T)'
+|   `-ParmVarDecl 'T'
+|-FunctionTemplateDecl f
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| `-FunctionDecl f 'void (T)'
+|   `-ParmVarDecl 'T'
+`-FunctionTemplateDecl f
+  |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+  `-FunctionDecl f 'void (T)'
+    |-ParmVarDecl x 'T'
+    `-CompoundStmt

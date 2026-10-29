@@ -224,6 +224,12 @@ impl Sema<'_, '_> {
                                 .zip(t.element(ty))
                                 .is_some_and(|(a, b)| t.same_type(a, b)));
                     let prev_def = self.ast.redecls_of(p).find(|&x| self.is_var_definition(x));
+                    // [depr.static.constexpr]: an out-of-class declaration
+                    // without an initializer of an inline (constexpr)
+                    // static data member is a redundant redeclaration.
+                    let redundant = d.init_style.is_none()
+                        && prev_def.is_some_and(|x| self.is_in_class_static(x));
+                    let prev_def = prev_def.filter(|_| !redundant);
                     if !compatible {
                         let msg = self
                             .diag(DiagId::sema_redefinition_different_type, loc)
@@ -262,6 +268,7 @@ impl Sema<'_, '_> {
         }
         let mut h = DeclHead::new(ctx, DeclName::ident(name), loc);
         h.lexical = Some(lexical);
+        self.mark_pattern_next();
         let v = self.builder().var(h, ty, spec, prev_ok);
         if invalid {
             self.ast.decls.set_flags(v, kiln_ast::decl::DeclFlags::INVALID);
@@ -313,6 +320,10 @@ impl Sema<'_, '_> {
         let vn = *self.ast.decls.get(v);
         let ty = vn.ty().unwrap_or(QualType::ERROR);
         if self.is_error_type(ty) || self.has_errors_in(e) {
+            return;
+        }
+        if self.is_dependent_type(ty) || self.expr_is_value_dependent(e) {
+            // Checked when instantiated ([temp.res.general]/6).
             return;
         }
         let quals = self.ast.types.effective_quals(ty);
@@ -370,6 +381,19 @@ impl Sema<'_, '_> {
         let mut seen: Vec<DeclId> = Vec::new();
         for s in specs {
             if self.is_error_type(s.ty) {
+                continue;
+            }
+            // A dependent base ([temp.dep.type]/1) is checked at
+            // instantiation (WP-070a); lookup does not look into it
+            // ([temp.dep.general]/4).
+            if self.is_dependent_type(s.ty) {
+                out.push(BaseSpec {
+                    ty: s.ty,
+                    loc: s.loc,
+                    is_virtual: s.is_virtual,
+                    access: s.access,
+                    pack_expansion: s.pack_expansion,
+                });
                 continue;
             }
             if s.pack_expansion {
@@ -532,7 +556,7 @@ impl Sema<'_, '_> {
         let class = self.ast.decls.get(f).ctx()?;
         let fty = self.ast.decls.get(f).ty()?;
         let q = self.ast.types.proto(fty).map_or(Quals::NONE, |p| p.info().this_quals());
-        let t = self.tag_type(class);
+        let t = self.this_class_type(class);
         let t = if q.is_empty() { t } else { self.ast.types.qualify(t, q) };
         Some(self.ast.types.pointer_to(t))
     }

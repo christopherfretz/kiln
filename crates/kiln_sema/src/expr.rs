@@ -61,7 +61,7 @@ impl CastStyle {
         }
     }
 
-    fn kind(self) -> ExprKind {
+    pub(crate) fn kind(self) -> ExprKind {
         match self {
             CastStyle::Const => ExprKind::CXXConstCastExpr,
             CastStyle::Static => ExprKind::CXXStaticCastExpr,
@@ -479,7 +479,9 @@ impl Sema<'_, '_> {
 
     /// clang's `DiagnoseUnusedExprResult` for an expression statement.
     pub(crate) fn diagnose_unused(&mut self, e: ExprId) {
-        if self.is_err_expr(e) {
+        // A type-dependent expression is checked at instantiation (clang
+        // does not warn in the template definition).
+        if self.is_err_expr(e) || self.expr_is_type_dependent(e) {
             return;
         }
         if let Some((id, loc, arg)) = self.unused_warning(e) {
@@ -620,6 +622,19 @@ impl Sema<'_, '_> {
 
     // -- names -------------------------------------------------------------------
 
+    /// An unqualified id-expression `name` that is the callee of a call
+    /// (followed by `(`) inside a template: as
+    /// [`Sema::act_on_id_expression`], but a non-member function it names
+    /// is marked referenced only by [`Sema::act_on_call`] once the call is
+    /// known not to be dependent (clang builds an `UnresolvedLookupExpr`
+    /// for a dependent call and references nothing; [temp.dep.candidate]).
+    pub fn act_on_call_name(&mut self, name: Symbol, loc: Loc) -> ExprId {
+        let saved = std::mem::replace(&mut self.deferring_call_ref, true);
+        let e = self.act_on_id_expression(name, loc, None);
+        self.deferring_call_ref = saved;
+        e
+    }
+
     /// An id-expression naming `name` ([expr.prim.id]), optionally
     /// qualified by the context `qualifier`.
     pub fn act_on_id_expression(
@@ -656,6 +671,30 @@ impl Sema<'_, '_> {
             return self.recover_err(&[], loc);
         };
         let mut d = d;
+        let any_tmpl = found.decls.iter().any(|&x| self.kind_of(x) == DeclKind::FunctionTemplate);
+        if any_tmpl
+            && found.decls.iter().all(|&x| {
+                let k = self.kind_of(x);
+                k == DeclKind::FunctionTemplate || k.is_function()
+            })
+        {
+            // A name of a function template without `<` ([temp.arg.explicit]/4):
+            // an overload set resolved at the call (clang's
+            // `UnresolvedLookupExpr`; deduction is WP-071).
+            if found.naming.is_some() {
+                self.templ_unimplemented("member function template names", loc);
+                return self.recover_err(&[], loc);
+            }
+            let decls: Vec<DeclId> = found.decls.clone();
+            return self.builder().unresolved_lookup(
+                name,
+                &decls,
+                qualifier.is_none(),
+                None,
+                None,
+                loc,
+            );
+        }
         let fns = found.decls.iter().all(|&x| self.ast.decls.get(x).kind().is_function());
         // An invalid redeclaration is not a separate overload (clang
         // drops invalid candidates).
@@ -712,7 +751,11 @@ impl Sema<'_, '_> {
     pub fn build_decl_ref_via(&mut self, d: DeclId, loc: Loc, shadow: Option<DeclId>) -> ExprId {
         let n = *self.ast.decls.get(d);
         match n.kind() {
-            DeclKind::Var | DeclKind::ParmVar | DeclKind::Function | DeclKind::EnumConstant => {}
+            DeclKind::Var
+            | DeclKind::ParmVar
+            | DeclKind::Function
+            | DeclKind::EnumConstant
+            | DeclKind::NonTypeTemplateParm => {}
             DeclKind::IndirectField
                 if self
                     .ast
@@ -743,13 +786,23 @@ impl Sema<'_, '_> {
         if n.kind() == DeclKind::Function && self.check_undeduced_use(d, loc) {
             return self.recover_err(&[], loc);
         }
-        let declared = n.ty().unwrap_or(QualType::ERROR);
+        let mut declared = n.ty().unwrap_or(QualType::ERROR);
+        // A pack names its pattern ([temp.variadic]/5): `Ts... x` gives `x`
+        // the type `Ts`.
+        if let TypeView::PackExpansion { pattern, .. } = self.ast.types.view(declared.ty()) {
+            declared = pattern;
+        }
         let ty = if self.ast.decls.builtin_id(d).is_some() {
             QualType::BUILTIN_FN
         } else {
             self.non_reference(declared)
         };
-        self.ast.decls.set_flags(d, DeclFlags::REFERENCED);
+        let defer = self.deferring_call_ref
+            && n.kind() == DeclKind::Function
+            && self.ast.decls.builtin_id(d).is_none();
+        if !defer {
+            self.ast.decls.set_flags(d, DeclFlags::REFERENCED);
+        }
         self.diagnose_deprecated(d, loc);
         let nou = if self.unevaluated > 0 { NonOdrUse::Unevaluated } else { NonOdrUse::None };
         let extra = shadow.map(|s| kiln_ast::expr::DeclRefExtra {
@@ -758,7 +811,12 @@ impl Sema<'_, '_> {
             found_decl: Some(s),
         });
         let e = self.builder().decl_ref(d, ty, loc, extra, nou, ExprFlags::NONE);
-        if self.unevaluated == 0 {
+        if defer {
+            self.deferred_call_refs.push((e, d));
+        }
+        // Inside a template definition a use is only a reference; odr-use
+        // happens at instantiation ([temp.res.general]/6).
+        if self.unevaluated == 0 && !self.in_template() {
             match n.kind() {
                 DeclKind::Function | DeclKind::CXXMethod => {
                     let own = self
@@ -1104,6 +1162,9 @@ impl Sema<'_, '_> {
             return self.recover_err(&[e], loc);
         }
         let t0 = self.ety(e);
+        if self.is_dependent_overloadable(t0) {
+            return self.builder().dependent_unary(op, e, loc);
+        }
         let bad = |s: &mut Self, e: ExprId| {
             let msg = s.diag(DiagId::sema_invalid_unary_operand, loc).arg(s.ty_arg(t0));
             s.emit(msg);
@@ -1277,6 +1338,9 @@ impl Sema<'_, '_> {
     pub fn act_on_binary(&mut self, op: BinaryOp, l: ExprId, r: ExprId, loc: Loc) -> ExprId {
         if self.is_err_expr(l) || self.is_err_expr(r) {
             return self.recover_err(&[l, r], loc);
+        }
+        if self.expr_is_type_dependent(l) || self.expr_is_type_dependent(r) {
+            return self.builder().dependent_binary(op, l, r, loc);
         }
         match op {
             BinaryOp::Assign => self.assign(l, r, loc),
@@ -1638,14 +1702,21 @@ impl Sema<'_, '_> {
         if self.is_err_expr(c) || self.is_err_expr(t) || self.is_err_expr(f) {
             return self.recover_err(&[c, t, f], loc);
         }
-        let c2 = match conv::contextually_convert_to_bool(self, c) {
-            Ok(x) => x,
-            Err(err) => {
-                let d = err.diag(self, c);
-                self.emit(d);
-                return self.recover_err(&[c, t, f], loc);
+        let c2 = if self.expr_is_type_dependent(c) {
+            c
+        } else {
+            match conv::contextually_convert_to_bool(self, c) {
+                Ok(x) => x,
+                Err(err) => {
+                    let d = err.diag(self, c);
+                    self.emit(d);
+                    return self.recover_err(&[c, t, f], loc);
+                }
             }
         };
+        if self.expr_is_type_dependent(t) || self.expr_is_type_dependent(f) {
+            return self.builder().dependent_conditional(c2, t, f, loc);
+        }
         let (tn, fnn) = (*self.ast.exprs.get(t), *self.ast.exprs.get(f));
         let (tt, ft) = (tn.ty(), fnn.ty());
         let (tv, fv) = (self.ast.types.is_void(tt), self.ast.types.is_void(ft));
@@ -1779,6 +1850,13 @@ impl Sema<'_, '_> {
         if self.is_err_expr(base) || self.is_err_expr(idx) {
             return self.recover_err(&[base, idx], loc);
         }
+        // Either operand type-dependent: an unanalyzed lvalue with no
+        // operand conversions ([temp.dep.expr]/3; clang's
+        // `getDependentArraySubscriptType`).
+        if self.expr_is_type_dependent(base) || self.expr_is_type_dependent(idx) {
+            let ty = self.dependent_subscript_type(base, idx);
+            return self.builder().subscript(base, idx, ty, loc);
+        }
         let b = conv::decay(self, base);
         let i = conv::decay(self, idx);
         let (bt, it) = (self.ety(b), self.ety(i));
@@ -1847,6 +1925,14 @@ impl Sema<'_, '_> {
         loc: Loc,
         rparen: Loc,
     ) -> ExprId {
+        // A callee from `act_on_call_name`: its function is referenced
+        // unless the call stays dependent ([temp.dep.candidate]).
+        if let Some(i) = self.deferred_call_refs.iter().position(|&(e, _)| e == callee) {
+            let (_, d) = self.deferred_call_refs.swap_remove(i);
+            if !args.iter().any(|&a| self.expr_is_type_dependent(a)) {
+                self.ast.decls.set_flags(d, DeclFlags::REFERENCED);
+            }
+        }
         let mut kids = vec![callee];
         kids.extend_from_slice(args);
         // Braced-init-list arguments (placeholders until the parameter
@@ -1855,6 +1941,18 @@ impl Sema<'_, '_> {
             args.iter().map(|&a| self.take_braced_arg(a)).collect();
         if self.is_err_expr(callee) || args.iter().any(|&a| self.is_err_expr(a)) {
             return self.recover_err(&kids, loc);
+        }
+        if let Some(e) = self.check_unresolved_callee(callee, args) {
+            return e;
+        }
+        if self.expr_is_type_dependent(callee)
+            || args.iter().any(|&a| self.expr_is_type_dependent(a))
+        {
+            if braced.iter().any(Option::is_some) {
+                self.templ_unimplemented("braced arguments in a dependent call", loc);
+                return self.recover_err(&kids, loc);
+            }
+            return self.dependent_call(callee, args, loc, rparen);
         }
         if let Some(e) = self.try_member_call(callee, args, &mut braced, loc, rparen) {
             return e;
@@ -2100,6 +2198,9 @@ impl Sema<'_, '_> {
         if self.is_err_expr(base) {
             return self.recover_err(&[base], loc);
         }
+        if let Some(e) = self.try_dependent_member(base, name, None, false, loc, arrow) {
+            return e;
+        }
         let (b, obj_ty) = if arrow {
             let b = conv::decay(self, base);
             let bt = self.ety(b);
@@ -2319,10 +2420,14 @@ impl Sema<'_, '_> {
         loc: Loc,
         rparen: Loc,
     ) -> ExprId {
+        let is_err = self.is_err_expr(e) || self.is_error_type(ty);
+        if !is_err && (self.ast.types.is_dependent(ty) || self.expr_is_type_dependent(e)) {
+            return self.dependent_cast(style, ty, e, loc, rparen);
+        }
         if style == CastStyle::Dynamic {
             return self.act_on_dynamic_cast(ty, e, loc, rparen);
         }
-        if self.is_err_expr(e) || self.is_error_type(ty) {
+        if is_err {
             return self.recover(ty, &[e], loc);
         }
         if self.ast.types.is_reference(ty) {

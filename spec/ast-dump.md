@@ -357,6 +357,62 @@ dependent types print with the parameter names (sugar), and
 `TemplateArgument value` covers clang's `integral`/`declaration`/
 `nullptr`/`structural value` lines.
 
+**Templates as written (landed, WP-069).** The lines below are normative;
+specializations and instantiations remain the sketch above (WP-070).
+- `ClassTemplateDecl` / `FunctionTemplateDecl` / `VarTemplateDecl` /
+  `TypeAliasTemplateDecl` `<name>`. The children are the parameters,
+  then the pattern (`CXXRecordDecl`, `FunctionDecl`, `VarDecl`,
+  `TypeAliasDecl`), then the requires-clause. A trailing
+  requires-clause is the pattern function's last child.
+- `TemplateTypeParmDecl [referenced] typename|class depth D index I
+  [...] [<name>]`. A constrained parameter (`C U`) prints `class` plus a
+  `ConceptSpecializationExpr` child. An abbreviated template's invented
+  parameter (`C auto x`) prints `implicit` and the name
+  `<param>:auto` (`x:auto`, clang's `-ast-dump` name for it).
+- `NonTypeTemplateParmDecl [referenced] '<type>' depth D index I [...]
+  [<name>]`, with the default argument as its child.
+- `TemplateTemplateParmDecl depth D index I [...] [<name>]`. The
+  children are the inner parameters (at depth D+1), then the default
+  as a `TemplateArgument template` line.
+- `ConceptDecl <name>`, with the constraint-expression as its child.
+- `ConceptSpecializationExpr 'bool'`. The children are the written
+  arguments as `TemplateArgument` lines.
+- `RequiresExpr 'bool'`. Its parameters are `ParmVarDecl` children,
+  followed by `SimpleRequirement` / `TypeRequirement '<type>'` /
+  `CompoundRequirement [noexcept]` / `NestedRequirement`. Each
+  requirement prints `dependent` when it is dependent.
+- `TemplateArgument type '<type>' | expr | template`. A pack-expansion
+  argument prints its pattern, without the `...` (`type 'Ts'`); this
+  matches clang.
+
+The dependent expressions use clang's dependent type, `'<dependent
+type>'`:
+- `DependentScopeDeclRefExpr`, `CXXDependentScopeMemberExpr '…' lvalue
+  ./-><name>`, `UnresolvedLookupExpr '…' lvalue [(ADL)] = '<name>'
+  [empty]`, `CXXUnresolvedConstructExpr '<type>'`, `PackExpansionExpr`,
+  `CXXFoldExpr` and `SizeOfPackExpr 'unsigned long' <pack>`.
+- An `UnresolvedLookupExpr` whose candidate set is all function
+  templates, with dependent explicit arguments, is `'<dependent type>'`.
+  Its overload set is `'<overloaded function type>'`.
+- clang prints neither `DependentScopeDeclRefExpr` nor
+  `CXXDependentScopeMemberExpr` explicit template arguments as children.
+  The dump prints neither.
+- **Expressions inside type names.** Wherever a type spells an
+  expression (`decltype(e)`, an array bound, `I<e>`), the expression
+  prints as clang's `printPretty`:
+  - `T::value` and `T::template m<int>`, the latter printed `T::m<int>`;
+    see "Known gaps" below.
+  - `t.x` and `t->template y<1>`.
+  - `f<T>` with the qualifier and arguments as written.
+  - `T(a, b)` for an unresolved construct, `sizeof...(Ts)`, and folds as
+    `(... + xs)`.
+
+Known gaps:
+- A `DependentScopeDeclRefExpr` does not store the `template` keyword.
+- A function parameter named inside its own declarator's trailing
+  return type (`auto f(T t) -> decltype(t.x)`) is unsupported, so the
+  type prints with `...` for the expression.
+
 ## 6. Differential testing against clang
 `cargo xtask clang-ast <file> [--compiler=] [--std=] [--implicit]
 [--all-files] [--filter=<substr>] [-- <clang args>]` prints clang's AST of
@@ -420,6 +476,17 @@ Anything the tool cannot render exactly is an error naming the construct
 and the enclosing top-level decl. It never prints a guess, so a mismatch
 between kiln and the tool is a real difference. Known-divergent constructs
 are rejected in the table, never patched in goldens by hand.
+
+Rejected by the table:
+- Template specializations and instantiations
+  (`ClassTemplate[Partial]SpecializationDecl`,
+  `VarTemplate[Partial]SpecializationDecl`, `CXXDeductionGuideDecl`,
+  `SubstNonTypeTemplateParmExpr`, and a `TemplateArgument` outside the
+  template nodes that print theirs): WP-070.
+- `UnresolvedMemberExpr` (member function template names).
+- `ImplicitConceptSpecializationDecl` is dropped. These are clang's
+  converted concept arguments; the written ones are the
+  `ConceptSpecializationExpr` children.
 
 ## 7. Harness outcome
 `//@ expect: ast` (optionally `//@ ast-filter: <substr>`), normative in

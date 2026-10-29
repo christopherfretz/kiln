@@ -6,7 +6,7 @@
 use std::path::PathBuf;
 
 use super::side::{self, VNode};
-use super::table::{self, CLASS_KINDS, Disposition, M2_KINDS, TABLE};
+use super::table::{self, CLASS_KINDS, Disposition, M2_KINDS, TABLE, TEMPLATE_KINDS};
 use super::values::{self, Field, Literals, Record, Shape, Types, Value};
 use super::{DumpOptions, escape, normalize};
 
@@ -137,7 +137,7 @@ fn unmapped_input_is_an_error_naming_it() {
 
 #[test]
 fn mapping_table_covers_m2() {
-    for k in M2_KINDS.iter().chain(CLASS_KINDS) {
+    for k in M2_KINDS.iter().chain(CLASS_KINDS).chain(TEMPLATE_KINDS) {
         assert!(matches!(table::lookup(k), Ok(Disposition::Keep)), "{k} must be kept");
         // Every kept kind has an attribute list.
         table::check_keys(k, ["id", "kind"].iter()).unwrap();
@@ -145,8 +145,8 @@ fn mapping_table_covers_m2() {
     for (k, d) in TABLE {
         if matches!(d, Disposition::Keep) {
             assert!(
-                M2_KINDS.contains(k) || CLASS_KINDS.contains(k),
-                "{k} is kept but not an M2 or class kind"
+                M2_KINDS.contains(k) || CLASS_KINDS.contains(k) || TEMPLATE_KINDS.contains(k),
+                "{k} is kept but not an M2, class or template kind"
             );
         }
         assert_eq!(TABLE.iter().filter(|(x, _)| x == k).count(), 1, "{k} listed twice");
@@ -160,7 +160,7 @@ fn mapping_table_covers_m2() {
     // Decl keys are not expression keys.
     assert!(table::check_keys("IntegerLiteral", ["isUsed"].iter()).is_err());
     let (keep, drop, unsupported) = table::counts();
-    assert_eq!(keep, M2_KINDS.len() + CLASS_KINDS.len());
+    assert_eq!(keep, M2_KINDS.len() + CLASS_KINDS.len() + TEMPLATE_KINDS.len());
     assert_eq!(keep + drop + unsupported, TABLE.len());
     eprintln!("mapping table: {keep} keep, {drop} drop, {unsupported} unsupported");
 }

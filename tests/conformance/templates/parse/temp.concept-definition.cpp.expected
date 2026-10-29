@@ -1,0 +1,28 @@
+TranslationUnitDecl
+|-ConceptDecl Always
+| |-TemplateTypeParmDecl class depth 0 index 0 T
+| `-CXXBoolLiteralExpr 'bool' true
+|-ConceptDecl Never
+| |-TemplateTypeParmDecl class depth 0 index 0 T
+| `-CXXBoolLiteralExpr 'bool' false
+|-ConceptDecl Both
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| |-TemplateTypeParmDecl referenced class depth 0 index 1 U
+| `-BinaryOperator 'bool' '&&'
+|   |-ConceptSpecializationExpr 'bool'
+|   | `-TemplateArgument type 'T'
+|   `-ConceptSpecializationExpr 'bool'
+|     `-TemplateArgument type 'U'
+|-ConceptDecl Either
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| `-BinaryOperator 'bool' '||'
+|   |-ConceptSpecializationExpr 'bool'
+|   | `-TemplateArgument type 'T'
+|   `-ConceptSpecializationExpr 'bool'
+|     `-TemplateArgument type 'T'
+`-ConceptDecl Big
+  |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+  `-BinaryOperator 'bool' '>'
+    |-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof 'T'
+    `-ImplicitCastExpr 'unsigned long' <IntegralCast>
+      `-IntegerLiteral 'int' 4

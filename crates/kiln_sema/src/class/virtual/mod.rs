@@ -194,6 +194,16 @@ impl Sema<'_, '_> {
         if ov.is_none() && fin.is_none() {
             return;
         }
+        // clang `CheckOverrideControl`: an instance member function of a
+        // class with a dependent base, or of a dependent type, is checked
+        // at instantiation ([temp.res.general]/6).
+        if site.method
+            && spec.storage() != FnStorage::Static
+            && (self.is_dependent_type(ty) || self.has_dependent_bases(site.class))
+        {
+            *spec = spec.with_override(ov.is_some()).with_final(fin.is_some());
+            return;
+        }
         if site.method && !spec.is_virtual() {
             let hidden = self.hidden_virtuals(site.class, site.name, ty, &[]);
             if !hidden.is_empty() {
@@ -228,6 +238,13 @@ impl Sema<'_, '_> {
                 .arg(self.decl_name_str(site.name));
             self.emit(msg);
         }
+    }
+
+    /// Whether class `c` has a dependent base ([temp.dep.type]; clang
+    /// `hasAnyDependentBases`).
+    pub(crate) fn has_dependent_bases(&self, c: DeclId) -> bool {
+        let Some(def) = self.ast.definition(c) else { return false };
+        self.ast.decls.bases(def, &self.ast.lists).any(|b| self.is_dependent_type(b.ty))
     }
 
     /// The virtual functions a member function named `name` of type `ty`
@@ -359,7 +376,10 @@ impl Sema<'_, '_> {
         let (Some(nr), Some(or)) = (self.written_ret(ty), self.written_ret(oty)) else {
             return true;
         };
-        if self.ast.types.same_type(nr, or) || self.is_error_type(nr) || self.is_error_type(or) {
+        // clang `CheckOverridingFunctionReturnType`: a dependent return
+        // type is checked at instantiation.
+        let skip = |s: &Self, t| s.is_error_type(t) || s.is_dependent_type(t);
+        if self.ast.types.same_type(nr, or) || skip(self, nr) || skip(self, or) {
             return true;
         }
         let nm = self.decl_name_str(name);

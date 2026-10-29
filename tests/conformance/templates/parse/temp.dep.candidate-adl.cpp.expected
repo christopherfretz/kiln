@@ -1,0 +1,19 @@
+TranslationUnitDecl
+|-FunctionTemplateDecl caller
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| `-FunctionDecl caller 'void (T)'
+|   |-ParmVarDecl referenced t 'T'
+|   `-CompoundStmt
+|     `-CallExpr '<dependent type>'
+|       |-UnresolvedLookupExpr '<overloaded function type>' lvalue (ADL) = 'helper' empty
+|       `-DeclRefExpr 'T' lvalue ParmVar 't' 'T'
+|-FunctionDecl known 'void (int)'
+| `-ParmVarDecl 'int'
+`-FunctionTemplateDecl caller2
+  |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+  `-FunctionDecl caller2 'void (T)'
+    |-ParmVarDecl referenced t 'T'
+    `-CompoundStmt
+      `-CallExpr '<dependent type>'
+        |-UnresolvedLookupExpr '<overloaded function type>' lvalue (ADL) = 'known'
+        `-DeclRefExpr 'T' lvalue ParmVar 't' 'T'

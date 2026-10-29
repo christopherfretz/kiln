@@ -1,0 +1,27 @@
+TranslationUnitDecl
+|-ConceptDecl C
+| |-TemplateTypeParmDecl class depth 0 index 0 T
+| `-CXXBoolLiteralExpr 'bool' true
+|-ConceptDecl C2
+| |-TemplateTypeParmDecl class depth 0 index 0 T
+| |-TemplateTypeParmDecl class depth 0 index 1 U
+| `-CXXBoolLiteralExpr 'bool' true
+|-ClassTemplateDecl A
+| |-TemplateTypeParmDecl class depth 0 index 0 T
+| | `-ConceptSpecializationExpr 'bool'
+| |   `-TemplateArgument type 'T'
+| `-CXXRecordDecl struct A definition
+|-ClassTemplateDecl B
+| |-TemplateTypeParmDecl class depth 0 index 0 T
+| | `-ConceptSpecializationExpr 'bool'
+| |   |-TemplateArgument type 'T'
+| |   `-TemplateArgument type 'int'
+| `-CXXRecordDecl struct B definition
+`-ClassTemplateDecl D
+  |-TemplateTypeParmDecl class depth 0 index 0 ... Ts
+  | `-CXXFoldExpr '<dependent type>'
+  |   |-<<<NULL>>>
+  |   |-ConceptSpecializationExpr 'bool'
+  |   | `-TemplateArgument type 'Ts'
+  |   `-<<<NULL>>>
+  `-CXXRecordDecl struct D definition

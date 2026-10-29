@@ -35,6 +35,14 @@ pub enum ScopeKind {
     /// outermost block of its sub-statement may not redeclare them
     /// ([basic.scope.block]/2).
     Control,
+    /// A template parameter list and the declaration it heads
+    /// (spec/sema-templates.md §2.1): holds the template parameters,
+    /// searched by unqualified lookup but transparent for declarations
+    /// (they go to the enclosing scope).
+    TemplateParams,
+    /// The parameters of a requires-expression ([expr.prim.req]/5,
+    /// spec/sema-templates.md §2.6).
+    RequiresExpr,
 }
 
 /// One entry of the scope stack.
@@ -72,8 +80,18 @@ impl Scope {
     pub fn is_local(&self) -> bool {
         matches!(
             self.kind,
-            ScopeKind::Function | ScopeKind::Block | ScopeKind::Control | ScopeKind::Prototype
+            ScopeKind::Function
+                | ScopeKind::Block
+                | ScopeKind::Control
+                | ScopeKind::Prototype
+                | ScopeKind::RequiresExpr
         )
+    }
+
+    /// True for scopes that declarations pass through to the enclosing
+    /// one (`extern "C" { }` blocks and template parameter scopes).
+    pub fn is_transparent(&self) -> bool {
+        matches!(self.kind, ScopeKind::LinkageSpec | ScopeKind::TemplateParams)
     }
 
     /// The most recent local `name` in name space `ns`.

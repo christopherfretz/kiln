@@ -18,7 +18,8 @@ pub enum Disposition {
 use Disposition::{Drop, Keep, Unsupported};
 
 const NOT_M2: &str = "not in the M2 dump (spec/ast-dump.md §3)";
-const TEMPLATES: &str = "templates are M3 (spec/ast-dump.md §5)";
+const INSTANTIATION: &str =
+    "template specializations and instantiations are not in the dump yet (spec/ast-dump.md §5)";
 const CXX_CAST: &str = "bit casts are not in the dump";
 
 /// Every node kind the normalizer knows, in `spec/ast-dump.md` §3 order for
@@ -104,6 +105,31 @@ pub const TABLE: &[(&str, Disposition)] = &[
     ("CompoundLiteralExpr", Keep),
     ("BinaryConditionalOperator", Keep),
     ("OffsetOfExpr", Keep),
+    // Templates as written (WP-069, spec/ast-dump.md §5).
+    ("ClassTemplateDecl", Keep),
+    ("FunctionTemplateDecl", Keep),
+    ("VarTemplateDecl", Keep),
+    ("TypeAliasTemplateDecl", Keep),
+    ("ConceptDecl", Keep),
+    ("TemplateTypeParmDecl", Keep),
+    ("NonTypeTemplateParmDecl", Keep),
+    ("TemplateTemplateParmDecl", Keep),
+    ("ConceptSpecializationExpr", Keep),
+    ("RequiresExpr", Keep),
+    ("SimpleRequirement", Keep),
+    ("TypeRequirement", Keep),
+    ("CompoundRequirement", Keep),
+    ("NestedRequirement", Keep),
+    ("CXXFoldExpr", Keep),
+    ("CXXDependentScopeMemberExpr", Keep),
+    ("DependentScopeDeclRefExpr", Keep),
+    ("CXXUnresolvedConstructExpr", Keep),
+    ("UnresolvedLookupExpr", Keep),
+    ("PackExpansionExpr", Keep),
+    ("SizeOfPackExpr", Keep),
+    // The concept's arguments as converted (clang-only; the written ones
+    // are the `ConceptSpecializationExpr`'s own children).
+    ("ImplicitConceptSpecializationDecl", Drop),
     // Statements (§3).
     ("CompoundStmt", Keep),
     ("DeclStmt", Keep),
@@ -134,18 +160,11 @@ pub const TABLE: &[(&str, Disposition)] = &[
     // Declarations kiln does not dump in M2.
     ("RecordDecl", Unsupported("C struct declarations (RecordDecl) are not in the M2 dump")),
     ("IndirectFieldDecl", Unsupported("anonymous struct/union members are not in the M2 dump")),
-    ("ClassTemplateDecl", Unsupported(TEMPLATES)),
-    ("ClassTemplateSpecializationDecl", Unsupported(TEMPLATES)),
-    ("ClassTemplatePartialSpecializationDecl", Unsupported(TEMPLATES)),
-    ("FunctionTemplateDecl", Unsupported(TEMPLATES)),
-    ("VarTemplateDecl", Unsupported(TEMPLATES)),
-    ("VarTemplateSpecializationDecl", Unsupported(TEMPLATES)),
-    ("TypeAliasTemplateDecl", Unsupported(TEMPLATES)),
-    ("TemplateTypeParmDecl", Unsupported(TEMPLATES)),
-    ("NonTypeTemplateParmDecl", Unsupported(TEMPLATES)),
-    ("TemplateTemplateParmDecl", Unsupported(TEMPLATES)),
-    ("ConceptDecl", Unsupported(TEMPLATES)),
-    ("CXXDeductionGuideDecl", Unsupported(TEMPLATES)),
+    ("ClassTemplateSpecializationDecl", Unsupported(INSTANTIATION)),
+    ("ClassTemplatePartialSpecializationDecl", Unsupported(INSTANTIATION)),
+    ("VarTemplateSpecializationDecl", Unsupported(INSTANTIATION)),
+    ("VarTemplatePartialSpecializationDecl", Unsupported(INSTANTIATION)),
+    ("CXXDeductionGuideDecl", Unsupported(INSTANTIATION)),
     ("DecompositionDecl", Unsupported("structured bindings are not in the M2 dump")),
     ("BindingDecl", Unsupported("structured bindings are not in the M2 dump")),
     ("EmptyDecl", Unsupported(NOT_M2)),
@@ -174,17 +193,11 @@ pub const TABLE: &[(&str, Disposition)] = &[
     ("CXXNoexceptExpr", Keep),
     ("CXXStdInitializerListExpr", Unsupported(NOT_M2)),
     ("CXXRewrittenBinaryOperator", Unsupported(NOT_M2)),
-    ("CXXFoldExpr", Unsupported(TEMPLATES)),
-    ("CXXDependentScopeMemberExpr", Unsupported(TEMPLATES)),
-    ("CXXUnresolvedConstructExpr", Unsupported(TEMPLATES)),
-    ("UnresolvedLookupExpr", Unsupported(TEMPLATES)),
-    ("UnresolvedMemberExpr", Unsupported(TEMPLATES)),
-    ("DependentScopeDeclRefExpr", Unsupported(TEMPLATES)),
-    ("PackExpansionExpr", Unsupported(TEMPLATES)),
-    ("SizeOfPackExpr", Unsupported(TEMPLATES)),
-    ("SubstNonTypeTemplateParmExpr", Unsupported(TEMPLATES)),
-    ("ConceptSpecializationExpr", Unsupported(TEMPLATES)),
-    ("RequiresExpr", Unsupported(TEMPLATES)),
+    ("UnresolvedMemberExpr", Unsupported("member function template names are not in the dump yet")),
+    ("SubstNonTypeTemplateParmExpr", Unsupported(INSTANTIATION)),
+    // A template argument outside the template nodes that print theirs
+    // (an explicit specialization's or instantiation's arguments).
+    ("TemplateArgument", Unsupported(INSTANTIATION)),
     ("LambdaExpr", Unsupported("lambdas are M3 (spec/ast-dump.md §5)")),
     ("TypeTraitExpr", Unsupported(NOT_M2)),
     ("ArrayTypeTraitExpr", Unsupported(NOT_M2)),
@@ -286,7 +299,7 @@ fn specific_keys(kind: &str) -> Option<&'static [&'static str]> {
         "CXXCtorInitializer" => &["anyInit", "baseInit", "delegatingInit"],
         // `init` (always `c`, printed `cinit`): the default argument is the
         // child.
-        "ParmVarDecl" => &["type", "init"],
+        "ParmVarDecl" => &["type", "init", "isParameterPack"],
         "VarDecl" => &["type", "storageClass", "nrvo", "inline", "constexpr", "init"],
         "StaticAssertDecl" => &[],
         "IntegerLiteral" | "FloatingLiteral" | "CharacterLiteral" | "StringLiteral"
@@ -357,6 +370,39 @@ fn specific_keys(kind: &str) -> Option<&'static [&'static str]> {
         // printed by clang's text dump either.
         "CXXTypeidExpr" => &["typeArg", "adjustedTypeArg"],
         "CXXParenListInitExpr" => &["array_filler"],
+        "ClassTemplateDecl"
+        | "FunctionTemplateDecl"
+        | "VarTemplateDecl"
+        | "TypeAliasTemplateDecl"
+        | "ConceptDecl" => &[],
+        // `defaultArg` repeats the default, which is the last child.
+        "TemplateTypeParmDecl" => &["tagUsed", "depth", "index", "isParameterPack", "defaultArg"],
+        "NonTypeTemplateParmDecl" => &["type", "depth", "index", "isParameterPack", "defaultArg"],
+        "TemplateTemplateParmDecl" => &["depth", "index", "isParameterPack", "defaultArg"],
+        // `satisfied` (a non-dependent requires-expression) is rejected by
+        // the printer: kiln does not evaluate requires-expressions yet.
+        "RequiresExpr" => &["satisfied"],
+        "SimpleRequirement" | "TypeRequirement" | "NestedRequirement" => {
+            &["isDependent", "satisfied"]
+        }
+        "CompoundRequirement" => &["isDependent", "satisfied", "noexcept"],
+        "ConceptSpecializationExpr"
+        | "CXXFoldExpr"
+        | "DependentScopeDeclRefExpr"
+        | "PackExpansionExpr" => &[],
+        // `hasTemplateKeyword` is not printed (as in clang's text dump).
+        "CXXDependentScopeMemberExpr" => &[
+            "isArrow",
+            "member",
+            "hasTemplateKeyword",
+            "hasExplicitTemplateArgs",
+            "explicitTemplateArgs",
+        ],
+        "CXXUnresolvedConstructExpr" => &["list"],
+        // The found declarations are not printed (clang's text dump prints
+        // their addresses).
+        "UnresolvedLookupExpr" => &["usesADL", "name", "lookups"],
+        "SizeOfPackExpr" => &["name"],
         "IfStmt" => {
             &["hasInit", "hasVar", "hasElse", "isConstexpr", "isConsteval", "constevalIsNegated"]
         }
@@ -423,6 +469,32 @@ pub const CLASS_KINDS: &[&str] = &[
     "ArrayInitLoopExpr",
     "ArrayInitIndexExpr",
     "OpaqueValueExpr",
+];
+
+/// The template kinds §5 of `spec/ast-dump.md` adds (WP-069).
+#[cfg(test)]
+pub const TEMPLATE_KINDS: &[&str] = &[
+    "ClassTemplateDecl",
+    "FunctionTemplateDecl",
+    "VarTemplateDecl",
+    "TypeAliasTemplateDecl",
+    "ConceptDecl",
+    "TemplateTypeParmDecl",
+    "NonTypeTemplateParmDecl",
+    "TemplateTemplateParmDecl",
+    "ConceptSpecializationExpr",
+    "RequiresExpr",
+    "SimpleRequirement",
+    "TypeRequirement",
+    "CompoundRequirement",
+    "NestedRequirement",
+    "CXXFoldExpr",
+    "CXXDependentScopeMemberExpr",
+    "DependentScopeDeclRefExpr",
+    "CXXUnresolvedConstructExpr",
+    "UnresolvedLookupExpr",
+    "PackExpansionExpr",
+    "SizeOfPackExpr",
 ];
 
 /// The kinds §3 of `spec/ast-dump.md` defines lines for (the M2 kinds, with

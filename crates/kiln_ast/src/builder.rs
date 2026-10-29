@@ -97,7 +97,7 @@ impl DeclHead {
 /// Typed constructors over a borrowed [`Ast`] (spec/ast.md §12, WP A).
 #[derive(Debug)]
 pub struct AstBuilder<'a> {
-    ast: &'a mut Ast,
+    pub(crate) ast: &'a mut Ast,
 }
 
 /// Maps type flags to expression dependence (spec/ast.md §5.1): a dependent
@@ -147,7 +147,7 @@ impl<'a> AstBuilder<'a> {
     /// Pushes a declaration, links it into its lexical context's member
     /// list and registers its name (§4.3). `prev` is the redeclared
     /// declaration, if any.
-    fn add(
+    pub(crate) fn add(
         &mut self,
         h: DeclHead,
         kind: DeclKind,
@@ -155,6 +155,12 @@ impl<'a> AstBuilder<'a> {
         payload: Payload,
         prev: Option<DeclId>,
     ) -> DeclId {
+        // A template pattern (spec/sema-templates.md §4.1) is neither a
+        // member nor a name: its template decl is both.
+        if std::mem::take(&mut self.ast.templates.pattern_next) {
+            return self.add_pattern(h, kind, ty, payload);
+        }
+        let h = self.ast.templates.dependent_head(h);
         let d = self.ast.decls.push(
             NewDecl {
                 kind,
@@ -184,13 +190,14 @@ impl<'a> AstBuilder<'a> {
 
     /// Pushes a declaration and links it into its lexical context's
     /// member list without entering its name in any lookup table.
-    fn add_unregistered(
+    pub(crate) fn add_unregistered(
         &mut self,
         h: DeclHead,
         kind: DeclKind,
         payload: Payload,
         member: bool,
     ) -> DeclId {
+        let h = self.ast.templates.dependent_head(h);
         let d = self.ast.decls.push(
             NewDecl {
                 kind,
@@ -835,7 +842,7 @@ impl<'a> AstBuilder<'a> {
         deps_of_type_flags(self.ast.types.flags(ty.ty()))
     }
 
-    fn deps(&self, e: ExprId) -> ExprDeps {
+    pub(crate) fn deps(&self, e: ExprId) -> ExprDeps {
         self.ast.exprs.get(e).deps()
     }
 
@@ -844,7 +851,7 @@ impl<'a> AstBuilder<'a> {
     }
 
     #[allow(clippy::too_many_arguments, reason = "mirrors the 10 header fields of ExprNode")]
-    fn push_expr(
+    pub(crate) fn push_expr(
         &mut self,
         kind: ExprKind,
         vk: ValueCategory,
@@ -861,7 +868,7 @@ impl<'a> AstBuilder<'a> {
     }
 
     #[allow(clippy::too_many_arguments, reason = "header fields minus object kind and flags")]
-    fn simple(
+    pub(crate) fn simple(
         &mut self,
         kind: ExprKind,
         vk: ValueCategory,
@@ -1026,11 +1033,23 @@ impl<'a> AstBuilder<'a> {
     /// parameter is value-dependent; so is a potentially-constant variable
     /// with a value-dependent initializer. A declaration in a dependent
     /// context makes the reference instantiation-dependent.
-    fn decl_deps(&self, d: DeclId) -> ExprDeps {
+    pub(crate) fn decl_deps(&self, d: DeclId) -> ExprDeps {
         let n = self.ast.decls.get(d);
         let mut deps = ExprDeps::NONE;
         if n.has(DeclFlags::DEPENDENT_CTX) {
             deps |= ExprDeps::INSTANTIATION;
+        }
+        // A function or template parameter pack names an unexpanded pack
+        // ([temp.variadic]/5); its type is the pack expansion (a non-type
+        // template parameter pack `int... N` keeps its pattern type).
+        let nttp_pack = n.kind() == DeclKind::NonTypeTemplateParm
+            && self.ast.template_parm(d).is_some_and(|i| i.pack);
+        if nttp_pack
+            || n.ty().is_some_and(|t| {
+                matches!(self.ast.types.view(t.ty()), crate::types::TypeView::PackExpansion { .. })
+            })
+        {
+            deps |= ExprDeps::UNEXPANDED_PACK | ExprDeps::INSTANTIATION;
         }
         match n.kind() {
             DeclKind::NonTypeTemplateParm => deps |= ExprDeps::VALUE_INST,
@@ -1042,6 +1061,16 @@ impl<'a> AstBuilder<'a> {
                         && v.init.is_some_and(|i| self.deps(i).contains(ExprDeps::VALUE))
                     {
                         deps |= ExprDeps::VALUE_INST;
+                    }
+                    // An array of unknown bound whose initializer is
+                    // type-dependent: its bound is unknown until
+                    // instantiation (clang's `computeDependence` for
+                    // `DeclRefExpr`; `int a[] = {ts...}`).
+                    if n.ty().is_some_and(|t| {
+                        self.ast.types.canonical_kind(t) == crate::types::TypeKind::IncompleteArray
+                    }) && v.init.is_some_and(|i| self.deps(i).contains(ExprDeps::TYPE))
+                    {
+                        deps |= ExprDeps::TYPE_VALUE_INST;
                     }
                 }
             }
@@ -1127,7 +1156,20 @@ impl<'a> AstBuilder<'a> {
             }
             _ => (ValueCategory::LValue, ObjectKind::Ordinary),
         };
-        let deps = self.deps(base) | self.type_deps(ty) | self.decl_deps(m);
+        let mut deps = self.deps(base) | self.type_deps(ty) | self.decl_deps(m);
+        // A field of the current instantiation with a non-dependent type
+        // is not type-dependent ([temp.dep.expr]/5); a bit-field with a
+        // value-dependent width is (clang's `computeDependence` for
+        // `MemberExpr`).
+        if mn.kind() == DeclKind::Field {
+            if mn.has(DeclFlags::DEPENDENT_CTX) && !self.ast.types.is_dependent(ty) {
+                deps = deps.without(ExprDeps::TYPE);
+            }
+            let width = self.ast.decls.field(m).and_then(|f| f.bit_width);
+            if width.is_some_and(|w| self.deps(w).contains(ExprDeps::VALUE)) {
+                deps |= ExprDeps::TYPE;
+            }
+        }
         let flags = if arrow { ExprFlags::ARROW } else { ExprFlags::NONE };
         let e = self.push_expr(
             ExprKind::MemberExpr,

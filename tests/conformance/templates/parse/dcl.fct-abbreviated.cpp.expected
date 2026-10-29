@@ -1,0 +1,27 @@
+TranslationUnitDecl
+|-ConceptDecl C
+| |-TemplateTypeParmDecl class depth 0 index 0 T
+| `-CXXBoolLiteralExpr 'bool' true
+|-FunctionTemplateDecl f
+| |-TemplateTypeParmDecl implicit class depth 0 index 0 x:auto
+| `-FunctionDecl f 'void (auto)'
+|   `-ParmVarDecl x 'auto'
+|-FunctionTemplateDecl g
+| |-TemplateTypeParmDecl implicit class depth 0 index 0 x:auto
+| | `-ConceptSpecializationExpr 'bool'
+| |   `-TemplateArgument type 'C auto'
+| |-TemplateTypeParmDecl implicit class depth 0 index 1 p:auto
+| `-FunctionDecl g 'void (C auto, auto *)'
+|   |-ParmVarDecl x 'C auto'
+|   `-ParmVarDecl p 'auto *'
+|-FunctionTemplateDecl h
+| |-TemplateTypeParmDecl implicit class depth 0 index 0 ... xs:auto
+| `-FunctionDecl h 'void (auto...)'
+|   `-ParmVarDecl xs 'auto...' pack
+`-FunctionTemplateDecl k
+  |-TemplateTypeParmDecl implicit class depth 0 index 0 r:auto
+  `-FunctionDecl k 'int (const auto &)'
+    |-ParmVarDecl r 'const auto &'
+    `-CompoundStmt
+      `-ReturnStmt
+        `-IntegerLiteral 'int' 0

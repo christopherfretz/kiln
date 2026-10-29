@@ -57,7 +57,10 @@ impl Sema<'_, '_> {
                 Nns::NamespaceAlias { prefix, alias: spelled, ns: resolved }
             }
             k => {
-                let ty = if matches!(k, DeclKind::Typedef | DeclKind::TypeAlias) {
+                let ty = if matches!(
+                    k,
+                    DeclKind::Typedef | DeclKind::TypeAlias | DeclKind::TemplateTypeParm
+                ) {
                     self.ast.decls.get(spelled).ty().unwrap_or(QualType::ERROR)
                 } else {
                     self.tag_type(spelled)
@@ -71,7 +74,7 @@ impl Sema<'_, '_> {
     /// The class whose member-specification is being parsed, if the
     /// innermost scope is a class scope.
     fn member_spec_class(&self) -> Option<DeclId> {
-        let s = self.scopes.iter().rev().find(|s| s.kind != ScopeKind::LinkageSpec)?;
+        let s = self.scopes.iter().rev().find(|s| !s.is_transparent())?;
         if s.kind == ScopeKind::Record { s.entity } else { None }
     }
 

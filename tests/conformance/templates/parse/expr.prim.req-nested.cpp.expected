@@ -1,0 +1,21 @@
+TranslationUnitDecl
+|-ConceptDecl Small
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| `-BinaryOperator 'bool' '<='
+|   |-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof 'T'
+|   `-ImplicitCastExpr 'unsigned long' <IntegralCast>
+|     `-IntegerLiteral 'int' 8
+`-ConceptDecl C
+  |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+  `-RequiresExpr 'bool'
+    |-ParmVarDecl referenced t 'T'
+    |-NestedRequirement dependent
+    | `-ConceptSpecializationExpr 'bool'
+    |   `-TemplateArgument type 'T'
+    `-NestedRequirement dependent
+      `-BinaryOperator 'bool' '>'
+        |-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof
+        | `-ParenExpr 'T' lvalue
+        |   `-DeclRefExpr 'T' lvalue ParmVar 't' 'T' non_odr_use_unevaluated
+        `-ImplicitCastExpr 'unsigned long' <IntegralCast>
+          `-IntegerLiteral 'int' 0

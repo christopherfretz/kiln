@@ -326,6 +326,9 @@ impl Sema<'_, '_> {
             return e;
         };
         let (cond_ty, invalid) = (sw.cond_ty, sw.invalid);
+        if self.expr_is_value_dependent(e) || self.is_dependent_type(cond_ty) {
+            return e;
+        }
         let loc = self.ast.exprs.get(e).loc();
         let conv = match conv::implicit_convert(self, e, cond_ty, ConvCtx::Initialization) {
             Ok(c) => c,

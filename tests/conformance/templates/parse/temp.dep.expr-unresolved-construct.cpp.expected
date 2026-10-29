@@ -1,0 +1,32 @@
+TranslationUnitDecl
+|-FunctionTemplateDecl a
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| `-FunctionDecl a 'T ()'
+|   `-CompoundStmt
+|     `-ReturnStmt
+|       `-CXXUnresolvedConstructExpr 'T'
+|-FunctionTemplateDecl b
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| `-FunctionDecl b 'T (int)'
+|   |-ParmVarDecl referenced x 'int'
+|   `-CompoundStmt
+|     `-ReturnStmt
+|       `-CXXUnresolvedConstructExpr 'T'
+|         |-DeclRefExpr 'int' lvalue ParmVar 'x' 'int'
+|         `-IntegerLiteral 'int' 2
+|-FunctionTemplateDecl c
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| `-FunctionDecl c 'T ()'
+|   `-CompoundStmt
+|     `-ReturnStmt
+|       `-CXXUnresolvedConstructExpr 'T' list
+|         `-InitListExpr 'void'
+|           |-IntegerLiteral 'int' 1
+|           `-IntegerLiteral 'int' 2
+`-FunctionTemplateDecl d
+  |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+  `-FunctionDecl d 'T ()'
+    `-CompoundStmt
+      `-ReturnStmt
+        `-CXXUnresolvedConstructExpr 'T' list
+          `-InitListExpr 'void'

@@ -1,0 +1,32 @@
+TranslationUnitDecl
+|-FunctionTemplateDecl a
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| `-FunctionDecl a 'T (int)'
+|   |-ParmVarDecl referenced x 'int'
+|   `-CompoundStmt
+|     `-ReturnStmt
+|       `-CXXStaticCastExpr 'T' static_cast<T> <Dependent>
+|         `-DeclRefExpr 'int' lvalue ParmVar 'x' 'int'
+|-FunctionTemplateDecl b
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| `-FunctionDecl b 'int (T)'
+|   |-ParmVarDecl referenced t 'T'
+|   `-CompoundStmt
+|     `-ReturnStmt
+|       `-CStyleCastExpr 'int' <Dependent>
+|         `-DeclRefExpr 'T' lvalue ParmVar 't' 'T'
+|-FunctionTemplateDecl c
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| `-FunctionDecl c 'void (T)'
+|   |-ParmVarDecl referenced t 'T'
+|   `-CompoundStmt
+|     `-CStyleCastExpr 'void' <ToVoid>
+|       `-DeclRefExpr 'T' lvalue ParmVar 't' 'T'
+`-FunctionTemplateDecl d
+  |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+  `-FunctionDecl d 'T *(void *)'
+    |-ParmVarDecl referenced p 'void *'
+    `-CompoundStmt
+      `-ReturnStmt
+        `-CXXReinterpretCastExpr 'T *' reinterpret_cast<T *> <Dependent>
+          `-DeclRefExpr 'void *' lvalue ParmVar 'p' 'void *'

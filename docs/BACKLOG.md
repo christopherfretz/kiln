@@ -9,7 +9,8 @@ Format per `docs/AGENTS.md`. Ids are stable; status moves between
 | WP-001 | `kiln_source`: implement `spec/source.md` with unit tests | done (2026-10-28) |
 | WP-002 | `kiln_diag`: implement `spec/diag.md` (engine, ids table skeleton, text + JSON renderers) | done (2026-10-28) |
 | WP-003 | `xtask test`: conformance runner implementing the directive format in `docs/VALIDATION.md` (see `spec/harness.md`) | done (2026-10-28) |
-| WP-006b | bench: `--record` must MERGE rows into `docs/status/perf.md` instead of regenerating from the filtered run (a `--filter` record currently wipes other groups' rows); intern-cache TLS 32 KB could be inverted to leave initialised data | todo |
+| WP-006b | bench: `--record` merges rows into `docs/status/perf.md` (`Recorded` column, stale marking, means recomputed over the merged table; spec/bench.md "Recording") | done (2026-10-29) |
+| WP-006c | intern-cache TLS 32 KB could be inverted to leave initialised data (split from 006b) | todo (small) |
 | WP-006 | harness follow-ups: `run-args:`/`run-stdin:`/`env:`, ci corpus self-check, oracle hang=ERROR, `-fconstexpr-report` protocol (`spec/oven.md`), bench per-entry thresholds + oven counters, heavier pp entries. **Still open:** re-record all `bench/baselines/*.json` on a quiet host (load < 4; durable reminder set) | done except baseline re-record (2026-10-28) |
 | WP-004 | `xtask bench`: run `bench/` entries, record wall/RSS/oven stats, compare with baselines (see `spec/bench.md`) | done (2026-10-28) |
 | WP-005 | `resource/`: import clang 19 builtin headers + generated predefines for aarch64/x86_64 linux; script to regenerate | done (2026-10-28) |
@@ -80,7 +81,7 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-067b | construction: ctor-initializers, implicit definitions, temporaries/cleanups (`materialize_temporary`, `ExprWithCleanups`), lifetime extension incl. P2718, elision + NRVO, class init forms, aggregates with bases, paren init | 067a | todo |
 | WP-068a | overload resolution core per sema-overload.md §11: `overload/{mod,ics,best,diag,adl,call}.rs`, ULE/UME, ADL, ICS with reference binding + DerivedToBase, ranking, ctor/copy/conv/ref/list init, default args, direct-call wording fix, replaces 067a's Q7 approximation, counters, `bench/overload` | S3O, 067b | todo |
 | WP-068b | operators per sema-overload.md §11: `overload/{oper,builtin,arrow,alloc}.rs`, built-in candidate tables (memoized), rewritten/reversed comparisons, surrogates, `->` chains, `operator new`/`delete` lookup | 068a | todo |
-| WP-069 | parser templates per sema-templates.md §2/§12: template-declarations, template-ids + `<` rule, `typename`/`template`, dependent nodes, packs, `sizeof...`, folds, concept/requires parsing, specialization/instantiation syntax, name-classification protocol | S3T, 064, 065 | todo |
+| WP-069 | parser templates per sema-templates.md §2/§12: template-declarations, template-ids + `<` rule, `typename`/`template`, dependent nodes, packs, `sizeof...`, folds, concept/requires parsing, specialization/instantiation syntax, name-classification protocol | S3T, 064, 065 | done (2026-10-29) |
 | WP-070a | sema templates core 1 (sema-templates.md §12): `TemplateTables`, `Substituter` + multi-level args, instantiation stack + SFINAE, alias templates, class instantiation without partials, instantiation report, non-dependent sharing experiment (Q3); lands every §11.1 file with stub signatures | 069 | todo |
 | WP-070b | sema templates core 2: deduction core (`deduce(P, A)`), partial/explicit specializations + matching/ordering, variable templates, static members, `ensure_body` M3 contract | 070a, 061b (R-OVEN-1) | todo |
 | WP-071 | function templates: `deduce_call`, explicit/default args, SFINAE integration with overload resolution (sema-overload.md §1.3), partial ordering, explicit specialization/instantiation, `TemplateParamObject` | 070b, 068a | todo |
@@ -89,16 +90,16 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-073 | concepts: constraint normalization, satisfaction, subsumption, `requires`-expressions, constrained `auto`, abbreviated function templates | 071 | todo |
 | WP-074 | `auto`/`decltype`/`decltype(auto)`, `declval`, the §9 builtin table (traits, transforms, `__make_integer_seq`/`__type_pack_element`, `__builtin_*`), `__has_builtin` staging | 070a (+S3C props for class traits) | todo |
 | WP-075 | lambdas: closure types, captures (copy/ref/init/`this`), generic lambdas, constexpr lambdas | 067b, 068a (generic: 071) | todo |
-| WP-061b | Oven heap (see M3 preparation) | 061a | todo |
 | WP-076 | Oven classes: ctors/dtors/`this`/member calls, `BeginLife`/`EndLife` subobjects (`SubobjectId`), temporaries, unions with ctors, pointers to members, `std::construct_at`/allocator recognition, iterative `compile.rs` walkers (Q16) | 067b, 061b | todo |
 | WP-077 | Oven virtual + RTTI: dynamic type in allocations, virtual calls via `SemaBridge::final_overrider`, `dynamic_cast`/`typeid` in constant evaluation | 076, 078a | todo |
 | WP-078a | virtual functions in sema: overriding, `final`/`override`, covariance, abstract classes, key function, deleting dtor, subobjects + final overriders (`Ast.virtuals`), `dynamic_cast`/`typeid` sema, virtual bases | 066b (067b for vbase ctors) | done (2026-10-29) |
-| WP-078b | virtual layout in `kiln_abi`: primary base, vptr, vbases, `kiln_abi::vtable` (Itanium), VTT, vtable dump, differentials with `virtual` | 066c, 078a | todo |
+| WP-078b | virtual layout in `kiln_abi`: primary base, vptr, vbases, `kiln_abi::vtable` (Itanium), VTT, vtable dump, differentials with `virtual` | 066c, 078a | done (2026-10-29) |
 | WP-079 | codegen classes: record types with bases, member functions/`this`, ctors/dtors (complete/base variants), `new`/`delete`, member pointers, temporaries; mangling for classes/templates in kiln_abi | 067b, 061a | todo |
 | WP-080 | codegen virtual: vtables, RTTI, virtual calls, thunks; template instantiation emission (linkonce_odr) | 078b, 079 | todo |
 | WP-081 | `cargo xtask libcxx` M3 gate: `<type_traits>`, `<utility>`, `<array>`, `<string_view>`, `<span>`, `<bit>`, `<limits>`, `<initializer_list>` compile; their libc++ tests run through kiln; status page `docs/status/libcxx-m3.md` | 072, 073, 074, 076, 079 | todo |
 | WP-082 | defaulted comparisons ([class.compare]: `= default` `operator==`/`<=>`, implicit `==` from defaulted `<=>`) in `class/compare.rs` | 067a, 068b | todo |
 | WP-083 | pointer-to-member declarators (`int C::*p`, `void (C::*pf)()`) in parser + sema declarator chunks (066b already has `.*`/`->*`/`&C::m`); flips `expr.mptr.oper/bad-operands`; plus the hidden-friend note wording ("in namespace 'N'") | 065, 066b | todo (small) |
+| WP-084 | harness `expect: layout` / `expect: vtables` dump modes (spec/harness.md; `-fdump-record-layouts-complete` / `-fdump-vtable-layouts` vs clang, block-by-block) so conformance tests can pin layouts; remove the unused `VTableError::Unsupported`; add ` [T = int]` suffixes to vtable method names once templates instantiate (070a) | 078b | todo (small) |
 
 ## Lessons
 - Size packages so one agent finishes well within a session: codegen should have been ABI+mangling / lowering / driver+tests from the start (the pp engine ended up split the same way). Prefer 3 small briefs over 1 large one; a brief that lists >5 deliverables is too big.

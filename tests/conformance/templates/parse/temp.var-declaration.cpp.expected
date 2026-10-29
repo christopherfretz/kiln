@@ -1,0 +1,16 @@
+TranslationUnitDecl
+|-VarTemplateDecl zero
+| |-TemplateTypeParmDecl class depth 0 index 0 T
+| `-VarDecl zero 'const int' constexpr cinit value=0
+|   `-IntegerLiteral 'int' 0
+|-VarTemplateDecl dflt
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| `-VarDecl dflt 'T' cinit
+|   `-CXXUnresolvedConstructExpr 'T'
+`-ClassTemplateDecl S
+  |-TemplateTypeParmDecl class depth 0 index 0 T
+  `-CXXRecordDecl struct S definition
+    `-VarTemplateDecl same
+      |-TemplateTypeParmDecl class depth 1 index 0 U
+      `-VarDecl same 'const bool' static inline constexpr cinit value=false
+        `-CXXBoolLiteralExpr 'bool' false

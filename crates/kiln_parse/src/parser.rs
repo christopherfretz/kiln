@@ -13,6 +13,7 @@ use kiln_source::{Loc, SourceManager, Span};
 
 use crate::class::LateClass;
 use crate::keywords::{Keywords, Kw};
+
 use crate::tokens::TokenSource;
 
 /// The result of parsing an expression: `None` when a syntax error was
@@ -86,6 +87,14 @@ pub struct Parser<'a, 'sm> {
     /// compound statement (clang's `ParsedStmtContext::InStmtExpr`); taken
     /// by `parse_statement`, passed on through labels.
     pub(crate) in_stmt_expr: bool,
+    /// False while parsing a template argument: a `>` or `>>` ends the
+    /// argument instead of being an operator ([temp.names]/4, clang's
+    /// `GreaterThanIsOperator`). Brackets restore it.
+    pub(crate) greater_is_op: bool,
+    /// The parameter-declaration being parsed declares a type with an
+    /// unexpanded pack (or `auto`): a `...` before its `)` belongs to the
+    /// declarator, not the parameter list ([dcl.fct]/14).
+    pub(crate) pack_hint: bool,
 }
 
 impl std::fmt::Debug for Parser<'_, '_> {
@@ -122,6 +131,8 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             #[cfg(test)]
             trace: Vec::new(),
             in_stmt_expr: false,
+            greater_is_op: true,
+            pack_hint: false,
         };
         p.handle_events(0);
         p
@@ -572,25 +583,167 @@ impl<'a, 'sm> Parser<'a, 'sm> {
     /// `i`, without consuming or diagnosing: returns the index after it
     /// and the classification of its last component. `None` if there is
     /// no name at `i` or a qualifier does not name a scope.
-    pub(crate) fn scan_name(&self, mut i: usize) -> Option<(usize, NameClass, Symbol)> {
+    ///
+    /// A template-id `X<args>` ([temp.names]) is part of the name: its
+    /// arguments are skipped ([`Parser::skip_template_args`]) and a
+    /// class or alias template specialization classifies as
+    /// `NameClass::Type` (of the template decl, with a dependent
+    /// placeholder type: lookahead only asks whether it is a type). If
+    /// the list closes in the middle of a `>>`-like token, the returned
+    /// index is that token's.
+    pub(crate) fn scan_name(&self, i: usize) -> Option<(usize, NameClass, Symbol)> {
+        self.scan_name_at(i).map(|(end, _, c, n)| (end, c, n))
+    }
+
+    /// [`Parser::scan_name`], also saying whether the name's last
+    /// argument list closed on the first `>` of the `>>`-like token at the
+    /// returned index.
+    pub(crate) fn scan_name_at(&self, mut i: usize) -> Option<(usize, bool, NameClass, Symbol)> {
         let mut qual: Option<DeclId> = None;
         if self.tok_at(i).kind == TokKind::Punct(Punct::ColonColon) {
             qual = Some(self.s.ast.tu);
             i += 1;
         }
         loop {
+            let template_kw = qual.is_some() && self.kw_of(self.tok_at(i)) == Some(Kw::Template);
+            if template_kw {
+                i += 1;
+            }
             let name = self.ident_of(self.tok_at(i))?;
-            let class = self.s.classify_name(name, qual);
-            if self.tok_at(i + 1).kind == TokKind::Punct(Punct::ColonColon) {
+            let mut class = self.s.classify_name(name, qual);
+            let mut end = i + 1;
+            if (template_kw || is_template_class(class))
+                && self.tok_at(end).kind == TokKind::Punct(Punct::Less)
+            {
+                let (close, split) = self.skip_template_args(end)?;
+                class = type_if_args(class);
+                if split {
+                    return Some((close, true, class, name));
+                }
+                end = close + 1;
+            }
+            if self.tok_at(end).kind == TokKind::Punct(Punct::ColonColon) {
                 qual = Some(match class {
                     NameClass::Namespace(d) | NameClass::Type(_, d) => d,
+                    // `T::x::`: still dependent.
+                    NameClass::Dependent => qual?,
                     _ => return None,
                 });
-                i += 2;
+                i = end + 1;
                 continue;
             }
-            return Some((i + 1, class, name));
+            return Some((end, false, class, name));
         }
+    }
+
+    /// Skips the template argument list whose `<` is at index `i`
+    /// ([temp.names]/4): a `<` opens a nested list only after a name that
+    /// classifies as a template (or after `template`); `>` (or each `>` of
+    /// a `>>`-like token) closes the innermost list when no bracket is
+    /// open inside it. Returns the index of the token that closes the
+    /// list and whether it closed before that token's last character (a
+    /// `>>` with one list open, `>=`, `>>=`). `None` if a bracket closes
+    /// unbalanced, or a `;` or the end of input is reached first.
+    pub(crate) fn skip_template_args(&self, i: usize) -> Option<(usize, bool)> {
+        let mut stack = vec![Punct::Less];
+        let mut j = i + 1;
+        let mut after_template_kw = false;
+        loop {
+            let t = self.tok_at(j);
+            let templ_kw = after_template_kw;
+            after_template_kw = false;
+            match t.kind {
+                TokKind::Eof => return None,
+                TokKind::Identifier(_) if self.kw_of(t) == Some(Kw::Template) => {
+                    after_template_kw = true;
+                    j += 1;
+                    continue;
+                }
+                TokKind::Identifier(_) if self.kw_of(t).is_some() => {
+                    j += 1;
+                    continue;
+                }
+                TokKind::Identifier(_) if templ_kw => {
+                    // `template name<`: always a template-id.
+                    if self.tok_at(j + 1).kind == TokKind::Punct(Punct::Less) {
+                        stack.push(Punct::Less);
+                        j += 2;
+                    } else {
+                        j += 1;
+                    }
+                    continue;
+                }
+                TokKind::Identifier(_) | TokKind::Punct(Punct::ColonColon) => {
+                    if let Some((end, split, _, _)) = self.scan_name_at(j)
+                        && end > j
+                    {
+                        if !split {
+                            j = end;
+                            continue;
+                        }
+                        // The name's own list took the first `>` of
+                        // token `end`; the rest may close this one.
+                        if let Some(r) =
+                            close_angles(&mut stack, Self::punct_of(self.tok_at(end)), 1)
+                        {
+                            return Some((end, r));
+                        }
+                        j = end + 1;
+                        continue;
+                    }
+                    j += 1;
+                    continue;
+                }
+                _ => {}
+            }
+            let Some(p) = Self::punct_of(t) else {
+                j += 1;
+                continue;
+            };
+            match p {
+                Punct::LParen | Punct::LSquare | Punct::LBrace => stack.push(p),
+                Punct::RParen | Punct::RSquare | Punct::RBrace => {
+                    let want = match p {
+                        Punct::RParen => Punct::LParen,
+                        Punct::RSquare => Punct::LSquare,
+                        _ => Punct::LBrace,
+                    };
+                    if stack.last() != Some(&want) {
+                        return None;
+                    }
+                    stack.pop();
+                }
+                Punct::Semi => return None,
+                _ => {
+                    if let Some(r) = close_angles(&mut stack, Some(p), 0) {
+                        return Some((j, r));
+                    }
+                }
+            }
+            j += 1;
+        }
+    }
+
+    /// Consumes the first `>` of the current token (`>`, `>>`, `>=`,
+    /// `>>=`) as the end of a template argument list ([temp.names]/4):
+    /// the rest stays the current token. Returns the `>`'s location.
+    pub(crate) fn split_greater(&mut self) -> Loc {
+        let t = self.tok();
+        let rest = match Self::punct_of(t) {
+            Some(Punct::GreaterGreater) => Punct::Greater,
+            Some(Punct::GreaterEqual) => Punct::Equal,
+            Some(Punct::GreaterGreaterEqual) => Punct::GreaterEqual,
+            _ => return self.bump().span.lo,
+        };
+        let lo = t.span.lo;
+        let mid = lo.with_offset(1);
+        self.cur = Token {
+            kind: TokKind::Punct(rest),
+            span: Span::new(mid, t.span.hi),
+            flags: TokFlags::empty(),
+        };
+        self.prev_hi = mid;
+        lo
     }
 
     /// Parses an optional nested-name-specifier (`::`, `N::`, `N::M::`),
@@ -609,22 +762,133 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             self.bump();
             qual = Some((self.s.ast.tu, self.s.nns_global()));
         }
-        while let Some(name) = self.ident() {
-            if !self.peek_is(1, Punct::ColonColon) {
+        loop {
+            // `nns template name<args>::` ([temp.names]/5).
+            let template_kw = qual.is_some()
+                && self.kw_of(self.tok_at(self.pos)) == Some(Kw::Template)
+                && self.ident_of(self.tok_at(self.pos + 1)).is_some();
+            let k = usize::from(template_kw);
+            let Some(name) = self.ident_of(self.tok_at(self.pos + k)) else { break };
+            let next = self.tok_at(self.pos + k + 1).kind;
+            if !template_kw && next == TokKind::Punct(Punct::ColonColon) {
+                let loc = self.bump().span.lo;
+                self.bump();
+                qual = Some(self.s.act_on_nested_name_component(qual, name, loc).ok_or(())?);
+                continue;
+            }
+            if next != TokKind::Punct(Punct::Less) {
                 break;
             }
-            let loc = self.bump().span.lo;
-            self.bump();
-            let Some((ctx, spelled)) =
-                self.s.act_on_nested_name_spelled(qual.map(|q| q.0), name, loc)
-            else {
-                return Err(());
+            // `name < args > ::` with the list closing on a whole `>`.
+            match self.skip_template_args(self.pos + k + 1) {
+                Some((close, false))
+                    if self.tok_at(close + 1).kind == TokKind::Punct(Punct::ColonColon) => {}
+                _ => break,
+            }
+            let dep_prefix = qual.is_some_and(|(c, _)| self.s.is_dependent_ctx(c));
+            let class = if dep_prefix {
+                NameClass::Dependent
+            } else {
+                self.s.classify_name(name, qual.map(|q| q.0))
             };
-            let nns = self.s.nns_component(qual.map(|q| q.1), ctx, spelled);
-            qual = Some((ctx, nns));
+            if !template_kw && !is_template_class(class) {
+                if class != NameClass::Dependent {
+                    break;
+                }
+                let text = self.s.ast.symbols().as_str(name).to_owned();
+                let d = self
+                    .s
+                    .diag(
+                        DiagId::parse_missing_dependent_template_kw,
+                        self.tok_at(self.pos).span.lo,
+                    )
+                    .arg(text);
+                self.emit(d);
+            }
+            if template_kw {
+                self.bump();
+            }
+            let loc = self.bump().span.lo;
+            let Some((args, _, _)) = self.parse_template_arg_list() else { return Err(()) };
+            self.expect(Punct::ColonColon);
+            let prefix_nns = qual.map(|q| q.1);
+            qual = Some(match (class, qual) {
+                (NameClass::TypeTemplate(d), _) if !dep_prefix => {
+                    let tn = self.s.template_name_for(d);
+                    let Ok(kiln_sema::templ::actions::TemplateIdRef::Type(ty)) =
+                        self.s.act_template_id(tn, &args, loc, loc)
+                    else {
+                        return Err(());
+                    };
+                    self.s
+                        .act_on_nested_name_template_id(prefix_nns, d, ty, template_kw, loc)
+                        .ok_or(())?
+                }
+                (_, Some((c, pn))) if dep_prefix || class == NameClass::Dependent => {
+                    let list = self.s.ast.types.arg_list(&args);
+                    let ty = self.s.act_dependent_name(
+                        pn,
+                        name,
+                        Some(list),
+                        kiln_ast::types::TagKeyword::None,
+                    );
+                    self.s
+                        .act_on_nested_name_template_id(Some(pn), c, ty, template_kw, loc)
+                        .ok_or(())?
+                }
+                _ => {
+                    let text = self.s.ast.symbols().as_str(name).to_owned();
+                    let d = self.s.diag(DiagId::sema_no_template_named, loc).arg(text);
+                    self.emit(d);
+                    return Err(());
+                }
+            });
         }
         Ok(qual.map(|(ctx, nns)| Qualifier { ctx, nns, loc: start }))
     }
+}
+
+/// True for a name class that a following `<` makes a template-id.
+pub(crate) fn is_template_class(c: NameClass) -> bool {
+    matches!(
+        c,
+        NameClass::TypeTemplate(_)
+            | NameClass::VarTemplate(_)
+            | NameClass::FunctionTemplate(_)
+            | NameClass::Concept(_)
+    )
+}
+
+/// A class or alias template specialization scans as a type.
+fn type_if_args(c: NameClass) -> NameClass {
+    match c {
+        NameClass::TypeTemplate(d) => NameClass::Type(kiln_ast::QualType::DEPENDENT, d),
+        c => c,
+    }
+}
+
+/// Applies the `>` characters of token `p` from character `from` to the
+/// open-bracket `stack` of [`Parser::skip_template_args`]: each `>` closes
+/// an innermost `<`. `Some(split)` when the stack empties (`split`: before
+/// the token's last character).
+fn close_angles(stack: &mut Vec<Punct>, p: Option<Punct>, from: usize) -> Option<bool> {
+    let chars: &[bool] = match p {
+        Some(Punct::Greater) => &[true],
+        Some(Punct::GreaterGreater) => &[true, true],
+        Some(Punct::GreaterEqual) => &[true, false],
+        Some(Punct::GreaterGreaterEqual) => &[true, true, false],
+        _ => return None,
+    };
+    for (k, &is_gt) in chars.iter().enumerate().skip(from) {
+        if !is_gt || stack.last() != Some(&Punct::Less) {
+            return None;
+        }
+        stack.pop();
+        if stack.is_empty() {
+            return Some(k + 1 < chars.len());
+        }
+    }
+    None
 }
 
 /// `'p'` as clang quotes a token in "expected" diagnostics.

@@ -1170,6 +1170,26 @@ impl ExprArena {
         Ok(())
     }
 
+    /// Marks the `UnresolvedLookupExpr` `e` as using argument-dependent
+    /// lookup: an unqualified template-id followed by `(`
+    /// ([basic.lookup.argdep]/1, [temp.names]/3). Write-once.
+    pub fn set_adl(&mut self, e: ExprId) -> Result<(), AlreadySet> {
+        let n = &mut self.nodes[e.index() as usize];
+        assert!(
+            n.kind == ExprKind::UnresolvedLookupExpr,
+            "expected UnresolvedLookupExpr, found {:?}",
+            n.kind
+        );
+        if n.aux != 0 {
+            return Err(AlreadySet {
+                slot: "UnresolvedLookupExpr.adl",
+                existing: u32::from(n.aux),
+            });
+        }
+        n.aux = 1;
+        Ok(())
+    }
+
     /// Marks the glvalue `e` as designating a bit-field
     /// ([`ObjectKind::BitField`]): sema propagates the marking from a
     /// member access through `=`, compound assignment, prefix `++`/`--`,
@@ -1451,7 +1471,8 @@ impl ExprArena {
 
     /// The single operand of a unary operator, cast, `ParenExpr`,
     /// `ConstantExpr`, `MemberExpr` (its base), `MaterializeTemporaryExpr`,
-    /// `CXXBindTemporaryExpr` or `ExprWithCleanups`.
+    /// `CXXBindTemporaryExpr`, `ExprWithCleanups` or `PackExpansionExpr`
+    /// (its pattern).
     pub fn operand(&self, e: ExprId) -> ExprId {
         let n = self.get(e);
         assert!(
@@ -1465,6 +1486,7 @@ impl ExprArena {
                         | ExprKind::MaterializeTemporaryExpr
                         | ExprKind::CXXBindTemporaryExpr
                         | ExprKind::ExprWithCleanups
+                        | ExprKind::PackExpansionExpr
                 ),
             "{:?} has no single operand",
             n.kind
@@ -1549,11 +1571,15 @@ impl ExprArena {
             ExprKind::UnaryExprOrTypeTraitExpr if !n.has(ExprFlags::ARG_IS_TYPE) => {
                 v.extend(id(n.a));
             }
+            // `CXXDependentScopeMemberExpr` and `PackExpansionExpr` are
+            // template expressions (spec/sema-templates.md §2.4).
             ExprKind::CXXNoexceptExpr
             | ExprKind::CXXThrowExpr
             | ExprKind::CompoundLiteralExpr
-            | ExprKind::CXXDeleteExpr => v.extend(id(n.a)),
-            ExprKind::BinaryOperator | ExprKind::ArraySubscriptExpr => {
+            | ExprKind::CXXDeleteExpr
+            | ExprKind::CXXDependentScopeMemberExpr
+            | ExprKind::PackExpansionExpr => v.extend(id(n.a)),
+            ExprKind::BinaryOperator | ExprKind::ArraySubscriptExpr | ExprKind::CXXFoldExpr => {
                 v.extend(id(n.a));
                 v.extend(id(n.b));
             }
@@ -1582,7 +1608,12 @@ impl ExprArena {
                     v.extend(lists.iter::<ExprId>(p));
                 }
             }
-            ExprKind::BinaryConditionalOperator | ExprKind::OffsetOfExpr => {
+            // `CXXUnresolvedConstructExpr` and `ParenListExpr` are template
+            // expressions (spec/sema-templates.md §2.4).
+            ExprKind::BinaryConditionalOperator
+            | ExprKind::OffsetOfExpr
+            | ExprKind::CXXUnresolvedConstructExpr
+            | ExprKind::ParenListExpr => {
                 v.extend(lists.iter::<ExprId>(ListId::new(n.a)));
             }
             _ => {}
