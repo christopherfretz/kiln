@@ -171,6 +171,9 @@ asks whether the evaluation is manifestly constant-evaluated.
   manifestly constant-evaluated). The nested initialization of a variable
   read during an evaluation (`resolve_var`) is a constant initializer:
   it runs with `const_context` true and restores the outer value after.
+  A nested evaluation context (R-OVEN-1, a bridge callback's `evaluate`
+  or `try_fold`) sets the flag by its own entry point and restores the
+  enclosing context's value at its end, with the rest of the run state.
 - A call to the builtin (a `CallExpr` whose callee is a
   `BuiltinFnToFnPtr` cast of a builtin's name) compiles to
   `IsConstEval [dst]`, which writes the flag as a `bool`. Its `aux` is 1
