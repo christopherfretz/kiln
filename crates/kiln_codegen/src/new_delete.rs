@@ -169,7 +169,7 @@ impl Cg<'_> {
 
     /// Emits a call to an allocation or deallocation function (clang
     /// `EmitNewDeleteCall`): `vals` in parameter order.
-    fn emit_new_delete_call(
+    pub(crate) fn emit_new_delete_call(
         &mut self,
         d: DeclId,
         vals: &[CallArg],
@@ -296,7 +296,7 @@ impl Cg<'_> {
 
     /// The lvalue `e` has `AlignmentSource::Decl`: a named non-reference
     /// variable, or a `.` member or array element of one.
-    fn lvalue_from_decl(&self, e: ExprId) -> bool {
+    pub(crate) fn lvalue_from_decl(&self, e: ExprId) -> bool {
         let ast = self.ast;
         let n = *ast.exprs.get(e);
         match n.kind() {

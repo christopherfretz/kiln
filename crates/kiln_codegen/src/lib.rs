@@ -16,6 +16,7 @@
     clippy::unnecessary_wraps
 )]
 
+mod builtins;
 mod consts;
 mod expr;
 mod fir;
