@@ -182,9 +182,36 @@ impl Sema<'_, '_> {
             self.emit(msg);
             ok = false;
         }
-        if !ok {
+        if ok {
+            self.finalize_var_dtor(class, elem, loc);
+        }
+    }
+
+    /// The destructor variable `v` of (array of) class type `ty`
+    /// potentially invokes ([class.dtor]/15, clang's
+    /// `FinalizeVarWithDestructor`; spec/sema-class.md §4.8): it must be
+    /// accessible and not deleted, and is odr-used unless trivial. `loc`
+    /// is the variable's name.
+    pub(crate) fn check_var_destructor(&mut self, v: DeclId, ty: QualType, loc: Loc) {
+        if self.ast.decls.get(v).has(kiln_ast::decl::DeclFlags::INVALID)
+            || self.ast.types.is_reference(ty)
+            || self.is_dependent_type(ty)
+        {
             return;
         }
+        let elem = self.base_element(ty);
+        let Some(class) = self.element_class(elem) else { return };
+        let class = self.class_def(class);
+        let cflags = self.ast.decls.get(class).flags();
+        if cflags.contains(kiln_ast::decl::DeclFlags::INVALID)
+            || cflags.contains(kiln_ast::decl::DeclFlags::DEPENDENT_CTX)
+        {
+            return;
+        }
+        self.finalize_var_dtor(class, elem, loc);
+    }
+
+    fn finalize_var_dtor(&mut self, class: DeclId, elem: QualType, loc: Loc) {
         match self.select_special(class, SpecialKind::Dtor, Quals::NONE, Quals::NONE) {
             Selected::Found(m) => {
                 let msg = self.special_member_access(m, class, |s, prot| {

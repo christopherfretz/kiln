@@ -206,6 +206,22 @@ impl Sema<'_, '_> {
                 | ExprKind::CXXTypeidExpr => continue,
                 ExprKind::CXXThrowExpr | ExprKind::CXXNewExpr => return true,
                 ExprKind::CallExpr if self.callee_can_throw(exprs.callee(x)) => return true,
+                ExprKind::CXXConstructExpr | ExprKind::CXXTemporaryObjectExpr
+                    if !self.decl_is_nothrow(exprs.constructor(x)) =>
+                {
+                    return true;
+                }
+                ExprKind::CXXBindTemporaryExpr
+                    if self
+                        .ast
+                        .types
+                        .as_record(n.ty())
+                        .and_then(|r| self.ast.definition(r))
+                        .and_then(|r| self.ast.destructor(r))
+                        .is_some_and(|d| !self.decl_is_nothrow(d)) =>
+                {
+                    return true;
+                }
                 ExprKind::CXXDynamicCastExpr
                     if n.value_category() != ValueCategory::PRValue
                         && exprs.cast_kind(x) == CastKind::Dynamic =>
@@ -217,6 +233,14 @@ impl Sema<'_, '_> {
             stack.extend(exprs.children(x, &self.ast.lists));
         }
         false
+    }
+
+    /// Whether function `f`'s type has a non-throwing exception
+    /// specification (an unresolved one counts as throwing).
+    fn decl_is_nothrow(&self, f: kiln_ast::DeclId) -> bool {
+        let t = &self.ast.types;
+        let ty = self.ast.decls.get(f).ty().unwrap_or(QualType::ERROR);
+        t.proto(ty).is_some_and(|p| t.exc_spec(p).is_nothrow())
     }
 
     /// Whether calling through `callee` may throw: its (pointer to)

@@ -124,6 +124,10 @@ struct Index<'a> {
     templated: HashSet<&'a str>,
     /// The template declarations enclosing the walk's current node.
     template_depth: usize,
+    /// Some class has a non-trivial destructor, so a variable or
+    /// parameter may print clang's `destroyed` (read from the side
+    /// channel only then).
+    nontrivial_dtor: bool,
 }
 
 impl<'a> Index<'a> {
@@ -171,6 +175,13 @@ impl<'a> Index<'a> {
                 self.contexts.insert(id(n), n);
                 inner_dc = n;
             }
+        }
+        if k == "CXXRecordDecl"
+            && n.get("definitionData")
+                .and_then(|d| d.get("dtor"))
+                .is_some_and(|d| flag(d, "nonTrivial"))
+        {
+            self.nontrivial_dtor = true;
         }
         if side::CLASSES.contains(&k) {
             self.order.insert(id(n), self.order_names.len());
@@ -711,6 +722,9 @@ impl<'a> Printer<'a, '_> {
                     Some(other) => {
                         return Err(format!("clang-ast: default argument init style `{other}`"));
                     }
+                }
+                if self.destroyed(n)? {
+                    push_word(&mut l, "destroyed");
                 }
                 if flag(n, "isParameterPack") {
                     push_word(&mut l, "pack");
@@ -1422,7 +1436,20 @@ impl<'a> Printer<'a, '_> {
                 l.push_str(&v);
             }
         }
+        if self.destroyed(n)? {
+            push_word(&mut l, "destroyed");
+        }
         Ok(l)
+    }
+
+    /// clang's `destroyed` (`VarDecl::needsDestruction`), which only the
+    /// text dump shows.
+    fn destroyed(&mut self, n: &'a Json) -> Res<bool> {
+        if !self.ix.nontrivial_dtor {
+            return Ok(false);
+        }
+        let Some(&pos) = self.ix.order.get(id(n)) else { return Ok(false) };
+        Ok(self.side()?[pos].has_trailing_flag("destroyed"))
     }
 
     /// The `value=` of a constexpr variable, from the side channel (none

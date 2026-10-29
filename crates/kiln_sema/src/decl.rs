@@ -629,6 +629,17 @@ impl Sema<'_, '_> {
         d.with_note(note)
     }
 
+    /// clang's "passing argument to parameter ['p'] here" note for the
+    /// parameter declaration `p`.
+    pub(crate) fn param_decl_note(&self, p: DeclId) -> kiln_diag::Diag {
+        let n = self.ast.decls.get(p);
+        if n.name().is_empty() {
+            return self.diag(DiagId::note_parameter_here, n.loc());
+        }
+        self.diag(DiagId::note_parameter_named_here, n.loc())
+            .arg(self.decl_arg(p).trim_matches('\'').to_string())
+    }
+
     /// True if `q` is an undeduced plain `auto` (not `decltype(auto)`).
     fn is_plain_auto(&self, q: QualType) -> bool {
         q.quals().is_empty()
@@ -2096,6 +2107,9 @@ impl Sema<'_, '_> {
         // long as it does (spec/sema-class.md §5.4).
         if !self.is_err_expr(e) {
             self.extend_temporaries(v, e);
+            // [class.dtor]/15 (spec/sema-class.md §4.8).
+            let vty = self.ast.decls.get(v).ty().unwrap_or(QualType::ERROR);
+            self.check_var_destructor(v, vty, loc);
         }
         // An incomplete array takes its bound from the initializer.
         let ety = self.ast.exprs.get(e).ty();

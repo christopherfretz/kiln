@@ -167,6 +167,9 @@ impl Sema<'_, '_> {
             self.emit(msg);
             return e;
         }
+        if let Some(x) = self.construct_from_class(e, ty, ctx, at, crate::class::DeletedAs::Call) {
+            return x;
+        }
         match conv::implicit_convert(self, e, ty, ctx) {
             Ok(x) => x,
             Err(err) => {

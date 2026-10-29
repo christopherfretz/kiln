@@ -2184,6 +2184,19 @@ impl Sema<'_, '_> {
             if i < n {
                 let pt = conv::strip_cv(self, params[i]);
                 let to = if self.ast.types.is_reference(params[i]) { params[i] } else { pt };
+                if self.ast.types.as_record(to).is_some()
+                    && self.ast.types.as_record(self.ety(a)).is_some()
+                {
+                    let note = match pdecls.get(i) {
+                        Some(&p) => crate::class::DeletedAs::Param(self.param_decl_note(p)),
+                        None => crate::class::DeletedAs::Call,
+                    };
+                    let at = self.begin_loc(a);
+                    if let Some(x) = self.construct_from_class(a, to, ConvCtx::Argument, at, note) {
+                        conv_args.push(x);
+                        continue;
+                    }
+                }
                 match conv::implicit_convert(self, a, to, ConvCtx::Argument) {
                     Ok(x) => conv_args.push(x),
                     Err(err) => {
@@ -2546,6 +2559,35 @@ impl Sema<'_, '_> {
                 return self.explicit_cast(style, CastKind::ToVoid, e, ty, loc, rparen);
             }
             return self.bad_cast(style, e, ty, loc);
+        }
+        // [expr.static.cast]/4 with a class target: direct-initialization
+        // of a temporary from an object of the same or a derived class
+        // ([dcl.init.general]/16.6.2; clang's `ConstructorConversion`).
+        if style.allows_static()
+            && self.ast.types.as_record(ty).is_some()
+            && let Some(x) = {
+                let d = self
+                    .diag(DiagId::sema_ovl_deleted_conversion_in_cast, loc)
+                    .arg(style.select())
+                    .arg(self.ty_arg(self.ety(e)))
+                    .arg(self.ty_arg(ty));
+                self.construct_from_class(
+                    e,
+                    ty,
+                    ConvCtx::Cast,
+                    loc,
+                    crate::class::DeletedAs::Cast(d),
+                )
+            }
+        {
+            if self.is_err_expr(x) {
+                return x;
+            }
+            if x == e {
+                return self.explicit_cast(style, CastKind::NoOp, x, ty, loc, rparen);
+            }
+            let x = self.maybe_bind_temporary(x);
+            return self.explicit_cast(style, CastKind::ConstructorConversion, x, ty, loc, rparen);
         }
         if self.ast.types.as_record(ty).is_some() || self.ast.types.as_record(self.ety(e)).is_some()
         {

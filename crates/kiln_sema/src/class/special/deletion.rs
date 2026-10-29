@@ -403,7 +403,7 @@ impl Sema<'_, '_> {
     }
 
     /// Whether the first parameter of `f` is a reference to `const`.
-    fn copy_param_is_const_ref(&self, f: DeclId) -> bool {
+    pub(super) fn copy_param_is_const_ref(&self, f: DeclId) -> bool {
         let Some(&p) = self.param_decls(f).first() else { return false };
         let ty = self.ast.decls.get(p).ty().unwrap_or(QualType::ERROR);
         match self.ast.types.canonical_view(ty) {

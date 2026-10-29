@@ -979,6 +979,8 @@ diag_ids! {
     sema_access_base_ctor = Error (4) "{0:base class|inherited virtual base class} {1} has {3:private|protected} {2:default |copy |move |}constructor";
     sema_access_field_ctor = Error (3) "field of type {0} has {2:private|protected} {1:default |copy |move |}constructor";
     note_member_declared_at = Note (0) "member is declared here";
+    sema_ovl_deleted_conversion_in_cast = Error (3) "{0:const_cast|static_cast|reinterpret_cast|dynamic_cast|C-style cast|functional-style cast} from {1} to {2} uses deleted function";
+    note_ctor_candidate_deleted = Note (2) "candidate constructor{0:| (the implicit default constructor)| (the implicit copy constructor)| (the implicit move constructor)} has been {1:explicitly|implicitly} deleted";
 }
 
 impl DiagId {

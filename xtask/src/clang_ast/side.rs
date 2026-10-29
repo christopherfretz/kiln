@@ -1,6 +1,7 @@
 //! The side channel: clang's text dump (`-Xclang -ast-dump`) of the same
 //! compile, for what the JSON dump omits — the `value:` child of constexpr
-//! variables; a function's `trivial`, `noexcept-unevaluated` and friend
+//! variables and the `destroyed` word of variables and parameters; a
+//! function's `trivial`, `noexcept-unevaluated` and friend
 //! words and its `Overrides:` child — and to cross-check the function
 //! flags the normalizer derives from the JSON (`constexpr`, `consteval`,
 //! `implicit-inline`).
@@ -19,8 +20,8 @@ pub struct VNode {
     pub children: Vec<VNode>,
 }
 
-/// The declaration classes the side channel aligns: the function kinds
-/// and `VarDecl`.
+/// The declaration classes the side channel aligns: the function kinds,
+/// `VarDecl` and `ParmVarDecl`.
 pub const CLASSES: &[&str] = &[
     "FunctionDecl",
     "CXXMethodDecl",
@@ -28,9 +29,10 @@ pub const CLASSES: &[&str] = &[
     "CXXDestructorDecl",
     "CXXConversionDecl",
     "VarDecl",
+    "ParmVarDecl",
 ];
 
-/// A function or `VarDecl` line of the text dump.
+/// A function, `VarDecl` or `ParmVarDecl` line of the text dump.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TextDecl {
     /// One of [`CLASSES`].
@@ -49,7 +51,7 @@ pub struct TextDecl {
 impl TextDecl {
     /// Whether the line names declaration `name` (` name 'type'`).
     pub fn names(&self, name: &str) -> bool {
-        self.line.contains(&format!(" {name} '"))
+        name.is_empty() || self.line.contains(&format!(" {name} '"))
     }
 
     /// Whether the line carries the bare word `flag` outside its quoted
@@ -148,7 +150,7 @@ pub fn parse(text: &str) -> Result<Vec<TextDecl>, String> {
         let mut line = content.to_owned();
         let mut value = None;
         let mut overrides = None;
-        if class != "VarDecl" {
+        if !matches!(class, "VarDecl" | "ParmVarDecl") {
             // The `delete message:` and `Overrides:` children come first.
             while let Some(&(d, c)) = lines.get(i)
                 && d == depth + 1

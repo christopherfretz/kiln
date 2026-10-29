@@ -100,6 +100,11 @@ impl Sema<'_, '_> {
     /// even odr-used); then `f` is odr-used.
     pub(crate) fn mark_function_referenced(&mut self, f: DeclId, loc: Loc) {
         self.ast.decls.set_flags(f, DeclFlags::REFERENCED);
+        // clang's `MarkFunctionReferenced` resolves the exception
+        // specification even in unevaluated operands (for `noexcept`).
+        if !self.in_template() {
+            self.resolve_exception_spec(f);
+        }
         if self.unevaluated > 0 || self.in_template() {
             return;
         }

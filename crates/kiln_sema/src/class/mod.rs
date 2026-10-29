@@ -11,6 +11,7 @@
 //! those packages.
 
 mod access;
+mod construct;
 mod friend;
 mod member_expr;
 mod members;
@@ -127,7 +128,7 @@ impl ClassBuild {
 }
 
 pub(crate) use member_expr::MemberRef;
-pub(crate) use special::{SpecialState, SynthContext};
+pub(crate) use special::{DeletedAs, SpecialState, SynthContext};
 pub(crate) use temporary::BindingSite;
 pub(crate) use r#virtual::{AbstractUse, VirtualSite, ensure_virtuals};
 

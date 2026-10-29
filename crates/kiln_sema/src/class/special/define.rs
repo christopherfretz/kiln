@@ -75,6 +75,31 @@ pub(crate) enum InitEntity {
     Field(DeclId),
 }
 
+/// Where a constructor call's errors are reported (clang's
+/// `InitializationKind` and `InitializedEntity` locations).
+#[derive(Clone, Debug)]
+pub(crate) struct DiagSites {
+    /// The access error.
+    pub access: Loc,
+    /// The deleted-constructor error.
+    pub deleted: Loc,
+    /// How a deleted constructor is reported.
+    pub deleted_as: DeletedAs,
+}
+
+/// The form of the deleted-constructor error (clang's
+/// `InitializationSequence::Diagnose`).
+#[derive(Clone, Debug)]
+pub(crate) enum DeletedAs {
+    /// "call to deleted constructor", with the deletion notes.
+    Call,
+    /// As `Call`, plus a note on the parameter an argument initializes.
+    Param(Diag),
+    /// The error of an explicit cast ("... uses deleted function"),
+    /// with the candidate note.
+    Cast(Diag),
+}
+
 /// The state clang's `BaseAndFieldInfo` keeps while completing a
 /// ctor-initializer list.
 struct InitInfo {
@@ -748,6 +773,25 @@ impl Sema<'_, '_> {
         loc: Loc,
         entity: InitEntity,
     ) -> Option<ExprId> {
+        let sites = DiagSites { access: loc, deleted: loc, deleted_as: DeletedAs::Call };
+        self.construct_special_at(ty, class, k, arg, ck, loc, entity, sites)
+    }
+
+    /// [`Sema::construct_special`] with clang's separate locations for
+    /// the access and deletion errors (and the "passing argument to
+    /// parameter here" note of an argument).
+    #[allow(clippy::too_many_arguments, reason = "clang's InitializationSequence inputs")]
+    pub(crate) fn construct_special_at(
+        &mut self,
+        ty: QualType,
+        class: DeclId,
+        k: SpecialKind,
+        arg: Option<ExprId>,
+        ck: ConstructionKind,
+        loc: Loc,
+        entity: InitEntity,
+        sites: DiagSites,
+    ) -> Option<ExprId> {
         let rq = arg.map_or(Quals::NONE, |a| self.ast.types.effective_quals(self.ety(a)));
         match self.select_special(class, k, rq, Quals::NONE) {
             Selected::Found(m) => {
@@ -759,7 +803,7 @@ impl Sema<'_, '_> {
                 let class_ty = self.ast.types.canonical(self.class_type(class));
                 let msg = match entity {
                     InitEntity::Var => self.special_member_access(m, class, |s, prot| {
-                        s.diag(DiagId::sema_access_ctor, loc)
+                        s.diag(DiagId::sema_access_ctor, sites.access)
                             .arg(u8::from(prot))
                             .arg(s.ty_arg(class_ty))
                     }),
@@ -791,16 +835,41 @@ impl Sema<'_, '_> {
             Selected::Deleted(m) => {
                 let spec =
                     self.ast.decls.function(self.ast.first(m)).map(|x| x.spec).unwrap_or_default();
+                let (deleted_as, param_note) = match sites.deleted_as {
+                    DeletedAs::Call => (None, None),
+                    DeletedAs::Param(n) => (None, Some(n)),
+                    DeletedAs::Cast(d) => (Some(d), None),
+                };
+                if let Some(d) = deleted_as {
+                    let implicit = if self.ast.decls.get(m).has(DeclFlags::IMPLICIT) {
+                        match k {
+                            SpecialKind::DefaultCtor => 1u8,
+                            SpecialKind::CopyCtor => 2,
+                            _ => 3,
+                        }
+                    } else {
+                        0
+                    };
+                    let note = self
+                        .diag(DiagId::note_ctor_candidate_deleted, self.ast.decls.get(m).loc())
+                        .arg(implicit)
+                        .arg(u8::from(spec.defaulted() != Defaulted::No));
+                    self.emit(d.with_note(note));
+                    return None;
+                }
                 let mut msg = if spec.defaulted() == Defaulted::No {
-                    self.diag(DiagId::sema_call_deleted_ctor, loc)
+                    self.diag(DiagId::sema_call_deleted_ctor, sites.deleted)
                         .arg(self.ty_arg(ty))
                         .arg(self.delete_message_suffix(m))
                 } else {
-                    self.diag(DiagId::sema_call_implicitly_deleted_ctor, loc)
+                    self.diag(DiagId::sema_call_implicitly_deleted_ctor, sites.deleted)
                         .arg(k.index())
                         .arg(self.ty_arg(ty))
                 };
                 for n in self.deleted_function_notes(m, 0) {
+                    msg = msg.with_note(n);
+                }
+                if let Some(n) = param_note {
                     msg = msg.with_note(n);
                 }
                 self.emit(msg);

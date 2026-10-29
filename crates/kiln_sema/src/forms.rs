@@ -204,8 +204,9 @@ impl Sema<'_, '_> {
         self.recover_err(&kids, op_loc)
     }
 
-    /// `T()` ([expr.type.conv]/2): a value-initialized prvalue of
-    /// non-class type `T` (`void()` is a void prvalue).
+    /// `T()` ([expr.type.conv]/2): a value-initialized prvalue of type
+    /// `T` (`void()` is a void prvalue; a class `T` is constructed by
+    /// [`Sema::value_init_class_temporary`]).
     pub fn act_on_value_init_cast(&mut self, ty: QualType, loc: Loc, rparen: Loc) -> ExprId {
         if self.is_error_type(ty) {
             return self.recover(ty, &[], loc);
@@ -216,6 +217,9 @@ impl Sema<'_, '_> {
         // [class.abstract]/3 (clang `BuildCXXTypeConstructExpr`).
         if self.require_non_abstract_alloc(loc, ty) {
             return self.recover(QualType::ERROR, &[], loc);
+        }
+        if let Some(e) = self.value_init_class_temporary(ty, loc, rparen) {
+            return e;
         }
         if let Some(what) = self.temporary_unsupported(ty) {
             self.unsupported(&format!("value-initialization of {what}"), loc);

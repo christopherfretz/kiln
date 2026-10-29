@@ -868,6 +868,9 @@ impl<'a, W: io::Write> Dumper<'a, W> {
             if p.default_arg.is_some() {
                 self.line.push_str(" cinit");
             }
+            if n.ty().is_some_and(|t| needs_destruction(ast, t)) {
+                self.line.push_str(" destroyed");
+            }
             if p.flags & ParamData::PACK != 0 {
                 self.line.push_str(" pack");
             }
