@@ -1,8 +1,9 @@
 //! Declarations ([dcl], [namespace], [class.mem]; spec/parse.md §4).
 
+use kiln_ast::attr::AttrKind;
 use kiln_ast::decl::{EnumData, InitStyle};
 use kiln_ast::types::{ExcSpec, Quals, TagKeyword};
-use kiln_ast::{DeclId, QualType};
+use kiln_ast::{AttrId, DeclId, QualType};
 use kiln_diag::DiagId;
 use kiln_lex::{Punct, TokKind};
 use kiln_sema::declspec::SpecError;
@@ -11,6 +12,7 @@ use kiln_sema::{
     InitValue, Initializer, NameClass, Sign, StorageSpec, TagUse, Width,
 };
 use kiln_source::Loc;
+use kiln_source::symbol::Symbol;
 
 use crate::keywords::Kw;
 use crate::parser::Parser;
@@ -125,6 +127,9 @@ impl Parser<'_, '_> {
                 self.unsupported("asm declarations", loc);
                 self.skip_unsupported_declaration();
             }
+            (Some(Punct::LSquare), _) if self.at_attributed_using() => {
+                self.parse_attributed_using();
+            }
             _ => {
                 self.parse_simple_declaration(DeclaratorContext::File, true);
             }
@@ -170,9 +175,13 @@ impl Parser<'_, '_> {
         let inline = self.eat_kw(Kw::Inline).is_some();
         let ns_loc = self.bump().span.lo;
         self.skip_attributes();
-        if self.ident().is_some() && self.peek_is(1, Punct::Equal) {
-            self.unsupported("namespace aliases", ns_loc);
-            self.skip_to_semi();
+        if let Some(name) = self.ident()
+            && self.peek_is(1, Punct::Equal)
+        {
+            let _ = ns_loc;
+            let nl = self.bump().span.lo;
+            self.bump();
+            let _ = self.parse_namespace_alias(name, nl);
             return;
         }
         let mut names = Vec::new();
@@ -229,9 +238,34 @@ impl Parser<'_, '_> {
         self.s.act_on_finish_linkage_spec(ls);
     }
 
-    /// `using namespace N;`, `using X = T;`, using-declarations
-    /// (unsupported). Returns the declarations.
+    /// The rest of `namespace name = [qual] target;` after the `=`
+    /// ([namespace.alias]).
+    pub(crate) fn parse_namespace_alias(&mut self, name: Symbol, name_loc: Loc) -> Option<DeclId> {
+        let Ok(qual) = self.parse_nested_name_nns() else {
+            self.skip_to_semi();
+            return None;
+        };
+        let Some(target) = self.ident() else {
+            self.error_here(DiagId::parse_expected_namespace_name);
+            self.skip_to_semi();
+            return None;
+        };
+        let tl = self.bump().span.lo;
+        let d = self.s.act_on_namespace_alias(name, name_loc, qual, target, tl);
+        self.expect_semi_after("namespace name");
+        d
+    }
+
+    /// `using namespace N;`, `using X = T;`, `using enum E;` and
+    /// using-declarations ([namespace.udir], [dcl.typedef],
+    /// [enum.udecl], [namespace.udecl]). Returns the declarations.
     pub(crate) fn parse_using(&mut self) -> Vec<DeclId> {
+        self.parse_using_attrs(&[])
+    }
+
+    /// [`Parser::parse_using`] with the attribute-specifier-seq written
+    /// before `using` (`leading`).
+    pub(crate) fn parse_using_attrs(&mut self, leading: &[AttrId]) -> Vec<DeclId> {
         let loc = self.bump().span.lo;
         if self.eat_kw(Kw::Namespace).is_some() {
             let Ok(qual) = self.parse_nested_name() else {
@@ -271,13 +305,83 @@ impl Parser<'_, '_> {
             self.expect_semi_after("alias declaration");
             return vec![d];
         }
-        if self.at_kw(Kw::Enum) {
-            self.unsupported("'using enum'", loc);
-        } else {
-            self.unsupported("using-declarations", loc);
+        if self.eat_kw(Kw::Enum).is_some() {
+            return self.parse_using_enum();
         }
-        self.skip_to_semi();
-        Vec::new()
+        let if_exists = self.has_using_if_exists(leading);
+        self.parse_using_declaration(loc, if_exists)
+    }
+
+    fn has_using_if_exists(&self, attrs: &[AttrId]) -> bool {
+        attrs.iter().any(|&a| self.s.ast.attrs.get(a).kind == AttrKind::USING_IF_EXISTS)
+    }
+
+    /// `using enum [qual] name;` after `enum` ([enum.udecl]).
+    fn parse_using_enum(&mut self) -> Vec<DeclId> {
+        let Ok(qual) = self.parse_nested_name_nns() else {
+            self.skip_to_semi();
+            return Vec::new();
+        };
+        let Some(name) = self.ident() else {
+            self.error_here(DiagId::parse_using_enum_requires_name);
+            self.skip_to_semi();
+            return Vec::new();
+        };
+        let nl = self.bump().span.lo;
+        let class = self.s.classify_name(name, qual.map(|q| q.ctx));
+        let d = self.s.act_on_using_enum(qual, class, name, nl);
+        self.expect_semi_after("using-enum declaration");
+        d.into_iter().collect()
+    }
+
+    /// `using-declarator-list ;` ([namespace.udecl]): each declarator is
+    /// `[typename] nested-name-specifier unqualified-id [...]`, here
+    /// optionally followed by an attribute-specifier-seq (a clang
+    /// extension for `using_if_exists`).
+    fn parse_using_declaration(&mut self, using_loc: Loc, leading_if_exists: bool) -> Vec<DeclId> {
+        let mut out = Vec::new();
+        loop {
+            if let Some(l) = self.eat_kw(Kw::Typename) {
+                self.unsupported("'typename' using-declarators", l);
+                self.skip_to_semi();
+                return out;
+            }
+            let Ok(qual) = self.parse_nested_name_nns() else {
+                self.skip_to_semi();
+                return out;
+            };
+            let Some(name) = self.ident() else {
+                if self.at_kw(Kw::Operator) || self.at(Punct::Tilde) {
+                    let l = self.loc();
+                    self.unsupported("this kind of name in a using-declarator", l);
+                } else {
+                    self.error_here(DiagId::parse_expected_unqualified_id);
+                }
+                self.skip_to_semi();
+                return out;
+            };
+            let nl = self.bump().span.lo;
+            if let Some(l) = self.eat(Punct::Ellipsis) {
+                self.unsupported("pack expansions in using-declarations", l);
+                self.skip_to_semi();
+                return out;
+            }
+            let mut attrs = Vec::new();
+            if self.at_cxx11_attr() {
+                let at = self.peek(2).span.lo;
+                self.s.error(DiagId::parse_cxx11_attr_placement, at);
+            }
+            self.parse_attributes(&mut attrs);
+            let if_exists = leading_if_exists || self.has_using_if_exists(&attrs);
+            if let Some(d) = self.s.act_on_using_declarator(using_loc, qual, name, nl, if_exists) {
+                out.push(d);
+            }
+            if self.eat(Punct::Comma).is_none() {
+                break;
+            }
+        }
+        self.expect_semi_after("using declaration");
+        out
     }
 
     /// Expects `;` after `what` (`expected ';' after {what}`).
@@ -639,6 +743,10 @@ impl Parser<'_, '_> {
             }
             (_, Some(Kw::Using)) => {
                 self.parse_using();
+                return;
+            }
+            (Some(Punct::LSquare), _) if self.at_attributed_using() => {
+                self.parse_attributed_using();
                 return;
             }
             (_, Some(Kw::Template)) => {

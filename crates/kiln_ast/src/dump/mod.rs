@@ -41,7 +41,7 @@ use crate::expr::{
 };
 use crate::ids::{AttrId, DeclId, ExprId, ListId, QualType, RawId, StmtId};
 use crate::stmt::{IfKind, StmtKind};
-use crate::types::{PrintOptions, write_type};
+use crate::types::{PrintOptions, write_nns, write_type};
 
 /// Selects the declarations [`dump`] prints as separate trees (clang's
 /// `-ast-dump-filter`, spec/ast-dump.md §1). A declaration matches when
@@ -876,6 +876,26 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                 if first != d {
                     self.line.push_str(" original ");
                     self.decl_ref(first);
+                }
+            }
+            DeclKind::Using => {
+                self.line.push(' ');
+                if let Some(q) = ast.using_qualifier(d) {
+                    write_nns(&ast.types, &self.names, q, &mut self.line);
+                }
+                self.names.write_name(d, &mut self.line);
+            }
+            DeclKind::NamespaceAlias => {
+                self.name(d);
+                if let Some(t) = ast.using_target(d) {
+                    self.line.push(' ');
+                    self.decl_ref(t);
+                }
+            }
+            DeclKind::UsingShadow | DeclKind::UsingEnum | DeclKind::UsingDirective => {
+                if let Some(t) = ast.using_target(d) {
+                    self.line.push(' ');
+                    self.decl_ref(t);
                 }
             }
             DeclKind::LinkageSpec => {

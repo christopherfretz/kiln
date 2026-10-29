@@ -648,11 +648,21 @@ impl Sema<'_, '_> {
             self.emit(msg);
             return self.recover_err(&[], loc);
         }
-        self.build_decl_ref(d, loc)
+        if self.kind_of(d) == DeclKind::UnresolvedUsingIfExists {
+            self.diag_unresolved_using(d, loc);
+            return self.recover_err(&[], loc);
+        }
+        self.build_decl_ref_via(d, loc, found.shadow(0))
     }
 
     /// A `DeclRefExpr` naming the value `d`.
     pub fn build_decl_ref(&mut self, d: DeclId, loc: Loc) -> ExprId {
+        self.build_decl_ref_via(d, loc, None)
+    }
+
+    /// A `DeclRefExpr` naming the value `d`, found through the
+    /// using-shadow `shadow` when that is set (clang's `FoundDecl`).
+    pub fn build_decl_ref_via(&mut self, d: DeclId, loc: Loc, shadow: Option<DeclId>) -> ExprId {
         let n = *self.ast.decls.get(d);
         match n.kind() {
             DeclKind::Var | DeclKind::ParmVar | DeclKind::Function | DeclKind::EnumConstant => {}
@@ -688,7 +698,12 @@ impl Sema<'_, '_> {
         self.ast.decls.set_flags(d, DeclFlags::REFERENCED);
         self.diagnose_deprecated(d, loc);
         let nou = if self.unevaluated > 0 { NonOdrUse::Unevaluated } else { NonOdrUse::None };
-        let e = self.builder().decl_ref(d, ty, loc, None, nou, ExprFlags::NONE);
+        let extra = shadow.map(|s| kiln_ast::expr::DeclRefExtra {
+            qualifier: None,
+            template_args: None,
+            found_decl: Some(s),
+        });
+        let e = self.builder().decl_ref(d, ty, loc, extra, nou, ExprFlags::NONE);
         if self.unevaluated == 0 {
             match n.kind() {
                 DeclKind::Function => {
