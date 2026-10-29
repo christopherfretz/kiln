@@ -80,6 +80,8 @@ pub(crate) struct Func {
     /// The register of the implicit object parameter of a non-static
     /// member function (after the result slot, before the parameters).
     pub this_reg: Option<u32>,
+    /// Its class (the type `this` points to; for the call-stack notes).
+    pub this_ty: Option<OTy>,
 }
 
 /// The source of a faulting instruction.
@@ -179,7 +181,7 @@ pub(crate) fn float_of(c: u32) -> FloatKind {
 }
 
 /// Strips parentheses.
-fn skip_parens(ast: &kiln_ast::Ast, mut e: ExprId) -> ExprId {
+pub(crate) fn skip_parens(ast: &kiln_ast::Ast, mut e: ExprId) -> ExprId {
     loop {
         match ast.exprs.get(e).kind() {
             ExprKind::ParenExpr => e = ast.exprs.operand(e),
@@ -221,6 +223,7 @@ impl Oven {
             params: Vec::new(),
             memo: false,
             this_reg: None,
+            this_ty: None,
         });
         self.func_map.insert(d, i);
         i
@@ -279,6 +282,7 @@ impl Oven {
             params: Vec::new(),
             memo: false,
             this_reg: None,
+            this_ty: None,
         });
         let mut c = Compiler::new(self, b);
         let entry = c.here();
@@ -391,8 +395,12 @@ impl Oven {
         if matches!(ret, RetKind::Sret(_)) {
             c.reg();
         }
+        let mut this_ty = None;
         if class::has_this(c.b.ast(), def) {
             c.this_reg = Some(c.reg());
+            let ast = c.b.ast();
+            let cls = ast.decls.get(def).ctx().and_then(|k| ast.decls.get(ast.first(k)).ty());
+            this_ty = cls.map(|q| c.ty(q));
         }
         let mut infos = Vec::with_capacity(params.len());
         for &p in &params {
@@ -447,6 +455,7 @@ impl Oven {
         f.params = infos;
         f.memo = memo;
         f.this_reg = this_reg;
+        f.this_ty = this_ty;
     }
 }
 
@@ -600,14 +609,19 @@ impl<'a> Compiler<'a> {
                 | ExprKind::ArraySubscriptExpr
                 | ExprKind::ConditionalOperator
                 | ExprKind::MaterializeTemporaryExpr => ExprId::new(n.a()),
-                ExprKind::CallExpr => ast.exprs.callee(e),
+                ExprKind::CallExpr | ExprKind::CXXMemberCallExpr => ast.exprs.callee(e),
+                ExprKind::CXXBindTemporaryExpr | ExprKind::ExprWithCleanups => ast.exprs.operand(e),
                 ExprKind::BinaryConditionalOperator => {
                     ast.exprs.binary_conditional_operands(e, &ast.lists)[0]
                 }
                 ExprKind::ImplicitCastExpr | ExprKind::ConstantExpr => ast.exprs.operand(e),
                 ExprKind::MemberExpr => {
                     let base = ast.exprs.operand(e);
-                    if ast.exprs.get(base).loc() == n.loc() {
+                    // An implicit `this` has no source of its own; an
+                    // implicit anonymous-member step does (its base).
+                    if ast.exprs.get(base).kind() == ExprKind::CXXThisExpr
+                        && ast.exprs.this_is_implicit(base)
+                    {
                         return n.loc();
                     }
                     base

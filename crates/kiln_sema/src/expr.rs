@@ -29,6 +29,8 @@ use crate::init::InitList;
 use crate::literal;
 use crate::lookup::LookupKind;
 
+mod ref_cast;
+
 /// The spelling of an explicit type conversion ([expr.cast],
 /// [expr.type.conv], [expr.static.cast], ...): selects the node kind and
 /// the conversions tried.
@@ -319,6 +321,7 @@ impl Sema<'_, '_> {
                 | ExprKind::BinaryConditionalOperator
                 | ExprKind::ArraySubscriptExpr
                 | ExprKind::CallExpr
+                | ExprKind::CXXMemberCallExpr
                 | ExprKind::MemberExpr => true,
                 ExprKind::UnaryOperator => self.ast.exprs.unary_op(e).is_postfix(),
                 _ => false,
@@ -2689,8 +2692,7 @@ impl Sema<'_, '_> {
             return self.recover(ty, &[e], loc);
         }
         if self.ast.types.is_reference(ty) {
-            self.unsupported("casts to reference types", loc);
-            return self.recover_err(&[e], loc);
+            return self.ref_cast(style, ty, e, loc, rparen);
         }
         // [expr.static.cast]/6: any expression can be converted to cv void.
         if self.ast.types.is_void(ty) {
@@ -2818,6 +2820,13 @@ impl Sema<'_, '_> {
             && let Some(ck) = self.static_inverse(xt, to, style)
         {
             return self.explicit_cast(style, ck, x, to, loc, rparen);
+        }
+        // static_cast: a pointer to a base class as a pointer to a derived
+        // class ([expr.static.cast]/11).
+        if style.allows_static()
+            && let Some(c) = self.static_downcast(style, x, to, loc, rparen)
+        {
+            return c;
         }
         // reinterpret_cast ([expr.reinterpret.cast]).
         if style.allows_reinterpret()

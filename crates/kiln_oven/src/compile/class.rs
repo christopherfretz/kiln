@@ -10,7 +10,7 @@
 //! by `Op::Downcast`.
 
 use kiln_ast::decl::{CtorInit, CtorInitKind, DeclKind, DefinitionBits, FnStorage};
-use kiln_ast::expr::{CastKind, ExprFlags, ExprKind, StorageDuration};
+use kiln_ast::expr::{CastKind, ExprFlags, ExprKind, StorageDuration, UnaryOp};
 use kiln_ast::{Ast, DeclId, ExprId, QualType, TypeId};
 use kiln_source::Loc;
 
@@ -19,6 +19,10 @@ use super::{Access, Compiler, Local, Place, skip_parens};
 use crate::kbc::{Op, cmp, int_aux};
 use crate::mem::Origin;
 use crate::ty::{OTy, TyKind};
+
+/// A member call through a null object pointer.
+const NULL_MEMBER_CALL: &str =
+    "member call on dereferenced null pointer is not allowed in a constant expression";
 
 /// What a call calls.
 #[derive(Clone, Copy)]
@@ -689,6 +693,23 @@ impl Compiler<'_> {
             let oty = self.ety(obj);
             self.materialize(obj, oty)
         };
+        let deref = {
+            let ast = self.ast();
+            let o = skip_parens(ast, obj);
+            ast.exprs.get(o).kind() == ExprKind::UnaryOperator
+                && ast.exprs.unary_op(o) == UnaryOp::Deref
+        };
+        if arrow || deref {
+            // [expr.ref]/8 (clang's `CSK_MemberCall` check): the object
+            // expression designates no object.
+            let m = self.next;
+            let c = self.reg();
+            self.emit(Op::PtrToBool, 0, &[c, this]);
+            let ok = self.jmp_if(c, true);
+            self.trap(callee, NULL_MEMBER_CALL);
+            self.patch_here(ok);
+            self.next = m;
+        }
         self.call_frame(e, Callee::Direct(md), rty, sret, Some(this), &args, &refs, Some(loc))
     }
 

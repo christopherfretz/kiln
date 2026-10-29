@@ -4,13 +4,15 @@
 
 use std::fmt::Write as _;
 
+use kiln_ast::decl::DeclKind;
 use kiln_ast::dump::AstNames;
-use kiln_ast::expr::ExprKind;
+use kiln_ast::expr::{ExprFlags, ExprKind};
+use kiln_ast::types::TypeNames as _;
 use kiln_ast::{Ast, DeclId, ExprId, QualType};
 use kiln_source::Loc;
 
 use crate::arith::{self, FloatErr, IntErr};
-use crate::compile::{FState, Site};
+use crate::compile::{FState, Site, skip_parens};
 use crate::failure::Note;
 use crate::kbc::{Op, ak};
 use crate::mem::{MemFault, Origin, Ptr, Sp, flags};
@@ -236,6 +238,7 @@ impl Oven {
             }
             let func = &self.funcs[fr.func as usize];
             let mut s = String::from("in call to '");
+            self.object_prefix(ast, fr.call_pc as usize, fr.fb as usize, fr.func, &mut s);
             if let Some(d) = func.decl {
                 AstNames::new(ast).write_name(d, &mut s);
             }
@@ -258,6 +261,47 @@ impl Oven {
             s.push_str(")'");
             notes.push(Note::new(loc, s));
         }
+    }
+
+    /// The implicit object of a member call in a call-stack note (clang's
+    /// `describeCall`): the object expression of a member call
+    /// expression (`p.`, `pp->`, `P(1).`), otherwise (a destructor) the
+    /// object's lvalue (`r.`). Constructors and static members have none.
+    fn object_prefix(&self, ast: &Ast, call_pc: usize, fb: usize, func: u32, s: &mut String) {
+        let func = &self.funcs[func as usize];
+        let (Some(d), Some(tr)) = (func.decl, func.this_reg) else { return };
+        if ast.decls.get(d).kind() == DeclKind::CXXConstructor {
+            return;
+        }
+        if let Some(ce) = self.site(call_pc).e
+            && ast.exprs.get(ce).kind() == ExprKind::CXXMemberCallExpr
+        {
+            let callee = ast.exprs.callee(ce);
+            let callee = skip_parens(ast, callee);
+            if ast.exprs.get(callee).kind() == ExprKind::MemberExpr {
+                // An implicit `this` prints too (`this->f(0)`).
+                ast.write_expr(ast.exprs.operand(callee), s);
+                s.push_str(if ast.exprs.get(callee).has(ExprFlags::ARROW) { "->" } else { "." });
+                return;
+            }
+        }
+        let v = self.regs[fb + tr as usize] as u64;
+        let Some(t) = func.this_ty else { return };
+        // A temporary prints as the expression that created it (`P(9).~P()`).
+        let p = Ptr::decode(v);
+        if v != 0
+            && !p.is_fn()
+            && p.off == 0
+            && let Some(a) = self.alloc_any(p)
+            && let Origin::Temp(x) = a.origin
+        {
+            ast.write_expr(x, s);
+            s.push('.');
+            return;
+        }
+        let r = self.ptr_string(ast, v, t);
+        s.push_str(r.strip_prefix('&').unwrap_or(&r));
+        s.push('.');
     }
 
     /// Appends the value of a register of type `t` (clang's
