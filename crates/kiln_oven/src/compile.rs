@@ -24,7 +24,10 @@ use crate::mem::{Origin, fn_ptr};
 use crate::ty::{OTy, Scal, TyKind, eval_int};
 use crate::{Oven, SemaBridge};
 
+mod builtins;
 mod new_delete;
+
+pub(crate) use builtins::designator_type;
 
 /// `Func::entry` of a function not compiled yet.
 pub(crate) const UNCOMPILED: u32 = u32::MAX;
@@ -3113,6 +3116,13 @@ impl Compiler<'_> {
                 return self.fn_lv(x0);
             }
             return self.lv_mem(x, Access::Addr);
+        }
+        // Library builtins (spec/oven.md "Builtins").
+        if let Some(d) = direct
+            && let Some(bid) = ast.decls.builtin_id(d)
+            && let Some(r) = self.builtin_call(e, bid, &args)
+        {
+            return r;
         }
         // `std::allocator<T>::allocate`/`deallocate` (spec/oven.md
         // "Transient allocation": deferred to the templates wave, so this

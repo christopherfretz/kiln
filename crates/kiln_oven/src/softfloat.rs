@@ -389,3 +389,64 @@ mod tests {
         assert_eq!(to_f64(FloatKind::X87Extended, third), 1.0 / 3.0);
     }
 }
+
+/// The IEEE class of a value (APFloat's `fltCategory`, with
+/// `isDenormal` split out of the normal category).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum Class {
+    Zero,
+    Subnormal,
+    Normal,
+    Inf,
+    NaN,
+}
+
+/// The class of `a` as APFloat reads it: an x87 value whose explicit
+/// integer bit disagrees with its exponent (pseudo-NaN, pseudo-infinity,
+/// unnormal) is a NaN; a pseudo-denormal (integer bit set, exponent
+/// zero) is normal.
+pub(crate) fn classify(kind: FloatKind, a: u128) -> Class {
+    let f = Fmt::of(kind);
+    let ef = (a >> f.mfield()) & f.emask();
+    let field = a & ((1u128 << f.mfield()) - 1);
+    let int_bit = 1u128 << (f.p - 1);
+    if ef == f.emask() {
+        let frac = if f.explicit { field ^ int_bit } else { field };
+        return if frac == 0 { Class::Inf } else { Class::NaN };
+    }
+    if ef == 0 {
+        return match field {
+            0 => Class::Zero,
+            _ if f.explicit && field & int_bit != 0 => Class::Normal,
+            _ => Class::Subnormal,
+        };
+    }
+    if f.explicit && field & int_bit == 0 { Class::NaN } else { Class::Normal }
+}
+
+/// Positive infinity.
+pub(crate) fn inf(kind: FloatKind) -> u128 {
+    pack_inf(Fmt::of(kind), false)
+}
+
+/// APFloat's `makeNaN(SNaN, Negative = false, fill)`: the low
+/// `precision - 1` bits of `fill`, the quiet bit set (or, signaling,
+/// cleared, with the next bit set when nothing else is), and for x87 the
+/// integer bit (a NaN, not a pseudo-NaN).
+pub(crate) fn make_nan(kind: FloatKind, fill: u128, signaling: bool) -> u128 {
+    let f = Fmt::of(kind);
+    let quiet = 1u128 << (f.p - 2);
+    let mut sig = fill & ((1u128 << (f.p - 1)) - 1);
+    if signaling {
+        sig &= !quiet;
+        if sig == 0 {
+            sig = quiet >> 1;
+        }
+    } else {
+        sig |= quiet;
+    }
+    if f.explicit {
+        sig |= 1 << (f.p - 1);
+    }
+    f.emask() << f.mfield() | sig
+}

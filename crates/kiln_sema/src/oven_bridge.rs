@@ -16,7 +16,7 @@ use kiln_ast::types::RecordLayout;
 use kiln_ast::{Ast, ConstValueId, DeclId, ExprId, StmtId};
 use kiln_diag::{Diag, DiagEngine};
 use kiln_oven::{Budget, EvalContext, EvalFailure, Oven, SemaBridge, Subobject, SubobjectId};
-use kiln_source::Span;
+use kiln_source::{Loc, Span};
 
 use crate::Sema;
 
@@ -151,6 +151,22 @@ impl<'a, 'sm> Sema<'a, 'sm> {
     /// `v` printed for a note ("expression evaluates to '…'").
     pub(crate) fn const_display(&self, v: ConstValueId) -> String {
         self.ast.consts.display(v, &self.ast.strings, &self.ast, &PrintOptions::DEFAULT)
+    }
+
+    /// The location of the diagnostic reporting the failed evaluation
+    /// `f`, normally `loc`. As clang (`VerifyIntegerConstantExpression`,
+    /// `CheckCompleteVariableDeclaration`, `CheckConvertedConstantExpression`),
+    /// a lone "subexpression not valid" note adds nothing but a location:
+    /// it is dropped and the diagnostic points where it did.
+    pub(crate) fn fold_lone_invalid(f: &mut EvalFailure, loc: Loc) -> Loc {
+        match &f.notes[..] {
+            [n] if n.msg == "subexpression not valid in a constant expression" => {
+                let at = n.loc;
+                f.notes.clear();
+                at
+            }
+            _ => loc,
+        }
     }
 
     /// `d` with the notes explaining the failed evaluation `f` (the

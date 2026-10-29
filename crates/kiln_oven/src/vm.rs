@@ -18,6 +18,10 @@ use crate::memo::{MAX_ARGS, MemoKey, MemoVal};
 use crate::ty::{OTy, TyKind};
 use crate::{Oven, SemaBridge};
 
+mod builtins;
+
+pub(crate) use builtins::BiFault;
+
 /// `Frame::mark` of a frame whose memory is not released on return.
 pub(crate) const BOTTOM: u64 = u64::MAX;
 /// `Frame::call_pc` of a bottom frame.
@@ -178,6 +182,8 @@ pub(crate) enum Fault {
         signed: bool,
         k: u64,
     },
+    /// A library builtin's own failure.
+    Bi(BiFault),
 }
 
 /// Why an array `new` bound is erroneous ([expr.new]/8).
@@ -686,6 +692,15 @@ impl Oven {
                         fail!(Fault::Mem { f, ak: ak::READ, ty: pointee, p: raw });
                     }
                     pc += 3;
+                }
+                Op::Builtin => {
+                    let (a, bb, c) = (reg!(1), reg!(2), reg!(3));
+                    let (t1, t2) = (arg!(4) as u32, arg!(5) as u32);
+                    match self.builtin(b.ast(), aux, a, bb, c, t1, t2) {
+                        Ok(v) => reg!(0) = v,
+                        Err(f) => fail!(f),
+                    }
+                    pc += 7;
                 }
                 Op::ScopeEnter => {
                     reg!(0) = u128::from(self.mem.mark());
