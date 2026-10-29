@@ -227,3 +227,68 @@ impl Sema<'_, '_> {
         }
     }
 }
+
+impl Sema<'_, '_> {
+    /// `throw` / `throw e` ([expr.throw]): a prvalue of type `void`. The
+    /// exception object's type is `e`'s with arrays and functions decayed
+    /// and top-level cv removed ([expr.throw]/3); it must not be (a
+    /// pointer to) an incomplete type other than cv `void`
+    /// ([expr.throw]/2, clang's `CheckCXXThrowOperand`). The operand is
+    /// copy-initialized into it after the implicit move
+    /// ([class.copy.elision]/3; kiln has no try-blocks or lambdas yet, so
+    /// every local is in scope). `loc` is the `throw` keyword.
+    pub fn act_on_throw(&mut self, operand: Option<ExprId>, loc: Loc) -> ExprId {
+        if !self.exceptions {
+            self.error(DiagId::sema_throw_disabled, loc);
+        }
+        let Some(e) = operand else {
+            return self.builder().throw_expr(None, QualType::VOID, loc);
+        };
+        if self.is_err_expr(e) {
+            return self.recover(QualType::VOID, &[e], loc);
+        }
+        let ety = self.ety(e);
+        let obj = if self.ast.types.is_array(ety) {
+            let elem = self.ast.types.element(ety).unwrap_or(QualType::ERROR);
+            self.ast.types.pointer_to(elem)
+        } else if self.ast.types.is_function(ety) {
+            self.ast.types.pointer_to(ety)
+        } else {
+            conv::strip_cv(self, ety)
+        };
+        let (checked, pointer) = match self.ast.types.pointee(obj) {
+            Some(p) if self.ast.types.is_pointer(obj) => (p, true),
+            _ => (obj, false),
+        };
+        if !(pointer && self.ast.types.is_void(checked))
+            && !self.ast.types.is_function(checked)
+            && !self.is_complete(checked)
+        {
+            let id = if pointer {
+                DiagId::sema_throw_incomplete_ptr
+            } else {
+                DiagId::sema_throw_incomplete
+            };
+            let msg = self.diag(id, loc).arg(self.ty_arg(checked));
+            self.emit(self.incomplete_note(msg, checked));
+            return self.recover(QualType::VOID, &[e], loc);
+        }
+        let moved = self.implicit_move(e);
+        let init = self.convert_for_init(moved, obj, ConvCtx::Initialization);
+        if self.is_err_expr(init) {
+            return self.recover(QualType::VOID, &[init], loc);
+        }
+        self.builder().throw_expr(Some(init), QualType::VOID, loc)
+    }
+
+    /// True if `e` is a (possibly parenthesized) throw-expression
+    /// ([expr.cond]/2.1).
+    pub(crate) fn is_throw_expr(&self, mut e: ExprId) -> bool {
+        loop {
+            match self.ast.exprs.get(e).kind() {
+                ExprKind::ParenExpr => e = self.ast.exprs.operand(e),
+                k => return k == ExprKind::CXXThrowExpr,
+            }
+        }
+    }
+}

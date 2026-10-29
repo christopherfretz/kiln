@@ -1093,7 +1093,13 @@ impl<'a> AstBuilder<'a> {
         loc: Loc,
     ) -> ExprId {
         let (tv, ev) = (self.vk(then), self.vk(els));
-        let vk = if tv == ev && tv.is_glvalue() { tv } else { ValueCategory::PRValue };
+        // [expr.cond]/2.1: a throw-expression arm takes the other's category.
+        let vk = match (self.is_throw(then), self.is_throw(els)) {
+            (true, false) => ev,
+            (false, true) => tv,
+            _ if tv == ev && tv.is_glvalue() => tv,
+            _ => ValueCategory::PRValue,
+        };
         let deps = self.deps(cond) | self.deps(then) | self.deps(els) | self.type_deps(ty);
         let side = self.ast.exprs.push_cond_arms(then, els);
         self.simple(ExprKind::ConditionalOperator, vk, deps, 0, ty, loc, cond.raw(), side)
@@ -1407,6 +1413,16 @@ impl<'a> AstBuilder<'a> {
         );
         self.ast.exprs.cold.end_loc.insert(e, rparen).expect("fresh expression");
         e
+    }
+
+    /// True if `e` is a (possibly parenthesized) `CXXThrowExpr`.
+    fn is_throw(&self, mut e: ExprId) -> bool {
+        loop {
+            match self.ast.exprs.get(e).kind() {
+                ExprKind::ParenExpr => e = self.ast.exprs.operand(e),
+                k => return k == ExprKind::CXXThrowExpr,
+            }
+        }
     }
 
     /// `throw` / `throw e` ([expr.throw]): a prvalue of type `void`

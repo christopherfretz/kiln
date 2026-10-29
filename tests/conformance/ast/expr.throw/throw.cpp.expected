@@ -1,0 +1,76 @@
+TranslationUnitDecl
+|-FunctionDecl referenced f 'void (int, const int, int *, int &)'
+| |-ParmVarDecl used x 'int'
+| |-ParmVarDecl used cx 'const int'
+| |-ParmVarDecl used p 'int *'
+| |-ParmVarDecl used r 'int &'
+| `-CompoundStmt
+|   |-CXXThrowExpr 'void'
+|   |-CXXThrowExpr 'void'
+|   | `-IntegerLiteral 'int' 1
+|   |-CXXThrowExpr 'void'
+|   | `-ImplicitCastExpr 'int' <LValueToRValue>
+|   |   `-ImplicitCastExpr 'int' xvalue <NoOp>
+|   |     `-DeclRefExpr 'int' lvalue ParmVar 'x' 'int'
+|   |-CXXThrowExpr 'void'
+|   | `-ImplicitCastExpr 'int' <LValueToRValue>
+|   |   `-ImplicitCastExpr 'const int' xvalue <NoOp>
+|   |     `-DeclRefExpr 'const int' lvalue ParmVar 'cx' 'const int'
+|   |-CXXThrowExpr 'void'
+|   | `-ImplicitCastExpr 'int' <LValueToRValue>
+|   |   `-DeclRefExpr 'int' lvalue ParmVar 'r' 'int &'
+|   |-CXXThrowExpr 'void'
+|   | `-ImplicitCastExpr 'const char *' <ArrayToPointerDecay>
+|   |   `-StringLiteral 'const char[4]' lvalue "abc"
+|   |-CXXThrowExpr 'void'
+|   | `-ImplicitCastExpr 'void (*)(int, const int, int *, int &)' <FunctionToPointerDecay>
+|   |   `-DeclRefExpr 'void (int, const int, int *, int &)' lvalue Function 'f' 'void (int, const int, int *, int &)'
+|   |-CXXThrowExpr 'void'
+|   | `-ImplicitCastExpr 'int *' <LValueToRValue>
+|   |   `-ImplicitCastExpr 'int *' xvalue <NoOp>
+|   |     `-DeclRefExpr 'int *' lvalue ParmVar 'p' 'int *'
+|   |-CXXThrowExpr 'void'
+|   | `-ImplicitCastExpr 'int' <LValueToRValue>
+|   |   `-ImplicitCastExpr 'int' xvalue <NoOp>
+|   |     `-ParenExpr 'int' lvalue
+|   |       `-DeclRefExpr 'int' lvalue ParmVar 'x' 'int'
+|   |-DeclStmt
+|   | `-VarDecl v 'int' cinit
+|   |   `-ConditionalOperator 'int'
+|   |     |-ImplicitCastExpr 'bool' <IntegralToBoolean>
+|   |     | `-ImplicitCastExpr 'int' <LValueToRValue>
+|   |     |   `-DeclRefExpr 'int' lvalue ParmVar 'x' 'int'
+|   |     |-CXXThrowExpr 'void'
+|   |     | `-IntegerLiteral 'int' 1
+|   |     `-IntegerLiteral 'int' 2
+|   |-ConditionalOperator 'void'
+|   | |-ImplicitCastExpr 'bool' <IntegralToBoolean>
+|   | | `-ImplicitCastExpr 'int' <LValueToRValue>
+|   | |   `-DeclRefExpr 'int' lvalue ParmVar 'x' 'int'
+|   | |-CXXThrowExpr 'void'
+|   | | `-IntegerLiteral 'int' 1
+|   | `-CXXThrowExpr 'void'
+|   |   `-IntegerLiteral 'int' 2
+|   |-DeclStmt
+|   | `-VarDecl used s 'int' static
+|   `-CXXThrowExpr 'void'
+|     `-ImplicitCastExpr 'int' <LValueToRValue>
+|       `-DeclRefExpr 'int' lvalue Var 's' 'int'
+|-FunctionDecl used constexpr g 'int (int)' implicit-inline
+| |-ParmVarDecl used x 'int'
+| `-CompoundStmt
+|   `-ReturnStmt
+|     `-ImplicitCastExpr 'int' <LValueToRValue>
+|       `-ConditionalOperator 'int' lvalue
+|         |-BinaryOperator 'bool' '>'
+|         | |-ImplicitCastExpr 'int' <LValueToRValue>
+|         | | `-DeclRefExpr 'int' lvalue ParmVar 'x' 'int'
+|         | `-IntegerLiteral 'int' 0
+|         |-DeclRefExpr 'int' lvalue ParmVar 'x' 'int'
+|         `-CXXThrowExpr 'void'
+|           `-IntegerLiteral 'int' 0
+`-VarDecl h 'const int' constexpr cinit value=1
+  `-CallExpr 'int'
+    |-ImplicitCastExpr 'int (*)(int)' <FunctionToPointerDecay>
+    | `-DeclRefExpr 'int (int)' lvalue Function 'g' 'int (int)'
+    `-IntegerLiteral 'int' 1

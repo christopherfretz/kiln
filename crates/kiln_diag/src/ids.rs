@@ -509,6 +509,8 @@ diag_ids! {
     sema_no_member_offsetof = Error (2) "no member named '{0}' in {1}";
     sema_stmtexpr_file_scope = Error (0) "statement expression not allowed at file scope";
     sema_throw_disabled = Error (0) "cannot use 'throw' with exceptions disabled";
+    sema_throw_incomplete = Error (1) "cannot throw object of incomplete type {0}";
+    sema_throw_incomplete_ptr = Error (1) "cannot throw pointer to object of incomplete type {0}";
     note_parameter_named_here = Note (1) "passing argument to parameter '{0}' here";
     note_parameter_here = Note (0) "passing argument to parameter here";
     parse_init_list_bin_op = Error (2) "initializer list cannot be used on the {0:left|right} hand side of operator '{1}'";
@@ -630,6 +632,7 @@ diag_ids! {
     sema_member_reference_incomplete = Error (1) "incomplete definition of type {0}";
     sema_invalid_unary_operand = Error (1) "invalid argument type {0} to unary expression";
     sema_incompatible_cond_operands = Error (2) "incompatible operand types ({0} and {1})";
+    sema_conditional_void_nonvoid = Error (2) "{0:left|right} operand to ? is void, but {0:right|left} operand is of type {1}";
     sema_sub_ptr_compatible = Error (2) "{0} and {1} are not pointers to compatible types";
     sema_comparison_distinct_pointers = Error (2) "comparison of distinct pointer types ({0} and {1})";
     sema_comparison_pointer_integer = Error (2) "comparison between pointer and integer ({0} and {1})";

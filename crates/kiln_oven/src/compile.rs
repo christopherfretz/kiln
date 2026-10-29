@@ -598,6 +598,13 @@ impl<'a> Compiler<'a> {
         self.trap_loc(loc, msg.to_owned());
     }
 
+    /// [expr.const]/10.22 (as clang 19, before P3068): evaluating a
+    /// throw-expression is not a core constant expression; the generic
+    /// note at the `throw`.
+    fn throw_invalid(&mut self, e: ExprId) {
+        self.trap(e, "subexpression not valid in a constant expression");
+    }
+
     fn unsupported(&mut self, e: ExprId) {
         let k = self.b.ast().exprs.get(e).kind();
         self.trap(e, &format!("kiln: constant evaluation of {k:?} is not supported yet"));
@@ -1703,6 +1710,7 @@ impl Compiler<'_> {
                 }
             }
             ExprKind::CXXScalarValueInitExpr => self.konst(dst, 0),
+            ExprKind::CXXThrowExpr => self.throw_invalid(e),
             ExprKind::CallExpr if !n.value_category().is_glvalue() => {
                 let r = self.call(e, None);
                 if r != dst {
@@ -2411,6 +2419,10 @@ impl Compiler<'_> {
                 self.init(e, r, ty);
                 Place::Mem(r)
             }
+            ExprKind::CXXThrowExpr => {
+                self.throw_invalid(e);
+                Place::Mem(self.reg())
+            }
             _ => {
                 self.unsupported(e);
                 Place::Mem(self.reg())
@@ -2795,6 +2807,7 @@ impl Compiler<'_> {
         let n = self.node(e);
         let ty = self.ety(e);
         match n.kind() {
+            ExprKind::CXXThrowExpr => self.throw_invalid(e),
             ExprKind::ParenExpr => {
                 let op = self.ast().exprs.operand(e);
                 self.effect(op);

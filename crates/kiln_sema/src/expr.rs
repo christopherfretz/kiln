@@ -91,7 +91,7 @@ impl CastStyle {
 impl Sema<'_, '_> {
     // -- small helpers ---------------------------------------------------------
 
-    fn ety(&self, e: ExprId) -> QualType {
+    pub(crate) fn ety(&self, e: ExprId) -> QualType {
         self.ast.exprs.get(e).ty()
     }
 
@@ -1601,8 +1601,29 @@ impl Sema<'_, '_> {
         let (tn, fnn) = (*self.ast.exprs.get(t), *self.ast.exprs.get(f));
         let (tt, ft) = (tn.ty(), fnn.ty());
         let (tv, fv) = (self.ast.types.is_void(tt), self.ast.types.is_void(ft));
-        if tv && fv {
-            return self.builder().conditional(c2, t, f, QualType::VOID, loc);
+        if tv || fv {
+            // [expr.cond]/2.1: exactly one throw-expression operand gives
+            // the other operand's type and value category.
+            let (tthrow, fthrow) = (self.is_throw_expr(t), self.is_throw_expr(f));
+            if tthrow != fthrow {
+                let other = if tthrow { f } else { t };
+                let ty = self.ety(other);
+                let res = self.builder().conditional(c2, t, f, ty, loc);
+                if self.is_bitfield(other) {
+                    self.ast.exprs.mark_bitfield(res);
+                }
+                return res;
+            }
+            // [expr.cond]/2.2: both `void`.
+            if tv && fv {
+                return self.builder().conditional(c2, t, f, QualType::VOID, loc);
+            }
+            let msg = self
+                .diag(DiagId::sema_conditional_void_nonvoid, loc)
+                .arg(if tv { "0" } else { "1" })
+                .arg(self.ty_arg(if tv { ft } else { tt }));
+            self.emit(msg);
+            return self.recover_err(&[c, t, f], loc);
         }
         if tn.value_category().is_glvalue()
             && tn.value_category() == fnn.value_category()

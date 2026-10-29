@@ -104,14 +104,37 @@ fn is_simple_type_kw(k: Kw) -> bool {
 impl Parser<'_, '_> {
     /// expression ([expr.comma]).
     pub fn parse_expression(&mut self) -> PExpr {
-        let lhs = self.parse_cast_expr()?;
+        let lhs = self.parse_assignment_expr()?;
         self.parse_rhs(lhs, prec::COMMA)
     }
 
     /// assignment-expression ([expr.assign]).
     pub fn parse_assignment_expr(&mut self) -> PExpr {
+        if self.at_kw(Kw::Throw) {
+            return self.parse_throw_expr();
+        }
         let lhs = self.parse_cast_expr()?;
         self.parse_rhs(lhs, prec::ASSIGN)
+    }
+
+    /// throw-expression ([expr.throw]): `throw assignment-expression?`.
+    /// The operand is absent before a token that cannot start one (clang's
+    /// `ParseThrowExpression`).
+    fn parse_throw_expr(&mut self) -> PExpr {
+        let loc = self.bump().span.lo;
+        let none = matches!(self.tok().kind, TokKind::Eof)
+            || [
+                Punct::Semi,
+                Punct::RParen,
+                Punct::RSquare,
+                Punct::RBrace,
+                Punct::Colon,
+                Punct::Comma,
+            ]
+            .iter()
+            .any(|&p| self.at(p));
+        let operand = if none { None } else { Some(self.parse_assignment_expr()?) };
+        Some(self.s.act_on_throw(operand, loc))
     }
 
     /// constant-expression ([expr.const]): a conditional-expression.
@@ -500,7 +523,6 @@ impl Parser<'_, '_> {
                 }
                 _ if is_simple_type_kw(k) => self.parse_functional_cast(),
                 Kw::This
-                | Kw::Throw
                 | Kw::Typeid
                 | Kw::Requires
                 | Kw::CoYield

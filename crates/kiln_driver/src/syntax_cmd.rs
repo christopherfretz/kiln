@@ -105,7 +105,11 @@ impl SyntaxJob<'_> {
         let Some((pp, _deps)) = job.build_preprocessor(sm, engine, interner, inputs) else {
             return;
         };
-        let popts = ParseOptions { std: job.std.lex, ..ParseOptions::default() };
+        let popts = ParseOptions {
+            std: job.std.lex,
+            exceptions: a.predef.exceptions.unwrap_or(true),
+            ..ParseOptions::default()
+        };
         let limits = a.constexpr.limits();
         let (tu, _pp) =
             parse_preprocessed(pp, Arc::clone(interner), engine, target, &popts, limits);

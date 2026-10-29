@@ -67,6 +67,8 @@ pub struct Sema<'a, 'sm> {
     /// spelling of the argument list), for `kiln_abi`'s record layout
     /// once packing is supported (WP-055; reported as unsupported now).
     pub pragma_packs: Vec<(Loc, String)>,
+    /// C++ exceptions are enabled (`-f[no-]exceptions`; default on).
+    pub exceptions: bool,
     pub(crate) scopes: Vec<scope::Scope>,
     /// The current semantic declaration context.
     pub(crate) ctx: DeclId,
@@ -119,6 +121,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             target,
             abi,
             pragma_packs: Vec::new(),
+            exceptions: true,
             scopes: vec![scope::Scope::new(ScopeKind::TranslationUnit, Some(tu))],
             ctx: tu,
             func: None,
