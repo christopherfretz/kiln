@@ -1094,6 +1094,21 @@ diag_ids! {
     // WP-086: the stack guard (spec/sema-templates.md §10.3, D1).
     sema_stack_exhausted = Fatal (1) "kiln: stack exhausted during {0:parsing|template instantiation|constant evaluation}; reduce nesting or raise -fkiln-stack-size";
     sema_ovl_static_nonstatic_member = Error (0) "static and non-static member functions with the same parameter types cannot be overloaded";
+    sema_ovl_no_viable_member_function_in_call = Error (1) "no matching member function for call to '{0}'";
+    sema_ovl_ambiguous_call = Error (1) "call to '{0}' is ambiguous";
+    sema_ovl_ambiguous_member_call = Error (1) "call to member function '{0}' is ambiguous";
+    sema_ovl_deleted_member_call = Error (2) "call to deleted member function '{0}'{1}";
+    sema_ovl_no_viable_ctor = Error (1) "no matching constructor for initialization of {0}";
+    sema_ovl_ambiguous_ctor = Error (1) "call to constructor of {0} is ambiguous";
+    sema_ovl_ambiguous_conversion = Error (2) "conversion from {0} to {1} is ambiguous";
+    sema_ovl_unresolvable = Error (1) "reference to overloaded function could not be resolved; did you mean to call it{0:| with no arguments}?";
+    sema_addr_ovl_no_match = Error (2) "address of overloaded function '{0}' does not match required type {1}";
+    sema_addr_ovl_ambiguous = Error (1) "address of overloaded function '{0}' is ambiguous";
+    note_ovl_candidate = Note (1) "candidate {0}";
+    note_ovl_candidate_kind_not_viable = Note (2) "candidate {0} not viable: {1}";
+    note_ovl_candidate_deleted = Note (2) "candidate {0} has been {1:explicitly|implicitly} deleted";
+    note_ovl_candidate_explicit = Note (1) "explicit {0:constructor|conversion function|deduction guide} is not a candidate";
+    note_possible_target = Note (0) "possible target for call";
 }
 
 impl DiagId {

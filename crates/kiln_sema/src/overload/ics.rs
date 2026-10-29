@@ -363,7 +363,8 @@ impl Sema<'_, '_> {
                 u.after.to_types[2] = t1;
                 Ics::UserDefined(u)
             }
-            Ics::Bad(b) => Ics::bad(b.kind, a.ty, to),
+            // clang reports the referent ('const H'), the temporary's type.
+            Ics::Bad(b) => Ics::bad(b.kind, a.ty, t1),
             Ics::Ambiguous { .. } => Ics::Ambiguous { from: a.ty, to },
             Ics::Ellipsis => Ics::Ellipsis,
         }
@@ -661,11 +662,32 @@ impl Sema<'_, '_> {
         let mut found = std::mem::take(&mut set.found);
         found.clear();
         found.extend(self.ast.constructors(c).iter());
+        self.add_found_candidates(set, &found, CandidateKind::Ctor, first_opts, list_only);
+        set.found = found;
+    }
+
+    /// Adds the functions in `found` (constructors or member functions
+    /// of one class, of kind `kind`) to `set`, once per entity; function
+    /// templates are skipped (WP-071) and a *requires-clause* makes the
+    /// set uncertain (WP-073). With `list_only`, only
+    /// initializer-list constructors.
+    pub(crate) fn add_found_candidates(
+        &mut self,
+        set: &mut super::OverloadCandidateSet,
+        found: &[DeclId],
+        kind: CandidateKind,
+        first_opts: IcsOptions,
+        list_only: bool,
+    ) {
+        let want = if kind == CandidateKind::Ctor { DeclKind::CXXConstructor } else { DeclKind::CXXMethod };
         let mut seen: Vec<DeclId> = Vec::with_capacity(found.len());
-        for &f in &found {
-            if self.kind_of(f) != DeclKind::CXXConstructor
-                || self.ast.decls.get(f).has(DeclFlags::INVALID)
-            {
+        for &f in found {
+            let k = self.kind_of(f);
+            if k == DeclKind::FunctionTemplate {
+                set.skipped_templates = true;
+                continue;
+            }
+            if k != want || self.ast.decls.get(f).has(DeclFlags::INVALID) {
                 continue;
             }
             let first = self.ast.first(f);
@@ -676,9 +698,11 @@ impl Sema<'_, '_> {
             if list_only && !self.is_init_list_ctor(f) {
                 continue;
             }
-            self.add_candidate(set, f, f, CandidateKind::Ctor, first_opts);
+            if self.ast.decls.cold.requires_clause.contains(f) {
+                set.uncertain = true;
+            }
+            self.add_candidate(set, f, f, kind, first_opts);
         }
-        set.found = found;
     }
 
     /// Whether constructor `f` is an initializer-list constructor

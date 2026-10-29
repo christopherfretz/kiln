@@ -147,13 +147,22 @@ impl Sema<'_, '_> {
             };
         }
         let Some(b) = best else { return OvlOutcome::NoViable };
-        let ambiguous: Vec<u32> =
-            set.viable().filter(|&c| c != b && !self.better(set, b, c)).collect();
-        if !ambiguous.is_empty() {
-            set.cands[b as usize].ambiguous_mark = true;
-            for c in ambiguous {
-                set.cands[c as usize].ambiguous_mark = true;
+        // Every viable candidate the best is not better than is
+        // ambiguous with it, transitively (clang's `PendingBest`).
+        set.cands[b as usize].ambiguous_mark = true;
+        let mut pending = vec![b];
+        let mut ambiguous = false;
+        while let Some(cur) = pending.pop() {
+            for c in 0..u32::try_from(set.cands.len()).unwrap_or(u32::MAX) {
+                let x = set.cand(c);
+                if x.viable && !x.ambiguous_mark && !self.better(set, cur, c) {
+                    set.cands[c as usize].ambiguous_mark = true;
+                    pending.push(c);
+                    ambiguous = true;
+                }
             }
+        }
+        if ambiguous {
             return OvlOutcome::Ambiguous;
         }
         if self.ovl_deleted(set.cand(b).func()) {
