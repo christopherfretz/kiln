@@ -1,6 +1,6 @@
 //! `new` and `delete` expressions ([expr.new], [expr.delete]) and the
 //! implicitly declared global allocation and deallocation functions
-//! ([basic.stc.dynamic.general]/2), spec/sema.md §5.5.
+//! ([basic.stc.dynamic.general]/2), spec/sema.md §5.9.
 //!
 //! clang's `Sema::ActOnCXXNew` / `BuildCXXNew` / `ActOnCXXDelete` for
 //! non-class and aggregate element types: class-scope `operator new` /
@@ -773,7 +773,9 @@ impl Sema<'_, '_> {
             let fl = if implicit { Loc::INVALID } else { self.ast.decls.get(f).loc() };
             let n = ps.len();
             if have < n || (have > n && !variadic) {
-                let detail = self.arity_detail(f, n, have, variadic);
+                // Default arguments of allocation functions are not considered
+                // (spec/sema.md §5.9): every parameter is required.
+                let detail = self.arity_detail(f, n, n, have, variadic);
                 arity.push((n.abs_diff(have), implicit, fl, detail));
                 continue;
             }

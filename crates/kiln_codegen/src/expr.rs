@@ -6,7 +6,8 @@ use kiln_abi::irtype::BitFieldInfo;
 use kiln_abi::mangle;
 use kiln_ast::decl::{DeclKind, VarStorage};
 use kiln_ast::expr::{BinaryOp, CastKind, ExprFlags, ExprKind, UnaryOp, ValueCategory};
-use kiln_ast::{DeclId, ExprId, QualType};
+use kiln_ast::stmt::StmtKind;
+use kiln_ast::{DeclId, ExprId, QualType, StmtId};
 use kiln_llvm::{
     Attr, AttrKind, AttrList, BinOp, CallOpts, CastOp, ConstData, Flags, FloatPredicate,
     IntPredicate, TypeId as LTy, Value,
@@ -16,6 +17,13 @@ use crate::fir::{Fir, Op, V};
 use crate::fold::is_local;
 use crate::func::{Addr, CallArg, min_align};
 use crate::module::{Cg, R, err, gval};
+
+/// The value an `OpaqueValueExpr` stands for.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum Opaque {
+    Rv(Option<V>),
+    Lv(LV),
+}
 
 /// An lvalue: an address, its source type and the bit-field access.
 #[derive(Clone, Copy, Debug)]
@@ -123,6 +131,13 @@ impl Cg<'_> {
         let q = n.ty();
         Ok(Some(match n.kind() {
             ExprKind::ParenExpr => return self.emit_scalar_opt(ast.exprs.operand(e)),
+            ExprKind::CompoundLiteralExpr => {
+                return self.emit_scalar_opt(ast.exprs.compound_literal_init(e));
+            }
+            ExprKind::CXXDefaultArgExpr => match default_arg_of(ast, e) {
+                Some(d) => return self.emit_scalar_opt(d),
+                None => return err(self.loc_of(e), "default argument not yet parsed"),
+            },
             ExprKind::ExprWithCleanups => return self.emit_scalar_opt(self.sub(e)),
             ExprKind::ConstantExpr => match ast.exprs.constant_value(e) {
                 Some(c) if !ast.types.is_void(q) => V::C(self.const_scalar_value(c, q)?),
@@ -155,6 +170,10 @@ impl Cg<'_> {
                 let t = self.lty(q);
                 V::C(self.m.const_zero(t))
             }
+            ExprKind::OffsetOfExpr => {
+                let t = self.lty(q);
+                V::C(self.m.const_int(t, i128::from(ast.exprs.offsetof_value(e))))
+            }
             ExprKind::UnaryExprOrTypeTraitExpr => match self.folds.get(e) {
                 Some(c) => V::C(self.const_scalar_value(c, q)?),
                 None => return err(self.loc_of(e), "unfolded type trait expression"),
@@ -178,18 +197,33 @@ impl Cg<'_> {
                 let (lv, v) = self.emit_compound_assign(e)?;
                 if self.is_volatile(lv.q) { self.load_lv(lv) } else { v }
             }
-            ExprKind::ConditionalOperator => return self.emit_conditional(e),
+            ExprKind::ConditionalOperator => {
+                let [a, b] = ast.exprs.cond_arms(e);
+                return self.emit_conditional(self.sub(e), a, b);
+            }
+            ExprKind::BinaryConditionalOperator => {
+                let [common, c, a, b] = self.bind_common(e)?;
+                let r = self.emit_conditional(c, a, b);
+                self.f.opaque.remove(&common);
+                return r;
+            }
+            ExprKind::OpaqueValueExpr => match self.opaque_of(e) {
+                Some(Opaque::Rv(v)) => return Ok(v),
+                Some(Opaque::Lv(lv)) => self.load_lv(lv),
+                None => return err(self.loc_of(e), "unbound OpaqueValueExpr"),
+            },
             ExprKind::CallExpr => return self.emit_call(e, None),
             ExprKind::CXXNewExpr => self.emit_cxx_new(e)?,
             ExprKind::CXXDeleteExpr => {
                 self.emit_cxx_delete(e)?;
                 return Ok(None);
             }
-            // ScalarExprEmitter::VisitInitListExpr: `T{}` is zero, `T{x}`
-            // is `x`.
+            ExprKind::StmtExpr => return self.emit_stmt_expr(e),
+            // A scalar initializer list (clang `VisitInitListExpr`): its
+            // single element, or zero.
             ExprKind::InitListExpr if !self.is_aggregate(q) => {
-                if let Some(i) = ast.lists.iter(ast.exprs.init_list_inits(e)).next() {
-                    return self.emit_scalar_opt(i);
+                if let Some(&x) = ast.lists.get(ast.exprs.init_list_inits(e)).first() {
+                    return self.emit_scalar_opt(ExprId::new(x));
                 }
                 let t = self.lty(q);
                 V::C(self.m.const_zero(t))
@@ -863,11 +897,28 @@ impl Cg<'_> {
         }
     }
 
-    /// clang `VisitAbstractConditionalOperator`.
-    fn emit_conditional(&mut self, e: ExprId) -> R<Option<V>> {
+    /// clang `OpaqueValueMapping` for a `BinaryConditionalOperator`:
+    /// evaluates the common expression once and binds it; returns the
+    /// operands `[common, cond, then, else]`.
+    fn bind_common(&mut self, e: ExprId) -> R<[ExprId; 4]> {
         let ast = self.ast;
-        let c = self.sub(e);
-        let [a, b] = ast.exprs.cond_arms(e);
+        let ops = ast.exprs.binary_conditional_operands(e, &ast.lists);
+        let v = if self.is_glvalue(ops[0]) {
+            Opaque::Lv(self.emit_lvalue(ops[0])?)
+        } else {
+            Opaque::Rv(self.emit_scalar_opt(ops[0])?)
+        };
+        self.f.opaque.insert(ops[0], v);
+        Ok(ops)
+    }
+
+    fn opaque_of(&self, e: ExprId) -> Option<Opaque> {
+        let src = self.ast.exprs.opaque_source(e)?;
+        self.f.opaque.get(&src).copied()
+    }
+
+    /// clang `VisitAbstractConditionalOperator`.
+    fn emit_conditional(&mut self, c: ExprId, a: ExprId, b: ExprId) -> R<Option<V>> {
         if let Some(x) = self.fold_bool(c) {
             return self.emit_scalar_opt(if x { a } else { b });
         }
@@ -1008,6 +1059,10 @@ impl Cg<'_> {
         let q = n.ty();
         match n.kind() {
             ExprKind::ParenExpr => self.emit_lvalue(ast.exprs.operand(e)),
+            ExprKind::CXXDefaultArgExpr => match default_arg_of(ast, e) {
+                Some(d) => self.emit_lvalue(d),
+                None => err(self.loc_of(e), "default argument not yet parsed"),
+            },
             ExprKind::ExprWithCleanups => self.emit_lvalue(self.sub(e)),
             ExprKind::ConstantExpr => self.emit_lvalue(ast.exprs.operand(e)),
             ExprKind::SubstNonTypeTemplateParmExpr => self.emit_lvalue(ExprId::new(n.b())),
@@ -1058,7 +1113,20 @@ impl Cg<'_> {
                 }
             }
             ExprKind::CompoundAssignOperator => Ok(self.emit_compound_assign(e)?.0),
-            ExprKind::ConditionalOperator => self.cond_lvalue(e),
+            ExprKind::ConditionalOperator => {
+                let [a, b] = ast.exprs.cond_arms(e);
+                self.cond_lvalue(e, self.sub(e), a, b)
+            }
+            ExprKind::BinaryConditionalOperator => {
+                let [common, c, a, b] = self.bind_common(e)?;
+                let r = self.cond_lvalue(e, c, a, b);
+                self.f.opaque.remove(&common);
+                r
+            }
+            ExprKind::OpaqueValueExpr => match self.opaque_of(e) {
+                Some(Opaque::Lv(lv)) => Ok(lv),
+                _ => err(self.loc_of(e), "unbound glvalue OpaqueValueExpr"),
+            },
             ExprKind::CallExpr if self.is_glvalue(e) => {
                 // A call returning a reference.
                 let Some(p) = self.emit_call(e, None)? else {
@@ -1094,10 +1162,8 @@ impl Cg<'_> {
         }
     }
 
-    fn cond_lvalue(&mut self, e: ExprId) -> R<LV> {
+    fn cond_lvalue(&mut self, e: ExprId, c: ExprId, a: ExprId, b: ExprId) -> R<LV> {
         let ast = self.ast;
-        let c = self.sub(e);
-        let [a, b] = ast.exprs.cond_arms(e);
         if let Some(x) = self.fold_bool(c) {
             return self.emit_lvalue(if x { a } else { b });
         }
@@ -1255,6 +1321,46 @@ impl Cg<'_> {
         };
         let v = self.gep(addr.ty, addr.v, indices, true);
         Ok(LV { addr: Addr { v, ty: ety, align }, q, bf: None })
+    }
+
+    // ---- statement expressions -----------------------------------------
+
+    /// A GNU statement expression with a scalar or `void` value (clang
+    /// `EmitCompoundStmt` with `GetLast`): the statements in order; the
+    /// result statement (the last non-null one, through labels) is
+    /// evaluated as the value.
+    fn emit_stmt_expr(&mut self, e: ExprId) -> R<Option<V>> {
+        let ast = self.ast;
+        let body = ast.exprs.stmt_expr_body(e);
+        if ast.types.is_void(ast.exprs.get(e).ty()) {
+            self.emit_stmt(body)?;
+            return Ok(None);
+        }
+        let children: Vec<StmtId> = ast.lists.iter(ast.stmts.compound_body(body)).collect();
+        let Some(result) =
+            children.iter().rposition(|&c| ast.stmts.get(c).kind() != StmtKind::NullStmt)
+        else {
+            return err(self.loc_of(e), "statement expression without a result");
+        };
+        for &c in &children[..result] {
+            self.emit_stmt(c)?;
+        }
+        let mut s = children[result];
+        loop {
+            let n = *ast.stmts.get(s);
+            match n.kind() {
+                StmtKind::LabelStmt => {
+                    let b = self.label_block(DeclId::new(n.a()));
+                    self.emit_block(b, false);
+                    s = StmtId::new(n.b());
+                }
+                StmtKind::AttributedStmt => s = StmtId::new(n.b()),
+                StmtKind::ExprStmt => break,
+                _ => return err(self.loc_of(e), "statement expression without a result"),
+            }
+        }
+        self.ensure_insert_point();
+        self.emit_scalar_opt(ast.stmts.expr_stmt_expr(s))
     }
 
     // ---- ignored expressions -------------------------------------------
@@ -1543,6 +1649,10 @@ impl Cg<'_> {
             ExprKind::ParenExpr | ExprKind::ConstantExpr => {
                 self.agg_visit(ast.exprs.operand(e), dest, zeroed)
             }
+            ExprKind::CXXDefaultArgExpr => match default_arg_of(ast, e) {
+                Some(d) => self.agg_visit(d, dest, zeroed),
+                None => err(self.loc_of(e), "default argument not yet parsed"),
+            },
             ExprKind::ExprWithCleanups | ExprKind::MaterializeTemporaryExpr => {
                 self.agg_visit(self.sub(e), dest, zeroed)
             }
@@ -1973,4 +2083,11 @@ impl Cg<'_> {
         self.memcpy(at, V::C(gval(g)), at.align, size, vol);
         Ok(())
     }
+}
+
+/// The expression a `CXXDefaultArgExpr` stands for: its parameter's
+/// default argument, evaluated afresh at each call ([dcl.fct.default]/9).
+fn default_arg_of(ast: &kiln_ast::Ast, e: ExprId) -> Option<ExprId> {
+    let p = ast.exprs.default_arg_param(e);
+    ast.decls.param(p).and_then(|x| x.default_arg)
 }

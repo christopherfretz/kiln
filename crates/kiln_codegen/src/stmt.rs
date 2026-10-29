@@ -151,7 +151,7 @@ impl Cg<'_> {
         }
     }
 
-    fn label_block(&mut self, d: DeclId) -> Blk {
+    pub(crate) fn label_block(&mut self, d: DeclId) -> Blk {
         if let Some(&b) = self.f.labels.get(&d) {
             return b;
         }

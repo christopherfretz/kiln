@@ -1,0 +1,43 @@
+TranslationUnitDecl
+|-TypedefDecl referenced T 'int'
+|-VarDecl used x 'int'
+|-FunctionDecl f 'int (int)'
+| `-ParmVarDecl 'int'
+`-FunctionDecl g 'void ()'
+  `-CompoundStmt
+    |-DeclStmt
+    | `-VarDecl used a 'T':'int'
+    |-DeclStmt
+    | `-VarDecl used b 'T (*)'
+    |-DeclStmt
+    | `-VarDecl used c 'T':'int' cinit
+    |   `-IntegerLiteral 'int' 1
+    |-DeclStmt
+    | `-VarDecl f 'T':'int' callinit
+    |   `-IntegerLiteral 'int' 1
+    |-DeclStmt
+    | `-VarDecl used d 'T[3]'
+    |-DeclStmt
+    | `-VarDecl used h 'T (*)(int)'
+    |-CStyleCastExpr 'void' <ToVoid>
+    | `-CXXFunctionalCastExpr 'T':'int' functional cast to T <NoOp>
+    |   `-ImplicitCastExpr 'int' <LValueToRValue> part_of_explicit_cast
+    |     `-DeclRefExpr 'int' lvalue Var 'x' 'int'
+    |-DeclStmt
+    | |-VarDecl used y 'T':'int'
+    | `-VarDecl used z 'T':'int' callinit
+    |   `-IntegerLiteral 'int' 2
+    |-CStyleCastExpr 'void' <ToVoid>
+    | `-DeclRefExpr 'T':'int' lvalue Var 'a' 'T':'int'
+    |-CStyleCastExpr 'void' <ToVoid>
+    | `-DeclRefExpr 'T (*)' lvalue Var 'b' 'T (*)'
+    |-CStyleCastExpr 'void' <ToVoid>
+    | `-DeclRefExpr 'T':'int' lvalue Var 'c' 'T':'int'
+    |-CStyleCastExpr 'void' <ToVoid>
+    | `-DeclRefExpr 'T[3]' lvalue Var 'd' 'T[3]'
+    |-CStyleCastExpr 'void' <ToVoid>
+    | `-DeclRefExpr 'T (*)(int)' lvalue Var 'h' 'T (*)(int)'
+    |-CStyleCastExpr 'void' <ToVoid>
+    | `-DeclRefExpr 'T':'int' lvalue Var 'y' 'T':'int'
+    `-CStyleCastExpr 'void' <ToVoid>
+      `-DeclRefExpr 'T':'int' lvalue Var 'z' 'T':'int'

@@ -1,5 +1,3 @@
 //@ expect: ast
 //@ oracle: clang
-struct P {
-  P();
-};
+void f() { l: goto l; }

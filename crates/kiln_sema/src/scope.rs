@@ -8,6 +8,8 @@
 use kiln_ast::DeclId;
 use kiln_source::symbol::Symbol;
 
+use crate::class::NrvoState;
+
 /// What kind of region a [`Scope`] is.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum ScopeKind {
@@ -47,6 +49,8 @@ pub struct Scope {
     pub locals: Vec<(Symbol, DeclId, Ns)>,
     /// Namespaces nominated by `using namespace` in this scope.
     pub using_dirs: Vec<DeclId>,
+    /// The NRVO candidate of this scope (spec/sema-class.md §5.5).
+    pub nrvo: NrvoState,
 }
 
 /// The name space (C's "tag" vs "ordinary" split) of a local entry.
@@ -61,7 +65,7 @@ pub enum Ns {
 impl Scope {
     /// A fresh scope of `kind` for `entity`.
     pub fn new(kind: ScopeKind, entity: Option<DeclId>) -> Self {
-        Scope { kind, entity, locals: Vec::new(), using_dirs: Vec::new() }
+        Scope { kind, entity, locals: Vec::new(), using_dirs: Vec::new(), nrvo: NrvoState::None }
     }
 
     /// True for scopes whose names live in the scope itself.

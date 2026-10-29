@@ -19,8 +19,7 @@ use Disposition::{Drop, Keep, Unsupported};
 
 const NOT_M2: &str = "not in the M2 dump (spec/ast-dump.md §3)";
 const TEMPLATES: &str = "templates are M3 (spec/ast-dump.md §5)";
-const CLASSES: &str = "member functions and class features beyond aggregates are not in M2";
-const CXX_CAST: &str = "named and functional casts are not in the M2 dump";
+const CXX_CAST: &str = "bit casts are not in the dump";
 
 /// Every node kind the normalizer knows, in `spec/ast-dump.md` §3 order for
 /// the kept ones. Kinds ending in `Attr` and type-tree kinds under a
@@ -31,6 +30,8 @@ pub const TABLE: &[(&str, Disposition)] = &[
     ("TypedefDecl", Keep),
     ("TypeAliasDecl", Keep),
     ("CXXRecordDecl", Keep),
+    ("AccessSpecDecl", Keep),
+    ("FriendDecl", Keep),
     ("FieldDecl", Keep),
     ("EnumDecl", Keep),
     ("EnumConstantDecl", Keep),
@@ -43,9 +44,17 @@ pub const TABLE: &[(&str, Disposition)] = &[
     ("UsingShadowDecl", Keep),
     ("UsingEnumDecl", Keep),
     ("FunctionDecl", Keep),
+    ("CXXMethodDecl", Keep),
+    ("CXXConstructorDecl", Keep),
+    ("CXXDestructorDecl", Keep),
+    ("CXXConversionDecl", Keep),
+    ("CXXCtorInitializer", Keep),
     ("ParmVarDecl", Keep),
     ("VarDecl", Keep),
     ("StaticAssertDecl", Keep),
+    // Attributes printed from the class virt-specifiers (§3).
+    ("OverrideAttr", Keep),
+    ("FinalAttr", Keep),
     // Expressions (§3).
     ("IntegerLiteral", Keep),
     ("FloatingLiteral", Keep),
@@ -57,6 +66,11 @@ pub const TABLE: &[(&str, Disposition)] = &[
     ("MemberExpr", Keep),
     ("ImplicitCastExpr", Keep),
     ("CStyleCastExpr", Keep),
+    ("CXXStaticCastExpr", Keep),
+    ("CXXDynamicCastExpr", Keep),
+    ("CXXConstCastExpr", Keep),
+    ("CXXReinterpretCastExpr", Keep),
+    ("CXXFunctionalCastExpr", Keep),
     ("UnaryOperator", Keep),
     ("BinaryOperator", Keep),
     ("CompoundAssignOperator", Keep),
@@ -68,6 +82,28 @@ pub const TABLE: &[(&str, Disposition)] = &[
     ("InitListExpr", Keep),
     ("ImplicitValueInitExpr", Keep),
     ("ConstantExpr", Keep),
+    ("CXXConstructExpr", Keep),
+    ("CXXTemporaryObjectExpr", Keep),
+    ("CXXInheritedCtorInitExpr", Keep),
+    ("CXXMemberCallExpr", Keep),
+    ("CXXThisExpr", Keep),
+    ("CXXDefaultArgExpr", Keep),
+    ("CXXDefaultInitExpr", Keep),
+    ("CXXBindTemporaryExpr", Keep),
+    ("MaterializeTemporaryExpr", Keep),
+    ("ExprWithCleanups", Keep),
+    ("CXXTypeidExpr", Keep),
+    ("CXXParenListInitExpr", Keep),
+    ("ArrayInitLoopExpr", Keep),
+    ("ArrayInitIndexExpr", Keep),
+    ("OpaqueValueExpr", Keep),
+    // Expression forms (WP-064).
+    ("CXXScalarValueInitExpr", Keep),
+    ("CXXThrowExpr", Keep),
+    ("StmtExpr", Keep),
+    ("CompoundLiteralExpr", Keep),
+    ("BinaryConditionalOperator", Keep),
+    ("OffsetOfExpr", Keep),
     // Statements (§3).
     ("CompoundStmt", Keep),
     ("DeclStmt", Keep),
@@ -97,12 +133,6 @@ pub const TABLE: &[(&str, Disposition)] = &[
     ("HTMLEndTagComment", Drop),
     // Declarations kiln does not dump in M2.
     ("RecordDecl", Unsupported("C struct declarations (RecordDecl) are not in the M2 dump")),
-    ("CXXMethodDecl", Unsupported(CLASSES)),
-    ("CXXConstructorDecl", Unsupported(CLASSES)),
-    ("CXXDestructorDecl", Unsupported(CLASSES)),
-    ("CXXConversionDecl", Unsupported(CLASSES)),
-    ("AccessSpecDecl", Unsupported(CLASSES)),
-    ("FriendDecl", Unsupported(CLASSES)),
     ("IndirectFieldDecl", Unsupported("anonymous struct/union members are not in the M2 dump")),
     ("ClassTemplateDecl", Unsupported(TEMPLATES)),
     ("ClassTemplateSpecializationDecl", Unsupported(TEMPLATES)),
@@ -137,30 +167,12 @@ pub const TABLE: &[(&str, Disposition)] = &[
     ("CoreturnStmt", Unsupported(NOT_M2)),
     ("CoroutineBodyStmt", Unsupported(NOT_M2)),
     // Expressions kiln does not dump in M2.
-    ("CXXStaticCastExpr", Unsupported(CXX_CAST)),
-    ("CXXDynamicCastExpr", Unsupported(CXX_CAST)),
-    ("CXXReinterpretCastExpr", Unsupported(CXX_CAST)),
-    ("CXXConstCastExpr", Unsupported(CXX_CAST)),
-    ("CXXFunctionalCastExpr", Unsupported(CXX_CAST)),
     ("BuiltinBitCastExpr", Unsupported(CXX_CAST)),
-    ("CXXConstructExpr", Unsupported("constructor calls (class copies, returns) are not in M2")),
-    ("CXXTemporaryObjectExpr", Unsupported(CLASSES)),
-    ("CXXMemberCallExpr", Unsupported(CLASSES)),
-    ("CXXOperatorCallExpr", Unsupported(CLASSES)),
-    ("CXXThisExpr", Unsupported(CLASSES)),
-    ("CXXDefaultArgExpr", Unsupported(NOT_M2)),
-    ("CXXDefaultInitExpr", Unsupported(NOT_M2)),
-    ("CXXBindTemporaryExpr", Unsupported(NOT_M2)),
-    ("MaterializeTemporaryExpr", Unsupported(NOT_M2)),
-    ("ExprWithCleanups", Unsupported(NOT_M2)),
+    ("CXXOperatorCallExpr", Unsupported("overloaded operator calls are not in the dump yet")),
     ("CXXNewExpr", Keep),
     ("CXXDeleteExpr", Keep),
-    ("CXXThrowExpr", Unsupported(NOT_M2)),
-    ("CXXTypeidExpr", Unsupported(NOT_M2)),
     ("CXXNoexceptExpr", Keep),
-    ("CXXScalarValueInitExpr", Unsupported(NOT_M2)),
     ("CXXStdInitializerListExpr", Unsupported(NOT_M2)),
-    ("CXXParenListInitExpr", Unsupported(NOT_M2)),
     ("CXXRewrittenBinaryOperator", Unsupported(NOT_M2)),
     ("CXXFoldExpr", Unsupported(TEMPLATES)),
     ("CXXDependentScopeMemberExpr", Unsupported(TEMPLATES)),
@@ -177,27 +189,20 @@ pub const TABLE: &[(&str, Disposition)] = &[
     ("TypeTraitExpr", Unsupported(NOT_M2)),
     ("ArrayTypeTraitExpr", Unsupported(NOT_M2)),
     ("ExpressionTraitExpr", Unsupported(NOT_M2)),
-    ("StmtExpr", Unsupported(NOT_M2)),
     ("ChooseExpr", Unsupported(NOT_M2)),
     ("GNUNullExpr", Unsupported(NOT_M2)),
     ("VAArgExpr", Unsupported(NOT_M2)),
     ("PredefinedExpr", Unsupported(NOT_M2)),
     ("UserDefinedLiteral", Unsupported(NOT_M2)),
-    ("CompoundLiteralExpr", Unsupported(NOT_M2)),
     ("DesignatedInitExpr", Unsupported(NOT_M2)),
     ("DesignatedInitUpdateExpr", Unsupported(NOT_M2)),
     ("NoInitExpr", Unsupported(NOT_M2)),
-    ("ArrayInitLoopExpr", Unsupported(NOT_M2)),
-    ("ArrayInitIndexExpr", Unsupported(NOT_M2)),
-    ("OpaqueValueExpr", Unsupported(NOT_M2)),
-    ("BinaryConditionalOperator", Unsupported(NOT_M2)),
     ("ImaginaryLiteral", Unsupported(NOT_M2)),
     ("FixedPointLiteral", Unsupported(NOT_M2)),
     ("AtomicExpr", Unsupported(NOT_M2)),
     ("ParenListExpr", Unsupported(NOT_M2)),
     ("SourceLocExpr", Unsupported(NOT_M2)),
     ("EmbedExpr", Unsupported(NOT_M2)),
-    ("OffsetOfExpr", Unsupported(NOT_M2)),
     ("AddrLabelExpr", Unsupported(NOT_M2)),
     ("CoawaitExpr", Unsupported(NOT_M2)),
     ("CoyieldExpr", Unsupported(NOT_M2)),
@@ -236,15 +241,21 @@ const EXPR_KEYS: &[&str] = &["type", "valueCategory"];
 /// The node-specific JSON keys the printer of `kind` reads (or knowingly
 /// ignores). Any other key is an error: it carries something the kiln line
 /// would silently lose. `None` for kinds without a printer.
-#[allow(clippy::match_same_arms, reason = "one arm per node kind, in spec/ast-dump.md §3 order")]
+#[allow(
+    clippy::match_same_arms,
+    clippy::too_many_lines,
+    reason = "a table: one arm per node kind, in spec/ast-dump.md §3 order"
+)]
 fn specific_keys(kind: &str) -> Option<&'static [&'static str]> {
     Some(match kind {
         "TranslationUnitDecl" => &[],
         "TypedefDecl" | "TypeAliasDecl" => &["type", "typeAliasDeclId"],
         // `definitionData` is clang's DefinitionData block (not dumped).
-        "CXXRecordDecl" => &["tagUsed", "completeDefinition", "definitionData"],
-        // `mutable` and default member initializers are not in M2.
-        "FieldDecl" => &["type", "isBitfield"],
+        "CXXRecordDecl" => &["tagUsed", "completeDefinition", "definitionData", "bases"],
+        "AccessSpecDecl" => &["access"],
+        "FriendDecl" => &["type"],
+        // The default member initializer is the child.
+        "FieldDecl" => &["type", "isBitfield", "mutable", "hasInClassInitializer"],
         "EnumDecl" => &["scopedEnumTag", "fixedUnderlyingType"],
         "EnumConstantDecl" => &["type"],
         "LinkageSpecDecl" => &["language", "hasBraces"],
@@ -256,18 +267,26 @@ fn specific_keys(kind: &str) -> Option<&'static [&'static str]> {
         "UsingShadowDecl" => &["target"],
         "UsingEnumDecl" => &["target"],
         // `immediate`: kiln prints clang's text-dump `consteval` instead;
-        // `variadic` is part of the printed type.
-        "FunctionDecl" => &[
+        // `variadic` is part of the printed type; `deletedMessage` becomes
+        // the `delete message:` child.
+        "FunctionDecl" | "CXXMethodDecl" | "CXXConstructorDecl" | "CXXDestructorDecl"
+        | "CXXConversionDecl" => &[
             "type",
             "storageClass",
             "inline",
             "constexpr",
             "immediate",
+            "virtual",
+            "pure",
+            "explicitlyDefaulted",
             "explicitlyDeleted",
+            "deletedMessage",
             "variadic",
         ],
-        // A `ParmVarDecl` with `init` (a default argument) is not in M2.
-        "ParmVarDecl" => &["type"],
+        "CXXCtorInitializer" => &["anyInit", "baseInit", "delegatingInit"],
+        // `init` (always `c`, printed `cinit`): the default argument is the
+        // child.
+        "ParmVarDecl" => &["type", "init"],
         "VarDecl" => &["type", "storageClass", "nrvo", "inline", "constexpr", "init"],
         "StaticAssertDecl" => &[],
         "IntegerLiteral" | "FloatingLiteral" | "CharacterLiteral" | "StringLiteral"
@@ -286,8 +305,14 @@ fn specific_keys(kind: &str) -> Option<&'static [&'static str]> {
         "CXXDeleteExpr" => &["isGlobal", "isArray", "isArrayAsWritten", "operatorDeleteDecl"],
         "DeclRefExpr" => &["referencedDecl", "foundReferencedDecl", "nonOdrUseReason"],
         "MemberExpr" => &["name", "isArrow", "referencedMemberDecl"],
-        "ImplicitCastExpr" => &["castKind", "isPartOfExplicitCast"],
-        "CStyleCastExpr" => &["castKind"],
+        // `conversionFunc` is the child's callee (not printed by clang).
+        "ImplicitCastExpr" => &["castKind", "path", "isPartOfExplicitCast", "conversionFunc"],
+        "CStyleCastExpr"
+        | "CXXStaticCastExpr"
+        | "CXXDynamicCastExpr"
+        | "CXXConstCastExpr"
+        | "CXXReinterpretCastExpr"
+        | "CXXFunctionalCastExpr" => &["castKind", "path", "conversionFunc"],
         "UnaryOperator" => &["opcode", "isPostfix", "canOverflow"],
         "BinaryOperator" => &["opcode"],
         "CompoundAssignOperator" => &["opcode", "computeLHSType", "computeResultType"],
@@ -296,6 +321,42 @@ fn specific_keys(kind: &str) -> Option<&'static [&'static str]> {
         "InitListExpr" => &["field", "array_filler"],
         "ImplicitValueInitExpr" => &[],
         "ConstantExpr" => &["value"],
+        // `hadMultipleCandidates` and `constructionKind` are not printed
+        // (clang's text dump prints neither); `elidable` is rejected.
+        "CXXConstructExpr" | "CXXTemporaryObjectExpr" => &[
+            "ctorType",
+            "list",
+            "initializer_list",
+            "zeroing",
+            "isImmediateEscalating",
+            "hadMultipleCandidates",
+            "constructionKind",
+        ],
+        "CXXInheritedCtorInitExpr"
+        | "CXXMemberCallExpr"
+        | "CXXDefaultArgExpr"
+        | "ArrayInitLoopExpr"
+        | "ArrayInitIndexExpr"
+        | "OpaqueValueExpr"
+        | "OverrideAttr"
+        | "FinalAttr"
+        | "CXXScalarValueInitExpr"
+        | "CXXThrowExpr"
+        | "StmtExpr"
+        | "CompoundLiteralExpr"
+        | "BinaryConditionalOperator"
+        | "OffsetOfExpr" => &[],
+        "CXXThisExpr" => &["implicit"],
+        "CXXDefaultInitExpr" => &["hasRewrittenInit"],
+        // `temp` and `dtor` (the temporary's destructor) are not printed.
+        "CXXBindTemporaryExpr" => &["temp", "dtor"],
+        // The storage duration follows from the extending declaration.
+        "MaterializeTemporaryExpr" => &["extendingDecl", "storageDuration", "boundToLValueRef"],
+        "ExprWithCleanups" => &["cleanupsHaveSideEffects"],
+        // `adjustedTypeArg` (the cv-unqualified type operand) is not
+        // printed by clang's text dump either.
+        "CXXTypeidExpr" => &["typeArg", "adjustedTypeArg"],
+        "CXXParenListInitExpr" => &["array_filler"],
         "IfStmt" => {
             &["hasInit", "hasVar", "hasElse", "isConstexpr", "isConsteval", "constevalIsNegated"]
         }
@@ -329,6 +390,40 @@ pub fn check_keys(kind: &str, keys: impl Iterator<Item = impl AsRef<str>>) -> Re
     }
     Ok(())
 }
+
+/// The class kinds §3 of `spec/ast-dump.md` adds for classes (WP-066a).
+#[cfg(test)]
+pub const CLASS_KINDS: &[&str] = &[
+    "AccessSpecDecl",
+    "FriendDecl",
+    "CXXMethodDecl",
+    "CXXConstructorDecl",
+    "CXXDestructorDecl",
+    "CXXConversionDecl",
+    "CXXCtorInitializer",
+    "OverrideAttr",
+    "FinalAttr",
+    "CXXStaticCastExpr",
+    "CXXDynamicCastExpr",
+    "CXXConstCastExpr",
+    "CXXReinterpretCastExpr",
+    "CXXFunctionalCastExpr",
+    "CXXConstructExpr",
+    "CXXTemporaryObjectExpr",
+    "CXXInheritedCtorInitExpr",
+    "CXXMemberCallExpr",
+    "CXXThisExpr",
+    "CXXDefaultArgExpr",
+    "CXXDefaultInitExpr",
+    "CXXBindTemporaryExpr",
+    "MaterializeTemporaryExpr",
+    "ExprWithCleanups",
+    "CXXTypeidExpr",
+    "CXXParenListInitExpr",
+    "ArrayInitLoopExpr",
+    "ArrayInitIndexExpr",
+    "OpaqueValueExpr",
+];
 
 /// The kinds §3 of `spec/ast-dump.md` defines lines for (the M2 kinds, with
 /// the namespace and using-declaration kinds of WP-062).
@@ -376,6 +471,12 @@ pub const M2_KINDS: &[&str] = &[
     "InitListExpr",
     "ImplicitValueInitExpr",
     "ConstantExpr",
+    "CXXScalarValueInitExpr",
+    "CXXThrowExpr",
+    "StmtExpr",
+    "CompoundLiteralExpr",
+    "BinaryConditionalOperator",
+    "OffsetOfExpr",
     "CompoundStmt",
     "DeclStmt",
     "NullStmt",

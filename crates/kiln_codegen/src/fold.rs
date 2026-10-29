@@ -16,7 +16,7 @@ use kiln_ast::stmt::StmtKind;
 use kiln_ast::types::{RecordLayout, TypeView};
 use kiln_ast::{Ast, ConstValueId, DeclId, ExprId, StmtId};
 use kiln_diag::Diag;
-use kiln_oven::{Oven, SemaBridge, VTableLayout};
+use kiln_oven::{Oven, SemaBridge, Subobject, SubobjectId};
 use kiln_source::fx::FxHashMap;
 
 /// The folded values of the expressions codegen may ask about.
@@ -38,7 +38,6 @@ impl Folds {
 struct Bridge<'x> {
     ast: &'x mut Ast,
     abi: &'x Target,
-    vt: VTableLayout,
 }
 
 impl SemaBridge for Bridge<'_> {
@@ -55,8 +54,19 @@ impl SemaBridge for Bridge<'_> {
         kiln_abi::ensure_layout(&mut *self.ast, record, self.abi)
     }
 
-    fn vtable(&mut self, _record: DeclId) -> &VTableLayout {
-        &self.vt
+    fn final_overrider(
+        &mut self,
+        most_derived: DeclId,
+        at: SubobjectId,
+        method: DeclId,
+    ) -> Option<(DeclId, SubobjectId)> {
+        let first = self.ast.first(most_derived);
+        self.ast.virtuals.get(first)?.final_overrider(at, method)
+    }
+
+    fn subobjects(&mut self, record: DeclId) -> &[Subobject] {
+        let first = self.ast.first(record);
+        self.ast.virtuals.get(first).map_or(&[], |v| &v.subobjects)
     }
 
     fn consts(&mut self) -> &mut ConstStore {
@@ -73,7 +83,7 @@ pub(crate) fn prepass(ast: &mut Ast, oven: &mut Oven, target: &Target) -> Folds 
         c.tu();
         (c.out, c.inits)
     };
-    let mut b = Bridge { ast, abi: target, vt: VTableLayout::default() };
+    let mut b = Bridge { ast, abi: target };
     let mut folds = Folds::default();
     for e in cands {
         if folds.expr.contains_key(&e) {
@@ -251,6 +261,7 @@ impl Collect<'_> {
             ExprKind::UnaryExprOrTypeTraitExpr => self.out.push(e),
             // clang `EmitCXXNewAllocSize` tries the array bound as a constant.
             ExprKind::CXXNewExpr => self.out.extend(ast.exprs.new_extra(e).array_size),
+            ExprKind::StmtExpr => self.stmt(ast.exprs.stmt_expr_body(e)),
             ExprKind::ImplicitCastExpr
                 if ast.exprs.cast_kind(e) == CastKind::LValueToRValue
                     && refers_to_const_var(ast, ast.exprs.operand(e)) =>

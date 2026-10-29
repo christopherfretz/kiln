@@ -1,0 +1,73 @@
+TranslationUnitDecl
+|-VarDecl used i 'int' cinit
+| `-IntegerLiteral 'int' 1
+|-VarDecl used ci 'const int' cinit
+| `-IntegerLiteral 'int' 2
+|-VarDecl used pi 'int *' cinit
+| `-UnaryOperator 'int *' prefix '&' cannot overflow
+|   `-DeclRefExpr 'int' lvalue Var 'i' 'int'
+|-VarDecl p1 'int *' cinit
+| `-UnaryOperator 'int *' prefix '&' cannot overflow
+|   `-DeclRefExpr 'int' lvalue Var 'i' 'int'
+|-VarDecl p2 'const int *' cinit
+| `-ImplicitCastExpr 'const int *' <NoOp>
+|   `-UnaryOperator 'int *' prefix '&' cannot overflow
+|     `-DeclRefExpr 'int' lvalue Var 'i' 'int'
+|-VarDecl p3 'const int *' cinit
+| `-UnaryOperator 'const int *' prefix '&' cannot overflow
+|   `-DeclRefExpr 'const int' lvalue Var 'ci' 'const int'
+|-VarDecl pp 'int **' cinit
+| `-UnaryOperator 'int **' prefix '&' cannot overflow
+|   `-DeclRefExpr 'int *' lvalue Var 'pi' 'int *'
+|-VarDecl r1 'int &' cinit
+| `-DeclRefExpr 'int' lvalue Var 'i' 'int'
+|-VarDecl r2 'const int &' cinit
+| `-DeclRefExpr 'const int' lvalue Var 'ci' 'const int'
+|-VarDecl r3 'const int &' cinit
+| `-ImplicitCastExpr 'const int' lvalue <NoOp>
+|   `-DeclRefExpr 'int' lvalue Var 'i' 'int'
+|-VarDecl f1 'int &' cinit
+| `-DeclRefExpr 'int' lvalue Var 'i' 'int'
+|-VarDecl f2 'const int &' cinit
+| `-DeclRefExpr 'const int' lvalue Var 'ci' 'const int'
+|-VarDecl cp 'int *const' cinit
+| `-UnaryOperator 'int *' prefix '&' cannot overflow
+|   `-DeclRefExpr 'int' lvalue Var 'i' 'int'
+|-VarDecl rp 'int *&' cinit
+| `-DeclRefExpr 'int *' lvalue Var 'pi' 'int *'
+|-FunctionDecl used g 'int ()'
+|-VarDecl fp 'int (*)()' cinit
+| `-UnaryOperator 'int (*)()' prefix '&' cannot overflow
+|   `-DeclRefExpr 'int ()' lvalue Function 'g' 'int ()'
+|-VarDecl fr 'int (&)()' cinit
+| `-DeclRefExpr 'int ()' lvalue Function 'g' 'int ()'
+|-FunctionDecl ret_ptr 'int *()'
+| `-CompoundStmt
+|   `-ReturnStmt
+|     `-UnaryOperator 'int *' prefix '&' cannot overflow
+|       `-DeclRefExpr 'int' lvalue Var 'i' 'int'
+|-FunctionDecl ret_ref 'int &()'
+| `-CompoundStmt
+|   `-ReturnStmt
+|     `-DeclRefExpr 'int' lvalue Var 'i' 'int'
+|-FunctionDecl ret_cref 'const int &()'
+| `-CompoundStmt
+|   `-ReturnStmt
+|     `-DeclRefExpr 'const int' lvalue Var 'ci' 'const int'
+|-FunctionDecl ret_fwd 'int &()'
+| `-CompoundStmt
+|   `-ReturnStmt
+|     `-DeclRefExpr 'int' lvalue Var 'i' 'int'
+`-FunctionDecl use 'void ()'
+  `-CompoundStmt
+    |-DeclStmt
+    | `-VarDecl used lp 'int *' cinit
+    |   `-UnaryOperator 'int *' prefix '&' cannot overflow
+    |     `-DeclRefExpr 'int' lvalue Var 'i' 'int'
+    |-DeclStmt
+    | `-VarDecl used lr 'int &' cinit
+    |   `-UnaryOperator 'int' lvalue prefix '*' cannot overflow
+    |     `-ImplicitCastExpr 'int *' <LValueToRValue>
+    |       `-DeclRefExpr 'int *' lvalue Var 'lp' 'int *'
+    `-CStyleCastExpr 'void' <ToVoid>
+      `-DeclRefExpr 'int' lvalue Var 'lr' 'int &'

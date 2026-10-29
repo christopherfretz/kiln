@@ -103,6 +103,9 @@ pub(crate) struct Fx {
     /// The active conditional evaluations (clang `ConditionalEvaluation`),
     /// innermost last: each is the block the condition started in.
     pub conds: Vec<Blk>,
+    /// The bound common expressions of the enclosing GNU binary
+    /// conditionals (clang `OpaqueValueMapping`).
+    pub opaque: FxHashMap<kiln_ast::ExprId, crate::expr::Opaque>,
 }
 
 impl Fx {
@@ -127,6 +130,7 @@ impl Fx {
             calls: Vec::new(),
             loop_mp: None,
             conds: Vec::new(),
+            opaque: FxHashMap::default(),
         }
     }
 }

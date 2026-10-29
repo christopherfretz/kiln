@@ -10,8 +10,8 @@ use kiln_ast::types::RecordLayout;
 use kiln_ast::{Ast, ConstValueId, DeclId, ExprId, StmtId};
 use kiln_diag::Diag;
 use kiln_oven::{
-    Budget, EvalContext, EvalFailure, EvalKind, EvalRecord, FailKind, Oven, SemaBridge,
-    VTableLayout,
+    Budget, EvalContext, EvalFailure, EvalKind, EvalRecord, FailKind, Oven, SemaBridge, Subobject,
+    SubobjectId,
 };
 use kiln_source::Loc;
 
@@ -42,8 +42,16 @@ impl SemaBridge for Nesting<'_> {
     fn ensure_layout(&mut self, record: DeclId) -> &RecordLayout {
         self.inner.ensure_layout(record)
     }
-    fn vtable(&mut self, record: DeclId) -> &VTableLayout {
-        self.inner.vtable(record)
+    fn final_overrider(
+        &mut self,
+        most_derived: DeclId,
+        at: SubobjectId,
+        method: DeclId,
+    ) -> Option<(DeclId, SubobjectId)> {
+        self.inner.final_overrider(most_derived, at, method)
+    }
+    fn subobjects(&mut self, record: DeclId) -> &[Subobject] {
+        self.inner.subobjects(record)
     }
     fn consts(&mut self) -> &mut ConstStore {
         self.inner.consts()

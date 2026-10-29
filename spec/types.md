@@ -390,12 +390,16 @@ pub struct RecordLayout {             // Itanium [class] layout, all offsets fro
 }
 pub struct LayoutCache { /* FxHashMap<DeclId /*first decl*/, Box<RecordLayout>> */ }
 ```
-- `Ast::layouts` is a write-once cache: sema calls
-  `kiln_abi::record_layout(&Ast, record) -> RecordLayout` the first time a
-  complete, non-dependent class needs `sizeof`, a field offset, codegen
-  or the Oven, then `ast.layouts.insert(record, layout)`. Readers
-  (`SemaBridge::layout`, codegen) never compute. Inserting twice is a
-  `debug_assert!` failure.
+- `Ast::layouts` is a write-once cache keyed by the class's first
+  declaration. Every consumer (sema for `sizeof`/`alignof`/offsets,
+  `SemaBridge::ensure_layout`, codegen) goes through
+  `kiln_abi::ensure_layout(&mut Ast, record, &Target) -> &RecordLayout`,
+  which lays out the class and every class it contains by value the
+  first time one is needed and inserts each layout not yet cached;
+  `kiln_abi::record_layout(&Ast, record, &Target) -> RecordLayout`
+  computes without caching (tests, the layout dump). Inserting twice is a
+  `debug_assert!` failure. Vtable layouts follow the same pattern in
+  `Ast::vtables` (`kiln_abi::vtable::ensure_vtable`, sema-class.md §3.5).
 - `size_align(q)` for non-record types is computed (not cached) by kiln_abi
   from `TargetTypes` (arrays multiply, references are pointers, member
   pointers are 1 or 2 pointer words, etc.).

@@ -48,6 +48,7 @@ mod vm;
 
 use std::time::Instant;
 
+pub use kiln_ast::class::{Subobject, SubobjectId};
 use kiln_ast::consts::ConstStore;
 use kiln_ast::types::RecordLayout;
 use kiln_ast::{Ast, ConstValueId, DeclId, ExprId, StmtId};
@@ -180,28 +181,36 @@ impl EvalContext {
     }
 }
 
-/// A class's virtual-function table (M3; unused in M2).
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct VTableLayout {
-    /// The final overrider of each slot.
-    pub slots: Vec<DeclId>,
-}
-
 /// What the Oven needs from sema. The Oven never holds a borrow of the
 /// AST across calls: sema may mutate it (instantiation on demand,
 /// interning constants) between and during evaluations.
 pub trait SemaBridge {
     /// The AST (re-borrowed per use, never held).
     fn ast(&self) -> &Ast;
-    /// The body of function `f`'s definition, instantiating it if needed.
+    /// The body of function `f`'s definition, instantiating it if needed;
+    /// for an implicit or defaulted special member this defines it on
+    /// demand (sema's `define_implicit_*`, spec/sema-class.md §4.5).
     /// Called while an evaluation runs (the first call of `f`); sema may
     /// evaluate nested constant expressions with `oven` meanwhile
     /// (R-OVEN-1: spec/oven.md "Nested evaluation").
     fn ensure_body(&mut self, f: DeclId, oven: &mut Oven) -> Option<StmtId>;
     /// The layout of a complete record (via `kiln_abi`).
     fn ensure_layout(&mut self, record: DeclId) -> &RecordLayout;
-    /// The vtable of a dynamic class (M3).
-    fn vtable(&mut self, record: DeclId) -> &VTableLayout;
+    /// The final overrider of virtual function `method` called on the
+    /// subobject `at` of an object whose most-derived class is
+    /// `most_derived`, with the subobject the overrider is a member of
+    /// ([class.virtual]/2; spec/sema-class.md §3.5). `None` when there is
+    /// no unique final overrider (diagnosed by sema at the class's `}`).
+    fn final_overrider(
+        &mut self,
+        most_derived: DeclId,
+        at: SubobjectId,
+        method: DeclId,
+    ) -> Option<(DeclId, SubobjectId)>;
+    /// The base-class subobject graph of complete class `record`, indexed
+    /// by [`SubobjectId`] (spec/sema-class.md §3.5): the currency of the
+    /// Oven's base-class pointer paths.
+    fn subobjects(&mut self, record: DeclId) -> &[Subobject];
     /// The constant store results are frozen into.
     fn consts(&mut self) -> &mut ConstStore;
     /// Emits a diagnostic (unused by M2 evaluation, which returns notes).

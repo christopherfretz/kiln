@@ -172,7 +172,12 @@ impl CodegenJob<'_> {
             return None;
         };
         let (pp, _deps) = job.build_preprocessor(sm, engine, interner, inputs)?;
-        let popts = ParseOptions { std: job.std.lex, ..ParseOptions::default() };
+        let popts = ParseOptions {
+            std: job.std.lex,
+            exceptions: a.predef.exceptions.unwrap_or(true),
+            rtti: a.predef.rtti.unwrap_or(true),
+            ..ParseOptions::default()
+        };
         let limits = a.constexpr.limits();
         let (mut tu, _pp) =
             parse_preprocessed(pp, Arc::clone(interner), engine, target.clone(), &popts, limits);

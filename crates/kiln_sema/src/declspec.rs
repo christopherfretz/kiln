@@ -68,7 +68,7 @@ pub enum Sign {
 
 /// The base type-specifier ([dcl.type.simple]).
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Default)]
-pub enum BaseSpec {
+pub enum TypeSpecKind {
     /// None written.
     #[default]
     None,
@@ -98,29 +98,32 @@ pub enum BaseSpec {
     Float128,
     /// `auto` (a placeholder deduced from the initializer, [dcl.spec.auto]).
     Auto,
+    /// `decltype(auto)` ([dcl.type.auto.deduct]/5).
+    DecltypeAuto,
     /// A type-name, class/enum specifier or elaborated-type-specifier:
     /// the type is in [`DeclSpec::named`].
     Named,
 }
 
-impl BaseSpec {
+impl TypeSpecKind {
     /// The keyword (for "cannot combine" diagnostics).
     pub fn spelling(self) -> &'static str {
         match self {
-            BaseSpec::None | BaseSpec::Named => "type name",
-            BaseSpec::Void => "void",
-            BaseSpec::Bool => "bool",
-            BaseSpec::Char => "char",
-            BaseSpec::WChar => "wchar_t",
-            BaseSpec::Char8 => "char8_t",
-            BaseSpec::Char16 => "char16_t",
-            BaseSpec::Char32 => "char32_t",
-            BaseSpec::Int => "int",
-            BaseSpec::Int128 => "__int128",
-            BaseSpec::Float => "float",
-            BaseSpec::Double => "double",
-            BaseSpec::Float128 => "__float128",
-            BaseSpec::Auto => "auto",
+            TypeSpecKind::None | TypeSpecKind::Named => "type name",
+            TypeSpecKind::Void => "void",
+            TypeSpecKind::Bool => "bool",
+            TypeSpecKind::Char => "char",
+            TypeSpecKind::WChar => "wchar_t",
+            TypeSpecKind::Char8 => "char8_t",
+            TypeSpecKind::Char16 => "char16_t",
+            TypeSpecKind::Char32 => "char32_t",
+            TypeSpecKind::Int => "int",
+            TypeSpecKind::Int128 => "__int128",
+            TypeSpecKind::Float => "float",
+            TypeSpecKind::Double => "double",
+            TypeSpecKind::Float128 => "__float128",
+            TypeSpecKind::Auto => "auto",
+            TypeSpecKind::DecltypeAuto => "decltype(auto)",
         }
     }
 }
@@ -160,10 +163,10 @@ pub struct DeclSpec {
     /// `signed`/`unsigned`.
     pub sign: Sign,
     /// The base type.
-    pub base: BaseSpec,
+    pub base: TypeSpecKind,
     /// Where the first type-specifier was written.
     pub type_loc: Option<Loc>,
-    /// The type of a [`BaseSpec::Named`] specifier.
+    /// The type of a [`TypeSpecKind::Named`] specifier.
     pub named: Option<QualType>,
     /// The class or enumeration declared or defined by this
     /// decl-specifier-seq (`struct S { }`, `enum E : int;`).
@@ -189,7 +192,7 @@ impl DeclSpec {
 
     /// True if any type-specifier was written.
     pub fn has_type_specifier(&self) -> bool {
-        self.base != BaseSpec::None || self.width != Width::None || self.sign != Sign::None
+        self.base != TypeSpecKind::None || self.width != Width::None || self.sign != Sign::None
     }
 
     /// True if anything at all was written.
@@ -307,12 +310,12 @@ impl DeclSpec {
     /// Two base types.
     pub fn set_base(
         &mut self,
-        b: BaseSpec,
+        b: TypeSpecKind,
         named: Option<QualType>,
         loc: Loc,
     ) -> Result<(), SpecError> {
         self.note_type(loc);
-        if self.base != BaseSpec::None {
+        if self.base != TypeSpecKind::None {
             return Err(SpecError::new(
                 DiagId::parse_invalid_decl_spec_combination,
                 &[self.base.spelling()],
@@ -328,9 +331,9 @@ impl DeclSpec {
         let ok = matches!(
             (self.width, self.base),
             (Width::None, _)
-                | (_, BaseSpec::None)
-                | (Width::Short | Width::LongLong | Width::Long, BaseSpec::Int)
-                | (Width::Long, BaseSpec::Double)
+                | (_, TypeSpecKind::None)
+                | (Width::Short | Width::LongLong | Width::Long, TypeSpecKind::Int)
+                | (Width::Long, TypeSpecKind::Double)
         );
         if ok {
             return Ok(());
@@ -345,9 +348,10 @@ impl DeclSpec {
     }
 
     fn check_base_sign(&self, new_is_base: bool) -> Result<(), SpecError> {
-        let ok =
-            matches!(self.base, BaseSpec::None | BaseSpec::Char | BaseSpec::Int | BaseSpec::Int128)
-                || self.sign == Sign::None;
+        let ok = matches!(
+            self.base,
+            TypeSpecKind::None | TypeSpecKind::Char | TypeSpecKind::Int | TypeSpecKind::Int128
+        ) || self.sign == Sign::None;
         if ok {
             return Ok(());
         }
@@ -389,6 +393,31 @@ pub struct ParamInfo {
     pub attrs: Vec<AttrId>,
     /// An error was reported in the parameter.
     pub invalid: bool,
+    /// The default argument, set by the parser after
+    /// [`crate::Sema::act_on_param_declarator`] returns (a default parsed
+    /// in place is already converted to the parameter's type by
+    /// [`crate::Sema::act_on_param_default_init`]).
+    pub default_arg: DefaultArg,
+    /// Where the parameter-declaration starts and ends (just past its
+    /// last token, default argument included; the `-Wvexing-parse`
+    /// fix-its, [dcl.ambig.res]).
+    pub range: (Loc, Loc),
+}
+
+/// The default argument of a [`ParamInfo`] ([dcl.fct.default]).
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
+pub enum DefaultArg {
+    /// None written.
+    #[default]
+    None,
+    /// `= e`, parsed in place and converted to the parameter's type
+    /// ([`crate::Sema::act_on_param_default_init`]).
+    Parsed(ExprId),
+    /// `=` at this location in a member function declared in a class
+    /// being defined: the tokens are saved and replayed in the
+    /// complete-class context (spec/sema-class.md §2.7); the parameter
+    /// gets `ParamData::DEFAULT_ARG_PENDING`.
+    Unparsed(Loc),
 }
 
 /// One declarator operator ([dcl.meaning]), clang's `DeclaratorChunk`.
@@ -432,6 +461,13 @@ pub enum Chunk {
         /// [`Sema::act_on_noexcept_spec`](crate::Sema::act_on_noexcept_spec)
         /// and friends; `ExcSpec::None` when absent.
         exc: ExcSpec,
+        /// The trailing return type ([dcl.fct]/2) and its `->`.
+        trailing: Option<(QualType, Loc)>,
+        /// The parentheses could also have been a direct initializer:
+        /// the parameter clause was ambiguous and resolved as a
+        /// declaration ([dcl.ambig.res]/1, clang's
+        /// `hasAmbiguousFunctionDeclarator`; `-Wvexing-parse`).
+        ambiguous: bool,
     },
 }
 
@@ -459,6 +495,13 @@ pub struct Declarator {
     /// The initializer syntax that follows (the parser peeks at `=`, `(`
     /// or `{` before the declaration is created; [dcl.init]/1).
     pub init_style: Option<kiln_ast::decl::InitStyle>,
+    /// The declarator may be followed by a direct initializer `( ... )`
+    /// (clang's `mayBeFollowedByCXXDirectInit`, less the grouping-paren
+    /// and name checks): a variable declaration that is not a `typedef`
+    /// or a block-scope `extern`. Set by the parser.
+    pub direct_init: bool,
+    /// Grouping parentheses were parsed (`int (x)`).
+    pub grouping: bool,
     /// The GNU asm label (`asm("name")` after the declarator, [dcl.asm]
     /// extension): an ordinary, non-empty `StringLiteral` expression and
     /// the extent of its tokens.
@@ -481,6 +524,8 @@ impl Declarator {
             loc,
             invalid: false,
             init_style: None,
+            direct_init: false,
+            grouping: false,
             asm_label: None,
             op_name: None,
         }

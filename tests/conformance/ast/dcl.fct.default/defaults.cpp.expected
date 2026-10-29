@@ -1,0 +1,61 @@
+TranslationUnitDecl
+|-FunctionDecl used f 'int (int, int, long)'
+| |-ParmVarDecl a 'int'
+| |-ParmVarDecl b 'int' cinit
+| | `-IntegerLiteral 'int' 2
+| `-ParmVarDecl c 'long' cinit
+|   `-ImplicitCastExpr 'long' <IntegralCast>
+|     `-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof 'int'
+|-FunctionDecl used g 'int (double)'
+| `-ParmVarDecl d 'double' cinit
+|   `-FloatingLiteral 'double' 1.5e0
+|-FunctionDecl h 'void ()'
+| `-CompoundStmt
+|   |-CallExpr 'int'
+|   | |-ImplicitCastExpr 'int (*)(int, int, long)' <FunctionToPointerDecay>
+|   | | `-DeclRefExpr 'int (int, int, long)' lvalue Function 'f' 'int (int, int, long)'
+|   | |-IntegerLiteral 'int' 1
+|   | |-CXXDefaultArgExpr 'int'
+|   | | `-IntegerLiteral 'int' 2
+|   | `-CXXDefaultArgExpr 'long'
+|   |   `-ImplicitCastExpr 'long' <IntegralCast>
+|   |     `-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof 'int'
+|   |-CallExpr 'int'
+|   | |-ImplicitCastExpr 'int (*)(int, int, long)' <FunctionToPointerDecay>
+|   | | `-DeclRefExpr 'int (int, int, long)' lvalue Function 'f' 'int (int, int, long)'
+|   | |-IntegerLiteral 'int' 1
+|   | |-IntegerLiteral 'int' 3
+|   | `-CXXDefaultArgExpr 'long'
+|   |   `-ImplicitCastExpr 'long' <IntegralCast>
+|   |     `-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof 'int'
+|   |-CallExpr 'int'
+|   | |-ImplicitCastExpr 'int (*)(int, int, long)' <FunctionToPointerDecay>
+|   | | `-DeclRefExpr 'int (int, int, long)' lvalue Function 'f' 'int (int, int, long)'
+|   | |-IntegerLiteral 'int' 1
+|   | |-IntegerLiteral 'int' 3
+|   | `-ImplicitCastExpr 'long' <IntegralCast>
+|   |   `-IntegerLiteral 'int' 4
+|   `-CallExpr 'int'
+|     |-ImplicitCastExpr 'int (*)(double)' <FunctionToPointerDecay>
+|     | `-DeclRefExpr 'int (double)' lvalue Function 'g' 'int (double)'
+|     `-CXXDefaultArgExpr 'double'
+|       `-FloatingLiteral 'double' 1.5e0
+`-FunctionDecl used f 'int (int, int, long)'
+  |-ParmVarDecl used a 'int'
+  |-ParmVarDecl used b 'int' cinit
+  | `-IntegerLiteral 'int' 2
+  |-ParmVarDecl used c 'long' cinit
+  | `-ImplicitCastExpr 'long' <IntegralCast>
+  |   `-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof 'int'
+  `-CompoundStmt
+    `-ReturnStmt
+      `-BinaryOperator 'int' '+'
+        |-BinaryOperator 'int' '+'
+        | |-ImplicitCastExpr 'int' <LValueToRValue>
+        | | `-DeclRefExpr 'int' lvalue ParmVar 'a' 'int'
+        | `-ImplicitCastExpr 'int' <LValueToRValue>
+        |   `-DeclRefExpr 'int' lvalue ParmVar 'b' 'int'
+        `-CXXFunctionalCastExpr 'int' functional cast to int <NoOp>
+          `-ImplicitCastExpr 'int' <IntegralCast> part_of_explicit_cast
+            `-ImplicitCastExpr 'long' <LValueToRValue> part_of_explicit_cast
+              `-DeclRefExpr 'long' lvalue ParmVar 'c' 'long'

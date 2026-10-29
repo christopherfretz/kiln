@@ -1,0 +1,266 @@
+TranslationUnitDecl
+|-TypedefDecl implicit __int128_t '__int128'
+|-TypedefDecl implicit __uint128_t 'unsigned __int128'
+|-TypedefDecl implicit __NSConstantString '__NSConstantString_tag'
+|-TypedefDecl implicit __SVInt8_t '__SVInt8_t'
+|-TypedefDecl implicit __SVInt16_t '__SVInt16_t'
+|-TypedefDecl implicit __SVInt32_t '__SVInt32_t'
+|-TypedefDecl implicit __SVInt64_t '__SVInt64_t'
+|-TypedefDecl implicit __SVUint8_t '__SVUint8_t'
+|-TypedefDecl implicit __SVUint16_t '__SVUint16_t'
+|-TypedefDecl implicit __SVUint32_t '__SVUint32_t'
+|-TypedefDecl implicit __SVUint64_t '__SVUint64_t'
+|-TypedefDecl implicit __SVFloat16_t '__SVFloat16_t'
+|-TypedefDecl implicit __SVFloat32_t '__SVFloat32_t'
+|-TypedefDecl implicit __SVFloat64_t '__SVFloat64_t'
+|-TypedefDecl implicit __SVBfloat16_t '__SVBfloat16_t'
+|-TypedefDecl implicit __clang_svint8x2_t '__clang_svint8x2_t'
+|-TypedefDecl implicit __clang_svint16x2_t '__clang_svint16x2_t'
+|-TypedefDecl implicit __clang_svint32x2_t '__clang_svint32x2_t'
+|-TypedefDecl implicit __clang_svint64x2_t '__clang_svint64x2_t'
+|-TypedefDecl implicit __clang_svuint8x2_t '__clang_svuint8x2_t'
+|-TypedefDecl implicit __clang_svuint16x2_t '__clang_svuint16x2_t'
+|-TypedefDecl implicit __clang_svuint32x2_t '__clang_svuint32x2_t'
+|-TypedefDecl implicit __clang_svuint64x2_t '__clang_svuint64x2_t'
+|-TypedefDecl implicit __clang_svfloat16x2_t '__clang_svfloat16x2_t'
+|-TypedefDecl implicit __clang_svfloat32x2_t '__clang_svfloat32x2_t'
+|-TypedefDecl implicit __clang_svfloat64x2_t '__clang_svfloat64x2_t'
+|-TypedefDecl implicit __clang_svbfloat16x2_t '__clang_svbfloat16x2_t'
+|-TypedefDecl implicit __clang_svint8x3_t '__clang_svint8x3_t'
+|-TypedefDecl implicit __clang_svint16x3_t '__clang_svint16x3_t'
+|-TypedefDecl implicit __clang_svint32x3_t '__clang_svint32x3_t'
+|-TypedefDecl implicit __clang_svint64x3_t '__clang_svint64x3_t'
+|-TypedefDecl implicit __clang_svuint8x3_t '__clang_svuint8x3_t'
+|-TypedefDecl implicit __clang_svuint16x3_t '__clang_svuint16x3_t'
+|-TypedefDecl implicit __clang_svuint32x3_t '__clang_svuint32x3_t'
+|-TypedefDecl implicit __clang_svuint64x3_t '__clang_svuint64x3_t'
+|-TypedefDecl implicit __clang_svfloat16x3_t '__clang_svfloat16x3_t'
+|-TypedefDecl implicit __clang_svfloat32x3_t '__clang_svfloat32x3_t'
+|-TypedefDecl implicit __clang_svfloat64x3_t '__clang_svfloat64x3_t'
+|-TypedefDecl implicit __clang_svbfloat16x3_t '__clang_svbfloat16x3_t'
+|-TypedefDecl implicit __clang_svint8x4_t '__clang_svint8x4_t'
+|-TypedefDecl implicit __clang_svint16x4_t '__clang_svint16x4_t'
+|-TypedefDecl implicit __clang_svint32x4_t '__clang_svint32x4_t'
+|-TypedefDecl implicit __clang_svint64x4_t '__clang_svint64x4_t'
+|-TypedefDecl implicit __clang_svuint8x4_t '__clang_svuint8x4_t'
+|-TypedefDecl implicit __clang_svuint16x4_t '__clang_svuint16x4_t'
+|-TypedefDecl implicit __clang_svuint32x4_t '__clang_svuint32x4_t'
+|-TypedefDecl implicit __clang_svuint64x4_t '__clang_svuint64x4_t'
+|-TypedefDecl implicit __clang_svfloat16x4_t '__clang_svfloat16x4_t'
+|-TypedefDecl implicit __clang_svfloat32x4_t '__clang_svfloat32x4_t'
+|-TypedefDecl implicit __clang_svfloat64x4_t '__clang_svfloat64x4_t'
+|-TypedefDecl implicit __clang_svbfloat16x4_t '__clang_svbfloat16x4_t'
+|-TypedefDecl implicit __SVBool_t '__SVBool_t'
+|-TypedefDecl implicit __clang_svboolx2_t '__clang_svboolx2_t'
+|-TypedefDecl implicit __clang_svboolx4_t '__clang_svboolx4_t'
+|-TypedefDecl implicit __SVCount_t '__SVCount_t'
+|-TypedefDecl implicit __builtin_ms_va_list 'char *'
+|-TypedefDecl implicit __builtin_va_list 'std::__va_list'
+|-CXXRecordDecl referenced struct B definition
+| |-CXXRecordDecl implicit referenced struct B
+| |-CXXDestructorDecl used ~B 'void () noexcept' virtual
+| |-CXXMethodDecl referenced f 'int ()' virtual pure
+| |-FieldDecl referenced b 'int'
+| | `-IntegerLiteral 'int' 1
+| |-CXXMethodDecl implicit constexpr operator= 'B &(const B &)' inline default noexcept-unevaluated
+| | `-ParmVarDecl 'const B &'
+| |-CXXConstructorDecl implicit constexpr B 'void (const B &)' inline default noexcept-unevaluated
+| | `-ParmVarDecl 'const B &'
+| `-CXXConstructorDecl implicit used constexpr B 'void () noexcept' inline default
+|   |-CXXCtorInitializer Field 'b' 'int'
+|   | `-CXXDefaultInitExpr 'int' has rewritten init
+|   |   `-IntegerLiteral 'int' 1
+|   `-CompoundStmt
+|-CXXRecordDecl referenced struct V definition
+| |-CXXRecordDecl implicit struct V
+| |-FieldDecl v 'int'
+| |-CXXConstructorDecl implicit constexpr V 'void (const V &)' inline default trivial noexcept-unevaluated
+| | `-ParmVarDecl 'const V &'
+| |-CXXConstructorDecl implicit constexpr V 'void (V &&)' inline default trivial noexcept-unevaluated
+| | `-ParmVarDecl 'V &&'
+| |-CXXDestructorDecl implicit constexpr ~V 'void () noexcept' inline default trivial
+| `-CXXConstructorDecl implicit used constexpr V 'void () noexcept' inline default trivial
+|   `-CompoundStmt
+|-CXXRecordDecl struct F
+|-FunctionDecl g 'void (int)'
+| `-ParmVarDecl 'int'
+|-CXXRecordDecl referenced class D definition
+| |-public 'B'
+| |-virtual protected 'V'
+| |-FinalAttr final
+| |-CXXRecordDecl implicit referenced class D
+| |-FriendDecl 'struct F':'F'
+| |-FriendDecl 'struct H':'H'
+| | `-CXXRecordDecl parent friend_undeclared struct H
+| |-FriendDecl
+| | `-FunctionDecl parent friend g 'void (int)'
+| |   `-ParmVarDecl 'int'
+| |-FriendDecl
+| | `-FunctionDecl parent constexpr friend_undeclared k 'int (D)' implicit-inline
+| |   |-ParmVarDecl 'D'
+| |   `-CompoundStmt
+| |     `-ReturnStmt
+| |       `-IntegerLiteral 'int' 0
+| |-AccessSpecDecl public
+| |-FieldDecl referenced m 'int' mutable
+| | `-IntegerLiteral 'int' 2
+| |-CXXConstructorDecl used D 'void ()' implicit-inline
+| | |-CXXCtorInitializer 'V'
+| | | `-CXXConstructExpr 'V' 'void () noexcept'
+| | |-CXXCtorInitializer 'B'
+| | | `-CXXConstructExpr 'B' 'void () noexcept' zeroing
+| | |-CXXCtorInitializer Field 'm' 'int'
+| | | `-IntegerLiteral 'int' 3
+| | `-CompoundStmt
+| |-CXXConstructorDecl D 'void (int)' implicit-inline
+| | |-ParmVarDecl x 'int'
+| | |-CXXCtorInitializer 'D'
+| | | `-CXXConstructExpr 'D' 'void ()'
+| | `-CompoundStmt
+| |-CXXConversionDecl operator bool 'bool () const'
+| |-CXXMethodDecl f 'int ()' implicit-inline
+| | |-Overrides: [ B::f 'int ()' ]
+| | |-CompoundStmt
+| | | `-ReturnStmt
+| | |   `-ImplicitCastExpr 'int' <LValueToRValue>
+| | |     `-MemberExpr 'int' lvalue ->m
+| | |       `-CXXThisExpr 'D *' implicit this
+| | |-OverrideAttr
+| | `-FinalAttr final
+| |-CXXConstructorDecl D 'void (const D &)' default noexcept-unevaluated implicit-inline
+| | `-ParmVarDecl 'const D &'
+| |-CXXMethodDecl operator= 'D &(const D &)' delete implicit-inline
+| | |-delete message: StringLiteral unevaluated "no \"copy\""
+| | `-ParmVarDecl 'const D &'
+| |-CXXMethodDecl s 'void ()' static
+| `-CXXDestructorDecl used ~D 'void () noexcept'
+|   `-Overrides: [ B::~B 'void () noexcept' ]
+|-CXXMethodDecl parent s 'void ()'
+| `-CompoundStmt
+|-CXXRecordDecl referenced struct Q definition
+| |-CXXRecordDecl implicit referenced struct Q
+| |-FieldDecl referenced q 'int[2]'
+| |-FieldDecl referenced z 'int'
+| | `-IntegerLiteral 'int' 1
+| |-CXXConstructorDecl constexpr Q 'void ()' default noexcept-unevaluated implicit-inline
+| |-CXXConstructorDecl Q 'void (int, int)'
+| | |-ParmVarDecl 'int'
+| | `-ParmVarDecl 'int'
+| |-CXXConstructorDecl implicit used constexpr Q 'void (const Q &) noexcept' inline default trivial
+| | |-ParmVarDecl used 'const Q &'
+| | |-CXXCtorInitializer Field 'q' 'int[2]'
+| | | `-ArrayInitLoopExpr 'int[2]'
+| | |   |-OpaqueValueExpr 'const int[2]' lvalue
+| | |   | `-MemberExpr 'const int[2]' lvalue .q
+| | |   |   `-DeclRefExpr 'const Q' lvalue ParmVar '' 'const Q &'
+| | |   `-ImplicitCastExpr 'int' <LValueToRValue>
+| | |     `-ArraySubscriptExpr 'const int' lvalue
+| | |       |-ImplicitCastExpr 'const int *' <ArrayToPointerDecay>
+| | |       | `-OpaqueValueExpr 'const int[2]' lvalue
+| | |       |   `-MemberExpr 'const int[2]' lvalue .q
+| | |       |     `-DeclRefExpr 'const Q' lvalue ParmVar '' 'const Q &'
+| | |       `-ArrayInitIndexExpr 'unsigned long'
+| | |-CXXCtorInitializer Field 'z' 'int'
+| | | `-ImplicitCastExpr 'int' <LValueToRValue>
+| | |   `-MemberExpr 'const int' lvalue .z
+| | |     `-DeclRefExpr 'const Q' lvalue ParmVar '' 'const Q &'
+| | `-CompoundStmt
+| `-CXXConstructorDecl implicit constexpr Q 'void (Q &&)' inline default trivial noexcept-unevaluated
+|   `-ParmVarDecl 'Q &&'
+|-CXXRecordDecl referenced struct S definition
+| |-CXXRecordDecl implicit referenced struct S
+| |-CXXConstructorDecl used S 'void ()'
+| |-CXXConstructorDecl used S 'void (int, int)'
+| | |-ParmVarDecl 'int'
+| | `-ParmVarDecl 'int'
+| |-CXXDestructorDecl used ~S 'void () noexcept'
+| `-CXXConstructorDecl implicit constexpr S 'void (const S &)' inline default trivial noexcept-unevaluated
+|   `-ParmVarDecl 'const S &'
+|-FunctionDecl used make 'S ()'
+|-FunctionDecl used use 'void (const S &, int)'
+| |-ParmVarDecl 'const S &'
+| `-ParmVarDecl 'int' cinit
+|   `-IntegerLiteral 'int' 5
+`-FunctionDecl h 'int (D &, V *, Q)'
+  |-ParmVarDecl used d 'D &'
+  |-ParmVarDecl w 'V *'
+  |-ParmVarDecl used q 'Q'
+  `-CompoundStmt
+    |-DeclStmt
+    | `-VarDecl used b 'B &' cinit
+    |   `-ImplicitCastExpr 'B' lvalue <DerivedToBase (B)>
+    |     `-DeclRefExpr 'D' lvalue ParmVar 'd' 'D &'
+    |-DeclStmt
+    | `-VarDecl r 'const S &' cinit
+    |   `-ExprWithCleanups 'const S' lvalue
+    |     `-MaterializeTemporaryExpr 'const S' lvalue extended by Var 'r' 'const S &'
+    |       `-ImplicitCastExpr 'const S' <NoOp>
+    |         `-CXXBindTemporaryExpr 'S' (CXXTemporary)
+    |           `-CXXTemporaryObjectExpr 'S' 'void ()'
+    |-DeclStmt
+    | `-VarDecl r2 'S &&' cinit
+    |   `-ExprWithCleanups 'S' xvalue
+    |     `-MaterializeTemporaryExpr 'S' xvalue extended by Var 'r2' 'S &&'
+    |       `-CXXBindTemporaryExpr 'S' (CXXTemporary)
+    |         `-CallExpr 'S'
+    |           `-ImplicitCastExpr 'S (*)()' <FunctionToPointerDecay>
+    |             `-DeclRefExpr 'S ()' lvalue Function 'make' 'S ()'
+    |-DeclStmt
+    | `-VarDecl s1 'S' cinit
+    |   `-ExprWithCleanups 'S'
+    |     `-CXXBindTemporaryExpr 'S' (CXXTemporary)
+    |       `-CXXTemporaryObjectExpr 'S' 'void (int, int)'
+    |         |-IntegerLiteral 'int' 1
+    |         `-IntegerLiteral 'int' 2
+    |-DeclStmt
+    | `-VarDecl s2 'S' listinit
+    |   `-CXXConstructExpr 'S' 'void (int, int)' list
+    |     |-IntegerLiteral 'int' 1
+    |     `-IntegerLiteral 'int' 2
+    |-ExprWithCleanups 'void'
+    | `-CallExpr 'void'
+    |   |-ImplicitCastExpr 'void (*)(const S &, int)' <FunctionToPointerDecay>
+    |   | `-DeclRefExpr 'void (const S &, int)' lvalue Function 'use' 'void (const S &, int)'
+    |   |-MaterializeTemporaryExpr 'const S' lvalue
+    |   | `-ImplicitCastExpr 'const S' <NoOp>
+    |   |   `-CXXBindTemporaryExpr 'S' (CXXTemporary)
+    |   |     `-CXXTemporaryObjectExpr 'S' 'void ()'
+    |   `-CXXDefaultArgExpr 'int'
+    |     `-IntegerLiteral 'int' 5
+    |-DeclStmt
+    | `-VarDecl used q2 'Q' cinit
+    |   `-CXXConstructExpr 'Q' 'void (const Q &) noexcept'
+    |     `-ImplicitCastExpr 'const Q' lvalue <NoOp>
+    |       `-DeclRefExpr 'Q' lvalue ParmVar 'q' 'Q'
+    |-DeclStmt
+    | `-VarDecl v 'V' parenlistinit
+    |   `-CXXParenListInitExpr 'V'
+    |     `-IntegerLiteral 'int' 1
+    |-DeclStmt
+    | `-VarDecl arr 'int[3]' parenlistinit
+    |   `-CXXParenListInitExpr 'int[3]'
+    |     |-array_filler: ImplicitValueInitExpr 'int'
+    |     `-IntegerLiteral 'int' 1
+    |-DeclStmt
+    | `-VarDecl used i 'int' cinit
+    |   `-CXXFunctionalCastExpr 'int' functional cast to int <NoOp>
+    |     `-ImplicitCastExpr 'int' <FloatingToIntegral> part_of_explicit_cast
+    |       `-FloatingLiteral 'double' 3e0
+    `-ReturnStmt
+      `-BinaryOperator 'int' '+'
+        |-BinaryOperator 'int' '+'
+        | |-BinaryOperator 'int' '+'
+        | | |-CXXMemberCallExpr 'int'
+        | | | `-MemberExpr '<bound member function type>' .f
+        | | |   `-DeclRefExpr 'B' lvalue Var 'b' 'B &'
+        | | `-ImplicitCastExpr 'int' <LValueToRValue>
+        | |   `-MemberExpr 'int' lvalue .b
+        | |     `-CXXStaticCastExpr 'B' lvalue static_cast<B &> <NoOp>
+        | |       `-ImplicitCastExpr 'B' lvalue <DerivedToBase (B)> part_of_explicit_cast
+        | |         `-DeclRefExpr 'D' lvalue ParmVar 'd' 'D &'
+        | `-ImplicitCastExpr 'int' <LValueToRValue>
+        |   `-MemberExpr 'const int' lvalue .z
+        |     `-CXXConstCastExpr 'const Q' lvalue const_cast<const Q &> <NoOp>
+        |       `-DeclRefExpr 'Q' lvalue Var 'q2' 'Q'
+        `-ImplicitCastExpr 'int' <LValueToRValue>
+          `-DeclRefExpr 'int' lvalue Var 'i' 'int'

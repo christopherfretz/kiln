@@ -8,6 +8,10 @@
 
 use kiln_ast::DeclId;
 use kiln_ast::decl::DeclKind;
+/// Lookup-table entry flags (owned by spec/sema-overload.md §2.3): a hidden
+/// friend's entry is `ADL_ONLY`, invisible to ordinary and qualified
+/// lookup ([namespace.memdef]/3) but seen by redeclaration lookup and ADL.
+pub use kiln_ast::lookup::LookupFlags;
 use kiln_ast::names::DeclName;
 use kiln_source::symbol::Symbol;
 
@@ -142,7 +146,7 @@ impl Sema<'_, '_> {
     /// namespaces included).
     pub fn lookup_in(&self, ctx: DeclId, name: Symbol, kind: LookupKind) -> Found {
         let r = self.ast.lookup_local(ctx, DeclName::ident(name));
-        self.filter(r.iter().collect(), kind)
+        self.filter(r.iter_ordinary().collect(), kind)
     }
 
     /// Qualified lookup of `name` in `ctx` ([namespace.qual],
@@ -159,7 +163,7 @@ impl Sema<'_, '_> {
         for s in &self.scopes {
             if s.entity.map(|e| self.ast.first(e)) == Some(self.ast.first(ctx)) {
                 for &n in &s.using_dirs {
-                    v.extend(self.ast.lookup_local(n, DeclName::ident(name)).iter());
+                    v.extend(self.ast.lookup_local(n, DeclName::ident(name)).iter_ordinary());
                 }
             }
         }
@@ -213,21 +217,21 @@ impl Sema<'_, '_> {
             }
             let Some(entity) = s.entity else { continue };
             let mut v: Vec<DeclId> =
-                self.ast.lookup_local(entity, DeclName::ident(name)).iter().collect();
+                self.ast.lookup_local(entity, DeclName::ident(name)).iter_ordinary().collect();
             let own = self.filter(v.clone(), kind);
             if !own.is_empty() {
                 return own;
             }
             v.clear();
             for &n in &s.using_dirs {
-                v.extend(self.ast.lookup_local(n, DeclName::ident(name)).iter());
+                v.extend(self.ast.lookup_local(n, DeclName::ident(name)).iter_ordinary());
             }
             if matches!(s.kind, ScopeKind::Namespace | ScopeKind::TranslationUnit) {
                 let mut i = 0;
                 while i < local_dirs.len() {
                     if self.encloses(entity, local_dirs[i]) {
                         let n = local_dirs.remove(i);
-                        v.extend(self.ast.lookup_local(n, DeclName::ident(name)).iter());
+                        v.extend(self.ast.lookup_local(n, DeclName::ident(name)).iter_ordinary());
                     } else {
                         i += 1;
                     }

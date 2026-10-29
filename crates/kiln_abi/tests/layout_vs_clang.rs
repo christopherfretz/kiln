@@ -1,7 +1,9 @@
 //! Differential test: seeded random class definitions are laid out and
 //! dumped by `kiln_abi` and by `clang++-19 -Xclang -fdump-record-layouts`
 //! for each supported target, and every dump block must match byte for
-//! byte (spec/abi.md §7). Skipped when `clang++-19` is not installed.
+//! byte (spec/abi.md §7). The generator covers non-virtual base
+//! hierarchies (empty bases, repeated indirect bases, non-POD bases) and
+//! `#pragma pack`. Skipped when `clang++-19` is not installed.
 //!
 //! `KILN_ABI_DIFF_SEED` overrides the seed; `KILN_ABI_DIFF_RECORDS` the
 //! number of records per target; `KILN_ABI_DIFF_SHOW` prints every
@@ -66,6 +68,8 @@ struct Facts {
     over_aligned: bool,
     /// Declares no members but unnamed bit-fields (an empty class).
     empty: bool,
+    /// A union (never a base class).
+    union: bool,
     /// An upper bound on the alignment, in bytes.
     align_ub: u64,
 }
@@ -322,6 +326,52 @@ impl Gen<'_> {
         (f, plain)
     }
 
+    /// Picks 1–3 distinct non-virtual bases for `rec`: empty ones (EBO
+    /// and the same-type rule), repeated indirect ones, non-POD ones
+    /// (tail-padding reuse). Returns their combined facts (`empty`: all
+    /// bases are empty).
+    fn bases(&mut self, rec: &mut RecDef) -> Facts {
+        let mut acc = Facts { dc: true, empty: true, align_ub: 1, ..Facts::default() };
+        let candidates = self.items_where(|f| f.record && !f.union && !f.fam);
+        let n = 1 + self.rng.below(3);
+        for _ in 0..n {
+            if candidates.is_empty() {
+                break;
+            }
+            let empties: Vec<usize> =
+                candidates.iter().copied().filter(|&c| self.facts[c].empty).collect();
+            let c = if !empties.is_empty() && self.rng.chance(40) {
+                self.rng.pick(&empties)
+            } else {
+                self.rng.pick(&candidates)
+            };
+            if rec.bases.contains(&c) {
+                continue;
+            }
+            let bf = self.facts[c];
+            rec.bases.push(c);
+            acc.dc &= bf.dc;
+            acc.nontrivial |= bf.nontrivial;
+            acc.align_ub = acc.align_ub.max(bf.align_ub);
+            acc.empty &= bf.empty;
+        }
+        acc
+    }
+
+    /// An empty-class member, usually `[[no_unique_address]]`, overlapping
+    /// other members (C++20 [intro.object]/9).
+    fn empty_member(&mut self, empties: &[usize]) -> (FieldDef, TyFacts) {
+        let e = self.rng.pick(empties);
+        let ef = self.facts[e];
+        let ty = if self.rng.chance(20) {
+            Ty::Named(e).arr(1 + self.rng.below(3))
+        } else {
+            Ty::Named(e)
+        };
+        let f = FieldDef { ty: Some(ty), nua: self.rng.chance(80), ..FieldDef::default() };
+        (f, TyFacts { dc: ef.dc, nontrivial: ef.nontrivial, align_ub: ef.align_ub })
+    }
+
     fn record(&mut self, idx: usize) {
         let union = self.rng.chance(20);
         let tag =
@@ -331,20 +381,21 @@ impl Gen<'_> {
         let mut dc = true;
         let mut nontrivial = false;
         let mut ub: u64 = 1;
+        let mut bases_empty = true;
+        if !union && self.rng.chance(35) {
+            let bf = self.bases(&mut rec);
+            dc &= bf.dc;
+            nontrivial |= bf.nontrivial;
+            ub = ub.max(bf.align_ub);
+            bases_empty = bf.empty;
+        }
+        if self.rng.chance(8) {
+            rec.pack = Some(self.rng.pick(&[1, 2, 4, 8, 16]));
+        }
         for k in 0..n_fields {
             let empties = self.items_where(|f| f.empty);
             let (mut f, tf) = if !empties.is_empty() && self.rng.chance(12) {
-                // [[no_unique_address]] empty members, overlapping each
-                // other and the next members (C++20 [intro.object]/9).
-                let e = self.rng.pick(&empties);
-                let ef = self.facts[e];
-                let ty = if self.rng.chance(20) {
-                    Ty::Named(e).arr(1 + self.rng.below(3))
-                } else {
-                    Ty::Named(e)
-                };
-                let f = FieldDef { ty: Some(ty), nua: self.rng.chance(80), ..FieldDef::default() };
-                (f, TyFacts { dc: ef.dc, nontrivial: ef.nontrivial, align_ub: ef.align_ub })
+                self.empty_member(&empties)
             } else if self.rng.chance(30) {
                 self.bit_field(union)
             } else {
@@ -413,11 +464,12 @@ impl Gen<'_> {
             rec.user_ctor = true;
             nontrivial = true;
         }
-        let empty = rec.fields.iter().all(|f| f.bits.is_some() && f.name.is_none());
+        let empty = bases_empty && rec.fields.iter().all(|f| f.bits.is_some() && f.name.is_none());
         self.model.push(Item::Record(rec));
         self.facts.push(Facts {
             record: true,
             empty,
+            union,
             fam,
             dc,
             nontrivial,
@@ -543,7 +595,7 @@ fn record_source(src: &str, name: &str) -> String {
     let mut out = String::new();
     let mut on = false;
     for line in src.lines() {
-        if !on && (line.contains(&format!(" {name} {{"))) {
+        if !on && (line.contains(&format!(" {name} {{")) || line.contains(&format!(" {name} : "))) {
             on = true;
         }
         if on {

@@ -14,9 +14,9 @@ builds is the contract: same kinds, same order, same target types (sugar
 included) and same value categories.
 
 ## 1. Context: `Sema`
-`Sema<'a, 'sm> { ast: Ast, diags: &DiagEngine, target: TargetTypes }` is a
-minimal shim that WP-048 extends. Every function in this spec takes
-`&Sema` or `&mut Sema`. Helpers:
+The conversion machinery reads `Sema`'s `ast`, `diags` and `target:
+TargetTypes` (the full state is sema.md §1). Every function in this spec
+takes `&Sema` or `&mut Sema`. Helpers:
 - `diag(id, loc) -> Diag` and `emit(Diag)`.
 - `ty_arg(q)` gives the quoted type as clang prints it in diagnostics,
   `'T'` or `'T' (aka 'U')` when sugar hides the canonical type.

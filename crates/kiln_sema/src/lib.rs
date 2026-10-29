@@ -15,18 +15,23 @@
 )]
 
 mod builtins;
+pub mod class;
 pub mod constfold;
 pub mod conv;
 pub mod decl;
 pub mod declspec;
+mod deduce;
 pub mod except;
 pub mod expr;
+mod forms;
+mod gnu;
 pub mod init;
 pub mod literal;
 pub mod lookup;
 pub mod names;
 pub mod new_delete;
 mod oven_bridge;
+mod rtti;
 pub mod scope;
 pub mod stmt;
 pub mod target;
@@ -38,10 +43,13 @@ use kiln_ast::{Ast, AstBuilder, DeclId, ExprId, QualType};
 use kiln_diag::{Diag, DiagEngine, DiagId};
 use kiln_source::{Loc, Span};
 
+pub use class::{BaseSpecInfo, MemInitId, MemInitInfo};
 pub use decl::{NameClass, TagUse};
 pub use declspec::{
-    BaseSpec, Chunk, DeclSpec, Declarator, DeclaratorContext, ParamInfo, Sign, StorageSpec, Width,
+    Chunk, DeclSpec, Declarator, DeclaratorContext, DefaultArg, ParamInfo, Sign, StorageSpec,
+    TypeSpecKind, Width,
 };
+pub use gnu::{OffsetofComponent, StmtExprScope};
 pub use init::{Designator, InitItem, InitList, InitValue, Initializer};
 pub use kiln_oven::{Budget, EvalContext, EvalFailure, EvalKind, Oven};
 pub use scope::ScopeKind;
@@ -64,9 +72,18 @@ pub struct Sema<'a, 'sm> {
     /// spec/abi.md).
     pub abi: Target,
     /// The `#pragma pack` directives seen, in order (location and the
-    /// spelling of the argument list), for `kiln_abi`'s record layout
-    /// once packing is supported (WP-055; reported as unsupported now).
+    /// spelling of the argument list).
     pub pragma_packs: Vec<(Loc, String)>,
+    /// C++ exceptions are enabled (`-f[no-]exceptions`; default on).
+    pub exceptions: bool,
+    /// Run-time type information is enabled (`-f[no-]rtti`; default on):
+    /// `typeid` is an error otherwise.
+    pub rtti: bool,
+    /// The `#pragma pack` state (clang's `AlignPackStack`): the current
+    /// maximum field alignment in bytes (0: none) and the pushed
+    /// `(label, value)` entries. Applied to each class definition as it
+    /// begins (`record_pack`).
+    pub(crate) pack: (u16, Vec<(Option<String>, u16)>),
     pub(crate) scopes: Vec<scope::Scope>,
     /// The current semantic declaration context.
     pub(crate) ctx: DeclId,
@@ -93,6 +110,36 @@ pub struct Sema<'a, 'sm> {
     pub(crate) oven: Oven,
     /// The implicitly declared global allocation functions.
     pub(crate) global_ops: new_delete::GlobalOps,
+    /// Braced-init-list call arguments awaiting their parameter types
+    /// (placeholders of [`Sema::act_on_braced_arg`]).
+    pub(crate) braced_args: Vec<(ExprId, InitList)>,
+    /// The names of the parameters declared so far in each enclosing
+    /// parameter-declaration-clause being parsed ([`Sema::act_on_start_prototype`]).
+    pub(crate) prototype_params: Vec<Vec<kiln_source::symbol::Symbol>>,
+    /// Classes being defined, innermost last (spec/sema-class.md §8.3).
+    pub(crate) classes: Vec<class::ClassBuild>,
+    /// Which implicit special members each class has declared
+    /// ([`class::implicit`] bits; spec/sema-class.md §4.1).
+    #[expect(dead_code, reason = "WP-066a interface; read from WP-066b/067a/067b")]
+    pub(crate) implicit_declared: kiln_source::fx::FxHashMap<DeclId, u8>,
+    /// Access checks delayed until their declaration exists
+    /// (spec/sema-class.md §2.4).
+    #[expect(dead_code, reason = "WP-066a interface; read from WP-066b/067a/067b")]
+    pub(crate) delayed_access: Vec<class::AccessCheck>,
+    /// `delayed_access.len()` at each open delay point, innermost last.
+    #[expect(dead_code, reason = "WP-066a interface; read from WP-066b/067a/067b")]
+    pub(crate) delayed_access_depth: Vec<usize>,
+    /// The current full-expression's cleanup state (spec/sema-class.md
+    /// §5.3).
+    #[expect(dead_code, reason = "WP-066a interface; read from WP-066b/067a/067b")]
+    pub(crate) cleanup: class::CleanupState,
+    /// Materialized temporaries collected for P2718 range-for lifetime
+    /// extension (spec/sema-class.md §5.4).
+    #[expect(dead_code, reason = "WP-066a interface; read from WP-066b/067a/067b")]
+    pub(crate) extend_collector: Option<Vec<ExprId>>,
+    /// Member functions whose *noexcept-specifier* awaits replay
+    /// (`ExcSpec::Deferred`, spec/sema-class.md §2.7).
+    pub(crate) unparsed_exc: kiln_source::fx::FxHashSet<DeclId>,
 }
 
 impl<'a, 'sm> Sema<'a, 'sm> {
@@ -118,6 +165,9 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             target,
             abi,
             pragma_packs: Vec::new(),
+            exceptions: true,
+            rtti: true,
+            pack: (0, Vec::new()),
             scopes: vec![scope::Scope::new(ScopeKind::TranslationUnit, Some(tu))],
             ctx: tu,
             func: None,
@@ -129,6 +179,15 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             local_externs: Vec::new(),
             oven: Oven::new(Budget::default()),
             global_ops: new_delete::GlobalOps::default(),
+            braced_args: Vec::new(),
+            prototype_params: Vec::new(),
+            classes: Vec::new(),
+            implicit_declared: kiln_source::fx::FxHashMap::default(),
+            delayed_access: Vec::new(),
+            delayed_access_depth: Vec::new(),
+            cleanup: class::CleanupState::default(),
+            extend_collector: None,
+            unparsed_exc: kiln_source::fx::FxHashSet::default(),
         }
     }
 

@@ -25,6 +25,7 @@ use kiln_source::symbol::Symbol;
 use crate::Sema;
 use crate::constfold::int_info;
 use crate::conv::{self, ArithConvKind, ConvCtx, ConvError};
+use crate::init::InitList;
 use crate::literal;
 use crate::lookup::LookupKind;
 
@@ -90,7 +91,7 @@ impl CastStyle {
 impl Sema<'_, '_> {
     // -- small helpers ---------------------------------------------------------
 
-    fn ety(&self, e: ExprId) -> QualType {
+    pub(crate) fn ety(&self, e: ExprId) -> QualType {
         self.ast.exprs.get(e).ty()
     }
 
@@ -130,7 +131,7 @@ impl Sema<'_, '_> {
 
     /// The type of a name or member of declared type `t`: references
     /// designate their referent ([expr.type]/1).
-    fn non_reference(&self, t: QualType) -> QualType {
+    pub(crate) fn non_reference(&self, t: QualType) -> QualType {
         if self.ast.types.is_reference(t) {
             self.pointee_sugared(t).unwrap_or(QualType::ERROR)
         } else {
@@ -310,6 +311,7 @@ impl Sema<'_, '_> {
                 | ExprKind::BinaryOperator
                 | ExprKind::CompoundAssignOperator
                 | ExprKind::ConditionalOperator
+                | ExprKind::BinaryConditionalOperator
                 | ExprKind::ArraySubscriptExpr
                 | ExprKind::CallExpr
                 | ExprKind::MemberExpr => true,
@@ -485,7 +487,7 @@ impl Sema<'_, '_> {
         }
     }
 
-    fn unused_warning(&self, e: ExprId) -> Option<(DiagId, Loc, Vec<String>)> {
+    pub(crate) fn unused_warning(&self, e: ExprId) -> Option<(DiagId, Loc, Vec<String>)> {
         let x = self.ignore_parens(e);
         let n = *self.ast.exprs.get(x);
         let loc = n.loc();
@@ -549,12 +551,18 @@ impl Sema<'_, '_> {
                 Some((DiagId::sema_unused_expr, loc, Vec::new()))
             }
             ExprKind::ConditionalOperator => {
+                // Only when both arms warn (otherwise it may be control
+                // flow); clang reports the false arm's warning.
                 let [t, f] = self.ast.exprs.cond_arms(x);
-                (self.unused_warning(t).is_some() && self.unused_warning(f).is_some()).then_some((
-                    DiagId::sema_unused_expr,
-                    loc,
-                    Vec::new(),
-                ))
+                self.unused_warning(t)?;
+                self.unused_warning(f)
+            }
+            ExprKind::BinaryConditionalOperator => {
+                let ops = self.ast.exprs.binary_conditional_operands(x, &self.ast.lists);
+                self.unused_warning(ops[3])
+            }
+            ExprKind::CXXScalarValueInitExpr if !self.ast.types.is_void(n.ty()) => {
+                Some((DiagId::sema_unused_expr, self.begin_loc(x), Vec::new()))
             }
             ExprKind::CStyleCastExpr | ExprKind::CXXFunctionalCastExpr => (self
                 .ast
@@ -563,6 +571,7 @@ impl Sema<'_, '_> {
                 != CastKind::ToVoid)
                 .then_some((DiagId::sema_unused_expr, loc, Vec::new())),
             ExprKind::ImplicitCastExpr => self.unused_warning(self.ast.exprs.operand(x)),
+            ExprKind::StmtExpr => self.unused_stmt_expr(x, loc),
             ExprKind::DeclRefExpr | ExprKind::MemberExpr | ExprKind::ArraySubscriptExpr => {
                 if self.ast.types.effective_quals(n.ty()).is_volatile() {
                     None
@@ -578,9 +587,11 @@ impl Sema<'_, '_> {
             | ExprKind::CXXNullPtrLiteralExpr
             | ExprKind::UnaryExprOrTypeTraitExpr
             | ExprKind::CXXNoexceptExpr
+            | ExprKind::CXXTypeidExpr
             | ExprKind::CXXStaticCastExpr
             | ExprKind::CXXReinterpretCastExpr
-            | ExprKind::CXXConstCastExpr => Some((DiagId::sema_unused_expr, loc, Vec::new())),
+            | ExprKind::CXXConstCastExpr
+            | ExprKind::CompoundLiteralExpr => Some((DiagId::sema_unused_expr, loc, Vec::new())),
             _ => None,
         }
     }
@@ -616,6 +627,10 @@ impl Sema<'_, '_> {
         loc: Loc,
         qualifier: Option<DeclId>,
     ) -> ExprId {
+        if qualifier.is_none() && self.prototype_params.iter().any(|f| f.contains(&name)) {
+            self.unsupported("naming a parameter within its function declarator", loc);
+            return self.recover_err(&[], loc);
+        }
         let found = match qualifier {
             Some(q) => self.lookup_qualified(q, name, LookupKind::Ordinary),
             None => self.lookup_name(name, LookupKind::Ordinary),
@@ -636,8 +651,20 @@ impl Sema<'_, '_> {
             self.emit(msg);
             return self.recover_err(&[], loc);
         };
-        if found.decls.len() > 1 {
-            if found.decls.iter().all(|&x| self.ast.decls.get(x).kind().is_function()) {
+        let mut d = d;
+        let fns = found.decls.iter().all(|&x| self.ast.decls.get(x).kind().is_function());
+        // An invalid redeclaration is not a separate overload (clang
+        // drops invalid candidates).
+        let valid: Vec<DeclId> = found
+            .decls
+            .iter()
+            .copied()
+            .filter(|&x| !self.ast.decls.get(x).has(DeclFlags::INVALID))
+            .collect();
+        if fns && valid.len() == 1 {
+            d = valid[0];
+        } else if found.decls.len() > 1 {
+            if fns {
                 self.unsupported("overloaded functions", loc);
                 return self.recover_err(&[], loc);
             }
@@ -697,6 +724,9 @@ impl Sema<'_, '_> {
                 self.unsupported("this kind of name", loc);
                 return self.recover_err(&[], loc);
             }
+        }
+        if n.kind() == DeclKind::Function && self.check_undeduced_use(d, loc) {
+            return self.recover_err(&[], loc);
         }
         let declared = n.ty().unwrap_or(QualType::ERROR);
         let ty = if self.ast.decls.builtin_id(d).is_some() {
@@ -1005,10 +1035,17 @@ impl Sema<'_, '_> {
     fn check_modifiable(&mut self, e: ExprId, loc: Loc) -> bool {
         let n = *self.ast.exprs.get(e);
         let t = n.ty();
-        if n.value_category() != ValueCategory::LValue
-            || self.ast.types.is_array(t)
-            || self.ast.types.is_function(t)
-        {
+        if self.ast.types.is_function(t) || self.ast.types.is_array(t) {
+            let id = if self.ast.types.is_function(t) {
+                DiagId::sema_non_object_not_modifiable
+            } else {
+                DiagId::sema_array_not_modifiable
+            };
+            let msg = self.diag(id, loc).arg(self.ty_arg(t));
+            self.emit(msg);
+            return false;
+        }
+        if n.value_category() != ValueCategory::LValue {
             self.error(DiagId::sema_not_assignable, loc);
             return false;
         }
@@ -1358,9 +1395,8 @@ impl Sema<'_, '_> {
     }
 
     fn compound_assign(&mut self, op: BinaryOp, l: ExprId, r: ExprId, loc: Loc) -> ExprId {
-        if !self.check_modifiable(l, loc) {
-            return self.recover_err(&[l, r], loc);
-        }
+        // The operands are checked as for `E1 op E2` before `E1` is
+        // checked to be modifiable (clang's `CreateBuiltinBinOp`).
         let lt = self.ety(l);
         let rt = self.ety(r);
         let (r2, lhs_ty, res_ty) = match op {
@@ -1418,6 +1454,9 @@ impl Sema<'_, '_> {
                 }
             }
         };
+        if !self.check_modifiable(l, loc) {
+            return self.recover_err(&[l, r], loc);
+        }
         // [expr.ass]/6: the result `E1 op E2` is assigned back to `E1`. An
         // arithmetic computation type converts implicitly to any arithmetic
         // left type, but not to an unscoped enumeration ([conv.prom]/3
@@ -1575,6 +1614,7 @@ impl Sema<'_, '_> {
     }
 
     /// `c ? t : f` ([expr.cond]).
+    #[allow(clippy::too_many_lines, reason = "one step per paragraph of [expr.cond]")]
     pub fn act_on_conditional(&mut self, c: ExprId, t: ExprId, f: ExprId, loc: Loc) -> ExprId {
         if self.is_err_expr(c) || self.is_err_expr(t) || self.is_err_expr(f) {
             return self.recover_err(&[c, t, f], loc);
@@ -1590,8 +1630,29 @@ impl Sema<'_, '_> {
         let (tn, fnn) = (*self.ast.exprs.get(t), *self.ast.exprs.get(f));
         let (tt, ft) = (tn.ty(), fnn.ty());
         let (tv, fv) = (self.ast.types.is_void(tt), self.ast.types.is_void(ft));
-        if tv && fv {
-            return self.builder().conditional(c2, t, f, QualType::VOID, loc);
+        if tv || fv {
+            // [expr.cond]/2.1: exactly one throw-expression operand gives
+            // the other operand's type and value category.
+            let (tthrow, fthrow) = (self.is_throw_expr(t), self.is_throw_expr(f));
+            if tthrow != fthrow {
+                let other = if tthrow { f } else { t };
+                let ty = self.ety(other);
+                let res = self.builder().conditional(c2, t, f, ty, loc);
+                if self.is_bitfield(other) {
+                    self.ast.exprs.mark_bitfield(res);
+                }
+                return res;
+            }
+            // [expr.cond]/2.2: both `void`.
+            if tv && fv {
+                return self.builder().conditional(c2, t, f, QualType::VOID, loc);
+            }
+            let msg = self
+                .diag(DiagId::sema_conditional_void_nonvoid, loc)
+                .arg(if tv { "0" } else { "1" })
+                .arg(self.ty_arg(if tv { ft } else { tt }));
+            self.emit(msg);
+            return self.recover_err(&[c, t, f], loc);
         }
         if tn.value_category().is_glvalue()
             && tn.value_category() == fnn.value_category()
@@ -1756,6 +1817,10 @@ impl Sema<'_, '_> {
 
     /// A function call `f(args)` ([expr.call]). `loc` is the callee's
     /// location; `rparen` the closing parenthesis.
+    #[allow(
+        clippy::too_many_lines,
+        reason = "callee checks, argument conversion and default arguments in [expr.call] order"
+    )]
     pub fn act_on_call(
         &mut self,
         callee: ExprId,
@@ -1765,12 +1830,20 @@ impl Sema<'_, '_> {
     ) -> ExprId {
         let mut kids = vec![callee];
         kids.extend_from_slice(args);
+        // Braced-init-list arguments (placeholders until the parameter
+        // types are known, [dcl.init.list]/1).
+        let mut braced: Vec<Option<InitList>> =
+            args.iter().map(|&a| self.take_braced_arg(a)).collect();
         if self.is_err_expr(callee) || args.iter().any(|&a| self.is_err_expr(a)) {
             return self.recover_err(&kids, loc);
         }
+        // The function the callee names, if any (calls through pointers
+        // report conversions directly, not as overload candidates).
         let named = {
             let x = self.ignore_parens(callee);
-            (self.ast.exprs.get(x).kind() == ExprKind::DeclRefExpr).then(|| self.ast.exprs.decl(x))
+            (self.ast.exprs.get(x).kind() == ExprKind::DeclRefExpr)
+                .then(|| self.ast.exprs.decl(x))
+                .filter(|&d| self.ast.decls.function(d).is_some())
         };
         let f = match self.builtin_callee(callee) {
             Some(b) => self.builtin_fn_to_ptr(callee, b),
@@ -1793,13 +1866,24 @@ impl Sema<'_, '_> {
         let variadic = proto.info().variadic();
         let n = params.len();
         let have = args.len();
-        if have < n || (have > n && !variadic) {
-            let few = have < n;
+        // Default arguments of the named function ([dcl.fct.default]/1).
+        let pdecls: Vec<DeclId> = named
+            .and_then(|d| self.ast.decls.function(d))
+            .map(|x| self.ast.lists.iter::<DeclId>(x.params).collect())
+            .unwrap_or_default();
+        let defaults: Vec<Option<ExprId>> = (0..n)
+            .map(|i| {
+                pdecls.get(i).and_then(|&p| self.ast.decls.param(p)).and_then(|x| x.default_arg)
+            })
+            .collect();
+        let min = defaults.iter().rposition(Option::is_none).map_or(0, |i| i + 1);
+        if have < min || (have > n && !variadic) {
+            let few = have < min;
             if let Some(d) = named {
                 let msg = self
                     .diag(DiagId::sema_ovl_no_viable_function_in_call, self.begin_loc(callee))
                     .arg(self.decl_name(d));
-                let detail = self.arity_detail(d, n, have, variadic);
+                let detail = self.arity_detail(d, n, min, have, variadic);
                 let fl = self.ast.decls.get(d).loc();
                 let note = self.diag(DiagId::note_ovl_candidate_not_viable, fl).arg(detail);
                 self.emit(msg.with_note(note));
@@ -1816,6 +1900,17 @@ impl Sema<'_, '_> {
         }
         let mut conv_args = Vec::with_capacity(have);
         for (i, &a) in args.iter().enumerate() {
+            if let Some(l) = braced[i].take() {
+                if i >= n {
+                    self.braced_variadic_argument(&l);
+                    return self.recover_err(&kids, loc);
+                }
+                match self.braced_argument(named, callee, &l, params[i]) {
+                    Some(x) => conv_args.push(x),
+                    None => return self.recover_err(&kids, loc),
+                }
+                continue;
+            }
             if i < n {
                 let pt = conv::strip_cv(self, params[i]);
                 let to = if self.ast.types.is_reference(params[i]) { params[i] } else { pt };
@@ -1830,6 +1925,13 @@ impl Sema<'_, '_> {
                 conv_args.push(self.default_argument_promotion(a));
             }
         }
+        for (i, &d) in defaults.iter().enumerate().skip(have) {
+            let (Some(p), Some(e)) = (pdecls.get(i).copied(), d) else { break };
+            let x = *self.ast.exprs.get(e);
+            let used = self.ctx;
+            let arg = self.builder().default_arg(p, used, x.ty(), x.value_category(), Loc::INVALID);
+            conv_args.push(arg);
+        }
         let (ty, vk) = if self.ast.types.is_reference(ret) {
             let lvalue = matches!(self.ast.types.canonical_view(ret), TypeView::LValueRef(_));
             (
@@ -1839,7 +1941,7 @@ impl Sema<'_, '_> {
         } else {
             (conv::strip_cv(self, ret), ValueCategory::PRValue)
         };
-        if !self.ast.types.is_void(ty)
+        if vk == ValueCategory::PRValue
             && self.ast.types.as_record(ty).is_some()
             && !self.is_complete(ty)
         {
@@ -1851,12 +1953,21 @@ impl Sema<'_, '_> {
     }
 
     /// clang's "candidate function not viable" detail for an arity
-    /// mismatch.
-    pub(crate) fn arity_detail(&self, d: DeclId, n: usize, have: usize, variadic: bool) -> String {
-        let provided = match have {
-            0 => "no arguments were provided".to_owned(),
-            1 => "1 was provided".to_owned(),
-            k => format!("{k} were provided"),
+    /// mismatch (`DiagnoseArityMismatch`): `n` parameters, `min` of them
+    /// without a default argument, `have` arguments.
+    pub(crate) fn arity_detail(
+        &self,
+        d: DeclId,
+        n: usize,
+        min: usize,
+        have: usize,
+        variadic: bool,
+    ) -> String {
+        // 0: at least, 1: at most, 2: exactly.
+        let (mode, count) = if have < min {
+            (if min != n || variadic { 0 } else { 2 }, min)
+        } else {
+            (if min == n { 2 } else { 1 }, n)
         };
         let pname = self
             .ast
@@ -1865,12 +1976,24 @@ impl Sema<'_, '_> {
             .and_then(|f| self.ast.lists.at::<DeclId>(f.params, 0))
             .map(|p| self.decl_name(p))
             .unwrap_or_default();
-        if n == 1 && !variadic && !pname.is_empty() {
-            return format!("requires single argument '{pname}', but {provided}");
+        if count == 1 && !pname.is_empty() {
+            let provided = match have {
+                0 => "no arguments were provided".to_owned(),
+                1 => "1 argument was provided".to_owned(),
+                k => format!("{k} arguments were provided"),
+            };
+            let how = [
+                "requires at least argument",
+                "allows at most single argument",
+                "requires single argument",
+            ][mode];
+            return format!("{how} '{pname}', but {provided}");
         }
-        let need = if variadic { format!("at least {n}") } else { n.to_string() };
-        let plural = if n == 1 { "argument" } else { "arguments" };
-        format!("requires {need} {plural}, but {provided}")
+        let provided =
+            if have == 1 { "1 was provided".to_owned() } else { format!("{have} were provided") };
+        let need = ["at least ", "at most ", ""][mode];
+        let plural = if count == 1 { "argument" } else { "arguments" };
+        format!("requires {need}{count} {plural}, but {provided}")
     }
 
     /// The default argument promotions for a variadic argument
@@ -2049,15 +2172,13 @@ impl Sema<'_, '_> {
             return false;
         }
         let t = if kind == TraitKind::SizeOf { self.non_reference(ty) } else { ty };
+        // [expr.sizeof]/1, [expr.alignof]/1: in C++ a function type is an
+        // error and `void` is an incomplete type; clang's GNU extensions
+        // for both are C-only ("hard errors for SFINAE").
         if self.ast.types.is_function(t) {
-            let msg = self.diag(DiagId::sema_sizeof_function, loc).arg(name);
+            let msg = self.diag(DiagId::sema_sizeof_function_expr, loc).arg(name);
             self.emit(msg);
-            return true;
-        }
-        if self.ast.types.is_void(t) {
-            let msg = self.diag(DiagId::sema_sizeof_void, loc).arg(name);
-            self.emit(msg);
-            return true;
+            return false;
         }
         let check = if kind == TraitKind::SizeOf {
             t
@@ -2143,9 +2264,17 @@ impl Sema<'_, '_> {
 
     /// An explicit type conversion `style<ty>(e)` ([expr.cast],
     /// [expr.static.cast], [expr.reinterpret.cast], [expr.const.cast],
-    /// [expr.type.conv]). `loc` is the cast's start.
+    /// [expr.type.conv]). `loc` is the cast's start, `rparen` its closing
+    /// `)`.
     #[allow(clippy::too_many_lines, reason = "one step per paragraph of [expr.cast]/4")]
-    pub fn act_on_cast(&mut self, style: CastStyle, ty: QualType, e: ExprId, loc: Loc) -> ExprId {
+    pub fn act_on_cast(
+        &mut self,
+        style: CastStyle,
+        ty: QualType,
+        e: ExprId,
+        loc: Loc,
+        rparen: Loc,
+    ) -> ExprId {
         if self.is_err_expr(e) || self.is_error_type(ty) {
             return self.recover(ty, &[e], loc);
         }
@@ -2155,32 +2284,21 @@ impl Sema<'_, '_> {
         }
         if self.ast.types.is_reference(ty) {
             self.unsupported("casts to reference types", loc);
-            return self.recover(ty, &[e], loc);
+            return self.recover_err(&[e], loc);
+        }
+        // [expr.static.cast]/6: any expression can be converted to cv void.
+        if self.ast.types.is_void(ty) {
+            if style.allows_static() {
+                return self.explicit_cast(style, CastKind::ToVoid, e, ty, loc, rparen);
+            }
+            return self.bad_cast(style, e, ty, loc);
         }
         if self.ast.types.as_record(ty).is_some() || self.ast.types.as_record(self.ety(e)).is_some()
         {
             self.unsupported("conversions of class types", loc);
             return self.recover(ty, &[e], loc);
         }
-        let kind = style.kind();
         let to = conv::strip_cv(self, ty);
-        let flags = ExprFlags::NONE;
-        // [expr.static.cast]/6: any expression can be converted to cv void.
-        if self.ast.types.is_void(ty) {
-            if style.allows_static() {
-                return self.builder().cast(
-                    kind,
-                    CastKind::ToVoid,
-                    e,
-                    ty,
-                    ValueCategory::PRValue,
-                    None,
-                    loc,
-                    flags,
-                );
-            }
-            return self.bad_cast(style, e, ty, loc);
-        }
         // const_cast part (and the qualification-only C-style cast).
         if style.allows_const() {
             let x = conv::decay(self, e);
@@ -2198,16 +2316,7 @@ impl Sema<'_, '_> {
                 && self.similar_pointers(xt, to)
             {
                 self.mark_explicit(x, e);
-                return self.builder().cast(
-                    kind,
-                    CastKind::NoOp,
-                    x,
-                    to,
-                    ValueCategory::PRValue,
-                    None,
-                    loc,
-                    flags,
-                );
+                return self.explicit_cast(style, CastKind::NoOp, x, to, loc, rparen);
             }
             if style == CastStyle::Const {
                 return self.bad_cast(style, e, ty, loc);
@@ -2221,16 +2330,7 @@ impl Sema<'_, '_> {
             match conv::apply_standard_conversion(self, e, &scs, to) {
                 Ok(x) => {
                     self.mark_explicit(x, e);
-                    return self.builder().cast(
-                        kind,
-                        CastKind::NoOp,
-                        x,
-                        to,
-                        ValueCategory::PRValue,
-                        None,
-                        loc,
-                        flags,
-                    );
+                    return self.explicit_cast(style, CastKind::NoOp, x, to, loc, rparen);
                 }
                 Err(err) => {
                     self.emit_conv_error(err, loc);
@@ -2245,15 +2345,35 @@ impl Sema<'_, '_> {
         if style.allows_static()
             && let Some(ck) = self.static_inverse(xt, to, style)
         {
-            return self.builder().cast(kind, ck, x, to, ValueCategory::PRValue, None, loc, flags);
+            return self.explicit_cast(style, ck, x, to, loc, rparen);
         }
         // reinterpret_cast ([expr.reinterpret.cast]).
         if style.allows_reinterpret()
             && let Some(ck) = self.reinterpret(xt, to, style, loc)
         {
-            return self.builder().cast(kind, ck, x, to, ValueCategory::PRValue, None, loc, flags);
+            return self.explicit_cast(style, ck, x, to, loc, rparen);
         }
         self.bad_cast(style, e, ty, loc)
+    }
+
+    /// The node of an explicit cast `style` that succeeded with kind `ck`:
+    /// a prvalue of `to`. A functional cast records its `)` (`rparen`).
+    fn explicit_cast(
+        &mut self,
+        style: CastStyle,
+        ck: CastKind,
+        sub: ExprId,
+        to: QualType,
+        loc: Loc,
+        rparen: Loc,
+    ) -> ExprId {
+        let vk = ValueCategory::PRValue;
+        let flags = ExprFlags::NONE;
+        if style == CastStyle::Functional {
+            self.builder().functional_cast(ck, sub, to, vk, None, loc, rparen, flags)
+        } else {
+            self.builder().cast(style.kind(), ck, sub, to, vk, None, loc, flags)
+        }
     }
 
     fn bad_cast(&mut self, style: CastStyle, e: ExprId, ty: QualType, loc: Loc) -> ExprId {

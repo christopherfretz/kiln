@@ -47,15 +47,38 @@ pub(crate) struct SwitchState {
 pub struct FnState {
     pub(crate) decl: DeclId,
     pub(crate) ret: QualType,
+    /// The declared placeholder return type (`auto`, `const auto`,
+    /// `decltype(auto)`) of a function with a deduced return type.
+    pub(crate) auto_ret: Option<QualType>,
+    /// The placeholder was deduced from a return statement.
+    pub(crate) deduced: bool,
     pub(crate) labels: Vec<LabelInfo>,
     pub(crate) switches: Vec<SwitchState>,
     /// Enclosing loops and switches (innermost last; `true` = loop).
     pub(crate) breakables: Vec<bool>,
+    /// The type of `this` in this function (`cv C*`), `None` outside a
+    /// non-static member function (spec/sema-class.md §2.5).
+    #[expect(dead_code, reason = "WP-066a interface; read from WP-066b")]
+    pub(crate) this_ty: Option<QualType>,
+    /// A `this` type that overrides `this_ty` while parsing an NSDMI or a
+    /// trailing return type (clang `CXXThisScopeRAII`).
+    #[expect(dead_code, reason = "WP-066a interface; read from WP-066b")]
+    pub(crate) this_override: Option<QualType>,
 }
 
 impl FnState {
     pub(crate) fn new(decl: DeclId, ret: QualType) -> Self {
-        FnState { decl, ret, labels: Vec::new(), switches: Vec::new(), breakables: Vec::new() }
+        FnState {
+            decl,
+            ret,
+            auto_ret: None,
+            deduced: false,
+            labels: Vec::new(),
+            switches: Vec::new(),
+            breakables: Vec::new(),
+            this_ty: None,
+            this_override: None,
+        }
     }
 }
 
@@ -468,9 +491,12 @@ impl Sema<'_, '_> {
 
     /// `return e;` ([stmt.return]).
     pub fn act_on_return(&mut self, value: Option<ExprId>, loc: Loc) -> StmtId {
-        let Some((fdecl, ret)) = self.func.as_ref().map(|f| (f.decl, f.ret)) else {
+        let Some((fdecl, mut ret)) = self.func.as_ref().map(|f| (f.decl, f.ret)) else {
             return self.builder().return_stmt(value, None, loc);
         };
+        if self.func.as_ref().is_some_and(|f| f.auto_ret.is_some()) {
+            ret = self.deduce_return(value, loc);
+        }
         let ret_void = self.ast.types.is_void(ret);
         let fname = self.decl_name(fdecl);
         let value = match value {
@@ -506,12 +532,17 @@ impl Sema<'_, '_> {
     /// C++23 implicit move ([expr.prim.id.unqual]/4, [class.copy.elision]/3):
     /// an id-expression naming a non-volatile object of automatic storage
     /// duration declared in the function becomes an xvalue.
-    fn implicit_move(&mut self, e: ExprId) -> ExprId {
-        let n = *self.ast.exprs.get(e);
+    pub(crate) fn implicit_move(&mut self, e: ExprId) -> ExprId {
+        // A possibly parenthesized id-expression.
+        let mut id = e;
+        while self.ast.exprs.get(id).kind() == ExprKind::ParenExpr {
+            id = self.ast.exprs.operand(id);
+        }
+        let n = *self.ast.exprs.get(id);
         if n.kind() != ExprKind::DeclRefExpr {
             return e;
         }
-        let d = self.ast.exprs.decl(e);
+        let d = self.ast.exprs.decl(id);
         let dn = *self.ast.decls.get(d);
         let local = match dn.kind() {
             DeclKind::ParmVar => true,
@@ -538,11 +569,24 @@ impl Sema<'_, '_> {
     /// Starts the body of function `f` (its parameters are already in
     /// the function scope).
     pub(crate) fn begin_function_body(&mut self, f: DeclId, ret: QualType) {
-        self.func = Some(FnState::new(f, ret));
+        let mut state = FnState::new(f, ret);
+        if self.contains_undeduced_auto(ret) {
+            state.auto_ret = Some(ret);
+        }
+        self.func = Some(state);
     }
 
     /// Ends the body: undefined labels and fall-off-the-end checks.
     pub(crate) fn end_function_body(&mut self, body: StmtId, rbrace: Loc) {
+        // No return statement: the placeholder deduces `void`
+        // ([dcl.spec.auto.general]/10).
+        if let Some(st) = self.func.as_ref()
+            && st.auto_ret.is_some()
+            && !st.deduced
+        {
+            let f = st.decl;
+            self.set_deduced_return(f, QualType::VOID);
+        }
         let Some(state) = self.func.take() else { return };
         for l in &state.labels {
             if l.defined.is_none() {
