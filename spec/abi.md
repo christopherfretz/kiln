@@ -1,11 +1,12 @@
 # spec: kiln_abi — targets, type and record layout
 
-Status: **implemented through WP-066c**: Itanium layout of classes with
-non-virtual bases (empty-base optimization, tail-padding reuse,
-`[[no_unique_address]]`, `#pragma pack`, `packed`/`aligned`), the
-base-subobject table, and the `-fdump-record-layouts` dump of all of
-them (§8). Virtual bases, the vptr and primary bases are reserved for
-WP-078b (§8.5) and do not reshape the interface.
+Status: **implemented through WP-078b**: Itanium layout of classes with
+non-virtual and virtual bases (empty-base optimization, tail-padding
+reuse, `[[no_unique_address]]`, `#pragma pack`, `packed`/`aligned`, the
+vptr, primary bases), the base-subobject table, the
+`-fdump-record-layouts` dump of all of them (§8), and Itanium vtable
+groups, construction vtables and VTTs with their
+`-fdump-vtable-layouts` dump (§8.5).
 
 Standard: [basic.fundamental], [basic.compound], [basic.align],
 [intro.object]/9, [expr.sizeof], [expr.alignof], [class.mem]/26–29,
@@ -17,7 +18,8 @@ ABI: Itanium C++ ABI §1.1 (definitions: *POD for the purpose of layout*,
 §2.3 (member pointers), §2.4 (non-POD class layout); System V AMD64
 psABI §3.1.2; AAPCS64 §5 and §10.1 (bit-fields).
 Reference implementation: clang 19 (`ASTContext::getTypeInfo`,
-`ItaniumRecordLayoutBuilder`, `EmptySubobjectMap`, `DumpRecordLayout`).
+`ItaniumRecordLayoutBuilder`, `EmptySubobjectMap`, `DumpRecordLayout`,
+`ItaniumVTableBuilder`, `VTTBuilder`).
 Where clang deviates from the ABI documents, **clang wins**: kiln must
 produce objects that link with clang-compiled code.
 
@@ -47,6 +49,20 @@ pub fn write_record_layout(&mut Layouter, DeclId, &mut String);
 pub fn write_record_layout_with(&mut Layouter, DeclId, &DumpOptions, &mut String);
 pub fn record_definitions(&Ast) -> Vec<DeclId>;             // -complete order
 pub fn dump_all_record_layouts(&Ast, &Target, Option<&SourceManager>) -> String;
+// vtable (§8.5); kiln_ast::class::{VTableLayout, VTableComponent, Thunk,
+// VttComponent, Subobject, SubobjectId} re-exported
+pub enum VTableError { NotDynamic, Incomplete, Unsupported, TooComplex }
+pub fn vtable_layout(&Ast, record: DeclId, &Target) -> Result<VTableLayout, VTableError>;
+pub fn ensure_vtable<'a>(&'a mut Ast, DeclId, &Target) -> Result<&'a VTableLayout, VTableError>;
+pub fn construction_vtable(&Ast, most_derived: DeclId, base: SubobjectId, &Target)
+    -> Result<VTableLayout, VTableError>;
+pub fn vtt_vtables(&Ast, record: DeclId, &Target) -> Result<Vec<SubobjectId>, VTableError>;
+pub fn vtt(&Ast, record: DeclId, &Target) -> Result<Vec<VttComponent>, VTableError>;
+pub fn dump_vtable_layout(&Ast, DeclId, &Target) -> Result<String, VTableError>;
+pub fn dump_construction_vtable(&Ast, most_derived: DeclId, base: SubobjectId, &Target)
+    -> Result<String, VTableError>;
+pub fn dump_vtable_group(&Ast, DeclId, &Target) -> Result<String, VTableError>;
+pub fn dump_all_vtable_layouts(&Ast, &Target) -> String;
 ```
 - **Total.** No input panics. Incomplete, dependent, invalid or
   recursive (`struct S { S s; }`, rejected by sema) types get the
@@ -61,9 +77,7 @@ pub fn dump_all_record_layouts(&Ast, &Target, Option<&SourceManager>) -> String;
   `Ast::layouts` (write-once, spec/types.md §11). Classes already there
   are reused, not recomputed.
 - **Pure.** The result depends only on the AST and the `Target`.
-- Not yet supported: virtual bases, the vptr and primary bases (WP-078b,
-  §8.5); a dynamic class is laid out as if it had neither. MS layout,
-  `-fpack-struct` and other triples are out of scope.
+- Out of scope: MS layout, `-fpack-struct` and other triples.
 
 ## 2. Targets
 `Triple::parse` accepts `{x86_64|amd64|x86_64h|aarch64|arm64}` +
@@ -262,8 +276,8 @@ Byte-identical to clang 19's `DumpRecordLayout` in non-simple mode:
   standard or ABI section. Expected values are hard-coded. When
   `clang++-19` is installed, every model is also dumped by clang and
   compared byte for byte.
-- **`layout_vs_clang.rs`.** Seeded random classes, 320 per target in 8
-  translation units, for both targets. clang runs on at most 8 processes
+- **`layout_vs_clang.rs`.** Seeded random classes, 2000 per target in
+  translation units of 40, for both targets. clang runs on at most 8 processes
   at once, and the test takes well under a second.
   - The generator covers:
     - every builtin, `_BitInt`, pointers, function pointers, member
@@ -283,6 +297,35 @@ Byte-identical to clang 19's `DumpRecordLayout` in non-simple mode:
     (35 %; empty bases preferred 40 % of the time, so repeated empty
     types collide) and `#pragma pack(push, N)` (8 %, N ∈ {1, 2, 4, 8,
     16}) around a class.
+  - Since WP-078b each base is virtual with p = 0.3 and a non-union
+    class gets a virtual function with p = 0.2 (no FAM in a dynamic
+    class), so the vptr, primary-base selection (including nearly-empty
+    virtual bases and indirect primaries), repeated virtual bases and
+    the `(virtual base)` / `(primary virtual base)` dump lines are
+    covered. The default seed prints about 1200 virtual-base lines, 800
+    primary-base lines and 2400 vptr lines across both targets.
+- **`vtable_vs_clang.rs`** (WP-078b). Seeded random polymorphic
+  hierarchies, 500 classes per target in translation units of 25: virtual
+  and repeated bases (subobject graphs ≤ 48 nodes), overriding,
+  covariant returns through non-virtual and virtual bases, pure, deleted
+  and `consteval` virtual functions, virtual destructors. Every class has
+  an out-of-line key function and a user constructor so clang emits (and
+  dumps) its vtable. Each class's `dump_vtable_layout` and every
+  `dump_construction_vtable` must equal clang's `-Xclang
+  -fdump-vtable-layouts` blocks byte for byte, and `vtt` (with
+  `vtt_vtables` and the address points) must name the same
+  `getelementptr inbounds inrange(..) (.., ptr @_ZTV../_ZTC.., i32 0, i32
+  K, i32 N)` entries as clang's `@_ZTT` initializer, read from the IR it
+  writes. Knobs `KILN_VTABLE_DIFF_SEED`, `KILN_VTABLE_DIFF_CLASSES`;
+  `XFAIL` is empty. The default seed checks about 4100 vtables and VTTs.
+- **`vtable_rules.rs`** (WP-078b). Hand-built probes with values
+  transcribed from clang 19 (and cross-checked against it when present):
+  non-virtual `this` thunk, virtual `this` thunk with vbase offset
+  offsets, the diamond's construction vtables and VTT, a covariant return
+  thunk, destructor slots and method indices.
+- **`layout_rules.rs`** gains dynamic-class probes (WP-078b): the vptr,
+  primary base selection, nearly-empty virtual primary bases, and the
+  `(primary virtual base)` label (§8.5).
 - **`layout_bases.rs`.** Hand-written cases for §8 with the C++ in doc
   comments and expected `(sizeof, align, dsize, nvsize, base offsets,
   field offsets)` checked against clang 19: the same-type empty-base
@@ -301,6 +344,10 @@ Byte-identical to clang 19's `DumpRecordLayout` in non-simple mode:
   `__va_list_tag`, `std::__va_list`). Without clang the test only
   checks that kiln accepts each program. Base classes join the corpus
   once the parser accepts base clauses (WP-065).
+- **`kiln_driver/tests/vtable_layouts.rs`** (WP-078b). Small programs
+  run through the real front end. `kiln -fsyntax-only
+  -fdump-vtable-layouts` must match clang's emission-time dump as a set
+  of blocks, with `Original map` sections removed (spec/driver.md).
 
 ## 8. Bases, `#pragma pack`, subobjects (WP-066c)
 Itanium §2.4 II.2 and clang `ItaniumRecordLayoutBuilder` for
@@ -405,34 +452,127 @@ up to N.
   (open question A5). The dump is written even when the translation unit
   has errors.
 
-### 8.5 Reserved for WP-078b (vptr, primary base, virtual bases)
-- **`RecordLayout`** (kiln_ast `types/layout.rs`) already carries
-  `vbases`, `vptr` and `primary_base`. WP-066c leaves them empty.
-  WP-078b may add `size_of_largest_empty_subobject` and `has_own_vfptr`
-  if codegen needs them.
-- **Steps**, in order:
-  1. **Primary base.** Choose it (II.1): the first non-virtual dynamic
-     base; failing that, the first nearly-empty virtual base that is not
-     an indirect primary base; failing that, the first such base that is
-     an indirect primary base.
-  2. **vptr.** Place it at 0 (8 bytes, align 8) if the class is dynamic
-     with no primary base. The primary base goes at 0, and §8.1 skips
-     it.
-  3. **Non-virtual bases and fields** follow, as now.
-  4. **`nvsize` and `nvalign`** are taken.
-  5. **Virtual bases** (III), in inheritance-graph order, each one not
-     already a primary base. They use the §8.1 rule at offsets ≥
-     `dsize`, and `size` grows to cover them.
-- **Dynamic classes.** `nvsize` and `dsize` stop being POD-derived for
-  them.
-- **Empty-subobject map.** It gains virtual bases: they are recorded
-  once, at their complete-object offset.
-- **Subobject table.** After the non-virtual subtree, it gains one entry
-  per virtual base, with `is_virtual` set and `parent` the first
-  subobject in preorder that names it.
-- **Dump.** The vptr prints as `{off} |   (C vtable pointer)`. Virtual
-  bases print once, after the most-derived class's fields, as
-  `(virtual base)`.
+### 8.5 Dynamic classes and vtables (WP-078b)
+**Record layout.** `RecordLayout` (kiln_ast `types/layout.rs`) is
+unchanged; WP-078b fills `vbases`, `vptr` and `primary_base`. The
+algorithm ports clang's `ItaniumRecordLayoutBuilder`
+(`layout/record.rs`, `layout/base_info.rs`):
+1. **Dynamic** = polymorphic or with a virtual base (clang
+   `isDynamicClass`).
+2. **Primary base** (II.1, clang `DeterminePrimaryBase`): the first
+   non-virtual dynamic base; else the first nearly-empty virtual base,
+   in a preorder walk of the base-specifiers, that is not an indirect
+   primary base; else the first nearly-empty virtual base that is one.
+   Nearly empty = dynamic with `nvsize` of one pointer.
+3. **vptr** at 0 (8 bytes, align 8) if the class is dynamic with no
+   primary base; otherwise the primary base goes at 0 and §8.1 skips it.
+4. **Non-virtual bases and fields** as in §8.1 and §5; then `nvsize`
+   and `nvalign` are taken. For a dynamic class they are not
+   POD-derived.
+5. **Virtual bases** (III, clang `LayoutVirtualBases`), in
+   inheritance-graph order (preorder over base-specifiers, each class
+   expanded once), skipping each one that is the class's primary base or
+   an indirect primary base. Each uses the §8.1 rule at offsets ≥
+   `dsize`, and `size` grows to cover it. A virtual base claimed as the
+   primary base of a base subobject (clang `BaseSubobjectInfo::Derived`)
+   shares that subobject's offset (`AddPrimaryVirtualBaseOffsets`).
+- **Base-subobject tree** (`base_info.rs`, clang `BaseSubobjectInfo`):
+  one node per non-virtual path plus one per virtual base, built with an
+  explicit stack and capped at 2^16 nodes (beyond the cap, nodes have no
+  children).
+- **Empty-subobject map.** It walks the tree: a base's non-virtual bases,
+  the virtual primary base it claimed (at its own offset) and its
+  class-typed fields. A field's own class contributes its virtual bases
+  at their offsets too (clang `CanPlaceFieldSubobjectAtOffset`).
+- **Subobject table** (§8.3). After the non-virtual subtree come the
+  virtual bases, once each, in inheritance-graph order, each followed by
+  its non-virtual subtree, with `is_virtual` set. A virtual base's
+  `parent` is the first subobject whose class names it as a direct
+  virtual base. This is the numbering of sema's `subobject_graph`.
+- **Dump.**
+  - The vptr prints as `{off} |   (C vtable pointer)` before the bases.
+  - Non-virtual bases print in declaration order, stably sorted by
+    offset.
+  - Virtual bases print once, after the most-derived class's fields (and
+    after those of a class-typed field's class), as `(virtual base)`.
+  - A virtual base is labelled `(primary virtual base)` when its *class*
+    is the primary base's class. clang compares classes, so a virtual
+    base `P` is so labelled even when the primary base is a non-virtual
+    `P` subobject. kiln matches this.
+
+**Vtables** (`kiln_abi::vtable`, §1 signatures). These are ports of
+clang 19's `ItaniumVTableBuilder`, `VCallAndVBaseOffsetBuilder`,
+`FinalOverriders` and `VTTBuilder`, function by function, in
+`vtable/{builder,overriders,classes,vtt,print}.rs`. Components, address
+points, thunks and method indices are clang's.
+- **Inputs:**
+  - `crate::layout` (primary bases, base offsets, subobjects);
+  - the override lists `ast.decls.cold.overrides`, written by sema
+    (WP-078a);
+  - the method kinds: destructors take two slots, and `consteval`
+    virtual functions take none (clang `hasVtableSlot`).
+- **Construction vtables and VTTs.**
+  - `vtable_layout` returns the complete group.
+  - `construction_vtable(most_derived, base)` returns the group used
+    while subobject `base` is built. Its address points name subobjects
+    of `most_derived`.
+  - `vtt_vtables` lists the groups the VTT points into. Index 0 is
+    `COMPLETE`, then the construction groups in VTT order.
+  - `vtt` lists `VttComponent { vtable_index, base }`. The address
+    point it holds is the group's `address_points` entry for `base`.
+  - Both are empty for a class without virtual bases.
+  - Codegen derives the IR form of an entry from these:
+    - `K` is the vtable of the group whose range holds the address
+      point (`vtable_starts`);
+    - `N` is the address point minus that vtable's start;
+    - the symbol is `_ZTV<class>` for group 0, else
+      `_ZTC<class><offset>_<base>`.
+- **`VTableLayout` fields** (kiln_ast `class.rs`; WP-078b adds
+  `vtable_starts` and `method_thunks`, and `Thunk::{method, this_class}`):
+  - `address_points` point at the slot after the RTTI. One may equal its
+    vtable's end, for a vtable with no function slots.
+  - `method_indices` count from the primary address point. They include
+    the methods of the primary-base chain, and a destructor's entry is
+    its complete-object slot. Construction groups carry them too, keyed
+    to the base class.
+  - `thunks` maps a slot to its adjustment.
+  - `method_thunks` lists, for each overrider declared in the class, the
+    thunks to emit (clang `Thunks`; empty for construction vtables).
+  - `Thunk.this_class` is the class of `Thunk.method`.
+- **Bounds.** Every walk is iterative and bounded. The following answer
+  `TooComplex` and never panic:
+  - a dynamic chain deeper than 256;
+  - more than `MAX_SUBOBJECTS` base paths;
+  - more than 2^26 builder steps.
+  `Incomplete` covers a missing definition, a missing override-list
+  entry, no unique final overrider, and an unknown subobject.
+  `Unsupported` is reserved; no current path returns it.
+- **Dump** (`-fdump-vtable-layouts`; byte-identical to clang 19 for each
+  block):
+  - `dump_vtable_layout` prints `Vtable for`, `Thunks for`, `Virtual base
+    offset offsets for` and `VTable indices for`.
+  - `dump_construction_vtable` prints `Construction vtable for ('B', off)
+    in 'D'`.
+  - `dump_vtable_group` prints the class's dump followed by its VTT's
+    construction vtables.
+  - `dump_all_vtable_layouts` (driver `-fdump-vtable-layouts`,
+    spec/driver.md) prints every group in `record_definitions` order.
+  - Deviations from clang:
+    - clang's `Original map` sections are not printed. They are
+      debugging state that clang accumulates across classes.
+    - Order and repetition: clang dumps in emission order and may repeat
+      a construction vtable; kiln dumps each group once.
+- **Gaps:**
+  - Method names omit the ` [T = int]` suffix clang prints for members
+    of class template specializations (`print.rs` `pretty_function`).
+    Templates are not yet generated by any differential.
+  - Implicit virtual destructors and implicitly declared members appear
+    in the slots only once sema declares them (WP-067a). Explicit
+    constructors and destructors are still "not supported yet" in sema's
+    parser path, so the driver differential uses key functions only.
+  - `spec/harness.md` has no record-layout or vtable dump expectation
+    mode. Conformance tests cannot pin dumps yet; the differentials and
+    `kiln_driver/tests/{record,vtable}_layouts.rs` stand in.
 
 ## 9. Open questions (with recommendation)
 - **A1.** `preferred_align` is equal to `align` on both targets. i386

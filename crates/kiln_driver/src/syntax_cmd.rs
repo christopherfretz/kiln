@@ -1,8 +1,8 @@
 //! `-fsyntax-only [-fdump-ast[=opts]] [-fdump-ast-filter=s]
-//! [-fdump-record-layouts[-complete]]` for one input: the preprocessor
-//! exactly as `-E` builds it ([`Job::build_preprocessor`]), the parser and
-//! Sema on its token stream, then the optional record-layout and AST
-//! dumps (`spec/driver.md` "Syntax checking", `spec/ast-dump.md`,
+//! [-fdump-record-layouts[-complete]] [-fdump-vtable-layouts]` for one
+//! input: the preprocessor exactly as `-E` builds it
+//! ([`Job::build_preprocessor`]), the parser and Sema on its token stream, then the optional record-layout, vtable and
+//! AST dumps (`spec/driver.md` "Syntax checking", `spec/ast-dump.md`,
 //! `spec/abi.md` §8).
 
 use std::sync::Arc;
@@ -123,6 +123,9 @@ impl SyntaxJob<'_> {
             // AST dump at the end of the translation unit.
             let layouts = kiln_abi::dump_all_record_layouts(&ast, &target, Some(sm));
             result.output.push_str(&layouts);
+        }
+        if a.dump_vtable_layouts {
+            result.output.push_str(&kiln_abi::vtable::dump_all_vtable_layouts(&ast, &target));
         }
         if let Some(d) = dump_opts {
             let mut out: Vec<u8> = Vec::new();

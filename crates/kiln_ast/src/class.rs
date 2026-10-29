@@ -103,7 +103,7 @@ pub enum VTableComponent {
     UnusedFunc(DeclId),
 }
 
-/// A `this`/return adjustment thunk (Itanium §2.7).
+/// A `this`/return adjustment thunk (Itanium §2.7; clang `ThunkInfo`).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
 pub struct Thunk {
     /// `this` adjustment: (non-virtual offset, vcall-offset offset; 0 =
@@ -112,6 +112,21 @@ pub struct Thunk {
     /// Return adjustment for covariant returns: (non-virtual offset,
     /// vbase-offset offset; 0 = none).
     pub ret: (i64, i64),
+    /// The method whose signature the thunk has, when it is not the
+    /// overrider's own (clang `ThunkInfo::Method`): the overridden
+    /// method of a return-adjusting slot, or the original method of an
+    /// inherited `this`-adjusting slot.
+    pub method: Option<DeclId>,
+    /// The class of the thunk's `this` parameter (clang
+    /// `ThunkInfo::ThisType`, whose cv-qualifiers are the overrider's).
+    pub this_class: Option<DeclId>,
+}
+
+impl Thunk {
+    /// No adjustment at all (clang `ThunkInfo::isEmpty`).
+    pub const fn is_empty(&self) -> bool {
+        self.this.0 == 0 && self.this.1 == 0 && self.ret.0 == 0 && self.ret.1 == 0
+    }
 }
 
 /// An Itanium vtable group of a dynamic class (spec/sema-class.md §3.5).
@@ -119,22 +134,35 @@ pub struct Thunk {
 pub struct VTableLayout {
     /// The slots of the primary and all secondary vtables.
     pub components: Vec<VTableComponent>,
-    /// The address point (component index) of each subobject's vtable.
+    /// The first component of each vtable of the group, ascending (0
+    /// first; clang `VTableIndices`).
+    pub vtable_starts: Vec<u32>,
+    /// The address point (component index) of each subobject's vtable,
+    /// sorted by subobject. Subobjects are those of the class the group
+    /// is laid out in (the most-derived class of a construction vtable).
     pub address_points: Vec<(SubobjectId, u32)>,
-    /// Component index → its thunk.
+    /// Component index → its thunk, ascending.
     pub thunks: Vec<(u32, Thunk)>,
+    /// Overrider declared in the class → the thunks to emit for it
+    /// (clang `Thunks`), sorted by method; empty for construction
+    /// vtables.
+    pub method_thunks: Vec<(DeclId, Thunk)>,
     /// Virtual base → the offset (from the address point) of its
     /// vbase-offset slot.
     pub vbase_offset_offsets: Vec<(DeclId, i64)>,
-    /// Virtual method → its slot index in the primary vtable.
+    /// Virtual method → its slot index from the primary address point,
+    /// sorted by method. A destructor's entry is its complete-object
+    /// slot; the deleting destructor is the next one.
     pub method_indices: Vec<(DeclId, u32)>,
 }
 
 impl VTableLayout {
     fn heap(&self) -> u64 {
         (self.components.capacity() * size_of::<VTableComponent>()
+            + self.vtable_starts.capacity() * size_of::<u32>()
             + self.address_points.capacity() * size_of::<(SubobjectId, u32)>()
             + self.thunks.capacity() * size_of::<(u32, Thunk)>()
+            + self.method_thunks.capacity() * size_of::<(DeclId, Thunk)>()
             + self.vbase_offset_offsets.capacity() * size_of::<(DeclId, i64)>()
             + self.method_indices.capacity() * size_of::<(DeclId, u32)>()) as u64
     }
