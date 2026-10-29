@@ -4,6 +4,9 @@
 # `-fconstexpr-report=<path>`; it strips that flag, writes the canned report
 # `<source>.oven.jsonl` (if there is one) to <path> with `@SRC@` replaced by
 # the source path as given, and compiles with ${KILN_FAKE_CC:-clang++-19}.
+# With `-fkiln-instantiation-report=json` it strips the flag, compiles, and
+# on success copies the canned report `<source>.inst.jsonl` (if there is
+# one) to stderr.
 # For `-fdump-ast` it compiles, and on success prints the canned dump
 # `<source>.ast` with `@FILTER@` replaced by the `-fdump-ast-filter=` value;
 # likewise `<source>.layout` for `-fdump-record-layouts` and
@@ -16,10 +19,12 @@ report=
 src=
 dump=
 filter=
+inst=
 for a in "$@"; do
   shift
   case "$a" in
     -fconstexpr-report=*) report=${a#-fconstexpr-report=} ;;
+    -fkiln-instantiation-report=json) inst=1 ;;
     -fdump-ast) dump=ast ;;
     -fdump-record-layouts) dump=layout ;;
     -fdump-vtable-layouts) dump=vtables ;;
@@ -30,6 +35,11 @@ for a in "$@"; do
 done
 if [ -n "$report" ] && [ -n "$src" ] && [ -f "$src.oven.jsonl" ]; then
   sed "s|@SRC@|$src|g" "$src.oven.jsonl" >"$report" || exit 70
+fi
+if [ -n "$inst" ]; then
+  "${KILN_FAKE_CC:-clang++-19}" "$@" || exit
+  if [ -f "$src.inst.jsonl" ]; then cat "$src.inst.jsonl" >&2; fi
+  exit 0
 fi
 if [ -z "$dump" ]; then
   exec "${KILN_FAKE_CC:-clang++-19}" "$@"

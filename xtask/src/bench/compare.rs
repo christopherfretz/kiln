@@ -3,7 +3,7 @@
 
 use std::fmt::Write as _;
 
-use super::record::{Baseline, Measurement};
+use super::record::{Baseline, InstCounters, Measurement};
 use crate::util::header::Counter;
 
 /// Regression thresholds in percent.
@@ -69,7 +69,7 @@ pub enum Verdict {
     /// Better than the baseline beyond a threshold; consider `--record`.
     Improved,
     /// Worse beyond a threshold. Fails the run (unless `--record`).
-    Regressed { time: bool, mem: bool, steps: bool, bytes: bool },
+    Regressed { time: bool, mem: bool, steps: bool, bytes: bool, inst: bool },
     /// Not comparable: the baseline was taken under different conditions
     /// (the reason says which). Reported, never fails.
     Advisory(String),
@@ -81,12 +81,17 @@ impl Verdict {
             Self::New => "new".into(),
             Self::Ok => "ok".into(),
             Self::Improved => "improved".into(),
-            Self::Regressed { time, mem, steps, bytes } => {
-                let what: Vec<&str> =
-                    [(time, "time"), (mem, "mem"), (steps, "steps"), (bytes, "bytes")]
-                        .into_iter()
-                        .filter_map(|(on, name)| on.then_some(name))
-                        .collect();
+            Self::Regressed { time, mem, steps, bytes, inst } => {
+                let what: Vec<&str> = [
+                    (time, "time"),
+                    (mem, "mem"),
+                    (steps, "steps"),
+                    (bytes, "bytes"),
+                    (inst, "inst"),
+                ]
+                .into_iter()
+                .filter_map(|(on, name)| on.then_some(name))
+                .collect();
                 format!("REGRESSED ({})", what.join(", "))
             }
             Self::Advisory(why) => format!("advisory: {why}"),
@@ -115,6 +120,10 @@ pub fn delta_pct(base: f64, cur: f64) -> Option<f64> {
 ///   `steps` grows (shrinks) by more than `steps_pct`, or `bytes` or
 ///   `peak_bytes` by more than `bytes_pct`. They are judged only when both
 ///   sides have them. They are deterministic, so no noise allowance applies.
+/// - The instantiation counters (`inst.*`, spec/sema-templates.md §11.4)
+///   regress (improve) when `inst.count` grows (shrinks) at all — it is
+///   exact, whatever the thresholds — or `inst.bytes` by more than
+///   `bytes_pct`. They are judged only when both sides have them.
 /// - Improvements never fail; they suggest re-recording.
 pub fn judge(base: Option<&Baseline>, cur: &Measurement, t: Thresholds) -> Verdict {
     let Some(base) = base else { return Verdict::New };
@@ -168,14 +177,22 @@ pub fn judge(base: Option<&Baseline>, cur: &Measurement, t: Thresholds) -> Verdi
         }
         _ => (false, false, false, false),
     };
-    if time_worse || mem_worse || steps_worse || bytes_worse {
+    let (inst_worse, inst_better) = match (b.inst, cur.inst) {
+        (Some(bi), Some(ci)) => {
+            let (bw, bb) = beyond(bi.bytes, ci.bytes, t.bytes_pct);
+            (ci.count > bi.count || bw, ci.count < bi.count || bb)
+        }
+        _ => (false, false),
+    };
+    if time_worse || mem_worse || steps_worse || bytes_worse || inst_worse {
         Verdict::Regressed {
             time: time_worse,
             mem: mem_worse,
             steps: steps_worse,
             bytes: bytes_worse,
+            inst: inst_worse,
         }
-    } else if time_better || mem_better || steps_better || bytes_better {
+    } else if time_better || mem_better || steps_better || bytes_better || inst_better {
         Verdict::Improved
     } else {
         Verdict::Ok
@@ -269,7 +286,8 @@ impl RatioRow {
     }
 
     /// The ratio-table cells: entry, mode, both medians, the time ratio,
-    /// both peak RSS values, the memory ratio.
+    /// both peak RSS values, the memory ratio, and the compiler under test's
+    /// instantiation totals ([`inst_cell`]).
     pub fn cells(&self) -> Vec<String> {
         let fmt_ratio = |r: Option<f64>| r.map_or_else(|| "-".to_owned(), |r| format!("{r:.2}x"));
         let t_ms = self.test.as_ref().map_or_else(|| "FAIL".to_owned(), |m| ms(m.wall_ms_median));
@@ -283,8 +301,18 @@ impl RatioRow {
             self.test.as_ref().map_or_else(|| "-".to_owned(), |m| mb(m.max_rss_kb)),
             self.oracle.as_ref().map_or_else(|| "-".to_owned(), |m| mb(m.max_rss_kb)),
             fmt_ratio(self.mem_ratio()),
+            inst_cell(self.test.as_ref().and_then(|m| m.inst)),
         ]
     }
+}
+
+/// `<count> / <KiB> KiB` of an instantiation report's totals, or `-`.
+#[allow(clippy::cast_precision_loss)]
+pub fn inst_cell(i: Option<InstCounters>) -> String {
+    i.map_or_else(
+        || "-".to_owned(),
+        |i| format!("{} / {:.1} KiB", i.count, i.bytes as f64 / 1024.0),
+    )
 }
 
 /// Column labels for the two compilers: their kinds, or `test`/`oracle`
@@ -307,6 +335,7 @@ pub fn render_ratio_table(rows: &[RatioRow], t: &str, o: &str) -> String {
         format!("{t} MB"),
         format!("{o} MB"),
         format!("{t}/{o} mem"),
+        format!("{t} inst"),
     ];
     let hdr: Vec<&str> = h.iter().map(String::as_str).collect();
     let cells: Vec<Vec<String>> = rows.iter().map(RatioRow::cells).collect();
@@ -353,7 +382,7 @@ mod tests {
         Thresholds { time_pct: 5.0, mem_pct: 2.0, steps_pct: 0.0, bytes_pct: 2.0 };
 
     fn reg(time: bool, mem: bool) -> Verdict {
-        Verdict::Regressed { time, mem, steps: false, bytes: false }
+        Verdict::Regressed { time, mem, steps: false, bytes: false, inst: false }
     }
 
     #[test]
@@ -410,12 +439,13 @@ mod tests {
         // Steps are exact by default: one more step regresses, one fewer improves.
         assert_eq!(
             judge(Some(&b), &m(Some(counters(1001, 10_000, 5000))), T),
-            Verdict::Regressed { time: false, mem: false, steps: true, bytes: false }
+            Verdict::Regressed { time: false, mem: false, steps: true, bytes: false, inst: false }
         );
         assert_eq!(judge(Some(&b), &m(Some(counters(999, 10_000, 5000))), T), Verdict::Improved);
         // Bytes and peak bytes share the 2% threshold.
         assert_eq!(judge(Some(&b), &m(Some(counters(1000, 10_200, 5100))), T), Verdict::Ok);
-        let bytes = Verdict::Regressed { time: false, mem: false, steps: false, bytes: true };
+        let bytes =
+            Verdict::Regressed { time: false, mem: false, steps: false, bytes: true, inst: false };
         assert_eq!(judge(Some(&b), &m(Some(counters(1000, 10_201, 5000))), T), bytes);
         assert_eq!(judge(Some(&b), &m(Some(counters(1000, 10_000, 5101))), T), bytes);
         assert_eq!(judge(Some(&b), &m(Some(counters(1000, 9_000, 5000))), T), Verdict::Improved);
@@ -433,8 +463,38 @@ mod tests {
         let loose = Thresholds { steps_pct: 10.0, bytes_pct: 50.0, ..T };
         assert_eq!(judge(Some(&b), &m(Some(counters(1100, 15_000, 7500))), loose), Verdict::Ok);
         assert_eq!(judge(Some(&b), &m(None), T), Verdict::Ok);
-        let v = Verdict::Regressed { time: true, mem: false, steps: true, bytes: true };
+        let v =
+            Verdict::Regressed { time: true, mem: false, steps: true, bytes: true, inst: false };
         assert_eq!(v.label(), "REGRESSED (time, steps, bytes)");
+    }
+
+    /// `inst.count` is exact whatever the thresholds; `inst.bytes` shares
+    /// `bytes_pct` (spec/sema-templates.md §11.4).
+    #[test]
+    fn instantiation_counters() {
+        use super::super::record::InstCounters;
+        let m = |i: Option<(u64, u64)>| {
+            let mut m = with(1000.0, 980.0, Some(100_000));
+            m.inst = i.map(|(count, bytes)| InstCounters { count, nodes: 5, bytes });
+            m
+        };
+        let inst =
+            Verdict::Regressed { time: false, mem: false, steps: false, bytes: false, inst: true };
+        let b = base(m(Some((1025, 10_000))));
+        assert_eq!(judge(Some(&b), &m(Some((1025, 10_000))), T), Verdict::Ok);
+        assert_eq!(judge(Some(&b), &m(Some((1026, 10_000))), T), inst);
+        assert_eq!(judge(Some(&b), &m(Some((1024, 10_000))), T), Verdict::Improved);
+        assert_eq!(judge(Some(&b), &m(Some((1025, 10_200))), T), Verdict::Ok);
+        assert_eq!(judge(Some(&b), &m(Some((1025, 10_201))), T), inst);
+        assert_eq!(judge(Some(&b), &m(Some((1025, 9_000))), T), Verdict::Improved);
+        // Loose thresholds widen the bytes, never the count.
+        let loose = Thresholds { steps_pct: 50.0, bytes_pct: 50.0, ..T };
+        assert_eq!(judge(Some(&b), &m(Some((1025, 14_000))), loose), Verdict::Ok);
+        assert_eq!(judge(Some(&b), &m(Some((1026, 10_000))), loose), inst);
+        // A baseline from before the metric, or a side without it: not judged.
+        assert_eq!(judge(Some(&base(m(None))), &m(Some((1, 1))), T), Verdict::Ok);
+        assert_eq!(judge(Some(&b), &m(None), T), Verdict::Ok);
+        assert_eq!(inst.label(), "REGRESSED (inst)");
     }
 
     #[test]
@@ -503,13 +563,19 @@ mod tests {
         };
         assert_eq!(row.time_ratio(), Some(2.0));
         assert_eq!(row.mem_ratio(), Some(0.5));
+        assert_eq!(row.cells()[8], "-");
+        let mut inst = row.clone();
+        inst.test.as_mut().unwrap().inst =
+            Some(InstCounters { count: 1025, nodes: 1, bytes: 688_800 });
+        assert_eq!(inst.cells()[8], "1025 / 672.7 KiB");
         let failed = RatioRow { test: None, ..row.clone() };
-        let text = render_ratio_table(&[row, failed], "kiln", "clang");
+        let text = render_ratio_table(&[row, failed, inst], "kiln", "clang");
+        assert!(text.contains("kiln inst") && text.contains("1025 / 672.7 KiB"), "{text}");
         assert!(
             text.contains("2.00x") && text.contains("0.50x") && text.contains("FAIL"),
             "{text}"
         );
-        assert!(text.contains("time 2.00x over 1 entries"), "{text}");
+        assert!(text.contains("time 2.00x over 2 entries"), "{text}");
         assert_eq!(ratio_labels("clang", "clang"), ("test".into(), "oracle".into()));
     }
 }

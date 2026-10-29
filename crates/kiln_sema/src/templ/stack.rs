@@ -281,6 +281,26 @@ impl Sema<'_, '_> {
         if self.inst.fatal {
             return false;
         }
+        if self.stack_exhausted() || self.stack_low() {
+            // P4 (c): the frame that would not fit is part of the
+            // backtrace, as for the depth limit.
+            self.inst.stack.push(InstFrame {
+                kind,
+                entity,
+                template,
+                poi,
+                sfinae: None,
+                args: None,
+                start: None,
+                start_bytes: 0,
+                start_nodes: 0,
+                child_ns: 0,
+            });
+            let _ = self.stack_ok(crate::stack_guard::StackPhase::Instantiation, poi);
+            let _ = self.inst.stack.pop();
+            self.inst.fatal = true;
+            return false;
+        }
         let sfinae = match kind {
             FrameKind::ClassInstantiation
             | FrameKind::MemberClass

@@ -252,6 +252,29 @@ outermost class is complete, so their tokens are saved and re-parsed
 - Pragma events (§2.3) keyed to tokens inside a saved range fire when the
   range is captured, not when it is replayed.
 
+### 2.5 The template-argument scan memo (WP-086)
+At each `<` after a template name the parser asks whether the
+template-argument-list closes before an operator could
+(`skip_template_args(i)`, [temp.names]/4). The scan classifies every name
+in the list and recurses into nested lists, so without a memo each of `N`
+nesting levels re-scans everything inside it: `W<W<...<char>...>>` was
+quadratic in `N` (2,000 levels took 1.4 s in release).
+- `skip_template_args(i)` memoizes its result by token index `i` in
+  `Parser::targs_memo`.
+- A result is valid while `Sema::lookup_stamp()` is unchanged. The stamp
+  hashes what name classification reads: the declaration count, the
+  lookup tables' generation (bumped on every insertion), the semantic
+  context, the scope stack (kind, entity, local and using-directive
+  counts) and the prototype-parameter scopes. A different stamp empties
+  the memo before the lookup.
+- The token stream changing also empties it: `begin_replay`,
+  `end_replay`, `inject_semi` (and the pop of an inject frame in `bump`)
+  re-number the indices, and `split_greater` rewrites the current token.
+- Parsing `W<...>` nested `N` deep is linear in `N`: the outermost scan
+  fills the memo for every nested `<`, and the nested parses hit it.
+  `bench/frontend/nested-template-ids.cpp` (128 aliases of a depth-2,000
+  template-id) tracks it.
+
 ## 3. Parser core (`parser.rs`)
 - **Token access:**
   - `tok`, `peek`, `bump`, `at(p)`, `at_kw(k)`, `eat`, `eat_kw`

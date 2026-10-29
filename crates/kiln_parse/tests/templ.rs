@@ -109,3 +109,28 @@ fn missing_template_keyword() {
     p.assert_clean();
     p.assert_dump("CXXDependentScopeMemberExpr '<dependent type>' lvalue .g");
 }
+
+/// [temp.names]/4, spec/parse.md §2.5: a template-id nested 2,000 deep
+/// parses (each nested `<` resolved through the scan memo, linear in the
+/// depth), and an expression `<` after a variable still is an operator
+/// once the memo holds results for other indices.
+#[test]
+fn nested_template_ids_scan_memo() {
+    let depth = 2000;
+    let src = format!(
+        "template <class T> struct W;\nusing D = {}char{};\nint a = 1, b = 2;\nbool c = a < b > 0;\n",
+        "W<".repeat(depth),
+        ">".repeat(depth)
+    );
+    // Each nesting level is a few parser frames: run with the stack the
+    // driver gives the front end, not the test harness's 2 MiB.
+    let p = std::thread::Builder::new()
+        .stack_size(256 << 20)
+        .spawn(move || parse(&src))
+        .expect("spawn")
+        .join()
+        .expect("parse thread");
+    p.assert_clean();
+    p.assert_dump("TypeAliasDecl D 'W<W<W<");
+    p.assert_dump("BinaryOperator 'bool' '>'");
+}
