@@ -6,17 +6,18 @@
 //! explicitly defaulted special member ([dcl.fct.def.default]/2–5; clang
 //! `ShouldDeleteSpecialMember`, `CheckExplicitlyDefaultedSpecialMember`).
 
-use std::cmp::Ordering;
 
 use kiln_ast::decl::{BaseSpec, DeclFlags, DeclKind, Defaulted, DefinitionBits, FnSpec};
 use kiln_ast::names::{DeclName, OverloadedOperator};
-use kiln_ast::types::{ExcSpec, FuncProto, Quals, RefQual, TypeView};
+use kiln_ast::types::{ExcSpec, FuncProto, Quals, TypeView};
 use kiln_ast::{DeclId, QualType};
 use kiln_diag::{Diag, DiagId};
 use kiln_source::Loc;
 
 use super::SpecialKind;
 use crate::Sema;
+use crate::overload::{ArgInfo, CandidateKind, IcsOptions, SetKind};
+use kiln_ast::expr::ValueCategory;
 
 /// How deep the explanation of a deleted member recurses into the
 /// members it selects (each step is a strictly smaller subobject).
@@ -58,19 +59,6 @@ enum Subobject {
     Field(DeclId),
 }
 
-/// How the argument of a copy/move selection binds a candidate's first
-/// parameter ([over.ics.ref], [over.best.ics]/6), with user-defined
-/// conversions suppressed as clang's `LookupSpecialMember` does.
-#[derive(Clone, Copy, Debug)]
-struct ArgConv {
-    /// 0 identity, 1 derived-to-base, 2 ellipsis.
-    rank: u8,
-    /// The base class for rank 1.
-    base: Option<DeclId>,
-    /// For a reference binding: rvalue reference, referent qualifiers.
-    binding: Option<(bool, Quals)>,
-}
-
 /// The walk state of one `should_delete` (clang
 /// `SpecialMemberDeletionInfo`).
 struct Walk {
@@ -96,7 +84,6 @@ impl Sema<'_, '_> {
     /// argument (copy/move) of the class type with qualifiers `rhs` and,
     /// for an assignment, an object with qualifiers `lhs` (clang
     /// `LookupSpecialMember`); declares the implicit members it needs.
-    #[allow(clippy::too_many_lines, reason = "one ranking pass over the candidates")]
     pub(crate) fn select_special(
         &mut self,
         class: DeclId,
@@ -131,133 +118,38 @@ impl Sema<'_, '_> {
         {
             return Selected::Unsupported;
         }
-        let found: Vec<DeclId> = if k.is_ctor() {
-            self.ast.constructors(c).iter().collect()
+        // clang `LookupSpecialMember`: an argument of the class type (an
+        // lvalue for copy, an xvalue for move) without user-defined
+        // conversions, and for an assignment an lvalue object.
+        let cty = self.class_type(c);
+        let mut set = self.begin_set(SetKind::Normal, Loc::INVALID);
+        if k != K::DefaultCtor {
+            let vk = if k.is_move() { ValueCategory::XValue } else { ValueCategory::LValue };
+            let ty = self.ast.types.qualify(cty, rhs);
+            set.args.push(ArgInfo::of_type(ty, vk));
+        }
+        if k.is_ctor() {
+            let mut found = std::mem::take(&mut set.found);
+            found.clear();
+            found.extend(self.ast.constructors(c).iter());
+            self.add_found_candidates(&mut set, &found, CandidateKind::Ctor, IcsOptions::SUPPRESS_UDC, false);
+            set.found = found;
         } else {
-            self.ast.lookup_local(c, DeclName::operator(OverloadedOperator::Equal)).iter().collect()
-        };
-        let mut cands: Vec<DeclId> = Vec::new();
-        let mut templates = false;
-        for f in found {
-            let kind = self.kind_of(f);
-            if kind == DeclKind::FunctionTemplate {
-                // todo(WP-068a): function templates are not candidates
-                // in the Q7 approximation; one may be the only viable
-                // candidate or break a tie, so those answers are
-                // unsupported.
-                templates = true;
-                continue;
-            }
-            let want = if k.is_ctor() { DeclKind::CXXConstructor } else { DeclKind::CXXMethod };
-            if kind != want || self.ast.decls.get(f).has(DeclFlags::INVALID) {
-                continue;
-            }
-            if self.ast.decls.cold.requires_clause.contains(f) {
-                return Selected::Unsupported;
-            }
-            if !cands.iter().any(|&x| self.ast.first(x) == self.ast.first(f)) {
-                cands.push(f);
-            }
+            let ty = self.ast.types.qualify(cty, lhs);
+            set.object = Some(ArgInfo::of_type(ty, ValueCategory::LValue));
+            let mut found = std::mem::take(&mut set.found);
+            found.clear();
+            found.extend(self.ast.lookup_local(c, DeclName::operator(OverloadedOperator::Equal)).iter());
+            self.add_found_candidates(&mut set, &found, CandidateKind::Method, IcsOptions::SUPPRESS_UDC, false);
+            set.found = found;
         }
-        let mut viable: Vec<(DeclId, Option<ArgConv>, Quals)> = Vec::new();
-        for f in cands {
-            let params = self.param_decls(f);
-            let variadic = self.fn_variadic(f);
-            if k == K::DefaultCtor {
-                if params.iter().all(|&p| self.param_has_default(p)) {
-                    viable.push((f, None, Quals::NONE));
-                }
-                continue;
-            }
-            let conv = match params.first() {
-                None if variadic => ArgConv { rank: 2, base: None, binding: None },
-                None => continue,
-                Some(&p) => {
-                    if !params[1..].iter().all(|&q| self.param_has_default(q)) {
-                        continue;
-                    }
-                    let pty = self.ast.decls.get(p).ty().unwrap_or(QualType::ERROR);
-                    match self.arg_conv(c, pty, rhs, k.is_move()) {
-                        Some(x) => x,
-                        None => continue,
-                    }
-                }
-            };
-            let obj = if k.is_assign() {
-                let info = self.fn_info(f);
-                let mq = info.this_quals();
-                if !mq.contains(lhs) || info.ref_qual() == RefQual::RValue {
-                    continue;
-                }
-                mq
-            } else {
-                Quals::NONE
-            };
-            viable.push((f, Some(conv), obj));
+        let out = self.best_viable(&mut set);
+        let r = self.selected_of(set, out);
+        // Special-member selection keeps no notes.
+        if let Some(old) = self.ovl.failed.take() {
+            self.end_set(old);
         }
-        if viable.is_empty() {
-            return if templates { Selected::Unsupported } else { Selected::Missing };
-        }
-        let mut best = None;
-        for (i, a) in viable.iter().enumerate() {
-            let mut wins = true;
-            for (j, b) in viable.iter().enumerate() {
-                if i == j {
-                    continue;
-                }
-                match better(a, b) {
-                    None => return Selected::Unsupported,
-                    Some(true) => {}
-                    Some(false) => {
-                        wins = false;
-                        break;
-                    }
-                }
-            }
-            if wins {
-                best = Some(a.0);
-                break;
-            }
-        }
-        match best {
-            None if templates => Selected::Unsupported,
-            None => Selected::Ambiguous,
-            Some(f) if self.fn_spec(f).is_deleted() => Selected::Deleted(f),
-            Some(f) => Selected::Found(f),
-        }
-    }
-
-    /// The conversion of an argument of class `c` (qualifiers `q`, an
-    /// lvalue, or an xvalue if `xvalue`) to parameter type `pty`, if
-    /// viable without user-defined conversions.
-    fn arg_conv(&self, c: DeclId, pty: QualType, q: Quals, xvalue: bool) -> Option<ArgConv> {
-        let (referent, binding) = match self.ast.types.canonical_view(pty) {
-            TypeView::LValueRef(t) => (t, Some(false)),
-            TypeView::RValueRef(t) => (t, Some(true)),
-            _ => (pty, None),
-        };
-        let r = self.ast.types.as_record(referent)?;
-        let r = self.class_def(r);
-        let (rank, base) = if r == c {
-            (0, None)
-        } else if crate::conv::bases::is_derived_from(self, c, r) {
-            (1, Some(r))
-        } else {
-            return None;
-        };
-        let rq = self.ast.types.effective_quals(referent);
-        let Some(rref) = binding else {
-            return Some(ArgConv { rank, base, binding: None });
-        };
-        let ok = if rref {
-            xvalue && rq.contains(q)
-        } else if xvalue {
-            // A non-volatile const lvalue reference binds an rvalue.
-            rq.is_const() && !rq.is_volatile() && rq.contains(q)
-        } else {
-            rq.contains(q)
-        };
-        ok.then_some(ArgConv { rank, base, binding: Some((rref, rq)) })
+        r
     }
 
     pub(crate) fn fn_spec(&self, f: DeclId) -> FnSpec {
@@ -852,63 +744,5 @@ impl Walk {
     fn member_class(&self) -> DeclId {
         let _ = self.member;
         self.class
-    }
-}
-
-/// Whether viable candidate `a` is better than `b` ([over.match.best],
-/// restricted to the parameter forms of special members); `None` when
-/// the Q7 approximation cannot tell.
-fn better(
-    a: &(DeclId, Option<ArgConv>, Quals),
-    b: &(DeclId, Option<ArgConv>, Quals),
-) -> Option<bool> {
-    let mut some_better = false;
-    let mut some_worse = false;
-    if let (Some(x), Some(y)) = (a.1, b.1) {
-        match cmp_conv(x, y)? {
-            Ordering::Less => some_better = true,
-            Ordering::Greater => some_worse = true,
-            Ordering::Equal => {}
-        }
-    }
-    // The implicit object parameter of an assignment: the less
-    // cv-qualified binding is better ([over.ics.rank]/3.2.6).
-    if a.2 != b.2 {
-        if b.2.contains(a.2) {
-            some_better = true;
-        } else if a.2.contains(b.2) {
-            some_worse = true;
-        }
-    }
-    Some(some_better && !some_worse)
-}
-
-/// [over.ics.rank] for two argument conversions: `Less` if `a` is better.
-fn cmp_conv(a: ArgConv, b: ArgConv) -> Option<Ordering> {
-    if a.rank != b.rank {
-        return Some(a.rank.cmp(&b.rank));
-    }
-    if a.rank == 1 && a.base != b.base {
-        // todo(WP-068a): [over.ics.rank]/4.4 between different bases.
-        return None;
-    }
-    match (a.binding, b.binding) {
-        (Some((ar, aq)), Some((br, bq))) => {
-            if ar != br {
-                // Only an xvalue argument binds both forms; the rvalue
-                // reference is better ([over.ics.rank]/3.2.3).
-                return Some(if ar { Ordering::Less } else { Ordering::Greater });
-            }
-            if aq == bq {
-                Some(Ordering::Equal)
-            } else if bq.contains(aq) {
-                Some(Ordering::Less)
-            } else if aq.contains(bq) {
-                Some(Ordering::Greater)
-            } else {
-                Some(Ordering::Equal)
-            }
-        }
-        _ => Some(Ordering::Equal),
     }
 }

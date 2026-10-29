@@ -349,7 +349,12 @@ impl Sema<'_, '_> {
         if opts.contains(IcsOptions::NO_TEMPORARY) || is_fn {
             return Ics::bad(BadKind::NoConversion, a.ty, to);
         }
-        // /5.4.2: a temporary copy-initialized from the argument.
+        // /5.4.2: a temporary copy-initialized from the argument. A class
+        // temporary needs a constructor, a user-defined conversion
+        // ([over.best.ics]/4; clang reports the reference type).
+        if suppress && self.ast.types.as_record(t1).is_some() {
+            return Ics::bad(BadKind::NoConversion, a.ty, to);
+        }
         let target = conv::strip_cv(self, t1);
         let temp_rb = base.with(RefBinding::BINDS_RVALUE);
         match self.try_implicit_conversion(a, target, opts) {

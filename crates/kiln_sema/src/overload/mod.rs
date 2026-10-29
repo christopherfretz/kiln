@@ -283,6 +283,9 @@ pub(crate) struct OverloadScratch {
     pub lists: Vec<crate::init::InitList>,
     /// Counters.
     pub stats: OverloadStats,
+    /// The set of the last constructor selection that failed
+    /// (`Missing`/`Ambiguous`), kept for its diagnostic notes.
+    pub failed: Option<OverloadCandidateSet>,
 }
 
 impl OverloadScratch {
