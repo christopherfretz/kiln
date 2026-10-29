@@ -823,6 +823,39 @@ New parser entry points (WP-065's contract): `act_on_base_specifiers`,
 Modules: `kiln_sema/src/class/{mod,access,special,ctorinit,temporary,virtual}.rs`
 (§9).
 
+**Landed signatures (WP-066a, `kiln_sema::class`; bodies report
+`{what} is not supported yet` until the owning WP):**
+```
+pub struct BaseSpecInfo { ty: QualType, loc: Loc, is_virtual: bool, access: Access, pack_expansion: bool, attrs: Vec<AttrId> }
+pub enum MemInitId { Ident(Symbol), Type(QualType) }
+pub struct MemInitInfo { id: MemInitId, loc: Loc, init: Initializer, pack_expansion: bool }
+fn act_on_base_specifiers(&mut self, r: DeclId, specs: &[BaseSpecInfo]);
+fn act_on_access_spec(&mut self, access: Access, loc: Loc) -> Option<DeclId>;
+fn act_on_friend(&mut self, ds: &DeclSpec, base: QualType, d: Option<&Declarator>, friend_loc: Loc) -> Option<DeclId>;
+fn act_on_defaulted(&mut self, f: DeclId, loc: Loc);
+fn act_on_deleted(&mut self, f: DeclId, loc: Loc, msg: Option<ExprId>);
+fn act_on_param_default_arg(&mut self, p: DeclId, e: ExprId);
+fn act_on_exception_spec(&mut self, f: DeclId, spec: ExcSpec);
+fn act_on_field_init(&mut self, field: DeclId, init: Initializer);
+fn act_on_mem_initializers(&mut self, ctor: DeclId, inits: &[MemInitInfo], colon_loc: Loc);
+fn act_on_finish_class_contexts(&mut self, r: DeclId);
+fn act_on_this(&mut self, loc: Loc) -> ExprId;
+fn current_class(&self) -> Option<&ClassBuild>;
+```
+Parser-facing additions outside `class/`: `ParamInfo.default_arg:
+DefaultArg { None | Parsed(ExprId) | Unparsed(Loc /* = */) }` (set by the
+parser after `act_on_param_declarator`; `act_on_declarator` applies
+`Parsed` through `act_on_param_default_arg` and marks `Unparsed`
+parameters `DEFAULT_ARG_PENDING`), and `TagUse::Friend` for the
+elaborated-type-specifier of `friend class X;`. Calling protocol: the
+parser calls `act_on_base_specifiers` for every class definition (empty
+slice when there is no base-clause), `act_on_mem_initializers` for every
+constructor definition (empty slice, `colon_loc` = the body's `{`, when
+there is no ctor-initializer) and `act_on_finish_class_contexts` for every
+outermost class; those calls are silent on the stubs, so M2 programs are
+unaffected. `ClassBuild` is pushed and popped by
+`act_on_{start,finish}_record_definition` already.
+
 ### 8.4 `SemaBridge` (kiln_oven) — public-interface change
 Replace `fn vtable(&mut self, record) -> &VTableLayout` with
 ```
@@ -835,6 +868,19 @@ demand (sema `define_implicit_*`). `kiln_oven::VTableLayout` is deleted; the
 Itanium `VTableLayout` lives in `kiln_abi` for codegen. Implementers to update:
 `kiln_sema/src/oven_bridge.rs`, `kiln_codegen/src/fold.rs`,
 `kiln_oven/tests/common/mod.rs`.
+
+Landed (WP-066a): `kiln_oven` re-exports `kiln_ast::class::{Subobject,
+SubobjectId}`; all three bridges read `Ast::virtuals` (keyed by first
+declaration), answering `None` / `&[]` until sema fills it (WP-078a).
+`kiln_abi::vtable` re-exports the vtable types and declares
+`vtable_layout(&Ast, record, &Target) -> Result<VTableLayout,
+VTableError>`, `ensure_vtable(&mut Ast, record, &Target) ->
+Result<&VTableLayout, VTableError>` (caches in `Ast::vtables`),
+`construction_vtable(&Ast, most_derived, base: SubobjectId, &Target)`,
+`vtt(&Ast, record, &Target) -> Result<Vec<VttComponent>, VTableError>`
+and `dump_vtable_layout(&Ast, record, &Target) -> Result<String,
+VTableError>`, with `VTableError { NotDynamic | Incomplete | Unsupported
+}`; every body answers `Unsupported` until WP-078b.
 
 ### 8.5 What codegen reads (WP-079/080)
 `RecordLayout` (bases, vbases, vptr, primary base); `VTableLayout` and VTT;

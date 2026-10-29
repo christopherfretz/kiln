@@ -408,9 +408,11 @@ bridge; it stores only ids, which are stable by spec/ast.md §2.4.
 ```rust
 pub trait SemaBridge {
     fn ast(&self) -> &Ast;                                        // re-borrowed per use, never held
-    fn ensure_body(&mut self, f: DeclId) -> Option<StmtId>;       // instantiates if needed
+    fn ensure_body(&mut self, f: DeclId) -> Option<StmtId>;       // instantiates / defines implicit members if needed
     fn ensure_layout(&mut self, record: DeclId) -> &RecordLayout; // via kiln_abi
-    fn vtable(&mut self, record: DeclId) -> &VTableLayout;        // M3
+    fn final_overrider(&mut self, most_derived: DeclId, at: SubobjectId, method: DeclId)
+        -> Option<(DeclId, SubobjectId)>;                         // spec/sema-class.md §3.5
+    fn subobjects(&mut self, record: DeclId) -> &[Subobject];     // indexed by SubobjectId
     fn consts(&mut self) -> &mut ConstStore;                      // freeze results
     fn diag(&mut self, d: Diag);
     // reflection ops added in M6
@@ -437,6 +439,17 @@ sema.
   `oven_bridge.rs` implements `SemaBridge` per call. `kiln_parse::parse_tu`
   and `parse_preprocessed` (the driver's path) return it beside the AST
   (`ParsedTu { ast, oven }`) for the report.
+- **Classes (amended 2026-10-28, spec/sema-class.md §8.4).**
+  `ensure_body(f)` also defines an implicit or defaulted special member
+  on demand (sema's `define_implicit_*`, WP-067b), so the Oven lowers the
+  same body codegen does. Virtual dispatch asks
+  `final_overrider(most_derived, at, method)`; the Oven's base-class
+  pointer paths use `SubobjectId` (`kiln_ast::class`, re-exported by
+  `kiln_oven`), resolved through `subobjects(record)`. Both read
+  `Ast::virtuals`, which sema fills (WP-078a); until then they answer
+  `None` / empty. The Itanium vtable layout is codegen's
+  (`kiln_abi::vtable`), never the Oven's: there is no
+  `kiln_oven::VTableLayout`.
 - **Contexts.** Every manifestly constant-evaluated site passes an
   `EvalContext`. Its `kind` is the report's `kind`; `loc` is the
   construct's location. The constructors match where clang 19 checks
