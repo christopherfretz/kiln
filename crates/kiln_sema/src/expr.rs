@@ -15,7 +15,7 @@ use kiln_ast::expr::{
 use kiln_ast::ids::RawId;
 use kiln_ast::strings::StringEncoding;
 use kiln_ast::types::{BuiltinType, TypeView};
-use kiln_ast::{Ast, AttrId, ConstValueId, DeclId, ExprId, ListId, QualType};
+use kiln_ast::{Ast, AttrId, ConstValueId, DeclId, ExprId, QualType};
 use kiln_diag::{Diag, DiagId};
 use kiln_lex::Encoding;
 use kiln_lex::literal::{CharLiteral, CodeUnits, FloatLiteral, IntegerLiteral, StringLiteral};
@@ -332,6 +332,7 @@ impl Sema<'_, '_> {
     /// operand of an lvalue-to-rvalue conversion is not odr-used
     /// (`non_odr_use_constant`); every other named variable is `used`.
     pub fn act_on_full_expr(&mut self, e: ExprId) -> ExprId {
+        self.flush_member_refs();
         if self.pending_odr.is_empty() {
             return e;
         }
@@ -620,6 +621,9 @@ impl Sema<'_, '_> {
             Some(q) => self.lookup_qualified(q, name, LookupKind::Ordinary),
             None => self.lookup_name(name, LookupKind::Ordinary),
         };
+        if self.diagnose_member_ambiguity(&found, name, loc) {
+            return self.recover_err(&[], loc);
+        }
         let Some(&d) = found.decls.first() else {
             if qualifier.is_none()
                 && let Some(b) = self.lazily_create_builtin(name, loc)
@@ -657,6 +661,17 @@ impl Sema<'_, '_> {
             self.diag_unresolved_using(d, loc);
             return self.recover_err(&[], loc);
         }
+        if let Some(naming) = found.naming {
+            // [class.access.base]/5: the object is `*this` for an implicit
+            // member access.
+            let object =
+                if self.is_instance_member(d) { self.implicit_object_class(d) } else { None };
+            let via = found.found.first().copied().unwrap_or(d);
+            self.check_member_access(via, naming, object, loc);
+        }
+        if self.is_class_member_ref(d) {
+            return self.implicit_member_ref(d, loc, found.shadow(0), qualifier.is_some());
+        }
         self.build_decl_ref_via(d, loc, found.shadow(0))
     }
 
@@ -682,9 +697,9 @@ impl Sema<'_, '_> {
             {
                 return self.anonymous_member_ref(d, loc);
             }
-            DeclKind::Field | DeclKind::IndirectField => {
-                self.unsupported("implicit member access", loc);
-                return self.recover_err(&[], loc);
+            DeclKind::CXXMethod if self.is_static_method(d) => {}
+            _ if self.is_class_member_ref(d) => {
+                return self.implicit_member_ref(d, loc, shadow, false);
             }
             k if crate::lookup::is_type_kind(k) || k == DeclKind::Namespace => {
                 let msg = self
@@ -715,7 +730,7 @@ impl Sema<'_, '_> {
         let e = self.builder().decl_ref(d, ty, loc, extra, nou, ExprFlags::NONE);
         if self.unevaluated == 0 {
             match n.kind() {
-                DeclKind::Function => {
+                DeclKind::Function | DeclKind::CXXMethod => {
                     let own = self
                         .func
                         .as_ref()
@@ -1025,7 +1040,7 @@ impl Sema<'_, '_> {
                     .diag(DiagId::note_var_declared_const, self.ast.decls.get(d).loc())
                     .arg(self.decl_name(d));
                 self.emit(msg.with_note(note));
-            } else {
+            } else if !self.diagnose_const_this_member(e, loc) {
                 self.error(DiagId::sema_read_only_not_assignable, loc);
             }
             return false;
@@ -1122,6 +1137,9 @@ impl Sema<'_, '_> {
     }
 
     fn address_of(&mut self, e: ExprId, loc: Loc) -> ExprId {
+        if let Some(mp) = self.member_pointer_of(e, loc) {
+            return mp;
+        }
         if self.check_builtin_fn_use(e) {
             return self.recover_err(&[e], loc);
         }
@@ -1294,6 +1312,7 @@ impl Sema<'_, '_> {
             | BinaryOp::GE
             | BinaryOp::EQ
             | BinaryOp::NE => self.comparison(op, l, r, loc),
+            BinaryOp::PtrMemD | BinaryOp::PtrMemI => self.act_on_ptr_mem(op, l, r, loc),
             _ => {
                 self.unsupported(&format!("operator '{}'", op.spelling()), loc);
                 self.recover_err(&[l, r], loc)
@@ -1679,7 +1698,7 @@ impl Sema<'_, '_> {
     /// The function prototype of `q` as written: sugar is looked through
     /// only down to the first function type, so parameter types keep
     /// their typedef names (clang converts arguments to them).
-    fn sugared_proto(&self, q: QualType) -> Option<kiln_ast::types::FuncProto> {
+    pub(crate) fn sugared_proto(&self, q: QualType) -> Option<kiln_ast::types::FuncProto> {
         let mut cur = q;
         for _ in 0..256 {
             if let Some(p) = self.ast.types.proto_of(cur.ty()) {
@@ -1768,6 +1787,9 @@ impl Sema<'_, '_> {
         if self.is_err_expr(callee) || args.iter().any(|&a| self.is_err_expr(a)) {
             return self.recover_err(&kids, loc);
         }
+        if let Some(e) = self.try_member_call(callee, args, loc, rparen) {
+            return e;
+        }
         let named = {
             let x = self.ignore_parens(callee);
             (self.ast.exprs.get(x).kind() == ExprKind::DeclRefExpr).then(|| self.ast.exprs.decl(x))
@@ -1788,33 +1810,79 @@ impl Sema<'_, '_> {
             self.unsupported("calls through this function type", loc);
             return self.recover_err(&kids, loc);
         };
-        let params: Vec<QualType> = self.ast.types.params(&proto).to_vec();
-        let ret = proto.ret();
+        let callee_info = named
+            .map(|d| CallCallee { decl: d, overloadable: self.kind_of(d) == DeclKind::Function });
+        let Some(conv_args) =
+            self.convert_call_args(callee_info, callee, args, &proto, loc, rparen)
+        else {
+            return self.recover_err(&kids, loc);
+        };
+        let (ty, vk) = self.call_result(proto.ret(), loc);
+        self.builder().call(f, &conv_args, ty, vk, loc, rparen, ExprFlags::NONE)
+    }
+
+    /// Converts the arguments of a call through a function of type `proto`
+    /// ([expr.call]/7), appending the default arguments of the omitted
+    /// trailing parameters ([dcl.fct.default]/1) when the callee is known.
+    /// Diagnoses and returns `None` on an arity or conversion error.
+    pub(crate) fn convert_call_args(
+        &mut self,
+        named: Option<CallCallee>,
+        callee: ExprId,
+        args: &[ExprId],
+        proto: &kiln_ast::types::FuncProto,
+        loc: Loc,
+        rparen: Loc,
+    ) -> Option<Vec<ExprId>> {
+        let params: Vec<QualType> = self.ast.types.params(proto).to_vec();
         let variadic = proto.info().variadic();
         let n = params.len();
         let have = args.len();
-        if have < n || (have > n && !variadic) {
+        let defaults = if have < n {
+            named.and_then(|c| self.default_args_for(c.decl, have, n))
+        } else {
+            None
+        };
+        if (have < n && defaults.is_none()) || (have > n && !variadic) {
             let few = have < n;
-            if let Some(d) = named {
-                let msg = self
-                    .diag(DiagId::sema_ovl_no_viable_function_in_call, self.begin_loc(callee))
-                    .arg(self.decl_name(d));
-                let detail = self.arity_detail(d, n, have, variadic);
-                let fl = self.ast.decls.get(d).loc();
-                let note = self.diag(DiagId::note_ovl_candidate_not_viable, fl).arg(detail);
-                self.emit(msg.with_note(note));
-            } else {
-                let id = match (few, variadic) {
-                    (true, true) => DiagId::sema_call_too_few_args_at_least,
-                    (true, false) => DiagId::sema_call_too_few_args,
-                    (false, _) => DiagId::sema_call_too_many_args,
-                };
-                let msg = self.diag(id, loc).arg(n).arg(have);
-                self.emit(msg);
+            match named {
+                Some(c) if c.overloadable => {
+                    let d = c.decl;
+                    let msg = self
+                        .diag(DiagId::sema_ovl_no_viable_function_in_call, self.begin_loc(callee))
+                        .arg(self.decl_name(d));
+                    let detail = self.arity_detail(d, n, have, variadic);
+                    let fl = self.ast.decls.get(d).loc();
+                    let note = self.diag(DiagId::note_ovl_candidate_not_viable, fl).arg(detail);
+                    self.emit(msg.with_note(note));
+                }
+                _ => {
+                    let id = match (few, variadic) {
+                        (true, true) => DiagId::sema_call_too_few_args_at_least,
+                        (true, false) => DiagId::sema_call_too_few_args,
+                        (false, _) => DiagId::sema_call_too_many_args,
+                    };
+                    // clang's direct-call diagnostics name the callee in a
+                    // note and point at the `)` or the first extra argument.
+                    let at = match named {
+                        Some(_) if few => rparen,
+                        Some(_) => self.begin_loc(args[n]),
+                        None => loc,
+                    };
+                    let mut msg = self.diag(id, at).arg(n).arg(have);
+                    if let Some(c) = named {
+                        let d = c.decl;
+                        let note = self
+                            .diag(DiagId::note_entity_declared_here, self.ast.decls.get(d).loc())
+                            .arg(format!("'{}'", self.decl_name(d)));
+                        msg = msg.with_note(note);
+                    }
+                    self.emit(msg);
+                }
             }
-            return self.recover_err(&kids, loc);
+            return None;
         }
-        let mut conv_args = Vec::with_capacity(have);
+        let mut conv_args = Vec::with_capacity(have.max(n));
         for (i, &a) in args.iter().enumerate() {
             if i < n {
                 let pt = conv::strip_cv(self, params[i]);
@@ -1822,14 +1890,64 @@ impl Sema<'_, '_> {
                 match conv::implicit_convert(self, a, to, ConvCtx::Argument) {
                     Ok(x) => conv_args.push(x),
                     Err(err) => {
-                        self.bad_argument(named, callee, a, params[i], i, &err);
-                        return self.recover_err(&kids, loc);
+                        self.bad_argument(named.map(|c| c.decl), callee, a, params[i], i, &err);
+                        return None;
                     }
                 }
             } else {
                 conv_args.push(self.default_argument_promotion(a));
             }
         }
+        if let Some(d) = defaults {
+            conv_args.extend(d);
+        }
+        Some(conv_args)
+    }
+
+    /// `CXXDefaultArgExpr`s for parameters `from..to` of function `f`, if
+    /// every one of them has a default argument in some declaration of
+    /// `f` ([dcl.fct.default]/4: later declarations may add them).
+    fn default_args_for(&mut self, f: DeclId, from: usize, to: usize) -> Option<Vec<ExprId>> {
+        let mut out = Vec::with_capacity(to - from);
+        let used_ctx = self.ctx;
+        for i in from..to {
+            let mut cur = Some(f);
+            let mut hit = None;
+            let mut guard = 0;
+            while let Some(x) = cur {
+                let p = self
+                    .ast
+                    .decls
+                    .function(x)
+                    .and_then(|fd| self.ast.lists.at::<DeclId>(fd.params, i));
+                if let Some(p) = p
+                    && let Some(e) = self.ast.decls.param(p).and_then(|pd| pd.default_arg)
+                {
+                    hit = Some((p, e));
+                    break;
+                }
+                guard += 1;
+                if guard > 4096 {
+                    break;
+                }
+                cur = self.ast.prev(x);
+            }
+            let (p, e) = hit?;
+            let n = *self.ast.exprs.get(e);
+            out.push(self.builder().default_arg(
+                p,
+                used_ctx,
+                n.ty(),
+                n.value_category(),
+                Loc::INVALID,
+            ));
+        }
+        Some(out)
+    }
+
+    /// The type and value category of a call returning `ret`
+    /// ([expr.call]/14), diagnosing an incomplete class result.
+    pub(crate) fn call_result(&mut self, ret: QualType, loc: Loc) -> (QualType, ValueCategory) {
         let (ty, vk) = if self.ast.types.is_reference(ret) {
             let lvalue = matches!(self.ast.types.canonical_view(ret), TypeView::LValueRef(_));
             (
@@ -1847,7 +1965,7 @@ impl Sema<'_, '_> {
                 self.diag(DiagId::sema_typecheck_decl_incomplete_type, loc).arg(self.ty_arg(ty));
             self.emit(self.incomplete_note(msg, ty));
         }
-        self.builder().call(f, &conv_args, ty, vk, loc, rparen, ExprFlags::NONE)
+        (ty, vk)
     }
 
     /// clang's "candidate function not viable" detail for an arity
@@ -1948,39 +2066,7 @@ impl Sema<'_, '_> {
             self.emit(self.incomplete_note(msg, obj_ty));
             return self.recover_err(&[base], loc);
         };
-        let found = self.lookup_in(def, name, LookupKind::Ordinary);
-        let Some(&m) = found.decls.first() else {
-            let msg = self
-                .diag(DiagId::sema_no_member, loc)
-                .arg(self.ast.symbols().as_str(name).to_owned())
-                .arg(self.ty_arg(obj_ty));
-            self.emit(msg);
-            return self.recover_err(&[base], loc);
-        };
-        let quals = self.ast.types.effective_quals(obj_ty);
-        match self.ast.decls.get(m).kind() {
-            DeclKind::Field => Some(self.field_access(b, m, quals, arrow, loc)),
-            DeclKind::IndirectField => {
-                let list = ListId::from_raw(self.ast.decls.get(m).data());
-                let chain: Vec<DeclId> =
-                    list.map(|l| self.ast.lists.iter::<DeclId>(l).collect()).unwrap_or_default();
-                self.ast.decls.set_flags(m, DeclFlags::REFERENCED);
-                let mut cur = b;
-                let mut arrow_now = arrow;
-                let mut q = quals;
-                for f in chain {
-                    cur = self.field_access(cur, f, q, arrow_now, loc);
-                    q = self.ast.types.effective_quals(self.ety(cur));
-                    arrow_now = false;
-                }
-                Some(cur)
-            }
-            _ => None,
-        }
-        .unwrap_or_else(|| {
-            self.unsupported("this kind of member access", loc);
-            self.recover_err(&[base], loc)
-        })
+        self.member_access(base, b, obj_ty, def, arrow, name, loc)
     }
 
     /// A name declared by an anonymous union outside a class
@@ -1998,7 +2084,7 @@ impl Sema<'_, '_> {
         cur
     }
 
-    fn field_access(
+    pub(crate) fn field_access(
         &mut self,
         base: ExprId,
         f: DeclId,
@@ -2400,4 +2486,14 @@ enum UdOperand {
     Char(QualType),
     /// A string literal of the given element type.
     String(QualType),
+}
+
+/// The function a call names, for default arguments and diagnostics.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct CallCallee {
+    /// The function.
+    pub(crate) decl: DeclId,
+    /// A non-member function named by an id-expression: clang reports
+    /// arity errors through overload resolution ("no matching function").
+    pub(crate) overloadable: bool,
 }

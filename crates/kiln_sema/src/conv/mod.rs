@@ -24,7 +24,7 @@ pub(crate) mod bases;
 pub(crate) mod narrow;
 mod qual;
 pub(crate) mod rank;
-mod scs;
+pub(crate) mod scs;
 pub(crate) mod soft;
 
 use kiln_ast::expr::{CastKind, ExprKind, ObjectKind, ValueCategory};

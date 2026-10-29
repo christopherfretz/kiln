@@ -105,7 +105,7 @@ impl Sema<'_, '_> {
     }
 
     /// True if `a` is `b` or derived from it.
-    fn derived_inclusive(&self, a: DeclId, b: DeclId) -> bool {
+    pub(crate) fn derived_inclusive(&self, a: DeclId, b: DeclId) -> bool {
         same_class(self, a, b) || is_derived_from(self, a, b)
     }
 
@@ -151,7 +151,13 @@ impl Sema<'_, '_> {
 
     /// clang `HasAccess`: whether an entity with access `access` as a
     /// member of `naming` is accessible in `ec`.
-    fn has_access(&self, ec: &EffectiveContext, naming: DeclId, access: Access, t: &Target) -> bool {
+    fn has_access(
+        &self,
+        ec: &EffectiveContext,
+        naming: DeclId,
+        access: Access,
+        t: &Target,
+    ) -> bool {
         match access {
             Access::Public => return true,
             Access::None => return false,
@@ -236,7 +242,13 @@ impl Sema<'_, '_> {
     }
 
     /// clang `IsAccessible`.
-    fn is_accessible(&self, ec: &EffectiveContext, t: &Target, naming: DeclId, unprivileged: Access) -> bool {
+    fn is_accessible(
+        &self,
+        ec: &EffectiveContext,
+        t: &Target,
+        naming: DeclId,
+        unprivileged: Access,
+    ) -> bool {
         if unprivileged == Access::Public {
             return true;
         }
@@ -400,7 +412,13 @@ impl Sema<'_, '_> {
 
     /// clang `DiagnoseAccessPath`: the notes explaining why `t` is
     /// inaccessible as a member of `naming`.
-    fn access_path_notes(&self, msg: Diag, ec: &EffectiveContext, t: &Target, naming: DeclId) -> Diag {
+    fn access_path_notes(
+        &self,
+        msg: Diag,
+        ec: &EffectiveContext,
+        t: &Target,
+        naming: DeclId,
+    ) -> Diag {
         let mut tt = *t;
         let mut so_far = Access::Public;
         if let Some(m) = t.member {
@@ -444,7 +462,9 @@ impl Sema<'_, '_> {
         let protected = u8::from(self.base_access(deriving, spec.access) == Access::Protected);
         let implicit = u8::from(spec.access == Access::None);
         let note = if t.member.is_some() || j + 1 != path.specs.len() {
-            self.diag(DiagId::note_access_constrained_by_path, spec.loc).arg(implicit).arg(protected)
+            self.diag(DiagId::note_access_constrained_by_path, spec.loc)
+                .arg(implicit)
+                .arg(protected)
         } else if implicit == 1 {
             self.diag(DiagId::note_access_implicit, spec.loc).arg(protected)
         } else {
@@ -462,7 +482,14 @@ impl Sema<'_, '_> {
 
     /// clang `diagnoseBadDirectAccess`: `declared private here` (or the
     /// [class.protected] explanation).
-    fn direct_access_notes(&self, msg: Diag, ec: &EffectiveContext, t: &Target, m: DeclId, naming: DeclId) -> Diag {
+    fn direct_access_notes(
+        &self,
+        msg: Diag,
+        ec: &EffectiveContext,
+        t: &Target,
+        m: DeclId,
+        naming: DeclId,
+    ) -> Diag {
         let first = self.ast.first(m);
         let loc = self.ast.decls.get(first).loc();
         if t.decl_access == Access::Protected
@@ -501,7 +528,13 @@ impl Sema<'_, '_> {
     }
 
     /// clang `TryDiagnoseProtectedAccess`.
-    fn protected_note(&self, ec: &EffectiveContext, t: &Target, naming: DeclId, loc: Loc) -> Option<Diag> {
+    fn protected_note(
+        &self,
+        ec: &EffectiveContext,
+        t: &Target,
+        naming: DeclId,
+        loc: Loc,
+    ) -> Option<Diag> {
         if !t.instance_member {
             return None;
         }

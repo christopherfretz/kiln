@@ -101,6 +101,7 @@ pub struct Sema<'a, 'sm> {
     pub(crate) classes: Vec<class::ClassBuild>,
     /// Which implicit special members each class has declared
     /// ([`class::implicit`] bits; spec/sema-class.md §4.1).
+    #[expect(dead_code, reason = "filled by WP-067a's implicit special members")]
     pub(crate) implicit_declared: kiln_source::fx::FxHashMap<DeclId, u8>,
     /// Access checks delayed until their declaration exists
     /// (spec/sema-class.md §2.4).
@@ -124,9 +125,8 @@ pub struct Sema<'a, 'sm> {
     pub(crate) fn_saved: Vec<class::SavedFn>,
     /// Names of non-static members whose meaning depends on the operand
     /// they appear in (spec/sema-class.md §2.5/§2.6): `&C::m` forms a
-    /// pointer to member, anything else needs an object. `true` marks a
-    /// reference that is an error unless `&` consumes it.
-    pub(crate) member_refs: kiln_source::fx::FxHashMap<ExprId, (DeclId, bool)>,
+    /// pointer to member, anything else needs an object.
+    pub(crate) member_refs: kiln_source::fx::FxHashMap<ExprId, class::MemberRef>,
     /// The `this` type of the default member initializers being parsed,
     /// innermost last, with their fields (`C*`, spec/sema-class.md §2.5).
     pub(crate) nsdmi_this: Vec<(DeclId, QualType)>,

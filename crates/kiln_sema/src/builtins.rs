@@ -83,6 +83,11 @@ impl Sema<'_, '_> {
     /// Whether `e` is a builtin function's name used other than as a
     /// callee; reports `builtin functions must be directly called`.
     pub(crate) fn check_builtin_fn_use(&mut self, e: ExprId) -> bool {
+        if self.ast.exprs.get(e).ty() == QualType::BOUND_MEMBER {
+            // [expr.ref]/7.3.2: a bound member function can only be called.
+            self.diagnose_bound_member(e);
+            return true;
+        }
         if self.ast.exprs.get(e).ty() != QualType::BUILTIN_FN {
             return false;
         }

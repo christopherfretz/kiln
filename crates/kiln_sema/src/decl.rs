@@ -865,12 +865,19 @@ impl Sema<'_, '_> {
         let mut prev_ok = None;
         let mut invalid_redecl = false;
         let fkind = if method { DeclKind::CXXMethod } else { DeclKind::Function };
-        let prev = if method { self.find_prev(name, d.qualifier) } else {
+        let prev = if method {
+            self.find_prev(name, d.qualifier)
+        } else {
             self.find_prev_linkage(name, d.qualifier)
         };
         let matches_member = prev.is_some_and(|p| {
             self.kind_of(p) == DeclKind::CXXMethod
-                && self.ast.decls.get(p).ty().is_some_and(|pty| self.same_ignoring_exc_spec(pty, ty))
+                && self
+                    .ast
+                    .decls
+                    .get(p)
+                    .ty()
+                    .is_some_and(|pty| self.same_ignoring_exc_spec(pty, ty))
         });
         if method && !in_class && !matches_member {
             let msg = self

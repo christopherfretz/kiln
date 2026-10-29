@@ -344,7 +344,13 @@ impl Sema<'_, '_> {
         }
     }
 
-    fn class_hit(&self, def: DeclId, name: Symbol, kind: LookupKind, depth: usize) -> Option<ClassHit> {
+    fn class_hit(
+        &self,
+        def: DeclId,
+        name: Symbol,
+        kind: LookupKind,
+        depth: usize,
+    ) -> Option<ClassHit> {
         if depth > 256 {
             return None;
         }
@@ -392,7 +398,8 @@ impl Sema<'_, '_> {
                 None => sub,
                 Some(mut a) => {
                     let firsts = |f: &Found| -> Vec<DeclId> {
-                        let mut v: Vec<DeclId> = f.decls.iter().map(|&d| self.ast.first(d)).collect();
+                        let mut v: Vec<DeclId> =
+                            f.decls.iter().map(|&d| self.ast.first(d)).collect();
                         v.sort_unstable();
                         v
                     };
@@ -418,27 +425,34 @@ impl Sema<'_, '_> {
 
     /// Reports an ambiguous class member lookup ([class.member.lookup]/6)
     /// with clang's diagnostics; true if `found` was ambiguous.
-    pub(crate) fn diagnose_member_ambiguity(&self, found: &Found, name: Symbol, loc: kiln_source::Loc) -> bool {
+    pub(crate) fn diagnose_member_ambiguity(
+        &self,
+        found: &Found,
+        name: Symbol,
+        loc: kiln_source::Loc,
+    ) -> bool {
         let Some(amb) = &found.ambiguity else { return false };
         let text = self.ast.symbols().as_str(name).to_owned();
         match amb {
             MemberAmbiguity::Types(decls) => {
-                let mut msg = self.diag(kiln_diag::DiagId::sema_ambiguous_member_types, loc).arg(text);
+                let mut msg =
+                    self.diag(kiln_diag::DiagId::sema_ambiguous_member_types, loc).arg(text);
                 for &d in decls {
                     let loc = self.ast.decls.get(d).loc();
-                    msg = msg.with_note(self.diag(kiln_diag::DiagId::note_ambiguous_member_found, loc));
+                    msg = msg
+                        .with_note(self.diag(kiln_diag::DiagId::note_ambiguous_member_found, loc));
                 }
                 self.emit(msg);
             }
             MemberAmbiguity::Subobjects { decl, paths } => {
                 let naming = found.naming.unwrap_or(*decl);
                 let nty = self.tag_type(naming);
-                let base_ty = paths
-                    .first()
-                    .and_then(|p| p.written.last().copied())
-                    .unwrap_or(nty);
+                let base_ty = paths.first().and_then(|p| p.written.last().copied()).unwrap_or(nty);
                 let display = crate::conv::bases::ambiguous_paths_string(self, nty, paths);
-                let note = self.diag(kiln_diag::DiagId::note_ambiguous_member_found, self.ast.decls.get(*decl).loc());
+                let note = self.diag(
+                    kiln_diag::DiagId::note_ambiguous_member_found,
+                    self.ast.decls.get(*decl).loc(),
+                );
                 let msg = self
                     .diag(kiln_diag::DiagId::sema_ambiguous_member_subobjects, loc)
                     .arg(text)

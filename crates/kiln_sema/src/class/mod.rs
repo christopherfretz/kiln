@@ -11,14 +11,15 @@
 //! those packages.
 
 mod access;
+mod member_expr;
 mod members;
 
 use kiln_ast::decl::{Access, DefinitionBits, TagKind};
 use kiln_ast::types::ExcSpec;
 use kiln_ast::{AttrId, DeclId, ExprId, QualType};
+use kiln_diag::DiagId;
 use kiln_source::Loc;
 use kiln_source::symbol::Symbol;
-use kiln_diag::DiagId;
 
 use crate::Sema;
 use crate::declspec::{DeclSpec, Declarator};
@@ -119,6 +120,8 @@ impl ClassBuild {
         }
     }
 }
+
+pub(crate) use member_expr::MemberRef;
 
 /// Bits of [`Sema`]'s `implicit_declared` map: which implicit special
 /// members of a class have been declared (spec/sema-class.md §4.1).

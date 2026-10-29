@@ -215,8 +215,7 @@ impl Sema<'_, '_> {
                             && t.element(pty)
                                 .zip(t.element(ty))
                                 .is_some_and(|(a, b)| t.same_type(a, b)));
-                    let prev_def =
-                        self.ast.redecls_of(p).find(|&x| self.is_var_definition(x));
+                    let prev_def = self.ast.redecls_of(p).find(|&x| self.is_var_definition(x));
                     if !compatible {
                         let msg = self
                             .diag(DiagId::sema_redefinition_different_type, loc)
@@ -272,7 +271,11 @@ impl Sema<'_, '_> {
     pub(crate) fn is_in_class_static(&self, v: DeclId) -> bool {
         let Some(ctx) = self.ast.decls.get(v).ctx() else { return false };
         self.kind_of(ctx) == DeclKind::CXXRecord
-            && self.ast.decls.lexical_ctx(v).is_some_and(|l| self.ast.first(l) == self.ast.first(ctx))
+            && self
+                .ast
+                .decls
+                .lexical_ctx(v)
+                .is_some_and(|l| self.ast.first(l) == self.ast.first(ctx))
     }
 
     /// Whether `t` is a literal type ([basic.types.general]/10), as far as
@@ -281,14 +284,12 @@ impl Sema<'_, '_> {
     pub(crate) fn is_literal_type(&self, t: QualType) -> bool {
         let types = &self.ast.types;
         match types.canonical_view(t) {
-            TypeView::Record(r) => self
-                .ast
-                .definition(r)
-                .and_then(|d| self.ast.decls.record(d))
-                .is_some_and(|x| {
+            TypeView::Record(r) => {
+                self.ast.definition(r).and_then(|d| self.ast.decls.record(d)).is_some_and(|x| {
                     x.defn.contains(DefinitionBits::COMPLETE)
                         && x.defn.contains(DefinitionBits::LITERAL)
-                }),
+                })
+            }
             TypeView::ConstantArray(_) | TypeView::IncompleteArray(_) => {
                 types.element(t).is_some_and(|e| self.is_literal_type(e))
             }
@@ -307,8 +308,7 @@ impl Sema<'_, '_> {
             return;
         }
         let quals = self.ast.types.effective_quals(ty);
-        let int_like =
-            self.ast.types.is_integral(ty) || self.ast.types.as_enum(ty).is_some();
+        let int_like = self.ast.types.is_integral(ty) || self.ast.types.as_enum(ty).is_some();
         if !quals.is_const() || self.ast.types.is_reference(ty) {
             self.error(DiagId::sema_static_member_nonconst_init, vn.loc());
             self.ast.decls.set_flags(v, kiln_ast::decl::DeclFlags::INVALID);
@@ -341,8 +341,7 @@ impl Sema<'_, '_> {
                 self.ast.decls.set_flags(v, kiln_ast::decl::DeclFlags::INVALID);
             }
         } else {
-            let msg =
-                self.diag(DiagId::sema_static_member_bad_init, vn.loc()).arg(self.ty_arg(ty));
+            let msg = self.diag(DiagId::sema_static_member_bad_init, vn.loc()).arg(self.ty_arg(ty));
             self.emit(msg);
             self.ast.decls.set_flags(v, kiln_ast::decl::DeclFlags::INVALID);
         }
@@ -383,8 +382,11 @@ impl Sema<'_, '_> {
                 let msg = self.incomplete_note(msg, s.ty);
                 let msg = match self.ast.definition(b) {
                     Some(def) if self.defining.contains(&def) => msg.with_note(
-                        self.diag(DiagId::note_definition_not_complete, self.ast.decls.get(def).loc())
-                            .arg(format!("'{}'", self.qualified_decl_name(def))),
+                        self.diag(
+                            DiagId::note_definition_not_complete,
+                            self.ast.decls.get(def).loc(),
+                        )
+                        .arg(format!("'{}'", self.qualified_decl_name(def))),
                     ),
                     _ => msg,
                 };
@@ -392,12 +394,7 @@ impl Sema<'_, '_> {
                 continue;
             }
             let def = self.ast.definition(b).unwrap_or(b);
-            if self
-                .ast
-                .decls
-                .record(def)
-                .is_some_and(|x| x.defn.contains(DefinitionBits::FINAL))
-            {
+            if self.ast.decls.record(def).is_some_and(|x| x.defn.contains(DefinitionBits::FINAL)) {
                 let n = format!("'{}'", self.decl_name(def));
                 let msg = self.diag(DiagId::sema_base_final, s.loc).arg(n.clone());
                 let msg = msg.with_note(
@@ -506,9 +503,12 @@ impl Sema<'_, '_> {
         if self.kind_of(f) != DeclKind::CXXMethod {
             return None;
         }
-        if self.ast.decls.function(f).is_some_and(|x| {
-            x.spec.storage() == kiln_ast::decl::FnStorage::Static
-        }) {
+        if self
+            .ast
+            .decls
+            .function(f)
+            .is_some_and(|x| x.spec.storage() == kiln_ast::decl::FnStorage::Static)
+        {
             return None;
         }
         let class = self.ast.decls.get(f).ctx()?;
@@ -550,7 +550,8 @@ impl Sema<'_, '_> {
                 *bits = bits.with(DefinitionBits::HAS_MUTABLE_FIELDS);
             }
         };
-        let not_sl = |bits: &mut DefinitionBits| *bits = bits.without(DefinitionBits::STANDARD_LAYOUT);
+        let not_sl =
+            |bits: &mut DefinitionBits| *bits = bits.without(DefinitionBits::STANDARD_LAYOUT);
         // Bases ([class.prop]/3, [dcl.init.aggr]/1.4).
         let bases: Vec<BaseSpec> = self.ast.decls.bases(r, &self.ast.lists).copied().collect();
         let mut bases_with_fields = false;
@@ -589,10 +590,7 @@ impl Sema<'_, '_> {
             .iter()
             .copied()
             .filter(|&b| {
-                self.ast
-                    .decls
-                    .record(b)
-                    .is_some_and(|x| x.defn.contains(DefinitionBits::EMPTY))
+                self.ast.decls.record(b).is_some_and(|x| x.defn.contains(DefinitionBits::EMPTY))
             })
             .collect();
         // Fields.
@@ -644,7 +642,10 @@ impl Sema<'_, '_> {
                 if !fb.contains(DefinitionBits::STANDARD_LAYOUT) {
                     not_sl(&mut bits);
                 }
-                if (union || first) && !empty_bases.is_empty() && self.zero_offset_hits(fr, &empty_bases) {
+                if (union || first)
+                    && !empty_bases.is_empty()
+                    && self.zero_offset_hits(fr, &empty_bases)
+                {
                     not_sl(&mut bits);
                 }
             }
@@ -726,7 +727,9 @@ impl Sema<'_, '_> {
                     continue;
                 }
                 let fd = self.ast.decls.field(f);
-                if fd.is_some_and(|d| d.bit_width.is_some()) && self.ast.decls.get(f).name().is_empty() {
+                if fd.is_some_and(|d| d.bit_width.is_some())
+                    && self.ast.decls.get(f).name().is_empty()
+                {
                     continue;
                 }
                 let mut t = self.ast.decls.get(f).ty().unwrap_or(QualType::ERROR);
