@@ -1063,12 +1063,12 @@ mod tests {
         // A buffer that fits the coalesced region reuses it.
         let small = heap(&mut m, 30 * MIB);
         assert_eq!(base(&m, small), 0);
-        assert!(m.bins.large.is_empty());
+        assert_eq!(m.bins.large, []);
         free(&mut m, small);
         // Freeing the top block lowers the top through the free region.
         free(&mut m, buf);
         assert_eq!(m.heap.top, 0);
-        assert!(m.bins.large.is_empty());
+        assert_eq!(m.bins.large, []);
         assert_eq!(m.heap_live, 0);
         assert_eq!(m.arena_peak, 62 * MIB);
         assert_eq!(m.peak, 62 * MIB);
@@ -1165,10 +1165,10 @@ mod tests {
         let sizes = [8, 24, 40, 200];
         let mut live: Vec<u64> = Vec::new();
         let mut seed = 1;
-        for i in 0..10_000 {
+        for i in 0..10_000u32 {
             // Grow towards ~400 live objects, then hover around them.
-            let grow = live.len() < 50 || (live.len() < 400 && lcg(&mut seed) % 3 != 0);
-            if grow || i % 2 == 0 && live.len() < 400 {
+            let grow = live.len() < 50 || (live.len() < 400 && !lcg(&mut seed).is_multiple_of(3));
+            if grow || i.is_multiple_of(2) && live.len() < 400 {
                 let s = sizes[(lcg(&mut seed) % 4) as usize];
                 live.push(heap(&mut m, s));
             } else {

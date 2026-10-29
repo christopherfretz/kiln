@@ -598,12 +598,13 @@ pub(super) mod tests {
 
     #[test]
     fn baselines_without_the_newer_counters_still_load() {
-        let mut m = sample("kiln", 9.0, Some(1000));
-        m.oven = Some(Counters { steps: 1, peak_arena: 7, frozen_bytes: 8, ..Counters::default() });
-        let mut f = BaselineFile::default();
-        let b = Baseline { measurement: m, recorded: "2026-10-28T000000".into() };
-        f.entries.entry("e".into()).or_default().insert("kiln".into(), b);
-        let text = f.to_json("oven").to_pretty();
+        let mut meas = sample("kiln", 9.0, Some(1000));
+        meas.oven =
+            Some(Counters { steps: 1, peak_arena: 7, frozen_bytes: 8, ..Counters::default() });
+        let mut file = BaselineFile::default();
+        let base = Baseline { measurement: meas, recorded: "2026-10-28T000000".into() };
+        file.entries.entry("e".into()).or_default().insert("kiln".into(), base);
+        let text = file.to_json("oven").to_pretty();
         let back = BaselineFile::from_json(&Json::parse(&text).unwrap(), "oven").unwrap();
         assert_eq!(back.entries["e"]["kiln"].measurement.oven_missing, []);
         // An older baseline has neither key: read as 0, marked missing, and
@@ -613,13 +614,13 @@ pub(super) mod tests {
         let back = BaselineFile::from_json(&Json::parse(&old).unwrap(), "oven").unwrap();
         let got = &back.entries["e"]["kiln"].measurement;
         assert_eq!(got.oven_missing, OPTIONAL_COUNTERS);
-        let c = got.oven.unwrap();
-        assert_eq!((c.steps, c.peak_arena, c.frozen_bytes), (1, 0, 0));
+        let counters = got.oven.unwrap();
+        assert_eq!((counters.steps, counters.peak_arena, counters.frozen_bytes), (1, 0, 0));
         let again = back.to_json("oven").to_pretty();
         assert!(!again.contains("peak_arena"), "{again}");
         // The counters that existed from the start stay required.
         let bad = text.replace("\"allocs\": 0,", "");
-        let e = BaselineFile::from_json(&Json::parse(&bad).unwrap(), "oven").unwrap_err();
-        assert!(e.contains("missing `allocs`"), "{e}");
+        let err = BaselineFile::from_json(&Json::parse(&bad).unwrap(), "oven").unwrap_err();
+        assert!(err.contains("missing `allocs`"), "{err}");
     }
 }

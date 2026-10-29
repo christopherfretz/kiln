@@ -222,7 +222,7 @@ impl ConstStore {
     /// push is what interning it added (the Oven's `frozen_bytes`).
     pub fn content_bytes(&self) -> u64 {
         fn n<T>(v: &[T]) -> u64 {
-            (v.len() * size_of::<T>()) as u64
+            size_of_val(v) as u64
         }
         let p = &self.pools;
         n(&p.nodes)

@@ -97,16 +97,16 @@ fn nest(
     let (e, loc) = cond(&tu, outer);
     let (ne, nloc) = cond(&tu, nested);
     let on = tu.names["g"];
-    let mut b = Nesting { inner: tu.bridge(), on, expr: ne, loc: nloc, result: None };
-    let r = oven.evaluate(&mut b, e, EvalContext::new(EvalKind::StaticAssert, loc));
-    let n = b.result.take().expect("the nested evaluation ran");
+    let mut bridge = Nesting { inner: tu.bridge(), on, expr: ne, loc: nloc, result: None };
+    let res = oven.evaluate(&mut bridge, e, EvalContext::new(EvalKind::StaticAssert, loc));
+    let nres = bridge.result.take().expect("the nested evaluation ran");
     let truth = |tu: &Tu, v: ConstValueId| match tu.ast.consts.scalar(v) {
         Some(kiln_ast::consts::Scalar::Bool { value, .. }) => value,
         s => panic!("not a bool: {s:?}"),
     };
-    let r = r.map(|v| truth(&tu, v));
-    let n = n.map(|v| truth(&tu, v));
-    (r, n, oven.stats().records().to_vec(), tu)
+    let res = res.map(|v| truth(&tu, v));
+    let nres = nres.map(|v| truth(&tu, v));
+    (res, nres, oven.stats().records().to_vec(), tu)
 }
 
 /// The record of `static_assert` item `i` evaluated alone on a fresh Oven.
@@ -115,7 +115,7 @@ fn alone(i: usize) -> EvalRecord {
     let mut oven = Oven::new(Budget::default());
     let (e, loc) = cond(&tu, i);
     tu.eval(&mut oven, e, loc).expect("ok");
-    oven.stats().records()[0].clone()
+    oven.stats().records()[0]
 }
 
 #[test]
