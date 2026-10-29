@@ -14,6 +14,7 @@ mod access;
 mod friend;
 mod member_expr;
 mod members;
+mod r#virtual;
 
 use kiln_ast::decl::{Access, DefinitionBits, TagKind};
 use kiln_ast::types::ExcSpec;
@@ -124,6 +125,7 @@ impl ClassBuild {
 }
 
 pub(crate) use member_expr::MemberRef;
+pub(crate) use r#virtual::{AbstractUse, VirtualSite, ensure_virtuals};
 
 /// Bits of [`Sema`]'s `implicit_declared` map: which implicit special
 /// members of a class have been declared (spec/sema-class.md §4.1).
@@ -333,7 +335,7 @@ impl Sema<'_, '_> {
     /// specifications of explicitly defaulted members and runs clang's
     /// `ActOnFinishCXXNonNestedClass` checks.
     pub fn act_on_finish_class_contexts(&mut self, r: DeclId) {
-        let _ = r;
+        self.act_on_virtual_class_contexts(r, 0);
     }
 
     /// Re-enters the scope of class `r` to replay its saved complete-class

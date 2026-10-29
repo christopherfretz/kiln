@@ -825,6 +825,46 @@ diag_ids! {
     // clang: an ExtWarn with no group (kiln prints ExtWarn as -Wpedantic).
     sema_new_paren_array_nonconst = Warning (0) "when type is in parentheses, array cannot have dynamic size";
     sema_placement_new_no_operator = Error (1) "no matching {0} function for non-allocating placement new expression; include <new>";
+    // WP-078a: virtual functions, abstract classes, dynamic_cast
+    // ([class.virtual], [class.abstract], [expr.dynamic.cast]).
+    sema_virtual_not_member_fn = Error (0) "'virtual' can only appear on non-static member functions";
+    sema_virtual_out_of_class = Error (0) "'virtual' can only be specified inside the class definition";
+    sema_virt_spec_not_virtual = Error (1) "only virtual member functions can be marked '{0}'";
+    sema_virt_spec_hides_virtual = Error (2) "non-virtual member function marked '{0}' hides virtual member {1:function|functions}";
+    sema_override_not_overriding = Error (1) "'{0}' marked 'override' but does not override any member functions";
+    sema_overrides_final = Error (1) "declaration of '{0}' overrides a 'final' function";
+    note_overridden_virtual = Note (0) "overridden virtual function is here";
+    sema_override_return_differs = Error (3) "virtual function '{0}' has a different return type ({1}) than the function it overrides (which has return type {2})";
+    sema_covariant_return_incomplete = Error (2) "return type of virtual function '{0}' is not covariant with the return type of the function it overrides ({1} is incomplete)";
+    sema_covariant_return_not_derived = Error (3) "return type of virtual function '{0}' is not covariant with the return type of the function it overrides ({1} is not derived from {2})";
+    sema_covariant_return_ambiguous = Error (4) "return type of virtual function '{0}' is not covariant with the return type of the function it overrides (ambiguous conversion from derived class {1} to base class {2}:{3})";
+    sema_covariant_return_inaccessible = Error (3) "invalid covariant return for virtual function: {0} is a {1:private|protected} base class of {2}";
+    sema_covariant_return_quals = Error (3) "return type of virtual function '{0}' is not covariant with the return type of the function it overrides ({1} has different qualifiers than {2})";
+    // clang's text has no closing parenthesis.
+    sema_covariant_return_more_qualified = Error (3) "return type of virtual function '{0}' is not covariant with the return type of the function it overrides (class type {1} is more qualified than class type {2}";
+    sema_pure_not_virtual = Error (1) "'{0}' is not virtual and cannot be declared pure";
+    sema_static_overrides_virtual = Error (1) "'static' member function '{0}' overrides a virtual function in a base class";
+    sema_deleted_overrides = Error (2) "{0:deleted|non-deleted} function '{1}' cannot override a {0:non-deleted|deleted} function";
+    sema_consteval_overrides = Error (2) "{0:consteval|non-consteval} function '{1}' cannot override a {0:non-consteval|consteval} function";
+    sema_multiple_final_overriders = Error (2) "virtual function '{0}' has more than one final overrider in {1}";
+    note_final_overrider = Note (2) "final overrider of '{0}' in '{1}'";
+    sema_hidden_overloaded_virtual = WarningOff [OverloadedVirtual] (2) "'{0}' hides overloaded virtual {1:function|functions}";
+    note_hidden_overloaded_virtual = Note (2) "hidden overloaded virtual function '{0}' declared here{1}";
+    sema_inconsistent_missing_override = Warning [InconsistentMissingOverride] (1) "'{0}' overrides a member function but is not marked 'override'";
+    sema_abstract_final_class = Warning [AbstractFinalClass] (0) "abstract class is marked 'final'";
+    sema_abstract_type_in_decl = Error (2) "{0:return|parameter|variable|field} type {1} is an abstract class";
+    sema_abstract_allocation = Error (1) "allocating an object of abstract class type {0}";
+    sema_abstract_array = Error (1) "array of abstract class type {0}";
+    note_pure_virtual_method = Note (2) "unimplemented pure virtual method '{0}' in '{1}'";
+    sema_dynamic_cast_not_polymorphic = Error (1) "{0} is not polymorphic";
+    sema_dynamic_cast_not_class = Error (1) "{0} is not a class type";
+    sema_dynamic_cast_incomplete = Error (1) "{0} is an incomplete type";
+    sema_dynamic_cast_bad_target = Error (1) "invalid target type {0} for dynamic_cast; target type must be a reference or pointer type to a defined class";
+    sema_dynamic_cast_not_ptr = Error (2) "cannot use dynamic_cast to convert from {0} to {1}";
+    sema_dynamic_cast_rvalue_to_ref = Error (1) "dynamic_cast from rvalue to reference type {0}";
+    sema_override_exception_spec = Error (0) "exception specification of overriding function is more lax than base version";
+    sema_dynamic_cast_no_rtti = Error (0) "use of dynamic_cast requires -frtti";
+    sema_inaccessible_base = Warning [InaccessibleBase] (2) "direct base {0} is inaccessible due to ambiguity:{1}";
     // WP-069: template parsing (spec/sema-templates.md §2).
     sema_unimplemented_template_feature = Error (1) "kiln: not yet implemented: {0}";
     parse_missing_typename = Error (1) "missing 'typename' prior to dependent type name '{0}'";

@@ -166,6 +166,10 @@ pub struct Sema<'a, 'sm> {
     /// Template heads and parse-time template state (WP-069,
     /// spec/sema-templates.md §11.2).
     pub(crate) templ: templ::TemplState,
+    /// The abstract classes whose unimplemented pure virtual functions
+    /// were already noted (clang notes them on the first abstract-type
+    /// diagnostic per class only; WP-078a).
+    pub(crate) abstract_noted: kiln_source::fx::FxHashSet<DeclId>,
 }
 
 impl<'a, 'sm> Sema<'a, 'sm> {
@@ -222,6 +226,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             nsdmi_this: Vec::new(),
             initializing: None,
             templ: templ::TemplState::default(),
+            abstract_noted: kiln_source::fx::FxHashSet::default(),
         }
     }
 

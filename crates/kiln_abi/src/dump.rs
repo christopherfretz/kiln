@@ -125,7 +125,9 @@ pub fn dump_all_record_layouts(
 enum Item {
     /// A class at an absolute byte offset, indent level and description
     /// (field name or `(base)`); `None` for the outermost class.
-    Record { d: DeclId, off: u64, indent: usize, desc: Option<String> },
+    /// `vbases`: print its virtual bases (the outermost class and
+    /// fields, not base subobjects).
+    Record { d: DeclId, off: u64, indent: usize, desc: Option<String>, vbases: bool },
     /// Finished text.
     Line(String),
 }
@@ -140,6 +142,7 @@ pub fn write_record_layout(lay: &mut Layouter<'_>, record: DeclId, out: &mut Str
 /// `DumpRecordLayout`): the class, its non-virtual bases sorted by
 /// offset (each expanded, without a footer), its fields (class-typed
 /// ones expanded), and the size footer.
+#[allow(clippy::too_many_lines, reason = "one pass over clang's DumpRecordLayout frames")]
 pub fn write_record_layout_with(
     lay: &mut Layouter<'_>,
     record: DeclId,
@@ -156,14 +159,14 @@ pub fn write_record_layout_with(
     };
     // Explicit stack of frames still to print; nested classes are
     // printed in place (pre-order).
-    let mut stack = vec![Item::Record { d: first, off: 0, indent: 0, desc: None }];
+    let mut stack = vec![Item::Record { d: first, off: 0, indent: 0, desc: None, vbases: true }];
     while let Some(item) = stack.pop() {
-        let (d, off, indent, desc) = match item {
+        let (d, off, indent, desc, with_vbases) = match item {
             Item::Line(s) => {
                 out.push_str(&s);
                 continue;
             }
-            Item::Record { d, off, indent, desc } => (d, off, indent, desc),
+            Item::Record { d, off, indent, desc, vbases } => (d, off, indent, desc, vbases),
         };
         let layout = lay.record(d).clone();
         let empty = lay.is_empty(d);
@@ -180,8 +183,22 @@ pub fn write_record_layout_with(
         let inner = indent + 1;
         let Some(def) = ast.definition(d) else { continue };
         let mut frames = Vec::new();
-        // Non-virtual bases, stably sorted by offset.
-        let mut bases: Vec<(DeclId, u64)> = layout.bases.to_vec();
+        // The vptr of a dynamic class without a primary base.
+        if let Some(vp) = layout.vptr {
+            let mut line = String::new();
+            print_offset(&mut line, off + vp, inner);
+            line.push('(');
+            write_simple_name(&names, ast.first(d), true, &mut line);
+            line.push_str(" vtable pointer)\n");
+            frames.push(Item::Line(line));
+        }
+        // Non-virtual bases in declaration order, stably sorted by offset.
+        let mut bases: Vec<(DeclId, u64)> = props::bases(ast, def)
+            .into_iter()
+            .filter(|b| !b.is_virtual)
+            .filter_map(|b| b.class)
+            .filter_map(|c| layout.bases.iter().find(|(x, _)| *x == c).copied())
+            .collect();
         bases.sort_by_key(|&(_, o)| o);
         for (b, boff) in bases {
             let desc =
@@ -191,6 +208,7 @@ pub fn write_record_layout_with(
                 off: off + boff,
                 indent: inner,
                 desc: Some(desc.to_owned()),
+                vbases: false,
             });
         }
         let fields = props::fields(ast, def);
@@ -199,7 +217,13 @@ pub fn write_record_layout_with(
             let foff = off + bits / 8;
             if let Some(r) = record_of(ast, f.ty) {
                 let name = field_name(ast, f.decl);
-                frames.push(Item::Record { d: r, off: foff, indent: inner, desc: Some(name) });
+                frames.push(Item::Record {
+                    d: r,
+                    off: foff,
+                    indent: inner,
+                    desc: Some(name),
+                    vbases: true,
+                });
                 continue;
             }
             let mut line = String::new();
@@ -221,6 +245,25 @@ pub fn write_record_layout_with(
             line.push_str(&field_name(ast, f.decl));
             line.push('\n');
             frames.push(Item::Line(line));
+        }
+        if with_vbases {
+            for &(v, voff) in &layout.vbases {
+                // clang compares classes, not subobjects: a virtual base
+                // of the same class as a non-virtual primary base is
+                // labelled primary too.
+                let desc = if layout.primary_base.is_some_and(|(p, _)| p == v) {
+                    "(primary virtual base)"
+                } else {
+                    "(virtual base)"
+                };
+                frames.push(Item::Record {
+                    d: v,
+                    off: off + voff,
+                    indent: inner,
+                    desc: Some(desc.to_owned()),
+                    vbases: false,
+                });
+            }
         }
         if desc.is_none() {
             let mut footer = String::new();

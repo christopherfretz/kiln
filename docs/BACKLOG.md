@@ -89,16 +89,16 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-073 | concepts: constraint normalization, satisfaction, subsumption, `requires`-expressions, constrained `auto`, abbreviated function templates | 071 | todo |
 | WP-074 | `auto`/`decltype`/`decltype(auto)`, `declval`, the §9 builtin table (traits, transforms, `__make_integer_seq`/`__type_pack_element`, `__builtin_*`), `__has_builtin` staging | 070a (+S3C props for class traits) | todo |
 | WP-075 | lambdas: closure types, captures (copy/ref/init/`this`), generic lambdas, constexpr lambdas | 067b, 068a (generic: 071) | todo |
-| WP-061b | Oven heap (see M3 preparation) | 061a | todo |
 | WP-076 | Oven classes: ctors/dtors/`this`/member calls, `BeginLife`/`EndLife` subobjects (`SubobjectId`), temporaries, unions with ctors, pointers to members, `std::construct_at`/allocator recognition, iterative `compile.rs` walkers (Q16) | 067b, 061b | todo |
 | WP-077 | Oven virtual + RTTI: dynamic type in allocations, virtual calls via `SemaBridge::final_overrider`, `dynamic_cast`/`typeid` in constant evaluation | 076, 078a | todo |
-| WP-078a | virtual functions in sema: overriding, `final`/`override`, covariance, abstract classes, key function, deleting dtor, subobjects + final overriders (`Ast.virtuals`), `dynamic_cast`/`typeid` sema, virtual bases | 066b (067b for vbase ctors) | todo |
-| WP-078b | virtual layout in `kiln_abi`: primary base, vptr, vbases, `kiln_abi::vtable` (Itanium), VTT, vtable dump, differentials with `virtual` | 066c, 078a | todo |
+| WP-078a | virtual functions in sema: overriding, `final`/`override`, covariance, abstract classes, key function, deleting dtor, subobjects + final overriders (`Ast.virtuals`), `dynamic_cast`/`typeid` sema, virtual bases | 066b (067b for vbase ctors) | done (2026-10-29) |
+| WP-078b | virtual layout in `kiln_abi`: primary base, vptr, vbases, `kiln_abi::vtable` (Itanium), VTT, vtable dump, differentials with `virtual` | 066c, 078a | done (2026-10-29) |
 | WP-079 | codegen classes: record types with bases, member functions/`this`, ctors/dtors (complete/base variants), `new`/`delete`, member pointers, temporaries; mangling for classes/templates in kiln_abi | 067b, 061a | todo |
 | WP-080 | codegen virtual: vtables, RTTI, virtual calls, thunks; template instantiation emission (linkonce_odr) | 078b, 079 | todo |
 | WP-081 | `cargo xtask libcxx` M3 gate: `<type_traits>`, `<utility>`, `<array>`, `<string_view>`, `<span>`, `<bit>`, `<limits>`, `<initializer_list>` compile; their libc++ tests run through kiln; status page `docs/status/libcxx-m3.md` | 072, 073, 074, 076, 079 | todo |
 | WP-082 | defaulted comparisons ([class.compare]: `= default` `operator==`/`<=>`, implicit `==` from defaulted `<=>`) in `class/compare.rs` | 067a, 068b | todo |
 | WP-083 | pointer-to-member declarators (`int C::*p`, `void (C::*pf)()`) in parser + sema declarator chunks (066b already has `.*`/`->*`/`&C::m`); flips `expr.mptr.oper/bad-operands`; plus the hidden-friend note wording ("in namespace 'N'") | 065, 066b | todo (small) |
+| WP-084 | harness `expect: layout` / `expect: vtables` dump modes (spec/harness.md; `-fdump-record-layouts-complete` / `-fdump-vtable-layouts` vs clang, block-by-block) so conformance tests can pin layouts; remove the unused `VTableError::Unsupported`; add ` [T = int]` suffixes to vtable method names once templates instantiate (070a) | 078b | todo (small) |
 
 ## Lessons
 - Size packages so one agent finishes well within a session: codegen should have been ABI+mangling / lowering / driver+tests from the start (the pp engine ended up split the same way). Prefer 3 small briefs over 1 large one; a brief that lists >5 deliverables is too big.

@@ -2396,7 +2396,7 @@ impl Sema<'_, '_> {
 
     /// Marks the implicit conversions applied on top of `orig` (down to
     /// it) as part of an explicit cast.
-    fn mark_explicit(&mut self, top: ExprId, orig: ExprId) {
+    pub(crate) fn mark_explicit(&mut self, top: ExprId, orig: ExprId) {
         let mut cur = top;
         for _ in 0..64 {
             if cur == orig || self.ast.exprs.get(cur).kind() != ExprKind::ImplicitCastExpr {
@@ -2420,14 +2420,14 @@ impl Sema<'_, '_> {
         loc: Loc,
         rparen: Loc,
     ) -> ExprId {
-        if self.is_err_expr(e) || self.is_error_type(ty) {
-            return self.recover(ty, &[e], loc);
-        }
-        if self.ast.types.is_dependent(ty) || self.expr_is_type_dependent(e) {
+        let is_err = self.is_err_expr(e) || self.is_error_type(ty);
+        if !is_err && (self.ast.types.is_dependent(ty) || self.expr_is_type_dependent(e)) {
             return self.dependent_cast(style, ty, e, loc, rparen);
         }
         if style == CastStyle::Dynamic {
-            self.unsupported("dynamic_cast", loc);
+            return self.act_on_dynamic_cast(ty, e, loc, rparen);
+        }
+        if is_err {
             return self.recover(ty, &[e], loc);
         }
         if self.ast.types.is_reference(ty) {

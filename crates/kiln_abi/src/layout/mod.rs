@@ -8,6 +8,7 @@
 //! explicit stack, so the nesting depth of the input cannot overflow the
 //! native stack.
 
+mod base_info;
 mod empty;
 pub(crate) mod props;
 mod record;
@@ -54,6 +55,7 @@ pub(crate) enum FieldTarget {
 
 /// Everything computed for one class.
 #[derive(Clone, Debug)]
+#[allow(clippy::struct_excessive_bools, reason = "independent class facts")]
 pub(crate) struct RecordFacts {
     pub layout: RecordLayout,
     pub is_pod: bool,
@@ -63,6 +65,12 @@ pub(crate) struct RecordFacts {
     pub largest_empty: u64,
     /// Per field, in declaration order.
     pub field_targets: Box<[FieldTarget]>,
+    /// Dynamic: polymorphic or with a virtual base (clang
+    /// `isDynamicClass`).
+    pub dynamic: bool,
+    /// The virtual primary bases of this class and of every base with
+    /// virtual bases, transitively (clang `AddIndirectPrimaryBases`).
+    pub vprimaries: Box<[DeclId]>,
 }
 
 impl RecordFacts {
@@ -79,6 +87,8 @@ impl RecordFacts {
             packed: false,
             largest_empty: 0,
             field_targets: Box::new([]),
+            dynamic: false,
+            vprimaries: Box::new([]),
         }
     }
 }

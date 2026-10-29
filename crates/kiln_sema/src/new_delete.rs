@@ -525,7 +525,7 @@ impl Sema<'_, '_> {
             self.emit(self.incomplete_note(msg, t));
             return false;
         } else {
-            return true;
+            return !self.require_non_abstract_alloc(at, t);
         };
         let msg = self.diag(id, at).arg(self.ty_arg(t));
         self.emit(msg);

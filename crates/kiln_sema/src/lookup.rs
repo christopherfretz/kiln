@@ -76,6 +76,11 @@ pub enum MemberAmbiguity {
     },
 }
 
+/// One declaration set found by the class member search, the path from
+/// the searched class to the class it was found in, and the virtual
+/// bases on that path.
+type Leaf = (Found, BasePath, Vec<DeclId>);
+
 /// One result of the recursive class member search: the declarations
 /// found in some class, and the paths from the searched class to it.
 struct ClassHit {
@@ -328,9 +333,9 @@ impl Sema<'_, '_> {
     /// different bases, or one non-static member found in distinct base
     /// subobjects, make the lookup ambiguous ([`Found::ambiguity`]); a
     /// static member, type or enumerator found in several subobjects of
-    /// the same type is not ([class.member.lookup]/6). Virtual base
-    /// classes are not supported (WP-078a), so no declaration dominates
-    /// another.
+    /// the same type is not ([class.member.lookup]/6).
+    /// A declaration found in a class dominates the declarations found in
+    /// that class's virtual bases (WP-078a).
     pub fn lookup_in_class(&self, c: DeclId, name: Symbol, kind: LookupKind) -> Found {
         let def = self.ast.definition(c).unwrap_or(c);
         let Some(hit) = self.class_hit(def, name, kind, 0) else {
@@ -373,6 +378,9 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// The search of `def` and its bases: the class's own members, else
+    /// the merged results of its direct bases, with virtual base members
+    /// a found class dominates removed ([class.member.lookup]/6).
     fn class_hit(
         &self,
         def: DeclId,
@@ -380,8 +388,37 @@ impl Sema<'_, '_> {
         kind: LookupKind,
         depth: usize,
     ) -> Option<ClassHit> {
+        let mut leaves = self.class_leaves(def, name, kind, depth);
+        self.remove_dominated(&mut leaves);
+        let mut it = leaves.into_iter();
+        let (found, path, _) = it.next()?;
+        let mut acc = ClassHit { found, paths: vec![path], mixed: false };
+        let firsts = |f: &Found| -> Vec<DeclId> {
+            let mut v: Vec<DeclId> = f.decls.iter().map(|&d| self.ast.first(d)).collect();
+            v.sort_unstable();
+            v
+        };
+        for (sub, path, _) in it {
+            if acc.mixed || firsts(&acc.found) != firsts(&sub) {
+                acc.mixed = true;
+                for (j, &d) in sub.decls.iter().enumerate() {
+                    let f = self.ast.first(d);
+                    if !acc.found.decls.iter().any(|&o| self.ast.first(o) == f) {
+                        acc.found.decls.push(d);
+                        acc.found.found.push(sub.found[j]);
+                    }
+                }
+            }
+            acc.paths.push(path);
+        }
+        Some(acc)
+    }
+
+    /// Every declaration set the search of `def` finds, with the path
+    /// from `def` to the class it is found in (in base-specifier order).
+    fn class_leaves(&self, def: DeclId, name: Symbol, kind: LookupKind, depth: usize) -> Vec<Leaf> {
         if depth > 256 {
-            return None;
+            return Vec::new();
         }
         let mut own = self.filter(
             self.ast.lookup_local(def, DeclName::ident(name)).iter_ordinary().collect(),
@@ -403,53 +440,64 @@ impl Sema<'_, '_> {
                 last_virtual: None,
                 first_virtual: None,
             };
-            return Some(ClassHit { found: own, paths: vec![empty], mixed: false });
+            return vec![(own, empty, Vec::new())];
         }
-        let rec = self.ast.decls.record(def)?;
+        let Some(rec) = self.ast.decls.record(def) else { return Vec::new() };
         let idx: Vec<u32> = self.ast.lists.get(rec.bases).to_vec();
         let specs: Vec<kiln_ast::decl::BaseSpec> =
             self.ast.decls.bases(def, &self.ast.lists).copied().collect();
-        let mut acc: Option<ClassHit> = None;
+        let mut out = Vec::new();
         for (&i, spec) in idx.iter().zip(specs) {
             let Some(b) = self.ast.types.as_record(spec.ty) else { continue };
             let Some(bdef) = self.ast.definition(b) else { continue };
-            let Some(mut sub) = self.class_hit(bdef, name, kind, depth + 1) else { continue };
-            for p in &mut sub.paths {
+            for (f, mut p, mut vs) in self.class_leaves(bdef, name, kind, depth + 1) {
                 p.specs.insert(0, i);
                 p.classes.insert(0, b);
                 p.written.insert(0, spec.ty);
                 if spec.is_virtual {
                     p.first_virtual = Some(b);
                     p.last_virtual = p.last_virtual.or(Some(b));
+                    vs.push(b);
+                }
+                out.push((f, p, vs));
+                if out.len() > 4096 {
+                    return out;
                 }
             }
-            acc = Some(match acc {
-                None => sub,
-                Some(mut a) => {
-                    let firsts = |f: &Found| -> Vec<DeclId> {
-                        let mut v: Vec<DeclId> =
-                            f.decls.iter().map(|&d| self.ast.first(d)).collect();
-                        v.sort_unstable();
-                        v
-                    };
-                    if !(a.mixed || sub.mixed) && firsts(&a.found) == firsts(&sub.found) {
-                        a.paths.extend(sub.paths);
-                    } else {
-                        a.mixed = true;
-                        for (j, &d) in sub.found.decls.iter().enumerate() {
-                            let f = self.ast.first(d);
-                            if !a.found.decls.iter().any(|&o| self.ast.first(o) == f) {
-                                a.found.decls.push(d);
-                                a.found.found.push(sub.found.found[j]);
-                            }
-                        }
-                        a.paths.extend(sub.paths);
-                    }
-                    a
-                }
-            });
         }
-        acc
+        out
+    }
+
+    /// [class.member.lookup]/6 dominance (clang `lookupInBases`): a
+    /// result found through a virtual base `V` is hidden when another
+    /// result is found in a class that has `V` as a virtual base.
+    fn remove_dominated(&self, leaves: &mut Vec<Leaf>) {
+        if leaves.len() < 2 || leaves.iter().all(|l| l.2.is_empty()) {
+            return;
+        }
+        let ends: Vec<DeclId> = leaves.iter().filter_map(|l| l.1.classes.last().copied()).collect();
+        let keep: Vec<bool> = leaves
+            .iter()
+            .map(|l| !l.2.iter().any(|&v| ends.iter().any(|&h| self.has_virtual_base(h, v, 0))))
+            .collect();
+        let mut k = keep.into_iter();
+        leaves.retain(|_| k.next().unwrap_or(true));
+    }
+
+    /// True if `class` has `v` as a (direct or indirect) virtual base
+    /// (clang `isVirtuallyDerivedFrom`).
+    fn has_virtual_base(&self, class: DeclId, v: DeclId, depth: usize) -> bool {
+        if depth > 256 {
+            return false;
+        }
+        let Some(def) = self.ast.definition(class) else { return false };
+        self.ast.decls.bases(def, &self.ast.lists).copied().collect::<Vec<_>>().into_iter().any(
+            |s| {
+                let Some(b) = self.ast.types.as_record(s.ty) else { return false };
+                (s.is_virtual && self.ast.first(b) == self.ast.first(v))
+                    || self.has_virtual_base(b, v, depth + 1)
+            },
+        )
     }
 
     /// Reports an ambiguous class member lookup ([class.member.lookup]/6)

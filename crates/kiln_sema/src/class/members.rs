@@ -438,10 +438,6 @@ impl Sema<'_, '_> {
                 self.emit(msg);
                 continue;
             }
-            if s.is_virtual {
-                self.unsupported("virtual base classes", s.loc);
-                continue;
-            }
             seen.push(def);
             out.push(BaseSpec {
                 ty: s.ty,
@@ -454,6 +450,7 @@ impl Sema<'_, '_> {
         if !out.is_empty() {
             let ast = &mut self.ast;
             let _ = ast.decls.set_bases(r, &out, &mut ast.lists);
+            self.check_inaccessible_bases(r, &out);
         }
     }
 
