@@ -948,6 +948,7 @@ impl Parser<'_, '_> {
             && class == NameClass::Undeclared
             && self.at(Punct::LParen)
             && self.s.in_template()
+            && !self.s.is_builtin_name(name)
         {
             return Some(self.s.act_on_undeclared_call_name(name, nl));
         }

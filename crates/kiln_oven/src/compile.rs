@@ -681,6 +681,16 @@ impl<'a> Compiler<'a> {
     }
 }
 
+/// Whether an object of type `q` is const: its type, or for an array its
+/// element type, is const-qualified ([basic.type.qualifier]/3).
+fn const_object(ast: &kiln_ast::Ast, q: QualType) -> bool {
+    let mut c = ast.types.canonical(q);
+    while let Some(e) = ast.types.element(c) {
+        c = ast.types.canonical(e);
+    }
+    c.has_const_bit()
+}
+
 /// clang's `note_constexpr_stmt_expr_unsupported`.
 const STMT_EXPR_UNSUPPORTED: &str =
     "this use of statement expressions is not supported in a constant expression";
@@ -950,7 +960,7 @@ impl Compiler<'_> {
                 continue;
             }
             let q = ast.decls.get(d).ty().unwrap_or(QualType::INT);
-            let is_const = ast.types.canonical(q).has_const_bit();
+            let is_const = const_object(ast, q);
             let ty = self.ty(q);
             if self.needs_mem(d, ty) {
                 mem.push((d, ty, is_const));
@@ -1527,7 +1537,7 @@ impl Compiler<'_> {
             _ => {
                 if self.needs_mem(d, ty) {
                     // Not hoisted (a condition variable of a loop iteration).
-                    let is_const = self.b.ast().types.canonical(q).has_const_bit();
+                    let is_const = const_object(self.b.ast(), q);
                     let p = self.reg();
                     self.alloc_var(p, ty, d, is_const);
                     self.locals.insert(d, Local::Mem(p));

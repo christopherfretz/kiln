@@ -657,6 +657,14 @@ impl Sema<'_, '_> {
         ))
     }
 
+    /// Whether unqualified lookup of `name` would declare a builtin
+    /// function (clang's `LookupBuiltin`): the parser then treats a call of
+    /// it in a template as naming a function, not as an ADL-only name.
+    pub fn is_builtin_name(&self, name: Symbol) -> bool {
+        builtin::by_name(self.ast.symbols().as_str(name))
+            .is_some_and(|id| builtin::info(id).is_some())
+    }
+
     /// The builtin function `callee` (through parentheses) names, if it
     /// names one.
     pub(crate) fn builtin_callee(&self, callee: ExprId) -> Option<DeclId> {
