@@ -160,6 +160,11 @@ impl Diag {
         self
     }
 
+    /// The diagnostic's id (`None` for a free-text note).
+    pub fn id(&self) -> Option<DiagId> {
+        self.id
+    }
+
     /// Adds a secondary span with a label (the label shows in JSON only).
     pub fn span(mut self, span: Span, label: impl Into<String>) -> Diag {
         self.labels.push(Label { span, text: label.into() });
