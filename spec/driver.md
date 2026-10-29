@@ -8,7 +8,8 @@ implement is an error, never silently ignored. The oracle is Debian's
 Three actions are implemented:
 
 - preprocessing: `-E`, `-M`, `-MM`, and `-MD`/`-MMD` alongside `-E`;
-- `-fsyntax-only [-fdump-ast] [-fdump-record-layouts]`, which runs
+- `-fsyntax-only [-fdump-ast] [-fdump-record-layouts]
+  [-fdump-vtable-layouts]`, which runs
   WP-048's parser and Sema;
 - code generation (WP-052b): `-S -emit-llvm`, `-c -emit-llvm`, `-S`, `-c`
   and linking (see "Code generation").
@@ -68,6 +69,7 @@ starting with `-` are inputs.
 | `-fsyntax-only` | parse and check (see "Syntax checking") |
 | `-fdump-ast[=ids,locs,canonical,implicit,all-files]`, `-fdump-ast-filter=<s>` | with `-fsyntax-only`: the AST dump (`spec/ast-dump.md`) to the output |
 | `-fdump-record-layouts`, `-fdump-record-layouts-complete` | with `-fsyntax-only`: the record layouts (`spec/abi.md` §6, §8.4) to the output |
+| `-fdump-vtable-layouts` | with `-fsyntax-only`: the vtable groups (`spec/abi.md` §8.5) to the output |
 | `-c`, `-S`, `-emit-llvm` | code generation (see "Code generation") |
 | `-###` | with a codegen action: print the steps instead of running them |
 | `-g`, `-g0`..`-g3`, `-ggdb`, `-ggdb0`..`-ggdb3` | accepted and ignored (no debug info yet) |
@@ -187,6 +189,14 @@ output and status follow the `-E` rules:
   non-template class of the translation unit, in clang's `-complete`
   order. Unnamed classes print their `at F:L:C` location. The dump is
   written even when there are errors;
+- `-fdump-vtable-layouts` (clang: `-Xclang -fdump-vtable-layouts`)
+  writes `kiln_abi::vtable::dump_all_vtable_layouts` for the `-target`
+  triple to the output, after the record layouts and before any
+  `-fdump-ast` dump: the vtable group (`dump_vtable_group`: the vtable,
+  its construction vtables, thunks, vbase offset offsets and method
+  indices) of every complete, valid, non-template dynamic class, in the
+  record-layout dump's order (`kiln_abi::record_definitions`). Classes kiln cannot lay out are skipped. Written even
+  when there are errors;
 - the parser's Sema evaluates constants under the `-fconstexpr-*`
   limits; after the parse `-fconstexpr-report=` writes the Oven's report
   (`constexpr_opts`);
@@ -196,8 +206,8 @@ An unknown `-fdump-ast` option gives `invalid value '<opt>' in
 '-fdump-ast=<opts>'`.
 
 C inputs (`-x c`, `.c`), `-MD`/`-MMD` with `-fsyntax-only`, and
-`-fdump-ast` or `-fdump-record-layouts` without `-fsyntax-only` are "not
-implemented yet".
+`-fdump-ast`, `-fdump-record-layouts` or `-fdump-vtable-layouts` without
+`-fsyntax-only` are "not implemented yet".
 
 ## Code generation
 
@@ -401,6 +411,11 @@ Each deviation is covered by a test or a test note.
 15. **`-fdump-record-layouts` dumps every complete class**, as
     `-fdump-record-layouts-complete` does. clang dumps only the classes
     it lays out, in the order it lays them out (spec/abi.md A5).
+16. **`-fdump-vtable-layouts` works under `-fsyntax-only`** and dumps
+    every dynamic class once, in the record-layout dump's order. clang dumps a vtable
+    only when code generation emits it (so never under `-fsyntax-only`),
+    in emission order, sometimes repeating a construction vtable, and
+    prints its `Original map` debugging sections, which kiln omits.
 
 ## Tests
 
@@ -423,6 +438,14 @@ Each deviation is covered by a test or a test note.
   compared byte for byte (clang's builtin records are dropped). The test
   also covers both spellings and the "not implemented" error with
   `-S -emit-llvm`.
+- `crates/kiln_driver/tests/vtable_layouts.rs`: small programs (every
+  dynamic class with an out-of-line key function, no constructors) are
+  dumped by `kiln -fsyntax-only -fdump-vtable-layouts` and by
+  `clang -S -emit-llvm -Xclang -fdump-vtable-layouts` on both triples;
+  the dumps are compared as sets of blocks without clang's `Original
+  map` sections. Also the "not implemented" error with `-S -emit-llvm`.
+  The exhaustive differential is `kiln_abi`'s `vtable_vs_clang`
+  (spec/abi.md §7).
 - `crates/kiln_codegen/tests/ir_vs_clang.rs`: the IR-diff corpus through
   `kiln_driver::run` (spec/codegen.md §6).
 - `run` conformance tests compile and link through the driver.

@@ -239,6 +239,21 @@ pub fn dump_construction_vtable(
     Ok(out)
 }
 
+/// `-fdump-vtable-layouts` for a whole translation unit: the vtable
+/// group ([`dump_vtable_group`]) of every dynamic class of
+/// [`crate::record_definitions`], in that order. clang instead dumps a
+/// class when it emits its vtable (spec/abi.md §8.5); classes kiln cannot
+/// lay out ([`VTableError`]) are skipped.
+pub fn dump_all_vtable_layouts(ast: &Ast, target: &Target) -> String {
+    let mut out = String::new();
+    for d in crate::record_definitions(ast) {
+        if let Ok(text) = dump_vtable_group(ast, d, target) {
+            out.push_str(&text);
+        }
+    }
+    out
+}
+
 /// The vtable dump of `record` followed by those of the construction
 /// groups its VTT uses, in VTT order (what clang prints when it emits
 /// the class's vtable and VTT).

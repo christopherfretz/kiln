@@ -202,6 +202,10 @@ pub struct Args {
     /// (`-fsyntax-only`; clang's `-Xclang` options of those names): the
     /// layout of every complete class, spec/driver.md.
     pub dump_record_layouts: bool,
+    /// `-fdump-vtable-layouts` (`-fsyntax-only`; clang's `-Xclang` option
+    /// of that name): the vtable group of every complete dynamic class,
+    /// spec/driver.md.
+    pub dump_vtable_layouts: bool,
     /// `-o <file>`.
     pub output: Option<String>,
     /// The action.
@@ -409,6 +413,7 @@ impl Args {
             "-fdump-record-layouts" | "-fdump-record-layouts-complete" => {
                 self.dump_record_layouts = true;
             }
+            "-fdump-vtable-layouts" => self.dump_vtable_layouts = true,
             _ => {
                 if let Some(v) =
                     arg.strip_prefix("-stdlib=").or_else(|| arg.strip_prefix("--stdlib="))
