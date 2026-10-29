@@ -105,6 +105,10 @@ fn is_incomplete_array(ast: &Ast, q: QualType) -> bool {
 
 /// Lays out the class definition `def` (its contained classes are
 /// already in the session).
+#[allow(
+    clippy::too_many_lines,
+    reason = "clang's ItaniumRecordLayoutBuilder::Layout steps in order"
+)]
 pub(super) fn layout_record(lay: &mut Layouter<'_>, def: DeclId) -> RecordFacts {
     let ast = lay.ast();
     let target = lay.target();

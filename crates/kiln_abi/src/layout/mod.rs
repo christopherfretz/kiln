@@ -55,6 +55,7 @@ pub(crate) enum FieldTarget {
 
 /// Everything computed for one class.
 #[derive(Clone, Debug)]
+#[allow(clippy::struct_excessive_bools, reason = "independent class facts")]
 pub(crate) struct RecordFacts {
     pub layout: RecordLayout,
     pub is_pod: bool,

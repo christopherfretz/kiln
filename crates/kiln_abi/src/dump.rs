@@ -142,6 +142,7 @@ pub fn write_record_layout(lay: &mut Layouter<'_>, record: DeclId, out: &mut Str
 /// `DumpRecordLayout`): the class, its non-virtual bases sorted by
 /// offset (each expanded, without a footer), its fields (class-typed
 /// ones expanded), and the size footer.
+#[allow(clippy::too_many_lines, reason = "one pass over clang's DumpRecordLayout frames")]
 pub fn write_record_layout_with(
     lay: &mut Layouter<'_>,
     record: DeclId,
