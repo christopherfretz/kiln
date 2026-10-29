@@ -306,7 +306,7 @@ impl Parser<'_, '_> {
             }
         };
         let v = self.s.act_on_declarator(&ds, base, &d);
-        let Ok(Some(init)) = self.parse_initializer(d.init_style) else {
+        let Ok(Some(init)) = self.parse_initializer(d.init_style, false) else {
             return None;
         };
         let v = v?;

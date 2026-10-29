@@ -210,6 +210,42 @@ preprocessor-level warning (for example `#pragma once in main file` from
 Locations and texts match clang; only the order differs, and the test
 harness ignores order.
 
+### 2.4 Saved tokens and replay (delayed parsing)
+Complete-class contexts ([class.mem.general]/7) are parsed after the
+outermost class is complete, so their tokens are saved and re-parsed
+(clang's `CachedTokens` and `LateParsedDeclaration`s; §4.1).
+- **Capture** (`class.rs`) moves tokens out of the stream into a
+  `LateToks { toks, end }`, `end` being the location of the token that
+  ended the range:
+  - `capture_until(stops, out, stop_at_semi, consume_final)` is clang's
+    `ConsumeAndStoreUntil`: balanced over `()`, `[]`, `{}`; it fails at
+    end of input, at a `;` when asked, or at a closer of a bracket opened
+    before the capture.
+  - `capture_initializer(kind)` is `ConsumeAndStoreInitializer` for a
+    default argument (ends at `,` or `)`) or a default member initializer
+    (ends at `,` or `;`). A `?:` keeps its `:` (`capture_conditional`),
+    and `operator,`-style names are taken whole. clang's
+    template-argument heuristics (`a < b, c > d` in a default argument)
+    are not implemented.
+  - `capture_default_arg` (at `=`), `capture_exception_spec` (at
+    `noexcept`/`throw`, through the `)`), and
+    `capture_function_prologue` (an optional `try`, a ctor-initializer and
+    the body's `{`; clang's `ConsumeAndStoreFunctionPrologue`), after
+    which the body is captured through its `}` (and `catch` handlers).
+- **Replay** (`parser.rs`): `begin_replay(toks, end)` saves the
+  position, current token, previous end and bracket depths, and makes
+  `toks[0]` current. After the last saved token every read sees an
+  `Eof` at `end`, so no rule runs past the saved range and
+  "expected ..." diagnostics point at the token that ended it.
+  `end_replay()` restores the interrupted stream and returns whether
+  every saved token was consumed; replays nest (a nested class's items
+  replay inside the outer class's). `inject_semi` uses the same stack to
+  insert the `;` clang assumes after a class with a missing `;`.
+- The token source's window (§2.1) is unaffected: saved tokens are owned
+  by the parser, not the window.
+- Pragma events (§2.3) keyed to tokens inside a saved range fire when the
+  range is captured, not when it is replayed.
+
 ## 3. Parser core (`parser.rs`)
 - **Token access:**
   - `tok`, `peek`, `bump`, `at(p)`, `at_kw(k)`, `eat`, `eat_kw`
@@ -247,8 +283,13 @@ harness ignores order.
 
 ## 4. Declarations (`decl.rs`)
 - **`parse_decl_specifiers`** fills a `kiln_sema::DeclSpec`:
-  - storage class, `typedef`, `inline`, `constexpr`, `constinit`,
-    `thread_local`, `friend`
+  - storage class, `typedef`, `inline`, `thread_local`, `mutable`
+  - `constexpr`, `consteval`, `constinit`: at most one of them
+    ([dcl.constexpr]/1; `cannot combine with previous 'X' declaration
+    specifier`)
+  - function specifiers `virtual` and `explicit` / `explicit(
+    constant-expression )` ([dcl.fct.spec]; the condition goes to
+    `DeclSpec::explicit_expr`), and `friend`
   - type specifiers, cv-qualifiers, sign/width keywords
   - a type name (`NameClass::Type`) or tag specifier
   - attributes
@@ -261,19 +302,46 @@ harness ignores order.
     bound, function with parameters, variadic flag and exception
     specification
   - the bit-width, attributes, and `init_style`
+  - a special declarator-id (`Declarator::special`, `SpecialName`):
+    a constructor (the class's own name in member context, or `C::C`
+    out of line, followed by `(`), `~C` (`expected a class name after
+    '~' to name a destructor`), `operator @` (every overloadable
+    operator, `new[]`/`delete[]`, `()`, `[]`, `co_await`), and
+    `operator conversion-type-id` (its declarator takes only `*`, `&`,
+    `&&` and cv-qualifiers, [class.conv.fct]/1). `operator""` is
+    "literal operators is not supported yet". Special declarator-ids are
+    recognised at namespace and class scope only; a decl-specifier-seq
+    with no type is allowed before a constructor, destructor or
+    conversion function.
+  - on a function chunk: cv-qualifiers (a duplicate warns
+    `duplicate 'const' declaration specifier`), a ref-qualifier, and an
+    explicit object parameter (`this T self`, [dcl.fct]/6) in
+    `Declarator::explicit_object`
+  - in member context: virt-specifiers `override`/`final` (a repeat is
+    `class member already marked 'X'`; `final` in a friend declaration
+    is `'final' is invalid in friend declarations`) and a
+    pure-specifier `= 0` (other initializers of a function are
+    `initializer on function does not look like a pure-specifier`)
 
   The parser peeks at `=`, `(` or `{` to set `init_style` *before* the
   declaration exists, because Sema needs it to create the `VarDecl`.
   Sema builds the type from the last chunk outwards ([dcl.meaning]).
   - A `(` after the declarator-id is a parameter list or a direct
-    initializer by `is_cxx_function_declarator`; when the choice was
+    initializer by `is_cxx_function_declarator` (only where a direct
+    initializer may follow; in member context it always starts a
+    parameter list, since a member has no direct-initializer); when the choice was
     ambiguous the function chunk records it and Sema warns
     `-Wvexing-parse` (`parentheses were disambiguated as a function
     declaration` / `empty parentheses interpreted as a function
     declaration`, with clang's fix-it notes).
   - Parameters: `= initializer-clause` default arguments go to
     `act_on_param_default_init` (a default argument starting with `({`
-    is `err_stmt_expr_in_default_arg`, skipped to `,`/`)`). The
+    is `err_stmt_expr_in_default_arg`, skipped to `,`/`)`). In a member
+    declarator whose function chunk applies to the name directly,
+    default arguments and a parenthesized *noexcept-specifier* are
+    saved instead (§2.4): the parameter gets `DefaultArg::Unparsed(=)`,
+    the declarator `late_noexcept`, and the chunk `ExcSpec::None` until
+    replay. The
     parameter-declaration-clause brackets `act_on_start_prototype` /
     `act_on_prototype_param` / `act_on_end_prototype` (closed after the
     trailing return type): naming a parameter inside its own
@@ -296,9 +364,25 @@ harness ignores order.
     the next token is diagnosed by the caller.
 - **`parse_simple_declaration`** handles the decl-specifiers, then
   init-declarators. Each one goes to `Sema::act_on_declarator`, then
-  `parse_initializer`/`act_on_init` or `act_on_uninit`. For a
-  function definition the body goes through `act_on_start_function`
-  and `act_on_finish_function`.
+  `parse_initializer`/`act_on_init` or `act_on_uninit`.
+  - The first function declarator followed by `{`, `:`, `try`,
+    `= default` or `= delete` is a definition
+    (`parse_function_definition_after_declarator`): the body goes
+    through `act_on_start_function_def`, `act_on_mem_initializers` (for
+    a constructor, §4.1), the compound statement and
+    `act_on_finish_function_def`; `= default;` / `= delete;` /
+    `= delete("reason");` (P2573) go to `act_on_defaulted` /
+    `act_on_deleted`. When Sema made no function the body is skipped.
+    Where a definition is not allowed (block scope), `{` is
+    `function definition is not allowed here`.
+  - `= delete` / `= default` on a later declarator or a non-function:
+    `'= delete' is a function definition and must occur in a
+    standalone declaration`, `only functions can have deleted
+    definitions`, `only special member functions and comparison
+    operators may be defaulted`.
+  - A declarator whose special declarator-id was malformed
+    (`operator;`) takes the error type, so no `a type specifier is
+    required` follows.
   - A declaration with no declarator (`struct S;`,
     `union { int a; };`) goes to `act_on_decl_spec_only`.
   - That call returns the implicit object of an anonymous union, if
@@ -323,14 +407,24 @@ harness ignores order.
     `ParseBraceInitializer` does.
 - **Tags** (`parse_tag_specifier`):
   - `act_on_tag(kind, name, TagUse, …)`. `TagUse` is reference,
-    declaration or definition, decided by the next token, as in
-    [dcl.type.elab].
+    declaration, definition or friend, decided by the next token, as in
+    [dcl.type.elab]. A named class followed by `final` and `{` or `:`
+    is a definition; a repeated `final` is `class already marked
+    'final'`. `friend class X;` is `TagUse::Friend`; a friend that
+    would define a class is `cannot define a type in a friend
+    declaration` and is skipped.
   - Then `act_on_tag_attrs` for the class-head or enum-head attributes.
   - Then the body:
-    - `parse_record_body` holds member declarations, bit-fields and
-      nested anonymous records.
+    - `parse_record_body` (§4.1) holds the base clause, member
+      declarations, bit-fields and nested records.
       `act_on_finish_record_definition(r, then_semi)` is told whether a
       `;` follows, which decides whether an unnamed class is anonymous.
+    - After a class or enum definition the next token must be able to
+      follow the type (clang's `isValidAfterTypeSpecifier`); otherwise
+      `expected ';' after struct|class|union|enum` at the end of the
+      `}` and a `;` is injected (§2.4), so the next declaration parses
+      normally. An enum in a member declaration may be followed by `:`
+      (a bit-field).
     - `parse_enum_body` holds enumerators, with an optional fixed
       underlying type and `enum class`/`enum struct`.
 - **Namespaces:**
@@ -367,6 +461,74 @@ harness ignores order.
   - `= expr`, `= { … }`, `( expr )` and `{ … }`
   - designated initializers `.x = …` (C++20)
   - The result is a `kiln_sema::Initializer` tree.
+
+### 4.1 Classes (`class.rs`)
+- **Class body** (`parse_record_body`, clang's `ParseCXXMemberSpecification`):
+  `act_on_start_record_definition`, then `act_on_class_final` for a
+  class-virt-specifier, then `act_on_base_specifiers` (always, with an
+  empty slice when there is no base clause), the members, `}` and
+  `act_on_finish_record_definition`. A missing `{` after a base clause
+  is `expected '{' after base class list`; the class is still finished.
+- **Base clause** ([class.derived]): `[attrs] [virtual] [access]
+  [virtual] class-or-decltype [...]`; a second `virtual` is
+  `duplicate 'virtual' in base specifier`. Each base becomes a
+  `BaseSpecInfo`. Template-id and `decltype` bases are not handled.
+- **Member declarations** (`parse_member_declaration`, clang's
+  `ParseCXXClassMemberDeclaration`):
+  - leaders: `;`, `public:`/`protected:`/`private:` (a missing `:` is
+    `expected ':'`; `act_on_access_spec`), `static_assert`, `using`,
+    `template` (unsupported).
+  - `decl-specifier-seq ;`: `act_on_friend(ds, base, None, loc)` for
+    `friend class X;`, else `act_on_decl_spec_only`.
+  - member-declarators: each goes to `act_on_declarator` with
+    `DeclaratorContext::Member` (or `act_on_friend` with the declarator
+    for a friend). A bit-field `: width` may carry a default member
+    initializer (C++20); an unnamed one may not (`anonymous bit-field
+    cannot have a default member initializer`). A missing `;` is
+    `expected ';' at end of declaration list`; an unparseable
+    declaration is skipped as clang's `SkipMalformedDecl` does.
+  - A function definition's body, ctor-initializer included, is saved
+    (§2.4) when Sema made the function; `= default`/`= delete` and
+    `= 0` are handled in place. A static data member's initializer is
+    parsed in place (it is not a complete-class context).
+  - A default member initializer (`= x` or `{x}`) is saved; the field
+    is created first, with its `InitStyle`.
+- **Delayed parsing.** The parser keeps a stack of `LateClass { record,
+  items }`, one per class being defined. Items are, in declaration
+  order: `Method` (saved default arguments and noexcept of a member
+  function), `Nsdmi`, `Body`, and `Nested(LateClass)` for a nested class
+  with items. After the outermost class's `}` and
+  `act_on_finish_record_definition`, three phases run over the class
+  tree (clang's `ParseLexedMethodDeclarations`,
+  `ParseLexedMemberInitializers`, `ParseLexedMethodDefs`). Each class
+  that has items of the phase is re-entered with
+  `act_on_start_delayed_class` / `act_on_finish_delayed_class`, the
+  nested ones inside their parent's, in declaration order:
+  1. **Method:** `act_on_start_delayed_method(f)`, then each default
+     argument (`act_on_param_default_arg(p, e)`; leftover tokens are
+     `unexpected end of default argument expression`; a braced default
+     argument is unsupported) and the *noexcept-specifier*
+     (`act_on_exception_spec(f, spec)`; leftovers are `unexpected end of
+     exception specification`), then `act_on_finish_delayed_method(f)`.
+  2. **Nsdmi:** `act_on_start_field_init(field)`, the initializer, then
+     `act_on_field_init(field, init)` if it parsed (not for a field Sema
+     marked invalid).
+  3. **Body:** the function definition as at namespace scope (§4).
+  Then `act_on_finish_class_contexts(r)`. A nested class finishes its
+  definition at its own `}` but replays with the outermost class. The
+  exact call sequences are the `#[cfg(test)]` trace tests in `class.rs`
+  (§10).
+- **Ctor-initializers** (`parse_mem_initializer`, [class.base.init]):
+  `mem-initializer-id ( expression-list ) | braced-init-list [...]`,
+  separated by `,` (a missing one between two initializers is `missing
+  ',' between base or member initializers`). The id is a `MemInitId`:
+  an identifier, or a type for a qualified class name; qualified
+  non-types and `decltype` ids are unsupported. All initializers go to
+  one `act_on_mem_initializers(ctor, inits, colon)`; a constructor
+  without a ctor-initializer gets an empty slice at its `{`. A
+  ctor-initializer on a non-constructor is `only constructors take base
+  initializers`.
+- **`this`** goes to `act_on_this(loc)`.
 
 ## 5. Expressions (`expr.rs`)
 - **Binary operators** use operator-precedence parsing
@@ -558,13 +720,16 @@ in `kiln_diag` for now; nothing emits them.
 - **Prototype scope:** parameters in scope within their own declarator
   (`decltype(n)` in a trailing return type or a later parameter;
   clang's "default argument references parameter").
-- **Classes:**
-  - member functions, access specifiers, base classes
-  - static data members, default member initializers
-  - constructors, destructors, special members, friends
-  - `this`
-  - operator function names, conversion functions
-  - deleted and defaulted functions
+- **Classes** (parsed by WP-065; their Sema is WP-066b):
+  - template-id and `decltype` base-specifiers, qualified non-type and
+    `decltype` mem-initializer-ids, braced default arguments
+  - clang's template-argument heuristics when saving a default argument
+    or default member initializer (`a < b, c > d`)
+  - function-try-blocks, literal operators (`operator""`)
+  - pragma events inside saved tokens (they fire at capture)
+  - diagnostics clang gives that the parser skips: a decl-specifier
+    after a virt-specifier, the missing-`{` fix-it after a base clause,
+    a typedef function definition, virt-specifiers on a non-function
 - **Templates:** declarations, template-ids, `typename`, `template`,
   packs, concepts, requires-clauses. Design: spec/sema-templates.md §2.
 - **Other expressions:**
@@ -576,6 +741,9 @@ in `kiln_diag` for now; nothing emits them.
   - fold expressions
   - braced-init-list subscripts and functional-cast operands
   - pointer-to-member operators on classes
+  - qualified member access `e.N::m` (reported "qualified member
+    access is not supported yet": `act_on_member` takes no
+    nested-name-specifier)
   - reflection (`^^`, `[: :]`)
   - `co_await`/`co_yield`
 - **Statements:** range-based `for`, `try`/`catch`, `co_return`, contracts.
@@ -592,6 +760,10 @@ in `kiln_diag` for now; nothing emits them.
   its standard section:
   - `decl.rs`: [dcl.*], [class.*], [namespace.*], [basic.def.odr],
     [basic.link]
+  - `class.rs`: class heads, member declarations, special
+    declarator-ids, bit-fields, `= default`/`= delete`,
+    ctor-initializers, missing `;` after a definition, an unterminated
+    class
   - `expr.rs`: [expr.*], [lex.string], [lex.ext]
   - `stmt.rs`: [stmt.*]
   - `sema.rs`: rules that need the parser in front of Sema
@@ -599,6 +771,10 @@ in `kiln_diag` for now; nothing emits them.
     tokens, pragmas, module directives, and window/whole-buffer parity
   - `common/mod.rs` provides `parse(src) -> Parsed` with
     `assert_clean`, `assert_diag(substr)` and `assert_dump(substr)`.
+- **Sequence tests** in `class.rs`'s `#[cfg(test)]` module: the parser
+  records each `act_on_*` call of a class in `Parser::trace` (test
+  builds only), and the tests pin the order (§4.1). The same module
+  tests capture and replay (§2.4).
 - **Conformance tests:** `diag:` tests under
   `tests/conformance/{dcl.*,expr.*,stmt.*,basic.*,class.*,namespace.*}/`.
   Tests of the token source are under `cpp.pragma`, `cpp.pragma.op`,

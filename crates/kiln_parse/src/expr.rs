@@ -562,6 +562,14 @@ impl Parser<'_, '_> {
                         self.unsupported("this member access", self.loc());
                         return None;
                     }
+                    // `e.N::m` ([expr.ref]/1 with a qualified-id): sema's
+                    // `act_on_member` takes no nested-name-specifier yet.
+                    if self.at(Punct::ColonColon)
+                        || (self.ident().is_some() && self.peek_is(1, Punct::ColonColon))
+                    {
+                        self.unsupported("qualified member access", self.loc());
+                        return None;
+                    }
                     let Some(name) = self.ident() else {
                         self.error_here(DiagId::parse_expected_unqualified_id);
                         return None;
@@ -635,9 +643,13 @@ impl Parser<'_, '_> {
                     None
                 }
                 _ if is_simple_type_kw(k) => self.parse_functional_cast(),
+                Kw::This => {
+                    self.bump();
+                    Some(self.s.act_on_this(loc))
+                }
                 Kw::Typeid => self.parse_typeid(),
                 Kw::BuiltinOffsetof => self.parse_builtin_offsetof(),
-                Kw::This | Kw::Requires | Kw::CoYield | Kw::Typename | Kw::Template => {
+                Kw::Requires | Kw::CoYield | Kw::Typename | Kw::Template => {
                     self.unsupported(&format!("'{}' expressions", k.spelling()), loc);
                     None
                 }

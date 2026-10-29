@@ -537,7 +537,7 @@ pub struct Declarator {
     pub pure: Option<Loc>,
     /// The function's own `noexcept ( constant-expression )`, saved for
     /// replay in a complete-class context ([class.mem]/7; spec/parse.md
-    /// §2.7): where `noexcept` is. The `Chunk::Function`'s `exc` is
+    /// §2.4): where `noexcept` is. The `Chunk::Function`'s `exc` is
     /// `ExcSpec::None` meanwhile; sema makes it `ExcSpec::Deferred(f)`.
     pub late_noexcept: Option<Loc>,
     /// `this` before a parameter-declaration (an explicit object

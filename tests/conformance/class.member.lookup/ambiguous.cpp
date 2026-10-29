@@ -3,7 +3,7 @@
 // of the same class; names in a derived class hide those of its bases.
 //@ expect: compile-fail
 //@ strict-diags
-//@ xfail(kiln): needs WP-065 parser classes
+//@ xfail(kiln): needs qualified member access (d.L::x): act_on_member takes no nested-name-specifier
 //@ diag: 21:20 error "member 'x' found in multiple base classes of different types"
 //@ diag: 16:20 note "member found by ambiguous name lookup"
 //@ diag: 17:20 note "member found by ambiguous name lookup"

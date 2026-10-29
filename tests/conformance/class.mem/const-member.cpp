@@ -2,11 +2,10 @@
 // object is const unless the member is mutable.
 //@ expect: compile-fail
 //@ strict-diags
-//@ xfail(kiln): needs WP-065 parser classes
-//@ diag: 16:7 error "cannot assign to non-static data member within const member function 'g'"
-//@ diag: 14:8 note "member function 'S::g' is declared const here"
-//@ diag: 21:3 error "'this' argument to member function 'h' has type 'const S', but function is not marked const"
-//@ diag: 13:8 note "'h' declared here"
+//@ diag: 15:7 error "cannot assign to non-static data member within const member function 'g'"
+//@ diag: 13:8 note "member function 'S::g' is declared const here"
+//@ diag: 20:3 error "'this' argument to member function 'h' has type 'const S', but function is not marked const"
+//@ diag: 12:8 note "'h' declared here"
 struct S {
   int x;
   mutable int m;

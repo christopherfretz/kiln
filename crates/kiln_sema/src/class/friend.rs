@@ -32,6 +32,11 @@ impl Sema<'_, '_> {
             }
             return Some(fd);
         };
+        // Constructor, destructor, conversion and operator names
+        // (WP-067a/WP-068b) are still stubs; report them by name.
+        if self.unsupported_declarator(ds, d) {
+            return None;
+        }
         let ty = self.type_for_declarator(base, d);
         let Some((name, _)) = d.name else {
             self.error(DiagId::parse_expected_unqualified_id, d.loc);

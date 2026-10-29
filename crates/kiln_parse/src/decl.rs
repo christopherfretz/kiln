@@ -4,14 +4,15 @@ use kiln_ast::attr::AttrKind;
 use kiln_ast::decl::{EnumData, InitStyle};
 use kiln_ast::expr::ExprKind;
 use kiln_ast::strings::StringEncoding;
-use kiln_ast::types::{ExcSpec, Quals, TagKeyword};
+use kiln_ast::types::{ExcSpec, Quals, RefQual, TagKeyword};
 use kiln_ast::{AttrId, DeclId, ExprId, QualType};
 use kiln_diag::DiagId;
 use kiln_lex::{Punct, TokKind};
 use kiln_sema::declspec::SpecError;
 use kiln_sema::{
-    Chunk, DeclSpec, Declarator, DeclaratorContext, Designator, InitItem, InitList, InitValue,
-    Initializer, NameClass, ParamInfo, Sign, StorageSpec, TagUse, TypeSpecKind, Width,
+    Chunk, DeclSpec, Declarator, DeclaratorContext, DefaultArg, Designator, InitItem, InitList,
+    InitValue, Initializer, NameClass, ParamInfo, Sign, SpecialName, StorageSpec, TagUse,
+    TypeSpecKind, Width,
 };
 use kiln_source::symbol::Symbol;
 use kiln_source::{Loc, Span};
@@ -440,7 +441,10 @@ impl Parser<'_, '_> {
                 continue;
             }
             if self.at(Punct::ColonColon) || self.ident().is_some() {
-                if ds.has_type_specifier() || !self.parse_type_name_spec(&mut ds, ctx) {
+                if ds.has_type_specifier()
+                    || self.at_special_declarator(ctx)
+                    || !self.parse_type_name_spec(&mut ds, ctx)
+                {
                     break;
                 }
                 continue;
@@ -453,13 +457,19 @@ impl Parser<'_, '_> {
                 Kw::Register => ds.set_storage(StorageSpec::Register, loc),
                 Kw::Mutable => ds.set_storage(StorageSpec::Mutable, loc),
                 Kw::ThreadLocal => set_flag(&mut ds.thread_local, loc, "thread_local"),
-                Kw::Constexpr => set_flag(&mut ds.constexpr, loc, "constexpr"),
-                Kw::Constinit => set_flag(&mut ds.constinit, loc, "constinit"),
+                Kw::Constexpr | Kw::Consteval | Kw::Constinit => {
+                    set_constexpr_kind(&mut ds, k, loc)
+                }
                 Kw::Inline => set_flag(&mut ds.inline, loc, "inline"),
-                Kw::Consteval | Kw::Virtual | Kw::Explicit | Kw::Friend => {
-                    self.unsupported(&format!("'{}'", k.spelling()), loc);
-                    ds.invalid = true;
-                    Ok(())
+                Kw::Virtual => set_flag(&mut ds.virtual_, loc, "virtual"),
+                Kw::Friend => set_flag(&mut ds.friend, loc, "friend"),
+                Kw::Explicit => {
+                    let r = set_flag(&mut ds.explicit, loc, "explicit");
+                    if self.peek_is(1, Punct::LParen) {
+                        self.parse_explicit_specifier(&mut ds, loc, r);
+                        continue;
+                    }
+                    r
                 }
                 Kw::Const => ds.add_cv(Quals::CONST, "const"),
                 Kw::Volatile => ds.add_cv(Quals::VOLATILE, "volatile"),
@@ -482,23 +492,11 @@ impl Parser<'_, '_> {
                 Kw::Float128 => ds.set_base(TypeSpecKind::Float128, None, loc),
                 Kw::Auto => ds.set_base(TypeSpecKind::Auto, None, loc),
                 Kw::Struct | Kw::Class | Kw::Union | Kw::Enum => {
-                    self.parse_tag_specifier(&mut ds, k);
+                    self.parse_tag_specifier(&mut ds, k, ctx);
                     continue;
                 }
                 Kw::Decltype => {
-                    let (base, ty) = self.parse_decltype_specifier();
-                    if base == TypeSpecKind::Named && ty.is_none() {
-                        ds.invalid = true;
-                    }
-                    let ty = if base == TypeSpecKind::Named {
-                        Some(ty.unwrap_or(QualType::ERROR))
-                    } else {
-                        None
-                    };
-                    if let Err(e) = ds.set_base(base, ty, loc) {
-                        ds.invalid = true;
-                        self.spec_error(&e, loc);
-                    }
+                    self.parse_decltype_into(&mut ds, loc);
                     continue;
                 }
                 Kw::Typename | Kw::Typeof => {
@@ -530,6 +528,38 @@ impl Parser<'_, '_> {
             }
         }
         ds
+    }
+
+    /// A `decltype` type-specifier added to `ds`.
+    fn parse_decltype_into(&mut self, ds: &mut DeclSpec, loc: Loc) {
+        let (base, ty) = self.parse_decltype_specifier();
+        if base == TypeSpecKind::Named && ty.is_none() {
+            ds.invalid = true;
+        }
+        let ty =
+            if base == TypeSpecKind::Named { Some(ty.unwrap_or(QualType::ERROR)) } else { None };
+        if let Err(e) = ds.set_base(base, ty, loc) {
+            ds.invalid = true;
+            self.spec_error(&e, loc);
+        }
+    }
+
+    /// `explicit ( constant-expression )` ([dcl.fct.spec]/3), at
+    /// `explicit`; `r` is the result of recording the keyword.
+    fn parse_explicit_specifier(&mut self, ds: &mut DeclSpec, loc: Loc, r: Result<(), SpecError>) {
+        self.bump();
+        if let Err(e) = r {
+            self.spec_error(&e, loc);
+        }
+        let open = self.bump().span.lo;
+        if let Some(e) = self.parse_constant_expr() {
+            ds.explicit_expr = Some(e);
+            self.expect_closing(Punct::RParen, Punct::LParen, open);
+        } else {
+            ds.invalid = true;
+            self.skip_until(&[Punct::RParen], false, false);
+            self.eat(Punct::RParen);
+        }
     }
 
     /// decltype-specifier ([dcl.type.decltype]): `decltype ( expression )`
@@ -624,7 +654,7 @@ impl Parser<'_, '_> {
 
     /// class-specifier, enum-specifier or elaborated-type-specifier
     /// ([class.pre], [dcl.enum], [dcl.type.elab]).
-    fn parse_tag_specifier(&mut self, ds: &mut DeclSpec, k: Kw) {
+    fn parse_tag_specifier(&mut self, ds: &mut DeclSpec, k: Kw, ctx: DeclaratorContext) {
         let kw_loc = self.bump().span.lo;
         let keyword = match k {
             Kw::Struct => TagKeyword::Struct,
@@ -666,17 +696,27 @@ impl Parser<'_, '_> {
                 self.error_here(DiagId::parse_expected_type);
             }
         }
-        if keyword != TagKeyword::Enum && self.at(Punct::Colon) {
-            self.unsupported("base classes", self.loc());
-            self.skip_until(&[Punct::LBrace, Punct::Semi], false, false);
+        let is_class = keyword != TagKeyword::Enum;
+        let mut final_loc = None;
+        if is_class && name.is_some() {
+            final_loc = self.parse_class_virt_specifiers();
         }
-        let use_ = if self.at(Punct::LBrace) {
-            TagUse::Definition
-        } else if self.at(Punct::Semi) && ds.storage.is_none() {
-            TagUse::Declaration
-        } else {
-            TagUse::Reference
-        };
+        let mut use_ =
+            if self.at(Punct::LBrace) || (is_class && self.at(Punct::Colon)) || final_loc.is_some()
+            {
+                TagUse::Definition
+            } else if self.at(Punct::Semi) && ds.storage.is_none() {
+                if ds.friend.is_some() { TagUse::Friend } else { TagUse::Declaration }
+            } else {
+                TagUse::Reference
+            };
+        if use_ == TagUse::Definition && ds.friend.is_some() {
+            // [class.friend]/2; clang skips the body and treats the
+            // specifier as a reference.
+            self.error_here(DiagId::parse_friend_decl_defines_type);
+            self.skip_until(&[Punct::Semi], false, false);
+            use_ = TagUse::Friend;
+        }
         if name.is_none() && use_ != TagUse::Definition {
             if !ds.invalid {
                 self.error_here(DiagId::parse_expected_unqualified_id);
@@ -691,7 +731,7 @@ impl Parser<'_, '_> {
             if keyword == TagKeyword::Enum {
                 self.parse_enum_body(d);
             } else {
-                self.parse_record_body(d);
+                self.parse_record_body(d, final_loc);
             }
         }
         ds.tag = Some(d);
@@ -702,192 +742,43 @@ impl Parser<'_, '_> {
             ds.invalid = true;
             self.spec_error(&e, kw_loc);
         }
-    }
-
-    /// `{ member-specification }` ([class.mem]).
-    fn parse_record_body(&mut self, r: DeclId) {
-        let open = self.bump().span.lo;
-        self.s.act_on_start_record_definition(r);
-        while !self.at(Punct::RBrace) && !self.at_eof() {
-            self.parse_member_declaration(r);
+        if use_ == TagUse::Definition {
+            let spelling = match keyword {
+                TagKeyword::Struct => "struct",
+                TagKeyword::Class => "class",
+                TagKeyword::Union => "union",
+                _ => "enum",
+            };
+            let could_be_bitfield = keyword == TagKeyword::Enum && ctx == DeclaratorContext::Member;
+            self.check_after_tag_definition(spelling, could_be_bitfield);
         }
-        self.expect_closing(Punct::RBrace, Punct::LBrace, open);
-        let then_semi = self.at(Punct::Semi);
-        self.s.act_on_finish_record_definition(r, then_semi);
     }
 
-    /// True if a constructor declaration of the class `r` starts here
-    /// ([class.ctor.general]/1: optional specifiers and attributes, then
-    /// the class's injected-class-name and a parameter list).
-    fn at_constructor_declaration(&self, r: DeclId) -> bool {
-        let Some(class) = self.s.ast.decls.get(r).name().as_ident() else {
-            return false;
-        };
+    /// class-virt-specifier ([class.pre]/1): `final` after the class
+    /// name, recognised only before `{` or `:` (clang's
+    /// `isCXX11FinalKeyword` lookahead). Repeats are diagnosed and
+    /// dropped. Returns the first `final`.
+    fn parse_class_virt_specifiers(&mut self) -> Option<Loc> {
         let mut i = self.pos();
-        loop {
-            let t = self.tok_at(i);
-            match self.kw_of(t) {
-                Some(Kw::Explicit) if self.tok_at(i + 1).kind == TokKind::Punct(Punct::LParen) => {
-                    i = self.skip_balanced_at(i + 1);
-                }
-                Some(Kw::Explicit | Kw::Constexpr | Kw::Consteval | Kw::Inline) => i += 1,
-                Some(Kw::Attribute | Kw::Alignas | Kw::Declspec) => {
-                    i = self.skip_balanced_at(i + 1);
-                }
-                _ if t.kind == TokKind::Punct(Punct::LSquare)
-                    && self.tok_at(i + 1).kind == TokKind::Punct(Punct::LSquare) =>
-                {
-                    i = self.skip_balanced_at(i);
-                }
-                _ => break,
-            }
-        }
-        self.ident_of(self.tok_at(i)) == Some(class)
-            && self.tok_at(i + 1).kind == TokKind::Punct(Punct::LParen)
-    }
-
-    /// The index after the bracketed group opening at `i` (`i` itself if
-    /// no bracket opens there).
-    fn skip_balanced_at(&self, mut i: usize) -> usize {
-        let mut depth = 0u32;
-        loop {
-            match Self::punct_of(self.tok_at(i)) {
-                Some(Punct::LParen | Punct::LSquare | Punct::LBrace) => depth += 1,
-                Some(Punct::RParen | Punct::RSquare | Punct::RBrace) => {
-                    depth = depth.saturating_sub(1);
-                }
-                _ if self.tok_at(i).kind == TokKind::Eof => return i,
-                _ => {}
-            }
+        while self.is_final_tok(self.tok_at(i)) {
             i += 1;
-            if depth == 0 {
-                return i;
-            }
         }
-    }
-
-    /// The member-declarations of class `r` that a leading token decides
-    /// (empty declarations, access specifiers, `static_assert`, `using`,
-    /// and the unsupported constructor, destructor, operator and template
-    /// members): parses one and returns true, or returns false.
-    fn parse_member_declaration_leader(&mut self, r: DeclId) -> bool {
-        let loc = self.loc();
-        if self.at_constructor_declaration(r) {
-            // Not a field of the class's own type ([class.ctor.general]).
-            self.unsupported("special member functions", loc);
-            self.skip_unsupported_declaration();
-            return true;
+        if i == self.pos()
+            || !matches!(Self::punct_of(self.tok_at(i)), Some(Punct::LBrace | Punct::Colon))
+        {
+            return None;
         }
-        match (Self::punct_of(self.tok()), self.kw()) {
-            (Some(Punct::Semi), _) => {
-                self.bump();
-                true
-            }
-            (_, Some(Kw::Public | Kw::Private | Kw::Protected)) => {
-                self.unsupported("access specifiers", loc);
-                self.bump();
-                self.expect(Punct::Colon);
-                true
-            }
-            (_, Some(Kw::StaticAssert)) => {
-                self.parse_static_assert();
-                true
-            }
-            (_, Some(Kw::Using)) => {
-                self.parse_using();
-                true
-            }
-            (Some(Punct::LSquare), _) if self.at_attributed_using() => {
-                self.parse_attributed_using();
-                true
-            }
-            (_, Some(Kw::Template)) => {
-                self.unsupported("templates", loc);
-                self.skip_unsupported_declaration();
-                true
-            }
-            (Some(Punct::Tilde), _) | (_, Some(Kw::Operator)) => {
-                self.unsupported("special member functions", loc);
-                self.skip_unsupported_declaration();
-                true
-            }
-            _ => false,
+        let first = self.bump().span.lo;
+        while self.pos() < i {
+            let loc = self.bump().span.lo;
+            let d = self.s.diag(DiagId::parse_duplicate_class_virt_specifier, loc).arg("final");
+            self.emit(d);
         }
-    }
-
-    /// member-declaration ([class.mem]) of the class `r`.
-    fn parse_member_declaration(&mut self, r: DeclId) {
-        if self.parse_member_declaration_leader(r) {
-            return;
-        }
-        let ds = self.parse_decl_specifiers(DeclaratorContext::Member);
-        if self.eat(Punct::Semi).is_some() {
-            let _ = self.s.act_on_decl_spec_only(&ds);
-            return;
-        }
-        if ds.is_empty() {
-            self.error_here(DiagId::parse_expected_member_name);
-            self.skip_to_semi();
-            return;
-        }
-        let mut base_ty: Option<QualType> = None;
-        loop {
-            let mut d = Declarator::new(DeclaratorContext::Member, self.loc());
-            if !self.at(Punct::Colon) {
-                self.parse_declarator(&mut d);
-            }
-            // The declspec's type is formed once the first declarator is
-            // known: clang reports a missing type specifier at its name.
-            let base =
-                *base_ty.get_or_insert_with(|| self.s.type_from_declspec_at(&ds, d.name_loc()));
-            if self.eat(Punct::Colon).is_some() {
-                let Some(w) = self.parse_constant_expr() else {
-                    self.skip_to_semi();
-                    return;
-                };
-                d.bit_width = Some(w);
-            }
-            // clang's `ParseCXXMemberDeclaratorBeforeInitializer`: a
-            // malformed asm label skips to the next declarator.
-            if let Ok(l) = self.parse_asm_label() {
-                d.asm_label = l;
-            } else {
-                self.skip_until(&[Punct::Comma], true, false);
-            }
-            if self.at_attr() {
-                self.parse_attributes(&mut d.attrs);
-            }
-            if d.name.is_none() && d.bit_width.is_none() {
-                if !d.invalid {
-                    self.error_here(DiagId::parse_expected_member_name);
-                }
-                self.skip_to_semi();
-                return;
-            }
-            if d.is_function_declarator() && self.at(Punct::LBrace) {
-                self.unsupported("member functions", d.name_loc());
-                self.skip_unsupported_declaration();
-                return;
-            }
-            let field = self.s.act_on_declarator(&ds, base, &d);
-            if self.at(Punct::Equal) || self.at(Punct::LBrace) {
-                self.unsupported("default member initializers", self.loc());
-                self.skip_until(&[Punct::Comma, Punct::Semi], false, false);
-            }
-            let _ = field;
-            if self.eat(Punct::Comma).is_none() {
-                break;
-            }
-        }
-        if self.eat(Punct::Semi).is_none() {
-            self.s.error(DiagId::parse_expected_semi_decl_list, self.expected_loc());
-            self.skip_until(&[Punct::RBrace], true, false);
-            self.eat(Punct::Semi);
-        }
+        Some(first)
     }
 
     /// `{ enumerator-list }` ([dcl.enum]).
-    fn parse_enum_body(&mut self, e: DeclId) {
+    pub(crate) fn parse_enum_body(&mut self, e: DeclId) {
         let open = self.bump().span.lo;
         self.s.act_on_start_enum_definition(e);
         while !self.at(Punct::RBrace) && !self.at_eof() {
@@ -1010,13 +901,22 @@ impl Parser<'_, '_> {
         if (self.ident().is_some() || self.at(Punct::ColonColon))
             && d.ctx != DeclaratorContext::TypeName
         {
+            let last_qual = self.last_qualifier_name();
             let qual = self.parse_nested_name().unwrap_or_else(|()| {
                 d.invalid = true;
                 None
             });
-            if let Some(n) = self.ident() {
+            if self.at(Punct::Tilde) || self.at_kw(Kw::Operator) {
+                self.parse_special_declarator_id(d);
+                d.qualifier = qual;
+            } else if let Some(n) = self.ident() {
+                let ctor = self.names_constructor(n, last_qual, d.ctx);
                 let l = self.bump().span.lo;
-                d.name = Some((n, l));
+                if ctor {
+                    d.special = Some((SpecialName::Constructor(n), l));
+                } else {
+                    d.name = Some((n, l));
+                }
                 d.qualifier = qual;
             } else if qual.is_some() {
                 self.error_here(DiagId::parse_expected_unqualified_id);
@@ -1039,14 +939,12 @@ impl Parser<'_, '_> {
             && d.ctx != DeclaratorContext::TypeName
             && matches!(self.kw_of(self.peek(1)), Some(Kw::New | Kw::Delete))
         {
+            // WP-061a's operator-function-ids for allocation functions.
             self.parse_new_delete_operator_id(d);
-        } else if self.at(Punct::Tilde) || self.at_kw(Kw::Operator) {
-            self.unsupported("special member functions", self.loc());
-            d.invalid = true;
-            self.bump();
-            if self.ident().is_some() {
-                self.bump();
-            }
+        } else if (self.at(Punct::Tilde) || self.at_kw(Kw::Operator))
+            && d.ctx != DeclaratorContext::TypeName
+        {
+            self.parse_special_declarator_id(d);
         }
         loop {
             if self.at(Punct::LSquare) && !self.at_cxx11_attr() {
@@ -1065,7 +963,9 @@ impl Parser<'_, '_> {
             } else if self.at(Punct::LParen) {
                 // [dcl.ambig.res]/1: after a name that could take a direct
                 // initializer, the parentheses are a function declarator
-                // only if they could be a parameter clause.
+                // only if they could be a parameter clause. A member
+                // declarator has no direct-initializer (`direct_init` is
+                // unset), so there `(` always starts its parameters.
                 let mut ambiguous = false;
                 if !abstract_ok && d.direct_init && !d.grouping && d.name.is_some() {
                     let (function, amb) = self.is_cxx_function_declarator(d.name.map(|n| n.0));
@@ -1097,6 +997,13 @@ impl Parser<'_, '_> {
                 matches!(self.scan_name(self.pos() + n), Some((_, NameClass::Type(..), _)))
             }
             TokKind::Identifier(s) => match self.kw_of(t) {
+                // An explicit object parameter ([dcl.fct]/6) starts with
+                // `this` followed by its decl-specifiers.
+                // `T *p(this);` in a member function body stays an initializer.
+                Some(Kw::This) => {
+                    self.peek(n + 1).kind != TokKind::Punct(Punct::RParen)
+                        && self.is_param_list_start(n + 1)
+                }
                 Some(k) => is_decl_specifier_kw(k),
                 None => match self.scan_name(self.pos() + n) {
                     Some((_, NameClass::Type(..), _)) => true,
@@ -1115,6 +1022,10 @@ impl Parser<'_, '_> {
     /// `ambiguous`: the parentheses could also have been a direct
     /// initializer ([dcl.ambig.res]/1).
     fn parse_function_suffix(&mut self, d: &mut Declarator, ambiguous: bool) {
+        // Only a member declarator whose function suffix applies to the
+        // name directly saves its default arguments and noexcept.
+        let delayable = d.ctx == DeclaratorContext::Member && d.chunks.is_empty();
+        let delay_args = delayable && self.late_fn.delay_args;
         let open = self.bump().span.lo;
         self.s.act_on_start_prototype();
         let mut params = Vec::new();
@@ -1128,6 +1039,8 @@ impl Parser<'_, '_> {
                 break;
             }
             let start = self.loc();
+            // explicit-object-parameter-declaration ([dcl.fct]/3, P0847).
+            let this_loc = self.eat_kw(Kw::This);
             let ds = self.parse_decl_specifiers(DeclaratorContext::Prototype);
             if ds.is_empty() {
                 let e = self.s.diag(DiagId::parse_expected, self.loc()).arg("parameter declarator");
@@ -1137,13 +1050,23 @@ impl Parser<'_, '_> {
                 break;
             }
             let mut pd = Declarator::new(DeclaratorContext::Prototype, start);
+            pd.explicit_object = this_loc;
             self.parse_declarator(&mut pd);
             if self.at_attr() {
                 self.parse_attributes(&mut pd.attrs);
             }
             let mut p = self.s.act_on_param_declarator(&ds, &pd);
             if self.at(Punct::Equal) {
-                self.parse_default_argument(&mut p);
+                if delay_args {
+                    // Complete-class context ([class.mem.general]/7):
+                    // replayed after the class (spec/parse.md §2.4).
+                    let eq = self.loc();
+                    let toks = self.capture_default_arg();
+                    p.default_arg = DefaultArg::Unparsed(eq);
+                    self.late_fn.default_args.push((params.len(), toks));
+                } else {
+                    self.parse_default_argument(&mut p);
+                }
             }
             p.range = (start, self.prev_end());
             self.s.act_on_prototype_param(&p);
@@ -1157,7 +1080,7 @@ impl Parser<'_, '_> {
             }
         }
         let rparen = self.expect_closing(Punct::RParen, Punct::LParen, open);
-        let (exc, trailing) = self.parse_function_qualifiers();
+        let (exc, quals, ref_qual, trailing) = self.parse_function_qualifiers(d, delayable);
         self.s.act_on_end_prototype();
         let params = self.s.act_on_param_list(params);
         d.chunks.push(Chunk::Function {
@@ -1166,8 +1089,8 @@ impl Parser<'_, '_> {
             loc: open,
             rparen,
             exc,
-            quals: Quals::NONE,
-            ref_qual: kiln_ast::types::RefQual::None,
+            quals,
+            ref_qual,
             trailing,
             ambiguous,
         });
@@ -1199,22 +1122,55 @@ impl Parser<'_, '_> {
     }
 
     /// cv- and ref-qualifiers, the exception specification and trailing
-    /// return types after a parameter list. Only the exception
-    /// specification ([except.spec]) is supported in M2; it is returned
-    /// (`ExcSpec::None` when absent). A second specification ends the
-    /// declarator (clang then expects a function body).
-    fn parse_function_qualifiers(&mut self) -> (ExcSpec, Option<(QualType, Loc)>) {
+    /// return type after a parameter list ([dcl.fct]/1, [dcl.decl]/4).
+    /// The exception specification is returned (`ExcSpec::None` when
+    /// absent); for a delayable member declarator (see
+    /// [`Self::parse_function_suffix`]) a parenthesized one is saved in
+    /// `late_fn` and `d.late_noexcept` set instead (spec/parse.md §2.4).
+    /// A second specification ends the declarator (clang then expects a
+    /// function body).
+    fn parse_function_qualifiers(
+        &mut self,
+        d: &mut Declarator,
+        delayable: bool,
+    ) -> (ExcSpec, Quals, RefQual, Option<(QualType, Loc)>) {
         let mut exc = None;
+        let mut quals = Quals::NONE;
+        let mut ref_qual = RefQual::None;
         let mut trailing = None;
         loop {
             let loc = self.loc();
             match self.kw() {
-                Some(Kw::Const | Kw::Volatile) => {
-                    self.unsupported("member function qualifiers", loc);
+                Some(k @ (Kw::Const | Kw::Volatile))
+                    if exc.is_none() && ref_qual == RefQual::None =>
+                {
+                    let (q, sp) = if k == Kw::Const {
+                        (Quals::CONST, "const")
+                    } else {
+                        (Quals::VOLATILE, "volatile")
+                    };
                     self.bump();
+                    if quals.contains(q) {
+                        let diag = self.s.diag(DiagId::parse_duplicate_decl_spec, loc).arg(sp);
+                        self.emit(diag);
+                    }
+                    quals |= q;
                 }
                 Some(Kw::Noexcept | Kw::Throw) if exc.is_none() => {
-                    exc = Some(self.parse_exception_spec());
+                    if delayable && self.late_fn.delay_noexcept && self.peek_is(1, Punct::LParen) {
+                        d.late_noexcept = Some(loc);
+                        self.late_fn.noexcept = Some(self.capture_exception_spec());
+                        exc = Some(ExcSpec::None);
+                    } else {
+                        exc = Some(self.parse_exception_spec());
+                    }
+                }
+                _ if exc.is_none()
+                    && ref_qual == RefQual::None
+                    && (self.at(Punct::Amp) || self.at(Punct::AmpAmp)) =>
+                {
+                    ref_qual = if self.at(Punct::Amp) { RefQual::LValue } else { RefQual::RValue };
+                    self.bump();
                 }
                 _ if self.at(Punct::Arrow) && trailing.is_none() => {
                     self.bump();
@@ -1222,9 +1178,9 @@ impl Parser<'_, '_> {
                     // invalid.
                     let ty = self.parse_type_id().unwrap_or(QualType::ERROR);
                     trailing = Some((ty, loc));
-                    return (exc.unwrap_or_default(), trailing);
+                    return (exc.unwrap_or_default(), quals, ref_qual, trailing);
                 }
-                _ => return (exc.unwrap_or_default(), trailing),
+                _ => return (exc.unwrap_or_default(), quals, ref_qual, trailing),
             }
         }
     }
@@ -1233,7 +1189,7 @@ impl Parser<'_, '_> {
     /// `noexcept ( constant-expression )`, or the dynamic `throw ( )` /
     /// `throw ( type-id-list )` (C++17 removed the latter; it is
     /// diagnosed by Sema). At the `noexcept` or `throw` keyword.
-    fn parse_exception_spec(&mut self) -> ExcSpec {
+    pub(crate) fn parse_exception_spec(&mut self) -> ExcSpec {
         let is_throw = self.at_kw(Kw::Throw);
         let loc = self.bump().span.lo;
         if is_throw {
@@ -1338,12 +1294,13 @@ impl Parser<'_, '_> {
             decls.extend(self.s.act_on_decl_spec_only(&ds));
             return decls;
         }
-        if ds.is_empty() {
+        if ds.is_empty() && !self.at_special_declarator(ctx) {
             self.error_here(DiagId::parse_expected_unqualified_id);
             self.skip_to_semi();
             return decls;
         }
         let mut base_ty: Option<QualType> = None;
+        let mut first = true;
         let direct_init = Self::may_have_direct_init(ctx, ds.storage);
         loop {
             let mut d = Declarator::new(ctx, self.loc());
@@ -1351,8 +1308,19 @@ impl Parser<'_, '_> {
             self.parse_declarator(&mut d);
             // The declspec's type is formed once the first declarator is
             // known: clang reports a missing type specifier at its name.
-            let base =
-                *base_ty.get_or_insert_with(|| self.s.type_from_declspec_at(&ds, d.name_loc()));
+            // Constructors, destructors and conversion functions have
+            // none ([class.ctor.general]/1, [class.dtor]/1,
+            // [class.conv.fct]/1).
+            let untyped = !ds.has_type_specifier() && is_untyped_special(&d);
+            let base = *base_ty.get_or_insert_with(|| {
+                if untyped {
+                    QualType::VOID
+                } else if d.invalid && !ds.has_type_specifier() {
+                    QualType::ERROR
+                } else {
+                    self.s.type_from_declspec_at(&ds, d.name_loc())
+                }
+            });
             // GNU asm label (clang's `ParseAsmAttributesAfterDeclarator`):
             // a malformed one drops the declarator.
             let Ok(label) = self.parse_asm_label() else {
@@ -1363,7 +1331,7 @@ impl Parser<'_, '_> {
             if self.at_attr() {
                 self.parse_attributes(&mut d.attrs);
             }
-            if d.name.is_none() {
+            if !d.has_name() {
                 if !d.invalid {
                     self.error_here(DiagId::parse_expected_unqualified_id);
                 }
@@ -1371,29 +1339,20 @@ impl Parser<'_, '_> {
                 return decls;
             }
             // A function definition has no asm label: after one, `{` is
-            // an initializer (clang's order of checks).
-            if d.is_function_declarator() && d.asm_label.is_none() && self.at(Punct::LBrace) {
-                if !allow_fn_def {
+            // an initializer (clang's order of checks:
+            // `isDeclarationAfterDeclarator`, `isStartOfFunctionDefinition`).
+            if first && d.is_function_declarator() && d.asm_label.is_none() {
+                if allow_fn_def && self.at_function_definition_start() {
+                    self.parse_function_definition_after_declarator(&ds, base, &d, &mut decls);
+                    return decls;
+                }
+                if !allow_fn_def && self.at(Punct::LBrace) {
                     self.error_here(DiagId::parse_function_definition_not_allowed);
                     self.skip_unsupported_declaration();
                     return decls;
                 }
-                match self.s.act_on_declarator(&ds, base, &d) {
-                    Some(f) if self.s.ast.decls.function(f).is_some() => {
-                        self.parse_function_body(f);
-                        decls.push(f);
-                    }
-                    // An invalid declarator sema did not make a function
-                    // (an unknown return type, say): the error is
-                    // reported; skip the body.
-                    Some(_) => {
-                        self.bump();
-                        self.skip_until(&[Punct::RBrace], false, true);
-                    }
-                    None => self.skip_unsupported_declaration(),
-                }
-                return decls;
             }
+            first = false;
             d.init_style = match Self::punct_of(self.tok()) {
                 Some(Punct::Equal) => Some(InitStyle::C),
                 Some(Punct::LParen) => Some(InitStyle::Call),
@@ -1401,7 +1360,7 @@ impl Parser<'_, '_> {
                 _ => None,
             };
             let v = self.s.act_on_declarator(&ds, base, &d);
-            match self.parse_initializer(d.init_style) {
+            match self.parse_initializer(d.init_style, d.is_function_declarator()) {
                 Ok(init) => match (v, init) {
                     (Some(v), Some(i)) => self.s.act_on_init(v, i),
                     (Some(v), None) => self.s.act_on_uninit(v),
@@ -1434,6 +1393,45 @@ impl Parser<'_, '_> {
             }
         }
         decls
+    }
+
+    /// True at the start of a function-body or `= default` / `= delete`
+    /// after a function declarator ([dcl.fct.def.general]/1).
+    fn at_function_definition_start(&self) -> bool {
+        match Self::punct_of(self.tok()) {
+            Some(Punct::LBrace | Punct::Colon) => true,
+            Some(Punct::Equal) => {
+                matches!(self.kw_of(self.peek(1)), Some(Kw::Default | Kw::Delete))
+            }
+            _ => self.at_kw(Kw::Try),
+        }
+    }
+
+    /// The function-body or `= default ;` / `= delete ;` of a namespace-
+    /// scope function definition whose declarator `d` was just parsed.
+    fn parse_function_definition_after_declarator(
+        &mut self,
+        ds: &DeclSpec,
+        base: QualType,
+        d: &Declarator,
+        decls: &mut Vec<DeclId>,
+    ) {
+        let f = self.s.act_on_declarator(ds, base, d);
+        // An invalid declarator sema did not make a function (an unknown
+        // return type, say): the error is reported; the body is skipped.
+        let f = f.filter(|&f| self.s.ast.decls.function(f).is_some());
+        decls.extend(f);
+        if self.at(Punct::Equal) {
+            self.parse_defaulted_or_deleted(f);
+            return;
+        }
+        match f {
+            Some(f) => {
+                let ctor = matches!(d.special, Some((SpecialName::Constructor(_), _)));
+                self.parse_function_definition(f, ctor);
+            }
+            None => self.skip_function_body(),
+        }
     }
 
     /// A GNU asm label after a declarator (`asm("name")`, also spelled
@@ -1499,14 +1497,30 @@ impl Parser<'_, '_> {
     pub(crate) fn parse_initializer(
         &mut self,
         style: Option<InitStyle>,
+        is_function: bool,
     ) -> Result<Option<Initializer>, ()> {
         match style {
             None => Ok(None),
             Some(InitStyle::C) => {
                 self.bump();
-                if self.at_kw(Kw::Delete) || self.at_kw(Kw::Default) {
-                    self.unsupported("deleted and defaulted functions", self.loc());
-                    self.bump();
+                // clang's `ParseDeclarationAfterDeclaratorAndAttributes`:
+                // only the first declarator of a function definition can
+                // be defaulted or deleted.
+                if let Some(k @ (Kw::Delete | Kw::Default)) = self.kw() {
+                    let l = self.bump().span.lo;
+                    let id = match (k, is_function) {
+                        (_, true) => DiagId::parse_default_delete_in_multiple_declaration,
+                        (Kw::Delete, false) => DiagId::parse_deleted_non_function,
+                        _ => DiagId::parse_default_special_members,
+                    };
+                    let mut diag = self.s.diag(id, l);
+                    if is_function {
+                        diag = diag.arg(if k == Kw::Delete { "delete" } else { "default" });
+                    }
+                    self.emit(diag);
+                    if k == Kw::Delete {
+                        self.skip_deleted_function_body();
+                    }
                     return Ok(None);
                 }
                 if self.at(Punct::LBrace) {
@@ -1597,14 +1611,42 @@ impl Parser<'_, '_> {
         let rbrace = self.expect_closing(Punct::RBrace, Punct::LBrace, lbrace);
         Ok(InitList { items, lbrace, rbrace })
     }
+}
 
-    /// function-body ([dcl.fct.def.general]): the compound statement shares
-    /// the function scope sema opens.
-    fn parse_function_body(&mut self, f: DeclId) {
-        self.s.act_on_start_function_def(f);
-        let (body, rbrace) = self.parse_compound(false);
-        self.s.act_on_finish_function_def(f, body, rbrace);
+/// True if `d` names a constructor, destructor or conversion function,
+/// which take no type specifier.
+pub(crate) fn is_untyped_special(d: &Declarator) -> bool {
+    matches!(
+        d.special,
+        Some((
+            SpecialName::Constructor(_) | SpecialName::Destructor(_) | SpecialName::Conversion(_),
+            _
+        ))
+    )
+}
+
+/// `constexpr`, `consteval` or `constinit`: at most one of them
+/// ([dcl.spec]/2, clang's `SetConstexprSpec`).
+fn set_constexpr_kind(ds: &mut DeclSpec, k: Kw, loc: Loc) -> Result<(), SpecError> {
+    let prev =
+        [(ds.constexpr, "constexpr"), (ds.consteval, "consteval"), (ds.constinit, "constinit")]
+            .into_iter()
+            .find_map(|(l, sp)| l.map(|_| sp));
+    if let Some(prev) = prev {
+        let id = if prev == k.spelling() {
+            DiagId::parse_duplicate_decl_spec
+        } else {
+            DiagId::parse_invalid_decl_spec_combination
+        };
+        return Err(SpecError { id, args: vec![prev.into()] });
     }
+    let slot = match k {
+        Kw::Constexpr => &mut ds.constexpr,
+        Kw::Consteval => &mut ds.consteval,
+        _ => &mut ds.constinit,
+    };
+    *slot = Some(loc);
+    Ok(())
 }
 
 /// Records a function or variable specifier written at most once.

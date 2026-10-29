@@ -125,6 +125,10 @@ keywords! {
 #[derive(Debug)]
 pub struct Keywords {
     map: HashMap<Symbol, Kw>,
+    /// The contextual keyword `final` ([lex.name]/2).
+    pub final_: Symbol,
+    /// The contextual keyword `override`.
+    pub override_: Symbol,
 }
 
 impl Keywords {
@@ -136,7 +140,7 @@ impl Keywords {
                 map.insert(interner.intern(s), *k);
             }
         }
-        Keywords { map }
+        Keywords { map, final_: interner.intern("final"), override_: interner.intern("override") }
     }
 
     /// The keyword `sym` spells, if any.

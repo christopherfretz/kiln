@@ -2,7 +2,7 @@
 // the left operand an object of its class or of a class derived from it.
 //@ expect: compile-fail
 //@ strict-diags
-//@ xfail(kiln): needs WP-065 parser classes
+//@ xfail(kiln): needs member-pointer declarators (int A::*p)
 //@ diag: 12:11 error "left hand operand to .* must be a class compatible with the right hand operand, but is 'B'"
 //@ diag: 12:18 error "right hand operand to .* has non-pointer-to-member type 'int'"
 struct A { int x; };

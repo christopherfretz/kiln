@@ -2,9 +2,8 @@
 // or a default member initializer.
 //@ expect: compile-fail
 //@ strict-diags
-//@ diag: 10:27 error "invalid use of 'this' outside of a non-static member function"
-//@ diag: 13:11 error "invalid use of 'this' outside of a non-static member function"
-//@ xfail(kiln): needs WP-065 parser classes
+//@ diag: 9:27 error "invalid use of 'this' outside of a non-static member function"
+//@ diag: 12:11 error "invalid use of 'this' outside of a non-static member function"
 struct S {
   int x;
   static int f() { return this->x; }

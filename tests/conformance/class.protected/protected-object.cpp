@@ -3,13 +3,12 @@
 // class derived from it).
 //@ expect: compile-fail
 //@ strict-diags
-//@ xfail(kiln): needs WP-065 parser classes
-//@ diag: 19:60 error "'x' is a protected member of 'B'"
-//@ diag: 15:7 note "can only access this member on an object of type 'D1'"
-//@ diag: 19:68 error "'x' is a protected member of 'B'"
-//@ diag: 15:7 note "can only access this member on an object of type 'D1'"
-//@ diag: 22:44 error "'x' is a protected member of 'B'"
-//@ diag: 15:7 note "can only access this member on an object of type 'D2'"
+//@ diag: 18:60 error "'x' is a protected member of 'B'"
+//@ diag: 14:7 note "can only access this member on an object of type 'D1'"
+//@ diag: 18:68 error "'x' is a protected member of 'B'"
+//@ diag: 14:7 note "can only access this member on an object of type 'D1'"
+//@ diag: 21:44 error "'x' is a protected member of 'B'"
+//@ diag: 14:7 note "can only access this member on an object of type 'D2'"
 struct B {
 protected:
   int x;

@@ -12,7 +12,9 @@ use kiln_ast::expr::{CastKind, ExprKind};
 use kiln_ast::ids::RawId;
 use kiln_ast::lookup::LookupFlags;
 use kiln_ast::names::{DeclName, OverloadedOperator};
-use kiln_ast::types::{AutoKeyword, BuiltinType, ExcSpec, FuncInfo, Quals, TagKeyword, TypeView};
+use kiln_ast::types::{
+    AutoKeyword, BuiltinType, ExcSpec, FuncInfo, Quals, RefQual, TagKeyword, TypeView,
+};
 use kiln_ast::{AttrId, DeclHead, DeclId, ExprId, QualType, StmtId};
 use kiln_diag::{DiagId, FixIt};
 use kiln_source::symbol::Symbol;
@@ -22,8 +24,8 @@ use crate::class::ClassBuild;
 use crate::constfold;
 use crate::conv::{self, ConvCtx};
 use crate::declspec::{
-    Chunk, DeclSpec, Declarator, DeclaratorContext, DefaultArg, ParamInfo, Sign, StorageSpec,
-    TypeSpecKind, Width,
+    Chunk, DeclSpec, Declarator, DeclaratorContext, DefaultArg, ParamInfo, Sign, SpecialName,
+    StorageSpec, TypeSpecKind, Width,
 };
 use crate::init::{InitValue, Initializer};
 use crate::lookup::{LookupKind, is_tag_kind, is_type_kind};
@@ -184,6 +186,14 @@ impl Sema<'_, '_> {
     }
 
     fn declarator_name(&self, d: &Declarator) -> String {
+        if let Some((sp, _)) = d.special {
+            return match sp {
+                SpecialName::Constructor(n) => sym_str(self, n),
+                SpecialName::Destructor(n) => format!("~{}", sym_str(self, n)),
+                SpecialName::Operator(op) => format!("operator{}", op.spelling()),
+                SpecialName::Conversion(t) => format!("operator {}", self.ty_arg(t)),
+            };
+        }
         d.name.map_or_else(|| "type name".to_owned(), |(n, _)| sym_str(self, n))
     }
 
@@ -349,7 +359,9 @@ impl Sema<'_, '_> {
                         },
                     };
                 }
-                Chunk::Function { params, variadic, loc, exc, quals, ref_qual, trailing, .. } => {
+                Chunk::Function {
+                    params, variadic, loc, exc, quals, ref_qual, trailing, ..
+                } => {
                     prev_ref = false;
                     let mut info = FuncInfo::new()
                         .with_variadic(*variadic)
@@ -442,6 +454,10 @@ impl Sema<'_, '_> {
     /// A parameter-declaration ([dcl.fct]/3): its type, adjusted
     /// ([dcl.fct]/5: arrays and functions become pointers).
     pub fn act_on_param_declarator(&mut self, ds: &DeclSpec, d: &Declarator) -> ParamInfo {
+        if let Some(l) = d.explicit_object {
+            // P0847 (spec/sema-class.md §2.5, Q4).
+            self.unsupported("explicit object parameters", l);
+        }
         let base = self.type_from_declspec(ds);
         let mut ty = self.type_for_declarator_at(base, ds.type_loc.unwrap_or(ds.loc), d);
         if let Some((s, loc)) = ds.storage
@@ -644,6 +660,56 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// The declarator forms the parser accepts but sema does not handle yet
+    /// (spec/parse.md §9): reports `{what} is not supported yet`, returning
+    /// true when the declaration is dropped. Constructors, destructors and
+    /// conversion functions are WP-067a, operator functions WP-068b,
+    /// virtual functions WP-078a; the specifiers are reported and ignored.
+    pub(crate) fn unsupported_declarator(&mut self, ds: &DeclSpec, d: &Declarator) -> bool {
+        if let Some((sp, loc)) = d.special {
+            let what = match sp {
+                SpecialName::Constructor(_) => "constructors",
+                SpecialName::Destructor(_) => "destructors",
+                SpecialName::Conversion(_) => "conversion functions",
+                SpecialName::Operator(_) => "overloaded operators",
+            };
+            self.unsupported(what, loc);
+            return true;
+        }
+        let specs = [
+            (ds.virtual_, "'virtual'"),
+            (ds.explicit, "'explicit'"),
+            (ds.consteval, "'consteval'"),
+            (d.virt_override, "'override'"),
+            (d.virt_final, "'final'"),
+            (d.pure, "pure virtual functions"),
+        ];
+        for (at, what) in specs {
+            if let Some(l) = at {
+                self.unsupported(what, l);
+            }
+        }
+        // A friend function goes through `act_on_friend`; elsewhere
+        // `friend` is not in a class.
+        if d.ctx != DeclaratorContext::Member
+            && let Some(l) = ds.friend
+        {
+            self.unsupported("'friend'", l);
+        }
+        // Member functions take cv/ref-qualifiers (WP-066b); a non-member
+        // function type with them is `typedef`-only ([dcl.fct]/6).
+        if d.ctx != DeclaratorContext::Member
+            && !ds.is_typedef()
+            && !d.invalid
+            && let Some(Chunk::Function { quals, ref_qual, .. }) = d.chunks.first()
+            && (!quals.is_empty() || *ref_qual != RefQual::None)
+            && d.qualifier.is_none_or(|q| self.ast.decls.record(q).is_none())
+        {
+            self.unsupported("function qualifiers on a non-member function", d.name_loc());
+        }
+        false
+    }
+
     /// `-Wvexing-parse` ([dcl.ambig.res]/1, clang's
     /// `warnAboutAmbiguousFunction`): a block-scope function declaration
     /// whose parentheses could have been a direct initializer, with a
@@ -750,6 +816,9 @@ impl Sema<'_, '_> {
         base: QualType,
         d: &Declarator,
     ) -> Option<DeclId> {
+        if self.unsupported_declarator(ds, d) {
+            return None;
+        }
         let ty = self.type_for_declarator_at(base, ds.type_loc.unwrap_or(ds.loc), d);
         let invalid = ds.invalid || d.invalid || self.is_error_type(ty);
         if !invalid {

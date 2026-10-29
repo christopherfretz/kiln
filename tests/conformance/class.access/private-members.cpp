@@ -3,15 +3,14 @@
 // private, of a struct public.
 //@ expect: compile-fail
 //@ strict-diags
-//@ xfail(kiln): needs WP-065 parser classes
-//@ diag: 30:5 error "'f' is a private member of 'B'"
-//@ diag: 27:8 note "declared private here"
-//@ diag: 31:12 error "'x' is a private member of 'A'"
-//@ diag: 16:7 note "implicitly declared private here"
-//@ diag: 31:35 error "'z' is a protected member of 'A'"
-//@ diag: 21:14 note "declared protected here"
-//@ diag: 31:48 error "'e1' is a protected member of 'A'"
-//@ diag: 22:10 note "declared protected here"
+//@ diag: 29:5 error "'f' is a private member of 'B'"
+//@ diag: 26:8 note "declared private here"
+//@ diag: 30:12 error "'x' is a private member of 'A'"
+//@ diag: 15:7 note "implicitly declared private here"
+//@ diag: 30:35 error "'z' is a protected member of 'A'"
+//@ diag: 20:14 note "declared protected here"
+//@ diag: 30:48 error "'e1' is a protected member of 'A'"
+//@ diag: 21:10 note "declared protected here"
 class A {
   int x;
 public:

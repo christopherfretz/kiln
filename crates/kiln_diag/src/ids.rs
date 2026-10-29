@@ -462,6 +462,23 @@ diag_ids! {
     parse_attribute_requires_string = Error (1) "expected string literal as argument of '{0}' attribute";
     parse_unsupported = Error (1) "{0} is not supported yet";
     parse_expected_lbrace_after_base = Error (0) "expected '{{' after base class list";
+    // classes (WP-065; clang ParseDeclCXX.cpp, ParseCXXInlineMethods.cpp)
+    parse_default_arg_unparsed = Error (0) "unexpected end of default argument expression";
+    parse_except_spec_unparsed = Error (0) "unexpected end of exception specification";
+    parse_bad_pure_specifier = Error (0) "initializer on function does not look like a pure-specifier";
+    parse_duplicate_virt_specifier = Error (1) "class member already marked '{0}'";
+    parse_expected_member_or_base_name = Error (0) "expected class member or base class name";
+    parse_ctor_init_missing_comma = Error (0) "missing ',' between base or member initializers";
+    parse_destructor_tilde_identifier = Error (0) "expected a class name after '~' to name a destructor";
+    parse_anon_bitfield_member_init = Error (0) "anonymous bit-field cannot have a default member initializer";
+    parse_friend_decl_spec = Error (1) "'{0}' is invalid in friend declarations";
+    parse_duplicate_class_virt_specifier = Error (1) "class already marked '{0}'";
+    parse_dup_virtual_base = Error (0) "duplicate 'virtual' in base specifier";
+    parse_default_delete_in_multiple_declaration = Error (1) "'= {0}' is a function definition and must occur in a standalone declaration";
+    parse_deleted_non_function = Error (0) "only functions can have deleted definitions";
+    parse_default_special_members = Error (0) "only special member functions and comparison operators may be defaulted";
+    parse_only_constructors_take_base_inits = Error (0) "only constructors take base initializers";
+    parse_friend_decl_defines_type = Error (0) "cannot define a type in a friend declaration";
     // pragmas handled by the parser (WP-055; clang ParsePragma.cpp)
     parse_pragma_expected_lparen = Warning [IgnoredPragmas] (1) "missing '(' after '#pragma {0}' - ignoring";
     parse_pragma_expected_rparen = Warning [IgnoredPragmas] (1) "missing ')' after '#pragma {0}' - ignoring";
