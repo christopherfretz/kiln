@@ -58,6 +58,9 @@ impl<'s> SemaNames<'s> {
                 DeclKind::CXXRecord | DeclKind::Enum => {
                     let mut s = String::new();
                     self.write_unscoped(c, &mut s);
+                    if let Some(args) = self.ast.spec_print_args(c) {
+                        kiln_ast::types::write_arg_list(&self.ast.types, self, args, &mut s);
+                    }
                     chain.push(s);
                 }
                 _ => {}
@@ -72,6 +75,10 @@ impl<'s> SemaNames<'s> {
 }
 
 impl TypeNames for SemaNames<'_> {
+    fn specialization_args(&self, decl: DeclId) -> Option<kiln_ast::ids::ArgListId> {
+        self.ast.spec_print_args(decl)
+    }
+
     fn write_decl_name(&self, decl: DeclId, scoped: bool, out: &mut String) {
         if scoped {
             self.write_scope(decl, out);

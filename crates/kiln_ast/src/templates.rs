@@ -151,6 +151,10 @@ pub struct SpecInfo {
     pub from_args: Option<ArgListId>,
     /// Where the definition was first required ([temp.point]).
     pub point_of_instantiation: Loc,
+    /// The arguments names print with: `args` without the trailing
+    /// arguments that equal their parameter's default (clang's
+    /// `SuppressDefaultTemplateArgs`).
+    pub print_args: ArgListId,
 }
 
 /// A member of a class template specialization (12 bytes, clang's
@@ -433,6 +437,15 @@ impl Ast {
             Some((TemplLinkKind::Specialization, i)) => Some((i, self.templates.spec(i)?)),
             _ => None,
         }
+    }
+
+    /// The template arguments a class template specialization's name
+    /// prints with (`None` for other declarations).
+    pub fn spec_print_args(&self, d: DeclId) -> Option<ArgListId> {
+        if self.decls.get(d).kind() != DeclKind::CXXRecord {
+            return None;
+        }
+        self.spec_info(d).map(|(_, s)| s.print_args)
     }
 
     /// The member record of `d` with its index, when `d` is a member of a
@@ -798,6 +811,7 @@ impl AstBuilder<'_> {
             from: tmpl,
             from_args: None,
             point_of_instantiation: Loc::INVALID,
+            print_args: args,
         });
         let _ = self.ast.templates.specializations.insert((tmpl, canonical), d);
         self.ast.templates.spec_order.entry(tmpl).or_default().push(d);

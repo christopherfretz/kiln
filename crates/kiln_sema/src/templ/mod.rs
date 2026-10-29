@@ -6,6 +6,7 @@
 //! `sema_unimplemented_template_feature`.
 
 pub mod actions;
+pub mod stack;
 
 use kiln_ast::decl::DeclKind;
 use kiln_ast::ids::TemplateParamListId;

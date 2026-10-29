@@ -902,6 +902,28 @@ diag_ids! {
     parse_expected_qualified_after_typename = Error (0) "expected a qualified name after 'typename'";
     parse_expected_fold_operator = Error (0) "expected a foldable binary operator in fold expression";
     parse_template_kw_missing = Error (1) "missing 'template' keyword prior to dependent template name '{0}'";
+    // WP-070a: instantiation (spec/sema-templates.md §4, §10).
+    sema_template_recursion_depth = Fatal (1) "recursive template instantiation exceeded maximum depth of {0}";
+    note_template_recursion_depth = Note (0) "use -ftemplate-depth=N to increase recursive template instantiation depth";
+    note_instantiation_contexts_suppressed = Note (2) "(skipping {0} context{1} in backtrace; use -ftemplate-backtrace-limit=0 to see all)";
+    note_template_class_instantiation_here = Note (1) "in instantiation of template class '{0}' requested here";
+    note_template_member_class_here = Note (1) "in instantiation of member class '{0}' requested here";
+    note_template_member_function_here = Note (1) "in instantiation of member function '{0}' requested here";
+    note_function_template_spec_here = Note (1) "in instantiation of function template specialization '{0}' requested here";
+    note_template_static_data_member_def_here = Note (1) "in instantiation of static data member '{0}' requested here";
+    note_template_type_alias_instantiation_here = Note (1) "in instantiation of template type alias '{0}' requested here";
+    note_template_enum_def_here = Note (1) "in instantiation of enumeration '{0}' requested here";
+    note_template_nsdmi_here = Note (1) "in instantiation of default member initializer '{0}' requested here";
+    note_default_arg_instantiation_here = Note (1) "in instantiation of default argument for '{0}' required here";
+    note_default_function_arg_instantiation_here = Note (1) "in instantiation of default function argument expression for '{0}' required here";
+    note_template_default_arg_checking = Note (0) "while checking a default template argument used here";
+    sema_template_implicit_instantiate_undefined = Error (1) "implicit instantiation of undefined template '{0}'";
+    note_template_decl_here = Note (0) "template is declared here";
+    sema_template_arg_list_different_arity = Error (3) "{0:too few|too many} template arguments for {1:class template|function template|variable template|alias template|template template parameter|concept|template} '{2}'";
+    sema_template_arg_must_be_type = Error (0) "template argument for template type parameter must be a type";
+    sema_template_arg_must_be_expr = Error (0) "template argument for non-type template parameter must be an expression";
+    sema_template_arg_must_be_template = Error (0) "template argument for template template parameter must be a class template or type alias template";
+    sema_incomplete_nested_name_spec = Error (1) "incomplete type {0} named in nested name specifier";
 }
 
 impl DiagId {

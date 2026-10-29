@@ -268,6 +268,9 @@ impl<'a> AstNames<'a> {
                 if !self.is_unnamed(ctx) =>
             {
                 self.write_name(ctx, out);
+                if let Some(args) = self.ast.spec_print_args(ctx) {
+                    write_arg_list(&self.ast.types, self, args, out);
+                }
                 out.push_str("::");
             }
             _ => {}
@@ -771,6 +774,10 @@ impl AstNames<'_> {
 }
 
 impl TypeNames for AstNames<'_> {
+    fn specialization_args(&self, decl: DeclId) -> Option<crate::ids::ArgListId> {
+        self.ast.spec_print_args(decl)
+    }
+
     fn invented_parm(&self, decl: DeclId) -> Option<Option<(DeclId, crate::ids::ArgListId)>> {
         self.invented_parm_of(decl)
     }
@@ -868,6 +875,10 @@ impl PrintEnv for AstNames<'_> {
 }
 
 impl TypeNames for Ast {
+    fn specialization_args(&self, decl: DeclId) -> Option<crate::ids::ArgListId> {
+        self.spec_print_args(decl)
+    }
+
     fn invented_parm(&self, decl: DeclId) -> Option<Option<(DeclId, crate::ids::ArgListId)>> {
         AstNames::new(self).invented_parm_of(decl)
     }

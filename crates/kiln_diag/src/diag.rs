@@ -199,6 +199,21 @@ impl Diag {
         self
     }
 
+    /// Inserts `notes` before the diagnostic's own notes (the template
+    /// instantiation context precedes them, spec/sema-templates.md §10.2).
+    pub fn prepend_notes(&mut self, notes: Vec<Diag>) {
+        if notes.is_empty() {
+            return;
+        }
+        let own = std::mem::replace(&mut self.notes, notes);
+        self.notes.extend(own);
+    }
+
+    /// Whether the diagnostic has notes attached.
+    pub fn has_notes(&self) -> bool {
+        !self.notes.is_empty()
+    }
+
     /// Adds a fix-it hint.
     pub fn fixit(mut self, f: FixIt) -> Diag {
         self.fixits.push(f);
