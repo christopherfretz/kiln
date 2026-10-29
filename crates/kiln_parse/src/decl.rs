@@ -87,6 +87,9 @@ impl Parser<'_, '_> {
         while !self.at_eof() {
             self.parse_external_declaration();
         }
+        // [temp.point]/7: the end of the translation unit is a point of
+        // instantiation of every pending definition.
+        self.s.end_of_tu_instantiations();
     }
 
     /// A declaration at namespace scope ([dcl.pre] declaration).

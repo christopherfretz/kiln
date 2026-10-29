@@ -173,7 +173,7 @@ impl Sema<'_, '_> {
             }
             // [dcl.constexpr]/1: a constexpr static data member is
             // implicitly inline.
-            if spec.is_constexpr() {
+            if spec.is_constexpr() && !self.inst.deferring_init {
                 spec = spec.with_inline(true);
             }
             if let Some(&p) = self.lookup_in(ctx, name, LookupKind::Ordinary).decls.first() {
@@ -405,7 +405,7 @@ impl Sema<'_, '_> {
                 self.error(DiagId::sema_base_is_union, s.loc);
                 continue;
             }
-            if !self.is_complete(s.ty) {
+            if !self.require_complete(s.ty, s.loc) {
                 let msg = self.diag(DiagId::sema_base_incomplete, s.loc);
                 let msg = self.incomplete_note(msg, s.ty);
                 let msg = match self.ast.definition(b) {

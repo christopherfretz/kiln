@@ -71,7 +71,7 @@ impl Sema<'_, '_> {
             return self.recover_err(&kids, loc);
         }
         let unqual = conv::strip_cv(self, written);
-        if self.ast.types.as_record(unqual).is_some() && !self.is_complete(unqual) {
+        if self.ast.types.as_record(unqual).is_some() && !self.require_complete(unqual, loc) {
             let msg = self.diag(DiagId::sema_typeid_incomplete, loc).arg(self.ty_arg(unqual));
             self.emit(self.incomplete_note(msg, unqual));
             return self.recover_err(&kids, loc);

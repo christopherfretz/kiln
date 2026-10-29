@@ -929,8 +929,10 @@ impl VarSpec {
     pub const fn with_init_style(self, s: InitStyle) -> Self {
         VarSpec((self.0 & !(3 << 5)) | ((s as u32) << 5))
     }
-    /// The bits [`DeclArena::mark_var`] may set after creation.
-    pub const LATE: VarSpec = VarSpec(1 << 10);
+    /// The bits [`DeclArena::mark_var`] may set after creation: `nrvo`,
+    /// and `inline` (an instantiated static data member becomes inline
+    /// with its deferred initializer, [temp.inst]/4).
+    pub const LATE: VarSpec = VarSpec((1 << 10) | (1 << 9));
 }
 
 bit_accessors!(VarSpec:

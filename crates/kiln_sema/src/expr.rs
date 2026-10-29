@@ -465,6 +465,13 @@ impl Sema<'_, '_> {
         self.ast.decls.set_flags(f, DeclFlags::USED);
     }
 
+    /// [`Sema::mark_used`] for a use at `loc`: a member function of a
+    /// class template specialization is instantiated ([temp.inst]/5).
+    pub(crate) fn mark_used_at(&mut self, d: DeclId, loc: Loc) {
+        self.mark_used(d);
+        self.note_used_for_instantiation(d, loc);
+    }
+
     /// Converts `e` to `ty` as in `ctx`, diagnosing failure (the result
     /// is then a `RecoveryExpr`).
     pub(crate) fn convert_for_init(&mut self, e: ExprId, ty: QualType, ctx: ConvCtx) -> ExprId {
@@ -805,6 +812,9 @@ impl Sema<'_, '_> {
         if !defer {
             self.ast.decls.set_flags(d, DeclFlags::REFERENCED);
         }
+        if n.kind() == DeclKind::Var {
+            self.note_var_referenced(d, loc);
+        }
         self.diagnose_deprecated(d, loc);
         let nou = if self.unevaluated > 0 { NonOdrUse::Unevaluated } else { NonOdrUse::None };
         let extra = shadow.map(|s| kiln_ast::expr::DeclRefExtra {
@@ -826,7 +836,7 @@ impl Sema<'_, '_> {
                         .as_ref()
                         .is_some_and(|f| self.ast.first(f.decl) == self.ast.first(d));
                     if !own {
-                        self.mark_used(d);
+                        self.mark_used_at(d, loc);
                     }
                 }
                 DeclKind::Var | DeclKind::ParmVar => self.pending_odr.push(e),
@@ -1312,7 +1322,7 @@ impl Sema<'_, '_> {
             self.emit(msg);
             return true;
         }
-        if !self.is_complete(p) {
+        if !self.require_complete(p, loc) {
             let msg = self.diag(DiagId::sema_arith_incomplete_pointee, loc).arg(self.ty_arg(p));
             self.emit(self.incomplete_note(msg, p));
             return false;
@@ -1875,7 +1885,7 @@ impl Sema<'_, '_> {
             return self.recover_err(&[b, i], loc);
         }
         let elem = self.pointee_sugared(ptr).unwrap_or(QualType::ERROR);
-        if !self.ast.types.is_function(elem) && !self.is_complete(elem) {
+        if !self.ast.types.is_function(elem) && !self.require_complete(elem, loc) {
             let msg = self.diag(DiagId::sema_arith_incomplete_pointee, loc).arg(self.ty_arg(elem));
             self.emit(self.incomplete_note(msg, elem));
             return self.recover_err(&[b, i], loc);
@@ -2119,7 +2129,7 @@ impl Sema<'_, '_> {
         };
         if vk == ValueCategory::PRValue
             && self.ast.types.as_record(ty).is_some()
-            && !self.is_complete(ty)
+            && !self.require_complete(ty, loc)
         {
             let msg =
                 self.diag(DiagId::sema_typecheck_decl_incomplete_type, loc).arg(self.ty_arg(ty));
@@ -2244,7 +2254,8 @@ impl Sema<'_, '_> {
             (base, bt)
         };
         let rec = self.ast.types.as_record(obj_ty).expect("checked above");
-        let Some(def) = self.ast.definition(rec).filter(|_| self.is_complete(obj_ty)) else {
+        let complete = self.require_complete(obj_ty, loc);
+        let Some(def) = self.ast.definition(rec).filter(|_| complete) else {
             let msg =
                 self.diag(DiagId::sema_member_reference_incomplete, loc).arg(self.ty_arg(obj_ty));
             self.emit(self.incomplete_note(msg, obj_ty));
@@ -2336,7 +2347,7 @@ impl Sema<'_, '_> {
             }
             x
         };
-        if !self.is_complete(check) {
+        if !self.require_complete(check, loc) {
             let msg = self.diag(DiagId::sema_sizeof_incomplete, loc).arg(name).arg(self.ty_arg(ty));
             self.emit(self.incomplete_note(msg, ty));
             return false;

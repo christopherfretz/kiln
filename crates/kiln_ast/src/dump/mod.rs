@@ -43,7 +43,7 @@ use crate::expr::{
 };
 use crate::ids::{AttrId, DeclId, ExprId, ListId, QualType, RawId, StmtId, StringLitId, TypeId};
 use crate::stmt::{IfKind, StmtKind};
-use crate::templates::Requirement;
+use crate::templates::{Requirement, SpecKind};
 use crate::types::{ArgView, ExcSpec, PrintOptions, TemplateArg, write_nns, write_type};
 
 /// Selects the declarations [`dump`] prints as separate trees (clang's
@@ -454,6 +454,12 @@ impl<'a, W: io::Write> Dumper<'a, W> {
             expr(Some(s.cond));
             expr(s.message);
         } else if decls.record(d).is_some() {
+            // A specialization's converted arguments (§5).
+            if let Some((_, i)) = ast.spec_info(d) {
+                for &a in ast.types.args(i.args) {
+                    kids.push((Node::Arg(a), None));
+                }
+            }
             for i in 0..decls.bases(d, &ast.lists).count() {
                 kids.push((Node::Base(d, i as u32), None));
             }
@@ -791,7 +797,11 @@ impl<'a, W: io::Write> Dumper<'a, W> {
         let decls = &ast.decls;
         let n = *decls.get(d);
         let kind = n.kind();
-        self.line.push_str(kind.name());
+        if kind == DeclKind::CXXRecord && ast.spec_info(d).is_some() {
+            self.line.push_str("ClassTemplateSpecialization");
+        } else {
+            self.line.push_str(kind.name());
+        }
         self.line.push_str("Decl");
         self.id('d', d.raw());
         self.loc(n.loc());
@@ -1001,6 +1011,11 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                         || defn.contains(DefinitionBits::BEING_DEFINED)
                     {
                         self.line.push_str(" definition");
+                        if ast.spec_info(d).is_some_and(|(_, i)| {
+                            i.kind == SpecKind::ImplicitInstantiation
+                        }) {
+                            self.line.push_str(" implicit_instantiation");
+                        }
                     }
                 } else {
                     self.name(d);
@@ -1100,6 +1115,15 @@ impl<'a, W: io::Write> Dumper<'a, W> {
         if let Some(c) = info.constraint {
             kids.push((Node::Expr(c), None));
         }
+        // The implicit instantiations, in creation order (§5): each is
+        // printed in full once, under its template.
+        for &s in ast.templates.specs_of(d) {
+            if ast.spec_info(s).is_some_and(|(_, i)| {
+                matches!(i.kind, SpecKind::Undeclared | SpecKind::ImplicitInstantiation)
+            }) {
+                kids.push((Node::Decl(s), None));
+            }
+        }
     }
 
     /// A template parameter's children: a template template parameter's
@@ -1157,7 +1181,29 @@ impl<'a, W: io::Write> Dumper<'a, W> {
             ArgView::Template(_) => self.line.push_str(" template"),
             ArgView::TemplateExpansion { .. } => self.line.push_str(" template expansion"),
             ArgView::Pack(_) => self.line.push_str(" pack"),
-            _ => self.line.push_str(" value"),
+            ArgView::Value { ty, value } => {
+                // `value '<type>' <integer>` (§5); other values print
+                // as clang's `printPretty` would need (WP-071).
+                self.line.push_str(" value");
+                self.ty(ty);
+                match self.ast.consts.scalar(value) {
+                    Some(crate::consts::Scalar::Int { bits, signed: true, .. }) => {
+                        if let Some(v) = bits.to_i128() {
+                            let _ = write!(self.line, " {v}");
+                        }
+                    }
+                    Some(crate::consts::Scalar::Int { bits, .. }) => {
+                        if let Some(v) = bits.to_u128() {
+                            let _ = write!(self.line, " {v}");
+                        }
+                    }
+                    Some(crate::consts::Scalar::Bool { value, .. }) => {
+                        let _ = write!(self.line, " {}", u8::from(value));
+                    }
+                    _ => {}
+                }
+            }
+            ArgView::Profile(_) => self.line.push_str(" value"),
         }
     }
 

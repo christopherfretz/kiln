@@ -146,6 +146,43 @@ impl Substituter<'_, '_, '_> {
         Ok(v)
     }
 
+    /// Whether pattern static data member `d` is declared without its
+    /// initializer ([temp.inst]/4): an inline one whose type does not
+    /// come from the initializer (`auto`, an array of unknown bound).
+    pub(crate) fn defers_init(&self, d: DeclId) -> bool {
+        let ast = &self.sema.ast;
+        let Some(v) = ast.decls.var(d) else { return false };
+        let t = self.decl_ty(d);
+        v.init.is_some()
+            && v.spec.is_inline()
+            && v.spec.storage() == VarStorage::Static
+            && !matches!(ast.types.view(t.ty()), TypeView::Auto { .. })
+            && !matches!(
+                ast.types.view(ast.types.canonical(t).ty()),
+                TypeView::IncompleteArray(_)
+            )
+    }
+
+    /// Declares pattern static data member `d` with its initializer
+    /// deferred (see [`Self::defers_init`]); not `inline` until then.
+    pub(crate) fn deferred_static_member(&mut self, d: DeclId) -> SubstResult<DeclId> {
+        let loc = self.sema.ast.decls.get(d).loc();
+        let t = self.decl_ty(d);
+        let ty = self.ty(t, loc)?;
+        let mut ds = self.pattern_declspec(d, ty);
+        ds.inline = None;
+        let dr = self.pattern_declarator(d, DeclaratorContext::Member)?;
+        let saved = std::mem::replace(&mut self.sema.inst.deferring_init, true);
+        let v = self.sema.act_on_declarator(&ds, ty, &dr);
+        self.sema.inst.deferring_init = saved;
+        let Some(v) = v else { return Err(SubstFail) };
+        self.locals.insert(d, DeclOrPack::Decl(v));
+        if self.sema.kind_of(v) == DeclKind::Var {
+            self.sema.inst.deferred_inits.insert(v);
+        }
+        Ok(v)
+    }
+
     /// Initializes `v` as pattern variable `d` is.
     pub(crate) fn var_init(&mut self, d: DeclId, v: DeclId) -> SubstResult<()> {
         let Some(data) = self.sema.ast.decls.var(d).copied() else { return Ok(()) };
@@ -261,6 +298,10 @@ impl Substituter<'_, '_, '_> {
         };
         if fs.is_some_and(|s| s.is_pure()) {
             self.sema.ast.decls.mark_function(f, kiln_ast::decl::FnSpec::new().with_pure(true));
+        }
+        // Defined in its class: inline before its body is instantiated.
+        if fs.is_some_and(|s| s.implicit_inline()) {
+            self.sema.ast.decls.mark_function(f, kiln_ast::decl::FnSpec::new().with_implicit_inline(true));
         }
         self.default_args(d, f)?;
         Ok(r)

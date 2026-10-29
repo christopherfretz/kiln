@@ -372,7 +372,7 @@ impl Sema<'_, '_> {
                         self.emit(msg);
                         return QualType::ERROR;
                     }
-                    if !self.is_complete(ty) {
+                    if !self.require_complete(ty, spec_loc) {
                         let msg = self
                             .diag(DiagId::sema_array_incomplete_type, *loc)
                             .arg(self.ty_arg(ty));
@@ -1687,7 +1687,10 @@ impl Sema<'_, '_> {
             let msg = self.diag(DiagId::sema_duplicate_member, d.name_loc()).arg(sym_str(self, n));
             self.emit(msg.with_note(note));
         }
-        let ty = if !invalid && !self.is_complete(ty) && !self.ast.types.is_reference(ty) {
+        let ty = if !invalid
+            && !self.ast.types.is_reference(ty)
+            && !self.require_complete(ty, d.name_loc())
+        {
             let msg = self.diag(DiagId::sema_field_incomplete, d.name_loc()).arg(self.ty_arg(ty));
             self.emit(self.incomplete_note(msg, ty));
             // clang marks the field invalid: initialization never
@@ -2109,7 +2112,7 @@ impl Sema<'_, '_> {
         if spec.storage() == VarStorage::Extern {
             return;
         }
-        if !self.is_complete(ty) {
+        if !self.require_complete(ty, self.ast.decls.get(v).loc()) {
             let msg = if self.ast.types.is_void(ty) {
                 self.diag(DiagId::sema_void_var, loc).arg(self.ty_arg(ty))
             } else {
@@ -2164,7 +2167,7 @@ impl Sema<'_, '_> {
                 self.push_local(sym, p);
             }
             let pty = self.ast.decls.get(p).ty().unwrap_or(QualType::ERROR);
-            if !self.is_complete(pty)
+            if !self.require_complete(pty, self.ast.decls.get(p).loc())
                 && !self.ast.types.is_reference(pty)
                 && !self.is_error_type(pty)
             {

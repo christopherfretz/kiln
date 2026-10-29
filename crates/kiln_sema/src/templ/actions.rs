@@ -82,8 +82,8 @@ impl Sema<'_, '_> {
 
     /// `prefix X<args>::` where the template-id named type `ty` of
     /// template `tmpl` ([temp.res.general]/2): the current instantiation
-    /// (its pattern, [temp.dep.type]/1) or a dependent marker. A
-    /// non-dependent specialization needs instantiation (WP-070).
+    /// (its pattern, [temp.dep.type]/1), a dependent marker, or the
+    /// instantiated specialization ([temp.inst]/2).
     pub fn act_on_nested_name_template_id(
         &mut self,
         prefix: Option<NnsId>,
@@ -97,8 +97,12 @@ impl Sema<'_, '_> {
             return Some((p, n));
         }
         if !self.is_dependent_type(ty) {
-            self.templ_unimplemented("class template specialization", loc);
-            return None;
+            // [expr.prim.id.qual]/1: the class must be complete.
+            if !self.require_complete_nns(ty, loc) {
+                return None;
+            }
+            let r = self.ast.types.as_record(ty)?;
+            return Some((self.ast.definition(r).unwrap_or(r), n));
         }
         Some((tmpl, n))
     }
@@ -206,9 +210,8 @@ impl Sema<'_, '_> {
 
     /// `name < args >` ([temp.names]): what the template-id names, by the
     /// kind of the template. Dependent specializations are built as
-    /// written; non-dependent class, alias and variable template
-    /// specializations need the engine (WP-070) and report
-    /// unimplemented.
+    /// written; non-dependent class and alias template specializations
+    /// are formed (§4.2, §4.10); variable templates need WP-071.
     #[allow(clippy::result_unit_err, reason = "`Err` means already diagnosed")]
     pub fn act_template_id(
         &mut self,
@@ -240,8 +243,9 @@ impl Sema<'_, '_> {
             DeclKind::ClassTemplate | DeclKind::TemplateTemplateParm => {
                 let ttp = self.kind_of(d) == DeclKind::TemplateTemplateParm;
                 if !dep_args && !ttp {
-                    self.templ_unimplemented("class template specialization", l);
-                    return Err(());
+                    let locs = std::mem::take(&mut self.templ.arg_locs);
+                    let t = self.class_template_type(name, d, args, &locs, l)?;
+                    return Ok(TemplateIdRef::Type(t));
                 }
                 Ok(TemplateIdRef::Type(
                     self.ast.types.template_specialization(name, list, None, false),
@@ -249,8 +253,9 @@ impl Sema<'_, '_> {
             }
             DeclKind::TypeAliasTemplate => {
                 if !dep_args {
-                    self.templ_unimplemented("alias template specialization", l);
-                    return Err(());
+                    let locs = std::mem::take(&mut self.templ.arg_locs);
+                    let t = self.alias_template_type(name, d, args, &locs, l)?;
+                    return Ok(TemplateIdRef::Type(t));
                 }
                 // The underlying type needs substitution (WP-070); the
                 // dependent specialization stands for itself until then.

@@ -298,6 +298,12 @@ impl Sema<'_, '_> {
             return false;
         }
         let Some((tmpl, args)) = self.spec_args(spec) else { return false };
+        // [temp.spec.partial.match]: partial specializations are not
+        // matched yet (WP-070b) — the primary template is used.
+        if let Some((_, info)) = self.ast.spec_info(spec) {
+            let written = info.args;
+            let _ = self.match_partial_specs(tmpl, written, poi);
+        }
         let Some(pattern) = self.ast.template_info(tmpl).and_then(|i| i.pattern) else {
             return false;
         };
@@ -474,6 +480,53 @@ impl Sema<'_, '_> {
         self.pop_inst_frame();
     }
 
+    /// A reference to variable `v` at `loc`: a static data member of a
+    /// specialization whose initializer was deferred gets it now
+    /// ([temp.inst]/4; clang instantiates at the reference, before the
+    /// value is needed). An unevaluated reference instantiates only a
+    /// variable usable in constant expressions.
+    pub(crate) fn note_var_referenced(&mut self, v: DeclId, loc: Loc) {
+        if !self.inst.deferred_inits.contains(&v) {
+            return;
+        }
+        let constant = self.ast.decls.var(v).is_some_and(|x| x.spec.is_constexpr())
+            || self.ast.decls.get(v).ty().is_some_and(|t| self.ast.types.effective_quals(t).is_const());
+        if self.unevaluated > 0 && !constant {
+            return;
+        }
+        self.instantiate_static_member_init(v, loc);
+    }
+
+    /// Instantiates the deferred initializer of static data member `v`.
+    pub fn instantiate_static_member_init(&mut self, v: DeclId, poi: Loc) {
+        if self.inst.fatal || !self.inst.deferred_inits.remove(&v) {
+            return;
+        }
+        let Some(pattern) = self.ast.instantiated_from(v) else { return };
+        let Some(spec) = self.inst_owner(v) else { return };
+        let Some((tmpl, args)) = self.spec_args(spec) else { return };
+        let Some(pclass) = self.ast.definition(self.ast.template_info(tmpl).and_then(|i| i.pattern).unwrap_or(spec)) else {
+            return;
+        };
+        if !self.push_inst_frame(FrameKind::StaticDataMember, v, pattern, poi) {
+            return;
+        }
+        self.ast.decls.mark_var(v, kiln_ast::decl::VarSpec::new().with_inline(true));
+        let ctx = self.ast.decls.get(v).ctx().unwrap_or(self.ast.tu);
+        self.in_inst_context(ctx, |s| {
+            let mut sub = Substituter::new(s, &args);
+            sub.entity = Some(spec);
+            sub.map_context(pclass, spec);
+            let first = sub.sema.ast.first(pclass);
+            if first != pclass {
+                sub.map_context(first, spec);
+            }
+            // A failure was diagnosed; the variable is left uninitialized.
+            let _ = sub.var_init(pattern, v);
+        });
+        self.pop_inst_frame();
+    }
+
     /// The class template specialization member `f` was instantiated
     /// with.
     fn inst_owner(&self, f: DeclId) -> Option<DeclId> {
@@ -526,6 +579,7 @@ impl Substituter<'_, '_, '_> {
         let loc = n.loc();
         Ok(Some(match n.kind() {
             DeclKind::Field => self.field_decl(m)?,
+            DeclKind::Var if self.defers_init(m) => self.deferred_static_member(m)?,
             DeclKind::Var => self.var_decl(m, DeclaratorContext::Member)?,
             DeclKind::CXXMethod
             | DeclKind::CXXConstructor
