@@ -340,11 +340,13 @@ average 8-9 during the run):
 
 ### Transient allocation — normative for M3 (WP-060 design; WP-061a/b implement)
 
-*Status:* the heap space, the allocator and the counters are implemented
-(WP-061b part 1, `crates/kiln_oven/src/mem.rs`); the `New`/`Delete`
-operations, their checks and the churn benchmarks are WP-061b part 2. Until
-then no evaluation allocates on the heap, so `allocs` is 0 and `peak_arena`
-equals `peak_bytes` on every program.
+*Status:* implemented. The heap space, the allocator and the counters are
+WP-061b part 1 (`crates/kiln_oven/src/mem.rs`); the `New`/`Delete`
+operations, their checks, the leak check and the churn benchmarks are
+WP-061b part 2 (`crates/kiln_oven/src/compile/new_delete.rs`, `vm.rs`,
+`value.rs`). Classes with a constructor or destructor (WP-076),
+`std::allocator` and `__builtin_operator_new` (the templates wave) are not
+yet constant; see "Status and what remains".
 
 The operator's requirement: memory that a constant evaluation allocates and
 frees **must be reclaimed while the evaluation is still running**, not at its
@@ -360,8 +362,10 @@ their own `Alloc` table and free-slot queue with the frame space's
 generation scheme: `delete` marks the slot dead and keeps its `Alloc` (so a
 dangling pointer still names its origin in notes) until the slot is reused
 with a bumped generation; a slot whose generation would wrap is retired.
-`Origin::Heap(ExprId)` names the `new` expression (or the
-`std::allocator<T>::allocate` call) for notes.
+`Origin::Heap(ExprId, u32)` names the `new` expression (or the
+`std::allocator<T>::allocate` call) and the allocation's serial number in
+its evaluation, for notes (clang prints a heap pointer as
+`&{*new T#n}`, `n` counting from 0 per evaluation).
 
 **Byte reuse.** Heap bytes are not a bump arena. Sizes are granule-rounded
 (8 bytes), then served by size class:
@@ -410,37 +414,106 @@ it (`Memory::ctx`); a nested evaluation frees what it still holds when it
 ends (`free_heap_of`), after its own leak check, so its blocks return to
 the free lists for the enclosing evaluation.
 
-**Operations (KBC).** `New { ty, count: Option<Reg>, array: bool }` yields
-a pointer to a fresh allocation of `ty` (or `ty[count]`), uninitialized
-(the initializer, if any, is ordinary stores through the pointer; lifetime
-of a trivially-constructible object begins at allocation; classes with
-constructors begin life in the constructor call, M3 Oven package).
-`Delete { array: bool }` takes the pointer. `std::allocator<T>::allocate(n)`
+**Operations (KBC).** `New [dst, ty, count, origin, k]` yields in `dst`
+a pointer to a fresh allocation of `ty` (or, with aux `ARRAY`,
+`ty[count]`), uninitialized unless aux `ZERO` (the initializer, if any, is
+ordinary stores through the pointer; the lifetime of a
+trivially-constructible object begins at allocation; classes with
+constructors begin life in the constructor call, WP-076). For an array,
+`count` is the bound as written (before the `size_t` conversion; aux
+`SIGNED` says whether it is signed) and `k` the number of explicit
+initializers; the bound is checked in clang's order: negative, too large
+for the address space (61 bits for a 64-bit `size_t`), beyond the step
+limit (clang's `-fconstexpr-steps` allocation limit), smaller than `k`.
+With aux `NOTHROW` (`new (std::nothrow)`) a failed check yields a null
+pointer instead of a fault and the initializer is skipped. Elements past
+the explicit initializers are filled by a runtime loop with the
+`array_filler`, or by `ZERO` when the filler is zero-initialization.
+`Delete [p, pointee]` (aux 1 for `delete[]`) frees the allocation; a null
+`p` is a no-op.
+`is_std_allocator_call` (`compile/new_delete.rs`) is the hook that will
+recognize the calls below; it returns false until class templates exist,
+and a call that reaches it traps with `kiln: std::allocator in constant
+evaluation lands with the templates wave`. `std::allocator<T>::allocate(n)`
 and `deallocate(p, n)` and the `__builtin_operator_new`/
 `__builtin_operator_delete` calls libc++ makes inside them lower to the same
-two ops with `array: true` and `ty = T` (clang's rule: the allocation is an
+two ops with aux `ARRAY` and `ty = T` (clang's rule: the allocation is an
 array of `n` `T`; `__builtin_operator_new` anywhere else is not a constant
 expression). That recognition needs class templates and is part of the M3
 Oven package; WP-061 covers `new`/`delete` expressions on the types the Oven
 supports in M2 (scalars, arrays, aggregates without constructors).
 
-**Checks**, with clang 19's wording (`DiagnosticASTKinds.td`; the
-compile-fail tests compare against the oracle). *The quoted wording below
-is a placeholder until WP-061b part 2 verifies each note against
-clang 19; part 1 only defines the faults (`MemFault::{NotHeap,
-DoubleDelete, Subobject, DeleteMismatch}`, `Dead(Origin::Heap(e))`).*
-- `new` of a negative or too-large array bound, or one that would exceed the
-  memory limit: not constant, note at the `new`.
-- Access through a pointer to a deleted allocation: "read of (…) heap
-  allocated object that has been deleted", with "heap allocation performed
-  here" at the `new`.
-- `delete` of null: no-op. `delete` of a pointer that is not to a heap
-  allocation, to a subobject rather than the complete object, already
-  deleted (double delete), or with the wrong form (`delete[]` of a `new`,
-  `delete` of a `new[]`, `deallocate` of a `new`): each its own clang note.
-- A result that still points into the heap, or an allocation still live at
-  the end of the evaluation: not constant, "allocation performed here was
-  not deallocated" ([expr.const]/5.20).
+*AST shapes the lowering consumes* (WP-061a; spec/ast.md §5.7).
+- `CXXNewExpr` (`ty` = `T*`), `new_extra(e)`:
+  - `allocated_ty` is `ty` for `New` (for an array new, the element
+    type: `int[3]` for `new int[n][3]`, so `New`'s `ty` is the element
+    type and `count` the first bound);
+  - `array_size` (`ARRAY_FORM`) is the `count` operand, already
+    converted to `size_t` (`IntegralCast`); a negative signed bound shows
+    as a huge unsigned value, so the "negative array bound" note needs the
+    operand under the cast;
+  - `init` is, by `new_init_style(e)`: `None` with no initializer
+    (default-initialization: the storage stays uninitialized, reads are
+    "read of uninitialized object"); `Parens` with
+    `ImplicitValueInitExpr` (`()`, zero) or the converted expression
+    (`(x)`); `Braces` with an `InitListExpr` of type `T` (scalar `{x}`,
+    an aggregate) or `T[k]` with `array_filler` for the elements beyond
+    the explicit ones (array new; `k` is the number of explicit
+    initializers, or the constant bound). Each is an ordinary store
+    sequence through the new pointer, element by element for arrays;
+  - `placement` holds the placement arguments. The only constant
+    placement is a single `std::nothrow_t` argument (the non-throwing
+    form). The allocation function must be a replaceable global one
+    (clang's `isReplaceableGlobalAllocationFunction`, mirrored by
+    `is_replaceable_global_alloc`); a user declaration that *replaces*
+    one is still replaceable and the `new` is constant, because constant
+    evaluation never calls it (corrected: the earlier text said a
+    replaced `operator_new` is not constant; clang 19 accepts it). A
+    non-replaceable one is not constant, with "call to placement
+    'operator new'" (or "call to class-specific 'operator new'"). Any
+    other placement form, including `std::align_val_t`, is "this
+    placement new expression is not yet supported in constant
+    expressions". P2747 (`constexpr` placement new, C++26) is not
+    implemented by clang 19, so the reserved `new (p) T` is not constant
+    either (corrected: the earlier text planned it); it comes with the
+    oracle that implements it;
+  - `PASS_ALIGN` and `operator_delete` are codegen facts and do not
+    affect evaluation.
+- `CXXDeleteExpr` (`ty` = `void`): `delete_operand(e)` is the pointer
+  prvalue; `ARRAY_FORM` selects `Delete { array: true }` (also set for a
+  `delete` of a pointer to an array, which clang treats as `delete[]`;
+  `ARRAY_AS_WRITTEN` says what was written); `operator_delete(e)` must be
+  a replaceable global deallocation function for the delete to be
+  constant ([expr.const]); `delete_passes(e)` (size, alignment) is
+  a codegen fact.
+
+**Checks**, with clang 19's wording, each verified against the oracle
+(WP-061b part 2; `tests/conformance/expr.new/constexpr-*.cpp`,
+`tests/conformance/expr.delete/constexpr-*.cpp` and
+`crates/kiln_oven/tests/new_delete.rs`). Pointers print as clang prints
+them: `&x` for a variable, `&{*new T#n}` for allocation `n`, then
+`[i]` / `.member` for subobjects.
+
+| Fault | Note (location) | Extra note |
+|---|---|---|
+| Leak at the end of an evaluation ([expr.const]/5.20) | "allocation performed here was not deallocated" (at the lowest-numbered live `new`), plus " (along with N other memory leak(s))" | — |
+| Result points into the heap | "pointer to heap-allocated object is not a constant expression" / "pointer to subobject of heap-allocated object ..." (at the variable for an initializer, as clang's `CheckConstantExpression`) | "heap allocation performed here" (the `new`) |
+| Access after `delete` | "read of heap allocated object that has been deleted" / "assignment to ..." (the access kind as for every access note) | — (corrected: clang adds no allocation note) |
+| `delete` of a non-heap pointer | "delete of pointer '&x' that does not point to a heap-allocated object" | "declared here" (the variable) / "temporary created here" |
+| Double delete | "delete of pointer that has already been deleted" | — |
+| `delete` of a subobject | "delete of pointer to subobject '&{*new S[2]#0}[1]' " (clang's trailing space) | — |
+| `delete` past the end | "delete of pointer '&{*new int[3]#0}[3]' that does not point to complete object" | — |
+| Wrong form | "non-array delete used to delete pointer to array object of type 'int[3]'" / "array delete used to delete pointer to non-array object of type 'int'" | "heap allocation performed here" |
+| Array bound ([expr.new]/8) | "cannot allocate array; evaluated array bound N is negative" / "is too large" / "exceeds the limit (L); use '-fconstexpr-steps' to increase this limit" / "is too small to hold K explicitly initialized elements" (at the bound expression) | — |
+| Non-replaceable allocation function | "call to placement 'operator new'" / "call to class-specific 'operator new'" (the `new`; `delete` likewise with 'operator delete') | — |
+| Other placement forms | "this placement new expression is not yet supported in constant expressions" | — |
+| Default-initialized scalar read | "read of uninitialized object is not allowed in a constant expression" | — |
+
+`delete` of null (either form) is a no-op. A leak is reported as
+`NotConstant`, like every other note here (clang reports it through a
+CCEDiag; the observable result, an error on the evaluation, is the
+same). The leak check runs at the end of every evaluation context,
+outermost and nested.
 
 **Churn benchmarks (written first, gated).** `bench/oven/churn-*.cpp` and
 the same programs as kiln-specific tests under `tests/conformance/expr.new/`
@@ -629,11 +702,37 @@ bullet reachable in M2 (5.2, 5.3, 5.4, 5.7, 5.8, 5.9, 5.10, 5.11, 5.14,
 
 Implemented (M3, WP-061b part 1): the heap space with its size-class
 allocator and the `peak_arena`/`frozen_bytes` counters ("Transient
-allocation"; no operation allocates on it yet); re-entrant nested
-evaluation through `ensure_body` and `EvalKind::Constraint` ("Nested
-evaluation"); content-interned frozen values (R-OVEN-2).
+allocation"); re-entrant nested evaluation through `ensure_body` and
+`EvalKind::Constraint` ("Nested evaluation"); content-interned frozen
+values (R-OVEN-2).
+
+Implemented (M3, WP-061b part 2): `new`/`delete` of scalars, arrays
+(runtime bounds, multidimensional) and aggregates with trivial default
+construction and destruction, with every initializer form (none, `()`,
+`(x)`, `{...}` with an array filler, a string literal for `char[]`) and
+the nothrow form; the clang-worded checks and the leak check above;
+`allocs` counting `new`; memoization skipping calls that allocate or free;
+the five churn benchmarks, all within their gates (measured: list
+`allocs` 100000, `peak_bytes`/`peak_arena` 1600/1600; vector 1088,
+393216/524288; string 336 allocations, 118048/257368; tree 65520,
+98280/98280; mixed 5014 allocations, 5064/5416).
 
 Remaining (each traps with a `kiln:` note today):
+- `new`/`delete` of a class with a non-trivial default constructor or
+  destructor, or initialized by a `CXXConstructExpr`: "kiln: constant
+  evaluation of constructors and destructors in new/delete lands with
+  WP-076".
+- `std::allocator<T>::allocate`/`deallocate` and
+  `__builtin_operator_new`/`__builtin_operator_delete`: need class
+  templates; the `is_std_allocator_call` hook is in place and returns
+  false ("kiln: std::allocator in constant evaluation lands with the
+  templates wave").
+- `delete` through `void*`, and P2747 placement new (see above).
+- Front-end gaps that keep some `new` forms from reaching the Oven (not
+  Oven work): default- or paren-initialized class `new` (`new S[2]`,
+  `new U`) is rejected by sema; `delete[] (expr)` is parsed as a lambda;
+  class-specific `operator new`, special members, binding a reference to
+  a temporary and `new char[n]{"hi"}` are not supported yet.
 - Binding a reference to a temporary (a prvalue). Sema rejects these
   before evaluation in M2 anyway.
 - `MaterializeTemporaryExpr`: kiln_sema never builds one in M2, and the
@@ -652,6 +751,10 @@ Remaining (each traps with a `kiln:` note today):
 - `limits.rs`: step and depth counts equal to clang's, limit notes, the
   memory budget, memo transparency and purity, the report golden, and the
   memory-reset test (flat footprint over 10k evaluations).
+- `new_delete.rs`: `new`/`delete` round trips, the leak, heap-result,
+  delete and bound notes, the `allocs`/peak counters, and memo purity
+  (an allocating call is evaluated every time: two leaking calls report
+  two leaks with the cache on).
 - `nested.rs`: nested evaluation from `ensure_body` (separate records with
   exclusive costs, shared step budget, depth from the starting call, a
   function whose body is being made available, no memoization through it)
@@ -663,7 +766,10 @@ Remaining (each traps with a `kiln:` note today):
   directly (test-only; replaced by the real front end as it lands).
 Every negative golden was produced by kiln and compared to clang 19's
 output for the same source; positives are all accepted by clang 19.
-Through the driver: `tests/conformance/expr.const/` ("Integration") and
+Through the driver: `tests/conformance/expr.const/` ("Integration"),
+`tests/conformance/expr.new/` and `expr.delete/` (`constexpr-*.cpp`
+faults with clang's notes; `churn-*.cpp` and `constexpr-counters.cpp`
+with `oven:` gates) and
 `bench/oven/` (`cargo xtask bench --filter oven`, with vs-clang ratios in
 docs/status/perf.md). The `*-nohdr` entries are header-free twins of the
 libc++-based ones, which kiln cannot compile until `#include` works.

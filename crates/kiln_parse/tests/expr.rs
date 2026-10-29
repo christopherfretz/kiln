@@ -227,6 +227,69 @@ fn expr_unary_noexcept() {
     p.assert_diag("expected '(' after 'noexcept'");
 }
 
+/// [stmt.ambig]: an ambiguous statement is a declaration when it can be;
+/// a trailing comma-expression makes it an expression.
+#[test]
+fn stmt_ambig() {
+    let p = parse("typedef int T; int x; void g() { T(a); T(*b)[2]; (void)T(x); }");
+    p.assert_clean();
+    p.assert_dump("VarDecl a 'T':'int'");
+    p.assert_dump("VarDecl b 'T (*)[2]'");
+    p.assert_dump("CXXFunctionalCastExpr");
+    let p = parse("typedef int T; int y; void g() { T(y), (void)0; }");
+    p.assert_clean();
+    p.assert_dump("BinaryOperator 'void' ','");
+}
+
+/// [dcl.ambig.res]: `sizeof(T(1))` is an expression, `sizeof(T())` a
+/// type-id (of function type, which `sizeof` rejects).
+#[test]
+fn dcl_ambig_res() {
+    let p = parse("typedef int T; unsigned long a = sizeof(T(1));");
+    p.assert_clean();
+    p.assert_dump("UnaryExprOrTypeTraitExpr");
+    let p = parse("typedef int T; unsigned long a = sizeof(T());");
+    p.assert_diag("1:34 error: invalid application of 'sizeof' to a function type");
+    let p = parse("void f() { int a(); }");
+    p.assert_diag("warning: empty parentheses interpreted as a function declaration");
+}
+
+/// [expr.type.conv]: a type name must be followed by `(` or `{`.
+#[test]
+fn expr_type_conv_errors() {
+    let p = parse("int d = int;");
+    p.assert_diag("1:12 error: expected '(' for function-style cast or type construction");
+    let p = parse("typedef int T; int e = T + 1;");
+    p.assert_diag("1:24 error: unexpected type name 'T': expected expression");
+}
+
+/// GNU extensions: statement expressions, `__builtin_offsetof` and
+/// scalar compound literals.
+#[test]
+fn gnu_extensions() {
+    let p = parse("int f() { return ({ int a = 1; a + 1; }); }");
+    p.assert_clean();
+    p.assert_dump("StmtExpr");
+    let p = parse("struct S { int a, b; }; unsigned long o = __builtin_offsetof(S, b);");
+    p.assert_clean();
+    p.assert_dump("OffsetOfExpr");
+    let p = parse("int f() { return (const int){3} + 1; }");
+    p.assert_clean();
+    p.assert_dump("CompoundLiteralExpr");
+    let p = parse("void f() { (void)(int){1, 2}; }");
+    p.assert_diag("error: function-style cast to a builtin type can only take one argument");
+}
+
+/// [expr.throw] and [expr.typeid] parse as unary-like expressions.
+#[test]
+fn throw_and_typeid() {
+    let p = parse("void f(int x) { if (x) throw x + 1; }");
+    p.assert_clean();
+    p.assert_dump("CXXThrowExpr");
+    let p = parse("void f() { throw; }");
+    p.assert_clean();
+}
+
 /// `__builtin_is_constant_evaluated` is declared on first use (clang
 /// `LazilyCreateBuiltin`); its name must be called directly.
 #[test]

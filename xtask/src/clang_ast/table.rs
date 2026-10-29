@@ -97,6 +97,13 @@ pub const TABLE: &[(&str, Disposition)] = &[
     ("ArrayInitLoopExpr", Keep),
     ("ArrayInitIndexExpr", Keep),
     ("OpaqueValueExpr", Keep),
+    // Expression forms (WP-064).
+    ("CXXScalarValueInitExpr", Keep),
+    ("CXXThrowExpr", Keep),
+    ("StmtExpr", Keep),
+    ("CompoundLiteralExpr", Keep),
+    ("BinaryConditionalOperator", Keep),
+    ("OffsetOfExpr", Keep),
     // Statements (§3).
     ("CompoundStmt", Keep),
     ("DeclStmt", Keep),
@@ -162,11 +169,9 @@ pub const TABLE: &[(&str, Disposition)] = &[
     // Expressions kiln does not dump in M2.
     ("BuiltinBitCastExpr", Unsupported(CXX_CAST)),
     ("CXXOperatorCallExpr", Unsupported("overloaded operator calls are not in the dump yet")),
-    ("CXXNewExpr", Unsupported(NOT_M2)),
-    ("CXXDeleteExpr", Unsupported(NOT_M2)),
-    ("CXXThrowExpr", Unsupported(NOT_M2)),
+    ("CXXNewExpr", Keep),
+    ("CXXDeleteExpr", Keep),
     ("CXXNoexceptExpr", Keep),
-    ("CXXScalarValueInitExpr", Unsupported(NOT_M2)),
     ("CXXStdInitializerListExpr", Unsupported(NOT_M2)),
     ("CXXRewrittenBinaryOperator", Unsupported(NOT_M2)),
     ("CXXFoldExpr", Unsupported(TEMPLATES)),
@@ -184,24 +189,20 @@ pub const TABLE: &[(&str, Disposition)] = &[
     ("TypeTraitExpr", Unsupported(NOT_M2)),
     ("ArrayTypeTraitExpr", Unsupported(NOT_M2)),
     ("ExpressionTraitExpr", Unsupported(NOT_M2)),
-    ("StmtExpr", Unsupported(NOT_M2)),
     ("ChooseExpr", Unsupported(NOT_M2)),
     ("GNUNullExpr", Unsupported(NOT_M2)),
     ("VAArgExpr", Unsupported(NOT_M2)),
     ("PredefinedExpr", Unsupported(NOT_M2)),
     ("UserDefinedLiteral", Unsupported(NOT_M2)),
-    ("CompoundLiteralExpr", Unsupported(NOT_M2)),
     ("DesignatedInitExpr", Unsupported(NOT_M2)),
     ("DesignatedInitUpdateExpr", Unsupported(NOT_M2)),
     ("NoInitExpr", Unsupported(NOT_M2)),
-    ("BinaryConditionalOperator", Unsupported(NOT_M2)),
     ("ImaginaryLiteral", Unsupported(NOT_M2)),
     ("FixedPointLiteral", Unsupported(NOT_M2)),
     ("AtomicExpr", Unsupported(NOT_M2)),
     ("ParenListExpr", Unsupported(NOT_M2)),
     ("SourceLocExpr", Unsupported(NOT_M2)),
     ("EmbedExpr", Unsupported(NOT_M2)),
-    ("OffsetOfExpr", Unsupported(NOT_M2)),
     ("AddrLabelExpr", Unsupported(NOT_M2)),
     ("CoawaitExpr", Unsupported(NOT_M2)),
     ("CoyieldExpr", Unsupported(NOT_M2)),
@@ -240,7 +241,11 @@ const EXPR_KEYS: &[&str] = &["type", "valueCategory"];
 /// The node-specific JSON keys the printer of `kind` reads (or knowingly
 /// ignores). Any other key is an error: it carries something the kiln line
 /// would silently lose. `None` for kinds without a printer.
-#[allow(clippy::match_same_arms, reason = "one arm per node kind, in spec/ast-dump.md §3 order")]
+#[allow(
+    clippy::match_same_arms,
+    clippy::too_many_lines,
+    reason = "a table: one arm per node kind, in spec/ast-dump.md §3 order"
+)]
 fn specific_keys(kind: &str) -> Option<&'static [&'static str]> {
     Some(match kind {
         "TranslationUnitDecl" => &[],
@@ -279,13 +284,25 @@ fn specific_keys(kind: &str) -> Option<&'static [&'static str]> {
             "variadic",
         ],
         "CXXCtorInitializer" => &["anyInit", "baseInit", "delegatingInit"],
-        // `init` (always `c`): the default argument is the child.
+        // `init` (always `c`, printed `cinit`): the default argument is the
+        // child.
         "ParmVarDecl" => &["type", "init"],
         "VarDecl" => &["type", "storageClass", "nrvo", "inline", "constexpr", "init"],
         "StaticAssertDecl" => &[],
         "IntegerLiteral" | "FloatingLiteral" | "CharacterLiteral" | "StringLiteral"
         | "CXXBoolLiteralExpr" => &["value"],
         "CXXNullPtrLiteralExpr" | "CXXNoexceptExpr" => &[],
+        // `isPlacement` and `initStyle` are implied by the children.
+        "CXXNewExpr" => &[
+            "isGlobal",
+            "isArray",
+            "isPlacement",
+            "initStyle",
+            "operatorNewDecl",
+            "operatorDeleteDecl",
+        ],
+        // `isArrayAsWritten` is not printed (clang's text dump has none).
+        "CXXDeleteExpr" => &["isGlobal", "isArray", "isArrayAsWritten", "operatorDeleteDecl"],
         "DeclRefExpr" => &["referencedDecl", "foundReferencedDecl", "nonOdrUseReason"],
         "MemberExpr" => &["name", "isArrow", "referencedMemberDecl"],
         // `conversionFunc` is the child's callee (not printed by clang).
@@ -322,7 +339,13 @@ fn specific_keys(kind: &str) -> Option<&'static [&'static str]> {
         | "ArrayInitIndexExpr"
         | "OpaqueValueExpr"
         | "OverrideAttr"
-        | "FinalAttr" => &[],
+        | "FinalAttr"
+        | "CXXScalarValueInitExpr"
+        | "CXXThrowExpr"
+        | "StmtExpr"
+        | "CompoundLiteralExpr"
+        | "BinaryConditionalOperator"
+        | "OffsetOfExpr" => &[],
         "CXXThisExpr" => &["implicit"],
         "CXXDefaultInitExpr" => &["hasRewrittenInit"],
         // `temp` and `dtor` (the temporary's destructor) are not printed.
@@ -330,7 +353,9 @@ fn specific_keys(kind: &str) -> Option<&'static [&'static str]> {
         // The storage duration follows from the extending declaration.
         "MaterializeTemporaryExpr" => &["extendingDecl", "storageDuration", "boundToLValueRef"],
         "ExprWithCleanups" => &["cleanupsHaveSideEffects"],
-        "CXXTypeidExpr" => &["typeArg"],
+        // `adjustedTypeArg` (the cv-unqualified type operand) is not
+        // printed by clang's text dump either.
+        "CXXTypeidExpr" => &["typeArg", "adjustedTypeArg"],
         "CXXParenListInitExpr" => &["array_filler"],
         "IfStmt" => {
             &["hasInit", "hasVar", "hasElse", "isConstexpr", "isConsteval", "constevalIsNegated"]
@@ -441,9 +466,17 @@ pub const M2_KINDS: &[&str] = &[
     "CallExpr",
     "UnaryExprOrTypeTraitExpr",
     "CXXNoexceptExpr",
+    "CXXNewExpr",
+    "CXXDeleteExpr",
     "InitListExpr",
     "ImplicitValueInitExpr",
     "ConstantExpr",
+    "CXXScalarValueInitExpr",
+    "CXXThrowExpr",
+    "StmtExpr",
+    "CompoundLiteralExpr",
+    "BinaryConditionalOperator",
+    "OffsetOfExpr",
     "CompoundStmt",
     "DeclStmt",
     "NullStmt",

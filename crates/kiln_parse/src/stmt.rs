@@ -4,11 +4,10 @@ use kiln_ast::decl::InitStyle;
 use kiln_ast::stmt::IfKind;
 use kiln_ast::{DeclId, ExprId, StmtId};
 use kiln_diag::DiagId;
-use kiln_lex::{Punct, TokKind};
-use kiln_sema::{Declarator, DeclaratorContext, NameClass, ScopeKind};
+use kiln_lex::Punct;
+use kiln_sema::{Declarator, DeclaratorContext, ScopeKind};
 use kiln_source::Loc;
 
-use crate::decl::is_decl_specifier_kw;
 use crate::keywords::Kw;
 use crate::parser::Parser;
 
@@ -21,12 +20,19 @@ impl Parser<'_, '_> {
     /// function's scope (`new_scope` false). Returns the statement and the
     /// location of the `}`.
     pub(crate) fn parse_compound(&mut self, new_scope: bool) -> (StmtId, Loc) {
+        self.parse_compound_in(new_scope, false)
+    }
+
+    /// A compound statement; `stmt_expr`: it is a statement expression's
+    /// body, whose statements are parsed in the `InStmtExpr` context.
+    pub(crate) fn parse_compound_in(&mut self, new_scope: bool, stmt_expr: bool) -> (StmtId, Loc) {
         let lbrace = self.bump().span.lo;
         if new_scope {
             self.s.push_scope(ScopeKind::Block);
         }
         let mut stmts = Vec::new();
         while !self.at(Punct::RBrace) && !self.at_eof() {
+            self.in_stmt_expr = stmt_expr;
             if let Some(s) = self.parse_statement() {
                 stmts.push(s);
             }
@@ -57,17 +63,19 @@ impl Parser<'_, '_> {
 
     /// A labeled statement's sub-statement: a label at the end of a block
     /// labels a null statement (C++23 [stmt.label]).
-    fn parse_labeled_sub(&mut self) -> StmtId {
+    fn parse_labeled_sub(&mut self, in_stmt_expr: bool) -> StmtId {
         let loc = self.loc();
         if self.at(Punct::RBrace) {
             return self.s.act_on_null_stmt(loc);
         }
+        self.in_stmt_expr = in_stmt_expr;
         self.parse_statement().unwrap_or_else(|| self.s.act_on_null_stmt(loc))
     }
 
     /// statement ([stmt.pre]). `None` if the statement was dropped after a
     /// syntax error.
     pub fn parse_statement(&mut self) -> Option<StmtId> {
+        let in_stmt_expr = std::mem::take(&mut self.in_stmt_expr);
         if self.at_cxx11_attr() {
             let mut attrs = Vec::new();
             self.parse_attributes(&mut attrs);
@@ -93,7 +101,7 @@ impl Parser<'_, '_> {
                     self.bump();
                     self.bump();
                     self.s.act_on_default_label(loc);
-                    let sub = self.parse_labeled_sub();
+                    let sub = self.parse_labeled_sub(false);
                     return Some(self.s.act_on_default(sub, loc));
                 }
                 Kw::Break => {
@@ -151,17 +159,17 @@ impl Parser<'_, '_> {
             self.bump();
             self.skip_attributes();
             let l = self.s.act_on_label(name, loc);
-            let sub = self.parse_labeled_sub();
+            let sub = self.parse_labeled_sub(in_stmt_expr);
             return Some(self.s.act_on_label_stmt(l, sub, loc));
         }
-        if self.is_declaration_statement() {
+        if self.is_cxx_declaration_statement(false) {
             let decls = self.parse_simple_declaration(DeclaratorContext::Block, false);
             if decls.is_empty() {
                 return None;
             }
             return Some(self.s.act_on_decl_stmt(&decls, loc));
         }
-        self.parse_expression_statement()
+        self.parse_expression_statement(in_stmt_expr)
     }
 
     /// `goto identifier ;` ([stmt.goto]).
@@ -190,19 +198,35 @@ impl Parser<'_, '_> {
     }
 
     /// expression-statement ([stmt.expr]).
-    fn parse_expression_statement(&mut self) -> Option<StmtId> {
+    /// `in_stmt_expr`: directly in a statement expression, where the
+    /// statement before the closing `})` (null statements aside) yields
+    /// the statement expression's value (clang's `handleExprStmt`).
+    fn parse_expression_statement(&mut self, in_stmt_expr: bool) -> Option<StmtId> {
         let Some(e) = self.parse_expression() else {
             self.skip_until(&[Punct::RBrace], true, false);
             self.eat(Punct::Semi);
             return None;
         };
-        let s = self.s.act_on_expr_stmt(e);
+        let s = if in_stmt_expr && self.ends_stmt_expr() {
+            self.s.act_on_stmt_expr_result(e)
+        } else {
+            self.s.act_on_expr_stmt(e)
+        };
         if self.eat(Punct::Semi).is_none() {
             self.s.error(DiagId::parse_expected_semi_after_expr, self.expected_loc());
             self.skip_until(&[Punct::RBrace], true, false);
             self.eat(Punct::Semi);
         }
         Some(s)
+    }
+
+    /// Whether the tokens from here are `;`s followed by `})`.
+    fn ends_stmt_expr(&self) -> bool {
+        let mut n = 0;
+        while self.peek_is(n, Punct::Semi) {
+            n += 1;
+        }
+        self.peek_is(n, Punct::RBrace) && self.peek_is(n + 1, Punct::RParen)
     }
 
     /// Expects the `;` ending a `what` statement.
@@ -213,42 +237,6 @@ impl Parser<'_, '_> {
             self.emit(d);
             self.skip_until(&[Punct::RBrace], true, false);
             self.eat(Punct::Semi);
-        }
-    }
-
-    /// Whether a declaration-statement starts here ([stmt.ambig]: a
-    /// statement that can be a declaration is one). TODO(M3): tentative
-    /// parsing for `T(x);` and friends.
-    fn is_declaration_statement(&self) -> bool {
-        if let Some(k) = self.kw() {
-            return is_decl_specifier_kw(k);
-        }
-        if self.at_cxx11_attr() {
-            return true;
-        }
-        if self.ident().is_none() && !self.at(Punct::ColonColon) {
-            return false;
-        }
-        match self.scan_name(self.pos()) {
-            Some((end, NameClass::Type(..), _)) => {
-                let next = self.tok_at(end);
-                if self.ident_of(next).is_some() {
-                    return true;
-                }
-                match Self::punct_of(next) {
-                    Some(Punct::Star | Punct::Amp | Punct::AmpAmp | Punct::Semi) => true,
-                    Some(Punct::LParen) => {
-                        self.tok_at(end + 1).kind == TokKind::Punct(Punct::Star)
-                            || self.tok_at(end + 1).kind == TokKind::Punct(Punct::Amp)
-                    }
-                    _ => self.kw_of(next).is_some_and(is_decl_specifier_kw),
-                }
-            }
-            Some((end, NameClass::Undeclared, _)) => {
-                let next = self.tok_at(end);
-                self.ident_of(next).is_some() && self.kw_of(next).is_none()
-            }
-            _ => false,
         }
     }
 
@@ -282,7 +270,7 @@ impl Parser<'_, '_> {
     /// condition variable (if any) and the condition expression -- for a
     /// declaration, a reference to the variable -- not yet converted.
     fn parse_condition(&mut self) -> Option<Cond> {
-        if !self.is_declaration_statement() {
+        if !self.is_cxx_condition_declaration() {
             return self.parse_expression().map(|e| (None, e));
         }
         let ctx = DeclaratorContext::Condition;
@@ -292,6 +280,7 @@ impl Parser<'_, '_> {
             return None;
         }
         let mut d = Declarator::new(ctx, self.loc());
+        d.direct_init = true;
         self.parse_declarator(&mut d);
         let base = self.s.type_from_declspec_at(&ds, d.name_loc());
         if self.at_attr() {
@@ -478,7 +467,7 @@ impl Parser<'_, '_> {
                 .arg("':'");
             self.emit(d);
         }
-        let sub = self.parse_labeled_sub();
+        let sub = self.parse_labeled_sub(false);
         Some(self.s.act_on_case(v, sub, loc))
     }
 
@@ -572,12 +561,12 @@ impl Parser<'_, '_> {
         let init = if self.at(Punct::Semi) {
             self.bump();
             None
-        } else if self.is_declaration_statement() {
+        } else if self.is_cxx_declaration_statement(true) {
             let l = self.loc();
             let decls = self.parse_simple_declaration(DeclaratorContext::ForInit, false);
             Some(self.s.act_on_decl_stmt(&decls, l))
         } else {
-            self.parse_expression_statement()
+            self.parse_expression_statement(false)
         };
         let (mut var, mut cond) = (None, None);
         if !self.at(Punct::Semi) {
@@ -621,9 +610,13 @@ impl Parser<'_, '_> {
         let loc = self.bump().span.lo;
         let mut value = None;
         if self.at(Punct::LBrace) {
-            self.unsupported("returning a braced-init-list", self.loc());
-            self.skip_to_semi();
-            return None;
+            let Ok(l) = self.parse_init_list() else {
+                self.skip_to_semi();
+                return None;
+            };
+            let s = self.s.act_on_return_list(&l, loc);
+            self.expect_semi_after_stmt("return");
+            return Some(s);
         }
         if !self.at(Punct::Semi) {
             let Some(e) = self.parse_expression() else {

@@ -5,14 +5,14 @@
 
 use std::cmp::Ordering;
 
-use kiln_ast::DeclId;
 use kiln_ast::consts::FloatKind;
+use kiln_ast::{DeclId, ExprId};
 use kiln_source::Loc;
 
 use crate::arith::{self, FloatErr, IntErr, canon};
 use crate::compile::{FState, GState, float_of};
 use crate::failure::{EvalFailure, FailKind};
-use crate::kbc::{Op, ak, cmp};
+use crate::kbc::{Op, ak, cmp, new_aux};
 use crate::mem::{Alloc, MemFault, Origin, Ptr, Sp, flags};
 use crate::memo::{MAX_ARGS, MemoKey, MemoVal};
 use crate::ty::{OTy, TyKind};
@@ -170,6 +170,28 @@ pub(crate) enum Fault {
     Steps(Loc),
     Depth,
     Memory,
+    /// An array `new` whose bound fails a check of [expr.new]/8 (`v` the
+    /// evaluated bound, `k` the explicitly initialized elements).
+    NewBound {
+        err: BoundErr,
+        v: u128,
+        signed: bool,
+        k: u64,
+    },
+}
+
+/// Why an array `new` bound is erroneous ([expr.new]/8).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum BoundErr {
+    Negative,
+    /// The allocation's size needs more address bits than the target has,
+    /// or the count exceeds 2^32 - 1 (clang's `CheckArraySize`).
+    TooLarge,
+    /// The count exceeds the step limit (clang's guard against evaluating
+    /// a huge array element by element).
+    Limit,
+    /// Fewer elements than explicit initializers.
+    TooSmall,
 }
 
 impl Fault {
@@ -629,6 +651,42 @@ impl Oven {
                     }
                     pc += 4;
                 }
+                Op::New => {
+                    let elem = OTy(arg!(1) as u32);
+                    let e = match self.origins[arg!(3)] {
+                        Origin::Heap(e, _) => e,
+                        _ => ExprId::new(0),
+                    };
+                    let origin = Origin::Heap(e, self.mem.heap_allocs as u32);
+                    let bound = if aux & new_aux::ARRAY != 0 {
+                        match self.new_bound(reg!(2), aux, elem, arg!(4) as u64) {
+                            Ok(n) => Some(n),
+                            Err(_) if aux & new_aux::NOTHROW != 0 => None,
+                            Err(f) => fail!(f),
+                        }
+                    } else {
+                        Some(u64::MAX)
+                    };
+                    let raw = match bound {
+                        None => 0,
+                        Some(n) => match self.new_alloc(elem, n, aux, origin) {
+                            Ok(p) => p,
+                            Err(f) => fail!(f),
+                        },
+                    };
+                    reg!(0) = u128::from(raw);
+                    pc += 6;
+                }
+                Op::Delete => {
+                    let raw = reg!(0) as u64;
+                    let pointee = OTy(arg!(1) as u32);
+                    if let Err(f) =
+                        self.mem.heap_free(raw, aux & 1 != 0, Some(pointee), &self.types)
+                    {
+                        fail!(Fault::Mem { f, ak: ak::READ, ty: pointee, p: raw });
+                    }
+                    pc += 3;
+                }
                 Op::ScopeEnter => {
                     reg!(0) = u128::from(self.mem.mark());
                     pc += 2;
@@ -839,6 +897,59 @@ impl Oven {
     pub(crate) fn active_calls(&self) -> u32 {
         let own = self.stack.len().saturating_sub(self.run.entry + 1) as u32;
         own + self.run.depth_base
+    }
+
+    // ---- transient allocation ---------------------------------------------
+
+    /// The element count of an array `new` with bound register value `v`,
+    /// checked in clang's order ([expr.new]/8): negative, too large for the
+    /// address space, beyond the step limit, smaller than the explicit
+    /// initializers.
+    fn new_bound(&self, v: u128, aux: u32, elem: OTy, k: u64) -> Result<u64, Fault> {
+        let signed = aux & new_aux::SIGNED != 0;
+        let bad = |err| Fault::NewBound { err, v, signed, k };
+        if signed && (v as i128) < 0 {
+            return Err(bad(BoundErr::Negative));
+        }
+        // clang's `ConstantArrayType::getMaxSizeBits`: 61 for a 64-bit
+        // `size_t`.
+        let es = u128::from(self.types.size(elem));
+        if v > u128::from(u32::MAX) || 128 - (v * es).leading_zeros() > 61 {
+            return Err(bad(BoundErr::TooLarge));
+        }
+        if v > u128::from(self.budget.steps) {
+            return Err(bad(BoundErr::Limit));
+        }
+        if v < u128::from(k) {
+            return Err(bad(BoundErr::TooSmall));
+        }
+        Ok(v as u64)
+    }
+
+    /// A heap allocation of `elem` (`n == u64::MAX`) or `elem[n]`,
+    /// zero-filled with [`new_aux::ZERO`].
+    fn new_alloc(&mut self, elem: OTy, n: u64, aux: u32, origin: Origin) -> Result<u64, Fault> {
+        let (ty, fl) = if n == u64::MAX {
+            (elem, 0)
+        } else {
+            (self.types.array_of(elem, n), flags::ARRAY_NEW)
+        };
+        let info = *self.types.info(ty);
+        let fl = fl | if info.has_union { flags::HAS_UNION } else { 0 };
+        let raw = self.mem.heap_alloc(ty, info.size, fl, origin).map_err(|_| Fault::Memory)?;
+        if aux & new_aux::ZERO != 0 && info.size > 0 {
+            let (st, abs, _) = self.mem.check(raw, info.size, true).map_err(|f| Fault::Mem {
+                f,
+                ak: ak::INIT,
+                ty,
+                p: raw,
+            })?;
+            self.mem.zero(st, abs, info.size);
+            if info.has_union {
+                self.zero_unions(raw, 0, ty);
+            }
+        }
+        Ok(raw)
     }
 
     // ---- pointers ---------------------------------------------------------

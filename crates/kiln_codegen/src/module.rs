@@ -583,6 +583,7 @@ impl<'a> Cg<'a> {
         }
         self.target_attrs(&mut fa);
         let fa = self.m.attr_set(&fa);
+        let (fa, ret) = self.alloc_fn_attrs(first, fa, ret);
         {
             let func = self.m.func_mut(f);
             func.attrs.func = fa;

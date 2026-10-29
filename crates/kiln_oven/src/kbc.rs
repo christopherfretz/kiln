@@ -133,6 +133,28 @@ ops! {
     GlobalAddr = 2,
     // [dst, p, target pointee type]
     VoidCast = 3,
+    // [dst, type, count, origin, explicit inits]: a transient allocation
+    // (spec/oven.md "Transient allocation"), uninitialized unless aux has
+    // `new_aux::ZERO`. With `new_aux::ARRAY`, `type` is the element type,
+    // `count` the bound register (its signedness in aux) and
+    // `explicit inits` the number of initializers (the bound of the
+    // initializer's array type): the bound is checked and the allocation
+    // is an array of `count` elements; `dst` points to its first.
+    New = 5,
+    // [p, static pointee type]; aux = 1 for `delete[]`
+    Delete = 2,
+}
+
+/// The aux of `New`.
+pub(crate) mod new_aux {
+    pub const ARRAY: u32 = 1;
+    /// A failed bound check yields a null pointer (`new (std::nothrow)`).
+    pub const NOTHROW: u32 = 2;
+    /// Zero-initialize the whole allocation.
+    pub const ZERO: u32 = 4;
+    /// The bound register holds a signed value (canonical, so a negative
+    /// bound is diagnosed as such).
+    pub const SIGNED: u32 = 8;
 }
 
 impl Op {

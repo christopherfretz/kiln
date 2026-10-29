@@ -20,13 +20,18 @@ pub mod constfold;
 pub mod conv;
 pub mod decl;
 pub mod declspec;
+mod deduce;
 pub mod except;
 pub mod expr;
+mod forms;
+mod gnu;
 pub mod init;
 pub mod literal;
 pub mod lookup;
 pub mod names;
+pub mod new_delete;
 mod oven_bridge;
+mod rtti;
 pub mod scope;
 pub mod stmt;
 pub mod target;
@@ -44,6 +49,7 @@ pub use declspec::{
     Chunk, DeclSpec, Declarator, DeclaratorContext, DefaultArg, ParamInfo, Sign, StorageSpec,
     TypeSpecKind, Width,
 };
+pub use gnu::{OffsetofComponent, StmtExprScope};
 pub use init::{Designator, InitItem, InitList, InitValue, Initializer};
 pub use kiln_oven::{Budget, EvalContext, EvalFailure, EvalKind, Oven};
 pub use scope::ScopeKind;
@@ -68,6 +74,11 @@ pub struct Sema<'a, 'sm> {
     /// The `#pragma pack` directives seen, in order (location and the
     /// spelling of the argument list).
     pub pragma_packs: Vec<(Loc, String)>,
+    /// C++ exceptions are enabled (`-f[no-]exceptions`; default on).
+    pub exceptions: bool,
+    /// Run-time type information is enabled (`-f[no-]rtti`; default on):
+    /// `typeid` is an error otherwise.
+    pub rtti: bool,
     /// The `#pragma pack` state (clang's `AlignPackStack`): the current
     /// maximum field alignment in bytes (0: none) and the pushed
     /// `(label, value)` entries. Applied to each class definition as it
@@ -97,6 +108,14 @@ pub struct Sema<'a, 'sm> {
     pub(crate) local_externs: Vec<(DeclId, kiln_source::symbol::Symbol, DeclId)>,
     /// The constant evaluator of the translation unit (spec/sema.md §8).
     pub(crate) oven: Oven,
+    /// The implicitly declared global allocation functions.
+    pub(crate) global_ops: new_delete::GlobalOps,
+    /// Braced-init-list call arguments awaiting their parameter types
+    /// (placeholders of [`Sema::act_on_braced_arg`]).
+    pub(crate) braced_args: Vec<(ExprId, InitList)>,
+    /// The names of the parameters declared so far in each enclosing
+    /// parameter-declaration-clause being parsed ([`Sema::act_on_start_prototype`]).
+    pub(crate) prototype_params: Vec<Vec<kiln_source::symbol::Symbol>>,
     /// Classes being defined, innermost last (spec/sema-class.md §8.3).
     pub(crate) classes: Vec<class::ClassBuild>,
     /// Which implicit special members each class has declared
@@ -161,6 +180,8 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             target,
             abi,
             pragma_packs: Vec::new(),
+            exceptions: true,
+            rtti: true,
             pack: (0, Vec::new()),
             scopes: vec![scope::Scope::new(ScopeKind::TranslationUnit, Some(tu))],
             ctx: tu,
@@ -172,6 +193,9 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             enums: Vec::new(),
             local_externs: Vec::new(),
             oven: Oven::new(Budget::default()),
+            global_ops: new_delete::GlobalOps::default(),
+            braced_args: Vec::new(),
+            prototype_params: Vec::new(),
             classes: Vec::new(),
             implicit_declared: kiln_source::fx::FxHashMap::default(),
             delayed_access: Vec::new(),

@@ -50,6 +50,10 @@ pub struct Parser<'a, 'sm> {
     pub(crate) lex_opts: LexOptions,
     pub(crate) lit_opts: LiteralOptions,
     pub(crate) std: Std,
+    /// The next statement parsed is directly in a statement expression's
+    /// compound statement (clang's `ParsedStmtContext::InStmtExpr`); taken
+    /// by `parse_statement`, passed on through labels.
+    pub(crate) in_stmt_expr: bool,
 }
 
 impl std::fmt::Debug for Parser<'_, '_> {
@@ -80,6 +84,7 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             lex_opts,
             lit_opts,
             std,
+            in_stmt_expr: false,
         };
         p.handle_events(0);
         p
@@ -266,6 +271,17 @@ impl<'a, 'sm> Parser<'a, 'sm> {
         let note = self.s.diag(DiagId::note_matching, open_loc).arg(quote(open));
         let d = self.s.diag(DiagId::parse_expected, at).arg(quote(close)).with_note(note);
         self.s.emit(d);
+        // Unless already at a closing bracket, skip to the closer and
+        // take it (clang's `diagnoseMissingClose`: `SkipUntil(close,
+        // StopAtSemi | StopBeforeMatch)`).
+        if !matches!(
+            Self::punct_of(self.tok()),
+            Some(Punct::RParen | Punct::RBrace | Punct::RSquare)
+        ) && self.skip_until(&[close], true, false)
+            && let Some(l) = self.eat(close)
+        {
+            return l;
+        }
         at
     }
 

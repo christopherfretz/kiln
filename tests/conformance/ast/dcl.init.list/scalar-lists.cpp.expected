@@ -1,0 +1,41 @@
+TranslationUnitDecl
+|-FunctionDecl used take 'int (int)'
+| `-ParmVarDecl 'int'
+|-FunctionDecl ret 'int ()'
+| `-CompoundStmt
+|   `-ReturnStmt
+|     `-InitListExpr 'int'
+|       `-IntegerLiteral 'int' 7
+|-FunctionDecl ret_empty 'int ()'
+| `-CompoundStmt
+|   `-ReturnStmt
+|     `-InitListExpr 'int'
+`-FunctionDecl g 'void (long)'
+  |-ParmVarDecl used x 'long'
+  `-CompoundStmt
+    |-DeclStmt
+    | `-VarDecl used a 'int' cinit
+    |   `-CallExpr 'int'
+    |     |-ImplicitCastExpr 'int (*)(int)' <FunctionToPointerDecay>
+    |     | `-DeclRefExpr 'int (int)' lvalue Function 'take' 'int (int)'
+    |     `-InitListExpr 'int'
+    |       `-IntegerLiteral 'int' 1
+    |-DeclStmt
+    | `-VarDecl used b 'int' listinit
+    |   `-InitListExpr 'int'
+    |-BinaryOperator 'int' lvalue '='
+    | |-DeclRefExpr 'int' lvalue Var 'b' 'int'
+    | `-InitListExpr 'int'
+    |   `-IntegerLiteral 'int' 2
+    |-CompoundAssignOperator 'int' lvalue '+=' ComputeLHSTy='int' ComputeResultTy='int'
+    | |-DeclRefExpr 'int' lvalue Var 'b' 'int'
+    | `-IntegerLiteral 'int' 0
+    |-DeclStmt
+    | `-VarDecl used c 'long' cinit
+    |   `-InitListExpr 'long'
+    |     `-ImplicitCastExpr 'long' <LValueToRValue>
+    |       `-DeclRefExpr 'long' lvalue ParmVar 'x' 'long'
+    |-CStyleCastExpr 'void' <ToVoid>
+    | `-DeclRefExpr 'int' lvalue Var 'a' 'int'
+    `-CStyleCastExpr 'void' <ToVoid>
+      `-DeclRefExpr 'long' lvalue Var 'c' 'long'

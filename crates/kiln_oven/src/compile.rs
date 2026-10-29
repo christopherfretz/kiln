@@ -24,6 +24,8 @@ use crate::mem::{Origin, fn_ptr};
 use crate::ty::{OTy, Scal, TyKind, eval_int};
 use crate::{Oven, SemaBridge};
 
+mod new_delete;
+
 /// `Func::entry` of a function not compiled yet.
 pub(crate) const UNCOMPILED: u32 = u32::MAX;
 
@@ -437,6 +439,10 @@ pub(crate) struct Compiler<'a> {
     mem_vars: FxHashSet<DeclId>,
     pending: Vec<Loc>,
     breakables: Vec<Breakable>,
+    /// The enclosing statement expressions: the start of the statement of
+    /// each being evaluated, and how many breakables were open outside it
+    /// (a `return`, or a `break`/`continue` leaving it, is unsupported).
+    stmt_exprs: Vec<(Loc, usize)>,
     /// Mark registers of the open scopes (`None`: allocates nothing).
     scopes: Vec<Option<u32>>,
     ret: RetKind,
@@ -447,11 +453,22 @@ pub(crate) struct Compiler<'a> {
     /// The operator location of the innermost read-modify-write being
     /// compiled (clang reports union active-member faults there).
     rmw_loc: Option<Loc>,
+    /// The evaluated common expressions of the enclosing GNU binary
+    /// conditionals, keyed by the expression (an `OpaqueValueExpr` names
+    /// its source).
+    opaque: FxHashMap<ExprId, Opaque>,
     /// The function being compiled is `std::is_constant_evaluated`.
     std_ice: bool,
     /// The code reads the evaluation context (`Op::IsConstEval`): the
     /// function is not memoized.
     uses_cc: bool,
+}
+
+/// The value an `OpaqueValueExpr` stands for.
+#[derive(Clone, Copy)]
+enum Opaque {
+    Rv(u32),
+    Lv(Place),
 }
 
 impl<'a> Compiler<'a> {
@@ -465,7 +482,9 @@ impl<'a> Compiler<'a> {
             mem_vars: FxHashSet::default(),
             pending: Vec::new(),
             rmw_loc: None,
+            opaque: FxHashMap::default(),
             breakables: Vec::new(),
+            stmt_exprs: Vec::new(),
             scopes: Vec::new(),
             ret: RetKind::Void,
             ret_ref: false,
@@ -537,6 +556,9 @@ impl<'a> Compiler<'a> {
                 | ExprKind::ConditionalOperator
                 | ExprKind::MaterializeTemporaryExpr => ExprId::new(n.a()),
                 ExprKind::CallExpr => ast.exprs.callee(e),
+                ExprKind::BinaryConditionalOperator => {
+                    ast.exprs.binary_conditional_operands(e, &ast.lists)[0]
+                }
                 ExprKind::ImplicitCastExpr | ExprKind::ConstantExpr => ast.exprs.operand(e),
                 ExprKind::MemberExpr => {
                     let base = ast.exprs.operand(e);
@@ -598,6 +620,13 @@ impl<'a> Compiler<'a> {
         self.trap_loc(loc, msg.to_owned());
     }
 
+    /// [expr.const]/10.22 (as clang 19, before P3068): evaluating a
+    /// throw-expression is not a core constant expression; the generic
+    /// note at the `throw`.
+    fn throw_invalid(&mut self, e: ExprId) {
+        self.trap(e, "subexpression not valid in a constant expression");
+    }
+
     fn unsupported(&mut self, e: ExprId) {
         let k = self.b.ast().exprs.get(e).kind();
         self.trap(e, &format!("kiln: constant evaluation of {k:?} is not supported yet"));
@@ -644,6 +673,10 @@ impl<'a> Compiler<'a> {
         self.emit_loc(Op::Alloc, u32::from(is_const), &[dst, ty.0, oi], loc);
     }
 }
+
+/// clang's `note_constexpr_stmt_expr_unsupported`.
+const STMT_EXPR_UNSUPPORTED: &str =
+    "this use of statement expressions is not supported in a constant expression";
 
 // ---- pre-scan: which locals need an address ----------------------------
 
@@ -728,6 +761,11 @@ impl Scan<'_> {
                 }
             }
             ExprKind::ParenExpr => self.expr(ast.exprs.operand(e), ok),
+            ExprKind::CXXDefaultArgExpr => {
+                if let Some(d) = default_arg_of(ast, e) {
+                    self.expr(d, false);
+                }
+            }
             k if k.is_cast() => {
                 let op = ast.exprs.operand(e);
                 match ast.exprs.cast_kind(e) {
@@ -767,7 +805,9 @@ impl Scan<'_> {
                 self.expr(ExprId::new(n.a()), ok);
                 self.expr(ast.exprs.compound_assign(e).rhs, false);
             }
-            ExprKind::UnaryExprOrTypeTraitExpr | ExprKind::CXXNoexceptExpr => {}
+            ExprKind::UnaryExprOrTypeTraitExpr
+            | ExprKind::CXXNoexceptExpr
+            | ExprKind::OffsetOfExpr => {}
             ExprKind::CallExpr => {
                 let ty = n.ty();
                 if matches!(
@@ -784,6 +824,7 @@ impl Scan<'_> {
                     self.expr(c, false);
                 }
             }
+            ExprKind::StmtExpr => self.stmt(ast.exprs.stmt_expr_body(e)),
             ExprKind::MaterializeTemporaryExpr | ExprKind::CompoundLiteralExpr => {
                 self.temps = true;
                 for c in ast.exprs.children(e, &ast.lists) {
@@ -931,6 +972,60 @@ impl Compiler<'_> {
         }
     }
 
+    /// A GNU statement expression (clang `VisitStmtExpr`): the statements
+    /// of its block in order, then its last statement, which must be an
+    /// expression statement, as the value (into `dst` when given). A
+    /// statement that leaves it by `return`, `break` or `continue` is not
+    /// supported, as in clang: the note is at that top-level statement.
+    fn stmt_expr(&mut self, e: ExprId, dst: Option<u32>) {
+        let ast = self.b.ast();
+        let body = ast.exprs.stmt_expr_body(e);
+        let children = ast.lists.get(ast.stmts.compound_body(body)).to_vec();
+        let Some((&last, init)) = children.split_last() else { return };
+        let last = StmtId::new(last);
+        let m = self.next;
+        let decls = self.block_decls(&children);
+        self.open_scope(&decls, false);
+        for &c in init {
+            let c = StmtId::new(c);
+            let at = self.stmt_begin(c);
+            self.stmt_exprs.push((at, self.breakables.len()));
+            self.stmt(c);
+            self.stmt_exprs.pop();
+        }
+        let ast = self.b.ast();
+        if ast.stmts.get(last).kind() == StmtKind::ExprStmt {
+            let x = ast.stmts.expr_stmt_expr(last);
+            self.step(last);
+            let temps = self.has_temps;
+            if temps {
+                self.open_scope(&[], true);
+            }
+            match dst {
+                Some(dst) => self.rv_into(x, dst),
+                None => self.effect(x),
+            }
+            if temps {
+                self.close_scope();
+            }
+        } else {
+            let at = self.stmt_begin(last);
+            self.trap_loc(at, STMT_EXPR_UNSUPPORTED.into());
+        }
+        self.close_scope();
+        self.next = m;
+    }
+
+    /// Where statement `s` begins.
+    fn stmt_begin(&self, s: StmtId) -> Loc {
+        let ast = self.b.ast();
+        if ast.stmts.get(s).kind() == StmtKind::ExprStmt {
+            self.begin(ast.stmts.expr_stmt_expr(s))
+        } else {
+            ast.stmts.get(s).loc()
+        }
+    }
+
     fn block_decls(&self, children: &[u32]) -> Vec<DeclId> {
         let ast = self.b.ast();
         let mut v = Vec::new();
@@ -1060,6 +1155,12 @@ impl Compiler<'_> {
                     self.trap_loc(n.loc(), "kiln: 'break' or 'continue' outside a loop".into());
                     return;
                 };
+                if let Some(&(at, outside)) = self.stmt_exprs.last()
+                    && idx < outside
+                {
+                    self.trap_loc(at, STMT_EXPR_UNSUPPORTED.into());
+                    return;
+                }
                 let depth =
                     if brk { self.breakables[idx].depth } else { self.breakables[idx].cont_depth };
                 self.exit_scopes(depth);
@@ -1072,6 +1173,10 @@ impl Compiler<'_> {
                 }
             }
             StmtKind::ReturnStmt => {
+                if let Some(&(at, _)) = self.stmt_exprs.last() {
+                    self.trap_loc(at, STMT_EXPR_UNSUPPORTED.into());
+                    return;
+                }
                 let v = ast.stmts.return_value(s);
                 match (self.ret, v) {
                     (RetKind::Sret(ty), Some(v)) => {
@@ -1626,6 +1731,15 @@ impl Compiler<'_> {
                 let op = self.ast().exprs.operand(e);
                 self.rv_inner(op, dst);
             }
+            ExprKind::CompoundLiteralExpr => {
+                let init = self.ast().exprs.compound_literal_init(e);
+                self.rv_inner(init, dst);
+            }
+            ExprKind::StmtExpr => self.stmt_expr(e, Some(dst)),
+            ExprKind::CXXDefaultArgExpr => match default_arg_of(self.ast(), e) {
+                Some(d) => self.rv_inner(d, dst),
+                None => self.unsupported(e),
+            },
             ExprKind::ConstantExpr => {
                 let ast = self.ast();
                 let v = ast
@@ -1655,6 +1769,11 @@ impl Compiler<'_> {
                 }
             }
             ExprKind::UnaryExprOrTypeTraitExpr => self.trait_expr(e, dst, ty),
+            ExprKind::OffsetOfExpr => {
+                let v = u128::from(self.ast().exprs.offsetof_value(e));
+                let (w, s) = int_of(self.kind(ty)).unwrap_or((64, false));
+                self.konst(dst, crate::arith::canon(v, w, s));
+            }
             ExprKind::UnaryOperator => self.unary(e, dst, ty),
             ExprKind::BinaryOperator => self.binary(e, dst, ty),
             ExprKind::CompoundAssignOperator => {
@@ -1671,6 +1790,30 @@ impl Compiler<'_> {
                 self.rv_into(f, dst);
                 self.patch_here(end);
             }
+            ExprKind::BinaryConditionalOperator => {
+                let [common, cond, t, f] = self.bind_common(e, Access::Read);
+                let c = self.rv(cond);
+                let j = self.jmp_if(c, false);
+                self.rv_into(t, dst);
+                let end = self.jmp();
+                self.patch_here(j);
+                self.rv_into(f, dst);
+                self.patch_here(end);
+                self.opaque.remove(&common);
+            }
+            ExprKind::OpaqueValueExpr if !n.value_category().is_glvalue() => {
+                match self.opaque_of(e) {
+                    Some(Opaque::Rv(r)) => {
+                        if r != dst {
+                            self.emit(Op::Mov, 0, &[dst, r]);
+                        }
+                    }
+                    Some(Opaque::Lv(p)) => self.load(p, ty, ak::READ, e, dst),
+                    None => self.unsupported(e),
+                }
+            }
+            ExprKind::CXXScalarValueInitExpr => self.konst(dst, 0),
+            ExprKind::CXXThrowExpr => self.throw_invalid(e),
             ExprKind::CallExpr if !n.value_category().is_glvalue() => {
                 let r = self.call(e, None);
                 if r != dst {
@@ -1684,6 +1827,9 @@ impl Compiler<'_> {
                     None => self.konst(dst, 0),
                 }
             }
+            // Transient allocation (spec/oven.md "Transient allocation").
+            ExprKind::CXXNewExpr => self.new_expr(e, dst),
+            ExprKind::CXXDeleteExpr => self.delete_expr(e),
             k if k.is_cast() => self.cast(e, dst, ty),
             _ if n.value_category().is_glvalue() => {
                 // A glvalue used as a value (an lvalue-to-rvalue conversion
@@ -2152,6 +2298,27 @@ impl Compiler<'_> {
     }
 
     /// A glvalue that must have an address.
+    /// Evaluates the common expression of a GNU binary conditional once
+    /// and binds it for the `OpaqueValueExpr`s naming it; returns the
+    /// operands.
+    fn bind_common(&mut self, e: ExprId, acc: Access) -> [ExprId; 4] {
+        let ast = self.ast();
+        let ops = ast.exprs.binary_conditional_operands(e, &ast.lists);
+        let common = ops[0];
+        let v = if self.node(common).value_category().is_glvalue() {
+            Opaque::Lv(self.lv(common, acc))
+        } else {
+            Opaque::Rv(self.rv(common))
+        };
+        self.opaque.insert(common, v);
+        ops
+    }
+
+    fn opaque_of(&self, e: ExprId) -> Option<Opaque> {
+        let src = self.ast().exprs.opaque_source(e)?;
+        self.opaque.get(&src).copied()
+    }
+
     fn lv_mem(&mut self, e: ExprId, acc: Access) -> u32 {
         match self.lv(e, acc) {
             Place::Mem(p) => p,
@@ -2168,6 +2335,10 @@ impl Compiler<'_> {
             ExprKind::ParenExpr => {
                 let op = self.ast().exprs.operand(e);
                 self.lv(op, acc)
+            }
+            ExprKind::CXXDefaultArgExpr if default_arg_of(self.ast(), e).is_some() => {
+                let d = default_arg_of(self.ast(), e).unwrap_or(e);
+                self.lv(d, acc)
             }
             ExprKind::DeclRefExpr => {
                 let ast = self.ast();
@@ -2300,6 +2471,28 @@ impl Compiler<'_> {
                 }
             }
             ExprKind::CompoundAssignOperator => self.compound_assign(e),
+            ExprKind::OpaqueValueExpr => match self.opaque_of(e) {
+                Some(Opaque::Lv(p)) => p,
+                _ => {
+                    self.unsupported(e);
+                    Place::Mem(self.reg())
+                }
+            },
+            ExprKind::BinaryConditionalOperator => {
+                let [common, cond, t, f] = self.bind_common(e, acc);
+                let c = self.rv(cond);
+                let r = self.reg();
+                let j = self.jmp_if(c, false);
+                let pt = self.lv_mem(t, acc);
+                self.emit(Op::Mov, 0, &[r, pt]);
+                let end = self.jmp();
+                self.patch_here(j);
+                let pf = self.lv_mem(f, acc);
+                self.emit(Op::Mov, 0, &[r, pf]);
+                self.patch_here(end);
+                self.opaque.remove(&common);
+                Place::Mem(r)
+            }
             ExprKind::ConditionalOperator => {
                 let c = self.rv(ExprId::new(n.a()));
                 let [t, f] = self.ast().exprs.cond_arms(e);
@@ -2331,6 +2524,10 @@ impl Compiler<'_> {
                 self.alloc(r, ty, Origin::Temp(e), false, e);
                 self.init(e, r, ty);
                 Place::Mem(r)
+            }
+            ExprKind::CXXThrowExpr => {
+                self.throw_invalid(e);
+                Place::Mem(self.reg())
             }
             _ => {
                 self.unsupported(e);
@@ -2496,6 +2693,10 @@ impl Compiler<'_> {
             ExprKind::ParenExpr | ExprKind::ConstantExpr => {
                 let op = self.ast().exprs.operand(e);
                 return self.init_inner(op, p, ty);
+            }
+            ExprKind::CXXDefaultArgExpr if default_arg_of(self.ast(), e).is_some() => {
+                let d = default_arg_of(self.ast(), e).unwrap_or(e);
+                return self.init_inner(d, p, ty);
             }
             ExprKind::ImplicitValueInitExpr => {
                 self.emit_at(Op::ZeroInit, 0, &[p, ty.0], e);
@@ -2712,9 +2913,19 @@ impl Compiler<'_> {
         let n = self.node(e);
         let ty = self.ety(e);
         match n.kind() {
+            ExprKind::CXXThrowExpr => self.throw_invalid(e),
+            ExprKind::StmtExpr => self.stmt_expr(e, None),
             ExprKind::ParenExpr => {
                 let op = self.ast().exprs.operand(e);
                 self.effect(op);
+            }
+            ExprKind::CompoundLiteralExpr => {
+                let init = self.ast().exprs.compound_literal_init(e);
+                self.effect(init);
+            }
+            ExprKind::CXXDefaultArgExpr if default_arg_of(self.ast(), e).is_some() => {
+                let d = default_arg_of(self.ast(), e).unwrap_or(e);
+                self.effect(d);
             }
             ExprKind::BinaryOperator => {
                 let op = self.ast().exprs.binary_op(e);
@@ -2773,6 +2984,7 @@ impl Compiler<'_> {
                 // A discarded glvalue is evaluated, not read.
                 let _ = self.lv(e, Access::Addr);
             }
+            ExprKind::CXXDeleteExpr => self.delete_expr(e),
             _ if self.kind(ty) == TyKind::Void => self.unsupported(e),
             _ if self.o.types.is_aggregate(ty) => {
                 let r = self.reg();
@@ -2853,6 +3065,18 @@ impl Compiler<'_> {
             }
             self.uses_cc = true;
             return r;
+        }
+        // `std::allocator<T>::allocate`/`deallocate` (spec/oven.md
+        // "Transient allocation": deferred to the templates wave, so this
+        // never holds yet).
+        if let Some(d) = direct
+            && new_delete::is_std_allocator_call(self.ast(), d)
+        {
+            self.trap(
+                e,
+                "kiln: std::allocator in constant evaluation lands with the templates wave",
+            );
+            return self.reg();
         }
         let fp = if direct.is_none() { Some(self.rv_copy(callee)) } else { None };
         let is_sret = self.o.types.is_aggregate(ty);
@@ -2943,4 +3167,11 @@ fn is_reference_var(ast: &kiln_ast::Ast, d: DeclId) -> bool {
 /// type.
 fn is_reference_decl(ast: &kiln_ast::Ast, d: DeclId) -> bool {
     ast.decls.get(d).ty().is_some_and(|t| ast.types.is_reference(t))
+}
+
+/// The expression a `CXXDefaultArgExpr` stands for: its parameter's
+/// default argument, evaluated afresh at each call ([dcl.fct.default]/9).
+fn default_arg_of(ast: &kiln_ast::Ast, e: ExprId) -> Option<ExprId> {
+    let p = ast.exprs.default_arg_param(e);
+    ast.decls.param(p).and_then(|x| x.default_arg)
 }

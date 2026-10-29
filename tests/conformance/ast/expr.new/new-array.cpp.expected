@@ -1,0 +1,60 @@
+TranslationUnitDecl
+|-FunctionDecl a 'int *()'
+| `-CompoundStmt
+|   `-ReturnStmt
+|     `-CXXNewExpr 'int *' array Function 'operator new[]' 'void *(unsigned long)'
+|       `-ImplicitCastExpr 'unsigned long' <IntegralCast>
+|         `-IntegerLiteral 'int' 4
+|-FunctionDecl b 'int *(int)'
+| |-ParmVarDecl used n 'int'
+| `-CompoundStmt
+|   `-ReturnStmt
+|     `-CXXNewExpr 'int *' array Function 'operator new[]' 'void *(unsigned long)'
+|       |-ImplicitCastExpr 'unsigned long' <IntegralCast>
+|       | `-ImplicitCastExpr 'int' <LValueToRValue>
+|       |   `-DeclRefExpr 'int' lvalue ParmVar 'n' 'int'
+|       `-InitListExpr 'int[2]'
+|         |-array_filler: ImplicitValueInitExpr 'int'
+|         |-IntegerLiteral 'int' 1
+|         `-IntegerLiteral 'int' 2
+|-FunctionDecl c 'short *(unsigned int)'
+| |-ParmVarDecl used n 'unsigned int'
+| `-CompoundStmt
+|   `-ReturnStmt
+|     `-CXXNewExpr 'short *' array Function 'operator new[]' 'void *(unsigned long)'
+|       |-ImplicitCastExpr 'unsigned long' <IntegralCast>
+|       | `-ImplicitCastExpr 'unsigned int' <LValueToRValue>
+|       |   `-DeclRefExpr 'unsigned int' lvalue ParmVar 'n' 'unsigned int'
+|       `-ImplicitValueInitExpr 'short[]'
+|-FunctionDecl d 'int (*(long))[3]'
+| |-ParmVarDecl used n 'long'
+| `-CompoundStmt
+|   `-ReturnStmt
+|     `-CXXNewExpr 'int (*)[3]' array Function 'operator new[]' 'void *(unsigned long)'
+|       `-ImplicitCastExpr 'unsigned long' <IntegralCast>
+|         `-ImplicitCastExpr 'long' <LValueToRValue>
+|           `-DeclRefExpr 'long' lvalue ParmVar 'n' 'long'
+|-FunctionDecl e 'char *()'
+| `-CompoundStmt
+|   `-ReturnStmt
+|     `-CXXNewExpr 'char *' array Function 'operator new[]' 'void *(unsigned long)'
+|       |-ImplicitCastExpr 'unsigned long' <IntegralCast>
+|       | `-IntegerLiteral 'int' 2
+|       `-InitListExpr 'char[2]'
+|         `-array_filler: ImplicitValueInitExpr 'char'
+|-CXXRecordDecl referenced struct P definition
+| |-FieldDecl x 'int'
+| `-FieldDecl y 'int'
+`-FunctionDecl f 'P *()'
+  `-CompoundStmt
+    `-ReturnStmt
+      `-CXXNewExpr 'P *' array Function 'operator new[]' 'void *(unsigned long)'
+        |-ImplicitCastExpr 'unsigned long' <IntegralCast>
+        | `-IntegerLiteral 'int' 2
+        `-InitListExpr 'P[2]'
+          |-array_filler: InitListExpr 'P'
+          | |-ImplicitValueInitExpr 'int'
+          | `-ImplicitValueInitExpr 'int'
+          `-InitListExpr 'P'
+            |-IntegerLiteral 'int' 1
+            `-IntegerLiteral 'int' 2

@@ -92,7 +92,7 @@ impl Sema<'_, '_> {
     }
 
     /// True for class and array types (aggregates in M2, [dcl.init.aggr]/1).
-    fn is_aggregate(&self, t: QualType) -> bool {
+    pub(crate) fn is_aggregate(&self, t: QualType) -> bool {
         self.ast.types.is_array(t) || self.ast.types.as_record(t).is_some()
     }
 
@@ -127,6 +127,11 @@ impl Sema<'_, '_> {
             Initializer::Paren(v, l, _) => {
                 if v.len() == 1 {
                     self.init_from_expr(ty, v[0], ConvCtx::DirectInitialization, loc)
+                } else if !self.is_aggregate(ty) && !self.ast.types.is_reference(ty) {
+                    // [dcl.init.general]/16.9: a scalar takes one expression.
+                    let d = self.diag(DiagId::sema_excess_initializers, loc).arg("2");
+                    self.emit(d);
+                    self.recover(ty, &v, l)
                 } else {
                     self.unsupported("parenthesized initialization with multiple expressions", l);
                     self.recover(ty, &v, l)
@@ -136,7 +141,7 @@ impl Sema<'_, '_> {
                 if direct_list && let Some(e) = self.fixed_enum_list_init(ty, &l) {
                     return e;
                 }
-                self.init_from_list(ty, &l)
+                self.init_from_list_at(ty, &l, Some(loc))
             }
         }
     }
@@ -199,10 +204,28 @@ impl Sema<'_, '_> {
         e
     }
 
+    /// List-initialization of a parameter (`f({1})`, `int x = {1}` as a
+    /// default argument) or a return value (`return {1};`): a single
+    /// braced scalar warns `-Wbraced-scalar-init` ([dcl.init.list]/3.9).
+    pub(crate) fn init_list_entity(&mut self, ty: QualType, l: &InitList, entity: Loc) -> ExprId {
+        if self.is_error_type(ty) {
+            return self.perform_init(ty, Initializer::List(l.clone()), entity, false);
+        }
+        if !self.is_aggregate(ty)
+            && !self.ast.types.is_reference(ty)
+            && let [InitItem { value: InitValue::Expr(_), designator }] = l.items.as_slice()
+            && designator.is_empty()
+        {
+            let msg = self.diag(DiagId::sema_braces_around_init, l.lbrace);
+            self.emit(msg);
+        }
+        self.init_from_list_at(ty, l, Some(entity))
+    }
+
     /// A value-initialized member with no initializer: a nested list for a
     /// class, `ImplicitValueInitExpr` otherwise (clang's
     /// `InitListChecker` fillers).
-    fn filler(&mut self, ty: QualType, at: Loc) -> ExprId {
+    pub(crate) fn filler(&mut self, ty: QualType, at: Loc) -> ExprId {
         if self.ast.types.as_record(ty).is_some() {
             let empty = InitList { items: Vec::new(), lbrace: at, rbrace: at };
             return self.init_from_list(ty, &empty);
@@ -212,7 +235,7 @@ impl Sema<'_, '_> {
 
     /// The members of a class that take part in aggregate initialization:
     /// fields, without unnamed bit-fields ([dcl.init.aggr]/2).
-    fn init_fields(&self, r: DeclId) -> Vec<DeclId> {
+    pub(crate) fn init_fields(&self, r: DeclId) -> Vec<DeclId> {
         let def = self.ast.definition(r).unwrap_or(r);
         self.ast
             .decls
@@ -232,6 +255,20 @@ impl Sema<'_, '_> {
 
     /// List-initialization ([dcl.init.list]/3).
     pub fn init_from_list(&mut self, ty: QualType, l: &InitList) -> ExprId {
+        self.init_from_list_at(ty, l, None)
+    }
+
+    /// List-initialization of an entity at `entity` (its name, or the
+    /// start of the expression for temporaries, return values and
+    /// assignments): too many elements for a scalar are reported there
+    /// (clang's `FK_TooManyInitsForScalar`); nested lists report at the
+    /// excess element.
+    pub(crate) fn init_from_list_at(
+        &mut self,
+        ty: QualType,
+        l: &InitList,
+        entity: Option<Loc>,
+    ) -> ExprId {
         if self.is_aggregate(ty) {
             if self.ast.types.as_record(ty).is_some() && !self.is_complete(ty) {
                 let msg = self
@@ -270,17 +307,24 @@ impl Sema<'_, '_> {
                 self.check_narrowing(*e, ty, ty);
                 inits.push(self.convert_for_init(*e, ty, ConvCtx::Initialization));
             }
+            Some(InitItem { value: InitValue::List(inner), designator })
+                if designator.is_empty() =>
+            {
+                // `int x = {{1}};` ([dcl.init.list]/3.9 with a nested
+                // list): clang warns and initializes from the inner list.
+                let msg = self.diag(DiagId::sema_many_braces_around_scalar, inner.lbrace);
+                self.emit(msg);
+                let e = self.init_from_list_at(ty, inner, entity);
+                let list = self.ast.exprs.init_list_inits(e);
+                inits.extend(self.ast.lists.iter::<ExprId>(list));
+            }
             Some(item) => {
-                let what = if matches!(item.value, InitValue::List(_)) {
-                    "nested braces"
-                } else {
-                    "a designator"
-                };
-                self.unsupported(&format!("{what} in a scalar initializer"), item.value.loc(self));
+                self.unsupported("a designator in a scalar initializer", item.value.loc(self));
             }
         }
         if let Some(extra) = l.items.get(1) {
-            let msg = self.diag(DiagId::sema_excess_initializers, extra.value.loc(self)).arg("2");
+            let at = entity.unwrap_or_else(|| extra.value.loc(self));
+            let msg = self.diag(DiagId::sema_excess_initializers, at).arg("2");
             self.emit(msg);
         }
         self.builder().init_list(ty, &inits, None, None, l.lbrace, l.rbrace)

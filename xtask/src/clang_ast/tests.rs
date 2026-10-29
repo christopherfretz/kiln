@@ -122,8 +122,8 @@ fn unmapped_input_is_an_error_naming_it() {
     let e = norm(&var("", &lit.replace("IntegerLiteral", "FrobExpr"))).unwrap_err();
     assert!(e.contains("clang node kind `FrobExpr` is not in the clang-ast mapping table"), "{e}");
     assert!(e.contains("in top-level VarDecl `v`"), "{e}");
-    let e = norm(&var("", &lit.replace("IntegerLiteral", "CXXThrowExpr"))).unwrap_err();
-    assert!(e.contains("unsupported CXXThrowExpr"), "{e}");
+    let e = norm(&var("", &lit.replace("IntegerLiteral", "LambdaExpr"))).unwrap_err();
+    assert!(e.contains("unsupported LambdaExpr"), "{e}");
     let e = norm(&var(r#","tls":"static""#, lit)).unwrap_err();
     assert!(e.contains("`VarDecl` attribute `tls` is not in the mapping table"), "{e}");
     let e = norm(&var(r#","init":"parenlist""#, lit)).unwrap_err();

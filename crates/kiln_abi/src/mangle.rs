@@ -7,7 +7,7 @@
 use kiln_ast::Ast;
 use kiln_ast::decl::{DeclKind, FnStorage, LinkageLang, NamespaceData, VarStorage};
 use kiln_ast::ids::{DeclId, QualType};
-use kiln_ast::names::DeclNameView;
+use kiln_ast::names::{DeclNameView, OverloadedOperator};
 use kiln_ast::types::{BuiltinType, TypeView};
 
 /// A substitution candidate ([abi:mangling.compression]).
@@ -246,12 +246,11 @@ impl Mangler<'_> {
     /// <name> for an entity: unscoped or nested.
     fn name(&mut self, d: DeclId, internal: bool) {
         let prefixes = self.prefix_chain(d);
-        let nm = decl_name(self.ast, d);
         if prefixes.is_empty() {
             if internal {
                 self.out.push('L');
             }
-            self.source_name(&nm);
+            self.unqualified_name(d);
             return;
         }
         if prefixes.len() == 1 && self.is_std(prefixes[0]) {
@@ -259,7 +258,7 @@ impl Mangler<'_> {
             if internal {
                 self.out.push('L');
             }
-            self.source_name(&nm);
+            self.unqualified_name(d);
             return;
         }
         self.out.push('N');
@@ -267,7 +266,7 @@ impl Mangler<'_> {
         if internal {
             self.out.push('L');
         }
-        self.source_name(&nm);
+        self.unqualified_name(d);
         self.out.push('E');
     }
 
@@ -322,6 +321,25 @@ impl Mangler<'_> {
             return "_GLOBAL__N_1".to_owned();
         }
         decl_name(self.ast, d)
+    }
+
+    /// <unqualified-name>: an <operator-name> for an operator function,
+    /// else the <source-name>.
+    fn unqualified_name(&mut self, d: DeclId) {
+        let n = self.ast.decls.get(d);
+        if let DeclNameView::Operator(op) = self.ast.names.view(n.name()) {
+            let explicit = n
+                .ty()
+                .and_then(|t| self.ast.types.proto(t))
+                .map_or(0, |p| self.ast.types.params(p).len());
+            // The implicit object parameter counts towards the arity
+            // (static member operators are arity-independent).
+            let arity = explicit + usize::from(n.kind() == DeclKind::CXXMethod);
+            self.out.push_str(operator_code(op, arity));
+            return;
+        }
+        let nm = decl_name(self.ast, d);
+        self.source_name(&nm);
     }
 
     fn source_name(&mut self, s: &str) {
@@ -497,4 +515,62 @@ fn base36(mut n: usize) -> String {
     }
     v.reverse();
     String::from_utf8(v).unwrap_or_default()
+}
+
+/// The Itanium <operator-name> of `op` declared with `arity` operands
+/// (the implicit object parameter included): `+ - * &` with one operand
+/// are the unary forms.
+pub fn operator_code(op: OverloadedOperator, arity: usize) -> &'static str {
+    use OverloadedOperator as O;
+    let unary = arity == 1;
+    match op {
+        O::New => "nw",
+        O::ArrayNew => "na",
+        O::Delete => "dl",
+        O::ArrayDelete => "da",
+        O::Plus if unary => "ps",
+        O::Minus if unary => "ng",
+        O::Star if unary => "de",
+        O::Amp if unary => "ad",
+        O::Plus => "pl",
+        O::Minus => "mi",
+        O::Star => "ml",
+        O::Amp => "an",
+        O::Slash => "dv",
+        O::Percent => "rm",
+        O::Caret => "eo",
+        O::Pipe => "or",
+        O::Tilde => "co",
+        O::Exclaim => "nt",
+        O::Equal => "aS",
+        O::Less => "lt",
+        O::Greater => "gt",
+        O::PlusEqual => "pL",
+        O::MinusEqual => "mI",
+        O::StarEqual => "mL",
+        O::SlashEqual => "dV",
+        O::PercentEqual => "rM",
+        O::CaretEqual => "eO",
+        O::AmpEqual => "aN",
+        O::PipeEqual => "oR",
+        O::LessLess => "ls",
+        O::GreaterGreater => "rs",
+        O::LessLessEqual => "lS",
+        O::GreaterGreaterEqual => "rS",
+        O::EqualEqual => "eq",
+        O::ExclaimEqual => "ne",
+        O::LessEqual => "le",
+        O::GreaterEqual => "ge",
+        O::Spaceship => "ss",
+        O::AmpAmp => "aa",
+        O::PipePipe => "oo",
+        O::PlusPlus => "pp",
+        O::MinusMinus => "mm",
+        O::Comma => "cm",
+        O::ArrowStar => "pm",
+        O::Arrow => "pt",
+        O::Call => "cl",
+        O::Subscript => "ix",
+        O::Coawait => "aw",
+    }
 }

@@ -1,0 +1,34 @@
+TranslationUnitDecl
+|-TypedefDecl referenced T 'int'
+|-VarDecl referenced n 'int'
+|-VarDecl a 'unsigned long' cinit
+| `-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof 'T':'int'
+|-VarDecl b 'unsigned long' cinit
+| `-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof
+|   `-ParenExpr 'T':'int'
+|     `-CXXFunctionalCastExpr 'T':'int' functional cast to T <NoOp>
+|       `-IntegerLiteral 'int' 1
+|-VarDecl c 'unsigned long' cinit
+| `-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof 'int (*)()'
+|-VarDecl d 'unsigned long' cinit
+| `-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof 'int (*)[3]'
+|-VarDecl e 'unsigned long' cinit
+| `-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof
+|   `-ParenExpr 'int' lvalue
+|     `-DeclRefExpr 'int' lvalue Var 'n' 'int' non_odr_use_unevaluated
+|-VarDecl g 'unsigned long' cinit
+| `-UnaryExprOrTypeTraitExpr 'unsigned long' alignof 'int (*)(T)'
+|-FunctionDecl h 'void (int (*)(T))'
+| `-ParmVarDecl 'int (*)(T)'
+|-FunctionDecl k 'void (int (*)(T, long))'
+| `-ParmVarDecl p 'int (*)(T, long)'
+|-FunctionDecl m 'void (int)'
+| `-ParmVarDecl n 'int'
+`-FunctionDecl q 'void ()'
+  `-CompoundStmt
+    |-DeclStmt
+    | `-VarDecl used fp 'int (*)(int (*)(T))' cinit
+    |   `-ImplicitCastExpr 'int (*)(int (*)(T))' <NullToPointer>
+    |     `-CXXNullPtrLiteralExpr 'std::nullptr_t'
+    `-CStyleCastExpr 'void' <ToVoid>
+      `-DeclRefExpr 'int (*)(int (*)(T))' lvalue Var 'fp' 'int (*)(int (*)(T))'

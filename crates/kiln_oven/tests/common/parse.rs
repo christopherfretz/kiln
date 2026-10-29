@@ -12,10 +12,10 @@ use kiln_ast::decl::{
     ConstexprKind, DeclKind, DefinitionBits, FnSpec, TagKind, VarSpec, VarStorage,
 };
 use kiln_ast::expr::{
-    BinaryOp, CastKind, CharKind, ExprFlags, ExprKind, NonOdrUse, ObjectKind, Radix, StringKind,
-    TraitKind, UnaryOp, ValueCategory,
+    BinaryOp, CastKind, CharKind, ExprFlags, ExprKind, NewExtra, NewInitStyle, NonOdrUse,
+    ObjectKind, Radix, StringKind, TraitKind, UnaryOp, ValueCategory,
 };
-use kiln_ast::names::DeclName;
+use kiln_ast::names::{DeclName, OverloadedOperator};
 use kiln_ast::stmt::{CaseData, IfData, IfKind, LoopData, SwitchData};
 use kiln_ast::strings::StringEncoding;
 use kiln_ast::types::{BuiltinType as B, ExcSpec, FuncInfo, Quals, TypeContext, TypeView};
@@ -1685,6 +1685,12 @@ impl Parser<'_> {
             if self.is("sizeof") || self.is("alignof") || self.is("_Alignof") {
                 return self.trait_expr();
             }
+            if self.is("new") {
+                return self.new_expr();
+            }
+            if self.is("delete") {
+                return self.delete_expr();
+            }
             return self.postfix();
         };
         match p {
@@ -1729,6 +1735,96 @@ impl Parser<'_> {
             }
             _ => self.postfix(),
         }
+    }
+
+    /// `new T`, `new T()`, `new T(x)`, `new T[n]`, `new T[n]()` (scalar
+    /// `T`, possibly a pointer), with the replaceable global allocation
+    /// functions.
+    fn new_expr(&mut self) -> ExprId {
+        let l = self.expect("new");
+        let mut t = self.spec().ty.expect("type");
+        while self.eat("*") {
+            t = self.ast.types.pointer_to(t);
+        }
+        let mut array_size = None;
+        if self.eat("[") {
+            let n = self.expr();
+            self.expect("]");
+            array_size = Some(self.convert(n, QualType::ULONG));
+        }
+        let mut init = None;
+        let mut style = NewInitStyle::None;
+        if self.eat("(") {
+            style = NewInitStyle::Parens;
+            if self.eat(")") {
+                init = Some(self.ast.builder().implicit_value_init(t));
+            } else {
+                let x = self.expr();
+                self.expect(")");
+                init = Some(self.convert(x, t));
+            }
+        }
+        let (on, od) = if array_size.is_some() {
+            (OverloadedOperator::ArrayNew, OverloadedOperator::ArrayDelete)
+        } else {
+            (OverloadedOperator::New, OverloadedOperator::Delete)
+        };
+        let extra = NewExtra {
+            allocated_ty: t,
+            array_size,
+            init,
+            placement: None,
+            operator_new: Some(self.global_op(on)),
+            operator_delete: Some(self.global_op(od)),
+            type_loc: l,
+        };
+        let pt = self.ast.types.pointer_to(t);
+        self.ast.builder().cxx_new(pt, ExprFlags::NONE, style, extra, l, l)
+    }
+
+    /// `delete p` / `delete[] p`.
+    fn delete_expr(&mut self) -> ExprId {
+        let l = self.expect("delete");
+        let array = self.eat("[");
+        if array {
+            self.expect("]");
+        }
+        let e = self.cast_expr();
+        let e = self.rvalue(e);
+        let op = self.global_op(if array {
+            OverloadedOperator::ArrayDelete
+        } else {
+            OverloadedOperator::Delete
+        });
+        let flags = if array {
+            ExprFlags::ARRAY_FORM.with(ExprFlags::ARRAY_AS_WRITTEN)
+        } else {
+            ExprFlags::NONE
+        };
+        self.ast.builder().cxx_delete(e, Some(op), flags, false, false, QualType::VOID, l)
+    }
+
+    /// The implicitly declared replaceable `::operator new`/`new[]`
+    /// (`size_t`) or `::operator delete`/`delete[]` (`void*`).
+    fn global_op(&mut self, op: OverloadedOperator) -> DeclId {
+        let key = format!("{op:?}");
+        if let Some(&d) = self.names.get(&key) {
+            return d;
+        }
+        let vp = self.ast.types.pointer_to(QualType::VOID);
+        let size_t = QualType::ULONG;
+        let (ret, p) = match op {
+            OverloadedOperator::New | OverloadedOperator::ArrayNew => (vp, size_t),
+            _ => (QualType::VOID, vp),
+        };
+        let fty = self.ast.types.function(ret, &[p], FuncInfo::new(), ExcSpec::default());
+        let l = self.loc();
+        let h = DeclHead::new(self.ast.tu, DeclName::operator(op), l);
+        let d = self.ast.builder().function(h, DeclKind::Function, fty, FnSpec::new(), None);
+        let pd = self.ast.builder().param(d, DeclName::EMPTY, l, p, 0, 0);
+        self.ast.builder().set_params(d, &[pd]).expect("params");
+        self.names.insert(key, d);
+        d
     }
 
     fn cast_expr(&mut self) -> ExprId {

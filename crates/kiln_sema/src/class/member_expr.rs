@@ -19,6 +19,7 @@ use crate::Sema;
 use crate::conv::bases::{BaseSearch, ambiguous_paths_string, find_base, path_list, same_class};
 use crate::conv::{self};
 use crate::expr::CallCallee;
+use crate::init::InitList;
 use crate::lookup::LookupKind;
 
 /// A name of a non-static member whose meaning depends on the operand it
@@ -338,11 +339,13 @@ impl Sema<'_, '_> {
 
     /// A call whose callee is a bound non-static member function (a
     /// member access or `.*` / `->*`, [expr.call]/2), or names one with
-    /// no object; `None` for other callees.
+    /// no object; `None` for other callees. `braced` as for
+    /// [`Sema::convert_call_args`].
     pub(crate) fn try_member_call(
         &mut self,
         callee: ExprId,
         args: &[ExprId],
+        braced: &mut [Option<InitList>],
         loc: Loc,
         rparen: Loc,
     ) -> Option<ExprId> {
@@ -386,7 +389,8 @@ impl Sema<'_, '_> {
             return Some(self.recover_err(&kids, loc));
         };
         let named = method.map(|d| CallCallee { decl: d, overloadable: false });
-        let Some(conv_args) = self.convert_call_args(named, callee, args, &proto, loc, rparen)
+        let Some(conv_args) =
+            self.convert_call_args(named, callee, args, braced, &proto, loc, rparen)
         else {
             return Some(self.recover_err(&kids, loc));
         };

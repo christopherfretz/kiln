@@ -882,9 +882,10 @@ fn current_class(&self) -> Option<&ClassBuild>;
 ```
 Parser-facing additions outside `class/`: `ParamInfo.default_arg:
 DefaultArg { None | Parsed(ExprId) | Unparsed(Loc /* = */) }` (set by the
-parser after `act_on_param_declarator`; `act_on_declarator` applies
-`Parsed` through `act_on_param_default_arg` and marks `Unparsed`
-parameters `DEFAULT_ARG_PENDING`), and `TagUse::Friend` for the
+parser after `act_on_param_declarator`; a `Parsed` default is already
+converted by `act_on_param_default_init` (sema.md §4.3), which
+`act_on_declarator` stores, and `Unparsed` parameters are marked
+`DEFAULT_ARG_PENDING`), and `TagUse::Friend` for the
 elaborated-type-specifier of `friend class X;`. Calling protocol: the
 parser calls `act_on_base_specifiers` for every class definition (empty
 slice when there is no base-clause), `act_on_mem_initializers` for every

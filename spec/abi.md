@@ -79,6 +79,7 @@ form is `<arch>-unknown-linux-gnu`.
 | pointer, data member pointer | 8/8 | 8/8 |
 | member function pointer | 16/8 | 16/8 |
 | `max_align_t`, `aligned` (no argument) | 32/16, 16 | 32/16, 16 |
+| `__STDCPP_DEFAULT_NEW_ALIGNMENT__` (`default_new_align`) | 16 | 16 |
 | unnamed bit-fields affect class alignment | no | yes (AAPCS64 §10.1.8) |
 | `_BitInt` max alignment | 8 | 16 |
 | `_Atomic` promotion width | 16 bytes | 16 bytes |
@@ -86,6 +87,20 @@ form is `<arch>-unknown-linux-gnu`.
 | tail-padding rule | C++03 POD (Itanium) | C++03 POD (Itanium) |
 
 `Target::types` is the `TargetTypes` stored in `TypeContext`.
+
+`default_new_align` decides when a new- or delete-expression passes
+`std::align_val_t` ([expr.new]/19, [expr.delete]/10: `alignof(T) >
+16`) and the `align` attribute on an allocation call (spec/codegen.md
+§3.1). Verified against clang 19's predefined macros on both triples
+(`clang++-19 --target=<triple> -dM -E`).
+
+**Operator-function names (WP-061a).** `kiln_abi::mangle` encodes an
+operator function's <unqualified-name> as the Itanium
+<operator-name> (`nw`, `na`, `dl`, `da`, `pl`, `ps`, `cl`, `ix`, ...;
+unary and binary `+ - * &` are told apart by arity, counting the
+implicit object parameter of a non-static member function). The
+replaceable allocation functions mangle as clang's: `_Znwm`, `_Znam`,
+`_ZdlPv`, `_ZdlPvm`, `_ZdlPvmSt11align_val_t`, `_ZnwmRKSt9nothrow_t`, ....
 
 ## 3. Type layout (clang `getTypeInfo`; sizes/alignments in bits)
 | type | width | align |

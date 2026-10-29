@@ -11,7 +11,7 @@ use kiln_lex::{Punct, TokKind};
 use kiln_sema::declspec::SpecError;
 use kiln_sema::{
     Chunk, DeclSpec, Declarator, DeclaratorContext, Designator, InitItem, InitList, InitValue,
-    Initializer, NameClass, Sign, StorageSpec, TagUse, TypeSpecKind, Width,
+    Initializer, NameClass, ParamInfo, Sign, StorageSpec, TagUse, TypeSpecKind, Width,
 };
 use kiln_source::symbol::Symbol;
 use kiln_source::{Loc, Span};
@@ -485,7 +485,23 @@ impl Parser<'_, '_> {
                     self.parse_tag_specifier(&mut ds, k);
                     continue;
                 }
-                Kw::Typename | Kw::Decltype | Kw::Typeof => {
+                Kw::Decltype => {
+                    let (base, ty) = self.parse_decltype_specifier();
+                    if base == TypeSpecKind::Named && ty.is_none() {
+                        ds.invalid = true;
+                    }
+                    let ty = if base == TypeSpecKind::Named {
+                        Some(ty.unwrap_or(QualType::ERROR))
+                    } else {
+                        None
+                    };
+                    if let Err(e) = ds.set_base(base, ty, loc) {
+                        ds.invalid = true;
+                        self.spec_error(&e, loc);
+                    }
+                    continue;
+                }
+                Kw::Typename | Kw::Typeof => {
                     self.unsupported(&format!("'{}'", k.spelling()), loc);
                     self.bump();
                     if self.eat(Punct::LParen).is_some() {
@@ -514,6 +530,37 @@ impl Parser<'_, '_> {
             }
         }
         ds
+    }
+
+    /// decltype-specifier ([dcl.type.decltype]): `decltype ( expression )`
+    /// or `decltype ( auto )` ([dcl.type.auto.deduct]). At `decltype`.
+    /// Returns the base specifier and, for `decltype(e)`, its type (`None`
+    /// after an error).
+    pub(crate) fn parse_decltype_specifier(&mut self) -> (TypeSpecKind, Option<QualType>) {
+        let loc = self.bump().span.lo;
+        let Some(open) = self.eat(Punct::LParen) else {
+            let d = self
+                .s
+                .diag(DiagId::parse_expected_after, self.expected_loc())
+                .arg("'decltype'")
+                .arg("'('");
+            self.emit(d);
+            return (TypeSpecKind::Named, None);
+        };
+        if self.at_kw(Kw::Auto) && self.peek_is(1, Punct::RParen) {
+            self.bump();
+            self.bump();
+            return (TypeSpecKind::DecltypeAuto, None);
+        }
+        self.s.enter_unevaluated();
+        let e = self.parse_expression();
+        self.s.exit_unevaluated();
+        let Some(e) = e else {
+            self.skip_until(&[Punct::RParen], false, true);
+            return (TypeSpecKind::Named, None);
+        };
+        let rparen = self.expect_closing(Punct::RParen, Punct::LParen, open);
+        (TypeSpecKind::Named, self.s.act_on_decltype(e, loc, rparen))
     }
 
     fn spec_error(&self, e: &SpecError, loc: Loc) {
@@ -933,7 +980,7 @@ impl Parser<'_, '_> {
     }
 
     /// The cv-qualifiers (and attributes) after a `*`.
-    fn parse_ptr_cv(&mut self) -> Quals {
+    pub(crate) fn parse_ptr_cv(&mut self) -> Quals {
         let mut q = Quals::NONE;
         loop {
             let (add, sp) = match self.kw() {
@@ -979,10 +1026,20 @@ impl Parser<'_, '_> {
                 self.parse_attributes(&mut d.attrs);
             }
         } else if self.at(Punct::LParen) && !(abstract_ok && self.is_param_list_start(1)) {
+            // Like clang's ParseParenDeclarator: grouping is in effect
+            // only for the inner declarator, then restored.
+            let had_grouping = d.grouping;
+            d.grouping = true;
             let open = self.bump().span.lo;
             self.skip_attributes();
             self.parse_declarator(d);
             self.expect_closing(Punct::RParen, Punct::LParen, open);
+            d.grouping = had_grouping;
+        } else if self.at_kw(Kw::Operator)
+            && d.ctx != DeclaratorContext::TypeName
+            && matches!(self.kw_of(self.peek(1)), Some(Kw::New | Kw::Delete))
+        {
+            self.parse_new_delete_operator_id(d);
         } else if self.at(Punct::Tilde) || self.at_kw(Kw::Operator) {
             self.unsupported("special member functions", self.loc());
             d.invalid = true;
@@ -1005,18 +1062,30 @@ impl Parser<'_, '_> {
                 self.expect_closing(Punct::RSquare, Punct::LSquare, open);
                 self.skip_attributes();
                 d.chunks.push(Chunk::Array { size, loc: open });
-            } else if self.at(Punct::LParen) && (abstract_ok || self.is_param_list_start(1)) {
-                self.parse_function_suffix(d);
+            } else if self.at(Punct::LParen) {
+                // [dcl.ambig.res]/1: after a name that could take a direct
+                // initializer, the parentheses are a function declarator
+                // only if they could be a parameter clause.
+                let mut ambiguous = false;
+                if !abstract_ok && d.direct_init && !d.grouping && d.name.is_some() {
+                    let (function, amb) = self.is_cxx_function_declarator(d.name.map(|n| n.0));
+                    if !function {
+                        break;
+                    }
+                    ambiguous = amb;
+                }
+                self.parse_function_suffix(d, ambiguous);
             } else {
                 break;
             }
         }
     }
 
-    /// True if the token `n` ahead (after a `(`) begins a
-    /// parameter-declaration-clause rather than a nested declarator or an
-    /// initializer. TODO(M3): tentative parsing for the `T(x)` ambiguity
-    /// ([dcl.ambig.res]).
+    /// True if the token `n` ahead (after a `(` where an abstract
+    /// declarator may start) begins a parameter-declaration-clause rather
+    /// than grouping parentheses (clang's `ParseParenDeclarator`): `)`,
+    /// `...)`, a decl-specifier or `[[`. An undeclared name followed by an
+    /// identifier is taken as a misspelled type.
     pub(crate) fn is_param_list_start(&self, n: usize) -> bool {
         let t = self.peek(n);
         match t.kind {
@@ -1043,8 +1112,11 @@ impl Parser<'_, '_> {
     }
 
     /// `( parameter-declaration-clause )` ([dcl.fct]) and what may follow it.
-    fn parse_function_suffix(&mut self, d: &mut Declarator) {
+    /// `ambiguous`: the parentheses could also have been a direct
+    /// initializer ([dcl.ambig.res]/1).
+    fn parse_function_suffix(&mut self, d: &mut Declarator, ambiguous: bool) {
         let open = self.bump().span.lo;
+        self.s.act_on_start_prototype();
         let mut params = Vec::new();
         let mut variadic = false;
         loop {
@@ -1069,12 +1141,13 @@ impl Parser<'_, '_> {
             if self.at_attr() {
                 self.parse_attributes(&mut pd.attrs);
             }
+            let mut p = self.s.act_on_param_declarator(&ds, &pd);
             if self.at(Punct::Equal) {
-                self.unsupported("default arguments", self.loc());
-                self.bump();
-                self.skip_until(&[Punct::Comma, Punct::RParen], false, false);
+                self.parse_default_argument(&mut p);
             }
-            params.push(self.s.act_on_param_declarator(&ds, &pd));
+            p.range = (start, self.prev_end());
+            self.s.act_on_prototype_param(&p);
+            params.push(p);
             if self.eat(Punct::Ellipsis).is_some() {
                 variadic = true;
                 break;
@@ -1084,9 +1157,43 @@ impl Parser<'_, '_> {
             }
         }
         let rparen = self.expect_closing(Punct::RParen, Punct::LParen, open);
-        let exc = self.parse_function_qualifiers();
+        let (exc, trailing) = self.parse_function_qualifiers();
+        self.s.act_on_end_prototype();
         let params = self.s.act_on_param_list(params);
-        d.chunks.push(Chunk::Function { params, variadic, loc: open, rparen, exc });
+        d.chunks.push(Chunk::Function {
+            params,
+            variadic,
+            loc: open,
+            rparen,
+            exc,
+            trailing,
+            ambiguous,
+        });
+    }
+
+    /// `= initializer-clause` after a parameter-declaration
+    /// ([dcl.fct.default]/1). At the `=`.
+    fn parse_default_argument(&mut self, p: &mut ParamInfo) {
+        self.bump();
+        // clang rejects a default argument that starts with `({` outright
+        // (`err_stmt_expr_in_default_arg`), skipping to the next `,`/`)`.
+        if self.at(Punct::LParen) && self.peek_is(1, Punct::LBrace) {
+            self.error_here(DiagId::parse_stmt_expr_in_default_arg);
+            p.invalid = true;
+            self.skip_until(&[Punct::Comma, Punct::RParen], true, false);
+            return;
+        }
+        let init = if self.at(Punct::LBrace) {
+            self.parse_init_list().ok().map(Initializer::List)
+        } else {
+            self.parse_assignment_expr().map(Initializer::Expr)
+        };
+        if let Some(init) = init {
+            self.s.act_on_param_default_init(p, init);
+        } else {
+            p.invalid = true;
+            self.skip_until(&[Punct::Comma, Punct::RParen], false, false);
+        }
     }
 
     /// cv- and ref-qualifiers, the exception specification and trailing
@@ -1094,8 +1201,9 @@ impl Parser<'_, '_> {
     /// specification ([except.spec]) is supported in M2; it is returned
     /// (`ExcSpec::None` when absent). A second specification ends the
     /// declarator (clang then expects a function body).
-    fn parse_function_qualifiers(&mut self) -> ExcSpec {
+    fn parse_function_qualifiers(&mut self) -> (ExcSpec, Option<(QualType, Loc)>) {
         let mut exc = None;
+        let mut trailing = None;
         loop {
             let loc = self.loc();
             match self.kw() {
@@ -1106,12 +1214,15 @@ impl Parser<'_, '_> {
                 Some(Kw::Noexcept | Kw::Throw) if exc.is_none() => {
                     exc = Some(self.parse_exception_spec());
                 }
-                _ if self.at(Punct::Arrow) => {
-                    self.unsupported("trailing return types", loc);
+                _ if self.at(Punct::Arrow) && trailing.is_none() => {
                     self.bump();
-                    let _ = self.parse_type_id();
+                    // A failed type-id was diagnosed: the declarator is
+                    // invalid.
+                    let ty = self.parse_type_id().unwrap_or(QualType::ERROR);
+                    trailing = Some((ty, loc));
+                    return (exc.unwrap_or_default(), trailing);
                 }
-                _ => return exc.unwrap_or_default(),
+                _ => return (exc.unwrap_or_default(), trailing),
             }
         }
     }
@@ -1175,7 +1286,7 @@ impl Parser<'_, '_> {
         let mut d = Declarator::new(DeclaratorContext::TypeName, self.loc());
         self.parse_declarator(&mut d);
         let base = self.s.type_from_declspec(&ds);
-        Some(self.s.type_for_declarator(base, &d))
+        Some(self.s.type_for_declarator_at(base, ds.type_loc.unwrap_or(ds.loc), &d))
     }
 
     /// True if a type-id starts at token index `i`.
@@ -1191,6 +1302,20 @@ impl Parser<'_, '_> {
     }
 
     // -- simple declarations ------------------------------------------------------------
+
+    /// Whether a declarator in `ctx` with storage class `storage` may take
+    /// a parenthesized initializer, so `T x(...)` is tentatively parsed
+    /// as a possible variable (clang's `mayHaveDirectInit`).
+    fn may_have_direct_init(ctx: DeclaratorContext, storage: Option<(StorageSpec, Loc)>) -> bool {
+        match storage {
+            Some((StorageSpec::Typedef, _)) => false,
+            Some((StorageSpec::Extern, _)) => ctx == DeclaratorContext::File,
+            _ => matches!(
+                ctx,
+                DeclaratorContext::File | DeclaratorContext::Block | DeclaratorContext::ForInit
+            ),
+        }
+    }
 
     /// simple-declaration or function-definition ([dcl.pre], [dcl.fct.def]):
     /// returns the declarations made (including a tag the decl-specifiers
@@ -1217,8 +1342,10 @@ impl Parser<'_, '_> {
             return decls;
         }
         let mut base_ty: Option<QualType> = None;
+        let direct_init = Self::may_have_direct_init(ctx, ds.storage);
         loop {
             let mut d = Declarator::new(ctx, self.loc());
+            d.direct_init = direct_init;
             self.parse_declarator(&mut d);
             // The declspec's type is formed once the first declarator is
             // known: clang reports a missing type specifier at its name.

@@ -1,0 +1,33 @@
+TranslationUnitDecl
+|-VarDecl used x 'int'
+|-VarDecl referenced rx 'int &' cinit
+| `-DeclRefExpr 'int' lvalue Var 'x' 'int'
+|-VarDecl a 'decltype(x)':'int' cinit
+| `-IntegerLiteral 'int' 1
+|-VarDecl b 'decltype((x))':'int &' cinit
+| `-DeclRefExpr 'int' lvalue Var 'x' 'int'
+|-VarDecl c 'decltype(rx)':'int &' cinit
+| `-DeclRefExpr 'int' lvalue Var 'x' 'int'
+|-VarDecl d 'decltype(x + 1)':'int' cinit
+| `-IntegerLiteral 'int' 2
+|-FunctionDecl f 'int ()'
+| `-CompoundStmt
+|   `-ReturnStmt
+|     `-IntegerLiteral 'int' 3
+|-FunctionDecl g 'auto () -> long'
+| `-CompoundStmt
+|   `-ReturnStmt
+|     `-ImplicitCastExpr 'long' <IntegralCast>
+|       `-IntegerLiteral 'int' 4
+|-FunctionDecl h 'int &()'
+| `-CompoundStmt
+|   `-ReturnStmt
+|     `-ParenExpr 'int' lvalue
+|       `-DeclRefExpr 'int' lvalue Var 'x' 'int'
+`-FunctionDecl k 'auto () -> decltype(x * 2)'
+  `-CompoundStmt
+    `-ReturnStmt
+      `-BinaryOperator 'int' '*'
+        |-ImplicitCastExpr 'int' <LValueToRValue>
+        | `-DeclRefExpr 'int' lvalue Var 'x' 'int'
+        `-IntegerLiteral 'int' 2

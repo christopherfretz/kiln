@@ -242,11 +242,11 @@ impl Sema<'_, '_> {
     }
 
     /// The default argument `e` of parameter `p` ([dcl.fct.default]),
-    /// write-once: called by [`Sema::act_on_declarator`] for a default
-    /// argument parsed in place, and by the parser when it replays a saved
-    /// one in a complete-class context (spec/sema-class.md §2.7, the
-    /// parameter then carries `ParamData::DEFAULT_ARG_PENDING`). WP-066b
-    /// (temporaries in defaults: WP-067b).
+    /// write-once: called by the parser when it replays a saved one in a
+    /// complete-class context (spec/sema-class.md §2.7, the parameter then
+    /// carries `ParamData::DEFAULT_ARG_PENDING`); one parsed in place goes
+    /// through [`Sema::act_on_param_default_init`]. WP-066b (temporaries in
+    /// defaults: WP-067b).
     pub fn act_on_param_default_arg(&mut self, p: DeclId, e: ExprId) {
         self.attach_default_arg(p, e);
     }

@@ -145,6 +145,7 @@ no category).
 | `MemberExpr` | `MemberExpr 'type' [lvalue [bitfield]] .name\|->name` |
 | `ImplicitCastExpr` | `ImplicitCastExpr 'type' [lvalue\|xvalue] <Kind> [part_of_explicit_cast]` |
 | `CStyleCastExpr` | `CStyleCastExpr 'type' [lvalue\|xvalue] <Kind>` |
+| `CXXFunctionalCastExpr` | `CXXFunctionalCastExpr 'type' [lvalue\|xvalue] functional cast to T <Kind>` (`T` is the type as written, the expression's sugared type) |
 | `UnaryOperator` | `UnaryOperator 'type' [lvalue [bitfield]] prefix\|postfix 'op' [cannot overflow]` |
 | `BinaryOperator` | `BinaryOperator 'type' [lvalue [bitfield]] 'op'` |
 | `CompoundAssignOperator` | `CompoundAssignOperator 'type' lvalue [bitfield] 'op' ComputeLHSTy='T' ComputeResultTy='T'` |
@@ -166,7 +167,10 @@ no category).
 | `CXXInheritedCtorInitExpr`, `ArrayInitLoopExpr`, `ArrayInitIndexExpr`, `OpaqueValueExpr` | class and type; an `ArrayInitLoopExpr` has the `OpaqueValueExpr` and the per-element initializer as children; an `OpaqueValueExpr` prints its source expression under every use (as clang) |
 | `InitListExpr` | `InitListExpr 'type' [field=name]`; `array_filler:` child first, then elements; `field=` names the initialized member of a union |
 | `ImplicitValueInitExpr` | `ImplicitValueInitExpr 'type'` |
+| WP-064 forms | `CXXScalarValueInitExpr`, `CXXDefaultArgExpr`, `CXXThrowExpr`, `StmtExpr`, `CompoundLiteralExpr`, `OpaqueValueExpr`, `BinaryConditionalOperator`, `OffsetOfExpr`, `CXXTypeidExpr`: class, type, category only. Children: a `CXXDefaultArgExpr` the parameter's default argument; a `CXXThrowExpr` its operand, if any; a `StmtExpr` its `CompoundStmt`; a `CompoundLiteralExpr` its `InitListExpr`; an `OpaqueValueExpr` its source expression; a `BinaryConditionalOperator` the common expression, condition, true arm and false arm; an `OffsetOfExpr` its array index expressions; a `CXXTypeidExpr` its expression operand (a type operand is not printed) |
 | `ConstantExpr` | `ConstantExpr 'type' value=V` (M2: integral, `bool` and enumeration values) |
+| `CXXNewExpr` | `CXXNewExpr 'T *' [global] [array] Function 'operator new' 'type'` (clang's `operatorNewDecl` printed as a decl reference, kind, name and type; `array` for an array new; no placement, init-style or alignment flags, as clang 19). Children in clang's order: the array size (the first bound converted to `unsigned long`, an `IntegralCast` or a synthesized `IntegerLiteral` for `new T[]{...}`), the initializer (`InitListExpr`, `ImplicitValueInitExpr` for `()`, or the converted expression), then the placement arguments (WP-061a) |
+| `CXXDeleteExpr` | `CXXDeleteExpr 'void' [global] [array] Function 'operator delete' 'type'` (`array` when written `delete[]`; clang's `isArrayForm`); one child, the operand converted to a pointer prvalue (WP-061a) |
 | statements | `CompoundStmt`, `DeclStmt`, `NullStmt`, `ReturnStmt`, `BreakStmt`, `ContinueStmt`, `DefaultStmt`, `CaseStmt`, `IfStmt [has_init] [has_var] [has_else] [constexpr] [consteval\|!consteval]`, `SwitchStmt [has_init] [has_var]`, `WhileStmt [has_var]`, `DoStmt`, `ForStmt [has_init] [has_var] [has_cond] [has_inc]` |
 
 Notes:
@@ -192,7 +196,7 @@ Notes:
   066b/c, 078a).
 - Not in the dump (an error in the clang normalizer, §6): attributes
   other than `override`/`final`, `thread_local`, overloaded operator calls
-  (`CXXOperatorCallExpr`), `new`/`delete`, `throw`, lambdas,
+  (`CXXOperatorCallExpr`), `new`/`delete`, lambdas,
   `ConstantExpr` values of floating, pointer or lvalue type, and
   `long double` values; also clang's `noexcept-uninstantiated`,
   `ineligible` and `not_selected` member-function words (templates and

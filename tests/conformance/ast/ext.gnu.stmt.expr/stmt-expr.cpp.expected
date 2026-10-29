@@ -1,0 +1,95 @@
+TranslationUnitDecl
+|-VarDecl used arr 'int[3]'
+|-VarDecl referenced ci 'const int' cinit
+| `-IntegerLiteral 'int' 1
+|-VarDecl used g 'int'
+|-FunctionDecl used v 'void ()'
+|-FunctionDecl used fn 'int ()'
+|-FunctionDecl used rf 'int &()'
+`-FunctionDecl f 'int ()'
+  `-CompoundStmt
+    |-DeclStmt
+    | `-VarDecl a 'int *' cinit
+    |   `-StmtExpr 'int *'
+    |     `-CompoundStmt
+    |       `-ImplicitCastExpr 'int *' <ArrayToPointerDecay>
+    |         `-DeclRefExpr 'int[3]' lvalue Var 'arr' 'int[3]'
+    |-DeclStmt
+    | `-VarDecl b 'int' cinit
+    |   `-StmtExpr 'int'
+    |     `-CompoundStmt
+    |       `-ImplicitCastExpr 'int' <LValueToRValue>
+    |         `-DeclRefExpr 'const int' lvalue Var 'ci' 'const int' non_odr_use_constant
+    |-DeclStmt
+    | `-VarDecl c 'int (*)()' cinit
+    |   `-StmtExpr 'int (*)()'
+    |     `-CompoundStmt
+    |       `-ImplicitCastExpr 'int (*)()' <FunctionToPointerDecay>
+    |         `-DeclRefExpr 'int ()' lvalue Function 'fn' 'int ()'
+    |-StmtExpr 'void'
+    | `-CompoundStmt
+    |   `-CallExpr 'void'
+    |     `-ImplicitCastExpr 'void (*)()' <FunctionToPointerDecay>
+    |       `-DeclRefExpr 'void ()' lvalue Function 'v' 'void ()'
+    |-DeclStmt
+    | `-VarDecl d 'int' cinit
+    |   `-StmtExpr 'int'
+    |     `-CompoundStmt
+    |       `-ImplicitCastExpr 'int' <LValueToRValue>
+    |         `-CallExpr 'int' lvalue
+    |           `-ImplicitCastExpr 'int &(*)()' <FunctionToPointerDecay>
+    |             `-DeclRefExpr 'int &()' lvalue Function 'rf' 'int &()'
+    |-DeclStmt
+    | `-VarDecl h 'int' cinit
+    |   `-StmtExpr 'int'
+    |     `-CompoundStmt
+    |       |-BinaryOperator 'int' '+'
+    |       | |-ImplicitCastExpr 'int' <LValueToRValue>
+    |       | | `-DeclRefExpr 'const int' lvalue Var 'ci' 'const int' non_odr_use_constant
+    |       | `-IntegerLiteral 'int' 1
+    |       `-NullStmt
+    |-DeclStmt
+    | `-VarDecl used x 'int' cinit
+    |   `-StmtExpr 'int'
+    |     `-CompoundStmt
+    |       |-DeclStmt
+    |       | `-VarDecl used y 'int' cinit
+    |       |   `-IntegerLiteral 'int' 2
+    |       `-BinaryOperator 'int' '+'
+    |         |-ImplicitCastExpr 'int' <LValueToRValue>
+    |         | `-DeclRefExpr 'int' lvalue Var 'y' 'int'
+    |         `-IntegerLiteral 'int' 1
+    |-StmtExpr 'void'
+    | `-CompoundStmt
+    |   `-NullStmt
+    |-StmtExpr 'void'
+    | `-CompoundStmt
+    |   |-DeclStmt
+    |   | `-VarDecl used q 'int' cinit
+    |   |   `-IntegerLiteral 'int' 1
+    |   `-CStyleCastExpr 'void' <ToVoid>
+    |     `-DeclRefExpr 'int' lvalue Var 'q' 'int'
+    |-StmtExpr 'int'
+    | `-CompoundStmt
+    |   `-ImplicitCastExpr 'int' <LValueToRValue>
+    |     `-BinaryOperator 'int' lvalue '='
+    |       |-DeclRefExpr 'int' lvalue Var 'g' 'int'
+    |       `-IntegerLiteral 'int' 1
+    |-DeclStmt
+    | `-VarDecl used z 'int' cinit
+    |   `-StmtExpr 'int'
+    |     `-CompoundStmt
+    |       `-BinaryOperator 'int' '+'
+    |         |-StmtExpr 'int'
+    |         | `-CompoundStmt
+    |         |   `-ImplicitCastExpr 'int' <LValueToRValue>
+    |         |     `-DeclRefExpr 'int' lvalue Var 'g' 'int'
+    |         `-IntegerLiteral 'int' 1
+    `-ReturnStmt
+      `-BinaryOperator 'int' '+'
+        |-StmtExpr 'int'
+        | `-CompoundStmt
+        |   `-ImplicitCastExpr 'int' <LValueToRValue>
+        |     `-DeclRefExpr 'int' lvalue Var 'x' 'int'
+        `-ImplicitCastExpr 'int' <LValueToRValue>
+          `-DeclRefExpr 'int' lvalue Var 'z' 'int'

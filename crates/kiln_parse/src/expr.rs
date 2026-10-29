@@ -5,8 +5,8 @@
 //! descent. A `None` result ([`PExpr`]) means a syntax error was reported
 //! and the caller must recover; semantic errors yield an error expression.
 
-use kiln_ast::QualType;
 use kiln_ast::expr::{BinaryOp, TraitKind, UnaryOp};
+use kiln_ast::{ExprId, QualType};
 use kiln_diag::DiagId;
 use kiln_lex::literal::{
     CodeUnits, NumberClass, StringLiteral, classify_number, decode_char, decode_string,
@@ -14,12 +14,13 @@ use kiln_lex::literal::{
 };
 use kiln_lex::{Punct, TokKind, Token};
 use kiln_sema::expr::CastStyle;
-use kiln_sema::{DeclaratorContext, NameClass};
+use kiln_sema::{DeclaratorContext, NameClass, OffsetofComponent};
 use kiln_source::Loc;
 
 use crate::decl::is_type_specifier_kw;
 use crate::keywords::Kw;
 use crate::parser::{PExpr, Parser};
+use crate::tentative::TypeIdContext;
 
 /// clang's `prec::Level`.
 mod prec {
@@ -103,14 +104,37 @@ fn is_simple_type_kw(k: Kw) -> bool {
 impl Parser<'_, '_> {
     /// expression ([expr.comma]).
     pub fn parse_expression(&mut self) -> PExpr {
-        let lhs = self.parse_cast_expr()?;
+        let lhs = self.parse_assignment_expr()?;
         self.parse_rhs(lhs, prec::COMMA)
     }
 
     /// assignment-expression ([expr.assign]).
     pub fn parse_assignment_expr(&mut self) -> PExpr {
+        if self.at_kw(Kw::Throw) {
+            return self.parse_throw_expr();
+        }
         let lhs = self.parse_cast_expr()?;
         self.parse_rhs(lhs, prec::ASSIGN)
+    }
+
+    /// throw-expression ([expr.throw]): `throw assignment-expression?`.
+    /// The operand is absent before a token that cannot start one (clang's
+    /// `ParseThrowExpression`).
+    fn parse_throw_expr(&mut self) -> PExpr {
+        let loc = self.bump().span.lo;
+        let none = matches!(self.tok().kind, TokKind::Eof)
+            || [
+                Punct::Semi,
+                Punct::RParen,
+                Punct::RSquare,
+                Punct::RBrace,
+                Punct::Colon,
+                Punct::Comma,
+            ]
+            .iter()
+            .any(|&p| self.at(p));
+        let operand = if none { None } else { Some(self.parse_assignment_expr()?) };
+        Some(self.s.act_on_throw(operand, loc))
     }
 
     /// constant-expression ([expr.const]): a conditional-expression.
@@ -131,7 +155,7 @@ impl Parser<'_, '_> {
     }
 
     /// clang's `ParseRHSOfBinaryExpression`.
-    fn parse_rhs(&mut self, mut lhs: kiln_ast::ExprId, min: u8) -> PExpr {
+    fn parse_rhs(&mut self, mut lhs: ExprId, min: u8) -> PExpr {
         loop {
             let Some((p, op)) = self.cur_binop() else { return Some(lhs) };
             if p < min {
@@ -140,13 +164,17 @@ impl Parser<'_, '_> {
             let op_tok = self.bump();
             let op_loc = op_tok.span.lo;
             let mut middle = None;
+            let mut colon = None;
             if op.is_none() {
-                if self.at(Punct::Colon) {
-                    self.unsupported("the GNU '?:' operator", self.loc());
-                    return None;
+                if let Some(c) = self.eat(Punct::Colon) {
+                    // GNU `a ?: b`.
+                    let rhs = self.parse_assignment_expr()?;
+                    lhs = self.s.act_on_binary_conditional(lhs, rhs, op_loc, c);
+                    continue;
                 }
                 middle = Some(self.parse_expression()?);
-                if self.eat(Punct::Colon).is_none() {
+                colon = self.eat(Punct::Colon);
+                if colon.is_none() {
                     let note = self.s.diag(DiagId::note_matching, op_loc).arg("'?'");
                     let d = self
                         .s
@@ -159,11 +187,11 @@ impl Parser<'_, '_> {
             }
             // [expr.assign], [expr.cond]: the right operand of an assignment
             // and the third operand of `?:` are assignment-expressions.
+            if self.at(Punct::LBrace) {
+                lhs = self.parse_braced_rhs(lhs, p, op, &op_tok, colon)?;
+                continue;
+            }
             let mut rhs = if p <= prec::COND {
-                if self.at(Punct::LBrace) {
-                    self.unsupported("braced-init-list operands", self.loc());
-                    return None;
-                }
                 self.parse_assignment_expr()?
             } else {
                 self.parse_cast_expr()?
@@ -184,11 +212,58 @@ impl Parser<'_, '_> {
         }
     }
 
+    /// A braced-init-list right operand of the binary operator `op_tok`
+    /// (precedence `p`; `op` is `None` for `?:`, whose `:` is at `colon`).
+    /// clang parses one after any operator and accepts it only as the
+    /// right operand of an assignment ([expr.assign]/8): elsewhere it
+    /// reports `err_init_list_bin_op` and the operation is erroneous.
+    fn parse_braced_rhs(
+        &mut self,
+        lhs: ExprId,
+        p: u8,
+        op: Option<BinaryOp>,
+        op_tok: &Token,
+        colon: Option<Loc>,
+    ) -> PExpr {
+        let l = self.parse_init_list().ok()?;
+        // An operator binding tighter than this one (or a right-associative
+        // one of the same precedence) would take the list as its left
+        // operand.
+        let next = self.cur_binop().map(|(np, _)| np);
+        if let Some(np) = next
+            && (np > p || (np == p && p <= prec::COND))
+        {
+            let t = self.tok();
+            let sp = self.spelling_of(&t);
+            let mut rhs = self.s.act_on_misplaced_init_list(lhs, &l, false, &sp, t.span.lo);
+            while let Some((np, _)) = self.cur_binop() {
+                if np < p || (np == p && p > prec::COND) {
+                    break;
+                }
+                rhs = self.parse_rhs(rhs, if p <= prec::COND { p } else { p + 1 })?;
+            }
+            return Some(self.s.act_on_error_expr(&[lhs, rhs], op_tok.span.lo));
+        }
+        Some(match (op, colon) {
+            (Some(op), _) if p == prec::ASSIGN => {
+                self.s.act_on_assign_list(op, lhs, &l, op_tok.span.lo)
+            }
+            (None, Some(c)) => self.s.act_on_misplaced_init_list(lhs, &l, true, ":", c),
+            _ => {
+                let sp = self.spelling_of(op_tok);
+                self.s.act_on_misplaced_init_list(lhs, &l, true, &sp, op_tok.span.lo)
+            }
+        })
+    }
+
     // -- unary and cast expressions ----------------------------------------------------
 
     /// cast-expression ([expr.cast]) and unary-expression ([expr.unary]).
     pub(crate) fn parse_cast_expr(&mut self) -> PExpr {
         let loc = self.loc();
+        if self.at_global_new_delete() {
+            return self.parse_new_delete_expr();
+        }
         if let Some(p) = Self::punct_of(self.tok()) {
             let op = match p {
                 Punct::PlusPlus => Some(UnaryOp::PreInc),
@@ -210,7 +285,9 @@ impl Parser<'_, '_> {
                 self.unsupported("the GNU address-of-label operator", loc);
                 return None;
             }
-            if p == Punct::LParen && self.is_type_id_start(self.pos() + 1) {
+            if p == Punct::LParen
+                && self.is_cxx_type_id_at(self.pos() + 1, TypeIdContext::InParens).0
+            {
                 return self.parse_c_style_cast();
             }
         }
@@ -225,13 +302,29 @@ impl Parser<'_, '_> {
                 return self.parse_cast_expr();
             }
             Some(Kw::Noexcept) => return self.parse_noexcept_expr(),
-            Some(k @ (Kw::New | Kw::Delete | Kw::CoAwait)) => {
+            Some(Kw::New | Kw::Delete) => return self.parse_new_delete_expr(),
+            Some(k @ Kw::CoAwait) => {
                 self.unsupported(&format!("'{}' expressions", k.spelling()), loc);
                 return None;
             }
             _ => {}
         }
         self.parse_postfix_expr()
+    }
+
+    /// The rest of a GNU statement expression `( compound-statement )`
+    /// after the `(` at `lparen` (clang's `ParseParenExpression`,
+    /// `CompoundStmt` case). Only allowed in a function body; elsewhere
+    /// it is skipped up to and including the `)`.
+    fn parse_stmt_expr(&mut self, lparen: Loc) -> PExpr {
+        if !self.s.check_stmt_expr_allowed(lparen) {
+            self.skip_until(&[Punct::RParen], true, true);
+            return None;
+        }
+        let scope = self.s.act_on_start_stmt_expr();
+        let (body, _) = self.parse_compound_in(true, true);
+        let rparen = self.expect_closing(Punct::RParen, Punct::LParen, lparen);
+        Some(self.s.act_on_stmt_expr(scope, body, lparen, rparen))
     }
 
     /// `( type-id ) cast-expression`.
@@ -242,13 +335,16 @@ impl Parser<'_, '_> {
             self.skip_until(&[Punct::RParen], false, true);
             return None;
         };
-        self.expect_closing(Punct::RParen, Punct::LParen, open);
+        let rparen = self.expect_closing(Punct::RParen, Punct::LParen, open);
         if self.at(Punct::LBrace) {
-            self.unsupported("compound literals", open);
-            return None;
+            // GNU/C99 compound literal `( type-id ) braced-init-list`, a
+            // postfix-expression (clang's `ParseCompoundLiteralExpression`).
+            let l = self.parse_init_list().ok()?;
+            let e = self.s.act_on_compound_literal(ty, &l, open);
+            return self.parse_postfix_suffix(e);
         }
         let e = self.parse_cast_expr()?;
-        Some(self.s.act_on_cast(CastStyle::CStyle, ty, e, open))
+        Some(self.s.act_on_cast(CastStyle::CStyle, ty, e, open, rparen))
     }
 
     /// `sizeof...(name)` ([expr.sizeof]/5). M2 has no packs, so Sema
@@ -276,7 +372,9 @@ impl Parser<'_, '_> {
         if kind == TraitKind::SizeOf && self.at(Punct::Ellipsis) {
             return self.parse_sizeof_pack(loc);
         }
-        if self.at(Punct::LParen) && self.is_type_id_start(self.pos() + 1) {
+        if self.at(Punct::LParen)
+            && self.is_cxx_type_id_at(self.pos() + 1, TypeIdContext::InParens).0
+        {
             let open = self.bump().span.lo;
             let Some(ty) = self.parse_type_id() else {
                 self.skip_until(&[Punct::RParen], false, true);
@@ -312,11 +410,104 @@ impl Parser<'_, '_> {
         Some(self.s.act_on_noexcept_expr(e, loc, rparen))
     }
 
+    /// `typeid ( type-id )` / `typeid ( expression )` ([expr.typeid]);
+    /// a parenthesized type-id wins ([dcl.ambig.res]/2). The expression
+    /// operand is unevaluated (no polymorphic classes exist in M2).
+    fn parse_typeid(&mut self) -> PExpr {
+        let loc = self.bump().span.lo;
+        let Some(open) = self.eat(Punct::LParen) else {
+            let d =
+                self.s.diag(DiagId::parse_expected_after, self.loc()).arg("'typeid'").arg("'('");
+            self.emit(d);
+            return None;
+        };
+        if self.is_cxx_type_id(TypeIdContext::InParens).0 {
+            // clang matches the `)` before looking at the type.
+            let ty = self.parse_type_id();
+            let rparen = self.expect_closing(Punct::RParen, Punct::LParen, open);
+            return Some(self.s.act_on_typeid(Err(ty?), loc, rparen));
+        }
+        self.s.enter_unevaluated();
+        let e = self.parse_expression();
+        self.s.exit_unevaluated();
+        let Some(e) = e else {
+            self.skip_until(&[Punct::RParen], true, true);
+            return None;
+        };
+        let rparen = self.expect_closing(Punct::RParen, Punct::LParen, open);
+        Some(self.s.act_on_typeid(Ok(e), loc, rparen))
+    }
+
+    /// `__builtin_offsetof ( type-id , offsetof-member-designator )`
+    /// (clang `ParseBuiltinPrimaryExpression`): the designator is an
+    /// identifier followed by `.identifier` and `[expression]` parts.
+    fn parse_builtin_offsetof(&mut self) -> PExpr {
+        let loc = self.bump().span.lo;
+        let Some(open) = self.eat(Punct::LParen) else {
+            let d = self
+                .s
+                .diag(DiagId::parse_expected_after, self.expected_loc())
+                .arg("'__builtin_offsetof'")
+                .arg("'('");
+            self.emit(d);
+            return None;
+        };
+        let Some(ty) = self.parse_type_id() else {
+            self.skip_until(&[Punct::RParen], true, true);
+            return None;
+        };
+        if self.expect(Punct::Comma).is_none() {
+            self.skip_until(&[Punct::RParen], true, true);
+            return None;
+        }
+        let mut comps = Vec::new();
+        let Some(name) = self.ident() else {
+            return self.offsetof_expected_identifier();
+        };
+        let at = self.bump().span.lo;
+        comps.push(OffsetofComponent::Field { name, start: at, end: at });
+        loop {
+            if let Some(dot) = self.eat(Punct::Period) {
+                let Some(name) = self.ident() else {
+                    return self.offsetof_expected_identifier();
+                };
+                let end = self.bump().span.lo;
+                comps.push(OffsetofComponent::Field { name, start: dot, end });
+            } else if self.at(Punct::LSquare) {
+                let start = self.bump().span.lo;
+                let Some(index) = self.parse_expression() else {
+                    self.skip_until(&[Punct::RParen], true, true);
+                    return None;
+                };
+                let end = self.expect_closing(Punct::RSquare, Punct::LSquare, start);
+                comps.push(OffsetofComponent::Index { index, start, end });
+            } else {
+                let ok = self.at(Punct::RParen);
+                let rparen = self.expect_closing(Punct::RParen, Punct::LParen, open);
+                return ok.then(|| self.s.act_on_builtin_offsetof(loc, ty, &comps, rparen));
+            }
+        }
+    }
+
+    /// `expected identifier` in an offsetof designator, then skip past `)`.
+    fn offsetof_expected_identifier(&mut self) -> PExpr {
+        let d = self.s.diag(DiagId::parse_expected, self.loc()).arg("identifier");
+        self.emit(d);
+        self.skip_until(&[Punct::RParen], true, true);
+        None
+    }
+
     // -- postfix expressions --------------------------------------------------------------
 
     /// postfix-expression ([expr.post]).
     fn parse_postfix_expr(&mut self) -> PExpr {
-        let mut e = self.parse_primary_expr()?;
+        let e = self.parse_primary_expr()?;
+        self.parse_postfix_suffix(e)
+    }
+
+    /// The postfix operators applied to `e` (clang's
+    /// `ParsePostfixExpressionSuffix`).
+    pub(crate) fn parse_postfix_suffix(&mut self, mut e: ExprId) -> PExpr {
         loop {
             let loc = self.loc();
             match Self::punct_of(self.tok()) {
@@ -342,9 +533,15 @@ impl Parser<'_, '_> {
                     if !self.at(Punct::RParen) {
                         loop {
                             if self.at(Punct::LBrace) {
-                                self.unsupported("braced-init-list arguments", self.loc());
-                                self.skip_until(&[Punct::RParen], false, true);
-                                return None;
+                                let Ok(l) = self.parse_init_list() else {
+                                    self.skip_until(&[Punct::RParen], false, true);
+                                    return None;
+                                };
+                                args.push(self.s.act_on_braced_arg(l));
+                                if self.eat(Punct::Comma).is_none() {
+                                    break;
+                                }
+                                continue;
                             }
                             let Some(a) = self.parse_assignment_expr() else {
                                 self.skip_until(&[Punct::RParen], false, true);
@@ -400,9 +597,7 @@ impl Parser<'_, '_> {
             TokKind::Punct(Punct::LParen) => {
                 self.bump();
                 if self.at(Punct::LBrace) {
-                    self.unsupported("statement expressions", loc);
-                    self.skip_until(&[Punct::RParen], false, true);
-                    return None;
+                    return self.parse_stmt_expr(loc);
                 }
                 let Some(e) = self.parse_expression() else {
                     self.skip_until(&[Punct::RParen], false, true);
@@ -440,13 +635,9 @@ impl Parser<'_, '_> {
                     None
                 }
                 _ if is_simple_type_kw(k) => self.parse_functional_cast(),
-                Kw::This
-                | Kw::Throw
-                | Kw::Typeid
-                | Kw::Requires
-                | Kw::CoYield
-                | Kw::Typename
-                | Kw::Template => {
+                Kw::Typeid => self.parse_typeid(),
+                Kw::BuiltinOffsetof => self.parse_builtin_offsetof(),
+                Kw::This | Kw::Requires | Kw::CoYield | Kw::Typename | Kw::Template => {
                     self.unsupported(&format!("'{}' expressions", k.spelling()), loc);
                     None
                 }
@@ -457,7 +648,22 @@ impl Parser<'_, '_> {
             };
         }
         if self.ident().is_some() || self.at(Punct::ColonColon) {
-            if let Some((_, NameClass::Type(..), _)) = self.scan_name(self.pos()) {
+            if let Some((end, NameClass::Type(..), name)) = self.scan_name(self.pos()) {
+                // An unqualified type name not followed by `(` or `{` is
+                // not looked at as a type (clang only annotates it before
+                // those), so the id-expression names a type.
+                if end == self.pos() + 1
+                    && !matches!(
+                        Self::punct_of(self.tok_at(end)),
+                        Some(Punct::LParen | Punct::LBrace)
+                    )
+                {
+                    let text = self.s.ast.symbols().as_str(name).to_owned();
+                    let d = self.s.diag(DiagId::sema_unexpected_typedef_ident, loc).arg(text);
+                    self.emit(d);
+                    self.bump();
+                    return Some(self.s.act_on_error_expr(&[], loc));
+                }
                 return self.parse_functional_cast();
             }
             let qual = self.parse_nested_name().ok()?;
@@ -483,8 +689,8 @@ impl Parser<'_, '_> {
             self.skip_until(&[Punct::RParen], false, true);
             return None;
         };
-        self.expect_closing(Punct::RParen, Punct::LParen, open);
-        Some(self.s.act_on_cast(style, ty, e, loc))
+        let rparen = self.expect_closing(Punct::RParen, Punct::LParen, open);
+        Some(self.s.act_on_cast(style, ty, e, loc, rparen))
     }
 
     /// `T(e)` ([expr.type.conv]) with one operand.
@@ -493,30 +699,39 @@ impl Parser<'_, '_> {
         let ds = self.parse_decl_specifiers(DeclaratorContext::TypeName);
         let ty: QualType = self.s.type_from_declspec(&ds);
         if self.at(Punct::LBrace) {
-            self.unsupported("list-initialization of a temporary", self.loc());
-            return None;
+            let l = self.parse_init_list().ok()?;
+            return Some(self.s.act_on_list_cast(ty, &l, loc));
         }
         let Some(open) = self.eat(Punct::LParen) else {
-            let d = self.s.diag(DiagId::parse_expected, self.expected_loc()).arg("'('");
+            let d = self.s.diag(DiagId::parse_expected_lparen_after_type, self.loc());
             self.emit(d);
             return None;
         };
         if self.at(Punct::RParen) {
-            self.unsupported("value-initialization of a temporary", loc);
-            self.bump();
-            return None;
+            let rparen = self.bump().span.lo;
+            return Some(self.s.act_on_value_init_cast(ty, loc, rparen));
         }
-        let Some(e) = self.parse_assignment_expr() else {
-            self.skip_until(&[Punct::RParen], false, true);
-            return None;
-        };
-        if self.at(Punct::Comma) {
-            self.unsupported("functional casts with several operands", self.loc());
-            self.skip_until(&[Punct::RParen], false, true);
-            return None;
+        let mut args = Vec::new();
+        loop {
+            if self.at(Punct::LBrace) {
+                self.unsupported("braced-init-list operands of a functional cast", self.loc());
+                self.skip_until(&[Punct::RParen], false, true);
+                return None;
+            }
+            let Some(e) = self.parse_assignment_expr() else {
+                self.skip_until(&[Punct::RParen], false, true);
+                return None;
+            };
+            args.push(e);
+            if self.eat(Punct::Comma).is_none() {
+                break;
+            }
         }
-        self.expect_closing(Punct::RParen, Punct::LParen, open);
-        Some(self.s.act_on_cast(CastStyle::Functional, ty, e, loc))
+        let rparen = self.expect_closing(Punct::RParen, Punct::LParen, open);
+        if let [e] = args[..] {
+            return Some(self.s.act_on_cast(CastStyle::Functional, ty, e, loc, rparen));
+        }
+        Some(self.s.act_on_paren_list_cast(ty, &args, loc))
     }
 
     // -- literals ------------------------------------------------------------------------------
@@ -541,7 +756,7 @@ impl Parser<'_, '_> {
         }
     }
 
-    fn parse_number(&mut self) -> kiln_ast::ExprId {
+    fn parse_number(&mut self) -> ExprId {
         let t = self.bump();
         let sp = self.spelling_of(&t);
         let n = classify_number(&sp, self.std);
@@ -562,7 +777,7 @@ impl Parser<'_, '_> {
         }
     }
 
-    fn parse_char(&mut self) -> kiln_ast::ExprId {
+    fn parse_char(&mut self) -> ExprId {
         let t = self.bump();
         let sp = self.spelling_of(&t);
         let c = decode_char(&sp, self.lit_opts);

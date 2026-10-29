@@ -6,7 +6,8 @@ use kiln_abi::irtype::BitFieldInfo;
 use kiln_abi::mangle;
 use kiln_ast::decl::{DeclKind, VarStorage};
 use kiln_ast::expr::{BinaryOp, CastKind, ExprFlags, ExprKind, UnaryOp, ValueCategory};
-use kiln_ast::{DeclId, ExprId, QualType};
+use kiln_ast::stmt::StmtKind;
+use kiln_ast::{DeclId, ExprId, QualType, StmtId};
 use kiln_llvm::{
     Attr, AttrKind, AttrList, BinOp, CallOpts, CastOp, ConstData, Flags, FloatPredicate,
     IntPredicate, TypeId as LTy, Value,
@@ -16,6 +17,13 @@ use crate::fir::{Fir, Op, V};
 use crate::fold::is_local;
 use crate::func::{Addr, CallArg, min_align};
 use crate::module::{Cg, R, err, gval};
+
+/// The value an `OpaqueValueExpr` stands for.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum Opaque {
+    Rv(Option<V>),
+    Lv(LV),
+}
 
 /// An lvalue: an address, its source type and the bit-field access.
 #[derive(Clone, Copy, Debug)]
@@ -31,15 +39,15 @@ fn low_mask(bits: u32) -> u128 {
 
 impl Cg<'_> {
     #[allow(clippy::unnecessary_wraps, reason = "diagnostic location slot")]
-    fn loc_of(&self, e: ExprId) -> Option<kiln_source::Loc> {
+    pub(crate) fn loc_of(&self, e: ExprId) -> Option<kiln_source::Loc> {
         Some(self.ast.exprs.get(e).loc())
     }
 
-    fn sub(&self, e: ExprId) -> ExprId {
+    pub(crate) fn sub(&self, e: ExprId) -> ExprId {
         ExprId::new(self.ast.exprs.get(e).a())
     }
 
-    fn is_glvalue(&self, e: ExprId) -> bool {
+    pub(crate) fn is_glvalue(&self, e: ExprId) -> bool {
         self.ast.exprs.get(e).value_category() != ValueCategory::PRValue
     }
 
@@ -55,11 +63,11 @@ impl Cg<'_> {
         self.size_align(q).1
     }
 
-    fn i64c(&mut self, v: i128) -> V {
+    pub(crate) fn i64c(&mut self, v: i128) -> V {
         V::C(self.m.const_int(LTy::I64, v))
     }
 
-    fn icn(&mut self, ty: LTy, v: i128) -> V {
+    pub(crate) fn icn(&mut self, ty: LTy, v: i128) -> V {
         V::C(self.m.const_int(ty, v))
     }
 
@@ -123,6 +131,13 @@ impl Cg<'_> {
         let q = n.ty();
         Ok(Some(match n.kind() {
             ExprKind::ParenExpr => return self.emit_scalar_opt(ast.exprs.operand(e)),
+            ExprKind::CompoundLiteralExpr => {
+                return self.emit_scalar_opt(ast.exprs.compound_literal_init(e));
+            }
+            ExprKind::CXXDefaultArgExpr => match default_arg_of(ast, e) {
+                Some(d) => return self.emit_scalar_opt(d),
+                None => return err(self.loc_of(e), "default argument not yet parsed"),
+            },
             ExprKind::ExprWithCleanups => return self.emit_scalar_opt(self.sub(e)),
             ExprKind::ConstantExpr => match ast.exprs.constant_value(e) {
                 Some(c) if !ast.types.is_void(q) => V::C(self.const_scalar_value(c, q)?),
@@ -155,6 +170,10 @@ impl Cg<'_> {
                 let t = self.lty(q);
                 V::C(self.m.const_zero(t))
             }
+            ExprKind::OffsetOfExpr => {
+                let t = self.lty(q);
+                V::C(self.m.const_int(t, i128::from(ast.exprs.offsetof_value(e))))
+            }
             ExprKind::UnaryExprOrTypeTraitExpr => match self.folds.get(e) {
                 Some(c) => V::C(self.const_scalar_value(c, q)?),
                 None => return err(self.loc_of(e), "unfolded type trait expression"),
@@ -178,8 +197,37 @@ impl Cg<'_> {
                 let (lv, v) = self.emit_compound_assign(e)?;
                 if self.is_volatile(lv.q) { self.load_lv(lv) } else { v }
             }
-            ExprKind::ConditionalOperator => return self.emit_conditional(e),
+            ExprKind::ConditionalOperator => {
+                let [a, b] = ast.exprs.cond_arms(e);
+                return self.emit_conditional(self.sub(e), a, b);
+            }
+            ExprKind::BinaryConditionalOperator => {
+                let [common, c, a, b] = self.bind_common(e)?;
+                let r = self.emit_conditional(c, a, b);
+                self.f.opaque.remove(&common);
+                return r;
+            }
+            ExprKind::OpaqueValueExpr => match self.opaque_of(e) {
+                Some(Opaque::Rv(v)) => return Ok(v),
+                Some(Opaque::Lv(lv)) => self.load_lv(lv),
+                None => return err(self.loc_of(e), "unbound OpaqueValueExpr"),
+            },
             ExprKind::CallExpr => return self.emit_call(e, None),
+            ExprKind::CXXNewExpr => self.emit_cxx_new(e)?,
+            ExprKind::CXXDeleteExpr => {
+                self.emit_cxx_delete(e)?;
+                return Ok(None);
+            }
+            ExprKind::StmtExpr => return self.emit_stmt_expr(e),
+            // A scalar initializer list (clang `VisitInitListExpr`): its
+            // single element, or zero.
+            ExprKind::InitListExpr if !self.is_aggregate(q) => {
+                if let Some(&x) = ast.lists.get(ast.exprs.init_list_inits(e)).first() {
+                    return self.emit_scalar_opt(ExprId::new(x));
+                }
+                let t = self.lty(q);
+                V::C(self.m.const_zero(t))
+            }
             ExprKind::DeclRefExpr
             | ExprKind::MemberExpr
             | ExprKind::ArraySubscriptExpr
@@ -409,7 +457,7 @@ impl Cg<'_> {
     }
 
     /// `gep inbounds [N x T], p, i64 0, i64 0`.
-    fn decay(&mut self, a: Addr) -> V {
+    pub(crate) fn decay(&mut self, a: Addr) -> V {
         let z = self.i64c(0);
         self.gep(a.ty, a.v, vec![z, z], true)
     }
@@ -755,6 +803,7 @@ impl Cg<'_> {
         }
         let end = self.f.fir.create_block();
         let rhs = self.f.fir.create_block();
+        let start = self.f.fir.cur();
         if and {
             self.branch_on_bool(l, rhs, end)?;
         } else {
@@ -768,11 +817,26 @@ impl Cg<'_> {
             LTy::I1,
         );
         self.emit_block(rhs, false);
-        let v = self.eval_bool(r)?;
+        let v = self.cond_eval(start, |cg| cg.eval_bool(r))?;
         let rb = self.f.fir.cur().expect("insert point");
         self.emit_block(end, false);
         self.f.fir.add_incoming(Fir::last_inst(phi), v, rb);
         Ok(self.zext_or_same(phi, rt))
+    }
+
+    /// Runs `f` as conditionally evaluated code (clang
+    /// `ConditionalEvaluation::begin`/`end`); `start` is the block the
+    /// condition was branched from.
+    fn cond_eval<T>(
+        &mut self,
+        start: Option<crate::fir::Blk>,
+        f: impl FnOnce(&mut Self) -> R<T>,
+    ) -> R<T> {
+        let Some(b) = start else { return f(self) };
+        self.f.conds.push(b);
+        let r = f(self);
+        self.f.conds.pop();
+        r
     }
 
     /// clang `EmitBranchOnBoolExpr`.
@@ -801,13 +865,14 @@ impl Cg<'_> {
                     return self.branch_on_bool(l, t, f);
                 }
                 let mid = self.f.fir.create_block();
+                let start = self.f.fir.cur();
                 if and {
                     self.branch_on_bool(l, mid, f)?;
                 } else {
                     self.branch_on_bool(l, t, mid)?;
                 }
                 self.emit_block(mid, false);
-                self.branch_on_bool(r, t, f)
+                self.cond_eval(start, |cg| cg.branch_on_bool(r, t, f))
             }
             ExprKind::UnaryOperator if ast.exprs.unary_op(e) == UnaryOp::LNot => {
                 self.branch_on_bool(ast.exprs.operand(e), f, t)
@@ -817,11 +882,12 @@ impl Cg<'_> {
                 let [a, b] = ast.exprs.cond_arms(e);
                 let lb = self.f.fir.create_block();
                 let rb = self.f.fir.create_block();
+                let start = self.f.fir.cur();
                 self.branch_on_bool(c, lb, rb)?;
                 self.emit_block(lb, false);
-                self.branch_on_bool(a, t, f)?;
+                self.cond_eval(start, |cg| cg.branch_on_bool(a, t, f))?;
                 self.emit_block(rb, false);
-                self.branch_on_bool(b, t, f)
+                self.cond_eval(start, |cg| cg.branch_on_bool(b, t, f))
             }
             _ => {
                 let v = self.eval_bool(e)?;
@@ -831,11 +897,28 @@ impl Cg<'_> {
         }
     }
 
-    /// clang `VisitAbstractConditionalOperator`.
-    fn emit_conditional(&mut self, e: ExprId) -> R<Option<V>> {
+    /// clang `OpaqueValueMapping` for a `BinaryConditionalOperator`:
+    /// evaluates the common expression once and binds it; returns the
+    /// operands `[common, cond, then, else]`.
+    fn bind_common(&mut self, e: ExprId) -> R<[ExprId; 4]> {
         let ast = self.ast;
-        let c = self.sub(e);
-        let [a, b] = ast.exprs.cond_arms(e);
+        let ops = ast.exprs.binary_conditional_operands(e, &ast.lists);
+        let v = if self.is_glvalue(ops[0]) {
+            Opaque::Lv(self.emit_lvalue(ops[0])?)
+        } else {
+            Opaque::Rv(self.emit_scalar_opt(ops[0])?)
+        };
+        self.f.opaque.insert(ops[0], v);
+        Ok(ops)
+    }
+
+    fn opaque_of(&self, e: ExprId) -> Option<Opaque> {
+        let src = self.ast.exprs.opaque_source(e)?;
+        self.f.opaque.get(&src).copied()
+    }
+
+    /// clang `VisitAbstractConditionalOperator`.
+    fn emit_conditional(&mut self, c: ExprId, a: ExprId, b: ExprId) -> R<Option<V>> {
         if let Some(x) = self.fold_bool(c) {
             return self.emit_scalar_opt(if x { a } else { b });
         }
@@ -852,13 +935,14 @@ impl Cg<'_> {
         let lb = self.f.fir.create_block();
         let rb = self.f.fir.create_block();
         let cont = self.f.fir.create_block();
+        let start = self.f.fir.cur();
         self.branch_on_bool(c, lb, rb)?;
         self.emit_block(lb, false);
-        let x = self.emit_scalar_opt(a)?;
+        let x = self.cond_eval(start, |cg| cg.emit_scalar_opt(a))?;
         let lb = self.f.fir.cur().expect("insert point");
         self.br(cont);
         self.emit_block(rb, false);
-        let y = self.emit_scalar_opt(b)?;
+        let y = self.cond_eval(start, |cg| cg.emit_scalar_opt(b))?;
         let rb = self.f.fir.cur().expect("insert point");
         self.emit_block(cont, false);
         Ok(match (x, y) {
@@ -975,6 +1059,10 @@ impl Cg<'_> {
         let q = n.ty();
         match n.kind() {
             ExprKind::ParenExpr => self.emit_lvalue(ast.exprs.operand(e)),
+            ExprKind::CXXDefaultArgExpr => match default_arg_of(ast, e) {
+                Some(d) => self.emit_lvalue(d),
+                None => err(self.loc_of(e), "default argument not yet parsed"),
+            },
             ExprKind::ExprWithCleanups => self.emit_lvalue(self.sub(e)),
             ExprKind::ConstantExpr => self.emit_lvalue(ast.exprs.operand(e)),
             ExprKind::SubstNonTypeTemplateParmExpr => self.emit_lvalue(ExprId::new(n.b())),
@@ -1025,7 +1113,20 @@ impl Cg<'_> {
                 }
             }
             ExprKind::CompoundAssignOperator => Ok(self.emit_compound_assign(e)?.0),
-            ExprKind::ConditionalOperator => self.cond_lvalue(e),
+            ExprKind::ConditionalOperator => {
+                let [a, b] = ast.exprs.cond_arms(e);
+                self.cond_lvalue(e, self.sub(e), a, b)
+            }
+            ExprKind::BinaryConditionalOperator => {
+                let [common, c, a, b] = self.bind_common(e)?;
+                let r = self.cond_lvalue(e, c, a, b);
+                self.f.opaque.remove(&common);
+                r
+            }
+            ExprKind::OpaqueValueExpr => match self.opaque_of(e) {
+                Some(Opaque::Lv(lv)) => Ok(lv),
+                _ => err(self.loc_of(e), "unbound glvalue OpaqueValueExpr"),
+            },
             ExprKind::CallExpr if self.is_glvalue(e) => {
                 // A call returning a reference.
                 let Some(p) = self.emit_call(e, None)? else {
@@ -1061,23 +1162,22 @@ impl Cg<'_> {
         }
     }
 
-    fn cond_lvalue(&mut self, e: ExprId) -> R<LV> {
+    fn cond_lvalue(&mut self, e: ExprId, c: ExprId, a: ExprId, b: ExprId) -> R<LV> {
         let ast = self.ast;
-        let c = self.sub(e);
-        let [a, b] = ast.exprs.cond_arms(e);
         if let Some(x) = self.fold_bool(c) {
             return self.emit_lvalue(if x { a } else { b });
         }
         let lb = self.f.fir.create_block();
         let rb = self.f.fir.create_block();
         let cont = self.f.fir.create_block();
+        let start = self.f.fir.cur();
         self.branch_on_bool(c, lb, rb)?;
         self.emit_block(lb, false);
-        let x = self.emit_lvalue(a)?;
+        let x = self.cond_eval(start, |cg| cg.emit_lvalue(a))?;
         let lb = self.f.fir.cur().expect("insert point");
         self.br(cont);
         self.emit_block(rb, false);
-        let y = self.emit_lvalue(b)?;
+        let y = self.cond_eval(start, |cg| cg.emit_lvalue(b))?;
         let rb = self.f.fir.cur().expect("insert point");
         self.emit_block(cont, false);
         let p = self
@@ -1221,6 +1321,46 @@ impl Cg<'_> {
         };
         let v = self.gep(addr.ty, addr.v, indices, true);
         Ok(LV { addr: Addr { v, ty: ety, align }, q, bf: None })
+    }
+
+    // ---- statement expressions -----------------------------------------
+
+    /// A GNU statement expression with a scalar or `void` value (clang
+    /// `EmitCompoundStmt` with `GetLast`): the statements in order; the
+    /// result statement (the last non-null one, through labels) is
+    /// evaluated as the value.
+    fn emit_stmt_expr(&mut self, e: ExprId) -> R<Option<V>> {
+        let ast = self.ast;
+        let body = ast.exprs.stmt_expr_body(e);
+        if ast.types.is_void(ast.exprs.get(e).ty()) {
+            self.emit_stmt(body)?;
+            return Ok(None);
+        }
+        let children: Vec<StmtId> = ast.lists.iter(ast.stmts.compound_body(body)).collect();
+        let Some(result) =
+            children.iter().rposition(|&c| ast.stmts.get(c).kind() != StmtKind::NullStmt)
+        else {
+            return err(self.loc_of(e), "statement expression without a result");
+        };
+        for &c in &children[..result] {
+            self.emit_stmt(c)?;
+        }
+        let mut s = children[result];
+        loop {
+            let n = *ast.stmts.get(s);
+            match n.kind() {
+                StmtKind::LabelStmt => {
+                    let b = self.label_block(DeclId::new(n.a()));
+                    self.emit_block(b, false);
+                    s = StmtId::new(n.b());
+                }
+                StmtKind::AttributedStmt => s = StmtId::new(n.b()),
+                StmtKind::ExprStmt => break,
+                _ => return err(self.loc_of(e), "statement expression without a result"),
+            }
+        }
+        self.ensure_insert_point();
+        self.emit_scalar_opt(ast.stmts.expr_stmt_expr(s))
     }
 
     // ---- ignored expressions -------------------------------------------
@@ -1509,6 +1649,10 @@ impl Cg<'_> {
             ExprKind::ParenExpr | ExprKind::ConstantExpr => {
                 self.agg_visit(ast.exprs.operand(e), dest, zeroed)
             }
+            ExprKind::CXXDefaultArgExpr => match default_arg_of(ast, e) {
+                Some(d) => self.agg_visit(d, dest, zeroed),
+                None => err(self.loc_of(e), "default argument not yet parsed"),
+            },
             ExprKind::ExprWithCleanups | ExprKind::MaterializeTemporaryExpr => {
                 self.agg_visit(self.sub(e), dest, zeroed)
             }
@@ -1579,7 +1723,7 @@ impl Cg<'_> {
     }
 
     /// clang `AggExprEmitter::EmitInitializationToLValue`.
-    fn init_to_lvalue(&mut self, e: ExprId, lv: LV, zeroed: bool) -> R<()> {
+    pub(crate) fn init_to_lvalue(&mut self, e: ExprId, lv: LV, zeroed: bool) -> R<()> {
         let ast = self.ast;
         if zeroed && self.is_simple_zero(e) {
             return Ok(());
@@ -1597,7 +1741,7 @@ impl Cg<'_> {
     }
 
     /// clang `EmitNullInitializationToLValue`.
-    fn null_init_lvalue(&mut self, lv: LV, zeroed: bool) -> R<()> {
+    pub(crate) fn null_init_lvalue(&mut self, lv: LV, zeroed: bool) -> R<()> {
         if zeroed {
             return Ok(());
         }
@@ -1716,7 +1860,7 @@ impl Cg<'_> {
         Ok(())
     }
 
-    fn is_trivial_filler(&self, e: ExprId) -> bool {
+    pub(crate) fn is_trivial_filler(&self, e: ExprId) -> bool {
         let ast = self.ast;
         match ast.exprs.get(e).kind() {
             ExprKind::ImplicitValueInitExpr => true,
@@ -1939,4 +2083,11 @@ impl Cg<'_> {
         self.memcpy(at, V::C(gval(g)), at.align, size, vol);
         Ok(())
     }
+}
+
+/// The expression a `CXXDefaultArgExpr` stands for: its parameter's
+/// default argument, evaluated afresh at each call ([dcl.fct.default]/9).
+fn default_arg_of(ast: &kiln_ast::Ast, e: ExprId) -> Option<ExprId> {
+    let p = ast.exprs.default_arg_param(e);
+    ast.decls.param(p).and_then(|x| x.default_arg)
 }
