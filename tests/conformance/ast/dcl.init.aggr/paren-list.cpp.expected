@@ -1,0 +1,63 @@
+Dumping f:
+FunctionDecl f 'void ()'
+`-CompoundStmt
+  |-DeclStmt
+  | `-VarDecl p 'P' parenlistinit
+  |   `-ExprWithCleanups 'P'
+  |     `-CXXParenListInitExpr 'P'
+  |       |-CXXConstructExpr 'B' 'void (B &&) noexcept'
+  |       | `-MaterializeTemporaryExpr 'B' xvalue
+  |       |   `-CXXFunctionalCastExpr 'B' functional cast to B <NoOp>
+  |       |     `-InitListExpr 'B'
+  |       |       `-IntegerLiteral 'int' 1
+  |       |-IntegerLiteral 'int' 2
+  |       |-CXXConstructExpr 'C' 'void ()'
+  |       `-ImplicitValueInitExpr 'int'
+  |-DeclStmt
+  | `-VarDecl q 'P' parenlistinit
+  |   `-ExprWithCleanups 'P'
+  |     `-CXXParenListInitExpr 'P'
+  |       |-CXXConstructExpr 'B' 'void (B &&) noexcept'
+  |       | `-MaterializeTemporaryExpr 'B' xvalue
+  |       |   `-CXXFunctionalCastExpr 'B' functional cast to B <NoOp>
+  |       |     `-InitListExpr 'B'
+  |       |       `-IntegerLiteral 'int' 1
+  |       |-CXXDefaultInitExpr 'int' has rewritten init
+  |       | `-IntegerLiteral 'int' 5
+  |       |-CXXConstructExpr 'C' 'void ()'
+  |       `-ImplicitValueInitExpr 'int'
+  |-DeclStmt
+  | `-VarDecl k 'Q' parenlistinit destroyed
+  |   `-CXXParenListInitExpr 'Q'
+  |     |-IntegerLiteral 'int' 1
+  |     |-CXXConstructExpr 'D' 'void () noexcept' zeroing
+  |     `-CXXConstructExpr 'F' 'void ()'
+  |-DeclStmt
+  | `-VarDecl used i 'int' cinit
+  |   `-IntegerLiteral 'int' 0
+  |-DeclStmt
+  | `-VarDecl r 'R' parenlistinit
+  |   `-CXXParenListInitExpr 'R'
+  |     |-DeclRefExpr 'int' lvalue Var 'i' 'int'
+  |     `-ImplicitValueInitExpr 'int'
+  |-CStyleCastExpr 'void' <ToVoid>
+  | `-CXXFunctionalCastExpr 'A' functional cast to A <NoOp>
+  |   `-CXXParenListInitExpr 'A'
+  |     |-IntegerLiteral 'int' 1
+  |     `-IntegerLiteral 'int' 2
+  |-CStyleCastExpr 'void' <ToVoid>
+  | `-CStyleCastExpr 'A' <NoOp>
+  |   `-CXXParenListInitExpr 'A'
+  |     |-IntegerLiteral 'int' 1
+  |     `-ImplicitValueInitExpr 'int'
+  |-CStyleCastExpr 'void' <ToVoid>
+  | `-CXXStaticCastExpr 'A' static_cast<A> <NoOp>
+  |   `-CXXParenListInitExpr 'A'
+  |     |-IntegerLiteral 'int' 1
+  |     `-ImplicitValueInitExpr 'int'
+  `-DeclStmt
+    `-VarDecl a2 'int[2]' parenlistinit
+      `-CXXParenListInitExpr 'int[2]'
+        |-array_filler: ImplicitValueInitExpr 'int'
+        `-IntegerLiteral 'int' 1
+

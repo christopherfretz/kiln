@@ -12,9 +12,39 @@ use kiln_ast::expr::{ConstructInfo, ConstructionKind, ExprFlags, ExprKind, Value
 use kiln_ast::{ExprId, QualType};
 use kiln_source::Loc;
 
-use super::special::{DeletedAs, DiagSites, InitEntity, SpecialKind};
+use super::ctor_select::InitStyle;
+use super::special::{CtorCall, DeletedAs, DiagSites, InitEntity, Selected, SpecialKind};
 use crate::Sema;
 use crate::conv::{self, ConvCtx};
+
+/// How a constructor call by [`Sema::construct_class`] is built and
+/// diagnosed.
+#[derive(Clone, Debug)]
+pub(crate) struct ConstructSite {
+    /// The `CXXConstructExpr`'s location (the variable's name, the
+    /// type of `T(a, b)`, the argument of a conversion).
+    pub loc: Loc,
+    /// A `CXXTemporaryObjectExpr` ending here (`T(a, b)`, `T{...}`).
+    pub temp_end: Option<Loc>,
+    /// The `)` of a parenthesized initializer (the end of a
+    /// `CXXParenListInitExpr`).
+    pub rparen: Option<Loc>,
+    /// Where the access and deletion errors go, and their form.
+    pub sites: DiagSites,
+}
+
+impl ConstructSite {
+    /// The construction site of a variable (or other entity) at `at`:
+    /// clang reports the access and deletion errors there.
+    pub(crate) fn at(at: Loc) -> Self {
+        ConstructSite {
+            loc: at,
+            temp_end: None,
+            rparen: None,
+            sites: DiagSites { access: at, deleted: at, deleted_as: DeletedAs::Call },
+        }
+    }
+}
 
 impl Sema<'_, '_> {
     /// The initialization of an object of class type `to` from `e`, of
@@ -77,6 +107,120 @@ impl Sema<'_, '_> {
         // full-expression ([expr.call]/7, the Itanium ABI's caller-side
         // destruction).
         Some(if ctx == ConvCtx::Argument { self.maybe_bind_temporary(c) } else { c })
+    }
+
+    /// The initialization of an object of class type `ty` by a
+    /// constructor called with `args` ([dcl.init.general]/16.6.2,
+    /// [dcl.init.list]/3.7; spec/sema-class.md §5.2). `None` when `ty` is
+    /// not a complete class (the caller diagnoses). Errors are emitted
+    /// here and give a recovery expression.
+    pub(crate) fn construct_class(
+        &mut self,
+        ty: QualType,
+        args: &[ExprId],
+        style: InitStyle,
+        site: ConstructSite,
+    ) -> Option<ExprId> {
+        let target = self.ast.types.as_record(ty)?;
+        let class = self.ast.definition(target)?;
+        let class = conv::bases::complete_class(self, class)?;
+        let loc = site.loc;
+        if style.is_list() && self.has_init_list_ctor(class) {
+            // todo(WP-067b follow-up): initializer-list constructors
+            // ([dcl.init.list]/3.7, [over.match.list]/1.1).
+            self.unsupported("initialization by an initializer-list constructor", loc);
+            return Some(self.recover(ty, args, loc));
+        }
+        let sel = self.resolve_ctor(class, args, style);
+        if sel == Selected::Missing
+            && style == InitStyle::Direct
+            && !args.is_empty()
+            && self.is_aggregate(ty)
+        {
+            // [dcl.init.general]/16.6.2.2: no constructor is viable, so
+            // the aggregate is initialized from the parenthesized list.
+            let rparen = site.rparen.or(site.temp_end).unwrap_or(loc);
+            return Some(self.paren_aggregate_init(ty, args, loc, rparen));
+        }
+        let call = CtorCall {
+            info: ConstructInfo { list: style.is_list(), ..ConstructInfo::COMPLETE },
+            value_init: style.is_list() && args.is_empty(),
+            temp_end: site.temp_end,
+            narrowing: style.is_list(),
+            reject_explicit: style == InitStyle::CopyList,
+            ..CtorCall::new(args)
+        };
+        let k = if args.is_empty() { SpecialKind::DefaultCtor } else { SpecialKind::CopyCtor };
+        let built = self.use_ctor(sel, ty, class, k, call, loc, InitEntity::Var, site.sites);
+        Some(built.unwrap_or_else(|| self.recover(ty, args, loc)))
+    }
+
+    /// The value-initialization of an object of class type `ty`
+    /// ([dcl.init.general]/9) by its default constructor, zero-initialized
+    /// first unless that is user-provided: a `CXXConstructExpr` at `loc`.
+    /// `None` when `ty` is not a complete class.
+    pub(crate) fn value_init_class(&mut self, ty: QualType, loc: Loc) -> Option<ExprId> {
+        let target = self.ast.types.as_record(ty)?;
+        let class = self.ast.definition(target)?;
+        let class = conv::bases::complete_class(self, class)?;
+        let sel = self.resolve_ctor(class, &[], InitStyle::Direct);
+        let call = CtorCall { value_init: true, ..CtorCall::new(&[]) };
+        let sites = ConstructSite::at(loc).sites;
+        let built = self.use_ctor(
+            sel,
+            ty,
+            class,
+            SpecialKind::DefaultCtor,
+            call,
+            loc,
+            InitEntity::Var,
+            sites,
+        );
+        Some(built.unwrap_or_else(|| self.recover(ty, &[], loc)))
+    }
+
+    /// The copy-initialization of an object of class type `to` from the
+    /// non-class expression `e` by a converting constructor
+    /// ([dcl.init.general]/16.6.3, [over.match.copy]): the call wrapped in
+    /// an implicit `ConstructorConversion`; for an argument, a
+    /// temporary destroyed at the end of the full-expression. Errors are
+    /// reported at `at` (the variable, or `e`). `None` when `to` is not a
+    /// complete class or `e` is of class type.
+    pub(crate) fn convert_to_class(
+        &mut self,
+        e: ExprId,
+        to: QualType,
+        ctx: ConvCtx,
+        at: Loc,
+        deleted_as: DeletedAs,
+    ) -> Option<ExprId> {
+        if self.ast.types.as_record(self.ety(e)).is_some() {
+            return None;
+        }
+        let deleted_as = match deleted_as {
+            DeletedAs::Param(n) => DeletedAs::Conversion(Some(n)),
+            DeletedAs::Call => DeletedAs::Conversion(None),
+            x => x,
+        };
+        let site = ConstructSite {
+            loc: self.begin_loc(e),
+            temp_end: None,
+            rparen: None,
+            sites: DiagSites { access: at, deleted: at, deleted_as },
+        };
+        let c = self.construct_class(to, &[e], InitStyle::Copy, site)?;
+        if self.is_err_expr(c) {
+            return Some(c);
+        }
+        let x = conv::raw_cast(
+            self,
+            kiln_ast::expr::CastKind::ConstructorConversion,
+            c,
+            to,
+            ValueCategory::PRValue,
+            None,
+        );
+        Some(if ctx == ConvCtx::Argument { self.maybe_bind_temporary(x) } else { x })
     }
 
     /// `T()` for a class `T` ([expr.type.conv]/2, [dcl.init.general]/9):

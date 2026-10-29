@@ -12,6 +12,7 @@
 
 mod access;
 mod construct;
+mod ctor_select;
 mod friend;
 mod member_expr;
 mod members;
@@ -127,8 +128,10 @@ impl ClassBuild {
     }
 }
 
+pub(crate) use construct::ConstructSite;
+pub(crate) use ctor_select::InitStyle;
 pub(crate) use member_expr::MemberRef;
-pub(crate) use special::{DeletedAs, SpecialState, SynthContext};
+pub(crate) use special::{DeletedAs, DiagSites, SpecialState, SynthContext};
 pub(crate) use temporary::BindingSite;
 pub(crate) use r#virtual::{AbstractUse, VirtualSite, ensure_virtuals};
 

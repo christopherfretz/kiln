@@ -1783,6 +1783,11 @@ impl Cg<'_> {
                 None => self.null_init_lvalue(lv, zeroed),
             };
         }
+        if ast.decls.bases(ast.definition(rd).unwrap_or(rd), &ast.lists).next().is_some() {
+            // todo(WP-079): base subobjects of an aggregate (the list's
+            // first elements, [dcl.init.aggr]/2).
+            return err(self.loc_of(e), "aggregate initialization of a class with base classes");
+        }
         let fields: Vec<DeclId> =
             ast.decls.members(rd).filter(|&m| ast.decls.get(m).kind() == DeclKind::Field).collect();
         let mut k = 0usize;

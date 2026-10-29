@@ -579,6 +579,7 @@ fn unsupported(what: &str) -> ConvError {
 /// Binds a reference of type `to` to the glvalue `e` ([dcl.init.ref]/5.1,
 /// 5.3 for reference-compatible glvalues). Temporaries and conversion
 /// functions are not supported yet (M3).
+#[allow(clippy::too_many_lines, reason = "one step per bullet of [dcl.init.ref]/5")]
 fn bind_reference(s: &mut Sema<'_, '_>, e: ExprId, to: QualType) -> Result<ExprId, ConvError> {
     let (rvalue_ref, referee) = match s.ast.types.canonical_view(to) {
         TypeView::LValueRef(p) => (false, p),
@@ -817,6 +818,12 @@ pub fn implicit_convert(
         if fr.is_some() {
             let at = s.begin_loc(e);
             if let Some(x) = s.construct_from_class(e, to, ctx, at, crate::class::DeletedAs::Call) {
+                return Ok(x);
+            }
+        }
+        if fr.is_none() {
+            let at = s.begin_loc(e);
+            if let Some(x) = s.convert_to_class(e, to, ctx, at, crate::class::DeletedAs::Call) {
                 return Ok(x);
             }
         }

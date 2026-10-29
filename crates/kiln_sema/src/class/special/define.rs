@@ -98,6 +98,45 @@ pub(crate) enum DeletedAs {
     /// The error of an explicit cast ("... uses deleted function"),
     /// with the candidate note.
     Cast(Diag),
+    /// An implicit conversion by a deleted converting constructor
+    /// ("conversion function from ... invokes a deleted function"), with
+    /// the note on the parameter the argument initializes, if any.
+    Conversion(Option<Diag>),
+}
+
+/// The call a selected constructor makes: its arguments and the form
+/// of the expression built.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct CtorCall<'a> {
+    /// The arguments, unconverted.
+    pub args: &'a [ExprId],
+    /// The construction's flags; `zeroing` is set by [`CtorCall::value_init`].
+    pub info: ConstructInfo,
+    /// Value-initialization: zero-initialize first unless the
+    /// constructor is user-provided ([dcl.init.general]/9.1.2).
+    pub value_init: bool,
+    /// A `CXXTemporaryObjectExpr` ending at this location (`T(a, b)`,
+    /// `T{...}`); otherwise a `CXXConstructExpr`.
+    pub temp_end: Option<Loc>,
+    /// Converted arguments of non-class type are checked for narrowing
+    /// (list-initialization, [dcl.init.list]/3.7).
+    pub narrowing: bool,
+    /// `explicit` makes the initialization ill-formed (copy-list-init).
+    pub reject_explicit: bool,
+}
+
+impl<'a> CtorCall<'a> {
+    /// A plain complete-object construction from `args`.
+    pub(crate) fn new(args: &'a [ExprId]) -> Self {
+        CtorCall {
+            args,
+            info: ConstructInfo::COMPLETE,
+            value_init: false,
+            temp_end: None,
+            narrowing: false,
+            reject_explicit: false,
+        }
+    }
 }
 
 /// The state clang's `BaseAndFieldInfo` keeps while completing a
@@ -763,6 +802,7 @@ impl Sema<'_, '_> {
     /// these forms, with the Q7 selection of [`Sema::select_special`]):
     /// checks access and deletedness, odr-uses the constructor and
     /// builds the `CXXConstructExpr`. `None` after an error.
+    #[allow(clippy::too_many_arguments, reason = "clang's InitializationSequence inputs")]
     pub(crate) fn construct_special(
         &mut self,
         ty: QualType,
@@ -793,13 +833,49 @@ impl Sema<'_, '_> {
         sites: DiagSites,
     ) -> Option<ExprId> {
         let rq = arg.map_or(Quals::NONE, |a| self.ast.types.effective_quals(self.ety(a)));
-        match self.select_special(class, k, rq, Quals::NONE) {
+        let sel = self.select_special(class, k, rq, Quals::NONE);
+        let args: &[ExprId] = match &arg {
+            Some(a) => std::slice::from_ref(a),
+            None => &[],
+        };
+        let call = CtorCall {
+            info: ConstructInfo { kind: ck, ..ConstructInfo::COMPLETE },
+            ..CtorCall::new(args)
+        };
+        self.use_ctor(sel, ty, class, k, call, loc, entity, sites)
+    }
+
+    /// Diagnoses and builds the call of the constructor selection `sel`
+    /// for an object of type `ty` of class `class` (clang's
+    /// `InitializationSequence::Perform` / `Diagnose` for constructor
+    /// initialization). `k` is the special member asked for (the wording
+    /// of a missing default constructor). `None` after an error.
+    #[allow(clippy::too_many_arguments, reason = "clang's InitializationSequence inputs")]
+    #[allow(clippy::too_many_lines, reason = "one arm per selection outcome")]
+    pub(crate) fn use_ctor(
+        &mut self,
+        sel: Selected,
+        ty: QualType,
+        class: DeclId,
+        k: SpecialKind,
+        call: CtorCall<'_>,
+        loc: Loc,
+        entity: InitEntity,
+        sites: DiagSites,
+    ) -> Option<ExprId> {
+        match sel {
             Selected::Found(m) => {
-                let sel = if self.special_kind_of(m).is_some_and(|x| x.is_ctor()) {
-                    self.special_kind_of(m).map_or(3, SpecialKind::index)
-                } else {
-                    3
-                };
+                if call.reject_explicit && self.fn_spec(m).is_explicit() {
+                    let note =
+                        self.diag(DiagId::note_explicit_ctor_here, self.ast.decls.get(m).loc());
+                    let msg = self
+                        .diag(DiagId::sema_ctor_explicit_copy_list, sites.deleted)
+                        .with_note(note);
+                    self.emit(msg);
+                    return None;
+                }
+                let mk = self.special_kind_of(m).filter(|x| x.is_ctor());
+                let sel = mk.map_or(3, SpecialKind::index);
                 let class_ty = self.ast.types.canonical(self.class_type(class));
                 let msg = match entity {
                     InitEntity::Var => self.special_member_access(m, class, |s, prot| {
@@ -828,21 +904,42 @@ impl Sema<'_, '_> {
                     return None;
                 }
                 self.mark_function_referenced(m, loc);
-                let args = self.special_args(m, arg)?;
-                let info = ConstructInfo { kind: ck, ..ConstructInfo::COMPLETE };
-                Some(self.builder().construct(ty, m, &args, info, ExprFlags::NONE, loc, None))
+                let args = self.ctor_args(m, call.args, call.narrowing)?;
+                let zeroing = call.info.zeroing || call.value_init && !self.is_user_provided(m);
+                let info = ConstructInfo { zeroing, ..call.info };
+                Some(match call.temp_end {
+                    Some(end) => self.builder().temporary_object(
+                        ty,
+                        m,
+                        &args,
+                        info,
+                        ExprFlags::NONE,
+                        loc,
+                        end,
+                    ),
+                    None => {
+                        self.builder().construct(ty, m, &args, info, ExprFlags::NONE, loc, None)
+                    }
+                })
             }
             Selected::Deleted(m) => {
                 let spec =
                     self.ast.decls.function(self.ast.first(m)).map(|x| x.spec).unwrap_or_default();
-                let (deleted_as, param_note) = match sites.deleted_as {
-                    DeletedAs::Call => (None, None),
-                    DeletedAs::Param(n) => (None, Some(n)),
-                    DeletedAs::Cast(d) => (Some(d), None),
+                let mk = self.special_kind_of(m).filter(|x| x.is_ctor());
+                let (deleted_as, param_note, conversion) = match sites.deleted_as {
+                    DeletedAs::Call => (None, None, false),
+                    DeletedAs::Param(n) => (None, Some(n), false),
+                    DeletedAs::Cast(d) => (Some(d), None, false),
+                    DeletedAs::Conversion(n) => (None, n, true),
                 };
                 if let Some(d) = deleted_as {
+                    let Some(mk) = mk else {
+                        // todo(WP-068a): clang notes every candidate here.
+                        self.unsupported("a cast calling a deleted constructor", loc);
+                        return None;
+                    };
                     let implicit = if self.ast.decls.get(m).has(DeclFlags::IMPLICIT) {
-                        match k {
+                        match mk {
                             SpecialKind::DefaultCtor => 1u8,
                             SpecialKind::CopyCtor => 2,
                             _ => 3,
@@ -857,13 +954,18 @@ impl Sema<'_, '_> {
                     self.emit(d.with_note(note));
                     return None;
                 }
-                let mut msg = if spec.defaulted() == Defaulted::No {
+                let mut msg = if conversion {
+                    let from = call.args.first().map_or(QualType::ERROR, |&a| self.ety(a));
+                    self.diag(DiagId::sema_conv_deleted_ctor, sites.deleted)
+                        .arg(self.ty_arg(from))
+                        .arg(self.ty_arg(ty))
+                } else if spec.defaulted() == Defaulted::No {
                     self.diag(DiagId::sema_call_deleted_ctor, sites.deleted)
                         .arg(self.ty_arg(ty))
                         .arg(self.delete_message_suffix(m))
                 } else {
                     self.diag(DiagId::sema_call_implicitly_deleted_ctor, sites.deleted)
-                        .arg(k.index())
+                        .arg(mk.unwrap_or(k).index())
                         .arg(self.ty_arg(ty))
                 };
                 for n in self.deleted_function_notes(m, 0) {
@@ -880,6 +982,8 @@ impl Sema<'_, '_> {
                 None
             }
             Selected::Missing => {
+                // todo(WP-068a): "no matching constructor" with the
+                // candidate notes.
                 self.unsupported("this constructor call", loc);
                 None
             }
@@ -916,28 +1020,46 @@ impl Sema<'_, '_> {
         self.emit(msg);
     }
 
-    /// The arguments of a call of special member `m` with `first` as its
-    /// first argument: converted to the parameter type, then the default
-    /// arguments.
-    fn special_args(&mut self, m: DeclId, first: Option<ExprId>) -> Option<Vec<ExprId>> {
+    /// The arguments of a call of constructor `m` with `args`: each
+    /// converted to its parameter's type (copy-initialization,
+    /// [expr.call]/7; checked for narrowing if `narrowing`), then the
+    /// default arguments, then the variadic arguments promoted.
+    pub(crate) fn ctor_args(
+        &mut self,
+        m: DeclId,
+        args: &[ExprId],
+        narrowing: bool,
+    ) -> Option<Vec<ExprId>> {
         let params = self.param_decls(m);
         let mut out = Vec::new();
-        for (i, &p) in params.iter().enumerate() {
-            if i == 0
-                && let Some(a) = first
-            {
-                let pty = self.ast.decls.get(p).ty().unwrap_or(QualType::ERROR);
-                let e = self.convert_for_init(a, pty, ConvCtx::Argument);
-                if self.is_err_expr(e) {
-                    return None;
-                }
-                out.push(e);
+        for (i, &a) in args.iter().enumerate() {
+            let Some(&p) = params.get(i) else {
+                out.push(self.default_argument_promotion(a));
                 continue;
+            };
+            let pty = self.ast.decls.get(p).ty().unwrap_or(QualType::ERROR);
+            if narrowing && !self.ast.types.is_reference(pty) {
+                self.check_list_narrowing(a, pty);
             }
-            let Some(d) = self.ast.decls.param(p).and_then(|x| x.default_arg) else { break };
-            let x = *self.ast.exprs.get(d);
-            let used = self.ctx;
-            out.push(self.builder().default_arg(p, used, x.ty(), x.value_category(), Loc::INVALID));
+            let e = self.convert_for_init(a, pty, ConvCtx::Argument);
+            if self.is_err_expr(e) {
+                return None;
+            }
+            out.push(e);
+        }
+        if args.len() < params.len() {
+            for &p in &params[args.len()..] {
+                let Some(d) = self.ast.decls.param(p).and_then(|x| x.default_arg) else { break };
+                let x = *self.ast.exprs.get(d);
+                let used = self.ctx;
+                out.push(self.builder().default_arg(
+                    p,
+                    used,
+                    x.ty(),
+                    x.value_category(),
+                    Loc::INVALID,
+                ));
+            }
         }
         Some(out)
     }
@@ -1231,9 +1353,10 @@ impl Sema<'_, '_> {
             {
                 continue;
             }
-            let dtor = match self.select_special(fc, SpecialKind::Dtor, Quals::NONE, Quals::NONE) {
-                Selected::Found(d) | Selected::Deleted(d) => d,
-                _ => continue,
+            let (Selected::Found(dtor) | Selected::Deleted(dtor)) =
+                self.select_special(fc, SpecialKind::Dtor, Quals::NONE, Quals::NONE)
+            else {
+                continue;
             };
             let floc = self.ast.decls.get(f).loc();
             let elem = self.base_element(fty);

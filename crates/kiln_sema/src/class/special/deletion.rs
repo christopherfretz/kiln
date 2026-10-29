@@ -260,7 +260,7 @@ impl Sema<'_, '_> {
         ok.then_some(ArgConv { rank, base, binding: Some((rref, rq)) })
     }
 
-    fn fn_spec(&self, f: DeclId) -> FnSpec {
+    pub(crate) fn fn_spec(&self, f: DeclId) -> FnSpec {
         self.ast.decls.function(f).map(|x| x.spec).unwrap_or_default()
     }
 
@@ -269,7 +269,7 @@ impl Sema<'_, '_> {
         self.ast.types.proto(ty).map(FuncProto::info).unwrap_or_default()
     }
 
-    fn fn_variadic(&self, f: DeclId) -> bool {
+    pub(crate) fn fn_variadic(&self, f: DeclId) -> bool {
         self.fn_info(f).variadic()
     }
 

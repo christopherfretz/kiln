@@ -1,0 +1,76 @@
+Dumping f:
+FunctionDecl f 'void ()'
+`-CompoundStmt
+  |-DeclStmt
+  | `-VarDecl a 'A' cinit destroyed
+  |   `-ExprWithCleanups 'A'
+  |     `-CXXFunctionalCastExpr 'A' functional cast to A <NoOp>
+  |       `-CXXBindTemporaryExpr 'A' (CXXTemporary)
+  |         `-InitListExpr 'A'
+  |           |-IntegerLiteral 'int' 1
+  |           `-IntegerLiteral 'int' 2
+  |-DeclStmt
+  | `-VarDecl s 'S' listinit destroyed
+  |   `-CXXConstructExpr 'S' 'void (int)' list
+  |     `-IntegerLiteral 'int' 1
+  |-DeclStmt
+  | `-VarDecl t 'S' cinit destroyed
+  |   `-CXXConstructExpr 'S' 'void (int)' list
+  |     `-IntegerLiteral 'int' 1
+  |-DeclStmt
+  | `-VarDecl u 'S' listinit destroyed
+  |   `-CXXConstructExpr 'S' 'void (int, int)' list
+  |     |-IntegerLiteral 'int' 1
+  |     `-IntegerLiteral 'int' 2
+  |-DeclStmt
+  | `-VarDecl c 'S' cinit destroyed
+  |   `-ImplicitCastExpr 'S' <ConstructorConversion>
+  |     `-CXXConstructExpr 'S' 'void (int)'
+  |       `-ImplicitCastExpr 'int' <IntegralCast>
+  |         `-CharacterLiteral 'char' 99
+  |-DeclStmt
+  | `-VarDecl v 'V' listinit
+  |   `-CXXConstructExpr 'V' 'void ()' list
+  |-DeclStmt
+  | `-VarDecl w 'V' cinit
+  |   `-CXXTemporaryObjectExpr 'V' 'void ()' list
+  |-DeclStmt
+  | `-VarDecl x 'V' cinit
+  |   `-CXXConstructExpr 'V' 'void ()' list
+  |-DeclStmt
+  | `-VarDecl e 'E' listinit
+  |   `-CXXConstructExpr 'E' 'void (long, long)' list
+  |     |-ImplicitCastExpr 'long' <IntegralCast>
+  |     | `-IntegerLiteral 'int' 1
+  |     `-ImplicitCastExpr 'long' <IntegralCast>
+  |       `-IntegerLiteral 'int' 2
+  |-DeclStmt
+  | `-VarDecl g 'E' cinit
+  |   `-CXXConstructExpr 'E' 'void (long, long)' list
+  |     |-IntegerLiteral 'long' 1
+  |     `-IntegerLiteral 'long' 2
+  |-ExprWithCleanups 'void'
+  | `-CStyleCastExpr 'void' <ToVoid>
+  |   `-CXXBindTemporaryExpr 'S' (CXXTemporary)
+  |     `-CXXTemporaryObjectExpr 'S' 'void (int, int)'
+  |       |-IntegerLiteral 'int' 1
+  |       `-IntegerLiteral 'int' 2
+  |-ExprWithCleanups 'void'
+  | `-CStyleCastExpr 'void' <ToVoid>
+  |   `-CStyleCastExpr 'S' <ConstructorConversion>
+  |     `-CXXBindTemporaryExpr 'S' (CXXTemporary)
+  |       `-CXXConstructExpr 'S' 'void (int)'
+  |         `-IntegerLiteral 'int' 3
+  |-CStyleCastExpr 'void' <ToVoid>
+  | `-CXXStaticCastExpr 'V' static_cast<V> <ConstructorConversion>
+  |   `-CXXConstructExpr 'V' 'void (int)'
+  |     `-IntegerLiteral 'int' 4
+  `-ExprWithCleanups 'void'
+    `-CallExpr 'void'
+      |-ImplicitCastExpr 'void (*)(S)' <FunctionToPointerDecay>
+      | `-DeclRefExpr 'void (S)' lvalue Function 'take' 'void (S)'
+      `-CXXBindTemporaryExpr 'S' (CXXTemporary)
+        `-ImplicitCastExpr 'S' <ConstructorConversion>
+          `-CXXConstructExpr 'S' 'void (int)'
+            `-IntegerLiteral 'int' 5
+

@@ -2099,7 +2099,11 @@ impl Sema<'_, '_> {
     /// trailing parameters ([dcl.fct.default]/1) when the callee is known.
     /// `braced` holds the braced-init-list arguments, parallel to `args`.
     /// Diagnoses and returns `None` on an arity or conversion error.
-    #[allow(clippy::too_many_arguments, reason = "one per part of the call")]
+    #[allow(
+        clippy::too_many_arguments,
+        clippy::too_many_lines,
+        reason = "one per part of the call; one step per paragraph of [expr.call]"
+    )]
     pub(crate) fn convert_call_args(
         &mut self,
         named: Option<CallCallee>,
@@ -2185,14 +2189,20 @@ impl Sema<'_, '_> {
                 let pt = conv::strip_cv(self, params[i]);
                 let to = if self.ast.types.is_reference(params[i]) { params[i] } else { pt };
                 if self.ast.types.as_record(to).is_some()
-                    && self.ast.types.as_record(self.ety(a)).is_some()
+                    && !self.is_err_expr(a)
+                    && !self.expr_is_type_dependent(a)
                 {
                     let note = match pdecls.get(i) {
                         Some(&p) => crate::class::DeletedAs::Param(self.param_decl_note(p)),
                         None => crate::class::DeletedAs::Call,
                     };
                     let at = self.begin_loc(a);
-                    if let Some(x) = self.construct_from_class(a, to, ConvCtx::Argument, at, note) {
+                    let built = if self.ast.types.as_record(self.ety(a)).is_some() {
+                        self.construct_from_class(a, to, ConvCtx::Argument, at, note)
+                    } else {
+                        self.convert_to_class(a, to, ConvCtx::Argument, at, note)
+                    };
+                    if let Some(x) = built {
                         conv_args.push(x);
                         continue;
                     }
@@ -2287,7 +2297,7 @@ impl Sema<'_, '_> {
 
     /// The default argument promotions for a variadic argument
     /// ([expr.call]/12).
-    fn default_argument_promotion(&mut self, a: ExprId) -> ExprId {
+    pub(crate) fn default_argument_promotion(&mut self, a: ExprId) -> ExprId {
         let x = conv::decay(self, a);
         let t = self.ety(x);
         if self.ast.types.builtin(t) == Some(BuiltinType::Float) {
@@ -2588,6 +2598,43 @@ impl Sema<'_, '_> {
             }
             let x = self.maybe_bind_temporary(x);
             return self.explicit_cast(style, CastKind::ConstructorConversion, x, ty, loc, rparen);
+        }
+        // [expr.static.cast]/4: `T(e)`, `(T)e`, `static_cast<T>(e)` for
+        // a class `T` direct-initialize a temporary by a constructor.
+        if style.allows_static() && self.ast.types.as_record(ty).is_some() && {
+            let fr = self.ast.types.as_record(self.ety(e));
+            fr.is_none() || !conv::has_conversion_functions(self, self.ety(e))
+        } {
+            let d = self
+                .diag(DiagId::sema_ovl_deleted_conversion_in_cast, loc)
+                .arg(style.select())
+                .arg(self.ty_arg(self.ety(e)))
+                .arg(self.ty_arg(ty));
+            let site = crate::class::ConstructSite {
+                loc: self.begin_loc(e),
+                temp_end: None,
+                rparen: None,
+                sites: crate::class::DiagSites {
+                    access: loc,
+                    deleted: loc,
+                    deleted_as: crate::class::DeletedAs::Cast(d),
+                },
+            };
+            let to = conv::strip_cv(self, ty);
+            if let Some(x) = self.construct_class(to, &[e], crate::class::InitStyle::Direct, site) {
+                if self.is_err_expr(x) {
+                    return x;
+                }
+                // A parenthesized aggregate initialization (P0960) is a
+                // no-op cast of the initialized prvalue.
+                let kind = if self.ast.exprs.get(x).kind() == ExprKind::CXXParenListInitExpr {
+                    CastKind::NoOp
+                } else {
+                    CastKind::ConstructorConversion
+                };
+                let x = self.maybe_bind_temporary(x);
+                return self.explicit_cast(style, kind, x, ty, loc, rparen);
+            }
         }
         if self.ast.types.as_record(ty).is_some() || self.ast.types.as_record(self.ety(e)).is_some()
         {

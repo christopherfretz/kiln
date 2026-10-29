@@ -981,6 +981,9 @@ diag_ids! {
     note_member_declared_at = Note (0) "member is declared here";
     sema_ovl_deleted_conversion_in_cast = Error (3) "{0:const_cast|static_cast|reinterpret_cast|dynamic_cast|C-style cast|functional-style cast} from {1} to {2} uses deleted function";
     note_ctor_candidate_deleted = Note (2) "candidate constructor{0:| (the implicit default constructor)| (the implicit copy constructor)| (the implicit move constructor)} has been {1:explicitly|implicitly} deleted";
+    sema_ctor_explicit_copy_list = Error (0) "chosen constructor is explicit in copy-initialization";
+    note_explicit_ctor_here = Note (0) "explicit constructor declared here";
+    sema_conv_deleted_ctor = Error (2) "conversion function from {0} to {1} invokes a deleted function";
 }
 
 impl DiagId {

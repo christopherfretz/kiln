@@ -74,9 +74,10 @@ impl Sema<'_, '_> {
         if self.defn_bits(class).contains(kiln_ast::decl::DefinitionBits::TRIVIAL_DTOR) {
             return e;
         }
-        let dtor = match self.select_special(class, SpecialKind::Dtor, Quals::NONE, Quals::NONE) {
-            super::special::Selected::Found(d) | super::special::Selected::Deleted(d) => d,
-            _ => return e,
+        let (super::special::Selected::Found(dtor) | super::special::Selected::Deleted(dtor)) =
+            self.select_special(class, SpecialKind::Dtor, Quals::NONE, Quals::NONE)
+        else {
+            return e;
         };
         let loc = self.begin_loc(e);
         let ty = n.ty();

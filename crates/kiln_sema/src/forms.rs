@@ -243,6 +243,31 @@ impl Sema<'_, '_> {
             let flat = Self::list_exprs(l);
             return self.recover(QualType::ERROR, &flat, loc);
         }
+        let to = conv::strip_cv(self, ty);
+        if let Some(x) =
+            self.list_construct(to, l, crate::class::InitStyle::DirectList, loc, Some(l.rbrace))
+        {
+            return if self.is_err_expr(x) { x } else { self.maybe_bind_temporary(x) };
+        }
+        if self.ast.types.as_record(to).is_some() && self.is_complete(to) {
+            // An aggregate temporary: the list, destroyed at the end of
+            // the full-expression, then a no-op functional cast.
+            let init = self.init_from_list_at(to, l, Some(loc));
+            if self.is_err_expr(init) {
+                return self.recover(ty, &[init], loc);
+            }
+            let init = self.maybe_bind_temporary(init);
+            return self.builder().functional_cast(
+                CastKind::NoOp,
+                init,
+                to,
+                ValueCategory::PRValue,
+                None,
+                loc,
+                l.rbrace,
+                ExprFlags::NONE,
+            );
+        }
         if let Some(what) = self
             .temporary_unsupported(ty)
             .or_else(|| self.ast.types.is_void(ty).then_some("a void temporary"))
@@ -272,16 +297,50 @@ impl Sema<'_, '_> {
     /// `T(a, b, ...)` ([expr.type.conv]/2) with several operands: a
     /// non-class `T` is direct-initialized from a parenthesized list,
     /// which is ill-formed for a scalar ([dcl.init.general]/16.9).
-    pub fn act_on_paren_list_cast(&mut self, ty: QualType, args: &[ExprId], loc: Loc) -> ExprId {
+    pub fn act_on_paren_list_cast(
+        &mut self,
+        ty: QualType,
+        args: &[ExprId],
+        loc: Loc,
+        rparen: Loc,
+    ) -> ExprId {
         if self.is_error_type(ty) || args.iter().any(|&a| self.is_err_expr(a)) {
             return self.recover(ty, args, loc);
         }
         if self.ast.types.is_dependent(ty) || args.iter().any(|&a| self.expr_is_type_dependent(a)) {
-            let rparen = args.last().map_or(loc, |&a| self.eloc(a));
             return self.builder().unresolved_construct(ty, args, false, loc, rparen);
         }
         if self.require_non_abstract_alloc(loc, ty) {
             return self.recover(QualType::ERROR, args, loc);
+        }
+        // A class: a temporary direct-initialized by a constructor
+        // ([expr.type.conv]/2, clang's `CXXTemporaryObjectExpr`).
+        if self.ast.types.as_record(ty).is_some() {
+            let mut site = crate::class::ConstructSite::at(loc);
+            site.temp_end = Some(rparen);
+            let to = conv::strip_cv(self, ty);
+            if let Some(x) = self.construct_class(to, args, crate::class::InitStyle::Direct, site) {
+                if self.is_err_expr(x) {
+                    return x;
+                }
+                let paren_list = self.ast.exprs.get(x).kind() == ExprKind::CXXParenListInitExpr;
+                let x = self.maybe_bind_temporary(x);
+                if !paren_list {
+                    return x;
+                }
+                // `A(1, 2)` for an aggregate `A` (P0960): clang wraps the
+                // list in a no-op functional cast.
+                return self.builder().functional_cast(
+                    CastKind::NoOp,
+                    x,
+                    to,
+                    ValueCategory::PRValue,
+                    None,
+                    loc,
+                    rparen,
+                    ExprFlags::NONE,
+                );
+            }
         }
         if let Some(what) = self.temporary_unsupported(ty) {
             self.unsupported(&format!("direct-initialization of {what}"), loc);

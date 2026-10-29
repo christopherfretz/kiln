@@ -985,7 +985,7 @@ impl Parser<'_, '_> {
         if let [e] = args[..] {
             return Some(self.s.act_on_cast(CastStyle::Functional, ty, e, loc, rparen));
         }
-        Some(self.s.act_on_paren_list_cast(ty, &args, loc))
+        Some(self.s.act_on_paren_list_cast(ty, &args, loc, rparen))
     }
 
     // -- literals ------------------------------------------------------------------------------

@@ -935,9 +935,11 @@ impl VarSpec {
         VarSpec((self.0 & !(3 << 5)) | ((s as u32) << 5))
     }
     /// The bits [`DeclArena::mark_var`] may set after creation: `nrvo`,
-    /// and the `Call` init style of a default-initialized class variable
-    /// (ORed in from `C` only, with its `CXXConstructExpr`).
-    pub const LATE: VarSpec = VarSpec(1 << 10 | 1 << 5);
+    /// the `Call` init style of a default-initialized class variable
+    /// (set over `C` only, with its `CXXConstructExpr`), and
+    /// `ParenList` (set over `Call` once the parenthesized initializer
+    /// turns out to initialize an aggregate).
+    pub const LATE: VarSpec = VarSpec(1 << 10 | 1 << 6 | 1 << 5);
 }
 
 bit_accessors!(VarSpec:

@@ -2839,7 +2839,13 @@ impl Compiler<'_> {
                     self.emit_at(Op::ZeroInit, 0, &[q, fi.ty.0], e);
                 }
             }
-            TyKind::Record { .. } => {
+            TyKind::Record { decl, .. } => {
+                if self.ast().decls.bases(decl, &self.ast().lists).next().is_some() {
+                    // todo(WP-076): base subobjects of an aggregate (the
+                    // list's first elements, [dcl.init.aggr]/2).
+                    self.unsupported(e);
+                    return;
+                }
                 let fields = self.o.types.fields(ty).to_vec();
                 let mut it = inits.iter();
                 for fi in fields {

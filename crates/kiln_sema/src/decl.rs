@@ -629,8 +629,8 @@ impl Sema<'_, '_> {
         d.with_note(note)
     }
 
-    /// clang's "passing argument to parameter ['p'] here" note for the
-    /// parameter declaration `p`.
+    /// clang's "passing argument to parameter 'p' here" note (the name is
+    /// optional) for the parameter declaration `p`.
     pub(crate) fn param_decl_note(&self, p: DeclId) -> kiln_diag::Diag {
         let n = self.ast.decls.get(p);
         if n.name().is_empty() {
@@ -2101,6 +2101,11 @@ impl Sema<'_, '_> {
             return;
         }
         let e = self.perform_init(ty, init, loc, direct);
+        if self.ast.exprs.get(e).kind() == ExprKind::CXXParenListInitExpr {
+            // P0960 (clang's `parenlistinit`).
+            let style = VarSpec::new().with_init_style(kiln_ast::decl::InitStyle::ParenList);
+            self.ast.decls.mark_var(v, style);
+        }
         let e = self.act_on_full_expr(e);
         let _ = self.builder().set_var_init(v, e);
         // [class.temporary]/6: the temporaries the variable binds live as
