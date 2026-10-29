@@ -45,6 +45,9 @@ pub enum IrType {
     Vector(Box<IrType>, u64),
     /// The named struct of a class (`%struct.S`), by first declaration.
     Record(DeclId),
+    /// The base-subobject struct of a class whose non-virtual size differs
+    /// from its size (`%struct.S.base`; clang `getBaseSubobjectLLVMType`).
+    RecordBase(DeclId),
     /// A literal struct `{ ... }` (packed if the flag is set).
     Struct(Vec<IrType>, bool),
 }
@@ -108,6 +111,15 @@ pub struct IrRecord {
     pub size: u64,
     /// `alignof` of the class.
     pub align: u64,
+    /// The body of the base-subobject type, when the non-virtual size
+    /// differs from the size (clang `.base`), with the same packedness.
+    pub base_members: Option<Vec<IrType>>,
+    /// Non-virtual base (first declaration) → struct element index
+    /// (absent for empty or zero-sized bases).
+    pub base_index: FxHashMap<DeclId, u32>,
+    /// Virtual base (first declaration) → struct element index of the
+    /// complete-object type.
+    pub vbase_index: FxHashMap<DeclId, u32>,
 }
 
 /// A conversion session (clang `CodeGenTypes` minus the LLVM context).
@@ -121,6 +133,8 @@ struct Member {
     offset: u64,
     data: Option<IrType>,
     field: Option<DeclId>,
+    /// A base subobject: (class, virtual).
+    base: Option<(DeclId, bool)>,
     /// Ordering key so storage precedes the fields it holds.
     seq: u32,
 }
@@ -253,6 +267,11 @@ impl<'a> IrTypes<'a> {
                 let r = self.record(*d).clone();
                 struct_size_align(self, &r.members, r.packed)
             }
+            IrType::RecordBase(d) => {
+                let r = self.record(*d).clone();
+                let m = r.base_members.unwrap_or(r.members);
+                struct_size_align(self, &m, r.packed)
+            }
             IrType::Struct(m, packed) => {
                 let m = m.clone();
                 struct_size_align(self, &m, *packed)
@@ -280,7 +299,6 @@ impl<'a> IrTypes<'a> {
         let def = ast.definition(d).unwrap_or(d);
         let layout = self.lay.record(d).clone();
         let is_union = ast.decls.record(def).is_some_and(|r| r.tag == TagKind::Union);
-        let fields = if ast.definition(d).is_some() { props::fields(ast, def) } else { Vec::new() };
         let mut out = IrRecord {
             is_union,
             size: layout.size,
@@ -290,17 +308,47 @@ impl<'a> IrTypes<'a> {
         if ast.definition(d).is_none() {
             return out;
         }
+        let fields = props::fields(ast, def);
         if is_union {
             self.lower_union(&fields, &layout, &mut out);
             return out;
         }
+        let (members, packed) = self.lower_struct(def, &fields, &layout, false, false, &mut out);
+        out.members = members;
+        out.packed = packed;
+        // clang `ComputeRecordLayout`: the base-subobject type, lowered
+        // with the complete type's packedness.
+        if layout.nv_size != layout.size {
+            let mut scratch = IrRecord::default();
+            let (bm, _) = self.lower_struct(def, &fields, &layout, true, packed, &mut scratch);
+            out.base_members = Some(bm);
+        }
+        out
+    }
+
+    /// clang `CGRecordLowering::lower` for a non-union class: the struct
+    /// body and whether it is packed. `nv_base` lowers the base-subobject
+    /// type; `packed` is the initial packedness.
+    #[allow(clippy::too_many_arguments)]
+    fn lower_struct(
+        &mut self,
+        def: DeclId,
+        fields: &[FieldDesc],
+        layout: &kiln_ast::types::RecordLayout,
+        nv_base: bool,
+        packed: bool,
+        out: &mut IrRecord,
+    ) -> (Vec<IrType>, bool) {
+        let ast = self.ast();
+        let size = if nv_base { layout.nv_size } else { layout.size };
         let mut members: Vec<Member> = Vec::new();
         let mut seq = 0u32;
+        // accumulateFields.
         let mut i = 0;
         while i < fields.len() {
             let f = fields[i];
             if f.bit_width.is_some() {
-                i = self.accumulate_bitfields(&fields, i, &layout, &mut members, &mut seq);
+                i = self.accumulate_bitfields(fields, i, layout, &mut members, &mut seq);
             } else if self.is_empty_field(&f) {
                 i += 1;
             } else {
@@ -309,87 +357,207 @@ impl<'a> IrTypes<'a> {
                     offset: layout.fields[i] / 8,
                     data: Some(ty),
                     field: Some(f.decl),
+                    base: None,
                     seq,
                 });
                 seq += 1;
                 i += 1;
             }
         }
-        if members.is_empty() {
-            if layout.size > 0 {
-                out.members.push(IrType::bytes(layout.size));
+        // accumulateVPtrs.
+        if layout.vptr.is_some() {
+            members.push(Member { offset: 0, data: Some(IrType::Ptr), field: None, base: None, seq });
+            seq += 1;
+        }
+        // accumulateBases.
+        if let Some((p, true)) = layout.primary_base {
+            let p = ast.first(p);
+            let t = self.base_storage_type(p);
+            members.push(Member {
+                offset: 0,
+                data: Some(t),
+                field: None,
+                base: Some((p, true)),
+                seq,
+            });
+            seq += 1;
+        }
+        for &(b, off) in &layout.bases {
+            let b = ast.first(b);
+            if self.is_empty_class(b) || self.lay.record(b).nv_size == 0 {
+                continue;
             }
-            return out;
+            let t = self.base_storage_type(b);
+            members.push(Member { offset: off, data: Some(t), field: None, base: Some((b, false)), seq });
+            seq += 1;
+        }
+        if members.is_empty() {
+            let mut body = Vec::new();
+            if size > 0 {
+                body.push(IrType::bytes(size));
+            }
+            return (body, packed);
+        }
+        // accumulateVBases.
+        if !nv_base {
+            for &(vb, off) in &layout.vbases {
+                let vb = ast.first(vb);
+                if self.is_empty_class(vb) {
+                    continue;
+                }
+                let data = if self.is_nearly_empty(vb) && !self.has_own_storage(def, vb) {
+                    None
+                } else {
+                    Some(self.base_storage_type(vb))
+                };
+                members.push(Member { offset: off, data, field: None, base: Some((vb, true)), seq });
+                seq += 1;
+            }
         }
         members.sort_by_key(|m| (m.offset, m.seq));
         // Capstone.
         members.push(Member {
-            offset: layout.size,
+            offset: size,
             data: Some(IrType::Int(8)),
             field: None,
+            base: None,
             seq: u32::MAX,
         });
         // determinePacked.
-        let mut packed = false;
-        let mut alignment = 1u64;
-        let nv_size = layout.nv_size;
-        let mut nv_alignment = 1u64;
-        for m in &members[..members.len() - 1] {
-            if let Some(t) = &m.data {
-                let (_, a) = self.size_align(t);
-                if m.offset % a != 0 {
-                    packed = true;
+        let mut packed = packed;
+        if !packed {
+            let mut alignment = 1u64;
+            let nv_size = if nv_base { 0 } else { layout.nv_size };
+            let mut nv_alignment = 1u64;
+            for m in &members[..members.len() - 1] {
+                if let Some(t) = &m.data {
+                    let (_, a) = self.size_align(t);
+                    if m.offset % a != 0 {
+                        packed = true;
+                    }
+                    if m.offset < nv_size {
+                        nv_alignment = nv_alignment.max(a);
+                    }
+                    alignment = alignment.max(a);
                 }
-                if m.offset < nv_size {
-                    nv_alignment = nv_alignment.max(a);
-                }
-                alignment = alignment.max(a);
             }
-        }
-        if members.last().is_some_and(|m| m.offset % alignment != 0) {
-            packed = true;
-        }
-        if !nv_size.is_multiple_of(nv_alignment) {
-            packed = true;
-        }
-        if !packed && let Some(last) = members.last_mut() {
-            last.data = Some(IrType::Int(u32::try_from(alignment * 8).unwrap_or(8)));
+            if members.last().is_some_and(|m| m.offset % alignment != 0) {
+                packed = true;
+            }
+            if !nv_size.is_multiple_of(nv_alignment) {
+                packed = true;
+            }
+            if !packed && let Some(last) = members.last_mut() {
+                last.data = Some(IrType::Int(u32::try_from(alignment * 8).unwrap_or(8)));
+            }
         }
         // insertPadding.
         let mut padding = Vec::new();
-        let mut size = 0u64;
+        let mut cur = 0u64;
         for m in &members {
             let Some(t) = &m.data else { continue };
             let (s, a) = self.size_align(t);
-            let aligned = if packed { size } else { size.next_multiple_of(a) };
+            let aligned = if packed { cur } else { cur.next_multiple_of(a) };
             if m.offset != aligned {
-                padding.push((size, m.offset - size));
+                padding.push((cur, m.offset - cur));
             }
-            size = m.offset + s;
+            cur = m.offset + s;
         }
         members.pop();
         for (off, n) in padding {
-            members.push(Member { offset: off, data: Some(IrType::bytes(n)), field: None, seq: 0 });
+            members.push(Member {
+                offset: off,
+                data: Some(IrType::bytes(n)),
+                field: None,
+                base: None,
+                seq: 0,
+            });
         }
         // stable_sort by offset only.
         members.sort_by_key(|m| m.offset);
         // fillOutputFields.
+        let mut body = Vec::new();
         for m in &members {
             if let Some(t) = &m.data {
-                out.members.push(t.clone());
+                body.push(t.clone());
             }
+            let idx = u32::try_from(body.len().saturating_sub(1)).unwrap_or(0);
             if let Some(fd) = m.field {
-                let idx = u32::try_from(out.members.len().saturating_sub(1)).unwrap_or(0);
                 out.field_index.insert(fd, idx);
                 if m.data.is_none() {
-                    let storage = out.members.last().cloned().unwrap_or(IrType::Int(8));
-                    let info = self.bitfield_info(&fields, fd, &layout.fields, m.offset, &storage);
+                    let storage = body.last().cloned().unwrap_or(IrType::Int(8));
+                    let info = self.bitfield_info(fields, fd, &layout.fields, m.offset, &storage);
                     out.bitfields.insert(fd, info);
                 }
             }
+            match m.base {
+                Some((b, false)) if m.data.is_some() => {
+                    out.base_index.insert(b, idx);
+                }
+                Some((b, true)) if m.data.is_some() => {
+                    out.vbase_index.insert(b, idx);
+                }
+                _ => {}
+            }
         }
-        out.packed = packed;
-        out
+        (body, packed)
+    }
+
+    /// clang `getStorageType(const CXXRecordDecl *)`: the base-subobject
+    /// type of class `b`.
+    fn base_storage_type(&mut self, b: DeclId) -> IrType {
+        let b = self.ast().first(b);
+        self.ensure_record(b);
+        if self.records[&b].base_members.is_some() {
+            IrType::RecordBase(b)
+        } else {
+            IrType::Record(b)
+        }
+    }
+
+    /// clang `isEmptyRecordForLayout` of class `d`.
+    fn is_empty_class(&mut self, d: DeclId) -> bool {
+        let ast = self.ast();
+        let Some(def) = ast.definition(d) else { return false };
+        let class = props::class_desc(ast, def);
+        if class.dynamic {
+            return false;
+        }
+        for b in ast.decls.bases(def, &ast.lists) {
+            if !self.is_empty_record_type(b.ty) {
+                return false;
+            }
+        }
+        props::fields(ast, def).iter().all(|f| self.is_empty_field(f))
+    }
+
+    /// clang `ASTContext::isNearlyEmpty`: a dynamic class whose non-virtual
+    /// part is just the vptr.
+    fn is_nearly_empty(&mut self, d: DeclId) -> bool {
+        let ast = self.ast();
+        let def = ast.definition(d).unwrap_or(d);
+        let ptr = self.target().pointer_size;
+        props::class_desc(ast, def).dynamic && self.lay.record(d).nv_size == ptr
+    }
+
+    /// clang `CGRecordLowering::hasOwnStorage`.
+    fn has_own_storage(&mut self, decl: DeclId, query: DeclId) -> bool {
+        let ast = self.ast();
+        let l = self.lay.record(decl).clone();
+        if let Some((p, true)) = l.primary_base
+            && ast.first(p) == query
+        {
+            return false;
+        }
+        let def = ast.definition(decl).unwrap_or(decl);
+        for b in props::bases(ast, def) {
+            if let Some(c) = b.class
+                && !self.has_own_storage(c, query)
+            {
+                return false;
+            }
+        }
+        true
     }
 
     fn bitfield_info(
@@ -430,17 +598,7 @@ impl<'a> IrTypes<'a> {
     fn is_empty_record_type(&mut self, q: QualType) -> bool {
         let ast = self.ast();
         let TypeView::Record(d) = ast.types.canonical_view(q) else { return false };
-        let Some(def) = ast.definition(d) else { return false };
-        let class = props::class_desc(ast, def);
-        if class.dynamic {
-            return false;
-        }
-        for b in ast.decls.bases(def, &ast.lists) {
-            if !self.is_empty_record_type(b.ty) {
-                return false;
-            }
-        }
-        props::fields(ast, def).iter().all(|f| self.is_empty_field(f))
+        self.is_empty_class(d)
     }
 
     /// clang `getStorageType(const FieldDecl *)` for a bit-field.
@@ -619,6 +777,7 @@ impl<'a> IrTypes<'a> {
                         offset: begin_offset,
                         data: Some(ty),
                         field: None,
+                        base: None,
                         seq: *seq,
                     });
                     *seq += 1;
@@ -628,6 +787,7 @@ impl<'a> IrTypes<'a> {
                                 offset: begin_offset,
                                 data: None,
                                 field: Some(f.decl),
+                                base: None,
                                 seq: *seq,
                             });
                             *seq += 1;

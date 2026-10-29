@@ -887,6 +887,10 @@ fn struct_body(t: &mut IrTypes<'_>, ty: &IrType) -> Option<(Vec<IrType>, bool)> 
             let r = t.record(*d);
             Some((r.members.clone(), r.packed))
         }
+        IrType::RecordBase(d) => {
+            let r = t.record(*d);
+            Some((r.base_members.clone().unwrap_or_else(|| r.members.clone()), r.packed))
+        }
         _ => None,
     }
 }

@@ -290,6 +290,9 @@ impl Cg<'_> {
                 }
                 self.m.const_struct(t, &elems).map_err(|e| ir_err(&e))
             }
+            IrType::RecordBase(_) => {
+                err(None, "base-class subobjects in constants are not supported yet (M3)")
+            }
             IrType::Void | IrType::Vector(..) => {
                 err(None, "vector constants are not supported yet (M3)")
             }

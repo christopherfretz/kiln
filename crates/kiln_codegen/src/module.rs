@@ -73,6 +73,8 @@ pub(crate) struct Cg<'a> {
     pub strings: FxHashMap<(LTy, Vec<u8>), GlobalId>,
     /// Named struct types by record.
     pub named: FxHashMap<DeclId, LTy>,
+    /// Base-subobject (`.base`) struct types by record.
+    pub named_base: FxHashMap<DeclId, LTy>,
     /// Names already used for named struct types.
     pub struct_names: FxHashMap<String, u32>,
     /// Private globals by name, for `.str.N` / `__const` uniquing.
@@ -110,6 +112,7 @@ impl<'a> Cg<'a> {
             to_emit: Vec::new(),
             strings: FxHashMap::default(),
             named: FxHashMap::default(),
+            named_base: FxHashMap::default(),
             struct_names: FxHashMap::default(),
             private_names: FxHashMap::default(),
             static_locals: FxHashMap::default(),
@@ -286,6 +289,11 @@ impl<'a> Cg<'a> {
                 self.m.types.vector(e, u32::try_from(*n).unwrap_or(u32::MAX))
             }
             IrType::Record(d) => self.record_ty(*d),
+            IrType::RecordBase(d) => {
+                let first = self.ast.first(*d);
+                self.record_ty(first);
+                self.named_base.get(&first).copied().unwrap_or_else(|| self.record_ty(first))
+            }
             IrType::Struct(fs, packed) => {
                 let fs: Vec<LTy> = fs.iter().map(|x| self.ir(x)).collect();
                 self.m.types.struct_literal(&fs, *packed)
@@ -308,6 +316,14 @@ impl<'a> Cg<'a> {
         self.named.insert(first, t);
         let rec = self.tys.record(first).clone();
         let fields: Vec<LTy> = rec.members.iter().map(|x| self.ir(x)).collect();
+        // clang `ComputeRecordLayout`: the base-subobject type is created
+        // before the complete type's body is filled in.
+        if let Some(bm) = &rec.base_members {
+            let bt = self.m.types.named_struct(&format!("{name}.base"));
+            self.named_base.insert(first, bt);
+            let bf: Vec<LTy> = bm.iter().map(|x| self.ir(x)).collect();
+            let _ = self.m.types.set_body(bt, &bf, rec.packed);
+        }
         let _ = self.m.types.set_body(t, &fields, rec.packed);
         t
     }
