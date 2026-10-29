@@ -200,7 +200,7 @@ The normative description is spec/driver.md "Code generation". In short:
   `bool` constant and `fold.rs` does not look inside it.)
 
 ## Status and what remains
-**Done:** WP-052 (lowering, §2–§4; unit corpus 73/74 exact on aarch64)
+**Done:** WP-052 (lowering, §2–§4; unit corpus 79/79 exact on aarch64)
 and WP-052b (driver §5; IR-diff corpus 92/92 exact on both triples; 33
 `run` tests). WP-052b also fixed, additively: `kiln_llvm`
 `Module::set_global_value_type` (a static local retyped by its
