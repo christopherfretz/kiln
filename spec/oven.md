@@ -136,7 +136,8 @@ the evaluator's flattened type table.
   as the referred-to object (`bad(a[1], 0)`), as clang prints them.
 - `-fconstexpr-backtrace-limit=N` (`Oven::set_backtrace_limit`) sets the
   frame limit; 0 shows every frame.
-- `try_fold` and `is_constant_initialized` never render notes (`silent`).
+- `try_fold`, `is_constant_initialized` and `fold_constant_init` never
+  render notes or warnings (`silent`).
 - An out-of-range conversion to an unscoped enumeration without a fixed
   underlying type ([expr.static.cast]/10) is accepted with the value, and
   reported only where clang 19 reports it ("Integration").
@@ -155,6 +156,39 @@ the evaluator's flattened type table.
   expressions ([expr.const]/4) when its initializer folds; its value is
   evaluated on demand when first read (nested initializations are capped
   at 512 deep and then read as unknown).
+- `Oven::fold_constant_init(bridge, e, var) -> Option<ConstValueId>`
+  (WP-063): folds `var`'s initializer `e` as a constant initializer
+  ([basic.start.static]/2): manifestly constant-evaluated, but silent and
+  not recorded, like `try_fold`. Codegen uses it for the initializers it
+  emits as constants (spec/codegen.md).
+
+### Manifestly constant-evaluated context — normative (WP-063)
+`__builtin_is_constant_evaluated()` ([expr.const]/20, [meta.const.eval])
+asks whether the evaluation is manifestly constant-evaluated.
+- `RunState::const_context` holds the answer for one top-level
+  evaluation: true for `evaluate`, `is_constant_initialized` and
+  `fold_constant_init`, false for `try_fold` (a trial fold is not
+  manifestly constant-evaluated). The nested initialization of a variable
+  read during an evaluation (`resolve_var`) is a constant initializer:
+  it runs with `const_context` true and restores the outer value after.
+- A call to the builtin (a `CallExpr` whose callee is a
+  `BuiltinFnToFnPtr` cast of a builtin's name) compiles to
+  `IsConstEval [dst]`, which writes the flag as a `bool`. Its `aux` is 1
+  when the enclosing function is `std::is_constant_evaluated` (a function
+  of that name in `std`, through inline namespaces).
+- **Warning** (`-Wconstant-evaluated`, clang's
+  `warn_is_constant_evaluated_always_true_constexpr`): when the answer is
+  true in a non-silent evaluation, and the builtin is called directly by
+  the evaluated expression (frame depth 1), the warning names
+  `__builtin_is_constant_evaluated` at the begin of the call's callee;
+  when it is called from `std::is_constant_evaluated` at depth 2, it
+  names `std::is_constant_evaluated` at that call's site. Deeper calls do
+  not warn. The warning goes through `SemaBridge::diag`, so it obeys
+  `-Wno-`/`-Werror=` and system-header suppression.
+- **Memoization:** a function whose body uses `IsConstEval` is never
+  memoized, and every memo key carries the context (bit 31 of the
+  function word), so a call cached in one context is never replayed in
+  the other.
 
 ### Limits and metrics — normative for M2
 - `Budget { steps: 1048576, depth: 512, bytes: 256 MiB, memo_entries:
@@ -236,7 +270,8 @@ inexact). They ignore unknown keys (so the format can grow) and blank lines.
   this when pointers to transient allocations can be passed.)
 - Calls are cached in a bounded LRU (`Budget::memo_entries`, 0 disables;
   table allocated once, least recently used evicted) keyed by `(function,
-  argument bits)`. Only successful calls are cached, and not a call that
+  argument bits)`, with the manifestly-constant-evaluated flag in bit 31
+  of the function word (WP-063). Only successful calls are cached, and not a call that
   converted a value out of an enumeration's range (its diagnostic must
   recur on every evaluation that checks it).
 - A hit charges everything the call cost when it ran: steps, calls,
@@ -410,6 +445,7 @@ impl Oven {
     pub fn evaluate(&mut self, bridge: &mut dyn SemaBridge, e: ExprId, ctx: EvalContext) -> Result<ConstValueId, EvalFailure>;
     pub fn try_fold(&mut self, bridge: &mut dyn SemaBridge, e: ExprId) -> Option<ConstValueId>;
     pub fn is_constant_initialized(&mut self, bridge: &mut dyn SemaBridge, var: DeclId) -> bool;
+    pub fn fold_constant_init(&mut self, bridge: &mut dyn SemaBridge, e: ExprId, var: DeclId) -> Option<ConstValueId>;
     pub fn stats(&self) -> &EvalStats;
     pub fn footprint(&self) -> usize;
     pub fn disassemble(&self) -> String;                          // debugging aid

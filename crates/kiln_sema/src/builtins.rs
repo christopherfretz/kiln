@@ -1,4 +1,4 @@
-//! Builtin functions (spec/sema.md §9.1): clang's `LazilyCreateBuiltin`.
+//! Builtin functions (spec/sema.md §5.4): clang's `LazilyCreateBuiltin`.
 //!
 //! A builtin function is declared the first time an unqualified lookup of
 //! its name finds nothing: an implicit `extern "C"` `Function` decl in the

@@ -124,7 +124,7 @@ no category).
 | `ParmVarDecl` | `ParmVarDecl <head> [name] 'type' [cinit] [pack]` (`cinit`: has a default argument, its child) |
 | `VarDecl` | `VarDecl <head> name 'type' [static\|extern\|register] [tls\|tls_dynamic] [nrvo] [inline] [constexpr] [cinit\|callinit\|listinit\|parenlistinit] [value=V]` (the init style only with an initializer; `constinit` is an attribute in clang and is not printed); `value=` only on a `constexpr` variable with an initializer (a `const int` initialized by a constant prints none, as in clang) |
 | `StaticAssertDecl` | `StaticAssertDecl <head>` children: condition, [message (`StringLiteral unevaluated "msg"`)] |
-| attribute | `<Name>Attr [#aN] [@loc] [Inherited] [Implicit]` with clang's class name (`[[nodiscard]]` → `WarnUnusedResultAttr`); a kind without one prints `UnknownAttr kind=N`. Arguments are not printed (M2). Implicit attributes print only with `implicit` |
+| attribute | `<Name>Attr [#aN] [@loc] [Inherited] [Implicit]` with clang's class name (`[[nodiscard]]` → `WarnUnusedResultAttr`); a kind without one prints `UnknownAttr kind=N`. Arguments are not printed (M2), except: `AsmLabelAttr [Inherited] "label" IsLiteralLabel` (the label's bytes unescaped, as clang) and `BuiltinAttr Implicit N` (the builtin id; the implicit builtin decl and its `extern "C"` `LinkageSpecDecl` print only with `implicit`). Implicit attributes print only with `implicit` |
 | `IntegerLiteral` | `IntegerLiteral 'type' N` |
 | `FloatingLiteral` | `FloatingLiteral 'type' 1.5e0` |
 | `CharacterLiteral` | `CharacterLiteral 'type' N` (the code unit value, decimal) |

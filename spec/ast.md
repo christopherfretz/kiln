@@ -182,6 +182,19 @@ default arguments of templates, alignment overrides, deprecation messages.
 A cold map costs ~16 B per *entry* and nothing for decls without one;
 fields used by fewer than ~5% of decls of a kind go there.
 
+- `asm_label: ColdMap<DeclId, StringLitId>` (WP-063): the GNU asm label
+  of a function or variable, keyed by the entity's *first* declaration
+  (a label on any redeclaration names the entity); each declaration
+  also carries an `AsmLabel` attribute (§7).
+- `builtin_id: ColdMap<DeclId, u32>` (WP-063): the builtin id of an
+  implicit builtin `Function` decl, read through
+  `DeclArena::builtin_id(d)`. Ids and spellings are in
+  `kiln_ast::decl::builtin` (`IS_CONSTANT_EVALUATED = 722`, clang's
+  numbering; `ALL`; `by_name`).
+- `AstBuilder::linkage_spec_head(head, lang)` creates a
+  `LinkageSpecDecl` from a full `DeclHead`, so implicit ones get
+  `IMPLICIT` at creation (`linkage_spec` delegates to it).
+
 ### 4.3 DeclContext lookup tables
 - **One global table** `FxHashMap<(DeclId /*semantic ctx*/, DeclName),
   LookupEntry>`. `LookupEntry(u32)`: top bit clear = a single `DeclId`
@@ -364,6 +377,9 @@ with attributes have `HAS_ATTRS` and an entry in `decl_attrs: FxHashMap<
 DeclId, ListId>`. Annotations (P3394, M6) are `AttrKind::Annotation` with
 `a` = `ConstValueId` (the annotation value, evaluated when not
 dependent). Unknown attributes are diagnosed and dropped (not stored).
+`AttrKind::ASM_LABEL` (88): `a` = raw `StringLitId` of the label,
+flags bit 1 = inherited from the previous declaration.
+`AttrKind::BUILTIN` (89): implicit, `a` = builtin id, invalid location.
 
 ## 8. Templates (M3; representation fixed now)
 ### 8.1 Parameters

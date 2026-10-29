@@ -136,6 +136,29 @@ Redeclaration and linkage rules:
   here` note, and the new declaration is marked invalid. Compatible
   spellings (`noexcept`, `noexcept(true)`, `throw()`) compare equal
   through the canonical type.
+- **GNU asm labels** (`act_on_asm_label`, clang's
+  `ActOn{Function,Variable}Declarator` and `mergeDeclAttributes`): a
+  function or variable declarator's label becomes an `AsmLabel`
+  attribute, first in the declaration's attribute list, and its
+  `StringLitId` is recorded in the `asm_label` cold data of the entity's
+  first declaration, which the mangler reads (spec/abi.md). A typedef's
+  label is ignored, as clang ignores it.
+  - A redeclaration without a label inherits the previous declaration's
+    `AsmLabel` (a copy with the inherited flag, ahead of its own
+    attributes, as clang orders them).
+  - A label differing from the previous declaration's is
+    `conflicting asm label`, with a `previous declaration is here` note
+    at the old label.
+  - A label first written on a redeclaration of an entity that is
+    already used is `cannot apply asm label to {variable|function}
+    after its first use`.
+  - A label on an automatic variable (local, no storage class, not
+    `thread_local`) warns `ignored asm label '…' on automatic variable`.
+- **Initializing a non-variable** (clang's `AddInitializerToDecl`): an
+  initializer on a function or typedef declarator (reachable after an
+  asm label, where `{` is not a body) is
+  `illegal initializer (only variables can be initialized)` at the
+  declaration, which becomes invalid.
 
 ### 4.3 Functions
 - `act_on_start_function` and `act_on_finish_function` bracket a body.
@@ -202,6 +225,8 @@ Redeclaration and linkage rules:
   |---|---|---|
   | ALIGNED | `ExprId` of the alignment expression | raw `QualType` of `alignas(type-id)` |
   | NODISCARD, DEPRECATED | `ExprId` of the string-literal message | — |
+  | ASM_LABEL | raw `StringLitId` of the label (flags bit 1: inherited) | — |
+  | BUILTIN | the builtin id (`kiln_ast::decl::builtin`; implicit, §5.4) | — |
 
 - **Semantics:**
   - `nodiscard` applies to functions, records and enumerations. A
@@ -342,6 +367,32 @@ constant and never look at the operand.
 The operands of nested `sizeof`, `alignof` and `noexcept` are not
 looked at (they are unevaluated). An erroneous operand gives an error
 expression.
+
+### 5.4 Builtin functions (`builtins.rs`)
+clang's `LazilyCreateBuiltin`. kiln knows one builtin,
+`bool __builtin_is_constant_evaluated() noexcept` (id 722, clang's
+`BIis_constant_evaluated`; `kiln_ast::decl::builtin`).
+- **Declaration:** when an unqualified id-expression's lookup finds
+  nothing and the name is a builtin (`lazily_create_builtin`), Sema
+  declares it in the translation unit: an implicit `LinkageSpecDecl`
+  (`extern "C"`) holding an implicit `extern` `FunctionDecl` with the
+  builtin's function type, its id in the `builtin_id` cold data, an
+  implicit `Builtin` attribute (invalid location, `a` = id) and an
+  implicit `NoThrow` attribute. Later lookups find that declaration.
+- **Name:** a `DeclRefExpr` to a builtin is a prvalue of the
+  placeholder type `QualType::BUILTIN_FN` (`<builtin fn type>`).
+- **Calls:** `act_on_call` converts the callee with
+  `BuiltinFnToFnPtr` (a pointer to the builtin's function type) and
+  type-checks the call as an ordinary one.
+- **Any other use** is `builtin functions must be directly called`
+  (`check_builtin_fn_use`), reported at the name by
+  `implicit_convert` and `decay` (initialization, operands,
+  arguments), by unary `&`, and by an expression statement (which then
+  gets no unused-result warning). The expression recovers as an error
+  expression.
+- **Evaluation:** the Oven answers `true` in a manifestly
+  constant-evaluated context and `false` otherwise (spec/oven.md);
+  codegen emits `i1 false` (spec/codegen.md).
 
 ## 6. Initialization (`init.rs`)
 - **`perform_init(ty, init, direct_list)`** implements [dcl.init]:
@@ -503,6 +554,12 @@ unscoped enumeration is reported (spec/oven.md "Integration").
     templates
   - template arguments (`EvalKind::TemplateArg`)
   - constant-initialization of `constinit` variables
+  - constant-initialization checks of non-`constexpr` variables with
+    static storage and of local `const` integral variables
+    ([basic.start.static]/2): codegen folds them with
+    `fold_constant_init` (spec/oven.md), but Sema does not evaluate
+    them, so `-Wconstant-evaluated` is not reported in their
+    initializers as clang reports it
   - Sema still rejects some M2 constructs before evaluation: a
     reference bound to a temporary, a cast to a reference type,
     list-initialization of a temporary, and initialization of a class
