@@ -61,6 +61,11 @@ impl IcsOptions {
     /// Explicit constructors and conversion functions are candidates
     /// (direct-initialization, contextual conversion to `bool`).
     pub const ALLOW_EXPLICIT: IcsOptions = IcsOptions(4);
+    /// The sequence is a candidate's argument conversion: a reference
+    /// binding whose best conversion function ([over.match.ref]) is
+    /// deleted is no conversion (clang's `FindConversionForRefInit`),
+    /// where an initialization diagnoses the deleted function.
+    pub const CANDIDATE_ARG: IcsOptions = IcsOptions(8);
 
     /// All of `o`'s bits are set.
     pub(crate) fn contains(self, o: IcsOptions) -> bool {
@@ -1114,7 +1119,13 @@ impl Sema<'_, '_> {
             self.add_conversion_candidate(&mut set, f, found, to, opts);
         }
         let r = if set.viable().next().is_some() {
-            Some(self.udc_outcome(&mut set, a.ty, to, false))
+            if opts.contains(IcsOptions::CANDIDATE_ARG)
+                && matches!(self.best_viable(&mut set), OvlOutcome::Deleted(_))
+            {
+                None
+            } else {
+                Some(self.udc_outcome(&mut set, a.ty, to, false))
+            }
         } else {
             None
         };

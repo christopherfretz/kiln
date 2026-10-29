@@ -81,7 +81,10 @@ impl Sema<'_, '_> {
         };
         let x = match u.via {
             UdcVia::Aggregate => return Err(unsupported_udc()),
-            UdcVia::ConvFn => self.conversion_function_call(e, f, found, at)?,
+            UdcVia::ConvFn => {
+                let target = self.non_reference(to);
+                self.conversion_function_call(e, f, found, target, at)?
+            }
             UdcVia::Ctor => {
                 let referee = self.non_reference(to);
                 if self.ast.types.is_reference(to) {
@@ -139,7 +142,9 @@ impl Sema<'_, '_> {
         found: kiln_ast::DeclId,
         at: Loc,
     ) -> ExprId {
-        match self.conversion_function_call(e, f, found, at) {
+        let target = self.conversion_result_type(f);
+        let target = self.non_reference(target);
+        match self.conversion_function_call(e, f, found, target, at) {
             Ok(x) => x,
             Err(err) => {
                 let msg = err.diag_at(self, at);
@@ -157,6 +162,7 @@ impl Sema<'_, '_> {
         e: ExprId,
         f: kiln_ast::DeclId,
         found: kiln_ast::DeclId,
+        target: QualType,
         at: Loc,
     ) -> Result<ExprId, ConvError> {
         let loc = self.eloc(e);
@@ -164,10 +170,9 @@ impl Sema<'_, '_> {
         let class = self.ast.types.as_record(src).and_then(|r| self.ast.definition(r)).unwrap_or(f);
         self.check_member_access(found, class, Some(class), at);
         if self.ovl_deleted(f) {
-            let ret = self.conversion_result_type(f);
             let mut err = ConvError::new(
                 DiagId::sema_conv_deleted_ctor,
-                vec![self.ty_arg(src), self.ty_arg(ret)],
+                vec![self.ty_arg(src), self.ty_arg(target)],
             );
             err.notes = self.deleted_function_notes(f, 0);
             return Err(err);

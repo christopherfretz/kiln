@@ -112,7 +112,11 @@ impl Sema<'_, '_> {
                     let x = match params.get(skip + i) {
                         Some(&p) => {
                             let opts = if i == 0 { first_opts } else { IcsOptions::NONE };
-                            self.try_implicit_conversion(&a, p, opts)
+                            self.try_implicit_conversion(
+                                &a,
+                                p,
+                                opts.with(IcsOptions::CANDIDATE_ARG),
+                            )
                         }
                         None => Ics::Ellipsis,
                     };

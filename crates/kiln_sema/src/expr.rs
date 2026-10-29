@@ -2512,6 +2512,24 @@ impl Sema<'_, '_> {
                         continue;
                     }
                 }
+                if named.is_some_and(|c| c.overloadable)
+                    && matches!(self.ast.types.canonical_view(to), TypeView::LValueRef(_))
+                    && self.ast.types.as_record(self.ety(a)).is_some()
+                    && !self.is_err_expr(a)
+                {
+                    // The one-candidate set's conversion sequence: a
+                    // deleted conversion function to a reference is no
+                    // conversion ([over.match.ref], clang's
+                    // `FindConversionForRefInit`).
+                    let info = self.arg_info(a);
+                    let opts = crate::overload::IcsOptions::CANDIDATE_ARG;
+                    if self.try_implicit_conversion(&info, to, opts).is_bad() {
+                        let err =
+                            ConvError::new(DiagId::sema_ovl_no_viable_function_in_call, Vec::new());
+                        self.bad_argument(named.map(|c| c.decl), callee, a, params[i], i, &err);
+                        return None;
+                    }
+                }
                 match conv::implicit_convert(self, a, to, ConvCtx::Argument) {
                     Ok(x) => conv_args.push(x),
                     Err(err)
