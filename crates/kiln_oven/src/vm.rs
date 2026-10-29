@@ -71,6 +71,10 @@ pub(crate) struct RunState {
     enum_oob: u64,
     /// Nested global initializations in progress.
     pub nesting: u32,
+    /// The evaluation is manifestly constant-evaluated ([expr.const]/20):
+    /// `__builtin_is_constant_evaluated()` yields true. A trial fold
+    /// ([`crate::Oven::try_fold`]) yields false.
+    pub const_context: bool,
 }
 
 impl RunState {
@@ -185,6 +189,31 @@ fn compare(c: u32, o: Ordering) -> bool {
 }
 
 impl Oven {
+    /// clang's `warn_is_constant_evaluated_always_true_constexpr`: the
+    /// builtin called directly by the top-level expression, or through
+    /// `std::is_constant_evaluated` (`aux` = 1) called directly by it,
+    /// in an evaluation that is always constant.
+    fn always_true_diag(&self, b: &mut dyn SemaBridge, pc: usize, aux: u32) {
+        let depth = self.stack.len() - self.run.entry;
+        let (name, at) = match (depth, aux) {
+            (1, _) => ("__builtin_is_constant_evaluated", pc),
+            (2, 1) => match self.stack.last() {
+                Some(f) if f.call_pc != NO_CALL => {
+                    ("std::is_constant_evaluated", f.call_pc as usize)
+                }
+                _ => return,
+            },
+            _ => return,
+        };
+        let loc = self.site(at).loc;
+        let d = kiln_diag::Diag::new(
+            kiln_diag::DiagId::oven_constant_evaluated_always_true,
+            kiln_source::Span::empty(loc),
+        )
+        .arg(name);
+        b.diag(d);
+    }
+
     /// Runs function `func` with its frame at register `fb` until it
     /// returns (the result is in `regs[fb]`).
     /// Reports an out-of-range unscoped enumeration value (clang's
@@ -616,6 +645,14 @@ impl Oven {
                     }
                     pc += 4;
                 }
+                Op::IsConstEval => {
+                    let cc = self.run.const_context;
+                    reg!(0) = u128::from(cc);
+                    if cc && !self.run.silent {
+                        self.always_true_diag(b, pc, aux);
+                    }
+                    pc += 2;
+                }
                 Op::Call | Op::CallInd => {
                     let callee = if op == Op::Call {
                         arg!(0) as u32
@@ -703,7 +740,11 @@ impl Oven {
         let memo = f.memo && self.memo.enabled();
         let (entry, nregs) = (f.entry as usize, f.nregs as usize);
         if memo {
-            let mut key = MemoKey { func: callee, args: [0; MAX_ARGS] };
+            // A call's result can depend on the evaluation context
+            // (`__builtin_is_constant_evaluated` in a callee): the context
+            // is part of the key.
+            let func = callee | u32::from(self.run.const_context) << 31;
+            let mut key = MemoKey { func, args: [0; MAX_ARGS] };
             for (i, p) in f.params.iter().enumerate() {
                 key.args[i] = self.regs[nb + p.reg as usize];
             }

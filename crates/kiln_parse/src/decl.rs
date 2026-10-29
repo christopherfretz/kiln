@@ -1108,13 +1108,11 @@ impl Parser<'_, '_> {
                 *base_ty.get_or_insert_with(|| self.s.type_from_declspec_at(&ds, d.name_loc()));
             // GNU asm label (clang's `ParseAsmAttributesAfterDeclarator`):
             // a malformed one drops the declarator.
-            match self.parse_asm_label() {
-                Ok(l) => d.asm_label = l,
-                Err(()) => {
-                    self.skip_until(&[], true, false);
-                    break;
-                }
-            }
+            let Ok(label) = self.parse_asm_label() else {
+                self.skip_until(&[], true, false);
+                break;
+            };
+            d.asm_label = label;
             if self.at_attr() {
                 self.parse_attributes(&mut d.attrs);
             }
@@ -1231,18 +1229,14 @@ impl Parser<'_, '_> {
             self.emit(d);
             None
         };
-        match label {
-            Some(l) => {
-                self.expect_closing(Punct::RParen, Punct::LParen, lparen);
-                Ok(Some(l))
+        let Some(l) = label else {
+            if self.skip_until(&[Punct::RParen], true, false) {
+                self.bump();
             }
-            None => {
-                if self.skip_until(&[Punct::RParen], true, false) {
-                    self.bump();
-                }
-                Err(())
-            }
-        }
+            return Err(());
+        };
+        self.expect_closing(Punct::RParen, Punct::LParen, lparen);
+        Ok(Some(l))
     }
 
     /// True if the current token can start a decl-specifier-seq.

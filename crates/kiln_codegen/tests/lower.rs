@@ -492,6 +492,20 @@ const CASES: &[(&str, Mode, &str)] = &[
         Exact,
         "int f3(); int f3() asm(\"ok3\"); extern int v; extern int v asm(\"vl\"); int v = 2; int f() { return f3() + v; }",
     ),
+    // `__builtin_is_constant_evaluated()` is true in constant
+    // initializers (static storage, `const` integral locals) and false at
+    // run time and in trial folds of other initializers.
+    (
+        "is_constant_evaluated",
+        Exact,
+        "constexpr int f() { return __builtin_is_constant_evaluated() ? 1 : 2; } bool b() { return __builtin_is_constant_evaluated(); } int g = f(); int arr[2] = {f(), 3}; struct S { int a, b; }; S gs = {f(), 4}; int h() { int x = f(); const int y = f(); int a[2] = {f(), 5}; const int ca[2] = {f(), 6}; S s = {f(), 7}; static int st = f(); const long l = f(); const volatile int v = f(); if (__builtin_is_constant_evaluated()) return 0; return x + y + a[0] + ca[0] + s.a + st + l + v; }",
+    ),
+    // A memoized caller's result depends on the evaluation context.
+    (
+        "is_constant_evaluated_memo",
+        Exact,
+        "constexpr int f0() { return __builtin_is_constant_evaluated() ? 1 : 2; } constexpr int f1(int n) { return f0() * 10 + n; } int h() { int a[2] = {f1(1), 0}; return a[0]; } int g = f1(1); int k() { int b[2] = {f1(1), 0}; return b[0]; }",
+    ),
     (
         "fn_returning_ptr_to_array",
         Exact,

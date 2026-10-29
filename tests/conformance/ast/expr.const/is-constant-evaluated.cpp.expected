@@ -1,0 +1,18 @@
+TranslationUnitDecl
+|-FunctionDecl used constexpr f 'bool ()' implicit-inline
+| `-CompoundStmt
+|   `-ReturnStmt
+|     `-CallExpr 'bool'
+|       `-ImplicitCastExpr 'bool (*)() noexcept' <BuiltinFnToFnPtr>
+|         `-DeclRefExpr '<builtin fn type>' Function '__builtin_is_constant_evaluated' 'bool () noexcept'
+`-FunctionDecl g 'bool ()'
+  `-CompoundStmt
+    `-ReturnStmt
+      `-BinaryOperator 'bool' '||'
+        |-CallExpr 'bool'
+        | `-ImplicitCastExpr 'bool (*)() noexcept' <BuiltinFnToFnPtr>
+        |   `-ParenExpr '<builtin fn type>'
+        |     `-DeclRefExpr '<builtin fn type>' Function '__builtin_is_constant_evaluated' 'bool () noexcept'
+        `-CallExpr 'bool'
+          `-ImplicitCastExpr 'bool (*)()' <FunctionToPointerDecay>
+            `-DeclRefExpr 'bool ()' lvalue Function 'f' 'bool ()'

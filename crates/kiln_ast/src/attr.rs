@@ -57,6 +57,10 @@ impl AttrKind {
     /// GNU asm label (`asm("name")` after a declarator): `a` = the
     /// label's `StringLitId`. Keyword syntax.
     pub const ASM_LABEL: AttrKind = AttrKind(88);
+    /// The implicit attribute of a lazily declared builtin function
+    /// (clang's `BuiltinAttr`): `a` = its builtin id
+    /// ([`crate::decl::builtin`]). Always implicit.
+    pub const BUILTIN: AttrKind = AttrKind(89);
 }
 
 /// Attribute syntax.

@@ -49,6 +49,7 @@ pub(super) fn class_name(a: &AttrNode) -> Option<&'static str> {
         AttrKind::MODE => "Mode",
         AttrKind::VECTOR_SIZE => "VectorSize",
         AttrKind::ASM_LABEL => "AsmLabel",
+        AttrKind::BUILTIN => "Builtin",
         _ => return None,
     })
 }

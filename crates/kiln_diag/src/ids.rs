@@ -373,6 +373,7 @@ diag_ids! {
     sema_different_asm_label = Error (0) "conflicting asm label";
     sema_late_asm_label = Error (1) "cannot apply asm label to {0:variable|function} after its first use";
     sema_asm_label_on_auto_decl = Warning (1) "ignored asm label '{0}' on automatic variable";
+    sema_builtin_fn_use = Error (0) "builtin functions must be directly called";
     sema_int_literal_too_large = Error (0) "integer literal is too large to be represented in any integer type";
     sema_int_literal_implicitly_unsigned = ExtWarn [ImplicitlyUnsignedLiteral] (0) "integer literal is too large to be represented in a signed integer type, interpreting as unsigned";
     sema_size_t_literal_too_large = Error (1) "{0:signed |}'size_t' literal is out of range of possible {0:signed |}'size_t' values";
@@ -535,6 +536,7 @@ diag_ids! {
     sema_static_assert_requirement_failed_msg = Error (2) "static assertion failed due to requirement '{0}': {1}";
     sema_static_assert_not_ice = Error (0) "static assertion expression is not an integral constant expression";
     oven_enum_constexpr_conversion = WarningError [EnumConstexprConversion] (4) "integer value {0} is outside the valid range of values [{1}, {2}] for the enumeration type '{3}'";
+    oven_constant_evaluated_always_true = Warning [ConstantEvaluated] (1) "'{0}' will always evaluate to 'true' in a manifestly constant-evaluated expression";
     note_expr_evaluates_to = Note (3) "expression evaluates to '{0} {1} {2}'";
     note_constexpr_overflow = Note (2) "value {0} is outside the range of representable values of type {1}";
     note_expr_divide_by_zero = Note (0) "division by zero";

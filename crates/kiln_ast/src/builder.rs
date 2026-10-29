@@ -274,14 +274,15 @@ impl<'a> AstBuilder<'a> {
     /// A linkage specification `extern "C" { }` ([dcl.link]). Transparent:
     /// its declarations are named in the enclosing context.
     pub fn linkage_spec(&mut self, ctx: DeclId, lang: LinkageLang, loc: Loc) -> DeclId {
+        self.linkage_spec_head(DeclHead::new(ctx, DeclName::EMPTY, loc), lang)
+    }
+
+    /// A linkage specification with head `h` (its name is ignored; an
+    /// implicit one surrounds a lazily declared builtin).
+    pub fn linkage_spec_head(&mut self, h: DeclHead, lang: LinkageLang) -> DeclId {
         let payload = Payload::Scope(ScopeData { members: Members::default(), aux: lang as u32 });
-        self.add(
-            DeclHead::new(ctx, DeclName::EMPTY, loc),
-            DeclKind::LinkageSpec,
-            None,
-            payload,
-            None,
-        )
+        let h = DeclHead { name: DeclName::EMPTY, ..h };
+        self.add(h, DeclKind::LinkageSpec, None, payload, None)
     }
 
     /// An export declaration `export { }` ([module.interface]).
@@ -759,6 +760,9 @@ impl<'a> AstBuilder<'a> {
     fn decl_ref_category(&self, d: DeclId) -> ValueCategory {
         match self.ast.decls.get(d).kind() {
             DeclKind::EnumConstant | DeclKind::NonTypeTemplateParm => ValueCategory::PRValue,
+            // A builtin function's name has the placeholder type
+            // `<builtin fn type>` and is a prvalue (as clang).
+            DeclKind::Function if self.ast.decls.builtin_id(d).is_some() => ValueCategory::PRValue,
             _ => ValueCategory::LValue,
         }
     }

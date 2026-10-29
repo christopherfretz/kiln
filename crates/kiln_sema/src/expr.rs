@@ -265,7 +265,7 @@ impl Sema<'_, '_> {
         e
     }
 
-    fn ignore_parens(&self, e: ExprId) -> ExprId {
+    pub(crate) fn ignore_parens(&self, e: ExprId) -> ExprId {
         let mut e = e;
         for _ in 0..256 {
             if self.ast.exprs.get(e).kind() == ExprKind::ParenExpr {
@@ -621,6 +621,11 @@ impl Sema<'_, '_> {
             None => self.lookup_name(name, LookupKind::Ordinary),
         };
         let Some(&d) = found.decls.first() else {
+            if qualifier.is_none()
+                && let Some(b) = self.lazily_create_builtin(name, loc)
+            {
+                return self.build_decl_ref(b, loc);
+            }
             let text = self.ast.symbols().as_str(name).to_owned();
             let msg = match qualifier {
                 Some(q) => {
@@ -684,7 +689,11 @@ impl Sema<'_, '_> {
             }
         }
         let declared = n.ty().unwrap_or(QualType::ERROR);
-        let ty = self.non_reference(declared);
+        let ty = if self.ast.decls.builtin_id(d).is_some() {
+            QualType::BUILTIN_FN
+        } else {
+            self.non_reference(declared)
+        };
         self.ast.decls.set_flags(d, DeclFlags::REFERENCED);
         self.diagnose_deprecated(d, loc);
         let nou = if self.unevaluated > 0 { NonOdrUse::Unevaluated } else { NonOdrUse::None };
@@ -1098,6 +1107,9 @@ impl Sema<'_, '_> {
     }
 
     fn address_of(&mut self, e: ExprId, loc: Loc) -> ExprId {
+        if self.check_builtin_fn_use(e) {
+            return self.recover_err(&[e], loc);
+        }
         let n = *self.ast.exprs.get(e);
         if n.object_kind() == ObjectKind::BitField {
             self.error(DiagId::sema_addrof_bitfield, loc);
@@ -1745,7 +1757,10 @@ impl Sema<'_, '_> {
             let x = self.ignore_parens(callee);
             (self.ast.exprs.get(x).kind() == ExprKind::DeclRefExpr).then(|| self.ast.exprs.decl(x))
         };
-        let f = conv::decay(self, callee);
+        let f = match self.builtin_callee(callee) {
+            Some(b) => self.builtin_fn_to_ptr(callee, b),
+            None => conv::decay(self, callee),
+        };
         let ft = self.ety(f);
         let fn_ty = self.pointee_sugared(ft).filter(|p| self.ast.types.is_function(*p));
         let Some(fn_ty) = fn_ty else {

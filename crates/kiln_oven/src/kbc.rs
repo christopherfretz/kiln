@@ -122,6 +122,11 @@ ops! {
     Call = 2,
     // [fn ptr reg, arg base]
     CallInd = 2,
+    // [dst]: `__builtin_is_constant_evaluated()` ([expr.const]/20): 1 in
+    // a manifestly constant-evaluated evaluation, 0 in a trial fold; aux =
+    // 1 when the enclosing function is `std::is_constant_evaluated`
+    // (the `-Wconstant-evaluated` warning names that call instead).
+    IsConstEval = 1,
     // [src]; aux = 1 if the function returns a scalar
     Ret = 1,
     // [dst, global]

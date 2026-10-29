@@ -68,10 +68,10 @@ impl SemaBridge for Bridge<'_> {
 
 /// Folds every candidate expression of the translation unit.
 pub(crate) fn prepass(ast: &mut Ast, oven: &mut Oven, target: &Target) -> Folds {
-    let cands = {
-        let mut c = Collect { ast, out: Vec::new() };
+    let (cands, inits) = {
+        let mut c = Collect { ast, out: Vec::new(), inits: FxHashMap::default() };
         c.tu();
-        c.out
+        (c.out, c.inits)
     };
     let mut b = Bridge { ast, abi: target, vt: VTableLayout::default() };
     let mut folds = Folds::default();
@@ -79,7 +79,14 @@ pub(crate) fn prepass(ast: &mut Ast, oven: &mut Oven, target: &Target) -> Folds 
         if folds.expr.contains_key(&e) {
             continue;
         }
-        if let Some(v) = oven.try_fold(&mut b, e) {
+        // A constant initializer is manifestly constant-evaluated
+        // ([expr.const]/20, clang `EvaluateAsInitializer`); anything else
+        // is a trial fold (`__builtin_is_constant_evaluated()` is false).
+        let v = match inits.get(&e) {
+            Some(&var) => oven.fold_constant_init(&mut b, e, var),
+            None => oven.try_fold(&mut b, e),
+        };
+        if let Some(v) = v {
             folds.expr.insert(e, v);
         }
     }
@@ -90,6 +97,10 @@ pub(crate) fn prepass(ast: &mut Ast, oven: &mut Oven, target: &Target) -> Folds 
 struct Collect<'a> {
     ast: &'a Ast,
     out: Vec<ExprId>,
+    /// Candidates that are constant initializers of a variable (static
+    /// storage, `constexpr`, or usable in constant expressions as a
+    /// `const` non-volatile integral or enumeration).
+    inits: FxHashMap<ExprId, DeclId>,
 }
 
 impl Collect<'_> {
@@ -120,22 +131,26 @@ impl Collect<'_> {
         let Some(v) = ast.decls.var(d) else { return };
         let Some(init) = v.init else { return };
         let Some(ty) = ast.decls.get(d).ty() else { return };
-        let fold = is_static
+        let quals = ast.types.effective_quals(ty);
+        let constant_init = is_static
             || v.spec.is_constexpr()
+            || (quals.is_const()
+                && !quals.is_volatile()
+                && (ast.types.is_integral(ty)
+                    || matches!(ast.types.canonical_view(ty), TypeView::Enum(_))));
+        let fold = constant_init
             || matches!(
                 ast.types.canonical_view(ty),
                 TypeView::ConstantArray(_)
                     | TypeView::Record(_)
                     | TypeView::LValueRef(_)
                     | TypeView::RValueRef(_)
-            )
-            || (ast.types.effective_quals(ty).is_const()
-                && !ast.types.effective_quals(ty).is_volatile()
-                && (is_static
-                    || ast.types.is_integral(ty)
-                    || matches!(ast.types.canonical_view(ty), TypeView::Enum(_))));
+            );
         if fold {
             self.out.push(init);
+        }
+        if constant_init {
+            self.inits.insert(init, d);
         }
         self.expr(init);
     }

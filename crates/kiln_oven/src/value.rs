@@ -565,12 +565,15 @@ impl Oven {
                     self.mem.peak,
                     self.run.object,
                     self.run.silent,
+                    self.run.const_context,
                 );
                 let mark = self.mem.mark();
                 self.run.nesting += 1;
                 self.run.counters = Counters::default();
                 self.run.object = Some(d);
                 self.run.silent = true;
+                // Constant initialization is manifestly constant-evaluated.
+                self.run.const_context = true;
                 let r = self.eval_at(b, init, Some(d), top);
                 self.mem.release(mark, &self.types);
                 self.run.nesting -= 1;
@@ -580,6 +583,7 @@ impl Oven {
                     self.mem.peak,
                     self.run.object,
                     self.run.silent,
+                    self.run.const_context,
                 ) = saved;
                 // The placeholder's storage now belongs to the variable.
                 self.globals[g as usize].slot = 0;

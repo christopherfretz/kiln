@@ -948,6 +948,9 @@ impl<'a, W: io::Write> Dumper<'a, W> {
             self.line.push_str(&String::from_utf8_lossy(self.ast.strings.bytes(l)));
             self.line.push_str("\" IsLiteralLabel");
         }
+        if node.kind == AttrKind::BUILTIN {
+            let _ = write!(self.line, " {}", node.a);
+        }
     }
 
     // -------------------------------------------------------------------

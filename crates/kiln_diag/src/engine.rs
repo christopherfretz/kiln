@@ -106,8 +106,8 @@ impl<'sm> DiagEngine<'sm> {
         self.policy.suppress_system
     }
 
-    /// Whether `id` located at `loc` would be emitted: [`is_enabled`]
-    /// (Self::is_enabled) and not suppressed in a system header (§5.4).
+    /// Whether `id` located at `loc` would be emitted: enabled
+    /// ([`Self::is_enabled`]) and not suppressed in a system header (§5.4).
     pub fn is_enabled_at(&self, id: DiagId, loc: kiln_source::Loc) -> bool {
         self.is_enabled(id) && !self.suppressed_in_system_header(id, loc)
     }

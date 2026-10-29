@@ -291,7 +291,7 @@ impl Oven {
         ctx: EvalContext,
     ) -> Result<ConstValueId, EvalFailure> {
         let start = Instant::now();
-        let r = self.eval_top(bridge, e, ctx.object, false, ctx.enum_range_check);
+        let r = self.eval_top(bridge, e, ctx.object, false, ctx.enum_range_check, true);
         let wall_us = start.elapsed().as_micros() as u64;
         let c = self.run.counters;
         self.stats.push(EvalRecord {
@@ -309,9 +309,25 @@ impl Oven {
     }
 
     /// Folds `e` if it is a constant expression; never reports anything
-    /// and is not recorded in the statistics.
+    /// and is not recorded in the statistics. The evaluation is a trial,
+    /// not manifestly constant-evaluated: `__builtin_is_constant_evaluated()`
+    /// yields false.
     pub fn try_fold(&mut self, bridge: &mut dyn SemaBridge, e: ExprId) -> Option<ConstValueId> {
-        self.eval_top(bridge, e, None, true, false).ok()
+        self.eval_top(bridge, e, None, true, false, false).ok()
+    }
+
+    /// Folds the initializer `e` of variable `var` as a constant
+    /// initializer ([basic.start.static]/2, manifestly constant-evaluated:
+    /// `__builtin_is_constant_evaluated()` yields true); `None` if it is
+    /// not a constant expression. Silent and not recorded in the
+    /// statistics, like [`Oven::try_fold`].
+    pub fn fold_constant_init(
+        &mut self,
+        bridge: &mut dyn SemaBridge,
+        e: ExprId,
+        var: DeclId,
+    ) -> Option<ConstValueId> {
+        self.eval_top(bridge, e, Some(var), true, false, true).ok()
     }
 
     /// Whether `var`'s initializer is a constant initializer
@@ -327,7 +343,7 @@ impl Oven {
             _ => {}
         }
         let Some(init) = data.init else { return false };
-        self.eval_top(bridge, init, Some(var), true, false).is_ok()
+        self.eval_top(bridge, init, Some(var), true, false, true).is_ok()
     }
 
     /// Per-evaluation records and totals.
@@ -379,12 +395,14 @@ impl Oven {
         object: Option<DeclId>,
         silent: bool,
         enum_check: bool,
+        const_context: bool,
     ) -> Result<ConstValueId, EvalFailure> {
         for g in self.provisional.drain(..) {
             self.globals[g as usize].state = compile::GState::Unresolved;
         }
         self.run.silent = silent;
         self.run.enum_check = enum_check;
+        self.run.const_context = const_context;
         self.run.counters = vm::Counters::default();
         self.mem.allocated = 0;
         self.mem.peak = 0;
