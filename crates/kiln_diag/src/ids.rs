@@ -831,7 +831,6 @@ diag_ids! {
     parse_missing_dependent_template_kw = Error (1) "use 'template' keyword to treat '{0}' as a dependent template name";
     parse_fold_operand_not_cast = Error (0) "expression not permitted as operand of fold expression";
     parse_fold_operator_mismatch = Error (0) "operators in fold expression must be the same";
-    note_fold_operator = Note (0) "previous operator is here";
     parse_requires_clause_needs_parens = Error (0) "parentheses are required around this expression in a requires clause";
     parse_concept_has_constraints = Error (0) "concept cannot have associated constraints";
     parse_concept_legacy_bool = Error (0) "ISO C++ does not permit the 'bool' keyword after 'concept'";
@@ -861,6 +860,7 @@ diag_ids! {
     sema_trailing_requires_non_function = Error (0) "trailing requires clause can only be used when declaring a function";
     sema_trailing_requires_non_template = Error (0) "non-templated function cannot have a requires clause";
     parse_expected_qualified_after_typename = Error (0) "expected a qualified name after 'typename'";
+    parse_expected_fold_operator = Error (0) "expected a foldable binary operator in fold expression";
 }
 
 impl DiagId {

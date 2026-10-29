@@ -1596,6 +1596,13 @@ impl Parser<'_, '_> {
             }
             return None;
         }
+        // A simple-template-id or dependent class-name ([class.derived.general]/1,
+        // [temp.res.general]/4: implicitly a type here).
+        if self.at_template_type_name(DeclaratorContext::TypeName) {
+            let ty = self.parse_template_type_name(DeclaratorContext::TypeName)?;
+            let pack_expansion = self.eat(Punct::Ellipsis).is_some();
+            return Some(BaseSpecInfo { ty, loc, is_virtual, access, pack_expansion, attrs });
+        }
         let Ok(q) = self.parse_nested_name() else {
             return None;
         };

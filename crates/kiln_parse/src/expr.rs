@@ -5,7 +5,7 @@
 //! descent. A `None` result ([`PExpr`]) means a syntax error was reported
 //! and the caller must recover; semantic errors yield an error expression.
 
-use kiln_ast::expr::{BinaryOp, TraitKind, UnaryOp};
+use kiln_ast::expr::{BinaryOp, ExprKind, TraitKind, UnaryOp};
 use kiln_ast::{ExprId, QualType};
 use kiln_diag::DiagId;
 use kiln_lex::literal::{
@@ -19,7 +19,8 @@ use kiln_source::Loc;
 
 use crate::decl::is_type_specifier_kw;
 use crate::keywords::Kw;
-use crate::parser::{PExpr, Parser};
+use crate::parser::{PExpr, Parser, is_template_class};
+use kiln_sema::templ::actions::TemplateIdRef;
 use crate::tentative::TypeIdContext;
 
 /// clang's `prec::Level`.
@@ -165,7 +166,24 @@ impl Parser<'_, '_> {
         if !self.greater_is_op && matches!(p, Punct::Greater | Punct::GreaterGreater) {
             return None;
         }
-        binop(p)
+        let r = binop(p)?;
+        // `op ...` belongs to the enclosing fold-expression (clang's
+        // `ParseRHSOfBinaryExpression` leaves it alone).
+        if r.1.is_some() && self.peek_is(1, Punct::Ellipsis) {
+            return None;
+        }
+        Some(r)
+    }
+
+    /// The fold-operator at index `i` when an ellipsis follows it
+    /// ([expr.prim.fold]/1: any binary operator but `?:`).
+    fn fold_op_at(&self, i: usize) -> Option<BinaryOp> {
+        let p = Self::punct_of(self.tok_at(i))?;
+        if !self.greater_is_op && matches!(p, Punct::Greater | Punct::GreaterGreater) {
+            return None;
+        }
+        let op = binop(p)?.1?;
+        (Self::punct_of(self.tok_at(i + 1)) == Some(Punct::Ellipsis)).then_some(op)
     }
 
     /// Runs `f` with `>` treated as an operator or not (clang's
@@ -370,8 +388,8 @@ impl Parser<'_, '_> {
         Some(self.s.act_on_cast(CastStyle::CStyle, ty, e, open, rparen))
     }
 
-    /// `sizeof...(name)` ([expr.sizeof]/5). M2 has no packs, so Sema
-    /// rejects every name; the unparenthesized form is TODO(M3).
+    /// `sizeof...(name)` ([expr.sizeof]/5): Sema looks the pack up; the
+    /// unparenthesized form is unsupported.
     fn parse_sizeof_pack(&mut self, loc: Loc) -> PExpr {
         let dots = self.bump().span.lo;
         if !self.at(Punct::LParen) {
@@ -385,8 +403,8 @@ impl Parser<'_, '_> {
             return Some(self.s.act_on_error_expr(&[], loc));
         };
         let name_loc = self.bump().span.lo;
-        self.expect_closing(Punct::RParen, Punct::LParen, open);
-        Some(self.s.act_on_sizeof_pack(name, name_loc, loc))
+        let rparen = self.expect_closing(Punct::RParen, Punct::LParen, open);
+        Some(self.s.act_on_sizeof_pack_name(name, name_loc, loc, rparen))
     }
 
     /// `sizeof`/`alignof`/`__alignof` ([expr.sizeof], [expr.alignof]).
@@ -543,7 +561,7 @@ impl Parser<'_, '_> {
                         self.unsupported("braced-init-list subscripts", self.loc());
                         return None;
                     }
-                    let Some(idx) = self.parse_expression() else {
+                    let Some(idx) = self.with_greater_op(true, Self::parse_expression) else {
                         self.skip_until(&[Punct::RSquare], false, true);
                         return None;
                     };
@@ -552,36 +570,14 @@ impl Parser<'_, '_> {
                 }
                 Some(Punct::LParen) => {
                     self.bump();
-                    let mut args = Vec::new();
-                    if !self.at(Punct::RParen) {
-                        loop {
-                            if self.at(Punct::LBrace) {
-                                let Ok(l) = self.parse_init_list() else {
-                                    self.skip_until(&[Punct::RParen], false, true);
-                                    return None;
-                                };
-                                args.push(self.s.act_on_braced_arg(l));
-                                if self.eat(Punct::Comma).is_none() {
-                                    break;
-                                }
-                                continue;
-                            }
-                            let Some(a) = self.parse_assignment_expr() else {
-                                self.skip_until(&[Punct::RParen], false, true);
-                                return None;
-                            };
-                            args.push(a);
-                            if self.eat(Punct::Comma).is_none() {
-                                break;
-                            }
-                        }
-                    }
+                    let args = self.with_greater_op(true, Self::parse_call_args)?;
                     let rparen = self.expect_closing(Punct::RParen, Punct::LParen, loc);
                     e = self.s.act_on_call(e, &args, loc, rparen);
                 }
                 Some(p @ (Punct::Period | Punct::Arrow)) => {
                     self.bump();
-                    if self.at_kw(Kw::Template) || self.at(Punct::Tilde) {
+                    let template_kw = self.eat_kw(Kw::Template).is_some();
+                    if self.at(Punct::Tilde) {
                         self.unsupported("this member access", self.loc());
                         return None;
                     }
@@ -598,7 +594,24 @@ impl Parser<'_, '_> {
                         return None;
                     };
                     let nl = self.bump().span.lo;
-                    e = self.s.act_on_member(e, name, nl, loc, p == Punct::Arrow);
+                    let arrow = p == Punct::Arrow;
+                    if template_kw {
+                        // `e.template f<args>` ([temp.names]/5).
+                        let targs = if self.at(Punct::Less) {
+                            let (args, _, _) = self.parse_template_arg_list()?;
+                            Some(self.s.ast.types.arg_list(&args))
+                        } else {
+                            None
+                        };
+                        let Some(m) = self.s.try_dependent_member(e, name, targs, true, nl, arrow)
+                        else {
+                            self.unsupported("'template' member access on a non-dependent object", nl);
+                            return None;
+                        };
+                        e = m;
+                        continue;
+                    }
+                    e = self.s.act_on_member(e, name, nl, loc, arrow);
                 }
                 Some(Punct::PlusPlus) => {
                     self.bump();
@@ -609,6 +622,39 @@ impl Parser<'_, '_> {
                     e = self.s.act_on_unary(UnaryOp::PostDec, e, loc);
                 }
                 _ => return Some(e),
+            }
+        }
+    }
+
+    /// The arguments of a call after its `(` ([expr.call]): an
+    /// expression-list whose initializer-clauses may be braced lists or
+    /// pack expansions ([temp.variadic]/5).
+    fn parse_call_args(&mut self) -> Option<Vec<ExprId>> {
+        let mut args = Vec::new();
+        if self.at(Punct::RParen) {
+            return Some(args);
+        }
+        loop {
+            let a = if self.at(Punct::LBrace) {
+                let Ok(l) = self.parse_init_list() else {
+                    self.skip_until(&[Punct::RParen], false, true);
+                    return None;
+                };
+                self.s.act_on_braced_arg(l)
+            } else {
+                let Some(a) = self.parse_assignment_expr() else {
+                    self.skip_until(&[Punct::RParen], false, true);
+                    return None;
+                };
+                a
+            };
+            let a = match self.eat(Punct::Ellipsis) {
+                Some(l) => self.s.act_pack_expansion(a, l),
+                None => a,
+            };
+            args.push(a);
+            if self.eat(Punct::Comma).is_none() {
+                return Some(args);
             }
         }
     }
@@ -630,12 +676,8 @@ impl Parser<'_, '_> {
                 if self.at(Punct::LBrace) {
                     return self.parse_stmt_expr(loc);
                 }
-                let Some(e) = self.parse_expression() else {
-                    self.skip_until(&[Punct::RParen], false, true);
-                    return None;
-                };
-                let r = self.expect_closing(Punct::RParen, Punct::LParen, loc);
-                return Some(self.s.act_on_paren(e, loc, r));
+                // [expr.prim.paren]: `>` is an operator inside parentheses.
+                return self.with_greater_op(true, |p| p.parse_paren_rest(loc));
             }
             TokKind::Punct(Punct::LSquare) => {
                 self.unsupported("lambda expressions", loc);
@@ -672,7 +714,10 @@ impl Parser<'_, '_> {
                 }
                 Kw::Typeid => self.parse_typeid(),
                 Kw::BuiltinOffsetof => self.parse_builtin_offsetof(),
-                Kw::Requires | Kw::CoYield | Kw::Typename | Kw::Template => {
+                Kw::Requires => self.parse_requires_expression(),
+                // `typename T::type(e)` ([expr.type.conv]).
+                Kw::Typename => self.parse_functional_cast(),
+                Kw::CoYield | Kw::Template => {
                     self.unsupported(&format!("'{}' expressions", k.spelling()), loc);
                     None
                 }
@@ -701,16 +746,136 @@ impl Parser<'_, '_> {
                 }
                 return self.parse_functional_cast();
             }
-            let qual = self.parse_nested_name().ok()?;
-            let Some(name) = self.ident() else {
-                self.error_here(DiagId::parse_expected_unqualified_id);
-                return None;
-            };
-            let nl = self.bump().span.lo;
-            return Some(self.s.act_on_id_expression(name, nl, qual));
+            return self.parse_id_expression_rest();
         }
         self.error_here(DiagId::parse_expected_expression);
         None
+    }
+
+    /// A (possibly qualified) id-expression that does not name a type
+    /// ([expr.prim.id]): a template-id names a variable template, a
+    /// function template or a concept ([temp.names]/1); a name after a
+    /// dependent qualifier is a `DependentScopeDeclRefExpr`
+    /// ([temp.dep.expr]/3); an undeclared name before `(` in a template
+    /// is found by argument-dependent lookup at instantiation
+    /// ([temp.dep.general]/2).
+    fn parse_id_expression_rest(&mut self) -> PExpr {
+        let qual = self.parse_nested_name_nns().ok()?;
+        let template_kw = qual.is_some() && self.eat_kw(Kw::Template).is_some();
+        let Some(name) = self.ident() else {
+            self.error_here(DiagId::parse_expected_unqualified_id);
+            return None;
+        };
+        let nl = self.bump().span.lo;
+        if let Some(q) = qual
+            && self.s.is_dependent_ctx(q.ctx)
+        {
+            let targs = if template_kw && self.at(Punct::Less) {
+                let (args, _, _) = self.parse_template_arg_list()?;
+                Some(self.s.ast.types.arg_list(&args))
+            } else {
+                None
+            };
+            return Some(self.s.act_dependent_scope_ref(q.nns, name, targs, nl));
+        }
+        let class = self.s.classify_name(name, qual.map(|q| q.ctx));
+        if self.at(Punct::Less) && (template_kw || is_template_class(class)) {
+            return match self.parse_template_id_rest(class, name, nl) {
+                Ok(TemplateIdRef::Value(e) | TemplateIdRef::Overload(e)) => Some(e),
+                Ok(TemplateIdRef::Type(_)) => {
+                    let t = self.s.ast.symbols().as_str(name).to_owned();
+                    let d = self.s.diag(DiagId::sema_unexpected_typedef_ident, nl).arg(t);
+                    self.emit(d);
+                    Some(self.s.act_on_error_expr(&[], nl))
+                }
+                Err(()) => Some(self.s.act_on_error_expr(&[], nl)),
+            };
+        }
+        if qual.is_none()
+            && class == NameClass::Undeclared
+            && self.at(Punct::LParen)
+            && self.s.in_template()
+        {
+            return Some(self.s.act_on_undeclared_call_name(name, nl));
+        }
+        Some(self.s.act_on_id_expression(name, nl, qual.map(|q| q.ctx)))
+    }
+
+    /// The rest of a parenthesized expression or fold-expression after
+    /// `(` at `lparen` ([expr.prim.paren], [expr.prim.fold]).
+    fn parse_paren_rest(&mut self, lparen: Loc) -> PExpr {
+        // `( ... op e )`.
+        if self.at(Punct::Ellipsis)
+            && let Some(op) = Self::punct_of(self.tok_at(self.pos() + 1))
+                .and_then(binop)
+                .and_then(|b| b.1)
+        {
+            let ellipsis = self.bump().span.lo;
+            self.bump();
+            let Some(rhs) = self.parse_fold_operand(true) else {
+                self.skip_until(&[Punct::RParen], false, true);
+                return None;
+            };
+            let r = self.expect_closing(Punct::RParen, Punct::LParen, lparen);
+            return Some(self.s.act_fold(None, op, Some(rhs), lparen, ellipsis, r));
+        }
+        let e = if self.at_kw(Kw::Throw) {
+            self.parse_expression()
+        } else {
+            self.parse_fold_operand(false)
+        };
+        let Some(e) = e else {
+            self.skip_until(&[Punct::RParen], false, true);
+            return None;
+        };
+        let Some(op) = self.fold_op_at(self.pos()) else {
+            let r = self.expect_closing(Punct::RParen, Punct::LParen, lparen);
+            return Some(self.s.act_on_paren(e, lparen, r));
+        };
+        // `( e op ... )` or `( e op ... op e )`.
+        self.bump();
+        let ellipsis = self.bump().span.lo;
+        let mut rhs = None;
+        if !self.at(Punct::RParen) {
+            let p = Self::punct_of(self.tok()).and_then(binop).and_then(|b| b.1);
+            let Some(op2) = p else {
+                self.error_here(DiagId::parse_expected_fold_operator);
+                self.skip_until(&[Punct::RParen], false, true);
+                return Some(self.s.act_on_error_expr(&[e], lparen));
+            };
+            if op2 != op {
+                self.error_here(DiagId::parse_fold_operator_mismatch);
+            }
+            self.bump();
+            let Some(r) = self.parse_fold_operand(true) else {
+                self.skip_until(&[Punct::RParen], false, true);
+                return None;
+            };
+            rhs = Some(r);
+        }
+        let r = self.expect_closing(Punct::RParen, Punct::LParen, lparen);
+        Some(self.s.act_fold(Some(e), op, rhs, lparen, ellipsis, r))
+    }
+
+    /// An expression that may be an operand of a fold-expression: a
+    /// cast-expression, or any expression (diagnosed when a fold operator
+    /// follows, [expr.prim.fold]/1, clang's `CheckFoldOperand`).
+    fn parse_fold_operand(&mut self, in_fold: bool) -> PExpr {
+        let start = self.loc();
+        let cast = self.parse_cast_expr()?;
+        let e = self.parse_rhs(cast, prec::COMMA)?;
+        if e != cast && (in_fold || self.fold_op_at(self.pos()).is_some()) {
+            // clang's `getExprLoc`: a binary operator's operator, else the
+            // start.
+            let n = self.s.ast.exprs.get(e);
+            let at = match n.kind() {
+                ExprKind::BinaryOperator | ExprKind::CompoundAssignOperator => n.loc(),
+                _ => start,
+            };
+            let d = self.s.diag(DiagId::parse_fold_operand_not_cast, at);
+            self.emit(d);
+        }
+        Some(e)
     }
 
     /// `static_cast<T>(e)` and friends ([expr.static.cast] etc.).

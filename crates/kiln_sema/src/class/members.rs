@@ -373,6 +373,19 @@ impl Sema<'_, '_> {
             if self.is_error_type(s.ty) {
                 continue;
             }
+            // A dependent base ([temp.dep.type]/1) is checked at
+            // instantiation (WP-070a); lookup does not look into it
+            // ([temp.dep.general]/4).
+            if self.is_dependent_type(s.ty) {
+                out.push(BaseSpec {
+                    ty: s.ty,
+                    loc: s.loc,
+                    is_virtual: s.is_virtual,
+                    access: s.access,
+                    pack_expansion: s.pack_expansion,
+                });
+                continue;
+            }
             if s.pack_expansion {
                 self.unsupported("pack expansions in a base-specifier list", s.loc);
                 continue;
