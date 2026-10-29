@@ -143,13 +143,6 @@ panic and never silently wrong IR.
   tests) run through kiln.
 
 ### Deviations
-- `bitfields_compound` (VerifyOnly; kiln_sema). The computation type of a
-  compound assignment does not promote a bit-field LHS narrower than
-  `int` (`kiln_sema` `conv/arith.rs`, `usual_arithmetic_conversions_kind`
-  skips LHS promotion on the CompoundAssign path). So for
-  `unsigned c : 9`, `c += 2` computes in `unsigned` (`add`) where clang
-  computes in `int` (`add nsw`). The value is the same; only the flag
-  differs. The fix belongs in kiln_sema.
 - Parser gaps (kiln_parse), which keep cases out of the corpus rather
   than deviating: `noexcept` exception specifications and
   `if constexpr`/`if consteval` are not parsed yet. `stmt.rs` already
@@ -161,9 +154,10 @@ Written as a resume point for a fresh agent. Branch `wp/052`, worktree
 `kiln/.worktrees/wp-052`.
 
 **Done (WP-052 part 1):** `fir.rs`, `module.rs`, `func.rs`, `consts.rs`,
-`fold.rs`, `expr.rs` (§3) and `stmt.rs` (§4). The unit corpus is 73/74
-exact against clang on aarch64; the one deviation is listed above.
-Additive `kiln_abi` fixes came with it: internal-linkage variable mangling,
+`fold.rs`, `expr.rs` (§3) and `stmt.rs` (§4). The unit corpus is 74/74
+exact against clang on aarch64 (`bitfields_compound` became exact with
+WP-057's kiln_sema compound-assignment promotion fix).
+Additive `kiln_abi` fixes came with part 1: internal-linkage variable mangling,
 static-local discriminators, and indirect returns with `byval` (clang's
 `getNaturalAlignIndirect`, so no `result.ptr` spill).
 
@@ -182,6 +176,4 @@ static-local discriminators, and indirect returns with `byval` (clang's
    the header-dependent tests in basic.start.main (argv, environment,
    return-value, stdin) and for stmt.ranged/constexpr-sum.
    `CXXForRangeStmt` is never produced by sema yet.
-4. Out of M2 but noted: bit-field and base-class constants, case ranges,
-   and the kiln_sema compound-assign promotion fix (then promote
-   `bitfields_compound` to `Exact`).
+4. Out of M2 but noted: bit-field and base-class constants, case ranges.

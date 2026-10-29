@@ -227,7 +227,10 @@ Redeclaration and linkage rules:
   - **literals:** via `kiln_sema::literal`; user-defined literals are
     diagnosed with clang's `no matching literal operator`
   - **operators:**
-    - unary and binary operators, including compound assignment
+    - unary and binary operators, including compound assignment (its
+      computation type promotes the left operand's type, bit-fields
+      by width, and an unscoped-enumeration left operand is then an
+      error: sema-conv.md §6)
     - `?:`, the comma operator
     - increment and decrement
   - **calls:** argument conversion, arity notes, variadic default

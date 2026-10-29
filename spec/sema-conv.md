@@ -149,7 +149,30 @@ ConvError>`. `usual_arithmetic_conversions` is the same with
 
 `ArithConvKind` (Arithmetic, Bitwise, Comparison, Conditional,
 CompoundAssign) selects only the diagnostic wording and the
-compound-assignment shape: the LHS is not converted.
+compound-assignment shape.
+
+**Compound assignment** ([expr.ass]/6: `E1 op= E2` computes `E1 op E2`
+with `E1` evaluated once). The LHS is returned unconverted, but the
+common type (the `ComputeLHSTy`) is computed from its promoted type, in
+clang's order:
+1. the RHS gets the usual unary conversions; if the cv-unqualified LHS
+   type and the RHS type are the same, that type is the result
+   (`unsigned c : 9; c += 2u` computes in `unsigned int`, and
+   `short s; s += (short)1` in `int`, since the RHS was promoted);
+2. otherwise the LHS type is replaced by its integral promotion
+   (`promoted_type(lt, bit_field_width(l))`: [conv.prom]/1–4, and /5 for
+   a bit-field, so `c += 2` computes in `int`, `long l3 : 3; l3 += 1` in
+   `int`, `char32_t x; x += 1` in `unsigned int`; a bit-field wider than
+   `int` keeps its type, and an enumeration bit-field promotes as its
+   enumeration). An unscoped enumeration LHS thereby counts as
+   arithmetic;
+3. the rules below continue with the promoted LHS type.
+
+The computation result must convert back to the LHS type. For an
+unscoped enumeration LHS it never does ([conv.prom]/3 made it an integer
+or the RHS made it floating), so `compound_assign` in `expr.rs` reports
+clang's `assigning to 'E' from incompatible type 'int'`
+(`sema_assign_incompatible`), for the shift operators too.
 
 The rules, per [expr.arith.conv]/1:
 - /1.1: a scoped enum mixed with another type is an error.

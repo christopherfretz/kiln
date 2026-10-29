@@ -369,7 +369,7 @@ const CASES: &[(&str, Mode, &str)] = &[
     // Deviation (kiln_sema): the compound-assignment computation type does
     // not promote a bit-field LHS narrower than int, so `c += 2` computes in
     // `unsigned` (`add`) where clang computes in `int` (`add nsw`).
-    ("bitfields_compound", VerifyOnly, "struct B { unsigned c : 9; }; void f(B* p) { p->c += 2; }"),
+    ("bitfields_compound", Exact, "struct B { unsigned c : 9; }; void f(B* p) { p->c += 2; }"),
     (
         "sizeof_alignof",
         Exact,

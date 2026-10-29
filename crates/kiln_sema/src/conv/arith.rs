@@ -6,10 +6,10 @@ use kiln_ast::{ExprId, QualType};
 use kiln_diag::DiagId;
 
 use super::rank::{
-    FloatOrder, float_order, int_signed, int_width, integer_rank, is_unscoped_enum,
-    unsigned_counterpart,
+    FloatOrder, float_order, int_signed, int_width, integer_rank, is_integral_or_unscoped_enum,
+    is_unscoped_enum, promoted_type, unsigned_counterpart,
 };
-use super::{ConvError, cast_to, ty, usual_unary_conversions};
+use super::{ConvError, bit_field_width, cast_to, ty, usual_unary_conversions};
 use crate::Sema;
 
 /// The operator the usual arithmetic conversions are performed for;
@@ -24,7 +24,8 @@ pub enum ArithConvKind {
     Comparison,
     /// The second and third operands of `?:`.
     Conditional,
-    /// A compound assignment: the left operand is not converted.
+    /// A compound assignment: the left operand is not converted, but its
+    /// type takes part in the conversions promoted.
     CompoundAssign,
 }
 
@@ -60,12 +61,33 @@ fn common_sugar(s: &Sema<'_, '_>, a: QualType, b: QualType) -> QualType {
     ca.iter().find(|q| cb.contains(q)).copied().unwrap_or_else(|| s.ast.types.canonical(a))
 }
 
+/// The type the left operand `l` (of type `lt`, cv-unqualified) of a
+/// compound assignment takes part in the usual arithmetic conversions
+/// with: its integral promotion ([conv.prom]), with the bit-field
+/// promotion of /5 for a bit-field, else `lt` itself. clang:
+/// `isPromotableIntegerType` / `isPromotableBitField` in
+/// `UsualArithmeticConversions`.
+fn compound_lhs_type(s: &Sema<'_, '_>, l: ExprId, lt: QualType) -> QualType {
+    if !is_integral_or_unscoped_enum(s, lt) {
+        return lt;
+    }
+    promoted_type(s, lt, bit_field_width(s, l)).unwrap_or(lt)
+}
+
 /// The usual arithmetic conversions ([expr.arith.conv]) on the operands
 /// `l` and `r` of an operator of kind `kind`: the usual unary
-/// conversions (not on the left operand of a compound assignment), then
-/// conversion to the common type, which is returned with the converted
-/// operands. Two operands of the same type (including a scoped
-/// enumeration) keep it.
+/// conversions, then conversion to the common type, which is returned
+/// with the converted operands. Two operands of the same type (including
+/// a scoped enumeration) keep it.
+///
+/// For a compound assignment ([expr.ass]/6, `E1 op= E2` is
+/// `E1 = E1 op E2`) the left operand is returned unconverted, but the
+/// common type is computed from its *promoted* type ([conv.prom],
+/// including the bit-field promotion of /5), as clang's
+/// `UsualArithmeticConversions` does: two operands of the same
+/// unpromoted type keep it (`unsigned c : 9; c += 2u` computes in
+/// `unsigned int`); otherwise the left type is promoted first
+/// (`c += 2` computes in `int`, `char32_t x; x += 1` in `unsigned int`).
 ///
 /// # Errors
 /// - an unscoped enumeration with a floating-point type, or two
@@ -114,12 +136,19 @@ pub fn usual_arithmetic_conversions_kind(
     if s.ast.types.same_unqualified(lt, rt) {
         return Ok((l, r, common_sugar(s, lt, rt)));
     }
+    // The left operand of a compound assignment is promoted in type only
+    // (the other kinds' left operands were promoted above). An unscoped
+    // enumeration is arithmetic here through its promotion, as in clang.
+    let lt = if ca { compound_lhs_type(s, l, lt) } else { lt };
     let arith = |q: QualType| s.ast.types.is_arithmetic(q);
     if !arith(lt) || !arith(rt) {
         return Err(ConvError::new(
             DiagId::sema_invalid_operands,
             vec![s.ty_arg(lt0), s.ty_arg(rt0)],
         ));
+    }
+    if ca && s.ast.types.same_unqualified(lt, rt) {
+        return Ok((l, r, common_sugar(s, lt, rt)));
     }
     let (lfl, rfl) = (s.ast.types.is_floating(lt), s.ast.types.is_floating(rt));
     if lfl && rfl {

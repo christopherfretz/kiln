@@ -1390,6 +1390,21 @@ impl Sema<'_, '_> {
                 }
             }
         };
+        // [expr.ass]/6: the result `E1 op E2` is assigned back to `E1`. An
+        // arithmetic computation type converts implicitly to any arithmetic
+        // left type, but not to an unscoped enumeration ([conv.prom]/3
+        // promoted it), so `e += 1` is ill-formed (clang's
+        // `CheckAssignmentOperands` with the computation result type).
+        if conv::is_unscoped_enum(self, lt)
+            && !self.ast.types.same_unqualified(res_ty, conv::strip_cv(self, lt))
+        {
+            let msg = self
+                .diag(DiagId::sema_assign_incompatible, loc)
+                .arg(self.ty_arg(lt))
+                .arg(self.ty_arg(res_ty));
+            self.emit(msg);
+            return self.recover_err(&[l, r], loc);
+        }
         let res = self.builder().compound_assign(op, l, r2, lt, lhs_ty, res_ty, loc);
         self.mark_bitfield_if(res, l);
         res
