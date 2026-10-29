@@ -519,7 +519,6 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                 if let Some(c) = ExprId::from_raw(n.b()) {
                     kids.push((Node::Expr(c), None));
                 }
-                return;
             }
             k if k.is_cast() => push(n.a()),
             ExprKind::CXXConstructExpr | ExprKind::CXXTemporaryObjectExpr => {
@@ -997,6 +996,7 @@ impl<'a, W: io::Write> Dumper<'a, W> {
         false
     }
 
+    #[allow(clippy::too_many_lines, reason = "one flat match over the decl kinds' trailing fields")]
     fn other_fields(&mut self, d: DeclId, n: &crate::decl::DeclNode) {
         let ast = self.ast;
         let decls = &ast.decls;

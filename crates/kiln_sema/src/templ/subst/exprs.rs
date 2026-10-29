@@ -393,12 +393,11 @@ impl Substituter<'_, '_, '_> {
     }
 
     fn int_literal(&mut self, ty: QualType, v: i128, loc: Loc) -> ExprId {
-        match u64::try_from(v) {
-            Ok(u) => self.sema.ast.builder().int_literal(ty, u, Radix::Decimal, loc),
-            Err(_) => {
-                let c = self.sema.int_const(ty, v);
-                self.sema.ast.builder().wide_int_literal(ty, c, Radix::Decimal, loc)
-            }
+        if let Ok(u) = u64::try_from(v) {
+            self.sema.ast.builder().int_literal(ty, u, Radix::Decimal, loc)
+        } else {
+            let c = self.sema.int_const(ty, v);
+            self.sema.ast.builder().wide_int_literal(ty, c, Radix::Decimal, loc)
         }
     }
 
@@ -440,9 +439,8 @@ impl Substituter<'_, '_, '_> {
                 let r = self.sema.ast.exprs.end_loc(init).unwrap_or(n.loc());
                 Ok(Initializer::Paren(args, n.loc(), r))
             }
-            ExprKind::InitListExpr if style != kiln_ast::decl::InitStyle::C || true => {
-                Ok(Initializer::List(self.init_list(init)?))
-            }
+            // `= {…}` and `{…}` alike: list-initialization ([dcl.init.list]/1).
+            ExprKind::InitListExpr => Ok(Initializer::List(self.init_list(init)?)),
             _ => {
                 let e = self.expr(init)?;
                 Ok(match style {

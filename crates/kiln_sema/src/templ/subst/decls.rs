@@ -206,20 +206,18 @@ impl Substituter<'_, '_, '_> {
         if self.sema.kind_of(v) != DeclKind::Var {
             return Ok(());
         }
-        match data.init {
-            Some(init) => {
-                let style = data.spec.init_style();
-                match self.initializer(init, style) {
-                    Ok(i) => self.sema.act_on_init(v, i),
-                    Err(SubstFail) => {
-                        self.sema.act_on_uninit(v);
-                        return Err(SubstFail);
-                    }
-                }
-            }
-            None => self.sema.act_on_uninit(v),
+        let Some(init) = data.init else {
+            self.sema.act_on_uninit(v);
+            return Ok(());
+        };
+        let style = data.spec.init_style();
+        if let Ok(i) = self.initializer(init, style) {
+            self.sema.act_on_init(v, i);
+            Ok(())
+        } else {
+            self.sema.act_on_uninit(v);
+            Err(SubstFail)
         }
-        Ok(())
     }
 
     /// The parameters of pattern function `f` with substituted types.
@@ -318,17 +316,17 @@ impl Substituter<'_, '_, '_> {
         } else {
             r
         };
-        if fs.is_some_and(|s| s.is_pure()) {
+        if fs.is_some_and(kiln_ast::decl::FnSpec::is_pure) {
             self.sema.ast.decls.mark_function(f, kiln_ast::decl::FnSpec::new().with_pure(true));
         }
         // Defined in its class: inline before its body is instantiated.
-        if fs.is_some_and(|s| s.implicit_inline()) {
+        if fs.is_some_and(kiln_ast::decl::FnSpec::implicit_inline) {
             self.sema
                 .ast
                 .decls
                 .mark_function(f, kiln_ast::decl::FnSpec::new().with_implicit_inline(true));
         }
-        self.default_args(d, f)?;
+        self.default_args(d, f);
         Ok(r)
     }
 
@@ -352,7 +350,7 @@ impl Substituter<'_, '_, '_> {
     }
 
     /// The default arguments of pattern function `pat` on `f`.
-    fn default_args(&mut self, pat: DeclId, f: DeclId) -> SubstResult<()> {
+    fn default_args(&mut self, pat: DeclId, f: DeclId) {
         let pp: Vec<DeclId> = self
             .sema
             .ast
@@ -378,15 +376,13 @@ impl Substituter<'_, '_, '_> {
                 kiln_ast::expr::ExprKind::CXXDefaultArgExpr => continue,
                 _ => self.expr(def),
             };
-            match e {
-                Ok(e) => self.sema.act_on_param_default_arg(b, e),
-                Err(SubstFail) => {}
+            if let Ok(e) = e {
+                self.sema.act_on_param_default_arg(b, e);
             }
         }
         for a in pp {
             self.locals.remove(&a);
         }
-        Ok(())
     }
 
     /// A field of the pattern; its default member initializer is

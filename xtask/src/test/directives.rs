@@ -362,6 +362,7 @@ impl Parser {
         self.errors.push(DirectiveError { line, message: message.into() });
     }
 
+    #[allow(clippy::too_many_lines, reason = "one flat match over the directive keys")]
     fn directive(&mut self, line: usize, key: &str, value: Option<&str>) {
         let Some((name, qualifier, value)) = self.split_key(line, key, value) else {
             return;

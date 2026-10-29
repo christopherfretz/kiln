@@ -76,6 +76,7 @@ impl Substituter<'_, '_, '_> {
         Ok((None, self.opt_expr(cond)?))
     }
 
+    #[allow(clippy::too_many_lines, reason = "one flat match over the statement kinds")]
     fn stmt_node(&mut self, s: StmtId) -> SubstResult<StmtId> {
         let n = *self.sema.ast.stmts.get(s);
         let loc = n.loc();

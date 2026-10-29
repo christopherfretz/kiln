@@ -2112,6 +2112,144 @@ are:
 
 Most of the remaining errors are follow-ons of these.
 
+**Landed (WP-070a).** Class and alias templates are instantiated:
+argument checking and conversion, the substituter, class
+specializations and their members, the instantiation stack and its
+notes, and the report. Partial and explicit specialization, deduction,
+packs, satisfaction and the builtins are stubs (below).
+
+*Files.*
+- `kiln_sema/src/templ/`:
+  - `args.rs`: `ConvertedArgs`, `MultiLevelArgs` (`Level`, `LevelMode`,
+    `ArgLookup`), `check_template_args`, per-kind checks, NTTP
+    conversion, defaults and canonical/printing argument lists;
+  - `class.rs`: `get_class_spec`, `class_template_type`,
+    `alias_template_type`, `require_complete*`, `instantiate_class`,
+    lazy member-function, static-data-member and member-class
+    instantiation;
+  - `stack.rs`: `FrameKind`, `InstFrame`, `InstLimits`,
+    `InstantiationStack`, `SfinaeState`, `push_inst_frame` /
+    `pop_inst_frame` and the §10.1 notes;
+  - `report.rs`: `InstReport`, `InstRow`, `RowKind`, `ReportFormat` and
+    the text/JSON renderers (§11.3);
+  - `pending.rs`: the end-of-TU queue; `deduce.rs` and `order.rs`:
+    stubs;
+  - `subst/{mod,types,exprs,stmts,decls}.rs`: `Substituter`.
+- `kiln_ast/src/templates.rs`: `SpecInfo`, `MemberSpecInfo`,
+  `SpecKind`, the specialization and member tables, `expr_begin`, and
+  `class_spec`, `member_of_spec` and `subst_nttp_expr`.
+- `kiln_ast/src/dump`: the `ClassTemplateSpecializationDecl` and
+  `SubstNonTypeTemplateParmExpr` lines (ast-dump.md §5), mirrored in
+  `xtask/src/clang_ast`.
+- `kiln_driver/src/templ_opts.rs`: the template flags.
+- `xtask/src/test/inst_report.rs`: the `inst-report:` directive.
+- `bench/frontend/templates_{wide,deep}.cpp` with kiln baselines.
+- Tests: `tests/conformance/templates/` gains 29 `class/`, 17 `alias/`,
+  19 `diag/` (strict-diags, clang 19 texts) and 1 `report/` test.
+
+*Signatures as landed* (where they differ from §11.2):
+```rust
+pub fn check_template_args(&mut self, tmpl: DeclId, written: &[TemplateArg], arg_locs: &[Loc], loc: Loc) -> Result<ConvertedArgs, ()>;
+pub fn get_class_spec(&mut self, tmpl: DeclId, written: &[TemplateArg], arg_locs: &[Loc], loc: Loc) -> Result<DeclId, ()>;
+pub fn class_template_type(&mut self, name: TemplateNameId, tmpl: DeclId, written: &[TemplateArg], arg_locs: &[Loc], loc: Loc) -> Result<QualType, ()>;
+pub fn alias_template_type(&mut self, name: TemplateNameId, tmpl: DeclId, written: &[TemplateArg], arg_locs: &[Loc], loc: Loc) -> Result<QualType, ()>;
+pub fn require_complete(&mut self, q: QualType, loc: Loc) -> bool;        // diagnoses
+pub fn require_complete_silent(&mut self, q: QualType, loc: Loc) -> bool; // instantiates, no diagnostic
+pub fn require_complete_nns(&mut self, q: QualType, loc: Loc) -> bool;    // [expr.prim.id.qual] texts
+pub fn instantiate_class(&mut self, spec: DeclId, poi: Loc, diagnose: bool) -> bool;
+pub fn instantiate_function_definition(&mut self, f: DeclId, poi: Loc);
+pub fn instantiate_static_member_init(&mut self, v: DeclId, poi: Loc);
+pub fn end_of_tu_instantiations(&mut self);
+pub(crate) fn push_inst_frame(&mut self, kind: FrameKind, entity: DeclId, template: DeclId, poi: Loc) -> bool; // false: depth limit or fatal
+pub(crate) fn pop_inst_frame(&mut self);
+pub fn instantiation_report(&self, file: &str) -> String; // "" unless -fkiln-instantiation-report
+pub fn act_dependent_scope_ref(&mut self, nns: NnsId, name: Symbol, targs: Option<ArgListId>, begin: Loc, loc: Loc) -> ExprId;
+impl Substituter { pub fn new(sema: &mut Sema, args: &MultiLevelArgs) -> Self; pub fn map_context(&mut self, pattern: DeclId, inst: DeclId); … }
+pub fn deduce_call(&mut self, tmpl: DeclId, explicit: Option<&ConvertedArgs>, args: &[ExprId], loc: Loc) -> Option<ConvertedArgs>; // stub
+```
+SFINAE is `InstantiationStack::is_sfinae()` plus a `SfinaeState`
+stack in `InstState.sfinae`: `Sema::emit` counts errors and keeps the
+first instead of emitting them (§5.7).
+
+*Interface changes outside the templates crates.*
+- `kiln_sema`:
+  - `Sema.inst: InstState`; `Sema::emit` prepends the instantiation
+    notes and captures errors under SFINAE.
+    `InstState.suppress_next_error` drops one follow-on error, and
+    `InstState.undefined_diagnosed` reports an undefined template once.
+  - `act_dependent_scope_ref` gains `begin` (the qualifier's first
+    token, kept in `ast.templates.expr_begin`).
+  - Member access into an incomplete class type is diagnosed at the
+    operator as `member access into incomplete type {0}`
+    (`sema_member_reference_incomplete`).
+  - A dependent enum-base and a dependent `constexpr` variable without
+    an initializer are checked at instantiation.
+- `kiln_ast`: `Ast::node_live_bytes` and `node_count` (the meter),
+  `ExprArena::subst_replacement` / `subst_parameter`, `VarSpec::LATE`.
+- `kiln_parse`: `ParseOptions.inst_limits` and `inst_report`, and
+  `ParsedTu.inst_report` (the rendered report).
+- `kiln_pp`: `Preprocessor::main_file`.
+- `kiln_oven`: looks through `SubstNonTypeTemplateParmExpr`.
+- `kiln_driver`:
+  - `-ftemplate-depth=N` (default 1024), `-ftemplate-backtrace-limit=N`
+    (default 10, 0 = all) and `-fkiln-instantiation-report[=all|json|text]`
+    (the report goes to stderr; timing only with the flag);
+    `ArgError::InvalidFlagValue` maps to `drv_invalid_value`;
+  - `main` runs the compile on a thread with a 1 GiB reserved stack.
+    This stands in for the Q4 sema thread (256 MiB plus `StackGuard`),
+    which is not built yet; 1024-deep instantiation needs more than
+    256 MiB in debug builds.
+- `kiln_diag`: the instantiation notes, `sema_template_recursion_depth`
+  (fatal), the undefined-template, arity, argument-kind, nested-name and
+  `typename` errors, appended at the end of the tables.
+- Harness: the `inst-report:` directive (harness.md) with masked
+  timings; the clang-ast mapping keeps `ClassTemplateSpecializationDecl`
+  and `SubstNonTypeTemplateParmExpr`.
+
+*Gaps* (each reports a diagnostic or is a known divergence):
+- No TypeLocs: an error inside a written type points at the
+  declarator, not the type.
+- Default member initializers are instantiated with the class. clang
+  instantiates them when used, with its own notes.
+- A qualified `DeclRefExpr` prints without its qualifier: sema never
+  records `qualifier` in `DeclRefExtra`. This predates WP-070a.
+- No `CXXConstructExpr` for a class-typed variable of a specialization
+  (WP-067b).
+- Parsing nested template-ids is quadratic: `skip_template_args`
+  recurses through `scan_name_at` (`kiln_parse/src/parser.rs`). Depth
+  1000 takes 406 ms in release. This predates WP-070a; the owner is the
+  parser.
+- The `inst.*` bench metrics of §11.4 are not in `xtask bench` yet.
+- Known divergences: a `void` parameter list after substitution, the
+  value-initialization temporary in an instantiated member-function
+  body, friend redefinition across specializations, and
+  explicit-after-implicit mismatches.
+
+*Stubs* (each reports `sema_unimplemented_template_feature`):
+| Stub | Owner |
+|---|---|
+| Explicit specialization (`act_explicit_specialization`), explicit instantiation | WP-070b |
+| Partial-specialization matching (`match_partial_specs`), `more_specialized` | WP-072 / WP-070b |
+| Member templates; the dependent template specialization type (`T::template X<…>`) | WP-070b |
+| `deduce_call`, function template specializations | WP-071 |
+| Pack expansion (`expand_list` with an expansion), variadic specializations | WP-072 |
+| `check_satisfaction` | WP-073 |
+| The builtins `TABLE` | WP-074 |
+| Pointer-to-member template arguments | WP-071 |
+
+*`<type_traits>` probe* (same command as WP-069): 431 errors on main
+before WP-070a, then 415 (the main binary at merge time gives 426). The
+23 non-dependent specialization errors are gone. The blockers are:
+
+| Errors | Cause | Owner |
+|---:|---|---|
+| ~200 | Builtin traits and transforms (`__is_same`, `__remove_cvref`, …) | WP-074 |
+| 87 | Partial (60) and explicit (27) specializations | WP-070b / WP-072 |
+| ~19 | Operators, constructors and conversion functions | WP-067b/068 |
+| 3 | `__copy_cv<_From>::template __apply<_To>` | WP-070b |
+
+Q3 was not implemented; see §14.
+
 ### 11.3 Instantiation report and memory accounting
 
 **Meter.** Each instantiation frame records, at push, `(Ast::bytes(),
@@ -2317,6 +2455,14 @@ Each question has a recommendation (R).
    `ExprDeps::LOCAL` bit, an ast.md §5 change. **R:** implement it in
    WP-070 behind `-fno-share-nondependent`, measure it with the report,
    and keep it if it saves ≥15% of `inst.bytes` on `libcxx_m3.cpp`.
+   **WP-070a: deferred to WP-071.** No code, flag or `LOCAL` bit landed,
+   and ast.md §5 is unchanged. The measurement cannot be made yet:
+   `libcxx_m3.cpp` does not exist and kiln cannot compile the M3
+   headers, and WP-070a instantiates no function-template bodies, where
+   the shared subtrees are. It instantiates only member functions,
+   default member initializers, static-member initializers, array
+   bounds and `static_assert`s. WP-071 measures it once function bodies
+   and `libcxx_m3.cpp` exist, with the same ≥15% rule.
 4. **Q4: Stack strategy (D1).** **R:** a dedicated sema thread with a
    256 MiB reserved stack, plus `StackGuard` with a 1 MiB red zone. The
    alternative is a `stacker`-style segmented stack, which needs `unsafe`
@@ -2370,7 +2516,7 @@ Each question has a recommendation (R).
 |---|---|
 | Q1 | Concepts are M3. ROADMAP M3/M4 edited. |
 | Q2 | Pack indexing (P2662) is M3, in WP-072. ROADMAP edited. |
-| Q3 | Implement non-dependent subtree sharing in WP-070a behind `-fno-share-nondependent`; `ExprDeps::LOCAL` is added to ast.md §5 by that WP; keep it only if the report shows ≥15% `inst.bytes` saved on `libcxx_m3.cpp`, else remove the code (no dead flags). |
+| Q3 | Implement non-dependent subtree sharing in WP-070a behind `-fno-share-nondependent`; `ExprDeps::LOCAL` is added to ast.md §5 by that WP; keep it only if the report shows ≥15% `inst.bytes` saved on `libcxx_m3.cpp`, else remove the code (no dead flags). WP-070a could not measure it (§14 Q3), so it moves to WP-071 with the same rule; nothing landed. |
 | Q4 | Dedicated sema thread (256 MiB reserved stack, `std::thread::Builder::stack_size`) plus `StackGuard` with a 1 MiB red zone. The whole front end (parser + sema + Oven) runs on that thread, since the parser calls sema. No segmented stacks, no `unsafe`. |
 | Q5 | R-OVEN-1 accepted: the Oven supports nested `evaluate` from bridge callbacks (a stack of `EvalContext`s; the frame space uses marks per context and is reset only when the outermost context ends; budget shared, `depth` counts nested contexts). It lands in **WP-061b** (which already reworks `mem.rs` reset) with `EvalKind::Constraint`; `ensure_body(&mut self, f, oven: &mut Oven)` is the contract. No fallback. |
 | Q6 | R-OVEN-2 accepted: frozen values are hash-consed by content in `ConstStore` (WP-061b, `frozen_bytes` counts only new values). |

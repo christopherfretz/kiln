@@ -138,22 +138,21 @@ impl InstReport {
             p.1 = p.1.saturating_add(nodes);
         }
         let kind = RowKind::of(kind);
-        let i = match self.index.get(&(template, kind)) {
-            Some(&i) => i as usize,
-            None => {
-                let i = self.rows.len();
-                self.rows.push(InstRow {
-                    template,
-                    kind,
-                    count: 0,
-                    nodes: 0,
-                    bytes: 0,
-                    self_ns: 0,
-                    incl_ns: 0,
-                });
-                let _ = self.index.insert((template, kind), i as u32);
-                i
-            }
+        let i = if let Some(&i) = self.index.get(&(template, kind)) {
+            i as usize
+        } else {
+            let i = self.rows.len();
+            self.rows.push(InstRow {
+                template,
+                kind,
+                count: 0,
+                nodes: 0,
+                bytes: 0,
+                self_ns: 0,
+                incl_ns: 0,
+            });
+            let _ = self.index.insert((template, kind), i as u32);
+            i
         };
         let r = &mut self.rows[i];
         r.count = r.count.saturating_add(1);
@@ -258,8 +257,8 @@ impl Sema<'_, '_> {
                         x.count,
                         x.nodes,
                         x.bytes,
-                        x.self_ns as f64 / 1e6,
-                        x.incl_ns as f64 / 1e6,
+                        ms(x.self_ns),
+                        ms(x.incl_ns),
                         x.kind.name(),
                         self.report_template_name(x.template),
                         loc(x.template)
@@ -273,8 +272,8 @@ impl Sema<'_, '_> {
                     "  total: {} instantiations, {} nodes, {:.2} MiB retained, {:.1} ms",
                     r.count,
                     total_nodes,
-                    total_bytes as f64 / (1024.0 * 1024.0),
-                    total_ns as f64 / 1e6
+                    mib(total_bytes),
+                    ms(total_ns)
                 );
             }
         }
@@ -297,6 +296,18 @@ fn json_str(s: &str) -> String {
     }
     o.push('"');
     o
+}
+
+/// Nanoseconds as milliseconds, for display.
+#[allow(clippy::cast_precision_loss, reason = "display only; exact below 2^52 ns")]
+fn ms(ns: u64) -> f64 {
+    ns as f64 / 1e6
+}
+
+/// Bytes as MiB, for display.
+#[allow(clippy::cast_precision_loss, reason = "display only; exact below 2^52 bytes")]
+fn mib(bytes: u64) -> f64 {
+    bytes as f64 / (1024.0 * 1024.0)
 }
 
 #[cfg(test)]

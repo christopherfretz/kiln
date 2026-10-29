@@ -759,7 +759,7 @@ impl<'a> Printer<'a, '_> {
                 push_opt(&mut l, name(n));
                 line = l;
                 if k == "ClassTemplateDecl" {
-                    let params = spec_param_types(n)?;
+                    let params = spec_param_types(n);
                     for c in kids(n) {
                         if kind(c) == "ClassTemplateSpecializationDecl" {
                             kids_out.extend(self.specialization(c, params.as_deref())?);
@@ -1565,40 +1565,40 @@ impl<'a> Printer<'a, '_> {
             "ClassTemplateSpecializationDecl",
             n.as_obj().unwrap_or(&[]).iter().map(|(key, _)| key.as_str()),
         )?;
-        let mut l = decl_head(n, "ClassTemplateSpecializationDecl");
-        push_word(&mut l, text(n, "tagUsed").unwrap_or(""));
-        push_word(&mut l, nm);
+        let mut line = decl_head(n, "ClassTemplateSpecializationDecl");
+        push_word(&mut line, text(n, "tagUsed").unwrap_or(""));
+        push_word(&mut line, nm);
         if flag(n, "completeDefinition") {
-            push_word(&mut l, "definition");
-            push_word(&mut l, "implicit_instantiation");
+            push_word(&mut line, "definition");
+            push_word(&mut line, "implicit_instantiation");
         }
-        let mut t = Tree { line: l, kids: Vec::new() };
-        let mut i = 0;
+        let mut tree = Tree { line, kids: Vec::new() };
+        let mut index = 0;
         let mut args = Vec::new();
         let mut rest = Vec::new();
-        for c in kids(n) {
-            if kind(c) == "TemplateArgument" {
-                let p = params.get(i).ok_or_else(|| {
+        for child in kids(n) {
+            if kind(child) == "TemplateArgument" {
+                let param = params.get(index).ok_or_else(|| {
                     format!("clang-ast: `{nm}` has more arguments than parameters")
                 })?;
-                args.push(spec_arg(c, p.as_deref())?);
-                i += 1;
+                args.push(spec_arg(child, param.as_deref())?);
+                index += 1;
             } else {
-                rest.push(c);
+                rest.push(child);
             }
         }
-        t.kids.extend(args);
+        tree.kids.extend(args);
         if let Some(bases) = n.get("bases") {
-            for b in bases.as_arr().unwrap_or(&[]) {
-                t.kids.push(Tree { line: base_line(b)?, kids: Vec::new() });
+            for base in bases.as_arr().unwrap_or(&[]) {
+                tree.kids.push(Tree { line: base_line(base)?, kids: Vec::new() });
             }
         }
-        for c in rest {
-            if let Some(x) = self.node(c)? {
-                t.kids.push(x);
+        for child in rest {
+            if let Some(x) = self.node(child)? {
+                tree.kids.push(x);
             }
         }
-        Ok(Some(t))
+        Ok(Some(tree))
     }
 
     /// The children of a template parameter, a concept-id or an
@@ -1621,21 +1621,21 @@ impl<'a> Printer<'a, '_> {
 
 /// The type of each parameter of the class template `n` (`None` for a
 /// type or template parameter); `None` when one is a pack.
-fn spec_param_types(n: &Json) -> Res<Option<Vec<Option<String>>>> {
+fn spec_param_types(n: &Json) -> Option<Vec<Option<String>>> {
     let mut v = Vec::new();
     for c in kids(n) {
         match kind(c) {
             "TemplateTypeParmDecl" | "TemplateTemplateParmDecl" | "NonTypeTemplateParmDecl"
                 if flag(c, "isParameterPack") =>
             {
-                return Ok(None);
+                return None;
             }
             "TemplateTypeParmDecl" | "TemplateTemplateParmDecl" => v.push(None),
             "NonTypeTemplateParmDecl" => v.push(Some(qual_type(c).to_owned())),
             _ => {}
         }
     }
-    Ok(Some(v))
+    Some(v)
 }
 
 /// A converted argument of an implicit instantiation: `TemplateArgument
@@ -1649,9 +1649,12 @@ fn spec_arg(n: &Json, param: Option<&str>) -> Res<Tree> {
         push_word(&mut line, &type_pair(Some(ty), "TemplateArgument")?);
         return Ok(Tree { line, kids: Vec::new() });
     }
-    // Numbers parse as `f64`: exact within 2^53, enough for the corpus.
+    // Numbers parse as `f64`: exact within 2^53 (the bound), enough for
+    // the corpus.
     let as_i64 = |j: &Json| {
-        j.as_f64().filter(|f| f.fract() == 0.0 && f.abs() <= (1u64 << 53) as f64).map(|f| f as i64)
+        j.as_f64()
+            .filter(|f| f.fract() == 0.0 && f.abs() <= 9_007_199_254_740_992.0)
+            .map(|f| f as i64)
     };
     let (Some(v), Some(p)) = (n.get("value").and_then(as_i64), param) else {
         return Err("clang-ast: unsupported non-integral template argument of a \

@@ -197,29 +197,24 @@ impl Sema<'_, '_> {
                 continue;
             }
             if wi < written.len() {
-                match self.check_template_arg(tmpl, depth, p, written[wi], arg_loc(wi), &out) {
-                    Ok(a) => out.push(a),
-                    Err(()) => {
-                        ok = false;
-                        out.push(TemplateArg::NULL);
-                    }
+                if let Ok(a) =
+                    self.check_template_arg(tmpl, depth, p, written[wi], arg_loc(wi), &out)
+                {
+                    out.push(a);
+                } else {
+                    ok = false;
+                    out.push(TemplateArg::NULL);
                 }
                 wi += 1;
                 continue;
             }
-            match self.template_default(p) {
-                Some(def) => {
-                    let _ = pi;
-                    match self.default_template_arg(tmpl, depth, p, def, loc, &out) {
-                        Ok(a) => out.push(a),
-                        Err(()) => return Err(()),
-                    }
-                }
-                None => {
-                    self.diag_template_arity(tmpl, false, loc);
-                    return Err(());
-                }
-            }
+            let _ = pi;
+            let Some(def) = self.template_default(p) else {
+                self.diag_template_arity(tmpl, false, loc);
+                return Err(());
+            };
+            let a = self.default_template_arg(tmpl, depth, p, def, loc, &out)?;
+            out.push(a);
         }
         if wi < written.len() {
             self.diag_template_arity(tmpl, true, loc);
@@ -333,7 +328,7 @@ impl Sema<'_, '_> {
     /// The levels for substituting into parameter `depth` of `tmpl`:
     /// outer levels retained, this level's `prior` arguments.
     fn prior_levels(&mut self, tmpl: DeclId, depth: u16, prior: &[TemplateArg]) -> MultiLevelArgs {
-        let mut m = self.outer_levels(tmpl, depth);
+        let mut m = Self::outer_levels(tmpl, depth);
         let l = self.ast.types.arg_list(prior);
         m.push(l, tmpl, LevelMode::Substitute);
         m
@@ -342,7 +337,7 @@ impl Sema<'_, '_> {
     /// The levels enclosing `tmpl`'s own parameters (`depth` of them):
     /// the arguments of the class template specialization `tmpl` is a
     /// member of, else retained.
-    pub(crate) fn outer_levels(&self, tmpl: DeclId, depth: u16) -> MultiLevelArgs {
+    pub(crate) fn outer_levels(tmpl: DeclId, depth: u16) -> MultiLevelArgs {
         let mut m = MultiLevelArgs::new();
         for _ in 0..depth {
             m.push(ArgListId::EMPTY, tmpl, LevelMode::Retain);

@@ -216,7 +216,7 @@ impl Sema<'_, '_> {
             let types = &self.ast.types;
             match r {
                 Ok(a) if !failed && types.canonical_arg(a) == types.canonical_arg(elems[n - 1]) => {
-                    n -= 1
+                    n -= 1;
                 }
                 _ => break,
             }
@@ -265,7 +265,7 @@ impl Sema<'_, '_> {
         };
         let Some(u) = self.ast.decls.typedef(pattern).map(|t| t.underlying) else { return Err(()) };
         let depth = self.template_param_depth(tmpl);
-        let mut args = self.outer_levels(tmpl, depth);
+        let mut args = Self::outer_levels(tmpl, depth);
         // clang 19 substitutes an alias with the canonical arguments: the
         // aliased type of `Ptr<I>` is `int *`, not `I *`.
         let subst_args = self.alias_subst_args(conv.sugared);
@@ -376,7 +376,7 @@ impl Sema<'_, '_> {
         let (_, info) = self.ast.spec_info(spec)?;
         let tmpl = info.template;
         let depth = self.template_param_depth(tmpl);
-        let mut args = self.outer_levels(tmpl, depth);
+        let mut args = Self::outer_levels(tmpl, depth);
         args.push(info.args, tmpl, LevelMode::Substitute);
         Some((tmpl, args))
     }
