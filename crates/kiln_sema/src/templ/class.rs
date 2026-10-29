@@ -312,6 +312,9 @@ impl Sema<'_, '_> {
                         t = n;
                     }
                 }
+                // A dependent expression stays one: its canonical form
+                // (a profile) cannot be substituted.
+                ArgView::Expr { profile: Some(_), .. } => a,
                 _ => self.ast.types.canonical_arg(a),
             })
             .collect();

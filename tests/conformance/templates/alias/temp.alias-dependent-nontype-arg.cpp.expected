@@ -1,0 +1,51 @@
+TranslationUnitDecl
+|-ClassTemplateDecl EnableIf
+| |-NonTypeTemplateParmDecl 'bool' depth 0 index 0 B
+| |-TemplateTypeParmDecl referenced class depth 0 index 1 T
+| | `-TemplateArgument type 'void'
+| |-CXXRecordDecl struct EnableIf definition
+| | `-TypeAliasDecl type 'T'
+| |-ClassTemplateSpecializationDecl struct EnableIf definition implicit_instantiation
+| | |-TemplateArgument value 'bool' 1
+| | |-TemplateArgument type 'int'
+| | `-TypeAliasDecl referenced type 'int'
+| |-ClassTemplateSpecializationDecl struct EnableIf definition implicit_instantiation
+| | |-TemplateArgument value 'bool' 1
+| | |-TemplateArgument type 'long'
+| | `-TypeAliasDecl referenced type 'long'
+| `-ClassTemplateSpecializationDecl struct EnableIf definition implicit_instantiation
+|   |-TemplateArgument value 'bool' 1
+|   |-TemplateArgument type 'char'
+|   `-TypeAliasDecl referenced type 'char'
+|-TypeAliasTemplateDecl EnableIfT
+| |-NonTypeTemplateParmDecl referenced 'bool' depth 0 index 0 B
+| |-TemplateTypeParmDecl referenced class depth 0 index 1 T
+| | `-TemplateArgument type 'void'
+| `-TypeAliasDecl EnableIfT 'typename EnableIf<B, T>::type'
+|-ClassTemplateDecl ByType
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 P
+| |-CXXRecordDecl struct ByType definition
+| | `-FieldDecl x 'EnableIfT<sizeof(P) == 1, int>':'typename EnableIf<sizeof(P) == 1, int>::type'
+| `-ClassTemplateSpecializationDecl struct ByType definition implicit_instantiation
+|   |-TemplateArgument type 'char'
+|   `-FieldDecl x 'EnableIfT<sizeof(char) == 1, int>':'int'
+|-ClassTemplateDecl ByParam
+| |-NonTypeTemplateParmDecl referenced 'int' depth 0 index 0 N
+| |-CXXRecordDecl struct ByParam definition
+| | |-FieldDecl a 'EnableIfT<N == 1, long>':'typename EnableIf<N == 1, long>::type'
+| | `-FieldDecl b 'EnableIfT<(N > 0), char>':'typename EnableIf<(N > 0), char>::type'
+| `-ClassTemplateSpecializationDecl struct ByParam definition implicit_instantiation
+|   |-TemplateArgument value 'int' 1
+|   |-FieldDecl a 'EnableIfT<1 == 1, long>':'long'
+|   `-FieldDecl b 'EnableIfT<(1 > 0), char>':'char'
+|-StaticAssertDecl
+| `-BinaryOperator 'bool' '=='
+|   |-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof 'ByType<char>'
+|   `-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof 'int'
+`-StaticAssertDecl
+  `-BinaryOperator 'bool' '=='
+    |-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof 'ByParam<1>'
+    `-BinaryOperator 'unsigned long' '*'
+      |-ImplicitCastExpr 'unsigned long' <IntegralCast>
+      | `-IntegerLiteral 'int' 2
+      `-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof 'long'

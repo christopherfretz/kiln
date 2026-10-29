@@ -7,7 +7,7 @@
 use kiln_ast::decl::DeclKind;
 use kiln_ast::expr::{CastKind, CharKind, ExprDeps, ExprFlags, ExprKind, Radix, ValueCategory};
 use kiln_ast::ids::RawId;
-use kiln_ast::types::{ArgView, BuiltinType};
+use kiln_ast::types::{ArgView, BuiltinType, Nns};
 use kiln_ast::{ExprId, QualType};
 use kiln_source::Loc;
 
@@ -161,6 +161,17 @@ impl Substituter<'_, '_, '_> {
                 let name = kiln_source::symbol::Symbol::from_index(n.b());
                 let begin = self.sema.ast.templates.expr_begin.get(e).copied().unwrap_or(loc);
                 let nns = self.nns(nns, begin)?;
+                if let Nns::Type { ty, .. } = self.sema.ast.types.nns_view(nns)
+                    && self.sema.is_dependent_type(ty)
+                {
+                    // Substituted with dependent arguments (an alias
+                    // template named in a template): still dependent.
+                    let targs = match self.sema.ast.templates.expr_targs.get(e).copied() {
+                        Some(l) => Some(self.args(l, loc)?),
+                        None => None,
+                    };
+                    return Ok(self.sema.act_dependent_scope_ref(nns, name, targs, begin, loc));
+                }
                 let ctx = self.nns_context(nns, begin)?;
                 Ok(self.sema.act_on_id_expression(name, loc, Some(ctx)))
             }
@@ -323,7 +334,7 @@ impl Substituter<'_, '_, '_> {
         let r = match a.view() {
             ArgView::Value { ty, value } => self.value_literal(ty, value, loc)?,
             ArgView::Expr { expr, .. } => expr,
-            _ => return Err(SubstFail),
+            _ => return self.unimplemented("non-type template argument of this kind", loc),
         };
         Ok(self.sema.ast.builder().subst_nttp_expr(p, r, loc))
     }

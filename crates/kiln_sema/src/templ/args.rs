@@ -271,6 +271,14 @@ impl Sema<'_, '_> {
                 self.emit(d);
                 Err(())
             }
+            // A value-dependent argument (of an alias template named
+            // with dependent arguments) is checked when it is substituted
+            // ([temp.res.general]/6).
+            (DeclKind::NonTypeTemplateParm, ArgView::Expr { expr, .. })
+                if self.expr_is_value_dependent(expr) =>
+            {
+                Ok(a)
+            }
             (DeclKind::NonTypeTemplateParm, ArgView::Expr { expr, .. }) => {
                 self.convert_nttp_arg(tmpl, depth, p, expr, at, prior)
             }
@@ -360,6 +368,11 @@ impl Sema<'_, '_> {
         let mut pty = self.nttp_type(tmpl, depth, p, prior, at)?;
         if self.is_error_type(pty) {
             return Err(());
+        }
+        if self.ast.types.is_dependent(pty) {
+            // `template<class T, T V>` with a dependent `T`: converted
+            // when substituted.
+            return Ok(self.builder().template_arg_expr(e));
         }
         let ety = self.ast.exprs.get(e).ty();
         if matches!(self.ast.types.canonical_view(pty), TypeView::Auto { .. }) {

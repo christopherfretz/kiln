@@ -5,7 +5,7 @@
 //! written).
 
 use kiln_ast::decl::DeclKind;
-use kiln_ast::types::{ArgView, ExcSpec, ExprOperand, TypeView};
+use kiln_ast::types::{ArgView, ExcSpec, ExprOperand, Nns, TypeView};
 use kiln_ast::{DeclId, QualType};
 use kiln_diag::DiagId;
 use kiln_source::Loc;
@@ -185,8 +185,14 @@ impl Substituter<'_, '_, '_> {
                 Ok(self.sema.tag_type(i))
             }
             TypeView::DependentName { keyword, nns, name } => {
-                let _ = keyword;
                 let n = self.nns(nns, loc)?;
+                if let Nns::Type { ty, .. } = self.sema.ast.types.nns_view(n)
+                    && self.sema.is_dependent_type(ty)
+                {
+                    // Substituted with dependent arguments (an alias
+                    // template named in a template): still dependent.
+                    return Ok(self.sema.ast.types.dependent_name(keyword, n, name));
+                }
                 let ctx = self.nns_context(n, loc)?;
                 let found = self.sema.lookup_qualified(ctx, name, LookupKind::Ordinary);
                 let Some(&d) = found.decls.first() else {
