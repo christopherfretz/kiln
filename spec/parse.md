@@ -40,6 +40,9 @@ undeclared, which resolves the C++ declaration/expression ambiguities.
   - `using namespace`, using-declarations, `using enum`, namespace
     aliases (WP-062)
   - `static_assert`
+  - default arguments, trailing return types, `decltype(e)` and
+    `decltype(auto)`, `auto` with pointer/reference declarators and
+    deduced return types (WP-064)
 - **Attributes:** standard and GNU attributes (§6.2).
 - **Statements:** every C control-flow statement, with C++
   init-statements and condition declarations; `if constexpr`,
@@ -49,8 +52,15 @@ undeclared, which resolves the C++ declaration/expression ambiguities.
   - calls, subscripts, `.`, `->`
   - `sizeof`, `alignof`, and `sizeof...` (diagnosed: M2 has no packs)
   - the `noexcept(e)` operator
-  - C-style, functional, `static_cast`, `reinterpret_cast` and
-    `const_cast`
+  - C-style, functional (`T(e)`, `T()`, `T{...}`), `static_cast`,
+    `reinterpret_cast`, `const_cast` and `dynamic_cast` (parsed; Sema
+    reports it unsupported)
+  - `throw`, `typeid`
+  - braced-init-list call arguments, return values and assignment
+    operands
+  - GNU extensions: `x ?: y`, statement expressions `({ ... })`,
+    `__builtin_offsetof`, scalar compound literals `(T){...}`
+    (spec/sema.md §6.10)
   - `nullptr`, `true`, `false`
   - string-literal concatenation
   - literals; user-defined literals are diagnosed because M2 has no
@@ -128,6 +138,22 @@ clang's `Parser` over `Preprocessor::Lex`.
   `headers` is skipped as unsupported, so re-measure when M3 lands.
 - After a fatal error (`'x' file not found`, `-ferror-limit` reached),
   the source returns `Eof`, so parsing stops, as in clang.
+- **Tentative parsing** (`tentative.rs`, WP-064) never rewinds: it is a
+  side-effect-free scanner over absolute token indices (clang's
+  `ParseTentative.cpp` without `TentativeParsingAction`). It classifies
+  names through Sema lookup but consumes, diagnoses and declares
+  nothing; identifiers its own declarators would declare are tracked
+  locally (clang's `TentativelyDeclaredIdentifiers`). A scan grows the
+  window to the furthest token it reads, which `KEEP_BEHIND` does not
+  bound because nothing behind the position is read. Entry points:
+  - `is_cxx_declaration_statement(allow_for_range)` ([stmt.ambig]),
+  - `is_cxx_condition_declaration()` (conditions),
+  - `is_cxx_type_id(ctx)` / `is_cxx_type_id_at(i, ctx) -> (bool, bool)`
+    ([dcl.ambig.res]/2; the second flag says the decision was
+    ambiguous), with `TypeIdContext` as clang's
+    `TentativeCXXTypeIdContext`,
+  - `is_cxx_function_declarator(name) -> (bool, bool)`
+    ([dcl.ambig.res]/1; the ambiguity flag feeds `-Wvexing-parse`).
 
 ### 2.2 Tokens
 - **Keywords** are classified by the parser (`keywords.rs`, one hash
@@ -239,6 +265,25 @@ harness ignores order.
   The parser peeks at `=`, `(` or `{` to set `init_style` *before* the
   declaration exists, because Sema needs it to create the `VarDecl`.
   Sema builds the type from the last chunk outwards ([dcl.meaning]).
+  - A `(` after the declarator-id is a parameter list or a direct
+    initializer by `is_cxx_function_declarator`; when the choice was
+    ambiguous the function chunk records it and Sema warns
+    `-Wvexing-parse` (`parentheses were disambiguated as a function
+    declaration` / `empty parentheses interpreted as a function
+    declaration`, with clang's fix-it notes).
+  - Parameters: `= initializer-clause` default arguments go to
+    `act_on_param_default_arg` (a default argument starting with `({`
+    is `err_stmt_expr_in_default_arg`, skipped to `,`/`)`). The
+    parameter-declaration-clause brackets `act_on_start_prototype` /
+    `act_on_prototype_param` / `act_on_end_prototype` (closed after the
+    trailing return type): naming a parameter inside its own
+    declarator is reported "not supported yet" (no prototype scope;
+    parameters become declarations with their function).
+  - `-> type-id` after the exception specification is a trailing
+    return type (`Chunk::Function::trailing`), required with a
+    leading `auto` and diagnosed otherwise by Sema.
+  - `decltype ( expression )` and `decltype(auto)` are type specifiers;
+    the operand is unevaluated.
 - **Exception specifications** (`parse_exception_spec`, after the
   function parameters, [except.spec]/1): at most one per declarator.
   - `noexcept` is `ExcSpec::BasicNoexcept`.
@@ -316,16 +361,45 @@ harness ignores order.
     `noexcept ( expression )` (`parse_noexcept_expr`: the operand is
     parsed between `enter_unevaluated`/`exit_unevaluated`, then
     `act_on_noexcept_expr`; a missing `(` is `expected '(' after
-    'noexcept'`), and `(type-id) cast-expression` when the parenthesized tokens name
-    a type (`scan_name` → `NameClass::Type`, or a type keyword).
-  - Then postfix operators: calls, subscripts, `.`, `->`, `++`, `--`.
+    'noexcept'`), and `(type-id) cast-expression` when
+    `is_cxx_type_id_at(pos + 1, InParens)` says the parentheses hold a
+    type-id. `( type-id ) { ... }` is a compound literal instead
+    (`act_on_compound_literal`), followed by postfix operators as in
+    clang's `ParseCompoundLiteralExpression`.
+  - `throw [assignment-expression]` (the operand is optional before
+    `)`, `]`, `}`, `;`, `,` and `:`) and `typeid ( type-id |
+    expression )`, disambiguated with `is_cxx_type_id`; the operand of
+    a type-id-shaped `typeid` is unevaluated.
+  - Then postfix operators (`parse_postfix_suffix`): calls, subscripts,
+    `.`, `->`, `++`, `--`. A call argument may be a braced-init-list
+    (`act_on_braced_arg`, converted once the parameter type is known).
   - Then primary expressions:
     - literals and `this`-less id-expressions
     - qualified names `N::x`
-    - `( expr )`
-    - functional casts `T(x)`/`T{x}` for a simple type specifier or
-      type name
+    - `( expr )`, and `( { ... } )`, a GNU statement expression
+      (`check_stmt_expr_allowed`, `act_on_start_stmt_expr`,
+      `act_on_stmt_expr`; at namespace scope it is skipped to `)`)
+    - functional casts `T(x)`, `T()`, `T{...}` and `T(a, b)` for a simple
+      type specifier or type name. A type name not followed by `(` or
+      `{` is `expected '(' for function-style cast or type
+      construction` after a keyword or qualified name, and
+      `unexpected type name 'T': expected expression` (at the name) for
+      a lone identifier, as clang only annotates the latter before `(`
+      or `{`.
     - named casts `static_cast<T>(e)` etc.
+    - `__builtin_offsetof ( type-id , designator )`: an identifier
+      followed by `.name` and `[expr]` components, each handed to
+      `act_on_builtin_offsetof` as an `OffsetofComponent`. clang's
+      parser errors: `expected '(' after '__builtin_offsetof'`,
+      `expected ','`, `expected identifier` (skip past `)`), a missing
+      `]` (reported, parsing continues) and a missing `)` (reported;
+      the expression fails).
+- **The GNU `x ?: y`** goes to `act_on_binary_conditional`; the middle
+  operand of an ordinary `?:` is a full expression.
+- **Missing closers** (`expect_closing`) are reported at the current
+  token with `to match this '('`, then, unless already at a closing
+  bracket, the parser skips to the closer and takes it (clang's
+  `BalancedDelimiterTracker::diagnoseMissingClose`).
 - **Literals:**
   - Integer, floating and character literals are classified by
     `kiln_lex::literal` and typed by `kiln_sema::literal`
@@ -433,10 +507,9 @@ in `kiln_diag` for now; nothing emits them.
 - **Pragmas:** applying `#pragma pack` to layout, `GCC visibility` to
   linkage, `clang diagnostic` to the diagnostic engine; `weak` and the
   other unsupported pragmas of §2.3.
-- **Tentative parsing:**
-  - `T(x);`, `T(x)` in parameter lists, and `(T)(x)` disambiguation
-    ([stmt.ambig], [dcl.ambig.res])
-  - `T(x)` with several arguments
+- **Prototype scope:** parameters in scope within their own declarator
+  (`decltype(n)` in a trailing return type or a later parameter;
+  clang's "default argument references parameter").
 - **Classes:**
   - member functions, access specifiers, base classes
   - static data members, default member initializers
@@ -447,13 +520,13 @@ in `kiln_diag` for now; nothing emits them.
 - **Templates:** declarations, template-ids, `typename`, `template`,
   packs, concepts, requires-clauses. Design: spec/sema-templates.md §2.
 - **Other expressions:**
-  - lambdas, `new`/`delete`, `throw`
-  - `typeid`, `dynamic_cast`
-  - compound literals, statement expressions, the GNU `?:` and
-    address-of-label operators
-  - `T()`, `T{…}` and `T(a, b)` temporaries
+  - lambdas, `new`/`delete`
+  - `dynamic_cast` semantics, polymorphic `typeid`
+  - class and array compound literals, compound literals at namespace
+    scope, the GNU address-of-label operator
+  - class `T()`, `T{…}` and `T(a, b)` temporaries
   - fold expressions
-  - braced-init-list operands and arguments
+  - braced-init-list subscripts and functional-cast operands
   - pointer-to-member operators on classes
   - reflection (`^^`, `[: :]`)
   - `co_await`/`co_yield`
@@ -461,9 +534,7 @@ in `kiln_diag` for now; nothing emits them.
 - **Other declarations:**
   - pointers to members, asm labels
   - pack expansions in dynamic exception specifications
-  - default arguments
-  - trailing return types
-  - `auto` deduction beyond `auto x = e`
+  - `auto` deduction from braced lists (`std::initializer_list`)
   - `typename`, `operator` and pack forms of using-declarators, and an
     attributed `[[...]] using` as a block-scope statement
   - `asm`, modules, `__declspec`

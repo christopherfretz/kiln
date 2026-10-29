@@ -1,6 +1,6 @@
 //! Exception handling ([except]): exception specifications on function
 //! declarators ([except.spec]) and the `noexcept` operator
-//! ([expr.unary.noexcept]) (spec/sema.md §10.3).
+//! ([expr.unary.noexcept]) (spec/sema.md §5.3).
 
 use kiln_ast::ExprId;
 use kiln_ast::expr::{CastKind, ExprKind};

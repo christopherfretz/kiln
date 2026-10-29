@@ -1,5 +1,5 @@
 //! `decltype` ([dcl.type.decltype]), `decltype(auto)` and deduced return
-//! types ([dcl.spec.auto], [dcl.type.auto.deduct]; spec/sema.md §4.7).
+//! types ([dcl.spec.auto], [dcl.type.auto.deduct]; spec/sema.md §4.3.1).
 
 use kiln_ast::expr::{ExprKind, ValueCategory};
 use kiln_ast::types::{AutoKeyword, Quals, TypeView};

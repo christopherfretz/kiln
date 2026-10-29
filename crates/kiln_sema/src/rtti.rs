@@ -1,5 +1,5 @@
 //! Run-time type identification: `typeid` ([expr.typeid]; spec/sema.md
-//! §6.9). Kiln checks and builds the expression; the Oven and codegen do
+//! §5.5). Kiln checks and builds the expression; the Oven and codegen do
 //! not evaluate it yet.
 
 use kiln_ast::decl::DeclKind;

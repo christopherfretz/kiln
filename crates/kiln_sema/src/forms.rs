@@ -1,5 +1,5 @@
 //! Braced-init-lists in expressions and explicit type conversions
-//! (spec/sema.md §6.5): `f({...})` ([expr.call]/7, [dcl.init.list]),
+//! (spec/sema.md §6.1): `f({...})` ([expr.call]/7, [dcl.init.list]),
 //! `return {...};` ([stmt.return]/2), `x = {...}` ([expr.assign]/8) and
 //! `T()`, `T{...}`, `T(a, b)` ([expr.type.conv]).
 
