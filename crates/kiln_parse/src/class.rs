@@ -1075,7 +1075,7 @@ impl Parser<'_, '_> {
     /// member-declaration ([class.mem]; clang's
     /// `ParseCXXClassMemberDeclaration`).
     pub(crate) fn parse_member_declaration(&mut self) {
-        if self.parse_member_declaration_leader() {
+        if !self.stack_ok() || self.parse_member_declaration_leader() {
             return;
         }
         let ds = self.parse_decl_specifiers(DeclaratorContext::Member);

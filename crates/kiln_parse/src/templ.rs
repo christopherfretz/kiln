@@ -482,6 +482,9 @@ impl Parser<'_, '_> {
     /// Returns the arguments and the `<` and `>` locations; `None` after
     /// a syntax error, recovered past the list.
     pub(crate) fn parse_template_arg_list(&mut self) -> Option<(Vec<TemplateArg>, Loc, Loc)> {
+        if !self.stack_ok() {
+            return None;
+        }
         let end = self.skip_template_args(self.pos());
         let l = self.bump().span.lo;
         let mut args = Vec::new();

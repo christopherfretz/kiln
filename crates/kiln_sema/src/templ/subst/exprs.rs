@@ -29,6 +29,7 @@ impl Substituter<'_, '_, '_> {
         if !self.needs_rebuild(e) {
             return Ok(e);
         }
+        self.check_stack(|s| s.sema.ast.exprs.get(e).loc())?;
         let r = self.expr_node(e)?;
         if self.sema.is_err_expr(r) { Err(SubstFail) } else { Ok(r) }
     }
@@ -85,7 +86,20 @@ impl Substituter<'_, '_, '_> {
                     return self.nttp_ref(e, d, loc);
                 }
                 let i = self.find_instantiated_decl(d, loc)?;
-                Ok(self.sema.build_decl_ref(i, loc))
+                // The qualifier as written survives ([temp.inst]; clang's
+                // `TransformDeclRefExpr` transforms the qualifier loc).
+                let nns = match ex(self).decl_ref_extra(e).and_then(|x| x.qualifier) {
+                    Some(q) => Some(self.nns(q, loc)?),
+                    None => None,
+                };
+                let r = self.sema.build_decl_ref_qualified(i, loc, None, nns);
+                if nns.is_some()
+                    && let Some(b) = self.sema.ast.templates.expr_begin.get(e).copied()
+                    && self.sema.ast.exprs.get(r).kind() == ExprKind::DeclRefExpr
+                {
+                    let _ = self.sema.ast.templates.expr_begin.insert(r, b);
+                }
+                Ok(r)
             }
             ExprKind::ParenExpr => {
                 let o = ex(self).operand(e);
@@ -173,7 +187,8 @@ impl Substituter<'_, '_, '_> {
                     return Ok(self.sema.act_dependent_scope_ref(nns, name, targs, begin, loc));
                 }
                 let ctx = self.nns_context(nns, begin)?;
-                Ok(self.sema.act_on_id_expression(name, loc, Some(ctx)))
+                let q = crate::using::Qualifier { ctx, nns, loc: begin };
+                Ok(self.sema.act_on_id_expression(name, loc, Some(q)))
             }
             ExprKind::CXXThisExpr => {
                 let implicit = ex(self).this_is_implicit(e);
@@ -353,7 +368,11 @@ impl Substituter<'_, '_, '_> {
             // scope; rebuild the reference as written.
             if let [d] = decls.as_slice() {
                 let d = self.find_instantiated_decl(*d, n.loc())?;
-                return Ok(self.sema.build_decl_ref(d, n.loc()));
+                let nns = match self.sema.ast.templates.expr_nns.get(c).copied() {
+                    Some(q) => Some(self.nns(q, n.loc())?),
+                    None => None,
+                };
+                return Ok(self.sema.build_decl_ref_qualified(d, n.loc(), None, nns));
             }
             return self.unimplemented("calls to overload sets", n.loc());
         }

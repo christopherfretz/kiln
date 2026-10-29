@@ -94,6 +94,18 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
     }
 
     /// Reports `feature` as not yet implemented and fails.
+    /// The stack guard's check at a substitution step (P4 (c)): a
+    /// failure, after the fatal error, when the stack is nearly
+    /// exhausted. `loc` is computed only then.
+    #[inline]
+    pub(crate) fn check_stack(&self, loc: impl FnOnce(&Self) -> Loc) -> SubstResult<()> {
+        if !self.sema.stack_exhausted() && !self.sema.stack_low() {
+            return Ok(());
+        }
+        let _ = self.sema.stack_ok(crate::stack_guard::StackPhase::Instantiation, loc(self));
+        Err(SubstFail)
+    }
+
     pub(crate) fn unimplemented<T>(&mut self, feature: &str, loc: Loc) -> SubstResult<T> {
         self.sema.templ_unimplemented(feature, loc);
         Err(SubstFail)

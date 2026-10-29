@@ -113,6 +113,12 @@ pub struct InstState {
     pub(crate) undefined_diagnosed: std::cell::Cell<Option<DeclId>>,
     /// Drop the next error passed to `emit` (set by `incomplete_note`).
     pub(crate) suppress_next_error: std::cell::Cell<bool>,
+    /// The thread's stack guard (P4 (c)): the one installed when the
+    /// state was created.
+    pub(crate) guard: crate::stack_guard::StackGuard,
+    /// The guard tripped: its fatal error was emitted, and every later
+    /// check fails so the recursion unwinds.
+    pub(crate) stack_exhausted: std::cell::Cell<bool>,
 }
 
 impl Sema<'_, '_> {

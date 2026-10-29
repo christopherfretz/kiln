@@ -86,6 +86,9 @@ impl<'a, 'sm> Sema<'a, 'sm> {
     /// If `e` is not a constant expression or exceeds a limit; the
     /// failure's notes explain why ([`Sema::with_failure_notes`]).
     pub fn eval_const(&mut self, e: ExprId, ctx: EvalContext) -> Result<ConstValueId, EvalFailure> {
+        if !self.eval_stack_ok(e) {
+            return Err(EvalFailure::silent(kiln_oven::FailKind::NotConstant));
+        }
         self.flush_member_refs();
         if !self.special.pending_deleted.is_empty() {
             self.flush_pending_deleted();
@@ -98,8 +101,22 @@ impl<'a, 'sm> Sema<'a, 'sm> {
     /// diagnostics, no notes) and not recorded in the statistics: for
     /// warnings and other speculative folds.
     pub fn try_fold(&mut self, e: ExprId) -> Option<ConstValueId> {
+        if !self.eval_stack_ok(e) {
+            return None;
+        }
         let (oven, mut b) = self.oven_parts();
         oven.try_fold(&mut b, e)
+    }
+
+    /// The stack guard's check before entering the Oven (P4 (c)): the
+    /// evaluation may instantiate, which re-enters sema.
+    #[inline]
+    fn eval_stack_ok(&self, e: ExprId) -> bool {
+        if !self.stack_exhausted() && !self.stack_low() {
+            return true;
+        }
+        let loc = self.ast.exprs.get(e).loc();
+        self.stack_ok(crate::stack_guard::StackPhase::ConstantEvaluation, loc)
     }
 
     /// [`Sema::eval_const`] of an integral (or `bool`) expression.
@@ -121,6 +138,11 @@ impl<'a, 'sm> Sema<'a, 'sm> {
     /// Whether `var`'s initializer is a constant initializer
     /// ([basic.start.static]/2). Silent and not recorded.
     pub fn is_constant_initialized(&mut self, var: DeclId) -> bool {
+        if self.stack_exhausted() || self.stack_low() {
+            let loc = self.ast.decls.get(var).loc();
+            let _ = self.stack_ok(crate::stack_guard::StackPhase::ConstantEvaluation, loc);
+            return false;
+        }
         let (oven, mut b) = self.oven_parts();
         oven.is_constant_initialized(&mut b, var)
     }

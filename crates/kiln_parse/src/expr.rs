@@ -344,6 +344,9 @@ impl Parser<'_, '_> {
 
     /// cast-expression ([expr.cast]) and unary-expression ([expr.unary]).
     pub(crate) fn parse_cast_expr(&mut self) -> PExpr {
+        if !self.stack_ok() {
+            return None;
+        }
         let loc = self.loc();
         if self.at_global_new_delete() {
             return self.parse_new_delete_expr();
@@ -954,7 +957,7 @@ impl Parser<'_, '_> {
         if qual.is_none() && self.at(Punct::LParen) && self.s.in_template() {
             return Some(self.s.act_on_call_name(name, nl));
         }
-        Some(self.s.act_on_id_expression(name, nl, qual.map(|q| q.ctx)))
+        Some(self.s.act_on_id_expression(name, nl, qual))
     }
 
     /// The rest of a parenthesized expression or fold-expression after

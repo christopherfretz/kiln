@@ -471,6 +471,9 @@ impl<'x, 'a, 'sm> Scan<'x, 'a, 'sm> {
         may_have_direct_init: bool,
         may_have_trailing_return: bool,
     ) -> Tpr {
+        if !self.p.stack_ok() {
+            return Tpr::Error;
+        }
         if self.ptr_operator_seq() == Tpr::Error {
             return Tpr::Error;
         }

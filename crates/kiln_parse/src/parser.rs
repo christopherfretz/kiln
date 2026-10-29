@@ -1,6 +1,6 @@
 //! The parser state, token access and error recovery (spec/parse.md §3).
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 
 use kiln_ast::types::UnaryTransformKind;
 use kiln_ast::{DeclId, ExprId, NnsId};
@@ -100,6 +100,10 @@ pub struct Parser<'a, 'sm> {
     /// §2.5): parsing `A<B<C<...>>>` scans each nested list once, not
     /// once per enclosing level.
     targs_memo: RefCell<TemplateArgsMemo>,
+    /// Set when the stack guard tripped (spec/sema-templates.md P4 (c)):
+    /// every token read from then on is this `Eof`, so every rule
+    /// unwinds.
+    halt: Cell<Option<Token>>,
 }
 
 /// The template-argument scan memo: the `<` index → the scan's result,
@@ -164,6 +168,7 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             greater_is_op: true,
             pack_hint: false,
             targs_memo: RefCell::new(TemplateArgsMemo::default()),
+            halt: Cell::new(None),
         };
         p.handle_events(0);
         p
@@ -192,7 +197,7 @@ impl<'a, 'sm> Parser<'a, 'sm> {
 
     /// The current token.
     pub(crate) fn tok(&self) -> Token {
-        self.cur
+        self.halt.get().unwrap_or(self.cur)
     }
 
     /// The token `n` ahead of the current one (`Eof` past the end).
@@ -203,7 +208,36 @@ impl<'a, 'sm> Parser<'a, 'sm> {
     /// The token at absolute index `i` (`Eof` past the end; at most
     /// [`crate::tokens::KEEP_BEHIND`] tokens before the current one).
     pub(crate) fn tok_at(&self, i: usize) -> Token {
+        if let Some(t) = self.halt.get() {
+            return t;
+        }
         if i == self.pos { self.cur } else { self.tok_in(self.replay.len(), i) }
+    }
+
+    /// The stack guard's check at a recursive rule (spec/sema-templates.md
+    /// P4 (c)): false when the stack is nearly exhausted, after the fatal
+    /// "kiln: stack exhausted during parsing", and from then on the
+    /// parser reads only `Eof`. Also false once instantiation tripped the
+    /// guard.
+    #[inline]
+    pub(crate) fn stack_ok(&self) -> bool {
+        if self.halt.get().is_some() {
+            return false;
+        }
+        if !self.s.stack_exhausted() && !self.s.stack_low() {
+            return true;
+        }
+        self.halt_on_stack()
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn halt_on_stack(&self) -> bool {
+        let loc = self.loc();
+        let _ = self.s.stack_ok(kiln_sema::stack_guard::StackPhase::Parsing, loc);
+        let eof = Token { kind: TokKind::Eof, span: Span::new(loc, loc), flags: TokFlags::empty() };
+        self.halt.set(Some(eof));
+        false
     }
 
     /// The token at index `i` of the stream `level` replays deep (0 is the
@@ -650,6 +684,9 @@ impl<'a, 'sm> Parser<'a, 'sm> {
     /// argument list closed on the first `>` of the `>>`-like token at the
     /// returned index.
     pub(crate) fn scan_name_at(&self, mut i: usize) -> Option<(usize, bool, NameClass, Symbol)> {
+        if !self.stack_ok() {
+            return None;
+        }
         let mut qual: Option<DeclId> = None;
         if self.tok_at(i).kind == TokKind::Punct(Punct::ColonColon) {
             qual = Some(self.s.ast.tu);
