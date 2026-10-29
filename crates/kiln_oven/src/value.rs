@@ -87,15 +87,16 @@ enum Freeze {
 }
 
 impl Oven {
-    /// A top-level evaluation: `object` is the variable initialized.
+    /// A top-level evaluation with registers from `fb`: `object` is the
+    /// variable initialized.
     pub(crate) fn eval_inner(
         &mut self,
         b: &mut dyn SemaBridge,
         e: ExprId,
         object: Option<DeclId>,
+        fb: u32,
     ) -> Result<ConstValueId, EvalFailure> {
         self.run.object = object;
-        self.run.nesting = 0;
         let mut pre = None;
         if let Some(d) = object {
             let ast = b.ast();
@@ -110,7 +111,7 @@ impl Oven {
                 }
             }
         }
-        let r = self.eval_at(b, e, object, 0);
+        let r = self.eval_at(b, e, object, fb);
         if let Some(g) = pre {
             self.globals[g as usize].state = GState::Unresolved;
         }

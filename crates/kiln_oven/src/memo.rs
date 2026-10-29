@@ -3,11 +3,12 @@
 //! scalar result, keyed by `(function, arguments)`.
 //!
 //! An entry records what the call cost (steps, calls, bytes, relative
-//! peak memory and depth), so a hit charges exactly what executing the
+//! peak memory and address space, and depth), so a hit charges exactly what executing the
 //! call would have: every counter, and every budget decision, is the same
 //! whether the cache is warm or cold. The table is allocated once; a full
 //! cache evicts its least recently used entry, so steady-state use
-//! allocates nothing.
+//! allocates nothing. A call that ran a heap operation or a nested
+//! evaluation is not cached (`vm::Oven::finish_memo`).
 
 use kiln_source::fx::FxHashMap;
 
@@ -27,8 +28,10 @@ pub(crate) struct MemoVal {
     pub steps: u64,
     pub calls: u64,
     pub bytes: u64,
-    /// Peak frame bytes above the live bytes at the call.
+    /// Peak live bytes above the live bytes at the call.
     pub peak: u64,
+    /// Peak address space above the address space at the call.
+    pub arena: u64,
     /// Deepest nesting below the call (1: the call itself).
     pub depth: u32,
 }

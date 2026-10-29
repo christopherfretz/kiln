@@ -30,6 +30,10 @@ pub(crate) struct Counters {
     pub bytes: u64,
     pub peak: u64,
     pub calls: u64,
+    /// Peak address space (`peak_arena`).
+    pub arena: u64,
+    /// Heap allocations (`allocs`).
+    pub allocs: u64,
 }
 
 /// A memoizable call in progress: what it will be charged.
@@ -39,13 +43,19 @@ struct Pending {
     steps0: u64,
     calls0: u64,
     bytes0: u64,
+    /// Live bytes at entry.
     live0: u64,
+    /// Address space at entry.
+    arena0: u64,
     peak_saved: u64,
+    arena_saved: u64,
     maxd_saved: u32,
     /// The call's own depth (active calls including it).
     d0: u32,
-    /// `RunState::enum_oob` at entry.
-    oob0: u64,
+    /// `RunState::impure` at entry.
+    impure0: u64,
+    /// `Memory::heap_ops` at entry.
+    heap0: u64,
 }
 
 /// The state of the running evaluation.
@@ -57,7 +67,7 @@ pub(crate) struct RunState {
     /// `stack.len()` at the start of the innermost `exec`.
     pub entry: usize,
     /// Deepest active-call count since the innermost pending memo call.
-    maxd: u32,
+    pub maxd: u32,
     pending: Vec<Pending>,
     /// The variable being initialized (its frame object freezes as the
     /// variable itself).
@@ -65,12 +75,17 @@ pub(crate) struct RunState {
     /// Out-of-range unscoped enumeration casts are reported
     /// ([`crate::EvalContext::enum_range_check`]).
     pub enum_check: bool,
-    /// Out-of-range enumeration casts executed so far. A call that executed
-    /// one is not memoized: clang reports the conversion on every
-    /// evaluation that checks it, and a cached result would skip it.
-    enum_oob: u64,
+    /// Effects a cached result would skip, executed so far: out-of-range
+    /// enumeration casts (clang reports the conversion on every evaluation
+    /// that checks it) and nested evaluations (R-OVEN-1: their records and
+    /// diagnostics). A call that executed one is not memoized.
+    pub impure: u64,
     /// Nested global initializations in progress.
     pub nesting: u32,
+    /// Depth charged to the enclosing evaluation contexts (R-OVEN-1): a
+    /// nested evaluation's calls count from the depth of the call that
+    /// started it, plus one for the context itself.
+    pub depth_base: u32,
 }
 
 impl RunState {
@@ -232,6 +247,7 @@ impl Oven {
                 while self.run.pending.len() > pend {
                     if let Some(p) = self.run.pending.pop() {
                         self.mem.peak = self.mem.peak.max(p.peak_saved);
+                        self.mem.arena_peak = self.mem.arena_peak.max(p.arena_saved);
                         self.run.maxd = self.run.maxd.max(p.maxd_saved);
                     }
                 }
@@ -402,7 +418,7 @@ impl Oven {
                     // expression proper is required (spec/oven.md
                     // "Integration"); elsewhere the cast is not checked.
                     if oob {
-                        self.run.enum_oob += 1;
+                        self.run.impure += 1;
                         if self.run.enum_check && !self.run.silent {
                             let v =
                                 if fs { raw.cast_signed().to_string() } else { raw.to_string() };
@@ -689,7 +705,7 @@ impl Oven {
         if f.state != FState::Ready {
             return Err(Fault::Callee(callee));
         }
-        let active = (self.stack.len() - self.run.entry - 1) as u32;
+        let active = self.active_calls();
         if active >= self.budget.depth {
             return Err(Fault::Depth);
         }
@@ -703,32 +719,38 @@ impl Oven {
             }
             let c = self.run.counters;
             if let Some(v) = self.memo.get(&key) {
-                let top = self.mem.frame.top;
+                let (live, arena) = (self.mem.live_bytes(), self.mem.arena());
                 if c.steps + v.steps <= self.budget.steps
                     && active + v.depth <= self.budget.depth
-                    && top + v.peak <= self.mem.limit
+                    && arena + v.arena <= self.mem.limit
                 {
                     self.run.counters.steps += v.steps;
                     self.run.counters.calls += v.calls;
                     self.mem.allocated += v.bytes;
-                    self.mem.peak = self.mem.peak.max(top + v.peak);
+                    self.mem.peak = self.mem.peak.max(live + v.peak);
+                    self.mem.arena_peak = self.mem.arena_peak.max(arena + v.arena);
                     self.run.maxd = self.run.maxd.max(active + v.depth);
                     self.regs[nb] = v.result;
                     return Ok(None);
                 }
             }
+            let (live, arena) = (self.mem.live_bytes(), self.mem.arena());
             self.run.pending.push(Pending {
                 key,
                 steps0: c.steps,
                 calls0: c.calls,
                 bytes0: self.mem.allocated,
-                live0: self.mem.frame.top,
+                live0: live,
+                arena0: arena,
                 peak_saved: self.mem.peak,
+                arena_saved: self.mem.arena_peak,
                 maxd_saved: self.run.maxd,
                 d0: active + 1,
-                oob0: self.run.enum_oob,
+                impure0: self.run.impure,
+                heap0: self.mem.heap_ops,
             });
-            self.mem.peak = self.mem.frame.top;
+            self.mem.peak = live;
+            self.mem.arena_peak = arena;
             self.run.maxd = active + 1;
         }
         self.run.counters.calls += 1;
@@ -757,13 +779,25 @@ impl Oven {
             calls: c.calls - p.calls0,
             bytes: self.mem.allocated - p.bytes0,
             peak: self.mem.peak.saturating_sub(p.live0),
+            arena: self.mem.arena_peak.saturating_sub(p.arena0),
             depth: self.run.maxd.saturating_sub(p.d0) + 1,
         };
-        if self.run.enum_oob == p.oob0 {
+        // A call that allocated or freed heap memory is not pure (a cached
+        // result would skip the allocation's accounting, or return a
+        // pointer to an object a later delete frees).
+        if self.run.impure == p.impure0 && self.mem.heap_ops == p.heap0 {
             self.memo.insert(p.key, val);
         }
         self.mem.peak = self.mem.peak.max(p.peak_saved);
+        self.mem.arena_peak = self.mem.arena_peak.max(p.arena_saved);
         self.run.maxd = self.run.maxd.max(p.maxd_saved);
+    }
+
+    /// Active calls of the running evaluation, counting those of the
+    /// evaluation contexts it is nested in (`RunState::depth_base`).
+    pub(crate) fn active_calls(&self) -> u32 {
+        let own = self.stack.len().saturating_sub(self.run.entry + 1) as u32;
+        own + self.run.depth_base
     }
 
     // ---- pointers ---------------------------------------------------------

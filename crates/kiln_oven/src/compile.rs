@@ -37,6 +37,10 @@ pub(crate) enum FState {
     /// Declared but not defined (yet): retried on every call.
     Undefined,
     Deleted,
+    /// Its body is being made available (`SemaBridge::ensure_body` is
+    /// running, and may evaluate nested constant expressions): a call to it
+    /// meanwhile fails as a call to an undefined function.
+    Compiling,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -338,7 +342,8 @@ impl Oven {
             self.funcs[idx as usize].state = FState::NotConstexpr;
             return;
         }
-        let Some(body) = b.ensure_body(d) else {
+        self.funcs[idx as usize].state = FState::Compiling;
+        let Some(body) = b.ensure_body(d, self) else {
             self.funcs[idx as usize].state = FState::Undefined;
             return;
         };
