@@ -169,8 +169,7 @@ impl InstReport {
     /// Bytes of the report's own tables.
     pub fn heap_bytes(&self) -> u64 {
         (self.rows.capacity() * size_of::<InstRow>()
-            + self.index.capacity() * (size_of::<(DeclId, RowKind)>() + 4))
-            as u64
+            + self.index.capacity() * (size_of::<(DeclId, RowKind)>() + 4)) as u64
     }
 }
 
@@ -211,13 +210,8 @@ impl Sema<'_, '_> {
         };
         let total_bytes: u64 = rows.iter().map(|x| x.bytes).sum();
         let total_nodes: u64 = rows.iter().map(|x| x.nodes).sum();
-        let total_ns: u64 = self
-            .inst
-            .report
-            .rows
-            .iter()
-            .map(|x| x.self_ns)
-            .fold(0u64, u64::saturating_add);
+        let total_ns: u64 =
+            self.inst.report.rows.iter().map(|x| x.self_ns).fold(0u64, u64::saturating_add);
         match r.format {
             ReportFormat::Off => {}
             ReportFormat::Json => {

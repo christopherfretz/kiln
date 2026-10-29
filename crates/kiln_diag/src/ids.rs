@@ -666,7 +666,7 @@ diag_ids! {
     sema_call_too_many_args_one = Error (2) "too many arguments to function call, expected single argument '{0}', have {1} arguments";
     sema_member_reference_struct_union = Error (1) "member reference base type {0} is not a structure or union";
     sema_member_reference_suggestion = Error (2) "member reference type {0} is {1:a|not a} pointer; did you mean to use '{1:->|.}'?";
-    sema_member_reference_incomplete = Error (1) "incomplete definition of type {0}";
+    sema_member_reference_incomplete = Error (1) "member access into incomplete type {0}";
     sema_invalid_unary_operand = Error (1) "invalid argument type {0} to unary expression";
     sema_incompatible_cond_operands = Error (2) "incompatible operand types ({0} and {1})";
     sema_conditional_void_nonvoid = Error (2) "{0:left|right} operand to ? is void, but {0:right|left} operand is of type {1}";

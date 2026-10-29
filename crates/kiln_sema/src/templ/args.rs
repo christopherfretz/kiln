@@ -115,7 +115,12 @@ impl MultiLevelArgs {
 
     /// What the parameter at `(depth, index)` becomes, reading the
     /// argument list through `args`.
-    pub fn lookup(&self, depth: u16, index: u16, args: impl Fn(ArgListId) -> Vec<TemplateArg>) -> ArgLookup {
+    pub fn lookup(
+        &self,
+        depth: u16,
+        index: u16,
+        args: impl Fn(ArgListId) -> Vec<TemplateArg>,
+    ) -> ArgLookup {
         match self.level(depth) {
             Some(l) if l.mode == LevelMode::Substitute => args(l.args)
                 .get(usize::from(index))
@@ -150,9 +155,7 @@ impl Sema<'_, '_> {
 
     /// The depth of `tmpl`'s parameters.
     pub(crate) fn template_param_depth(&self, tmpl: DeclId) -> u16 {
-        self.ast
-            .template_info(tmpl)
-            .map_or(0, |i| self.ast.templates.param_list(i.params).depth)
+        self.ast.template_info(tmpl).map_or(0, |i| self.ast.templates.param_list(i.params).depth)
     }
 
     /// Checks the written arguments of the template-id `tmpl<written>`
@@ -302,7 +305,14 @@ impl Sema<'_, '_> {
 
     /// The type of non-type parameter `p` given the arguments before it
     /// (its declared type with those substituted).
-    fn nttp_type(&mut self, tmpl: DeclId, depth: u16, p: DeclId, prior: &[TemplateArg], at: Loc) -> Result<QualType, ()> {
+    fn nttp_type(
+        &mut self,
+        tmpl: DeclId,
+        depth: u16,
+        p: DeclId,
+        prior: &[TemplateArg],
+        at: Loc,
+    ) -> Result<QualType, ()> {
         let ty = self.ast.decls.get(p).ty().unwrap_or(QualType::ERROR);
         if !self.ast.types.is_dependent(ty) {
             return Ok(ty);
@@ -359,7 +369,10 @@ impl Sema<'_, '_> {
             pty = conv::strip_cv(self, self.ast.exprs.get(d).ty());
         }
         let t = &self.ast.types;
-        if t.is_reference(pty) || t.as_record(pty).is_some() || t.is_array(ety) && !t.is_pointer(pty) {
+        if t.is_reference(pty)
+            || t.as_record(pty).is_some()
+            || t.is_array(ety) && !t.is_pointer(pty)
+        {
             self.templ_unimplemented("non-type template parameter of class or reference type", at);
             return Err(());
         }

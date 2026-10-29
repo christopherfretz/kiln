@@ -104,6 +104,13 @@ pub struct InstState {
     /// Declaring such a member: its `constexpr` does not imply `inline`
     /// until the initializer is instantiated (as clang).
     pub(crate) deferring_init: bool,
+    /// The specialization just diagnosed as an implicit instantiation of
+    /// an undefined template: the caller's own incomplete-type error for
+    /// it is suppressed, as clang's `RequireCompleteType` reports only
+    /// the instantiation failure.
+    pub(crate) undefined_diagnosed: std::cell::Cell<Option<DeclId>>,
+    /// Drop the next error passed to `emit` (set by `incomplete_note`).
+    pub(crate) suppress_next_error: std::cell::Cell<bool>,
 }
 
 impl Sema<'_, '_> {

@@ -277,6 +277,9 @@ impl<'a, 'sm> Sema<'a, 'sm> {
     /// the context notes are added to a diagnostic that shows, and a
     /// SFINAE context captures errors instead (§5.7).
     pub fn emit(&self, mut d: Diag) {
+        if self.inst.suppress_next_error.replace(false) {
+            return;
+        }
         if !self.inst.stack.is_empty()
             && let Some(id) = d.id()
         {

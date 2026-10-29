@@ -14,12 +14,12 @@ mod exprs;
 mod stmts;
 mod types;
 
+use kiln_ast::DeclId;
 use kiln_ast::decl::{DeclFlags, DeclKind};
 use kiln_ast::ids::{ArgListId, ListId, NnsId};
 use kiln_ast::types::{ArgView, Nns, TemplateArg, TemplateName, TypeFlags};
-use kiln_ast::DeclId;
-use kiln_source::fx::FxHashMap;
 use kiln_source::Loc;
+use kiln_source::fx::FxHashMap;
 use kiln_source::symbol::Symbol;
 
 use crate::Sema;
@@ -231,7 +231,9 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
                 };
                 return Ok(self.sema.nns_component(Some(p), c, spelled));
             }
-            Nns::Namespace { prefix: Some(p), ns } => Nns::Namespace { prefix: Some(self.nns(p, loc)?), ns },
+            Nns::Namespace { prefix: Some(p), ns } => {
+                Nns::Namespace { prefix: Some(self.nns(p, loc)?), ns }
+            }
             Nns::NamespaceAlias { prefix: Some(p), alias, ns } => {
                 Nns::NamespaceAlias { prefix: Some(self.nns(p, loc)?), alias, ns }
             }
@@ -288,7 +290,9 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
         }
         if matches!(
             node.kind(),
-            DeclKind::TemplateTypeParm | DeclKind::NonTypeTemplateParm | DeclKind::TemplateTemplateParm
+            DeclKind::TemplateTypeParm
+                | DeclKind::NonTypeTemplateParm
+                | DeclKind::TemplateTemplateParm
         ) {
             return Ok(d);
         }

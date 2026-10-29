@@ -329,15 +329,17 @@ impl Sema<'_, '_> {
     }
 
     /// `nns::name` (with optional explicit arguments) in an expression,
-    /// with a dependent `nns` ([temp.dep.expr]/3).
+    /// with a dependent `nns` ([temp.dep.expr]/3); `begin` is the
+    /// qualifier's first token.
     pub fn act_dependent_scope_ref(
         &mut self,
         nns: NnsId,
         name: Symbol,
         targs: Option<ArgListId>,
+        begin: Loc,
         loc: Loc,
     ) -> ExprId {
-        self.builder().dependent_scope_decl_ref(nns, name, targs, loc)
+        self.builder().dependent_scope_decl_ref(nns, name, targs, begin, loc)
     }
 
     // -- concepts and requires ------------------------------------------------------

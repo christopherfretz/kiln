@@ -30,7 +30,8 @@ impl Sema<'_, '_> {
     /// Whether `tmpl` has declared partial specializations.
     pub(crate) fn has_partial_specs(&self, tmpl: DeclId) -> bool {
         self.ast.templates.specs_of(tmpl).iter().any(|&s| {
-            self.ast.decls.get(s).kind() == kiln_ast::decl::DeclKind::ClassTemplatePartialSpecialization
+            self.ast.decls.get(s).kind()
+                == kiln_ast::decl::DeclKind::ClassTemplatePartialSpecialization
         })
     }
 

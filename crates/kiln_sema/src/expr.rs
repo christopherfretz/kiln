@@ -323,7 +323,7 @@ impl Sema<'_, '_> {
             let kids = if first { self.ast.exprs.children(e, &self.ast.lists) } else { Vec::new() };
             match kids.first() {
                 Some(&k) => e = k,
-                None => return n.loc(),
+                None => return self.ast.templates.expr_begin.get(e).copied().unwrap_or(n.loc()),
             }
         }
     }
@@ -2259,10 +2259,12 @@ impl Sema<'_, '_> {
             (base, bt)
         };
         let rec = self.ast.types.as_record(obj_ty).expect("checked above");
-        let complete = self.require_complete(obj_ty, loc);
+        // [expr.ref]/4 (clang diagnoses at the operator).
+        let complete = self.require_complete(obj_ty, op_loc);
         let Some(def) = self.ast.definition(rec).filter(|_| complete) else {
-            let msg =
-                self.diag(DiagId::sema_member_reference_incomplete, loc).arg(self.ty_arg(obj_ty));
+            let msg = self
+                .diag(DiagId::sema_member_reference_incomplete, op_loc)
+                .arg(self.ty_arg(obj_ty));
             self.emit(self.incomplete_note(msg, obj_ty));
             return self.recover_err(&[base], loc);
         };

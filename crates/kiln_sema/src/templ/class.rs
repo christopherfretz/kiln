@@ -106,7 +106,9 @@ impl Sema<'_, '_> {
                     Scope::new(ScopeKind::Record, Some(self.ast.definition(x).unwrap_or(x)))
                 }
                 DeclKind::Namespace => Scope::new(ScopeKind::Namespace, Some(x)),
-                DeclKind::LinkageSpec | DeclKind::Export => Scope::new(ScopeKind::LinkageSpec, Some(x)),
+                DeclKind::LinkageSpec | DeclKind::Export => {
+                    Scope::new(ScopeKind::LinkageSpec, Some(x))
+                }
                 // A local class's context (WP-070b): its function's
                 // scope is gone; lookup sees only the enclosing namespaces.
                 _ => continue,
@@ -177,7 +179,13 @@ impl Sema<'_, '_> {
     /// default (clang's `SuppressDefaultTemplateArgs`): the arguments a
     /// specialization's name prints with. The first `written` came from
     /// the source; a default is recomputed for those silently (SFINAE).
-    fn suppress_default_args(&mut self, tmpl: DeclId, args: ArgListId, written: usize, loc: Loc) -> ArgListId {
+    fn suppress_default_args(
+        &mut self,
+        tmpl: DeclId,
+        args: ArgListId,
+        written: usize,
+        loc: Loc,
+    ) -> ArgListId {
         let params = self.template_params(tmpl);
         let elems: Vec<TemplateArg> = self.ast.types.args(args).to_vec();
         if elems.len() != params.len() {
@@ -207,7 +215,9 @@ impl Sema<'_, '_> {
             self.pop_inst_frame();
             let types = &self.ast.types;
             match r {
-                Ok(a) if !failed && types.canonical_arg(a) == types.canonical_arg(elems[n - 1]) => n -= 1,
+                Ok(a) if !failed && types.canonical_arg(a) == types.canonical_arg(elems[n - 1]) => {
+                    n -= 1
+                }
                 _ => break,
             }
         }
@@ -291,10 +301,8 @@ impl Sema<'_, '_> {
                 ArgView::Type(q) if q.quals().is_empty() => {
                     let mut t = q;
                     loop {
-                        if matches!(
-                            self.ast.types.view(t.ty()),
-                            TypeView::InjectedClassName { .. }
-                        ) {
+                        if matches!(self.ast.types.view(t.ty()), TypeView::InjectedClassName { .. })
+                        {
                             break TemplateArg::ty(t);
                         }
                         let n = self.ast.types.desugar_once(t);
@@ -398,12 +406,16 @@ impl Sema<'_, '_> {
         let Some(def) = self.ast.definition(pattern) else {
             if diagnose {
                 let t = self.tag_type(spec);
-                let note = self.diag(DiagId::note_template_decl_here, self.ast.decls.get(tmpl).loc());
+                let note =
+                    self.diag(DiagId::note_template_decl_here, self.ast.decls.get(tmpl).loc());
                 let d = self
                     .diag(DiagId::sema_template_implicit_instantiate_undefined, poi)
                     .arg(self.ty_str(t))
                     .with_note(note);
                 self.emit(d);
+                self.inst.undefined_diagnosed.set(Some(spec));
+            } else {
+                self.inst.undefined_diagnosed.set(None);
             }
             return false;
         };
@@ -564,7 +576,10 @@ impl Sema<'_, '_> {
         // (a friend: the class that declared it).
         let Some(spec) = self.inst_owner(f) else { return };
         let Some((tmpl, args)) = self.spec_args(spec) else { return };
-        let Some(pclass) = self.ast.definition(self.ast.template_info(tmpl).and_then(|i| i.pattern).unwrap_or(spec)) else {
+        let Some(pclass) = self
+            .ast
+            .definition(self.ast.template_info(tmpl).and_then(|i| i.pattern).unwrap_or(spec))
+        else {
             return;
         };
         if !self.push_inst_frame(FrameKind::MemberFunction, f, pattern, poi) {
@@ -627,7 +642,12 @@ impl Sema<'_, '_> {
             return;
         }
         let constant = self.ast.decls.var(v).is_some_and(|x| x.spec.is_constexpr())
-            || self.ast.decls.get(v).ty().is_some_and(|t| self.ast.types.effective_quals(t).is_const());
+            || self
+                .ast
+                .decls
+                .get(v)
+                .ty()
+                .is_some_and(|t| self.ast.types.effective_quals(t).is_const());
         if self.unevaluated > 0 && !constant {
             return;
         }
@@ -642,7 +662,10 @@ impl Sema<'_, '_> {
         let Some(pattern) = self.ast.instantiated_from(v) else { return };
         let Some(spec) = self.inst_owner(v) else { return };
         let Some((tmpl, args)) = self.spec_args(spec) else { return };
-        let Some(pclass) = self.ast.definition(self.ast.template_info(tmpl).and_then(|i| i.pattern).unwrap_or(spec)) else {
+        let Some(pclass) = self
+            .ast
+            .definition(self.ast.template_info(tmpl).and_then(|i| i.pattern).unwrap_or(spec))
+        else {
             return;
         };
         if !self.push_inst_frame(FrameKind::StaticDataMember, v, pattern, poi) {
@@ -698,7 +721,10 @@ impl Sema<'_, '_> {
         let constexpr = self.ast.decls.function(f).is_some_and(|x| {
             x.spec.constexpr_kind() != kiln_ast::decl::ConstexprKind::None
                 || self.is_undeduced_auto(
-                    self.ast.types.proto(self.ast.decls.get(f).ty().unwrap_or(QualType::ERROR)).map_or(QualType::ERROR, kiln_ast::types::FuncProto::ret),
+                    self.ast
+                        .types
+                        .proto(self.ast.decls.get(f).ty().unwrap_or(QualType::ERROR))
+                        .map_or(QualType::ERROR, kiln_ast::types::FuncProto::ret),
                 )
         });
         if constexpr {

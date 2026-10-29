@@ -832,7 +832,10 @@ impl TypeNames for AstNames<'_> {
     fn write_value(&self, _ty: QualType, value: ConstValueId, out: &mut String) {
         // A converted argument of a known parameter (clang's
         // `IncludeType` is false unless the parameter is `auto`; WP-071).
-        let opts = ValueOptions { include_type: false, ..ValueOptions::with_style(PrintStyle::TemplateArg) };
+        let opts = ValueOptions {
+            include_type: false,
+            ..ValueOptions::with_style(PrintStyle::TemplateArg)
+        };
         self.ast.consts.print(value, &self.ast.strings, self, &opts, out);
     }
 

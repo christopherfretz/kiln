@@ -11,11 +11,11 @@ use kiln_diag::DiagId;
 use kiln_source::Loc;
 
 use super::{SubstFail, SubstResult, Substituter};
+use crate::Sema;
 use crate::declspec::{Chunk, Declarator, DeclaratorContext};
 use crate::lookup::LookupKind;
 use crate::templ::actions::TemplateIdRef;
 use crate::templ::args::ArgLookup;
-use crate::Sema;
 
 impl Substituter<'_, '_, '_> {
     /// Substitutes into type `q` (its qualifiers kept, collapsing as the
@@ -119,7 +119,10 @@ impl Substituter<'_, '_, '_> {
                     out.push(self.ty(x, loc)?);
                 }
                 let exc = match self.sema.ast.types.exc_spec(&p) {
-                    ExcSpec::NoexceptExpr { expr, value: kiln_ast::types::NoexceptValue::Dependent(_) } => {
+                    ExcSpec::NoexceptExpr {
+                        expr,
+                        value: kiln_ast::types::NoexceptValue::Dependent(_),
+                    } => {
                         let e = self.expr(expr)?;
                         self.sema.act_on_noexcept_spec(e, loc, loc)
                     }
@@ -197,10 +200,7 @@ impl Substituter<'_, '_, '_> {
                 };
                 if !matches!(
                     self.sema.kind_of(d),
-                    DeclKind::Typedef
-                        | DeclKind::TypeAlias
-                        | DeclKind::CXXRecord
-                        | DeclKind::Enum
+                    DeclKind::Typedef | DeclKind::TypeAlias | DeclKind::CXXRecord | DeclKind::Enum
                 ) {
                     let at = self.sema.ast.decls.get(d).loc();
                     let n = crate::decl::sym_str(self.sema, name);
@@ -250,13 +250,24 @@ impl Substituter<'_, '_, '_> {
 
     /// Template type parameter `(depth, index)` (§5.3): its argument as
     /// `SubstTemplateTypeParmType` sugar, or itself when retained.
-    fn type_parm(&mut self, q: QualType, depth: u16, index: u16, loc: Loc) -> SubstResult<QualType> {
+    fn type_parm(
+        &mut self,
+        q: QualType,
+        depth: u16,
+        index: u16,
+        loc: Loc,
+    ) -> SubstResult<QualType> {
         match self.lookup(depth, index) {
             ArgLookup::Arg(a) => {
                 let a = self.element(a, loc)?;
                 let ArgView::Type(t) = a.view() else { return Err(SubstFail) };
                 let Some(assoc) = self.assoc(depth) else { return Ok(t) };
-                Ok(self.sema.ast.types.subst_template_type_parm(t, assoc, u32::from(index), self.pack_index))
+                Ok(self.sema.ast.types.subst_template_type_parm(
+                    t,
+                    assoc,
+                    u32::from(index),
+                    self.pack_index,
+                ))
             }
             ArgLookup::Retain(d) if d == depth => Ok(q),
             ArgLookup::Retain(_) => self.unimplemented("member templates", loc),
@@ -267,9 +278,7 @@ impl Substituter<'_, '_, '_> {
     /// A context for diagnostics: `'X<int>'` or `namespace 'n'`.
     pub(crate) fn ctx_arg(&self, ctx: DeclId) -> String {
         match self.sema.kind_of(ctx) {
-            DeclKind::CXXRecord | DeclKind::Enum => {
-                self.sema.ty_arg(self.sema.tag_type(ctx))
-            }
+            DeclKind::CXXRecord | DeclKind::Enum => self.sema.ty_arg(self.sema.tag_type(ctx)),
             _ => format!("'{}'", self.sema.decl_name(ctx)),
         }
     }

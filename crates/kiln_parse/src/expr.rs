@@ -806,6 +806,7 @@ impl Parser<'_, '_> {
     /// is found by argument-dependent lookup at instantiation
     /// ([temp.dep.general]/2).
     fn parse_id_expression_rest(&mut self) -> PExpr {
+        let begin = self.loc();
         let qual = self.parse_nested_name_nns().ok()?;
         let template_kw = qual.is_some() && self.eat_kw(Kw::Template).is_some();
         let Some(name) = self.ident() else {
@@ -822,7 +823,7 @@ impl Parser<'_, '_> {
             } else {
                 None
             };
-            return Some(self.s.act_dependent_scope_ref(q.nns, name, targs, nl));
+            return Some(self.s.act_dependent_scope_ref(q.nns, name, targs, begin, nl));
         }
         let class = self.s.classify_name(name, qual.map(|q| q.ctx));
         if self.at(Punct::Less) && (template_kw || is_template_class(class)) {

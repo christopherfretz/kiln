@@ -1019,9 +1019,10 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                         || defn.contains(DefinitionBits::BEING_DEFINED)
                     {
                         self.line.push_str(" definition");
-                        if ast.spec_info(d).is_some_and(|(_, i)| {
-                            i.kind == SpecKind::ImplicitInstantiation
-                        }) {
+                        if ast
+                            .spec_info(d)
+                            .is_some_and(|(_, i)| i.kind == SpecKind::ImplicitInstantiation)
+                        {
                             self.line.push_str(" implicit_instantiation");
                         }
                     }

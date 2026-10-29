@@ -207,9 +207,12 @@ impl InstantiationStack {
             if i == skip_lo && skip_hi > skip_lo {
                 let k = skip_hi - skip_lo;
                 out.push(
-                    Diag::new(DiagId::note_instantiation_contexts_suppressed, kiln_source::Span::empty(f.poi))
-                        .arg(k)
-                        .arg(if k == 1 { "" } else { "s" }),
+                    Diag::new(
+                        DiagId::note_instantiation_contexts_suppressed,
+                        kiln_source::Span::empty(f.poi),
+                    )
+                    .arg(k)
+                    .arg(if k == 1 { "" } else { "s" }),
                 );
             }
             if i >= skip_lo && i < skip_hi {
@@ -322,7 +325,7 @@ impl Sema<'_, '_> {
     /// (`A<int>`), anything else by its qualified name.
     fn frame_name(&self, f: &InstFrame) -> String {
         match f.kind {
-            FrameKind::ClassInstantiation | FrameKind::MemberClass => {
+            FrameKind::ClassInstantiation => {
                 let t = self.ast.decls.get(f.entity).ty().unwrap_or(kiln_ast::QualType::ERROR);
                 self.ty_str(t)
             }

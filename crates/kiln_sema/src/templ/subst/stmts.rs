@@ -47,7 +47,8 @@ impl Substituter<'_, '_, '_> {
         if n.kind() != StmtKind::CompoundStmt {
             return self.stmt(s);
         }
-        let items: Vec<StmtId> = self.sema.ast.lists.iter::<StmtId>(self.sema.ast.stmts.compound_body(s)).collect();
+        let items: Vec<StmtId> =
+            self.sema.ast.lists.iter::<StmtId>(self.sema.ast.stmts.compound_body(s)).collect();
         let rb = self.sema.ast.stmts.rbrace(s);
         let mut out = Vec::with_capacity(items.len());
         for x in items {
@@ -92,8 +93,12 @@ impl Substituter<'_, '_, '_> {
                 Ok(self.sema.act_on_expr_stmt(e))
             }
             StmtKind::DeclStmt => {
-                let ds: Vec<DeclId> =
-                    self.sema.ast.lists.iter::<DeclId>(self.sema.ast.stmts.decl_stmt_decls(s)).collect();
+                let ds: Vec<DeclId> = self
+                    .sema
+                    .ast
+                    .lists
+                    .iter::<DeclId>(self.sema.ast.stmts.decl_stmt_decls(s))
+                    .collect();
                 let mut out = Vec::with_capacity(ds.len());
                 for d in ds {
                     out.push(self.local_decl(d)?);

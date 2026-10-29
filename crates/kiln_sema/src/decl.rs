@@ -1102,6 +1102,11 @@ impl Sema<'_, '_> {
         if self.ast.definition(rec).is_some() {
             return msg;
         }
+        if self.inst.undefined_diagnosed.get() == Some(rec) {
+            self.inst.undefined_diagnosed.set(None);
+            self.inst.suppress_next_error.set(true);
+            return msg;
+        }
         let loc = self.ast.decls.get(rec).loc();
         msg.with_note(
             self.diag(DiagId::note_forward_declaration, loc)
@@ -2095,7 +2100,8 @@ impl Sema<'_, '_> {
         let ty = vn.ty().unwrap_or(QualType::ERROR);
         let loc = vn.loc();
         let name = self.decl_name(v);
-        if self.is_error_type(ty) {
+        // [temp.res.general]/6: checked when instantiated.
+        if self.is_error_type(ty) || self.ast.types.is_dependent(ty) {
             return;
         }
         if self.contains_undeduced_auto(ty) {
@@ -2330,7 +2336,9 @@ impl Sema<'_, '_> {
         let is_enum = keyword == TagKeyword::Enum;
         let fixed = fixed.or(if is_enum && scoped != 0 { Some(QualType::INT) } else { None });
         if let Some(f) = fixed {
-            let ok = self.ast.types.is_integral(f) || self.is_error_type(f);
+            let ok = self.ast.types.is_integral(f)
+                || self.is_error_type(f)
+                || self.ast.types.is_dependent(f);
             if !ok {
                 let msg = self.diag(DiagId::sema_enum_invalid_underlying, loc).arg(self.ty_arg(f));
                 self.emit(msg);

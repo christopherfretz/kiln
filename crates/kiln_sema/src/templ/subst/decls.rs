@@ -16,8 +16,8 @@ use kiln_source::symbol::Symbol;
 
 use super::{DeclOrPack, SubstFail, SubstResult, Substituter};
 use crate::declspec::{
-    Chunk, DeclSpec, Declarator, DeclaratorContext, DefaultArg, ParamInfo, SpecialName, StorageSpec,
-    TypeSpecKind,
+    Chunk, DeclSpec, Declarator, DeclaratorContext, DefaultArg, ParamInfo, SpecialName,
+    StorageSpec, TypeSpecKind,
 };
 
 impl Substituter<'_, '_, '_> {
@@ -77,7 +77,11 @@ impl Substituter<'_, '_, '_> {
     }
 
     /// The declarator-id of pattern declaration `d` in context `ctx`.
-    pub(crate) fn pattern_declarator(&mut self, d: DeclId, ctx: DeclaratorContext) -> SubstResult<Declarator> {
+    pub(crate) fn pattern_declarator(
+        &mut self,
+        d: DeclId,
+        ctx: DeclaratorContext,
+    ) -> SubstResult<Declarator> {
         let n = *self.sema.ast.decls.get(d);
         let loc = n.loc();
         let mut dr = Declarator::new(ctx, loc);
@@ -117,7 +121,10 @@ impl Substituter<'_, '_, '_> {
                 dr.special = Some((SpecialName::Conversion(ret), loc));
             }
             DeclNameKind::LiteralOperator | DeclNameKind::DeductionGuide => {
-                return self.unimplemented("literal operators and deduction guides in class templates", loc);
+                return self.unimplemented(
+                    "literal operators and deduction guides in class templates",
+                    loc,
+                );
             }
         }
         Ok(dr)
@@ -163,14 +170,14 @@ impl Substituter<'_, '_, '_> {
         let ast = &self.sema.ast;
         let Some(v) = ast.decls.var(d) else { return false };
         let t = self.decl_ty(d);
-        v.init.is_some()
-            && v.spec.is_inline()
+        // A constexpr one without an initializer is diagnosed only when
+        // its definition is instantiated (as clang).
+        let missing = v.init.is_none() && v.spec.is_constexpr();
+        (v.init.is_some() || missing)
+            && (v.spec.is_inline() || v.spec.is_constexpr())
             && v.spec.storage() == VarStorage::Static
             && !matches!(ast.types.view(t.ty()), TypeView::Auto { .. })
-            && !matches!(
-                ast.types.view(ast.types.canonical(t).ty()),
-                TypeView::IncompleteArray(_)
-            )
+            && !matches!(ast.types.view(ast.types.canonical(t).ty()), TypeView::IncompleteArray(_))
     }
 
     /// Declares pattern static data member `d` with its initializer
@@ -251,7 +258,12 @@ impl Substituter<'_, '_, '_> {
     /// substituted signature; its definition is instantiated when used
     /// (§4.4). Default arguments are substituted now (a gap: clang
     /// instantiates them when a call uses them).
-    pub(crate) fn function_decl(&mut self, d: DeclId, ctx: DeclaratorContext, friend: Option<Loc>) -> SubstResult<DeclId> {
+    pub(crate) fn function_decl(
+        &mut self,
+        d: DeclId,
+        ctx: DeclaratorContext,
+        friend: Option<Loc>,
+    ) -> SubstResult<DeclId> {
         let loc = self.sema.ast.decls.get(d).loc();
         let t = self.decl_ty(d);
         let TypeView::Function(p) = self.sema.ast.types.view(t.ty()) else {
@@ -311,14 +323,21 @@ impl Substituter<'_, '_, '_> {
         }
         // Defined in its class: inline before its body is instantiated.
         if fs.is_some_and(|s| s.implicit_inline()) {
-            self.sema.ast.decls.mark_function(f, kiln_ast::decl::FnSpec::new().with_implicit_inline(true));
+            self.sema
+                .ast
+                .decls
+                .mark_function(f, kiln_ast::decl::FnSpec::new().with_implicit_inline(true));
         }
         self.default_args(d, f)?;
         Ok(r)
     }
 
     /// The exception specification of function type `p`.
-    fn exc_spec(&mut self, p: &kiln_ast::types::FuncProto, loc: Loc) -> SubstResult<kiln_ast::types::ExcSpec> {
+    fn exc_spec(
+        &mut self,
+        p: &kiln_ast::types::FuncProto,
+        loc: Loc,
+    ) -> SubstResult<kiln_ast::types::ExcSpec> {
         use kiln_ast::types::{ExcSpec, NoexceptValue};
         Ok(match self.sema.ast.types.exc_spec(p) {
             ExcSpec::NoexceptExpr { expr, value: NoexceptValue::Dependent(_) } => {
@@ -352,7 +371,9 @@ impl Substituter<'_, '_, '_> {
             self.locals.insert(a, DeclOrPack::Decl(b));
         }
         for (&a, &b) in pp.iter().zip(fp.iter()) {
-            let Some(def) = self.sema.ast.decls.param(a).and_then(|x| x.default_arg) else { continue };
+            let Some(def) = self.sema.ast.decls.param(a).and_then(|x| x.default_arg) else {
+                continue;
+            };
             let e = match self.sema.ast.exprs.get(def).kind() {
                 kiln_ast::expr::ExprKind::CXXDefaultArgExpr => continue,
                 _ => self.expr(def),
@@ -392,7 +413,11 @@ impl Substituter<'_, '_, '_> {
     }
 
     /// A typedef or alias-declaration of the pattern in context `ctx`.
-    pub(crate) fn typedef_decl_in(&mut self, d: DeclId, ctx: DeclaratorContext) -> SubstResult<DeclId> {
+    pub(crate) fn typedef_decl_in(
+        &mut self,
+        d: DeclId,
+        ctx: DeclaratorContext,
+    ) -> SubstResult<DeclId> {
         let n = *self.sema.ast.decls.get(d);
         let loc = n.loc();
         let u = self.sema.ast.decls.typedef(d).map(|x| x.underlying).ok_or(SubstFail)?;
@@ -433,7 +458,11 @@ impl Substituter<'_, '_, '_> {
         let scoped = data.flags & (EnumData::SCOPED | EnumData::SCOPED_STRUCT);
         let name = n.name().as_ident().filter(|_| !n.name().is_empty()).map(|s| (s, loc));
         let defined = self.sema.ast.definition(d) == Some(d);
-        let use_ = if defined { crate::decl::TagUse::Definition } else { crate::decl::TagUse::Declaration };
+        let use_ = if defined {
+            crate::decl::TagUse::Definition
+        } else {
+            crate::decl::TagUse::Declaration
+        };
         let kw = kiln_ast::types::TagKeyword::Enum;
         let e = self.sema.act_on_tag(kw, name, None, use_, scoped, fixed, loc);
         if !defined {

@@ -6,8 +6,8 @@
 
 use kiln_ast::decl::DeclKind;
 use kiln_ast::expr::{CastKind, CharKind, ExprDeps, ExprFlags, ExprKind, Radix, ValueCategory};
-use kiln_ast::types::{ArgView, BuiltinType};
 use kiln_ast::ids::RawId;
+use kiln_ast::types::{ArgView, BuiltinType};
 use kiln_ast::{ExprId, QualType};
 use kiln_source::Loc;
 
@@ -159,8 +159,9 @@ impl Substituter<'_, '_, '_> {
                     return Err(SubstFail);
                 };
                 let name = kiln_source::symbol::Symbol::from_index(n.b());
-                let nns = self.nns(nns, loc)?;
-                let ctx = self.nns_context(nns, loc)?;
+                let begin = self.sema.ast.templates.expr_begin.get(e).copied().unwrap_or(loc);
+                let nns = self.nns(nns, begin)?;
+                let ctx = self.nns_context(nns, begin)?;
                 Ok(self.sema.act_on_id_expression(name, loc, Some(ctx)))
             }
             ExprKind::CXXThisExpr => {
@@ -185,7 +186,10 @@ impl Substituter<'_, '_, '_> {
                 // a glvalue result ([expr.cast]/1).
                 let t = n.ty();
                 let written = match n.value_category() {
-                    ValueCategory::LValue if style != CastStyle::Functional || self.sema.ast.types.is_reference(t) => {
+                    ValueCategory::LValue
+                        if style != CastStyle::Functional
+                            || self.sema.ast.types.is_reference(t) =>
+                    {
                         self.sema.ast.types.lvalue_ref_to(t)
                     }
                     ValueCategory::XValue => self.sema.ast.types.rvalue_ref_to(t),
@@ -360,7 +364,9 @@ impl Substituter<'_, '_, '_> {
             Some(BuiltinType::Bool) => {
                 return Ok(self.sema.ast.builder().bool_literal(ty, v != 0, loc));
             }
-            Some(BuiltinType::Char | BuiltinType::SChar | BuiltinType::UChar) => Some(CharKind::Ascii),
+            Some(BuiltinType::Char | BuiltinType::SChar | BuiltinType::UChar) => {
+                Some(CharKind::Ascii)
+            }
             Some(BuiltinType::WChar) => Some(CharKind::Wide),
             Some(BuiltinType::Char8) => Some(CharKind::Utf8),
             Some(BuiltinType::Char16) => Some(CharKind::Utf16),
