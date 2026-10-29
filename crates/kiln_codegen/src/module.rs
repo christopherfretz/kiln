@@ -81,6 +81,8 @@ pub(crate) struct Cg<'a> {
     pub private_names: FxHashMap<String, u32>,
     /// Static locals already emitted.
     pub static_locals: FxHashMap<DeclId, GlobalId>,
+    /// Static locals emitted per (function, name), for discriminators.
+    pub static_local_names: FxHashMap<(Option<DeclId>, String), u32>,
     /// Per-function state.
     pub f: Fx,
 }
@@ -108,6 +110,7 @@ impl<'a> Cg<'a> {
             struct_names: FxHashMap::default(),
             private_names: FxHashMap::default(),
             static_locals: FxHashMap::default(),
+            static_local_names: FxHashMap::default(),
             f: Fx::empty(),
         }
     }
@@ -681,7 +684,15 @@ impl<'a> Cg<'a> {
             },
         };
         let ity = self.m.const_type(init);
-        let name = mangle::mangle_static_local(ast, first, 1);
+        // The discriminator counts earlier static locals of the same name in
+        // the same function (emission order is declaration order).
+        let key = (mangle::enclosing_function(ast, first), mangle::decl_name(ast, first));
+        let index = {
+            let n = self.static_local_names.entry(key).or_insert(0);
+            *n += 1;
+            *n - 1
+        };
+        let name = mangle::mangle_static_local(ast, first, index);
         let g = self.m.add_global(&name, ity);
         let align = self.global_align(ty);
         let constant = ast.types.effective_quals(ty).is_const();

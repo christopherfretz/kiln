@@ -39,7 +39,8 @@ pub enum ArgKind {
     },
     /// Passed by address: `byval(T) align N` when `byval`, else a plain
     /// pointer to a caller-owned temporary. For the return value this is
-    /// the `sret` pointer.
+    /// the `sret` pointer, and `byval` is clang's `getIndirectByVal` (true
+    /// for `getNaturalAlignIndirect` returns: no `result.ptr` spill).
     Indirect {
         /// `byval`.
         byval: bool,
@@ -280,7 +281,7 @@ fn aarch64_ret(t: &mut IrTypes<'_>, q: QualType) -> ArgKind {
         let q = strip_enum(t, q);
         if let TypeView::BitInt { width, .. } = view(t, q) {
             if width > 128 {
-                return ArgKind::Indirect { byval: false, align: t.layouter().type_layout(q).align };
+                return ArgKind::Indirect { byval: true, align: t.layouter().type_layout(q).align };
             }
         }
         return direct(t.convert(q));
@@ -303,7 +304,7 @@ fn aarch64_ret(t: &mut IrTypes<'_>, q: QualType) -> ArgKind {
         }
         return direct(IrType::Int(u32::try_from(size).unwrap_or(128)));
     }
-    ArgKind::Indirect { byval: false, align: t.layouter().type_layout(q).align }
+    ArgKind::Indirect { byval: true, align: t.layouter().type_layout(q).align }
 }
 
 /// clang `isEmptyRecord(T, AllowArrays)`.
@@ -766,7 +767,7 @@ fn x86_ret(t: &mut IrTypes<'_>, q: QualType) -> ArgKind {
                 let s = strip_enum(t, q);
                 return if is_promotable(t, s) { extend(t, s) } else { direct(natural) };
             }
-            return ArgKind::Indirect { byval: false, align: t.layouter().type_layout(q).align };
+            return ArgKind::Indirect { byval: true, align: t.layouter().type_layout(q).align };
         }
         Integer => {
             let r = integer_at(t, &natural, 0, q, 0);

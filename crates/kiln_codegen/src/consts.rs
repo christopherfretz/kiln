@@ -198,7 +198,7 @@ impl Cg<'_> {
             IrType::Record(d) => {
                 let rec = self.tys.record(*d).clone();
                 if rec.is_union {
-                    return err(None, "union constants are not supported yet (M3)");
+                    return self.union_const(img, off, t, rec.size, e);
                 }
                 if !rec.bitfields.is_empty() {
                     return err(None, "bit-field constants are not supported yet (M3)");
@@ -258,6 +258,41 @@ impl Cg<'_> {
                 self.m.const_struct(t, &elems).map_err(|e| ir_err(&e))
             }
             IrType::Void | IrType::Vector(..) => err(None, "vector constants are not supported yet (M3)"),
+        }
+    }
+
+    /// A union constant (clang `ConstStructBuilder` for unions): the active
+    /// member then `undef` padding, as the union's IR type when the element
+    /// types match it, else a literal struct.
+    fn union_const(&mut self, img: &Img, off: u64, t: LTy, size: u64, e: Option<ExprId>) -> R<Value> {
+        let e = e.map(|x| self.strip_init(x));
+        let ile = e.filter(|&x| self.ast.exprs.get(x).kind() == ExprKind::InitListExpr);
+        let active = ile.and_then(|x| self.ast.exprs.init_list(x).union_field);
+        let Some(f) = active else {
+            if (0..size).all(|i| img.byte(off + i) == 0) && img.relocs.is_empty() {
+                return Ok(self.m.const_zero(t));
+            }
+            return err(None, "union constant without an active member");
+        };
+        let sub = ile.and_then(|x| {
+            let l = self.ast.exprs.init_list_inits(x);
+            self.ast.lists.get(l).first().map(|&i| ExprId::new(i))
+        });
+        let fq = self.ast.decls.get(f).ty().expect("field type");
+        let fit = self.tys.convert(fq);
+        let c = self.image_const(img, off, &fit, sub)?;
+        let (fs, _) = self.tys.size_align(&fit);
+        let mut elems = vec![c];
+        if size > fs {
+            let pt = self.m.types.array(LTy::I8, size - fs);
+            elems.push(self.m.const_undef(pt));
+        }
+        let want = self.m.types.struct_fields(t).map(<[LTy]>::to_vec).unwrap_or_default();
+        let got: Vec<LTy> = elems.iter().map(|&v| self.m.const_type(v)).collect();
+        if want == got {
+            self.m.const_struct(t, &elems).map_err(|e| ir_err(&e))
+        } else {
+            self.m.const_anon_struct(&elems, false).map_err(|e| ir_err(&e))
         }
     }
 

@@ -344,13 +344,7 @@ impl Cg<'_> {
                 }
                 return self.emit_scalar_opt(s);
             }
-            CastKind::NoOp | CastKind::BitCast | CastKind::LValueBitCast => {
-                if self.is_glvalue(s) && !self.is_glvalue(e) {
-                    let lv = self.emit_lvalue(s)?;
-                    return Ok(Some(self.load_lv(lv)));
-                }
-                return self.emit_scalar_opt(s);
-            }
+            CastKind::NoOp | CastKind::BitCast | CastKind::LValueBitCast => return self.emit_scalar_opt(s),
             CastKind::ToVoid => {
                 self.emit_ignored(s)?;
                 return Ok(None);
@@ -552,10 +546,24 @@ impl Cg<'_> {
                 self.gep(ety, p, vec![idx], true)
             }
             BinaryOp::Add => {
-                if float { self.bin(BinOp::FAdd, Flags::NONE, l, r) } else { self.bin(BinOp::Add, nsw, l, r) }
+                if float {
+                    match self.try_fmuladd(l, r, false) {
+                        Some(v) => v,
+                        None => self.bin(BinOp::FAdd, Flags::NONE, l, r),
+                    }
+                } else {
+                    self.bin(BinOp::Add, nsw, l, r)
+                }
             }
             BinaryOp::Sub => {
-                if float { self.bin(BinOp::FSub, Flags::NONE, l, r) } else { self.bin(BinOp::Sub, nsw, l, r) }
+                if float {
+                    match self.try_fmuladd(l, r, true) {
+                        Some(v) => v,
+                        None => self.bin(BinOp::FSub, Flags::NONE, l, r),
+                    }
+                } else {
+                    self.bin(BinOp::Sub, nsw, l, r)
+                }
             }
             BinaryOp::Mul => {
                 if float { self.bin(BinOp::FMul, Flags::NONE, l, r) } else { self.bin(BinOp::Mul, nsw, l, r) }
@@ -619,6 +627,69 @@ impl Cg<'_> {
             }
             op => return err(self.loc_of(e), format!("binary {op:?} is not supported yet")),
         })
+    }
+
+    /// The `fneg` instruction `v` negates, if unused with a single-use
+    /// operand (clang `tryEmitFMulAdd` peeking through `fneg`).
+    fn peek_fneg(&self, v: V) -> Option<V> {
+        let V::I(i) = v else { return None };
+        let Op::FNeg { v: x } = *self.f.fir.op(i) else { return None };
+        (self.f.fir.uses(v) == 0 && self.f.fir.uses(x) == 1).then_some(x)
+    }
+
+    fn is_fmul(&self, v: V) -> bool {
+        let V::I(i) = v else { return false };
+        matches!(self.f.fir.op(i), Op::Bin { op: BinOp::FMul, .. })
+    }
+
+    /// clang `tryEmitFMulAdd` (`-ffp-contract=on`): fuse an unused `fmul`
+    /// operand of an `fadd`/`fsub` into `llvm.fmuladd`.
+    fn try_fmuladd(&mut self, l: V, r: V, sub: bool) -> Option<V> {
+        let nl = self.peek_fneg(l);
+        let nr = self.peek_fneg(r);
+        let lm = nl.unwrap_or(l);
+        let rm = nr.unwrap_or(r);
+        if self.is_fmul(lm) && (nl.is_some() || self.f.fir.uses(lm) == 0) {
+            if nl.is_some() {
+                self.f.fir.erase(Fir::last_inst(l));
+            }
+            return Some(self.build_fmuladd(lm, r, nl.is_some(), sub));
+        }
+        if self.is_fmul(rm) && (nr.is_some() || self.f.fir.uses(rm) == 0) {
+            if nr.is_some() {
+                self.f.fir.erase(Fir::last_inst(r));
+            }
+            return Some(self.build_fmuladd(rm, l, nr.is_some(), !sub));
+        }
+        None
+    }
+
+    fn build_fmuladd(&mut self, mul: V, addend: V, neg_mul: bool, neg_add: bool) -> V {
+        let mi = Fir::last_inst(mul);
+        let Op::Bin { l: a, r: b, .. } = *self.f.fir.op(mi) else { unreachable!("fmul") };
+        let a = if neg_mul { self.fneg(a) } else { a };
+        let addend = if neg_add { self.fneg(addend) } else { addend };
+        let ty = self.f.fir.ty(&self.m, addend);
+        let name = kiln_llvm::intrinsics::overloaded_name(&self.m, "llvm.fmuladd", &[ty]);
+        let fn_ty = self.m.types.function(ty, &[ty, ty, ty], false);
+        let f = kiln_llvm::intrinsics::intrinsic(&mut self.m, &name, fn_ty).expect("fmuladd declaration");
+        let fa = self.m.attr_set(&[
+            Attr::Flag(AttrKind::NoCallback),
+            Attr::Flag(AttrKind::NoFree),
+            Attr::Flag(AttrKind::NoSync),
+            Attr::Flag(AttrKind::NoUnwind),
+            Attr::Flag(AttrKind::Speculatable),
+            Attr::Flag(AttrKind::WillReturn),
+            Attr::Memory(kiln_llvm::MemoryEffects::all(kiln_llvm::ModRef::None)),
+        ]);
+        self.m.func_mut(f).attrs.func = fa;
+        let c = self.f.fir.push(
+            Op::Call { fn_ty, callee: V::C(Value::func(f)), args: vec![a, b, addend], opts: Box::default() },
+            ty,
+        );
+        self.f.calls.push((Fir::last_inst(c), Some(f), true));
+        self.f.fir.erase(mi);
+        c
     }
 
     /// clang `VisitBinLAnd` / `VisitBinLOr`.
@@ -707,10 +778,6 @@ impl Cg<'_> {
         let ast = self.ast;
         let c = self.sub(e);
         let [a, b] = ast.exprs.cond_arms(e);
-        if self.is_glvalue(e) {
-            let lv = self.emit_lvalue(e)?;
-            return Ok(Some(self.load_lv(lv)));
-        }
         if let Some(x) = self.fold_bool(c) {
             return self.emit_scalar_opt(if x { a } else { b });
         }

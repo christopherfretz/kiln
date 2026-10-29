@@ -813,6 +813,11 @@ impl Cg<'_> {
                     Some(self.mk_float(to, sext(a, w) as f64))
                 }
                 (CastOp::UIToFP, None) if to == LTy::DOUBLE || to == LTy::FLOAT => Some(self.mk_float(to, a as f64)),
+                (CastOp::SIToFP | CastOp::UIToFP, None) if self.m.types.float_width(to) == Some(128) => {
+                    let neg = op == CastOp::SIToFP && sext(a, w) < 0;
+                    let mag = if neg { sext(a, w).unsigned_abs() } else { a };
+                    Some(V::C(self.m.const_float_bits(to, int_to_f128_bits(neg, mag))))
+                }
                 _ => None,
             };
             if let Some(r) = r {
@@ -909,6 +914,33 @@ fn fold_int_bin(op: BinOp, a: u128, b: u128, w: u32) -> Option<u128> {
 }
 
 /// Sign-extends the low `w` bits of `a`.
+/// The IEEE binary128 encoding of `±mag` (round to nearest, ties to even).
+fn int_to_f128_bits(neg: bool, mag: u128) -> u128 {
+    if mag == 0 {
+        return 0;
+    }
+    let sign = u128::from(neg) << 127;
+    let e = 127 - mag.leading_zeros();
+    let frac_mask = (1u128 << 112) - 1;
+    if e <= 112 {
+        let m = mag << (112 - e);
+        return sign | (u128::from(e + 16383) << 112) | (m & frac_mask);
+    }
+    let shift = e - 112;
+    let mut m = mag >> shift;
+    let rem = mag & ((1u128 << shift) - 1);
+    let half = 1u128 << (shift - 1);
+    let mut e = e;
+    if rem > half || (rem == half && m & 1 == 1) {
+        m += 1;
+        if m >> 113 != 0 {
+            m >>= 1;
+            e += 1;
+        }
+    }
+    sign | (u128::from(e + 16383) << 112) | (m & frac_mask)
+}
+
 pub(crate) fn sext(a: u128, w: u32) -> i128 {
     if w == 0 || w >= 128 {
         return a as i128;
