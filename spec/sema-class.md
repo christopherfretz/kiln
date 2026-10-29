@@ -937,8 +937,19 @@ polymorphic classes) for `final_overrider`/vtable cache size.
   covers only rewritten/reversed candidates. *Recommend* a WP after 067a and
   068b in `class/compare.rs`, reusing §4.2 deletedness and §4.6 constexpr.
 
-### Supervisor decisions
-*(placeholder — the supervisor records decisions on Q1–Q11 here.)*
+### Supervisor decisions (2026-10-28, binding)
+- **Q1** clang's eager/lazy policy (goldens must match clang's `implicit` lines).
+- **Q2** yes: `Ast.virtuals`, `SemaBridge::final_overrider`, `SubobjectId` is the shared currency (WP-076 adopts it).
+- **Q3** yes: NSDMIs and default arguments share the stored initializer with a `used_ctx` payload (Deviation 1 is accepted).
+- **Q4** yes: P0847 declarations in 066b, calls in 068a.
+- **Q5** yes: rename to `TypeSpecKind` in 066a.
+- **Q6** no caches in M3; `bench/frontend/classes.cpp` decides later.
+- **Q7** approved: the unique-candidate approximation with `sema_unsupported` (never a different answer); 068a replaces it keeping 067's tests green.
+- **Q8** yes: delete `kiln_oven::VTableLayout`; the Itanium layout lives in `kiln_abi::vtable`; the `SemaBridge` trait change is approved (pre-M3, three impls).
+- **Q9** yes: BACKLOG rows replaced by 066a/b/c, 067a/b, 078a/b; 066a gates; WP-065 now needs 066a.
+- **Q10** approved (write-once / append-only additions to ast.md §2.4).
+- **Q11** new **WP-082** defaulted comparisons ([class.compare]) in `class/compare.rs`, after 067a and 068b.
+- Inconsistencies 1–11 listed in the handback are assigned: ROADMAP (1) fixed by the supervisor now; types.md (2), sema.md (3), ast.md (4), sema-conv.md (7), the normalizer keys (9), sema-overload.md §7 ownership (10) are fixed by WP-066a in the same PR; (5), (6), (8) are Q5/Q8/Q10.
 
 ## Deviations from clang 19
 1. `CXXDefaultInitExpr`/`CXXDefaultArgExpr` always share the stored
