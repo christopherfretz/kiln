@@ -189,6 +189,9 @@ impl Parser<'_, '_> {
     /// cast-expression ([expr.cast]) and unary-expression ([expr.unary]).
     pub(crate) fn parse_cast_expr(&mut self) -> PExpr {
         let loc = self.loc();
+        if self.at_global_new_delete() {
+            return self.parse_new_delete_expr();
+        }
         if let Some(p) = Self::punct_of(self.tok()) {
             let op = match p {
                 Punct::PlusPlus => Some(UnaryOp::PreInc),
@@ -225,7 +228,8 @@ impl Parser<'_, '_> {
                 return self.parse_cast_expr();
             }
             Some(Kw::Noexcept) => return self.parse_noexcept_expr(),
-            Some(k @ (Kw::New | Kw::Delete | Kw::CoAwait)) => {
+            Some(Kw::New | Kw::Delete) => return self.parse_new_delete_expr(),
+            Some(k @ Kw::CoAwait) => {
                 self.unsupported(&format!("'{}' expressions", k.spelling()), loc);
                 return None;
             }
@@ -316,7 +320,12 @@ impl Parser<'_, '_> {
 
     /// postfix-expression ([expr.post]).
     fn parse_postfix_expr(&mut self) -> PExpr {
-        let mut e = self.parse_primary_expr()?;
+        let e = self.parse_primary_expr()?;
+        self.parse_postfix_suffix(e)
+    }
+
+    /// The postfix operators applied to `e`.
+    pub(crate) fn parse_postfix_suffix(&mut self, mut e: kiln_ast::ExprId) -> PExpr {
         loop {
             let loc = self.loc();
             match Self::punct_of(self.tok()) {

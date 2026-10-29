@@ -704,6 +704,8 @@ diag_ids! {
     sema_converting_pointer_to_int = Error (2) "incompatible pointer to integer conversion converting {0} to type {1}";
     sema_new_array_of_auto = Error (0) "cannot allocate array of 'auto'";
     sema_new_function_type = Error (1) "cannot allocate function type {0} with new";
+    // clang: an ExtWarn with no group (kiln prints ExtWarn as -Wpedantic).
+    sema_new_paren_array_nonconst = Warning (0) "when type is in parentheses, array cannot have dynamic size";
     sema_placement_new_no_operator = Error (1) "no matching {0} function for non-allocating placement new expression; include <new>";
 }
 

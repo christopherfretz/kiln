@@ -1852,7 +1852,7 @@ impl Sema<'_, '_> {
 
     /// clang's "candidate function not viable" detail for an arity
     /// mismatch.
-    fn arity_detail(&self, d: DeclId, n: usize, have: usize, variadic: bool) -> String {
+    pub(crate) fn arity_detail(&self, d: DeclId, n: usize, have: usize, variadic: bool) -> String {
         let provided = match have {
             0 => "no arguments were provided".to_owned(),
             1 => "1 was provided".to_owned(),
@@ -2380,7 +2380,7 @@ impl Sema<'_, '_> {
 }
 
 /// "1st", "2nd", "3rd", "4th", ...
-fn ordinal(n: usize) -> String {
+pub(crate) fn ordinal(n: usize) -> String {
     let suffix = match (n % 10, n % 100) {
         (1, x) if x != 11 => "st",
         (2, x) if x != 12 => "nd",

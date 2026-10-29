@@ -848,7 +848,10 @@ impl Sema<'_, '_> {
                 prev_ok = p;
             } else {
                 // todo(WP-068b): other operator functions.
-                self.unsupported("operator functions other than 'operator new' and 'operator delete'", d.name_loc());
+                self.unsupported(
+                    "operator functions other than 'operator new' and 'operator delete'",
+                    d.name_loc(),
+                );
             }
         } else if let Some(p) = self.find_prev_linkage(name, d.qualifier) {
             let pn = *self.ast.decls.get(p);

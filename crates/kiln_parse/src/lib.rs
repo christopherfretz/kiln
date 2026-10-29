@@ -10,6 +10,7 @@ mod attr;
 mod decl;
 mod expr;
 pub mod keywords;
+mod new_delete;
 mod parser;
 mod pragma;
 mod stmt;

@@ -10,7 +10,7 @@
 use kiln_ast::decl::{DeclFlags, DeclKind, DefinitionBits, EnumData, FnSpec};
 use kiln_ast::expr::{ExprFlags, ExprKind, NewExtra, NewInitStyle, Radix};
 use kiln_ast::names::{DeclName, OverloadedOperator};
-use kiln_ast::types::{ExcSpec, FuncInfo};
+use kiln_ast::types::{ExcSpec, FuncInfo, Nns, TagKeyword};
 use kiln_ast::{DeclHead, DeclId, ExprId, QualType};
 use kiln_diag::DiagId;
 use kiln_source::Loc;
@@ -115,8 +115,8 @@ impl Sema<'_, '_> {
         let mut ids = Vec::with_capacity(params.len());
         for (i, &p) in params.iter().enumerate() {
             let idx = u16::try_from(i).unwrap_or(u16::MAX);
-            let pd = self.builder().param(f, DeclName::EMPTY, Loc::INVALID, p, idx, 0);
-            self.ast.decls.set_flags(pd, DeclFlags::IMPLICIT);
+            let ph = DeclHead::new(f, DeclName::EMPTY, Loc::INVALID).flags(DeclFlags::IMPLICIT);
+            let pd = self.builder().param_head(ph, p, idx, 0);
             ids.push(pd);
         }
         let _ = self.builder().set_params(f, &ids);
@@ -143,7 +143,7 @@ impl Sema<'_, '_> {
                 .into_iter()
                 .find(|&d| self.kind_of(d) == DeclKind::Enum)
         {
-            return self.tag_type(e);
+            return self.std_qualified(ns, e);
         }
         let ns = ns.unwrap_or_else(|| {
             let h = DeclHead::new(tu, std, Loc::INVALID).flags(DeclFlags::IMPLICIT);
@@ -152,7 +152,16 @@ impl Sema<'_, '_> {
         let size = self.size_type();
         let h = DeclHead::new(ns, avt, Loc::INVALID).flags(DeclFlags::IMPLICIT);
         let e = self.builder().enumeration(h, EnumData::SCOPED, Some((size, size)), None);
-        self.tag_type(e)
+        self.std_qualified(ns, e)
+    }
+
+    /// The type of tag `d` in namespace `ns`, printed `std::name` as
+    /// clang prints the bare `TagType` it uses.
+    fn std_qualified(&mut self, ns: DeclId, d: DeclId) -> QualType {
+        let t = self.tag_type(d);
+        let ns = self.ast.first(ns);
+        let n = self.ast.types.nns(Nns::Namespace { prefix: None, ns });
+        self.ast.types.elaborated(TagKeyword::None, Some(n), t)
     }
 
     /// The global `operator op` whose parameter types are `params`.
@@ -171,7 +180,9 @@ impl Sema<'_, '_> {
     /// The parameter types of function `f` and whether it is variadic.
     fn fn_params(&self, f: DeclId) -> Option<(Vec<QualType>, bool)> {
         let ty = self.ast.decls.get(f).ty()?;
-        let p = self.ast.types.proto(ty)?;
+        // The written (sugared) proto when the type is one, so that
+        // diagnostics print `std::align_val_t` as clang does.
+        let p = self.ast.types.proto_of(ty.ty()).or_else(|| self.ast.types.proto(ty))?;
         Some((self.ast.types.params(p).to_vec(), p.info().variadic()))
     }
 
@@ -252,12 +263,12 @@ impl Sema<'_, '_> {
         }
         // Every later bound is a converted constant expression of type
         // `std::size_t` ([expr.new]/6).
-        let mut later: Vec<Option<u64>> = Vec::new();
-        for &(size, _) in arrays.iter().skip(1) {
+        let mut later: Vec<(Option<u64>, Loc)> = Vec::new();
+        for &(size, at) in arrays.iter().skip(1) {
             match size {
-                None => later.push(None),
+                None => later.push((None, at)),
                 Some(e) => match self.new_later_bound(e) {
-                    Some(n) => later.push(Some(n)),
+                    Some(n) => later.push((Some(n), self.begin_loc(e))),
                     None => return self.recover_err(&kids, loc),
                 },
             }
@@ -284,9 +295,16 @@ impl Sema<'_, '_> {
             return self.recover_err(&kids, loc);
         }
         // The later bounds, outermost last.
-        for n in later.iter().rev() {
+        for &(n, at) in later.iter().rev() {
             elem = match n {
-                Some(n) => self.ast.types.constant_array(elem, *n, None),
+                Some(n) => {
+                    if self.array_too_large(n, elem) {
+                        let msg = self.diag(DiagId::sema_array_too_large, at).arg(n.to_string());
+                        self.emit(msg);
+                        return self.recover_err(&kids, loc);
+                    }
+                    self.ast.types.constant_array(elem, n, None)
+                }
                 None => self.ast.types.incomplete_array(elem),
             };
         }
@@ -317,6 +335,10 @@ impl Sema<'_, '_> {
                 Some((c, v)) => {
                     array_size = Some(c);
                     const_bound = v;
+                    if tid.parenthesized && v.is_none() {
+                        let at = self.begin_loc(e);
+                        self.error(DiagId::sema_new_paren_array_nonconst, at);
+                    }
                 }
                 None => return self.recover_err(&kids, loc),
             }
@@ -332,7 +354,8 @@ impl Sema<'_, '_> {
         // todo(WP-068b): a class element type's own `operator new` (unless
         // `::new`) is looked up in the class first ([expr.new]/12).
         let _ = global;
-        let place_args: Vec<ExprId> = placement.as_ref().map(|p| p.args.clone()).unwrap_or_default();
+        let place_args: Vec<ExprId> =
+            placement.as_ref().map(|p| p.args.clone()).unwrap_or_default();
         let Some((op_new, with_align)) = self.find_operator_new(op, &place_args, pass_align) else {
             let ptr_like = place_args.len() == 1 && {
                 let t = self.ast.exprs.get(place_args[0]).ty();
@@ -347,6 +370,7 @@ impl Sema<'_, '_> {
                 let msg = self
                     .diag(DiagId::sema_ovl_no_viable_function_in_call, loc)
                     .arg(op_spelling(op));
+                let msg = self.operator_new_candidate_notes(msg, op, &place_args);
                 self.emit(msg);
             }
             return self.recover_err(&kids, loc);
@@ -359,7 +383,8 @@ impl Sema<'_, '_> {
         for (i, &a) in place_args.iter().enumerate() {
             let c = match params.get(skip + i) {
                 Some(&pt) => {
-                    let to = if self.ast.types.is_reference(pt) { pt } else { conv::strip_cv(self, pt) };
+                    let to =
+                        if self.ast.types.is_reference(pt) { pt } else { conv::strip_cv(self, pt) };
                     self.convert_for_init(a, to, ConvCtx::Argument)
                 }
                 None if variadic => {
@@ -372,7 +397,8 @@ impl Sema<'_, '_> {
         }
         // The matching deallocation function, called if the
         // initialization throws ([expr.new]/28).
-        let op_delete = self.matching_operator_delete(array_form, placement.is_some(), &params, pass_align);
+        let op_delete =
+            self.matching_operator_delete(array_form, placement.is_some(), &params, pass_align);
         if let Some(od) = op_delete {
             self.mark_used(od);
         }
@@ -423,7 +449,12 @@ impl Sema<'_, '_> {
 
     /// `new auto(e)` / `new auto{e}`: the type deduced from the single
     /// initializer ([expr.new]/2, [dcl.type.auto.deduct]).
-    fn deduce_new_auto(&mut self, declared: QualType, init: &NewInit, loc: Loc) -> Option<QualType> {
+    fn deduce_new_auto(
+        &mut self,
+        declared: QualType,
+        init: &NewInit,
+        loc: Loc,
+    ) -> Option<QualType> {
         let exprs: Vec<ExprId> = match init {
             NewInit::None => Vec::new(),
             NewInit::Paren(v, ..) => v.clone(),
@@ -435,16 +466,14 @@ impl Sema<'_, '_> {
             NewInit::None => 0,
         };
         if items == 0 {
-            let msg = self
-                .diag(DiagId::sema_new_auto_requires_ctor_arg, loc)
-                .arg(self.ty_arg(declared));
+            let msg =
+                self.diag(DiagId::sema_new_auto_requires_ctor_arg, loc).arg(self.ty_arg(declared));
             self.emit(msg);
             return None;
         }
         if items > 1 || exprs.len() != 1 {
             let at = exprs.get(1).map_or(loc, |&e| self.begin_loc(e));
-            let msg =
-                self.diag(DiagId::sema_new_auto_multiple_args, at).arg(self.ty_arg(declared));
+            let msg = self.diag(DiagId::sema_new_auto_multiple_args, at).arg(self.ty_arg(declared));
             self.emit(msg);
             return None;
         }
@@ -568,7 +597,9 @@ impl Sema<'_, '_> {
         }
         let scoped = t.as_enum(ety).is_some_and(|en| self.is_scoped_enum(en));
         let class = t.as_record(ety).is_some();
-        if scoped || self.is_nullptr_type(ety) || class && !conv::has_conversion_functions(self, ety)
+        if scoped
+            || self.is_nullptr_type(ety)
+            || class && !conv::has_conversion_functions(self, ety)
         {
             let msg = self
                 .diag(DiagId::sema_converting_to_incompatible, at)
@@ -653,7 +684,9 @@ impl Sema<'_, '_> {
                         return true;
                     }
                 }
-                NewInit::Paren(..) => "parenthesized initialization of a class type in a new-expression",
+                NewInit::Paren(..) => {
+                    "parenthesized initialization of a class type in a new-expression"
+                }
             }
         };
         self.unsupported(what, at);
@@ -713,6 +746,79 @@ impl Sema<'_, '_> {
             }
         }
         None
+    }
+
+    /// clang's candidate notes for a failed `operator new` lookup: the
+    /// candidates with a bad argument conversion first, then those with
+    /// the wrong number of parameters, closest arity first (an
+    /// approximation of `CompareOverloadCandidatesForDisplay`).
+    fn operator_new_candidate_notes(
+        &mut self,
+        mut msg: kiln_diag::Diag,
+        op: OverloadedOperator,
+        place: &[ExprId],
+    ) -> kiln_diag::Diag {
+        let tu = self.ast.tu;
+        let cands = self.ast.lookup_local(tu, DeclName::operator(op)).to_vec();
+        let have = 1 + place.len();
+        let size_t = self.size_type();
+        let mut bad: Vec<(bool, Loc, String)> = Vec::new();
+        let mut arity: Vec<(usize, bool, Loc, String)> = Vec::new();
+        for f in cands {
+            let Some((ps, variadic)) = self.fn_params(f) else { continue };
+            let implicit = self.ast.decls.get(f).flags().contains(DeclFlags::IMPLICIT);
+            let fl = if implicit { Loc::INVALID } else { self.ast.decls.get(f).loc() };
+            let n = ps.len();
+            if have < n || (have > n && !variadic) {
+                let detail = self.arity_detail(f, n, have, variadic);
+                arity.push((n.abs_diff(have), implicit, fl, detail));
+                continue;
+            }
+            let args: Vec<(QualType, Option<ExprId>)> = std::iter::once((size_t, None))
+                .chain(place.iter().map(|&a| (self.ast.exprs.get(a).ty(), Some(a))))
+                .collect();
+            for (i, (&(aty, a), &p)) in args.iter().zip(&ps).enumerate() {
+                let ok = match a {
+                    Some(a) => self.placement_arg_match(a, p).is_some(),
+                    None => self.ast.types.same_type(aty, p),
+                };
+                if ok {
+                    continue;
+                }
+                let mut detail = format!(
+                    "no known conversion from {} to {} for {} argument",
+                    self.ty_arg(aty),
+                    self.ty_arg(p),
+                    crate::expr::ordinal(i + 1)
+                );
+                let t = &self.ast.types;
+                if t.is_pointer(aty)
+                    && t.pointee(aty).is_some_and(|x| {
+                        t.same_unqualified(x, p) || t.is_arithmetic(x) && t.is_arithmetic(p)
+                    })
+                {
+                    detail.push_str("; dereference the argument with *");
+                } else if t.is_pointer(p)
+                    && t.pointee(p).is_some_and(|x| t.same_unqualified(x, aty))
+                {
+                    detail.push_str("; take the address of the argument with &");
+                }
+                bad.push((implicit, fl, detail));
+                break;
+            }
+        }
+        bad.sort_by_key(|b| b.0);
+        arity.sort_by_key(|a| (a.0, !a.1));
+        let notes: Vec<(Loc, String)> = bad
+            .into_iter()
+            .map(|(_, l, d)| (l, d))
+            .chain(arity.into_iter().map(|(_, _, l, d)| (l, d)))
+            .collect();
+        for (l, d) in notes {
+            let note = self.diag(DiagId::note_ovl_candidate_not_viable, l).arg(d);
+            msg = msg.with_note(note);
+        }
+        msg
     }
 
     /// An approximation of overload resolution's viability check for a
@@ -822,7 +928,7 @@ impl Sema<'_, '_> {
                         Ok((Some(e), None))
                     }
                     _ => {
-                        let msg = self.diag(DiagId::sema_excess_initializers, self.begin_loc(v[1])).arg("2");
+                        let msg = self.diag(DiagId::sema_excess_initializers, at).arg("2");
                         self.emit(msg);
                         Err(())
                     }
@@ -870,14 +976,23 @@ impl Sema<'_, '_> {
             let l = self.ast.exprs.init_list_inits(e);
             self.ast.lists.iter(l).collect()
         };
-        if inits.len() == 1 && self.string_lit_of(inits[0]).is_some_and(|_| {
-            self.ast.types.is_array(self.ast.exprs.get(inits[0]).ty())
-        }) {
+        if inits.len() == 1
+            && self
+                .string_lit_of(inits[0])
+                .is_some_and(|_| self.ast.types.is_array(self.ast.exprs.get(inits[0]).ty()))
+        {
             return e;
         }
         let elem = self.ast.types.element(n.ty()).unwrap_or(QualType::ERROR);
         let filler = self.filler(elem, rbrace);
-        self.builder().init_list(n.ty(), &inits, Some(filler), extra.union_field, n.loc(), extra.rbrace)
+        self.builder().init_list(
+            n.ty(),
+            &inits,
+            Some(filler),
+            extra.union_field,
+            n.loc(),
+            extra.rbrace,
+        )
     }
 
     // -- delete ---------------------------------------------------------------
@@ -903,7 +1018,15 @@ impl Sema<'_, '_> {
             flags = flags.with(ExprFlags::ARRAY_FORM).with(ExprFlags::ARRAY_AS_WRITTEN);
         }
         if self.is_err_expr(operand) {
-            return self.builder().cxx_delete(operand, None, flags, false, false, QualType::VOID, loc);
+            return self.builder().cxx_delete(
+                operand,
+                None,
+                flags,
+                false,
+                false,
+                QualType::VOID,
+                loc,
+            );
         }
         let ety = self.ast.exprs.get(operand).ty();
         let t = &self.ast.types;
@@ -931,8 +1054,11 @@ impl Sema<'_, '_> {
             self.emit(msg);
         } else if !self.is_complete(pointee) {
             complete = false;
-            let id =
-                if cxx26 { DiagId::sema_delete_incomplete } else { DiagId::sema_delete_incomplete_warn };
+            let id = if cxx26 {
+                DiagId::sema_delete_incomplete
+            } else {
+                DiagId::sema_delete_incomplete_warn
+            };
             let msg = self.diag(id, loc).arg(self.ty_arg(pointee));
             self.emit(self.incomplete_note(msg, pointee));
             if cxx26 {
@@ -958,7 +1084,10 @@ impl Sema<'_, '_> {
             let defn = self.ast.decls.record(def).map(|r| r.defn).unwrap_or_default();
             if !defn.contains(DefinitionBits::TRIVIAL_DTOR) {
                 // WP-067b / WP-076: destructor calls and array cookies.
-                self.unsupported("deleting an object of a class type with a non-trivial destructor", loc);
+                self.unsupported(
+                    "deleting an object of a class type with a non-trivial destructor",
+                    loc,
+                );
                 return self.recover_err(&[operand], loc);
             }
             // todo(WP-068b): unless `::delete`, the class's own

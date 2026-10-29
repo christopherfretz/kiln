@@ -23,8 +23,8 @@ use crate::decl::{
 };
 use crate::expr::{
     BinaryOp, CastKind, CharKind, CompoundAssignExtra, DeclRefExtra, ExprDeps, ExprFlags, ExprKind,
-    ExprNode, InitListExtra, NewExtra, NewInitStyle, NonOdrUse, ObjectKind, Radix, StringKind, TraitKind, UnaryOp,
-    ValueCategory,
+    ExprNode, InitListExtra, NewExtra, NewInitStyle, NonOdrUse, ObjectKind, Radix, StringKind,
+    TraitKind, UnaryOp, ValueCategory,
 };
 use crate::ids::{
     AttrId, ConstValueId, DeclId, ExprId, ListId, QualType, RawId, StmtId, StringLitId, TypeId,
@@ -586,9 +586,15 @@ impl<'a> AstBuilder<'a> {
         index: u16,
         flags: u16,
     ) -> DeclId {
+        self.param_head(DeclHead::new(func, name, loc), ty, index, flags)
+    }
+
+    /// A parameter declared by `head` (whose context is the function), for
+    /// implicit parameters (`DeclFlags::IMPLICIT`).
+    pub fn param_head(&mut self, head: DeclHead, ty: QualType, index: u16, flags: u16) -> DeclId {
         let payload =
             Payload::Param(ParamData { default_arg: None, original_ty: None, index, flags });
-        self.add(DeclHead::new(func, name, loc), DeclKind::ParmVar, Some(ty), payload, None)
+        self.add(head, DeclKind::ParmVar, Some(ty), payload, None)
     }
 
     /// Sets the parameter list of `func`.

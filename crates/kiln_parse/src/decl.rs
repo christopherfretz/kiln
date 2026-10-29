@@ -933,7 +933,7 @@ impl Parser<'_, '_> {
     }
 
     /// The cv-qualifiers (and attributes) after a `*`.
-    fn parse_ptr_cv(&mut self) -> Quals {
+    pub(crate) fn parse_ptr_cv(&mut self) -> Quals {
         let mut q = Quals::NONE;
         loop {
             let (add, sp) = match self.kw() {
@@ -983,6 +983,11 @@ impl Parser<'_, '_> {
             self.skip_attributes();
             self.parse_declarator(d);
             self.expect_closing(Punct::RParen, Punct::LParen, open);
+        } else if self.at_kw(Kw::Operator)
+            && d.ctx != DeclaratorContext::TypeName
+            && matches!(self.kw_of(self.peek(1)), Some(Kw::New | Kw::Delete))
+        {
+            self.parse_new_delete_operator_id(d);
         } else if self.at(Punct::Tilde) || self.at_kw(Kw::Operator) {
             self.unsupported("special member functions", self.loc());
             d.invalid = true;
