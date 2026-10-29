@@ -23,7 +23,7 @@ use crate::decl::{
 };
 use crate::expr::{
     BinaryOp, CastKind, CharKind, CompoundAssignExtra, DeclRefExtra, ExprDeps, ExprFlags, ExprKind,
-    ExprNode, InitListExtra, NonOdrUse, ObjectKind, Radix, StringKind, TraitKind, UnaryOp,
+    ExprNode, InitListExtra, NewExtra, NewInitStyle, NonOdrUse, ObjectKind, Radix, StringKind, TraitKind, UnaryOp,
     ValueCategory,
 };
 use crate::ids::{
@@ -1342,6 +1342,76 @@ impl<'a> AstBuilder<'a> {
             Loc::INVALID,
             0,
             0,
+        )
+    }
+
+    /// A `CXXNewExpr` ([expr.new], §5.9): a prvalue of pointer type `ty`
+    /// starting at `loc` (`::` or `new`); `extra` holds the allocated type,
+    /// the converted array size, initializer and placement arguments and the
+    /// allocation / deallocation functions; `end` is the last token.
+    pub fn cxx_new(
+        &mut self,
+        ty: QualType,
+        flags: ExprFlags,
+        style: NewInitStyle,
+        extra: NewExtra,
+        loc: Loc,
+        end: Loc,
+    ) -> ExprId {
+        let mut deps = self.type_deps(ty) | self.type_deps(extra.allocated_ty);
+        for e in [extra.array_size, extra.init].into_iter().flatten() {
+            deps |= self.deps(e);
+        }
+        if let Some(p) = extra.placement {
+            let args: Vec<ExprId> = self.ast.lists.iter::<ExprId>(p).collect();
+            for e in args {
+                deps |= self.deps(e);
+            }
+        }
+        let side = self.ast.exprs.push_new_extra(extra);
+        let e = self.push_expr(
+            ExprKind::CXXNewExpr,
+            ValueCategory::PRValue,
+            ObjectKind::Ordinary,
+            flags,
+            deps,
+            style as u8,
+            ty,
+            loc,
+            side,
+            0,
+        );
+        self.ast.exprs.cold.end_loc.insert(e, end).expect("fresh expression");
+        e
+    }
+
+    /// A `CXXDeleteExpr` ([expr.delete], §5.9): a `void` prvalue deleting
+    /// `operand` with `operator_delete`; `sized`/`aligned` say whether the
+    /// size and the alignment are passed to it.
+    #[allow(clippy::too_many_arguments, reason = "one per payload field")]
+    pub fn cxx_delete(
+        &mut self,
+        operand: ExprId,
+        operator_delete: Option<DeclId>,
+        flags: ExprFlags,
+        sized: bool,
+        aligned: bool,
+        ty: QualType,
+        loc: Loc,
+    ) -> ExprId {
+        let deps = self.type_deps(ty) | self.deps(operand);
+        let aux = u8::from(sized) | (u8::from(aligned) << 1);
+        self.push_expr(
+            ExprKind::CXXDeleteExpr,
+            ValueCategory::PRValue,
+            ObjectKind::Ordinary,
+            flags,
+            deps,
+            aux,
+            ty,
+            loc,
+            operand.raw(),
+            operator_delete.map_or(0, DeclId::raw),
         )
     }
 

@@ -475,6 +475,11 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                     }
                 }
             }
+            ExprKind::CXXNewExpr | ExprKind::CXXDeleteExpr => {
+                for c in exprs.children(e, lists) {
+                    kids.push((Node::Expr(c), None));
+                }
+            }
             _ => {}
         }
     }
@@ -1175,6 +1180,23 @@ impl<'a, W: io::Write> Dumper<'a, W> {
             ExprKind::ConstantExpr => {
                 if let Some(v) = exprs.constant_value(e) {
                     self.value(v);
+                }
+            }
+            ExprKind::CXXNewExpr | ExprKind::CXXDeleteExpr => {
+                if n.has(ExprFlags::GLOBAL) {
+                    self.line.push_str(" global");
+                }
+                if n.has(ExprFlags::ARRAY_FORM) {
+                    self.line.push_str(" array");
+                }
+                let f = if kind == ExprKind::CXXNewExpr {
+                    exprs.new_extra(e).operator_new
+                } else {
+                    exprs.operator_delete(e)
+                };
+                if let Some(f) = f {
+                    self.line.push(' ');
+                    self.decl_ref(f);
                 }
             }
             _ => {}

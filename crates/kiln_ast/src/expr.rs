@@ -212,6 +212,15 @@ impl ExprFlags {
     /// `DeclRefExpr` / `MemberExpr`: overload resolution chose among
     /// several candidates.
     pub const HAD_MULTIPLE_CANDIDATES: ExprFlags = ExprFlags(1 << 6);
+    /// `CXXNewExpr` / `CXXDeleteExpr`: `::new` / `::delete` (dump `global`).
+    pub const GLOBAL: ExprFlags = ExprFlags(1 << 4);
+    /// `CXXNewExpr`: an array new; `CXXDeleteExpr`: deletes an array
+    /// (`delete[]`, or `delete` of a pointer to array; dump `array`).
+    pub const ARRAY_FORM: ExprFlags = ExprFlags(1 << 5);
+    /// `CXXNewExpr`: the allocation function takes `std::align_val_t`.
+    pub const PASS_ALIGN: ExprFlags = ExprFlags(1 << 6);
+    /// `CXXDeleteExpr`: written `delete[]`.
+    pub const ARRAY_AS_WRITTEN: ExprFlags = ExprFlags(1 << 6);
 
     /// The raw bits (already shifted into bits 4..=7).
     pub const fn bits(self) -> u8 {
@@ -743,6 +752,55 @@ pub struct InitListExtra {
     pub rbrace: Loc,
 }
 
+/// How a `CXXNewExpr`'s initializer was written (its `aux`; clang's
+/// `CXXNewInitializationStyle`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(u8)]
+pub enum NewInitStyle {
+    /// No initializer: default-initialization.
+    None = 0,
+    /// `new T(args)`, including `new T()`.
+    Parens = 1,
+    /// `new T{args}`.
+    Braces = 2,
+}
+
+impl NewInitStyle {
+    /// The style with raw value `v`.
+    pub const fn from_u8(v: u8) -> Option<NewInitStyle> {
+        match v {
+            0 => Some(NewInitStyle::None),
+            1 => Some(NewInitStyle::Parens),
+            2 => Some(NewInitStyle::Braces),
+            _ => None,
+        }
+    }
+}
+
+/// Side record of a `CXXNewExpr` (spec/ast.md §5.9; [expr.new]).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct NewExtra {
+    /// The allocated type: the type of the created object, or for an array
+    /// new the element type (`int[4]` for `new int[n][4]`; clang's
+    /// `getAllocatedType`).
+    pub allocated_ty: QualType,
+    /// The first array bound, converted to `size_t` (synthesized from the
+    /// initializer for `new int[]{...}`); `None` for a non-array new.
+    pub array_size: Option<ExprId>,
+    /// The semantic initializer (`InitListExpr`, `ImplicitValueInitExpr`,
+    /// or the converted expression); `None` for default-initialization.
+    pub init: Option<ExprId>,
+    /// The converted placement arguments (a `ListId` of `ExprId`s).
+    pub placement: Option<ListId>,
+    /// The allocation function.
+    pub operator_new: Option<DeclId>,
+    /// The matching deallocation function (called if initialization
+    /// throws).
+    pub operator_delete: Option<DeclId>,
+    /// The start of the type-id (after any placement arguments).
+    pub type_loc: Loc,
+}
+
 /// Cold per-expression data.
 #[derive(Clone, Debug)]
 pub struct ColdExprData {
@@ -775,6 +833,7 @@ pub struct ExprArena {
     declref_extras: Vec<DeclRefExtra>,
     compound_assigns: Vec<CompoundAssignExtra>,
     init_lists: Vec<InitListExtra>,
+    news: Vec<NewExtra>,
     /// Cold per-expression data.
     pub cold: ColdExprData,
 }
@@ -800,6 +859,15 @@ impl Default for ExprArena {
             declref_extras: vec![DeclRefExtra::default()],
             compound_assigns: vec![CompoundAssignExtra { rhs: dummy_e, lhs_ty: qt, result_ty: qt }],
             init_lists: vec![InitListExtra::default()],
+            news: vec![NewExtra {
+                allocated_ty: qt,
+                array_size: None,
+                init: None,
+                placement: None,
+                operator_new: None,
+                operator_delete: None,
+                type_loc: Loc::INVALID,
+            }],
             cold: ColdExprData::default(),
         }
     }
@@ -850,6 +918,9 @@ impl ExprArena {
     }
     pub(crate) fn push_init_list(&mut self, x: InitListExtra) -> u32 {
         push_side(&mut self.init_lists, x)
+    }
+    pub(crate) fn push_new_extra(&mut self, x: NewExtra) -> u32 {
+        push_side(&mut self.news, x)
     }
 
     fn expect_kind(&self, e: ExprId, k: ExprKind) -> &ExprNode {
@@ -1089,6 +1160,35 @@ impl ExprArena {
         self.expect_kind(e, ExprKind::CXXNoexceptExpr).b != 0
     }
 
+    /// The side record of a `CXXNewExpr`.
+    pub fn new_extra(&self, e: ExprId) -> &NewExtra {
+        &self.news[self.expect_kind(e, ExprKind::CXXNewExpr).a as usize]
+    }
+
+    /// The initialization style of a `CXXNewExpr`.
+    pub fn new_init_style(&self, e: ExprId) -> NewInitStyle {
+        NewInitStyle::from_u8(self.expect_kind(e, ExprKind::CXXNewExpr).aux)
+            .expect("valid new init style")
+    }
+
+    /// The operand of a `CXXDeleteExpr` (converted to a pointer prvalue).
+    pub fn delete_operand(&self, e: ExprId) -> ExprId {
+        ExprId::new(self.expect_kind(e, ExprKind::CXXDeleteExpr).a)
+    }
+
+    /// The deallocation function of a `CXXDeleteExpr` (`None` when the
+    /// operand is erroneous).
+    pub fn operator_delete(&self, e: ExprId) -> Option<DeclId> {
+        DeclId::from_raw(self.expect_kind(e, ExprKind::CXXDeleteExpr).b)
+    }
+
+    /// Whether a `CXXDeleteExpr`'s deallocation function takes the size
+    /// (aux bit 0) and the alignment (aux bit 1).
+    pub fn delete_passes(&self, e: ExprId) -> (bool, bool) {
+        let aux = self.expect_kind(e, ExprKind::CXXDeleteExpr).aux;
+        (aux & 1 != 0, aux & 2 != 0)
+    }
+
     /// The single operand of a unary operator, cast, `ParenExpr`,
     /// `ConstantExpr` or `MemberExpr` (its base).
     pub fn operand(&self, e: ExprId) -> ExprId {
@@ -1187,6 +1287,15 @@ impl ExprArena {
                 v.extend(self.init_lists[n.b as usize].array_filler);
             }
             ExprKind::RecoveryExpr => v.extend(lists.iter::<ExprId>(ListId::new(n.a))),
+            ExprKind::CXXNewExpr => {
+                let x = &self.news[n.a as usize];
+                v.extend(x.array_size);
+                v.extend(x.init);
+                if let Some(p) = x.placement {
+                    v.extend(lists.iter::<ExprId>(p));
+                }
+            }
+            ExprKind::CXXDeleteExpr => v.extend(id(n.a)),
             _ => {}
         }
         v
@@ -1196,13 +1305,14 @@ impl ExprArena {
         self.vec_rows().iter().map(|r| r.live_bytes).sum()
     }
 
-    fn vec_rows(&self) -> [MemRow; 5] {
+    fn vec_rows(&self) -> [MemRow; 6] {
         [
             MemRow::of_vec("nodes", &self.nodes),
             MemRow::of_vec("cond_arms", &self.cond_arms),
             MemRow::of_vec("declref_extras", &self.declref_extras),
             MemRow::of_vec("compound_assigns", &self.compound_assigns),
             MemRow::of_vec("init_lists", &self.init_lists),
+            MemRow::of_vec("news", &self.news),
         ]
     }
 }

@@ -153,8 +153,8 @@ pub const TABLE: &[(&str, Disposition)] = &[
     ("CXXBindTemporaryExpr", Unsupported(NOT_M2)),
     ("MaterializeTemporaryExpr", Unsupported(NOT_M2)),
     ("ExprWithCleanups", Unsupported(NOT_M2)),
-    ("CXXNewExpr", Unsupported(NOT_M2)),
-    ("CXXDeleteExpr", Unsupported(NOT_M2)),
+    ("CXXNewExpr", Keep),
+    ("CXXDeleteExpr", Keep),
     ("CXXThrowExpr", Unsupported(NOT_M2)),
     ("CXXTypeidExpr", Unsupported(NOT_M2)),
     ("CXXNoexceptExpr", Keep),
@@ -273,6 +273,17 @@ fn specific_keys(kind: &str) -> Option<&'static [&'static str]> {
         "IntegerLiteral" | "FloatingLiteral" | "CharacterLiteral" | "StringLiteral"
         | "CXXBoolLiteralExpr" => &["value"],
         "CXXNullPtrLiteralExpr" | "CXXNoexceptExpr" => &[],
+        // `isPlacement` and `initStyle` are implied by the children.
+        "CXXNewExpr" => &[
+            "isGlobal",
+            "isArray",
+            "isPlacement",
+            "initStyle",
+            "operatorNewDecl",
+            "operatorDeleteDecl",
+        ],
+        // `isArrayAsWritten` is not printed (clang's text dump has none).
+        "CXXDeleteExpr" => &["isGlobal", "isArray", "isArrayAsWritten", "operatorDeleteDecl"],
         "DeclRefExpr" => &["referencedDecl", "foundReferencedDecl", "nonOdrUseReason"],
         "MemberExpr" => &["name", "isArrow", "referencedMemberDecl"],
         "ImplicitCastExpr" => &["castKind", "isPartOfExplicitCast"],
@@ -360,6 +371,8 @@ pub const M2_KINDS: &[&str] = &[
     "CallExpr",
     "UnaryExprOrTypeTraitExpr",
     "CXXNoexceptExpr",
+    "CXXNewExpr",
+    "CXXDeleteExpr",
     "InitListExpr",
     "ImplicitValueInitExpr",
     "ConstantExpr",
