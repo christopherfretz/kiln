@@ -925,6 +925,13 @@ impl Parser<'_, '_> {
                 matches!(self.scan_name(self.pos() + n), Some((_, NameClass::Type(..), _)))
             }
             TokKind::Identifier(s) => match self.kw_of(t) {
+                // An explicit object parameter ([dcl.fct]/6) starts with
+                // `this` followed by its decl-specifiers.
+                // `T *p(this);` in a member function body stays an initializer.
+                Some(Kw::This) => {
+                    self.peek(n + 1).kind != TokKind::Punct(Punct::RParen)
+                        && self.is_param_list_start(n + 1)
+                }
                 Some(k) => is_decl_specifier_kw(k),
                 None => match self.scan_name(self.pos() + n) {
                     Some((_, NameClass::Type(..), _)) => true,
@@ -1187,6 +1194,8 @@ impl Parser<'_, '_> {
             let base = *base_ty.get_or_insert_with(|| {
                 if untyped {
                     QualType::VOID
+                } else if d.invalid && !ds.has_type_specifier() {
+                    QualType::ERROR
                 } else {
                     self.s.type_from_declspec_at(&ds, d.name_loc())
                 }

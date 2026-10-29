@@ -1,0 +1,12 @@
+TranslationUnitDecl
+|-CXXRecordDecl struct A definition
+| |-FinalAttr final
+| `-FieldDecl x 'int'
+|-CXXRecordDecl class B definition
+| `-FinalAttr final
+|-CXXRecordDecl union U definition
+| |-FinalAttr final
+| |-FieldDecl i 'int'
+| `-FieldDecl f 'float'
+`-CXXRecordDecl struct final definition
+  `-FieldDecl y 'int'

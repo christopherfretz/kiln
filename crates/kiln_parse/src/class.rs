@@ -985,6 +985,10 @@ impl Parser<'_, '_> {
                     // specifier at its name.
                     let b = if untyped_special {
                         QualType::VOID
+                    } else if d.invalid && !ds.has_type_specifier() {
+                        // A malformed special declarator-id (`operator;`)
+                        // is reported; clang adds nothing about the type.
+                        QualType::ERROR
                     } else {
                         self.s.type_from_declspec_at(&ds, d.name_loc())
                     };

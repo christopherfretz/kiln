@@ -11,7 +11,9 @@ use kiln_ast::decl::{
 use kiln_ast::expr::{CastKind, ExprKind};
 use kiln_ast::ids::RawId;
 use kiln_ast::names::DeclName;
-use kiln_ast::types::{AutoKeyword, BuiltinType, ExcSpec, FuncInfo, Quals, RefQual, TagKeyword, TypeView};
+use kiln_ast::types::{
+    AutoKeyword, BuiltinType, ExcSpec, FuncInfo, Quals, RefQual, TagKeyword, TypeView,
+};
 use kiln_ast::{AttrId, DeclHead, DeclId, ExprId, QualType, StmtId};
 use kiln_diag::DiagId;
 use kiln_source::Loc;
@@ -499,9 +501,8 @@ impl Sema<'_, '_> {
             self.unsupported("out-of-line definitions of class members", d.name_loc());
             return true;
         }
-        let member_fn = d.ctx == DeclaratorContext::Member
-            && d.is_function_declarator()
-            && !ds.is_typedef();
+        let member_fn =
+            d.ctx == DeclaratorContext::Member && d.is_function_declarator() && !ds.is_typedef();
         if member_fn {
             return false;
         }

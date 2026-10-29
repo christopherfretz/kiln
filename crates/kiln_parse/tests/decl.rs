@@ -404,12 +404,12 @@ fn dcl_fct_def_body_on_non_function() {
 }
 
 /// [class.ctor.general]/1: a constructor declaration (the class's own name
-/// followed by `(`) is recognised and reported as unsupported, not parsed
-/// as a member of the class's own type.
+/// followed by `(`) is recognised as one and handed to sema (whose member
+/// functions are WP-066b), not parsed as a member of the class's own type.
 #[test]
-fn class_ctor_declaration_unsupported() {
+fn class_ctor_declaration_recognised() {
     let p = parse("struct S { int a; explicit constexpr S(int v); [[nodiscard]] S(); };");
-    p.assert_diag("special member functions is not supported yet");
+    p.assert_diag("member functions is not supported yet");
     assert!(!p.diags.iter().any(|d| d.contains("incomplete type")), "{:?}", p.diags);
     p.assert_dump("FieldDecl a 'int'");
 }

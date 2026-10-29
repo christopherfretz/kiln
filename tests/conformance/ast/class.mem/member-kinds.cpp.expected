@@ -1,0 +1,37 @@
+TranslationUnitDecl
+|-CXXRecordDecl struct A definition
+| |-FinalAttr final
+| `-FieldDecl x 'int'
+|-EnumDecl referenced E
+| |-EnumConstantDecl e0 'E' value=0
+| `-EnumConstantDecl e1 'E' value=1
+|-CXXRecordDecl referenced struct Outer definition
+| |-CXXRecordDecl struct In definition
+| | `-FieldDecl referenced z 'int'
+| |-FieldDecl referenced in 'struct In':'Outer::In'
+| |-FieldDecl e 'E'
+| | `-ConstantExpr 'int' value=2
+| |   `-IntegerLiteral 'int' 2
+| |-FieldDecl m 'int' mutable
+| |-FieldDecl 'int'
+| | `-ConstantExpr 'int' value=0
+| |   `-IntegerLiteral 'int' 0
+| |-FieldDecl referenced bits 'unsigned int'
+| | `-ConstantExpr 'int' value=3
+| |   `-IntegerLiteral 'int' 3
+| `-FieldDecl more 'unsigned int'
+|   `-ConstantExpr 'int' value=4
+|     `-IntegerLiteral 'int' 4
+`-FunctionDecl use 'int (Outer)'
+  |-ParmVarDecl used o 'Outer'
+  `-CompoundStmt
+    `-ReturnStmt
+      `-BinaryOperator 'int' '+'
+        |-ImplicitCastExpr 'int' <LValueToRValue>
+        | `-MemberExpr 'int' lvalue .z
+        |   `-MemberExpr 'struct In':'Outer::In' lvalue .in
+        |     `-DeclRefExpr 'Outer' lvalue ParmVar 'o' 'Outer'
+        `-ImplicitCastExpr 'int' <IntegralCast>
+          `-ImplicitCastExpr 'unsigned int' <LValueToRValue>
+            `-MemberExpr 'unsigned int' lvalue bitfield .bits
+              `-DeclRefExpr 'Outer' lvalue ParmVar 'o' 'Outer'
