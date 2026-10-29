@@ -993,6 +993,84 @@ specifiers, friends, default arguments, NSDMIs and `this` now have bodies.
   computed (§2.9); P0847 explicit object parameters wait for WP-065's
   syntax (Q4); virtual bases (WP-078a).
 
+**Landed (WP-078a).** Module `kiln_sema/src/class/virtual/{mod,graph,
+complete,abstract_,cast}.rs`; `virtual`, `override`, `final`, pure
+specifiers and virtual base-specifiers are no longer `sema_unsupported`.
+- §3.4 declarations (`mod.rs`): `virtual_decl(ds, d, ty, VirtualSite,
+  &mut FnSpec) -> VirtualDecl` runs before the function is built and
+  `finish_virtual_decl(f, VirtualDecl)` after (decl.rs `act_on_function`):
+  `virtual` outside a class / on an out-of-line definition / on a friend
+  / with `static`, pure-specifier on a non-virtual, `override`/`final` on
+  a non-member, the overridden-method search over all bases
+  (`overridden_methods`, same name + `is_method_overload` false: same
+  parameter-type-list, cv- and ref-qualifiers), implicit virtualness,
+  `override` that overrides nothing, overriding a `final` function,
+  covariant returns ([class.virtual]/8, `check_override_return`, clang
+  `CheckOverridingFunctionReturnType`, with [class.access.base]
+  `check_covariant_base_access` in `access.rs`) and the overridden-method
+  list (`builder().set_overrides`, `cold.overrides`; a redeclaration
+  inherits it). `virtual_on_non_function` covers
+  `virtual` on typedefs and variables.
+- At `}` (`complete.rs`, from `act_on_finish_record_definition`):
+  `virtual_class_bits` sets `POLYMORPHIC`, `HAS_VIRTUAL_BASES` and
+  `ABSTRACT` before completion; `act_on_complete_virtual` then reports
+  multiple final overriders (`sema_multiple_final_overriders` +
+  `note_final_overrider` per overrider), static/deleted/consteval
+  override mismatches, `-Woverloaded-virtual` (in `-Wmost`/`-Wall`) and
+  `-Winconsistent-missing-override` (on by default), and
+  `-Wabstract-final-class`. After the complete-class contexts
+  (`act_on_virtual_class_contexts`, from `act_on_finish_class_contexts`):
+  overrider exception specifications ([except.spec]/13) and the key
+  function (Itanium §5.2.3, stored in `cold.key_function`).
+- Abstract classes (`abstract_.rs`): `AbstractUse { Return, Param,
+  Variable, Field }`, `require_non_abstract(loc, ty, use)`,
+  `require_non_abstract_alloc` (new-expression, functional casts),
+  `require_non_abstract_element` (arrays), `check_abstract_var`,
+  `check_abstract_signature` (definitions only), and
+  `recheck_abstract_members` for uses inside the class being defined
+  (unknown until `}`); the pure-function notes appear on the first error
+  per class (`Sema.abstract_noted`).
+- §3.5 graph (`graph.rs`, pure functions of `&Ast`): `pub fn
+  subobject_graph(&Ast, record) -> Vec<Subobject>` (numbering as §3.5 and
+  `kiln_abi::layout::subobject`, capped at 65535 subobjects), `pub fn
+  compute_virtuals(&Ast, record) -> Option<ClassVirtuals>` (None unless
+  the class is complete), `pub fn ensure_virtuals(&mut Ast, record) ->
+  Option<&ClassVirtuals>` (insert-only cache in `Ast.virtuals`).
+  Final overriders: for each (subobject, virtual method) the overriders
+  in the subobject's ancestor chain and in every class with the
+  subobject's virtual base on its path; overriders dominated by another
+  are dropped ([class.virtual]/2). Pure-final-overrider ⇒ abstract.
+- `SemaBridge::final_overrider` / `subobjects` (§8.4) compute on demand
+  via `ensure_virtuals`; `kiln_codegen/src/fold.rs` still only reads
+  `Ast.virtuals` (no sema dependency; WP-079/080).
+- §3.1/§3.2: virtual bases are accepted; `lookup_in_class` follows clang
+  `lookupInBases` dominance: a result reached through virtual base `V` is
+  dropped when another result's class has `V` as a virtual base, and
+  results in one virtual base subobject are one result.
+  `-Winaccessible-base` (`sema_inaccessible_base`, at the base-specifier)
+  for a direct base that is ambiguous as a base of the class.
+- §5.8: `act_on_dynamic_cast` (`cast.rs`, clang `CheckDynamicCast`
+  order: target kind, complete class or `cv void` pointee, operand kind,
+  completeness, casting away constness, same class `NoOp`, upcast
+  `DerivedToBase` with access/ambiguity, polymorphic source, `-fno-rtti`
+  unless `void*`, else `Dynamic`; reference to a prvalue class operand
+  materializes for `&&`); `CastStyle::Dynamic` in `act_on_cast` routes
+  there. `typeid` of a glvalue of polymorphic class type is marked
+  evaluated (`typeid_expr(.., evaluated, ..)`).
+- New diagnostics (`kiln_diag`, end of the tables): the WP-078a block in
+  `ids.rs` plus `sema_dynamic_cast_no_rtti`, `sema_inaccessible_base`;
+  groups `OverloadedVirtual`, `InconsistentMissingOverride`,
+  `AbstractFinalClass`, `InaccessibleBase`.
+- Not done (owners): `dtor_delete` (the destructor's operator delete) and
+  virtual destructors (WP-067a); deleted/consteval override checks are in
+  place but unreachable until `= delete` (WP-067a) and `consteval` members
+  land (xfail tests in `class.virtual/`); virtual member templates and
+  `virtual` constructors are not diagnosed (no member templates or
+  constructors yet); the destructor `-Winconsistent-missing-override`
+  variant; `static_cast` downcasts (incl. "via virtual base");
+  explicit-object (P0847) virtual functions; overloaded virtual functions
+  in one class (WP-068a); copy-initialization of an abstract class (WP-067b).
+
 ### 8.4 `SemaBridge` (kiln_oven) — public-interface change
 Replace `fn vtable(&mut self, record) -> &VTableLayout` with
 ```
@@ -1166,3 +1244,9 @@ polymorphic classes) for `final_overrider`/vtable cache size.
 9. (WP-066b) Out-of-line static data member initializers and the parameter
    types of out-of-line member definitions are not looked up in class
    scope (names before the declarator-id's class are); the body is.
+10. (WP-078a) The operand of a potentially-evaluated `typeid` is not
+    re-transformed: names in it keep `non_odr_use_unevaluated`, and the
+    "expression with side effects will be evaluated" warning is not
+    emitted.
+11. (WP-078a) The key function does not change when a later out-of-line
+    `inline` definition makes the candidate inline (clang recomputes it).

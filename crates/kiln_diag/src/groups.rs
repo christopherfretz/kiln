@@ -44,7 +44,7 @@ macro_rules! diag_groups {
 
 diag_groups! {
     All = "all" [Most];
-    Most = "most" [Comment, UnknownPragmas];
+    Most = "most" [Comment, UnknownPragmas, OverloadedVirtual];
     Pragmas = "pragmas" [UnknownPragmas, IgnoredPragmas];
     Pedantic = "pedantic" [];
     BackslashNewlineEscape = "backslash-newline-escape" [];
@@ -136,6 +136,11 @@ diag_groups! {
     // WP-067a
     DefaultedFunctionDeleted = "defaulted-function-deleted" [];
     ClassConversion = "class-conversion" [];
+    // WP-078a
+    OverloadedVirtual = "overloaded-virtual" [];
+    InconsistentMissingOverride = "inconsistent-missing-override" [];
+    AbstractFinalClass = "abstract-final-class" [];
+    InaccessibleBase = "inaccessible-base" [];
 }
 
 impl Group {

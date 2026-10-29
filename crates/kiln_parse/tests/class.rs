@@ -98,7 +98,9 @@ fn class_member_paren_is_function() {
 /// [class.virtual], [class.abstract]: virt-specifiers and pure-specifiers.
 #[test]
 fn class_virt_and_pure_specifiers() {
-    let p = parse("struct S { virtual void f() = 0; virtual void g() override final; };");
+    let p = parse(
+        "struct B { virtual void g(); }; struct S : B { virtual void f() = 0; virtual void g() override final; };",
+    );
     assert_parsed(&p);
     let p = parse("struct S { virtual void g() override final override; };");
     p.assert_diag("1:44 error: class member already marked 'override'");
