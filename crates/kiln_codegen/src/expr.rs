@@ -1443,7 +1443,7 @@ impl Cg<'_> {
                 }
             }
         }
-        // A builtin is never emitted as a function (spec/codegen.md §3.9):
+        // A builtin is never emitted as a function (spec/codegen.md §3, "Calls"):
         // it folds, lowers inline, or calls the library function it names.
         let mut lib = None;
         if let Some(d) = direct

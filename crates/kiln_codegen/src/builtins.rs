@@ -1,4 +1,4 @@
-//! Builtin function calls (spec/codegen.md §3.9): clang `EmitBuiltinExpr`
+//! Builtin function calls (spec/codegen.md §3, "Calls"): clang `EmitBuiltinExpr`
 //! for the builtins kiln declares (`kiln_ast::decl::builtin`).
 //!
 //! A builtin is never emitted as a function. A call whose value folds to an

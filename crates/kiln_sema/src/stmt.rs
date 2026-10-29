@@ -711,6 +711,12 @@ impl Sema<'_, '_> {
                 ExprKind::ImplicitCastExpr | ExprKind::ParenExpr => c = ExprId::new(cn.a()),
                 ExprKind::DeclRefExpr => {
                     let d = self.ast.exprs.decl(c);
+                    // A `noreturn` builtin (`__builtin_unreachable`).
+                    if let Some(b) = self.ast.decls.builtin_id(d) {
+                        use kiln_ast::decl::builtin;
+                        return builtin::info(b)
+                            .is_some_and(|i| i.attrs & builtin::attr::NORETURN != 0);
+                    }
                     let attrs = self.ast.attrs.of_decl(d);
                     return self
                         .ast
