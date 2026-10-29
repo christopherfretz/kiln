@@ -633,10 +633,12 @@ impl AstBuilder<'_> {
         targs: Option<ArgListId>,
         loc: Loc,
     ) -> ExprId {
-        let ty = QualType::OVERLOAD;
         let list = self.ast.lists.push(decls);
         let deps = self.targs_deps(targs);
         let deps = if deps.intersects(ExprDeps::VALUE) { deps | DEP_ALL } else { deps };
+        // clang's `OverloadExpr`: a type-dependent name (dependent explicit
+        // arguments) has the dependent type.
+        let ty = if deps.contains(ExprDeps::TYPE) { self.dependent_ty() } else { QualType::OVERLOAD };
         let e = self.simple(
             ExprKind::UnresolvedLookupExpr,
             ValueCategory::LValue,

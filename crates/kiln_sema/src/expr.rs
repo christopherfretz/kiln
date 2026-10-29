@@ -656,6 +656,31 @@ impl Sema<'_, '_> {
             return self.recover_err(&[], loc);
         };
         let mut d = d;
+        let any_tmpl =
+            found.decls.iter().any(|&x| self.kind_of(x) == DeclKind::FunctionTemplate);
+        if any_tmpl
+            && found.decls.iter().all(|&x| {
+                let k = self.kind_of(x);
+                k == DeclKind::FunctionTemplate || k.is_function()
+            })
+        {
+            // A name of a function template without `<` ([temp.arg.explicit]/4):
+            // an overload set resolved at the call (clang's
+            // `UnresolvedLookupExpr`; deduction is WP-071).
+            if found.naming.is_some() {
+                self.templ_unimplemented("member function template names", loc);
+                return self.recover_err(&[], loc);
+            }
+            let decls: Vec<DeclId> = found.decls.clone();
+            return self.builder().unresolved_lookup(
+                name,
+                &decls,
+                qualifier.is_none(),
+                None,
+                None,
+                loc,
+            );
+        }
         let fns = found.decls.iter().all(|&x| self.ast.decls.get(x).kind().is_function());
         // An invalid redeclaration is not a separate overload (clang
         // drops invalid candidates).

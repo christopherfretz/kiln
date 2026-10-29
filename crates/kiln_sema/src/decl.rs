@@ -1949,6 +1949,16 @@ impl Sema<'_, '_> {
                 return;
             }
         }
+        if let Initializer::List(l) = &init
+            && (self.ast.types.is_dependent(ty) || self.init_list_type_dependent(l))
+        {
+            // Initialized at instantiation ([temp.dep.expr]); clang keeps
+            // the list as written with type `void` (and `int[]` unbounded).
+            let e = self.dependent_init_list(l);
+            let e = self.act_on_full_expr(e);
+            let _ = self.builder().set_var_init(v, e);
+            return;
+        }
         let e = self.perform_init(ty, init, loc, direct);
         let e = self.act_on_full_expr(e);
         let _ = self.builder().set_var_init(v, e);

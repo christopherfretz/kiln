@@ -1677,7 +1677,7 @@ impl Parser<'_, '_> {
                 self.skip_until(&[Punct::RBrace], false, true);
                 return Err(());
             }
-            let value = if self.at(Punct::LBrace) {
+            let mut value = if self.at(Punct::LBrace) {
                 let Ok(l) = self.parse_init_list() else {
                     // The inner list skipped through its `}`; skip
                     // through ours too (clang's `ParseBraceInitializer`).
@@ -1693,7 +1693,11 @@ impl Parser<'_, '_> {
                 InitValue::Expr(e)
             };
             if let Some(l) = self.eat(Punct::Ellipsis) {
-                self.unsupported("pack expansions", l);
+                // An initializer-clause pack expansion ([temp.variadic]/5.4).
+                match value {
+                    InitValue::Expr(e) => value = InitValue::Expr(self.s.act_pack_expansion(e, l)),
+                    InitValue::List(_) => self.unsupported("pack expansions of braced lists", l),
+                }
             }
             items.push(InitItem { designator, value });
             if self.eat(Punct::Comma).is_none() {

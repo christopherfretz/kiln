@@ -519,7 +519,16 @@ impl Parser<'_, '_> {
     /// ([temp.arg.template]/1): consumed, as a template name.
     fn at_template_name_arg(&mut self) -> Option<TemplateArg> {
         let (end, split, class, _) = self.scan_name_at(self.pos())?;
-        let NameClass::TypeTemplate(d) = class else { return None };
+        // `nns template name` with a dependent `nns` ([temp.names]/5,
+        // [temp.arg.template]/1).
+        let dep_name = matches!(class, NameClass::Dependent)
+            && end >= 2
+            && self.kw_of(self.tok_at(end - 2)) == Some(Kw::Template);
+        let d = match class {
+            NameClass::TypeTemplate(d) => Some(d),
+            _ if dep_name => None,
+            _ => return None,
+        };
         if split
             || !matches!(
                 Self::punct_of(self.tok_at(end)),
@@ -535,6 +544,14 @@ impl Parser<'_, '_> {
         {
             return None;
         }
+        let Some(d) = d else {
+            let qual = self.parse_nested_name_nns().ok()??;
+            self.eat_kw(Kw::Template);
+            let n = self.ident()?;
+            self.bump();
+            let tn = self.s.ast.types.template_name(TemplateName::DependentIdentifier { nns: qual.nns, name: n });
+            return Some(TemplateArg::template(tn));
+        };
         while self.pos() < end {
             self.bump();
         }

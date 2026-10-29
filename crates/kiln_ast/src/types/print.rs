@@ -1006,16 +1006,14 @@ impl Printer<'_> {
                 }
             }
             TemplateName::DependentIdentifier { nns, name } => {
-                if qual == Qual::AsWritten {
-                    self.nns(nns);
-                }
+                // clang prints a dependent name's qualifier unconditionally.
+                self.nns(nns);
                 self.push("template ");
                 self.symbol(name);
             }
             TemplateName::DependentOperator { nns, op } => {
-                if qual == Qual::AsWritten {
-                    self.nns(nns);
-                }
+                // clang prints a dependent name's qualifier unconditionally.
+                self.nns(nns);
                 self.push("template operator ");
                 let names = self.names;
                 names.write_operator(op, &mut self.out);

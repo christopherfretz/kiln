@@ -207,8 +207,17 @@ impl Sema<'_, '_> {
         let dep_args =
             self.ast.types.arg_list_flags(list).intersects(TypeFlags::DEPENDENT_INSTANTIATION);
         let Some(d) = self.ast.types.template_decl(name) else {
-            // A dependent template name (`T::template X<args>`).
-            return Ok(TemplateIdRef::Type(QualType::DEPENDENT));
+            return Ok(TemplateIdRef::Type(match self.ast.types.template_name_view(name) {
+                // `TT<args>` for a template template parameter `TT`.
+                TemplateName::TemplateTemplateParm { .. } | TemplateName::CanonTemplateTemplateParm { .. } => {
+                    self.ast.types.template_specialization(name, list, None, false)
+                }
+                // `T::template X<args>` ([temp.names]/5).
+                TemplateName::DependentIdentifier { nns, name: id } => {
+                    self.ast.types.dependent_template_specialization(TagKeyword::None, nns, id, list)
+                }
+                _ => QualType::DEPENDENT,
+            }));
         };
         match self.kind_of(d) {
             DeclKind::ClassTemplate | DeclKind::TemplateTemplateParm => {
