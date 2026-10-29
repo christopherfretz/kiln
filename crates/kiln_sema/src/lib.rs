@@ -117,6 +117,13 @@ pub struct Sema<'a, 'sm> {
     /// The names of the parameters declared so far in each enclosing
     /// parameter-declaration-clause being parsed ([`Sema::act_on_start_prototype`]).
     pub(crate) prototype_params: Vec<Vec<kiln_source::symbol::Symbol>>,
+    /// Set while [`Sema::act_on_call_name`] builds an unqualified callee
+    /// inside a template: a function it names is not marked referenced
+    /// until the call is known to be non-dependent ([temp.dep.candidate]).
+    pub(crate) deferring_call_ref: bool,
+    /// Callees whose function is not marked referenced yet (see
+    /// `deferring_call_ref`), resolved by [`Sema::act_on_call`].
+    pub(crate) deferred_call_refs: Vec<(ExprId, DeclId)>,
     /// Classes being defined, innermost last (spec/sema-class.md §8.3).
     pub(crate) classes: Vec<class::ClassBuild>,
     /// Which implicit special members each class has declared
@@ -200,6 +207,8 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             global_ops: new_delete::GlobalOps::default(),
             braced_args: Vec::new(),
             prototype_params: Vec::new(),
+            deferring_call_ref: false,
+            deferred_call_refs: Vec::new(),
             classes: Vec::new(),
             implicit_declared: kiln_source::fx::FxHashMap::default(),
             delayed_access: Vec::new(),

@@ -1,0 +1,17 @@
+TranslationUnitDecl
+|-FunctionTemplateDecl s
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| `-FunctionDecl s 'unsigned long ()'
+|   `-CompoundStmt
+|     `-ReturnStmt
+|       `-BinaryOperator 'unsigned long' '+'
+|         |-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof 'T'
+|         `-UnaryExprOrTypeTraitExpr 'unsigned long' alignof 'T'
+`-FunctionTemplateDecl e
+  |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+  `-FunctionDecl e 'unsigned long (T)'
+    |-ParmVarDecl referenced t 'T'
+    `-CompoundStmt
+      `-ReturnStmt
+        `-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof
+          `-DeclRefExpr 'T' lvalue ParmVar 't' 'T' non_odr_use_unevaluated

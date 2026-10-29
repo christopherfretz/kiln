@@ -174,6 +174,15 @@ impl Sema<'_, '_> {
 
     // -- template-ids -------------------------------------------------------------
 
+    /// The function template-id `e` (an `UnresolvedLookupExpr`), written
+    /// unqualified and followed by `(`: the call also uses
+    /// argument-dependent lookup ([basic.lookup.argdep]/1).
+    pub fn act_on_template_id_call_name(&mut self, e: ExprId) {
+        if self.ast.exprs.get(e).kind() == ExprKind::UnresolvedLookupExpr {
+            let _ = self.ast.exprs.set_adl(e);
+        }
+    }
+
     /// The template name of template (or template template parameter)
     /// `d` as written.
     pub fn template_name_for(&mut self, d: DeclId) -> TemplateNameId {
@@ -448,6 +457,7 @@ impl Sema<'_, '_> {
         let pack = found.decls.first().copied().filter(|&d| self.is_pack_decl(d));
         match pack {
             Some(d) => {
+                self.ast.decls.set_flags(d, DeclFlags::REFERENCED);
                 let st = self.size_type();
                 self.builder().size_of_pack(d, st, loc, rparen)
             }
@@ -515,6 +525,47 @@ impl Sema<'_, '_> {
     /// instantiation: a dependent type that may become a class or
     /// enumeration (clang's `isOverloadableType`; dependent pointers,
     /// arrays, functions and member pointers keep built-in semantics).
+    /// The type of a subscript with a type-dependent operand (clang's
+    /// `getDependentArraySubscriptType`): with an integral or unscoped
+    /// enumeration index, the other operand's pointee or element type if
+    /// that is dependent; else `<dependent type>`.
+    pub(crate) fn dependent_subscript_type(&self, base: ExprId, idx: ExprId) -> QualType {
+        let (bt, it) = (self.ety(base), self.ety(idx));
+        let index_like = |t: QualType| {
+            !self.ast.types.is_dependent(t)
+                && (self.ast.types.is_integral(t) || crate::conv::is_unscoped_enum(self, t))
+        };
+        // The pointee or element type, keeping sugar (clang's
+        // `getAs<PointerType>` / `getAsArrayTypeUnsafe`).
+        let elem = |t: QualType| {
+            let mut cur = t;
+            for _ in 0..256 {
+                match self.ast.types.view(cur.ty()) {
+                    TypeView::Pointer(p) | TypeView::IncompleteArray(p) => return Some(p),
+                    TypeView::ConstantArray(a) => return Some(a.elem),
+                    TypeView::VariableArray { elem, .. }
+                    | TypeView::DependentSizedArray { elem, .. } => return Some(elem),
+                    _ => {
+                        let next = self.ast.types.desugar_once(cur);
+                        if next == cur {
+                            return None;
+                        }
+                        cur = next;
+                    }
+                }
+            }
+            None
+        };
+        let r = if index_like(it) {
+            elem(bt)
+        } else if index_like(bt) {
+            elem(it)
+        } else {
+            None
+        };
+        r.filter(|&t| self.ast.types.is_dependent(t)).unwrap_or(QualType::DEPENDENT)
+    }
+
     pub(crate) fn is_dependent_overloadable(&self, t: QualType) -> bool {
         use kiln_ast::types::TypeKind;
         self.ast.types.is_dependent(t)
@@ -547,7 +598,10 @@ impl Sema<'_, '_> {
         };
         let to = self.non_reference(ty);
         let kind = style.kind();
-        self.builder().cast(kind, CastKind::Dependent, e, to, vk, None, loc, ExprFlags::NONE)
+        // A cast to `void` is never dependent ([expr.static.cast]/6;
+        // clang's `ToVoid`).
+        let ck = if self.ast.types.is_void(to) { CastKind::ToVoid } else { CastKind::Dependent };
+        self.builder().cast(kind, ck, e, to, vk, None, loc, ExprFlags::NONE)
     }
 
     /// A braced-init-list kept unanalyzed in a dependent context: an
@@ -671,7 +725,7 @@ impl Sema<'_, '_> {
             }
         }
         let b = if arrow && !self.is_dependent_overloadable(bt) {
-            crate::conv::decay(self, base)
+            crate::conv::decay_dependent(self, base)
         } else {
             base
         };
@@ -759,7 +813,21 @@ impl Sema<'_, '_> {
                     TemplateArg::ty(if pack { self.ast.types.pack_expansion(t, None) } else { t })
                 }
                 DeclKind::NonTypeTemplateParm => {
-                    let mut e = self.build_decl_ref(p, loc);
+                    // Built directly: naming the parameter here is not a
+                    // reference to it (clang leaves it unreferenced).
+                    let mut t = self.ast.decls.get(p).ty().unwrap_or(QualType::ERROR);
+                    if let TypeView::PackExpansion { pattern, .. } = self.ast.types.view(t.ty()) {
+                        t = pattern;
+                    }
+                    let t = self.non_reference(t);
+                    let mut e = self.builder().decl_ref(
+                        p,
+                        t,
+                        loc,
+                        None,
+                        kiln_ast::expr::NonOdrUse::None,
+                        kiln_ast::expr::ExprFlags::NONE,
+                    );
                     if pack {
                         e = self.act_pack_expansion(e, loc);
                     }

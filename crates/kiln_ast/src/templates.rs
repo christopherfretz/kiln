@@ -724,10 +724,10 @@ impl AstBuilder<'_> {
 
     /// A built-in unary operator on a type-dependent operand
     /// ([temp.dep.expr]/1, resolved at instantiation): `<dependent type>`,
-    /// an lvalue for prefix `++`/`--` (clang's `CreateOverloadedUnaryOp`
+    /// an lvalue for `*` and prefix `++`/`--` (clang's `CreateOverloadedUnaryOp`
     /// with no visible operator functions), else a prvalue.
     pub fn dependent_unary(&mut self, op: UnaryOp, operand: ExprId, loc: Loc) -> ExprId {
-        let vk = if matches!(op, UnaryOp::PreInc | UnaryOp::PreDec) {
+        let vk = if matches!(op, UnaryOp::PreInc | UnaryOp::PreDec | UnaryOp::Deref) {
             ValueCategory::LValue
         } else {
             ValueCategory::PRValue

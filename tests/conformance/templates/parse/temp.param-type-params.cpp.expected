@@ -1,0 +1,15 @@
+TranslationUnitDecl
+|-ClassTemplateDecl A
+| |-TemplateTypeParmDecl class depth 0 index 0 T
+| `-CXXRecordDecl struct A definition
+|-ClassTemplateDecl B
+| |-TemplateTypeParmDecl typename depth 0 index 0 T
+| |-TemplateTypeParmDecl class depth 0 index 1 U
+| | `-TemplateArgument type 'int'
+| `-CXXRecordDecl struct B definition
+`-ClassTemplateDecl C
+  |-TemplateTypeParmDecl class depth 0 index 0 T
+  | `-TemplateArgument type 'char'
+  |-TemplateTypeParmDecl typename depth 0 index 1
+  | `-TemplateArgument type 'long'
+  `-CXXRecordDecl struct C definition

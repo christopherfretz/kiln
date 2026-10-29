@@ -1,0 +1,31 @@
+TranslationUnitDecl
+|-ConceptDecl Same
+| |-TemplateTypeParmDecl class depth 0 index 0 T
+| |-TemplateTypeParmDecl class depth 0 index 1 U
+| `-CXXBoolLiteralExpr 'bool' true
+`-ConceptDecl C
+  |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+  `-RequiresExpr 'bool'
+    |-ParmVarDecl referenced t 'T'
+    |-CompoundRequirement dependent
+    | `-CallExpr '<dependent type>'
+    |   `-CXXDependentScopeMemberExpr '<dependent type>' lvalue .f
+    |     `-DeclRefExpr 'T' lvalue ParmVar 't' 'T' non_odr_use_unevaluated
+    |-CompoundRequirement noexcept dependent
+    | `-CallExpr '<dependent type>'
+    |   `-CXXDependentScopeMemberExpr '<dependent type>' lvalue .g
+    |     `-DeclRefExpr 'T' lvalue ParmVar 't' 'T' non_odr_use_unevaluated
+    |-CompoundRequirement dependent
+    | |-BinaryOperator '<dependent type>' '+'
+    | | |-DeclRefExpr 'T' lvalue ParmVar 't' 'T' non_odr_use_unevaluated
+    | | `-IntegerLiteral 'int' 1
+    | `-ConceptSpecializationExpr 'bool'
+    |   |-TemplateArgument type 'expr-type'
+    |   `-TemplateArgument type 'int'
+    `-CompoundRequirement noexcept dependent
+      |-CallExpr '<dependent type>'
+      | `-CXXDependentScopeMemberExpr '<dependent type>' lvalue .h
+      |   `-DeclRefExpr 'T' lvalue ParmVar 't' 'T' non_odr_use_unevaluated
+      `-ConceptSpecializationExpr 'bool'
+        |-TemplateArgument type 'expr-type'
+        `-TemplateArgument type 'long'

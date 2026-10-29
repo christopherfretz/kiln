@@ -1,0 +1,13 @@
+TranslationUnitDecl
+`-ClassTemplateDecl Outer
+  |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+  `-CXXRecordDecl struct Outer definition
+    |-FunctionTemplateDecl conv
+    | |-TemplateTypeParmDecl referenced class depth 1 index 0 U
+    | `-CXXMethodDecl conv 'U (T)'
+    |   `-ParmVarDecl t 'T'
+    `-ClassTemplateDecl In
+      |-TemplateTypeParmDecl referenced class depth 1 index 0 U
+      `-CXXRecordDecl struct In definition
+        |-FieldDecl a 'T'
+        `-FieldDecl b 'U'

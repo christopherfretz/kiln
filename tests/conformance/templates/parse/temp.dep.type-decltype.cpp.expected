@@ -1,0 +1,14 @@
+TranslationUnitDecl
+|-FunctionTemplateDecl f
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| `-FunctionDecl f 'void (T)'
+|   |-ParmVarDecl referenced t 'T'
+|   `-CompoundStmt
+|     `-DeclStmt
+|       `-VarDecl u 'decltype(t)' cinit
+|         `-DeclRefExpr 'T' lvalue ParmVar 't' 'T'
+`-ClassTemplateDecl W
+  |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+  `-CXXRecordDecl struct W definition
+    |-FieldDecl v 'decltype(T() + 1)'
+    `-FieldDecl n 'decltype(sizeof(T))'

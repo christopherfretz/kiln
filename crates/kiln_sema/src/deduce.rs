@@ -17,6 +17,20 @@ impl Sema<'_, '_> {
         if self.is_err_expr(e) {
             return None;
         }
+        // An instantiation-dependent operand: the type is computed at
+        // instantiation, canonically `DependentDecltype` (clang's
+        // `getDecltypeType`; the underlying type is `<dependent type>` for a
+        // type-dependent operand).
+        let deps = self.ast.exprs.get(e).deps();
+        if deps.contains(kiln_ast::expr::ExprDeps::INSTANTIATION) {
+            let u = if deps.contains(kiln_ast::expr::ExprDeps::TYPE) {
+                QualType::DEPENDENT
+            } else {
+                self.decltype_of(e)
+            };
+            let p = self.dependent_profile(e);
+            return Some(self.ast.types.decltype_type(e, u, Some(p)));
+        }
         let u = self.decltype_of(e);
         Some(self.ast.types.decltype_type(e, u, None))
     }

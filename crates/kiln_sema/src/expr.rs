@@ -479,7 +479,9 @@ impl Sema<'_, '_> {
 
     /// clang's `DiagnoseUnusedExprResult` for an expression statement.
     pub(crate) fn diagnose_unused(&mut self, e: ExprId) {
-        if self.is_err_expr(e) {
+        // A type-dependent expression is checked at instantiation (clang
+        // does not warn in the template definition).
+        if self.is_err_expr(e) || self.expr_is_type_dependent(e) {
             return;
         }
         if let Some((id, loc, arg)) = self.unused_warning(e) {
@@ -619,6 +621,19 @@ impl Sema<'_, '_> {
     }
 
     // -- names -------------------------------------------------------------------
+
+    /// An unqualified id-expression `name` that is the callee of a call
+    /// (followed by `(`) inside a template: as
+    /// [`Sema::act_on_id_expression`], but a non-member function it names
+    /// is marked referenced only by [`Sema::act_on_call`] once the call is
+    /// known not to be dependent (clang builds an `UnresolvedLookupExpr`
+    /// for a dependent call and references nothing; [temp.dep.candidate]).
+    pub fn act_on_call_name(&mut self, name: Symbol, loc: Loc) -> ExprId {
+        let saved = std::mem::replace(&mut self.deferring_call_ref, true);
+        let e = self.act_on_id_expression(name, loc, None);
+        self.deferring_call_ref = saved;
+        e
+    }
 
     /// An id-expression naming `name` ([expr.prim.id]), optionally
     /// qualified by the context `qualifier`.
@@ -785,7 +800,12 @@ impl Sema<'_, '_> {
         } else {
             self.non_reference(declared)
         };
-        self.ast.decls.set_flags(d, DeclFlags::REFERENCED);
+        let defer = self.deferring_call_ref
+            && n.kind() == DeclKind::Function
+            && self.ast.decls.builtin_id(d).is_none();
+        if !defer {
+            self.ast.decls.set_flags(d, DeclFlags::REFERENCED);
+        }
         self.diagnose_deprecated(d, loc);
         let nou = if self.unevaluated > 0 { NonOdrUse::Unevaluated } else { NonOdrUse::None };
         let extra = shadow.map(|s| kiln_ast::expr::DeclRefExtra {
@@ -794,6 +814,9 @@ impl Sema<'_, '_> {
             found_decl: Some(s),
         });
         let e = self.builder().decl_ref(d, ty, loc, extra, nou, ExprFlags::NONE);
+        if defer {
+            self.deferred_call_refs.push((e, d));
+        }
         // Inside a template definition a use is only a reference; odr-use
         // happens at instantiation ([temp.res.general]/6).
         if self.unevaluated == 0 && !self.in_template() {
@@ -1830,10 +1853,12 @@ impl Sema<'_, '_> {
         if self.is_err_expr(base) || self.is_err_expr(idx) {
             return self.recover_err(&[base, idx], loc);
         }
-        if self.is_dependent_overloadable(self.ety(base))
-            || self.is_dependent_overloadable(self.ety(idx))
-        {
-            return self.builder().subscript(base, idx, QualType::DEPENDENT, loc);
+        // Either operand type-dependent: an unanalyzed lvalue with no
+        // operand conversions ([temp.dep.expr]/3; clang's
+        // `getDependentArraySubscriptType`).
+        if self.expr_is_type_dependent(base) || self.expr_is_type_dependent(idx) {
+            let ty = self.dependent_subscript_type(base, idx);
+            return self.builder().subscript(base, idx, ty, loc);
         }
         let b = conv::decay(self, base);
         let i = conv::decay(self, idx);
@@ -1903,6 +1928,14 @@ impl Sema<'_, '_> {
         loc: Loc,
         rparen: Loc,
     ) -> ExprId {
+        // A callee from `act_on_call_name`: its function is referenced
+        // unless the call stays dependent ([temp.dep.candidate]).
+        if let Some(i) = self.deferred_call_refs.iter().position(|&(e, _)| e == callee) {
+            let (_, d) = self.deferred_call_refs.swap_remove(i);
+            if !args.iter().any(|&a| self.expr_is_type_dependent(a)) {
+                self.ast.decls.set_flags(d, DeclFlags::REFERENCED);
+            }
+        }
         let mut kids = vec![callee];
         kids.extend_from_slice(args);
         // Braced-init-list arguments (placeholders until the parameter

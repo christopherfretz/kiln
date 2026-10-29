@@ -1,0 +1,21 @@
+TranslationUnitDecl
+|-FunctionTemplateDecl f
+| |-TemplateTypeParmDecl class depth 0 index 0 T
+| `-FunctionDecl f 'int ()'
+|   `-CompoundStmt
+|     `-ReturnStmt
+|       `-DependentScopeDeclRefExpr '<dependent type>' lvalue
+|-FunctionTemplateDecl g
+| |-TemplateTypeParmDecl class depth 0 index 0 T
+| `-FunctionDecl g 'int ()'
+|   `-CompoundStmt
+|     `-ReturnStmt
+|       `-BinaryOperator '<dependent type>' '+'
+|         |-DependentScopeDeclRefExpr '<dependent type>' lvalue
+|         `-IntegerLiteral 'int' 1
+`-FunctionTemplateDecl h
+  |-TemplateTypeParmDecl class depth 0 index 0 T
+  `-FunctionDecl h 'void ()'
+    `-CompoundStmt
+      `-CallExpr '<dependent type>'
+        `-DependentScopeDeclRefExpr '<dependent type>' lvalue

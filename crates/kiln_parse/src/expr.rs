@@ -781,7 +781,13 @@ impl Parser<'_, '_> {
         let class = self.s.classify_name(name, qual.map(|q| q.ctx));
         if self.at(Punct::Less) && (template_kw || is_template_class(class)) {
             return match self.parse_template_id_rest(class, name, nl) {
-                Ok(TemplateIdRef::Value(e) | TemplateIdRef::Overload(e)) => Some(e),
+                Ok(TemplateIdRef::Overload(e)) => {
+                    if qual.is_none() && self.at(Punct::LParen) {
+                        self.s.act_on_template_id_call_name(e);
+                    }
+                    Some(e)
+                }
+                Ok(TemplateIdRef::Value(e)) => Some(e),
                 Ok(TemplateIdRef::Type(_)) => {
                     let t = self.s.ast.symbols().as_str(name).to_owned();
                     let d = self.s.diag(DiagId::sema_unexpected_typedef_ident, nl).arg(t);
@@ -797,6 +803,9 @@ impl Parser<'_, '_> {
             && self.s.in_template()
         {
             return Some(self.s.act_on_undeclared_call_name(name, nl));
+        }
+        if qual.is_none() && self.at(Punct::LParen) && self.s.in_template() {
+            return Some(self.s.act_on_call_name(name, nl));
         }
         Some(self.s.act_on_id_expression(name, nl, qual.map(|q| q.ctx)))
     }

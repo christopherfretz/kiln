@@ -3180,6 +3180,14 @@ impl Sema<'_, '_> {
             // [namespace.alias]/2: an alias names its namespace.
             return NameClass::Namespace(self.ast.resolve_alias(d));
         }
+        // The injected-class-name of a class template's pattern names the
+        // template ([temp.local]/1): `X` alone is `X<P...>`, `X<A>` a
+        // template-id.
+        if k == DeclKind::CXXRecord
+            && let Some(t) = self.ast.described_template(self.ast.first(d))
+        {
+            return NameClass::TypeTemplate(t);
+        }
         if is_type_kind(k) {
             let ty = if matches!(k, DeclKind::Typedef | DeclKind::TypeAlias | DeclKind::TemplateTypeParm)
             {

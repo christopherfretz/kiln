@@ -1,0 +1,26 @@
+TranslationUnitDecl
+|-FunctionTemplateDecl foo
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| `-FunctionDecl foo 'void (T)'
+|   `-ParmVarDecl 'T'
+|-FunctionTemplateDecl bar
+| |-TemplateTypeParmDecl class depth 0 index 0 T
+| |-TemplateTypeParmDecl referenced class depth 0 index 1 U
+| `-FunctionDecl bar 'void (U)'
+|   `-ParmVarDecl 'U'
+`-FunctionTemplateDecl call
+  |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+  `-FunctionDecl call 'void (T)'
+    |-ParmVarDecl referenced t 'T'
+    `-CompoundStmt
+      |-CallExpr '<dependent type>'
+      | |-UnresolvedLookupExpr '<dependent type>' lvalue (ADL) = 'foo'
+      | | `-TemplateArgument type 'T'
+      | `-DeclRefExpr 'T' lvalue ParmVar 't' 'T'
+      |-CallExpr '<dependent type>'
+      | |-UnresolvedLookupExpr '<dependent type>' lvalue (ADL) = 'bar'
+      | | `-TemplateArgument type 'T'
+      | `-DeclRefExpr 'T' lvalue ParmVar 't' 'T'
+      `-CallExpr '<dependent type>'
+        |-UnresolvedLookupExpr '<overloaded function type>' lvalue (ADL) = 'foo'
+        `-DeclRefExpr 'T' lvalue ParmVar 't' 'T'

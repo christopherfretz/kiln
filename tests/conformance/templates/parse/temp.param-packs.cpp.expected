@@ -1,0 +1,15 @@
+TranslationUnitDecl
+|-ClassTemplateDecl A
+| |-TemplateTypeParmDecl class depth 0 index 0 ... Ts
+| `-CXXRecordDecl struct A definition
+|-ClassTemplateDecl B
+| |-NonTypeTemplateParmDecl 'int' depth 0 index 0 ... Ns
+| `-CXXRecordDecl struct B definition
+|-ClassTemplateDecl C
+| |-TemplateTemplateParmDecl depth 0 index 0 ... TTs
+| | `-TemplateTypeParmDecl class depth 1 index 0
+| `-CXXRecordDecl struct C definition
+`-ClassTemplateDecl D
+  |-TemplateTypeParmDecl class depth 0 index 0 T
+  |-TemplateTypeParmDecl typename depth 0 index 1 ... Rest
+  `-CXXRecordDecl struct D definition

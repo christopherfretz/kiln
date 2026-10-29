@@ -1,0 +1,21 @@
+TranslationUnitDecl
+`-ClassTemplateDecl A
+  |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+  `-CXXRecordDecl struct A definition
+    |-FieldDecl referenced x 'T'
+    |-FieldDecl referenced n 'int'
+    |-CXXMethodDecl get 'T ()' implicit-inline
+    | `-CompoundStmt
+    |   `-ReturnStmt
+    |     `-MemberExpr 'T' lvalue ->x
+    |       `-CXXThisExpr 'A<T> *' this
+    `-CXXMethodDecl count 'int ()' implicit-inline
+      `-CompoundStmt
+        `-ReturnStmt
+          `-BinaryOperator 'int' '+'
+            |-ImplicitCastExpr 'int' <LValueToRValue>
+            | `-MemberExpr 'int' lvalue ->n
+            |   `-CXXThisExpr 'A<T> *' implicit this
+            `-ImplicitCastExpr 'int' <LValueToRValue>
+              `-MemberExpr 'int' lvalue ->n
+                `-CXXThisExpr 'A<T> *' this

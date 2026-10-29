@@ -1,0 +1,10 @@
+TranslationUnitDecl
+|-ConceptDecl HasType
+| |-TemplateTypeParmDecl class depth 0 index 0 T
+| `-RequiresExpr 'bool'
+|   `-TypeRequirement 'typename T::type' dependent
+`-ConceptDecl HasMore
+  |-TemplateTypeParmDecl class depth 0 index 0 T
+  `-RequiresExpr 'bool'
+    |-TypeRequirement 'typename T::value_type' dependent
+    `-TypeRequirement 'typename T::template rebind<int>' dependent

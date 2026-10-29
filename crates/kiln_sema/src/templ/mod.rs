@@ -184,9 +184,19 @@ impl Sema<'_, '_> {
     ) -> DeclId {
         let p = self.act_on_type_template_param(false, loc, pack, name);
         let ty = self.ast.decls.get(p).ty().unwrap_or(QualType::ERROR);
-        let c = self.immediately_declared_constraint(concept, ty, cargs, loc);
+        let mut c = self.immediately_declared_constraint(concept, ty, cargs, loc);
+        if pack {
+            c = self.pack_constraint(c, loc);
+        }
         self.builder().set_parm_constraint(p, c);
         p
+    }
+
+    /// The immediately-declared constraint of a constrained pack is the
+    /// fold `(C<Ts> && ...)` ([temp.param]/4; clang's
+    /// `formImmediatelyDeclaredConstraint`).
+    pub(crate) fn pack_constraint(&mut self, c: ExprId, loc: Loc) -> ExprId {
+        self.builder().fold_expr(Some(c), kiln_ast::expr::BinaryOp::LAnd, None, loc, loc)
     }
 
     /// `concept<ty, extra...>` as a `ConceptSpecializationExpr`
@@ -535,7 +545,10 @@ impl Sema<'_, '_> {
         }
         let ty = self.ast.decls.get(p).ty().unwrap_or(QualType::ERROR);
         if let Some((c, extra)) = constraint {
-            let e = self.immediately_declared_constraint(c, ty, &extra, loc);
+            let mut e = self.immediately_declared_constraint(c, ty, &extra, loc);
+            if pack {
+                e = self.pack_constraint(e, loc);
+            }
             self.builder().set_parm_constraint(p, e);
         }
         ty

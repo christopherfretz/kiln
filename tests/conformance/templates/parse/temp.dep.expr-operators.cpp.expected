@@ -1,0 +1,31 @@
+TranslationUnitDecl
+`-FunctionTemplateDecl f
+  |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+  `-FunctionDecl f 'void (T, T)'
+    |-ParmVarDecl referenced t 'T'
+    |-ParmVarDecl referenced u 'T'
+    `-CompoundStmt
+      |-BinaryOperator '<dependent type>' '='
+      | |-DeclRefExpr 'T' lvalue ParmVar 't' 'T'
+      | `-DeclRefExpr 'T' lvalue ParmVar 'u' 'T'
+      |-CompoundAssignOperator '<dependent type>' lvalue '+=' ComputeLHSTy='<dependent type>' ComputeResultTy='<dependent type>'
+      | |-DeclRefExpr 'T' lvalue ParmVar 't' 'T'
+      | `-DeclRefExpr 'T' lvalue ParmVar 'u' 'T'
+      |-UnaryOperator '<dependent type>' prefix '-' cannot overflow
+      | `-DeclRefExpr 'T' lvalue ParmVar 't' 'T'
+      |-UnaryOperator '<dependent type>' prefix '!' cannot overflow
+      | `-DeclRefExpr 'T' lvalue ParmVar 't' 'T'
+      |-ArraySubscriptExpr '<dependent type>' lvalue
+      | |-DeclRefExpr 'T' lvalue ParmVar 't' 'T'
+      | `-IntegerLiteral 'int' 0
+      |-BinaryOperator '<dependent type>' '<'
+      | |-DeclRefExpr 'T' lvalue ParmVar 't' 'T'
+      | `-DeclRefExpr 'T' lvalue ParmVar 'u' 'T'
+      |-ConditionalOperator '<dependent type>'
+      | |-DeclRefExpr 'T' lvalue ParmVar 't' 'T'
+      | |-DeclRefExpr 'T' lvalue ParmVar 't' 'T'
+      | `-DeclRefExpr 'T' lvalue ParmVar 'u' 'T'
+      |-UnaryOperator '<dependent type>' lvalue prefix '++' cannot overflow
+      | `-DeclRefExpr 'T' lvalue ParmVar 't' 'T'
+      `-UnaryOperator '<dependent type>' postfix '++' cannot overflow
+        `-DeclRefExpr 'T' lvalue ParmVar 't' 'T'

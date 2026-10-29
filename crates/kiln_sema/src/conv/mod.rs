@@ -280,6 +280,41 @@ pub fn decay(s: &mut Sema<'_, '_>, e: ExprId) -> ExprId {
     lvalue_to_rvalue(s, e)
 }
 
+/// [`decay`] of a type-dependent operand, as clang's
+/// `DefaultFunctionArrayLvalueConversion` does it: arrays and functions
+/// decay, and a glvalue of (dependent) pointer or pointer-to-member type is
+/// converted to a prvalue; other dependent types are left alone.
+pub fn decay_dependent(s: &mut Sema<'_, '_>, e: ExprId) -> ExprId {
+    let n = *s.ast.exprs.get(e);
+    let t = n.ty();
+    if !s.ast.types.is_dependent(t) {
+        return decay(s, e);
+    }
+    if !n.value_category().is_glvalue() {
+        return e;
+    }
+    let types = &s.ast.types;
+    if types.is_function(t) {
+        if n.value_category() == ValueCategory::LValue {
+            let p = s.ast.types.pointer_to(t);
+            return raw_cast(s, CastKind::FunctionToPointerDecay, e, p, ValueCategory::PRValue, None);
+        }
+        return e;
+    }
+    if types.is_array(t) {
+        let p = array_decayed(s, t);
+        return raw_cast(s, CastKind::ArrayToPointerDecay, e, p, ValueCategory::PRValue, None);
+    }
+    if !matches!(
+        types.canonical_kind(t),
+        kiln_ast::types::TypeKind::Pointer | kiln_ast::types::TypeKind::MemberPointer
+    ) {
+        return e;
+    }
+    let to = strip_cv(s, t);
+    raw_cast(s, CastKind::LValueToRValue, e, to, ValueCategory::PRValue, None)
+}
+
 /// The value of the integral constant expression `w` (a bit-field width:
 /// a `ConstantExpr`, a literal, or casts and parentheses around one).
 fn eval_width(s: &Sema<'_, '_>, w: ExprId) -> Option<u32> {

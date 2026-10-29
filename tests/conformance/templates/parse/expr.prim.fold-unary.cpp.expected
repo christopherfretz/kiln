@@ -1,0 +1,50 @@
+TranslationUnitDecl
+|-FunctionTemplateDecl sum_r
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 ... Ts
+| `-FunctionDecl sum_r 'auto (Ts...)'
+|   |-ParmVarDecl referenced ts 'Ts...' pack
+|   `-CompoundStmt
+|     `-ReturnStmt
+|       `-CXXFoldExpr '<dependent type>'
+|         |-<<<NULL>>>
+|         |-DeclRefExpr 'Ts' lvalue ParmVar 'ts' 'Ts...'
+|         `-<<<NULL>>>
+|-FunctionTemplateDecl sum_l
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 ... Ts
+| `-FunctionDecl sum_l 'auto (Ts...)'
+|   |-ParmVarDecl referenced ts 'Ts...' pack
+|   `-CompoundStmt
+|     `-ReturnStmt
+|       `-CXXFoldExpr '<dependent type>'
+|         |-<<<NULL>>>
+|         |-<<<NULL>>>
+|         `-DeclRefExpr 'Ts' lvalue ParmVar 'ts' 'Ts...'
+|-FunctionTemplateDecl all
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 ... Ts
+| `-FunctionDecl all 'bool (Ts...)'
+|   |-ParmVarDecl referenced ts 'Ts...' pack
+|   `-CompoundStmt
+|     `-ReturnStmt
+|       `-CXXFoldExpr '<dependent type>'
+|         |-<<<NULL>>>
+|         |-DeclRefExpr 'Ts' lvalue ParmVar 'ts' 'Ts...'
+|         `-<<<NULL>>>
+|-FunctionTemplateDecl any
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 ... Ts
+| `-FunctionDecl any 'bool (Ts...)'
+|   |-ParmVarDecl referenced ts 'Ts...' pack
+|   `-CompoundStmt
+|     `-ReturnStmt
+|       `-CXXFoldExpr '<dependent type>'
+|         |-<<<NULL>>>
+|         |-<<<NULL>>>
+|         `-DeclRefExpr 'Ts' lvalue ParmVar 'ts' 'Ts...'
+`-FunctionTemplateDecl seq
+  |-TemplateTypeParmDecl referenced class depth 0 index 0 ... Ts
+  `-FunctionDecl seq 'void (Ts...)'
+    |-ParmVarDecl referenced ts 'Ts...' pack
+    `-CompoundStmt
+      `-CXXFoldExpr '<dependent type>'
+        |-<<<NULL>>>
+        |-DeclRefExpr 'Ts' lvalue ParmVar 'ts' 'Ts...'
+        `-<<<NULL>>>

@@ -73,12 +73,24 @@ const FN_KINDS: &[&str] = &[
     "CXXConversionDecl",
 ];
 
+/// The template declaration kinds (spec/ast-dump.md §5).
+const TEMPLATE_DECL_KINDS: &[&str] = &[
+    "ClassTemplateDecl",
+    "FunctionTemplateDecl",
+    "VarTemplateDecl",
+    "TypeAliasTemplateDecl",
+    "ConceptDecl",
+];
+
 /// The text-dump words of a function that clang prints but the JSON dump
 /// does not carry, and which kiln prints (`spec/ast-dump.md` §3).
 const SIDE_FN_WORDS: &[&str] = &["trivial", "noexcept-unevaluated"];
 
 /// Text-dump words of a function kiln has no field for.
 const UNSUPPORTED_FN_WORDS: &[&str] = &["noexcept-uninstantiated", "ineligible", "not_selected"];
+
+const INSTANTIATIONS: &str =
+    "template specializations and instantiations are not in the dump yet (spec/ast-dump.md §5)";
 
 /// What the whole tree is scanned for before printing.
 #[derive(Default)]
@@ -107,6 +119,11 @@ struct Index<'a> {
     order: HashMap<&'a str, usize>,
     /// (class, name) of each position in `order`.
     order_names: Vec<(&'a str, &'a str)>,
+    /// Declarations inside a template (whose constexpr values clang's
+    /// text dump may not show).
+    templated: HashSet<&'a str>,
+    /// The template declarations enclosing the walk's current node.
+    template_depth: usize,
 }
 
 impl<'a> Index<'a> {
@@ -168,10 +185,22 @@ impl<'a> Index<'a> {
                 self.in_class.insert(id(n));
             }
         }
+        if self.template_depth > 0 {
+            self.templated.insert(id(n));
+        }
+        // A function template is transparent for its pattern's parent (a
+        // member template is in its class; a friend template befriended).
+        let (kid_parent, is_template) = match k {
+            "FunctionTemplateDecl" => (parent, true),
+            _ => (k, TEMPLATE_DECL_KINDS.contains(&k)),
+        };
+        if is_template {
+            self.template_depth += 1;
+        }
         for (key, v) in obj {
             if key == "inner" || key == "array_filler" {
                 for c in v.as_arr().unwrap_or(&[]) {
-                    self.walk(c, cur, k, inner_dc);
+                    self.walk(c, cur, kid_parent, inner_dc);
                 }
                 continue;
             }
@@ -183,6 +212,9 @@ impl<'a> Index<'a> {
             {
                 self.decl_file.insert(id(n), f);
             }
+        }
+        if is_template {
+            self.template_depth -= 1;
         }
         match k {
             "FieldDecl" if flag(n, "isBitfield") => {
@@ -313,8 +345,14 @@ fn context(n: &Json, e: &str) -> String {
 }
 
 impl<'a> Printer<'a, '_> {
+    /// Implicit declarations are dropped unless `implicit`; an invented
+    /// template parameter (`auto` in a parameter) is always printed.
     fn implicit_dropped(&self, n: &Json) -> bool {
-        kind(n).ends_with("Decl") && flag(n, "isImplicit") && !self.opts.implicit
+        let k = kind(n);
+        k.ends_with("Decl")
+            && k != "TemplateTypeParmDecl"
+            && flag(n, "isImplicit")
+            && !self.opts.implicit
     }
 
     /// Whether a top-level declaration is printed: the main file only,
@@ -674,11 +712,157 @@ impl<'a> Printer<'a, '_> {
                         return Err(format!("clang-ast: default argument init style `{other}`"));
                     }
                 }
+                if flag(n, "isParameterPack") {
+                    push_word(&mut l, "pack");
+                }
                 line = l;
                 kids_out = self.kid_trees(n)?;
             }
             "VarDecl" => {
                 line = self.var(n)?;
+                kids_out = self.kid_trees(n)?;
+            }
+            "ClassTemplateDecl"
+            | "FunctionTemplateDecl"
+            | "VarTemplateDecl"
+            | "TypeAliasTemplateDecl"
+            | "ConceptDecl" => {
+                if k == "FunctionTemplateDecl"
+                    && kids(n).filter(|c| FN_KINDS.contains(&kind(c))).count() > 1
+                {
+                    return Err(format!(
+                        "clang-ast: unsupported FunctionTemplateDecl `{}` with \
+                         specializations: {INSTANTIATIONS}",
+                        name(n).unwrap_or("")
+                    ));
+                }
+                let mut l = decl_head(n, k);
+                push_opt(&mut l, name(n));
+                line = l;
+                kids_out = self.kid_trees(n)?;
+            }
+            "TemplateTypeParmDecl" | "NonTypeTemplateParmDecl" | "TemplateTemplateParmDecl" => {
+                let mut l = decl_head(n, k);
+                match k {
+                    "TemplateTypeParmDecl" => push_word(
+                        &mut l,
+                        text(n, "tagUsed").ok_or("clang-ast: type parameter without a tag")?,
+                    ),
+                    "NonTypeTemplateParmDecl" => push_word(&mut l, &type_pair(n.get("type"), k)?),
+                    _ => {}
+                }
+                let num = |key: &str| {
+                    n.get(key)
+                        .and_then(Json::as_u64)
+                        .ok_or_else(|| format!("clang-ast: {k} without `{key}`"))
+                };
+                let _ = write!(l, " depth {} index {}", num("depth")?, num("index")?);
+                if flag(n, "isParameterPack") {
+                    push_word(&mut l, "...");
+                }
+                push_opt(&mut l, name(n));
+                line = l;
+                kids_out = self.template_kids(n, k == "TemplateTemplateParmDecl")?;
+            }
+            "ConceptSpecializationExpr" | "UnresolvedLookupExpr" => {
+                let mut l = self.expr_head(n, k)?;
+                if k == "UnresolvedLookupExpr" {
+                    let adl = if flag(n, "usesADL") { "(ADL)" } else { "(no ADL)" };
+                    let _ = write!(l, " {adl} = '{}'", text(n, "name").unwrap_or(""));
+                    if n.get("lookups").and_then(Json::as_arr).is_none_or(<[_]>::is_empty) {
+                        push_word(&mut l, "empty");
+                    }
+                }
+                line = l;
+                kids_out = self.template_kids(n, false)?;
+            }
+            "RequiresExpr" => {
+                if n.get("satisfied").is_some() {
+                    return Err("clang-ast: unsupported non-dependent RequiresExpr (kiln does \
+                                not evaluate requires-expressions in the dump yet)"
+                        .into());
+                }
+                line = self.expr_head(n, k)?;
+                kids_out = self.kid_trees(n)?;
+            }
+            "SimpleRequirement"
+            | "TypeRequirement"
+            | "CompoundRequirement"
+            | "NestedRequirement" => {
+                if n.get("satisfied").is_some() {
+                    return Err(format!("clang-ast: unsupported non-dependent {k}"));
+                }
+                let mut l = String::from(k);
+                if k == "TypeRequirement" {
+                    // The required type is the type node child's type.
+                    let t = kids(n).next().and_then(|c| c.get("type"));
+                    push_word(&mut l, &type_pair(t, k)?);
+                }
+                if flag(n, "noexcept") {
+                    push_word(&mut l, "noexcept");
+                }
+                if flag(n, "isDependent") {
+                    push_word(&mut l, "dependent");
+                }
+                line = l;
+                for c in kids(n) {
+                    if !kind(c).ends_with("Type")
+                        && let Some(t) = self.node(c)?
+                    {
+                        kids_out.push(t);
+                    }
+                }
+            }
+            "CXXFoldExpr" => {
+                line = self.expr_head(n, k)?;
+                let mut it = kids(n);
+                // The operator lookup results clang keeps as the callee.
+                match it.next() {
+                    Some(c) if is_null(c) => {}
+                    _ => {
+                        return Err("clang-ast: unsupported CXXFoldExpr with a callee (operator \
+                                    candidates found by lookup)"
+                            .into());
+                    }
+                }
+                kids_out.push(Tree { line: "<<<NULL>>>".into(), kids: Vec::new() });
+                for c in it {
+                    if is_null(c) {
+                        kids_out.push(Tree { line: "<<<NULL>>>".into(), kids: Vec::new() });
+                    } else {
+                        kids_out.extend(self.node(c)?);
+                    }
+                }
+            }
+            "CXXDependentScopeMemberExpr" => {
+                let mut l = self.expr_head(n, k)?;
+                let _ = write!(
+                    l,
+                    " {}{}",
+                    if flag(n, "isArrow") { "->" } else { "." },
+                    text(n, "member").unwrap_or("")
+                );
+                line = l;
+                // The explicit template arguments are not printed (as in
+                // clang's text dump).
+                kids_out = self.kid_trees(n)?;
+            }
+            "DependentScopeDeclRefExpr" | "PackExpansionExpr" => {
+                line = self.expr_head(n, k)?;
+                kids_out = self.kid_trees(n)?;
+            }
+            "CXXUnresolvedConstructExpr" => {
+                let mut l = self.expr_head(n, k)?;
+                if flag(n, "list") {
+                    push_word(&mut l, "list");
+                }
+                line = l;
+                kids_out = self.kid_trees(n)?;
+            }
+            "SizeOfPackExpr" => {
+                let mut l = self.expr_head(n, k)?;
+                push_opt(&mut l, name(n));
+                line = l;
                 kids_out = self.kid_trees(n)?;
             }
             "StaticAssertDecl" => {
@@ -1233,8 +1417,9 @@ impl<'a> Printer<'a, '_> {
                     _ => return Err(format!("clang-ast: unsupported init style `{init}`")),
                 },
             );
-            if flag(n, "constexpr") {
-                let v = self.var_value(n)?;
+            if flag(n, "constexpr")
+                && let Some(v) = self.var_value(n)?
+            {
                 l.push_str(" value=");
                 l.push_str(&v);
             }
@@ -1242,23 +1427,87 @@ impl<'a> Printer<'a, '_> {
         Ok(l)
     }
 
-    /// The `value=` of a constexpr variable, from the side channel.
-    fn var_value(&mut self, n: &'a Json) -> Res<String> {
+    /// The `value=` of a constexpr variable, from the side channel (none
+    /// for a variable in a template whose value clang did not compute).
+    fn var_value(&mut self, n: &'a Json) -> Res<Option<String>> {
         let pos = *self.ix.order.get(id(n)).ok_or("clang-ast: VarDecl missing from the index")?;
+        let templated = self.ix.templated.contains(id(n));
         let side = self.side()?;
-        let vnode = side[pos].value.clone().ok_or_else(|| {
-            format!(
-                "clang-ast: clang's text dump shows no value for constexpr `{}`",
-                name(n).unwrap_or("")
-            )
-        })?;
+        let vnode = match side[pos].value.clone() {
+            Some(v) => v,
+            None if templated => return Ok(None),
+            None => {
+                return Err(format!(
+                    "clang-ast: clang's text dump shows no value for constexpr `{}`",
+                    name(n).unwrap_or("")
+                ));
+            }
+        };
         let v = values::parse(&vnode)?;
         let mut lits = Literals::default();
         for c in kids(n) {
             collect_literals(c, &mut lits);
         }
         let null_init = kids(n).next().is_some_and(is_null_pointer_constant);
-        values::print_var(&self.ix.types, &v, qual_type(n), &lits, null_init)
+        values::print_var(&self.ix.types, &v, qual_type(n), &lits, null_init).map(Some)
+    }
+
+    /// A `TemplateArgument` line (spec/ast-dump.md §5). clang's JSON dump
+    /// writes a template-name argument as an empty object, which cannot be
+    /// told from a pack expansion of one; it is accepted only as a template
+    /// template parameter's default (`ttp_default`).
+    fn template_arg(&mut self, n: &'a Json, ttp_default: bool) -> Res<Tree> {
+        const KEYS: &[&str] = &["kind", "range", "inner", "type", "isExpr"];
+        if let Some((key, _)) =
+            n.as_obj().unwrap_or(&[]).iter().find(|(key, _)| !KEYS.contains(&key.as_str()))
+        {
+            return Err(match key.as_str() {
+                "inherited from" | "previous" => {
+                    "clang-ast: unsupported inherited default template argument (kiln prints \
+                     a default on the declaring parameter only)"
+                        .into()
+                }
+                _ => format!(
+                    "clang-ast: `TemplateArgument` attribute `{key}` is not in the mapping \
+                     table (only type, expression and template arguments as written are)"
+                ),
+            });
+        }
+        let mut t = Tree { line: String::from("TemplateArgument"), kids: Vec::new() };
+        if let Some(ty) = n.get("type") {
+            push_word(&mut t.line, "type");
+            push_word(&mut t.line, &type_pair(Some(ty), "TemplateArgument")?);
+            // The type's tree is not printed.
+        } else if flag(n, "isExpr") {
+            push_word(&mut t.line, "expr");
+            for c in kids(n) {
+                t.kids.extend(self.node(c)?);
+            }
+        } else if ttp_default && kids(n).next().is_none() {
+            push_word(&mut t.line, "template");
+        } else {
+            return Err("clang-ast: unsupported template-name TemplateArgument (clang's JSON \
+                        dump does not say whether it is a pack expansion)"
+                .into());
+        }
+        Ok(t)
+    }
+
+    /// The children of a template parameter, a concept-id or an
+    /// unresolved name: `TemplateArgument` children go through
+    /// [`Self::template_arg`].
+    fn template_kids(&mut self, n: &'a Json, ttp_default: bool) -> Res<Vec<Tree>> {
+        let mut v = Vec::new();
+        for c in kids(n) {
+            if kind(c) == "TemplateArgument" {
+                v.push(self.template_arg(c, ttp_default)?);
+            } else if !kind(c).ends_with("Type")
+                && let Some(t) = self.node(c)?
+            {
+                v.push(t);
+            }
+        }
+        Ok(v)
     }
 }
 

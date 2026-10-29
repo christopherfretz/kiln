@@ -1170,6 +1170,23 @@ impl ExprArena {
         Ok(())
     }
 
+    /// Marks the `UnresolvedLookupExpr` `e` as using argument-dependent
+    /// lookup: an unqualified template-id followed by `(`
+    /// ([basic.lookup.argdep]/1, [temp.names]/3). Write-once.
+    pub fn set_adl(&mut self, e: ExprId) -> Result<(), AlreadySet> {
+        let n = &mut self.nodes[e.index() as usize];
+        assert!(
+            n.kind == ExprKind::UnresolvedLookupExpr,
+            "expected UnresolvedLookupExpr, found {:?}",
+            n.kind
+        );
+        if n.aux != 0 {
+            return Err(AlreadySet { slot: "UnresolvedLookupExpr.adl", existing: u32::from(n.aux) });
+        }
+        n.aux = 1;
+        Ok(())
+    }
+
     /// Marks the glvalue `e` as designating a bit-field
     /// ([`ObjectKind::BitField`]): sema propagates the marking from a
     /// member access through `=`, compound assignment, prefix `++`/`--`,

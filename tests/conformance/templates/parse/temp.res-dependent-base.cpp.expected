@@ -1,0 +1,16 @@
+TranslationUnitDecl
+|-ClassTemplateDecl Base
+| |-TemplateTypeParmDecl class depth 0 index 0 T
+| `-CXXRecordDecl struct Base definition
+|-ClassTemplateDecl D1
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| `-CXXRecordDecl struct D1 definition
+|   `-public 'Base<T>'
+|-ClassTemplateDecl D2
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| `-CXXRecordDecl struct D2 definition
+|   `-public 'T'
+`-ClassTemplateDecl D3
+  |-TemplateTypeParmDecl referenced class depth 0 index 0 ... Ts
+  `-CXXRecordDecl struct D3 definition
+    `-public 'Ts'...

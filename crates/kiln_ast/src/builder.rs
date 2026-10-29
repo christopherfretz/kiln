@@ -1062,6 +1062,16 @@ impl<'a> AstBuilder<'a> {
                     {
                         deps |= ExprDeps::VALUE_INST;
                     }
+                    // An array of unknown bound whose initializer is
+                    // type-dependent: its bound is unknown until
+                    // instantiation (clang's `computeDependence` for
+                    // `DeclRefExpr`; `int a[] = {ts...}`).
+                    if n.ty().is_some_and(|t| {
+                        self.ast.types.canonical_kind(t) == crate::types::TypeKind::IncompleteArray
+                    }) && v.init.is_some_and(|i| self.deps(i).contains(ExprDeps::TYPE))
+                    {
+                        deps |= ExprDeps::TYPE_VALUE_INST;
+                    }
                 }
             }
             _ => {}
@@ -1146,7 +1156,20 @@ impl<'a> AstBuilder<'a> {
             }
             _ => (ValueCategory::LValue, ObjectKind::Ordinary),
         };
-        let deps = self.deps(base) | self.type_deps(ty) | self.decl_deps(m);
+        let mut deps = self.deps(base) | self.type_deps(ty) | self.decl_deps(m);
+        // A field of the current instantiation with a non-dependent type
+        // is not type-dependent ([temp.dep.expr]/5); a bit-field with a
+        // value-dependent width is (clang's `computeDependence` for
+        // `MemberExpr`).
+        if mn.kind() == DeclKind::Field {
+            if mn.has(DeclFlags::DEPENDENT_CTX) && !self.ast.types.is_dependent(ty) {
+                deps = deps.without(ExprDeps::TYPE);
+            }
+            let width = self.ast.decls.field(m).and_then(|f| f.bit_width);
+            if width.is_some_and(|w| self.deps(w).contains(ExprDeps::VALUE)) {
+                deps |= ExprDeps::TYPE;
+            }
+        }
         let flags = if arrow { ExprFlags::ARROW } else { ExprFlags::NONE };
         let e = self.push_expr(
             ExprKind::MemberExpr,

@@ -656,6 +656,38 @@ impl<'a> AstNames<'a> {
                 self.expr(exprs.operand(e), d, out);
                 out.push_str("...");
             }
+            ExprKind::CXXUnresolvedConstructExpr => {
+                write_type(&ast.types, self, n.ty(), PrintOptions::SUGARED, out);
+                let (open, close) = if n.aux() != 0 { ('{', '}') } else { ('(', ')') };
+                match ListId::from_raw(n.a()) {
+                    Some(l) => self.expr_list(l, open, close, d, out),
+                    None => {
+                        out.push(open);
+                        out.push(close);
+                    }
+                }
+            }
+            ExprKind::SizeOfPackExpr => {
+                out.push_str("sizeof...(");
+                if let Some(p) = DeclId::from_raw(n.a()) {
+                    self.write_name(p, out);
+                }
+                out.push(')');
+            }
+            ExprKind::CXXFoldExpr => {
+                let op = crate::expr::BinaryOp::from_u8(n.aux()).map_or("?", |o| o.spelling());
+                out.push('(');
+                if let Some(l) = ExprId::from_raw(n.a()) {
+                    self.expr(l, d, out);
+                    let _ = write!(out, " {op} ");
+                }
+                out.push_str("...");
+                if let Some(r) = ExprId::from_raw(n.b()) {
+                    let _ = write!(out, " {op} ");
+                    self.expr(r, d, out);
+                }
+                out.push(')');
+            }
             _ => out.push_str("..."),
         }
     }
@@ -688,7 +720,11 @@ impl AstNames<'_> {
         }
         let c = self.ast.template_parm(decl)?.constraint;
         Some(c.and_then(|e| {
-            let x = self.ast.exprs.get(e);
+            let mut x = self.ast.exprs.get(e);
+            // A constrained pack's constraint is the fold `(C<T> && ...)`.
+            if x.kind() == ExprKind::CXXFoldExpr {
+                x = self.ast.exprs.get(ExprId::from_raw(x.a())?);
+            }
             if x.kind() != ExprKind::ConceptSpecializationExpr {
                 return None;
             }

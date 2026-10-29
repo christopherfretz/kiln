@@ -1,0 +1,29 @@
+TranslationUnitDecl
+|-FunctionTemplateDecl sum
+| |-NonTypeTemplateParmDecl referenced 'int' depth 0 index 0 ... Ns
+| `-FunctionDecl sum 'int ()'
+|   `-CompoundStmt
+|     `-ReturnStmt
+|       `-CXXFoldExpr '<dependent type>'
+|         |-<<<NULL>>>
+|         |-DeclRefExpr 'int' NonTypeTemplateParm 'Ns' 'int'
+|         `-IntegerLiteral 'int' 0
+|-FunctionTemplateDecl prod
+| |-NonTypeTemplateParmDecl referenced 'int' depth 0 index 0 ... Ns
+| `-FunctionDecl prod 'int ()'
+|   `-CompoundStmt
+|     `-ReturnStmt
+|       `-CXXFoldExpr '<dependent type>'
+|         |-<<<NULL>>>
+|         |-IntegerLiteral 'int' 1
+|         `-DeclRefExpr 'int' NonTypeTemplateParm 'Ns' 'int'
+`-FunctionTemplateDecl shifts
+  |-TemplateTypeParmDecl referenced class depth 0 index 0 ... Ts
+  `-FunctionDecl shifts 'int (Ts...)'
+    |-ParmVarDecl referenced ts 'Ts...' pack
+    `-CompoundStmt
+      `-ReturnStmt
+        `-CXXFoldExpr '<dependent type>'
+          |-<<<NULL>>>
+          |-IntegerLiteral 'int' 1
+          `-DeclRefExpr 'Ts' lvalue ParmVar 'ts' 'Ts...'

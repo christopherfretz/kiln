@@ -1093,6 +1093,21 @@ impl Printer<'_> {
                 if template_kw {
                     self.push("template ");
                 }
+                // `T::template X<A>::`: the component's own qualifier is
+                // this one's prefix, already printed (clang's
+                // `SuppressScope` for a type component).
+                if let TypeView::DependentTemplateSpecialization { name, args, .. } =
+                    self.ctx.view(ty.ty())
+                {
+                    if !template_kw {
+                        self.push("template ");
+                    }
+                    self.symbol(name);
+                    self.arg_list(args, false);
+                    self.push("::");
+                    self.depth -= 1;
+                    return;
+                }
                 let saved_tag = self.suppress_tag;
                 self.suppress_tag = true;
                 self.with_scope(false, |p| p.print(ty, ""));

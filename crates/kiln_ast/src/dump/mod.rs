@@ -1179,12 +1179,14 @@ impl<'a, W: io::Write> Dumper<'a, W> {
             None => kids.push((Node::Fixed("<<<NULL>>>"), None)),
         };
         match n.kind() {
-            ExprKind::DependentScopeDeclRefExpr | ExprKind::UnresolvedLookupExpr => targs(kids),
+            // clang's dumps print no explicit template arguments of a
+            // `DependentScopeDeclRefExpr` or `CXXDependentScopeMemberExpr`.
+            ExprKind::DependentScopeDeclRefExpr => {}
+            ExprKind::UnresolvedLookupExpr => targs(kids),
             ExprKind::CXXDependentScopeMemberExpr => {
                 if let Some(b) = ExprId::from_raw(n.a()) {
                     kids.push((Node::Expr(b), None));
                 }
-                targs(kids);
             }
             ExprKind::CXXUnresolvedConstructExpr | ExprKind::ParenListExpr => {
                 let l = n.a();
