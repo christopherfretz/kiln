@@ -620,7 +620,13 @@ impl<'a> AstBuilder<'a> {
             FriendTarget::Decl(d) => {
                 self.add(h, DeclKind::Friend, None, Payload::None(d.raw()), None)
             }
-            FriendTarget::Type(t) => self.add(h, DeclKind::Friend, Some(t), Payload::None(0), None),
+            FriendTarget::Type { ty, owned_tag } => self.add(
+                h,
+                DeclKind::Friend,
+                Some(ty),
+                Payload::None(owned_tag.map_or(0, RawId::raw)),
+                None,
+            ),
         }
     }
 

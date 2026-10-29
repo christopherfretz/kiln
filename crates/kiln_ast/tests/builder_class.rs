@@ -94,9 +94,12 @@ fn hidden_friend_is_adl_only_namespace_memdef() {
         .misc(DeclMisc::new().with_friend(FriendKind::Undeclared));
     let f = ast.builder().function(h, DeclKind::Function, builtin(INT), FnSpec::new(), None);
     let fr = ast.builder().friend(c, L, FriendTarget::Decl(f));
-    let ft = ast.builder().friend(c, L, FriendTarget::Type(builtin(INT)));
+    let ft = ast.builder().friend(c, L, FriendTarget::Type { ty: builtin(INT), owned_tag: None });
     assert_eq!(ast.decls.friend_target(fr), FriendTarget::Decl(f));
-    assert_eq!(ast.decls.friend_target(ft), FriendTarget::Type(builtin(INT)));
+    assert_eq!(
+        ast.decls.friend_target(ft),
+        FriendTarget::Type { ty: builtin(INT), owned_tag: None }
+    );
     // The befriended function is a lexical member of C, then the friends.
     assert_eq!(ast.members(c).collect::<Vec<_>>(), vec![f, fr, ft]);
     let r = ast.lookup_local(tu, fname);

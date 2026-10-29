@@ -686,7 +686,7 @@ pub enum Defaulted {
 /// implicit_inline(1) constexpr_kind(2) virtual(1) pure(1) defaulted(2)
 /// deleted(1) explicit(1) trivial(1) immediate_escalating(1)
 /// has_contracts(1) is_coroutine(1) escalated(1) variadic(1) override(1)
-/// final(1) explicit_object(1)`.
+/// final(1) explicit_object(1) virtual_written(1)`.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug)]
 pub struct FnSpec(u32);
 
@@ -768,7 +768,8 @@ bit_accessors!(FnSpec:
     is_inline / with_inline = 2;
     /// Implicitly inline (defined in class, constexpr, ...).
     implicit_inline / with_implicit_inline = 3;
-    /// `virtual` (written or overriding).
+    /// Virtual: `virtual` written or overriding a virtual function
+    /// ([class.virtual]/2). Semantic; see [`Self::virtual_written`].
     is_virtual / with_virtual = 6;
     /// Pure virtual (`= 0`).
     is_pure / with_pure = 7;
@@ -795,6 +796,10 @@ bit_accessors!(FnSpec:
     is_final / with_final = 19;
     /// Has an explicit object parameter (P0847, [dcl.fct]/6).
     has_explicit_object / with_explicit_object = 20;
+    /// The `virtual` function-specifier was written on this declaration
+    /// (clang's dump prints `virtual` only when written; an implicit
+    /// overrider has [`Self::is_virtual`] without this bit).
+    virtual_written / with_virtual_written = 21;
 );
 
 /// Hot payload of function kinds (24 bytes, spec/ast.md §4.2).
@@ -1113,6 +1118,9 @@ impl DefinitionBits {
     pub const POD: DefinitionBits = DefinitionBits(1 << 48);
     /// Const-default-constructible ([dcl.init.general]/8).
     pub const CAN_CONST_DEFAULT_INIT: DefinitionBits = DefinitionBits(1 << 49);
+    /// The class was declared with the `final` class-virt-specifier
+    /// ([class.pre]; clang dumps a `FinalAttr final` child).
+    pub const FINAL: DefinitionBits = DefinitionBits(1 << 50);
 
     /// No bits.
     pub const fn empty() -> Self {
@@ -1352,10 +1360,21 @@ pub struct StaticAssertData {
 /// What a `Friend` declaration befriends ([class.friend]).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum FriendTarget {
-    /// A function, function template or class (its declaration).
+    /// A function or function template (its declaration, whose lexical
+    /// context is the class).
     Decl(DeclId),
-    /// `friend T;` (a type, possibly not a class).
-    Type(QualType),
+    /// `friend T;` / `friend class C;` (a type, possibly not a class).
+    Type {
+        /// The befriended type as written (an `Elaborated` type for
+        /// `friend class C;`).
+        ty: QualType,
+        /// The class declaration the elaborated-type-specifier introduced
+        /// (`friend struct H;` with no prior `H`: semantic context the
+        /// innermost enclosing namespace, lexical context the class,
+        /// `FriendKind::Undeclared`); the dump prints it as the
+        /// `FriendDecl`'s child, as clang.
+        owned_tag: Option<DeclId>,
+    },
 }
 
 /// Payload of `LifetimeExtendedTemporary` (12 bytes, spec/sema-class.md
@@ -2197,6 +2216,12 @@ impl DeclArena {
         Ok(())
     }
 
+    /// The base-specifier at global index `i` (a value of a record's
+    /// `bases` list or of a cast's base path, `ExprArena::cast_path`).
+    pub fn base_spec(&self, i: u32) -> &BaseSpec {
+        &self.base_specs[i as usize]
+    }
+
     /// The base-specifiers of class `r`.
     pub fn bases<'a>(
         &'a self,
@@ -2336,9 +2361,9 @@ impl DeclArena {
     pub fn friend_target(&self, d: DeclId) -> FriendTarget {
         let n = self.get(d);
         assert!(n.kind() == DeclKind::Friend, "expected Friend, found {:?}", n.kind());
-        match DeclId::from_raw(n.data()) {
-            Some(t) => FriendTarget::Decl(t),
-            None => FriendTarget::Type(n.ty().expect("friend type")),
+        match n.ty() {
+            Some(ty) => FriendTarget::Type { ty, owned_tag: DeclId::from_raw(n.data()) },
+            None => FriendTarget::Decl(DeclId::new(n.data())),
         }
     }
 

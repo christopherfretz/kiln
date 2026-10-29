@@ -32,16 +32,16 @@ pub use names::AstNames;
 use crate::Ast;
 use crate::consts::PrintOptions as ValueOptions;
 use crate::decl::{
-    Access, ConstexprKind, DeclFlags, DeclKind, Defaulted, DefinitionBits, EnumData, FieldData,
-    FnStorage, InitStyle, LinkageLang, NamespaceData, ParamData, TagKind, TlsKind, VarEvalState,
-    VarStorage,
+    Access, ConstexprKind, CtorInitKind, DeclFlags, DeclKind, Defaulted, DefinitionBits, EnumData,
+    FieldData, FnStorage, FriendKind, FriendTarget, InitStyle, LinkageLang, NamespaceData,
+    ParamData, TagKind, TlsKind, VarEvalState, VarStorage,
 };
 use crate::expr::{
     ExprDeps, ExprFlags, ExprKind, NonOdrUse, ObjectKind, StringKind, ValueCategory,
 };
-use crate::ids::{AttrId, DeclId, ExprId, ListId, QualType, RawId, StmtId};
+use crate::ids::{AttrId, DeclId, ExprId, ListId, QualType, RawId, StmtId, TypeId};
 use crate::stmt::{IfKind, StmtKind};
-use crate::types::{PrintOptions, write_type};
+use crate::types::{ExcSpec, PrintOptions, write_type};
 
 /// Selects the declarations [`dump`] prints as separate trees (clang's
 /// `-ast-dump-filter`, spec/ast-dump.md §1). A declaration matches when
@@ -131,6 +131,15 @@ enum Node {
     CondVar(DeclId),
     /// A base-specifier of a class definition (`public 'B'`).
     Base(DeclId, u32),
+    /// The `i`th ctor-initializer of a constructor
+    /// (`CXXCtorInitializer Field 'm' 'int'`).
+    CtorInit(DeclId, u32),
+    /// The methods a virtual function overrides
+    /// (`Overrides: [ B::f 'int ()' ]`).
+    Overrides(DeclId),
+    /// A fixed line: the attributes kiln keeps as bits (`OverrideAttr`,
+    /// `FinalAttr final`).
+    Fixed(&'static str),
 }
 
 /// A pending line.
@@ -331,6 +340,9 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                 Node::Attr(a) => self.attr_line(a),
                 Node::CondVar(_) => self.line.push_str("DeclStmt"),
                 Node::Base(r, i) => self.base_line(r, i),
+                Node::CtorInit(c, i) => self.ctor_init_line(c, i),
+                Node::Overrides(d) => self.overrides_line(d),
+                Node::Fixed(text) => self.line.push_str(text),
             }
             debug_assert!(!self.line.ends_with(' '), "trailing whitespace: {:?}", self.line);
             self.line.push('\n');
@@ -365,7 +377,12 @@ impl<'a, W: io::Write> Dumper<'a, W> {
             Node::Expr(e) => self.expr_children(e, kids),
             Node::Stmt(s) => self.stmt_children(s, kids),
             Node::CondVar(d) => kids.push((Node::Decl(d), None)),
-            Node::Attr(_) | Node::Base(..) => {}
+            Node::CtorInit(c, i) => {
+                if let Some(ci) = self.ast.ctor_inits(c).nth(i as usize) {
+                    kids.push((Node::Expr(ci.init), None));
+                }
+            }
+            Node::Attr(_) | Node::Base(..) | Node::Overrides(_) | Node::Fixed(_) => {}
         }
     }
 
@@ -379,13 +396,31 @@ impl<'a, W: io::Write> Dumper<'a, W> {
             }
         };
         if kind.is_function() {
+            // clang: the delete message and the overridden methods are
+            // children of the line itself, before the parameters.
+            if let Some(&m) = decls.cold.delete_message.get(d) {
+                kids.push((Node::Expr(m), Some("delete message")));
+            }
+            if decls.cold.overrides.get(d).is_some() {
+                kids.push((Node::Overrides(d), None));
+            }
             if let Some(f) = decls.function(d) {
                 for p in ast.lists.iter::<DeclId>(f.params) {
                     kids.push((Node::Decl(p), None));
                 }
+                for i in 0..ast.ctor_inits(d).len() {
+                    kids.push((Node::CtorInit(d, i as u32), None));
+                }
                 if let Some(b) = f.body {
                     kids.push((self.stmt_node(b), None));
                 }
+            }
+        } else if kind == DeclKind::Friend {
+            match decls.friend_target(d) {
+                FriendTarget::Decl(t) | FriendTarget::Type { owned_tag: Some(t), .. } => {
+                    kids.push((Node::Decl(t), None));
+                }
+                FriendTarget::Type { owned_tag: None, .. } => {}
             }
         } else if let Some(v) = decls.var(d) {
             expr(v.init);
@@ -403,15 +438,27 @@ impl<'a, W: io::Write> Dumper<'a, W> {
             for i in 0..decls.bases(d, &ast.lists).count() {
                 kids.push((Node::Base(d, i as u32), None));
             }
+            if decls.record(d).is_some_and(|r| r.defn.contains(DefinitionBits::FINAL)) {
+                kids.push((Node::Fixed("FinalAttr final"), None));
+            }
         }
         for a in ast.lists.iter::<AttrId>(ast.attrs.of_decl(d)) {
             if self.opts.implicit || ast.attrs.get(a).flags & 1 == 0 {
                 kids.push((Node::Attr(a), None));
             }
         }
+        if let Some(f) = decls.function(d) {
+            if f.spec.is_override() {
+                kids.push((Node::Fixed("OverrideAttr"), None));
+            }
+            if f.spec.is_final() {
+                kids.push((Node::Fixed("FinalAttr final"), None));
+            }
+        }
         if !kind.is_function() && decls.member_list(d).is_some() {
             for m in ast.members(d) {
-                if self.shown(d, m) {
+                // A befriended declaration prints under its `FriendDecl`.
+                if self.shown(d, m) && decls.get(m).misc().friend() == FriendKind::None {
                     kids.push((Node::Decl(m), None));
                 }
             }
@@ -431,8 +478,58 @@ impl<'a, W: io::Write> Dumper<'a, W> {
             ExprKind::MemberExpr
             | ExprKind::UnaryOperator
             | ExprKind::ParenExpr
-            | ExprKind::ConstantExpr => push(n.a()),
+            | ExprKind::ConstantExpr
+            | ExprKind::MaterializeTemporaryExpr
+            | ExprKind::CXXBindTemporaryExpr
+            | ExprKind::ExprWithCleanups => push(n.a()),
             k if k.is_cast() => push(n.a()),
+            ExprKind::CXXTypeidExpr => {
+                if !n.has(ExprFlags::ARG_IS_TYPE) {
+                    push(n.a());
+                }
+            }
+            ExprKind::CXXConstructExpr | ExprKind::CXXTemporaryObjectExpr => {
+                for c in lists.iter::<ExprId>(exprs.construct_args(e)) {
+                    push(c.raw());
+                }
+            }
+            ExprKind::CXXMemberCallExpr => {
+                push(n.a());
+                for c in lists.iter::<ExprId>(exprs.call_args(e)) {
+                    push(c.raw());
+                }
+            }
+            ExprKind::CXXParenListInitExpr => {
+                if let Some(f) = exprs.paren_list_filler(e) {
+                    kids.push((Node::Expr(f), Some("array_filler")));
+                }
+                for c in lists.iter::<ExprId>(exprs.paren_list_inits(e)) {
+                    kids.push((Node::Expr(c), None));
+                }
+            }
+            ExprKind::ArrayInitLoopExpr => {
+                for c in exprs.array_init_loop(e) {
+                    kids.push((Node::Expr(c), None));
+                }
+            }
+            // Shared subexpressions print under every user (as clang).
+            ExprKind::OpaqueValueExpr => {
+                if let Some(c) = exprs.opaque_source(e) {
+                    kids.push((Node::Expr(c), None));
+                }
+            }
+            ExprKind::CXXDefaultInitExpr => {
+                let field = exprs.default_init_field(e);
+                if let Some(c) = self.ast.decls.field(field).and_then(|f| f.init) {
+                    kids.push((Node::Expr(c), None));
+                }
+            }
+            ExprKind::CXXDefaultArgExpr => {
+                let param = exprs.default_arg_param(e);
+                if let Some(c) = self.ast.decls.param(param).and_then(|p| p.default_arg) {
+                    kids.push((Node::Expr(c), None));
+                }
+            }
             ExprKind::UnaryExprOrTypeTraitExpr => {
                 if !n.has(ExprFlags::ARG_IS_TYPE) {
                     push(n.a());
@@ -658,6 +755,17 @@ impl<'a, W: io::Write> Dumper<'a, W> {
         self.line.push_str("Decl");
         self.id('d', d.raw());
         self.loc(n.loc());
+        // clang's `parent`: the semantic context differs from the lexical
+        // one (a friend, an out-of-line member).
+        if let Some(ctx) = n.ctx()
+            && decls.lexical_ctx(d) != Some(ctx)
+        {
+            if self.opts.ids {
+                let _ = write!(self.line, " parent=#d{}", ctx.raw());
+            } else {
+                self.line.push_str(" parent");
+            }
+        }
         if self.opts.ids
             && let Some(p) = ast.prev(d)
         {
@@ -678,7 +786,10 @@ impl<'a, W: io::Write> Dumper<'a, W> {
         }
         if kind.is_function() {
             self.function_fields(d);
-        } else if let Some(v) = decls.var(d) {
+            return;
+        }
+        self.friend_word(n.misc().friend());
+        if let Some(v) = decls.var(d) {
             let v = *v;
             self.name(d);
             self.opt_ty(n.ty());
@@ -762,6 +873,7 @@ impl<'a, W: io::Write> Dumper<'a, W> {
             ConstexprKind::None if spec.escalated() => self.line.push_str(" immediate"),
             ConstexprKind::None => {}
         }
+        self.friend_word(n.misc().friend());
         self.name(d);
         self.opt_ty(n.ty());
         self.line.push_str(match spec.storage() {
@@ -772,7 +884,7 @@ impl<'a, W: io::Write> Dumper<'a, W> {
         let defaulted = spec.defaulted() != Defaulted::No;
         for (on, word) in [
             (spec.is_inline(), " inline"),
-            (spec.is_virtual(), " virtual"),
+            (spec.virtual_written(), " virtual"),
             (spec.is_pure(), " pure"),
             (defaulted, " default"),
             (defaulted && spec.is_deleted(), "_delete"),
@@ -783,9 +895,24 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                 self.line.push_str(word);
             }
         }
+        if let Some(t) = n.ty()
+            && let Some(p) = ast.types.proto(t)
+            && let ExcSpec::Deferred(src) = ast.types.exc_spec(p)
+        {
+            self.line.push_str(" noexcept-unevaluated");
+            self.id('d', src.raw());
+        }
         if !spec.is_inline() && self.implicitly_inline(d) {
             self.line.push_str(" implicit-inline");
         }
+    }
+
+    fn friend_word(&mut self, k: FriendKind) {
+        self.line.push_str(match k {
+            FriendKind::None => "",
+            FriendKind::Declared => " friend",
+            FriendKind::Undeclared => " friend_undeclared",
+        });
     }
 
     /// clang's `isInlined()` without the specifier: constexpr, consteval,
@@ -882,6 +1009,11 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                 let lang = decls.scope(d).map_or(0, |s| s.aux);
                 self.line.push_str(if lang == LinkageLang::C as u32 { " C" } else { " C++" });
             }
+            DeclKind::Friend => {
+                if let FriendTarget::Type { ty, .. } = decls.friend_target(d) {
+                    self.ty(ty);
+                }
+            }
             DeclKind::AccessSpec => {
                 self.line.push_str(match n.misc().access() {
                     Access::Public => " public",
@@ -919,6 +1051,48 @@ impl<'a, W: io::Write> Dumper<'a, W> {
         if b.pack_expansion {
             self.line.push_str("...");
         }
+    }
+
+    /// clang's `CXXCtorInitializer` line: the member (`Field 'm' 'int'`),
+    /// the base class (`'B'`) or the delegated-to class (`'D'`).
+    fn ctor_init_line(&mut self, c: DeclId, i: u32) {
+        self.line.push_str("CXXCtorInitializer");
+        let Some(ci) = self.ast.ctor_inits(c).nth(i as usize).copied() else { return };
+        match ci.kind {
+            CtorInitKind::Field | CtorInitKind::IndirectField => {
+                self.line.push(' ');
+                self.decl_ref(DeclId::new(ci.target));
+            }
+            CtorInitKind::Base | CtorInitKind::VirtualBase => {
+                self.ty(QualType::unqual(TypeId::new(ci.target)));
+            }
+            CtorInitKind::Delegating => self.ty(self.ast.exprs.get(ci.init).ty()),
+        }
+    }
+
+    /// `Overrides: [ B::f 'int ()', C::f 'int ()' ]` (clang names each
+    /// method by its class's simple name; the type is sugared only).
+    fn overrides_line(&mut self, d: DeclId) {
+        let ast = self.ast;
+        self.line.push_str("Overrides: [ ");
+        let list = ast.decls.cold.overrides.get(d).copied().unwrap_or(ListId::EMPTY);
+        for (k, m) in ast.lists.iter::<DeclId>(list).enumerate() {
+            if k > 0 {
+                self.line.push_str(", ");
+            }
+            if let Some(p) = ast.decls.get(m).ctx() {
+                self.names.write_name(p, &mut self.line);
+            }
+            self.line.push_str("::");
+            self.names.write_name(m, &mut self.line);
+            self.id('d', m.raw());
+            if let Some(t) = ast.decls.get(m).ty() {
+                self.line.push_str(" '");
+                write_type(&ast.types, &self.names, t, PrintOptions::SUGARED, &mut self.line);
+                self.line.push('\'');
+            }
+        }
+        self.line.push_str(" ]");
     }
 
     fn attr_line(&mut self, a: AttrId) {
@@ -1115,9 +1289,63 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                 self.bare_ty(x.result_ty);
             }
             k if k.is_cast() => {
-                let _ = write!(self.line, " <{}>", exprs.cast_kind(e).spelling());
+                let named = match k {
+                    ExprKind::CXXStaticCastExpr => Some(" static_cast<"),
+                    ExprKind::CXXDynamicCastExpr => Some(" dynamic_cast<"),
+                    ExprKind::CXXConstCastExpr => Some(" const_cast<"),
+                    ExprKind::CXXReinterpretCastExpr => Some(" reinterpret_cast<"),
+                    ExprKind::CXXFunctionalCastExpr => Some(" functional cast to "),
+                    _ => None,
+                };
+                if let Some(head) = named {
+                    self.line.push_str(head);
+                    self.written_cast_type(n.ty(), n.value_category());
+                    if k != ExprKind::CXXFunctionalCastExpr {
+                        self.line.push('>');
+                    }
+                }
+                let _ = write!(self.line, " <{}", exprs.cast_kind(e).spelling());
+                if let Some(path) = exprs.cast_path(e) {
+                    self.base_path(path);
+                }
+                self.line.push('>');
                 if k == ExprKind::ImplicitCastExpr && n.has(ExprFlags::PART_OF_EXPLICIT_CAST) {
                     self.line.push_str(" part_of_explicit_cast");
+                }
+            }
+            ExprKind::CXXConstructExpr | ExprKind::CXXTemporaryObjectExpr => {
+                if let Some(t) = ast.decls.get(exprs.constructor(e)).ty() {
+                    self.ty(t);
+                }
+                let info = exprs.construct_info(e);
+                self.flags(&[
+                    (info.list, " list"),
+                    (info.std_init_list, " std::initializer_list"),
+                    (info.zeroing, " zeroing"),
+                    (info.immediate_escalating, " immediate-escalating"),
+                ]);
+            }
+            ExprKind::MaterializeTemporaryExpr => {
+                if let Some(t) = exprs.lifetime_extended_temporary(e)
+                    && let Some(l) = ast.decls.lifetime_extended(t)
+                {
+                    self.line.push_str(" extended by ");
+                    self.decl_ref(l.extending);
+                }
+            }
+            ExprKind::CXXBindTemporaryExpr => self.line.push_str(" (CXXTemporary)"),
+            // clang 19 always rebuilds a default member initializer.
+            ExprKind::CXXDefaultInitExpr => self.line.push_str(" has rewritten init"),
+            ExprKind::CXXThisExpr => {
+                if exprs.this_is_implicit(e) {
+                    self.line.push_str(" implicit");
+                }
+                self.line.push_str(" this");
+            }
+            ExprKind::CXXTypeidExpr => {
+                if let crate::expr::TypeidOperand::Type(t) = exprs.typeid_operand(e) {
+                    self.line.push_str(" type_operand=");
+                    self.bare_ty(t);
                 }
             }
             ExprKind::UnaryExprOrTypeTraitExpr => {
@@ -1141,6 +1369,42 @@ impl<'a, W: io::Write> Dumper<'a, W> {
             }
             _ => {}
         }
+    }
+
+    /// The type a named or functional cast wrote: the expression type,
+    /// as a reference for a glvalue (clang's `getTypeAsWritten`, sugared,
+    /// unquoted).
+    fn written_cast_type(&mut self, t: QualType, vk: ValueCategory) {
+        write_type(&self.ast.types, &self.names, t, PrintOptions::SUGARED, &mut self.line);
+        match vk {
+            ValueCategory::PRValue => {}
+            ValueCategory::LValue => self.line.push_str(" &"),
+            ValueCategory::XValue => self.line.push_str(" &&"),
+        }
+    }
+
+    /// clang's `dumpBasePath`: ` (B -> virtual V)`, each step the base's
+    /// simple name.
+    fn base_path(&mut self, path: ListId) {
+        let ast = self.ast;
+        let steps = ast.lists.get(path);
+        if steps.is_empty() {
+            return;
+        }
+        self.line.push_str(" (");
+        for (k, &i) in steps.iter().enumerate() {
+            if k > 0 {
+                self.line.push_str(" -> ");
+            }
+            let b = ast.decls.base_spec(i);
+            if b.is_virtual {
+                self.line.push_str("virtual ");
+            }
+            if let Some(r) = ast.types.as_record(b.ty) {
+                self.names.write_name(r, &mut self.line);
+            }
+        }
+        self.line.push(')');
     }
 
     fn non_odr_use(&mut self, u: NonOdrUse) {
