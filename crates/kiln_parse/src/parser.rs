@@ -96,6 +96,35 @@ pub struct Parser<'a, 'sm> {
     /// unexpanded pack (or `auto`): a `...` before its `)` belongs to the
     /// declarator, not the parameter list ([dcl.fct]/14).
     pub(crate) pack_hint: bool,
+    /// Memoized [`Parser::skip_template_args`] results (spec/parse.md
+    /// §2.5): parsing `A<B<C<...>>>` scans each nested list once, not
+    /// once per enclosing level.
+    targs_memo: RefCell<TemplateArgsMemo>,
+}
+
+/// The template-argument scan memo: the `<` index → the scan's result,
+/// valid while [`Sema::lookup_stamp`] is `stamp` (name classification
+/// unchanged) and the token stream is unchanged (cleared when a replay
+/// starts or ends and when [`Parser::split_greater`] rewrites a token).
+#[derive(Default)]
+struct TemplateArgsMemo {
+    stamp: u64,
+    map: kiln_source::fx::FxHashMap<usize, Option<(usize, bool)>>,
+}
+
+impl TemplateArgsMemo {
+    /// The results valid under `stamp`; a different stamp empties the
+    /// memo first.
+    fn valid_for(
+        &mut self,
+        stamp: u64,
+    ) -> &mut kiln_source::fx::FxHashMap<usize, Option<(usize, bool)>> {
+        if self.stamp != stamp {
+            self.stamp = stamp;
+            self.map.clear();
+        }
+        &mut self.map
+    }
 }
 
 impl std::fmt::Debug for Parser<'_, '_> {
@@ -134,6 +163,7 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             in_stmt_expr: false,
             greater_is_op: true,
             pack_hint: false,
+            targs_memo: RefCell::new(TemplateArgsMemo::default()),
         };
         p.handle_events(0);
         p
@@ -236,6 +266,7 @@ impl<'a, 'sm> Parser<'a, 'sm> {
                     self.pos = r.pos;
                     self.cur = r.cur;
                 }
+                self.forget_scans();
                 return t;
             }
             self.cur = r.toks.get(self.pos).copied().unwrap_or(r.eof);
@@ -267,6 +298,7 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             inject: false,
         };
         self.replay.push(saved);
+        self.forget_scans();
         self.pos = 0;
         self.cur = cur;
         self.prev_hi = Loc::INVALID;
@@ -293,6 +325,7 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             inject: true,
         };
         self.replay.push(saved);
+        self.forget_scans();
         self.pos = 0;
         self.cur = semi;
     }
@@ -304,6 +337,7 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             self.replay.pop();
         }
         let done = self.at_eof();
+        self.forget_scans();
         if let Some(r) = self.replay.pop() {
             self.pos = r.pos;
             self.cur = r.cur;
@@ -661,7 +695,34 @@ impl<'a, 'sm> Parser<'a, 'sm> {
     /// list and whether it closed before that token's last character (a
     /// `>>` with one list open, `>=`, `>>=`). `None` if a bracket closes
     /// unbalanced, or a `;` or the end of input is reached first.
+    ///
+    /// Memoized per `<` index (spec/parse.md §2.5): nested lists are
+    /// scanned by the enclosing list's scan, and each level of
+    /// `A<B<C<...>>>` asks again when it is parsed, so without the memo
+    /// the parse is quadratic in the nesting depth.
     pub(crate) fn skip_template_args(&self, i: usize) -> Option<(usize, bool)> {
+        let stamp = self.s.lookup_stamp();
+        if let Some(&r) = self.targs_memo.borrow_mut().valid_for(stamp).get(&i) {
+            return r;
+        }
+        let r = self.scan_template_args(i);
+        let mut m = self.targs_memo.borrow_mut();
+        // A nested scan may have refreshed the memo; keep only results
+        // computed under the current stamp.
+        if m.stamp == stamp {
+            let _ = m.map.insert(i, r);
+        }
+        r
+    }
+
+    /// Clears the template-argument memo: the token indices or the
+    /// tokens themselves changed.
+    fn forget_scans(&mut self) {
+        self.targs_memo.get_mut().map.clear();
+    }
+
+    /// [`Parser::skip_template_args`] without the memo.
+    fn scan_template_args(&self, i: usize) -> Option<(usize, bool)> {
         let mut stack = vec![Punct::Less];
         let mut j = i + 1;
         let mut after_template_kw = false;
@@ -754,6 +815,7 @@ impl<'a, 'sm> Parser<'a, 'sm> {
         };
         let lo = t.span.lo;
         let mid = lo.with_offset(1);
+        self.forget_scans();
         self.cur = Token {
             kind: TokKind::Punct(rest),
             span: Span::new(mid, t.span.hi),

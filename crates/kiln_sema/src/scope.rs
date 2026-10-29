@@ -99,3 +99,25 @@ impl Scope {
         self.locals.iter().rev().find(|(s, _, n)| *s == name && *n == ns).map(|e| e.1)
     }
 }
+
+impl crate::Sema<'_, '_> {
+    /// A fingerprint of the state name classification reads: the number
+    /// of declarations, the AST lookup tables' generation, the current
+    /// context, the shape of the scope stack (kind, entity, number of
+    /// locals and using-directives per scope) and the open prototype
+    /// parameter lists. While it is unchanged, [`crate::Sema::classify_name`]
+    /// answers every query the same way, so the parser may reuse a
+    /// lookahead scan (spec/parse.md §2.5, the template-argument memo).
+    pub fn lookup_stamp(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut h = kiln_source::fx::FxHasher::default();
+        (self.ast.decls.len(), self.ast.lookup.generation(), self.ctx).hash(&mut h);
+        for s in &self.scopes {
+            (s.kind as u8, s.entity, s.locals.len(), s.using_dirs.len()).hash(&mut h);
+        }
+        for f in &self.prototype_params {
+            (f.depth, f.params.len(), f.index).hash(&mut h);
+        }
+        h.finish()
+    }
+}

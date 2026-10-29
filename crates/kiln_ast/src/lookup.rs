@@ -66,6 +66,8 @@ pub struct LookupTables {
     map: FxHashMap<(DeclId, DeclName), LookupEntry>,
     sets: Vec<Vec<u32>>,
     inline_children: FxHashMap<DeclId, Vec<DeclId>>,
+    /// Bumped by every insertion (see [`LookupTables::generation`]).
+    generation: u64,
 }
 
 /// The declarations found by [`LookupTables::lookup_local`], in order of
@@ -201,6 +203,7 @@ impl LookupTables {
         flags: LookupFlags,
     ) {
         assert!(d.index() & FLAG_MASK == 0, "DeclId collides with lookup flag bits");
+        self.generation += 1;
         let word = d.index() | flags.0;
         let plain = flags.is_empty();
         let key = (ctx, name);
@@ -243,6 +246,7 @@ impl LookupTables {
     /// Records inline namespace `child` (primary) of namespace `parent`
     /// (primary), for ADL's associated namespaces.
     pub fn add_inline_child(&mut self, parent: DeclId, child: DeclId) {
+        self.generation += 1;
         let v = self.inline_children.entry(parent).or_default();
         if !v.contains(&child) {
             v.push(child);
@@ -252,6 +256,14 @@ impl LookupTables {
     /// The inline namespaces directly nested in `parent` (primary).
     pub fn inline_children(&self, parent: DeclId) -> &[DeclId] {
         self.inline_children.get(&parent).map_or(&[], Vec::as_slice)
+    }
+
+    /// A counter that changes whenever an entry may have changed: two
+    /// equal values bracket a span in which every lookup through these
+    /// tables gives the same answer (the parser's template-argument scan
+    /// memo, spec/parse.md §2.5).
+    pub fn generation(&self) -> u64 {
+        self.generation
     }
 
     /// The number of `(context, name)` entries.
