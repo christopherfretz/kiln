@@ -110,7 +110,7 @@ pub struct Sema<'a, 'sm> {
     pub(crate) delayed_access_depth: Vec<usize>,
     /// The current full-expression's cleanup state (spec/sema-class.md
     /// §5.3).
-    #[expect(dead_code, reason = "WP-066a interface; read from WP-067b (temporaries and cleanups)")]
+    #[expect(dead_code, reason = "WP-066a interface; read from WP-067b (cleanups)")]
     pub(crate) cleanup: class::CleanupState,
     /// Materialized temporaries collected for P2718 range-for lifetime
     /// extension (spec/sema-class.md §5.4).
