@@ -25,12 +25,25 @@ fn lex_digraph_alternative_token_from_macro() {
     p.assert_clean();
 }
 
-/// [cpp.pragma]: `#pragma pack(...)` is recorded but not applied yet, so it
-/// is reported as unsupported.
+/// [cpp.pragma]: `#pragma pack(...)` caps member alignment of the
+/// classes defined while it is in effect (spec/sema-class.md §6).
+#[test]
+fn cpp_pragma_pack_applied() {
+    let p = parse(
+        "#pragma pack(push, 1)\nstruct S { char c; int i; };\n#pragma pack(pop)\n\
+         struct T { char c; int i; };\nstatic_assert(sizeof(S) == 5 && sizeof(T) == 8);\n",
+    );
+    p.assert_clean();
+}
+
+/// [cpp.pragma]: the `#pragma pack` forms clang diagnoses (`show`, an
+/// invalid alignment, `pop` on an empty stack) are reported as
+/// unsupported.
 #[test]
 fn cpp_pragma_pack_unsupported() {
-    let p = parse("#pragma pack(push, 1)\nstruct S { char c; };\n#pragma pack(pop)\n");
+    let p = parse("#pragma pack(show)\n#pragma pack(3)\n#pragma pack(pop)\nint x;\n");
     p.assert_diag("1:9 error: '#pragma pack' is not supported yet");
+    p.assert_diag("2:9 error: '#pragma pack' is not supported yet");
     p.assert_diag("3:9 error: '#pragma pack' is not supported yet");
 }
 
@@ -75,9 +88,11 @@ fn cpp_pragma_diagnostic_ignored() {
 /// [cpp.pragma.op]: `_Pragma` produces the same pragma handling.
 #[test]
 fn cpp_pragma_op_pack() {
-    let p = parse("_Pragma(\"pack(1)\") int x;");
-    p.assert_diag("error: '#pragma pack' is not supported yet");
-    p.assert_dump("VarDecl x 'int'");
+    let p = parse(
+        "_Pragma(\"pack(1)\") struct S { char c; int i; };\n\
+                   static_assert(sizeof(S) == 5);",
+    );
+    p.assert_clean();
 }
 
 /// [cpp.import], [module.import]: an import is reported as unsupported and

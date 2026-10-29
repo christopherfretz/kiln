@@ -1,7 +1,9 @@
-//! `-fsyntax-only [-fdump-ast[=opts]] [-fdump-ast-filter=s]` for one input:
-//! the preprocessor exactly as `-E` builds it ([`Job::build_preprocessor`]),
-//! the parser and Sema on its token stream, then the optional AST dump
-//! (`spec/driver.md` "Syntax checking", `spec/ast-dump.md`).
+//! `-fsyntax-only [-fdump-ast[=opts]] [-fdump-ast-filter=s]
+//! [-fdump-record-layouts[-complete]]` for one input: the preprocessor
+//! exactly as `-E` builds it ([`Job::build_preprocessor`]), the parser and
+//! Sema on its token stream, then the optional record-layout and AST
+//! dumps (`spec/driver.md` "Syntax checking", `spec/ast-dump.md`,
+//! `spec/abi.md` §8).
 
 use std::sync::Arc;
 
@@ -108,9 +110,15 @@ impl SyntaxJob<'_> {
         let popts = ParseOptions { std: job.std.lex, ..ParseOptions::default() };
         let limits = a.constexpr.limits();
         let (tu, _pp) =
-            parse_preprocessed(pp, Arc::clone(interner), engine, target, &popts, limits);
+            parse_preprocessed(pp, Arc::clone(interner), engine, target.clone(), &popts, limits);
         a.constexpr.write_report(&tu.oven, sm, engine);
         let ast = tu.ast;
+        if a.dump_record_layouts {
+            // clang prints each class as Sema completes it, before any
+            // AST dump at the end of the translation unit.
+            let layouts = kiln_abi::dump_all_record_layouts(&ast, &target, Some(sm));
+            result.output.push_str(&layouts);
+        }
         if let Some(d) = dump_opts {
             let mut out: Vec<u8> = Vec::new();
             if dump(&ast, &d, &mut out).is_ok() {

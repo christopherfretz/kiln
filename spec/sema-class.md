@@ -689,10 +689,42 @@ evaluated; the result is an lvalue `const std::type_info`.
 All from the `Ast` (kiln_abi never sees sema): `RecordData.bases`, definition
 bits (`DYNAMIC`, `POLYMORPHIC`, `HAS_VIRTUAL_BASES`, `EMPTY`), fields and their
 flags, `alignas`/`packed` attributes, and the `#pragma pack` value current at
-the class definition, which sema now records in cold map `record_pack: DeclId →
-u16` (abi.md A3 sources `ClassDesc.max_field_align` from it).
+the class definition, which sema records in cold map `record_pack: DeclId →
+u16` (abi.md §8.2 sources `ClassDesc.max_field_align` from it).
+
+**`#pragma pack` state (WP-066c; clang `Sema::ActOnPragmaPack`).**
+- **State.** Sema keeps the current value N (bytes, 0 = none) and a
+  stack of `(label, value)` entries.
+- **Applying it.** `act_on_start_record_definition` stores a nonzero N
+  in `record_pack` for the class being defined. A class template's
+  pattern gets it too; instantiation must copy it from the pattern
+  (WP-066b/templates; not done yet).
+- **Forms** (the argument text of `#pragma pack(...)` and
+  `_Pragma("pack(...)")`):
+  - `()` resets N to 0;
+  - `(N)` sets N;
+  - `(push)`, `(push, id)`, `(push, N)` and `(push, id, N)` push the
+    current value (with `id`), then set N if given;
+  - `(pop)` restores the top entry;
+  - `(pop, id)` pops through the nearest entry labelled `id`, or does
+    nothing if there is none;
+  - `(pop, N)` pops, then sets N.
+  - N must be one of 0, 1, 2, 4, 8 or 16.
+- **Rejected forms.** These are reported through the
+  unsupported-pragma diagnostic (`#pragma pack ... is not supported
+  yet`; an error), where clang 19 warns and ignores them:
+  - `show`;
+  - any other N;
+  - `pop` on an empty stack;
+  - `pop` with both a label and N;
+  - an unknown action.
+- **Not implemented.** clang's end-of-file `-Wpragma-pack` "unterminated
+  push" warning and the include-boundary warnings are missing.
 
 ### 6.2 Algorithm (Itanium §2.4, clang `ItaniumRecordLayoutBuilder`)
+Status: steps 3–5 and 7 are implemented for non-virtual bases (WP-066c,
+abi.md §8.1). Steps 1, 2 and 6 and the vptr are WP-078b (abi.md §8.5).
+
 1. **Primary base** (II.1): the first non-virtual dynamic base; else the first
    nearly-empty virtual base that is not an indirect primary base; else the
    first nearly-empty virtual base that is (an indirect primary).
@@ -726,8 +758,11 @@ two spaces of indent per nesting level, `(empty)` after an empty class's name,
 virtual bases of a base printed once, at the end of the most-derived layout
 (`struct D` prints `struct A (virtual base)` after `int d`, not inside
 `B`/`C`), footer `[sizeof=48, dsize=44, align=8,` / `nvsize=32, nvalign=8]`.
-Clang dumps each record when first laid out (bases before derived); the
-differential compares per record, keyed by name, ignoring order.
+Clang's plain flag dumps each record when first laid out (bases before
+derived). The driver's dump instead follows clang's
+`-fdump-record-layouts-complete` order: every complete class, in lexical
+post-order, each named as at its `}`. The corpus differential compares
+against `-complete` block by block, in order (abi.md §8.4).
 
 ### 6.4 Differential tests
 - `kiln_abi/tests/layout_vs_clang.rs` (abi.md §7) extends its generator
@@ -735,7 +770,10 @@ differential compares per record, keyed by name, ignoring order.
   each, `virtual` with p = 0.3 (after WP-078b; 0 before), empty classes,
   repeated bases, polymorphic classes, non-POD bases with tail padding,
   `[[no_unique_address]]`, bit-fields after bases, `alignas`, `#pragma pack`.
-  CI: fixed seed, 2000 records; XFAIL list empty.
+  CI: fixed seed, 2000 records; XFAIL list empty. WP-066c implements this
+  for non-virtual bases and `#pragma pack` (1–3 bases per class, depth
+  bounded by the item count). Virtual bases and polymorphic classes come
+  with WP-078b.
 - `kiln_abi/tests/vtable_vs_clang.rs` (WP-078b): `-fdump-vtable-layouts` vs
   `kiln_abi::dump_vtable_layout`, byte-identical (`Vtable for 'B' (13
   entries).`, `vbase_offset (8)`, `-- (A, 8) vtable address --`, `[this

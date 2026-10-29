@@ -66,9 +66,13 @@ pub struct Sema<'a, 'sm> {
     /// spec/abi.md).
     pub abi: Target,
     /// The `#pragma pack` directives seen, in order (location and the
-    /// spelling of the argument list), for `kiln_abi`'s record layout
-    /// once packing is supported (WP-055; reported as unsupported now).
+    /// spelling of the argument list).
     pub pragma_packs: Vec<(Loc, String)>,
+    /// The `#pragma pack` state (clang's `AlignPackStack`): the current
+    /// maximum field alignment in bytes (0: none) and the pushed
+    /// `(label, value)` entries. Applied to each class definition as it
+    /// begins (`record_pack`).
+    pub(crate) pack: (u16, Vec<(Option<String>, u16)>),
     pub(crate) scopes: Vec<scope::Scope>,
     /// The current semantic declaration context.
     pub(crate) ctx: DeclId,
@@ -142,6 +146,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             target,
             abi,
             pragma_packs: Vec::new(),
+            pack: (0, Vec::new()),
             scopes: vec![scope::Scope::new(ScopeKind::TranslationUnit, Some(tu))],
             ctx: tu,
             func: None,

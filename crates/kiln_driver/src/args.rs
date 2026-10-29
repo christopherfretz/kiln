@@ -198,6 +198,10 @@ pub struct Args {
     pub dump_ast: Option<String>,
     /// `-fdump-ast-filter=<substr>`.
     pub dump_ast_filter: Option<String>,
+    /// `-fdump-record-layouts` or `-fdump-record-layouts-complete`
+    /// (`-fsyntax-only`; clang's `-Xclang` options of those names): the
+    /// layout of every complete class, spec/driver.md.
+    pub dump_record_layouts: bool,
     /// `-o <file>`.
     pub output: Option<String>,
     /// The action.
@@ -402,6 +406,9 @@ impl Args {
             "-fno-dollars-in-identifiers" => self.dollars = Some(false),
             "-fkiln-reproducible-time" => self.reproducible_time = true,
             "-fdump-ast" => self.dump_ast = Some(String::new()),
+            "-fdump-record-layouts" | "-fdump-record-layouts-complete" => {
+                self.dump_record_layouts = true;
+            }
             _ => {
                 if let Some(v) =
                     arg.strip_prefix("-stdlib=").or_else(|| arg.strip_prefix("--stdlib="))
