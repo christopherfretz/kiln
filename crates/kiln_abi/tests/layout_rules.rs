@@ -8,8 +8,8 @@
 mod common;
 
 use common::{
-    EnumDef, FieldDef, Item, MARKER, Model, RecDef, Ty, TypedefDef, blocks, clang_available,
-    run_clang,
+    EnumDef, FieldDef, Item, MARKER, MethodDef, MethodKind, Model, RecDef, Ty, TypedefDef, blocks,
+    clang_available, run_clang,
 };
 use kiln_abi::target::target;
 use kiln_abi::{Layouter, dump_record_layout, ensure_layout, record_layout, type_size_align};
@@ -533,4 +533,195 @@ fn dump_format() {
 ";
     assert_eq!(got, want);
     cross_check(&m, X86);
+}
+
+// ---------------------------------------------------------------------
+// Dynamic classes: Itanium C++ ABI §2.4 II.1 (primary base selection,
+// the vptr), §2.4 III (virtual base allocation), spec/abi.md §6.
+// ---------------------------------------------------------------------
+
+/// `virtual void name();`
+fn vm(name: &str) -> MethodDef {
+    MethodDef {
+        name: name.to_owned(),
+        ret: b(B::Void),
+        params: Vec::new(),
+        is_const: false,
+        virtual_written: true,
+        pure: false,
+        kind: MethodKind::Normal,
+        is_virtual: false,
+    }
+}
+
+/// `struct name : bases... { methods...; fields }`; `virt` lists the
+/// members of `bases` that are virtual.
+fn dyn_st(
+    m: &mut Model,
+    name: &str,
+    bases: &[usize],
+    virt: &[usize],
+    methods: &[&str],
+    fields: Vec<FieldDef>,
+) -> usize {
+    let mut r = RecDef::new(name, TagKind::Struct, fields);
+    r.bases = bases.to_vec();
+    r.virtual_bases = virt.to_vec();
+    r.methods = methods.iter().map(|n| vm(n)).collect();
+    m.push(Item::Record(r))
+}
+
+/// What a dynamic class's layout must be: `(sizeof, alignof, dsize,
+/// nvsize)`, own vptr offset, primary base `(item, virtual)`, direct
+/// non-virtual base offsets `(item, byte)`, virtual base offsets
+/// `(item, byte)` and field bit offsets.
+struct DynExpect<'a> {
+    sizes: (u64, u32, u64, u64),
+    vptr: Option<u64>,
+    primary: Option<(usize, bool)>,
+    bases: &'a [(usize, u64)],
+    vbases: &'a [(usize, u64)],
+    fields: &'a [u64],
+}
+
+fn check_dyn(m: &Model, triple: &str, i: usize, want: &DynExpect<'_>) {
+    cross_check(m, triple);
+    let tgt = target(triple).expect("target");
+    let (ast, decls) = m.ast(&tgt);
+    let l = record_layout(&ast, decls[i], &tgt);
+    let name = m.name_of(i);
+    let item = |d| decls.iter().position(|&x| x == d).expect("model decl");
+    assert_eq!((l.size, l.align, l.data_size, l.nv_size), want.sizes, "{triple} {name} sizes");
+    assert_eq!(l.vptr, want.vptr, "{triple} {name} vptr");
+    assert_eq!(l.primary_base.map(|(d, v)| (item(d), v)), want.primary, "{triple} {name} primary");
+    let bases: Vec<_> = l.bases.iter().map(|&(d, o)| (item(d), o)).collect();
+    assert_eq!(bases, want.bases, "{triple} {name} bases");
+    let vbases: Vec<_> = l.vbases.iter().map(|&(d, o)| (item(d), o)).collect();
+    assert_eq!(vbases, want.vbases, "{triple} {name} vbases");
+    assert_eq!(&*l.fields, want.fields, "{triple} {name} fields");
+}
+
+/// §2.4 II.1: a polymorphic class without a dynamic base gets its own
+/// vptr at offset 0; a derived class shares it with its primary base,
+/// the first non-virtual dynamic base, which is allocated first even
+/// when it is not declared first.
+#[test]
+fn vptr_and_non_virtual_primary_base() {
+    let mut m = Model::default();
+    let a = dyn_st(&mut m, "A", &[], &[], &["f"], vec![f("a", b(B::Int))]);
+    let bb = dyn_st(&mut m, "B", &[a], &[], &[], vec![f("b", b(B::Int))]);
+    let g = dyn_st(&mut m, "G", &[], &[], &[], vec![f("g", b(B::Int))]);
+    let h = dyn_st(&mut m, "H", &[g, a], &[], &["h"], vec![f("x", b(B::Char))]);
+    for t in BOTH {
+        let base = DynExpect {
+            sizes: (16, 8, 12, 12),
+            vptr: Some(0),
+            primary: None,
+            bases: &[],
+            vbases: &[],
+            fields: &[64],
+        };
+        check_dyn(&m, t, a, &base);
+        // `b` reuses `A`'s tail padding: a dynamic class is not POD.
+        let derived = DynExpect {
+            sizes: (16, 8, 16, 16),
+            vptr: None,
+            primary: Some((a, false)),
+            bases: &[(a, 0)],
+            fields: &[96],
+            ..base
+        };
+        check_dyn(&m, t, bb, &derived);
+        let h_want = DynExpect {
+            sizes: (24, 8, 17, 17),
+            vptr: None,
+            primary: Some((a, false)),
+            bases: &[(g, 12), (a, 0)],
+            vbases: &[],
+            fields: &[128],
+        };
+        check_dyn(&m, t, h, &h_want);
+    }
+}
+
+/// §2.4 II.1–III: virtual bases are allocated after the non-virtual
+/// part, once per complete object; a diamond shares one `V`.
+#[test]
+fn virtual_bases_diamond() {
+    let mut m = Model::default();
+    let v = dyn_st(&mut m, "V", &[], &[], &[], vec![f("v", b(B::Int))]);
+    let l = dyn_st(&mut m, "L", &[v], &[v], &[], vec![f("l", b(B::Int))]);
+    let r = dyn_st(&mut m, "R", &[v], &[v], &[], vec![f("r", b(B::Int))]);
+    let d = dyn_st(&mut m, "D", &[l, r], &[], &[], vec![f("d", b(B::Int))]);
+    for t in BOTH {
+        let side = DynExpect {
+            sizes: (16, 8, 16, 12),
+            vptr: Some(0),
+            primary: None,
+            bases: &[],
+            vbases: &[(v, 12)],
+            fields: &[64],
+        };
+        check_dyn(&m, t, l, &side);
+        check_dyn(&m, t, r, &side);
+        let want = DynExpect {
+            sizes: (40, 8, 36, 32),
+            vptr: None,
+            primary: Some((l, false)),
+            bases: &[(l, 0), (r, 16)],
+            vbases: &[(v, 32)],
+            fields: &[224],
+        };
+        check_dyn(&m, t, d, &want);
+    }
+}
+
+/// §2.4 II.1: without a non-virtual dynamic base the primary base is the
+/// first nearly empty virtual base that is not an indirect primary base
+/// (here `N` is `M`'s primary, so `Q` picks `M`); failing that, the
+/// first nearly empty virtual base even if it is an indirect primary.
+#[test]
+fn nearly_empty_virtual_primary_base() {
+    let mut m = Model::default();
+    let e = dyn_st(&mut m, "E", &[], &[], &[], vec![]);
+    let n = dyn_st(&mut m, "N", &[], &[], &["n"], vec![]);
+    let c = dyn_st(&mut m, "C", &[e, n], &[n], &[], vec![]);
+    let mm = dyn_st(&mut m, "M", &[n], &[n], &[], vec![]);
+    let q = dyn_st(&mut m, "Q", &[n, mm], &[n, mm], &[], vec![f("q", b(B::Int))]);
+    let p = dyn_st(&mut m, "P", &[n], &[n], &[], vec![f("p", b(B::Int))]);
+    let s = dyn_st(&mut m, "S", &[e, p], &[p], &[], vec![]);
+    for t in BOTH {
+        let c_want = DynExpect {
+            sizes: (8, 8, 8, 8),
+            vptr: None,
+            primary: Some((n, true)),
+            bases: &[(e, 0)],
+            vbases: &[(n, 0)],
+            fields: &[],
+        };
+        check_dyn(&m, t, c, &c_want);
+        let m_want = DynExpect { bases: &[], ..c_want };
+        check_dyn(&m, t, mm, &m_want);
+        let q_want = DynExpect {
+            sizes: (16, 8, 12, 12),
+            vptr: None,
+            primary: Some((mm, true)),
+            bases: &[],
+            vbases: &[(n, 0), (mm, 0)],
+            fields: &[64],
+        };
+        check_dyn(&m, t, q, &q_want);
+        // `P` has data, so it is not nearly empty; the only nearly empty
+        // virtual base, `N`, is `P`'s primary, so `S` falls back to it
+        // and shares its vptr at 0 (`P` itself lands at 8).
+        let s_want = DynExpect {
+            sizes: (24, 8, 20, 8),
+            vptr: None,
+            primary: Some((n, true)),
+            bases: &[(e, 0)],
+            vbases: &[(n, 0), (p, 8)],
+            fields: &[],
+        };
+        check_dyn(&m, t, s, &s_want);
+    }
 }
