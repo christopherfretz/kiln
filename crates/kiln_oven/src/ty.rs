@@ -406,7 +406,14 @@ impl Types {
                 let (o, u) = self.union_pos[k as usize];
                 upos.push((off + o, u));
             }
-            fields.push(FieldInfo { decl: rd, ty: bty, offset: off, bit: 0, width: None, base: true });
+            fields.push(FieldInfo {
+                decl: rd,
+                ty: bty,
+                offset: off,
+                bit: 0,
+                width: None,
+                base: true,
+            });
         }
         for (i, &(m, fq, w)) in fdecls.iter().enumerate() {
             let fty = self.intern(bridge, fq);

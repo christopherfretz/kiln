@@ -168,6 +168,13 @@ pub(crate) enum Fault {
     LiteralCmp,
     NullField,
     PastField,
+    /// A base-to-derived conversion of a pointer to (or glvalue of) a
+    /// base subobject that is not part of an object of the derived type
+    /// ([expr.static.cast]/2, /11): the type of the designated object.
+    BadDowncast {
+        dynamic: OTy,
+        to: OTy,
+    },
     Union {
         ak: u32,
         field: DeclId,
@@ -592,6 +599,22 @@ impl Oven {
                     }
                     pc += 4;
                 }
+                Op::Downcast => {
+                    let raw = reg!(1) as u64;
+                    let to = OTy(arg!(3) as u32);
+                    if raw == 0 {
+                        if aux == 0 {
+                            fail!(Fault::NullField);
+                        }
+                        reg!(0) = 0;
+                    } else {
+                        match self.downcast(raw, arg!(2) as u64, to) {
+                            Ok(q) => reg!(0) = u128::from(q),
+                            Err(f) => fail!(f),
+                        }
+                    }
+                    pc += 5;
+                }
                 Op::Load => {
                     let ty = OTy(arg!(2) as u32);
                     let raw = reg!(1) as u64;
@@ -695,9 +718,13 @@ impl Oven {
                 Op::Delete => {
                     let raw = reg!(0) as u64;
                     let pointee = OTy(arg!(1) as u32);
-                    if let Err(f) =
+                    // aux 2: the checks only (before the destructors run).
+                    let r = if aux & 2 != 0 {
+                        self.mem.heap_check(raw, aux & 1 != 0, Some(pointee), &self.types).map(drop)
+                    } else {
                         self.mem.heap_free(raw, aux & 1 != 0, Some(pointee), &self.types)
-                    {
+                    };
+                    if let Err(f) = r {
                         fail!(Fault::Mem { f, ak: ak::READ, ty: pointee, p: raw });
                     }
                     pc += 3;
@@ -851,6 +878,12 @@ impl Oven {
         fb: usize,
     ) -> Result<Option<(usize, usize)>, (Fault, usize)> {
         let Some(c) = self.cleanups.pop() else { return Ok(None) };
+        // A const object is modifiable during its destruction
+        // ([class.dtor]/5).
+        let p = Ptr::decode(c.this);
+        if c.this != 0 && self.mem.alloc_of(p).is_ok() {
+            self.mem.alloc_of_mut(p).flags &= !flags::CONST;
+        }
         let cur = self.stack.last().map_or(0, |f| f.func);
         let base = self.funcs[cur as usize].nregs as usize;
         self.grow_regs(fb + base + 2);
@@ -1471,6 +1504,59 @@ impl Oven {
                 }
             }
             _ => {}
+        }
+    }
+
+    /// `Op::Downcast`: the object of type `to` whose base subobject is
+    /// `d` bytes into it, at `raw` ([expr.static.cast]/2, /11).
+    fn downcast(&self, raw: u64, d: u64, to: OTy) -> Result<u64, Fault> {
+        let p = Ptr::decode(raw);
+        let a = self.mem.alloc_of(p).map_err(|f| Fault::Mem { f, ak: ak::READ, ty: to, p: raw })?;
+        let off = u64::from(p.off);
+        match off.checked_sub(d) {
+            Some(o) if !p.past && self.types.has_subobject(a.ty, o, to) => {
+                Ok(Ptr::with_off(raw, o, false))
+            }
+            _ => Err(Fault::BadDowncast { dynamic: self.dynamic_type(a.ty, off), to }),
+        }
+    }
+
+    /// The most derived object containing the byte at `off` of an object
+    /// of type `t` (a complete object, member or array element of class
+    /// type; base subobjects belong to their derived object).
+    fn dynamic_type(&self, mut t: OTy, mut off: u64) -> OTy {
+        loop {
+            match self.types.kind(t) {
+                TyKind::Array { elem, n } => {
+                    let es = self.types.size(elem);
+                    if es == 0 || off / es >= n {
+                        return t;
+                    }
+                    off %= es;
+                    t = elem;
+                }
+                TyKind::Record { .. } => {
+                    let f = self.types.fields(t).iter().find(|f| {
+                        f.width.is_none()
+                            && off >= f.offset
+                            && off < f.offset + self.types.size(f.ty).max(1)
+                    });
+                    match f {
+                        Some(f)
+                            if !f.base
+                                && matches!(
+                                    self.types.kind(f.ty),
+                                    TyKind::Record { .. } | TyKind::Array { .. }
+                                ) =>
+                        {
+                            off -= f.offset;
+                            t = f.ty;
+                        }
+                        _ => return t,
+                    }
+                }
+                _ => return t,
+            }
         }
     }
 

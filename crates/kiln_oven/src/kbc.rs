@@ -96,6 +96,10 @@ ops! {
     PtrToBool = 2,
     // [dst, p, byte offset]
     Field = 3,
+    // [dst, p, byte offset, derived type]: the derived-class object whose
+    // base subobject is at `p` (`offset` bytes into it); aux 1 = a null
+    // pointer stays null
+    Downcast = 4,
     // [dst, p, type]; aux = access kind
     Load = 3,
     // [p, src, type]; aux = access kind
@@ -141,7 +145,8 @@ ops! {
     // initializer's array type): the bound is checked and the allocation
     // is an array of `count` elements; `dst` points to its first.
     New = 5,
-    // [p, static pointee type]; aux = 1 for `delete[]`
+    // [p, static pointee type]; aux 1 = `delete[]`; aux 2 = the checks
+    // only (made before the destructors run)
     Delete = 2,
     // [p, dtor func, type]: registers the destruction of the object at
     // `p` (an array: of each element, in order) by the enclosing scope

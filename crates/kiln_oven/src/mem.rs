@@ -740,8 +740,33 @@ impl Memory {
         pointee: Option<OTy>,
         types: &Types,
     ) -> Result<(), MemFault> {
-        if raw == 0 {
+        let Some(i) = self.heap_check(raw, array, pointee, types)? else {
             return Ok(());
+        };
+        let a = self.hslots[i];
+        self.release_heap(i);
+        if a.flags & flags::HAS_UNION != 0 {
+            let key = Ptr::alloc_key(raw);
+            for &(o, _) in types.unions(a.ty) {
+                self.unions.remove(&(key << 32 | o));
+            }
+        }
+        Ok(())
+    }
+
+    /// The checks of [`Mem::heap_free`] without the deallocation: the heap
+    /// slot `raw` designates (`None` for null). A delete-expression of a
+    /// class with a destructor makes them before running it (clang's
+    /// `VisitCXXDeleteExpr`: `CheckDeleteKind`, then `HandleDestruction`).
+    pub fn heap_check(
+        &self,
+        raw: u64,
+        array: bool,
+        pointee: Option<OTy>,
+        types: &Types,
+    ) -> Result<Option<usize>, MemFault> {
+        if raw == 0 {
+            return Ok(None);
         }
         let p = Ptr::decode(raw);
         if p.is_fn() || !p.is_heap() {
@@ -769,14 +794,7 @@ impl Memory {
                 return Err(MemFault::Subobject);
             }
         }
-        self.release_heap(i);
-        if a.flags & flags::HAS_UNION != 0 {
-            let key = Ptr::alloc_key(raw);
-            for &(o, _) in types.unions(a.ty) {
-                self.unions.remove(&(key << 32 | o));
-            }
-        }
-        Ok(())
+        Ok(Some(i))
     }
 
     /// Frees heap slot `i` (live) and its block.

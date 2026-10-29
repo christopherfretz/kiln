@@ -24,6 +24,7 @@ use crate::mem::{Origin, fn_ptr};
 use crate::ty::{OTy, Scal, TyKind, eval_int};
 use crate::{Oven, SemaBridge};
 
+mod class;
 mod new_delete;
 
 /// `Func::entry` of a function not compiled yet.
@@ -76,6 +77,9 @@ pub(crate) struct Func {
     pub params: Vec<ParamInfo>,
     /// Eligible for memoization (pure: scalar, non-pointer parameters).
     pub memo: bool,
+    /// The register of the implicit object parameter of a non-static
+    /// member function (after the result slot, before the parameters).
+    pub this_reg: Option<u32>,
 }
 
 /// The source of a faulting instruction.
@@ -216,6 +220,7 @@ impl Oven {
             ret: RetKind::Void,
             params: Vec::new(),
             memo: false,
+            this_reg: None,
         });
         self.func_map.insert(d, i);
         i
@@ -273,6 +278,7 @@ impl Oven {
             ret: RetKind::Void,
             params: Vec::new(),
             memo: false,
+            this_reg: None,
         });
         let mut c = Compiler::new(self, b);
         let entry = c.here();
@@ -379,8 +385,14 @@ impl Oven {
         c.ret = ret;
         c.ret_ref = c.b.ast().types.is_reference(ret_q);
         c.scan(body, &params);
+        c.scan_inits(def);
+        c.cur_fn = Some(def);
+        c.cur_params.clone_from(&params);
         if matches!(ret, RetKind::Sret(_)) {
             c.reg();
+        }
+        if class::has_this(c.b.ast(), def) {
+            c.this_reg = Some(c.reg());
         }
         let mut infos = Vec::with_capacity(params.len());
         for &p in &params {
@@ -406,6 +418,7 @@ impl Oven {
                 c.locals.insert(pi.decl, Local::Reg(pi.reg));
             }
         }
+        c.member_prologue(def);
         c.stmt(body);
         // Falling off the end ([stmt.return]/4).
         if ret == RetKind::Void {
@@ -416,8 +429,10 @@ impl Oven {
             c.trap_loc(loc, "control reached end of constexpr function".into());
         }
         let nregs = c.max;
+        let this_reg = c.this_reg;
         let memo = c.o.budget.memo_entries > 0
             && !c.uses_cc
+            && this_reg.is_none()
             && !matches!(ret, RetKind::Sret(_) | RetKind::Void)
             && infos.len() <= 4
             && infos.iter().all(|p| {
@@ -431,6 +446,7 @@ impl Oven {
         f.ret = ret;
         f.params = infos;
         f.memo = memo;
+        f.this_reg = this_reg;
     }
 }
 
@@ -466,6 +482,24 @@ pub(crate) struct Compiler<'a> {
     /// The code reads the evaluation context (`Op::IsConstEval`): the
     /// function is not memoized.
     uses_cc: bool,
+    /// The register holding `this` (a non-static member function).
+    this_reg: Option<u32>,
+    /// The object a default member initializer of an aggregate is
+    /// initializing (its `this`, [class.mem.general]/11).
+    this_override: Option<u32>,
+    /// The storage of the lifetime-extended temporaries of the variable
+    /// being initialized, allocated before its initializer's cleanups
+    /// scope (keyed by the `MaterializeTemporaryExpr`).
+    ext_temps: FxHashMap<ExprId, u32>,
+    /// Local class objects declared `const`: allocated modifiable, made
+    /// const once initialized ([class.ctor.general]/5).
+    late_const: FxHashSet<DeclId>,
+    /// The function being compiled (`None`: a thunk).
+    cur_fn: Option<DeclId>,
+    /// Its parameters (forwarded by an inheriting constructor).
+    cur_params: Vec<DeclId>,
+    /// The index register of the innermost `ArrayInitLoopExpr`.
+    array_index: Option<u32>,
 }
 
 /// The value an `OpaqueValueExpr` stands for.
@@ -495,6 +529,13 @@ impl<'a> Compiler<'a> {
             has_temps: false,
             std_ice: false,
             uses_cc: false,
+            this_reg: None,
+            this_override: None,
+            ext_temps: FxHashMap::default(),
+            late_const: FxHashSet::default(),
+            cur_fn: None,
+            cur_params: Vec::new(),
+            array_index: None,
         }
     }
 
@@ -816,7 +857,10 @@ impl Scan<'_> {
             | ExprKind::TypeTraitExpr
             | ExprKind::ArrayTypeTraitExpr
             | ExprKind::ExpressionTraitExpr => {}
-            ExprKind::CallExpr => {
+            ExprKind::CallExpr
+            | ExprKind::CXXMemberCallExpr
+            | ExprKind::CXXConstructExpr
+            | ExprKind::CXXTemporaryObjectExpr => {
                 let ty = n.ty();
                 if matches!(
                     ast.types.canonical_view(ty),
@@ -833,7 +877,10 @@ impl Scan<'_> {
                 }
             }
             ExprKind::StmtExpr => self.stmt(ast.exprs.stmt_expr_body(e)),
-            ExprKind::MaterializeTemporaryExpr | ExprKind::CompoundLiteralExpr => {
+            ExprKind::MaterializeTemporaryExpr
+            | ExprKind::CompoundLiteralExpr
+            | ExprKind::ExprWithCleanups
+            | ExprKind::CXXBindTemporaryExpr => {
                 self.temps = true;
                 for c in ast.exprs.children(e, &ast.lists) {
                     self.expr(c, false);
@@ -941,15 +988,27 @@ impl Compiler<'_> {
     /// Opens a scope allocating the memory locals among `decls`.
     fn open_scope(&mut self, decls: &[DeclId], force: bool) {
         let mut mem = Vec::new();
+        let mut force = force;
         for &d in decls {
             let ast = self.b.ast();
             if !is_local_var(ast, d) || ast.decls.get(d).kind() != DeclKind::Var {
                 continue;
             }
+            // A reference may extend the lifetime of a temporary to the
+            // end of this scope ([class.temporary]/6).
+            force |= self.has_temps && is_reference_var(ast, d);
             let q = ast.decls.get(d).ty().unwrap_or(QualType::INT);
-            let is_const = ast.types.canonical(q).has_const_bit();
+            let mut is_const = ast.types.canonical(q).has_const_bit();
             let ty = self.ty(q);
             if self.needs_mem(d, ty) {
+                // A const class object is modifiable until its
+                // constructor completes ([class.ctor.general]/5).
+                if is_const && let Some(late) = self.is_late_const(ty) {
+                    is_const = false;
+                    if late {
+                        self.late_const.insert(d);
+                    }
+                }
                 mem.push((d, ty, is_const));
             }
         }
@@ -1504,7 +1563,9 @@ impl Compiler<'_> {
             let r = self.reg();
             if let Some(init) = v.init {
                 let m = self.next;
+                let ext = self.begin_extended(init);
                 self.bind_ref(init, r);
+                self.end_extended(&ext);
                 self.next = m;
             }
             self.locals.insert(d, Local::Mem(r));
@@ -1515,24 +1576,36 @@ impl Compiler<'_> {
         let local = self.locals.get(&d).copied();
         match local {
             Some(Local::Mem(p)) => {
+                let m = self.next;
+                let ext = v.init.map(|i| self.begin_extended(i)).unwrap_or_default();
                 if let Some(init) = v.init {
-                    let m = self.next;
                     self.init(init, p, ty);
-                    self.next = m;
                 }
+                self.end_extended(&ext);
+                self.end_local_init(d, p, ty);
+                self.next = m;
             }
             _ => {
                 if self.needs_mem(d, ty) {
                     // Not hoisted (a condition variable of a loop iteration).
-                    let is_const = self.b.ast().types.canonical(q).has_const_bit();
+                    let mut is_const = self.b.ast().types.canonical(q).has_const_bit();
+                    if is_const && let Some(late) = self.is_late_const(ty) {
+                        is_const = false;
+                        if late {
+                            self.late_const.insert(d);
+                        }
+                    }
                     let p = self.reg();
                     self.alloc_var(p, ty, d, is_const);
                     self.locals.insert(d, Local::Mem(p));
+                    let m = self.next;
+                    let ext = v.init.map(|i| self.begin_extended(i)).unwrap_or_default();
                     if let Some(init) = v.init {
-                        let m = self.next;
                         self.init(init, p, ty);
-                        self.next = m;
                     }
+                    self.end_extended(&ext);
+                    self.end_local_init(d, p, ty);
+                    self.next = m;
                 } else {
                     let r = self.reg();
                     if let Some(init) = v.init {
@@ -1679,6 +1752,9 @@ impl Compiler<'_> {
         }
         if n.kind() == ExprKind::CallExpr && !n.value_category().is_glvalue() {
             return self.call(e0, None);
+        }
+        if n.kind() == ExprKind::CXXMemberCallExpr && !n.value_category().is_glvalue() {
+            return self.member_call(e0, None);
         }
         let r = self.reg();
         self.rv_into(e, r);
@@ -1852,6 +1928,33 @@ impl Compiler<'_> {
             // Transient allocation (spec/oven.md "Transient allocation").
             ExprKind::CXXNewExpr => self.new_expr(e, dst),
             ExprKind::CXXDeleteExpr => self.delete_expr(e),
+            ExprKind::CXXThisExpr => self.this_expr(e, dst),
+            ExprKind::ExprWithCleanups => {
+                let op = self.ast().exprs.operand(e);
+                self.open_scope(&[], true);
+                self.rv_inner(op, dst);
+                self.close_scope();
+            }
+            ExprKind::CXXBindTemporaryExpr => {
+                let op = self.ast().exprs.operand(e);
+                self.rv_inner(op, dst);
+            }
+            ExprKind::CXXDefaultInitExpr => match self.default_init_of(e) {
+                Some(x) => self.rv_inner(x, dst),
+                None => self.unsupported(e),
+            },
+            ExprKind::ArrayInitIndexExpr => match self.array_index {
+                Some(k) => {
+                    self.emit(Op::Mov, 0, &[dst, k]);
+                }
+                None => self.unsupported(e),
+            },
+            ExprKind::CXXMemberCallExpr if !n.value_category().is_glvalue() => {
+                let r = self.member_call(e, None);
+                if r != dst {
+                    self.emit(Op::Mov, 0, &[dst, r]);
+                }
+            }
             k if k.is_cast() => self.cast(e, dst, ty),
             _ if n.value_category().is_glvalue() => {
                 // A glvalue used as a value (an lvalue-to-rvalue conversion
@@ -2186,7 +2289,15 @@ impl Compiler<'_> {
                 let begin = self.begin(op);
                 self.o.sites[at..].iter_mut().for_each(|s| s.loc = begin);
             }
-            CastKind::NoOp => self.rv_inner(op, dst),
+            CastKind::NoOp | CastKind::UserDefinedConversion | CastKind::ConstructorConversion => {
+                self.rv_inner(op, dst);
+            }
+            CastKind::DerivedToBase
+            | CastKind::UncheckedDerivedToBase
+            | CastKind::BaseToDerived => {
+                let p = self.rv(op);
+                self.class_cast(e, p, dst, true, ck == CastKind::BaseToDerived);
+            }
             CastKind::ToVoid => self.effect(op),
             CastKind::NullToPointer => {
                 self.effect(op);
@@ -2542,23 +2653,68 @@ impl Compiler<'_> {
                 let op = self.ast().exprs.operand(e);
                 self.lv(op, acc)
             }
-            k if k.is_cast() && self.ast().exprs.cast_kind(e) == CastKind::NoOp => {
+            k if k.is_cast()
+                && matches!(
+                    self.ast().exprs.cast_kind(e),
+                    CastKind::NoOp
+                        | CastKind::UserDefinedConversion
+                        | CastKind::ConstructorConversion
+                ) =>
+            {
                 let op = self.ast().exprs.operand(e);
                 self.lv(op, acc)
             }
+            k if k.is_cast()
+                && n.value_category().is_glvalue()
+                && matches!(
+                    self.ast().exprs.cast_kind(e),
+                    CastKind::DerivedToBase
+                        | CastKind::UncheckedDerivedToBase
+                        | CastKind::BaseToDerived
+                ) =>
+            {
+                let down = self.ast().exprs.cast_kind(e) == CastKind::BaseToDerived;
+                let op = self.ast().exprs.operand(e);
+                let sub = match acc {
+                    Access::Write => Access::Write,
+                    Access::Addr => Access::Addr,
+                    Access::Read | Access::Rmw => Access::Read,
+                };
+                let p = self.lv_mem(op, sub);
+                let r = self.reg();
+                self.class_cast(e, p, r, false, down);
+                Place::Mem(r)
+            }
             // A call returning a reference: the referent's address.
             ExprKind::CallExpr if n.value_category().is_glvalue() => Place::Mem(self.call(e, None)),
-            ExprKind::CallExpr => {
-                // A class prvalue used as a glvalue: materialize it.
-                let ty = self.ety(e);
-                let r = self.reg();
-                self.alloc(r, ty, Origin::Temp(e), false, e);
-                self.init(e, r, ty);
-                Place::Mem(r)
+            ExprKind::CXXMemberCallExpr if n.value_category().is_glvalue() => {
+                Place::Mem(self.member_call(e, None))
+            }
+            ExprKind::MaterializeTemporaryExpr => self.mte(e),
+            ExprKind::ExprWithCleanups => {
+                let op = self.ast().exprs.operand(e);
+                self.open_scope(&[], true);
+                let p = self.lv(op, acc);
+                self.close_scope();
+                p
+            }
+            ExprKind::CXXDefaultInitExpr if self.default_init_of(e).is_some() => {
+                let x = self.default_init_of(e).unwrap_or(e);
+                self.lv(x, acc)
             }
             ExprKind::CXXThrowExpr => {
                 self.throw_invalid(e);
                 Place::Mem(self.reg())
+            }
+            // A class prvalue used as a glvalue: materialize it, destroyed
+            // at the end of the full-expression.
+            _ if !n.value_category().is_glvalue() && {
+                let ty = self.ety(e);
+                self.o.types.is_aggregate(ty)
+            } =>
+            {
+                let ty = self.ety(e);
+                Place::Mem(self.materialize(e, ty))
             }
             _ => {
                 self.unsupported(e);
@@ -2736,7 +2892,41 @@ impl Compiler<'_> {
             // Default-initialization by a trivial constructor performs no
             // initialization ([dcl.init.general]/7.1): the object stays
             // indeterminate.
-            ExprKind::CXXConstructExpr if self.ast().is_trivial_default_construction(e) => return,
+            ExprKind::CXXConstructExpr | ExprKind::CXXTemporaryObjectExpr => {
+                self.construct(e, p, ty);
+                return;
+            }
+            ExprKind::CXXInheritedCtorInitExpr => {
+                self.inherited_ctor(e, p);
+                return;
+            }
+            ExprKind::ExprWithCleanups => {
+                let op = self.ast().exprs.operand(e);
+                self.open_scope(&[], true);
+                self.init_inner(op, p, ty);
+                self.close_scope();
+                return;
+            }
+            ExprKind::CXXBindTemporaryExpr => {
+                let op = self.ast().exprs.operand(e);
+                return self.init_inner(op, p, ty);
+            }
+            ExprKind::CXXDefaultInitExpr if self.default_init_of(e).is_some() => {
+                let x = self.default_init_of(e).unwrap_or(e);
+                return self.init_inner(x, p, ty);
+            }
+            ExprKind::ArrayInitLoopExpr => {
+                self.array_init_loop(e, p, ty);
+                return;
+            }
+            ExprKind::CXXParenListInitExpr => {
+                let ast = self.ast();
+                let inits: Vec<ExprId> =
+                    ast.lists.iter::<ExprId>(ast.exprs.paren_list_inits(e)).collect();
+                let filler = ast.exprs.paren_list_filler(e);
+                self.init_aggr(e, &inits, filler, None, p, ty);
+                return;
+            }
             _ => {}
         }
         if !self.o.types.is_aggregate(ty) {
@@ -2758,8 +2948,11 @@ impl Compiler<'_> {
                 let cty = if self.o.types.size(sty) <= self.o.types.size(ty) { sty } else { ty };
                 self.emit_at(Op::Copy, 1, &[p, r, cty.0], e);
             }
-            ExprKind::CallExpr => {
+            ExprKind::CallExpr if !n.value_category().is_glvalue() => {
                 self.call(e, Some(p));
+            }
+            ExprKind::CXXMemberCallExpr if !n.value_category().is_glvalue() => {
+                self.member_call(e, Some(p));
             }
             ExprKind::ConditionalOperator => {
                 let c = self.rv(ExprId::new(n.a()));
@@ -2779,7 +2972,10 @@ impl Compiler<'_> {
             k if k.is_cast()
                 && matches!(
                     self.ast().exprs.cast_kind(e),
-                    CastKind::NoOp | CastKind::LValueToRValue
+                    CastKind::NoOp
+                        | CastKind::LValueToRValue
+                        | CastKind::UserDefinedConversion
+                        | CastKind::ConstructorConversion
                 ) =>
             {
                 let op = self.ast().exprs.operand(e);
@@ -2803,6 +2999,22 @@ impl Compiler<'_> {
         let inits: Vec<ExprId> =
             ast.lists.get(ast.exprs.init_list_inits(e)).iter().map(|&x| ExprId::new(x)).collect();
         let extra = *ast.exprs.init_list(e);
+        self.init_aggr(e, &inits, extra.array_filler, extra.union_field, p, ty);
+    }
+
+    /// Aggregate initialization ([dcl.init.aggr]) of the object of type
+    /// `ty` at `p` from the elements `inits` of list (or parenthesized
+    /// list) `e`; `filler` initializes the remaining array elements,
+    /// `union_field` names the union member initialized.
+    fn init_aggr(
+        &mut self,
+        e: ExprId,
+        inits: &[ExprId],
+        filler: Option<ExprId>,
+        union_field: Option<DeclId>,
+        p: u32,
+        ty: OTy,
+    ) {
         match self.kind(ty) {
             TyKind::Array { elem, n } => {
                 if inits.len() as u64 > n {
@@ -2818,7 +3030,6 @@ impl Compiler<'_> {
                     self.init_inner(s, p, ty);
                     return;
                 }
-                let filler = extra.array_filler;
                 let rest = n - inits.len() as u64;
                 let zero_fill = rest > 0
                     && filler
@@ -2857,7 +3068,7 @@ impl Compiler<'_> {
             }
             TyKind::Record { union: true, .. } => {
                 let fields = self.o.types.fields(ty).to_vec();
-                let target = extra.union_field.or_else(|| fields.first().map(|f| f.decl));
+                let target = union_field.or_else(|| fields.first().map(|f| f.decl));
                 let Some(idx) = target.and_then(|d| fields.iter().position(|f| f.decl == d)) else {
                     return;
                 };
@@ -2871,23 +3082,45 @@ impl Compiler<'_> {
                 }
             }
             TyKind::Record { decl, .. } => {
-                if self.ast().decls.bases(decl, &self.ast().lists).next().is_some() {
-                    // todo(WP-076): base subobjects of an aggregate (the
-                    // list's first elements, [dcl.init.aggr]/2).
-                    self.unsupported(e);
-                    return;
+                // The bases first, in declaration order ([dcl.init.aggr]/2).
+                let ast = self.ast();
+                let bases: Vec<QualType> =
+                    ast.decls.bases(decl, &ast.lists).map(|b| b.ty).collect();
+                let mut it = inits.iter();
+                for bq in bases {
+                    let bty = self.ty(bq);
+                    let off = self.base_offset(ty, bty);
+                    let m = self.next;
+                    let q = self.elem_ptr(p, off, e);
+                    match it.next() {
+                        Some(&x) => self.init(x, q, bty),
+                        None => {
+                            self.emit_at(Op::ZeroInit, 0, &[q, bty.0], e);
+                        }
+                    }
+                    self.next = m;
                 }
                 let fields = self.o.types.fields(ty).to_vec();
-                let mut it = inits.iter();
                 for fi in fields {
                     let unnamed_bf = fi.width.is_some() && !self.has_name(fi.decl);
-                    if unnamed_bf {
+                    if unnamed_bf || fi.base {
                         continue;
                     }
-                    if let Some(&x) = it.next() {
+                    // A default member initializer's `this` is the object
+                    // being initialized ([class.mem.general]/11).
+                    let x = match it.next() {
+                        Some(&x) => Some((x, self.is_default_init(x))),
+                        None => {
+                            self.ast().decls.field(fi.decl).and_then(|f| f.init).map(|d| (d, true))
+                        }
+                    };
+                    if let Some((x, dflt)) = x {
+                        let saved = self.this_override;
+                        if dflt {
+                            self.this_override = Some(p);
+                        }
                         self.init_field(x, p, fi, e);
-                    } else if let Some(di) = self.ast().decls.field(fi.decl).and_then(|f| f.init) {
-                        self.init_field(di, p, fi, e);
+                        self.this_override = saved;
                     } else {
                         // [dcl.init.aggr]/5.3: copy-initialized from `{}`.
                         let q = self.elem_ptr(p, fi.offset, e);
@@ -3002,14 +3235,25 @@ impl Compiler<'_> {
                 let xty = self.ety(x);
                 self.inc_dec(place, xty, op, None, e);
             }
-            ExprKind::CallExpr => {
+            ExprKind::CallExpr | ExprKind::CXXMemberCallExpr
+                if !n.value_category().is_glvalue() =>
+            {
                 if self.o.types.is_aggregate(ty) {
-                    let r = self.reg();
-                    self.alloc(r, ty, Origin::Temp(e), false, e);
-                    self.call(e, Some(r));
-                } else {
+                    // A discarded class prvalue: a temporary
+                    // ([expr.context]/2), destroyed at the end of the
+                    // full-expression.
+                    let _ = self.materialize(e, ty);
+                } else if n.kind() == ExprKind::CallExpr {
                     self.call(e, None);
+                } else {
+                    self.member_call(e, None);
                 }
+            }
+            ExprKind::ExprWithCleanups => {
+                let op = self.ast().exprs.operand(e);
+                self.open_scope(&[], true);
+                self.effect(op);
+                self.close_scope();
             }
             ExprKind::ConditionalOperator => {
                 let c = self.rv(ExprId::new(n.a()));
@@ -3032,9 +3276,7 @@ impl Compiler<'_> {
             ExprKind::CXXDeleteExpr => self.delete_expr(e),
             _ if self.kind(ty) == TyKind::Void => self.unsupported(e),
             _ if self.o.types.is_aggregate(ty) => {
-                let r = self.reg();
-                self.alloc(r, ty, Origin::Temp(e), false, e);
-                self.init(e, r, ty);
+                let _ = self.materialize(e, ty);
             }
             _ => {
                 let r = self.reg();
@@ -3056,13 +3298,18 @@ impl Compiler<'_> {
                 self.emit(Op::Mov, 0, &[dst, p]);
             }
         } else {
-            // Sema materializes no temporaries yet (no
-            // `MaterializeTemporaryExpr`).
-            let loc = self.begin(init);
-            self.trap_loc(
-                loc,
-                "kiln: binding a reference to a temporary is not supported yet".into(),
-            );
+            // A prvalue sema did not wrap in a `MaterializeTemporaryExpr`:
+            // a temporary of the full-expression.
+            let ty = self.ety(init);
+            let p = if self.o.types.is_aggregate(ty) {
+                self.materialize(init, ty)
+            } else {
+                let r = self.reg();
+                self.alloc(r, ty, Origin::Temp(init), false, init);
+                self.init(init, r, ty);
+                r
+            };
+            self.emit(Op::Mov, 0, &[dst, p]);
         }
         self.next = m;
     }
@@ -3136,56 +3383,28 @@ impl Compiler<'_> {
             );
             return self.reg();
         }
-        let fp = if direct.is_none() { Some(self.rv_copy(callee)) } else { None };
-        let is_sret = self.o.types.is_aggregate(ty);
-        let base = self.next;
-        let window = args.len() as u32 + u32::from(is_sret);
-        for _ in 0..window.max(1) {
-            self.reg();
-        }
-        if is_sret {
-            match sret {
-                Some(p) => {
-                    self.emit(Op::Mov, 0, &[base, p]);
-                }
-                None => {
-                    self.alloc(base, ty, Origin::Temp(e), false, e);
-                }
+        // `obj.f()` naming a static member function: `obj` is evaluated,
+        // then `f` called directly ([expr.ref]/7.1).
+        let direct = match direct {
+            None if ast.exprs.get(c).kind() == ExprKind::MemberExpr
+                && ast.decls.get(ast.exprs.decl(c)).kind().is_function() =>
+            {
+                let d = ast.exprs.decl(c);
+                let obj = ast.exprs.operand(c);
+                self.effect(obj);
+                Some(d)
             }
-        }
-        let ref_params = self.ref_params(callee);
-        for (i, &a) in args.iter().enumerate() {
-            let slot = base + u32::from(is_sret) + i as u32;
-            let aty = self.ety(a);
-            if ref_params.get(i).copied().unwrap_or(false) {
-                self.bind_ref(a, slot);
-            } else if self.o.types.is_aggregate(aty) {
-                self.alloc(slot, aty, Origin::Temp(a), false, a);
-                self.init(a, slot, aty);
-            } else {
-                self.rv_into(a, slot);
-            }
-        }
-        let pc = match (direct, fp) {
-            (Some(d), _) => {
-                let f = self.o.func_index(self.b.ast(), d);
-                Some(self.emit_at(Op::Call, 0, &[f, base], e))
-            }
-            (None, Some(r)) => Some(self.emit_at(Op::CallInd, 0, &[r, base], e)),
-            (None, None) => None,
+            d => d,
         };
+        let target = match direct {
+            Some(d) => class::Callee::Direct(d),
+            None => class::Callee::Ind(self.rv_copy(callee)),
+        };
+        let refs = self.ref_params(callee);
         // clang's `CallExpr::getExprLoc`: the begin of the callee (kiln's
         // `loc` of a call is its `(`).
-        if let Some(pc) = pc
-            && self.ast().exprs.get(e).kind() == ExprKind::CallExpr
-        {
-            let loc = self.begin(e);
-            if let Some(site) = self.o.sites.last_mut().filter(|x| x.pc == pc as u32) {
-                site.loc = loc;
-            }
-        }
-        self.next = base + 1;
-        base
+        let loc = (self.ast().exprs.get(e).kind() == ExprKind::CallExpr).then(|| self.begin(e));
+        self.call_frame(e, target, ty, sret, None, &args, &refs, loc)
     }
 }
 

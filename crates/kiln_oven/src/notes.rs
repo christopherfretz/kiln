@@ -135,6 +135,14 @@ impl Oven {
                 (site.loc, "comparison of addresses of literals has unspecified value".into())
             }
             Fault::NullField => (site.loc, "cannot access field of null pointer".into()),
+            Fault::BadDowncast { dynamic, to } => (
+                site.loc,
+                format!(
+                    "cannot cast object of dynamic type '{}' to type '{}'",
+                    self.tname(ast, dynamic),
+                    self.tname(ast, to)
+                ),
+            ),
             Fault::PastField => {
                 (site.loc, "cannot access field of pointer past the end of object".into())
             }
