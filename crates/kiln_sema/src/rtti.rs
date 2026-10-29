@@ -2,7 +2,7 @@
 //! §5.6). Kiln checks and builds the expression; the Oven and codegen do
 //! not evaluate it yet.
 
-use kiln_ast::decl::DeclKind;
+use kiln_ast::decl::{DeclKind, DefinitionBits};
 use kiln_ast::expr::{CastKind, TypeidOperand};
 use kiln_ast::types::{Nns, Quals, TagKeyword};
 use kiln_ast::{DeclId, ExprId, QualType};
@@ -41,8 +41,10 @@ impl Sema<'_, '_> {
     /// - a class type must be complete ([expr.typeid]/4; clang's
     ///   `err_incomplete_typeid` at the `typeid` keyword).
     ///
-    /// An expression operand is never evaluated: M2 has no polymorphic
-    /// classes ([expr.typeid]/3).
+    /// An expression operand is evaluated only if it is a glvalue of
+    /// polymorphic class type ([expr.typeid]/3). Its names were still
+    /// checked as an unevaluated operand (clang re-transforms it; a
+    /// known deviation, spec/sema-class.md §8).
     pub fn act_on_typeid(
         &mut self,
         operand: Result<ExprId, QualType>,
@@ -74,6 +76,18 @@ impl Sema<'_, '_> {
             self.emit(self.incomplete_note(msg, unqual));
             return self.recover_err(&kids, loc);
         }
+        // [expr.typeid]/3: a glvalue of polymorphic class type is
+        // evaluated (WP-078a).
+        let evaluated = operand.is_ok_and(|e| {
+            self.ast.exprs.get(e).value_category().is_glvalue()
+                && self
+                    .ast
+                    .types
+                    .as_record(unqual)
+                    .and_then(|r| self.ast.definition(r))
+                    .and_then(|d| self.ast.decls.record(d))
+                    .is_some_and(|r| r.defn.contains(DefinitionBits::POLYMORPHIC))
+        });
         let operand = match operand {
             Ok(e) if !self.ast.types.effective_quals(written).is_empty() => {
                 let vk = self.ast.exprs.get(e).value_category();
@@ -88,7 +102,6 @@ impl Sema<'_, '_> {
         let nns = self.ast.types.nns(Nns::Namespace { prefix: None, ns: self.ast.first(std) });
         let named = self.ast.types.elaborated(TagKeyword::None, Some(nns), rec);
         let ty = self.ast.types.qualify(named, Quals::CONST);
-        // Never potentially evaluated: no polymorphic classes yet.
-        self.builder().typeid_expr(operand, false, ty, loc, rparen)
+        self.builder().typeid_expr(operand, evaluated, ty, loc, rparen)
     }
 }
