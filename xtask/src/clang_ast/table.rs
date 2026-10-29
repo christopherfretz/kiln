@@ -160,9 +160,10 @@ pub const TABLE: &[(&str, Disposition)] = &[
     // Declarations kiln does not dump in M2.
     ("RecordDecl", Unsupported("C struct declarations (RecordDecl) are not in the M2 dump")),
     ("IndirectFieldDecl", Unsupported("anonymous struct/union members are not in the M2 dump")),
-    // Printed by its `ClassTemplateDecl` (an implicit instantiation).
+    // An implicit instantiation is printed by its `ClassTemplateDecl`; an
+    // explicit one and a partial specialization at their positions.
     ("ClassTemplateSpecializationDecl", Keep),
-    ("ClassTemplatePartialSpecializationDecl", Unsupported(INSTANTIATION)),
+    ("ClassTemplatePartialSpecializationDecl", Keep),
     ("VarTemplateSpecializationDecl", Unsupported(INSTANTIATION)),
     ("VarTemplatePartialSpecializationDecl", Unsupported(INSTANTIATION)),
     ("CXXDeductionGuideDecl", Unsupported(INSTANTIATION)),
@@ -266,7 +267,9 @@ fn specific_keys(kind: &str) -> Option<&'static [&'static str]> {
         "TranslationUnitDecl" => &[],
         "TypedefDecl" | "TypeAliasDecl" => &["type", "typeAliasDeclId"],
         // `definitionData` is clang's DefinitionData block (not dumped).
-        "CXXRecordDecl" | "ClassTemplateSpecializationDecl" => {
+        "CXXRecordDecl"
+        | "ClassTemplateSpecializationDecl"
+        | "ClassTemplatePartialSpecializationDecl" => {
             &["tagUsed", "completeDefinition", "definitionData", "bases"]
         }
         "AccessSpecDecl" => &["access"],
@@ -481,6 +484,7 @@ pub const CLASS_KINDS: &[&str] = &[
 pub const TEMPLATE_KINDS: &[&str] = &[
     "ClassTemplateDecl",
     "ClassTemplateSpecializationDecl",
+    "ClassTemplatePartialSpecializationDecl",
     "SubstNonTypeTemplateParmExpr",
     "FunctionTemplateDecl",
     "VarTemplateDecl",

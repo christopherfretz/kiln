@@ -216,6 +216,14 @@ impl Sema<'_, '_> {
             self.emit(d);
             return Err(());
         }
+        if self.ast.templates.param_list(head).requires.is_some() {
+            // Constrained partial specializations order by constraints
+            // ([temp.spec.partial.order]/1, [temp.constr.order]: WP-073)
+            // and may repeat the primary's arguments
+            // ([temp.spec.partial.general]/9.3).
+            self.templ_unimplemented("constrained class template partial specialization", name_loc);
+            return Err(());
+        }
         // [temp.spec.partial.general]/9.3: the arguments are not the
         // primary template's own parameters in order.
         let params = self.template_params(tmpl);
@@ -235,12 +243,6 @@ impl Sema<'_, '_> {
                 let d = self.note_prev(d, prev, true);
                 self.emit(d);
             }
-            return Err(());
-        }
-        if self.ast.templates.param_list(head).requires.is_some() {
-            // Constrained partial specializations order by constraints
-            // ([temp.spec.partial.order]/1, [temp.constr.order]): WP-073.
-            self.templ_unimplemented("constrained class template partial specialization", name_loc);
             return Err(());
         }
         if !self.check_spec_scope(tmpl, true, name_loc) {

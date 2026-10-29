@@ -89,6 +89,13 @@ const SIDE_FN_WORDS: &[&str] = &["trivial", "noexcept-unevaluated"];
 /// Text-dump words of a function kiln has no field for.
 const UNSUPPORTED_FN_WORDS: &[&str] = &["noexcept-uninstantiated", "ineligible", "not_selected"];
 
+/// clang's text-dump words for an explicit class specialization's kind.
+const EXPLICIT_SPEC_WORDS: &[&str] = &[
+    "explicit_specialization",
+    "explicit_instantiation_definition",
+    "explicit_instantiation_declaration",
+];
+
 const INSTANTIATIONS: &str =
     "template specializations and instantiations are not in the dump yet (spec/ast-dump.md §5)";
 
@@ -127,6 +134,13 @@ struct Index<'a> {
     templated: HashSet<&'a str>,
     /// The template declarations enclosing the walk's current node.
     template_depth: usize,
+    /// Each class template specialization's `ClassTemplateDecl` (by the
+    /// specialization's id; an explicit one is listed under its template
+    /// by reference).
+    spec_template: HashMap<&'a str, &'a Json>,
+    /// The `ClassTemplateDecl`s by name, with their lexical contexts (a
+    /// partial specialization's JSON does not name its template).
+    templates_by_name: HashMap<&'a str, Vec<&'a Json>>,
 }
 
 impl<'a> Index<'a> {
@@ -175,7 +189,16 @@ impl<'a> Index<'a> {
                 inner_dc = n;
             }
         }
-        if side::CLASSES.contains(&k) {
+        if k == "ClassTemplateDecl" {
+            for c in kids(n).filter(|c| kind(c) == "ClassTemplateSpecializationDecl") {
+                self.spec_template.insert(id(c), n);
+            }
+            if let Some(nm) = name(n) {
+                self.templates_by_name.entry(nm).or_default().push(n);
+            }
+        }
+        // A specialization listed by reference has no line of its own.
+        if side::CLASSES.contains(&k) && (!side::is_record(k) || text(n, "tagUsed").is_some()) {
             self.order.insert(id(n), self.order_names.len());
             self.order_names.push((k, name(n).unwrap_or("")));
         }
@@ -184,8 +207,13 @@ impl<'a> Index<'a> {
         }
         if FN_KINDS.contains(&k) {
             self.funcs.insert(id(n), n);
-            if matches!(parent, "CXXRecordDecl" | "FriendDecl" | "ClassTemplateSpecializationDecl")
-            {
+            if matches!(
+                parent,
+                "CXXRecordDecl"
+                    | "FriendDecl"
+                    | "ClassTemplateSpecializationDecl"
+                    | "ClassTemplatePartialSpecializationDecl"
+            ) {
                 self.in_class.insert(id(n));
             }
             if parent == "ClassTemplateSpecializationDecl" {
@@ -199,6 +227,7 @@ impl<'a> Index<'a> {
         // member template is in its class; a friend template befriended).
         let (kid_parent, is_template) = match k {
             "FunctionTemplateDecl" => (parent, true),
+            "ClassTemplatePartialSpecializationDecl" => (k, true),
             _ => (k, TEMPLATE_DECL_KINDS.contains(&k)),
         };
         if is_template {
@@ -460,7 +489,7 @@ impl<'a> Printer<'a, '_> {
             let decls = side::parse(&(self.text)()?)?;
             if decls.len() != self.ix.order_names.len() {
                 return Err(format!(
-                    "clang-ast: clang's text dump has {} function/VarDecl lines but its \
+                    "clang-ast: clang's text dump has {} function/variable/specialization lines but its \
                      JSON dump has {}; cannot align them",
                     decls.len(),
                     self.ix.order_names.len()
@@ -761,8 +790,20 @@ impl<'a> Printer<'a, '_> {
                 if k == "ClassTemplateDecl" {
                     let params = spec_param_types(n);
                     for c in kids(n) {
-                        if kind(c) == "ClassTemplateSpecializationDecl" {
-                            kids_out.extend(self.specialization(c, params.as_deref())?);
+                        if kind(c) == "ClassTemplateSpecializationDecl"
+                            && text(c, "tagUsed").is_none()
+                        {
+                            // An explicit specialization or instantiation:
+                            // printed at its lexical position.
+                            kids_out.push(Tree {
+                                line: format!(
+                                    "ClassTemplateSpecialization '{}'",
+                                    name(c).unwrap_or("")
+                                ),
+                                kids: Vec::new(),
+                            });
+                        } else if kind(c) == "ClassTemplateSpecializationDecl" {
+                            kids_out.extend(self.specialization(c, params.as_deref(), false)?);
                         } else if let Some(t) = self.node(c)? {
                             kids_out.push(t);
                         }
@@ -772,12 +813,18 @@ impl<'a> Printer<'a, '_> {
                 }
             }
             "ClassTemplateSpecializationDecl" => {
-                return Err(format!(
-                    "clang-ast: unsupported ClassTemplateSpecializationDecl `{}` outside its \
-                     template (explicit specializations and instantiations: WP-070b)",
-                    name(n).unwrap_or("")
-                ));
+                // An explicit specialization or instantiation, at its
+                // lexical position.
+                let tmpl = self.ix.spec_template.get(id(n)).copied().ok_or_else(|| {
+                    format!(
+                        "clang-ast: specialization `{}` is not listed under a template",
+                        name(n).unwrap_or("")
+                    )
+                })?;
+                let params = spec_param_types(tmpl);
+                return self.specialization(n, params.as_deref(), true);
             }
+            "ClassTemplatePartialSpecializationDecl" => return self.partial(n).map(Some),
             "TemplateTypeParmDecl" | "NonTypeTemplateParmDecl" | "TemplateTemplateParmDecl" => {
                 let mut l = decl_head(n, k);
                 match k {
@@ -1545,14 +1592,9 @@ impl<'a> Printer<'a, '_> {
         &mut self,
         n: &'a Json,
         params: Option<&[Option<String>]>,
+        explicit: bool,
     ) -> Res<Option<Tree>> {
         let nm = name(n).unwrap_or("");
-        if text(n, "tagUsed").is_none() {
-            // A reference to an explicit specialization declared elsewhere.
-            return Err(format!(
-                "clang-ast: unsupported explicit specialization of `{nm}` (WP-070b)"
-            ));
-        }
         let Some(params) = params else {
             return Err(format!(
                 "clang-ast: unsupported specialization of `{nm}`, a variadic template (WP-072)"
@@ -1568,7 +1610,21 @@ impl<'a> Printer<'a, '_> {
         let mut line = decl_head(n, "ClassTemplateSpecializationDecl");
         push_word(&mut line, text(n, "tagUsed").unwrap_or(""));
         push_word(&mut line, nm);
-        if flag(n, "completeDefinition") {
+        if explicit {
+            // clang's JSON lacks the specialization kind: the text dump
+            // has it.
+            if flag(n, "completeDefinition") {
+                push_word(&mut line, "definition");
+            }
+            let pos = self.ix.order.get(id(n)).copied().ok_or_else(|| {
+                format!("clang-ast: specialization `{nm}` is not in the side-channel order")
+            })?;
+            let d = &self.side()?[pos];
+            let word = EXPLICIT_SPEC_WORDS.iter().find(|w| d.has_flag(w)).ok_or_else(|| {
+                format!("clang-ast: no explicit specialization kind on `{}`", d.line)
+            })?;
+            push_word(&mut line, word);
+        } else if flag(n, "completeDefinition") {
             push_word(&mut line, "definition");
             push_word(&mut line, "implicit_instantiation");
         }
@@ -1599,6 +1655,67 @@ impl<'a> Printer<'a, '_> {
             }
         }
         Ok(Some(tree))
+    }
+
+    /// A class template partial specialization, at its lexical position
+    /// (spec/ast-dump.md §5): the record line plus `explicit_specialization`,
+    /// the canonical arguments, the template parameters, the bases, then
+    /// the members.
+    fn partial(&mut self, n: &'a Json) -> Res<Tree> {
+        const KIND: &str = "ClassTemplatePartialSpecializationDecl";
+        let nm = name(n).unwrap_or("");
+        table::check_keys(KIND, n.as_obj().unwrap_or(&[]).iter().map(|(key, _)| key.as_str()))?;
+        // The primary template: the one of that name in the same lexical
+        // context, else the only one of that name.
+        let cands = self.ix.templates_by_name.get(nm).map_or(&[][..], Vec::as_slice);
+        let here = self.ix.lexical.get(id(n)).map(|c| id(c));
+        let tmpl = cands
+            .iter()
+            .find(|t| self.ix.lexical.get(id(t)).map(|c| id(c)) == here)
+            .or(if cands.len() == 1 { cands.first() } else { None })
+            .ok_or_else(|| format!("clang-ast: cannot find the template of partial `{nm}`"))?;
+        let params = spec_param_types(tmpl).ok_or_else(|| {
+            format!("clang-ast: unsupported partial specialization of `{nm}`, a variadic template (WP-072)")
+        })?;
+        let mut line = decl_head(n, KIND);
+        push_word(&mut line, text(n, "tagUsed").unwrap_or(""));
+        push_word(&mut line, nm);
+        if flag(n, "completeDefinition") {
+            push_word(&mut line, "definition");
+        }
+        push_word(&mut line, "explicit_specialization");
+        let mut tree = Tree { line, kids: Vec::new() };
+        let mut index = 0;
+        let mut rest = Vec::new();
+        for child in kids(n) {
+            match kind(child) {
+                "TemplateArgument" => {
+                    let param = params.get(index).ok_or_else(|| {
+                        format!("clang-ast: partial `{nm}` has more arguments than parameters")
+                    })?;
+                    let t = if child.get("value").is_some() {
+                        spec_arg(child, param.as_deref())?
+                    } else {
+                        self.template_arg(child, false)?
+                    };
+                    tree.kids.push(t);
+                    index += 1;
+                }
+                "TemplateTypeParmDecl" | "NonTypeTemplateParmDecl" | "TemplateTemplateParmDecl" => {
+                    tree.kids.extend(self.node(child)?);
+                }
+                _ => rest.push(child),
+            }
+        }
+        if let Some(bases) = n.get("bases") {
+            for base in bases.as_arr().unwrap_or(&[]) {
+                tree.kids.push(Tree { line: base_line(base)?, kids: Vec::new() });
+            }
+        }
+        for child in rest {
+            tree.kids.extend(self.node(child)?);
+        }
+        Ok(tree)
     }
 
     /// The children of a template parameter, a concept-id or an

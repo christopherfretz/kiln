@@ -28,9 +28,18 @@ pub const CLASSES: &[&str] = &[
     "CXXDestructorDecl",
     "CXXConversionDecl",
     "VarDecl",
+    "ClassTemplateSpecializationDecl",
+    "ClassTemplatePartialSpecializationDecl",
 ];
 
-/// A function or `VarDecl` line of the text dump.
+/// Whether `class` is one of the class template specialization classes
+/// (aligned for their specialization kind, which the JSON lacks).
+pub fn is_record(class: &str) -> bool {
+    class.ends_with("SpecializationDecl")
+}
+
+/// A function, `VarDecl` or class template specialization line of the
+/// text dump.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TextDecl {
     /// One of [`CLASSES`].
@@ -49,6 +58,9 @@ pub struct TextDecl {
 impl TextDecl {
     /// Whether the line names declaration `name` (` name 'type'`).
     pub fn names(&self, name: &str) -> bool {
+        if is_record(self.class) {
+            return self.has_flag(name);
+        }
         self.line.contains(&format!(" {name} '"))
     }
 
