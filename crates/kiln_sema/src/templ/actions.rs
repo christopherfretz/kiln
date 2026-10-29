@@ -151,7 +151,9 @@ impl Sema<'_, '_> {
                 .is_some_and(|i| i.depth == info.depth && i.index == info.index)
     }
 
-    fn arg_names_param(&self, p: DeclId, a: TemplateArg) -> bool {
+    /// Whether template argument `a` names parameter `p` (at its depth
+    /// and index; a pack expanded).
+    pub(crate) fn arg_names_param(&self, p: DeclId, a: TemplateArg) -> bool {
         let Some(info) = self.ast.template_parm(p).copied() else { return false };
         match (self.kind_of(p), a.view()) {
             (DeclKind::TemplateTypeParm, ArgView::Type(t)) => {

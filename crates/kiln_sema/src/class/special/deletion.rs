@@ -821,7 +821,8 @@ impl Sema<'_, '_> {
         }
         if first {
             self.ast.decls.mark_function(f, FnSpec::new().with_deleted(true));
-            if !had_error {
+            // Not inside an instantiation (clang `!inTemplateInstantiation()`).
+            if !had_error && self.inst.stack.is_empty() {
                 let mut d = self.diag(DiagId::sema_defaulted_deleted, floc).arg(k.index());
                 if mismatch {
                     d = d.with_note(

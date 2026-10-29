@@ -327,6 +327,18 @@ impl Substituter<'_, '_, '_> {
                 .mark_function(f, kiln_ast::decl::FnSpec::new().with_implicit_inline(true));
         }
         self.default_args(d, f);
+        // `= delete` / `= default` on the pattern's declaration: declared
+        // again on the instantiation, where its checks run with the class
+        // (clang `InstantiateFunctionDeclaration` → `SetDeclDeleted` /
+        // `SetDeclDefaulted`; spec/sema-class.md §4.4).
+        if let Some(s) = fs {
+            if s.is_deleted() {
+                let msg = self.sema.ast.decls.cold.delete_message.get(d).copied();
+                self.sema.act_on_deleted(f, loc, msg);
+            } else if s.defaulted() == kiln_ast::decl::Defaulted::Explicit && friend.is_none() {
+                self.sema.act_on_defaulted(f, loc);
+            }
+        }
         Ok(r)
     }
 
