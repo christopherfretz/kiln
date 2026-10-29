@@ -5,7 +5,9 @@
 # `<source>.oven.jsonl` (if there is one) to <path> with `@SRC@` replaced by
 # the source path as given, and compiles with ${KILN_FAKE_CC:-clang++-19}.
 # For `-fdump-ast` it compiles, and on success prints the canned dump
-# `<source>.ast` with `@FILTER@` replaced by the `-fdump-ast-filter=` value.
+# `<source>.ast` with `@FILTER@` replaced by the `-fdump-ast-filter=` value;
+# likewise `<source>.layout` for `-fdump-record-layouts` and
+# `<source>.vtables` for `-fdump-vtable-layouts`.
 if [ "$1" = "--version" ]; then
   echo "kiln version 0.0.0-fake (xtask fixture)"
   exit 0
@@ -18,7 +20,9 @@ for a in "$@"; do
   shift
   case "$a" in
     -fconstexpr-report=*) report=${a#-fconstexpr-report=} ;;
-    -fdump-ast) dump=1 ;;
+    -fdump-ast) dump=ast ;;
+    -fdump-record-layouts) dump=layout ;;
+    -fdump-vtable-layouts) dump=vtables ;;
     -fdump-ast-filter=*) filter=${a#-fdump-ast-filter=} ;;
     *.cpp | *.c | *.h) src=$a; set -- "$@" "$a" ;;
     *) set -- "$@" "$a" ;;
@@ -31,4 +35,4 @@ if [ -z "$dump" ]; then
   exec "${KILN_FAKE_CC:-clang++-19}" "$@"
 fi
 "${KILN_FAKE_CC:-clang++-19}" "$@" || exit
-if [ -f "$src.ast" ]; then sed "s|@FILTER@|$filter|g" "$src.ast"; fi
+if [ -f "$src.$dump" ]; then sed "s|@FILTER@|$filter|g" "$src.$dump"; fi
