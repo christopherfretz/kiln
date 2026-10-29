@@ -24,10 +24,12 @@ use crate::mem::{Origin, fn_ptr};
 use crate::ty::{OTy, Scal, TyKind, eval_int};
 use crate::{Oven, SemaBridge};
 
+mod bitcast;
 mod builtins;
 mod new_delete;
 
 pub(crate) use builtins::designator_type;
+pub(crate) use new_delete::is_std_named;
 
 /// `Func::entry` of a function not compiled yet.
 pub(crate) const UNCOMPILED: u32 = u32::MAX;
@@ -761,6 +763,15 @@ impl Scan<'_> {
             return;
         }
         if let Some(init) = ast.decls.var(d).and_then(|v| v.init) {
+            // A `__builtin_bit_cast` result may be indeterminate
+            // ([bit.cast]/2): the variable is built in memory.
+            let mut x = init;
+            while matches!(ast.exprs.get(x).kind(), ExprKind::ParenExpr | ExprKind::ConstantExpr) {
+                x = ast.exprs.operand(x);
+            }
+            if ast.exprs.get(x).kind() == ExprKind::BuiltinBitCastExpr {
+                self.mem.insert(d);
+            }
             let saved = self.cur.replace(d);
             self.expr(init, false);
             self.cur = saved;
@@ -2267,11 +2278,7 @@ impl Compiler<'_> {
                     _ => self.trap(e, "cast that performs the conversions of a reinterpret_cast is not allowed in a constant expression"),
                 }
             }
-            CastKind::LValueToRValueBitCast => {
-                // spec/sema-templates.md §9.5: the byte-level
-                // reinterpretation (through `abi` layout) is an Oven stub.
-                self.trap(e, "kiln: __builtin_bit_cast in a constant expression is not supported yet (Oven bit_cast; unowned, see spec/sema-templates.md §9.5)");
-            }
+            CastKind::LValueToRValueBitCast => self.bit_cast(e, dst, None),
             CastKind::IntegralToPointer | CastKind::PointerToIntegral => {
                 self.trap(e, "cast that performs the conversions of a reinterpret_cast is not allowed in a constant expression");
             }
@@ -2559,6 +2566,22 @@ impl Compiler<'_> {
                 let op = self.ast().exprs.operand(e);
                 self.lv(op, acc)
             }
+            // A temporary destroyed at the end of its full-expression
+            // ([class.temporary]/4): an object in the current frame,
+            // released by the enclosing statement's temporaries scope.
+            ExprKind::MaterializeTemporaryExpr
+                if self.ast().exprs.temporary_storage(e)
+                    == kiln_ast::expr::StorageDuration::FullExpression =>
+            {
+                let sub = self.ast().exprs.operand(e);
+                let q = n.ty();
+                let is_const = const_object(self.ast(), q);
+                let ty = self.ty(q);
+                let r = self.reg();
+                self.alloc(r, ty, Origin::Temp(e), is_const, e);
+                self.init(sub, r, ty);
+                Place::Mem(r)
+            }
             // A call returning a reference: the referent's address.
             ExprKind::CallExpr if n.value_category().is_glvalue() => Place::Mem(self.call(e, None)),
             ExprKind::CallExpr => {
@@ -2747,6 +2770,12 @@ impl Compiler<'_> {
                 return;
             }
             _ => {}
+        }
+        if n.kind().is_cast() && self.ast().exprs.cast_kind(e) == CastKind::LValueToRValueBitCast {
+            // The result may hold indeterminate bytes ([bit.cast]/2).
+            let r = self.reg();
+            self.bit_cast(e, r, Some(p));
+            return;
         }
         if !self.o.types.is_aggregate(ty) {
             let r = self.rv(e);

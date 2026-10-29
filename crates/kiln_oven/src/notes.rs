@@ -209,6 +209,22 @@ impl Oven {
     /// A designated type is printed as the argument's static pointee (with
     /// its qualifiers, as clang's designator type) when it has one.
     fn bi_msg(&self, ast: &Ast, site: Site, f: BiFault) -> String {
+        match f {
+            BiFault::CastBitfield => {
+                return "constexpr bit_cast involving bit-field is not yet supported".into();
+            }
+            BiFault::CastIndet { t } => {
+                let chr = if ast.types.target().char_signed { " or" } else { ", 'char', or" };
+                return format!(
+                    "indeterminate value can only initialize an object of type 'unsigned char'{chr} 'std::byte'; '{}' is invalid",
+                    self.tname(ast, t)
+                );
+            }
+            BiFault::CastUnrep { v } => {
+                return format!("value {v} cannot be represented in type 'bool'");
+            }
+            _ => {}
+        }
         let arg_ty = |i: usize, t: OTy| {
             site.e
                 .and_then(|e| {
@@ -253,6 +269,9 @@ impl Oven {
                 "constant evaluation of '__builtin_memchr' on array of type '{}' is not supported; only arrays of narrow character types can be searched",
                 arg_ty(0, t)
             ),
+            BiFault::CastBitfield | BiFault::CastIndet { .. } | BiFault::CastUnrep { .. } => {
+                String::new()
+            }
         }
     }
 

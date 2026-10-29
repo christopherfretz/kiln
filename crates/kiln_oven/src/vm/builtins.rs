@@ -43,6 +43,13 @@ pub(crate) enum BiFault {
     CmpType { t1: OTy, t2: OTy },
     /// `note_constexpr_memchr_unsupported`.
     ChrType { t: OTy },
+    /// `note_constexpr_bit_cast_unsupported_bitfield` (a destination
+    /// bit-field; a source one is rejected statically).
+    CastBitfield,
+    /// `note_constexpr_bit_cast_indet_dest`.
+    CastIndet { t: OTy },
+    /// `note_constexpr_bit_cast_unrepresentable_value` (a `bool` byte).
+    CastUnrep { v: u8 },
 }
 
 fn mask(w: u32) -> u128 {
@@ -108,6 +115,10 @@ impl Oven {
             bi::MEMCHR => self.bi_memchr(ast, a as u64, b, c as u64, t1, sub != 0).map(u128::from),
             bi::MEMCPY => {
                 self.bi_memcpy(ast, a as u64, b as u64, c as u64, t1, t2, sub != 0).map(|()| a)
+            }
+            bi::BIT_CAST => {
+                let (to_mem, read) = (sub == bi::TO_MEM, sub == bi::READ_ONLY);
+                self.bit_cast(ast, a as u64, b as u64, OTy(t1), OTy(t2), to_mem, read)
             }
             _ => Err(Fault::Invalid),
         }

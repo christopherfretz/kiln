@@ -1862,6 +1862,11 @@ impl Sema<'_, '_> {
         let width = d.bit_width.and_then(|w| self.bit_width(w, ty, nm.as_deref(), d.name_loc()));
         let h = DeclHead::new(ctx, name.map_or(DeclName::EMPTY, DeclName::ident), d.name_loc());
         let f = self.builder().field(h, ty, width, flags);
+        // The decl-specifiers' start (clang's `FieldDecl::getBeginLoc`;
+        // the Oven's `__builtin_bit_cast` notes point there).
+        if ds.loc.is_valid() && ds.loc != d.name_loc() {
+            let _ = self.ast.decls.cold.begin_loc.insert(f, ds.loc);
+        }
         if d.init_style.is_some() {
             self.special.nsdmi.insert(f);
         }

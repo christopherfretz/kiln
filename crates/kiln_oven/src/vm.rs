@@ -18,6 +18,7 @@ use crate::memo::{MAX_ARGS, MemoKey, MemoVal};
 use crate::ty::{OTy, TyKind};
 use crate::{Oven, SemaBridge};
 
+mod bitcast;
 mod builtins;
 
 pub(crate) use builtins::BiFault;

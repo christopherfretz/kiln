@@ -174,12 +174,20 @@ pub(crate) mod bi {
     /// `memcpy`/`memmove` of `c` bytes from `b` to `a`; `t1`/`t2` the
     /// destination/source element types; sub = `MOVE`.
     pub const MEMCPY: u32 = 8;
+    /// `__builtin_bit_cast` of the object at `a` (type `t1`) to `t2`:
+    /// into the object at `b` when sub = `TO_MEM`, else as `dst`.
+    pub const BIT_CAST: u32 = 9;
 
     /// sub of `MEMCMP`/`MEMCHR`: the `w` form (elements compared as
     /// `wchar_t`, no narrow-character restriction).
     pub const WIDE: u32 = 1;
     /// sub of `MEMCPY`: `memmove` (overlap allowed).
     pub const MOVE: u32 = 1;
+    /// sub of `BIT_CAST`: the result initializes the object at `b`.
+    pub const TO_MEM: u32 = 1;
+    /// sub of `BIT_CAST`: only read the source object (its faults come
+    /// before the compiler's static ones).
+    pub const READ_ONLY: u32 = 2;
 
     /// Classes of `FP_CLASS`.
     pub const FINITE: u32 = 0;
