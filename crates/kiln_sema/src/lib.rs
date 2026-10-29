@@ -138,11 +138,9 @@ pub struct Sema<'a, 'sm> {
     pub(crate) delayed_access_depth: Vec<usize>,
     /// The current full-expression's cleanup state (spec/sema-class.md
     /// §5.3).
-    #[expect(dead_code, reason = "WP-066a interface; read from WP-067b (cleanups)")]
     pub(crate) cleanup: class::CleanupState,
     /// Materialized temporaries collected for P2718 range-for lifetime
     /// extension (spec/sema-class.md §5.4).
-    #[expect(dead_code, reason = "WP-066a interface; read from WP-067b (P2718)")]
     pub(crate) extend_collector: Option<Vec<ExprId>>,
     /// Member functions whose *noexcept-specifier* awaits replay
     /// (`ExcSpec::Deferred`, spec/sema-class.md §2.7).
@@ -167,6 +165,8 @@ pub struct Sema<'a, 'sm> {
     /// Template heads and parse-time template state (WP-069,
     /// spec/sema-templates.md §11.2).
     pub(crate) templ: templ::TemplState,
+    /// The instantiation engine (spec/sema-templates.md §11.2; WP-070a).
+    pub inst: templ::InstState,
     /// The abstract classes whose unimplemented pure virtual functions
     /// were already noted (clang notes them on the first abstract-type
     /// diagnostic per class only; WP-078a).
@@ -228,6 +228,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             nsdmi_this: Vec::new(),
             initializing: None,
             templ: templ::TemplState::default(),
+            inst: templ::InstState::default(),
             abstract_noted: kiln_source::fx::FxHashSet::default(),
         }
     }
@@ -274,14 +275,38 @@ impl<'a, 'sm> Sema<'a, 'sm> {
         Diag::new(id, Span::empty(loc))
     }
 
-    /// Emits `d`.
-    pub fn emit(&self, d: Diag) {
+    /// Emits `d`. Inside an instantiation (spec/sema-templates.md §10.2)
+    /// the context notes are added to a diagnostic that shows, and a
+    /// SFINAE context captures errors instead (§5.7).
+    pub fn emit(&self, mut d: Diag) {
+        if self.inst.suppress_next_error.replace(false) {
+            return;
+        }
+        if !self.inst.stack.is_empty()
+            && let Some(id) = d.id()
+        {
+            let sev = self.diags.severity(id);
+            if self.inst.stack.is_sfinae() {
+                if sev >= kiln_diag::Severity::Error
+                    && let Some(s) = self.inst.sfinae.borrow_mut().last_mut()
+                {
+                    s.errors += 1;
+                    if s.first.is_none() {
+                        s.first = Some(d);
+                    }
+                }
+                return;
+            }
+            if sev != kiln_diag::Severity::Ignored {
+                d.prepend_notes(self.inst_context_notes());
+            }
+        }
         d.emit(self.diags);
     }
 
     /// Emits a diagnostic with no arguments at `loc`.
     pub fn error(&self, id: DiagId, loc: Loc) {
-        self.diag(id, loc).emit(self.diags);
+        self.emit(self.diag(id, loc));
     }
 
     /// `q` as clang prints a type argument: `'T'`, or `'T' (aka 'int')`

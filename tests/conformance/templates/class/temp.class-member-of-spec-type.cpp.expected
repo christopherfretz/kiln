@@ -1,0 +1,22 @@
+TranslationUnitDecl
+|-ClassTemplateDecl Inner
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| |-CXXRecordDecl struct Inner definition
+| | `-FieldDecl v 'T'
+| `-ClassTemplateSpecializationDecl struct Inner definition implicit_instantiation
+|   |-TemplateArgument type 'char'
+|   `-FieldDecl v 'char'
+|-ClassTemplateDecl Outer
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| |-CXXRecordDecl struct Outer definition
+| | |-FieldDecl in 'Inner<T>'
+| | `-FieldDecl tag 'int'
+| `-ClassTemplateSpecializationDecl struct Outer definition implicit_instantiation
+|   |-TemplateArgument type 'char'
+|   |-FieldDecl in 'Inner<char>'
+|   `-FieldDecl tag 'int'
+`-StaticAssertDecl
+  `-BinaryOperator 'bool' '=='
+    |-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof 'Outer<char>'
+    `-ImplicitCastExpr 'unsigned long' <IntegralCast>
+      `-IntegerLiteral 'int' 8

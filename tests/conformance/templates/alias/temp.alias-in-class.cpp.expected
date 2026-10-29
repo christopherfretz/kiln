@@ -1,0 +1,16 @@
+TranslationUnitDecl
+|-ClassTemplateDecl Holder
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| |-CXXRecordDecl struct Holder definition
+| | |-TypeAliasDecl referenced pointer 'T *'
+| | `-FieldDecl p 'pointer':'T *'
+| |-ClassTemplateSpecializationDecl struct Holder
+| | `-TemplateArgument type 'int'
+| `-ClassTemplateSpecializationDecl struct Holder definition implicit_instantiation
+|   |-TemplateArgument type 'double'
+|   |-TypeAliasDecl referenced pointer 'double *'
+|   `-FieldDecl p 'pointer':'double *'
+|-VarDecl h 'Holder<int> *'
+`-VarDecl sz 'int' cinit
+  `-ImplicitCastExpr 'int' <IntegralCast>
+    `-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof 'Holder<double>'

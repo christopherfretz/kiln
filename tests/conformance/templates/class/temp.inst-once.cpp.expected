@@ -1,0 +1,22 @@
+TranslationUnitDecl
+|-ClassTemplateDecl Box
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| |-CXXRecordDecl struct Box definition
+| | `-FieldDecl value 'T'
+| `-ClassTemplateSpecializationDecl struct Box definition implicit_instantiation
+|   |-TemplateArgument type 'int'
+|   `-FieldDecl value 'int'
+|-StaticAssertDecl
+| `-BinaryOperator 'bool' '=='
+|   |-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof 'Box<int>'
+|   `-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof 'int'
+|-StaticAssertDecl
+| `-BinaryOperator 'bool' '=='
+|   |-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof 'Box<int>'
+|   `-ImplicitCastExpr 'unsigned long' <IntegralCast>
+|     `-IntegerLiteral 'int' 4
+`-StaticAssertDecl
+  `-BinaryOperator 'bool' '=='
+    |-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof 'Box<int>'
+    `-ImplicitCastExpr 'unsigned long' <IntegralCast>
+      `-IntegerLiteral 'int' 4

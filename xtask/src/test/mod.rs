@@ -7,6 +7,7 @@ mod compare;
 mod diag_parse;
 pub(crate) mod directives;
 mod discover;
+mod inst_report;
 mod pp_tokens;
 mod report;
 mod runner;

@@ -184,9 +184,33 @@ impl Sema<'_, '_> {
         self.tag_type(r)
     }
 
-    /// Whether `q` (cv-qualifiers ignored) is the class `r`.
+    /// Whether `q` (cv-qualifiers ignored) is the class `r`. In the
+    /// pattern of class template `X`, `X` and `X<P...>` for `X`'s own
+    /// parameters `P` (canonically the same specialization) name the
+    /// class too ([temp.dep.type]/1; clang compares with the canonical
+    /// injected-class-name type), so `X(const X &) = default;` in a
+    /// template is a copy constructor.
     pub(crate) fn is_class_type_of(&self, q: QualType, r: DeclId) -> bool {
-        self.ast.types.as_record(q).is_some_and(|d| self.ast.first(d) == self.ast.first(r))
+        let first = self.ast.first(r);
+        if self.ast.types.as_record(q).is_some_and(|d| self.ast.first(d) == first) {
+            return true;
+        }
+        let Some(tmpl) = self.ast.described_template(first) else { return false };
+        let TypeView::TemplateSpecialization { name, args, .. } = self.ast.types.canonical_view(q)
+        else {
+            return false;
+        };
+        if self.ast.types.template_decl(name).map(|d| self.ast.first(d))
+            != Some(self.ast.first(tmpl))
+        {
+            return false;
+        }
+        let Some(info) = self.ast.template_info(tmpl).copied() else { return false };
+        let list = *self.ast.templates.param_list(info.params);
+        let params: Vec<DeclId> = self.ast.lists.iter(list.params).collect();
+        let args = self.ast.types.args(args);
+        params.len() == args.len()
+            && params.iter().zip(args).all(|(&p, &a)| self.arg_names_param(p, a))
     }
 
     /// The parameters of function `f`.
@@ -287,9 +311,22 @@ impl Sema<'_, '_> {
         }
         let Some(kind) = self.special_kind_of(f) else {
             let name = self.ast.decls.get(f).name();
-            if let DeclNameView::Operator(op) = self.ast.names.view(name)
-                && is_comparison(op)
+            let op = match self.ast.names.view(name) {
+                DeclNameView::Operator(op) => Some(op),
+                _ => None,
+            };
+            if self.ast.decls.get(f).has(DeclFlags::DEPENDENT_CTX)
+                && self.ast.described_template(f).is_none()
+                && (self.kind_of(f) == DeclKind::CXXConstructor
+                    || op == Some(kiln_ast::names::OverloadedOperator::Equal))
             {
+                // A constructor or `operator=` in a dependent context may
+                // instantiate to a special member: checked when its class
+                // is instantiated (clang `SetDeclDefaulted`).
+                self.ast.decls.mark_function(f, FnSpec::new().with_defaulted(Defaulted::Explicit));
+                return;
+            }
+            if op.is_some_and(is_comparison) {
                 // todo(WP-068b): defaulted comparison operators.
                 self.unsupported("defaulted comparison operators", loc);
             } else {

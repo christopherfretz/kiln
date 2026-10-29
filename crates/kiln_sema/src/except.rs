@@ -268,7 +268,7 @@ impl Sema<'_, '_> {
         };
         if (!pointer || !self.ast.types.is_void(checked))
             && !self.ast.types.is_function(checked)
-            && !self.is_complete(checked)
+            && !self.require_complete(checked, loc)
         {
             let id = if pointer {
                 DiagId::sema_throw_incomplete_ptr

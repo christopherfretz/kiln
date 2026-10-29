@@ -109,6 +109,9 @@ struct Index<'a> {
     in_class: HashSet<&'a str>,
     /// Declarations a `FriendDecl` holds.
     befriended: HashSet<&'a str>,
+    /// Functions declared in a class template specialization (their
+    /// `implicit-inline` follows the pattern, which the JSON omits).
+    in_spec: HashSet<&'a str>,
     /// The declaration contexts (filter mode's [`Ctx`] kinds) by id, and
     /// each declaration's nearest enclosing one (its lexical context), for
     /// the qualified name of a declaration whose semantic context differs.
@@ -181,8 +184,12 @@ impl<'a> Index<'a> {
         }
         if FN_KINDS.contains(&k) {
             self.funcs.insert(id(n), n);
-            if matches!(parent, "CXXRecordDecl" | "FriendDecl") {
+            if matches!(parent, "CXXRecordDecl" | "FriendDecl" | "ClassTemplateSpecializationDecl")
+            {
                 self.in_class.insert(id(n));
+            }
+            if parent == "ClassTemplateSpecializationDecl" {
+                self.in_spec.insert(id(n));
             }
         }
         if self.template_depth > 0 {
@@ -196,6 +203,10 @@ impl<'a> Index<'a> {
         };
         if is_template {
             self.template_depth += 1;
+        }
+        let saved_depth = self.template_depth;
+        if k == "ClassTemplateSpecializationDecl" {
+            self.template_depth = 0;
         }
         for (key, v) in obj {
             if key == "inner" || key == "array_filler" {
@@ -212,6 +223,9 @@ impl<'a> Index<'a> {
             {
                 self.decl_file.insert(id(n), f);
             }
+        }
+        if k == "ClassTemplateSpecializationDecl" {
+            self.template_depth = saved_depth;
         }
         if is_template {
             self.template_depth -= 1;
@@ -596,21 +610,26 @@ impl<'a> Printer<'a, '_> {
                         }
                         continue;
                     }
-                    let value = match kids(c).next() {
-                        Some(init) => enumerator_value(init)?,
-                        None => next,
-                    };
-                    next = value + 1;
                     table::check_keys(
                         "EnumConstantDecl",
                         c.as_obj().unwrap_or(&[]).iter().map(|(key, _)| key.as_str()),
                     )?;
-                    let line = format!(
-                        "{} {} {} value={value}",
+                    let mut line = format!(
+                        "{} {} {}",
                         decl_head(c, "EnumConstantDecl"),
                         name(c).unwrap_or(""),
                         type_pair(c.get("type"), "EnumConstantDecl")?
                     );
+                    // An enumeration in a template is dependent: its
+                    // enumerators have no value until instantiated.
+                    if !self.ix.templated.contains(id(c)) {
+                        let value = match kids(c).next() {
+                            Some(init) => enumerator_value(init)?,
+                            None => next,
+                        };
+                        next = value + 1;
+                        let _ = write!(line, " value={value}");
+                    }
                     kids_out.push(Tree { line, kids: self.kid_trees(c)? });
                 }
             }
@@ -739,7 +758,25 @@ impl<'a> Printer<'a, '_> {
                 let mut l = decl_head(n, k);
                 push_opt(&mut l, name(n));
                 line = l;
-                kids_out = self.kid_trees(n)?;
+                if k == "ClassTemplateDecl" {
+                    let params = spec_param_types(n);
+                    for c in kids(n) {
+                        if kind(c) == "ClassTemplateSpecializationDecl" {
+                            kids_out.extend(self.specialization(c, params.as_deref())?);
+                        } else if let Some(t) = self.node(c)? {
+                            kids_out.push(t);
+                        }
+                    }
+                } else {
+                    kids_out = self.kid_trees(n)?;
+                }
+            }
+            "ClassTemplateSpecializationDecl" => {
+                return Err(format!(
+                    "clang-ast: unsupported ClassTemplateSpecializationDecl `{}` outside its \
+                     template (explicit specializations and instantiations: WP-070b)",
+                    name(n).unwrap_or("")
+                ));
             }
             "TemplateTypeParmDecl" | "NonTypeTemplateParmDecl" | "TemplateTemplateParmDecl" => {
                 let mut l = decl_head(n, k);
@@ -1142,6 +1179,7 @@ impl<'a> Printer<'a, '_> {
             | "BinaryConditionalOperator"
             | "OffsetOfExpr"
             | "DependentScopeDeclRefExpr"
+            | "SubstNonTypeTemplateParmExpr"
             | "PackExpansionExpr" => {
                 line = self.expr_head(n, k)?;
                 kids_out = self.kid_trees(n)?;
@@ -1256,6 +1294,7 @@ impl<'a> Printer<'a, '_> {
                 text(n, "referencedMemberDecl").is_some_and(|d| self.ix.bitfields.contains(d))
             }
             "ParenExpr" | "CompoundAssignOperator" => kid(0),
+            "SubstNonTypeTemplateParmExpr" => kid(1),
             "BinaryOperator" => match text(n, "opcode") {
                 Some("=") => kid(0),
                 Some(",") => kid(1),
@@ -1286,12 +1325,18 @@ impl<'a> Printer<'a, '_> {
         let constexpr = flag(n, "constexpr") && !consteval;
         let deleted = flag(n, "explicitlyDeleted");
         let inline = flag(n, "inline");
-        let implicit_inline = !inline && self.inlined(n);
         let pos = self.ix.order.get(id(n)).copied();
         let side = match pos {
             Some(pos) if self.needs_side(n, class) => Some(self.side()?[pos].clone()),
             _ => None,
         };
+        // An instantiated member is inline as its pattern is (clang's
+        // JSON omits the body of a member not yet used).
+        let implicit_inline = !inline
+            && match &side {
+                Some(d) if self.ix.in_spec.contains(id(n)) => d.has_flag("implicit-inline"),
+                _ => self.inlined(n),
+            };
         if let Some(pos) = pos {
             self.fn_flags.push((
                 pos,
@@ -1491,6 +1536,71 @@ impl<'a> Printer<'a, '_> {
         Ok(t)
     }
 
+    /// An implicit instantiation printed under its `ClassTemplateDecl`
+    /// (spec/ast-dump.md §5): the record line plus `implicit_instantiation`
+    /// when defined, the converted arguments, then the members. `params`
+    /// holds each template parameter's type (`None` for a type or
+    /// template parameter), or is `None` when it has a pack.
+    fn specialization(
+        &mut self,
+        n: &'a Json,
+        params: Option<&[Option<String>]>,
+    ) -> Res<Option<Tree>> {
+        let nm = name(n).unwrap_or("");
+        if text(n, "tagUsed").is_none() {
+            // A reference to an explicit specialization declared elsewhere.
+            return Err(format!(
+                "clang-ast: unsupported explicit specialization of `{nm}` (WP-070b)"
+            ));
+        }
+        let Some(params) = params else {
+            return Err(format!(
+                "clang-ast: unsupported specialization of `{nm}`, a variadic template (WP-072)"
+            ));
+        };
+        if self.implicit_dropped(n) {
+            return Ok(None);
+        }
+        table::check_keys(
+            "ClassTemplateSpecializationDecl",
+            n.as_obj().unwrap_or(&[]).iter().map(|(key, _)| key.as_str()),
+        )?;
+        let mut line = decl_head(n, "ClassTemplateSpecializationDecl");
+        push_word(&mut line, text(n, "tagUsed").unwrap_or(""));
+        push_word(&mut line, nm);
+        if flag(n, "completeDefinition") {
+            push_word(&mut line, "definition");
+            push_word(&mut line, "implicit_instantiation");
+        }
+        let mut tree = Tree { line, kids: Vec::new() };
+        let mut index = 0;
+        let mut args = Vec::new();
+        let mut rest = Vec::new();
+        for child in kids(n) {
+            if kind(child) == "TemplateArgument" {
+                let param = params.get(index).ok_or_else(|| {
+                    format!("clang-ast: `{nm}` has more arguments than parameters")
+                })?;
+                args.push(spec_arg(child, param.as_deref())?);
+                index += 1;
+            } else {
+                rest.push(child);
+            }
+        }
+        tree.kids.extend(args);
+        if let Some(bases) = n.get("bases") {
+            for base in bases.as_arr().unwrap_or(&[]) {
+                tree.kids.push(Tree { line: base_line(base)?, kids: Vec::new() });
+            }
+        }
+        for child in rest {
+            if let Some(x) = self.node(child)? {
+                tree.kids.push(x);
+            }
+        }
+        Ok(Some(tree))
+    }
+
     /// The children of a template parameter, a concept-id or an
     /// unresolved name: `TemplateArgument` children go through
     /// [`Self::template_arg`].
@@ -1507,6 +1617,68 @@ impl<'a> Printer<'a, '_> {
         }
         Ok(v)
     }
+}
+
+/// The type of each parameter of the class template `n` (`None` for a
+/// type or template parameter); `None` when one is a pack.
+fn spec_param_types(n: &Json) -> Option<Vec<Option<String>>> {
+    let mut v = Vec::new();
+    for c in kids(n) {
+        match kind(c) {
+            "TemplateTypeParmDecl" | "TemplateTemplateParmDecl" | "NonTypeTemplateParmDecl"
+                if flag(c, "isParameterPack") =>
+            {
+                return None;
+            }
+            "TemplateTypeParmDecl" | "TemplateTemplateParmDecl" => v.push(None),
+            "NonTypeTemplateParmDecl" => v.push(Some(qual_type(c).to_owned())),
+            _ => {}
+        }
+    }
+    Some(v)
+}
+
+/// A converted argument of an implicit instantiation: `TemplateArgument
+/// type '<type>'` or `value '<type>' <integer>` (spec/ast-dump.md §5).
+/// clang's JSON writes an integral value as its sign-extended 64-bit
+/// pattern (`true` is -1), so the parameter's type `param` decodes it.
+fn spec_arg(n: &Json, param: Option<&str>) -> Res<Tree> {
+    let mut line = String::from("TemplateArgument");
+    if let Some(ty) = n.get("type") {
+        push_word(&mut line, "type");
+        push_word(&mut line, &type_pair(Some(ty), "TemplateArgument")?);
+        return Ok(Tree { line, kids: Vec::new() });
+    }
+    // Numbers parse as `f64`: exact within 2^53 (the bound), enough for
+    // the corpus.
+    let as_i64 = |j: &Json| {
+        j.as_f64()
+            .filter(|f| f.fract() == 0.0 && f.abs() <= 9_007_199_254_740_992.0)
+            .map(|f| f as i64)
+    };
+    let (Some(v), Some(p)) = (n.get("value").and_then(as_i64), param) else {
+        return Err("clang-ast: unsupported non-integral template argument of a \
+                    specialization (WP-071)"
+            .into());
+    };
+    let value: i128 = match p {
+        "bool" => i128::from(v != 0),
+        "unsigned char" | "char8_t" => i128::from(v as u8),
+        "unsigned short" | "char16_t" => i128::from(v as u16),
+        "unsigned int" | "char32_t" => i128::from(v as u32),
+        "unsigned long" | "unsigned long long" | "size_t" | "std::size_t" => i128::from(v as u64),
+        "int" | "long" | "long long" | "short" | "signed char" | "char" | "wchar_t" => {
+            i128::from(v)
+        }
+        _ => {
+            return Err(format!(
+                "clang-ast: unsupported template argument of type `{p}` in a specialization"
+            ));
+        }
+    };
+    push_word(&mut line, "value");
+    let _ = write!(line, " '{p}' {value}");
+    Ok(Tree { line, kids: Vec::new() })
 }
 
 fn push_word(l: &mut String, w: &str) {
@@ -1668,6 +1840,7 @@ fn is_null_pointer_constant(n: &Json) -> bool {
         "ImplicitCastExpr" | "ParenExpr" | "CStyleCastExpr" => {
             kids(n).next().is_some_and(is_null_pointer_constant)
         }
+        "SubstNonTypeTemplateParmExpr" => kids(n).nth(1).is_some_and(is_null_pointer_constant),
         _ => false,
     }
 }

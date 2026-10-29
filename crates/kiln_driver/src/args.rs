@@ -184,6 +184,9 @@ pub enum ArgError {
     InvalidStdlib(String),
     /// An option with a bad integer value: `(argument, value)`.
     InvalidInt(String, String),
+    /// A flag with a value outside its set: `(argument, value)`
+    /// ("invalid value '{v}' in '{arg}'").
+    InvalidFlagValue(String, String),
 }
 
 /// The parsed command line.
@@ -263,6 +266,8 @@ pub struct Args {
     pub errors: Vec<ArgError>,
     /// The `-fconstexpr-*` options.
     pub constexpr: crate::constexpr_opts::ConstexprOpts,
+    /// The `-ftemplate-*` / `-fkiln-instantiation-report` options.
+    pub templ: crate::templ_opts::TemplOpts,
     /// `-c`, `-S`, `-emit-llvm`.
     pub compile: CompileArgs,
     /// Linker options, in order.
@@ -323,7 +328,7 @@ impl Args {
                 }
                 continue;
             }
-            if let Some(r) = a.constexpr.parse_arg(arg) {
+            if let Some(r) = a.constexpr.parse_arg(arg).or_else(|| a.templ.parse_arg(arg)) {
                 a.errors.extend(r.err());
             } else if !a.flag(arg) && !a.predef_flag(arg) && !a.diag_flag(arg) {
                 a.errors.push(ArgError::Unknown(arg.to_owned()));

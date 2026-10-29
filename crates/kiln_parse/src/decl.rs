@@ -87,6 +87,9 @@ impl Parser<'_, '_> {
         while !self.at_eof() {
             self.parse_external_declaration();
         }
+        // [temp.point]/7: the end of the translation unit is a point of
+        // instantiation of every pending definition.
+        self.s.end_of_tu_instantiations();
     }
 
     /// A declaration at namespace scope ([dcl.pre] declaration).
@@ -657,6 +660,24 @@ impl Parser<'_, '_> {
             return true;
         }
         match self.scan_name(start) {
+            Some((end, NameClass::Type(..), _)) if end > start + 1 => {
+                // A qualified name: the qualifier is formed (and kept as
+                // sugar) by the parse proper.
+                let ty = match self.parse_nested_name_nns() {
+                    Ok(Some(q)) => self.parse_qualified_type_rest(q, TagKeyword::None),
+                    _ => None,
+                };
+                if ty.is_none() {
+                    ds.invalid = true;
+                }
+                if let Err(e) =
+                    ds.set_base(TypeSpecKind::Named, Some(ty.unwrap_or(QualType::ERROR)), loc)
+                {
+                    ds.invalid = true;
+                    self.spec_error(&e, loc);
+                }
+                true
+            }
             Some((end, NameClass::Type(ty, d), _)) => {
                 while self.pos() < end {
                     self.bump();

@@ -160,7 +160,8 @@ pub const TABLE: &[(&str, Disposition)] = &[
     // Declarations kiln does not dump in M2.
     ("RecordDecl", Unsupported("C struct declarations (RecordDecl) are not in the M2 dump")),
     ("IndirectFieldDecl", Unsupported("anonymous struct/union members are not in the M2 dump")),
-    ("ClassTemplateSpecializationDecl", Unsupported(INSTANTIATION)),
+    // Printed by its `ClassTemplateDecl` (an implicit instantiation).
+    ("ClassTemplateSpecializationDecl", Keep),
     ("ClassTemplatePartialSpecializationDecl", Unsupported(INSTANTIATION)),
     ("VarTemplateSpecializationDecl", Unsupported(INSTANTIATION)),
     ("VarTemplatePartialSpecializationDecl", Unsupported(INSTANTIATION)),
@@ -194,7 +195,8 @@ pub const TABLE: &[(&str, Disposition)] = &[
     ("CXXStdInitializerListExpr", Unsupported(NOT_M2)),
     ("CXXRewrittenBinaryOperator", Unsupported(NOT_M2)),
     ("UnresolvedMemberExpr", Unsupported("member function template names are not in the dump yet")),
-    ("SubstNonTypeTemplateParmExpr", Unsupported(INSTANTIATION)),
+    // The parameter (reprinted) then the replacement (spec/ast-dump.md §5).
+    ("SubstNonTypeTemplateParmExpr", Keep),
     // A template argument outside the template nodes that print theirs
     // (an explicit specialization's or instantiation's arguments).
     ("TemplateArgument", Unsupported(INSTANTIATION)),
@@ -264,7 +266,9 @@ fn specific_keys(kind: &str) -> Option<&'static [&'static str]> {
         "TranslationUnitDecl" => &[],
         "TypedefDecl" | "TypeAliasDecl" => &["type", "typeAliasDeclId"],
         // `definitionData` is clang's DefinitionData block (not dumped).
-        "CXXRecordDecl" => &["tagUsed", "completeDefinition", "definitionData", "bases"],
+        "CXXRecordDecl" | "ClassTemplateSpecializationDecl" => {
+            &["tagUsed", "completeDefinition", "definitionData", "bases"]
+        }
         "AccessSpecDecl" => &["access"],
         "FriendDecl" => &["type"],
         // The default member initializer is the child.
@@ -330,6 +334,7 @@ fn specific_keys(kind: &str) -> Option<&'static [&'static str]> {
         "BinaryOperator" => &["opcode"],
         "CompoundAssignOperator" => &["opcode", "computeLHSType", "computeResultType"],
         "ConditionalOperator" | "ParenExpr" | "ArraySubscriptExpr" | "CallExpr" => &[],
+        "SubstNonTypeTemplateParmExpr" => &[],
         "UnaryExprOrTypeTraitExpr" => &["name", "argType"],
         "InitListExpr" => &["field", "array_filler"],
         "ImplicitValueInitExpr" => &[],
@@ -475,6 +480,8 @@ pub const CLASS_KINDS: &[&str] = &[
 #[cfg(test)]
 pub const TEMPLATE_KINDS: &[&str] = &[
     "ClassTemplateDecl",
+    "ClassTemplateSpecializationDecl",
+    "SubstNonTypeTemplateParmExpr",
     "FunctionTemplateDecl",
     "VarTemplateDecl",
     "TypeAliasTemplateDecl",

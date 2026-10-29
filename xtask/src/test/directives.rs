@@ -256,6 +256,10 @@ pub struct TestSpec {
     /// `ast-filter:`: dump only the declarations whose qualified name
     /// contains this substring (`-fdump-ast-filter=`).
     pub ast_filter: Option<String>,
+    /// `inst-report:`: the golden NDJSON template instantiation report
+    /// (`-fkiln-instantiation-report=json`), relative to the test's
+    /// directory; compared with the `*_us` timings masked.
+    pub inst_report: Option<PathBuf>,
     /// `ast-implicit`: include implicit declarations (`-fdump-ast=implicit`,
     /// `xtask clang-ast --implicit`).
     pub ast_implicit: bool,
@@ -274,7 +278,7 @@ impl TestSpec {
 
     /// Does this test use directives only kiln can check?
     pub fn is_kiln_specific(&self) -> bool {
-        !self.oven.is_empty()
+        !self.oven.is_empty() || self.inst_report.is_some()
     }
 }
 
@@ -321,6 +325,8 @@ struct Parser {
     pp_compare: Option<PpCompare>,
     pp_linemarkers: bool,
     ast_filter: Option<String>,
+    inst_report: Option<PathBuf>,
+    inst_report_line: usize,
     ast_implicit: bool,
     /// Lines of directives whose validity depends on `expect`.
     run_only: Vec<(usize, &'static str)>,
@@ -356,6 +362,8 @@ impl Parser {
             pp_compare: None,
             pp_linemarkers: false,
             ast_filter: None,
+            inst_report: None,
+            inst_report_line: 0,
             ast_implicit: false,
             run_only: Vec::new(),
             pp_only: Vec::new(),
@@ -370,6 +378,7 @@ impl Parser {
         self.errors.push(DirectiveError { line, message: message.into() });
     }
 
+    #[allow(clippy::too_many_lines, reason = "one flat match over the directive keys")]
     fn directive(&mut self, line: usize, key: &str, value: Option<&str>) {
         let Some((name, qualifier, value)) = self.split_key(line, key, value) else {
             return;
@@ -432,6 +441,16 @@ impl Parser {
                 s.push('\n');
             }
             "stdout-file" => self.stdout_file_directive(line, value),
+            "inst-report" => {
+                if self.inst_report.is_some() {
+                    self.err(line, "duplicate `inst-report`");
+                } else if value.is_empty() {
+                    self.err(line, "`inst-report` requires a path");
+                } else {
+                    self.inst_report_line = line;
+                    self.inst_report = Some(PathBuf::from(value));
+                }
+            }
             "exit" => {
                 self.run_only.push((line, "exit"));
                 match value.parse::<i32>() {
@@ -652,6 +671,11 @@ impl Parser {
         if self.oracle.is_some() && !matches!(expect, Expect::Run | Expect::Pp | Expect::Ast) {
             self.err(self.oracle_line, "`oracle` only applies to `run`, `pp` and `ast` tests");
         }
+        if self.inst_report.is_some() && !matches!(expect, Expect::CompileOk | Expect::CompileFail)
+        {
+            let line = self.inst_report_line;
+            self.err(line, "`inst-report` only applies to `compile-ok` and `compile-fail` tests");
+        }
         if expect == Expect::Pp {
             for line in std::mem::take(&mut self.oven_lines) {
                 self.err(line, "`oven` does not apply to `pp` tests (nothing is evaluated)");
@@ -707,6 +731,7 @@ impl Parser {
             pp_compare: self.pp_compare.unwrap_or_default(),
             pp_linemarkers: self.pp_linemarkers,
             ast_filter: self.ast_filter,
+            inst_report: self.inst_report,
             ast_implicit: self.ast_implicit,
         })
     }
@@ -721,6 +746,7 @@ fn is_known_key(k: &str) -> bool {
             | "diag"
             | "stdout"
             | "stdout-file"
+            | "inst-report"
             | "exit"
             | "run-args"
             | "run-stdin"
@@ -864,6 +890,22 @@ mod tests {
         assert_eq!(s.stdout, Some(StdoutExpect::Inline("hello\n\nworld\n".into())));
         assert_eq!(s.exit, Some(3));
         assert!(s.oracle, "oracle defaults on for run");
+    }
+
+    #[test]
+    fn inst_report_directive() {
+        let s = ok("//@ inst-report: a.json\n");
+        assert_eq!(s.inst_report, Some(PathBuf::from("a.json")));
+        assert!(s.is_kiln_specific());
+        let s = ok("//@ expect: compile-fail\n//@ inst-report: b.json\n");
+        assert_eq!(s.inst_report, Some(PathBuf::from("b.json")));
+        assert!(ok("int x;\n").inst_report.is_none());
+        let e = errs("//@ expect: run\n//@ inst-report: a.json\n");
+        assert!(e.iter().any(|e| e.contains("only applies to `compile-ok`")), "{e:?}");
+        let e = errs("//@ inst-report: a.json\n//@ inst-report: b.json\n");
+        assert!(e.iter().any(|e| e.contains("duplicate `inst-report`")), "{e:?}");
+        let e = errs("//@ inst-report:\n");
+        assert!(e.iter().any(|e| e.contains("requires a path")), "{e:?}");
     }
 
     #[test]

@@ -1,0 +1,16 @@
+TranslationUnitDecl
+|-TypeAliasTemplateDecl Fn
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 R
+| |-TemplateTypeParmDecl referenced class depth 0 index 1 A
+| `-TypeAliasDecl Fn 'R (*)(A)'
+|-FunctionDecl used twice 'int (int)'
+| |-ParmVarDecl used x 'int'
+| `-CompoundStmt
+|   `-ReturnStmt
+|     `-BinaryOperator 'int' '*'
+|       |-IntegerLiteral 'int' 2
+|       `-ImplicitCastExpr 'int' <LValueToRValue>
+|         `-DeclRefExpr 'int' lvalue ParmVar 'x' 'int'
+`-VarDecl f 'Fn<int, int>':'int (*)(int)' cinit
+  `-ImplicitCastExpr 'int (*)(int)' <FunctionToPointerDecay>
+    `-DeclRefExpr 'int (int)' lvalue Function 'twice' 'int (int)'

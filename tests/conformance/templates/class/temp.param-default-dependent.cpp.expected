@@ -1,0 +1,20 @@
+TranslationUnitDecl
+|-ClassTemplateDecl P
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| |-TemplateTypeParmDecl referenced class depth 0 index 1 U
+| | `-TemplateArgument type 'T *'
+| |-CXXRecordDecl struct P definition
+| | |-FieldDecl t 'T'
+| | `-FieldDecl u 'U'
+| `-ClassTemplateSpecializationDecl struct P definition implicit_instantiation
+|   |-TemplateArgument type 'char'
+|   |-TemplateArgument type 'char *'
+|   |-FieldDecl t 'char'
+|   `-FieldDecl u 'char *'
+`-StaticAssertDecl
+  `-BinaryOperator 'bool' '=='
+    |-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof 'P<char>'
+    `-BinaryOperator 'unsigned long' '*'
+      |-ImplicitCastExpr 'unsigned long' <IntegralCast>
+      | `-IntegerLiteral 'int' 2
+      `-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof 'void *'

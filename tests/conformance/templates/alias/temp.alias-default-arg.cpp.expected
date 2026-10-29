@@ -1,0 +1,8 @@
+TranslationUnitDecl
+|-TypeAliasTemplateDecl Second
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| |-TemplateTypeParmDecl referenced class depth 0 index 1 U
+| | `-TemplateArgument type 'T *'
+| `-TypeAliasDecl Second 'U'
+|-VarDecl p 'Second<int>':'int *'
+`-VarDecl l 'Second<int, long>':'long'

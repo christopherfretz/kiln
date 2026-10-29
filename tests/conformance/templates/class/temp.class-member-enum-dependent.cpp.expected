@@ -1,0 +1,32 @@
+TranslationUnitDecl
+|-ClassTemplateDecl F
+| |-NonTypeTemplateParmDecl referenced 'int' depth 0 index 0 N
+| |-CXXRecordDecl struct F definition
+| | `-EnumDecl K
+| |   |-EnumConstantDecl A 'F::K'
+| |   | `-IntegerLiteral 'int' 1
+| |   |-EnumConstantDecl B 'F::K'
+| |   |-EnumConstantDecl C 'F::K'
+| |   | `-DeclRefExpr 'int' NonTypeTemplateParm 'N' 'int'
+| |   `-EnumConstantDecl D 'F::K'
+| `-ClassTemplateSpecializationDecl struct F definition implicit_instantiation
+|   |-TemplateArgument value 'int' 3
+|   `-EnumDecl K
+|     |-EnumConstantDecl referenced A 'F<3>::K' value=1
+|     | `-ImplicitCastExpr 'unsigned int' <IntegralCast>
+|     |   `-ConstantExpr 'int' value=1
+|     |     `-IntegerLiteral 'int' 1
+|     |-EnumConstantDecl B 'F<3>::K' value=2
+|     |-EnumConstantDecl C 'F<3>::K' value=3
+|     | `-ImplicitCastExpr 'unsigned int' <IntegralCast>
+|     |   `-ConstantExpr 'int' value=3
+|     |     `-SubstNonTypeTemplateParmExpr 'int'
+|     |       |-NonTypeTemplateParmDecl referenced 'int' depth 0 index 0 N
+|     |       `-IntegerLiteral 'int' 3
+|     `-EnumConstantDecl referenced D 'F<3>::K' value=4
+`-VarDecl v 'int' cinit
+  `-BinaryOperator 'int' '+'
+    |-ImplicitCastExpr 'int' <IntegralCast>
+    | `-DeclRefExpr 'F<3>::K' EnumConstant 'D' 'F<3>::K'
+    `-ImplicitCastExpr 'int' <IntegralCast>
+      `-DeclRefExpr 'F<3>::K' EnumConstant 'A' 'F<3>::K'

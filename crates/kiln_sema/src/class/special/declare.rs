@@ -440,9 +440,12 @@ impl Sema<'_, '_> {
         }
         self.create_params(f, &fparams, &defaults);
         // A destructor without an exception specification gets the
-        // implicit one ([except.spec]/8), computed when needed.
+        // implicit one ([except.spec]/8), computed when needed. In a
+        // dependent context it is left alone; the instantiation gets its own
+        // (clang `AdjustDestructorExceptionSpec` returns early there).
         if shape == Shape::Dtor
             && prev_ok.is_none()
+            && !self.ast.decls.get(f).has(DeclFlags::DEPENDENT_CTX)
             && d.late_noexcept.is_none()
             && self.written_exc_spec(ty) == ExcSpec::None
         {

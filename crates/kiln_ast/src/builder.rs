@@ -402,7 +402,8 @@ impl<'a> AstBuilder<'a> {
             self.ast.decls.get(self.ast.first(p)).ty()
         } else {
             let d = self.ast.decls.next_id();
-            Some(QualType::unqual(self.ast.types.record_type(d)))
+            let dep = self.nested_in_template();
+            Some(QualType::unqual(self.ast.types.record_type_dependent(d, dep)))
         };
         let payload = Payload::Record(RecordData {
             redecl,
@@ -480,7 +481,8 @@ impl<'a> AstBuilder<'a> {
             self.ast.decls.get(self.ast.first(p)).ty()
         } else {
             let d = self.ast.decls.next_id();
-            Some(QualType::unqual(self.ast.types.enum_type(d)))
+            let dep = self.nested_in_template();
+            Some(QualType::unqual(self.ast.types.enum_type_dependent(d, dep)))
         };
         let mut flags = flags & (EnumData::SCOPED | EnumData::SCOPED_STRUCT);
         if fixed.is_some() {
@@ -524,6 +526,13 @@ impl<'a> AstBuilder<'a> {
         }
         self.ast.decls.complete_enum_definition(e);
         Ok(())
+    }
+
+    /// Whether the tag being declared is nested in a template (not the
+    /// pattern itself, whose type is its injected-class-name): its type is
+    /// dependent, a member of the current instantiation ([temp.dep.type]/9).
+    fn nested_in_template(&self) -> bool {
+        self.ast.templates.dependent_depth > 0 && !self.ast.templates.pattern_next
     }
 
     /// An enumerator of enumeration `h.ctx` ([dcl.enum]/2). Its type is the

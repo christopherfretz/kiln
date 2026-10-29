@@ -400,6 +400,11 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
         &self.lex_opts
     }
 
+    /// The main source file, once entered.
+    pub fn main_file(&self) -> Option<FileId> {
+        self.main_file
+    }
+
     /// Enters `file` as the main source file: pushes it, then the
     /// predefines buffer (`<built-in>`: [`PpOptions::predefines`], then
     /// `-D` / `-U`) on top of it, so that the predefines are read first.

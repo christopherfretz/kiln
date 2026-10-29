@@ -228,13 +228,16 @@ impl Sema<'_, '_> {
                 if kind != DeclKind::CXXMethod || self.is_static_method(m) =>
             {
                 self.ast.decls.set_flags(m, DeclFlags::REFERENCED);
+                if kind == DeclKind::Var {
+                    self.note_var_referenced(m, loc);
+                }
                 if kind == DeclKind::CXXMethod {
                     self.diagnose_deleted_use(m, loc);
                 }
                 let ty = self.non_reference(self.ast.decls.get(m).ty().unwrap_or(QualType::ERROR));
                 let e = self.builder().member(b, m, ty, arrow, loc, extra);
                 if self.unevaluated == 0 && kind != DeclKind::EnumConstant {
-                    self.mark_used(m);
+                    self.mark_used_at(m, loc);
                 }
                 e
             }
@@ -407,7 +410,7 @@ impl Sema<'_, '_> {
             let own =
                 self.func.as_ref().is_some_and(|f| self.ast.first(f.decl) == self.ast.first(m));
             if !own {
-                self.mark_used(m);
+                self.mark_used_at(m, loc);
             }
         }
         let (ty, vk) = self.call_result(proto.ret(), loc);
@@ -597,7 +600,7 @@ impl Sema<'_, '_> {
             self.builder().decl_ref(d, declared, at, None, nou, ExprFlags::NONE)
         };
         if self.kind_of(d) == DeclKind::CXXMethod && self.unevaluated == 0 {
-            self.mark_used(d);
+            self.mark_used_at(d, loc);
         }
         let class_ty = self.tag_type(class).ty();
         let mp = self.ast.types.member_pointer(declared, class_ty);

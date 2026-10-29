@@ -270,7 +270,7 @@ impl Sema<'_, '_> {
         entity: Option<Loc>,
     ) -> ExprId {
         if self.is_aggregate(ty) {
-            if self.ast.types.as_record(ty).is_some() && !self.is_complete(ty) {
+            if self.ast.types.as_record(ty).is_some() && !self.require_complete(ty, l.lbrace) {
                 let msg = self
                     .diag(DiagId::sema_typecheck_decl_incomplete_type, l.lbrace)
                     .arg(self.ty_arg(ty));

@@ -1,0 +1,20 @@
+TranslationUnitDecl
+|-ClassTemplateDecl S
+| |-TemplateTypeParmDecl class depth 0 index 0 T
+| |-CXXRecordDecl struct S definition
+| | |-VarDecl b 'const int' static cinit
+| | | `-IntegerLiteral 'int' 2
+| | |-VarDecl a 'int' static inline cinit
+| | | `-IntegerLiteral 'int' 1
+| | `-VarDecl d 'int' static
+| `-ClassTemplateSpecializationDecl struct S definition implicit_instantiation
+|   |-TemplateArgument type 'int'
+|   |-VarDecl referenced b 'const int' static cinit
+|   | `-IntegerLiteral 'int' 2
+|   |-VarDecl a 'int' static
+|   `-VarDecl d 'int' static
+`-StaticAssertDecl
+  `-BinaryOperator 'bool' '=='
+    |-ImplicitCastExpr 'int' <LValueToRValue>
+    | `-DeclRefExpr 'const int' lvalue Var 'b' 'const int' non_odr_use_constant
+    `-IntegerLiteral 'int' 2

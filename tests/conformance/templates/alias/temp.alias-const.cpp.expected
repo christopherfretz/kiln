@@ -1,0 +1,11 @@
+TranslationUnitDecl
+|-TypeAliasTemplateDecl C
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| `-TypeAliasDecl C 'const T'
+|-TypeAliasTemplateDecl Ref
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| `-TypeAliasDecl Ref 'const T &'
+|-VarDecl used ci 'C<int>':'const int' cinit
+| `-IntegerLiteral 'int' 1
+`-VarDecl r 'Ref<int>':'const int &' cinit
+  `-DeclRefExpr 'C<int>':'const int' lvalue Var 'ci' 'C<int>':'const int'

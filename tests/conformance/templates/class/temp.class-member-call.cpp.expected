@@ -1,0 +1,35 @@
+TranslationUnitDecl
+|-ClassTemplateDecl Counter
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| |-CXXRecordDecl struct Counter definition
+| | |-FieldDecl referenced n 'T'
+| | |-CXXMethodDecl next 'T ()' implicit-inline
+| | | `-CompoundStmt
+| | |   `-ReturnStmt
+| | |     `-UnaryOperator '<dependent type>' lvalue prefix '++' cannot overflow
+| | |       `-MemberExpr 'T' lvalue ->n
+| | |         `-CXXThisExpr 'Counter<T> *' implicit this
+| | `-CXXMethodDecl peek 'T () const' implicit-inline
+| |   `-CompoundStmt
+| |     `-ReturnStmt
+| |       `-MemberExpr 'const T' lvalue ->n
+| |         `-CXXThisExpr 'const Counter<T> *' implicit this
+| `-ClassTemplateSpecializationDecl struct Counter definition implicit_instantiation
+|   |-TemplateArgument type 'int'
+|   |-FieldDecl referenced n 'int'
+|   |-CXXMethodDecl used next 'int ()' implicit-inline
+|   | `-CompoundStmt
+|   |   `-ReturnStmt
+|   |     `-ImplicitCastExpr 'int' <LValueToRValue>
+|   |       `-UnaryOperator 'int' lvalue prefix '++'
+|   |         `-MemberExpr 'int' lvalue ->n
+|   |           `-CXXThisExpr 'Counter<int> *' implicit this
+|   `-CXXMethodDecl peek 'int () const' implicit-inline
+`-FunctionDecl g 'int (Counter<int> *)'
+  |-ParmVarDecl used c 'Counter<int> *'
+  `-CompoundStmt
+    `-ReturnStmt
+      `-CXXMemberCallExpr 'int'
+        `-MemberExpr '<bound member function type>' ->next
+          `-ImplicitCastExpr 'Counter<int> *' <LValueToRValue>
+            `-DeclRefExpr 'Counter<int> *' lvalue ParmVar 'c' 'Counter<int> *'

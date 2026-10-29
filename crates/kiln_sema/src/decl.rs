@@ -397,7 +397,7 @@ impl Sema<'_, '_> {
                         self.emit(msg);
                         return QualType::ERROR;
                     }
-                    if !self.is_complete(ty) {
+                    if !self.require_complete(ty, spec_loc) {
                         let msg = self
                             .diag(DiagId::sema_array_incomplete_type, *loc)
                             .arg(self.ty_arg(ty));
@@ -482,7 +482,7 @@ impl Sema<'_, '_> {
     /// expression of type `std::size_t`.
     fn array_bound(&mut self, e: ExprId, d: &Declarator) -> Option<u64> {
         let ety = self.ast.exprs.get(e).ty();
-        let loc = self.ast.exprs.get(e).loc();
+        let loc = self.begin_loc(e);
         if self.is_error_type(ety) {
             return None;
         }
@@ -1190,6 +1190,11 @@ impl Sema<'_, '_> {
         if self.ast.definition(rec).is_some() {
             return msg;
         }
+        if self.inst.undefined_diagnosed.get() == Some(rec) {
+            self.inst.undefined_diagnosed.set(None);
+            self.inst.suppress_next_error.set(true);
+            return msg;
+        }
         let loc = self.ast.decls.get(rec).loc();
         msg.with_note(
             self.diag(DiagId::note_forward_declaration, loc)
@@ -1803,7 +1808,10 @@ impl Sema<'_, '_> {
             let msg = self.diag(DiagId::sema_duplicate_member, d.name_loc()).arg(sym_str(self, n));
             self.emit(msg.with_note(note));
         }
-        let ty = if !invalid && !self.is_complete(ty) && !self.ast.types.is_reference(ty) {
+        let ty = if !invalid
+            && !self.ast.types.is_reference(ty)
+            && !self.require_complete(ty, d.name_loc())
+        {
             let msg = self.diag(DiagId::sema_field_incomplete, d.name_loc()).arg(self.ty_arg(ty));
             self.emit(self.incomplete_note(msg, ty));
             // clang marks the field invalid: initialization never
@@ -2212,7 +2220,8 @@ impl Sema<'_, '_> {
         let ty = vn.ty().unwrap_or(QualType::ERROR);
         let loc = vn.loc();
         let name = self.decl_name(v);
-        if self.is_error_type(ty) {
+        // [temp.res.general]/6: checked when instantiated.
+        if self.is_error_type(ty) || self.ast.types.is_dependent(ty) {
             return;
         }
         if self.contains_undeduced_auto(ty) {
@@ -2229,7 +2238,7 @@ impl Sema<'_, '_> {
         if spec.storage() == VarStorage::Extern {
             return;
         }
-        if !self.is_complete(ty) {
+        if !self.require_complete(ty, self.ast.decls.get(v).loc()) {
             let msg = if self.ast.types.is_void(ty) {
                 self.diag(DiagId::sema_void_var, loc).arg(self.ty_arg(ty))
             } else {
@@ -2290,7 +2299,7 @@ impl Sema<'_, '_> {
                 self.push_local(sym, p);
             }
             let pty = self.ast.decls.get(p).ty().unwrap_or(QualType::ERROR);
-            if !self.is_complete(pty)
+            if !self.require_complete(pty, self.ast.decls.get(p).loc())
                 && !self.ast.types.is_reference(pty)
                 && !self.is_error_type(pty)
             {
@@ -2453,7 +2462,9 @@ impl Sema<'_, '_> {
         let is_enum = keyword == TagKeyword::Enum;
         let fixed = fixed.or(if is_enum && scoped != 0 { Some(QualType::INT) } else { None });
         if let Some(f) = fixed {
-            let ok = self.ast.types.is_integral(f) || self.is_error_type(f);
+            let ok = self.ast.types.is_integral(f)
+                || self.is_error_type(f)
+                || self.ast.types.is_dependent(f);
             if !ok {
                 let msg = self.diag(DiagId::sema_enum_invalid_underlying, loc).arg(self.ty_arg(f));
                 self.emit(msg);
@@ -2854,6 +2865,25 @@ impl Sema<'_, '_> {
             let msg = self.note_prev(msg, p, true);
             self.emit(msg);
         }
+        // An enumerator of a dependent enumeration (a member of a template)
+        // keeps its initializer as written and has no value until
+        // instantiated (clang's `CheckEnumConstant`).
+        let dependent = self.ast.types.is_dependent(self.tag_type(e));
+        if dependent {
+            let h = DeclHead::new(e, DeclName::ident(name), loc);
+            let d = self.builder().enumerator(h, init);
+            let access = self.ast.decls.get(e).misc().access();
+            if access != kiln_ast::decl::Access::None {
+                self.ast.decls.set_access(d, access);
+            }
+            if !attrs.is_empty() {
+                let _ = self.builder().attach_attrs(d, attrs);
+            }
+            if !scoped && self.in_local_scope() {
+                self.push_local(name, d);
+            }
+            return d;
+        }
         let (value, init_e) = match init {
             Some(ie) => self.enumerator_init(&build, ie),
             None => (None, None),
@@ -2986,8 +3016,13 @@ impl Sema<'_, '_> {
             .lexical_ctx(e)
             .or_else(|| self.ast.decls.get(e).ctx())
             .unwrap_or(self.ast.tu);
+        let dependent = self.ast.types.is_dependent(self.tag_type(e));
         let computed = if build.fixed.is_some() {
             None
+        } else if dependent {
+            // clang's `ActOnEnumBody` stops here for a dependent
+            // enumeration; `int` stands in until it is instantiated.
+            Some((QualType::INT, QualType::INT))
         } else {
             let (best, promotion) = self.best_enum_types(&build.enumerators);
             // [dcl.enum]/5 (clang's `ActOnEnumBody`): each initializer is
@@ -3330,10 +3365,37 @@ impl Sema<'_, '_> {
 
     // -- name classification -----------------------------------------------------
 
+    /// What `name` names in `X<...>::name` when the parser's lookahead
+    /// skipped the template-id `X<...>` without forming the
+    /// specialization: classified by the primary template's pattern (a
+    /// partial or explicit specialization may differ; the parse proper
+    /// looks up in the specialization).
+    fn classify_template_member(&self, tmpl: DeclId, name: Symbol) -> NameClass {
+        let Some(p) = self.ast.template_info(tmpl).and_then(|i| i.pattern) else {
+            return NameClass::Dependent;
+        };
+        let Some(def) = self.ast.definition(p) else { return NameClass::Dependent };
+        let found = self.lookup_qualified(def, name, LookupKind::Ordinary);
+        let Some(&d) = found.decls.first() else { return NameClass::Dependent };
+        let k = self.kind_of(self.ast.strip_shadow(d));
+        match k {
+            DeclKind::ClassTemplate | DeclKind::TypeAliasTemplate => NameClass::TypeTemplate(d),
+            DeclKind::VarTemplate => NameClass::VarTemplate(d),
+            DeclKind::FunctionTemplate => NameClass::FunctionTemplate(d),
+            _ if is_type_kind(k) => NameClass::Type(QualType::DEPENDENT, d),
+            _ => NameClass::Value(d),
+        }
+    }
+
     /// What an identifier names here (for parser decisions,
     /// [basic.lookup.unqual]); `qualifier` is the context named by a
     /// preceding nested-name-specifier.
     pub fn classify_name(&self, name: Symbol, qualifier: Option<DeclId>) -> NameClass {
+        if let Some(q) = qualifier
+            && self.kind_of(q) == DeclKind::ClassTemplate
+        {
+            return self.classify_template_member(q, name);
+        }
         if let Some(q) = qualifier
             && self.is_dependent_ctx(q)
         {
@@ -3441,10 +3503,9 @@ impl Sema<'_, '_> {
         let ctx = match self.ast.decls.get(d).kind() {
             DeclKind::Namespace => Some(self.ast.first(d)),
             DeclKind::NamespaceAlias => Some(self.ast.resolve_alias(d)),
-            DeclKind::CXXRecord | DeclKind::Enum => {
-                self.mark_type_referenced(d);
-                Some(self.ast.definition(d).unwrap_or(d))
-            }
+            // A class named only as a qualifier is not marked referenced
+            // (clang's `isReferenced`).
+            DeclKind::CXXRecord | DeclKind::Enum => Some(self.ast.definition(d).unwrap_or(d)),
             DeclKind::TemplateTypeParm | DeclKind::TemplateTemplateParm => Some(d),
             DeclKind::ClassTemplate | DeclKind::TypeAliasTemplate => {
                 let what = if self.kind_of(d) == DeclKind::ClassTemplate {
@@ -3501,7 +3562,7 @@ impl Sema<'_, '_> {
     }
 
     /// How a qualifier context is named in "no member named 'x' in ...".
-    pub(crate) fn qualifier_desc(&self, q: DeclId) -> String {
+    pub fn qualifier_desc(&self, q: DeclId) -> String {
         match self.ast.decls.get(q).kind() {
             DeclKind::Namespace => format!("namespace '{}'", self.qualified_decl_name(q)),
             DeclKind::TranslationUnit => "the global namespace".to_owned(),

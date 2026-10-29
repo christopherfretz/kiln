@@ -13,6 +13,7 @@ pub mod deps;
 pub mod link;
 pub mod pp_cmd;
 pub mod syntax_cmd;
+pub mod templ_opts;
 pub mod time;
 pub mod toolchain;
 
@@ -116,7 +117,8 @@ Implemented: -E -P -C -CC -dM -o -x -std= -D -U -I -isystem -iquote
 -fdiagnostics-format= -f[no-]color-diagnostics -fkiln-reproducible-time
 -fsyntax-only -fdump-ast[=...] -fdump-ast-filter= -fconstexpr-steps=
 -fconstexpr-depth= -fconstexpr-memory= -fconstexpr-backtrace-limit=
--fconstexpr-report= -c -S -emit-llvm -O<n> -g (ignored) -l -L -Wl,
+-fconstexpr-report= -ftemplate-depth= -ftemplate-backtrace-limit=
+-fkiln-instantiation-report[=all|json] -c -S -emit-llvm -O<n> -g (ignored) -l -L -Wl,
 -fuse-ld= -static -nostdlib -shared -rdynamic -pie -no-pie -pthread -###
 -v --version.
 See spec/driver.md.
@@ -136,6 +138,9 @@ fn emit_arg_error(e: &ArgError, engine: &DiagEngine<'_>) {
         }
         ArgError::InvalidInt(a, v) => {
             Diag::new(DiagId::drv_invalid_int_value, Span::INVALID).arg(a).arg(v)
+        }
+        ArgError::InvalidFlagValue(a, v) => {
+            Diag::new(DiagId::drv_invalid_value, Span::INVALID).arg(a).arg(v)
         }
     };
     d.emit(engine);
