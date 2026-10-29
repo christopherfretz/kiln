@@ -13,13 +13,18 @@ for _cand in "$_WS/.toolchain" "$_MAIN/.toolchain" "$_MAIN/../.toolchain" "${KIL
     break
   fi
 done
-# Build output: ONE shared target dir for every checkout/worktree, inside the
-# workspace (operator rule: keep build state in the workspace, not in the
-# container's overlay — per-worktree dirs in /var/tmp once grew to 37 GB).
-# Sharing means unchanged crates are compiled once for all worktrees; cargo
-# serializes concurrent builds with its lock. Override with CARGO_TARGET_DIR.
-_TGT="${KILN_BUILD_ROOT:-$_MAIN/.build}/target"
-case "$_MAIN" in /Volumes/AgentWork/kiln-helper/kiln) _TGT="/Volumes/AgentWork/kiln-helper/.build/target";; esac
+# Build output: inside the workspace (operator rule: keep build state in the
+# workspace, not in the container's overlay), ONE target dir PER CHECKOUT
+# (`.build/target-<checkout basename>`: the main checkout `kiln` gets
+# `target-kiln`, the worktree `.worktrees/wp-058` gets `target-wp-058`).
+# A target dir shared between worktrees is unsound: cargo hashes workspace
+# members by their path relative to the workspace root, so two checkouts
+# produce the same artifact names and overwrite each other's rlibs and
+# uplifted binaries mid-build ("can't find crate", a kiln binary from
+# another branch). Delete a worktree's dir when the worktree is removed.
+# Override with CARGO_TARGET_DIR.
+_TGT="${KILN_BUILD_ROOT:-$_MAIN/.build}/target-$(basename "$_WS")"
+case "$_MAIN" in /Volumes/AgentWork/kiln-helper/kiln) _TGT="/Volumes/AgentWork/kiln-helper/.build/target-$(basename "$_WS")";; esac
 export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$_TGT}"
 unset _TGT
 unset _WS _MAIN _cand
