@@ -1,0 +1,818 @@
+//! Module-level emission (spec/codegen.md §2): the declaration maps,
+//! `EmitGlobal`/`EmitDeferred` ordering, linkage, attributes, globals,
+//! string literals and the module trailer.
+
+use kiln_abi::call::{ArgKind, CallInfo, classify_call};
+use kiln_abi::irtype::{IrType, IrTypes, record_kind_prefix};
+use kiln_abi::mangle;
+use kiln_abi::{Arch, Target};
+use kiln_ast::decl::{ConstexprKind, DeclFlags, DeclKind, TemplLinkKind, VarStorage};
+use kiln_ast::types::{BuiltinType, TypeView};
+use kiln_ast::{Ast, DeclId, QualType};
+use kiln_llvm::{
+    Attr, AttrKind, AttrSetId, ComdatKind, FuncId, GlobalId, Linkage, Module, TypeId as LTy,
+    UnnamedAddr, UwTableKind, Value,
+};
+use kiln_source::Loc;
+use kiln_source::fx::FxHashMap;
+
+use crate::fold::Folds;
+use crate::func::Fx;
+use crate::{CodegenError, CodegenOptions};
+
+/// Result of an emission step.
+pub(crate) type R<T> = Result<T, CodegenError>;
+
+/// An error at `loc`.
+pub(crate) fn err<T>(loc: Option<Loc>, msg: impl Into<String>) -> R<T> {
+    Err(CodegenError { loc, msg: msg.into() })
+}
+
+/// The lowered signature of a function type (clang `CGFunctionInfo` plus
+/// the IR function type).
+#[derive(Clone, Debug)]
+pub(crate) struct Sig {
+    /// ABI classification.
+    pub info: CallInfo,
+    /// The IR function type.
+    pub fn_ty: LTy,
+    /// The source return type.
+    pub ret: QualType,
+    /// The source parameter types.
+    pub params: Vec<QualType>,
+    /// The prototype is `noexcept`.
+    pub nothrow: bool,
+}
+
+impl Sig {
+    /// The return is `sret`.
+    pub fn sret(&self) -> bool {
+        matches!(self.info.ret.kind, ArgKind::Indirect { .. })
+    }
+}
+
+/// Module emission state.
+pub(crate) struct Cg<'a> {
+    pub ast: &'a Ast,
+    pub folds: &'a Folds,
+    pub tys: IrTypes<'a>,
+    pub target: &'a Target,
+    pub opts: &'a CodegenOptions,
+    pub m: Module,
+    /// First declaration → function.
+    pub fns: FxHashMap<DeclId, FuncId>,
+    /// Function → its definition carries `nounwind`.
+    pub nounwind: FxHashMap<FuncId, bool>,
+    /// First declaration → global variable.
+    pub gvars: FxHashMap<DeclId, GlobalId>,
+    /// Discardable definitions not yet needed: first declaration → definition.
+    pub deferred: FxHashMap<DeclId, DeclId>,
+    /// Definitions to emit (clang `DeferredDeclsToEmit`).
+    pub to_emit: Vec<DeclId>,
+    /// String literal globals by (array type, bytes).
+    pub strings: FxHashMap<(LTy, Vec<u8>), GlobalId>,
+    /// Named struct types by record.
+    pub named: FxHashMap<DeclId, LTy>,
+    /// Names already used for named struct types.
+    pub struct_names: FxHashMap<String, u32>,
+    /// Private globals by name, for `.str.N` / `__const` uniquing.
+    pub private_names: FxHashMap<String, u32>,
+    /// Static locals already emitted.
+    pub static_locals: FxHashMap<DeclId, GlobalId>,
+    /// Static locals emitted per (function, name), for discriminators.
+    pub static_local_names: FxHashMap<(Option<DeclId>, String), u32>,
+    /// Per-function state.
+    pub f: Fx,
+}
+
+impl<'a> Cg<'a> {
+    pub fn new(
+        ast: &'a Ast,
+        folds: &'a Folds,
+        target: &'a Target,
+        opts: &'a CodegenOptions,
+    ) -> Self {
+        let spec = match target.triple.arch {
+            Arch::AArch64 => kiln_llvm::AARCH64_LINUX_GNU,
+            Arch::X86_64 => kiln_llvm::X86_64_LINUX_GNU,
+        };
+        Cg {
+            ast,
+            folds,
+            tys: IrTypes::new(ast, target),
+            target,
+            opts,
+            m: Module::with_target(&opts.source_filename, spec),
+            fns: FxHashMap::default(),
+            nounwind: FxHashMap::default(),
+            gvars: FxHashMap::default(),
+            deferred: FxHashMap::default(),
+            to_emit: Vec::new(),
+            strings: FxHashMap::default(),
+            named: FxHashMap::default(),
+            struct_names: FxHashMap::default(),
+            private_names: FxHashMap::default(),
+            static_locals: FxHashMap::default(),
+            static_local_names: FxHashMap::default(),
+            f: Fx::empty(),
+        }
+    }
+
+    pub fn is_x86(&self) -> bool {
+        self.target.triple.arch == Arch::X86_64
+    }
+
+    // ---- driving -------------------------------------------------------
+
+    /// Emits the whole translation unit.
+    pub fn run(mut self) -> R<Module> {
+        let tu = self.ast.tu;
+        self.emit_members(tu)?;
+        self.emit_deferred()?;
+        self.trailer();
+        Ok(self.m)
+    }
+
+    fn emit_members(&mut self, ctx: DeclId) -> R<()> {
+        let ast = self.ast;
+        let members: Vec<DeclId> = ast.decls.members(ctx).collect();
+        for d in members {
+            let n = ast.decls.get(d);
+            if n.has(DeclFlags::INVALID) {
+                continue;
+            }
+            match n.kind() {
+                DeclKind::Namespace | DeclKind::LinkageSpec | DeclKind::Export => {
+                    self.emit_members(d)?;
+                }
+                DeclKind::Function => self.emit_global_fn(d)?,
+                DeclKind::Var => self.emit_global_var(d)?,
+                DeclKind::FunctionTemplate | DeclKind::ClassTemplate | DeclKind::VarTemplate => {}
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
+    /// clang `EmitGlobal` for a function.
+    fn emit_global_fn(&mut self, d: DeclId) -> R<()> {
+        let ast = self.ast;
+        let Some(fd) = ast.decls.function(d) else { return Ok(()) };
+        if fd.body.is_none() || matches!(fd.templ.get(), Some((TemplLinkKind::Pattern, _))) {
+            return Ok(());
+        }
+        if fd.spec.constexpr_kind() == ConstexprKind::Consteval {
+            return Ok(());
+        }
+        let first = ast.first(d);
+        if !self.discardable_fn(d) {
+            return self.emit_fn_def(d);
+        }
+        if let Some(&f) = self.fns.get(&first) {
+            if self.m.func(f).is_declaration() {
+                self.to_emit.push(d);
+            }
+        } else {
+            self.deferred.insert(first, d);
+        }
+        Ok(())
+    }
+
+    /// clang `EmitGlobal` for a variable.
+    fn emit_global_var(&mut self, d: DeclId) -> R<()> {
+        let ast = self.ast;
+        let Some(v) = ast.decls.var(d) else { return Ok(()) };
+        if v.spec.storage() == VarStorage::Extern && v.init.is_none() {
+            return Ok(());
+        }
+        if matches!(v.templ.get(), Some((TemplLinkKind::Pattern, _))) {
+            return Ok(());
+        }
+        let first = ast.first(d);
+        if !self.discardable_var(d) {
+            return self.emit_var_def(d);
+        }
+        if self.gvars.contains_key(&first) {
+            self.to_emit.push(d);
+        } else {
+            self.deferred.insert(first, d);
+        }
+        Ok(())
+    }
+
+    /// clang `EmitDeferred`.
+    fn emit_deferred(&mut self) -> R<()> {
+        let cur = std::mem::take(&mut self.to_emit);
+        for d in cur {
+            let first = self.ast.first(d);
+            if self.ast.decls.get(d).kind() == DeclKind::Function {
+                let still_decl =
+                    self.fns.get(&first).is_none_or(|&f| self.m.func(f).is_declaration());
+                if still_decl {
+                    self.emit_fn_def(d)?;
+                }
+            } else {
+                let still_decl = self
+                    .gvars
+                    .get(&first)
+                    .is_none_or(|&g| self.m.global(g).initializer().is_none());
+                if still_decl {
+                    self.emit_var_def(d)?;
+                }
+            }
+            if !self.to_emit.is_empty() {
+                self.emit_deferred()?;
+            }
+        }
+        Ok(())
+    }
+
+    // ---- linkage -------------------------------------------------------
+
+    pub fn fn_is_inline(&self, d: DeclId) -> bool {
+        let ast = self.ast;
+        ast.redecls_of(d).any(|r| {
+            ast.decls.function(r).is_some_and(|f| {
+                f.spec.is_inline()
+                    || f.spec.implicit_inline()
+                    || f.spec.constexpr_kind() != ConstexprKind::None
+            })
+        })
+    }
+
+    pub fn fn_internal(&self, d: DeclId) -> bool {
+        mangle::has_internal_linkage(self.ast, d)
+    }
+
+    fn discardable_fn(&self, d: DeclId) -> bool {
+        self.fn_internal(d) || self.fn_is_inline(d)
+    }
+
+    fn var_is_inline(&self, d: DeclId) -> bool {
+        let ast = self.ast;
+        ast.redecls_of(d).any(|r| ast.decls.var(r).is_some_and(|v| v.spec.is_inline()))
+    }
+
+    fn discardable_var(&self, d: DeclId) -> bool {
+        mangle::has_internal_linkage(self.ast, d) || self.var_is_inline(d)
+    }
+
+    // ---- types ---------------------------------------------------------
+
+    /// The IR type of `t`.
+    pub fn ir(&mut self, t: &IrType) -> LTy {
+        match t {
+            IrType::Void => LTy::VOID,
+            IrType::Int(1) => LTy::I1,
+            IrType::Int(8) => LTy::I8,
+            IrType::Int(16) => LTy::I16,
+            IrType::Int(32) => LTy::I32,
+            IrType::Int(64) => LTy::I64,
+            IrType::Int(128) => LTy::I128,
+            IrType::Int(n) => self.m.types.int(*n),
+            IrType::Ptr => LTy::PTR,
+            IrType::Half => LTy::HALF,
+            IrType::BFloat => LTy::BFLOAT,
+            IrType::Float => LTy::FLOAT,
+            IrType::Double => LTy::DOUBLE,
+            IrType::X86Fp80 => LTy::X86_FP80,
+            IrType::Fp128 => LTy::FP128,
+            IrType::Array(e, n) => {
+                let e = self.ir(e);
+                self.m.types.array(e, *n)
+            }
+            IrType::Vector(_, _) => LTy::I8,
+            IrType::Record(d) => self.record_ty(*d),
+            IrType::Struct(fs, packed) => {
+                let fs: Vec<LTy> = fs.iter().map(|x| self.ir(x)).collect();
+                self.m.types.struct_literal(&fs, *packed)
+            }
+        }
+    }
+
+    /// The named struct type of record `d`.
+    pub fn record_ty(&mut self, d: DeclId) -> LTy {
+        let first = self.ast.first(d);
+        if let Some(&t) = self.named.get(&first) {
+            return t;
+        }
+        let base =
+            format!("{}.{}", record_kind_prefix(self.ast, first), self.qualified_name(first));
+        let n = self.struct_names.entry(base.clone()).or_insert(0);
+        let name = if *n == 0 { base } else { format!("{base}.{n}") };
+        *n += 1;
+        let t = self.m.types.named_struct(&name);
+        self.named.insert(first, t);
+        let rec = self.tys.record(first).clone();
+        let fields: Vec<LTy> = rec.members.iter().map(|x| self.ir(x)).collect();
+        let _ = self.m.types.set_body(t, &fields, rec.packed);
+        t
+    }
+
+    fn qualified_name(&self, d: DeclId) -> String {
+        let ast = self.ast;
+        let mut parts = Vec::new();
+        let mut cur = Some(d);
+        while let Some(x) = cur {
+            let n = ast.decls.get(x);
+            match n.kind() {
+                DeclKind::TranslationUnit => break,
+                DeclKind::LinkageSpec | DeclKind::Export => {}
+                DeclKind::Namespace => {
+                    let s = mangle::decl_name(ast, x);
+                    parts.push(if s.is_empty() { "(anonymous namespace)".to_owned() } else { s });
+                }
+                _ => {
+                    let s = mangle::decl_name(ast, x);
+                    parts.push(if s.is_empty() { "anon".to_owned() } else { s });
+                }
+            }
+            cur = n.ctx();
+        }
+        parts.reverse();
+        parts.join("::")
+    }
+
+    /// The IR type of a value of type `q` (`ConvertType`).
+    pub fn lty(&mut self, q: QualType) -> LTy {
+        let t = self.tys.convert(q);
+        self.ir(&t)
+    }
+
+    /// The in-memory IR type of `q` (`ConvertTypeForMem`).
+    pub fn mty(&mut self, q: QualType) -> LTy {
+        let t = self.tys.convert_mem(q);
+        self.ir(&t)
+    }
+
+    /// `sizeof` and `alignof` of `q`.
+    pub fn size_align(&mut self, q: QualType) -> (u64, u64) {
+        let l = self.tys.layouter().type_layout(q);
+        (l.size, l.align)
+    }
+
+    pub fn is_bool(&self, q: QualType) -> bool {
+        matches!(self.ast.types.canonical_view(q), TypeView::Builtin(BuiltinType::Bool))
+    }
+
+    pub fn is_signed(&self, q: QualType) -> bool {
+        kiln_abi::irtype::is_signed_or_enum(self.ast, q, self.target)
+    }
+
+    // ---- signatures ----------------------------------------------------
+
+    /// The lowered signature of function type `fty`.
+    pub fn sig(&mut self, fty: QualType, extern_c: bool) -> Sig {
+        let ast = self.ast;
+        let p = *ast.types.proto(fty).expect("function prototype");
+        let params: Vec<QualType> = ast.types.params(&p).to_vec();
+        let ret = p.ret();
+        let nothrow = ast.types.exc_spec(&p).is_nothrow();
+        let variadic = p.variadic();
+        let info = classify_call(&mut self.tys, ret, &params, params.len(), !extern_c);
+        let fn_ty = self.fn_type(&info, ret, variadic);
+        Sig { info, fn_ty, ret, params, nothrow }
+    }
+
+    /// The signature of a call with the given argument types (variadic
+    /// extras appended).
+    pub fn call_sig(&mut self, fty: QualType, extern_c: bool, args: &[QualType]) -> Sig {
+        let ast = self.ast;
+        let p = *ast.types.proto(fty).expect("function prototype");
+        let params: Vec<QualType> = ast.types.params(&p).to_vec();
+        let ret = p.ret();
+        let mut all = params.clone();
+        all.extend_from_slice(&args[params.len().min(args.len())..]);
+        let info = classify_call(&mut self.tys, ret, &all, params.len(), !extern_c);
+        let decl_info = classify_call(&mut self.tys, ret, &params, params.len(), !extern_c);
+        let fn_ty = self.fn_type(&decl_info, ret, p.variadic());
+        Sig { info, fn_ty, ret, params: all, nothrow: ast.types.exc_spec(&p).is_nothrow() }
+    }
+
+    fn fn_type(&mut self, info: &CallInfo, _ret: QualType, variadic: bool) -> LTy {
+        let mut ps = Vec::new();
+        let rt = match &info.ret.kind {
+            ArgKind::Direct { coerce, .. } | ArgKind::Extend { coerce, .. } => self.ir(coerce),
+            ArgKind::Indirect { .. } => {
+                ps.push(LTy::PTR);
+                LTy::VOID
+            }
+            ArgKind::Ignore => LTy::VOID,
+        };
+        for a in &info.args {
+            match &a.kind {
+                ArgKind::Direct { coerce: IrType::Struct(fs, _), flatten: true, .. } => {
+                    for f in fs.clone() {
+                        let t = self.ir(&f);
+                        ps.push(t);
+                    }
+                }
+                ArgKind::Direct { coerce, .. } | ArgKind::Extend { coerce, .. } => {
+                    let t = self.ir(coerce);
+                    ps.push(t);
+                }
+                ArgKind::Indirect { .. } => ps.push(LTy::PTR),
+                ArgKind::Ignore => {}
+            }
+        }
+        self.m.types.function(rt, &ps, variadic)
+    }
+
+    /// The return and parameter attributes of `sig` (`ConstructAttributeList`).
+    pub fn sig_attrs(
+        &mut self,
+        sig: &Sig,
+        n_args: usize,
+        def: bool,
+    ) -> (AttrSetId, Vec<AttrSetId>) {
+        let mut ret = Vec::new();
+        let mut params = Vec::new();
+        match &sig.info.ret.kind {
+            ArgKind::Indirect { align, .. } => {
+                let t = self.mty(sig.ret);
+                let mut a = vec![Attr::Flag(AttrKind::DeadOnUnwind)];
+                if def {
+                    a.push(Attr::Flag(AttrKind::NoAlias));
+                }
+                a.push(Attr::Flag(AttrKind::Writable));
+                a.push(Attr::SRet(t));
+                a.push(Attr::Align(*align));
+                params.push(self.m.attr_set(&a));
+            }
+            ArgKind::Extend { signed, .. } => {
+                if sig.info.ret.noundef {
+                    ret.push(Attr::Flag(AttrKind::NoUndef));
+                }
+                ret.push(Attr::Flag(if *signed { AttrKind::SExt } else { AttrKind::ZExt }));
+            }
+            ArgKind::Direct { .. } => {
+                if sig.info.ret.noundef {
+                    ret.push(Attr::Flag(AttrKind::NoUndef));
+                }
+            }
+            ArgKind::Ignore => {}
+        }
+        for a in sig.info.args.iter().take(n_args) {
+            let mut s = Vec::new();
+            if a.noundef {
+                s.push(Attr::Flag(AttrKind::NoUndef));
+            }
+            match &a.kind {
+                ArgKind::Extend { signed, .. } => {
+                    s.push(Attr::Flag(if *signed { AttrKind::SExt } else { AttrKind::ZExt }));
+                }
+                ArgKind::Direct { coerce: IrType::Struct(fs, _), flatten: true, .. } => {
+                    for _ in 1..fs.len() {
+                        params.push(self.m.attr_set(&s));
+                    }
+                }
+                ArgKind::Ignore => continue,
+                _ => {}
+            }
+            params.push(self.m.attr_set(&s));
+        }
+        let ret = self.m.attr_set(&ret);
+        (ret, params)
+    }
+
+    /// The target-dependent function attributes.
+    pub fn target_attrs(&self, out: &mut Vec<Attr>) {
+        if self.is_x86() {
+            out.push(Attr::string("frame-pointer", "all"));
+        } else {
+            out.push(Attr::string("frame-pointer", "non-leaf"));
+        }
+        out.push(Attr::string("no-trapping-math", "true"));
+        out.push(Attr::string("stack-protector-buffer-size", "8"));
+        if self.is_x86() {
+            out.push(Attr::string("target-cpu", "x86-64"));
+            out.push(Attr::string("target-features", "+cmov,+cx8,+fxsr,+mmx,+sse,+sse2,+x87"));
+            out.push(Attr::string("tune-cpu", "generic"));
+        } else {
+            out.push(Attr::string("target-cpu", "generic"));
+            out.push(Attr::string("target-features", "+fp-armv8,+neon,+outline-atomics,+v8a,-fmv"));
+        }
+    }
+
+    // ---- functions -----------------------------------------------------
+
+    /// The (possibly declaration-only) function for `d` (clang
+    /// `GetOrCreateLLVMFunction`).
+    pub fn get_fn(&mut self, d: DeclId) -> R<FuncId> {
+        let ast = self.ast;
+        let first = ast.first(d);
+        if let Some(&f) = self.fns.get(&first) {
+            return Ok(f);
+        }
+        let name = mangle::mangle_decl(ast, first);
+        let Some(fty) = ast.decls.get(first).ty() else {
+            return err(None, "function without type");
+        };
+        let sig = self.sig(fty, mangle::is_extern_c(ast, first));
+        let f = match self.m.add_function(&name, sig.fn_ty) {
+            Ok(f) => f,
+            Err(e) => {
+                return err(
+                    Some(ast.decls.get(first).loc()),
+                    format!("cannot declare {name}: {e:?}"),
+                );
+            }
+        };
+        let (ret, params) = self.sig_attrs(&sig, sig.params.len(), false);
+        let mut fa = Vec::new();
+        if sig.nothrow {
+            fa.push(Attr::Flag(AttrKind::NoUnwind));
+        }
+        self.target_attrs(&mut fa);
+        let fa = self.m.attr_set(&fa);
+        {
+            let func = self.m.func_mut(f);
+            func.attrs.func = fa;
+            func.attrs.ret = ret;
+            func.attrs.params = params;
+        }
+        self.nounwind.insert(f, sig.nothrow);
+        self.fns.insert(first, f);
+        if let Some(def) = self.deferred.remove(&first) {
+            self.to_emit.push(def);
+        }
+        Ok(f)
+    }
+
+    /// Sets linkage and definition attributes of `f` defined by `d`.
+    pub fn set_def_linkage(&mut self, f: FuncId, d: DeclId) {
+        let internal = self.fn_internal(d);
+        let inline = self.fn_is_inline(d);
+        let name = self.m.func(f).name().to_owned();
+        let comdat =
+            if !internal && inline { Some(self.m.comdat(&name, ComdatKind::Any)) } else { None };
+        let func = self.m.func_mut(f);
+        if internal {
+            func.linkage = Linkage::Internal;
+            func.dso_local = false;
+        } else if inline {
+            func.linkage = Linkage::LinkOnceOdr;
+            func.dso_local = true;
+            func.comdat = comdat;
+        } else {
+            func.linkage = Linkage::External;
+            func.dso_local = true;
+        }
+    }
+
+    /// The function attributes of a definition.
+    pub fn def_fn_attrs(&mut self, is_main: bool, nounwind: bool, mustprogress: bool) -> AttrSetId {
+        let mut a = Vec::new();
+        if mustprogress {
+            a.push(Attr::Flag(AttrKind::MustProgress));
+        }
+        a.push(Attr::Flag(AttrKind::NoInline));
+        if is_main {
+            a.push(Attr::Flag(AttrKind::NoRecurse));
+        }
+        if nounwind {
+            a.push(Attr::Flag(AttrKind::NoUnwind));
+        }
+        a.push(Attr::Flag(AttrKind::OptimizeNone));
+        a.push(Attr::UwTable(UwTableKind::Async));
+        self.target_attrs(&mut a);
+        if self.is_x86() {
+            a.push(Attr::string("min-legal-vector-width", "0"));
+        }
+        self.m.attr_set(&a)
+    }
+
+    // ---- globals -------------------------------------------------------
+
+    /// The global for variable `d`, declaring it if needed.
+    pub fn get_gvar(&mut self, d: DeclId) -> R<GlobalId> {
+        let ast = self.ast;
+        let first = ast.first(d);
+        if let Some(&g) = self.gvars.get(&first) {
+            return Ok(g);
+        }
+        if let Some(&g) = self.static_locals.get(&first) {
+            return Ok(g);
+        }
+        if let Some(def) = self.deferred.remove(&first) {
+            // Emit it now if it is a discardable definition (its position
+            // is the point of first use, as clang's GetOrCreateLLVMGlobal
+            // followed by the deferred definition reusing it).
+            self.to_emit.push(def);
+        }
+        let Some(ty) = ast.decls.get(first).ty() else { return err(None, "variable without type") };
+        let lt = self.mty(ty);
+        let name = mangle::mangle_decl(ast, first);
+        let g = self.m.add_global(&name, lt);
+        let (_, align) = self.size_align(ty);
+        let gv = self.m.global_mut(g);
+        gv.linkage = Linkage::External;
+        gv.align = Some(align);
+        self.gvars.insert(first, g);
+        Ok(g)
+    }
+
+    /// The alignment of global variable of type `ty`.
+    pub fn global_align(&mut self, ty: QualType) -> u64 {
+        let (size, align) = self.size_align(ty);
+        if self.is_x86() && self.ast.types.is_array(ty) && size >= 16 {
+            align.max(16)
+        } else {
+            align
+        }
+    }
+
+    /// clang `EmitGlobalVarDefinition`.
+    fn emit_var_def(&mut self, d: DeclId) -> R<()> {
+        let ast = self.ast;
+        let first = ast.first(d);
+        let v = ast.decls.var(d).expect("var");
+        let ty = ast.decls.get(d).ty().expect("var type");
+        let loc = Some(ast.decls.get(d).loc());
+        let init = match v.init {
+            None => {
+                let t = self.mty(ty);
+                self.m.const_zero(t)
+            }
+            Some(e) => match self.folds.get(e) {
+                Some(c) => self.const_value(c, ty, Some(e), true)?,
+                None => {
+                    return err(
+                        loc,
+                        "dynamic initialization of a global is not supported yet (M3)",
+                    );
+                }
+            },
+        };
+        let ity = self.m.const_type(init);
+        let g = if let Some(&g) = self.gvars.get(&first) {
+            if self.m.global(g).value_type() != ity {
+                return err(loc, "global redeclared with a different IR type");
+            }
+            g
+        } else {
+            let name = mangle::mangle_decl(ast, first);
+            let g = self.m.add_global(&name, ity);
+            self.gvars.insert(first, g);
+            g
+        };
+        let internal = mangle::has_internal_linkage(ast, d);
+        let inline = self.var_is_inline(d);
+        let quals = ast.types.effective_quals(ty);
+        let constant = quals.is_const() && !has_mutable(ty);
+        let align = self.global_align(ty);
+        let name = self.m.global(g).name().to_owned();
+        let comdat =
+            if inline && !internal { Some(self.m.comdat(&name, ComdatKind::Any)) } else { None };
+        if let Err(e) = self.m.set_initializer(g, Some(init)) {
+            return err(loc, format!("bad initializer: {e:?}"));
+        }
+        let gv = self.m.global_mut(g);
+        gv.is_constant = constant;
+        gv.align = Some(align);
+        if internal {
+            gv.linkage = Linkage::Internal;
+            gv.dso_local = false;
+        } else if inline {
+            gv.linkage = Linkage::LinkOnceOdr;
+            gv.dso_local = true;
+            gv.comdat = comdat;
+        } else {
+            gv.linkage = Linkage::External;
+            gv.dso_local = true;
+        }
+        Ok(())
+    }
+
+    /// A function-local `static` variable (clang `EmitStaticVarDecl`).
+    pub fn static_local(&mut self, d: DeclId) -> R<GlobalId> {
+        let ast = self.ast;
+        let first = ast.first(d);
+        if let Some(&g) = self.static_locals.get(&first) {
+            return Ok(g);
+        }
+        let v = ast.decls.var(d).expect("var");
+        let ty = ast.decls.get(d).ty().expect("var type");
+        let loc = Some(ast.decls.get(d).loc());
+        let init = match v.init {
+            None => {
+                let t = self.mty(ty);
+                self.m.const_zero(t)
+            }
+            Some(e) => match self.folds.get(e) {
+                Some(c) => self.const_value(c, ty, Some(e), true)?,
+                None => {
+                    return err(
+                        loc,
+                        "dynamic initialization of a static local is not supported yet (M3)",
+                    );
+                }
+            },
+        };
+        let ity = self.m.const_type(init);
+        // The discriminator counts earlier static locals of the same name in
+        // the same function (emission order is declaration order).
+        let key = (mangle::enclosing_function(ast, first), mangle::decl_name(ast, first));
+        let index = {
+            let n = self.static_local_names.entry(key).or_insert(0);
+            *n += 1;
+            *n - 1
+        };
+        let name = mangle::mangle_static_local(ast, first, index);
+        let g = self.m.add_global(&name, ity);
+        let align = self.global_align(ty);
+        let constant = ast.types.effective_quals(ty).is_const();
+        if let Err(e) = self.m.set_initializer(g, Some(init)) {
+            return err(loc, format!("bad initializer: {e:?}"));
+        }
+        let encl = mangle::enclosing_function(ast, first);
+        let inline_fn = encl.is_some_and(|f| self.fn_is_inline(f) && !self.fn_internal(f));
+        let comdat = if inline_fn { Some(self.m.comdat(&name, ComdatKind::Any)) } else { None };
+        let gv = self.m.global_mut(g);
+        gv.is_constant = constant;
+        gv.align = Some(align);
+        if inline_fn {
+            gv.linkage = Linkage::LinkOnceOdr;
+            gv.dso_local = true;
+            gv.comdat = comdat;
+        } else {
+            gv.linkage = Linkage::Internal;
+        }
+        self.static_locals.insert(first, g);
+        Ok(g)
+    }
+
+    /// A private `unnamed_addr` constant named `base` (uniqued `.N`).
+    pub fn private_const(&mut self, base: &str, init: Value, align: u64) -> GlobalId {
+        let n = self.private_names.entry(base.to_owned()).or_insert(0);
+        let name = if *n == 0 { base.to_owned() } else { format!("{base}.{n}") };
+        *n += 1;
+        let ty = self.m.const_type(init);
+        let g = self.m.add_global(&name, ty);
+        let _ = self.m.set_initializer(g, Some(init));
+        let gv = self.m.global_mut(g);
+        gv.linkage = Linkage::Private;
+        gv.unnamed_addr = UnnamedAddr::Global;
+        gv.is_constant = true;
+        gv.align = Some(align);
+        g
+    }
+
+    /// The global holding a string literal of array type `arr` (clang
+    /// `GetAddrOfConstantStringFromLiteral`).
+    pub fn string_global(&mut self, bytes: &[u8], elem_size: u64, n_elems: u64) -> GlobalId {
+        let et = match elem_size {
+            1 => LTy::I8,
+            2 => LTy::I16,
+            _ => LTy::I32,
+        };
+        let at = self.m.types.array(et, n_elems);
+        if let Some(&g) = self.strings.get(&(at, bytes.to_vec())) {
+            return g;
+        }
+        let init = if elem_size == 1 {
+            self.m.const_bytes(bytes)
+        } else {
+            let mut es = Vec::new();
+            for c in bytes.chunks(elem_size as usize) {
+                let mut v: u64 = 0;
+                for (i, b) in c.iter().enumerate() {
+                    v |= u64::from(*b) << (8 * i);
+                }
+                es.push(self.m.const_int(et, i128::from(v)));
+            }
+            self.m.const_array(et, &es).expect("string array")
+        };
+        let g = self.private_const(".str", init, elem_size);
+        self.strings.insert((at, bytes.to_vec()), g);
+        g
+    }
+
+    // ---- module trailer ------------------------------------------------
+
+    fn trailer(&mut self) {
+        let m = &mut self.m;
+        m.add_named_metadata("llvm.linker.options", &[]);
+        m.add_module_flag_i32(1, "wchar_size", 4);
+        m.add_module_flag_i32(8, "PIC Level", 2);
+        m.add_module_flag_i32(7, "PIE Level", 2);
+        m.add_module_flag_i32(7, "uwtable", 2);
+        m.add_module_flag_i32(
+            7,
+            "frame-pointer",
+            if self.target.triple.arch == Arch::X86_64 { 2 } else { 1 },
+        );
+        m.add_ident(&self.opts.ident);
+    }
+}
+
+/// Whether a record type has a `mutable` member (never in M2, which has no
+/// `mutable`), which keeps a const global out of read-only memory.
+fn has_mutable(_ty: QualType) -> bool {
+    false
+}
+
+/// `Value` of a global.
+pub(crate) fn gval(g: GlobalId) -> Value {
+    Value::global(g)
+}
