@@ -26,6 +26,7 @@ use crate::module::{Cg, R, err};
 /// (`isReplaceableGlobalAllocationFunction`,
 /// `isReservedGlobalPlacementOperator`).
 #[derive(Clone, Copy, Debug, Default)]
+#[allow(clippy::struct_excessive_bools, reason = "independent facts, as clang's predicates")]
 pub(crate) struct AllocFn {
     /// `operator new` / `operator new[]`.
     pub is_new: bool,
@@ -327,7 +328,7 @@ impl Cg<'_> {
     }
 
     /// The preferred alignment of `ty` (`DataLayout::getPrefTypeAlign`):
-    /// AArch64 prefers 32-bit alignment for `i8`/`i16`.
+    /// `AArch64` prefers 32-bit alignment for `i8`/`i16`.
     fn pref_align(&self, ty: LTy) -> u64 {
         let (_, a) = self.ir_layout(ty);
         if !self.is_x86() && self.m.types.int_width(ty).is_some_and(|w| (2..=16).contains(&w)) {
@@ -502,7 +503,7 @@ impl Cg<'_> {
             if !pass_align && af.replaceable {
                 let (bsize, _) = self.size_align(base);
                 let bits = (self.target.default_new_align * 8).min(bsize * 8);
-                let floor = if bits == 0 { 0 } else { 1u64 << (63 - bits.leading_zeros()) };
+                let floor = if bits == 0 { 0 } else { 1u64 << bits.ilog2() };
                 align = align.max(floor / 8);
             }
             (p, align)
@@ -647,8 +648,8 @@ impl Cg<'_> {
         let mut n_init: u64 = 0;
         let mut init = Some(init0);
         if ast.exprs.get(init0).kind() == ExprKind::InitListExpr {
-            let inits: Vec<ExprId> = ast.lists.iter(ast.exprs.init_list_inits(init0)).collect();
-            n_init = inits.len() as u64;
+            let elems: Vec<ExprId> = ast.lists.iter(ast.exprs.init_list_inits(init0)).collect();
+            n_init = elems.len() as u64;
             let mut cur_ty = base_ty;
             if matches!(t.canonical_view(x.allocated_ty), TypeView::ConstantArray(_)) {
                 elem_ty = self.mty(x.allocated_ty);
@@ -662,7 +663,7 @@ impl Cg<'_> {
                 n_init = n_init.wrapping_mul(count);
             }
             let start_align = cur_align;
-            for (k, &ie) in inits.iter().enumerate() {
+            for (k, &ie) in elems.iter().enumerate() {
                 let q = ast.exprs.get(ie).ty();
                 let lv = LV { addr: Addr { v: cur, ty: cur_ty, align: cur_align }, q, bf: None };
                 self.init_to_lvalue(ie, lv, false)?;

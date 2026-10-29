@@ -78,6 +78,7 @@ impl Sema<'_, '_> {
     /// `operator delete[]` forms, in clang's order. The nothrow forms are
     /// only available when `<new>` declares them.
     pub(crate) fn declare_global_new_delete(&mut self) {
+        use OverloadedOperator as O;
         if self.global_ops.declared {
             return;
         }
@@ -86,7 +87,6 @@ impl Sema<'_, '_> {
         self.global_ops.align_val_t = Some(al);
         let size = self.size_type();
         let vp = self.ast.types.pointer_to(QualType::VOID);
-        use OverloadedOperator as O;
         for op in [O::New, O::ArrayNew] {
             self.declare_global_op(op, vp, &[size], ExcSpec::None);
             self.declare_global_op(op, vp, &[size, al], ExcSpec::None);
@@ -679,15 +679,14 @@ impl Sema<'_, '_> {
                         // `new_initializer` diagnoses the const array.
                         return false;
                     }
-                    if !is_const {
-                        "default-initialization of a class type in a new-expression"
-                    } else {
+                    if is_const {
                         let msg = self
                             .diag(DiagId::sema_default_init_const_no_ctor, at)
                             .arg(self.ty_arg(elem));
                         self.emit(msg);
                         return true;
                     }
+                    "default-initialization of a class type in a new-expression"
                 }
                 NewInit::Paren(..) => {
                     "parenthesized initialization of a class type in a new-expression"
@@ -733,13 +732,12 @@ impl Sema<'_, '_> {
                 let mut exact = 0;
                 let mut ok = true;
                 for (i, &a) in place.iter().enumerate() {
-                    match ps.get(lead.len() + i) {
-                        Some(&p) => match self.placement_arg_match(a, p) {
+                    if let Some(&p) = ps.get(lead.len() + i) {
+                        match self.placement_arg_match(a, p) {
                             Some(true) => exact += 1,
                             Some(false) => {}
                             None => ok = false,
-                        },
-                        None => {}
+                        }
                     }
                 }
                 if ok && best.is_none_or(|(_, e)| exact > e) {
@@ -1008,6 +1006,7 @@ impl Sema<'_, '_> {
     /// ([expr.delete]); `loc` is its first token. `cxx26` selects the
     /// C++26 rule that deleting a pointer to an incomplete type is
     /// ill-formed (P3144).
+    #[allow(clippy::too_many_lines, reason = "clang's ActOnCXXDelete, step by step")]
     pub fn act_on_cxx_delete(
         &mut self,
         global: bool,

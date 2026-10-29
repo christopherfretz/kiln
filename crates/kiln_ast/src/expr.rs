@@ -1265,7 +1265,7 @@ impl ExprArena {
             ExprKind::UnaryExprOrTypeTraitExpr if !n.has(ExprFlags::ARG_IS_TYPE) => {
                 v.extend(id(n.a));
             }
-            ExprKind::CXXNoexceptExpr => v.extend(id(n.a)),
+            ExprKind::CXXNoexceptExpr | ExprKind::CXXDeleteExpr => v.extend(id(n.a)),
             ExprKind::BinaryOperator | ExprKind::ArraySubscriptExpr => {
                 v.extend(id(n.a));
                 v.extend(id(n.b));
@@ -1295,7 +1295,6 @@ impl ExprArena {
                     v.extend(lists.iter::<ExprId>(p));
                 }
             }
-            ExprKind::CXXDeleteExpr => v.extend(id(n.a)),
             _ => {}
         }
         v

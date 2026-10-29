@@ -118,8 +118,15 @@ impl Parser<'_, '_> {
         loop {
             let t = self.tok_at(j);
             match self.kw_of(t) {
-                Some(Kw::Decltype | Kw::Typeof | Kw::Typename) => return true,
-                Some(Kw::Struct | Kw::Class | Kw::Union | Kw::Enum) => return true,
+                Some(
+                    Kw::Decltype
+                    | Kw::Typeof
+                    | Kw::Typename
+                    | Kw::Struct
+                    | Kw::Class
+                    | Kw::Union
+                    | Kw::Enum,
+                ) => return true,
                 Some(k) if crate::decl::is_type_specifier_kw(k) => j += 1,
                 Some(_) => break,
                 None => match self.scan_name(j) {

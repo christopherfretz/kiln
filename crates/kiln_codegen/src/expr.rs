@@ -188,13 +188,11 @@ impl Cg<'_> {
             // ScalarExprEmitter::VisitInitListExpr: `T{}` is zero, `T{x}`
             // is `x`.
             ExprKind::InitListExpr if !self.is_aggregate(q) => {
-                match ast.lists.iter(ast.exprs.init_list_inits(e)).next() {
-                    Some(i) => return self.emit_scalar_opt(i),
-                    None => {
-                        let t = self.lty(q);
-                        V::C(self.m.const_zero(t))
-                    }
+                if let Some(i) = ast.lists.iter(ast.exprs.init_list_inits(e)).next() {
+                    return self.emit_scalar_opt(i);
                 }
+                let t = self.lty(q);
+                V::C(self.m.const_zero(t))
             }
             ExprKind::DeclRefExpr
             | ExprKind::MemberExpr
