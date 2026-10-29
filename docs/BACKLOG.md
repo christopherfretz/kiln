@@ -60,6 +60,37 @@ Format per `docs/AGENTS.md`. Ids are stable; status moves between
 | WP-061a | parse+sema `new`/`delete` expressions on non-class types ([expr.new]/[expr.delete]: `new T`, `new T[n]`, `new T(init)`/`{init}`, `delete`, `delete[]`, array-bound diagnostics as clang; `CXXNewExpr`/`CXXDeleteExpr` payload in `spec/ast.md`; `-fdump-ast` + codegen lowering to `operator new`/`operator delete` calls, Exact vs clang) | todo (after 052b lands) |
 | WP-061b | Oven heap space per `spec/oven.md` "Transient allocation": `mem.rs` heap space + size-class free lists + coalescing (unit-testable without 061a), `New`/`Delete` KBC ops + checks with clang wording, `peak_arena`/`frozen_bytes` in report/harness/bench, `-fconstexpr-memory` over `peak_arena`, the five `churn-*` benchmarks + `tests/conformance/expr.new/` with the spec's gates, footprint-flat test extended | todo (mem.rs part can start now; glue after 061a) |
 
+## M3 waves (dependency order; each row ≤5 deliverables, one agent-session)
+Spec first (S-rows, supervisor reviews), then implementation. "needs" lists
+the rows that must be MERGED first; rows with the same needs run in parallel.
+
+| id | scope | needs | status |
+|---|---|---|---|
+| WP-S3C | spec: `spec/sema-class.md` — classes, members, `this`, access, bases (non-virtual then virtual), special members (implicit declaration/definition, triviality, deletedness), ctor-initializers, NSDMI, temporaries + `MaterializeTemporaryExpr` + lifetime extension, record layout (bases, vptr) vs clang `-fdump-record-layouts` | — | todo |
+| WP-S3O | spec: `spec/sema-overload.md` — candidate sets ([over.match.*]), viability, user-defined conversion sequences (converting ctors, conversion functions), ranking + tie-breakers, operator overloading incl. builtin candidates and `<=>`/`==` rewrites, implicit object parameter, address of overloaded function, default arguments | — | todo |
+| WP-S3T | spec: `spec/sema-templates.md` — parsing (template-ids, `typename`/`template`, packs, requires), dependent names/two-phase lookup, class template instantiation (lazy, member-wise), partial/explicit specialization matching, alias/variable templates, function template deduction ([temp.deduct]), partial ordering, SFINAE + instantiation stack, packs/folds, concepts/constraint satisfaction/subsumption, builtin traits table (`__is_same` …), instantiation memory accounting | — | todo |
+| WP-062 | using-declarations (`using ::name;`, `__using_if_exists__`), using-directives, namespace aliases, `using enum`, `UsingShadow` lookup | — | todo |
+| WP-063 | asm labels on declarations, `__builtin_is_constant_evaluated` (+ Oven/codegen), system-header warning suppression (clang `-isystem` rule), `__builtin_*` declaration table for the C-library builtins libc++ wrappers use | — | todo |
+| WP-064 | parser expressions wave: tentative-parse disambiguation (`T(x)`, params, `(T)(x)`), `T()`/`T{}`/`T(a,b)` temporaries, braced-init-list args, default arguments, trailing return types, `throw`, `typeid`, `dynamic_cast`, compound literals, statement expressions | — | todo |
+| WP-065 | parser classes: member functions (deferred in-class bodies, [class.mem]/7), access specifiers, base-clauses, ctor/dtor/conversion/operator names, ctor-initializers, static data members, NSDMI, friends, `= default`/`= delete`, `this` | — | todo |
+| WP-066 | sema classes 1: member functions, `this`, implicit object param, access control, static members, NSDMI, complete-class contexts, record layout with non-virtual bases + layout-dump differential test | S3C, 065 | todo |
+| WP-067 | sema classes 2: special members, ctor-initializers, member init order, aggregates with bases, temporaries/`MaterializeTemporaryExpr`/lifetime extension, copy elision as clang | 066 | todo |
+| WP-068 | overload resolution per S3O; `CXXOperatorCallExpr`, `CXXMemberCallExpr`; user-defined conversions in ICS (extends WP-049 ranking) | S3O, 066 | todo |
+| WP-069 | parser templates: template-declarations, template-ids, `typename`/`template`, packs, `sizeof...`, folds, concept/requires parsing, explicit specialization/instantiation syntax | S3T, 065 | todo |
+| WP-070 | sema templates 1: template decls + dependent types/exprs, class template instantiation (lazy member-wise), partial/explicit specializations, alias + variable templates, static members of templates, instantiation stack diagnostics | 069 | todo |
+| WP-071 | sema templates 2: function templates, deduction from calls/explicit args/defaults, partial ordering, SFINAE, integration with overload resolution | 070, 068 | todo |
+| WP-072 | packs: variadic templates, pack expansion in all contexts, fold expressions, `sizeof...` | 071 | todo |
+| WP-073 | concepts: constraint normalization, satisfaction, subsumption, `requires`-expressions, constrained `auto`, abbreviated function templates | 071 | todo |
+| WP-074 | `auto`/`decltype`/`decltype(auto)`, `declval`, the builtin type-trait table (`__is_same`, `__is_base_of`, `__is_constructible`…, per S3T table), `__make_integer_seq`/`__type_pack_element` | 070 | todo |
+| WP-075 | lambdas: closure types, captures (copy/ref/init/`this`), generic lambdas, constexpr lambdas | 067, 068 (generic: 071) | todo |
+| WP-061b | Oven heap (see M3 preparation) | 061a | todo |
+| WP-076 | Oven classes: ctors/dtors/`this`/member calls, `BeginLife`/`EndLife` subobjects, temporaries, unions with ctors, pointers to members, `std::construct_at`/allocator recognition | 067, 061b | todo |
+| WP-077 | Oven virtual + RTTI: dynamic type in allocations, virtual calls via `SemaBridge::vtable`, `dynamic_cast`/`typeid` in constant evaluation | 076, 078 | todo |
+| WP-078 | sema/abi virtual inheritance: vptr/vtable layout (Itanium), virtual bases, final/override, `dynamic_cast`/`typeid` semantics, layout-dump differential | 067 | todo |
+| WP-079 | codegen classes: record types with bases, member functions/`this`, ctors/dtors (complete/base variants), `new`/`delete`, member pointers, temporaries; mangling for classes/templates in kiln_abi | 067, 061a | todo |
+| WP-080 | codegen virtual: vtables, RTTI, virtual calls, thunks; template instantiation emission (linkonce_odr), `-fdump-record-layouts` | 078, 079 | todo |
+| WP-081 | `cargo xtask libcxx` M3 gate: `<type_traits>`, `<utility>`, `<array>`, `<string_view>`, `<span>`, `<bit>`, `<limits>`, `<initializer_list>` compile; their libc++ tests run through kiln; status page `docs/status/libcxx-m3.md` | 072, 073, 074, 076, 079 | todo |
+
 ## Lessons
 - Size packages so one agent finishes well within a session: codegen should have been ABI+mangling / lowering / driver+tests from the start (the pp engine ended up split the same way). Prefer 3 small briefs over 1 large one; a brief that lists >5 deliverables is too big.
 
