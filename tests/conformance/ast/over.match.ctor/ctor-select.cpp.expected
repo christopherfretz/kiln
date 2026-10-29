@@ -1,0 +1,42 @@
+TranslationUnitDecl
+|-CXXRecordDecl referenced struct S definition
+| |-CXXConstructorDecl used S 'void (int)'
+| | `-ParmVarDecl 'int'
+| |-CXXConstructorDecl used S 'void (double, int)'
+| | |-ParmVarDecl 'double'
+| | `-ParmVarDecl 'int' cinit
+| |   `-IntegerLiteral 'int' 0
+| `-CXXConstructorDecl used S 'void (const char *)'
+|   `-ParmVarDecl 'const char *'
+|-FunctionDecl used take 'void (S)'
+| `-ParmVarDecl 'S'
+`-FunctionDecl t 'void ()'
+  `-CompoundStmt
+    |-DeclStmt
+    | `-VarDecl a 'S' callinit
+    |   `-CXXConstructExpr 'S' 'void (int)'
+    |     `-IntegerLiteral 'int' 1
+    |-DeclStmt
+    | `-VarDecl b 'S' cinit
+    |   `-ImplicitCastExpr 'S' <ConstructorConversion>
+    |     `-CXXConstructExpr 'S' 'void (double, int)'
+    |       |-FloatingLiteral 'double' 2.5e0
+    |       `-CXXDefaultArgExpr 'int'
+    |         `-IntegerLiteral 'int' 0
+    |-DeclStmt
+    | `-VarDecl c 'S' listinit
+    |   `-CXXConstructExpr 'S' 'void (double, int)' list
+    |     |-ImplicitCastExpr 'double' <IntegralToFloating>
+    |     | `-IntegerLiteral 'int' 3
+    |     `-IntegerLiteral 'int' 4
+    |-DeclStmt
+    | `-VarDecl d 'S' callinit
+    |   `-CXXConstructExpr 'S' 'void (const char *)'
+    |     `-ImplicitCastExpr 'const char *' <ArrayToPointerDecay>
+    |       `-StringLiteral 'const char[2]' lvalue "x"
+    `-CallExpr 'void'
+      |-ImplicitCastExpr 'void (*)(S)' <FunctionToPointerDecay>
+      | `-DeclRefExpr 'void (S)' lvalue Function 'take' 'void (S)'
+      `-ImplicitCastExpr 'S' <ConstructorConversion>
+        `-CXXConstructExpr 'S' 'void (int)'
+          `-IntegerLiteral 'int' 5
