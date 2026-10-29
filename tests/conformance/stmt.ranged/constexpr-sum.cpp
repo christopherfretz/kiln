@@ -4,6 +4,7 @@
 //@ std: c++20
 //@ args: -O2 -DN=10
 //@ stdout-file: constexpr-sum.stdout
+//@ xfail(kiln): libstdc++ headers do not parse yet: kiln_parse does not support decltype (c++config.h)
 #include <array>
 #include <cstdio>
 
