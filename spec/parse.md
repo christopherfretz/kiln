@@ -154,6 +154,12 @@ clang's `Parser` over `Preprocessor::Lex`.
     `TentativeCXXTypeIdContext`,
   - `is_cxx_function_declarator(name) -> (bool, bool)`
     ([dcl.ambig.res]/1; the ambiguity flag feeds `-Wvexing-parse`).
+  A member-pointer ptr-operator (`member_pointer_end`) is scanned as
+  `::`? (`template`? name (`<args>`)? `::`)+ `*`: each component is
+  classified in the context of the previous one; template arguments
+  are skipped (`skip_template_args`) only after `template` or a name
+  that classifies as a class template, so `x<1>::y` with a variable `x`
+  stays an expression; dependent components keep the scan going.
 
 ### 2.2 Tokens
 - **Keywords** are classified by the parser (`keywords.rs`, one hash

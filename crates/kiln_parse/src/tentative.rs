@@ -7,13 +7,14 @@
 //! declarators would declare are tracked locally (clang's
 //! `TentativelyDeclaredIdentifiers`).
 
+use kiln_ast::DeclId;
 use kiln_lex::{Punct, TokKind};
 use kiln_sema::NameClass;
 use kiln_source::symbol::Symbol;
 
 use crate::decl::is_decl_specifier_kw;
 use crate::keywords::Kw;
-use crate::parser::Parser;
+use crate::parser::{Parser, is_template_class};
 
 /// The result of a tentative parse step (clang's `TPResult`).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -381,19 +382,61 @@ impl<'x, 'a, 'sm> Scan<'x, 'a, 'sm> {
         }
     }
 
-    /// The index after `N::*` (a pointer-to-member operator) at the
-    /// current token.
+    /// The index after `nested-name-specifier *` (a pointer-to-member
+    /// operator, [dcl.mptr]/1) at the current token: `N::*`, `::N::C::*`,
+    /// and template-id components `X<T>::*`, `X<T>::Y::*`, `::X<int>::*`,
+    /// `T::template Y<U>::*` (clang annotates the scope first). A `<`
+    /// opens template arguments only after a name that classifies as a
+    /// template in its qualifier's scope or after `template`
+    /// ([temp.names]/3), so `x<1>::*` with a variable `x` is not one.
     fn member_pointer_end(&self) -> Option<usize> {
         let mut i = self.i;
+        // The lookup context of the next component: `Some(q)` known
+        // (`None` = unqualified), `None` once it can no longer be
+        // classified (a component that names no scope).
+        let mut ctx: Option<Option<DeclId>> = Some(None);
         if self.punct_at(i) == Some(Punct::ColonColon) {
+            ctx = Some(Some(self.p.s.ast.tu));
             i += 1;
         }
         let mut any = false;
-        while self.ident_at(i).is_some() && self.punct_at(i + 1) == Some(Punct::ColonColon) {
-            i += 2;
+        loop {
+            if any && self.punct_at(i) == Some(Punct::Star) {
+                return Some(i + 1);
+            }
+            let template_kw = i > self.i && self.kw_at(i) == Some(Kw::Template);
+            if template_kw {
+                i += 1;
+            }
+            let name = self.ident_at(i)?;
+            if !matches!(self.punct_at(i + 1), Some(Punct::Less | Punct::ColonColon)) {
+                return None;
+            }
+            let class = ctx.map(|q| self.p.s.classify_name(name, q));
+            let mut end = i + 1;
+            if self.punct_at(end) == Some(Punct::Less)
+                && (template_kw || class.is_some_and(is_template_class))
+            {
+                let (close, split) = self.p.skip_template_args(end)?;
+                if split {
+                    return None;
+                }
+                end = close + 1;
+            }
+            if self.punct_at(end) != Some(Punct::ColonColon) {
+                return None;
+            }
+            ctx = match class {
+                Some(
+                    NameClass::Namespace(d) | NameClass::Type(_, d) | NameClass::TypeTemplate(d),
+                ) => Some(Some(d)),
+                // `T::x::`: still dependent.
+                Some(NameClass::Dependent) => ctx,
+                _ => None,
+            };
+            i = end + 1;
             any = true;
         }
-        (any && self.punct_at(i) == Some(Punct::Star)).then_some(i + 1)
     }
 
     /// clang's `TryParseDeclarator`.

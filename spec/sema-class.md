@@ -202,6 +202,23 @@ so `sizeof`/`alignof`/layout agree with kiln_abi; the value itself stays
 opaque to the evaluator (constant evaluation of member pointers is WP-076).
 `[dcl.mptr]` tests: `tests/conformance/dcl.mptr/`.
 
+**Landed (WP-085): member-pointer follow-ups.** `==`/`!=` on member
+pointers (sema.md §5, "Member-pointer equality"); tentative parsing
+accepts template-id components in a member-pointer
+nested-name-specifier (`X<T>::*`, `X<T>::Y::*`, `::X<int>::*`,
+`T::template W<int>::*`; parse.md §2.1); a nested-name-specifier
+component that names something other than a class, namespace or
+enumeration is `'x' is not a class, namespace, or enumeration` with a
+`'x' declared here` note when ordinary lookup finds exactly one
+declaration that is not a function template (clang's second lookup in
+`BuildCXXNestedNameSpecifier`); and `out-of-line definition of 'f' does
+not match any declaration in {1}` takes clang's scope text (`'S'` for a
+class, `namespace 'N::M'`, `the global namespace`) and is now also
+emitted for a qualified namespace-scope function that names no previous
+declaration ([dcl.meaning.general]/2). Tests: `expr.eq/`,
+`dcl.mptr/template-id-qualifier.cpp`, `basic.lookup.qual/not-a-scope.cpp`,
+`dcl.meaning/qualified-no-match.cpp`.
+
 ### 2.7 Complete-class contexts ([class.mem]/7)
 The parser (WP-065) saves the tokens of member function bodies (with
 ctor-initializers), default arguments, *noexcept-specifier*s, NSDMIs and
