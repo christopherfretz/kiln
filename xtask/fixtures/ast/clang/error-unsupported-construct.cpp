@@ -1,7 +1,4 @@
 //@ expect: ast
-// A class-type default initialization: clang's CXXConstructExpr is not in
-// the M2 mapping table, so the dump cannot be normalized.
-struct P {
-  P();
-};
-void f() { P p; }
+// A throw expression: clang's CXXThrowExpr is not in the mapping table, so
+// the dump cannot be normalized.
+void f() { throw 1; }

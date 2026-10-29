@@ -2,6 +2,7 @@
 //! §2–§3), with the §4 deviations applied.
 
 use std::collections::{HashMap, HashSet};
+use std::fmt::Write as _;
 
 use super::side::{self, TextDecl};
 use super::table::{self, Disposition};
@@ -63,6 +64,22 @@ fn qual_type(n: &Json) -> &str {
     n.get("type").and_then(|t| text(t, "qualType")).unwrap_or("")
 }
 
+/// The function declaration kinds.
+const FN_KINDS: &[&str] = &[
+    "FunctionDecl",
+    "CXXMethodDecl",
+    "CXXConstructorDecl",
+    "CXXDestructorDecl",
+    "CXXConversionDecl",
+];
+
+/// The text-dump words of a function that clang prints but the JSON dump
+/// does not carry, and which kiln prints (`spec/ast-dump.md` §3).
+const SIDE_FN_WORDS: &[&str] = &["trivial", "noexcept-unevaluated"];
+
+/// Text-dump words of a function kiln has no field for.
+const UNSUPPORTED_FN_WORDS: &[&str] = &["noexcept-uninstantiated", "ineligible", "not_selected"];
+
 /// What the whole tree is scanned for before printing.
 #[derive(Default)]
 struct Index<'a> {
@@ -73,9 +90,19 @@ struct Index<'a> {
     types: Types,
     /// Bit-field `FieldDecl` ids.
     bitfields: HashSet<&'a str>,
-    /// `FunctionDecl`s by id (for `previousDecl`).
+    /// Functions by id (for `previousDecl`).
     funcs: HashMap<&'a str, &'a Json>,
-    /// `FunctionDecl`/`VarDecl` ids by pre-order position (the side
+    /// Functions whose lexical context is a class (members, and friends
+    /// declared in a class).
+    in_class: HashSet<&'a str>,
+    /// Declarations a `FriendDecl` holds.
+    befriended: HashSet<&'a str>,
+    /// The declaration contexts (filter mode's [`Ctx`] kinds) by id, and
+    /// each declaration's nearest enclosing one (its lexical context), for
+    /// the qualified name of a declaration whose semantic context differs.
+    contexts: HashMap<&'a str, &'a Json>,
+    lexical: HashMap<&'a str, &'a Json>,
+    /// Function and `VarDecl` ids by pre-order position (the side
     /// channel's alignment).
     order: HashMap<&'a str, usize>,
     /// (class, name) of each position in `order`.
@@ -86,7 +113,7 @@ impl<'a> Index<'a> {
     fn build(root: &'a Json) -> Self {
         let mut ix = Index::default();
         let mut cur = None;
-        ix.walk(root, &mut cur);
+        ix.walk(root, &mut cur, "", root);
         ix
     }
 
@@ -117,17 +144,34 @@ impl<'a> Index<'a> {
         }
     }
 
-    fn walk(&mut self, n: &'a Json, cur: &mut Option<usize>) {
+    fn walk(&mut self, n: &'a Json, cur: &mut Option<usize>, parent: &str, dc: &'a Json) {
         let Some(obj) = n.as_obj() else { return };
         let k = kind(n);
-        if k == "FunctionDecl" || k == "VarDecl" {
+        let mut inner_dc = dc;
+        if k.ends_with("Decl") {
+            self.lexical.insert(id(n), dc);
+            if ctx_of(n).is_some() {
+                self.contexts.insert(id(n), n);
+                inner_dc = n;
+            }
+        }
+        if side::CLASSES.contains(&k) {
             self.order.insert(id(n), self.order_names.len());
             self.order_names.push((k, name(n).unwrap_or("")));
+        }
+        if parent == "FriendDecl" {
+            self.befriended.insert(id(n));
+        }
+        if FN_KINDS.contains(&k) {
+            self.funcs.insert(id(n), n);
+            if matches!(parent, "CXXRecordDecl" | "FriendDecl") {
+                self.in_class.insert(id(n));
+            }
         }
         for (key, v) in obj {
             if key == "inner" || key == "array_filler" {
                 for c in v.as_arr().unwrap_or(&[]) {
-                    self.walk(c, cur);
+                    self.walk(c, cur, k, inner_dc);
                 }
                 continue;
             }
@@ -141,9 +185,6 @@ impl<'a> Index<'a> {
             }
         }
         match k {
-            "FunctionDecl" => {
-                self.funcs.insert(id(n), n);
-            }
             "FieldDecl" if flag(n, "isBitfield") => {
                 self.bitfields.insert(id(n));
             }
@@ -221,10 +262,9 @@ struct Printer<'a, 'f> {
     main_file: &'f str,
     text: &'f mut (dyn FnMut() -> Result<String, String> + Send),
     side: Option<Vec<TextDecl>>,
-    /// Function flags derived from the JSON, checked against the side
-    /// channel when it is loaded: (order position, constexpr, consteval,
-    /// implicit-inline).
-    fn_flags: Vec<(usize, bool, bool, bool)>,
+    /// Function words derived from the JSON, checked against the side
+    /// channel when it is loaded: (order position, [(word, present)]).
+    fn_flags: Vec<(usize, [(&'static str, bool); 3])>,
 }
 
 /// Prints `root` (a `TranslationUnitDecl`) per `opts`.
@@ -309,7 +349,10 @@ impl<'a> Printer<'a, '_> {
         if k.ends_with("Decl")
             && let Some(nm) = name(n)
         {
-            let q = qualified(ctx, nm)?;
+            let q = match text(n, "parentDeclContextId") {
+                Some(p) => qualified(&self.semantic_ctx(p)?, nm)?,
+                None => qualified(ctx, nm)?,
+            };
             if q.contains(f) {
                 if let Some(t) = self.node(n)? {
                     out.push_str("Dumping ");
@@ -321,15 +364,7 @@ impl<'a> Printer<'a, '_> {
                 return Ok(());
             }
         }
-        let pushed = match k {
-            "CXXRecordDecl" => Some(name(n).map_or(Ctx::Unnamed, |s| Ctx::Named(s.into()))),
-            "EnumDecl" if n.get("scopedEnumTag").is_some() => {
-                Some(name(n).map_or(Ctx::Unnamed, |s| Ctx::Named(s.into())))
-            }
-            "EnumDecl" | "LinkageSpecDecl" => Some(Ctx::Transparent),
-            "FunctionDecl" => Some(Ctx::Function(signature(n))),
-            _ => None,
-        };
+        let pushed = ctx_of(n);
         let has = pushed.is_some();
         if let Some(c) = pushed {
             ctx.push(c);
@@ -341,12 +376,36 @@ impl<'a> Printer<'a, '_> {
         r
     }
 
+    /// The context chain of the declaration context `id` (a declaration's
+    /// semantic parent), outermost first.
+    fn semantic_ctx(&self, id: &str) -> Res<Vec<Ctx>> {
+        let mut chain = Vec::new();
+        let mut cur = self.ix.contexts.get(id).copied();
+        // Bounded by the nesting depth; the cap guards a cycle.
+        for _ in 0..10_000 {
+            let Some(c) = cur else { break };
+            if kind(c) == "TranslationUnitDecl" {
+                break;
+            }
+            chain.extend(ctx_of(c));
+            let up = text(c, "parentDeclContextId")
+                .and_then(|p| self.ix.contexts.get(p))
+                .or_else(|| self.ix.lexical.get(self::id(c)));
+            cur = up.copied();
+        }
+        if cur.is_none_or(|c| kind(c) != "TranslationUnitDecl") {
+            return Err(format!("clang-ast: filter mode cannot resolve the context `{id}`"));
+        }
+        chain.reverse();
+        Ok(chain)
+    }
+
     fn side(&mut self) -> Res<&[TextDecl]> {
         if self.side.is_none() {
             let decls = side::parse(&(self.text)()?)?;
             if decls.len() != self.ix.order_names.len() {
                 return Err(format!(
-                    "clang-ast: clang's text dump has {} FunctionDecl/VarDecl lines but its \
+                    "clang-ast: clang's text dump has {} function/VarDecl lines but its \
                      JSON dump has {}; cannot align them",
                     decls.len(),
                     self.ix.order_names.len()
@@ -367,17 +426,17 @@ impl<'a> Printer<'a, '_> {
 
     fn check_fn_flags(&mut self) -> Res<()> {
         let Some(side) = &self.side else { return Ok(()) };
-        for &(pos, constexpr, consteval, implicit_inline) in &self.fn_flags {
-            let d = &side[pos];
-            let want = [constexpr, consteval, implicit_inline];
-            let got =
-                [d.has_flag("constexpr"), d.has_flag("consteval"), d.has_flag("implicit-inline")];
-            if want != got {
-                return Err(format!(
-                    "clang-ast: derived FunctionDecl flags [constexpr, consteval, \
-                     implicit-inline] = {want:?} disagree with clang's text dump `{}`",
-                    d.line
-                ));
+        for (pos, words) in &self.fn_flags {
+            let d = &side[*pos];
+            for &(w, want) in words {
+                if d.has_flag(w) != want {
+                    return Err(format!(
+                        "clang-ast: the derived function word `{w}` ({}) disagrees with \
+                         clang's text dump `{}`",
+                        if want { "present" } else { "absent" },
+                        d.line
+                    ));
+                }
             }
         }
         Ok(())
@@ -434,10 +493,38 @@ impl<'a> Printer<'a, '_> {
             }
             "CXXRecordDecl" => {
                 let mut l = decl_head(n, k);
+                if self.ix.befriended.contains(id(n)) {
+                    // A class first declared by a friend declaration (one
+                    // declared before is not the friend's child).
+                    if n.get("previousDecl").is_some() {
+                        return Err("clang-ast: a befriended class with a previous \
+                                    declaration (its friend kind is not in the JSON dump)"
+                            .into());
+                    }
+                    push_word(&mut l, "friend_undeclared");
+                }
                 push_word(&mut l, text(n, "tagUsed").ok_or("clang-ast: record without a tag")?);
                 push_opt(&mut l, name(n));
                 if flag(n, "completeDefinition") {
                     push_word(&mut l, "definition");
+                }
+                line = l;
+                if let Some(bases) = n.get("bases") {
+                    for b in bases.as_arr().unwrap_or(&[]) {
+                        kids_out.push(Tree { line: base_line(b)?, kids: Vec::new() });
+                    }
+                }
+                kids_out.extend(self.kid_trees(n)?);
+            }
+            "AccessSpecDecl" => {
+                let mut l = decl_head(n, k);
+                push_word(&mut l, text(n, "access").ok_or("clang-ast: access without a level")?);
+                line = l;
+            }
+            "FriendDecl" => {
+                let mut l = decl_head(n, k);
+                if let Some(t) = n.get("type") {
+                    push_word(&mut l, &type_pair(Some(t), k)?);
                 }
                 line = l;
                 kids_out = self.kid_trees(n)?;
@@ -446,6 +533,9 @@ impl<'a> Printer<'a, '_> {
                 let mut l = decl_head(n, k);
                 push_opt(&mut l, name(n));
                 push_word(&mut l, &type_pair(n.get("type"), k)?);
+                if flag(n, "mutable") {
+                    push_word(&mut l, "mutable");
+                }
                 line = l;
                 kids_out = self.kid_trees(n)?;
             }
@@ -492,19 +582,51 @@ impl<'a> Printer<'a, '_> {
                 line = l;
                 kids_out = self.kid_trees(n)?;
             }
-            "FunctionDecl" => {
-                line = self.function(n)?;
+            "FunctionDecl" | "CXXMethodDecl" | "CXXConstructorDecl" | "CXXDestructorDecl"
+            | "CXXConversionDecl" => {
+                let (l, pre) = self.function(n, k)?;
+                line = l;
+                kids_out = pre;
+                kids_out.extend(self.kid_trees(n)?);
+            }
+            "CXXCtorInitializer" => {
+                let mut l = String::from(k);
+                if let Some(m) = n.get("anyInit") {
+                    let mk = kind(m);
+                    let _ = write!(
+                        l,
+                        " {} '{}' {}",
+                        mk.strip_suffix("Decl").unwrap_or(mk),
+                        text(m, "name").unwrap_or(""),
+                        type_pair(m.get("type"), "initialized member")?
+                    );
+                } else if let Some(t) = n.get("baseInit").or_else(|| n.get("delegatingInit")) {
+                    push_word(&mut l, &type_pair(Some(t), "initialized class")?);
+                } else {
+                    return Err("clang-ast: CXXCtorInitializer without a target".into());
+                }
+                line = l;
                 kids_out = self.kid_trees(n)?;
+            }
+            "OverrideAttr" => {
+                line = k.to_owned();
+            }
+            "FinalAttr" => {
+                line = "FinalAttr final".to_owned();
             }
             "ParmVarDecl" => {
                 let mut l = decl_head(n, k);
                 push_opt(&mut l, name(n));
                 push_word(&mut l, &type_pair(n.get("type"), k)?);
+                match text(n, "init") {
+                    None => {}
+                    Some("c") => push_word(&mut l, "cinit"),
+                    Some(other) => {
+                        return Err(format!("clang-ast: default argument init style `{other}`"));
+                    }
+                }
                 line = l;
                 kids_out = self.kid_trees(n)?;
-                if !kids_out.is_empty() {
-                    return Err("clang-ast: default arguments are not in the M2 dump".into());
-                }
             }
             "VarDecl" => {
                 line = self.var(n)?;
@@ -581,9 +703,54 @@ impl<'a> Printer<'a, '_> {
                 );
                 kids_out = self.kid_trees(n)?;
             }
-            "ImplicitCastExpr" | "CStyleCastExpr" => {
+            "ImplicitCastExpr"
+            | "CStyleCastExpr"
+            | "CXXStaticCastExpr"
+            | "CXXDynamicCastExpr"
+            | "CXXConstCastExpr"
+            | "CXXReinterpretCastExpr"
+            | "CXXFunctionalCastExpr" => {
                 let ck = text(n, "castKind").ok_or("clang-ast: cast without a kind")?;
-                let mut l = format!("{} <{ck}>", self.expr_head(n, k)?);
+                let mut l = self.expr_head(n, k)?;
+                let named = match k {
+                    "CXXStaticCastExpr" => Some(" static_cast<"),
+                    "CXXDynamicCastExpr" => Some(" dynamic_cast<"),
+                    "CXXConstCastExpr" => Some(" const_cast<"),
+                    "CXXReinterpretCastExpr" => Some(" reinterpret_cast<"),
+                    "CXXFunctionalCastExpr" => Some(" functional cast to "),
+                    _ => None,
+                };
+                if let Some(head) = named {
+                    // clang prints the type as written; kiln rebuilds it
+                    // from the expression's type and value category.
+                    l.push_str(head);
+                    l.push_str(qual_type(n));
+                    match text(n, "valueCategory") {
+                        Some("lvalue") => l.push_str(" &"),
+                        Some("xvalue") => l.push_str(" &&"),
+                        _ => {}
+                    }
+                    if k != "CXXFunctionalCastExpr" {
+                        l.push('>');
+                    }
+                }
+                l.push_str(" <");
+                l.push_str(ck);
+                if let Some(path) = n.get("path").and_then(Json::as_arr)
+                    && !path.is_empty()
+                {
+                    let steps: Vec<String> = path
+                        .iter()
+                        .map(|b| {
+                            let v = if flag(b, "isVirtual") { "virtual " } else { "" };
+                            format!("{v}{}", text(b, "name").unwrap_or(""))
+                        })
+                        .collect();
+                    l.push_str(" (");
+                    l.push_str(&steps.join(" -> "));
+                    l.push(')');
+                }
+                l.push('>');
                 if flag(n, "isPartOfExplicitCast") {
                     l.push_str(" part_of_explicit_cast");
                 }
@@ -641,6 +808,75 @@ impl<'a> Printer<'a, '_> {
                     first.line.insert_str(0, "array_filler: ");
                 }
             }
+            "CXXConstructExpr" | "CXXTemporaryObjectExpr" => {
+                let mut l = self.expr_head(n, k)?;
+                push_word(&mut l, &type_pair(n.get("ctorType"), "constructor")?);
+                for (key, word) in [
+                    ("list", "list"),
+                    ("initializer_list", "std::initializer_list"),
+                    ("zeroing", "zeroing"),
+                    ("isImmediateEscalating", "immediate-escalating"),
+                ] {
+                    if flag(n, key) {
+                        push_word(&mut l, word);
+                    }
+                }
+                line = l;
+                kids_out = self.kid_trees(n)?;
+            }
+            "MaterializeTemporaryExpr" => {
+                let mut l = self.expr_head(n, k)?;
+                if let Some(d) = n.get("extendingDecl") {
+                    let dk = kind(d);
+                    let _ = write!(
+                        l,
+                        " extended by {} '{}' {}",
+                        dk.strip_suffix("Decl").unwrap_or(dk),
+                        text(d, "name").unwrap_or(""),
+                        type_pair(d.get("type"), "extending declaration")?
+                    );
+                }
+                line = l;
+                kids_out = self.kid_trees(n)?;
+            }
+            "CXXBindTemporaryExpr" => {
+                line = format!("{} (CXXTemporary)", self.expr_head(n, k)?);
+                kids_out = self.kid_trees(n)?;
+            }
+            "CXXDefaultInitExpr" => {
+                let mut l = self.expr_head(n, k)?;
+                if flag(n, "hasRewrittenInit") {
+                    l.push_str(" has rewritten init");
+                }
+                line = l;
+                kids_out = self.kid_trees(n)?;
+            }
+            "CXXThisExpr" => {
+                let mut l = self.expr_head(n, k)?;
+                if flag(n, "implicit") {
+                    l.push_str(" implicit");
+                }
+                l.push_str(" this");
+                line = l;
+            }
+            "CXXTypeidExpr" => {
+                let mut l = self.expr_head(n, k)?;
+                if let Some(t) = n.get("typeArg") {
+                    l.push_str(" type_operand=");
+                    l.push_str(&type_pair(Some(t), "typeid operand")?);
+                }
+                line = l;
+                kids_out = self.kid_trees(n)?;
+            }
+            "CXXParenListInitExpr" => {
+                line = self.expr_head(n, k)?;
+                kids_out = self.kid_trees(n)?;
+                if n.get("array_filler").is_some()
+                    && let Some(first) = kids_out.first_mut()
+                {
+                    first.line.insert_str(0, "array_filler: ");
+                }
+            }
             "ConstantExpr" => {
                 let v = text(n, "value").ok_or_else(|| {
                     "clang-ast: ConstantExpr without a value (an lvalue or unevaluated \
@@ -657,7 +893,14 @@ impl<'a> Printer<'a, '_> {
             | "ParenExpr"
             | "ArraySubscriptExpr"
             | "CallExpr"
-            | "ImplicitValueInitExpr" => {
+            | "ImplicitValueInitExpr"
+            | "ExprWithCleanups"
+            | "CXXDefaultArgExpr"
+            | "CXXMemberCallExpr"
+            | "CXXInheritedCtorInitExpr"
+            | "ArrayInitLoopExpr"
+            | "ArrayInitIndexExpr"
+            | "OpaqueValueExpr" => {
                 line = self.expr_head(n, k)?;
                 kids_out = self.kid_trees(n)?;
             }
@@ -767,39 +1010,102 @@ impl<'a> Printer<'a, '_> {
         }
     }
 
-    fn function(&mut self, n: &'a Json) -> Res<String> {
+    /// Whether a function's line needs the side channel: for the words
+    /// only clang's text dump has (`friend`, `trivial`,
+    /// `noexcept-unevaluated`) and the `Overrides:` child, which only
+    /// members, friends and defaulted functions can carry.
+    fn needs_side(&self, n: &Json, class: &str) -> bool {
+        class != "FunctionDecl"
+            || self.ix.befriended.contains(id(n))
+            || n.get("explicitlyDefaulted").is_some()
+    }
+
+    /// A function's line, and the children clang prints before its
+    /// parameters (the `delete message:` and `Overrides:` lines).
+    fn function(&mut self, n: &'a Json, class: &str) -> Res<(String, Vec<Tree>)> {
         let consteval = flag(n, "immediate");
         let constexpr = flag(n, "constexpr") && !consteval;
         let deleted = flag(n, "explicitlyDeleted");
         let inline = flag(n, "inline");
         let implicit_inline = !inline && self.inlined(n);
-        if let Some(&pos) = self.ix.order.get(id(n)) {
-            self.fn_flags.push((pos, constexpr, consteval, implicit_inline));
+        let pos = self.ix.order.get(id(n)).copied();
+        let side = match pos {
+            Some(pos) if self.needs_side(n, class) => Some(self.side()?[pos].clone()),
+            _ => None,
+        };
+        if let Some(pos) = pos {
+            self.fn_flags.push((
+                pos,
+                [
+                    ("constexpr", constexpr),
+                    ("consteval", consteval),
+                    ("implicit-inline", implicit_inline),
+                ],
+            ));
         }
-        let mut l = decl_head(n, "FunctionDecl");
+        let nm = name(n).ok_or_else(|| format!("clang-ast: {class} without a name"))?;
+        let mut l = self.head(n, class);
         if constexpr {
             push_word(&mut l, "constexpr");
         }
         if consteval {
             push_word(&mut l, "consteval");
         }
-        push_word(&mut l, name(n).ok_or("clang-ast: FunctionDecl without a name")?);
-        push_word(&mut l, &type_pair(n.get("type"), "FunctionDecl")?);
+        if let Some(d) = &side {
+            if let Some(w) = UNSUPPORTED_FN_WORDS.iter().find(|w| d.has_trailing_flag(w)) {
+                return Err(format!("clang-ast: unsupported function word `{w}` on `{}`", d.line));
+            }
+            for w in ["friend", "friend_undeclared"] {
+                if d.has_flag(w) {
+                    push_word(&mut l, w);
+                }
+            }
+        }
+        push_word(&mut l, nm);
+        push_word(&mut l, &type_pair(n.get("type"), class)?);
         push_opt(&mut l, text(n, "storageClass"));
-        if inline {
-            push_word(&mut l, "inline");
+        for (key, word) in [("inline", "inline"), ("virtual", "virtual"), ("pure", "pure")] {
+            if flag(n, key) {
+                push_word(&mut l, word);
+            }
+        }
+        match text(n, "explicitlyDefaulted") {
+            None => {}
+            Some("default") => push_word(&mut l, "default"),
+            Some("deleted") => push_word(&mut l, "default_delete"),
+            Some(other) => return Err(format!("clang-ast: explicitlyDefaulted `{other}`")),
         }
         if deleted {
             push_word(&mut l, "delete");
         }
+        if let Some(d) = &side {
+            for w in SIDE_FN_WORDS {
+                if d.has_trailing_flag(w) {
+                    push_word(&mut l, w);
+                }
+            }
+        }
         if implicit_inline {
             push_word(&mut l, "implicit-inline");
         }
-        Ok(l)
+        let mut pre = Vec::new();
+        if let Some(msg) = text(n, "deletedMessage") {
+            let mut line = String::from("delete message: StringLiteral unevaluated \"");
+            for b in msg.bytes() {
+                escape::push_unit(u32::from(b), &mut line);
+            }
+            line.push('"');
+            pre.push(Tree { line, kids: Vec::new() });
+        }
+        if let Some(o) = side.and_then(|d| d.overrides) {
+            pre.push(Tree { line: o, kids: Vec::new() });
+        }
+        Ok((l, pre))
     }
 
     /// `FunctionDecl::isInlined()`: `inline`, `constexpr`/`consteval` and
-    /// deleted functions are inline, and a redeclaration inherits it.
+    /// deleted functions, and those defined (or defaulted) in their class,
+    /// are inline, and a redeclaration inherits it.
     fn inlined(&self, n: &Json) -> bool {
         let mut cur = Some(n);
         // Bounded by the redeclaration chain; the cap guards a cycle.
@@ -808,13 +1114,29 @@ impl<'a> Printer<'a, '_> {
             if flag(f, "inline") || flag(f, "constexpr") || flag(f, "explicitlyDeleted") {
                 return true;
             }
+            if self.ix.in_class.contains(id(f))
+                && (f.get("explicitlyDefaulted").is_some()
+                    || kids(f).any(|c| kind(c).ends_with("Stmt")))
+            {
+                return true;
+            }
             cur = text(f, "previousDecl").and_then(|p| self.ix.funcs.get(p).copied());
         }
         false
     }
 
+    /// [`decl_head`] for a function or variable. clang also prints `parent`
+    /// on a block-scope `extern` declaration (its semantic context is the
+    /// enclosing namespace); kiln's dump does not model that, so the word is
+    /// dropped there.
+    fn head(&self, n: &Json, class: &str) -> String {
+        let block_scope = self.ix.lexical.get(id(n)).is_some_and(|dc| FN_KINDS.contains(&kind(dc)));
+        let l = decl_head(n, class);
+        if block_scope { l.replacen(" parent", "", 1) } else { l }
+    }
+
     fn var(&mut self, n: &'a Json) -> Res<String> {
-        let mut l = decl_head(n, "VarDecl");
+        let mut l = self.head(n, "VarDecl");
         push_word(&mut l, name(n).ok_or("clang-ast: VarDecl without a name")?);
         push_word(&mut l, &type_pair(n.get("type"), "VarDecl")?);
         push_opt(&mut l, text(n, "storageClass"));
@@ -830,6 +1152,7 @@ impl<'a> Printer<'a, '_> {
                     "c" => "cinit",
                     "call" => "callinit",
                     "list" => "listinit",
+                    "paren-list" => "parenlistinit",
                     _ => return Err(format!("clang-ast: unsupported init style `{init}`")),
                 },
             );
@@ -873,9 +1196,13 @@ fn push_opt(l: &mut String, w: Option<&str>) {
     }
 }
 
-/// `Class [implicit] [used|referenced]`.
+/// `Class [parent] [implicit] [used|referenced]`; `parent` when the
+/// semantic context differs from the lexical one.
 fn decl_head(n: &Json, class: &str) -> String {
     let mut l = String::from(class);
+    if n.get("parentDeclContextId").is_some() {
+        l.push_str(" parent");
+    }
     if flag(n, "isImplicit") {
         l.push_str(" implicit");
     }
@@ -885,6 +1212,41 @@ fn decl_head(n: &Json, class: &str) -> String {
         l.push_str(" referenced");
     }
     l
+}
+
+/// A base-specifier line, `[virtual ]access 'B'[...]` (the semantic
+/// access).
+fn base_line(b: &Json) -> Res<String> {
+    const KEYS: &[&str] = &["access", "writtenAccess", "isVirtual", "type", "isPackExpansion"];
+    if let Some((k, _)) =
+        b.as_obj().into_iter().flatten().find(|(k, _)| !KEYS.contains(&k.as_str()))
+    {
+        return Err(format!("clang-ast: base-specifier attribute `{k}` is not in the mapping"));
+    }
+    let mut l = String::new();
+    if flag(b, "isVirtual") {
+        l.push_str("virtual ");
+    }
+    l.push_str(text(b, "access").ok_or("clang-ast: base-specifier without an access")?);
+    l.push(' ');
+    l.push_str(&type_pair(b.get("type"), "base class")?);
+    if flag(b, "isPackExpansion") {
+        l.push_str("...");
+    }
+    Ok(l)
+}
+
+/// The filter-mode context a declaration opens, if it is one.
+fn ctx_of(n: &Json) -> Option<Ctx> {
+    match kind(n) {
+        "CXXRecordDecl" => Some(name(n).map_or(Ctx::Unnamed, |s| Ctx::Named(s.into()))),
+        "EnumDecl" if n.get("scopedEnumTag").is_some() => {
+            Some(name(n).map_or(Ctx::Unnamed, |s| Ctx::Named(s.into())))
+        }
+        "TranslationUnitDecl" | "EnumDecl" | "LinkageSpecDecl" => Some(Ctx::Transparent),
+        k if FN_KINDS.contains(&k) => Some(Ctx::Function(signature(n))),
+        _ => None,
+    }
 }
 
 /// The qualified name of `nm` declared in `ctx`

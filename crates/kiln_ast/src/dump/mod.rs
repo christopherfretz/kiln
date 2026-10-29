@@ -438,14 +438,16 @@ impl<'a, W: io::Write> Dumper<'a, W> {
             for i in 0..decls.bases(d, &ast.lists).count() {
                 kids.push((Node::Base(d, i as u32), None));
             }
-            if decls.record(d).is_some_and(|r| r.defn.contains(DefinitionBits::FINAL)) {
-                kids.push((Node::Fixed("FinalAttr final"), None));
-            }
         }
         for a in ast.lists.iter::<AttrId>(ast.attrs.of_decl(d)) {
             if self.opts.implicit || ast.attrs.get(a).flags & 1 == 0 {
                 kids.push((Node::Attr(a), None));
             }
+        }
+        // clang adds a class's `FinalAttr` when the definition starts,
+        // after the attributes of its head.
+        if decls.record(d).is_some_and(|r| r.defn.contains(DefinitionBits::FINAL)) {
+            kids.push((Node::Fixed("FinalAttr final"), None));
         }
         if let Some(f) = decls.function(d) {
             if f.spec.is_override() {
