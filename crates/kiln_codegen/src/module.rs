@@ -354,6 +354,53 @@ impl<'a> Cg<'a> {
         (l.size, l.align)
     }
 
+    /// The referee of a reference type.
+    pub fn referee(&self, q: QualType) -> Option<QualType> {
+        match self.ast.types.canonical_view(q) {
+            TypeView::LValueRef(p) | TypeView::RValueRef(p) => Some(p),
+            _ => None,
+        }
+    }
+
+    /// clang `getMinimumObjectSize` and `getNaturalTypeAlignment(T,
+    /// forPointeeType)` of an object reached through a pointer or
+    /// reference: `(dereferenceable bytes, alignment)`, the size `None` for
+    /// an incomplete type (whose alignment is 1). Classes use their
+    /// non-virtual size and alignment.
+    pub fn pointee_layout(&mut self, p: QualType) -> (Option<u64>, u64) {
+        let ast = self.ast;
+        match ast.types.canonical_view(p) {
+            TypeView::Record(d) => match ast.definition(d) {
+                Some(def) => {
+                    let l = self.tys.layouter().record(def);
+                    (Some(l.nv_size.max(1)), u64::from(l.nv_align))
+                }
+                None => (None, 1),
+            },
+            TypeView::IncompleteArray(_) | TypeView::Function(_) => (None, 1),
+            _ if ast.types.is_void(p) => (None, 1),
+            _ => {
+                let (s, a) = self.size_align(p);
+                (Some(s), a)
+            }
+        }
+    }
+
+    /// clang `ConstructAttributeList` for a reference parameter or return:
+    /// `nonnull align A dereferenceable(N)`.
+    fn ref_attrs(&mut self, q: QualType, out: &mut Vec<Attr>) {
+        let Some(p) = self.referee(q) else { return };
+        out.push(Attr::Flag(AttrKind::NonNull));
+        if self.ast.types.is_function(p) {
+            return;
+        }
+        let (size, align) = self.pointee_layout(p);
+        if let Some(n) = size.filter(|&n| n > 0) {
+            out.push(Attr::Dereferenceable(n));
+        }
+        out.push(Attr::Align(align));
+    }
+
     pub fn is_bool(&self, q: QualType) -> bool {
         matches!(self.ast.types.canonical_view(q), TypeView::Builtin(BuiltinType::Bool))
     }
@@ -452,6 +499,7 @@ impl<'a> Cg<'a> {
                 if sig.info.ret.noundef {
                     ret.push(Attr::Flag(AttrKind::NoUndef));
                 }
+                self.ref_attrs(sig.ret, &mut ret);
             }
             ArgKind::Ignore => {}
         }
@@ -460,6 +508,7 @@ impl<'a> Cg<'a> {
             if a.noundef {
                 s.push(Attr::Flag(AttrKind::NoUndef));
             }
+            self.ref_attrs(sig.params[i], &mut s);
             match &a.kind {
                 ArgKind::Extend { signed, .. } => {
                     s.push(Attr::Flag(if *signed { AttrKind::SExt } else { AttrKind::ZExt }));
@@ -570,7 +619,13 @@ impl<'a> Cg<'a> {
     }
 
     /// The function attributes of a definition.
-    pub fn def_fn_attrs(&mut self, is_main: bool, nounwind: bool, mustprogress: bool) -> AttrSetId {
+    pub fn def_fn_attrs(
+        &mut self,
+        is_main: bool,
+        nounwind: bool,
+        mustprogress: bool,
+        vector_width: u64,
+    ) -> AttrSetId {
         let mut a = Vec::new();
         if mustprogress {
             a.push(Attr::Flag(AttrKind::MustProgress));
@@ -586,7 +641,7 @@ impl<'a> Cg<'a> {
         a.push(Attr::UwTable(UwTableKind::Async));
         self.target_attrs(&mut a);
         if self.is_x86() {
-            a.push(Attr::string("min-legal-vector-width", "0"));
+            a.push(Attr::string("min-legal-vector-width", &vector_width.to_string()));
         }
         self.m.attr_set(&a)
     }
@@ -703,22 +758,9 @@ impl<'a> Cg<'a> {
         let v = ast.decls.var(d).expect("var");
         let ty = ast.decls.get(d).ty().expect("var type");
         let loc = Some(ast.decls.get(d).loc());
-        let init = match v.init {
-            None => {
-                let t = self.mty(ty);
-                self.m.const_zero(t)
-            }
-            Some(e) => match self.folds.get(e) {
-                Some(c) => self.const_value(c, ty, Some(e), true)?,
-                None => {
-                    return err(
-                        loc,
-                        "dynamic initialization of a static local is not supported yet (M3)",
-                    );
-                }
-            },
-        };
-        let ity = self.m.const_type(init);
+        // clang `CreateStaticVarDecl`: the global exists (with the memory
+        // type) before its initializer is emitted, so constants the
+        // initializer creates follow it and a self-reference resolves.
         // The discriminator counts earlier static locals of the same name in
         // the same function (emission order is declaration order).
         let key = (mangle::enclosing_function(ast, first), mangle::decl_name(ast, first));
@@ -728,12 +770,10 @@ impl<'a> Cg<'a> {
             *n - 1
         };
         let name = mangle::mangle_static_local(ast, first, index);
-        let g = self.m.add_global(&name, ity);
+        let mt = self.mty(ty);
+        let g = self.m.add_global(&name, mt);
         let align = self.global_align(ty);
         let constant = ast.types.effective_quals(ty).is_const();
-        if let Err(e) = self.m.set_initializer(g, Some(init)) {
-            return err(loc, format!("bad initializer: {e:?}"));
-        }
         let encl = mangle::enclosing_function(ast, first);
         let inline_fn = encl.is_some_and(|f| self.fn_is_inline(f) && !self.fn_internal(f));
         let comdat = if inline_fn { Some(self.m.comdat(&name, ComdatKind::Any)) } else { None };
@@ -748,6 +788,26 @@ impl<'a> Cg<'a> {
             gv.linkage = Linkage::Internal;
         }
         self.static_locals.insert(first, g);
+        // clang `AddInitializerToStaticVarDecl`.
+        let init = match v.init {
+            None => self.m.const_zero(mt),
+            Some(e) => match self.folds.get(e) {
+                Some(c) => self.const_value(c, ty, Some(e), true)?,
+                None => {
+                    return err(
+                        loc,
+                        "dynamic initialization of a static local is not supported yet (M3)",
+                    );
+                }
+            },
+        };
+        let ity = self.m.const_type(init);
+        if ity != mt {
+            self.m.set_global_value_type(g, ity);
+        }
+        if let Err(e) = self.m.set_initializer(g, Some(init)) {
+            return err(loc, format!("bad initializer: {e:?}"));
+        }
         Ok(g)
     }
 
