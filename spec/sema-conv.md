@@ -248,6 +248,7 @@ the target:
 - Access checking of base conversions ([conv.ptr]/3, [class.access.base]).
 - MaterializeTemporaryExpr and reference binding to temporaries.
 - Conversion warnings (§9.3) and fix-its.
+- Overload resolution, user-defined ICS and reference-binding ranking: spec/sema-overload.md.
 
 ## 11. Tests
 All tests are in `crates/kiln_sema/tests/`, are built with `AstBuilder`,

@@ -22,6 +22,7 @@ say which in the PR. A spec change without tests is incomplete.
 | [ast-dump.md](ast-dump.md) | kiln_ast (dump), xtask (`clang-ast`) | design |
 | [abi.md](abi.md) | kiln_abi | implemented (M2: no bases) |
 | [sema-conv.md](sema-conv.md) | kiln_sema (`conv`, `literal`) | implemented |
+| [sema-overload.md](sema-overload.md) | kiln_sema (`overload`) | design (WP-S3O; WP-068a/b) |
 | [llvm.md](llvm.md) | kiln_llvm | implemented |
 | [parse.md](parse.md) | kiln_parse | implemented (M2); M3+ listed |
 | [sema.md](sema.md) | kiln_sema | implemented (M2); M3+ listed |
