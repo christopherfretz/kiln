@@ -825,6 +825,35 @@ diag_ids! {
     // clang: an ExtWarn with no group (kiln prints ExtWarn as -Wpedantic).
     sema_new_paren_array_nonconst = Warning (0) "when type is in parentheses, array cannot have dynamic size";
     sema_placement_new_no_operator = Error (1) "no matching {0} function for non-allocating placement new expression; include <new>";
+    // WP-069: template parsing (spec/sema-templates.md §2).
+    sema_unimplemented_template_feature = Error (1) "kiln: not yet implemented: {0}";
+    parse_missing_typename = Error (1) "missing 'typename' prior to dependent type name '{0}'";
+    parse_missing_dependent_template_kw = Error (1) "use 'template' keyword to treat '{0}' as a dependent template name";
+    parse_fold_operand_not_cast = Error (0) "expression not permitted as operand of fold expression";
+    parse_fold_operator_mismatch = Error (0) "operators in fold expression must be the same";
+    note_fold_operator = Note (0) "previous operator is here";
+    parse_requires_clause_needs_parens = Error (0) "parentheses are required around this expression in a requires clause";
+    parse_concept_has_constraints = Error (0) "concept cannot have associated constraints";
+    parse_concept_legacy_bool = Error (0) "ISO C++ does not permit the 'bool' keyword after 'concept'";
+    sema_extraneous_template_params = Error (0) "extraneous template parameter list in template specialization";
+    sema_template_params_for_non_template = Error (1) "template parameter list matching the non-templated nested type {0} should be empty";
+    sema_template_param_default_redefined = Error (0) "template parameter redefines default argument";
+    note_template_param_prev_default = Note (0) "previous default template argument defined here";
+    sema_function_partial_spec = Error (0) "function template partial specialization is not allowed";
+    sema_template_param_shadow = Error (1) "declaration of {0} shadows template parameter";
+    note_template_param_here = Note (0) "template parameter is declared here";
+    sema_template_param_missing_default = Error (0) "template parameter missing a default argument";
+    note_template_param_has_default = Note (0) "previous default template argument defined here";
+    sema_template_param_pack_not_last = Error (0) "template parameter pack must be the last template parameter";
+    parse_expected_template_param = Error (0) "expected template parameter";
+    sema_no_template_named = Error (1) "no template named '{0}'";
+    sema_template_decl_in_local = Error (0) "templates cannot be declared inside of a local class";
+    sema_template_outside_namespace_or_class = Error (0) "templates can only be declared in namespace or class scope";
+    sema_typename_nested_not_found = Error (2) "no type named '{0}' in {1}";
+    sema_pack_expansion_without_packs = Error (0) "pattern contains no parameter packs";
+    sema_unexpanded_pack = Error (0) "expression contains unexpanded parameter pack";
+    sema_not_a_template = Error (1) "{0} is not a template";
+    parse_template_args_expected_gt = Error (0) "expected '>'";
 }
 
 impl DiagId {

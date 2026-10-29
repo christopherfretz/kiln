@@ -439,6 +439,7 @@ impl AstBuilder<'_> {
         ty: Option<QualType>,
         payload: Payload,
     ) -> DeclId {
+        let h = self.ast.templates.dependent_head(h);
         let d = self.ast.decls.push(
             NewDecl {
                 kind,
