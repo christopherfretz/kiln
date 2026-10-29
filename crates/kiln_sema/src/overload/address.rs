@@ -81,7 +81,9 @@ impl Sema<'_, '_> {
     /// pointer conversion. Non-static members match only a pointer to
     /// member (WP-068a: not yet).
     fn address_matches(&mut self, d: DeclId, fnty: QualType) -> bool {
-        if self.kind_of(d) != DeclKind::Function || self.is_instance_member(d) {
+        if !matches!(self.kind_of(d), DeclKind::Function | DeclKind::CXXMethod)
+            || self.is_instance_member(d)
+        {
             return false;
         }
         if !self.ast.types.is_function(fnty) {

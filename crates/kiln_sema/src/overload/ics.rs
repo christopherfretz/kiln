@@ -225,6 +225,9 @@ impl Sema<'_, '_> {
         if self.ics_is_error(a.ty) || self.ics_is_error(to) {
             return Ics::Standard(StandardConversion::identity(a.ty, to, RefBinding::NONE));
         }
+        if a.ty == QualType::OVERLOAD {
+            return self.overload_set_ics(a, to, opts);
+        }
         if self.ast.types.is_reference(to) {
             return self.ref_ics(a, to, opts);
         }
@@ -254,6 +257,24 @@ impl Sema<'_, '_> {
             Some(s) => Ics::Standard(s),
             None => Ics::bad(BadKind::NoConversion, a.ty, to),
         }
+    }
+
+    /// The conversion sequence of an overload-set argument ([over.ics.scs]
+    /// with [over.over]): that of the function the target selects (an
+    /// lvalue of function type, or its address for `&f`), else none.
+    fn overload_set_ics(&mut self, a: &ArgInfo, to: QualType, opts: IcsOptions) -> Ics {
+        let Some(e) = a.expr else { return Ics::bad(BadKind::NoConversion, a.ty, to) };
+        let Some(d) = self.address_match(e, to) else {
+            return Ics::bad(BadKind::NoConversion, a.ty, to);
+        };
+        let ft = self.ast.decls.get(d).ty().unwrap_or(QualType::ERROR);
+        let addr = self.overload_operand(e).is_some_and(|(_, addr)| addr);
+        let f = if addr {
+            ArgInfo::of_type(self.ast.types.pointer_to(ft), ValueCategory::PRValue)
+        } else {
+            ArgInfo::of_type(ft, ValueCategory::LValue)
+        };
+        self.try_implicit_conversion(&f, to, opts)
     }
 
     /// Reference-relatedness of `t1` (the referee) and `t2`, both

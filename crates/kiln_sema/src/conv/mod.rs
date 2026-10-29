@@ -253,7 +253,7 @@ pub fn decay(s: &mut Sema<'_, '_>, e: ExprId) -> ExprId {
     if s.ast.types.is_dependent(t) {
         return e;
     }
-    if s.check_builtin_fn_use(e) {
+    if s.check_builtin_fn_use(e) || s.check_overload_use(e) {
         let loc = s.eloc(e);
         return s.recover_err(&[e], loc);
     }
@@ -806,6 +806,23 @@ pub fn implicit_convert(
     if s.check_builtin_fn_use(e) {
         let loc = s.eloc(e);
         return Ok(s.recover_err(&[e], loc));
+    }
+    if from == QualType::OVERLOAD {
+        // [over.over]: the target selects the function.
+        let resolved = if ctx == ConvCtx::Condition {
+            s.check_overload_use(e);
+            None
+        } else {
+            let at = s.begin_loc(e);
+            s.resolve_address_of_overloaded(e, to, true, crate::overload::address::AddrCtx::Convert, at)
+        };
+        return match resolved {
+            Some(x) => implicit_convert(s, x, to, ctx),
+            None => {
+                let loc = s.eloc(e);
+                Ok(s.recover_err(&[e], loc))
+            }
+        };
     }
     if s.ast.types.is_reference(to) {
         return bind_reference(s, e, to);

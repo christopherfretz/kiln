@@ -2407,9 +2407,20 @@ impl Sema<'_, '_> {
             Initializer::List(l) if direct => (list_items(l), AutoInit::DirectList, Some(l.lbrace)),
             Initializer::List(l) => (list_items(l), AutoInit::CopyList, Some(l.lbrace)),
         };
-        let fail = match self.deduce_auto(declared, &items, kind) {
-            Ok(t) => return Some(t),
-            Err(f) => f,
+        // [temp.deduct.call]/6: every member of an overload set deduces
+        // `auto`, so nothing is deduced (a placeholder in a function
+        // declarator selecting one member is not implemented).
+        let overload = items
+            .iter()
+            .flatten()
+            .copied()
+            .find(|&e| self.ast.exprs.get(e).ty() == QualType::OVERLOAD);
+        let fail = match overload {
+            Some(e) => AutoFail::Incompatible(e),
+            None => match self.deduce_auto(declared, &items, kind) {
+                Ok(t) => return Some(t),
+                Err(f) => f,
+            },
         };
         let lbrace = lbrace.unwrap_or(loc);
         let name = self.decl_name(v);

@@ -1346,6 +1346,9 @@ impl Sema<'_, '_> {
         if self.is_dependent_overloadable(t0) {
             return self.builder().dependent_unary(op, e, loc);
         }
+        if op != UnaryOp::AddrOf && self.check_overload_use(e) {
+            return self.recover_err(&[e], loc);
+        }
         let bad = |s: &mut Self, e: ExprId| {
             let msg = s.diag(DiagId::sema_invalid_unary_operand, loc).arg(s.ty_arg(t0));
             s.emit(msg);
@@ -1416,6 +1419,16 @@ impl Sema<'_, '_> {
     }
 
     fn address_of(&mut self, e: ExprId, loc: Loc) -> ExprId {
+        if self.overload_operand(e).is_some_and(|(_, addr)| !addr) {
+            // [over.over]: `&f` of an overload set is resolved by its target.
+            return self.builder().unary(
+                UnaryOp::AddrOf,
+                e,
+                QualType::OVERLOAD,
+                loc,
+                ExprFlags::CANNOT_OVERFLOW,
+            );
+        }
         if let Some(mp) = self.member_pointer_of(e, loc) {
             return mp;
         }
@@ -1533,6 +1546,11 @@ impl Sema<'_, '_> {
         }
         if self.expr_is_type_dependent(l) || self.expr_is_type_dependent(r) {
             return self.builder().dependent_binary(op, l, r, loc);
+        }
+        // [over.over]/1: an overload set needs a target; only an
+        // assignment's right operand has one.
+        if self.check_overload_use(l) || (op != BinaryOp::Assign && self.check_overload_use(r)) {
+            return self.recover_err(&[l, r], loc);
         }
         match op {
             BinaryOp::Assign => self.assign(l, r, loc),
@@ -2742,6 +2760,9 @@ impl Sema<'_, '_> {
             self.emit(msg);
             return self.recover_err(&[e], loc);
         }
+        if self.check_overload_use(e) {
+            return self.recover_err(&[e], loc);
+        }
         self.check_unevaluated_side_effects(e);
         let ty = self.ety(e);
         // [expr.sizeof]/1: in C++ an expression of function type is an
@@ -2773,6 +2794,29 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// [over.over]/1: the operand of a cast to `ty` that names an overload
+    /// set resolves to the function `ty` selects; `None` after
+    /// diagnosing.
+    #[inline(never)]
+    fn cast_overload_set(
+        &mut self,
+        style: CastStyle,
+        ty: QualType,
+        e: ExprId,
+        loc: Loc,
+    ) -> Option<ExprId> {
+        use crate::overload::address::AddrCtx;
+        let ctx = match style {
+            CastStyle::Reinterpret => AddrCtx::Reinterpret,
+            CastStyle::Static => AddrCtx::Cast(1),
+            _ if self.ast.types.is_void(ty) => AddrCtx::Cast(0),
+            _ => AddrCtx::Convert,
+        };
+        // clang reports a C-style cast at its type, just after the `(`.
+        let at = if style == CastStyle::CStyle { loc.with_offset(1) } else { loc };
+        self.resolve_address_of_overloaded(e, ty, true, ctx, at)
+    }
+
     /// An explicit type conversion `style<ty>(e)` ([expr.cast],
     /// [expr.static.cast], [expr.reinterpret.cast], [expr.const.cast],
     /// [expr.type.conv]). `loc` is the cast's start, `rparen` its closing
@@ -2796,6 +2840,14 @@ impl Sema<'_, '_> {
         if is_err {
             return self.recover(ty, &[e], loc);
         }
+        let e = if self.ety(e) == QualType::OVERLOAD {
+            match self.cast_overload_set(style, ty, e, loc) {
+                Some(x) => x,
+                None => return self.recover(ty, &[e], loc),
+            }
+        } else {
+            e
+        };
         if self.ast.types.is_reference(ty) {
             self.unsupported("casts to reference types", loc);
             return self.recover_err(&[e], loc);
