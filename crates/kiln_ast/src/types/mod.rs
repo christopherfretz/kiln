@@ -42,5 +42,5 @@ pub use nns::{Nns, NnsKind};
 pub use node::{ConstArray, TypeNode};
 pub use print::{
     PrintOptions, RawNames, TypeNames, aka, dump_strings, print_type, write_arg_list,
-    write_declarator, write_nns, write_type,
+    write_declarator, write_nns, write_template_arg, write_type,
 };

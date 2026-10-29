@@ -8,6 +8,9 @@
 //! the specialization tables (`specs`, `member_specs`, `specializations`,
 //! `instantiated_from`, `member_map`; sema-templates.md §4.1) and their
 //! constructors ([`AstBuilder::class_spec`], [`AstBuilder::member_of_spec`]).
+//! WP-070b adds the partial specialization tables (`partials` with their
+//! [`ArgShape`] prefilters, sema-templates.md §4.4) and
+//! [`AstBuilder::class_partial_spec`].
 
 use kiln_source::Loc;
 use kiln_source::fx::FxHashMap;
@@ -23,7 +26,7 @@ use crate::ids::{ArgListId, DeclId, ExprId, ListId, NnsId, QualType, RawId, Temp
 use crate::mem::{HeapSize, MemReport, MemRow};
 use crate::names::DeclName;
 use crate::slot::ColdMap;
-use crate::types::{ArgView, TemplateArg, TypeFlags};
+use crate::types::{ArgView, TemplateArg, TypeFlags, TypeKind};
 
 /// A template parameter list ([temp.pre]/1): `template < params >
 /// requires-clause?`.
@@ -170,6 +173,83 @@ pub struct MemberSpecInfo {
     pub point_of_instantiation: Loc,
 }
 
+/// The prefilter shape of one argument of a partial specialization
+/// (sema-templates.md §4.4), computed when the partial is declared: a
+/// candidate whose argument does not fit is skipped without deduction.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ArgShape {
+    /// Any argument (a dependent one, or one at or after a pack
+    /// expansion).
+    Any,
+    /// A type whose canonical top level is `kind` with at least the
+    /// qualifier bits `quals` (`T *`, `const T`, `T &`).
+    Type {
+        /// The canonical type class (`None`: any).
+        kind: Option<TypeKind>,
+        /// cv-qualifier bits the argument must carry.
+        quals: u8,
+    },
+    /// Exactly this canonical argument (a non-dependent one).
+    Exact(TemplateArg),
+}
+
+impl ArgShape {
+    /// The shape of canonical partial-specialization argument `a`.
+    fn of(types: &crate::types::TypeContext, a: TemplateArg) -> ArgShape {
+        if !types.arg_flags(a).intersects(TypeFlags::DEPENDENT_INSTANTIATION) {
+            return ArgShape::Exact(a);
+        }
+        let ArgView::Type(q) = a.view() else { return ArgShape::Any };
+        let quals = q.quals_bits();
+        let kind = match types.kind(q.ty()) {
+            k @ (TypeKind::Pointer
+            | TypeKind::LValueRef
+            | TypeKind::RValueRef
+            | TypeKind::MemberPointer
+            | TypeKind::Function) => Some(k),
+            TypeKind::CanonTemplateTypeParm if quals != 0 => None,
+            _ => return ArgShape::Any,
+        };
+        ArgShape::Type { kind, quals }
+    }
+
+    /// Whether canonical argument `a` fits this shape.
+    pub fn admits(self, types: &crate::types::TypeContext, a: TemplateArg) -> bool {
+        match self {
+            ArgShape::Any => true,
+            ArgShape::Exact(x) => x == a,
+            ArgShape::Type { kind, quals } => {
+                let ArgView::Type(q) = a.view() else { return false };
+                q.quals_bits() & quals == quals && kind.is_none_or(|k| types.kind(q.ty()) == k)
+            }
+        }
+    }
+}
+
+/// A class template partial specialization ([temp.spec.partial],
+/// sema-templates.md §4.1): a `CXXRecord` with a
+/// [`TemplLinkKind::PartialSpecialization`] link to this record. It has
+/// no template decl of its own (as clang: `getDescribedClassTemplate` is
+/// null), so [`Ast::described_template`] is `None` for it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PartialSpecInfo {
+    /// The partial specialization's record (its first declaration).
+    pub partial: DeclId,
+    /// The primary template (its first decl).
+    pub template: DeclId,
+    /// The partial's template parameter list.
+    pub params: TemplateParamListId,
+    /// The arguments as written (`X<T *>`).
+    pub args: ArgListId,
+    /// `types.canonical_args(args)`.
+    pub canonical: ArgListId,
+    /// Whether any parameter of the partial is a pack (matching such a
+    /// partial is WP-072).
+    pub has_pack: bool,
+    shapes: u32,
+    shapes_len: u32,
+}
+
 /// Template tables (spec/ast.md §8, M3).
 #[derive(Debug)]
 pub struct TemplateTables {
@@ -212,6 +292,15 @@ pub struct TemplateTables {
     /// `(specialization, pattern member) -> instantiated member`
     /// (`find_instantiated_decl`, sema-templates.md §5.3).
     member_map: FxHashMap<(DeclId, DeclId), DeclId>,
+    /// Partial specializations (§4.4).
+    partials: Vec<PartialSpecInfo>,
+    /// The prefilter shapes of every partial, by `PartialSpecInfo` range.
+    shapes: Vec<ArgShape>,
+    /// Each template's partial specializations in declaration order, by
+    /// first decl of the template.
+    partials_of: FxHashMap<DeclId, Vec<u32>>,
+    /// `(template, canonical args) -> partial` (redeclarations).
+    partial_map: FxHashMap<(DeclId, ArgListId), u32>,
 }
 
 impl Default for TemplateTables {
@@ -251,6 +340,10 @@ impl Default for TemplateTables {
             spec_order: FxHashMap::default(),
             instantiated_from: FxHashMap::default(),
             member_map: FxHashMap::default(),
+            partials: Vec::new(),
+            shapes: Vec::new(),
+            partials_of: FxHashMap::default(),
+            partial_map: FxHashMap::default(),
         }
     }
 }
@@ -348,6 +441,28 @@ impl TemplateTables {
         self.instantiated_from.get(&inst).copied()
     }
 
+    /// Partial specialization record `i`.
+    pub fn partial(&self, i: u32) -> Option<&PartialSpecInfo> {
+        self.partials.get(i as usize)
+    }
+
+    /// The prefilter shapes of partial `p`'s arguments.
+    pub fn partial_shapes(&self, p: &PartialSpecInfo) -> &[ArgShape] {
+        &self.shapes[p.shapes as usize..(p.shapes + p.shapes_len) as usize]
+    }
+
+    /// The partial specializations of `template` (its first decl), in
+    /// declaration order, as indices for [`TemplateTables::partial`].
+    pub fn partials_of(&self, template: DeclId) -> &[u32] {
+        self.partials_of.get(&template).map_or(&[], Vec::as_slice)
+    }
+
+    /// The partial specialization of `template` with canonical arguments
+    /// `canonical`.
+    pub fn find_partial(&self, template: DeclId, canonical: ArgListId) -> Option<u32> {
+        self.partial_map.get(&(template, canonical)).copied()
+    }
+
     /// `h` with `DEPENDENT_CTX` added while inside a template.
     pub(crate) fn dependent_head(&self, mut h: DeclHead) -> DeclHead {
         if self.dependent_depth > 0 {
@@ -380,6 +495,14 @@ impl HeapSize for TemplateTables {
         r.push(row);
         r.push(MemRow::of_map("templ.instantiated_from", &self.instantiated_from));
         r.push(MemRow::of_map("templ.member_map", &self.member_map));
+        r.push(MemRow::of_vec("templ.partials", &self.partials));
+        r.push(MemRow::of_vec("templ.partial_shapes", &self.shapes));
+        let order = self.partials_of.values().map(|v| v.capacity() * 4).sum::<usize>() as u64;
+        let mut row = MemRow::of_map("templ.partials_of", &self.partials_of);
+        row.live_bytes += order;
+        row.reserved_bytes += order;
+        r.push(row);
+        r.push(MemRow::of_map("templ.partial_map", &self.partial_map));
         r
     }
 }
@@ -478,6 +601,17 @@ impl Ast {
                 self.templates.member_spec(i).map(|s| s.instantiated_from)
             }
             _ => self.templates.instantiated_from_map(d),
+        }
+    }
+
+    /// The partial specialization record of `d` with its index, when `d`
+    /// is (a declaration of) a class template partial specialization.
+    pub fn partial_spec_info(&self, d: DeclId) -> Option<(u32, &PartialSpecInfo)> {
+        match self.templ_link(d).get() {
+            Some((TemplLinkKind::PartialSpecialization, i)) => {
+                Some((i, self.templates.partial(i)?))
+            }
+            _ => None,
         }
     }
 
@@ -750,6 +884,10 @@ impl AstBuilder<'_> {
         self.ast.templates.dependent_depth = depth;
         debug_assert_eq!(d, d2);
         let _ = self.ast.decls.set_templ(pattern, TemplLink::new(TemplLinkKind::Pattern, i));
+        if self.ast.decls.get(d).has(DeclFlags::DEPENDENT_CTX) {
+            let first = prev.map_or(d, |p| self.ast.first(p));
+            self.ast.types.mark_dependent_template(first);
+        }
         d
     }
 
@@ -821,6 +959,219 @@ impl AstBuilder<'_> {
         let _ = self.ast.templates.specializations.insert((tmpl, canonical), d);
         self.ast.templates.spec_order.entry(tmpl).or_default().push(d);
         d
+    }
+
+    /// The class template partial specialization `template<params> class
+    /// X<args>` ([temp.spec.partial], sema-templates.md §4.1): a
+    /// `CXXRecord` named like the primary `template`, in its semantic
+    /// context, a member of `h.lexical` but not a name, with a
+    /// [`TemplLinkKind::PartialSpecialization`] link to its
+    /// [`PartialSpecInfo`]. The argument shapes of the
+    /// matching prefilter (§4.4) are computed here. The caller has probed
+    /// [`TemplateTables::find_partial`] first.
+    pub fn class_partial_spec(
+        &mut self,
+        h: DeclHead,
+        template: DeclId,
+        params: TemplateParamListId,
+        args: ArgListId,
+        tag: crate::decl::TagKind,
+    ) -> DeclId {
+        let tmpl = self.ast.first(template);
+        let canonical = self.ast.types.canonical_args(args);
+        let i = self.ast.templates.partials.len() as u32;
+        let d = self.ast.decls.next_id();
+        let ty = QualType::unqual(self.ast.types.record_type(d));
+        let redecl = crate::decl::Redecl { prev: None, group: self.ast.redecls.new_group(d) };
+        let payload = Payload::Record(crate::decl::RecordData {
+            redecl,
+            members: Members::default(),
+            bases: ListId::EMPTY,
+            defn: crate::decl::DefinitionBits::empty(),
+            templ: TemplLink::new(TemplLinkKind::PartialSpecialization, i),
+            lambda: None,
+            tag,
+        });
+        let d2 =
+            self.add_partial(h, tmpl, params, args, canonical, DeclKind::CXXRecord, ty, payload);
+        debug_assert_eq!(d, d2);
+        d
+    }
+
+    /// Pushes partial specialization decl `payload` (whose
+    /// [`TemplLinkKind::PartialSpecialization`] link is the next
+    /// [`PartialSpecInfo`]), appends it to its lexical member list, and
+    /// registers it with the matching prefilter shapes (§4.4).
+    #[allow(clippy::too_many_arguments)]
+    fn add_partial(
+        &mut self,
+        h: DeclHead,
+        tmpl: DeclId,
+        params: TemplateParamListId,
+        args: ArgListId,
+        canonical: ArgListId,
+        kind: DeclKind,
+        ty: QualType,
+        payload: Payload,
+    ) -> DeclId {
+        let i = self.ast.templates.partials.len() as u32;
+        let lexical = h.lexical.unwrap_or(h.ctx);
+        let d = self.add_pattern(h, kind, Some(ty), payload);
+        if self.ast.decls.member_list(lexical).is_some() {
+            self.ast.decls.append_member(lexical, d);
+        }
+        let first = self.ast.templates.shapes.len() as u32;
+        let mut after_pack = false;
+        for &a in self.ast.types.args(canonical) {
+            let pack = match a.view() {
+                ArgView::Type(q) => self.ast.types.kind(q.ty()) == TypeKind::PackExpansion,
+                ArgView::TemplateExpansion { .. } | ArgView::Pack(_) => true,
+                _ => false,
+            } || self.ast.types.arg_flags(a).contains(TypeFlags::UNEXPANDED_PACK);
+            after_pack |= pack;
+            let shape = if after_pack { ArgShape::Any } else { ArgShape::of(&self.ast.types, a) };
+            self.ast.templates.shapes.push(shape);
+        }
+        let len = self.ast.templates.shapes.len() as u32 - first;
+        let plist = self.ast.templates.param_list(params).params;
+        let has_pack = self
+            .ast
+            .lists
+            .iter::<DeclId>(plist)
+            .any(|p| self.ast.template_parm(p).is_some_and(|i| i.pack));
+        self.ast.templates.partials.push(PartialSpecInfo {
+            partial: d,
+            template: tmpl,
+            params,
+            args,
+            canonical,
+            has_pack,
+            shapes: first,
+            shapes_len: len,
+        });
+        self.ast.templates.partials_of.entry(tmpl).or_default().push(i);
+        let _ = self.ast.templates.partial_map.insert((tmpl, canonical), i);
+        d
+    }
+
+    /// The specialization `v<args>` of variable template `template`
+    /// ([temp.spec], sema-templates.md §4.7, clang's
+    /// `VarTemplateSpecializationDecl`): a `Var` with a
+    /// [`TemplLink::Specialization`] link (`SpecKind::Undeclared`) and
+    /// declared type `ty`, in the template's semantic context but neither
+    /// a member nor a name. `canonical` is `types.canonical_args(args)`;
+    /// the caller has probed [`TemplateTables::find_spec`] first.
+    pub fn var_spec(
+        &mut self,
+        template: DeclId,
+        args: ArgListId,
+        canonical: ArgListId,
+        ty: QualType,
+        spec: crate::decl::VarSpec,
+    ) -> DeclId {
+        let tmpl = self.ast.first(template);
+        let n = *self.ast.decls.get(tmpl);
+        let ctx = n.ctx().unwrap_or(self.ast.tu);
+        let mut h = DeclHead::new(ctx, n.name(), n.loc());
+        h.misc = n.misc();
+        let i = self.ast.templates.specs.len() as u32;
+        let d = self.ast.decls.next_id();
+        let redecl = crate::decl::Redecl { prev: None, group: self.ast.redecls.new_group(d) };
+        let payload = Payload::Var(crate::decl::VarData {
+            redecl,
+            init: None,
+            spec,
+            eval: crate::decl::VarEval::default(),
+            templ: TemplLink::new(TemplLinkKind::Specialization, i),
+        });
+        let depth = std::mem::take(&mut self.ast.templates.dependent_depth);
+        let d2 = self.add_pattern(h, DeclKind::Var, Some(ty), payload);
+        self.ast.templates.dependent_depth = depth;
+        debug_assert_eq!(d, d2);
+        self.ast.templates.specs.push(SpecInfo {
+            template: tmpl,
+            args,
+            kind: SpecKind::Undeclared,
+            from: tmpl,
+            from_args: None,
+            point_of_instantiation: Loc::INVALID,
+            print_args: args,
+        });
+        let _ = self.ast.templates.specializations.insert((tmpl, canonical), d);
+        self.ast.templates.spec_order.entry(tmpl).or_default().push(d);
+        d
+    }
+
+    /// The variable template partial specialization `template<params> T
+    /// v<args>` ([temp.spec.partial], clang's
+    /// `VarTemplatePartialSpecializationDecl`): a `Var` named like the
+    /// primary `template`, otherwise as [`AstBuilder::class_partial_spec`].
+    pub fn var_partial_spec(
+        &mut self,
+        h: DeclHead,
+        template: DeclId,
+        params: TemplateParamListId,
+        args: ArgListId,
+        ty: QualType,
+        spec: crate::decl::VarSpec,
+    ) -> DeclId {
+        let tmpl = self.ast.first(template);
+        let canonical = self.ast.types.canonical_args(args);
+        let i = self.ast.templates.partials.len() as u32;
+        let d = self.ast.decls.next_id();
+        let redecl = crate::decl::Redecl { prev: None, group: self.ast.redecls.new_group(d) };
+        let payload = Payload::Var(crate::decl::VarData {
+            redecl,
+            init: None,
+            spec,
+            eval: crate::decl::VarEval::default(),
+            templ: TemplLink::new(TemplLinkKind::PartialSpecialization, i),
+        });
+        self.add_partial(h, tmpl, params, args, canonical, DeclKind::Var, ty, payload)
+    }
+
+    /// Appends implicit variable template specialization `spec`,
+    /// instantiated from `pattern` (the primary's variable or a partial
+    /// specialization), to the member list of the pattern's lexical
+    /// context: clang lists it there, after the decls present when it is
+    /// first referenced (spec/ast-dump.md §5), and locates it at the
+    /// pattern.
+    pub fn list_implicit_spec(&mut self, spec: DeclId, pattern: DeclId) {
+        let p = *self.ast.decls.get(pattern);
+        self.ast.decls.set_loc(spec, p.loc());
+        let ctx = self.ast.decls.get(spec).ctx().unwrap_or(self.ast.tu);
+        let lexical = self.ast.decls.lexical_ctx(pattern).unwrap_or(ctx);
+        // The primary's variable sits in its `VarTemplateDecl`.
+        let lexical = if self.ast.decls.get(lexical).kind() == DeclKind::VarTemplate {
+            self.ast.decls.lexical_ctx(lexical).unwrap_or(ctx)
+        } else {
+            lexical
+        };
+        if lexical != ctx {
+            let _ = self.ast.decls.set_lexical_ctx(spec, lexical);
+        }
+        if self.ast.decls.member_list(lexical).is_some() {
+            self.ast.decls.append_member(lexical, spec);
+        }
+    }
+
+    /// Marks specialization `spec` as declared in lexical context
+    /// `lexical` (an explicit specialization or instantiation, which
+    /// clang lists among the decls of the context it appears in;
+    /// spec/ast-dump.md §5). Called once per specialization, when it
+    /// first becomes explicit (from `Undeclared` or
+    /// `ImplicitInstantiation`); implicit specializations are in no member
+    /// list. The specialization is then located at `loc` (its name in the
+    /// explicit declaration).
+    pub fn declare_spec_in(&mut self, spec: DeclId, lexical: DeclId, loc: Loc) {
+        self.ast.decls.set_loc(spec, loc);
+        let ctx = self.ast.decls.get(spec).ctx().unwrap_or(self.ast.tu);
+        if lexical != ctx && !self.ast.decls.get(spec).has(DeclFlags::HAS_LEXICAL_CTX) {
+            let _ = self.ast.decls.set_lexical_ctx(spec, lexical);
+        }
+        if self.ast.decls.member_list(lexical).is_some() {
+            self.ast.decls.append_member(lexical, spec);
+        }
     }
 
     /// Links `member`, a member of a class template specialization, to the
@@ -956,8 +1307,25 @@ impl AstBuilder<'_> {
         targs: Option<ArgListId>,
         loc: Loc,
     ) -> ExprId {
+        self.unresolved_lookup_in(name, decls, adl, nns, targs, false, loc)
+    }
+
+    /// [`Self::unresolved_lookup`]; `dependent` for a name that is
+    /// type-dependent itself (a member template of the current
+    /// instantiation, [temp.dep.expr]/3).
+    #[allow(clippy::too_many_arguments, reason = "the lookup fields")]
+    pub fn unresolved_lookup_in(
+        &mut self,
+        name: Symbol,
+        decls: &[DeclId],
+        adl: bool,
+        nns: Option<NnsId>,
+        targs: Option<ArgListId>,
+        dependent: bool,
+        loc: Loc,
+    ) -> ExprId {
         let list = self.ast.lists.push(decls);
-        let deps = self.targs_deps(targs);
+        let deps = self.targs_deps(targs) | if dependent { DEP_ALL } else { ExprDeps::NONE };
         let deps = if deps.intersects(ExprDeps::VALUE) { deps | DEP_ALL } else { deps };
         let deps = deps | nns_deps(self, nns);
         // clang's `OverloadExpr`: a type-dependent name (dependent explicit

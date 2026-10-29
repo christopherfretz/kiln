@@ -60,10 +60,10 @@ impl Substituter<'_, '_, '_> {
                 let Some(info) = self.sema.ast.template_parm(d).copied() else {
                     return Err(SubstFail);
                 };
-                self.type_parm(q, info.depth, info.index, loc)
+                self.type_parm(q, Some(d), info.depth, info.index, loc)
             }
             TypeView::CanonTemplateTypeParm { depth, index, .. } => {
-                self.type_parm(q, depth as u16, index as u16, loc)
+                self.type_parm(q, None, depth as u16, index as u16, loc)
             }
             TypeView::SubstTemplateTypeParm { replacement, associated, index, pack_index } => {
                 let r = self.ty(replacement, loc)?;
@@ -258,8 +258,37 @@ impl Substituter<'_, '_, '_> {
                 let e = self.ty(e, loc)?;
                 Ok(self.sema.ast.types.complex(e))
             }
-            TypeView::DependentTemplateSpecialization { .. } => {
-                self.unimplemented("dependent template specialization type", loc)
+            TypeView::DependentTemplateSpecialization { keyword, nns, name, args } => {
+                let n = self.nns(nns, loc)?;
+                let args = self.args(args, loc)?;
+                if let Nns::Type { ty, .. } = self.sema.ast.types.nns_view(n)
+                    && self.sema.is_dependent_type(ty)
+                {
+                    return Ok(self
+                        .sema
+                        .ast
+                        .types
+                        .dependent_template_specialization(keyword, n, name, args));
+                }
+                // `T::template X<args>` ([temp.names]/5): the member
+                // template of the substituted class.
+                let d = self.member_template_named(n, name, loc)?;
+                let underlying = self.sema.template_name_for(d);
+                let tn =
+                    self.sema.ast.types.template_name(kiln_ast::types::TemplateName::Qualified {
+                        nns: n,
+                        template_kw: true,
+                        underlying,
+                    });
+                let v = self.sema.ast.types.args(args).to_vec();
+                let Ok(TemplateIdRef::Type(t)) = self.sema.act_template_id(tn, &v, loc, loc) else {
+                    return Err(SubstFail);
+                };
+                let named = match self.sema.ast.types.view(t.ty()) {
+                    TypeView::Elaborated { nns: None, named, .. } => named,
+                    _ => t,
+                };
+                Ok(self.sema.ast.types.elaborated(keyword, Some(n), named))
             }
             TypeView::PackExpansion { .. } | TypeView::PackIndexing { .. } => {
                 self.unimplemented("pack expansion", loc)
@@ -273,6 +302,7 @@ impl Substituter<'_, '_, '_> {
     fn type_parm(
         &mut self,
         q: QualType,
+        decl: Option<DeclId>,
         depth: u16,
         index: u16,
         loc: Loc,
@@ -290,9 +320,64 @@ impl Substituter<'_, '_, '_> {
                 ))
             }
             ArgLookup::Retain(d) if d == depth => Ok(q),
-            ArgLookup::Retain(_) => self.unimplemented("member templates", loc),
+            // A parameter of a member template redeclared one level
+            // shallower ([temp.mem]; §4.6): its new declaration.
+            ArgLookup::Retain(d) => {
+                if let Some(p) = decl
+                    && let Ok(np) = self.find_instantiated_decl(p, loc)
+                    && np != p
+                    && let Some(t) = self.sema.ast.decls.get(np).ty()
+                {
+                    return Ok(QualType::new(t.ty(), q.quals_bits() | t.quals_bits()));
+                }
+                let pack =
+                    matches!(
+                        self.sema.ast.types.view(q.ty()),
+                        TypeView::CanonTemplateTypeParm { pack: true, .. }
+                    ) || decl.and_then(|p| self.sema.ast.template_parm(p)).is_some_and(|i| i.pack);
+                let t = self.sema.ast.types.canon_template_type_parm(
+                    u32::from(d),
+                    u32::from(index),
+                    pack,
+                );
+                Ok(QualType::new(t, q.quals_bits()))
+            }
             ArgLookup::Missing => Err(SubstFail),
         }
+    }
+
+    /// The member template `name` of the context `n` names after
+    /// substitution (`T::template X`, [temp.names]/5); diagnosed when
+    /// there is none or it is not a template.
+    pub(crate) fn member_template_named(
+        &mut self,
+        n: kiln_ast::ids::NnsId,
+        name: kiln_source::symbol::Symbol,
+        loc: Loc,
+    ) -> SubstResult<DeclId> {
+        let ctx = self.nns_context(n, loc)?;
+        let found = self.sema.lookup_qualified(ctx, name, LookupKind::Ordinary);
+        let Some(&d) = found.decls.first() else {
+            let d = self
+                .sema
+                .diag(DiagId::sema_no_member, loc)
+                .arg(crate::decl::sym_str(self.sema, name))
+                .arg(self.ctx_arg(ctx));
+            self.sema.emit(d);
+            return Err(SubstFail);
+        };
+        if let Some(t) = self.sema.template_of(d) {
+            return Ok(t);
+        }
+        let at = self.sema.ast.decls.get(d).loc();
+        let note = self.sema.diag(DiagId::note_declared_non_template, at);
+        let d = self
+            .sema
+            .diag(DiagId::sema_template_kw_refers_to_non_template, loc)
+            .arg(crate::decl::sym_str(self.sema, name))
+            .with_note(note);
+        self.sema.emit(d);
+        Err(SubstFail)
     }
 
     /// A context for diagnostics: `'X<int>'` or `namespace 'n'`.

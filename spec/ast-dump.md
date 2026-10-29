@@ -359,7 +359,7 @@ dependent types print with the parameter names (sugar), and
 
 **Templates as written (landed, WP-069).** The lines below are normative;
 specializations other than implicit class instantiations remain the
-sketch above (WP-070b/071/072).
+sketch above (WP-071/072).
 - `ClassTemplateDecl` / `FunctionTemplateDecl` / `VarTemplateDecl` /
   `TypeAliasTemplateDecl` `<name>`. The children are the parameters,
   then the pattern (`CXXRecordDecl`, `FunctionDecl`, `VarDecl`,
@@ -430,6 +430,50 @@ Known gaps:
   they differ (`'Arr<1 + 4>':'Arr<5>'`), and canonical argument lists
   omit defaulted arguments as clang 19 does.
 
+**Specializations of class and variable templates (landed, WP-070b).**
+Normative. The order and placement are clang 19's.
+- An implicit instantiation prints its full tree under its template
+  (`ClassTemplateDecl` or `VarTemplateDecl`), after the pattern, in
+  creation order.
+- An explicit specialization, explicit instantiation or partial
+  specialization prints its full tree at its own position in its
+  enclosing context. Its template then holds a reference line in its
+  place:
+  - `ClassTemplateSpecialization '<name>'`;
+  - `VarTemplateSpecialization '<name>' '<type>'`.
+- A `VarTemplateSpecializationDecl` that clang prints at a top-level
+  position (after the first declaration that uses it) is also printed
+  there in full.
+- `ClassTemplateSpecializationDecl <tag> <name> [definition]
+  <kind>`. The kinds are `implicit_instantiation`,
+  `explicit_specialization`, `explicit_instantiation_definition` and
+  `explicit_instantiation_declaration`.
+- `ClassTemplatePartialSpecializationDecl <tag> <name> [definition]
+  explicit_specialization`. Its children are the written arguments as
+  `TemplateArgument` lines, in canonical spelling
+  (`type 'type-parameter-0-0 *'`), then its template parameters, then
+  its members.
+- `VarTemplateSpecializationDecl [used|referenced] <name> '<type>'
+  <kind> [constexpr] [cinit] [value=…]`. Its children are the
+  `TemplateArgument` lines, then the initializer.
+- `VarTemplatePartialSpecializationDecl <name> '<type>'
+  explicit_specialization …`. Its children are its template
+  parameters, then its `TemplateArgument` lines, then the initializer.
+  This is the opposite order to the class form, as in clang.
+- A reference to a variable template specialization is `DeclRefExpr …
+  VarTemplateSpecialization '<name>' '<type>' (VarTemplate '<name>')`.
+- Member templates of a class specialization (`ClassTemplateDecl`,
+  `TypeAliasTemplateDecl`) print under the instantiated class. Their
+  parameters are renumbered to the remaining depth. A member class
+  template that is not instantiated prints its pattern without
+  `definition`. Its specializations print under it.
+
+Known gaps:
+- A partial specialization of a `constexpr` variable template cannot
+  be compared, because clang's JSON lacks its value.
+- Explicit specializations of members of an implicit specialization are
+  not implemented (spec/sema-templates.md §11.2, WP-070b).
+
 ## 6. Differential testing against clang
 `cargo xtask clang-ast <file> [--compiler=] [--std=] [--implicit]
 [--all-files] [--filter=<substr>] [-- <clang args>]` prints clang's AST of
@@ -495,14 +539,12 @@ between kiln and the tool is a real difference. Known-divergent constructs
 are rejected in the table, never patched in goldens by hand.
 
 Rejected by the table:
-- Template specializations other than the implicit instantiation of a
-  non-variadic class template with type and integral arguments
-  (`ClassTemplatePartialSpecializationDecl`, explicit specializations,
-  `VarTemplate[Partial]SpecializationDecl`, `CXXDeductionGuideDecl`,
-  and a `TemplateArgument` outside the template nodes that print
-  theirs): WP-070b/071/072. Implicit `ClassTemplateSpecializationDecl`s
-  under their `ClassTemplateDecl` and `SubstNonTypeTemplateParmExpr`
-  are compared (§5, WP-070a).
+- Function template specializations, variadic specializations,
+  `CXXDeductionGuideDecl`, and a `TemplateArgument` outside the
+  template nodes that print theirs: WP-071/072. Class and variable
+  template specializations (implicit, explicit and partial), their
+  reference lines and `SubstNonTypeTemplateParmExpr` are compared (§5;
+  WP-070a, WP-070b).
 - `UnresolvedMemberExpr` (member function template names).
 - `ImplicitConceptSpecializationDecl` is dropped. These are clang's
   converted concept arguments; the written ones are the

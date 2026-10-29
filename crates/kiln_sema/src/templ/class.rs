@@ -179,7 +179,7 @@ impl Sema<'_, '_> {
     /// default (clang's `SuppressDefaultTemplateArgs`): the arguments a
     /// specialization's name prints with. The first `written` came from
     /// the source; a default is recomputed for those silently (SFINAE).
-    fn suppress_default_args(
+    pub(crate) fn suppress_default_args(
         &mut self,
         tmpl: DeclId,
         args: ArgListId,
@@ -323,7 +323,7 @@ impl Sema<'_, '_> {
 
     /// The class template specialization, or member class of one, that
     /// `q` names (through sugar and arrays), if any and not yet defined.
-    fn undefined_spec(&self, q: QualType) -> Option<DeclId> {
+    pub(crate) fn undefined_spec(&self, q: QualType) -> Option<DeclId> {
         let mut t = q;
         while let Some(e) = self.ast.types.element(t) {
             if !self.ast.types.is_array(t) {
@@ -375,10 +375,66 @@ impl Sema<'_, '_> {
     pub(crate) fn spec_args(&self, spec: DeclId) -> Option<(DeclId, MultiLevelArgs)> {
         let (_, info) = self.ast.spec_info(spec)?;
         let tmpl = info.template;
-        let depth = self.template_param_depth(tmpl);
-        let mut args = Self::outer_levels(tmpl, depth);
-        args.push(info.args, tmpl, LevelMode::Substitute);
+        let mut args = self.base_levels(tmpl);
+        // Instantiated from a partial specialization: its deduced
+        // arguments ([temp.spec.partial.match]/2, [temp.inst]/2).
+        match (info.from_args, self.ast.partial_spec_info(info.from)) {
+            (Some(a), Some((_, p))) => args.push(a, p.partial, LevelMode::Substitute),
+            _ => args.push(info.args, tmpl, LevelMode::Substitute),
+        }
         Some((tmpl, args))
+    }
+
+    /// The template whose pattern instantiates the specializations of
+    /// `tmpl`: the member template of a class template `tmpl` was
+    /// instantiated from ([temp.mem]; its pattern is never substituted
+    /// on its own, as clang's `getTemplateInstantiationPattern`), else
+    /// `tmpl`.
+    pub(crate) fn inst_template(&self, tmpl: DeclId) -> DeclId {
+        self.ast
+            .templates
+            .instantiated_from_map(tmpl)
+            .filter(|&t| kiln_ast::templates::is_template_kind(self.kind_of(t)))
+            .unwrap_or(tmpl)
+    }
+
+    /// The argument levels enclosing `tmpl`'s own parameters: those of
+    /// the specialization `tmpl` is a member of when it is an
+    /// instantiated member template ([temp.mem]), else retained.
+    pub(crate) fn base_levels(&self, tmpl: DeclId) -> MultiLevelArgs {
+        if self.inst_template(tmpl) != tmpl {
+            let mut c = self.ast.decls.get(tmpl).ctx();
+            while let Some(x) = c.filter(|&x| self.kind_of(x) == DeclKind::CXXRecord) {
+                if let Some((_, a)) = self.spec_args(x) {
+                    return a;
+                }
+                c = self.ast.decls.get(x).ctx();
+            }
+        }
+        Self::outer_levels(tmpl, self.template_param_depth(tmpl))
+    }
+
+    /// The instantiated classes from `x` outwards (stopping at the first
+    /// context that is not a class), each paired with the pattern class
+    /// it was instantiated from: member lookups into the patterns go to
+    /// the instantiations (§5.6).
+    pub(crate) fn inst_context_pairs(&self, x: DeclId) -> Vec<(DeclId, DeclId)> {
+        let mut out = Vec::new();
+        let mut c = Some(x);
+        while let Some(r) = c.filter(|&r| self.kind_of(r) == DeclKind::CXXRecord) {
+            let p = match self.ast.spec_info(r) {
+                Some((_, s)) => self.spec_pattern_class(r, s.template),
+                None => self.ast.instantiated_from(r),
+            };
+            if let Some(p) = p {
+                out.push((p, r));
+            }
+            if out.len() > 1024 {
+                break;
+            }
+            c = self.ast.decls.get(r).ctx();
+        }
+        out
     }
 
     /// Instantiates the definition of class template specialization
@@ -396,21 +452,50 @@ impl Sema<'_, '_> {
         if self.ast.spec_info(spec).is_none() {
             return self.instantiate_member_class(spec, poi);
         }
-        let Some((tmpl, args)) = self.spec_args(spec) else { return false };
-        // [temp.spec.partial.match]: partial specializations are not
-        // matched yet (WP-070b) — the primary template is used.
-        if let Some((_, info)) = self.ast.spec_info(spec) {
-            let written = info.args;
-            let _ = self.match_partial_specs(tmpl, written, poi);
+        let Some((tmpl, mut args)) = self.spec_args(spec) else { return false };
+        let kind = self.ast.spec_info(spec).map(|(_, s)| s.kind);
+        if self.ast.decls.get(spec).has(DeclFlags::INVALID) {
+            self.inst.undefined_diagnosed.set(Some(spec));
+            return false;
         }
-        let Some(pattern) = self.ast.template_info(tmpl).and_then(|i| i.pattern) else {
+        if kind == Some(SpecKind::ExplicitSpecialization) {
+            // Declared, never defined ([temp.expl.spec]/1): the caller
+            // reports the incomplete type.
+            self.inst.undefined_diagnosed.set(None);
+            return false;
+        }
+        // [temp.spec.partial.match]: the most specialized matching
+        // partial specialization, else the primary template.
+        let Ok(matched) = self.match_partial_specs(tmpl, spec, poi) else {
+            self.ast.decls.set_flags(spec, DeclFlags::INVALID);
+            self.inst.undefined_diagnosed.set(Some(spec));
+            return false;
+        };
+        let pattern = match matched {
+            Some(m) => {
+                args = self.base_levels(tmpl);
+                args.push(m.args, m.partial, LevelMode::Substitute);
+                Some(m.partial)
+            }
+            None => self.pattern_of(self.inst_template(tmpl)),
+        };
+        let Some(pattern) = pattern else {
             return false;
         };
         let Some(def) = self.ast.definition(pattern) else {
+            if let Some(m) = matched
+                && let Some((i, _)) = self.ast.spec_info(spec)
+            {
+                // Remembered for the explicit-instantiation diagnostic.
+                self.ast.templates.update_spec(i, |s| {
+                    s.from = m.partial;
+                    s.from_args = Some(m.args);
+                });
+            }
             if diagnose {
                 let t = self.tag_type(spec);
-                let note =
-                    self.diag(DiagId::note_template_decl_here, self.ast.decls.get(tmpl).loc());
+                let at = if matched.is_some() { pattern } else { tmpl };
+                let note = self.diag(DiagId::note_template_decl_here, self.ast.decls.get(at).loc());
                 let d = self
                     .diag(DiagId::sema_template_implicit_instantiate_undefined, poi)
                     .arg(self.ty_str(t))
@@ -426,14 +511,21 @@ impl Sema<'_, '_> {
             return false;
         }
         if let Some((i, _)) = self.ast.spec_info(spec) {
+            let from_args = matched.map(|m| m.args);
             self.ast.templates.update_spec(i, |s| {
-                s.kind = SpecKind::ImplicitInstantiation;
+                if s.kind == SpecKind::Undeclared {
+                    s.kind = SpecKind::ImplicitInstantiation;
+                }
                 s.from = def;
-                s.point_of_instantiation = poi;
+                s.from_args = from_args;
+                if s.point_of_instantiation == Loc::INVALID {
+                    s.point_of_instantiation = poi;
+                }
             });
         }
         let parent = self.ast.decls.get(spec).ctx().unwrap_or(self.ast.tu);
-        self.in_inst_context(parent, |s| s.instantiate_class_body(spec, def, &args, &[]));
+        let outer = self.inst_context_pairs(parent);
+        self.in_inst_context(parent, |s| s.instantiate_class_body(spec, def, &args, &outer));
         self.pop_inst_frame();
         self.ast.definition(spec).is_some()
     }
@@ -484,18 +576,8 @@ impl Sema<'_, '_> {
         self.act_on_start_record_definition(spec);
         let mut sub = Substituter::new(self, args);
         sub.entity = Some(spec);
-        for &(p, x) in outer.iter().rev() {
-            sub.map_context(p, x);
-            let first = sub.sema.ast.first(p);
-            if first != p {
-                sub.map_context(first, x);
-            }
-        }
-        sub.map_context(def, spec);
-        let first = sub.sema.ast.first(def);
-        if first != def {
-            sub.map_context(first, spec);
-        }
+        sub.map_contexts(outer);
+        sub.map_contexts(&[(def, spec)]);
         // Base classes ([temp.inst]/3: the base-clause is instantiated
         // with the class).
         let bases: Vec<kiln_ast::decl::BaseSpec> =
@@ -579,12 +661,11 @@ impl Sema<'_, '_> {
         // (a friend: the class that declared it).
         let Some(spec) = self.inst_owner(f) else { return };
         let Some((tmpl, args)) = self.spec_args(spec) else { return };
-        let Some(pclass) = self
-            .ast
-            .definition(self.ast.template_info(tmpl).and_then(|i| i.pattern).unwrap_or(spec))
-        else {
-            return;
-        };
+        let Some(pclass) = self.spec_pattern_class(spec, tmpl) else { return };
+        let mut pairs = self.inst_context_pairs(spec);
+        if pairs.first().is_none_or(|&(_, x)| x != spec) {
+            pairs.insert(0, (pclass, spec));
+        }
         if !self.push_inst_frame(FrameKind::MemberFunction, f, pattern, poi) {
             return;
         }
@@ -621,11 +702,7 @@ impl Sema<'_, '_> {
             }
             let mut sub = Substituter::new(s, &args);
             sub.entity = Some(spec);
-            sub.map_context(pclass, spec);
-            let first = sub.sema.ast.first(pclass);
-            if first != pclass {
-                sub.map_context(first, spec);
-            }
+            sub.map_contexts(&pairs);
             for (a, b) in pp.into_iter().zip(fp) {
                 sub.locals.insert(a, crate::templ::subst::DeclOrPack::Decl(b));
             }
@@ -639,22 +716,100 @@ impl Sema<'_, '_> {
     /// specialization whose initializer was deferred gets it now
     /// ([temp.inst]/4; clang instantiates at the reference, before the
     /// value is needed). An unevaluated reference instantiates only a
-    /// variable usable in constant expressions.
+    /// variable usable in constant expressions. The out-of-line
+    /// definition of a non-inline one is instantiated here when the
+    /// variable may be usable in constant expressions, else at the end
+    /// of the translation unit ([temp.point]/7, as clang).
     pub(crate) fn note_var_referenced(&mut self, v: DeclId, loc: Loc) {
-        if !self.inst.deferred_inits.contains(&v) {
+        let deferred = self.inst.deferred_inits.contains(&v);
+        if !deferred && !self.inst.member_defs.contains(&v) {
             return;
         }
-        let constant = self.ast.decls.var(v).is_some_and(|x| x.spec.is_constexpr())
-            || self
-                .ast
-                .decls
-                .get(v)
-                .ty()
-                .is_some_and(|t| self.ast.types.effective_quals(t).is_const());
+        let constant = self.might_be_constant_var(v);
         if self.unevaluated > 0 && !constant {
             return;
         }
-        self.instantiate_static_member_init(v, loc);
+        if deferred {
+            self.instantiate_static_member_init(v, loc);
+        } else if constant {
+            self.instantiate_static_member_def(v, loc);
+        } else {
+            self.queue_instantiation(v, loc);
+        }
+    }
+
+    /// clang's `mightBeUsableInConstantExpressions`: `constexpr`, or a
+    /// `const` non-volatile integral, enumeration or reference variable
+    /// ([expr.const]/4, before its initializer is known).
+    fn might_be_constant_var(&self, v: DeclId) -> bool {
+        if self.ast.decls.var(v).is_some_and(|x| x.spec.is_constexpr()) {
+            return true;
+        }
+        let ty = self.ast.decls.get(v).ty().unwrap_or(QualType::ERROR);
+        if self.ast.types.is_reference(ty) {
+            return true;
+        }
+        let q = self.ast.types.effective_quals(ty);
+        q.is_const() && !q.is_volatile() && self.is_integral_or_enum(ty)
+    }
+
+    /// Instantiates the definition of non-inline static data member `v`
+    /// of a specialization from its pattern's out-of-line definition
+    /// ([temp.inst]/4, [class.static.data]/3): a redeclaration of `v`
+    /// in the namespace of that definition, initialized as it is. Nothing
+    /// happens while the pattern has no out-of-line definition (a later
+    /// one is found at the next reference or at the end of the TU).
+    pub fn instantiate_static_member_def(&mut self, v: DeclId, poi: Loc) {
+        if self.inst.fatal || !self.inst.member_defs.contains(&v) {
+            return;
+        }
+        if self.is_var_spec(v) {
+            self.instantiate_var_spec_init(v, poi);
+            return;
+        }
+        let Some(pattern) = self.ast.instantiated_from(v) else { return };
+        let Some(pdef) = self.ast.redecls_of(pattern).find(|&x| {
+            self.kind_of(x) == DeclKind::Var
+                && !self.is_in_class_static(x)
+                && !self.ast.decls.get(x).has(DeclFlags::INVALID)
+        }) else {
+            return;
+        };
+        self.inst.member_defs.remove(&v);
+        let Some(spec) = self.inst_owner(v) else { return };
+        let Some((tmpl, args)) = self.spec_args(spec) else { return };
+        let Some(pclass) = self.spec_pattern_class(spec, tmpl) else { return };
+        let mut pairs = self.inst_context_pairs(spec);
+        if pairs.first().is_none_or(|&(_, x)| x != spec) {
+            pairs.insert(0, (pclass, spec));
+        }
+        if !self.push_inst_frame(FrameKind::StaticDataMember, v, pdef, poi) {
+            return;
+        }
+        let pn = *self.ast.decls.get(pdef);
+        let lexical = self.ast.decls.lexical_ctx(pdef).unwrap_or(self.ast.tu);
+        let ty = self.ast.decls.get(v).ty().unwrap_or(QualType::ERROR);
+        let vspec = self.ast.decls.var(v).map(|x| x.spec).unwrap_or_default();
+        let pspec = self.ast.decls.var(pdef).map(|x| x.spec).unwrap_or_default();
+        let spec_bits = pspec
+            .with_storage(kiln_ast::decl::VarStorage::None)
+            .with_inline(vspec.is_inline())
+            .with_constexpr(vspec.is_constexpr());
+        let mut h = kiln_ast::DeclHead::new(spec, pn.name(), pn.loc());
+        h.lexical = Some(lexical);
+        let d = self.builder().var(h, ty, spec_bits, Some(v));
+        self.ast.templates.set_instantiated_from(d, pdef);
+        self.in_inst_context(spec, |s| {
+            let mut sub = Substituter::new(s, &args);
+            sub.entity = Some(spec);
+            sub.map_contexts(&pairs);
+            // [class.static.data]/3: the initializer is in the scope of
+            // the class.
+            sub.sema.initializing = Some(d);
+            // A failure was diagnosed; the variable is left uninitialized.
+            let _ = sub.var_init(pdef, d);
+        });
+        self.pop_inst_frame();
     }
 
     /// Instantiates the deferred initializer of static data member `v`.
@@ -665,12 +820,11 @@ impl Sema<'_, '_> {
         let Some(pattern) = self.ast.instantiated_from(v) else { return };
         let Some(spec) = self.inst_owner(v) else { return };
         let Some((tmpl, args)) = self.spec_args(spec) else { return };
-        let Some(pclass) = self
-            .ast
-            .definition(self.ast.template_info(tmpl).and_then(|i| i.pattern).unwrap_or(spec))
-        else {
-            return;
-        };
+        let Some(pclass) = self.spec_pattern_class(spec, tmpl) else { return };
+        let mut pairs = self.inst_context_pairs(spec);
+        if pairs.first().is_none_or(|&(_, x)| x != spec) {
+            pairs.insert(0, (pclass, spec));
+        }
         if !self.push_inst_frame(FrameKind::StaticDataMember, v, pattern, poi) {
             return;
         }
@@ -679,15 +833,22 @@ impl Sema<'_, '_> {
         self.in_inst_context(ctx, |s| {
             let mut sub = Substituter::new(s, &args);
             sub.entity = Some(spec);
-            sub.map_context(pclass, spec);
-            let first = sub.sema.ast.first(pclass);
-            if first != pclass {
-                sub.map_context(first, spec);
-            }
+            sub.map_contexts(&pairs);
             // A failure was diagnosed; the variable is left uninitialized.
             let _ = sub.var_init(pattern, v);
         });
         self.pop_inst_frame();
+    }
+
+    /// The class definition specialization `spec` of `tmpl` was
+    /// instantiated from: the matched partial specialization's
+    /// ([temp.spec.partial.match]) or the primary template's.
+    fn spec_pattern_class(&self, spec: DeclId, tmpl: DeclId) -> Option<DeclId> {
+        let from = self.ast.spec_info(spec).map(|(_, s)| s.from);
+        if let Some(from) = from.filter(|&f| self.ast.partial_spec_info(f).is_some()) {
+            return self.ast.definition(from);
+        }
+        self.ast.definition(self.pattern_of(self.inst_template(tmpl)).unwrap_or(spec))
     }
 
     /// The class template specialization member `f` was instantiated
@@ -731,7 +892,14 @@ impl Sema<'_, '_> {
                 )
         });
         if constexpr {
+            // Instantiated now, so the evaluator never has to (clang's
+            // `MarkFunctionReferenced`); if its pattern is not defined
+            // yet, it is retried at end of TU (and stays undefined for
+            // constant evaluation, spec/sema-templates.md §4.11).
             self.instantiate_function_definition(f, loc);
+            if self.ast.definition(f).is_none() {
+                self.queue_instantiation(f, loc);
+            }
         } else {
             self.queue_instantiation(f, loc);
         }
@@ -741,7 +909,7 @@ impl Sema<'_, '_> {
 impl Substituter<'_, '_, '_> {
     /// A member class is declared with its class; its definition is
     /// instantiated when it is required to be complete ([temp.inst]/3).
-    fn member_class_decl(&mut self, m: DeclId) -> Result<DeclId, SubstFail> {
+    pub(crate) fn member_class_decl(&mut self, m: DeclId) -> Result<DeclId, SubstFail> {
         let n = *self.sema.ast.decls.get(m);
         let loc = n.loc();
         let Some(name) = n.name().as_ident().filter(|_| !n.name().is_empty()) else {
@@ -762,7 +930,18 @@ impl Substituter<'_, '_, '_> {
         Ok(Some(match n.kind() {
             DeclKind::Field => self.field_decl(m)?,
             DeclKind::Var if self.defers_init(m) => self.deferred_static_member(m)?,
-            DeclKind::Var => self.var_decl(m, DeclaratorContext::Member)?,
+            DeclKind::Var => {
+                let v = self.var_decl(m, DeclaratorContext::Member)?;
+                let spec = self.sema.ast.decls.var(v).map(|x| x.spec);
+                if self.sema.kind_of(v) == DeclKind::Var
+                    && spec.is_some_and(|x| {
+                        x.storage() == kiln_ast::decl::VarStorage::Static && !x.is_inline()
+                    })
+                {
+                    self.sema.inst.member_defs.insert(v);
+                }
+                v
+            }
             DeclKind::CXXMethod
             | DeclKind::CXXConstructor
             | DeclKind::CXXDestructor
@@ -791,7 +970,7 @@ impl Substituter<'_, '_, '_> {
             DeclKind::ClassTemplate
             | DeclKind::FunctionTemplate
             | DeclKind::VarTemplate
-            | DeclKind::TypeAliasTemplate => return self.unimplemented("member templates", loc),
+            | DeclKind::TypeAliasTemplate => self.member_template(m)?,
             k => return self.unimplemented(&format!("{k:?} members of class templates"), loc),
         }))
     }

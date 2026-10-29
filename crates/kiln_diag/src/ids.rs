@@ -1012,6 +1012,44 @@ diag_ids! {
     sema_param_default_argument_references_param = Error (1) "default argument references parameter '{0}'";
     sema_side_effects_unevaluated_context = Warning [UnevaluatedExpression] (0) "expression with side effects has no effect in an unevaluated context";
     sema_auto_non_deduced_not_alone = Error (1) "{0:function with deduced return type|declaration with trailing return type} must be the only declaration in its group";
+    note_deduced_conflicting = Note (4) "candidate template ignored: deduced conflicting {0:types|values|templates} for parameter '{1}' ({2} vs. {3})";
+    note_deduction_incomplete = Note (1) "candidate template ignored: couldn't infer template argument '{0}'";
+    note_deduction_underqualified = Note (3) "candidate template ignored: cannot deduce a type for '{0}' that would make '{1}' equal '{2}'";
+    note_deduction_non_deduced_mismatch = Note (2) "candidate template ignored: could not match '{0}' against '{1}'";
+    sema_partial_spec_ambiguous = Error (1) "ambiguous partial specializations of '{0}'";
+    note_partial_spec_match = Note (1) "partial specialization matches {0}";
+    sema_partial_spec_not_more_specialized = WarningError [InvalidPartialSpecialization] (1) "{0:class|variable} template partial specialization is not more specialized than the primary template";
+    sema_partial_spec_fully_specialized = Error (1) "partial specialization of '{0}' does not use any of its template parameters";
+    sema_partial_spec_args_match_primary = Error (2) "{0:class|variable} template partial specialization does not specialize any template argument; to {1:declare|define} the primary template, remove the template argument list";
+    sema_partial_spec_not_deducible = WarningError [UnusablePartialSpecialization] (2) "{0:class|variable} template partial specialization contains {1:a template parameter|template parameters} that cannot be deduced; this partial specialization will never be used";
+    note_non_deducible_parameter = Note (1) "non-deducible template parameter '{0}'";
+    note_partial_spec_deduct_here = Note (1) "during template argument deduction for {0}";
+    sema_spec_after_instantiation = Error (1) "explicit specialization of '{0}' after instantiation";
+    note_instantiation_required_here = Note (1) "{0:implicit|explicit} instantiation first required here";
+    sema_explicit_inst_duplicate = Error (1) "duplicate explicit instantiation of '{0}'";
+    note_previous_explicit_instantiation = Note (0) "previous explicit instantiation is here";
+    sema_explicit_inst_undefined_template = Error (1) "explicit instantiation of undefined template '{0}'";
+    sema_explicit_inst_undefined_member = Error (3) "explicit instantiation of undefined {0:member class|member function|static data member} '{1}' of class template '{2}'";
+    sema_explicit_inst_not_known = Error (1) "explicit instantiation of '{0}' does not refer to a function template, variable template, member function, member class, or static data member";
+    sema_explicit_inst_nontemplate_type = Error (1) "explicit instantiation of non-templated type '{0}'";
+    sema_explicit_inst_requires_name = Error (0) "explicit instantiation declaration requires a name";
+    sema_explicit_spec_non_template = Error (1) "explicit specialization of non-template {0}";
+    note_explicit_spec_template_declared = Note (0) "explicitly specialized declaration is here";
+    sema_template_spec_needs_header = Error (0) "template specialization requires 'template<>'";
+    sema_class_spec_not_in_enclosing_ns = Error (2) "class template specialization of '{0}' not in a namespace enclosing '{1}'";
+    sema_partial_spec_redecl_scope = Error (2) "class template partial specialization of '{0}' not in a namespace enclosing '{1}'";
+    sema_explicit_inst_after_spec_ignored = Warning [InstantiationAfterSpecialization] (1) "explicit instantiation of '{0}' that occurs after an explicit specialization has no effect";
+    note_previous_template_specialization = Note (0) "previous template specialization is here";
+    sema_explicit_inst_declaration_after_definition = Error (0) "explicit instantiation declaration (with 'extern') follows explicit instantiation definition (without 'extern')";
+    note_explicit_instantiation_definition_here = Note (0) "explicit instantiation definition is here";
+    sema_redundant_constexpr_static_def = WarningOff [DeprecatedRedundantConstexprStaticDef] (0) "out-of-line definition of constexpr static data member is redundant in C++17 and is deprecated";
+    note_var_template_spec_here = Note (1) "in instantiation of variable template specialization '{0}' requested here";
+    sema_var_spec_not_in_enclosing_ns = Error (2) "variable template specialization of '{0}' not in a namespace enclosing '{1}'";
+    sema_var_partial_spec_redecl_scope = Error (2) "variable template partial specialization of '{0}' not in a namespace enclosing '{1}'";
+    sema_explicit_spec_storage_class = ExtWarn [ExplicitSpecializationStorageClass] (0) "explicit specialization cannot have a storage class";
+    sema_template_kw_refers_to_non_template = Error (1) "'{0}' following the 'template' keyword does not refer to a template";
+    note_declared_non_template = Note (0) "declared as a non-template here";
+    sema_default_arg_in_partial_spec = Error (0) "default template argument in a class template partial specialization";
 }
 
 impl DiagId {

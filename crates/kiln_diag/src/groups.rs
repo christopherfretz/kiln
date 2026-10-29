@@ -145,6 +145,12 @@ diag_groups! {
     DeprecatedBuiltins = "deprecated-builtins" [];
     // WP-087
     UnevaluatedExpression = "unevaluated-expression" [];
+    InvalidPartialSpecialization = "invalid-partial-specialization" [];
+    UnusablePartialSpecialization = "unusable-partial-specialization" [];
+    InstantiationAfterSpecialization = "instantiation-after-specialization" [];
+    Deprecated = "deprecated" [DeprecatedDeclarations, DeprecatedRedundantConstexprStaticDef];
+    DeprecatedRedundantConstexprStaticDef = "deprecated-redundant-constexpr-static-def" [];
+    ExplicitSpecializationStorageClass = "explicit-specialization-storage-class" [];
 }
 
 impl Group {

@@ -28,9 +28,26 @@ pub const CLASSES: &[&str] = &[
     "CXXDestructorDecl",
     "CXXConversionDecl",
     "VarDecl",
+    "ClassTemplateSpecializationDecl",
+    "ClassTemplatePartialSpecializationDecl",
+    "VarTemplateSpecializationDecl",
+    "VarTemplatePartialSpecializationDecl",
 ];
 
-/// A function or `VarDecl` line of the text dump.
+/// Whether `class` is one of the class template specialization classes
+/// (aligned for their specialization kind, which the JSON lacks).
+pub fn is_record(class: &str) -> bool {
+    class.starts_with("ClassTemplate")
+}
+
+/// Whether `class` is `VarDecl` or a variable template specialization
+/// class (which carry a `value:` child).
+pub fn is_var(class: &str) -> bool {
+    class == "VarDecl" || class.starts_with("VarTemplate")
+}
+
+/// A function, `VarDecl` or class template specialization line of the
+/// text dump.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TextDecl {
     /// One of [`CLASSES`].
@@ -49,6 +66,9 @@ pub struct TextDecl {
 impl TextDecl {
     /// Whether the line names declaration `name` (` name 'type'`).
     pub fn names(&self, name: &str) -> bool {
+        if is_record(self.class) {
+            return self.has_flag(name);
+        }
         self.line.contains(&format!(" {name} '"))
     }
 
@@ -148,7 +168,7 @@ pub fn parse(text: &str) -> Result<Vec<TextDecl>, String> {
         let mut line = content.to_owned();
         let mut value = None;
         let mut overrides = None;
-        if class != "VarDecl" {
+        if !is_var(class) {
             // The `delete message:` and `Overrides:` children come first.
             while let Some(&(d, c)) = lines.get(i)
                 && d == depth + 1
@@ -167,7 +187,7 @@ pub fn parse(text: &str) -> Result<Vec<TextDecl>, String> {
                 i += 1;
             }
         }
-        if class == "VarDecl"
+        if is_var(class)
             && let Some(&(d, c)) = lines.get(i)
             && d == depth + 1
             && c.starts_with("value: ")

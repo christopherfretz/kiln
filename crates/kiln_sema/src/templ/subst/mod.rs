@@ -93,6 +93,19 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
         self.pairs.push((pattern, inst));
     }
 
+    /// Records pattern contexts and their instantiations, innermost first
+    /// (as [`Sema::inst_context_pairs`] lists them); a pattern's first
+    /// declaration maps too.
+    pub(crate) fn map_contexts(&mut self, pairs: &[(DeclId, DeclId)]) {
+        for &(p, x) in pairs.iter().rev() {
+            self.map_context(p, x);
+            let first = self.sema.ast.first(p);
+            if first != p {
+                self.map_context(first, x);
+            }
+        }
+    }
+
     /// Reports `feature` as not yet implemented and fails.
     pub(crate) fn unimplemented<T>(&mut self, feature: &str, loc: Loc) -> SubstResult<T> {
         self.sema.templ_unimplemented(feature, loc);
@@ -193,12 +206,59 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
                         _ => Err(SubstFail),
                     },
                     ArgLookup::Retain(nd) if nd == d => Ok(n),
-                    ArgLookup::Retain(_) => self.unimplemented("member templates", loc),
+                    ArgLookup::Retain(_) => {
+                        let TemplateName::TemplateTemplateParm { decl, .. } =
+                            self.sema.ast.types.template_name_view(n)
+                        else {
+                            return self.unimplemented("member templates", loc);
+                        };
+                        let np = self.find_instantiated_decl(decl, loc)?;
+                        Ok(self.sema.template_name_for(np))
+                    }
                     ArgLookup::Missing => Err(SubstFail),
                 }
             }
-            TemplateName::DependentIdentifier { .. } => {
-                self.unimplemented("dependent template name", loc)
+            TemplateName::DependentIdentifier { nns, name } => {
+                let q = self.nns(nns, loc)?;
+                if let Nns::Type { ty, .. } = self.sema.ast.types.nns_view(q)
+                    && self.sema.is_dependent_type(ty)
+                {
+                    return Ok(self
+                        .sema
+                        .ast
+                        .types
+                        .template_name(TemplateName::DependentIdentifier { nns: q, name }));
+                }
+                let d = self.member_template_named(q, name, loc)?;
+                let underlying = self.sema.template_name_for(d);
+                Ok(self.sema.ast.types.template_name(TemplateName::Qualified {
+                    nns: q,
+                    template_kw: true,
+                    underlying,
+                }))
+            }
+            // A member template of a class template names the member of
+            // the instantiated class ([temp.mem]).
+            TemplateName::Template(d)
+                if self.sema.ast.decls.get(d).flags().contains(DeclFlags::DEPENDENT_CTX) =>
+            {
+                let x = self.find_instantiated_decl(d, loc)?;
+                if x == d {
+                    return Ok(n);
+                }
+                Ok(self.sema.template_name_for(x))
+            }
+            TemplateName::Qualified { nns, template_kw, underlying } => {
+                let u = self.template_name(underlying, loc)?;
+                let q = self.nns(nns, loc)?;
+                if u == underlying && q == nns {
+                    return Ok(n);
+                }
+                Ok(self.sema.ast.types.template_name(TemplateName::Qualified {
+                    nns: q,
+                    template_kw,
+                    underlying: u,
+                }))
             }
             _ => Ok(n),
         }

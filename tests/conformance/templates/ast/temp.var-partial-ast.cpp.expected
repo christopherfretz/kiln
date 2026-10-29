@@ -1,0 +1,26 @@
+TranslationUnitDecl
+|-VarTemplateDecl rank_v
+| |-TemplateTypeParmDecl class depth 0 index 0 T
+| |-VarDecl rank_v 'int' cinit
+| | `-IntegerLiteral 'int' 0
+| |-VarTemplateSpecialization 'rank_v' 'int'
+| `-VarTemplateSpecializationDecl used rank_v 'int' implicit_instantiation cinit
+|   |-TemplateArgument type 'int **'
+|   `-IntegerLiteral 'int' 1
+|-VarTemplatePartialSpecializationDecl rank_v 'int' explicit_specialization cinit
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| |-TemplateArgument type 'type-parameter-0-0 *'
+| `-IntegerLiteral 'int' 1
+|-VarTemplateSpecializationDecl used rank_v 'int' explicit_specialization cinit
+| |-TemplateArgument type 'void'
+| `-UnaryOperator 'int' prefix '-'
+|   `-IntegerLiteral 'int' 1
+|-VarDecl a 'int' cinit
+| `-ImplicitCastExpr 'int' <LValueToRValue>
+|   `-DeclRefExpr 'int' lvalue VarTemplateSpecialization 'rank_v' 'int' (VarTemplate 'rank_v')
+|-VarTemplateSpecializationDecl used rank_v 'int' implicit_instantiation cinit
+| |-TemplateArgument type 'int **'
+| `-IntegerLiteral 'int' 1
+`-VarDecl b 'int' cinit
+  `-ImplicitCastExpr 'int' <LValueToRValue>
+    `-DeclRefExpr 'int' lvalue VarTemplateSpecialization 'rank_v' 'int' (VarTemplate 'rank_v')

@@ -22,7 +22,7 @@
 
 use std::fmt::Display;
 
-use super::args::ArgView;
+use super::args::{ArgView, TemplateArg};
 use super::context::{ExprOperand, TypeContext, TypeOfOperand, TypeView};
 use super::func::ExcSpec;
 use super::kinds::{CallConv, Quals, RefQual, TagKeyword, TypeAttrKind, TypeKind, VectorKind};
@@ -250,6 +250,28 @@ pub fn write_arg_list(ctx: &TypeContext, names: &dyn TypeNames, l: ArgListId, ou
         depth: 0,
     };
     p.arg_list(l, false);
+    *out = p.out;
+}
+
+/// Renders one template argument as written (no brackets), appending to
+/// `out`.
+pub fn write_template_arg(
+    ctx: &TypeContext,
+    names: &dyn TypeNames,
+    a: TemplateArg,
+    out: &mut String,
+) {
+    let mut p = Printer {
+        ctx,
+        names,
+        out: std::mem::take(out),
+        empty_ph: true,
+        scope: false,
+        suppress_tag: false,
+        inside_cc_attr: false,
+        depth: 0,
+    };
+    p.arg(a.view());
     *out = p.out;
 }
 

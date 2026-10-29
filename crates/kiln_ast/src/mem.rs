@@ -41,6 +41,15 @@ impl MemRow {
         Self::new(name, m.len() as u64, m.len() as u64 * slot, buckets * slot)
     }
 
+    /// The row for a `HashSet<K, S>` of plain data ([`MemRow::of_map`]
+    /// with no value).
+    pub fn of_set<K, S>(name: impl Into<String>, m: &std::collections::HashSet<K, S>) -> Self {
+        let slot = size_of::<K>() as u64 + 1;
+        let cap = m.capacity() as u64;
+        let buckets = if cap == 0 { 0 } else { (cap * 8 / 7).next_power_of_two() };
+        Self::new(name, m.len() as u64, m.len() as u64 * slot, buckets * slot)
+    }
+
     /// Prefixes the row's name with `prefix.`.
     #[must_use]
     pub fn prefixed(mut self, prefix: &str) -> Self {

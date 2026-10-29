@@ -867,29 +867,51 @@ instantiated and evaluated, because building the reference marked it.
 
 **Functions differ.** An evaluation can reach a function definition that
 was never marked, through a function pointer or a virtual call. For
-those, `SemaBridge::ensure_body(f)` changes in M3 (sema.md §8.1 must be
-updated by WP-070):
-1. If `f` is a specialization, or a member of a class specialization,
-   whose definition is not yet instantiated, `ensure_body` instantiates it
-   now. The frame is `TemplateInstantiation(Function)` and the POI is the
-   Oven's current evaluation location. It returns the body.
-2. If that instantiation fails, it returns `None`. The Oven then reports
-   its "undefined function cannot be used in a constant expression" note.
+those, `SemaBridge::ensure_body(f, oven)` (sema.md §8.1; as landed by
+WP-070b):
+1. If `f` already has a parsed or instantiated definition, its body is
+   returned.
+2. Otherwise, if `f` is a specialization or a member of a class
+   specialization (`instantiated_from(f)` is set), the evaluation is
+   manifestly constant-evaluated (`eval_const`, which records its
+   location in `InstState.eval_loc`), and `f` was **never marked**
+   (it is not in the pending queue), `ensure_body` instantiates it now.
+   The frame is `TemplateInstantiation(Function)` and the POI is the
+   evaluation's location. It returns the body.
+3. Otherwise it returns `None`, and the Oven reports its "undefined
+   function cannot be used in a constant expression" note. This
+   covers:
+   - a speculative fold (`try_fold`): it never instantiates;
+   - a failed instantiation, or one after a fatal error;
+   - a member that was marked but whose instantiation is still
+     deferred because its pattern was not yet defined at the mark
+     (`InstState.queued`). clang also leaves it undefined: the test
+     `templates/diag/temp.inst-constexpr-defined-later.cpp` pins the
+     note.
 
-**Requirement R-OVEN-1 (reentrancy).** Instantiation inside
-`ensure_body` can itself need constant evaluation: a `static_assert`, a
-template argument, `if constexpr`.
-- The Oven must therefore accept a nested `evaluate` call from inside a
-  bridge callback. The nested call pushes a new `EvalContext` on the same
-  Oven and pops it before returning.
-- Sema takes its `Oven` out of `Option` for the duration of the outer
-  evaluation, and hands the callback the `&mut Oven` the Oven passes
-  in: `ensure_body(&mut self, f, oven: &mut Oven)`.
-- The budget is shared. `depth` counts nested contexts.
-- If the Oven owner cannot provide this, the fallback is to forbid
-  instantiation from `ensure_body` and pre-instantiate everything that is
-  odr-used (clang order). Then calls through computed function pointers
-  to never-referenced specializations fail. See Q5.
+**Requirement R-OVEN-1 (reentrancy)**, as landed:
+- `Sema.oven` is an `Option<Oven>`. `with_oven` takes it out for the
+  duration of an evaluation and hands the closure a `Bridge` that holds
+  `&mut Sema`.
+- In `ensure_body`, the Oven passes its own `&mut Oven`. Sema lends it
+  back by swapping it into `Sema.oven` (a fresh `Oven` with the same
+  budget holds its place) while it instantiates. Nested evaluations
+  (`static_assert`, template arguments, `if constexpr`, constexpr
+  variable initializers) therefore run on the same Oven, sharing its
+  compiled code, memo cache and budget. The Oven is swapped back before
+  `ensure_body` returns.
+- `crates/kiln_parse/tests/ensure_body.rs` pins the behaviour. Its
+  calls are built with the AST builder so they bypass marking. The
+  tests cover:
+  - an unmarked member instantiated once (the second evaluation finds
+    the body) and recorded in the report;
+  - a speculative fold that does not instantiate;
+  - a nested `static_assert` in the instantiated body;
+  - an instantiation error that is reported with its context, while
+    the definition still exists, as in clang;
+  - a member marked before its pattern was defined, which is
+    instantiated at the end of the TU.
+- No fallback is needed (pre-instantiating everything odr-used).
 
 ## 5. Substitution: the tree transform
 
@@ -2238,9 +2260,9 @@ first instead of emitting them (§5.7).
 *Stubs* (each reports `sema_unimplemented_template_feature`):
 | Stub | Owner |
 |---|---|
-| Explicit specialization (`act_explicit_specialization`), explicit instantiation | WP-070b |
-| Partial-specialization matching (`match_partial_specs`), `more_specialized` | WP-072 / WP-070b |
-| Member templates; the dependent template specialization type (`T::template X<…>`) | WP-070b |
+| Explicit specialization (`act_explicit_specialization`), explicit instantiation | WP-070b (done) |
+| Partial-specialization matching (`match_partial_specs`), `more_specialized` | WP-070b (done for classes and variables) / WP-071 |
+| Member templates; the dependent template specialization type (`T::template X<…>`) | WP-070b (done) |
 | `deduce_call`, function template specializations | WP-071 |
 | Pack expansion (`expand_list` with an expansion), variadic specializations | WP-072 |
 | `check_satisfaction` | WP-073 |
@@ -2506,6 +2528,146 @@ four gaps above that they close are removed.
 - A non-dependent `static_assert` in a template definition is evaluated
   in the definition; clang (CWG2518) waits for an instantiation, and
   then reports it once per instantiation.
+**Landed (WP-070b).** The deduction core, class and variable template
+partial specializations with their matching and ordering, explicit
+specializations and instantiations of class and variable templates,
+variable templates, out-of-line static data member definitions, member
+templates, `T::template X<…>`, and `ensure_body` instantiation
+(R-OVEN-1, §4.11).
+
+*Files.*
+- `kiln_sema/src/templ/`:
+  - `deduce.rs`: `TdfFlags`, `Tdk`, `DeducedArgs`, `deduce` (types,
+    [temp.deduct.type]), `deduce_args` (argument lists), the §10.4
+    `deduction_failure_note`. Template template parameters are matched
+    through `TemplateName::CanonTemplateTemplateParm`.
+  - `order.rs`: `match_partial_specs` / `match_partial_args`
+    ([temp.spec.partial.match]) and the partial ordering of class and
+    variable partial specializations ([temp.spec.partial.order],
+    memoized in `templ.partial_order`). Function template
+    `more_specialized` is a stub.
+  - `spec.rs` (new): `template<>` and `[extern] template` scopes,
+    `act_on_class_template_id_tag` (partial and explicit specialization,
+    explicit instantiation, or a reference), partial-specialization
+    checks (scope, arguments matching the primary, non-deducible
+    parameters, not more specialized, default arguments), explicit
+    instantiation of classes and members.
+  - `var.rs` (new): `get_var_spec`, variable partial and explicit
+    specializations, `instantiate_var_spec_init`.
+  - `member.rs` (new): member templates (class, alias and variable) of
+    a class specialization, renumbered to the remaining depth.
+  - `class.rs`: pattern selection through partial specializations,
+    explicit-specialization awareness, static data member out-of-line
+    definitions (`instantiate_static_member_def`).
+  - `subst/types.rs`, `subst/exprs.rs`: `T::template X<…>` types and
+    expressions through `member_template_named`; a non-template after
+    `template` is diagnosed.
+- `kiln_sema/src/oven_bridge.rs`: `ensure_body`, `with_oven`,
+  `instantiate_for_oven`.
+- `kiln_ast/src/templates.rs`: `PartialSpecInfo`, `ArgShape` (a
+  cheap pre-filter before deduction), the partial tables
+  (`partials_of`, `find_partial`, `partial_spec_info`),
+  `class_partial_spec`, `var_spec`, `var_partial_spec`,
+  `list_implicit_spec`, `declare_spec_in`, `unresolved_lookup_in`.
+- `kiln_ast/src/dump` and `xtask/src/clang_ast`: the specialization
+  lines (ast-dump.md §5).
+- `kiln_parse`: `template<>` and explicit-instantiation heads, the
+  template-id tag path (`tag_use`), qualified template-id elaborated
+  sugar, and the variable-template declarator path.
+- Tests:
+  - `tests/conformance/templates/` gains 18 `spec/`, 16 `var/`,
+    7 `class/`, 14 `diag/`, 6 `ast/` and 1 `report/` test;
+  - `crates/kiln_sema/tests/templ_deduce.rs` (12 unit tests) and
+    `crates/kiln_parse/tests/ensure_body.rs` (5).
+
+*Signatures as landed.*
+```rust
+pub fn deduce(&mut self, p: QualType, a: QualType, flags: TdfFlags, d: &mut DeducedArgs) -> Tdk;
+pub fn deduce_args(&mut self, ps: &[TemplateArg], as_: &[TemplateArg], must_match: bool, d: &mut DeducedArgs, loc: Loc) -> Tdk;
+pub fn deduction_failure_note(&self, …) -> Option<Diag>;
+pub(crate) fn match_partial_specs(&mut self, tmpl: DeclId, spec: DeclId, poi: Loc) -> Result<Option<PartialMatch>, ()>;
+pub fn get_var_spec(&mut self, tmpl: DeclId, written: &[TemplateArg], arg_locs: &[Loc], loc: Loc) -> Result<DeclId, ()>;
+pub fn act_explicit_spec_start(&mut self, loc: Loc); pub fn act_explicit_spec_end(&mut self);
+pub fn act_explicit_inst_start(&mut self, extern_loc: Option<Loc>, loc: Loc); pub fn act_explicit_inst_end(&mut self);
+pub fn act_on_class_template_id_tag(&mut self, keyword: TagKeyword, tmpl: DeclId, args: &[TemplateArg], qualifier: Option<DeclId>, use_: TagUse, name_loc: Loc, r_angle: Loc, kw_loc: Loc) -> Result<(Option<DeclId>, QualType), ()>;
+pub fn instantiate_static_member_def(&mut self, v: DeclId, poi: Loc);
+fn ensure_body(&mut self, f: DeclId, oven: &mut Oven) -> Option<StmtId>; // SemaBridge
+```
+
+*Interface changes outside the files WP-070b owns.*
+- `kiln_sema`:
+  - `Sema.oven: Option<Oven>`; the `Bridge` holds `&mut Sema`, and
+    `with_oven` lends the Oven (sema.md §8.1). `InstState.eval_loc`
+    holds the location of a manifestly constant-evaluated evaluation.
+  - A constexpr member marked while its pattern is undefined is queued
+    (`InstState.queued`) and instantiated at the end of the TU.
+  - `expr.rs`: a variable template named without arguments is
+    diagnosed ("use of variable template 'v' requires template
+    arguments", as clang 19).
+  - `decl.rs`: a nested-name-specifier through an alias of an
+    uninstantiated specialization instantiates it; out-of-line static
+    data member definitions of class templates.
+  - `templ/class.rs`: `inst_template`, `base_levels`,
+    `inst_context_pairs` and `map_contexts` for member templates;
+    `member_class_decl` and `undefined_spec` are `pub(crate)`.
+  - The `type_parm` signature (it takes the depth).
+- `kiln_ast`:
+  - `append_member` accepts a `Var` specialization;
+  - `TypeContext::mark_dependent_template` / `dependent_templates`;
+  - `MemRow::of_set` in the memory meter.
+- `kiln_diag`: the deduction notes, the partial-specialization,
+  explicit-specialization and explicit-instantiation errors,
+  `sema_template_kw_refers_to_non_template`, `note_declared_non_template`
+  and `sema_default_arg_in_partial_spec`, plus the groups
+  `invalid-partial-specialization`, `unusable-partial-specialization`,
+  `instantiation-after-specialization`, `deprecated-redundant-constexpr-static-def`
+  and `explicit-specialization-storage-class`. All are appended at the
+  end of the tables.
+
+*Gaps* (each reports a diagnostic or is a known divergence):
+- Explicit specializations of *members* of an implicit specialization
+  (`template<> int A<long>::f();`) are not implemented. They need the
+  declarator paths in `decl.rs` and `class/members.rs` (WP-067b's
+  area). The test `templates/spec/temp.expl.spec-member.cpp` is xfail.
+- Accept-invalid: a member redefinition of a specialization without
+  `template<>` is accepted. clang reports "template specialization
+  requires 'template<>'".
+- No TypeLocs: an error in `typename T::template type<int>` points at
+  `typename`, not at the template-id.
+- Partial specializations of member templates and out-of-line
+  definitions of member templates are not implemented.
+- Member template calls (`t.template f<int>()`) wait on WP-071.
+- Default arguments of variable partial specializations are not
+  checked; clang does not check them either.
+- clang wraps some instantiated initializers in `ConstantExpr`; kiln
+  does not (no golden depends on it).
+
+*Stubs* (each reports `sema_unimplemented_template_feature`):
+| Stub | Owner |
+|---|---|
+| `deduce_call`, function template specializations, explicit specialization and instantiation of function templates | WP-071 |
+| `more_specialized` for function templates ([temp.func.order]) | WP-071 / WP-072 |
+| Packs in deduction and in partial specializations (`has_pack`), variadic specializations, pack expansion | WP-072 |
+| Constrained partial specializations (satisfaction during matching, ordering by constraints) | WP-073 |
+| Pointer-to-member template arguments | WP-071 |
+| Member explicit specialization | WP-070c or WP-067b follow-up |
+
+In the WP-070a stub table above, the rows for explicit specialization
+and instantiation, partial-specialization matching, member templates
+and `T::template X<…>` are done.
+
+*`<type_traits>` probe* (same command as WP-069): 343 errors, down from
+415 (426 with the main binary) at the WP-070a merge. No partial or
+explicit specialization errors remain. The blockers are:
+
+| Errors | Cause | Owner |
+|---:|---|---|
+| ~157 | Builtin traits in expressions ("unexpected type name: expected expression") | WP-074 |
+| ~57 | Builtin transforms (`__remove_cv_t`, `__decay_t`, `__remove_cvref_t`, …) and their follow-on "expected a type" | WP-074 |
+| 30 | Undeclared identifiers (follow-ons, `__int128_t`) | mixed |
+| ~15 | Overloaded operators and function overloading | WP-068 |
+| — | Function templates (`declval<_Tp>()`, `forward`, `__invokable`) | WP-071 |
+| 4 | Constrained class template partial specializations | WP-073 |
 
 ### 11.3 Instantiation report and memory accounting
 
@@ -2596,6 +2758,15 @@ WP-065 ─┴─ WP-069 parser ── WP-070 core ─┬─ WP-071 functions (+0
 | 072 packs | `pack.rs`; the expansion sites in `subst/*` (sequenced after 071) | 071 | `expand`, folds, pack indexing, `__type_pack_element` core | — | ≥40 tests in `templates/packs/`, incl. `stress/fold-65536.cpp` |
 | 073 concepts | `concepts/*` | 071 | `check_satisfaction`, `subsumes`, `requires` | — | ≥50 tests in `templates/concepts/`; all §8.7 note chains golden-tested |
 | 074 auto/builtins | `builtins/*`, `auto.rs`; kiln_pp `__has_builtin` hookup | 070 (+S3C props for the class traits) | `TABLE`, the trait evaluators, `deduce_auto`, `decltype(auto)` | traits waiting on S3C props report unimplemented, and `__has_builtin` is false for them | one test per §9 row (positive and negative) plus a clang probe; `templates/auto/` ≥30 |
+
+**Status after WP-070b.** WP-070 (a and b) has landed. The stubs it
+leaves, with their owners, are listed under "Landed (WP-070b)" in §11.2:
+- WP-071: `deduce_call` and function template `more_specialized`;
+- WP-072: packs in deduction and in partial specializations;
+- WP-073: constrained partial specializations.
+
+Member explicit specialization needs a follow-up WP, because it
+touches WP-067b's declarator paths.
 
 **Rules.**
 1. **Signatures are fixed.** WP-070 lands every file listed in §11.1 with

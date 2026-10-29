@@ -1,0 +1,28 @@
+TranslationUnitDecl
+|-VarTemplateDecl size_v
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| |-VarDecl size_v 'const int' constexpr cinit
+| | `-ImplicitCastExpr 'const int' <IntegralCast>
+| |   `-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof 'T'
+| |-VarTemplateSpecializationDecl referenced size_v 'const int' implicit_instantiation constexpr cinit value=1
+| | |-TemplateArgument type 'char'
+| | `-ImplicitCastExpr 'const int' <IntegralCast>
+| |   `-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof 'char'
+| `-VarTemplateSpecializationDecl referenced size_v 'const int' implicit_instantiation constexpr cinit value=8
+|   |-TemplateArgument type 'long'
+|   `-ImplicitCastExpr 'const int' <IntegralCast>
+|     `-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof 'long'
+|-VarDecl a 'int' cinit
+| `-ImplicitCastExpr 'int' <LValueToRValue>
+|   `-DeclRefExpr 'const int' lvalue VarTemplateSpecialization 'size_v' 'const int' (VarTemplate 'size_v') non_odr_use_constant
+|-VarTemplateSpecializationDecl referenced size_v 'const int' implicit_instantiation constexpr cinit value=1
+| |-TemplateArgument type 'char'
+| `-ImplicitCastExpr 'const int' <IntegralCast>
+|   `-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof 'char'
+|-VarDecl b 'int' cinit
+| `-ImplicitCastExpr 'int' <LValueToRValue>
+|   `-DeclRefExpr 'const int' lvalue VarTemplateSpecialization 'size_v' 'const int' (VarTemplate 'size_v') non_odr_use_constant
+`-VarTemplateSpecializationDecl referenced size_v 'const int' implicit_instantiation constexpr cinit value=8
+  |-TemplateArgument type 'long'
+  `-ImplicitCastExpr 'const int' <IntegralCast>
+    `-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof 'long'

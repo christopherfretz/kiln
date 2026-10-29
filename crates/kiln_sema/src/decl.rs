@@ -1067,6 +1067,9 @@ impl Sema<'_, '_> {
         if special {
             return self.act_on_special_member_declarator(ds, ty, d, invalid);
         }
+        if let Some(sid) = &d.spec_id {
+            return self.act_on_var_spec_declarator(ds, ty, d, sid, head);
+        }
         if !invalid {
             self.warn_ambiguous_function(ds, d, ty);
         }
@@ -2405,13 +2408,26 @@ impl Sema<'_, '_> {
         }
         // [depr.static.constexpr]: a redundant out-of-class redeclaration
         // of an inline static data member initialized in its class.
-        if !self.is_in_class_static(v)
-            && self
+        if !self.is_in_class_static(v) {
+            let in_class = self
                 .ast
                 .redecls_of(v)
-                .any(|x| x != v && self.is_in_class_static(x) && self.is_var_definition(x))
-        {
-            return;
+                .find(|&x| x != v && self.is_in_class_static(x) && self.is_var_definition(x));
+            if let Some(x) = in_class {
+                if self.ast.decls.var(x).is_some_and(|y| y.spec.is_constexpr()) {
+                    self.error(DiagId::sema_redundant_constexpr_static_def, vn.loc());
+                }
+                return;
+            }
+            // [class.static.data]/4: the definition of a `const` static
+            // data member initialized in its class has no initializer.
+            if self
+                .ast
+                .redecls_of(v)
+                .any(|x| x != v && self.ast.decls.var(x).is_some_and(|y| y.init.is_some()))
+            {
+                return;
+            }
         }
         let spec = self.ast.decls.var(v).map(|x| x.spec).unwrap_or_default();
         let ty = vn.ty().unwrap_or(QualType::ERROR);
@@ -2571,7 +2587,7 @@ impl Sema<'_, '_> {
         }
     }
 
-    fn tag_kind_of(keyword: TagKeyword) -> TagKind {
+    pub(crate) fn tag_kind_of(keyword: TagKeyword) -> TagKind {
         match keyword {
             TagKeyword::Class => TagKind::Class,
             TagKeyword::Union => TagKind::Union,
@@ -3628,7 +3644,7 @@ impl Sema<'_, '_> {
         // template ([temp.local]/1): `X` alone is `X<P...>`, `X<A>` a
         // template-id.
         if k == DeclKind::CXXRecord
-            && let Some(t) = self.ast.described_template(self.ast.first(d))
+            && let Some(t) = self.injected_template_of(d)
         {
             return NameClass::TypeTemplate(t);
         }
@@ -3735,6 +3751,11 @@ impl Sema<'_, '_> {
             DeclKind::Typedef | DeclKind::TypeAlias => {
                 self.mark_type_referenced(d);
                 let ty = self.ast.decls.get(d).ty().unwrap_or(QualType::ERROR);
+                // [temp.inst]/2: a specialization named through an alias
+                // is instantiated like one named by its template-id.
+                if self.undefined_spec(ty).is_some() && !self.require_complete_nns(ty, loc) {
+                    return None;
+                }
                 let r = self.ast.types.as_record(ty).or_else(|| self.ast.types.as_enum(ty));
                 if r.is_none() {
                     let msg = self
