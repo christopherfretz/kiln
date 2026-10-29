@@ -139,10 +139,10 @@ is spelled out in detail in `spec/oven.md`; the summary:
   allocations (`new`/`delete`, `std::allocator`, M3) MUST be reclaimed on
   `delete` by a size-class allocator inside the arena — reclaiming only at
   the end of an evaluation is the g++ failure mode that motivates kiln and
-  is forbidden. `peak_bytes`/`allocs` are reported per evaluation and gated
-  by the bench on allocation-churn workloads. Results that escape are
-  frozen into compact `ConstValue`s interned in the AST (reported
-  separately).
+  is forbidden. `peak_bytes`/`peak_arena`/`allocs` are reported per
+  evaluation and gated by the bench on allocation-churn workloads. Results
+  that escape are frozen into compact `ConstValue`s interned in the AST by
+  content (reported separately as `frozen_bytes`).
 - **Deterministic budgets.** Steps and bytes are counted exactly; limits are
   user-configurable (`-fconstexpr-steps`, `-fconstexpr-memory`) and every
   evaluation can report its cost (`-fconstexpr-report`). The harness uses the
