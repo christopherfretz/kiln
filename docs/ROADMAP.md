@@ -39,9 +39,11 @@ printer, diagnostics are separate work packages).
   and lower peak RSS. Recorded in `bench/baselines/pp.json`.
 
 ## M2 — The C-ish subset, end to end, with the Oven — done (2026-10-28)
-Status: parse/sema/Oven/dump done; `kiln -fsyntax-only -fdump-ast` matches
-clang on 47 golden directories; 99 [expr.const] source tests; Oven 0.02x clang
-time / 0.04x memory on `bench/oven`. Codegen + `run` tests: WP-052.
+Status: done. `kiln -fsyntax-only -fdump-ast` matches clang on 47 golden
+directories; 99 [expr.const] source tests; Oven 0.02x clang time / 0.04x
+memory on `bench/oven`; codegen byte-identical to clang -O0 on the IR-diff
+corpus (46 programs × 2 triples) and the 79-case unit corpus; 33 printf
+`run` tests pass vs the oracle through `kiln` driving `llc-19`/`clang++-19`.
 A vertical slice that exercises every crate: parse, sema, Oven, ABI, codegen,
 driver. Scope: fundamental types, arithmetic and conversions, pointers,
 arrays, enums, structs (no members functions yet), functions, all C control
