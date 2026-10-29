@@ -1011,6 +1011,7 @@ diag_ids! {
     // WP-087
     sema_param_default_argument_references_param = Error (1) "default argument references parameter '{0}'";
     sema_side_effects_unevaluated_context = Warning [UnevaluatedExpression] (0) "expression with side effects has no effect in an unevaluated context";
+    sema_auto_non_deduced_not_alone = Error (1) "{0:function with deduced return type|declaration with trailing return type} must be the only declaration in its group";
 }
 
 impl DiagId {

@@ -27,6 +27,7 @@ use kiln_source::symbol::Symbol;
 use crate::decl::is_untyped_special;
 use crate::keywords::Kw;
 use crate::parser::{Parser, quote};
+use kiln_sema::templ::auto::AutoGroup;
 
 /// Saved tokens and the location of the `Eof` sentinel that ends their
 /// replay.
@@ -1092,6 +1093,7 @@ impl Parser<'_, '_> {
         let is_typedef = ds.is_typedef();
         let mut base_ty: Option<QualType> = None;
         let mut first = true;
+        let mut group = AutoGroup::default();
         loop {
             let mut d = Declarator::new(DeclaratorContext::Member, self.loc());
             self.late_fn = LateFnParts {
@@ -1148,6 +1150,9 @@ impl Parser<'_, '_> {
             }
             let (decl, target) =
                 if width_failed { (None, None) } else { self.act_on_member(&ds, base, &d) };
+            if let Some(x) = decl {
+                self.s.act_on_group_declarator(&mut group, x);
+            }
             if nsdmi {
                 self.save_nsdmi(decl);
             } else {
@@ -1163,6 +1168,7 @@ impl Parser<'_, '_> {
             }
             first = false;
         }
+        self.s.act_on_end_group(group, &ds);
         if self.eat(Punct::Semi).is_none() {
             self.s.error(DiagId::parse_expected_semi_decl_list, self.expected_loc());
             self.skip_until(&[Punct::RBrace], true, false);

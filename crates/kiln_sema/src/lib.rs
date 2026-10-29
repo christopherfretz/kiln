@@ -129,6 +129,11 @@ pub struct Sema<'a, 'sm> {
     /// return type was deduced, by first declaration: redeclarations are
     /// matched against it ([dcl.spec.auto.general]/13).
     pub(crate) declared_returns: kiln_source::fx::FxHashMap<DeclId, QualType>,
+    /// The declared placeholder type and decl-specifiers' type location
+    /// of each variable of a multi-declarator group in a template
+    /// pattern: instantiation checks the group's deductions again
+    /// ([dcl.spec.auto.general]/8).
+    pub(crate) group_placeholders: kiln_source::fx::FxHashMap<DeclId, (QualType, Loc)>,
     /// Set while [`Sema::act_on_call_name`] builds an unqualified callee
     /// inside a template: a function it names is not marked referenced
     /// until the call is known to be non-dependent ([temp.dep.candidate]).
@@ -233,6 +238,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             prototype_params: Vec::new(),
             unowned_params: std::collections::HashSet::new(),
             declared_returns: kiln_source::fx::FxHashMap::default(),
+            group_placeholders: kiln_source::fx::FxHashMap::default(),
             deferring_call_ref: false,
             deferred_call_refs: Vec::new(),
             classes: Vec::new(),

@@ -1525,8 +1525,8 @@ impl Parser<'_, '_> {
         let mut base_ty: Option<QualType> = None;
         let mut first = true;
         let direct_init = Self::may_have_direct_init(ctx, ds.storage);
-        // [dcl.spec.auto.general]/8: one placeholder deduction per group.
-        let (mut group, type_at) = (AutoGroup::default(), ds.type_loc.unwrap_or(ds.loc));
+        // [dcl.spec.auto.general]/3, /8: checked at the end of the group.
+        let mut group = AutoGroup::default();
         loop {
             let mut d = Declarator::new(ctx, self.loc());
             d.direct_init = direct_init;
@@ -1586,9 +1586,12 @@ impl Parser<'_, '_> {
                 _ => None,
             };
             let v = self.s.act_on_declarator(&ds, base, &d);
+            if let Some(v) = v {
+                self.s.act_on_group_declarator(&mut group, v);
+            }
             match self.parse_initializer(d.init_style, d.is_function_declarator()) {
                 Ok(init) => match (v, init) {
-                    (Some(v), Some(i)) => self.s.act_on_init_in_group(&mut group, v, i, type_at),
+                    (Some(v), Some(i)) => self.s.act_on_init(v, i),
                     (Some(v), None) => self.s.act_on_uninit(v),
                     _ => {}
                 },
@@ -1607,6 +1610,7 @@ impl Parser<'_, '_> {
                 break;
             }
         }
+        self.s.act_on_end_group(group, &ds);
         if self.eat(Punct::Semi).is_none() {
             let id = if ctx == DeclaratorContext::File {
                 DiagId::parse_expected_semi_toplevel

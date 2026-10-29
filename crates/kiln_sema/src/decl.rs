@@ -1963,7 +1963,8 @@ impl Sema<'_, '_> {
                     .diag(DiagId::sema_auto_not_allowed_field, ds.type_loc.unwrap_or(ds.loc))
                     .arg(u8::from(kw == AutoKeyword::DecltypeAuto))
                     .arg(tag as u8);
-                self.emit(msg);
+                // Once per declarator of a group (as clang).
+                self.emit(msg.allow_duplicate());
             }
             kw.is_some()
         };
