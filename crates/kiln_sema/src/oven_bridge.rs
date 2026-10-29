@@ -45,21 +45,20 @@ impl SemaBridge for Bridge<'_, '_, '_> {
         kiln_abi::ensure_layout(&mut *self.ast, record, self.abi)
     }
 
-    // Final overriders are read from `Ast::virtuals`; computing them on
-    // demand is WP-078a (spec/sema-class.md §3.5).
+    // Final overriders and subobject graphs are computed on demand and
+    // cached in `Ast::virtuals` (WP-078a; spec/sema-class.md §3.5).
     fn final_overrider(
         &mut self,
         most_derived: DeclId,
         at: SubobjectId,
         method: DeclId,
     ) -> Option<(DeclId, SubobjectId)> {
-        let first = self.ast.first(most_derived);
-        self.ast.virtuals.get(first)?.final_overrider(at, method)
+        let method = self.ast.first(method);
+        crate::class::ensure_virtuals(self.ast, most_derived)?.final_overrider(at, method)
     }
 
     fn subobjects(&mut self, record: DeclId) -> &[Subobject] {
-        let first = self.ast.first(record);
-        self.ast.virtuals.get(first).map_or(&[], |v| &v.subobjects)
+        crate::class::ensure_virtuals(self.ast, record).map_or(&[], |v| &v.subobjects)
     }
 
     fn consts(&mut self) -> &mut ConstStore {

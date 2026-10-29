@@ -188,14 +188,6 @@ fn collect_vbases(
     }
 }
 
-/// True if class `c` has a virtual base (directly or indirectly).
-pub(crate) fn has_virtual_bases(ast: &Ast, c: DeclId) -> bool {
-    let mut out = Vec::new();
-    let mut visited = FxHashSet::default();
-    collect_vbases(ast, ast.first(c), &mut out, &mut visited, 0);
-    !out.is_empty()
-}
-
 /// The final overriders of every virtual function in every subobject of
 /// `record`: `(subobject, method, overrider, overrider's subobject)` for
 /// each candidate that no other candidate dominates, sorted. A
@@ -355,4 +347,170 @@ pub(crate) fn method_order(ast: &Ast, record: DeclId) -> Vec<DeclId> {
     let mut out = Vec::new();
     walk(ast, ast.first(record), &mut out, &mut FxHashSet::default(), &mut FxHashSet::default(), 0);
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use kiln_ast::decl::{BaseSpec, DeclKind, DefinitionBits, FnSpec, TagKind};
+    use kiln_ast::names::DeclName;
+    use kiln_ast::types::{ExcSpec, FuncInfo, TargetTypes, TypeContext};
+    use kiln_ast::{Ast, DeclHead, DeclId, QualType};
+    use kiln_source::Loc;
+    use kiln_source::symbol::Interner;
+
+    use super::*;
+
+    fn ast() -> Ast {
+        Ast::new(Arc::new(Interner::new()), TypeContext::new(TargetTypes::default()))
+    }
+
+    fn name(a: &Ast, n: &str) -> DeclName {
+        DeclName::ident(a.symbols().intern(n))
+    }
+
+    /// `struct n : bases {` (`(base, is_virtual)`), definition begun.
+    fn class(a: &mut Ast, n: &str, bases: &[(DeclId, bool)]) -> DeclId {
+        let h = DeclHead::new(a.tu, name(a, n), Loc::INVALID);
+        let r = a.builder().record(h, TagKind::Struct, None);
+        a.builder().begin_record_definition(r).expect("first definition");
+        let specs: Vec<BaseSpec> = bases
+            .iter()
+            .map(|&(b, is_virtual)| BaseSpec {
+                ty: a.decls.get(b).ty().expect("record type"),
+                loc: Loc::INVALID,
+                is_virtual,
+                access: kiln_ast::decl::Access::Public,
+                pack_expansion: false,
+            })
+            .collect();
+        let lists = &mut a.lists;
+        a.decls.set_bases(r, &specs, lists).expect("bases once");
+        r
+    }
+
+    /// `virtual void n()` in `r`, overriding `overrides`.
+    fn vfn(a: &mut Ast, r: DeclId, n: &str, overrides: &[DeclId]) -> DeclId {
+        let ft = a.types.function(QualType::VOID, &[], FuncInfo::new(), ExcSpec::None);
+        let h = DeclHead::new(r, name(a, n), Loc::INVALID);
+        let spec = FnSpec::new().with_virtual(true);
+        let f = a.builder().function(h, DeclKind::CXXMethod, ft, spec, None);
+        a.builder().set_overrides(f, overrides).expect("overrides once");
+        f
+    }
+
+    fn done(a: &mut Ast, r: DeclId) {
+        a.builder().complete_record_definition(r, DefinitionBits::empty());
+    }
+
+    fn classes(a: &Ast, r: DeclId) -> Vec<(DeclId, u16, bool)> {
+        subobject_graph(a, r).iter().map(|s| (s.class, s.parent.0, s.is_virtual)).collect()
+    }
+
+    fn fo(v: &ClassVirtuals, at: u16, m: DeclId) -> Option<(DeclId, u16)> {
+        v.final_overrider(SubobjectId(at), m).map(|(f, s)| (f, s.0))
+    }
+
+    #[test]
+    fn numbering_non_virtual_diamond() {
+        let mut a = ast();
+        let x = class(&mut a, "A", &[]);
+        let f = vfn(&mut a, x, "f", &[]);
+        done(&mut a, x);
+        let b = class(&mut a, "B", &[(x, false)]);
+        let bf = vfn(&mut a, b, "f", &[f]);
+        done(&mut a, b);
+        let c = class(&mut a, "C", &[(x, false)]);
+        done(&mut a, c);
+        let d = class(&mut a, "D", &[(b, false), (c, false)]);
+        done(&mut a, d);
+        // D, B, A (in B), C, A (in C).
+        assert_eq!(
+            classes(&a, d),
+            vec![(d, 0, false), (b, 0, false), (x, 1, false), (c, 0, false), (x, 3, false)]
+        );
+        let v = compute_virtuals(&a, d).expect("complete");
+        // Each A subobject has its own final overrider.
+        assert_eq!(fo(&v, 2, f), Some((bf, 1)));
+        assert_eq!(fo(&v, 4, f), Some((f, 4)));
+        assert_eq!(fo(&v, 1, bf), Some((bf, 1)));
+        assert!(all_final_overriders(&a, &v.subobjects).windows(2).all(|w| (w[0].0, w[0].1) != (w[1].0, w[1].1)));
+    }
+
+    #[test]
+    fn virtual_diamond_dominance() {
+        let mut a = ast();
+        let x = class(&mut a, "A", &[]);
+        let f = vfn(&mut a, x, "f", &[]);
+        let g = vfn(&mut a, x, "g", &[]);
+        done(&mut a, x);
+        let b = class(&mut a, "B", &[(x, true)]);
+        let bf = vfn(&mut a, b, "f", &[f]);
+        done(&mut a, b);
+        let c = class(&mut a, "C", &[(x, true)]);
+        done(&mut a, c);
+        let d = class(&mut a, "D", &[(b, false), (c, false)]);
+        done(&mut a, d);
+        // D, B, C, then the shared virtual A (parent B, the first naming it).
+        assert_eq!(classes(&a, d), vec![(d, 0, false), (b, 0, false), (c, 0, false), (x, 1, true)]);
+        let v = compute_virtuals(&a, d).expect("complete");
+        // B::f dominates A::f in the shared A ([class.virtual]/2).
+        assert_eq!(fo(&v, 3, f), Some((bf, 1)));
+        assert_eq!(fo(&v, 3, g), Some((g, 3)));
+    }
+
+    #[test]
+    fn virtual_diamond_two_final_overriders() {
+        let mut a = ast();
+        let x = class(&mut a, "A", &[]);
+        let f = vfn(&mut a, x, "f", &[]);
+        done(&mut a, x);
+        let b = class(&mut a, "B", &[(x, true)]);
+        let bf = vfn(&mut a, b, "f", &[f]);
+        done(&mut a, b);
+        let c = class(&mut a, "C", &[(x, true)]);
+        let cf = vfn(&mut a, c, "f", &[f]);
+        done(&mut a, c);
+        let d = class(&mut a, "D", &[(b, false), (c, false)]);
+        done(&mut a, d);
+        let subs = subobject_graph(&a, d);
+        let all = all_final_overriders(&a, &subs);
+        let at_a: Vec<DeclId> =
+            all.iter().filter(|e| e.0 == SubobjectId(3) && e.1 == f).map(|e| e.2).collect();
+        assert_eq!(at_a.len(), 2);
+        assert!(at_a.contains(&bf) && at_a.contains(&cf));
+        // An overrider in D resolves it.
+        let e = class(&mut a, "E", &[(b, false), (c, false)]);
+        let ef = vfn(&mut a, e, "f", &[bf, cf]);
+        done(&mut a, e);
+        let v = compute_virtuals(&a, e).expect("complete");
+        assert_eq!(fo(&v, 3, f), Some((ef, 0)));
+        assert_eq!(fo(&v, 1, bf), Some((ef, 0)));
+        assert_eq!(fo(&v, 2, cf), Some((ef, 0)));
+    }
+
+    #[test]
+    fn nested_virtual_bases_in_graph_order() {
+        // struct V; struct W : virtual V; struct X : virtual W, virtual V.
+        let mut a = ast();
+        let v = class(&mut a, "V", &[]);
+        done(&mut a, v);
+        let w = class(&mut a, "W", &[(v, true)]);
+        done(&mut a, w);
+        let x = class(&mut a, "X", &[(w, true), (v, true)]);
+        done(&mut a, x);
+        assert_eq!(classes(&a, x), vec![(x, 0, false), (w, 0, true), (v, 0, true)]);
+    }
+
+    #[test]
+    fn ensure_virtuals_caches_complete_classes_only() {
+        let mut a = ast();
+        let x = class(&mut a, "A", &[]);
+        vfn(&mut a, x, "f", &[]);
+        assert!(ensure_virtuals(&mut a, x).is_none());
+        done(&mut a, x);
+        assert_eq!(ensure_virtuals(&mut a, x).map(|v| v.subobjects.len()), Some(1));
+        assert!(a.virtuals.get(x).is_some());
+    }
 }

@@ -125,7 +125,7 @@ impl ClassBuild {
 }
 
 pub(crate) use member_expr::MemberRef;
-pub(crate) use r#virtual::{AbstractUse, VirtualSite};
+pub(crate) use r#virtual::{AbstractUse, VirtualSite, ensure_virtuals};
 
 /// Bits of [`Sema`]'s `implicit_declared` map: which implicit special
 /// members of a class have been declared (spec/sema-class.md §4.1).

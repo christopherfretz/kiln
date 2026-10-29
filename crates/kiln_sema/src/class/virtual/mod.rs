@@ -29,7 +29,7 @@ use crate::Sema;
 use crate::conv::bases::{self, BaseSearch};
 use crate::declspec::{DeclSpec, Declarator};
 
-pub use graph::{MAX_SUBOBJECTS, compute_virtuals, ensure_virtuals, subobject_graph};
+pub(crate) use graph::ensure_virtuals;
 pub(crate) use abstract_::AbstractUse;
 pub(crate) use graph::{is_method_kind, is_pure, is_virtual, overridden};
 
