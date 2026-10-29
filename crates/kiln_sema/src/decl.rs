@@ -3227,10 +3227,37 @@ impl Sema<'_, '_> {
 
     // -- name classification -----------------------------------------------------
 
+    /// What `name` names in `X<...>::name` when the parser's lookahead
+    /// skipped the template-id `X<...>` without forming the
+    /// specialization: classified by the primary template's pattern (a
+    /// partial or explicit specialization may differ; the parse proper
+    /// looks up in the specialization).
+    fn classify_template_member(&self, tmpl: DeclId, name: Symbol) -> NameClass {
+        let Some(p) = self.ast.template_info(tmpl).and_then(|i| i.pattern) else {
+            return NameClass::Dependent;
+        };
+        let Some(def) = self.ast.definition(p) else { return NameClass::Dependent };
+        let found = self.lookup_qualified(def, name, LookupKind::Ordinary);
+        let Some(&d) = found.decls.first() else { return NameClass::Dependent };
+        let k = self.kind_of(self.ast.strip_shadow(d));
+        match k {
+            DeclKind::ClassTemplate | DeclKind::TypeAliasTemplate => NameClass::TypeTemplate(d),
+            DeclKind::VarTemplate => NameClass::VarTemplate(d),
+            DeclKind::FunctionTemplate => NameClass::FunctionTemplate(d),
+            _ if is_type_kind(k) => NameClass::Type(QualType::DEPENDENT, d),
+            _ => NameClass::Value(d),
+        }
+    }
+
     /// What an identifier names here (for parser decisions,
     /// [basic.lookup.unqual]); `qualifier` is the context named by a
     /// preceding nested-name-specifier.
     pub fn classify_name(&self, name: Symbol, qualifier: Option<DeclId>) -> NameClass {
+        if let Some(q) = qualifier
+            && self.kind_of(q) == DeclKind::ClassTemplate
+        {
+            return self.classify_template_member(q, name);
+        }
         if let Some(q) = qualifier
             && self.is_dependent_ctx(q)
         {

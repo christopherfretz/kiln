@@ -670,11 +670,9 @@ impl Parser<'_, '_> {
         };
         self.s.mark_type_referenced(d);
         let kind = self.s.ast.decls.get(d).kind();
-        Some(if kiln_sema::lookup::is_tag_kind(kind) {
-            self.s.elaborated_tag_type(d, TagKeyword::None)
-        } else {
-            t
-        })
+        let named = if kiln_sema::lookup::is_tag_kind(kind) { self.s.tag_type(d) } else { t };
+        // The qualifier as written is sugar: `'S::P':'int *'`.
+        Some(self.s.ast.types.elaborated(kw, Some(q.nns), named))
     }
 
     /// True at a type-constraint followed by `auto` or `decltype(auto)`

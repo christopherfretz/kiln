@@ -9,13 +9,14 @@ use kiln_ast::decl::{DeclFlags, DeclKind, TagKind};
 use kiln_ast::expr::ExprKind;
 use kiln_ast::ids::{ArgListId, TemplateNameId};
 use kiln_ast::templates::SpecKind;
-use kiln_ast::types::TemplateArg;
+use kiln_ast::types::{TagKeyword, TemplateArg};
 use kiln_ast::{DeclId, QualType};
 use kiln_diag::DiagId;
 use kiln_source::Loc;
 
 use crate::Sema;
 use crate::class::BaseSpecInfo;
+use crate::decl::TagUse;
 use crate::declspec::DeclaratorContext;
 use crate::init::Initializer;
 use crate::scope::{Scope, ScopeKind};
@@ -272,8 +273,8 @@ impl Sema<'_, '_> {
         Ok(self.ast.types.template_specialization(name, list, Some(u), true))
     }
 
-    /// The class template specialization `q` names (through sugar and
-    /// arrays), if any and not yet defined.
+    /// The class template specialization, or member class of one, that
+    /// `q` names (through sugar and arrays), if any and not yet defined.
     fn undefined_spec(&self, q: QualType) -> Option<DeclId> {
         let mut t = q;
         while let Some(e) = self.ast.types.element(t) {
@@ -283,7 +284,9 @@ impl Sema<'_, '_> {
             t = e;
         }
         let r = self.ast.types.as_record(t)?;
-        self.ast.spec_info(r)?;
+        if self.ast.spec_info(r).is_none() && self.ast.instantiated_from(r).is_none() {
+            return None;
+        }
         self.ast.definition(r).is_none().then_some(r)
     }
 
@@ -342,6 +345,9 @@ impl Sema<'_, '_> {
         if self.defining.contains(&spec) || self.inst.fatal {
             return false;
         }
+        if self.ast.spec_info(spec).is_none() {
+            return self.instantiate_member_class(spec, poi);
+        }
         let Some((tmpl, args)) = self.spec_args(spec) else { return false };
         // [temp.spec.partial.match]: partial specializations are not
         // matched yet (WP-070b) — the primary template is used.
@@ -375,15 +381,64 @@ impl Sema<'_, '_> {
             });
         }
         let parent = self.ast.decls.get(spec).ctx().unwrap_or(self.ast.tu);
-        self.in_inst_context(parent, |s| s.instantiate_class_body(spec, def, &args));
+        self.in_inst_context(parent, |s| s.instantiate_class_body(spec, def, &args, &[]));
         self.pop_inst_frame();
         self.ast.definition(spec).is_some()
     }
 
-    fn instantiate_class_body(&mut self, spec: DeclId, def: DeclId, args: &MultiLevelArgs) {
+    /// Instantiates the definition of `r`, a member class of a class
+    /// template specialization, from its pattern ([temp.inst]/3: a member
+    /// class is declared with its enclosing class and defined when a
+    /// complete type is required). False when the pattern has no
+    /// definition (the caller reports the incomplete type).
+    fn instantiate_member_class(&mut self, r: DeclId, poi: Loc) -> bool {
+        let Some(pattern) = self.ast.instantiated_from(r) else { return false };
+        let Some(def) = self.ast.definition(pattern) else { return false };
+        // The enclosing instantiated classes, innermost first, up to the
+        // specialization whose arguments the member is substituted with.
+        let mut outer = Vec::new();
+        let mut args = None;
+        let mut c = self.ast.decls.get(r).ctx();
+        while let Some(x) = c.filter(|&x| self.kind_of(x) == DeclKind::CXXRecord) {
+            if let Some(p) = self.ast.instantiated_from(x) {
+                outer.push((p, x));
+            }
+            if let Some((_, a)) = self.spec_args(x) {
+                args = Some(a);
+                break;
+            }
+            c = self.ast.decls.get(x).ctx();
+        }
+        let Some(args) = args else { return false };
+        if !self.push_inst_frame(FrameKind::MemberClass, r, pattern, poi) {
+            return false;
+        }
+        let parent = self.ast.decls.get(r).ctx().unwrap_or(self.ast.tu);
+        self.in_inst_context(parent, |s| s.instantiate_class_body(r, def, &args, &outer));
+        self.pop_inst_frame();
+        self.ast.definition(r).is_some()
+    }
+
+    /// Defines `spec` from pattern definition `def`. `outer` maps the
+    /// patterns of the enclosing classes of a member class to their
+    /// instantiations.
+    fn instantiate_class_body(
+        &mut self,
+        spec: DeclId,
+        def: DeclId,
+        args: &MultiLevelArgs,
+        outer: &[(DeclId, DeclId)],
+    ) {
         self.act_on_start_record_definition(spec);
         let mut sub = Substituter::new(self, args);
         sub.entity = Some(spec);
+        for &(p, x) in outer.iter().rev() {
+            sub.map_context(p, x);
+            let first = sub.sema.ast.first(p);
+            if first != p {
+                sub.map_context(first, x);
+            }
+        }
         sub.map_context(def, spec);
         let first = sub.sema.ast.first(def);
         if first != def {
@@ -618,6 +673,22 @@ impl Sema<'_, '_> {
 }
 
 impl Substituter<'_, '_, '_> {
+    /// A member class is declared with its class; its definition is
+    /// instantiated when it is required to be complete ([temp.inst]/3).
+    fn member_class_decl(&mut self, m: DeclId) -> Result<DeclId, SubstFail> {
+        let n = *self.sema.ast.decls.get(m);
+        let loc = n.loc();
+        let Some(name) = n.name().as_ident().filter(|_| !n.name().is_empty()) else {
+            return self.unimplemented("anonymous member classes of class templates", loc);
+        };
+        let kw = match self.sema.ast.decls.record(m).map(|r| r.tag) {
+            Some(TagKind::Class) => TagKeyword::Class,
+            Some(TagKind::Union) => TagKeyword::Union,
+            _ => TagKeyword::Struct,
+        };
+        Ok(self.sema.act_on_tag(kw, Some((name, loc)), None, TagUse::Declaration, 0, None, loc))
+    }
+
     /// Replays member `m` of the pattern class (§4.6).
     fn member(&mut self, m: DeclId) -> Result<Option<DeclId>, SubstFail> {
         let n = *self.sema.ast.decls.get(m);
@@ -650,7 +721,7 @@ impl Substituter<'_, '_, '_> {
                 return Ok(r.filter(|&x| self.sema.kind_of(x) != DeclKind::Friend));
             }
             DeclKind::Empty => return Ok(None),
-            DeclKind::CXXRecord => return self.unimplemented("member classes of class templates", loc),
+            DeclKind::CXXRecord => self.member_class_decl(m)?,
             DeclKind::ClassTemplate
             | DeclKind::FunctionTemplate
             | DeclKind::VarTemplate
