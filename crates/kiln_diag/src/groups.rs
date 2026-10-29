@@ -123,6 +123,9 @@ diag_groups! {
     Cxx14Extensions = "c++14-extensions" [Cxx14BinaryLiteral];
     Cxx17Extensions = "c++17-extensions" [];
     Cxx23Extensions = "c++23-extensions" [];
+    // WP-064
+    VexingParse = "vexing-parse" [];
+    BracedScalarInit = "braced-scalar-init" [];
     // driver codegen path (WP-052b)
     UnusedCommandLineArgument = "unused-command-line-argument" [];
 }

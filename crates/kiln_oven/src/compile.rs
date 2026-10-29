@@ -713,6 +713,11 @@ impl Scan<'_> {
                 }
             }
             ExprKind::ParenExpr => self.expr(ast.exprs.operand(e), ok),
+            ExprKind::CXXDefaultArgExpr => {
+                if let Some(d) = default_arg_of(ast, e) {
+                    self.expr(d, false);
+                }
+            }
             k if k.is_cast() => {
                 let op = ast.exprs.operand(e);
                 match ast.exprs.cast_kind(e) {
@@ -1611,6 +1616,10 @@ impl Compiler<'_> {
                 let op = self.ast().exprs.operand(e);
                 self.rv_inner(op, dst);
             }
+            ExprKind::CXXDefaultArgExpr => match default_arg_of(self.ast(), e) {
+                Some(d) => self.rv_inner(d, dst),
+                None => self.unsupported(e),
+            },
             ExprKind::ConstantExpr => {
                 let ast = self.ast();
                 let v = ast
@@ -2154,6 +2163,10 @@ impl Compiler<'_> {
                 let op = self.ast().exprs.operand(e);
                 self.lv(op, acc)
             }
+            ExprKind::CXXDefaultArgExpr if default_arg_of(self.ast(), e).is_some() => {
+                let d = default_arg_of(self.ast(), e).unwrap_or(e);
+                self.lv(d, acc)
+            }
             ExprKind::DeclRefExpr => {
                 let ast = self.ast();
                 let d = ast.exprs.decl(e);
@@ -2482,6 +2495,10 @@ impl Compiler<'_> {
                 let op = self.ast().exprs.operand(e);
                 return self.init_inner(op, p, ty);
             }
+            ExprKind::CXXDefaultArgExpr if default_arg_of(self.ast(), e).is_some() => {
+                let d = default_arg_of(self.ast(), e).unwrap_or(e);
+                return self.init_inner(d, p, ty);
+            }
             ExprKind::ImplicitValueInitExpr => {
                 self.emit_at(Op::ZeroInit, 0, &[p, ty.0], e);
                 return;
@@ -2701,6 +2718,10 @@ impl Compiler<'_> {
                 let op = self.ast().exprs.operand(e);
                 self.effect(op);
             }
+            ExprKind::CXXDefaultArgExpr if default_arg_of(self.ast(), e).is_some() => {
+                let d = default_arg_of(self.ast(), e).unwrap_or(e);
+                self.effect(d);
+            }
             ExprKind::BinaryOperator => {
                 let op = self.ast().exprs.binary_op(e);
                 match op {
@@ -2886,4 +2907,11 @@ fn is_reference_var(ast: &kiln_ast::Ast, d: DeclId) -> bool {
 /// type.
 fn is_reference_decl(ast: &kiln_ast::Ast, d: DeclId) -> bool {
     ast.decls.get(d).ty().is_some_and(|t| ast.types.is_reference(t))
+}
+
+/// The expression a `CXXDefaultArgExpr` stands for: its parameter's
+/// default argument, evaluated afresh at each call ([dcl.fct.default]/9).
+fn default_arg_of(ast: &kiln_ast::Ast, e: ExprId) -> Option<ExprId> {
+    let p = ast.exprs.default_arg_param(e);
+    ast.decls.param(p).and_then(|x| x.default_arg)
 }

@@ -123,6 +123,10 @@ impl Cg<'_> {
         let q = n.ty();
         Ok(Some(match n.kind() {
             ExprKind::ParenExpr => return self.emit_scalar_opt(ast.exprs.operand(e)),
+            ExprKind::CXXDefaultArgExpr => match default_arg_of(ast, e) {
+                Some(d) => return self.emit_scalar_opt(d),
+                None => return err(self.loc_of(e), "default argument not yet parsed"),
+            },
             ExprKind::ExprWithCleanups => return self.emit_scalar_opt(self.sub(e)),
             ExprKind::ConstantExpr => match ast.exprs.constant_value(e) {
                 Some(c) if !ast.types.is_void(q) => V::C(self.const_scalar_value(c, q)?),
@@ -975,6 +979,10 @@ impl Cg<'_> {
         let q = n.ty();
         match n.kind() {
             ExprKind::ParenExpr => self.emit_lvalue(ast.exprs.operand(e)),
+            ExprKind::CXXDefaultArgExpr => match default_arg_of(ast, e) {
+                Some(d) => self.emit_lvalue(d),
+                None => err(self.loc_of(e), "default argument not yet parsed"),
+            },
             ExprKind::ExprWithCleanups => self.emit_lvalue(self.sub(e)),
             ExprKind::ConstantExpr => self.emit_lvalue(ast.exprs.operand(e)),
             ExprKind::SubstNonTypeTemplateParmExpr => self.emit_lvalue(ExprId::new(n.b())),
@@ -1498,6 +1506,10 @@ impl Cg<'_> {
             ExprKind::ParenExpr | ExprKind::ConstantExpr => {
                 self.agg_visit(ast.exprs.operand(e), dest, zeroed)
             }
+            ExprKind::CXXDefaultArgExpr => match default_arg_of(ast, e) {
+                Some(d) => self.agg_visit(d, dest, zeroed),
+                None => err(self.loc_of(e), "default argument not yet parsed"),
+            },
             ExprKind::ExprWithCleanups | ExprKind::MaterializeTemporaryExpr => {
                 self.agg_visit(self.sub(e), dest, zeroed)
             }
@@ -1928,4 +1940,11 @@ impl Cg<'_> {
         self.memcpy(at, V::C(gval(g)), at.align, size, vol);
         Ok(())
     }
+}
+
+/// The expression a `CXXDefaultArgExpr` stands for: its parameter's
+/// default argument, evaluated afresh at each call ([dcl.fct.default]/9).
+fn default_arg_of(ast: &kiln_ast::Ast, e: ExprId) -> Option<ExprId> {
+    let p = ast.exprs.default_arg_param(e);
+    ast.decls.param(p).and_then(|x| x.default_arg)
 }

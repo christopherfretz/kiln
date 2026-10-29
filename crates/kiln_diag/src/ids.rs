@@ -487,6 +487,29 @@ diag_ids! {
     sema_using_enum_incomplete = Error (1) "enumeration '{0}' is incomplete";
     parse_using_enum_requires_name = Error (0) "using enum requires an enum or typedef name";
 
+    // ----- disambiguation, expression forms, declarators (WP-064)
+    parse_vexing_parse = Warning [VexingParse] (0) "parentheses were disambiguated as a function declaration";
+    parse_empty_parens_vexing = Warning [VexingParse] (0) "empty parentheses interpreted as a function declaration";
+    note_additional_parens_for_variable_declaration = Note (0) "add a pair of parentheses to declare a variable";
+    note_empty_parens_default_ctor = Note (0) "remove parentheses to declare a variable";
+    note_empty_parens_zero_initialize = Note (0) "replace parentheses with an initializer to declare a variable";
+    sema_braces_around_init = Warning [BracedScalarInit] (0) "braces around scalar initializer";
+    sema_default_arg_redefinition = Error (0) "redefinition of default argument";
+    sema_missing_default_arg = Error (1) "missing default argument on parameter '{0}'";
+    sema_missing_default_arg_unnamed = Error (0) "missing default argument on parameter";
+    sema_trailing_return_without_auto = Error (1) "function with trailing return type must specify return type 'auto', not {0}";
+    sema_auto_fn_different_deductions = Error (3) "'{0:auto|decltype(auto)}' in return type deduced as {1} here but deduced as {2} in earlier return statement";
+    sema_auto_fn_used_before_defined = Error (1) "function '{0}' with deduced return type cannot be used before it is defined";
+    sema_auto_fn_init_list = Error (0) "cannot deduce return type from initializer list";
+    sema_auto_init_list_deduction = Error (0) "cannot deduce type of initializer list because std::initializer_list was not found; include <initializer_list>";
+    sema_decltype_auto_compound = Error (1) "cannot form {0:pointer to|reference to|array of} 'decltype(auto)'";
+    sema_need_header_before_typeid = Error (0) "you need to include <typeinfo> before using the 'typeid' operator";
+    sema_bad_offsetof_type = Error (1) "offsetof requires struct, union, or class type, {0} invalid";
+    sema_no_member_offsetof = Error (2) "no member named '{0}' in {1}";
+    sema_stmtexpr_file_scope = Error (0) "statement expression not allowed at file scope";
+    sema_throw_disabled = Error (0) "cannot use 'throw' with exceptions disabled";
+    note_parameter_named_here = Note (1) "passing argument to parameter '{0}' here";
+    note_parameter_here = Note (0) "passing argument to parameter here";
     // ----- sema (WP-048)
     sema_undeclared_var_use = Error (1) "use of undeclared identifier '{0}'";
     sema_unknown_typename = Error (1) "unknown type name '{0}'";

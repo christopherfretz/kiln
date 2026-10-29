@@ -22,7 +22,7 @@ use crate::conv::{self, ConvCtx};
 use crate::declspec::{
     BaseSpec, Chunk, DeclSpec, Declarator, DeclaratorContext, ParamInfo, Sign, StorageSpec, Width,
 };
-use crate::init::Initializer;
+use crate::init::{InitValue, Initializer};
 use crate::lookup::{LookupKind, is_tag_kind, is_type_kind};
 use crate::scope::{Scope, ScopeKind};
 use crate::{Sema, target};
@@ -136,6 +136,9 @@ impl Sema<'_, '_> {
             }
             BaseSpec::Float128 => QualType::FLOAT128,
             BaseSpec::Auto => self.ast.types.auto_type(AutoKeyword::Auto, None, None, None, false),
+            BaseSpec::DecltypeAuto => {
+                self.ast.types.auto_type(AutoKeyword::DecltypeAuto, None, None, None, false)
+            }
             BaseSpec::Named => ds.named.unwrap_or(QualType::ERROR),
         };
         let cv = ds.cv;
@@ -208,12 +211,30 @@ impl Sema<'_, '_> {
         reason = "one arm per declarator chunk, as clang's GetFullTypeForDeclarator"
     )]
     pub fn type_for_declarator(&mut self, base: QualType, d: &Declarator) -> QualType {
+        self.type_for_declarator_at(base, d.loc, d)
+    }
+
+    /// [`Sema::type_for_declarator`] with the location of the
+    /// decl-specifier-seq's type-specifier (where a trailing return type
+    /// without `auto` is diagnosed).
+    pub fn type_for_declarator_at(
+        &mut self,
+        base: QualType,
+        spec_loc: Loc,
+        d: &Declarator,
+    ) -> QualType {
         let mut ty = base;
         let name = self.declarator_name(d);
         let mut prev_ref = false;
         for chunk in d.chunks.iter().rev() {
             if self.is_error_type(ty) {
                 return ty;
+            }
+            if let Some(which) = self.decltype_auto_compound(ty, chunk) {
+                let loc = Self::chunk_loc(chunk);
+                let msg = self.diag(DiagId::sema_decltype_auto_compound, loc).arg(which);
+                self.emit(msg);
+                return QualType::ERROR;
             }
             let t = &self.ast.types;
             match chunk {
@@ -295,8 +316,25 @@ impl Sema<'_, '_> {
                         },
                     };
                 }
-                Chunk::Function { params, variadic, loc, exc, .. } => {
+                Chunk::Function { params, variadic, loc, exc, trailing, .. } => {
                     prev_ref = false;
+                    let mut info = FuncInfo::new().with_variadic(*variadic);
+                    if let Some((ret, _)) = *trailing {
+                        // [dcl.fct]/2: the declared return type is `auto`.
+                        if !self.is_plain_auto(ty) {
+                            if !self.is_error_type(ty) {
+                                let at = spec_loc;
+                                let msg = self
+                                    .diag(DiagId::sema_trailing_return_without_auto, at)
+                                    .arg(self.ty_arg(ty));
+                                self.emit(msg);
+                            }
+                            return QualType::ERROR;
+                        }
+                        ty = ret;
+                        info = info.with_trailing_return(true);
+                    }
+                    let t = &self.ast.types;
                     if t.is_array(ty) || t.is_function(ty) {
                         let which = if t.is_array(ty) { "0" } else { "1" };
                         let msg = self
@@ -307,7 +345,6 @@ impl Sema<'_, '_> {
                         return QualType::ERROR;
                     }
                     let ptys: Vec<QualType> = params.iter().map(|p| p.ty).collect();
-                    let info = FuncInfo::new().with_variadic(*variadic);
                     ty = self.ast.types.function(ty, &ptys, info, *exc);
                 }
             }
@@ -370,7 +407,7 @@ impl Sema<'_, '_> {
     /// ([dcl.fct]/5: arrays and functions become pointers).
     pub fn act_on_param_declarator(&mut self, ds: &DeclSpec, d: &Declarator) -> ParamInfo {
         let base = self.type_from_declspec(ds);
-        let mut ty = self.type_for_declarator(base, d);
+        let mut ty = self.type_for_declarator_at(base, ds.type_loc.unwrap_or(ds.loc), d);
         if let Some((s, loc)) = ds.storage
             && s != StorageSpec::Register
         {
@@ -384,7 +421,112 @@ impl Sema<'_, '_> {
         }
         let mut attrs = ds.attrs.clone();
         attrs.extend(d.attrs.iter().copied());
-        ParamInfo { name: d.name, ty, loc: d.name_loc(), attrs, invalid: ds.invalid || d.invalid }
+        ParamInfo {
+            name: d.name,
+            ty,
+            loc: d.name_loc(),
+            attrs,
+            invalid: ds.invalid || d.invalid,
+            default_arg: None,
+            range: (ds.loc, d.name_loc()),
+        }
+    }
+
+    /// The default argument `= init` of parameter `p` ([dcl.fct.default]):
+    /// copy-initialization of the parameter's type ([dcl.fct.default]/5).
+    pub fn act_on_param_default_arg(&mut self, p: &mut ParamInfo, init: Initializer, eq: Loc) {
+        if p.invalid || self.is_error_type(p.ty) {
+            if let Initializer::Expr(e) = init {
+                p.default_arg = Some((e, eq));
+            }
+            return;
+        }
+        let e = match init {
+            Initializer::List(mut l) => {
+                let scalar = !self.ast.types.is_array(p.ty)
+                    && self.ast.types.as_record(p.ty).is_none()
+                    && !self.ast.types.is_reference(p.ty);
+                if scalar && l.items.len() > 1 {
+                    let d = self.diag(DiagId::sema_excess_initializers, p.loc).arg("2");
+                    let d = self.with_param_note(d, p);
+                    self.emit(d);
+                    l.items.truncate(1);
+                    self.init_from_list_at(p.ty, &l, Some(p.loc))
+                } else {
+                    self.init_list_entity(p.ty, &l, p.loc)
+                }
+            }
+            Initializer::Expr(e) => {
+                if self.is_err_expr(e) {
+                    e
+                } else {
+                    match conv::implicit_convert(self, e, p.ty, ConvCtx::Argument) {
+                        Ok(x) => x,
+                        Err(err) => {
+                            let d = err
+                                .args
+                                .into_iter()
+                                .fold(self.diag(err.id, p.loc), kiln_diag::Diag::arg);
+                            let d = self.with_param_note(d, p);
+                            self.emit(d);
+                            let loc = self.ast.exprs.get(e).loc();
+                            self.recover(p.ty, &[e], loc)
+                        }
+                    }
+                }
+            }
+            Initializer::Paren(v, l, _) => self.recover(p.ty, &v, l),
+        };
+        let e = self.act_on_full_expr(e);
+        p.default_arg = Some((e, eq));
+    }
+
+    /// Attaches clang's "passing argument to parameter 'p' here" note.
+    pub(crate) fn with_param_note(&self, d: kiln_diag::Diag, p: &ParamInfo) -> kiln_diag::Diag {
+        let note = match p.name {
+            None => self.diag(DiagId::note_parameter_here, p.loc),
+            Some((n, _)) => self
+                .diag(DiagId::note_parameter_named_here, p.loc)
+                .arg(self.ast.symbols().as_str(n).to_string()),
+        };
+        d.with_note(note)
+    }
+
+    /// True if `q` is an undeduced plain `auto` (not `decltype(auto)`).
+    fn is_plain_auto(&self, q: QualType) -> bool {
+        q.quals().is_empty()
+            && matches!(
+                self.ast.types.view(q.ty()),
+                TypeView::Auto { keyword: AutoKeyword::Auto, deduced: None, .. }
+            )
+    }
+
+    /// `decltype(auto)` under a pointer, reference or array declarator
+    /// ([dcl.type.auto.deduct]/5): clang's selector (`pointer to`,
+    /// `reference to`, `array of`).
+    fn decltype_auto_compound(&self, ty: QualType, chunk: &Chunk) -> Option<u8> {
+        if !matches!(
+            self.ast.types.view(ty.ty()),
+            TypeView::Auto { keyword: AutoKeyword::DecltypeAuto, deduced: None, .. }
+        ) {
+            return None;
+        }
+        match chunk {
+            Chunk::Pointer { .. } => Some(0),
+            Chunk::LRef { .. } | Chunk::RRef { .. } => Some(1),
+            Chunk::Array { .. } => Some(2),
+            Chunk::Function { .. } => None,
+        }
+    }
+
+    fn chunk_loc(chunk: &Chunk) -> Loc {
+        match chunk {
+            Chunk::Pointer { loc, .. }
+            | Chunk::LRef { loc }
+            | Chunk::RRef { loc }
+            | Chunk::Array { loc, .. }
+            | Chunk::Function { loc, .. } => *loc,
+        }
     }
 
     // -- declarations ------------------------------------------------------------
@@ -466,7 +608,7 @@ impl Sema<'_, '_> {
         base: QualType,
         d: &Declarator,
     ) -> Option<DeclId> {
-        let ty = self.type_for_declarator(base, d);
+        let ty = self.type_for_declarator_at(base, ds.type_loc.unwrap_or(ds.loc), d);
         let invalid = ds.invalid || d.invalid || self.is_error_type(ty);
         let Some((name, name_loc)) = d.name else {
             if d.ctx == DeclaratorContext::Member && d.bit_width.is_some() {
@@ -812,6 +954,15 @@ impl Sema<'_, '_> {
                 self.emit(msg);
             }
         }
+        let params: Vec<ParamInfo> =
+            d.function_params().map(<[ParamInfo]>::to_vec).unwrap_or_default();
+        let (defaults, redefined) = self.merge_default_args(prev_ok, block, &params);
+        // clang marks the redeclaration invalid and leaves it out of the
+        // redeclaration chain; calls ignore it.
+        if redefined {
+            prev_ok = None;
+            invalid_redecl = true;
+        }
         let mut h = DeclHead::new(ctx, DeclName::ident(name), d.name_loc());
         h.lexical = Some(lexical);
         let f = self.builder().function(h, DeclKind::Function, ty, spec, prev_ok);
@@ -819,8 +970,6 @@ impl Sema<'_, '_> {
             self.ast.decls.set_flags(f, DeclFlags::INVALID);
         }
         self.note_local_extern(name, f);
-        let params: Vec<ParamInfo> =
-            d.function_params().map(<[ParamInfo]>::to_vec).unwrap_or_default();
         let mut ids = Vec::with_capacity(params.len());
         let mut seen: Vec<Symbol> = Vec::new();
         for (i, p) in params.iter().enumerate() {
@@ -844,11 +993,104 @@ impl Sema<'_, '_> {
             if !p.attrs.is_empty() {
                 let _ = self.builder().attach_attrs(pd, &p.attrs);
             }
+            if let Some(e) = defaults[i] {
+                let _ = self.ast.decls.set_default_arg(pd, e);
+            }
             ids.push(pd);
         }
         let _ = self.builder().set_params(f, &ids);
         self.register_local(name, f);
         f
+    }
+
+    /// The default arguments of a function declaration's parameters
+    /// after merging with the previous declaration `prev` in the same
+    /// scope ([dcl.fct.default]/4): a default given again is an error
+    /// ("redefinition of default argument"; the redeclaration is then
+    /// invalid, the second result), one given earlier is inherited.
+    /// Declarations in different scopes (a block-scope redeclaration of
+    /// a namespace-scope function) have distinct sets. Then every
+    /// parameter after one with a default argument needs one.
+    fn merge_default_args(
+        &mut self,
+        prev: Option<DeclId>,
+        block: bool,
+        params: &[ParamInfo],
+    ) -> (Vec<Option<ExprId>>, bool) {
+        let mut out: Vec<Option<ExprId>> =
+            params.iter().map(|p| p.default_arg.map(|x| x.0)).collect();
+        let mut redefined = false;
+        let cur = self.ctx;
+        let old = prev.and_then(|p| {
+            self.ast.redecls_of(p).find(|&r| {
+                if block {
+                    self.ast.decls.lexical_ctx(r) == Some(cur)
+                } else {
+                    !self.lexically_local(r)
+                }
+            })
+        });
+        if let Some(o) = old {
+            let olds: Vec<DeclId> = self
+                .ast
+                .decls
+                .function(o)
+                .map(|x| self.ast.lists.iter::<DeclId>(x.params).collect())
+                .unwrap_or_default();
+            for (i, p) in params.iter().enumerate() {
+                let Some(&op) = olds.get(i) else { break };
+                let Some(od) = self.ast.decls.param(op).and_then(|x| x.default_arg) else {
+                    continue;
+                };
+                if p.default_arg.is_some() {
+                    // The note names the declaration that wrote it.
+                    let origin = self
+                        .ast
+                        .redecls_of(o)
+                        .filter_map(|r| {
+                            let f = self.ast.decls.function(r)?;
+                            let rp = self.ast.lists.at::<DeclId>(f.params, i)?;
+                            (self.ast.decls.param(rp)?.default_arg == Some(od)).then_some(rp)
+                        })
+                        .last()
+                        .unwrap_or(op);
+                    let note = self
+                        .diag(DiagId::note_previous_definition, self.ast.decls.get(origin).loc());
+                    let msg = self.diag(DiagId::sema_default_arg_redefinition, p.loc);
+                    self.emit(msg.with_note(note));
+                    redefined = true;
+                } else {
+                    out[i] = Some(od);
+                }
+            }
+        }
+        if let Some(first) = out.iter().position(Option::is_some) {
+            for (i, p) in params.iter().enumerate().skip(first + 1) {
+                if out[i].is_some() || p.invalid {
+                    continue;
+                }
+                let msg = match p.name {
+                    Some((n, _)) => self
+                        .diag(DiagId::sema_missing_default_arg, p.loc)
+                        .arg(self.ast.symbols().as_str(n).to_string()),
+                    None => self.diag(DiagId::sema_missing_default_arg_unnamed, p.loc),
+                };
+                self.emit(msg);
+            }
+        }
+        (out, redefined)
+    }
+
+    /// True if `d` was declared inside a function body.
+    fn lexically_local(&self, d: DeclId) -> bool {
+        let mut c = self.ast.decls.lexical_ctx(d);
+        while let Some(x) = c {
+            if self.ast.decls.get(x).kind() == DeclKind::Function {
+                return true;
+            }
+            c = self.ast.decls.get(x).ctx();
+        }
+        false
     }
 
     fn act_on_field(
@@ -1095,14 +1337,14 @@ impl Sema<'_, '_> {
             self.error(DiagId::sema_extern_init, loc);
         }
         let mut ty = vn.ty().unwrap_or(QualType::ERROR);
+        let direct = spec.init_style() == kiln_ast::decl::InitStyle::List;
         if self.is_undeduced_auto(ty) {
-            ty = match self.deduce_auto(ty, &init, loc) {
+            ty = match self.deduce_auto(ty, &init, loc, direct) {
                 Some(t) => t,
                 None => QualType::ERROR,
             };
             self.ast.decls.set_ty(v, ty);
         }
-        let direct = spec.init_style() == kiln_ast::decl::InitStyle::List;
         let e = self.perform_init(ty, init, loc, direct);
         let e = self.act_on_full_expr(e);
         let _ = self.builder().set_var_init(v, e);
@@ -1126,28 +1368,33 @@ impl Sema<'_, '_> {
         declared: QualType,
         init: &Initializer,
         loc: Loc,
+        direct: bool,
     ) -> Option<QualType> {
         let e = match init {
             Initializer::Expr(e) => *e,
             Initializer::Paren(v, ..) if v.len() == 1 => v[0],
+            // `auto x{e};` deduces from `e` ([dcl.type.auto.deduct]/2.1.4).
+            Initializer::List(l)
+                if l.items.len() == 1
+                    && l.items[0].designator.is_empty()
+                    && matches!(l.items[0].value, InitValue::Expr(_))
+                    && direct =>
+            {
+                let InitValue::Expr(e) = l.items[0].value else { return None };
+                e
+            }
+            // `auto x = { ... };` deduces std::initializer_list<T>.
+            Initializer::List(l) => {
+                let msg = self.diag(DiagId::sema_auto_init_list_deduction, l.lbrace);
+                self.emit(msg);
+                return None;
+            }
             _ => {
                 self.unsupported("this form of 'auto' deduction", loc);
                 return None;
             }
         };
-        let ety = self.ast.exprs.get(e).ty();
-        let t = &self.ast.types;
-        let base = if t.is_array(ety) {
-            let el = t.element(ety).unwrap_or(QualType::ERROR);
-            self.ast.types.pointer_to(el)
-        } else if t.is_function(ety) {
-            self.ast.types.pointer_to(ety)
-        } else {
-            let c = self.ast.types.canonical(ety);
-            if self.ast.types.effective_quals(ety).is_empty() { ety } else { c.without_quals() }
-        };
-        let q = declared.quals();
-        Some(if q.is_empty() { base } else { self.ast.types.qualify(base, q) })
+        Some(self.deduce_placeholder(declared, e))
     }
 
     /// A `constexpr` variable's initializer must be a constant expression

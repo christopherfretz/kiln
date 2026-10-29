@@ -9,7 +9,7 @@ use kiln_lex::{Punct, TokKind};
 use kiln_sema::declspec::SpecError;
 use kiln_sema::{
     BaseSpec, Chunk, DeclSpec, Declarator, DeclaratorContext, Designator, InitItem, InitList,
-    InitValue, Initializer, NameClass, Sign, StorageSpec, TagUse, Width,
+    InitValue, Initializer, NameClass, ParamInfo, Sign, StorageSpec, TagUse, Width,
 };
 use kiln_source::Loc;
 use kiln_source::symbol::Symbol;
@@ -483,7 +483,23 @@ impl Parser<'_, '_> {
                     self.parse_tag_specifier(&mut ds, k);
                     continue;
                 }
-                Kw::Typename | Kw::Decltype | Kw::Typeof => {
+                Kw::Decltype => {
+                    let (base, ty) = self.parse_decltype_specifier();
+                    if base == BaseSpec::Named && ty.is_none() {
+                        ds.invalid = true;
+                    }
+                    let ty = if base == BaseSpec::Named {
+                        Some(ty.unwrap_or(QualType::ERROR))
+                    } else {
+                        None
+                    };
+                    if let Err(e) = ds.set_base(base, ty, loc) {
+                        ds.invalid = true;
+                        self.spec_error(&e, loc);
+                    }
+                    continue;
+                }
+                Kw::Typename | Kw::Typeof => {
                     self.unsupported(&format!("'{}'", k.spelling()), loc);
                     self.bump();
                     if self.eat(Punct::LParen).is_some() {
@@ -512,6 +528,37 @@ impl Parser<'_, '_> {
             }
         }
         ds
+    }
+
+    /// decltype-specifier ([dcl.type.decltype]): `decltype ( expression )`
+    /// or `decltype ( auto )` ([dcl.type.auto.deduct]). At `decltype`.
+    /// Returns the base specifier and, for `decltype(e)`, its type (`None`
+    /// after an error).
+    pub(crate) fn parse_decltype_specifier(&mut self) -> (BaseSpec, Option<QualType>) {
+        let loc = self.bump().span.lo;
+        let Some(open) = self.eat(Punct::LParen) else {
+            let d = self
+                .s
+                .diag(DiagId::parse_expected_after, self.expected_loc())
+                .arg("'decltype'")
+                .arg("'('");
+            self.emit(d);
+            return (BaseSpec::Named, None);
+        };
+        if self.at_kw(Kw::Auto) && self.peek_is(1, Punct::RParen) {
+            self.bump();
+            self.bump();
+            return (BaseSpec::DecltypeAuto, None);
+        }
+        self.s.enter_unevaluated();
+        let e = self.parse_expression();
+        self.s.exit_unevaluated();
+        let Some(e) = e else {
+            self.skip_until(&[Punct::RParen], false, true);
+            return (BaseSpec::Named, None);
+        };
+        let rparen = self.expect_closing(Punct::RParen, Punct::LParen, open);
+        (BaseSpec::Named, self.s.act_on_decltype(e, loc, rparen))
     }
 
     fn spec_error(&self, e: &SpecError, loc: Loc) {
@@ -1050,12 +1097,12 @@ impl Parser<'_, '_> {
             if self.at_attr() {
                 self.parse_attributes(&mut pd.attrs);
             }
+            let mut p = self.s.act_on_param_declarator(&ds, &pd);
+            p.range = (start, self.tok_at(self.pos().saturating_sub(1)).span.lo);
             if self.at(Punct::Equal) {
-                self.unsupported("default arguments", self.loc());
-                self.bump();
-                self.skip_until(&[Punct::Comma, Punct::RParen], false, false);
+                self.parse_default_argument(&mut p);
             }
-            params.push(self.s.act_on_param_declarator(&ds, &pd));
+            params.push(p);
             if self.eat(Punct::Ellipsis).is_some() {
                 variadic = true;
                 break;
@@ -1065,9 +1112,35 @@ impl Parser<'_, '_> {
             }
         }
         let rparen = self.expect_closing(Punct::RParen, Punct::LParen, open);
-        let exc = self.parse_function_qualifiers();
+        let (exc, trailing) = self.parse_function_qualifiers();
         let params = self.s.act_on_param_list(params);
-        d.chunks.push(Chunk::Function { params, variadic, loc: open, rparen, exc });
+        d.chunks.push(Chunk::Function {
+            params,
+            variadic,
+            loc: open,
+            rparen,
+            exc,
+            trailing,
+            ambiguous: false,
+        });
+    }
+
+    /// `= initializer-clause` after a parameter-declaration
+    /// ([dcl.fct.default]/1). At the `=`.
+    fn parse_default_argument(&mut self, p: &mut ParamInfo) {
+        let eq = self.bump().span.lo;
+        let init = if self.at(Punct::LBrace) {
+            self.parse_init_list().ok().map(Initializer::List)
+        } else {
+            self.parse_assignment_expr().map(Initializer::Expr)
+        };
+        match init {
+            Some(init) => self.s.act_on_param_default_arg(p, init, eq),
+            None => {
+                p.invalid = true;
+                self.skip_until(&[Punct::Comma, Punct::RParen], false, false);
+            }
+        }
     }
 
     /// cv- and ref-qualifiers, the exception specification and trailing
@@ -1075,8 +1148,9 @@ impl Parser<'_, '_> {
     /// specification ([except.spec]) is supported in M2; it is returned
     /// (`ExcSpec::None` when absent). A second specification ends the
     /// declarator (clang then expects a function body).
-    fn parse_function_qualifiers(&mut self) -> ExcSpec {
+    fn parse_function_qualifiers(&mut self) -> (ExcSpec, Option<(QualType, Loc)>) {
         let mut exc = None;
+        let mut trailing = None;
         loop {
             let loc = self.loc();
             match self.kw() {
@@ -1087,12 +1161,15 @@ impl Parser<'_, '_> {
                 Some(Kw::Noexcept | Kw::Throw) if exc.is_none() => {
                     exc = Some(self.parse_exception_spec());
                 }
-                _ if self.at(Punct::Arrow) => {
-                    self.unsupported("trailing return types", loc);
+                _ if self.at(Punct::Arrow) && trailing.is_none() => {
                     self.bump();
-                    let _ = self.parse_type_id();
+                    // A failed type-id was diagnosed: the declarator is
+                    // invalid.
+                    let ty = self.parse_type_id().unwrap_or(QualType::ERROR);
+                    trailing = Some((ty, loc));
+                    return (exc.unwrap_or_default(), trailing);
                 }
-                _ => return exc.unwrap_or_default(),
+                _ => return (exc.unwrap_or_default(), trailing),
             }
         }
     }
@@ -1156,7 +1233,7 @@ impl Parser<'_, '_> {
         let mut d = Declarator::new(DeclaratorContext::TypeName, self.loc());
         self.parse_declarator(&mut d);
         let base = self.s.type_from_declspec(&ds);
-        Some(self.s.type_for_declarator(base, &d))
+        Some(self.s.type_for_declarator_at(base, ds.type_loc.unwrap_or(ds.loc), &d))
     }
 
     /// True if a type-id starts at token index `i`.

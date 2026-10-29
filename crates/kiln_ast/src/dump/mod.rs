@@ -474,6 +474,22 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                     }
                 }
             }
+            ExprKind::BinaryConditionalOperator | ExprKind::OffsetOfExpr => {
+                for c in exprs.children(e, lists) {
+                    kids.push((Node::Expr(c), None));
+                }
+            }
+            ExprKind::CXXThrowExpr | ExprKind::CompoundLiteralExpr | ExprKind::OpaqueValueExpr => {
+                push(n.a());
+            }
+            // The shared default argument, as clang dumps it.
+            ExprKind::CXXDefaultArgExpr => {
+                let p = exprs.default_arg_param(e);
+                if let Some(d) = self.ast.decls.param(p).and_then(|x| x.default_arg) {
+                    kids.push((Node::Expr(d), None));
+                }
+            }
+            ExprKind::StmtExpr => kids.push((self.stmt_node(exprs.stmt_expr_body(e)), None)),
             _ => {}
         }
     }

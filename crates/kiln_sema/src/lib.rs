@@ -18,6 +18,7 @@ pub mod constfold;
 pub mod conv;
 pub mod decl;
 pub mod declspec;
+mod deduce;
 pub mod except;
 pub mod expr;
 pub mod init;

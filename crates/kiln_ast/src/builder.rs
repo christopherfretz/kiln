@@ -1388,6 +1388,164 @@ impl<'a> AstBuilder<'a> {
         self.simple(ExprKind::RecoveryExpr, vk, deps, 0, ty, loc, list.raw(), 0)
     }
 
+    // ----- WP-064: expression forms ---------------------------------------
+
+    /// `T()` for a non-class type `T` ([expr.type.conv]/2): a prvalue
+    /// value-initialized `ty`; `loc` is the type's location, `rparen`
+    /// the closing `)`.
+    pub fn scalar_value_init(&mut self, ty: QualType, loc: Loc, rparen: Loc) -> ExprId {
+        let deps = self.type_deps(ty);
+        let e = self.simple(
+            ExprKind::CXXScalarValueInitExpr,
+            ValueCategory::PRValue,
+            deps,
+            0,
+            ty,
+            loc,
+            0,
+            0,
+        );
+        self.ast.exprs.cold.end_loc.insert(e, rparen).expect("fresh expression");
+        e
+    }
+
+    /// `throw` / `throw e` ([expr.throw]): a prvalue of type `void`
+    /// (`ty`); `operand` is the copy-initialized exception object's
+    /// source, already converted.
+    pub fn throw_expr(&mut self, operand: Option<ExprId>, ty: QualType, loc: Loc) -> ExprId {
+        let deps = self.type_deps(ty) | operand.map_or(ExprDeps::NONE, |o| self.deps(o));
+        self.simple(
+            ExprKind::CXXThrowExpr,
+            ValueCategory::PRValue,
+            deps,
+            0,
+            ty,
+            loc,
+            operand.map_or(0, RawId::raw),
+            0,
+        )
+    }
+
+    /// A use of `param`'s default argument ([dcl.fct.default]) in context
+    /// `used_ctx` (the argument is the parameter's shared one); `ty`/`vk`
+    /// are the default argument's (sema-overload.md §7).
+    pub fn default_arg(
+        &mut self,
+        param: DeclId,
+        used_ctx: DeclId,
+        ty: QualType,
+        vk: ValueCategory,
+        loc: Loc,
+    ) -> ExprId {
+        let deps = self.type_deps(ty);
+        self.simple(ExprKind::CXXDefaultArgExpr, vk, deps, 0, ty, loc, param.raw(), used_ctx.raw())
+    }
+
+    /// An `OpaqueValueExpr` standing for `source` (same type, category,
+    /// object kind and dependence); `source` is shared, not a child.
+    pub fn opaque_value(&mut self, source: ExprId) -> ExprId {
+        let n = *self.ast.exprs.get(source);
+        self.push_expr(
+            ExprKind::OpaqueValueExpr,
+            n.value_category(),
+            n.object_kind(),
+            ExprFlags::NONE,
+            n.deps(),
+            0,
+            n.ty(),
+            n.loc(),
+            source.raw(),
+            0,
+        )
+    }
+
+    /// GNU `x ?: y` ([`ExprKind::BinaryConditionalOperator`]): `common`
+    /// is `x`, `opaque` an [`AstBuilder::opaque_value`] of it, `cond` the
+    /// contextual conversion of `opaque` to `bool`, `els` the converted
+    /// `y`; the true arm is `opaque` (converted to `ty` if needed:
+    /// `then`). `vk` is the result's category.
+    #[allow(clippy::too_many_arguments, reason = "the four operands plus the header")]
+    pub fn binary_conditional(
+        &mut self,
+        common: ExprId,
+        cond: ExprId,
+        then: ExprId,
+        els: ExprId,
+        ty: QualType,
+        vk: ValueCategory,
+        loc: Loc,
+    ) -> ExprId {
+        let deps = self.deps(common) | self.deps(els) | self.type_deps(ty);
+        let list = self.ast.lists.push(&[common, cond, then, els]);
+        self.simple(ExprKind::BinaryConditionalOperator, vk, deps, 0, ty, loc, list.raw(), 0)
+    }
+
+    /// A GNU statement expression `({ ... })`: `body` is the compound
+    /// statement; the value is its last expression statement's (`ty`,
+    /// `void` when there is none). `loc` is the `(`, `rparen` the `)`.
+    pub fn stmt_expr(&mut self, body: StmtId, ty: QualType, loc: Loc, rparen: Loc) -> ExprId {
+        let deps = self.type_deps(ty);
+        let e = self.simple(
+            ExprKind::StmtExpr,
+            ValueCategory::PRValue,
+            deps,
+            0,
+            ty,
+            loc,
+            body.raw(),
+            0,
+        );
+        self.ast.exprs.cold.end_loc.insert(e, rparen).expect("fresh expression");
+        e
+    }
+
+    /// `__builtin_offsetof(T, designator)` ([support.types.layout]/1):
+    /// a prvalue of type `std::size_t` (`ty`) whose value is `offset`
+    /// bytes. `indices` are the array subscripts written in the
+    /// designator (dumped as children, as clang).
+    pub fn offsetof(
+        &mut self,
+        ty: QualType,
+        indices: &[ExprId],
+        offset: u32,
+        loc: Loc,
+        rparen: Loc,
+    ) -> ExprId {
+        let mut deps = self.type_deps(ty);
+        for &i in indices {
+            deps |= self.deps(i);
+        }
+        let list = self.ast.lists.push(indices);
+        let e = self.simple(
+            ExprKind::OffsetOfExpr,
+            ValueCategory::PRValue,
+            deps,
+            0,
+            ty,
+            loc,
+            list.raw(),
+            offset,
+        );
+        self.ast.exprs.cold.end_loc.insert(e, rparen).expect("fresh expression");
+        e
+    }
+
+    /// A compound literal `( T ) { ... }` (C99 6.5.2.5, a GNU extension in
+    /// C++): `init` is the `InitListExpr`; a prvalue of type `ty`.
+    pub fn compound_literal(&mut self, ty: QualType, init: ExprId, loc: Loc) -> ExprId {
+        let deps = self.type_deps(ty) | self.deps(init);
+        self.simple(
+            ExprKind::CompoundLiteralExpr,
+            ValueCategory::PRValue,
+            deps,
+            0,
+            ty,
+            loc,
+            init.raw(),
+            0,
+        )
+    }
+
     // =====================================================================
     // Statements
     // =====================================================================

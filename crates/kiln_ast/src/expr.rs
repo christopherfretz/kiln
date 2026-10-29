@@ -9,7 +9,7 @@
 use kiln_source::Loc;
 
 use crate::ids::{
-    ArgListId, ConstValueId, DeclId, ExprId, ListId, NnsId, QualType, RawId, StringLitId,
+    ArgListId, ConstValueId, DeclId, ExprId, ListId, NnsId, QualType, RawId, StmtId, StringLitId,
 };
 use crate::lists::IdLists;
 use crate::mem::{HeapSize, MemReport, MemRow};
@@ -1187,6 +1187,10 @@ impl ExprArena {
                 v.extend(self.init_lists[n.b as usize].array_filler);
             }
             ExprKind::RecoveryExpr => v.extend(lists.iter::<ExprId>(ListId::new(n.a))),
+            ExprKind::BinaryConditionalOperator | ExprKind::OffsetOfExpr => {
+                v.extend(lists.iter::<ExprId>(ListId::new(n.a)));
+            }
+            ExprKind::CXXThrowExpr | ExprKind::CompoundLiteralExpr => v.extend(id(n.a)),
             _ => {}
         }
         v
@@ -1217,5 +1221,63 @@ impl HeapSize for ExprArena {
         r.push(self.cold.member_extra.mem_row().prefixed("cold"));
         r.push(self.cold.designators.mem_row().prefixed("cold"));
         r
+    }
+}
+
+/// Accessors for the WP-064 expression forms (spec/ast.md §5.1).
+impl ExprArena {
+    /// The parameter of a `CXXDefaultArgExpr` (its initializer is the
+    /// parameter's shared default argument).
+    pub fn default_arg_param(&self, e: ExprId) -> DeclId {
+        DeclId::new(self.expect_kind(e, ExprKind::CXXDefaultArgExpr).a)
+    }
+
+    /// The declaration context in which a `CXXDefaultInitExpr` /
+    /// `CXXDefaultArgExpr` is used.
+    pub fn used_context(&self, e: ExprId) -> DeclId {
+        let n = self.get(e);
+        assert!(
+            matches!(n.kind, ExprKind::CXXDefaultInitExpr | ExprKind::CXXDefaultArgExpr),
+            "{:?} has no used context",
+            n.kind
+        );
+        DeclId::new(n.b)
+    }
+
+    /// The source expression of an `OpaqueValueExpr` (shared: not one of
+    /// its [`ExprArena::children`]).
+    pub fn opaque_source(&self, e: ExprId) -> Option<ExprId> {
+        ExprId::from_raw(self.expect_kind(e, ExprKind::OpaqueValueExpr).a)
+    }
+
+    /// The operand of a `CXXThrowExpr` (`None` for a rethrow).
+    pub fn throw_operand(&self, e: ExprId) -> Option<ExprId> {
+        ExprId::from_raw(self.expect_kind(e, ExprKind::CXXThrowExpr).a)
+    }
+
+    /// The operands of a `BinaryConditionalOperator`: the common
+    /// expression, the condition (over an `OpaqueValueExpr` of the
+    /// common expression), the true arm (the `OpaqueValueExpr`, possibly
+    /// converted) and the false arm.
+    pub fn binary_conditional_operands(&self, e: ExprId, lists: &IdLists) -> [ExprId; 4] {
+        let n = self.expect_kind(e, ExprKind::BinaryConditionalOperator);
+        let mut it = lists.iter::<ExprId>(ListId::new(n.a));
+        let mut next = || it.next().expect("four operands");
+        [next(), next(), next(), next()]
+    }
+
+    /// The compound statement of a `StmtExpr`.
+    pub fn stmt_expr_body(&self, e: ExprId) -> StmtId {
+        StmtId::new(self.expect_kind(e, ExprKind::StmtExpr).a)
+    }
+
+    /// The byte offset an `OffsetOfExpr` evaluates to.
+    pub fn offsetof_value(&self, e: ExprId) -> u64 {
+        u64::from(self.expect_kind(e, ExprKind::OffsetOfExpr).b)
+    }
+
+    /// The `InitListExpr` of a `CompoundLiteralExpr`.
+    pub fn compound_literal_init(&self, e: ExprId) -> ExprId {
+        ExprId::new(self.expect_kind(e, ExprKind::CompoundLiteralExpr).a)
     }
 }

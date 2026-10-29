@@ -631,8 +631,20 @@ impl Sema<'_, '_> {
             self.emit(msg);
             return self.recover_err(&[], loc);
         };
-        if found.decls.len() > 1 {
-            if found.decls.iter().all(|&x| self.ast.decls.get(x).kind().is_function()) {
+        let mut d = d;
+        let fns = found.decls.iter().all(|&x| self.ast.decls.get(x).kind().is_function());
+        // An invalid redeclaration is not a separate overload (clang
+        // drops invalid candidates).
+        let valid: Vec<DeclId> = found
+            .decls
+            .iter()
+            .copied()
+            .filter(|&x| !self.ast.decls.get(x).has(DeclFlags::INVALID))
+            .collect();
+        if fns && valid.len() == 1 {
+            d = valid[0];
+        } else if found.decls.len() > 1 {
+            if fns {
                 self.unsupported("overloaded functions", loc);
                 return self.recover_err(&[], loc);
             }
@@ -692,6 +704,9 @@ impl Sema<'_, '_> {
                 self.unsupported("this kind of name", loc);
                 return self.recover_err(&[], loc);
             }
+        }
+        if n.kind() == DeclKind::Function && self.check_undeduced_use(d, loc) {
+            return self.recover_err(&[], loc);
         }
         let declared = n.ty().unwrap_or(QualType::ERROR);
         let ty = self.non_reference(declared);
@@ -1778,13 +1793,24 @@ impl Sema<'_, '_> {
         let variadic = proto.info().variadic();
         let n = params.len();
         let have = args.len();
-        if have < n || (have > n && !variadic) {
-            let few = have < n;
+        // Default arguments of the named function ([dcl.fct.default]/1).
+        let pdecls: Vec<DeclId> = named
+            .and_then(|d| self.ast.decls.function(d))
+            .map(|x| self.ast.lists.iter::<DeclId>(x.params).collect())
+            .unwrap_or_default();
+        let defaults: Vec<Option<ExprId>> = (0..n)
+            .map(|i| {
+                pdecls.get(i).and_then(|&p| self.ast.decls.param(p)).and_then(|x| x.default_arg)
+            })
+            .collect();
+        let min = defaults.iter().rposition(Option::is_none).map_or(0, |i| i + 1);
+        if have < min || (have > n && !variadic) {
+            let few = have < min;
             if let Some(d) = named {
                 let msg = self
                     .diag(DiagId::sema_ovl_no_viable_function_in_call, self.begin_loc(callee))
                     .arg(self.decl_name(d));
-                let detail = self.arity_detail(d, n, have, variadic);
+                let detail = self.arity_detail(d, n, min, have, variadic);
                 let fl = self.ast.decls.get(d).loc();
                 let note = self.diag(DiagId::note_ovl_candidate_not_viable, fl).arg(detail);
                 self.emit(msg.with_note(note));
@@ -1815,6 +1841,13 @@ impl Sema<'_, '_> {
                 conv_args.push(self.default_argument_promotion(a));
             }
         }
+        for i in have..n {
+            let (Some(p), Some(e)) = (pdecls.get(i).copied(), defaults[i]) else { break };
+            let x = *self.ast.exprs.get(e);
+            let used = self.ctx;
+            let arg = self.builder().default_arg(p, used, x.ty(), x.value_category(), Loc::INVALID);
+            conv_args.push(arg);
+        }
         let (ty, vk) = if self.ast.types.is_reference(ret) {
             let lvalue = matches!(self.ast.types.canonical_view(ret), TypeView::LValueRef(_));
             (
@@ -1836,12 +1869,14 @@ impl Sema<'_, '_> {
     }
 
     /// clang's "candidate function not viable" detail for an arity
-    /// mismatch.
-    fn arity_detail(&self, d: DeclId, n: usize, have: usize, variadic: bool) -> String {
-        let provided = match have {
-            0 => "no arguments were provided".to_owned(),
-            1 => "1 was provided".to_owned(),
-            k => format!("{k} were provided"),
+    /// mismatch (`DiagnoseArityMismatch`): `n` parameters, `min` of them
+    /// without a default argument, `have` arguments.
+    fn arity_detail(&self, d: DeclId, n: usize, min: usize, have: usize, variadic: bool) -> String {
+        // 0: at least, 1: at most, 2: exactly.
+        let (mode, count) = if have < min {
+            (if min != n || variadic { 0 } else { 2 }, min)
+        } else {
+            (if min == n { 2 } else { 1 }, n)
         };
         let pname = self
             .ast
@@ -1850,12 +1885,24 @@ impl Sema<'_, '_> {
             .and_then(|f| self.ast.lists.at::<DeclId>(f.params, 0))
             .map(|p| self.decl_name(p))
             .unwrap_or_default();
-        if n == 1 && !variadic && !pname.is_empty() {
-            return format!("requires single argument '{pname}', but {provided}");
+        if count == 1 && !pname.is_empty() {
+            let provided = match have {
+                0 => "no arguments were provided".to_owned(),
+                1 => "1 argument was provided".to_owned(),
+                k => format!("{k} arguments were provided"),
+            };
+            let how = [
+                "requires at least argument",
+                "allows at most single argument",
+                "requires single argument",
+            ][mode];
+            return format!("{how} '{pname}', but {provided}");
         }
-        let need = if variadic { format!("at least {n}") } else { n.to_string() };
-        let plural = if n == 1 { "argument" } else { "arguments" };
-        format!("requires {need} {plural}, but {provided}")
+        let provided =
+            if have == 1 { "1 was provided".to_owned() } else { format!("{have} were provided") };
+        let need = ["at least ", "at most ", ""][mode];
+        let plural = if count == 1 { "argument" } else { "arguments" };
+        format!("requires {need}{count} {plural}, but {provided}")
     }
 
     /// The default argument promotions for a variadic argument

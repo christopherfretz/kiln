@@ -98,6 +98,8 @@ pub enum BaseSpec {
     Float128,
     /// `auto` (a placeholder deduced from the initializer, [dcl.spec.auto]).
     Auto,
+    /// `decltype(auto)` ([dcl.type.auto.deduct]/5).
+    DecltypeAuto,
     /// A type-name, class/enum specifier or elaborated-type-specifier:
     /// the type is in [`DeclSpec::named`].
     Named,
@@ -121,6 +123,7 @@ impl BaseSpec {
             BaseSpec::Double => "double",
             BaseSpec::Float128 => "__float128",
             BaseSpec::Auto => "auto",
+            BaseSpec::DecltypeAuto => "decltype(auto)",
         }
     }
 }
@@ -389,6 +392,12 @@ pub struct ParamInfo {
     pub attrs: Vec<AttrId>,
     /// An error was reported in the parameter.
     pub invalid: bool,
+    /// The default argument ([dcl.fct.default]), converted to the
+    /// parameter's type, and the location of its `=`.
+    pub default_arg: Option<(ExprId, Loc)>,
+    /// The first and last tokens of the parameter-declaration (the
+    /// `-Wvexing-parse` fix-its, [dcl.ambig.res]).
+    pub range: (Loc, Loc),
 }
 
 /// One declarator operator ([dcl.meaning]), clang's `DeclaratorChunk`.
@@ -432,6 +441,13 @@ pub enum Chunk {
         /// [`Sema::act_on_noexcept_spec`](crate::Sema::act_on_noexcept_spec)
         /// and friends; `ExcSpec::None` when absent.
         exc: ExcSpec,
+        /// The trailing return type ([dcl.fct]/2) and its `->`.
+        trailing: Option<(QualType, Loc)>,
+        /// The parentheses could also have been a direct initializer:
+        /// the parameter clause was ambiguous and resolved as a
+        /// declaration ([dcl.ambig.res]/1, clang's
+        /// `hasAmbiguousFunctionDeclarator`; `-Wvexing-parse`).
+        ambiguous: bool,
     },
 }
 
