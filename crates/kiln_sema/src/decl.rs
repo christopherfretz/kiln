@@ -162,6 +162,15 @@ impl Sema<'_, '_> {
                 }
             }
             TypeSpecKind::Float128 => QualType::FLOAT128,
+            // [dcl.type.auto.deduct]/4 (clang
+            // `err_decltype_auto_cannot_be_combined`).
+            TypeSpecKind::DecltypeAuto if !ds.cv.is_empty() => {
+                self.error(
+                    DiagId::sema_decltype_auto_cannot_be_combined,
+                    ds.type_loc.unwrap_or(loc),
+                );
+                return QualType::ERROR;
+            }
             TypeSpecKind::Auto | TypeSpecKind::DecltypeAuto => {
                 let kw = if ds.base == TypeSpecKind::Auto {
                     AutoKeyword::Auto
@@ -1540,7 +1549,9 @@ impl Sema<'_, '_> {
                         self.diag(DiagId::sema_overload_unsupported, d.name_loc())
                             .arg(sym_str(self, name))
                     };
-                    let msg = self.note_prev(msg, p, false);
+                    // clang's `getNoteDiagForInvalidRedeclaration`.
+                    let def = self.ast.decls.function(p).is_some_and(|f| f.body.is_some());
+                    let msg = self.note_prev(msg, p, def);
                     self.emit(msg);
                 }
             } else {
@@ -1589,6 +1600,13 @@ impl Sema<'_, '_> {
             name: dname,
         };
         let virt = self.virtual_decl(ds, d, ty, site, &mut spec);
+        // [dcl.spec.auto.general]/12 (clang's `err_auto_fn_virtual`).
+        if let Some(vloc) = ds.virtual_
+            && in_class
+            && self.ast.types.proto(ty).is_some_and(|p| self.contains_undeduced_auto(p.ret()))
+        {
+            self.error(DiagId::sema_auto_fn_virtual, vloc);
+        }
         let f = self.builder().function(h, fkind, ty, spec, prev_ok);
         self.finish_virtual_decl(f, &virt);
         if invalid_redecl {
@@ -1808,7 +1826,23 @@ impl Sema<'_, '_> {
             let msg = self.diag(DiagId::sema_duplicate_member, d.name_loc()).arg(sym_str(self, n));
             self.emit(msg.with_note(note));
         }
-        let ty = if !invalid
+        // [dcl.spec.auto.general]/5: a placeholder is not allowed in a
+        // non-static data member (clang's `err_auto_not_allowed`).
+        let invalid = invalid || {
+            let kw = self.placeholder_keyword(ty);
+            if let Some(kw) = kw {
+                let tag = self.ast.decls.record(ctx).map_or(TagKind::Struct, |r| r.tag);
+                let msg = self
+                    .diag(DiagId::sema_auto_not_allowed_field, ds.type_loc.unwrap_or(ds.loc))
+                    .arg(u8::from(kw == AutoKeyword::DecltypeAuto))
+                    .arg(tag as u8);
+                self.emit(msg);
+            }
+            kw.is_some()
+        };
+        let ty = if invalid && self.placeholder_keyword(ty).is_some() {
+            QualType::ERROR
+        } else if !invalid
             && !self.ast.types.is_reference(ty)
             && !self.require_complete(ty, d.name_loc())
         {
@@ -2064,11 +2098,25 @@ impl Sema<'_, '_> {
         let mut ty = vn.ty().unwrap_or(QualType::ERROR);
         let direct = spec.init_style() == kiln_ast::decl::InitStyle::List;
         if self.contains_undeduced_auto(ty) {
-            ty = match self.deduce_auto(v, ty, &init, loc, direct) {
+            ty = match self.deduce_var_auto(v, ty, &init, loc, direct) {
                 Some(t) => t,
                 None => QualType::ERROR,
             };
             self.ast.decls.set_ty(v, ty);
+            // `auto x = {...};` deduced `std::initializer_list<U>`; its
+            // initialization (`CXXStdInitializerListExpr` over a backing
+            // array) lands with WP-068a (spec/sema-class.md §5.7).
+            if let Initializer::List(l) = &init
+                && !direct
+                && !self.is_error_type(ty)
+                && !self.ast.types.is_dependent(ty)
+            {
+                self.unsupported("std::initializer_list", l.lbrace);
+                for e in Self::list_exprs(l) {
+                    self.act_on_full_expr(e);
+                }
+                return;
+            }
             // `auto x = f();` with a `void` f deduces an incomplete
             // object type (clang `DeduceVariableDeclarationType`, then
             // `err_typecheck_decl_incomplete_type`); `x` gets no initializer.
@@ -2115,9 +2163,10 @@ impl Sema<'_, '_> {
         }
     }
 
-    /// `auto x = e;` ([dcl.type.auto.deduct]): the decayed, unqualified
-    /// type of the initializer, plus the declared cv-qualifiers.
-    fn deduce_auto(
+    /// `auto x = e;` ([dcl.type.auto.deduct]): deduces through the
+    /// `deduce_auto` seam (`templ/auto.rs`) and reports a failure as
+    /// clang's `DeduceVariableDeclarationType` does.
+    fn deduce_var_auto(
         &mut self,
         v: DeclId,
         declared: QualType,
@@ -2125,40 +2174,60 @@ impl Sema<'_, '_> {
         loc: Loc,
         direct: bool,
     ) -> Option<QualType> {
-        let e = match init {
-            Initializer::Expr(e) => *e,
-            Initializer::Paren(es, ..) if es.len() == 1 => es[0],
-            // `auto x{e};` deduces from `e` ([dcl.type.auto.deduct]/2.1.4).
-            Initializer::List(l)
-                if l.items.len() == 1
-                    && l.items[0].designator.is_empty()
-                    && matches!(l.items[0].value, InitValue::Expr(_))
-                    && direct =>
-            {
-                let InitValue::Expr(e) = l.items[0].value else { return None };
-                e
+        use crate::templ::auto::{AutoFail, AutoInit};
+        let list_items = |l: &crate::init::InitList| -> Vec<Option<ExprId>> {
+            l.items
+                .iter()
+                .map(|it| match it.value {
+                    InitValue::Expr(e) if it.designator.is_empty() => Some(e),
+                    _ => None,
+                })
+                .collect()
+        };
+        let (items, kind, lbrace) = match init {
+            Initializer::Expr(e) => (vec![Some(*e)], AutoInit::Expr, None),
+            Initializer::Paren(es, ..) => {
+                (es.iter().copied().map(Some).collect(), AutoInit::Paren, None)
             }
-            // `auto x = { ... };` deduces std::initializer_list<T>.
-            Initializer::List(l) => {
-                let msg = self.diag(DiagId::sema_auto_init_list_deduction, l.lbrace);
-                self.emit(msg);
-                return None;
-            }
-            Initializer::Paren(..) => {
-                self.unsupported("this form of 'auto' deduction", loc);
-                return None;
+            Initializer::List(l) if direct => (list_items(l), AutoInit::DirectList, Some(l.lbrace)),
+            Initializer::List(l) => (list_items(l), AutoInit::CopyList, Some(l.lbrace)),
+        };
+        let fail = match self.deduce_auto(declared, &items, kind) {
+            Ok(t) => return Some(t),
+            Err(f) => f,
+        };
+        let lbrace = lbrace.unwrap_or(loc);
+        let name = self.decl_name(v);
+        let msg = match fail {
+            AutoFail::Error => return Some(QualType::ERROR),
+            AutoFail::Incompatible(e) => self
+                .diag(DiagId::sema_auto_var_deduction_failure, loc)
+                .arg(name)
+                .arg(self.ty_arg(declared))
+                .arg(self.ty_arg(self.ast.exprs.get(e).ty())),
+            AutoFail::Multiple(at) => self
+                .diag(DiagId::sema_auto_var_init_multiple_expressions, at)
+                .arg(name)
+                .arg(self.ty_arg(declared)),
+            AutoFail::Empty => self
+                .diag(DiagId::sema_auto_var_init_no_expression, lbrace)
+                .arg(name)
+                .arg(self.ty_arg(declared)),
+            AutoFail::NoInitializerList => self.diag(DiagId::sema_auto_init_list_deduction, lbrace),
+            AutoFail::Conflict(a, b, _) => self
+                .diag(DiagId::sema_auto_inconsistent_deduction, lbrace)
+                .arg(self.ty_arg(a))
+                .arg(self.ty_arg(b)),
+            AutoFail::FromInitList => self
+                .diag(DiagId::sema_auto_var_deduction_failure_from_init_list, loc)
+                .arg(name)
+                .arg(self.ty_arg(declared)),
+            AutoFail::DecltypeAutoList => {
+                self.diag(DiagId::sema_decltype_auto_initializer_list, lbrace)
             }
         };
-        let deduced = self.deduce_from(declared, e);
-        if deduced.is_none() {
-            let msg = self
-                .diag(DiagId::sema_auto_var_deduction_failure, loc)
-                .arg(self.decl_name(v))
-                .arg(self.ty_arg(declared))
-                .arg(self.ty_arg(self.ast.exprs.get(e).ty()));
-            self.emit(msg);
-        }
-        deduced
+        self.emit(msg);
+        None
     }
 
     /// A `constexpr` variable's initializer must be a constant expression
@@ -2225,7 +2294,16 @@ impl Sema<'_, '_> {
             return;
         }
         if self.contains_undeduced_auto(ty) {
-            self.unsupported("'auto' without an initializer", loc);
+            // [dcl.spec.auto.general]/4 (clang `err_auto_var_requires_init`).
+            // During instantiation the pattern had an initializer whose
+            // substitution failed (already reported).
+            self.ast.decls.set_flags(v, DeclFlags::INVALID);
+            if !self.inst.stack.is_empty() {
+                return;
+            }
+            let msg =
+                self.diag(DiagId::sema_auto_var_requires_init, loc).arg(name).arg(self.ty_arg(ty));
+            self.emit(msg);
             return;
         }
         if self.ast.types.is_reference(ty) {
@@ -3183,7 +3261,11 @@ impl Sema<'_, '_> {
                         }
                     } else {
                         let mut req = String::new();
-                        kiln_ast::types::TypeNames::write_expr(&self.ast, inner, &mut req);
+                        kiln_ast::types::TypeNames::write_expr(
+                            &kiln_ast::dump::AstNames::new(&self.ast).canonical_expr_types(),
+                            inner,
+                            &mut req,
+                        );
                         let at = self.begin_loc(inner);
                         match text {
                             Some(t) => self
@@ -3436,7 +3518,8 @@ impl Sema<'_, '_> {
         match k {
             DeclKind::ClassTemplate
             | DeclKind::TypeAliasTemplate
-            | DeclKind::TemplateTemplateParm => {
+            | DeclKind::TemplateTemplateParm
+            | DeclKind::BuiltinTemplate => {
                 return NameClass::TypeTemplate(d);
             }
             DeclKind::VarTemplate => return NameClass::VarTemplate(d),

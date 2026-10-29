@@ -222,6 +222,13 @@ impl Substituter<'_, '_, '_> {
                 let o = self.expr(o)?;
                 Ok(self.sema.act_on_cast(style, ty, o, loc, end))
             }
+            ExprKind::BuiltinBitCastExpr => {
+                // WP-074: `__builtin_bit_cast(T, e)` (a dependent one keeps
+                // `T` as its type and `e` unmaterialized).
+                let ty = self.ty(n.ty(), loc)?;
+                let o = self.expr(ex(self).operand(e))?;
+                Ok(self.sema.act_on_builtin_bit_cast(ty, o, loc, end))
+            }
             ExprKind::CXXUnresolvedConstructExpr => {
                 let ty = self.ty(n.ty(), loc)?;
                 let l = kiln_ast::ids::ListId::new(n.a());
@@ -251,6 +258,41 @@ impl Substituter<'_, '_, '_> {
                     let o = self.expr(o)?;
                     Ok(self.sema.act_on_trait_expr(kind, o, loc))
                 }
+            }
+            // spec/sema-templates.md §9.1, §9.4: rebuilt through the
+            // parser's builders (no deprecation warning on instantiation).
+            ExprKind::TypeTraitExpr => {
+                let t = ex(self).type_trait(e);
+                let tys: Vec<QualType> =
+                    self.sema.ast.lists.iter::<QualType>(ex(self).type_trait_args(e)).collect();
+                let rhs = ex(self).type_trait_rhs_loc(e).unwrap_or(loc);
+                let is_exp = |s: &crate::Sema<'_, '_>, q: QualType| {
+                    matches!(
+                        s.ast.types.view(q.ty()),
+                        kiln_ast::types::TypeView::PackExpansion { .. }
+                    )
+                };
+                let tys = self.expand_list(&tys, is_exp, |s, q| s.ty(q, loc), loc)?;
+                let args: Vec<(QualType, Loc)> = tys
+                    .iter()
+                    .enumerate()
+                    .map(|(i, &q)| (q, if i == 1 { rhs } else { loc }))
+                    .collect();
+                Ok(self.sema.build_type_trait(t, &args, loc, end))
+            }
+            ExprKind::ArrayTypeTraitExpr => {
+                let t = ex(self).type_trait(e);
+                let q = ex(self).array_trait_type(e);
+                let dim = ex(self).array_trait(e).dim;
+                let q = self.ty(q, loc)?;
+                let dim = self.opt_expr(dim)?;
+                Ok(self.sema.build_array_type_trait(t, q, dim, loc, end))
+            }
+            ExprKind::ExpressionTraitExpr => {
+                let t = ex(self).type_trait(e);
+                let o = ex(self).expression_trait_operand(e);
+                let o = self.expr(o)?;
+                Ok(self.sema.build_expression_trait(t, o, loc, end))
             }
             ExprKind::CXXNoexceptExpr => {
                 let o = ex(self).noexcept_operand(e);

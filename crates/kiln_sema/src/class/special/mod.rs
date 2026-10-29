@@ -29,6 +29,7 @@ use kiln_source::fx::{FxHashMap, FxHashSet};
 
 use crate::Sema;
 
+pub(crate) use deletion::Selected;
 use uses::PendingDeleted;
 
 /// The six special member functions ([special]/1), in clang's

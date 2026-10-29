@@ -502,6 +502,7 @@ impl Sema<'_, '_> {
         }
     }
 
+    #[allow(clippy::too_many_lines, reason = "one flat classification of expression kinds")]
     pub(crate) fn unused_warning(&self, e: ExprId) -> Option<(DiagId, Loc, Vec<String>)> {
         let x = self.ignore_parens(e);
         let n = *self.ast.exprs.get(x);
@@ -602,6 +603,9 @@ impl Sema<'_, '_> {
             | ExprKind::CXXNullPtrLiteralExpr
             | ExprKind::UnaryExprOrTypeTraitExpr
             | ExprKind::CXXNoexceptExpr
+            | ExprKind::TypeTraitExpr
+            | ExprKind::ArrayTypeTraitExpr
+            | ExprKind::ExpressionTraitExpr
             | ExprKind::CXXTypeidExpr
             | ExprKind::CXXStaticCastExpr
             | ExprKind::CXXReinterpretCastExpr
@@ -797,10 +801,28 @@ impl Sema<'_, '_> {
                 return self.recover_err(&[], loc);
             }
         }
-        if n.kind() == DeclKind::Function && self.check_undeduced_use(d, loc) {
+        if matches!(n.kind(), DeclKind::Function | DeclKind::CXXMethod)
+            && self.check_undeduced_use(d, loc)
+        {
             return self.recover_err(&[], loc);
         }
-        let mut declared = n.ty().unwrap_or(QualType::ERROR);
+        // [dcl.spec.auto.general]/11: a placeholder variable's type is
+        // not known inside its own initializer.
+        if n.kind() == DeclKind::Var
+            && !n.has(DeclFlags::INVALID)
+            && let Some(t) = n.ty()
+            && self.contains_undeduced_auto(t)
+        {
+            let msg = self
+                .diag(DiagId::sema_auto_var_in_own_initializer, loc)
+                .arg(self.decl_name(d))
+                .arg(self.ty_arg(t));
+            self.emit(msg);
+            self.ast.decls.set_flags(d, DeclFlags::INVALID);
+            return self.recover_err(&[], loc);
+        }
+        // Re-read: `check_undeduced_use` may have deduced the return type.
+        let mut declared = self.ast.decls.get(d).ty().unwrap_or(QualType::ERROR);
         // A pack names its pattern ([temp.variadic]/5): `Ts... x` gives `x`
         // the type `Ts`.
         if let TypeView::PackExpansion { pattern, .. } = self.ast.types.view(declared.ty()) {
@@ -1255,21 +1277,32 @@ impl Sema<'_, '_> {
         if let Some(mp) = self.member_pointer_of(e, loc) {
             return mp;
         }
-        if self.check_builtin_fn_use(e) {
+        let Some(t) = self.check_addressable(e, loc) else {
             return self.recover_err(&[e], loc);
+        };
+        let ty = self.ast.types.pointer_to(t);
+        self.builder().unary(UnaryOp::AddrOf, e, ty, loc, ExprFlags::CANNOT_OVERFLOW)
+    }
+
+    /// clang's `CheckAddressOfOperand` for an operand that is not a
+    /// member-pointer name ([expr.unary.op]/3): the operand's type, or
+    /// `None` after reporting a builtin function name, a bit-field or an
+    /// rvalue at `loc`.
+    pub(crate) fn check_addressable(&mut self, e: ExprId, loc: Loc) -> Option<QualType> {
+        if self.check_builtin_fn_use(e) {
+            return None;
         }
         let n = *self.ast.exprs.get(e);
         if n.object_kind() == ObjectKind::BitField {
             self.error(DiagId::sema_addrof_bitfield, loc);
-            return self.recover_err(&[e], loc);
+            return None;
         }
         if n.value_category() != ValueCategory::LValue {
             let msg = self.diag(DiagId::sema_addrof_rvalue, loc).arg(self.ty_arg(n.ty()));
             self.emit(msg);
-            return self.recover_err(&[e], loc);
+            return None;
         }
-        let ty = self.ast.types.pointer_to(n.ty());
-        self.builder().unary(UnaryOp::AddrOf, e, ty, loc, ExprFlags::CANNOT_OVERFLOW)
+        Some(n.ty())
     }
 
     fn inc_dec(&mut self, op: UnaryOp, e: ExprId, loc: Loc) -> ExprId {
@@ -2071,6 +2104,15 @@ impl Sema<'_, '_> {
             }
             return self.dependent_call(callee, args, loc, rparen);
         }
+        if let Some(b) = self.builtin_callee(callee)
+            && self.ast.decls.builtin_id(b) == Some(kiln_ast::decl::builtin::ADDRESSOF)
+        {
+            let has_braced = braced.iter().any(Option::is_some);
+            return match self.builtin_addressof_call(callee, b, args, has_braced, loc, rparen) {
+                Some(e) => e,
+                None => self.recover_err(&kids, loc),
+            };
+        }
         if let Some(e) = self.try_member_call(callee, args, &mut braced, loc, rparen) {
             return e;
         }
@@ -2105,7 +2147,8 @@ impl Sema<'_, '_> {
         else {
             return self.recover_err(&kids, loc);
         };
-        let (ty, vk) = self.call_result(proto.ret(), loc);
+        let at = self.begin_loc(callee);
+        let (ty, vk) = self.call_result_of(proto.ret(), loc, named, at);
         self.builder().call(f, &conv_args, ty, vk, loc, rparen, ExprFlags::NONE)
     }
 
@@ -2223,6 +2266,20 @@ impl Sema<'_, '_> {
     /// The type and value category of a call returning `ret`
     /// ([expr.call]/14), diagnosing an incomplete class result.
     pub(crate) fn call_result(&mut self, ret: QualType, loc: Loc) -> (QualType, ValueCategory) {
+        self.call_result_of(ret, loc, None, loc)
+    }
+
+    /// [`Self::call_result`] for a call at `loc` of `callee` (the named
+    /// function, if any) beginning at `at`: an incomplete class prvalue
+    /// result is clang's `CheckCallReturnType` error at `at`, deferred to
+    /// the end of an enclosing `decltype` operand ([dcl.type.decltype]/2).
+    pub(crate) fn call_result_of(
+        &mut self,
+        ret: QualType,
+        loc: Loc,
+        callee: Option<DeclId>,
+        at: Loc,
+    ) -> (QualType, ValueCategory) {
         let (ty, vk) = if self.ast.types.is_reference(ret) {
             let lvalue = matches!(self.ast.types.canonical_view(ret), TypeView::LValueRef(_));
             (
@@ -2232,13 +2289,18 @@ impl Sema<'_, '_> {
         } else {
             (conv::strip_cv(self, ret), ValueCategory::PRValue)
         };
-        if vk == ValueCategory::PRValue
-            && self.ast.types.as_record(ty).is_some()
-            && !self.require_complete(ty, loc)
-        {
-            let msg =
-                self.diag(DiagId::sema_typecheck_decl_incomplete_type, loc).arg(self.ty_arg(ty));
-            self.emit(self.incomplete_note(msg, ty));
+        if vk == ValueCategory::PRValue && self.ast.types.as_record(ty).is_some() {
+            let call = crate::deduce::DeferredCall { loc, ty, callee, at };
+            let unevaluated = self.unevaluated;
+            if let Some((depth, calls)) = self.decltype_calls.last_mut()
+                && *depth == unevaluated
+            {
+                calls.push(call);
+            } else if !self.check_call_return(call) {
+                // An invalid call (clang's `ExprError`): no follow-on
+                // diagnostics.
+                return (QualType::ERROR, vk);
+            }
         }
         (ty, vk)
     }

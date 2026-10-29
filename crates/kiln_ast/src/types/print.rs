@@ -398,7 +398,9 @@ impl Printer<'_> {
         for _ in 0..MAX_DEPTH {
             match ctx.view(t) {
                 TypeView::SubstTemplateTypeParm { replacement, .. } => t = replacement.ty(),
-                TypeView::Auto { deduced: Some(d), .. } => t = ctx.canonical(d).ty(),
+                TypeView::Auto { deduced: Some(d), .. } if d != QualType::DEPENDENT => {
+                    t = ctx.canonical(d).ty();
+                }
                 TypeView::QualifiedArray { base, .. } => t = base,
                 TypeView::ConstantArray(a) => t = a.elem.ty(),
                 TypeView::IncompleteArray(e)
@@ -732,9 +734,11 @@ impl Printer<'_> {
                 self.push(")");
                 self.space_before_ph();
             }
-            TypeView::Auto { deduced: Some(d), .. }
-            | TypeView::DeducedTemplateSpecialization { deduced: Some(d), .. } => self.before(d),
-            TypeView::Auto { keyword, deduced: None, concept, args, .. } => {
+            // A placeholder deduced from a type-dependent initializer
+            // prints as written (clang's dependent `AutoType`).
+            TypeView::Auto { deduced: Some(d), .. } if d != QualType::DEPENDENT => self.before(d),
+            TypeView::DeducedTemplateSpecialization { deduced: Some(d), .. } => self.before(d),
+            TypeView::Auto { keyword, concept, args, .. } => {
                 if let Some(c) = concept {
                     self.decl(c, false);
                     if let Some(a) = args
@@ -824,8 +828,8 @@ impl Printer<'_> {
                 self.after(pattern);
                 self.push("...");
             }
-            TypeView::Auto { deduced: Some(d), .. }
-            | TypeView::DeducedTemplateSpecialization { deduced: Some(d), .. } => self.after(d),
+            TypeView::Auto { deduced: Some(d), .. } if d != QualType::DEPENDENT => self.after(d),
+            TypeView::DeducedTemplateSpecialization { deduced: Some(d), .. } => self.after(d),
             TypeView::Attributed { kind, modified, equivalent } => {
                 let saved = self.inside_cc_attr;
                 self.inside_cc_attr = kind == TypeAttrKind::CallingConv;

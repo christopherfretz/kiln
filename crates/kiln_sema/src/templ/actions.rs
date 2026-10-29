@@ -244,6 +244,11 @@ impl Sema<'_, '_> {
             }));
         };
         match self.kind_of(d) {
+            // spec/sema-templates.md §9.3.
+            DeclKind::BuiltinTemplate => {
+                let locs = std::mem::take(&mut self.templ.arg_locs);
+                self.builtin_template_id(name, d, args, &locs, l)
+            }
             DeclKind::ClassTemplate | DeclKind::TemplateTemplateParm => {
                 let ttp = self.kind_of(d) == DeclKind::TemplateTemplateParm;
                 if !dep_args && !ttp {

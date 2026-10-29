@@ -979,6 +979,35 @@ diag_ids! {
     sema_nested_name_spec_non_tag = Error (1) "type {0} cannot be used prior to '::' because it has no members";
     sema_mempointer_in_nonclass_type = Error (1) "member pointer refers into non-class type {0}";
     note_typename_member_refers_here = Note (1) "referenced member '{0}' is declared here";
+    // WP-074: builtin type traits, transforms and templates (spec/sema-templates.md §9)
+    sema_type_trait_arity = Error (5) "type trait requires {0}{1:| or more} argument{2:|s}; have {3} argument{4:|s}";
+    sema_incomplete_type_trait = Error (1) "incomplete type {0} used in type trait expression";
+    sema_deprecated_builtin = Warning [DeprecatedBuiltins] (2) "builtin {0} is deprecated; use {1} instead";
+    sema_dimension_expr_not_const = Error (0) "dimension expression does not evaluate to a constant unsigned int";
+    sema_make_signed_bad_type = Error (2) "'{0:make_signed|make_unsigned}' is only compatible with non-bool integers and enum types, but was given {1}";
+    sema_only_enums_have_underlying = Error (0) "only enumeration types have underlying types";
+    sema_pack_index_out_of_bounds = Error (0) "a parameter pack may not be accessed at an out of bounds index";
+    sema_integer_seq_negative_length = Error (0) "integer sequences must have non-negative sequence length";
+    sema_bit_cast_size_mismatch = Error (2) "__builtin_bit_cast source size does not equal destination size ({0} vs {1})";
+    sema_bit_cast_not_trivially_copyable = Error (1) "__builtin_bit_cast {0:source|destination} type must be trivially copyable";
+    sema_integer_seq_integral_element_type = Error (0) "integer sequences must have integral element type";
+    sema_integer_seq_too_long = Error (2) "integer sequence length {0} exceeds the implementation limit of {1}";
+    sema_auto_var_requires_init = Error (2) "declaration of variable '{0}' with deduced type {1} requires an initializer";
+    sema_auto_var_init_multiple_expressions = Error (2) "initializer for variable '{0}' with type {1} contains multiple expressions";
+    sema_auto_var_init_no_expression = Error (2) "initializer for variable '{0}' with type {1} is empty";
+    sema_auto_inconsistent_deduction = Error (2) "deduced conflicting types ({0} vs {1}) for initializer list element type";
+    sema_auto_var_deduction_failure_from_init_list = Error (2) "cannot deduce actual type for variable '{0}' with type {1} from initializer list";
+    sema_decltype_auto_initializer_list = Error (0) "cannot deduce 'decltype(auto)' from initializer list";
+    sema_decltype_auto_cannot_be_combined = Error (0) "'decltype(auto)' cannot be combined with other type specifiers";
+    sema_call_incomplete_return = Error (2) "calling {0} with incomplete return type {1}";
+    sema_call_function_incomplete_return = Error (1) "calling function with incomplete return type {0}";
+    sema_cast_to_incomplete = Error (1) "cast to incomplete type {0}";
+    sema_incomplete_type_required = Error (1) "incomplete type {0} where a complete type is required";
+    sema_auto_var_different_deductions = Error (5) "'{0:auto|decltype(auto)}' deduced as {1} in declaration of '{2}' and deduced as {3} in declaration of '{4}'";
+    sema_auto_var_in_own_initializer = Error (2) "variable '{0}' declared with deduced type {1} cannot appear in its own initializer";
+    sema_auto_not_allowed_field = Error (2) "'{0:auto|decltype(auto)}' not allowed in non-static {1:struct|class|union} member";
+    sema_auto_fn_virtual = Error (0) "function with deduced return type cannot be virtual";
+    parse_decltype_auto_invalid = Error (0) "'decltype(auto)' not allowed here";
 }
 
 impl DiagId {

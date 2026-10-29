@@ -91,6 +91,10 @@ pub struct Sema<'a, 'sm> {
     pub(crate) func: Option<stmt::FnState>,
     /// Depth of unevaluated operands (`sizeof`, `alignof`).
     pub(crate) unevaluated: u32,
+    /// The operands of the `decltype`s being parsed, innermost last: the
+    /// unevaluated depth of each and the calls with an incomplete class
+    /// prvalue result it deferred ([dcl.type.decltype]/2).
+    pub(crate) decltype_calls: Vec<(u32, Vec<deduce::DeferredCall>)>,
     /// Depth of immediate function contexts ([expr.const]/16) entered
     /// by `if consteval`.
     pub(crate) immediate: u32,
@@ -188,8 +192,14 @@ impl<'a, 'sm> Sema<'a, 'sm> {
         Self::with_abi(ast, diags, abi, types)
     }
 
-    fn with_abi(ast: Ast, diags: &'a DiagEngine<'sm>, abi: Target, target: TargetTypes) -> Self {
+    fn with_abi(
+        mut ast: Ast,
+        diags: &'a DiagEngine<'sm>,
+        abi: Target,
+        target: TargetTypes,
+    ) -> Self {
         let tu = ast.tu;
+        templ::builtins::declare_builtin_templates(&mut ast);
         Sema {
             ast,
             diags,
@@ -203,6 +213,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             ctx: tu,
             func: None,
             unevaluated: 0,
+            decltype_calls: Vec::new(),
             immediate: 0,
             pending_odr: Vec::new(),
             defining: Vec::new(),

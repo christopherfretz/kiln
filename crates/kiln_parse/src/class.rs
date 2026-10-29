@@ -19,7 +19,7 @@ use kiln_diag::DiagId;
 use kiln_lex::{Punct, TokKind, Token};
 use kiln_sema::{
     BaseSpecInfo, Chunk, DeclSpec, Declarator, DeclaratorContext, Initializer, MemInitId,
-    MemInitInfo, NameClass, SpecialName, StorageSpec,
+    MemInitInfo, NameClass, SpecialName, StorageSpec, TypeSpecKind,
 };
 use kiln_source::Loc;
 use kiln_source::symbol::Symbol;
@@ -1588,14 +1588,18 @@ impl Parser<'_, '_> {
             }
             is_virtual = true;
         }
+        // class-or-decltype ([class.derived.general]/1): a decltype-specifier
+        // (WP-074). `decltype(auto)` is not a class-or-decltype.
         if self.at_kw(Kw::Decltype) {
-            self.unsupported("'decltype'", self.loc());
-            self.bump();
-            if self.at(Punct::LParen) {
-                self.bump();
-                self.skip_until(&[Punct::RParen], false, true);
+            let at = self.loc();
+            let (kind, ty) = self.parse_decltype_specifier();
+            if matches!(kind, TypeSpecKind::DecltypeAuto) {
+                self.s.error(DiagId::parse_decltype_auto_invalid, at);
+                return None;
             }
-            return None;
+            let ty = ty?;
+            let pack_expansion = self.eat(Punct::Ellipsis).is_some();
+            return Some(BaseSpecInfo { ty, loc, is_virtual, access, pack_expansion, attrs });
         }
         // A simple-template-id or dependent class-name ([class.derived.general]/1,
         // [temp.res.general]/4: implicitly a type here).

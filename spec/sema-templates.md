@@ -2250,6 +2250,189 @@ before WP-070a, then 415 (the main binary at merge time gives 426). The
 
 Q3 was not implemented; see §14.
 
+**Landed (WP-074).** The builtins of §9, `auto`/`decltype(auto)`
+deduction for variables and return types, `decltype` (including the
+id-expression and call rules), and the staging of `__has_builtin`.
+Overload-resolution traits and pack arguments are stubs (below).
+
+*Files.*
+- `kiln_sema/src/templ/builtins/`:
+  - `table.rs`: `TABLE` (the §9.3–9.5 rows), the per-trait `arity`,
+    `completeness`, `deprecated_replacement`, `trait_status` and
+    `trait_kind`, `lookup`, `transform_by_name`,
+    `has_builtin_staged` / `has_constexpr_builtin_staged`;
+  - `traits.rs`: `act_type_trait`, `build_type_trait`,
+    `build_array_type_trait`, `build_expression_trait` and the §9.1
+    predicates (`is_trivially_copyable_type`, `dtor_nothrow`, …);
+  - `transforms.rs`: `build_unary_transform` (§9.2) and `referenceable`;
+  - `builtin_templates.rs`: `declare_builtin_templates` and
+    `builtin_template_id` (`__make_integer_seq`, `__type_pack_element`).
+- `kiln_sema/src/templ/auto.rs`: `deduce_auto`, `AutoInit`, `AutoFail`,
+  `AutoGroup`, `act_on_init_in_group`, `check_auto_group`, `placeholder_keyword`, `dependent_auto`,
+  `replace_placeholder`, `std_initializer_list`.
+- `kiln_sema/src/deduce.rs`: the `decltype` scope
+  (`enter_decltype` / `exit_decltype` and the deferred call checks),
+  `act_on_decltype`, `decltype_of`, `deduce_placeholder`, `deduce_from`,
+  `deduce_return`, `set_deduced_return`, `check_undeduced_use`.
+- `kiln_sema/src/builtins.rs`: `__builtin_addressof`,
+  `act_on_builtin_bit_cast`.
+- `kiln_ast`: `TypeTraitExpr`, `ArrayTypeTraitExpr` and
+  `ExpressionTraitExpr` (`ExprArena::type_trait_*`, `array_trait`), the
+  `UnaryTransform` type print, `BuiltinTemplate` decls,
+  `CastKind::LValueToRValueBitCast`, `builtin::ADDRESSOF`; dump lines
+  for each, and `AstNames::canonical_expr_types`, so that
+  `static_assert` messages print canonical types the way clang does.
+- `kiln_parse`: the trait keywords (`keywords.rs`), the trait,
+  transform and `__builtin_bit_cast` grammar (`expr.rs`,
+  `tentative.rs`), the `decltype` scope, a decltype-specifier as a
+  base-specifier (`class.rs`; `decltype(auto)` there is
+  `parse_decltype_auto_invalid`), and the multi-declarator `auto` check
+  in `parse_simple_declaration`.
+- Tests:
+  - `tests/conformance/templates/builtins/` (34): a positive and a
+    negative test per §9 row, plus a clang probe golden;
+  - `tests/conformance/templates/auto/` (33);
+  - `tests/conformance/dcl.type.decltype/` (9);
+  - `tests/conformance/dcl.spec.auto/undeduced-member-diag.cpp`.
+
+  Each test names its section and passes under
+  `--compiler clang++-19`.
+
+*Signatures as landed.*
+```rust
+pub fn deduce_auto(&mut self, declared: QualType, init: &[Option<ExprId>], kind: AutoInit) -> Result<QualType, AutoFail>;
+pub fn act_on_init_in_group(&mut self, group: &mut AutoGroup, v: DeclId, init: Initializer, at: Loc); // act_on_init + [dcl.spec.auto.general]/8
+pub fn enter_decltype(&mut self);
+pub fn exit_decltype(&mut self, e: Option<ExprId>);
+pub fn act_on_decltype(&mut self, e: ExprId, loc: Loc, rparen: Loc) -> Option<QualType>;
+pub fn act_type_trait(..) / build_type_trait(..) / build_array_type_trait(..) / build_expression_trait(..) -> ExprId;
+pub fn build_unary_transform(..) -> QualType;
+pub fn act_on_builtin_bit_cast(..) -> ExprId;
+pub fn has_builtin_staged(name: &str) -> Option<bool>;           // None: not a table name
+pub fn has_constexpr_builtin_staged(name: &str) -> Option<bool>;
+```
+
+*Behaviour.*
+- The placeholder seam with WP-070b is
+  `Auto { deduced: Some(QualType::DEPENDENT) }`. A type-dependent
+  initializer or return operand gives a dependent placeholder.
+  Substitution turns it back into an undeduced one, and the
+  instantiation then deduces it again. `templ/deduce.rs` is not
+  called: `deduce_auto` does [temp.deduct.call] for one P/A pair. The
+  pair forms are `auto`, `auto*`, `auto&`, `auto&&`, cv, and
+  `std::initializer_list<auto>`. WP-070b/071 can replace that core
+  with `deduce` without changing the callers (§6.3).
+- `decltype(e)` follows [dcl.type.decltype]/1. An unparenthesized
+  id-expression or member access gives the declared type. Otherwise
+  the result follows the value category: xvalue → `T&&`,
+  lvalue → `T&`, prvalue → `T`. A prvalue call operand whose return
+  type is incomplete is accepted only when the call is the whole
+  operand ([dcl.type.decltype]/2). Other calls are checked when the
+  scope exits.
+- Calling a function whose return type is still undeduced instantiates
+  it if it is a template specialization member (`check_undeduced_use`).
+  Otherwise it reports
+  `function {0} with deduced return type cannot be used before it is defined`.
+- `__has_builtin` (and `__has_constexpr_builtin`) consult the table
+  only in the sema modes (`-fsyntax-only`, `-emit-llvm`, …;
+  `build_preprocessor(.., staged: true)`). `-E` and `-M` answer as
+  clang does, so their output stays token-identical.
+  A `Status::Stub` row answers false, so libc++ uses its library
+  fallback. Using a stub row directly reports
+  `sema_unimplemented_template_feature`.
+
+*Interface changes outside the templates crates.*
+- `kiln_sema`:
+  - `Sema.decltype_calls`;
+  - `build_decl_ref_via` diagnoses a variable used in its own `auto`
+    initializer, and calls `check_undeduced_use` for methods as well as
+    functions;
+  - `act_on_field` rejects `auto` non-static members;
+  - virtual functions with a deduced return type are rejected;
+  - a differing return type on a redeclaration notes "previous
+    definition" when the earlier declaration has a body;
+  - `class/mod.rs` re-exports `special::{Selected, SpecialKind}` for the
+    traits (a WP-067b merge touchpoint);
+  - `conv::eval_width` is now `pub(crate)`.
+- `kiln_oven` and `kiln_codegen` fold the trait expressions to
+  constants, and handle `LValueToRValueBitCast` (scalar only) and
+  `__builtin_addressof`.
+- `kiln_driver`: `Job::build_preprocessor` gains `staged: bool`.
+- `kiln_diag`: the §9 and `auto` errors, appended at the end:
+  - `sema_type_trait_arity`, `sema_incomplete_type_trait`,
+    `sema_deprecated_builtin` (group `-Wdeprecated-builtins`);
+  - `sema_dimension_expr_not_const`, `sema_make_signed_bad_type`,
+    `sema_only_enums_have_underlying`, `sema_pack_index_out_of_bounds`;
+  - `sema_integer_seq_*`, `sema_bit_cast_*`;
+  - `sema_auto_var_*`, `sema_auto_inconsistent_deduction`,
+    `sema_decltype_auto_*`, `sema_auto_not_allowed_field`,
+    `sema_auto_fn_virtual`;
+  - `sema_call_incomplete_return`,
+    `sema_call_function_incomplete_return`, `sema_cast_to_incomplete`,
+    `sema_incomplete_type_required`;
+  - `parse_decltype_auto_invalid`.
+
+*Stubs* (each reports `sema_unimplemented_template_feature`, and
+`__has_builtin` answers false):
+| Stub | Owner |
+|---|---|
+| The 17 overload-resolution traits (`__is_constructible`, `__is_assignable`, `__is_convertible`, `__is_nothrow_*`, `__reference_*_from_temporary`, …) | WP-068a |
+| `__is_layout_compatible`, `__is_pointer_interconvertible_base_of`, `__can_pass_in_regs`, `__is_bitwise_cloneable` | M4 (unassigned) |
+| `__is_trivially_relocatable` (`TRIVIALLY_RELOCATABLE` is never set) | unowned: S3C canPassInRegisters |
+| `__type_pack_element` and `__make_integer_seq` with pack arguments | WP-072 |
+| The §9.5 functions other than `is_constant_evaluated`, `addressof` and `bit_cast` | unowned: proposed §9.5 builtin-functions WP |
+| `__builtin_operator_new` / `__builtin_operator_delete` in the Oven | WP-061b |
+| `__builtin_FILE` / `__builtin_LINE` / … | unowned: source-location builtins with `__builtin_source_location` |
+| `__builtin_bit_cast` in the Oven (aggregates through the ABI layout) | unowned: Oven bit_cast through ABI layout |
+
+In all, 79 table names answer yes and 75 are staged off.
+
+*Gaps* (each reports a diagnostic or is a known divergence):
+- `DiagEngine` deduplicates on `(id, span)`. The same error from two
+  instantiations prints once, but clang prints it twice.
+- Substituted types carry no argument locations, so the columns of
+  some trait errors inside instantiations differ from clang.
+- An array of an incomplete type is rejected when the declarator is
+  formed, before a trait can see it.
+- Abominable function types (`void() const`) are not diagnosed as
+  trait operands.
+- `ExcSpec::Deferred` is not resolved. `dtor_nothrow` computes the
+  implicit destructor's exception specification itself.
+- `set_deduced_return` rewrites the return type of every
+  redeclaration, so `auto f(); auto f() { return 1; } auto f();` rejects
+  the third declaration.
+- `-Wunevaluated-expression` (side effects in `decltype`) is not
+  implemented.
+- `x.f()` with `f` an undeduced member goes through
+  `class/member_expr.rs` (WP-067b). That path has no
+  `check_undeduced_use` and does not instantiate on use; its return
+  type should come from `call_result_of`.
+- Inline member functions defined in the class are not emitted by
+  codegen, so the `run` tests use namespace-scope functions.
+- The multi-declarator check runs only in `parse_simple_declaration`,
+  not for member declarator groups or instantiated groups.
+- A trailing return type cannot name a parameter: the `ParmVarDecl`s
+  are not in scope yet. This causes 17 `<type_traits>` errors.
+- `auto x = {1, 2}` deduces `std::initializer_list<int>`. The
+  initialization of the `initializer_list` object belongs to WP-068a.
+- A failed member typedef in an instantiation is dropped, which causes
+  follow-on errors. A `constexpr` static member without an initializer
+  reports twice.
+
+*`<type_traits>` probe* (same command as WP-069): 410 errors before
+WP-074, 148 after. None of the remaining errors is a §9 builtin:
+
+| Errors | Cause | Owner |
+|---:|---|---|
+| 64 + 2 | Partial specializations (class, variable) | WP-070b / WP-072 |
+| 27 | Explicit specializations | WP-070b |
+| 17 | Parameters named in a trailing return type | parser/sema (gap above) |
+| 20 | Overloaded operators and overloading | WP-068 |
+| 4 | Declarations that differ only in return type (overloading) | WP-068 |
+| 7 + 1 | `common_reference.h`: `typename` on an alias template-id, and the `?:` operand types | WP-070b / WP-068 |
+| 4 | Dependent template specialization type | WP-070b |
+| 2 | "this kind of name" | WP-070b |
+
 ### 11.3 Instantiation report and memory accounting
 
 **Meter.** Each instantiation frame records, at push, `(Ast::bytes(),
