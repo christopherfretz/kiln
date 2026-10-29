@@ -80,11 +80,18 @@ After a node is created its header and side record are immutable, except:
 |---|---|---|
 | `FunctionData.body` | once (definition parsed or instantiated) | sema |
 | `VarData.init`, `VarData.eval` | init once; eval state machine §9.2 | sema / Oven via bridge |
-| `RecordData` definition data, `first/last_child` | while the class is being defined; frozen at `}` (except `define_aggregate`, §10) | sema |
+| `RecordData` definition data, `members` | while the class is being defined; frozen at `}` (except `define_aggregate`, §10, and the row below) | sema |
+| `RecordData.members.last` of a complete class | append-only: implicit special members and inheriting constructors, declared lazily (`append_implicit_member`, spec/sema-class.md §4.1) | sema |
+| `VarData` `nrvo` bit | once, at the variable's scope exit (`set_nrvo`) | sema |
+| cold `ctor_inits` of a constructor | once, with the body (`set_ctor_inits`; implicit initializers included) | sema |
+| cold `overrides` of a method, `friends` of a class | once (`set_overrides` at the declaration, `set_friends` at `}`) | sema |
+| `LetData.value` (`LifetimeExtendedTemporary`) | once | Oven via bridge |
+| `FnSpec::deleted` | once, at `}` (`= default` members found deleted; part of `FnSpec::LATE`) | sema |
+| `ParamData::DEFAULT_ARG_PENDING`, `ParamData.default_arg` | the flag set at the declaration; the argument once, when the late-parsed tokens are parsed ([class.mem]/7) | parser / sema |
 | `DeclNode.ty` | re-pointed for deduced return types and resolved exception specs | sema |
 | `RedeclGroup.latest/definition` | on each redeclaration / definition | sema |
 | `DeclFlags::{USED, REFERENCED, INVALID}` | monotone set | sema |
-| lookup tables, specialization maps, `layouts`, `consts`, `types` | insert-only | sema / Oven |
+| lookup tables, specialization maps, `layouts`, `virtuals`, `vtables`, `consts`, `types` | insert-only | sema / Oven / `kiln_abi` |
 
 **Instantiation adds nodes, never rewrites patterns**: substituting a
 pattern creates fresh decls/exprs/stmts (with `instantiated_from` links,
@@ -135,7 +142,7 @@ struct DeclNode {        // 28 bytes
   `local_extern`, not stored.
 
 ### 4.2 Kinds and payloads
-Context kinds (★) own a member list `first_child/last_child` (append O(1)
+Context kinds (★) own a member list `members: Members { first, last }` (append O(1)
 through `next`) and a lookup table (§4.3). Functions are the semantic
 context of their parameters and local declarations but own neither (§4.3). `R` = redeclarable (payload starts with `Redecl { prev:
 Option<DeclId>, group: RedeclGroupId }`). `T` = may be templated (§8.2).
@@ -145,11 +152,11 @@ Option<DeclId>, group: RedeclGroupId }`). `T` = may be templated (§8.2).
 | scopes | `TranslationUnit`★, `Namespace`★R (inline bit; inline children in an append-only side map), `NamespaceAlias`R, `LinkageSpec`★ (C / C++), `Export`★ (M4), `Empty`, `FileScopeAsm` |
 | using | `UsingDirective`, `Using`, `UsingEnum`, `UsingShadow`, `ConstructorUsingShadow`, `UsingPack`, `UnresolvedUsingValue`, `UnresolvedUsingTypename`, `UnresolvedUsingIfExists` (M3) |
 | types | `Typedef`R, `TypeAlias`R T, `Enum`★R T (scoped, fixed underlying type, `int_type`, promotion type), `EnumConstant` (value: `ConstValueId`), `CXXRecord`★R T (struct/class/union; lambda closure bit), `ClassTemplateSpecialization`★R, `ClassTemplatePartialSpecialization`★R |
-| members | `Field` (bit-width `ExprId`, default member init, mutable, `[[no_unique_address]]`), `IndirectField` (chain into anonymous unions), `AccessSpec`, `Friend` (decl or type; P2893 pack), `FriendTemplate` |
+| members | `Field` (bit-width `ExprId`, default member init, mutable, `[[no_unique_address]]`), `IndirectField` (chain into anonymous unions), `AccessSpec` (no payload: the access is `misc.access`), `Friend` (no payload: a friend type is `DeclNode.ty` and `data` the raw `DeclId` of the class its elaborated-type-specifier first declared, or 0; a befriended function or class has `ty` None and `data` its `DeclId` — `Decls::friend_target` → `FriendTarget::{Decl, Type { ty, owned_tag }}`; P2893 pack), `FriendTemplate` |
 | functions | `Function`R T, `CXXMethod`R T, `CXXConstructor`R T, `CXXDestructor`R T, `CXXConversion`R T, `CXXDeductionGuide` T |
 | variables | `Var`R T, `ParmVar`, `ImplicitParam` (`this`, coroutine frame), `Decomposition` (structured bindings: `bindings: ListId`; P1061 pack), `Binding` (`binding: ExprId`, holding var for tuple-like), `VarTemplateSpecialization`R, `VarTemplatePartialSpecialization`R |
 | templates | `ClassTemplate`R, `FunctionTemplate`R, `VarTemplate`R, `TypeAliasTemplate`R, `Concept`, `BuiltinTemplate` (`__make_integer_seq`, `__type_pack_element`), `TemplateTypeParm`, `NonTypeTemplateParm`, `TemplateTemplateParm`, `ImplicitConceptSpecialization`, `RequiresExprBody`★ |
-| synthesized | `LifetimeExtendedTemporary` (value of a lifetime-extended temporary in a constant initializer), `TemplateParamObject` (class-type NTTP object: type + `ConstValueId`), `StaticAssert` (cond `ExprId`, message `ExprId`, P2741), `Label`, `ContractResultName` (P2900 `post(r: ...)`) |
+| synthesized | `LifetimeExtendedTemporary` (payload `LetData { extending: DeclId, mangling_index: u32, value: Option<ConstValueId> }`; context the extending declaration's, in no member list or lookup table), `TemplateParamObject` (class-type NTTP object: type + `ConstValueId`), `StaticAssert` (cond `ExprId`, message `ExprId`, P2741), `Label`, `ContractResultName` (P2900 `post(r: ...)`) |
 
 Hot payloads (dense arenas, one record per decl of the kind):
 ```rust
@@ -159,7 +166,13 @@ struct FunctionData {               // 24 bytes
     body: Option<StmtId>,           // late-bound (§2.4)
     spec: FnSpec,                   // u32: storage(2) inline(1) implicit_inline(1) constexpr_kind(2: none/constexpr/consteval)
                                     //   virtual(1) pure(1) defaulted(2: no/=default/implicit) deleted(1) explicit(1)
-                                    //   trivial(1) immediate_escalating(1) has_contracts(1) is_coroutine(1) ...
+                                    //   trivial(1) immediate_escalating(1) has_contracts(1) is_coroutine(1)
+                                    //   escalated(1) variadic(1) override(1, bit 18) final(1, bit 19)
+                                    //   explicit_object(1, bit 20) virtual_written(1, bit 21)
+                                    //   (`virtual` is semantic: written or overriding; `virtual_written`
+                                    //   is the specifier, which the dump prints. LATE bits, set after
+                                    //   the body or at `}`: trivial, has_contracts, is_coroutine,
+                                    //   escalated, deleted)
     templ: TemplLink,               // §8.2
 }
 struct VarData {                    // 24 bytes
@@ -170,12 +183,23 @@ struct VarData {                    // 24 bytes
     eval: VarEval,                  // u32, §9.2: 0 NotEvaluated | MAX Evaluating | MAX-1 NotConstant | else ConstValueId
     templ: TemplLink,
 }
-struct RecordData { redecl: Redecl, first_child, last_child, bases: ListId /*BaseSpec ids*/,
-                    defn: DefinitionBits /*u64, clang's DefinitionData flags*/, templ: TemplLink,
-                    lambda: Option<LambdaId>, tag: TagKind /*struct/class/union*/ }   // 40 bytes
+struct RecordData { redecl: Redecl, members: Members /*first, last*/,
+                    bases: ListId /*1-based indices into DeclArena::base_specs*/,
+                    defn: DefinitionBits /*u64, clang's DefinitionData flags; bits 24–49
+                                            spec/sema-class.md §2.9, bit 50 FINAL*/,
+                    templ: TemplLink, lambda: Option<LambdaId>, tag: TagKind /*struct/class/union*/ }   // 40 bytes
+struct BaseSpec { ty: QualType /*as written*/, loc: Loc, is_virtual: bool,
+                  access: Access /*as written; None if defaulted*/, pack_expansion: bool, ... }
 ```
 Cold data (only some decls have it) lives in `FxHashMap<DeclId, _>`
-maps: `= delete("reason")` messages (P2573), `explicit(expr)`, trailing
+maps: class features (spec/sema-class.md §8.1) — `ctor_inits` (a `ListId`
+of `CtorInit { target: u32, kind: CtorInitKind /*Base, VirtualBase, Field,
+IndirectField, Delegating*/, written_index: u8 /*IMPLICIT = 255*/, init:
+ExprId, loc }` in initialization order, read by `Ast::ctor_inits`),
+`overrides` (`ListId` of overridden methods), `friends` (`ListId` of a
+class's befriended first declarations), `key_function`, `dtor_delete` (the
+operator delete a virtual destructor uses), `record_pack` —
+`= delete("reason")` messages (P2573), `explicit(expr)`, trailing
 requires-clauses, contract lists (P2900: `ListId` of `ContractSpec { kind:
 pre|post, cond: ExprId, result_name: Option<DeclId> }`), `asm` labels,
 default arguments of templates, alignment overrides, deprecation messages.
@@ -194,6 +218,11 @@ fields used by fewer than ~5% of decls of a kind go there.
   enumerators, anonymous unions/structs' `IndirectField`s) insert each
   name into the nearest non-transparent enclosing context as well as (for
   enums and anonymous records) their own.
+- **Entry flags** (`LookupFlags`, stored with each `DeclId` of an entry):
+  `VIA_INLINE` (below) and `ADL_ONLY` — a function first declared by a
+  friend declaration, visible only to argument-dependent and
+  redeclaration lookup until redeclared at namespace scope
+  ([namespace.memdef]/3; owned by spec/sema-overload.md §2.3).
 - **Inline namespaces**: names declared in inline namespace `I` are also
   inserted into each enclosing namespace up the chain of inline
   namespaces, flagged `via_inline` in the set entry ([namespace.def]/7);
@@ -274,6 +303,20 @@ Names are clang's (the dump prints them). (M2) marks the M2 subset.
 | GNU / builtins | `StmtExpr`, `ChooseExpr`, `VAArgExpr`, `AtomicExpr` (`__c11_atomic_*`, `__atomic_*`), `ShuffleVectorExpr`, `ConvertVectorExpr`, `ExtVectorElementExpr` |
 | reflection (M6) | `CXXReflectExpr` (`^^`: operand type/decl/namespace/expr → `ReflectionId` when non-dependent), `CXXSpliceExpr` (`[: e :]` in expression position; designated entity once evaluated) |
 | recovery | `RecoveryExpr` (children kept; `ERROR` dependence; type if known) |
+
+Class-feature payloads (`a`, `b`, `aux` of `CXXConstructExpr`,
+`CXXTemporaryObjectExpr`, `CXXInheritedCtorInitExpr`,
+`CXXMemberCallExpr`, `CXXThisExpr`, `CXXDefaultArgExpr`,
+`CXXDefaultInitExpr`, `MaterializeTemporaryExpr`,
+`CXXBindTemporaryExpr`, `ExprWithCleanups`, `CXXParenListInitExpr`,
+`ArrayInitLoopExpr`, `ArrayInitIndexExpr`, `OpaqueValueExpr`,
+`CXXTypeidExpr` and the named/functional casts) are spec/sema-class.md
+§5.1, with typed accessors on `Exprs` (`construct_info`,
+`member_call_object`, `lifetime_extended_temporary`, ...). Two flags are
+shared `ExprFlags` bits: `ARG_IS_TYPE` (`typeid(T)` as `sizeof(T)`: `a` is
+a raw `QualType`) and `HAD_MULTIPLE_CANDIDATES`. There is no `elidable`
+construct flag (C++17 guaranteed elision). An `OpaqueValueExpr`'s `a` is
+its source expression (or 0), shared by every use.
 
 Builtin *functions* (`__builtin_memcpy`, `__builtin_is_constant_evaluated`,
 `__builtin_is_within_lifetime`, `__builtin_constant_p`, ...) are ordinary
