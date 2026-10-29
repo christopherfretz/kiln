@@ -187,6 +187,7 @@ fn seed_corpus_passes_with_clang() {
         "env",
         "exit",
         "header-test",
+        "layout",
         "oracle",
         "oven",
         "pp",
@@ -203,6 +204,7 @@ fn seed_corpus_passes_with_clang() {
         "stdout",
         "stdout-file",
         "strict-diags",
+        "vtables",
         "xfail",
     ];
     let missing: Vec<_> = want.iter().filter(|w| !seen.contains(**w)).collect();
@@ -395,6 +397,88 @@ fn ast_fixtures_with_a_fake_kiln() {
     for n in ["fail-oracle-disagrees.cpp", "error-oracle-cannot-normalize.cpp"] {
         let r = results.iter().find(|r| r.name.ends_with(n)).unwrap();
         assert_eq!(r.status, Status::Pass, "{}", report::format_result(r, true));
+    }
+}
+
+/// `expect: layout` / `expect: vtables` with kiln (a fake that prints canned
+/// dumps) as the compiler under test, compared with clang's dumps; without
+/// an oracle there is no reference, so every test is a SKIP.
+#[test]
+fn dump_fixtures_with_a_fake_kiln() {
+    if !have_clang() {
+        return;
+    }
+    let root = repo_root();
+    let mut o = clang_opts(&[root.join("xtask/fixtures/dumps/kiln")]);
+    o.compiler = Some(root.join("xtask/fixtures/fake-kiln/kiln"));
+    let results = execute(&o).unwrap();
+    check_fixture_statuses(&results, 8);
+    let by_name = |n: &str| results.iter().find(|r| r.name.ends_with(n)).unwrap();
+    let has = |n: &str, what: &str| {
+        let d = &by_name(n).details;
+        assert!(d.contains(what), "{n}: {what:?} not in\n{d}");
+    };
+    let logged = |n: &str, what: &str| by_name(n).log.iter().any(|l| l.contains(what));
+    assert!(logged("pass-layout.cpp", "-fsyntax-only -fdump-record-layouts "));
+    assert!(logged("pass-layout.cpp", "-fsyntax-only -Xclang -fdump-record-layouts-complete "));
+    assert!(logged("pass-vtables.cpp", "-fsyntax-only -fdump-vtable-layouts "));
+    assert!(logged("pass-vtables.cpp", "-S -emit-llvm -Xclang -fdump-vtable-layouts "));
+    // The first differing block, both texts, and a diff.
+    has(
+        "fail-layout-differs.cpp",
+        "record layout block 2 differs from the oracle's (2 blocks, oracle 2):\n\
+         --- oracle ---\n             0 | struct A\n",
+    );
+    has("fail-layout-differs.cpp", "--- actual ---\n             0 | struct A\n");
+    has("fail-layout-differs.cpp", "-         4 |   int i\n    +         2 |   int i\n");
+    has("xfail-layout-differs.cpp", "record layout block 2 differs");
+    has("fail-layout-no-dump.cpp", "the compiler dumped no record layout");
+    has("fail-layout-diag-missing.cpp", "no such warning");
+    has("fail-vtables-differs.cpp", "as sets of blocks (13 blocks, oracle 14)");
+    has(
+        "fail-vtables-differs.cpp",
+        "block `Vtable for 'D' (13 entries).` differs (-oracle +actual):\n",
+    );
+    has("fail-vtables-differs.cpp", "-   9 | vcall_offset (-32)\n    +   9 | vcall_offset (-16)");
+    has(
+        "fail-vtables-differs.cpp",
+        "only in the oracle's dump (1):\n    VTable indices for 'V' (1 entries).\n",
+    );
+    has("error-vtables-oracle-emits-none.cpp", "dumped no vtable; clang dumps a vtable only");
+
+    o.no_oracle = true;
+    let results = execute(&o).unwrap();
+    assert_eq!(results.len(), 8);
+    for r in &results {
+        assert_eq!(r.status, Status::Skip, "{}", report::format_result(r, true));
+        let reason = r.reason.as_deref().unwrap_or_default();
+        assert!(reason.starts_with("no oracle (`expect: "), "{reason}");
+    }
+}
+
+/// `expect: layout` / `expect: vtables` with clang as both the compiler and
+/// the oracle (the corpus self-check): no comparison, but the dump must be
+/// produced, non-empty, and the diagnostics must match.
+#[test]
+fn dump_fixtures_with_clang() {
+    if !have_clang() {
+        return;
+    }
+    let results = execute(&clang_opts(&[repo_root().join("xtask/fixtures/dumps/clang")])).unwrap();
+    check_fixture_statuses(&results, 5);
+    let by_name = |n: &str| results.iter().find(|r| r.name.ends_with(n)).unwrap();
+    let has = |n: &str, what: &str| {
+        let d = &by_name(n).details;
+        assert!(d.contains(what), "{n}: {what:?} not in\n{d}");
+    };
+    has("fail-vtables-not-emitted.cpp", "the compiler dumped no vtable");
+    has(
+        "fail-layout-compile-error.cpp",
+        "expected the record layout dump, but the compiler failed",
+    );
+    // One compile each: the oracle is the compiler under test.
+    for n in ["pass-layout.cpp", "pass-vtables.cpp"] {
+        assert_eq!(by_name(n).log.iter().filter(|l| l.starts_with("$ ")).count(), 1, "{n}");
     }
 }
 

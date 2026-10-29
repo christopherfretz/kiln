@@ -11,6 +11,9 @@ publish = false
 # Re-lexes `-E` output for the token-wise pp comparison (spec/harness.md).
 kiln_lex.workspace = true
 kiln_source.workspace = true
+# Splits record-layout and vtable dumps into blocks for `expect: layout` /
+# `expect: vtables` (spec/harness.md "Layout and vtable tests").
+kiln_abi.workspace = true
 
 [lints]
 workspace = true

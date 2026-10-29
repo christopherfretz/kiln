@@ -6,21 +6,16 @@
 //! clang: emission order, construction vtables possibly twice) and
 //! clang's `Original map` sections are debugging state kiln does not
 //! print, so the dumps are compared as *sets* of blocks with those
-//! sections removed. Without `clang++-19` only kiln's side runs.
+//! sections removed (`kiln_abi::dump_blocks`). Without `clang++-19`
+//! only kiln's side runs.
 #![forbid(unsafe_code)]
 
-use std::collections::BTreeSet;
 use std::process::{Command, Stdio};
+
+use kiln_abi::dump_blocks::vtable_blocks as blocks;
 
 const CLANG: &str = "clang++-19";
 const TRIPLES: [&str; 2] = ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"];
-const HEADS: [&str; 5] = [
-    "Vtable for ",
-    "Construction vtable for ",
-    "VTable indices for ",
-    "Thunks for ",
-    "Virtual base offset offsets for ",
-];
 
 /// Programs without constructors/destructors (not yet in sema); every
 /// dynamic class has a key function defined out of line.
@@ -53,43 +48,6 @@ fn clang_available() -> bool {
         .stderr(Stdio::null())
         .status()
         .is_ok_and(|s| s.success())
-}
-
-/// The set of dump blocks of `text`, `Original map` sections dropped and
-/// trailing blank lines trimmed.
-fn blocks(text: &str) -> BTreeSet<String> {
-    let mut out = BTreeSet::new();
-    let mut cur: Vec<&str> = Vec::new();
-    let mut in_map = false;
-    let mut flush = |cur: &mut Vec<&str>| {
-        while cur.last().is_some_and(|l| l.is_empty()) {
-            cur.pop();
-        }
-        if !cur.is_empty() {
-            out.insert(cur.join("\n"));
-        }
-        cur.clear();
-    };
-    for line in text.lines() {
-        if line == "Original map" {
-            in_map = true;
-            continue;
-        }
-        if in_map {
-            if line.starts_with(' ') {
-                continue;
-            }
-            in_map = false;
-        }
-        if HEADS.iter().any(|h| line.starts_with(h)) {
-            flush(&mut cur);
-        }
-        if !cur.is_empty() || !line.is_empty() {
-            cur.push(line);
-        }
-    }
-    flush(&mut cur);
-    out
 }
 
 fn kiln_dump(src: &std::path::Path, triple: &str) -> String {

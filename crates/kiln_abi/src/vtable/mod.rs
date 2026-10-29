@@ -44,8 +44,6 @@ pub enum VTableError {
     /// function without a unique final overrider, a missing override
     /// list entry, or a subobject that does not exist.
     Incomplete,
-    /// Not implemented (reserved; no current path answers it).
-    Unsupported,
     /// The hierarchy exceeds the builders' bounds (see the module
     /// documentation).
     TooComplex,

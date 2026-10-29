@@ -1145,7 +1145,7 @@ VTableError>`, with `VTableError { NotDynamic | Incomplete | Unsupported
 }`; every body answers `Unsupported` until WP-078b.
 
 Landed (WP-078b): every body is implemented. `VTableError` gains
-`TooComplex`, and `Unsupported` is now unused. New functions:
+`TooComplex`, and `Unsupported` became unused (WP-084 removed it). New functions:
 - `vtt_vtables(&Ast, record, &Target) -> Result<Vec<SubobjectId>,
   VTableError>`;
 - `dump_construction_vtable`;
