@@ -111,6 +111,39 @@ fn dedup() {
     assert_eq!(e.warning_count(), 0);
 }
 
+// spec: diag.md §7.4 (the emission context joins the key; sema passes the
+// instantiation stack)
+#[test]
+fn dedup_context() {
+    let (sm, f) = source("e.c", SRC);
+    let opts = DiagOptions::default();
+    let mem = MemorySink::new();
+    let e = DiagEngine::new(&sm, &opts, mem.clone());
+    let s = sp(&sm, f, 1, 2, 5);
+    let t = sp(&sm, f, 2, 2, 5);
+    let d = |sp: Span, ctx: u64| Diag::new(DiagId::pp_endif_without_if, sp).context(ctx);
+    // Two contexts (instantiations): both print; each once.
+    assert!(e.would_emit(&d(s, 7)));
+    d(s, 7).emit(&e);
+    assert!(!e.would_emit(&d(s, 7)));
+    d(s, 7).emit(&e); // dropped
+    d(s, 9).emit(&e);
+    // No context (the definition), then an instantiation: the second is a
+    // repeat of the first.
+    d(t, 0).emit(&e);
+    assert!(!e.would_emit(&d(t, 7)));
+    d(t, 7).emit(&e); // dropped
+    // But an instantiation first does not hide a later context-free one.
+    let u = sp(&sm, f, 3, 2, 5);
+    d(u, 7).emit(&e);
+    d(u, 0).emit(&e);
+    assert_eq!(mem.take().len(), 5);
+    // would_emit is false for an ignored diagnostic.
+    let opts = DiagOptions::from_args(["-Wno-#warnings"]);
+    let e = DiagEngine::new(&sm, &opts, MemorySink::new());
+    assert!(!e.would_emit(&Diag::new(DiagId::pp_warning_directive, s).arg("x")));
+}
+
 // spec: diag.md §7.5 (summary line)
 #[test]
 fn summary() {

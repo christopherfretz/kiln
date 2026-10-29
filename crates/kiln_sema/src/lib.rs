@@ -313,6 +313,8 @@ impl<'a, 'sm> Sema<'a, 'sm> {
         if !self.inst.stack.is_empty()
             && let Some(id) = d.id()
         {
+            // Dedup is per instantiation (spec/diag.md §7.4).
+            d = d.context(self.inst.stack.context_key());
             let sev = self.diags.severity(id);
             if self.inst.stack.is_sfinae() {
                 if sev >= kiln_diag::Severity::Error
@@ -325,7 +327,9 @@ impl<'a, 'sm> Sema<'a, 'sm> {
                 }
                 return;
             }
-            if sev != kiln_diag::Severity::Ignored {
+            // Only a diagnostic that will print takes the context notes,
+            // which print once per depth (§10.2).
+            if self.diags.would_emit(&d) {
                 d.prepend_notes(self.inst_context_notes());
             }
         }

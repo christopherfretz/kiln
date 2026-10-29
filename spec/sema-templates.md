@@ -1783,6 +1783,16 @@ toward `-ftemplate-depth`. They are clang's `NonInstantiationEntries`.
 - So two errors at the same depth print the stack only once, as in
   clang.
 - Notes never trigger printing.
+- Only a diagnostic that will print takes the notes: `Sema::emit` asks
+  `DiagEngine::would_emit` first (spec/diag.md §7.4), so a dropped
+  duplicate or an ignored warning does not set `last_emitted` and leave
+  the next real error without its context.
+
+**Deduplication.** `Sema::emit` sets the diagnostic's dedup context to
+`InstantiationStack::context_key()`, a hash of every frame's `(kind,
+entity, args, poi)` (0 only for an empty stack). The same error in two
+instantiations (`S<int>`, `S<long>`) prints twice, each with its notes;
+see spec/diag.md §7.4 for the full rule (WP-087).
 
 **Elision.** `-ftemplate-backtrace-limit=N` defaults to 10; 0 means no
 limit. With F frames and F > N > 0:
