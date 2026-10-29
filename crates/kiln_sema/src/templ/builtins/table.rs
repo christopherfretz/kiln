@@ -204,6 +204,12 @@ pub fn trait_status(t: TypeTrait) -> Status {
         | T::IsPointerInterconvertibleBaseOf
         | T::CanPassInRegs
         | T::IsBitwiseCloneable => Status::Owner("M4 (unassigned)"),
+        // clang 19 answers `canPassInRegisters` for a class, which needs the
+        // S3C class properties to set `DefinitionBits::TRIVIALLY_RELOCATABLE`
+        // (nothing sets it yet). libc++ falls back to trivially copyable.
+        T::IsTriviallyRelocatable => {
+            Status::Owner("unowned: S3C canPassInRegisters (DefinitionBits::TRIVIALLY_RELOCATABLE)")
+        }
         _ => Status::Done,
     }
 }

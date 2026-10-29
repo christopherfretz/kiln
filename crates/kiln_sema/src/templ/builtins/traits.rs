@@ -11,7 +11,7 @@
 
 use kiln_ast::decl::{Access, DefinitionBits, TagKind};
 use kiln_ast::expr::{ExprDeps, TypeTrait, ValueCategory};
-use kiln_ast::types::{BuiltinType, TypeFlags, TypeView};
+use kiln_ast::types::{BuiltinType, ExcSpec, TypeFlags, TypeView};
 use kiln_ast::{DeclId, ExprId, QualType};
 use kiln_diag::DiagId;
 use kiln_source::Loc;
@@ -147,8 +147,13 @@ impl Sema<'_, '_> {
         let value = if n.deps().contains(ExprDeps::TYPE) {
             false
         } else {
-            let lv = n.value_category() == ValueCategory::LValue;
-            if t == TypeTrait::IsLvalueExpr { lv } else { !lv }
+            // clang: `isLValue()` / `isPRValue()`; an xvalue is neither.
+            let vc = n.value_category();
+            if t == TypeTrait::IsLvalueExpr {
+                vc == ValueCategory::LValue
+            } else {
+                vc == ValueCategory::PRValue
+            }
         };
         self.builder().expression_trait_expr(t, e, value, QualType::BOOL, loc, rparen)
     }
@@ -648,11 +653,36 @@ impl Sema<'_, '_> {
             return false;
         }
         if t == TypeTrait::IsNothrowDestructible {
-            let ty = self.ast.decls.get(d).ty().unwrap_or(QualType::ERROR);
-            let t = &self.ast.types;
-            return t.proto(ty).is_some_and(|p| t.exc_spec(p).is_nothrow());
+            return self.dtor_nothrow(r, d);
         }
         true
+    }
+
+    /// Whether destructor `d` of class `r` is non-throwing. An unwritten
+    /// specification (`ExcSpec::Deferred`) is the implicit one of
+    /// [except.spec]/8: non-throwing unless the destructor of a base or
+    /// of a non-static data member is potentially throwing. Virtual bases
+    /// are direct bases of a complete object, so walking the direct bases
+    /// covers them.
+    fn dtor_nothrow(&mut self, r: DeclId, d: DeclId) -> bool {
+        let ty = self.ast.decls.get(d).ty().unwrap_or(QualType::ERROR);
+        let t = &self.ast.types;
+        let Some(p) = t.proto(ty) else { return false };
+        match t.exc_spec(p) {
+            ExcSpec::Deferred(_) => {}
+            e => return e.is_nothrow(),
+        }
+        let def = self.class_def(r);
+        let mut subs: Vec<QualType> =
+            self.ast.decls.bases(def, &self.ast.lists).map(|b| b.ty).collect();
+        subs.extend(
+            self.fields_of(r).into_iter().map(|f| self.ast.decls.get(f).ty().unwrap_or(QualType::ERROR)),
+        );
+        subs.into_iter().all(|q| {
+            self.ast.types.is_reference(q)
+                || self.element_record(q).is_none()
+                || self.is_destructible(TypeTrait::IsNothrowDestructible, q)
+        })
     }
 
     /// [meta.unary.prop] `has_unique_object_representations` (clang's
