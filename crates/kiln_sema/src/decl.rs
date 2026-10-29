@@ -165,7 +165,10 @@ impl Sema<'_, '_> {
             // [dcl.type.auto.deduct]/4 (clang
             // `err_decltype_auto_cannot_be_combined`).
             TypeSpecKind::DecltypeAuto if !ds.cv.is_empty() => {
-                self.error(DiagId::sema_decltype_auto_cannot_be_combined, ds.type_loc.unwrap_or(loc));
+                self.error(
+                    DiagId::sema_decltype_auto_cannot_be_combined,
+                    ds.type_loc.unwrap_or(loc),
+                );
                 return QualType::ERROR;
             }
             TypeSpecKind::Auto | TypeSpecKind::DecltypeAuto => {
@@ -1546,7 +1549,9 @@ impl Sema<'_, '_> {
                         self.diag(DiagId::sema_overload_unsupported, d.name_loc())
                             .arg(sym_str(self, name))
                     };
-                    let msg = self.note_prev(msg, p, false);
+                    // clang's `getNoteDiagForInvalidRedeclaration`.
+                    let def = self.ast.decls.function(p).is_some_and(|f| f.body.is_some());
+                    let msg = self.note_prev(msg, p, def);
                     self.emit(msg);
                 }
             } else {
@@ -1595,6 +1600,13 @@ impl Sema<'_, '_> {
             name: dname,
         };
         let virt = self.virtual_decl(ds, d, ty, site, &mut spec);
+        // [dcl.spec.auto.general]/12 (clang's `err_auto_fn_virtual`).
+        if let Some(vloc) = ds.virtual_
+            && in_class
+            && self.ast.types.proto(ty).is_some_and(|p| self.contains_undeduced_auto(p.ret()))
+        {
+            self.error(DiagId::sema_auto_fn_virtual, vloc);
+        }
         let f = self.builder().function(h, fkind, ty, spec, prev_ok);
         self.finish_virtual_decl(f, &virt);
         if invalid_redecl {
@@ -1814,7 +1826,23 @@ impl Sema<'_, '_> {
             let msg = self.diag(DiagId::sema_duplicate_member, d.name_loc()).arg(sym_str(self, n));
             self.emit(msg.with_note(note));
         }
-        let ty = if !invalid
+        // [dcl.spec.auto.general]/5: a placeholder is not allowed in a
+        // non-static data member (clang's `err_auto_not_allowed`).
+        let invalid = invalid || {
+            let kw = self.placeholder_keyword(ty);
+            if let Some(kw) = kw {
+                let tag = self.ast.decls.record(ctx).map_or(TagKind::Struct, |r| r.tag);
+                let msg = self
+                    .diag(DiagId::sema_auto_not_allowed_field, ds.type_loc.unwrap_or(ds.loc))
+                    .arg(u8::from(kw == AutoKeyword::DecltypeAuto))
+                    .arg(tag as u8);
+                self.emit(msg);
+            }
+            kw.is_some()
+        };
+        let ty = if invalid && self.placeholder_keyword(ty).is_some() {
+            QualType::ERROR
+        } else if !invalid
             && !self.ast.types.is_reference(ty)
             && !self.require_complete(ty, d.name_loc())
         {
@@ -2194,7 +2222,9 @@ impl Sema<'_, '_> {
                 .diag(DiagId::sema_auto_var_deduction_failure_from_init_list, loc)
                 .arg(name)
                 .arg(self.ty_arg(declared)),
-            AutoFail::DecltypeAutoList => self.diag(DiagId::sema_decltype_auto_initializer_list, lbrace),
+            AutoFail::DecltypeAutoList => {
+                self.diag(DiagId::sema_decltype_auto_initializer_list, lbrace)
+            }
         };
         self.emit(msg);
         None
@@ -2271,10 +2301,8 @@ impl Sema<'_, '_> {
             if !self.inst.stack.is_empty() {
                 return;
             }
-            let msg = self
-                .diag(DiagId::sema_auto_var_requires_init, loc)
-                .arg(name)
-                .arg(self.ty_arg(ty));
+            let msg =
+                self.diag(DiagId::sema_auto_var_requires_init, loc).arg(name).arg(self.ty_arg(ty));
             self.emit(msg);
             return;
         }

@@ -9,6 +9,7 @@ use kiln_ast::{AttrId, DeclId, ExprId, QualType};
 use kiln_diag::DiagId;
 use kiln_lex::{Punct, TokKind};
 use kiln_sema::declspec::SpecError;
+use kiln_sema::templ::auto::AutoGroup;
 use kiln_sema::{
     Chunk, DeclSpec, Declarator, DeclaratorContext, DefaultArg, Designator, InitItem, InitList,
     InitValue, Initializer, NameClass, ParamInfo, Sign, SpecialName, StorageSpec, TagUse,
@@ -1513,6 +1514,8 @@ impl Parser<'_, '_> {
         let mut base_ty: Option<QualType> = None;
         let mut first = true;
         let direct_init = Self::may_have_direct_init(ctx, ds.storage);
+        // [dcl.spec.auto.general]/8: one placeholder deduction per group.
+        let (mut group, type_at) = (AutoGroup::default(), ds.type_loc.unwrap_or(ds.loc));
         loop {
             let mut d = Declarator::new(ctx, self.loc());
             d.direct_init = direct_init;
@@ -1574,7 +1577,7 @@ impl Parser<'_, '_> {
             let v = self.s.act_on_declarator(&ds, base, &d);
             match self.parse_initializer(d.init_style, d.is_function_declarator()) {
                 Ok(init) => match (v, init) {
-                    (Some(v), Some(i)) => self.s.act_on_init(v, i),
+                    (Some(v), Some(i)) => self.s.act_on_init_in_group(&mut group, v, i, type_at),
                     (Some(v), None) => self.s.act_on_uninit(v),
                     _ => {}
                 },

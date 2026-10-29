@@ -22,11 +22,10 @@ use crate::decl::{
     StaticAssertData, TagKind, TemplLink, TypedefData, VarData, VarEval, VarSpec,
 };
 use crate::expr::{
-    ArrayTraitExtra, BinaryOp, CastKind, CharKind, CompoundAssignExtra, ConstructInfo, ConstructionKind,
-    DeclRefExtra, ExprDeps, ExprFlags, ExprKind, ExprNode, InitListExtra, NewExtra, NewInitStyle,
-    NonOdrUse, ObjectKind, Radix, StorageDuration, StringKind, TraitKind, TypeTrait, TypeidOperand,
-    UnaryOp,
-    ValueCategory,
+    ArrayTraitExtra, BinaryOp, CastKind, CharKind, CompoundAssignExtra, ConstructInfo,
+    ConstructionKind, DeclRefExtra, ExprDeps, ExprFlags, ExprKind, ExprNode, InitListExtra,
+    NewExtra, NewInitStyle, NonOdrUse, ObjectKind, Radix, StorageDuration, StringKind, TraitKind,
+    TypeTrait, TypeidOperand, UnaryOp, ValueCategory,
 };
 use crate::ids::{
     AttrId, ConstValueId, DeclId, ExprId, ListId, QualType, RawId, StmtId, StringLitId, TypeId,

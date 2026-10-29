@@ -1003,6 +1003,11 @@ diag_ids! {
     sema_call_function_incomplete_return = Error (1) "calling function with incomplete return type {0}";
     sema_cast_to_incomplete = Error (1) "cast to incomplete type {0}";
     sema_incomplete_type_required = Error (1) "incomplete type {0} where a complete type is required";
+    sema_auto_var_different_deductions = Error (5) "'{0:auto|decltype(auto)}' deduced as {1} in declaration of '{2}' and deduced as {3} in declaration of '{4}'";
+    sema_auto_var_in_own_initializer = Error (2) "variable '{0}' declared with deduced type {1} cannot appear in its own initializer";
+    sema_auto_not_allowed_field = Error (2) "'{0:auto|decltype(auto)}' not allowed in non-static {1:struct|class|union} member";
+    sema_auto_fn_virtual = Error (0) "function with deduced return type cannot be virtual";
+    parse_decltype_auto_invalid = Error (0) "'decltype(auto)' not allowed here";
 }
 
 impl DiagId {

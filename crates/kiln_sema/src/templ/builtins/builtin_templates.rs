@@ -5,10 +5,10 @@
 //! checked here instead of through a template parameter list.
 
 use kiln_ast::Ast;
+use kiln_ast::ids::TemplateNameId;
 use kiln_ast::names::DeclName;
 use kiln_ast::types::{ArgView, TemplateArg};
 use kiln_ast::{DeclId, QualType};
-use kiln_ast::ids::TemplateNameId;
 use kiln_diag::DiagId;
 use kiln_oven::EvalContext;
 use kiln_source::Loc;
@@ -96,12 +96,9 @@ impl Sema<'_, '_> {
             self.builtin_template_arity(d, args.len() > 3, loc);
             return Err(());
         }
-        let seq = match args[0].view() {
-            ArgView::Template(n) => n,
-            _ => {
-                self.error(DiagId::sema_template_arg_must_be_template, at(0));
-                return Err(());
-            }
+        let ArgView::Template(seq) = args[0].view() else {
+            self.error(DiagId::sema_template_arg_must_be_template, at(0));
+            return Err(());
         };
         let ArgView::Type(t) = args[1].view() else {
             self.error(DiagId::sema_template_arg_must_be_type, at(1));
@@ -159,21 +156,17 @@ impl Sema<'_, '_> {
         let i = self.builtin_nttp_value(args[0], size_t, at(0))?;
         let mut types = Vec::with_capacity(args.len() - 1);
         for (k, &a) in args.iter().enumerate().skip(1) {
-            match a.view() {
-                ArgView::Type(t) => types.push(t),
-                _ => {
-                    self.error(DiagId::sema_template_arg_must_be_type, at(k));
-                    return Err(());
-                }
-            }
+            let ArgView::Type(t) = a.view() else {
+                self.error(DiagId::sema_template_arg_must_be_type, at(k));
+                return Err(());
+            };
+            types.push(t);
         }
-        match usize::try_from(i).ok().and_then(|i| types.get(i)) {
-            Some(&t) => Ok(t),
-            None => {
-                self.error(DiagId::sema_pack_index_out_of_bounds, at(0));
-                Err(())
-            }
+        if let Some(&t) = usize::try_from(i).ok().and_then(|i| types.get(i)) {
+            return Ok(t);
         }
+        self.error(DiagId::sema_pack_index_out_of_bounds, at(0));
+        Err(())
     }
 
     /// The value of non-type argument `a` converted to `ty` as a

@@ -160,15 +160,13 @@ pub fn completeness(t: TypeTrait) -> Complete {
 pub fn deprecated_replacement(t: TypeTrait) -> Option<&'static str> {
     use TypeTrait as T;
     Some(match t {
-        T::HasNothrowAssign => "__is_nothrow_assignable",
-        T::HasNothrowMoveAssign => "__is_nothrow_assignable",
-        T::HasNothrowCopy => "__is_nothrow_constructible",
-        T::HasNothrowConstructor => "__is_nothrow_constructible",
-        T::HasTrivialAssign => "__is_trivially_assignable",
-        T::HasTrivialMoveAssign => "__is_trivially_assignable",
+        T::HasNothrowAssign | T::HasNothrowMoveAssign => "__is_nothrow_assignable",
+        T::HasNothrowCopy | T::HasNothrowConstructor => "__is_nothrow_constructible",
+        T::HasTrivialAssign | T::HasTrivialMoveAssign => "__is_trivially_assignable",
         T::HasTrivialCopy => "__is_trivially_copyable",
-        T::HasTrivialDefaultConstructor => "__is_trivially_constructible",
-        T::HasTrivialMoveConstructor => "__is_trivially_constructible",
+        T::HasTrivialDefaultConstructor | T::HasTrivialMoveConstructor => {
+            "__is_trivially_constructible"
+        }
         T::HasTrivialDestructor => "__is_trivially_destructible",
         _ => return None,
     })
@@ -244,12 +242,7 @@ const OVEN_WP: &str = "unowned: proposed §9.5 builtin-functions WP";
 
 /// The non-trait rows: §9.3 templates, then §9.4-9.5 functions.
 pub static TABLE: &[Row] = &[
-    Row {
-        name: "__make_integer_seq",
-        kind: Kind::Template,
-        status: Status::Done,
-        oven: Oven::No,
-    },
+    Row { name: "__make_integer_seq", kind: Kind::Template, status: Status::Done, oven: Oven::No },
     Row {
         name: "__type_pack_element",
         kind: Kind::Template,

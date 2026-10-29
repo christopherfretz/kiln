@@ -13,14 +13,25 @@
 //! placeholders nested in other compound types (`std::vector<auto>` is
 //! ill-formed, but `auto (*)()` and `C auto` constraints are not).
 
-use kiln_ast::decl::DeclKind;
+use kiln_ast::decl::{DeclFlags, DeclKind};
 use kiln_ast::types::{AutoKeyword, TemplateArg, TypeView};
 use kiln_ast::{DeclId, ExprId, QualType};
 use kiln_source::Loc;
 
-use crate::Sema;
+use kiln_diag::DiagId;
+
 use crate::lookup::LookupKind;
 use crate::templ::actions::TemplateIdRef;
+use crate::{Initializer, Sema};
+
+/// One declarator group's placeholder deductions
+/// ([dcl.spec.auto.general]/8), kept by the parser across
+/// [`Sema::act_on_init_in_group`] calls.
+#[derive(Debug, Default)]
+pub struct AutoGroup {
+    first: Option<(DeclId, QualType)>,
+    failed: bool,
+}
 
 /// The form of a placeholder variable's initializer
 /// ([dcl.type.auto.deduct]/2.1).
@@ -125,9 +136,11 @@ impl Sema<'_, '_> {
                 }
                 let Some(u) = elem else { return Err(AutoFail::FromInitList) };
                 let name = self.template_name_for(il);
-                let loc = init.iter().flatten().next().map_or(Loc::INVALID, |&e| {
-                    self.ast.exprs.get(e).loc()
-                });
+                let loc = init
+                    .iter()
+                    .flatten()
+                    .next()
+                    .map_or(Loc::INVALID, |&e| self.ast.exprs.get(e).loc());
                 match self.act_template_id(name, &[TemplateArg::ty(u)], loc, loc) {
                     Ok(TemplateIdRef::Type(t)) => Ok(self.replace_placeholder(declared, t)),
                     _ => Err(AutoFail::Error),
@@ -136,9 +149,111 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// [`Sema::act_on_init`] for a declarator of a group, then the
+    /// group's placeholder check ([`Sema::check_auto_group`]) at `at`
+    /// (the decl-specifiers' type). `group` is parser-local, so nested
+    /// declarations in an initializer do not interfere.
+    pub fn act_on_init_in_group(
+        &mut self,
+        group: &mut AutoGroup,
+        v: DeclId,
+        init: Initializer,
+        at: Loc,
+    ) {
+        let declared = self.ast.decls.get(v).ty();
+        self.act_on_init(v, init);
+        if !group.failed
+            && let Some(t) = declared
+        {
+            group.failed = !self.check_auto_group(&mut group.first, v, t, at);
+        }
+    }
+
+    /// [dcl.spec.auto.general]/8: in a declaration with several
+    /// declarators, the placeholder must deduce the same type in each.
+    /// Called by the parser after each declarator's initializer with the
+    /// type `declared` the declarator had before deduction; `first` is
+    /// the group's first deduction (parser-local, so nested declarations
+    /// in an initializer do not interfere). Reports clang's
+    /// `err_auto_different_deductions` once, at `at` (the
+    /// decl-specifiers' type), and returns `false` then: the caller stops
+    /// checking the group (clang's `BuildDeclaratorGroup`).
+    pub(crate) fn check_auto_group(
+        &mut self,
+        first: &mut Option<(DeclId, QualType)>,
+        v: DeclId,
+        declared: QualType,
+        at: Loc,
+    ) -> bool {
+        let n = *self.ast.decls.get(v);
+        if n.kind() != DeclKind::Var || n.has(DeclFlags::INVALID) {
+            return true;
+        }
+        let Some(actual) = n.ty() else { return true };
+        let Some((kw, deduced)) = self.placeholder_deduction(declared, actual) else {
+            return true;
+        };
+        if self.is_error_type(deduced) || self.ast.types.is_dependent(deduced) {
+            return true;
+        }
+        let Some((d0, t0)) = *first else {
+            *first = Some((v, deduced));
+            return true;
+        };
+        if self.ast.types.canonical(t0) == self.ast.types.canonical(deduced) {
+            return true;
+        }
+        let msg = self
+            .diag(DiagId::sema_auto_var_different_deductions, at)
+            .arg(u8::from(kw == AutoKeyword::DecltypeAuto))
+            .arg(self.ty_arg(t0))
+            .arg(self.decl_name(d0))
+            .arg(self.ty_arg(deduced))
+            .arg(self.decl_name(v));
+        self.emit(msg);
+        self.ast.decls.set_flags(v, DeclFlags::INVALID);
+        false
+    }
+
+    /// The type the placeholder in `declared` (under pointer and
+    /// reference declarators) deduced, given the declarator's type
+    /// `actual` after deduction: `actual` walked in parallel, less the
+    /// cv-qualifiers written on the placeholder. `auto &&` deduced from
+    /// an lvalue gives the lvalue reference itself ([temp.deduct.call]/3).
+    fn placeholder_deduction(
+        &mut self,
+        declared: QualType,
+        actual: QualType,
+    ) -> Option<(AutoKeyword, QualType)> {
+        let (mut d, mut a) = (declared, actual);
+        for _ in 0..256 {
+            let av = self.ast.types.canonical_view(a);
+            match (self.ast.types.canonical_view(d), av) {
+                (TypeView::Auto { keyword, deduced: None, .. }, _) => {
+                    let q = self.ast.types.canonical(d).quals();
+                    let t = if q.is_empty() { a } else { self.ast.types.unqualified(a) };
+                    return Some((keyword, t));
+                }
+                (TypeView::Pointer(p), TypeView::Pointer(x))
+                | (TypeView::LValueRef(p), TypeView::LValueRef(x))
+                | (TypeView::RValueRef(p), TypeView::RValueRef(x)) => (d, a) = (p, x),
+                (TypeView::RValueRef(p), TypeView::LValueRef(_)) => {
+                    let TypeView::Auto { keyword, deduced: None, .. } =
+                        self.ast.types.canonical_view(p)
+                    else {
+                        return None;
+                    };
+                    return Some((keyword, a));
+                }
+                _ => return None,
+            }
+        }
+        None
+    }
+
     /// The keyword of the placeholder in `declared` (under pointer and
     /// reference declarators).
-    fn placeholder_keyword(&self, declared: QualType) -> Option<AutoKeyword> {
+    pub(crate) fn placeholder_keyword(&self, declared: QualType) -> Option<AutoKeyword> {
         let mut cur = declared;
         for _ in 0..256 {
             match self.ast.types.canonical_view(cur) {

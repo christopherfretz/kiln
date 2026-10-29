@@ -9,9 +9,9 @@
 //! extensions (complex types count as arithmetic and scalar, a
 //! zero-length array is not an array).
 
-use kiln_ast::decl::{Access, DefinitionBits, TagKind};
+use kiln_ast::decl::{Access, DefinitionBits};
 use kiln_ast::expr::{ExprDeps, TypeTrait, ValueCategory};
-use kiln_ast::types::{BuiltinType, ExcSpec, TypeFlags, TypeView};
+use kiln_ast::types::{ExcSpec, Quals, TypeFlags, TypeView};
 use kiln_ast::{DeclId, ExprId, QualType};
 use kiln_diag::DiagId;
 use kiln_source::Loc;
@@ -199,8 +199,7 @@ impl Sema<'_, '_> {
                 if self.ast.types.is_void(e) {
                     return true;
                 }
-                let e = self.ast.types.unqualified(e);
-                e
+                self.ast.types.unqualified(e)
             }
             Complete::BoundedElement => {
                 if tys.is_void(q)
@@ -379,12 +378,10 @@ impl Sema<'_, '_> {
             T::IsPolymorphic => self.record_bit(q, DefinitionBits::POLYMORPHIC),
             T::IsAbstract => self.record_bit(q, DefinitionBits::ABSTRACT),
             T::IsFinal => self.defined_record(q).is_some_and(|r| self.is_final_class(r)),
-            T::IsEmpty => self
-                .defined_record(q)
-                .is_some_and(|r| !self.is_union(r) && self.bits_of(r).contains(DefinitionBits::EMPTY)),
-            T::IsAggregate => {
-                tys.is_array(q) || self.record_bit(q, DefinitionBits::AGGREGATE)
-            }
+            T::IsEmpty => self.defined_record(q).is_some_and(|r| {
+                !self.is_union(r) && self.bits_of(r).contains(DefinitionBits::EMPTY)
+            }),
+            T::IsAggregate => tys.is_array(q) || self.record_bit(q, DefinitionBits::AGGREGATE),
             T::IsTriviallyCopyable => self.is_trivially_copyable_type(q),
             T::IsTrivial => self.is_trivial_type(q),
             T::IsPod => self.is_pod_type(q),
@@ -412,9 +409,9 @@ impl Sema<'_, '_> {
             T::HasTrivialCopy => {
                 self.is_pod_type(q)
                     || tys.is_reference(q)
-                    || self
-                        .defined_record(q)
-                        .is_some_and(|r| self.bits_of(r).contains(DefinitionBits::TRIVIAL_COPY_CTOR))
+                    || self.defined_record(q).is_some_and(|r| {
+                        self.bits_of(r).contains(DefinitionBits::TRIVIAL_COPY_CTOR)
+                    })
             }
             T::HasTrivialMoveAssign => {
                 self.is_pod_type(q)
@@ -428,9 +425,9 @@ impl Sema<'_, '_> {
                     return false;
                 }
                 self.is_pod_type(q)
-                    || self
-                        .defined_record(q)
-                        .is_some_and(|r| self.bits_of(r).contains(DefinitionBits::TRIVIAL_COPY_ASSIGN))
+                    || self.defined_record(q).is_some_and(|r| {
+                        self.bits_of(r).contains(DefinitionBits::TRIVIAL_COPY_ASSIGN)
+                    })
             }
             T::HasTrivialDestructor => {
                 self.is_pod_type(q)
@@ -441,7 +438,8 @@ impl Sema<'_, '_> {
             }
             T::HasVirtualDestructor => {
                 let Some(r) = self.defined_record(q) else { return false };
-                match self.select_special(r, SpecialKind::Dtor, Default::default(), Default::default()) {
+                match self.select_special(r, SpecialKind::Dtor, Quals::default(), Quals::default())
+                {
                     Selected::Found(d) | Selected::Deleted(d) => self
                         .ast
                         .decls
@@ -643,10 +641,10 @@ impl Sema<'_, '_> {
         {
             return false;
         }
-        let d = match self.select_special(r, SpecialKind::Dtor, Default::default(), Default::default())
-        {
-            Selected::Found(d) => d,
-            _ => return false,
+        let Selected::Found(d) =
+            self.select_special(r, SpecialKind::Dtor, Quals::default(), Quals::default())
+        else {
+            return false;
         };
         let access = self.ast.decls.get(d).misc().access();
         if !matches!(access, Access::Public | Access::None) {
@@ -676,7 +674,9 @@ impl Sema<'_, '_> {
         let mut subs: Vec<QualType> =
             self.ast.decls.bases(def, &self.ast.lists).map(|b| b.ty).collect();
         subs.extend(
-            self.fields_of(r).into_iter().map(|f| self.ast.decls.get(f).ty().unwrap_or(QualType::ERROR)),
+            self.fields_of(r)
+                .into_iter()
+                .map(|f| self.ast.decls.get(f).ty().unwrap_or(QualType::ERROR)),
         );
         subs.into_iter().all(|q| {
             self.ast.types.is_reference(q)
@@ -753,7 +753,9 @@ impl Sema<'_, '_> {
     fn struct_unique_bits(&self, r: DeclId) -> Option<u64> {
         let def = self.class_def(r);
         let bits = self.bits_of(def);
-        if bits.contains(DefinitionBits::POLYMORPHIC) || bits.contains(DefinitionBits::HAS_VIRTUAL_BASES) {
+        if bits.contains(DefinitionBits::POLYMORPHIC)
+            || bits.contains(DefinitionBits::HAS_VIRTUAL_BASES)
+        {
             return None;
         }
         let layout = kiln_abi::record_layout(&self.ast, def, &self.abi);
@@ -785,10 +787,11 @@ impl Sema<'_, '_> {
     fn field_unique_bits(&self, f: DeclId) -> Option<u64> {
         let ft = self.ast.decls.get(f).ty().unwrap_or(QualType::ERROR);
         let tys = &self.ast.types;
-        if let Some(r) = tys.as_record(ft) {
-            if !self.is_union(r) && !tys.is_array(ft) {
-                return self.struct_unique_bits(r);
-            }
+        if let Some(r) = tys.as_record(ft)
+            && !self.is_union(r)
+            && !tys.is_array(ft)
+        {
+            return self.struct_unique_bits(r);
         }
         let bit_int = matches!(tys.canonical_view(ft), TypeView::BitInt { .. });
         if !tys.is_reference(ft) && !bit_int && !self.unique_reps(ft) {
@@ -815,6 +818,3 @@ impl Sema<'_, '_> {
         Some(size)
     }
 }
-
-#[allow(dead_code, reason = "kept for the n-ary traits of WP-068a")]
-fn _unused(_: BuiltinType, _: TagKind) {}

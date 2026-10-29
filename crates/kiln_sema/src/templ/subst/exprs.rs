@@ -267,7 +267,10 @@ impl Substituter<'_, '_, '_> {
                     self.sema.ast.lists.iter::<QualType>(ex(self).type_trait_args(e)).collect();
                 let rhs = ex(self).type_trait_rhs_loc(e).unwrap_or(loc);
                 let is_exp = |s: &crate::Sema<'_, '_>, q: QualType| {
-                    matches!(s.ast.types.view(q.ty()), kiln_ast::types::TypeView::PackExpansion { .. })
+                    matches!(
+                        s.ast.types.view(q.ty()),
+                        kiln_ast::types::TypeView::PackExpansion { .. }
+                    )
                 };
                 let tys = self.expand_list(&tys, is_exp, |s, q| s.ty(q, loc), loc)?;
                 let args: Vec<(QualType, Loc)> = tys

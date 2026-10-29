@@ -87,9 +87,9 @@ impl Sema<'_, '_> {
                     .arg(self.ty_arg(c.ty))
                     .with_note(note)
             }
-            None => self
-                .diag(DiagId::sema_call_function_incomplete_return, c.at)
-                .arg(self.ty_arg(c.ty)),
+            None => {
+                self.diag(DiagId::sema_call_function_incomplete_return, c.at).arg(self.ty_arg(c.ty))
+            }
         };
         self.emit(self.incomplete_note(msg, c.ty));
         false
@@ -335,6 +335,9 @@ impl Sema<'_, '_> {
                 .arg(self.ty_arg(deduced))
                 .arg(self.ty_arg(ret));
             self.emit(msg);
+            // clang drops the return statement (`StmtError`): its operand
+            // is not converted to the earlier deduction.
+            return QualType::ERROR;
         }
         ret
     }
@@ -361,13 +364,23 @@ impl Sema<'_, '_> {
 
     /// Uses of a function whose return type is still undeduced
     /// ([dcl.spec.auto.general]/11): reports and returns true.
+    /// A member of a class template specialization is instantiated first
+    /// (clang's `DeduceReturnType`; [dcl.spec.auto.general]/12 deduces
+    /// when the definition is instantiated).
     pub(crate) fn check_undeduced_use(&mut self, d: DeclId, loc: Loc) -> bool {
-        let Some(fty) = self.ast.decls.get(d).ty() else { return false };
-        let Some(ret) = self.ast.types.proto(fty).map(kiln_ast::types::FuncProto::ret) else {
-            return false;
+        let undeduced = |s: &Self| {
+            let fty = s.ast.decls.get(d).ty()?;
+            let ret = s.ast.types.proto(fty).map(kiln_ast::types::FuncProto::ret)?;
+            s.contains_undeduced_auto(ret).then_some(())
         };
-        if !self.contains_undeduced_auto(ret) {
+        if undeduced(self).is_none() {
             return false;
+        }
+        if self.ast.instantiated_from(d).is_some() {
+            self.instantiate_function_definition(d, loc);
+            if undeduced(self).is_none() {
+                return false;
+            }
         }
         let name = self.decl_name(d);
         let note = self

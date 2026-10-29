@@ -502,6 +502,7 @@ impl Sema<'_, '_> {
         }
     }
 
+    #[allow(clippy::too_many_lines, reason = "one flat classification of expression kinds")]
     pub(crate) fn unused_warning(&self, e: ExprId) -> Option<(DiagId, Loc, Vec<String>)> {
         let x = self.ignore_parens(e);
         let n = *self.ast.exprs.get(x);
@@ -800,10 +801,28 @@ impl Sema<'_, '_> {
                 return self.recover_err(&[], loc);
             }
         }
-        if n.kind() == DeclKind::Function && self.check_undeduced_use(d, loc) {
+        if matches!(n.kind(), DeclKind::Function | DeclKind::CXXMethod)
+            && self.check_undeduced_use(d, loc)
+        {
             return self.recover_err(&[], loc);
         }
-        let mut declared = n.ty().unwrap_or(QualType::ERROR);
+        // [dcl.spec.auto.general]/11: a placeholder variable's type is
+        // not known inside its own initializer.
+        if n.kind() == DeclKind::Var
+            && !n.has(DeclFlags::INVALID)
+            && let Some(t) = n.ty()
+            && self.contains_undeduced_auto(t)
+        {
+            let msg = self
+                .diag(DiagId::sema_auto_var_in_own_initializer, loc)
+                .arg(self.decl_name(d))
+                .arg(self.ty_arg(t));
+            self.emit(msg);
+            self.ast.decls.set_flags(d, DeclFlags::INVALID);
+            return self.recover_err(&[], loc);
+        }
+        // Re-read: `check_undeduced_use` may have deduced the return type.
+        let mut declared = self.ast.decls.get(d).ty().unwrap_or(QualType::ERROR);
         // A pack names its pattern ([temp.variadic]/5): `Ts... x` gives `x`
         // the type `Ts`.
         if let TypeView::PackExpansion { pattern, .. } = self.ast.types.view(declared.ty()) {

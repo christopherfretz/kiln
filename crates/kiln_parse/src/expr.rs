@@ -378,7 +378,7 @@ impl Parser<'_, '_> {
         if let Some(crate::keywords::BuiltinKw::Trait(t)) = self.builtin_kw_at(self.pos()) {
             // clang's `ParseTypeTrait` / `ParseArrayTypeTrait` /
             // `ParseExpressionTrait`: no postfix suffix follows.
-            return self.parse_type_trait(t);
+            return Some(self.parse_type_trait(t));
         }
         match self.kw() {
             Some(Kw::Sizeof) => return self.parse_sizeof_alignof(TraitKind::SizeOf),
@@ -482,7 +482,7 @@ impl Parser<'_, '_> {
     /// §9.1, §9.4): a type-id list (each possibly a pack expansion), the
     /// type and dimension of `__array_extent`, or the unevaluated operand
     /// of `__is_lvalue_expr` / `__is_rvalue_expr`.
-    fn parse_type_trait(&mut self, t: TypeTrait) -> PExpr {
+    fn parse_type_trait(&mut self, t: TypeTrait) -> ExprId {
         let loc = self.bump().span.lo;
         let open = self.bump().span.lo;
         match t {
@@ -492,15 +492,15 @@ impl Parser<'_, '_> {
                 self.s.exit_unevaluated();
                 let Some(e) = e else {
                     self.skip_until(&[Punct::RParen], true, true);
-                    return Some(self.s.act_on_error_expr(&[], loc));
+                    return self.s.act_on_error_expr(&[], loc);
                 };
                 let rparen = self.expect_closing(Punct::RParen, Punct::LParen, open);
-                Some(self.s.build_expression_trait(t, e, loc, rparen))
+                self.s.build_expression_trait(t, e, loc, rparen)
             }
             TypeTrait::ArrayRank | TypeTrait::ArrayExtent => {
                 let Some(ty) = self.parse_type_id() else {
                     self.skip_until(&[Punct::RParen], true, true);
-                    return Some(self.s.act_on_error_expr(&[], loc));
+                    return self.s.act_on_error_expr(&[], loc);
                 };
                 let mut dim = None;
                 if t == TypeTrait::ArrayExtent {
@@ -508,16 +508,16 @@ impl Parser<'_, '_> {
                         let d = self.s.diag(DiagId::parse_expected, self.expected_loc()).arg("','");
                         self.emit(d);
                         self.skip_until(&[Punct::RParen], true, true);
-                        return Some(self.s.act_on_error_expr(&[], loc));
+                        return self.s.act_on_error_expr(&[], loc);
                     }
                     let Some(e) = self.parse_expression() else {
                         self.skip_until(&[Punct::RParen], true, true);
-                        return Some(self.s.act_on_error_expr(&[], loc));
+                        return self.s.act_on_error_expr(&[], loc);
                     };
                     dim = Some(e);
                 }
                 let rparen = self.expect_closing(Punct::RParen, Punct::LParen, open);
-                Some(self.s.build_array_type_trait(t, ty, dim, loc, rparen))
+                self.s.build_array_type_trait(t, ty, dim, loc, rparen)
             }
             _ => {
                 let mut args = Vec::new();
@@ -525,7 +525,7 @@ impl Parser<'_, '_> {
                     let at = self.loc();
                     let Some(mut ty) = self.parse_type_id() else {
                         self.skip_until(&[Punct::RParen], true, true);
-                        return Some(self.s.act_on_error_expr(&[], loc));
+                        return self.s.act_on_error_expr(&[], loc);
                     };
                     if let Some(l) = self.eat(Punct::Ellipsis) {
                         ty = self.s.act_pack_expansion_type(ty, l);
@@ -536,7 +536,7 @@ impl Parser<'_, '_> {
                     }
                 }
                 let rparen = self.expect_closing(Punct::RParen, Punct::LParen, open);
-                Some(self.s.act_type_trait(t, &args, loc, rparen))
+                self.s.act_type_trait(t, &args, loc, rparen)
             }
         }
     }

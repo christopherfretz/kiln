@@ -285,7 +285,8 @@ impl Job<'_> {
         result: &mut JobResult,
     ) {
         let a = self.args;
-        let Some((mut pp, deps)) = self.build_preprocessor(sm, engine, interner, inputs, false) else {
+        let Some((mut pp, deps)) = self.build_preprocessor(sm, engine, interner, inputs, false)
+        else {
             return;
         };
         if a.deps.only.is_some() {
