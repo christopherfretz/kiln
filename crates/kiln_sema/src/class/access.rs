@@ -77,6 +77,11 @@ impl Sema<'_, '_> {
 
     fn effective_context(&self) -> EffectiveContext {
         let start = self.initializing.and_then(|v| self.ast.decls.get(v).ctx()).unwrap_or(self.ctx);
+        self.effective_context_at(start)
+    }
+
+    /// The effective context of a declaration in context `start`.
+    fn effective_context_at(&self, start: DeclId) -> EffectiveContext {
         let mut ec = EffectiveContext { records: Vec::new(), functions: Vec::new() };
         let mut cur = Some(start);
         for _ in 0..10_000 {
@@ -365,6 +370,43 @@ impl Sema<'_, '_> {
         let msg = self.access_path_notes(msg, &ec, &t, naming);
         self.emit(msg);
         false
+    }
+
+    /// The access check of a use of special member `m` of class `naming`
+    /// from the current context (spec/sema-class.md §4.8; clang
+    /// `CheckDestructorAccess` / `CheckConstructorAccess`): `None` if it
+    /// is accessible, else the error `mk(protected)` with clang's
+    /// access-path notes.
+    pub(crate) fn special_member_access(
+        &self,
+        m: DeclId,
+        naming: DeclId,
+        mk: impl FnOnce(&Self, bool) -> Diag,
+    ) -> Option<Diag> {
+        let naming = self.ast.definition(naming).unwrap_or(naming);
+        let t = self.member_target(m, Some(naming))?;
+        let ec = self.effective_context();
+        let unpriv = self.unprivileged_access(naming, t.declaring, t.decl_access);
+        if self.is_accessible(&ec, &t, naming, unpriv) {
+            return None;
+        }
+        let msg = mk(self, unpriv == Access::Protected);
+        Some(self.access_path_notes(msg, &ec, &t, naming))
+    }
+
+    /// Whether special member `m` of the class of a subobject is
+    /// accessible from a member of class `from` (clang
+    /// `SpecialMemberDeletionInfo::isAccessible`, [class.default.ctor]/2,
+    /// [class.copy.ctor]/10): for a base class subobject (`base`) its
+    /// members are named in the base, without an object expression;
+    /// for a member subobject, through an object of its class.
+    pub(crate) fn special_accessible_from(&self, m: DeclId, from: DeclId, base: bool) -> bool {
+        let Some(declaring) = self.declaring_class(m) else { return true };
+        let declaring = self.ast.definition(declaring).unwrap_or(declaring);
+        let Some(t) = self.member_target(m, (!base).then_some(declaring)) else { return true };
+        let ec = self.effective_context_at(from);
+        let unpriv = self.unprivileged_access(declaring, t.declaring, t.decl_access);
+        self.is_accessible(&ec, &t, declaring, unpriv)
     }
 
     /// Whether a conversion from `derived` to its base class `base` along

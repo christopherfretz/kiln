@@ -1392,8 +1392,14 @@ impl Sema<'_, '_> {
             };
             h.misc = h.misc.with_friend(k);
         }
-        let site =
-            crate::class::VirtualSite { class: ctx, method, in_class, friend, prev: prev_ok, name };
+        let site = crate::class::VirtualSite {
+            class: ctx,
+            method,
+            in_class,
+            friend,
+            prev: prev_ok,
+            name: dname,
+        };
         let virt = self.virtual_decl(ds, d, ty, site, &mut spec);
         let f = self.builder().function(h, fkind, ty, spec, prev_ok);
         self.finish_virtual_decl(f, &virt);
@@ -1403,6 +1409,22 @@ impl Sema<'_, '_> {
         if d.op_name.is_none() {
             self.note_local_extern(name, f);
         }
+        self.create_params(f, &params, &defaults);
+        if d.op_name.is_none() {
+            self.register_local(name, f);
+        }
+        f
+    }
+
+    /// Creates the parameter declarations of function `f` from the
+    /// declarator's `params`, with the merged `defaults`
+    /// ([`Sema::merge_default_args`]), and attaches them.
+    pub(crate) fn create_params(
+        &mut self,
+        f: DeclId,
+        params: &[ParamInfo],
+        defaults: &[Option<ExprId>],
+    ) {
         let mut ids = Vec::with_capacity(params.len());
         let mut seen: Vec<Symbol> = Vec::new();
         for (i, p) in params.iter().enumerate() {
@@ -1445,10 +1467,6 @@ impl Sema<'_, '_> {
             ids.push(pd);
         }
         let _ = self.builder().set_params(f, &ids);
-        if d.op_name.is_none() {
-            self.register_local(name, f);
-        }
-        f
     }
 
     /// The default arguments of a function declaration's parameters
@@ -1459,7 +1477,7 @@ impl Sema<'_, '_> {
     /// Declarations in different scopes (a block-scope redeclaration of
     /// a namespace-scope function) have distinct sets. Then every
     /// parameter after one with a default argument needs one.
-    fn merge_default_args(
+    pub(crate) fn merge_default_args(
         &mut self,
         prev: Option<DeclId>,
         block: bool,

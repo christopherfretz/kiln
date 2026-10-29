@@ -16,14 +16,13 @@ mod cast;
 mod complete;
 mod graph;
 
-use kiln_ast::decl::{DeclFlags, DeclKind, FnSpec, FnStorage};
+use kiln_ast::decl::{DeclFlags, FnSpec, FnStorage};
 use kiln_ast::names::DeclName;
 use kiln_ast::types::{ExcSpec, FuncProto, Quals, TypeView};
 use kiln_ast::{DeclId, ListId, QualType};
 use kiln_diag::{Diag, DiagId};
 use kiln_source::Loc;
 use kiln_source::fx::FxHashSet;
-use kiln_source::symbol::Symbol;
 
 use crate::Sema;
 use crate::conv::bases::{self, BaseSearch};
@@ -47,7 +46,7 @@ pub(crate) struct VirtualSite {
     /// The previous declaration it redeclares, if any.
     pub prev: Option<DeclId>,
     /// The declared name.
-    pub name: Symbol,
+    pub name: DeclName,
 }
 
 /// What [`Sema::virtual_decl`] decided, applied by
@@ -112,11 +111,20 @@ impl Sema<'_, '_> {
         if site.method
             && site.in_class
             && !site.friend
-            && d.op_name.is_none()
+            && (d.op_name.is_none() || d.special.is_some())
             && d.explicit_object.is_none()
             && site.prev.is_none()
         {
-            out.overridden = self.overridden_methods(site.class, DeclName::ident(site.name), ty);
+            out.overridden = if matches!(
+                self.ast.names.view(site.name),
+                kiln_ast::names::DeclNameView::Destructor(_)
+            ) {
+                // [class.virtual]/7: a destructor overrides the base
+                // classes' virtual destructors, whatever their names.
+                self.overridden_destructors(site.class)
+            } else {
+                self.overridden_methods(site.class, site.name, ty)
+            };
             if !out.overridden.is_empty() && !is_static {
                 *spec = spec.with_virtual(true);
             }
@@ -136,7 +144,7 @@ impl Sema<'_, '_> {
             } else if !out.invalid {
                 let msg = self
                     .diag(DiagId::sema_pure_not_virtual, d.name_loc())
-                    .arg(crate::decl::sym_str(self, site.name));
+                    .arg(self.decl_name_str(site.name));
                 self.emit(msg);
             }
         }
@@ -187,7 +195,7 @@ impl Sema<'_, '_> {
             return;
         }
         if site.method && !spec.is_virtual() {
-            let hidden = self.hidden_virtuals(site.class, DeclName::ident(site.name), ty, &[]);
+            let hidden = self.hidden_virtuals(site.class, site.name, ty, &[]);
             if !hidden.is_empty() {
                 let (loc, kw) = match ov {
                     Some(l) => (l, "override"),
@@ -217,7 +225,7 @@ impl Sema<'_, '_> {
         if ov.is_some() && out.overridden.is_empty() && out.inherited.is_none() && site.in_class {
             let msg = self
                 .diag(DiagId::sema_override_not_overriding, d.name_loc())
-                .arg(crate::decl::sym_str(self, site.name));
+                .arg(self.decl_name_str(site.name));
             self.emit(msg);
         }
     }
@@ -261,7 +269,6 @@ impl Sema<'_, '_> {
     /// The virtual destructors a destructor of `class` overrides
     /// ([class.virtual]/7; for WP-067a's destructor declarations): each
     /// base's destructor, if virtual.
-    #[allow(dead_code, reason = "used by WP-067a's destructor declarations")]
     pub(crate) fn overridden_destructors(&self, class: DeclId) -> Vec<DeclId> {
         let mut out = Vec::new();
         let mut seen_v = FxHashSet::default();
@@ -322,12 +329,12 @@ impl Sema<'_, '_> {
 
     /// `declaration of 'f' overrides a 'final' function`
     /// ([class.virtual]/4).
-    fn check_overrides_final(&mut self, name: Symbol, at: Loc, o: DeclId) {
+    fn check_overrides_final(&mut self, name: DeclName, at: Loc, o: DeclId) {
         let fin = self.ast.decls.function(o).is_some_and(|f| f.spec.is_final());
         if fin {
             let msg = self
                 .diag(DiagId::sema_overrides_final, at)
-                .arg(crate::decl::sym_str(self, name))
+                .arg(self.decl_name_str(name))
                 .with_note(self.overridden_note(o));
             self.emit(msg);
         }
@@ -347,7 +354,7 @@ impl Sema<'_, '_> {
     /// clang `CheckOverridingFunctionReturnType` ([class.virtual]/8):
     /// false (and diagnosed) if the return type of the overrider (`ty`)
     /// is neither the same as nor covariant with that of `o`.
-    fn check_override_return(&mut self, name: Symbol, at: Loc, ty: QualType, o: DeclId) -> bool {
+    fn check_override_return(&mut self, name: DeclName, at: Loc, ty: QualType, o: DeclId) -> bool {
         let oty = self.ast.decls.get(o).ty().unwrap_or(QualType::ERROR);
         let (Some(nr), Some(or)) = (self.written_ret(ty), self.written_ret(oty)) else {
             return true;
@@ -355,7 +362,7 @@ impl Sema<'_, '_> {
         if self.ast.types.same_type(nr, or) || self.is_error_type(nr) || self.is_error_type(or) {
             return true;
         }
-        let nm = crate::decl::sym_str(self, name);
+        let nm = self.decl_name_str(name);
         let classes = match (self.ast.types.canonical_view(nr), self.ast.types.canonical_view(or)) {
             (TypeView::Pointer(a), TypeView::Pointer(b))
             | (TypeView::LValueRef(a), TypeView::LValueRef(b))
@@ -646,12 +653,6 @@ impl Sema<'_, '_> {
             }
         }
     }
-}
-
-/// Whether `k` is a member-function kind for clippy-free reuse.
-#[allow(dead_code, reason = "kept for WP-067a's destructor declarations")]
-pub(crate) fn is_destructor(k: DeclKind) -> bool {
-    k == DeclKind::CXXDestructor
 }
 
 impl Sema<'_, '_> {

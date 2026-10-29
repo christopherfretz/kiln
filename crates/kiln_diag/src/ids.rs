@@ -873,7 +873,6 @@ diag_ids! {
     sema_access_ctor = Error (2) "calling a {0:private|protected} constructor of class {1}";
     sema_dtor_not_member = Error (0) "destructor must be a non-static member function";
     sema_dtor_undeclared_name = Error (1) "undeclared identifier '{0}' in destructor name";
-    sema_default_init_const_class = Error (1) "default initialization of an object of const type {0} without a user-provided default constructor";
     // WP-078a: virtual functions, abstract classes, dynamic_cast
     // ([class.virtual], [class.abstract], [expr.dynamic.cast]).
     sema_virtual_not_member_fn = Error (0) "'virtual' can only appear on non-static member functions";

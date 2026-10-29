@@ -302,7 +302,16 @@ impl<'a, 'sm> Sema<'a, 'sm> {
 
     /// The simple name of `d` (empty when unnamed).
     pub fn decl_name(&self, d: DeclId) -> String {
-        let name = self.ast.decls.get(d).name();
-        self.ast.names.simple_spelling(name, self.ast.symbols()).unwrap_or_default()
+        self.decl_name_str(self.ast.decls.get(d).name())
+    }
+
+    /// `name` as clang prints it in a diagnostic: identifiers, `operator+`,
+    /// the class name for constructors, `~X`, `operator int`.
+    pub fn decl_name_str(&self, name: kiln_ast::names::DeclName) -> String {
+        self.ast.names.simple_spelling(name, self.ast.symbols()).unwrap_or_else(|| {
+            let mut s = String::new();
+            kiln_ast::dump::AstNames::new(&self.ast).write_decl_name_value(name, &mut s);
+            s
+        })
     }
 }

@@ -661,7 +661,7 @@ impl Sema<'_, '_> {
             return false;
         }
         let Some(f) = self.func.as_ref().map(|f| f.decl) else { return false };
-        if self.kind_of(f) != DeclKind::CXXMethod {
+        if !matches!(self.kind_of(f), DeclKind::CXXMethod | DeclKind::CXXConversion) {
             return false;
         }
         let msg = self.diag(DiagId::sema_const_member_assign, loc).arg(self.decl_name(f));
