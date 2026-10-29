@@ -16,6 +16,7 @@ mod parser;
 mod pragma;
 mod stmt;
 mod tentative;
+mod templ;
 pub mod tokens;
 
 use std::sync::Arc;

@@ -23,7 +23,7 @@ use crate::parser::{PExpr, Parser};
 use crate::tentative::TypeIdContext;
 
 /// clang's `prec::Level`.
-mod prec {
+pub(crate) mod prec {
     pub const COMMA: u8 = 1;
     pub const ASSIGN: u8 = 2;
     pub const COND: u8 = 3;
@@ -148,6 +148,16 @@ impl Parser<'_, '_> {
     pub fn parse_expr_prec(&mut self, min: u8) -> PExpr {
         let lhs = self.parse_cast_expr()?;
         self.parse_rhs(lhs, min.max(1))
+    }
+
+    /// The precedence of the binary operator at the current token.
+    pub(crate) fn cur_binop_prec(&self) -> Option<u8> {
+        self.cur_binop().map(|b| b.0)
+    }
+
+    /// The operators of precedence `min` or higher after `lhs`.
+    pub(crate) fn parse_rhs_from(&mut self, lhs: ExprId, min: u8) -> PExpr {
+        self.parse_rhs(lhs, min)
     }
 
     fn cur_binop(&self) -> Option<(u8, Option<BinaryOp>)> {
@@ -606,7 +616,7 @@ impl Parser<'_, '_> {
     // -- primary expressions ----------------------------------------------------------------
 
     /// primary-expression ([expr.prim]), named casts and functional casts.
-    fn parse_primary_expr(&mut self) -> PExpr {
+    pub(crate) fn parse_primary_expr(&mut self) -> PExpr {
         let t = self.tok();
         let loc = t.span.lo;
         match t.kind {

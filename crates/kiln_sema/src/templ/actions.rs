@@ -634,4 +634,36 @@ impl Sema<'_, '_> {
         };
         Some(self.builder().dependent_member(Some(b), arrow, name, template_kw, None, targs, loc))
     }
+    /// Parameter `p` (the `idx`th) of the requires-expression whose body
+    /// is `body` ([expr.prim.req.general]/4): a `ParmVarDecl` in the body,
+    /// visible to the requirements.
+    pub fn act_on_requires_param(&mut self, body: DeclId, p: &crate::declspec::ParamInfo, idx: u16) -> DeclId {
+        let name = p.name.map_or(DeclName::EMPTY, |n| DeclName::ident(n.0));
+        let d = self.builder().param(body, name, p.loc, p.ty, idx, 0);
+        if p.invalid {
+            self.ast.decls.set_flags(d, DeclFlags::INVALID);
+        }
+        if let Some((n, _)) = p.name {
+            self.push_local(n, d);
+        }
+        d
+    }
+
+    /// True if `t` names a parameter pack that is not expanded
+    /// ([temp.variadic]/7; clang's `containsUnexpandedParameterPack`).
+    pub fn has_unexpanded_pack(&self, t: QualType) -> bool {
+        self.ast.types.flags(t.ty()).contains(TypeFlags::UNEXPANDED_PACK)
+    }
+
+    /// The profile of a value-dependent expression `e` (for dependent
+    /// array bounds and `noexcept` operands).
+    pub(crate) fn dependent_profile(&mut self, e: ExprId) -> kiln_ast::ProfileId {
+        match self.builder().template_arg_expr(e).view() {
+            ArgView::Expr { profile: Some(p), .. } => p,
+            _ => {
+                let f = TypeFlags::DEPENDENT_INSTANTIATION;
+                self.ast.types.profile(&[e.index()], e, f)
+            }
+        }
+    }
 }

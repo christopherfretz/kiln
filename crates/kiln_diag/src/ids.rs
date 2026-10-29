@@ -860,6 +860,7 @@ diag_ids! {
     sema_member_template_field = Error (1) "data member {0} cannot be a member template";
     sema_trailing_requires_non_function = Error (0) "trailing requires clause can only be used when declaring a function";
     sema_trailing_requires_non_template = Error (0) "non-templated function cannot have a requires clause";
+    parse_expected_qualified_after_typename = Error (0) "expected a qualified name after 'typename'";
 }
 
 impl DiagId {

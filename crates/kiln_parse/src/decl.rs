@@ -119,8 +119,10 @@ impl Parser<'_, '_> {
                 self.parse_linkage_spec();
             }
             (_, Some(Kw::Template)) => {
-                self.unsupported("templates", loc);
-                self.skip_unsupported_declaration();
+                self.parse_template_declaration(DeclaratorContext::File);
+            }
+            (_, Some(Kw::Extern)) if self.kw_of(self.peek(1)) == Some(Kw::Template) => {
+                self.parse_template_declaration(DeclaratorContext::File);
             }
             (_, Some(Kw::Export)) => {
                 self.unsupported("modules", loc);

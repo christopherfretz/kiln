@@ -934,8 +934,8 @@ impl Parser<'_, '_> {
                 true
             }
             (_, Some(Kw::Template)) => {
-                self.unsupported("templates", loc);
-                self.skip_unsupported_declaration();
+                self.parse_template_declaration(DeclaratorContext::Member);
+                self.s.act_on_end_abbreviated();
                 true
             }
             _ => false,
@@ -1066,7 +1066,7 @@ impl Parser<'_, '_> {
 
     /// member-declaration ([class.mem]; clang's
     /// `ParseCXXClassMemberDeclaration`).
-    fn parse_member_declaration(&mut self) {
+    pub(crate) fn parse_member_declaration(&mut self) {
         if self.parse_member_declaration_leader() {
             return;
         }

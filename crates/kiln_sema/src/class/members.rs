@@ -312,6 +312,10 @@ impl Sema<'_, '_> {
         if self.is_error_type(ty) || self.has_errors_in(e) {
             return;
         }
+        if self.is_dependent_type(ty) || self.expr_is_value_dependent(e) {
+            // Checked when instantiated ([temp.res.general]/6).
+            return;
+        }
         let quals = self.ast.types.effective_quals(ty);
         let int_like = self.ast.types.is_integral(ty) || self.ast.types.as_enum(ty).is_some();
         if !quals.is_const() || self.ast.types.is_reference(ty) {

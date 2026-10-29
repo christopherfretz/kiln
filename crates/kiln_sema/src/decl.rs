@@ -187,6 +187,10 @@ impl Sema<'_, '_> {
     /// True if `q` is a complete object type here (a class is incomplete
     /// until its closing brace).
     pub fn is_complete(&self, q: QualType) -> bool {
+        // A dependent type is checked when instantiated ([temp.res.general]/6).
+        if self.is_dependent_type(q) {
+            return true;
+        }
         if let Some(r) = self.ast.types.as_record(q) {
             let f = self.ast.first(r);
             if self.defining.iter().any(|&d| self.ast.first(d) == f) {
@@ -370,6 +374,11 @@ impl Sema<'_, '_> {
                     }
                     ty = match size {
                         None => self.ast.types.incomplete_array(ty),
+                        Some(e) if self.expr_is_value_dependent(*e) => {
+                            // [temp.dep.constexpr]: checked at instantiation.
+                            let p = self.dependent_profile(*e);
+                            self.ast.types.dependent_sized_array(ty, *e, p)
+                        }
                         Some(e) => match self.array_bound(*e, d) {
                             Some(n) => self.ast.types.constant_array(ty, n, None),
                             None => return QualType::ERROR,
@@ -1684,6 +1693,9 @@ impl Sema<'_, '_> {
         name: Option<&str>,
         loc: Loc,
     ) -> Option<ExprId> {
+        if self.expr_is_value_dependent(w) || self.is_dependent_type(ty) {
+            return Some(w);
+        }
         let t = &self.ast.types;
         if !(t.is_integral(ty) || t.as_enum(ty).is_some() || self.is_error_type(ty)) {
             let msg = match name {
@@ -1995,7 +2007,11 @@ impl Sema<'_, '_> {
         }
         // clang reports at the variable (`CheckCompleteVariableDeclaration`).
         let loc = self.ast.decls.get(v).loc();
-        if self.has_errors_in(e) {
+        if self.has_errors_in(e)
+            || self.expr_is_value_dependent(e)
+            || self.ast.decls.get(v).ty().is_some_and(|t| self.is_dependent_type(t))
+        {
+            // A dependent initializer is checked at instantiation.
             self.ast.decls.finish_eval(v, None);
             return;
         }
@@ -2554,6 +2570,9 @@ impl Sema<'_, '_> {
         let e = build.decl;
         let mut value: Option<i128> = None;
         let mut init_e = None;
+        if self.expr_is_value_dependent(ie) {
+            return (None, Some(ie));
+        }
         let ity = self.ast.exprs.get(ie).ty();
         let t = &self.ast.types;
         let ok_ty = t.is_integral(ity)
@@ -2911,7 +2930,8 @@ impl Sema<'_, '_> {
         };
         let c = self.act_on_full_expr(c);
         let cloc = self.begin_loc(cond);
-        if !self.has_errors_in(c) {
+        // [dcl.pre]/10: a value-dependent condition waits for instantiation.
+        if !self.has_errors_in(c) && !self.expr_is_value_dependent(c) {
             match self.eval_const(c, EvalContext::new(EvalKind::StaticAssert, loc)) {
                 Ok(v) if self.const_truth(v) != Some(false) => {}
                 Ok(_) => {
@@ -3355,6 +3375,9 @@ impl Sema<'_, '_> {
     /// An alignment argument ([dcl.align]/2): an integral constant
     /// expression whose value is a power of two (0 is ignored).
     fn check_alignment_expr(&mut self, e: ExprId) -> Option<ExprId> {
+        if self.expr_is_value_dependent(e) {
+            return Some(e);
+        }
         let loc = self.ast.exprs.get(e).loc();
         let c = conv::lvalue_to_rvalue(self, e);
         let c = self.act_on_full_expr(c);
