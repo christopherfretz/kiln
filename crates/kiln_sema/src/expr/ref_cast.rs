@@ -1,6 +1,7 @@
 //! Casts to reference types ([expr.static.cast]/2-4, [expr.const.cast]/4,
 //! [expr.reinterpret.cast]/11, [expr.cast]/4) and the static downcast of a
-//! pointer to a class ([expr.static.cast]/11).
+//! pointer to a class ([expr.static.cast]/11) and the static upcast of a
+//! pointer to member ([expr.static.cast]/12).
 //!
 //! A cast to a reference yields the referent type: an lvalue for an
 //! lvalue reference (or a function), an xvalue for an rvalue reference.
@@ -174,6 +175,45 @@ impl Sema<'_, '_> {
         let path = Some(path_list(self, &p));
         let vk = ValueCategory::PRValue;
         Some(self.typed_cast(style, CastKind::BaseToDerived, x, to, vk, path, loc, rparen))
+    }
+
+    /// `static_cast<T B::*>(m)` for a prvalue `x` of type "pointer to
+    /// member of `D` of type cv1 `T`" where `D` is derived from `B`
+    /// ([expr.static.cast]/12): a `DerivedToBaseMemberPointer` cast along
+    /// the base path, its value checked when used ([expr.mptr.oper]/4).
+    pub(super) fn static_mp_upcast(
+        &mut self,
+        style: CastStyle,
+        x: ExprId,
+        to: QualType,
+        loc: Loc,
+        rparen: Loc,
+    ) -> Option<ExprId> {
+        let xt = self.ety(x);
+        let parts = |s: &Self, q| match s.ast.types.canonical_view(q) {
+            TypeView::MemberPointer { pointee, class } => Some((pointee, class)),
+            _ => None,
+        };
+        let (fp, fcls) = parts(self, xt)?;
+        let (tp, tcls) = parts(self, to)?;
+        if !self.ast.types.same_unqualified(fp, tp) {
+            return None;
+        }
+        if !style.allows_const()
+            && !self.ast.types.effective_quals(tp).contains(self.ast.types.effective_quals(fp))
+        {
+            return None;
+        }
+        let d = self.ast.types.as_record(QualType::unqual(fcls))?;
+        let b = self.ast.types.as_record(QualType::unqual(tcls))?;
+        let BaseSearch::Unique(p) = find_base(self, d, b) else { return None };
+        if p.first_virtual.is_some() {
+            return None;
+        }
+        let path = Some(path_list(self, &p));
+        let vk = ValueCategory::PRValue;
+        let ck = CastKind::DerivedToBaseMemberPointer;
+        Some(self.typed_cast(style, ck, x, to, vk, path, loc, rparen))
     }
 
     /// The node of an explicit cast `style` of kind `ck` yielding a `vk`

@@ -218,6 +218,9 @@ impl Oven {
         v: u128,
         loc: Loc,
     ) -> Result<ConstValueId, Freeze> {
+        if let TyKind::MemPtr { .. } = self.types.kind(ty) {
+            return self.mp_freeze(b, ty, v).map_err(|_| Freeze::Fault(FailKind::MemoryLimit));
+        }
         let s = self.scalar_of(b, ty, v, loc)?;
         b.consts().push_scalar(s).map_err(|_| Freeze::Fault(FailKind::MemoryLimit))
     }
@@ -456,6 +459,17 @@ impl Oven {
                 let sc = self.scalar_of(b, t, v, loc)?;
                 let id =
                     b.consts().push_scalar(sc).map_err(|_| Freeze::Fault(FailKind::NotConstant))?;
+                s.relocs.push(Reloc { at: at as u32, value: id });
+                s.cover[at..at + info.size as usize].fill(1);
+            }
+            TyKind::MemPtr { .. } => {
+                let sp = self.mem.space(st);
+                if !sp.is_init(abs, info.size) {
+                    return Err(self.uninit(b, field, t, loc));
+                }
+                let v = sp.read(abs, info.size);
+                let id =
+                    self.mp_freeze(b, t, v).map_err(|_| Freeze::Fault(FailKind::NotConstant))?;
                 s.relocs.push(Reloc { at: at as u32, value: id });
                 s.cover[at..at + info.size as usize].fill(1);
             }
@@ -720,6 +734,12 @@ impl Oven {
         for r in relocs {
             let at = u64::from(r.at);
             let ty = self.deepest_at(aty, at);
+            if let TyKind::MemPtr { .. } = self.types.kind(ty) {
+                let v = self.mp_thaw(b, r.value);
+                let n = self.types.size(ty);
+                self.mem.stat.write(base + at, n, v);
+                continue;
+            }
             let raw = self.thaw_ptr(b, r.value, ty, top);
             self.mem.stat.write(base + at, 8, u128::from(raw));
             self.mem.stat.set_ptr(base + at, 8, raw != 0);
@@ -751,6 +771,7 @@ impl Oven {
             Some(Scalar::Bool { value, .. }) => (u128::from(value), false),
             Some(Scalar::Float { bits, .. }) => (bits, false),
             Some(Scalar::Pointer { .. }) => (0, true),
+            Some(Scalar::MemberPtr { .. }) => (self.mp_thaw(b, cv), false),
             _ => (0, false),
         };
         let v = if is_ptr { u128::from(self.thaw_ptr(b, cv, ty, top)) } else { v };

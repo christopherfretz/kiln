@@ -25,6 +25,7 @@ use crate::ty::{OTy, Scal, TyKind, eval_int};
 use crate::{Oven, SemaBridge};
 
 mod class;
+mod mptr;
 mod new_delete;
 
 /// `Func::entry` of a function not compiled yet.
@@ -2037,6 +2038,10 @@ impl Compiler<'_> {
                 self.emit(Op::LNot, 0, &[dst, r]);
             }
             UnaryOp::AddrOf => {
+                if matches!(self.kind(ty), TyKind::MemPtr { .. }) {
+                    self.mp_const(e, x, dst);
+                    return;
+                }
                 let x0 = skip_parens(self.ast(), x);
                 let xn = self.node(x0);
                 let xty = self.ety(x0);
@@ -2161,6 +2166,10 @@ impl Compiler<'_> {
                         }
                         (TyKind::NullPtr, _) => {
                             self.konst(dst, u128::from(matches!(c, cmp::EQ | cmp::LE | cmp::GE)));
+                        }
+                        // Interned member pointers: equal values share an index.
+                        (TyKind::MemPtr { .. }, _) | (_, TyKind::MemPtr { .. }) => {
+                            self.emit(Op::ICmp, int_aux(64, false) | c << 9, &[dst, ra, rb]);
                         }
                         (k, _) => {
                             let (w, s) = int_of(k).unwrap_or((32, true));
@@ -2313,9 +2322,19 @@ impl Compiler<'_> {
                 self.class_cast(e, p, dst, true, ck == CastKind::BaseToDerived);
             }
             CastKind::ToVoid => self.effect(op),
-            CastKind::NullToPointer => {
+            CastKind::NullToPointer | CastKind::NullToMemberPointer => {
                 self.effect(op);
                 self.konst(dst, 0);
+            }
+            CastKind::BaseToDerivedMemberPointer | CastKind::DerivedToBaseMemberPointer => {
+                self.mp_conv(e, dst, ck);
+            }
+            CastKind::MemberPointerToBoolean => {
+                let r = self.rv(op);
+                let z = self.reg();
+                self.konst(z, 0);
+                self.emit(Op::ICmp, int_aux(64, false) | cmp::NE << 9, &[dst, r, z]);
+                self.next = z;
             }
             CastKind::ArrayToPointerDecay => {
                 let p = self.lv_mem(op, Access::Addr);
@@ -2620,6 +2639,7 @@ impl Compiler<'_> {
                         self.lv(b, acc)
                     }
                     _ if op.is_compound_assignment() => self.compound_assign(e),
+                    _ if op.is_ptr_mem() => self.mp_access(e, acc),
                     _ => {
                         self.unsupported(e);
                         Place::Mem(self.reg())
@@ -2824,7 +2844,9 @@ impl Compiler<'_> {
         }
         // [expr.assign]/1: the right operand is sequenced first.
         let r = self.rv_copy(b);
+        let saved = self.rmw_loc.replace(self.node(e).loc());
         let place = self.lv(a, Access::Write);
+        self.rmw_loc = saved;
         self.store(place, r, ty, ak::ASSIGN, e);
         place
     }

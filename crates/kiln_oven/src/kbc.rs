@@ -159,6 +159,21 @@ ops! {
     // [p]: the complete object at `p` is const from now on (a const
     // object is modifiable during its construction, [class.ctor.general]/5).
     MakeConst = 1,
+    // [mp reg, class decl]: clang's `MemberPtr::castToDerived` (aux 0)
+    // or `castToBase` (aux 1) of the member pointer in the register, in
+    // place ([conv.mem]/2, [expr.static.cast]/12)
+    MpCast = 2,
+    // [dst, object p, mp]: `obj.*mp` ([expr.mptr.oper]): the member's
+    // address (a member function: the adjusted object)
+    MpAddr = 3,
+    // [member p, mp]: the access (aux: its kind) of the member `MpAddr`
+    // found, when it is a union's: the member must be active
+    // ([class.union]/2; an access through `.*` never activates one,
+    // [class.union]/6)
+    MpActive = 2,
+    // [dst, mp, trap]: the function of a pointer to member function
+    // (`trap`: the note for a virtual one, dispatch lands with WP-077)
+    MpFn = 3,
 }
 
 /// The aux of `New`.

@@ -646,10 +646,10 @@ impl Compiler<'_> {
         let callee = skip_parens(ast, ast.exprs.callee(e));
         let args: Vec<ExprId> = ast.lists.iter::<ExprId>(ast.exprs.call_args(e)).collect();
         if ast.exprs.get(callee).kind() != ExprKind::MemberExpr {
-            self.trap(
-                e,
-                "kiln: calls through pointers to member functions in constant evaluation are not supported yet",
-            );
+            if let Some(bin) = self.is_mp_callee(callee) {
+                return self.mp_call(e, bin, sret);
+            }
+            self.unsupported(e);
             return self.reg();
         }
         let obj = ast.exprs.member_call_object(e);

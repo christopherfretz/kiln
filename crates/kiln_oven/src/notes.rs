@@ -137,6 +137,7 @@ impl Oven {
                 (site.loc, "comparison of addresses of literals has unspecified value".into())
             }
             Fault::NullField => (site.loc, "cannot access field of null pointer".into()),
+            Fault::NullBase => (site.loc, "cannot access base class of null pointer".into()),
             Fault::BadDowncast { dynamic, to } => (
                 site.loc,
                 format!(

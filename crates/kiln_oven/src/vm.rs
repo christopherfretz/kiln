@@ -167,6 +167,9 @@ pub(crate) enum Fault {
     },
     LiteralCmp,
     NullField,
+    /// A base-class step of a member pointer access through a null
+    /// object pointer.
+    NullBase,
     PastField,
     /// A base-to-derived conversion of a pointer to (or glvalue of) a
     /// base subobject that is not part of an object of the derived type
@@ -784,6 +787,44 @@ impl Oven {
                     }
                     pc += 4;
                 }
+                Op::MpCast => {
+                    let v = reg!(0);
+                    let class = DeclId::new(arg!(1) as u32);
+                    match self.mp_cast(b, v, class, aux == 1) {
+                        Some(r) => reg!(0) = r,
+                        None => fail!(Fault::Invalid),
+                    }
+                    pc += 3;
+                }
+                Op::MpAddr => {
+                    let (raw, v) = (reg!(1) as u64, reg!(2));
+                    match self.mp_addr(raw, v) {
+                        Ok(q) => reg!(0) = u128::from(q),
+                        Err(f) => fail!(f),
+                    }
+                    pc += 4;
+                }
+                Op::MpActive => {
+                    if let Some(e) = self.mp.get(reg!(1))
+                        && e.union
+                        && let Some((_, _, idx)) = e.field
+                    {
+                        // A union's members are all at its offset 0.
+                        let cls = e.cls;
+                        if let Err(f) = self.active_check(reg!(0) as u64, idx, cls, aux) {
+                            fail!(f);
+                        }
+                    }
+                    pc += 3;
+                }
+                Op::MpFn => match self.mp.get(reg!(1)) {
+                    Some(e) if e.virt => fail!(Fault::Trap(arg!(2) as u32)),
+                    Some(e) => {
+                        reg!(0) = u128::from(crate::mem::fn_ptr(e.fn_index));
+                        pc += 4;
+                    }
+                    None => fail!(Fault::Invalid),
+                },
                 Op::IsConstEval => {
                     let cc = self.run.const_context;
                     reg!(0) = u128::from(cc);
@@ -1589,6 +1630,53 @@ impl Oven {
         }
         self.mem.unions.insert(key, idx);
         Ok(())
+    }
+
+    /// `Op::MpAddr`: the member of the object at `raw` that member
+    /// pointer `v` designates (clang's `HandleMemberPointerAccess`).
+    fn mp_addr(&mut self, raw: u64, v: u128) -> Result<u64, Fault> {
+        // [expr.mptr.oper]/6: a null member pointer (clang's generic
+        // note at the operand).
+        let Some(e) = self.mp.get(v) else { return Err(Fault::Invalid) };
+        let (derived, adj, cls, field) = (e.derived, e.adj, e.cls, e.field);
+        let e_path_empty = e.path.is_empty();
+        if raw == 0 {
+            // clang steps a null object along the member pointer's base
+            // path (failing on the first step) and otherwise reports it at
+            // its use: the read, write or call, not the `.*`.
+            return if derived {
+                Err(Fault::Invalid)
+            } else if !e_path_empty {
+                Err(Fault::NullBase)
+            } else {
+                Ok(0)
+            };
+        }
+        let obj = if derived {
+            // The object must be the base subobject of an object of the
+            // member's class along the path (clang: generic note).
+            let p = Ptr::decode(raw);
+            let a = self.mem.alloc_of(p).map_err(|f| Fault::Mem {
+                f,
+                ak: ak::READ,
+                ty: cls,
+                p: raw,
+            })?;
+            match u64::from(p.off).checked_sub(adj) {
+                Some(o) if !p.past && self.types.has_subobject(a.ty, o, cls) => {
+                    Ptr::with_off(raw, o, false)
+                }
+                _ => return Err(Fault::Invalid),
+            }
+        } else if adj == 0 {
+            raw
+        } else {
+            let p = Ptr::decode(raw);
+            Ptr::with_off(raw, u64::from(p.off) + adj, false)
+        };
+        let Some((off, _, _)) = field else { return Ok(obj) };
+        let p = Ptr::decode(obj);
+        Ok(Ptr::with_off(obj, u64::from(p.off) + off, false))
     }
 
     fn active_check(&self, raw: u64, idx: u32, uty: OTy, k: u32) -> Result<(), Fault> {

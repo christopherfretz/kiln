@@ -38,6 +38,7 @@ mod failure;
 mod kbc;
 mod mem;
 mod memo;
+mod memptr;
 mod notes;
 pub mod report;
 mod softfloat;
@@ -250,6 +251,8 @@ pub struct Oven {
     pub(crate) stats: EvalStats,
     pub(crate) run: vm::RunState,
     pub(crate) scratch: value::Scratch,
+    /// The interned pointer-to-member values.
+    pub(crate) mp: memptr::MemPtrs,
     /// Evaluation contexts in progress (R-OVEN-1: 0 between evaluations,
     /// above 1 while a bridge callback evaluates a nested one).
     pub(crate) ctx_depth: u32,
@@ -294,6 +297,7 @@ impl Oven {
             stats: EvalStats::default(),
             run: vm::RunState::default(),
             scratch: value::Scratch::default(),
+            mp: memptr::MemPtrs::default(),
             ctx_depth: 0,
             inner: Inner::default(),
         }
@@ -422,6 +426,7 @@ impl Oven {
             + self.memo.footprint()
             + self.run.footprint()
             + self.scratch.footprint()
+            + self.mp.footprint()
     }
 
     /// The disassembly of everything compiled so far (debugging aid).

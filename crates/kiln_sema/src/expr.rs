@@ -2828,6 +2828,13 @@ impl Sema<'_, '_> {
         {
             return c;
         }
+        // static_cast: a pointer to member of a derived class as a pointer
+        // to member of a base class ([expr.static.cast]/12).
+        if style.allows_static()
+            && let Some(c) = self.static_mp_upcast(style, x, to, loc, rparen)
+        {
+            return c;
+        }
         // reinterpret_cast ([expr.reinterpret.cast]).
         if style.allows_reinterpret()
             && let Some(ck) = self.reinterpret(xt, to, style, loc)

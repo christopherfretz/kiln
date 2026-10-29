@@ -40,6 +40,11 @@ pub(crate) enum TyKind {
         count: u32,
     },
     Func,
+    /// A pointer to member: an interned value index ([`crate::memptr`]),
+    /// 0 for null; `func` for a pointer to member function.
+    MemPtr {
+        func: bool,
+    },
     /// Incomplete or not representable in M2 (member pointers,
     /// vectors, ...): it has no storage the VM can touch.
     Opaque,
@@ -336,10 +341,11 @@ impl Types {
             // A member pointer has the Itanium size (one pointer-sized
             // offset for data, pointer + adjustment for functions) so
             // `sizeof`/`alignof` and record layout agree with kiln_abi;
-            // its value stays opaque to the evaluator ([dcl.mptr]).
+            // its value is an interned index ([`crate::memptr`]).
             TypeView::MemberPointer { pointee, .. } => {
-                let n = if ast.types.is_function(pointee) { 2 } else { 1 };
-                self.simple(c, pbytes * n, pbytes as u32, TyKind::Opaque)
+                let func = ast.types.is_function(pointee);
+                let n = if func { 2 } else { 1 };
+                self.simple(c, pbytes * n, pbytes as u32, TyKind::MemPtr { func })
             }
             _ => self.simple(c, 0, 1, TyKind::Opaque),
         }
