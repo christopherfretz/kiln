@@ -250,6 +250,9 @@ fn aarch64_arg(t: &mut IrTypes<'_>, q: QualType) -> ArgKind {
         }
         return direct(t.convert(q));
     }
+    if is_indirect_record(t.ast(), q) {
+        return ArgKind::Indirect { byval: false, align: t.layouter().type_layout(q).align };
+    }
     let size = type_bits(t, q);
     let empty = is_empty_record(t, q, true);
     if empty || size == 0 {
@@ -282,6 +285,9 @@ fn aarch64_arg(t: &mut IrTypes<'_>, q: QualType) -> ArgKind {
 fn aarch64_ret(t: &mut IrTypes<'_>, q: QualType) -> ArgKind {
     if matches!(view(t, q), TypeView::Builtin(BuiltinType::Void)) {
         return ArgKind::Ignore;
+    }
+    if is_indirect_record(t.ast(), q) {
+        return ArgKind::Indirect { byval: false, align: t.layouter().type_layout(q).align };
     }
     if !is_aggregate(t, q) {
         let q = strip_enum(t, q);
@@ -620,6 +626,9 @@ fn classify(t: &mut IrTypes<'_>, q: QualType, off: u64) -> (Class, Class) {
                 return (lo, hi);
             }
             let Some(def) = ast.definition(d) else { return (lo, hi) };
+            if !can_pass_in_registers(ast, def) {
+                return (lo, hi);
+            }
             let layout = t.layouter().record(def).clone();
             set_cur!(NoClass);
             for (i, b) in ast.decls.bases(def, &ast.lists).enumerate() {
@@ -696,6 +705,9 @@ fn x86_64(t: &mut IrTypes<'_>, ret: QualType, args: &[QualType], _n_required: us
 }
 
 fn x86_indirect(t: &mut IrTypes<'_>, q: QualType, free_int: u32) -> ArgKind {
+    if is_indirect_record(t.ast(), q) {
+        return ArgKind::Indirect { byval: false, align: t.layouter().type_layout(q).align };
+    }
     if !is_aggregate(t, q) && !matches!(view(t, q), TypeView::BitInt { .. }) {
         let q = strip_enum(t, q);
         return if is_promotable(t, q) { extend(t, q) } else { direct(t.convert(q)) };
@@ -723,7 +735,10 @@ fn x86_arg(t: &mut IrTypes<'_>, q: QualType, free_int: u32) -> (ArgKind, u32, u3
                 return (ArgKind::Ignore, 0, 0);
             }
         }
-        Memory | X87 | ComplexX87 => return (x86_indirect(t, q, free_int), 0, 0),
+        Memory | X87 | ComplexX87 => {
+            let ni = u32::from(is_indirect_record(t.ast(), q));
+            return (x86_indirect(t, q, free_int), ni, 0);
+        }
         SseUp | X87Up => {}
         Integer => {
             ni += 1;
@@ -780,6 +795,9 @@ fn x86_arg(t: &mut IrTypes<'_>, q: QualType, free_int: u32) -> (ArgKind, u32, u3
 
 fn x86_ret(t: &mut IrTypes<'_>, q: QualType) -> ArgKind {
     use Class::{ComplexX87, Integer, Memory, NoClass, Sse, SseUp, X87, X87Up};
+    if is_indirect_record(t.ast(), q) {
+        return ArgKind::Indirect { byval: false, align: t.layouter().type_layout(q).align };
+    }
     let (lo, hi) = classify(t, q, 0);
     let natural = t.convert(q);
     let mut res: Option<IrType> = None;
@@ -1028,6 +1046,129 @@ fn bits_no_user_data(t: &mut IrTypes<'_>, q: QualType, start: u64, end: u64) -> 
             }
             true
         }
+        _ => false,
+    }
+}
+
+/// Which copy/move special member a constructor is ([class.copy.ctor]/1):
+/// `Some(false)` copy, `Some(true)` move, `None` neither.
+fn copy_move_ctor_kind(ast: &Ast, ctor: DeclId, class: DeclId) -> Option<bool> {
+    use kiln_ast::decl::{DeclKind, ParamData};
+    if ast.decls.get(ctor).kind() != DeclKind::CXXConstructor {
+        return None;
+    }
+    let f = ast.decls.function(ctor)?;
+    let params: Vec<DeclId> = ast.lists.iter::<DeclId>(f.params).collect();
+    let (&first, rest) = params.split_first()?;
+    let has_default = |p: DeclId| {
+        ast.decls.param(p).is_some_and(|x| {
+            x.default_arg.is_some() || x.flags & ParamData::DEFAULT_ARG_PENDING != 0
+        })
+    };
+    if has_default(first) || !rest.iter().all(|&p| has_default(p)) {
+        return None;
+    }
+    let pty = ast.decls.get(first).ty()?;
+    let (is_move, inner) = match ast.types.canonical_view(pty) {
+        TypeView::LValueRef(t) => (false, t),
+        TypeView::RValueRef(t) => (true, t),
+        _ => return None,
+    };
+    let rd = ast.types.as_record(ast.types.canonical(inner))?;
+    (ast.first(rd) == ast.first(class)).then_some(is_move)
+}
+
+/// clang 19 `canPassInRegisters` (Itanium, C++11 and later): a class
+/// whose eligible copy/move constructors and destructor are all trivial
+/// or deleted, with at least one non-deleted copy or move constructor,
+/// is passed and returned like a C struct; any other class is passed by
+/// address and returned through `sret` ([class.temporary]/3).
+/// `[[clang::trivial_abi]]` is not modeled (trivial-for-call = trivial).
+pub fn can_pass_in_registers(ast: &Ast, record: DeclId) -> bool {
+    use kiln_ast::decl::{DeclKind, DefinitionBits as B};
+    let Some(def) = ast.definition(record) else { return true };
+    let Some(r) = ast.decls.record(def) else { return true };
+    let bits = r.defn;
+    let mut copy_decl = false;
+    let mut move_decl = false;
+    let mut copy_trivial = false;
+    // Declared constructors (implicit ones included once declared).
+    let ctors: Vec<DeclId> = ast.constructors(def).iter().collect();
+    let mut declared = Vec::new();
+    for c in ctors {
+        let Some(kind) = copy_move_ctor_kind(ast, c, def) else { continue };
+        let spec = ast.decls.function(c).map(|f| f.spec).unwrap_or_default();
+        if kind {
+            move_decl = true;
+        } else {
+            copy_decl = true;
+            if !spec.is_deleted() && spec.is_trivial() {
+                copy_trivial = true;
+            }
+        }
+        declared.push((c, spec));
+    }
+    let dtor = ast.destructor(def).filter(|&d| ast.decls.get(d).kind() == DeclKind::CXXDestructor);
+    let needs_copy = !copy_decl && !bits.contains(B::USER_DECLARED_COPY_CTOR);
+    let needs_move = !move_decl
+        && !bits.contains(B::USER_DECLARED_MOVE_CTOR)
+        && !bits.contains(B::USER_DECLARED_COPY_CTOR)
+        && !bits.contains(B::USER_DECLARED_COPY_ASSIGN)
+        && !bits.contains(B::USER_DECLARED_MOVE_ASSIGN)
+        && !bits.contains(B::USER_DECLARED_DTOR);
+    let needs_dtor = dtor.is_none();
+    if needs_copy && !bits.contains(B::DEFAULTED_COPY_CTOR_DELETED) {
+        copy_trivial = bits.contains(B::TRIVIAL_COPY_CTOR);
+    }
+    let dtor_trivial = if needs_dtor {
+        !bits.contains(B::DEFAULTED_DTOR_DELETED) && bits.contains(B::TRIVIAL_DTOR)
+    } else {
+        dtor.and_then(|d| ast.decls.function(d))
+            .is_some_and(|f| !f.spec.is_deleted() && f.spec.is_trivial())
+    };
+    if copy_trivial && dtor_trivial {
+        return true;
+    }
+    let mut has_copy_or_move = false;
+    if needs_copy && !bits.contains(B::DEFAULTED_COPY_CTOR_DELETED) {
+        if !bits.contains(B::TRIVIAL_COPY_CTOR) {
+            return false;
+        }
+        has_copy_or_move = true;
+    }
+    if needs_move && !bits.contains(B::DEFAULTED_MOVE_CTOR_DELETED) {
+        if !bits.contains(B::TRIVIAL_MOVE_CTOR) {
+            return false;
+        }
+        has_copy_or_move = true;
+    }
+    if needs_dtor && !bits.contains(B::DEFAULTED_DTOR_DELETED) && !bits.contains(B::TRIVIAL_DTOR)
+    {
+        return false;
+    }
+    for (_, spec) in &declared {
+        if spec.is_deleted() {
+            continue;
+        }
+        has_copy_or_move = true;
+        if !spec.is_trivial() {
+            return false;
+        }
+    }
+    if let Some(f) = dtor.and_then(|d| ast.decls.function(d))
+        && !f.spec.is_deleted()
+        && !f.spec.is_trivial()
+    {
+        return false;
+    }
+    has_copy_or_move
+}
+
+/// True if `q` is a class type that [`can_pass_in_registers`] rejects
+/// (clang `getRecordArgABI` = `RAA_Indirect`).
+pub fn is_indirect_record(ast: &Ast, q: QualType) -> bool {
+    match ast.types.canonical_view(q) {
+        TypeView::Record(d) => !can_pass_in_registers(ast, d),
         _ => false,
     }
 }
