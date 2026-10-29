@@ -5,6 +5,7 @@ use std::sync::Arc;
 use kiln_source::symbol::Interner;
 
 use crate::attr::AttrArena;
+use crate::class::{ClassCache, ClassVirtuals, VTableLayout};
 use crate::consts::ConstStore;
 use crate::decl::{
     DeclArena, DeclFlags, DeclKind, DeclMisc, EnumData, NewDecl, Payload, ScopeData,
@@ -58,6 +59,12 @@ pub struct Ast {
     pub reflections: ReflectionTable,
     /// Record layouts (spec/types.md §11).
     pub layouts: LayoutCache,
+    /// Subobject graphs and final overriders of polymorphic classes
+    /// (spec/sema-class.md §3.5; computed by sema, insert-only).
+    pub virtuals: ClassCache<ClassVirtuals>,
+    /// Itanium vtable layouts (computed by `kiln_abi::vtable`,
+    /// insert-only).
+    pub vtables: ClassCache<VTableLayout>,
     /// The `TranslationUnitDecl`.
     pub tu: DeclId,
     symbols: Arc<Interner>,
@@ -105,6 +112,8 @@ impl Ast {
             consts: ConstStore::default(),
             reflections: ReflectionTable::default(),
             layouts: LayoutCache::default(),
+            virtuals: ClassCache::default(),
+            vtables: ClassCache::default(),
             tu,
             symbols,
             inst: InstantiationMeter::default(),
@@ -223,6 +232,36 @@ impl Ast {
         self.decls.members(ctx)
     }
 
+    // -- classes (spec/sema-class.md §8.1) ------------------------------
+
+    /// The destructor of class `record`, if one has been declared (a table
+    /// read: never declares the implicit destructor, which is sema's job).
+    pub fn destructor(&self, record: DeclId) -> Option<DeclId> {
+        let ty = self.decls.get(record).ty()?;
+        let name = self.names.find_destructor(self.types.canonical(ty).ty())?;
+        self.lookup_local(record, name).iter().next()
+    }
+
+    /// The constructors of class `record` declared so far (a table read:
+    /// never declares implicit constructors), in order of first
+    /// declaration; templates included.
+    pub fn constructors(&self, record: DeclId) -> LookupResult<'_> {
+        let Some(ty) = self.decls.get(record).ty() else { return LookupResult::Empty };
+        match self.names.find_constructor(self.types.canonical(ty).ty()) {
+            Some(name) => self.lookup_local(record, name),
+            None => LookupResult::Empty,
+        }
+    }
+
+    /// The ctor-initializers of constructor `ctor` in initialization order
+    /// (empty until set, or if it has none).
+    pub fn ctor_inits(
+        &self,
+        ctor: DeclId,
+    ) -> impl ExactSizeIterator<Item = &crate::decl::CtorInit> + '_ {
+        self.decls.ctor_inits(ctor, &self.lists)
+    }
+
     // -- instantiation accounting (§13 Q6) -----------------------------
 
     /// Starts an instantiation. Nested calls nest; the outermost
@@ -288,6 +327,8 @@ impl Ast {
         r.extend_prefixed("consts", self.consts.heap_bytes());
         r.extend_prefixed("reflections", self.reflections.heap_bytes());
         r.extend_prefixed("layouts", self.layouts.heap_bytes());
+        r.extend_prefixed("virtuals", self.virtuals.heap_bytes());
+        r.extend_prefixed("vtables", self.vtables.heap_bytes());
         r.push(MemRow::new(
             "instantiation.retained",
             self.inst.count,

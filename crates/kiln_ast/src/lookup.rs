@@ -2,8 +2,10 @@
 //!
 //! One global table keyed by `(primary context, name)`. An entry is a
 //! single `DeclId` or an index into the overload-set pool; sets hold raw
-//! decl ids with the top bit marking entries visible only through an
-//! inline namespace (`via_inline`, [namespace.def]/7). The *rules*
+//! decl ids with [`LookupFlags`] in the top bits: entries visible only
+//! through an inline namespace (`VIA_INLINE`, [namespace.def]/7) and
+//! hidden friends visible only to argument-dependent lookup (`ADL_ONLY`,
+//! [namespace.memdef]/3, spec/sema-overload.md §2.2). The *rules*
 //! (hiding, using-directives, ADL, two-phase lookup) are sema's; this
 //! module stores what each context declares and answers
 //! [`LookupTables::lookup_local`].
@@ -16,7 +18,42 @@ use crate::mem::{HeapSize, MemReport, MemRow};
 use crate::names::DeclName;
 
 const SET_BIT: u32 = 1 << 31;
-const VIA_INLINE: u32 = 1 << 31;
+const VIA_INLINE: u32 = LookupFlags::VIA_INLINE.0;
+const FLAG_MASK: u32 = LookupFlags::VIA_INLINE.0 | LookupFlags::ADL_ONLY.0;
+
+/// Per-entry flags of a lookup-table entry.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug)]
+pub struct LookupFlags(u32);
+
+impl LookupFlags {
+    /// No flags: visible to every lookup.
+    pub const NONE: LookupFlags = LookupFlags(0);
+    /// Entered in an enclosing namespace of an inline namespace.
+    pub const VIA_INLINE: LookupFlags = LookupFlags(1 << 31);
+    /// Visible only to argument-dependent lookup: a friend function first
+    /// declared in a class ([namespace.memdef]/3, [class.friend]/7).
+    /// Ordinary lookup skips it; a later declaration of the same entity
+    /// without the flag replaces the entry and makes it visible.
+    pub const ADL_ONLY: LookupFlags = LookupFlags(1 << 30);
+
+    /// The raw bits.
+    pub const fn bits(self) -> u32 {
+        self.0
+    }
+    /// True if every flag of `f` is set.
+    pub const fn contains(self, f: LookupFlags) -> bool {
+        self.0 & f.0 == f.0
+    }
+    /// The union.
+    #[must_use]
+    pub const fn with(self, f: LookupFlags) -> Self {
+        LookupFlags(self.0 | f.0)
+    }
+    /// True if no flag is set.
+    pub const fn is_empty(self) -> bool {
+        self.0 == 0
+    }
+}
 
 /// A table entry: top bit clear = one `DeclId`, set = an overload-set
 /// index.
@@ -39,8 +76,8 @@ pub enum LookupResult<'a> {
     Empty,
     /// One declaration (not via an inline namespace).
     One(DeclId),
-    /// Several, or ones found via an inline namespace (raw words: decl id
-    /// with the top bit = `via_inline`).
+    /// Several, or ones with [`LookupFlags`] (raw words: decl id with the
+    /// flag bits on top).
     Many(&'a [u32]),
 }
 
@@ -66,9 +103,32 @@ impl<'a> LookupResult<'a> {
             LookupResult::Empty => None,
             LookupResult::One(d) => (i == 0).then_some((*d, false)),
             LookupResult::Many(s) => {
-                s.get(i).map(|&w| (DeclId::new(w & !VIA_INLINE), w & VIA_INLINE != 0))
+                s.get(i).map(|&w| (DeclId::new(w & !FLAG_MASK), w & VIA_INLINE != 0))
             }
         }
+    }
+
+    /// The `i`-th declaration and its flags.
+    pub fn get_with_flags(&self, i: usize) -> Option<(DeclId, LookupFlags)> {
+        match self {
+            LookupResult::Empty => None,
+            LookupResult::One(d) => (i == 0).then_some((*d, LookupFlags::NONE)),
+            LookupResult::Many(s) => {
+                s.get(i).map(|&w| (DeclId::new(w & !FLAG_MASK), LookupFlags(w & FLAG_MASK)))
+            }
+        }
+    }
+
+    /// The declarations with their flags.
+    pub fn iter_with_flags(&self) -> impl ExactSizeIterator<Item = (DeclId, LookupFlags)> + 'a {
+        let this = *self;
+        (0..this.len()).map(move |i| this.get_with_flags(i).expect("in range"))
+    }
+
+    /// The declarations visible to ordinary (non-ADL) lookup: all but
+    /// [`LookupFlags::ADL_ONLY`] entries.
+    pub fn iter_ordinary(&self) -> impl Iterator<Item = DeclId> + 'a {
+        self.iter_with_flags().filter(|(_, f)| !f.contains(LookupFlags::ADL_ONLY)).map(|(d, _)| d)
     }
 
     /// The single declaration, if exactly one was found.
@@ -122,18 +182,38 @@ impl LookupTables {
         replaces: Option<DeclId>,
         via_inline: bool,
     ) {
-        let word = d.index() | if via_inline { VIA_INLINE } else { 0 };
+        let flags = if via_inline { LookupFlags::VIA_INLINE } else { LookupFlags::NONE };
+        self.insert_with_flags(ctx, name, d, replaces, flags);
+    }
+
+    /// [`LookupTables::insert`] with explicit [`LookupFlags`]. Replacing an
+    /// entry keeps its `VIA_INLINE` and takes `ADL_ONLY` from `flags` (a
+    /// visible redeclaration of a hidden friend makes it visible).
+    ///
+    /// # Panics
+    /// If `d`'s index does not fit below the flag bits.
+    pub fn insert_with_flags(
+        &mut self,
+        ctx: DeclId,
+        name: DeclName,
+        d: DeclId,
+        replaces: Option<DeclId>,
+        flags: LookupFlags,
+    ) {
+        assert!(d.index() & FLAG_MASK == 0, "DeclId collides with lookup flag bits");
+        let word = d.index() | flags.0;
+        let plain = flags.is_empty();
         let key = (ctx, name);
         let Some(&LookupEntry(w)) = self.map.get(&key) else {
-            let e = if via_inline { self.new_set(vec![word]) } else { LookupEntry(d.index()) };
+            let e = if plain { LookupEntry(d.index()) } else { self.new_set(vec![word]) };
             self.map.insert(key, e);
             return;
         };
         if w & SET_BIT == 0 {
-            if w == d.index() && !via_inline {
+            if w == d.index() && plain {
                 return;
             }
-            if replaces.is_some_and(|p| p.index() == w) && !via_inline {
+            if replaces.is_some_and(|p| p.index() == w) && plain {
                 self.map.insert(key, LookupEntry(d.index()));
                 return;
             }
@@ -143,12 +223,12 @@ impl LookupTables {
         let LookupEntry(w) = self.map[&key];
         let set = &mut self.sets[(w & !SET_BIT) as usize];
         if let Some(p) = replaces
-            && let Some(slot) = set.iter_mut().find(|s| **s & !VIA_INLINE == p.index())
+            && let Some(slot) = set.iter_mut().find(|s| **s & !FLAG_MASK == p.index())
         {
-            *slot = (*slot & VIA_INLINE) | d.index();
+            *slot = (*slot & VIA_INLINE) | (word & LookupFlags::ADL_ONLY.0) | d.index();
             return;
         }
-        if !set.iter().any(|s| *s & !VIA_INLINE == d.index()) {
+        if !set.iter().any(|s| *s & !FLAG_MASK == d.index()) {
             set.push(word);
         }
     }

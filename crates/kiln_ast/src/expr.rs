@@ -202,15 +202,16 @@ impl ExprFlags {
     pub const CANNOT_OVERFLOW: ExprFlags = ExprFlags(1 << 4);
     /// `IntegerLiteral`: wider than 64 bits; `a` is a `ConstValueId`.
     pub const WIDE: ExprFlags = ExprFlags(1 << 4);
-    /// `UnaryExprOrTypeTraitExpr`: the operand is a type (`a` = raw
-    /// `QualType`).
+    /// `UnaryExprOrTypeTraitExpr`, `CXXTypeidExpr`: the operand is a type
+    /// (`a` = raw `QualType`).
     pub const ARG_IS_TYPE: ExprFlags = ExprFlags(1 << 4);
     /// `DeclRefExpr`: refers to an enclosing variable or capture.
     pub const REFERS_TO_ENCLOSING: ExprFlags = ExprFlags(1 << 5);
     /// `CallExpr`: the callee was found by ADL.
     pub const ADL: ExprFlags = ExprFlags(1 << 5);
-    /// `DeclRefExpr` / `MemberExpr`: overload resolution chose among
-    /// several candidates.
+    /// `DeclRefExpr` / `MemberExpr` / `CXXConstructExpr` /
+    /// `CXXTemporaryObjectExpr`: overload resolution chose among several
+    /// candidates.
     pub const HAD_MULTIPLE_CANDIDATES: ExprFlags = ExprFlags(1 << 6);
 
     /// The raw bits (already shifted into bits 4..=7).
@@ -619,6 +620,99 @@ u8_enum!(
         Binary = "2",
     }
 );
+
+u8_enum!(
+    /// What a `CXXConstructExpr` / `CXXInheritedCtorInitExpr` constructs
+    /// (clang's `CXXConstructionKind`; 2 bits of `aux`).
+    ConstructionKind {
+        /// A complete object.
+        Complete = "complete",
+        /// A non-virtual base subobject.
+        NonVirtualBase = "non-virtual base",
+        /// A virtual base subobject.
+        VirtualBase = "virtual base",
+        /// A delegating constructor's target ([class.base.init]/6).
+        Delegating = "delegating",
+    }
+);
+
+u8_enum!(
+    /// The storage duration of a materialized temporary
+    /// ([class.temporary]/6; clang's `StorageDuration` minus `Dynamic`;
+    /// 2 bits of `MaterializeTemporaryExpr.aux`).
+    StorageDuration {
+        /// Destroyed at the end of the full-expression (not extended).
+        FullExpression = "full expression",
+        /// Lifetime-extended by an automatic reference.
+        Automatic = "automatic",
+        /// Lifetime-extended by a static-storage reference.
+        Static = "static",
+        /// Lifetime-extended by a thread-storage reference.
+        Thread = "thread",
+    }
+);
+
+/// The flags of a `CXXConstructExpr` / `CXXTemporaryObjectExpr`
+/// (sema-class.md §5.1), packed into `aux`: bits 0-1 the
+/// [`ConstructionKind`], bit 2 `list`, bit 3 `std_init_list`, bit 4
+/// `zeroing`, bit 5 `immediate_escalating`. "Had multiple candidates" is
+/// [`ExprFlags::HAD_MULTIPLE_CANDIDATES`]. There is no `elidable` flag
+/// (C++17 guaranteed elision).
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[allow(clippy::struct_excessive_bools, reason = "independent flags mirroring clang's dump keys")]
+pub struct ConstructInfo {
+    /// What is constructed.
+    pub kind: ConstructionKind,
+    /// List-initialization (`T{...}`, `= {...}`).
+    pub list: bool,
+    /// Initialization from a `std::initializer_list` ([dcl.init.list]/3.7).
+    pub std_init_list: bool,
+    /// Zero-initialization precedes the constructor call
+    /// ([dcl.init.general]/9.1.2, value-initialization).
+    pub zeroing: bool,
+    /// The call is immediate-escalating ([expr.const]/18).
+    pub immediate_escalating: bool,
+}
+
+impl ConstructInfo {
+    /// A plain complete-object construction.
+    pub const COMPLETE: ConstructInfo = ConstructInfo {
+        kind: ConstructionKind::Complete,
+        list: false,
+        std_init_list: false,
+        zeroing: false,
+        immediate_escalating: false,
+    };
+
+    /// The `aux` encoding.
+    pub const fn to_aux(self) -> u8 {
+        self.kind as u8
+            | (self.list as u8) << 2
+            | (self.std_init_list as u8) << 3
+            | (self.zeroing as u8) << 4
+            | (self.immediate_escalating as u8) << 5
+    }
+
+    /// Decodes [`ConstructInfo::to_aux`].
+    pub fn from_aux(aux: u8) -> Self {
+        ConstructInfo {
+            kind: ConstructionKind::from_u8(aux & 3).expect("2-bit construction kind"),
+            list: aux & (1 << 2) != 0,
+            std_init_list: aux & (1 << 3) != 0,
+            zeroing: aux & (1 << 4) != 0,
+            immediate_escalating: aux & (1 << 5) != 0,
+        }
+    }
+}
+
+/// The operand of a `CXXTypeidExpr`.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum TypeidOperand {
+    /// `typeid(T)`.
+    Type(QualType),
+    /// `typeid(expr)`.
+    Expr(ExprId),
+}
 
 /// The 20-byte expression header (spec/ast.md §5.1).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -1049,14 +1143,180 @@ impl ExprArena {
         n.bits |= ExprFlags::PART_OF_EXPLICIT_CAST.0;
     }
 
-    /// The callee of a `CallExpr`.
-    pub fn callee(&self, e: ExprId) -> ExprId {
-        ExprId::new(self.expect_kind(e, ExprKind::CallExpr).a)
+    fn expect_call(&self, e: ExprId) -> &ExprNode {
+        let n = self.get(e);
+        assert!(
+            matches!(n.kind, ExprKind::CallExpr | ExprKind::CXXMemberCallExpr),
+            "expected a call, found {:?}",
+            n.kind
+        );
+        n
     }
 
-    /// The arguments of a `CallExpr` (a `ListId` of `ExprId`s).
+    /// The callee of a `CallExpr` or `CXXMemberCallExpr` (for the latter a
+    /// `MemberExpr`, or a `.*`/`->*` `BinaryOperator`).
+    pub fn callee(&self, e: ExprId) -> ExprId {
+        ExprId::new(self.expect_call(e).a)
+    }
+
+    /// The arguments of a `CallExpr` or `CXXMemberCallExpr` (a `ListId` of
+    /// `ExprId`s; the implied object argument is not among them).
     pub fn call_args(&self, e: ExprId) -> ListId {
-        ListId::new(self.expect_kind(e, ExprKind::CallExpr).b)
+        ListId::new(self.expect_call(e).b)
+    }
+
+    /// The implied object argument of a `CXXMemberCallExpr`: the base of
+    /// its `MemberExpr` callee, or the left operand of a `.*`/`->*`
+    /// callee (sema-class.md §5.1; for `->` a pointer).
+    pub fn member_call_object(&self, e: ExprId) -> ExprId {
+        let callee = self.get(ExprId::new(self.expect_kind(e, ExprKind::CXXMemberCallExpr).a));
+        assert!(
+            matches!(callee.kind, ExprKind::MemberExpr | ExprKind::BinaryOperator),
+            "CXXMemberCallExpr callee is {:?}",
+            callee.kind
+        );
+        ExprId::new(callee.a)
+    }
+
+    fn expect_construct(&self, e: ExprId) -> &ExprNode {
+        let n = self.get(e);
+        assert!(
+            matches!(n.kind, ExprKind::CXXConstructExpr | ExprKind::CXXTemporaryObjectExpr),
+            "expected a construct expression, found {:?}",
+            n.kind
+        );
+        n
+    }
+
+    /// The constructor called by a `CXXConstructExpr`,
+    /// `CXXTemporaryObjectExpr` or `CXXInheritedCtorInitExpr`.
+    pub fn constructor(&self, e: ExprId) -> DeclId {
+        let n = self.get(e);
+        assert!(
+            matches!(
+                n.kind,
+                ExprKind::CXXConstructExpr
+                    | ExprKind::CXXTemporaryObjectExpr
+                    | ExprKind::CXXInheritedCtorInitExpr
+            ),
+            "{:?} calls no constructor",
+            n.kind
+        );
+        DeclId::new(n.a)
+    }
+
+    /// The arguments of a `CXXConstructExpr` / `CXXTemporaryObjectExpr`.
+    pub fn construct_args(&self, e: ExprId) -> ListId {
+        ListId::new(self.expect_construct(e).b)
+    }
+
+    /// The flags of a `CXXConstructExpr` / `CXXTemporaryObjectExpr`.
+    pub fn construct_info(&self, e: ExprId) -> ConstructInfo {
+        ConstructInfo::from_aux(self.expect_construct(e).aux)
+    }
+
+    /// The construction kind of a `CXXInheritedCtorInitExpr` and whether the
+    /// constructor is inherited from a virtual base.
+    pub fn inherited_ctor_info(&self, e: ExprId) -> (ConstructionKind, bool) {
+        let aux = self.expect_kind(e, ExprKind::CXXInheritedCtorInitExpr).aux;
+        (ConstructionKind::from_u8(aux & 3).expect("2-bit kind"), aux & 4 != 0)
+    }
+
+    /// The storage duration of a `MaterializeTemporaryExpr`.
+    pub fn temporary_storage(&self, e: ExprId) -> StorageDuration {
+        let aux = self.expect_kind(e, ExprKind::MaterializeTemporaryExpr).aux;
+        StorageDuration::from_u8(aux & 3).expect("2-bit storage duration")
+    }
+
+    /// True if a `MaterializeTemporaryExpr` is bound to an lvalue
+    /// reference (it is then an lvalue, else an xvalue).
+    pub fn bound_to_lvalue_ref(&self, e: ExprId) -> bool {
+        self.expect_kind(e, ExprKind::MaterializeTemporaryExpr).aux & 4 != 0
+    }
+
+    /// The `LifetimeExtendedTemporary` declaration of a lifetime-extended
+    /// `MaterializeTemporaryExpr` (its `extending` field is the extending
+    /// declaration).
+    pub fn lifetime_extended_temporary(&self, e: ExprId) -> Option<DeclId> {
+        DeclId::from_raw(self.expect_kind(e, ExprKind::MaterializeTemporaryExpr).b)
+    }
+
+    /// The destructor of a `CXXBindTemporaryExpr`.
+    pub fn bound_destructor(&self, e: ExprId) -> DeclId {
+        DeclId::new(self.expect_kind(e, ExprKind::CXXBindTemporaryExpr).b)
+    }
+
+    /// True if the cleanups of an `ExprWithCleanups` have side effects.
+    pub fn cleanups_have_side_effects(&self, e: ExprId) -> bool {
+        self.expect_kind(e, ExprKind::ExprWithCleanups).aux & 1 != 0
+    }
+
+    /// The field of a `CXXDefaultInitExpr` (its initializer is the
+    /// field's shared default member initializer).
+    pub fn default_init_field(&self, e: ExprId) -> DeclId {
+        DeclId::new(self.expect_kind(e, ExprKind::CXXDefaultInitExpr).a)
+    }
+
+    /// The parameter of a `CXXDefaultArgExpr` (its initializer is the
+    /// parameter's shared default argument).
+    pub fn default_arg_param(&self, e: ExprId) -> DeclId {
+        DeclId::new(self.expect_kind(e, ExprKind::CXXDefaultArgExpr).a)
+    }
+
+    /// The declaration context in which a `CXXDefaultInitExpr` /
+    /// `CXXDefaultArgExpr` is used.
+    pub fn used_context(&self, e: ExprId) -> DeclId {
+        let n = self.get(e);
+        assert!(
+            matches!(n.kind, ExprKind::CXXDefaultInitExpr | ExprKind::CXXDefaultArgExpr),
+            "{:?} has no used context",
+            n.kind
+        );
+        DeclId::new(n.b)
+    }
+
+    /// True if a `CXXThisExpr` is implicit (a member named without `this->`).
+    pub fn this_is_implicit(&self, e: ExprId) -> bool {
+        self.expect_kind(e, ExprKind::CXXThisExpr).aux & 1 != 0
+    }
+
+    /// The explicit initializers of a `CXXParenListInitExpr`.
+    pub fn paren_list_inits(&self, e: ExprId) -> ListId {
+        ListId::new(self.expect_kind(e, ExprKind::CXXParenListInitExpr).a)
+    }
+
+    /// The array filler of a `CXXParenListInitExpr`.
+    pub fn paren_list_filler(&self, e: ExprId) -> Option<ExprId> {
+        ExprId::from_raw(self.expect_kind(e, ExprKind::CXXParenListInitExpr).b)
+    }
+
+    /// The common expression (an `OpaqueValueExpr`) and element
+    /// initializer of an `ArrayInitLoopExpr`.
+    pub fn array_init_loop(&self, e: ExprId) -> [ExprId; 2] {
+        let n = self.expect_kind(e, ExprKind::ArrayInitLoopExpr);
+        [ExprId::new(n.a), ExprId::new(n.b)]
+    }
+
+    /// The source expression of an `OpaqueValueExpr` (shared: not one of
+    /// its [`ExprArena::children`]).
+    pub fn opaque_source(&self, e: ExprId) -> Option<ExprId> {
+        ExprId::from_raw(self.expect_kind(e, ExprKind::OpaqueValueExpr).a)
+    }
+
+    /// The operand of a `CXXTypeidExpr`.
+    pub fn typeid_operand(&self, e: ExprId) -> TypeidOperand {
+        let n = self.expect_kind(e, ExprKind::CXXTypeidExpr);
+        if n.has(ExprFlags::ARG_IS_TYPE) {
+            TypeidOperand::Type(QualType::from_raw(n.a).expect("typeid type operand"))
+        } else {
+            TypeidOperand::Expr(ExprId::new(n.a))
+        }
+    }
+
+    /// True if the operand of a `CXXTypeidExpr` is potentially evaluated
+    /// (a glvalue of polymorphic class type, [expr.typeid]/4).
+    pub fn typeid_potentially_evaluated(&self, e: ExprId) -> bool {
+        self.expect_kind(e, ExprKind::CXXTypeidExpr).aux & 1 != 0
     }
 
     /// The explicit initializers of an `InitListExpr` (a `ListId` of
@@ -1090,7 +1350,8 @@ impl ExprArena {
     }
 
     /// The single operand of a unary operator, cast, `ParenExpr`,
-    /// `ConstantExpr` or `MemberExpr` (its base).
+    /// `ConstantExpr`, `MemberExpr` (its base), `MaterializeTemporaryExpr`,
+    /// `CXXBindTemporaryExpr` or `ExprWithCleanups`.
     pub fn operand(&self, e: ExprId) -> ExprId {
         let n = self.get(e);
         assert!(
@@ -1101,6 +1362,9 @@ impl ExprArena {
                         | ExprKind::ParenExpr
                         | ExprKind::ConstantExpr
                         | ExprKind::MemberExpr
+                        | ExprKind::MaterializeTemporaryExpr
+                        | ExprKind::CXXBindTemporaryExpr
+                        | ExprKind::ExprWithCleanups
                 ),
             "{:?} has no single operand",
             n.kind
@@ -1151,7 +1415,12 @@ impl ExprArena {
         }
     }
 
-    /// The child expressions of `e` in dump order (§11).
+    /// The child expressions of `e` in dump order (§11): the expressions
+    /// `e` owns, as clang's `Stmt::children`. Shared subexpressions are
+    /// not children (the dump prints them, §11): the source of an
+    /// `OpaqueValueExpr`, the default member initializer of a
+    /// `CXXDefaultInitExpr` and the default argument of a
+    /// `CXXDefaultArgExpr`.
     pub fn children(&self, e: ExprId, lists: &IdLists) -> Vec<ExprId> {
         let n = self.get(e);
         let id = |w: u32| ExprId::from_raw(w);
@@ -1160,7 +1429,22 @@ impl ExprArena {
             ExprKind::MemberExpr
             | ExprKind::UnaryOperator
             | ExprKind::ParenExpr
-            | ExprKind::ConstantExpr => v.extend(id(n.a)),
+            | ExprKind::ConstantExpr
+            | ExprKind::MaterializeTemporaryExpr
+            | ExprKind::CXXBindTemporaryExpr
+            | ExprKind::ExprWithCleanups => v.extend(id(n.a)),
+            ExprKind::CXXTypeidExpr if !n.has(ExprFlags::ARG_IS_TYPE) => v.extend(id(n.a)),
+            ExprKind::CXXConstructExpr | ExprKind::CXXTemporaryObjectExpr => {
+                v.extend(lists.iter::<ExprId>(ListId::new(n.b)));
+            }
+            ExprKind::CXXParenListInitExpr => {
+                v.extend(lists.iter::<ExprId>(ListId::new(n.a)));
+                v.extend(id(n.b));
+            }
+            ExprKind::ArrayInitLoopExpr => {
+                v.extend(id(n.a));
+                v.extend(id(n.b));
+            }
             k if k.is_cast() => v.extend(id(n.a)),
             ExprKind::UnaryExprOrTypeTraitExpr if !n.has(ExprFlags::ARG_IS_TYPE) => {
                 v.extend(id(n.a));
@@ -1178,7 +1462,7 @@ impl ExprArena {
                 v.extend(id(n.a));
                 v.extend(self.cond_arms[n.b as usize]);
             }
-            ExprKind::CallExpr => {
+            ExprKind::CallExpr | ExprKind::CXXMemberCallExpr => {
                 v.extend(id(n.a));
                 v.extend(lists.iter::<ExprId>(ListId::new(n.b)));
             }
