@@ -902,7 +902,14 @@ impl Parser<'_, '_> {
                 self.expect_closing(Punct::RSquare, Punct::LSquare, open);
                 self.skip_attributes();
                 d.chunks.push(Chunk::Array { size, loc: open });
-            } else if self.at(Punct::LParen) && (abstract_ok || self.is_param_list_start(1)) {
+            } else if self.at(Punct::LParen)
+                && (abstract_ok
+                    // A member declarator has no direct-initializer, so
+                    // `(` always starts its parameters (clang's
+                    // `mayBeFollowedByCXXDirectInit`).
+                    || d.ctx == DeclaratorContext::Member
+                    || self.is_param_list_start(1))
+            {
                 self.parse_function_suffix(d);
             } else {
                 break;
