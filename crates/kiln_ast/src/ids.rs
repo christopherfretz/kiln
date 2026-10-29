@@ -161,6 +161,12 @@ define_id!(
     ProfileId, u32::MAX, "ProfileId"
 );
 
+define_id!(
+    /// A template parameter list in `TemplateTables` (spec/sema-templates.md
+    /// §2.1, §11.2).
+    TemplateParamListId, u32::MAX, "TemplateParamListId"
+);
+
 impl ListId {
     /// The empty list (index 1; index 0 is the dummy). Pushing an empty
     /// slice returns it without allocating.

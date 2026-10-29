@@ -287,6 +287,16 @@ impl<'x, 'a, 'sm> Scan<'x, 'a, 'sm> {
         }
         match class {
             NameClass::Type(..) => self.after_simple_type(end, braced),
+            NameClass::TypeTemplate(d) if self.p.s.names_injected_class(d) => {
+                self.after_simple_type(end, braced)
+            }
+            // `C auto` ([dcl.spec.auto.general]/1).
+            NameClass::Concept(_) if self.p.kw_of(self.p.tok_at(end)) == Some(Kw::Auto) => {
+                Tpr::True
+            }
+            // `T::type x` (a missing `typename`, diagnosed by the
+            // declaration parser).
+            NameClass::Dependent if end > self.i + 1 && self.ident_at(end).is_some() => Tpr::True,
             _ => Tpr::False,
         }
     }

@@ -65,7 +65,7 @@ impl Sema<'_, '_> {
     /// be used.
     pub(crate) fn this_class(&self) -> Option<(QualType, DeclId)> {
         let t = self.current_this()?;
-        let p = self.ast.types.pointee(t)?;
+        let p = self.pointee_sugared(t)?;
         let r = self.ast.types.as_record(p)?;
         Some((t, self.ast.definition(r).unwrap_or(r)))
     }

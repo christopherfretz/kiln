@@ -1,0 +1,17 @@
+TranslationUnitDecl
+`-CXXRecordDecl struct S definition
+  |-FunctionTemplateDecl f
+  | |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+  | `-CXXMethodDecl f 'void (T)'
+  |   `-ParmVarDecl 'T'
+  |-FunctionTemplateDecl g
+  | |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+  | `-CXXMethodDecl g 'int (T)' implicit-inline
+  |   |-ParmVarDecl t 'T'
+  |   `-CompoundStmt
+  |     `-ReturnStmt
+  |       `-IntegerLiteral 'int' 0
+  `-ClassTemplateDecl Inner
+    |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+    `-CXXRecordDecl struct Inner definition
+      `-FieldDecl x 'T'

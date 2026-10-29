@@ -1959,6 +1959,159 @@ Two more are needed:
 - R-OVEN-2: frozen values are hash-consed.
 - A new `EvalKind::Constraint`.
 
+**Landed (WP-069).** Parsing and the parse-time sema for templates are
+in place. The engine (§4–§10) is not.
+
+*Files.*
+- `kiln_parse`:
+  - `src/templ.rs`: heads, parameters, template-ids, the `<` rule,
+    requires-clauses and requires-expressions, concepts, and the
+    specialization/instantiation syntax;
+  - hooks in `src/{tokens,decl,expr,stmt,parser}.rs`;
+  - unit tests in `tests/templ.rs`.
+- `kiln_sema`:
+  - `src/templ/mod.rs`: heads and parameter actions, abbreviated
+    templates, re-entering template scopes, and the §2.1 checks;
+  - `src/templ/actions.rs`: template-ids, dependent names, packs and
+    folds, concepts and requires-expressions, `classify_name` support,
+    and dependence queries;
+  - hooks in `src/{decl,declspec,expr,class/members,lookup,…}.rs`.
+- `kiln_ast`:
+  - `src/templates.rs`: the tables and the constructors listed below;
+  - `types/print.rs` gains `write_arg_list`;
+  - `dump/names.rs` prints dependent expressions as clang's
+    `printPretty`;
+  - the template dump lines (ast-dump.md §5).
+- `kiln_diag`: the template diagnostic ids, appended at the end of the
+  tables.
+- Tests:
+  - `tests/conformance/templates/parse/` holds 46 `expect: ast` goldens.
+  - `tests/conformance/templates/diag/` holds 10 strict-diags tests.
+
+*Signatures as landed* (where they differ from the sketch above):
+```rust
+pub fn act_on_template_params_start(&mut self, template_loc: Loc, l_angle: Loc) -> u16;
+pub fn act_on_type_template_param(&mut self, typename_kw: bool, kw_loc: Loc, pack: bool, name: Option<(Symbol, Loc)>) -> DeclId;
+pub fn act_on_constrained_template_param(&mut self, concept: DeclId, cargs: &[TemplateArg], loc: Loc, pack: bool, name: Option<(Symbol, Loc)>) -> DeclId;
+pub fn act_on_non_type_template_param(&mut self, p: &ParamInfo, pack: bool) -> DeclId;
+pub fn act_on_template_template_param(&mut self, params: TemplateParamListId, typename_kw: bool, kw_loc: Loc, pack: bool, name: Option<(Symbol, Loc)>) -> DeclId;
+pub fn act_on_template_param_default(&mut self, p: DeclId, arg: TemplateArg, loc: Loc); // loc = the argument, not `=`
+pub fn act_template_head(&mut self, requires: Option<ExprId>, r_angle: Loc) -> TemplateParamListId; // params pushed one by one
+pub fn act_on_finish_template_decl(&mut self);
+pub fn act_on_invented_template_param(&mut self, loc: Loc, pack: bool, constraint: Option<(DeclId, Vec<TemplateArg>)>, param_name: Option<Symbol>) -> QualType;
+pub fn act_on_end_abbreviated(&mut self);
+pub fn act_on_trailing_requires(&mut self, f: DeclId, r: ExprId);
+pub fn act_on_reenter_template_scopes(&mut self, f: DeclId) -> usize;
+pub fn match_template_lists_to_scope(&self, qualifier: Option<DeclId>) -> usize;
+pub fn act_on_specialization_declarator_id(&mut self, tmpl: DeclId, loc: Loc) -> bool; // false: declarator dropped
+pub fn act_template_id(&mut self, name: TemplateNameId, args: &[TemplateArg], l: Loc, r: Loc) -> Result<TemplateIdRef, ()>;
+pub fn act_on_template_id_call_name(&mut self, e: ExprId);
+pub fn act_dependent_name(&mut self, nns: NnsId, name: Symbol, targs: Option<ArgListId>, kw: TagKeyword) -> QualType;
+pub fn act_dependent_scope_ref(&mut self, nns: NnsId, name: Symbol, targs: Option<ArgListId>, loc: Loc) -> ExprId;
+pub fn try_dependent_member(&mut self, base: ExprId, name: Symbol, targs: Option<ArgListId>, template_kw: bool, loc: Loc, arrow: bool) -> Option<ExprId>;
+pub fn act_on_undeclared_call_name(&mut self, name: Symbol, loc: Loc) -> ExprId; // ADL-deferred ULE
+pub fn act_on_nested_name_component(&mut self, prefix: Option<(DeclId, NnsId)>, name: Symbol, loc: Loc) -> Option<(DeclId, NnsId)>;
+pub fn act_on_nested_name_template_id(&mut self, prefix: Option<NnsId>, tmpl: DeclId, ty: QualType, template_kw: bool, loc: Loc) -> Option<(DeclId, NnsId)>;
+pub fn act_concept(&mut self, head: TemplateParamListId, name: Symbol, loc: Loc, e: ExprId) -> DeclId;
+pub fn act_on_requires_expr_start(&mut self, loc: Loc) -> DeclId;
+pub fn act_on_requires_param(&mut self, body: DeclId, p: &ParamInfo, idx: u16) -> DeclId;
+pub fn act_requires_expr(&mut self, body: DeclId, params: &[DeclId], reqs: &[Requirement], loc: Loc, rbrace: Loc) -> ExprId;
+pub fn act_on_return_type_requirement(&mut self, concept: DeclId, args: &[TemplateArg], loc: Loc) -> ExprId;
+pub fn act_pack_expansion(&mut self, pattern: ExprId, ellipsis: Loc) -> ExprId;
+pub fn act_pack_expansion_type(&mut self, pattern: QualType, ellipsis: Loc) -> QualType;
+pub fn act_pack_expansion_arg(&mut self, a: TemplateArg, ellipsis: Loc) -> TemplateArg;
+pub fn act_fold(&mut self, lhs: Option<ExprId>, op: BinaryOp, rhs: Option<ExprId>, lparen: Loc, ellipsis: Loc, rparen: Loc) -> ExprId;
+pub fn act_on_sizeof_pack_name(&mut self, name: Symbol, name_loc: Loc, loc: Loc, rparen: Loc) -> ExprId;
+pub fn act_explicit_instantiation(&mut self, extern_loc: Option<Loc>, loc: Loc) -> Option<DeclId>;  // stub
+pub fn act_explicit_specialization(&mut self, partial: bool, loc: Loc) -> Option<DeclId>;           // stub
+pub fn act_deduction_guide(&mut self, name: Symbol, loc: Loc) -> Option<DeclId>;                    // stub
+pub fn templ_unimplemented(&self, feature: &str, loc: Loc); // sema_unimplemented_template_feature
+```
+
+The `AstBuilder` constructors (`kiln_ast/src/templates.rs`) are:
+- `template_param_list`, `template_type_parm`, `non_type_template_parm`
+  and `template_template_parm`;
+- `template_decl` (class, function, variable and alias) and `concept`;
+- `template_arg_expr`, `dependent_scope_decl_ref`, `unresolved_lookup`,
+  `dependent_member` and `unresolved_construct`;
+- `dependent_unary`, `dependent_binary`, `dependent_conditional` and
+  `paren_list`;
+- `size_of_pack`, `pack_expansion_expr` and `fold_expr`;
+- `requires_expr` and `concept_spec_expr`.
+
+The dependent-reference constructors (`dependent_scope_decl_ref`,
+`unresolved_lookup`, `dependent_member`) also inherit
+`UNEXPANDED_PACK` and `CONTAINS_ERROR` from their nested-name-specifier.
+
+*Interface changes outside the templates crates.*
+- `kiln_ast`:
+  - `types::write_arg_list`;
+  - `AstNames::expr` prints DSDRE, ULE and DSME as written;
+  - dependent `decltype` is canonical.
+- `kiln_sema`:
+  - `Declarator.dropped`: a dropped specialization declarator declares
+    nothing.
+  - `classify_name` maps an injected-class-name used with `<` to
+    `TypeTemplate`.
+  - `injected_type_of` no longer marks a declaration referenced.
+  - `set_adl` and `decay_dependent`.
+  - `dependent_subscript_type` and the dependent `ToVoid` cast.
+  - Dependent expressions get no unused-result warnings.
+  - `check_template_param_list` and `check_template_param_shadow`
+    implement [temp.param]/14 and [temp.local]/6.
+  - `default_locs`.
+  - [depr.static.constexpr]: an out-of-line `constexpr const T X::v;`
+    without an initializer is a redundant redeclaration, not a
+    redefinition (`class/members.rs`, `decl.rs::act_on_uninit`).
+- `kiln_parse`:
+  - `parse_nested_name_nns` and `entering_context`;
+  - `diagnose_missing_template_kw`, which reports
+    `parse_template_kw_missing`;
+  - `parse_specialization_declarator_id`;
+  - an alias-declaration may carry `__attribute__` after its name;
+  - `at_partial_specialization` skips `[[…]]`, `__attribute__((…))` and
+    `alignas(…)`.
+
+*Gaps* (each reports a diagnostic or is a known divergence):
+- The shadow check does not cover function parameters. Kiln emits a
+  plain error where clang emits the ExtWarn
+  `-Wstrict-primary-template-shadow`.
+- Inherited defaults are not recorded on the redeclaration's
+  parameters. A class-template forward redeclaration creates no new
+  decl, so chained default checks are partial.
+- A template template parameter's inner list is not order-checked.
+- P0846 (ADL for an unknown name followed by `<`) is not implemented.
+- A `DependentScopeDeclRefExpr` does not record the `template` keyword.
+- A parameter named in its own declarator's trailing return type is
+  unsupported.
+
+*Stubs for WP-070a/b and later* (each reports
+`sema_unimplemented_template_feature` or `sema_unimplemented`):
+- A non-dependent `class template specialization` (needs
+  `get_class_spec` and instantiation).
+- Explicit and partial specializations of class, variable and function
+  templates (`act_explicit_specialization`,
+  `act_on_specialization_declarator_id`).
+- Explicit instantiation (`act_explicit_instantiation`).
+- Deduction guides (`act_deduction_guide`).
+- Alias-template substitution.
+- Calls to function templates (deduction, WP-071).
+
+*`<type_traits>` probe*: run
+`kiln -std=c++26 -stdlib=libc++ -fsyntax-only -ferror-limit=0` on
+`#include <type_traits>`. The error count went from 464 on main to 431.
+No remaining error is a WP-069 template-syntax failure. The blockers
+are:
+
+| Errors | Cause | Owner |
+|---:|---|---|
+| ~207 | Builtin traits and transforms (`__is_same`, `__remove_cvref`, …) | WP-074 |
+| 74 | Partial and explicit specializations | WP-070b |
+| 23 | Non-dependent specializations | WP-070a |
+| ~19 | Operators, constructors and conversion functions | WP-067a/068a |
+
+Most of the remaining errors are follow-ons of these.
+
 ### 11.3 Instantiation report and memory accounting
 
 **Meter.** Each instantiation frame records, at push, `(Ast::bytes(),

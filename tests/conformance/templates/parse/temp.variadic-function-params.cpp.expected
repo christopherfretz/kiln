@@ -1,0 +1,16 @@
+TranslationUnitDecl
+|-FunctionTemplateDecl count
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 ... Ts
+| `-FunctionDecl count 'unsigned long (Ts...)'
+|   |-ParmVarDecl referenced ts 'Ts...' pack
+|   `-CompoundStmt
+|     `-ReturnStmt
+|       `-BinaryOperator 'unsigned long' '+'
+|         |-SizeOfPackExpr 'unsigned long' Ts
+|         `-SizeOfPackExpr 'unsigned long' ts
+`-FunctionTemplateDecl g
+  |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+  |-TemplateTypeParmDecl referenced class depth 0 index 1 ... Ts
+  `-FunctionDecl g 'void (T, Ts &...)'
+    |-ParmVarDecl t 'T'
+    `-ParmVarDecl rest 'Ts &...' pack

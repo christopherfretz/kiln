@@ -517,6 +517,7 @@ impl Parser<'_, '_> {
             let open = self.bump().span.lo;
             while !self.at(Punct::RBrace) && !self.at_eof() {
                 self.parse_member_declaration();
+                self.s.act_on_end_abbreviated();
             }
             self.expect_closing(Punct::RBrace, Punct::LBrace, open);
         } else {
@@ -565,7 +566,9 @@ impl Parser<'_, '_> {
             match item {
                 LateItem::Method { f, parts } if ph == Phase::Method => {
                     let parts = mem::take(parts);
+                    let n = self.s.act_on_reenter_template_scopes(*f);
                     self.replay_method(*f, parts);
+                    self.s.act_on_exit_reentered_template_scopes(n);
                 }
                 LateItem::Nsdmi { field, toks } if ph == Phase::Nsdmi => {
                     let t = mem::take(&mut toks.toks);
@@ -574,7 +577,9 @@ impl Parser<'_, '_> {
                 LateItem::Body { f, ctor, toks } if ph == Phase::Body => {
                     let t = mem::take(&mut toks.toks);
                     self.begin_replay(t, toks.end);
+                    let n = self.s.act_on_reenter_template_scopes(*f);
                     self.parse_function_definition(*f, *ctor);
+                    self.s.act_on_exit_reentered_template_scopes(n);
                     self.finish_replay();
                 }
                 LateItem::Nested(c) => self.replay_phase(c, ph),
@@ -930,8 +935,8 @@ impl Parser<'_, '_> {
                 true
             }
             (_, Some(Kw::Template)) => {
-                self.unsupported("templates", loc);
-                self.skip_unsupported_declaration();
+                self.parse_template_declaration(DeclaratorContext::Member);
+                self.s.act_on_end_abbreviated();
                 true
             }
             _ => false,
@@ -1062,7 +1067,7 @@ impl Parser<'_, '_> {
 
     /// member-declaration ([class.mem]; clang's
     /// `ParseCXXClassMemberDeclaration`).
-    fn parse_member_declaration(&mut self) {
+    pub(crate) fn parse_member_declaration(&mut self) {
         if self.parse_member_declaration_leader() {
             return;
         }
@@ -1090,6 +1095,7 @@ impl Parser<'_, '_> {
             };
             if !self.at(Punct::Colon) {
                 self.parse_declarator(&mut d);
+                self.parse_trailing_requires(&mut d);
             }
             let parts = mem::take(&mut self.late_fn);
             let base = *base_ty.get_or_insert_with(|| self.member_base_type(&ds, &d));
@@ -1590,6 +1596,13 @@ impl Parser<'_, '_> {
                 self.skip_until(&[Punct::RParen], false, true);
             }
             return None;
+        }
+        // A simple-template-id or dependent class-name ([class.derived.general]/1,
+        // [temp.res.general]/4: implicitly a type here).
+        if self.at_template_type_name(DeclaratorContext::TypeName) {
+            let ty = self.parse_template_type_name(DeclaratorContext::TypeName)?;
+            let pack_expansion = self.eat(Punct::Ellipsis).is_some();
+            return Some(BaseSpecInfo { ty, loc, is_virtual, access, pack_expansion, attrs });
         }
         let Ok(q) = self.parse_nested_name() else {
             return None;

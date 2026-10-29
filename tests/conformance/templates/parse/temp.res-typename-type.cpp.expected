@@ -1,0 +1,21 @@
+TranslationUnitDecl
+|-FunctionTemplateDecl get
+| |-TemplateTypeParmDecl class depth 0 index 0 T
+| `-FunctionDecl get 'typename T::type (typename T::type)'
+|   |-ParmVarDecl referenced x 'typename T::type'
+|   `-CompoundStmt
+|     `-ReturnStmt
+|       `-ImplicitCastExpr 'typename T::type' xvalue <NoOp>
+|         `-DeclRefExpr 'typename T::type' lvalue ParmVar 'x' 'typename T::type'
+|-ClassTemplateDecl A
+| |-TemplateTypeParmDecl class depth 0 index 0 T
+| `-CXXRecordDecl struct A definition
+|   |-TypedefDecl referenced V 'typename T::value_type'
+|   `-FieldDecl v 'V':'typename T::value_type'
+`-FunctionTemplateDecl f
+  |-TemplateTypeParmDecl class depth 0 index 0 T
+  `-FunctionDecl f 'void ()'
+    `-CompoundStmt
+      `-DeclStmt
+        `-VarDecl p 'typename T::template rebind<int>::other *' cinit
+          `-CXXNullPtrLiteralExpr 'std::nullptr_t'

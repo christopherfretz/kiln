@@ -36,7 +36,8 @@ pub use ast::Ast;
 pub use builder::{AstBuilder, DeclHead};
 pub use ids::{
     ArgListId, AttrId, BlobId, ConstValueId, DeclId, ExprId, LambdaId, ListId, NnsId, ProfileId,
-    QualType, RawId, RedeclGroupId, ReflectionId, StmtId, StringLitId, TemplateNameId, TypeId,
+    QualType, RawId, RedeclGroupId, ReflectionId, StmtId, StringLitId, TemplateNameId,
+    TemplateParamListId, TypeId,
 };
 pub use lists::IdLists;
 pub use mem::{HeapSize, MemReport, MemRow};

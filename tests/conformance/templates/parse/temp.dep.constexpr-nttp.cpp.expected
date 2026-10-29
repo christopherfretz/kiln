@@ -1,0 +1,24 @@
+TranslationUnitDecl
+|-FunctionTemplateDecl next
+| |-NonTypeTemplateParmDecl referenced 'int' depth 0 index 0 N
+| `-FunctionDecl next 'int ()'
+|   `-CompoundStmt
+|     `-ReturnStmt
+|       `-BinaryOperator 'int' '+'
+|         |-DeclRefExpr 'int' NonTypeTemplateParm 'N' 'int'
+|         `-IntegerLiteral 'int' 1
+|-ClassTemplateDecl A
+| |-NonTypeTemplateParmDecl referenced 'int' depth 0 index 0 N
+| `-CXXRecordDecl struct A definition
+|   |-FieldDecl arr 'int[N]'
+|   `-FieldDecl twice 'int[N * 2]'
+`-FunctionTemplateDecl sum
+  |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+  |-NonTypeTemplateParmDecl referenced 'int' depth 0 index 1 N
+  `-FunctionDecl sum 'T (T (&)[N])'
+    |-ParmVarDecl referenced a 'T (&)[N]'
+    `-CompoundStmt
+      `-ReturnStmt
+        `-ArraySubscriptExpr 'T' lvalue
+          |-DeclRefExpr 'T[N]' lvalue ParmVar 'a' 'T (&)[N]'
+          `-IntegerLiteral 'int' 0

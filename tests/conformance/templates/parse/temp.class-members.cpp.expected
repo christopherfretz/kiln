@@ -1,0 +1,20 @@
+TranslationUnitDecl
+`-ClassTemplateDecl Array
+  |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+  |-NonTypeTemplateParmDecl referenced 'int' depth 0 index 1 N
+  `-CXXRecordDecl struct Array definition
+    |-FieldDecl referenced data 'T[N]'
+    |-VarDecl size 'const int' static cinit
+    | `-DeclRefExpr 'int' NonTypeTemplateParm 'N' 'int'
+    |-CXXMethodDecl at 'T &(int)' implicit-inline
+    | |-ParmVarDecl referenced i 'int'
+    | `-CompoundStmt
+    |   `-ReturnStmt
+    |     `-ArraySubscriptExpr 'T' lvalue
+    |       |-MemberExpr 'T[N]' lvalue ->data
+    |       | `-CXXThisExpr 'Array<T, N> *' implicit this
+    |       `-DeclRefExpr 'int' lvalue ParmVar 'i' 'int'
+    `-CXXMethodDecl length 'int () const' implicit-inline
+      `-CompoundStmt
+        `-ReturnStmt
+          `-DeclRefExpr 'int' NonTypeTemplateParm 'N' 'int'

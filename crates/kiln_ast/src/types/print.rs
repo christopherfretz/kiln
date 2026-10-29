@@ -59,6 +59,16 @@ pub trait TypeNames {
         None
     }
 
+    /// For the invented type parameter of an abbreviated function
+    /// template ([dcl.fct]/22), which prints as `auto` or `C<A...> auto`:
+    /// `Some(constraint)` with the type-constraint's concept and its whole
+    /// argument list (the first argument is the parameter itself).
+    /// `None` for other declarations.
+    fn invented_parm(&self, decl: DeclId) -> Option<Option<(DeclId, ArgListId)>> {
+        let _ = decl;
+        None
+    }
+
     /// Writes expression `expr` as clang's `Expr::printPretty`.
     fn write_expr(&self, expr: ExprId, out: &mut String);
 
@@ -223,6 +233,23 @@ pub fn write_nns(ctx: &TypeContext, names: &dyn TypeNames, n: NnsId, out: &mut S
         depth: 0,
     };
     p.nns(n);
+    *out = p.out;
+}
+
+/// Renders template-argument list `l` as written (clang's
+/// `printTemplateArgumentList`: `<int, N>`), appending to `out`.
+pub fn write_arg_list(ctx: &TypeContext, names: &dyn TypeNames, l: ArgListId, out: &mut String) {
+    let mut p = Printer {
+        ctx,
+        names,
+        out: std::mem::take(out),
+        empty_ph: true,
+        scope: false,
+        suppress_tag: false,
+        inside_cc_attr: false,
+        depth: 0,
+    };
+    p.arg_list(l, false);
     *out = p.out;
 }
 
@@ -586,13 +613,36 @@ impl Printer<'_> {
                 self.before(QualType::new(base, quals.bits()));
             }
             TypeView::TemplateTypeParm(d) => {
-                let start = self.out.len();
-                self.decl(d, false);
-                if self.out.len() == start
-                    && let TypeView::CanonTemplateTypeParm { depth, index, .. } =
-                        ctx.canonical_view(QualType::unqual(t))
-                {
-                    self.parm_name(depth, index);
+                let names = self.names;
+                if let Some(c) = names.invented_parm(d) {
+                    // clang's `printTemplateTypeParmBefore` for an implicit
+                    // parameter: the type-constraint, then `auto`.
+                    if let Some((concept, l)) = c {
+                        self.decl(concept, false);
+                        let ctx = self.ctx;
+                        let extra = &ctx.args(l)[1.min(ctx.args(l).len())..];
+                        if !extra.is_empty() {
+                            self.push("<");
+                            for (i, a) in extra.iter().enumerate() {
+                                if i > 0 {
+                                    self.push(", ");
+                                }
+                                self.arg(a.view());
+                            }
+                            self.push(">");
+                        }
+                        self.push(" ");
+                    }
+                    self.push("auto");
+                } else {
+                    let start = self.out.len();
+                    self.decl(d, false);
+                    if self.out.len() == start
+                        && let TypeView::CanonTemplateTypeParm { depth, index, .. } =
+                            ctx.canonical_view(QualType::unqual(t))
+                    {
+                        self.parm_name(depth, index);
+                    }
                 }
                 self.space_before_ph();
             }
@@ -988,16 +1038,14 @@ impl Printer<'_> {
                 }
             }
             TemplateName::DependentIdentifier { nns, name } => {
-                if qual == Qual::AsWritten {
-                    self.nns(nns);
-                }
+                // clang prints a dependent name's qualifier unconditionally.
+                self.nns(nns);
                 self.push("template ");
                 self.symbol(name);
             }
             TemplateName::DependentOperator { nns, op } => {
-                if qual == Qual::AsWritten {
-                    self.nns(nns);
-                }
+                // clang prints a dependent name's qualifier unconditionally.
+                self.nns(nns);
                 self.push("template operator ");
                 let names = self.names;
                 names.write_operator(op, &mut self.out);
@@ -1076,6 +1124,21 @@ impl Printer<'_> {
             Nns::Type { ty, template_kw, .. } => {
                 if template_kw {
                     self.push("template ");
+                }
+                // `T::template X<A>::`: the component's own qualifier is
+                // this one's prefix, already printed (clang's
+                // `SuppressScope` for a type component).
+                if let TypeView::DependentTemplateSpecialization { name, args, .. } =
+                    self.ctx.view(ty.ty())
+                {
+                    if !template_kw {
+                        self.push("template ");
+                    }
+                    self.symbol(name);
+                    self.arg_list(args, false);
+                    self.push("::");
+                    self.depth -= 1;
+                    return;
                 }
                 let saved_tag = self.suppress_tag;
                 self.suppress_tag = true;

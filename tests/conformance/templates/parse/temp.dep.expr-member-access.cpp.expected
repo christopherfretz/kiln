@@ -1,0 +1,31 @@
+TranslationUnitDecl
+|-FunctionTemplateDecl f
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| `-FunctionDecl f 'int (T)'
+|   |-ParmVarDecl referenced t 'T'
+|   `-CompoundStmt
+|     `-ReturnStmt
+|       `-BinaryOperator '<dependent type>' '+'
+|         |-CXXDependentScopeMemberExpr '<dependent type>' lvalue .x
+|         | `-DeclRefExpr 'T' lvalue ParmVar 't' 'T'
+|         `-CallExpr '<dependent type>'
+|           |-CXXDependentScopeMemberExpr '<dependent type>' lvalue .g
+|           | `-DeclRefExpr 'T' lvalue ParmVar 't' 'T'
+|           `-IntegerLiteral 'int' 1
+|-FunctionTemplateDecl h
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| `-FunctionDecl h 'int (T *)'
+|   |-ParmVarDecl referenced p 'T *'
+|   `-CompoundStmt
+|     `-ReturnStmt
+|       `-CXXDependentScopeMemberExpr '<dependent type>' lvalue ->x
+|         `-ImplicitCastExpr 'T *' <LValueToRValue>
+|           `-DeclRefExpr 'T *' lvalue ParmVar 'p' 'T *'
+`-FunctionTemplateDecl k
+  |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+  `-FunctionDecl k 'int (T &)'
+    |-ParmVarDecl referenced r 'T &'
+    `-CompoundStmt
+      `-ReturnStmt
+        `-CXXDependentScopeMemberExpr '<dependent type>' lvalue .x
+          `-DeclRefExpr 'T' lvalue ParmVar 'r' 'T &'

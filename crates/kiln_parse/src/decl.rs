@@ -91,6 +91,13 @@ impl Parser<'_, '_> {
 
     /// A declaration at namespace scope ([dcl.pre] declaration).
     pub fn parse_external_declaration(&mut self) {
+        self.parse_external_declaration_inner();
+        // An abbreviated function template's invented head ends with its
+        // declaration ([dcl.fct]/22).
+        self.s.act_on_end_abbreviated();
+    }
+
+    fn parse_external_declaration_inner(&mut self) {
         let loc = self.loc();
         match (Self::punct_of(self.tok()), self.kw()) {
             (Some(Punct::Semi), _) => {
@@ -119,8 +126,10 @@ impl Parser<'_, '_> {
                 self.parse_linkage_spec();
             }
             (_, Some(Kw::Template)) => {
-                self.unsupported("templates", loc);
-                self.skip_unsupported_declaration();
+                self.parse_template_declaration(DeclaratorContext::File);
+            }
+            (_, Some(Kw::Extern)) if self.kw_of(self.peek(1)) == Some(Kw::Template) => {
+                self.parse_template_declaration(DeclaratorContext::File);
             }
             (_, Some(Kw::Export)) => {
                 self.unsupported("modules", loc);
@@ -291,7 +300,9 @@ impl Parser<'_, '_> {
             return vec![d];
         }
         if let Some(name) = self.ident()
-            && (self.peek_is(1, Punct::Equal) || self.peek_is(1, Punct::LSquare))
+            && (self.peek_is(1, Punct::Equal)
+                || self.peek_is(1, Punct::LSquare)
+                || self.kw_of(self.peek(1)) == Some(Kw::Attribute))
         {
             let nl = self.bump().span.lo;
             let mut attrs = Vec::new();
@@ -430,6 +441,7 @@ impl Parser<'_, '_> {
     // -- decl-specifiers ------------------------------------------------------------
 
     /// decl-specifier-seq ([dcl.spec]).
+    #[allow(clippy::too_many_lines, reason = "one arm per decl-specifier")]
     pub(crate) fn parse_decl_specifiers(&mut self, ctx: DeclaratorContext) -> DeclSpec {
         let mut ds = DeclSpec::new(self.loc());
         loop {
@@ -438,6 +450,17 @@ impl Parser<'_, '_> {
                 let mut attrs = Vec::new();
                 self.parse_attributes(&mut attrs);
                 ds.attrs.extend(attrs);
+                continue;
+            }
+            if !ds.has_type_specifier()
+                && ds.auto_constraint.is_none()
+                && (self.at(Punct::ColonColon) || self.ident().is_some())
+                && self.at_constrained_placeholder()
+            {
+                match self.parse_concept_name() {
+                    Some(c) => ds.auto_constraint = Some(c),
+                    None => ds.invalid = true,
+                }
                 continue;
             }
             if self.at(Punct::ColonColon) || self.ident().is_some() {
@@ -499,7 +522,20 @@ impl Parser<'_, '_> {
                     self.parse_decltype_into(&mut ds, loc);
                     continue;
                 }
-                Kw::Typename | Kw::Typeof => {
+                Kw::Typename => {
+                    let ty = self.parse_typename_specifier();
+                    if ty.is_none() {
+                        ds.invalid = true;
+                    }
+                    if let Err(e) =
+                        ds.set_base(TypeSpecKind::Named, Some(ty.unwrap_or(QualType::ERROR)), loc)
+                    {
+                        ds.invalid = true;
+                        self.spec_error(&e, loc);
+                    }
+                    continue;
+                }
+                Kw::Typeof => {
                     self.unsupported(&format!("'{}'", k.spelling()), loc);
                     self.bump();
                     if self.eat(Punct::LParen).is_some() {
@@ -607,6 +643,19 @@ impl Parser<'_, '_> {
     fn parse_type_name_spec(&mut self, ds: &mut DeclSpec, ctx: DeclaratorContext) -> bool {
         let start = self.pos();
         let loc = self.loc();
+        if self.at_template_type_name(ctx) {
+            let ty = self.parse_template_type_name(ctx);
+            if ty.is_none() {
+                ds.invalid = true;
+            }
+            if let Err(e) =
+                ds.set_base(TypeSpecKind::Named, Some(ty.unwrap_or(QualType::ERROR)), loc)
+            {
+                ds.invalid = true;
+                self.spec_error(&e, loc);
+            }
+            return true;
+        }
         match self.scan_name(start) {
             Some((end, NameClass::Type(ty, d), _)) => {
                 while self.pos() < end {
@@ -620,6 +669,18 @@ impl Parser<'_, '_> {
                     ty
                 };
                 if let Err(e) = ds.set_base(TypeSpecKind::Named, Some(ty), loc) {
+                    ds.invalid = true;
+                    self.spec_error(&e, loc);
+                }
+                true
+            }
+            Some((end, NameClass::TypeTemplate(d), _))
+                if end == start + 1 && self.s.names_injected_class(d) =>
+            {
+                // The injected-class-name ([temp.local]/1).
+                self.bump();
+                let ty = self.s.injected_class_type(d);
+                if let Err(e) = ds.set_base(TypeSpecKind::Named, ty, loc) {
                     ds.invalid = true;
                     self.spec_error(&e, loc);
                 }
@@ -898,11 +959,23 @@ impl Parser<'_, '_> {
     fn parse_direct_declarator(&mut self, d: &mut Declarator) {
         let abstract_ok =
             matches!(d.ctx, DeclaratorContext::Prototype | DeclaratorContext::TypeName);
+        // `... declarator-id` / an abstract pack declarator
+        // ([dcl.decl.general]/4, [dcl.fct]/14).
+        if d.ctx == DeclaratorContext::Prototype && self.at(Punct::Ellipsis) {
+            let named = self.ident_of(self.peek(1)).is_some()
+                || matches!(Self::punct_of(self.peek(1)), Some(Punct::LSquare | Punct::LParen));
+            if named || self.pack_hint {
+                d.ellipsis = Some(self.bump().span.lo);
+            }
+        }
         if (self.ident().is_some() || self.at(Punct::ColonColon))
             && d.ctx != DeclaratorContext::TypeName
         {
             let last_qual = self.last_qualifier_name();
-            let qual = self.parse_nested_name().unwrap_or_else(|()| {
+            let saved = self.s.set_entering_context(true);
+            let qual = self.parse_nested_name();
+            self.s.set_entering_context(saved);
+            let qual = qual.unwrap_or_else(|()| {
                 d.invalid = true;
                 None
             });
@@ -918,6 +991,9 @@ impl Parser<'_, '_> {
                     d.name = Some((n, l));
                 }
                 d.qualifier = qual;
+                if !ctor && self.at(Punct::Less) && self.s.has_pending_head() {
+                    self.parse_specialization_declarator_id(d, n, l);
+                }
             } else if qual.is_some() {
                 self.error_here(DiagId::parse_expected_unqualified_id);
                 d.invalid = true;
@@ -981,6 +1057,26 @@ impl Parser<'_, '_> {
         }
     }
 
+    /// `name<args>` as the declarator-id after a template head, when
+    /// `name` is a function or variable template: an explicit or partial
+    /// specialization ([temp.expl.spec]/1, [temp.spec.partial]/1). The
+    /// arguments are parsed and the declarator is dropped
+    /// ([`Sema::act_on_specialization_declarator_id`]).
+    fn parse_specialization_declarator_id(&mut self, d: &mut Declarator, name: Symbol, loc: Loc) {
+        let (NameClass::FunctionTemplate(t) | NameClass::VarTemplate(t)) =
+            self.s.classify_name(name, d.qualifier)
+        else {
+            return;
+        };
+        if self.parse_template_arg_list().is_none() {
+            d.invalid = true;
+            return;
+        }
+        if !self.s.act_on_specialization_declarator_id(t, loc) {
+            d.dropped = true;
+        }
+    }
+
     /// True if the token `n` ahead (after a `(` where an abstract
     /// declarator may start) begins a parameter-declaration-clause rather
     /// than grouping parentheses (clang's `ParseParenDeclarator`): `)`,
@@ -1041,7 +1137,7 @@ impl Parser<'_, '_> {
             let start = self.loc();
             // explicit-object-parameter-declaration ([dcl.fct]/3, P0847).
             let this_loc = self.eat_kw(Kw::This);
-            let ds = self.parse_decl_specifiers(DeclaratorContext::Prototype);
+            let mut ds = self.parse_decl_specifiers(DeclaratorContext::Prototype);
             if ds.is_empty() {
                 let e = self.s.diag(DiagId::parse_expected, self.loc()).arg("parameter declarator");
                 self.emit(e);
@@ -1051,7 +1147,28 @@ impl Parser<'_, '_> {
             }
             let mut pd = Declarator::new(DeclaratorContext::Prototype, start);
             pd.explicit_object = this_loc;
+            let placeholder = matches!(ds.base, TypeSpecKind::Auto);
+            let hint = placeholder
+                || (ds.base == TypeSpecKind::Named
+                    && ds.named.is_some_and(|t| self.s.has_unexpanded_pack(t)));
+            let saved = std::mem::replace(&mut self.pack_hint, hint);
             self.parse_declarator(&mut pd);
+            self.pack_hint = saved;
+            if placeholder && !ds.invalid {
+                // An abbreviated function template's invented parameter
+                // ([dcl.fct]/22).
+                let at = ds.type_loc.unwrap_or(start);
+                let constraint = ds.auto_constraint.take();
+                let pname = pd.name.map(|(n, _)| n);
+                let ty = self.s.act_on_invented_template_param(
+                    at,
+                    pd.ellipsis.is_some(),
+                    constraint,
+                    pname,
+                );
+                ds.base = TypeSpecKind::Named;
+                ds.named = Some(ty);
+            }
             if self.at_attr() {
                 self.parse_attributes(&mut pd.attrs);
             }
@@ -1306,6 +1423,7 @@ impl Parser<'_, '_> {
             let mut d = Declarator::new(ctx, self.loc());
             d.direct_init = direct_init;
             self.parse_declarator(&mut d);
+            self.parse_trailing_requires(&mut d);
             // The declspec's type is formed once the first declarator is
             // known: clang reports a missing type specifier at its name.
             // Constructors, destructors and conversion functions have
@@ -1585,7 +1703,7 @@ impl Parser<'_, '_> {
                 self.skip_until(&[Punct::RBrace], false, true);
                 return Err(());
             }
-            let value = if self.at(Punct::LBrace) {
+            let mut value = if self.at(Punct::LBrace) {
                 let Ok(l) = self.parse_init_list() else {
                     // The inner list skipped through its `}`; skip
                     // through ours too (clang's `ParseBraceInitializer`).
@@ -1601,7 +1719,11 @@ impl Parser<'_, '_> {
                 InitValue::Expr(e)
             };
             if let Some(l) = self.eat(Punct::Ellipsis) {
-                self.unsupported("pack expansions", l);
+                // An initializer-clause pack expansion ([temp.variadic]/5.4).
+                match value {
+                    InitValue::Expr(e) => value = InitValue::Expr(self.s.act_pack_expansion(e, l)),
+                    InitValue::List(_) => self.unsupported("pack expansions of braced lists", l),
+                }
             }
             items.push(InitItem { designator, value });
             if self.eat(Punct::Comma).is_none() {

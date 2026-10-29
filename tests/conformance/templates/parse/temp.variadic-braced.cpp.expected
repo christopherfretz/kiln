@@ -1,0 +1,26 @@
+TranslationUnitDecl
+`-FunctionTemplateDecl first
+  |-TemplateTypeParmDecl referenced class depth 0 index 0 ... Ts
+  `-FunctionDecl first 'int (Ts...)'
+    |-ParmVarDecl referenced ts 'Ts...' pack
+    `-CompoundStmt
+      |-DeclStmt
+      | `-VarDecl referenced a 'int[]' cinit
+      |   `-InitListExpr 'void'
+      |     `-PackExpansionExpr '<dependent type>' lvalue
+      |       `-DeclRefExpr 'Ts' lvalue ParmVar 'ts' 'Ts...'
+      |-DeclStmt
+      | `-VarDecl referenced b 'int[]' cinit
+      |   `-InitListExpr 'void'
+      |     |-IntegerLiteral 'int' 0
+      |     |-PackExpansionExpr '<dependent type>' lvalue
+      |     | `-DeclRefExpr 'Ts' lvalue ParmVar 'ts' 'Ts...'
+      |     `-IntegerLiteral 'int' 0
+      `-ReturnStmt
+        `-BinaryOperator '<dependent type>' '+'
+          |-ArraySubscriptExpr '<dependent type>' lvalue
+          | |-DeclRefExpr 'int[]' lvalue Var 'a' 'int[]'
+          | `-IntegerLiteral 'int' 0
+          `-ArraySubscriptExpr '<dependent type>' lvalue
+            |-DeclRefExpr 'int[]' lvalue Var 'b' 'int[]'
+            `-IntegerLiteral 'int' 0

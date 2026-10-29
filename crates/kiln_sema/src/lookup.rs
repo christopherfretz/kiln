@@ -110,7 +110,14 @@ impl Found {
 
 /// True if `k` declares a type.
 pub fn is_type_kind(k: DeclKind) -> bool {
-    matches!(k, DeclKind::CXXRecord | DeclKind::Enum | DeclKind::Typedef | DeclKind::TypeAlias)
+    matches!(
+        k,
+        DeclKind::CXXRecord
+            | DeclKind::Enum
+            | DeclKind::Typedef
+            | DeclKind::TypeAlias
+            | DeclKind::TemplateTypeParm
+    )
 }
 
 /// True if `k` is a tag (class or enumeration).
@@ -134,7 +141,15 @@ impl Sema<'_, '_> {
             LookupKind::Ordinary | LookupKind::All => true,
             LookupKind::Tag => is_tag_kind(k),
             LookupKind::Nested => {
-                is_type_kind(k) || matches!(k, DeclKind::Namespace | DeclKind::NamespaceAlias)
+                is_type_kind(k)
+                    || matches!(
+                        k,
+                        DeclKind::Namespace
+                            | DeclKind::NamespaceAlias
+                            | DeclKind::ClassTemplate
+                            | DeclKind::TypeAliasTemplate
+                            | DeclKind::TemplateTemplateParm
+                    )
             }
         }
     }
@@ -194,6 +209,10 @@ impl Sema<'_, '_> {
     /// [class.qual]). Namespaces nominated by using-directives in `ctx`
     /// are searched when `ctx` itself has no result.
     pub fn lookup_qualified(&self, ctx: DeclId, name: Symbol, kind: LookupKind) -> Found {
+        if self.is_dependent_ctx(ctx) {
+            // [temp.dep.type]/6: nothing is known about a dependent scope.
+            return Found::default();
+        }
         if self.kind_of(ctx) == DeclKind::CXXRecord {
             return self.lookup_in_class(ctx, name, kind);
         }
@@ -223,6 +242,16 @@ impl Sema<'_, '_> {
         // namespace ([namespace.udir]/2).
         let mut local_dirs: Vec<DeclId> = Vec::new();
         for s in self.scopes.iter().rev() {
+            if s.kind == ScopeKind::TemplateParams {
+                // [temp.local]/6: template parameter names.
+                if kind != LookupKind::Tag
+                    && let Some(d) = s.find(name, Ns::Ordinary)
+                    && self.accept(d, kind)
+                {
+                    return self.filter(vec![d], kind);
+                }
+                continue;
+            }
             if s.is_local() {
                 local_dirs.extend(s.using_dirs.iter().copied());
                 let hit = match kind {
@@ -546,7 +575,7 @@ impl Sema<'_, '_> {
     }
 
     pub(crate) fn current_scope_raw(&self, name: Symbol) -> Vec<DeclId> {
-        let Some(i) = self.scopes.iter().rposition(|s| s.kind != ScopeKind::LinkageSpec) else {
+        let Some(i) = self.scopes.iter().rposition(|s| !s.is_transparent()) else {
             return Vec::new();
         };
         let s = &self.scopes[i];
@@ -586,7 +615,7 @@ impl Sema<'_, '_> {
         self.scopes
             .iter()
             .rev()
-            .find(|s| !matches!(s.kind, ScopeKind::LinkageSpec | ScopeKind::Enum))
+            .find(|s| !s.is_transparent() && s.kind != ScopeKind::Enum)
             .is_some_and(super::scope::Scope::is_local)
     }
 }

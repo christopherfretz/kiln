@@ -1,0 +1,11 @@
+TranslationUnitDecl
+`-ClassTemplateDecl Node
+  |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+  `-CXXRecordDecl struct Node definition
+    |-FieldDecl next 'Node<T> *'
+    |-FieldDecl prev 'Node<T> *'
+    |-FieldDecl value 'T'
+    `-CXXMethodDecl self 'Node<T> *()' implicit-inline
+      `-CompoundStmt
+        `-ReturnStmt
+          `-CXXThisExpr 'Node<T> *' this

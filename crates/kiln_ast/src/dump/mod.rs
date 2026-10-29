@@ -25,6 +25,7 @@ mod names;
 use std::fmt::Write as _;
 use std::io;
 
+use kiln_source::symbol::Symbol;
 use kiln_source::{FileId, Loc, SourceManager};
 
 pub use names::AstNames;
@@ -42,7 +43,8 @@ use crate::expr::{
 };
 use crate::ids::{AttrId, DeclId, ExprId, ListId, QualType, RawId, StmtId, StringLitId, TypeId};
 use crate::stmt::{IfKind, StmtKind};
-use crate::types::{ExcSpec, PrintOptions, write_nns, write_type};
+use crate::templates::Requirement;
+use crate::types::{ArgView, ExcSpec, PrintOptions, TemplateArg, write_nns, write_type};
 
 /// Selects the declarations [`dump`] prints as separate trees (clang's
 /// `-ast-dump-filter`, spec/ast-dump.md §1). A declaration matches when
@@ -141,6 +143,11 @@ enum Node {
     /// A fixed line: the attributes kiln keeps as bits (`OverrideAttr`,
     /// `FinalAttr final`).
     Fixed(&'static str),
+    /// A template argument (`TemplateArgument type 'int'`): a default
+    /// argument or an argument of a concept-id / template-id.
+    Arg(TemplateArg),
+    /// Requirement `i` of `RequiresExpr` `e` (`SimpleRequirement`, ...).
+    Req(ExprId, u32),
 }
 
 /// A pending line.
@@ -344,6 +351,8 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                 Node::CtorInit(c, i) => self.ctor_init_line(c, i),
                 Node::Overrides(d) => self.overrides_line(d),
                 Node::Fixed(text) => self.line.push_str(text),
+                Node::Arg(a) => self.arg_line(a),
+                Node::Req(e, i) => self.req_line(e, i),
             }
             debug_assert!(!self.line.ends_with(' '), "trailing whitespace: {:?}", self.line);
             self.line.push('\n');
@@ -383,6 +392,8 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                     kids.push((Node::Expr(ci.init), None));
                 }
             }
+            Node::Arg(a) => self.arg_children(a, kids),
+            Node::Req(e, i) => self.req_children(e, i, kids),
             Node::Attr(_) | Node::Base(..) | Node::Overrides(_) | Node::Fixed(_) => {}
         }
     }
@@ -409,6 +420,9 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                 for p in ast.lists.iter::<DeclId>(f.params) {
                     kids.push((Node::Decl(p), None));
                 }
+                if let Some(&r) = ast.templates.trailing_requires.get(d) {
+                    kids.push((Node::Expr(r), None));
+                }
                 for i in 0..ast.ctor_inits(d).len() {
                     kids.push((Node::CtorInit(d, i as u32), None));
                 }
@@ -416,6 +430,10 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                     kids.push((self.stmt_node(b), None));
                 }
             }
+        } else if crate::templates::is_template_kind(kind) {
+            self.template_children(d, kids);
+        } else if crate::templates::is_template_parm_kind(kind) {
+            self.template_parm_children(d, kids);
         } else if kind == DeclKind::Friend {
             match decls.friend_target(d) {
                 FriendTarget::Decl(t) | FriendTarget::Type { owned_tag: Some(t), .. } => {
@@ -543,6 +561,7 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                 }
             }
             ExprKind::StmtExpr => kids.push((self.stmt_node(exprs.stmt_expr_body(e)), None)),
+            k if is_template_expr(k) => self.template_expr_children(e, kids),
             _ => self.class_expr_children(e, kids),
         }
     }
@@ -1032,6 +1051,9 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                     self.ty(ty);
                 }
             }
+            DeclKind::TemplateTypeParm
+            | DeclKind::NonTypeTemplateParm
+            | DeclKind::TemplateTemplateParm => self.template_parm_fields(d, n),
             DeclKind::AccessSpec => {
                 self.line.push_str(match n.misc().access() {
                     Access::Public => " public",
@@ -1046,6 +1068,207 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                     self.opt_ty(n.ty());
                 }
             }
+        }
+    }
+
+    // ----- templates (spec/ast-dump.md §5) ---------------------------------
+
+    /// A template decl's children: its parameters, the head's
+    /// requires-clause, then the pattern (a concept: its constraint).
+    fn template_children(&self, d: DeclId, kids: &mut Vec<(Node, Option<&'static str>)>) {
+        let ast = self.ast;
+        let Some(info) = ast.template_info(d) else { return };
+        let list = ast.templates.param_list(info.params);
+        for p in ast.lists.iter::<DeclId>(list.params) {
+            kids.push((Node::Decl(p), None));
+        }
+        if let Some(r) = list.requires {
+            kids.push((Node::Expr(r), None));
+        }
+        if let Some(p) = info.pattern {
+            kids.push((Node::Decl(p), None));
+        }
+        if let Some(c) = info.constraint {
+            kids.push((Node::Expr(c), None));
+        }
+    }
+
+    /// A template parameter's children: a template template parameter's
+    /// own parameters, a type parameter's type-constraint, the default.
+    fn template_parm_children(&self, d: DeclId, kids: &mut Vec<(Node, Option<&'static str>)>) {
+        let ast = self.ast;
+        let Some(p) = ast.template_parm(d) else { return };
+        if let Some(l) = p.params {
+            let list = ast.templates.param_list(l);
+            for q in ast.lists.iter::<DeclId>(list.params) {
+                kids.push((Node::Decl(q), None));
+            }
+            if let Some(r) = list.requires {
+                kids.push((Node::Expr(r), None));
+            }
+        }
+        if let Some(c) = p.constraint {
+            kids.push((Node::Expr(c), None));
+        }
+        if let Some(&a) = ast.templates.defaults.get(d) {
+            kids.push((Node::Arg(a), None));
+        }
+    }
+
+    /// ` [class|typename] ['ty'] depth D index I [...] [name]`.
+    fn template_parm_fields(&mut self, d: DeclId, n: &crate::decl::DeclNode) {
+        let Some(p) = self.ast.template_parm(d).copied() else {
+            self.name(d);
+            return;
+        };
+        match n.kind() {
+            DeclKind::TemplateTypeParm => {
+                self.line.push_str(if p.typename_kw { " typename" } else { " class" });
+            }
+            DeclKind::NonTypeTemplateParm => self.opt_ty(n.ty()),
+            _ => {}
+        }
+        let _ = write!(self.line, " depth {} index {}", p.depth, p.index);
+        if p.pack {
+            self.line.push_str(" ...");
+        }
+        self.name(d);
+    }
+
+    /// `TemplateArgument type 'int'` / `expr` / `template` / `pack`.
+    fn arg_line(&mut self, a: TemplateArg) {
+        self.line.push_str("TemplateArgument");
+        match a.view() {
+            ArgView::Null => self.line.push_str(" null"),
+            ArgView::Type(t) => {
+                self.line.push_str(" type");
+                self.ty(t);
+            }
+            ArgView::Expr { .. } => self.line.push_str(" expr"),
+            ArgView::Template(_) => self.line.push_str(" template"),
+            ArgView::TemplateExpansion { .. } => self.line.push_str(" template expansion"),
+            ArgView::Pack(_) => self.line.push_str(" pack"),
+            _ => self.line.push_str(" value"),
+        }
+    }
+
+    fn arg_children(&self, a: TemplateArg, kids: &mut Vec<(Node, Option<&'static str>)>) {
+        match a.view() {
+            ArgView::Expr { expr, .. } => kids.push((Node::Expr(expr), None)),
+            ArgView::Pack(l) => {
+                for &x in self.ast.types.args(l) {
+                    kids.push((Node::Arg(x), None));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn template_expr_children(&self, e: ExprId, kids: &mut Vec<(Node, Option<&'static str>)>) {
+        let ast = self.ast;
+        let n = ast.exprs.get(e);
+        let targs = |kids: &mut Vec<(Node, Option<&'static str>)>| {
+            if let Some(&l) = ast.templates.expr_targs.get(e) {
+                for &a in ast.types.args(l) {
+                    kids.push((Node::Arg(a), None));
+                }
+            }
+        };
+        let opt = |kids: &mut Vec<(Node, Option<&'static str>)>, w: u32| match ExprId::from_raw(w) {
+            Some(c) => kids.push((Node::Expr(c), None)),
+            None => kids.push((Node::Fixed("<<<NULL>>>"), None)),
+        };
+        match n.kind() {
+            // clang's dumps print no explicit template arguments of a
+            // `DependentScopeDeclRefExpr` (the wildcard arm) or
+            // `CXXDependentScopeMemberExpr`.
+            ExprKind::UnresolvedLookupExpr => targs(kids),
+            ExprKind::CXXDependentScopeMemberExpr => {
+                if let Some(b) = ExprId::from_raw(n.a()) {
+                    kids.push((Node::Expr(b), None));
+                }
+            }
+            ExprKind::CXXUnresolvedConstructExpr | ExprKind::ParenListExpr => {
+                let l = n.a();
+                if let Some(l) = ListId::from_raw(l) {
+                    for c in ast.lists.iter::<ExprId>(l) {
+                        kids.push((Node::Expr(c), None));
+                    }
+                }
+            }
+            ExprKind::PackExpansionExpr => opt(kids, n.a()),
+            ExprKind::CXXFoldExpr => {
+                kids.push((Node::Fixed("<<<NULL>>>"), None));
+                opt(kids, n.a());
+                opt(kids, n.b());
+            }
+            ExprKind::RequiresExpr => {
+                if let Some(r) = ast.requires_of(e) {
+                    for p in ast.lists.iter::<DeclId>(r.params) {
+                        kids.push((Node::Decl(p), None));
+                    }
+                    for i in 0..ast.templates.requirements(r).len() {
+                        kids.push((Node::Req(e, i as u32), None));
+                    }
+                }
+            }
+            ExprKind::ConceptSpecializationExpr => {
+                if let Some(l) = crate::ids::ArgListId::from_raw(n.b()) {
+                    for &a in ast.types.args(l) {
+                        kids.push((Node::Arg(a), None));
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn requirement(&self, e: ExprId, i: u32) -> Option<Requirement> {
+        let r = self.ast.requires_of(e)?;
+        self.ast.templates.requirements(r).get(i as usize).copied()
+    }
+
+    /// `SimpleRequirement` / `TypeRequirement 'T'` / `CompoundRequirement
+    /// [noexcept]` / `NestedRequirement`, each ` dependent` when so.
+    fn req_line(&mut self, e: ExprId, i: u32) {
+        let Some(r) = self.requirement(e, i) else { return };
+        let dependent = match r {
+            Requirement::Simple(x)
+            | Requirement::Nested(x)
+            | Requirement::Compound { expr: x, .. } => !self.ast.exprs.get(x).deps().is_none(),
+            Requirement::Type(t) => self.ast.types.is_dependent(t),
+        };
+        match r {
+            Requirement::Simple(_) => self.line.push_str("SimpleRequirement"),
+            Requirement::Type(t) => {
+                self.line.push_str("TypeRequirement");
+                self.ty(t);
+            }
+            Requirement::Compound { noexcept, .. } => {
+                self.line.push_str("CompoundRequirement");
+                if noexcept {
+                    self.line.push_str(" noexcept");
+                }
+            }
+            Requirement::Nested(_) => self.line.push_str("NestedRequirement"),
+        }
+        if dependent {
+            self.line.push_str(" dependent");
+        }
+    }
+
+    fn req_children(&self, e: ExprId, i: u32, kids: &mut Vec<(Node, Option<&'static str>)>) {
+        match self.requirement(e, i) {
+            Some(Requirement::Simple(x) | Requirement::Nested(x)) => {
+                kids.push((Node::Expr(x), None));
+            }
+            Some(Requirement::Compound { expr, constraint, .. }) => {
+                kids.push((Node::Expr(expr), None));
+                if let Some(c) = constraint {
+                    kids.push((Node::Expr(c), None));
+                }
+            }
+            Some(Requirement::Type(_)) | None => {}
         }
     }
 
@@ -1417,6 +1640,28 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                     self.value(v);
                 }
             }
+            ExprKind::CXXDependentScopeMemberExpr => {
+                self.line.push_str(if n.aux() & 1 != 0 { " ->" } else { " ." });
+                self.line.push_str(ast.symbols().as_str(Symbol::from_index(n.b())));
+            }
+            ExprKind::UnresolvedLookupExpr => {
+                self.line.push_str(if n.aux() != 0 { " (ADL) = '" } else { " (no ADL) = '" });
+                self.line.push_str(ast.symbols().as_str(Symbol::from_index(n.a())));
+                self.line.push('\'');
+                if ast.unresolved_decls(e).is_empty() {
+                    self.line.push_str(" empty");
+                }
+            }
+            ExprKind::CXXUnresolvedConstructExpr => {
+                if n.aux() != 0 {
+                    self.line.push_str(" list");
+                }
+            }
+            ExprKind::SizeOfPackExpr => {
+                if let Some(d) = DeclId::from_raw(n.a()) {
+                    self.name(d);
+                }
+            }
             ExprKind::CXXNewExpr | ExprKind::CXXDeleteExpr => {
                 if n.has(ExprFlags::GLOBAL) {
                     self.line.push_str(" global");
@@ -1483,6 +1728,22 @@ impl<'a, W: io::Write> Dumper<'a, W> {
 }
 
 /// clang's `ValueDecl`s: the declarations whose type a reference prints.
+/// The template expression kinds of spec/sema-templates.md §2.4.
+fn is_template_expr(k: ExprKind) -> bool {
+    matches!(
+        k,
+        ExprKind::DependentScopeDeclRefExpr
+            | ExprKind::UnresolvedLookupExpr
+            | ExprKind::CXXDependentScopeMemberExpr
+            | ExprKind::CXXUnresolvedConstructExpr
+            | ExprKind::ParenListExpr
+            | ExprKind::PackExpansionExpr
+            | ExprKind::CXXFoldExpr
+            | ExprKind::RequiresExpr
+            | ExprKind::ConceptSpecializationExpr
+    )
+}
+
 fn is_value_decl(k: DeclKind) -> bool {
     use crate::decl::PayloadClass as P;
     matches!(k.payload(), P::Function | P::Var | P::Field | P::Enumerator | P::Param)

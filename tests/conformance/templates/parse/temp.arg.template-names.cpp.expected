@@ -1,0 +1,14 @@
+TranslationUnitDecl
+|-ClassTemplateDecl X
+| |-TemplateTemplateParmDecl depth 0 index 0 TT
+| | `-TemplateTypeParmDecl class depth 1 index 0
+| `-CXXRecordDecl struct X definition
+|-ClassTemplateDecl Y
+| |-TemplateTemplateParmDecl depth 0 index 0 TT
+| | `-TemplateTypeParmDecl class depth 1 index 0
+| `-CXXRecordDecl struct Y definition
+|   `-FieldDecl x 'X<TT>'
+`-ClassTemplateDecl Z
+  |-TemplateTypeParmDecl class depth 0 index 0 T
+  `-CXXRecordDecl struct Z definition
+    `-FieldDecl p 'X<T::template W> *'

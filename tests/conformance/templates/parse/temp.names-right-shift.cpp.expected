@@ -1,0 +1,13 @@
+TranslationUnitDecl
+|-ClassTemplateDecl A
+| |-TemplateTypeParmDecl class depth 0 index 0 T
+| `-CXXRecordDecl struct A definition
+|-ClassTemplateDecl B
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| `-CXXRecordDecl struct B definition
+|   |-FieldDecl x 'A<A<T>>'
+|   `-FieldDecl y 'A<A<A<T>>> *'
+`-ClassTemplateDecl C
+  |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+  `-CXXRecordDecl struct C definition
+    `-FieldDecl z 'A<A<T>>'

@@ -15,6 +15,7 @@ mod new_delete;
 mod parser;
 mod pragma;
 mod stmt;
+mod templ;
 mod tentative;
 pub mod tokens;
 

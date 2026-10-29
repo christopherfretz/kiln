@@ -1,0 +1,10 @@
+TranslationUnitDecl
+|-ClassTemplateDecl A
+| |-TemplateTypeParmDecl class depth 0 index 0 T
+| |-NonTypeTemplateParmDecl 'bool' depth 0 index 1 B
+| `-CXXRecordDecl struct A definition
+`-ClassTemplateDecl C
+  |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+  `-CXXRecordDecl struct C definition
+    |-FieldDecl x 'A<T, (3 > 2)>'
+    `-FieldDecl y 'A<T, (sizeof(T) > 1)>'

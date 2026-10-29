@@ -1,0 +1,15 @@
+TranslationUnitDecl
+`-FunctionTemplateDecl call
+  |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+  |-RequiresExpr 'bool'
+  | |-ParmVarDecl referenced t 'T'
+  | `-SimpleRequirement dependent
+  |   `-CallExpr '<dependent type>'
+  |     `-CXXDependentScopeMemberExpr '<dependent type>' lvalue .f
+  |       `-DeclRefExpr 'T' lvalue ParmVar 't' 'T' non_odr_use_unevaluated
+  `-FunctionDecl call 'void (T)'
+    |-ParmVarDecl referenced t 'T'
+    `-CompoundStmt
+      `-CallExpr '<dependent type>'
+        `-CXXDependentScopeMemberExpr '<dependent type>' lvalue .f
+          `-DeclRefExpr 'T' lvalue ParmVar 't' 'T'

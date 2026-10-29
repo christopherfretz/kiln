@@ -1,0 +1,34 @@
+TranslationUnitDecl
+|-FunctionDecl sink 'void (...)'
+|-FunctionTemplateDecl fwd
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 ... Ts
+| `-FunctionDecl fwd 'void (Ts...)'
+|   |-ParmVarDecl referenced ts 'Ts...' pack
+|   `-CompoundStmt
+|     `-CallExpr '<dependent type>'
+|       |-UnresolvedLookupExpr '<overloaded function type>' lvalue (ADL) = 'sink'
+|       `-PackExpansionExpr '<dependent type>' lvalue
+|         `-DeclRefExpr 'Ts' lvalue ParmVar 'ts' 'Ts...'
+|-FunctionTemplateDecl twice
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 ... Ts
+| `-FunctionDecl twice 'void (Ts...)'
+|   |-ParmVarDecl referenced ts 'Ts...' pack
+|   `-CompoundStmt
+|     `-CallExpr '<dependent type>'
+|       |-UnresolvedLookupExpr '<overloaded function type>' lvalue (ADL) = 'sink'
+|       |-PackExpansionExpr '<dependent type>' lvalue
+|       | `-DeclRefExpr 'Ts' lvalue ParmVar 'ts' 'Ts...'
+|       `-PackExpansionExpr '<dependent type>' lvalue
+|         `-DeclRefExpr 'Ts' lvalue ParmVar 'ts' 'Ts...'
+`-FunctionTemplateDecl plus1
+  |-TemplateTypeParmDecl referenced class depth 0 index 0 ... Ts
+  `-FunctionDecl plus1 'void (Ts...)'
+    |-ParmVarDecl referenced ts 'Ts...' pack
+    `-CompoundStmt
+      `-CallExpr '<dependent type>'
+        |-UnresolvedLookupExpr '<overloaded function type>' lvalue (ADL) = 'sink'
+        `-PackExpansionExpr '<dependent type>'
+          `-ParenExpr '<dependent type>'
+            `-BinaryOperator '<dependent type>' '+'
+              |-DeclRefExpr 'Ts' lvalue ParmVar 'ts' 'Ts...'
+              `-IntegerLiteral 'int' 1

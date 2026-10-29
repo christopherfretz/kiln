@@ -90,7 +90,11 @@ impl Sema<'_, '_> {
     /// (clang `CheckCompletedCXXClass`).
     pub(crate) fn act_on_complete_virtual(&mut self, r: DeclId) {
         let defn = self.ast.decls.record(r).map(|x| x.defn).unwrap_or_default();
-        if defn.contains(DefinitionBits::HAS_VIRTUAL_BASES) {
+        // clang runs the final-overrider and per-member-function checks
+        // only for a non-dependent class; a templated class is checked at
+        // instantiation ([temp.res.general]/6).
+        let dependent = self.ast.decls.get(r).has(DeclFlags::DEPENDENT_CTX);
+        if defn.contains(DefinitionBits::HAS_VIRTUAL_BASES) && !dependent {
             self.check_unique_final_overriders(r);
         }
         if defn.contains(DefinitionBits::ABSTRACT) {
@@ -101,7 +105,9 @@ impl Sema<'_, '_> {
             }
             self.recheck_abstract_members(r, r, 0);
         }
-        self.report_overrides(r);
+        if !dependent {
+            self.report_overrides(r);
+        }
     }
 
     /// `virtual function 'f' has more than one final overrider`

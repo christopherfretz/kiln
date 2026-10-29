@@ -1,0 +1,16 @@
+TranslationUnitDecl
+|-ClassTemplateDecl Box
+| |-TemplateTypeParmDecl class depth 0 index 0
+| `-CXXRecordDecl struct Box definition
+|-ClassTemplateDecl A
+| |-TemplateTemplateParmDecl depth 0 index 0 TT
+| | `-TemplateTypeParmDecl class depth 1 index 0
+| `-CXXRecordDecl struct A definition
+`-ClassTemplateDecl B
+  |-TemplateTemplateParmDecl depth 0 index 0 TT
+  | |-TemplateTypeParmDecl class depth 1 index 0
+  | `-TemplateTypeParmDecl class depth 1 index 1 ...
+  |-TemplateTemplateParmDecl depth 0 index 1 U
+  | |-TemplateTypeParmDecl class depth 1 index 0
+  | `-TemplateArgument template
+  `-CXXRecordDecl struct B definition

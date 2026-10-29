@@ -1,0 +1,14 @@
+TranslationUnitDecl
+|-ClassTemplateDecl A
+| |-TemplateTypeParmDecl class depth 0 index 0 T
+| |-NonTypeTemplateParmDecl 'int' depth 0 index 1 N
+| `-CXXRecordDecl struct A definition
+|-ClassTemplateDecl B
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| `-CXXRecordDecl struct B definition
+|   |-FieldDecl a 'A<T, 3>'
+|   `-FieldDecl b 'A<T *, sizeof(T)>'
+`-FunctionTemplateDecl f
+  |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+  `-FunctionDecl f 'A<T, 1> *(A<T, 2> &)'
+    `-ParmVarDecl 'A<T, 2> &'

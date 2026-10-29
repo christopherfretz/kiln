@@ -43,6 +43,10 @@ impl Sema<'_, '_> {
         if self.is_err_expr(e) {
             return self.invalid_noexcept_spec(loc);
         }
+        if self.expr_is_value_dependent(e) {
+            let p = self.dependent_profile(e);
+            return ExcSpec::NoexceptExpr { expr: e, value: NoexceptValue::Dependent(p) };
+        }
         let at = start;
         // Diagnostics name the operand's type as written (clang prints
         // `int *const`, not the converted `int *`).
