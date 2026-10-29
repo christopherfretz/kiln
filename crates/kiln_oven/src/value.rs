@@ -512,7 +512,10 @@ impl Oven {
         let p = Ptr::decode(raw);
         let fr = Ptr::with_off(raw, u64::from(p.off) + f.offset, false);
         let Some(width) = f.width else {
-            return self.walk(b, s, f.ty, fr, at + f.offset as usize, Some(f.decl), loc);
+            // clang notes an uninitialized base by its type, a member by
+            // its name.
+            let named = (!f.base).then_some(f.decl);
+            return self.walk(b, s, f.ty, fr, at + f.offset as usize, named, loc);
         };
         if width == 0 || b.ast().decls.get(f.decl).name().is_empty() {
             return Ok(());

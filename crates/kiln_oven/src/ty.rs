@@ -70,6 +70,10 @@ pub(crate) struct FieldInfo {
     pub bit: u32,
     /// Bit-field width (`None` for an ordinary member).
     pub width: Option<u32>,
+    /// A direct non-virtual base class subobject (`decl` is the base
+    /// class's definition); bases precede the members in
+    /// [`Types::fields`] (WP-076, [class.derived]).
+    pub base: bool,
 }
 
 /// The value class of a scalar type (how many registers, which ops).
@@ -347,6 +351,22 @@ impl Types {
             return self.simple(c, 0, 1, TyKind::Opaque);
         };
         let union = ast.decls.record(def).is_some_and(|r| r.tag == kiln_ast::decl::TagKind::Union);
+        // Direct non-virtual bases as written; empty bases have no storage
+        // the evaluator touches (they would shadow the member at offset 0).
+        let bdecls: Vec<(DeclId, QualType, DeclId)> = ast
+            .decls
+            .bases(def, &ast.lists)
+            .filter(|b| !b.is_virtual)
+            .filter_map(|b| {
+                let rd = ast.types.as_record(b.ty)?;
+                let rdef = ast.definition(rd)?;
+                let empty = ast
+                    .decls
+                    .record(rdef)
+                    .is_some_and(|r| r.defn.contains(kiln_ast::decl::DefinitionBits::EMPTY));
+                (!empty).then_some((rdef, b.ty, ast.first(rd)))
+            })
+            .collect();
         let fdecls: Vec<(DeclId, QualType, Option<u32>)> = ast
             .members(def)
             .filter(|&m| ast.decls.get(m).kind() == DeclKind::Field)
@@ -362,6 +382,12 @@ impl Types {
         let layout = bridge.ensure_layout(def);
         let (size, align) = (layout.size, layout.align);
         let offs: Vec<u64> = layout.fields.to_vec();
+        let boffs: Vec<u64> = bdecls
+            .iter()
+            .map(|&(_, _, first)| {
+                layout.bases.iter().find(|&&(b, _)| b == first).map_or(0, |&(_, o)| o)
+            })
+            .collect();
         // Reserve the slot first so self-referential pointers terminate.
         let me = self.simple(c, size, align.max(1), TyKind::Opaque);
         self.map.insert(c, me);
@@ -370,6 +396,17 @@ impl Types {
         let mut upos = Vec::new();
         if union {
             upos.push((0, me));
+        }
+        for (&(rd, bq, _), &off) in bdecls.iter().zip(&boffs) {
+            let bty = self.intern(bridge, bq);
+            let bi = *self.info(bty);
+            has_union |= bi.has_union;
+            has_ptr |= bi.has_ptr;
+            for k in bi.upos.0..bi.upos.1 {
+                let (o, u) = self.union_pos[k as usize];
+                upos.push((off + o, u));
+            }
+            fields.push(FieldInfo { decl: rd, ty: bty, offset: off, bit: 0, width: None, base: true });
         }
         for (i, &(m, fq, w)) in fdecls.iter().enumerate() {
             let fty = self.intern(bridge, fq);
@@ -390,6 +427,7 @@ impl Types {
                     offset: bits / 8,
                     bit: (bits % 8) as u32,
                     width: Some(w),
+                    base: false,
                 }),
                 None => fields.push(FieldInfo {
                     decl: m,
@@ -397,6 +435,7 @@ impl Types {
                     offset: bits / 8,
                     bit: 0,
                     width: None,
+                    base: false,
                 }),
             }
         }

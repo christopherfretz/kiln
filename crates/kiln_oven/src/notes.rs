@@ -399,6 +399,9 @@ impl Oven {
             }
         }
         let (mut t, mut rel) = (a.ty, u64::from(p.off));
+        // clang prints a member reached through a base as `.B::m` and
+        // omits a trailing base step.
+        let mut via_base = None;
         loop {
             if t == pointee && rel == 0 {
                 return s;
@@ -422,8 +425,16 @@ impl Oven {
                     }) else {
                         break;
                     };
-                    s.push('.');
-                    s.push_str(&name_of(ast, f.decl));
+                    if f.base {
+                        via_base = Some(f.decl);
+                    } else {
+                        s.push('.');
+                        if let Some(b) = via_base.take() {
+                            s.push_str(&name_of(ast, b));
+                            s.push_str("::");
+                        }
+                        s.push_str(&name_of(ast, f.decl));
+                    }
                     rel -= f.offset;
                     t = f.ty;
                 }
