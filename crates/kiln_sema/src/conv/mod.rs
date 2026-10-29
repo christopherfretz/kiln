@@ -47,8 +47,8 @@ pub use rank::{
     is_integral_or_unscoped_enum, is_scoped_enum, is_unscoped_enum, promoted_type,
 };
 pub use scs::{
-    ConvRank, FirstStep, FixedEnumPromotion, IcsCompare, SecondStep, StandardConversion, ThirdStep,
-    compare_standard_conversions, standard_conversion, standard_conversion_from,
+    ConvRank, FirstStep, FixedEnumPromotion, IcsCompare, RefBinding, SecondStep, StandardConversion,
+    ThirdStep, compare_standard_conversions, standard_conversion, standard_conversion_from,
 };
 
 /// Where a conversion happens: selects the conversions allowed and

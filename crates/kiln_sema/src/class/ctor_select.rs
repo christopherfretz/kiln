@@ -17,10 +17,7 @@ use kiln_ast::{DeclId, ExprId, QualType};
 
 use super::special::{Selected, SpecialKind};
 use crate::Sema;
-use crate::conv::{
-    self, ConvCtx, FirstStep, FixedEnumPromotion, IcsCompare, SecondStep, StandardConversion,
-    ThirdStep,
-};
+use crate::conv::{self, ConvCtx, IcsCompare, StandardConversion};
 
 /// The form of an initialization by constructor (clang's
 /// `InitializationKind`), which decides the candidates
@@ -299,15 +296,7 @@ impl Sema<'_, '_> {
                 return None;
             }
             let from = aty;
-            let scs = StandardConversion {
-                first: FirstStep::Identity,
-                second: SecondStep::Identity,
-                third: ThirdStep::Identity,
-                from,
-                to_types: [from; 3],
-                null_pointer: false,
-                fixed_enum: FixedEnumPromotion::None,
-            };
+            let scs = StandardConversion::identity(from, from, conv::RefBinding::NONE);
             return Some(Fit::Std(scs, Some((r, rq))));
         }
         if plain_lref {

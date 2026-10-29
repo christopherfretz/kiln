@@ -51,6 +51,9 @@ pub enum SecondStep {
     MemberPointerConversion,
     /// [conv.bool].
     BooleanConversion,
+    /// A class argument for a parameter (or reference) of a base class
+    /// type ([over.best.ics]/6, [over.ics.ref]/1): Conversion rank.
+    DerivedToBase,
 }
 
 /// The third conversion ([conv.fctptr], [conv.qual]).
@@ -88,6 +91,43 @@ pub enum FixedEnumPromotion {
     ToPromotedUnderlying,
 }
 
+/// How a standard conversion sequence binds a reference
+/// ([over.ics.ref]; clang's `StandardConversionSequence` binding bits).
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Hash)]
+pub struct RefBinding(u8);
+
+impl RefBinding {
+    /// Not a reference binding.
+    pub const NONE: RefBinding = RefBinding(0);
+    /// The sequence binds a reference.
+    pub const IS_REF: RefBinding = RefBinding(1);
+    /// The reference binds directly ([dcl.init.ref]/5.1, /5.3).
+    pub const DIRECT: RefBinding = RefBinding(2);
+    /// The reference is an lvalue reference.
+    pub const LVALUE_REF: RefBinding = RefBinding(4);
+    /// The reference binds an rvalue (or a temporary).
+    pub const BINDS_RVALUE: RefBinding = RefBinding(8);
+    /// The reference binds a function lvalue.
+    pub const BINDS_FUNCTION_LVALUE: RefBinding = RefBinding(16);
+    /// The implicit object parameter of a member function declared
+    /// without a ref-qualifier ([over.ics.rank]/3.2.3).
+    pub const OBJECT_NO_REF_QUAL: RefBinding = RefBinding(32);
+    /// The implicit object parameter of a static member function: never
+    /// compared ([over.match.best.general]/1).
+    pub const IGNORED: RefBinding = RefBinding(64);
+
+    /// All of `o`'s bits are set.
+    pub fn contains(self, o: RefBinding) -> bool {
+        self.0 & o.0 == o.0
+    }
+
+    /// The union.
+    #[must_use]
+    pub fn with(self, o: RefBinding) -> RefBinding {
+        RefBinding(self.0 | o.0)
+    }
+}
+
 /// A standard conversion sequence ([over.ics.scs]).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct StandardConversion {
@@ -106,6 +146,8 @@ pub struct StandardConversion {
     pub null_pointer: bool,
     /// See [`FixedEnumPromotion`].
     pub fixed_enum: FixedEnumPromotion,
+    /// The reference binding this sequence performs, if any.
+    pub rb: RefBinding,
 }
 
 impl StandardConversion {
@@ -121,6 +163,21 @@ impl StandardConversion {
     /// True if no conversion other than an lvalue transformation is made.
     pub fn is_identity(&self) -> bool {
         self.second == SecondStep::Identity && self.third == ThirdStep::Identity
+    }
+
+    /// The identity conversion of a value of type `from` (to `to` for a
+    /// reference binding: the referenced type), binding as `rb`.
+    pub fn identity(from: QualType, to: QualType, rb: RefBinding) -> StandardConversion {
+        StandardConversion {
+            first: FirstStep::Identity,
+            second: SecondStep::Identity,
+            third: ThirdStep::Identity,
+            from,
+            to_types: [from, from, to],
+            null_pointer: false,
+            fixed_enum: FixedEnumPromotion::None,
+            rb,
+        }
     }
 }
 
@@ -276,6 +333,7 @@ pub fn standard_conversion_from(
         to_types: [cur, cur, cur],
         null_pointer: false,
         fixed_enum: FixedEnumPromotion::None,
+        rb: RefBinding::NONE,
     };
     // A bit-field width only matters before the lvalue transformation
     // drops it; it stays attached to the value.
@@ -573,6 +631,28 @@ fn compare_derived_to_base(
             }
         }
     }
+    if a.second == SecondStep::DerivedToBase && b.second == SecondStep::DerivedToBase {
+        // [over.ics.rank]/4.4.3-4.4.4, /4.4.7-4.4.8: class conversions and
+        // bindings of class expressions to base references.
+        let c = |q: QualType| s.ast.types.canonical(q).without_quals();
+        let (fc1, tc1, fc2, tc2) = (c(f1), c(t1), c(f2), c(t2));
+        if fc1 == fc2 && tc1 != tc2 {
+            if derived_q(s, tc1, tc2) {
+                return IcsCompare::Better;
+            }
+            if derived_q(s, tc2, tc1) {
+                return IcsCompare::Worse;
+            }
+        }
+        if tc1 == tc2 && fc1 != fc2 {
+            if derived_q(s, fc2, fc1) {
+                return IcsCompare::Better;
+            }
+            if derived_q(s, fc1, fc2) {
+                return IcsCompare::Worse;
+            }
+        }
+    }
     IcsCompare::Indistinguishable
 }
 
@@ -635,8 +715,25 @@ fn compare_fp(s: &Sema<'_, '_>, a: &StandardConversion, b: &StandardConversion) 
     IcsCompare::Indistinguishable
 }
 
+/// [over.ics.rank]/3.2.3-3.2.4 (clang `isBetterReferenceBindingKind`):
+/// neither binds the implicit object parameter of a member function
+/// without a ref-qualifier, and `a` binds an rvalue reference to an
+/// rvalue where `b` binds an lvalue reference, or `a` binds an lvalue
+/// reference to a function lvalue where `b` binds an rvalue reference.
+fn better_binding_kind(a: RefBinding, b: RefBinding) -> bool {
+    if a.contains(RefBinding::OBJECT_NO_REF_QUAL) || b.contains(RefBinding::OBJECT_NO_REF_QUAL) {
+        return false;
+    }
+    let (al, bl) = (a.contains(RefBinding::LVALUE_REF), b.contains(RefBinding::LVALUE_REF));
+    (!al && a.contains(RefBinding::BINDS_RVALUE) && bl)
+        || (al
+            && a.contains(RefBinding::BINDS_FUNCTION_LVALUE)
+            && !bl
+            && b.contains(RefBinding::BINDS_FUNCTION_LVALUE))
+}
+
 /// Compares two standard conversion sequences ([over.ics.rank]/3.2,
-/// /4).
+/// /4), in clang's `CompareStandardConversionSequences` order.
 pub fn compare_standard_conversions(
     s: &Sema<'_, '_>,
     a: &StandardConversion,
@@ -714,6 +811,28 @@ pub fn compare_standard_conversions(
                 return IcsCompare::Better;
             }
             if y && !x {
+                return IcsCompare::Worse;
+            }
+        }
+    }
+    // /3.2.3, /3.2.4: the kinds of two reference bindings.
+    if a.rb.contains(RefBinding::IS_REF) && b.rb.contains(RefBinding::IS_REF) {
+        if better_binding_kind(a.rb, b.rb) {
+            return IcsCompare::Better;
+        }
+        if better_binding_kind(b.rb, a.rb) {
+            return IcsCompare::Worse;
+        }
+        // /3.2.6: the same type but for top-level cv-qualifiers; the
+        // less qualified referent is better.
+        let t = &s.ast.types;
+        let (t1, t2) = (t.canonical(a.to_types[2]), t.canonical(b.to_types[2]));
+        if t1.without_quals() == t2.without_quals() && t1.quals() != t2.quals() {
+            let (q1, q2) = (t.effective_quals(t1), t.effective_quals(t2));
+            if q2.contains(q1) && q1 != q2 {
+                return IcsCompare::Better;
+            }
+            if q1.contains(q2) && q1 != q2 {
                 return IcsCompare::Worse;
             }
         }

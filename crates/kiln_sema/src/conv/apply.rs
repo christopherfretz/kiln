@@ -148,6 +148,32 @@ fn apply_second(
                 None => cast_to(s, CastKind::BitCast, e, to, None),
             }
         }
+        SecondStep::DerivedToBase => {
+            // [over.best.ics]/6: a class prvalue converted to its base only
+            // ranks as a conversion; initialization performs it through a
+            // constructor, so only a glvalue view reaches here.
+            let (Some(d), Some(b)) = (s.ast.types.as_record(from), s.ast.types.as_record(to)) else {
+                return Ok(e);
+            };
+            match find_base(s, d, b) {
+                BaseSearch::Unique(p) => {
+                    let at = s.begin_loc(e);
+                    s.check_base_access(strip_cv(s, from), strip_cv(s, to), &p, at);
+                    let list = path_list(s, &p);
+                    let vk = s.ast.exprs.get(e).value_category();
+                    super::raw_cast(s, CastKind::DerivedToBase, e, to, vk, Some(list))
+                }
+                BaseSearch::Ambiguous(paths) => {
+                    let shown = ambiguous_paths_string(s, from, &paths);
+                    let (fa, ta) = (s.ty_arg(strip_cv(s, from)), s.ty_arg(strip_cv(s, to)));
+                    return Err(ConvError::new(
+                        DiagId::sema_ambiguous_derived_to_base,
+                        vec![fa, ta, shown],
+                    ));
+                }
+                BaseSearch::NotDerived => e,
+            }
+        }
         SecondStep::MemberPointerConversion => {
             if scs.null_pointer || s.ast.types.builtin(from) == Some(BuiltinType::NullPtr) {
                 return Ok(cast_to(s, CastKind::NullToMemberPointer, e, to, None));
