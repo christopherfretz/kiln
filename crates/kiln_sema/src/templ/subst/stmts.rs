@@ -114,6 +114,18 @@ impl Substituter<'_, '_, '_> {
                     let l = self.init_list(v)?;
                     return Ok(self.sema.act_on_return_list(&l, loc));
                 }
+                // `return {...};` of a class type: a list-initializing
+                // construction (WP-067b) goes back to its braced list.
+                if let Some(v) = v {
+                    let c = self.peel_initializer(v);
+                    let ex = &self.sema.ast.exprs;
+                    if ex.get(c).kind() == ExprKind::CXXConstructExpr && ex.construct_info(c).list {
+                        let at = ex.get(c).loc();
+                        let end = ex.end_loc(c).unwrap_or(at);
+                        let l = self.construct_list(c, at, end)?;
+                        return Ok(self.sema.act_on_return_list(&l, loc));
+                    }
+                }
                 let v = self.opt_expr(v)?;
                 Ok(self.sema.act_on_return(v, loc))
             }

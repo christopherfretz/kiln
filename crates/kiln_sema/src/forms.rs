@@ -151,6 +151,13 @@ impl Sema<'_, '_> {
             let e = self.recover_err(&flat, l.lbrace);
             return self.builder().return_stmt(Some(e), None, loc);
         }
+        if self.ast.types.is_dependent(ret) || self.init_list_type_dependent(l) {
+            // Initialized at instantiation (clang's dependent
+            // `InitializationSequence`): the list is kept as written.
+            let e = self.dependent_init_list(l);
+            let e = self.act_on_full_expr(e);
+            return self.builder().return_stmt(Some(e), None, loc);
+        }
         let e = self.init_list_entity(ret, l, l.lbrace);
         let e = self.act_on_full_expr(e);
         self.builder().return_stmt(Some(e), None, loc)

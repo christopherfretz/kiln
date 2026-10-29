@@ -212,7 +212,10 @@ impl Substituter<'_, '_, '_> {
         };
         let style = data.spec.init_style();
         if let Ok(i) = self.initializer(init, style) {
-            self.sema.act_on_init(v, i);
+            match i {
+                Some(i) => self.sema.act_on_init(v, i),
+                None => self.sema.act_on_uninit(v),
+            }
             Ok(())
         } else {
             self.sema.act_on_uninit(v);
