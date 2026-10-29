@@ -51,7 +51,7 @@ pub fn record_definitions(&Ast) -> Vec<DeclId>;             // -complete order
 pub fn dump_all_record_layouts(&Ast, &Target, Option<&SourceManager>) -> String;
 // vtable (§8.5); kiln_ast::class::{VTableLayout, VTableComponent, Thunk,
 // VttComponent, Subobject, SubobjectId} re-exported
-pub enum VTableError { NotDynamic, Incomplete, Unsupported, TooComplex }
+pub enum VTableError { NotDynamic, Incomplete, TooComplex }
 pub fn vtable_layout(&Ast, record: DeclId, &Target) -> Result<VTableLayout, VTableError>;
 pub fn ensure_vtable<'a>(&'a mut Ast, DeclId, &Target) -> Result<&'a VTableLayout, VTableError>;
 pub fn construction_vtable(&Ast, most_derived: DeclId, base: SubobjectId, &Target)
@@ -63,6 +63,11 @@ pub fn dump_construction_vtable(&Ast, most_derived: DeclId, base: SubobjectId, &
     -> Result<String, VTableError>;
 pub fn dump_vtable_group(&Ast, DeclId, &Target) -> Result<String, VTableError>;
 pub fn dump_all_vtable_layouts(&Ast, &Target) -> String;
+// dump_blocks (clang differentials: kiln_driver tests, `expect: layout|vtables`)
+pub const RECORD_LAYOUT_MARKER: &str;       // "\n*** Dumping AST Record Layout\n"
+pub const CLANG_BUILTIN_RECORDS: [&str; 3]; pub const VTABLE_BLOCK_HEADS: [&str; 5];
+pub fn record_layout_blocks(&str) -> Vec<&str>;          // ordered, clang builtins dropped
+pub fn vtable_blocks(&str) -> BTreeSet<String>;          // a set, `Original map` dropped
 ```
 - **Total.** No input panics. Incomplete, dependent, invalid or
   recursive (`struct S { S s; }`, rejected by sema) types get the
@@ -546,7 +551,6 @@ points, thunks and method indices are clang's.
   - more than 2^26 builder steps.
   `Incomplete` covers a missing definition, a missing override-list
   entry, no unique final overrider, and an unknown subobject.
-  `Unsupported` is reserved; no current path returns it.
 - **Dump** (`-fdump-vtable-layouts`; byte-identical to clang 19 for each
   block):
   - `dump_vtable_layout` prints `Vtable for`, `Thunks for`, `Virtual base
@@ -570,9 +574,10 @@ points, thunks and method indices are clang's.
     in the slots only once sema declares them (WP-067a). Explicit
     constructors and destructors are still "not supported yet" in sema's
     parser path, so the driver differential uses key functions only.
-  - `spec/harness.md` has no record-layout or vtable dump expectation
-    mode. Conformance tests cannot pin dumps yet; the differentials and
-    `kiln_driver/tests/{record,vtable}_layouts.rs` stand in.
+  - Conformance tests pin both dumps with `expect: layout` and
+    `expect: vtables` (spec/harness.md "Layout and vtable tests", WP-084).
+    They and `kiln_driver/tests/{record,vtable}_layouts.rs` split the dumps
+    with `kiln_abi::dump_blocks`, which encodes the two deviations above.
 
 ## 9. Open questions (with recommendation)
 - **A1.** `preferred_align` is equal to `align` on both targets. i386

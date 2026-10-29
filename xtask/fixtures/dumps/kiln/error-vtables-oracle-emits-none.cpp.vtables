@@ -1,0 +1,9 @@
+Vtable for 'P' (3 entries).
+   0 | offset_to_top (0)
+   1 | P RTTI
+       -- (P, 0) vtable address --
+   2 | void P::f()
+
+VTable indices for 'P' (1 entries).
+   0 | void P::f()
+

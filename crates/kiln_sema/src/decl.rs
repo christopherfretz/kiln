@@ -322,6 +322,31 @@ impl Sema<'_, '_> {
                     ty = if quals.is_empty() { p } else { self.ast.types.qualify(p, *quals) };
                     prev_ref = false;
                 }
+                Chunk::MemberPointer { qual, quals, loc } => {
+                    prev_ref = false;
+                    let Some(qual) = qual else { return QualType::ERROR };
+                    let Some(class) = self.member_pointer_class(qual) else {
+                        let msg = self.diag(DiagId::sema_mptr_in_nonclass, *loc).arg(&name);
+                        self.emit(msg);
+                        return QualType::ERROR;
+                    };
+                    let t = &self.ast.types;
+                    if t.is_reference(ty) {
+                        let msg = self
+                            .diag(DiagId::sema_mptr_to_reference, *loc)
+                            .arg(&name)
+                            .arg(self.ty_arg(ty));
+                        self.emit(msg);
+                        return QualType::ERROR;
+                    }
+                    if t.is_void(ty) {
+                        let msg = self.diag(DiagId::sema_mptr_to_void, *loc).arg(&name);
+                        self.emit(msg);
+                        return QualType::ERROR;
+                    }
+                    let p = self.ast.types.member_pointer(ty, class.ty());
+                    ty = if quals.is_empty() { p } else { self.ast.types.qualify(p, *quals) };
+                }
                 Chunk::LRef { loc } | Chunk::RRef { loc } => {
                     if t.is_reference(ty) && prev_ref {
                         let msg = self.diag(DiagId::sema_reference_to_reference, *loc).arg(&name);
@@ -434,6 +459,23 @@ impl Sema<'_, '_> {
             }
         }
         ty
+    }
+
+    /// The class a member-pointer declarator's nested-name-specifier
+    /// names ([dcl.mptr]/1, clang's `GetFullTypeForDeclarator`): the type
+    /// of its last component as written when that is a class or a
+    /// dependent type, a dependent name for a dependent `T::X::`; `None`
+    /// for a namespace, `::` or a non-class type.
+    fn member_pointer_class(&mut self, qual: &crate::using::Qualifier) -> Option<QualType> {
+        match self.ast.types.nns_view(qual.nns) {
+            kiln_ast::types::Nns::Type { ty, .. } => {
+                (self.is_dependent_type(ty) || self.ast.types.as_record(ty).is_some()).then_some(ty)
+            }
+            kiln_ast::types::Nns::Identifier { prefix: Some(prefix), name } => {
+                Some(self.act_dependent_name(prefix, name, None, TagKeyword::None))
+            }
+            _ => None,
+        }
     }
 
     /// Evaluates an array bound ([dcl.array]/1): a converted constant
@@ -607,7 +649,7 @@ impl Sema<'_, '_> {
             return None;
         }
         match chunk {
-            Chunk::Pointer { .. } => Some(0),
+            Chunk::Pointer { .. } | Chunk::MemberPointer { .. } => Some(0),
             Chunk::LRef { .. } | Chunk::RRef { .. } => Some(1),
             Chunk::Array { .. } => Some(2),
             Chunk::Function { .. } => None,
@@ -617,6 +659,7 @@ impl Sema<'_, '_> {
     fn chunk_loc(chunk: &Chunk) -> Loc {
         match chunk {
             Chunk::Pointer { loc, .. }
+            | Chunk::MemberPointer { loc, .. }
             | Chunk::LRef { loc }
             | Chunk::RRef { loc }
             | Chunk::Array { loc, .. }
@@ -731,11 +774,18 @@ impl Sema<'_, '_> {
             self.unsupported(what, loc);
             return true;
         }
-        let specs = [(ds.explicit, "'explicit'"), (ds.consteval, "'consteval'")];
-        for (at, what) in specs {
-            if let Some(l) = at {
-                self.unsupported(what, l);
+        // `explicit` outside a constructor or conversion function is
+        // ill-formed ([dcl.fct.spec]/3); on a friend it is WP-068b.
+        if let Some(l) = ds.explicit {
+            if ds.friend.is_some() {
+                self.unsupported("'explicit'", l);
+            } else {
+                let function = d.is_function_declarator() && !ds.is_typedef();
+                self.check_explicit_spec(ds, d, function, false);
             }
+        }
+        if let Some(l) = ds.consteval {
+            self.unsupported("'consteval'", l);
         }
         // A friend function goes through `act_on_friend`; elsewhere
         // `friend` is not in a class.
@@ -866,7 +916,8 @@ impl Sema<'_, '_> {
     ) -> Option<DeclId> {
         self.finish_invented_head();
         let head = self.take_template_head(d.qualifier);
-        if d.dropped || self.unsupported_declarator(ds, d) {
+        let special = !d.dropped && self.handles_special_declarator(ds, d);
+        if d.dropped || !special && self.unsupported_declarator(ds, d) {
             self.templ.cur = None;
             return None;
         }
@@ -886,6 +937,9 @@ impl Sema<'_, '_> {
             }
         }
         let invalid = ds.invalid || d.invalid || self.is_error_type(ty);
+        if special {
+            return self.act_on_special_member_declarator(ds, ty, d, invalid);
+        }
         if !invalid {
             self.warn_ambiguous_function(ds, d, ty);
         }
@@ -950,6 +1004,40 @@ impl Sema<'_, '_> {
         if d.qualifier.is_none() && d.op_name.is_none() {
             self.check_using_shadow_conflict(decl, name);
         }
+        if !attrs.is_empty() {
+            self.check_decl_attrs(decl, &attrs);
+            let _ = self.builder().attach_attrs(decl, &attrs);
+        }
+        Some(decl)
+    }
+
+    /// [`Sema::act_on_declarator`] for a constructor, destructor,
+    /// conversion function or member `operator=` (WP-067a,
+    /// spec/sema-class.md §4.7).
+    fn act_on_special_member_declarator(
+        &mut self,
+        ds: &DeclSpec,
+        ty: QualType,
+        d: &Declarator,
+        invalid: bool,
+    ) -> Option<DeclId> {
+        if let Some(l) = ds.consteval {
+            self.unsupported("'consteval'", l);
+        }
+        let mut invalid = invalid;
+        let Some(decl) = self.act_on_special_declarator(ds, ty, d, &mut invalid) else {
+            self.templ.cur = None;
+            return None;
+        };
+        if let Some(r) = d.trailing_requires {
+            self.act_on_trailing_requires(decl, r);
+        }
+        self.set_member_access(decl);
+        if let Some(t) = self.finish_template_pattern(decl) {
+            self.set_member_access(t);
+        }
+        let mut attrs = ds.attrs.clone();
+        attrs.extend(d.attrs.iter().copied());
         if !attrs.is_empty() {
             self.check_decl_attrs(decl, &attrs);
             let _ = self.builder().attach_attrs(decl, &attrs);
@@ -1059,7 +1147,7 @@ impl Sema<'_, '_> {
 
     /// `exc` spelled as in a function type (`noexcept`, `throw()`,
     /// `noexcept(expr)`), without the leading space.
-    fn exc_spec_spelling(&self, exc: ExcSpec) -> String {
+    pub(crate) fn exc_spec_spelling(&self, exc: ExcSpec) -> String {
         match exc {
             ExcSpec::DynamicNone => "throw()".to_owned(),
             ExcSpec::NoexceptExpr { expr, .. } => {
@@ -1362,14 +1450,24 @@ impl Sema<'_, '_> {
             let msg = self
                 .diag(DiagId::sema_friend_def_no_match, d.name_loc())
                 .arg(sym_str(self, name))
-                .arg(self.qualified_decl_name(ctx));
+                .arg(self.qualifier_desc(ctx));
             self.emit(msg);
             invalid_redecl = true;
-        } else if method && !in_class && !matches_member {
+        } else if method && !in_class && !matches_member
+            || !method && !friend && d.qualifier.is_some() && prev.is_none()
+        {
+            // [dcl.meaning.general]/2: a qualified declarator-id names a
+            // previously declared member of the nominated class or
+            // namespace.
+            let scope = if method {
+                format!("'{}'", self.qualified_decl_name(ctx))
+            } else {
+                self.qualifier_desc(ctx)
+            };
             let msg = self
                 .diag(DiagId::sema_member_def_no_match, d.name_loc())
                 .arg(sym_str(self, name))
-                .arg(self.qualified_decl_name(ctx));
+                .arg(scope);
             self.emit(msg);
             invalid_redecl = true;
         } else if let Some(p) = prev
@@ -1482,8 +1580,14 @@ impl Sema<'_, '_> {
             h.misc = h.misc.with_friend(k);
         }
         self.mark_pattern_next();
-        let site =
-            crate::class::VirtualSite { class: ctx, method, in_class, friend, prev: prev_ok, name };
+        let site = crate::class::VirtualSite {
+            class: ctx,
+            method,
+            in_class,
+            friend,
+            prev: prev_ok,
+            name: dname,
+        };
         let virt = self.virtual_decl(ds, d, ty, site, &mut spec);
         let f = self.builder().function(h, fkind, ty, spec, prev_ok);
         self.finish_virtual_decl(f, &virt);
@@ -1493,6 +1597,22 @@ impl Sema<'_, '_> {
         if d.op_name.is_none() {
             self.note_local_extern(name, f);
         }
+        self.create_params(f, &params, &defaults);
+        if d.op_name.is_none() {
+            self.register_local(name, f);
+        }
+        f
+    }
+
+    /// Creates the parameter declarations of function `f` from the
+    /// declarator's `params`, with the merged `defaults`
+    /// ([`Sema::merge_default_args`]), and attaches them.
+    pub(crate) fn create_params(
+        &mut self,
+        f: DeclId,
+        params: &[ParamInfo],
+        defaults: &[Option<ExprId>],
+    ) {
         let mut ids = Vec::with_capacity(params.len());
         let mut seen: Vec<Symbol> = Vec::new();
         for (i, p) in params.iter().enumerate() {
@@ -1539,10 +1659,6 @@ impl Sema<'_, '_> {
             ids.push(pd);
         }
         let _ = self.builder().set_params(f, &ids);
-        if d.op_name.is_none() {
-            self.register_local(name, f);
-        }
-        f
     }
 
     /// The default arguments of a function declaration's parameters
@@ -1553,7 +1669,7 @@ impl Sema<'_, '_> {
     /// Declarations in different scopes (a block-scope redeclaration of
     /// a namespace-scope function) have distinct sets. Then every
     /// parameter after one with a default argument needs one.
-    fn merge_default_args(
+    pub(crate) fn merge_default_args(
         &mut self,
         prev: Option<DeclId>,
         block: bool,
@@ -1711,7 +1827,11 @@ impl Sema<'_, '_> {
         };
         let width = d.bit_width.and_then(|w| self.bit_width(w, ty, nm.as_deref(), d.name_loc()));
         let h = DeclHead::new(ctx, name.map_or(DeclName::EMPTY, DeclName::ident), d.name_loc());
-        self.builder().field(h, ty, width, flags)
+        let f = self.builder().field(h, ty, width, flags);
+        if d.init_style.is_some() {
+            self.special.nsdmi.insert(f);
+        }
+        f
     }
 
     /// Checks a bit-field width ([class.bit]/1): an integral constant
@@ -2134,7 +2254,11 @@ impl Sema<'_, '_> {
             return;
         }
         let quals = self.ast.types.effective_quals(ty);
-        if quals.is_const() && self.ast.types.as_record(ty).is_none() {
+        let elem = self.base_element(ty);
+        if self.element_class(elem).is_some() {
+            // [dcl.init.general]/7–8, [class.dtor]/15 (WP-067a).
+            self.check_class_default_init(v, ty, loc);
+        } else if quals.is_const() {
             let msg = self.diag(DiagId::sema_default_init_const, loc).arg(self.ty_arg(ty));
             self.emit(msg);
         }
@@ -2145,7 +2269,9 @@ impl Sema<'_, '_> {
     /// Starts the definition of function `f` at `{`: checks for a
     /// redefinition, opens the function scope with the parameters.
     pub fn act_on_start_function_def(&mut self, f: DeclId) {
-        if let Some(prev) = self.ast.definition(f)
+        // A deleted function is defined by its first declaration.
+        let deleted = Some(self.ast.first(f)).filter(|&p| p != f && self.is_deleted_fn(p));
+        if let Some(prev) = deleted.or_else(|| self.ast.definition(f))
             && prev != f
         {
             let msg = self
@@ -2624,10 +2750,14 @@ impl Sema<'_, '_> {
         }
         let bits = self.class_bits(r, build.as_ref(), bits);
         let bits = self.virtual_class_bits(r, bits);
+        // Special members (spec/sema-class.md §4.1, §4.2, §4.4).
+        let bits = self.special_member_bits(r, bits);
+        let bits = self.finish_special_members(r, bits);
         if let Some(b) = &build {
             let _ = self.builder().set_friends(r, &b.friends);
         }
         self.builder().complete_record_definition(r, bits);
+        self.check_pending_defaulted(r);
         self.act_on_complete_virtual(r);
     }
 
@@ -3348,6 +3478,18 @@ impl Sema<'_, '_> {
             None => self.lookup_name(name, LookupKind::Nested),
         };
         let Some(&d) = found.decls.first() else {
+            // [basic.lookup.qual]/1 ignores names that are not types,
+            // templates or namespaces; one that ordinary lookup finds is
+            // "not a class, namespace, or enumeration" (clang's
+            // `BuildCXXNestedNameSpecifier` second lookup).
+            let ordinary = match prefix {
+                Some(q) => self.lookup_qualified(q, name, LookupKind::Ordinary),
+                None => self.lookup_name(name, LookupKind::Ordinary),
+            };
+            if !ordinary.decls.is_empty() {
+                self.not_a_nested_name(name, &ordinary.decls, loc);
+                return None;
+            }
             let msg = match prefix {
                 Some(q) => self
                     .diag(DiagId::sema_no_member, loc)
@@ -3384,20 +3526,45 @@ impl Sema<'_, '_> {
                 let ty = self.ast.decls.get(d).ty().unwrap_or(QualType::ERROR);
                 let r = self.ast.types.as_record(ty).or_else(|| self.ast.types.as_enum(ty));
                 if r.is_none() {
-                    let msg = self.diag(DiagId::sema_not_a_type, loc).arg(sym_str(self, name));
+                    let msg = self
+                        .diag(DiagId::sema_expected_class_or_namespace, loc)
+                        .arg(self.ty_arg(ty));
                     self.emit(msg);
                 }
                 r.map(|r| self.ast.definition(r).unwrap_or(r))
             }
-            _ => None,
+            _ => {
+                self.not_a_nested_name(name, &found.decls, loc);
+                None
+            }
         };
         ctx.map(|c| (c, d))
+    }
+
+    /// `'x' is not a class, namespace, or enumeration` for a
+    /// nested-name-specifier component `x::` that names something else,
+    /// with clang's `declared here` note when lookup found one declaration
+    /// that is not a function template (clang's `LookupResult` treats a
+    /// function template, like several functions, as an overload set).
+    fn not_a_nested_name(&mut self, name: Symbol, decls: &[DeclId], loc: Loc) {
+        let mut msg = self
+            .diag(DiagId::sema_expected_class_or_namespace, loc)
+            .arg(format!("'{}'", sym_str(self, name)));
+        if let [d] = decls
+            && self.kind_of(*d) != DeclKind::FunctionTemplate
+        {
+            msg = msg.with_note(
+                self.diag(DiagId::note_entity_declared_at, self.ast.decls.get(*d).loc())
+                    .arg(format!("'{}'", sym_str(self, name))),
+            );
+        }
+        self.emit(msg);
     }
 
     /// How a qualifier context is named in "no member named 'x' in ...".
     pub fn qualifier_desc(&self, q: DeclId) -> String {
         match self.ast.decls.get(q).kind() {
-            DeclKind::Namespace => format!("namespace '{}'", self.decl_name(q)),
+            DeclKind::Namespace => format!("namespace '{}'", self.qualified_decl_name(q)),
             DeclKind::TranslationUnit => "the global namespace".to_owned(),
             _ => {
                 let t = self.tag_type(q);
@@ -3563,11 +3730,13 @@ impl Sema<'_, '_> {
             let node = *self.ast.attrs.get(a);
             let bad = match node.kind {
                 AttrKind::NODISCARD => {
-                    (!matches!(kind, DeclKind::Function | DeclKind::CXXRecord | DeclKind::Enum))
+                    // Every function kind, constructors included
+                    // ([dcl.attr.nodiscard]/1, /2 since P1771).
+                    (!(kind.is_function() || matches!(kind, DeclKind::CXXRecord | DeclKind::Enum)))
                         .then_some("functions, classes, or enumerations")
                 }
                 AttrKind::NORETURN => {
-                    (kind != DeclKind::Function).then_some("functions, classes, or enumerations")
+                    (!kind.is_function()).then_some("functions, classes, or enumerations")
                 }
                 AttrKind::ALIGNED => {
                     if matches!(kind, DeclKind::Function | DeclKind::Typedef | DeclKind::TypeAlias)

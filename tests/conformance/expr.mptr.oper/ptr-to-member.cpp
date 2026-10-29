@@ -2,7 +2,7 @@
 // member's class or of a class derived from it.
 //@ expect: run
 //@ stdout: 1 2 12 22 5
-//@ xfail(kiln): needs member-pointer declarators (int B::*p) and WP-079 codegen
+//@ xfail(kiln): needs WP-079 codegen (member-pointer declarators landed in WP-083)
 extern "C" int printf(const char*, ...);
 struct B { int a = 1, b = 2; int add(int k) const { return a + k; } };
 struct D : B { int c = 5; };

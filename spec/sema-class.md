@@ -178,6 +178,47 @@ per [expr.mptr.oper]; conversions `DerivedToBaseMemberPointer` /
 `BaseToDerivedMemberPointer` (sema-conv rank rules apply; virtual-base path is
 ill-formed). The constant form is ast.md §9's `MemberPtr` scalar.
 
+**Landed (WP-083): member-pointer declarators.** The parser emits
+`Chunk::MemberPointer { qual: Option<Qualifier>, quals, loc }` (parse.md
+§4) for `T C::* cv` in named, abstract and new-declarators; Sema
+(`type_for_declarator_at`) takes the class from the nested-name-specifier's
+last component (a `Nns::Type` that is a record or dependent, or a dependent
+`Nns::Identifier`, which becomes a `DependentName`, so `T::*` stays
+dependent) and checks, in clang's order and at the nested-name-specifier's
+start: not a class (`'p' does not point into a class`; a typedef to a
+non-class prefix is `'I' (aka 'int') is not a class, namespace, or
+enumeration`), a reference pointee (`'p' declared as a member pointer to a
+reference of type 'int &'`), and `void` (`'p' declared as a member pointer
+to void`); abstract declarators name `'type name'`. A `qual: None` chunk
+(the prefix error was already reported) makes the type the error type.
+Function member pointers keep their cv/ref-qualifiers.
+`sema_init_conversion_failed` gained a fifth argument, clang's
+`HandleFunctionTypeMismatch` suffix (`fn_mismatch_suffix`: `different
+classes ('D' vs 'C')`, number of parameters, Nth parameter, return type,
+qualifiers, exception specification) for member-pointer and
+pointer/reference-to-function pairs. The Oven's type table gives
+`MemberPointer` the Itanium size and alignment (8 / 16, pointer-aligned)
+so `sizeof`/`alignof`/layout agree with kiln_abi; the value itself stays
+opaque to the evaluator (constant evaluation of member pointers is WP-076).
+`[dcl.mptr]` tests: `tests/conformance/dcl.mptr/`.
+
+**Landed (WP-085): member-pointer follow-ups.** `==`/`!=` on member
+pointers (sema.md §5, "Member-pointer equality"); tentative parsing
+accepts template-id components in a member-pointer
+nested-name-specifier (`X<T>::*`, `X<T>::Y::*`, `::X<int>::*`,
+`T::template W<int>::*`; parse.md §2.1); a nested-name-specifier
+component that names something other than a class, namespace or
+enumeration is `'x' is not a class, namespace, or enumeration` with a
+`'x' declared here` note when ordinary lookup finds exactly one
+declaration that is not a function template (clang's second lookup in
+`BuildCXXNestedNameSpecifier`); and `out-of-line definition of 'f' does
+not match any declaration in {1}` takes clang's scope text (`'S'` for a
+class, `namespace 'N::M'`, `the global namespace`) and is now also
+emitted for a qualified namespace-scope function that names no previous
+declaration ([dcl.meaning.general]/2). Tests: `expr.eq/`,
+`dcl.mptr/template-id-qualifier.cpp`, `basic.lookup.qual/not-a-scope.cpp`,
+`dcl.meaning/qualified-no-match.cpp`.
+
 ### 2.7 Complete-class contexts ([class.mem]/7)
 The parser (WP-065) saves the tokens of member function bodies (with
 ctor-initializers), default arguments, *noexcept-specifier*s, NSDMIs and
@@ -409,22 +450,27 @@ with `DeclFlags::IMPLICIT`, `Defaulted::Implicit`, inline, `constexpr` per
 `noexcept-unevaluated`) resolved when the member is defined or its exception
 specification is needed ([except.spec]/13).
 
-**Laziness** (clang `AddImplicitlyDeclaredMembersToClass`). At `}` declare
-eagerly: copy/move ctor if `NEEDS_OVL_*_CTOR` or `HAS_INHERITED_CTOR` (also the
-default ctor then); both assignments if `DYNAMIC`, `NEEDS_OVL_*_ASSIGN` or
-`HAS_INHERITED_ASSIGN`; the dtor if `DYNAMIC` or `NEEDS_OVL_DTOR`; copy ctor
-and copy assignment if a dtor or copy operation is user-declared
-(deprecated-copy check). Otherwise on first lookup of the constructor name,
-`operator=` or the destructor in that class; such members are appended to the
-member list (§8.2), as clang. Observed clang 19 (golden
+**Laziness** (clang `AddImplicitlyDeclaredMembersToClass`). At `}`, of the
+members still to be declared implicitly: the default ctor if
+`HAS_INHERITED_CTOR`; the copy ctor if `NEEDS_OVL_COPY_CTOR`, a move
+operation is user-declared, or `HAS_INHERITED_CTOR`; the move ctor if
+`NEEDS_OVL_MOVE_CTOR` or `HAS_INHERITED_CTOR`; the copy assignment if
+`DYNAMIC`, `NEEDS_OVL_COPY_ASSIGN`, a move operation is user-declared, or
+`HAS_INHERITED_ASSIGN`; the move assignment if `DYNAMIC`,
+`NEEDS_OVL_MOVE_ASSIGN` or `HAS_INHERITED_ASSIGN`; the dtor if `DYNAMIC` or
+`NEEDS_OVL_DTOR`. Otherwise on first lookup of the constructor name,
+`operator=` or the destructor in that class, or when another class's
+overload resolution selects among them (a `{ ~P1(); }` alone declares
+nothing, but `{ P1 m; }` declares P1's copy members); such members are
+appended to the member list (§8.2), as clang. Observed clang 19 (golden
 `ast/class.implicit/eager.cpp`):
 
 | class | eagerly declared |
 |---|---|
-| `{ int a; }`, `{ P2(const P2&); }`, `{ P3(); }`, `{ mutable int m; }` | none |
-| `{ ~P1(); }` | copy ctor, copy assign |
+| `{ int a; }`, `{ ~D1(); }`, `{ P2(const P2&); }`, `{ P3(); }`, `{ mutable int m; }`, `{ CA& operator=(const CA&); }` | none |
 | `{ virtual void f(); }` and its derived classes | copy assign, move assign, dtor |
 | `{ P1 m; }` (member with user dtor) | copy ctor, move ctor, move assign, dtor |
+| `{ MC(MC&&); }`, `{ MA& operator=(MA&&); }` | copy ctor, copy assign (both deleted) |
 
 ### 4.2 Deletedness
 `should_delete(class, kind) -> Option<DeleteReason>` implements
@@ -454,7 +500,11 @@ differs, [dcl.fct.def.default]/2).
 Not user-provided, no virtual functions/bases (ctor, copy/move, assign), every
 direct base and non-static class member's selected corresponding member
 trivial, no NSDMI (default ctor), not a variant-member conflict. Computed at
-`}` into `TRIVIAL_*`; the implicit member gets `FnSpec` trivial at creation; an
+`}` into `TRIVIAL_*`; the implicit member gets `FnSpec` trivial at creation
+(from `TRIVIAL_*`, or, for a copy/move member whose class has `NEEDS_OVL_*`,
+by selecting each direct base's and class field's member as clang
+`SpecialMemberIsTrivial`: `{ P1 m; }` has a trivial move ctor because P1's
+copy ctor is selected); an
 `= default` on first declaration gets it at `}` (`mark_function`, already
 `LATE`). Eligibility ([special]/6) of constrained special members is WP-073's;
 for non-template classes every non-deleted declared special member is eligible.
@@ -507,6 +557,7 @@ on all implicit members of non-virtual-base classes, absent on
 not `constexpr` when a member's selected ctor is not). `HAS_CONSTEXPR_CTOR` and
 `LITERAL` are computed from these. `DEFAULTED_DEFAULT_CTOR_CONSTEXPR` records
 the default ctor's answer before it is declared.
+WP-067a implements the C++23+ rule only; the C++20 rule is open.
 
 ### 4.7 Constructors, destructors, conversion functions (declarations)
 Constructor: no return type (`constructor cannot have a return type`), not
@@ -904,6 +955,7 @@ against `-complete` block by block, in order (abi.md §8.4).
 | `cleanup: CleanupState` | §5.3 |
 | `extend_collector: Option<Vec<ExprId>>` | §5.4 P2718 |
 | `unparsed_exc: FxHashSet<DeclId>` | §2.7 |
+| `special: SpecialState` (WP-067a) | pending `= default` checks, pending deleted uses, lazily found deleted implicit members, the definition bits of classes at `}`, fields with an NSDMI (§4) |
 | `FnState.this_ty`, `this_override` | §2.5 |
 | `Scope.nrvo` | §5.5 |
 New parser entry points (WP-065's contract): `act_on_base_specifiers`,
@@ -1094,6 +1146,70 @@ specifiers and virtual base-specifiers are no longer `sema_unsupported`.
   explicit-object (P0847) virtual functions; overloaded virtual functions
   in one class (WP-068a); copy-initialization of an abstract class (WP-067b).
 
+**Landed (WP-067a).** Module `kiln_sema/src/class/special/{mod,declare,
+implicit,deletion,uses}.rs` (§9 says `special.rs`; split by concern).
+Constructors, destructors, conversion functions, `= default` and
+`= delete` are no longer `sema_unsupported`.
+- §4.7 declarations (`declare.rs`): `handles_special_declarator` /
+  `act_on_special_declarator` (from decl.rs `act_on_declarator`) build
+  `CXXConstructor`/`CXXDestructor`/`CXXConversion`: return types,
+  `static`/`virtual`/cv/ref-qualifiers on ctors and dtors, destructor
+  name matching (`~X` naming the class, undeclared names), destructor
+  and conversion parameters/variadics, copy constructor by value,
+  `-Wclass-conversion`, "cannot be redeclared", "definition of
+  implicitly declared". `check_explicit_spec` covers `explicit` on every
+  declarator (non-function, non-ctor/conv, out of class); `static ~X()`
+  drops `static` without invalidating (clang `CheckDestructorDeclarator`).
+- §4.1 implicit declaration (`implicit.rs`): `special_member_bits` and
+  `finish_special_members` at `}` (`act_on_finish_record_definition`) compute the `NEEDS_*`,
+  `TRIVIAL_*`, `IMPLICIT_*_CONST_PARAM` and deleted-ness bits and declare
+  the eager members of the §4.1 table; `ensure_implicit(class, kind)`
+  declares the rest lazily (the members' own declarator checks and
+  §4.2 selection call it). `declare_implicit` sets triviality from the
+  class bits, or for copy/move members of a class with `NEEDS_OVL_*` from
+  `selected_all_trivial` (clang `SpecialMemberIsTrivial`, §4.3); `constexpr`
+  follows the C++23+ rules (§4.6).
+- §4.2 deletion (`deletion.rs`): `should_delete` is the Q7 rule over
+  bases, fields and variant members, with `select_special` as the
+  approximate overload resolution (Found / Missing / Deleted / Ambiguous
+  / Unsupported); `deletion_notes` / `deleted_function_notes` give clang's
+  `note_deleted_*` explanation. `check_defaulted` / `check_out_of_line_defaulted`
+  (§4.4; pending ones run at `}` via `check_pending_defaulted`) check the
+  signature (return type, parameter kind, default arguments, declared vs
+  implicit type) and emit `-Wdefaulted-function-deleted` with the
+  deletion notes and "replace 'default' with 'delete'".
+- §4.4 `act_on_defaulted` / `act_on_deleted` (`mod.rs` `defaulted_impl`
+  / `deleted_impl`): only special members and comparison operators may be
+  defaulted; a deleted definition must be the first declaration; a
+  deleted definition is a definition, so a later `= delete` or body is a
+  redefinition (also decl.rs `act_on_start_function_def`).
+- Uses (`uses.rs`): a named deleted function is queued in
+  `special.pending_deleted` and reported at the end of the full
+  expression (`act_on_full_expr`), declaration (`act_on_end_abbreviated`)
+  or constant evaluation (`eval_const`) as "attempt to use", unless
+  `act_on_deleted_callee` saw it called ("call to deleted function",
+  "call to [implicitly-]deleted constructor"). §4.8:
+  `check_class_default_init` (from `act_on_uninit`) checks the default
+  constructor (deleted, inaccessible, const default-init) and the
+  destructor (deleted, access) of a variable.
+- `define_implicit_special` is the §4.5 stub (`sema_unsupported`
+  "implicit definition of a ..."); implicit members are declared but
+  have no bodies.
+- New diagnostics: the WP-067a block in `kiln_diag/src/ids.rs`; groups
+  `DefaultedFunctionDeleted`, `ClassConversion`. Harness: `//@
+  ast-implicit` (harness.md) dumps implicit members.
+- Not done (owners): implicit definitions, ctor-initializers and
+  constructor calls (WP-067b; so `constexpr C c;` and member-wise copies
+  are untested); overload resolution proper (WP-068a: §4.2 selection
+  ignores templates and reports Unsupported where they matter, and a
+  deleted static member named unqualified inside its class is reported as
+  "attempt to use"); deferred and late exception specifications of
+  implicit members; the pre-C++23 `constexpr` rules; the operator delete
+  of a virtual destructor ([class.dtor]/16); the `constexpr`-with-virtual-
+  base diagnostic; `explicit` on friends and parameters (WP-068b);
+  injected-class-names in the implicit AST dump (xfail
+  `ast/class.implicit/eager.cpp`).
+
 ### 8.4 `SemaBridge` (kiln_oven) — public-interface change
 Replace `fn vtable(&mut self, record) -> &VTableLayout` with
 ```
@@ -1121,7 +1237,7 @@ VTableError>`, with `VTableError { NotDynamic | Incomplete | Unsupported
 }`; every body answers `Unsupported` until WP-078b.
 
 Landed (WP-078b): every body is implemented. `VTableError` gains
-`TooComplex`, and `Unsupported` is now unused. New functions:
+`TooComplex`, and `Unsupported` became unused (WP-084 removed it). New functions:
 - `vtt_vtables(&Ast, record, &Target) -> Result<Vec<SubobjectId>,
   VTableError>`;
 - `dump_construction_vtable`;
@@ -1149,7 +1265,7 @@ in the return slot); key function; `dtor_delete`.
 | WP-065 | parser classes (backlog text) against §2.1/§2.7/§8.3 entry points | `kiln_parse/*` | 066a |
 | WP-066b | members, `this`, implicit member access, static members, access control, friends, member lookup across bases, derived-to-base checks, pointers to members, definition data | `kiln_sema/src/class/{mod,access}.rs`, `lookup.rs`, `expr.rs` (member access) | 066a, 065 for conformance tests |
 | WP-066c | non-virtual-base layout, EBO with bases, tail padding, `record_pack`, dump, differential | `kiln_abi/src/layout/*`, `kiln_abi/tests/*` | 066a (unit tests build ASTs directly); differential needs 065 + 066b |
-| WP-067a | implicit declaration (laziness table), deletedness, triviality, `constexpr`, `= default`/`= delete`, ctor/dtor/conversion declaration checks | `kiln_sema/src/class/special.rs` | 066b |
+| WP-067a | implicit declaration (laziness table), deletedness, triviality, `constexpr`, `= default`/`= delete`, ctor/dtor/conversion declaration checks | `kiln_sema/src/class/special/*.rs` (landed as a directory) | 066b |
 | WP-067b | construction + ctor-initializers + implicit definitions, temporaries/cleanups/lifetime extension/P2718, elision + NRVO, class init forms + aggregates with bases + paren init | `kiln_sema/src/class/{ctorinit,temporary}.rs`, `init.rs`, `stmt.rs` | 067a |
 | WP-078a | virtual functions: overriding, `final`/`override`, covariance, abstract, key function, `dtor_delete`, subobjects + final overriders, `dynamic_cast`/`typeid` sema, virtual bases in sema | `kiln_sema/src/class/virtual.rs` | 066b (067b for virtual-base ctors) |
 | WP-078b | virtual layout (primary base, vptr, vbases) + `kiln_abi::vtable` + VTT + vtable dump + both differentials with `virtual` | `kiln_abi/src/{layout/*,vtable.rs}`, tests | 066c, 078a |

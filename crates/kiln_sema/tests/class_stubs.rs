@@ -67,10 +67,6 @@ fn calls_every_class_makes_are_silent() {
 fn class_features_report_unsupported() {
     with_sema(|s, sink| {
         let (r, f) = open_class(s, TagKind::Struct);
-        s.act_on_defaulted(f, L);
-        assert_eq!(messages(sink), unsupported("defaulted functions"));
-        s.act_on_deleted(f, L, None);
-        assert_eq!(messages(sink), unsupported("deleted functions"));
         s.act_on_exception_spec(f, ExcSpec::BasicNoexcept);
         assert_eq!(messages(sink), unsupported("exception specifications of member functions"));
         let one = int_lit(s, QualType::INT, 1);
@@ -83,6 +79,28 @@ fn class_features_report_unsupported() {
         s.act_on_mem_initializers(f, &[init], L);
         assert_eq!(messages(sink), unsupported("constructor initializers"));
         s.act_on_finish_record_definition(r, true);
+    });
+}
+
+/// WP-067a: `= default` and `= delete` are implemented
+/// ([dcl.fct.def.default]/1, [dcl.fct.def.delete]/4).
+#[test]
+fn defaulted_and_deleted_landed_in_067a() {
+    with_sema(|s, sink| {
+        let (r, f) = open_class(s, TagKind::Struct);
+        s.act_on_defaulted(f, L);
+        assert_eq!(
+            messages(sink),
+            vec![
+                "error: only special member functions and comparison operators may be defaulted"
+                    .to_string()
+            ]
+        );
+        s.act_on_deleted(f, L, None);
+        assert_eq!(messages(sink), Vec::<String>::new());
+        assert!(s.ast.decls.function(f).is_some_and(|d| d.spec.is_deleted()));
+        s.act_on_finish_record_definition(r, true);
+        assert_eq!(messages(sink), Vec::<String>::new());
     });
 }
 

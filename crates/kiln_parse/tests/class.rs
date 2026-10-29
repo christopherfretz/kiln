@@ -29,10 +29,11 @@ fn class_special_declarator_ids() {
            explicit(false) S(int); explicit S(char); operator const int *(); };",
     );
     assert_parsed(&p);
-    p.assert_diag("1:12 error: destructors is not supported yet");
-    p.assert_diag("1:18 error: conversion functions is not supported yet");
+    // Constructors, destructors and conversion functions are declared
+    // (WP-067a); operator functions are WP-068b.
     p.assert_diag("1:38 error: overloaded operators is not supported yet");
-    p.assert_diag("2:28 error: constructors is not supported yet");
+    p.assert_diag("1:59 error: overloaded operators is not supported yet");
+    assert_eq!(p.problems().len(), 2, "{:?}", p.problems());
 }
 
 /// [class.friend]: friend declarations with special declarator-ids reach
@@ -195,8 +196,9 @@ fn class_ctor_initializers() {
 fn class_out_of_line_definitions() {
     let p = parse("struct S { int a; S(); void f(); }; S::S() : a(1) {} void S::f() {}");
     assert_parsed(&p);
-    p.assert_diag("1:19 error: constructors is not supported yet");
-    p.assert_diag("1:40 error: constructors is not supported yet");
+    // Constructors are declared (WP-067a); ctor-initializers are WP-067b.
+    p.assert_diag("1:44 error: constructor initializers is not supported yet");
+    assert_eq!(p.problems().len(), 1, "{:?}", p.problems());
 }
 
 /// [expr.prim.this]: `this` reaches sema (outside a member function).

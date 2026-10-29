@@ -1,0 +1,89 @@
+TranslationUnitDecl
+|-CXXRecordDecl referenced struct B definition
+| |-FieldDecl referenced x 'int'
+| |-FieldDecl referenced w 'int'
+| |-CXXMethodDecl used f 'void ()'
+| `-CXXMethodDecl used g 'void ()'
+|-CXXRecordDecl referenced struct D definition
+| |-public 'B'
+| `-FieldDecl referenced y 'int'
+|-CXXRecordDecl struct E definition
+| `-public 'D'
+|-VarDecl used pb 'int B::*' cinit
+| `-UnaryOperator 'int B::*' prefix '&' cannot overflow
+|   `-DeclRefExpr 'int' lvalue Field 'x' 'int'
+|-VarDecl used qb 'int B::*' cinit
+| `-UnaryOperator 'int B::*' prefix '&' cannot overflow
+|   `-DeclRefExpr 'int' lvalue Field 'w' 'int'
+|-VarDecl used pd 'int D::*' cinit
+| `-UnaryOperator 'int D::*' prefix '&' cannot overflow
+|   `-DeclRefExpr 'int' lvalue Field 'y' 'int'
+|-VarDecl used pf 'void (B::*)()' cinit
+| `-UnaryOperator 'void (B::*)()' prefix '&' cannot overflow
+|   `-DeclRefExpr 'void ()' CXXMethod 'f' 'void ()'
+|-VarDecl a1 'bool' cinit
+| `-BinaryOperator 'bool' '=='
+|   |-ImplicitCastExpr 'int B::*' <LValueToRValue>
+|   | `-DeclRefExpr 'int B::*' lvalue Var 'pb' 'int B::*'
+|   `-ImplicitCastExpr 'int B::*' <LValueToRValue>
+|     `-DeclRefExpr 'int B::*' lvalue Var 'qb' 'int B::*'
+|-VarDecl a2 'bool' cinit
+| `-BinaryOperator 'bool' '!='
+|   |-ImplicitCastExpr 'int D::*' <LValueToRValue>
+|   | `-DeclRefExpr 'int D::*' lvalue Var 'pd' 'int D::*'
+|   `-ImplicitCastExpr 'int D::*' <BaseToDerivedMemberPointer (B)>
+|     `-ImplicitCastExpr 'int B::*' <LValueToRValue>
+|       `-DeclRefExpr 'int B::*' lvalue Var 'pb' 'int B::*'
+|-VarDecl a3 'bool' cinit
+| `-BinaryOperator 'bool' '=='
+|   |-ImplicitCastExpr 'int D::*' <BaseToDerivedMemberPointer (B)>
+|   | `-ImplicitCastExpr 'int B::*' <LValueToRValue>
+|   |   `-DeclRefExpr 'int B::*' lvalue Var 'pb' 'int B::*'
+|   `-ImplicitCastExpr 'int D::*' <LValueToRValue>
+|     `-DeclRefExpr 'int D::*' lvalue Var 'pd' 'int D::*'
+|-VarDecl a4 'bool' cinit
+| `-BinaryOperator 'bool' '=='
+|   |-ImplicitCastExpr 'int B::*' <LValueToRValue>
+|   | `-DeclRefExpr 'int B::*' lvalue Var 'pb' 'int B::*'
+|   `-ImplicitCastExpr 'int B::*' <NullToMemberPointer>
+|     `-CXXNullPtrLiteralExpr 'std::nullptr_t'
+|-VarDecl a5 'bool' cinit
+| `-BinaryOperator 'bool' '=='
+|   |-ImplicitCastExpr 'int B::*' <NullToMemberPointer>
+|   | `-IntegerLiteral 'int' 0
+|   `-ImplicitCastExpr 'int B::*' <LValueToRValue>
+|     `-DeclRefExpr 'int B::*' lvalue Var 'pb' 'int B::*'
+|-VarDecl a6 'bool' cinit
+| `-BinaryOperator 'bool' '!='
+|   |-ImplicitCastExpr 'void (B::*)()' <LValueToRValue>
+|   | `-DeclRefExpr 'void (B::*)()' lvalue Var 'pf' 'void (B::*)()'
+|   `-ImplicitCastExpr 'void (B::*)()' <NullToMemberPointer>
+|     `-CXXNullPtrLiteralExpr 'std::nullptr_t'
+|-VarDecl a7 'bool' cinit
+| `-BinaryOperator 'bool' '=='
+|   |-ImplicitCastExpr 'void (B::*)()' <LValueToRValue>
+|   | `-DeclRefExpr 'void (B::*)()' lvalue Var 'pf' 'void (B::*)()'
+|   `-UnaryOperator 'void (B::*)()' prefix '&' cannot overflow
+|     `-DeclRefExpr 'void ()' CXXMethod 'g' 'void ()'
+|-VarDecl a8 'bool' cinit
+| `-BinaryOperator 'bool' '!='
+|   |-UnaryOperator 'int B::*' prefix '&' cannot overflow
+|   | `-DeclRefExpr 'int' lvalue Field 'x' 'int'
+|   `-ImplicitCastExpr 'int B::*' <LValueToRValue>
+|     `-DeclRefExpr 'int B::*' lvalue Var 'pb' 'int B::*'
+|-VarDecl a9 'bool' cinit
+| `-BinaryOperator 'bool' '!='
+|   |-ImplicitCastExpr 'int B::*' <LValueToRValue>
+|   | `-DeclRefExpr 'int B::*' lvalue Var 'pb' 'int B::*'
+|   `-ImplicitCastExpr 'int B::*' <NullToMemberPointer>
+|     `-IntegerLiteral 'long' 0
+|-VarDecl used cb 'const int B::*' cinit
+| `-ImplicitCastExpr 'const int B::*' <NullToMemberPointer>
+|   `-CXXNullPtrLiteralExpr 'std::nullptr_t'
+`-VarDecl a10 'bool' cinit
+  `-BinaryOperator 'bool' '=='
+    |-ImplicitCastExpr 'const int B::*' <LValueToRValue>
+    | `-DeclRefExpr 'const int B::*' lvalue Var 'cb' 'const int B::*'
+    `-ImplicitCastExpr 'const int B::*' <NoOp>
+      `-ImplicitCastExpr 'int B::*' <LValueToRValue>
+        `-DeclRefExpr 'int B::*' lvalue Var 'pb' 'int B::*'

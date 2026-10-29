@@ -1,0 +1,97 @@
+Vtable for 'V' (3 entries).
+   0 | offset_to_top (0)
+   1 | V RTTI
+       -- (V, 0) vtable address --
+   2 | void V::g()
+
+Vtable for 'L' (8 entries).
+   0 | vbase_offset (16)
+   1 | offset_to_top (0)
+   2 | L RTTI
+       -- (L, 0) vtable address --
+   3 | void L::g()
+   4 | vcall_offset (-16)
+   5 | offset_to_top (-16)
+   6 | L RTTI
+       -- (V, 16) vtable address --
+   7 | void L::g()
+       [this adjustment: 0 non-virtual, -24 vcall offset offset] method: void V::g()
+
+Virtual base offset offsets for 'L' (1 entry).
+   V | -24
+
+Thunks for 'void L::g()' (1 entry).
+   0 | this adjustment: 0 non-virtual, -24 vcall offset offset
+
+VTable indices for 'L' (1 entries).
+   0 | void L::g()
+
+Vtable for 'R' (8 entries).
+   0 | vbase_offset (16)
+   1 | offset_to_top (0)
+   2 | R RTTI
+       -- (R, 0) vtable address --
+   3 | void R::m()
+   4 | vcall_offset (0)
+   5 | offset_to_top (-16)
+   6 | R RTTI
+       -- (V, 16) vtable address --
+   7 | void V::g()
+
+Virtual base offset offsets for 'R' (1 entry).
+   V | -24
+
+VTable indices for 'R' (1 entries).
+   0 | void R::m()
+
+Vtable for 'D' (13 entries).
+   0 | vbase_offset (32)
+   1 | offset_to_top (0)
+   2 | D RTTI
+       -- (D, 0) vtable address --
+       -- (L, 0) vtable address --
+   3 | void L::g()
+   4 | void D::k()
+   5 | vbase_offset (16)
+   6 | offset_to_top (-16)
+   7 | D RTTI
+       -- (R, 16) vtable address --
+   8 | void R::m()
+   9 | vcall_offset (-16)
+  10 | offset_to_top (-32)
+  11 | D RTTI
+       -- (V, 32) vtable address --
+  12 | void L::g()
+       [this adjustment: 0 non-virtual, -24 vcall offset offset] method: void V::g()
+
+Virtual base offset offsets for 'D' (1 entry).
+   V | -24
+
+VTable indices for 'D' (1 entries).
+   1 | void D::k()
+
+Construction vtable for ('L', 0) in 'D' (8 entries).
+   0 | vbase_offset (32)
+   1 | offset_to_top (0)
+   2 | L RTTI
+       -- (L, 0) vtable address --
+   3 | void L::g()
+   4 | vcall_offset (-32)
+   5 | offset_to_top (-32)
+   6 | L RTTI
+       -- (V, 32) vtable address --
+   7 | void L::g()
+       [this adjustment: 0 non-virtual, -24 vcall offset offset] method: void V::g()
+
+Construction vtable for ('R', 16) in 'D' (8 entries).
+   0 | vbase_offset (16)
+   1 | offset_to_top (0)
+   2 | R RTTI
+       -- (R, 16) vtable address --
+   3 | void R::m()
+   4 | vcall_offset (0)
+   5 | offset_to_top (-16)
+   6 | R RTTI
+       -- (V, 32) vtable address --
+   7 | void V::g()
+

@@ -11,10 +11,10 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
+use kiln_abi::dump_blocks::{RECORD_LAYOUT_MARKER as MARKER, record_layout_blocks as blocks};
+
 const CLANG: &str = "clang++-19";
-const MARKER: &str = "\n*** Dumping AST Record Layout\n";
 const TRIPLES: [&str; 2] = ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"];
-const BUILTIN: [&str; 3] = ["__NSConstantString_tag", "__va_list_tag", "std::__va_list"];
 /// Concurrent workers.
 const JOBS: usize = 4;
 
@@ -36,18 +36,6 @@ fn clang_available() -> bool {
         .stderr(Stdio::null())
         .status()
         .is_ok_and(|s| s.success())
-}
-
-/// The dump blocks of `text` (without the marker), builtin records
-/// dropped.
-fn blocks(text: &str) -> Vec<&str> {
-    text.split(MARKER)
-        .skip(1)
-        .filter(|b| {
-            let head = b.lines().next().unwrap_or_default();
-            !BUILTIN.iter().any(|n| head.contains(n))
-        })
-        .collect()
 }
 
 /// Checks one program on one target; `Err` describes the mismatch.

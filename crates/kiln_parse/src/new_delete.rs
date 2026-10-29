@@ -239,7 +239,10 @@ impl Parser<'_, '_> {
                 self.parse_new_declarator(d);
                 d.chunks.push(Chunk::RRef { loc });
             }
-            _ => self.parse_direct_new_declarator(d),
+            _ => match self.at_member_pointer() {
+                Some(star) => self.parse_member_pointer(d, star, Self::parse_new_declarator),
+                None => self.parse_direct_new_declarator(d),
+            },
         }
     }
 

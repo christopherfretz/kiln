@@ -766,9 +766,14 @@ impl FnSpec {
     /// trivial, contracts, coroutine, escalated, `deleted` for
     /// `= default` members found deleted at `}`, spec/sema-class.md §8.2,
     /// and `implicit_inline` for a member function defined in its class,
-    /// known only at its body, [class.mfct]/1).
-    pub const LATE: FnSpec =
-        FnSpec((1 << 3) | (1 << 10) | (1 << 12) | (1 << 14) | (1 << 15) | (1 << 16));
+    /// known only at its body, [class.mfct]/1; WP-067a: `defaulted`
+    /// [`Defaulted::Explicit`] and `constexpr` [`ConstexprKind::Constexpr`],
+    /// known only at `= default` after the declarator, [dcl.fct.def.default],
+    /// [dcl.constexpr]/7). The two fields are OR-ed in, so sema sets them
+    /// only from [`Defaulted::No`] / [`ConstexprKind::None`].
+    pub const LATE: FnSpec = FnSpec(
+        (1 << 3) | (1 << 4) | (1 << 8) | (1 << 10) | (1 << 12) | (1 << 14) | (1 << 15) | (1 << 16),
+    );
 }
 
 bit_accessors!(FnSpec:
@@ -2089,7 +2094,8 @@ impl DeclArena {
     }
 
     /// Sets late specifier bits ([`FnSpec::LATE`]: trivial, contracts,
-    /// coroutine, escalated, deleted).
+    /// coroutine, escalated, deleted, implicit inline, explicitly
+    /// defaulted, constexpr).
     ///
     /// # Panics
     /// If `bits` contains other bits.

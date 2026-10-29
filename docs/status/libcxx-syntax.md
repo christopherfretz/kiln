@@ -7,28 +7,26 @@ kiln -std=c++26 -stdlib=libc++ -fsyntax-only -ferror-limit=0 h.cpp
 ```
 
 The setup is libc++ 19.1.7 (Debian `libc++-19-dev`) on aarch64 Linux,
-with kiln at WP-065 (the parser side of classes: member functions,
-special member names, friends, access labels, bases, deferred member
-parsing) merged with main at WP-066b (class members in Sema: member
-lookup through bases, access control, `this`, member access and calls,
-pointers to members, static data members, friends), WP-064, WP-061a and
-WP-061b. "First
+with kiln main after WP-069 (parser templates: no template-syntax
+errors remain; the remaining errors are the template engine, WP-070a/b,
+builtin traits, WP-074, special members, WP-067a, and overloading,
+WP-068a/b), WP-078a/b, WP-066b, WP-065, WP-064 and WP-061a/b. "First
 blocker" is the first error kiln reports. The counts are all the errors
 in the header's closure; most are follow-ons of the same unsupported
 feature. Every header preprocesses identically to clang (see
 `pp-parity.md`), so these are all parser or Sema gaps.
 
-| header | exit | errors | was (main at WP-066b) | first blocker | main error kinds |
+| header | exit | errors | was (WP-065) | first blocker | main error kinds |
 |---|---:|---:|---:|---|---|
-| `<cstddef>` | 1 | 53 | 42 | `__type_traits/enable_if.h:20:1`: templates | templates 43, overloaded operators 7 |
+| `<cstddef>` | 1 | 45 | 53 | `__type_traits/enable_if.h:22:1`: explicit specialization (WP-070b) | explicit specialization 18, overloaded operators 12, follow-on type errors 11, class template specialization 3 |
 | `<cstdint>` | 0 | 0 | 0 | none (clean since WP-062; no warnings since WP-063) | |
 | `<climits>` | 0 | 0 | 0 | none (clean; was blocked by glibc's `__THROW`, `noexcept(true)`, before WP-058) | |
 | `<cfloat>` | 0 | 0 | 0 | none (clean) | |
-| `<cstring>` | 1 | 10 | 10 | `string.h:89:20`: overloading `memchr` | overloading 10 |
+| `<cstring>` | 1 | 10 | 10 | `string.h:89:20`: overloading `memchr` (WP-068a) | overloading 10 |
 | `<version>` | 0 | 0 | 0 | none (clean) | |
-| `<initializer_list>` | 1 | 56 | 45 | `__type_traits/enable_if.h:20:1`: templates | templates 46, overloaded operators 7 |
-| `<compare>` | 1 | 417 | 385 | `__type_traits/enable_if.h:20:1`: templates | templates 289, overloaded operators 43, undeclared identifiers 25 (`__builtin_isnan`, ...), class-object initialization 11, constructors 5 |
-| `<type_traits>` | 1 | 464 | 453 | `__fwd/functional.h:20:1`: templates | templates 441, overloaded operators 8, constructors 2 |
+| `<initializer_list>` | 1 | 47 | 56 | `__type_traits/enable_if.h:22:1`: explicit specialization (WP-070b) | explicit specialization, overloaded operators, follow-ons |
+| `<compare>` | 1 | 399 | 417 | `__type_traits/enable_if.h:22:1`: explicit specialization (WP-070b) | undeclared identifiers 81 (builtin traits, WP-074), overloaded operators 49 + overloading 33 (WP-068a/b), follow-on type/expression errors 81, explicit specialization 30 |
+| `<type_traits>` | 1 | 431 | 464 | `__type_traits/integral_constant.h:25:43`: conversion functions (WP-067a) | follow-on "unexpected type name" 155 + "expected a type" 52 (mostly builtin traits, WP-074), partial specialization 60 (WP-070b), explicit specialization 27, class template specialization 23 (WP-070a), undeclared identifiers 26 |
 
 The single-header counts rose a little: before WP-065 the parser gave
 up on a class at its first constructor or operator (one "special member

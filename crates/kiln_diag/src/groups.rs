@@ -133,6 +133,9 @@ diag_groups! {
     // driver codegen path (WP-052b)
     UnusedCommandLineArgument = "unused-command-line-argument" [];
     DeleteIncomplete = "delete-incomplete" [];
+    // WP-067a
+    DefaultedFunctionDeleted = "defaulted-function-deleted" [];
+    ClassConversion = "class-conversion" [];
     // WP-078a
     OverloadedVirtual = "overloaded-virtual" [];
     InconsistentMissingOverride = "inconsistent-missing-override" [];

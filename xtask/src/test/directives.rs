@@ -28,6 +28,12 @@ pub enum Expect {
     /// `-fsyntax-only -fdump-ast`; compare the dump with `<test>.expected`
     /// (`spec/ast-dump.md` §7).
     Ast,
+    /// `-fsyntax-only -fdump-record-layouts`; compare the dump with the
+    /// oracle's `-fdump-record-layouts-complete`, block by block.
+    Layout,
+    /// `-fsyntax-only -fdump-vtable-layouts`; compare the dump with the
+    /// oracle's (emitted at code generation) as a set of blocks.
+    Vtables,
 }
 
 impl Expect {
@@ -38,6 +44,8 @@ impl Expect {
             "run" => Self::Run,
             "pp" => Self::Pp,
             "ast" => Self::Ast,
+            "layout" => Self::Layout,
+            "vtables" => Self::Vtables,
             _ => return None,
         })
     }
@@ -50,6 +58,8 @@ impl Expect {
             Self::Run => "run",
             Self::Pp => "pp",
             Self::Ast => "ast",
+            Self::Layout => "layout",
+            Self::Vtables => "vtables",
         }
     }
 }
@@ -216,6 +226,7 @@ pub enum StdinInput {
 
 /// Everything the directive header says about one test.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[allow(clippy::struct_excessive_bools, reason = "independent directives")]
 pub struct TestSpec {
     pub expect: Expect,
     /// The `-std=` value, e.g. `c++26`.
@@ -249,6 +260,9 @@ pub struct TestSpec {
     /// (`-fkiln-instantiation-report=json`), relative to the test's
     /// directory; compared with the `*_us` timings masked.
     pub inst_report: Option<PathBuf>,
+    /// `ast-implicit`: include implicit declarations (`-fdump-ast=implicit`,
+    /// `xtask clang-ast --implicit`).
+    pub ast_implicit: bool,
 }
 
 impl TestSpec {
@@ -313,6 +327,7 @@ struct Parser {
     ast_filter: Option<String>,
     inst_report: Option<PathBuf>,
     inst_report_line: usize,
+    ast_implicit: bool,
     /// Lines of directives whose validity depends on `expect`.
     run_only: Vec<(usize, &'static str)>,
     pp_only: Vec<(usize, &'static str)>,
@@ -349,6 +364,7 @@ impl Parser {
             ast_filter: None,
             inst_report: None,
             inst_report_line: 0,
+            ast_implicit: false,
             run_only: Vec::new(),
             pp_only: Vec::new(),
             ast_only: Vec::new(),
@@ -373,7 +389,7 @@ impl Parser {
                 Some(_) => self.err(line, "duplicate `expect`"),
                 None => self.err(
                     line,
-                    format!("unknown expectation `{value}` (compile-ok|compile-fail|run|pp|ast)"),
+                    format!("unknown expectation `{value}` (compile-ok|compile-fail|run|pp|ast|layout|vtables)"),
                 ),
             },
             "std" => self.std_directive(line, value),
@@ -505,6 +521,16 @@ impl Parser {
                 self.err(line, "duplicate `strict-diags`");
             }
             self.strict_diags = true;
+            return None;
+        }
+        if name == "ast-implicit" {
+            self.ast_only.push((line, "ast-implicit"));
+            if value.is_some() {
+                self.err(line, "`ast-implicit` takes no value");
+            } else if self.ast_implicit {
+                self.err(line, "duplicate `ast-implicit`");
+            }
+            self.ast_implicit = true;
             return None;
         }
         if name == "pp-linemarkers" {
@@ -693,7 +719,12 @@ impl Parser {
             run_args: self.run_args,
             stdin,
             env: self.env,
-            oracle: self.oracle.unwrap_or(matches!(expect, Expect::Run | Expect::Pp)),
+            // `layout` and `vtables` have no golden: the oracle is their
+            // only reference, and `oracle:` does not apply to them.
+            oracle: self.oracle.unwrap_or(matches!(
+                expect,
+                Expect::Run | Expect::Pp | Expect::Layout | Expect::Vtables
+            )),
             oven: self.oven,
             skip: self.skip,
             xfail: self.xfail,
@@ -701,6 +732,7 @@ impl Parser {
             pp_linemarkers: self.pp_linemarkers,
             ast_filter: self.ast_filter,
             inst_report: self.inst_report,
+            ast_implicit: self.ast_implicit,
         })
     }
 }
@@ -1098,11 +1130,40 @@ mod tests {
             errs("//@ ast-filter: f\n"),
             ["line 1: `ast-filter` only applies to `expect: ast`"]
         );
+        let s = ok("//@ expect: ast\n//@ ast-implicit\n");
+        assert!(s.ast_implicit);
+        assert!(!ok("//@ expect: ast\n").ast_implicit);
+        assert_eq!(
+            errs("//@ ast-implicit\n"),
+            ["line 1: `ast-implicit` only applies to `expect: ast`"]
+        );
+        assert_eq!(
+            errs("//@ expect: ast\n//@ ast-implicit\n//@ ast-implicit\n"),
+            ["line 3: duplicate `ast-implicit`"]
+        );
+        assert_eq!(
+            errs("//@ expect: ast\n//@ ast-implicit: yes\n"),
+            ["line 2: `ast-implicit` takes no value"]
+        );
         let e = errs("//@ expect: ast\n//@ ast-filter: a\n//@ ast-filter: b\n");
         assert_eq!(e, ["line 3: duplicate `ast-filter`"]);
         let e = errs("//@ expect: ast\n//@ ast-filter: c d\n");
         assert!(e[0].contains("without whitespace"), "{e:?}");
         assert!(errs("//@ ast-filter\n")[0].contains("requires a value"));
+    }
+
+    #[test]
+    fn layout_and_vtables_directives() {
+        for (text, want) in [("layout", Expect::Layout), ("vtables", Expect::Vtables)] {
+            let s = ok(&format!("//@ expect: {text}\n//@ diag: 2 warning \"w\"\n"));
+            assert_eq!(s.expect, want);
+            assert_eq!(s.expect.as_str(), text);
+            assert!(s.oracle, "the oracle is the only reference of `{text}`");
+            let e = errs(&format!("//@ expect: {text}\n//@ oracle: none\n"));
+            assert_eq!(e, ["line 2: `oracle` only applies to `run`, `pp` and `ast` tests"]);
+            let e = errs(&format!("//@ expect: {text}\n//@ ast-filter: f\n"));
+            assert_eq!(e, ["line 2: `ast-filter` only applies to `expect: ast`"]);
+        }
     }
 
     #[test]
