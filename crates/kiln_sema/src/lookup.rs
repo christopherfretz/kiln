@@ -172,8 +172,14 @@ impl Sema<'_, '_> {
     /// Unqualified lookup of `name` from the current scope
     /// ([basic.lookup.unqual]).
     pub fn lookup_name(&self, name: Symbol, kind: LookupKind) -> Found {
+        // Namespaces nominated by block-scope using-directives: their
+        // members appear as if declared in the nearest enclosing
+        // namespace that contains both the directive and the nominated
+        // namespace ([namespace.udir]/2).
+        let mut local_dirs: Vec<DeclId> = Vec::new();
         for s in self.scopes.iter().rev() {
             if s.is_local() {
+                local_dirs.extend(s.using_dirs.iter().copied());
                 let hit = match kind {
                     LookupKind::Tag => s.find(name, Ns::Tag),
                     LookupKind::Ordinary => {
@@ -219,12 +225,37 @@ impl Sema<'_, '_> {
             for &n in &s.using_dirs {
                 v.extend(self.ast.lookup_local(n, DeclName::ident(name)).iter());
             }
+            if matches!(s.kind, ScopeKind::Namespace | ScopeKind::TranslationUnit) {
+                let mut i = 0;
+                while i < local_dirs.len() {
+                    if self.encloses(entity, local_dirs[i]) {
+                        let n = local_dirs.remove(i);
+                        v.extend(self.ast.lookup_local(n, DeclName::ident(name)).iter());
+                    } else {
+                        i += 1;
+                    }
+                }
+            }
             let via = self.filter(v, kind);
             if !via.is_empty() {
                 return via;
             }
         }
         Found::default()
+    }
+
+    /// True if namespace `outer` is `inner` or encloses it.
+    fn encloses(&self, outer: DeclId, inner: DeclId) -> bool {
+        let outer = self.ast.first(outer);
+        let mut cur = Some(inner);
+        for _ in 0..10_000 {
+            let Some(c) = cur else { return false };
+            if self.ast.first(c) == outer {
+                return true;
+            }
+            cur = self.ast.decls.get(c).ctx();
+        }
+        false
     }
 
     /// Looks `name` up in the innermost scope only (for redeclaration
