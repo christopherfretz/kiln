@@ -549,6 +549,9 @@ pub struct Declarator {
     /// `...` before the declarator-id: a function or template parameter
     /// pack ([dcl.fct]/16, [temp.variadic]/3).
     pub ellipsis: Option<Loc>,
+    /// The trailing requires-clause of a function declarator
+    /// ([dcl.decl.general]/4, [temp.pre]/9).
+    pub trailing_requires: Option<ExprId>,
 }
 
 /// A declarator-id that is not an identifier ([dcl.decl]/4,
@@ -589,6 +592,7 @@ impl Declarator {
             explicit_object: None,
             op_name: None,
             ellipsis: None,
+            trailing_requires: None,
         }
     }
 

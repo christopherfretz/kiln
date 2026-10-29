@@ -151,7 +151,20 @@ impl Parser<'_, '_> {
     }
 
     fn cur_binop(&self) -> Option<(u8, Option<BinaryOp>)> {
-        Self::punct_of(self.tok()).and_then(binop)
+        let p = Self::punct_of(self.tok())?;
+        if !self.greater_is_op && matches!(p, Punct::Greater | Punct::GreaterGreater) {
+            return None;
+        }
+        binop(p)
+    }
+
+    /// Runs `f` with `>` treated as an operator or not (clang's
+    /// `GreaterThanIsOperatorScope`).
+    pub(crate) fn with_greater_op<T>(&mut self, on: bool, f: impl FnOnce(&mut Self) -> T) -> T {
+        let saved = std::mem::replace(&mut self.greater_is_op, on);
+        let r = f(self);
+        self.greater_is_op = saved;
+        r
     }
 
     /// clang's `ParseRHSOfBinaryExpression`.

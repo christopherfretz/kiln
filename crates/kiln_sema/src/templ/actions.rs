@@ -276,6 +276,7 @@ impl Sema<'_, '_> {
     /// `template<params> concept name = e;` ([temp.concept]/1); the head
     /// was consumed by [`Sema::take_template_head`].
     pub fn act_concept(&mut self, head: TemplateParamListId, name: Symbol, loc: Loc, e: ExprId) -> DeclId {
+        let _ = self.take_template_head(None);
         self.templ.cur = None;
         if self.in_local_scope() || self.kind_of(self.ctx) == DeclKind::CXXRecord {
             self.error(DiagId::sema_template_outside_namespace_or_class, loc);

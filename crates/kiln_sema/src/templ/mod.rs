@@ -552,6 +552,22 @@ impl Sema<'_, '_> {
         self.templ.invented = 0;
     }
 
+    /// Attaches the trailing requires-clause `r` to function `f`
+    /// ([dcl.decl.general]/4); only a templated function may have one
+    /// ([dcl.decl.general]/5).
+    pub fn act_on_trailing_requires(&mut self, f: DeclId, r: ExprId) {
+        if self.kind_of(f).payload() != kiln_ast::decl::PayloadClass::Function {
+            let loc = self.ast.exprs.get(r).loc();
+            self.error(DiagId::sema_trailing_requires_non_function, loc);
+            return;
+        }
+        if !self.in_template() {
+            let loc = self.ast.exprs.get(r).loc();
+            self.error(DiagId::sema_trailing_requires_non_template, loc);
+        }
+        let _ = self.ast.templates.trailing_requires.insert(f, r);
+    }
+
     /// The default argument recorded for template parameter `p`.
     pub fn template_default(&self, p: DeclId) -> Option<TemplateArg> {
         self.ast.templates.defaults.get(p).copied()

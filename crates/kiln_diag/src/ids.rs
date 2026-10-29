@@ -858,6 +858,8 @@ diag_ids! {
     sema_template_requires_args = Error (2) "use of {0} {1} requires template arguments";
     sema_typedef_template = Error (0) "a typedef cannot be a template";
     sema_member_template_field = Error (1) "data member {0} cannot be a member template";
+    sema_trailing_requires_non_function = Error (0) "trailing requires clause can only be used when declaring a function";
+    sema_trailing_requires_non_template = Error (0) "non-templated function cannot have a requires clause";
 }
 
 impl DiagId {

@@ -922,6 +922,9 @@ impl Sema<'_, '_> {
         if invalid {
             self.ast.decls.set_flags(decl, DeclFlags::INVALID);
         }
+        if let Some(r) = d.trailing_requires {
+            self.act_on_trailing_requires(decl, r);
+        }
         self.set_member_access(decl);
         if let Some(t) = self.finish_template_pattern(decl) {
             self.set_member_access(t);
