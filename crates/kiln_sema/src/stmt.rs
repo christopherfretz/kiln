@@ -203,7 +203,7 @@ impl Sema<'_, '_> {
     /// An expression statement ([stmt.expr]): `e` is a discarded-value
     /// full-expression.
     pub fn act_on_expr_stmt(&mut self, e: ExprId) -> StmtId {
-        if !self.check_builtin_fn_use(e) {
+        if !self.check_builtin_fn_use(e) && !self.check_overload_use(e) {
             self.diagnose_unused(e);
         }
         let e = self.act_on_full_expr(e);
@@ -216,11 +216,7 @@ impl Sema<'_, '_> {
             Ok(c) => c,
             Err(err) => {
                 let loc = self.ast.exprs.get(e).loc();
-                let mut d = self.diag(err.id, loc);
-                for a in err.args {
-                    d = d.arg(a);
-                }
-                self.emit(d);
+                self.emit(err.diag_at(self, loc));
                 e
             }
         };

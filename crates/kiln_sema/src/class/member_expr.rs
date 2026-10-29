@@ -146,8 +146,26 @@ impl Sema<'_, '_> {
             return self.recover_err(&[base], loc);
         };
         if found.decls.len() > 1 {
-            self.unsupported("overloaded member functions", loc);
-            return self.recover_err(&[base], loc);
+            if !self.is_member_overload_set(&found.decls) {
+                self.unsupported("this kind of overloaded member access", loc);
+                return self.recover_err(&[base], loc);
+            }
+            // spec/sema-overload.md §2.3: resolved by the call.
+            let set = crate::overload::OvlMember {
+                name,
+                decls: found.decls.clone(),
+                found: (0..found.decls.len())
+                    .map(|i| found.found.get(i).copied().unwrap_or(found.decls[i]))
+                    .collect(),
+                naming: found.naming.unwrap_or(def),
+                obj_ty,
+                def,
+                base: b,
+                arrow,
+                nns: None,
+                implicit: false,
+            };
+            return self.build_member_overload(set, loc);
         }
         if crate::lookup::is_type_kind(self.kind_of(m)) {
             let text = self.ast.symbols().as_str(name).to_owned();
@@ -172,7 +190,7 @@ impl Sema<'_, '_> {
     /// Member `m` of the object `b` (a pointer for `arrow`) of class type
     /// `obj_ty` (complete class `obj_class`).
     #[allow(clippy::too_many_arguments, reason = "the operands of a member access")]
-    fn member_of_object(
+    pub(crate) fn member_of_object(
         &mut self,
         b: ExprId,
         obj_ty: QualType,
@@ -297,6 +315,16 @@ impl Sema<'_, '_> {
                 return b;
             }
             let ty = to_ty(self, obj_class);
+            // clang's `ImpCastExprToType` folds a no-op cast into the
+            // one below it (the xvalue of an implicit move).
+            let b = if !arrow
+                && self.ast.exprs.get(b).kind() == ExprKind::ImplicitCastExpr
+                && self.ast.exprs.cast_kind(b) == CastKind::NoOp
+            {
+                self.ast.exprs.operand(b)
+            } else {
+                b
+            };
             return self.builder().cast(
                 ExprKind::ImplicitCastExpr,
                 CastKind::NoOp,
@@ -376,6 +404,8 @@ impl Sema<'_, '_> {
                 let Some(mem) = self.bind_object_argument(x, m) else {
                     return Some(self.recover_err(&kids, loc));
                 };
+                // `(b.f)(…)` keeps its parentheses.
+                let mem = if mem == x { callee } else { self.rebuild_parens(callee, mem) };
                 let fn_ty = self.ast.decls.get(m).ty().unwrap_or(QualType::ERROR);
                 (mem, Some(m), fn_ty)
             }

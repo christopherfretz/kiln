@@ -1005,13 +1005,43 @@ impl Sema<'_, '_> {
                 self.missing_default_ctor(ty, class, entity, loc);
                 None
             }
-            Selected::Missing => {
-                // todo(WP-068a): "no matching constructor" with the
-                // candidate notes.
-                self.unsupported("this constructor call", loc);
+            Selected::Missing | Selected::Ambiguous => {
+                let ambiguous = matches!(sel, Selected::Ambiguous);
+                let (conversion, param_note) = match sites.deleted_as {
+                    DeletedAs::Conversion(n) => (true, n),
+                    _ => (false, None),
+                };
+                let msg = if conversion {
+                    let from = call.args.first().map_or(QualType::ERROR, |&a| self.ety(a));
+                    let id = if ambiguous {
+                        DiagId::sema_ovl_ambiguous_conversion
+                    } else {
+                        DiagId::sema_no_viable_conversion
+                    };
+                    self.diag(id, sites.deleted).arg(self.ty_arg(from)).arg(self.ty_arg(ty))
+                } else {
+                    let id = if ambiguous {
+                        DiagId::sema_ovl_ambiguous_ctor
+                    } else {
+                        DiagId::sema_ovl_no_viable_ctor
+                    };
+                    self.diag(id, sites.deleted).arg(self.ty_arg(ty))
+                };
+                let mut msg = match self.ovl.failed.take() {
+                    Some(set) => {
+                        let m = self.with_ovl_notes(msg, &set, ambiguous);
+                        self.end_set(set);
+                        m
+                    }
+                    None => msg,
+                };
+                if let Some(n) = param_note {
+                    msg = msg.with_note(n);
+                }
+                self.emit(msg);
                 None
             }
-            Selected::Ambiguous | Selected::Unsupported => {
+            Selected::Unsupported => {
                 self.unsupported("selecting the constructor", loc);
                 None
             }

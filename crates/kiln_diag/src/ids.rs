@@ -567,7 +567,6 @@ diag_ids! {
     sema_redeclaration_different_type = Error (3) "redeclaration of '{0}' with a different type: {1} vs {2}";
     sema_redefinition_different_typedef = Error (3) "{0:typedef|type alias} redefinition with different types ({1} vs {2})";
     sema_ovl_diff_return_type = Error (0) "functions that differ only in their return type cannot be overloaded";
-    sema_overload_unsupported = Error (1) "overloading '{0}' is not supported yet";
     sema_static_non_static = Error (1) "static declaration of '{0}' follows non-static declaration";
     sema_param_redefinition = Error (1) "redefinition of parameter '{0}'";
     sema_duplicate_member = Error (1) "duplicate member '{0}'";
@@ -1105,6 +1104,34 @@ diag_ids! {
     note_ref_or_ptr_member_here = Note (1) "{0:reference|pointer} member declared here";
     // WP-086: the stack guard (spec/sema-templates.md §10.3, D1).
     sema_stack_exhausted = Fatal (1) "kiln: stack exhausted during {0:parsing|template instantiation|constant evaluation}; reduce nesting or raise -fkiln-stack-size";
+    sema_ovl_static_nonstatic_member = Error (0) "static and non-static member functions with the same parameter types cannot be overloaded";
+    sema_ovl_no_viable_member_function_in_call = Error (1) "no matching member function for call to '{0}'";
+    sema_ovl_ambiguous_call = Error (1) "call to '{0}' is ambiguous";
+    sema_ovl_ambiguous_member_call = Error (1) "call to member function '{0}' is ambiguous";
+    sema_ovl_deleted_member_call = Error (2) "call to deleted member function '{0}'{1}";
+    sema_ovl_no_viable_ctor = Error (1) "no matching constructor for initialization of {0}";
+    sema_ovl_ambiguous_ctor = Error (1) "call to constructor of {0} is ambiguous";
+    sema_ovl_ambiguous_conversion = Error (2) "conversion from {0} to {1} is ambiguous";
+    sema_ovl_unresolvable = Error (1) "reference to overloaded function could not be resolved; did you mean to call it{0:| with no arguments}?";
+    sema_addr_ovl_no_match = Error (2) "address of overloaded function '{0}' does not match required type {1}";
+    sema_addr_ovl_ambiguous = Error (1) "address of overloaded function '{0}' is ambiguous";
+    note_ovl_candidate = Note (1) "candidate {0}";
+    note_ovl_candidate_kind_not_viable = Note (2) "candidate {0} not viable: {1}";
+    note_ovl_candidate_deleted = Note (2) "candidate {0} has been {1:explicitly|implicitly} deleted";
+    note_ovl_candidate_explicit = Note (1) "explicit {0:constructor|conversion function|deduction guide} is not a candidate";
+    note_possible_target = Note (0) "possible target for call";
+    sema_addr_ovl_cast = Error (3) "address of overloaded function '{0}' cannot be {1:cast|static_cast} to type {2}";
+    sema_addr_ovl_reinterpret = Error (2) "reinterpret_cast cannot resolve overloaded function '{0}' to type {1}";
+    note_ovl_candidate_fn_arity = Note (3) "candidate {0} has different number of parameters (expected {1} but has {2})";
+    note_ovl_candidate_fn_param = Note (4) "candidate {0} has type mismatch at {1} parameter (expected {2} but has {3})";
+    note_ovl_candidate_fn_return = Note (3) "candidate {0} has different return type ({1} expected but has {2})";
+    note_ovl_candidate_fn_noexcept = Note (1) "candidate {0} has different exception specification";
+    sema_ref_init_ambiguous = Error (2) "reference initialization of type {0} with initializer of type {1} is ambiguous";
+    sema_ovl_no_conversion_in_cast = Error (3) "no matching conversion for {0:const_cast|static_cast|reinterpret_cast|dynamic_cast|C-style cast|functional-style cast} from {1} to {2}";
+    sema_ovl_ambiguous_conversion_in_cast = Error (3) "ambiguous conversion for {0:const_cast|static_cast|reinterpret_cast|dynamic_cast|C-style cast|functional-style cast} from {1} to {2}";
+    sema_nonviable_condition_no_candidates = Error (2) "cannot convert {0} to {1} without a conversion operator";
+    sema_bad_static_cast_pointer_nonpointer = Error (2) "cannot cast from type {0} to pointer type {1}";
+    sema_bad_static_cast_member_pointer_nonmp = Error (2) "cannot cast from type {0} to member pointer type {1}";
 }
 
 impl DiagId {

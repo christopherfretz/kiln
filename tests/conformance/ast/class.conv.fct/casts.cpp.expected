@@ -1,0 +1,43 @@
+TranslationUnitDecl
+|-CXXRecordDecl referenced struct A definition
+| |-CXXConversionDecl operator int 'int () const'
+| |-CXXConversionDecl operator long 'long () const'
+| `-CXXConversionDecl used operator double & 'double &()'
+`-FunctionDecl f 'void (A)'
+  |-ParmVarDecl used a 'A'
+  `-CompoundStmt
+    |-DeclStmt
+    | `-VarDecl i 'int' cinit
+    |   `-CXXStaticCastExpr 'int' static_cast<int> <NoOp>
+    |     `-ImplicitCastExpr 'int' <FloatingToIntegral> part_of_explicit_cast
+    |       `-ImplicitCastExpr 'double' <LValueToRValue> part_of_explicit_cast
+    |         `-ImplicitCastExpr 'double' lvalue <UserDefinedConversion> part_of_explicit_cast
+    |           `-CXXMemberCallExpr 'double' lvalue
+    |             `-MemberExpr '<bound member function type>' .operator double &
+    |               `-DeclRefExpr 'A' lvalue ParmVar 'a' 'A'
+    |-DeclStmt
+    | `-VarDecl l 'long' cinit
+    |   `-CXXStaticCastExpr 'long' static_cast<long> <NoOp>
+    |     `-ImplicitCastExpr 'long' <FloatingToIntegral> part_of_explicit_cast
+    |       `-ImplicitCastExpr 'double' <LValueToRValue> part_of_explicit_cast
+    |         `-ImplicitCastExpr 'double' lvalue <UserDefinedConversion> part_of_explicit_cast
+    |           `-CXXMemberCallExpr 'double' lvalue
+    |             `-MemberExpr '<bound member function type>' .operator double &
+    |               `-DeclRefExpr 'A' lvalue ParmVar 'a' 'A'
+    |-DeclStmt
+    | `-VarDecl d 'double' cinit
+    |   `-CStyleCastExpr 'double' <NoOp>
+    |     `-ImplicitCastExpr 'double' <LValueToRValue> part_of_explicit_cast
+    |       `-ImplicitCastExpr 'double' lvalue <UserDefinedConversion> part_of_explicit_cast
+    |         `-CXXMemberCallExpr 'double' lvalue
+    |           `-MemberExpr '<bound member function type>' .operator double &
+    |             `-DeclRefExpr 'A' lvalue ParmVar 'a' 'A'
+    `-DeclStmt
+      `-VarDecl s 'short' cinit
+        `-CXXFunctionalCastExpr 'short' functional cast to short <NoOp>
+          `-ImplicitCastExpr 'short' <FloatingToIntegral> part_of_explicit_cast
+            `-ImplicitCastExpr 'double' <LValueToRValue> part_of_explicit_cast
+              `-ImplicitCastExpr 'double' lvalue <UserDefinedConversion> part_of_explicit_cast
+                `-CXXMemberCallExpr 'double' lvalue
+                  `-MemberExpr '<bound member function type>' .operator double &
+                    `-DeclRefExpr 'A' lvalue ParmVar 'a' 'A'

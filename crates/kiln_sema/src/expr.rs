@@ -196,7 +196,7 @@ impl Sema<'_, '_> {
     /// Emits a conversion error at `loc`.
     pub(crate) fn emit_conv_error(&self, err: ConvError, loc: Loc) {
         let d = err.args.into_iter().fold(self.diag(err.id, loc), Diag::arg);
-        self.emit(d);
+        self.emit(err.notes.into_iter().fold(d, Diag::with_note));
     }
 
     /// Interns the integer (or `bool`) constant `v` of type `ty`.
@@ -660,11 +660,12 @@ impl Sema<'_, '_> {
     // -- names -------------------------------------------------------------------
 
     /// An unqualified id-expression `name` that is the callee of a call
-    /// (followed by `(`) inside a template: as
-    /// [`Sema::act_on_id_expression`], but a non-member function it names
-    /// is marked referenced only by [`Sema::act_on_call`] once the call is
-    /// known not to be dependent (clang builds an `UnresolvedLookupExpr`
-    /// for a dependent call and references nothing; [temp.dep.candidate]).
+    /// (followed by `(`): as [`Sema::act_on_id_expression`], but non-member
+    /// functions it names become an `UnresolvedLookupExpr` with ADL
+    /// unless argument-dependent lookup is suppressed
+    /// (spec/sema-overload.md §2.1–§2.2), and a function it names
+    /// directly is marked referenced only by [`Sema::act_on_call`] once
+    /// the call is known not to be dependent ([temp.dep.candidate]).
     pub fn act_on_call_name(&mut self, name: Symbol, loc: Loc) -> ExprId {
         let saved = std::mem::replace(&mut self.deferring_call_ref, true);
         let e = self.act_on_id_expression(name, loc, None);
@@ -742,13 +743,18 @@ impl Sema<'_, '_> {
             .copied()
             .filter(|&x| !self.ast.decls.get(x).has(DeclFlags::INVALID))
             .collect();
+        if fns && (valid.len() > 1 || self.call_uses_adl(&valid, qualifier.is_none())) {
+            let e = self.overload_name_ref(name, &found, &valid, qualifier.is_none(), nns, loc);
+            if let Some(b) = begin
+                && b != loc
+            {
+                let _ = self.ast.templates.expr_begin.insert(e, b);
+            }
+            return e;
+        }
         if fns && valid.len() == 1 {
             d = valid[0];
         } else if found.decls.len() > 1 {
-            if fns {
-                self.unsupported("overloaded functions", loc);
-                return self.recover_err(&[], loc);
-            }
             // Distinct entities found via using-directives ([namespace.udir]/6).
             let text = self.ast.symbols().as_str(name).to_owned();
             let mut msg = self.diag(DiagId::sema_ambiguous_reference, loc).arg(text);
@@ -786,6 +792,122 @@ impl Sema<'_, '_> {
         }
         self.note_function_name_use(d, e, loc, qualifier.is_none());
         e
+    }
+
+    /// [basic.lookup.argdep]/1–3 for the callee of a call being built by
+    /// [`Sema::act_on_call_name`]: an `unqualified` name whose lookup
+    /// found only non-member functions (or function templates), none of
+    /// them a block-scope declaration or an implicit builtin
+    /// (spec/sema-overload.md §2.2, clang `UseArgumentDependentLookup`).
+    #[inline(never)]
+    pub(crate) fn call_uses_adl(&self, decls: &[DeclId], unqualified: bool) -> bool {
+        unqualified
+            && self.deferring_call_ref
+            && !decls.is_empty()
+            && decls.iter().all(|&d| {
+                matches!(self.kind_of(d), DeclKind::Function | DeclKind::FunctionTemplate)
+                    && self.ast.decls.builtin_id(d).is_none()
+                    && !self
+                        .ast
+                        .decls
+                        .lexical_ctx(d)
+                        .is_some_and(|l| self.ast.decls.get(l).kind().is_function())
+                    && !self
+                        .ast
+                        .decls
+                        .get(d)
+                        .ctx()
+                        .is_some_and(|c| crate::overload::adl::is_class_kind(self.kind_of(c)))
+            })
+    }
+
+    /// The `UnresolvedLookupExpr` for an id-expression naming the
+    /// functions `valid` (the non-invalid decls of `found`): overload
+    /// resolution happens at the call (spec/sema-overload.md §2.1).
+    /// Unqualified results are listed newest first (§2.1, candidate
+    /// order). `None` after diagnosing an unsupported form.
+    #[inline(never)]
+    fn overload_name_ref(
+        &mut self,
+        name: Symbol,
+        found: &crate::lookup::Found,
+        valid: &[DeclId],
+        unqualified: bool,
+        nns: Option<kiln_ast::NnsId>,
+        loc: Loc,
+    ) -> ExprId {
+        if let Some(e) = self.implicit_member_overload(name, found, valid, nns, loc) {
+            return e;
+        }
+        let adl = found.naming.is_none() && self.call_uses_adl(valid, unqualified);
+        let mut decls: Vec<DeclId> = Vec::with_capacity(valid.len());
+        let mut via: Vec<DeclId> = Vec::with_capacity(valid.len());
+        for (i, &d) in found.decls.iter().enumerate() {
+            if valid.contains(&d) {
+                decls.push(d);
+                via.push(found.found.get(i).copied().unwrap_or(d));
+            }
+        }
+        if unqualified && found.naming.is_none() {
+            decls.reverse();
+            via.reverse();
+        }
+        self.build_overload_ref(name, &decls, &via, found.naming, adl, nns, loc)
+    }
+
+    /// An overloaded member name used with an implicit object
+    /// ([class.mfct.non.static]/2, [over.match.call]/2.2): `this->f` where
+    /// `this` may be used and its class is (derived from) the members'
+    /// class (spec/sema-overload.md §2.3). Without such a `this` the set
+    /// stays an `UnresolvedLookupExpr`, and a non-static winner is "call
+    /// to non-static member function without an object argument".
+    fn implicit_member_overload(
+        &mut self,
+        name: Symbol,
+        found: &crate::lookup::Found,
+        valid: &[DeclId],
+        nns: Option<kiln_ast::NnsId>,
+        loc: Loc,
+    ) -> Option<ExprId> {
+        let instance = |s: &Self, d: DeclId| {
+            let d = if s.kind_of(d) == DeclKind::FunctionTemplate {
+                s.pattern_of(d).unwrap_or(d)
+            } else {
+                d
+            };
+            s.is_instance_member(d)
+        };
+        let &first = valid.iter().find(|&&d| instance(self, d))?;
+        let first = if self.kind_of(first) == DeclKind::FunctionTemplate {
+            self.pattern_of(first).unwrap_or(first)
+        } else {
+            first
+        };
+        let class = self.implicit_object_class(first)?;
+        let (this_ty, _) = self.this_class()?;
+        let mut decls = Vec::with_capacity(valid.len());
+        let mut via = Vec::with_capacity(valid.len());
+        for (i, &d) in found.decls.iter().enumerate() {
+            if valid.contains(&d) {
+                decls.push(d);
+                via.push(found.found.get(i).copied().unwrap_or(d));
+            }
+        }
+        let this = self.builder().this_expr(this_ty, true, loc);
+        let obj_ty = self.ast.types.pointee(this_ty).unwrap_or(QualType::ERROR);
+        let set = crate::overload::OvlMember {
+            name,
+            decls,
+            found: via,
+            naming: found.naming.unwrap_or(class),
+            obj_ty,
+            def: class,
+            base: this,
+            arrow: true,
+            nns,
+            implicit: true,
+        };
+        Some(self.build_member_overload(set, loc))
     }
 
     /// A `DeclRefExpr` naming the value `d`.
@@ -1273,6 +1395,9 @@ impl Sema<'_, '_> {
         if self.is_dependent_overloadable(t0) {
             return self.builder().dependent_unary(op, e, loc);
         }
+        if op != UnaryOp::AddrOf && self.check_overload_use(e) {
+            return self.recover_err(&[e], loc);
+        }
         let bad = |s: &mut Self, e: ExprId| {
             let msg = s.diag(DiagId::sema_invalid_unary_operand, loc).arg(s.ty_arg(t0));
             s.emit(msg);
@@ -1343,6 +1468,34 @@ impl Sema<'_, '_> {
     }
 
     fn address_of(&mut self, e: ExprId, loc: Loc) -> ExprId {
+        if let Some(x) = self.member_overload(e) {
+            if x == e
+                && let Some(ule) = self.member_overload_as_lookup(x)
+            {
+                // `&C::f` in a member function of `C`: the overload set
+                // a pointer to member is taken from ([expr.unary.op]/3).
+                return self.builder().unary(
+                    UnaryOp::AddrOf,
+                    ule,
+                    QualType::OVERLOAD,
+                    loc,
+                    ExprFlags::CANNOT_OVERFLOW,
+                );
+            }
+            // [expr.unary.op]/4: `&b.f` is not a pointer to member.
+            self.error(DiagId::sema_nonconst_member_fn_ptr, loc);
+            return self.recover_err(&[e], loc);
+        }
+        if self.overload_operand(e).is_some_and(|(_, addr)| !addr) {
+            // [over.over]: `&f` of an overload set is resolved by its target.
+            return self.builder().unary(
+                UnaryOp::AddrOf,
+                e,
+                QualType::OVERLOAD,
+                loc,
+                ExprFlags::CANNOT_OVERFLOW,
+            );
+        }
         if let Some(mp) = self.member_pointer_of(e, loc) {
             return mp;
         }
@@ -1460,6 +1613,11 @@ impl Sema<'_, '_> {
         }
         if self.expr_is_type_dependent(l) || self.expr_is_type_dependent(r) {
             return self.builder().dependent_binary(op, l, r, loc);
+        }
+        // [over.over]/1: an overload set needs a target; only an
+        // assignment's right operand has one.
+        if self.check_overload_use(l) || (op != BinaryOp::Assign && self.check_overload_use(r)) {
+            return self.recover_err(&[l, r], loc);
         }
         match op {
             BinaryOp::Assign => self.assign(l, r, loc),
@@ -2092,23 +2250,10 @@ impl Sema<'_, '_> {
         self.builder().subscript(b, i, elem, loc)
     }
 
-    /// Reports argument `a` (the `i`th, 0-based) not converting to its
-    /// parameter type `pt`: clang's "no matching function" with the
-    /// candidate's note for a named callee, else the conversion error.
-    fn bad_argument(
-        &mut self,
-        named: Option<DeclId>,
-        callee: ExprId,
-        a: ExprId,
-        pt: QualType,
-        i: usize,
-        err: &ConvError,
-    ) {
-        let Some(d) = named else {
-            let msg = err.diag(self, a);
-            self.emit(msg);
-            return;
-        };
+    /// Reports argument `a` (the `i`th, 0-based) of a call of `d` (a
+    /// one-candidate overload set) not converting to its parameter type
+    /// `pt`: clang's "no matching function" with the candidate's note.
+    fn bad_argument(&mut self, d: DeclId, callee: ExprId, a: ExprId, pt: QualType, i: usize) {
         let msg = self
             .diag(DiagId::sema_ovl_no_viable_function_in_call, self.begin_loc(callee))
             .arg(self.decl_name(d));
@@ -2161,9 +2306,25 @@ impl Sema<'_, '_> {
         if self.is_err_expr(callee) || args.iter().any(|&a| self.is_err_expr(a)) {
             return self.recover_err(&kids, loc);
         }
-        if let Some(e) = self.check_unresolved_callee(callee, args) {
-            return e;
-        }
+        let callee = if self.ast.exprs.get(self.ignore_parens(callee)).kind()
+            == ExprKind::UnresolvedLookupExpr
+            && !self.expr_is_type_dependent(callee)
+            && !args.iter().any(|&a| self.expr_is_type_dependent(a))
+        {
+            match self.resolve_unresolved_call(callee, args, &braced) {
+                Some(e) if !self.is_err_expr(e) => e,
+                _ => return self.recover_err(&kids, loc),
+            }
+        } else if self.member_overload(callee).is_some()
+            && !args.iter().any(|&a| self.expr_is_type_dependent(a))
+        {
+            match self.resolve_member_call(callee, args, &braced) {
+                Some(e) if !self.is_err_expr(e) => self.rebuild_parens(callee, e),
+                _ => return self.recover_err(&kids, loc),
+            }
+        } else {
+            callee
+        };
         if self.expr_is_type_dependent(callee)
             || args.iter().any(|&a| self.expr_is_type_dependent(a))
         {
@@ -2209,10 +2370,12 @@ impl Sema<'_, '_> {
         };
         // A builtin is not overloadable, and its diagnostics name no
         // declaration (clang's `ConvertArgumentsForCall`).
+        let adl_single = self.ovl.adl_single.take();
         let callee_info = named.map(|d| CallCallee {
             decl: d,
             overloadable: self.kind_of(d) == DeclKind::Function
-                && self.ast.decls.builtin_id(d).is_none(),
+                && self.ast.decls.builtin_id(d).is_none()
+                && adl_single == Some(callee),
         });
         let Some(conv_args) =
             self.convert_call_args(callee_info, callee, args, &mut braced, &proto, loc, rparen)
@@ -2338,13 +2501,50 @@ impl Sema<'_, '_> {
                         continue;
                     }
                 }
+                if named.is_some_and(|c| c.overloadable)
+                    && matches!(self.ast.types.canonical_view(to), TypeView::LValueRef(_))
+                    && self.ast.types.as_record(self.ety(a)).is_some()
+                    && !self.is_err_expr(a)
+                {
+                    // The one-candidate set's conversion sequence: a
+                    // deleted conversion function to a reference is no
+                    // conversion ([over.match.ref], clang's
+                    // `FindConversionForRefInit`).
+                    let info = self.arg_info(a);
+                    let opts = crate::overload::IcsOptions::CANDIDATE_ARG;
+                    if self.try_implicit_conversion(&info, to, opts).is_bad()
+                        && let Some(c) = named
+                    {
+                        self.bad_argument(c.decl, callee, a, params[i], i);
+                        return None;
+                    }
+                }
                 match conv::implicit_convert(self, a, to, ConvCtx::Argument) {
                     Ok(x) => conv_args.push(x),
                     Err(err) => {
-                        let d = named
-                            .map(|c| c.decl)
-                            .filter(|&d| self.ast.decls.builtin_id(d).is_none());
-                        self.bad_argument(d, callee, a, params[i], i, &err);
+                        // clang reports an ambiguous or deleted
+                        // user-defined conversion of the selected
+                        // function's argument as such, and so does a
+                        // callee without overload resolution (its direct
+                        // path, noting the parameter, unless a builtin);
+                        // otherwise "no matching function".
+                        let as_such = matches!(
+                            err.id,
+                            DiagId::sema_ovl_ambiguous_conversion
+                                | DiagId::sema_ref_init_ambiguous
+                                | DiagId::sema_conv_deleted_ctor
+                        );
+                        if let Some(c) = named.filter(|c| c.overloadable && !as_such) {
+                            self.bad_argument(c.decl, callee, a, params[i], i);
+                        } else {
+                            let mut d = err.diag(self, a);
+                            let builtin =
+                                named.is_some_and(|c| self.ast.decls.builtin_id(c.decl).is_some());
+                            if !builtin && let Some(&p) = pdecls.get(i) {
+                                d = d.with_note(self.param_decl_note(p));
+                            }
+                            self.emit(d);
+                        }
                         return None;
                     }
                 }
@@ -2668,6 +2868,9 @@ impl Sema<'_, '_> {
             self.emit(msg);
             return self.recover_err(&[e], loc);
         }
+        if self.check_overload_use(e) {
+            return self.recover_err(&[e], loc);
+        }
         self.check_unevaluated_side_effects(e);
         let ty = self.ety(e);
         // [expr.sizeof]/1: in C++ an expression of function type is an
@@ -2699,6 +2902,29 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// [over.over]/1: the operand of a cast to `ty` that names an overload
+    /// set resolves to the function `ty` selects; `None` after
+    /// diagnosing.
+    #[inline(never)]
+    fn cast_overload_set(
+        &mut self,
+        style: CastStyle,
+        ty: QualType,
+        e: ExprId,
+        loc: Loc,
+    ) -> Option<ExprId> {
+        use crate::overload::address::AddrCtx;
+        let ctx = match style {
+            CastStyle::Reinterpret => AddrCtx::Reinterpret,
+            CastStyle::Static => AddrCtx::Cast(1),
+            _ if self.ast.types.is_void(ty) => AddrCtx::Cast(0),
+            _ => AddrCtx::Convert,
+        };
+        // clang reports a C-style cast at its type, just after the `(`.
+        let at = if style == CastStyle::CStyle { loc.with_offset(1) } else { loc };
+        self.resolve_address_of_overloaded(e, ty, true, ctx, at)
+    }
+
     /// An explicit type conversion `style<ty>(e)` ([expr.cast],
     /// [expr.static.cast], [expr.reinterpret.cast], [expr.const.cast],
     /// [expr.type.conv]). `loc` is the cast's start, `rparen` its closing
@@ -2722,6 +2948,14 @@ impl Sema<'_, '_> {
         if is_err {
             return self.recover(ty, &[e], loc);
         }
+        let e = if self.ety(e) == QualType::OVERLOAD {
+            match self.cast_overload_set(style, ty, e, loc) {
+                Some(x) => x,
+                None => return self.recover(ty, &[e], loc),
+            }
+        } else {
+            e
+        };
         if self.ast.types.is_reference(ty) {
             self.unsupported("casts to reference types", loc);
             return self.recover_err(&[e], loc);
@@ -2767,10 +3001,7 @@ impl Sema<'_, '_> {
         }
         // [expr.static.cast]/4: `T(e)`, `(T)e`, `static_cast<T>(e)` for
         // a class `T` direct-initialize a temporary by a constructor.
-        if style.allows_static() && self.ast.types.as_record(ty).is_some() && {
-            let fr = self.ast.types.as_record(self.ety(e));
-            fr.is_none() || !conv::has_conversion_functions(self, self.ety(e))
-        } {
+        if style.allows_static() && self.ast.types.as_record(ty).is_some() {
             let d = self
                 .diag(DiagId::sema_ovl_deleted_conversion_in_cast, loc)
                 .arg(style.select())
@@ -2792,7 +3023,12 @@ impl Sema<'_, '_> {
                     return x;
                 }
                 // A parenthesized aggregate initialization (P0960) is a
-                // no-op cast of the initialized prvalue.
+                // no-op cast of the initialized prvalue, as is the result
+                // of a conversion function (CWG2327).
+                if self.ast.exprs.get(x).kind() == ExprKind::ImplicitCastExpr {
+                    self.mark_explicit(x, e);
+                    return self.explicit_cast(style, CastKind::NoOp, x, ty, loc, rparen);
+                }
                 let kind = if self.ast.exprs.get(x).kind() == ExprKind::CXXParenListInitExpr {
                     CastKind::NoOp
                 } else {
@@ -2802,8 +3038,13 @@ impl Sema<'_, '_> {
                 return self.explicit_cast(style, kind, x, ty, loc, rparen);
             }
         }
-        if self.ast.types.as_record(ty).is_some() || self.ast.types.as_record(self.ety(e)).is_some()
+        if style.allows_static()
+            && self.ast.types.as_record(ty).is_none()
+            && self.ast.types.as_record(self.ety(e)).is_some()
         {
+            return self.cast_user_conversion(style, e, ty, loc, rparen);
+        }
+        if self.ast.types.as_record(ty).is_some() {
             self.unsupported("conversions of class types", loc);
             return self.recover(ty, &[e], loc);
         }
@@ -2883,6 +3124,77 @@ impl Sema<'_, '_> {
         } else {
             self.builder().cast(style.kind(), ck, sub, to, vk, None, loc, flags)
         }
+    }
+
+    /// [expr.static.cast]/4 from a class to a non-class type `ty`: the
+    /// user-defined conversion of the direct-initialization `ty t(e);`
+    /// (explicit conversion functions are candidates), with clang's
+    /// `tryDiagnoseOverloadedCast` errors.
+    #[inline(never)]
+    fn cast_user_conversion(
+        &mut self,
+        style: CastStyle,
+        e: ExprId,
+        ty: QualType,
+        loc: Loc,
+        rparen: Loc,
+    ) -> ExprId {
+        use crate::overload::{Ics, IcsOptions};
+        let to = conv::strip_cv(self, ty);
+        let from = self.ety(e);
+        let a = self.arg_info(e);
+        let id = match self.try_implicit_conversion(&a, to, IcsOptions::ALLOW_EXPLICIT) {
+            Ics::UserDefined(u) if !u.func.is_some_and(|f| self.ovl_deleted(f)) => {
+                return match self.user_convert(e, to, ConvCtx::Cast, loc) {
+                    Some(Ok(x)) if !self.is_err_expr(x) => {
+                        self.mark_explicit(x, e);
+                        self.explicit_cast(style, CastKind::NoOp, x, to, loc, rparen)
+                    }
+                    Some(Ok(_)) => self.recover(ty, &[e], loc),
+                    Some(Err(err)) => {
+                        self.emit_conv_error(err, loc);
+                        self.recover(ty, &[e], loc)
+                    }
+                    None => {
+                        self.unsupported("this user-defined conversion", loc);
+                        self.recover(ty, &[e], loc)
+                    }
+                };
+            }
+            Ics::UserDefined(_) => DiagId::sema_ovl_deleted_conversion_in_cast,
+            Ics::Ambiguous { .. } => DiagId::sema_ovl_ambiguous_conversion_in_cast,
+            // clang's `TryStaticPointerDowncast` / `TryStaticMemberPointerUpcast`
+            // diagnose a class operand of a cast to a pointer first.
+            _ if self.ast.types.is_pointer(to) || self.is_member_pointer(to) => {
+                let id = if self.ast.types.is_pointer(to) {
+                    DiagId::sema_bad_static_cast_pointer_nonpointer
+                } else {
+                    DiagId::sema_bad_static_cast_member_pointer_nonmp
+                };
+                let msg = self.diag(id, loc).arg(self.ty_arg(from)).arg(self.ty_arg(ty));
+                self.emit(msg);
+                return self.recover(ty, &[e], loc);
+            }
+            _ if conv::has_conversion_functions(self, from) => {
+                DiagId::sema_ovl_no_conversion_in_cast
+            }
+            _ => {
+                let msg = self
+                    .diag(DiagId::sema_nonviable_condition_no_candidates, loc)
+                    .arg(self.ty_arg(from))
+                    .arg(self.ty_arg(ty));
+                self.emit(msg);
+                return self.recover(ty, &[e], loc);
+            }
+        };
+        let mut msg =
+            self.diag(id, loc).arg(style.select()).arg(self.ty_arg(from)).arg(self.ty_arg(ty));
+        let notes = self.udc_cast_notes(&a, to, id != DiagId::sema_ovl_no_conversion_in_cast);
+        for n in notes {
+            msg = msg.with_note(n);
+        }
+        self.emit(msg);
+        self.recover(ty, &[e], loc)
     }
 
     fn bad_cast(&mut self, style: CastStyle, e: ExprId, ty: QualType, loc: Loc) -> ExprId {
