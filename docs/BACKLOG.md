@@ -67,7 +67,7 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | id | scope | needs | status |
 |---|---|---|---|
 | WP-S3C | spec: `spec/sema-class.md` — classes, members, `this`, access, bases (non-virtual then virtual), special members (implicit declaration/definition, triviality, deletedness), ctor-initializers, NSDMI, temporaries + `MaterializeTemporaryExpr` + lifetime extension, record layout (bases, vptr) vs clang `-fdump-record-layouts` | — | todo |
-| WP-S3O | spec: `spec/sema-overload.md` — candidate sets ([over.match.*]), viability, user-defined conversion sequences (converting ctors, conversion functions), ranking + tie-breakers, operator overloading incl. builtin candidates and `<=>`/`==` rewrites, implicit object parameter, address of overloaded function, default arguments | — | todo |
+| WP-S3O | spec: `spec/sema-overload.md` — candidate sets, viability, ICS incl. user-defined, ranking, rewritten `<=>`/`==`, operators + builtin candidates, default args, interfaces for deduction/constraints, 068a/068b split, bench `bench/overload` | — | done (2026-10-28; decisions §13.1) |
 | WP-S3T | spec: `spec/sema-templates.md` — parsing (template-ids, `typename`/`template`, packs, requires), dependent names/two-phase lookup, class template instantiation (lazy, member-wise), partial/explicit specialization matching, alias/variable templates, function template deduction ([temp.deduct]), partial ordering, SFINAE + instantiation stack, packs/folds, concepts/constraint satisfaction/subsumption, builtin traits table (`__is_same` …), instantiation memory accounting | — | todo |
 | WP-062 | using-declarations (`using ::name;`, `__using_if_exists__`), using-directives, namespace aliases, `using enum`, `UsingShadow` lookup | — | todo |
 | WP-063 | asm labels on declarations, `__builtin_is_constant_evaluated` (+ Oven/codegen), system-header warning suppression (clang `-isystem` rule), `__builtin_*` declaration table for the C-library builtins libc++ wrappers use | — | todo |
@@ -75,14 +75,15 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-065 | parser classes: member functions (deferred in-class bodies, [class.mem]/7), access specifiers, base-clauses, ctor/dtor/conversion/operator names, ctor-initializers, static data members, NSDMI, friends, `= default`/`= delete`, `this` | — | todo |
 | WP-066 | sema classes 1: member functions, `this`, implicit object param, access control, static members, NSDMI, complete-class contexts, record layout with non-virtual bases + layout-dump differential test | S3C, 065 | todo |
 | WP-067 | sema classes 2: special members, ctor-initializers, member init order, aggregates with bases, temporaries/`MaterializeTemporaryExpr`/lifetime extension, copy elision as clang | 066 | todo |
-| WP-068 | overload resolution per S3O; `CXXOperatorCallExpr`, `CXXMemberCallExpr`; user-defined conversions in ICS (extends WP-049 ranking) | S3O, 066 | todo |
+| WP-068a | overload resolution core per sema-overload.md §11: `overload/{mod,ics,best,diag,adl,call}.rs`, ULE/UME, ADL, ICS with reference binding + DerivedToBase, ranking, ctor/copy/conv/ref/list init, default args, direct-call wording fix, counters, `bench/overload` | S3O, 067 | todo |
+| WP-068b | operators per sema-overload.md §11: `overload/{oper,builtin,arrow,alloc}.rs`, built-in candidate tables (memoized), rewritten/reversed comparisons, surrogates, `->` chains, `operator new`/`delete` lookup | 068a | todo |
 | WP-069 | parser templates: template-declarations, template-ids, `typename`/`template`, packs, `sizeof...`, folds, concept/requires parsing, explicit specialization/instantiation syntax | S3T, 065 | todo |
 | WP-070 | sema templates 1: template decls + dependent types/exprs, class template instantiation (lazy member-wise), partial/explicit specializations, alias + variable templates, static members of templates, instantiation stack diagnostics | 069 | todo |
-| WP-071 | sema templates 2: function templates, deduction from calls/explicit args/defaults, partial ordering, SFINAE, integration with overload resolution | 070, 068 | todo |
+| WP-071 | sema templates 2: function templates, deduction from calls/explicit args/defaults, partial ordering, SFINAE, integration with overload resolution (sema-overload.md §1.3 contract) | 070, 068a | todo |
 | WP-072 | packs: variadic templates, pack expansion in all contexts, fold expressions, `sizeof...` | 071 | todo |
 | WP-073 | concepts: constraint normalization, satisfaction, subsumption, `requires`-expressions, constrained `auto`, abbreviated function templates | 071 | todo |
 | WP-074 | `auto`/`decltype`/`decltype(auto)`, `declval`, the builtin type-trait table (`__is_same`, `__is_base_of`, `__is_constructible`…, per S3T table), `__make_integer_seq`/`__type_pack_element` | 070 | todo |
-| WP-075 | lambdas: closure types, captures (copy/ref/init/`this`), generic lambdas, constexpr lambdas | 067, 068 (generic: 071) | todo |
+| WP-075 | lambdas: closure types, captures (copy/ref/init/`this`), generic lambdas, constexpr lambdas | 067, 068a (generic: 071) | todo |
 | WP-061b | Oven heap (see M3 preparation) | 061a | todo |
 | WP-076 | Oven classes: ctors/dtors/`this`/member calls, `BeginLife`/`EndLife` subobjects, temporaries, unions with ctors, pointers to members, `std::construct_at`/allocator recognition | 067, 061b | todo |
 | WP-077 | Oven virtual + RTTI: dynamic type in allocations, virtual calls via `SemaBridge::vtable`, `dynamic_cast`/`typeid` in constant evaluation | 076, 078 | todo |
