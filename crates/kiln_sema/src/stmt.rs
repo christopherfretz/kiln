@@ -523,6 +523,9 @@ impl Sema<'_, '_> {
                 } else {
                     let e = self.implicit_move(e);
                     let c = self.convert_for_init(e, ret, ConvCtx::Return);
+                    if self.ast.types.is_reference(ret) && !self.is_err_expr(c) {
+                        self.check_dangling_temporary(crate::class::BindingSite::Return, c);
+                    }
                     Some(self.act_on_full_expr(c))
                 }
             }

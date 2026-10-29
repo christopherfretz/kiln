@@ -7,7 +7,7 @@
 //! polymorphic class ([expr.dynamic.cast]/6).
 
 use kiln_ast::decl::DefinitionBits;
-use kiln_ast::expr::{CastKind, StorageDuration, ValueCategory};
+use kiln_ast::expr::{CastKind, ValueCategory};
 use kiln_ast::types::TypeView;
 use kiln_ast::{ExprId, QualType};
 use kiln_diag::DiagId;
@@ -90,13 +90,7 @@ impl Sema<'_, '_> {
                 && n.value_category() == ValueCategory::PRValue
                 && self.ast.types.as_record(n.ty()).is_some()
             {
-                x = self.builder().materialize_temporary(
-                    e,
-                    n.ty(),
-                    false,
-                    StorageDuration::FullExpression,
-                    None,
-                );
+                x = self.materialize_temporary(e, n.ty(), false);
             }
             (x, n.ty())
         };

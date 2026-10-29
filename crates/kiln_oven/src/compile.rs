@@ -2702,6 +2702,10 @@ impl Compiler<'_> {
                 self.emit_at(Op::ZeroInit, 0, &[p, ty.0], e);
                 return;
             }
+            // Default-initialization by a trivial constructor performs no
+            // initialization ([dcl.init.general]/7.1): the object stays
+            // indeterminate.
+            ExprKind::CXXConstructExpr if self.ast().is_trivial_default_construction(e) => return,
             _ => {}
         }
         if !self.o.types.is_aggregate(ty) {

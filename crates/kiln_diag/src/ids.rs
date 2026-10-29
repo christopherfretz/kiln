@@ -953,6 +953,32 @@ diag_ids! {
     parse_expected_qualified_after_typename = Error (0) "expected a qualified name after 'typename'";
     parse_expected_fold_operator = Error (0) "expected a foldable binary operator in fold expression";
     parse_template_kw_missing = Error (1) "missing 'template' keyword prior to dependent template name '{0}'";
+    // WP-067b: construction, ctor-initializers, implicit definitions,
+    // temporaries ([class.base.init], [class.temporary], spec/sema-class.md §4.5-§5).
+    sema_temp_return_local = Error (0) "returning reference to local temporary object";
+    sema_temp_member_ref = Error (1) "reference member {0} binds to a temporary object whose lifetime would be shorter than the lifetime of the constructed object";
+    note_temp_member_ref_here = Note (0) "reference member declared here";
+    sema_temp_dtor_access = Error (2) "temporary of type {0} has {1:private|protected} destructor";
+    sema_init_mem_not_member_or_base = Error (1) "member initializer '{0}' does not name a non-static data member or base class";
+    sema_init_multiple_member = Error (1) "multiple initializations given for non-static member '{0}'";
+    sema_init_multiple_base = Error (1) "multiple initializations given for base {0}";
+    note_init_previous = Note (0) "previous initialization is here";
+    sema_init_delegating_alone = Error (0) "an initializer for a delegating constructor must appear alone";
+    sema_init_multiple_union = Error (0) "initializing multiple members of union";
+    sema_init_uninit_member = Error (4) "{0:constructor for|implicit default constructor for} {1} must explicitly initialize the {2:reference|const} member {3}";
+    sema_init_missing_default_ctor = Error (4) "{0:constructor for|implicit default constructor for} {1} must explicitly initialize the {2:base class|member} {3} which does not have a default constructor";
+    sema_reorder_ctor = WarningOff [ReorderCtor] (4) "{0:field|base class} {1} will be initialized after {2:field|base} {3}";
+    sema_field_uninit_use = Warning [Uninitialized] (1) "field {0} is uninitialized when used here";
+    sema_delegating_ctor_cycle = WarningError [DelegatingCtorCycles] (1) "constructor for {0} creates a delegation cycle";
+    note_it_delegates_to = Note (0) "it delegates to";
+    note_which_delegates_to = Note (0) "which delegates to";
+    sema_pure_virtual_call_in_cdtor = Warning [CallToPureVirtualFromCtorDtor] (3) "call to pure virtual member function {0} has undefined behavior; overrides of {0} in subclasses are not available in the {1:constructor|destructor} of {2}";
+    note_member_synthesized_at = Note (3) "in {0:implicit|defaulted} {1:default constructor|copy constructor|move constructor|copy assignment operator|move assignment operator|destructor} for {2} first required here";
+    sema_dtor_access_field = Error (2) "field of type {0} has {1:private|protected} destructor";
+    sema_dtor_access_base = Error (2) "base class {0} has {1:private|protected} destructor";
+    sema_access_base_ctor = Error (4) "{0:base class|inherited virtual base class} {1} has {3:private|protected} {2:default |copy |move |}constructor";
+    sema_access_field_ctor = Error (3) "field of type {0} has {2:private|protected} {1:default |copy |move |}constructor";
+    note_member_declared_at = Note (0) "member is declared here";
 }
 
 impl DiagId {

@@ -1656,6 +1656,9 @@ impl Cg<'_> {
             ExprKind::ExprWithCleanups | ExprKind::MaterializeTemporaryExpr => {
                 self.agg_visit(self.sub(e), dest, zeroed)
             }
+            // Default-initialization by a trivial constructor: no code
+            // (clang `EmitCXXConstructExpr` skips trivial default ctors).
+            ExprKind::CXXConstructExpr if ast.is_trivial_default_construction(e) => Ok(()),
             ExprKind::InitListExpr => {
                 if ast.types.is_array(q) {
                     self.array_init(e, dest, zeroed)
@@ -1892,7 +1895,10 @@ impl Cg<'_> {
         let a = self.f.fir.alloca(ty, align);
         let addr = Addr { v: a, ty, align };
         self.f.locals.insert(d, addr);
-        let Some(init) = v.init else { return Ok(()) };
+        // Default-initialization by a trivial constructor emits nothing.
+        let Some(init) = v.init.filter(|&i| !ast.is_trivial_default_construction(i)) else {
+            return Ok(());
+        };
         if self.f.fir.cur().is_none() {
             return Ok(());
         }

@@ -934,8 +934,10 @@ impl VarSpec {
     pub const fn with_init_style(self, s: InitStyle) -> Self {
         VarSpec((self.0 & !(3 << 5)) | ((s as u32) << 5))
     }
-    /// The bits [`DeclArena::mark_var`] may set after creation.
-    pub const LATE: VarSpec = VarSpec(1 << 10);
+    /// The bits [`DeclArena::mark_var`] may set after creation: `nrvo`,
+    /// and the `Call` init style of a default-initialized class variable
+    /// (ORed in from `C` only, with its `CXXConstructExpr`).
+    pub const LATE: VarSpec = VarSpec(1 << 10 | 1 << 5);
 }
 
 bit_accessors!(VarSpec:
@@ -2461,6 +2463,13 @@ impl HeapSize for DeclArena {
 pub mod builtin {
     /// `bool __builtin_is_constant_evaluated() noexcept` ([meta.const.eval]).
     pub const IS_CONSTANT_EVALUATED: u32 = 722;
+
+    /// `void *__builtin_memcpy(void *, const void *, size_t) noexcept`, as
+    /// sema declares it internally for the memberwise copy of arrays in
+    /// implicit assignment operators ([class.copy.assign]/12; clang
+    /// `buildMemcpyForAssignmentOp`). Not in [`ALL`]: a user call is not
+    /// supported yet.
+    pub const MEMCPY: u32 = 865;
 
     /// The id and spelling of every builtin function kiln declares.
     pub const ALL: &[(u32, &str)] = &[(IS_CONSTANT_EVALUATED, "__builtin_is_constant_evaluated")];

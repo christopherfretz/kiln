@@ -604,6 +604,30 @@ fn bind_reference(s: &mut Sema<'_, '_>, e: ExprId, to: QualType) -> Result<ExprI
         if rvalue_ref { vk == ValueCategory::XValue } else { vk == ValueCategory::LValue };
     // A non-const (or volatile) lvalue reference: binds no temporary.
     let plain_lref = !rvalue_ref && (!rq.contains(Quals::CONST) || rq.contains(Quals::VOLATILE));
+    if !plain_lref && vk == ValueCategory::PRValue && related && rq.contains(fq) {
+        // [dcl.init.ref]/5.3.1: a reference-compatible prvalue is
+        // materialized and the reference binds the temporary.
+        return bind_to_temporary(s, e, referee, rq, rvalue_ref, base);
+    }
+    if !plain_lref
+        && !related
+        && s.ast.types.as_record(f_un).is_none()
+        && s.ast.types.as_record(r_un).is_none()
+        && !s.ast.types.is_function(r_un)
+        && !s.ast.types.is_array(r_un)
+    {
+        // [dcl.init.ref]/5.4.2: a temporary of type cv1 T1
+        // copy-initialized from the initializer.
+        let target = s.ast.types.qualify(r_un, rq);
+        let scs = standard_conversion(s, e, r_un, ConvCtx::Initialization)
+            .ok_or_else(|| conversion_error(s, e, r_un, ConvCtx::Initialization))?;
+        let mut x = apply_standard_conversion(s, e, &scs, r_un)?;
+        if !rq.is_empty() {
+            x = qualify_prvalue(s, x, target);
+        }
+        let x = s.materialize_temporary(x, target, !rvalue_ref);
+        return Ok(x);
+    }
     if !related {
         if plain_lref {
             let sel = if rq.contains(Quals::VOLATILE) { "1" } else { "0" };
@@ -675,6 +699,64 @@ fn bind_reference(s: &mut Sema<'_, '_>, e: ExprId, to: QualType) -> Result<ExprI
             ))
         }
     }
+}
+
+/// Binds a reference to the temporary materialized from the
+/// reference-compatible prvalue `e` ([dcl.init.ref]/5.3.1, clang
+/// `PerformInitialization`'s `SK_BindReferenceToTemporary`): `e` is
+/// adjusted to cv1 T2, materialized (an lvalue for an lvalue
+/// reference), then converted to the base T1.
+fn bind_to_temporary(
+    s: &mut Sema<'_, '_>,
+    e: ExprId,
+    referee: QualType,
+    rq: Quals,
+    rvalue_ref: bool,
+    base: BaseSearch,
+) -> Result<ExprId, ConvError> {
+    let from = ty(s, e);
+    let src = strip_cv(s, from);
+    let qualified = s.ast.types.qualify(src, rq);
+    let x = qualify_prvalue(s, e, qualified);
+    let x = s.materialize_temporary(x, qualified, !rvalue_ref);
+    let vk = if rvalue_ref { ValueCategory::XValue } else { ValueCategory::LValue };
+    match base {
+        BaseSearch::NotDerived => Ok(x),
+        BaseSearch::Unique(p) => {
+            let at = s.begin_loc(e);
+            let b = strip_cv(s, referee);
+            s.check_base_access(src, b, &p, at);
+            let list = path_list(s, &p);
+            let target = s.ast.types.qualify(b, rq);
+            Ok(raw_cast(s, CastKind::DerivedToBase, x, target, vk, Some(list)))
+        }
+        BaseSearch::Ambiguous(paths) => {
+            let shown = bases::ambiguous_paths_string(s, from, &paths);
+            Err(ConvError::new(
+                DiagId::sema_ambiguous_derived_to_base,
+                vec![s.ty_arg(src), s.ty_arg(strip_cv(s, referee)), shown],
+            ))
+        }
+    }
+}
+
+/// The prvalue `e` with the qualifiers of `to` (its own type plus cv): a
+/// `NoOp` cast when they differ, retyping the cast `e` itself when it is
+/// an implicit conversion just built (clang gives the conversion the
+/// qualified type: `ImplicitCastExpr 'const long' <IntegralCast>`).
+fn qualify_prvalue(s: &mut Sema<'_, '_>, e: ExprId, to: QualType) -> ExprId {
+    if s.ast.types.canonical(ty(s, e)) == s.ast.types.canonical(to) {
+        return e;
+    }
+    let n = *s.ast.exprs.get(e);
+    if n.kind() == ExprKind::ImplicitCastExpr
+        && s.ast.exprs.cast_kind(e) != CastKind::LValueToRValue
+    {
+        let ck = s.ast.exprs.cast_kind(e);
+        let op = s.ast.exprs.operand(e);
+        return raw_cast(s, ck, op, to, ValueCategory::PRValue, None);
+    }
+    raw_cast(s, CastKind::NoOp, e, to, ValueCategory::PRValue, None)
 }
 
 /// Converts `e` to type `to` in context `ctx` by an implicit conversion

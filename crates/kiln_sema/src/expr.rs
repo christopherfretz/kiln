@@ -308,6 +308,9 @@ impl Sema<'_, '_> {
             let first = match n.kind() {
                 ExprKind::ImplicitCastExpr
                 | ExprKind::ConstantExpr
+                | ExprKind::MaterializeTemporaryExpr
+                | ExprKind::CXXBindTemporaryExpr
+                | ExprKind::ExprWithCleanups
                 | ExprKind::BinaryOperator
                 | ExprKind::CompoundAssignOperator
                 | ExprKind::ConditionalOperator
@@ -338,6 +341,9 @@ impl Sema<'_, '_> {
         if !self.special.pending_deleted.is_empty() {
             self.flush_pending_deleted();
         }
+        // [intro.execution]/5: the temporaries of the full-expression are
+        // destroyed at its end (spec/sema-class.md §5.3).
+        let e = self.finish_cleanups(e);
         if self.pending_odr.is_empty() {
             return e;
         }
@@ -824,13 +830,8 @@ impl Sema<'_, '_> {
         if self.unevaluated == 0 && !self.in_template() {
             match n.kind() {
                 DeclKind::Function | DeclKind::CXXMethod => {
-                    let own = self
-                        .func
-                        .as_ref()
-                        .is_some_and(|f| self.ast.first(f.decl) == self.ast.first(d));
-                    if !own {
-                        self.mark_used(d);
-                    }
+                    let at = self.eloc(e);
+                    self.mark_function_referenced(d, at);
                 }
                 DeclKind::Var | DeclKind::ParmVar => self.pending_odr.push(e),
                 _ => {}
@@ -2089,7 +2090,8 @@ impl Sema<'_, '_> {
             return self.recover_err(&kids, loc);
         };
         let (ty, vk) = self.call_result(proto.ret(), loc);
-        self.builder().call(f, &conv_args, ty, vk, loc, rparen, ExprFlags::NONE)
+        let call = self.builder().call(f, &conv_args, ty, vk, loc, rparen, ExprFlags::NONE);
+        self.maybe_bind_temporary(call)
     }
 
     /// Converts the arguments of a call through a function of type `proto`
@@ -2394,11 +2396,15 @@ impl Sema<'_, '_> {
     /// Enters an unevaluated operand ([expr.context]/1).
     pub fn enter_unevaluated(&mut self) {
         self.unevaluated += 1;
+        self.push_cleanups();
     }
 
-    /// Leaves an unevaluated operand.
+    /// Leaves an unevaluated operand: its temporaries are never created,
+    /// so they add no cleanups to the enclosing full-expression (clang
+    /// restores the parent's `CleanupInfo`).
     pub fn exit_unevaluated(&mut self) {
         self.unevaluated = self.unevaluated.saturating_sub(1);
+        self.pop_cleanups();
     }
 
     fn trait_name(kind: TraitKind) -> &'static str {

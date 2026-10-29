@@ -394,6 +394,30 @@ impl Sema<'_, '_> {
         Some(self.access_path_notes(msg, &ec, &t, naming))
     }
 
+    /// clang `CheckConstructorAccess` for constructor `m` of a base class
+    /// (`base`) or member subobject initialized by the constructor being
+    /// defined (the current context): a base class constructor is named
+    /// without an object expression, so a protected one is accessible.
+    /// `None` if accessible, else `mk(protected)` with the access-path
+    /// notes.
+    pub(crate) fn subobject_member_access(
+        &self,
+        m: DeclId,
+        base: bool,
+        mk: impl FnOnce(&Self, bool) -> Diag,
+    ) -> Option<Diag> {
+        let declaring = self.declaring_class(m)?;
+        let declaring = self.ast.definition(declaring).unwrap_or(declaring);
+        let t = self.member_target(m, (!base).then_some(declaring))?;
+        let ec = self.effective_context();
+        let unpriv = self.unprivileged_access(declaring, t.declaring, t.decl_access);
+        if self.is_accessible(&ec, &t, declaring, unpriv) {
+            return None;
+        }
+        let msg = mk(self, unpriv == Access::Protected);
+        Some(self.access_path_notes(msg, &ec, &t, declaring))
+    }
+
     /// Whether special member `m` of the class of a subobject is
     /// accessible from a member of class `from` (clang
     /// `SpecialMemberDeletionInfo::isAccessible`, [class.default.ctor]/2,

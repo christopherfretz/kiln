@@ -15,9 +15,10 @@ mod friend;
 mod member_expr;
 mod members;
 mod special;
+mod temporary;
 mod r#virtual;
 
-use kiln_ast::decl::{Access, DefinitionBits, TagKind};
+use kiln_ast::decl::{Access, DeclFlags, DefinitionBits, TagKind};
 use kiln_ast::types::ExcSpec;
 use kiln_ast::{AttrId, DeclId, ExprId, QualType};
 use kiln_diag::DiagId;
@@ -126,7 +127,8 @@ impl ClassBuild {
 }
 
 pub(crate) use member_expr::MemberRef;
-pub(crate) use special::SpecialState;
+pub(crate) use special::{SpecialState, SynthContext};
+pub(crate) use temporary::BindingSite;
 pub(crate) use r#virtual::{AbstractUse, VirtualSite, ensure_virtuals};
 
 /// Bits of [`Sema`]'s `implicit_declared` map: which implicit special
@@ -323,10 +325,18 @@ impl Sema<'_, '_> {
     /// is no ctor-initializer, so the implicit initializers are always
     /// completed here.
     pub fn act_on_mem_initializers(&mut self, ctor: DeclId, inits: &[MemInitInfo], colon_loc: Loc) {
-        let _ = ctor;
         if !inits.is_empty() {
             self.unsupported("constructor initializers", colon_loc);
+            return;
         }
+        let Some(class) = self.ast.decls.get(ctor).ctx() else { return };
+        if self.ast.decls.get(ctor).flags().contains(DeclFlags::INVALID)
+            || self.ast.decls.get(class).flags().contains(DeclFlags::DEPENDENT_CTX)
+            || self.in_template()
+        {
+            return;
+        }
+        let _ = self.complete_ctor_inits(ctor, class, &[], special::ImplicitInit::Default, false);
     }
 
     /// After the outermost class `r` (not nested in a class being defined)

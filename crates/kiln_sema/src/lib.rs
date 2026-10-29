@@ -138,8 +138,23 @@ pub struct Sema<'a, 'sm> {
     pub(crate) delayed_access_depth: Vec<usize>,
     /// The current full-expression's cleanup state (spec/sema-class.md
     /// §5.3).
-    #[expect(dead_code, reason = "WP-066a interface; read from WP-067b (cleanups)")]
     pub(crate) cleanup: class::CleanupState,
+    /// The cleanup states of the enclosing full-expressions around
+    /// unevaluated operands, innermost last.
+    pub(crate) cleanup_saved: Vec<class::CleanupState>,
+    /// Implicit special members being defined (spec/sema-class.md §4.5),
+    /// innermost last: diagnostics emitted meanwhile get the note `in
+    /// implicit ... for 'T' first required here`.
+    pub(crate) synth: Vec<class::SynthContext>,
+    /// The depth of `synth` whose notes were last printed (clang
+    /// `LastEmittedCodeSynthesisContextDepth`).
+    pub(crate) synth_noted: std::cell::Cell<usize>,
+    /// The internal `__builtin_memcpy` declaration (spec/sema-class.md
+    /// §4.5), once declared.
+    pub(crate) memcpy_decl: Option<DeclId>,
+    /// Delegating constructors and their targets, checked for cycles at
+    /// the end of the translation unit ([class.base.init]/6).
+    pub(crate) delegating: Vec<(DeclId, DeclId, Loc)>,
     /// Materialized temporaries collected for P2718 range-for lifetime
     /// extension (spec/sema-class.md §5.4).
     #[expect(dead_code, reason = "WP-066a interface; read from WP-067b (P2718)")]
@@ -220,6 +235,11 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             delayed_access: Vec::new(),
             delayed_access_depth: Vec::new(),
             cleanup: class::CleanupState::default(),
+            cleanup_saved: Vec::new(),
+            synth: Vec::new(),
+            synth_noted: std::cell::Cell::new(0),
+            memcpy_decl: None,
+            delegating: Vec::new(),
             extend_collector: None,
             unparsed_exc: kiln_source::fx::FxHashSet::default(),
             fn_saved: Vec::new(),
@@ -276,12 +296,13 @@ impl<'a, 'sm> Sema<'a, 'sm> {
 
     /// Emits `d`.
     pub fn emit(&self, d: Diag) {
+        let d = self.with_synth_note(d);
         d.emit(self.diags);
     }
 
     /// Emits a diagnostic with no arguments at `loc`.
     pub fn error(&self, id: DiagId, loc: Loc) {
-        self.diag(id, loc).emit(self.diags);
+        self.emit(self.diag(id, loc));
     }
 
     /// `q` as clang prints a type argument: `'T'`, or `'T' (aka 'int')`

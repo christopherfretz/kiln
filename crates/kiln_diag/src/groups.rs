@@ -44,7 +44,7 @@ macro_rules! diag_groups {
 
 diag_groups! {
     All = "all" [Most];
-    Most = "most" [Comment, UnknownPragmas, OverloadedVirtual];
+    Most = "most" [Comment, UnknownPragmas, OverloadedVirtual, Reorder, Uninitialized];
     Pragmas = "pragmas" [UnknownPragmas, IgnoredPragmas];
     Pedantic = "pedantic" [];
     BackslashNewlineEscape = "backslash-newline-escape" [];
@@ -141,6 +141,12 @@ diag_groups! {
     InconsistentMissingOverride = "inconsistent-missing-override" [];
     AbstractFinalClass = "abstract-final-class" [];
     InaccessibleBase = "inaccessible-base" [];
+    ReturnStackAddress = "return-stack-address" [];
+    Reorder = "reorder" [ReorderCtor];
+    ReorderCtor = "reorder-ctor" [];
+    Uninitialized = "uninitialized" [];
+    DelegatingCtorCycles = "delegating-ctor-cycles" [];
+    CallToPureVirtualFromCtorDtor = "call-to-pure-virtual-from-ctor-dtor" [];
 }
 
 impl Group {

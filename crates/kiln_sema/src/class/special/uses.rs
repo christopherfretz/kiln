@@ -10,12 +10,15 @@
 //! function`, reported at the end of the full-expression or
 //! declaration.
 
-use kiln_ast::decl::{DeclKind, Defaulted, DefinitionBits};
+use kiln_ast::decl::{DeclKind, DefinitionBits, InitStyle, VarSpec};
+use kiln_ast::expr::ConstructionKind;
+use kiln_ast::types::Quals;
 use kiln_ast::{DeclId, ExprId, QualType};
 use kiln_diag::DiagId;
 use kiln_source::Loc;
 
 use super::SpecialKind;
+use super::define::InitEntity;
 use super::deletion::Selected;
 use crate::Sema;
 
@@ -40,7 +43,7 @@ impl Sema<'_, '_> {
     }
 
     /// The `: message` suffix of `= delete("message")` (C++26, P2573).
-    fn delete_message_suffix(&self, d: DeclId) -> String {
+    pub(crate) fn delete_message_suffix(&self, d: DeclId) -> String {
         let first = self.ast.first(d);
         self.ast
             .decls
@@ -128,10 +131,12 @@ impl Sema<'_, '_> {
 
     /// Default-initialization of variable `v` of (array of) class type
     /// `ty` ([dcl.init.general]/7–8) and the destructor it potentially
-    /// invokes ([class.dtor]/15): diagnoses a deleted, ambiguous or
-    /// inaccessible default constructor, a `const` object without a
-    /// user-provided one, and a deleted or inaccessible destructor. The
-    /// constructor call itself is not built yet (todo(WP-067b)).
+    /// invokes ([class.dtor]/15): builds the default constructor call
+    /// (the variable's `callinit` initializer, spec/sema-class.md §5.6),
+    /// diagnosing a deleted, ambiguous or inaccessible default
+    /// constructor and a `const` object without a user-provided one; then
+    /// the destructor must be accessible and not deleted, and is odr-used
+    /// (§4.8).
     pub(crate) fn check_class_default_init(&mut self, v: DeclId, ty: QualType, loc: Loc) {
         let elem = self.base_element(ty);
         let Some(class) = self.element_class(elem) else { return };
@@ -142,51 +147,31 @@ impl Sema<'_, '_> {
         {
             return;
         }
-        let _ = v;
         let mut ok = true;
-        match self.select_special(
-            class,
-            SpecialKind::DefaultCtor,
-            kiln_ast::types::Quals::NONE,
-            kiln_ast::types::Quals::NONE,
-        ) {
-            Selected::Found(m) => {
-                let class_ty = self.ast.types.canonical(self.class_type(class));
-                let msg = self.special_member_access(m, class, |s, prot| {
-                    s.diag(DiagId::sema_access_ctor, loc)
-                        .arg(u8::from(prot))
-                        .arg(s.ty_arg(class_ty))
-                });
-                if let Some(msg) = msg {
-                    self.emit(msg);
-                    ok = false;
+        if let Selected::Missing =
+            self.select_special(class, SpecialKind::DefaultCtor, Quals::NONE, Quals::NONE)
+        {
+            self.unsupported("default-initialization without a default constructor", loc);
+            ok = false;
+        } else {
+            let e = self.construct_special(
+                ty,
+                class,
+                SpecialKind::DefaultCtor,
+                None,
+                ConstructionKind::Complete,
+                loc,
+                InitEntity::Var,
+            );
+            match e {
+                Some(e) => {
+                    let e = self.finish_cleanups(e);
+                    if self.ast.decls.var(v).is_some_and(|x| x.init.is_none()) {
+                        let _ = self.builder().set_var_init(v, e);
+                        self.ast.decls.mark_var(v, VarSpec::new().with_init_style(InitStyle::Call));
+                    }
                 }
-            }
-            Selected::Deleted(m) => {
-                let spec =
-                    self.ast.decls.function(self.ast.first(m)).map(|x| x.spec).unwrap_or_default();
-                let mut msg = if spec.defaulted() == Defaulted::No {
-                    self.diag(DiagId::sema_call_deleted_ctor, loc)
-                        .arg(self.ty_arg(ty))
-                        .arg(self.delete_message_suffix(m))
-                } else {
-                    self.diag(DiagId::sema_call_implicitly_deleted_ctor, loc)
-                        .arg(SpecialKind::DefaultCtor.index())
-                        .arg(self.ty_arg(ty))
-                };
-                for n in self.deleted_function_notes(m, 0) {
-                    msg = msg.with_note(n);
-                }
-                self.emit(msg);
-                ok = false;
-            }
-            Selected::Missing => {
-                self.unsupported("default-initialization without a default constructor", loc);
-                ok = false;
-            }
-            Selected::Ambiguous | Selected::Unsupported => {
-                self.unsupported("selecting the default constructor", loc);
-                ok = false;
+                None => ok = false,
             }
         }
         if ok
@@ -200,12 +185,7 @@ impl Sema<'_, '_> {
         if !ok {
             return;
         }
-        match self.select_special(
-            class,
-            SpecialKind::Dtor,
-            kiln_ast::types::Quals::NONE,
-            kiln_ast::types::Quals::NONE,
-        ) {
+        match self.select_special(class, SpecialKind::Dtor, Quals::NONE, Quals::NONE) {
             Selected::Found(m) => {
                 let msg = self.special_member_access(m, class, |s, prot| {
                     s.diag(DiagId::sema_dtor_access_var, loc)
@@ -214,6 +194,9 @@ impl Sema<'_, '_> {
                 });
                 if let Some(msg) = msg {
                     self.emit(msg);
+                }
+                if !self.defn_bits(class).contains(DefinitionBits::TRIVIAL_DTOR) {
+                    self.mark_function_referenced(m, loc);
                 }
             }
             Selected::Deleted(m) => self.diagnose_deleted_use(m, loc),

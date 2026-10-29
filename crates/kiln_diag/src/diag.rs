@@ -194,6 +194,26 @@ impl Diag {
         self
     }
 
+    /// Inserts `notes` (context notes such as clang's `in implicit ...
+    /// first required here`) before this diagnostic's other notes, as
+    /// clang prints the code-synthesis context right after the
+    /// diagnostic itself.
+    pub fn with_context_notes(mut self, notes: Vec<Diag>) -> Diag {
+        let rest = std::mem::replace(&mut self.notes, notes);
+        self.notes.extend(rest);
+        self
+    }
+
+    /// The diagnostic's id (`None` for a free-text note).
+    pub const fn id(&self) -> Option<DiagId> {
+        self.id
+    }
+
+    /// Where the caret goes.
+    pub const fn loc(&self) -> Loc {
+        self.span.lo
+    }
+
     /// Adds a fix-it hint.
     pub fn fixit(mut self, f: FixIt) -> Diag {
         self.fixits.push(f);

@@ -2092,6 +2092,11 @@ impl Sema<'_, '_> {
         let e = self.perform_init(ty, init, loc, direct);
         let e = self.act_on_full_expr(e);
         let _ = self.builder().set_var_init(v, e);
+        // [class.temporary]/6: the temporaries the variable binds live as
+        // long as it does (spec/sema-class.md §5.4).
+        if !self.is_err_expr(e) {
+            self.extend_temporaries(v, e);
+        }
         // An incomplete array takes its bound from the initializer.
         let ety = self.ast.exprs.get(e).ty();
         if self.ast.types.is_array(ty)
@@ -2314,6 +2319,15 @@ impl Sema<'_, '_> {
         self.end_function_body(body, rbrace);
         if self.ast.definition(f).is_none() {
             let _ = self.builder().set_body(f, body);
+        }
+        if self.kind_of(f) == DeclKind::CXXDestructor
+            && let Some(class) = self.ast.decls.get(f).ctx()
+            && !self.in_template()
+        {
+            // [class.dtor]/13: the subobject destructors are odr-used by a
+            // destructor definition (clang `ActOnFinishFunctionBody`).
+            let loc = self.ast.decls.get(f).loc();
+            self.mark_base_and_member_dtors_referenced(loc, class);
         }
         self.pop_scope();
         if let Some(saved) = self.fn_saved.pop() {

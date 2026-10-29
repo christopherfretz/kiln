@@ -6,8 +6,7 @@
 
 use kiln_ast::decl::{DeclFlags, DeclKind, FnStorage};
 use kiln_ast::expr::{
-    BinaryOp, CastKind, DeclRefExtra, ExprFlags, ExprKind, NonOdrUse, StorageDuration, UnaryOp,
-    ValueCategory,
+    BinaryOp, CastKind, DeclRefExtra, ExprFlags, ExprKind, NonOdrUse, UnaryOp, ValueCategory,
 };
 use kiln_ast::types::{Quals, RefQual};
 use kiln_ast::{DeclId, ExprId, QualType};
@@ -233,7 +232,9 @@ impl Sema<'_, '_> {
                 }
                 let ty = self.non_reference(self.ast.decls.get(m).ty().unwrap_or(QualType::ERROR));
                 let e = self.builder().member(b, m, ty, arrow, loc, extra);
-                if self.unevaluated == 0 && kind != DeclKind::EnumConstant {
+                if self.unevaluated == 0 && kind == DeclKind::CXXMethod {
+                    self.mark_function_referenced(m, loc);
+                } else if self.unevaluated == 0 && kind != DeclKind::EnumConstant {
                     self.mark_used(m);
                 }
                 e
@@ -259,13 +260,7 @@ impl Sema<'_, '_> {
         {
             return e;
         }
-        self.builder().materialize_temporary(
-            e,
-            n.ty(),
-            false,
-            StorageDuration::FullExpression,
-            None,
-        )
+        self.materialize_temporary(e, n.ty(), false)
     }
 
     /// Converts the object `b` (a pointer for `arrow`) of class
@@ -404,14 +399,10 @@ impl Sema<'_, '_> {
         if let Some(m) = method
             && self.unevaluated == 0
         {
-            let own =
-                self.func.as_ref().is_some_and(|f| self.ast.first(f.decl) == self.ast.first(m));
-            if !own {
-                self.mark_used(m);
-            }
+            self.mark_function_referenced(m, loc);
         }
         let (ty, vk) = self.call_result(proto.ret(), loc);
-        Some(self.builder().member_call(
+        let call = self.builder().member_call(
             call_callee,
             &conv_args,
             ty,
@@ -419,7 +410,8 @@ impl Sema<'_, '_> {
             loc,
             rparen,
             ExprFlags::NONE,
-        ))
+        );
+        Some(self.maybe_bind_temporary(call))
     }
 
     /// The implicit object argument of a call of method `m` through the
@@ -597,7 +589,8 @@ impl Sema<'_, '_> {
             self.builder().decl_ref(d, declared, at, None, nou, ExprFlags::NONE)
         };
         if self.kind_of(d) == DeclKind::CXXMethod && self.unevaluated == 0 {
-            self.mark_used(d);
+            let at = self.eloc(e);
+            self.mark_function_referenced(d, at);
         }
         let class_ty = self.tag_type(class).ty();
         let mp = self.ast.types.member_pointer(declared, class_ty);
