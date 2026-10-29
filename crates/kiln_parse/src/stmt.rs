@@ -130,7 +130,7 @@ impl Parser<'_, '_> {
                     if self.ident_of(self.peek(1)).is_some() && self.peek_is(2, Punct::Equal) =>
                 {
                     self.bump();
-                    let Some(name) = self.ident() else { return None };
+                    let name = self.ident()?;
                     let nl = self.bump().span.lo;
                     self.bump();
                     let d = self.parse_namespace_alias(name, nl)?;

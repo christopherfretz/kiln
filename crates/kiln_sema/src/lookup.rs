@@ -108,15 +108,12 @@ impl Sema<'_, '_> {
                 continue;
             }
             let f = self.ast.first(d);
-            match out.decls.iter().position(|&o| self.ast.first(o) == f) {
-                Some(i) => {
-                    out.decls[i] = d;
-                    out.found[i] = raw;
-                }
-                None => {
-                    out.decls.push(d);
-                    out.found.push(raw);
-                }
+            if let Some(i) = out.decls.iter().position(|&o| self.ast.first(o) == f) {
+                out.decls[i] = d;
+                out.found[i] = raw;
+            } else {
+                out.decls.push(d);
+                out.found.push(raw);
             }
         }
         let keep = |out: &mut Found, pred: &dyn Fn(DeclId) -> bool| {

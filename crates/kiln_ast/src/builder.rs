@@ -218,7 +218,7 @@ impl<'a> AstBuilder<'a> {
     /// as written. The declaration itself is not entered in lookup; its
     /// [`AstBuilder::using_shadow`]s are.
     pub fn using_decl(&mut self, h: DeclHead, qualifier: Option<crate::ids::NnsId>) -> DeclId {
-        let q = qualifier.map_or(0, |n| n.raw());
+        let q = qualifier.map_or(0, RawId::raw);
         self.add_unregistered(h, DeclKind::Using, Payload::None(q), true)
     }
 
