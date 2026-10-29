@@ -1,2 +1,2 @@
-{"loc":"@SRC@:3:15","kind":"init","steps":1,"bytes":4,"peak_bytes":4,"calls":0,"allocs":0,"wall_us":0}
-{"total":{"steps":2,"bytes":4,"peak_bytes":4,"calls":0,"allocs":0,"wall_us":0,"evaluations":1}}
+{"loc":"@SRC@:3:15","kind":"init","steps":1,"bytes":4,"peak_bytes":4,"calls":0,"allocs":0,"peak_arena":4,"frozen_bytes":16,"wall_us":0}
+{"total":{"steps":2,"bytes":4,"peak_bytes":4,"calls":0,"allocs":0,"peak_arena":4,"frozen_bytes":16,"wall_us":0,"evaluations":1}}
