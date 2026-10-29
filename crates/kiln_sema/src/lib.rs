@@ -128,8 +128,8 @@ pub struct Sema<'a, 'sm> {
     /// reference that is an error unless `&` consumes it.
     pub(crate) member_refs: kiln_source::fx::FxHashMap<ExprId, (DeclId, bool)>,
     /// The `this` type of the default member initializers being parsed,
-    /// innermost last (`C*`, spec/sema-class.md §2.5).
-    pub(crate) nsdmi_this: Vec<QualType>,
+    /// innermost last, with their fields (`C*`, spec/sema-class.md §2.5).
+    pub(crate) nsdmi_this: Vec<(DeclId, QualType)>,
     /// The static data member whose out-of-line initializer is being
     /// analysed: its class is the access context ([class.access]/7).
     pub(crate) initializing: Option<DeclId>,

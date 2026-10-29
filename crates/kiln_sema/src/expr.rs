@@ -90,7 +90,7 @@ impl CastStyle {
 impl Sema<'_, '_> {
     // -- small helpers ---------------------------------------------------------
 
-    fn ety(&self, e: ExprId) -> QualType {
+    pub(crate) fn ety(&self, e: ExprId) -> QualType {
         self.ast.exprs.get(e).ty()
     }
 
@@ -130,7 +130,7 @@ impl Sema<'_, '_> {
 
     /// The type of a name or member of declared type `t`: references
     /// designate their referent ([expr.type]/1).
-    fn non_reference(&self, t: QualType) -> QualType {
+    pub(crate) fn non_reference(&self, t: QualType) -> QualType {
         if self.ast.types.is_reference(t) {
             self.pointee_sugared(t).unwrap_or(QualType::ERROR)
         } else {

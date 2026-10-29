@@ -452,7 +452,7 @@ impl Sema<'_, '_> {
     }
 
     /// True if namespace `outer` is `inner` or encloses it.
-    fn encloses(&self, outer: DeclId, inner: DeclId) -> bool {
+    pub(crate) fn encloses(&self, outer: DeclId, inner: DeclId) -> bool {
         let outer = self.ast.first(outer);
         let mut cur = Some(inner);
         for _ in 0..10_000 {

@@ -10,11 +10,14 @@
 //! (`access`, `special`, `ctorinit`, `temporary`, `virtual`) arrive with
 //! those packages.
 
+mod members;
+
 use kiln_ast::decl::{Access, DefinitionBits, TagKind};
 use kiln_ast::types::ExcSpec;
 use kiln_ast::{AttrId, DeclId, ExprId, QualType};
 use kiln_source::Loc;
 use kiln_source::symbol::Symbol;
+use kiln_diag::DiagId;
 
 use crate::Sema;
 use crate::declspec::{DeclSpec, Declarator};
@@ -184,19 +187,17 @@ impl Sema<'_, '_> {
     /// empty slice when there is no base-clause. Invalid specifiers are
     /// diagnosed and dropped; the class stays valid.
     pub fn act_on_base_specifiers(&mut self, r: DeclId, specs: &[BaseSpecInfo]) {
-        let _ = r;
-        if let Some(first) = specs.first() {
-            self.unsupported("base classes", first.loc);
-        }
+        self.attach_bases(r, specs);
     }
 
     /// `public:` / `protected:` / `private:` at `loc` in the class being
     /// defined ([class.access.spec]; WP-066b): changes the current access
     /// and returns the `AccessSpec` declaration (kept for the dump).
     pub fn act_on_access_spec(&mut self, access: Access, loc: Loc) -> Option<DeclId> {
-        let _ = access;
-        self.unsupported("access specifiers", loc);
-        None
+        let c = self.classes.last_mut()?;
+        c.access = access;
+        let r = c.record;
+        Some(self.builder().access_spec(r, access, loc))
     }
 
     /// A friend declaration in the class being defined ([class.friend];
@@ -244,9 +245,7 @@ impl Sema<'_, '_> {
     /// parameter then carries `ParamData::DEFAULT_ARG_PENDING`). WP-066b
     /// (temporaries in defaults: WP-067b).
     pub fn act_on_param_default_arg(&mut self, p: DeclId, e: ExprId) {
-        let _ = p;
-        let loc = self.ast.exprs.get(e).loc();
-        self.unsupported("default arguments", loc);
+        self.attach_default_arg(p, e);
     }
 
     /// The replayed *noexcept-specifier* of member function `f`, whose
@@ -265,11 +264,35 @@ impl Sema<'_, '_> {
     /// ([class.mem.general]/11, spec/sema-class.md §2.7): `this` is usable
     /// and the initializer is its own full-expression. WP-066b (temporaries
     /// WP-067b).
-    #[expect(clippy::needless_pass_by_value, reason = "the WP-066b body consumes it")]
     pub fn act_on_field_init(&mut self, field: DeclId, init: Initializer) {
-        let _ = init;
-        let loc = self.ast.decls.get(field).loc();
-        self.unsupported("default member initializers", loc);
+        let fty = self.ast.decls.get(field).ty().unwrap_or(QualType::ERROR);
+        let loc = match &init {
+            Initializer::Expr(e) => self.begin_loc(*e),
+            _ => self.ast.decls.get(field).loc(),
+        };
+        let direct = !matches!(init, Initializer::Expr(_));
+        if self.is_error_type(fty) {
+            if let Initializer::Expr(e) = init {
+                self.act_on_full_expr(e);
+            }
+        } else {
+            let e = self.perform_init(fty, init, loc, direct);
+            let e = self.act_on_full_expr(e);
+            let _ = self.ast.decls.set_field_init(field, e);
+        }
+        if self.nsdmi_this.last().is_some_and(|&(f, _)| f == field) {
+            self.nsdmi_this.pop();
+        }
+    }
+
+    /// Before the replayed default member initializer of `field` is
+    /// parsed (spec/sema-class.md §2.7): `this` has type `C*`
+    /// ([expr.prim.this]/2).
+    pub fn act_on_start_field_init(&mut self, field: DeclId) {
+        let class = self.ast.decls.get(field).ctx().unwrap_or(self.ctx);
+        let t = self.tag_type(class);
+        let p = self.ast.types.pointer_to(t);
+        self.nsdmi_this.push((field, p));
     }
 
     /// The ctor-initializer of constructor definition `ctor`
@@ -298,7 +321,24 @@ impl Sema<'_, '_> {
     /// `this` at `loc` ([expr.prim.this], spec/sema-class.md §2.5;
     /// WP-066b).
     pub fn act_on_this(&mut self, loc: Loc) -> ExprId {
-        self.unsupported("'this'", loc);
-        self.act_on_error_expr(&[], loc)
+        match self.current_this() {
+            Some(t) => self.builder().this_expr(t, false, loc),
+            None => {
+                self.error(DiagId::sema_this_outside_member, loc);
+                self.act_on_error_expr(&[], loc)
+            }
+        }
+    }
+
+    /// The type of `this` where an expression is being analysed, if
+    /// `this` may appear there ([expr.prim.this]/2-3).
+    pub(crate) fn current_this(&self) -> Option<QualType> {
+        if let Some(t) = self.func.as_ref().and_then(|f| f.this_override) {
+            return Some(t);
+        }
+        if let Some(&(_, t)) = self.nsdmi_this.last() {
+            return Some(t);
+        }
+        self.func.as_ref().and_then(|f| f.this_ty)
     }
 }

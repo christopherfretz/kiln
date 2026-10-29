@@ -2063,6 +2063,14 @@ impl DeclArena {
             n.misc.with_field(9, 3, u16::from(linkage)).with_field(12, 2, u16::from(visibility));
     }
 
+    /// Sets the access of member `d` ([class.access]), right after the
+    /// builder created it: sema knows the current access-specifier, the
+    /// typed constructors take only a [`crate::builder::DeclHead`] (WP-066b).
+    pub fn set_access(&mut self, d: DeclId, a: Access) {
+        let n = &mut self.nodes[d.index() as usize];
+        n.misc = n.misc.with_access(a);
+    }
+
     /// Sets a function's body (write-once, §2.4).
     pub fn set_body(&mut self, f: DeclId, body: StmtId) -> Result<(), AlreadySet> {
         set_once(&mut self.function_mut(f).body, body, "FunctionData.body", RawId::raw)
