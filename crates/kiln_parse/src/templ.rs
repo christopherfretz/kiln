@@ -13,7 +13,7 @@
 
 use kiln_ast::expr::BinaryOp;
 use kiln_ast::templates::Requirement;
-use kiln_ast::types::{TagKeyword, TemplateArg};
+use kiln_ast::types::{TagKeyword, TemplateArg, TemplateName};
 use kiln_ast::{DeclId, ExprId, QualType};
 use kiln_diag::DiagId;
 use kiln_lex::{Punct, TokKind};
@@ -396,13 +396,27 @@ impl Parser<'_, '_> {
         let (pack, name) = self.parse_param_pack_and_name();
         let p = self.s.act_on_template_template_param(params, typename_kw, kw.span.lo, pack, name);
         let Some(eq) = self.eat(Punct::Equal) else { return true };
-        let Ok(qual) = self.parse_nested_name() else { return false };
+        let Ok(qual) = self.parse_nested_name_nns() else { return false };
+        // `nns template name` with a dependent `nns` ([temp.names]/5).
+        let dep = qual.as_ref().is_some_and(|q| self.s.is_dependent_ctx(q.ctx));
+        if dep {
+            self.eat_kw(Kw::Template);
+        }
         let Some(n) = self.ident() else {
             self.error_here(DiagId::parse_expected_unqualified_id);
             return false;
         };
         let nl = self.bump().span.lo;
-        match self.s.classify_name(n, qual) {
+        if let (true, Some(q)) = (dep, qual) {
+            let tn = self
+                .s
+                .ast
+                .types
+                .template_name(TemplateName::DependentIdentifier { nns: q.nns, name: n });
+            self.s.act_on_template_param_default(p, TemplateArg::template(tn), eq);
+            return true;
+        }
+        match self.s.classify_name(n, qual.map(|q| q.ctx)) {
             NameClass::TypeTemplate(d) => {
                 let tn = self.s.template_name_for(d);
                 self.s.act_on_template_param_default(p, TemplateArg::template(tn), eq);

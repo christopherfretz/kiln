@@ -1040,10 +1040,15 @@ impl<'a> AstBuilder<'a> {
             deps |= ExprDeps::INSTANTIATION;
         }
         // A function or template parameter pack names an unexpanded pack
-        // ([temp.variadic]/5); its type is the pack expansion.
-        if n.ty().is_some_and(|t| {
-            matches!(self.ast.types.view(t.ty()), crate::types::TypeView::PackExpansion { .. })
-        }) {
+        // ([temp.variadic]/5); its type is the pack expansion (a non-type
+        // template parameter pack `int... N` keeps its pattern type).
+        let nttp_pack = n.kind() == DeclKind::NonTypeTemplateParm
+            && self.ast.template_parm(d).is_some_and(|i| i.pack);
+        if nttp_pack
+            || n.ty().is_some_and(|t| {
+                matches!(self.ast.types.view(t.ty()), crate::types::TypeView::PackExpansion { .. })
+            })
+        {
             deps |= ExprDeps::UNEXPANDED_PACK | ExprDeps::INSTANTIATION;
         }
         match n.kind() {

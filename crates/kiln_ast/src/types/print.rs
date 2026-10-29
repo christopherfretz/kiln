@@ -59,6 +59,16 @@ pub trait TypeNames {
         None
     }
 
+    /// For the invented type parameter of an abbreviated function
+    /// template ([dcl.fct]/22), which prints as `auto` or `C<A...> auto`:
+    /// `Some(constraint)` with the type-constraint's concept and its whole
+    /// argument list (the first argument is the parameter itself).
+    /// `None` for other declarations.
+    fn invented_parm(&self, decl: DeclId) -> Option<Option<(DeclId, ArgListId)>> {
+        let _ = decl;
+        None
+    }
+
     /// Writes expression `expr` as clang's `Expr::printPretty`.
     fn write_expr(&self, expr: ExprId, out: &mut String);
 
@@ -571,13 +581,36 @@ impl Printer<'_> {
                 self.before(QualType::new(base, quals.bits()));
             }
             TypeView::TemplateTypeParm(d) => {
-                let start = self.out.len();
-                self.decl(d, false);
-                if self.out.len() == start
-                    && let TypeView::CanonTemplateTypeParm { depth, index, .. } =
-                        ctx.canonical_view(QualType::unqual(t))
-                {
-                    self.parm_name(depth, index);
+                let names = self.names;
+                if let Some(c) = names.invented_parm(d) {
+                    // clang's `printTemplateTypeParmBefore` for an implicit
+                    // parameter: the type-constraint, then `auto`.
+                    if let Some((concept, l)) = c {
+                        self.decl(concept, false);
+                        let ctx = self.ctx;
+                        let extra = &ctx.args(l)[1.min(ctx.args(l).len())..];
+                        if !extra.is_empty() {
+                            self.push("<");
+                            for (i, a) in extra.iter().enumerate() {
+                                if i > 0 {
+                                    self.push(", ");
+                                }
+                                self.arg(a.view());
+                            }
+                            self.push(">");
+                        }
+                        self.push(" ");
+                    }
+                    self.push("auto");
+                } else {
+                    let start = self.out.len();
+                    self.decl(d, false);
+                    if self.out.len() == start
+                        && let TypeView::CanonTemplateTypeParm { depth, index, .. } =
+                            ctx.canonical_view(QualType::unqual(t))
+                    {
+                        self.parm_name(depth, index);
+                    }
                 }
                 self.space_before_ph();
             }

@@ -969,7 +969,10 @@ impl Parser<'_, '_> {
             && d.ctx != DeclaratorContext::TypeName
         {
             let last_qual = self.last_qualifier_name();
-            let qual = self.parse_nested_name().unwrap_or_else(|()| {
+            let saved = self.s.set_entering_context(true);
+            let qual = self.parse_nested_name();
+            self.s.set_entering_context(saved);
+            let qual = qual.unwrap_or_else(|()| {
                 d.invalid = true;
                 None
             });
@@ -1130,7 +1133,13 @@ impl Parser<'_, '_> {
                 // ([dcl.fct]/22).
                 let at = ds.type_loc.unwrap_or(start);
                 let constraint = ds.auto_constraint.take();
-                let ty = self.s.act_on_invented_template_param(at, pd.ellipsis.is_some(), constraint);
+                let pname = pd.name.map(|(n, _)| n);
+                let ty = self.s.act_on_invented_template_param(
+                    at,
+                    pd.ellipsis.is_some(),
+                    constraint,
+                    pname,
+                );
                 ds.base = TypeSpecKind::Named;
                 ds.named = Some(ty);
             }

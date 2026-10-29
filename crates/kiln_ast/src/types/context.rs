@@ -810,6 +810,25 @@ impl TypeContext {
     pub fn as_record(&self, q: QualType) -> Option<DeclId> {
         match self.canonical_view(q) {
             TypeView::Record(d) => Some(d),
+            // The injected-class-name type `X<P...>` (the type of `*this`
+            // in the pattern of class template `X`) names the pattern
+            // ([temp.dep.type]/1; clang's `InjectedClassNameType`). A
+            // specialization written out is not looked through: its
+            // canonical type is shared with every `X<P...>` at the same
+            // depths, inside `X` or not.
+            TypeView::TemplateSpecialization { .. } => {
+                let mut t = q;
+                loop {
+                    if let TypeView::InjectedClassName { pattern, .. } = self.view(t.ty()) {
+                        return Some(pattern);
+                    }
+                    let n = self.desugar_once(t);
+                    if n == t {
+                        return None;
+                    }
+                    t = n;
+                }
+            }
             _ => None,
         }
     }

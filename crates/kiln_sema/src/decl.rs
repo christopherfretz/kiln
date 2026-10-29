@@ -1499,7 +1499,14 @@ impl Sema<'_, '_> {
                 None => DeclName::EMPTY,
             };
             let idx = u16::try_from(i).unwrap_or(u16::MAX);
-            let pd = self.builder().param(f, pname, p.loc, p.ty, idx, 0);
+            // A function parameter pack ([temp.variadic]/3) has a pack
+            // expansion type.
+            let pack = matches!(
+                self.ast.types.view(p.ty.ty()),
+                TypeView::PackExpansion { .. }
+            );
+            let flags = if pack { kiln_ast::decl::ParamData::PACK } else { 0 };
+            let pd = self.builder().param(f, pname, p.loc, p.ty, idx, flags);
             if p.invalid {
                 self.ast.decls.set_flags(pd, DeclFlags::INVALID);
             }

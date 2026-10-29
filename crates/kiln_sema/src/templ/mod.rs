@@ -44,6 +44,10 @@ pub(crate) struct HeadBuild {
 #[derive(Clone, Debug, Default)]
 pub struct TemplState {
     pub(crate) heads: Vec<HeadBuild>,
+    /// A declarator-id's nested-name-specifier is being parsed (clang's
+    /// `EnteringContext`): `X<P...>::` names the current instantiation
+    /// even outside `X`'s definition ([temp.mem]/1, out-of-line members).
+    pub(crate) entering_context: bool,
     /// The head consumed by the declaration being built: its pattern is
     /// wrapped in a template decl by [`Sema::finish_template_pattern`].
     pub(crate) cur: Option<TemplateParamListId>,
@@ -60,6 +64,12 @@ impl Sema<'_, '_> {
     pub fn templ_unimplemented(&self, feature: &str, loc: Loc) {
         let d = self.diag(DiagId::sema_unimplemented_template_feature, loc).arg(feature);
         self.emit(d);
+    }
+
+    /// Sets whether a declarator-id's nested-name-specifier is being
+    /// parsed (clang's `EnteringContext`); returns the previous value.
+    pub fn set_entering_context(&mut self, on: bool) -> bool {
+        std::mem::replace(&mut self.templ.entering_context, on)
     }
 
     /// The depth the next template parameter list gets: the number of
@@ -200,9 +210,11 @@ impl Sema<'_, '_> {
     pub fn act_on_non_type_template_param(&mut self, p: &ParamInfo, pack: bool) -> DeclId {
         let h = self.param_head(p.name, p.loc);
         let (depth, index) = (self.cur_depth(), self.next_param_index());
+        // `int... N` keeps the type `int` (as clang); only a type with
+        // unexpanded packs (`Ts... Vs`) becomes a pack expansion.
         let mut ty = p.ty;
         if pack
-            && !matches!(self.ast.types.view(ty.ty()), kiln_ast::types::TypeView::PackExpansion { .. })
+            && self.ast.types.flags(ty.ty()).contains(kiln_ast::types::TypeFlags::UNEXPANDED_PACK)
         {
             ty = self.ast.types.pack_expansion(ty, None);
         }
@@ -481,6 +493,7 @@ impl Sema<'_, '_> {
         loc: Loc,
         pack: bool,
         constraint: Option<(DeclId, Vec<TemplateArg>)>,
+        param_name: Option<Symbol>,
     ) -> QualType {
         // An explicit head is open once its list is built; an invented one
         // collects every `auto` parameter of the declarator.
@@ -503,12 +516,19 @@ impl Sema<'_, '_> {
             self.ast.templates.dependent_depth += 1;
             self.templ.invented = 0;
         }
-        let n = self.templ.invented;
         self.templ.invented += 1;
-        let name = self.intern(&format!("auto:{}", n + 1));
+        let (depth, index) = (self.cur_depth(), self.next_param_index());
+        // clang's names: `x:auto` for parameter `x`, else `auto:N` with
+        // `N` the 1-based position in the list.
+        let name = match param_name {
+            Some(s) => {
+                let text = format!("{}:auto", self.ast.symbols().as_str(s));
+                self.intern(&text)
+            }
+            None => self.intern(&format!("auto:{}", u32::from(index) + 1)),
+        };
         let h = DeclHead::new(self.ctx, DeclName::ident(name), loc)
             .flags(kiln_ast::decl::DeclFlags::IMPLICIT);
-        let (depth, index) = (self.cur_depth(), self.next_param_index());
         let p = self.builder().template_type_parm(h, depth, index, pack, false);
         if let Some(head) = self.templ.heads.last_mut() {
             head.params.push(p);

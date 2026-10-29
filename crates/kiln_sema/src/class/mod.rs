@@ -308,7 +308,7 @@ impl Sema<'_, '_> {
     /// ([expr.prim.this]/2).
     pub fn act_on_start_field_init(&mut self, field: DeclId) {
         let class = self.ast.decls.get(field).ctx().unwrap_or(self.ctx);
-        let t = self.tag_type(class);
+        let t = self.this_class_type(class);
         let p = self.ast.types.pointer_to(t);
         self.nsdmi_this.push((field, p));
     }

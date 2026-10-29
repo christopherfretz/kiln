@@ -13,7 +13,7 @@ use crate::consts::{
 };
 use crate::decl::{DeclFlags, DeclKind, DefinitionBits, TagKind};
 use crate::expr::{CharKind, ExprFlags, ExprKind, TraitKind};
-use crate::ids::{ConstValueId, DeclId, ExprId, ListId, QualType, TypeId};
+use crate::ids::{ConstValueId, DeclId, ExprId, ListId, QualType, RawId, TypeId};
 use crate::names::{DeclName, DeclNameView};
 use crate::strings::{StringEncoding, push_unit};
 use crate::types::{FloatFormat, PrintOptions, TypeNames, TypeView, write_type};
@@ -652,6 +652,10 @@ impl<'a> AstNames<'a> {
             ExprKind::InitListExpr => {
                 self.expr_list(exprs.init_list_inits(e), '{', '}', d, out);
             }
+            ExprKind::PackExpansionExpr => {
+                self.expr(exprs.operand(e), d, out);
+                out.push_str("...");
+            }
             _ => out.push_str("..."),
         }
     }
@@ -674,7 +678,30 @@ impl<'a> AstNames<'a> {
     }
 }
 
+impl AstNames<'_> {
+    /// [`TypeNames::invented_parm`]: an implicit type template parameter
+    /// and its type-constraint's concept and arguments.
+    fn invented_parm_of(&self, decl: DeclId) -> Option<Option<(DeclId, crate::ids::ArgListId)>> {
+        let n = self.ast.decls.get(decl);
+        if n.kind() != DeclKind::TemplateTypeParm || !n.flags().contains(DeclFlags::IMPLICIT) {
+            return None;
+        }
+        let c = self.ast.template_parm(decl)?.constraint;
+        Some(c.and_then(|e| {
+            let x = self.ast.exprs.get(e);
+            if x.kind() != ExprKind::ConceptSpecializationExpr {
+                return None;
+            }
+            Some((DeclId::from_raw(x.a())?, crate::ids::ArgListId::from_raw(x.b())?))
+        }))
+    }
+}
+
 impl TypeNames for AstNames<'_> {
+    fn invented_parm(&self, decl: DeclId) -> Option<Option<(DeclId, crate::ids::ArgListId)>> {
+        self.invented_parm_of(decl)
+    }
+
     fn write_decl_name(&self, decl: DeclId, scoped: bool, out: &mut String) {
         let n = self.ast.decls.get(decl);
         let tag = matches!(
@@ -768,6 +795,10 @@ impl PrintEnv for AstNames<'_> {
 }
 
 impl TypeNames for Ast {
+    fn invented_parm(&self, decl: DeclId) -> Option<Option<(DeclId, crate::ids::ArgListId)>> {
+        AstNames::new(self).invented_parm_of(decl)
+    }
+
     fn write_decl_name(&self, decl: DeclId, scoped: bool, out: &mut String) {
         AstNames::new(self).write_decl_name(decl, scoped, out);
     }

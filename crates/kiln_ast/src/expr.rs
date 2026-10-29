@@ -1451,7 +1451,8 @@ impl ExprArena {
 
     /// The single operand of a unary operator, cast, `ParenExpr`,
     /// `ConstantExpr`, `MemberExpr` (its base), `MaterializeTemporaryExpr`,
-    /// `CXXBindTemporaryExpr` or `ExprWithCleanups`.
+    /// `CXXBindTemporaryExpr`, `ExprWithCleanups` or `PackExpansionExpr`
+    /// (its pattern).
     pub fn operand(&self, e: ExprId) -> ExprId {
         let n = self.get(e);
         assert!(
@@ -1465,6 +1466,7 @@ impl ExprArena {
                         | ExprKind::MaterializeTemporaryExpr
                         | ExprKind::CXXBindTemporaryExpr
                         | ExprKind::ExprWithCleanups
+                        | ExprKind::PackExpansionExpr
                 ),
             "{:?} has no single operand",
             n.kind

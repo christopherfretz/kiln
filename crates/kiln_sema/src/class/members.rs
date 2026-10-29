@@ -536,7 +536,7 @@ impl Sema<'_, '_> {
         let class = self.ast.decls.get(f).ctx()?;
         let fty = self.ast.decls.get(f).ty()?;
         let q = self.ast.types.proto(fty).map_or(Quals::NONE, |p| p.info().this_quals());
-        let t = self.tag_type(class);
+        let t = self.this_class_type(class);
         let t = if q.is_empty() { t } else { self.ast.types.qualify(t, q) };
         Some(self.ast.types.pointer_to(t))
     }

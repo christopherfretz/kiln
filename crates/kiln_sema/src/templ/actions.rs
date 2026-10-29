@@ -7,7 +7,7 @@ use kiln_ast::decl::{DeclFlags, DeclKind};
 use kiln_ast::expr::{BinaryOp, ExprDeps, ExprKind};
 use kiln_ast::ids::{ArgListId, NnsId, TemplateNameId, TemplateParamListId};
 use kiln_ast::names::DeclName;
-use kiln_ast::templates::Requirement;
+use kiln_ast::templates::{Requirement, TemplateParmInfo};
 use kiln_ast::types::{ArgView, Nns, TagKeyword, TemplateArg, TemplateName, TypeFlags, TypeView};
 use kiln_ast::{DeclHead, DeclId, ExprId, QualType};
 use kiln_diag::DiagId;
@@ -127,7 +127,20 @@ impl Sema<'_, '_> {
             }
         }
         let pat = self.pattern_of(tmpl)?;
+        if !self.templ.entering_context && !self.encloses(pat, self.ctx) {
+            // `X<P...>` outside `X` (an alias template's or another
+            // template's own parameters at the same positions) is an
+            // ordinary dependent specialization.
+            return None;
+        }
         Some(self.ast.definition(pat).unwrap_or(pat))
+    }
+
+    /// Whether `d` is a template parameter of `p`'s kind at `p`'s depth
+    /// and index (`info`).
+    fn same_template_parm(&self, d: DeclId, p: DeclId, info: TemplateParmInfo) -> bool {
+        self.kind_of(d) == self.kind_of(p)
+            && self.ast.template_parm(d).is_some_and(|i| i.depth == info.depth && i.index == info.index)
     }
 
     fn arg_names_param(&self, p: DeclId, a: TemplateArg) -> bool {
@@ -147,10 +160,13 @@ impl Sema<'_, '_> {
                 if info.pack && self.ast.exprs.get(e).kind() == ExprKind::PackExpansionExpr {
                     e = self.ast.exprs.operand(e);
                 }
-                self.ast.exprs.get(e).kind() == ExprKind::DeclRefExpr && self.ast.exprs.decl(e) == p
+                // The parameter at the same position: the out-of-line
+                // head redeclares the class template's parameters.
+                self.ast.exprs.get(e).kind() == ExprKind::DeclRefExpr
+                    && self.same_template_parm(self.ast.exprs.decl(e), p, info)
             }
             (DeclKind::TemplateTemplateParm, ArgView::Template(n) | ArgView::TemplateExpansion { name: n, .. }) => {
-                matches!(self.ast.types.template_name_view(n), TemplateName::TemplateTemplateParm { decl, .. } if decl == p)
+                matches!(self.ast.types.template_name_view(n), TemplateName::TemplateTemplateParm { decl, .. } if self.same_template_parm(decl, p, info))
             }
             _ => false,
         }
@@ -293,6 +309,8 @@ impl Sema<'_, '_> {
         self.scopes.push(Scope::new(ScopeKind::RequiresExpr, Some(body)));
         self.templ.req_ctx.push(self.ctx);
         self.ctx = body;
+        // The requirements are unevaluated operands ([expr.prim.req.general]/2).
+        self.enter_unevaluated();
         body
     }
 
@@ -311,6 +329,7 @@ impl Sema<'_, '_> {
         }
         if let Some(c) = self.templ.req_ctx.pop() {
             self.ctx = c;
+            self.exit_unevaluated();
         }
         if !self.in_template() {
             // A non-dependent requires-expression is evaluated at once
@@ -337,7 +356,9 @@ impl Sema<'_, '_> {
         loc: Loc,
     ) -> ExprId {
         let depth = self.template_depth();
-        let h = DeclHead::new(self.ctx, DeclName::EMPTY, loc).flags(DeclFlags::IMPLICIT);
+        // clang names the invented parameter `expr-type` (not implicit).
+        let name = self.intern("expr-type");
+        let h = DeclHead::new(self.ctx, DeclName::ident(name), loc);
         let p = self.builder().template_type_parm(h, depth, 0, false, false);
         let ty = self.ast.decls.get(p).ty().unwrap_or(QualType::ERROR);
         self.immediately_declared_constraint(concept, ty, args, loc)
@@ -626,6 +647,20 @@ impl Sema<'_, '_> {
         if !self.ast.types.is_dependent(bt) {
             return None;
         }
+        // A member of the current instantiation found by lookup is an
+        // ordinary member access ([temp.dep.expr]/5, clang's MemberExpr).
+        if targs.is_none() && !template_kw {
+            let obj = if arrow {
+                self.pointee_sugared(bt).filter(|_| self.ast.types.is_pointer(bt))
+            } else {
+                Some(bt)
+            };
+            if let Some(rec) = obj.and_then(|o| self.ast.types.as_record(o))
+                && self.lookup_in_class(rec, name, crate::lookup::LookupKind::Ordinary).decls.len() == 1
+            {
+                return None;
+            }
+        }
         let b = if arrow && !self.is_dependent_overloadable(bt) {
             crate::conv::decay(self, base)
         } else {
@@ -681,6 +716,26 @@ impl Sema<'_, '_> {
         if !self.names_injected_class(tmpl) {
             return None;
         }
+        self.injected_type_of(tmpl)
+    }
+
+    /// The type of `this`'s pointee in a member of class `class`
+    /// ([expr.prim.this]/2): for the pattern of a class template, its
+    /// injected-class-name type `X<P...>` (as clang); else the class type.
+    pub(crate) fn this_class_type(&mut self, class: DeclId) -> QualType {
+        let first = self.ast.first(class);
+        if self.kind_of(class) == DeclKind::CXXRecord
+            && let Some(t) = self.ast.described_template(first)
+            && let Some(q) = self.injected_type_of(t)
+        {
+            return q;
+        }
+        self.tag_type(class)
+    }
+
+    /// `X<P...>` for class template `tmpl`'s own parameters `P`, as an
+    /// `InjectedClassNameType`.
+    fn injected_type_of(&mut self, tmpl: DeclId) -> Option<QualType> {
         let pat = self.pattern_of(tmpl)?;
         let info = self.ast.template_info(tmpl).copied()?;
         let list = *self.ast.templates.param_list(info.params);
