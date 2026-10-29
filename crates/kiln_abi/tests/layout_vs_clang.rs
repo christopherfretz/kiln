@@ -1,8 +1,9 @@
 //! Differential test: seeded random class definitions are laid out and
 //! dumped by `kiln_abi` and by `clang++-19 -Xclang -fdump-record-layouts`
 //! for each supported target, and every dump block must match byte for
-//! byte (spec/abi.md §7). The generator covers non-virtual base
-//! hierarchies (empty bases, repeated indirect bases, non-POD bases) and
+//! byte (spec/abi.md §7). The generator covers base hierarchies (empty
+//! bases, repeated direct and indirect bases, non-POD bases, virtual
+//! bases), polymorphic classes (vptr, primary base selection) and
 //! `#pragma pack`. Skipped when `clang++-19` is not installed.
 //!
 //! `KILN_ABI_DIFF_SEED` overrides the seed; `KILN_ABI_DIFF_RECORDS` the
@@ -12,8 +13,8 @@
 mod common;
 
 use common::{
-    CLANG, EnumDef, FieldDef, Item, MARKER, Model, RecDef, Ty, TypedefDef, blocks, clang_available,
-    run_clang,
+    CLANG, EnumDef, FieldDef, Item, MARKER, MethodDef, MethodKind, Model, RecDef, Ty, TypedefDef,
+    blocks, clang_available, run_clang,
 };
 use kiln_abi::Layouter;
 use kiln_abi::target::{Target, target};
@@ -70,8 +71,24 @@ struct Facts {
     empty: bool,
     /// A union (never a base class).
     union: bool,
+    /// Polymorphic or with a virtual base (no flexible array member).
+    dynamic: bool,
     /// An upper bound on the alignment, in bytes.
     align_ub: u64,
+}
+
+/// `virtual void name();`
+fn virtual_method(name: &str) -> MethodDef {
+    MethodDef {
+        name: name.to_owned(),
+        ret: Ty::B(B::Void),
+        params: Vec::new(),
+        is_const: false,
+        virtual_written: true,
+        pure: false,
+        kind: MethodKind::Normal,
+        is_virtual: false,
+    }
 }
 
 struct Gen<'t> {
@@ -326,10 +343,11 @@ impl Gen<'_> {
         (f, plain)
     }
 
-    /// Picks 1–3 distinct non-virtual bases for `rec`: empty ones (EBO
-    /// and the same-type rule), repeated indirect ones, non-POD ones
-    /// (tail-padding reuse). Returns their combined facts (`empty`: all
-    /// bases are empty).
+    /// Picks 1–3 distinct bases for `rec`, 30% of them virtual: empty
+    /// ones (EBO and the same-type rule), repeated indirect ones, non-POD
+    /// ones (tail-padding reuse), dynamic ones (primary base selection).
+    /// Returns their combined facts (`empty`: all bases are empty;
+    /// `dynamic`: some base is dynamic or virtual).
     fn bases(&mut self, rec: &mut RecDef) -> Facts {
         let mut acc = Facts { dc: true, empty: true, align_ub: 1, ..Facts::default() };
         let candidates = self.items_where(|f| f.record && !f.union && !f.fam);
@@ -350,6 +368,11 @@ impl Gen<'_> {
             }
             let bf = self.facts[c];
             rec.bases.push(c);
+            let virt = self.rng.chance(30);
+            if virt {
+                rec.virtual_bases.push(c);
+            }
+            acc.dynamic |= virt || bf.dynamic;
             acc.dc &= bf.dc;
             acc.nontrivial |= bf.nontrivial;
             acc.align_ub = acc.align_ub.max(bf.align_ub);
@@ -372,6 +395,24 @@ impl Gen<'_> {
         (f, TyFacts { dc: ef.dc, nontrivial: ef.nontrivial, align_ub: ef.align_ub })
     }
 
+    /// `packed`, `aligned` and `alignas` on the class; returns the new
+    /// alignment upper bound.
+    fn class_attributes(&mut self, rec: &mut RecDef, mut ub: u64) -> u64 {
+        if self.rng.chance(10) {
+            rec.packed = true;
+        }
+        if self.rng.chance(8) {
+            rec.aligned = Some(if self.rng.chance(20) { 0 } else { 1 << self.rng.below(7) });
+            ub = ub.max(rec.aligned.unwrap_or(0)).max(16);
+        }
+        if self.rng.chance(5) {
+            let a = ub.max(16).next_power_of_two() << self.rng.below(2);
+            rec.alignas = Some(a);
+            ub = ub.max(a);
+        }
+        ub
+    }
+
     fn record(&mut self, idx: usize) {
         let union = self.rng.chance(20);
         let tag =
@@ -382,13 +423,25 @@ impl Gen<'_> {
         let mut nontrivial = false;
         let mut ub: u64 = 1;
         let mut bases_empty = true;
+        let mut dynamic = false;
         if !union && self.rng.chance(35) {
             let bf = self.bases(&mut rec);
             dc &= bf.dc;
             nontrivial |= bf.nontrivial;
             ub = ub.max(bf.align_ub);
             bases_empty = bf.empty;
+            dynamic = bf.dynamic;
         }
+        // A fresh virtual function (unions cannot have one): a vptr, or
+        // one shared with a primary base.
+        if !union && self.rng.chance(20) {
+            rec.methods.push(virtual_method(&format!("v{idx}")));
+            dynamic = true;
+        }
+        // A dynamic class has a non-trivial default constructor and is
+        // never empty.
+        nontrivial |= dynamic;
+        bases_empty &= !dynamic;
         if self.rng.chance(8) {
             rec.pack = Some(self.rng.pick(&[1, 2, 4, 8, 16]));
         }
@@ -435,7 +488,7 @@ impl Gen<'_> {
         }
         // A flexible array member as the last member of a struct.
         let mut fam = false;
-        if !union && !rec.fields.is_empty() && self.rng.chance(8) {
+        if !union && !dynamic && !rec.fields.is_empty() && self.rng.chance(8) {
             let (e, tf) = self.element(false);
             if !matches!(e, Ty::Named(i) if self.facts[i].record) {
                 let mut f = FieldDef::new(&format!("f{}", rec.fields.len()), Ty::Flex(Box::new(e)));
@@ -448,18 +501,7 @@ impl Gen<'_> {
         if union && nontrivial {
             dc = false;
         }
-        if self.rng.chance(10) {
-            rec.packed = true;
-        }
-        if self.rng.chance(8) {
-            rec.aligned = Some(if self.rng.chance(20) { 0 } else { 1 << self.rng.below(7) });
-            ub = ub.max(rec.aligned.unwrap_or(0)).max(16);
-        }
-        if self.rng.chance(5) {
-            let a = ub.max(16).next_power_of_two() << self.rng.below(2);
-            rec.alignas = Some(a);
-            ub = ub.max(a);
-        }
+        ub = self.class_attributes(&mut rec, ub);
         if dc && self.rng.chance(15) {
             rec.user_ctor = true;
             nontrivial = true;
@@ -471,6 +513,7 @@ impl Gen<'_> {
             empty,
             union,
             fam,
+            dynamic,
             dc,
             nontrivial,
             align_ub: ub.max(16),
@@ -620,7 +663,7 @@ fn layout_matches_clang() {
         .and_then(|s| s.parse().ok())
         .unwrap_or(0x6b69_6c6e_0050);
     let per_target: usize =
-        std::env::var("KILN_ABI_DIFF_RECORDS").ok().and_then(|s| s.parse().ok()).unwrap_or(320);
+        std::env::var("KILN_ABI_DIFF_RECORDS").ok().and_then(|s| s.parse().ok()).unwrap_or(2000);
     let mut jobs = Vec::new();
     for (t, triple) in
         ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"].into_iter().enumerate()

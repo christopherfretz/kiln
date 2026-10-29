@@ -725,3 +725,29 @@ fn nearly_empty_virtual_primary_base() {
         check_dyn(&m, t, s, &s_want);
     }
 }
+
+/// clang's dump labels a virtual base "(primary virtual base)" when its
+/// class is the primary base's class, even if the primary base is the
+/// non-virtual subobject (`P` here is both).
+#[test]
+fn primary_base_label_compares_classes() {
+    let mut m = Model::default();
+    let p = dyn_st(&mut m, "P", &[], &[], &["f"], vec![f("p", b(B::Int))]);
+    let v = dyn_st(&mut m, "V", &[p], &[p], &[], vec![f("v", b(B::Int))]);
+    let d = dyn_st(&mut m, "D", &[p, v], &[], &[], vec![]);
+    for t in BOTH {
+        let want = DynExpect {
+            sizes: (48, 8, 44, 28),
+            vptr: None,
+            primary: Some((p, false)),
+            bases: &[(p, 0), (v, 16)],
+            vbases: &[(p, 32)],
+            fields: &[],
+        };
+        check_dyn(&m, t, d, &want);
+        let tgt = target(t).expect("target");
+        let (ast, decls) = m.ast(&tgt);
+        let dump = dump_record_layout(&ast, decls[d], &tgt);
+        assert!(dump.contains("32 |   struct P (primary virtual base)\n"), "{dump}");
+    }
+}

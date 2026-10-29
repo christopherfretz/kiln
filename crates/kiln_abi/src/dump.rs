@@ -248,7 +248,10 @@ pub fn write_record_layout_with(
         }
         if with_vbases {
             for &(v, voff) in &layout.vbases {
-                let desc = if layout.primary_base == Some((v, true)) {
+                // clang compares classes, not subobjects: a virtual base
+                // of the same class as a non-virtual primary base is
+                // labelled primary too.
+                let desc = if layout.primary_base.is_some_and(|(p, _)| p == v) {
                     "(primary virtual base)"
                 } else {
                     "(virtual base)"
