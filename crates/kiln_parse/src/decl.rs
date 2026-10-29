@@ -1092,6 +1092,7 @@ impl Parser<'_, '_> {
     /// initializer ([dcl.ambig.res]/1).
     fn parse_function_suffix(&mut self, d: &mut Declarator, ambiguous: bool) {
         let open = self.bump().span.lo;
+        self.s.act_on_start_prototype();
         let mut params = Vec::new();
         let mut variadic = false;
         loop {
@@ -1121,6 +1122,7 @@ impl Parser<'_, '_> {
                 self.parse_default_argument(&mut p);
             }
             p.range = (start, self.prev_end());
+            self.s.act_on_prototype_param(&p);
             params.push(p);
             if self.eat(Punct::Ellipsis).is_some() {
                 variadic = true;
@@ -1132,6 +1134,7 @@ impl Parser<'_, '_> {
         }
         let rparen = self.expect_closing(Punct::RParen, Punct::LParen, open);
         let (exc, trailing) = self.parse_function_qualifiers();
+        self.s.act_on_end_prototype();
         let params = self.s.act_on_param_list(params);
         d.chunks.push(Chunk::Function {
             params,

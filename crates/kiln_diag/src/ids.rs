@@ -528,6 +528,7 @@ diag_ids! {
     sema_many_braces_around_scalar = Warning [ManyBracesAroundScalarInit] (0) "too many braces around scalar initializer";
     // ----- sema (WP-048)
     sema_undeclared_var_use = Error (1) "use of undeclared identifier '{0}'";
+    sema_unexpected_typedef_ident = Error (1) "unexpected type name '{0}': expected expression";
     sema_unknown_typename = Error (1) "unknown type name '{0}'";
     sema_no_member = Error (2) "no member named '{0}' in {1}";
     sema_ambiguous_reference = Error (1) "reference to '{0}' is ambiguous";
@@ -624,6 +625,8 @@ diag_ids! {
     note_var_declared_const = Note (1) "variable '{0}' declared const here";
     note_marked_deprecated = Note (1) "'{0}' has been explicitly marked deprecated here";
     sema_not_assignable = Error (0) "expression is not assignable";
+    sema_non_object_not_modifiable = Error (1) "non-object type {0} is not assignable";
+    sema_array_not_modifiable = Error (1) "array type {0} is not assignable";
     sema_assign_const_var = Error (2) "cannot assign to variable '{0}' with const-qualified type {1}";
     sema_read_only_not_assignable = Error (0) "read-only variable is not assignable";
     sema_indirection_requires_pointer = Error (1) "indirection requires pointer operand ({0} invalid)";

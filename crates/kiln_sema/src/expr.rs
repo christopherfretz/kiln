@@ -627,6 +627,10 @@ impl Sema<'_, '_> {
         loc: Loc,
         qualifier: Option<DeclId>,
     ) -> ExprId {
+        if qualifier.is_none() && self.prototype_params.iter().any(|f| f.contains(&name)) {
+            self.unsupported("naming a parameter within its function declarator", loc);
+            return self.recover_err(&[], loc);
+        }
         let found = match qualifier {
             Some(q) => self.lookup_qualified(q, name, LookupKind::Ordinary),
             None => self.lookup_name(name, LookupKind::Ordinary),
@@ -1022,10 +1026,17 @@ impl Sema<'_, '_> {
     fn check_modifiable(&mut self, e: ExprId, loc: Loc) -> bool {
         let n = *self.ast.exprs.get(e);
         let t = n.ty();
-        if n.value_category() != ValueCategory::LValue
-            || self.ast.types.is_array(t)
-            || self.ast.types.is_function(t)
-        {
+        if self.ast.types.is_function(t) || self.ast.types.is_array(t) {
+            let id = if self.ast.types.is_function(t) {
+                DiagId::sema_non_object_not_modifiable
+            } else {
+                DiagId::sema_array_not_modifiable
+            };
+            let msg = self.diag(id, loc).arg(self.ty_arg(t));
+            self.emit(msg);
+            return false;
+        }
+        if n.value_category() != ValueCategory::LValue {
             self.error(DiagId::sema_not_assignable, loc);
             return false;
         }
@@ -1372,9 +1383,8 @@ impl Sema<'_, '_> {
     }
 
     fn compound_assign(&mut self, op: BinaryOp, l: ExprId, r: ExprId, loc: Loc) -> ExprId {
-        if !self.check_modifiable(l, loc) {
-            return self.recover_err(&[l, r], loc);
-        }
+        // The operands are checked as for `E1 op E2` before `E1` is
+        // checked to be modifiable (clang's `CreateBuiltinBinOp`).
         let lt = self.ety(l);
         let rt = self.ety(r);
         let (r2, lhs_ty, res_ty) = match op {
@@ -1432,6 +1442,9 @@ impl Sema<'_, '_> {
                 }
             }
         };
+        if !self.check_modifiable(l, loc) {
+            return self.recover_err(&[l, r], loc);
+        }
         // [expr.ass]/6: the result `E1 op E2` is assigned back to `E1`. An
         // arithmetic computation type converts implicitly to any arithmetic
         // left type, but not to an unscoped enumeration ([conv.prom]/3

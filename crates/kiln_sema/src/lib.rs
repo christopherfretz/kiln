@@ -102,6 +102,9 @@ pub struct Sema<'a, 'sm> {
     /// Braced-init-list call arguments awaiting their parameter types
     /// (placeholders of [`Sema::act_on_braced_arg`]).
     pub(crate) braced_args: Vec<(ExprId, InitList)>,
+    /// The names of the parameters declared so far in each enclosing
+    /// parameter-declaration-clause being parsed ([`Sema::act_on_start_prototype`]).
+    pub(crate) prototype_params: Vec<Vec<kiln_source::symbol::Symbol>>,
 }
 
 impl<'a, 'sm> Sema<'a, 'sm> {
@@ -140,6 +143,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             local_externs: Vec::new(),
             oven: Oven::new(Budget::default()),
             braced_args: Vec::new(),
+            prototype_params: Vec::new(),
         }
     }
 

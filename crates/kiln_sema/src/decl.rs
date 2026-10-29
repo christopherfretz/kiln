@@ -177,6 +177,29 @@ impl Sema<'_, '_> {
         d.name.map_or_else(|| "type name".to_owned(), |(n, _)| sym_str(self, n))
     }
 
+    /// The `(` of a parameter-declaration-clause. Until the matching
+    /// [`Sema::act_on_end_prototype`] (after the trailing return type),
+    /// each parameter declared ([`Sema::act_on_prototype_param`]) is in
+    /// scope ([basic.scope.param]); kiln only creates parameters with
+    /// their function, so such uses are reported as unsupported rather
+    /// than resolved to an outer name.
+    pub fn act_on_start_prototype(&mut self) {
+        self.prototype_params.push(Vec::new());
+    }
+
+    /// Parameter `p` of the innermost parameter-declaration-clause.
+    pub fn act_on_prototype_param(&mut self, p: &ParamInfo) {
+        if let (Some((name, _)), Some(frame)) = (p.name, self.prototype_params.last_mut()) {
+            frame.push(name);
+        }
+    }
+
+    /// The end of the declarator part a parameter-declaration-clause
+    /// scopes (see [`Sema::act_on_start_prototype`]).
+    pub fn act_on_end_prototype(&mut self) {
+        self.prototype_params.pop();
+    }
+
     /// Normalizes a parameter list ([dcl.fct]/2): a lone unnamed `void`
     /// parameter means "no parameters"; any other `void` parameter is an
     /// error.

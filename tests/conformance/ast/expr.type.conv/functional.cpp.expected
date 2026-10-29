@@ -1,0 +1,77 @@
+TranslationUnitDecl
+|-TypedefDecl referenced U 'unsigned int'
+|-EnumDecl referenced E
+| |-EnumConstantDecl A 'E' value=0
+| `-EnumConstantDecl B 'E' value=1
+`-FunctionDecl f 'int (double, int)'
+  |-ParmVarDecl used d 'double'
+  |-ParmVarDecl used i 'int'
+  `-CompoundStmt
+    |-DeclStmt
+    | `-VarDecl used a 'int' cinit
+    |   `-CXXFunctionalCastExpr 'int' functional cast to int <NoOp>
+    |     `-ImplicitCastExpr 'int' <FloatingToIntegral> part_of_explicit_cast
+    |       `-ImplicitCastExpr 'double' <LValueToRValue> part_of_explicit_cast
+    |         `-DeclRefExpr 'double' lvalue ParmVar 'd' 'double'
+    |-DeclStmt
+    | `-VarDecl used b 'int' cinit
+    |   `-CXXScalarValueInitExpr 'int'
+    |-DeclStmt
+    | `-VarDecl used c 'int' cinit
+    |   `-CXXFunctionalCastExpr 'int' functional cast to int <NoOp>
+    |     `-InitListExpr 'int'
+    |       `-ImplicitCastExpr 'int' <LValueToRValue>
+    |         `-DeclRefExpr 'int' lvalue ParmVar 'i' 'int'
+    |-DeclStmt
+    | `-VarDecl used z 'int' cinit
+    |   `-CXXFunctionalCastExpr 'int' functional cast to int <NoOp>
+    |     `-InitListExpr 'int'
+    |-DeclStmt
+    | `-VarDecl used u 'U':'unsigned int' cinit
+    |   `-CXXFunctionalCastExpr 'U':'unsigned int' functional cast to U <NoOp>
+    |     `-ImplicitCastExpr 'U':'unsigned int' <IntegralCast> part_of_explicit_cast
+    |       `-ImplicitCastExpr 'int' <LValueToRValue> part_of_explicit_cast
+    |         `-DeclRefExpr 'int' lvalue ParmVar 'i' 'int'
+    |-DeclStmt
+    | `-VarDecl used e 'E' cinit
+    |   `-CXXFunctionalCastExpr 'E' functional cast to E <IntegralCast>
+    |     `-IntegerLiteral 'int' 1
+    |-DeclStmt
+    | `-VarDecl used l 'long' cinit
+    |   `-CXXFunctionalCastExpr 'long' functional cast to long <NoOp>
+    |     `-InitListExpr 'long'
+    |       `-ImplicitCastExpr 'long' <IntegralCast>
+    |         `-IntegerLiteral 'int' 3
+    |-DeclStmt
+    | `-VarDecl used p 'double *' cinit
+    |   `-CStyleCastExpr 'double *' <NoOp>
+    |     `-ImplicitCastExpr 'double *' <NullToPointer> part_of_explicit_cast
+    |       `-CXXNullPtrLiteralExpr 'std::nullptr_t'
+    |-CStyleCastExpr 'void' <ToVoid>
+    | `-DeclRefExpr 'double *' lvalue Var 'p' 'double *'
+    `-ReturnStmt
+      `-BinaryOperator 'int' '+'
+        |-BinaryOperator 'int' '+'
+        | |-BinaryOperator 'int' '+'
+        | | |-BinaryOperator 'int' '+'
+        | | | |-BinaryOperator 'int' '+'
+        | | | | |-BinaryOperator 'int' '+'
+        | | | | | |-ImplicitCastExpr 'int' <LValueToRValue>
+        | | | | | | `-DeclRefExpr 'int' lvalue Var 'a' 'int'
+        | | | | | `-ImplicitCastExpr 'int' <LValueToRValue>
+        | | | | |   `-DeclRefExpr 'int' lvalue Var 'b' 'int'
+        | | | | `-ImplicitCastExpr 'int' <LValueToRValue>
+        | | | |   `-DeclRefExpr 'int' lvalue Var 'c' 'int'
+        | | | `-ImplicitCastExpr 'int' <LValueToRValue>
+        | | |   `-DeclRefExpr 'int' lvalue Var 'z' 'int'
+        | | `-CXXFunctionalCastExpr 'int' functional cast to int <NoOp>
+        | |   `-ImplicitCastExpr 'int' <IntegralCast> part_of_explicit_cast
+        | |     `-ImplicitCastExpr 'U':'unsigned int' <LValueToRValue> part_of_explicit_cast
+        | |       `-DeclRefExpr 'U':'unsigned int' lvalue Var 'u' 'U':'unsigned int'
+        | `-ImplicitCastExpr 'int' <IntegralCast>
+        |   `-ImplicitCastExpr 'E' <LValueToRValue>
+        |     `-DeclRefExpr 'E' lvalue Var 'e' 'E'
+        `-CXXFunctionalCastExpr 'int' functional cast to int <NoOp>
+          `-ImplicitCastExpr 'int' <IntegralCast> part_of_explicit_cast
+            `-ImplicitCastExpr 'long' <LValueToRValue> part_of_explicit_cast
+              `-DeclRefExpr 'long' lvalue Var 'l' 'long'

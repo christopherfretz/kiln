@@ -644,7 +644,22 @@ impl Parser<'_, '_> {
             };
         }
         if self.ident().is_some() || self.at(Punct::ColonColon) {
-            if let Some((_, NameClass::Type(..), _)) = self.scan_name(self.pos()) {
+            if let Some((end, NameClass::Type(..), name)) = self.scan_name(self.pos()) {
+                // An unqualified type name not followed by `(` or `{` is
+                // not looked at as a type (clang only annotates it before
+                // those), so the id-expression names a type.
+                if end == self.pos() + 1
+                    && !matches!(
+                        Self::punct_of(self.tok_at(end)),
+                        Some(Punct::LParen | Punct::LBrace)
+                    )
+                {
+                    let text = self.s.ast.symbols().as_str(name).to_owned();
+                    let d = self.s.diag(DiagId::sema_unexpected_typedef_ident, loc).arg(text);
+                    self.emit(d);
+                    self.bump();
+                    return Some(self.s.act_on_error_expr(&[], loc));
+                }
                 return self.parse_functional_cast();
             }
             let qual = self.parse_nested_name().ok()?;
