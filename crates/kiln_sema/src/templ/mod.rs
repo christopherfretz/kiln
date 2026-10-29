@@ -2,14 +2,26 @@
 //! template heads and parameters, attaching a head to the declaration it
 //! introduces, the template-aware name classification and the dependent
 //! expression nodes ([`actions`]). Instantiation, substitution, deduction
-//! and satisfaction are WP-070..074; until then they report
+//! and satisfaction are WP-070..074. WP-070a lands the engine core:
+//! argument checking ([`args`]), the substituter ([`subst`]), class
+//! template instantiation ([`class`]), lazy member instantiation
+//! ([`pending`]), the instantiation stack ([`stack`]) and the report
+//! ([`report`]); deduction ([`deduce`]), partial ordering ([`order`]),
+//! pack expansion and satisfaction still report
 //! `sema_unimplemented_template_feature`.
 
 pub mod actions;
+pub mod args;
+pub mod class;
+pub mod deduce;
+pub mod order;
+pub mod pending;
+pub mod report;
 pub mod stack;
+pub mod subst;
 
 use kiln_ast::decl::DeclKind;
-use kiln_ast::ids::TemplateParamListId;
+use kiln_ast::ids::{ArgListId, TemplateParamListId};
 use kiln_ast::names::DeclName;
 use kiln_ast::templates::is_template_kind;
 use kiln_ast::types::TemplateArg;
@@ -60,6 +72,32 @@ pub struct TemplState {
     /// Where each template parameter's default argument starts (the
     /// redefinition and missing-default diagnostics point there).
     pub(crate) default_locs: kiln_source::fx::FxHashMap<DeclId, Loc>,
+    /// Where each argument of the template-id being parsed starts (set by
+    /// the parser right before `act_template_id`; consumed there).
+    pub(crate) arg_locs: Vec<Loc>,
+}
+
+/// The instantiation engine's state (spec/sema-templates.md §11.2).
+#[derive(Debug, Default)]
+pub struct InstState {
+    /// The active instantiations, innermost last (§10.1).
+    pub(crate) stack: stack::InstantiationStack,
+    /// `-ftemplate-depth=` / `-ftemplate-backtrace-limit=`.
+    pub limits: stack::InstLimits,
+    /// Member definitions whose instantiation was required at a point
+    /// where it could not run (§4.4), drained at end of TU.
+    pub(crate) pending: std::collections::VecDeque<pending::PendingInst>,
+    /// One entry per active SFINAE context: the errors it captured (§5.7).
+    pub(crate) sfinae: std::cell::RefCell<Vec<stack::SfinaeState>>,
+    /// Alias template specializations already substituted (§4.6).
+    pub(crate) alias_cache: kiln_source::fx::FxHashMap<(DeclId, ArgListId), QualType>,
+    /// The instantiation report (§11.3).
+    pub report: report::InstReport,
+    /// The depth limit was hit: no further instantiation (the error is
+    /// fatal).
+    pub(crate) fatal: bool,
+    /// The members already queued in `pending` (no duplicates).
+    pub(crate) queued: kiln_source::fx::FxHashSet<DeclId>,
 }
 
 impl Sema<'_, '_> {
@@ -74,6 +112,12 @@ impl Sema<'_, '_> {
     /// parsed (clang's `EnteringContext`); returns the previous value.
     pub fn set_entering_context(&mut self, on: bool) -> bool {
         std::mem::replace(&mut self.templ.entering_context, on)
+    }
+
+    /// Records where each argument of the next template-id starts (the
+    /// kind and conversion diagnostics point there, as clang's do).
+    pub fn set_template_arg_locs(&mut self, locs: Vec<Loc>) {
+        self.templ.arg_locs = locs;
     }
 
     /// The depth the next template parameter list gets: the number of

@@ -1506,6 +1506,17 @@ impl ExprArena {
         [ExprId::new(n.a), ExprId::new(n.b)]
     }
 
+    /// The replacement expression of a `SubstNonTypeTemplateParmExpr`.
+    pub fn subst_replacement(&self, e: ExprId) -> ExprId {
+        ExprId::new(self.expect_kind(e, ExprKind::SubstNonTypeTemplateParmExpr).b)
+    }
+
+    /// The `NonTypeTemplateParmDecl` a `SubstNonTypeTemplateParmExpr`
+    /// replaced.
+    pub fn subst_parameter(&self, e: ExprId) -> DeclId {
+        DeclId::new(self.expect_kind(e, ExprKind::SubstNonTypeTemplateParmExpr).a)
+    }
+
     /// The cached value of a `ConstantExpr`.
     pub fn constant_value(&self, e: ExprId) -> Option<ConstValueId> {
         ConstValueId::from_raw(self.expect_kind(e, ExprKind::ConstantExpr).b)
@@ -1567,6 +1578,7 @@ impl ExprArena {
                 v.extend(id(n.a));
                 v.extend(id(n.b));
             }
+            ExprKind::SubstNonTypeTemplateParmExpr => v.extend(id(n.b)),
             k if k.is_cast() => v.extend(id(n.a)),
             ExprKind::UnaryExprOrTypeTraitExpr if !n.has(ExprFlags::ARG_IS_TYPE) => {
                 v.extend(id(n.a));

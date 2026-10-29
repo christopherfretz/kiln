@@ -1,0 +1,562 @@
+//! Class template specializations (spec/sema-templates.md §4): naming
+//! one (`get_class_spec`), instantiating its definition when a complete
+//! type is required (`instantiate_class`, [temp.inst]/2), alias template
+//! specializations (§4.10), and the definitions of members, which are
+//! instantiated when used (`instantiate_function_definition`,
+//! [temp.inst]/4).
+
+use kiln_ast::decl::{DeclFlags, DeclKind, TagKind};
+use kiln_ast::expr::ExprKind;
+use kiln_ast::ids::TemplateNameId;
+use kiln_ast::templates::SpecKind;
+use kiln_ast::types::TemplateArg;
+use kiln_ast::{DeclId, QualType};
+use kiln_diag::DiagId;
+use kiln_source::Loc;
+
+use crate::Sema;
+use crate::class::BaseSpecInfo;
+use crate::declspec::DeclaratorContext;
+use crate::init::Initializer;
+use crate::scope::{Scope, ScopeKind};
+use crate::templ::args::{LevelMode, MultiLevelArgs};
+use crate::templ::stack::FrameKind;
+use crate::templ::subst::{SubstFail, Substituter};
+
+/// The parse state set aside while an instantiation runs in the context
+/// of its template (§4.5): an instantiation can be triggered from deep
+/// inside any declaration, statement or expression.
+#[derive(Default)]
+struct SavedState {
+    scopes: Vec<Scope>,
+    ctx: Option<DeclId>,
+    func: Option<crate::stmt::FnState>,
+    unevaluated: u32,
+    immediate: u32,
+    pending_odr: Vec<kiln_ast::ExprId>,
+    defining: Vec<DeclId>,
+    enums: Vec<crate::decl::EnumBuild>,
+    braced_args: Vec<(kiln_ast::ExprId, crate::init::InitList)>,
+    prototype_params: Vec<Vec<kiln_source::symbol::Symbol>>,
+    deferring_call_ref: bool,
+    deferred_call_refs: Vec<(kiln_ast::ExprId, DeclId)>,
+    classes: Vec<crate::class::ClassBuild>,
+    cleanup: crate::class::CleanupState,
+    extend_collector: Option<Vec<kiln_ast::ExprId>>,
+    nsdmi_this: Vec<(DeclId, QualType)>,
+    initializing: Option<DeclId>,
+    heads: Vec<super::HeadBuild>,
+    cur: Option<kiln_ast::ids::TemplateParamListId>,
+    entering_context: bool,
+    invented: u16,
+    req_ctx: Vec<DeclId>,
+    dependent_depth: u32,
+    friend_tag: Option<DeclId>,
+}
+
+impl Sema<'_, '_> {
+    /// Runs `f` in the context of declaration context `ctx` (a namespace
+    /// or a class), with the parse state of the point of instantiation
+    /// set aside ([temp.point]: names are looked up from the template's
+    /// definition, not from where the instantiation was required).
+    pub(crate) fn in_inst_context<R>(&mut self, ctx: DeclId, f: impl FnOnce(&mut Self) -> R) -> R {
+        let tu_dirs = self.scopes.first().map(|s| s.using_dirs.clone()).unwrap_or_default();
+        let saved = SavedState {
+            scopes: std::mem::take(&mut self.scopes),
+            ctx: Some(self.ctx),
+            func: self.func.take(),
+            unevaluated: std::mem::take(&mut self.unevaluated),
+            immediate: std::mem::take(&mut self.immediate),
+            pending_odr: std::mem::take(&mut self.pending_odr),
+            defining: std::mem::take(&mut self.defining),
+            enums: std::mem::take(&mut self.enums),
+            braced_args: std::mem::take(&mut self.braced_args),
+            prototype_params: std::mem::take(&mut self.prototype_params),
+            deferring_call_ref: std::mem::take(&mut self.deferring_call_ref),
+            deferred_call_refs: std::mem::take(&mut self.deferred_call_refs),
+            classes: std::mem::take(&mut self.classes),
+            cleanup: std::mem::take(&mut self.cleanup),
+            extend_collector: self.extend_collector.take(),
+            nsdmi_this: std::mem::take(&mut self.nsdmi_this),
+            initializing: self.initializing.take(),
+            heads: std::mem::take(&mut self.templ.heads),
+            cur: self.templ.cur.take(),
+            entering_context: std::mem::take(&mut self.templ.entering_context),
+            invented: std::mem::take(&mut self.templ.invented),
+            req_ctx: std::mem::take(&mut self.templ.req_ctx),
+            dependent_depth: std::mem::take(&mut self.ast.templates.dependent_depth),
+            friend_tag: self.friend_tag.take(),
+        };
+        let mut tu = Scope::new(ScopeKind::TranslationUnit, Some(self.ast.tu));
+        tu.using_dirs = tu_dirs;
+        self.scopes.push(tu);
+        let mut chain = Vec::new();
+        let mut c = Some(ctx);
+        while let Some(x) = c {
+            if x == self.ast.tu || chain.len() > 1024 {
+                break;
+            }
+            chain.push(x);
+            c = self.ast.decls.get(x).ctx();
+        }
+        for x in chain.into_iter().rev() {
+            let s = match self.kind_of(x) {
+                DeclKind::CXXRecord => {
+                    Scope::new(ScopeKind::Record, Some(self.ast.definition(x).unwrap_or(x)))
+                }
+                DeclKind::Namespace => Scope::new(ScopeKind::Namespace, Some(x)),
+                DeclKind::LinkageSpec | DeclKind::Export => Scope::new(ScopeKind::LinkageSpec, Some(x)),
+                // A local class's context (WP-070b): its function's
+                // scope is gone; lookup sees only the enclosing namespaces.
+                _ => continue,
+            };
+            self.scopes.push(s);
+        }
+        self.ctx = ctx;
+        let r = f(self);
+        self.scopes = saved.scopes;
+        self.ctx = saved.ctx.unwrap_or(self.ast.tu);
+        self.func = saved.func;
+        self.unevaluated = saved.unevaluated;
+        self.immediate = saved.immediate;
+        self.pending_odr = saved.pending_odr;
+        self.defining = saved.defining;
+        self.enums = saved.enums;
+        self.braced_args = saved.braced_args;
+        self.prototype_params = saved.prototype_params;
+        self.deferring_call_ref = saved.deferring_call_ref;
+        self.deferred_call_refs = saved.deferred_call_refs;
+        self.classes = saved.classes;
+        self.cleanup = saved.cleanup;
+        self.extend_collector = saved.extend_collector;
+        self.nsdmi_this = saved.nsdmi_this;
+        self.initializing = saved.initializing;
+        self.templ.heads = saved.heads;
+        self.templ.cur = saved.cur;
+        self.templ.entering_context = saved.entering_context;
+        self.templ.invented = saved.invented;
+        self.templ.req_ctx = saved.req_ctx;
+        self.ast.templates.dependent_depth = saved.dependent_depth;
+        self.friend_tag = saved.friend_tag;
+        r
+    }
+
+    /// The specialization of class template `tmpl` for `written`
+    /// ([temp.spec.general], §4.2): the arguments are checked and
+    /// converted, and the specialization found or created (undefined
+    /// until a complete type is required).
+    #[allow(clippy::result_unit_err, reason = "`Err` means already diagnosed")]
+    pub fn get_class_spec(
+        &mut self,
+        tmpl: DeclId,
+        written: &[TemplateArg],
+        arg_locs: &[Loc],
+        loc: Loc,
+    ) -> Result<DeclId, ()> {
+        let tmpl = self.ast.first(tmpl);
+        let conv = self.check_template_args(tmpl, written, arg_locs, loc)?;
+        if let Some(s) = self.ast.templates.find_spec(tmpl, conv.canonical) {
+            return Ok(s);
+        }
+        let tag = self
+            .ast
+            .template_info(tmpl)
+            .and_then(|i| i.pattern)
+            .and_then(|p| self.ast.decls.record(p))
+            .map_or(TagKind::Struct, |r| r.tag);
+        let spec = self.builder().class_spec(tmpl, conv.sugared, conv.canonical, tag);
+        Ok(spec)
+    }
+
+    /// The type `name<args>` naming a specialization of class template
+    /// `tmpl` (§4.2): a `TemplateSpecializationType` sugaring the
+    /// specialization's record type.
+    #[allow(clippy::result_unit_err, reason = "`Err` means already diagnosed")]
+    pub fn class_template_type(
+        &mut self,
+        name: TemplateNameId,
+        tmpl: DeclId,
+        written: &[TemplateArg],
+        arg_locs: &[Loc],
+        loc: Loc,
+    ) -> Result<QualType, ()> {
+        let spec = self.get_class_spec(tmpl, written, arg_locs, loc)?;
+        let list = self.ast.types.arg_list(written);
+        let rec = self.tag_type(spec);
+        Ok(self.ast.types.template_specialization(name, list, Some(rec), false))
+    }
+
+    /// The type `name<args>` naming a specialization of alias template
+    /// `tmpl` ([temp.alias]/2, §4.10): the aliased type with the
+    /// arguments substituted, cached per canonical argument list.
+    #[allow(clippy::result_unit_err, reason = "`Err` means already diagnosed")]
+    pub fn alias_template_type(
+        &mut self,
+        name: TemplateNameId,
+        tmpl: DeclId,
+        written: &[TemplateArg],
+        arg_locs: &[Loc],
+        loc: Loc,
+    ) -> Result<QualType, ()> {
+        let tmpl = self.ast.first(tmpl);
+        let conv = self.check_template_args(tmpl, written, arg_locs, loc)?;
+        let list = self.ast.types.arg_list(written);
+        if let Some(&u) = self.inst.alias_cache.get(&(tmpl, conv.canonical)) {
+            return Ok(self.ast.types.template_specialization(name, list, Some(u), true));
+        }
+        let Some(pattern) = self.ast.template_info(tmpl).and_then(|i| i.pattern) else {
+            return Err(());
+        };
+        let Some(u) = self.ast.decls.typedef(pattern).map(|t| t.underlying) else { return Err(()) };
+        let depth = self.template_param_depth(tmpl);
+        let mut args = self.outer_levels(tmpl, depth);
+        args.push(conv.sugared, tmpl, LevelMode::Substitute);
+        if !self.push_inst_frame(FrameKind::AliasTemplate, pattern, tmpl, loc) {
+            return Err(());
+        }
+        let r = {
+            let saved = std::mem::take(&mut self.ast.templates.dependent_depth);
+            let mut s = Substituter::new(self, &args);
+            let r = s.ty(u, loc);
+            self.ast.templates.dependent_depth = saved;
+            r
+        };
+        self.pop_inst_frame();
+        let Ok(u) = r else { return Err(()) };
+        let _ = self.inst.alias_cache.insert((tmpl, conv.canonical), u);
+        Ok(self.ast.types.template_specialization(name, list, Some(u), true))
+    }
+
+    /// The class template specialization `q` names (through sugar and
+    /// arrays), if any and not yet defined.
+    fn undefined_spec(&self, q: QualType) -> Option<DeclId> {
+        let mut t = q;
+        while let Some(e) = self.ast.types.element(t) {
+            if !self.ast.types.is_array(t) {
+                break;
+            }
+            t = e;
+        }
+        let r = self.ast.types.as_record(t)?;
+        self.ast.spec_info(r)?;
+        self.ast.definition(r).is_none().then_some(r)
+    }
+
+    /// Whether `q` is complete at `loc`, first instantiating the class
+    /// template specialization it names ([temp.inst]/2: a complete type
+    /// is required). Errors in the instantiation are diagnosed.
+    pub fn require_complete(&mut self, q: QualType, loc: Loc) -> bool {
+        if let Some(r) = self.undefined_spec(q) {
+            let _ = self.instantiate_class(r, loc, true);
+        }
+        self.is_complete(q)
+    }
+
+    /// As [`Sema::require_complete`], but an undefined template is not
+    /// diagnosed (the caller reports the incomplete type).
+    pub fn require_complete_silent(&mut self, q: QualType, loc: Loc) -> bool {
+        if let Some(r) = self.undefined_spec(q) {
+            let _ = self.instantiate_class(r, loc, false);
+        }
+        self.is_complete(q)
+    }
+
+    /// A class named in a nested-name-specifier must be complete
+    /// ([expr.prim.id.qual]/1); false after a diagnostic.
+    pub fn require_complete_nns(&mut self, q: QualType, loc: Loc) -> bool {
+        if let Some(r) = self.undefined_spec(q) {
+            return self.instantiate_class(r, loc, true);
+        }
+        if self.ast.types.as_record(q).is_some() && !self.is_complete(q) {
+            let d = self.diag(DiagId::sema_incomplete_nested_name_spec, loc).arg(self.ty_arg(q));
+            self.emit(d);
+            return false;
+        }
+        true
+    }
+
+    /// The arguments of specialization `spec` by depth (§5.1).
+    pub(crate) fn spec_args(&self, spec: DeclId) -> Option<(DeclId, MultiLevelArgs)> {
+        let (_, info) = self.ast.spec_info(spec)?;
+        let tmpl = info.template;
+        let depth = self.template_param_depth(tmpl);
+        let mut args = self.outer_levels(tmpl, depth);
+        args.push(info.args, tmpl, LevelMode::Substitute);
+        Some((tmpl, args))
+    }
+
+    /// Instantiates the definition of class template specialization
+    /// `spec` ([temp.inst]/2-3, §4.3): the member declarations are
+    /// substituted, the member definitions are not (§4.4). `poi` is the
+    /// point of instantiation. False when the specialization cannot be
+    /// defined (diagnosed if `diagnose`).
+    pub fn instantiate_class(&mut self, spec: DeclId, poi: Loc, diagnose: bool) -> bool {
+        if self.ast.definition(spec).is_some() {
+            return true;
+        }
+        if self.defining.contains(&spec) || self.inst.fatal {
+            return false;
+        }
+        let Some((tmpl, args)) = self.spec_args(spec) else { return false };
+        let Some(pattern) = self.ast.template_info(tmpl).and_then(|i| i.pattern) else {
+            return false;
+        };
+        let Some(def) = self.ast.definition(pattern) else {
+            if diagnose {
+                let t = self.tag_type(spec);
+                let note = self.diag(DiagId::note_template_decl_here, self.ast.decls.get(tmpl).loc());
+                let d = self
+                    .diag(DiagId::sema_template_implicit_instantiate_undefined, poi)
+                    .arg(self.ty_str(t))
+                    .with_note(note);
+                self.emit(d);
+            }
+            return false;
+        };
+        if !self.push_inst_frame(FrameKind::ClassInstantiation, spec, tmpl, poi) {
+            return false;
+        }
+        if let Some((i, _)) = self.ast.spec_info(spec) {
+            self.ast.templates.update_spec(i, |s| {
+                s.kind = SpecKind::ImplicitInstantiation;
+                s.from = def;
+                s.point_of_instantiation = poi;
+            });
+        }
+        let parent = self.ast.decls.get(spec).ctx().unwrap_or(self.ast.tu);
+        self.in_inst_context(parent, |s| s.instantiate_class_body(spec, def, &args));
+        self.pop_inst_frame();
+        self.ast.definition(spec).is_some()
+    }
+
+    fn instantiate_class_body(&mut self, spec: DeclId, def: DeclId, args: &MultiLevelArgs) {
+        self.act_on_start_record_definition(spec);
+        let mut sub = Substituter::new(self, args);
+        sub.entity = Some(spec);
+        sub.map_context(def, spec);
+        let first = sub.sema.ast.first(def);
+        if first != def {
+            sub.map_context(first, spec);
+        }
+        // Base classes ([temp.inst]/3: the base-clause is instantiated
+        // with the class).
+        let bases: Vec<kiln_ast::decl::BaseSpec> =
+            sub.sema.ast.decls.bases(def, &sub.sema.ast.lists).copied().collect();
+        let mut specs = Vec::with_capacity(bases.len());
+        for b in bases {
+            if b.pack_expansion {
+                let _ = sub.unimplemented::<()>("pack expansion", b.loc);
+                continue;
+            }
+            if let Ok(ty) = sub.ty(b.ty, b.loc) {
+                specs.push(BaseSpecInfo {
+                    ty,
+                    loc: b.loc,
+                    is_virtual: b.is_virtual,
+                    access: b.access,
+                    pack_expansion: false,
+                    attrs: Vec::new(),
+                });
+            }
+        }
+        sub.sema.act_on_base_specifiers(spec, &specs);
+        let members: Vec<DeclId> = sub.sema.ast.decls.members(def).collect();
+        let mut nsdmis = Vec::new();
+        for m in members {
+            let n = *sub.sema.ast.decls.get(m);
+            if n.flags().contains(DeclFlags::IMPLICIT) {
+                continue;
+            }
+            let r = sub.member(m);
+            if let Ok(Some(x)) = r {
+                sub.member_link(x, m);
+                if n.kind() == DeclKind::Field
+                    && let Some(init) = sub.sema.ast.decls.field(m).and_then(|f| f.init)
+                {
+                    nsdmis.push((x, init));
+                }
+            }
+        }
+        sub.sema.act_on_finish_record_definition(spec, false);
+        // Default member initializers: in the complete-class context
+        // (clang instantiates them when a constructor uses them; a gap).
+        if !nsdmis.is_empty() {
+            sub.sema.act_on_start_delayed_class(spec);
+            for (field, init) in nsdmis {
+                if sub.sema.kind_of(field) != DeclKind::Field {
+                    continue;
+                }
+                sub.sema.act_on_start_field_init(field);
+                let i = if sub.sema.ast.exprs.get(init).kind() == ExprKind::InitListExpr {
+                    sub.init_list(init).map(Initializer::List)
+                } else {
+                    sub.expr(init).map(Initializer::Expr)
+                };
+                match i {
+                    Ok(i) => sub.sema.act_on_field_init(field, i),
+                    Err(SubstFail) => {
+                        if sub.sema.nsdmi_this.last().is_some_and(|&(f, _)| f == field) {
+                            sub.sema.nsdmi_this.pop();
+                        }
+                    }
+                }
+            }
+            sub.sema.act_on_finish_delayed_class(spec);
+        }
+        sub.sema.act_on_finish_class_contexts(spec);
+    }
+
+    /// Instantiates the definition of `f`, a member function of a class
+    /// template specialization (or a friend defined in one), from its
+    /// pattern ([temp.inst]/4-5, §4.4). Nothing happens if `f` is already
+    /// defined or its pattern has no definition (a link-time reference).
+    pub fn instantiate_function_definition(&mut self, f: DeclId, poi: Loc) {
+        if self.ast.definition(f).is_some() || self.inst.fatal {
+            return;
+        }
+        let Some(pattern) = self.ast.instantiated_from(f) else { return };
+        let Some(pdef) = self.ast.definition(pattern) else { return };
+        let Some(body) = self.ast.decls.function(pdef).and_then(|x| x.body) else { return };
+        // The specialization whose member `f` is: its semantic context
+        // (a friend: the class that declared it).
+        let Some(spec) = self.inst_owner(f) else { return };
+        let Some((tmpl, args)) = self.spec_args(spec) else { return };
+        let Some(pclass) = self.ast.definition(self.ast.template_info(tmpl).and_then(|i| i.pattern).unwrap_or(spec)) else {
+            return;
+        };
+        if !self.push_inst_frame(FrameKind::MemberFunction, f, pattern, poi) {
+            return;
+        }
+        if let Some((i, _)) = self.ast.member_spec_info(f) {
+            self.ast.templates.update_member_spec(i, |m| {
+                if m.point_of_instantiation == Loc::INVALID {
+                    m.point_of_instantiation = poi;
+                }
+            });
+        }
+        let ctx = self.ast.decls.get(f).ctx().unwrap_or(self.ast.tu);
+        self.in_inst_context(ctx, |s| {
+            s.act_on_start_function_def(f);
+            let pp: Vec<DeclId> = s
+                .ast
+                .decls
+                .function(pdef)
+                .map(|x| s.ast.lists.iter::<DeclId>(x.params).collect())
+                .unwrap_or_default();
+            let fp: Vec<DeclId> = s
+                .ast
+                .decls
+                .function(f)
+                .map(|x| s.ast.lists.iter::<DeclId>(x.params).collect())
+                .unwrap_or_default();
+            let lbrace = s.ast.stmts.get(body).loc();
+            let rbrace = if s.ast.stmts.get(body).kind() == kiln_ast::stmt::StmtKind::CompoundStmt {
+                s.ast.stmts.rbrace(body)
+            } else {
+                lbrace
+            };
+            if s.kind_of(f) == DeclKind::CXXConstructor {
+                s.act_on_mem_initializers(f, &[], lbrace);
+            }
+            let mut sub = Substituter::new(s, &args);
+            sub.entity = Some(spec);
+            sub.map_context(pclass, spec);
+            let first = sub.sema.ast.first(pclass);
+            if first != pclass {
+                sub.map_context(first, spec);
+            }
+            for (a, b) in pp.into_iter().zip(fp) {
+                sub.locals.insert(a, crate::templ::subst::DeclOrPack::Decl(b));
+            }
+            let b = sub.body(body);
+            s.act_on_finish_function_def(f, b, rbrace);
+        });
+        self.pop_inst_frame();
+    }
+
+    /// The class template specialization member `f` was instantiated
+    /// with.
+    fn inst_owner(&self, f: DeclId) -> Option<DeclId> {
+        let mut c = self.ast.decls.lexical_ctx(f).or_else(|| self.ast.decls.get(f).ctx());
+        while let Some(x) = c {
+            if self.ast.spec_info(x).is_some() {
+                return Some(x);
+            }
+            c = self.ast.decls.get(x).ctx();
+        }
+        None
+    }
+
+    /// `f`, a function, was odr-used at `loc` ([temp.inst]/5): a member
+    /// of a class template specialization is instantiated now when it
+    /// is constexpr (constant evaluation may need it), else queued for
+    /// the end of the translation unit ([temp.point]/7).
+    pub(crate) fn note_used_for_instantiation(&mut self, f: DeclId, loc: Loc) {
+        if self.ast.definition(f).is_some() || self.ast.instantiated_from(f).is_none() {
+            return;
+        }
+        if !matches!(
+            self.kind_of(f),
+            DeclKind::Function
+                | DeclKind::CXXMethod
+                | DeclKind::CXXConstructor
+                | DeclKind::CXXDestructor
+                | DeclKind::CXXConversion
+        ) {
+            return;
+        }
+        let constexpr = self.ast.decls.function(f).is_some_and(|x| {
+            x.spec.constexpr_kind() != kiln_ast::decl::ConstexprKind::None
+                || self.is_undeduced_auto(
+                    self.ast.types.proto(self.ast.decls.get(f).ty().unwrap_or(QualType::ERROR)).map_or(QualType::ERROR, kiln_ast::types::FuncProto::ret),
+                )
+        });
+        if constexpr {
+            self.instantiate_function_definition(f, loc);
+        } else {
+            self.queue_instantiation(f, loc);
+        }
+    }
+}
+
+impl Substituter<'_, '_, '_> {
+    /// Replays member `m` of the pattern class (§4.6).
+    fn member(&mut self, m: DeclId) -> Result<Option<DeclId>, SubstFail> {
+        let n = *self.sema.ast.decls.get(m);
+        let loc = n.loc();
+        Ok(Some(match n.kind() {
+            DeclKind::Field => self.field_decl(m)?,
+            DeclKind::Var => self.var_decl(m, DeclaratorContext::Member)?,
+            DeclKind::CXXMethod
+            | DeclKind::CXXConstructor
+            | DeclKind::CXXDestructor
+            | DeclKind::CXXConversion => {
+                // An out-of-line redeclaration is not a member of the
+                // class's member list; only the first declaration is.
+                self.function_decl(m, DeclaratorContext::Member, None)?
+            }
+            DeclKind::Typedef | DeclKind::TypeAlias => self.typedef_decl(m)?,
+            DeclKind::StaticAssert => {
+                self.static_assert_decl(m)?;
+                return Ok(None);
+            }
+            DeclKind::Enum => self.enum_decl(m)?,
+            DeclKind::AccessSpec => {
+                let a = n.misc().access();
+                let _ = self.sema.act_on_access_spec(a, loc);
+                return Ok(None);
+            }
+            DeclKind::Friend => {
+                let r = self.friend_decl(m)?;
+                return Ok(r.filter(|&x| self.sema.kind_of(x) != DeclKind::Friend));
+            }
+            DeclKind::Empty => return Ok(None),
+            DeclKind::CXXRecord => return self.unimplemented("member classes of class templates", loc),
+            DeclKind::ClassTemplate
+            | DeclKind::FunctionTemplate
+            | DeclKind::VarTemplate
+            | DeclKind::TypeAliasTemplate => return self.unimplemented("member templates", loc),
+            k => return self.unimplemented(&format!("{k:?} members of class templates"), loc),
+        }))
+    }
+}

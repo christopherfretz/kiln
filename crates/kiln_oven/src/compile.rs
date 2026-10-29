@@ -176,8 +176,12 @@ pub(crate) fn float_of(c: u32) -> FloatKind {
 
 /// Strips parentheses.
 fn skip_parens(ast: &kiln_ast::Ast, mut e: ExprId) -> ExprId {
-    while ast.exprs.get(e).kind() == ExprKind::ParenExpr {
-        e = ast.exprs.operand(e);
+    loop {
+        match ast.exprs.get(e).kind() {
+            ExprKind::ParenExpr => e = ast.exprs.operand(e),
+            ExprKind::SubstNonTypeTemplateParmExpr => e = ast.exprs.subst_replacement(e),
+            _ => break,
+        }
     }
     e
 }
@@ -761,6 +765,7 @@ impl Scan<'_> {
                 }
             }
             ExprKind::ParenExpr => self.expr(ast.exprs.operand(e), ok),
+            ExprKind::SubstNonTypeTemplateParmExpr => self.expr(ast.exprs.subst_replacement(e), ok),
             ExprKind::CXXDefaultArgExpr => {
                 if let Some(d) = default_arg_of(ast, e) {
                     self.expr(d, false);
@@ -1731,6 +1736,10 @@ impl Compiler<'_> {
                 let op = self.ast().exprs.operand(e);
                 self.rv_inner(op, dst);
             }
+            ExprKind::SubstNonTypeTemplateParmExpr => {
+                let op = self.ast().exprs.subst_replacement(e);
+                self.rv_inner(op, dst);
+            }
             ExprKind::CompoundLiteralExpr => {
                 let init = self.ast().exprs.compound_literal_init(e);
                 self.rv_inner(init, dst);
@@ -2336,6 +2345,10 @@ impl Compiler<'_> {
                 let op = self.ast().exprs.operand(e);
                 self.lv(op, acc)
             }
+            ExprKind::SubstNonTypeTemplateParmExpr => {
+                let op = self.ast().exprs.subst_replacement(e);
+                self.lv(op, acc)
+            }
             ExprKind::CXXDefaultArgExpr if default_arg_of(self.ast(), e).is_some() => {
                 let d = default_arg_of(self.ast(), e).unwrap_or(e);
                 self.lv(d, acc)
@@ -2917,6 +2930,10 @@ impl Compiler<'_> {
             ExprKind::StmtExpr => self.stmt_expr(e, None),
             ExprKind::ParenExpr => {
                 let op = self.ast().exprs.operand(e);
+                self.effect(op);
+            }
+            ExprKind::SubstNonTypeTemplateParmExpr => {
+                let op = self.ast().exprs.subst_replacement(e);
                 self.effect(op);
             }
             ExprKind::CompoundLiteralExpr => {

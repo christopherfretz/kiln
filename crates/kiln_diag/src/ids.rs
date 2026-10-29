@@ -924,6 +924,8 @@ diag_ids! {
     sema_template_arg_must_be_expr = Error (0) "template argument for non-type template parameter must be an expression";
     sema_template_arg_must_be_template = Error (0) "template argument for template template parameter must be a class template or type alias template";
     sema_incomplete_nested_name_spec = Error (1) "incomplete type {0} named in nested name specifier";
+    sema_expected_class_or_namespace = Error (1) "{0} is not a class, namespace, or enumeration";
+    sema_typename_nested_not_type = Error (2) "typename specifier refers to non-type member '{0}' in {1}";
 }
 
 impl DiagId {

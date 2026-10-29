@@ -224,6 +224,7 @@ impl Sema<'_, '_> {
                 ExprKind::ParenExpr | ExprKind::ImplicitCastExpr | ExprKind::ConstantExpr => {
                     e = ast.exprs.operand(e);
                 }
+                ExprKind::SubstNonTypeTemplateParmExpr => e = ast.exprs.subst_replacement(e),
                 ExprKind::IntegerLiteral
                 | ExprKind::FloatingLiteral
                 | ExprKind::CharacterLiteral
@@ -260,6 +261,7 @@ impl Sema<'_, '_> {
                 ExprKind::ParenExpr | ExprKind::ImplicitCastExpr | ExprKind::ConstantExpr => {
                     e = self.ast.exprs.operand(e);
                 }
+                ExprKind::SubstNonTypeTemplateParmExpr => e = self.ast.exprs.subst_replacement(e),
                 _ => break,
             }
         }

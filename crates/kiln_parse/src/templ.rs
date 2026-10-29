@@ -485,9 +485,11 @@ impl Parser<'_, '_> {
         let end = self.skip_template_args(self.pos());
         let l = self.bump().span.lo;
         let mut args = Vec::new();
+        let mut locs = Vec::new();
         let mut ok = true;
         if !self.at_greater() {
             loop {
+                locs.push(self.loc());
                 let Some(a) = self.parse_template_argument() else {
                     ok = false;
                     break;
@@ -500,6 +502,7 @@ impl Parser<'_, '_> {
         }
         if ok && self.at_greater() {
             let r = self.split_greater();
+            self.s.set_template_arg_locs(locs);
             return Some((args, l, r));
         }
         if ok {

@@ -506,6 +506,15 @@ impl<'a, W: io::Write> Dumper<'a, W> {
             | ExprKind::CXXNoexceptExpr
             | ExprKind::CXXThrowExpr
             | ExprKind::CompoundLiteralExpr => push(n.a()),
+            ExprKind::SubstNonTypeTemplateParmExpr => {
+                // The parameter prints first (clang), then the replacement.
+                drop(push);
+                kids.push((Node::Decl(exprs.subst_parameter(e)), None));
+                if let Some(c) = ExprId::from_raw(n.b()) {
+                    kids.push((Node::Expr(c), None));
+                }
+                return;
+            }
             k if k.is_cast() => push(n.a()),
             ExprKind::CXXConstructExpr | ExprKind::CXXTemporaryObjectExpr => {
                 for c in lists.iter::<ExprId>(exprs.construct_args(e)) {

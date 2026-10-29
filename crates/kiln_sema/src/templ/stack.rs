@@ -9,6 +9,8 @@ use kiln_ast::DeclId;
 use kiln_diag::{Diag, DiagId};
 use kiln_source::Loc;
 
+use crate::Sema;
+
 /// What a frame instantiates (§10.1). The "while …" kinds are not
 /// instantiations: they print a note but do not count toward the depth
 /// limit.
@@ -95,8 +97,8 @@ pub struct InstFrame {
     /// to inherit.
     pub sfinae: Option<bool>,
     pub(crate) start: Instant,
-    pub(crate) start_bytes: usize,
-    pub(crate) start_nodes: usize,
+    pub(crate) start_bytes: u64,
+    pub(crate) start_nodes: u64,
     pub(crate) child_ns: u64,
 }
 
@@ -217,6 +219,95 @@ impl InstantiationStack {
             out.push(d);
         }
         out
+    }
+}
+
+impl Sema<'_, '_> {
+    /// Pushes an instantiation frame ([temp.inst]/16): false, after the
+    /// fatal depth diagnostic (once per translation unit), when the
+    /// depth limit is reached or a fatal error already stopped
+    /// instantiation.
+    pub(crate) fn push_inst_frame(
+        &mut self,
+        kind: FrameKind,
+        entity: DeclId,
+        template: DeclId,
+        poi: Loc,
+    ) -> bool {
+        if self.inst.fatal {
+            return false;
+        }
+        if kind.is_instantiation() && self.inst.stack.depth() >= self.inst.limits.depth {
+            let note = self.diag(DiagId::note_template_recursion_depth, poi);
+            let d = self
+                .diag(DiagId::sema_template_recursion_depth, poi)
+                .arg(self.inst.limits.depth)
+                .with_note(note);
+            self.emit(d);
+            self.inst.fatal = true;
+            return false;
+        }
+        let sfinae = match kind {
+            FrameKind::ClassInstantiation
+            | FrameKind::MemberClass
+            | FrameKind::MemberFunction
+            | FrameKind::FunctionSpec
+            | FrameKind::StaticDataMember
+            | FrameKind::Enum
+            | FrameKind::Nsdmi => Some(false),
+            _ => None,
+        };
+        if kind.is_instantiation() {
+            self.inst.report.open();
+        }
+        let start_bytes = self.ast.node_live_bytes();
+        let start_nodes = self.ast.node_count();
+        self.ast.begin_instantiation();
+        self.inst.stack.push(InstFrame {
+            kind,
+            entity,
+            template,
+            poi,
+            sfinae,
+            start: Instant::now(),
+            start_bytes,
+            start_nodes,
+            child_ns: 0,
+        });
+        true
+    }
+
+    /// Pops the innermost frame, charging its meter to its template's
+    /// report row (§11.3).
+    pub(crate) fn pop_inst_frame(&mut self) {
+        let Some(f) = self.inst.stack.pop() else { return };
+        self.ast.end_instantiation();
+        let incl = u64::try_from(f.start.elapsed().as_nanos()).unwrap_or(u64::MAX);
+        let bytes = self.ast.node_live_bytes().saturating_sub(f.start_bytes);
+        let nodes = self.ast.node_count().saturating_sub(f.start_nodes);
+        if let Some(parent) = self.inst.stack.frames.last_mut() {
+            parent.child_ns = parent.child_ns.saturating_add(incl);
+        }
+        if f.kind.is_instantiation() {
+            self.inst.report.charge(f.kind, f.template, nodes, bytes, incl, f.child_ns);
+        }
+    }
+
+    /// The context notes the next diagnostic carries (§10.2).
+    pub(crate) fn inst_context_notes(&self) -> Vec<Diag> {
+        self.inst.stack.context_notes(self.inst.limits.backtrace, &|f| Some(self.frame_name(f)))
+    }
+
+    /// How a frame's entity prints in its note: a class by its type
+    /// (`A<int>`), anything else by its qualified name.
+    fn frame_name(&self, f: &InstFrame) -> String {
+        match f.kind {
+            FrameKind::ClassInstantiation | FrameKind::MemberClass => {
+                let t = self.ast.decls.get(f.entity).ty().unwrap_or(kiln_ast::QualType::ERROR);
+                self.ty_str(t)
+            }
+            _ => self.qualified_decl_name(f.entity),
+        }
     }
 }
 

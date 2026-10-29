@@ -1240,6 +1240,27 @@ impl AstBuilder<'_> {
         e
     }
 
+    /// A substituted non-type template parameter reference
+    /// ([temp.inst]; clang's `SubstNonTypeTemplateParmExpr`): `param` is
+    /// the `NonTypeTemplateParmDecl` the pattern named and `replacement`
+    /// the converted argument expression. It has the replacement's
+    /// category and type and none of the pattern's dependence.
+    pub fn subst_nttp_expr(&mut self, param: DeclId, replacement: ExprId, loc: Loc) -> ExprId {
+        let n = *self.ast.exprs.get(replacement);
+        self.push_expr(
+            ExprKind::SubstNonTypeTemplateParmExpr,
+            n.value_category(),
+            n.object_kind(),
+            ExprFlags::NONE,
+            n.deps(),
+            0,
+            n.ty(),
+            loc,
+            param.raw(),
+            replacement.raw(),
+        )
+    }
+
     /// `C<args>` naming concept `c` ([temp.names]/8): a
     /// `ConceptSpecializationExpr`, a `bool` prvalue, value-dependent when
     /// an argument is.
