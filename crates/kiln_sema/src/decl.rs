@@ -2208,13 +2208,26 @@ impl Sema<'_, '_> {
         }
         // [depr.static.constexpr]: a redundant out-of-class redeclaration
         // of an inline static data member initialized in its class.
-        if !self.is_in_class_static(v)
-            && self
+        if !self.is_in_class_static(v) {
+            let in_class = self
                 .ast
                 .redecls_of(v)
-                .any(|x| x != v && self.is_in_class_static(x) && self.is_var_definition(x))
-        {
-            return;
+                .find(|&x| x != v && self.is_in_class_static(x) && self.is_var_definition(x));
+            if let Some(x) = in_class {
+                if self.ast.decls.var(x).is_some_and(|y| y.spec.is_constexpr()) {
+                    self.error(DiagId::sema_redundant_constexpr_static_def, vn.loc());
+                }
+                return;
+            }
+            // [class.static.data]/4: the definition of a `const` static
+            // data member initialized in its class has no initializer.
+            if self
+                .ast
+                .redecls_of(v)
+                .any(|x| x != v && self.ast.decls.var(x).is_some_and(|y| y.init.is_some()))
+            {
+                return;
+            }
         }
         let spec = self.ast.decls.var(v).map(|x| x.spec).unwrap_or_default();
         let ty = vn.ty().unwrap_or(QualType::ERROR);

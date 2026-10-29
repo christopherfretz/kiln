@@ -113,6 +113,11 @@ pub struct InstState {
     /// Inline static data members of specializations whose initializer
     /// is not instantiated yet ([temp.inst]/4: on first reference).
     pub(crate) deferred_inits: kiln_source::fx::FxHashSet<DeclId>,
+    /// Non-inline static data members of specializations whose
+    /// definition (the pattern's out-of-line one, [class.static.data]/3)
+    /// is not instantiated yet ([temp.inst]/4: when odr-used or needed
+    /// for constant evaluation).
+    pub(crate) member_defs: kiln_source::fx::FxHashSet<DeclId>,
     /// Declaring such a member: its `constexpr` does not imply `inline`
     /// until the initializer is instantiated (as clang).
     pub(crate) deferring_init: bool,

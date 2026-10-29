@@ -1009,6 +1009,7 @@ diag_ids! {
     note_previous_template_specialization = Note (0) "previous template specialization is here";
     sema_explicit_inst_declaration_after_definition = Error (0) "explicit instantiation declaration (with 'extern') follows explicit instantiation definition (without 'extern')";
     note_explicit_instantiation_definition_here = Note (0) "explicit instantiation definition is here";
+    sema_redundant_constexpr_static_def = WarningOff [DeprecatedRedundantConstexprStaticDef] (0) "out-of-line definition of constexpr static data member is redundant in C++17 and is deprecated";
 }
 
 impl DiagId {

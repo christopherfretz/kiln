@@ -144,6 +144,8 @@ diag_groups! {
     InvalidPartialSpecialization = "invalid-partial-specialization" [];
     UnusablePartialSpecialization = "unusable-partial-specialization" [];
     InstantiationAfterSpecialization = "instantiation-after-specialization" [];
+    Deprecated = "deprecated" [DeprecatedDeclarations, DeprecatedRedundantConstexprStaticDef];
+    DeprecatedRedundantConstexprStaticDef = "deprecated-redundant-constexpr-static-def" [];
 }
 
 impl Group {

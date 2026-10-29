@@ -139,7 +139,7 @@ impl Sema<'_, '_> {
         }
     }
 
-    fn is_integral_or_enum(&self, t: QualType) -> bool {
+    pub(crate) fn is_integral_or_enum(&self, t: QualType) -> bool {
         self.ast.types.is_integral(t) || self.ast.types.as_enum(t).is_some()
     }
 
@@ -402,18 +402,33 @@ impl Sema<'_, '_> {
             return false;
         }
         let Some(v) = self.ast.decls.var(d) else { return false };
-        let Some(init) = v.init else { return false };
+        // The initializer may be on another declaration (an out-of-line
+        // definition of a static data member, [class.static.data]/3).
+        let spec = v.spec;
+        let holder = if v.init.is_some() {
+            d
+        } else {
+            let Some(x) = self
+                .ast
+                .redecls_of(d)
+                .find(|&x| self.ast.decls.var(x).is_some_and(|y| y.init.is_some()))
+            else {
+                return false;
+            };
+            x
+        };
+        let Some(init) = self.ast.decls.var(holder).and_then(|y| y.init) else { return false };
         let ty = n.ty().unwrap_or(QualType::ERROR);
         if self.ast.types.is_reference(ty) {
             return self.is_static_lvalue(init);
         }
         let q = self.ast.types.effective_quals(ty);
-        let ok = v.spec.is_constexpr()
+        let ok = spec.is_constexpr()
             || (q.is_const()
                 && !q.is_volatile()
                 && self.is_integral_or_enum(ty)
                 && !self.ast.types.is_reference(ty));
-        ok && self.is_constant_initialized(d)
+        ok && self.is_constant_initialized(holder)
     }
 
     /// True if the glvalue `e` designates a function or a variable with

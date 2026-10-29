@@ -678,22 +678,96 @@ impl Sema<'_, '_> {
     /// specialization whose initializer was deferred gets it now
     /// ([temp.inst]/4; clang instantiates at the reference, before the
     /// value is needed). An unevaluated reference instantiates only a
-    /// variable usable in constant expressions.
+    /// variable usable in constant expressions. The out-of-line
+    /// definition of a non-inline one is instantiated here when the
+    /// variable may be usable in constant expressions, else at the end
+    /// of the translation unit ([temp.point]/7, as clang).
     pub(crate) fn note_var_referenced(&mut self, v: DeclId, loc: Loc) {
-        if !self.inst.deferred_inits.contains(&v) {
+        let deferred = self.inst.deferred_inits.contains(&v);
+        if !deferred && !self.inst.member_defs.contains(&v) {
             return;
         }
-        let constant = self.ast.decls.var(v).is_some_and(|x| x.spec.is_constexpr())
-            || self
-                .ast
-                .decls
-                .get(v)
-                .ty()
-                .is_some_and(|t| self.ast.types.effective_quals(t).is_const());
+        let constant = self.might_be_constant_var(v);
         if self.unevaluated > 0 && !constant {
             return;
         }
-        self.instantiate_static_member_init(v, loc);
+        if deferred {
+            self.instantiate_static_member_init(v, loc);
+        } else if constant {
+            self.instantiate_static_member_def(v, loc);
+        } else {
+            self.queue_instantiation(v, loc);
+        }
+    }
+
+    /// clang's `mightBeUsableInConstantExpressions`: `constexpr`, or a
+    /// `const` non-volatile integral, enumeration or reference variable
+    /// ([expr.const]/4, before its initializer is known).
+    fn might_be_constant_var(&self, v: DeclId) -> bool {
+        if self.ast.decls.var(v).is_some_and(|x| x.spec.is_constexpr()) {
+            return true;
+        }
+        let ty = self.ast.decls.get(v).ty().unwrap_or(QualType::ERROR);
+        if self.ast.types.is_reference(ty) {
+            return true;
+        }
+        let q = self.ast.types.effective_quals(ty);
+        q.is_const() && !q.is_volatile() && self.is_integral_or_enum(ty)
+    }
+
+    /// Instantiates the definition of non-inline static data member `v`
+    /// of a specialization from its pattern's out-of-line definition
+    /// ([temp.inst]/4, [class.static.data]/3): a redeclaration of `v`
+    /// in the namespace of that definition, initialized as it is. Nothing
+    /// happens while the pattern has no out-of-line definition (a later
+    /// one is found at the next reference or at the end of the TU).
+    pub fn instantiate_static_member_def(&mut self, v: DeclId, poi: Loc) {
+        if self.inst.fatal || !self.inst.member_defs.contains(&v) {
+            return;
+        }
+        let Some(pattern) = self.ast.instantiated_from(v) else { return };
+        let Some(pdef) = self.ast.redecls_of(pattern).find(|&x| {
+            self.kind_of(x) == DeclKind::Var
+                && !self.is_in_class_static(x)
+                && !self.ast.decls.get(x).has(DeclFlags::INVALID)
+        }) else {
+            return;
+        };
+        self.inst.member_defs.remove(&v);
+        let Some(spec) = self.inst_owner(v) else { return };
+        let Some((tmpl, args)) = self.spec_args(spec) else { return };
+        let Some(pclass) = self.spec_pattern_class(spec, tmpl) else { return };
+        if !self.push_inst_frame(FrameKind::StaticDataMember, v, pdef, poi) {
+            return;
+        }
+        let pn = *self.ast.decls.get(pdef);
+        let lexical = self.ast.decls.lexical_ctx(pdef).unwrap_or(self.ast.tu);
+        let ty = self.ast.decls.get(v).ty().unwrap_or(QualType::ERROR);
+        let vspec = self.ast.decls.var(v).map(|x| x.spec).unwrap_or_default();
+        let pspec = self.ast.decls.var(pdef).map(|x| x.spec).unwrap_or_default();
+        let spec_bits = pspec
+            .with_storage(kiln_ast::decl::VarStorage::None)
+            .with_inline(vspec.is_inline())
+            .with_constexpr(vspec.is_constexpr());
+        let mut h = kiln_ast::DeclHead::new(spec, pn.name(), pn.loc());
+        h.lexical = Some(lexical);
+        let d = self.builder().var(h, ty, spec_bits, Some(v));
+        self.ast.templates.set_instantiated_from(d, pdef);
+        self.in_inst_context(spec, |s| {
+            let mut sub = Substituter::new(s, &args);
+            sub.entity = Some(spec);
+            sub.map_context(pclass, spec);
+            let first = sub.sema.ast.first(pclass);
+            if first != pclass {
+                sub.map_context(first, spec);
+            }
+            // [class.static.data]/3: the initializer is in the scope of
+            // the class.
+            sub.sema.initializing = Some(d);
+            // A failure was diagnosed; the variable is left uninitialized.
+            let _ = sub.var_init(pdef, d);
+        });
+        self.pop_inst_frame();
     }
 
     /// Instantiates the deferred initializer of static data member `v`.
@@ -807,7 +881,18 @@ impl Substituter<'_, '_, '_> {
         Ok(Some(match n.kind() {
             DeclKind::Field => self.field_decl(m)?,
             DeclKind::Var if self.defers_init(m) => self.deferred_static_member(m)?,
-            DeclKind::Var => self.var_decl(m, DeclaratorContext::Member)?,
+            DeclKind::Var => {
+                let v = self.var_decl(m, DeclaratorContext::Member)?;
+                let spec = self.sema.ast.decls.var(v).map(|x| x.spec);
+                if self.sema.kind_of(v) == DeclKind::Var
+                    && spec.is_some_and(|x| {
+                        x.storage() == kiln_ast::decl::VarStorage::Static && !x.is_inline()
+                    })
+                {
+                    self.sema.inst.member_defs.insert(v);
+                }
+                v
+            }
             DeclKind::CXXMethod
             | DeclKind::CXXConstructor
             | DeclKind::CXXDestructor
