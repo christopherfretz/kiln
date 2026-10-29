@@ -326,6 +326,52 @@ impl Gen<'_> {
         (f, plain)
     }
 
+    /// Picks 1–3 distinct non-virtual bases for `rec`: empty ones (EBO
+    /// and the same-type rule), repeated indirect ones, non-POD ones
+    /// (tail-padding reuse). Returns their combined facts (`empty`: all
+    /// bases are empty).
+    fn bases(&mut self, rec: &mut RecDef) -> Facts {
+        let mut acc = Facts { dc: true, empty: true, align_ub: 1, ..Facts::default() };
+        let candidates = self.items_where(|f| f.record && !f.union && !f.fam);
+        let n = 1 + self.rng.below(3);
+        for _ in 0..n {
+            if candidates.is_empty() {
+                break;
+            }
+            let empties: Vec<usize> =
+                candidates.iter().copied().filter(|&c| self.facts[c].empty).collect();
+            let c = if !empties.is_empty() && self.rng.chance(40) {
+                self.rng.pick(&empties)
+            } else {
+                self.rng.pick(&candidates)
+            };
+            if rec.bases.contains(&c) {
+                continue;
+            }
+            let bf = self.facts[c];
+            rec.bases.push(c);
+            acc.dc &= bf.dc;
+            acc.nontrivial |= bf.nontrivial;
+            acc.align_ub = acc.align_ub.max(bf.align_ub);
+            acc.empty &= bf.empty;
+        }
+        acc
+    }
+
+    /// An empty-class member, usually `[[no_unique_address]]`, overlapping
+    /// other members (C++20 [intro.object]/9).
+    fn empty_member(&mut self, empties: &[usize]) -> (FieldDef, TyFacts) {
+        let e = self.rng.pick(empties);
+        let ef = self.facts[e];
+        let ty = if self.rng.chance(20) {
+            Ty::Named(e).arr(1 + self.rng.below(3))
+        } else {
+            Ty::Named(e)
+        };
+        let f = FieldDef { ty: Some(ty), nua: self.rng.chance(80), ..FieldDef::default() };
+        (f, TyFacts { dc: ef.dc, nontrivial: ef.nontrivial, align_ub: ef.align_ub })
+    }
+
     fn record(&mut self, idx: usize) {
         let union = self.rng.chance(20);
         let tag =
@@ -337,31 +383,11 @@ impl Gen<'_> {
         let mut ub: u64 = 1;
         let mut bases_empty = true;
         if !union && self.rng.chance(35) {
-            // Non-virtual bases: empty ones (EBO and the same-type rule),
-            // repeated indirect ones, non-POD ones (tail-padding reuse).
-            let candidates = self.items_where(|f| f.record && !f.union && !f.fam);
-            let n = 1 + self.rng.below(3);
-            for _ in 0..n {
-                if candidates.is_empty() {
-                    break;
-                }
-                let empties: Vec<usize> =
-                    candidates.iter().copied().filter(|&c| self.facts[c].empty).collect();
-                let c = if !empties.is_empty() && self.rng.chance(40) {
-                    self.rng.pick(&empties)
-                } else {
-                    self.rng.pick(&candidates)
-                };
-                if rec.bases.contains(&c) {
-                    continue;
-                }
-                let bf = self.facts[c];
-                rec.bases.push(c);
-                dc &= bf.dc;
-                nontrivial |= bf.nontrivial;
-                ub = ub.max(bf.align_ub);
-                bases_empty &= bf.empty;
-            }
+            let bf = self.bases(&mut rec);
+            dc &= bf.dc;
+            nontrivial |= bf.nontrivial;
+            ub = ub.max(bf.align_ub);
+            bases_empty = bf.empty;
         }
         if self.rng.chance(8) {
             rec.pack = Some(self.rng.pick(&[1, 2, 4, 8, 16]));
@@ -369,17 +395,7 @@ impl Gen<'_> {
         for k in 0..n_fields {
             let empties = self.items_where(|f| f.empty);
             let (mut f, tf) = if !empties.is_empty() && self.rng.chance(12) {
-                // [[no_unique_address]] empty members, overlapping each
-                // other and the next members (C++20 [intro.object]/9).
-                let e = self.rng.pick(&empties);
-                let ef = self.facts[e];
-                let ty = if self.rng.chance(20) {
-                    Ty::Named(e).arr(1 + self.rng.below(3))
-                } else {
-                    Ty::Named(e)
-                };
-                let f = FieldDef { ty: Some(ty), nua: self.rng.chance(80), ..FieldDef::default() };
-                (f, TyFacts { dc: ef.dc, nontrivial: ef.nontrivial, align_ub: ef.align_ub })
+                self.empty_member(&empties)
             } else if self.rng.chance(30) {
                 self.bit_field(union)
             } else {

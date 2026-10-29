@@ -337,10 +337,10 @@ fn write_scope(names: &Names<'_>, d: DeclId, out: &mut String) {
                     chain.push(s);
                 }
             }
-            DeclKind::CXXRecord | DeclKind::Enum => {
-                if !ast.decls.get(s).name().is_empty() || names.typedef_for_anon(s).is_some() {
-                    chain.push(s);
-                }
+            DeclKind::CXXRecord | DeclKind::Enum
+                if !ast.decls.get(s).name().is_empty() || names.typedef_for_anon(s).is_some() =>
+            {
+                chain.push(s);
             }
             _ => {}
         }

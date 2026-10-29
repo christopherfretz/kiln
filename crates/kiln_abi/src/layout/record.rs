@@ -161,7 +161,7 @@ pub(super) fn layout_record(lay: &mut Layouter<'_>, def: DeclId) -> RecordFacts 
     let mut empty_map = EmptySubobjectMap::new(largest_empty);
     // LayoutNonVirtualBases (no primary base or vptr yet: WP-078b).
     for base in &bases {
-        layout_base(&mut b, lay, &mut empty_map, base);
+        layout_base(&mut b, lay, &mut empty_map, *base);
     }
     for f in &ins {
         match f.desc.bit_width {
@@ -212,7 +212,7 @@ pub(super) fn layout_record(lay: &mut Layouter<'_>, def: DeclId) -> RecordFacts 
 /// rounded up to its `nvalign`, moving up by `nvalign` while an empty
 /// subobject conflicts. The base adds its `nvsize` to `dsize`, so later
 /// members reuse its tail padding when it is not POD for layout.
-fn layout_base(b: &mut Builder, lay: &Layouter<'_>, map: &mut EmptySubobjectMap, base: &BaseDesc) {
+fn layout_base(b: &mut Builder, lay: &Layouter<'_>, map: &mut EmptySubobjectMap, base: BaseDesc) {
     if base.is_virtual {
         return;
     }
