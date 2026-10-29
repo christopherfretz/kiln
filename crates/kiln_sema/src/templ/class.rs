@@ -38,7 +38,7 @@ struct SavedState {
     defining: Vec<DeclId>,
     enums: Vec<crate::decl::EnumBuild>,
     braced_args: Vec<(kiln_ast::ExprId, crate::init::InitList)>,
-    prototype_params: Vec<Vec<kiln_source::symbol::Symbol>>,
+    prototype_params: Vec<crate::decl::PrototypeFrame>,
     deferring_call_ref: bool,
     deferred_call_refs: Vec<(kiln_ast::ExprId, DeclId)>,
     classes: Vec<crate::class::ClassBuild>,

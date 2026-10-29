@@ -1008,6 +1008,10 @@ diag_ids! {
     sema_auto_not_allowed_field = Error (2) "'{0:auto|decltype(auto)}' not allowed in non-static {1:struct|class|union} member";
     sema_auto_fn_virtual = Error (0) "function with deduced return type cannot be virtual";
     parse_decltype_auto_invalid = Error (0) "'decltype(auto)' not allowed here";
+    // WP-087
+    sema_param_default_argument_references_param = Error (1) "default argument references parameter '{0}'";
+    sema_side_effects_unevaluated_context = Warning [UnevaluatedExpression] (0) "expression with side effects has no effect in an unevaluated context";
+    sema_auto_non_deduced_not_alone = Error (1) "{0:function with deduced return type|declaration with trailing return type} must be the only declaration in its group";
 }
 
 impl DiagId {

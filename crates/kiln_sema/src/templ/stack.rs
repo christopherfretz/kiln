@@ -3,12 +3,14 @@
 //! context notes with backtrace elision, and the SFINAE context flag.
 
 use std::cell::Cell;
+use std::hash::{Hash, Hasher};
 use std::time::Instant;
 
 use kiln_ast::DeclId;
 use kiln_ast::ids::ArgListId;
 use kiln_diag::{Diag, DiagId};
 use kiln_source::Loc;
+use kiln_source::fx::FxHasher;
 
 use crate::Sema;
 
@@ -159,6 +161,23 @@ impl InstantiationStack {
     /// Whether `entity` is being instantiated as `kind` (a cycle).
     pub fn contains(&self, kind: FrameKind, entity: DeclId) -> bool {
         self.frames.iter().any(|f| f.kind == kind && f.entity == entity)
+    }
+
+    /// The diagnostic deduplication context for the current stack
+    /// (spec/diag.md §7.4): a hash of every frame's kind, entity,
+    /// arguments and point of instantiation; 0 when the stack is empty.
+    /// Two instantiations of one pattern hash differently, so an error in
+    /// the pattern prints once per instantiation.
+    pub(crate) fn context_key(&self) -> u64 {
+        if self.frames.is_empty() {
+            return 0;
+        }
+        let mut h = FxHasher::default();
+        for f in &self.frames {
+            (f.kind, f.entity, f.args, f.poi).hash(&mut h);
+        }
+        // 0 means "no context"; keep it reserved.
+        h.finish().max(1)
     }
 
     pub(crate) fn push(&mut self, f: InstFrame) {

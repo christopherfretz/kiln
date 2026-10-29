@@ -659,10 +659,6 @@ impl Sema<'_, '_> {
         loc: Loc,
         qualifier: Option<DeclId>,
     ) -> ExprId {
-        if qualifier.is_none() && self.prototype_params.iter().any(|f| f.contains(&name)) {
-            self.unsupported("naming a parameter within its function declarator", loc);
-            return self.recover_err(&[], loc);
-        }
         let found = match qualifier {
             Some(q) => self.lookup_qualified(q, name, LookupKind::Ordinary),
             None => self.lookup_name(name, LookupKind::Ordinary),
@@ -2421,8 +2417,12 @@ impl Sema<'_, '_> {
             (base, bt)
         };
         let rec = self.ast.types.as_record(obj_ty).expect("checked above");
-        // [expr.ref]/4 (clang diagnoses at the operator).
-        let complete = self.require_complete(obj_ty, op_loc);
+        // [expr.ref]/4 (clang diagnoses at the operator). A class being
+        // defined is complete enough: its members declared so far are
+        // found (a trailing return type naming `this->m`, [class.mem]/7).
+        let first = self.ast.first(rec);
+        let complete = self.defining.iter().any(|&d| self.ast.first(d) == first)
+            || self.require_complete(obj_ty, op_loc);
         let Some(def) = self.ast.definition(rec).filter(|_| complete) else {
             let msg = self
                 .diag(DiagId::sema_member_reference_incomplete, op_loc)
@@ -2559,6 +2559,7 @@ impl Sema<'_, '_> {
             self.emit(msg);
             return self.recover_err(&[e], loc);
         }
+        self.check_unevaluated_side_effects(e);
         let ty = self.ety(e);
         // [expr.sizeof]/1: in C++ an expression of function type is an
         // error, not the GNU extension the type form gets.

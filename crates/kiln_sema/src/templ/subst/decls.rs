@@ -239,6 +239,14 @@ impl Substituter<'_, '_, '_> {
             let t = pd.and_then(|x| x.original_ty).unwrap_or_else(|| self.decl_ty(p));
             let ty = self.ty(t, n.loc())?;
             let name = n.name().as_ident().filter(|_| !n.name().is_empty()).map(|s| (s, n.loc()));
+            // Created now, so that the rest of the signature (a trailing
+            // return type, the exception specification) refers to it
+            // ([basic.scope.param]); the function adopts it.
+            let ctx = self.sema.ctx;
+            let idx = u16::try_from(out.len()).unwrap_or(u16::MAX);
+            let np = self.sema.builder().prototype_param(ctx, n.name(), n.loc(), ty, idx, 0);
+            self.sema.unowned_params.insert(np);
+            self.locals.insert(p, DeclOrPack::Decl(np));
             out.push(ParamInfo {
                 name,
                 ty,
@@ -247,6 +255,7 @@ impl Substituter<'_, '_, '_> {
                 invalid: false,
                 default_arg: DefaultArg::None,
                 range: (n.loc(), n.loc()),
+                decl: Some(np),
             });
         }
         Ok(out)
@@ -268,9 +277,25 @@ impl Substituter<'_, '_, '_> {
             return self.unimplemented("function declared with a typedef of function type", loc);
         };
         let info = p.info();
-        let ret = self.ty(p.ret(), loc)?;
-        let exc = self.exc_spec(&p, loc)?;
-        let params = self.param_infos(d)?;
+        // The parameters first: the return type and exception
+        // specification may name them ([basic.scope.param]), and `this`
+        // ([expr.prim.this]/2).
+        let params = self.param_infos(d);
+        let method = friend.is_none() && self.sema.kind_of(d) == DeclKind::CXXMethod;
+        let this = self.sema.act_on_start_this_scope(method, info.this_quals());
+        let sig = params.and_then(|params| {
+            let ret = self.ty(p.ret(), loc)?;
+            let exc = self.exc_spec(&p, loc)?;
+            Ok((params, ret, exc))
+        });
+        self.sema.act_on_end_this_scope(this);
+        let (params, ret, exc) = match sig {
+            Ok(x) => x,
+            Err(e) => {
+                self.forget_pattern_params(d);
+                return Err(e);
+            }
+        };
         let mut ds = self.pattern_declspec(d, ret);
         ds.friend = friend;
         let mut dr = self.pattern_declarator(d, ctx)?;
@@ -306,6 +331,7 @@ impl Substituter<'_, '_, '_> {
             Some(fl) => self.sema.act_on_friend(&ds, base, Some(&dr), fl),
             None => self.sema.act_on_declarator(&ds, base, &dr),
         };
+        self.forget_pattern_params(d);
         let Some(r) = r else { return Err(SubstFail) };
         // The befriended function (act_on_friend returns the FriendDecl).
         let f = if self.sema.kind_of(r) == DeclKind::Friend {
@@ -340,6 +366,21 @@ impl Substituter<'_, '_, '_> {
             }
         }
         Ok(r)
+    }
+
+    /// Drops the mapping of pattern function `pat`'s parameters
+    /// ([`Self::param_infos`]).
+    fn forget_pattern_params(&mut self, pat: DeclId) {
+        let pp: Vec<DeclId> = self
+            .sema
+            .ast
+            .decls
+            .function(pat)
+            .map(|x| self.sema.ast.lists.iter::<DeclId>(x.params).collect())
+            .unwrap_or_default();
+        for a in pp {
+            self.locals.remove(&a);
+        }
     }
 
     /// The exception specification of function type `p`.

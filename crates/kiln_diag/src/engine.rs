@@ -29,7 +29,7 @@ pub trait DiagSink {
 
 struct State<'sm> {
     sink: Box<dyn DiagSink + Send + 'sm>,
-    seen: HashSet<(DiagId, Span)>,
+    seen: HashSet<(DiagId, Span, u64)>,
 }
 
 /// The diagnostics engine. Shared by reference (`&DiagEngine` is
@@ -173,6 +173,34 @@ impl<'sm> DiagEngine<'sm> {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
+    /// Whether [`emit`](Self::emit) would print `d` now: it is not
+    /// ignored, not suppressed in a system header, not a duplicate, and
+    /// no fatal error has occurred. Lets a caller skip work (sema's
+    /// instantiation-context notes, which print once per depth) for a
+    /// diagnostic that will be dropped.
+    pub fn would_emit(&self, d: &Diag) -> bool {
+        let Some(id) = d.id else { return false };
+        if self.has_fatal() || self.policy.severity(id) == Severity::Ignored {
+            return false;
+        }
+        if self.suppressed_in_system_header(id, d.span.lo) {
+            return false;
+        }
+        !Self::is_duplicate(&self.lock(), id, d)
+    }
+
+    /// The deduplication rule (spec/diag.md §7.4): the key is
+    /// `(id, span, context)`; a diagnostic with a context (inside a
+    /// template instantiation) is also a duplicate of the same
+    /// `(id, span)` reported with none (in the template definition).
+    fn is_duplicate(st: &State<'_>, id: DiagId, d: &Diag) -> bool {
+        if d.allow_duplicate || !d.span.is_valid() {
+            return false;
+        }
+        st.seen.contains(&(id, d.span, d.context))
+            || (d.context != 0 && st.seen.contains(&(id, d.span, 0)))
+    }
+
     /// Applies policy to `d` and sinks it. Same as [`Diag::emit`].
     pub fn emit(&self, d: Diag) {
         let Some(id) = d.id else {
@@ -197,8 +225,11 @@ impl<'sm> DiagEngine<'sm> {
         if self.has_fatal() {
             return;
         }
-        if !d.allow_duplicate && d.span.is_valid() && !st.seen.insert((id, d.span)) {
+        if Self::is_duplicate(&st, id, &d) {
             return;
+        }
+        if !d.allow_duplicate && d.span.is_valid() {
+            st.seen.insert((id, d.span, d.context));
         }
         let record = if level == Level::Error
             && self.error_limit != 0

@@ -102,6 +102,7 @@ impl Sema<'_, '_> {
         if self.is_err_expr(e) {
             return None;
         }
+        self.check_unevaluated_side_effects(e);
         // An instantiation-dependent operand: the type is computed at
         // instantiation, canonically `DependentDecltype` (clang's
         // `getDecltypeType`; the underlying type is `<dependent type>` for a
@@ -343,7 +344,10 @@ impl Sema<'_, '_> {
     }
 
     /// Records `ret` as the deduced return type of function `f` and of
-    /// all its redeclarations (clang updates every redeclaration's type).
+    /// all its redeclarations (clang's `adjustDeducedFunctionResultType`
+    /// updates every redeclaration's type); the declared placeholder
+    /// return type is kept for matching later redeclarations
+    /// ([`Sema::declared_fn_type`]).
     pub(crate) fn set_deduced_return(&mut self, f: DeclId, ret: QualType) {
         if let Some(state) = self.func.as_mut()
             && state.decl == f
@@ -355,11 +359,46 @@ impl Sema<'_, '_> {
         let TypeView::Function(p) = self.ast.types.view(fty.ty()) else { return };
         let params = self.ast.types.params(&p).to_vec();
         let exc = self.ast.types.exc_spec(&p);
+        let first = self.ast.first(f);
+        if self.contains_undeduced_auto(p.ret()) {
+            self.declared_returns.entry(first).or_insert(p.ret());
+        }
         let nty = self.ast.types.function(ret, &params, p.info(), exc);
         let redecls: Vec<DeclId> = self.ast.redecls_of(f).collect();
         for d in redecls {
             self.ast.decls.set_ty(d, nty);
         }
+    }
+
+    /// The type of function `f` as declared: with the placeholder return
+    /// type it was declared with when that has been deduced since
+    /// ([dcl.spec.auto.general]/13: a redeclaration uses the placeholder,
+    /// not the deduced type; clang's `getDeclaredReturnType`).
+    pub(crate) fn declared_fn_type(&mut self, f: DeclId) -> Option<QualType> {
+        let fty = self.ast.decls.get(f).ty()?;
+        let Some(&ret) = self.declared_returns.get(&self.ast.first(f)) else { return Some(fty) };
+        let TypeView::Function(p) = self.ast.types.view(fty.ty()) else { return Some(fty) };
+        let params = self.ast.types.params(&p).to_vec();
+        let exc = self.ast.types.exc_spec(&p);
+        Some(self.ast.types.function(ret, &params, p.info(), exc))
+    }
+
+    /// A redeclaration of type `ty` (declared with a placeholder return
+    /// type) of function `prev`, whose return type was deduced: `ty` with
+    /// the deduced return type (clang's `MergeFunctionDecl`).
+    pub(crate) fn adopt_deduced_return(&mut self, prev: DeclId, ty: QualType) -> QualType {
+        let Some(prev_ty) = self.ast.decls.get(prev).ty() else { return ty };
+        let Some(deduced) = self.ast.types.proto(prev_ty).map(kiln_ast::types::FuncProto::ret)
+        else {
+            return ty;
+        };
+        let TypeView::Function(p) = self.ast.types.view(ty.ty()) else { return ty };
+        if !self.contains_undeduced_auto(p.ret()) || self.contains_undeduced_auto(deduced) {
+            return ty;
+        }
+        let params = self.ast.types.params(&p).to_vec();
+        let exc = self.ast.types.exc_spec(&p);
+        self.ast.types.function(deduced, &params, p.info(), exc)
     }
 
     /// Uses of a function whose return type is still undeduced
