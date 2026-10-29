@@ -233,9 +233,9 @@ impl Parser<'_, '_> {
         if let Some(np) = next
             && (np > p || (np == p && p <= prec::COND))
         {
-            let t = self.tok().clone();
+            let t = self.tok();
             let sp = self.spelling_of(&t);
-            let mut rhs = self.s.act_on_misplaced_init_list(lhs, l, false, &sp, t.span.lo);
+            let mut rhs = self.s.act_on_misplaced_init_list(lhs, &l, false, &sp, t.span.lo);
             while let Some((np, _)) = self.cur_binop() {
                 if np < p || (np == p && p > prec::COND) {
                     break;
@@ -246,12 +246,12 @@ impl Parser<'_, '_> {
         }
         Some(match (op, colon) {
             (Some(op), _) if p == prec::ASSIGN => {
-                self.s.act_on_assign_list(op, lhs, l, op_tok.span.lo)
+                self.s.act_on_assign_list(op, lhs, &l, op_tok.span.lo)
             }
-            (None, Some(c)) => self.s.act_on_misplaced_init_list(lhs, l, true, ":", c),
+            (None, Some(c)) => self.s.act_on_misplaced_init_list(lhs, &l, true, ":", c),
             _ => {
                 let sp = self.spelling_of(op_tok);
-                self.s.act_on_misplaced_init_list(lhs, l, true, &sp, op_tok.span.lo)
+                self.s.act_on_misplaced_init_list(lhs, &l, true, &sp, op_tok.span.lo)
             }
         })
     }
@@ -388,6 +388,34 @@ impl Parser<'_, '_> {
         Some(self.s.act_on_noexcept_expr(e, loc, rparen))
     }
 
+    /// `typeid ( type-id )` / `typeid ( expression )` ([expr.typeid]);
+    /// a parenthesized type-id wins ([dcl.ambig.res]/2). The expression
+    /// operand is unevaluated (no polymorphic classes exist in M2).
+    fn parse_typeid(&mut self) -> PExpr {
+        let loc = self.bump().span.lo;
+        let Some(open) = self.eat(Punct::LParen) else {
+            let d =
+                self.s.diag(DiagId::parse_expected_after, self.loc()).arg("'typeid'").arg("'('");
+            self.emit(d);
+            return None;
+        };
+        if self.is_cxx_type_id(TypeIdContext::InParens).0 {
+            // clang matches the `)` before looking at the type.
+            let ty = self.parse_type_id();
+            let rparen = self.expect_closing(Punct::RParen, Punct::LParen, open);
+            return Some(self.s.act_on_typeid(Err(ty?), loc, rparen));
+        }
+        self.s.enter_unevaluated();
+        let e = self.parse_expression();
+        self.s.exit_unevaluated();
+        let Some(e) = e else {
+            self.skip_until(&[Punct::RParen], true, true);
+            return None;
+        };
+        let rparen = self.expect_closing(Punct::RParen, Punct::LParen, open);
+        Some(self.s.act_on_typeid(Ok(e), loc, rparen))
+    }
+
     // -- postfix expressions --------------------------------------------------------------
 
     /// postfix-expression ([expr.post]).
@@ -522,12 +550,8 @@ impl Parser<'_, '_> {
                     None
                 }
                 _ if is_simple_type_kw(k) => self.parse_functional_cast(),
-                Kw::This
-                | Kw::Typeid
-                | Kw::Requires
-                | Kw::CoYield
-                | Kw::Typename
-                | Kw::Template => {
+                Kw::Typeid => self.parse_typeid(),
+                Kw::This | Kw::Requires | Kw::CoYield | Kw::Typename | Kw::Template => {
                     self.unsupported(&format!("'{}' expressions", k.spelling()), loc);
                     None
                 }
@@ -575,7 +599,7 @@ impl Parser<'_, '_> {
         let ty: QualType = self.s.type_from_declspec(&ds);
         if self.at(Punct::LBrace) {
             let l = self.parse_init_list().ok()?;
-            return Some(self.s.act_on_list_cast(ty, l, loc));
+            return Some(self.s.act_on_list_cast(ty, &l, loc));
         }
         let Some(open) = self.eat(Punct::LParen) else {
             let d = self.s.diag(DiagId::parse_expected_lparen_after_type, self.loc());

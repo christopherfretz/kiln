@@ -44,11 +44,14 @@ pub struct ParseOptions {
     /// C++ exceptions are enabled (`-f[no-]exceptions`): `throw` is
     /// an error otherwise ([except], clang's `err_exceptions_disabled`).
     pub exceptions: bool,
+    /// Run-time type information is enabled (`-f[no-]rtti`): `typeid`
+    /// is an error otherwise (clang's `err_no_typeid_with_fno_rtti`).
+    pub rtti: bool,
 }
 
 impl Default for ParseOptions {
     fn default() -> Self {
-        ParseOptions { std: Std::Cxx26, keep_tokens: false, exceptions: true }
+        ParseOptions { std: Std::Cxx26, keep_tokens: false, exceptions: true, rtti: true }
     }
 }
 
@@ -155,6 +158,7 @@ pub fn parse_preprocessed<'a, 'sm>(
     let mut s = Sema::for_target(ast, diags, target);
     s.set_constexpr_limits(limits.budget, limits.backtrace_limit);
     s.exceptions = opts.exceptions;
+    s.rtti = opts.rtti;
     let mut src = TokenSource::new(pp, diags);
     src.keep_all(opts.keep_tokens);
     let mut p = Parser::new(s, src, lit_opts);

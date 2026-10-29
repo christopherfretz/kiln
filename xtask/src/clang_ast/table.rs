@@ -78,6 +78,7 @@ pub const TABLE: &[(&str, Disposition)] = &[
     ("OpaqueValueExpr", Keep),
     ("BinaryConditionalOperator", Keep),
     ("OffsetOfExpr", Keep),
+    ("CXXTypeidExpr", Keep),
     // Statements (§3).
     ("CompoundStmt", Keep),
     ("DeclStmt", Keep),
@@ -163,7 +164,6 @@ pub const TABLE: &[(&str, Disposition)] = &[
     ("ExprWithCleanups", Unsupported(NOT_M2)),
     ("CXXNewExpr", Unsupported(NOT_M2)),
     ("CXXDeleteExpr", Unsupported(NOT_M2)),
-    ("CXXTypeidExpr", Unsupported(NOT_M2)),
     ("CXXNoexceptExpr", Keep),
     ("CXXStdInitializerListExpr", Unsupported(NOT_M2)),
     ("CXXParenListInitExpr", Unsupported(NOT_M2)),
@@ -295,6 +295,8 @@ fn specific_keys(kind: &str) -> Option<&'static [&'static str]> {
         | "OpaqueValueExpr"
         | "BinaryConditionalOperator"
         | "OffsetOfExpr" => &[],
+        // The type operand is not printed by clang's text dump either.
+        "CXXTypeidExpr" => &["typeArg", "adjustedTypeArg"],
         "IfStmt" => {
             &["hasInit", "hasVar", "hasElse", "isConstexpr", "isConsteval", "constevalIsNegated"]
         }
@@ -382,6 +384,7 @@ pub const M2_KINDS: &[&str] = &[
     "OpaqueValueExpr",
     "BinaryConditionalOperator",
     "OffsetOfExpr",
+    "CXXTypeidExpr",
     "CompoundStmt",
     "DeclStmt",
     "NullStmt",

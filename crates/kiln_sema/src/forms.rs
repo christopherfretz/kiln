@@ -124,8 +124,8 @@ impl Sema<'_, '_> {
 
     /// `return { ... };` ([stmt.return]/2): copy-list-initialization of
     /// the returned object. `loc` is the `return` keyword.
-    pub fn act_on_return_list(&mut self, l: InitList, loc: Loc) -> StmtId {
-        let flat = Self::list_exprs(&l);
+    pub fn act_on_return_list(&mut self, l: &InitList, loc: Loc) -> StmtId {
+        let flat = Self::list_exprs(l);
         let Some((fdecl, ret, auto)) =
             self.func.as_ref().map(|f| (f.decl, f.ret, f.auto_ret.is_some()))
         else {
@@ -151,7 +151,7 @@ impl Sema<'_, '_> {
             let e = self.recover_err(&flat, l.lbrace);
             return self.builder().return_stmt(Some(e), None, loc);
         }
-        let e = self.init_list_entity(ret, &l, l.lbrace);
+        let e = self.init_list_entity(ret, l, l.lbrace);
         let e = self.act_on_full_expr(e);
         self.builder().return_stmt(Some(e), None, loc)
     }
@@ -162,10 +162,10 @@ impl Sema<'_, '_> {
         &mut self,
         op: BinaryOp,
         lhs: ExprId,
-        l: InitList,
+        l: &InitList,
         op_loc: Loc,
     ) -> ExprId {
-        let flat = Self::list_exprs(&l);
+        let flat = Self::list_exprs(l);
         if self.is_err_expr(lhs) {
             let mut kids = vec![lhs];
             kids.extend(flat);
@@ -179,7 +179,7 @@ impl Sema<'_, '_> {
             kids.extend(flat);
             return self.recover_err(&kids, op_loc);
         }
-        let r = self.init_from_list_at(lt, &l, Some(l.lbrace));
+        let r = self.init_from_list_at(lt, l, Some(l.lbrace));
         self.act_on_binary(op, lhs, r, op_loc)
     }
 
@@ -189,7 +189,7 @@ impl Sema<'_, '_> {
     pub fn act_on_misplaced_init_list(
         &mut self,
         lhs: ExprId,
-        l: InitList,
+        l: &InitList,
         right: bool,
         op: &str,
         op_loc: Loc,
@@ -200,7 +200,7 @@ impl Sema<'_, '_> {
             .arg(op.to_owned());
         self.emit(msg);
         let mut kids = vec![lhs];
-        kids.extend(Self::list_exprs(&l));
+        kids.extend(Self::list_exprs(l));
         self.recover_err(&kids, op_loc)
     }
 
@@ -219,9 +219,9 @@ impl Sema<'_, '_> {
 
     /// `T{ ... }` ([expr.type.conv]/2): direct-list-initialization of a
     /// prvalue of non-class type `T`. `loc` is the start of the type.
-    pub fn act_on_list_cast(&mut self, ty: QualType, l: InitList, loc: Loc) -> ExprId {
+    pub fn act_on_list_cast(&mut self, ty: QualType, l: &InitList, loc: Loc) -> ExprId {
         if self.is_error_type(ty) {
-            let flat = Self::list_exprs(&l);
+            let flat = Self::list_exprs(l);
             return self.recover(ty, &flat, loc);
         }
         if let Some(what) = self
@@ -229,11 +229,11 @@ impl Sema<'_, '_> {
             .or_else(|| self.ast.types.is_void(ty).then_some("a void temporary"))
         {
             self.unsupported(&format!("list-initialization of {what}"), l.lbrace);
-            let flat = Self::list_exprs(&l);
+            let flat = Self::list_exprs(l);
             return self.recover(ty, &flat, loc);
         }
         let to = conv::strip_cv(self, ty);
-        let init = self.init_from_list_at(to, &l, Some(loc));
+        let init = self.init_from_list_at(to, l, Some(loc));
         if self.is_err_expr(init) {
             return self.recover(ty, &[init], loc);
         }

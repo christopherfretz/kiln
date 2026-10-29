@@ -502,9 +502,13 @@ diag_ids! {
     sema_auto_fn_different_deductions = Error (3) "'{0:auto|decltype(auto)}' in return type deduced as {1} here but deduced as {2} in earlier return statement";
     sema_auto_fn_used_before_defined = Error (1) "function '{0}' with deduced return type cannot be used before it is defined";
     sema_auto_fn_init_list = Error (0) "cannot deduce return type from initializer list";
+    sema_auto_fn_deduction_failure = Error (2) "cannot deduce return type {0} from returned value of type {1}";
+    sema_auto_var_deduction_failure = Error (3) "variable '{0}' with type {1} has incompatible initializer of type {2}";
     sema_auto_init_list_deduction = Error (0) "cannot deduce type of initializer list because std::initializer_list was not found; include <initializer_list>";
     sema_decltype_auto_compound = Error (1) "cannot form {0:pointer to|reference to|array of} 'decltype(auto)'";
     sema_need_header_before_typeid = Error (0) "you need to include <typeinfo> before using the 'typeid' operator";
+    sema_typeid_no_rtti = Error (0) "use of typeid requires -frtti";
+    sema_typeid_incomplete = Error (1) "'typeid' of incomplete type {0}";
     sema_bad_offsetof_type = Error (1) "offsetof requires struct, union, or class type, {0} invalid";
     sema_no_member_offsetof = Error (2) "no member named '{0}' in {1}";
     sema_stmtexpr_file_scope = Error (0) "statement expression not allowed at file scope";

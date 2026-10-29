@@ -143,13 +143,12 @@ impl<'x, 'a, 'sm> Scan<'x, 'a, 'sm> {
         loop {
             match self.punct_at(self.i) {
                 Some(Punct::Comma | Punct::RParen) => return true,
-                Some(Punct::Semi) => return false,
+                Some(Punct::Semi | Punct::RSquare | Punct::RBrace) => return false,
                 Some(Punct::LParen | Punct::LSquare | Punct::LBrace) => {
                     if !self.skip_group_here() {
                         return false;
                     }
                 }
-                Some(Punct::RSquare | Punct::RBrace) => return false,
                 _ => {
                     if self.p.tok_at(self.i).kind == TokKind::Eof {
                         return false;
@@ -311,19 +310,12 @@ impl<'x, 'a, 'sm> Scan<'x, 'a, 'sm> {
                     return Tpr::Error;
                 }
             }
-            Some(Kw::Typename) => {
-                self.i += 1;
-                match self.p.scan_name(self.i) {
-                    Some((end, _, _)) => self.i = end,
-                    None => return Tpr::Error,
-                }
-            }
             Some(Kw::Alignas | Kw::Attribute) => {
                 if !self.skip_attributes() {
                     return Tpr::Error;
                 }
             }
-            Some(Kw::Struct | Kw::Class | Kw::Union | Kw::Enum) => {
+            Some(Kw::Typename | Kw::Struct | Kw::Class | Kw::Union | Kw::Enum) => {
                 self.i += 1;
                 match self.p.scan_name(self.i) {
                     Some((end, _, _)) => self.i = end,
@@ -395,6 +387,7 @@ impl<'x, 'a, 'sm> Scan<'x, 'a, 'sm> {
     }
 
     /// clang's `TryParseDeclarator`.
+    #[allow(clippy::fn_params_excessive_bools, reason = "clang's TryParseDeclarator flags")]
     fn declarator(
         &mut self,
         may_be_abstract: bool,
@@ -581,13 +574,12 @@ impl<'x, 'a, 'sm> Scan<'x, 'a, 'sm> {
                     self.i += 1;
                     return true;
                 }
-                Some(Punct::Semi) => return false,
+                Some(Punct::Semi | Punct::RSquare | Punct::RBrace) => return false,
                 Some(Punct::LParen | Punct::LSquare | Punct::LBrace) => {
                     if !self.skip_group_here() {
                         return false;
                     }
                 }
-                Some(Punct::RSquare | Punct::RBrace) => return false,
                 _ => {
                     if self.p.tok_at(self.i).kind == TokKind::Eof {
                         return false;
@@ -664,9 +656,7 @@ impl<'x, 'a, 'sm> Scan<'x, 'a, 'sm> {
         let mut invalid = false;
         let mut r = s.parameter_declaration_clause(&mut invalid);
         if r == Tpr::Ambiguous {
-            if !s.at(Punct::RParen) {
-                r = Tpr::False;
-            } else {
+            if s.at(Punct::RParen) {
                 let n = s.i + 1;
                 let virt = s.ident_at(n).is_some_and(|sym| {
                     let t = self.p.s.ast.symbols().as_str(sym);
@@ -689,6 +679,8 @@ impl<'x, 'a, 'sm> Scan<'x, 'a, 'sm> {
                 if decisive {
                     r = Tpr::True;
                 }
+            } else {
+                r = Tpr::False;
             }
         }
         if r == Tpr::Ambiguous {
@@ -773,7 +765,7 @@ impl<'x, 'a, 'sm> Scan<'x, 'a, 'sm> {
         if r != Tpr::Ambiguous {
             return r;
         }
-        if !self.at(Punct::Semi) && !(allow_for_range && self.at(Punct::Colon)) {
+        if !self.at(Punct::Semi) && (!allow_for_range || !self.at(Punct::Colon)) {
             return Tpr::False;
         }
         Tpr::Ambiguous

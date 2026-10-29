@@ -586,6 +586,7 @@ impl Sema<'_, '_> {
             | ExprKind::CXXNullPtrLiteralExpr
             | ExprKind::UnaryExprOrTypeTraitExpr
             | ExprKind::CXXNoexceptExpr
+            | ExprKind::CXXTypeidExpr
             | ExprKind::CXXStaticCastExpr
             | ExprKind::CXXReinterpretCastExpr
             | ExprKind::CXXConstCastExpr => Some((DiagId::sema_unused_expr, loc, Vec::new())),
@@ -1586,6 +1587,7 @@ impl Sema<'_, '_> {
     }
 
     /// `c ? t : f` ([expr.cond]).
+    #[allow(clippy::too_many_lines, reason = "one step per paragraph of [expr.cond]")]
     pub fn act_on_conditional(&mut self, c: ExprId, t: ExprId, f: ExprId, loc: Loc) -> ExprId {
         if self.is_err_expr(c) || self.is_err_expr(t) || self.is_err_expr(f) {
             return self.recover_err(&[c, t, f], loc);
@@ -1788,6 +1790,10 @@ impl Sema<'_, '_> {
 
     /// A function call `f(args)` ([expr.call]). `loc` is the callee's
     /// location; `rparen` the closing parenthesis.
+    #[allow(
+        clippy::too_many_lines,
+        reason = "callee checks, argument conversion and default arguments in [expr.call] order"
+    )]
     pub fn act_on_call(
         &mut self,
         callee: ExprId,
@@ -1889,8 +1895,8 @@ impl Sema<'_, '_> {
                 conv_args.push(self.default_argument_promotion(a));
             }
         }
-        for i in have..n {
-            let (Some(p), Some(e)) = (pdecls.get(i).copied(), defaults[i]) else { break };
+        for (i, &d) in defaults.iter().enumerate().skip(have) {
+            let (Some(p), Some(e)) = (pdecls.get(i).copied(), d) else { break };
             let x = *self.ast.exprs.get(e);
             let used = self.ctx;
             let arg = self.builder().default_arg(p, used, x.ty(), x.value_category(), Loc::INVALID);
@@ -1905,7 +1911,7 @@ impl Sema<'_, '_> {
         } else {
             (conv::strip_cv(self, ret), ValueCategory::PRValue)
         };
-        if !self.ast.types.is_void(ty)
+        if vk == ValueCategory::PRValue
             && self.ast.types.as_record(ty).is_some()
             && !self.is_complete(ty)
         {
@@ -2235,13 +2241,7 @@ impl Sema<'_, '_> {
             self.unsupported("casts to reference types", loc);
             return self.recover_err(&[e], loc);
         }
-        if self.ast.types.as_record(ty).is_some() || self.ast.types.as_record(self.ety(e)).is_some()
-        {
-            self.unsupported("conversions of class types", loc);
-            return self.recover(ty, &[e], loc);
-        }
         let kind = style.kind();
-        let to = conv::strip_cv(self, ty);
         let flags = ExprFlags::NONE;
         // [expr.static.cast]/6: any expression can be converted to cv void.
         if self.ast.types.is_void(ty) {
@@ -2259,6 +2259,12 @@ impl Sema<'_, '_> {
             }
             return self.bad_cast(style, e, ty, loc);
         }
+        if self.ast.types.as_record(ty).is_some() || self.ast.types.as_record(self.ety(e)).is_some()
+        {
+            self.unsupported("conversions of class types", loc);
+            return self.recover(ty, &[e], loc);
+        }
+        let to = conv::strip_cv(self, ty);
         // const_cast part (and the qualification-only C-style cast).
         if style.allows_const() {
             let x = conv::decay(self, e);

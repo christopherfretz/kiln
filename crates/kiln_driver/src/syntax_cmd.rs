@@ -108,6 +108,7 @@ impl SyntaxJob<'_> {
         let popts = ParseOptions {
             std: job.std.lex,
             exceptions: a.predef.exceptions.unwrap_or(true),
+            rtti: a.predef.rtti.unwrap_or(true),
             ..ParseOptions::default()
         };
         let limits = a.constexpr.limits();

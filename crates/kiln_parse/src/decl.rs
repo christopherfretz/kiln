@@ -1153,12 +1153,11 @@ impl Parser<'_, '_> {
         } else {
             self.parse_assignment_expr().map(Initializer::Expr)
         };
-        match init {
-            Some(init) => self.s.act_on_param_default_arg(p, init, eq),
-            None => {
-                p.invalid = true;
-                self.skip_until(&[Punct::Comma, Punct::RParen], false, false);
-            }
+        if let Some(init) = init {
+            self.s.act_on_param_default_arg(p, init, eq);
+        } else {
+            p.invalid = true;
+            self.skip_until(&[Punct::Comma, Punct::RParen], false, false);
         }
     }
 
@@ -1269,6 +1268,20 @@ impl Parser<'_, '_> {
 
     // -- simple declarations ------------------------------------------------------------
 
+    /// Whether a declarator in `ctx` with storage class `storage` may take
+    /// a parenthesized initializer, so `T x(...)` is tentatively parsed
+    /// as a possible variable (clang's `mayHaveDirectInit`).
+    fn may_have_direct_init(ctx: DeclaratorContext, storage: Option<(StorageSpec, Loc)>) -> bool {
+        match storage {
+            Some((StorageSpec::Typedef, _)) => false,
+            Some((StorageSpec::Extern, _)) => ctx == DeclaratorContext::File,
+            _ => matches!(
+                ctx,
+                DeclaratorContext::File | DeclaratorContext::Block | DeclaratorContext::ForInit
+            ),
+        }
+    }
+
     /// simple-declaration or function-definition ([dcl.pre], [dcl.fct.def]):
     /// returns the declarations made (including a tag the decl-specifiers
     /// declare), for a declaration statement.
@@ -1294,14 +1307,7 @@ impl Parser<'_, '_> {
             return decls;
         }
         let mut base_ty: Option<QualType> = None;
-        let direct_init = match ds.storage {
-            Some((StorageSpec::Typedef, _)) => false,
-            Some((StorageSpec::Extern, _)) => ctx == DeclaratorContext::File,
-            _ => matches!(
-                ctx,
-                DeclaratorContext::File | DeclaratorContext::Block | DeclaratorContext::ForInit
-            ),
-        };
+        let direct_init = Self::may_have_direct_init(ctx, ds.storage);
         loop {
             let mut d = Declarator::new(ctx, self.loc());
             d.direct_init = direct_init;

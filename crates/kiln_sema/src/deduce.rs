@@ -2,7 +2,7 @@
 //! types ([dcl.spec.auto], [dcl.type.auto.deduct]; spec/sema.md §4.7).
 
 use kiln_ast::expr::{ExprKind, ValueCategory};
-use kiln_ast::types::{AutoKeyword, TypeView};
+use kiln_ast::types::{AutoKeyword, Quals, TypeView};
 use kiln_ast::{DeclId, ExprId, QualType};
 use kiln_diag::DiagId;
 use kiln_source::Loc;
@@ -75,6 +75,100 @@ impl Sema<'_, '_> {
         if q.is_empty() { base } else { self.ast.types.qualify(base, q) }
     }
 
+    /// True if `q` is an undeduced `auto` under zero or more pointer and
+    /// reference declarators (`auto`, `const auto &`, `auto **`, ...;
+    /// [dcl.spec.auto.general]/3).
+    pub(crate) fn contains_undeduced_auto(&self, q: QualType) -> bool {
+        let mut cur = q;
+        for _ in 0..256 {
+            match self.ast.types.canonical_view(cur) {
+                TypeView::Auto { deduced: None, .. } => return true,
+                TypeView::Pointer(p) | TypeView::LValueRef(p) | TypeView::RValueRef(p) => cur = p,
+                _ => return false,
+            }
+        }
+        false
+    }
+
+    /// The type deduced for a declared type `declared` containing a
+    /// placeholder from initializer `e` ([dcl.type.auto.deduct]/4): a
+    /// top-level placeholder as [`Self::deduce_placeholder`]; otherwise
+    /// template argument deduction from a call ([temp.deduct.call]/2-4)
+    /// with `auto` as the template parameter, restricted to the pointer
+    /// and reference declarators [`Self::contains_undeduced_auto`]
+    /// admits. `None` when deduction fails (the caller reports).
+    pub(crate) fn deduce_from(&mut self, declared: QualType, e: ExprId) -> Option<QualType> {
+        if self.undeduced_keyword(declared).is_some() {
+            return Some(self.deduce_placeholder(declared, e));
+        }
+        if self.is_err_expr(e) {
+            return Some(QualType::ERROR);
+        }
+        let n = *self.ast.exprs.get(e);
+        let ety = n.ty();
+        let t = &self.ast.types;
+        match t.canonical_view(declared) {
+            TypeView::LValueRef(p) | TypeView::RValueRef(p) => {
+                let rref = matches!(t.canonical_view(declared), TypeView::RValueRef(_));
+                // A forwarding reference `auto &&` bound to an lvalue
+                // deduces `A &` ([temp.deduct.call]/3); the reference
+                // collapses ([dcl.ref]/7).
+                if rref
+                    && n.value_category() == ValueCategory::LValue
+                    && self.undeduced_keyword(p).is_some()
+                    && t.canonical(p).quals().is_empty()
+                {
+                    return Some(self.ast.types.lvalue_ref_to(ety));
+                }
+                let inner = self.deduce_match(p, ety)?;
+                Some(if rref {
+                    self.ast.types.rvalue_ref_to(inner)
+                } else {
+                    self.ast.types.lvalue_ref_to(inner)
+                })
+            }
+            _ => {
+                // A non-reference P: A decays and loses its top-level cv
+                // ([temp.deduct.call]/2).
+                let a = if t.is_array(ety) {
+                    let el = t.element(ety).unwrap_or(QualType::ERROR);
+                    self.ast.types.pointer_to(el)
+                } else if t.is_function(ety) {
+                    self.ast.types.pointer_to(ety)
+                } else {
+                    crate::conv::strip_cv(self, ety)
+                };
+                self.deduce_match(declared, a)
+            }
+        }
+    }
+
+    /// Matches `p` (pointers down to a placeholder) against `a`, returning
+    /// `p` with the placeholder replaced; the placeholder deduces `a`
+    /// without the cv-qualifiers written on it ([temp.deduct.call]/4.2
+    /// allows the extra qualification). `p`'s own top-level cv is the
+    /// caller's.
+    fn deduce_match(&mut self, p: QualType, a: QualType) -> Option<QualType> {
+        let t = &self.ast.types;
+        let pq = t.canonical(p).quals();
+        match t.canonical_view(p) {
+            TypeView::Auto { deduced: None, .. } => {
+                let aq = self.ast.types.effective_quals(a);
+                let rest = Quals::from_bits(aq.bits() & !pq.bits());
+                let base = crate::conv::strip_cv(self, a);
+                let leaf = if rest.is_empty() { base } else { self.ast.types.qualify(base, rest) };
+                Some(if pq.is_empty() { leaf } else { self.ast.types.qualify(leaf, pq) })
+            }
+            TypeView::Pointer(pp) => {
+                let TypeView::Pointer(ap) = t.canonical_view(a) else { return None };
+                let inner = self.deduce_match(pp, ap)?;
+                let r = self.ast.types.pointer_to(inner);
+                Some(if pq.is_empty() { r } else { self.ast.types.qualify(r, pq) })
+            }
+            _ => None,
+        }
+    }
+
     /// `return e;` (or `return;` when `value` is `None`) in a function
     /// with a deduced return type ([dcl.spec.auto.general]/9,
     /// [dcl.type.auto.deduct]/2.3). Deduces the return type from the
@@ -99,7 +193,18 @@ impl Sema<'_, '_> {
                     self.decltype_of(moved)
                 }
             }
-            Some(e) => self.deduce_placeholder(declared, e),
+            Some(e) => {
+                if let Some(t) = self.deduce_from(declared, e) {
+                    t
+                } else {
+                    let msg = self
+                        .diag(DiagId::sema_auto_fn_deduction_failure, self.ast.exprs.get(e).loc())
+                        .arg(self.ty_arg(declared))
+                        .arg(self.ty_arg(self.ast.exprs.get(e).ty()));
+                    self.emit(msg);
+                    QualType::ERROR
+                }
+            }
         };
         if !done {
             self.set_deduced_return(fdecl, deduced);
@@ -147,7 +252,7 @@ impl Sema<'_, '_> {
         let Some(ret) = self.ast.types.proto(fty).map(kiln_ast::types::FuncProto::ret) else {
             return false;
         };
-        if self.undeduced_keyword(ret).is_none() {
+        if !self.contains_undeduced_auto(ret) {
             return false;
         }
         let name = self.decl_name(d);

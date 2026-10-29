@@ -589,7 +589,7 @@ impl Parser<'_, '_> {
                 self.skip_to_semi();
                 return None;
             };
-            let s = self.s.act_on_return_list(l, loc);
+            let s = self.s.act_on_return_list(&l, loc);
             self.expect_semi_after_stmt("return");
             return Some(s);
         }

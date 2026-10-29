@@ -734,7 +734,8 @@ impl<'a> Printer<'a, '_> {
             | "CompoundLiteralExpr"
             | "OpaqueValueExpr"
             | "BinaryConditionalOperator"
-            | "OffsetOfExpr" => {
+            | "OffsetOfExpr"
+            | "CXXTypeidExpr" => {
                 line = self.expr_head(n, k)?;
                 kids_out = self.kid_trees(n)?;
             }

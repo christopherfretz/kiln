@@ -206,10 +206,6 @@ impl Sema<'_, '_> {
 
     /// The type of `d` given the decl-specifier type `base`
     /// ([dcl.meaning], [dcl.ptr], [dcl.ref], [dcl.array], [dcl.fct]).
-    #[allow(
-        clippy::too_many_lines,
-        reason = "one arm per declarator chunk, as clang's GetFullTypeForDeclarator"
-    )]
     pub fn type_for_declarator(&mut self, base: QualType, d: &Declarator) -> QualType {
         self.type_for_declarator_at(base, d.loc, d)
     }
@@ -217,6 +213,10 @@ impl Sema<'_, '_> {
     /// [`Sema::type_for_declarator`] with the location of the
     /// decl-specifier-seq's type-specifier (where a trailing return type
     /// without `auto` is diagnosed).
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one arm per declarator chunk, as clang's GetFullTypeForDeclarator"
+    )]
     pub fn type_for_declarator_at(
         &mut self,
         base: QualType,
@@ -1437,8 +1437,8 @@ impl Sema<'_, '_> {
         }
         let mut ty = vn.ty().unwrap_or(QualType::ERROR);
         let direct = spec.init_style() == kiln_ast::decl::InitStyle::List;
-        if self.is_undeduced_auto(ty) {
-            ty = match self.deduce_auto(ty, &init, loc, direct) {
+        if self.contains_undeduced_auto(ty) {
+            ty = match self.deduce_auto(v, ty, &init, loc, direct) {
                 Some(t) => t,
                 None => QualType::ERROR,
             };
@@ -1464,6 +1464,7 @@ impl Sema<'_, '_> {
     /// type of the initializer, plus the declared cv-qualifiers.
     fn deduce_auto(
         &mut self,
+        v: DeclId,
         declared: QualType,
         init: &Initializer,
         loc: Loc,
@@ -1471,7 +1472,7 @@ impl Sema<'_, '_> {
     ) -> Option<QualType> {
         let e = match init {
             Initializer::Expr(e) => *e,
-            Initializer::Paren(v, ..) if v.len() == 1 => v[0],
+            Initializer::Paren(es, ..) if es.len() == 1 => es[0],
             // `auto x{e};` deduces from `e` ([dcl.type.auto.deduct]/2.1.4).
             Initializer::List(l)
                 if l.items.len() == 1
@@ -1488,12 +1489,21 @@ impl Sema<'_, '_> {
                 self.emit(msg);
                 return None;
             }
-            _ => {
+            Initializer::Paren(..) => {
                 self.unsupported("this form of 'auto' deduction", loc);
                 return None;
             }
         };
-        Some(self.deduce_placeholder(declared, e))
+        let deduced = self.deduce_from(declared, e);
+        if deduced.is_none() {
+            let msg = self
+                .diag(DiagId::sema_auto_var_deduction_failure, loc)
+                .arg(self.decl_name(v))
+                .arg(self.ty_arg(declared))
+                .arg(self.ty_arg(self.ast.exprs.get(e).ty()));
+            self.emit(msg);
+        }
+        deduced
     }
 
     /// A `constexpr` variable's initializer must be a constant expression
@@ -1538,7 +1548,7 @@ impl Sema<'_, '_> {
         if self.is_error_type(ty) {
             return;
         }
-        if self.is_undeduced_auto(ty) {
+        if self.contains_undeduced_auto(ty) {
             self.unsupported("'auto' without an initializer", loc);
             return;
         }

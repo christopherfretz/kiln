@@ -197,7 +197,9 @@ impl Sema<'_, '_> {
         while let Some(x) = stack.pop() {
             let n = exprs.get(x);
             match n.kind() {
-                ExprKind::UnaryExprOrTypeTraitExpr | ExprKind::CXXNoexceptExpr => continue,
+                ExprKind::UnaryExprOrTypeTraitExpr
+                | ExprKind::CXXNoexceptExpr
+                | ExprKind::CXXTypeidExpr => continue,
                 ExprKind::CXXThrowExpr | ExprKind::CXXNewExpr => return true,
                 ExprKind::CallExpr if self.callee_can_throw(exprs.callee(x)) => return true,
                 ExprKind::CXXDynamicCastExpr
@@ -260,7 +262,7 @@ impl Sema<'_, '_> {
             Some(p) if self.ast.types.is_pointer(obj) => (p, true),
             _ => (obj, false),
         };
-        if !(pointer && self.ast.types.is_void(checked))
+        if (!pointer || !self.ast.types.is_void(checked))
             && !self.ast.types.is_function(checked)
             && !self.is_complete(checked)
         {

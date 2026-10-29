@@ -489,6 +489,11 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                     kids.push((Node::Expr(d), None));
                 }
             }
+            ExprKind::CXXTypeidExpr => {
+                if let Ok(c) = exprs.typeid_operand(e) {
+                    kids.push((Node::Expr(c), None));
+                }
+            }
             ExprKind::StmtExpr => kids.push((self.stmt_node(exprs.stmt_expr_body(e)), None)),
             _ => {}
         }

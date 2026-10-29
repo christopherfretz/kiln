@@ -27,6 +27,7 @@ pub mod literal;
 pub mod lookup;
 pub mod names;
 mod oven_bridge;
+mod rtti;
 pub mod scope;
 pub mod stmt;
 pub mod target;
@@ -69,6 +70,9 @@ pub struct Sema<'a, 'sm> {
     pub pragma_packs: Vec<(Loc, String)>,
     /// C++ exceptions are enabled (`-f[no-]exceptions`; default on).
     pub exceptions: bool,
+    /// Run-time type information is enabled (`-f[no-]rtti`; default on):
+    /// `typeid` is an error otherwise.
+    pub rtti: bool,
     pub(crate) scopes: Vec<scope::Scope>,
     /// The current semantic declaration context.
     pub(crate) ctx: DeclId,
@@ -122,6 +126,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             abi,
             pragma_packs: Vec::new(),
             exceptions: true,
+            rtti: true,
             scopes: vec![scope::Scope::new(ScopeKind::TranslationUnit, Some(tu))],
             ctx: tu,
             func: None,

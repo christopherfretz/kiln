@@ -558,7 +558,7 @@ impl Sema<'_, '_> {
     /// the function scope).
     pub(crate) fn begin_function_body(&mut self, f: DeclId, ret: QualType) {
         let mut state = FnState::new(f, ret);
-        if self.undeduced_keyword(ret).is_some() {
+        if self.contains_undeduced_auto(ret) {
             state.auto_ret = Some(ret);
         }
         self.func = Some(state);

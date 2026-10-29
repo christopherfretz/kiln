@@ -1442,6 +1442,26 @@ impl<'a> AstBuilder<'a> {
         )
     }
 
+    /// `typeid ( type-id )` / `typeid ( expression )` ([expr.typeid]):
+    /// an lvalue of type `const std::type_info` (`ty`). `operand` is the
+    /// (unevaluated) expression, or `Err` with the type-id's type.
+    pub fn typeid_expr(
+        &mut self,
+        operand: Result<ExprId, QualType>,
+        ty: QualType,
+        loc: Loc,
+        rparen: Loc,
+    ) -> ExprId {
+        let (deps, aux, a) = match operand {
+            Ok(e) => (self.type_deps(ty) | self.deps(e), 0, e.raw()),
+            Err(t) => (self.type_deps(ty) | self.type_deps(t), 1, t.to_raw()),
+        };
+        let e =
+            self.simple(ExprKind::CXXTypeidExpr, ValueCategory::LValue, deps, aux, ty, loc, a, 0);
+        self.ast.exprs.cold.end_loc.insert(e, rparen).expect("fresh expression");
+        e
+    }
+
     /// A use of `param`'s default argument ([dcl.fct.default]) in context
     /// `used_ctx` (the argument is the parameter's shared one); `ty`/`vk`
     /// are the default argument's (sema-overload.md §7).

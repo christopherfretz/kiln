@@ -1165,7 +1165,9 @@ impl ExprArena {
             ExprKind::UnaryExprOrTypeTraitExpr if !n.has(ExprFlags::ARG_IS_TYPE) => {
                 v.extend(id(n.a));
             }
-            ExprKind::CXXNoexceptExpr => v.extend(id(n.a)),
+            ExprKind::CXXNoexceptExpr | ExprKind::CXXThrowExpr | ExprKind::CompoundLiteralExpr => {
+                v.extend(id(n.a));
+            }
             ExprKind::BinaryOperator | ExprKind::ArraySubscriptExpr => {
                 v.extend(id(n.a));
                 v.extend(id(n.b));
@@ -1190,7 +1192,7 @@ impl ExprArena {
             ExprKind::BinaryConditionalOperator | ExprKind::OffsetOfExpr => {
                 v.extend(lists.iter::<ExprId>(ListId::new(n.a)));
             }
-            ExprKind::CXXThrowExpr | ExprKind::CompoundLiteralExpr => v.extend(id(n.a)),
+            ExprKind::CXXTypeidExpr if n.aux == 0 => v.extend(id(n.a)),
             _ => {}
         }
         v
@@ -1274,6 +1276,17 @@ impl ExprArena {
     /// The byte offset an `OffsetOfExpr` evaluates to.
     pub fn offsetof_value(&self, e: ExprId) -> u64 {
         u64::from(self.expect_kind(e, ExprKind::OffsetOfExpr).b)
+    }
+
+    /// The operand of a `CXXTypeidExpr`: the expression, or `Err` with
+    /// the type-id's type.
+    pub fn typeid_operand(&self, e: ExprId) -> Result<ExprId, QualType> {
+        let n = self.expect_kind(e, ExprKind::CXXTypeidExpr);
+        if n.aux == 0 {
+            Ok(ExprId::new(n.a))
+        } else {
+            Err(QualType::from_raw(n.a).expect("a type operand"))
+        }
     }
 
     /// The `InitListExpr` of a `CompoundLiteralExpr`.
