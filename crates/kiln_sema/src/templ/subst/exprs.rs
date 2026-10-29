@@ -421,7 +421,16 @@ impl Substituter<'_, '_, '_> {
                 };
                 return Ok(self.sema.build_decl_ref_qualified(d, n.loc(), None, nns));
             }
-            return self.unimplemented("calls to overload sets", n.loc());
+            // An overload set: resolved again at the call.
+            let mut ds = Vec::with_capacity(decls.len());
+            for &d in &decls {
+                ds.push(self.find_instantiated_decl(d, n.loc())?);
+            }
+            let nns = match self.sema.ast.templates.expr_nns.get(c).copied() {
+                Some(q) => Some(self.nns(q, n.loc())?),
+                None => None,
+            };
+            return Ok(self.sema.builder().unresolved_lookup(name, &ds, false, nns, None, n.loc()));
         }
         if decls.is_empty() {
             return Ok(self.sema.act_on_undeclared_call_name(name, n.loc()));

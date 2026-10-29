@@ -746,43 +746,16 @@ impl Sema<'_, '_> {
     }
 
     /// An unqualified name followed by `(` that ordinary lookup does not
-    /// find, inside a template: argument-dependent lookup at instantiation
-    /// may find it ([temp.dep.candidate]), so it becomes an empty
-    /// `UnresolvedLookupExpr` with ADL. The call diagnoses it when no
-    /// argument is type-dependent.
+    /// find: an implicit builtin, else an empty `UnresolvedLookupExpr`
+    /// with ADL, which argument-dependent lookup at the call (or, inside a
+    /// template, at instantiation, [temp.dep.candidate]) may resolve
+    /// ([basic.lookup.argdep]). The call diagnoses an undeclared
+    /// identifier when ADL finds nothing.
     pub fn act_on_undeclared_call_name(&mut self, name: Symbol, loc: Loc) -> ExprId {
+        if let Some(b) = self.lazily_create_builtin(name, loc) {
+            return self.build_decl_ref(b, loc);
+        }
         self.builder().unresolved_lookup(name, &[], true, None, None, loc)
-    }
-
-    /// For a call whose callee is an unresolved name: the diagnostics when
-    /// no argument is type-dependent, or `None` when the call stays
-    /// dependent. An empty lookup is an undeclared identifier
-    /// ([basic.lookup.argdep]); a function template needs deduction
-    /// (WP-071).
-    pub(crate) fn check_unresolved_callee(
-        &mut self,
-        callee: ExprId,
-        args: &[ExprId],
-    ) -> Option<ExprId> {
-        let n = *self.ast.exprs.get(callee);
-        if n.kind() != ExprKind::UnresolvedLookupExpr
-            || args.iter().any(|&a| self.expr_is_type_dependent(a))
-            || self.expr_is_type_dependent(callee)
-        {
-            return None;
-        }
-        let mut kids = vec![callee];
-        kids.extend_from_slice(args);
-        let decls = self.ast.unresolved_decls(callee);
-        if decls.is_empty() {
-            let name = self.ast.unresolved_name(callee);
-            let text = sym_str(self, name);
-            let msg = self.diag(DiagId::sema_undeclared_var_use, n.loc()).arg(text);
-            self.emit(msg);
-        } else {
-            self.templ_unimplemented("calls to function templates", n.loc());
-        }
-        Some(self.recover_err(&kids, n.loc()))
     }
 
     /// `base.name` / `base->name` on a type-dependent object

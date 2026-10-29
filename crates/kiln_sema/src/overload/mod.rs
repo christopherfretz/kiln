@@ -6,7 +6,10 @@
 //! perform or diagnose → `end_set` (§1.2). Sets come from a pool on
 //! [`Sema`] so steady-state resolution allocates nothing (§1.4).
 
+pub(crate) mod address;
+pub(crate) mod adl;
 pub(crate) mod best;
+pub(crate) mod call;
 pub(crate) mod diag;
 pub(crate) mod ics;
 pub(crate) mod redecl;
@@ -17,7 +20,7 @@ use kiln_ast::types::RefQual;
 use kiln_ast::{DeclId, QualType};
 use kiln_source::Loc;
 
-pub(crate) use ics::{ArgInfo, BadConv, BadKind, Ics, IcsOptions, UdcVia, UserConv};
+pub(crate) use ics::{ArgInfo, BadKind, Ics, IcsOptions};
 
 use crate::Sema;
 use crate::conv::{RefBinding, StandardConversion};
@@ -286,6 +289,21 @@ pub(crate) struct OverloadScratch {
     /// The set of the last constructor selection that failed
     /// (`Missing`/`Ambiguous`), kept for its diagnostic notes.
     pub failed: Option<OverloadCandidateSet>,
+    /// What lookup found for an `UnresolvedLookupExpr` callee beyond its
+    /// decls, kept only when there is something to keep (a using-shadow
+    /// or a naming class): consumed by [`Sema::resolve_unresolved_call`].
+    pub ule_found: kiln_source::fx::FxHashMap<kiln_ast::ExprId, UleFound>,
+}
+
+/// The lookup details of an `UnresolvedLookupExpr` its decl list does not
+/// record.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct UleFound {
+    /// Parallel to the ULE's decls: the declaration lookup found (clang's
+    /// `FoundDecl`).
+    pub found: Vec<DeclId>,
+    /// The naming class ([class.access.base]/5) of a class member lookup.
+    pub naming: Option<DeclId>,
 }
 
 impl OverloadScratch {
@@ -300,6 +318,9 @@ impl OverloadScratch {
         };
         self.pool.capacity() * size_of::<OverloadCandidateSet>()
             + self.pool.iter().map(one).sum::<usize>()
+            + self.failed.as_ref().map_or(0, one)
+            + self.ule_found.capacity() * size_of::<(kiln_ast::ExprId, UleFound)>()
+            + self.ule_found.values().map(|u| u.found.capacity() * size_of::<DeclId>()).sum::<usize>()
     }
 }
 

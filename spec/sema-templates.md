@@ -1881,7 +1881,9 @@ depth". Fatal means kiln_diag stops the TU.
   `stress/stack-guard-parens.cpp` (50,000 nested parentheses under
   `-fkiln-stack-size=8M`) and `stress/stack-guard-template.cpp`
   (unterminated `R<N - 1>::v` recursion under `-ftemplate-depth=100000
-  -fkiln-stack-size=32M`). Both are `skip(clang)`: clang stops at its
+  -fkiln-stack-size=32M`; the phase it reports is not pinned: whether the
+  frame push or the Oven entry for `N - 1` trips first depends on frame
+  sizes). Both are `skip(clang)`: clang stops at its
   bracket depth (256) and its own depth/stack handling instead.
 - With the default 1 GiB, 50,000 parentheses parse without a trip
   (debug 0.11 s); depth 100000 hits `-ftemplate-depth` in release and

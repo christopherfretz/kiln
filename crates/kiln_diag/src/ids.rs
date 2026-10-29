@@ -1109,6 +1109,12 @@ diag_ids! {
     note_ovl_candidate_deleted = Note (2) "candidate {0} has been {1:explicitly|implicitly} deleted";
     note_ovl_candidate_explicit = Note (1) "explicit {0:constructor|conversion function|deduction guide} is not a candidate";
     note_possible_target = Note (0) "possible target for call";
+    sema_addr_ovl_cast = Error (3) "address of overloaded function '{0}' cannot be {1:cast|static_cast} to type {2}";
+    sema_addr_ovl_reinterpret = Error (2) "reinterpret_cast cannot resolve overloaded function '{0}' to type {1}";
+    note_ovl_candidate_fn_arity = Note (3) "candidate {0} has different number of parameters (expected {1} but has {2})";
+    note_ovl_candidate_fn_param = Note (4) "candidate {0} has type mismatch at {1} parameter (expected {2} but has {3})";
+    note_ovl_candidate_fn_return = Note (3) "candidate {0} has different return type ({1} expected but has {2})";
+    note_ovl_candidate_fn_noexcept = Note (1) "candidate {0} has different exception specification";
 }
 
 impl DiagId {

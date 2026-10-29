@@ -140,9 +140,10 @@ pub struct Sema<'a, 'sm> {
     /// pattern: instantiation checks the group's deductions again
     /// ([dcl.spec.auto.general]/8).
     pub(crate) group_placeholders: kiln_source::fx::FxHashMap<DeclId, (QualType, Loc)>,
-    /// Set while [`Sema::act_on_call_name`] builds an unqualified callee
-    /// inside a template: a function it names is not marked referenced
-    /// until the call is known to be non-dependent ([temp.dep.candidate]).
+    /// Set while [`Sema::act_on_call_name`] builds an unqualified callee:
+    /// a function it names is not marked referenced until the call is
+    /// known to be non-dependent ([temp.dep.candidate]), and ADL applies
+    /// (spec/sema-overload.md §2.2).
     pub(crate) deferring_call_ref: bool,
     /// Overload resolution's pooled candidate sets and counters
     /// (spec/sema-overload.md §1.4).

@@ -23,6 +23,7 @@ mod arith;
 pub(crate) mod bases;
 pub(crate) mod narrow;
 mod qual;
+pub(crate) use qual::drop_noexcept;
 pub(crate) mod rank;
 pub(crate) mod scs;
 pub(crate) mod soft;

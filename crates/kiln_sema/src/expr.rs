@@ -660,11 +660,12 @@ impl Sema<'_, '_> {
     // -- names -------------------------------------------------------------------
 
     /// An unqualified id-expression `name` that is the callee of a call
-    /// (followed by `(`) inside a template: as
-    /// [`Sema::act_on_id_expression`], but a non-member function it names
-    /// is marked referenced only by [`Sema::act_on_call`] once the call is
-    /// known not to be dependent (clang builds an `UnresolvedLookupExpr`
-    /// for a dependent call and references nothing; [temp.dep.candidate]).
+    /// (followed by `(`): as [`Sema::act_on_id_expression`], but non-member
+    /// functions it names become an `UnresolvedLookupExpr` with ADL
+    /// unless argument-dependent lookup is suppressed
+    /// (spec/sema-overload.md §2.1–§2.2), and a function it names
+    /// directly is marked referenced only by [`Sema::act_on_call`] once
+    /// the call is known not to be dependent ([temp.dep.candidate]).
     pub fn act_on_call_name(&mut self, name: Symbol, loc: Loc) -> ExprId {
         let saved = std::mem::replace(&mut self.deferring_call_ref, true);
         let e = self.act_on_id_expression(name, loc, None);
@@ -742,13 +743,21 @@ impl Sema<'_, '_> {
             .copied()
             .filter(|&x| !self.ast.decls.get(x).has(DeclFlags::INVALID))
             .collect();
+        if fns && (valid.len() > 1 || self.call_uses_adl(&valid, qualifier.is_none())) {
+            if let Some(e) = self.overload_name_ref(name, &found, &valid, qualifier.is_none(), nns, loc)
+            {
+                if let Some(b) = begin
+                    && b != loc
+                {
+                    let _ = self.ast.templates.expr_begin.insert(e, b);
+                }
+                return e;
+            }
+            return self.recover_err(&[], loc);
+        }
         if fns && valid.len() == 1 {
             d = valid[0];
         } else if found.decls.len() > 1 {
-            if fns {
-                self.unsupported("overloaded functions", loc);
-                return self.recover_err(&[], loc);
-            }
             // Distinct entities found via using-directives ([namespace.udir]/6).
             let text = self.ast.symbols().as_str(name).to_owned();
             let mut msg = self.diag(DiagId::sema_ambiguous_reference, loc).arg(text);
@@ -786,6 +795,70 @@ impl Sema<'_, '_> {
         }
         self.note_function_name_use(d, e, loc, qualifier.is_none());
         e
+    }
+
+    /// [basic.lookup.argdep]/1–3 for the callee of a call being built by
+    /// [`Sema::act_on_call_name`]: an `unqualified` name whose lookup
+    /// found only non-member functions (or function templates), none of
+    /// them a block-scope declaration or an implicit builtin
+    /// (spec/sema-overload.md §2.2, clang `UseArgumentDependentLookup`).
+    #[inline(never)]
+    pub(crate) fn call_uses_adl(&self, decls: &[DeclId], unqualified: bool) -> bool {
+        unqualified
+            && self.deferring_call_ref
+            && !decls.is_empty()
+            && decls.iter().all(|&d| {
+                matches!(self.kind_of(d), DeclKind::Function | DeclKind::FunctionTemplate)
+                    && self.ast.decls.builtin_id(d).is_none()
+                    && !self
+                        .ast
+                        .decls
+                        .lexical_ctx(d)
+                        .is_some_and(|l| self.ast.decls.get(l).kind().is_function())
+                    && !self
+                        .ast
+                        .decls
+                        .get(d)
+                        .ctx()
+                        .is_some_and(|c| crate::overload::adl::is_class_kind(self.kind_of(c)))
+            })
+    }
+
+    /// The `UnresolvedLookupExpr` for an id-expression naming the
+    /// functions `valid` (the non-invalid decls of `found`): overload
+    /// resolution happens at the call (spec/sema-overload.md §2.1).
+    /// Unqualified results are listed newest first (§2.1, candidate
+    /// order). `None` after diagnosing an unsupported form.
+    #[inline(never)]
+    fn overload_name_ref(
+        &mut self,
+        name: Symbol,
+        found: &crate::lookup::Found,
+        valid: &[DeclId],
+        unqualified: bool,
+        nns: Option<kiln_ast::NnsId>,
+        loc: Loc,
+    ) -> Option<ExprId> {
+        if valid.iter().any(|&d| self.is_instance_member(d)) {
+            // Overloaded non-static members: an `UnresolvedMemberExpr`
+            // (spec/sema-overload.md §2.3).
+            self.unsupported("overloaded member functions", loc);
+            return None;
+        }
+        let adl = found.naming.is_none() && self.call_uses_adl(valid, unqualified);
+        let mut decls: Vec<DeclId> = Vec::with_capacity(valid.len());
+        let mut via: Vec<DeclId> = Vec::with_capacity(valid.len());
+        for (i, &d) in found.decls.iter().enumerate() {
+            if valid.contains(&d) {
+                decls.push(d);
+                via.push(found.found.get(i).copied().unwrap_or(d));
+            }
+        }
+        if unqualified && found.naming.is_none() {
+            decls.reverse();
+            via.reverse();
+        }
+        Some(self.build_overload_ref(name, &decls, &via, found.naming, adl, nns, loc))
     }
 
     /// A `DeclRefExpr` naming the value `d`.
@@ -2161,9 +2234,18 @@ impl Sema<'_, '_> {
         if self.is_err_expr(callee) || args.iter().any(|&a| self.is_err_expr(a)) {
             return self.recover_err(&kids, loc);
         }
-        if let Some(e) = self.check_unresolved_callee(callee, args) {
-            return e;
-        }
+        let callee = if self.ast.exprs.get(self.ignore_parens(callee)).kind()
+            == ExprKind::UnresolvedLookupExpr
+            && !self.expr_is_type_dependent(callee)
+            && !args.iter().any(|&a| self.expr_is_type_dependent(a))
+        {
+            match self.resolve_unresolved_call(callee, args, &braced) {
+                Some(e) if !self.is_err_expr(e) => e,
+                _ => return self.recover_err(&kids, loc),
+            }
+        } else {
+            callee
+        };
         if self.expr_is_type_dependent(callee)
             || args.iter().any(|&a| self.expr_is_type_dependent(a))
         {
