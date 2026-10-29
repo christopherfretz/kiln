@@ -32,6 +32,7 @@ dependencies = [
  "kiln_abi",
  "kiln_ast",
  "kiln_diag",
+ "kiln_driver",
  "kiln_llvm",
  "kiln_oven",
  "kiln_parse",
