@@ -1022,7 +1022,7 @@ impl<'a> AstBuilder<'a> {
     /// A source-location builtin call `kind()` ([support.srcloc.cons];
     /// clang `SourceLocExpr`) of type `ty` written in context `ctx`, from
     /// `loc` to the `)` at `rparen`: a non-dependent prvalue (sema keeps a
-    /// template pattern's context, spec/ast.md §5.10).
+    /// template pattern's context, spec/ast.md §5.8).
     pub fn source_loc_expr(
         &mut self,
         kind: crate::expr::SourceLocKind,

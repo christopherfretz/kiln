@@ -1461,8 +1461,8 @@ impl Cg<'_> {
             && let Some(id) = ast.decls.builtin_id(d)
         {
             match self.emit_builtin(id, e)? {
-                Some(v) => return Ok(v),
-                None => lib = Some(self.lib_fn(d, id)?),
+                crate::builtins::BuiltinCall::Emitted(v) => return Ok(v),
+                crate::builtins::BuiltinCall::Library => lib = Some(self.lib_fn(d, id)?),
             }
         }
         let args: Vec<ExprId> = ast.lists.iter(ast.exprs.call_args(e)).collect();

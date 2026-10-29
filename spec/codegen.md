@@ -129,6 +129,17 @@ panic and never silently wrong IR.
       with the builtin's type, `nounwind`, and `willreturn
       memory(read)` / `memory(none)` for `Pure` / `Const` builtins (on the
       call site too).
+  - a source-location builtin (`SourceLocExpr`, spec/ast.md §5.8) is
+    the value sema recorded for it: `__builtin_LINE`/`_COLUMN` an
+    integer constant; `__builtin_FILE`/`_FILE_NAME`/`_FUNCTION` a
+    pointer to the string literal's global; `__builtin_source_location()`
+    a pointer to a private `unnamed_addr constant` named `.constant`
+    holding the frozen `__impl` object (clang
+    `GetAddrOfUnnamedGlobalConstantDecl`), one per frozen value
+    (`ModuleGen::const_object`), its initializer, and so its strings,
+    emitted first. Inside a `CXXDefaultArgExpr` (and nested default
+    arguments) the outermost use's recorded values are taken
+    (`enter_default_arg`), so each call site gets its own location.
   - a conversion to bool of a `zext` from `i1` is the `i1`, and the
     `zext` is erased when unused (clang `EmitIntToBoolConversion`);
   - the IR constant folder propagates NaNs as APFloat does: a NaN
@@ -138,6 +149,11 @@ panic and never silently wrong IR.
   linkage are mangled (`_ZL1h`); static locals use 0-based
   discriminators per (function, name): none, then `_0` ... `_9`, then
   `__10_`, `__11_`, ...
+- Private unnamed constants (`.str`, `.constant`) are uniqued by
+  `kiln_llvm`'s one module-wide counter, as LLVM's
+  `ValueSymbolTable::makeUniqueName`: a clashing name gets `.N` with the
+  next counter value (`.str`, `.str.1`, `.constant`, `.str.2`), so names
+  follow emission order exactly as clang's do.
 - A GNU asm label (`asm("name")`, recorded on the entity's first
   declaration, spec/ast.md §4.2) replaces the function's or variable's
   linkage name (`kiln_abi::mangle::asm_label`). clang prefixes LLVM's
@@ -287,12 +303,12 @@ The normative description is spec/driver.md "Code generation". In short:
   same normalization. A `(case, triple)` pair in its `DEVIATIONS` table
   must only verify; every other pair must be identical. `KILN_CASE=<stem>`
   prints both texts; without `opt-19`/`clang++-19` it is skipped. The
-  corpus is 56 programs (ABI classification of 1- to 32-byte structs,
+  corpus is 57 programs (ABI classification of 1- to 32-byte structs,
   HFAs, byval, varargs, `__int128`, `long double`, bit-fields, static
   locals, string literals, references, control flow, new/delete, and the
-  WP-088 `builtins_{bits,mem,fp,misc}` cases): 112/112 pairs exact,
-  `DEVIATIONS` is empty.
-- **`run` tests:** 33 printf-based programs (`extern "C" int printf`, no
+  WP-088 `builtins_{bits,mem,fp,misc,srcloc}` cases): 114/114 pairs
+  exact, `DEVIATIONS` is empty.
+- **`run` tests:** 35 printf-based programs (`extern "C" int printf`, no
   headers) under `tests/conformance/<section>/`, each naming its section,
   are compiled, linked and run by kiln and by clang, and their stdout and
   exit status compared. The 5 header-dependent `run` tests
@@ -354,7 +370,8 @@ move, which no longer treats an lvalue-reference variable as movable.
 
 **Done (WP-052 + WP-052b):** `fir.rs`, `module.rs`, `func.rs`, `consts.rs`,
 `fold.rs`, `expr.rs` (§3), `stmt.rs` (§4), the driver path (§5) and the
-IR-diff corpus (§6: 46 programs, exact on both triples). The unit corpus
+IR-diff corpus (§6: then 46 programs, exact on both triples; see §6 for
+the current count). The unit corpus
 is 79/79 exact against clang on aarch64 (`bitfields_compound` became exact
 with WP-057; WP-058 added five cases). Additive `kiln_abi` fixes came with
 part 1: internal-linkage variable mangling, static-local discriminators,

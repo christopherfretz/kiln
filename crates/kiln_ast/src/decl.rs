@@ -2637,8 +2637,8 @@ pub mod builtin {
         pub name: &'static str,
         /// The type in `Builtins.td` notation: the return type, then the
         /// parameter types; `.` makes it variadic. Base types: `v` void,
-        /// `b` bool, `c` char, `w` wchar_t, `s` short, `i` int, `f`
-        /// float, `d` double, `z` size_t; prefixes `U` unsigned, `L`
+        /// `b` bool, `c` char, `w` `wchar_t`, `s` short, `i` int, `f`
+        /// float, `d` double, `z` `size_t`; prefixes `U` unsigned, `L`
         /// long (`LL` long long, `Ld` long double); suffixes `*` pointer,
         /// `&` lvalue reference, `C` const.
         pub sig: &'static str,

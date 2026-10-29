@@ -1101,7 +1101,7 @@ pub struct ColdExprData {
     /// binary trait (clang reports `__is_base_of`'s incomplete derived
     /// type there).
     pub trait_rhs_loc: ColdMap<ExprId, Loc>,
-    /// The values of the source-location builtins at a use (§5.10): for a
+    /// The values of the source-location builtins at a use (§5.8): for a
     /// `SourceLocExpr` its own location and context, for a
     /// `CXXDefaultArgExpr` / `CXXDefaultInitExpr` whose initializer holds
     /// one, the location and context of the use. Computed by sema (which

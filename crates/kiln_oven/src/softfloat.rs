@@ -390,7 +390,7 @@ mod tests {
     }
 }
 
-/// The IEEE class of a value (APFloat's `fltCategory`, with
+/// The IEEE class of a value (`APFloat`'s `fltCategory`, with
 /// `isDenormal` split out of the normal category).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum Class {
@@ -401,7 +401,7 @@ pub(crate) enum Class {
     NaN,
 }
 
-/// The class of `a` as APFloat reads it: an x87 value whose explicit
+/// The class of `a` as `APFloat` reads it: an x87 value whose explicit
 /// integer bit disagrees with its exponent (pseudo-NaN, pseudo-infinity,
 /// unnormal) is a NaN; a pseudo-denormal (integer bit set, exponent
 /// zero) is normal.
@@ -429,7 +429,7 @@ pub(crate) fn inf(kind: FloatKind) -> u128 {
     pack_inf(Fmt::of(kind), false)
 }
 
-/// APFloat's `makeNaN(SNaN, Negative = false, fill)`: the low
+/// `APFloat`'s `makeNaN(SNaN, Negative = false, fill)`: the low
 /// `precision - 1` bits of `fill`, the quiet bit set (or, signaling,
 /// cleared, with the next bit set when nothing else is), and for x87 the
 /// integer bit (a NaN, not a pseudo-NaN).

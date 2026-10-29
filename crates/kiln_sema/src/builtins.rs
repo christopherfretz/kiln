@@ -510,7 +510,8 @@ impl Sema<'_, '_> {
             ValueCategory::PRValue,
             None,
         );
-        let ret = self.ast.types.proto(fty).map_or(QualType::ERROR, |p| p.ret());
+        let ret =
+            self.ast.types.proto(fty).map_or(QualType::ERROR, kiln_ast::types::FuncProto::ret);
         let ret = conv::strip_cv(self, ret);
         self.builder().call(cal, &out, ret, ValueCategory::PRValue, loc, rparen, ExprFlags::NONE)
     }
@@ -712,8 +713,8 @@ impl Sema<'_, '_> {
     /// both types complete, a prvalue operand materialized, equal sizes,
     /// and both types trivially copyable. The result is a prvalue of `ty`
     /// (cv-unqualified for a non-class type) with cast kind
-    /// `LValueToRValueBitCast`. Evaluating it is an Oven stub
-    /// (spec/sema-templates.md §9.5).
+    /// `LValueToRValueBitCast`. The Oven evaluates it through the ABI
+    /// layout (spec/oven.md "Builtins").
     pub fn act_on_builtin_bit_cast(
         &mut self,
         ty: QualType,
@@ -976,23 +977,22 @@ impl Sema<'_, '_> {
     fn srcloc_string(&mut self, s: &str) -> Option<kiln_ast::ConstValueId> {
         let lit =
             self.ast.strings.intern(kiln_ast::strings::StringEncoding::Ordinary, s.as_bytes());
-        let origin = match self.srcloc.strings.get(&lit) {
-            Some(&e) => e,
-            None => {
-                let ty = crate::literal::string_literal_type(
-                    self,
-                    kiln_lex::Encoding::Ordinary,
-                    s.len() as u64 + 1,
-                );
-                let e = self.builder().string_literal(
-                    ty,
-                    kiln_ast::expr::StringKind::Ordinary,
-                    lit,
-                    Loc::INVALID,
-                );
-                self.srcloc.strings.insert(lit, e);
-                e
-            }
+        let origin = if let Some(&e) = self.srcloc.strings.get(&lit) {
+            e
+        } else {
+            let ty = crate::literal::string_literal_type(
+                self,
+                kiln_lex::Encoding::Ordinary,
+                s.len() as u64 + 1,
+            );
+            let e = self.builder().string_literal(
+                ty,
+                kiln_ast::expr::StringKind::Ordinary,
+                lit,
+                Loc::INVALID,
+            );
+            self.srcloc.strings.insert(lit, e);
+            e
         };
         let ty = self.const_char_ptr(QualType::CHAR);
         let ty = self.ast.types.canonical(ty);
@@ -1029,23 +1029,19 @@ impl Sema<'_, '_> {
             let n = self.ast.decls.get(f);
             let name = n.name().as_ident().map(|s| self.ast.symbols().as_str(s).to_owned());
             let fty = n.ty().unwrap_or(QualType::UINT);
-            match name.as_deref() {
-                Some("_M_file_name" | "_M_function_name") => {
-                    let value =
-                        if name.as_deref() == Some("_M_file_name") { file } else { function };
-                    relocs.push(kiln_ast::consts::Reloc { at: at as u32, value });
-                    covered.get_mut(at..at + ptr_bytes)?.fill(true);
+            if let Some(n @ ("_M_file_name" | "_M_function_name")) = name.as_deref() {
+                let value = if n == "_M_file_name" { file } else { function };
+                relocs.push(kiln_ast::consts::Reloc { at: at as u32, value });
+                covered.get_mut(at..at + ptr_bytes)?.fill(true);
+            } else {
+                let v = if name.as_deref() == Some("_M_line") { line } else { column };
+                let (w, _) = crate::target::size_align(&self.ast, fty, &self.abi)?;
+                let w = usize::try_from(w).ok()?;
+                let le = u64::from(v).to_le_bytes();
+                for i in 0..w {
+                    *bytes.get_mut(at + i)? = le.get(i).copied().unwrap_or(0);
                 }
-                _ => {
-                    let v = if name.as_deref() == Some("_M_line") { line } else { column };
-                    let (w, _) = crate::target::size_align(&self.ast, fty, &self.abi)?;
-                    let w = usize::try_from(w).ok()?;
-                    let le = u64::from(v).to_le_bytes();
-                    for i in 0..w {
-                        *bytes.get_mut(at + i)? = le.get(i).copied().unwrap_or(0);
-                    }
-                    covered.get_mut(at..at + w)?.fill(true);
-                }
+                covered.get_mut(at..at + w)?.fill(true);
             }
         }
         relocs.sort_by_key(|r| r.at);

@@ -153,17 +153,25 @@ fn is_complete(ast: &Ast, q: QualType) -> bool {
     })
 }
 
+/// How [`Cg::emit_builtin`] handled a builtin call.
+pub(crate) enum BuiltinCall {
+    /// Emitted inline: the value, or none for a `void` call.
+    Emitted(Option<V>),
+    /// A library builtin: the caller emits an ordinary call.
+    Library,
+}
+
 impl Cg<'_> {
-    /// clang `EmitBuiltinExpr` for the call `e` of builtin `b`: `Ok(None)`
-    /// for a library builtin, which the caller emits as an ordinary call
-    /// of [`Cg::lib_fn`].
-    pub(crate) fn emit_builtin(&mut self, b: u32, e: ExprId) -> R<Option<Option<V>>> {
+    /// clang `EmitBuiltinExpr` for the call `e` of builtin `b`:
+    /// [`BuiltinCall::Library`] for a library builtin, which the caller
+    /// emits as an ordinary call of [`Cg::lib_fn`].
+    pub(crate) fn emit_builtin(&mut self, b: u32, e: ExprId) -> R<BuiltinCall> {
         let ast = self.ast;
         let q = ast.exprs.get(e).ty();
         if let Some(c) = self.folds.get(e)
             && (ast.types.is_integral(q) || ast.types.is_floating(q))
         {
-            return Ok(Some(Some(V::C(self.const_scalar_value(c, q)?))));
+            return Ok(BuiltinCall::Emitted(Some(V::C(self.const_scalar_value(c, q)?))));
         }
         let args: Vec<ExprId> = ast.lists.iter(ast.exprs.call_args(e)).collect();
         let arg = |i: usize| args.get(i).copied();
@@ -314,7 +322,7 @@ impl Cg<'_> {
             // without `-fstrict-vtable-pointers`).
             id::LAUNDER => self.emit_scalar(a0)?,
             id::OPERATOR_NEW | id::OPERATOR_DELETE => {
-                return self.builtin_new_delete(b, e, &args).map(Some);
+                return self.builtin_new_delete(b, e, &args).map(BuiltinCall::Emitted);
             }
             id::UNREACHABLE => {
                 // clang `EmitUnreachable`, then an insertion point.
@@ -322,9 +330,9 @@ impl Cg<'_> {
                 self.f.fir.set_cur(None);
                 let cont = self.f.fir.create_block();
                 self.emit_block(cont, false);
-                return Ok(Some(None));
+                return Ok(BuiltinCall::Emitted(None));
             }
-            _ if lib_name(b).is_some() => return Ok(None),
+            _ if lib_name(b).is_some() => return Ok(BuiltinCall::Library),
             _ => {
                 let name = id::info(b).map_or("?", |i| i.name);
                 return err(
@@ -333,7 +341,7 @@ impl Cg<'_> {
                 );
             }
         };
-        Ok(Some(Some(v)))
+        Ok(BuiltinCall::Emitted(Some(v)))
     }
 
     /// A call of intrinsic `f` with no call-site attributes.

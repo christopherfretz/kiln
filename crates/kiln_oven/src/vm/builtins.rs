@@ -339,7 +339,7 @@ impl Oven {
         if size == 0 {
             return Err(Fault::Invalid);
         }
-        if n % size != 0 {
+        if !n.is_multiple_of(size) {
             return Err(Fault::Bi(BiFault::CopySize { mv, t, n, size }));
         }
         let ne = n / size;

@@ -464,6 +464,32 @@ needed later). Values of non-constant-context folding (`try_fold`) are
   `Builder::cxx_delete(operand, operator_delete, flags, sized, aligned,
   ty, loc)`.
 
+### 5.8 Source-location builtins (WP-088)
+- **`SourceLocExpr`**: `__builtin_FILE()`, `__builtin_FILE_NAME()`,
+  `__builtin_FUNCTION()`, `__builtin_LINE()`, `__builtin_COLUMN()` and
+  `__builtin_source_location()` ([support.srcloc.cons]; clang
+  `SourceLocExpr`). Built by `AstBuilder::source_loc_expr(kind, ty, ctx,
+  loc, rparen)`; `aux` is the `SourceLocKind`
+  (`Exprs::source_loc_kind`), `a` the declaration context it appears in
+  (`Exprs::source_loc_context`); the `)` is in the cold `end_loc` map.
+  A prvalue of `const char *` (`FILE`, `FILE_NAME`, `FUNCTION`),
+  `unsigned int` (`LINE`, `COLUMN`) or
+  `const std::source_location::__impl *`, with its type's dependence; no
+  children.
+- **Values** (`exprs.cold.source_loc: ColdMap<ExprId, SourceLocValues>`;
+  `Exprs::source_loc_values` / `set_source_loc_values`): sema computes
+  them, since it owns the source manager and the function-name printer.
+  `SourceLocValues { file, file_name, function: ConstValueId, line,
+  column: u32, location: Option<ConstValueId> }`; the `ConstValueId`s are
+  interned pointers to string-literal objects (one per distinct string)
+  and, for `location`, to the frozen `__impl` object of that location.
+  The key is the `SourceLocExpr` itself (its own location and context),
+  or a `CXXDefaultArgExpr` that uses a default argument containing one
+  (the call's location and the caller's context, [dcl.fct.default]/9 via
+  [support.srcloc.cons]/2). Consumers (Oven, codegen) take the values of
+  the outermost `CXXDefaultArgExpr` in scope that has an entry, else the
+  `SourceLocExpr`'s own.
+
 ## 6. Statements
 ```rust
 struct StmtNode { kind: StmtKind /*u8*/, flags: u8, aux: u16, loc: Loc, a: u32, b: u32 }  // 16 bytes
