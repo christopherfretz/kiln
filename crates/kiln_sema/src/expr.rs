@@ -673,13 +673,18 @@ impl Sema<'_, '_> {
     }
 
     /// An id-expression naming `name` ([expr.prim.id]), optionally
-    /// qualified by the context `qualifier`.
+    /// qualified by the nested-name-specifier `qualifier`, which the
+    /// resulting `DeclRefExpr` records as written (clang's
+    /// `getQualifier()`; the expression printer shows it).
     pub fn act_on_id_expression(
         &mut self,
         name: Symbol,
         loc: Loc,
-        qualifier: Option<DeclId>,
+        qualifier: Option<crate::using::Qualifier>,
     ) -> ExprId {
+        let nns = qualifier.map(|q| q.nns);
+        let begin = qualifier.map(|q| q.loc);
+        let qualifier = qualifier.map(|q| q.ctx);
         let found = match qualifier {
             Some(q) => self.lookup_qualified(q, name, LookupKind::Ordinary),
             None => self.lookup_name(name, LookupKind::Ordinary),
@@ -723,7 +728,7 @@ impl Sema<'_, '_> {
                 name,
                 &decls,
                 qualifier.is_none(),
-                None,
+                nns,
                 None,
                 loc,
             );
@@ -771,7 +776,14 @@ impl Sema<'_, '_> {
         if self.is_class_member_ref(d) {
             return self.implicit_member_ref(d, loc, found.shadow(0), qualifier.is_some());
         }
-        let e = self.build_decl_ref_via(d, loc, found.shadow(0));
+        let e = self.build_decl_ref_qualified(d, loc, found.shadow(0), nns);
+        // clang's `getBeginLoc` of a qualified name is the qualifier's.
+        if let Some(b) = begin
+            && b != loc
+            && self.ast.exprs.get(e).kind() == ExprKind::DeclRefExpr
+        {
+            let _ = self.ast.templates.expr_begin.insert(e, b);
+        }
         self.note_function_name_use(d, e, loc, qualifier.is_none());
         e
     }
@@ -784,17 +796,31 @@ impl Sema<'_, '_> {
     /// A `DeclRefExpr` naming the value `d`, found through the
     /// using-shadow `shadow` when that is set (clang's `FoundDecl`).
     pub fn build_decl_ref_via(&mut self, d: DeclId, loc: Loc, shadow: Option<DeclId>) -> ExprId {
-        let extra = shadow.map(|s| kiln_ast::expr::DeclRefExtra {
-            qualifier: None,
+        self.build_decl_ref_qualified(d, loc, shadow, None)
+    }
+
+    /// A `DeclRefExpr` naming the value `d`, found through `shadow`, with
+    /// the nested-name-specifier `nns` as written (`N::x`, `A<int>::y`,
+    /// `::z`).
+    pub fn build_decl_ref_qualified(
+        &mut self,
+        d: DeclId,
+        loc: Loc,
+        shadow: Option<DeclId>,
+        nns: Option<kiln_ast::ids::NnsId>,
+    ) -> ExprId {
+        let extra = (shadow.is_some() || nns.is_some()).then_some(kiln_ast::expr::DeclRefExtra {
+            qualifier: nns,
             template_args: None,
-            found_decl: Some(s),
+            found_decl: shadow,
         });
         self.build_decl_ref_extra(d, loc, extra)
     }
 
     /// [`Self::build_decl_ref_via`] with the side record `extra` (a
     /// variable template specialization records the template as its
-    /// found decl and the arguments as written).
+    /// found decl and the arguments as written; a qualified name its
+    /// nested-name-specifier).
     #[allow(
         clippy::too_many_lines,
         reason = "the 074/087 use checks and the 070b variable-template record meet here"

@@ -35,6 +35,7 @@ mod oven_bridge;
 mod rtti;
 pub mod scope;
 mod side_effects;
+pub mod stack_guard;
 pub mod stmt;
 pub mod target;
 pub mod templ;

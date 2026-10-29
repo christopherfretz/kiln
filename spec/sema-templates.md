@@ -74,6 +74,10 @@ P4 **Bounded native stack.**
   - (c) A `StackGuard` measures the remaining stack (in safe Rust) at every
     frame push and every 16th substitution step. It turns overflow into a
     fatal diagnostic, never a crash (§10.3, Q4).
+  - *Landed (WP-086):* the check is two address reads and a compare, so it
+    runs at **every** substitution step (`Substituter::expr`, `ty`,
+    `stmt`), not every 16th, as well as at every frame push, at the
+    parser's recursive rules and at each Oven entry from sema (§10.3).
 - End-of-TU instantiation is a worklist (`pending`), not recursion.
 
 P5 **Diagnostics identical to clang 19.**
@@ -118,7 +122,7 @@ These are owned elsewhere:
 
 | # | clang 19 | kiln | Why |
 |---|---|---|---|
-| D1 | `runWithSufficientStackSpace` switches to a new stack, and warns "stack nearly exhausted" | the dedicated sema thread has a large stack; when `StackGuard` trips, kiln emits the fatal `kiln: stack exhausted while instantiating …` | safe Rust; no stack switching |
+| D1 | `runWithSufficientStackSpace` switches to a new stack, and warns "stack nearly exhausted" | the dedicated sema thread has a large stack; when `StackGuard` trips, kiln emits the fatal `kiln: stack exhausted during template instantiation; …` (or `parsing`, `constant evaluation`; §10.3) | safe Rust; no stack switching |
 | D2 | `-ftime-trace` | also `-fkiln-instantiation-report[=json]` (§11.3) | accounting principle |
 | D3 | always keeps `SubstTemplateTypeParmType` | the same by default; `-fno-subst-sugar` drops it (T3) | memory experiments |
 | D4 | rebuilds every pattern subtree | can share non-dependent, non-local expression subtrees (§3.3, Q3) | memory; dumps stay byte-identical |
@@ -1850,6 +1854,41 @@ depth". Fatal means kiln_diag stops the TU.
 - `stress/template-depth-1024.cpp` asserts that depth 1024 of the worst
   bench pattern uses less than ¼ of the default stack.
 
+*Landed (WP-086).*
+- `kiln_sema::stack_guard`: `StackGuard { base, size }` is installed per
+  thread (`StackGuard::install(size)`, a thread-local) by the driver's
+  `main` on the compiling thread; a thread without one (unit tests,
+  library callers) never trips. The red zone is 1 MiB (`RED_ZONE`).
+- **Default 1 GiB** (`DEFAULT_STACK_SIZE`; Q4 decision below), not
+  256 MiB: one instantiation level of the `R<N>::v` chain costs up to
+  ~300 KiB in a debug build, so 256 MiB does not reach the default depth
+  1024 there. `-fkiln-stack-size=N[K|M|G]` (last valid one wins; values
+  below 4 MiB are raised to 4 MiB; a malformed value is
+  `drv_invalid_value`).
+- The fatal is `sema_stack_exhausted`: "kiln: stack exhausted during
+  {parsing|template instantiation|constant evaluation}; reduce nesting
+  or raise -fkiln-stack-size", where the phase is the checking site:
+  - **template instantiation**: `push_inst_frame` (the notes then show
+    the instantiation stack, with the frame being pushed on top) and
+    `Substituter::{expr,ty,stmt}`;
+  - **parsing**: the recursive parser rules (external declarations,
+    declarators, initializer lists, template-argument lists, member
+    declarations, statements, cast-expressions, the tentative
+    declarator, `scan_name_at`). After a trip the parser sees end of
+    file, so it unwinds without further diagnostics;
+  - **constant evaluation**: `oven_bridge` before each evaluation.
+- Stress tests (spawned binary, so the guard is installed):
+  `stress/stack-guard-parens.cpp` (50,000 nested parentheses under
+  `-fkiln-stack-size=8M`) and `stress/stack-guard-template.cpp`
+  (unterminated `R<N - 1>::v` recursion under `-ftemplate-depth=100000
+  -fkiln-stack-size=32M`). Both are `skip(clang)`: clang stops at its
+  bracket depth (256) and its own depth/stack handling instead.
+- With the default 1 GiB, 50,000 parentheses parse without a trip
+  (debug 0.11 s); depth 100000 hits `-ftemplate-depth` in release and
+  the guard (during constant evaluation, at depth ~22,500) in debug.
+- `stress/template-depth-1024.cpp` is not written; the depth-1024 bench
+  entry `templates_deep.cpp` runs on the default stack.
+
 `-fconstexpr-depth` and the Oven budgets (oven.md) are separate limits.
 
 ### 10.4 Notes for failed deductions
@@ -2228,9 +2267,9 @@ first instead of emitting them (§5.7).
     (the report goes to stderr; timing only with the flag);
     `ArgError::InvalidFlagValue` maps to `drv_invalid_value`;
   - `main` runs the compile on a thread with a 1 GiB reserved stack.
-    This stands in for the Q4 sema thread (256 MiB plus `StackGuard`),
-    which is not built yet; 1024-deep instantiation needs more than
-    256 MiB in debug builds.
+    *WP-086:* this is now the Q4 sema thread, sized by
+    `-fkiln-stack-size` (default 1 GiB) with `StackGuard` installed
+    (§10.3).
 - `kiln_diag`: the instantiation notes, `sema_template_recursion_depth`
   (fatal), the undefined-template, arity, argument-kind, nested-name and
   `typename` errors, appended at the end of the tables.
@@ -2243,15 +2282,21 @@ first instead of emitting them (§5.7).
   declarator, not the type.
 - Default member initializers are instantiated with the class. clang
   instantiates them when used, with its own notes.
-- A qualified `DeclRefExpr` prints without its qualifier: sema never
-  records `qualifier` in `DeclRefExtra`. This predates WP-070a.
+- ~~A qualified `DeclRefExpr` prints without its qualifier~~ *Resolved
+  (WP-086):* `act_on_id_expression` records the nested-name-specifier in
+  `DeclRefExtra.qualifier` and the qualifier's first token as the begin
+  location (`ast.templates.expr_begin`); the printer writes it before the
+  name, as clang 19's StmtPrinter does (`'N::x == 2'`, `'::z == 3'`,
+  `'A<int>::y == 4'`), and substitution substitutes it. clang's dumps
+  show no qualifier, so the AST goldens are unchanged. Still missing:
+  implicit member references named with a qualifier (`class/member_expr.rs`).
 - No `CXXConstructExpr` for a class-typed variable of a specialization
   (WP-067b).
-- Parsing nested template-ids is quadratic: `skip_template_args`
-  recurses through `scan_name_at` (`kiln_parse/src/parser.rs`). Depth
-  1000 takes 406 ms in release. This predates WP-070a; the owner is the
-  parser.
-- The `inst.*` bench metrics of §11.4 are not in `xtask bench` yet.
+- ~~Parsing nested template-ids is quadratic~~ *Resolved (WP-086):*
+  `skip_template_args` results are memoized per token (parse.md §2.5);
+  `templates_deep.cpp` dropped from 406 ms to ~60 ms in release.
+- ~~The `inst.*` bench metrics are not in `xtask bench`~~ *Resolved
+  (WP-086):* see §11.4.
 - Known divergences: a `void` parameter list after substitution, the
   value-initialization temporary in an instantiated member-function
   body, friend redefinition across specializations, and
@@ -2735,6 +2780,19 @@ Goldens mask `*_us`.
   typical uses);
 - the mirrorbind synthetic corpus, when WP-030 delivers it.
 
+*Landed (WP-086).* `cargo xtask bench` passes kiln
+`-fkiln-instantiation-report=json` for every entry of the `frontend`
+group and records the totals row as `inst: {count, nodes, bytes}` in the
+results and baselines (bench.md "Measurement", "Records"). `inst.count`
+is judged exactly (`REGRESSED (inst)` on any increase, `improved` on a
+decrease), `inst.bytes` against the bytes threshold (2%); a total that
+differs between runs fails the entry. `--record` writes them into the
+baselines and as the `kiln instantiations` column (`count / KiB`) of
+`docs/status/perf.md`. Not yet: `ast.bytes` (the totals row has no
+whole-TU AST size; adding one would churn every `inst-report:` golden on
+any AST change) and `sat.count` (no satisfaction counter until WP-073);
+`--clang-inst` below is not built.
+
 **Laziness parity.** `cargo xtask bench --clang-inst` counts
 `InstantiateClass` and `InstantiateFunction` events in clang 19's
 `-ftime-trace -ftime-trace-granularity=0` output. The gate is
@@ -2895,6 +2953,9 @@ Each question has a recommendation (R).
    256 MiB reserved stack, plus `StackGuard` with a 1 MiB red zone. The
    alternative is a `stacker`-style segmented stack, which needs `unsafe`
    in a dependency and conflicts with the unsafe policy.
+   **Decided (WP-086):** the dedicated thread and `StackGuard` as
+   recommended, with a **1 GiB** default: a debug build needs more than
+   256 MiB for depth 1024, and the reservation costs only address space.
 5. **Q5: Oven reentrancy (R-OVEN-1) and `EvalKind::Constraint`.** **R:**
    the Oven owner confirms that nested evaluation from bridge callbacks
    works (`ensure_body(…, &mut Oven)`). Otherwise fall back to "no
@@ -2945,7 +3006,7 @@ Each question has a recommendation (R).
 | Q1 | Concepts are M3. ROADMAP M3/M4 edited. |
 | Q2 | Pack indexing (P2662) is M3, in WP-072. ROADMAP edited. |
 | Q3 | Implement non-dependent subtree sharing in WP-070a behind `-fno-share-nondependent`; `ExprDeps::LOCAL` is added to ast.md §5 by that WP; keep it only if the report shows ≥15% `inst.bytes` saved on `libcxx_m3.cpp`, else remove the code (no dead flags). WP-070a could not measure it (§14 Q3), so it moves to WP-071 with the same rule; nothing landed. |
-| Q4 | Dedicated sema thread (256 MiB reserved stack, `std::thread::Builder::stack_size`) plus `StackGuard` with a 1 MiB red zone. The whole front end (parser + sema + Oven) runs on that thread, since the parser calls sema. No segmented stacks, no `unsafe`. |
+| Q4 | Dedicated sema thread (1 GiB reserved stack by default — 256 MiB until WP-086 measured debug builds — `-fkiln-stack-size`, `std::thread::Builder::stack_size`) plus `StackGuard` with a 1 MiB red zone. The whole front end (parser + sema + Oven) runs on that thread, since the parser calls sema. No segmented stacks, no `unsafe`. |
 | Q5 | R-OVEN-1 accepted: the Oven supports nested `evaluate` from bridge callbacks (a stack of `EvalContext`s; the frame space uses marks per context and is reset only when the outermost context ends; budget shared, `depth` counts nested contexts). It lands in **WP-061b** (which already reworks `mem.rs` reset) with `EvalKind::Constraint`; `ensure_body(&mut self, f, oven: &mut Oven)` is the contract. No fallback. |
 | Q6 | R-OVEN-2 accepted: frozen values are hash-consed by content in `ConstStore` (WP-061b, `frozen_bytes` counts only new values). |
 | Q7 | Constexpr function templates are instantiated immediately at odr-use, as clang. |

@@ -68,6 +68,11 @@ pub struct Measurement {
     /// ([`OPTIONAL_COUNTERS`]): read as 0, not judged, not written back.
     /// Empty for a fresh measurement.
     pub oven_missing: Vec<Counter>,
+    /// The totals row of kiln's template instantiation report
+    /// (`-fkiln-instantiation-report=json`, spec/sema-templates.md §11.3),
+    /// identical in every run (`self_us` is not kept). Only `frontend`
+    /// entries measured with kiln have it.
+    pub inst: Option<InstCounters>,
     /// Per-run samples, in run order. Results keep them; baselines do not.
     pub samples_wall_ms: Vec<f64>,
     pub samples_rss_kb: Vec<u64>,
@@ -76,6 +81,54 @@ pub struct Measurement {
     /// The first line of `<compiler> --version`.
     pub compiler_version: String,
     pub host: Host,
+}
+
+/// The `inst.*` bench metrics (spec/sema-templates.md §11.4): the totals of
+/// kiln's instantiation report.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct InstCounters {
+    /// Implicit instantiations (`inst.count`; judged exactly).
+    pub count: u64,
+    /// AST nodes they created.
+    pub nodes: u64,
+    /// AST bytes they retained (`inst.bytes`; judged against `bytes_pct`).
+    pub bytes: u64,
+}
+
+impl InstCounters {
+    /// The totals row (`{"total":true,...}`) of a JSON instantiation report
+    /// in `stderr`, which may hold diagnostics too; the last one wins.
+    pub fn parse_report(stderr: &str) -> Result<Self, String> {
+        let line = stderr
+            .lines()
+            .rev()
+            .find(|l| l.trim_start().starts_with("{\"total\":true"))
+            .ok_or("no instantiation report totals row on stderr")?;
+        let j = Json::parse(line.trim())
+            .map_err(|e| format!("malformed instantiation report totals row: {e}"))?;
+        Self::from_json(&j)
+    }
+
+    fn to_json(self) -> Json {
+        Json::obj([
+            ("count", num_u(self.count)),
+            ("nodes", num_u(self.nodes)),
+            ("bytes", num_u(self.bytes)),
+        ])
+    }
+
+    fn from_json(j: &Json) -> Result<Self, String> {
+        let n = |k: &str| -> Result<u64, String> {
+            field(j, k)?
+                .as_u64()
+                .ok_or_else(|| format!("`inst.{k}` must be a non-negative integer"))
+        };
+        Ok(Self { count: n("count")?, nodes: n("nodes")?, bytes: n("bytes")? })
+    }
+
+    pub fn describe(self) -> String {
+        format!("count {}, nodes {}, bytes {}", self.count, self.nodes, self.bytes)
+    }
 }
 
 #[allow(clippy::cast_precision_loss)]
@@ -99,6 +152,9 @@ impl Measurement {
         if let Some(c) = &self.oven {
             let keys = Counter::ALL.into_iter().filter(|k| !self.oven_missing.contains(k));
             p.push(("oven", Json::obj(keys.map(|k| (k.name(), num_u(c.get(k)))))));
+        }
+        if let Some(i) = self.inst {
+            p.push(("inst", i.to_json()));
         }
         if samples {
             p.push((
@@ -132,6 +188,8 @@ impl Measurement {
             Some(o) => oven_from_json(o).map(|(c, m)| (Some(c), m))?,
             None => (None, Vec::new()),
         };
+        // Optional: baselines recorded before WP-086 have none.
+        let inst = j.get("inst").map(InstCounters::from_json).transpose()?;
         let nums = |k: &str| -> Result<Vec<&Json>, String> {
             Ok(match j.get(k) {
                 None => Vec::new(),
@@ -156,6 +214,7 @@ impl Measurement {
             },
             oven,
             oven_missing,
+            inst,
             samples_wall_ms: nums("samples_wall_ms")?
                 .into_iter()
                 .map(|x| x.as_f64().ok_or("`samples_wall_ms` must hold numbers"))
@@ -477,6 +536,7 @@ pub(super) mod tests {
             max_rss_kb: rss,
             oven: None,
             oven_missing: Vec::new(),
+            inst: None,
             samples_wall_ms: vec![median * 1.1, median, median * 0.98],
             samples_rss_kb: rss.into_iter().collect(),
             compiler: compiler.into(),
@@ -517,6 +577,7 @@ pub(super) mod tests {
             wall_us: 0,
             evaluations: 6,
         });
+        kiln.inst = Some(InstCounters { count: 10, nodes: 20, bytes: 30 });
         entries.insert("oven/kiln".to_owned(), Outcome::Measured(kiln));
         let r = RunRecord {
             timestamp: "2026-10-28T123456".into(),
@@ -562,6 +623,32 @@ pub(super) mod tests {
             "{k}"
         );
         assert_eq!(text.matches("\"oven\":").count(), 1, "{text}");
+        // The instantiation totals follow the constexpr counters.
+        assert!(
+            k.contains(
+                "        },\n        \"inst\": {\n          \"count\": 10,\n          \
+                 \"nodes\": 20,\n          \"bytes\": 30\n        }"
+            ),
+            "{k}"
+        );
+        assert_eq!(text.matches("\"inst\":").count(), 1, "{text}");
+    }
+
+    /// The totals row of `-fkiln-instantiation-report=json` among other
+    /// stderr output (spec/sema-templates.md §11.3).
+    #[test]
+    fn instantiation_report_totals() {
+        let stderr = "t.cpp:1:1: warning: w\n\
+            {\"template\":\"R<N>::v\",\"kind\":\"static\",\"loc\":\"t.cpp:1:49\",\"count\":3,\
+            \"nodes\":9,\"bytes\":99,\"self_us\":1,\"incl_us\":2}\n\
+            {\"total\":true,\"count\":3,\"nodes\":9,\"bytes\":99,\"self_us\":1}\n";
+        let i = InstCounters::parse_report(stderr).unwrap();
+        assert_eq!(i, InstCounters { count: 3, nodes: 9, bytes: 99 });
+        assert!(InstCounters::parse_report("error: x\n").unwrap_err().contains("no instantiation"));
+        let bad = "{\"total\":true,\"count\":-1,\"nodes\":9,\"bytes\":99}";
+        assert!(InstCounters::parse_report(bad).unwrap_err().contains("inst.count"));
+        let torn = "{\"total\":true,\"count\":";
+        assert!(InstCounters::parse_report(torn).unwrap_err().contains("malformed"));
     }
 
     #[test]

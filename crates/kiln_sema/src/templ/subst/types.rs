@@ -25,6 +25,7 @@ impl Substituter<'_, '_, '_> {
         if !Sema::dependent_flags(flags) {
             return Ok(q);
         }
+        self.check_stack(|_| loc)?;
         let inner = self.ty_node(q.without_quals(), loc)?;
         if self.sema.is_error_type(inner) {
             return Err(SubstFail);

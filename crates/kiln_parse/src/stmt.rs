@@ -75,6 +75,9 @@ impl Parser<'_, '_> {
     /// statement ([stmt.pre]). `None` if the statement was dropped after a
     /// syntax error.
     pub fn parse_statement(&mut self) -> Option<StmtId> {
+        if !self.stack_ok() {
+            return None;
+        }
         let in_stmt_expr = std::mem::take(&mut self.in_stmt_expr);
         if self.at_cxx11_attr() {
             let mut attrs = Vec::new();

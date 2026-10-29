@@ -1091,6 +1091,8 @@ diag_ids! {
     sema_dangling_field_param = Warning [DanglingField] (2) "binding reference member {0} to stack allocated parameter {1}";
     sema_dangling_field_param_addr = Warning [DanglingField] (2) "initializing pointer member {0} with the stack address of parameter {1}";
     note_ref_or_ptr_member_here = Note (1) "{0:reference|pointer} member declared here";
+    // WP-086: the stack guard (spec/sema-templates.md §10.3, D1).
+    sema_stack_exhausted = Fatal (1) "kiln: stack exhausted during {0:parsing|template instantiation|constant evaluation}; reduce nesting or raise -fkiln-stack-size";
     sema_ovl_static_nonstatic_member = Error (0) "static and non-static member functions with the same parameter types cannot be overloaded";
 }
 
