@@ -125,7 +125,7 @@ target's formats (`format_subset`). bf16 and f16 are unordered.
 `err.diag(s, e)`, which puts the caret at `e`.
 
 Wording table (all verified against clang 19; tests in `conv_errors.rs`):
-- **Initialization, Argument, Return:** `sema_init_conversion_failed`, "cannot initialize {a variable|a parameter|return object|a value} of type T with an {rvalue|lvalue} of type U". An xvalue prints as "rvalue", which covers the implicitly moved `return` operand. The caller marks that operand as an xvalue ([class.copy.elision]/3).
+- **Initialization, Argument, Return:** `sema_init_conversion_failed`, "cannot initialize {a variable|a parameter|return object|a value} of type T with an {rvalue|lvalue} of type U" plus, for member-pointer and pointer/reference-to-function pairs, clang's `HandleFunctionTypeMismatch` suffix (": different classes ('D' vs 'C')", ": different number of parameters (0 vs 1)", ": different qualifiers (unqualified vs 'const')", ...; WP-083). An xvalue prints as "rvalue", which covers the implicitly moved `return` operand. The caller marks that operand as an xvalue ([class.copy.elision]/3).
 - **Class source:** `sema_no_viable_conversion` / `_return`.
 - **Assignment** ([expr.assign]/3):
   - int↔pointer cases, with fix-it text: "take the address with &", "dereference with *", "remove *", "remove &";

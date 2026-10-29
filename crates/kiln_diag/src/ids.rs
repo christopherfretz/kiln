@@ -390,7 +390,7 @@ diag_ids! {
     sema_float_literal_overflow = Warning [LiteralRange] (2) "magnitude of floating-point constant too large for type {0}; maximum is {1}";
     sema_float_literal_underflow = Warning [LiteralRange] (2) "magnitude of floating-point constant too small for type {0}; minimum is {1}";
     sema_invalid_float_suffix = Error (1) "invalid suffix '{0}' on floating constant";
-    sema_init_conversion_failed = Error (4) "cannot initialize {0:a variable|a parameter|return object|a value} of type {1} with an {2:rvalue|lvalue} of type {3}";
+    sema_init_conversion_failed = Error (5) "cannot initialize {0:a variable|a parameter|return object|a value} of type {1} with an {2:rvalue|lvalue} of type {3}{4}";
     sema_no_viable_conversion = Error (2) "no viable conversion from {0} to {1}";
     sema_no_viable_conversion_return = Error (2) "no viable conversion from returned value of type {0} to function return type {1}";
     sema_assign_incompatible = Error (2) "assigning to {0} from incompatible type {1}";
@@ -557,7 +557,7 @@ diag_ids! {
     sema_no_member = Error (2) "no member named '{0}' in {1}";
     sema_ambiguous_reference = Error (1) "reference to '{0}' is ambiguous";
     note_ambiguous_candidate = Note (1) "candidate found by name lookup is '{0}'";
-    sema_not_a_type = Error (1) "'{0}' does not name a type";
+    sema_expected_class_or_namespace = Error (1) "{0} is not a class, namespace, or enumeration";
     sema_redefinition = Error (1) "redefinition of '{0}'";
     sema_redefinition_of_enumerator = Error (1) "redefinition of enumerator '{0}'";
     sema_redefinition_different_kind = Error (1) "redefinition of '{0}' as different kind of symbol";
@@ -602,6 +602,9 @@ diag_ids! {
     sema_array_incomplete_type = Error (1) "array has incomplete element type {0}";
     sema_array_of_void = Error (1) "'{0}' declared as array of void";
     sema_pointer_to_reference = Error (2) "'{0}' declared as a pointer to a reference of type {1}";
+    sema_mptr_in_nonclass = Error (1) "'{0}' does not point into a class";
+    sema_mptr_to_reference = Error (2) "'{0}' declared as a member pointer to a reference of type {1}";
+    sema_mptr_to_void = Error (1) "'{0}' declared as a member pointer to void";
     sema_reference_to_reference = Error (1) "'{0}' declared as a reference to a reference";
     sema_reference_to_void = Error (0) "cannot form a reference to 'void'";
     sema_array_size_non_int = Error (1) "size of array has non-integer type {0}";
@@ -790,7 +793,7 @@ diag_ids! {
     sema_storage_class_for_member = Error (0) "storage class specified for a member declaration";
     sema_nonstatic_member_out_of_line = Error (0) "non-static data member defined out-of-line";
     sema_member_def_no_match = Error (2) "out-of-line definition of '{0}' does not match any declaration in '{1}'";
-    sema_friend_def_no_match = Error (2) "friend declaration of '{0}' does not match any declaration in '{1}'";
+    sema_friend_def_no_match = Error (2) "friend declaration of '{0}' does not match any declaration in {1}";
     sema_friend_not_class_or_fn = Error (0) "friends can only be classes or functions";
     sema_const_member_assign = Error (1) "cannot assign to non-static data member within const member function '{0}'";
     note_member_fn_declared_const = Note (1) "member function '{0}' is declared const here";

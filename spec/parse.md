@@ -300,7 +300,14 @@ outermost class is complete, so their tokens are saved and re-parsed
   - the name, its qualifier and its location
   - `chunks`, innermost first: pointer/reference with cv, array with
     bound, function with parameters, variadic flag and exception
-    specification
+    specification, and a member pointer `nested-name-specifier * cv`
+    (`Chunk::MemberPointer`, [dcl.mptr]). `at_member_pointer` scans
+    `::`? `name` (`<args>`)? `::` ... `*` without consuming; the
+    nested-name-specifier is parsed with entering-context off, and when
+    it fails or does not end at the `*` (`int nope::*p`) the tokens up
+    to the `*` are skipped, the declarator is marked invalid and the
+    chunk carries `qual: None`. The same form is accepted in abstract
+    declarators and in new-declarators (`new int C::*`).
   - the bit-width, attributes, and `init_style`
   - a special declarator-id (`Declarator::special`, `SpecialName`):
     a constructor (the class's own name in member context, or `C::C`
@@ -748,7 +755,6 @@ in `kiln_diag` for now; nothing emits them.
   - `co_await`/`co_yield`
 - **Statements:** range-based `for`, `try`/`catch`, `co_return`, contracts.
 - **Other declarations:**
-  - pointers to members
   - pack expansions in dynamic exception specifications
   - `auto` deduction from braced lists (`std::initializer_list`)
   - `typename`, `operator` and pack forms of using-declarators, and an

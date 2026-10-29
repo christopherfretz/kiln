@@ -2,7 +2,7 @@
 // of a derived class and still designates the same member.
 //@ expect: run
 //@ stdout: 7 8 1
-//@ xfail(kiln): needs member-pointer declarators (int D::*p) and WP-079 codegen
+//@ xfail(kiln): needs member-pointer equality ([expr.eq]/4, `p == nullptr`) and WP-079 codegen
 extern "C" int printf(const char*, ...);
 struct B { int x = 7; };
 struct M { int pad = 0; };

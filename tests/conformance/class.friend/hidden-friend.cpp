@@ -3,7 +3,7 @@
 // scope; a qualified friend must name an existing function.
 //@ expect: compile-fail
 //@ strict-diags
-//@ xfail(kiln): needs WP-068a ADL (hidden friend call); sema_friend_def_no_match prints 'N', clang prints namespace 'N'
+//@ xfail(kiln): needs WP-068a ADL (hidden friend call)
 //@ diag: 19:6 error "no member named 'f' in namespace 'N'"
 //@ diag: 21:12 error "no member named 'g' in namespace 'N'"
 //@ diag: 25:18 error "friend declaration of 'nope' does not match any declaration in namespace 'N'"
