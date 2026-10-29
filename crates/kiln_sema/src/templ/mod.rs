@@ -141,6 +141,12 @@ pub struct InstState {
     /// point of instantiation of a definition `ensure_body` instantiates
     /// (§4.11).
     pub(crate) eval_loc: Option<Loc>,
+    /// The thread's stack guard (P4 (c)): the one installed when the
+    /// state was created.
+    pub(crate) guard: crate::stack_guard::StackGuard,
+    /// The guard tripped: its fatal error was emitted, and every later
+    /// check fails so the recursion unwinds.
+    pub(crate) stack_exhausted: std::cell::Cell<bool>,
 }
 
 impl Sema<'_, '_> {

@@ -2491,28 +2491,288 @@ impl HeapSize for DeclArena {
 /// Builtin function ids (the `builtin_id` cold data of an implicit builtin
 /// `Function` decl, §5.3). The numbering is clang 19's `Builtin::ID` (its
 /// target-independent part), so a `BuiltinAttr` dumps as clang's does.
+/// [`ALL`] gives each one's spelling, signature and attributes in clang's
+/// `Builtins.td` notation (spec/sema-templates.md §9.5).
 pub mod builtin {
     /// `bool __builtin_is_constant_evaluated() noexcept` ([meta.const.eval]).
     pub const IS_CONSTANT_EVALUATED: u32 = 722;
     /// `void *__builtin_addressof(void &) noexcept` ([specialized.addressof];
     /// custom type-checking: the result is a pointer to the operand's type).
     pub const ADDRESSOF: u32 = 200;
-
-    /// `void *__builtin_memcpy(void *, const void *, size_t) noexcept`, as
-    /// sema declares it internally for the memberwise copy of arrays in
-    /// implicit assignment operators ([class.copy.assign]/12; clang
-    /// `buildMemcpyForAssignmentOp`). Not in [`ALL`]: a user call is not
-    /// supported yet.
+    /// `__builtin_clz` (clang `Builtins.td` signature `iUi`).
+    pub const CLZ: u32 = 341;
+    /// `__builtin_clzl` (clang `Builtins.td` signature `iULi`).
+    pub const CLZL: u32 = 342;
+    /// `__builtin_clzll` (clang `Builtins.td` signature `iULLi`).
+    pub const CLZLL: u32 = 343;
+    /// `__builtin_ctz` (clang `Builtins.td` signature `iUi`).
+    pub const CTZ: u32 = 443;
+    /// `__builtin_ctzl` (clang `Builtins.td` signature `iULi`).
+    pub const CTZL: u32 = 444;
+    /// `__builtin_ctzll` (clang `Builtins.td` signature `iULLi`).
+    pub const CTZLL: u32 = 445;
+    /// `__builtin_popcount` (clang `Builtins.td` signature `iUi`).
+    pub const POPCOUNT: u32 = 961;
+    /// `__builtin_popcountl` (clang `Builtins.td` signature `iULi`).
+    pub const POPCOUNTL: u32 = 962;
+    /// `__builtin_popcountll` (clang `Builtins.td` signature `iULLi`).
+    pub const POPCOUNTLL: u32 = 963;
+    /// `__builtin_clzg` (clang `Builtins.td` signature `i.`).
+    pub const CLZG: u32 = 344;
+    /// `__builtin_ctzg` (clang `Builtins.td` signature `i.`).
+    pub const CTZG: u32 = 446;
+    /// `__builtin_popcountg` (clang `Builtins.td` signature `i.`).
+    pub const POPCOUNTG: u32 = 964;
+    /// `__builtin_bswap16` (clang `Builtins.td` signature `UsUs`).
+    pub const BSWAP16: u32 = 179;
+    /// `__builtin_bswap32` (clang `Builtins.td` signature `UiUi`).
+    pub const BSWAP32: u32 = 180;
+    /// `__builtin_bswap64` (clang `Builtins.td` signature `ULiULi`).
+    pub const BSWAP64: u32 = 181;
+    /// `__builtin_memcmp` (clang `Builtins.td` signature `ivC*vC*z`).
+    pub const MEMCMP: u32 = 218;
+    /// `__builtin_memcpy` (clang `Builtins.td` signature `v*v*vC*z`).
     pub const MEMCPY: u32 = 865;
+    /// `__builtin_memmove` (clang `Builtins.td` signature `v*v*vC*z`).
+    pub const MEMMOVE: u32 = 867;
+    /// `__builtin_memchr` (clang `Builtins.td` signature `v*vC*iz`).
+    pub const MEMCHR: u32 = 862;
+    /// `__builtin_char_memchr` (clang `Builtins.td` signature `c*cC*iz`).
+    pub const CHAR_MEMCHR: u32 = 208;
+    /// `__builtin_strlen` (clang `Builtins.td` signature `zcC*`).
+    pub const STRLEN: u32 = 1147;
+    /// `__builtin_wcslen` (clang `Builtins.td` signature `zwC*`).
+    pub const WCSLEN: u32 = 1390;
+    /// `__builtin_wmemchr` (clang `Builtins.td` signature `w*wC*wz`).
+    pub const WMEMCHR: u32 = 1377;
+    /// `__builtin_wmemcmp` (clang `Builtins.td` signature `iwC*wC*z`).
+    pub const WMEMCMP: u32 = 1379;
+    /// `__builtin_isfinite` (clang `Builtins.td` signature `i.`).
+    pub const ISFINITE: u32 = 725;
+    /// `__builtin_isinf` (clang `Builtins.td` signature `i.`).
+    pub const ISINF: u32 = 729;
+    /// `__builtin_isnan` (clang `Builtins.td` signature `i.`).
+    pub const ISNAN: u32 = 735;
+    /// `__builtin_isnormal` (clang `Builtins.td` signature `i.`).
+    pub const ISNORMAL: u32 = 736;
+    /// `__builtin_signbit` (clang `Builtins.td` signature `i.`).
+    pub const SIGNBIT: u32 = 1089;
+    /// `__builtin_isgreater` (clang `Builtins.td` signature `i.`).
+    pub const ISGREATER: u32 = 727;
+    /// `__builtin_isgreaterequal` (clang `Builtins.td` signature `i.`).
+    pub const ISGREATEREQUAL: u32 = 728;
+    /// `__builtin_isless` (clang `Builtins.td` signature `i.`).
+    pub const ISLESS: u32 = 731;
+    /// `__builtin_islessequal` (clang `Builtins.td` signature `i.`).
+    pub const ISLESSEQUAL: u32 = 732;
+    /// `__builtin_islessgreater` (clang `Builtins.td` signature `i.`).
+    pub const ISLESSGREATER: u32 = 733;
+    /// `__builtin_isunordered` (clang `Builtins.td` signature `i.`).
+    pub const ISUNORDERED: u32 = 742;
+    /// `__builtin_huge_val` (clang `Builtins.td` signature `d`).
+    pub const HUGE_VAL: u32 = 652;
+    /// `__builtin_huge_valf` (clang `Builtins.td` signature `f`).
+    pub const HUGE_VALF: u32 = 651;
+    /// `__builtin_huge_vall` (clang `Builtins.td` signature `Ld`).
+    pub const HUGE_VALL: u32 = 653;
+    /// `__builtin_nan` (clang `Builtins.td` signature `dcC*`).
+    pub const NAN: u32 = 892;
+    /// `__builtin_nanf` (clang `Builtins.td` signature `fcC*`).
+    pub const NANF: u32 = 890;
+    /// `__builtin_nanl` (clang `Builtins.td` signature `LdcC*`).
+    pub const NANL: u32 = 894;
+    /// `__builtin_nans` (clang `Builtins.td` signature `dcC*`).
+    pub const NANS: u32 = 899;
+    /// `__builtin_nansf` (clang `Builtins.td` signature `fcC*`).
+    pub const NANSF: u32 = 898;
+    /// `__builtin_nansl` (clang `Builtins.td` signature `LdcC*`).
+    pub const NANSL: u32 = 900;
+    /// `__builtin_exp` (clang `Builtins.td` signature `dd`).
+    pub const EXP: u32 = 509;
+    /// `__builtin_expf` (clang `Builtins.td` signature `ff`).
+    pub const EXPF: u32 = 507;
+    /// `__builtin_expl` (clang `Builtins.td` signature `LdLd`).
+    pub const EXPL: u32 = 511;
+    /// `__builtin_exp2` (clang `Builtins.td` signature `dd`).
+    pub const EXP2: u32 = 515;
+    /// `__builtin_exp2f` (clang `Builtins.td` signature `ff`).
+    pub const EXP2F: u32 = 513;
+    /// `__builtin_exp2l` (clang `Builtins.td` signature `LdLd`).
+    pub const EXP2L: u32 = 517;
+    /// `__builtin_expm1` (clang `Builtins.td` signature `dd`).
+    pub const EXPM1: u32 = 532;
+    /// `__builtin_expm1f` (clang `Builtins.td` signature `ff`).
+    pub const EXPM1F: u32 = 530;
+    /// `__builtin_expm1l` (clang `Builtins.td` signature `LdLd`).
+    pub const EXPM1L: u32 = 534;
+    /// `__builtin_frexp` (clang `Builtins.td` signature `ddi*`).
+    pub const FREXP: u32 = 615;
+    /// `__builtin_frexpf` (clang `Builtins.td` signature `ffi*`).
+    pub const FREXPF: u32 = 613;
+    /// `__builtin_frexpl` (clang `Builtins.td` signature `LdLdi*`).
+    pub const FREXPL: u32 = 617;
+    /// `__builtin_ldexp` (clang `Builtins.td` signature `ddi`).
+    pub const LDEXP: u32 = 759;
+    /// `__builtin_ldexpf` (clang `Builtins.td` signature `ffi`).
+    pub const LDEXPF: u32 = 757;
+    /// `__builtin_ldexpl` (clang `Builtins.td` signature `LdLdi`).
+    pub const LDEXPL: u32 = 761;
+    /// `__builtin_pow` (clang `Builtins.td` signature `ddd`).
+    pub const POW: u32 = 967;
+    /// `__builtin_powf` (clang `Builtins.td` signature `fff`).
+    pub const POWF: u32 = 965;
+    /// `__builtin_powl` (clang `Builtins.td` signature `LdLdLd`).
+    pub const POWL: u32 = 969;
+    /// `__builtin_scalbn` (clang `Builtins.td` signature `ddi`).
+    pub const SCALBN: u32 = 1074;
+    /// `__builtin_scalbnf` (clang `Builtins.td` signature `ffi`).
+    pub const SCALBNF: u32 = 1072;
+    /// `__builtin_scalbnl` (clang `Builtins.td` signature `LdLdi`).
+    pub const SCALBNL: u32 = 1076;
+    /// `__builtin_scalbln` (clang `Builtins.td` signature `ddLi`).
+    pub const SCALBLN: u32 = 1068;
+    /// `__builtin_scalblnf` (clang `Builtins.td` signature `ffLi`).
+    pub const SCALBLNF: u32 = 1066;
+    /// `__builtin_scalblnl` (clang `Builtins.td` signature `LdLdLi`).
+    pub const SCALBLNL: u32 = 1070;
+    /// `__builtin_launder` (clang `Builtins.td` signature `v*v*`).
+    pub const LAUNDER: u32 = 756;
+    /// `__builtin_operator_new` (clang `Builtins.td` signature `v*z`).
+    pub const OPERATOR_NEW: u32 = 224;
+    /// `__builtin_operator_delete` (clang `Builtins.td` signature `vv*`).
+    pub const OPERATOR_DELETE: u32 = 223;
+    /// `__builtin_unreachable` (clang `Builtins.td` signature `v`).
+    pub const UNREACHABLE: u32 = 1347;
 
-    /// The id and spelling of every builtin function kiln declares.
-    pub const ALL: &[(u32, &str)] = &[
-        (IS_CONSTANT_EVALUATED, "__builtin_is_constant_evaluated"),
-        (ADDRESSOF, "__builtin_addressof"),
+    /// Attribute bits of an [`Info`] (clang's `Builtins.td` attributes).
+    pub mod attr {
+        /// `NoThrow`: an implicit `NoThrowAttr` and a `noexcept` type.
+        pub const NOTHROW: u8 = 1;
+        /// `Const`: an implicit `ConstAttr`.
+        pub const CONST: u8 = 2;
+        /// `Pure`: an implicit `PureAttr`.
+        pub const PURE: u8 = 4;
+        /// `NoReturn`: a `noreturn` function type.
+        pub const NORETURN: u8 = 8;
+        /// `CustomTypeChecking`: the arguments are not converted to the
+        /// parameter types; sema checks the call itself.
+        pub const CUSTOM: u8 = 16;
+    }
+
+    /// One builtin function.
+    #[derive(Clone, Copy, Debug)]
+    pub struct Info {
+        /// clang's `Builtin::ID`.
+        pub id: u32,
+        /// The spelling.
+        pub name: &'static str,
+        /// The type in `Builtins.td` notation: the return type, then the
+        /// parameter types; `.` makes it variadic. Base types: `v` void,
+        /// `b` bool, `c` char, `w` `wchar_t`, `s` short, `i` int, `f`
+        /// float, `d` double, `z` `size_t`; prefixes `U` unsigned, `L`
+        /// long (`LL` long long, `Ld` long double); suffixes `*` pointer,
+        /// `&` lvalue reference, `C` const.
+        pub sig: &'static str,
+        /// [`attr`] bits.
+        pub attrs: u8,
+    }
+
+    const fn row(id: u32, name: &'static str, sig: &'static str, attrs: u8) -> Info {
+        Info { id, name, sig, attrs }
+    }
+
+    use attr::{CONST as C, CUSTOM as T, NORETURN as R, NOTHROW as N, PURE as P};
+
+    /// Every builtin function kiln declares.
+    pub const ALL: &[Info] = &[
+        row(IS_CONSTANT_EVALUATED, "__builtin_is_constant_evaluated", "b", N),
+        row(ADDRESSOF, "__builtin_addressof", "v*v&", N | C | T),
+        row(CLZ, "__builtin_clz", "iUi", N | C),
+        row(CLZL, "__builtin_clzl", "iULi", N | C),
+        row(CLZLL, "__builtin_clzll", "iULLi", N | C),
+        row(CTZ, "__builtin_ctz", "iUi", N | C),
+        row(CTZL, "__builtin_ctzl", "iULi", N | C),
+        row(CTZLL, "__builtin_ctzll", "iULLi", N | C),
+        row(POPCOUNT, "__builtin_popcount", "iUi", N | C),
+        row(POPCOUNTL, "__builtin_popcountl", "iULi", N | C),
+        row(POPCOUNTLL, "__builtin_popcountll", "iULLi", N | C),
+        row(CLZG, "__builtin_clzg", "i.", N | C | T),
+        row(CTZG, "__builtin_ctzg", "i.", N | C | T),
+        row(POPCOUNTG, "__builtin_popcountg", "i.", N | C | T),
+        row(BSWAP16, "__builtin_bswap16", "UsUs", N | C),
+        row(BSWAP32, "__builtin_bswap32", "UiUi", N | C),
+        row(BSWAP64, "__builtin_bswap64", "ULiULi", N | C),
+        row(MEMCMP, "__builtin_memcmp", "ivC*vC*z", N),
+        row(MEMCPY, "__builtin_memcpy", "v*v*vC*z", N),
+        row(MEMMOVE, "__builtin_memmove", "v*v*vC*z", N),
+        row(MEMCHR, "__builtin_memchr", "v*vC*iz", N),
+        row(CHAR_MEMCHR, "__builtin_char_memchr", "c*cC*iz", N),
+        row(STRLEN, "__builtin_strlen", "zcC*", N),
+        row(WCSLEN, "__builtin_wcslen", "zwC*", N | P),
+        row(WMEMCHR, "__builtin_wmemchr", "w*wC*wz", N),
+        row(WMEMCMP, "__builtin_wmemcmp", "iwC*wC*z", N),
+        row(ISFINITE, "__builtin_isfinite", "i.", N | C | T),
+        row(ISINF, "__builtin_isinf", "i.", N | C | T),
+        row(ISNAN, "__builtin_isnan", "i.", N | C | T),
+        row(ISNORMAL, "__builtin_isnormal", "i.", N | C | T),
+        row(SIGNBIT, "__builtin_signbit", "i.", N | C | T),
+        row(ISGREATER, "__builtin_isgreater", "i.", N | C | T),
+        row(ISGREATEREQUAL, "__builtin_isgreaterequal", "i.", N | C | T),
+        row(ISLESS, "__builtin_isless", "i.", N | C | T),
+        row(ISLESSEQUAL, "__builtin_islessequal", "i.", N | C | T),
+        row(ISLESSGREATER, "__builtin_islessgreater", "i.", N | C | T),
+        row(ISUNORDERED, "__builtin_isunordered", "i.", N | C | T),
+        row(HUGE_VAL, "__builtin_huge_val", "d", N | C),
+        row(HUGE_VALF, "__builtin_huge_valf", "f", N | C),
+        row(HUGE_VALL, "__builtin_huge_vall", "Ld", N | C),
+        row(NAN, "__builtin_nan", "dcC*", N | P),
+        row(NANF, "__builtin_nanf", "fcC*", N | P),
+        row(NANL, "__builtin_nanl", "LdcC*", N | P),
+        row(NANS, "__builtin_nans", "dcC*", N | P),
+        row(NANSF, "__builtin_nansf", "fcC*", N | P),
+        row(NANSL, "__builtin_nansl", "LdcC*", N | P),
+        row(EXP, "__builtin_exp", "dd", N),
+        row(EXPF, "__builtin_expf", "ff", N),
+        row(EXPL, "__builtin_expl", "LdLd", N),
+        row(EXP2, "__builtin_exp2", "dd", N),
+        row(EXP2F, "__builtin_exp2f", "ff", N),
+        row(EXP2L, "__builtin_exp2l", "LdLd", N),
+        row(EXPM1, "__builtin_expm1", "dd", N),
+        row(EXPM1F, "__builtin_expm1f", "ff", N),
+        row(EXPM1L, "__builtin_expm1l", "LdLd", N),
+        row(FREXP, "__builtin_frexp", "ddi*", N),
+        row(FREXPF, "__builtin_frexpf", "ffi*", N),
+        row(FREXPL, "__builtin_frexpl", "LdLdi*", N),
+        row(LDEXP, "__builtin_ldexp", "ddi", N),
+        row(LDEXPF, "__builtin_ldexpf", "ffi", N),
+        row(LDEXPL, "__builtin_ldexpl", "LdLdi", N),
+        row(POW, "__builtin_pow", "ddd", N),
+        row(POWF, "__builtin_powf", "fff", N),
+        row(POWL, "__builtin_powl", "LdLdLd", N),
+        row(SCALBN, "__builtin_scalbn", "ddi", N),
+        row(SCALBNF, "__builtin_scalbnf", "ffi", N),
+        row(SCALBNL, "__builtin_scalbnl", "LdLdi", N),
+        row(SCALBLN, "__builtin_scalbln", "ddLi", N),
+        row(SCALBLNF, "__builtin_scalblnf", "ffLi", N),
+        row(SCALBLNL, "__builtin_scalblnl", "LdLdLi", N),
+        row(LAUNDER, "__builtin_launder", "v*v*", N | T),
+        row(OPERATOR_NEW, "__builtin_operator_new", "v*z", C | T),
+        row(OPERATOR_DELETE, "__builtin_operator_delete", "vv*", N | T),
+        row(UNREACHABLE, "__builtin_unreachable", "v", N | R),
     ];
 
     /// The builtin function spelled `name`, if kiln declares one.
     pub fn by_name(name: &str) -> Option<u32> {
-        ALL.iter().find(|e| e.1 == name).map(|e| e.0)
+        ALL.iter().find(|e| e.name == name).map(|e| e.id)
+    }
+
+    /// The table row of builtin `id`.
+    pub fn info(id: u32) -> Option<&'static Info> {
+        ALL.iter().find(|e| e.id == id)
+    }
+
+    /// Whether builtin `id` has custom type-checking.
+    pub fn is_custom(id: u32) -> bool {
+        info(id).is_some_and(|i| i.attrs & attr::CUSTOM != 0)
     }
 }

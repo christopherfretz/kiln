@@ -82,6 +82,18 @@ Constructors:
   using-directives.
 - **Qualified lookup** ([basic.lookup.qual]) searches one context's
   table, plus that namespace's using-directives.
+- **Argument-dependent lookup** ([basic.lookup.argdep]; WP-068a,
+  `overload/adl.rs`, spec/sema-overload.md §2.2): a call's unqualified,
+  unparenthesized callee whose ordinary lookup found only namespace-scope
+  functions or function templates (no block-scope declaration, no class
+  member, no implicit builtin: `call_uses_adl`) also searches the
+  arguments' associated namespaces and classes (`assoc_arg`), ignoring
+  using-directives. A friend first declared in a class is entered in its
+  namespace's table with `LookupFlags::ADL_ONLY`: ordinary and qualified
+  lookup skip it, ADL finds it when its class is associated. Results
+  already found are compared by first declaration. For overload candidate
+  order the unqualified results are listed newest first
+  (`overload_name_ref`); `lookup_name` itself keeps storage order.
 - **Using-shadows** (§4.8) are looked through. `Found` has two parallel
   vectors:
   - `decls`: the entities, shadows stripped (`AstBuilder::strip_shadow`).

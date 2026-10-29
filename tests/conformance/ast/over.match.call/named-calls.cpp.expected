@@ -1,0 +1,71 @@
+TranslationUnitDecl
+|-NamespaceDecl N
+| |-CXXRecordDecl referenced struct A definition
+| |-FunctionDecl used f 'int (A, int)'
+| | |-ParmVarDecl 'A':'N::A'
+| | |-ParmVarDecl 'int'
+| | `-CompoundStmt
+| |   `-ReturnStmt
+| |     `-IntegerLiteral 'int' 2
+| `-FunctionDecl used f 'int (A, double)'
+|   |-ParmVarDecl 'A':'N::A'
+|   |-ParmVarDecl 'double'
+|   `-CompoundStmt
+|     `-ReturnStmt
+|       `-IntegerLiteral 'int' 3
+|-FunctionDecl used g 'int (int)'
+| |-ParmVarDecl 'int'
+| `-CompoundStmt
+|   `-ReturnStmt
+|     `-IntegerLiteral 'int' 3
+|-FunctionDecl used g 'int (double)'
+| |-ParmVarDecl 'double'
+| `-CompoundStmt
+|   `-ReturnStmt
+|     `-IntegerLiteral 'int' 4
+|-FunctionDecl used g 'int (const char *)'
+| |-ParmVarDecl 'const char *'
+| `-CompoundStmt
+|   `-ReturnStmt
+|     `-IntegerLiteral 'int' 5
+`-FunctionDecl t 'int (N::A, short)'
+  |-ParmVarDecl used a 'N::A'
+  |-ParmVarDecl used s 'short'
+  `-CompoundStmt
+    `-ReturnStmt
+      `-BinaryOperator 'int' '+'
+        |-BinaryOperator 'int' '+'
+        | |-BinaryOperator 'int' '+'
+        | | |-BinaryOperator 'int' '+'
+        | | | |-CallExpr 'int'
+        | | | | |-ImplicitCastExpr 'int (*)(int)' <FunctionToPointerDecay>
+        | | | | | `-DeclRefExpr 'int (int)' lvalue Function 'g' 'int (int)'
+        | | | | `-ImplicitCastExpr 'int' <IntegralCast>
+        | | | |   `-ImplicitCastExpr 'short' <LValueToRValue>
+        | | | |     `-DeclRefExpr 'short' lvalue ParmVar 's' 'short'
+        | | | `-CallExpr 'int'
+        | | |   |-ImplicitCastExpr 'int (*)(double)' <FunctionToPointerDecay>
+        | | |   | `-DeclRefExpr 'int (double)' lvalue Function 'g' 'int (double)'
+        | | |   `-ImplicitCastExpr 'double' <FloatingCast>
+        | | |     `-FloatingLiteral 'float' 1.5e0
+        | | `-CallExpr 'int'
+        | |   |-ImplicitCastExpr 'int (*)(const char *)' <FunctionToPointerDecay>
+        | |   | `-DeclRefExpr 'int (const char *)' lvalue Function 'g' 'int (const char *)'
+        | |   `-ImplicitCastExpr 'const char *' <ArrayToPointerDecay>
+        | |     `-StringLiteral 'const char[2]' lvalue "x"
+        | `-CallExpr 'int'
+        |   |-ImplicitCastExpr 'int (*)(A, int)' <FunctionToPointerDecay>
+        |   | `-DeclRefExpr 'int (A, int)' lvalue Function 'f' 'int (A, int)'
+        |   |-CXXConstructExpr 'A':'N::A' 'void (const A &) noexcept'
+        |   | `-ImplicitCastExpr 'const A':'const N::A' lvalue <NoOp>
+        |   |   `-DeclRefExpr 'N::A' lvalue ParmVar 'a' 'N::A'
+        |   `-ImplicitCastExpr 'int' <IntegralCast>
+        |     `-CharacterLiteral 'char' 99
+        `-CallExpr 'int'
+          |-ImplicitCastExpr 'int (*)(A, double)' <FunctionToPointerDecay>
+          | `-DeclRefExpr 'int (A, double)' lvalue Function 'f' 'int (A, double)'
+          |-CXXConstructExpr 'A':'N::A' 'void (const A &) noexcept'
+          | `-ImplicitCastExpr 'const A':'const N::A' lvalue <NoOp>
+          |   `-DeclRefExpr 'N::A' lvalue ParmVar 'a' 'N::A'
+          `-ImplicitCastExpr 'double' <FloatingCast>
+            `-FloatingLiteral 'float' 2.5e0

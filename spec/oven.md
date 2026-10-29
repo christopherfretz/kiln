@@ -274,6 +274,69 @@ match the evaluations (sums, maximum for `peak_bytes` and `peak_arena`, count fo
 `evaluations`; `wall_us` is not cross-checked, since rounding makes its sum
 inexact). They ignore unknown keys (so the format can grow) and blank lines.
 
+### Builtins — normative (WP-088)
+The §9.5 builtin functions of spec/sema-templates.md, with clang 19's
+results and notes. A builtin is one `Op::Builtin`
+instruction (`aux` = the `bi` kind | sub-kind << 8; six operand words:
+three argument registers, the destination, and two immediates such as
+the element type), so a `memcpy` of 4096 `int`s or a `strlen` of a long
+literal is one instruction and one step, not an interpreted loop.
+- **Folded at compile time:** `__builtin_huge_val*`, `__builtin_nan*` and
+  `__builtin_nans*` (the argument must be a string literal,
+  parsed as clang's `StringRef::getAsInteger(0)`: decimal, `0` octal,
+  `0x` hex, `0b` binary, `0o` octal; an empty string is payload 0; any
+  other argument is not a constant), and the source-location builtins (below).
+- **Not constant-evaluable** (a trap with "subexpression not valid in a
+  constant expression", as clang 19): `__builtin_signbit`, the six
+  ordered comparisons, the math functions; `__builtin_unreachable` when
+  reached; `__builtin_operator_new`/`_delete` (WP-061b; clang's
+  untyped-memory note).
+- **Bits** (`bi::CLZ`/`CTZ`/`POPCOUNT`/`BSWAP`): any width up to 128; a
+  zero operand to `clz`/`ctz` without the `g` forms' fallback is not a
+  constant (no note, as clang).
+- **Classification** (`bi::FP_CLASS`): `isfinite`/`isinf`/`isnan`/
+  `isnormal` on every float format, x87 and binary128 through
+  `softfloat.rs`.
+- **Strings and memory** (`bi::STRLEN`, `MEMCMP`, `MEMCHR`, `MEMCPY`, each
+  with a `WIDE` or `MOVE` sub-kind): clang's typed semantics. `strlen`,
+  `memcmp` and `memchr` read element by element and fail with clang's
+  one-past-the-end / uninitialized notes; `memcmp` and `memchr` on
+  non-character element types report `note_constexpr_memcmp_unsupported`
+  / `memchr_unsupported`. `memcpy`/`memmove` need both pointers to
+  designate arrays of the same trivially copyable type with enough
+  elements left and a size that is a multiple of the element size
+  (`note_constexpr_memcpy_*`: null, type pun, non-trivial, overlap for
+  `memcpy`, unsupported); `memmove` handles overlap in either direction.
+  The fast path compares, scans or moves bytes directly when the
+  elements are one byte (or, for `memcpy`/`memmove`, scalars) and no
+  union is involved; any irregularity falls back to the element-wise
+  loop, which reports the exact fault.
+- **`__builtin_bit_cast`** (`bi::BIT_CAST`; `compile/bitcast.rs`,
+  `vm/bitcast.rs`): clang's `checkBitCastConstexprEligibilityType` runs at
+  compile time (unions, pointers, member pointers, `volatile` and
+  reference members are rejected with clang's subobject notes; so are a
+  source bit-field and classes with bases). The VM then reads the source
+  value representation into a byte buffer through the `kiln_abi` layout
+  (padding and uninitialized scalars stay indeterminate) and builds the
+  destination scalar by scalar: an indeterminate byte may only initialize
+  `unsigned char`, unsigned plain `char` or `std::byte`, a `bool` byte
+  must be 0 or 1. Dense, fully initialized types copy all bytes at once.
+  `TO_MEM` builds an aggregate result in place; `READ_ONLY` only reads
+  the source (clang reads before its type checks).
+- **Temporaries:** a `MaterializeTemporaryExpr` with full-expression
+  storage (a `bit_cast` or builtin operand bound to a reference
+  parameter) is an lvalue in the Oven, its object living until the end of
+  the full-expression (the general rule of "Classes", Temporaries; a
+  temporary of const-qualified non-class type is a const object).
+- **Source location** (`ExprKind::SourceLocExpr`): sema has computed the
+  values (spec/ast.md §5.8). `LINE`/`COLUMN` compile to constants; the
+  pointer kinds compile to one `Op::Builtin` with `bi::THAW_PTR`, whose
+  immediates are the frozen pointer (`ConstValueId`) and its type; the VM
+  thaws it (`thaw_ptr`, memoized per value), so every evaluation sees the
+  same string and `__impl` objects. Inside a `CXXDefaultArgExpr` whose
+  call site sema recorded, the outermost such default argument supplies
+  the values.
+
 ### Memoization — normative for M2
 - A function is memoized when its parameters (at most 4) are integral,
   `bool` or floating and its result is such a scalar (not a pointer, not

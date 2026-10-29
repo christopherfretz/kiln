@@ -190,6 +190,61 @@ ops! {
     // [dst, mp, trap]: the function of a pointer to member function
     // (`trap`: the note for a virtual one, dispatch lands with WP-077)
     MpFn = 3,
+    // [dst, a, b, c, t1, t2]: a library builtin evaluated natively
+    // (spec/oven.md "Builtins"); aux = kind (`bi`) | sub << 8, `a`..`c`
+    // registers, `t1`/`t2` types (`bi::DYN`: the designated object's).
+    Builtin = 6,
+}
+
+/// The kinds of `Builtin` and their operands.
+pub(crate) mod bi {
+    /// `t1`/`t2`: no static type; the type of the designated object.
+    pub const DYN: u32 = u32::MAX;
+    /// `clz`/`clzg` of `a`; sub = width | has fallback (`b`) << 8.
+    pub const CLZ: u32 = 0;
+    /// `ctz`/`ctzg`, as `CLZ`.
+    pub const CTZ: u32 = 1;
+    /// `popcount`/`popcountg` of `a`; sub = width.
+    pub const POPCOUNT: u32 = 2;
+    /// `bswap` of `a`; sub = width.
+    pub const BSWAP: u32 = 3;
+    /// Floating-point classification of `a`; sub = float kind | class << 4.
+    pub const FP_CLASS: u32 = 4;
+    /// `strlen`/`wcslen` of `a`; `t1` the character type.
+    pub const STRLEN: u32 = 5;
+    /// `memcmp`/`wmemcmp` of `a` and `b` over `c` elements; `t1`/`t2`
+    /// the element types; sub = `WIDE`.
+    pub const MEMCMP: u32 = 6;
+    /// `memchr`/`char_memchr`/`wmemchr` of `b` in `c` elements at `a`;
+    /// `t1` the element type; sub = `WIDE`.
+    pub const MEMCHR: u32 = 7;
+    /// `memcpy`/`memmove` of `c` bytes from `b` to `a`; `t1`/`t2` the
+    /// destination/source element types; sub = `MOVE`.
+    pub const MEMCPY: u32 = 8;
+    /// `__builtin_bit_cast` of the object at `a` (type `t1`) to `t2`:
+    /// into the object at `b` when sub = `TO_MEM`, else as `dst`.
+    pub const BIT_CAST: u32 = 9;
+    /// The pointer stored as constant `t1` (a raw `ConstValueId`) of
+    /// pointer type `t2`, thawed: the value of a source-location builtin
+    /// (spec/oven.md, Builtins).
+    pub const THAW_PTR: u32 = 10;
+
+    /// sub of `MEMCMP`/`MEMCHR`: the `w` form (elements compared as
+    /// `wchar_t`, no narrow-character restriction).
+    pub const WIDE: u32 = 1;
+    /// sub of `MEMCPY`: `memmove` (overlap allowed).
+    pub const MOVE: u32 = 1;
+    /// sub of `BIT_CAST`: the result initializes the object at `b`.
+    pub const TO_MEM: u32 = 1;
+    /// sub of `BIT_CAST`: only read the source object (its faults come
+    /// before the compiler's static ones).
+    pub const READ_ONLY: u32 = 2;
+
+    /// Classes of `FP_CLASS`.
+    pub const FINITE: u32 = 0;
+    pub const INF: u32 = 1;
+    pub const NAN: u32 = 2;
+    pub const NORMAL: u32 = 3;
 }
 
 /// The aux of `New`.

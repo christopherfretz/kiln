@@ -3,10 +3,9 @@
 // scope; a qualified friend must name an existing function.
 //@ expect: compile-fail
 //@ strict-diags
-//@ xfail(kiln): needs WP-068a ADL (hidden friend call)
-//@ diag: 19:6 error "no member named 'f' in namespace 'N'"
-//@ diag: 21:12 error "no member named 'g' in namespace 'N'"
-//@ diag: 25:18 error "friend declaration of 'nope' does not match any declaration in namespace 'N'"
+//@ diag: 18:6 error "no member named 'f' in namespace 'N'"
+//@ diag: 20:12 error "no member named 'g' in namespace 'N'"
+//@ diag: 24:18 error "friend declaration of 'nope' does not match any declaration in namespace 'N'"
 namespace N {
 struct A {
   friend void f();

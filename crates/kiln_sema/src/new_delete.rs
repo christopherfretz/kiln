@@ -64,7 +64,7 @@ pub struct NewPlacement {
 #[derive(Debug, Default)]
 pub(crate) struct GlobalOps {
     declared: bool,
-    align_val_t: Option<QualType>,
+    pub(crate) align_val_t: Option<QualType>,
 }
 
 impl Sema<'_, '_> {
@@ -179,7 +179,7 @@ impl Sema<'_, '_> {
     }
 
     /// The parameter types of function `f` and whether it is variadic.
-    fn fn_params(&self, f: DeclId) -> Option<(Vec<QualType>, bool)> {
+    pub(crate) fn fn_params(&self, f: DeclId) -> Option<(Vec<QualType>, bool)> {
         let ty = self.ast.decls.get(f).ty()?;
         // The written (sugared) proto when the type is one, so that
         // diagnostics print `std::align_val_t` as clang does.
@@ -850,7 +850,7 @@ impl Sema<'_, '_> {
     /// placement argument `a` against parameter type `p`: `Some(true)` for
     /// an exact match, `Some(false)` for a standard conversion, `None`
     /// when not viable.
-    fn placement_arg_match(&self, a: ExprId, p: QualType) -> Option<bool> {
+    pub(crate) fn placement_arg_match(&self, a: ExprId, p: QualType) -> Option<bool> {
         let t = &self.ast.types;
         let at = conv::strip_cv(self, self.ast.exprs.get(a).ty());
         let p = if t.is_reference(p) { t.pointee(p).unwrap_or(p) } else { p };

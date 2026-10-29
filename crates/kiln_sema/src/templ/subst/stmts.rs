@@ -20,6 +20,9 @@ impl Substituter<'_, '_, '_> {
     /// body is still checked, as clang does.
     pub fn stmt(&mut self, s: StmtId) -> StmtId {
         let loc = self.sema.ast.stmts.get(s).loc();
+        if self.check_stack(|_| loc).is_err() {
+            return self.sema.act_on_null_stmt(loc);
+        }
         match self.stmt_node(s) {
             Ok(x) => x,
             Err(SubstFail) => self.sema.act_on_null_stmt(loc),

@@ -203,7 +203,7 @@ impl Sema<'_, '_> {
     /// An expression statement ([stmt.expr]): `e` is a discarded-value
     /// full-expression.
     pub fn act_on_expr_stmt(&mut self, e: ExprId) -> StmtId {
-        if !self.check_builtin_fn_use(e) {
+        if !self.check_builtin_fn_use(e) && !self.check_overload_use(e) {
             self.diagnose_unused(e);
         }
         let e = self.act_on_full_expr(e);
@@ -216,11 +216,7 @@ impl Sema<'_, '_> {
             Ok(c) => c,
             Err(err) => {
                 let loc = self.ast.exprs.get(e).loc();
-                let mut d = self.diag(err.id, loc);
-                for a in err.args {
-                    d = d.arg(a);
-                }
-                self.emit(d);
+                self.emit(err.diag_at(self, loc));
                 e
             }
         };
@@ -251,7 +247,8 @@ impl Sema<'_, '_> {
                 let cv = self.int_const(QualType::BOOL, i128::from(value));
                 self.builder().constant_expr(c, Some(cv))
             }
-            Err(f) => {
+            Err(mut f) => {
+                let at = Self::fold_lone_invalid(&mut f, at);
                 let d = self.diag(DiagId::sema_expr_not_cce, at).arg("constexpr if condition");
                 let d = Self::with_failure_notes(d, f);
                 self.emit(d);
@@ -449,10 +446,11 @@ impl Sema<'_, '_> {
                 }
                 ce
             }
-            Err(f) => {
+            Err(mut f) => {
                 // [stmt.switch]/2: a converted constant expression (clang's
                 // `CheckConvertedConstantExpression`, CCEK_CaseValue).
-                let msg = self.diag(DiagId::sema_expr_not_cce, loc).arg("case value");
+                let at = Self::fold_lone_invalid(&mut f, loc);
+                let msg = self.diag(DiagId::sema_expr_not_cce, at).arg("case value");
                 let d = Self::with_failure_notes(msg, f);
                 self.emit(d);
                 self.act_on_full_expr(conv)
@@ -832,6 +830,12 @@ impl Sema<'_, '_> {
                 ExprKind::ImplicitCastExpr | ExprKind::ParenExpr => c = ExprId::new(cn.a()),
                 ExprKind::DeclRefExpr => {
                     let d = self.ast.exprs.decl(c);
+                    // A `noreturn` builtin (`__builtin_unreachable`).
+                    if let Some(b) = self.ast.decls.builtin_id(d) {
+                        use kiln_ast::decl::builtin;
+                        return builtin::info(b)
+                            .is_some_and(|i| i.attrs & builtin::attr::NORETURN != 0);
+                    }
                     let attrs = self.ast.attrs.of_decl(d);
                     return self
                         .ast

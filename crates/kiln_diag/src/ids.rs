@@ -534,6 +534,8 @@ diag_ids! {
     sema_need_header_before_typeid = Error (0) "you need to include <typeinfo> before using the 'typeid' operator";
     sema_typeid_no_rtti = Error (0) "use of typeid requires -frtti";
     sema_typeid_incomplete = Error (1) "'typeid' of incomplete type {0}";
+    sema_std_source_location_impl_not_found = Error (0) "'std::source_location::__impl' was not found; it must be defined before '__builtin_source_location' is called";
+    sema_std_source_location_impl_malformed = Error (0) "'std::source_location::__impl' must be standard-layout and have only two 'const char *' fields '_M_file_name' and '_M_function_name', and two integral fields '_M_line' and '_M_column'";
     sema_offsetof_record_type = Error (1) "offsetof requires struct, union, or class type, {0} invalid";
     sema_offsetof_incomplete_type = Error (1) "offsetof of incomplete type {0}";
     sema_offsetof_array_type = Error (1) "offsetof requires array type, {0} invalid";
@@ -565,7 +567,6 @@ diag_ids! {
     sema_redeclaration_different_type = Error (3) "redeclaration of '{0}' with a different type: {1} vs {2}";
     sema_redefinition_different_typedef = Error (3) "{0:typedef|type alias} redefinition with different types ({1} vs {2})";
     sema_ovl_diff_return_type = Error (0) "functions that differ only in their return type cannot be overloaded";
-    sema_overload_unsupported = Error (1) "overloading '{0}' is not supported yet";
     sema_static_non_static = Error (1) "static declaration of '{0}' follows non-static declaration";
     sema_param_redefinition = Error (1) "redefinition of parameter '{0}'";
     sema_duplicate_member = Error (1) "duplicate member '{0}'";
@@ -991,6 +992,15 @@ diag_ids! {
     sema_integer_seq_negative_length = Error (0) "integer sequences must have non-negative sequence length";
     sema_bit_cast_size_mismatch = Error (2) "__builtin_bit_cast source size does not equal destination size ({0} vs {1})";
     sema_bit_cast_not_trivially_copyable = Error (1) "__builtin_bit_cast {0:source|destination} type must be trivially copyable";
+    // Builtin function calls with custom type-checking (WP-088,
+    // spec/sema-templates.md §9.5; clang's `SemaChecking.cpp`).
+    sema_call_too_many_args_at_most = Error (2) "too many arguments to function call, expected at most {0}, have {1}";
+    sema_builtin_invalid_arg_type = Error (3) "{0:1st|2nd} argument must be {1:an unsigned integer|an 'int'} (was {2})";
+    sema_builtin_fp_class_arg = Error (1) "floating point classification requires argument of floating point type (passed in {0})";
+    sema_builtin_ordered_compare = Error (2) "ordered compare requires two args of floating point type ({0} and {1})";
+    sema_builtin_launder_invalid_arg = Error (1) "{0:non-pointer|function pointer|void pointer} argument to '__builtin_launder' is not allowed";
+    sema_builtin_new_delete_not_usual = Error (1) "call to '{0:__builtin_operator_new|__builtin_operator_delete}' selects non-usual {0:allocation|deallocation} function";
+    note_builtin_non_usual_declared_here = Note (1) "non-usual {0} declared here";
     sema_integer_seq_integral_element_type = Error (0) "integer sequences must have integral element type";
     sema_integer_seq_too_long = Error (2) "integer sequence length {0} exceeds the implementation limit of {1}";
     sema_auto_var_requires_init = Error (2) "declaration of variable '{0}' with deduced type {1} requires an initializer";
@@ -1093,6 +1103,36 @@ diag_ids! {
     sema_dangling_field_param = Warning [DanglingField] (2) "binding reference member {0} to stack allocated parameter {1}";
     sema_dangling_field_param_addr = Warning [DanglingField] (2) "initializing pointer member {0} with the stack address of parameter {1}";
     note_ref_or_ptr_member_here = Note (1) "{0:reference|pointer} member declared here";
+    // WP-086: the stack guard (spec/sema-templates.md §10.3, D1).
+    sema_stack_exhausted = Fatal (1) "kiln: stack exhausted during {0:parsing|template instantiation|constant evaluation}; reduce nesting or raise -fkiln-stack-size";
+    sema_ovl_static_nonstatic_member = Error (0) "static and non-static member functions with the same parameter types cannot be overloaded";
+    sema_ovl_no_viable_member_function_in_call = Error (1) "no matching member function for call to '{0}'";
+    sema_ovl_ambiguous_call = Error (1) "call to '{0}' is ambiguous";
+    sema_ovl_ambiguous_member_call = Error (1) "call to member function '{0}' is ambiguous";
+    sema_ovl_deleted_member_call = Error (2) "call to deleted member function '{0}'{1}";
+    sema_ovl_no_viable_ctor = Error (1) "no matching constructor for initialization of {0}";
+    sema_ovl_ambiguous_ctor = Error (1) "call to constructor of {0} is ambiguous";
+    sema_ovl_ambiguous_conversion = Error (2) "conversion from {0} to {1} is ambiguous";
+    sema_ovl_unresolvable = Error (1) "reference to overloaded function could not be resolved; did you mean to call it{0:| with no arguments}?";
+    sema_addr_ovl_no_match = Error (2) "address of overloaded function '{0}' does not match required type {1}";
+    sema_addr_ovl_ambiguous = Error (1) "address of overloaded function '{0}' is ambiguous";
+    note_ovl_candidate = Note (1) "candidate {0}";
+    note_ovl_candidate_kind_not_viable = Note (2) "candidate {0} not viable: {1}";
+    note_ovl_candidate_deleted = Note (2) "candidate {0} has been {1:explicitly|implicitly} deleted";
+    note_ovl_candidate_explicit = Note (1) "explicit {0:constructor|conversion function|deduction guide} is not a candidate";
+    note_possible_target = Note (0) "possible target for call";
+    sema_addr_ovl_cast = Error (3) "address of overloaded function '{0}' cannot be {1:cast|static_cast} to type {2}";
+    sema_addr_ovl_reinterpret = Error (2) "reinterpret_cast cannot resolve overloaded function '{0}' to type {1}";
+    note_ovl_candidate_fn_arity = Note (3) "candidate {0} has different number of parameters (expected {1} but has {2})";
+    note_ovl_candidate_fn_param = Note (4) "candidate {0} has type mismatch at {1} parameter (expected {2} but has {3})";
+    note_ovl_candidate_fn_return = Note (3) "candidate {0} has different return type ({1} expected but has {2})";
+    note_ovl_candidate_fn_noexcept = Note (1) "candidate {0} has different exception specification";
+    sema_ref_init_ambiguous = Error (2) "reference initialization of type {0} with initializer of type {1} is ambiguous";
+    sema_ovl_no_conversion_in_cast = Error (3) "no matching conversion for {0:const_cast|static_cast|reinterpret_cast|dynamic_cast|C-style cast|functional-style cast} from {1} to {2}";
+    sema_ovl_ambiguous_conversion_in_cast = Error (3) "ambiguous conversion for {0:const_cast|static_cast|reinterpret_cast|dynamic_cast|C-style cast|functional-style cast} from {1} to {2}";
+    sema_nonviable_condition_no_candidates = Error (2) "cannot convert {0} to {1} without a conversion operator";
+    sema_bad_static_cast_pointer_nonpointer = Error (2) "cannot cast from type {0} to pointer type {1}";
+    sema_bad_static_cast_member_pointer_nonmp = Error (2) "cannot cast from type {0} to member pointer type {1}";
 }
 
 impl DiagId {

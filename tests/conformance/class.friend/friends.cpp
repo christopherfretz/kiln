@@ -3,7 +3,7 @@
 // found only by argument-dependent lookup.
 //@ expect: run
 //@ stdout: 3 4 5 6
-//@ xfail(kiln): needs WP-068a ADL (hidden friend call) and WP-079 codegen of constructor calls
+//@ xfail(kiln): needs WP-079 codegen of constructor calls
 extern "C" int printf(const char*, ...);
 class A {
   int v;

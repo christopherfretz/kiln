@@ -153,7 +153,7 @@ pub fn is_qualification_convertible(s: &Sema<'_, '_>, from: QualType, to: QualTy
 
 /// The function type `f` without its non-throwing exception
 /// specification, or `None` if `f` is not a non-throwing function type.
-fn drop_noexcept(s: &mut Sema<'_, '_>, f: QualType) -> Option<QualType> {
+pub(crate) fn drop_noexcept(s: &mut Sema<'_, '_>, f: QualType) -> Option<QualType> {
     let p = *s.ast.types.proto(f)?;
     if !matches!(s.ast.types.exc_spec(&p), ExcSpec::Nothrow) {
         return None;

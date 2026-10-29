@@ -118,7 +118,7 @@ Implemented: -E -P -C -CC -dM -o -x -std= -D -U -I -isystem -iquote
 -fsyntax-only -fdump-ast[=...] -fdump-ast-filter= -fconstexpr-steps=
 -fconstexpr-depth= -fconstexpr-memory= -fconstexpr-backtrace-limit=
 -fconstexpr-report= -ftemplate-depth= -ftemplate-backtrace-limit=
--fkiln-instantiation-report[=all|json] -c -S -emit-llvm -O<n> -g (ignored) -l -L -Wl,
+-fkiln-instantiation-report[=all|json] -fkiln-stack-size= -c -S -emit-llvm -O<n> -g (ignored) -l -L -Wl,
 -fuse-ld= -static -nostdlib -shared -rdynamic -pie -no-pie -pthread -###
 -v --version.
 See spec/driver.md.

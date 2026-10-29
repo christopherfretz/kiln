@@ -1,0 +1,81 @@
+TranslationUnitDecl
+|-CXXRecordDecl referenced struct S definition
+| |-CXXMethodDecl used f 'int (int)'
+| | `-ParmVarDecl 'int'
+| |-CXXMethodDecl used f 'double (double)'
+| | `-ParmVarDecl 'double'
+| |-CXXMethodDecl used g 'int () const'
+| |-CXXMethodDecl used g 'int ()'
+| |-CXXMethodDecl used h 'int (int)' static
+| | `-ParmVarDecl 'int'
+| |-CXXMethodDecl h 'int (double)'
+| | `-ParmVarDecl 'double'
+| |-CXXMethodDecl use 'int () const' implicit-inline
+| | `-CompoundStmt
+| |   `-ReturnStmt
+| |     `-BinaryOperator 'int' '+'
+| |       |-CXXMemberCallExpr 'int'
+| |       | `-MemberExpr '<bound member function type>' ->g
+| |       |   `-CXXThisExpr 'const S *' implicit this
+| |       `-CallExpr 'int'
+| |         |-ImplicitCastExpr 'int (*)(int)' <FunctionToPointerDecay>
+| |         | `-DeclRefExpr 'int (int)' lvalue CXXMethod 'h' 'int (int)'
+| |         `-IntegerLiteral 'int' 1
+| `-CXXMethodDecl use2 'int ()' implicit-inline
+|   `-CompoundStmt
+|     `-ReturnStmt
+|       `-BinaryOperator 'int' '+'
+|         |-BinaryOperator 'int' '+'
+|         | |-CXXMemberCallExpr 'int'
+|         | | `-MemberExpr '<bound member function type>' ->g
+|         | |   `-CXXThisExpr 'S *' implicit this
+|         | `-CXXMemberCallExpr 'int'
+|         |   |-MemberExpr '<bound member function type>' ->f
+|         |   | `-CXXThisExpr 'S *' implicit this
+|         |   `-IntegerLiteral 'int' 2
+|         `-CallExpr 'int'
+|           |-ImplicitCastExpr 'int (*)(int)' <FunctionToPointerDecay>
+|           | `-DeclRefExpr 'int (int)' lvalue CXXMethod 'h' 'int (int)'
+|           `-IntegerLiteral 'int' 3
+`-FunctionDecl t 'int (S, const S &, S *)'
+  |-ParmVarDecl used s 'S'
+  |-ParmVarDecl used cs 'const S &'
+  |-ParmVarDecl used p 'S *'
+  `-CompoundStmt
+    `-ReturnStmt
+      `-ImplicitCastExpr 'int' <FloatingToIntegral>
+        `-BinaryOperator 'double' '+'
+          |-BinaryOperator 'double' '+'
+          | |-BinaryOperator 'double' '+'
+          | | |-BinaryOperator 'double' '+'
+          | | | |-BinaryOperator 'double' '+'
+          | | | | |-ImplicitCastExpr 'double' <IntegralToFloating>
+          | | | | | `-CXXMemberCallExpr 'int'
+          | | | | |   |-MemberExpr '<bound member function type>' .f
+          | | | | |   | `-DeclRefExpr 'S' lvalue ParmVar 's' 'S'
+          | | | | |   `-IntegerLiteral 'int' 1
+          | | | | `-CXXMemberCallExpr 'double'
+          | | | |   |-MemberExpr '<bound member function type>' ->f
+          | | | |   | `-ImplicitCastExpr 'S *' <LValueToRValue>
+          | | | |   |   `-DeclRefExpr 'S *' lvalue ParmVar 'p' 'S *'
+          | | | |   `-FloatingLiteral 'double' 2e0
+          | | | `-ImplicitCastExpr 'double' <IntegralToFloating>
+          | | |   `-CXXMemberCallExpr 'int'
+          | | |     `-MemberExpr '<bound member function type>' .g
+          | | |       `-DeclRefExpr 'const S' lvalue ParmVar 'cs' 'const S &'
+          | | `-ImplicitCastExpr 'double' <IntegralToFloating>
+          | |   `-CXXMemberCallExpr 'int'
+          | |     `-MemberExpr '<bound member function type>' .g
+          | |       `-DeclRefExpr 'S' lvalue ParmVar 's' 'S'
+          | `-ImplicitCastExpr 'double' <IntegralToFloating>
+          |   `-CallExpr 'int'
+          |     |-ImplicitCastExpr 'int (*)(int)' <FunctionToPointerDecay>
+          |     | `-MemberExpr 'int (int)' lvalue .h
+          |     |   `-DeclRefExpr 'S' lvalue ParmVar 's' 'S'
+          |     `-IntegerLiteral 'int' 1
+          `-ImplicitCastExpr 'double' <IntegralToFloating>
+            `-CXXMemberCallExpr 'int'
+              |-ParenExpr '<bound member function type>'
+              | `-MemberExpr '<bound member function type>' .f
+              |   `-DeclRefExpr 'S' lvalue ParmVar 's' 'S'
+              `-IntegerLiteral 'int' 3

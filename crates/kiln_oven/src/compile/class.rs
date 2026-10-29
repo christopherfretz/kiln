@@ -162,8 +162,16 @@ impl Compiler<'_> {
     /// the end of the enclosing full-expression ([class.temporary]/4);
     /// returns the register holding its address.
     pub(super) fn materialize(&mut self, e: ExprId, ty: OTy) -> u32 {
+        self.materialize_as(e, ty, false)
+    }
+
+    /// `materialize`, the temporary const when `is_const` (a class
+    /// object only once constructed, [class.ctor.general]/5: its const
+    /// type is left to its destructor's `this`).
+    fn materialize_as(&mut self, e: ExprId, ty: OTy, is_const: bool) -> u32 {
+        let is_const = is_const && self.is_late_const(ty).is_none();
         let r = self.reg();
-        self.alloc(r, ty, Origin::Temp(e), false, e);
+        self.alloc(r, ty, Origin::Temp(e), is_const, e);
         self.init(e, r, ty);
         let loc = self.begin(e);
         self.push_cleanup(r, ty, 0, loc);
@@ -184,7 +192,10 @@ impl Compiler<'_> {
             return Place::Mem(r);
         }
         match storage {
-            StorageDuration::FullExpression => Place::Mem(self.materialize(x, ty)),
+            StorageDuration::FullExpression => {
+                let is_const = super::const_object(self.ast(), self.ast().exprs.get(e).ty());
+                Place::Mem(self.materialize_as(x, ty, is_const))
+            }
             // Extended by a variable outside this evaluation, or by one
             // whose storage was not preallocated: lives until the
             // evaluation ends.

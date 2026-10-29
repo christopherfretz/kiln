@@ -12,13 +12,13 @@ use kiln_ast::{Ast, DeclId, ExprId, QualType};
 use kiln_source::Loc;
 
 use crate::arith::{self, FloatErr, IntErr};
-use crate::compile::{FState, Site, skip_parens};
+use crate::compile::{FState, Site, designator_type, skip_parens};
 use crate::failure::Note;
 use crate::kbc::{Op, ak};
 use crate::mem::{MemFault, Origin, Ptr, Sp, flags};
 use crate::ty::{OTy, TyKind};
 use crate::value::var_info;
-use crate::vm::{BoundErr, Fault, value_len};
+use crate::vm::{BiFault, BoundErr, Fault, value_len};
 use crate::{Oven, SemaBridge};
 
 /// clang's default `-fconstexpr-backtrace-limit`.
@@ -191,6 +191,7 @@ impl Oven {
                 };
                 (site.loc, format!("cannot allocate array; evaluated array bound {v} {what}"))
             }
+            Fault::Bi(f) => (site.loc, self.bi_msg(ast, site, f)),
             Fault::Callee(f) => {
                 let func = &self.funcs[f as usize];
                 let d = func.decl.unwrap_or_else(|| DeclId::new(0));
@@ -211,6 +212,77 @@ impl Oven {
         self.call_stack(ast, &mut notes);
         notes.extend(extra);
         notes
+    }
+
+    /// The note of a library builtin's failure (clang's
+    /// `note_constexpr_memcpy_*`, `note_constexpr_mem{cmp,chr}_unsupported`).
+    /// A designated type is printed as the argument's static pointee (with
+    /// its qualifiers, as clang's designator type) when it has one.
+    fn bi_msg(&self, ast: &Ast, site: Site, f: BiFault) -> String {
+        match f {
+            BiFault::CastBitfield => {
+                return "constexpr bit_cast involving bit-field is not yet supported".into();
+            }
+            BiFault::CastIndet { t } => {
+                let chr = if ast.types.target().char_signed { " or" } else { ", 'char', or" };
+                return format!(
+                    "indeterminate value can only initialize an object of type 'unsigned char'{chr} 'std::byte'; '{}' is invalid",
+                    self.tname(ast, t)
+                );
+            }
+            BiFault::CastUnrep { v } => {
+                return format!("value {v} cannot be represented in type 'bool'");
+            }
+            _ => {}
+        }
+        let arg_ty = |i: usize, t: OTy| {
+            site.e
+                .and_then(|e| {
+                    let args = ast.lists.get(ast.exprs.call_args(e));
+                    args.get(i).and_then(|&a| designator_type(ast, ExprId::new(a)))
+                })
+                .map_or_else(|| self.tname(ast, t), |q| Self::qname(ast, q))
+        };
+        let op = |mv: bool| if mv { "memmove" } else { "memcpy" };
+        let end = |src: bool| if src { "source" } else { "destination" };
+        match f {
+            BiFault::CopyNull { mv, src } => format!("{} of '{}' is nullptr", end(src), op(mv)),
+            BiFault::CopyPun { mv, src, dst } => format!(
+                "cannot constant evaluate '{}' from object of type '{}' to object of type '{}'",
+                op(mv),
+                arg_ty(1, src),
+                arg_ty(0, dst)
+            ),
+            BiFault::CopyNontrivial { mv, t } => format!(
+                "cannot constant evaluate '{}' between objects of non-trivially-copyable type '{}'",
+                op(mv),
+                arg_ty(0, t)
+            ),
+            BiFault::CopyOverlap => "'memcpy' between overlapping memory regions".into(),
+            BiFault::CopySize { mv, t, n, size } => format!(
+                "'{}' not supported: size to copy ({n}) is not a multiple of size of element type '{}' ({size})",
+                op(mv),
+                arg_ty(0, t)
+            ),
+            BiFault::CopyRange { mv, src, t, n } => format!(
+                "'{}' not supported: {} is not a contiguous array of at least {n} elements of type '{}'",
+                op(mv),
+                end(src),
+                arg_ty(0, t)
+            ),
+            BiFault::CmpType { t1, t2 } => format!(
+                "constant evaluation of '__builtin_memcmp' between arrays of types '{}' and '{}' is not supported; only arrays of narrow character types can be compared",
+                arg_ty(0, t1),
+                arg_ty(1, t2)
+            ),
+            BiFault::ChrType { t } => format!(
+                "constant evaluation of '__builtin_memchr' on array of type '{}' is not supported; only arrays of narrow character types can be searched",
+                arg_ty(0, t)
+            ),
+            BiFault::CastBitfield | BiFault::CastIndet { .. } | BiFault::CastUnrep { .. } => {
+                String::new()
+            }
+        }
     }
 
     fn call_stack(&self, ast: &Ast, notes: &mut Vec<Note>) {

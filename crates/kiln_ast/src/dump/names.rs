@@ -552,7 +552,18 @@ impl<'a> AstNames<'a> {
                 out.push_str(if exprs.bool_value(e) { "true" } else { "false" });
             }
             ExprKind::CXXNullPtrLiteralExpr => out.push_str("nullptr"),
-            ExprKind::DeclRefExpr => self.write_name(exprs.decl(e), out),
+            // clang's `VisitDeclRefExpr`: the qualifier as written, then
+            // the name.
+            ExprKind::DeclRefExpr => {
+                if let Some(q) = exprs.decl_ref_extra(e).and_then(|x| x.qualifier) {
+                    write_nns(&ast.types, self, q, out);
+                }
+                self.write_name(exprs.decl(e), out);
+            }
+            ExprKind::SourceLocExpr => {
+                out.push_str(exprs.source_loc_kind(e).spelling());
+                out.push_str("()");
+            }
             ExprKind::MemberExpr => {
                 self.expr(exprs.operand(e), d, out);
                 out.push_str(if n.has(ExprFlags::ARROW) { "->" } else { "." });

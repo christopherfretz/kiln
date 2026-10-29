@@ -31,9 +31,11 @@ pub mod lookup;
 pub mod names;
 pub mod new_delete;
 mod oven_bridge;
+pub mod overload;
 mod rtti;
 pub mod scope;
 mod side_effects;
+pub mod stack_guard;
 pub mod stmt;
 pub mod target;
 pub mod templ;
@@ -138,10 +140,14 @@ pub struct Sema<'a, 'sm> {
     /// pattern: instantiation checks the group's deductions again
     /// ([dcl.spec.auto.general]/8).
     pub(crate) group_placeholders: kiln_source::fx::FxHashMap<DeclId, (QualType, Loc)>,
-    /// Set while [`Sema::act_on_call_name`] builds an unqualified callee
-    /// inside a template: a function it names is not marked referenced
-    /// until the call is known to be non-dependent ([temp.dep.candidate]).
+    /// Set while [`Sema::act_on_call_name`] builds an unqualified callee:
+    /// a function it names is not marked referenced until the call is
+    /// known to be non-dependent ([temp.dep.candidate]), and ADL applies
+    /// (spec/sema-overload.md §2.2).
     pub(crate) deferring_call_ref: bool,
+    /// Overload resolution's pooled candidate sets and counters
+    /// (spec/sema-overload.md §1.4).
+    pub(crate) ovl: overload::OverloadScratch,
     /// Callees whose function is not marked referenced yet (see
     /// `deferring_call_ref`), resolved by [`Sema::act_on_call`].
     pub(crate) deferred_call_refs: Vec<(ExprId, DeclId)>,
@@ -216,6 +222,8 @@ pub struct Sema<'a, 'sm> {
     /// were already noted (clang notes them on the first abstract-type
     /// diagnostic per class only; WP-078a).
     pub(crate) abstract_noted: kiln_source::fx::FxHashSet<DeclId>,
+    /// State of the source-location builtins (`builtins.rs`).
+    pub(crate) srcloc: builtins::SrcLocCache,
 }
 
 impl<'a, 'sm> Sema<'a, 'sm> {
@@ -268,6 +276,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             declared_returns: kiln_source::fx::FxHashMap::default(),
             group_placeholders: kiln_source::fx::FxHashMap::default(),
             deferring_call_ref: false,
+            ovl: overload::OverloadScratch::default(),
             deferred_call_refs: Vec::new(),
             classes: Vec::new(),
             implicit_declared: kiln_source::fx::FxHashMap::default(),
@@ -292,6 +301,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             templ: templ::TemplState::default(),
             inst: templ::InstState::default(),
             abstract_noted: kiln_source::fx::FxHashSet::default(),
+            srcloc: builtins::SrcLocCache::default(),
         }
     }
 

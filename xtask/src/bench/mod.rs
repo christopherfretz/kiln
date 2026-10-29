@@ -19,7 +19,9 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use compare::{RatioRow, ThresholdOverrides, Thresholds, Verdict};
 use entry::{BenchSpec, Entry};
-use record::{Baseline, BaselineFile, CompilerRun, Host, Measurement, Outcome, RunRecord};
+use record::{
+    Baseline, BaselineFile, CompilerRun, Host, InstCounters, Measurement, Outcome, RunRecord,
+};
 use stats::{Summary, round_to};
 
 use crate::util::oven_report::{self, Counters};
@@ -65,6 +67,12 @@ infrastructure error.
 const RUN_TIMEOUT: Duration = Duration::from_secs(300);
 /// A median this far above the minimum is reported as noisy.
 const NOISY_SPREAD_PCT: f64 = 10.0;
+
+/// The group whose kiln measurements record the `inst.*` metrics.
+const INST_GROUP: &str = "frontend";
+/// kiln's instantiation report, as NDJSON on stderr (its last line is the
+/// totals row, [`InstCounters::parse_report`]).
+const INST_FLAG: &str = "-fkiln-instantiation-report=json";
 
 /// Parsed command line.
 #[derive(Clone, Debug, PartialEq)]
@@ -487,9 +495,19 @@ fn judge_all(
     }
     let mut header =
         vec!["entry", "mode", "base ms", "ms", "time", "spread", "base MB", "MB", "mem", "status"];
-    // Constexpr counters (kiln only): columns only when some entry has them.
-    let counters =
-        test_run.entries.values().any(|o| o.measurement().is_some_and(|m| m.oven.is_some()));
+    // Constexpr and instantiation counters (kiln only): columns only when
+    // some entry has them.
+    let has = |f: fn(&Measurement) -> bool| {
+        test_run.entries.values().any(|o| o.measurement().is_some_and(f))
+    };
+    let (counters, inst) = (has(|m| m.oven.is_some()), has(|m| m.inst.is_some()));
+    if inst {
+        header.splice(9..9, ["inst", "inst±", "inst KiB", "KiB±"]);
+    } else {
+        for r in &mut rows {
+            r.drain(13..17);
+        }
+    }
     if counters {
         header.splice(9..9, ["steps", "steps±", "ev bytes", "bytes±"]);
     } else {
@@ -606,6 +624,12 @@ fn measure(cx: &Ctx<'_>, e: &Entry, spec: &BenchSpec, hash: &str, s: &Subject) -
         flag.push(r);
         cmd.arg(flag);
     }
+    // ... and for `frontend` entries its instantiation totals (the `inst.*`
+    // metrics, spec/sema-templates.md §11.4), likewise not in `flags`.
+    let inst_report = report.is_some() && e.group == INST_GROUP;
+    if inst_report {
+        cmd.arg(INST_FLAG);
+    }
     cmd.arg(&e.arg).current_dir(&cx.layout.root);
     if cx.verbose {
         eprintln!("  $ {}", Shown(&cmd));
@@ -614,6 +638,7 @@ fn measure(cx: &Ctx<'_>, e: &Entry, spec: &BenchSpec, hash: &str, s: &Subject) -
     let mut walls = Vec::with_capacity(cx.runs);
     let mut rss = Vec::with_capacity(cx.runs);
     let mut oven: Option<Counters> = None;
+    let mut inst: Option<InstCounters> = None;
     for run in 1..=cx.runs {
         if let Some(r) = &report {
             let _ = std::fs::remove_file(r);
@@ -637,18 +662,16 @@ fn measure(cx: &Ctx<'_>, e: &Entry, spec: &BenchSpec, hash: &str, s: &Subject) -
             rss.push(k);
         }
         if let Some(r) = &report {
-            match read_counters(r, e, spec) {
-                Err(why) => return Outcome::Failed(format!("run {run}: {why}")),
-                Ok(c) => match oven {
-                    Some(first) if first != c => {
-                        return Outcome::Failed(format!(
-                            "nondeterministic constexpr counters: run 1 {}, run {run} {}",
-                            first.describe(),
-                            c.describe()
-                        ));
-                    }
-                    _ => oven = Some(c),
-                },
+            let got = read_counters(r, e, spec);
+            if let Err(why) = same_every_run(&mut oven, got, run, "constexpr", Counters::describe) {
+                return Outcome::Failed(why);
+            }
+        }
+        if inst_report {
+            let got = InstCounters::parse_report(&out.stderr_str());
+            let what = "instantiation";
+            if let Err(why) = same_every_run(&mut inst, got, run, what, |c| c.describe()) {
+                return Outcome::Failed(why);
             }
         }
     }
@@ -673,12 +696,36 @@ fn measure(cx: &Ctx<'_>, e: &Entry, spec: &BenchSpec, hash: &str, s: &Subject) -
         max_rss_kb,
         oven,
         oven_missing: Vec::new(),
+        inst,
         samples_wall_ms: walls.iter().map(|&x| round_to(x, 3)).collect(),
         samples_rss_kb: rss,
         compiler: s.path.display().to_string(),
         compiler_version: s.id.version.clone(),
         host: cx.host.clone(),
     })
+}
+
+/// Records run `run`'s counters in `slot`, failing when reading them failed
+/// or when they differ from run 1's: the counters are deterministic.
+fn same_every_run<T: Copy + PartialEq>(
+    slot: &mut Option<T>,
+    got: Result<T, String>,
+    run: usize,
+    what: &str,
+    describe: impl Fn(&T) -> String,
+) -> Result<(), String> {
+    let c = got.map_err(|why| format!("run {run}: {why}"))?;
+    match slot {
+        Some(first) if *first != c => Err(format!(
+            "nondeterministic {what} counters: run 1 {}, run {run} {}",
+            describe(first),
+            describe(&c)
+        )),
+        _ => {
+            *slot = Some(c);
+            Ok(())
+        }
+    }
 }
 
 /// Reads and checks one run's constexpr report: the total line, with
@@ -742,6 +789,14 @@ fn row(
         (Some(x), Some(y)) => compare::delta_pct(f(x) as f64, f(y) as f64),
         _ => None,
     };
+    let (bi, ci) = (b.and_then(|b| b.inst), cur.and_then(|c| c.inst));
+    #[allow(clippy::cast_precision_loss)]
+    let inst_delta = |f: fn(&InstCounters) -> u64| match (&bi, &ci) {
+        (Some(x), Some(y)) => compare::delta_pct(f(x) as f64, f(y) as f64),
+        _ => None,
+    };
+    #[allow(clippy::cast_precision_loss)]
+    let kib = |n: u64| format!("{:.1}", n as f64 / 1024.0);
     vec![
         entry.id.clone(),
         spec.map_or_else(dash, |s| s.mode.as_str().to_owned()),
@@ -758,6 +813,10 @@ fn row(
         compare::pct(counter_delta(|c| c.steps)),
         co.map_or_else(dash, |c| c.bytes.to_string()),
         compare::pct(counter_delta(|c| c.bytes)),
+        ci.map_or_else(dash, |i| i.count.to_string()),
+        compare::pct(inst_delta(|i| i.count)),
+        ci.map_or_else(dash, |i| kib(i.bytes)),
+        compare::pct(inst_delta(|i| i.bytes)),
         status,
     ]
 }

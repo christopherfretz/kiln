@@ -1,0 +1,68 @@
+TranslationUnitDecl
+|-CXXRecordDecl referenced struct A definition
+| `-FieldDecl v 'int'
+|-CXXRecordDecl referenced struct C definition
+| `-CXXConversionDecl used operator int 'int () const'
+|-CXXRecordDecl referenced struct D definition
+| `-CXXConversionDecl used operator double 'double ()'
+|-CXXRecordDecl referenced struct R definition
+| `-CXXConversionDecl used operator int & 'int &()'
+|-CXXRecordDecl referenced struct B definition
+| `-CXXConversionDecl used operator A 'A ()'
+`-FunctionDecl t 'void (C, D, R, B)'
+  |-ParmVarDecl used c 'C'
+  |-ParmVarDecl used d 'D'
+  |-ParmVarDecl used r 'R'
+  |-ParmVarDecl used b 'B'
+  `-CompoundStmt
+    |-DeclStmt
+    | `-VarDecl i 'int' cinit
+    |   `-ImplicitCastExpr 'int' <UserDefinedConversion>
+    |     `-CXXMemberCallExpr 'int'
+    |       `-MemberExpr '<bound member function type>' .operator int
+    |         `-ImplicitCastExpr 'const C' lvalue <NoOp>
+    |           `-DeclRefExpr 'C' lvalue ParmVar 'c' 'C'
+    |-DeclStmt
+    | `-VarDecl j 'int' cinit
+    |   `-ImplicitCastExpr 'int' <FloatingToIntegral>
+    |     `-ImplicitCastExpr 'double' <UserDefinedConversion>
+    |       `-CXXMemberCallExpr 'double'
+    |         `-MemberExpr '<bound member function type>' .operator double
+    |           `-DeclRefExpr 'D' lvalue ParmVar 'd' 'D'
+    |-DeclStmt
+    | `-VarDecl k 'int' cinit
+    |   `-ImplicitCastExpr 'int' <LValueToRValue>
+    |     `-ImplicitCastExpr 'int' lvalue <UserDefinedConversion>
+    |       `-CXXMemberCallExpr 'int' lvalue
+    |         `-MemberExpr '<bound member function type>' .operator int &
+    |           `-DeclRefExpr 'R' lvalue ParmVar 'r' 'R'
+    |-DeclStmt
+    | `-VarDecl cr 'const int &' cinit
+    |   `-ExprWithCleanups 'const int' lvalue
+    |     `-MaterializeTemporaryExpr 'const int' lvalue extended by Var 'cr' 'const int &'
+    |       `-ImplicitCastExpr 'const int' <NoOp>
+    |         `-ImplicitCastExpr 'int' <UserDefinedConversion>
+    |           `-CXXMemberCallExpr 'int'
+    |             `-MemberExpr '<bound member function type>' .operator int
+    |               `-ImplicitCastExpr 'const C' lvalue <NoOp>
+    |                 `-DeclRefExpr 'C' lvalue ParmVar 'c' 'C'
+    |-DeclStmt
+    | `-VarDecl lr 'int &' cinit
+    |   `-ImplicitCastExpr 'int' lvalue <UserDefinedConversion>
+    |     `-CXXMemberCallExpr 'int' lvalue
+    |       `-MemberExpr '<bound member function type>' .operator int &
+    |         `-DeclRefExpr 'R' lvalue ParmVar 'r' 'R'
+    |-DeclStmt
+    | `-VarDecl a 'A' cinit
+    |   `-ImplicitCastExpr 'A' <UserDefinedConversion>
+    |     `-CXXMemberCallExpr 'A'
+    |       `-MemberExpr '<bound member function type>' .operator A
+    |         `-DeclRefExpr 'B' lvalue ParmVar 'b' 'B'
+    `-DeclStmt
+      `-VarDecl l 'long' cinit
+        `-ImplicitCastExpr 'long' <IntegralCast>
+          `-ImplicitCastExpr 'int' <UserDefinedConversion>
+            `-CXXMemberCallExpr 'int'
+              `-MemberExpr '<bound member function type>' .operator int
+                `-ImplicitCastExpr 'const C' lvalue <NoOp>
+                  `-DeclRefExpr 'C' lvalue ParmVar 'c' 'C'
