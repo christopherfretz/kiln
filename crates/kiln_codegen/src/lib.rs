@@ -22,6 +22,7 @@ mod fir;
 mod fold;
 mod func;
 mod module;
+mod new_delete;
 mod stmt;
 
 use kiln_abi::Target;

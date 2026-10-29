@@ -4,7 +4,7 @@
 
 use kiln_ast::ExprId;
 use kiln_diag::DiagId;
-use kiln_lex::{Punct, Std, TokFlags};
+use kiln_lex::{Punct, Std, TokFlags, TokKind};
 use kiln_sema::DeclaratorContext;
 use kiln_sema::declspec::{Chunk, Declarator};
 use kiln_sema::new_delete::{NewInit, NewPlacement, NewTypeId};
@@ -59,7 +59,7 @@ impl Parser<'_, '_> {
         let mut placement = None;
         let tid = if self.at(Punct::LParen) {
             let open = self.loc();
-            if self.is_type_id_start(self.pos() + 1) {
+            if self.paren_is_type_id(self.pos() + 1) {
                 self.bump();
                 let tid = self.parse_paren_new_type_id(open)?;
                 Some(tid)
@@ -104,6 +104,54 @@ impl Parser<'_, '_> {
             NewInit::None
         };
         Some(self.s.act_on_cxx_new(global, start, placement, tid, init, end))
+    }
+
+    /// clang `isTypeIdInParens` after `new (`, for the shapes that need
+    /// no tentative parse (TODO(M3)): a simple type followed by `{` or by
+    /// a `(` that cannot open an abstract declarator or parameter list
+    /// (`new (short(n), 'x') int`) starts an expression.
+    fn paren_is_type_id(&self, i: usize) -> bool {
+        if !self.is_type_id_start(i) {
+            return false;
+        }
+        let mut j = i;
+        loop {
+            let t = self.tok_at(j);
+            match self.kw_of(t) {
+                Some(Kw::Decltype | Kw::Typeof | Kw::Typename) => return true,
+                Some(Kw::Struct | Kw::Class | Kw::Union | Kw::Enum) => return true,
+                Some(k) if crate::decl::is_type_specifier_kw(k) => j += 1,
+                Some(_) => break,
+                None => match self.scan_name(j) {
+                    Some((e, kiln_sema::NameClass::Type(..), _)) if e > j => j = e,
+                    _ => break,
+                },
+            }
+        }
+        let next = self.tok_at(j);
+        if next.kind == TokKind::Punct(Punct::LBrace) {
+            return false;
+        }
+        if next.kind != TokKind::Punct(Punct::LParen) {
+            return true;
+        }
+        let after = self.tok_at(j + 1);
+        match after.kind {
+            TokKind::Punct(
+                Punct::Star
+                | Punct::Amp
+                | Punct::AmpAmp
+                | Punct::Caret
+                | Punct::RParen
+                | Punct::LSquare
+                | Punct::LParen
+                | Punct::Ellipsis,
+            ) => true,
+            _ => {
+                self.is_type_id_start(j + 1)
+                    || self.kw_of(after).is_some_and(crate::decl::is_decl_specifier_kw)
+            }
+        }
     }
 
     /// expression-list in a new-placement or new-initializer; `None`

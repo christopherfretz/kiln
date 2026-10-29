@@ -392,6 +392,21 @@ impl Fir {
         V::I(n)
     }
 
+    /// Inserts `op` before the last instruction of `b` (its terminator;
+    /// LLVM `new StoreInst(.., block->back())`), or appends it to an
+    /// empty block.
+    pub fn insert_before_last(&mut self, b: Blk, op: Op, ty: TypeId) -> V {
+        let n = self.insts.len() as u32;
+        for s in op.successors() {
+            self.blocks[s.0 as usize].uses += 1;
+        }
+        self.insts.push(Inst { op, ty, block: Some(b), md: Vec::new() });
+        let insts = &mut self.blocks[b.0 as usize].insts;
+        let at = insts.len().saturating_sub(1);
+        insts.insert(at, n);
+        V::I(n)
+    }
+
     /// Adds an incoming edge to phi `i`.
     pub fn add_incoming(&mut self, i: u32, v: V, from: Blk) {
         if let Op::Phi { inc, .. } = &mut self.insts[i as usize].op {

@@ -100,6 +100,9 @@ pub(crate) struct Fx {
     /// Calls: (instruction, callee, call-site nounwind).
     pub calls: Vec<(u32, Option<FuncId>, bool)>,
     pub loop_mp: Option<MetadataId>,
+    /// The active conditional evaluations (clang `ConditionalEvaluation`),
+    /// innermost last: each is the block the condition started in.
+    pub conds: Vec<Blk>,
 }
 
 impl Fx {
@@ -123,6 +126,7 @@ impl Fx {
             vector_width: 0,
             calls: Vec::new(),
             loop_mp: None,
+            conds: Vec::new(),
         }
     }
 }
@@ -260,6 +264,7 @@ impl Cg<'_> {
         let nothrow_def = sig.nothrow || !self.opts.exceptions || self.no_throw_calls();
         let fa = self.def_fn_attrs(is_main, nothrow_def, self.f.mustprogress, self.f.vector_width);
         let (ret, params) = self.sig_attrs(&sig, sig.params.len(), true);
+        let (fa, ret) = self.alloc_fn_attrs(d, fa, ret);
         {
             let func = self.m.func_mut(f);
             func.attrs.func = fa;
@@ -273,7 +278,7 @@ impl Cg<'_> {
         Ok(())
     }
 
-    fn is_tu_level(&self, mut c: DeclId) -> bool {
+    pub(crate) fn is_tu_level(&self, mut c: DeclId) -> bool {
         loop {
             let n = self.ast.decls.get(c);
             match n.kind() {
@@ -545,10 +550,15 @@ impl Cg<'_> {
 
     /// `memset(dst, byte, n)`.
     pub fn memset(&mut self, dst: Addr, byte: u8, n: u64, volatile: bool) {
+        let nv = self.m.const_int(LTy::I64, i128::from(n));
+        self.memset_v(dst, byte, V::C(nv), volatile);
+    }
+
+    /// `memset(dst, byte, n)` with a computed length.
+    pub fn memset_v(&mut self, dst: Addr, byte: u8, n: V, volatile: bool) {
         let f = kiln_llvm::intrinsics::memset(&mut self.m, LTy::I64);
         let fn_ty = self.m.func(f).ty();
         let bv = self.m.const_int(LTy::I8, i128::from(byte));
-        let nv = self.m.const_int(LTy::I64, i128::from(n));
         let vb = self.m.const_bool(volatile);
         let pa = self.m.attr_set(&[Attr::Align(dst.align)]);
         let e = self.m.attr_set(&[]);
@@ -560,7 +570,7 @@ impl Cg<'_> {
             Op::Call {
                 fn_ty,
                 callee: V::C(Value::func(f)),
-                args: vec![dst.v, V::C(bv), V::C(nv), V::C(vb)],
+                args: vec![dst.v, V::C(bv), n, V::C(vb)],
                 opts: Box::new(opts),
             },
             LTy::VOID,

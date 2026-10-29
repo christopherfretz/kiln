@@ -31,15 +31,15 @@ fn low_mask(bits: u32) -> u128 {
 
 impl Cg<'_> {
     #[allow(clippy::unnecessary_wraps, reason = "diagnostic location slot")]
-    fn loc_of(&self, e: ExprId) -> Option<kiln_source::Loc> {
+    pub(crate) fn loc_of(&self, e: ExprId) -> Option<kiln_source::Loc> {
         Some(self.ast.exprs.get(e).loc())
     }
 
-    fn sub(&self, e: ExprId) -> ExprId {
+    pub(crate) fn sub(&self, e: ExprId) -> ExprId {
         ExprId::new(self.ast.exprs.get(e).a())
     }
 
-    fn is_glvalue(&self, e: ExprId) -> bool {
+    pub(crate) fn is_glvalue(&self, e: ExprId) -> bool {
         self.ast.exprs.get(e).value_category() != ValueCategory::PRValue
     }
 
@@ -55,11 +55,11 @@ impl Cg<'_> {
         self.size_align(q).1
     }
 
-    fn i64c(&mut self, v: i128) -> V {
+    pub(crate) fn i64c(&mut self, v: i128) -> V {
         V::C(self.m.const_int(LTy::I64, v))
     }
 
-    fn icn(&mut self, ty: LTy, v: i128) -> V {
+    pub(crate) fn icn(&mut self, ty: LTy, v: i128) -> V {
         V::C(self.m.const_int(ty, v))
     }
 
@@ -180,6 +180,22 @@ impl Cg<'_> {
             }
             ExprKind::ConditionalOperator => return self.emit_conditional(e),
             ExprKind::CallExpr => return self.emit_call(e, None),
+            ExprKind::CXXNewExpr => self.emit_cxx_new(e)?,
+            ExprKind::CXXDeleteExpr => {
+                self.emit_cxx_delete(e)?;
+                return Ok(None);
+            }
+            // ScalarExprEmitter::VisitInitListExpr: `T{}` is zero, `T{x}`
+            // is `x`.
+            ExprKind::InitListExpr if !self.is_aggregate(q) => {
+                match ast.lists.iter(ast.exprs.init_list_inits(e)).next() {
+                    Some(i) => return self.emit_scalar_opt(i),
+                    None => {
+                        let t = self.lty(q);
+                        V::C(self.m.const_zero(t))
+                    }
+                }
+            }
             ExprKind::DeclRefExpr
             | ExprKind::MemberExpr
             | ExprKind::ArraySubscriptExpr
@@ -409,7 +425,7 @@ impl Cg<'_> {
     }
 
     /// `gep inbounds [N x T], p, i64 0, i64 0`.
-    fn decay(&mut self, a: Addr) -> V {
+    pub(crate) fn decay(&mut self, a: Addr) -> V {
         let z = self.i64c(0);
         self.gep(a.ty, a.v, vec![z, z], true)
     }
@@ -755,6 +771,7 @@ impl Cg<'_> {
         }
         let end = self.f.fir.create_block();
         let rhs = self.f.fir.create_block();
+        let start = self.f.fir.cur();
         if and {
             self.branch_on_bool(l, rhs, end)?;
         } else {
@@ -768,11 +785,26 @@ impl Cg<'_> {
             LTy::I1,
         );
         self.emit_block(rhs, false);
-        let v = self.eval_bool(r)?;
+        let v = self.cond_eval(start, |cg| cg.eval_bool(r))?;
         let rb = self.f.fir.cur().expect("insert point");
         self.emit_block(end, false);
         self.f.fir.add_incoming(Fir::last_inst(phi), v, rb);
         Ok(self.zext_or_same(phi, rt))
+    }
+
+    /// Runs `f` as conditionally evaluated code (clang
+    /// `ConditionalEvaluation::begin`/`end`); `start` is the block the
+    /// condition was branched from.
+    fn cond_eval<T>(
+        &mut self,
+        start: Option<crate::fir::Blk>,
+        f: impl FnOnce(&mut Self) -> R<T>,
+    ) -> R<T> {
+        let Some(b) = start else { return f(self) };
+        self.f.conds.push(b);
+        let r = f(self);
+        self.f.conds.pop();
+        r
     }
 
     /// clang `EmitBranchOnBoolExpr`.
@@ -801,13 +833,14 @@ impl Cg<'_> {
                     return self.branch_on_bool(l, t, f);
                 }
                 let mid = self.f.fir.create_block();
+                let start = self.f.fir.cur();
                 if and {
                     self.branch_on_bool(l, mid, f)?;
                 } else {
                     self.branch_on_bool(l, t, mid)?;
                 }
                 self.emit_block(mid, false);
-                self.branch_on_bool(r, t, f)
+                self.cond_eval(start, |cg| cg.branch_on_bool(r, t, f))
             }
             ExprKind::UnaryOperator if ast.exprs.unary_op(e) == UnaryOp::LNot => {
                 self.branch_on_bool(ast.exprs.operand(e), f, t)
@@ -817,11 +850,12 @@ impl Cg<'_> {
                 let [a, b] = ast.exprs.cond_arms(e);
                 let lb = self.f.fir.create_block();
                 let rb = self.f.fir.create_block();
+                let start = self.f.fir.cur();
                 self.branch_on_bool(c, lb, rb)?;
                 self.emit_block(lb, false);
-                self.branch_on_bool(a, t, f)?;
+                self.cond_eval(start, |cg| cg.branch_on_bool(a, t, f))?;
                 self.emit_block(rb, false);
-                self.branch_on_bool(b, t, f)
+                self.cond_eval(start, |cg| cg.branch_on_bool(b, t, f))
             }
             _ => {
                 let v = self.eval_bool(e)?;
@@ -852,13 +886,14 @@ impl Cg<'_> {
         let lb = self.f.fir.create_block();
         let rb = self.f.fir.create_block();
         let cont = self.f.fir.create_block();
+        let start = self.f.fir.cur();
         self.branch_on_bool(c, lb, rb)?;
         self.emit_block(lb, false);
-        let x = self.emit_scalar_opt(a)?;
+        let x = self.cond_eval(start, |cg| cg.emit_scalar_opt(a))?;
         let lb = self.f.fir.cur().expect("insert point");
         self.br(cont);
         self.emit_block(rb, false);
-        let y = self.emit_scalar_opt(b)?;
+        let y = self.cond_eval(start, |cg| cg.emit_scalar_opt(b))?;
         let rb = self.f.fir.cur().expect("insert point");
         self.emit_block(cont, false);
         Ok(match (x, y) {
@@ -1071,13 +1106,14 @@ impl Cg<'_> {
         let lb = self.f.fir.create_block();
         let rb = self.f.fir.create_block();
         let cont = self.f.fir.create_block();
+        let start = self.f.fir.cur();
         self.branch_on_bool(c, lb, rb)?;
         self.emit_block(lb, false);
-        let x = self.emit_lvalue(a)?;
+        let x = self.cond_eval(start, |cg| cg.emit_lvalue(a))?;
         let lb = self.f.fir.cur().expect("insert point");
         self.br(cont);
         self.emit_block(rb, false);
-        let y = self.emit_lvalue(b)?;
+        let y = self.cond_eval(start, |cg| cg.emit_lvalue(b))?;
         let rb = self.f.fir.cur().expect("insert point");
         self.emit_block(cont, false);
         let p = self
@@ -1579,7 +1615,7 @@ impl Cg<'_> {
     }
 
     /// clang `AggExprEmitter::EmitInitializationToLValue`.
-    fn init_to_lvalue(&mut self, e: ExprId, lv: LV, zeroed: bool) -> R<()> {
+    pub(crate) fn init_to_lvalue(&mut self, e: ExprId, lv: LV, zeroed: bool) -> R<()> {
         let ast = self.ast;
         if zeroed && self.is_simple_zero(e) {
             return Ok(());
@@ -1597,7 +1633,7 @@ impl Cg<'_> {
     }
 
     /// clang `EmitNullInitializationToLValue`.
-    fn null_init_lvalue(&mut self, lv: LV, zeroed: bool) -> R<()> {
+    pub(crate) fn null_init_lvalue(&mut self, lv: LV, zeroed: bool) -> R<()> {
         if zeroed {
             return Ok(());
         }
@@ -1716,7 +1752,7 @@ impl Cg<'_> {
         Ok(())
     }
 
-    fn is_trivial_filler(&self, e: ExprId) -> bool {
+    pub(crate) fn is_trivial_filler(&self, e: ExprId) -> bool {
         let ast = self.ast;
         match ast.exprs.get(e).kind() {
             ExprKind::ImplicitValueInitExpr => true,
