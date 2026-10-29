@@ -4,8 +4,7 @@
 // free it. The same program as bench/oven/churn-string.cpp; the gates are
 // the spec's design targets, set from the live-object count.
 //@ args: -fconstexpr-steps=100000000
-//@ skip(clang): kiln-only Oven budget; clang 19 needs about 20 s for it
-//@ oven: 50 peak_bytes<=262144 peak_arena<=393216
+//@ oven: 49 peak_bytes<=262144 peak_arena<=393216
 struct Str {
   char *p;
   int len;

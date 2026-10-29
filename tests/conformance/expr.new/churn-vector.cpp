@@ -5,8 +5,7 @@
 // (384 KiB). The same program as bench/oven/churn-vector.cpp; the gates are
 // the spec's design targets, set from the live-object count.
 //@ args: -fconstexpr-steps=100000000
-//@ skip(clang): kiln-only Oven budget; clang 19 needs about 20 s for it
-//@ oven: 36 allocs<=1088 peak_bytes<=786432 peak_arena<=1048576
+//@ oven: 35 allocs<=1088 peak_bytes<=786432 peak_arena<=1048576
 // Grows a buffer from 1 to `limit` elements by doubling: allocate the new
 // buffer, copy, delete the old one, fill the new half.
 constexpr long long grow(int limit, int seed) {
