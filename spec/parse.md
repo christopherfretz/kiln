@@ -420,7 +420,7 @@ in `kiln_diag` for now; nothing emits them.
   - operator function names, conversion functions
   - deleted and defaulted functions
 - **Templates:** declarations, template-ids, `typename`, `template`,
-  packs, concepts, requires-clauses.
+  packs, concepts, requires-clauses. Design: spec/sema-templates.md §2.
 - **Other expressions:**
   - lambdas, `new`/`delete`, `throw`
   - `typeid`, `dynamic_cast`
