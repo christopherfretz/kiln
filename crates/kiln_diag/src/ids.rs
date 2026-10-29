@@ -870,6 +870,10 @@ diag_ids! {
     sema_call_deleted_function = Error (2) "call to deleted function {0}{1}";
     sema_use_deleted_function = Error (1) "attempt to use a deleted function{0}";
     sema_dtor_access_var = Error (2) "variable of type {0} has {1:private|protected} destructor";
+    sema_access_ctor = Error (2) "calling a {0:private|protected} constructor of class {1}";
+    sema_dtor_not_member = Error (0) "destructor must be a non-static member function";
+    sema_dtor_undeclared_name = Error (1) "undeclared identifier '{0}' in destructor name";
+    sema_default_init_const_class = Error (1) "default initialization of an object of const type {0} without a user-provided default constructor";
 }
 
 impl DiagId {
