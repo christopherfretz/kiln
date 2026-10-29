@@ -286,7 +286,10 @@ impl Sema<'_, '_> {
         }
         let n = *self.ast.exprs.get(e);
         match n.kind() {
-            ExprKind::ParenExpr | ExprKind::CXXBindTemporaryExpr | ExprKind::ConstantExpr => {
+            ExprKind::ParenExpr
+            | ExprKind::ExprWithCleanups
+            | ExprKind::CXXBindTemporaryExpr
+            | ExprKind::ConstantExpr => {
                 self.temporaries_in_aggregate(self.ast.exprs.operand(e), out, depth + 1);
             }
             k if k.is_cast() && self.ast.exprs.cast_kind(e) == CastKind::NoOp => {

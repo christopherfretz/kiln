@@ -1,0 +1,287 @@
+Dumping nrvo1:
+FunctionDecl nrvo1 'S (bool)'
+|-ParmVarDecl used b 'bool'
+`-CompoundStmt
+  |-IfStmt
+  | |-ImplicitCastExpr 'bool' <LValueToRValue>
+  | | `-DeclRefExpr 'bool' lvalue ParmVar 'b' 'bool'
+  | `-CompoundStmt
+  |   |-DeclStmt
+  |   | `-VarDecl used x 'S' nrvo callinit destroyed
+  |   |   `-CXXConstructExpr 'S' 'void ()'
+  |   `-ReturnStmt nrvo_candidate(Var 'x' 'S')
+  |     `-CXXConstructExpr 'S' 'void (const S &)'
+  |       `-ImplicitCastExpr 'const S' xvalue <NoOp>
+  |         `-DeclRefExpr 'S' lvalue Var 'x' 'S'
+  |-DeclStmt
+  | `-VarDecl used y 'S' nrvo callinit destroyed
+  |   `-CXXConstructExpr 'S' 'void ()'
+  `-ReturnStmt nrvo_candidate(Var 'y' 'S')
+    `-CXXConstructExpr 'S' 'void (const S &)'
+      `-ImplicitCastExpr 'const S' xvalue <NoOp>
+        `-DeclRefExpr 'S' lvalue Var 'y' 'S'
+
+Dumping nrvo2:
+FunctionDecl nrvo2 'S (bool)'
+|-ParmVarDecl used b 'bool'
+`-CompoundStmt
+  |-DeclStmt
+  | |-VarDecl used x 'S' callinit destroyed
+  | | `-CXXConstructExpr 'S' 'void ()'
+  | `-VarDecl used y 'S' callinit destroyed
+  |   `-CXXConstructExpr 'S' 'void ()'
+  |-IfStmt
+  | |-ImplicitCastExpr 'bool' <LValueToRValue>
+  | | `-DeclRefExpr 'bool' lvalue ParmVar 'b' 'bool'
+  | `-ReturnStmt
+  |   `-CXXConstructExpr 'S' 'void (const S &)'
+  |     `-ImplicitCastExpr 'const S' xvalue <NoOp>
+  |       `-DeclRefExpr 'S' lvalue Var 'x' 'S'
+  `-ReturnStmt
+    `-CXXConstructExpr 'S' 'void (const S &)'
+      `-ImplicitCastExpr 'const S' xvalue <NoOp>
+        `-DeclRefExpr 'S' lvalue Var 'y' 'S'
+
+Dumping nrvo3:
+FunctionDecl nrvo3 'S (bool)'
+|-ParmVarDecl used b 'bool'
+`-CompoundStmt
+  |-DeclStmt
+  | `-VarDecl used x 'S' callinit destroyed
+  |   `-CXXConstructExpr 'S' 'void ()'
+  |-IfStmt
+  | |-ImplicitCastExpr 'bool' <LValueToRValue>
+  | | `-DeclRefExpr 'bool' lvalue ParmVar 'b' 'bool'
+  | `-ReturnStmt
+  |   `-ExprWithCleanups 'S'
+  |     `-CXXBindTemporaryExpr 'S' (CXXTemporary)
+  |       `-CXXTemporaryObjectExpr 'S' 'void ()'
+  `-ReturnStmt
+    `-CXXConstructExpr 'S' 'void (const S &)'
+      `-ImplicitCastExpr 'const S' xvalue <NoOp>
+        `-DeclRefExpr 'S' lvalue Var 'x' 'S'
+
+Dumping nrvo4:
+FunctionDecl nrvo4 'S (S)'
+|-ParmVarDecl used p 'S' destroyed
+`-CompoundStmt
+  `-ReturnStmt
+    `-CXXConstructExpr 'S' 'void (const S &)'
+      `-ImplicitCastExpr 'const S' xvalue <NoOp>
+        `-DeclRefExpr 'S' lvalue ParmVar 'p' 'S'
+
+Dumping nrvo5:
+FunctionDecl nrvo5 'S (bool)'
+|-ParmVarDecl used b 'bool'
+`-CompoundStmt
+  |-DeclStmt
+  | `-VarDecl x 'S' callinit destroyed
+  |   `-CXXConstructExpr 'S' 'void ()'
+  |-IfStmt
+  | |-ImplicitCastExpr 'bool' <LValueToRValue>
+  | | `-DeclRefExpr 'bool' lvalue ParmVar 'b' 'bool'
+  | `-ReturnStmt
+  |   `-ExprWithCleanups 'S'
+  |     `-CXXBindTemporaryExpr 'S' (CXXTemporary)
+  |       `-CXXTemporaryObjectExpr 'S' 'void ()'
+  |-DeclStmt
+  | `-VarDecl used y 'S' nrvo callinit destroyed
+  |   `-CXXConstructExpr 'S' 'void ()'
+  `-ReturnStmt nrvo_candidate(Var 'y' 'S')
+    `-CXXConstructExpr 'S' 'void (const S &)'
+      `-ImplicitCastExpr 'const S' xvalue <NoOp>
+        `-DeclRefExpr 'S' lvalue Var 'y' 'S'
+
+Dumping nrvo6:
+FunctionDecl nrvo6 'S (bool)'
+|-ParmVarDecl used b 'bool'
+`-CompoundStmt
+  |-DeclStmt
+  | `-VarDecl used x 'S' callinit destroyed
+  |   `-CXXConstructExpr 'S' 'void ()'
+  |-CompoundStmt
+  | |-DeclStmt
+  | | `-VarDecl used y 'S' nrvo callinit destroyed
+  | |   `-CXXConstructExpr 'S' 'void ()'
+  | `-IfStmt
+  |   |-ImplicitCastExpr 'bool' <LValueToRValue>
+  |   | `-DeclRefExpr 'bool' lvalue ParmVar 'b' 'bool'
+  |   `-ReturnStmt nrvo_candidate(Var 'y' 'S')
+  |     `-CXXConstructExpr 'S' 'void (const S &)'
+  |       `-ImplicitCastExpr 'const S' xvalue <NoOp>
+  |         `-DeclRefExpr 'S' lvalue Var 'y' 'S'
+  `-ReturnStmt
+    `-CXXConstructExpr 'S' 'void (const S &)'
+      `-ImplicitCastExpr 'const S' xvalue <NoOp>
+        `-DeclRefExpr 'S' lvalue Var 'x' 'S'
+
+Dumping nrvo7:
+FunctionDecl nrvo7 'S (bool)'
+|-ParmVarDecl used b 'bool'
+`-CompoundStmt
+  |-DeclStmt
+  | `-VarDecl used x 'S' nrvo callinit destroyed
+  |   `-CXXConstructExpr 'S' 'void ()'
+  |-IfStmt
+  | |-ImplicitCastExpr 'bool' <LValueToRValue>
+  | | `-DeclRefExpr 'bool' lvalue ParmVar 'b' 'bool'
+  | `-ReturnStmt nrvo_candidate(Var 'x' 'S')
+  |   `-CXXConstructExpr 'S' 'void (const S &)'
+  |     `-ImplicitCastExpr 'const S' xvalue <NoOp>
+  |       `-DeclRefExpr 'S' lvalue Var 'x' 'S'
+  |-DeclStmt
+  | `-VarDecl y 'S' callinit destroyed
+  |   `-CXXConstructExpr 'S' 'void ()'
+  `-ReturnStmt nrvo_candidate(Var 'x' 'S')
+    `-CXXConstructExpr 'S' 'void (const S &)'
+      `-ImplicitCastExpr 'const S' xvalue <NoOp>
+        `-DeclRefExpr 'S' lvalue Var 'x' 'S'
+
+Dumping nrvo8:
+FunctionDecl nrvo8 'S (int)'
+|-ParmVarDecl used n 'int'
+`-CompoundStmt
+  |-DeclStmt
+  | `-VarDecl used x 'S' nrvo callinit destroyed
+  |   `-CXXConstructExpr 'S' 'void ()'
+  |-ForStmt has_init has_cond has_inc
+  | |-DeclStmt
+  | | `-VarDecl used i 'int' cinit
+  | |   `-IntegerLiteral 'int' 0
+  | |-BinaryOperator 'bool' '<'
+  | | |-ImplicitCastExpr 'int' <LValueToRValue>
+  | | | `-DeclRefExpr 'int' lvalue Var 'i' 'int'
+  | | `-ImplicitCastExpr 'int' <LValueToRValue>
+  | |   `-DeclRefExpr 'int' lvalue ParmVar 'n' 'int'
+  | |-UnaryOperator 'int' lvalue prefix '++'
+  | | `-DeclRefExpr 'int' lvalue Var 'i' 'int'
+  | `-CompoundStmt
+  |   `-IfStmt
+  |     |-ImplicitCastExpr 'bool' <IntegralToBoolean>
+  |     | `-ImplicitCastExpr 'int' <LValueToRValue>
+  |     |   `-DeclRefExpr 'int' lvalue Var 'i' 'int'
+  |     `-ReturnStmt nrvo_candidate(Var 'x' 'S')
+  |       `-CXXConstructExpr 'S' 'void (const S &)'
+  |         `-ImplicitCastExpr 'const S' xvalue <NoOp>
+  |           `-DeclRefExpr 'S' lvalue Var 'x' 'S'
+  `-ReturnStmt nrvo_candidate(Var 'x' 'S')
+    `-CXXConstructExpr 'S' 'void (const S &)'
+      `-ImplicitCastExpr 'const S' xvalue <NoOp>
+        `-ParenExpr 'S' lvalue
+          `-DeclRefExpr 'S' lvalue Var 'x' 'S'
+
+Dumping nrvo9:
+FunctionDecl nrvo9 'S (bool)'
+|-ParmVarDecl used b 'bool'
+`-CompoundStmt
+  |-DeclStmt
+  | `-VarDecl used x 'S' callinit destroyed
+  |   `-CXXConstructExpr 'S' 'void ()'
+  |-IfStmt
+  | |-ImplicitCastExpr 'bool' <LValueToRValue>
+  | | `-DeclRefExpr 'bool' lvalue ParmVar 'b' 'bool'
+  | `-CompoundStmt
+  |   |-DeclStmt
+  |   | `-VarDecl used y 'S' nrvo callinit destroyed
+  |   |   `-CXXConstructExpr 'S' 'void ()'
+  |   `-ReturnStmt nrvo_candidate(Var 'y' 'S')
+  |     `-CXXConstructExpr 'S' 'void (const S &)'
+  |       `-ImplicitCastExpr 'const S' xvalue <NoOp>
+  |         `-DeclRefExpr 'S' lvalue Var 'y' 'S'
+  `-ReturnStmt
+    `-CXXConstructExpr 'S' 'void (const S &)'
+      `-ImplicitCastExpr 'const S' xvalue <NoOp>
+        `-DeclRefExpr 'S' lvalue Var 'x' 'S'
+
+Dumping nrvo10:
+FunctionDecl nrvo10 'const S ()'
+`-CompoundStmt
+  |-DeclStmt
+  | `-VarDecl used x 'const S' nrvo callinit destroyed
+  |   `-CXXConstructExpr 'const S' 'void ()'
+  `-ReturnStmt nrvo_candidate(Var 'x' 'const S')
+    `-CXXConstructExpr 'const S' 'void (const S &)'
+      `-ImplicitCastExpr 'const S' xvalue <NoOp>
+        `-DeclRefExpr 'const S' lvalue Var 'x' 'const S'
+
+Dumping nrvo11:
+FunctionDecl nrvo11 'S ()'
+`-CompoundStmt
+  |-DeclStmt
+  | `-VarDecl used x 'S' static callinit destroyed
+  |   `-CXXConstructExpr 'S' 'void ()'
+  `-ReturnStmt
+    `-CXXConstructExpr 'S' 'void (const S &)'
+      `-ImplicitCastExpr 'const S' lvalue <NoOp>
+        `-DeclRefExpr 'S' lvalue Var 'x' 'S'
+
+Dumping nrvo12:
+FunctionDecl nrvo12 'int ()'
+`-CompoundStmt
+  |-DeclStmt
+  | `-VarDecl used x 'int' cinit
+  |   `-IntegerLiteral 'int' 1
+  `-ReturnStmt
+    `-ImplicitCastExpr 'int' <LValueToRValue>
+      `-ImplicitCastExpr 'int' xvalue <NoOp>
+        `-DeclRefExpr 'int' lvalue Var 'x' 'int'
+
+Dumping nrvo13:
+FunctionDecl nrvo13 'S (bool)'
+|-ParmVarDecl used b 'bool'
+`-CompoundStmt
+  |-WhileStmt
+  | |-ImplicitCastExpr 'bool' <LValueToRValue>
+  | | `-DeclRefExpr 'bool' lvalue ParmVar 'b' 'bool'
+  | `-CompoundStmt
+  |   |-DeclStmt
+  |   | `-VarDecl used x 'S' nrvo callinit destroyed
+  |   |   `-CXXConstructExpr 'S' 'void ()'
+  |   `-ReturnStmt nrvo_candidate(Var 'x' 'S')
+  |     `-CXXConstructExpr 'S' 'void (const S &)'
+  |       `-ImplicitCastExpr 'const S' xvalue <NoOp>
+  |         `-DeclRefExpr 'S' lvalue Var 'x' 'S'
+  `-ReturnStmt
+    `-ExprWithCleanups 'S'
+      `-CXXBindTemporaryExpr 'S' (CXXTemporary)
+        `-CXXTemporaryObjectExpr 'S' 'void ()'
+
+Dumping nrvo14:
+FunctionDecl nrvo14 'S (int)'
+|-ParmVarDecl used n 'int'
+`-CompoundStmt
+  |-DeclStmt
+  | `-VarDecl used x 'S' callinit destroyed
+  |   `-CXXConstructExpr 'S' 'void ()'
+  |-SwitchStmt
+  | |-ImplicitCastExpr 'int' <LValueToRValue>
+  | | `-DeclRefExpr 'int' lvalue ParmVar 'n' 'int'
+  | `-CompoundStmt
+  |   |-CaseStmt
+  |   | |-ConstantExpr 'int' value=1
+  |   | | `-IntegerLiteral 'int' 1
+  |   | `-CompoundStmt
+  |   |   |-DeclStmt
+  |   |   | `-VarDecl used y 'S' nrvo callinit destroyed
+  |   |   |   `-CXXConstructExpr 'S' 'void ()'
+  |   |   `-ReturnStmt nrvo_candidate(Var 'y' 'S')
+  |   |     `-CXXConstructExpr 'S' 'void (const S &)'
+  |   |       `-ImplicitCastExpr 'const S' xvalue <NoOp>
+  |   |         `-DeclRefExpr 'S' lvalue Var 'y' 'S'
+  |   `-DefaultStmt
+  |     `-BreakStmt
+  `-ReturnStmt
+    `-CXXConstructExpr 'S' 'void (const S &)'
+      `-ImplicitCastExpr 'const S' xvalue <NoOp>
+        `-DeclRefExpr 'S' lvalue Var 'x' 'S'
+
+Dumping nrvo15:
+FunctionDecl nrvo15 'S &(S &)'
+|-ParmVarDecl used r 'S &'
+`-CompoundStmt
+  |-DeclStmt
+  | `-VarDecl used x 'S &' cinit
+  |   `-DeclRefExpr 'S' lvalue ParmVar 'r' 'S &'
+  `-ReturnStmt
+    `-DeclRefExpr 'S' lvalue Var 'x' 'S &'
+

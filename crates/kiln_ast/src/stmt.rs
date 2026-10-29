@@ -217,6 +217,10 @@ impl StmtArena {
         self.nodes.push(n);
         id
     }
+    pub(crate) fn clear_return_nrvo(&mut self, s: StmtId) {
+        assert_eq!(self.get(s).kind, StmtKind::ReturnStmt, "not a ReturnStmt");
+        self.nodes[s.index() as usize].b = 0;
+    }
     pub(crate) fn push_if(&mut self, x: IfData) -> u32 {
         push_side(&mut self.ifs, x)
     }

@@ -1597,6 +1597,14 @@ impl Sema<'_, '_> {
         let virt = self.virtual_decl(ds, d, ty, site, &mut spec);
         let f = self.builder().function(h, fkind, ty, spec, prev_ok);
         self.finish_virtual_decl(f, &virt);
+        // A pure virtual function's notes point at its decl-specifiers
+        // (clang `getBeginLoc`, §4.11).
+        if self.ast.decls.function(f).is_some_and(|x| x.spec.is_pure())
+            && ds.loc.is_valid()
+            && ds.loc != self.ast.decls.get(f).loc()
+        {
+            let _ = self.ast.decls.cold.begin_loc.insert(f, ds.loc);
+        }
         if invalid_redecl {
             self.ast.decls.set_flags(f, DeclFlags::INVALID);
         }

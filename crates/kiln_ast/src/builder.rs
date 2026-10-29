@@ -833,6 +833,13 @@ impl<'a> AstBuilder<'a> {
         self.ast.decls.mark_var(v, VarSpec::new().with_nrvo(true));
     }
 
+    /// Drops the NRVO candidate of `return` statement `r` once its
+    /// variable turned out not to be the named return value (clang
+    /// `computeNRVO`, at the end of the function body).
+    pub fn clear_return_nrvo(&mut self, r: StmtId) {
+        self.ast.stmts.clear_return_nrvo(r);
+    }
+
     // =====================================================================
     // Expressions
     // =====================================================================

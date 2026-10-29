@@ -724,6 +724,11 @@ extended by Var '__range1'`). Sema collects every full-expression-duration
 `InLifetimeExtendingContext`), including those in default arguments of calls in
 it, and extends them all to `__range`.
 
+Status (WP-067b): not implemented. Range-based `for` itself (parser,
+`CXXForRangeStmt` builder, dump, codegen, Oven) does not exist yet and no
+work package owns it; `Sema.extend_collector` is declared but unused, so
+P2718 and the `stmt.ranged` conformance directory are blocked on it.
+
 ### 5.5 Copy elision and NRVO ([class.copy.elision])
 - **Guaranteed elision** ([dcl.init.general]/16.6.1): a prvalue of the same
   class (ignoring cv) initializes the object directly; no copy or move
@@ -732,20 +737,32 @@ it, and extends them all to `__range`.
   `co_return` operands an id-expression naming an implicitly movable entity is
   an xvalue (clang 19 dump: `ImplicitCastExpr 'const S' xvalue <NoOp>` before
   binding to `const S&`).
-- **NRVO marking (clang `Scope::updateNRVOCandidate` / `applyNRVO`).** A
-  candidate is a non-volatile local variable with automatic storage (not a
-  parameter, not an exception variable) whose type is the return type ignoring
-  cv. `ReturnStmt.b` = the candidate returned by that statement (dump
-  `nrvo_candidate(Var 'x' 'S')`). Each block scope (`scope::Scope` gains `nrvo:
-  NrvoState { None | Candidate(DeclId) | Disabled }`) records: a return of
-  candidate `x` sets the scope's state to `x` if `None`, else `Disabled` if
-  different; a return of anything else sets `Disabled`. On scope exit:
-  `Candidate(x)` with `x` declared in this scope → set `x`'s `nrvo` bit (§8.2
-  mutation); `Candidate(x)` declared outside → propagate to the parent as a
-  return of `x`; `Disabled` → propagate `Disabled`. Probes (all clang 19): `if
-  (b) { S x; return x; } S y; return y;` → both `nrvo`; `S x, y; if (b) return
-  x; return y;` → neither; `S x; if (b) return S(); return x;` → neither;
-  `return p;` (param) → not a candidate.
+- **NRVO marking (clang 19 `Scope::updateNRVOCandidate` / `applyNRVO` /
+  `computeNRVO`).** A copy-elision candidate of `return e` is `e` (through
+  parentheses) naming a non-volatile, non-reference local variable with
+  automatic storage (not a parameter, not `thread_local`, not an exception
+  variable) whose type is the class return type ignoring cv (or either is
+  dependent). `ReturnStmt.b` = that candidate (dump `nrvo_candidate(Var 'x'
+  'S')`). Each scope carries `nrvo: NrvoState { slots: Vec<DeclId>, nrvo:
+  Option<Option<DeclId>> }` (clang `ReturnSlots` / `NRVO`): every local
+  variable is added to its scope's `slots` when declared (`push_local`).
+  At a return with candidate `c` (possibly none), walking from the current
+  scope out to and including the function scope, each scope keeps only `c`
+  in its `slots` if `c` was there and drops the rest; the innermost scope's
+  `nrvo` becomes `Some(Some(c))` if `c` is in its slots (or declared
+  outside it) and the scope had no other verdict, else `Some(None)`
+  (disabled). On scope exit (`pop_scope` → `apply_nrvo`): `Some(Some(x))`
+  with `x` declared in this scope sets `x`'s `nrvo` bit; a block/control
+  scope's verdict otherwise overwrites its parent's. The function scope's
+  own verdict is applied first in `end_function_body`; then, for a
+  non-template function with a class return type, every return in
+  `FnState.returns` whose candidate did not end up `nrvo` has its candidate
+  cleared (`AstBuilder::clear_return_nrvo`, clang `computeNRVO`). Probes (all
+  clang 19, golden `ast/class.copy.elision/nrvo.cpp`): `if (b) { S x; return
+  x; } S y; return y;` → both `nrvo`; `S x, y; if (b) return x; return y;` →
+  neither; `S x; if (b) return S(); return x;` → neither; `return p;`
+  (param) → not a candidate. Alignment (`alignas` on the variable) is not
+  yet considered (clang `isCopyElisionCandidate` checks it).
 
 ### 5.6 Class initialization forms (extends `init.rs`, sema.md §6)
 | form | class `T` |
@@ -1209,6 +1226,52 @@ Constructors, destructors, conversion functions, `= default` and
   base diagnostic; `explicit` on friends and parameters (WP-068b);
   injected-class-names in the implicit AST dump (xfail
   `ast/class.implicit/eager.cpp`).
+
+**Landed (WP-067b).** Object construction, ctor-initializers, implicit
+definitions and temporaries. Modules in `kiln_sema/src/class/`:
+- `special/define.rs` (§4.5): `define_implicit_special` builds clang's
+  implicit bodies of default/copy/move constructors, copy/move assignment
+  (memberwise, arrays via `__builtin_memcpy`, `kiln_ast::decl::builtin::MEMCPY`) and
+  destructors when odr-used, with the "in implicit ... first required
+  here" notes (`Diag::with_context_notes`); `special/excspec.rs` resolves
+  implicit exception specifications on use.
+- `construct.rs`, `ctor_select.rs` (§5.2, §5.6): `resolve_ctor` selects
+  the constructor for direct, copy and list initialization (access,
+  deleted, explicit; approximate overload resolution until WP-068a);
+  `construct_from_class` for copy/move from the same or a derived class
+  (initialization, conversions, arguments, casts); `T()` as
+  `CXXTemporaryObjectExpr`; default-initialization builds the default
+  constructor call (`init_style` `Call`, `VarSpec::LATE`); P0960
+  `CXXParenListInitExpr` for arrays and classes (`ParenList`); brace
+  aggregate initialization with bases. `std::initializer_list`
+  constructors report `sema_unsupported` (§5.7).
+- `ctorinit.rs` (§4.9): mem-initializers are built as their own full
+  expressions (`act_on_mem_initializer`), then clang's
+  `ActOnMemInitializers` checks, implicit initializers,
+  `-Wreorder-ctor`, `-Wuninitialized` in constructors,
+  `-Wdangling-field`, and the delegation-cycle check at end of TU.
+- `temporary.rs` (§5.3–5.4): `MaterializeTemporaryExpr`,
+  `CXXBindTemporaryExpr`, `ExprWithCleanups` at the full expression;
+  lifetime extension (`extend_temporaries`: references and the reference
+  members of aggregate variables and temporaries) and dangling checks
+  (P2748 return, reference member).
+- §5.5 NRVO: the `ReturnSlots` model above (`NrvoState`,
+  `FnState.returns`, `AstBuilder::clear_return_nrvo`); implicit move.
+- §4.8 variable destructors (checked and odr-used); §4.11 the
+  `-Wcall-to-pure-virtual-from-ctor-dtor` warning (`member_expr.rs`
+  `check_pure_virtual_call_in_cdtor`; `cold.begin_loc` records a pure
+  virtual's decl-spec start for its note).
+- New diagnostics: the WP-067b block at the end of `kiln_diag/src/ids.rs`;
+  groups `Reorder`/`ReorderCtor`, `Uninitialized`, `Dangling`/
+  `DanglingField`/`ReturnStackAddress`, `DelegatingCtorCycles`,
+  `CallToPureVirtualFromCtorDtor`.
+- Not done (owners): P2718 and range-based `for` (unowned, §5.4);
+  `initializer_list` constructors (follow-up, `construct.rs`); "explicit
+  constructor is not a candidate" and no-viable notes, volatile copies
+  (WP-068a); class-typed `?:` with different classes, `static_cast` to a
+  reference, `new T(args)` for classes (unowned in sema); template
+  mem-initializers (WP-070); codegen and Oven of construction (WP-079,
+  WP-076); injected-class-names (§2.2).
 
 ### 8.4 `SemaBridge` (kiln_oven) — public-interface change
 Replace `fn vtable(&mut self, record) -> &VTableLayout` with

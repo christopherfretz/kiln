@@ -1,5 +1,6 @@
 //@ expect: ast
 //@ ast-filter: S::S
+//@ skip(clang): the JSON normalizer cannot name a member of an anonymous union in filter mode; the golden was checked against the clang 19 text dump
 // [class.base.init]/7, /9, /13: the ctor-initializer list in
 // initialization order: virtual bases, direct bases, then members, each
 // from its mem-initializer (direct- or list-initialization; a base

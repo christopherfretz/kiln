@@ -369,6 +369,7 @@ impl Sema<'_, '_> {
         let (call_callee, method, fn_ty) = match n.kind() {
             ExprKind::MemberExpr => {
                 let m = self.ast.exprs.decl(x);
+                self.check_pure_virtual_call_in_cdtor(x, m);
                 let Some(mem) = self.bind_object_argument(x, m) else {
                     return Some(self.recover_err(&kids, loc));
                 };
@@ -412,6 +413,43 @@ impl Sema<'_, '_> {
             ExprFlags::NONE,
         );
         Some(self.maybe_bind_temporary(call))
+    }
+
+    /// [class.cdtor]/4 (spec/sema-class.md §4.11, clang
+    /// `BuildCallToMemberFunction`): a virtual call of a pure virtual
+    /// function `m` on `this` from a constructor or destructor has
+    /// undefined behavior. The member access `x` must name `m` without a
+    /// qualifier (a qualified name does not dispatch virtually).
+    fn check_pure_virtual_call_in_cdtor(&mut self, x: ExprId, m: DeclId) {
+        if !matches!(self.kind_of(self.ctx), DeclKind::CXXConstructor | DeclKind::CXXDestructor)
+            || !self.ast.decls.function(self.ast.first(m)).is_some_and(|f| f.spec.is_pure())
+            || self.member_refs.get(&x).is_some_and(|r| r.qualified)
+        {
+            return;
+        }
+        let mut base = self.ast.exprs.operand(x);
+        while matches!(
+            self.ast.exprs.get(base).kind(),
+            ExprKind::ParenExpr | ExprKind::ImplicitCastExpr
+        ) {
+            base = self.ast.exprs.operand(base);
+        }
+        if self.ast.exprs.get(base).kind() != ExprKind::CXXThisExpr {
+            return;
+        }
+        let dtor = u8::from(self.kind_of(self.ctx) == DeclKind::CXXDestructor);
+        let Some(class) = self.ast.decls.get(m).ctx() else { return };
+        let name = self.decl_arg(m);
+        let at =
+            self.ast.decls.cold.begin_loc.get(m).copied().unwrap_or(self.ast.decls.get(m).loc());
+        let note = self.diag(DiagId::note_entity_declared_at, at).arg(name.clone());
+        let d = self
+            .diag(DiagId::sema_pure_virtual_call_in_cdtor, self.ast.exprs.get(base).loc())
+            .arg(name)
+            .arg(dtor)
+            .arg(self.decl_arg(class))
+            .with_note(note);
+        self.emit(d);
     }
 
     /// The implicit object argument of a call of method `m` through the

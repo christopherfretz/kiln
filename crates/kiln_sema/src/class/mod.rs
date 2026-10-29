@@ -180,17 +180,16 @@ pub struct CleanupState {
     pub side_effects: bool,
 }
 
-/// The NRVO candidate of a block scope (spec/sema-class.md §5.5;
-/// WP-067b, clang `Scope::updateNRVOCandidate`).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum NrvoState {
-    /// No `return` seen in this scope.
-    #[default]
-    None,
-    /// Every `return` so far returned this candidate variable.
-    Candidate(DeclId),
-    /// Some `return` returned something else: no NRVO through this scope.
-    Disabled,
+/// The NRVO state of a local scope (spec/sema-class.md §5.5; clang 19
+/// `Scope::ReturnSlots` / `Scope::NRVO`).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct NrvoState {
+    /// The variables declared in this scope that may still occupy the
+    /// return slot (clang `ReturnSlots`; parameters are never added).
+    pub slots: Vec<DeclId>,
+    /// `None`: no `return` reached this scope; `Some(None)`: NRVO is
+    /// disabled through it; `Some(Some(x))`: `x` is the candidate.
+    pub nrvo: Option<Option<DeclId>>,
 }
 
 impl Sema<'_, '_> {
