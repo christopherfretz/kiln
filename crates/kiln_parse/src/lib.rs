@@ -13,6 +13,7 @@ pub mod keywords;
 mod parser;
 mod pragma;
 mod stmt;
+mod tentative;
 pub mod tokens;
 
 use std::sync::Arc;
@@ -29,6 +30,7 @@ use kiln_source::symbol::Interner;
 use kiln_source::{FileId, SourceManager};
 
 pub use parser::{PExpr, Parser};
+pub use tentative::TypeIdContext;
 pub use tokens::{Event, TokenSource};
 
 /// Options for [`parse_file`], [`parse_tu`] and [`parse_preprocessed`].

@@ -423,6 +423,7 @@ diag_ids! {
     // ----- parser
     parse_expected = Error (1) "expected {0}";
     parse_expected_after = Error (2) "expected {1} after {0}";
+    parse_expected_lparen_after_type = Error (0) "expected '(' for function-style cast or type construction";
     parse_expected_semi_declaration = Error (0) "expected ';' at end of declaration";
     parse_expected_semi_decl_list = Error (0) "expected ';' at end of declaration list";
     parse_expected_semi_after_expr = Error (0) "expected ';' after expression";

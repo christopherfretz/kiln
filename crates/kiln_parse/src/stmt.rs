@@ -4,11 +4,10 @@ use kiln_ast::decl::InitStyle;
 use kiln_ast::stmt::IfKind;
 use kiln_ast::{DeclId, ExprId, StmtId};
 use kiln_diag::DiagId;
-use kiln_lex::{Punct, TokKind};
-use kiln_sema::{Declarator, DeclaratorContext, NameClass, ScopeKind};
+use kiln_lex::Punct;
+use kiln_sema::{Declarator, DeclaratorContext, ScopeKind};
 use kiln_source::Loc;
 
-use crate::decl::is_decl_specifier_kw;
 use crate::keywords::Kw;
 use crate::parser::Parser;
 
@@ -154,7 +153,7 @@ impl Parser<'_, '_> {
             let sub = self.parse_labeled_sub();
             return Some(self.s.act_on_label_stmt(l, sub, loc));
         }
-        if self.is_declaration_statement() {
+        if self.is_cxx_declaration_statement(false) {
             let decls = self.parse_simple_declaration(DeclaratorContext::Block, false);
             if decls.is_empty() {
                 return None;
@@ -216,42 +215,6 @@ impl Parser<'_, '_> {
         }
     }
 
-    /// Whether a declaration-statement starts here ([stmt.ambig]: a
-    /// statement that can be a declaration is one). TODO(M3): tentative
-    /// parsing for `T(x);` and friends.
-    fn is_declaration_statement(&self) -> bool {
-        if let Some(k) = self.kw() {
-            return is_decl_specifier_kw(k);
-        }
-        if self.at_cxx11_attr() {
-            return true;
-        }
-        if self.ident().is_none() && !self.at(Punct::ColonColon) {
-            return false;
-        }
-        match self.scan_name(self.pos()) {
-            Some((end, NameClass::Type(..), _)) => {
-                let next = self.tok_at(end);
-                if self.ident_of(next).is_some() {
-                    return true;
-                }
-                match Self::punct_of(next) {
-                    Some(Punct::Star | Punct::Amp | Punct::AmpAmp | Punct::Semi) => true,
-                    Some(Punct::LParen) => {
-                        self.tok_at(end + 1).kind == TokKind::Punct(Punct::Star)
-                            || self.tok_at(end + 1).kind == TokKind::Punct(Punct::Amp)
-                    }
-                    _ => self.kw_of(next).is_some_and(is_decl_specifier_kw),
-                }
-            }
-            Some((end, NameClass::Undeclared, _)) => {
-                let next = self.tok_at(end);
-                self.ident_of(next).is_some() && self.kw_of(next).is_none()
-            }
-            _ => false,
-        }
-    }
-
     /// `( [init-statement] condition )` for `if` and `switch`. Returns
     /// the init-statement and the condition expression.
     fn parse_paren_condition(&mut self, what: &str) -> Option<(Option<StmtId>, Cond)> {
@@ -282,7 +245,7 @@ impl Parser<'_, '_> {
     /// condition variable (if any) and the condition expression -- for a
     /// declaration, a reference to the variable -- not yet converted.
     fn parse_condition(&mut self) -> Option<Cond> {
-        if !self.is_declaration_statement() {
+        if !self.is_cxx_condition_declaration() {
             return self.parse_expression().map(|e| (None, e));
         }
         let ctx = DeclaratorContext::Condition;
@@ -292,6 +255,7 @@ impl Parser<'_, '_> {
             return None;
         }
         let mut d = Declarator::new(ctx, self.loc());
+        d.direct_init = true;
         self.parse_declarator(&mut d);
         let base = self.s.type_from_declspec_at(&ds, d.name_loc());
         if self.at_attr() {
@@ -572,7 +536,7 @@ impl Parser<'_, '_> {
         let init = if self.at(Punct::Semi) {
             self.bump();
             None
-        } else if self.is_declaration_statement() {
+        } else if self.is_cxx_declaration_statement(true) {
             let l = self.loc();
             let decls = self.parse_simple_declaration(DeclaratorContext::ForInit, false);
             Some(self.s.act_on_decl_stmt(&decls, l))

@@ -395,8 +395,9 @@ pub struct ParamInfo {
     /// The default argument ([dcl.fct.default]), converted to the
     /// parameter's type, and the location of its `=`.
     pub default_arg: Option<(ExprId, Loc)>,
-    /// The first and last tokens of the parameter-declaration (the
-    /// `-Wvexing-parse` fix-its, [dcl.ambig.res]).
+    /// Where the parameter-declaration starts and ends (just past its
+    /// last token, default argument included; the `-Wvexing-parse`
+    /// fix-its, [dcl.ambig.res]).
     pub range: (Loc, Loc),
 }
 
@@ -475,6 +476,13 @@ pub struct Declarator {
     /// The initializer syntax that follows (the parser peeks at `=`, `(`
     /// or `{` before the declaration is created; [dcl.init]/1).
     pub init_style: Option<kiln_ast::decl::InitStyle>,
+    /// The declarator may be followed by a direct initializer `( ... )`
+    /// (clang's `mayBeFollowedByCXXDirectInit`, less the grouping-paren
+    /// and name checks): a variable declaration that is not a `typedef`
+    /// or a block-scope `extern`. Set by the parser.
+    pub direct_init: bool,
+    /// Grouping parentheses were parsed (`int (x)`).
+    pub grouping: bool,
 }
 
 impl Declarator {
@@ -490,6 +498,8 @@ impl Declarator {
             loc,
             invalid: false,
             init_style: None,
+            direct_init: false,
+            grouping: false,
         }
     }
 

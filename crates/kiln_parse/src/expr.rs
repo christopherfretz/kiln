@@ -20,6 +20,7 @@ use kiln_source::Loc;
 use crate::decl::is_type_specifier_kw;
 use crate::keywords::Kw;
 use crate::parser::{PExpr, Parser};
+use crate::tentative::TypeIdContext;
 
 /// clang's `prec::Level`.
 mod prec {
@@ -258,7 +259,9 @@ impl Parser<'_, '_> {
                 self.unsupported("the GNU address-of-label operator", loc);
                 return None;
             }
-            if p == Punct::LParen && self.is_type_id_start(self.pos() + 1) {
+            if p == Punct::LParen
+                && self.is_cxx_type_id_at(self.pos() + 1, TypeIdContext::InParens).0
+            {
                 return self.parse_c_style_cast();
             }
         }
@@ -324,7 +327,9 @@ impl Parser<'_, '_> {
         if kind == TraitKind::SizeOf && self.at(Punct::Ellipsis) {
             return self.parse_sizeof_pack(loc);
         }
-        if self.at(Punct::LParen) && self.is_type_id_start(self.pos() + 1) {
+        if self.at(Punct::LParen)
+            && self.is_cxx_type_id_at(self.pos() + 1, TypeIdContext::InParens).0
+        {
             let open = self.bump().span.lo;
             let Some(ty) = self.parse_type_id() else {
                 self.skip_until(&[Punct::RParen], false, true);
@@ -551,7 +556,7 @@ impl Parser<'_, '_> {
             return Some(self.s.act_on_list_cast(ty, l, loc));
         }
         let Some(open) = self.eat(Punct::LParen) else {
-            let d = self.s.diag(DiagId::parse_expected, self.expected_loc()).arg("'('");
+            let d = self.s.diag(DiagId::parse_expected_lparen_after_type, self.loc());
             self.emit(d);
             return None;
         };

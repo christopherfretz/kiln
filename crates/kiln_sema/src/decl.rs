@@ -13,9 +13,9 @@ use kiln_ast::ids::RawId;
 use kiln_ast::names::DeclName;
 use kiln_ast::types::{AutoKeyword, BuiltinType, ExcSpec, FuncInfo, Quals, TagKeyword, TypeView};
 use kiln_ast::{AttrId, DeclHead, DeclId, ExprId, QualType, StmtId};
-use kiln_diag::DiagId;
-use kiln_source::Loc;
+use kiln_diag::{DiagId, FixIt};
 use kiln_source::symbol::Symbol;
+use kiln_source::{Loc, Span};
 
 use crate::constfold;
 use crate::conv::{self, ConvCtx};
@@ -598,6 +598,102 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// `-Wvexing-parse` ([dcl.ambig.res]/1, clang's
+    /// `warnAboutAmbiguousFunction`): a block-scope function declaration
+    /// whose parentheses could have been a direct initializer, with a
+    /// note suggesting how to declare a variable instead.
+    fn warn_ambiguous_function(&mut self, ds: &DeclSpec, d: &Declarator, ty: QualType) {
+        let Some(Chunk::Function { params, loc, rparen, ambiguous: true, .. }) = d.chunks.first()
+        else {
+            return;
+        };
+        let Some(ret) = self.ast.types.proto(ty).map(kiln_ast::types::FuncProto::ret) else {
+            return;
+        };
+        let t = &self.ast.types;
+        let record = t.as_record(ret);
+        // No ambiguity for `void`; a non-class initializer takes at most
+        // one expression, a reference exactly one.
+        if t.is_void(ret)
+            || (record.is_none() && params.len() > 1)
+            || (t.is_reference(ret) && params.len() != 1)
+        {
+            return;
+        }
+        if !self.in_local_scope() || ds.storage.is_some() || d.ctx == DeclaratorContext::Condition {
+            return;
+        }
+        let parens = Span::new(*loc, rparen.with_offset(1));
+        let (id, note) = if let Some(first) = params.first() {
+            let (b, e) = first.range;
+            let note = self
+                .diag(DiagId::note_additional_parens_for_variable_declaration, b)
+                .fixit(FixIt::insert(b, "("))
+                .fixit(FixIt::insert(e, ")"));
+            (DiagId::parse_vexing_parse, Some(note))
+        } else {
+            // Empty parentheses value-initialize; without them the object
+            // is default-initialized. These agree for an empty class (or
+            // one with a user-provided default constructor, M3+).
+            let defn = record.and_then(|r| self.ast.decls.record(r)).map(|r| r.defn);
+            let note = if defn.is_some_and(|b| {
+                b.contains(DefinitionBits::COMPLETE) && b.contains(DefinitionBits::EMPTY)
+            }) {
+                Some(
+                    self.diag(DiagId::note_empty_parens_default_ctor, *loc)
+                        .fixit(FixIt::remove(parens)),
+                )
+            } else {
+                let init = self.zero_initializer_fixit(ret, defn);
+                let init = if init.is_empty() { "{}".to_owned() } else { init };
+                Some(
+                    self.diag(DiagId::note_empty_parens_zero_initialize, *loc)
+                        .fixit(FixIt::replace(parens, init)),
+                )
+            };
+            (DiagId::parse_empty_parens_vexing, note)
+        };
+        let mut w = self.diag(id, *loc).range(parens);
+        if let Some(n) = note {
+            w = w.with_note(n);
+        }
+        self.emit(w);
+    }
+
+    /// clang's `getFixItZeroInitializerForType`: ` = 0`, ` = nullptr`,
+    /// `{}`, ... ("" when there is none).
+    fn zero_initializer_fixit(&self, t: QualType, defn: Option<DefinitionBits>) -> String {
+        let types = &self.ast.types;
+        if let Some(bits) = defn {
+            if !bits.contains(DefinitionBits::COMPLETE) {
+                return String::new();
+            }
+            // No user-provided default constructor in M3: `T x{}`.
+            return "{}".to_owned();
+        }
+        if types.as_record(t).is_some() {
+            return String::new();
+        }
+        if types.as_enum(t).is_some() {
+            return String::new();
+        }
+        let zero = if types.is_floating(t) {
+            "0.0"
+        } else if types.is_pointer(t) {
+            "nullptr"
+        } else {
+            match types.builtin(types.canonical(t).without_quals()) {
+                Some(BuiltinType::Bool) => "false",
+                Some(BuiltinType::Char) => "'\\0'",
+                Some(BuiltinType::WChar) => "L'\\0'",
+                Some(BuiltinType::Char16) => "u'\\0'",
+                Some(BuiltinType::Char32) => "U'\\0'",
+                _ => "0",
+            }
+        };
+        format!(" = {zero}")
+    }
+
     /// A declarator in a simple-declaration or member-declaration: creates
     /// the variable, function, typedef or field (spec/sema.md §4.2). The
     /// caller then supplies the initializer ([`Sema::act_on_init`] /
@@ -610,6 +706,9 @@ impl Sema<'_, '_> {
     ) -> Option<DeclId> {
         let ty = self.type_for_declarator_at(base, ds.type_loc.unwrap_or(ds.loc), d);
         let invalid = ds.invalid || d.invalid || self.is_error_type(ty);
+        if !invalid {
+            self.warn_ambiguous_function(ds, d, ty);
+        }
         let Some((name, name_loc)) = d.name else {
             if d.ctx == DeclaratorContext::Member && d.bit_width.is_some() {
                 return Some(self.act_on_field(ds, ty, d, invalid));

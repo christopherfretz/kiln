@@ -1007,10 +1007,15 @@ impl Parser<'_, '_> {
                 self.parse_attributes(&mut d.attrs);
             }
         } else if self.at(Punct::LParen) && !(abstract_ok && self.is_param_list_start(1)) {
+            // Like clang's ParseParenDeclarator: grouping is in effect
+            // only for the inner declarator, then restored.
+            let had_grouping = d.grouping;
+            d.grouping = true;
             let open = self.bump().span.lo;
             self.skip_attributes();
             self.parse_declarator(d);
             self.expect_closing(Punct::RParen, Punct::LParen, open);
+            d.grouping = had_grouping;
         } else if self.at(Punct::Tilde) || self.at_kw(Kw::Operator) {
             self.unsupported("special member functions", self.loc());
             d.invalid = true;
@@ -1033,18 +1038,30 @@ impl Parser<'_, '_> {
                 self.expect_closing(Punct::RSquare, Punct::LSquare, open);
                 self.skip_attributes();
                 d.chunks.push(Chunk::Array { size, loc: open });
-            } else if self.at(Punct::LParen) && (abstract_ok || self.is_param_list_start(1)) {
-                self.parse_function_suffix(d);
+            } else if self.at(Punct::LParen) {
+                // [dcl.ambig.res]/1: after a name that could take a direct
+                // initializer, the parentheses are a function declarator
+                // only if they could be a parameter clause.
+                let mut ambiguous = false;
+                if !abstract_ok && d.direct_init && !d.grouping && d.name.is_some() {
+                    let (function, amb) = self.is_cxx_function_declarator(d.name.map(|n| n.0));
+                    if !function {
+                        break;
+                    }
+                    ambiguous = amb;
+                }
+                self.parse_function_suffix(d, ambiguous);
             } else {
                 break;
             }
         }
     }
 
-    /// True if the token `n` ahead (after a `(`) begins a
-    /// parameter-declaration-clause rather than a nested declarator or an
-    /// initializer. TODO(M3): tentative parsing for the `T(x)` ambiguity
-    /// ([dcl.ambig.res]).
+    /// True if the token `n` ahead (after a `(` where an abstract
+    /// declarator may start) begins a parameter-declaration-clause rather
+    /// than grouping parentheses (clang's `ParseParenDeclarator`): `)`,
+    /// `...)`, a decl-specifier or `[[`. An undeclared name followed by an
+    /// identifier is taken as a misspelled type.
     pub(crate) fn is_param_list_start(&self, n: usize) -> bool {
         let t = self.peek(n);
         match t.kind {
@@ -1071,7 +1088,9 @@ impl Parser<'_, '_> {
     }
 
     /// `( parameter-declaration-clause )` ([dcl.fct]) and what may follow it.
-    fn parse_function_suffix(&mut self, d: &mut Declarator) {
+    /// `ambiguous`: the parentheses could also have been a direct
+    /// initializer ([dcl.ambig.res]/1).
+    fn parse_function_suffix(&mut self, d: &mut Declarator, ambiguous: bool) {
         let open = self.bump().span.lo;
         let mut params = Vec::new();
         let mut variadic = false;
@@ -1098,10 +1117,10 @@ impl Parser<'_, '_> {
                 self.parse_attributes(&mut pd.attrs);
             }
             let mut p = self.s.act_on_param_declarator(&ds, &pd);
-            p.range = (start, self.tok_at(self.pos().saturating_sub(1)).span.lo);
             if self.at(Punct::Equal) {
                 self.parse_default_argument(&mut p);
             }
+            p.range = (start, self.prev_end());
             params.push(p);
             if self.eat(Punct::Ellipsis).is_some() {
                 variadic = true;
@@ -1121,7 +1140,7 @@ impl Parser<'_, '_> {
             rparen,
             exc,
             trailing,
-            ambiguous: false,
+            ambiguous,
         });
     }
 
@@ -1275,8 +1294,17 @@ impl Parser<'_, '_> {
             return decls;
         }
         let mut base_ty: Option<QualType> = None;
+        let direct_init = match ds.storage {
+            Some((StorageSpec::Typedef, _)) => false,
+            Some((StorageSpec::Extern, _)) => ctx == DeclaratorContext::File,
+            _ => matches!(
+                ctx,
+                DeclaratorContext::File | DeclaratorContext::Block | DeclaratorContext::ForInit
+            ),
+        };
         loop {
             let mut d = Declarator::new(ctx, self.loc());
+            d.direct_init = direct_init;
             self.parse_declarator(&mut d);
             // The declspec's type is formed once the first declarator is
             // known: clang reports a missing type specifier at its name.

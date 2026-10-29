@@ -551,12 +551,18 @@ impl Sema<'_, '_> {
                 Some((DiagId::sema_unused_expr, loc, Vec::new()))
             }
             ExprKind::ConditionalOperator => {
+                // Only when both arms warn (otherwise it may be control
+                // flow); clang reports the false arm's warning.
                 let [t, f] = self.ast.exprs.cond_arms(x);
-                (self.unused_warning(t).is_some() && self.unused_warning(f).is_some()).then_some((
-                    DiagId::sema_unused_expr,
-                    loc,
-                    Vec::new(),
-                ))
+                self.unused_warning(t)?;
+                self.unused_warning(f)
+            }
+            ExprKind::BinaryConditionalOperator => {
+                let ops = self.ast.exprs.binary_conditional_operands(x, &self.ast.lists);
+                self.unused_warning(ops[3])
+            }
+            ExprKind::CXXScalarValueInitExpr if !self.ast.types.is_void(n.ty()) => {
+                Some((DiagId::sema_unused_expr, self.begin_loc(x), Vec::new()))
             }
             ExprKind::CStyleCastExpr | ExprKind::CXXFunctionalCastExpr => (self
                 .ast
@@ -2102,15 +2108,13 @@ impl Sema<'_, '_> {
             return false;
         }
         let t = if kind == TraitKind::SizeOf { self.non_reference(ty) } else { ty };
+        // [expr.sizeof]/1, [expr.alignof]/1: in C++ a function type is an
+        // error and `void` is an incomplete type; clang's GNU extensions
+        // for both are C-only ("hard errors for SFINAE").
         if self.ast.types.is_function(t) {
-            let msg = self.diag(DiagId::sema_sizeof_function, loc).arg(name);
+            let msg = self.diag(DiagId::sema_sizeof_function_expr, loc).arg(name);
             self.emit(msg);
-            return true;
-        }
-        if self.ast.types.is_void(t) {
-            let msg = self.diag(DiagId::sema_sizeof_void, loc).arg(name);
-            self.emit(msg);
-            return true;
+            return false;
         }
         let check = if kind == TraitKind::SizeOf {
             t

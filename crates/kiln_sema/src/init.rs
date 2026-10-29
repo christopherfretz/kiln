@@ -127,6 +127,11 @@ impl Sema<'_, '_> {
             Initializer::Paren(v, l, _) => {
                 if v.len() == 1 {
                     self.init_from_expr(ty, v[0], ConvCtx::DirectInitialization, loc)
+                } else if !self.is_aggregate(ty) && !self.ast.types.is_reference(ty) {
+                    // [dcl.init.general]/16.9: a scalar takes one expression.
+                    let d = self.diag(DiagId::sema_excess_initializers, loc).arg("2");
+                    self.emit(d);
+                    self.recover(ty, &v, l)
                 } else {
                     self.unsupported("parenthesized initialization with multiple expressions", l);
                     self.recover(ty, &v, l)
