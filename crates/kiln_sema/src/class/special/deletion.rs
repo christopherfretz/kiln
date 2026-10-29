@@ -10,7 +10,7 @@ use std::cmp::Ordering;
 
 use kiln_ast::decl::{BaseSpec, DeclFlags, DeclKind, Defaulted, DefinitionBits, FnSpec};
 use kiln_ast::names::{DeclName, OverloadedOperator};
-use kiln_ast::types::{ExcSpec, Quals, RefQual, TypeView};
+use kiln_ast::types::{ExcSpec, FuncProto, Quals, RefQual, TypeView};
 use kiln_ast::{DeclId, QualType};
 use kiln_diag::{Diag, DiagId};
 use kiln_source::Loc;
@@ -96,6 +96,7 @@ impl Sema<'_, '_> {
     /// argument (copy/move) of the class type with qualifiers `rhs` and,
     /// for an assignment, an object with qualifiers `lhs` (clang
     /// `LookupSpecialMember`); declares the implicit members it needs.
+    #[allow(clippy::too_many_lines, reason = "one ranking pass over the candidates")]
     pub(crate) fn select_special(
         &mut self,
         class: DeclId,
@@ -265,7 +266,7 @@ impl Sema<'_, '_> {
 
     fn fn_info(&self, f: DeclId) -> kiln_ast::types::FuncInfo {
         let ty = self.ast.decls.get(f).ty().unwrap_or(QualType::ERROR);
-        self.ast.types.proto(ty).map(|p| p.info()).unwrap_or_default()
+        self.ast.types.proto(ty).map(FuncProto::info).unwrap_or_default()
     }
 
     fn fn_variadic(&self, f: DeclId) -> bool {
@@ -469,6 +470,10 @@ impl Sema<'_, '_> {
         }
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one case per [class.default.ctor]/2 and [class.copy.ctor]/10 bullet"
+    )]
     fn delete_for_field(&mut self, w: &mut Walk, f: DeclId) -> DeleteReason {
         use SpecialKind as K;
         let full = self.ast.decls.get(f).ty().unwrap_or(QualType::ERROR);
@@ -703,6 +708,7 @@ impl Sema<'_, '_> {
         self.check_defaulted_impl(f, k, None, false);
     }
 
+    #[allow(clippy::too_many_lines, reason = "the [dcl.fct.def.default] checks in clang's order")]
     fn check_defaulted_impl(&mut self, f: DeclId, k: SpecialKind, dloc: Option<Loc>, first: bool) {
         use SpecialKind as K;
         let Some(ctx) = self.ast.decls.get(f).ctx() else { return };
@@ -739,7 +745,7 @@ impl Sema<'_, '_> {
         };
         let fty = self.ast.decls.get(f).ty().unwrap_or(QualType::ERROR);
         if k.is_assign() {
-            let ret = self.ast.types.proto(fty).map_or(QualType::ERROR, |p| p.ret());
+            let ret = self.ast.types.proto(fty).map_or(QualType::ERROR, FuncProto::ret);
             let class_ty = self.class_type(class);
             let expected_ret = self.ast.types.lvalue_ref_to(class_ty);
             if !self.ast.types.same_type(ret, expected_ret) {

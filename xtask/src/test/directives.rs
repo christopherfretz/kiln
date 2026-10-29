@@ -226,6 +226,7 @@ pub enum StdinInput {
 
 /// Everything the directive header says about one test.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[allow(clippy::struct_excessive_bools, reason = "independent directives")]
 pub struct TestSpec {
     pub expect: Expect,
     /// The `-std=` value, e.g. `c++26`.

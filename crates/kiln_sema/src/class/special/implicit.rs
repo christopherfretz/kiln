@@ -63,6 +63,7 @@ pub(crate) fn needs_ovl_from(bits: DefinitionBits, k: SpecialKind) -> bool {
 
 /// What the scan of a class's declared special members found.
 #[derive(Default)]
+#[allow(clippy::struct_excessive_bools, reason = "independent facts of the scan")]
 struct Declared {
     /// Kinds with a user-declared (non-implicit) member.
     user: u8,
@@ -122,8 +123,8 @@ impl Sema<'_, '_> {
     pub(crate) fn has_special(&self, r: DeclId, k: SpecialKind) -> bool {
         let bits = self.defn_bits(r);
         let implicit = self.implicit_bits(r);
-        declared(bits, implicit, k)
-            && !(k == SpecialKind::DefaultCtor && !self.has_default_ctor_decl(r))
+        (declared(bits, implicit, k)
+            && (k != SpecialKind::DefaultCtor || self.has_default_ctor_decl(r)))
             || needs_from(bits, implicit, k)
     }
 
@@ -507,10 +508,12 @@ impl Sema<'_, '_> {
             if is_ref && !has_init {
                 bits = bits.with(DefinitionBits::HAS_UNINIT_REF_OR_CONST);
             }
-            if !is_ref && quals.is_const() && !has_init {
-                if class.is_none_or(|c| !self.can_const_default_init(c)) {
-                    bits = bits.with(DefinitionBits::HAS_UNINIT_REF_OR_CONST);
-                }
+            if !is_ref
+                && quals.is_const()
+                && !has_init
+                && class.is_none_or(|c| !self.can_const_default_init(c))
+            {
+                bits = bits.with(DefinitionBits::HAS_UNINIT_REF_OR_CONST);
             }
             if !has_init && !mutable && !is_ref {
                 match class {
@@ -520,7 +523,7 @@ impl Sema<'_, '_> {
                         }
                     }
                     None => {
-                        if !self.ast.types.as_record(elem).is_some() {
+                        if self.ast.types.as_record(elem).is_none() {
                             uninit_fields = true;
                         }
                     }
@@ -632,12 +635,12 @@ impl Sema<'_, '_> {
         };
         // Parameter forms of the implicit copy members
         // ([class.copy.ctor]/7, [class.copy.assign]/2).
-        let mut ctor_const_nv = true;
-        let mut ctor_const_v = true;
+        let mut ctor_const_direct = true;
+        let mut ctor_const_vbase = true;
         let mut assign_const = true;
         for &(b, virt) in &base_classes {
             if !virt && !self.copy_has_const_param(b, K::CopyCtor) {
-                ctor_const_nv = false;
+                ctor_const_direct = false;
             }
             if !self.copy_has_const_param(b, K::CopyAssign) {
                 assign_const = false;
@@ -645,18 +648,18 @@ impl Sema<'_, '_> {
         }
         for (v, _) in &vbases {
             if !self.copy_has_const_param(*v, K::CopyCtor) {
-                ctor_const_v = false;
+                ctor_const_vbase = false;
             }
         }
         for &(_, c) in &field_classes {
             if !self.copy_has_const_param(c, K::CopyCtor) {
-                ctor_const_nv = false;
+                ctor_const_direct = false;
             }
             if !self.copy_has_const_param(c, K::CopyAssign) {
                 assign_const = false;
             }
         }
-        if ctor_const_nv && (bits.contains(DefinitionBits::ABSTRACT) || ctor_const_v) {
+        if ctor_const_direct && (bits.contains(DefinitionBits::ABSTRACT) || ctor_const_vbase) {
             bits = bits.with(DefinitionBits::IMPLICIT_COPY_CTOR_CONST_PARAM);
         }
         if assign_const {
@@ -786,6 +789,7 @@ impl Sema<'_, '_> {
     /// `DeclareImplicit*`): public, inline, `Defaulted::Implicit`,
     /// `constexpr` per §4.6, trivial per the class bits, deleted per
     /// [`Sema::should_delete`], and the deferred exception specification.
+    #[allow(clippy::too_many_lines, reason = "one step per property of the declaration")]
     pub(crate) fn declare_implicit(&mut self, r: DeclId, k: SpecialKind) -> DeclId {
         use SpecialKind as K;
         let d = self.class_def(r);

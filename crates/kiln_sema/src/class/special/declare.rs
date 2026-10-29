@@ -211,16 +211,12 @@ impl Sema<'_, '_> {
                 self.check_ctor_dtor_quals(rparen, quals, ref_qual, "0", invalid);
             }
             Shape::Dtor => {
-                if is_static {
-                    if !*invalid {
-                        let m = self
-                            .diag(DiagId::sema_ctor_dtor_cannot_be, sloc)
-                            .arg("1")
-                            .arg("static");
-                        self.emit(m);
-                    }
-                    // clang `CheckDestructorDeclarator` drops `static`
-                    // without invalidating the declarator.
+                // clang `CheckDestructorDeclarator` drops `static`
+                // without invalidating the declarator.
+                if is_static && !*invalid {
+                    let m =
+                        self.diag(DiagId::sema_ctor_dtor_cannot_be, sloc).arg("1").arg("static");
+                    self.emit(m);
                 }
                 if !*invalid && ds.has_type_specifier() {
                     self.error(DiagId::sema_dtor_return_type, sloc);
