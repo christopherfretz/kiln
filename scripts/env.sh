@@ -28,3 +28,10 @@ case "$_MAIN" in /Volumes/AgentWork/kiln-helper/kiln) _TGT="/Volumes/AgentWork/k
 export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$_TGT}"
 unset _TGT
 unset _WS _MAIN _cand
+# The workspace mount (a host bind mount) has dropped rmeta/rlib writes under
+# several concurrent pipelined builds ("can't find crate for kiln_ast" in the
+# middle of a clean build; a retry at -j 8 passed). Cap the jobs and disable
+# pipelining so a dependent rustc never starts before the artifact is fully
+# written. Override either with the same variables.
+export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-8}"
+export CARGO_BUILD_PIPELINING="${CARGO_BUILD_PIPELINING:-false}"
