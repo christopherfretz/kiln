@@ -2,6 +2,7 @@
 // splice of it names the same type.
 //@ std: c++26
 //@ xfail(clang): clang 19 does not implement P2996 reflection
+//@ xfail(kiln): reflection (P2996: `^^`, splices) is not implemented yet
 using info = decltype(^^int);
 
 constexpr info r = ^^int;

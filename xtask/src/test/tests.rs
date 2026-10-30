@@ -538,3 +538,49 @@ fn update_rewrites_existing_goldens() {
     assert!(others_pass(&r), "{}", report(&r));
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+/// `spec/harness.md` "CI": `cargo xtask ci` passes only if neither corpus
+/// run has a FAIL, XPASS or ERROR (XFAIL and SKIP are allowed), an
+/// infrastructure error fails it, and a skipped run (the clang self-check
+/// under `--quick` or without clang) does not.
+#[test]
+fn ci_gate_honours_failure_counts() {
+    let mk = |status| TestResult {
+        name: "tests/conformance/x.cpp".into(),
+        status,
+        reason: None,
+        details: String::new(),
+        log: Vec::new(),
+        updated: false,
+        elapsed: Duration::ZERO,
+    };
+    let ran = |statuses: &[Status]| {
+        let results: Vec<TestResult> = statuses.iter().map(|&s| mk(s)).collect();
+        CorpusOutcome::of(&Ok(results), Duration::from_millis(1250))
+    };
+    let clean = ran(&[Status::Pass, Status::Pass, Status::XFail, Status::Skip]);
+    assert!(clean.passes());
+    assert_eq!(
+        clean.line(),
+        "test result: ok. 2 passed; 0 failed; 1 xfail; 0 xpass; 1 skipped; 0 errors; 4 tests in 1.25s"
+    );
+    for bad in [Status::Fail, Status::XPass, Status::Error] {
+        let run = ran(&[Status::Pass, Status::XFail, bad]);
+        assert!(!run.passes(), "{bad:?} must fail the gate");
+        assert!(run.line().starts_with("test result: FAILED."), "{}", run.line());
+        // One bad run fails ci whichever side it is on.
+        assert!(!ci_corpus_passes(&[clean.clone(), run.clone()]), "{bad:?}");
+        assert!(!ci_corpus_passes(&[run.clone(), clean.clone()]), "{bad:?}");
+    }
+    let infra = CorpusOutcome::of(&Err("cargo build -p kiln_driver failed".into()), Duration::ZERO);
+    assert!(!infra.passes());
+    assert_eq!(infra.line(), "error: cargo build -p kiln_driver failed");
+    assert!(!ci_corpus_passes(&[clean.clone(), infra]));
+
+    let skipped = CorpusOutcome::Skipped("--quick".into());
+    assert!(skipped.passes());
+    assert_eq!(skipped.line(), "skipped (--quick)");
+    assert!(ci_corpus_passes(&[skipped.clone(), clean.clone()]));
+    assert!(!ci_corpus_passes(&[skipped, ran(&[Status::XPass])]));
+    assert!(ci_corpus_passes(&[clean.clone(), clean]));
+}

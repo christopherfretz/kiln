@@ -20,6 +20,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use directives::PpCompare;
+pub use report::{CorpusOutcome, ci_corpus_passes};
 use runner::TestResult;
 
 #[cfg(test)]

@@ -431,16 +431,46 @@ removed at the end of the run.
 
 ## CI
 
-`cargo xtask ci` runs `cargo fmt --all --check`, `cargo clippy --workspace
---all-targets -- -D warnings` and `cargo test --workspace`, then, as a corpus
-self-check, `cargo xtask test --compiler clang++-19`: the seed corpus must
-pass with the reference compiler, or the corpus is wrong. When `clang++-19`
-is not on PATH (`--version` cannot be run), that step is skipped with a note
-on stderr and `ci` still succeeds. The end-to-end tests in
-`xtask/src/test/tests.rs` and `xtask/src/bench/tests.rs` skip themselves with
-a note the same way. GitHub CI (`.github/workflows/ci.yml`, ubuntu-24.04)
-installs `clang-19 libc++-19-dev libc++abi-19-dev` and runs `cargo xtask ci`,
-so neither is skipped there.
+`cargo xtask ci [--quick]` is the merge gate (`docs/AGENTS.md` rule 3). It
+runs, stopping at the first failing step:
+
+1. `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D
+   warnings`, `cargo test --workspace`;
+2. `cargo build -p kiln_driver` (the binary the kiln-mode run tests, in the
+   target dir as for `--compiler`'s default);
+
+then the two corpus runs, both over the default paths (`tests/conformance`
+and `tests/differential`) with the default oracle `clang++-19`. Both run even
+if the first fails, so one cannot hide the other:
+
+3. **clang self-check**: `cargo xtask test --compiler clang++-19`. The corpus
+   must pass with the reference compiler, or the corpus is wrong. It is
+   skipped, with the reason, under `--quick` or when `clang++-19` is not on
+   PATH (`--version` cannot be run).
+4. **kiln mode**: `cargo xtask test --compiler <the kiln built in step 2>`.
+   It is never skipped. It needs clang 19 (the oracle, and kiln's linker), so
+   without clang it ends in an infrastructure error and `ci` fails.
+
+`ci` then prints one line per corpus run, `xtask ci: corpus (<run>): <line>`,
+where `<line>` is the run's summary line ("Output"), `skipped (<reason>)`, or
+`error: <message>`. **`ci` passes only if** every step of 1–2 succeeds and
+neither corpus run has a FAIL, XPASS or ERROR (XFAIL and SKIP are allowed)
+or an infrastructure error; otherwise it exits 1. The decision is
+`test::report::ci_corpus_passes`. A kiln gap is therefore recorded as
+`xfail(kiln):` (or `skip(kiln):`) with the reason, never left failing.
+
+`--quick` is for local iteration only; merges to `main` and GitHub CI use the
+full form. Any other argument is a usage error (exit 2).
+
+The end-to-end tests in `xtask/src/test/tests.rs` and
+`xtask/src/bench/tests.rs` skip themselves with a note when clang 19 is
+missing. GitHub CI (`.github/workflows/ci.yml`, ubuntu-24.04) installs
+`clang-19 libc++-19-dev libc++abi-19-dev` and runs `cargo xtask ci`, so
+nothing is skipped there.
+
+Landed (WP-096): the kiln-mode run, `--quick`, and the pass criteria above.
+Before it, `ci` ran only the clang self-check, and kiln regressions in the
+corpus went through unnoticed.
 
 ## Tests backing this spec
 
@@ -452,6 +482,9 @@ so neither is skipped there.
 - `xtask/src/gen_pp.rs`: the generator's options, and idempotent generation
   over a fake header tree.
 - `xtask/src/test/tests.rs`:
+  - `ci_gate_honours_failure_counts`: the `ci` corpus verdict ("CI") fails
+    on a FAIL, XPASS or ERROR in either run or an infrastructure error, and
+    allows XFAIL, SKIP and a skipped run;
   - the seed corpus (`tests/conformance`, `tests/differential` except the
     generated pp corpus, plus `tests/differential/pp/torture`) passes with
     clang, and every directive kind appears in it;
@@ -491,8 +524,6 @@ so neither is skipped there.
 
 ## Open questions
 
-- **`xtask ci` with kiln.** The corpus self-check uses clang++-19. Once kiln
-  compiles the seed corpus, `ci` should also run `xtask test` with kiln.
 - **Located `oven:` budgets in headers.** A location names a line of the test
   file; there is no way yet to bound an evaluation located in an included
   file, other than through the total.
