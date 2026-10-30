@@ -1133,6 +1133,38 @@ diag_ids! {
     sema_nonviable_condition_no_candidates = Error (2) "cannot convert {0} to {1} without a conversion operator";
     sema_bad_static_cast_pointer_nonpointer = Error (2) "cannot cast from type {0} to pointer type {1}";
     sema_bad_static_cast_member_pointer_nonmp = Error (2) "cannot cast from type {0} to member pointer type {1}";
+    // WP-068b: operator overloading (spec/sema-overload.md §6, §9.1).
+    sema_operator_overload_variable = Error (1) "'{0}' cannot be the name of a variable or data member";
+    sema_typedef_not_identifier = Error (0) "typedef name must be an identifier";
+    sema_operator_overload_needs_class_or_enum = Error (1) "overloaded '{0}' must have at least one parameter of class or enumeration type";
+    sema_operator_overload_must_be = Error (4) "overloaded '{0}' must be a {1:unary|binary|unary or binary} operator (has {2} parameter{3:|s})";
+    sema_operator_overload_must_be_member = Error (1) "overloaded '{0}' must be a non-static member function";
+    sema_operator_overload_static = Error (1) "overloaded '{0}' cannot be a static member function";
+    sema_operator_overload_variadic = Error (1) "overloaded '{0}' cannot be variadic";
+    sema_operator_overload_default_arg = Error (1) "parameter of overloaded '{0}' cannot have a default argument";
+    sema_operator_overload_post_incdec_must_be_int = Error (2) "parameter of overloaded post-{1:increment|decrement} operator must have type 'int' (not {0})";
+    sema_ovl_no_viable_oper = Error (1) "no viable overloaded '{0}'";
+    sema_ovl_no_viable_subscript = Error (1) "no viable overloaded operator[] for type {0}";
+    sema_ovl_ambiguous_oper_binary = Error (3) "use of overloaded operator '{0}' is ambiguous (with operand types {1} and {2})";
+    sema_ovl_ambiguous_oper_unary = Error (2) "use of overloaded operator '{0}' is ambiguous (with operand type {1})";
+    sema_ovl_deleted_oper = Error (2) "overload resolution selected deleted operator '{0}'{1}";
+    sema_ovl_no_viable_object_call = Error (1) "no matching function for call to object of type {0}";
+    sema_ovl_ambiguous_object_call = Error (1) "call to object of type {0} is ambiguous";
+    sema_ovl_deleted_object_call = Error (2) "call to deleted function call operator in type {0}{1}";
+    sema_no_call_operator = Error (1) "type {0} does not provide a call operator";
+    sema_no_subscript_operator = Error (1) "type {0} does not provide a subscript operator";
+    sema_ovl_rewrite_equalequal_not_bool = Error (2) "return type {0} of selected 'operator==' function for rewritten '{1}' comparison is not 'bool'";
+    sema_circular_arrow = Error (0) "circular pointer delegation detected";
+    sema_operator_arrow_depth_exceeded = Error (2) "use of 'operator->' on type {0} would invoke a sequence of more than {1} 'operator->' calls";
+    note_operator_arrow_here = Note (1) "'operator->' declared here produces an object of type {0}";
+    note_operator_arrow_depth = Note (0) "use -foperator-arrow-depth=N to increase 'operator->' limit";
+    note_ovl_builtin_candidate = Note (1) "built-in candidate {0}";
+    note_ovl_surrogate_candidate = Note (1) "conversion candidate of type {0}";
+    note_ovl_ambiguous_oper_binary_reversed_self = Note (0) "ambiguity is between a regular call to this operator and a call with the argument order reversed";
+    note_ovl_ambiguous_eqeq_reversed_self_non_const = Note (0) "mark 'operator==' as const or add a matching 'operator!=' to resolve the ambiguity";
+    sema_ovl_ambiguous_reversed_operator = ExtWarn [AmbiguousReversedOperator] (3) "ISO C++20 considers use of overloaded operator '{0}' (with operand types {1} and {2}) to be ambiguous despite there being a unique best viable function";
+    note_rewriting_operator_as_spaceship = Note (0) "while rewriting comparison as call to 'operator<=>' declared here";
+    sema_operator_arrow_not_pointer = Error (1) "member reference type {0} is not a pointer";
 }
 
 impl DiagId {

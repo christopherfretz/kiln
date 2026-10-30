@@ -48,6 +48,7 @@ diag_groups! {
     Pragmas = "pragmas" [UnknownPragmas, IgnoredPragmas];
     Pedantic = "pedantic" [];
     BackslashNewlineEscape = "backslash-newline-escape" [];
+    AmbiguousReversedOperator = "ambiguous-reversed-operator" [];
     InvalidPpToken = "invalid-pp-token" [];
     MacroRedefined = "macro-redefined" [];
     UnusedMacros = "unused-macros" [];
