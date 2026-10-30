@@ -816,16 +816,29 @@ impl Sema<'_, '_> {
     /// The declarations of `name` a declaration may redeclare (redeclaration
     /// lookup, declaration order).
     pub(crate) fn prev_candidates(&self, name: Symbol, qualifier: Option<DeclId>) -> Vec<DeclId> {
+        self.prev_candidates_dn(DeclName::ident(name), qualifier)
+    }
+
+    /// [`Sema::prev_candidates`] for any declaration name.
+    pub(crate) fn prev_candidates_dn(
+        &self,
+        name: DeclName,
+        qualifier: Option<DeclId>,
+    ) -> Vec<DeclId> {
         match qualifier {
             // [class.mfct]/3, [class.static.data]/3: an out-of-line
             // definition redeclares a member of that class itself, never
             // one inherited from a base.
             Some(q) if self.kind_of(q) == DeclKind::CXXRecord => {
                 let def = self.ast.definition(q).unwrap_or(q);
-                self.lookup_in(def, name, LookupKind::Ordinary).decls
+                self.lookup_in_dn(def, name, LookupKind::Ordinary).decls
             }
-            Some(q) => self.lookup_qualified(q, name, LookupKind::Ordinary).decls,
-            None => self.lookup_current_scope(name),
+            Some(q) => self.lookup_qualified_dn(q, name, LookupKind::Ordinary).decls,
+            None => {
+                let mut v = self.current_scope_raw_dn(name);
+                v.retain(|&d| self.kind_of(d) != DeclKind::UsingShadow);
+                v
+            }
         }
     }
 
@@ -879,11 +892,11 @@ impl Sema<'_, '_> {
     /// same entity ([`Sema::local_externs`]).
     fn find_prev_function(
         &mut self,
-        name: Symbol,
+        dname: DeclName,
         qualifier: Option<DeclId>,
         new: NewFn,
     ) -> Option<DeclId> {
-        let found = self.prev_candidates(name, qualifier);
+        let found = self.prev_candidates_dn(dname, qualifier);
         if let Some(p) = self.pick_prev_function(&found, new) {
             return Some(p);
         }
@@ -891,6 +904,7 @@ impl Sema<'_, '_> {
             return None;
         }
         let ns = self.enclosing_namespace()?;
+        let name = dname.as_ident()?;
         if self.in_local_scope() {
             let mut outer = self.lookup_in(ns, name, LookupKind::Ordinary).decls;
             outer.retain(|&d| matches!(self.kind_of(d), DeclKind::Var | DeclKind::Function));
@@ -1580,29 +1594,15 @@ impl Sema<'_, '_> {
             head: self.templ.cur,
             requires: d.trailing_requires,
         };
-        let prev = if d.op_name.is_some() {
-            None
-        } else if friend && d.qualifier.is_none() {
-            // Redeclaration lookup in the namespace sees hidden friends.
-            let found: Vec<DeclId> =
-                self.ast.lookup_local(ctx, DeclName::ident(name)).iter().collect();
-            self.pick_prev_function(&found, new_fn)
-        } else if method {
-            let found = self.prev_candidates(name, d.qualifier);
-            self.pick_prev_function(&found, new_fn)
-        } else {
-            self.find_prev_function(name, d.qualifier, new_fn)
+        let dname = d.op_name.map_or(DeclName::ident(name), DeclName::operator);
+        let fname = match d.op_name {
+            Some(op) => format!("operator{}", op.spelling()),
+            None => sym_str(self, name),
         };
-        let matches_member = prev.is_some_and(|p| {
-            self.kind_of(p) == DeclKind::CXXMethod
-                && self.ast.decls.get(p).ty().is_some()
-                && self.declared_fn_type(p).is_some_and(|pty| self.same_ignoring_exc_spec(pty, ty))
-        });
-        let mut ty = ty;
-        if let Some(op) = d.op_name {
-            // A replaceable global allocation or deallocation function
-            // redeclares the implicit one ([new.delete]/2).
-            if !method
+        // A replaceable global allocation or deallocation function
+        // redeclares the implicit one ([new.delete]/2).
+        let global_new_delete = d.op_name.is_some_and(|op| {
+            !method
                 && !friend
                 && matches!(
                     op,
@@ -1611,22 +1611,35 @@ impl Sema<'_, '_> {
                         | OverloadedOperator::Delete
                         | OverloadedOperator::ArrayDelete
                 )
-            {
-                let (t, p) = self.act_on_global_new_delete_decl(op, ty);
-                ty = t;
-                prev_ok = p;
-            } else {
-                // todo(WP-068b): other operator functions, class-specific
-                // and friend operator functions.
-                self.unsupported(
-                    "operator functions other than 'operator new' and 'operator delete'",
-                    d.name_loc(),
-                );
-            }
+        });
+        let prev = if global_new_delete {
+            None
+        } else if friend && d.qualifier.is_none() {
+            // Redeclaration lookup in the namespace sees hidden friends.
+            let found: Vec<DeclId> = self.ast.lookup_local(ctx, dname).iter().collect();
+            self.pick_prev_function(&found, new_fn)
+        } else if method {
+            let found = self.prev_candidates_dn(dname, d.qualifier);
+            self.pick_prev_function(&found, new_fn)
+        } else {
+            self.find_prev_function(dname, d.qualifier, new_fn)
+        };
+        let matches_member = prev.is_some_and(|p| {
+            self.kind_of(p) == DeclKind::CXXMethod
+                && self.ast.decls.get(p).ty().is_some()
+                && self.declared_fn_type(p).is_some_and(|pty| self.same_ignoring_exc_spec(pty, ty))
+        });
+        let mut ty = ty;
+        if let Some(op) = d.op_name
+            && global_new_delete
+        {
+            let (t, p) = self.act_on_global_new_delete_decl(op, ty);
+            ty = t;
+            prev_ok = p;
         } else if friend && d.qualifier.is_some() && (prev.is_none() || method && !matches_member) {
             let msg = self
                 .diag(DiagId::sema_friend_def_no_match, d.name_loc())
-                .arg(sym_str(self, name))
+                .arg(fname.clone())
                 .arg(self.qualifier_desc(ctx));
             self.emit(msg);
             invalid_redecl = true;
@@ -1643,7 +1656,7 @@ impl Sema<'_, '_> {
             };
             let msg = self
                 .diag(DiagId::sema_member_def_no_match, d.name_loc())
-                .arg(sym_str(self, name))
+                .arg(fname.clone())
                 .arg(scope);
             self.emit(msg);
             invalid_redecl = true;
@@ -1686,7 +1699,7 @@ impl Sema<'_, '_> {
                     if spec.storage() == FnStorage::Static && pspec.storage() != FnStorage::Static {
                         let msg = self
                             .diag(DiagId::sema_static_non_static, d.name_loc())
-                            .arg(sym_str(self, name));
+                            .arg(fname.clone());
                         let msg = self.note_prev(msg, p, false);
                         self.emit(msg);
                     }
@@ -1703,7 +1716,7 @@ impl Sema<'_, '_> {
                         ExcSpec::None => {
                             let spelled = self.exc_spec_spelling(self.written_exc_spec(pty));
                             self.diag(DiagId::sema_missing_exception_spec, d.name_loc())
-                                .arg(sym_str(self, name))
+                                .arg(fname.clone())
                                 .arg(spelled)
                         }
                         _ => self.diag(DiagId::sema_exception_spec_mismatch, d.name_loc()),
@@ -1738,7 +1751,7 @@ impl Sema<'_, '_> {
             } else {
                 let msg = self
                     .diag(DiagId::sema_redefinition_different_kind, d.name_loc())
-                    .arg(sym_str(self, name));
+                    .arg(fname.clone());
                 let msg = self.note_prev(msg, p, true);
                 self.emit(msg);
             }
@@ -1752,7 +1765,6 @@ impl Sema<'_, '_> {
             prev_ok = None;
             invalid_redecl = true;
         }
-        let dname = d.op_name.map_or(DeclName::ident(name), DeclName::operator);
         let mut h = DeclHead::new(ctx, dname, d.name_loc());
         h.lexical = Some(lexical);
         if friend {
@@ -1760,7 +1772,7 @@ impl Sema<'_, '_> {
             // declared outside the class (before or after).
             let visible = prev_ok.is_some_and(|p| {
                 self.ast
-                    .lookup_local(ctx, DeclName::ident(name))
+                    .lookup_local(ctx, dname)
                     .iter_with_flags()
                     .any(|(x, fl)| x == p && !fl.contains(LookupFlags::ADL_ONLY))
             });
