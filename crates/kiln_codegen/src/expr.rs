@@ -10,13 +10,13 @@ use kiln_ast::stmt::StmtKind;
 use kiln_ast::{DeclId, ExprId, QualType, StmtId};
 use kiln_llvm::{
     Attr, AttrKind, AttrList, BinOp, CallOpts, CastOp, ConstData, Flags, FloatPredicate,
-    IntPredicate, TypeId as LTy, Value,
+    FuncId, IntPredicate, TypeId as LTy, Value,
 };
 
 use crate::fir::{Fir, Op, V};
 use crate::fold::is_local;
 use crate::func::{Addr, CallArg, min_align};
-use crate::module::{Cg, R, err, gval};
+use crate::module::{Cg, R, Sig, err, gval};
 
 /// The value an `OpaqueValueExpr` stands for.
 #[derive(Clone, Copy, Debug)]
@@ -1383,6 +1383,9 @@ impl Cg<'_> {
         else {
             return err(self.loc_of(e), "statement expression without a result");
         };
+        // `EmitCompoundStmt(GetLast)`: a lexical scope, the result stored
+        // to a `tmp` so the scope's cleanups can run before it is read.
+        let scope = self.begin_scope(true);
         for &c in &children[..result] {
             self.emit_stmt(c)?;
         }
@@ -1391,8 +1394,7 @@ impl Cg<'_> {
             let n = *ast.stmts.get(s);
             match n.kind() {
                 StmtKind::LabelStmt => {
-                    let b = self.label_block(DeclId::new(n.a()));
-                    self.emit_block(b, false);
+                    self.emit_label(DeclId::new(n.a()));
                     s = StmtId::new(n.b());
                 }
                 StmtKind::AttributedStmt => s = StmtId::new(n.b()),
@@ -1401,7 +1403,13 @@ impl Cg<'_> {
             }
         }
         self.ensure_insert_point();
-        self.emit_scalar_opt(ast.stmts.expr_stmt_expr(s))
+        let r = ast.stmts.expr_stmt_expr(s);
+        let q = ast.exprs.get(r).ty();
+        let tmp = self.temp(q);
+        let v = self.emit_scalar(r)?;
+        self.store_scalar(v, tmp, q);
+        self.end_scope(scope);
+        Ok(Some(self.load_scalar(tmp, q)))
     }
 
     // ---- ignored expressions -------------------------------------------
@@ -1481,9 +1489,33 @@ impl Cg<'_> {
             (p, fty, false, None)
         };
         let sig = self.call_sig(fty, extern_c, &arg_tys);
-        self.f.vector_width = self.f.vector_width.max(sig.info.max_vector_width);
-        let rq = sig.ret;
-        // EmitCallArgs: evaluate every argument, aggregates into `agg.tmp`.
+        let extra: Vec<Attr> = lib.map(|(_, x)| x).unwrap_or_default();
+        self.call_with(&sig, callee, fid, None, &args, dest, &extra)
+    }
+
+    /// clang `EmitCallArgs` + `EmitCall`: evaluates `args` and calls
+    /// `callee` with signature `sig` (`this`: the implicit object
+    /// argument; `extra`: call-site attributes of a library builtin).
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn call_with(
+        &mut self,
+        sig: &Sig,
+        callee: V,
+        fid: Option<FuncId>,
+        this: Option<V>,
+        args: &[ExprId],
+        dest: Option<Addr>,
+        extra: &[Attr],
+    ) -> R<Option<V>> {
+        let vals = self.emit_call_args(sig, args)?;
+        self.call_vals(sig, callee, fid, this, &vals, args, dest, extra)
+    }
+
+    /// clang `EmitCallArgs`: evaluates every argument, aggregates into
+    /// `agg.tmp`.
+    pub(crate) fn emit_call_args(&mut self, sig: &Sig, args: &[ExprId]) -> R<Vec<CallArg>> {
+        let ast = self.ast;
+        let arg_tys: Vec<QualType> = args.iter().map(|&a| ast.exprs.get(a).ty()).collect();
         let mut vals = Vec::with_capacity(args.len());
         for (i, &a) in args.iter().enumerate() {
             let v = if self.referee(sig.params[i]).is_some() {
@@ -1498,7 +1530,25 @@ impl Cg<'_> {
             };
             vals.push(v);
         }
-        // EmitCall.
+        Ok(vals)
+    }
+
+    /// clang `EmitCall` with evaluated arguments `vals` (of the
+    /// expressions `args`).
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn call_vals(
+        &mut self,
+        sig: &Sig,
+        callee: V,
+        fid: Option<FuncId>,
+        this: Option<V>,
+        vals: &[CallArg],
+        args: &[ExprId],
+        dest: Option<Addr>,
+        extra: &[Attr],
+    ) -> R<Option<V>> {
+        self.f.vector_width = self.f.vector_width.max(sig.info.max_vector_width);
+        let rq = sig.ret;
         let mut ir_args = Vec::new();
         let mut sret_addr = None;
         if sig.sret() {
@@ -1508,6 +1558,9 @@ impl Cg<'_> {
             };
             ir_args.push(a.v);
             sret_addr = Some(a);
+        }
+        if let Some(t) = this {
+            ir_args.push(t);
         }
         for (i, &v) in vals.iter().enumerate() {
             let Some(info) = sig.info.args.get(i) else {
@@ -1524,12 +1577,10 @@ impl Cg<'_> {
             }
             _ => LTy::VOID,
         };
-        let (ret, params) = self.sig_attrs(&sig, args.len(), false);
+        let (ret, params) = self.sig_attrs(sig, args.len(), false);
         let func = if sig.nothrow {
             let mut fa = vec![Attr::Flag(AttrKind::NoUnwind)];
-            if let Some((_, extra)) = &lib {
-                fa.extend(extra.iter().cloned());
-            }
+            fa.extend(extra.iter().cloned());
             self.m.attr_set(&fa)
         } else {
             AttrList::default().func

@@ -197,7 +197,16 @@ impl<'a> IrTypes<'a> {
                     .unwrap_or(QualType::INT);
                 self.convert_mem(int)
             }
-            TypeView::MemberPointer { .. } => IrType::Int(64),
+            // Itanium: a data member pointer is a `ptrdiff_t` offset, a
+            // member function pointer the pair `{ ptr-or-vtable-offset, adj }`
+            // (clang `ItaniumCXXABI::ConvertMemberPointerType`).
+            TypeView::MemberPointer { pointee, .. } => {
+                if ast.types.is_function(pointee) {
+                    IrType::Struct(vec![IrType::Int(64), IrType::Int(64)], false)
+                } else {
+                    IrType::Int(64)
+                }
+            }
             _ => IrType::Int(8),
         }
     }

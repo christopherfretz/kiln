@@ -17,6 +17,8 @@
 )]
 
 mod builtins;
+mod class;
+mod cleanup;
 mod consts;
 mod expr;
 mod fir;
@@ -78,5 +80,6 @@ pub fn emit(
     opts: &CodegenOptions,
 ) -> Result<Module, CodegenError> {
     let folds = fold::prepass(ast, oven, target);
-    module::Cg::new(&*ast, &folds, target, opts).run()
+    let void_ptr = ast.types.pointer_to(kiln_ast::QualType::VOID);
+    module::Cg::new(&*ast, &folds, target, opts, void_ptr).run()
 }

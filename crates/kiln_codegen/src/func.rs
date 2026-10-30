@@ -14,7 +14,9 @@ use kiln_llvm::{
 use kiln_source::Loc;
 use kiln_source::fx::FxHashMap;
 
+use crate::cleanup::{Cleanups, JumpDest};
 use crate::fir::{Blk, Fir, Op, V};
+use crate::CodegenError;
 use crate::module::{Cg, R, Sig, err};
 
 /// An address with its element type and alignment (clang `Address`).
@@ -25,11 +27,11 @@ pub(crate) struct Addr {
     pub align: u64,
 }
 
-/// A `break`/`continue` target pair.
+/// A `break`/`continue` target pair (clang `BreakContinue`).
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Jump {
-    pub brk: Blk,
-    pub cont: Option<Blk>,
+    pub brk: JumpDest,
+    pub cont: Option<JumpDest>,
 }
 
 /// The active `switch`.
@@ -90,7 +92,35 @@ pub(crate) struct Fx {
     pub sig: Option<Sig>,
     pub is_main: bool,
     pub jumps: Vec<Jump>,
-    pub labels: FxHashMap<DeclId, Blk>,
+    pub labels: FxHashMap<DeclId, JumpDest>,
+    /// The labels of the enclosing lexical scopes with cleanups (clang
+    /// `LexicalScope::Labels`), innermost last; `None` for a lexical scope
+    /// entered without cleanups.
+    pub lex_labels: Vec<Vec<DeclId>>,
+    /// The normal-cleanup stack.
+    pub cl: Cleanups,
+    /// `ReturnBlock` as a jump destination.
+    pub ret_dest: Option<JumpDest>,
+    /// `CXXThisValue`: `this` loaded once in the prolog.
+    pub this: Option<V>,
+    /// The class of `this` in a member function.
+    pub this_class: Option<DeclId>,
+    /// The constructor/destructor variant being emitted.
+    pub structor: Option<mangle::Structor>,
+    /// The NRVO flags of NRVO variables with non-trivial destructors.
+    pub nrvo_flags: FxHashMap<DeclId, V>,
+    /// The body refers to a [`V::P`] placeholder.
+    pub uses_ph: bool,
+    /// The first error raised where an `R` cannot be returned (cleanup
+    /// emission); `gen_code` reports it after the body.
+    pub error: Option<CodegenError>,
+    /// The aggregate slot being initialized may overlap other data
+    /// (clang `AggValueSlot::Overlap_t`), consumed by the next emission.
+    pub overlap: bool,
+    /// An object with a non-trivial destructor has been constructed in
+    /// the current constructor prologue: under `-fexceptions` its EH
+    /// cleanup would be needed by any throwing call (spec gap).
+    pub eh_only: bool,
     pub sw: Option<SwitchCtx>,
     pub loops: Vec<LoopFrame>,
     pub mustprogress: bool,
@@ -123,6 +153,17 @@ impl Fx {
             is_main: false,
             jumps: Vec::new(),
             labels: FxHashMap::default(),
+            lex_labels: Vec::new(),
+            cl: Cleanups::new(),
+            ret_dest: None,
+            this: None,
+            this_class: None,
+            structor: None,
+            nrvo_flags: FxHashMap::default(),
+            uses_ph: false,
+            error: None,
+            overlap: false,
+            eh_only: false,
             sw: None,
             loops: Vec::new(),
             mustprogress: true,
@@ -146,12 +187,21 @@ impl Cg<'_> {
 
     /// clang `GenerateCode` for the function definition `d`.
     pub fn emit_fn_def(&mut self, d: DeclId) -> R<()> {
-        let ast = self.ast;
         let f = self.get_fn(d)?;
+        self.gen_code(d, f, None)
+    }
+
+    /// clang `GenerateCode` for the definition `d` into `f` (`structor`:
+    /// the constructor/destructor variant being emitted).
+    pub fn gen_code(
+        &mut self,
+        d: DeclId,
+        f: FuncId,
+        structor: Option<mangle::Structor>,
+    ) -> R<()> {
+        let ast = self.ast;
         let first = ast.first(d);
-        let fty = ast.decls.get(d).ty().expect("function type");
-        let extern_c = mangle::is_extern_c(ast, first);
-        let sig = self.sig(fty, extern_c);
+        let sig = self.decl_sig(first)?;
         let fd = *ast.decls.function(d).expect("function");
         let Some(body) = fd.body else { return Ok(()) };
         let is_main = mangle::decl_name(ast, first) == "main"
@@ -168,11 +218,30 @@ impl Cg<'_> {
         self.f.is_main = is_main;
         self.f.sig = Some(sig.clone());
         self.f.vector_width = sig.info.max_vector_width;
+        self.f.structor = structor;
+        self.f.this_class = sig.this;
         self.set_def_linkage(f, d);
+        let kind = ast.decls.get(d).kind();
+        if self.is_x86()
+            && matches!(
+                kind,
+                DeclKind::CXXMethod
+                    | DeclKind::CXXConstructor
+                    | DeclKind::CXXDestructor
+                    | DeclKind::CXXConversion
+            )
+        {
+            self.m.func_mut(f).align = Some(2);
+        }
+        if structor.is_some() {
+            self.m.func_mut(f).unnamed_addr = kiln_llvm::UnnamedAddr::Global;
+        }
 
         // StartFunction.
         let ret_block = self.f.fir.create_block();
         self.f.ret_block = Some(ret_block);
+        self.f.ret_dest = Some(JumpDest { blk: ret_block, depth: Some(0), index: 1 });
+        self.f.cl.next_index = 2;
         let mut arg_no = 0u32;
         match &sig.info.ret.kind {
             ArgKind::Ignore => self.f.ret_kind = RetKind::Void,
@@ -205,7 +274,12 @@ impl Cg<'_> {
             self.store(V::C(z), slot.v, slot.align, false);
         }
         // EmitFunctionProlog: every argument first, then EmitParmDecl for
-        // each parameter in order.
+        // each parameter in order (the implicit object parameter first).
+        let this_arg = sig.this.map(|_| {
+            let v = V::Arg(arg_no);
+            arg_no += 1;
+            v
+        });
         let param_decls: Vec<DeclId> = ast.lists.iter(fd.params).collect();
         let mut vals = Vec::with_capacity(param_decls.len());
         for (i, &p) in param_decls.iter().enumerate() {
@@ -214,6 +288,11 @@ impl Cg<'_> {
             let loc = Some(ast.decls.get(p).loc());
             vals.push(self.prolog_arg(&info.kind, pq, &mut arg_no, loc)?);
         }
+        let this_addr = this_arg.map(|v| {
+            let a = self.f.fir.alloca(LTy::PTR, 8);
+            self.store(v, a, 8, false);
+            a
+        });
         for (&p, val) in param_decls.iter().zip(vals) {
             let pq = ast.decls.get(p).ty().expect("param type");
             let addr = match val {
@@ -235,8 +314,16 @@ impl Cg<'_> {
             };
             self.f.locals.insert(p, addr);
         }
+        // EmitInstanceFunctionProlog: `this` is loaded once.
+        if let Some(a) = this_addr {
+            self.f.this = Some(self.load(LTy::PTR, a, 8, false));
+        }
 
-        self.emit_body(body)?;
+        match kind {
+            DeclKind::CXXConstructor => self.emit_ctor_body(d, body)?,
+            DeclKind::CXXDestructor => self.emit_dtor_body(d, body)?,
+            _ => self.emit_body(body)?,
+        }
 
         // GenerateCode: falling off the end of a value-returning function.
         if !is_main && self.f.ret_kind != RetKind::Void && self.f.fir.cur().is_some() {
@@ -261,8 +348,14 @@ impl Cg<'_> {
             self.f.fir.push(Op::Unreachable, LTy::VOID);
             self.f.fir.set_cur(None);
         }
+        // FinishFunction.
+        self.pop_cleanup_blocks(0);
         self.emit_return_block();
         self.emit_epilog();
+        self.emit_unreachable_if_used();
+        if let Some(e) = self.f.error.take() {
+            return Err(e);
+        }
         // FinishFunction: an unreachable return block is deleted, and with
         // it a return-value slot nothing else uses.
         if let Some(rb) = self.f.ret_block
@@ -291,8 +384,34 @@ impl Cg<'_> {
             func.attrs.params = params;
         }
         self.nounwind.insert(f, nothrow_def);
-        if let Err(e) = self.f.fir.lower(&mut self.m, f) {
+        if self.f.uses_ph {
+            let fir = std::mem::replace(&mut self.f.fir, Fir::new(Vec::new()));
+            self.pending.push((f, d, fir));
+            return Ok(());
+        }
+        if let Err(e) = self.f.fir.lower(&mut self.m, f, &self.phs) {
             return err(Some(ast.decls.get(d).loc()), format!("IR lowering failed: {e:?}"));
+        }
+        Ok(())
+    }
+
+    /// Declares the complete-object structors still unresolved (used but
+    /// never defined in the translation unit), then lowers the bodies
+    /// that use placeholders.
+    pub(crate) fn resolve_placeholders(&mut self) -> R<()> {
+        let mut keys: Vec<((DeclId, mangle::Structor), u32)> =
+            self.ph_of.iter().map(|(&k, &v)| (k, v)).collect();
+        keys.sort_by_key(|&(_, v)| v);
+        for ((first, v), p) in keys {
+            if self.phs[p as usize].is_none() {
+                let (val, _) = self.declare_structor(first, v)?;
+                self.phs[p as usize] = Some(val);
+            }
+        }
+        for (f, d, fir) in std::mem::take(&mut self.pending) {
+            if let Err(e) = fir.lower(&mut self.m, f, &self.phs) {
+                return err(Some(self.ast.decls.get(d).loc()), format!("IR lowering failed: {e:?}"));
+            }
         }
         Ok(())
     }
@@ -420,9 +539,11 @@ impl Cg<'_> {
 
     /// An unconditional branch at the insertion point (loop metadata
     /// attached as clang's `LoopInfoStack::InsertHelper`).
-    pub fn br(&mut self, target: Blk) {
+    pub fn br(&mut self, target: Blk) -> u32 {
         let v = self.f.fir.push(Op::Br { dest: target }, LTy::VOID);
-        self.loop_md(Fir::last_inst(v), &[target]);
+        let i = Fir::last_inst(v);
+        self.loop_md(i, &[target]);
+        i
     }
 
     /// A conditional branch (constant conditions are kept, as `IRBuilder`
