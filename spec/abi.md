@@ -579,6 +579,38 @@ points, thunks and method indices are clang's.
     They and `kiln_driver/tests/{record,vtable}_layouts.rs` split the dumps
     with `kiln_abi::dump_blocks`, which encodes the two deviations above.
 
+### 8.6 Landed (WP-079): class lowering, argument passing, mangling, member pointers
+- **Record lowering** (`irtype.rs`, clang `CGRecordLowering`):
+  - the vptr comes first, then non-virtual bases and fields, then
+    virtual bases;
+  - a class whose non-virtual size differs from its size also gets a
+    `%struct.S.base` subobject type (`IrType::RecordBase`,
+    `getBaseSubobjectLLVMType`);
+  - `IrRecord::base_index` and `vbase_index` map each base to its
+    element.
+- **Argument passing** (`call.rs`): `can_pass_in_registers` follows
+  clang's `canPassInRegisters`. A class with a non-trivial copy or move
+  constructor or destructor, or with all of them deleted, is passed
+  indirectly and returned via `sret`.
+- **Mangling** (`mangle.rs`): the Itanium mangler covers classes,
+  templates, structor variants (C1/C2/D0/D1/D2), local entities and
+  member pointer types. It is checked against clang by
+  `kiln_codegen/tests/mangle_vs_clang.rs` over `tests/mangle/`.
+- **Member pointers** (Itanium §2.3; clang `ItaniumCXXABI` with
+  `UseARMMethodPtrABI` on AArch64):
+  - A data member pointer is an `i64` byte offset. Null is `-1`.
+  - A member function pointer is `{ i64 ptr, i64 adj }`. Null has
+    `ptr == 0`.
+  - On x86-64, `adj` is the `this` adjustment, and a virtual function's
+    `ptr` is its vtable offset plus 1.
+  - On AArch64, `adj` is `2 * adjustment + is_virtual`, and `ptr` is the
+    plain vtable offset.
+  - Conversion between base and derived scales the adjustment by 2 on
+    AArch64.
+  - Calling convention: an `i64`, or `{ i64, i64 }`. On x86-64 the pair
+    is passed in two INTEGER eightbytes; on AArch64 it is coerced to
+    `[2 x i64]`. Codegen is in spec/codegen.md §7.
+
 ## 9. Open questions (with recommendation)
 - **A1.** `preferred_align` is equal to `align` on both targets. i386
   `double` is where it differs; out of scope.
