@@ -303,10 +303,11 @@ The normative description is spec/driver.md "Code generation". In short:
   same normalization. A `(case, triple)` pair in its `DEVIATIONS` table
   must only verify; every other pair must be identical. `KILN_CASE=<stem>`
   prints both texts; without `opt-19`/`clang++-19` it is skipped. The
-  corpus is 57 programs (ABI classification of 1- to 32-byte structs,
+  corpus is 64 programs (ABI classification of 1- to 32-byte structs,
   HFAs, byval, varargs, `__int128`, `long double`, bit-fields, static
   locals, string literals, references, control flow, new/delete, and the
-  WP-088 `builtins_{bits,mem,fp,misc,srcloc}` cases): 114/114 pairs
+  WP-088 `builtins_{bits,mem,fp,misc,srcloc}` cases, and the WP-079
+  `class_*` cases of §7): 128/128 pairs
   exact, `DEVIATIONS` is empty.
 - **`run` tests:** 35 printf-based programs (`extern "C" int printf`, no
   headers) under `tests/conformance/<section>/`, each naming its section,
@@ -359,6 +360,100 @@ The normative description is spec/driver.md "Code generation". In short:
   `noexcept_operator`, `if_constexpr_true`, `if_constexpr_false` and
   `if_consteval` are exact; a `CXXNoexceptExpr` lowers to its stored
   `bool` constant and `fold.rs` does not look inside it.)
+
+## 7. Landed (WP-079): classes
+Lowering of non-polymorphic classes (`class.rs`, `cleanup.rs`,
+`memptr.rs`), mirroring clang 19 `-O0` on both targets. Polymorphic
+classes and virtual bases are WP-080: every path that needs a vtable
+pointer, a VTT or a virtual call reports a `CodegenError` naming WP-080.
+- **Structors** (clang `ItaniumCXXABI::emitCXXStructor`): constructors
+  and destructors are emitted as the base variant (C2/D2) and then the
+  complete variant (C1/D1). A discardable C1 is replaced by C2 (RAUW);
+  otherwise C1 is an `alias` to C2. Deleting destructors (D0) are WP-080.
+  Structor references go through `structor_ref`. A cache hit on the base
+  variant still queues it for definition, because clang's `EmitDeferred`
+  is depth-first.
+- **Constructor bodies** (`EmitConstructorBody`): base initializers at an
+  `i8` GEP with the `min_align` alignment and `getOverlapForBaseInit`,
+  then member initializers in declaration order. Delegating constructors
+  are supported. Defaulted copy and move constructors use clang's
+  `ConstructorMemcpyizer`, which merges runs of trivially copyable fields
+  into one `llvm.memcpy`.
+- **Destructor bodies and cleanups** (`EmitDestructorBody`, `cleanup.rs`):
+  a cleanup stack modeled on clang's `EHScopeStack` normal cleanups, with
+  branch fixups, the `cleanup.dest.slot` switch, and the single-exit
+  rewrite. Destructors run in this order: member destructors in reverse
+  declaration order, then base destructors.
+  - `ExprWithCleanups` opens a full-expression scope.
+  - `CXXBindTemporaryExpr` and `MaterializeTemporaryExpr` push
+    destructor cleanups. Lifetime-extended temporaries move to the
+    enclosing automatic scope.
+  - Locals of class type get destructor cleanups. NRVO uses an `nrvo`
+    flag, as clang does.
+- **Arrays of classes** (`EmitCXXAggrConstructorCall`): an
+  `arrayctor.loop` with a `phi`, one element at a time, and an
+  `arraydestroy` loop on cleanup. Variable-length arrays of classes
+  report an error.
+- **Aggregate initialization with bases** (C++17): base initializers come
+  first in the init list. Each one is emitted into its base subobject.
+- **Member calls** (`EmitCXXMemberCallExpr`): non-virtual calls through
+  `.` or `->`. A trivial copy or move assignment becomes a `memcpy` of
+  the data size. A static member called through an object evaluates the
+  object for side effects.
+- **Static data members:**
+  - An in-class non-inline declaration is an `external global`.
+  - An inline member is defined in its class.
+  - An out-of-line definition takes the in-class initializer
+    (`getAnyInitializer`).
+  - A const member with an in-class initializer, odr-used but never
+    defined out of line, is an `available_externally constant`.
+  - Naming a static member through `.` evaluates the object and is
+    ignored.
+- **Member-expression folds** (`ScalarExprEmitter::VisitMemberExpr`): an
+  integral or enumeration `MemberExpr` that the Oven folds becomes a
+  constant, after the object is evaluated for side effects.
+- **Pointers to members** (`memptr.rs`; Itanium §2.3, the ARM variant on
+  AArch64; see spec/abi.md §8.6):
+  - `&C::m` constants and Oven `Scalar::MemberPtr` constants, with
+    clang's `getMemberPointerPathAdjustment`;
+  - null member pointers;
+  - base-to-derived and derived-to-base conversions (the
+    `-1`-preserving `select` for data members; `adj` arithmetic for
+    functions, folded on constants);
+  - `.*` and `->*` lvalues, aligned with `getDynamicOffsetAlignment`;
+  - calls through member function pointers, with the virtual/non-virtual
+    dispatch diamond (`!nosanitize !{}` on the vtable slot GEP and
+    load);
+  - `==` and `!=` (`EmitMemberPointerComparison`);
+  - conversion to `bool`.
+
+  Pointers to virtual member functions are WP-080.
+- **Tests:**
+  - IR-diff corpus cases `class_structors`, `class_temporaries`,
+    `class_copy`, `class_members`, `class_aggregate_bases`,
+    `class_static_members` and `class_member_pointers`. All are exact on
+    both triples, which makes the corpus 64 programs.
+  - The `xfail(kiln)` markers that named WP-079 are gone:
+    `class.friend/friends`, `class.mem/member-functions`,
+    `class.static.data/static-members`, `class.derived/derived-to-base`,
+    `expr.mptr.oper/ptr-to-member` and `conv.mem/base-to-derived`.
+
+**Gaps (owned elsewhere or open):**
+- No EH: there are no `invoke`s, landing pads or terminate scopes.
+  Corpus cases call `noexcept` functions, so clang emits no EH either.
+  A throwing call inside a cleanup scope is emitted as a plain `call`.
+- WP-080 owns virtual functions, virtual bases, D0, and pointers to
+  virtual member functions.
+- A C1 that is not discardable is an alias. clang uses a COMDAT or a
+  `weak_odr` C1 in some linkage combinations, which kiln has not
+  covered yet.
+- A `CXXDefaultInitExpr` is emitted with the enclosing `this`.
+- Sema does not yet synthesize calls to non-trivial `operator=` for
+  classes, so codegen sees only trivial assignments.
+- Class `new[]`/`delete[]` with array cookies is not covered by the
+  corpus.
+- The comment in `templates/builtins/builtin.bit-cast-run.cpp` defers
+  class-template member calls. That test has no `xfail` and passes.
 
 ## Status and what remains
 **Done:** WP-052 (lowering, §2–§4; unit corpus 79/79 exact on aarch64)

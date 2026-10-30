@@ -3,7 +3,6 @@
 // member functions; mutable members are modifiable through a const object.
 //@ expect: run
 //@ stdout: 9 18 7 10 1 2 2
-//@ xfail(kiln): needs WP-079 codegen of member calls
 extern "C" int printf(const char*, ...);
 struct S {
   int x = 7;

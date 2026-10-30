@@ -122,8 +122,17 @@ impl Collect<'_> {
                 continue;
             }
             match n.kind() {
-                DeclKind::Function => {
+                DeclKind::Function
+                | DeclKind::CXXMethod
+                | DeclKind::CXXConstructor
+                | DeclKind::CXXDestructor
+                | DeclKind::CXXConversion => {
                     if let Some(body) = ast.decls.function(d).and_then(|f| f.body) {
+                        if n.kind() == DeclKind::CXXConstructor {
+                            for ci in ast.ctor_inits(d) {
+                                self.expr(ci.init);
+                            }
+                        }
                         self.stmt(body);
                     }
                 }
@@ -262,6 +271,14 @@ impl Collect<'_> {
                 self.out.push(ast.exprs.operand(e));
             }
             ExprKind::UnaryExprOrTypeTraitExpr => self.out.push(e),
+            // clang `ScalarExprEmitter::VisitMemberExpr` tries
+            // `EvaluateAsInt` on an integral member access.
+            ExprKind::MemberExpr
+                if ast.types.is_integral(n.ty())
+                    || matches!(ast.types.canonical_view(n.ty()), TypeView::Enum(_)) =>
+            {
+                self.out.push(e);
+            }
             // clang `EmitBuiltinExpr` first tries the call as a constant.
             ExprKind::CallExpr if crate::builtins::is_fold_candidate(ast, e) => self.out.push(e),
             // clang `EmitCXXNewAllocSize` tries the array bound as a constant.

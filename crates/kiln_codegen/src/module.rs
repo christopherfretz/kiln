@@ -6,7 +6,10 @@ use kiln_abi::call::{ArgKind, CallInfo, classify_call};
 use kiln_abi::irtype::{IrType, IrTypes, record_kind_prefix};
 use kiln_abi::mangle;
 use kiln_abi::{Arch, Target};
-use kiln_ast::decl::{ConstexprKind, DeclFlags, DeclKind, TemplLinkKind, VarStorage};
+use kiln_ast::decl::{
+    ConstexprKind, DeclFlags, DeclKind, DefinitionBits, TemplLinkKind, VarStorage,
+};
+use kiln_ast::templates::SpecKind;
 use kiln_ast::types::{BuiltinType, TypeView};
 use kiln_ast::{Ast, DeclId, QualType};
 use kiln_llvm::{
@@ -14,7 +17,7 @@ use kiln_llvm::{
     UnnamedAddr, UwTableKind, Value,
 };
 use kiln_source::Loc;
-use kiln_source::fx::FxHashMap;
+use kiln_source::fx::{FxHashMap, FxHashSet};
 
 use crate::fold::Folds;
 use crate::func::Fx;
@@ -42,6 +45,11 @@ pub(crate) struct Sig {
     pub params: Vec<QualType>,
     /// The prototype is `noexcept`.
     pub nothrow: bool,
+    /// The class of `*this` for an implicit object parameter, passed
+    /// after the `sret` pointer and before `info.args` (clang's
+    /// `arrangeCXXMethodType` prepends it; it is classified with the
+    /// parameters but kept out of `info.args`/`params`).
+    pub this: Option<DeclId>,
 }
 
 impl Sig {
@@ -49,6 +57,15 @@ impl Sig {
     pub fn sret(&self) -> bool {
         matches!(self.info.ret.kind, ArgKind::Indirect { .. })
     }
+}
+
+/// A definition to emit (clang `DeferredDeclsToEmit` entry).
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum Def {
+    /// A function or variable definition.
+    Decl(DeclId),
+    /// One variant of a constructor or destructor definition.
+    Structor(DeclId, mangle::Structor),
 }
 
 /// Module emission state.
@@ -68,11 +85,13 @@ pub(crate) struct Cg<'a> {
     /// Discardable definitions not yet needed: first declaration → definition.
     pub deferred: FxHashMap<DeclId, DeclId>,
     /// Definitions to emit (clang `DeferredDeclsToEmit`).
-    pub to_emit: Vec<DeclId>,
+    pub to_emit: Vec<Def>,
     /// String literal globals by (array type, bytes).
     pub strings: FxHashMap<(LTy, Vec<u8>), GlobalId>,
     /// Named struct types by record.
     pub named: FxHashMap<DeclId, LTy>,
+    /// Base-subobject (`.base`) struct types by record.
+    pub named_base: FxHashMap<DeclId, LTy>,
     /// Names already used for named struct types.
     pub struct_names: FxHashMap<String, u32>,
     /// The `.constant` globals of frozen constant objects (clang
@@ -85,6 +104,27 @@ pub(crate) struct Cg<'a> {
     pub static_locals: FxHashMap<DeclId, GlobalId>,
     /// Static locals emitted per (function, name), for discriminators.
     pub static_local_names: FxHashMap<(Option<DeclId>, String), u32>,
+    /// `void *`, used to classify implicit object parameters.
+    pub void_ptr: QualType,
+    /// Constructor/destructor variants: (first declaration, variant) →
+    /// the symbol (a function or an alias) and the function it names.
+    pub sfns: FxHashMap<(DeclId, mangle::Structor), (Value, FuncId)>,
+    /// Discardable structor variants not yet needed.
+    pub sdeferred: FxHashMap<(DeclId, mangle::Structor), DeclId>,
+    /// The [`crate::fir::V::P`] placeholders: their symbols once known.
+    pub phs: Vec<Option<Value>>,
+    /// Placeholder by (first declaration, variant).
+    pub ph_of: FxHashMap<(DeclId, mangle::Structor), u32>,
+    /// Structor variants whose definitions are queued or emitted.
+    pub squeued: FxHashSet<(DeclId, mangle::Structor)>,
+    /// Classes' structors whose complete variant was referenced.
+    pub c1_decl: FxHashSet<DeclId>,
+    /// Structors whose complete variant is defined (alias or RAUW).
+    pub c1_done: FxHashSet<DeclId>,
+    /// Structors whose base variant body was generated.
+    pub sdone: FxHashSet<DeclId>,
+    /// Bodies using placeholders, lowered once the module is complete.
+    pub pending: Vec<(FuncId, DeclId, crate::fir::Fir)>,
     /// Per-function state.
     pub f: Fx,
 }
@@ -95,6 +135,7 @@ impl<'a> Cg<'a> {
         folds: &'a Folds,
         target: &'a Target,
         opts: &'a CodegenOptions,
+        void_ptr: QualType,
     ) -> Self {
         let spec = match target.triple.arch {
             Arch::AArch64 => kiln_llvm::AARCH64_LINUX_GNU,
@@ -114,11 +155,22 @@ impl<'a> Cg<'a> {
             to_emit: Vec::new(),
             strings: FxHashMap::default(),
             named: FxHashMap::default(),
+            named_base: FxHashMap::default(),
             struct_names: FxHashMap::default(),
             const_objects: FxHashMap::default(),
             srcloc: None,
             static_locals: FxHashMap::default(),
             static_local_names: FxHashMap::default(),
+            void_ptr,
+            sfns: FxHashMap::default(),
+            sdeferred: FxHashMap::default(),
+            phs: Vec::new(),
+            ph_of: FxHashMap::default(),
+            squeued: FxHashSet::default(),
+            c1_decl: FxHashSet::default(),
+            c1_done: FxHashSet::default(),
+            sdone: FxHashSet::default(),
+            pending: Vec::new(),
             f: Fx::empty(),
         }
     }
@@ -134,6 +186,7 @@ impl<'a> Cg<'a> {
         let tu = self.ast.tu;
         self.emit_members(tu)?;
         self.emit_deferred()?;
+        self.resolve_placeholders()?;
         self.trailer();
         Ok(self.m)
     }
@@ -150,8 +203,19 @@ impl<'a> Cg<'a> {
                 DeclKind::Namespace | DeclKind::LinkageSpec | DeclKind::Export => {
                     self.emit_members(d)?;
                 }
-                DeclKind::Function => self.emit_global_fn(d)?,
+                DeclKind::Function | DeclKind::CXXMethod | DeclKind::CXXConversion => {
+                    self.emit_global_fn(d)?;
+                }
+                DeclKind::CXXConstructor | DeclKind::CXXDestructor => {
+                    self.emit_global_structor(d)?;
+                }
                 DeclKind::Var => self.emit_global_var(d)?,
+                // clang `EmitTopLevelDecl(CXXRecord)`: static data members
+                // and nested classes; inline member functions are emitted
+                // when first used.
+                DeclKind::CXXRecord | DeclKind::ClassTemplateSpecialization => {
+                    self.emit_class_members(d)?;
+                }
                 DeclKind::FunctionTemplate | DeclKind::ClassTemplate | DeclKind::VarTemplate => {}
                 _ => {}
             }
@@ -175,10 +239,35 @@ impl<'a> Cg<'a> {
         }
         if let Some(&f) = self.fns.get(&first) {
             if self.m.func(f).is_declaration() {
-                self.to_emit.push(d);
+                self.to_emit.push(Def::Decl(d));
             }
         } else {
             self.deferred.insert(first, d);
+        }
+        Ok(())
+    }
+
+    /// The static data members and nested classes of class `d`.
+    fn emit_class_members(&mut self, d: DeclId) -> R<()> {
+        let ast = self.ast;
+        if ast.decls.get(d).has(DeclFlags::INVALID) {
+            return Ok(());
+        }
+        let members: Vec<DeclId> = ast.decls.members(d).collect();
+        for m in members {
+            let n = ast.decls.get(m);
+            if n.has(DeclFlags::INVALID) {
+                continue;
+            }
+            match n.kind() {
+                // An in-class static data member declaration is a
+                // definition only when inline ([class.static.data]/3,4).
+                DeclKind::Var if self.var_is_inline(m) => self.emit_global_var(m)?,
+                DeclKind::CXXRecord | DeclKind::ClassTemplateSpecialization => {
+                    self.emit_class_members(m)?;
+                }
+                _ => {}
+            }
         }
         Ok(())
     }
@@ -198,7 +287,7 @@ impl<'a> Cg<'a> {
             return self.emit_var_def(d);
         }
         if self.gvars.contains_key(&first) {
-            self.to_emit.push(d);
+            self.to_emit.push(Def::Decl(d));
         } else {
             self.deferred.insert(first, d);
         }
@@ -208,21 +297,31 @@ impl<'a> Cg<'a> {
     /// clang `EmitDeferred`.
     fn emit_deferred(&mut self) -> R<()> {
         let cur = std::mem::take(&mut self.to_emit);
-        for d in cur {
-            let first = self.ast.first(d);
-            if self.ast.decls.get(d).kind() == DeclKind::Function {
-                let still_decl =
-                    self.fns.get(&first).is_none_or(|&f| self.m.func(f).is_declaration());
-                if still_decl {
-                    self.emit_fn_def(d)?;
+        for def in cur {
+            let d = match def {
+                Def::Decl(d) => d,
+                Def::Structor(d, v) => {
+                    self.emit_structor_def(d, v)?;
+                    if !self.to_emit.is_empty() {
+                        self.emit_deferred()?;
+                    }
+                    continue;
                 }
-            } else {
+            };
+            let first = self.ast.first(d);
+            if self.ast.decls.get(d).kind() == DeclKind::Var {
                 let still_decl = self
                     .gvars
                     .get(&first)
                     .is_none_or(|&g| self.m.global(g).initializer().is_none());
                 if still_decl {
                     self.emit_var_def(d)?;
+                }
+            } else {
+                let still_decl =
+                    self.fns.get(&first).is_none_or(|&f| self.m.func(f).is_declaration());
+                if still_decl {
+                    self.emit_fn_def(d)?;
                 }
             }
             if !self.to_emit.is_empty() {
@@ -234,22 +333,66 @@ impl<'a> Cg<'a> {
 
     // ---- linkage -------------------------------------------------------
 
+    /// Whether `d` is (a member of) an implicit template instantiation,
+    /// which has vague (`linkonce_odr`) linkage.
+    pub(crate) fn is_implicit_instantiation(&self, d: DeclId) -> bool {
+        let ast = self.ast;
+        let first = ast.first(d);
+        match ast.templ_link(first).get() {
+            Some((TemplLinkKind::MemberOfSpecialization, _)) => {
+                let ctx = ast.decls.get(first).ctx();
+                ctx.is_none_or(|c| match ast.spec_info(c) {
+                    Some((_, s)) => s.kind == SpecKind::ImplicitInstantiation,
+                    None => true,
+                })
+            }
+            Some((TemplLinkKind::Specialization, _)) => {
+                ast.spec_info(first).is_some_and(|(_, s)| s.kind == SpecKind::ImplicitInstantiation)
+            }
+            _ => false,
+        }
+    }
+
+    /// The definition of a function whose definition is emitted on first
+    /// use but is not reached by the top-level walk (a member function
+    /// defined in its class, an implicit instantiation).
+    pub(crate) fn inline_def(&self, first: DeclId) -> Option<DeclId> {
+        let ast = self.ast;
+        ast.redecls_of(first).find(|&r| {
+            let Some(f) = ast.decls.function(r) else { return false };
+            if f.body.is_none() || matches!(f.templ.get(), Some((TemplLinkKind::Pattern, _))) {
+                return false;
+            }
+            if f.spec.constexpr_kind() == ConstexprKind::Consteval {
+                return false;
+            }
+            let in_class = ast.decls.lexical_ctx(r).is_some_and(|c| {
+                matches!(
+                    ast.decls.get(c).kind(),
+                    DeclKind::CXXRecord | DeclKind::ClassTemplateSpecialization
+                )
+            });
+            in_class || self.is_implicit_instantiation(r)
+        })
+    }
+
     pub fn fn_is_inline(&self, d: DeclId) -> bool {
         let ast = self.ast;
-        ast.redecls_of(d).any(|r| {
-            ast.decls.function(r).is_some_and(|f| {
-                f.spec.is_inline()
-                    || f.spec.implicit_inline()
-                    || f.spec.constexpr_kind() != ConstexprKind::None
+        self.is_implicit_instantiation(d)
+            || ast.redecls_of(d).any(|r| {
+                ast.decls.function(r).is_some_and(|f| {
+                    f.spec.is_inline()
+                        || f.spec.implicit_inline()
+                        || f.spec.constexpr_kind() != ConstexprKind::None
+                })
             })
-        })
     }
 
     pub fn fn_internal(&self, d: DeclId) -> bool {
         mangle::has_internal_linkage(self.ast, d)
     }
 
-    fn discardable_fn(&self, d: DeclId) -> bool {
+    pub(crate) fn discardable_fn(&self, d: DeclId) -> bool {
         self.fn_internal(d) || self.fn_is_inline(d)
     }
 
@@ -291,6 +434,11 @@ impl<'a> Cg<'a> {
                 self.m.types.vector(e, u32::try_from(*n).unwrap_or(u32::MAX))
             }
             IrType::Record(d) => self.record_ty(*d),
+            IrType::RecordBase(d) => {
+                let first = self.ast.first(*d);
+                self.record_ty(first);
+                self.named_base.get(&first).copied().unwrap_or_else(|| self.record_ty(first))
+            }
             IrType::Struct(fs, packed) => {
                 let fs: Vec<LTy> = fs.iter().map(|x| self.ir(x)).collect();
                 self.m.types.struct_literal(&fs, *packed)
@@ -313,6 +461,14 @@ impl<'a> Cg<'a> {
         self.named.insert(first, t);
         let rec = self.tys.record(first).clone();
         let fields: Vec<LTy> = rec.members.iter().map(|x| self.ir(x)).collect();
+        // clang `ComputeRecordLayout`: the base-subobject type is created
+        // before the complete type's body is filled in.
+        if let Some(bm) = &rec.base_members {
+            let bt = self.m.types.named_struct(&format!("{name}.base"));
+            self.named_base.insert(first, bt);
+            let bf: Vec<LTy> = bm.iter().map(|x| self.ir(x)).collect();
+            let _ = self.m.types.set_body(bt, &bf, rec.packed);
+        }
         let _ = self.m.types.set_body(t, &fields, rec.packed);
         t
     }
@@ -375,13 +531,9 @@ impl<'a> Cg<'a> {
     pub fn pointee_layout(&mut self, p: QualType) -> (Option<u64>, u64) {
         let ast = self.ast;
         match ast.types.canonical_view(p) {
-            TypeView::Record(d) => match ast.definition(d) {
-                Some(def) => {
-                    let l = self.tys.layouter().record(def);
-                    (Some(l.nv_size.max(1)), u64::from(l.nv_align))
-                }
-                None => (None, 1),
-            },
+            // getMinimumClassObjectSize / getClassPointerAlignment: a
+            // final class is known to be a complete object.
+            TypeView::Record(d) => self.this_layout(d),
             TypeView::IncompleteArray(_) | TypeView::Function(_) => (None, 1),
             _ if ast.types.is_void(p) => (None, 1),
             _ => {
@@ -389,6 +541,38 @@ impl<'a> Cg<'a> {
                 (Some(s), a)
             }
         }
+    }
+
+    /// The `dereferenceable` size and alignment of `this` pointing to an
+    /// object of class `rd` (clang `getMinimumClassObjectSize` and
+    /// `getClassPointerAlignment`).
+    pub fn this_layout(&mut self, rd: DeclId) -> (Option<u64>, u64) {
+        match self.ast.definition(rd) {
+            Some(def) => {
+                let fin = self.class_is_final(def);
+                let eff = fin || self.dtor_is_final(def);
+                let l = self.tys.layouter().record(def);
+                let size = if eff { l.size } else { l.nv_size.max(1) };
+                let align = if eff { l.align } else { l.nv_align };
+                (Some(size), u64::from(align))
+            }
+            None => (None, 1),
+        }
+    }
+
+    /// The class has the `final` class-virt-specifier (clang
+    /// `hasAttr<FinalAttr>`).
+    pub fn class_is_final(&self, def: DeclId) -> bool {
+        self.ast.decls.record(def).is_some_and(|r| r.defn.contains(DefinitionBits::FINAL))
+    }
+
+    /// The destructor is declared `final` (the rest of clang
+    /// `isEffectivelyFinal`).
+    fn dtor_is_final(&self, def: DeclId) -> bool {
+        self.ast
+            .destructor(def)
+            .and_then(|d| self.ast.decls.function(d))
+            .is_some_and(|f| f.spec.is_final())
     }
 
     /// clang `ConstructAttributeList` for a reference parameter or return:
@@ -418,33 +602,72 @@ impl<'a> Cg<'a> {
 
     /// The lowered signature of function type `fty`.
     pub fn sig(&mut self, fty: QualType, extern_c: bool) -> Sig {
+        self.sig_this(fty, extern_c, None)
+    }
+
+    /// The lowered signature of function type `fty` with an implicit
+    /// object parameter of type `this*` when `this` is set.
+    pub fn sig_this(&mut self, fty: QualType, extern_c: bool, this: Option<DeclId>) -> Sig {
         let ast = self.ast;
         let p = *ast.types.proto(fty).expect("function prototype");
         let params: Vec<QualType> = ast.types.params(&p).to_vec();
         let ret = p.ret();
         let nothrow = ast.types.exc_spec(&p).is_nothrow();
         let variadic = p.variadic();
-        let info = classify_call(&mut self.tys, ret, &params, params.len(), !extern_c);
-        let fn_ty = self.fn_type(&info, ret, variadic);
-        Sig { info, fn_ty, ret, params, nothrow }
+        let info = self.classify(ret, &params, params.len(), !extern_c, this.is_some());
+        let fn_ty = self.fn_type(&info, this.is_some(), variadic);
+        Sig { info, fn_ty, ret, params, nothrow, this }
+    }
+
+    /// clang `arrangeLLVMFunctionInfo`: classifies `this` (when present)
+    /// with the parameters, then splits it off.
+    fn classify(
+        &mut self,
+        ret: QualType,
+        params: &[QualType],
+        n_required: usize,
+        strict_return: bool,
+        this: bool,
+    ) -> CallInfo {
+        if !this {
+            return classify_call(&mut self.tys, ret, params, n_required, strict_return);
+        }
+        let mut all = Vec::with_capacity(params.len() + 1);
+        all.push(self.void_ptr);
+        all.extend_from_slice(params);
+        let mut info = classify_call(&mut self.tys, ret, &all, n_required + 1, strict_return);
+        info.args.remove(0);
+        info
     }
 
     /// The signature of a call with the given argument types (variadic
     /// extras appended).
     pub fn call_sig(&mut self, fty: QualType, extern_c: bool, args: &[QualType]) -> Sig {
+        self.call_sig_this(fty, extern_c, args, None)
+    }
+
+    /// [`Cg::call_sig`] with an implicit object argument.
+    pub fn call_sig_this(
+        &mut self,
+        fty: QualType,
+        extern_c: bool,
+        args: &[QualType],
+        this: Option<DeclId>,
+    ) -> Sig {
         let ast = self.ast;
         let p = *ast.types.proto(fty).expect("function prototype");
         let params: Vec<QualType> = ast.types.params(&p).to_vec();
         let ret = p.ret();
         let mut all = params.clone();
         all.extend_from_slice(&args[params.len().min(args.len())..]);
-        let info = classify_call(&mut self.tys, ret, &all, params.len(), !extern_c);
-        let decl_info = classify_call(&mut self.tys, ret, &params, params.len(), !extern_c);
-        let fn_ty = self.fn_type(&decl_info, ret, p.variadic());
-        Sig { info, fn_ty, ret, params: all, nothrow: ast.types.exc_spec(&p).is_nothrow() }
+        let t = this.is_some();
+        let info = self.classify(ret, &all, params.len(), !extern_c, t);
+        let decl_info = self.classify(ret, &params, params.len(), !extern_c, t);
+        let fn_ty = self.fn_type(&decl_info, t, p.variadic());
+        Sig { info, fn_ty, ret, params: all, nothrow: ast.types.exc_spec(&p).is_nothrow(), this }
     }
 
-    fn fn_type(&mut self, info: &CallInfo, _ret: QualType, variadic: bool) -> LTy {
+    fn fn_type(&mut self, info: &CallInfo, this: bool, variadic: bool) -> LTy {
         let mut ps = Vec::new();
         let rt = match &info.ret.kind {
             ArgKind::Direct { coerce, .. } | ArgKind::Extend { coerce, .. } => self.ir(coerce),
@@ -454,6 +677,9 @@ impl<'a> Cg<'a> {
             }
             ArgKind::Ignore => LTy::VOID,
         };
+        if this {
+            ps.push(LTy::PTR);
+        }
         for a in &info.args {
             match &a.kind {
                 ArgKind::Direct { coerce: IrType::Struct(fs, _), flatten: true, .. } => {
@@ -507,6 +733,18 @@ impl<'a> Cg<'a> {
                 self.ref_attrs(sig.ret, &mut ret);
             }
             ArgKind::Ignore => {}
+        }
+        if let Some(t) = sig.this {
+            // ConstructAttributeList: `nonnull dereferenceable(N) align A`
+            // on `this` (the minimum object size and class pointer
+            // alignment), plus `noundef`.
+            let (size, align) = self.this_layout(t);
+            let mut s = vec![Attr::Flag(AttrKind::NoUndef), Attr::Flag(AttrKind::NonNull)];
+            if let Some(n) = size {
+                s.push(Attr::Dereferenceable(n));
+            }
+            s.push(Attr::Align(align));
+            params.push(self.m.attr_set(&s));
         }
         for (i, a) in sig.info.args.iter().take(n_args).enumerate() {
             let mut s = Vec::new();
@@ -568,11 +806,23 @@ impl<'a> Cg<'a> {
             return Ok(f);
         }
         let name = mangle::mangle_decl(ast, first);
-        let Some(fty) = ast.decls.get(first).ty() else {
-            return err(None, "function without type");
-        };
-        let sig = self.sig(fty, mangle::is_extern_c(ast, first));
-        let f = match self.m.add_function(&name, sig.fn_ty) {
+        let sig = self.decl_sig(first)?;
+        let f = self.declare_fn(&name, first, &sig)?;
+        self.fns.insert(first, f);
+        if let Some(def) = self.deferred.remove(&first) {
+            self.to_emit.push(Def::Decl(def));
+        } else if let Some(def) = self.inline_def(first) {
+            self.to_emit.push(Def::Decl(def));
+        }
+        Ok(f)
+    }
+
+    /// Declares the function `name` for declaration `first` with
+    /// signature `sig` (the declaration attributes of
+    /// `GetOrCreateLLVMFunction`).
+    pub(crate) fn declare_fn(&mut self, name: &str, first: DeclId, sig: &Sig) -> R<FuncId> {
+        let ast = self.ast;
+        let f = match self.m.add_function(name, sig.fn_ty) {
             Ok(f) => f,
             Err(e) => {
                 return err(
@@ -581,7 +831,7 @@ impl<'a> Cg<'a> {
                 );
             }
         };
-        let (ret, params) = self.sig_attrs(&sig, sig.params.len(), false);
+        let (ret, params) = self.sig_attrs(sig, sig.params.len(), false);
         let mut fa = Vec::new();
         if sig.nothrow {
             fa.push(Attr::Flag(AttrKind::NoUnwind));
@@ -596,10 +846,6 @@ impl<'a> Cg<'a> {
             func.attrs.params = params;
         }
         self.nounwind.insert(f, sig.nothrow);
-        self.fns.insert(first, f);
-        if let Some(def) = self.deferred.remove(&first) {
-            self.to_emit.push(def);
-        }
         Ok(f)
     }
 
@@ -668,7 +914,7 @@ impl<'a> Cg<'a> {
             // Emit it now if it is a discardable definition (its position
             // is the point of first use, as clang's GetOrCreateLLVMGlobal
             // followed by the deferred definition reusing it).
-            self.to_emit.push(def);
+            self.to_emit.push(Def::Decl(def));
         }
         let Some(ty) = ast.decls.get(first).ty() else { return err(None, "variable without type") };
         let lt = self.mty(ty);
@@ -679,7 +925,42 @@ impl<'a> Cg<'a> {
         gv.linkage = Linkage::External;
         gv.align = Some(align);
         self.gvars.insert(first, g);
+        self.available_externally(first, g, ty)?;
         Ok(g)
+    }
+
+    /// clang `GetOrCreateLLVMGlobal`: a `const` static data member with
+    /// an in-class initializer and no definition in this translation
+    /// unit exposes its value as an `available_externally` constant.
+    fn available_externally(&mut self, first: DeclId, g: GlobalId, ty: QualType) -> R<()> {
+        let ast = self.ast;
+        if !ast.decls.get(first).ctx().is_some_and(|c| {
+            ast.decls.get(c).kind().payload() == kiln_ast::decl::PayloadClass::Record
+        }) {
+            return Ok(());
+        }
+        if ast.redecls_of(first).count() > 1 || self.var_is_inline(first) {
+            return Ok(());
+        }
+        if !ast.types.effective_quals(ty).is_const() || has_mutable(ty) {
+            return Ok(());
+        }
+        if mangle::has_internal_linkage(ast, first) {
+            return Ok(());
+        }
+        let Some(init) = ast.decls.var(first).and_then(|v| v.init) else { return Ok(()) };
+        let Some(c) = self.folds.get(init) else { return Ok(()) };
+        let c = self.const_value(c, ty, Some(init), true)?;
+        if self.m.const_type(c) != self.m.global(g).value_type() {
+            return Ok(());
+        }
+        if let Err(e) = self.m.set_initializer(g, Some(c)) {
+            return err(Some(ast.decls.get(first).loc()), format!("bad initializer: {e:?}"));
+        }
+        let gv = self.m.global_mut(g);
+        gv.is_constant = true;
+        gv.linkage = Linkage::AvailableExternally;
+        Ok(())
     }
 
     /// The alignment of global variable of type `ty`.
@@ -701,7 +982,12 @@ impl<'a> Cg<'a> {
         let loc = Some(ast.decls.get(d).loc());
         // A trivial default constructor does nothing; the static object
         // is zero-initialized ([basic.start.static]/2).
-        let init = match v.init.filter(|&i| !ast.is_trivial_default_construction(i)) {
+        // clang `getAnyInitializer`: an out-of-line definition of a static
+        // data member takes the in-class initializer.
+        let any_init = v
+            .init
+            .or_else(|| ast.redecls_of(first).find_map(|r| ast.decls.var(r).and_then(|x| x.init)));
+        let init = match any_init.filter(|&i| !ast.is_trivial_default_construction(i)) {
             None => {
                 let t = self.mty(ty);
                 self.m.const_zero(t)

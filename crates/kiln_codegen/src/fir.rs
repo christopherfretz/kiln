@@ -25,6 +25,10 @@ pub(crate) enum V {
     Arg(u32),
     /// A constant, global or function of the module.
     C(Value),
+    /// A constructor/destructor symbol resolved at lowering (clang's
+    /// complete-object declaration later replaced by the base variant or
+    /// an alias; spec/codegen.md §7).
+    P(u32),
 }
 
 /// One instruction.
@@ -48,6 +52,7 @@ pub(crate) enum Op {
     Ret { v: Option<V> },
     Unreachable,
     ExtractValue { agg: V, idx: u32 },
+    InsertValue { agg: V, val: V, idx: u32 },
 }
 
 impl Op {
@@ -88,6 +93,7 @@ impl Op {
         match self {
             Op::Alloca { .. } | Op::Br { .. } | Op::Unreachable => Vec::new(),
             Op::ExtractValue { agg, .. } => vec![*agg],
+            Op::InsertValue { agg, val, .. } => vec![*agg, *val],
             Op::Load { ptr, .. } => vec![*ptr],
             Op::Store { val, ptr, .. } => vec![*val, *ptr],
             Op::Bin { l, r, .. } | Op::ICmp { l, r, .. } | Op::FCmp { l, r, .. } => vec![*l, *r],
@@ -319,6 +325,7 @@ impl Fir {
             V::I(i) => self.insts[i as usize].ty,
             V::Arg(n) => self.params[n as usize],
             V::C(c) => m.const_type(c),
+            V::P(_) => TypeId::PTR,
         }
     }
 
@@ -407,6 +414,61 @@ impl Fir {
         V::I(n)
     }
 
+    /// Inserts `op` immediately before instruction `at` (LLVM
+    /// `new X(.., InsertBefore)`).
+    pub fn insert_before(&mut self, at: u32, op: Op, ty: TypeId) -> V {
+        let b = self.insts[at as usize].block.expect("insertion before a live instruction");
+        let n = self.insts.len() as u32;
+        for s in op.successors() {
+            self.blocks[s.0 as usize].uses += 1;
+        }
+        self.insts.push(Inst { op, ty, block: Some(b), md: Vec::new() });
+        let insts = &mut self.blocks[b.0 as usize].insts;
+        let pos = insts.iter().position(|&x| x == at).expect("instruction in its block");
+        insts.insert(pos, n);
+        V::I(n)
+    }
+
+    /// Redirects every edge of terminator `i` to `from` to `to`
+    /// (LLVM `setSuccessor`).
+    pub fn set_successor(&mut self, i: u32, from: Blk, to: Blk) {
+        let live = self.insts[i as usize].block.is_some();
+        let mut n = 0;
+        for s in self.insts[i as usize].op.successors_mut() {
+            if *s == from {
+                *s = to;
+                n += 1;
+            }
+        }
+        if live {
+            self.blocks[from.0 as usize].uses -= n;
+            self.blocks[to.0 as usize].uses += n;
+        }
+    }
+
+    /// Moves every instruction of `from` to the end of `to`; `from` is
+    /// left empty.
+    pub fn splice_block(&mut self, from: Blk, to: Blk) {
+        let insts = std::mem::take(&mut self.blocks[from.0 as usize].insts);
+        for &i in &insts {
+            self.insts[i as usize].block = Some(to);
+        }
+        self.blocks[to.0 as usize].insts.extend(insts);
+        if self.cur == Some(from) {
+            self.cur = Some(to);
+        }
+    }
+
+    /// The live terminators branching to `b`.
+    pub fn branches_to(&self, b: Blk) -> Vec<u32> {
+        (0..self.insts.len() as u32)
+            .filter(|&i| {
+                let x = &self.insts[i as usize];
+                x.block.is_some() && x.op.is_terminator() && x.op.successors().contains(&b)
+            })
+            .collect()
+    }
+
     /// Adds an incoming edge to phi `i`.
     pub fn add_incoming(&mut self, i: u32, v: V, from: Blk) {
         if let Op::Phi { inc, .. } = &mut self.insts[i as usize].op {
@@ -459,8 +521,10 @@ impl Fir {
 
     // ---- lowering -----------------------------------------------------------
 
-    /// Lowers the buffer into the (empty) body of `f`.
-    pub fn lower(&self, m: &mut Module, f: FuncId) -> IrResult<()> {
+    /// Lowers the buffer into the (empty) body of `f`; `ph` resolves the
+    /// [`V::P`] placeholders.
+    pub fn lower(&self, m: &mut Module, f: FuncId, ph: &[Option<Value>]) -> IrResult<()> {
+        let phv = |n: u32| ph[n as usize].unwrap_or_else(|| panic!("unresolved placeholder {n}"));
         let mut b = IrBuilder::new(m, f);
         let mut bmap: Vec<Option<BlockId>> = vec![None; self.blocks.len()];
         for &bb in &self.layout {
@@ -480,6 +544,7 @@ impl Fir {
                             .unwrap_or_else(|| panic!("use of %{n} before definition")),
                         V::Arg(n) => Value::arg(n),
                         V::C(c) => c,
+                        V::P(n) => phv(n),
                     }
                 };
                 let r = match &inst.op {
@@ -517,6 +582,9 @@ impl Fir {
                     Op::Ret { v } => b.ret(v.map(val))?,
                     Op::Unreachable => b.unreachable()?,
                     Op::ExtractValue { agg, idx } => b.extract_value(val(*agg), &[*idx])?,
+                    Op::InsertValue { agg, val: x, idx } => {
+                        b.insert_value(val(*agg), val(*x), &[*idx])?
+                    }
                 };
                 if let Some(id) = r.as_inst() {
                     for &(k, md) in &inst.md {
@@ -535,6 +603,7 @@ impl Fir {
                         }
                         V::Arg(n) => Value::arg(n),
                         V::C(c) => c,
+                        V::P(n) => phv(n),
                     };
                     b.add_incoming(p, v, blk(bb))?;
                 }

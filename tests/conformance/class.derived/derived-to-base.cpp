@@ -3,7 +3,6 @@
 // bases; members of the bases are members of the derived class.
 //@ expect: run
 //@ stdout: 1 2 3 1 2 6
-//@ xfail(kiln): needs WP-079 codegen of DerivedToBase casts
 extern "C" int printf(const char*, ...);
 struct A { int a = 1; int geta() const { return a; } };
 struct B { int b = 2; };

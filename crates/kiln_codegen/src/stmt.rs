@@ -2,18 +2,126 @@
 //! family at `-O0`.
 
 use kiln_ast::decl::DeclKind;
+use kiln_ast::expr::ExprKind;
 use kiln_ast::stmt::{IfKind, StmtKind};
 use kiln_ast::{DeclId, ExprId, StmtId};
 use kiln_llvm::TypeId as LTy;
 
+use crate::cleanup::{Depth, JumpDest};
 use crate::fir::{Blk, Op, V};
 use crate::func::{Jump, LoopFrame, RetKind, SwitchCtx};
 use crate::module::{Cg, R, err};
 
+/// A `RunCleanupsScope` / `LexicalScope` in progress.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Scope {
+    depth: Depth,
+    le: usize,
+    lexical: bool,
+}
+
 impl Cg<'_> {
-    /// Emits a function body.
+    /// Emits a function body (clang `EmitFunctionBody`: a compound body
+    /// without a lexical scope of its own).
     pub(crate) fn emit_body(&mut self, body: StmtId) -> R<()> {
+        let ast = self.ast;
+        if ast.stmts.get(body).kind() == StmtKind::CompoundStmt {
+            return self.emit_compound_without_scope(body);
+        }
         self.emit_stmt(body)
+    }
+
+    fn emit_compound_without_scope(&mut self, s: StmtId) -> R<()> {
+        let ast = self.ast;
+        for c in ast.lists.iter::<StmtId>(ast.stmts.compound_body(s)).collect::<Vec<_>>() {
+            self.emit_stmt(c)?;
+        }
+        Ok(())
+    }
+
+    // ---- scopes --------------------------------------------------------
+
+    /// Enters a `RunCleanupsScope` (or, with `lexical`, a `LexicalScope`).
+    pub(crate) fn begin_scope(&mut self, lexical: bool) -> Scope {
+        if lexical {
+            self.f.lex_labels.push(Vec::new());
+        }
+        Scope { depth: self.f.cl.depth(), le: self.f.cl.lifetime_extended.len(), lexical }
+    }
+
+    /// `RunCleanupsScope::requiresCleanups`.
+    pub(crate) fn requires_cleanups(&self, s: &Scope) -> bool {
+        self.f.cl.depth() != s.depth
+    }
+
+    /// `ForceCleanup` (and the scope's destructor): pops the cleanups
+    /// pushed since `s` began, then pushes the lifetime-extended ones;
+    /// a lexical scope rescopes its labels.
+    pub(crate) fn end_scope(&mut self, s: Scope) {
+        let labels = if s.lexical { self.f.lex_labels.pop() } else { None };
+        self.pop_cleanup_blocks_le(s.depth, s.le);
+        if let Some(labels) = labels
+            && !labels.is_empty()
+        {
+            // rescopeLabels.
+            let innermost = self.f.cl.depth();
+            for l in &labels {
+                if let Some(j) = self.f.labels.get_mut(l) {
+                    j.depth = Some(innermost);
+                }
+            }
+            if innermost != 0
+                && let Some(parent) = self.f.lex_labels.last_mut()
+            {
+                parent.extend(labels);
+            }
+        }
+    }
+
+    /// `getJumpDestInCurrentScope` for an existing block.
+    fn jump_dest_at(&mut self, blk: Blk) -> JumpDest {
+        let index = self.f.cl.next_index;
+        self.f.cl.next_index += 1;
+        JumpDest { blk, depth: Some(self.f.cl.depth()), index }
+    }
+
+    /// `getJumpDestForLabel`.
+    fn label_dest(&mut self, d: DeclId) -> JumpDest {
+        if let Some(&j) = self.f.labels.get(&d) {
+            return j;
+        }
+        let blk = self.f.fir.create_block();
+        let index = self.f.cl.next_index;
+        self.f.cl.next_index += 1;
+        let j = JumpDest { blk, depth: None, index };
+        self.f.labels.insert(d, j);
+        j
+    }
+
+    /// clang `EmitLabel`.
+    pub(crate) fn emit_label(&mut self, d: DeclId) {
+        let blk = match self.f.labels.get(&d).copied() {
+            None => {
+                let b = self.f.fir.create_block();
+                let j = self.jump_dest_at(b);
+                self.f.labels.insert(d, j);
+                b
+            }
+            Some(j) => {
+                let depth: Depth = self.f.cl.depth();
+                if let Some(x) = self.f.labels.get_mut(&d) {
+                    x.depth = Some(depth);
+                }
+                self.resolve_branch_fixups(j.blk);
+                j.blk
+            }
+        };
+        if !self.f.cl.stack.is_empty()
+            && let Some(l) = self.f.lex_labels.last_mut()
+        {
+            l.push(d);
+        }
+        self.emit_block(blk, false);
     }
 
     fn stmt_children(&self, s: StmtId) -> Vec<StmtId> {
@@ -87,9 +195,9 @@ impl Cg<'_> {
         match n.kind() {
             StmtKind::NullStmt => Ok(()),
             StmtKind::CompoundStmt => {
-                for c in ast.lists.iter::<StmtId>(ast.stmts.compound_body(s)).collect::<Vec<_>>() {
-                    self.emit_stmt(c)?;
-                }
+                let sc = self.begin_scope(true);
+                self.emit_compound_without_scope(s)?;
+                self.end_scope(sc);
                 Ok(())
             }
             StmtKind::DeclStmt => {
@@ -118,35 +226,22 @@ impl Cg<'_> {
             }
             StmtKind::AttributedStmt => self.emit_stmt(StmtId::new(n.b())),
             StmtKind::LabelStmt => {
-                let b = self.label_block(DeclId::new(n.a()));
-                self.emit_block(b, false);
+                self.emit_label(DeclId::new(n.a()));
                 self.emit_stmt(StmtId::new(n.b()))
             }
             StmtKind::GotoStmt => {
-                let b = self.label_block(DeclId::new(n.a()));
-                if self.f.fir.cur().is_some() {
-                    self.emit_branch(b);
-                }
+                let j = self.label_dest(DeclId::new(n.a()));
+                self.branch_through_cleanup(j);
                 Ok(())
             }
             StmtKind::BreakStmt => {
-                if self.f.fir.cur().is_some() {
-                    let j = *self.f.jumps.last().expect("break outside a loop");
-                    self.emit_branch(j.brk);
-                }
+                let j = self.f.jumps.last().expect("break outside a loop").brk;
+                self.branch_through_cleanup(j);
                 Ok(())
             }
             StmtKind::ContinueStmt => {
-                if self.f.fir.cur().is_some() {
-                    let c = self
-                        .f
-                        .jumps
-                        .iter()
-                        .rev()
-                        .find_map(|j| j.cont)
-                        .expect("continue outside a loop");
-                    self.emit_branch(c);
-                }
+                let c = self.f.jumps.last().and_then(|j| j.cont).expect("continue outside a loop");
+                self.branch_through_cleanup(c);
                 Ok(())
             }
             StmtKind::ReturnStmt => self.emit_return(s),
@@ -165,30 +260,36 @@ impl Cg<'_> {
         }
     }
 
-    pub(crate) fn label_block(&mut self, d: DeclId) -> Blk {
-        if let Some(&b) = self.f.labels.get(&d) {
-            return b;
-        }
-        let b = self.f.fir.create_block();
-        self.f.labels.insert(d, b);
-        b
-    }
-
     fn emit_return(&mut self, s: StmtId) -> R<()> {
         let ast = self.ast;
-        let rv = ast.stmts.return_value(s);
-        if let Some(e) = rv {
+        let sc = self.begin_scope(false);
+        let mut rv = ast.stmts.return_value(s);
+        if let Some(e) = rv
+            && ast.exprs.get(e).kind() == ExprKind::ExprWithCleanups
+        {
+            rv = Some(self.sub(e));
+        }
+        let nrvo = ast
+            .stmts
+            .return_nrvo(s)
+            .filter(|&v| ast.decls.var(v).is_some_and(|x| x.spec.is_nrvo()));
+        if let Some(v) = nrvo {
+            if let Some(&flag) = self.f.nrvo_flags.get(&v) {
+                let t = V::C(self.m.const_bool(true));
+                self.store(t, flag, 1, false);
+            }
+        } else if let Some(e) = rv {
             let q = ast.exprs.get(e).ty();
             let ret_ref = self.f.sig.as_ref().is_some_and(|g| self.referee(g.ret).is_some());
             if ast.types.is_void(q) || self.f.ret_slot.is_none() {
                 self.emit_ignored(e)?;
             } else if ret_ref {
-                let lv = self.emit_lvalue(e)?;
+                let p = self.emit_ref_binding(e)?;
                 let slot = self.f.ret_slot.expect("return slot");
-                self.store(lv.addr.v, slot.v, slot.align, false);
+                self.store(p, slot.v, slot.align, false);
             } else if self.is_aggregate(q) {
                 let slot = self.f.ret_slot.expect("return slot");
-                self.emit_agg(e, slot, false)?;
+                self.emit_agg_slot(e, slot, false, false)?;
             } else {
                 let v = self.emit_scalar(e)?;
                 let slot = self.f.ret_slot.expect("return slot");
@@ -199,8 +300,9 @@ impl Cg<'_> {
                 }
             }
         }
-        let rb = self.f.ret_block.expect("return block");
-        self.emit_branch(rb);
+        self.end_scope(sc);
+        let rd = self.f.ret_dest.expect("return destination");
+        self.branch_through_cleanup(rd);
         Ok(())
     }
 
@@ -211,10 +313,13 @@ impl Cg<'_> {
         if matches!(kind, IfKind::Consteval | IfKind::NotConsteval) {
             let live = if kind == IfKind::Consteval { d.els } else { d.then };
             if let Some(l) = live {
+                let sc = self.begin_scope(false);
                 self.emit_stmt(l)?;
+                self.end_scope(sc);
             }
             return Ok(());
         }
+        let cond_scope = self.begin_scope(true);
         if let Some(i) = d.init {
             self.emit_stmt(i)?;
         }
@@ -226,8 +331,11 @@ impl Cg<'_> {
             let (live, dead) = if b { (d.then, d.els) } else { (d.els, d.then) };
             if kind == IfKind::Constexpr || !dead.is_some_and(|x| self.contains_label(x)) {
                 if let Some(l) = live {
+                    let sc = self.begin_scope(false);
                     self.emit_stmt(l)?;
+                    self.end_scope(sc);
                 }
+                self.end_scope(cond_scope);
                 return Ok(());
             }
         }
@@ -237,15 +345,20 @@ impl Cg<'_> {
         self.branch_on_bool(cond, then_b, else_b)?;
         self.emit_block(then_b, false);
         if let Some(t) = d.then {
+            let sc = self.begin_scope(false);
             self.emit_stmt(t)?;
+            self.end_scope(sc);
         }
         self.emit_branch(end_b);
         if let Some(e) = d.els {
             self.emit_block(else_b, false);
+            let sc = self.begin_scope(false);
             self.emit_stmt(e)?;
+            self.end_scope(sc);
             self.emit_branch(end_b);
         }
         self.emit_block(end_b, true);
+        self.end_scope(cond_scope);
         Ok(())
     }
 
@@ -295,10 +408,12 @@ impl Cg<'_> {
     fn emit_while(&mut self, s: StmtId) -> R<()> {
         let ast = self.ast;
         let d = *ast.stmts.loop_data(s);
-        let header = self.f.fir.create_block();
-        self.emit_block(header, false);
-        let end = self.f.fir.create_block();
+        let header_b = self.f.fir.create_block();
+        let header = self.jump_dest_at(header_b);
+        self.emit_block(header_b, false);
+        let end = self.jump_dest_here();
         self.f.jumps.push(Jump { brk: end, cont: Some(header) });
+        let cond_scope = self.begin_scope(false);
         if let Some(v) = d.cond_var {
             self.emit_var_decl(v)?;
         }
@@ -306,21 +421,33 @@ impl Cg<'_> {
         let cv = self.eval_bool(cond)?;
         let const_true = matches!(self.cint(cv), Some((_, 1, _)));
         let md = self.new_loop_md(Some(cond), d.body);
-        self.f.loops.push(LoopFrame { header, md });
+        self.f.loops.push(LoopFrame { header: header_b, md });
         let body = self.f.fir.create_block();
         if !const_true {
-            self.cond_br(cv, body, end);
+            let exit = if self.requires_cleanups(&cond_scope) {
+                self.f.fir.create_block()
+            } else {
+                end.blk
+            };
+            self.cond_br(cv, body, exit);
+            if exit != end.blk {
+                self.emit_block(exit, false);
+                self.branch_through_cleanup(end);
+            }
         }
+        let body_scope = self.begin_scope(false);
         self.emit_block(body, false);
         if let Some(b) = d.body {
             self.emit_stmt(b)?;
         }
+        self.end_scope(body_scope);
         self.f.jumps.pop();
-        self.emit_branch(header);
+        self.end_scope(cond_scope);
+        self.emit_branch(header_b);
         self.f.loops.pop();
-        self.emit_block(end, true);
+        self.emit_block(end.blk, true);
         if const_true {
-            self.simplify_forwarding(header);
+            self.simplify_forwarding(header_b);
         }
         Ok(())
     }
@@ -328,15 +455,17 @@ impl Cg<'_> {
     fn emit_do(&mut self, s: StmtId) -> R<()> {
         let ast = self.ast;
         let d = *ast.stmts.loop_data(s);
-        let end = self.f.fir.create_block();
-        let cond_b = self.f.fir.create_block();
-        self.f.jumps.push(Jump { brk: end, cont: Some(cond_b) });
+        let end = self.jump_dest_here();
+        let cond_d = self.jump_dest_here();
+        self.f.jumps.push(Jump { brk: end, cont: Some(cond_d) });
         let body_b = self.f.fir.create_block();
         self.emit_block(body_b, false);
         if let Some(b) = d.body {
+            let sc = self.begin_scope(false);
             self.emit_stmt(b)?;
+            self.end_scope(sc);
         }
-        self.emit_block(cond_b, false);
+        self.emit_block(cond_d.blk, false);
         let cond = d.cond.expect("do condition");
         let cv = self.eval_bool(cond)?;
         self.f.jumps.pop();
@@ -344,12 +473,12 @@ impl Cg<'_> {
         let md = self.new_loop_md(Some(cond), d.body);
         self.f.loops.push(LoopFrame { header: body_b, md });
         if !const_false {
-            self.cond_br(cv, body_b, end);
+            self.cond_br(cv, body_b, end.blk);
         }
         self.f.loops.pop();
-        self.emit_block(end, false);
+        self.emit_block(end.blk, false);
         if const_false {
-            self.simplify_forwarding(cond_b);
+            self.simplify_forwarding(cond_d.blk);
         }
         Ok(())
     }
@@ -357,42 +486,69 @@ impl Cg<'_> {
     fn emit_for(&mut self, s: StmtId) -> R<()> {
         let ast = self.ast;
         let d = *ast.stmts.loop_data(s);
-        let end = self.f.fir.create_block();
+        let end = self.jump_dest_here();
+        let for_scope = self.begin_scope(true);
         if let Some(i) = d.init {
             self.emit_stmt(i)?;
         }
-        let cond_b = self.f.fir.create_block();
+        let cond_d = self.jump_dest_here();
+        let cond_b = cond_d.blk;
         self.emit_block(cond_b, false);
         let md = self.new_loop_md(d.cond, d.body);
         self.f.loops.push(LoopFrame { header: cond_b, md });
-        let cont = if d.inc.is_some() { self.f.fir.create_block() } else { cond_b };
-        self.f.jumps.push(Jump { brk: end, cont: Some(cont) });
-        if let Some(v) = d.cond_var {
-            self.emit_var_decl(v)?;
-        }
+        let cond_scope = self.begin_scope(true);
+        let mut cont = if d.inc.is_none() {
+            Some(cond_d)
+        } else if d.cond_var.is_none() {
+            Some(self.jump_dest_here())
+        } else {
+            None
+        };
+        self.f.jumps.push(Jump { brk: end, cont });
         if let Some(c) = d.cond {
+            if let Some(v) = d.cond_var {
+                self.emit_var_decl(v)?;
+                cont = Some(if d.inc.is_some() { self.jump_dest_here() } else { cond_d });
+                self.f.jumps.last_mut().expect("loop").cont = cont;
+            }
+            let exit = if self.requires_cleanups(&for_scope) {
+                self.f.fir.create_block()
+            } else {
+                end.blk
+            };
             let body_b = self.f.fir.create_block();
             let cv = self.eval_bool(c)?;
-            self.cond_br(cv, body_b, end);
+            self.cond_br(cv, body_b, exit);
+            if exit != end.blk {
+                self.emit_block(exit, false);
+                self.branch_through_cleanup(end);
+            }
             self.emit_block(body_b, false);
         }
         if let Some(b) = d.body {
+            let sc = self.begin_scope(false);
             self.emit_stmt(b)?;
+            self.end_scope(sc);
         }
         if let Some(inc) = d.inc {
-            self.emit_block(cont, false);
+            let c = cont.expect("continue destination");
+            self.emit_block(c.blk, false);
             self.emit_ignored(inc)?;
         }
         self.f.jumps.pop();
+        self.end_scope(cond_scope);
         self.emit_branch(cond_b);
+        self.end_scope(for_scope);
         self.f.loops.pop();
-        self.emit_block(end, true);
+        self.emit_block(end.blk, true);
         Ok(())
     }
 
     fn emit_switch(&mut self, s: StmtId) -> R<()> {
         let ast = self.ast;
         let d = *ast.stmts.switch_data(s);
+        let epilog = self.jump_dest_here();
+        let cond_scope = self.begin_scope(false);
         if let Some(i) = d.init {
             self.emit_stmt(i)?;
         }
@@ -404,17 +560,21 @@ impl Cg<'_> {
         let default = self.f.fir.create_block();
         let sw = self.f.fir.push(Op::Switch { c, default, cases: Vec::new() }, LTy::VOID);
         self.f.fir.set_cur(None);
-        let epilog = self.f.fir.create_block();
-        let outer_cont = self.f.jumps.iter().rev().find_map(|j| j.cont);
+        let outer_cont = self.f.jumps.last().and_then(|j| j.cont);
         self.f.jumps.push(Jump { brk: epilog, cont: outer_cont });
         let saved =
             self.f.sw.replace(SwitchCtx { inst: crate::fir::Fir::last_inst(sw), cond_ty, default });
         self.emit_stmt(d.body)?;
         self.f.jumps.pop();
         if !self.f.fir.is_placed(default) {
-            self.f.fir.replace_block_uses(default, epilog);
+            if self.requires_cleanups(&cond_scope) {
+                self.emit_block(default, false);
+            } else {
+                self.f.fir.replace_block_uses(default, epilog.blk);
+            }
         }
-        self.emit_block(epilog, true);
+        self.end_scope(cond_scope);
+        self.emit_block(epilog.blk, true);
         self.f.sw = saved;
         Ok(())
     }
