@@ -324,6 +324,28 @@ impl Sema<'_, '_> {
                 | ExprKind::CXXMemberCallExpr
                 | ExprKind::MemberExpr => true,
                 ExprKind::UnaryOperator => self.ast.exprs.unary_op(e).is_postfix(),
+                ExprKind::CXXRewrittenBinaryOperator => {
+                    e = self.ast.exprs.rewritten_semantic(e);
+                    continue;
+                }
+                // clang's `CXXOperatorCallExpr::getSourceRangeImpl`: a
+                // prefix unary operator begins at its token, every other
+                // form at its first operand.
+                ExprKind::CXXOperatorCallExpr => {
+                    use kiln_ast::names::OverloadedOperator as O;
+                    let op = self.ast.exprs.operator_call_op(e);
+                    let args = self.ast.exprs.call_args(e);
+                    let first = self.ast.lists.at::<ExprId>(args, 0);
+                    let prefix = self.ast.lists.get(args).len() == 1
+                        && !matches!(op, O::Call | O::Subscript | O::Arrow);
+                    match first {
+                        Some(a) if !prefix => {
+                            e = a;
+                            continue;
+                        }
+                        _ => return n.loc(),
+                    }
+                }
                 _ => false,
             };
             let kids = if first { self.ast.exprs.children(e, &self.ast.lists) } else { Vec::new() };
@@ -532,7 +554,32 @@ impl Sema<'_, '_> {
         let n = *self.ast.exprs.get(x);
         let loc = n.loc();
         match n.kind() {
-            ExprKind::CallExpr => {
+            // clang's `isUnusedResultAWarning`: user-defined comparisons
+            // warn as the built-in ones do.
+            ExprKind::CXXOperatorCallExpr
+                if !self.ast.types.is_reference(n.ty())
+                    && !self.ast.types.is_void(n.ty())
+                    && matches!(
+                        self.ast.exprs.operator_call_op(x),
+                        kiln_ast::names::OverloadedOperator::EqualEqual
+                            | kiln_ast::names::OverloadedOperator::ExclaimEqual
+                            | kiln_ast::names::OverloadedOperator::Less
+                            | kiln_ast::names::OverloadedOperator::Greater
+                            | kiln_ast::names::OverloadedOperator::LessEqual
+                            | kiln_ast::names::OverloadedOperator::GreaterEqual
+                    ) =>
+            {
+                let which = match self.ast.exprs.operator_call_op(x) {
+                    kiln_ast::names::OverloadedOperator::EqualEqual => "0",
+                    kiln_ast::names::OverloadedOperator::ExclaimEqual => "1",
+                    _ => "2",
+                };
+                Some((DiagId::sema_unused_comparison, loc, vec![which.to_owned()]))
+            }
+            ExprKind::CXXRewrittenBinaryOperator => {
+                Some((DiagId::sema_unused_expr, loc, Vec::new()))
+            }
+            ExprKind::CallExpr | ExprKind::CXXOperatorCallExpr => {
                 let callee = self.ignore_paren_imp_casts(self.ast.exprs.callee(x));
                 if self.ast.exprs.get(callee).kind() == ExprKind::DeclRefExpr {
                     let f = self.ast.exprs.decl(callee);

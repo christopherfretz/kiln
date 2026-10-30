@@ -38,6 +38,26 @@ impl Sema<'_, '_> {
                 | ExprKind::BinaryOperator
                 | ExprKind::CompoundAssignOperator
                 | ExprKind::MemberExpr => return self.eloc(e),
+                ExprKind::CXXRewrittenBinaryOperator => return self.eloc(e),
+                ExprKind::CXXOperatorCallExpr => {
+                    use kiln_ast::names::OverloadedOperator as O;
+                    let op = exprs.operator_call_op(e);
+                    if matches!(
+                        op,
+                        O::PlusPlus
+                            | O::MinusMinus
+                            | O::Arrow
+                            | O::Call
+                            | O::Subscript
+                            | O::New
+                            | O::Delete
+                            | O::ArrayNew
+                            | O::ArrayDelete
+                    ) {
+                        return self.begin_loc(e);
+                    }
+                    return self.eloc(e);
+                }
                 _ => return self.begin_loc(e),
             }
         }

@@ -1496,6 +1496,66 @@ impl<'a> AstBuilder<'a> {
         e
     }
 
+    /// A call of an overloaded operator function (`CXXOperatorCallExpr`,
+    /// spec/sema-overload.md §8): `callee` the decayed reference to the
+    /// operator function, `args` its operands in parameter order (the
+    /// object first for a member). `loc` is the operator token and `end`
+    /// the closing `)`/`]` of a call or subscript (else invalid).
+    #[allow(clippy::too_many_arguments, reason = "the call's parts")]
+    pub fn operator_call(
+        &mut self,
+        op: crate::names::OverloadedOperator,
+        callee: ExprId,
+        args: &[ExprId],
+        ty: QualType,
+        vk: ValueCategory,
+        loc: Loc,
+        end: Loc,
+    ) -> ExprId {
+        let mut deps = self.deps(callee) | self.type_deps(ty);
+        for &a in args {
+            deps |= self.deps(a);
+        }
+        let list = self.ast.lists.push(args);
+        let e = self.push_expr(
+            ExprKind::CXXOperatorCallExpr,
+            vk,
+            ObjectKind::Ordinary,
+            ExprFlags::NONE,
+            deps,
+            op as u8,
+            ty,
+            loc,
+            callee.raw(),
+            list.raw(),
+        );
+        if end.is_valid() {
+            self.ast.exprs.cold.end_loc.insert(e, end).expect("fresh expression");
+        }
+        e
+    }
+
+    /// A comparison rewritten to `==` or `<=>` ([over.match.oper]/3.4,
+    /// `CXXRewrittenBinaryOperator`): `semantic` is the expression it
+    /// stands for, `loc` the written operator.
+    pub fn rewritten_binary(&mut self, semantic: ExprId, loc: Loc) -> ExprId {
+        let deps = self.deps(semantic);
+        let ty = self.ast.exprs.get(semantic).ty();
+        let vk = self.vk(semantic);
+        self.push_expr(
+            ExprKind::CXXRewrittenBinaryOperator,
+            vk,
+            ObjectKind::Ordinary,
+            ExprFlags::NONE,
+            deps,
+            0,
+            ty,
+            loc,
+            semantic.raw(),
+            0,
+        )
+    }
+
     /// A cast of `kind` (`ImplicitCastExpr` or an explicit cast kind) with
     /// cast kind `ck` ([expr.cast], [expr.static.cast], \[conv\]).
     /// Dependence ([temp.dep.expr]/3, [temp.dep.constexpr]/2): type-

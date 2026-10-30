@@ -995,6 +995,23 @@ impl Cg<'_> {
         let base = ast.exprs.operand(callee_e);
         let arrow = ast.exprs.get(callee_e).has(ExprFlags::ARROW);
         let args: Vec<ExprId> = ast.lists.iter(ast.exprs.call_args(e)).collect();
+        self.emit_method_call(e, md, base, arrow, &args, dest)
+    }
+
+    /// A call of member function `md` on object `base` (`arrow`: a
+    /// pointer to it) with arguments `args`: a `CXXMemberCallExpr`, or a
+    /// `CXXOperatorCallExpr` whose callee is a member (clang
+    /// `EmitCXXOperatorMemberCallExpr`).
+    pub(crate) fn emit_method_call(
+        &mut self,
+        e: ExprId,
+        md: DeclId,
+        base: ExprId,
+        arrow: bool,
+        args: &[ExprId],
+        dest: Option<Addr>,
+    ) -> R<Option<V>> {
+        let ast = self.ast;
         let arg_tys: Vec<QualType> = args.iter().map(|&a| ast.exprs.get(a).ty()).collect();
         let fty = ast.decls.get(md).ty().expect("method type");
         if self.this_class_of(md).is_none() {
@@ -1002,7 +1019,7 @@ impl Cg<'_> {
             self.emit_ignored(base)?;
             let f = self.get_fn(md)?;
             let sig = self.call_sig(fty, false, &arg_tys);
-            return self.call_with(&sig, V::C(Value::func(f)), Some(f), None, &args, dest, &[]);
+            return self.call_with(&sig, V::C(Value::func(f)), Some(f), None, args, dest, &[]);
         }
         if ast.decls.function(md).is_some_and(|f| f.spec.is_virtual()) {
             return err(self.loc_of(e), "virtual calls are not supported yet (WP-080)");
@@ -1038,7 +1055,7 @@ impl Cg<'_> {
         }
         let f = self.get_fn(md)?;
         let sig = self.call_sig_this(fty, false, &arg_tys, Some(rd));
-        self.call_with(&sig, V::C(Value::func(f)), Some(f), Some(this.v), &args, dest, &[])
+        self.call_with(&sig, V::C(Value::func(f)), Some(f), Some(this.v), args, dest, &[])
     }
 
     // ---- expressions ---------------------------------------------------

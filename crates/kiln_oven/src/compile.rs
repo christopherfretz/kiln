@@ -216,6 +216,9 @@ pub(crate) fn skip_parens(ast: &kiln_ast::Ast, mut e: ExprId) -> ExprId {
         match ast.exprs.get(e).kind() {
             ExprKind::ParenExpr => e = ast.exprs.operand(e),
             ExprKind::SubstNonTypeTemplateParmExpr => e = ast.exprs.subst_replacement(e),
+            // [over.match.oper]/8: the rewritten form is its semantic
+            // expression.
+            ExprKind::CXXRewrittenBinaryOperator => e = ast.exprs.rewritten_semantic(e),
             _ => break,
         }
     }
@@ -682,6 +685,18 @@ impl<'a> Compiler<'a> {
                 | ExprKind::ConditionalOperator
                 | ExprKind::MaterializeTemporaryExpr => ExprId::new(n.a()),
                 ExprKind::CallExpr | ExprKind::CXXMemberCallExpr => ast.exprs.callee(e),
+                // A prefix unary operator begins at its token.
+                ExprKind::CXXOperatorCallExpr => {
+                    use kiln_ast::names::OverloadedOperator as O;
+                    let args = ast.exprs.call_args(e);
+                    let prefix = ast.lists.get(args).len() == 1
+                        && !matches!(ast.exprs.operator_call_op(e), O::Call | O::Subscript | O::Arrow);
+                    match ast.lists.at::<ExprId>(args, 0) {
+                        Some(a) if !prefix => a,
+                        _ => return n.loc(),
+                    }
+                }
+                ExprKind::CXXRewrittenBinaryOperator => ast.exprs.rewritten_semantic(e),
                 ExprKind::CXXBindTemporaryExpr | ExprKind::ExprWithCleanups => ast.exprs.operand(e),
                 ExprKind::BinaryConditionalOperator => {
                     ast.exprs.binary_conditional_operands(e, &ast.lists)[0]
@@ -969,6 +984,7 @@ impl Scan<'_> {
             | ExprKind::ExpressionTraitExpr => {}
             ExprKind::CallExpr
             | ExprKind::CXXMemberCallExpr
+            | ExprKind::CXXOperatorCallExpr
             | ExprKind::CXXConstructExpr
             | ExprKind::CXXTemporaryObjectExpr => {
                 let ty = n.ty();
@@ -1860,7 +1876,9 @@ impl Compiler<'_> {
                 return r;
             }
         }
-        if n.kind() == ExprKind::CallExpr && !n.value_category().is_glvalue() {
+        if matches!(n.kind(), ExprKind::CallExpr | ExprKind::CXXOperatorCallExpr)
+            && !n.value_category().is_glvalue()
+        {
             return self.call(e0, None);
         }
         if n.kind() == ExprKind::CXXMemberCallExpr && !n.value_category().is_glvalue() {
@@ -1933,6 +1951,10 @@ impl Compiler<'_> {
             }
             ExprKind::ParenExpr => {
                 let op = self.ast().exprs.operand(e);
+                self.rv_inner(op, dst);
+            }
+            ExprKind::CXXRewrittenBinaryOperator => {
+                let op = self.ast().exprs.rewritten_semantic(e);
                 self.rv_inner(op, dst);
             }
             ExprKind::SubstNonTypeTemplateParmExpr => {
@@ -2027,7 +2049,9 @@ impl Compiler<'_> {
             }
             ExprKind::CXXScalarValueInitExpr => self.konst(dst, 0),
             ExprKind::CXXThrowExpr => self.throw_invalid(e),
-            ExprKind::CallExpr if !n.value_category().is_glvalue() => {
+            ExprKind::CallExpr | ExprKind::CXXOperatorCallExpr
+                if !n.value_category().is_glvalue() =>
+            {
                 let r = self.call(e, None);
                 if r != dst {
                     self.emit(Op::Mov, 0, &[dst, r]);
@@ -2760,6 +2784,10 @@ impl Compiler<'_> {
                 let op = self.ast().exprs.operand(e);
                 self.lv(op, acc)
             }
+            ExprKind::CXXRewrittenBinaryOperator => {
+                let op = self.ast().exprs.rewritten_semantic(e);
+                self.lv(op, acc)
+            }
             ExprKind::SubstNonTypeTemplateParmExpr => {
                 let op = self.ast().exprs.subst_replacement(e);
                 self.lv(op, acc)
@@ -2976,7 +3004,11 @@ impl Compiler<'_> {
                 Place::Mem(r)
             }
             // A call returning a reference: the referent's address.
-            ExprKind::CallExpr if n.value_category().is_glvalue() => Place::Mem(self.call(e, None)),
+            ExprKind::CallExpr | ExprKind::CXXOperatorCallExpr
+                if n.value_category().is_glvalue() =>
+            {
+                Place::Mem(self.call(e, None))
+            }
             ExprKind::CXXMemberCallExpr if n.value_category().is_glvalue() => {
                 Place::Mem(self.member_call(e, None))
             }
@@ -3173,6 +3205,10 @@ impl Compiler<'_> {
                 let op = self.ast().exprs.operand(e);
                 return self.init_inner(op, p, ty);
             }
+            ExprKind::CXXRewrittenBinaryOperator => {
+                let op = self.ast().exprs.rewritten_semantic(e);
+                return self.init_inner(op, p, ty);
+            }
             ExprKind::CXXDefaultArgExpr if default_arg_of(self.ast(), e).is_some() => {
                 let d = default_arg_of(self.ast(), e).unwrap_or(e);
                 let saved = self.enter_default_arg(e);
@@ -3249,7 +3285,9 @@ impl Compiler<'_> {
                 let cty = if self.o.types.size(sty) <= self.o.types.size(ty) { sty } else { ty };
                 self.emit_at(Op::Copy, 1, &[p, r, cty.0], e);
             }
-            ExprKind::CallExpr if !n.value_category().is_glvalue() => {
+            ExprKind::CallExpr | ExprKind::CXXOperatorCallExpr
+                if !n.value_category().is_glvalue() =>
+            {
                 self.call(e, Some(p));
             }
             ExprKind::CXXMemberCallExpr if !n.value_category().is_glvalue() => {
@@ -3494,6 +3532,10 @@ impl Compiler<'_> {
                 let op = self.ast().exprs.operand(e);
                 self.effect(op);
             }
+            ExprKind::CXXRewrittenBinaryOperator => {
+                let op = self.ast().exprs.rewritten_semantic(e);
+                self.effect(op);
+            }
             ExprKind::SubstNonTypeTemplateParmExpr => {
                 let op = self.ast().exprs.subst_replacement(e);
                 self.effect(op);
@@ -3548,7 +3590,7 @@ impl Compiler<'_> {
                 let xty = self.ety(x);
                 self.inc_dec(place, xty, op, None, e);
             }
-            ExprKind::CallExpr | ExprKind::CXXMemberCallExpr
+            ExprKind::CallExpr | ExprKind::CXXMemberCallExpr | ExprKind::CXXOperatorCallExpr
                 if !n.value_category().is_glvalue() =>
             {
                 if self.o.types.is_aggregate(ty) {
@@ -3556,7 +3598,7 @@ impl Compiler<'_> {
                     // ([expr.context]/2), destroyed at the end of the
                     // full-expression.
                     let _ = self.materialize(e, ty);
-                } else if n.kind() == ExprKind::CallExpr {
+                } else if n.kind() != ExprKind::CXXMemberCallExpr {
                     self.call(e, None);
                 } else {
                     self.member_call(e, None);
@@ -3703,6 +3745,17 @@ impl Compiler<'_> {
             );
             return self.reg();
         }
+        // An operator call whose callee is a member function: the first
+        // argument is the object ([over.match.oper]/2, clang's
+        // `EmitCXXOperatorMemberCallExpr`).
+        let ast = self.ast();
+        if let Some(md) = direct
+            && ast.exprs.get(e).kind() == ExprKind::CXXOperatorCallExpr
+            && ast.decls.get(md).kind() == DeclKind::CXXMethod
+            && let Some((&obj, rest)) = args.split_first()
+        {
+            return self.method_call(e, c, md, obj, false, false, rest, sret);
+        }
         // `obj.f()` naming a static member function: `obj` is evaluated,
         // then `f` called directly ([expr.ref]/7.1).
         let ast = self.ast();
@@ -3724,7 +3777,11 @@ impl Compiler<'_> {
         let refs = self.ref_params(callee);
         // clang's `CallExpr::getExprLoc`: the begin of the callee (kiln's
         // `loc` of a call is its `(`).
-        let loc = (self.ast().exprs.get(e).kind() == ExprKind::CallExpr).then(|| self.begin(e));
+        let loc = matches!(
+            self.ast().exprs.get(e).kind(),
+            ExprKind::CallExpr | ExprKind::CXXOperatorCallExpr
+        )
+        .then(|| self.begin(e));
         self.call_frame(e, target, ty, sret, None, &args, &refs, loc)
     }
 }

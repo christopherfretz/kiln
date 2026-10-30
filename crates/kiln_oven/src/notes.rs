@@ -816,7 +816,7 @@ pub(crate) fn array_name(elem: &str, n: u64) -> String {
 /// The callee's spelling for "'f' evaluates to a null function pointer".
 fn callee_name(ast: &Ast, call: ExprId) -> Option<String> {
     let mut e = call;
-    if ast.exprs.get(e).kind() == ExprKind::CallExpr {
+    if matches!(ast.exprs.get(e).kind(), ExprKind::CallExpr | ExprKind::CXXOperatorCallExpr) {
         e = ast.exprs.callee(e);
     }
     for _ in 0..16 {

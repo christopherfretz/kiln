@@ -1547,7 +1547,10 @@ impl ExprArena {
     fn expect_call(&self, e: ExprId) -> &ExprNode {
         let n = self.get(e);
         assert!(
-            matches!(n.kind, ExprKind::CallExpr | ExprKind::CXXMemberCallExpr),
+            matches!(
+                n.kind,
+                ExprKind::CallExpr | ExprKind::CXXMemberCallExpr | ExprKind::CXXOperatorCallExpr
+            ),
             "expected a call, found {:?}",
             n.kind
         );
@@ -1564,6 +1567,18 @@ impl ExprArena {
     /// `ExprId`s; the implied object argument is not among them).
     pub fn call_args(&self, e: ExprId) -> ListId {
         ListId::new(self.expect_call(e).b)
+    }
+
+    /// The operator of a `CXXOperatorCallExpr` (spec/sema-overload.md §8).
+    pub fn operator_call_op(&self, e: ExprId) -> crate::names::OverloadedOperator {
+        let n = self.expect_kind(e, ExprKind::CXXOperatorCallExpr);
+        crate::names::OverloadedOperator::from_u8(n.aux).expect("operator kind")
+    }
+
+    /// The operand of a `CXXRewrittenBinaryOperator`: its semantic form
+    /// (spec/sema-overload.md §5.2).
+    pub fn rewritten_semantic(&self, e: ExprId) -> ExprId {
+        ExprId::new(self.expect_kind(e, ExprKind::CXXRewrittenBinaryOperator).a)
     }
 
     /// The implied object argument of a `CXXMemberCallExpr`: the base of
@@ -1993,10 +2008,11 @@ impl ExprArena {
                 v.extend(id(n.a));
                 v.extend(self.cond_arms[n.b as usize]);
             }
-            ExprKind::CallExpr | ExprKind::CXXMemberCallExpr => {
+            ExprKind::CallExpr | ExprKind::CXXMemberCallExpr | ExprKind::CXXOperatorCallExpr => {
                 v.extend(id(n.a));
                 v.extend(lists.iter::<ExprId>(ListId::new(n.b)));
             }
+            ExprKind::CXXRewrittenBinaryOperator => v.extend(id(n.a)),
             ExprKind::InitListExpr => {
                 v.extend(lists.iter::<ExprId>(ListId::new(n.a)));
                 v.extend(self.init_lists[n.b as usize].array_filler);

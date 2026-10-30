@@ -9,9 +9,17 @@ Branch `wp/068b-operators`, worktree `kiln/.worktrees/wp-068b`.
   operator functions (op_name form) participate; only replaceable global
   new/delete keeps the special path.
 
+- Declarations: operator declarators normalized to op_name form;
+  `check_operator_decl` (§6.1) with diag ids.
+- AST: `CXXOperatorCallExpr` / `CXXRewrittenBinaryOperator` builder + dump;
+  sema helper sites (begin_loc, unused-value/comparison, except, noreturn,
+  side effects), Oven (`method_call` split, operator calls dispatch as
+  calls/member calls, rewritten recurse to semantic form), codegen
+  (`emit_method_call` split, operator calls in scalar/lvalue/agg paths).
+
 ## In progress
-- Declarations: normalize `SpecialName::Operator` declarators into the
-  op_name form; `check_operator_decl` (§6.1).
+- `overload/oper.rs` resolve_operator (member/non-member/ADL candidates)
+  and dispatch from act_on_binary/unary/subscript/call.
 
 ## Next
 1. `overload/oper.rs` resolve_operator + CXXOperatorCallExpr.
