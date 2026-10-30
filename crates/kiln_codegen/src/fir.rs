@@ -52,6 +52,7 @@ pub(crate) enum Op {
     Ret { v: Option<V> },
     Unreachable,
     ExtractValue { agg: V, idx: u32 },
+    InsertValue { agg: V, val: V, idx: u32 },
 }
 
 impl Op {
@@ -92,6 +93,7 @@ impl Op {
         match self {
             Op::Alloca { .. } | Op::Br { .. } | Op::Unreachable => Vec::new(),
             Op::ExtractValue { agg, .. } => vec![*agg],
+            Op::InsertValue { agg, val, .. } => vec![*agg, *val],
             Op::Load { ptr, .. } => vec![*ptr],
             Op::Store { val, ptr, .. } => vec![*val, *ptr],
             Op::Bin { l, r, .. } | Op::ICmp { l, r, .. } | Op::FCmp { l, r, .. } => vec![*l, *r],
@@ -600,6 +602,9 @@ impl Fir {
                     Op::Ret { v } => b.ret(v.map(val))?,
                     Op::Unreachable => b.unreachable()?,
                     Op::ExtractValue { agg, idx } => b.extract_value(val(*agg), &[*idx])?,
+                    Op::InsertValue { agg, val: x, idx } => {
+                        b.insert_value(val(*agg), val(*x), &[*idx])?
+                    }
                 };
                 if let Some(id) = r.as_inst() {
                     for &(k, md) in &inst.md {

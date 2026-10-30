@@ -57,7 +57,7 @@ impl Cg<'_> {
     }
 
     /// The natural alignment of objects of type `q`.
-    fn natural_align(&mut self, q: QualType) -> u64 {
+    pub(crate) fn natural_align(&mut self, q: QualType) -> u64 {
         if self.ast.types.is_void(q) || self.ast.types.is_function(q) {
             return 1;
         }
@@ -506,6 +506,23 @@ impl Cg<'_> {
                 }
                 V::C(self.m.const_null(LTy::PTR))
             }
+            CastKind::NullToMemberPointer => {
+                if matches!(
+                    ast.types.canonical_view(sq),
+                    kiln_ast::types::TypeView::Builtin(kiln_ast::types::BuiltinType::NullPtr)
+                ) {
+                    self.emit_ignored(s)?;
+                }
+                self.null_mp(q)
+            }
+            CastKind::BaseToDerivedMemberPointer | CastKind::DerivedToBaseMemberPointer => {
+                let v = self.emit_scalar(s)?;
+                self.mp_convert(e, v)?
+            }
+            CastKind::MemberPointerToBoolean => {
+                let v = self.emit_scalar(s)?;
+                self.mp_is_not_null(v, sq)
+            }
             CastKind::IntegralToPointer => {
                 let v = self.emit_scalar(s)?;
                 let w = self.int_cast(v, LTy::I64, self.is_signed(sq));
@@ -571,6 +588,7 @@ impl Cg<'_> {
                 let rt = self.lty(q);
                 Ok(self.zext_or_same(x, rt))
             }
+            UnaryOp::AddrOf if self.is_mp(q) => self.mp_addr_of(e, q),
             UnaryOp::AddrOf => Ok(self.emit_lvalue(s)?.addr.v),
             UnaryOp::Deref => {
                 let lv = self.emit_lvalue(e)?;
@@ -640,6 +658,16 @@ impl Cg<'_> {
                 return self.emit_scalar_opt(r);
             }
             BinaryOp::LAnd | BinaryOp::LOr => self.emit_logical(e, op == BinaryOp::LAnd)?,
+            BinaryOp::PtrMemD | BinaryOp::PtrMemI => {
+                let lv = self.emit_lvalue(e)?;
+                self.load_lv(lv)
+            }
+            BinaryOp::EQ | BinaryOp::NE if self.is_mp(ast.exprs.get(l).ty()) => {
+                let lv = self.emit_scalar(l)?;
+                let rv = self.emit_scalar(r)?;
+                let lq = ast.exprs.get(l).ty();
+                self.mp_compare(lv, rv, lq, op == BinaryOp::NE)
+            }
             _ => {
                 let lv = self.emit_scalar(l)?;
                 let rv = self.emit_scalar(r)?;
@@ -1192,6 +1220,7 @@ impl Cg<'_> {
             ExprKind::BinaryOperator => {
                 let [l, r] = ast.exprs.operands(e);
                 match ast.exprs.binary_op(e) {
+                    BinaryOp::PtrMemD | BinaryOp::PtrMemI => self.mp_data_lvalue(e),
                     BinaryOp::Assign => {
                         if self.is_aggregate(q) {
                             let lv = self.emit_lvalue(l)?;

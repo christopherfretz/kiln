@@ -86,8 +86,10 @@ impl Cg<'_> {
             }
             Scalar::Float { bits, .. } => Ok(self.m.const_float_bits(t, bits)),
             Scalar::Null { kind: NullKind::Pointer, .. } => Ok(self.m.const_null(LTy::PTR)),
-            Scalar::Null { .. } | Scalar::MemberPtr { .. } => {
-                err(None, "pointer-to-member constants are not supported yet (M3)")
+            Scalar::Null { kind: NullKind::MemberData, .. } => Ok(self.m.const_int(t, -1)),
+            Scalar::Null { kind: NullKind::MemberFunction, .. } => Ok(self.m.const_zero(t)),
+            Scalar::MemberPtr { member, kind, derived, path, .. } => {
+                self.mp_value(member, kind, derived, path, t)
             }
             Scalar::Pointer { base, offset, .. } => {
                 let b = self.ptr_base(base)?;
@@ -471,6 +473,6 @@ impl Img {
     }
 }
 
-fn ir_err(e: &kiln_llvm::IrError) -> crate::CodegenError {
+pub(crate) fn ir_err(e: &kiln_llvm::IrError) -> crate::CodegenError {
     crate::CodegenError { loc: None, msg: format!("constant emission failed: {e:?}") }
 }

@@ -984,6 +984,11 @@ impl Cg<'_> {
         while ast.exprs.get(callee_e).kind() == ExprKind::ParenExpr {
             callee_e = ast.exprs.operand(callee_e);
         }
+        if ast.exprs.get(callee_e).kind() == ExprKind::BinaryOperator
+            && ast.exprs.binary_op(callee_e).is_ptr_mem()
+        {
+            return self.mp_call(e, callee_e, dest);
+        }
         if ast.exprs.get(callee_e).kind() != ExprKind::MemberExpr {
             return err(self.loc_of(e), "calls through member pointers are not supported yet");
         }

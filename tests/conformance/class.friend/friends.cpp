@@ -3,7 +3,6 @@
 // found only by argument-dependent lookup.
 //@ expect: run
 //@ stdout: 3 4 5 6
-//@ xfail(kiln): needs WP-079 codegen of constructor calls
 extern "C" int printf(const char*, ...);
 class A {
   int v;

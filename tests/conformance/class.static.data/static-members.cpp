@@ -2,7 +2,6 @@
 // the class or through an object; enumerators and nested types of a class.
 //@ expect: run
 //@ stdout: 4 1 13 13
-//@ xfail(kiln): needs WP-079 codegen of static members named with '.'
 extern "C" int printf(const char*, ...);
 struct S {
   int x;
