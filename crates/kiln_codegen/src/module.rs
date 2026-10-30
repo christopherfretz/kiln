@@ -17,7 +17,7 @@ use kiln_llvm::{
     UnnamedAddr, UwTableKind, Value,
 };
 use kiln_source::Loc;
-use kiln_source::fx::FxHashMap;
+use kiln_source::fx::{FxHashMap, FxHashSet};
 
 use crate::fold::Folds;
 use crate::func::Fx;
@@ -115,6 +115,14 @@ pub(crate) struct Cg<'a> {
     pub phs: Vec<Option<Value>>,
     /// Placeholder by (first declaration, variant).
     pub ph_of: FxHashMap<(DeclId, mangle::Structor), u32>,
+    /// Structor variants whose definitions are queued or emitted.
+    pub squeued: FxHashSet<(DeclId, mangle::Structor)>,
+    /// Classes' structors whose complete variant was referenced.
+    pub c1_decl: FxHashSet<DeclId>,
+    /// Structors whose complete variant is defined (alias or RAUW).
+    pub c1_done: FxHashSet<DeclId>,
+    /// Structors whose base variant body was generated.
+    pub sdone: FxHashSet<DeclId>,
     /// Bodies using placeholders, lowered once the module is complete.
     pub pending: Vec<(FuncId, DeclId, crate::fir::Fir)>,
     /// Per-function state.
@@ -158,6 +166,10 @@ impl<'a> Cg<'a> {
             sdeferred: FxHashMap::default(),
             phs: Vec::new(),
             ph_of: FxHashMap::default(),
+            squeued: FxHashSet::default(),
+            c1_decl: FxHashSet::default(),
+            c1_done: FxHashSet::default(),
+            sdone: FxHashSet::default(),
             pending: Vec::new(),
             f: Fx::empty(),
         }
@@ -287,14 +299,7 @@ impl<'a> Cg<'a> {
             let d = match def {
                 Def::Decl(d) => d,
                 Def::Structor(d, v) => {
-                    let first = self.ast.first(d);
-                    let still_decl = self
-                        .sfns
-                        .get(&(first, v))
-                        .is_none_or(|&(_, f)| self.m.func(f).is_declaration());
-                    if still_decl {
-                        self.emit_structor_def(d, v)?;
-                    }
+                    self.emit_structor_def(d, v)?;
                     if !self.to_emit.is_empty() {
                         self.emit_deferred()?;
                     }
@@ -333,7 +338,7 @@ impl<'a> Cg<'a> {
         let first = ast.first(d);
         match ast.templ_link(first).get() {
             Some((TemplLinkKind::MemberOfSpecialization, _)) => {
-                let ctx = ast.decls.get(first).ctx;
+                let ctx = ast.decls.get(first).ctx();
                 ctx.is_none_or(|c| match ast.spec_info(c) {
                     Some((_, s)) => s.kind == SpecKind::ImplicitInstantiation,
                     None => true,

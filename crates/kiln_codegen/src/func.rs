@@ -121,6 +121,10 @@ pub(crate) struct Fx {
     /// the current constructor prologue: under `-fexceptions` its EH
     /// cleanup would be needed by any throwing call (spec gap).
     pub eh_only: bool,
+    /// The aggregate slot being initialized is destructed by its owner
+    /// (clang `AggValueSlot::IsDestructed`): a bound temporary written
+    /// there needs no cleanup.
+    pub dest_destructed: bool,
     pub sw: Option<SwitchCtx>,
     pub loops: Vec<LoopFrame>,
     pub mustprogress: bool,
@@ -164,6 +168,7 @@ impl Fx {
             error: None,
             overlap: false,
             eh_only: false,
+            dest_destructed: false,
             sw: None,
             loops: Vec::new(),
             mustprogress: true,

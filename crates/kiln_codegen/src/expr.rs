@@ -1290,12 +1290,29 @@ impl Cg<'_> {
             let st = self.m.types.int(bf.storage_size);
             return Ok(LV { addr: Addr { v, ty: st, align }, q, bf: Some(bf) });
         }
-        if ast.decls.get(field).ty().is_some_and(|t| self.referee(t).is_some()) {
-            return err(
-                Some(ast.decls.get(field).loc()),
-                "a reference member is not supported yet",
-            );
+        let fq = ast.decls.get(field).ty().unwrap_or(q);
+        if let Some(referee) = self.referee(fq) {
+            // clang `EmitLValueForField` on a reference member: load the
+            // bound address.
+            let slot = self.field_lvalue_init(base, field, fq)?;
+            let p = self.load(LTy::PTR, slot.addr.v, slot.addr.align, false);
+            let (_, align) = self.pointee_layout(fq);
+            let ty = self.mty(referee);
+            return Ok(LV { addr: Addr { v: p, ty, align }, q: referee, bf: None });
         }
+        self.field_lvalue_init(base, field, q)
+    }
+
+    /// The storage of field `field` of the object at `base` (a reference
+    /// member's own slot, not its referee): clang `EmitLValueForFieldInitialization`.
+    pub(crate) fn field_lvalue_init(&mut self, base: Addr, field: DeclId, q: QualType) -> R<LV> {
+        let ast = self.ast;
+        let rd = ast.decls.get(field).ctx().expect("field parent");
+        let rty = self.record_ty(rd);
+        let (is_union, idx) = {
+            let r = self.tys.record(rd);
+            (r.is_union, r.field_index.get(&field).copied())
+        };
         let ty = self.mty(q);
         if is_union {
             return Ok(LV { addr: Addr { v: base.v, ty, align: base.align }, q, bf: None });

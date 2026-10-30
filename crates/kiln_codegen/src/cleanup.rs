@@ -36,9 +36,9 @@ pub(crate) enum Cleanup {
     /// (`DestroyObject` with `destroyCXXObject`, `CallBaseDtor`,
     /// `CallDtorDelegating`).
     Dtor { addr: V, record: DeclId, base: bool },
-    /// Destroys an array of `n` objects of class `record` (element IR type
-    /// `elem`) starting at `begin` (`emitArrayDestroy`).
-    ArrayDtor { begin: V, n: u64, elem: LTy, record: DeclId },
+    /// Destroys the constant-length array at `addr` of objects of class
+    /// `record` (`emitDestroy` + `emitArrayDestroy`).
+    ArrayDtor { addr: Addr, record: DeclId },
     /// The destructor of an NRVO variable, skipped when the NRVO flag is
     /// set (`DestroyNRVOVariableCXX`).
     NrvoDtor { addr: V, record: DeclId, flag: V },
@@ -597,9 +597,7 @@ impl Cg<'_> {
                 self.call_dtor(record, addr, false);
                 self.emit_block(skip, false);
             }
-            Cleanup::ArrayDtor { begin, n, elem, record } => {
-                self.array_destroy(begin, n, elem, record);
-            }
+            Cleanup::ArrayDtor { addr, record } => self.array_destroy_at(addr, record),
             Cleanup::Field { field, record } => self.destroy_field_of_this(field, record),
             Cleanup::BaseOfThis { base, offset } => {
                 let this = self.this_value();
