@@ -600,18 +600,24 @@ impl Cg<'_> {
         }
         let start = items[0].1;
         let end = items.last().expect("run").2;
+        let first = items[0].0;
+        let fq = ast.decls.get(first).ty().expect("field type");
+        // clang `emitMemcpy`: the destination and the source are the first
+        // field's lvalues (struct GEPs), destination first.
         let this = self.this_addr();
-        let dst_v = self.byte_offset(this.v, start);
-        let dst = Addr { v: dst_v, ty: LTy::I8, align: min_align(this.align, start) };
-        // The source: the parameter's `.addr` slot, reloaded.
+        let dst = self.field_lvalue_init(this, first, fq)?.addr;
         let fd = ast.decls.function(ctor).expect("constructor");
         let p0: DeclId = ast.lists.iter(fd.params).next().expect("copy parameter");
         let slot = *self.f.locals.get(&p0).expect("parameter slot");
         let src_obj = self.load(LTy::PTR, slot.v, slot.align, false);
         let pq = ast.decls.get(p0).ty().expect("param type");
         let (_, src_align0) = self.pointee_layout(pq);
-        let src = self.byte_offset(src_obj, start);
-        self.memcpy(dst, src, min_align(src_align0, start), end - start, false);
+        let rd = ast.decls.get(first).ctx().expect("field parent");
+        let rty = self.record_ty(rd);
+        let src_base = Addr { v: src_obj, ty: rty, align: src_align0 };
+        let src = self.field_lvalue_init(src_base, first, fq)?.addr;
+        let dst = Addr { v: dst.v, ty: LTy::I8, align: dst.align };
+        self.memcpy(dst, src.v, src.align, end - start, false);
         Ok(())
     }
 
@@ -794,12 +800,14 @@ impl Cg<'_> {
     /// address of the glvalue, or of a materialized temporary.
     pub(crate) fn emit_ref_binding(&mut self, e: ExprId) -> R<V> {
         let ast = self.ast;
-        let mut x = e;
-        while matches!(ast.exprs.get(x).kind(), ExprKind::ExprWithCleanups) {
-            x = self.sub(x);
+        if ast.exprs.get(e).kind() == ExprKind::ExprWithCleanups {
+            let sc = self.begin_scope(false);
+            let r = self.emit_ref_binding(self.sub(e));
+            self.end_scope(sc);
+            return r;
         }
-        if self.is_glvalue(x) {
-            return Ok(self.emit_lvalue(x)?.addr.v);
+        if self.is_glvalue(e) {
+            return Ok(self.emit_lvalue(e)?.addr.v);
         }
         err(self.loc_of(e), "binding a reference to a prvalue is not supported yet")
     }
