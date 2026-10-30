@@ -76,7 +76,9 @@ pub(crate) fn var_info(ast: &Ast, d: DeclId) -> VarInfo {
     let c = ast.types.canonical(info.ty);
     info.is_const = c.has_const_bit();
     let integral = ast.types.is_integral(c) || ast.types.as_enum(c).is_some();
-    info.usable = constexpr || (info.is_const && integral);
+    // Potentially-constant ([expr.const]/3): constexpr, a reference, or
+    // const-qualified integral or enumeration type.
+    info.usable = constexpr || ast.types.is_reference(c) || (info.is_const && integral);
     info
 }
 
@@ -151,6 +153,7 @@ impl Oven {
         fb: u32,
     ) -> Result<ConstValueId, EvalFailure> {
         let f = self.compile_thunk(b, e, object);
+        self.let_pending.clear();
         self.exec(b, f, fb)?;
         let v = self.regs[fb as usize];
         // clang's `CheckConstantExpression` location: the variable for an
@@ -172,14 +175,74 @@ impl Oven {
             None => Ok(cv),
             Some(n) => Err(Freeze::Notes(n)),
         });
-        r.map_err(|f| match f {
+        let cv = r.map_err(|f| match f {
             Freeze::Fault(k) => EvalFailure::silent(k),
             Freeze::Notes(n) if self.run.silent => {
                 drop(n);
                 EvalFailure::silent(FailKind::NotConstant)
             }
             Freeze::Notes(notes) => EvalFailure { kind: FailKind::NotConstant, notes },
-        })
+        })?;
+        // [dcl.constexpr]/6: a `constexpr` variable has constant
+        // destruction ([expr.const]/7), checked on the object just built.
+        if let (Some(d), RetKind::Sret(ty)) = (object, self.funcs[f as usize].ret)
+            && !self.run.silent
+            && b.ast().decls.var(d).is_some_and(|x| x.spec.is_constexpr())
+            && let Some(df) = self.compile_destroy(b, d, ty)
+        {
+            self.regs[fb as usize] = v;
+            self.exec(b, df, fb)
+                .map_err(|e| EvalFailure { kind: FailKind::Destruction, notes: e.notes })?;
+        }
+        self.freeze_lets(b, loc)?;
+        Ok(cv)
+    }
+
+    /// Whether static temporary `t` is extended by the variable being
+    /// initialized.
+    fn extends_object(&self, ast: &Ast, t: DeclId) -> bool {
+        let Some(l) = ast.decls.lifetime_extended(t) else { return false };
+        self.run.object.is_some_and(|o| ast.first(o) == ast.first(l.extending))
+    }
+
+    /// Freezes the static temporaries the result points to (and those
+    /// their values point to) into their `LetData.value`s.
+    fn freeze_lets(&mut self, b: &mut dyn SemaBridge, loc: Loc) -> Result<(), EvalFailure> {
+        let mut i = 0;
+        let mut out = Vec::new();
+        while i < self.let_pending.len() {
+            let (t, p) = self.let_pending[i];
+            i += 1;
+            let r = self.freeze_object(b, p, loc).map_err(|f| match f {
+                Freeze::Fault(k) => EvalFailure::silent(k),
+                Freeze::Notes(notes) => EvalFailure { kind: FailKind::NotConstant, notes },
+            })?;
+            out.push((t, r));
+        }
+        self.let_pending.clear();
+        for (t, v) in out {
+            b.set_temporary_value(t, v);
+        }
+        Ok(())
+    }
+
+    /// The value of the complete object at `p`.
+    fn freeze_object(
+        &mut self,
+        b: &mut dyn SemaBridge,
+        p: u64,
+        loc: Loc,
+    ) -> Result<ConstValueId, Freeze> {
+        let Some(a) = self.alloc_any(Ptr::decode(p)).copied() else {
+            return Err(Freeze::Fault(FailKind::NotConstant));
+        };
+        if self.types.is_aggregate(a.ty) {
+            return self.freeze_aggregate(b, a.ty, p, loc);
+        }
+        let Ok(v) = self.load(p, a.ty, crate::kbc::ak::READ) else {
+            return Err(self.uninit(b, None, a.ty, loc));
+        };
+        self.freeze_scalar(b, a.ty, v, loc)
     }
 
     /// clang's `note_constexpr_memory_leak` for the allocations of the
@@ -218,6 +281,9 @@ impl Oven {
         v: u128,
         loc: Loc,
     ) -> Result<ConstValueId, Freeze> {
+        if let TyKind::MemPtr { .. } = self.types.kind(ty) {
+            return self.mp_freeze(b, ty, v).map_err(|_| Freeze::Fault(FailKind::MemoryLimit));
+        }
         let s = self.scalar_of(b, ty, v, loc)?;
         b.consts().push_scalar(s).map_err(|_| Freeze::Fault(FailKind::MemoryLimit))
     }
@@ -292,9 +358,21 @@ impl Oven {
                 Origin::Global(d) | Origin::External(d) => PtrBase::Decl(d),
                 Origin::Str(lit, Some(origin)) => PtrBase::StringLit { lit, origin },
                 Origin::Const(c) => PtrBase::Const(c),
+                Origin::Let(t) => PtrBase::Temporary(t),
                 _ => return Err(Freeze::Fault(FailKind::NotConstant)),
             };
             return Ok(Scalar::Pointer { ty: q, base, offset });
+        }
+        // A temporary extended by the variable being initialized
+        // ([class.temporary]/6): its value is frozen with the result.
+        if let Origin::Let(t) = a.origin
+            && a.live
+            && self.extends_object(b.ast(), t)
+        {
+            if !self.let_pending.iter().any(|&(x, _)| x == t) {
+                self.let_pending.push((t, Ptr::with_off(raw, 0, false)));
+            }
+            return Ok(Scalar::Pointer { ty: q, base: PtrBase::Temporary(t), offset });
         }
         if let (Origin::Var(d), Some(o)) = (a.origin, self.run.object)
             && d == o
@@ -326,6 +404,15 @@ impl Oven {
                     format!("pointer to {what}temporary is not a constant expression"),
                 ));
                 notes.push(Note::new(ast.exprs.get(e).loc(), "temporary created here"));
+            }
+            Origin::Let(t) => {
+                notes.push(Note::new(
+                    loc,
+                    format!("pointer to {what}temporary is not a constant expression"),
+                ));
+                if let Some(e) = let_mte(ast, t) {
+                    notes.push(Note::new(ast.exprs.get(e).loc(), "temporary created here"));
+                }
             }
             // clang's note_constexpr_dynamic_alloc, before the leak check;
             // the allocation is noted while it is live.
@@ -459,6 +546,17 @@ impl Oven {
                 s.relocs.push(Reloc { at: at as u32, value: id });
                 s.cover[at..at + info.size as usize].fill(1);
             }
+            TyKind::MemPtr { .. } => {
+                let sp = self.mem.space(st);
+                if !sp.is_init(abs, info.size) {
+                    return Err(self.uninit(b, field, t, loc));
+                }
+                let v = sp.read(abs, info.size);
+                let id =
+                    self.mp_freeze(b, t, v).map_err(|_| Freeze::Fault(FailKind::NotConstant))?;
+                s.relocs.push(Reloc { at: at as u32, value: id });
+                s.cover[at..at + info.size as usize].fill(1);
+            }
             TyKind::Array { elem, n } => {
                 let e = *self.types.info(elem);
                 let es = e.size as usize;
@@ -512,7 +610,10 @@ impl Oven {
         let p = Ptr::decode(raw);
         let fr = Ptr::with_off(raw, u64::from(p.off) + f.offset, false);
         let Some(width) = f.width else {
-            return self.walk(b, s, f.ty, fr, at + f.offset as usize, Some(f.decl), loc);
+            // clang notes an uninitialized base by its type, a member by
+            // its name.
+            let named = (!f.base).then_some(f.decl);
+            return self.walk(b, s, f.ty, fr, at + f.offset as usize, named, loc);
         };
         if width == 0 || b.ast().decls.get(f.decl).name().is_empty() {
             return Ok(());
@@ -579,6 +680,37 @@ impl Oven {
         self.mem.stat.bytes[a0..a1].fill(0);
         self.mem.stat.bytes[a0..a0 + n].copy_from_slice(&bytes[..n]);
         self.mem.stat.set_init(base, size, true);
+        p
+    }
+
+    /// The static object of lifetime-extended temporary `t`, thawed from
+    /// its `LetData.value`: readable if it is usable in constant
+    /// expressions (a `const` temporary extended by a variable that is,
+    /// [expr.const]/4), else an external object whose accesses clang
+    /// reports as outside the expression that created it.
+    fn resolve_let(&mut self, b: &mut dyn SemaBridge, t: DeclId, top: u32) -> u64 {
+        if let Some(&p) = self.lets.get(&t) {
+            return p;
+        }
+        let ast = b.ast();
+        let q = ast.decls.get(t).ty().unwrap_or(QualType::INT);
+        let l = ast.decls.lifetime_extended(t).copied();
+        let usable = ast.types.canonical(q).has_const_bit()
+            && l.is_some_and(|l| var_info(ast, l.extending).usable);
+        let value = l.and_then(|l| l.value);
+        let ty = self.types.intern(b, q);
+        let size = self.types.size(ty);
+        let hu = if self.types.info(ty).has_union { flags::HAS_UNION } else { 0 };
+        let p = match value {
+            Some(cv) if usable => {
+                let p = self.mem.alloc_static(ty, size, flags::CONST | hu, Origin::Let(t));
+                self.lets.insert(t, p);
+                self.thaw_into(b, cv, p, top);
+                p
+            }
+            _ => self.mem.alloc_static(ty, size, flags::EXTERNAL | flags::CONST, Origin::Let(t)),
+        };
+        self.lets.insert(t, p);
         p
     }
 
@@ -717,6 +849,12 @@ impl Oven {
         for r in relocs {
             let at = u64::from(r.at);
             let ty = self.deepest_at(aty, at);
+            if let TyKind::MemPtr { .. } = self.types.kind(ty) {
+                let v = self.mp_thaw(b, r.value);
+                let n = self.types.size(ty);
+                self.mem.stat.write(base + at, n, v);
+                continue;
+            }
             let raw = self.thaw_ptr(b, r.value, ty, top);
             self.mem.stat.write(base + at, 8, u128::from(raw));
             self.mem.stat.set_ptr(base + at, 8, raw != 0);
@@ -748,6 +886,7 @@ impl Oven {
             Some(Scalar::Bool { value, .. }) => (u128::from(value), false),
             Some(Scalar::Float { bits, .. }) => (bits, false),
             Some(Scalar::Pointer { .. }) => (0, true),
+            Some(Scalar::MemberPtr { .. }) => (self.mp_thaw(b, cv), false),
             _ => (0, false),
         };
         let v = if is_ptr { u128::from(self.thaw_ptr(b, cv, ty, top)) } else { v };
@@ -808,10 +947,7 @@ impl Oven {
                 }
             }
             PtrBase::Const(c) => self.thaw(b, c, top),
-            PtrBase::Temporary(d) => {
-                let t = pointee.unwrap_or(ty);
-                self.external(t, d)
-            }
+            PtrBase::Temporary(d) => self.resolve_let(b, d, top),
             PtrBase::TypeInfo(_) => {
                 let t = pointee.unwrap_or(ty);
                 let size = self.types.size(t);
@@ -832,4 +968,21 @@ impl Oven {
 
 fn ast_first(b: &dyn SemaBridge, d: DeclId) -> DeclId {
     b.ast().first(d)
+}
+
+/// The `MaterializeTemporaryExpr` that created static temporary `t` (in
+/// its extending variable's initializer), for "temporary created here".
+pub(crate) fn let_mte(ast: &Ast, t: DeclId) -> Option<ExprId> {
+    let ext = ast.decls.lifetime_extended(t)?.extending;
+    let init = ast.redecls_of(ext).find_map(|r| ast.decls.var(r).and_then(|v| v.init))?;
+    let mut work = vec![init];
+    while let Some(e) = work.pop() {
+        if ast.exprs.get(e).kind() == kiln_ast::expr::ExprKind::MaterializeTemporaryExpr
+            && ast.exprs.lifetime_extended_temporary(e) == Some(t)
+        {
+            return Some(e);
+        }
+        work.extend(ast.exprs.children(e, &ast.lists));
+    }
+    None
 }

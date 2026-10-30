@@ -18,10 +18,6 @@ use crate::kbc::{Op, cmp, int_aux, new_aux};
 use crate::mem::Origin;
 use crate::ty::{OTy, TyKind};
 
-/// The note of a class-type new/delete the Oven cannot run yet.
-const CLASS_UNSUPPORTED: &str =
-    "kiln: constant evaluation of constructors and destructors in new/delete lands with WP-076";
-
 impl Compiler<'_> {
     /// `new T`, `new T(init)`, `new T{init}`, `new T[n]...` into `dst`.
     pub(super) fn new_expr(&mut self, e: ExprId, dst: u32) {
@@ -61,15 +57,8 @@ impl Compiler<'_> {
         let loc_new = self.ast().exprs.get(e).loc();
         let oi = self.o.push_origin(Origin::Heap(e, 0));
         let Some(size_e) = x.array_size else {
-            // A single object.
-            if init.is_none() && !self.trivially_default_init(x.allocated_ty) {
-                self.trap(e, CLASS_UNSUPPORTED);
-                return;
-            }
-            if init.is_some_and(|i| self.node(i).kind() == ExprKind::CXXConstructExpr) {
-                self.trap(e, CLASS_UNSUPPORTED);
-                return;
-            }
+            // A single object (a class object is initialized by its
+            // constructor, a `CXXConstructExpr`).
             self.emit_site(Op::New, aux, &[dst, elem.0, dst, oi, 0], e, loc_new);
             if let Some(i) = init {
                 self.init(i, dst, elem);
@@ -100,15 +89,11 @@ impl Compiler<'_> {
             Zero,
             /// A braced list (of `k` elements) and its filler.
             List { list: ExprId, k: u64, filler: Option<ExprId>, zero_rest: bool },
+            /// Each element by a constructor call.
+            Each(ExprId),
         }
         let ai = match init.map(|i| (i, self.node(i).kind())) {
-            None => {
-                if !self.trivially_default_init(x.allocated_ty) {
-                    self.trap(e, CLASS_UNSUPPORTED);
-                    return;
-                }
-                ArrInit::None
-            }
+            None => ArrInit::None,
             Some((_, ExprKind::ImplicitValueInitExpr)) => ArrInit::Zero,
             Some((i, ExprKind::InitListExpr)) => {
                 let ast = self.ast();
@@ -121,12 +106,9 @@ impl Compiler<'_> {
                 let zero_rest = filler.is_some_and(|f| self.is_zero_init(f));
                 ArrInit::List { list: i, k, filler, zero_rest }
             }
+            Some((i, ExprKind::CXXConstructExpr)) => ArrInit::Each(i),
             Some((i, _)) => {
-                if self.node(i).kind() == ExprKind::CXXConstructExpr {
-                    self.trap(e, CLASS_UNSUPPORTED);
-                } else {
-                    self.unsupported(i);
-                }
+                self.unsupported(i);
                 return;
             }
         };
@@ -139,6 +121,21 @@ impl Compiler<'_> {
         }
         let cnt = self.rv_copy(stripped);
         self.emit_site(Op::New, aux, &[dst, elem.0, cnt, oi, k as u32], e, size_loc);
+        if let ArrInit::Each(i) = ai {
+            // A null result (`std::nothrow`) has no elements: the loop
+            // bound is checked against the count, which the VM leaves as
+            // requested, so test the pointer.
+            let skip = (aux & new_aux::NOTHROW != 0).then(|| {
+                let c = self.reg();
+                self.emit(Op::PtrToBool, 0, &[c, dst]);
+                self.jmp_if(c, false)
+            });
+            self.fill_loop(dst, 0, cnt, i, elem, e);
+            if let Some(j) = skip {
+                self.patch_here(j);
+            }
+            return;
+        }
         let ArrInit::List { list, k, filler, zero_rest } = ai else {
             return;
         };
@@ -199,22 +196,6 @@ impl Compiler<'_> {
         self.next = m;
     }
 
-    /// Whether default-initializing a `t` (or each element of an array of
-    /// them) does nothing the Oven must run: no constructor.
-    fn trivially_default_init(&self, t: QualType) -> bool {
-        let ast = self.ast();
-        let mut t = t;
-        while ast.types.is_array(t)
-            && let Some(e) = ast.types.element(t)
-        {
-            t = e;
-        }
-        match ast.types.as_record(t) {
-            None => true,
-            Some(r) => record_bits(ast, r).contains(DefinitionBits::TRIVIAL_DEFAULT_CTOR),
-        }
-    }
-
     /// Whether initializer `e` yields all-zero bits with no side effects
     /// (an implicit value-initialization, or a list of them).
     fn is_zero_init(&self, e: ExprId) -> bool {
@@ -260,26 +241,27 @@ impl Compiler<'_> {
             self.unsupported(e);
             return;
         }
-        let mut t = pq;
-        while ast.types.is_array(t)
-            && let Some(x) = ast.types.element(t)
-        {
-            t = x;
-        }
-        if let Some(r) = ast.types.as_record(t)
-            && !record_bits(ast, r).contains(DefinitionBits::TRIVIAL_DTOR)
-        {
-            self.trap(e, CLASS_UNSUPPORTED);
-            return;
-        }
         let pointee = self.ty(pq);
         let p = self.rv(arg);
+        if self.dtor_of(pointee).is_some() {
+            // [expr.delete]/6: the destructor (of each element, in reverse
+            // order) runs first, once the operand is known to be an object
+            // (or array) new created, then the storage is released.
+            self.emit_at(Op::Delete, u32::from(array) | 2, &[p, pointee.0], e);
+            let m = self.next;
+            let mark = self.reg();
+            self.emit(Op::ScopeEnter, 0, &[mark]);
+            let loc = self.ast().exprs.get(e).loc();
+            self.push_cleanup(p, pointee, u32::from(array), loc);
+            self.emit(Op::ScopeExit, 0, &[mark]);
+            self.next = m;
+        }
         self.emit_at(Op::Delete, u32::from(array), &[p, pointee.0], e);
     }
 }
 
 /// The definition bits of record `r` (empty when it is incomplete).
-fn record_bits(ast: &Ast, r: DeclId) -> DefinitionBits {
+pub(super) fn record_bits(ast: &Ast, r: DeclId) -> DefinitionBits {
     let def = ast.definition(r).unwrap_or(r);
     ast.decls.record(def).map(|x| x.defn).unwrap_or_default()
 }

@@ -2,6 +2,7 @@
 // A skip rather than an xfail: clang 19's parse errors say nothing useful.
 //@ expect: run
 //@ skip(clang): clang 19 does not implement contracts (P2900)
+//@ xfail(kiln): contracts (P2900: `contract_assert`) are not implemented yet
 int main() {
   int x = 2;
   contract_assert(x + x == 4);

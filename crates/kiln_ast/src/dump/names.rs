@@ -617,12 +617,45 @@ impl<'a> AstNames<'a> {
                 self.expr(exprs.operand(e), d, out);
                 out.push(')');
             }
-            ExprKind::CallExpr => {
+            ExprKind::CallExpr | ExprKind::CXXMemberCallExpr => {
                 self.expr(exprs.callee(e), d, out);
                 self.expr_list(exprs.call_args(e), '(', ')', d, out);
             }
-            ExprKind::ImplicitCastExpr | ExprKind::ConstantExpr => {
+            ExprKind::ImplicitCastExpr
+            | ExprKind::ConstantExpr
+            | ExprKind::MaterializeTemporaryExpr
+            | ExprKind::CXXBindTemporaryExpr
+            | ExprKind::ExprWithCleanups => {
                 self.expr(exprs.operand(e), depth, out);
+            }
+            ExprKind::CXXThisExpr => out.push_str("this"),
+            // clang's `VisitCXXTemporaryObjectExpr`: `T(args)`, `T{args}`.
+            ExprKind::CXXTemporaryObjectExpr => {
+                write_type(&ast.types, self, n.ty(), self.expr_types, out);
+                let list = exprs.construct_info(e).list;
+                let (open, close) = if list { ('{', '}') } else { ('(', ')') };
+                self.expr_list(exprs.construct_args(e), open, close, d, out);
+            }
+            // clang's `VisitCXXConstructExpr`: the arguments (braced for a
+            // list-initialization).
+            ExprKind::CXXConstructExpr => {
+                let info = exprs.construct_info(e);
+                let braced = info.list && !info.std_init_list;
+                if braced {
+                    out.push('{');
+                }
+                for (i, a) in ast.lists.iter::<ExprId>(exprs.construct_args(e)).enumerate() {
+                    if exprs.get(a).kind() == ExprKind::CXXDefaultArgExpr {
+                        break;
+                    }
+                    if i > 0 {
+                        out.push_str(", ");
+                    }
+                    self.expr(a, d, out);
+                }
+                if braced {
+                    out.push('}');
+                }
             }
             // clang prints the replacement of a substituted parameter.
             ExprKind::SubstNonTypeTemplateParmExpr => {
@@ -791,6 +824,10 @@ impl<'a> AstNames<'a> {
     fn expr_list(&self, list: ListId, open: char, close: char, depth: u32, out: &mut String) {
         out.push(open);
         for (i, a) in self.ast.lists.iter::<ExprId>(list).enumerate() {
+            // clang stops at the first defaulted argument.
+            if self.ast.exprs.get(a).kind() == ExprKind::CXXDefaultArgExpr {
+                break;
+            }
             if i > 0 {
                 out.push_str(", ");
             }

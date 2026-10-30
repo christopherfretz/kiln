@@ -4,14 +4,15 @@
 
 use std::fmt::Write as _;
 
+use kiln_ast::decl::DeclKind;
 use kiln_ast::dump::AstNames;
-use kiln_ast::expr::ExprKind;
+use kiln_ast::expr::{ExprFlags, ExprKind};
+use kiln_ast::types::TypeNames as _;
 use kiln_ast::{Ast, DeclId, ExprId, QualType};
 use kiln_source::Loc;
 
 use crate::arith::{self, FloatErr, IntErr};
-use crate::compile::designator_type;
-use crate::compile::{FState, Site};
+use crate::compile::{FState, Site, designator_type, skip_parens};
 use crate::failure::Note;
 use crate::kbc::{Op, ak};
 use crate::mem::{MemFault, Origin, Ptr, Sp, flags};
@@ -136,6 +137,15 @@ impl Oven {
                 (site.loc, "comparison of addresses of literals has unspecified value".into())
             }
             Fault::NullField => (site.loc, "cannot access field of null pointer".into()),
+            Fault::NullBase => (site.loc, "cannot access base class of null pointer".into()),
+            Fault::BadDowncast { dynamic, to } => (
+                site.loc,
+                format!(
+                    "cannot cast object of dynamic type '{}' to type '{}'",
+                    self.tname(ast, dynamic),
+                    self.tname(ast, to)
+                ),
+            ),
             Fault::PastField => {
                 (site.loc, "cannot access field of pointer past the end of object".into())
             }
@@ -301,6 +311,7 @@ impl Oven {
             }
             let func = &self.funcs[fr.func as usize];
             let mut s = String::from("in call to '");
+            self.object_prefix(ast, fr.call_pc as usize, fr.fb as usize, fr.func, &mut s);
             if let Some(d) = func.decl {
                 AstNames::new(ast).write_name(d, &mut s);
             }
@@ -323,6 +334,47 @@ impl Oven {
             s.push_str(")'");
             notes.push(Note::new(loc, s));
         }
+    }
+
+    /// The implicit object of a member call in a call-stack note (clang's
+    /// `describeCall`): the object expression of a member call
+    /// expression (`p.`, `pp->`, `P(1).`), otherwise (a destructor) the
+    /// object's lvalue (`r.`). Constructors and static members have none.
+    fn object_prefix(&self, ast: &Ast, call_pc: usize, fb: usize, func: u32, s: &mut String) {
+        let func = &self.funcs[func as usize];
+        let (Some(d), Some(tr)) = (func.decl, func.this_reg) else { return };
+        if ast.decls.get(d).kind() == DeclKind::CXXConstructor {
+            return;
+        }
+        if let Some(ce) = self.site(call_pc).e
+            && ast.exprs.get(ce).kind() == ExprKind::CXXMemberCallExpr
+        {
+            let callee = ast.exprs.callee(ce);
+            let callee = skip_parens(ast, callee);
+            if ast.exprs.get(callee).kind() == ExprKind::MemberExpr {
+                // An implicit `this` prints too (`this->f(0)`).
+                ast.write_expr(ast.exprs.operand(callee), s);
+                s.push_str(if ast.exprs.get(callee).has(ExprFlags::ARROW) { "->" } else { "." });
+                return;
+            }
+        }
+        let v = self.regs[fb + tr as usize] as u64;
+        let Some(t) = func.this_ty else { return };
+        // A temporary prints as the expression that created it (`P(9).~P()`).
+        let p = Ptr::decode(v);
+        if v != 0
+            && !p.is_fn()
+            && p.off == 0
+            && let Some(a) = self.alloc_any(p)
+            && let Origin::Temp(x) = a.origin
+        {
+            ast.write_expr(x, s);
+            s.push('.');
+            return;
+        }
+        let r = self.ptr_string(ast, v, t);
+        s.push_str(r.strip_prefix('&').unwrap_or(&r));
+        s.push('.');
     }
 
     /// Appends the value of a register of type `t` (clang's
@@ -465,13 +517,18 @@ impl Oven {
                 s.push_str(&name_of(ast, d));
             }
             Origin::Str(id, _) => ast.strings.write_literal(id, &mut s),
-            Origin::Temp(_) | Origin::Const(_) | Origin::None => s.push_str("{temporary}"),
+            Origin::Temp(_) | Origin::Let(_) | Origin::Const(_) | Origin::None => {
+                s.push_str("{temporary}");
+            }
             // clang: `{*new T#N}`, N its allocation number.
             Origin::Heap(_, n) => {
                 let _ = write!(s, "{{*new {}#{n}}}", self.tname(ast, a.ty));
             }
         }
         let (mut t, mut rel) = (a.ty, u64::from(p.off));
+        // clang prints a member reached through a base as `.B::m` and
+        // omits a trailing base step.
+        let mut via_base = None;
         loop {
             if t == pointee && rel == 0 {
                 return s;
@@ -495,8 +552,16 @@ impl Oven {
                     }) else {
                         break;
                     };
-                    s.push('.');
-                    s.push_str(&name_of(ast, f.decl));
+                    if f.base {
+                        via_base = Some(f.decl);
+                    } else {
+                        s.push('.');
+                        if let Some(b) = via_base.take() {
+                            s.push_str(&name_of(ast, b));
+                            s.push_str("::");
+                        }
+                        s.push_str(&name_of(ast, f.decl));
+                    }
                     rel -= f.offset;
                     t = f.ty;
                 }
@@ -650,6 +715,15 @@ impl Oven {
             }
             MemFault::ModifyGlobal | MemFault::External(_, true) => {
                 "a constant expression cannot modify an object that is visible outside that expression".into()
+            }
+            // clang's note_constexpr_access_static_temporary.
+            MemFault::Temporary(t) => {
+                if let Some(e) = crate::value::let_mte(ast, t) {
+                    extra.push(Note::new(ast.exprs.get(e).loc(), "temporary created here"));
+                }
+                format!(
+                    "{verb} temporary is not allowed in a constant expression outside the expression that created the temporary"
+                )
             }
             MemFault::External(d, false) => {
                 extra.push(Note::new(ast.decls.get(d).loc(), "declared here"));

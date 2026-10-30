@@ -26,6 +26,8 @@ use crate::{Oven, SemaBridge};
 
 mod bitcast;
 mod builtins;
+mod class;
+mod mptr;
 mod new_delete;
 
 pub(crate) use builtins::designator_type;
@@ -81,6 +83,11 @@ pub(crate) struct Func {
     pub params: Vec<ParamInfo>,
     /// Eligible for memoization (pure: scalar, non-pointer parameters).
     pub memo: bool,
+    /// The register of the implicit object parameter of a non-static
+    /// member function (after the result slot, before the parameters).
+    pub this_reg: Option<u32>,
+    /// Its class (the type `this` points to; for the call-stack notes).
+    pub this_ty: Option<OTy>,
 }
 
 /// The source of a faulting instruction.
@@ -180,7 +187,31 @@ pub(crate) fn float_of(c: u32) -> FloatKind {
 }
 
 /// Strips parentheses.
-fn skip_parens(ast: &kiln_ast::Ast, mut e: ExprId) -> ExprId {
+/// Whether `e` is a builtin binary operator `op`.
+fn is_binary(ast: &kiln_ast::Ast, e: ExprId, op: BinaryOp) -> bool {
+    ast.exprs.get(e).kind() == ExprKind::BinaryOperator && ast.exprs.binary_op(e) == op
+}
+
+/// Whether `e` is a builtin `&&` or `||`.
+fn is_logical(ast: &kiln_ast::Ast, e: ExprId) -> bool {
+    ast.exprs.get(e).kind() == ExprKind::BinaryOperator
+        && matches!(ast.exprs.binary_op(e), BinaryOp::LAnd | BinaryOp::LOr)
+}
+
+/// Whether `e` is a builtin binary operator `binary_node` evaluates (a
+/// prvalue of arithmetic, comparison or pointer arithmetic).
+fn is_plain_binary(ast: &kiln_ast::Ast, e: ExprId) -> bool {
+    let n = ast.exprs.get(e);
+    if n.kind() != ExprKind::BinaryOperator || n.value_category().is_glvalue() {
+        return false;
+    }
+    let op = ast.exprs.binary_op(e);
+    !matches!(op, BinaryOp::Comma | BinaryOp::LAnd | BinaryOp::LOr | BinaryOp::Assign)
+        && !op.is_compound_assignment()
+        && !op.is_ptr_mem()
+}
+
+pub(crate) fn skip_parens(ast: &kiln_ast::Ast, mut e: ExprId) -> ExprId {
     loop {
         match ast.exprs.get(e).kind() {
             ExprKind::ParenExpr => e = ast.exprs.operand(e),
@@ -221,6 +252,8 @@ impl Oven {
             ret: RetKind::Void,
             params: Vec::new(),
             memo: false,
+            this_reg: None,
+            this_ty: None,
         });
         self.func_map.insert(d, i);
         i
@@ -278,11 +311,16 @@ impl Oven {
             ret: RetKind::Void,
             params: Vec::new(),
             memo: false,
+            this_reg: None,
+            this_ty: None,
         });
         let mut c = Compiler::new(self, b);
         let entry = c.here();
         let ty = c.ety(e);
         let glvalue = c.b.ast().exprs.get(e).value_category().is_glvalue();
+        if let Some(d) = object {
+            c.begin_static_extended(e, d);
+        }
 
         let ref_object = object.filter(|&d| is_reference_var(c.b.ast(), d));
         let ret = if let Some(d) = ref_object {
@@ -336,6 +374,40 @@ impl Oven {
         idx
     }
 
+    /// A function destroying the object of type `ty` whose address is in
+    /// its register 0 (the constant destruction of `constexpr` variable
+    /// `d`, [dcl.constexpr]/6), or `None` if destroying it does nothing.
+    pub(crate) fn compile_destroy(
+        &mut self,
+        b: &mut dyn SemaBridge,
+        d: DeclId,
+        ty: OTy,
+    ) -> Option<u32> {
+        let mut c = Compiler::new(self, b);
+        let f = c.dtor_of(ty)?;
+        let entry = c.here();
+        let p = c.reg();
+        debug_assert_eq!(p, 0);
+        // clang's `in call to 'v.~T()'` points at the variable.
+        let loc = c.b.ast().decls.get(d).loc();
+        c.emit_loc(Op::PushCleanup, 0, &[p, f, ty.0], loc);
+        c.emit(Op::Ret, 1, &[p]);
+        let nregs = c.max;
+        let idx = self.funcs.len() as u32;
+        self.funcs.push(Func {
+            decl: None,
+            entry,
+            state: FState::Ready,
+            nregs,
+            ret: RetKind::Void,
+            params: Vec::new(),
+            memo: false,
+            this_reg: None,
+            this_ty: None,
+        });
+        Some(idx)
+    }
+
     /// Compiles function `idx` if it can be: sets its state.
     pub(crate) fn compile_func(&mut self, b: &mut dyn SemaBridge, idx: u32) {
         let Some(d) = self.funcs[idx as usize].decl else { return };
@@ -384,8 +456,18 @@ impl Oven {
         c.ret = ret;
         c.ret_ref = c.b.ast().types.is_reference(ret_q);
         c.scan(body, &params);
+        c.scan_inits(def);
+        c.cur_fn = Some(def);
+        c.cur_params.clone_from(&params);
         if matches!(ret, RetKind::Sret(_)) {
             c.reg();
+        }
+        let mut this_ty = None;
+        if class::has_this(c.b.ast(), def) {
+            c.this_reg = Some(c.reg());
+            let ast = c.b.ast();
+            let cls = ast.decls.get(def).ctx().and_then(|k| ast.decls.get(ast.first(k)).ty());
+            this_ty = cls.map(|q| c.ty(q));
         }
         let mut infos = Vec::with_capacity(params.len());
         for &p in &params {
@@ -411,6 +493,7 @@ impl Oven {
                 c.locals.insert(pi.decl, Local::Reg(pi.reg));
             }
         }
+        c.member_prologue(def);
         c.stmt(body);
         // Falling off the end ([stmt.return]/4).
         if ret == RetKind::Void {
@@ -421,8 +504,10 @@ impl Oven {
             c.trap_loc(loc, "control reached end of constexpr function".into());
         }
         let nregs = c.max;
+        let this_reg = c.this_reg;
         let memo = c.o.budget.memo_entries > 0
             && !c.uses_cc
+            && this_reg.is_none()
             && !matches!(ret, RetKind::Sret(_) | RetKind::Void)
             && infos.len() <= 4
             && infos.iter().all(|p| {
@@ -436,6 +521,8 @@ impl Oven {
         f.ret = ret;
         f.params = infos;
         f.memo = memo;
+        f.this_reg = this_reg;
+        f.this_ty = this_ty;
     }
 }
 
@@ -471,6 +558,24 @@ pub(crate) struct Compiler<'a> {
     /// The code reads the evaluation context (`Op::IsConstEval`): the
     /// function is not memoized.
     uses_cc: bool,
+    /// The register holding `this` (a non-static member function).
+    this_reg: Option<u32>,
+    /// The object a default member initializer of an aggregate is
+    /// initializing (its `this`, [class.mem.general]/11).
+    this_override: Option<u32>,
+    /// The storage of the lifetime-extended temporaries of the variable
+    /// being initialized, allocated before its initializer's cleanups
+    /// scope (keyed by the `MaterializeTemporaryExpr`).
+    ext_temps: FxHashMap<ExprId, u32>,
+    /// Local class objects declared `const`: allocated modifiable, made
+    /// const once initialized ([class.ctor.general]/5).
+    late_const: FxHashSet<DeclId>,
+    /// The function being compiled (`None`: a thunk).
+    cur_fn: Option<DeclId>,
+    /// Its parameters (forwarded by an inheriting constructor).
+    cur_params: Vec<DeclId>,
+    /// The index register of the innermost `ArrayInitLoopExpr`.
+    array_index: Option<u32>,
     /// The outermost default argument being compiled that holds a
     /// source-location builtin: the builtins in it take the values of
     /// that use (clang `SourceLocExprScopeGuard`; spec/oven.md, Builtins).
@@ -504,6 +609,13 @@ impl<'a> Compiler<'a> {
             has_temps: false,
             std_ice: false,
             uses_cc: false,
+            this_reg: None,
+            this_override: None,
+            ext_temps: FxHashMap::default(),
+            late_const: FxHashSet::default(),
+            cur_fn: None,
+            cur_params: Vec::new(),
+            array_index: None,
             srcloc: None,
         }
     }
@@ -569,14 +681,19 @@ impl<'a> Compiler<'a> {
                 | ExprKind::ArraySubscriptExpr
                 | ExprKind::ConditionalOperator
                 | ExprKind::MaterializeTemporaryExpr => ExprId::new(n.a()),
-                ExprKind::CallExpr => ast.exprs.callee(e),
+                ExprKind::CallExpr | ExprKind::CXXMemberCallExpr => ast.exprs.callee(e),
+                ExprKind::CXXBindTemporaryExpr | ExprKind::ExprWithCleanups => ast.exprs.operand(e),
                 ExprKind::BinaryConditionalOperator => {
                     ast.exprs.binary_conditional_operands(e, &ast.lists)[0]
                 }
                 ExprKind::ImplicitCastExpr | ExprKind::ConstantExpr => ast.exprs.operand(e),
                 ExprKind::MemberExpr => {
                     let base = ast.exprs.operand(e);
-                    if ast.exprs.get(base).loc() == n.loc() {
+                    // An implicit `this` has no source of its own; an
+                    // implicit anonymous-member step does (its base).
+                    if ast.exprs.get(base).kind() == ExprKind::CXXThisExpr
+                        && ast.exprs.this_is_implicit(base)
+                    {
                         return n.loc();
                     }
                     base
@@ -690,7 +807,7 @@ impl<'a> Compiler<'a> {
 
 /// Whether an object of type `q` is const: its type, or for an array its
 /// element type, is const-qualified ([basic.type.qualifier]/3).
-fn const_object(ast: &kiln_ast::Ast, q: QualType) -> bool {
+pub(crate) fn const_object(ast: &kiln_ast::Ast, q: QualType) -> bool {
     let mut c = ast.types.canonical(q);
     while let Some(e) = ast.types.element(c) {
         c = ast.types.canonical(e);
@@ -819,19 +936,24 @@ impl Scan<'_> {
                 }
             }
             ExprKind::BinaryOperator => {
-                let [a, b] = ast.exprs.operands(e);
-                match ast.exprs.binary_op(e) {
-                    BinaryOp::Assign => {
-                        self.expr(a, ok);
-                        self.expr(b, false);
+                // R-WALK: binary spines of any depth, with a worklist
+                // (the scan only collects a set, so order is free).
+                let mut work = vec![(e, ok)];
+                while let Some((x, ok)) = work.pop() {
+                    let k = ast.exprs.get(x).kind();
+                    if k == ExprKind::ParenExpr {
+                        work.push((ast.exprs.operand(x), ok));
+                        continue;
                     }
-                    BinaryOp::Comma => {
-                        self.expr(a, true);
-                        self.expr(b, ok);
+                    if k != ExprKind::BinaryOperator {
+                        self.expr(x, ok);
+                        continue;
                     }
-                    _ => {
-                        self.expr(a, false);
-                        self.expr(b, false);
+                    let [a, b] = ast.exprs.operands(x);
+                    match ast.exprs.binary_op(x) {
+                        BinaryOp::Assign => work.extend([(a, ok), (b, false)]),
+                        BinaryOp::Comma => work.extend([(a, true), (b, ok)]),
+                        _ => work.extend([(a, false), (b, false)]),
                     }
                 }
             }
@@ -845,7 +967,10 @@ impl Scan<'_> {
             | ExprKind::TypeTraitExpr
             | ExprKind::ArrayTypeTraitExpr
             | ExprKind::ExpressionTraitExpr => {}
-            ExprKind::CallExpr => {
+            ExprKind::CallExpr
+            | ExprKind::CXXMemberCallExpr
+            | ExprKind::CXXConstructExpr
+            | ExprKind::CXXTemporaryObjectExpr => {
                 let ty = n.ty();
                 if matches!(
                     ast.types.canonical_view(ty),
@@ -862,7 +987,10 @@ impl Scan<'_> {
                 }
             }
             ExprKind::StmtExpr => self.stmt(ast.exprs.stmt_expr_body(e)),
-            ExprKind::MaterializeTemporaryExpr | ExprKind::CompoundLiteralExpr => {
+            ExprKind::MaterializeTemporaryExpr
+            | ExprKind::CompoundLiteralExpr
+            | ExprKind::ExprWithCleanups
+            | ExprKind::CXXBindTemporaryExpr => {
                 self.temps = true;
                 for c in ast.exprs.children(e, &ast.lists) {
                     self.expr(c, false);
@@ -970,15 +1098,27 @@ impl Compiler<'_> {
     /// Opens a scope allocating the memory locals among `decls`.
     fn open_scope(&mut self, decls: &[DeclId], force: bool) {
         let mut mem = Vec::new();
+        let mut force = force;
         for &d in decls {
             let ast = self.b.ast();
             if !is_local_var(ast, d) || ast.decls.get(d).kind() != DeclKind::Var {
                 continue;
             }
+            // A reference may extend the lifetime of a temporary to the
+            // end of this scope ([class.temporary]/6).
+            force |= self.has_temps && is_reference_var(ast, d);
             let q = ast.decls.get(d).ty().unwrap_or(QualType::INT);
-            let is_const = const_object(ast, q);
+            let mut is_const = const_object(ast, q);
             let ty = self.ty(q);
             if self.needs_mem(d, ty) {
+                // A const class object is modifiable until its
+                // constructor completes ([class.ctor.general]/5).
+                if is_const && let Some(late) = self.is_late_const(ty) {
+                    is_const = false;
+                    if late {
+                        self.late_const.insert(d);
+                    }
+                }
                 mem.push((d, ty, is_const));
             }
         }
@@ -1533,7 +1673,9 @@ impl Compiler<'_> {
             let r = self.reg();
             if let Some(init) = v.init {
                 let m = self.next;
+                let ext = self.begin_extended(init);
                 self.bind_ref(init, r);
+                self.end_extended(&ext);
                 self.next = m;
             }
             self.locals.insert(d, Local::Mem(r));
@@ -1544,24 +1686,36 @@ impl Compiler<'_> {
         let local = self.locals.get(&d).copied();
         match local {
             Some(Local::Mem(p)) => {
+                let m = self.next;
+                let ext = v.init.map(|i| self.begin_extended(i)).unwrap_or_default();
                 if let Some(init) = v.init {
-                    let m = self.next;
                     self.init(init, p, ty);
-                    self.next = m;
                 }
+                self.end_extended(&ext);
+                self.end_local_init(d, p, ty);
+                self.next = m;
             }
             _ => {
                 if self.needs_mem(d, ty) {
                     // Not hoisted (a condition variable of a loop iteration).
-                    let is_const = const_object(self.b.ast(), q);
+                    let mut is_const = const_object(self.b.ast(), q);
+                    if is_const && let Some(late) = self.is_late_const(ty) {
+                        is_const = false;
+                        if late {
+                            self.late_const.insert(d);
+                        }
+                    }
                     let p = self.reg();
                     self.alloc_var(p, ty, d, is_const);
                     self.locals.insert(d, Local::Mem(p));
+                    let m = self.next;
+                    let ext = v.init.map(|i| self.begin_extended(i)).unwrap_or_default();
                     if let Some(init) = v.init {
-                        let m = self.next;
                         self.init(init, p, ty);
-                        self.next = m;
                     }
+                    self.end_extended(&ext);
+                    self.end_local_init(d, p, ty);
+                    self.next = m;
                 } else {
                     let r = self.reg();
                     if let Some(init) = v.init {
@@ -1708,6 +1862,9 @@ impl Compiler<'_> {
         }
         if n.kind() == ExprKind::CallExpr && !n.value_category().is_glvalue() {
             return self.call(e0, None);
+        }
+        if n.kind() == ExprKind::CXXMemberCallExpr && !n.value_category().is_glvalue() {
+            return self.member_call(e0, None);
         }
         let r = self.reg();
         self.rv_into(e, r);
@@ -1886,6 +2043,33 @@ impl Compiler<'_> {
             // Transient allocation (spec/oven.md "Transient allocation").
             ExprKind::CXXNewExpr => self.new_expr(e, dst),
             ExprKind::CXXDeleteExpr => self.delete_expr(e),
+            ExprKind::CXXThisExpr => self.this_expr(e, dst),
+            ExprKind::ExprWithCleanups => {
+                let op = self.ast().exprs.operand(e);
+                self.open_scope(&[], true);
+                self.rv_inner(op, dst);
+                self.close_scope();
+            }
+            ExprKind::CXXBindTemporaryExpr => {
+                let op = self.ast().exprs.operand(e);
+                self.rv_inner(op, dst);
+            }
+            ExprKind::CXXDefaultInitExpr => match self.default_init_of(e) {
+                Some(x) => self.rv_inner(x, dst),
+                None => self.unsupported(e),
+            },
+            ExprKind::ArrayInitIndexExpr => match self.array_index {
+                Some(k) => {
+                    self.emit(Op::Mov, 0, &[dst, k]);
+                }
+                None => self.unsupported(e),
+            },
+            ExprKind::CXXMemberCallExpr if !n.value_category().is_glvalue() => {
+                let r = self.member_call(e, None);
+                if r != dst {
+                    self.emit(Op::Mov, 0, &[dst, r]);
+                }
+            }
             k if k.is_cast() => self.cast(e, dst, ty),
             _ if n.value_category().is_glvalue() => {
                 // A glvalue used as a value (an lvalue-to-rvalue conversion
@@ -1954,6 +2138,10 @@ impl Compiler<'_> {
                 self.emit(Op::LNot, 0, &[dst, r]);
             }
             UnaryOp::AddrOf => {
+                if matches!(self.kind(ty), TyKind::MemPtr { .. }) {
+                    self.mp_const(e, x, dst);
+                    return;
+                }
                 let x0 = skip_parens(self.ast(), x);
                 let xn = self.node(x0);
                 let xty = self.ety(x0);
@@ -2045,15 +2233,23 @@ impl Compiler<'_> {
         let [a, b] = self.ast().exprs.operands(e);
         match op {
             BinaryOp::Comma => {
-                self.effect(a);
-                self.rv_inner(b, dst);
+                // R-WALK (sema-templates.md Q16): a comma fold is a spine
+                // of any depth; every operand but the last is a discarded
+                // value, in order.
+                let ast = self.ast();
+                let mut rest = vec![a];
+                let mut last = b;
+                let mut c = skip_parens(ast, b);
+                while is_binary(ast, c, BinaryOp::Comma) {
+                    let [x, y] = ast.exprs.operands(c);
+                    rest.push(x);
+                    last = y;
+                    c = skip_parens(ast, y);
+                }
+                self.effects(&rest);
+                self.rv_inner(last, dst);
             }
-            BinaryOp::LAnd | BinaryOp::LOr => {
-                self.rv_into(a, dst);
-                let j = self.jmp_if(dst, op == BinaryOp::LOr);
-                self.rv_into(b, dst);
-                self.patch_here(j);
-            }
+            BinaryOp::LAnd | BinaryOp::LOr => self.logical(e, dst),
             BinaryOp::Assign => {
                 let place = self.assign(e);
                 self.load(place, ty, ak::READ, e, dst);
@@ -2062,67 +2258,220 @@ impl Compiler<'_> {
                 let place = self.compound_assign(e);
                 self.load(place, ty, ak::READ, e, dst);
             }
-            _ => {
-                let at = self.ety(a);
-                let bt = self.ety(b);
-                let (ak_, bk) = (self.kind(at), self.kind(bt));
-                if let Some(c) = cmp_of(op) {
-                    let ra = self.rv(a);
-                    let rb = self.rv(b);
-                    match (ak_, bk) {
-                        (TyKind::Float(k), _) => {
-                            self.emit_at(Op::FCmp, float_code(k) | c << 4, &[dst, ra, rb], e);
-                        }
-                        (TyKind::Ptr(p), _) | (_, TyKind::Ptr(p)) => {
-                            self.emit_at(Op::PtrCmp, c, &[dst, ra, rb, p.0], e);
-                        }
-                        (TyKind::NullPtr, _) => {
-                            self.konst(dst, u128::from(matches!(c, cmp::EQ | cmp::LE | cmp::GE)));
-                        }
-                        (k, _) => {
-                            let (w, s) = int_of(k).unwrap_or((32, true));
-                            self.emit(Op::ICmp, int_aux(w as u8, s) | c << 9, &[dst, ra, rb]);
-                        }
-                    }
-                    return;
+            _ => self.arith_spine(e, dst, ty),
+        }
+    }
+
+    /// `&&` / `||` chain `e` into `dst`, iterating along both spines
+    /// (R-WALK): a left-deep chain `((a && b) || c)` evaluates its
+    /// leftmost operand and then each right operand behind a
+    /// short-circuit jump; a right-deep tail `a && (b && c)` jumps
+    /// straight to the end.
+    fn logical(&mut self, e: ExprId, dst: u32) {
+        let ast = self.ast();
+        let mut left = vec![e];
+        let mut cur = skip_parens(ast, ast.exprs.operands(e)[0]);
+        while is_logical(ast, cur) {
+            left.push(cur);
+            cur = skip_parens(ast, ast.exprs.operands(cur)[0]);
+        }
+        self.rv_into(cur, dst);
+        // Bottom-up along the left spine; the top node's right operand
+        // opens the right spine.
+        for &n in left[1..].iter().rev() {
+            let ast = self.ast();
+            let lor = ast.exprs.binary_op(n) == BinaryOp::LOr;
+            let rhs = ast.exprs.operands(n)[1];
+            let j = self.jmp_if(dst, lor);
+            self.rv_into(rhs, dst);
+            self.patch_here(j);
+        }
+        let mut ends = Vec::new();
+        let mut n = e;
+        loop {
+            let ast = self.ast();
+            let lor = ast.exprs.binary_op(n) == BinaryOp::LOr;
+            let rhs = skip_parens(ast, ast.exprs.operands(n)[1]);
+            ends.push(self.jmp_if(dst, lor));
+            let ast = self.ast();
+            if !is_logical(ast, rhs) {
+                self.rv_into(rhs, dst);
+                break;
+            }
+            // `rhs` is itself a chain: its left spine, then its tail.
+            let mut l = vec![rhs];
+            let mut c = skip_parens(ast, ast.exprs.operands(rhs)[0]);
+            while is_logical(ast, c) {
+                l.push(c);
+                c = skip_parens(ast, ast.exprs.operands(c)[0]);
+            }
+            self.rv_into(c, dst);
+            for &m in l[1..].iter().rev() {
+                let ast = self.ast();
+                let lor = ast.exprs.binary_op(m) == BinaryOp::LOr;
+                let r = ast.exprs.operands(m)[1];
+                let j = self.jmp_if(dst, lor);
+                self.rv_into(r, dst);
+                self.patch_here(j);
+            }
+            n = rhs;
+        }
+        for j in ends {
+            self.patch_here(j);
+        }
+    }
+
+    /// The discarded-value expressions `xs`, in order.
+    fn effects(&mut self, xs: &[ExprId]) {
+        for &x in xs {
+            self.effect(x);
+        }
+    }
+
+    /// A non-logical, non-assigning builtin binary operator `e` into
+    /// `dst`, iterating along a left-deep (`((a + b) + c) + d`) or a
+    /// right-deep (`a + (b + (c + d))`) spine of such operators (R-WALK,
+    /// sema-templates.md Q16: fold expressions over 65,536 elements).
+    fn arith_spine(&mut self, e: ExprId, dst: u32, ty: OTy) {
+        let ast = self.ast();
+        let [a, b] = ast.exprs.operands(e);
+        let (la, rb) = (skip_parens(ast, a), skip_parens(ast, b));
+        if is_plain_binary(ast, la) {
+            // Left spine, bottom-up, results ping-ponging between two
+            // registers.
+            let mut spine = vec![la];
+            let mut c = skip_parens(ast, ast.exprs.operands(la)[0]);
+            while is_plain_binary(ast, c) {
+                spine.push(c);
+                c = skip_parens(ast, ast.exprs.operands(c)[0]);
+            }
+            let m = self.next.max(dst + 1);
+            self.next = m;
+            let regs = [self.reg(), self.reg()];
+            let base = self.next;
+            let mut prev = None;
+            for (i, &n) in spine.iter().rev().enumerate() {
+                let r = regs[i & 1];
+                let nty = self.ety(n);
+                self.next = base;
+                self.binary_node(n, r, nty, prev, None);
+                prev = Some(r);
+            }
+            self.next = base;
+            self.binary_node(e, dst, ty, prev, None);
+            self.next = m;
+            return;
+        }
+        if is_plain_binary(ast, rb) {
+            // Right spine: every left operand first, in order, then the
+            // innermost node and the rest bottom-up.
+            let mut spine = vec![e];
+            let mut c = rb;
+            while is_plain_binary(self.ast(), c) {
+                spine.push(c);
+                c = skip_parens(self.ast(), self.ast().exprs.operands(c)[1]);
+            }
+            let m = self.next.max(dst + 1);
+            self.next = m;
+            let lefts: Vec<u32> = spine
+                .iter()
+                .map(|&n| {
+                    let x = self.ast().exprs.operands(n)[0];
+                    self.rv_copy(x)
+                })
+                .collect();
+            let regs = [self.reg(), self.reg()];
+            let base = self.next;
+            let mut prev = None;
+            for (i, (&n, &l)) in spine.iter().zip(&lefts).enumerate().rev() {
+                let (r, nty) = if i == 0 { (dst, ty) } else { (regs[i & 1], self.ety(n)) };
+                self.next = base;
+                self.binary_node(n, r, nty, Some(l), prev);
+                prev = Some(r);
+            }
+            self.next = m;
+            return;
+        }
+        self.binary_node(e, dst, ty, None, None);
+    }
+
+    /// Operand `x`, or the register `given` already holding its value
+    /// (`copy`: into a fresh register, not a local's own).
+    fn opnd(&mut self, x: ExprId, given: Option<u32>, copy: bool) -> u32 {
+        match given {
+            Some(r) => r,
+            None if copy => self.rv_copy(x),
+            None => self.rv(x),
+        }
+    }
+
+    /// One builtin binary operator `e` into `dst`; `ga` / `gb` hold its
+    /// operands' values when a spine walk evaluated them already.
+    fn binary_node(&mut self, e: ExprId, dst: u32, ty: OTy, ga: Option<u32>, gb: Option<u32>) {
+        let op = self.ast().exprs.binary_op(e);
+        let [a, b] = self.ast().exprs.operands(e);
+        let at = self.ety(a);
+        let bt = self.ety(b);
+        let (ak_, bk) = (self.kind(at), self.kind(bt));
+        if let Some(c) = cmp_of(op) {
+            let ra = self.opnd(a, ga, false);
+            let rb = self.opnd(b, gb, false);
+            match (ak_, bk) {
+                (TyKind::Float(k), _) => {
+                    self.emit_at(Op::FCmp, float_code(k) | c << 4, &[dst, ra, rb], e);
                 }
-                if matches!(op, BinaryOp::Add | BinaryOp::Sub) {
-                    if let (TyKind::Ptr(pa), TyKind::Ptr(_)) = (ak_, bk) {
-                        let ra = self.rv(a);
-                        let rb = self.rv(b);
-                        self.emit_at(Op::PtrSub, 0, &[dst, ra, rb, pa.0], e);
-                        return;
-                    }
-                    let ptr_side = match (ak_, bk) {
-                        (TyKind::Ptr(p), k) => Some((a, b, p, k)),
-                        (k, TyKind::Ptr(p)) => Some((b, a, p, k)),
-                        _ => None,
-                    };
-                    if let Some((pe, ie, pointee, ik)) = ptr_side {
-                        let (rp, ri) = if pe == a {
-                            let rp = self.rv(pe);
-                            (rp, self.rv(ie))
-                        } else {
-                            let ri = self.rv(ie);
-                            (self.rv(pe), ri)
-                        };
-                        let (w, s) = int_of(ik).unwrap_or((64, true));
-                        let aux = int_aux(w as u8, s) | u32::from(op == BinaryOp::Sub) << 9;
-                        self.emit_at(Op::PtrAdd, aux, &[dst, rp, ri, pointee.0], e);
-                        return;
-                    }
+                (TyKind::Ptr(p), _) | (_, TyKind::Ptr(p)) => {
+                    self.emit_at(Op::PtrCmp, c, &[dst, ra, rb, p.0], e);
                 }
-                let Some(iop) = int_op(op) else {
-                    self.unsupported(e);
-                    return;
+                (TyKind::NullPtr, _) => {
+                    self.konst(dst, u128::from(matches!(c, cmp::EQ | cmp::LE | cmp::GE)));
+                }
+                // Interned member pointers: equal values share an index.
+                (TyKind::MemPtr { .. }, _) | (_, TyKind::MemPtr { .. }) => {
+                    self.emit(Op::ICmp, int_aux(64, false) | c << 9, &[dst, ra, rb]);
+                }
+                (k, _) => {
+                    let (w, s) = int_of(k).unwrap_or((32, true));
+                    self.emit(Op::ICmp, int_aux(w as u8, s) | c << 9, &[dst, ra, rb]);
+                }
+            }
+            return;
+        }
+        if matches!(op, BinaryOp::Add | BinaryOp::Sub) {
+            if let (TyKind::Ptr(pa), TyKind::Ptr(_)) = (ak_, bk) {
+                let ra = self.opnd(a, ga, false);
+                let rb = self.opnd(b, gb, false);
+                self.emit_at(Op::PtrSub, 0, &[dst, ra, rb, pa.0], e);
+                return;
+            }
+            let ptr_side = match (ak_, bk) {
+                (TyKind::Ptr(p), k) => Some((a, b, p, k)),
+                (k, TyKind::Ptr(p)) => Some((b, a, p, k)),
+                _ => None,
+            };
+            if let Some((pe, _ie, pointee, ik)) = ptr_side {
+                let (rp, ri) = if pe == a {
+                    let rp = self.opnd(a, ga, false);
+                    (rp, self.opnd(b, gb, false))
+                } else {
+                    let ri = self.opnd(a, ga, false);
+                    (self.opnd(b, gb, false), ri)
                 };
-                let shift = matches!(iop, Op::IShl | Op::IShr);
-                // [expr.shift]/4: the left operand is sequenced first.
-                let ra = if shift { self.rv_copy(a) } else { self.rv(a) };
-                let rb = self.rv(b);
-                self.arith(iop, ty, bt, dst, ra, rb, e);
+                let (w, s) = int_of(ik).unwrap_or((64, true));
+                let aux = int_aux(w as u8, s) | u32::from(op == BinaryOp::Sub) << 9;
+                self.emit_at(Op::PtrAdd, aux, &[dst, rp, ri, pointee.0], e);
+                return;
             }
         }
+        let Some(iop) = int_op(op) else {
+            self.unsupported(e);
+            return;
+        };
+        let shift = matches!(iop, Op::IShl | Op::IShr);
+        // [expr.shift]/4: the left operand is sequenced first.
+        let ra = self.opnd(a, ga, shift);
+        let rb = self.opnd(b, gb, false);
+        self.arith(iop, ty, bt, dst, ra, rb, e);
     }
 
     /// `dst = a op b` in type `ty` (`bt`: the right operand's type, for
@@ -2220,11 +2569,29 @@ impl Compiler<'_> {
                 let begin = self.begin(op);
                 self.o.sites[at..].iter_mut().for_each(|s| s.loc = begin);
             }
-            CastKind::NoOp => self.rv_inner(op, dst),
+            CastKind::NoOp | CastKind::UserDefinedConversion | CastKind::ConstructorConversion => {
+                self.rv_inner(op, dst);
+            }
+            CastKind::DerivedToBase
+            | CastKind::UncheckedDerivedToBase
+            | CastKind::BaseToDerived => {
+                let p = self.rv(op);
+                self.class_cast(e, p, dst, true, ck == CastKind::BaseToDerived);
+            }
             CastKind::ToVoid => self.effect(op),
-            CastKind::NullToPointer => {
+            CastKind::NullToPointer | CastKind::NullToMemberPointer => {
                 self.effect(op);
                 self.konst(dst, 0);
+            }
+            CastKind::BaseToDerivedMemberPointer | CastKind::DerivedToBaseMemberPointer => {
+                self.mp_conv(e, dst, ck);
+            }
+            CastKind::MemberPointerToBoolean => {
+                let r = self.rv(op);
+                let z = self.reg();
+                self.konst(z, 0);
+                self.emit(Op::ICmp, int_aux(64, false) | cmp::NE << 9, &[dst, r, z]);
+                self.next = z;
             }
             CastKind::ArrayToPointerDecay => {
                 let p = self.lv_mem(op, Access::Addr);
@@ -2528,6 +2895,7 @@ impl Compiler<'_> {
                         self.lv(b, acc)
                     }
                     _ if op.is_compound_assignment() => self.compound_assign(e),
+                    _ if op.is_ptr_mem() => self.mp_access(e, acc),
                     _ => {
                         self.unsupported(e);
                         Place::Mem(self.reg())
@@ -2575,39 +2943,68 @@ impl Compiler<'_> {
                 let op = self.ast().exprs.operand(e);
                 self.lv(op, acc)
             }
-            k if k.is_cast() && self.ast().exprs.cast_kind(e) == CastKind::NoOp => {
+            k if k.is_cast()
+                && matches!(
+                    self.ast().exprs.cast_kind(e),
+                    CastKind::NoOp
+                        | CastKind::UserDefinedConversion
+                        | CastKind::ConstructorConversion
+                ) =>
+            {
                 let op = self.ast().exprs.operand(e);
                 self.lv(op, acc)
             }
-            // A temporary destroyed at the end of its full-expression
-            // ([class.temporary]/4): an object in the current frame,
-            // released by the enclosing statement's temporaries scope.
-            ExprKind::MaterializeTemporaryExpr
-                if self.ast().exprs.temporary_storage(e)
-                    == kiln_ast::expr::StorageDuration::FullExpression =>
+            k if k.is_cast()
+                && n.value_category().is_glvalue()
+                && matches!(
+                    self.ast().exprs.cast_kind(e),
+                    CastKind::DerivedToBase
+                        | CastKind::UncheckedDerivedToBase
+                        | CastKind::BaseToDerived
+                ) =>
             {
-                let sub = self.ast().exprs.operand(e);
-                let q = n.ty();
-                let is_const = const_object(self.ast(), q);
-                let ty = self.ty(q);
+                let down = self.ast().exprs.cast_kind(e) == CastKind::BaseToDerived;
+                let op = self.ast().exprs.operand(e);
+                let sub = match acc {
+                    Access::Write => Access::Write,
+                    Access::Addr => Access::Addr,
+                    Access::Read | Access::Rmw => Access::Read,
+                };
+                let p = self.lv_mem(op, sub);
                 let r = self.reg();
-                self.alloc(r, ty, Origin::Temp(e), is_const, e);
-                self.init(sub, r, ty);
+                self.class_cast(e, p, r, false, down);
                 Place::Mem(r)
             }
             // A call returning a reference: the referent's address.
             ExprKind::CallExpr if n.value_category().is_glvalue() => Place::Mem(self.call(e, None)),
-            ExprKind::CallExpr => {
-                // A class prvalue used as a glvalue: materialize it.
-                let ty = self.ety(e);
-                let r = self.reg();
-                self.alloc(r, ty, Origin::Temp(e), false, e);
-                self.init(e, r, ty);
-                Place::Mem(r)
+            ExprKind::CXXMemberCallExpr if n.value_category().is_glvalue() => {
+                Place::Mem(self.member_call(e, None))
+            }
+            ExprKind::MaterializeTemporaryExpr => self.mte(e),
+            ExprKind::ExprWithCleanups => {
+                let op = self.ast().exprs.operand(e);
+                self.open_scope(&[], true);
+                let p = self.lv(op, acc);
+                self.close_scope();
+                p
+            }
+            ExprKind::CXXDefaultInitExpr if self.default_init_of(e).is_some() => {
+                let x = self.default_init_of(e).unwrap_or(e);
+                self.lv(x, acc)
             }
             ExprKind::CXXThrowExpr => {
                 self.throw_invalid(e);
                 Place::Mem(self.reg())
+            }
+            // A class prvalue used as a glvalue: materialize it, destroyed
+            // at the end of the full-expression.
+            _ if !n.value_category().is_glvalue() && {
+                let ty = self.ety(e);
+                self.o.types.is_aggregate(ty)
+            } =>
+            {
+                let ty = self.ety(e);
+                Place::Mem(self.materialize(e, ty))
             }
             _ => {
                 self.unsupported(e);
@@ -2703,7 +3100,9 @@ impl Compiler<'_> {
         }
         // [expr.assign]/1: the right operand is sequenced first.
         let r = self.rv_copy(b);
+        let saved = self.rmw_loc.replace(self.node(e).loc());
         let place = self.lv(a, Access::Write);
+        self.rmw_loc = saved;
         self.store(place, r, ty, ak::ASSIGN, e);
         place
     }
@@ -2788,7 +3187,41 @@ impl Compiler<'_> {
             // Default-initialization by a trivial constructor performs no
             // initialization ([dcl.init.general]/7.1): the object stays
             // indeterminate.
-            ExprKind::CXXConstructExpr if self.ast().is_trivial_default_construction(e) => return,
+            ExprKind::CXXConstructExpr | ExprKind::CXXTemporaryObjectExpr => {
+                self.construct(e, p, ty);
+                return;
+            }
+            ExprKind::CXXInheritedCtorInitExpr => {
+                self.inherited_ctor(e, p);
+                return;
+            }
+            ExprKind::ExprWithCleanups => {
+                let op = self.ast().exprs.operand(e);
+                self.open_scope(&[], true);
+                self.init_inner(op, p, ty);
+                self.close_scope();
+                return;
+            }
+            ExprKind::CXXBindTemporaryExpr => {
+                let op = self.ast().exprs.operand(e);
+                return self.init_inner(op, p, ty);
+            }
+            ExprKind::CXXDefaultInitExpr if self.default_init_of(e).is_some() => {
+                let x = self.default_init_of(e).unwrap_or(e);
+                return self.init_inner(x, p, ty);
+            }
+            ExprKind::ArrayInitLoopExpr => {
+                self.array_init_loop(e, p, ty);
+                return;
+            }
+            ExprKind::CXXParenListInitExpr => {
+                let ast = self.ast();
+                let inits: Vec<ExprId> =
+                    ast.lists.iter::<ExprId>(ast.exprs.paren_list_inits(e)).collect();
+                let filler = ast.exprs.paren_list_filler(e);
+                self.init_aggr(e, &inits, filler, None, p, ty);
+                return;
+            }
             _ => {}
         }
         if n.kind().is_cast() && self.ast().exprs.cast_kind(e) == CastKind::LValueToRValueBitCast {
@@ -2816,8 +3249,11 @@ impl Compiler<'_> {
                 let cty = if self.o.types.size(sty) <= self.o.types.size(ty) { sty } else { ty };
                 self.emit_at(Op::Copy, 1, &[p, r, cty.0], e);
             }
-            ExprKind::CallExpr => {
+            ExprKind::CallExpr if !n.value_category().is_glvalue() => {
                 self.call(e, Some(p));
+            }
+            ExprKind::CXXMemberCallExpr if !n.value_category().is_glvalue() => {
+                self.member_call(e, Some(p));
             }
             ExprKind::ConditionalOperator => {
                 let c = self.rv(ExprId::new(n.a()));
@@ -2837,7 +3273,10 @@ impl Compiler<'_> {
             k if k.is_cast()
                 && matches!(
                     self.ast().exprs.cast_kind(e),
-                    CastKind::NoOp | CastKind::LValueToRValue
+                    CastKind::NoOp
+                        | CastKind::LValueToRValue
+                        | CastKind::UserDefinedConversion
+                        | CastKind::ConstructorConversion
                 ) =>
             {
                 let op = self.ast().exprs.operand(e);
@@ -2861,6 +3300,22 @@ impl Compiler<'_> {
         let inits: Vec<ExprId> =
             ast.lists.get(ast.exprs.init_list_inits(e)).iter().map(|&x| ExprId::new(x)).collect();
         let extra = *ast.exprs.init_list(e);
+        self.init_aggr(e, &inits, extra.array_filler, extra.union_field, p, ty);
+    }
+
+    /// Aggregate initialization ([dcl.init.aggr]) of the object of type
+    /// `ty` at `p` from the elements `inits` of list (or parenthesized
+    /// list) `e`; `filler` initializes the remaining array elements,
+    /// `union_field` names the union member initialized.
+    fn init_aggr(
+        &mut self,
+        e: ExprId,
+        inits: &[ExprId],
+        filler: Option<ExprId>,
+        union_field: Option<DeclId>,
+        p: u32,
+        ty: OTy,
+    ) {
         match self.kind(ty) {
             TyKind::Array { elem, n } => {
                 if inits.len() as u64 > n {
@@ -2876,7 +3331,6 @@ impl Compiler<'_> {
                     self.init_inner(s, p, ty);
                     return;
                 }
-                let filler = extra.array_filler;
                 let rest = n - inits.len() as u64;
                 let zero_fill = rest > 0
                     && filler
@@ -2915,7 +3369,7 @@ impl Compiler<'_> {
             }
             TyKind::Record { union: true, .. } => {
                 let fields = self.o.types.fields(ty).to_vec();
-                let target = extra.union_field.or_else(|| fields.first().map(|f| f.decl));
+                let target = union_field.or_else(|| fields.first().map(|f| f.decl));
                 let Some(idx) = target.and_then(|d| fields.iter().position(|f| f.decl == d)) else {
                     return;
                 };
@@ -2929,23 +3383,45 @@ impl Compiler<'_> {
                 }
             }
             TyKind::Record { decl, .. } => {
-                if self.ast().decls.bases(decl, &self.ast().lists).next().is_some() {
-                    // todo(WP-076): base subobjects of an aggregate (the
-                    // list's first elements, [dcl.init.aggr]/2).
-                    self.unsupported(e);
-                    return;
+                // The bases first, in declaration order ([dcl.init.aggr]/2).
+                let ast = self.ast();
+                let bases: Vec<QualType> =
+                    ast.decls.bases(decl, &ast.lists).map(|b| b.ty).collect();
+                let mut it = inits.iter();
+                for bq in bases {
+                    let bty = self.ty(bq);
+                    let off = self.base_offset(ty, bty);
+                    let m = self.next;
+                    let q = self.elem_ptr(p, off, e);
+                    match it.next() {
+                        Some(&x) => self.init(x, q, bty),
+                        None => {
+                            self.emit_at(Op::ZeroInit, 0, &[q, bty.0], e);
+                        }
+                    }
+                    self.next = m;
                 }
                 let fields = self.o.types.fields(ty).to_vec();
-                let mut it = inits.iter();
                 for fi in fields {
                     let unnamed_bf = fi.width.is_some() && !self.has_name(fi.decl);
-                    if unnamed_bf {
+                    if unnamed_bf || fi.base {
                         continue;
                     }
-                    if let Some(&x) = it.next() {
+                    // A default member initializer's `this` is the object
+                    // being initialized ([class.mem.general]/11).
+                    let x = match it.next() {
+                        Some(&x) => Some((x, self.is_default_init(x))),
+                        None => {
+                            self.ast().decls.field(fi.decl).and_then(|f| f.init).map(|d| (d, true))
+                        }
+                    };
+                    if let Some((x, dflt)) = x {
+                        let saved = self.this_override;
+                        if dflt {
+                            self.this_override = Some(p);
+                        }
                         self.init_field(x, p, fi, e);
-                    } else if let Some(di) = self.ast().decls.field(fi.decl).and_then(|f| f.init) {
-                        self.init_field(di, p, fi, e);
+                        self.this_override = saved;
                     } else {
                         // [dcl.init.aggr]/5.3: copy-initialized from `{}`.
                         let q = self.elem_ptr(p, fi.offset, e);
@@ -3036,9 +3512,19 @@ impl Compiler<'_> {
                 let op = self.ast().exprs.binary_op(e);
                 match op {
                     BinaryOp::Comma => {
-                        let [a, b] = self.ast().exprs.operands(e);
-                        self.effect(a);
-                        self.effect(b);
+                        // R-WALK: a comma fold of any shape, in order.
+                        let mut work = vec![e];
+                        while let Some(x) = work.pop() {
+                            let ast = self.ast();
+                            let x = skip_parens(ast, x);
+                            if is_binary(ast, x, BinaryOp::Comma) {
+                                let [a, b] = ast.exprs.operands(x);
+                                work.push(b);
+                                work.push(a);
+                            } else {
+                                self.effect(x);
+                            }
+                        }
                     }
                     BinaryOp::Assign => {
                         self.assign(e);
@@ -3062,14 +3548,25 @@ impl Compiler<'_> {
                 let xty = self.ety(x);
                 self.inc_dec(place, xty, op, None, e);
             }
-            ExprKind::CallExpr => {
+            ExprKind::CallExpr | ExprKind::CXXMemberCallExpr
+                if !n.value_category().is_glvalue() =>
+            {
                 if self.o.types.is_aggregate(ty) {
-                    let r = self.reg();
-                    self.alloc(r, ty, Origin::Temp(e), false, e);
-                    self.call(e, Some(r));
-                } else {
+                    // A discarded class prvalue: a temporary
+                    // ([expr.context]/2), destroyed at the end of the
+                    // full-expression.
+                    let _ = self.materialize(e, ty);
+                } else if n.kind() == ExprKind::CallExpr {
                     self.call(e, None);
+                } else {
+                    self.member_call(e, None);
                 }
+            }
+            ExprKind::ExprWithCleanups => {
+                let op = self.ast().exprs.operand(e);
+                self.open_scope(&[], true);
+                self.effect(op);
+                self.close_scope();
             }
             ExprKind::ConditionalOperator => {
                 let c = self.rv(ExprId::new(n.a()));
@@ -3092,9 +3589,7 @@ impl Compiler<'_> {
             ExprKind::CXXDeleteExpr => self.delete_expr(e),
             _ if self.kind(ty) == TyKind::Void => self.unsupported(e),
             _ if self.o.types.is_aggregate(ty) => {
-                let r = self.reg();
-                self.alloc(r, ty, Origin::Temp(e), false, e);
-                self.init(e, r, ty);
+                let _ = self.materialize(e, ty);
             }
             _ => {
                 let r = self.reg();
@@ -3116,13 +3611,18 @@ impl Compiler<'_> {
                 self.emit(Op::Mov, 0, &[dst, p]);
             }
         } else {
-            // Sema materializes no temporaries yet (no
-            // `MaterializeTemporaryExpr`).
-            let loc = self.begin(init);
-            self.trap_loc(
-                loc,
-                "kiln: binding a reference to a temporary is not supported yet".into(),
-            );
+            // A prvalue sema did not wrap in a `MaterializeTemporaryExpr`:
+            // a temporary of the full-expression.
+            let ty = self.ety(init);
+            let p = if self.o.types.is_aggregate(ty) {
+                self.materialize(init, ty)
+            } else {
+                let r = self.reg();
+                self.alloc(r, ty, Origin::Temp(init), false, init);
+                self.init(init, r, ty);
+                r
+            };
+            self.emit(Op::Mov, 0, &[dst, p]);
         }
         self.next = m;
     }
@@ -3203,56 +3703,29 @@ impl Compiler<'_> {
             );
             return self.reg();
         }
-        let fp = if direct.is_none() { Some(self.rv_copy(callee)) } else { None };
-        let is_sret = self.o.types.is_aggregate(ty);
-        let base = self.next;
-        let window = args.len() as u32 + u32::from(is_sret);
-        for _ in 0..window.max(1) {
-            self.reg();
-        }
-        if is_sret {
-            match sret {
-                Some(p) => {
-                    self.emit(Op::Mov, 0, &[base, p]);
-                }
-                None => {
-                    self.alloc(base, ty, Origin::Temp(e), false, e);
-                }
+        // `obj.f()` naming a static member function: `obj` is evaluated,
+        // then `f` called directly ([expr.ref]/7.1).
+        let ast = self.ast();
+        let direct = match direct {
+            None if ast.exprs.get(c).kind() == ExprKind::MemberExpr
+                && ast.decls.get(ast.exprs.decl(c)).kind().is_function() =>
+            {
+                let d = ast.exprs.decl(c);
+                let obj = ast.exprs.operand(c);
+                self.effect(obj);
+                Some(d)
             }
-        }
-        let ref_params = self.ref_params(callee);
-        for (i, &a) in args.iter().enumerate() {
-            let slot = base + u32::from(is_sret) + i as u32;
-            let aty = self.ety(a);
-            if ref_params.get(i).copied().unwrap_or(false) {
-                self.bind_ref(a, slot);
-            } else if self.o.types.is_aggregate(aty) {
-                self.alloc(slot, aty, Origin::Temp(a), false, a);
-                self.init(a, slot, aty);
-            } else {
-                self.rv_into(a, slot);
-            }
-        }
-        let pc = match (direct, fp) {
-            (Some(d), _) => {
-                let f = self.o.func_index(self.b.ast(), d);
-                Some(self.emit_at(Op::Call, 0, &[f, base], e))
-            }
-            (None, Some(r)) => Some(self.emit_at(Op::CallInd, 0, &[r, base], e)),
-            (None, None) => None,
+            d => d,
         };
+        let target = match direct {
+            Some(d) => class::Callee::Direct(d),
+            None => class::Callee::Ind(self.rv_copy(callee)),
+        };
+        let refs = self.ref_params(callee);
         // clang's `CallExpr::getExprLoc`: the begin of the callee (kiln's
         // `loc` of a call is its `(`).
-        if let Some(pc) = pc
-            && self.ast().exprs.get(e).kind() == ExprKind::CallExpr
-        {
-            let loc = self.begin(e);
-            if let Some(site) = self.o.sites.last_mut().filter(|x| x.pc == pc as u32) {
-                site.loc = loc;
-            }
-        }
-        self.next = base + 1;
-        base
+        let loc = (self.ast().exprs.get(e).kind() == ExprKind::CallExpr).then(|| self.begin(e));
+        self.call_frame(e, target, ty, sret, None, &args, &refs, loc)
     }
 }
 
