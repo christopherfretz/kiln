@@ -370,6 +370,29 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// The implicit object argument `obj` (an object, not a pointer) of a
+    /// call of the member operator function `m`, converted to `cv C` for
+    /// `m`'s class `C` (clang `PerformImplicitObjectArgumentInitialization`
+    /// after overload resolution checked the binding).
+    pub(crate) fn operator_object(&mut self, obj: ExprId, m: DeclId) -> ExprId {
+        let obj_ty = self.ety(obj);
+        let Some(c) = self.ast.types.as_record(obj_ty) else { return obj };
+        let obj_class = self.ast.definition(c).unwrap_or(c);
+        let Some(declaring) = self.declaring_class(m) else { return obj };
+        let (mq, _) = self.method_object_quals(m);
+        let oq = self.ast.types.effective_quals(obj_ty);
+        let to_q = (oq & CV) | (mq & CV);
+        self.object_to_class(
+            obj,
+            false,
+            obj_class,
+            oq,
+            declaring,
+            to_q,
+            CastKind::UncheckedDerivedToBase,
+        )
+    }
+
     /// A call whose callee is a bound non-static member function (a
     /// member access or `.*` / `->*`, [expr.call]/2), or names one with
     /// no object; `None` for other callees. `braced` as for

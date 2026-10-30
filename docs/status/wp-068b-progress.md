@@ -17,13 +17,20 @@ Branch `wp/068b-operators`, worktree `kiln/.worktrees/wp-068b`.
   calls/member calls, rewritten recurse to semantic form), codegen
   (`emit_method_call` split, operator calls in scalar/lvalue/agg paths).
 
+- `overload/oper.rs`: candidate set for operators (non-member from
+  unqualified lookup + ADL with enum-only filter, members, reversed and
+  rewritten candidates with P2468, template filter heuristic),
+  `-Wambiguous-reversed-operator`, rewritten `==` non-bool check,
+  `build_operator_call`, all outcome diagnostics. Compiles; not yet wired.
+- `overload/builtin.rs`: stub (no built-in candidates yet).
+
 ## In progress
-- `overload/oper.rs` resolve_operator (member/non-member/ADL candidates)
-  and dispatch from act_on_binary/unary/subscript/call.
+- Wiring `try_overloaded_operator` into act_on_binary/unary/subscript/call
+  (split existing bodies into builtin_binary/builtin_unary).
 
 ## Next
-1. `overload/oper.rs` resolve_operator + CXXOperatorCallExpr.
-2. `overload/builtin.rs` built-in candidates.
-3. Rewritten comparisons.
-4. `->` chains, call-on-object, surrogates; `alloc.rs`.
+1. Wire dispatch; fix `check_modifiable` class case; subst arms; parse test.
+2. Compare against clang on scratch cases (n1.cpp, g.cpp).
+3. `overload/builtin.rs` built-in candidates.
+4. `->` chains, call-on-object surrogates; `alloc.rs`.
 5. Tests, xfail flips, bench, spec §10, type_traits probe.

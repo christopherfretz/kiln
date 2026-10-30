@@ -49,6 +49,7 @@ diag_groups! {
     Pedantic = "pedantic" [];
     BackslashNewlineEscape = "backslash-newline-escape" [];
     AmbiguousReversedOperator = "ambiguous-reversed-operator" [];
+    RewriteNotBool = "rewrite-not-bool" [];
     InvalidPpToken = "invalid-pp-token" [];
     MacroRedefined = "macro-redefined" [];
     UnusedMacros = "unused-macros" [];

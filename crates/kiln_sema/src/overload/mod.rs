@@ -9,10 +9,12 @@
 pub(crate) mod address;
 pub(crate) mod adl;
 pub(crate) mod best;
+pub(crate) mod builtin;
 pub(crate) mod call;
 pub(crate) mod diag;
 pub(crate) mod ics;
 pub(crate) mod member;
+pub(crate) mod oper;
 pub(crate) mod redecl;
 pub(crate) mod udc;
 
@@ -108,12 +110,31 @@ pub(crate) enum CandidateFailure {
     BadFinalConversion,
 }
 
-/// A rewritten comparison candidate's form (WP-068b).
+/// A rewritten comparison candidate's form ([over.match.oper]/3.4;
+/// clang `OverloadCandidateRewriteKind`).
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub(crate) enum Rewrite {
     /// Not rewritten.
     #[default]
     None,
+    /// `y @ x` for `x @ y` (a reversed `==` or `<=>`).
+    Reversed,
+    /// A different operator: `==` for `!=`, `<=>` for a relational
+    /// operator.
+    Different,
+    /// A different operator with the operands reversed.
+    DifferentReversed,
+}
+
+impl Rewrite {
+    /// The parameters take the operands in reverse order.
+    pub(crate) fn is_reversed(self) -> bool {
+        matches!(self, Rewrite::Reversed | Rewrite::DifferentReversed)
+    }
+    /// The candidate's operator is not the one written.
+    pub(crate) fn is_different(self) -> bool {
+        matches!(self, Rewrite::Different | Rewrite::DifferentReversed)
+    }
 }
 
 /// One candidate function (spec/sema-overload.md §10.1).
@@ -134,8 +155,7 @@ pub(crate) struct Candidate {
     pub viable: bool,
     /// Why not, when not viable.
     pub failure: CandidateFailure,
-    /// The rewritten form (WP-068b).
-    #[allow(dead_code, reason = "stub: WP-068b rewritten operator candidates")]
+    /// The rewritten form ([over.match.oper]/3.4).
     pub rewrite: Rewrite,
     /// Found only by argument-dependent lookup.
     pub adl_only: bool,
@@ -212,6 +232,9 @@ pub(crate) struct OverloadCandidateSet {
     /// A candidate has a *requires-clause*, which is not checked yet
     /// (WP-073): the outcome is uncertain.
     pub uncertain: bool,
+    /// An operator set ([over.match.oper]): `object` is the first operand,
+    /// which a non-member candidate takes as its first parameter.
+    pub oper: bool,
 }
 
 impl Default for OverloadCandidateSet {
@@ -228,6 +251,7 @@ impl Default for OverloadCandidateSet {
             params: Vec::new(),
             skipped_templates: false,
             uncertain: false,
+            oper: false,
         }
     }
 }
@@ -246,6 +270,7 @@ impl OverloadCandidateSet {
         self.params.clear();
         self.skipped_templates = false;
         self.uncertain = false;
+        self.oper = false;
     }
 
     /// The conversion sequences of candidate `c`.

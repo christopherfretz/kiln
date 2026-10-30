@@ -47,6 +47,7 @@ impl Sema<'_, '_> {
                 _ => "constructor (the implicit copy constructor)",
             },
             CandidateKind::Ctor => "constructor",
+            _ if c.rewrite.is_reversed() => "function (with reversed parameter order)",
             CandidateKind::Method if implicit => match self.special_kind_of(f) {
                 Some(SpecialKind::MoveAssign) => "function (the implicit move assignment operator)",
                 Some(SpecialKind::CopyAssign) => "function (the implicit copy assignment operator)",
@@ -126,6 +127,7 @@ impl Sema<'_, '_> {
         let f = cand.func();
         let loc = self.ast.decls.get(f).loc();
         let kind = self.ovl_kind_str(cand);
+        let oper_fn = set.oper && cand.kind == CandidateKind::Function && set.object.is_some();
         if cand.viable {
             if self.ovl_deleted(f) {
                 let first = self.ast.first(f);
@@ -142,10 +144,24 @@ impl Sema<'_, '_> {
             CandidateFailure::TooManyArgs { .. } | CandidateFailure::TooFewArgs { .. } => {
                 let mut params = Vec::new();
                 let variadic = self.fn_param_types(f, &mut params);
+                if oper_fn {
+                    // The first operand is an argument too.
+                    let (n, min) = (params.len(), self.fn_min_args(f));
+                    return self
+                        .diag(DiagId::note_ovl_candidate_kind_not_viable, loc)
+                        .arg(kind)
+                        .arg(self.arity_detail(f, n, min, set.args.len() + 1, variadic));
+                }
                 let skip = usize::from(set.object.is_some() && self.has_explicit_object(f));
                 let n = params.len().saturating_sub(skip);
                 let min = self.fn_min_args(f).saturating_sub(skip);
                 self.arity_detail(f, n, min, set.args.len(), variadic)
+            }
+            CandidateFailure::BadConversion { arg } if oper_fn => {
+                // The operands are the 1st, 2nd, ... arguments.
+                let slot = if arg == u16::MAX { 0 } else { usize::from(arg) + 1 };
+                let x = set.ics_of(c).get(slot).copied().unwrap_or(Ics::Ellipsis);
+                self.bad_conversion_detail(&x, Some(slot))
             }
             CandidateFailure::BadConversion { arg } => {
                 let (slot, which) = if arg == u16::MAX {

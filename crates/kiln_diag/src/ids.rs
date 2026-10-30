@@ -1153,6 +1153,8 @@ diag_ids! {
     sema_ovl_deleted_object_call = Error (2) "call to deleted function call operator in type {0}{1}";
     sema_no_call_operator = Error (1) "type {0} does not provide a call operator";
     sema_no_subscript_operator = Error (1) "type {0} does not provide a subscript operator";
+    sema_ovl_ambiguous_subscript_call = Error (1) "call to subscript operator of type {0} is ambiguous";
+    sema_ovl_deleted_special_oper = Error (2) "object of type {0} cannot be {1:constructed|copied|moved|assigned|assigned|destroyed} because its {1:default constructor|copy constructor|move constructor|copy assignment operator|move assignment operator|destructor} is implicitly deleted";
     sema_ovl_rewrite_equalequal_not_bool = Error (2) "return type {0} of selected 'operator==' function for rewritten '{1}' comparison is not 'bool'";
     sema_circular_arrow = Error (0) "circular pointer delegation detected";
     sema_operator_arrow_depth_exceeded = Error (2) "use of 'operator->' on type {0} would invoke a sequence of more than {1} 'operator->' calls";
@@ -1162,7 +1164,10 @@ diag_ids! {
     note_ovl_surrogate_candidate = Note (1) "conversion candidate of type {0}";
     note_ovl_ambiguous_oper_binary_reversed_self = Note (0) "ambiguity is between a regular call to this operator and a call with the argument order reversed";
     note_ovl_ambiguous_eqeq_reversed_self_non_const = Note (0) "mark 'operator==' as const or add a matching 'operator!=' to resolve the ambiguity";
-    sema_ovl_ambiguous_reversed_operator = ExtWarn [AmbiguousReversedOperator] (3) "ISO C++20 considers use of overloaded operator '{0}' (with operand types {1} and {2}) to be ambiguous despite there being a unique best viable function";
+    sema_ovl_ambiguous_reversed_operator = ExtWarn [AmbiguousReversedOperator] (4) "ISO C++20 considers use of overloaded operator '{0}' (with operand types {1} and {2}) to be ambiguous despite there being a unique best viable function{3: with non-reversed arguments|}";
+    note_ovl_ambiguous_oper_binary_selected_candidate = Note (0) "candidate function with non-reversed arguments";
+    note_ovl_ambiguous_oper_binary_reversed_candidate = Note (0) "ambiguous candidate function with reversed arguments";
+    sema_ovl_rewrite_equalequal_not_bool_ext = ExtWarn [RewriteNotBool] (2) "ISO C++20 requires return type of selected 'operator==' function for rewritten '{1}' comparison to be 'bool', not {0}";
     note_rewriting_operator_as_spaceship = Note (0) "while rewriting comparison as call to 'operator<=>' declared here";
     sema_operator_arrow_not_pointer = Error (1) "member reference type {0} is not a pointer";
 }

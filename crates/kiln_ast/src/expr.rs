@@ -1581,6 +1581,13 @@ impl ExprArena {
         ExprId::new(self.expect_kind(e, ExprKind::CXXRewrittenBinaryOperator).a)
     }
 
+    /// The written operator of a `CXXRewrittenBinaryOperator` and its list
+    /// of the two operands as written.
+    pub fn rewritten_written(&self, e: ExprId) -> (BinaryOp, ListId) {
+        let n = self.expect_kind(e, ExprKind::CXXRewrittenBinaryOperator);
+        (BinaryOp::from_u8(n.aux).expect("valid opcode"), ListId::new(n.b))
+    }
+
     /// The implied object argument of a `CXXMemberCallExpr`: the base of
     /// its `MemberExpr` callee, or the left operand of a `.*`/`->*`
     /// callee (sema-class.md §5.1; for `->` a pointer).

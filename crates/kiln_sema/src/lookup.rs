@@ -259,6 +259,16 @@ impl Sema<'_, '_> {
     /// an identifier (an operator-function-id) is never a parameter,
     /// template parameter or block-scope name here.
     pub(crate) fn lookup_name_dn(&self, dname: DeclName, kind: LookupKind) -> Found {
+        self.lookup_name_scoped(dname, kind, false)
+    }
+
+    /// The unqualified lookup of an operator function name for an operator
+    /// expression ([over.match.oper]/3.2): class scopes are skipped.
+    pub(crate) fn lookup_operator_name(&self, dname: DeclName) -> Found {
+        self.lookup_name_scoped(dname, LookupKind::Ordinary, true)
+    }
+
+    fn lookup_name_scoped(&self, dname: DeclName, kind: LookupKind, skip_records: bool) -> Found {
         let ident = dname.as_ident();
         let name = ident.unwrap_or(Symbol::from_index(0));
         // Namespaces nominated by block-scope using-directives: their
@@ -331,6 +341,9 @@ impl Sema<'_, '_> {
             }
             let Some(entity) = s.entity else { continue };
             if s.kind == ScopeKind::Record {
+                if skip_records {
+                    continue;
+                }
                 let found = self.lookup_in_class_dn(entity, dname, kind);
                 if !found.is_empty() || found.ambiguity.is_some() {
                     return found;

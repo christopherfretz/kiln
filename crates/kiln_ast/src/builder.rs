@@ -1535,24 +1535,71 @@ impl<'a> AstBuilder<'a> {
         e
     }
 
+    /// The callee of an operator call (clang `CreateFunctionRefExpr`): an
+    /// lvalue `DeclRefExpr` of the operator function `d` of type `ty`
+    /// (a member function too), decayed to a pointer.
+    pub fn operator_callee(
+        &mut self,
+        d: DeclId,
+        ty: QualType,
+        loc: Loc,
+        extra: Option<DeclRefExtra>,
+    ) -> ExprId {
+        let deps = self.type_deps(ty) | self.decl_deps(d);
+        let b = extra.map_or(0, |x| self.ast.exprs.push_declref_extra(x));
+        let dre = self.push_expr(
+            ExprKind::DeclRefExpr,
+            ValueCategory::LValue,
+            ObjectKind::Ordinary,
+            ExprFlags::NONE,
+            deps,
+            NonOdrUse::None as u8,
+            ty,
+            loc,
+            d.raw(),
+            b,
+        );
+        let pty = self.ast.types.pointer_to(ty);
+        self.cast(
+            ExprKind::ImplicitCastExpr,
+            CastKind::FunctionToPointerDecay,
+            dre,
+            pty,
+            ValueCategory::PRValue,
+            None,
+            loc,
+            ExprFlags::NONE,
+        )
+    }
+
     /// A comparison rewritten to `==` or `<=>` ([over.match.oper]/3.4,
     /// `CXXRewrittenBinaryOperator`): `semantic` is the expression it
-    /// stands for, `loc` the written operator.
-    pub fn rewritten_binary(&mut self, semantic: ExprId, loc: Loc) -> ExprId {
+    /// stands for, `loc` the written operator; `op` and the operands
+    /// `l`, `r` are the expression as written (kept for template
+    /// instantiation, not dumped).
+    pub fn rewritten_binary(
+        &mut self,
+        op: BinaryOp,
+        l: ExprId,
+        r: ExprId,
+        semantic: ExprId,
+        loc: Loc,
+    ) -> ExprId {
         let deps = self.deps(semantic);
         let ty = self.ast.exprs.get(semantic).ty();
         let vk = self.vk(semantic);
+        let list = self.ast.lists.push(&[l, r]);
         self.push_expr(
             ExprKind::CXXRewrittenBinaryOperator,
             vk,
             ObjectKind::Ordinary,
             ExprFlags::NONE,
             deps,
-            0,
+            op as u8,
             ty,
             loc,
             semantic.raw(),
-            0,
+            list.raw(),
         )
     }
 
