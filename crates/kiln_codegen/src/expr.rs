@@ -441,6 +441,20 @@ impl Cg<'_> {
                 {
                     return Ok(Some(V::C(self.const_scalar_value(c, q)?)));
                 }
+                // clang `ScalarExprEmitter::VisitMemberExpr`: an integral
+                // member access that folds is its base, ignored, and the
+                // constant.
+                let mut m = s;
+                while ast.exprs.get(m).kind() == ExprKind::ParenExpr {
+                    m = ast.exprs.operand(m);
+                }
+                if ast.exprs.get(m).kind() == ExprKind::MemberExpr
+                    && let Some(c) = self.folds.get(m)
+                {
+                    let v = self.const_scalar_value(c, q)?;
+                    self.emit_ignored(ast.exprs.operand(m))?;
+                    return Ok(Some(V::C(v)));
+                }
                 return self.emit_scalar_opt(s);
             }
             CastKind::NoOp | CastKind::BitCast | CastKind::LValueBitCast => {
@@ -1350,7 +1364,7 @@ impl Cg<'_> {
             // bound address.
             let slot = self.field_lvalue_init(base, field, fq)?;
             let p = self.load(LTy::PTR, slot.addr.v, slot.addr.align, false);
-            let (_, align) = self.pointee_layout(fq);
+            let (_, align) = self.pointee_layout(referee);
             let ty = self.mty(referee);
             return Ok(LV { addr: Addr { v: p, ty, align }, q: referee, bf: None });
         }
@@ -2009,14 +2023,31 @@ impl Cg<'_> {
                 None => self.null_init_lvalue(lv, zeroed),
             };
         }
-        if ast.decls.bases(ast.definition(rd).unwrap_or(rd), &ast.lists).next().is_some() {
-            // todo(WP-079): base subobjects of an aggregate (the list's
-            // first elements, [dcl.init.aggr]/2).
-            return err(self.loc_of(e), "aggregate initialization of a class with base classes");
+        // [dcl.init.aggr]/2: the bases are the list's first elements
+        // (clang `VisitCXXParenListOrInitListExpr`).
+        let def = ast.definition(rd).unwrap_or(rd);
+        let bases: Vec<_> = ast.decls.bases(def, &ast.lists).collect();
+        let mut k = 0usize;
+        for b in bases {
+            if b.is_virtual {
+                return err(self.loc_of(e), "aggregate with a virtual base");
+            }
+            let Some(brd) = ast.types.as_record(b.ty) else {
+                return err(self.loc_of(e), "base of a non-class type");
+            };
+            let Some(off) = self.base_offset(rd, brd) else {
+                return err(self.loc_of(e), "base class not in the layout");
+            };
+            let Some(&init) = inits.get(k) else { break };
+            k += 1;
+            let v = self.byte_offset(dest.v, off);
+            let ty = self.record_ty(brd);
+            let bdest = Addr { v, ty, align: min_align(dest.align, off) };
+            let overlap = self.base_may_overlap(rd, brd, off);
+            self.emit_agg_into(init, bdest, overlap)?;
         }
         let fields: Vec<DeclId> =
             ast.decls.members(rd).filter(|&m| ast.decls.get(m).kind() == DeclKind::Field).collect();
-        let mut k = 0usize;
         for f in fields {
             let fd = ast.decls.field(f);
             let unnamed_bf =

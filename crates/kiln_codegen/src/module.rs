@@ -260,7 +260,9 @@ impl<'a> Cg<'a> {
                 continue;
             }
             match n.kind() {
-                DeclKind::Var => self.emit_global_var(m)?,
+                // An in-class static data member declaration is a
+                // definition only when inline ([class.static.data]/3,4).
+                DeclKind::Var if self.var_is_inline(m) => self.emit_global_var(m)?,
                 DeclKind::CXXRecord | DeclKind::ClassTemplateSpecialization => {
                     self.emit_class_members(m)?;
                 }
@@ -923,7 +925,40 @@ impl<'a> Cg<'a> {
         gv.linkage = Linkage::External;
         gv.align = Some(align);
         self.gvars.insert(first, g);
+        self.available_externally(first, g, ty)?;
         Ok(g)
+    }
+
+    /// clang `GetOrCreateLLVMGlobal`: a `const` static data member with
+    /// an in-class initializer and no definition in this translation
+    /// unit exposes its value as an `available_externally` constant.
+    fn available_externally(&mut self, first: DeclId, g: GlobalId, ty: QualType) -> R<()> {
+        let ast = self.ast;
+        if !ast.decls.get(first).ctx().is_some_and(|c| ast.decls.get(c).kind().payload() == kiln_ast::decl::PayloadClass::Record) {
+            return Ok(());
+        }
+        if ast.redecls_of(first).count() > 1 || self.var_is_inline(first) {
+            return Ok(());
+        }
+        if !ast.types.effective_quals(ty).is_const() || has_mutable(ty) {
+            return Ok(());
+        }
+        if mangle::has_internal_linkage(ast, first) {
+            return Ok(());
+        }
+        let Some(init) = ast.decls.var(first).and_then(|v| v.init) else { return Ok(()) };
+        let Some(c) = self.folds.get(init) else { return Ok(()) };
+        let c = self.const_value(c, ty, Some(init), true)?;
+        if self.m.const_type(c) != self.m.global(g).value_type() {
+            return Ok(());
+        }
+        if let Err(e) = self.m.set_initializer(g, Some(c)) {
+            return err(Some(ast.decls.get(first).loc()), format!("bad initializer: {e:?}"));
+        }
+        let gv = self.m.global_mut(g);
+        gv.is_constant = true;
+        gv.linkage = Linkage::AvailableExternally;
+        Ok(())
     }
 
     /// The alignment of global variable of type `ty`.
@@ -945,7 +980,12 @@ impl<'a> Cg<'a> {
         let loc = Some(ast.decls.get(d).loc());
         // A trivial default constructor does nothing; the static object
         // is zero-initialized ([basic.start.static]/2).
-        let init = match v.init.filter(|&i| !ast.is_trivial_default_construction(i)) {
+        // clang `getAnyInitializer`: an out-of-line definition of a static
+        // data member takes the in-class initializer.
+        let any_init = v.init.or_else(|| {
+            ast.redecls_of(first).find_map(|r| ast.decls.var(r).and_then(|x| x.init))
+        });
+        let init = match any_init.filter(|&i| !ast.is_trivial_default_construction(i)) {
             None => {
                 let t = self.mty(ty);
                 self.m.const_zero(t)

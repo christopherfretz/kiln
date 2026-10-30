@@ -14,10 +14,10 @@ use kiln_ast::decl::{
 use kiln_ast::expr::{ConstructionKind, ExprFlags, ExprKind, StorageDuration};
 use kiln_ast::types::TypeView;
 use kiln_ast::{DeclId, ExprId, QualType, StmtId, TypeId};
-use kiln_llvm::{FuncId, Linkage, TypeId as LTy, UnnamedAddr, Value};
+use kiln_llvm::{FuncId, IntPredicate, Linkage, TypeId as LTy, UnnamedAddr, Value};
 
 use crate::cleanup::Cleanup;
-use crate::fir::V;
+use crate::fir::{Op, V};
 use crate::func::{Addr, min_align};
 use crate::module::{Cg, Def, R, Sig, err};
 
@@ -272,6 +272,11 @@ impl Cg<'_> {
             );
         }
         if let Some(&(val, f)) = self.sfns.get(&(first, v)) {
+            if v == Structor::Base {
+                // Declared by a RAUW'd complete-object reference: a use
+                // of the base variant itself queues its definition.
+                self.queue_structor(first, v);
+            }
             let fid = (val == Value::func(f) && v == Structor::Base).then_some(f);
             return Ok((V::C(val), fid));
         }
@@ -446,7 +451,7 @@ impl Cg<'_> {
     }
 
     /// clang `getOverlapForBaseInit`.
-    fn base_may_overlap(&mut self, rd: DeclId, base: DeclId, off: u64) -> bool {
+    pub(crate) fn base_may_overlap(&mut self, rd: DeclId, base: DeclId, off: u64) -> bool {
         let Some(def) = self.class_def(rd) else { return true };
         let nv = self.tys.layouter().record(def).nv_size;
         let bsize = self.class_def(base).map_or(0, |b| self.tys.layouter().record(b).size);
@@ -611,7 +616,8 @@ impl Cg<'_> {
         let slot = *self.f.locals.get(&p0).expect("parameter slot");
         let src_obj = self.load(LTy::PTR, slot.v, slot.align, false);
         let pq = ast.decls.get(p0).ty().expect("param type");
-        let (_, src_align0) = self.pointee_layout(pq);
+        let src_q = self.referee(pq).unwrap_or(pq);
+        let (_, src_align0) = self.pointee_layout(src_q);
         let rd = ast.decls.get(first).ctx().expect("field parent");
         let rty = self.record_ty(rd);
         let src_base = Addr { v: src_obj, ty: rty, align: src_align0 };
@@ -739,7 +745,6 @@ impl Cg<'_> {
         if n == 0 {
             return;
         }
-        idx.pop();
         let begin = self.gep(a.ty, a.v, idx, true);
         self.array_destroy(begin, n, t, rd);
     }
@@ -863,8 +868,76 @@ impl Cg<'_> {
             return Ok(());
         }
         if self.array_elem(q).is_some() {
-            return err(self.loc_of(e), "array construction is not supported yet");
+            return self.construct_array(e, dest);
         }
+        self.construct_one(e, dest, overlap)
+    }
+
+    /// clang `EmitCXXAggrConstructorCall` for a constant-length array: a
+    /// loop over the flattened elements, each constructed in its own
+    /// cleanup scope. Without exceptions no partial-destroy cleanup.
+    fn construct_array(&mut self, e: ExprId, dest: Addr) -> R<()> {
+        let ast = self.ast;
+        let mut q = ast.exprs.get(e).ty();
+        let mut n = 1u64;
+        loop {
+            match ast.types.canonical_view(q) {
+                TypeView::ConstantArray(a) => {
+                    n = n.saturating_mul(a.size);
+                    q = a.elem;
+                }
+                TypeView::IncompleteArray(_) | TypeView::VariableArray { .. } => {
+                    return err(self.loc_of(e), "construction of variable-length arrays is not supported yet");
+                }
+                _ => break,
+            }
+        }
+        if n == 0 {
+            return Ok(());
+        }
+        let elem = self.mty(q);
+        let begin = if self.m.types.array_info(dest.ty).is_some() {
+            let mut idx = vec![self.icn(LTy::I32, 0)];
+            let mut t = dest.ty;
+            while let Some((el, _)) = self.m.types.array_info(t) {
+                idx.push(self.icn(LTy::I32, 0));
+                t = el;
+            }
+            self.gep(dest.ty, dest.v, idx, true)
+        } else {
+            dest.v
+        };
+        let elem_size = self.alloc_size(elem);
+        let elem_align = min_align(dest.align, elem_size);
+        let nn = self.i64c(i128::from(n));
+        let end = self.gep(elem, begin, vec![nn], true);
+        let entry = self.f.fir.cur().expect("insertion point");
+        let body = self.f.fir.create_block();
+        self.emit_block(body, false);
+        let phi = self.f.fir.push(Op::Phi { ty: LTy::PTR, inc: vec![(begin, entry)] }, LTy::PTR);
+        let sc = self.begin_scope(false);
+        let r = self.construct_one(e, Addr { v: phi, ty: elem, align: elem_align }, false);
+        self.end_scope(sc);
+        r?;
+        let one = self.i64c(1);
+        let next = self.gep(elem, phi, vec![one], true);
+        let cur = self.f.fir.cur().expect("insertion point");
+        self.f.fir.add_incoming(crate::fir::Fir::last_inst(phi), next, cur);
+        let done = self.icmp(IntPredicate::Eq, next, end);
+        let out = self.f.fir.create_block();
+        self.cond_br(done, out, body);
+        self.emit_block(out, false);
+        Ok(())
+    }
+
+    /// One complete-or-base object construction (clang
+    /// `EmitCXXConstructorCall`).
+    fn construct_one(&mut self, e: ExprId, dest: Addr, overlap: bool) -> R<()> {
+        let ast = self.ast;
+        let ctor = ast.exprs.constructor(e);
+        let info = ast.exprs.construct_info(e);
+        let rd = ast.decls.get(ctor).ctx().expect("constructor class");
+        let args: Vec<ExprId> = ast.lists.iter(ast.exprs.construct_args(e)).collect();
         if self.memcpy_equivalent(ctor) {
             let src = self.emit_lvalue(args[0])?;
             let size = self.copy_size(rd, overlap);
@@ -933,7 +1006,7 @@ impl Cg<'_> {
         let this = if arrow {
             let p = self.emit_scalar(base)?;
             let pq = ast.types.pointee(ast.exprs.get(base).ty()).expect("pointee");
-            let (_, align) = self.pointee_layout(ast.exprs.get(base).ty());
+            let (_, align) = self.pointee_layout(pq);
             let ty = self.mty(pq);
             Addr { v: p, ty, align }
         } else {
@@ -1032,7 +1105,7 @@ impl Cg<'_> {
         let not_null = self.f.fir.create_block();
         let end = self.f.fir.create_block();
         let null = V::C(self.m.const_null(LTy::PTR));
-        let is_null = self.icmp(kiln_llvm::IntPredicate::Eq, p, null);
+        let is_null = self.icmp(IntPredicate::Eq, p, null);
         let orig = self.f.fir.cur().expect("insertion point");
         self.cond_br(is_null, end, not_null);
         self.emit_block(not_null, false);
@@ -1041,7 +1114,7 @@ impl Cg<'_> {
         self.emit_block(end, false);
         self.f
             .fir
-            .push(crate::fir::Op::Phi { ty: LTy::PTR, inc: vec![(adj, from), (null, orig)] }, LTy::PTR)
+            .push(Op::Phi { ty: LTy::PTR, inc: vec![(adj, from), (null, orig)] }, LTy::PTR)
     }
 
 
