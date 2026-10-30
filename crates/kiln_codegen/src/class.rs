@@ -41,9 +41,7 @@ impl Cg<'_> {
         let ast = self.ast;
         let n = ast.decls.get(d);
         match n.kind() {
-            DeclKind::CXXConstructor | DeclKind::CXXDestructor | DeclKind::CXXConversion => {
-                n.ctx()
-            }
+            DeclKind::CXXConstructor | DeclKind::CXXDestructor | DeclKind::CXXConversion => n.ctx(),
             DeclKind::CXXMethod => {
                 let f = ast.decls.function(d)?;
                 if f.spec.storage() == FnStorage::Static || f.spec.has_explicit_object() {
@@ -136,7 +134,9 @@ impl Cg<'_> {
         if params.len() != 1 || fd.spec.storage() == FnStorage::Static {
             return None;
         }
-        if !mangle::decl_name(ast, f).starts_with("operator=") || mangle::decl_name(ast, f) != "operator=" {
+        if !mangle::decl_name(ast, f).starts_with("operator=")
+            || mangle::decl_name(ast, f) != "operator="
+        {
             return None;
         }
         match ast.types.canonical_view(pty(params[0])) {
@@ -298,14 +298,13 @@ impl Cg<'_> {
             return Ok((V::C(Value::func(f)), None));
         }
         // An alias defined later in the translation unit.
-        let p = match self.ph_of.get(&(first, v)) {
-            Some(&p) => p,
-            None => {
-                let p = u32::try_from(self.phs.len()).expect("placeholder count");
-                self.phs.push(None);
-                self.ph_of.insert((first, v), p);
-                p
-            }
+        let p = if let Some(&p) = self.ph_of.get(&(first, v)) {
+            p
+        } else {
+            let p = u32::try_from(self.phs.len()).expect("placeholder count");
+            self.phs.push(None);
+            self.ph_of.insert((first, v), p);
+            p
         };
         self.f.uses_ph = true;
         Ok((V::P(p), None))
@@ -499,7 +498,8 @@ impl Cg<'_> {
                 }
                 CtorInitKind::Field | CtorInitKind::IndirectField => {
                     let field = DeclId::new(ci.target);
-                    if memcpyize && ci.kind == CtorInitKind::Field
+                    if memcpyize
+                        && ci.kind == CtorInitKind::Field
                         && let Some(span) = self.memcpyable_field(rd, field, ci.init)
                     {
                         run.push((field, span.0, span.1));
@@ -538,28 +538,21 @@ impl Cg<'_> {
                 false
             }
         };
-        if !init_ok && !(self.referee(q).is_some() || self.trivially_copyable(q)) {
+        if !init_ok && self.referee(q).is_none() && !self.trivially_copyable(q) {
             return None;
         }
         let def = self.class_def(rd)?;
         let idx = self.field_number(def, field)?;
         let bit = self.tys.layouter().record(def).fields[idx];
-        let (start, size) = {
-            let bf = self.tys.record(def).bitfields.get(&field).copied();
-            match bf {
-                Some(_) => return None,
-                None => {
-                    let (s, _) = self.size_align(q);
-                    let ds = match ast.types.as_record(q).and_then(|r| self.class_def(r)) {
-                        Some(r) if self.array_elem(q).is_none() => {
-                            self.tys.layouter().record(r).data_size.max(0)
-                        }
-                        _ => s,
-                    };
-                    (bit / 8, ds)
-                }
-            }
+        if self.tys.record(def).bitfields.contains_key(&field) {
+            return None;
+        }
+        let (s, _) = self.size_align(q);
+        let size = match ast.types.as_record(q).and_then(|r| self.class_def(r)) {
+            Some(r) if self.array_elem(q).is_none() => self.tys.layouter().record(r).data_size,
+            _ => s,
         };
+        let start = bit / 8;
         Some((start, start + size))
     }
 
@@ -690,7 +683,10 @@ impl Cg<'_> {
                 // Members of anonymous unions are never destroyed.
                 if ast.types.as_record(q).is_some_and(|r| {
                     self.is_union(r)
-                        && matches!(ast.names.view(ast.decls.get(f).name()), kiln_ast::names::DeclNameView::Empty)
+                        && matches!(
+                            ast.names.view(ast.decls.get(f).name()),
+                            kiln_ast::names::DeclNameView::Empty
+                        )
                 }) {
                     continue;
                 }
@@ -887,7 +883,10 @@ impl Cg<'_> {
                     q = a.elem;
                 }
                 TypeView::IncompleteArray(_) | TypeView::VariableArray { .. } => {
-                    return err(self.loc_of(e), "construction of variable-length arrays is not supported yet");
+                    return err(
+                        self.loc_of(e),
+                        "construction of variable-length arrays is not supported yet",
+                    );
                 }
                 _ => break,
             }
@@ -1117,11 +1116,8 @@ impl Cg<'_> {
         let adj = self.byte_offset(p, off);
         let from = self.f.fir.cur().expect("insertion point");
         self.emit_block(end, false);
-        self.f
-            .fir
-            .push(Op::Phi { ty: LTy::PTR, inc: vec![(adj, from), (null, orig)] }, LTy::PTR)
+        self.f.fir.push(Op::Phi { ty: LTy::PTR, inc: vec![(adj, from), (null, orig)] }, LTy::PTR)
     }
-
 
     /// `QualType::isPODType` (C++11: trivial and standard-layout classes,
     /// arrays of them, and every non-class type).
@@ -1140,5 +1136,4 @@ impl Cg<'_> {
             None => true,
         }
     }
-
 }

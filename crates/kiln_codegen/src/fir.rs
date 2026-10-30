@@ -429,21 +429,6 @@ impl Fir {
         V::I(n)
     }
 
-    /// Replaces the operation of instruction `i` (keeping its position),
-    /// updating block use counts.
-    pub fn replace_op(&mut self, i: u32, op: Op) {
-        let live = self.insts[i as usize].block.is_some();
-        if live {
-            for s in self.insts[i as usize].op.successors() {
-                self.blocks[s.0 as usize].uses -= 1;
-            }
-            for s in op.successors() {
-                self.blocks[s.0 as usize].uses += 1;
-            }
-        }
-        self.insts[i as usize].op = op;
-    }
-
     /// Redirects every edge of terminator `i` to `from` to `to`
     /// (LLVM `setSuccessor`).
     pub fn set_successor(&mut self, i: u32, from: Blk, to: Blk) {
@@ -472,11 +457,6 @@ impl Fir {
         if self.cur == Some(from) {
             self.cur = Some(to);
         }
-    }
-
-    /// The successors of terminator `i`.
-    pub fn successors(&self, i: u32) -> Vec<Blk> {
-        self.insts[i as usize].op.successors()
     }
 
     /// The live terminators branching to `b`.

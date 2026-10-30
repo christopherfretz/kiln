@@ -14,9 +14,9 @@ use kiln_llvm::{
 use kiln_source::Loc;
 use kiln_source::fx::FxHashMap;
 
+use crate::CodegenError;
 use crate::cleanup::{Cleanups, JumpDest};
 use crate::fir::{Blk, Fir, Op, V};
-use crate::CodegenError;
 use crate::module::{Cg, R, Sig, err};
 
 /// An address with its element type and alignment (clang `Address`).
@@ -80,6 +80,10 @@ pub(crate) enum RetKind {
 }
 
 /// Per-function state.
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "independent per-function flags (clang's CodeGenFunction fields)"
+)]
 pub(crate) struct Fx {
     pub fir: Fir,
     pub decl: Option<DeclId>,
@@ -198,12 +202,7 @@ impl Cg<'_> {
 
     /// clang `GenerateCode` for the definition `d` into `f` (`structor`:
     /// the constructor/destructor variant being emitted).
-    pub fn gen_code(
-        &mut self,
-        d: DeclId,
-        f: FuncId,
-        structor: Option<mangle::Structor>,
-    ) -> R<()> {
+    pub fn gen_code(&mut self, d: DeclId, f: FuncId, structor: Option<mangle::Structor>) -> R<()> {
         let ast = self.ast;
         let first = ast.first(d);
         let sig = self.decl_sig(first)?;
@@ -415,7 +414,10 @@ impl Cg<'_> {
         }
         for (f, d, fir) in std::mem::take(&mut self.pending) {
             if let Err(e) = fir.lower(&mut self.m, f, &self.phs) {
-                return err(Some(self.ast.decls.get(d).loc()), format!("IR lowering failed: {e:?}"));
+                return err(
+                    Some(self.ast.decls.get(d).loc()),
+                    format!("IR lowering failed: {e:?}"),
+                );
             }
         }
         Ok(())

@@ -1,5 +1,5 @@
 //! Pointers to members (spec/abi.md, Itanium C++ ABI §2.3; clang
-//! `ItaniumCXXABI`, with `UseARMMethodPtrABI` on AArch64).
+//! `ItaniumCXXABI`, with `UseARMMethodPtrABI` on `AArch64`).
 //!
 //! A data member pointer is a `ptrdiff_t` offset with null `-1`; a member
 //! function pointer is `{ ptr-as-int, adj }` with null `ptr == 0`. On
@@ -170,7 +170,10 @@ impl Cg<'_> {
         for &p in path {
             let (base, der) = if derived { (p, rd) } else { (rd, p) };
             let Some(o) = self.base_offset(der, base) else {
-                return err(Some(ast.decls.get(member).loc()), "member pointer path not in the layout");
+                return err(
+                    Some(ast.decls.get(member).loc()),
+                    "member pointer path not in the layout",
+                );
             };
             adj += i128::from(o);
             rd = p;

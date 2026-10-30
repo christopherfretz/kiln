@@ -1142,8 +1142,7 @@ pub fn can_pass_in_registers(ast: &Ast, record: DeclId) -> bool {
         }
         has_copy_or_move = true;
     }
-    if needs_dtor && !bits.contains(B::DEFAULTED_DTOR_DELETED) && !bits.contains(B::TRIVIAL_DTOR)
-    {
+    if needs_dtor && !bits.contains(B::DEFAULTED_DTOR_DELETED) && !bits.contains(B::TRIVIAL_DTOR) {
         return false;
     }
     for (_, spec) in &declared {

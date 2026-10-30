@@ -47,9 +47,6 @@ pub(crate) enum Cleanup {
     /// Destroys a non-virtual base subobject of `this` in a base
     /// destructor (`CallBaseDtor`).
     BaseOfThis { base: DeclId, offset: u64 },
-    /// Calls `operator delete(ptr)` for a new-expression whose initializer
-    /// is running (normal path only: never needed without exceptions).
-    Nop,
 }
 
 /// One scope (clang `EHCleanupScope`, normal cleanups only).
@@ -172,6 +169,12 @@ impl Cleanups {
 
 fn mem4() -> MemOpts {
     MemOpts::aligned(4)
+}
+
+/// How control leaves a cleanup's normal block.
+enum Exit {
+    Br(Blk),
+    Switch { default: Blk, cases: Vec<(V, Blk)> },
 }
 
 impl Cg<'_> {
@@ -324,8 +327,11 @@ impl Cg<'_> {
         let t = self.f.fir.terminator(b).expect("terminator");
         if let Op::Br { dest } = *self.f.fir.op(t) {
             let slot = self.dest_slot();
-            let ld =
-                self.f.fir.insert_before(t, Op::Load { ty: LTy::I32, ptr: slot, mem: mem4() }, LTy::I32);
+            let ld = self.f.fir.insert_before(
+                t,
+                Op::Load { ty: LTy::I32, ptr: slot, mem: mem4() },
+                LTy::I32,
+            );
             self.f.fir.erase(t);
             crate::fir::Fir::last_inst(self.f.fir.push_in(
                 b,
@@ -468,10 +474,6 @@ impl Cg<'_> {
             through_dest = Some(self.normal_entry(Cleanups::enclosing(top)));
         }
 
-        enum Exit {
-            Br(Blk),
-            Switch { default: Blk, cases: Vec<(V, Blk)> },
-        }
         let mut fallthrough_dest = None;
         let exit = if !has_throughs && !has_fixups && !has_fallthrough && n_afters == 1 {
             let slot = self.dest_slot();
@@ -499,8 +501,8 @@ impl Cg<'_> {
                     cases.push((self.i32c(0), ft));
                 }
             }
-            let afters = self.f.cl.stack[top - 1].branch_afters.clone();
-            for (b, i) in afters {
+            let branch_afters = self.f.cl.stack[top - 1].branch_afters.clone();
+            for (b, i) in branch_afters {
                 cases.push((self.i32c(i), b));
             }
             if has_fixups && !has_enclosing {
@@ -535,7 +537,8 @@ impl Cg<'_> {
             }
             Exit::Switch { default, cases } => {
                 let slot = self.dest_slot();
-                let ld = self.f.fir.push(Op::Load { ty: LTy::I32, ptr: slot, mem: mem4() }, LTy::I32);
+                let ld =
+                    self.f.fir.push(Op::Load { ty: LTy::I32, ptr: slot, mem: mem4() }, LTy::I32);
                 self.f.fir.push(Op::Switch { c: ld, default, cases }, LTy::VOID);
             }
         }
@@ -604,7 +607,6 @@ impl Cg<'_> {
                 let p = self.byte_offset(this, offset);
                 self.call_dtor(base, p, true);
             }
-            Cleanup::Nop => {}
         }
     }
 

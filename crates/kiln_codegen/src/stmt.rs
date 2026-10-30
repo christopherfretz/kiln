@@ -269,9 +269,10 @@ impl Cg<'_> {
         {
             rv = Some(self.sub(e));
         }
-        let nrvo = ast.stmts.return_nrvo(s).filter(|&v| {
-            ast.decls.var(v).is_some_and(|x| x.spec.is_nrvo())
-        });
+        let nrvo = ast
+            .stmts
+            .return_nrvo(s)
+            .filter(|&v| ast.decls.var(v).is_some_and(|x| x.spec.is_nrvo()));
         if let Some(v) = nrvo {
             if let Some(&flag) = self.f.nrvo_flags.get(&v) {
                 let t = V::C(self.m.const_bool(true));
@@ -423,8 +424,11 @@ impl Cg<'_> {
         self.f.loops.push(LoopFrame { header: header_b, md });
         let body = self.f.fir.create_block();
         if !const_true {
-            let exit =
-                if self.requires_cleanups(&cond_scope) { self.f.fir.create_block() } else { end.blk };
+            let exit = if self.requires_cleanups(&cond_scope) {
+                self.f.fir.create_block()
+            } else {
+                end.blk
+            };
             self.cond_br(cv, body, exit);
             if exit != end.blk {
                 self.emit_block(exit, false);
@@ -507,8 +511,11 @@ impl Cg<'_> {
                 cont = Some(if d.inc.is_some() { self.jump_dest_here() } else { cond_d });
                 self.f.jumps.last_mut().expect("loop").cont = cont;
             }
-            let exit =
-                if self.requires_cleanups(&for_scope) { self.f.fir.create_block() } else { end.blk };
+            let exit = if self.requires_cleanups(&for_scope) {
+                self.f.fir.create_block()
+            } else {
+                end.blk
+            };
             let body_b = self.f.fir.create_block();
             let cv = self.eval_bool(c)?;
             self.cond_br(cv, body_b, exit);

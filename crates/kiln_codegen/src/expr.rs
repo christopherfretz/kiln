@@ -9,12 +9,12 @@ use kiln_ast::expr::{BinaryOp, CastKind, ExprFlags, ExprKind, UnaryOp, ValueCate
 use kiln_ast::stmt::StmtKind;
 use kiln_ast::{DeclId, ExprId, QualType, StmtId};
 use kiln_llvm::{
-    Attr, AttrKind, AttrList, BinOp, CallOpts, CastOp, ConstData, Flags, FloatPredicate,
-    FuncId, IntPredicate, TypeId as LTy, Value,
+    Attr, AttrKind, AttrList, BinOp, CallOpts, CastOp, ConstData, Flags, FloatPredicate, FuncId,
+    IntPredicate, TypeId as LTy, Value,
 };
 
-use crate::fir::{Fir, Op, V};
 use crate::cleanup::Cleanup;
+use crate::fir::{Fir, Op, V};
 use crate::fold::is_local;
 use crate::func::{Addr, CallArg, min_align};
 use crate::module::{Cg, R, Sig, err, gval};
@@ -1912,11 +1912,7 @@ impl Cg<'_> {
                 let destructed = std::mem::take(&mut self.f.dest_destructed);
                 self.agg_visit(self.sub(e), dest, zeroed)?;
                 if !destructed && let Some(rd) = self.destructed_class(q) {
-                    self.push_cleanup(Cleanup::Dtor {
-                        addr: dest.v,
-                        record: rd,
-                        base: false,
-                    });
+                    self.push_cleanup(Cleanup::Dtor { addr: dest.v, record: rd, base: false });
                 }
                 Ok(())
             }
@@ -2198,9 +2194,8 @@ impl Cg<'_> {
         // NRVO: the variable lives in the return slot (clang
         // `EmitAutoVarAlloca`), with a flag telling its cleanup whether
         // the return happened.
-        let nrvo_slot = self.f.ret_slot.filter(|_| {
-            v.spec.is_nrvo() && ast.types.as_record(q).is_some()
-        });
+        let nrvo_slot =
+            self.f.ret_slot.filter(|_| v.spec.is_nrvo() && ast.types.as_record(q).is_some());
         let (addr, flag) = if let Some(slot) = nrvo_slot {
             let addr = Addr { v: slot.v, ty, align: slot.align };
             let flag = if dtor_class.is_some() {
@@ -2221,7 +2216,7 @@ impl Cg<'_> {
         self.f.locals.insert(d, addr);
         // Default-initialization by a trivial constructor emits nothing.
         let Some(init) = v.init.filter(|&i| {
-            !(ast.is_trivial_default_construction(i) && !ast.exprs.construct_info(i).zeroing)
+            !ast.is_trivial_default_construction(i) || ast.exprs.construct_info(i).zeroing
         }) else {
             return Ok(());
         };

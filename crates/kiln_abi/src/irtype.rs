@@ -375,7 +375,13 @@ impl<'a> IrTypes<'a> {
         }
         // accumulateVPtrs.
         if layout.vptr.is_some() {
-            members.push(Member { offset: 0, data: Some(IrType::Ptr), field: None, base: None, seq });
+            members.push(Member {
+                offset: 0,
+                data: Some(IrType::Ptr),
+                field: None,
+                base: None,
+                seq,
+            });
             seq += 1;
         }
         // accumulateBases.
@@ -397,7 +403,13 @@ impl<'a> IrTypes<'a> {
                 continue;
             }
             let t = self.base_storage_type(b);
-            members.push(Member { offset: off, data: Some(t), field: None, base: Some((b, false)), seq });
+            members.push(Member {
+                offset: off,
+                data: Some(t),
+                field: None,
+                base: Some((b, false)),
+                seq,
+            });
             seq += 1;
         }
         if members.is_empty() {
@@ -419,7 +431,13 @@ impl<'a> IrTypes<'a> {
                 } else {
                     Some(self.base_storage_type(vb))
                 };
-                members.push(Member { offset: off, data, field: None, base: Some((vb, true)), seq });
+                members.push(Member {
+                    offset: off,
+                    data,
+                    field: None,
+                    base: Some((vb, true)),
+                    seq,
+                });
                 seq += 1;
             }
         }

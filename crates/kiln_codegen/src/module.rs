@@ -309,19 +309,19 @@ impl<'a> Cg<'a> {
                 }
             };
             let first = self.ast.first(d);
-            if self.ast.decls.get(d).kind() != DeclKind::Var {
-                let still_decl =
-                    self.fns.get(&first).is_none_or(|&f| self.m.func(f).is_declaration());
-                if still_decl {
-                    self.emit_fn_def(d)?;
-                }
-            } else {
+            if self.ast.decls.get(d).kind() == DeclKind::Var {
                 let still_decl = self
                     .gvars
                     .get(&first)
                     .is_none_or(|&g| self.m.global(g).initializer().is_none());
                 if still_decl {
                     self.emit_var_def(d)?;
+                }
+            } else {
+                let still_decl =
+                    self.fns.get(&first).is_none_or(|&f| self.m.func(f).is_declaration());
+                if still_decl {
+                    self.emit_fn_def(d)?;
                 }
             }
             if !self.to_emit.is_empty() {
@@ -380,12 +380,12 @@ impl<'a> Cg<'a> {
         let ast = self.ast;
         self.is_implicit_instantiation(d)
             || ast.redecls_of(d).any(|r| {
-            ast.decls.function(r).is_some_and(|f| {
-                f.spec.is_inline()
-                    || f.spec.implicit_inline()
-                    || f.spec.constexpr_kind() != ConstexprKind::None
+                ast.decls.function(r).is_some_and(|f| {
+                    f.spec.is_inline()
+                        || f.spec.implicit_inline()
+                        || f.spec.constexpr_kind() != ConstexprKind::None
+                })
             })
-        })
     }
 
     pub fn fn_internal(&self, d: DeclId) -> bool {
@@ -934,7 +934,9 @@ impl<'a> Cg<'a> {
     /// unit exposes its value as an `available_externally` constant.
     fn available_externally(&mut self, first: DeclId, g: GlobalId, ty: QualType) -> R<()> {
         let ast = self.ast;
-        if !ast.decls.get(first).ctx().is_some_and(|c| ast.decls.get(c).kind().payload() == kiln_ast::decl::PayloadClass::Record) {
+        if !ast.decls.get(first).ctx().is_some_and(|c| {
+            ast.decls.get(c).kind().payload() == kiln_ast::decl::PayloadClass::Record
+        }) {
             return Ok(());
         }
         if ast.redecls_of(first).count() > 1 || self.var_is_inline(first) {
@@ -982,9 +984,9 @@ impl<'a> Cg<'a> {
         // is zero-initialized ([basic.start.static]/2).
         // clang `getAnyInitializer`: an out-of-line definition of a static
         // data member takes the in-class initializer.
-        let any_init = v.init.or_else(|| {
-            ast.redecls_of(first).find_map(|r| ast.decls.var(r).and_then(|x| x.init))
-        });
+        let any_init = v
+            .init
+            .or_else(|| ast.redecls_of(first).find_map(|r| ast.decls.var(r).and_then(|x| x.init)));
         let init = match any_init.filter(|&i| !ast.is_trivial_default_construction(i)) {
             None => {
                 let t = self.mty(ty);
