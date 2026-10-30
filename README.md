@@ -52,7 +52,7 @@ Requires Rust (pinned in `rust-toolchain.toml`) and clang/LLVM 19 on PATH
 
 ```
 cargo build
-cargo xtask ci                          # fmt, clippy, unit tests
+cargo xtask ci                          # fmt, clippy, unit tests, corpus as clang self-check + kiln-mode (--quick skips the self-check)
 cargo xtask test --compiler clang++-19  # validate the corpus against the oracle
 cargo xtask test                        # run it through kiln
 ```
