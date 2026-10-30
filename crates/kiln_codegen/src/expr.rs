@@ -14,6 +14,7 @@ use kiln_llvm::{
 };
 
 use crate::fir::{Fir, Op, V};
+use crate::cleanup::Cleanup;
 use crate::fold::is_local;
 use crate::func::{Addr, CallArg, min_align};
 use crate::module::{Cg, R, Sig, err, gval};
@@ -144,7 +145,20 @@ impl Cg<'_> {
                 None => return err(self.loc_of(e), "default argument not yet parsed"),
             },
             ExprKind::SourceLocExpr => V::C(self.source_loc_value(e)?),
-            ExprKind::ExprWithCleanups => return self.emit_scalar_opt(self.sub(e)),
+            ExprKind::ExprWithCleanups => {
+                let sc = self.begin_scope(false);
+                let r = self.emit_scalar_opt(self.sub(e));
+                self.end_scope(sc);
+                return r;
+            }
+            ExprKind::CXXThisExpr => self.this_value(),
+            ExprKind::CXXMemberCallExpr => return self.emit_member_call(e, None),
+            ExprKind::CXXDefaultInitExpr => {
+                let Some(init) = self.default_member_init(e) else {
+                    return err(self.loc_of(e), "default member initializer not yet parsed");
+                };
+                return self.emit_scalar_opt(init);
+            }
             ExprKind::ConstantExpr => match ast.exprs.constant_value(e) {
                 Some(c) if !ast.types.is_void(q) => V::C(self.const_scalar_value(c, q)?),
                 _ => return self.emit_scalar_opt(ast.exprs.operand(e)),
@@ -431,6 +445,16 @@ impl Cg<'_> {
             }
             CastKind::NoOp | CastKind::BitCast | CastKind::LValueBitCast => {
                 return self.emit_scalar_opt(s);
+            }
+            CastKind::DerivedToBase | CastKind::UncheckedDerivedToBase => {
+                let p = self.emit_scalar(s)?;
+                let Some(derived) = ast.types.pointee(sq).and_then(|t| ast.types.as_record(t))
+                else {
+                    return err(self.loc_of(e), "derived-to-base cast of a non-class pointer");
+                };
+                let off = self.base_path_offset(e, derived)?;
+                let null_check = ck == CastKind::DerivedToBase && !self.is_this_expr(s);
+                self.base_ptr(p, off, null_check)
             }
             // `__builtin_bit_cast` ([bit.cast]): the operand's bytes
             // loaded as the destination type (clang `EmitLoadOfLValue` of
@@ -1104,7 +1128,22 @@ impl Cg<'_> {
                 }
                 None => err(self.loc_of(e), "default argument not yet parsed"),
             },
-            ExprKind::ExprWithCleanups => self.emit_lvalue(self.sub(e)),
+            ExprKind::ExprWithCleanups => {
+                let sc = self.begin_scope(false);
+                let r = self.emit_lvalue(self.sub(e));
+                self.end_scope(sc);
+                r
+            }
+            ExprKind::CXXDefaultInitExpr => match self.default_member_init(e) {
+                Some(init) => self.emit_lvalue(init),
+                None => err(self.loc_of(e), "default member initializer not yet parsed"),
+            },
+            ExprKind::CXXMemberCallExpr if self.is_glvalue(e) => {
+                let Some(p) = self.emit_member_call(e, None)? else {
+                    return err(self.loc_of(e), "reference-returning call produced no value");
+                };
+                Ok(self.ref_lvalue(p, q))
+            }
             ExprKind::ConstantExpr => self.emit_lvalue(ast.exprs.operand(e)),
             ExprKind::SubstNonTypeTemplateParmExpr => self.emit_lvalue(ExprId::new(n.b())),
             ExprKind::DeclRefExpr => self.decl_lvalue(e, ast.exprs.decl(e), q),
@@ -1181,10 +1220,13 @@ impl Cg<'_> {
                 let sq = ast.exprs.get(s).ty();
                 let tmp = self.temp(sq);
                 if self.is_aggregate(sq) {
-                    self.emit_agg(s, tmp, false)?;
+                    self.emit_agg_into(s, tmp, false)?;
                 } else {
                     let v = self.emit_scalar(s)?;
                     self.store_scalar(v, tmp, sq);
+                }
+                if n.kind() == ExprKind::MaterializeTemporaryExpr {
+                    self.push_temporary_cleanup(e, tmp);
                 }
                 Ok(LV { addr: tmp, q: sq, bf: None })
             }
@@ -1196,6 +1238,18 @@ impl Cg<'_> {
                     }
                     lv.q = q;
                     Ok(lv)
+                }
+                CastKind::DerivedToBase | CastKind::UncheckedDerivedToBase => {
+                    let s = ast.exprs.operand(e);
+                    let lv = self.emit_lvalue(s)?;
+                    let Some(derived) = ast.types.as_record(ast.exprs.get(s).ty()) else {
+                        return err(self.loc_of(e), "derived-to-base cast of a non-class");
+                    };
+                    let off = self.base_path_offset(e, derived)?;
+                    let v = self.byte_offset(lv.addr.v, off);
+                    let ty = self.mty(q);
+                    let align = min_align(lv.addr.align, off);
+                    Ok(LV { addr: Addr { v, ty, align }, q, bf: None })
                 }
                 k => err(self.loc_of(e), format!("lvalue cast {k:?} is not supported yet")),
             },
@@ -1470,9 +1524,18 @@ impl Cg<'_> {
                     }
                     ExprKind::DeclRefExpr => {
                         let d = ast.exprs.decl(c);
-                        if matches!(ast.decls.get(d).kind(), DeclKind::Function) {
+                        if matches!(ast.decls.get(d).kind(), DeclKind::Function)
+                            || self.is_static_method(d)
+                        {
                             direct = Some(d);
                         }
+                        break;
+                    }
+                    // `obj.f()` naming a static member function: the object
+                    // is evaluated and ignored.
+                    ExprKind::MemberExpr if self.is_static_method(ast.exprs.decl(c)) => {
+                        self.emit_ignored(ast.exprs.operand(c))?;
+                        direct = Some(ast.exprs.decl(c));
                         break;
                     }
                     _ => break,
@@ -1540,7 +1603,10 @@ impl Cg<'_> {
                 CallArg::Scalar(self.emit_lvalue(a)?.addr.v)
             } else if self.is_aggregate(arg_tys[i]) {
                 let t = self.temp(arg_tys[i]);
-                self.emit_agg(a, t, false)?;
+                let saved = std::mem::take(&mut self.f.dest_destructed);
+                let r = self.emit_agg(a, t, false);
+                self.f.dest_destructed = saved;
+                r?;
                 CallArg::Agg(t)
             } else {
                 CallArg::Scalar(self.emit_scalar(a)?)
@@ -1777,12 +1843,42 @@ impl Cg<'_> {
                 }
                 None => err(self.loc_of(e), "default argument not yet parsed"),
             },
-            ExprKind::ExprWithCleanups | ExprKind::MaterializeTemporaryExpr => {
-                self.agg_visit(self.sub(e), dest, zeroed)
+            ExprKind::ExprWithCleanups => {
+                let sc = self.begin_scope(false);
+                let r = self.agg_visit(self.sub(e), dest, zeroed);
+                self.end_scope(sc);
+                r
             }
-            // Default-initialization by a trivial constructor: no code
-            // (clang `EmitCXXConstructExpr` skips trivial default ctors).
-            ExprKind::CXXConstructExpr if ast.is_trivial_default_construction(e) => Ok(()),
+            ExprKind::MaterializeTemporaryExpr => self.agg_visit(self.sub(e), dest, zeroed),
+            ExprKind::CXXConstructExpr | ExprKind::CXXTemporaryObjectExpr => {
+                self.emit_construct(e, dest, zeroed)
+            }
+            ExprKind::CXXBindTemporaryExpr => {
+                let destructed = std::mem::take(&mut self.f.dest_destructed);
+                self.agg_visit(self.sub(e), dest, zeroed)?;
+                if !destructed && let Some(rd) = self.destructed_class(q) {
+                    self.push_cleanup(Cleanup::Dtor {
+                        addr: dest.v,
+                        record: rd,
+                        base: false,
+                    });
+                }
+                Ok(())
+            }
+            ExprKind::CXXDefaultInitExpr => match self.default_member_init(e) {
+                Some(init) => self.agg_visit(init, dest, zeroed),
+                None => err(self.loc_of(e), "default member initializer not yet parsed"),
+            },
+            ExprKind::CXXMemberCallExpr if self.is_glvalue(e) => {
+                let lv = self.emit_lvalue(e)?;
+                let size = self.size_align(q).0;
+                self.memcpy(dest, lv.addr.v, lv.addr.align, size, false);
+                Ok(())
+            }
+            ExprKind::CXXMemberCallExpr => {
+                self.emit_member_call(e, Some(dest))?;
+                Ok(())
+            }
             ExprKind::InitListExpr => {
                 if ast.types.is_array(q) {
                     self.array_init(e, dest, zeroed)
@@ -1810,7 +1906,10 @@ impl Cg<'_> {
             k if k.is_cast()
                 && matches!(
                     ast.exprs.cast_kind(e),
-                    CastKind::NoOp | CastKind::LValueToRValue | CastKind::LValueToRValueBitCast
+                    CastKind::NoOp
+                        | CastKind::LValueToRValue
+                        | CastKind::LValueToRValueBitCast
+                        | CastKind::ConstructorConversion
                 ) =>
             {
                 let s = ast.exprs.operand(e);
@@ -2023,36 +2122,77 @@ impl Cg<'_> {
         }
         let q = ast.decls.get(d).ty().expect("var type");
         let ty = self.mty(q);
-        let align = self.global_align(q);
-        let a = self.f.fir.alloca(ty, align);
-        let addr = Addr { v: a, ty, align };
+        let dtor_class = self.destructed_class(q);
+        // NRVO: the variable lives in the return slot (clang
+        // `EmitAutoVarAlloca`), with a flag telling its cleanup whether
+        // the return happened.
+        let nrvo_slot = self.f.ret_slot.filter(|_| {
+            v.spec.is_nrvo() && ast.types.as_record(q).is_some()
+        });
+        let (addr, flag) = if let Some(slot) = nrvo_slot {
+            let addr = Addr { v: slot.v, ty, align: slot.align };
+            let flag = if dtor_class.is_some() {
+                let f = self.f.fir.alloca(LTy::I1, 1);
+                let fls = V::C(self.m.const_bool(false));
+                self.store(fls, f, 1, false);
+                self.f.nrvo_flags.insert(d, f);
+                Some(f)
+            } else {
+                None
+            };
+            (addr, flag)
+        } else {
+            let align = self.global_align(q);
+            let a = self.f.fir.alloca(ty, align);
+            (Addr { v: a, ty, align }, None)
+        };
         self.f.locals.insert(d, addr);
         // Default-initialization by a trivial constructor emits nothing.
-        let Some(init) = v.init.filter(|&i| !ast.is_trivial_default_construction(i)) else {
+        let Some(init) = v.init.filter(|&i| {
+            !(ast.is_trivial_default_construction(i) && !ast.exprs.construct_info(i).zeroing)
+        }) else {
             return Ok(());
         };
         if self.f.fir.cur().is_none() {
             return Ok(());
         }
+        self.emit_var_init(d, q, addr, init)?;
+        // clang `EmitAutoVarCleanups`.
+        if self.f.fir.cur().is_none() {
+            return Ok(());
+        }
+        if let Some(rd) = dtor_class {
+            let c = if self.array_elem(q).is_some() {
+                Cleanup::ArrayDtor { addr, record: rd }
+            } else if let Some(flag) = flag {
+                Cleanup::NrvoDtor { addr: addr.v, record: rd, flag }
+            } else {
+                Cleanup::Dtor { addr: addr.v, record: rd, base: false }
+            };
+            self.push_cleanup(c);
+        }
+        Ok(())
+    }
+
+    /// clang `EmitAutoVarInit` for variable `d` of type `q` at `addr`.
+    fn emit_var_init(&mut self, d: DeclId, q: QualType, addr: Addr, init: ExprId) -> R<()> {
+        let ast = self.ast;
         if self.referee(q).is_some() {
             // A reference binds the address of its initializer glvalue.
-            if !self.is_glvalue(init) {
-                return err(
-                    self.loc_of(init),
-                    "binding a reference to a temporary is not supported yet",
-                );
-            }
-            let lv = self.emit_lvalue(init)?;
-            self.store(lv.addr.v, a, align, false);
+            let p = self.emit_ref_binding(init)?;
+            self.store(p, addr.v, addr.align, false);
             return Ok(());
         }
         let fold = self.folds.get(init);
         if self.is_aggregate(q) {
-            if let Some(c) = fold {
+            // clang `IsConstantAggregate`: constexpr, or POD with a
+            // constant initializer.
+            let constexpr = ast.decls.var(d).is_some_and(|v| v.spec.is_constexpr());
+            if let Some(c) = fold.filter(|_| constexpr || self.is_pod(q)) {
                 let k = self.const_value(c, q, Some(init), true)?;
                 return self.stores_for_constant(d, addr, k, self.is_volatile(q));
             }
-            return self.emit_agg(init, addr, false);
+            return self.emit_agg_into(init, addr, false);
         }
         let v = match fold {
             Some(c) => V::C(self.const_scalar_value(c, q)?),

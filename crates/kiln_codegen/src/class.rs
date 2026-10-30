@@ -955,4 +955,104 @@ impl Cg<'_> {
         let sig = self.call_sig_this(fty, false, &arg_tys, Some(rd));
         self.call_with(&sig, V::C(Value::func(f)), Some(f), Some(this.v), &args, dest, &[])
     }
+
+    // ---- expressions ---------------------------------------------------
+
+    /// The initializer of the field of a `CXXDefaultInitExpr`.
+    pub(crate) fn default_member_init(&self, e: ExprId) -> Option<ExprId> {
+        let f = self.ast.exprs.default_init_field(e);
+        self.ast.decls.field(f).and_then(|x| x.init)
+    }
+
+    /// A static member function.
+    pub(crate) fn is_static_method(&self, d: DeclId) -> bool {
+        self.ast.decls.get(d).kind() == DeclKind::CXXMethod
+            && self.ast.decls.function(d).is_some_and(|f| f.spec.storage() == FnStorage::Static)
+    }
+
+    /// `e` is `this` (through parentheses).
+    pub(crate) fn is_this_expr(&self, e: ExprId) -> bool {
+        let ast = self.ast;
+        let mut e = e;
+        while ast.exprs.get(e).kind() == ExprKind::ParenExpr {
+            e = ast.exprs.operand(e);
+        }
+        ast.exprs.get(e).kind() == ExprKind::CXXThisExpr
+    }
+
+    /// The byte offset of the base a derived-to-base cast `e` converts
+    /// to, from class `derived` (clang `computeNonVirtualBaseClassOffset`).
+    pub(crate) fn base_path_offset(&mut self, e: ExprId, derived: DeclId) -> R<u64> {
+        let ast = self.ast;
+        let Some(path) = ast.exprs.cast_path(e) else { return Ok(0) };
+        let specs: Vec<(QualType, bool)> = ast
+            .lists
+            .get(path)
+            .iter()
+            .map(|&i| {
+                let b = ast.decls.base_spec(i);
+                (b.ty, b.is_virtual)
+            })
+            .collect();
+        let mut cur = derived;
+        let mut off = 0;
+        for (bq, virt) in specs {
+            if virt {
+                return err(self.loc_of(e), "conversions to virtual bases are WP-080");
+            }
+            let Some(b) = ast.types.as_record(bq) else {
+                return err(self.loc_of(e), "base of a non-class type");
+            };
+            let Some(o) = self.base_offset(cur, b) else {
+                return err(self.loc_of(e), "base class not in the layout");
+            };
+            off += o;
+            cur = b;
+        }
+        Ok(off)
+    }
+
+    /// clang `GetAddressOfBaseClass` on a pointer: `p + off`, null-checked
+    /// when `null_check` and the offset is not zero.
+    pub(crate) fn base_ptr(&mut self, p: V, off: u64, null_check: bool) -> V {
+        if off == 0 {
+            return p;
+        }
+        if !null_check {
+            return self.byte_offset(p, off);
+        }
+        let not_null = self.f.fir.create_block();
+        let end = self.f.fir.create_block();
+        let null = V::C(self.m.const_null(LTy::PTR));
+        let is_null = self.icmp(kiln_llvm::IntPredicate::Eq, p, null);
+        let orig = self.f.fir.cur().expect("insertion point");
+        self.cond_br(is_null, end, not_null);
+        self.emit_block(not_null, false);
+        let adj = self.byte_offset(p, off);
+        let from = self.f.fir.cur().expect("insertion point");
+        self.emit_block(end, false);
+        self.f
+            .fir
+            .push(crate::fir::Op::Phi { ty: LTy::PTR, inc: vec![(adj, from), (null, orig)] }, LTy::PTR)
+    }
+
+
+    /// `QualType::isPODType` (C++11: trivial and standard-layout classes,
+    /// arrays of them, and every non-class type).
+    pub(crate) fn is_pod(&self, q: QualType) -> bool {
+        let mut q = q;
+        while let Some(e) = self.array_elem(q) {
+            q = e;
+        }
+        match self.ast.types.as_record(q) {
+            Some(r) => {
+                let b = self.class_bits(r);
+                b.contains(DefinitionBits::TRIVIALLY_COPYABLE)
+                    && b.contains(DefinitionBits::TRIVIAL_DEFAULT_CTOR)
+                    && b.contains(DefinitionBits::STANDARD_LAYOUT)
+            }
+            None => true,
+        }
+    }
+
 }

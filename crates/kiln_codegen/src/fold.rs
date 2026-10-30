@@ -122,8 +122,17 @@ impl Collect<'_> {
                 continue;
             }
             match n.kind() {
-                DeclKind::Function => {
+                DeclKind::Function
+                | DeclKind::CXXMethod
+                | DeclKind::CXXConstructor
+                | DeclKind::CXXDestructor
+                | DeclKind::CXXConversion => {
                     if let Some(body) = ast.decls.function(d).and_then(|f| f.body) {
+                        if n.kind() == DeclKind::CXXConstructor {
+                            for ci in ast.ctor_inits(d) {
+                                self.expr(ci.init);
+                            }
+                        }
                         self.stmt(body);
                     }
                 }
