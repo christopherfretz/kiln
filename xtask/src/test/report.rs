@@ -76,6 +76,57 @@ pub fn format_summary(counts: &Counts, total: usize, elapsed: Duration) -> Strin
     )
 }
 
+/// The outcome of one corpus run of `cargo xtask ci` (`spec/harness.md`
+/// "CI"), as far as the gate is concerned.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CorpusOutcome {
+    /// The run was not made (only the clang self-check may be skipped:
+    /// `--quick`, or clang 19 is not installed), with the reason.
+    Skipped(String),
+    /// The run finished: its per-status counts, test count and duration.
+    Ran { counts: Counts, total: usize, elapsed: Duration },
+    /// An infrastructure error (`cargo xtask test` exit status 2).
+    Error(String),
+}
+
+impl CorpusOutcome {
+    /// The outcome of [`super::execute`]'s result.
+    pub fn of(run: &Result<Vec<TestResult>, String>, elapsed: Duration) -> Self {
+        match run {
+            Ok(results) => Self::Ran { counts: Counts::of(results), total: results.len(), elapsed },
+            Err(e) => Self::Error(e.clone()),
+        }
+    }
+
+    /// Does this run let `ci` pass? A run passes when it has no FAIL, XPASS
+    /// or ERROR (XFAIL and SKIP are allowed); a skipped run passes (the
+    /// caller decides which runs may be skipped); an infrastructure error
+    /// fails.
+    pub fn passes(&self) -> bool {
+        match self {
+            Self::Skipped(_) => true,
+            Self::Ran { counts, .. } => !counts.failed(),
+            Self::Error(_) => false,
+        }
+    }
+
+    /// The one-line result `ci` prints for this run.
+    pub fn line(&self) -> String {
+        match self {
+            Self::Skipped(why) => format!("skipped ({why})"),
+            Self::Ran { counts, total, elapsed } => {
+                format_summary(counts, *total, *elapsed).trim_end().to_owned()
+            }
+            Self::Error(e) => format!("error: {e}"),
+        }
+    }
+}
+
+/// `cargo xtask ci`'s corpus verdict: it passes only if every run passes.
+pub fn ci_corpus_passes(runs: &[CorpusOutcome]) -> bool {
+    runs.iter().all(CorpusOutcome::passes)
+}
+
 /// The start and end markers of the generated region of a parity report.
 pub const PARITY_BEGIN: &str = "<!-- parity:begin -->";
 pub const PARITY_END: &str = "<!-- parity:end -->";

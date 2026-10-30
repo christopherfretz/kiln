@@ -74,11 +74,20 @@ hold auxiliary files, never tests. A pp golden is `<test file>.expected`, for
 example `foo.cpp.expected`. It is compared token-wise (or as normalized text
 under `pp-compare: text`) and refreshed by `cargo xtask test --update`.
 
-The corpus validates itself: `cargo xtask ci` runs `cargo xtask test
---compiler clang++-19` after the unit tests (skipped with a note when clang 19
-is absent; GitHub CI installs it), so a test that clang 19 does not pass is
-caught before it is used to judge kiln. An oracle that hangs or crashes makes
-the test an ERROR, never a kiln FAIL.
+`cargo xtask ci` is the merge gate. After fmt, clippy and the unit tests it
+runs the corpus twice, and fails on any FAIL, XPASS or ERROR in either run:
+
+- `cargo xtask test --compiler clang++-19`: the corpus validates itself, so a
+  test that clang 19 does not pass is caught before it is used to judge kiln
+  (skipped with a note when clang 19 is absent, and under `--quick`; GitHub
+  CI installs it);
+- `cargo xtask test` with the kiln just built: kiln must pass everything it
+  is not marked `xfail(kiln)`/`skip(kiln)` for, so a kiln regression in the
+  corpus fails `ci`. This run is never skipped.
+
+`cargo xtask ci --quick` drops the clang self-check for local iteration;
+merges use the full form. The contract is spec/harness.md "CI". An oracle
+that hangs or crashes makes the test an ERROR, never a kiln FAIL.
 
 Each test file names the standard section it covers in its directory path,
 and `spec/` entries list the tests that back them, so coverage of a spec is

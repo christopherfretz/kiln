@@ -30,8 +30,12 @@ reviewable diff (roughly: one module, one spec section, < ~2k lines).
    `git worktree add .worktrees/wp-<id> -b wp/<id>-<slug>` before spawning.)
 2. Read `README.md`, `docs/ARCHITECTURE.md`, the `spec/` entry, and the
    crate's `lib.rs` docs before writing code.
-3. `#![forbid(unsafe_code)]` stays. `cargo fmt`, `cargo clippy -D warnings`,
-   `cargo test`, and `cargo xtask test` must be green before handing back.
+3. `#![forbid(unsafe_code)]` stays. `cargo xtask ci` must be green before
+   handing back: fmt, clippy `-D warnings`, `cargo test`, and the corpus
+   under both clang 19 (the self-check) and kiln (no FAIL, XPASS or ERROR;
+   spec/harness.md "CI"). A kiln gap your WP does not close is marked
+   `xfail(kiln): <reason>` in the test, not left failing.
+   `cargo xtask ci --quick` (no clang self-check) is fine while iterating.
 4. Do not change a public interface outside your WP without recording the
    change in the spec and flagging it in the handback. Other agents may be
    building against it concurrently.
