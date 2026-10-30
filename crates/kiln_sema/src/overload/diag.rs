@@ -250,6 +250,11 @@ impl Sema<'_, '_> {
                 }
             }
             (false, false) => {
+                let nargs = set.args.len() + set.note_extra_args;
+                // clang `EffectiveFailureKind`: a function whose
+                // parameter count does not fit the argument count sorts as
+                // an arity mismatch (in an operator set a member's
+                // implicit object parameter counts as an argument).
                 let arity = |c: &Candidate| match c.failure {
                     CandidateFailure::TooManyArgs { max } => Some((usize::from(max), true)),
                     CandidateFailure::TooFewArgs { .. } => {
@@ -257,9 +262,19 @@ impl Sema<'_, '_> {
                         let _ = self.fn_param_types(c.func(), &mut p);
                         Some((p.len(), false))
                     }
+                    _ if set.note_extra_args > 0 && c.decl.is_some() => {
+                        let mut p = Vec::new();
+                        let variadic = self.fn_param_types(c.func(), &mut p);
+                        if nargs > p.len() && !variadic {
+                            Some((p.len(), true))
+                        } else if nargs < self.fn_min_args(c.func()) {
+                            Some((p.len(), false))
+                        } else {
+                            None
+                        }
+                    }
                     _ => None,
                 };
-                let nargs = set.args.len();
                 match (arity(l), arity(r)) {
                     (Some((ln, lmany)), Some((rn, rmany))) => {
                         let (ld, rd) = (ln.abs_diff(nargs), rn.abs_diff(nargs));

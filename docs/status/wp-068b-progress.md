@@ -24,13 +24,18 @@ Branch `wp/068b-operators`, worktree `kiln/.worktrees/wp-068b`.
   `build_operator_call`, all outcome diagnostics. Compiles; not yet wired.
 - `overload/builtin.rs`: stub (no built-in candidates yet).
 
-## In progress
-- Wiring `try_overloaded_operator` into act_on_binary/unary/subscript/call
-  (split existing bodies into builtin_binary/builtin_unary).
+- Dispatch wired: act_on_binary -> binary_operator -> builtin_binary
+  (BuiltinNotes via `trailing_notes`), act_on_unary -> builtin_unary,
+  multi-arg subscript (`parse_expr_list`, `act_on_subscript_args`),
+  call-on-object in act_on_call, braced assign rhs (forms.rs), subst arms
+  for CXXOperatorCallExpr/CXXRewrittenBinaryOperator, ctorinit uninit arm.
+  Display-order quirk (clang EffectiveFailureKind) via `note_extra_args`.
+- Scratch cases match clang (n1, err, un, rw, amb; diffs only the
+  pre-existing "use '=' to turn" note and WP-082 defaulted comparisons).
+- libc++ probe: <type_traits> 24 errors (branch-before 27, main 36).
 
 ## Next
-1. Wire dispatch; fix `check_modifiable` class case; subst arms; parse test.
-2. Compare against clang on scratch cases (n1.cpp, g.cpp).
-3. `overload/builtin.rs` built-in candidates.
-4. `->` chains, call-on-object surrogates; `alloc.rs`.
-5. Tests, xfail flips, bench, spec §10, type_traits probe.
+1. cargo test; fix kiln_parse/tests/class.rs operator asserts; ci --quick.
+2. `overload/builtin.rs` built-in candidates + conv_types cache + counter.
+3. `->` chains, call-on-object surrogates; `alloc.rs`.
+4. Tests, xfail flips, bench, spec §10, type_traits probe.

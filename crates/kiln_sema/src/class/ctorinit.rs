@@ -792,6 +792,14 @@ impl Sema<'_, '_> {
                 }
                 self.uninit_children(st, e, depth);
             }
+            ExprKind::CXXOperatorCallExpr => {
+                let args: Vec<ExprId> =
+                    self.ast.lists.iter::<ExprId>(self.ast.exprs.call_args(e)).collect();
+                for a in args {
+                    let a = self.ignore_paren_imp_casts(a);
+                    self.uninit_value(st, a, false, depth + 1);
+                }
+            }
             ExprKind::BinaryOperator => {
                 if self.ast.exprs.binary_op(e) == BinaryOp::Assign {
                     let [lhs, _] = self.ast.exprs.operands(e);

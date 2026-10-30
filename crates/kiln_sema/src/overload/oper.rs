@@ -85,6 +85,30 @@ pub(crate) fn binary_oper(op: BinaryOp) -> Option<OO> {
     })
 }
 
+/// The binary operator whose operator function is `op`.
+pub(crate) fn binary_of(op: OO) -> Option<BinaryOp> {
+    (0..=u8::MAX).map_while(BinaryOp::from_u8).find(|&b| binary_oper(b) == Some(op))
+}
+
+/// The prefix (`postfix`: postfix) unary operator whose operator
+/// function is `op`.
+pub(crate) fn unary_of(op: OO, postfix: bool) -> Option<UnaryOp> {
+    use UnaryOp as U;
+    Some(match (op, postfix) {
+        (OO::PlusPlus, false) => U::PreInc,
+        (OO::PlusPlus, true) => U::PostInc,
+        (OO::MinusMinus, false) => U::PreDec,
+        (OO::MinusMinus, true) => U::PostDec,
+        (OO::Amp, false) => U::AddrOf,
+        (OO::Star, false) => U::Deref,
+        (OO::Plus, false) => U::Plus,
+        (OO::Minus, false) => U::Minus,
+        (OO::Tilde, false) => U::Not,
+        (OO::Exclaim, false) => U::LNot,
+        _ => return None,
+    })
+}
+
 /// The operator function name of a unary operator.
 pub(crate) fn unary_oper(op: UnaryOp) -> Option<OO> {
     use UnaryOp as U;
@@ -278,6 +302,7 @@ impl Sema<'_, '_> {
             && (extra.is_some() || allows_reversed(op));
         let mut set = self.begin_set(SetKind::Normal, loc);
         set.oper = true;
+        set.note_extra_args = usize::from(form != OperForm::Call);
         set.object = Some(self.arg_info(a0));
         let mark = self.push_call_args(&mut set, &ops[1..], &brs[1..]);
         let types: Vec<QualType> = ops.iter().map(|&e| self.ety(e)).collect();

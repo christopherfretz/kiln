@@ -235,6 +235,11 @@ pub(crate) struct OverloadCandidateSet {
     /// An operator set ([over.match.oper]): `object` is the first operand,
     /// which a non-member candidate takes as its first parameter.
     pub oper: bool,
+    /// The number of arguments clang's candidate notes count
+    /// (`CompareOverloadCandidatesForDisplay::NumArgs`) beyond `args`:
+    /// 1 for an operator set other than a call, whose argument list
+    /// includes the first operand.
+    pub note_extra_args: usize,
 }
 
 impl Default for OverloadCandidateSet {
@@ -252,6 +257,7 @@ impl Default for OverloadCandidateSet {
             skipped_templates: false,
             uncertain: false,
             oper: false,
+            note_extra_args: 0,
         }
     }
 }
@@ -271,6 +277,7 @@ impl OverloadCandidateSet {
         self.skipped_templates = false;
         self.uncertain = false;
         self.oper = false;
+        self.note_extra_args = 0;
     }
 
     /// The conversion sequences of candidate `c`.

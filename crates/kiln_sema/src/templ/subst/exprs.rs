@@ -148,6 +148,38 @@ impl Substituter<'_, '_, '_> {
                 let args = self.expr_list(args)?;
                 Ok(self.sema.act_on_call(callee, &args, loc, end))
             }
+            ExprKind::CXXOperatorCallExpr => {
+                use crate::overload::oper::{binary_of, unary_of};
+                use kiln_ast::names::OverloadedOperator as OO;
+                let op = ex(self).operator_call_op(e);
+                let args = ex(self).call_args(e);
+                let args = self.expr_list(args)?;
+                match (op, args.as_slice()) {
+                    (OO::Call, [f, rest @ ..]) => Ok(self.sema.act_on_call(*f, rest, loc, end)),
+                    (OO::Subscript, [b, rest @ ..]) => {
+                        Ok(self.sema.act_on_subscript_args(*b, rest, loc, end))
+                    }
+                    (_, &[a]) | (OO::PlusPlus | OO::MinusMinus, &[a, _]) => {
+                        match unary_of(op, args.len() == 2) {
+                            Some(u) => Ok(self.sema.act_on_unary(u, a, loc)),
+                            None => self.unimplemented("this overloaded operator", loc),
+                        }
+                    }
+                    (_, &[l, r]) => match binary_of(op) {
+                        Some(b) => Ok(self.sema.act_on_binary(b, l, r, loc)),
+                        None => self.unimplemented("this overloaded operator", loc),
+                    },
+                    _ => self.unimplemented("this overloaded operator", loc),
+                }
+            }
+            ExprKind::CXXRewrittenBinaryOperator => {
+                let (op, l) = ex(self).rewritten_written(e);
+                let v = self.expr_list(l)?;
+                match v.as_slice() {
+                    &[l, r] => Ok(self.sema.act_on_binary(op, l, r, loc)),
+                    _ => self.unimplemented("this rewritten comparison", loc),
+                }
+            }
             ExprKind::UnresolvedLookupExpr => self.callee(e),
             ExprKind::MemberExpr => {
                 let base = ex(self).operand(e);
