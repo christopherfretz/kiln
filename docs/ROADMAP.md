@@ -93,11 +93,15 @@ clang-built libc++ runtime. Track pass rate in `docs/status/libcxx.md`.
 ## M6 — C++26 reflection and mirrorbind
 P2996 reflection, `std::meta` runtime in the Oven, splicing, annotations
 (P3394), `define_aggregate`, expansion statements (P1306), plus whichever of
-token injection makes it into the IS. The oracle is clang-22's / bloomberg's
-P2996 implementation where available.
+token injection makes it into the IS. Reference compiler: **GCC 16.1.0**
+(it builds mirrorbind; the Bloomberg p2996 clang fork does not and is used
+only as an advisory oracle for AST/diagnostic spot checks — see BACKLOG
+WP-102). Reflection tests default to `oracle: none` with goldens written
+from the P2996 text.
 - Exit: mirrorbind (`git@github.com:christopherfretz/mirrorbind.git`) builds
   and its tests pass; its compile time and peak memory with kiln are recorded
-  against clang-p2996.
+  against GCC 16.1 (whose constexpr memory growth is the problem kiln exists
+  to fix).
 
 ## M7 — Performance campaign
 With correctness pinned by M5/M6, optimize the Oven and the frontend against
