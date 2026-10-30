@@ -278,7 +278,8 @@ impl Sema<'_, '_> {
         // The operands as the candidates see them: a postfix `++`/`--`
         // has a second operand `0` ([over.match.oper]/1).
         let mut ops: Vec<ExprId> = args.to_vec();
-        let mut brs: Vec<Option<InitList>> = (0..args.len()).map(|i| braced.get(i).cloned().flatten()).collect();
+        let mut brs: Vec<Option<InitList>> =
+            (0..args.len()).map(|i| braced.get(i).cloned().flatten()).collect();
         if matches!(form, OperForm::Unary(u) if u.is_postfix()) {
             let zero = self.builder().int_literal(
                 QualType::INT,
@@ -296,7 +297,8 @@ impl Sema<'_, '_> {
                 let _ = c;
             }
         }
-        let extra = if rewrites && matches!(form, OperForm::Binary(_)) { rewritten_of(op) } else { None };
+        let extra =
+            if rewrites && matches!(form, OperForm::Binary(_)) { rewritten_of(op) } else { None };
         let reversible = rewrites
             && matches!(form, OperForm::Binary(_))
             && (extra.is_some() || allows_reversed(op));
@@ -343,8 +345,8 @@ impl Sema<'_, '_> {
             for name in [Some(op), extra].into_iter().flatten() {
                 self.adl_lookup_dn(DeclName::operator(name), &adl_args, &mut fns);
             }
-            for i in n_unqual..fns.len() {
-                let (d, f) = fns[i];
+            let adl: Vec<(DeclId, DeclId)> = fns[n_unqual..].to_vec();
+            for (d, f) in adl {
                 self.add_nonmember_oper(&mut set, d, f, op, extra, &ops, &types, true);
             }
         }
@@ -456,7 +458,7 @@ impl Sema<'_, '_> {
                 None
             }
             OvlOutcome::NoViable => match form {
-                OperForm::Binary(BinaryOp::Comma) => {
+                OperForm::Binary(BinaryOp::Comma) | OperForm::Unary(_) => {
                     self.end_set(set);
                     return OperResult::Builtin;
                 }
@@ -473,10 +475,6 @@ impl Sema<'_, '_> {
                     let notes = self.ovl_notes(&set, false);
                     self.end_set(set);
                     return OperResult::BuiltinNotes(notes);
-                }
-                OperForm::Unary(_) => {
-                    self.end_set(set);
-                    return OperResult::Builtin;
                 }
                 OperForm::Subscript => {
                     let id = if set.cands.is_empty() {
@@ -533,7 +531,8 @@ impl Sema<'_, '_> {
         if self.kind_of(d) == DeclKind::FunctionTemplate {
             let t2 = types.get(1).copied();
             if self.template_may_match(d, types[0], t2)
-                || (reversed_too && t2.is_some_and(|t2| self.template_may_match(d, t2, Some(types[0]))))
+                || (reversed_too
+                    && t2.is_some_and(|t2| self.template_may_match(d, t2, Some(types[0]))))
             {
                 set.skipped_templates = true;
             }
@@ -553,8 +552,15 @@ impl Sema<'_, '_> {
                 c.adl_only = adl_only;
             }
         }
-        if reversed_too && let Some(t2) = t2 && self.acceptable_nonmember(d, t2, Some(t1)) {
-            let rw = if rewrite == Rewrite::None { Rewrite::Reversed } else { Rewrite::DifferentReversed };
+        if reversed_too
+            && let Some(t2) = t2
+            && self.acceptable_nonmember(d, t2, Some(t1))
+        {
+            let rw = if rewrite == Rewrite::None {
+                Rewrite::Reversed
+            } else {
+                Rewrite::DifferentReversed
+            };
             self.add_reversed(set, d, found, CandidateKind::Function, rw);
             if let Some(c) = set.cands.last_mut() {
                 c.adl_only = adl_only;
@@ -706,9 +712,8 @@ impl Sema<'_, '_> {
         let c = &mut set.cands[n];
         c.rewrite = rewrite;
         if let CandidateFailure::BadConversion { arg } = c.failure {
-            c.failure = CandidateFailure::BadConversion {
-                arg: if arg == u16::MAX { 0 } else { u16::MAX },
-            };
+            c.failure =
+                CandidateFailure::BadConversion { arg: if arg == u16::MAX { 0 } else { u16::MAX } };
         }
     }
 
@@ -833,7 +838,8 @@ impl Sema<'_, '_> {
             .arg(self.ty_arg(types[1]))
             .arg(u8::from(same));
         if same {
-            msg = msg.with_note(self.diag(DiagId::note_ovl_ambiguous_oper_binary_reversed_self, floc));
+            msg = msg
+                .with_note(self.diag(DiagId::note_ovl_ambiguous_oper_binary_reversed_self, floc));
             if op == OO::EqualEqual && self.eqeq_non_const_self(f, types) {
                 msg = msg.with_note(
                     self.diag(DiagId::note_ovl_ambiguous_eqeq_reversed_self_non_const, floc),
@@ -898,9 +904,10 @@ impl Sema<'_, '_> {
         let fop = self.ast.decls.get(f).name().as_operator().unwrap_or(op);
         if rewrite != Rewrite::None && fop == OO::EqualEqual {
             let ty = self.ast.decls.get(f).ty().unwrap_or(QualType::ERROR);
-            let ret = self.ast.types.proto(ty).map_or(QualType::ERROR, |p| p.ret());
+            let ret = self.ast.types.proto(ty).map_or(QualType::ERROR, kiln_ast::types::FuncProto::ret);
             if !self.ast.types.same_unqualified(ret, QualType::BOOL) {
-                let ext = self.ast.types.is_integral(ret) || crate::conv::is_unscoped_enum(self, ret);
+                let ext =
+                    self.ast.types.is_integral(ret) || crate::conv::is_unscoped_enum(self, ret);
                 let id = if ext {
                     DiagId::sema_ovl_rewrite_equalequal_not_bool_ext
                 } else {
@@ -929,12 +936,8 @@ impl Sema<'_, '_> {
         if op == OO::ExclaimEqual && fop == OO::EqualEqual {
             r = self.act_on_unary(UnaryOp::LNot, r, loc);
         } else if fop == OO::Spaceship && fop != op {
-            let zero = self.builder().int_literal(
-                QualType::INT,
-                0,
-                kiln_ast::expr::Radix::Decimal,
-                loc,
-            );
+            let zero =
+                self.builder().int_literal(QualType::INT, 0, kiln_ast::expr::Radix::Decimal, loc);
             r = if rewrite.is_reversed() {
                 self.act_on_binary(bop, zero, r, loc)
             } else {
@@ -978,15 +981,20 @@ impl Sema<'_, '_> {
         if method && !self.has_explicit_object(f) {
             let obj = if implicit_obj { self.operator_object(ops[0], f) } else { ops[0] };
             conv.push(obj);
-            let rest =
-                self.convert_call_args(named, callee, &ops[1..], &mut brs[1..], &proto, loc, rparen)?;
+            let rest = self.convert_call_args(
+                named,
+                callee,
+                &ops[1..],
+                &mut brs[1..],
+                &proto,
+                loc,
+                rparen,
+            )?;
             conv.extend(rest);
         } else {
             conv = self.convert_call_args(named, callee, ops, brs, &proto, loc, rparen)?;
         }
-        if method
-            && let Some(c) = self.operand_class(ops[0])
-        {
+        if method && let Some(c) = self.operand_class(ops[0]) {
             let def = self.ast.definition(c).unwrap_or(c);
             self.check_member_access(found, def, Some(def), loc);
         }

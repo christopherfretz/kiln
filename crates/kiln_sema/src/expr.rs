@@ -26,9 +26,9 @@ use crate::Sema;
 use crate::constfold::int_info;
 use crate::conv::{self, ArithConvKind, ConvCtx, ConvError};
 use crate::init::InitList;
-use crate::overload::oper::{OperForm, OperResult};
 use crate::literal;
 use crate::lookup::LookupKind;
+use crate::overload::oper::{OperForm, OperResult};
 
 mod ref_cast;
 
@@ -1700,7 +1700,13 @@ impl Sema<'_, '_> {
     }
 
     /// The built-in binary operator `op` ([expr.mul] .. [expr.comma]).
-    pub(crate) fn builtin_binary(&mut self, op: BinaryOp, l: ExprId, r: ExprId, loc: Loc) -> ExprId {
+    pub(crate) fn builtin_binary(
+        &mut self,
+        op: BinaryOp,
+        l: ExprId,
+        r: ExprId,
+        loc: Loc,
+    ) -> ExprId {
         // [over.over]/1: an overload set needs a target; only an
         // assignment's right operand has one.
         if self.check_overload_use(l) || (op != BinaryOp::Assign && self.check_overload_use(r)) {
@@ -2318,13 +2324,11 @@ impl Sema<'_, '_> {
         }
         let single = (args.len() == 1 && braced[0].is_none()).then(|| args[0]);
         if kids.iter().any(|&e| self.expr_is_type_dependent(e)) {
-            return match single {
-                Some(idx) => self.act_on_subscript(base, idx, loc),
-                None => {
-                    self.templ_unimplemented("dependent multi-argument subscripts", loc);
-                    self.recover_err(&kids, loc)
-                }
-            };
+            if let Some(idx) = single {
+                return self.act_on_subscript(base, idx, loc);
+            }
+            self.templ_unimplemented("dependent multi-argument subscripts", loc);
+            return self.recover_err(&kids, loc);
         }
         let mut br = vec![None];
         br.extend(braced.iter().cloned());
@@ -2390,8 +2394,13 @@ impl Sema<'_, '_> {
 
     /// `act_on_subscript` with a class base: the overloaded `operator[]`.
     fn act_on_subscript_args_resolved(&mut self, base: ExprId, idx: ExprId, loc: Loc) -> ExprId {
-        match self.try_overloaded_operator(OperForm::Subscript, &[base, idx], &[], loc, Loc::INVALID)
-        {
+        match self.try_overloaded_operator(
+            OperForm::Subscript,
+            &[base, idx],
+            &[],
+            loc,
+            Loc::INVALID,
+        ) {
             OperResult::Done(e) => e,
             OperResult::Builtin | OperResult::BuiltinNotes(_) => {
                 let msg = self

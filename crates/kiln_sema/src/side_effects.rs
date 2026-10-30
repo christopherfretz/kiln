@@ -37,8 +37,8 @@ impl Sema<'_, '_> {
                 ExprKind::UnaryOperator
                 | ExprKind::BinaryOperator
                 | ExprKind::CompoundAssignOperator
-                | ExprKind::MemberExpr => return self.eloc(e),
-                ExprKind::CXXRewrittenBinaryOperator => return self.eloc(e),
+                | ExprKind::MemberExpr
+                | ExprKind::CXXRewrittenBinaryOperator => return self.eloc(e),
                 ExprKind::CXXOperatorCallExpr => {
                     use kiln_ast::names::OverloadedOperator as O;
                     let op = exprs.operator_call_op(e);

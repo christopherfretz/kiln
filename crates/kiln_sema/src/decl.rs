@@ -1110,6 +1110,7 @@ impl Sema<'_, '_> {
     /// the variable, function, typedef or field (spec/sema.md §4.2). The
     /// caller then supplies the initializer ([`Sema::act_on_init`] /
     /// [`Sema::act_on_uninit`]) or the function body.
+    #[allow(clippy::too_many_lines, reason = "one flat dispatch over declarator kinds")]
     pub fn act_on_declarator(
         &mut self,
         ds: &DeclSpec,
@@ -1902,9 +1903,8 @@ impl Sema<'_, '_> {
                     || self.is_error_type(t)
             });
             if !ok {
-                let m = self
-                    .diag(DiagId::sema_operator_overload_needs_class_or_enum, loc)
-                    .arg(spelled);
+                let m =
+                    self.diag(DiagId::sema_operator_overload_needs_class_or_enum, loc).arg(spelled);
                 self.emit(m);
                 return false;
             }
@@ -4402,11 +4402,19 @@ impl Sema<'_, '_> {
 pub(crate) const fn operator_uses(op: OverloadedOperator) -> (bool, bool, bool) {
     use OverloadedOperator as O;
     match op {
-        O::Plus | O::Minus | O::Star | O::Amp | O::PlusPlus | O::MinusMinus => (true, true, false),
+        O::Plus
+        | O::Minus
+        | O::Star
+        | O::Amp
+        | O::PlusPlus
+        | O::MinusMinus
+        | O::New
+        | O::Delete
+        | O::ArrayNew
+        | O::ArrayDelete => (true, true, false),
         O::Tilde | O::Exclaim | O::Coawait => (true, false, false),
         O::Equal | O::Subscript | O::Call => (false, true, true),
         O::Arrow => (true, false, true),
-        O::New | O::Delete | O::ArrayNew | O::ArrayDelete => (true, true, false),
         _ => (false, true, false),
     }
 }

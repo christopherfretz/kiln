@@ -2002,7 +2002,8 @@ impl ExprArena {
             | ExprKind::CompoundLiteralExpr
             | ExprKind::CXXDeleteExpr
             | ExprKind::CXXDependentScopeMemberExpr
-            | ExprKind::PackExpansionExpr => v.extend(id(n.a)),
+            | ExprKind::PackExpansionExpr
+            | ExprKind::CXXRewrittenBinaryOperator => v.extend(id(n.a)),
             ExprKind::BinaryOperator | ExprKind::ArraySubscriptExpr | ExprKind::CXXFoldExpr => {
                 v.extend(id(n.a));
                 v.extend(id(n.b));
@@ -2019,7 +2020,6 @@ impl ExprArena {
                 v.extend(id(n.a));
                 v.extend(lists.iter::<ExprId>(ListId::new(n.b)));
             }
-            ExprKind::CXXRewrittenBinaryOperator => v.extend(id(n.a)),
             ExprKind::InitListExpr => {
                 v.extend(lists.iter::<ExprId>(ListId::new(n.a)));
                 v.extend(self.init_lists[n.b as usize].array_filler);

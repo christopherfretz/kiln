@@ -131,10 +131,6 @@ impl Rewrite {
     pub(crate) fn is_reversed(self) -> bool {
         matches!(self, Rewrite::Reversed | Rewrite::DifferentReversed)
     }
-    /// The candidate's operator is not the one written.
-    pub(crate) fn is_different(self) -> bool {
-        matches!(self, Rewrite::Different | Rewrite::DifferentReversed)
-    }
 }
 
 /// One candidate function (spec/sema-overload.md §10.1).

@@ -720,16 +720,7 @@ impl Compiler<'_> {
         let loc = self.begin(e);
         if spec.is_some_and(|s| s.storage() == FnStorage::Static) {
             self.effect(obj);
-            return self.call_frame(
-                e,
-                Callee::Direct(md),
-                rty,
-                sret,
-                None,
-                args,
-                &refs,
-                Some(loc),
-            );
+            return self.call_frame(e, Callee::Direct(md), rty, sret, None, args, &refs, Some(loc));
         }
         if spec.is_some_and(|s| s.is_virtual() && !s.is_final())
             && !qualified

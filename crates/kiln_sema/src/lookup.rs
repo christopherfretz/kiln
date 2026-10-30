@@ -350,8 +350,7 @@ impl Sema<'_, '_> {
                 }
                 continue;
             }
-            let mut v: Vec<DeclId> =
-                self.ast.lookup_local(entity, dname).iter_ordinary().collect();
+            let mut v: Vec<DeclId> = self.ast.lookup_local(entity, dname).iter_ordinary().collect();
             let own = self.filter(v.clone(), kind);
             if !own.is_empty() {
                 return own;
@@ -485,10 +484,7 @@ impl Sema<'_, '_> {
         if depth > 256 {
             return Vec::new();
         }
-        let mut own = self.filter(
-            self.ast.lookup_local(def, name).iter_ordinary().collect(),
-            kind,
-        );
+        let mut own = self.filter(self.ast.lookup_local(def, name).iter_ordinary().collect(), kind);
         if own.is_empty()
             && self.ast.decls.get(def).name() == name
             && !matches!(kind, LookupKind::All)

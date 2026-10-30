@@ -1593,7 +1593,8 @@ impl Cg<'_> {
                         if ast.exprs.get(e).kind() == ExprKind::CXXOperatorCallExpr
                             && ast.decls.get(d).kind() == DeclKind::CXXMethod
                         {
-                            let args: Vec<ExprId> = ast.lists.iter(ast.exprs.call_args(e)).collect();
+                            let args: Vec<ExprId> =
+                                ast.lists.iter(ast.exprs.call_args(e)).collect();
                             if let Some((&obj, rest)) = args.split_first() {
                                 return self.emit_method_call(e, d, obj, false, rest, dest);
                             }

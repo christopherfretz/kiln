@@ -253,9 +253,7 @@ impl Sema<'_, '_> {
             Shape::Assign => {
                 if is_static {
                     // [over.ass]/1: a non-static member function.
-                    let m = self
-                        .diag(DiagId::sema_operator_overload_static, sloc)
-                        .arg("operator=");
+                    let m = self.diag(DiagId::sema_operator_overload_static, sloc).arg("operator=");
                     self.emit(m);
                     return None;
                 }

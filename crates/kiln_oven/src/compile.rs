@@ -690,7 +690,10 @@ impl<'a> Compiler<'a> {
                     use kiln_ast::names::OverloadedOperator as O;
                     let args = ast.exprs.call_args(e);
                     let prefix = ast.lists.get(args).len() == 1
-                        && !matches!(ast.exprs.operator_call_op(e), O::Call | O::Subscript | O::Arrow);
+                        && !matches!(
+                            ast.exprs.operator_call_op(e),
+                            O::Call | O::Subscript | O::Arrow
+                        );
                     match ast.lists.at::<ExprId>(args, 0) {
                         Some(a) if !prefix => a,
                         _ => return n.loc(),
