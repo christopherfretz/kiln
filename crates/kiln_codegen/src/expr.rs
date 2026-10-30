@@ -217,6 +217,25 @@ impl Cg<'_> {
                     None => return err(self.loc_of(e), "enumerator without a value"),
                 }
             }
+            // clang `ScalarExprEmitter::VisitMemberExpr`: an integral
+            // member access that folds (an enumerator, a constant member)
+            // is its base, ignored, and the constant.
+            ExprKind::MemberExpr
+                if self.folds.get(e).is_some()
+                    || ast.decls.get(ast.exprs.decl(e)).kind() == DeclKind::EnumConstant =>
+            {
+                let d = ast.exprs.decl(e);
+                let c = match self.folds.get(e) {
+                    Some(c) => c,
+                    None => match ast.decls.enumerator(d).and_then(|x| x.value) {
+                        Some(c) => c,
+                        None => return err(self.loc_of(e), "enumerator without a value"),
+                    },
+                };
+                let v = self.const_scalar_value(c, q)?;
+                self.emit_ignored(ast.exprs.operand(e))?;
+                V::C(v)
+            }
             k if k.is_cast() => return self.emit_cast(e),
             ExprKind::UnaryOperator => return self.emit_unary(e).map(Some),
             ExprKind::BinaryOperator => return self.emit_binary(e),
@@ -440,20 +459,6 @@ impl Cg<'_> {
                     && !self.is_aggregate(q)
                 {
                     return Ok(Some(V::C(self.const_scalar_value(c, q)?)));
-                }
-                // clang `ScalarExprEmitter::VisitMemberExpr`: an integral
-                // member access that folds is its base, ignored, and the
-                // constant.
-                let mut m = s;
-                while ast.exprs.get(m).kind() == ExprKind::ParenExpr {
-                    m = ast.exprs.operand(m);
-                }
-                if ast.exprs.get(m).kind() == ExprKind::MemberExpr
-                    && let Some(c) = self.folds.get(m)
-                {
-                    let v = self.const_scalar_value(c, q)?;
-                    self.emit_ignored(ast.exprs.operand(m))?;
-                    return Ok(Some(V::C(v)));
                 }
                 return self.emit_scalar_opt(s);
             }
@@ -1323,6 +1328,13 @@ impl Cg<'_> {
         let q = n.ty();
         let base = ast.exprs.operand(e);
         let field = ast.exprs.decl(e);
+        if ast.decls.get(field).kind() == DeclKind::Var {
+            // clang `tryToConvertMemberExprToDeclRefExpr`: a static data
+            // member named with `.`/`->` is its base, ignored, and the
+            // variable.
+            self.emit_ignored(base)?;
+            return self.decl_lvalue(e, field, q);
+        }
         let base_addr = if n.has(ExprFlags::ARROW) {
             let p = self.emit_scalar(base)?;
             let pq = ast.types.pointee(ast.exprs.get(base).ty()).expect("pointee");

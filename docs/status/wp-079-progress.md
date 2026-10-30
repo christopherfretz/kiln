@@ -1,19 +1,20 @@
 # WP-079 progress (codegen for classes)
 
-Updated: 2026-10-30 18:40 EDT
+Updated: 2026-10-30 18:50 EDT
 
 ## State
-- `cargo check -p kiln_codegen` builds (dead-code warnings only).
-- class.rs: structor variants (RAUW for discardable C1, alias otherwise;
-  WP-080 errors for polymorphic / virtual bases), ctor body (bases, fields,
-  memcpyizer runs), dtor body (BaseOfThis/Field cleanups), `call_dtor`,
-  `emit_construct`, `emit_member_call`, `push_temporary_cleanup`.
-- expr.rs: `field_lvalue` handles reference members via `field_lvalue_init`.
-- cleanup.rs: `ArrayDtor { addr: Addr, record }` via `array_destroy_at`.
+- `kiln_codegen` builds (dead-code warnings: Cleanup::Nop, fir replace_op/successors).
+- IR-diff corpus matching clang on aarch64 + x86_64: class_structors,
+  class_temporaries, class_copy, class_members, class_aggregate_bases,
+  class_static_members.
+- Conformance WP-079 xfails passing at runtime: friends, member-functions,
+  derived-to-base, builtin.bit-cast-run, static-members.
+- Still failing: expr.mptr.oper/ptr-to-member.cpp, conv.mem/base-to-derived.cpp
+  (need member pointers).
 
 ## Next step
-Wire expr.rs arms: `CXXThisExpr`, construct exprs in `agg_visit` (call
-`emit_construct`), `CXXBindTemporaryExpr`, `CXXMemberCallExpr` (scalar and
-agg via `emit_member_call`), `ExprWithCleanups` as a scope,
-DerivedToBase casts, `CXXDefaultInitExpr`; then `emit_var_decl` dtor
-cleanups / NRVO; then tests.
+Member pointer codegen (new section in class.rs): `&C::f` constants,
+NullToMemberPointer, Base<->Derived member pointer casts, `.*`/`->*`,
+call through mfp, ==/!=, MemberPointerToBoolean. Test:
+tests/codegen/class_member_pointers.cpp (clang refs in scratch mp.*.ll).
+Then flip xfails, conformance both modes, spec "Landed (WP-079)", exit checks.
