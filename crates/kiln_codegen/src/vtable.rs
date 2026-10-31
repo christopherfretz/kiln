@@ -1261,6 +1261,9 @@ impl Cg<'_> {
         }
         let abi = match ast.types.canonical_view(q) {
             TypeView::Pointer(p) => return self.pointer_rtti(q, p, &name),
+            TypeView::MemberPointer { pointee, class } => {
+                return self.member_pointer_rtti(q, pointee, QualType::unqual(class), &name);
+            }
             TypeView::Enum(_) => "_ZTVN10__cxxabiv116__enum_type_infoE",
             TypeView::Function(_) => "_ZTVN10__cxxabiv120__function_type_infoE",
             TypeView::ConstantArray(_) | TypeView::IncompleteArray(_) => {
@@ -1278,6 +1281,10 @@ impl Cg<'_> {
         match self.ast.types.canonical_view(q) {
             TypeView::Record(rd) => self.class_def(rd).is_none(),
             TypeView::Pointer(p) => self.contains_incomplete_class(p),
+            TypeView::MemberPointer { pointee, class } => {
+                self.contains_incomplete_class(QualType::unqual(class))
+                    || self.contains_incomplete_class(pointee)
+            }
             _ => false,
         }
     }
@@ -1288,37 +1295,103 @@ impl Cg<'_> {
             return VtLinkage::Internal;
         }
         let ast = self.ast;
+        let internal =
+            |d: Option<DeclId>| d.is_some_and(|d| mangle::has_internal_linkage(ast, ast.first(d)));
         let mut t = q;
-        while let Some(p) = ast.types.pointee(t) {
-            t = p;
+        loop {
+            // (`pointee` also looks through member pointers.)
+            if let TypeView::MemberPointer { class, .. } = ast.types.canonical_view(t)
+                && internal(ast.types.as_record(QualType::unqual(class)))
+            {
+                return VtLinkage::Internal;
+            }
+            match ast.types.pointee(t) {
+                Some(p) => t = p,
+                None => break,
+            }
         }
-        let d = ast.types.as_record(t).or_else(|| ast.types.as_enum(t));
-        if d.is_some_and(|d| mangle::has_internal_linkage(ast, ast.first(d))) {
+        if internal(ast.types.as_record(t).or_else(|| ast.types.as_enum(t))) {
             return VtLinkage::Internal;
         }
         VtLinkage::LinkOnce
     }
 
-    /// clang `BuildPointerTypeInfo`: `{ vtable, name, i32 flags, pointee }`.
-    fn pointer_rtti(&mut self, q: QualType, pointee: QualType, name: &str) -> R<Value> {
+    /// clang `extractPBaseFlags`: the qualifier, incomplete-class (8) and
+    /// noexcept (64) flags of a pointee, and its `type_info` (a noexcept
+    /// function type's is that of the function type without `noexcept`).
+    fn pointee_rtti(&mut self, pointee: QualType) -> R<(u32, Value)> {
         let ast = self.ast;
-        let linkage = self.type_rtti_linkage(q);
-        let mut fields = vec![self.abi_vtable("_ZTVN10__cxxabiv119__pointer_type_infoE")?];
-        fields.push(self.rtti_type_name(q, linkage));
-        // extractPBaseFlags.
-        // PTI_Const/Volatile/Restrict are the `Quals` bits.
         let mut flags = u32::from(ast.types.effective_quals(pointee).bits());
         if self.contains_incomplete_class(pointee) {
             flags |= 8;
         }
+        let nothrow = ast.types.proto(pointee).is_some_and(|p| ast.types.exc_spec(p).is_nothrow());
+        if !nothrow {
+            return Ok((flags, self.rtti(pointee)?));
+        }
+        flags |= 64;
+        // The mangling of the function type without its exception
+        // specification: drop the `Do` before `F`.
+        let q = QualType::unqual(ast.types.canonical(pointee).ty());
+        let with = mangle::mangle_rtti(ast, q, "_ZTI");
+        let name = match with.strip_prefix("_ZTIDo") {
+            Some(rest) => format!("_ZTI{rest}"),
+            None => return err(None, format!("unexpected noexcept function mangling `{with}`")),
+        };
+        if let Some(&g) = self.rtti_globals.get(&name) {
+            return Ok((flags, Value::global(g)));
+        }
+        let linkage = self.type_rtti_linkage(q);
+        let mut fields = vec![self.abi_vtable("_ZTVN10__cxxabiv120__function_type_infoE")?];
+        fields.push(self.rtti_name_global(&format!("_ZTS{}", &name[4..]), linkage));
+        Ok((flags, self.finish_rtti(&name, &fields, linkage)?))
+    }
+
+    /// clang `BuildPointerToMemberTypeInfo`: `{ vtable, name, i32 flags,
+    /// pointee, class }`; flag 16 marks an incomplete class.
+    fn member_pointer_rtti(
+        &mut self,
+        q: QualType,
+        pointee: QualType,
+        class: QualType,
+        name: &str,
+    ) -> R<Value> {
+        let linkage = self.type_rtti_linkage(q);
+        let mut fields =
+            vec![self.abi_vtable("_ZTVN10__cxxabiv129__pointer_to_member_type_infoE")?];
+        fields.push(self.rtti_type_name(q, linkage));
+        let (mut flags, pti) = self.pointee_rtti(pointee)?;
+        if self.contains_incomplete_class(class) {
+            flags |= 16;
+        }
         fields.push(self.m.const_int(LTy::I32, i128::from(flags)));
-        fields.push(self.rtti(pointee)?);
+        fields.push(pti);
+        fields.push(self.rtti(class)?);
+        self.finish_rtti(name, &fields, linkage)
+    }
+
+    /// clang `BuildPointerTypeInfo`: `{ vtable, name, i32 flags, pointee }`.
+    fn pointer_rtti(&mut self, q: QualType, pointee: QualType, name: &str) -> R<Value> {
+        let linkage = self.type_rtti_linkage(q);
+        let mut fields = vec![self.abi_vtable("_ZTVN10__cxxabiv119__pointer_type_infoE")?];
+        fields.push(self.rtti_type_name(q, linkage));
+        // PTI_Const/Volatile/Restrict are the `Quals` bits.
+        let (flags, pti) = self.pointee_rtti(pointee)?;
+        fields.push(self.m.const_int(LTy::I32, i128::from(flags)));
+        fields.push(pti);
         self.finish_rtti(name, &fields, linkage)
     }
 
     /// clang `GetAddrOfTypeName`: the `_ZTS` string of `q`.
     fn rtti_type_name(&mut self, q: QualType, linkage: VtLinkage) -> Value {
         let ts_name = mangle::mangle_rtti(self.ast, q, "_ZTS");
+        self.rtti_name_global(&ts_name, linkage)
+    }
+
+    /// The `_ZTS` global `ts_name` (its string is the mangling after the
+    /// prefix).
+    fn rtti_name_global(&mut self, ts_name: &str, linkage: VtLinkage) -> Value {
+        let ts_name = ts_name.to_owned();
         if let Some(g) = self.m.get_global(&ts_name) {
             return Value::global(g);
         }

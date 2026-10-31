@@ -207,8 +207,18 @@ impl Sema<'_, '_> {
         let d = self.ast.types.as_record(QualType::unqual(fcls))?;
         let b = self.ast.types.as_record(QualType::unqual(tcls))?;
         let BaseSearch::Unique(p) = find_base(self, d, b) else { return None };
-        if p.first_virtual.is_some() {
-            return None;
+        if let Some(v) = p.first_virtual {
+            // [expr.static.cast]/12: no virtual base on the path (clang
+            // `TryStaticMemberPointerUpcast`, a hard failure), so no
+            // member-pointer conversion with a virtual step reaches codegen.
+            let vt = QualType::unqual(self.ast.types.record_type(v));
+            let msg = self
+                .diag(DiagId::sema_member_pointer_conv_via_virtual, loc)
+                .arg(self.ty_arg(QualType::unqual(fcls)))
+                .arg(self.ty_arg(QualType::unqual(tcls)))
+                .arg(self.ty_arg(vt));
+            self.emit(msg);
+            return Some(self.recover(to, &[x], loc));
         }
         let path = Some(path_list(self, &p));
         let vk = ValueCategory::PRValue;
