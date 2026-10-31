@@ -167,6 +167,9 @@ diag_groups! {
     CallToPureVirtualFromCtorDtor = "call-to-pure-virtual-from-ctor-dtor" [];
     Dangling = "dangling" [DanglingField, ReturnStackAddress];
     DanglingField = "dangling-field" [];
+    // ----- WP-122 (structured bindings)
+    EmptyDecomposition = "empty-decomposition" [];
+    BindingInCondition = "binding-in-condition" [];
     // ----- WP-100 (exceptions)
     Exceptions = "exceptions" [];
     InvalidNoreturn = "invalid-noreturn" [];

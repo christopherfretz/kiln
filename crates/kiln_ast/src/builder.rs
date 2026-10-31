@@ -736,6 +736,25 @@ impl<'a> AstBuilder<'a> {
         self.add(h, DeclKind::Var, Some(ty), payload, replaces)
     }
 
+    /// One structured binding ([dcl.struct.bind]/1, clang's
+    /// `BindingDecl`): typed and given its binding expression when the
+    /// decomposition's initializer is known (`DeclArena::set_binding`). At
+    /// namespace scope it joins the member list ahead of its
+    /// decomposition variable, as in clang.
+    pub fn binding(&mut self, h: DeclHead) -> DeclId {
+        self.add(h, DeclKind::Binding, None, Payload::None(0), None)
+    }
+
+    /// Marks `v` (an unnamed `Var`) as the decomposition holding
+    /// `bindings` (write-once).
+    ///
+    /// # Errors
+    /// If `v` already has bindings.
+    pub fn set_decomposition(&mut self, v: DeclId, bindings: &[DeclId]) -> Result<(), AlreadySet> {
+        let list = self.ast.lists.push(bindings);
+        self.ast.decls.set_decomp_bindings(v, list, bindings)
+    }
+
     /// Sets the initializer of variable `v` (once).
     ///
     /// # Errors

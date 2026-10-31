@@ -1528,6 +1528,18 @@ pub struct ColdDeclData {
     /// purposes ([dcl.typedef]/9, clang's `TypedefNameForAnonDecl`): the
     /// tag's type prints with the typedef's name.
     pub typedef_for_anon: ColdMap<DeclId, DeclId>,
+    /// Structured bindings ([dcl.struct.bind], WP-122): a `Var` that is a
+    /// decomposition (clang's `DecompositionDecl`, the hidden variable
+    /// `e`) → its `Binding`s (`ListId` of `DeclId`s, write-once).
+    pub decomp_bindings: ColdMap<DeclId, ListId>,
+    /// `Binding` → the decomposition variable it belongs to.
+    pub binding_decomp: ColdMap<DeclId, DeclId>,
+    /// `Binding` → its binding expression (an lvalue naming the element,
+    /// member or holding variable; write-once).
+    pub binding_expr: ColdMap<DeclId, ExprId>,
+    /// `Binding` of a tuple-like type → its implicit holding variable
+    /// ([dcl.struct.bind]/4; write-once).
+    pub binding_var: ColdMap<DeclId, DeclId>,
 }
 
 impl Default for ColdDeclData {
@@ -1552,12 +1564,16 @@ impl Default for ColdDeclData {
             injection_point: ColdMap::new("injection_point"),
             builtin_id: ColdMap::new("builtin_id"),
             typedef_for_anon: ColdMap::new("typedef_for_anon"),
+            decomp_bindings: ColdMap::new("decomp_bindings"),
+            binding_decomp: ColdMap::new("binding_decomp"),
+            binding_expr: ColdMap::new("binding_expr"),
+            binding_var: ColdMap::new("binding_var"),
         }
     }
 }
 
 impl ColdDeclData {
-    fn rows(&self) -> [MemRow; 19] {
+    fn rows(&self) -> [MemRow; 23] {
         [
             self.lexical_ctx.mem_row(),
             self.begin_loc.mem_row(),
@@ -1578,6 +1594,10 @@ impl ColdDeclData {
             self.injection_point.mem_row(),
             self.builtin_id.mem_row(),
             self.typedef_for_anon.mem_row(),
+            self.decomp_bindings.mem_row(),
+            self.binding_decomp.mem_row(),
+            self.binding_expr.mem_row(),
+            self.binding_var.mem_row(),
         ]
     }
 }
@@ -2000,6 +2020,69 @@ impl DeclArena {
         typedef_decl: DeclId,
     ) -> Result<(), AlreadySet> {
         self.cold.typedef_for_anon.insert(tag, typedef_decl)
+    }
+
+    /// The bindings of decomposition variable `d` ([dcl.struct.bind]),
+    /// `None` when `d` is not a decomposition.
+    pub fn decomp_bindings(&self, d: DeclId) -> Option<ListId> {
+        self.cold.decomp_bindings.get(d).copied()
+    }
+
+    /// True if `d` is a decomposition variable (clang's
+    /// `DecompositionDecl`).
+    pub fn is_decomposition(&self, d: DeclId) -> bool {
+        self.cold.decomp_bindings.contains(d)
+    }
+
+    /// The decomposition variable binding `b` belongs to.
+    pub fn binding_decomp(&self, b: DeclId) -> Option<DeclId> {
+        self.cold.binding_decomp.get(b).copied()
+    }
+
+    /// The binding expression of `Binding` `b`, once known.
+    pub fn binding_expr(&self, b: DeclId) -> Option<ExprId> {
+        self.cold.binding_expr.get(b).copied()
+    }
+
+    /// The holding variable of tuple-like `Binding` `b`.
+    pub fn binding_var(&self, b: DeclId) -> Option<DeclId> {
+        self.cold.binding_var.get(b).copied()
+    }
+
+    /// Records decomposition `v`'s bindings and links each back to `v`.
+    /// Write-once.
+    ///
+    /// # Errors
+    /// If `v` already has bindings.
+    pub fn set_decomp_bindings(
+        &mut self,
+        v: DeclId,
+        list: ListId,
+        bindings: &[DeclId],
+    ) -> Result<(), AlreadySet> {
+        self.cold.decomp_bindings.insert(v, list)?;
+        for &b in bindings {
+            self.cold.binding_decomp.insert(b, v)?;
+        }
+        Ok(())
+    }
+
+    /// Records binding `b`'s expression and, for a tuple-like type, its
+    /// holding variable. Write-once.
+    ///
+    /// # Errors
+    /// If already set.
+    pub fn set_binding(
+        &mut self,
+        b: DeclId,
+        expr: ExprId,
+        holding: Option<DeclId>,
+    ) -> Result<(), AlreadySet> {
+        self.cold.binding_expr.insert(b, expr)?;
+        if let Some(h) = holding {
+            self.cold.binding_var.insert(b, h)?;
+        }
+        Ok(())
     }
 
     /// Records a lexical context different from the semantic one. Must be
