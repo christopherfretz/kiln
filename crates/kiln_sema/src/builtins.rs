@@ -16,9 +16,9 @@ use kiln_ast::decl::{DeclFlags, DeclKind, FnSpec, FnStorage, LinkageLang, builti
 use kiln_ast::expr::{CastKind, ExprFlags, ExprKind, ValueCategory};
 use kiln_ast::expr::{SourceLocKind, SourceLocValues};
 use kiln_ast::names::{DeclName, OverloadedOperator};
+use kiln_ast::types::TargetTypes;
 use kiln_ast::types::{BuiltinType, ExcSpec, FuncInfo, Quals};
 use kiln_ast::types::{Nns, TagKeyword};
-use kiln_ast::types::TargetTypes;
 use kiln_ast::{Ast, DeclHead, DeclId, ExprId, QualType};
 use kiln_diag::DiagId;
 use kiln_source::Loc;

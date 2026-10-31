@@ -1,6 +1,6 @@
 // [expr.const]: __int128 arithmetic in constant evaluation (two's
 // complement, unsigned wrap-around, conversions to and from floating).
-//@ expect: compile-pass
+//@ expect: compile-ok
 constexpr __int128_t big = (__int128_t)1 << 100;
 constexpr __uint128_t umax = ~(__uint128_t)0;
 constexpr __int128_t imax = (__int128_t)(umax >> 1);

@@ -2,7 +2,7 @@
 // extended integer types of rank above long long; __int128_t and
 // __uint128_t are implicit typedefs for them (clang's Sema::Initialize),
 // which a program may redeclare.
-//@ expect: compile-pass
+//@ expect: compile-ok
 typedef __int128 __int128_t;
 typedef unsigned __int128 __uint128_t;
 static_assert(sizeof(__int128_t) == 16 && alignof(__int128_t) == 16);
