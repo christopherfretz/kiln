@@ -545,4 +545,25 @@ impl Sema<'_, '_> {
         let (args, braced) = self.ctad_args(init);
         self.deduce_ctad(declared, &args, &braced, how, loc)
     }
+
+    /// Whether `ty` is a class template placeholder to deduce.
+    pub fn is_ctad_placeholder(&self, ty: QualType) -> bool {
+        self.undeduced_ctad(ty).is_some()
+    }
+
+    /// `C(args)` ([expr.type.conv]/1): the deduced type, or the error
+    /// type after a diagnostic at `loc`; any other `ty` unchanged.
+    pub(crate) fn ctad_cast_type(&mut self, ty: QualType, args: &[ExprId], loc: Loc) -> QualType {
+        if !self.is_ctad_placeholder(ty) {
+            return ty;
+        }
+        let init = Initializer::Paren(args.to_vec(), loc, loc);
+        self.ctad_for_initializer(ty, &init, false, loc).unwrap_or(QualType::ERROR)
+    }
+
+    /// `C{args}` ([expr.type.conv]/1).
+    pub(crate) fn act_on_ctad_list_cast_type(&mut self, ty: QualType, l: &InitList, loc: Loc) -> QualType {
+        let init = Initializer::List(l.clone());
+        self.ctad_for_initializer(ty, &init, true, loc).unwrap_or(QualType::ERROR)
+    }
 }

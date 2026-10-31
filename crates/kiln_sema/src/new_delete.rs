@@ -20,6 +20,7 @@ use crate::conv::{self, ConvCtx};
 use crate::declspec::{Chunk, Declarator};
 use crate::init::{InitList, InitValue, Initializer};
 use crate::{EvalContext, Sema};
+use crate::templ::ctad::CtadInit;
 
 /// The type-id of a new-expression ([expr.new]/1), as parsed: the
 /// decl-specifier type and the abstract declarator (a new-declarator,
@@ -289,6 +290,28 @@ impl Sema<'_, '_> {
         let mut elem = self.type_for_declarator(tid.base, &d);
         if self.is_error_type(elem) {
             return self.recover_err(&kids, loc);
+        }
+        // [dcl.type.class.deduct]/2: `new C(args)` (WP-071b).
+        if self.is_ctad_placeholder(elem) {
+            if arrays.first().is_some() {
+                self.unsupported("class template argument deduction for an array new", tid.loc);
+                return self.recover_err(&kids, loc);
+            }
+            let t = match &init {
+                NewInit::None => self.deduce_ctad(elem, &[], &[], CtadInit::Direct, tid.loc),
+                NewInit::Paren(es, l, r) => {
+                    let i = Initializer::Paren(es.clone(), *l, *r);
+                    self.ctad_for_initializer(elem, &i, false, tid.loc)
+                }
+                NewInit::List(l) => {
+                    let i = Initializer::List(l.clone());
+                    self.ctad_for_initializer(elem, &i, true, tid.loc)
+                }
+            };
+            match t {
+                Some(t) => elem = t,
+                None => return self.recover_err(&kids, loc),
+            }
         }
         // [dcl.type.auto.deduct]: `new auto(e)`.
         if self.is_undeduced_auto(elem) {

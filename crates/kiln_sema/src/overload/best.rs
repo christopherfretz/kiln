@@ -239,10 +239,24 @@ impl Sema<'_, '_> {
         if x.rewrite.is_reversed() != y.rewrite.is_reversed() {
             return !x.rewrite.is_reversed();
         }
-        // /2.7 (constructor of a derived class over
-        // an inherited constructor): inherited constructors are not
-        // candidates yet. /2.8-2.10 (rewritten candidates, deduction
-        // guides): WP-068b, S3T.
+        // /2.10: a user-declared deduction guide over an implicit one;
+        // /2.11: the copy deduction candidate over any other
+        // ([over.match.class.deduct], WP-071b). /2.12 (a non-template
+        // constructor's guide over a constructor template's) waits for
+        // constructor-template guides.
+        if let (Some((i1, c1)), Some((i2, c2))) = (
+            x.decl.and_then(|f| self.ctad_guide_kind(f, x.template)),
+            y.decl.and_then(|f| self.ctad_guide_kind(f, y.template)),
+        ) {
+            if i1 != i2 {
+                return !i1;
+            }
+            if c1 != c2 {
+                return c1;
+            }
+        }
+        // /2.7 (constructor of a derived class over an inherited
+        // constructor): inherited constructors are not candidates yet.
         false
     }
 

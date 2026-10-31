@@ -212,6 +212,7 @@ impl Sema<'_, '_> {
     /// `T` (`void()` is a void prvalue; a class `T` is constructed by
     /// [`Sema::value_init_class_temporary`]).
     pub fn act_on_value_init_cast(&mut self, ty: QualType, loc: Loc, rparen: Loc) -> ExprId {
+        let ty = self.ctad_cast_type(ty, &[], loc);
         if self.is_error_type(ty) {
             return self.recover(ty, &[], loc);
         }
@@ -235,6 +236,11 @@ impl Sema<'_, '_> {
     /// `T{ ... }` ([expr.type.conv]/2): direct-list-initialization of a
     /// prvalue of non-class type `T`. `loc` is the start of the type.
     pub fn act_on_list_cast(&mut self, ty: QualType, l: &InitList, loc: Loc) -> ExprId {
+        let ty = if self.is_ctad_placeholder(ty) {
+            self.act_on_ctad_list_cast_type(ty, l, loc)
+        } else {
+            ty
+        };
         if self.is_error_type(ty) {
             let flat = Self::list_exprs(l);
             return self.recover(ty, &flat, loc);
@@ -309,6 +315,10 @@ impl Sema<'_, '_> {
         rparen: Loc,
     ) -> ExprId {
         if self.is_error_type(ty) || args.iter().any(|&a| self.is_err_expr(a)) {
+            return self.recover(ty, args, loc);
+        }
+        let ty = self.ctad_cast_type(ty, args, loc);
+        if self.is_error_type(ty) {
             return self.recover(ty, args, loc);
         }
         if self.ast.types.is_dependent(ty) || args.iter().any(|&a| self.expr_is_type_dependent(a)) {
