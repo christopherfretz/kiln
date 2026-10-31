@@ -674,6 +674,27 @@ points, thunks and method indices are clang's.
   included) against clang; the `S2_` substitution in some closure
   names inside templates is WP-117's.
 
+### 8.10 Landed (WP-131): local entities of template instantiations
+- **Linkage** (`fn_shares_local_linkage`): a local class, and hence its
+  members, takes its function's linkage when that function is inline
+  *or a template instantiation*. This covers a function template
+  specialization (implicitly or explicitly instantiated) and a member of
+  a class template specialization that is not explicitly specialized
+  (clang `getLVForLocalDecl`: `isInlined() ||
+  isTemplateInstantiation(TSK)`). Otherwise the local class has no
+  linkage and its members are internal.
+- **Discriminator** (`AnonIds::local_tag`): `Z <encoding> E <entity>
+  [<discriminator>]`. A named class or enumeration declared directly in
+  a function, after the first one of the same name there, gets `_0`,
+  `_1`, ..., `__10_` (Itanium §5.1.6; clang's mangling number, counted
+  per name in declaration order). A member of such a class carries its
+  class's discriminator after the whole nested name
+  (`_ZZ1fvEN1M1gE_0v`). The table is built in one pass over the
+  declarations, on the first use. clang numbers *internal* local
+  classes in first-mangle order instead; kiln uses declaration order
+  for those too, which differs only when a later same-named class is
+  mangled first. `tests/codegen/local_class_template.cpp` checks this.
+
 ## 9. Open questions (with recommendation)
 - **A1.** `preferred_align` is equal to `align` on both targets. i386
   `double` is where it differs; out of scope.

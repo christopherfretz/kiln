@@ -1055,7 +1055,12 @@ recomputed exactly as for non-template code (clang's
 - **Parameters.** `ParmVar`s are substituted. A function parameter pack
   becomes N `ParmVar`s (`DeclOrPack::Pack`).
 - **Local classes** inside an instantiated body are instantiated fully
-  and immediately ([temp.inst]/2).
+  and immediately ([temp.inst]/3), by the body's own substituter
+  (`subst/local.rs`, WP-131): so their members see the function's
+  template arguments and its local declarations. Member classes are
+  defined with the outermost local class. Member function bodies are
+  defined after it is complete, in the re-entered class scopes, as the
+  parser replays them. Local enumerations are substituted the same way.
 - **Member templates** are created as in §4.6.
 - **`static_assert`** is evaluated with the substituted condition.
 - **`using` declarations** with packs give a `UsingPack` decl.

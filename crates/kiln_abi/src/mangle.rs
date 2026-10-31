@@ -26,6 +26,10 @@ use kiln_source::fx::FxHashMap;
 pub struct AnonIds {
     ids: FxHashMap<DeclId, u32>,
     per_fn: FxHashMap<DeclId, u32>,
+    /// Local-tag discriminators (built on first use): the index of each
+    /// named class or enumeration directly in a function among those of
+    /// the same name there, in declaration order.
+    local_tags: Option<FxHashMap<DeclId, u32>>,
 }
 
 impl AnonIds {
@@ -51,6 +55,47 @@ impl AnonIds {
         self.ids.insert(d, n);
         n
     }
+
+    /// The discriminator index of named local tag `d` (first
+    /// declaration): how many tags of the same name its function declares
+    /// before it (clang's mangling number less one,
+    /// `ItaniumNumberingContext::getManglingNumber(const TagDecl *)`; the
+    /// declaration order of an instantiated function follows its
+    /// pattern's). One pass over the declarations builds the table.
+    fn local_tag(&mut self, ast: &Ast, d: DeclId) -> u32 {
+        let table = self.local_tags.get_or_insert_with(|| {
+            let mut counts: FxHashMap<(DeclId, kiln_source::symbol::Symbol), u32> =
+                FxHashMap::default();
+            let mut t = FxHashMap::default();
+            for x in ast.decls.ids() {
+                if let Some((f, s)) = local_tag_key(ast, x) {
+                    let c = counts.entry((f, s)).or_insert(0);
+                    t.insert(x, *c);
+                    *c += 1;
+                }
+            }
+            t
+        });
+        table.get(&d).copied().unwrap_or(0)
+    }
+}
+
+/// The (function, name) a named class or enumeration declared directly
+/// in a function is numbered under; `None` for other declarations,
+/// redeclarations, closure types and unnamed tags.
+fn local_tag_key(ast: &Ast, d: DeclId) -> Option<(DeclId, kiln_source::symbol::Symbol)> {
+    let n = ast.decls.get(d);
+    if !matches!(n.kind(), DeclKind::CXXRecord | DeclKind::Enum) || ast.first(d) != d {
+        return None;
+    }
+    let f = n.ctx().filter(|&c| is_function_kind(ast.decls.get(c).kind()))?;
+    let DeclNameView::Identifier(s) = ast.names.view(n.name()) else {
+        return None;
+    };
+    if ast.closure_lambda(d).is_some() {
+        return None;
+    }
+    Some((f, s))
 }
 
 /// The semantic context of `d` as the mangler sees it (clang
@@ -253,7 +298,7 @@ fn tag_externally_visible(ast: &Ast, d: DeclId) -> bool {
         return false;
     }
     match effective_ctx(ast, d) {
-        Some(c) if is_function_kind(ast.decls.get(c).kind()) => fn_is_inline(ast, c),
+        Some(c) if is_function_kind(ast.decls.get(c).kind()) => fn_shares_local_linkage(ast, c),
         Some(c) if is_record_kind(ast.decls.get(c).kind()) => {
             tag_externally_visible(ast, ast.first(c))
         }
@@ -285,15 +330,15 @@ pub fn has_internal_linkage(ast: &Ast, d: DeclId) -> bool {
     if internal_by_storage(ast, first) || in_anon_ns(ast, first) {
         return true;
     }
-    // A local entity has no linkage unless its function is inline (then it
-    // takes the function's); a member of a class without linkage (clang
+    // A local entity has no linkage unless its function is inline or a
+    // template instantiation (then it takes the function's); a member of a class without linkage (clang
     // `isExternallyVisible`: an unnamed or local class, a closure type
     // without a mangling number) has none either.
     let mut c = effective_ctx(ast, first);
     while let Some(ctx) = c {
         let k = ast.decls.get(ctx).kind();
         if is_function_kind(k) {
-            return !fn_is_inline(ast, ctx) || has_internal_linkage(ast, ctx);
+            return !fn_shares_local_linkage(ast, ctx) || has_internal_linkage(ast, ctx);
         }
         if !is_record_kind(k) {
             break;
@@ -311,6 +356,36 @@ pub fn has_internal_linkage(ast: &Ast, d: DeclId) -> bool {
 pub fn class_is_internal(ast: &Ast, rd: DeclId) -> bool {
     let first = ast.first(rd);
     has_internal_linkage(ast, first) || !tag_externally_visible(ast, first)
+}
+
+/// True if the local entities of function `f` take its linkage (clang
+/// `getLVForLocalDecl`): `f` is inline or a template instantiation (an
+/// implicit or explicit instantiation of a function template, or a
+/// member function of a class template specialization that is not
+/// explicitly specialized).
+fn fn_shares_local_linkage(ast: &Ast, f: DeclId) -> bool {
+    fn_is_inline(ast, f) || fn_is_template_instantiation(ast, f)
+}
+
+/// True if `f` is an instantiated function (clang
+/// `isTemplateInstantiation(getTemplateSpecializationKind())`).
+fn fn_is_template_instantiation(ast: &Ast, f: DeclId) -> bool {
+    use kiln_ast::templates::SpecKind;
+    let first = ast.first(f);
+    match ast.templ_link(first).get() {
+        Some((TemplLinkKind::MemberOfSpecialization, i)) => {
+            ast.templates.member_spec(i).is_some_and(|m| m.kind != SpecKind::ExplicitSpecialization)
+        }
+        Some((TemplLinkKind::Specialization, _)) => ast.spec_info(first).is_some_and(|(_, s)| {
+            matches!(
+                s.kind,
+                SpecKind::ImplicitInstantiation
+                    | SpecKind::ExplicitInstantiationDeclaration
+                    | SpecKind::ExplicitInstantiationDefinition
+            )
+        }),
+        _ => false,
+    }
 }
 
 /// An inline (or constexpr, or implicitly inline) function.
@@ -691,6 +766,20 @@ impl<'a, 'b> Mangler<'a, 'b> {
             self.out.push('E');
             self.default_arg_discriminator(d, f);
             self.name_in(d, v, Some(f));
+            // [<discriminator>] of the entity directly in `f` (clang
+            // `mangleLocalName`): a named local class or enumeration
+            // after the first of its name in `f`.
+            let mut r = d;
+            while let Some(c) = effective_ctx(ast, r)
+                && c != f
+            {
+                r = c;
+            }
+            let r = ast.first(r);
+            if local_tag_key(ast, r).is_some() {
+                let i = self.anon.local_tag(ast, r);
+                push_discriminator(&mut self.out, i);
+            }
             return;
         }
         self.name_in(d, v, None);

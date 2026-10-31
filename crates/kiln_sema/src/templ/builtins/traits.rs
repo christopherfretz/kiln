@@ -371,7 +371,7 @@ impl Sema<'_, '_> {
             let r = operand(s, b.0);
             let e = s.binary_operator(BinaryOp::Assign, l, r, None, loc);
             s.exit_unevaluated();
-            !s.is_err_expr(e) && !(nothrow && s.can_throw(e))
+            !(s.is_err_expr(e) || (nothrow && s.can_throw(e)))
         });
         self.ctx = saved;
         Some(matches!(r, Some((true, Ok(())))))
@@ -450,7 +450,7 @@ impl Sema<'_, '_> {
                 s.perform_init(ty, init, loc, false)
             };
             s.exit_unevaluated();
-            !s.is_err_expr(e) && !(nothrow && s.can_throw(e))
+            !(s.is_err_expr(e) || (nothrow && s.can_throw(e)))
         });
         self.ctx = saved;
         Some(matches!(r, Some((true, Ok(())))))
@@ -507,7 +507,7 @@ impl Sema<'_, '_> {
             let op = s.builder().opaque_value_of(fty, vc, from.1);
             let e = s.perform_init(to.0, crate::init::Initializer::Expr(op), loc, false);
             s.exit_unevaluated();
-            !s.is_err_expr(e) && !(nothrow && s.can_throw(e))
+            !(s.is_err_expr(e) || (nothrow && s.can_throw(e)))
         });
         self.ctx = saved;
         Some(matches!(r, Some((true, Ok(())))))

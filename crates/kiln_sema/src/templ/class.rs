@@ -22,7 +22,7 @@ use crate::init::Initializer;
 use crate::scope::{Scope, ScopeKind};
 use crate::templ::args::{LevelMode, MultiLevelArgs};
 use crate::templ::stack::FrameKind;
-use crate::templ::subst::{SubstFail, Substituter};
+use crate::templ::subst::{LocalMethod, SubstFail, Substituter};
 
 /// The parse state set aside while an instantiation runs in the context
 /// of its template (§4.5): an instantiation can be triggered from deep
@@ -597,103 +597,10 @@ impl Sema<'_, '_> {
         args: &MultiLevelArgs,
         outer: &[(DeclId, DeclId)],
     ) {
-        self.act_on_start_record_definition(spec);
         let mut sub = Substituter::new(self, args);
         sub.entity = Some(spec);
         sub.map_contexts(outer);
-        sub.map_contexts(&[(def, spec)]);
-        // Base classes ([temp.inst]/3: the base-clause is instantiated
-        // with the class).
-        let bases: Vec<kiln_ast::decl::BaseSpec> =
-            sub.sema.ast.decls.bases(def, &sub.sema.ast.lists).copied().collect();
-        let mut specs = Vec::with_capacity(bases.len());
-        for b in bases {
-            if b.pack_expansion {
-                // [temp.variadic]/5: one base per element.
-                let tys = match sub.expand_pattern(|s| s.element_ty(b.ty, b.loc)) {
-                    Ok(crate::templ::pack::Expansion::Elements(v)) => v,
-                    Ok(crate::templ::pack::Expansion::Unexpanded(_)) => {
-                        let _ = sub.unimplemented::<()>("base pack expansion", b.loc);
-                        continue;
-                    }
-                    Err(_) => continue,
-                };
-                for ty in tys {
-                    specs.push(BaseSpecInfo {
-                        ty,
-                        loc: b.loc,
-                        is_virtual: b.is_virtual,
-                        access: b.access,
-                        pack_expansion: false,
-                        attrs: Vec::new(),
-                    });
-                }
-                continue;
-            }
-            if let Ok(ty) = sub.ty(b.ty, b.loc) {
-                specs.push(BaseSpecInfo {
-                    ty,
-                    loc: b.loc,
-                    is_virtual: b.is_virtual,
-                    access: b.access,
-                    pack_expansion: false,
-                    attrs: Vec::new(),
-                });
-            }
-        }
-        sub.sema.act_on_base_specifiers(spec, &specs);
-        let members: Vec<DeclId> = sub.sema.ast.decls.members(def).collect();
-        let mut nsdmis = Vec::new();
-        for m in members {
-            let n = *sub.sema.ast.decls.get(m);
-            if n.flags().contains(DeclFlags::IMPLICIT) {
-                continue;
-            }
-            // A friend function defined in the class is a member of the
-            // list as well as its `FriendDecl`'s target; the
-            // `FriendDecl` redeclares it.
-            if n.kind() == DeclKind::Function
-                && n.misc().friend() != kiln_ast::decl::FriendKind::None
-            {
-                continue;
-            }
-            let r = sub.member(m);
-            if let Ok(Some(x)) = r {
-                sub.member_link(x, m);
-                if n.kind() == DeclKind::Field
-                    && let Some(init) = sub.sema.ast.decls.field(m).and_then(|f| f.init)
-                {
-                    nsdmis.push((x, init));
-                }
-            }
-        }
-        sub.sema.act_on_finish_record_definition(spec, false);
-        // Default member initializers: in the complete-class context
-        // (clang instantiates them when a constructor uses them; a gap).
-        if !nsdmis.is_empty() {
-            sub.sema.act_on_start_delayed_class(spec);
-            for (field, init) in nsdmis {
-                if sub.sema.kind_of(field) != DeclKind::Field {
-                    continue;
-                }
-                sub.sema.act_on_start_field_init(field);
-                let i = if sub.sema.ast.exprs.get(init).kind() == ExprKind::InitListExpr {
-                    sub.init_list(init).map(Initializer::List)
-                } else {
-                    sub.expr(init).map(Initializer::Expr)
-                };
-                match i {
-                    Ok(i) => sub.sema.act_on_field_init(field, i),
-                    Err(SubstFail) => {
-                        if sub.sema.nsdmi_this.last().is_some_and(|&(f, _)| f == field) {
-                            sub.sema.nsdmi_this.pop();
-                        }
-                    }
-                }
-            }
-            sub.sema.act_on_finish_delayed_class(spec);
-        }
-        sub.sema.act_on_finish_class_contexts(spec);
+        sub.class_body(spec, def, None);
     }
 
     /// Instantiates the definition of `f`, a member function of a class
@@ -733,53 +640,10 @@ impl Sema<'_, '_> {
         }
         let ctx = self.ast.decls.get(f).ctx().unwrap_or(self.ast.tu);
         self.in_inst_context(ctx, |s| {
-            s.act_on_start_function_def(f);
-            let pp: Vec<DeclId> = s
-                .ast
-                .decls
-                .function(pdef)
-                .map(|x| s.ast.lists.iter::<DeclId>(x.params).collect())
-                .unwrap_or_default();
-            let fp: Vec<DeclId> = s
-                .ast
-                .decls
-                .function(f)
-                .map(|x| s.ast.lists.iter::<DeclId>(x.params).collect())
-                .unwrap_or_default();
-            let lbrace = s.ast.stmts.get(body).loc();
-            let rbrace = if s.ast.stmts.get(body).kind() == kiln_ast::stmt::StmtKind::CompoundStmt {
-                s.ast.stmts.rbrace(body)
-            } else {
-                lbrace
-            };
             let mut sub = Substituter::new(s, &args);
             sub.entity = Some(spec);
             sub.map_contexts(&pairs);
-            sub.map_params(&pp, &fp);
-            if sub.sema.kind_of(f) == DeclKind::CXXConstructor {
-                // The pattern's ctor-initializer, substituted and checked
-                // as the parser's would be (spec/sema-class.md §4.9).
-                let (inits, colon) = sub
-                    .sema
-                    .inst
-                    .pattern_mem_inits
-                    .get(&pdef)
-                    .cloned()
-                    .unwrap_or((Vec::new(), lbrace));
-                for info in &inits {
-                    match sub.mem_initializer(info) {
-                        Ok(v) => {
-                            for i in &v {
-                                sub.sema.act_on_mem_initializer(f, i);
-                            }
-                        }
-                        Err(_) => sub.sema.note_failed_mem_initializer(f),
-                    }
-                }
-                sub.sema.act_on_mem_initializers(f, &[], colon);
-            }
-            let b = sub.body(body);
-            s.act_on_finish_function_def(f, b, rbrace);
+            sub.function_def(f, pdef, body);
         });
         self.pop_inst_frame();
     }
@@ -979,6 +843,187 @@ impl Sema<'_, '_> {
 }
 
 impl Substituter<'_, '_, '_> {
+    /// Defines member function `f` from its pattern definition `pdef`
+    /// with body `body` ([temp.inst]/4-5): the parameters are mapped, a
+    /// constructor's ctor-initializer is substituted, then the body.
+    pub(crate) fn function_def(&mut self, f: DeclId, pdef: DeclId, body: kiln_ast::StmtId) {
+        let sub = self;
+        sub.sema.act_on_start_function_def(f);
+        let pp: Vec<DeclId> = sub
+            .sema
+            .ast
+            .decls
+            .function(pdef)
+            .map(|x| sub.sema.ast.lists.iter::<DeclId>(x.params).collect())
+            .unwrap_or_default();
+        let fp: Vec<DeclId> = sub
+            .sema
+            .ast
+            .decls
+            .function(f)
+            .map(|x| sub.sema.ast.lists.iter::<DeclId>(x.params).collect())
+            .unwrap_or_default();
+        let lbrace = sub.sema.ast.stmts.get(body).loc();
+        let rbrace =
+            if sub.sema.ast.stmts.get(body).kind() == kiln_ast::stmt::StmtKind::CompoundStmt {
+                sub.sema.ast.stmts.rbrace(body)
+            } else {
+                lbrace
+            };
+        sub.map_params(&pp, &fp);
+        if sub.sema.kind_of(f) == DeclKind::CXXConstructor {
+            // The pattern's ctor-initializer, substituted and checked
+            // as the parser's would be (spec/sema-class.md §4.9).
+            let (inits, colon) =
+                sub.sema.inst.pattern_mem_inits.get(&pdef).cloned().unwrap_or((Vec::new(), lbrace));
+            for info in &inits {
+                match sub.mem_initializer(info) {
+                    Ok(v) => {
+                        for i in &v {
+                            sub.sema.act_on_mem_initializer(f, i);
+                        }
+                    }
+                    Err(_) => sub.sema.note_failed_mem_initializer(f),
+                }
+            }
+            sub.sema.act_on_mem_initializers(f, &[], colon);
+        }
+        let b = sub.body(body);
+        sub.sema.act_on_finish_function_def(f, b, rbrace);
+    }
+
+    /// The base-specifiers of pattern definition `def`, substituted
+    /// ([temp.inst]/3: the base-clause is instantiated with the class;
+    /// [temp.variadic]/5: a pack expansion gives one base per element).
+    fn class_bases(&mut self, def: DeclId) -> Vec<BaseSpecInfo> {
+        // Base classes ([temp.inst]/3: the base-clause is instantiated
+        // with the class).
+        let bases: Vec<kiln_ast::decl::BaseSpec> =
+            self.sema.ast.decls.bases(def, &self.sema.ast.lists).copied().collect();
+        let mut specs = Vec::with_capacity(bases.len());
+        for b in bases {
+            if b.pack_expansion {
+                // [temp.variadic]/5: one base per element.
+                let tys = match self.expand_pattern(|s| s.element_ty(b.ty, b.loc)) {
+                    Ok(crate::templ::pack::Expansion::Elements(v)) => v,
+                    Ok(crate::templ::pack::Expansion::Unexpanded(_)) => {
+                        let _ = self.unimplemented::<()>("base pack expansion", b.loc);
+                        continue;
+                    }
+                    Err(_) => continue,
+                };
+                for ty in tys {
+                    specs.push(BaseSpecInfo {
+                        ty,
+                        loc: b.loc,
+                        is_virtual: b.is_virtual,
+                        access: b.access,
+                        pack_expansion: false,
+                        attrs: Vec::new(),
+                    });
+                }
+                continue;
+            }
+            if let Ok(ty) = self.ty(b.ty, b.loc) {
+                specs.push(BaseSpecInfo {
+                    ty,
+                    loc: b.loc,
+                    is_virtual: b.is_virtual,
+                    access: b.access,
+                    pack_expansion: false,
+                    attrs: Vec::new(),
+                });
+            }
+        }
+        specs
+    }
+
+    /// Defines `spec` from pattern definition `def` (bases, members,
+    /// default member initializers). `local` is set for a local class
+    /// ([class.local], [temp.inst]/3: instantiated with its enclosing
+    /// function): its member classes are defined with it, and the member
+    /// functions it defines are collected there, to be defined after the
+    /// outermost local class is complete (as the parser replays them);
+    /// otherwise the class contexts are finished here.
+    pub(crate) fn class_body(
+        &mut self,
+        spec: DeclId,
+        def: DeclId,
+        mut local: Option<&mut Vec<LocalMethod>>,
+    ) {
+        let saved_entity = self.entity.replace(spec);
+        self.sema.act_on_start_record_definition(spec);
+        self.map_contexts(&[(def, spec)]);
+        let sub = self;
+        let specs = sub.class_bases(def);
+        sub.sema.act_on_base_specifiers(spec, &specs);
+        let members: Vec<DeclId> = sub.sema.ast.decls.members(def).collect();
+        let mut nsdmis = Vec::new();
+        for m in members {
+            let n = *sub.sema.ast.decls.get(m);
+            if n.flags().contains(DeclFlags::IMPLICIT) {
+                continue;
+            }
+            // A friend function defined in the class is a member of the
+            // list as well as its `FriendDecl`'s target; the
+            // `FriendDecl` redeclares it.
+            if n.kind() == DeclKind::Function
+                && n.misc().friend() != kiln_ast::decl::FriendKind::None
+            {
+                continue;
+            }
+            let r = if local.is_some()
+                && n.kind() == DeclKind::CXXRecord
+                && n.misc().friend() == kiln_ast::decl::FriendKind::None
+            {
+                Ok(Some(sub.local_class(m, local.as_deref_mut())))
+            } else {
+                sub.member(m)
+            };
+            if let Ok(Some(x)) = r {
+                sub.member_link(x, m);
+                if let Some(l) = local.as_deref_mut() {
+                    sub.collect_local_method(spec, x, m, l);
+                }
+                if n.kind() == DeclKind::Field
+                    && let Some(init) = sub.sema.ast.decls.field(m).and_then(|f| f.init)
+                {
+                    nsdmis.push((x, init));
+                }
+            }
+        }
+        sub.sema.act_on_finish_record_definition(spec, false);
+        // Default member initializers: in the complete-class context
+        // (clang instantiates them when a constructor uses them; a gap).
+        if !nsdmis.is_empty() {
+            sub.sema.act_on_start_delayed_class(spec);
+            for (field, init) in nsdmis {
+                if sub.sema.kind_of(field) != DeclKind::Field {
+                    continue;
+                }
+                sub.sema.act_on_start_field_init(field);
+                let i = if sub.sema.ast.exprs.get(init).kind() == ExprKind::InitListExpr {
+                    sub.init_list(init).map(Initializer::List)
+                } else {
+                    sub.expr(init).map(Initializer::Expr)
+                };
+                match i {
+                    Ok(i) => sub.sema.act_on_field_init(field, i),
+                    Err(SubstFail) => {
+                        if sub.sema.nsdmi_this.last().is_some_and(|&(f, _)| f == field) {
+                            sub.sema.nsdmi_this.pop();
+                        }
+                    }
+                }
+            }
+            sub.sema.act_on_finish_delayed_class(spec);
+        }
+        if local.is_none() {
+            sub.sema.act_on_finish_class_contexts(spec);
+        }
+        sub.entity = saved_entity;
+    }
+
     /// A member class is declared with its class; its definition is
     /// instantiated when it is required to be complete ([temp.inst]/3).
     pub(crate) fn member_class_decl(&mut self, m: DeclId) -> Result<DeclId, SubstFail> {

@@ -12,8 +12,11 @@
 mod decls;
 mod exprs;
 mod lambda;
+mod local;
 mod stmts;
 mod types;
+
+pub(crate) use local::LocalMethod;
 
 use kiln_ast::DeclId;
 use kiln_ast::decl::{DeclFlags, DeclKind};
