@@ -26,7 +26,17 @@ supervisor folds the outcome into BACKLOG/HANDOFF.
      the pattern; proposed one-line hook in class.rs (wp-109):
      `instantiate_function_definition` returns early when member_spec kind is
      ExplicitSpecialization.
-2. TemplateParamObject — not started
+2. TemplateParamObject + reference NTTPs — DONE (e69bb17, 4dd04bb; spec §6.10 "As built")
+   - `templ/nttp.rs`: `check_nttp_type` (structural / literal checks, clang's notes),
+     `convert_class_nttp_arg`, `convert_ref_nttp_arg`, `nttp_value_expr`.
+   - AST: `TemplateParamObject` decls memoized in `TemplateTables::{param_objects,
+     param_object_values}`; `AstBuilder::template_param_object`.
+   - Oven `var_info`/`lv()`; codegen `param_object_global` (linkonce_odr comdat);
+     mangling seam `aggregate_arg` (NOT clang's member spelling — WP-079),
+     `mangle_param_object`; decayed-array pointer args mangle `Xadso...` as clang.
+   - tests: templates/nttp/ (8 files).
+   - GAPS: dependent NTTP types; nonzero-offset pointer/reference values; base note loc
+     with access keyword; class-value mangling; Oven accepts `&local` at top level.
 3. Template candidates — DONE
    - conversion-function templates ([temp.deduct.conv]; `deduce_conversion`,
      `DeduceTarget`, `conversion_functions_all`, ordering via `more_specialized_conversion`).
@@ -80,7 +90,8 @@ supervisor folds the outcome into BACKLOG/HANDOFF.
      args; -Wconstant-conversion not emitted after a narrowing error (pre-existing);
      range-for over a braced list is WP-089's; ctor templates with initializer_list
      params in phase 1 go through construct.rs:128 unsupported (wp-112's file).
-5. Q3 measurement, tests, spec — not started
+5. Tests DONE (46 new conformance files); spec DONE (sema-templates §6.10, Landed (WP-106),
+   sema-overload §10.8); Q3 measurement — see §14 Q3
 
 ## Interface changes
 - `kiln_ast`: `AstBuilder::function_spec_redecl`, `DeclArena::respecify_function`,
@@ -91,6 +102,18 @@ supervisor folds the outcome into BACKLOG/HANDOFF.
 - `kiln_diag`: `sema_member_decl_no_match` (appended).
 - codegen one-line hook: `module.rs::is_implicit_instantiation` returns false for a
   member whose MemberSpecInfo kind is ExplicitSpecialization (else linkonce_odr).
+
+- WP-106 deliverable 2 interfaces: `Sema::{check_nttp_type, convert_class_nttp_arg,
+  convert_ref_nttp_arg, nttp_value_expr}` (pub(crate)); `AstBuilder::template_param_object`;
+  `TemplateTables::{param_object, param_object_value}`; `kiln_abi::mangle::mangle_param_object`;
+  `ModuleGen::param_object_global`; diag ids `sema_nttp_{not_structural,non_literal,rvalue_ref}`,
+  `note_not_structural_*`, `note_non_literal_*`, `sema_cce_ref_binds_temporary`.
+- Hooks in other owners' files (deliverable 2): `templ/args.rs` (route class/reference
+  NTTP args), `templ/subst/exprs.rs` (`value_literal` → `nttp_value_expr`), `templ/mod.rs`
+  (param type check), `kiln_ast/builder.rs` (`decl_ref_category`: class/ref NTTP = lvalue),
+  `expr.rs` (class NTTP type `const T`), `names.rs` (value printer fallback),
+  `kiln_oven/{value,compile}.rs`, `kiln_codegen/{consts,expr,module}.rs` (expr.rs also
+  sees through `SubstNonTypeTemplateParmExpr` for direct callees), `kiln_abi/mangle.rs`.
 
 ## Notes for WP-113
 - Explicit instantiation definitions are emitted with External linkage; clang uses
