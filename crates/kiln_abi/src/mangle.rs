@@ -1009,10 +1009,16 @@ impl<'a, 'b> Mangler<'a, 'b> {
             }
             DeclNameView::Constructor(t) => {
                 // An inheriting constructor ([class.inhctor.init]) is named
-                // as the base constructor: `CI1`/`CI2` <base class type>.
+                // as the base constructor: `CI1`/`CI2` <base class name>.
+                // clang `mangleCXXCtorType` mangles the base as a <name>,
+                // not a <type>: the class itself is neither looked up in nor
+                // added to the substitutions (only its prefixes are).
                 if ast.decls.inheriting_ctor_shadow(d).is_some() {
                     self.out.push_str(if v == Structor::Base { "CI2" } else { "CI1" });
-                    self.ty(QualType::unqual(t));
+                    match ast.types.canonical_view(QualType::unqual(t)) {
+                        TypeView::Record(b) => self.name(b, Structor::Complete),
+                        _ => self.ty(QualType::unqual(t)),
+                    }
                 } else {
                     self.out.push_str(if v == Structor::Base { "C2" } else { "C1" });
                 }

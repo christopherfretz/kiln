@@ -840,7 +840,19 @@ impl Parser<'_, '_> {
                 NameClass::Type(ty, d) => MemInitId::Type(self.named_type(ty, d)),
                 _ => MemInitId::Ident(name),
             },
-            None => MemInitId::Ident(name),
+            // A template type parameter cannot be redeclared by a member
+            // ([temp.local]/6), so naming one is a base: resolve it now,
+            // since instantiation re-resolves identifiers in the
+            // instantiated class, where the parameter is not in scope.
+            None => match self.s.classify_name(name, None) {
+                NameClass::Type(ty, d)
+                    if self.s.ast.decls.get(d).kind()
+                        == DeclKind::TemplateTypeParm =>
+                {
+                    MemInitId::Type(self.named_type(ty, d))
+                }
+                _ => MemInitId::Ident(name),
+            },
             Some(q) => {
                 if let NameClass::Type(ty, d) = self.s.classify_name(name, Some(q)) {
                     MemInitId::Type(self.named_type(ty, d))
