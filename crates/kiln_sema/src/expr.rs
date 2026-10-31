@@ -1662,7 +1662,13 @@ impl Sema<'_, '_> {
         self.recover_err(&[l, r], loc)
     }
 
-    pub(crate) fn conv_failed(&mut self, err: &ConvError, l: ExprId, r: ExprId, loc: Loc) -> ExprId {
+    pub(crate) fn conv_failed(
+        &mut self,
+        err: &ConvError,
+        l: ExprId,
+        r: ExprId,
+        loc: Loc,
+    ) -> ExprId {
         self.emit_conv_error(err.clone(), loc);
         self.recover_err(&[l, r], loc)
     }
@@ -1996,7 +2002,11 @@ impl Sema<'_, '_> {
 
     /// The composite pointer type of two pointer operands
     /// ([expr.type]/4), converting the operands to it.
-    pub(crate) fn composite_pointer(&mut self, l: ExprId, r: ExprId) -> Option<(ExprId, ExprId, QualType)> {
+    pub(crate) fn composite_pointer(
+        &mut self,
+        l: ExprId,
+        r: ExprId,
+    ) -> Option<(ExprId, ExprId, QualType)> {
         let (lt, rt) = (self.ety(l), self.ety(r));
         let (lp, rp) = (
             self.ast.types.is_pointer(lt) || self.is_nullptr_type(lt),

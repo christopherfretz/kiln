@@ -281,7 +281,8 @@ pub enum CmpCategory {
 
 impl CmpCategory {
     /// All categories, weakest first.
-    pub const ALL: [CmpCategory; 3] = [CmpCategory::Partial, CmpCategory::Weak, CmpCategory::Strong];
+    pub const ALL: [CmpCategory; 3] =
+        [CmpCategory::Partial, CmpCategory::Weak, CmpCategory::Strong];
 
     /// The unqualified name of the class in namespace `std`.
     pub const fn name(self) -> &'static str {
@@ -296,19 +297,13 @@ impl CmpCategory {
     /// checking order (`ComparisonCategories::getPossibleResultsForType`).
     pub const fn results(self) -> &'static [CmpResult] {
         match self {
-            CmpCategory::Strong => &[
-                CmpResult::Equal,
-                CmpResult::Equivalent,
-                CmpResult::Less,
-                CmpResult::Greater,
-            ],
+            CmpCategory::Strong => {
+                &[CmpResult::Equal, CmpResult::Equivalent, CmpResult::Less, CmpResult::Greater]
+            }
             CmpCategory::Weak => &[CmpResult::Equivalent, CmpResult::Less, CmpResult::Greater],
-            CmpCategory::Partial => &[
-                CmpResult::Equivalent,
-                CmpResult::Less,
-                CmpResult::Greater,
-                CmpResult::Unordered,
-            ],
+            CmpCategory::Partial => {
+                &[CmpResult::Equivalent, CmpResult::Less, CmpResult::Greater, CmpResult::Unordered]
+            }
         }
     }
 }

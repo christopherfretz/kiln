@@ -2440,6 +2440,84 @@ impl Compiler<'_> {
         }
     }
 
+    /// The builtin comparison `c` of `ra` and `rb`, operands of kinds
+    /// `kinds` (after the usual conversions), into `dst`.
+    fn compare(&mut self, e: ExprId, kinds: (TyKind, TyKind), c: u32, dst: u32, ra: u32, rb: u32) {
+        match kinds {
+            (TyKind::Float(k), _) => {
+                self.emit_at(Op::FCmp, float_code(k) | c << 4, &[dst, ra, rb], e);
+            }
+            (TyKind::Ptr(p), _) | (_, TyKind::Ptr(p)) => {
+                self.emit_at(Op::PtrCmp, c, &[dst, ra, rb, p.0], e);
+            }
+            (TyKind::NullPtr, _) => {
+                self.konst(dst, u128::from(matches!(c, cmp::EQ | cmp::LE | cmp::GE)));
+            }
+            // Interned member pointers: equal values share an index.
+            (TyKind::MemPtr { .. }, _) | (_, TyKind::MemPtr { .. }) => {
+                self.emit(Op::ICmp, int_aux(64, false) | c << 9, &[dst, ra, rb]);
+            }
+            (k, _) => {
+                let (w, s) = int_of(k).unwrap_or((32, true));
+                self.emit(Op::ICmp, int_aux(w as u8, s) | c << 9, &[dst, ra, rb]);
+            }
+        }
+    }
+
+    /// The builtin three-way comparison `e` ([expr.spaceship]/4-8) into
+    /// the comparison-category object at `p`: its single member holds
+    /// the integer of the selected value (clang's `VisitBinCmp`: for
+    /// `partial_ordering`, `==` then `<` then `>` else unordered).
+    fn three_way(&mut self, e: ExprId, p: u32, ty: OTy) {
+        let TyKind::Record { decl, .. } = self.kind(ty) else {
+            return self.unsupported(e);
+        };
+        let Some(info) = self.ast().cmp_categories.for_record(decl).copied() else {
+            return self.unsupported(e);
+        };
+        let Some(fi) = self.o.types.fields(ty).iter().copied().find(|f| f.decl == info.field)
+        else {
+            return self.unsupported(e);
+        };
+        let [a, b] = self.ast().exprs.operands(e);
+        let (at, bt) = (self.ety(a), self.ety(b));
+        let kinds = (self.kind(at), self.kind(bt));
+        let ra = self.rv(a);
+        let rb = self.rv(b);
+        let r = self.reg();
+        let c = self.reg();
+        let partial = info.kind == kiln_ast::class::CmpCategory::Partial;
+        let int = |x: i64| x as i128 as u128;
+        // Tests in order; the first that holds selects its value.
+        let mut tests = vec![
+            (cmp::EQ, int(info.equal_or_equiv_int())),
+            (cmp::LT, int(info.int(kiln_ast::class::CmpResult::Less))),
+        ];
+        let fallback = if partial {
+            tests.push((cmp::GT, int(info.int(kiln_ast::class::CmpResult::Greater))));
+            int(info.int(kiln_ast::class::CmpResult::Unordered))
+        } else {
+            int(info.int(kiln_ast::class::CmpResult::Greater))
+        };
+        let mut ends = Vec::new();
+        for (k, v) in tests {
+            self.compare(e, kinds, k, c, ra, rb);
+            let j = self.jmp_if(c, false);
+            self.konst(r, v);
+            ends.push(self.jmp());
+            self.patch_here(j);
+        }
+        self.konst(r, fallback);
+        for j in ends {
+            self.patch_here(j);
+        }
+        if self.o.types.size(ty) > self.o.types.size(fi.ty) {
+            self.emit_at(Op::ZeroInit, 0, &[p, ty.0], e);
+        }
+        let q = self.elem_ptr(p, fi.offset, e);
+        self.emit_at(Op::InitStore, 0, &[q, r, fi.ty.0], e);
+    }
+
     /// One builtin binary operator `e` into `dst`; `ga` / `gb` hold its
     /// operands' values when a spine walk evaluated them already.
     fn binary_node(&mut self, e: ExprId, dst: u32, ty: OTy, ga: Option<u32>, gb: Option<u32>) {
@@ -2451,25 +2529,7 @@ impl Compiler<'_> {
         if let Some(c) = cmp_of(op) {
             let ra = self.opnd(a, ga, false);
             let rb = self.opnd(b, gb, false);
-            match (ak_, bk) {
-                (TyKind::Float(k), _) => {
-                    self.emit_at(Op::FCmp, float_code(k) | c << 4, &[dst, ra, rb], e);
-                }
-                (TyKind::Ptr(p), _) | (_, TyKind::Ptr(p)) => {
-                    self.emit_at(Op::PtrCmp, c, &[dst, ra, rb, p.0], e);
-                }
-                (TyKind::NullPtr, _) => {
-                    self.konst(dst, u128::from(matches!(c, cmp::EQ | cmp::LE | cmp::GE)));
-                }
-                // Interned member pointers: equal values share an index.
-                (TyKind::MemPtr { .. }, _) | (_, TyKind::MemPtr { .. }) => {
-                    self.emit(Op::ICmp, int_aux(64, false) | c << 9, &[dst, ra, rb]);
-                }
-                (k, _) => {
-                    let (w, s) = int_of(k).unwrap_or((32, true));
-                    self.emit(Op::ICmp, int_aux(w as u8, s) | c << 9, &[dst, ra, rb]);
-                }
-            }
+            self.compare(e, (ak_, bk), c, dst, ra, rb);
             return;
         }
         if matches!(op, BinaryOp::Add | BinaryOp::Sub) {
@@ -3269,6 +3329,10 @@ impl Compiler<'_> {
             }
             ExprKind::ArrayInitLoopExpr => {
                 self.array_init_loop(e, p, ty);
+                return;
+            }
+            ExprKind::BinaryOperator if self.ast().exprs.binary_op(e) == BinaryOp::Cmp => {
+                self.three_way(e, p, ty);
                 return;
             }
             ExprKind::CXXParenListInitExpr => {

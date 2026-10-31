@@ -67,10 +67,7 @@ impl Sema<'_, '_> {
         }
         let def = self.class_def(rec);
         let type_form = |s: &mut Self, which: u8| {
-            let msg = s
-                .diag(DiagId::sema_std_compare_type_form, loc)
-                .arg(s.ty_arg(ty))
-                .arg(which);
+            let msg = s.diag(DiagId::sema_std_compare_type_form, loc).arg(s.ty_arg(ty)).arg(which);
             s.emit(msg);
         };
         if !self.defn_bits(def).contains(DefinitionBits::TRIVIALLY_COPYABLE) {
@@ -81,12 +78,8 @@ impl Sema<'_, '_> {
         let empty_base = |s: &Self, b: QualType| {
             s.ast.types.as_record(b).is_some_and(|d| s.defn_bits(d).contains(DefinitionBits::EMPTY))
         };
-        let fields: Vec<DeclId> = self
-            .ast
-            .decls
-            .members(def)
-            .filter(|&f| self.kind_of(f) == DeclKind::Field)
-            .collect();
+        let fields: Vec<DeclId> =
+            self.ast.decls.members(def).filter(|&f| self.kind_of(f) == DeclKind::Field).collect();
         let field_ok = |s: &Self, f: DeclId| {
             let t = s.ast.decls.get(f).ty().unwrap_or(QualType::ERROR);
             s.is_integral_or_enum(t)
@@ -99,13 +92,8 @@ impl Sema<'_, '_> {
             return None;
         }
         let field = fields[0];
-        let mut info = CmpCategoryInfo {
-            kind,
-            record: def,
-            field,
-            values: [None; 5],
-            ints: [0; 5],
-        };
+        let mut info =
+            CmpCategoryInfo { kind, record: def, field, values: [None; 5], ints: [0; 5] };
         let mut used = Vec::with_capacity(4);
         for &r in kind.results() {
             let name = self.intern(r.name());
@@ -160,19 +148,16 @@ impl Sema<'_, '_> {
     /// some declaration, constant-initialized).
     fn cmp_value_holder(&mut self, class: DeclId, var: DeclId) -> Option<DeclId> {
         let first = self.ast.first(class);
-        let in_class = self
-            .ast
-            .decls
-            .get(var)
-            .ctx()
-            .is_some_and(|c| self.kind_of(c) == DeclKind::CXXRecord && self.ast.first(c) == first);
+        let in_class =
+            self.ast.decls.get(var).ctx().is_some_and(|c| {
+                self.kind_of(c) == DeclKind::CXXRecord && self.ast.first(c) == first
+            });
         if !in_class {
             return None;
         }
         let redecls: Vec<DeclId> = self.ast.redecls_of(var).collect();
-        let constexpr = redecls
-            .iter()
-            .any(|&d| self.ast.decls.var(d).is_some_and(|v| v.spec.is_constexpr()));
+        let constexpr =
+            redecls.iter().any(|&d| self.ast.decls.var(d).is_some_and(|v| v.spec.is_constexpr()));
         let holder = redecls
             .into_iter()
             .find(|&d| self.ast.decls.var(d).is_some_and(|v| v.init.is_some()))?;
@@ -239,8 +224,9 @@ impl Sema<'_, '_> {
         if self.is_error_type(lt) || self.is_error_type(rt) {
             return self.recover_err(&[l, r], loc);
         }
-        let arith_or_enum =
-            |s: &Self, t: QualType| s.ast.types.is_arithmetic(t) || s.ast.types.as_enum(t).is_some();
+        let arith_or_enum = |s: &Self, t: QualType| {
+            s.ast.types.is_arithmetic(t) || s.ast.types.as_enum(t).is_some()
+        };
         if arith_or_enum(self, lt) && arith_or_enum(self, rt) {
             return self.arith_three_way(l, r, loc);
         }
@@ -264,8 +250,11 @@ impl Sema<'_, '_> {
         }
         let int = |s: &Self, t: QualType| s.ast.types.is_integral(t);
         if (lp && int(self, rt)) || (rp && int(self, lt)) {
-            let null =
-                if lp { conv::is_null_pointer_constant(self, r) } else { conv::is_null_pointer_constant(self, l) };
+            let null = if lp {
+                conv::is_null_pointer_constant(self, r)
+            } else {
+                conv::is_null_pointer_constant(self, l)
+            };
             let id = if null {
                 DiagId::sema_ordered_pointer_zero
             } else {
@@ -288,7 +277,8 @@ impl Sema<'_, '_> {
         if is_bool(self, lst) != is_bool(self, rst) {
             return self.invalid_operands(ls, rs, loc);
         }
-        let (le, re) = (self.ast.types.as_enum(lst).is_some(), self.ast.types.as_enum(rst).is_some());
+        let (le, re) =
+            (self.ast.types.as_enum(lst).is_some(), self.ast.types.as_enum(rst).is_some());
         let (mut l, mut r) = (l, r);
         if le != re {
             let other = if le { rst } else { lst };
