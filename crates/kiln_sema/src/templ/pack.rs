@@ -12,9 +12,9 @@
 //! pattern, still an expansion.
 
 use kiln_ast::ExprId;
-use kiln_ast::ids::RawId;
 use kiln_ast::QualType;
 use kiln_ast::expr::ExprKind;
+use kiln_ast::ids::RawId;
 use kiln_ast::types::{ArgView, TemplateArg, TypeView};
 use kiln_diag::DiagId;
 use kiln_source::Loc;
@@ -178,9 +178,12 @@ impl Substituter<'_, '_, '_> {
     /// Substitutes into a list of types that may contain pack
     /// expansions.
     pub fn expand_types(&mut self, tys: &[QualType], loc: Loc) -> SubstResult<Vec<QualType>> {
-        self.expand_list(tys, type_pattern, |s, q| s.ty(q, loc), |s, q| {
-            s.sema.ast.types.pack_expansion(q, None)
-        })
+        self.expand_list(
+            tys,
+            type_pattern,
+            |s, q| s.ty(q, loc),
+            |s, q| s.sema.ast.types.pack_expansion(q, None),
+        )
     }
 
     /// Substitutes into a list of expressions that may contain pack
@@ -245,11 +248,8 @@ impl Substituter<'_, '_, '_> {
                 return Ok(self.sema.act_fold(l, op, r, loc, loc, end));
             }
         };
-        let mut it: Box<dyn Iterator<Item = ExprId>> = if right {
-            Box::new(elems.into_iter().rev())
-        } else {
-            Box::new(elems.into_iter())
-        };
+        let mut it: Box<dyn Iterator<Item = ExprId>> =
+            if right { Box::new(elems.into_iter().rev()) } else { Box::new(elems.into_iter()) };
         let mut acc = match init.or_else(|| it.next()) {
             Some(x) => x,
             None => {

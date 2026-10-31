@@ -212,9 +212,10 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
             ArgView::Expr { expr, .. } => {
                 let Some(p) = expr_pattern(self.sema, expr) else { return Ok(None) };
                 match self.expand_pattern(|s| s.expr(p))? {
-                    Expansion::Elements(v) => {
-                        v.into_iter().map(|e| self.sema.ast.builder().template_arg_expr(e)).collect()
-                    }
+                    Expansion::Elements(v) => v
+                        .into_iter()
+                        .map(|e| self.sema.ast.builder().template_arg_expr(e))
+                        .collect(),
                     Expansion::Unexpanded(e) => {
                         let x = self.sema.act_pack_expansion(e, loc);
                         vec![self.sema.ast.builder().template_arg_expr(x)]
