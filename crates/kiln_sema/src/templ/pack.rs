@@ -296,7 +296,7 @@ impl Substituter<'_, '_, '_> {
                     Ok(self.sema.act_on_value_init_cast(QualType::VOID, ellipsis, ellipsis))
                 }
                 _ => {
-                    let d = self.sema.diag(DiagId::sema_fold_empty, loc).arg(op.spelling());
+                    let d = self.sema.diag(DiagId::sema_fold_empty, ellipsis).arg(op.spelling());
                     self.sema.emit(d);
                     Err(SubstFail)
                 }
