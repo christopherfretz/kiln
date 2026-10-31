@@ -685,10 +685,10 @@ impl Sema<'_, '_> {
             let own = |q: &DeclId| self.ast.templates.defaults.get(*q).copied();
             let Some(a) = lists.iter().find_map(|l| l.get(i).and_then(own)) else { continue };
             for l in &lists {
-                if let Some(&q) = l.get(i) {
-                    if self.ast.templates.defaults.get(q).is_none() {
-                        self.inherited_defaults.insert(q, a);
-                    }
+                if let Some(&q) = l.get(i)
+                    && self.ast.templates.defaults.get(q).is_none()
+                {
+                    self.inherited_defaults.insert(q, a);
                 }
             }
         }

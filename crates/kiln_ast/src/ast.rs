@@ -222,11 +222,11 @@ impl Ast {
     /// The template described by the first (or latest) declaration of
     /// template `d`'s pattern; `d` itself for other declarations.
     fn template_redecl(&self, d: DeclId, first: bool) -> DeclId {
-        let Some(p) = self.template_info(d).and_then(|t| t.pattern) else { return d };
-        let Some(r) = self.decls.redecl(p) else { return d };
-        let g = self.redecls.get(r.group);
-        let q = if first { g.first } else { g.latest };
-        self.described_template(q).unwrap_or(d)
+        let Some(pattern) = self.template_info(d).and_then(|t| t.pattern) else { return d };
+        let Some(link) = self.decls.redecl(pattern) else { return d };
+        let group = self.redecls.get(link.group);
+        let target = if first { group.first } else { group.latest };
+        self.described_template(target).unwrap_or(d)
     }
 
     /// The definition of `d`'s entity, once seen.
