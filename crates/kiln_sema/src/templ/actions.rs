@@ -905,11 +905,9 @@ impl Sema<'_, '_> {
     /// The profile of a value-dependent expression `e` (for dependent
     /// array bounds and `noexcept` operands).
     pub(crate) fn dependent_profile(&mut self, e: ExprId) -> kiln_ast::ProfileId {
-        if let ArgView::Expr { profile: Some(p), .. } = self.builder().template_arg_expr(e).view() {
-            return p;
-        }
-        let f = TypeFlags::DEPENDENT_INSTANTIATION;
-        self.ast.types.profile(&[e.index()], e, f)
+        let f = kiln_ast::types::deps_type_flags(self.ast.exprs.get(e).deps());
+        let f = if f.is_empty() { TypeFlags::DEPENDENT_INSTANTIATION } else { f };
+        self.ast.profile_expr_with(e, f)
     }
 
     /// True if class template `tmpl`'s name, used without arguments here,

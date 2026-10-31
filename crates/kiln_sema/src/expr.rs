@@ -1511,6 +1511,12 @@ impl Sema<'_, '_> {
                 Err(_) => bad(self, e),
             },
             UnaryOp::Deref => {
+                // A type-dependent operand that is not of an overloadable
+                // type (`*a` for `T (&a)[N]`): the result type is dependent
+                // (clang's `CheckIndirectionOperand`).
+                if self.ast.types.is_dependent(t0) {
+                    return self.builder().dependent_unary(op, e, loc);
+                }
                 let x = conv::decay(self, e);
                 let pt = self.ety(x);
                 let Some(p) =

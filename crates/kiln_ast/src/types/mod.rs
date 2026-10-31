@@ -26,6 +26,7 @@ mod nns;
 mod node;
 mod print;
 mod profile;
+mod profile_expr;
 
 pub use args::{ArgKind, ArgView, TemplateArg};
 pub use context::{
@@ -44,3 +45,4 @@ pub use print::{
     PrintOptions, RawNames, TypeNames, aka, dump_strings, print_type, write_arg_list,
     write_declarator, write_nns, write_template_arg, write_type,
 };
+pub use profile_expr::deps_type_flags;

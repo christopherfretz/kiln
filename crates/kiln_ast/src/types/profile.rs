@@ -1,7 +1,7 @@
 //! Canonical expression profiles (spec/types.md §7.2).
 //!
-//! A profile is the interned sequence of `u32` words that `profile_expr`
-//! (`kiln_sema`, which sees expressions) produces for an expression inside a
+//! A profile is the interned sequence of `u32` words that
+//! `Ast::profile_expr` (`profile_expr.rs`) produces for an expression inside a
 //! type. Two expressions are equivalent ([temp.over.link]) iff their
 //! profiles are equal, so dependent types containing expressions
 //! canonicalize to a [`ProfileId`] and stay `u32`-comparable. The entry
