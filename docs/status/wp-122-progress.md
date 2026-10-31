@@ -8,7 +8,7 @@ base a1e8e9c (WP-075 merge, kiln-mode 1561/1577).
 2. [x] Structured bindings: parser + sema (array, tuple-like, members)
 3. [x] Oven + codegen for bindings
 4. [x] Tests (`tests/conformance/dcl.struct.bind/`: 28) + spec
-5. [ ] `git merge main`, final full CI
+5. [x] `git merge main`, final full CI (green at 63d1e82)
 
 ## Merge note (item 1)
 Item 1 is complete and green on its own at commit **4abe197**
@@ -82,3 +82,7 @@ New first blockers:
   prvalue; spurious aka for namespace-member types in overload notes;
   M3 constants with base classes or bit-fields; clang 19 rejects a
   constexpr lambda capture of bindings, kiln accepts it.
+- Final gate (63d1e82, after merging main a8c1565): `cargo xtask ci`
+  green. `corpus (clang++-19 self-check): 1604 passed; 0 failed; 4
+  xfail; 27 skipped; 1635 tests`; `corpus (kiln): 1622 passed; 0
+  failed; 13 xfail; 1635 tests`.
