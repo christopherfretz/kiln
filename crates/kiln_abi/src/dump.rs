@@ -69,6 +69,9 @@ pub fn record_definitions(ast: &Ast) -> Vec<DeclId> {
         if !r.defn.contains(DefinitionBits::COMPLETE)
             || ast.definition(d) != Some(d)
             || n.has(DeclFlags::INVALID)
+            // The predeclared target records (`__builtin_va_list`'s), which
+            // clang lays out only when a program uses them.
+            || (n.has(DeclFlags::IMPLICIT) && n.loc() == kiln_source::Loc::INVALID)
             || n.has(DeclFlags::DEPENDENT_CTX)
             || n.ty().is_none_or(|t| ast.types.is_dependent(t))
         {
