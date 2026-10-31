@@ -2,7 +2,7 @@
 
 Updated: 2026-10-31
 
-## State: items 1-4 done (WIP commits on the branch); item 5 in progress
+## State: items 1-5 done (WIP commits on the branch); final full CI running
 
 **Item 1 is green and can merge early.** Its commit is `66ab349`, and quick CI
 on it was 1500 passed / 0 failed / 15 xfail. Every later WIP commit also kept
@@ -14,7 +14,7 @@ quick CI green. The branch is never left red.
 | 2 qualified member access | d0a8a38, 82f9e06, 5599dbf | done, green |
 | 3 dependent NNS chains, typename/template diags | db0fcfd, 01dc8b5 | done, green |
 | 4 friend templates ([temp.friend]) | c936c33, 4af684f, b9338cb, e2057bb | done, green |
-| 5 declarator parameters / trailing requires-clause / out-of-line scope | f439d2e, 271b0c0, next | in progress |
+| 5 declarator parameters / trailing requires-clause / out-of-line scope | f439d2e, 271b0c0, 5b0b7a4, 2786912, ba13c42 | done, green |
 
 ### Item 1: member access by declared name (done)
 - `x.operator@(…)`, `x.operator T()`, `x.operator->()`, and unqualified
@@ -110,7 +110,7 @@ quick CI green. The branch is never left red.
   - Until then every manual kiln run and corpus run goes under
     `ulimit -v 8388608`.
 
-### Item 5 (in progress)
+### Item 5: declarator parameters and out-of-line scope (done)
 - **Trailing requires-clause** (f439d2e and the next commit). The function
   parameters, and `this` in a member, are in scope again in a trailing
   requires-clause ([basic.scope.param]/1, [expr.prim.this]/2).
@@ -154,6 +154,14 @@ quick CI green. The branch is never left red.
     (compile-ok; a class template's out-of-line members). It is
     compile-ok rather than run because of a pre-existing codegen panic,
     below.
+- **Dependent builtin template-id as an NNS** (ba13c42):
+  `typename __make_integer_seq<S, T, E - S>::template to<S>` (libc++
+  `__make_indices_imp`) is a dependent context. Test:
+  `temp.res/dependent-builtin-template-nns.cpp`.
+- **WP-116 `temp.over.link-head-locations` xfail flipped** (ba13c42): an
+  unnamed template parameter is located at the token where its name
+  would be (clang's `NameLoc`), and a type parameter's `class` /
+  `typename` key is recorded as its begin location.
 - **Gap, pre-existing on main:** codegen panics at
   `kiln_abi/src/irtype.rs:489` when a program defines a member of a class
   template out of line and the object file is emitted (`emit_global_fn`
@@ -161,6 +169,19 @@ quick CI green. The branch is never left red.
   unaffected.
 
 ## Evidence
+- Corpus (kiln, `-j 2`) at ba13c42: 1524 passed; 0 failed; 13 xfail; 0
+  xpass (1537 tests; baseline 1496/1511 kiln-mode). The new tests pass on
+  clang 19 as well.
+- libc++ probe at ba13c42 (error counts): array 37, string_view 53,
+  span 21, utility 12 (baseline 83/147/62/23).
+  - Remaining first blockers, none in WP-121's scope: `new:298` (a void
+    function returning a void call), `construct_at.h:38` (`::new`
+    parsing), `common_comparison_category.h:44` range-for (WP-089) and
+    its deduced-return fallout, lambdas (WP-075), deduction guides,
+    `consteval`, literal operators, using-declaration conflicts
+    (`using ranges::get;`), braced arguments in a dependent call.
+
+### Earlier evidence
 - Item 1 `cargo xtask ci --quick`: corpus (kiln) 1500 passed; 0 failed; 15 xfail; 0 xpass (1515 tests; baseline 1496/1511).
 - libc++ probe (`#include <h>`, `-fsyntax-only -ferror-limit=0`, error count):
 
