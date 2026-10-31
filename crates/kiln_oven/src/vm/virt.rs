@@ -406,7 +406,7 @@ impl Oven {
             }
             if !s.public {
                 let has = subs.iter().any(|s| s.cls == t);
-                return fail(if has { 0 } else { 1 });
+                return fail(u8::from(!has));
             }
             cur = usize::from(s.parent);
         }
