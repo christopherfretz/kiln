@@ -299,7 +299,7 @@ impl Substituter<'_, '_, '_> {
                     }
                     _ => {
                         let d =
-                            self.sema.diag(DiagId::sema_fold_empty, ellipsis).arg(op.spelling());
+                            self.sema.diag(DiagId::sema_fold_empty, loc).arg(op.spelling());
                         self.sema.emit(d);
                         Err(SubstFail)
                     }
