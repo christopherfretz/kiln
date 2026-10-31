@@ -888,9 +888,13 @@ bench/oven/churn-tree.cpp within 1% of its pre-WP-076 instruction count
   still returns false.
 - Class assignment (`a = b` of class type) is rejected by sema before
   evaluation; explicit destructor calls (`p->~T()`) and
-  `::operator new`/`::operator delete` are not parsed; inheriting
-  constructors (`using B::B`) are not in sema: front-end gaps, not Oven
-  work.
+  `::operator new`/`::operator delete` are not parsed: front-end
+  gaps, not Oven work. Inheriting constructors (WP-114) evaluate their
+  `CXXInheritedCtorInitExpr` as a call of the base constructor with the
+  inheriting constructor's own arguments (`compile/class.rs`
+  `inherited_ctor`); notes name a non-constexpr inherited constructor
+  (`non-constexpr constructor 'B' ...`) or the base for a constructor
+  inherited through a virtual base, as clang.
 - Constant destruction of a non-trivially-destructible temporary bound to
   a constexpr reference is not checked (clang 19 rejects it as "not yet
   supported"; kiln accepts it).
@@ -988,8 +992,11 @@ cs[2]` member); `ensure_body` defines implicit virtual destructors.
 
 **Left for later (owners).**
 - Virtual bases: objects with virtual bases cannot be constructed
-  (`VIRTUAL_UNSUPPORTED` traps on a `VirtualBase` ctor-init, an inherited
-  constructor and a class cast through a virtual base), so dispatch,
+  (`VIRTUAL_UNSUPPORTED` traps on a `VirtualBase` ctor-init and a class
+  cast through a virtual base; an inheriting constructor through a virtual
+  base is never constexpr-suitable, so its trap is clang's
+  `constructor inherited from base class 'V' cannot be used in a constant
+  expression` note), so dispatch,
   `dynamic_cast` and `typeid` never meet one; the subobject list marks
   virtual subobjects and phase 2 treats one as `Fault::Invalid`. Owner:
   a follow-up WP (object layout of virtual bases in `ty.rs`).
@@ -1207,8 +1214,8 @@ Remaining (each traps with a `kiln:` note today):
 - `delete` through `void*`, and P2747 placement new (see above).
 - Front-end gaps that keep some forms from reaching the Oven (not
   Oven work): class assignment, explicit destructor calls,
-  `::operator new`/`delete`, class-specific `operator new`, inheriting
-  constructors, `delete[] (expr)` (parsed as a lambda) and
+  `::operator new`/`delete`, class-specific `operator new`,
+  `delete[] (expr)` (parsed as a lambda) and
   `new char[n]{"hi"}`.
 - Volatile objects: reads are diagnosed ([expr.const]/5.9) only where the
   front end puts the volatile qualifier on the read expression's type.

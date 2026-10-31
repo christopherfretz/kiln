@@ -620,11 +620,67 @@ ctor → `ListId`, written once with the body. Dump `CXXCtorInitializer 'S'` /
 `delegatingInit`.
 
 ### 4.10 Inheriting constructors ([namespace.udecl]/3, [class.inhctor.init])
-After WP-062: `using B::B;` creates `ConstructorUsingShadow` decls. Overload
-resolution (S3O) considers the shadowed ctors; a selected one gets an implicit
-`CXXConstructor` in the derived class (clang `findInheritingConstructor`) whose
-body initializes the base with `CXXInheritedCtorInitExpr` and the remaining
-subobjects as a defaulted default ctor would.
+**Landed (WP-114).** Modules `kiln_sema/src/using.rs` (class-scope
+using-declarators), `class/inhctor.rs` (the inheriting constructor),
+`overload/{ics,best,diag}.rs` (candidates).
+- **Declaration** ([namespace.udecl]/3, [class.qual]/2). A class-scope
+  using-declarator's qualifier must name a direct or indirect base
+  (`using declaration refers into 'X::', which is not a base class of
+  'D'`). `using B::B;` (the last component names the qualifier's class:
+  class, typedef or template parameter name) is a `Using` named by the
+  derived class's constructor name (dump `UsingDecl B::D`) with one
+  `ConstructorUsingShadow` per constructor of `B`, its own and the ones `B`
+  itself inherits (`inheritable_ctors`); `DefinitionBits::HAS_INHERITED_CTOR`
+  marks the class. A derived constructor with the same parameter-type-list
+  (and template head) hides a shadow ([namespace.udecl]/14): an earlier one
+  prevents it, a later one (including the implicit ones declared at `}`)
+  is recorded by `hide_inherited_ctors` in `Decls::hidden_shadow`, and a
+  hidden shadow is dropped from lookup and from the dump (clang
+  `HideUsingShadowDecl`). An inherited default constructor makes the class
+  declare its own implicit default constructor even with user-declared ones
+  (clang `HasInheritedDefaultConstructor`).
+- **Dependent bases** ([temp.dep.type], [temp.inst]/3). With a dependent
+  qualifier the declarator is an `UnresolvedUsingValue` (a constructor name
+  is the canonical nominated type: `Base<type-parameter-0-0>`, clang's
+  dump); class instantiation replays it in the instantiated class
+  (`member_using` in `templ/class.rs`), which then creates the shadows.
+  libc++'s `using __base::__base;` takes this path.
+- **Candidates** ([over.match.funcs.general]/8, [over.match.best]/2.7).
+  Constructor lookup adds each visible shadow's target (templates are
+  deduced as usual), accessed as the using-declaration
+  ([namespace.udecl]/19). A copy/move constructor of a base whose first
+  parameter's referred type is reference-related to the argument's class
+  is not viable when the argument is (derived from) that base
+  (`CandidateFailure::InhCtorSlice`, [over.match.funcs.general]/8; no note
+  for copy/move constructors, as clang). In `better_viable`, a constructor
+  of the derived class beats an inherited one when neither is otherwise
+  better (/2.7; clang does not check the same-parameter-types condition and
+  neither does kiln).
+- **The inheriting constructor** (clang `findInheritingConstructor`). A
+  selected shadow target materializes, once per (class, base constructor),
+  an implicit inline `CXXConstructor` of the derived class named as the base
+  constructor, with its parameter types and *explicit-specifier*,
+  `ast.shadow_constructed`/`shadow_base_class` naming the shadow chain;
+  `constexpr` when the base constructor is and a defaulted default
+  constructor of the class could be; deleted when the base constructor is
+  or when a defaulted default constructor would be ([class.inhctor.init]/1,
+  [class.default.ctor]/2). Defined on first odr-use
+  (`define_inheriting_ctor`): `CXXInheritedCtorInitExpr` for each inherited
+  base (`inherited_bases`: the nominated base and, through virtual bases,
+  the base whose constructor is ultimately inherited, clang
+  `InheritedConstructorInfo`), every other subobject as a defaulted default
+  constructor would. The exception specification is clang's
+  `ComputeInheritingCtorExceptionSpec`.
+- **Gaps.** Only the default-constructibility of the remaining subobjects
+  is checked for deletion (other deleted-subobject cases are clang's
+  `ShouldDeleteSpecialMember` on the inheriting constructor); a variadic
+  base constructor is inherited like any other (clang inlines the
+  inheriting constructor at each call instead, codegen.md); a repeated
+  `using B::B;` in the same class is not diagnosed; `has_init_list_ctor`
+  does not look through shadows; [over.match.funcs]/4 (the implied object
+  argument of an inherited constructor) is not modelled separately; no
+  "non-literal type" note for a constexpr inheriting constructor of a class
+  with virtual bases.
 
 ### 4.11 During construction and destruction ([class.cdtor])
 Sema warns on a direct call of a pure virtual function from a ctor/dtor of its
@@ -1554,6 +1610,7 @@ lands.
 | `class.base.init`, `class.init`, `dcl.init.general`, `dcl.init.aggr` | 067b | order + `-Wreorder-ctor`, delegating, union, missing-init errors, NSDMI interplay, reference member to temporary, aggregates with bases, designated init with bases, paren aggregate init |
 | `class.temporary`, `class.copy.elision`, `stmt.ranged`; `ast/` goldens for every §5.1 node | 067b | cleanup shapes, each extension and non-extension context, P2718, the NRVO probes of §5.5 |
 | `class.virtual`, `class.abstract`, `expr.dynamic.cast`, `expr.typeid` | 078a | override/final/covariance/consteval mismatch, abstract uses, more than one final overrider, RTTI casts |
+| `class.inhctor.init`, `namespace.udecl/class-scope`, `over.match.best/inherited-ctor`; `ast/class.inhctor.init/`; codegen `class_inheriting_ctors`, mangle `inheriting_ctors` | 114 | §4.10: forwarding (by value, references, default arguments, NSDMIs), virtual bases, dependent bases, constexpr (Oven budget) and its notes, the /8 slice, access, /2.7 |
 | `kiln_abi` `layout_rules`, `layout_vs_clang`, `vtable_vs_clang` | 066c, 078b | §6.4 (non-virtual in 066c, virtual in 078b) |
 
 Performance and memory (bench.md): `bench/frontend/classes.cpp` (generated: 5k

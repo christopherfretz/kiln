@@ -2,8 +2,9 @@
 // an inherited constructor of a base when the parameter types match for
 // every argument (the example: B b; selects B::B(), not A(int = 0)).
 // [namespace.udecl]/14: a derived constructor with the same signature hides
-// the inherited one outright. [over.match.funcs]/9 (C++26 numbering of the
-// inherited-ctor rule): inherited candidates compete as base constructors.
+// the inherited one outright; otherwise inherited candidates compete as
+// base constructors ([over.match.funcs.general]/8). A mem-initializer
+// naming a template type parameter base ([class.base.init]/2).
 //@ expect: compile-ok
 struct A { constexpr A(int = 0) : v(1) {} int v; };
 struct B : A { using A::A; constexpr B() : A(5) { v = 2; } };
