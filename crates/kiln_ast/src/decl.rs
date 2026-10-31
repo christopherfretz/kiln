@@ -1544,6 +1544,17 @@ pub struct ColdDeclData {
     /// `Binding` of a tuple-like type → its implicit holding variable
     /// ([dcl.struct.bind]/4; write-once).
     pub binding_var: ColdMap<DeclId, DeclId>,
+    /// `ConstructorUsingShadow` → the shadow in the nominated base class
+    /// it was made from, when the base inherited the constructor itself
+    /// (clang `getNominatedBaseClassShadowDecl`; WP-114).
+    pub ctor_shadow_nominated: ColdMap<DeclId, DeclId>,
+    /// Inheriting constructor (the implicit `CXXConstructor` an inherited
+    /// constructor materializes, [class.inhctor.init]) → the
+    /// `ConstructorUsingShadow` it was made for (WP-114).
+    pub inheriting_ctor: ColdMap<DeclId, DeclId>,
+    /// Using-shadow in a class → the member of the class that hides it
+    /// ([namespace.udecl]/14; recorded at the class's `}`).
+    pub hidden_shadow: ColdMap<DeclId, DeclId>,
 }
 
 impl Default for ColdDeclData {
@@ -1572,12 +1583,15 @@ impl Default for ColdDeclData {
             binding_decomp: ColdMap::new("binding_decomp"),
             binding_expr: ColdMap::new("binding_expr"),
             binding_var: ColdMap::new("binding_var"),
+            ctor_shadow_nominated: ColdMap::new("ctor_shadow_nominated"),
+            inheriting_ctor: ColdMap::new("inheriting_ctor"),
+            hidden_shadow: ColdMap::new("hidden_shadow"),
         }
     }
 }
 
 impl ColdDeclData {
-    fn rows(&self) -> [MemRow; 23] {
+    fn rows(&self) -> [MemRow; 26] {
         [
             self.lexical_ctx.mem_row(),
             self.begin_loc.mem_row(),
@@ -1602,6 +1616,9 @@ impl ColdDeclData {
             self.binding_decomp.mem_row(),
             self.binding_expr.mem_row(),
             self.binding_var.mem_row(),
+            self.ctor_shadow_nominated.mem_row(),
+            self.inheriting_ctor.mem_row(),
+            self.hidden_shadow.mem_row(),
         ]
     }
 }
@@ -2051,6 +2068,39 @@ impl DeclArena {
     /// The holding variable of tuple-like `Binding` `b`.
     pub fn binding_var(&self, b: DeclId) -> Option<DeclId> {
         self.cold.binding_var.get(b).copied()
+    }
+
+    /// The base class's `ConstructorUsingShadow` that shadow `s` was made
+    /// from (the nominated base inherited the constructor too).
+    pub fn ctor_shadow_nominated(&self, s: DeclId) -> Option<DeclId> {
+        self.cold.ctor_shadow_nominated.get(s).copied()
+    }
+
+    /// The `ConstructorUsingShadow` inheriting constructor `c` was made
+    /// for, if `c` is one ([class.inhctor.init]).
+    pub fn inheriting_ctor_shadow(&self, c: DeclId) -> Option<DeclId> {
+        self.cold.inheriting_ctor.get(c).copied()
+    }
+
+    /// Records `c` as the inheriting constructor of shadow `s`.
+    ///
+    /// # Errors
+    /// If `c` is already recorded.
+    pub fn set_inheriting_ctor(&mut self, c: DeclId, s: DeclId) -> Result<(), AlreadySet> {
+        self.cold.inheriting_ctor.insert(c, s)
+    }
+
+    /// The class member hiding using-shadow `s`, if any.
+    pub fn hidden_shadow(&self, s: DeclId) -> Option<DeclId> {
+        self.cold.hidden_shadow.get(s).copied()
+    }
+
+    /// Records that member `by` hides using-shadow `s`.
+    ///
+    /// # Errors
+    /// If `s` is already recorded hidden.
+    pub fn set_hidden_shadow(&mut self, s: DeclId, by: DeclId) -> Result<(), AlreadySet> {
+        self.cold.hidden_shadow.insert(s, by)
     }
 
     /// Records decomposition `v`'s bindings and links each back to `v`.

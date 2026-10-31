@@ -262,6 +262,49 @@ impl<'a> AstBuilder<'a> {
         d
     }
 
+    /// The implicit `ConstructorUsingShadow` an inheriting-constructor
+    /// using-declaration (`using B::B;`, [namespace.udecl]/3) introduces
+    /// into class `h.ctx` for constructor (or constructor template)
+    /// `target` of a base class. `nominated` is the base class's own shadow
+    /// when the base inherited `target` itself. Appended to the member list
+    /// but not entered in lookup: overload resolution for the class's
+    /// constructors collects the shadows from the member list (WP-114).
+    pub fn constructor_using_shadow(
+        &mut self,
+        h: DeclHead,
+        target: DeclId,
+        nominated: Option<DeclId>,
+    ) -> DeclId {
+        let d = self.add_unregistered(
+            h.flags(DeclFlags::IMPLICIT),
+            DeclKind::ConstructorUsingShadow,
+            Payload::None(target.raw()),
+            true,
+        );
+        if let Some(n) = nominated {
+            let _ = self.ast.decls.cold.ctor_shadow_nominated.insert(d, n);
+        }
+        d
+    }
+
+    /// A using-declarator with a dependent qualifier in a class template
+    /// (clang `UnresolvedUsingValueDecl`): `h.name` is the name as
+    /// written, `nns` the qualifier. Entered in lookup when `register`
+    /// (a member name; uses of it are dependent), not for an
+    /// inheriting-constructor declarator.
+    pub fn unresolved_using_value(
+        &mut self,
+        h: DeclHead,
+        nns: crate::ids::NnsId,
+        register: bool,
+    ) -> DeclId {
+        let d = self.add_unregistered(h, DeclKind::UnresolvedUsingValue, Payload::None(nns.raw()), true);
+        if register {
+            self.register_name(h.ctx, h.name, d, None, false, false);
+        }
+        d
+    }
+
     /// `using enum E;` ([enum.udecl]); `e` is the enumeration. Not
     /// entered in lookup (its enumerators' shadows are).
     pub fn using_enum(&mut self, h: DeclHead, e: DeclId) -> DeclId {

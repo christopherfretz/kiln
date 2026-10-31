@@ -520,6 +520,9 @@ diag_ids! {
     sema_using_decl_nested_name_specifier_is_not_class = Error (1) "using declaration in class refers into '{0}', which is not a class";
     sema_using_decl_refers_to_own_class = Error (0) "using declaration refers to its own class";
     sema_using_decl_not_base_class = Error (2) "using declaration refers into '{0}', which is not a base class of '{1}'";
+    sema_using_decl_constructor_not_in_direct_base = Error (2) "{0} is not a direct base of {1}, cannot inherit constructors";
+    sema_using_decl_redeclaration = Error (0) "redeclaration of using declaration";
+    note_previous_using_decl = Note (0) "previous using declaration";
     sema_using_decl_can_not_refer_to_class_member = Error (0) "using declaration cannot refer to class member";
     note_using_decl_class_member_alias = Note (0) "use an alias declaration instead";
     note_using_decl_class_member_reference = Note (0) "use a reference instead";

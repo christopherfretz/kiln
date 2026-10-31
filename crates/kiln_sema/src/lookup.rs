@@ -163,6 +163,9 @@ impl Sema<'_, '_> {
     fn filter(&self, v: Vec<DeclId>, kind: LookupKind) -> Found {
         let mut out = Found::default();
         for raw in v {
+            if self.ast.decls.hidden_shadow(raw).is_some() {
+                continue;
+            }
             let d = self.ast.strip_shadow(raw);
             if !self.accept(d, kind) {
                 continue;

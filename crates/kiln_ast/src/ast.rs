@@ -149,6 +149,7 @@ impl Ast {
         let n = self.decls.get(d);
         match n.kind() {
             DeclKind::UsingShadow
+            | DeclKind::ConstructorUsingShadow
             | DeclKind::UsingEnum
             | DeclKind::NamespaceAlias
             | DeclKind::UsingDirective => DeclId::try_new(n.data()),
@@ -159,14 +160,21 @@ impl Ast {
     /// The nested-name-specifier written in a `Using` declaration.
     pub fn using_qualifier(&self, d: DeclId) -> Option<crate::ids::NnsId> {
         let n = self.decls.get(d);
-        if n.kind() == DeclKind::Using { crate::ids::NnsId::try_new(n.data()) } else { None }
+        if matches!(n.kind(), DeclKind::Using | DeclKind::UnresolvedUsingValue) {
+            crate::ids::NnsId::try_new(n.data())
+        } else {
+            None
+        }
     }
 
     /// `d` with using-shadows looked through: the declaration a
     /// `UsingShadow` introduces (an `UnresolvedUsingIfExists` for an
     /// unresolved `using_if_exists` target), else `d`.
     pub fn strip_shadow(&self, d: DeclId) -> DeclId {
-        if self.decls.get(d).kind() == DeclKind::UsingShadow {
+        if matches!(
+            self.decls.get(d).kind(),
+            DeclKind::UsingShadow | DeclKind::ConstructorUsingShadow
+        ) {
             self.using_target(d).unwrap_or(d)
         } else {
             d
