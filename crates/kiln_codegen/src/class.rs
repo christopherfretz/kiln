@@ -189,15 +189,23 @@ impl Cg<'_> {
         })
     }
 
-    /// Structors of classes with virtual bases are not supported yet.
-    fn check_structor(&self, d: DeclId) -> R<()> {
-        let ast = self.ast;
-        let Some(c) = ast.decls.get(d).ctx() else { return Ok(()) };
-        let bits = self.class_bits(c);
-        if bits.contains(DefinitionBits::HAS_VIRTUAL_BASES) {
+    /// The class of structor `d` has virtual bases (its complete and base
+    /// variants differ, clang `getCodegenToUse` → `Emit`).
+    pub(crate) fn structor_has_vbases(&self, d: DeclId) -> bool {
+        self.ast
+            .decls
+            .get(d)
+            .ctx()
+            .is_some_and(|c| self.class_bits(c).contains(DefinitionBits::HAS_VIRTUAL_BASES))
+    }
+
+    /// Base-object structors of classes with virtual bases take a VTT
+    /// parameter, which is not supported yet.
+    fn check_structor(&self, d: DeclId, v: Structor) -> R<()> {
+        if v == Structor::Base && self.structor_has_vbases(d) {
             return err(
-                Some(ast.decls.get(d).loc()),
-                "constructors and destructors of classes with virtual bases are not supported yet (WP-080)",
+                Some(self.ast.decls.get(d).loc()),
+                "base-object constructors and destructors of classes with virtual bases (VTT parameter) are not supported yet (WP-080)",
             );
         }
         Ok(())
@@ -263,13 +271,16 @@ impl Cg<'_> {
             self.queue_structor(first, v);
             return Ok((V::C(val), Some(f)));
         }
+        self.check_structor(first, v)?;
         if let Some(&(val, f)) = self.sfns.get(&(first, v)) {
             if v == Structor::Base {
                 // Declared by a RAUW'd complete-object reference: a use
                 // of the base variant itself queues its definition.
                 self.queue_structor(first, v);
             }
-            let fid = (val == Value::func(f) && v == Structor::Base).then_some(f);
+            let fid = (val == Value::func(f)
+                && (v == Structor::Base || self.structor_has_vbases(first)))
+            .then_some(f);
             return Ok((V::C(val), fid));
         }
         if v == Structor::Base {
@@ -280,8 +291,13 @@ impl Cg<'_> {
             let (val, _) = self.declare_structor(first, v)?;
             return Ok((V::C(val), None));
         };
-        self.check_structor(def)?;
         self.c1_decl.insert(first);
+        if self.structor_has_vbases(first) {
+            // A separate complete-object function.
+            let (val, f) = self.declare_structor(first, v)?;
+            self.queue_structor(first, v);
+            return Ok((V::C(val), Some(f)));
+        }
         if self.complete_is_rauw(def) {
             // The complete-object declaration is later replaced by the
             // base variant, which takes its place in the module.
@@ -313,7 +329,6 @@ impl Cg<'_> {
         if fd.spec.constexpr_kind() == ConstexprKind::Consteval {
             return Ok(());
         }
-        self.check_structor(d)?;
         let first = ast.first(d);
         let is_ctor = ast.decls.get(d).kind() == DeclKind::CXXConstructor;
         let abstract_ = ast
@@ -330,6 +345,7 @@ impl Cg<'_> {
                 continue;
             }
             if !self.discardable_fn(d) {
+                self.check_structor(d, v)?;
                 self.emit_structor_def(d, v)?;
                 continue;
             }
@@ -353,7 +369,7 @@ impl Cg<'_> {
     pub(crate) fn emit_structor_def(&mut self, d: DeclId, v: Structor) -> R<()> {
         let ast = self.ast;
         let first = ast.first(d);
-        self.check_structor(d)?;
+        self.check_structor(d, v)?;
         match v {
             Structor::Base => {
                 self.squeued.insert((first, v));
@@ -372,6 +388,17 @@ impl Cg<'_> {
                     return Ok(());
                 }
                 self.squeued.insert((first, v));
+                if self.structor_has_vbases(d) {
+                    let (_, f) = self.declare_structor(first, v)?;
+                    if !self.m.func(f).is_declaration() {
+                        return Ok(());
+                    }
+                    let saved = std::mem::replace(&mut self.f, crate::func::Fx::empty());
+                    let r = self.gen_code(d, f, Some(Structor::Complete));
+                    self.f = saved;
+                    r?;
+                    return self.emit_thunks(d, Some(v));
+                }
                 if self.complete_is_rauw(d) {
                     let f = self.base_fn(first, true)?;
                     self.sfns.insert((first, v), (Value::func(f), f));
@@ -502,7 +529,29 @@ impl Cg<'_> {
                     }
                 }
                 CtorInitKind::VirtualBase => {
-                    return err(Some(ci.loc), "virtual base initializers are WP-080");
+                    // clang `EmitBaseInitializer`: only the complete
+                    // variant of a non-abstract class constructs them.
+                    if self.f.structor == Some(Structor::Base)
+                        || self.class_bits(rd).contains(DefinitionBits::ABSTRACT)
+                    {
+                        continue;
+                    }
+                    self.flush_memcpy_run(d, &mut run)?;
+                    let t = QualType::unqual(TypeId::new(ci.target));
+                    let Some(base) = ast.types.as_record(t) else {
+                        return err(Some(ci.loc), "base initializer of a non-class type");
+                    };
+                    let Some(off) = self.vbase_offset(rd, base) else {
+                        return err(Some(ci.loc), "virtual base not in the layout");
+                    };
+                    let this = self.this_addr();
+                    let v = self.byte_offset(this.v, off);
+                    let ty = self.record_ty(base);
+                    let dest = Addr { v, ty, align: min_align(this.align, off) };
+                    self.emit_agg_into(ci.init, dest, true)?;
+                    if self.opts.exceptions && self.has_nontrivial_dtor(base) {
+                        self.f.eh_only = true;
+                    }
                 }
                 CtorInitKind::Delegating => {
                     self.flush_memcpy_run(d, &mut run)?;
@@ -987,11 +1036,8 @@ impl Cg<'_> {
         }
         let v = match info.kind {
             ConstructionKind::Complete => Structor::Complete,
-            ConstructionKind::NonVirtualBase => Structor::Base,
+            ConstructionKind::NonVirtualBase | ConstructionKind::VirtualBase => Structor::Base,
             ConstructionKind::Delegating => self.f.structor.unwrap_or(Structor::Complete),
-            ConstructionKind::VirtualBase => {
-                return err(self.loc_of(e), "virtual base construction is WP-080");
-            }
         };
         let first = ast.first(ctor);
         let fty = ast.decls.get(first).ty().expect("constructor type");

@@ -230,12 +230,105 @@ impl Cg<'_> {
         if self.m.global(g).initializer().is_some() || !self.vt_emitted.insert(first) {
             return Ok(());
         }
-        let l = self.vt_layout(first)?;
         let linkage = self.vtable_linkage(first);
+        if self.class_bits_of(first).contains(DefinitionBits::HAS_VIRTUAL_BASES) {
+            // clang `GenerateClassData`: the VTT (and its construction
+            // vtables) before the vtable's own initializer.
+            self.emit_vtt(first, linkage)?;
+        }
+        let l = self.vt_layout(first)?;
         let rd_ty = self.class_type(first);
         let rtti = self.rtti(rd_ty)?;
         let init = self.vtable_init(&l, rtti, first)?;
         self.define_vtable_global(g, init, linkage)
+    }
+
+    /// clang `GetAddrOfVTT`: the `_ZTT` global of `rd` (declared).
+    pub(crate) fn vtt_global(&mut self, rd: DeclId) -> R<GlobalId> {
+        let first = self.ast.first(rd);
+        let name = mangle::mangle_class_special(self.ast, "_ZTT", first);
+        if let Some(g) = self.m.get_global(&name) {
+            return Ok(g);
+        }
+        let n = match kiln_abi::vtable::vtt(self.ast, first, self.target) {
+            Ok(c) => c.len(),
+            Err(e) => {
+                return err(Some(self.ast.decls.get(first).loc()), format!("cannot lay out the VTT: {e:?}"));
+            }
+        };
+        let ty = self.m.types.array(LTy::PTR, n as u64);
+        let g = self.m.add_global(&name, ty);
+        let gv = self.m.global_mut(g);
+        gv.is_constant = true;
+        gv.linkage = Linkage::External;
+        gv.unnamed_addr = UnnamedAddr::Global;
+        gv.align = Some(8);
+        Ok(g)
+    }
+
+    /// clang `EmitVTTDefinition`: the construction vtables the VTT of
+    /// `rd` points into, then the VTT itself.
+    fn emit_vtt(&mut self, rd: DeclId, linkage: VtLinkage) -> R<()> {
+        let ast = self.ast;
+        let loc = Some(ast.decls.get(rd).loc());
+        let vtt = self.vtt_global(rd)?;
+        if self.m.global(vtt).initializer().is_some() {
+            return Ok(());
+        }
+        let (comps, vts) = match (
+            kiln_abi::vtable::vtt(ast, rd, self.target),
+            kiln_abi::vtable::vtt_vtables(ast, rd, self.target),
+        ) {
+            (Ok(c), Ok(v)) => (c, v),
+            (Err(e), _) | (_, Err(e)) => return err(loc, format!("cannot lay out the VTT: {e:?}")),
+        };
+        let subs = self.tys.layouter().subobjects(rd);
+        let mut groups: Vec<(Value, Rc<VTableLayout>)> = Vec::with_capacity(vts.len());
+        for (k, &sub) in vts.iter().enumerate() {
+            if k == 0 {
+                let g = self.vtable_global(rd)?;
+                groups.push((Value::global(g), self.vt_layout(rd)?));
+                continue;
+            }
+            let Some(&(so, off)) = subs.get(usize::from(sub.0)) else {
+                return err(loc, "VTT vtable of an unknown subobject");
+            };
+            let l = match kiln_abi::vtable::construction_vtable(ast, rd, sub, self.target) {
+                Ok(l) => Rc::new(l),
+                Err(e) => return err(loc, format!("cannot lay out a construction vtable: {e:?}")),
+            };
+            let name = mangle::mangle_ctor_vtable(ast, rd, off as i64, so.class);
+            let ty = self.vtable_ir_ty(&l);
+            let g = match self.m.get_global(&name) {
+                Some(g) => g,
+                None => self.m.add_global(&name, ty),
+            };
+            {
+                let gv = self.m.global_mut(g);
+                gv.is_constant = true;
+                gv.unnamed_addr = UnnamedAddr::Global;
+                gv.align = Some(8);
+            }
+            let bty = self.class_type(so.class);
+            let rtti = self.rtti(bty)?;
+            let init = self.vtable_init(&l, rtti, rd)?;
+            self.define_vtable_global(g, init, linkage)?;
+            groups.push((Value::global(g), l));
+        }
+        let mut elems = Vec::with_capacity(comps.len());
+        for c in &comps {
+            let Some(&(so, off)) = subs.get(usize::from(c.base.0)) else {
+                return err(loc, "VTT entry of an unknown subobject");
+            };
+            let (g, l) = &groups[c.vtable_index as usize];
+            let (g, l) = (*g, Rc::clone(l));
+            elems.push(self.group_address_point(g, &l, rd, so.class, off)?);
+        }
+        let init = match self.m.const_array(LTy::PTR, &elems) {
+            Ok(a) => a,
+            Err(e) => return err(loc, format!("bad VTT: {e:?}")),
+        };
+        self.define_vtable_global(vtt, init, linkage)
     }
 
     /// Sets the initializer, linkage and comdat of a vtable (or VTT)
