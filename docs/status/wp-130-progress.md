@@ -15,6 +15,7 @@ file with one `#include`, error count (libc++ 19.1.7, aarch64).
 | 2 named casts in template argument lists | 0 | 1 | 9 | 7 | 17 |
 | 4 member templates of explicit/partial specializations | 0 | 1 | 9 | 7 | 17 |
 | 3 qualified operator-function-ids | 0 | 1 | 9 | 7 | 17 |
+| merge main (WP-071b CTAD guides) | 0 | 0 | 0 | 1 | 9 |
 
 Item 3 removed the three `hash.h:434/444/485` errors from `<string_view>`;
 parsing past them exposed three more local-class-in-template errors
@@ -48,7 +49,7 @@ parsing past them exposed three more local-class-in-template errors
 ## New blockers (listed, not fixed)
 - `<string_view>`: local classes in templates (`hash.h:245/258/270`, 4
   errors); dependent `switch` (`hash.h:62`); `consteval`
-  (`ranges_iterator_concept.h:31`, also `<array>`); `__is_constructible`
+  (`ranges_iterator_concept.h:31`, also `<array>`'s only error); `__is_constructible`
   (`is_constructible.h:24`); `__invoke` ambiguity (`find.h:48`); literal
   operators (`string_view:906`).
 - Codegen: a concept-id evaluated at run time (`return K<int>;`) is

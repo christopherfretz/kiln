@@ -18,7 +18,8 @@ dependent expressions, `::__builtin_*`, alias templates substituted in
 their own context) on the last four, and for WP-130 (`__datasizeof`,
 `__builtin_va_list`, `__builtin_constant_p`, `__is_assignable`, named
 casts in template argument lists, qualified operator-function-ids,
-member templates of explicit specializations) on the same four. The M3
+member templates of explicit specializations; counts after merging
+WP-071b's CTAD guides) on the same four. The M3
 gate headers (WP-081) are listed last. "First
 blocker" is the first error kiln reports. The counts are all the errors
 in the header's closure; most are follow-ons of the same unsupported
@@ -38,10 +39,10 @@ feature. Every header preprocesses identically to clang (see
 | `<limits>` | 0 | 0 | — | none | |
 | `<type_traits>` | 0 | 0 | 431 | none (clean since WP-109, 2026-10-31) | |
 | `<compare>` | 0 | 0 | 399 | none (clean since WP-122, 2026-10-31) | that error + follow-ons |
-| `<utility>` | 1 | 1 | — | CTAD deduction guide (`pair.h:484`, WP-071b) | that error only |
-| `<span>` | 1 | 9 | — | CTAD deduction guides (`subrange.h`, `span:604-620`, WP-071b) | guides only |
-| `<array>` | 1 | 7 | — | CTAD deduction guide (`pair.h:484`, WP-071b) | guides (6), `consteval` (`ranges_iterator_concept.h:31`) |
-| `<string_view>` | 1 | 17 | — | CTAD deduction guide (`pair.h:484`, WP-071b) | guides (8), local classes in templates (`hash.h`, 4), dependent `switch` (`hash.h:62`), `consteval`, `__is_constructible`, literal operators, `__invoke` ambiguity |
+| `<utility>` | 0 | 0 | — | none (clean since WP-071b + WP-130, 2026-10-31) | |
+| `<span>` | 0 | 0 | — | none (clean since WP-071b + WP-130, 2026-10-31) | |
+| `<array>` | 1 | 1 | — | `consteval` (`ranges_iterator_concept.h:31`) | that error only |
+| `<string_view>` | 1 | 9 | — | dependent `switch` (`hash.h:62`) | local classes in templates (`hash.h`, 4), `consteval`, `__is_constructible`, `__invoke` ambiguity (`find.h:48`), literal operators (`string_view:906`) |
 
 The single-header counts rose a little: before WP-065 the parser gave
 up on a class at its first constructor or operator (one "special member
