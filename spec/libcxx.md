@@ -218,6 +218,8 @@ appended. The region contains:
   killed, timeout, error, and pass rate. Pass rate is PASS / (total −
   UNSUPPORTED).
 - **Failures by stage**: compile, link, run and expected-fail per directory.
+- **Dominant first errors per directory**: the three most common first-error
+  clusters among each directory's FAIL tests.
 - **Error clusters**: the top 40 clusters (see below).
 - **Crashes, KILLED, TIMEOUT, ERROR and XPASS**: each test, with its first
   message.

@@ -219,6 +219,30 @@ pub fn render(
         );
     }
 
+    let _ = writeln!(
+        s,
+        "\n### Dominant first errors per directory\n\nThe three most common first-error clusters among each \
+         directory's FAIL tests, with their test counts.\n\n| directory | clusters |\n|---|---|"
+    );
+    for g in &order {
+        let in_group: Vec<TestResult> =
+            results.iter().filter(|r| group_of(&r.rel, roots) == *g).cloned().collect();
+        let c = clusters_of(&in_group);
+        let top: Vec<String> = c
+            .ranked()
+            .into_iter()
+            .filter(|(_, c)| c.first > 0)
+            .take(3)
+            .map(|(k, c)| format!("{} ({})", md_code(k), c.first))
+            .collect();
+        let _ = writeln!(
+            s,
+            "| `{}` | {} |",
+            if g.is_empty() { "." } else { g },
+            if top.is_empty() { "—".to_owned() } else { top.join("; ") }
+        );
+    }
+
     let clusters = clusters_of(results);
     let _ = writeln!(
         s,
@@ -385,6 +409,7 @@ mod tests {
         );
         assert!(page.contains("- `std/a/3.pass.cpp` — KILLED (compile)"), "{page}");
         assert!(page.contains("2 MiB (largest single process"), "{page}");
+        assert!(page.contains("| `std/a` | `compile: x '…'` (1) |"), "{page}");
     }
 
     #[test]
