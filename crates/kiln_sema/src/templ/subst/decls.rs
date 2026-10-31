@@ -676,8 +676,11 @@ impl Substituter<'_, '_, '_> {
             // `friend bool operator==<>(const X&, const X&);`
             // ([temp.friend]/1.3).
             let ty = self.ty(fs.ty, loc)?;
-            let args =
-                fs.args.iter().map(|&a| self.template_arg(a, loc)).collect::<SubstResult<Vec<_>>>()?;
+            let args = fs
+                .args
+                .iter()
+                .map(|&a| self.template_arg(a, loc))
+                .collect::<SubstResult<Vec<_>>>()?;
             let record = self.sema.current_class().map(|c| c.record).ok_or(SubstFail)?;
             return Ok(self.sema.instantiate_friend_spec(record, &fs, ty, &args));
         }

@@ -186,7 +186,11 @@ impl Sema<'_, '_> {
 
     /// The function template a friend declarator-id `name<...>` names
     /// (the first found), for the parser.
-    pub fn friend_spec_template(&self, name: DeclName, qualifier: Option<DeclId>) -> Option<DeclId> {
+    pub fn friend_spec_template(
+        &self,
+        name: DeclName,
+        qualifier: Option<DeclId>,
+    ) -> Option<DeclId> {
         let found = self.friend_spec_lookup(name, qualifier);
         self.function_templates_in(&found).first().copied()
     }
@@ -214,7 +218,8 @@ impl Sema<'_, '_> {
     fn friend_spec_no_candidate(&mut self, found: &[DeclId], loc: Loc) {
         let mut e = self.diag(DiagId::sema_dependent_friend_spec_no_candidate, loc);
         for &f in found {
-            let n = self.diag(DiagId::note_dependent_spec_not_template, self.ast.decls.get(f).loc());
+            let n =
+                self.diag(DiagId::note_dependent_spec_not_template, self.ast.decls.get(f).loc());
             e = e.with_note(n);
         }
         self.emit(e);

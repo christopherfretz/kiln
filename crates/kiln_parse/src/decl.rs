@@ -3,8 +3,8 @@
 use kiln_ast::attr::AttrKind;
 use kiln_ast::decl::{EnumData, InitStyle};
 use kiln_ast::expr::ExprKind;
-use kiln_ast::strings::StringEncoding;
 use kiln_ast::names::DeclName;
+use kiln_ast::strings::StringEncoding;
 use kiln_ast::types::{ExcSpec, Quals, RefQual, TagKeyword, UnaryTransformKind};
 use kiln_ast::{AttrId, DeclId, ExprId, QualType};
 use kiln_diag::DiagId;
