@@ -15,7 +15,7 @@ use kiln_diag::{Diag, DiagId};
 use kiln_source::Loc;
 
 use crate::Sema;
-use crate::overload::ArgInfo;
+use crate::overload::{ArgInfo, CandidateKind, IcsOptions, OverloadCandidateSet, Rewrite};
 use crate::templ::args::ConvertedArgs;
 use crate::templ::deduce::{DeducedArgs, TdfFlags, Tdk};
 use crate::templ::stack::{FrameKind, SfinaeState};
@@ -665,6 +665,57 @@ impl Sema<'_, '_> {
                 self.diag(DiagId::note_ovl_candidate_bad_deduction, loc)
             }
             _ => self.diag(DiagId::note_ovl_candidate, loc).arg("function template"),
+        }
+    }
+
+    /// Whether the template of candidate `c1` of `set` is more
+    /// specialized than that of `c2` ([over.match.best]/2.5) in a call
+    /// with `nargs` arguments; for an operator, each candidate counts its
+    /// own explicit arguments and reversal ([temp.func.order]/3).
+    pub(crate) fn more_specialized_candidate(
+        &mut self,
+        set: &OverloadCandidateSet,
+        c1: u32,
+        c2: u32,
+        nargs: usize,
+    ) -> bool {
+        let (x, y) = (set.cand(c1), set.cand(c2));
+        let (Some(t1), Some(t2)) = (x.template, y.template) else { return false };
+        if !set.oper {
+            return self.more_specialized(t1, t2, nargs);
+        }
+        let n = |k: CandidateKind| {
+            nargs + usize::from(k == CandidateKind::Function && set.object.is_some())
+        };
+        let reversed = x.rewrite.is_reversed() != y.rewrite.is_reversed();
+        self.more_specialized_operator(t1, n(x.kind), t2, n(y.kind), reversed)
+    }
+
+    /// A rewritten or reversed operator function template candidate
+    /// ([over.match.oper]/3.4, [temp.deduct.call]): deduction runs
+    /// against the operands in the candidate's parameter order (swapped
+    /// for a reversed `rewrite`); the hook `add_member_opers` and
+    /// `add_nonmember_oper` call for templates (spec/sema-overload.md
+    /// §10, WP-106).
+    pub(crate) fn add_rewritten_template(
+        &mut self,
+        set: &mut OverloadCandidateSet,
+        ft: DeclId,
+        found: DeclId,
+        kind: CandidateKind,
+        rewrite: Rewrite,
+        ops: &[ExprId],
+    ) {
+        if rewrite.is_reversed() {
+            if ops.len() == 2 && self.should_add_reversed(ft, ops[1]) {
+                self.add_reversed(set, ft, found, kind, rewrite);
+            }
+            return;
+        }
+        let loc = ops.first().map_or(set.loc, |&e| self.ast.exprs.get(e).loc());
+        self.add_template_candidate(set, ft, found, None, kind, IcsOptions::NONE, loc);
+        if let Some(c) = set.cands.last_mut() {
+            c.rewrite = rewrite;
         }
     }
 }

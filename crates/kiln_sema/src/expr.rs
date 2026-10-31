@@ -784,14 +784,9 @@ impl Sema<'_, '_> {
                 let valid = found.decls.clone();
                 return self.overload_name_ref(name, &found, &valid, qualifier.is_none(), nns, loc);
             }
-            let mut decls: Vec<DeclId> = found.decls.clone();
-            if qualifier.is_none() {
-                // Newest first, as for a non-template set (§2.1).
-                decls.reverse();
-            }
             return self.builder().unresolved_lookup(
                 name,
-                &decls,
+                &lookup_set_order(&found.decls, qualifier.is_none()),
                 qualifier.is_none(),
                 nns,
                 None,
@@ -3591,4 +3586,10 @@ pub(crate) struct CallCallee {
     /// A non-member function named by an id-expression: clang reports
     /// arity errors through overload resolution ("no matching function").
     pub(crate) overloadable: bool,
+}
+
+/// An overload set in the order clang lists it: an unqualified lookup
+/// newest first, as for a non-template set (spec/sema-overload.md §2.1).
+fn lookup_set_order(decls: &[DeclId], unqualified: bool) -> Vec<DeclId> {
+    if unqualified { decls.iter().rev().copied().collect() } else { decls.to_vec() }
 }

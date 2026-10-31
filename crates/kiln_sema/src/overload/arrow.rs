@@ -3,7 +3,7 @@
 //! `ActOnStartCXXMemberReference`, `BuildOverloadedArrowExpr`), with
 //! cycle detection and clang's default depth limit.
 
-use kiln_ast::names::OverloadedOperator as OO;
+use kiln_ast::names::{DeclName, OverloadedOperator as OO};
 use kiln_ast::{DeclId, ExprId, QualType};
 use kiln_diag::{Diag, DiagId};
 use kiln_source::Loc;
@@ -11,6 +11,7 @@ use kiln_source::fx::FxHashSet;
 
 use super::{OvlOutcome, Rewrite, SetKind};
 use crate::Sema;
+use crate::lookup::LookupKind;
 
 /// clang's default `-foperator-arrow-depth` ([implimits]); kiln has no
 /// option to change it yet.
@@ -184,7 +185,7 @@ impl Sema<'_, '_> {
                     None => Step::Err,
                 };
             }
-            OvlOutcome::NoViable if set.cands.is_empty() => {
+            OvlOutcome::NoViable if set.cands.is_empty() && !self.declares_arrow(t) => {
                 self.end_set(set);
                 return Step::NotFound;
             }
@@ -211,5 +212,18 @@ impl Sema<'_, '_> {
         self.emit(msg);
         self.end_set(set);
         Step::Err
+    }
+
+    /// Whether class type `t` declares an `operator->` at all (clang
+    /// adds invalid declarations as candidates, so a class whose only
+    /// `operator->` is ill-formed reports no viable operator rather than
+    /// suggesting `.`).
+    fn declares_arrow(&mut self, t: QualType) -> bool {
+        let Some(c) = self.ast.types.as_record(t) else { return false };
+        let Some(def) = self.ast.definition(c) else { return false };
+        !self
+            .lookup_in_class_dn(def, DeclName::operator(OO::Arrow), LookupKind::Ordinary)
+            .decls
+            .is_empty()
     }
 }
