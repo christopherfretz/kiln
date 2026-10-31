@@ -28,4 +28,4 @@
 - Partially substituted pack expansions (SubstTemplateTypeParmPack): stub.
 
 ## Next
-- Full `cargo xtask ci` (running), then hand back. Spec note in §11.2 done.
+- Done: full `cargo xtask ci` green (clang 1279/0/3xf/24skip; kiln 1293/0/13xf). Handed back.
