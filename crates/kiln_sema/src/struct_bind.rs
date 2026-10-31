@@ -16,7 +16,7 @@ use kiln_source::Loc;
 use crate::Sema;
 use crate::class::InitEntity;
 use crate::conv;
-use crate::declspec::{Chunk, DeclSpec, Declarator, StorageSpec, TypeSpecKind};
+use crate::declspec::{Chunk, DeclSpec, Declarator, DeclaratorContext, StorageSpec, TypeSpecKind};
 use crate::init::Initializer;
 use crate::lookup::LookupKind;
 use crate::templ::actions::TemplateIdRef;
@@ -64,6 +64,10 @@ impl Sema<'_, '_> {
             self.error(DiagId::sema_decomp_decl_template, l);
             self.templ.cur = None;
             return None;
+        }
+        if d.ctx == DeclaratorContext::Condition {
+            // clang `ext_decomp_decl_cond`, even in C++26 (P0963 not yet).
+            self.error(DiagId::sema_decomp_decl_cond, dc.lbracket);
         }
         // [dcl.pre]/6: only static, thread_local, auto and cv.
         let mut bad: Vec<(&str, Loc)> = Vec::new();
@@ -142,7 +146,7 @@ impl Sema<'_, '_> {
                 && !pack_reported
             {
                 // P1061 (C++26): structured binding packs.
-                self.unsupported("structured binding packs", e);
+                self.unsupported("a structured binding pack", e);
                 pack_reported = true;
                 invalid = true;
             }
