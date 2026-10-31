@@ -1292,10 +1292,6 @@ impl<'a> Printer<'a, '_> {
                 line = format!("{} '{op}'{adl}", self.expr_head(n, k)?);
                 kids_out = self.kid_trees(n)?;
             }
-            "CXXRewrittenBinaryOperator" => {
-                line = self.expr_head(n, k)?;
-                kids_out = self.kid_trees(n)?;
-            }
             "CXXNullPtrLiteralExpr"
             | "CXXNoexceptExpr"
             | "ConditionalOperator"
@@ -1318,7 +1314,8 @@ impl<'a> Printer<'a, '_> {
             | "OffsetOfExpr"
             | "DependentScopeDeclRefExpr"
             | "SubstNonTypeTemplateParmExpr"
-            | "PackExpansionExpr" => {
+            | "PackExpansionExpr"
+            | "CXXRewrittenBinaryOperator" => {
                 line = self.expr_head(n, k)?;
                 kids_out = self.kid_trees(n)?;
             }

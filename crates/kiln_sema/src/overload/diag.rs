@@ -230,7 +230,7 @@ impl Sema<'_, '_> {
     /// clang `CompareConversions`: the first operand whose conversion
     /// kind (standard, user-defined, ellipsis, none) and rank differ
     /// decides (a total order, unlike [over.match.best]).
-    fn compare_conversions(&self, set: &OverloadCandidateSet, a: u32, b: u32) -> Ordering {
+    fn compare_conversions(set: &OverloadCandidateSet, a: u32, b: u32) -> Ordering {
         // clang `ConversionSignals`: (kind rank, rank); an ignored object
         // argument counts as an exact match. A sequence not computed
         // after the first bad one counts as bad.
@@ -249,7 +249,11 @@ impl Sema<'_, '_> {
         let y_ignores = y.first().is_some_and(Ics::is_ignored);
         let exact = (0, ConvRank::ExactMatch);
         for i in 0..x.len().max(y.len()) {
-            let p = if i == 0 && x.first().is_some_and(Ics::is_ignored) { exact } else { sig(x.get(i)) };
+            let p = if i == 0 && x.first().is_some_and(Ics::is_ignored) {
+                exact
+            } else {
+                sig(x.get(i))
+            };
             let q = if y_ignores { exact } else { sig(y.get(i)) };
             if p != q {
                 return p.cmp(&q);
@@ -265,7 +269,7 @@ impl Sema<'_, '_> {
             (true, false) => return Ordering::Less,
             (false, true) => return Ordering::Greater,
             (true, true) => {
-                let o = self.compare_conversions(set, a, b);
+                let o = Self::compare_conversions(set, a, b);
                 if o != Ordering::Equal {
                     return o;
                 }
@@ -323,7 +327,7 @@ impl Sema<'_, '_> {
                     (true, false) => return Ordering::Less,
                     (false, true) => return Ordering::Greater,
                     (true, true) => {
-                        let o = self.compare_conversions(set, a, b);
+                        let o = Self::compare_conversions(set, a, b);
                         if o != Ordering::Equal {
                             return o;
                         }

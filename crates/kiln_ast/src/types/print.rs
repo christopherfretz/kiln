@@ -25,7 +25,9 @@ use std::fmt::Display;
 use super::args::{ArgView, TemplateArg};
 use super::context::{ExprOperand, TypeContext, TypeOfOperand, TypeView};
 use super::func::ExcSpec;
-use super::kinds::{BuiltinType, CallConv, Quals, RefQual, TagKeyword, TypeAttrKind, TypeKind, VectorKind};
+use super::kinds::{
+    BuiltinType, CallConv, Quals, RefQual, TagKeyword, TypeAttrKind, TypeKind, VectorKind,
+};
 use super::names::TemplateName;
 use super::nns::Nns;
 use crate::ids::{
@@ -157,18 +159,38 @@ pub struct PrintOptions {
 
 impl PrintOptions {
     /// The type as written (diagnostics' first string).
-    pub const SUGARED: PrintOptions =
-        PrintOptions { canonical: false, desugar: false, full_scope: false, suppress_tag: false, c_policy: false };
+    pub const SUGARED: PrintOptions = PrintOptions {
+        canonical: false,
+        desugar: false,
+        full_scope: false,
+        suppress_tag: false,
+        c_policy: false,
+    };
     /// The canonical type with every name scoped (the `aka` string).
-    pub const CANONICAL: PrintOptions =
-        PrintOptions { canonical: true, desugar: false, full_scope: true, suppress_tag: false, c_policy: false };
+    pub const CANONICAL: PrintOptions = PrintOptions {
+        canonical: true,
+        desugar: false,
+        full_scope: true,
+        suppress_tag: false,
+        c_policy: false,
+    };
     /// The top-level-desugared type (the AST dump's second string).
-    pub const DESUGARED: PrintOptions =
-        PrintOptions { canonical: false, desugar: true, full_scope: false, suppress_tag: false, c_policy: false };
+    pub const DESUGARED: PrintOptions = PrintOptions {
+        canonical: false,
+        desugar: true,
+        full_scope: false,
+        suppress_tag: false,
+        c_policy: false,
+    };
     /// The canonical type as clang's policy-less `QualType::getAsString()`
     /// prints it (built-in candidate notes).
-    pub const C_DEFAULT: PrintOptions =
-        PrintOptions { canonical: true, desugar: false, full_scope: true, suppress_tag: false, c_policy: true };
+    pub const C_DEFAULT: PrintOptions = PrintOptions {
+        canonical: true,
+        desugar: false,
+        full_scope: true,
+        suppress_tag: false,
+        c_policy: true,
+    };
 }
 
 /// Renders `q` as clang 19's `QualType::getAsString` (spec/types.md §12).

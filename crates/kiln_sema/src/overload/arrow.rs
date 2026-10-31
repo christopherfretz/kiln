@@ -90,8 +90,9 @@ impl Sema<'_, '_> {
                     return ArrowBase::Dot;
                 }
                 Step::NotFound => {
-                    let mut msg =
-                        self.diag(DiagId::sema_operator_arrow_not_pointer, op_loc).arg(self.ty_arg(t));
+                    let mut msg = self
+                        .diag(DiagId::sema_operator_arrow_not_pointer, op_loc)
+                        .arg(self.ty_arg(t));
                     if let Some(&(f, _)) = calls.last() {
                         let at = self
                             .ast

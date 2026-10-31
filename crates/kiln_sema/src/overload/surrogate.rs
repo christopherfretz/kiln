@@ -22,7 +22,7 @@ impl Sema<'_, '_> {
         let t = self.conversion_result_type(conv);
         let t = self.non_reference(t);
         let t = if self.ast.types.is_pointer(t) { self.ast.types.pointee(t)? } else { t };
-        self.ast.types.proto(t).cloned()
+        self.ast.types.proto(t).copied()
     }
 
     /// Adds the surrogate call functions of the object `obj` (the set's
@@ -77,12 +77,14 @@ impl Sema<'_, '_> {
         if !cand.viable {
         } else if nargs > params.len() && !variadic {
             cand.viable = false;
-            cand.failure =
-                CandidateFailure::TooManyArgs { max: u16::try_from(params.len()).unwrap_or(u16::MAX) };
+            cand.failure = CandidateFailure::TooManyArgs {
+                max: u16::try_from(params.len()).unwrap_or(u16::MAX),
+            };
         } else if nargs < params.len() {
             cand.viable = false;
-            cand.failure =
-                CandidateFailure::TooFewArgs { min: u16::try_from(params.len()).unwrap_or(u16::MAX) };
+            cand.failure = CandidateFailure::TooFewArgs {
+                min: u16::try_from(params.len()).unwrap_or(u16::MAX),
+            };
         } else {
             for i in 0..nargs {
                 let a = set.args[i];
@@ -93,8 +95,9 @@ impl Sema<'_, '_> {
                 set.ics.push(x);
                 if x.is_bad() {
                     cand.viable = false;
-                    cand.failure =
-                        CandidateFailure::BadConversion { arg: u16::try_from(i).unwrap_or(u16::MAX) };
+                    cand.failure = CandidateFailure::BadConversion {
+                        arg: u16::try_from(i).unwrap_or(u16::MAX),
+                    };
                     break;
                 }
             }

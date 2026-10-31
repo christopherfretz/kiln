@@ -147,7 +147,7 @@ impl Sema<'_, '_> {
             };
             loop {
                 if t.quals().is_restrict() {
-                    c.vr = c.vr | Quals::RESTRICT;
+                    c.vr |= Quals::RESTRICT;
                 }
                 let next = match self.ast.types.canonical_view(t) {
                     TypeView::Pointer(p) | TypeView::MemberPointer { pointee: p, .. } => Some(p),
@@ -157,7 +157,7 @@ impl Sema<'_, '_> {
                     t = self.ast.types.canonical(p);
                 }
                 if t.quals().is_volatile() {
-                    c.vr = c.vr | Quals::VOLATILE;
+                    c.vr |= Quals::VOLATILE;
                 }
                 if next.is_none() || c.vr.contains(Quals::VOLATILE | Quals::RESTRICT) {
                     break;
@@ -275,6 +275,7 @@ impl Sema<'_, '_> {
 
     /// Adds the built-in candidates of `op` for operands `ops` of types
     /// `types` ([over.match.oper]/3.3; clang `AddBuiltinOperatorCandidates`).
+    #[allow(clippy::too_many_lines, reason = "one dispatch over clang's operator table")]
     pub(crate) fn add_builtin_candidates(
         &mut self,
         set: &mut OverloadCandidateSet,
@@ -289,7 +290,7 @@ impl Sema<'_, '_> {
         set.builtin_op = Some(op);
         let mut vis = Quals::CONST;
         for &t in types {
-            vis = vis | self.visible_vr(t);
+            vis |= self.visible_vr(t);
         }
         let logical = matches!(op, OO::Exclaim | OO::AmpAmp | OO::PipePipe);
         let mut sets: Vec<TypeSet> = Vec::with_capacity(types.len());
@@ -328,7 +329,8 @@ impl Sema<'_, '_> {
                 for &p in &b.sets[0].ptrs {
                     let pointee = self.ast.types.pointee(p).unwrap_or(QualType::ERROR);
                     if self.ast.types.is_function(pointee) {
-                        let info = self.ast.types.proto(pointee).map(|f| f.info());
+                        let info =
+                            self.ast.types.proto(pointee).map(kiln_ast::types::FuncProto::info);
                         if info.is_some_and(|i| {
                             !i.this_quals().is_empty()
                                 || i.ref_qual() != kiln_ast::types::RefQual::None
@@ -422,18 +424,16 @@ impl Sema<'_, '_> {
                 }
             }
             OO::Exclaim => {
-                self.add_builtin_with(&mut b, &Params {
-                    tys: &[QualType::BOOL],
-                    assign: false,
-                    ctx_bool: 1,
-                });
+                self.add_builtin_with(
+                    &mut b,
+                    &Params { tys: &[QualType::BOOL], assign: false, ctx_bool: 1 },
+                );
             }
             OO::AmpAmp | OO::PipePipe => {
-                self.add_builtin_with(&mut b, &Params {
-                    tys: &[QualType::BOOL, QualType::BOOL],
-                    assign: false,
-                    ctx_bool: 2,
-                });
+                self.add_builtin_with(
+                    &mut b,
+                    &Params { tys: &[QualType::BOOL, QualType::BOOL], assign: false, ctx_bool: 2 },
+                );
             }
             OO::Subscript if n == 2 => {
                 let ptrdiff = QualType::unqual(self.target.ptrdiff_t);
@@ -680,7 +680,8 @@ impl Sema<'_, '_> {
             }
             let mptrs = b.sets[1].mptrs.clone();
             for m in mptrs {
-                let TypeView::MemberPointer { pointee: t, class } = self.ast.types.canonical_view(m)
+                let TypeView::MemberPointer { pointee: t, class } =
+                    self.ast.types.canonical_view(m)
                 else {
                     continue;
                 };
@@ -689,7 +690,8 @@ impl Sema<'_, '_> {
                     break;
                 }
                 let tq = self.ast.types.canonical(t).quals();
-                if (!vis.is_volatile() && tq.is_volatile()) || (!vis.is_restrict() && tq.is_restrict())
+                if (!vis.is_volatile() && tq.is_volatile())
+                    || (!vis.is_restrict() && tq.is_restrict())
                 {
                     continue;
                 }
@@ -711,10 +713,8 @@ impl Sema<'_, '_> {
         self.ovl.stats.builtin_candidates += 1;
         let set = &mut *b.set;
         let start = u32::try_from(set.ics.len()).unwrap_or(u32::MAX);
-        let mut cand = Candidate::builtin([
-            p.tys[0],
-            p.tys.get(1).copied().unwrap_or(QualType::ERROR),
-        ]);
+        let mut cand =
+            Candidate::builtin([p.tys[0], p.tys.get(1).copied().unwrap_or(QualType::ERROR)]);
         for (i, &to) in p.tys.iter().enumerate() {
             let opts = if i < p.ctx_bool {
                 IcsOptions::ALLOW_EXPLICIT
@@ -724,15 +724,14 @@ impl Sema<'_, '_> {
                 IcsOptions::NONE
             };
             let key = (i as u8, to, opts.bits());
-            let x = match b.memo.get(&key) {
-                Some(&x) => x,
-                None => {
-                    let a = if i == 0 { b.set.object } else { b.set.args.get(i - 1).copied() };
-                    let Some(a) = a else { break };
-                    let x = self.try_implicit_conversion(&a, to, opts);
-                    b.memo.insert(key, x);
-                    x
-                }
+            let x = if let Some(&x) = b.memo.get(&key) {
+                x
+            } else {
+                let a = if i == 0 { b.set.object } else { b.set.args.get(i - 1).copied() };
+                let Some(a) = a else { break };
+                let x = self.try_implicit_conversion(&a, to, opts);
+                b.memo.insert(key, x);
+                x
             };
             let bad = x.is_bad();
             b.set.ics.push(x);
@@ -770,14 +769,14 @@ impl Sema<'_, '_> {
                     }
                 }
                 Ics::Ambiguous { .. } => {
-                    let a = self.arg_info(e);
-                    let opts =
+                    let info = self.arg_info(e);
+                    let flags =
                         if i == 0 && set.builtin_op == Some(OO::Exclaim) || cand_ctx_bool(set, i) {
                             IcsOptions::ALLOW_EXPLICIT
                         } else {
                             IcsOptions::NONE
                         };
-                    let err = self.ambiguous_conversion(&a, cand.builtin[i], opts);
+                    let err = self.ambiguous_conversion(&info, cand.builtin[i], flags);
                     let msg = err.diag_at(self, set.loc);
                     self.emit(msg);
                     return None;
@@ -810,8 +809,11 @@ impl Sema<'_, '_> {
                     let a = if i == 0 { set.object } else { set.args.get(i - 1).copied() };
                     let Some(a) = a else { continue };
                     let to = cand.builtin[i];
-                    let opts =
-                        if cand_ctx_bool(set, i) { IcsOptions::ALLOW_EXPLICIT } else { IcsOptions::NONE };
+                    let opts = if cand_ctx_bool(set, i) {
+                        IcsOptions::ALLOW_EXPLICIT
+                    } else {
+                        IcsOptions::NONE
+                    };
                     let m = self
                         .diag(kiln_diag::DiagId::note_ambiguous_type_conversion, set.loc)
                         .arg(self.ty_arg(a.ty))

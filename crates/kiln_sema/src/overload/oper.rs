@@ -407,7 +407,14 @@ impl Sema<'_, '_> {
                     let c = set.cand(b);
                     let (f, found) = (c.func(), c.found);
                     self.end_set(set);
-                    return OperResult::Done(self.call_surrogate(a0, f, found, &args[1..], loc, end));
+                    return OperResult::Done(self.call_surrogate(
+                        a0,
+                        f,
+                        found,
+                        &args[1..],
+                        loc,
+                        end,
+                    ));
                 }
                 if reversible && !set.cand(b).rewrite.is_reversed() {
                     self.diagnose_reversed_ambiguity(&set, b, op, spelling, &types, loc);
@@ -927,7 +934,8 @@ impl Sema<'_, '_> {
         let fop = self.ast.decls.get(f).name().as_operator().unwrap_or(op);
         if rewrite != Rewrite::None && fop == OO::EqualEqual {
             let ty = self.ast.decls.get(f).ty().unwrap_or(QualType::ERROR);
-            let ret = self.ast.types.proto(ty).map_or(QualType::ERROR, kiln_ast::types::FuncProto::ret);
+            let ret =
+                self.ast.types.proto(ty).map_or(QualType::ERROR, kiln_ast::types::FuncProto::ret);
             if !self.ast.types.same_unqualified(ret, QualType::BOOL) {
                 let ext =
                     self.ast.types.is_integral(ret) || crate::conv::is_unscoped_enum(self, ret);

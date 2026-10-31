@@ -217,7 +217,12 @@ impl Sema<'_, '_> {
 
     /// clang's ambiguity error for converting `a` to `to`, with a note
     /// per ambiguous candidate.
-    pub(crate) fn ambiguous_conversion(&mut self, a: &ArgInfo, to: QualType, opts: IcsOptions) -> ConvError {
+    pub(crate) fn ambiguous_conversion(
+        &mut self,
+        a: &ArgInfo,
+        to: QualType,
+        opts: IcsOptions,
+    ) -> ConvError {
         let mut err = if self.ast.types.is_reference(to) {
             ConvError::new(
                 DiagId::sema_ref_init_ambiguous,

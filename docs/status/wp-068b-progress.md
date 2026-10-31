@@ -43,8 +43,21 @@ Branch `wp/068b-operators`, worktree `kiln/.worktrees/wp-068b`.
   pre-existing "use '=' to turn" note and WP-082 defaulted comparisons).
 - libc++ probe: <type_traits> 24 errors (branch-before 27, main 36).
 
+- `->` chains (`overload/arrow.rs`): cycle detection, depth limit 256,
+  notes as clang. Surrogate call candidates (`surrogate.rs`).
+- `overload/alloc.rs`: class-scope `operator new`/`delete` lookup
+  ([expr.new]/12, [expr.delete]/9), usual deallocation selection, "no
+  suitable member" diag; member operator delete implicitly noexcept.
+- Oven: reference-returning class calls never use sret.
+- Conformance tests: over.ref, over.call.object, over.match.oper,
+  class.compare, over.built (incl. 144/121-note goldens), over.oper,
+  expr.new, expr.delete; AST goldens (xtask normalizer now handles
+  CXXOperatorCallExpr / CXXRewrittenBinaryOperator). Full conformance:
+  1154 pass / 0 fail / 12 xfail / 0 xpass.
+- Static operator() / [] with a prvalue object: materialized (as clang).
+
 ## Next
-1. cargo test; fix kiln_parse/tests/class.rs operator asserts; ci --quick.
-2. More builtin probes (++/--, =, compound, ->*, [] with class index).
-3. `->` chains, call-on-object surrogates; `alloc.rs`.
-4. Tests, xfail flips, bench, spec §10, type_traits probe.
+1. Clippy fixes (list in scratch clip.out), `cargo xtask ci --quick`.
+2. bench/overload/{arrow-chain,less-10k}.cpp (check `ps` for quiet host).
+3. spec/sema-overload.md §10 "Landed (WP-068b)" with divergences.
+4. type_traits probe; full `cargo xtask ci`; handback.

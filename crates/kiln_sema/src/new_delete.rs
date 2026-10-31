@@ -366,7 +366,8 @@ impl Sema<'_, '_> {
         let alloc = self.alloc_fns(elem, op, global, tid.loc);
         let place_args: Vec<ExprId> =
             placement.as_ref().map(|p| p.args.clone()).unwrap_or_default();
-        let Some((op_new, with_align)) = self.find_operator_new(&alloc.fns, &place_args, pass_align)
+        let Some((op_new, with_align)) =
+            self.find_operator_new(&alloc.fns, &place_args, pass_align)
         else {
             let ptr_like = place_args.len() == 1 && {
                 let t = self.ast.exprs.get(place_args[0]).ty();
@@ -915,7 +916,11 @@ impl Sema<'_, '_> {
     /// `global`): for a placement allocation function, the one with the
     /// same additional parameters; otherwise the usual deallocation
     /// function.
-    #[allow(clippy::too_many_arguments)]
+    #[allow(
+        clippy::too_many_arguments,
+        clippy::fn_params_excessive_bools,
+        reason = "the new-expression's forms, as clang's FindAllocationFunctions"
+    )]
     fn matching_operator_delete(
         &mut self,
         elem: QualType,

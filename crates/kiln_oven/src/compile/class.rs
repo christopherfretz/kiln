@@ -595,8 +595,7 @@ impl Compiler<'_> {
     ) -> u32 {
         // A call returning a reference (a glvalue) returns the referent's
         // address in a register, whatever the referent's type.
-        let is_sret =
-            self.o.types.is_aggregate(rty) && !self.node(e).value_category().is_glvalue();
+        let is_sret = self.o.types.is_aggregate(rty) && !self.node(e).value_category().is_glvalue();
         let base = self.next;
         let first = u32::from(is_sret) + u32::from(this.is_some());
         let window = args.len() as u32 + first;
