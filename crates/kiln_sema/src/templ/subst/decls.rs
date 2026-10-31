@@ -231,7 +231,7 @@ impl Substituter<'_, '_, '_> {
     }
 
     /// The parameters of pattern function `f` with substituted types.
-    fn param_infos(&mut self, f: DeclId) -> SubstResult<Vec<ParamInfo>> {
+    pub(crate) fn param_infos(&mut self, f: DeclId) -> SubstResult<Vec<ParamInfo>> {
         let params: Vec<DeclId> = self
             .sema
             .ast
@@ -500,7 +500,7 @@ impl Substituter<'_, '_, '_> {
 
     /// Drops the mapping of pattern function `pat`'s parameters
     /// ([`Self::param_infos`]).
-    fn forget_pattern_params(&mut self, pat: DeclId) {
+    pub(crate) fn forget_pattern_params(&mut self, pat: DeclId) {
         let pp: Vec<DeclId> = self
             .sema
             .ast
@@ -514,7 +514,7 @@ impl Substituter<'_, '_, '_> {
     }
 
     /// The exception specification of function type `p`.
-    fn exc_spec(
+    pub(crate) fn exc_spec(
         &mut self,
         p: &kiln_ast::types::FuncProto,
         loc: Loc,
@@ -533,7 +533,7 @@ impl Substituter<'_, '_, '_> {
     }
 
     /// The default arguments of pattern function `pat` on `f`.
-    fn default_args(&mut self, pat: DeclId, f: DeclId) {
+    pub(crate) fn default_args(&mut self, pat: DeclId, f: DeclId) {
         let pp: Vec<DeclId> = self
             .sema
             .ast

@@ -435,7 +435,7 @@ impl Sema<'_, '_> {
             let explicit = j == 0 && top.is_some_and(|t| t.0 == l);
             let star = explicit && top.is_some_and(|t| t.1);
             let ty = if star {
-                self.ast.types.pointee(this_ty).unwrap_or(QualType::ERROR)
+                self.pointee_sugared(this_ty).unwrap_or(QualType::ERROR)
             } else {
                 this_ty
             };
@@ -678,7 +678,12 @@ impl Sema<'_, '_> {
                     let t = self.current_this().unwrap_or(QualType::ERROR);
                     let this = self.builder().this_expr(t, c.implicit, at);
                     let obj = self.builtin_unary(UnaryOp::Deref, this, at);
-                    self.init_subobject_from(ty, obj, InitEntity::Field(field), at).ok()
+                    if self.is_dependent_type(ty) {
+                        // Initialized when instantiated.
+                        Some(obj)
+                    } else {
+                        self.init_subobject_from(ty, obj, InitEntity::Field(field), at).ok()
+                    }
                 }
                 _ if c.init => c.var.and_then(|v| self.ast.decls.var(v).and_then(|x| x.init)),
                 _ => c.var.and_then(|v| {

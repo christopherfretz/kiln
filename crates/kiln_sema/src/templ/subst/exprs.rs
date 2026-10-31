@@ -30,6 +30,9 @@ impl Substituter<'_, '_, '_> {
     /// Substitutes into `e`.
     pub fn expr(&mut self, e: ExprId) -> SubstResult<ExprId> {
         if !self.needs_rebuild(e) {
+            if self.lambda_bodies > 0 {
+                self.note_shared_this(e);
+            }
             return Ok(e);
         }
         self.check_stack(|s| s.sema.ast.exprs.get(e).loc())?;
@@ -403,7 +406,7 @@ impl Substituter<'_, '_, '_> {
             | ExprKind::FunctionParmPackExpr => self.unimplemented("pack expansion", loc),
             ExprKind::ConceptSpecializationExpr => self.concept_id_expr(e, loc),
             ExprKind::RequiresExpr => self.requires_expr(e, loc),
-            ExprKind::LambdaExpr => self.unimplemented("lambda expressions in templates", loc),
+            ExprKind::LambdaExpr => self.lambda_expr(e, loc),
             ExprKind::CXXConstructExpr => self.construct_expr(e, loc),
             ExprKind::CXXTemporaryObjectExpr => {
                 // `T(a, b)` / `T()` / `T{...}` ([expr.type.conv]/2): rebuilt
@@ -437,7 +440,10 @@ impl Substituter<'_, '_, '_> {
 
     fn this_expr(&mut self, implicit: bool, loc: Loc) -> ExprId {
         match self.sema.current_this() {
-            Some(t) => self.sema.builder().this_expr(t, implicit, loc),
+            Some(t) => {
+                self.sema.note_this_use(loc);
+                self.sema.builder().this_expr(t, implicit, loc)
+            }
             None => self.sema.act_on_this(loc),
         }
     }
