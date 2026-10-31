@@ -123,6 +123,16 @@ pub(crate) struct Cg<'a> {
     pub c1_done: FxHashSet<DeclId>,
     /// Structors whose base variant body was generated.
     pub sdone: FxHashSet<DeclId>,
+    /// `_ZTV` globals by class (WP-080).
+    pub vtables: FxHashMap<DeclId, GlobalId>,
+    /// Vtable group layouts by class.
+    pub vt_layouts: FxHashMap<DeclId, std::rc::Rc<kiln_ast::class::VTableLayout>>,
+    /// Vtables referenced but not yet defined (clang `DeferredVTables`).
+    pub deferred_vtables: Vec<DeclId>,
+    /// Vtables already defined.
+    pub vt_emitted: FxHashSet<DeclId>,
+    /// `_ZTI` definitions by mangled name.
+    pub rtti_globals: FxHashMap<String, GlobalId>,
     /// Bodies using placeholders, lowered once the module is complete.
     pub pending: Vec<(FuncId, DeclId, crate::fir::Fir)>,
     /// Per-function state.
@@ -170,6 +180,11 @@ impl<'a> Cg<'a> {
             c1_decl: FxHashSet::default(),
             c1_done: FxHashSet::default(),
             sdone: FxHashSet::default(),
+            vtables: FxHashMap::default(),
+            vt_layouts: FxHashMap::default(),
+            deferred_vtables: Vec::new(),
+            vt_emitted: FxHashSet::default(),
+            rtti_globals: FxHashMap::default(),
             pending: Vec::new(),
             f: Fx::empty(),
         }
@@ -185,6 +200,7 @@ impl<'a> Cg<'a> {
     pub fn run(mut self) -> R<Module> {
         let tu = self.ast.tu;
         self.emit_members(tu)?;
+        self.emit_key_function_vtables()?;
         self.emit_deferred()?;
         self.resolve_placeholders()?;
         self.trailer();
@@ -296,13 +312,16 @@ impl<'a> Cg<'a> {
 
     /// clang `EmitDeferred`.
     fn emit_deferred(&mut self) -> R<()> {
+        if !self.deferred_vtables.is_empty() {
+            self.emit_deferred_vtables()?;
+        }
         let cur = std::mem::take(&mut self.to_emit);
         for def in cur {
             let d = match def {
                 Def::Decl(d) => d,
                 Def::Structor(d, v) => {
                     self.emit_structor_def(d, v)?;
-                    if !self.to_emit.is_empty() {
+                    if !self.to_emit.is_empty() || !self.deferred_vtables.is_empty() {
                         self.emit_deferred()?;
                     }
                     continue;
@@ -324,7 +343,7 @@ impl<'a> Cg<'a> {
                     self.emit_fn_def(d)?;
                 }
             }
-            if !self.to_emit.is_empty() {
+            if !self.to_emit.is_empty() || !self.deferred_vtables.is_empty() {
                 self.emit_deferred()?;
             }
         }

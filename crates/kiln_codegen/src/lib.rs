@@ -28,6 +28,7 @@ mod memptr;
 mod module;
 mod new_delete;
 mod stmt;
+mod vtable;
 
 use kiln_abi::Target;
 use kiln_ast::Ast;
