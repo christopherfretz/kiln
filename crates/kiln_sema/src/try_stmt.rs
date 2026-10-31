@@ -5,9 +5,9 @@
 
 use kiln_ast::decl::{Access, DeclFlags, DeclKind, InitStyle, VarSpec};
 use kiln_ast::expr::{ExprKind, ValueCategory};
-use kiln_ast::names::DeclName;
+use kiln_ast::names::{DeclName, OverloadedOperator};
 use kiln_ast::stmt::StmtKind;
-use kiln_ast::types::TypeView;
+use kiln_ast::types::{ExcSpec, TypeView};
 use kiln_ast::{DeclHead, DeclId, ExprId, QualType, StmtId};
 use kiln_diag::DiagId;
 use kiln_source::Loc;
@@ -68,7 +68,8 @@ impl Sema<'_, '_> {
             } else {
                 (ty, DiagId::sema_catch_incomplete)
             };
-            let void_ptr = id == DiagId::sema_catch_incomplete_ptr && self.ast.types.is_void(checked);
+            let void_ptr =
+                id == DiagId::sema_catch_incomplete_ptr && self.ast.types.is_void(checked);
             if !void_ptr
                 && !self.ast.types.is_function(checked)
                 && !self.require_complete(checked, loc)
@@ -221,7 +222,9 @@ impl Sema<'_, '_> {
         };
         let ty = self.ast.decls.get(v).ty().unwrap_or(QualType::ERROR);
         let pty = self.ast.decls.get(prev).ty().unwrap_or(QualType::ERROR);
-        let note = self.diag(DiagId::note_previous_exception_handler, at(self, prev)).arg(self.ty_arg(pty));
+        let note = self
+            .diag(DiagId::note_previous_exception_handler, at(self, prev))
+            .arg(self.ty_arg(pty));
         let msg = self
             .diag(DiagId::sema_caught_by_earlier_handler, at(self, v))
             .arg(self.ty_arg(ty))
@@ -271,7 +274,8 @@ impl Sema<'_, '_> {
         {
             return;
         }
-        let handlers: Vec<StmtId> = self.ast.lists.iter(self.ast.stmts.try_handlers(body)).collect();
+        let handlers: Vec<StmtId> =
+            self.ast.lists.iter(self.ast.stmts.try_handlers(body)).collect();
         for h in handlers {
             let mut todo = vec![self.ast.stmts.catch_block(h)];
             while let Some(s) = todo.pop() {
@@ -283,5 +287,157 @@ impl Sema<'_, '_> {
                 todo.extend(kids);
             }
         }
+    }
+}
+
+impl Sema<'_, '_> {
+    /// clang's `checkThrowInNonThrowingFunc` (-Wexceptions): each
+    /// throw-expression in the body of a function with a non-throwing
+    /// exception specification ([except.spec]/5) that no enclosing handler
+    /// of the function catches ([except.handle]/3) — `std::terminate` is
+    /// called ([except.terminate]). A structural approximation of clang's
+    /// CFG walk: every throw counts as reachable.
+    pub(crate) fn check_throw_in_nothrow(&mut self, f: DeclId, body: StmtId) {
+        let t = &self.ast.types;
+        let ty = self.ast.decls.get(f).ty().unwrap_or(QualType::ERROR);
+        let Some(spec) = t.proto(ty).map(|p| t.exc_spec(p)) else { return };
+        if !spec.is_nothrow() {
+            return;
+        }
+        let mut found = Vec::new();
+        let mut handlers = Vec::new();
+        self.escaping_throws(body, &mut handlers, &mut found);
+        if found.is_empty() {
+            return;
+        }
+        // clang visits the CFG blocks, built back to front.
+        found.sort_by_key(|&e| std::cmp::Reverse(self.ast.exprs.get(e).loc()));
+        let fname = self.decl_name(f);
+        let floc = self.ast.decls.get(f).loc();
+        let dealloc = self.ast.decls.get(f).name().as_operator().is_some_and(|o| {
+            matches!(o, OverloadedOperator::Delete | OverloadedOperator::ArrayDelete)
+        });
+        let dtor = self.ast.decls.get(f).kind() == DeclKind::CXXDestructor;
+        // `noexcept`/`throw()` written vs. the implicit specification of a
+        // destructor or deallocation function ([except.spec]/8, /9).
+        let implicit = matches!(spec, ExcSpec::Nothrow);
+        for e in found {
+            let loc = self.ast.exprs.get(e).loc();
+            let note = if dtor || dealloc {
+                self.diag(DiagId::note_throw_in_dtor, floc)
+                    .arg(u8::from(dealloc))
+                    .arg(u8::from(implicit))
+            } else {
+                self.diag(DiagId::note_throw_in_function, floc)
+            };
+            let msg = self
+                .diag(DiagId::sema_throw_in_nothrow_func, loc)
+                .arg(fname.clone())
+                .with_note(note);
+            self.emit(msg);
+        }
+    }
+
+    /// The throw-expressions in `s` not caught by `handlers` (the handler
+    /// lists of the enclosing try-blocks, innermost last).
+    fn escaping_throws(&self, s: StmtId, handlers: &mut Vec<StmtId>, out: &mut Vec<ExprId>) {
+        let st = &self.ast.stmts;
+        let n = st.get(s);
+        let mut exprs: Vec<ExprId> = Vec::new();
+        let mut subs: Vec<StmtId> = Vec::new();
+        match n.kind() {
+            StmtKind::CXXTryStmt => {
+                handlers.push(s);
+                self.escaping_throws(st.try_block(s), handlers, out);
+                handlers.pop();
+                for h in self.ast.lists.iter::<StmtId>(st.try_handlers(s)) {
+                    self.escaping_throws(st.catch_block(h), handlers, out);
+                }
+                return;
+            }
+            StmtKind::ExprStmt => exprs.push(st.expr_stmt_expr(s)),
+            StmtKind::ReturnStmt => exprs.extend(st.return_value(s)),
+            StmtKind::DeclStmt => {
+                for d in self.ast.lists.iter::<DeclId>(st.decl_stmt_decls(s)) {
+                    exprs.extend(self.ast.decls.var(d).and_then(|v| v.init));
+                }
+            }
+            StmtKind::IfStmt => {
+                let d = *st.if_data(s);
+                subs.extend(d.init);
+                exprs.extend(d.cond_var.and_then(|v| self.ast.decls.var(v).and_then(|x| x.init)));
+                exprs.extend(d.cond);
+            }
+            StmtKind::SwitchStmt => {
+                let d = *st.switch_data(s);
+                subs.extend(d.init);
+                exprs.extend(d.cond_var.and_then(|v| self.ast.decls.var(v).and_then(|x| x.init)));
+                exprs.push(d.cond);
+            }
+            StmtKind::WhileStmt | StmtKind::ForStmt | StmtKind::DoStmt => {
+                let d = *st.loop_data(s);
+                subs.extend(d.init);
+                exprs.extend(d.cond_var.and_then(|v| self.ast.decls.var(v).and_then(|x| x.init)));
+                exprs.extend(d.cond);
+                exprs.extend(d.inc);
+            }
+            _ => {}
+        }
+        subs.extend(self.children(s));
+        for e in exprs {
+            self.escaping_throws_in_expr(e, handlers, out);
+        }
+        for c in subs {
+            self.escaping_throws(c, handlers, out);
+        }
+    }
+
+    fn escaping_throws_in_expr(&self, e: ExprId, handlers: &[StmtId], out: &mut Vec<ExprId>) {
+        let mut stack = vec![e];
+        while let Some(x) = stack.pop() {
+            let k = self.ast.exprs.get(x).kind();
+            if k == ExprKind::LambdaExpr {
+                continue;
+            }
+            if k == ExprKind::CXXThrowExpr && !self.throw_caught(x, handlers) {
+                out.push(x);
+            }
+            stack.extend(self.ast.exprs.children(x, &self.ast.lists));
+        }
+    }
+
+    /// Whether some handler of the enclosing try-blocks catches the throw
+    /// `e` (clang `isThrowCaught`: a catch-all, the same type, or a base
+    /// class, through one reference or pointer level).
+    fn throw_caught(&self, e: ExprId, tries: &[StmtId]) -> bool {
+        let t = &self.ast.types;
+        let thrown = self.ast.exprs.throw_operand(e).map(|o| self.ast.exprs.get(o).ty());
+        for &tr in tries.iter().rev() {
+            for h in self.ast.lists.iter::<StmtId>(self.ast.stmts.try_handlers(tr)) {
+                let Some(v) = self.ast.stmts.catch_var(h) else { return true };
+                let Some(thrown) = thrown else { continue };
+                let mut caught = t.canonical(self.ast.decls.get(v).ty().unwrap_or(QualType::ERROR));
+                if t.is_reference(caught) {
+                    caught = t.pointee(caught).unwrap_or(QualType::ERROR);
+                }
+                let mut th = t.canonical(thrown);
+                if t.is_pointer(th) && t.is_pointer(caught) {
+                    th = t.pointee(th).unwrap_or(QualType::ERROR);
+                    caught = t.pointee(caught).unwrap_or(QualType::ERROR);
+                }
+                let (th, caught) =
+                    (t.canonical(th).without_quals(), t.canonical(caught).without_quals());
+                if th == caught {
+                    return true;
+                }
+                if let (Some(d), Some(b)) = (t.as_record(th), t.as_record(caught))
+                    && let Some(def) = self.ast.definition(d)
+                    && !matches!(find_base(self, def, b), BaseSearch::NotDerived)
+                {
+                    return true;
+                }
+            }
+        }
+        false
     }
 }

@@ -556,6 +556,10 @@ diag_ids! {
     sema_catch_incomplete_ref = Error (1) "cannot catch reference to incomplete type {0}";
     sema_return_in_ctor_handler = Error (0) "return in the catch of a function try block of a constructor is illegal";
     parse_expected_catch = Error (0) "expected catch";
+    sema_throw_in_nothrow_func = Warning [Exceptions] (1) "'{0}' has a non-throwing exception specification but can still throw";
+    note_throw_in_function = Note (0) "function declared non-throwing here";
+    note_throw_in_dtor = Note (2) "{0:destructor|deallocator} has a {1:non-throwing|implicit non-throwing} exception specification";
+    sema_falloff_noreturn = Warning [InvalidNoreturn] (0) "function declared 'noreturn' should not return";
     note_parameter_named_here = Note (1) "passing argument to parameter '{0}' here";
     note_parameter_here = Note (0) "passing argument to parameter here";
     parse_init_list_bin_op = Error (2) "initializer list cannot be used on the {0:left|right} hand side of operator '{1}'";

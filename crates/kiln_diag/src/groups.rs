@@ -163,6 +163,7 @@ diag_groups! {
     DanglingField = "dangling-field" [];
     // ----- WP-100 (exceptions)
     Exceptions = "exceptions" [];
+    InvalidNoreturn = "invalid-noreturn" [];
 }
 
 impl Group {

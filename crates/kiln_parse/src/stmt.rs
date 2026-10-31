@@ -5,7 +5,7 @@ use kiln_ast::stmt::IfKind;
 use kiln_ast::{DeclId, ExprId, StmtId};
 use kiln_diag::DiagId;
 use kiln_lex::Punct;
-use kiln_sema::{Declarator, DeclaratorContext, ScopeKind};
+use kiln_sema::{Chunk, Declarator, DeclaratorContext, ScopeKind};
 use kiln_source::Loc;
 
 use crate::keywords::Kw;
@@ -381,6 +381,19 @@ impl Parser<'_, '_> {
             let ds = self.parse_decl_specifiers(ctx);
             let mut d = Declarator::new(ctx, self.loc());
             self.parse_declarator(&mut d);
+            if d.name.is_none() {
+                // An abstract declarator's identifier location is where
+                // the name would be (clang `ParseDirectDeclarator`): the
+                // first array bound, else the token after the declarator.
+                d.loc = d
+                    .chunks
+                    .iter()
+                    .find_map(|c| match c {
+                        Chunk::Array { loc, .. } => Some(*loc),
+                        _ => None,
+                    })
+                    .unwrap_or_else(|| self.loc());
+            }
             let base = self.s.type_from_declspec_at(&ds, d.name_loc());
             self.s.act_on_exception_decl(&ds, base, &d)
         };

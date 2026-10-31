@@ -894,6 +894,8 @@ impl Scan<'_> {
                     self.expr(v, false);
                 }
             }
+            // Only the compound statement is evaluated (see `stmt`).
+            StmtKind::CXXTryStmt => self.stmt(ast.stmts.try_block(s)),
             _ => {}
         }
     }
@@ -1414,6 +1416,12 @@ impl Compiler<'_> {
             // A label is evaluated by evaluating its statement (clang
             // charges a step for each: `EvaluateStmt` recurses).
             StmtKind::LabelStmt => self.stmt(StmtId::new(n.b())),
+            // [expr.const]/5.25 (C++20, P1002): a try-block is evaluated by
+            // evaluating its compound statement; no exception can be
+            // thrown during constant evaluation (a throw-expression is not
+            // a core constant expression), so no handler is ever entered
+            // (clang `EvaluateStmt`, one step for the try itself).
+            StmtKind::CXXTryStmt => self.stmt(ast.stmts.try_block(s)),
             // The payload of an attributed statement is not yet defined by
             // kiln_ast (spec/ast.md §6; no builder exists).
             StmtKind::AttributedStmt => {

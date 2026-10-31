@@ -16,10 +16,19 @@ Branch `wp/100-codegen-eh`, worktree `kiln/.worktrees/wp-100`.
   move of thrown locals ([class.copy.elision]/3), falloff analysis for
   try/throw, return in ctor function-try-block handler.
 - xtask clang-ast printer: CXXTryStmt/CXXCatchStmt kept; unnamed VarDecl.
-- Test: `tests/conformance/ast/except.handle/try-catch.cpp` (golden exact).
+- -Wexceptions throw in a non-throwing function (+ dtor/deallocator
+  note), -Winvalid-noreturn falloff; analysis warnings skipped in
+  templates (clang skips dependent contexts).
+- Tests: `ast/except.handle/try-catch.cpp` (golden exact),
+  `except.handle/{handler-order,catch-decl-invalid,catch-all-last,
+  ctor-handler-return,return-type-try}.cpp`,
+  `except.pre/{try-expected-catch,try-no-exceptions}.cpp`,
+  `except.terminate/throw-in-noexcept.cpp`, `dcl.attr.noreturn/falloff.cpp`
+  (all verified against clang++-19).
+- Step 2 started: Oven evaluates a try-block's compound statement.
 
 ## Next
-- Diag conformance tests in `tests/conformance/except.handle`, `except.pre`.
+- `cargo xtask ci --quick` on the above (was running at 23:55).
 - Step 2: Oven `try` in constexpr functions.
 - Step 3: codegen EH (`kiln_codegen/src/eh.rs`, invoke/landingpad/resume).
 - Step 4: run tests, spec updates, full CI.
