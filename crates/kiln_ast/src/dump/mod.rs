@@ -869,6 +869,10 @@ impl<'a, W: io::Write> Dumper<'a, W> {
     // declarations
     // -------------------------------------------------------------------
 
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one line per decl kind; the cycle cut and friend words sit beside it"
+    )]
     fn decl_line(&mut self, d: DeclId) {
         let ast = self.ast;
         let decls = &ast.decls;
@@ -1296,7 +1300,7 @@ impl<'a, W: io::Write> Dumper<'a, W> {
         // (its tree prints at its lexical position). A template first
         // declared by a friend declaration lists them under its first
         // declaration outside a class (as clang's JSON dump does).
-        if self.spec_owner(d) != Some(d) {
+        if self.spec_owner(d) != d {
             return;
         }
         for &s in ast.templates.specs_of(ast.first(d)) {
@@ -1313,17 +1317,17 @@ impl<'a, W: io::Write> Dumper<'a, W> {
     /// The declaration of template `d` its specializations are listed
     /// under: the first one not introduced by a friend declaration, else
     /// the first.
-    fn spec_owner(&self, d: DeclId) -> Option<DeclId> {
+    fn spec_owner(&self, d: DeclId) -> DeclId {
         let ast = self.ast;
         let first = ast.first(d);
-        let Some(p) = ast.template_info(first).and_then(|i| i.pattern) else { return Some(d) };
+        let Some(p) = ast.template_info(first).and_then(|i| i.pattern) else { return d };
         let mut redecls: Vec<DeclId> = ast.redecls_of(p).collect();
         redecls.reverse();
         let owner = redecls
             .iter()
             .filter_map(|&r| ast.described_template(r))
             .find(|&t| ast.decls.get(t).misc().friend() == FriendKind::None);
-        Some(owner.unwrap_or(first))
+        owner.unwrap_or(first)
     }
 
     /// A template parameter's children: a template template parameter's

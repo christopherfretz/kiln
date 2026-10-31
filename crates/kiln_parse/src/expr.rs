@@ -1012,37 +1012,40 @@ impl Parser<'_, '_> {
             };
         }
         if self.ident().is_some() || self.at(Punct::ColonColon) {
-            if let Some((end, NameClass::Type(..), name)) = self.scan_name(self.pos()) {
-                // An unqualified type name not followed by `(` or `{` is
-                // not looked at as a type (clang only annotates it before
-                // those), so the id-expression names a type.
-                if end == self.pos() + 1
-                    && !matches!(
-                        Self::punct_of(self.tok_at(end)),
-                        Some(Punct::LParen | Punct::LBrace)
-                    )
-                {
-                    let text = self.s.ast.symbols().as_str(name).to_owned();
-                    let d = self.s.diag(DiagId::sema_unexpected_typedef_ident, loc).arg(text);
-                    self.emit(d);
-                    self.bump();
-                    return Some(self.s.act_on_error_expr(&[], loc));
-                }
-                return self.parse_functional_cast();
-            }
-            // A class template's injected-class-name used as a type
-            // ([temp.local]/1): `X(args)` / `X{args}` in its definition.
-            if let Some((end, NameClass::TypeTemplate(d), _)) = self.scan_name(self.pos())
-                && end == self.pos() + 1
-                && matches!(Self::punct_of(self.tok_at(end)), Some(Punct::LParen | Punct::LBrace))
-                && self.s.names_injected_class(d)
-            {
-                return self.parse_functional_cast();
-            }
-            return self.parse_id_expression_rest();
+            return self.parse_name_primary(loc);
         }
         self.error_here(DiagId::parse_expected_expression);
         None
+    }
+
+    /// A primary expression starting with a name or `::`: a functional
+    /// cast of a type name, or an id-expression.
+    fn parse_name_primary(&mut self, loc: Loc) -> PExpr {
+        if let Some((end, NameClass::Type(..), name)) = self.scan_name(self.pos()) {
+            // An unqualified type name not followed by `(` or `{` is
+            // not looked at as a type (clang only annotates it before
+            // those), so the id-expression names a type.
+            if end == self.pos() + 1
+                && !matches!(Self::punct_of(self.tok_at(end)), Some(Punct::LParen | Punct::LBrace))
+            {
+                let text = self.s.ast.symbols().as_str(name).to_owned();
+                let d = self.s.diag(DiagId::sema_unexpected_typedef_ident, loc).arg(text);
+                self.emit(d);
+                self.bump();
+                return Some(self.s.act_on_error_expr(&[], loc));
+            }
+            return self.parse_functional_cast();
+        }
+        // A class template's injected-class-name used as a type
+        // ([temp.local]/1): `X(args)` / `X{args}` in its definition.
+        if let Some((end, NameClass::TypeTemplate(d), _)) = self.scan_name(self.pos())
+            && end == self.pos() + 1
+            && matches!(Self::punct_of(self.tok_at(end)), Some(Punct::LParen | Punct::LBrace))
+            && self.s.names_injected_class(d)
+        {
+            return self.parse_functional_cast();
+        }
+        self.parse_id_expression_rest()
     }
 
     /// A (possibly qualified) id-expression that does not name a type

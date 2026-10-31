@@ -1655,6 +1655,38 @@ impl Parser<'_, '_> {
         }
     }
 
+    /// The initializer of declarator `d` (declared as `v`) and its
+    /// semantic action. `Err` when the declaration cannot continue.
+    fn parse_declarator_initializer(
+        &mut self,
+        d: &Declarator,
+        v: Option<DeclId>,
+    ) -> Result<(), ()> {
+        // The initializer of a qualified declarator-id is in the scope of
+        // its qualifier ([basic.scope.class]/1).
+        let entered = match (v, d.qualifier) {
+            (Some(v), Some(_)) => self.s.act_on_enter_decl_initializer(v),
+            _ => 0,
+        };
+        let init = self.parse_initializer(d.init_style, d.is_function_declarator());
+        self.s.act_on_exit_declarator_scope(entered);
+        match init {
+            Ok(init) => {
+                match (v, init) {
+                    (Some(v), Some(i)) => self.s.act_on_init(v, i),
+                    (Some(v), None) => self.s.act_on_uninit(v),
+                    _ => {}
+                }
+                Ok(())
+            }
+            // A malformed braced-init-list without `=` was skipped
+            // through its `}` (clang's `ParseBraceInitializer`); the
+            // declaration continues.
+            Err(()) if d.init_style == Some(InitStyle::List) => Ok(()),
+            Err(()) => Err(()),
+        }
+    }
+
     /// simple-declaration or function-definition ([dcl.pre], [dcl.fct.def]):
     /// returns the declarations made (including a tag the decl-specifiers
     /// declare), for a declaration statement.
@@ -1742,29 +1774,10 @@ impl Parser<'_, '_> {
             if let Some(v) = v {
                 self.s.act_on_group_declarator(&mut group, v);
             }
-            // The initializer of a qualified declarator-id is in the
-            // scope of its qualifier ([basic.scope.class]/1).
-            let entered = match (v, d.qualifier) {
-                (Some(v), Some(_)) => self.s.act_on_enter_decl_initializer(v),
-                _ => 0,
-            };
-            let init = self.parse_initializer(d.init_style, d.is_function_declarator());
-            self.s.act_on_exit_declarator_scope(entered);
-            match init {
-                Ok(init) => match (v, init) {
-                    (Some(v), Some(i)) => self.s.act_on_init(v, i),
-                    (Some(v), None) => self.s.act_on_uninit(v),
-                    _ => {}
-                },
-                // A malformed braced-init-list without `=` was skipped
-                // through its `}` (clang's `ParseBraceInitializer`); the
-                // declaration continues.
-                Err(()) if d.init_style == Some(InitStyle::List) => {}
-                Err(()) => {
-                    decls.extend(v);
-                    self.skip_to_semi();
-                    return decls;
-                }
+            if self.parse_declarator_initializer(&d, v).is_err() {
+                decls.extend(v);
+                self.skip_to_semi();
+                return decls;
             }
             decls.extend(v);
             if self.eat(Punct::Comma).is_none() {
