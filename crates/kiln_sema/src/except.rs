@@ -289,8 +289,9 @@ impl Sema<'_, '_> {
     /// pointer to) an incomplete type other than cv `void`
     /// ([expr.throw]/2, clang's `CheckCXXThrowOperand`). The operand is
     /// copy-initialized into it after the implicit move
-    /// ([class.copy.elision]/3; kiln has no try-blocks or lambdas yet, so
-    /// every local is in scope). `loc` is the `throw` keyword.
+    /// ([class.copy.elision]/3) when the variable's scope does not extend
+    /// past the innermost try-block (`thrown_var_in_scope`, WP-100).
+    /// `loc` is the `throw` keyword.
     pub fn act_on_throw(&mut self, operand: Option<ExprId>, loc: Loc) -> ExprId {
         if !self.exceptions {
             self.error(DiagId::sema_throw_disabled, loc);
@@ -327,7 +328,7 @@ impl Sema<'_, '_> {
             self.emit(self.incomplete_note(msg, checked));
             return self.recover(QualType::VOID, &[e], loc);
         }
-        let moved = self.implicit_move(e);
+        let moved = if self.thrown_var_in_scope(e) { self.implicit_move(e) } else { e };
         let init = self.convert_for_init(moved, obj, ConvCtx::Initialization);
         if self.is_err_expr(init) {
             return self.recover(QualType::VOID, &[init], loc);

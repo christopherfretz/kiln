@@ -321,6 +321,18 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                 push(l.body, todo);
             }
             StmtKind::DoStmt => push(stmts.loop_data(s).body, todo),
+            StmtKind::CXXTryStmt => {
+                push(Some(stmts.try_block(s)), todo);
+                for h in lists.iter::<StmtId>(stmts.try_handlers(s)) {
+                    push(Some(h), todo);
+                }
+            }
+            StmtKind::CXXCatchStmt => {
+                if let Some(v) = stmts.catch_var(s) {
+                    todo.push(Search::Decl(v));
+                }
+                push(Some(stmts.catch_block(s)), todo);
+            }
             _ => {}
         }
     }
@@ -709,6 +721,18 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                 expr(l.cond, kids);
             }
             StmtKind::ReturnStmt => expr(stmts.return_value(s), kids),
+            StmtKind::CXXTryStmt => {
+                stmt(Some(stmts.try_block(s)), kids);
+                for h in lists.iter::<StmtId>(stmts.try_handlers(s)) {
+                    stmt(Some(h), kids);
+                }
+            }
+            StmtKind::CXXCatchStmt => {
+                if let Some(v) = stmts.catch_var(s) {
+                    kids.push((Node::Decl(v), None));
+                }
+                stmt(Some(stmts.catch_block(s)), kids);
+            }
             _ => {}
         }
     }

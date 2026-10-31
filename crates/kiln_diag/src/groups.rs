@@ -161,6 +161,8 @@ diag_groups! {
     CallToPureVirtualFromCtorDtor = "call-to-pure-virtual-from-ctor-dtor" [];
     Dangling = "dangling" [DanglingField, ReturnStackAddress];
     DanglingField = "dangling-field" [];
+    // ----- WP-100 (exceptions)
+    Exceptions = "exceptions" [];
 }
 
 impl Group {

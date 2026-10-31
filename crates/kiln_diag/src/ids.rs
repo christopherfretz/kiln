@@ -546,6 +546,16 @@ diag_ids! {
     sema_throw_disabled = Error (0) "cannot use 'throw' with exceptions disabled";
     sema_throw_incomplete = Error (1) "cannot throw object of incomplete type {0}";
     sema_throw_incomplete_ptr = Error (1) "cannot throw pointer to object of incomplete type {0}";
+    sema_try_disabled = Error (0) "cannot use 'try' with exceptions disabled";
+    sema_early_catch_all = Error (0) "catch-all handler must come last";
+    sema_caught_by_earlier_handler = Warning [Exceptions] (1) "exception of type {0} will be caught by earlier handler";
+    note_previous_exception_handler = Note (1) "for type {0}";
+    sema_catch_rvalue_ref = Error (0) "cannot catch exceptions by rvalue reference";
+    sema_catch_incomplete = Error (1) "cannot catch incomplete type {0}";
+    sema_catch_incomplete_ptr = Error (1) "cannot catch pointer to incomplete type {0}";
+    sema_catch_incomplete_ref = Error (1) "cannot catch reference to incomplete type {0}";
+    sema_return_in_ctor_handler = Error (0) "return in the catch of a function try block of a constructor is illegal";
+    parse_expected_catch = Error (0) "expected catch";
     note_parameter_named_here = Note (1) "passing argument to parameter '{0}' here";
     note_parameter_here = Note (0) "passing argument to parameter here";
     parse_init_list_bin_op = Error (2) "initializer list cannot be used on the {0:left|right} hand side of operator '{1}'";

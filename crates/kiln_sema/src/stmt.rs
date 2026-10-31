@@ -812,7 +812,28 @@ impl Sema<'_, '_> {
             }
             StmtKind::ExprStmt => {
                 let e = self.ast.stmts.expr_stmt_expr(s);
-                if self.is_noreturn_call(e) { Falloff::Never } else { Falloff::Always }
+                if self.is_noreturn_call(e) || self.is_throw_stmt_expr(e) {
+                    Falloff::Never
+                } else {
+                    Falloff::Always
+                }
+            }
+            StmtKind::CXXTryStmt => {
+                // clang's CFG makes every handler a successor of the
+                // try-block's entry ([except.handle]).
+                let mut parts = vec![self.falls_off(self.ast.stmts.try_block(s))];
+                let handlers: Vec<StmtId> =
+                    self.ast.lists.iter(self.ast.stmts.try_handlers(s)).collect();
+                for h in handlers {
+                    parts.push(self.falls_off(self.ast.stmts.catch_block(h)));
+                }
+                if parts.iter().all(|&p| p == Falloff::Never) {
+                    Falloff::Never
+                } else if parts.iter().all(|&p| p == Falloff::Always) {
+                    Falloff::Always
+                } else {
+                    Falloff::Maybe
+                }
             }
             _ => Falloff::Always,
         }
@@ -848,7 +869,7 @@ impl Sema<'_, '_> {
         }
     }
 
-    fn children(&self, s: StmtId) -> Vec<StmtId> {
+    pub(crate) fn children(&self, s: StmtId) -> Vec<StmtId> {
         let st = &self.ast.stmts;
         let n = st.get(s);
         match n.kind() {
@@ -864,6 +885,10 @@ impl Sema<'_, '_> {
             StmtKind::CaseStmt => vec![st.case_data(s).sub],
             StmtKind::DefaultStmt => vec![st.default_sub(s)],
             StmtKind::LabelStmt => vec![StmtId::new(n.b())],
+            StmtKind::CXXTryStmt => std::iter::once(st.try_block(s))
+                .chain(self.ast.lists.iter::<StmtId>(st.try_handlers(s)))
+                .collect(),
+            StmtKind::CXXCatchStmt => vec![st.catch_block(s)],
             _ => Vec::new(),
         }
     }

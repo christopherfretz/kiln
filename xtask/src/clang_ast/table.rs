@@ -182,8 +182,8 @@ pub const TABLE: &[(&str, Disposition)] = &[
     ("IndirectGotoStmt", Unsupported(NOT_M2)),
     ("AttributedStmt", Unsupported("attributes are not in the M2 dump")),
     ("CXXForRangeStmt", Unsupported(NOT_M2)),
-    ("CXXTryStmt", Unsupported(NOT_M2)),
-    ("CXXCatchStmt", Unsupported(NOT_M2)),
+    ("CXXTryStmt", Keep),
+    ("CXXCatchStmt", Keep),
     ("GCCAsmStmt", Unsupported(NOT_M2)),
     ("CoreturnStmt", Unsupported(NOT_M2)),
     ("CoroutineBodyStmt", Unsupported(NOT_M2)),
@@ -423,7 +423,7 @@ fn specific_keys(kind: &str) -> Option<&'static [&'static str]> {
         "SwitchStmt" => &["hasInit", "hasVar"],
         "WhileStmt" => &["hasVar"],
         "CompoundStmt" | "DeclStmt" | "NullStmt" | "ReturnStmt" | "BreakStmt" | "ContinueStmt"
-        | "DefaultStmt" | "CaseStmt" | "DoStmt" | "ForStmt" => &[],
+        | "DefaultStmt" | "CaseStmt" | "DoStmt" | "ForStmt" | "CXXTryStmt" | "CXXCatchStmt" => &[],
         _ => return None,
     })
 }
@@ -583,6 +583,8 @@ pub const M2_KINDS: &[&str] = &[
     "WhileStmt",
     "DoStmt",
     "ForStmt",
+    "CXXTryStmt",
+    "CXXCatchStmt",
 ];
 
 /// Counts of table entries by disposition: (keep, drop, unsupported).

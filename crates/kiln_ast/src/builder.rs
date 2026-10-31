@@ -2495,6 +2495,24 @@ impl<'a> AstBuilder<'a> {
         )
     }
 
+    /// An `OpaqueValueExpr` of type `ty` with no source expression: the
+    /// exception object a handler's variable is copy-initialized from
+    /// ([except.handle]/15).
+    pub fn opaque_value_of(&mut self, ty: QualType, vc: ValueCategory, loc: Loc) -> ExprId {
+        self.push_expr(
+            ExprKind::OpaqueValueExpr,
+            vc,
+            ObjectKind::Ordinary,
+            ExprFlags::NONE,
+            ExprDeps::NONE,
+            0,
+            ty,
+            loc,
+            0,
+            0,
+        )
+    }
+
     /// Element-wise array copy ([class.copy.ctor]/14, [expr.prim.lambda.capture]/
     /// 10, structured bindings): `common` is the `OpaqueValueExpr` of the
     /// source array, `elem` the initializer of one element (indexed by an
@@ -2653,6 +2671,19 @@ impl<'a> AstBuilder<'a> {
     /// `goto label;` ([stmt.goto]); `a` = the `Label` declaration.
     pub fn goto_stmt(&mut self, label: DeclId, loc: Loc) -> StmtId {
         self.stmt(StmtKind::GotoStmt, 0, loc, label.raw(), 0)
+    }
+
+    /// A try-block ([except.pre]/1): `try compound-statement handler-seq`
+    /// (`a` = the compound statement, `b` = the `CXXCatchStmt` list).
+    pub fn try_stmt(&mut self, block: StmtId, handlers: &[StmtId], loc: Loc) -> StmtId {
+        let list = self.ast.lists.push(handlers);
+        self.stmt(StmtKind::CXXTryStmt, 0, loc, block.raw(), list.raw())
+    }
+
+    /// A handler `catch ( exception-declaration ) compound-statement`
+    /// ([except.handle]); `var` is `None` for `catch (...)`.
+    pub fn catch_stmt(&mut self, var: Option<DeclId>, block: StmtId, loc: Loc) -> StmtId {
+        self.stmt(StmtKind::CXXCatchStmt, 0, loc, var.map_or(0, RawId::raw), block.raw())
     }
 
     /// A `return` statement ([stmt.return]) with its NRVO candidate
