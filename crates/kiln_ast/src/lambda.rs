@@ -196,3 +196,71 @@ impl LambdaArena {
         row
     }
 }
+
+/// A member of a closure type that has no body of its own: evaluation and
+/// code generation synthesize it (clang `isLambdaStaticInvoker` and the
+/// conversion's `EmitLambdaToBlockPointerBody`/`EmitLambdaStaticInvokeBody`).
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum ClosureThunk {
+    /// The conversion function to pointer to function
+    /// ([expr.prim.lambda.closure]/8): returns `target`, the static invoker
+    /// or (for a static lambda) the call operator itself.
+    Conversion {
+        /// The function whose address is returned.
+        target: DeclId,
+    },
+    /// The static invoker `__invoke`: forwards its arguments to the call
+    /// operator `call_op` (whose body never uses `this`: the lambda has no
+    /// captures).
+    Invoker {
+        /// The call operator.
+        call_op: DeclId,
+    },
+}
+
+impl crate::Ast {
+    /// The lambda whose closure type is class `r`.
+    pub fn closure_lambda(&self, r: DeclId) -> Option<LambdaId> {
+        self.decls.record(self.first(r)).and_then(|x| x.lambda)
+    }
+
+    /// The static invoker `__invoke` of closure type `r` (the one implicit
+    /// static member function of a closure).
+    pub fn closure_invoker(&self, r: DeclId) -> Option<DeclId> {
+        let l = self.closure_lambda(r)?;
+        let call_op = self.exprs.lambdas.get(l).call_op;
+        self.members(self.first(r)).find(|&m| {
+            Some(m) != call_op
+                && self.decls.get(m).kind() == crate::decl::DeclKind::CXXMethod
+                && self.decls.get(m).flags().contains(crate::decl::DeclFlags::IMPLICIT)
+                && self
+                    .decls
+                    .function(m)
+                    .is_some_and(|f| f.spec.storage() == crate::decl::FnStorage::Static)
+        })
+    }
+
+    /// Whether function `d` is a body-less closure member, and which.
+    pub fn closure_thunk(&self, d: DeclId) -> Option<ClosureThunk> {
+        let decl = self.decls.get(d);
+        if !decl.flags().contains(crate::decl::DeclFlags::IMPLICIT) {
+            return None;
+        }
+        let r = decl.ctx()?;
+        let l = self.closure_lambda(r)?;
+        let call_op = self.exprs.lambdas.get(l).call_op?;
+        let invoker = self.closure_invoker(r);
+        match decl.kind() {
+            crate::decl::DeclKind::CXXConversion => {
+                let target = invoker.unwrap_or(call_op);
+                Some(ClosureThunk::Conversion { target })
+            }
+            crate::decl::DeclKind::CXXMethod
+                if Some(self.first(d)) == invoker.map(|i| self.first(i)) =>
+            {
+                Some(ClosureThunk::Invoker { call_op })
+            }
+            _ => None,
+        }
+    }
+}

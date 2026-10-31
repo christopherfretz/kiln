@@ -199,8 +199,9 @@ impl Parser<'_, '_> {
                 }
                 Some(open @ (Punct::LParen | Punct::LSquare | Punct::LBrace)) => {
                     self.take_into(out);
+                    // Nested brackets may hold a lambda body's `;`.
                     if let Some(close) = closer_of(open) {
-                        self.capture_until(&[close], out, true, true);
+                        self.capture_until(&[close], out, false, true);
                     }
                 }
                 Some(Punct::RParen) if kind == InitKind::DefaultArg => return true,

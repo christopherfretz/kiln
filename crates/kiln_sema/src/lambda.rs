@@ -92,6 +92,9 @@ pub(crate) struct LambdaScope {
     body_open: bool,
     /// `constexpr` was written (the static invoker is then constexpr too).
     explicit_constexpr: bool,
+    /// `templ.heads.len()` at the introducer: a deeper head after the
+    /// parameters is a generic lambda's invented one.
+    heads: usize,
 }
 
 impl Sema<'_, '_> {
@@ -125,8 +128,22 @@ impl Sema<'_, '_> {
             saved_ctor_entity: None,
             body_open: false,
             explicit_constexpr: false,
+            heads: self.templ.heads.len(),
         });
         id
+    }
+
+    /// After the *lambda-declarator*'s parameters: whether `auto`
+    /// parameters made the lambda generic ([expr.prim.lambda.general]/6).
+    /// Generic lambdas are not supported yet: reported, and the caller
+    /// abandons the lambda through [`Self::act_on_lambda_error`].
+    pub fn act_on_lambda_check_generic(&mut self, loc: Loc) -> bool {
+        let Some(top) = self.lambdas.last() else { return false };
+        if self.templ.heads.len() <= top.heads {
+            return false;
+        }
+        self.unsupported("generic lambdas", loc);
+        true
     }
 
     /// The *lambda-declarator* `d` (a member declarator whose single
@@ -331,6 +348,13 @@ impl Sema<'_, '_> {
             self.extend_collector = top.saved_extend.take();
             self.ctor_entity = top.saved_ctor_entity.take();
         }
+        // A generic lambda's invented template head.
+        while self.templ.heads.len() > top.heads {
+            self.templ.heads.pop();
+            self.ast.templates.dependent_depth =
+                self.ast.templates.dependent_depth.saturating_sub(1);
+        }
+        self.templ.invented = 0;
         self.ast.decls.set_flags(top.closure, DeclFlags::INVALID);
         self.finish_closure(top.closure);
     }

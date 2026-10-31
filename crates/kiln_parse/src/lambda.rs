@@ -16,8 +16,10 @@ impl Parser<'_, '_> {
     /// lambda-expression ([expr.prim.lambda.general]/1). At the `[`.
     pub(crate) fn parse_lambda_expr(&mut self) -> PExpr {
         let Some(intro) = self.parse_lambda_introducer() else {
+            // clang: each skip consumes its stop token, so the last one
+            // stops at the body's first `;`.
             self.skip_until(&[Punct::RSquare], true, true);
-            self.skip_until(&[Punct::LBrace], true, false);
+            self.skip_until(&[Punct::LBrace], true, true);
             self.skip_until(&[Punct::RBrace], true, true);
             return None;
         };
@@ -26,8 +28,7 @@ impl Parser<'_, '_> {
         if self.at(Punct::Less) {
             self.unsupported("template parameter lists of lambdas", self.loc());
             self.s.act_on_lambda_error(id);
-            self.skip_until(&[Punct::LBrace], true, false);
-            self.skip_until(&[Punct::RBrace], true, true);
+            self.skip_lambda_rest();
             return None;
         }
         let mut specs = LambdaSpecifiers::default();
@@ -46,6 +47,12 @@ impl Parser<'_, '_> {
             open = l;
             (params, variadic) = self.parse_param_clause(&mut d, false);
             rparen = self.expect_closing(Punct::RParen, Punct::LParen, open);
+            if self.s.act_on_lambda_check_generic(open) {
+                self.s.act_on_end_prototype();
+                self.s.act_on_lambda_error(id);
+                self.skip_lambda_rest();
+                return None;
+            }
         }
         self.parse_lambda_specifiers(&mut specs, &intro);
         let exc = if matches!(self.kw(), Some(Kw::Noexcept | Kw::Throw)) {
@@ -87,6 +94,13 @@ impl Parser<'_, '_> {
         let (body, rbrace) = self.with_greater_op(true, |p| p.parse_compound(false));
         self.in_stmt_expr = saved_stmt_expr;
         Some(self.s.act_on_lambda_end(id, body, rbrace))
+    }
+
+    /// Skips an abandoned (unsupported) lambda's declarator and body.
+    fn skip_lambda_rest(&mut self) {
+        if self.skip_until(&[Punct::LBrace], true, true) {
+            self.skip_until(&[Punct::RBrace], false, true);
+        }
     }
 
     /// lambda-introducer ([expr.prim.lambda.general]/1,

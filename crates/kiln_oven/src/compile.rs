@@ -12,6 +12,7 @@
 use kiln_ast::consts::{FloatKind, Scalar};
 use kiln_ast::decl::{ConstexprKind, DeclKind, VarStorage};
 use kiln_ast::expr::{BinaryOp, CastKind, ExprKind, TraitKind, UnaryOp};
+use kiln_ast::lambda::ClosureThunk;
 use kiln_ast::stmt::{IfKind, StmtKind};
 use kiln_ast::types::TypeView;
 use kiln_ast::{DeclId, ExprId, QualType, StmtId, StringLitId};
@@ -412,6 +413,47 @@ impl Oven {
         Some(idx)
     }
 
+    /// Compiles the conversion function `d` of a closure type to pointer to
+    /// function: it returns the address of `target`
+    /// ([expr.prim.lambda.closure]/8).
+    fn compile_closure_conversion(
+        &mut self,
+        b: &mut dyn SemaBridge,
+        idx: u32,
+        d: DeclId,
+        target: DeclId,
+    ) {
+        let ast = b.ast();
+        let fty = ast.decls.get(d).ty().unwrap_or(QualType::INT);
+        let ret_q = match ast.types.canonical_view(fty) {
+            TypeView::Function(p) => p.ret(),
+            _ => QualType::INT,
+        };
+        let f = self.func_index(b.ast(), target);
+        let mut c = Compiler::new(self, b);
+        let rty = c.ty(ret_q);
+        let this_reg = c.reg();
+        let entry = c.here();
+        let r = c.reg();
+        c.konst(r, u128::from(fn_ptr(f)));
+        c.emit(Op::Ret, 1, &[r]);
+        let nregs = c.max;
+        let cls = {
+            let ast = c.b.ast();
+            ast.decls.get(d).ctx().and_then(|k| ast.decls.get(ast.first(k)).ty())
+        };
+        let this_ty = cls.map(|q| c.ty(q));
+        let f = &mut self.funcs[idx as usize];
+        f.entry = entry;
+        f.state = FState::Ready;
+        f.nregs = nregs;
+        f.ret = RetKind::Scalar(rty);
+        f.params = Vec::new();
+        f.memo = false;
+        f.this_reg = Some(this_reg);
+        f.this_ty = this_ty;
+    }
+
     /// Compiles function `idx` if it can be: sets its state.
     pub(crate) fn compile_func(&mut self, b: &mut dyn SemaBridge, idx: u32) {
         let Some(d) = self.funcs[idx as usize].decl else { return };
@@ -425,7 +467,24 @@ impl Oven {
             self.funcs[idx as usize].state = FState::Deleted;
             return;
         }
-        if spec.constexpr_kind() == ConstexprKind::None {
+        // A closure's conversion function and static invoker have no body
+        // (spec/sema-lambda.md §Evaluation): the conversion returns the
+        // invoker; the invoker runs the call operator's body without `this`.
+        let thunk = ast.closure_thunk(ast.latest(d));
+        if let Some(ClosureThunk::Conversion { target }) = thunk {
+            self.compile_closure_conversion(b, idx, d, target);
+            return;
+        }
+        let (d, invoker) = match thunk {
+            Some(ClosureThunk::Invoker { call_op }) => (call_op, true),
+            _ => (d, false),
+        };
+        let ast = b.ast();
+        let Some(fd) = ast.decls.function(ast.latest(d)) else {
+            self.funcs[idx as usize].state = FState::NotConstexpr;
+            return;
+        };
+        if fd.spec.constexpr_kind() == ConstexprKind::None {
             self.funcs[idx as usize].state = FState::NotConstexpr;
             return;
         }
@@ -467,7 +526,7 @@ impl Oven {
             c.reg();
         }
         let mut this_ty = None;
-        if class::has_this(c.b.ast(), def) {
+        if class::has_this(c.b.ast(), def) && !invoker {
             c.this_reg = Some(c.reg());
             let ast = c.b.ast();
             let cls = ast.decls.get(def).ctx().and_then(|k| ast.decls.get(ast.first(k)).ty());
@@ -3294,6 +3353,18 @@ impl Compiler<'_> {
         }
         match n.kind() {
             ExprKind::InitListExpr => self.init_list(e, p, ty),
+            // [expr.prim.lambda.capture]/15: the closure's members are
+            // direct-initialized from the captures, in order.
+            ExprKind::LambdaExpr => {
+                let ast = self.ast();
+                let inits: Vec<ExprId> = ast
+                    .exprs
+                    .lambda(e)
+                    .inits
+                    .map(|l| ast.lists.iter::<ExprId>(l).collect())
+                    .unwrap_or_default();
+                self.init_aggr(e, &inits, None, None, p, ty);
+            }
             ExprKind::StringLiteral => {
                 let sty = self.ety(e);
                 let s = self.ast().exprs.string_lit(e);
