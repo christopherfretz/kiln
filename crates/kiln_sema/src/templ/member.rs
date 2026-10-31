@@ -9,7 +9,7 @@
 //! ([`Sema::base_levels`]).
 
 use kiln_ast::DeclId;
-use kiln_ast::decl::DeclKind;
+use kiln_ast::decl::{DeclKind, FriendTarget};
 use kiln_ast::ids::TemplateParamListId;
 
 use crate::declspec::DeclaratorContext;
@@ -57,6 +57,51 @@ impl Substituter<'_, '_, '_> {
             return Ok(x);
         }
         Err(SubstFail)
+    }
+
+    /// `template<class U> friend R f(U);` in a class template
+    /// ([temp.friend]/1): its head is substituted like a member
+    /// template's (to the retained depth), and the pattern redeclared as a
+    /// friend, which matches (or hiddenly declares) the namespace scope
+    /// template. Returns the `FriendDecl`.
+    pub(crate) fn friend_function_template(
+        &mut self,
+        t: DeclId,
+        loc: kiln_source::Loc,
+    ) -> SubstResult<DeclId> {
+        let Some(info) = self.sema.ast.template_info(t).copied() else { return Err(SubstFail) };
+        let Some(pattern) = info.pattern else { return Err(SubstFail) };
+        let list = self.param_list(info.params)?;
+        let l = *self.sema.ast.templates.param_list(list);
+        let params: Vec<DeclId> = self.sema.ast.lists.iter::<DeclId>(l.params).collect();
+        self.sema.templ.heads.push(HeadBuild {
+            template_loc: l.template_loc,
+            l_angle: l.l_angle,
+            depth: l.depth,
+            params: params.clone(),
+            list: Some(list),
+            taken: false,
+            invented: false,
+        });
+        let mut s = Scope::new(ScopeKind::TemplateParams, None);
+        for &p in &params {
+            if let Some(n) = self.sema.ast.decls.get(p).name().as_ident() {
+                s.locals.push((n, p, Ns::Ordinary));
+            }
+        }
+        self.sema.scopes.push(s);
+        self.sema.ast.templates.dependent_depth += 1;
+        let r = self.function_decl(pattern, DeclaratorContext::Member, Some(loc));
+        self.sema.act_on_finish_template_decl();
+        self.sema.templ.cur = None;
+        let fd = r?;
+        if let FriendTarget::Decl(x) = self.sema.ast.decls.friend_target(fd)
+            && let Some(p) = self.sema.pattern_of(x)
+            && self.sema.ast.instantiated_from(p).is_none()
+        {
+            self.member_link(p, pattern);
+        }
+        Ok(fd)
     }
 
     /// Declares the pattern of a member template (the head is open).

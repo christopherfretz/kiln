@@ -221,6 +221,9 @@ pub struct Sema<'a, 'sm> {
     /// The class the last `friend class X;` declared ([`TagUse::Friend`]),
     /// taken by [`Sema::act_on_friend`] as the `FriendDecl`'s owned tag.
     pub(crate) friend_tag: Option<DeclId>,
+    /// The class template the last `template<..> friend class X;`
+    /// befriended ([temp.friend]/1), taken by [`Sema::act_on_friend`].
+    pub(crate) friend_class_template: Option<DeclId>,
     /// The `this` type of the default member initializers being parsed,
     /// innermost last, with their fields (`C*`, spec/sema-class.md §2.5).
     pub(crate) nsdmi_this: Vec<(DeclId, QualType)>,
@@ -314,6 +317,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             fn_saved: Vec::new(),
             member_refs: kiln_source::fx::FxHashMap::default(),
             friend_tag: None,
+            friend_class_template: None,
             nsdmi_this: Vec::new(),
             initializing: None,
             templ: templ::TemplState::default(),

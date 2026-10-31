@@ -158,8 +158,10 @@ impl Parser<'_, '_> {
             _ => {}
         }
         let _ = loc;
-        if self.at_friend_template() {
-            self.s.templ_unimplemented("friend templates", self.loc());
+        if ctx != DeclaratorContext::Member && self.at_friend_template() {
+            // [class.friend]/1: a friend declaration appears in a class
+            // (clang: "'friend' used outside of class").
+            self.s.templ_unimplemented("friend templates outside a class", self.loc());
             self.skip_unsupported_declaration();
             return;
         }

@@ -1900,7 +1900,10 @@ impl Sema<'_, '_> {
                 self.ast
                     .lookup_local(ctx, dname)
                     .iter_with_flags()
-                    .any(|(x, fl)| x == p && !fl.contains(LookupFlags::ADL_ONLY))
+                    .any(|(x, fl)| {
+                        (x == p || Some(x) == self.ast.described_template(p))
+                            && !fl.contains(LookupFlags::ADL_ONLY)
+                    })
             });
             let k = if visible || d.qualifier.is_some() {
                 FriendKind::Declared
@@ -3220,6 +3223,9 @@ impl Sema<'_, '_> {
             }
             false
         };
+        if self.has_pending_head() {
+            return self.act_on_friend_class_template(keyword, n, nloc, ns);
+        }
         let found = self.lookup_name(n, LookupKind::Tag).decls;
         let hidden = || {
             self.ast
@@ -3245,6 +3251,59 @@ impl Sema<'_, '_> {
         h.misc = h.misc.with_friend(FriendKind::Undeclared);
         let d = self.builder().record(h, Self::tag_kind_of(keyword), None);
         self.friend_tag = Some(d);
+        d
+    }
+
+    /// `template<class U> friend class X;` ([temp.friend]/1): `X` names
+    /// a class template of the innermost enclosing namespace (its
+    /// injected-class-name is not considered), else declares one there,
+    /// hidden from ordinary lookup ([namespace.memdef]/3). The template is
+    /// left in [`Sema::friend_class_template`] for `act_on_friend`.
+    fn act_on_friend_class_template(
+        &mut self,
+        keyword: TagKeyword,
+        n: Symbol,
+        nloc: Loc,
+        ns: DeclId,
+    ) -> DeclId {
+        let head = self.take_template_head(None);
+        let prev = self
+            .ast
+            .lookup_local(ns, DeclName::ident(n))
+            .iter()
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .find(|&d| is_tag_kind(self.kind_of(d)) || self.kind_of(d) == DeclKind::ClassTemplate);
+        let prev = prev.map(|d| self.pattern_of(d).unwrap_or(d));
+        if let Some(p) = prev {
+            if let Some(t) = self.ast.described_template(p) {
+                if self.tag_matches(p, keyword) {
+                    self.check_redeclared_class_head(p);
+                    self.templ.cur = None;
+                    self.mark_type_referenced(p);
+                    self.friend_class_template = Some(t);
+                    return p;
+                }
+                let msg = self.diag(DiagId::sema_use_with_wrong_tag, nloc).arg(sym_str(self, n));
+                let msg = self.note_prev(msg, p, false);
+                self.emit(msg);
+            } else if head.is_some() {
+                // clang: "redefinition of 'X' as different kind of symbol".
+                let msg = self.diag(DiagId::sema_redefinition_different_kind, nloc)
+                    .arg(sym_str(self, n));
+                let msg = self.note_prev(msg, p, false);
+                self.emit(msg);
+                self.templ.cur = None;
+                return p;
+            }
+        }
+        let mut h = DeclHead::new(ns, DeclName::ident(n), nloc);
+        h.lexical = Some(self.ctx);
+        h.misc = h.misc.with_friend(FriendKind::Undeclared);
+        self.mark_pattern_next();
+        let d = self.builder().record(h, Self::tag_kind_of(keyword), None);
+        self.friend_class_template = self.finish_template_pattern(d);
         d
     }
 

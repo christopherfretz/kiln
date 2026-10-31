@@ -685,9 +685,21 @@ impl Substituter<'_, '_, '_> {
                 ds.friend = Some(loc);
                 Ok(self.sema.act_on_friend(&ds, ty, None, loc))
             }
+            FriendTarget::Decl(t) if self.sema.kind_of(t) == DeclKind::ClassTemplate => {
+                // `template<class U> friend class X;` names a namespace
+                // scope template, which substitution leaves unchanged.
+                let record = self.sema.current_class().map(|c| c.record).ok_or(SubstFail)?;
+                let fd = self.sema.builder().friend(record, loc, FriendTarget::Decl(t));
+                let first = self.sema.ast.first(t);
+                self.sema.push_friend(first);
+                Ok(Some(fd))
+            }
+            FriendTarget::Decl(t) if self.sema.kind_of(t) == DeclKind::FunctionTemplate => {
+                self.friend_function_template(t, loc).map(Some)
+            }
             FriendTarget::Decl(f) => {
                 if !matches!(self.sema.kind_of(f), DeclKind::Function | DeclKind::CXXMethod) {
-                    return self.unimplemented("friend templates", loc);
+                    return self.unimplemented("this kind of friend declaration", loc);
                 }
                 let ctx = DeclaratorContext::Member;
                 let r = self.function_decl(f, ctx, Some(loc))?;

@@ -1277,8 +1277,12 @@ impl Parser<'_, '_> {
             let decls = &self.s.ast.decls;
             if decls.get(x).kind() == DeclKind::Friend {
                 match decls.friend_target(x) {
-                    FriendTarget::Decl(t) if decls.function(t).is_some() => Some(t),
-                    _ => None,
+                    // A friend function template's body is its pattern's.
+                    FriendTarget::Decl(t) => {
+                        let t = self.s.ast.template_info(t).and_then(|i| i.pattern).unwrap_or(t);
+                        decls.function(t).map(|_| t)
+                    }
+                    FriendTarget::Type { .. } => None,
                 }
             } else {
                 decls.function(x).map(|_| x)

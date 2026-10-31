@@ -133,12 +133,34 @@ impl Sema<'_, '_> {
     fn is_friend(&self, ec: &EffectiveContext, class: DeclId) -> bool {
         self.friends_of(class).into_iter().any(|f| {
             let f = self.ast.first(f);
-            if self.ast.decls.get(f).kind().is_function() {
-                ec.functions.contains(&f)
-            } else {
-                ec.records.iter().any(|&r| same_class(self, r, f))
+            match self.kind_of(f) {
+                // [temp.friend]/1: every specialization of a befriended
+                // template is a friend (and the pattern, for uses inside
+                // its definition).
+                DeclKind::FunctionTemplate => {
+                    ec.functions.iter().any(|&g| self.friend_template_of(g) == Some(f))
+                }
+                DeclKind::ClassTemplate => {
+                    ec.records.iter().any(|&r| self.friend_template_of(r) == Some(f))
+                }
+                k if k.is_function() => ec.functions.contains(&f),
+                _ => ec.records.iter().any(|&r| same_class(self, r, f)),
             }
         })
+    }
+
+    /// The (first declaration of the) template `d` is a specialization,
+    /// partial specialization or pattern of.
+    fn friend_template_of(&self, d: DeclId) -> Option<DeclId> {
+        let t = match self.ast.spec_info(d) {
+            Some((_, s)) => Some(s.template),
+            None => self
+                .ast
+                .partial_spec_info(d)
+                .map(|(_, p)| p.template)
+                .or_else(|| self.ast.described_template(self.ast.first(d))),
+        };
+        t.map(|t| self.ast.first(t))
     }
 
     /// clang `GetProtectedFriendKind`: friendship of any class `P` with
