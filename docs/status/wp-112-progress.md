@@ -19,10 +19,10 @@
   `over.match.oper/` (2). Spec: sema.md §4.7/§5.3, sema-class.md §8.3.
 
 ## Next
-- Re-probe `<array>`, `<string_view>`; full exit gate.
+- Full exit gate; handback. Remaining header errors are other WPs (friend templates, dependent NNS, `__invoke` ambiguity in find.h, constrained ctor redeclaration in subrange.h).
 
 ## Probe (kiln -fsyntax-only, libc++ 19)
 | header | main | now |
 |---|---:|---:|
-| `<array>` | 180 | 115 (pre-ctor-selection) |
-| `<string_view>` | 332 | 184 (pre-ctor-selection) |
+| `<array>` | 180 | 103 |
+| `<string_view>` | 332 | 167 |
