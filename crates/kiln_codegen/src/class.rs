@@ -1297,21 +1297,17 @@ impl Cg<'_> {
         let first = ast.first(ctor);
         let fty = ast.decls.get(first).ty().expect("constructor type");
         let arg_tys: Vec<QualType> = args.iter().map(|&a| ast.exprs.get(a).ty()).collect();
+        // A base-object inheriting constructor that drops its parameters
+        // is still called with the arguments (clang
+        // `arrangeCXXConstructorCall` with `PassProtoArgs` false keeps the
+        // argument list; only the callee's prototype omits them).
         let mut sig = self.call_sig_this(fty, false, &arg_tys, Some(rd));
-        let dropped = self.inheriting_drops_params(first, Some(v));
-        if dropped {
-            sig = self.without_params(sig);
-        }
         let needs_vtt = v == Structor::Base && self.structor_has_vbases(first);
         if needs_vtt {
             sig = self.with_vtt(sig);
         }
         let saved = self.f.dest_destructed;
         self.f.dest_destructed = false;
-        // The base-object variant of an inheriting constructor that
-        // constructs a virtual base drops its arguments (clang
-        // `arrangeCXXConstructorCall` without prototype arguments).
-        let args = if dropped { Vec::new() } else { args };
         let vals = self.emit_call_args(&sig, &args);
         self.f.dest_destructed = saved;
         let vals = vals?;

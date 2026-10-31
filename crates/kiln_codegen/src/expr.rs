@@ -1559,7 +1559,12 @@ impl Cg<'_> {
             return Ok(LV { addr: Addr { v: base.v, ty, align: base.align }, q, bf: None });
         }
         let Some(i) = idx else {
-            return Ok(LV { addr: Addr { v: base.v, ty, align: base.align }, q, bf: None });
+            // An empty field with no IR element (clang addresses it by
+            // byte offset).
+            let off = self.field_byte_offset(field)?;
+            let v = if off == 0 { base.v } else { self.byte_offset(base.v, off) };
+            let align = min_align(base.align, off);
+            return Ok(LV { addr: Addr { v, ty, align }, q, bf: None });
         };
         let v = self.struct_gep(rty, base.v, i);
         let align = min_align(base.align, self.elem_offset(rty, u64::from(i)));
