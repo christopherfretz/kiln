@@ -1180,8 +1180,8 @@ impl Parser<'_, '_> {
                 None
             });
             if self.at(Punct::Tilde) || self.at_kw(Kw::Operator) {
-                self.parse_special_declarator_id(d);
                 d.qualifier = qual;
+                self.parse_special_declarator_id(d);
             } else if let Some(n) = self.ident() {
                 let ctor = self.names_constructor(n, last_qual, d.ctx);
                 let l = self.bump().span.lo;
@@ -1762,7 +1762,9 @@ impl Parser<'_, '_> {
         d: &Declarator,
         decls: &mut Vec<DeclId>,
     ) {
+        self.s.act_function_def_next(true);
         let f = self.s.act_on_declarator(ds, base, d);
+        self.s.act_function_def_next(false);
         // An invalid declarator sema did not make a function (an unknown
         // return type, say): the error is reported; the body is skipped.
         let f = f.filter(|&f| self.s.ast.decls.function(f).is_some());

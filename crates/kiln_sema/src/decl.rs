@@ -1148,7 +1148,8 @@ impl Sema<'_, '_> {
         if head.is_none() && !ds.is_typedef() && self.is_function_spec_declarator(d, ty) {
             return self.act_on_function_spec_declarator(ds, ty, d, invalid);
         }
-        if let Some((_, l)) = self.templ.explicit_inst.take() {
+        if let Some((_, l)) = self.templ.explicit_inst.filter(|_| self.at_explicit_head()) {
+            self.templ.explicit_inst = None;
             // [temp.explicit]/3: of a variable template or static data
             // member (WP-106 lands functions only).
             self.templ_unimplemented("explicit instantiation of a variable", l);

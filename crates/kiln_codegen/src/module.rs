@@ -368,7 +368,16 @@ impl<'a> Cg<'a> {
         let ast = self.ast;
         let first = ast.first(d);
         match ast.templ_link(first).get() {
-            Some((TemplLinkKind::MemberOfSpecialization, _)) => {
+            Some((TemplLinkKind::MemberOfSpecialization, i)) => {
+                // An explicitly specialized member is an ordinary
+                // function (WP-106).
+                if ast
+                    .templates
+                    .member_spec(i)
+                    .is_some_and(|m| m.kind == SpecKind::ExplicitSpecialization)
+                {
+                    return false;
+                }
                 let ctx = ast.decls.get(first).ctx();
                 ctx.is_none_or(|c| match ast.spec_info(c) {
                     Some((_, s)) => s.kind == SpecKind::ImplicitInstantiation,

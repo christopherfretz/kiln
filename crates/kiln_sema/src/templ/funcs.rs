@@ -197,14 +197,21 @@ impl Sema<'_, '_> {
         self.ast.decls.get(d).loc()
     }
 
+    /// Whether `template<>` or an explicit instantiation's `template`
+    /// heads the declaration being parsed (not a declaration met while
+    /// instantiating a class named in its qualifier).
+    pub(crate) fn at_explicit_head(&self) -> bool {
+        (self.templ.explicit_spec.is_some() || self.templ.explicit_inst.is_some())
+            && self.inst.stack.len() == self.templ.explicit_depth
+    }
+
     /// Whether declarator `d` of function type `ty` declares a function
     /// template specialization: after `template<>` or an explicit
     /// instantiation's `template`, or with a template-id naming a
     /// function template (§6.9).
     pub(crate) fn is_function_spec_declarator(&self, d: &Declarator, ty: QualType) -> bool {
         self.ast.types.is_function(ty)
-            && (self.templ.explicit_spec.is_some()
-                || self.templ.explicit_inst.is_some()
+            && (self.at_explicit_head()
                 || d.spec_id
                     .as_ref()
                     .is_some_and(|s| self.kind_of(s.template) == DeclKind::FunctionTemplate))
@@ -226,8 +233,9 @@ impl Sema<'_, '_> {
         d: &Declarator,
         invalid: bool,
     ) -> Option<DeclId> {
-        let spec_head = self.templ.explicit_spec.take();
-        let inst = self.templ.explicit_inst.take();
+        let head = self.at_explicit_head();
+        let spec_head = if head { self.templ.explicit_spec.take() } else { None };
+        let inst = if head { self.templ.explicit_inst.take() } else { None };
         self.templ.cur = None;
         let dname = match (d.op_name, d.name) {
             (Some(op), _) => DeclName::operator(op),
@@ -241,6 +249,20 @@ impl Sema<'_, '_> {
             return None;
         }
         let name_loc = d.name_loc();
+        if d.spec_id.is_none()
+            && let Some(m) = self.member_of_spec_candidate(d, dname, ty, inst.is_some())
+        {
+            let m = m?;
+            // [temp.expl.spec]/1, [temp.explicit]/3: a member function
+            // of an implicit class template specialization.
+            return match inst {
+                Some((ext, _)) => {
+                    self.act_on_explicit_member_inst(m, ext.is_some(), name_loc);
+                    None
+                }
+                None => self.act_on_explicit_member_spec(ds, ty, d, m, name_loc),
+            };
+        }
         let m = self.match_function_spec(d, dname, ty, inst.is_some(), name_loc)?;
         match inst {
             Some((ext, _)) => {
@@ -380,19 +402,7 @@ impl Sema<'_, '_> {
             self.emit(e);
             return None;
         }
-        let mut fspec = kiln_ast::decl::FnSpec::new();
-        if ds.inline.is_some() {
-            fspec = fspec.with_inline(true);
-        }
-        if ds.constexpr.is_some() {
-            fspec = fspec
-                .with_constexpr_kind(kiln_ast::decl::ConstexprKind::Constexpr)
-                .with_implicit_inline(true);
-        }
-        let variadic = self.ast.types.proto(ty).is_some_and(|p| p.info().variadic());
-        fspec = fspec.with_variadic(variadic);
-        let old = self.ast.decls.function(s).map(|x| x.spec).unwrap_or_default();
-        fspec = fspec.with_storage(old.storage());
+        let fspec = self.explicit_spec_fnspec(ds, ty, s);
         self.ast.templates.update_spec(i, |x| {
             x.kind = SpecKind::ExplicitSpecialization;
             x.from = info.template;
@@ -403,16 +413,7 @@ impl Sema<'_, '_> {
         if info.kind != SpecKind::ExplicitSpecialization {
             self.ast.decls.respecify_function(s, fspec);
         }
-        let lexical = self.ctx;
-        let f = self.builder().function_spec_redecl(s, lexical, name_loc, ty, fspec);
-        let params: Vec<crate::declspec::ParamInfo> =
-            d.function_params().map(<[crate::declspec::ParamInfo]>::to_vec).unwrap_or_default();
-        let (defaults, _) = self.merge_default_args(None, false, &params);
-        self.create_params(f, &params, &defaults);
-        if self.kind_of(lexical) == DeclKind::CXXRecord {
-            self.set_member_access(f);
-        }
-        Some(f)
+        Some(self.declare_explicit_spec(s, d, ty, fspec, name_loc))
     }
 
     /// `[extern] template R f<args>(params);` for specialization `m.spec`
@@ -443,8 +444,10 @@ impl Sema<'_, '_> {
             }
             (SpecKind::ExplicitInstantiationDefinition, false) => {
                 // [temp.spec.general]/5: at most once.
-                let note = self
-                    .diag(DiagId::note_previous_explicit_instantiation, info.point_of_instantiation);
+                let note = self.diag(
+                    DiagId::note_previous_explicit_instantiation,
+                    info.point_of_instantiation,
+                );
                 let e = self
                     .diag(DiagId::sema_explicit_inst_duplicate, name_loc)
                     .arg(name)
@@ -490,6 +493,238 @@ impl Sema<'_, '_> {
         self.instantiate_function_definition(s, name_loc);
         if self.ast.definition(s).is_none() {
             self.queue_instantiation(s, name_loc);
+        }
+    }
+
+    /// The member function of an implicit class template specialization
+    /// that `template<> R C<args>::f(params)` (or `template R
+    /// C<args>::f(params);`) names: `None` when the qualifier is not such
+    /// a specialization or names a member function template (then the
+    /// declarator is a function template specialization), `Some(None)`
+    /// after a diagnostic.
+    fn member_of_spec_candidate(
+        &mut self,
+        d: &Declarator,
+        name: DeclName,
+        ty: QualType,
+        inst: bool,
+    ) -> Option<Option<DeclId>> {
+        let q = d.qualifier?;
+        if self.kind_of(q).payload() != kiln_ast::decl::PayloadClass::Record {
+            return None;
+        }
+        let in_spec =
+            self.ast.spec_info(q).is_some_and(|(_, x)| x.kind != SpecKind::ExplicitSpecialization)
+                || self.ast.member_spec_info(q).is_some();
+        if !in_spec {
+            return None;
+        }
+        let cands = self.prev_candidates_dn(name, Some(q));
+        if cands.iter().any(|&c| self.kind_of(c) == DeclKind::FunctionTemplate) {
+            return None;
+        }
+        let mut exc = None;
+        for c in cands {
+            if self.kind_of(c).payload() != kiln_ast::decl::PayloadClass::Function
+                || self.ast.member_spec_info(c).is_none()
+            {
+                continue;
+            }
+            let Some(pty) = self.declared_fn_type(c) else { continue };
+            if self.ast.types.same_type(pty, ty) {
+                return Some(Some(self.ast.first(c)));
+            }
+            if exc.is_none() && self.same_ignoring_exc_spec(pty, ty) {
+                exc = Some(c);
+            }
+        }
+        if let Some(p) = exc {
+            // [except.spec]/5.
+            let e = self.diag(DiagId::sema_exception_spec_mismatch, d.name_loc());
+            let e = self.note_prev(e, p, false);
+            self.emit(e);
+            return Some(None);
+        }
+        if inst {
+            let e = self
+                .diag(DiagId::sema_explicit_inst_not_known, d.name_loc())
+                .arg(self.decl_name_str(name));
+            self.emit(e);
+            return Some(None);
+        }
+        // [dcl.meaning.general]/2 (clang's `err_member_decl_does_not_match`).
+        let id = if self.templ.fn_def_next {
+            DiagId::sema_member_def_no_match
+        } else {
+            DiagId::sema_member_decl_no_match
+        };
+        let e = self
+            .diag(id, d.name_loc())
+            .arg(self.decl_name_str(name))
+            .arg(format!("'{}'", self.ty_str(self.class_type(q))));
+        self.emit(e);
+        Some(None)
+    }
+
+    /// Where the definition of member `m` of a class template
+    /// specialization was first required: its point of instantiation,
+    /// else where its instantiation was queued.
+    fn member_use_loc(&self, m: DeclId, poi: Loc) -> Loc {
+        if poi != Loc::INVALID {
+            return poi;
+        }
+        self.inst.pending.iter().find(|p| p.decl == m).map_or(Loc::INVALID, |p| p.poi)
+    }
+
+    /// The [`kiln_ast::decl::FnSpec`] of an explicit specialization
+    /// declared with `ds` (function type `ty`), keeping `old`'s storage
+    /// class (`static` is not repeated).
+    fn explicit_spec_fnspec(
+        &self,
+        ds: &DeclSpec,
+        ty: QualType,
+        old: DeclId,
+    ) -> kiln_ast::decl::FnSpec {
+        let mut fspec = kiln_ast::decl::FnSpec::new();
+        if ds.inline.is_some() {
+            fspec = fspec.with_inline(true);
+        }
+        if ds.constexpr.is_some() {
+            fspec = fspec
+                .with_constexpr_kind(kiln_ast::decl::ConstexprKind::Constexpr)
+                .with_implicit_inline(true);
+        }
+        let variadic = self.ast.types.proto(ty).is_some_and(|p| p.info().variadic());
+        fspec = fspec.with_variadic(variadic);
+        let old = self.ast.decls.function(old).map(|x| x.spec).unwrap_or_default();
+        fspec.with_storage(old.storage())
+    }
+
+    /// The new declaration of an explicit specialization `s` (of a
+    /// function template, or a member function of a class template
+    /// specialization) with its parameters.
+    fn declare_explicit_spec(
+        &mut self,
+        s: DeclId,
+        d: &Declarator,
+        ty: QualType,
+        fspec: kiln_ast::decl::FnSpec,
+        name_loc: Loc,
+    ) -> DeclId {
+        let lexical = self.ctx;
+        let f = self.builder().function_spec_redecl(s, lexical, name_loc, ty, fspec);
+        let params: Vec<crate::declspec::ParamInfo> =
+            d.function_params().map(<[crate::declspec::ParamInfo]>::to_vec).unwrap_or_default();
+        let (defaults, _) = self.merge_default_args(None, false, &params);
+        self.create_params(f, &params, &defaults);
+        if self.kind_of(lexical) == DeclKind::CXXRecord {
+            self.set_member_access(f);
+        }
+        f
+    }
+
+    /// `template<> R C<args>::f(params)` for member `m` of an implicit
+    /// specialization ([temp.expl.spec]/1, §4.5): the member is no longer
+    /// instantiated from the pattern.
+    fn act_on_explicit_member_spec(
+        &mut self,
+        ds: &DeclSpec,
+        ty: QualType,
+        d: &Declarator,
+        m: DeclId,
+        name_loc: Loc,
+    ) -> Option<DeclId> {
+        let (i, info) = self.ast.member_spec_info(m).map(|(i, x)| (i, *x))?;
+        let used = self.ast.decls.get(m).has(DeclFlags::USED) || self.ast.definition(m).is_some();
+        let after_inst = match info.kind {
+            SpecKind::ImplicitInstantiation => used,
+            SpecKind::ExplicitInstantiationDeclaration
+            | SpecKind::ExplicitInstantiationDefinition => true,
+            SpecKind::Undeclared | SpecKind::ExplicitSpecialization => false,
+        };
+        if after_inst {
+            // [temp.expl.spec]/7.
+            let explicit = u32::from(info.kind != SpecKind::ImplicitInstantiation);
+            let at = self.member_use_loc(m, info.point_of_instantiation);
+            let note = self.diag(DiagId::note_instantiation_required_here, at).arg(explicit);
+            let e = self
+                .diag(DiagId::sema_spec_after_instantiation, name_loc)
+                .arg(self.decl_name_str(self.ast.decls.get(m).name()))
+                .with_note(note);
+            self.emit(e);
+            return None;
+        }
+        let fspec = self.explicit_spec_fnspec(ds, ty, m);
+        self.ast.templates.update_member_spec(i, |x| {
+            x.kind = SpecKind::ExplicitSpecialization;
+            x.point_of_instantiation = Loc::INVALID;
+        });
+        if info.kind != SpecKind::ExplicitSpecialization {
+            self.ast.decls.respecify_function(m, fspec);
+        }
+        Some(self.declare_explicit_spec(m, d, ty, fspec, name_loc))
+    }
+
+    /// `[extern] template R C<args>::f(params);` for member `m` of a
+    /// class template specialization ([temp.explicit]/3, §4.5).
+    fn act_on_explicit_member_inst(&mut self, m: DeclId, declaration: bool, name_loc: Loc) {
+        let Some((i, info)) = self.ast.member_spec_info(m).map(|(i, x)| (i, *x)) else { return };
+        let name = self.qualified_decl_name(m);
+        match (info.kind, declaration) {
+            (
+                SpecKind::ExplicitSpecialization | SpecKind::ExplicitInstantiationDeclaration,
+                true,
+            ) => return,
+            (SpecKind::ExplicitSpecialization, false) => {
+                let def = self.ast.latest(m);
+                let note =
+                    self.diag(DiagId::note_previous_template_specialization, self.loc_of(def));
+                let e = self
+                    .diag(DiagId::sema_explicit_inst_after_spec_ignored, name_loc)
+                    .arg(name)
+                    .with_note(note);
+                self.emit(e);
+                return;
+            }
+            (SpecKind::ExplicitInstantiationDefinition, false) => {
+                let note = self.diag(
+                    DiagId::note_previous_explicit_instantiation,
+                    info.point_of_instantiation,
+                );
+                let e = self
+                    .diag(DiagId::sema_explicit_inst_duplicate, name_loc)
+                    .arg(name)
+                    .with_note(note);
+                self.emit(e);
+                return;
+            }
+            (SpecKind::ExplicitInstantiationDefinition, true) => {
+                let note = self.diag(
+                    DiagId::note_explicit_instantiation_definition_here,
+                    info.point_of_instantiation,
+                );
+                let e = self
+                    .diag(DiagId::sema_explicit_inst_declaration_after_definition, name_loc)
+                    .with_note(note);
+                self.emit(e);
+                return;
+            }
+            _ => {}
+        }
+        let kind = if declaration {
+            SpecKind::ExplicitInstantiationDeclaration
+        } else {
+            SpecKind::ExplicitInstantiationDefinition
+        };
+        self.ast.templates.update_member_spec(i, |x| {
+            x.kind = kind;
+            x.point_of_instantiation = name_loc;
+        });
+        if !declaration {
+            self.instantiate_function_definition(m, name_loc);
+            if self.ast.definition(m).is_none() {
+                self.queue_instantiation(m, name_loc);
+            }
         }
     }
 }

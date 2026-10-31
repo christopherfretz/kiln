@@ -62,6 +62,7 @@ impl Sema<'_, '_> {
     /// [`Sema::act_explicit_spec_end`].
     pub fn act_explicit_spec_start(&mut self, loc: Loc) {
         self.templ.explicit_spec = Some(loc);
+        self.templ.explicit_depth = self.inst.stack.len();
     }
 
     /// The declaration after `template<>` ended.
@@ -74,6 +75,7 @@ impl Sema<'_, '_> {
     /// Paired with [`Sema::act_explicit_inst_end`].
     pub fn act_explicit_inst_start(&mut self, extern_loc: Option<Loc>, loc: Loc) {
         self.templ.explicit_inst = Some((extern_loc, loc));
+        self.templ.explicit_depth = self.inst.stack.len();
     }
 
     /// The explicit instantiation ended.

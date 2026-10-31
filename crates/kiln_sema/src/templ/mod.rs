@@ -92,6 +92,14 @@ pub struct TemplState {
     /// and `template` locations): the next class template-id declared
     /// is explicitly instantiated ([temp.explicit]).
     pub(crate) explicit_inst: Option<(Option<Loc>, Loc)>,
+    /// The instantiation-stack depth at which `explicit_spec` /
+    /// `explicit_inst` was set: a declarator met while a class named in
+    /// the declaration's qualifier is instantiated is not the explicit
+    /// specialization (WP-106).
+    pub(crate) explicit_depth: usize,
+    /// The declarator handed to `act_on_declarator` next is followed by a
+    /// function body (set by the parser; WP-106 diagnostics).
+    pub(crate) fn_def_next: bool,
     /// Partial ordering results of partial specializations, by index
     /// pair: whether the first is at least as specialized as the second
     /// ([temp.spec.partial.order], §4.4).
@@ -804,8 +812,9 @@ impl Sema<'_, '_> {
     /// declarator ([`Declarator::spec_id`]); a function template partial
     /// specialization is an error ([temp.spec.partial.general]/1 covers
     /// only class and variable templates; clang's
-    /// `err_function_template_partial_spec`) and an explicit one is
-    /// WP-071's: `None`, and the declarator is dropped. The argument
+    /// `err_function_template_partial_spec`: `None`, and the declarator
+    /// is dropped); an explicit one is returned for the declarator too
+    /// (§6.9, `act_on_function_spec_declarator`). The argument
     /// locations are the ones the parser recorded; `r_angle` is the
     /// closing `>`.
     ///
@@ -834,13 +843,31 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// The function template `operator op` that redeclaration lookup in
+    /// `qualifier` (else the current scope) finds, for the declarator-id
+    /// `operator op<args>` of an explicit specialization.
+    pub fn operator_function_template(
+        &self,
+        op: kiln_ast::names::OverloadedOperator,
+        qualifier: Option<DeclId>,
+    ) -> Option<DeclId> {
+        self.prev_candidates_dn(kiln_ast::names::DeclName::operator(op), qualifier)
+            .into_iter()
+            .find(|&c| self.kind_of(c) == DeclKind::FunctionTemplate)
+    }
+
     /// True between `template<>` and the declaration it introduces.
     pub fn has_explicit_spec_head(&self) -> bool {
         self.templ.explicit_spec.is_some()
     }
 
-    /// True between an explicit-instantiation `[extern] template` and
-    /// the declaration it introduces.
+    /// The parser is about to hand sema a function declarator followed
+    /// by its body (`true`), or is done with it (`false`).
+    pub fn act_function_def_next(&mut self, def: bool) {
+        self.templ.fn_def_next = def;
+    }
+
+    /// Whether `[extern] template` heads the declaration being parsed.
     pub fn has_explicit_inst_head(&self) -> bool {
         self.templ.explicit_inst.is_some()
     }

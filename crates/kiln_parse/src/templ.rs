@@ -87,6 +87,16 @@ impl Parser<'_, '_> {
             // explicit-specialization ([temp.expl.spec]/1).
             self.bump();
             self.bump();
+            // `template<> template<> R C<args>::f<args>(...)`: a member
+            // template of a class template specialization.
+            while self.at_kw(Kw::Template)
+                && self.peek_is(1, Punct::Less)
+                && self.peek_is(2, Punct::Greater)
+            {
+                self.bump();
+                self.bump();
+                self.bump();
+            }
             if self.at_partial_specialization()
                 || self.at_var_template_spec()
                 || !self.at_spec_tag_or_template()

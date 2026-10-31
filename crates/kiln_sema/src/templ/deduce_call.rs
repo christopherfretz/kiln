@@ -200,7 +200,8 @@ impl Sema<'_, '_> {
             let levels = self.prior_levels(ft, depth, &d.args);
             let shown = self.ast.types.arg_list(&d.args[..written.len().min(n)]);
             let tys = ptys.clone();
-            let fn_has_pack = tys.iter().any(|&t| crate::templ::pack::type_pattern(self, t).is_some());
+            let fn_has_pack =
+                tys.iter().any(|&t| crate::templ::pack::type_pattern(self, t).is_some());
             let whole = target.is_some() && !fn_has_pack;
             let r = self.in_sfinae(FrameKind::ExplicitArgSubstitution, ft, Some(shown), loc, |s| {
                 let mut sub = Substituter::new(s, &levels);
