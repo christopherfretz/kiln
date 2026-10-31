@@ -1,0 +1,201 @@
+Dumping gfun:
+FunctionDecl gfun 'void ()'
+`-CompoundStmt
+  |-DeclStmt
+  | `-VarDecl id '(lambda at tests/conformance/expr.prim.lambda/ast-generic-implicit.cpp:10:13)' cinit
+  |   `-LambdaExpr '(lambda at tests/conformance/expr.prim.lambda/ast-generic-implicit.cpp:10:13)'
+  |     |-CXXRecordDecl implicit class definition
+  |     | |-FunctionTemplateDecl operator()
+  |     | | |-TemplateTypeParmDecl implicit class depth 0 index 0 x:auto
+  |     | | `-CXXMethodDecl constexpr operator() 'auto (auto) const' inline
+  |     | |   |-ParmVarDecl referenced x 'auto'
+  |     | |   `-CompoundStmt
+  |     | |     `-ReturnStmt
+  |     | |       `-ImplicitCastExpr 'auto' xvalue <NoOp>
+  |     | |         `-DeclRefExpr 'auto' lvalue ParmVar 'x' 'auto'
+  |     | |-FunctionTemplateDecl implicit operator auto (*)(type-parameter-0-0)
+  |     | | |-TemplateTypeParmDecl implicit class depth 0 index 0 x:auto
+  |     | | `-CXXConversionDecl implicit constexpr operator auto (*)(type-parameter-0-0) 'auto (*() const noexcept)(auto)' inline
+  |     | |-FunctionTemplateDecl implicit __invoke
+  |     | | |-TemplateTypeParmDecl implicit class depth 0 index 0 x:auto
+  |     | | `-CXXMethodDecl implicit __invoke 'auto (auto)' static inline
+  |     | |   `-ParmVarDecl x 'auto'
+  |     | `-CXXDestructorDecl implicit referenced constexpr ~(lambda at tests/conformance/expr.prim.lambda/ast-generic-implicit.cpp:10:13) 'void () noexcept' inline default trivial
+  |     `-CompoundStmt
+  |       `-ReturnStmt
+  |         `-ImplicitCastExpr 'auto' xvalue <NoOp>
+  |           `-DeclRefExpr 'auto' lvalue ParmVar 'x' 'auto'
+  |-DeclStmt
+  | `-VarDecl tp '(lambda at tests/conformance/expr.prim.lambda/ast-generic-implicit.cpp:11:13)' cinit
+  |   `-LambdaExpr '(lambda at tests/conformance/expr.prim.lambda/ast-generic-implicit.cpp:11:13)'
+  |     |-CXXRecordDecl implicit class definition
+  |     | |-FunctionTemplateDecl operator()
+  |     | | |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+  |     | | `-CXXMethodDecl constexpr operator() 'auto (T, T) const' inline
+  |     | |   |-ParmVarDecl referenced a 'T'
+  |     | |   |-ParmVarDecl referenced b 'T'
+  |     | |   `-CompoundStmt
+  |     | |     `-ReturnStmt
+  |     | |       `-ConditionalOperator '<dependent type>'
+  |     | |         |-BinaryOperator '<dependent type>' '<'
+  |     | |         | |-DeclRefExpr 'T' lvalue ParmVar 'a' 'T'
+  |     | |         | `-DeclRefExpr 'T' lvalue ParmVar 'b' 'T'
+  |     | |         |-DeclRefExpr 'T' lvalue ParmVar 'b' 'T'
+  |     | |         `-DeclRefExpr 'T' lvalue ParmVar 'a' 'T'
+  |     | |-FunctionTemplateDecl implicit operator auto (*)(type-parameter-0-0, type-parameter-0-0)
+  |     | | |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+  |     | | `-CXXConversionDecl implicit constexpr operator auto (*)(type-parameter-0-0, type-parameter-0-0) 'auto (*() const noexcept)(T, T)' inline
+  |     | |-FunctionTemplateDecl implicit __invoke
+  |     | | |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+  |     | | `-CXXMethodDecl implicit __invoke 'auto (T, T)' static inline
+  |     | |   |-ParmVarDecl a 'T'
+  |     | |   `-ParmVarDecl b 'T'
+  |     | `-CXXDestructorDecl implicit referenced constexpr ~(lambda at tests/conformance/expr.prim.lambda/ast-generic-implicit.cpp:11:13) 'void () noexcept' inline default trivial
+  |     `-CompoundStmt
+  |       `-ReturnStmt
+  |         `-ConditionalOperator '<dependent type>'
+  |           |-BinaryOperator '<dependent type>' '<'
+  |           | |-DeclRefExpr 'T' lvalue ParmVar 'a' 'T'
+  |           | `-DeclRefExpr 'T' lvalue ParmVar 'b' 'T'
+  |           |-DeclRefExpr 'T' lvalue ParmVar 'b' 'T'
+  |           `-DeclRefExpr 'T' lvalue ParmVar 'a' 'T'
+  |-DeclStmt
+  | `-VarDecl cn '(lambda at tests/conformance/expr.prim.lambda/ast-generic-implicit.cpp:12:13)' cinit
+  |   `-LambdaExpr '(lambda at tests/conformance/expr.prim.lambda/ast-generic-implicit.cpp:12:13)'
+  |     |-CXXRecordDecl implicit class definition
+  |     | |-FunctionTemplateDecl operator()
+  |     | | |-TemplateTypeParmDecl implicit class depth 0 index 0 x:auto
+  |     | | | `-ConceptSpecializationExpr 'bool'
+  |     | | |   `-TemplateArgument type 'Small auto'
+  |     | | `-CXXMethodDecl constexpr operator() 'auto (Small auto) const' inline
+  |     | |   |-ParmVarDecl referenced x 'Small auto'
+  |     | |   `-CompoundStmt
+  |     | |     `-ReturnStmt
+  |     | |       `-BinaryOperator '<dependent type>' '+'
+  |     | |         |-DeclRefExpr 'Small auto' lvalue ParmVar 'x' 'Small auto'
+  |     | |         `-IntegerLiteral 'int' 1
+  |     | |-FunctionTemplateDecl implicit operator auto (*)(type-parameter-0-0)
+  |     | | |-TemplateTypeParmDecl implicit class depth 0 index 0 x:auto
+  |     | | | `-ConceptSpecializationExpr 'bool'
+  |     | | |   `-TemplateArgument type 'Small auto'
+  |     | | `-CXXConversionDecl implicit constexpr operator auto (*)(type-parameter-0-0) 'auto (*() const noexcept)(Small auto)' inline
+  |     | |-FunctionTemplateDecl implicit __invoke
+  |     | | |-TemplateTypeParmDecl implicit class depth 0 index 0 x:auto
+  |     | | | `-ConceptSpecializationExpr 'bool'
+  |     | | |   `-TemplateArgument type 'Small auto'
+  |     | | `-CXXMethodDecl implicit __invoke 'auto (Small auto)' static inline
+  |     | |   `-ParmVarDecl x 'Small auto'
+  |     | `-CXXDestructorDecl implicit referenced constexpr ~(lambda at tests/conformance/expr.prim.lambda/ast-generic-implicit.cpp:12:13) 'void () noexcept' inline default trivial
+  |     `-CompoundStmt
+  |       `-ReturnStmt
+  |         `-BinaryOperator '<dependent type>' '+'
+  |           |-DeclRefExpr 'Small auto' lvalue ParmVar 'x' 'Small auto'
+  |           `-IntegerLiteral 'int' 1
+  |-DeclStmt
+  | `-VarDecl da '(lambda at tests/conformance/expr.prim.lambda/ast-generic-implicit.cpp:13:13)' cinit
+  |   `-LambdaExpr '(lambda at tests/conformance/expr.prim.lambda/ast-generic-implicit.cpp:13:13)'
+  |     |-CXXRecordDecl implicit class definition
+  |     | |-FunctionTemplateDecl operator()
+  |     | | |-TemplateTypeParmDecl implicit class depth 0 index 0 x:auto
+  |     | | `-CXXMethodDecl constexpr operator() 'auto (auto &) const -> decltype(auto)' inline
+  |     | |   |-ParmVarDecl referenced x 'auto &'
+  |     | |   `-CompoundStmt
+  |     | |     `-ReturnStmt
+  |     | |       `-ParenExpr 'auto' lvalue
+  |     | |         `-DeclRefExpr 'auto' lvalue ParmVar 'x' 'auto &'
+  |     | |-FunctionTemplateDecl implicit operator decltype(auto) (*)(type-parameter-0-0 &)
+  |     | | |-TemplateTypeParmDecl implicit class depth 0 index 0 x:auto
+  |     | | `-CXXConversionDecl implicit constexpr operator decltype(auto) (*)(type-parameter-0-0 &) 'auto (*() const noexcept)(auto &) -> decltype(auto)' inline
+  |     | |-FunctionTemplateDecl implicit __invoke
+  |     | | |-TemplateTypeParmDecl implicit class depth 0 index 0 x:auto
+  |     | | `-CXXMethodDecl implicit __invoke 'auto (auto &) -> decltype(auto)' static inline
+  |     | |   `-ParmVarDecl x 'auto &'
+  |     | `-CXXDestructorDecl implicit referenced constexpr ~(lambda at tests/conformance/expr.prim.lambda/ast-generic-implicit.cpp:13:13) 'void () noexcept' inline default trivial
+  |     `-CompoundStmt
+  |       `-ReturnStmt
+  |         `-ParenExpr 'auto' lvalue
+  |           `-DeclRefExpr 'auto' lvalue ParmVar 'x' 'auto &'
+  |-DeclStmt
+  | `-VarDecl va '(lambda at tests/conformance/expr.prim.lambda/ast-generic-implicit.cpp:14:13)' cinit
+  |   `-LambdaExpr '(lambda at tests/conformance/expr.prim.lambda/ast-generic-implicit.cpp:14:13)'
+  |     |-CXXRecordDecl implicit class definition
+  |     | |-FunctionTemplateDecl operator()
+  |     | | |-TemplateTypeParmDecl implicit class depth 0 index 0 ... xs:auto
+  |     | | `-CXXMethodDecl constexpr operator() 'auto (auto...) const' inline
+  |     | |   |-ParmVarDecl referenced xs 'auto...' pack
+  |     | |   `-CompoundStmt
+  |     | |     `-ReturnStmt
+  |     | |       `-CXXFoldExpr '<dependent type>'
+  |     | |         |-<<<NULL>>>
+  |     | |         |-IntegerLiteral 'int' 0
+  |     | |         `-DeclRefExpr 'auto' lvalue ParmVar 'xs' 'auto...'
+  |     | |-FunctionTemplateDecl implicit operator auto (*)(type-parameter-0-0...)
+  |     | | |-TemplateTypeParmDecl implicit class depth 0 index 0 ... xs:auto
+  |     | | `-CXXConversionDecl implicit constexpr operator auto (*)(type-parameter-0-0...) 'auto (*() const noexcept)(auto...)' inline
+  |     | |-FunctionTemplateDecl implicit __invoke
+  |     | | |-TemplateTypeParmDecl implicit class depth 0 index 0 ... xs:auto
+  |     | | `-CXXMethodDecl implicit __invoke 'auto (auto...)' static inline
+  |     | |   `-ParmVarDecl xs 'auto...' pack
+  |     | `-CXXDestructorDecl implicit referenced constexpr ~(lambda at tests/conformance/expr.prim.lambda/ast-generic-implicit.cpp:14:13) 'void () noexcept' inline default trivial
+  |     `-CompoundStmt
+  |       `-ReturnStmt
+  |         `-CXXFoldExpr '<dependent type>'
+  |           |-<<<NULL>>>
+  |           |-IntegerLiteral 'int' 0
+  |           `-DeclRefExpr 'auto' lvalue ParmVar 'xs' 'auto...'
+  |-DeclStmt
+  | `-VarDecl rq '(lambda at tests/conformance/expr.prim.lambda/ast-generic-implicit.cpp:15:13)' cinit
+  |   `-LambdaExpr '(lambda at tests/conformance/expr.prim.lambda/ast-generic-implicit.cpp:15:13)'
+  |     |-CXXRecordDecl implicit class definition
+  |     | |-FunctionTemplateDecl operator()
+  |     | | |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+  |     | | |-ConceptSpecializationExpr 'bool'
+  |     | | | `-TemplateArgument type 'T'
+  |     | | `-CXXMethodDecl constexpr operator() 'auto (T) const' inline
+  |     | |   |-ParmVarDecl referenced x 'T'
+  |     | |   `-CompoundStmt
+  |     | |     `-ReturnStmt
+  |     | |       `-ImplicitCastExpr 'T' xvalue <NoOp>
+  |     | |         `-DeclRefExpr 'T' lvalue ParmVar 'x' 'T'
+  |     | |-FunctionTemplateDecl implicit operator auto (*)(type-parameter-0-0)
+  |     | | |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+  |     | | |-ConceptSpecializationExpr 'bool'
+  |     | | | `-TemplateArgument type 'T'
+  |     | | `-CXXConversionDecl implicit constexpr operator auto (*)(type-parameter-0-0) 'auto (*() const noexcept)(T)' inline
+  |     | |-FunctionTemplateDecl implicit __invoke
+  |     | | |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+  |     | | |-ConceptSpecializationExpr 'bool'
+  |     | | | `-TemplateArgument type 'T'
+  |     | | `-CXXMethodDecl implicit __invoke 'auto (T)' static inline
+  |     | |   `-ParmVarDecl x 'T'
+  |     | `-CXXDestructorDecl implicit referenced constexpr ~(lambda at tests/conformance/expr.prim.lambda/ast-generic-implicit.cpp:15:13) 'void () noexcept' inline default trivial
+  |     `-CompoundStmt
+  |       `-ReturnStmt
+  |         `-ImplicitCastExpr 'T' xvalue <NoOp>
+  |           `-DeclRefExpr 'T' lvalue ParmVar 'x' 'T'
+  |-DeclStmt
+  | `-VarDecl used k 'int' cinit
+  |   `-IntegerLiteral 'int' 1
+  `-DeclStmt
+    `-VarDecl cp '(lambda at tests/conformance/expr.prim.lambda/ast-generic-implicit.cpp:17:13)' cinit
+      `-LambdaExpr '(lambda at tests/conformance/expr.prim.lambda/ast-generic-implicit.cpp:17:13)'
+        |-CXXRecordDecl implicit class definition
+        | |-FunctionTemplateDecl operator()
+        | | |-TemplateTypeParmDecl implicit class depth 0 index 0 x:auto
+        | | `-CXXMethodDecl constexpr operator() 'auto (auto) const' inline
+        | |   |-ParmVarDecl referenced x 'auto'
+        | |   `-CompoundStmt
+        | |     `-ReturnStmt
+        | |       `-BinaryOperator '<dependent type>' '+'
+        | |         |-DeclRefExpr 'auto' lvalue ParmVar 'x' 'auto'
+        | |         `-DeclRefExpr 'const int' lvalue Var 'k' 'int'
+        | |-FieldDecl implicit 'int'
+        | `-CXXDestructorDecl implicit referenced constexpr ~(lambda at tests/conformance/expr.prim.lambda/ast-generic-implicit.cpp:17:13) 'void () noexcept' inline default trivial
+        |-ImplicitCastExpr 'int' <LValueToRValue>
+        | `-DeclRefExpr 'int' lvalue Var 'k' 'int'
+        `-CompoundStmt
+          `-ReturnStmt
+            `-BinaryOperator '<dependent type>' '+'
+              |-DeclRefExpr 'auto' lvalue ParmVar 'x' 'auto'
+              `-DeclRefExpr 'const int' lvalue Var 'k' 'int'
+
