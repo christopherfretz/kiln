@@ -203,6 +203,15 @@ impl Sema<'_, '_> {
         match (x.template.is_some(), y.template.is_some()) {
             (false, true) => return true,
             (true, false) => return false,
+            (true, true) => {
+                // /2.5: the more specialized template.
+                if set.tmpl_order.contains(&(c1, c2)) {
+                    return true;
+                }
+                if set.tmpl_order.contains(&(c2, c1)) {
+                    return false;
+                }
+            }
             _ => {}
         }
         // /2.8: a non-rewritten candidate over a rewritten one; /2.9:
@@ -213,12 +222,39 @@ impl Sema<'_, '_> {
         if x.rewrite.is_reversed() != y.rewrite.is_reversed() {
             return !x.rewrite.is_reversed();
         }
-        // /2.5 (more specialized template): WP-071. /2.6 (more
+        // /2.6 (more
         // constrained): WP-073. /2.7 (constructor of a derived class over
         // an inherited constructor): inherited constructors are not
         // candidates yet. /2.8-2.10 (rewritten candidates, deduction
         // guides): WP-068b, S3T.
         false
+    }
+
+    /// Records in `set.tmpl_order` which viable function template
+    /// specializations come from a more specialized template than which
+    /// ([over.match.best.general]/2.5, [temp.func.order]), for `better`.
+    pub(crate) fn order_template_candidates(&mut self, set: &mut OverloadCandidateSet) {
+        set.tmpl_order.clear();
+        let ts: Vec<(u32, DeclId)> = set
+            .cands
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| c.viable)
+            .filter_map(|(i, c)| Some((u32::try_from(i).ok()?, c.template?)))
+            .collect();
+        if ts.len() < 2 {
+            return;
+        }
+        let nargs = set.args.len();
+        for (i, &(c1, t1)) in ts.iter().enumerate() {
+            for &(c2, t2) in &ts[i + 1..] {
+                if self.more_specialized(t1, t2, nargs) {
+                    set.tmpl_order.push((c1, c2));
+                } else if self.more_specialized(t2, t1, nargs) {
+                    set.tmpl_order.push((c2, c1));
+                }
+            }
+        }
     }
 
     /// [over.match.best]/2-3: the best viable function of `set` (clang

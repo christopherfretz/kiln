@@ -94,6 +94,13 @@ impl TypeNames for SemaNames<'_> {
             self.write_scope(decl, out);
         }
         self.write_unscoped(decl, out);
+        // A function template specialization prints its arguments
+        // (clang `getNameForDiagnostic`): `f<int>`.
+        if self.ast.decls.get(decl).kind().is_function()
+            && let Some((_, info)) = self.ast.spec_info(decl)
+        {
+            kiln_ast::types::write_arg_list(&self.ast.types, self, info.print_args, out);
+        }
     }
 
     fn write_expr(&self, expr: ExprId, out: &mut String) {

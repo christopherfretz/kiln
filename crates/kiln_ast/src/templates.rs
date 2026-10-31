@@ -1054,6 +1054,57 @@ impl AstBuilder<'_> {
         d
     }
 
+    /// The specialization `f<args>` of function template `template`
+    /// ([temp.fct.spec], sema-templates.md §6.1, clang's
+    /// `FunctionTemplateSpecializationInfo`): a function of the pattern's
+    /// kind `kind` with function type `ty` and specifiers `spec`, linked
+    /// [`TemplLink::Specialization`] (`SpecKind::Undeclared`), in the
+    /// template's semantic context but neither a member nor a name.
+    /// Parameters are attached afterwards ([`AstBuilder::set_params`]).
+    /// `canonical` is `types.canonical_args(args)`; the caller has probed
+    /// [`TemplateTables::find_spec`] first.
+    pub fn function_spec(
+        &mut self,
+        template: DeclId,
+        args: ArgListId,
+        canonical: ArgListId,
+        kind: DeclKind,
+        ty: QualType,
+        spec: crate::decl::FnSpec,
+    ) -> DeclId {
+        let tmpl = self.ast.first(template);
+        let n = *self.ast.decls.get(tmpl);
+        let ctx = n.ctx().unwrap_or(self.ast.tu);
+        let mut h = DeclHead::new(ctx, n.name(), n.loc());
+        h.misc = n.misc();
+        let i = self.ast.templates.specs.len() as u32;
+        let d = self.ast.decls.next_id();
+        let redecl = crate::decl::Redecl { prev: None, group: self.ast.redecls.new_group(d) };
+        let payload = Payload::Function(crate::decl::FunctionData {
+            redecl,
+            params: ListId::EMPTY,
+            body: None,
+            spec,
+            templ: TemplLink::new(TemplLinkKind::Specialization, i),
+        });
+        let depth = std::mem::take(&mut self.ast.templates.dependent_depth);
+        let d2 = self.add_pattern(h, kind, Some(ty), payload);
+        self.ast.templates.dependent_depth = depth;
+        debug_assert_eq!(d, d2);
+        self.ast.templates.specs.push(SpecInfo {
+            template: tmpl,
+            args,
+            kind: SpecKind::Undeclared,
+            from: tmpl,
+            from_args: None,
+            point_of_instantiation: Loc::INVALID,
+            print_args: args,
+        });
+        let _ = self.ast.templates.specializations.insert((tmpl, canonical), d);
+        self.ast.templates.spec_order.entry(tmpl).or_default().push(d);
+        d
+    }
+
     /// The specialization `v<args>` of variable template `template`
     /// ([temp.spec], sema-templates.md §4.7, clang's
     /// `VarTemplateSpecializationDecl`): a `Var` with a

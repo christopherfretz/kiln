@@ -51,6 +51,13 @@ pub enum FrameKind {
     /// The initializer of a variable template specialization (charged
     /// to the specialization's report row without counting it again).
     VarTemplateInit,
+    /// Substituting deduced arguments into a function template's
+    /// signature ([temp.deduct.general]/5; a SFINAE context). The frame's
+    /// `args` are the deduced arguments.
+    DeducedArgSubstitution,
+    /// Substituting explicitly-specified arguments into a function
+    /// template's signature ([temp.arg.explicit]; a SFINAE context).
+    ExplicitArgSubstitution,
 }
 
 impl FrameKind {
@@ -77,6 +84,12 @@ impl FrameKind {
             FrameKind::VarTemplateInstantiation | FrameKind::VarTemplateInit => {
                 DiagId::note_var_template_spec_here
             }
+            FrameKind::DeducedArgSubstitution => {
+                DiagId::note_function_template_deduction_instantiation_here
+            }
+            FrameKind::ExplicitArgSubstitution => {
+                DiagId::note_explicit_template_arg_substitution_here
+            }
         }
     }
 
@@ -97,6 +110,8 @@ impl FrameKind {
             FrameKind::PartialSpecDeduction => "partial-deduction",
             FrameKind::VarTemplateInstantiation => "var",
             FrameKind::VarTemplateInit => "var-init",
+            FrameKind::DeducedArgSubstitution => "deduction",
+            FrameKind::ExplicitArgSubstitution => "explicit-args",
         }
     }
 }
@@ -311,6 +326,7 @@ impl Sema<'_, '_> {
             | FrameKind::VarTemplateInit
             | FrameKind::Enum
             | FrameKind::Nsdmi => Some(false),
+            FrameKind::DeducedArgSubstitution | FrameKind::ExplicitArgSubstitution => Some(true),
             _ => None,
         };
         if kind.is_instantiation() && self.inst.stack.depth() >= self.inst.limits.depth {
@@ -397,6 +413,17 @@ impl Sema<'_, '_> {
                 s
             }
             FrameKind::PartialSpecDeduction => self.partial_spec_desc(f.entity, f.args),
+            FrameKind::DeducedArgSubstitution | FrameKind::ExplicitArgSubstitution => {
+                let name = self.qualified_decl_name(f.template);
+                match f.args {
+                    Some(l) => format!("'{name}' {}", self.template_args_desc(f.template, l)),
+                    None => format!("'{name}'"),
+                }
+            }
+            FrameKind::FunctionSpec => match self.ast.spec_info(f.entity) {
+                Some((_, i)) => self.function_spec_name(f.entity, i.template, i.args),
+                None => self.qualified_decl_name(f.entity),
+            },
             FrameKind::VarTemplateInstantiation | FrameKind::VarTemplateInit => {
                 match self.ast.spec_info(f.entity) {
                     Some((_, i)) => self.spec_name(i.template, i.print_args),

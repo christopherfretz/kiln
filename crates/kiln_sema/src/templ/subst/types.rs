@@ -98,10 +98,16 @@ impl Substituter<'_, '_, '_> {
             }
             TypeView::ConstantArray(a) => {
                 let e = self.ty(a.elem, loc)?;
-                match a.size_expr {
-                    Some(s) => self.chunk(e, Chunk::Array { size: Some(s), loc }, loc),
-                    None => Ok(self.sema.ast.types.constant_array(e, a.size, None)),
+                if let Some(s) = a.size_expr {
+                    return self.chunk(e, Chunk::Array { size: Some(s), loc }, loc);
                 }
+                // [temp.deduct]/11.1: the element checks of a bound
+                // written without an expression.
+                let t = &self.sema.ast.types;
+                if t.is_void(e) || t.is_function(e) || t.is_reference(e) {
+                    return self.chunk(e, Chunk::Array { size: None, loc }, loc);
+                }
+                Ok(self.sema.ast.types.constant_array(e, a.size, None))
             }
             TypeView::IncompleteArray(elem) => {
                 let e = self.ty(elem, loc)?;

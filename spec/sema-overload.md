@@ -861,8 +861,8 @@ Where the code differs from (or details) the design above:
   per function found; a deleted class `operator new` is `sema_call_deleted_function`. A member
   `operator delete` without an exception specification is implicitly
   `noexcept` ([except.spec]/9).
-- **Gaps (owners).** Function templates are not operator candidates
-  (WP-071). Builtin `<=>` on scalars reports "not supported yet" where
+- **Gaps (owners).** Reversed and rewritten operator function template
+  candidates are not formed (see §10.7). Builtin `<=>` on scalars reports "not supported yet" where
   clang reports the missing `std::strong_ordering` (WP-082). No access
   check on class `operator new`/`delete`; no destroying
   `operator delete` (WP-061 follow-up). `x.operator+=(2)` (member access
@@ -873,6 +873,43 @@ Where the code differs from (or details) the design above:
   `aka` of a template specialization with an expression argument prints
   `'T<0 + 1>' (aka 'T<1>')` where clang prints no `aka` (types/print).
   `ovl.*` counters are not printed by the driver (§10.5).
+
+### 10.7 Landed (WP-071): template candidates
+- `add_template_candidate` (`call.rs`) adds the specialization
+  `deduce_call` forms as an ordinary candidate with
+  `Candidate::template` set. When deduction fails, it adds a non-viable
+  `BadDeduction` candidate whose note `deduction_note` writes. When the
+  arity is wrong, the pattern is added so the arity note is the one
+  printed.
+- Callers:
+  - `resolve_unresolved_call` (named calls; `f<args>` keeps only the
+    templates);
+  - `resolve_member_call` (`OvlMember::targs` holds `e.f<args>`);
+  - `add_nonmember_oper` and `add_member_opers`, for non-reversed,
+    non-rewritten operator candidates only. A reversed or rewritten
+    template candidate still sets `skipped_templates`, and the
+    operator's resolution then reports "not yet implemented".
+- /2.5 (more specialized template): `order_template_candidates` runs
+  `more_specialized` (spec/sema-templates.md §6, `templ/order.rs`) over
+  each pair of viable template candidates before `best_viable`. It
+  records the ordered pairs in `OverloadCandidateSet::tmpl_order`, and
+  `better()` reads them, because it cannot deduce through `&self`.
+- Candidate notes print `candidate function [with T = int]` and
+  `candidate function template not viable` (CWG1391) as clang's `FnDesc`
+  does (`diag.rs::spec_desc`).
+- Not yet:
+  - `ics.rs` (conversion function templates);
+  - `arrow.rs` (`operator->` templates);
+  - a diagnostic for `&f` when no template matches the target type. That
+    case still reports "not yet implemented", where clang prints
+    `address of overloaded function` with deduction notes.
+- Address of a function template ([temp.deduct.funcaddr]):
+  - `resolve_single_template_id` resolves `&f<int>` when exactly one
+    template accepts the explicit args.
+  - When no non-template matches the target, `address_template_candidates`
+    deduces P (the template's function type) from A (the target type)
+    through `deduce_spec(.., target)`. It keeps the specializations that
+    match exactly, then the one more specialized than all the others.
 
 ## 11. Agent parallelization (WP-068 split)
 WP-068 has more than five deliverables, so it splits. 068a merges §10.1–10.3

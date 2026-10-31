@@ -29,8 +29,20 @@ const MAX_ELEMS: u64 = 16;
 
 fn name_of(ast: &Ast, d: DeclId) -> String {
     let mut s = String::new();
-    AstNames::new(ast).write_name(d, &mut s);
+    write_name_for_diag(ast, d, &mut s);
     s
+}
+
+/// `d`'s name as clang's `getNameForDiagnostic` (unqualified): a function
+/// template specialization with its arguments (`f<int>`).
+fn write_name_for_diag(ast: &Ast, d: DeclId, out: &mut String) {
+    let names = AstNames::new(ast);
+    names.write_name(d, out);
+    if ast.decls.get(d).kind().is_function()
+        && let Some((_, info)) = ast.spec_info(d)
+    {
+        kiln_ast::types::write_arg_list(&ast.types, &names, info.print_args, out);
+    }
 }
 
 /// `d`'s name qualified by its enclosing classes and namespaces (clang's
@@ -404,7 +416,7 @@ impl Oven {
             let mut s = String::from("in call to '");
             self.object_prefix(ast, fr.call_pc as usize, fr.fb as usize, fr.func, &mut s);
             if let Some(d) = func.decl {
-                AstNames::new(ast).write_name(d, &mut s);
+                write_name_for_diag(ast, d, &mut s);
             }
             s.push('(');
             for (k, p) in func.params.iter().enumerate() {

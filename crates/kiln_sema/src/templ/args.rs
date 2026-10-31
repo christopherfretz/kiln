@@ -122,10 +122,17 @@ impl MultiLevelArgs {
         args: impl Fn(ArgListId) -> Vec<TemplateArg>,
     ) -> ArgLookup {
         match self.level(depth) {
-            Some(l) if l.mode == LevelMode::Substitute => args(l.args)
-                .get(usize::from(index))
-                .copied()
-                .map_or(ArgLookup::Missing, ArgLookup::Arg),
+            Some(l) if l.mode == LevelMode::Substitute => {
+                match args(l.args).get(usize::from(index)) {
+                    // Not yet deduced (explicit arguments substituted before
+                    // deduction, §6.1 step 1): the parameter stays.
+                    Some(a) if matches!(a.view(), ArgView::Null) => {
+                        ArgLookup::Retain(self.retained_depth(depth))
+                    }
+                    Some(&a) => ArgLookup::Arg(a),
+                    None => ArgLookup::Missing,
+                }
+            }
             _ => ArgLookup::Retain(self.retained_depth(depth)),
         }
     }
@@ -249,7 +256,7 @@ impl Sema<'_, '_> {
     /// Checks and converts one written argument for parameter `p`
     /// (§3.2). `prior` holds the converted arguments of the parameters
     /// before `p` (a non-type parameter's type may name them).
-    fn check_template_arg(
+    pub(crate) fn check_template_arg(
         &mut self,
         tmpl: DeclId,
         depth: u16,
@@ -327,7 +334,12 @@ impl Sema<'_, '_> {
 
     /// The levels for substituting into parameter `depth` of `tmpl`:
     /// outer levels retained, this level's `prior` arguments.
-    fn prior_levels(&mut self, tmpl: DeclId, depth: u16, prior: &[TemplateArg]) -> MultiLevelArgs {
+    pub(crate) fn prior_levels(
+        &mut self,
+        tmpl: DeclId,
+        depth: u16,
+        prior: &[TemplateArg],
+    ) -> MultiLevelArgs {
         let mut m = Self::outer_levels(tmpl, depth);
         let l = self.ast.types.arg_list(prior);
         m.push(l, tmpl, LevelMode::Substitute);

@@ -70,18 +70,19 @@ impl Sema<'_, '_> {
             self.emit(msg);
             return None;
         }
-        if self.ast.templates.expr_targs.get(ule).is_some() {
-            // `f<args>(…)`: explicit template arguments (WP-071).
-            self.templ_unimplemented("calls to function templates", n.loc());
-            return None;
+        // `f<args>(…)`: only the templates are candidates
+        // ([over.match.call.general]/1 via [temp.arg.explicit]).
+        let explicit = self.ast.templates.expr_targs.get(ule).copied();
+        if explicit.is_some() {
+            cands.retain(|&(d, _)| self.kind_of(d) == DeclKind::FunctionTemplate);
+            if cands.is_empty() {
+                self.templ_unimplemented("explicit template arguments for a non-template", n.loc());
+                return None;
+            }
         }
         let templates = cands.iter().any(|&(d, _)| self.kind_of(d) == DeclKind::FunctionTemplate);
         let plain =
             cands.iter().filter(|&&(d, _)| self.kind_of(d) != DeclKind::FunctionTemplate).count();
-        if plain == 0 {
-            self.templ_unimplemented("calls to function templates", n.loc());
-            return None;
-        }
         let nns = self.ast.templates.expr_nns.get(ule).copied();
         if plain == 1 && !templates {
             // One candidate: the direct path's conversions and
@@ -95,24 +96,96 @@ impl Sema<'_, '_> {
         let base = self.push_call_args(&mut set, args, braced);
         for (i, &(d, f)) in cands.iter().enumerate() {
             if self.kind_of(d) == DeclKind::FunctionTemplate {
-                set.skipped_templates = true;
-                continue;
+                if self.ast.decls.cold.requires_clause.contains(d) {
+                    set.uncertain = true;
+                }
+                self.add_template_candidate(
+                    &mut set,
+                    d,
+                    f,
+                    explicit,
+                    CandidateKind::Function,
+                    IcsOptions::NONE,
+                    n.loc(),
+                );
+            } else {
+                if self.ast.decls.cold.requires_clause.contains(d) {
+                    set.uncertain = true;
+                }
+                self.add_candidate(&mut set, d, f, CandidateKind::Function, IcsOptions::NONE);
             }
-            if self.ast.decls.cold.requires_clause.contains(d) {
-                set.uncertain = true;
-            }
-            self.add_candidate(&mut set, d, f, CandidateKind::Function, IcsOptions::NONE);
             if i >= decls.len()
                 && let Some(c) = set.cands.last_mut()
             {
                 c.adl_only = true;
             }
         }
+        self.order_template_candidates(&mut set);
         let out = self.best_viable(&mut set);
         self.ovl.lists.truncate(base);
         let r = self.finish_overloaded_call(&set, out, name, at, n.loc(), naming, nns, ule);
         self.end_set(set);
         r
+    }
+
+    /// Adds function template `ft` (found as `found`) to `set`: its
+    /// specialization deduced from the set's arguments (§6.1,
+    /// spec/sema-overload.md §2.3), else a non-viable candidate that
+    /// keeps the deduction failure for its note (§10.4).
+    #[allow(clippy::too_many_arguments, reason = "add_candidate's parts and the template's")]
+    pub(crate) fn add_template_candidate(
+        &mut self,
+        set: &mut OverloadCandidateSet,
+        ft: DeclId,
+        found: DeclId,
+        explicit: Option<kiln_ast::ids::ArgListId>,
+        kind: CandidateKind,
+        first_opts: IcsOptions,
+        loc: Loc,
+    ) {
+        // A non-member operator template's first parameter takes the
+        // object operand ([over.match.oper]/2).
+        let mut args = Vec::with_capacity(set.args.len() + 1);
+        if set.oper
+            && kind == CandidateKind::Function
+            && let Some(o) = set.object
+        {
+            args.push(o);
+        }
+        args.extend_from_slice(&set.args);
+        let pattern = self.templated_function(ft).unwrap_or(ft);
+        match self.deduce_call(ft, explicit, &args, loc) {
+            Ok(spec) => {
+                self.add_candidate(set, spec, found, kind, first_opts);
+                if let Some(c) = set.cands.last_mut() {
+                    c.template = Some(ft);
+                }
+            }
+            Err(fail) => {
+                use crate::templ::deduce::Tdk;
+                if matches!(fail.tdk, Tdk::TooManyArguments | Tdk::TooFewArguments) {
+                    self.add_candidate(set, pattern, found, kind, first_opts);
+                    if let Some(c) = set.cands.last_mut() {
+                        c.template = Some(ft);
+                        if c.viable {
+                            c.viable = false;
+                            c.failure = super::CandidateFailure::BadDeduction;
+                            c.deduction = Some(fail);
+                        }
+                    }
+                    return;
+                }
+                self.ovl.stats.candidates += 1;
+                let mut c = super::Candidate::new(pattern, found, kind);
+                let start = u32::try_from(set.ics.len()).unwrap_or(u32::MAX);
+                c.ics = start..start;
+                c.template = Some(ft);
+                c.viable = false;
+                c.failure = super::CandidateFailure::BadDeduction;
+                c.deduction = Some(fail);
+                set.cands.push(c);
+            }
+        }
     }
 
     /// Adds the call arguments `args` (`braced` the braced-init-list ones)

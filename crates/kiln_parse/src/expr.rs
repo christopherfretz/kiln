@@ -782,6 +782,20 @@ impl Parser<'_, '_> {
                         continue;
                     }
                     e = self.s.act_on_member(e, name, nl, loc, arrow);
+                    // `e.f<args>` naming a member function template
+                    // ([temp.names]/3).
+                    if self.at(Punct::Less) && self.s.is_member_template_ref(e) {
+                        let at = self.loc();
+                        let (args, _, _) = self.parse_template_arg_list()?;
+                        let l = self.s.ast.types.arg_list(&args);
+                        if !self.s.set_member_template_args(e, l) {
+                            self.unsupported(
+                                "dependent template arguments of a member template",
+                                at,
+                            );
+                            return None;
+                        }
+                    }
                 }
                 Some(Punct::PlusPlus) => {
                     self.bump();
@@ -968,7 +982,11 @@ impl Parser<'_, '_> {
         if self.at(Punct::Less) && (template_kw || is_template_class(class)) {
             return match self.parse_template_id_rest(class, name, nl) {
                 Ok(TemplateIdRef::Overload(e)) => {
-                    if qual.is_none() && self.at(Punct::LParen) {
+                    let e = self.s.widen_function_template_id(e, name, qual.map(|q| q.ctx));
+                    if !self.at(Punct::LParen) {
+                        return Some(self.s.resolve_single_template_id(e));
+                    }
+                    if qual.is_none() {
                         self.s.act_on_template_id_call_name(e);
                     }
                     Some(e)

@@ -19,9 +19,10 @@ use crate::init::InitList;
 
 impl Sema<'_, '_> {
     /// Whether the members `decls` form a member function overload set
-    /// (functions and function templates, at least one of them a member).
+    /// (functions and function templates, at least one of them a member;
+    /// a lone member function template is one too, resolved at the call).
     pub(crate) fn is_member_overload_set(&self, decls: &[DeclId]) -> bool {
-        decls.len() > 1
+        (decls.len() > 1 || decls.iter().any(|&d| self.kind_of(d) == DeclKind::FunctionTemplate))
             && decls.iter().all(|&d| {
                 let k = self.kind_of(self.templated_or_self(d));
                 k.is_function() && k != DeclKind::Function
@@ -53,6 +54,40 @@ impl Sema<'_, '_> {
         let x = self.ignore_parens(e);
         (self.ast.exprs.get(x).kind() == ExprKind::MemberExpr && self.ovl.members.contains_key(&x))
             .then_some(x)
+    }
+
+    /// Whether `e` is an overloaded member access whose set has a member
+    /// function template (so `e.f<args>` is a template-id,
+    /// [temp.names]/3).
+    pub fn is_member_template_ref(&self, e: ExprId) -> bool {
+        self.member_overload(e).is_some_and(|x| {
+            self.member_overload_decls(x)
+                .iter()
+                .any(|&d| self.kind_of(d) == DeclKind::FunctionTemplate)
+        })
+    }
+
+    /// Records the explicit template arguments `targs` of the member
+    /// template-id `e` (see [`Self::is_member_template_ref`]); false
+    /// (nothing recorded) for dependent arguments, which a member
+    /// access of a non-dependent object does not take yet.
+    pub fn set_member_template_args(&mut self, e: ExprId, targs: kiln_ast::ids::ArgListId) -> bool {
+        if self
+            .ast
+            .types
+            .arg_list_flags(targs)
+            .intersects(kiln_ast::types::TypeFlags::DEPENDENT_INSTANTIATION)
+        {
+            return false;
+        }
+        let Some(x) = self.member_overload(e) else { return false };
+        match self.ovl.members.get_mut(&x) {
+            Some(m) => {
+                m.targs = Some(targs);
+                true
+            }
+            None => false,
+        }
     }
 
     /// The member functions of the overloaded member access `x`.
@@ -104,15 +139,26 @@ impl Sema<'_, '_> {
             if self.ast.decls.get(d).has(DeclFlags::INVALID) {
                 continue;
             }
-            if self.kind_of(d) == DeclKind::FunctionTemplate {
-                set.skipped_templates = true;
-                continue;
-            }
             if self.ast.decls.cold.requires_clause.contains(d) {
                 set.uncertain = true;
             }
+            if self.kind_of(d) == DeclKind::FunctionTemplate {
+                // A member function template: its specialization deduced
+                // from the call's arguments ([temp.deduct.call]).
+                self.add_template_candidate(
+                    &mut set,
+                    d,
+                    f,
+                    m.targs,
+                    CandidateKind::Method,
+                    IcsOptions::NONE,
+                    loc,
+                );
+                continue;
+            }
             self.add_candidate(&mut set, d, f, CandidateKind::Method, IcsOptions::NONE);
         }
+        self.order_template_candidates(&mut set);
         let out = self.best_viable(&mut set);
         self.ovl.lists.truncate(mark);
         let won = self.call_winner(&set, out, name, loc, loc, true);

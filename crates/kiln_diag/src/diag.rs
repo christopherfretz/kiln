@@ -261,7 +261,7 @@ impl Diag {
     }
 
     /// The rendered message.
-    pub(crate) fn message(&self) -> String {
+    pub fn message(&self) -> String {
         match (&self.text, self.id) {
             (Some(t), _) => t.clone(),
             (None, Some(id)) => {

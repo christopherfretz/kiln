@@ -106,7 +106,6 @@ pub(crate) enum CandidateFailure {
         arg: u16,
     },
     /// Template argument deduction failed (WP-071).
-    #[allow(dead_code, reason = "stub: WP-071 template candidates")]
     BadDeduction,
     /// The trailing requires-clause is not satisfied (WP-073).
     #[allow(dead_code, reason = "stub: WP-073 constraints")]
@@ -172,6 +171,8 @@ pub(crate) struct Candidate {
     /// A built-in candidate's parameter types (the second is
     /// [`QualType::ERROR`] for a unary operator).
     pub builtin: [QualType; 2],
+    /// `BadDeduction`: why the template's deduction failed (§10.4).
+    pub deduction: Option<Box<crate::templ::deduce_call::DeductionFailure>>,
 }
 
 /// The result of overload resolution (spec/sema-overload.md §10.1).
@@ -203,6 +204,7 @@ impl Candidate {
             ambiguous_mark: false,
             final_conv: None,
             builtin: [QualType::ERROR; 2],
+            deduction: None,
         }
     }
 
@@ -262,6 +264,11 @@ pub(crate) struct OverloadCandidateSet {
     pub note_extra_args: usize,
     /// The operator of the built-in candidates, for their notes.
     pub builtin_op: Option<kiln_ast::names::OverloadedOperator>,
+    /// Pairs `(c1, c2)` of viable function template specializations
+    /// whose template is more specialized for `c1`
+    /// ([over.match.best.general]/2.5), precomputed by
+    /// `order_template_candidates` because `better` cannot deduce.
+    pub tmpl_order: Vec<(u32, u32)>,
 }
 
 impl Default for OverloadCandidateSet {
@@ -281,6 +288,7 @@ impl Default for OverloadCandidateSet {
             oper: false,
             note_extra_args: 0,
             builtin_op: None,
+            tmpl_order: Vec::new(),
         }
     }
 }
@@ -302,6 +310,7 @@ impl OverloadCandidateSet {
         self.oper = false;
         self.note_extra_args = 0;
         self.builtin_op = None;
+        self.tmpl_order.clear();
     }
 
     /// The conversion sequences of candidate `c`.
@@ -406,6 +415,9 @@ pub(crate) struct OvlMember {
     /// The object is an implicit `this` (a static winner is then named
     /// by a `DeclRefExpr`, as clang does).
     pub implicit: bool,
+    /// The explicit template arguments of a member template-id
+    /// (`this->f<int>(…)`, [temp.arg.explicit]).
+    pub targs: Option<kiln_ast::ids::ArgListId>,
 }
 
 /// The lookup details of an `UnresolvedLookupExpr` its decl list does not

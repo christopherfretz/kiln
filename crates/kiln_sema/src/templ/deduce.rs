@@ -15,7 +15,6 @@ use kiln_diag::{Diag, DiagId};
 use kiln_source::Loc;
 
 use crate::Sema;
-use crate::templ::args::ConvertedArgs;
 
 /// The flags of one deduction step (clang's `TDF_*`, §6.2).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
@@ -583,7 +582,13 @@ impl Sema<'_, '_> {
                     }
                     return r;
                 }
-                self.deduce_from_bases(name, args, a, d, next).unwrap_or_else(|| mismatch(d))
+                // No base matches: the result for `A` itself (clang's
+                // `DeduceTemplateSpecArguments`).
+                match self.deduce_from_bases(name, args, a, d, next) {
+                    Some(b) => b,
+                    None if r == Tdk::NonDeducedMismatch => mismatch(d),
+                    None => r,
+                }
             }
             TypeView::Complex(pe) => {
                 let TypeView::Complex(ae) = av else { return mismatch(d) };
@@ -894,19 +899,5 @@ impl Sema<'_, '_> {
             ArgView::Type(q) => format!("'{}'", self.ty_str(q)),
             _ => self.arg_str(a),
         }
-    }
-
-    /// Deduces the arguments of function template `tmpl` from a call
-    /// ([temp.deduct.call]). Not implemented (WP-071): reports and fails.
-    pub fn deduce_call(
-        &mut self,
-        tmpl: DeclId,
-        explicit: Option<&ConvertedArgs>,
-        args: &[ExprId],
-        loc: Loc,
-    ) -> Option<ConvertedArgs> {
-        let _ = (tmpl, explicit, args);
-        self.templ_unimplemented("template argument deduction", loc);
-        None
     }
 }
