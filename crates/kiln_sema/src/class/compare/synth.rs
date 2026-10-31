@@ -24,6 +24,7 @@ use kiln_ast::class::{CmpCategory, CmpResult};
 use kiln_ast::decl::{DeclFlags, DeclKind, DefinitionBits, FieldData, VarSpec};
 use kiln_ast::expr::{BinaryOp, CastKind, UnaryOp, ValueCategory};
 use kiln_ast::names::DeclName;
+use kiln_ast::names::OverloadedOperator as OO;
 use kiln_ast::stmt::{IfKind, LoopData, StmtKind};
 use kiln_ast::types::{ExcSpec, NoexceptValue, Quals};
 use kiln_ast::{DeclHead, DeclId, ExprId, QualType, StmtId};
@@ -35,7 +36,8 @@ use crate::class::special::SynthKind;
 use crate::conv;
 use crate::expr::CastStyle;
 use crate::init::Initializer;
-use crate::overload::oper::binary_of;
+use crate::overload::OvlOutcome;
+use crate::overload::oper::{OperForm, binary_of};
 use crate::scope::{Scope, ScopeKind};
 
 /// The column offset of the last character of `default` from its first.
@@ -412,6 +414,28 @@ impl Sema<'_, '_> {
         Some(Piece::Stmt(self.builder().for_stmt(data, loc)))
     }
 
+    /// Whether `l <=> l` finds no viable `operator<=>`, so that a
+    /// defaulted `<=>` with a specified category falls back to the
+    /// synthesized three-way comparison ([class.spaceship]/1).
+    fn cmp_needs_synth_three_way(&mut self, l: ExprId, loc: Loc) -> bool {
+        let t = self.ety(l);
+        let overloadable =
+            self.ast.types.as_record(t).is_some() || self.ast.types.as_enum(t).is_some();
+        let (set, out, _, _) = self.oper_set(
+            OperForm::Binary(BinaryOp::Cmp),
+            OO::Spaceship,
+            &[l, l],
+            &[None, None],
+            2,
+            loc,
+            true,
+            overloadable,
+        );
+        let uncertain = set.uncertain || set.skipped_templates;
+        self.end_set(set);
+        !uncertain && matches!(out, OvlOutcome::NoViable)
+    }
+
     /// clang `visitExpandedSubobject`: `x @ y` for the operator of the
     /// defaulted comparison, in the form of its kind.
     fn cmp_visit_expanded(
@@ -422,6 +446,15 @@ impl Sema<'_, '_> {
     ) -> Option<Piece> {
         let loc = sx.loc;
         let op = binary_of(self.fn_operator(sx.f)?)?;
+        if sx.k == CmpKind::ThreeWay && self.cmp_needs_synth_three_way(l, loc) {
+            // todo(spec/sema-class.md §11): clang builds a PseudoObjectExpr
+            // (`BuildSynthesizedThreeWayComparison`), which kiln's AST lacks.
+            self.unsupported(
+                "a defaulted 'operator<=>' that synthesizes a three-way comparison from '==' and '<'",
+                loc,
+            );
+            return None;
+        }
         let e = self.binary_operator(op, l, r, None, loc);
         let e = self.ok_expr(e)?;
         match sx.k {
