@@ -442,6 +442,15 @@ impl Substituter<'_, '_, '_> {
         let name = self.sema.ast.unresolved_name(c);
         let decls = self.sema.ast.unresolved_decls(c);
         let adl = n.aux() != 0;
+        // Explicit template arguments (`f<T>(x)`): substituted, and kept
+        // on the rebuilt name for the call's deduction (§6.1).
+        let written_targs = self.sema.ast.templates.expr_targs.get(c).copied();
+        let targs = match written_targs {
+            Some(l) if !decls.iter().any(|&d| self.sema.kind_of(d) == DeclKind::VarTemplate) => {
+                Some(self.args(l, n.loc())?)
+            }
+            _ => None,
+        };
         if !adl {
             // A qualified name: the decls were found in a non-dependent
             // scope; rebuild the reference as written.
@@ -464,6 +473,16 @@ impl Substituter<'_, '_, '_> {
                     Some(q) => Some(self.nns(q, n.loc())?),
                     None => None,
                 };
+                if self.sema.kind_of(d) == DeclKind::FunctionTemplate || targs.is_some() {
+                    return Ok(self.sema.builder().unresolved_lookup(
+                        name,
+                        &[d],
+                        false,
+                        nns,
+                        targs,
+                        n.loc(),
+                    ));
+                }
                 return Ok(self.sema.build_decl_ref_qualified(d, n.loc(), None, nns));
             }
             // An overload set: resolved again at the call.
@@ -475,12 +494,25 @@ impl Substituter<'_, '_, '_> {
                 Some(q) => Some(self.nns(q, n.loc())?),
                 None => None,
             };
-            return Ok(self.sema.builder().unresolved_lookup(name, &ds, false, nns, None, n.loc()));
+            return Ok(self.sema.builder().unresolved_lookup(
+                name,
+                &ds,
+                false,
+                nns,
+                targs,
+                n.loc(),
+            ));
         }
         if decls.is_empty() {
             return Ok(self.sema.act_on_undeclared_call_name(name, n.loc()));
         }
-        Ok(self.sema.act_on_call_name(name, n.loc()))
+        let r = self.sema.act_on_call_name(name, n.loc());
+        if let Some(t) = targs
+            && self.sema.ast.exprs.get(r).kind() == ExprKind::UnresolvedLookupExpr
+        {
+            let _ = self.sema.ast.templates.expr_targs.insert(r, t);
+        }
+        Ok(r)
     }
 
     /// A reference to a non-type template parameter (§5.4): the

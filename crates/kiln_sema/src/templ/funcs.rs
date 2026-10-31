@@ -112,6 +112,11 @@ impl Sema<'_, '_> {
     /// declaration without a prototype).
     pub(crate) fn proto_param_types(&self, f: DeclId) -> (Vec<QualType>, bool) {
         let ty = self.ast.decls.get(f).ty().unwrap_or(QualType::ERROR);
+        // The written (sugared) prototype first, so mismatch notes print
+        // the parameter as spelled; the canonical one as the fallback.
+        if let TypeView::Function(p) = self.ast.types.view(ty.ty()) {
+            return (self.ast.types.params(&p).to_vec(), p.info().variadic());
+        }
         match self.ast.types.view(self.ast.types.canonical(ty).ty()) {
             TypeView::Function(p) => (self.ast.types.params(&p).to_vec(), p.info().variadic()),
             _ => (Vec::new(), false),

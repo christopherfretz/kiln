@@ -82,7 +82,6 @@ impl Sema<'_, '_> {
     /// template arguments, as written) and forms the specialization
     /// (§6.1). `object`: `args` has no slot for an object argument the
     /// template's implicit object parameter takes.
-    #[allow(clippy::too_many_lines, reason = "the steps of §6.1 in order")]
     pub(crate) fn deduce_call(
         &mut self,
         ft: DeclId,
@@ -90,6 +89,33 @@ impl Sema<'_, '_> {
         args: &[ArgInfo],
         loc: Loc,
     ) -> Result<DeclId, Box<DeductionFailure>> {
+        self.deduce_spec(ft, explicit, Some(args), loc)
+    }
+
+    /// The specialization of `ft` a template-id with the explicit
+    /// arguments `explicit` names without a call or a target type
+    /// ([over.over]/3, [temp.arg.explicit]/4): every argument explicit
+    /// or defaulted.
+    pub(crate) fn deduce_explicit_only(
+        &mut self,
+        ft: DeclId,
+        explicit: Option<ArgListId>,
+        loc: Loc,
+    ) -> Result<DeclId, Box<DeductionFailure>> {
+        self.deduce_spec(ft, explicit, None, loc)
+    }
+
+    /// [`Self::deduce_call`]; `call` `None` for no call (no arity
+    /// check, nothing deduced from arguments).
+    #[allow(clippy::too_many_lines, reason = "the steps of §6.1 in order")]
+    fn deduce_spec(
+        &mut self,
+        ft: DeclId,
+        explicit: Option<ArgListId>,
+        call: Option<&[ArgInfo]>,
+        loc: Loc,
+    ) -> Result<DeclId, Box<DeductionFailure>> {
+        let args = call.unwrap_or(&[]);
         let ft = self.ast.first(ft);
         let params = self.template_params(ft);
         let depth = self.template_param_depth(ft);
@@ -104,11 +130,19 @@ impl Sema<'_, '_> {
         }
         // §6.1 step 1: the explicitly-specified arguments.
         let (mut ptys, variadic) = self.proto_param_types(templated);
-        if let Some(list) = explicit {
-            let written: Vec<TemplateArg> = self.ast.types.args(list).to_vec();
+        let written: Vec<TemplateArg> =
+            explicit.map(|l| self.ast.types.args(l).to_vec()).unwrap_or_default();
+        if !written.is_empty() {
             if written.len() > n {
-                d.info.param = u16::try_from(n).ok();
-                return Err(DeductionFailure::new(Tdk::InvalidExplicitArguments, d));
+                // clang: a substitution failure with the arity message.
+                let msg = self
+                    .diag(DiagId::sema_template_arg_list_different_arity, loc)
+                    .arg(1u8)
+                    .arg(1u8)
+                    .arg(self.decl_name(ft));
+                let mut f = DeductionFailure::new(Tdk::SubstitutionFailure, d);
+                f.diag = Some(msg);
+                return Err(f);
             }
             let mut bad = None;
             let r = self.in_sfinae(FrameKind::ExplicitArgSubstitution, ft, None, loc, |s| {
@@ -150,10 +184,10 @@ impl Sema<'_, '_> {
         // Arity ([temp.deduct.call]/1: a parameter without an argument
         // is not deduced from).
         let nargs = args.len();
-        if nargs > ptys.len() && !variadic {
+        if call.is_some() && nargs > ptys.len() && !variadic {
             return Err(DeductionFailure::new(Tdk::TooManyArguments, d));
         }
-        if nargs < self.fn_min_args(templated) {
+        if call.is_some() && nargs < self.fn_min_args(templated) {
             return Err(DeductionFailure::new(Tdk::TooFewArguments, d));
         }
         // §6.1 step 2: each (P, A).
@@ -164,6 +198,7 @@ impl Sema<'_, '_> {
             }
             let r = self.deduce_call_arg(p, a, &mut d);
             if r != Tdk::Success {
+                self.resugar_mismatch(p, &mut d);
                 return Err(DeductionFailure::new(r, d));
             }
         }
@@ -305,6 +340,25 @@ impl Sema<'_, '_> {
         }
         flags = flags.union(TdfFlags::DERIVED_CLASS);
         self.deduce(p, at, flags, d)
+    }
+
+    /// A mismatch at the top of parameter type `p` is noted with `p` as
+    /// written (`T *`, not the canonical `type-parameter-0-0 *`).
+    fn resugar_mismatch(&mut self, p: QualType, d: &mut DeducedArgs) {
+        let t = &mut self.ast.types;
+        let Some(first) = d.info.first else { return };
+        let ArgView::Type(fq) = first.view() else { return };
+        let inner = match t.view(p.ty()) {
+            TypeView::LValueRef(x) | TypeView::RValueRef(x) => x,
+            _ => p,
+        };
+        let bare = t.unqualified(inner);
+        for cand in [inner, bare] {
+            if t.canonical(cand) == t.canonical(fq) {
+                d.info.first = Some(TemplateArg::ty(cand));
+                return;
+            }
+        }
     }
 
     /// `E` when `p` is `std::initializer_list<E>` (dependent or not).

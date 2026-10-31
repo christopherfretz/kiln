@@ -118,6 +118,51 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// The one specialization the function template-id `ule` names
+    /// without a call or a target type ([over.over]/3 via
+    /// [temp.arg.explicit]/4): of its templates, exactly one has every
+    /// template argument explicit or defaulted (clang's
+    /// `ResolveSingleFunctionTemplateSpecialization`).
+    fn single_template_spec(&mut self, ule: ExprId) -> Option<(DeclId, DeclId)> {
+        let explicit = self.ast.templates.expr_targs.get(ule).copied()?;
+        if self
+            .ast
+            .types
+            .arg_list_flags(explicit)
+            .intersects(kiln_ast::types::TypeFlags::DEPENDENT_INSTANTIATION)
+        {
+            return None;
+        }
+        let loc = self.ast.exprs.get(ule).loc();
+        let mut found = None;
+        for (d, f) in self.ule_candidates(ule) {
+            if self.kind_of(d) != DeclKind::FunctionTemplate {
+                return None;
+            }
+            let Ok(spec) = self.deduce_explicit_only(d, Some(explicit), loc) else { continue };
+            if found.is_some() {
+                return None;
+            }
+            found = Some((spec, f));
+        }
+        found
+    }
+
+    /// `e`, a function template-id not called: the `DeclRefExpr` naming
+    /// the one specialization it names ([over.over]/3), else `e`.
+    pub fn resolve_single_template_id(&mut self, e: ExprId) -> ExprId {
+        if self.ast.exprs.get(e).kind() != ExprKind::UnresolvedLookupExpr {
+            return e;
+        }
+        let Some((d, f)) = self.single_template_spec(e) else { return e };
+        let naming = self.ovl.ule_found.get(&e).and_then(|x| x.naming);
+        let nns = self.ast.templates.expr_nns.get(e).copied();
+        let loc = self.ast.exprs.get(e).loc();
+        let r = self.finish_overload_ref(d, f, naming, loc, nns, e, false);
+        self.note_function_name_use(d, r, loc, nns.is_none());
+        r
+    }
+
     /// [over.over]: resolves the overload set `e` (a ULE, possibly in
     /// parentheses and under `&`) against `target`: the expression with
     /// the ULE replaced by a `DeclRefExpr` to the selected function, or

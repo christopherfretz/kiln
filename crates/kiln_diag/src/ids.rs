@@ -1038,7 +1038,6 @@ diag_ids! {
     sema_fn_template_spec_no_match = Error (1) "no function template matches function template specialization '{0}'";
     sema_fn_template_spec_ambiguous = Error (1) "function template specialization '{0}' ambiguously refers to more than one function template";
     sema_explicit_instantiation_no_match = Error (1) "explicit instantiation of '{0}' does not refer to a function template, variable template, member function, member class, or static data member";
-    note_ovl_candidate_with_args = Note (2) "candidate {0} {1}";
     note_deduction_non_deduced_mismatch = Note (2) "candidate template ignored: could not match '{0}' against '{1}'";
     sema_partial_spec_ambiguous = Error (1) "ambiguous partial specializations of '{0}'";
     note_partial_spec_match = Note (1) "partial specialization matches {0}";

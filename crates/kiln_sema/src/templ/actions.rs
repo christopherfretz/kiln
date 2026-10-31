@@ -18,6 +18,7 @@ use kiln_source::symbol::Symbol;
 
 use crate::Sema;
 use crate::decl::sym_str;
+use crate::lookup::LookupKind;
 use crate::scope::{Scope, ScopeKind};
 
 /// What a template-id names ([temp.names]/3-8).
@@ -194,6 +195,39 @@ impl Sema<'_, '_> {
         if self.ast.exprs.get(e).kind() == ExprKind::UnresolvedLookupExpr {
             let _ = self.ast.exprs.set_adl(e);
         }
+    }
+
+    /// The function template-id `e` (an `UnresolvedLookupExpr` built from
+    /// the first template `name` found) widened to the whole overload set
+    /// the lookup of `name` (in `qualifier`, if any) finds
+    /// ([temp.arg.explicit]/4, [over.match.call.general]/1): every
+    /// function template of the set is a candidate.
+    pub fn widen_function_template_id(
+        &mut self,
+        e: ExprId,
+        name: Symbol,
+        qualifier: Option<DeclId>,
+    ) -> ExprId {
+        if self.ast.exprs.get(e).kind() != ExprKind::UnresolvedLookupExpr {
+            return e;
+        }
+        let found = match qualifier {
+            Some(q) => self.lookup_qualified(q, name, LookupKind::Ordinary),
+            None => self.lookup_name(name, LookupKind::Ordinary),
+        };
+        let decls: Vec<DeclId> = found
+            .decls
+            .iter()
+            .copied()
+            .filter(|&d| matches!(self.kind_of(d), DeclKind::FunctionTemplate | DeclKind::Function))
+            .collect();
+        if decls.len() < 2 || decls.len() != found.decls.len() {
+            return e;
+        }
+        let n = *self.ast.exprs.get(e);
+        let nns = self.ast.templates.expr_nns.get(e).copied();
+        let targs = self.ast.templates.expr_targs.get(e).copied();
+        self.builder().unresolved_lookup(name, &decls, false, nns, targs, n.loc())
     }
 
     /// The template name of template (or template template parameter)
@@ -535,7 +569,7 @@ impl Sema<'_, '_> {
         loc: Loc,
         rparen: Loc,
     ) -> ExprId {
-        let found = self.lookup_name(name, crate::lookup::LookupKind::Ordinary);
+        let found = self.lookup_name(name, LookupKind::Ordinary);
         let pack = found.decls.first().copied().filter(|&d| self.is_pack_decl(d));
         match pack {
             Some(d) => {
@@ -784,8 +818,7 @@ impl Sema<'_, '_> {
                 Some(bt)
             };
             if let Some(rec) = obj.and_then(|o| self.ast.types.as_record(o))
-                && self.lookup_in_class(rec, name, crate::lookup::LookupKind::Ordinary).decls.len()
-                    == 1
+                && self.lookup_in_class(rec, name, LookupKind::Ordinary).decls.len() == 1
             {
                 return None;
             }

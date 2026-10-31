@@ -55,7 +55,38 @@ impl Sema<'_, '_> {
             },
             _ => "function",
         };
-        if c.template.is_some() { format!("{base} template") } else { base.to_owned() }
+        if let Some(desc) = self.spec_desc(c) {
+            format!("{base} {desc}")
+        } else if c.template.is_some() {
+            format!("{base} template")
+        } else {
+            base.to_owned()
+        }
+    }
+
+    /// clang's `FnDesc` for a function template specialization
+    /// candidate (`[with T = int]`). A conversion that failed for a
+    /// parameter of non-dependent type was checked before the
+    /// specialization was formed (CWG1391), so that note names the
+    /// template.
+    fn spec_desc(&self, c: &Candidate) -> Option<String> {
+        let f = c.func();
+        if !self.is_function_spec(f) {
+            return None;
+        }
+        let (_, info) = self.ast.spec_info(f)?;
+        let (tmpl, args) = (info.template, info.args);
+        if let CandidateFailure::BadConversion { arg } = c.failure
+            && arg != u16::MAX
+            && let Some(pattern) = c.template.and_then(|t| self.templated_function(t))
+        {
+            let (ptys, _) = self.proto_param_types(pattern);
+            let skip = usize::from(self.has_explicit_object(f));
+            if ptys.get(usize::from(arg) + skip).is_some_and(|&p| !self.is_dependent_type(p)) {
+                return None;
+            }
+        }
+        Some(self.template_args_desc(tmpl, args))
     }
 
     /// The detail of candidate `c`'s bad conversion (`slot` in its
@@ -121,27 +152,6 @@ impl Sema<'_, '_> {
         ))
     }
 
-    /// `candidate <kind>`; for a function template specialization,
-    /// `candidate function [with T = int]` (clang's `FnDesc`).
-    fn candidate_note_with_args(
-        &self,
-        f: kiln_ast::DeclId,
-        kind: &str,
-        loc: kiln_source::Loc,
-    ) -> Diag {
-        if self.is_function_spec(f)
-            && let Some((_, info)) = self.ast.spec_info(f)
-        {
-            let (tmpl, args) = (info.template, info.args);
-            let base = kind.strip_suffix(" template").unwrap_or(kind);
-            return self
-                .diag(DiagId::note_ovl_candidate_with_args, loc)
-                .arg(base)
-                .arg(self.template_args_desc(tmpl, args));
-        }
-        self.diag(DiagId::note_ovl_candidate, loc).arg(kind)
-    }
-
     /// The note for candidate `c` of `set` (clang `NoteFunctionCandidate`).
     pub(crate) fn ovl_note(&mut self, set: &OverloadCandidateSet, c: u32) -> Diag {
         let cand = set.cand(c);
@@ -159,7 +169,7 @@ impl Sema<'_, '_> {
                     .arg(kind)
                     .arg(u8::from(defaulted));
             }
-            return self.candidate_note_with_args(f, &kind, loc);
+            return self.diag(DiagId::note_ovl_candidate, loc).arg(kind);
         }
         if cand.failure == CandidateFailure::BadDeduction
             && let (Some(ft), Some(fail)) = (cand.template, cand.deduction.as_deref())
@@ -207,7 +217,7 @@ impl Sema<'_, '_> {
             | CandidateFailure::BadFinalConversion
             | CandidateFailure::BadDeduction
             | CandidateFailure::ConstraintsNotSatisfied => {
-                return self.candidate_note_with_args(f, &kind, loc);
+                return self.diag(DiagId::note_ovl_candidate, loc).arg(kind);
             }
         };
         self.diag(DiagId::note_ovl_candidate_kind_not_viable, loc).arg(kind).arg(detail)
