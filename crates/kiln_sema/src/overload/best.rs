@@ -244,6 +244,9 @@ impl Sema<'_, '_> {
     pub(crate) fn order_template_candidates(&mut self, set: &mut OverloadCandidateSet) {
         set.tmpl_order.clear();
         self.order_constrained_candidates(set);
+        if set.cands.iter().filter(|c| c.viable && c.template.is_some()).nth(1).is_none() {
+            return;
+        }
         let ts: Vec<(u32, DeclId)> = set
             .cands
             .iter()
@@ -272,6 +275,16 @@ impl Sema<'_, '_> {
     /// same non-object parameter-type-lists, the constraints those of the
     /// members they were instantiated from.
     fn order_constrained_candidates(&mut self, set: &mut OverloadCandidateSet) {
+        // Fast path (no allocation): no viable non-template candidate
+        // has a trailing requires-clause.
+        let constrained = |c: &Candidate| {
+            c.viable
+                && c.template.is_none()
+                && c.decl.is_some_and(|f| self.ast.templates.trailing_requires.get(f).is_some())
+        };
+        if !set.cands.iter().any(constrained) {
+            return;
+        }
         let fs: Vec<(u32, DeclId, Vec<ExprId>)> = set
             .cands
             .iter()
@@ -283,9 +296,6 @@ impl Sema<'_, '_> {
                 Some((u32::try_from(i).ok()?, f, r.into_iter().collect()))
             })
             .collect();
-        if !fs.iter().any(|(_, _, r)| !r.is_empty()) {
-            return;
-        }
         for (i, (c1, f1, r1)) in fs.iter().enumerate() {
             for (c2, f2, r2) in &fs[i + 1..] {
                 if r1.is_empty() && r2.is_empty() || !self.same_param_type_lists(*f1, *f2) {
