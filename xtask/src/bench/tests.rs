@@ -16,6 +16,7 @@ fn parses_the_command_line() {
     assert_eq!(o, Options::default());
     assert_eq!(o.runs, 5);
     assert_eq!(o.thresholds, ThresholdOverrides::default());
+    assert_eq!(o.mem_limit_mib, 8192, "the cap is on by default");
 
     let o = parse_args(args(&[
         "--compiler",
@@ -33,6 +34,7 @@ fn parses_the_command_line() {
         "--threshold-steps=1",
         "--threshold-bytes",
         "3",
+        "--mem-limit=0",
         "-v",
         "bench/oven",
     ]))
@@ -44,6 +46,7 @@ fn parses_the_command_line() {
     assert_eq!(o.compare_with, Some(PathBuf::from("clang++-22")));
     assert_eq!(o.filter.as_deref(), Some("oven"));
     assert_eq!(o.runs, 7);
+    assert_eq!(o.mem_limit_mib, 0);
     assert_eq!(
         o.thresholds,
         ThresholdOverrides {
@@ -66,6 +69,7 @@ fn parses_the_command_line() {
         &["--record=yes"],
         &["--compiler"],
         &["--jobs", "2"],
+        &["--mem-limit", "lots"],
     ] {
         assert!(parse_args(args(bad)).is_err(), "{bad:?}");
     }

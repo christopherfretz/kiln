@@ -93,7 +93,7 @@ pub const DEFAULT_MEM_LIMIT_MIB: u64 = 8192;
 /// A process over the cap sees its allocations fail: Rust aborts with
 /// `memory allocation of N bytes failed`, C++ throws `std::bad_alloc`, the
 /// dynamic loader cannot map a library. [`out_of_memory`] recognizes those.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct MemLimit {
     pub mib: u64,
 }

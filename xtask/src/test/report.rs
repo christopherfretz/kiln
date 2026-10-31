@@ -65,13 +65,14 @@ pub fn format_result(r: &TestResult, verbose: bool) -> String {
 pub fn format_summary(counts: &Counts, total: usize, elapsed: Duration) -> String {
     let verdict = if counts.failed() { "FAILED" } else { "ok" };
     format!(
-        "test result: {verdict}. {} passed; {} failed; {} xfail; {} xpass; {} skipped; {} errors; {total} tests in {:.2}s\n",
+        "test result: {verdict}. {} passed; {} failed; {} xfail; {} xpass; {} skipped; {} errors; {} killed; {total} tests in {:.2}s\n",
         counts.get(Status::Pass),
         counts.get(Status::Fail),
         counts.get(Status::XFail),
         counts.get(Status::XPass),
         counts.get(Status::Skip),
         counts.get(Status::Error),
+        counts.get(Status::Killed),
         elapsed.as_secs_f64(),
     )
 }
@@ -98,8 +99,8 @@ impl CorpusOutcome {
         }
     }
 
-    /// Does this run let `ci` pass? A run passes when it has no FAIL, XPASS
-    /// or ERROR (XFAIL and SKIP are allowed); a skipped run passes (the
+    /// Does this run let `ci` pass? A run passes when it has no FAIL, XPASS,
+    /// ERROR or KILLED (XFAIL and SKIP are allowed); a skipped run passes (the
     /// caller decides which runs may be skipped); an infrastructure error
     /// fails.
     pub fn passes(&self) -> bool {
@@ -185,7 +186,9 @@ pub fn parity_table(h: &ParityHeader, results: &[TestResult]) -> String {
             "| {name} | {} | {} | {} | {} | {} | {} | {} | {rate} |",
             rs.len(),
             c.get(Status::Pass),
-            c.get(Status::Fail),
+            // A memory-limit kill is a failure of the compiler (or of the
+            // test binary) for the parity table.
+            c.get(Status::Fail) + c.get(Status::Killed),
             c.get(Status::XFail),
             c.get(Status::XPass),
             c.get(Status::Skip),
@@ -269,7 +272,7 @@ mod tests {
         assert!(!c.failed());
         assert_eq!(
             format_summary(&c, 3, Duration::from_millis(1500)),
-            "test result: ok. 1 passed; 0 failed; 1 xfail; 0 xpass; 1 skipped; 0 errors; 3 tests in 1.50s\n"
+            "test result: ok. 1 passed; 0 failed; 1 xfail; 0 xpass; 1 skipped; 0 errors; 0 killed; 3 tests in 1.50s\n"
         );
         assert!(Counts::of(&[r(Status::XPass)]).failed());
         assert!(Counts::of(&[r(Status::Error)]).failed());
