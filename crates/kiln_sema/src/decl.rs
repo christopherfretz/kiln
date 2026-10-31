@@ -1603,6 +1603,16 @@ impl Sema<'_, '_> {
         } else {
             ty
         };
+        // [except.spec]/9: a class-specific deallocation function without
+        // an exception specification is non-throwing.
+        let ty = match d.op_name {
+            Some(OverloadedOperator::Delete | OverloadedOperator::ArrayDelete)
+                if method && self.written_exc_spec(ty) == ExcSpec::None =>
+            {
+                self.with_basic_noexcept(ty)
+            }
+            _ => ty,
+        };
         if ds.inline.is_some() {
             spec = spec.with_inline(true);
         }

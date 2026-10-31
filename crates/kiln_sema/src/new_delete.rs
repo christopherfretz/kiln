@@ -202,10 +202,8 @@ impl Sema<'_, '_> {
         let mut ty = ty;
         if matches!(op, OverloadedOperator::Delete | OverloadedOperator::ArrayDelete)
             && self.written_exc_spec(ty) == ExcSpec::None
-            && let Some(p) = self.ast.types.proto(ty).copied()
         {
-            let params = self.ast.types.params(&p).to_vec();
-            ty = self.ast.types.function(p.ret(), &params, p.info(), ExcSpec::BasicNoexcept);
+            ty = self.with_basic_noexcept(ty);
         }
         let tu = self.ast.tu;
         let cands = self.ast.lookup_local(tu, DeclName::operator(op)).to_vec();
@@ -214,6 +212,17 @@ impl Sema<'_, '_> {
             self.same_ignoring_exc_spec(pty, ty)
         });
         (ty, prev)
+    }
+
+    /// Function type `ty` with a `noexcept` exception specification.
+    pub(crate) fn with_basic_noexcept(&mut self, ty: QualType) -> QualType {
+        let Some(p) =
+            self.ast.types.proto_of(ty.ty()).or_else(|| self.ast.types.proto(ty)).copied()
+        else {
+            return ty;
+        };
+        let params = self.ast.types.params(&p).to_vec();
+        self.ast.types.function(p.ret(), &params, p.info(), ExcSpec::BasicNoexcept)
     }
 
     // -- new ------------------------------------------------------------------
@@ -352,12 +361,13 @@ impl Sema<'_, '_> {
         let class_unsupported = self.new_class_unsupported(elem, array_form, &init, tid.loc);
         // The allocation function ([expr.new]/12-19).
         let op = if array_form { OverloadedOperator::ArrayNew } else { OverloadedOperator::New };
-        // todo(WP-068b): a class element type's own `operator new` (unless
-        // `::new`) is looked up in the class first ([expr.new]/12).
-        let _ = global;
+        // A class element type's own `operator new` (unless `::new`) is
+        // looked up in the class first ([expr.new]/12).
+        let alloc = self.alloc_fns(elem, op, global, tid.loc);
         let place_args: Vec<ExprId> =
             placement.as_ref().map(|p| p.args.clone()).unwrap_or_default();
-        let Some((op_new, with_align)) = self.find_operator_new(op, &place_args, pass_align) else {
+        let Some((op_new, with_align)) = self.find_operator_new(&alloc.fns, &place_args, pass_align)
+        else {
             let ptr_like = place_args.len() == 1 && {
                 let t = self.ast.exprs.get(place_args[0]).ty();
                 self.ast.types.is_array(t)
@@ -371,12 +381,25 @@ impl Sema<'_, '_> {
                 let msg = self
                     .diag(DiagId::sema_ovl_no_viable_function_in_call, loc)
                     .arg(op_spelling(op));
-                let msg = self.operator_new_candidate_notes(msg, op, &place_args);
+                let msg = self.operator_new_candidate_notes(msg, &alloc.fns, &place_args);
                 self.emit(msg);
             }
             return self.recover_err(&kids, loc);
         };
         pass_align = with_align;
+        if self.is_deleted_fn(op_new) {
+            let own = self.ast.decls.function(op_new).is_some_and(|x| x.spec.is_deleted());
+            let note = self
+                .diag(DiagId::note_candidate_deleted, self.ast.decls.get(op_new).loc())
+                .arg(u8::from(!own));
+            let msg = self
+                .diag(DiagId::sema_call_deleted_function, loc)
+                .arg(self.decl_arg(op_new))
+                .arg(self.delete_message_suffix(op_new))
+                .with_note(note);
+            self.emit(msg);
+            return self.recover_err(&kids, loc);
+        }
         self.mark_used(op_new);
         let (params, variadic) = self.fn_params(op_new).unwrap_or_default();
         let skip = 1 + usize::from(pass_align);
@@ -398,8 +421,15 @@ impl Sema<'_, '_> {
         }
         // The matching deallocation function, called if the
         // initialization throws ([expr.new]/28).
-        let op_delete =
-            self.matching_operator_delete(array_form, placement.is_some(), &params, pass_align);
+        let op_delete = self.matching_operator_delete(
+            elem,
+            global,
+            array_form,
+            placement.is_some(),
+            &params,
+            pass_align,
+            tid.loc,
+        );
         if let Some(od) = op_delete {
             self.mark_used(od);
         }
@@ -722,14 +752,12 @@ impl Sema<'_, '_> {
     /// alignment argument when the type is over-aligned, then without).
     fn find_operator_new(
         &mut self,
-        op: OverloadedOperator,
+        cands: &[DeclId],
         place: &[ExprId],
         pass_align: bool,
     ) -> Option<(DeclId, bool)> {
         let size_t = self.size_type();
         let al = self.global_ops.align_val_t.unwrap_or(size_t);
-        let tu = self.ast.tu;
-        let cands = self.ast.lookup_local(tu, DeclName::operator(op)).to_vec();
         let tries: &[bool] = if pass_align { &[true, false] } else { &[false] };
         for &with_align in tries {
             let mut lead = vec![size_t];
@@ -737,10 +765,7 @@ impl Sema<'_, '_> {
                 lead.push(al);
             }
             let mut best: Option<(DeclId, usize)> = None;
-            for &f in &cands {
-                if self.ast.decls.get(f).kind() != DeclKind::Function {
-                    continue;
-                }
+            for &f in cands {
                 let Some((ps, variadic)) = self.fn_params(f) else { continue };
                 let n = lead.len() + place.len();
                 if ps.len() > n || (ps.len() < n && !variadic) {
@@ -778,16 +803,14 @@ impl Sema<'_, '_> {
     fn operator_new_candidate_notes(
         &mut self,
         mut msg: kiln_diag::Diag,
-        op: OverloadedOperator,
+        cands: &[DeclId],
         place: &[ExprId],
     ) -> kiln_diag::Diag {
-        let tu = self.ast.tu;
-        let cands = self.ast.lookup_local(tu, DeclName::operator(op)).to_vec();
         let have = 1 + place.len();
         let size_t = self.size_type();
         let mut bad: Vec<(bool, Loc, String)> = Vec::new();
         let mut arity: Vec<(usize, bool, Loc, String)> = Vec::new();
-        for f in cands {
+        for &f in cands {
             let Some((ps, variadic)) = self.fn_params(f) else { continue };
             let implicit = self.ast.decls.get(f).flags().contains(DeclFlags::IMPLICIT);
             let fl = if implicit { Loc::INVALID } else { self.ast.decls.get(f).loc() };
@@ -887,28 +910,37 @@ impl Sema<'_, '_> {
     }
 
     /// The deallocation function matching an allocation function with
-    /// parameter types `new_params` ([expr.new]/28): for a placement
-    /// allocation function, the one with the same additional parameters;
-    /// otherwise the sized usual deallocation function.
+    /// parameter types `new_params` ([expr.new]/28), looked up like the
+    /// allocation function (in the class of `elem` first unless
+    /// `global`): for a placement allocation function, the one with the
+    /// same additional parameters; otherwise the usual deallocation
+    /// function.
+    #[allow(clippy::too_many_arguments)]
     fn matching_operator_delete(
         &mut self,
+        elem: QualType,
+        global: bool,
         array: bool,
         placement: bool,
         new_params: &[QualType],
         pass_align: bool,
+        loc: Loc,
     ) -> Option<DeclId> {
         let op = if array { OverloadedOperator::ArrayDelete } else { OverloadedOperator::Delete };
+        let found = self.alloc_fns(elem, op, global, loc);
+        if !placement {
+            return self.usual_delete(&found.fns, found.in_class, pass_align, true).map(|u| u.0);
+        }
         let vp = self.ast.types.pointer_to(QualType::VOID);
         let mut params = vec![vp];
-        if placement {
-            params.extend(new_params.iter().skip(1));
-        } else {
-            params.push(self.size_type());
-            if pass_align {
-                params.push(self.global_ops.align_val_t?);
-            }
-        }
-        self.find_global_op(op, &params)
+        params.extend(new_params.iter().skip(1));
+        found.fns.iter().copied().find(|&f| {
+            self.fn_params(f).is_some_and(|(ps, variadic)| {
+                !variadic
+                    && ps.len() == params.len()
+                    && ps.iter().zip(&params).all(|(a, b)| self.ast.types.same_type(*a, *b))
+            })
+        })
     }
 
     /// The semantic initializer of a new-expression ([expr.new]/23) and,
@@ -1143,8 +1175,6 @@ impl Sema<'_, '_> {
                 // [basic.def.odr]/8).
                 self.mark_function_referenced(m, loc);
             }
-            // todo(WP-068b): unless `::delete`, the class's own
-            // `operator delete` is looked up first ([expr.delete]/9).
         }
         let align = if complete {
             crate::target::size_align(&self.ast, elem, &self.abi).map_or(1, |(_, a)| a)
@@ -1155,17 +1185,18 @@ impl Sema<'_, '_> {
         // [expr.delete]/10: a usual deallocation function; the sized one
         // when the type is complete (and no array cookie is needed: a
         // `delete[]` of a type without one is unsized, clang).
-        let sized = complete && !array;
+        let want_sized = complete && !array;
         let op = if array { OverloadedOperator::ArrayDelete } else { OverloadedOperator::Delete };
-        let vp = self.ast.types.pointer_to(QualType::VOID);
-        let mut params = vec![vp];
-        if sized {
-            params.push(self.size_type());
+        // Unless `::delete`, the class's own `operator delete` is looked
+        // up first ([expr.delete]/9).
+        let found = self.alloc_fns(elem, op, global || !complete, loc);
+        let usual = self.usual_delete(&found.fns, found.in_class, aligned, want_sized);
+        if usual.is_none() && found.in_class {
+            self.no_suitable_delete(op, elem, &found.fns, loc);
+            return self.recover_err(&[operand], loc);
         }
-        if aligned && let Some(al) = self.global_ops.align_val_t {
-            params.push(al);
-        }
-        let op_delete = self.find_global_op(op, &params);
+        let op_delete = usual.map(|u| u.0);
+        let sized = usual.is_some_and(|u| u.1);
         if let Some(f) = op_delete {
             self.mark_used(f);
         }

@@ -820,6 +820,7 @@ diag_ids! {
     sema_new_reference_type = Error (1) "cannot allocate reference type {0} with new";
     sema_default_init_const_no_ctor = Error (1) "default initialization of an object of const type {0} without a user-provided default constructor";
     sema_delete_operand = Error (1) "cannot delete expression of type {0}";
+    sema_no_suitable_delete_member = Error (2) "no suitable member {0} in {1}";
     sema_delete_incomplete = Error (1) "cannot delete pointer to incomplete type {0}";
     sema_delete_void_ptr_warn = Warning [DeleteIncomplete] (1) "cannot delete expression with pointer-to-'void' type {0}";
     sema_delete_incomplete_warn = Warning [DeleteIncomplete] (1) "deleting pointer to incomplete type {0} is incompatible with C++2c and may cause undefined behavior";

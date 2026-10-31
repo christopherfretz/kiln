@@ -7,6 +7,7 @@
 //! [`Sema`] so steady-state resolution allocates nothing (§1.4).
 
 pub(crate) mod address;
+pub(crate) mod alloc;
 pub(crate) mod arrow;
 pub(crate) mod adl;
 pub(crate) mod best;
