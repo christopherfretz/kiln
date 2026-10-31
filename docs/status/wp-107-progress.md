@@ -1,6 +1,6 @@
 # WP-107 progress: `__int128` end to end
 
-Status: complete pending full `cargo xtask ci`.
+Status: complete. Full `cargo xtask ci` green: clang self-check 1298 passed / 3 xfail / 23 skipped (1324); kiln 1311 passed / 13 xfail (1324).
 
 - Most of `__int128` already existed on main (builtin ids 18/19, rank 7,
   layout 16/16, mangling `n`/`o`, call classification, `i128` codegen,
