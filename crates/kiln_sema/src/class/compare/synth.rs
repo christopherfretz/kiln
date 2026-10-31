@@ -64,6 +64,21 @@ struct Synth {
 }
 
 impl Sema<'_, '_> {
+    /// A defaulted comparison `f` odr-used at `loc` is defined now, before
+    /// its exception specification is resolved from the body (clang
+    /// `MarkFunctionReferenced` → `DefineDefaultedComparison`;
+    /// spec/sema-class.md §8.3). Not in an unevaluated operand, a template,
+    /// or `f`'s own body.
+    pub(crate) fn define_cmp_on_use(&mut self, f: DeclId, loc: Loc) {
+        if self.unevaluated == 0
+            && !self.in_template()
+            && self.is_defaulted_cmp(f)
+            && self.func.as_ref().is_none_or(|s| self.ast.first(s.decl) != self.ast.first(f))
+        {
+            self.define_defaulted_comparison(f, loc);
+        }
+    }
+
     /// Defines defaulted comparison `f` (checked, not deleted), first
     /// required at `use_loc` (clang `DefineDefaultedComparison`): its body
     /// goes on the declaration defaulted; a body that cannot be built

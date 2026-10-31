@@ -98,16 +98,7 @@ impl Sema<'_, '_> {
     /// even odr-used); then `f` is odr-used.
     pub(crate) fn mark_function_referenced(&mut self, f: DeclId, loc: Loc) {
         self.ast.decls.set_flags(f, DeclFlags::REFERENCED);
-        // A defaulted comparison is defined before its exception
-        // specification is resolved from the body (clang
-        // `DefineDefaultedComparison`; spec/sema-class.md §8.3).
-        if self.unevaluated == 0
-            && !self.in_template()
-            && self.is_defaulted_cmp(f)
-            && self.func.as_ref().is_none_or(|s| self.ast.first(s.decl) != self.ast.first(f))
-        {
-            self.define_defaulted_comparison(f, loc);
-        }
+        self.define_cmp_on_use(f, loc);
         // clang's `MarkFunctionReferenced` resolves the exception
         // specification even in unevaluated operands (for `noexcept`).
         if !self.in_template() {

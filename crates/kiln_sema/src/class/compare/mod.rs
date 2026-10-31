@@ -97,14 +97,17 @@ impl Sema<'_, '_> {
             return None;
         };
         let ty = self.class_type(rec);
+        // Diagnostics name it as clang prints a bare RecordType.
+        let shown = self.scoped_class_type(rec);
         if !self.require_complete(ty, loc) {
-            let msg = self.diag(DiagId::sema_incomplete_type_required, loc).arg(self.ty_arg(ty));
+            let msg = self.diag(DiagId::sema_incomplete_type_required, loc).arg(self.ty_arg(shown));
             self.emit(msg);
             return None;
         }
         let def = self.class_def(rec);
         let type_form = |s: &mut Self, which: u8| {
-            let msg = s.diag(DiagId::sema_std_compare_type_form, loc).arg(s.ty_arg(ty)).arg(which);
+            let msg =
+                s.diag(DiagId::sema_std_compare_type_form, loc).arg(s.ty_arg(shown)).arg(which);
             s.emit(msg);
         };
         if !self.defn_bits(def).contains(DefinitionBits::TRIVIALLY_COPYABLE) {
@@ -137,7 +140,7 @@ impl Sema<'_, '_> {
             let member_form = |s: &mut Self, missing: bool| {
                 let msg = s
                     .diag(DiagId::sema_std_compare_member_form, loc)
-                    .arg(s.ty_arg(ty))
+                    .arg(s.ty_arg(shown))
                     .arg(r.name())
                     .arg(u8::from(missing));
                 s.emit(msg);
@@ -363,13 +366,21 @@ impl Sema<'_, '_> {
         let Some(scs) = conv::standard_conversion(self, e, to, ConvCtx::Initialization) else {
             return false;
         };
+        let from = conv::strip_cv(self, self.ety(e));
+        // "other than from an integral type to a floating-point type"
+        // (clang's `IgnoreFloatToIntegralConversion`, which despite its
+        // name exempts the integral-to-floating case).
+        let floating =
+            |s: &Self, q: QualType| s.ast.types.builtin(q).is_some_and(BuiltinType::is_floating);
+        if conv::is_integral_or_unscoped_enum(self, from) && floating(self, to) {
+            return false;
+        }
         let value = self.try_fold(e);
         let n = conv::narrowing_kind(self, &scs, e, value);
         let at = self.begin_loc(e);
-        let from = conv::strip_cv(self, self.ety(e));
         let msg = match n {
-            // clang ignores float-to-integral conversions (`Type`) here;
-            // the usual arithmetic conversions never make one.
+            // Floating-to-integral (`Type`): the usual arithmetic
+            // conversions never make one.
             Narrowing::NotNarrowing | Narrowing::Dependent | Narrowing::Type => return false,
             Narrowing::Variable => self
                 .diag(DiagId::sema_spaceship_narrowing_var, at)

@@ -1214,6 +1214,7 @@ diag_ids! {
     sema_no_call_operator = Error (1) "type {0} does not provide a call operator";
     sema_no_subscript_operator = Error (1) "type {0} does not provide a subscript operator";
     sema_ovl_ambiguous_subscript_call = Error (1) "call to subscript operator of type {0} is ambiguous";
+    sema_ovl_deleted_comparison = Error (2) "object of type {0} cannot be compared because its {1} is implicitly deleted";
     sema_ovl_deleted_special_oper = Error (2) "object of type {0} cannot be {1:constructed|copied|moved|assigned|assigned|destroyed} because its {1:default constructor|copy constructor|move constructor|copy assignment operator|move assignment operator|destructor} is implicitly deleted";
     sema_ovl_rewrite_equalequal_not_bool = Error (2) "return type {0} of selected 'operator==' function for rewritten '{1}' comparison is not 'bool'";
     sema_circular_arrow = Error (0) "circular pointer delegation detected";

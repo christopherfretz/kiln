@@ -494,6 +494,19 @@ impl Sema<'_, '_> {
                         }
                         m
                     }
+                    // clang's `err_ovl_deleted_comparison`: a defaulted
+                    // comparison that is implicitly deleted explains why.
+                    (_, None) if implicit && self.cmp_kind(f).is_some() => {
+                        let fd = self.decl_arg(f);
+                        let mut m = self
+                            .diag(DiagId::sema_ovl_deleted_comparison, loc)
+                            .arg(self.ty_arg(t0))
+                            .arg(&fd);
+                        for n in self.deleted_function_notes(f, 0) {
+                            m = m.with_note(n);
+                        }
+                        m
+                    }
                     _ => {
                         let name = self
                             .ast
@@ -1085,8 +1098,10 @@ impl Sema<'_, '_> {
     ) -> Option<ExprId> {
         if !self.in_template() && self.is_defaulted_cmp(f) {
             // The exception specification is part of the type the callee
-            // names (clang `DiagnoseUseOfDecl`, C++17); resolved here for a
-            // defaulted comparison, whose specification is deferred.
+            // names (clang `CreateFunctionRefExpr`, C++17): a defaulted
+            // comparison is defined (odr-use) and then its deferred
+            // specification is resolved from the body.
+            self.define_cmp_on_use(f, loc);
             self.resolve_exception_spec(f);
         }
         let fty = self.ast.decls.get(f).ty().unwrap_or(QualType::ERROR);
