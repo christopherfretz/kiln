@@ -28,6 +28,9 @@ const NULL_MEMBER_CALL: &str =
 #[derive(Clone, Copy)]
 pub(super) enum Callee {
     Direct(DeclId),
+    /// A virtual call of the method (dispatched on the dynamic type of
+    /// the object argument), a member of the class.
+    Virtual(DeclId, OTy),
     /// A function pointer in a register.
     Ind(u32),
 }
@@ -151,7 +154,10 @@ impl Compiler<'_> {
     }
 
     /// Registers the destruction of the object of type `ty` at `p` with
-    /// the enclosing scope (aux 1: `p` is a heap array of `ty`s).
+    /// the enclosing scope (aux 1: `p` is a heap array of `ty`s; aux 2: a
+    /// subobject destroyed by a destructor, whose backtrace note is at the
+    /// destructor's call, as clang's `HandleDestructionImpl` passes its
+    /// call range down).
     pub(super) fn push_cleanup(&mut self, p: u32, ty: OTy, aux: u32, loc: Loc) {
         if let Some(f) = self.dtor_of(ty) {
             self.emit_loc(Op::PushCleanup, aux, &[p, f, ty.0], loc);
@@ -336,14 +342,29 @@ impl Compiler<'_> {
         };
         let cls = self.ty(cq);
         let TyKind::Record { union, decl: rdef, .. } = self.kind(cls) else { return };
+        // [class.cdtor]/4: the object's dynamic type is the class from
+        // the end of its base initializers (a constructor) or the start
+        // of the body (a destructor).
+        let poly = record_bits(self.ast(), rdef).contains(DefinitionBits::POLYMORPHIC);
         if kind == DeclKind::CXXConstructor {
             let inits: Vec<CtorInit> = self.ast().ctor_inits(def).copied().collect();
+            let mut vptr = poly && !inits.iter().any(|c| c.kind == CtorInitKind::Delegating);
             for ci in inits {
+                if vptr && !matches!(ci.kind, CtorInitKind::Base | CtorInitKind::VirtualBase) {
+                    self.emit(Op::SetVptr, 0, &[this, cls.0]);
+                    vptr = false;
+                }
                 let m = self.next;
                 self.ctor_init(&ci, this, cls, union);
                 self.next = m;
             }
+            if vptr {
+                self.emit(Op::SetVptr, 0, &[this, cls.0]);
+            }
             return;
+        }
+        if poly {
+            self.emit(Op::SetVptr, 0, &[this, cls.0]);
         }
         if union {
             // A union's destructor destroys no member.
@@ -361,7 +382,7 @@ impl Compiler<'_> {
             let off = self.base_offset(cls, bty);
             let m = self.next;
             let q = self.elem_ptr_loc(this, off, loc);
-            self.push_cleanup(q, bty, 0, loc);
+            self.push_cleanup(q, bty, 2, loc);
             self.next = m;
         }
         let fields = self.o.types.fields(cls).to_vec();
@@ -374,7 +395,7 @@ impl Compiler<'_> {
             }
             let m = self.next;
             let q = self.elem_ptr_loc(this, fi.offset, loc);
-            self.push_cleanup(q, fi.ty, 0, loc);
+            self.push_cleanup(q, fi.ty, 2, loc);
             self.next = m;
         }
     }
@@ -596,6 +617,10 @@ impl Compiler<'_> {
         // A call returning a reference (a glvalue) returns the referent's
         // address in a register, whatever the referent's type.
         let is_sret = self.o.types.is_aggregate(rty) && !self.node(e).value_category().is_glvalue();
+        let adj = match callee {
+            Callee::Virtual(d, _) if self.returns_class_ref(d) => Some(self.reg()),
+            _ => None,
+        };
         let base = self.next;
         let first = u32::from(is_sret) + u32::from(this.is_some());
         let window = args.len() as u32 + first;
@@ -633,7 +658,15 @@ impl Compiler<'_> {
                 self.emit_at(Op::Call, 0, &[f, base], e)
             }
             Callee::Ind(r) => self.emit_at(Op::CallInd, 0, &[r, base], e),
+            Callee::Virtual(d, cls) => {
+                let m = self.ast().first(d);
+                let a = adj.unwrap_or(u32::MAX);
+                self.emit_at(Op::VCall, u32::from(is_sret), &[m.index(), base, cls.0, a], e)
+            }
         };
+        if let Some(a) = adj {
+            self.emit(Op::CovAdj, 0, &[base, a]);
+        }
         if let Some(loc) = loc
             && let Some(site) = self.o.sites.last_mut().filter(|x| x.pc == pc as u32)
         {
@@ -643,10 +676,23 @@ impl Compiler<'_> {
         base
     }
 
+    /// Whether function `d` returns a pointer or reference to a class (a
+    /// virtual one may be overridden covariantly, [class.virtual]/8).
+    fn returns_class_ref(&self, d: DeclId) -> bool {
+        let ast = self.ast();
+        let def = ast.definition(d).unwrap_or(d);
+        let Some(fty) = ast.decls.get(def).ty() else { return false };
+        let kiln_ast::types::TypeView::Function(p) = ast.types.canonical_view(fty) else {
+            return false;
+        };
+        ast.types.pointee(p.ret()).and_then(|r| ast.types.as_record(r)).is_some()
+    }
+
     /// Whether the object expression `obj` of a member call designates an
     /// object whose dynamic type is its static type (so a virtual call
-    /// needs no dispatch): a variable or temporary of class type, or
-    /// `*this` in a constructor or destructor ([class.cdtor]/4).
+    /// needs no dispatch): a variable or temporary of class type. (`*this`
+    /// in a constructor or destructor dispatches: the final overrider in
+    /// the constructor's class may be pure or in another base.)
     fn exact_dynamic_type(&self, obj: ExprId, arrow: bool) -> bool {
         let ast = self.ast();
         let mut x = skip_parens(ast, obj);
@@ -655,15 +701,6 @@ impl Compiler<'_> {
         }
         let n = ast.exprs.get(x);
         match n.kind() {
-            ExprKind::CXXThisExpr => {
-                arrow
-                    && self.cur_fn.is_some_and(|f| {
-                        matches!(
-                            ast.decls.get(f).kind(),
-                            DeclKind::CXXConstructor | DeclKind::CXXDestructor
-                        )
-                    })
-            }
             ExprKind::DeclRefExpr if !arrow => {
                 let d = ast.exprs.decl(x);
                 matches!(ast.decls.get(d).kind(), DeclKind::Var | DeclKind::ParmVar)
@@ -724,14 +761,10 @@ impl Compiler<'_> {
             self.effect(obj);
             return self.call_frame(e, Callee::Direct(md), rty, sret, None, args, &refs, Some(loc));
         }
-        if spec.is_some_and(|s| s.is_virtual() && !s.is_final())
+        let dispatch = spec.is_some_and(|s| s.is_virtual() && !s.is_final())
             && !qualified
             && !class_final
-            && !self.exact_dynamic_type(obj, arrow)
-        {
-            self.trap(e, VIRTUAL_UNSUPPORTED);
-            return self.reg();
-        }
+            && !self.exact_dynamic_type(obj, arrow);
         let this = if arrow {
             self.rv(obj)
         } else if self.node(obj).value_category().is_glvalue() {
@@ -757,7 +790,18 @@ impl Compiler<'_> {
             self.patch_here(ok);
             self.next = m;
         }
-        self.call_frame(e, Callee::Direct(md), rty, sret, Some(this), args, &refs, Some(loc))
+        let callee = match self.method_class(md) {
+            Some(cls) if dispatch => Callee::Virtual(md, cls),
+            _ => Callee::Direct(md),
+        };
+        self.call_frame(e, callee, rty, sret, Some(this), args, &refs, Some(loc))
+    }
+
+    /// The class type of member `md`.
+    pub(super) fn method_class(&mut self, md: DeclId) -> Option<OTy> {
+        let ast = self.ast();
+        let q = ast.decls.get(md).ctx().and_then(|c| ast.decls.get(c).ty())?;
+        Some(self.ty(q))
     }
 
     // ---- aggregates ---------------------------------------------------------

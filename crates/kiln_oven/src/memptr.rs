@@ -46,7 +46,7 @@ pub(crate) struct MpEntry {
     /// The member's class is a union.
     pub union: bool,
     /// A member function: its function index, and whether it is virtual
-    /// (dispatch through a member pointer lands with WP-077).
+    /// (a call through the member pointer dispatches, `Op::MpFn`).
     pub fn_index: u32,
     pub virt: bool,
 }

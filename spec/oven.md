@@ -693,7 +693,7 @@ evaluated like any other initializer.
 `Fault::NullBase` for a base step through a null object), `MpActive
 [p, mp]` (a union member reached through `.*` must be active), `MpFn
 [dst, mp, trap]` (the callee of a pointer to member function; a virtual
-one traps to WP-077). `Downcast [dst, p, off, ty]` is
+one dispatches as `VCall` does, WP-077). `Downcast [dst, p, off, ty]` is
 `static_cast` from a base pointer or glvalue to a derived one
 ([expr.static.cast]/2, /11), checking that the base subobject is part of
 an object of the derived type.
@@ -724,9 +724,9 @@ bench/oven/churn-tree.cpp within 1% of its pre-WP-076 instruction count
 (it had grown 10%).
 
 **Left for later (owners).**
-- Virtual calls, virtual bases, virtual calls through member pointers,
-  `dynamic_cast`, `typeid`, `delete` through a base with a virtual
-  destructor: WP-077 (they trap with a `kiln:` note).
+- Virtual calls, virtual calls through member pointers, `dynamic_cast`,
+  `typeid`, `delete` through a base with a virtual destructor: landed in
+  WP-077 (below). Virtual bases still trap with a `kiln:` note.
 - `std::construct_at`/`destroy_at`/`std::allocator`: need function
   templates (WP-071) and the library; the `is_std_allocator_call` hook
   still returns false.
@@ -744,6 +744,110 @@ bench/oven/churn-tree.cpp within 1% of its pre-WP-076 instruction count
 - Spec gap: `SubobjectId` (spec/sema-class.md §3.5) is not used by the
   Oven; offsets suffice until virtual bases (WP-077) make the path
   dynamic.
+
+### Dynamic types — Landed (WP-077)
+
+*Status:* implemented in `crates/kiln_oven/src/vm/virt.rs` (dynamic-type
+words, dispatch, `dynamic_cast`, `typeid`), `compile/rtti.rs`,
+`compile/class.rs` (`SetVptr`, `VCall`, `CovAdj`) and
+`compile/new_delete.rs` (virtual destructor `delete`). Contract tests:
+`tests/conformance/expr.const/virtual-*.cpp`; bench
+`bench/oven/virtual-dispatch.cpp`.
+
+**Dynamic-type word.** Each polymorphic subobject's vptr slot (offset 0
+of a class with `TyInfo::has_vptr`; never a field) holds an Oven word:
+low 32 bits the `OTy` of the class `C` whose constructor or destructor
+last ran on the object, high 32 bits the subobject's byte offset in `C`.
+`SetVptr [this, class]` writes the words of every polymorphic subobject
+of `class` at `this`: in a constructor after the base initializers and
+before the member initializers, in a destructor at entry
+([class.cdtor]/4). The words are not part of a frozen value (frozen
+records are structural); `Oven::thaw_vptrs` rewrites them for every
+complete class object of a thawed value. A read of an uninitialized word
+is CWG1517: `Fault::Invalid` ("subexpression not valid") if a
+constructor of exactly that object and class is running (its bases
+phase), else `Fault::NoDynamic(ak)` ("<verb> object outside its
+lifetime", a subobject whose construction has not started). An object
+not usable in constant expressions (`MemFault::External`/`Temporary`) is
+`Fault::UnknownDynamic` ("... whose dynamic type is not constant").
+
+**Dispatch.** `VCall [method, args, class, adj]` (aux 1: sret) reads the
+word at `this`, locates the subobject (`class`, offset) in `C`'s
+subobject list (`Virt::poly_info`, built from `ensure_layout` per class),
+asks `SemaBridge::final_overrider`, adjusts `this` to the overrider's
+subobject and enters it. Resolutions are cached per `(C, offset,
+method)` (`Virt::dispatch`); `Virt::footprint` counts the tables into
+`peak_bytes`. A pure overrider is `Fault::PureVirtual` (clang's "pure
+virtual function 'P::f' called" + "declared here"). A qualified call
+(`A::f()`, recorded by sema on the implicit `MemberExpr` as its
+qualifier) and a call on an object of known dynamic type stay direct
+calls. Covariant returns: `VCall` writes the overrider-to-method return
+adjustment (a byte offset of the method's return class within the
+overrider's) into register `adj`, and `CovAdj [p, adj]` moves the
+returned pointer or reference (null stays null). `MpFn` of a virtual
+member function dispatches the same way.
+
+**`dynamic_cast`.** `DynCast [dst, p, static, target]` (target
+`u32::MAX`: `void*`; aux 1: reference cast) follows clang's
+`HandleDynamicCast`: a null pointer gives null; `void*` gives the most
+derived object; otherwise phase 1 walks from the operand's subobject up
+through public base edges to an object of the target class, phase 2
+looks for a unique public base of the dynamic type. A failure gives null
+for a pointer and `Fault::DynCast { kind, .. }` for a reference
+(`note_constexpr_dynamic_cast_to_reference_failed`, kinds 0–3: the
+static type is a non-public base, no base of the target type, ambiguous,
+non-public target).
+
+**`typeid`.** `TypeId [dst, q|p, type_info, class]`: aux 0 names the
+canonical, unqualified, non-reference type `q` statically; aux 1 reads
+the dynamic type of the polymorphic glvalue `p` (null:
+`MemFault::Null` with access kind `TYPEID`). The result is the address
+of one static, constant allocation of type `std::type_info` per type
+(`Origin::TypeInfo(q)`, cached in `Virt::type_infos`), so `&typeid(T)`
+is stable within the translation unit and libc++'s constant-evaluated
+`operator==` (`this == &other`) works. Notes print it as `&typeid(T)`.
+
+**`delete` through a base.** A single-object `Delete` whose operand
+designates a base subobject (`has_base_subobject` in `ty.rs`, base fields
+only) of a heap object of another type is `Fault::DeleteNonVirtual`
+unless aux 4 (the static type has a virtual destructor) is set; with it,
+the compiled code checks (`Delete` aux 2|4), calls the destructor
+virtually (`VCall` on the static type) and frees the complete object
+(aux 4). The implicit destructor of the dynamic type
+is defined on demand by `ensure_body` (`Sema::define_virtual_dtor`:
+clang defines it when the vtable is used).
+
+**Notes.** A subobject destructor run by a destructor's epilogue
+(`PushCleanup` aux 2) is noted at that destructor's call, as clang's
+`HandleDestructionImpl` passes its call range down.
+
+**Interface changes.** `Fault::{PureVirtual, UnknownDynamic,
+NoDynamic, DeleteNonVirtual, DynCast}`; `Origin::TypeInfo`; ops
+`SetVptr`, `VCall`, `CovAdj`, `DynCast`, `TypeId`; access kinds
+`ak::{MEMBER_CALL, DYNAMIC_CAST, TYPEID, DESTROY}`. Sema (bridge
+support only): `member_of_object`/`implicit_member_ref` record a
+nested-name-specifier on implicit member accesses; list fillers of
+arrays of class type are list-initialized (`Holder h{}` with a `C
+cs[2]` member); `ensure_body` defines implicit virtual destructors.
+
+**Left for later (owners).**
+- Virtual bases: objects with virtual bases cannot be constructed
+  (`VIRTUAL_UNSUPPORTED` traps on a `VirtualBase` ctor-init, an inherited
+  constructor and a class cast through a virtual base), so dispatch,
+  `dynamic_cast` and `typeid` never meet one; the subobject list marks
+  virtual subobjects and phase 2 treats one as `Fault::Invalid`. Owner:
+  a follow-up WP (object layout of virtual bases in `ty.rs`).
+- Covariant return adjustment through a pointer to member function:
+  `Fault::Invalid` (stub, follow-up of WP-077).
+- Freezing a pointer to a `typeid` object (`constexpr auto *p =
+  &typeid(T);`) is `NotConstant`: needs a `PtrBase` for type_info objects
+  shared with codegen (WP-080, with RTTI emission).
+- `r.A::f()` (an explicit member access with a qualifier) is rejected by
+  sema ("qualified member access is not supported yet"); only implicit
+  `A::f()` is covered.
+- A virtual call on a member subobject whose own base is still being
+  constructed reports the lifetime note where clang reports CWG1517
+  (`no_dynamic` keys on the running constructor's object and class).
 
 ### Reflection runtime (M6)
 - `std::meta::info` is a `ReflectionId(u32)` into sema's entity tables;

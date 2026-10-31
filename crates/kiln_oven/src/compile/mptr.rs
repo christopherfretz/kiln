@@ -13,8 +13,6 @@ use super::class::Callee;
 use super::{Access, Compiler, Place, skip_parens};
 use crate::kbc::{Op, ak};
 
-const VIRTUAL_MP_CALL: &str = "kiln: calls of virtual functions through member pointers in constant evaluation land with WP-077";
-
 impl Compiler<'_> {
     /// `&C::m` (`x` the `DeclRefExpr`) into `dst`.
     pub(super) fn mp_const(&mut self, e: ExprId, x: ExprId, dst: u32) {
@@ -139,13 +137,7 @@ impl Compiler<'_> {
         let at = self.node(b).loc();
         self.emit_site(Op::MpAddr, 0, &[this, obj, mp], b, at);
         let f = self.reg();
-        let trap = self.o.traps.len() as u32;
-        self.o.traps.push(crate::compile::TrapInfo {
-            loc: at,
-            msg: VIRTUAL_MP_CALL.to_owned(),
-            extra: Vec::new(),
-        });
-        self.emit_site(Op::MpFn, 0, &[f, mp, trap], b, at);
+        self.emit_site(Op::MpFn, 0, &[f, mp, this], b, at);
         self.call_frame(e, Callee::Ind(f), rty, sret, Some(this), &args, &refs, Some(loc))
     }
 

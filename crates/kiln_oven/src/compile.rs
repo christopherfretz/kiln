@@ -29,6 +29,7 @@ mod builtins;
 mod class;
 mod mptr;
 mod new_delete;
+mod rtti;
 
 pub(crate) use builtins::designator_type;
 pub(crate) use new_delete::is_std_named;
@@ -2605,6 +2606,7 @@ impl Compiler<'_> {
                 let p = self.rv(op);
                 self.class_cast(e, p, dst, true, ck == CastKind::BaseToDerived);
             }
+            CastKind::Dynamic => self.dynamic_cast(e, dst, false),
             CastKind::ToVoid => self.effect(op),
             CastKind::NullToPointer | CastKind::NullToMemberPointer => {
                 self.effect(op);
@@ -3016,6 +3018,15 @@ impl Compiler<'_> {
                 Place::Mem(self.member_call(e, None))
             }
             ExprKind::MaterializeTemporaryExpr => self.mte(e),
+            ExprKind::CXXTypeidExpr => Place::Mem(self.typeid(e)),
+            ExprKind::CXXDynamicCastExpr
+                if n.value_category().is_glvalue()
+                    && self.ast().exprs.cast_kind(e) == CastKind::Dynamic =>
+            {
+                let r = self.reg();
+                self.dynamic_cast(e, r, true);
+                Place::Mem(r)
+            }
             ExprKind::ExprWithCleanups => {
                 let op = self.ast().exprs.operand(e);
                 self.open_scope(&[], true);

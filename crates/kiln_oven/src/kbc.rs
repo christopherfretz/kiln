@@ -187,13 +187,39 @@ ops! {
     // ([class.union]/2; an access through `.*` never activates one,
     // [class.union]/6)
     MpActive = 2,
-    // [dst, mp, trap]: the function of a pointer to member function
-    // (`trap`: the note for a virtual one, dispatch lands with WP-077)
+    // [dst, mp, this]: the function of a pointer to member function; a
+    // virtual one is dispatched on the object at register `this` (the
+    // member's class subobject, `MpAddr`'s result), which is adjusted in
+    // place to the final overrider's subobject
     MpFn = 3,
     // [dst, a, b, c, t1, t2]: a library builtin evaluated natively
     // (spec/oven.md "Builtins"); aux = kind (`bi`) | sub << 8, `a`..`c`
     // registers, `t1`/`t2` types (`bi::DYN`: the designated object's).
     Builtin = 6,
+    // [p, class]: the object at `p` of `class` (under construction or
+    // destruction) has dynamic type `class` from now on ([class.cdtor]/4):
+    // writes the dynamic-type word of each of its polymorphic subobjects
+    // (spec/oven.md "Dynamic types", WP-077)
+    SetVptr = 2,
+    // [method, arg base, class, adj]: a virtual call of `method` (first
+    // declaration, a member of `class`) on the object argument of the
+    // window at `arg base` (after the result object when aux = 1): the
+    // final overrider for the object's dynamic type, `this` adjusted to
+    // its subobject ([class.virtual]/2); register `adj` (`u32::MAX`:
+    // none) receives the covariant return adjustment ([class.virtual]/8)
+    VCall = 4,
+    // [p, adj]: a covariant return: `p` (unless null) moved by the byte
+    // offset in register `adj`, to the called function's return class
+    CovAdj = 2,
+    // [dst, p, static class, target class (`u32::MAX`: `void`)]:
+    // `dynamic_cast` ([expr.dynamic.cast]/6-9); aux = 1: a reference cast
+    // (`p` a glvalue's address; failure is diagnosed, not null)
+    DynCast = 4,
+    // [dst, type | p, type_info type, class]: the address of the
+    // `std::type_info` object of `type` (a canonical `QualType`), or with
+    // aux = 1 of the dynamic type of the polymorphic glvalue of `class`
+    // at `p` ([expr.typeid]/3-4)
+    TypeId = 4,
 }
 
 /// The kinds of `Builtin` and their operands.
@@ -285,6 +311,11 @@ pub(crate) mod ak {
     /// Compound assignment: a lifetime fault reads "assignment to", an
     /// uninitialized operand "read of".
     pub const COMPOUND: u32 = 5;
+    /// A member function call (clang's `AK_MemberCall`).
+    pub const MEMBER_CALL: u32 = 6;
+    pub const DYNAMIC_CAST: u32 = 7;
+    pub const TYPEID: u32 = 8;
+    pub const DESTROY: u32 = 9;
 
     pub fn verb(k: u32) -> &'static str {
         match k {
@@ -292,7 +323,21 @@ pub(crate) mod ak {
             INCREMENT => "increment of",
             DECREMENT => "decrement of",
             INIT => "construction of",
+            MEMBER_CALL => "member call on",
+            DYNAMIC_CAST => "dynamic_cast of",
+            TYPEID => "typeid applied to",
+            DESTROY => "destruction of",
             _ => "read of",
+        }
+    }
+
+    /// The verb of clang's `note_constexpr_polymorphic_unknown_dynamic_type`.
+    pub fn poly_verb(k: u32) -> &'static str {
+        match k {
+            DYNAMIC_CAST => "dynamic_cast applied to",
+            TYPEID => "typeid applied to",
+            DESTROY => "destruction of",
+            _ => "virtual function called on",
         }
     }
 }

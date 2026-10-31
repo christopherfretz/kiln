@@ -187,7 +187,7 @@ impl Sema<'_, '_> {
             e
         };
         let shadow = (found != f).then_some(found);
-        let mem = self.member_of_object(e, src, class, false, f, shadow, loc);
+        let mem = self.member_of_object(e, src, class, false, f, shadow, None, loc);
         if self.is_err_expr(mem) {
             return Ok(mem);
         }

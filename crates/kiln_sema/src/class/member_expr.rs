@@ -87,14 +87,15 @@ impl Sema<'_, '_> {
         d: DeclId,
         loc: Loc,
         shadow: Option<DeclId>,
-        qualified: bool,
+        nns: Option<kiln_ast::NnsId>,
     ) -> ExprId {
+        let qualified = nns.is_some();
         if let Some(class) = self.implicit_object_class(d)
             && let Some((this_ty, _)) = self.this_class()
         {
             let this = self.builder().this_expr(this_ty, true, loc);
             let obj_ty = self.ast.types.pointee(this_ty).unwrap_or(QualType::ERROR);
-            let e = self.member_of_object(this, obj_ty, class, true, d, shadow, loc);
+            let e = self.member_of_object(this, obj_ty, class, true, d, shadow, nns, loc);
             if qualified && !self.is_err_expr(e) {
                 self.member_refs.insert(e, MemberRef { decl: d, error: false, qualified });
             }
@@ -184,11 +185,13 @@ impl Sema<'_, '_> {
         let naming = found.naming.unwrap_or(def);
         let via = found.found.first().copied().unwrap_or(m);
         self.check_member_access(via, naming, Some(def), loc);
-        self.member_of_object(b, obj_ty, def, arrow, m, found.shadow(0), loc)
+        self.member_of_object(b, obj_ty, def, arrow, m, found.shadow(0), None, loc)
     }
 
     /// Member `m` of the object `b` (a pointer for `arrow`) of class type
-    /// `obj_ty` (complete class `obj_class`).
+    /// `obj_ty` (complete class `obj_class`), named with qualifier `nns`
+    /// if any (recorded: a qualified call is not virtual,
+    /// [class.virtual]/16).
     #[allow(clippy::too_many_arguments, reason = "the operands of a member access")]
     pub(crate) fn member_of_object(
         &mut self,
@@ -198,13 +201,14 @@ impl Sema<'_, '_> {
         arrow: bool,
         m: DeclId,
         shadow: Option<DeclId>,
+        nns: Option<kiln_ast::NnsId>,
         loc: Loc,
     ) -> ExprId {
         let quals = self.ast.types.effective_quals(obj_ty);
-        let extra = shadow.map(|s| DeclRefExtra {
-            qualifier: None,
+        let extra = (shadow.is_some() || nns.is_some()).then_some(DeclRefExtra {
+            qualifier: nns,
             template_args: None,
-            found_decl: Some(s),
+            found_decl: shadow,
         });
         let kind = self.kind_of(m);
         match kind {

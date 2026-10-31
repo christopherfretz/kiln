@@ -6,7 +6,7 @@
 use std::cmp::Ordering;
 
 use kiln_ast::consts::FloatKind;
-use kiln_ast::{DeclId, ExprId};
+use kiln_ast::{DeclId, ExprId, QualType};
 use kiln_source::Loc;
 
 use crate::arith::{self, FloatErr, IntErr, canon};
@@ -20,8 +20,10 @@ use crate::{Oven, SemaBridge};
 
 mod bitcast;
 mod builtins;
+mod virt;
 
 pub(crate) use builtins::BiFault;
+pub(crate) use virt::Virt;
 
 /// `Frame::mark` of a frame whose memory is not released on return.
 pub(crate) const BOTTOM: u64 = u64::MAX;
@@ -213,6 +215,34 @@ pub(crate) enum Fault {
     },
     /// A library builtin's own failure.
     Bi(BiFault),
+    /// A virtual call whose final overrider is pure ([class.abstract]/6).
+    PureVirtual(DeclId),
+    /// `delete` of a base class subobject whose class has no virtual
+    /// destructor ([expr.delete]/3).
+    DeleteNonVirtual {
+        stat: OTy,
+        dynamic: OTy,
+    },
+    /// A failed reference `dynamic_cast` (clang's
+    /// `note_constexpr_dynamic_cast_to_reference_failed`, `kind` its
+    /// select index).
+    DynCast {
+        kind: u8,
+        stat: OTy,
+        dynamic: OTy,
+        target: OTy,
+    },
+    /// A polymorphic operation (access kind `ak`) on an object whose
+    /// dynamic type is unknown (not usable in constant expressions).
+    UnknownDynamic {
+        ak: u32,
+        p: u64,
+        ty: OTy,
+    },
+    /// A polymorphic operation (access kind `ak`) on a subobject whose
+    /// construction has not started or whose destruction has finished:
+    /// its dynamic-type word is uninitialized ([class.cdtor]/1, CWG1517).
+    NoDynamic(u32),
 }
 
 /// Why an array `new` bound is erroneous ([expr.new]/8).
@@ -758,8 +788,15 @@ impl Oven {
                     pc += 6;
                 }
                 Op::Delete => {
-                    let raw = reg!(0) as u64;
-                    let pointee = OTy(arg!(1) as u32);
+                    let mut raw = reg!(0) as u64;
+                    let mut pointee = OTy(arg!(1) as u32);
+                    if aux & 1 == 0 && raw != 0 {
+                        match self.delete_base(raw, pointee, aux & 4 != 0) {
+                            Ok(Some((r, t))) => (raw, pointee) = (r, t),
+                            Ok(None) => {}
+                            Err(f) => fail!(f),
+                        }
+                    }
                     // aux 2: the checks only (before the destructors run).
                     let r = if aux & 2 != 0 {
                         self.mem.heap_check(raw, aux & 1 != 0, Some(pointee), &self.types).map(drop)
@@ -864,13 +901,94 @@ impl Oven {
                     pc += 3;
                 }
                 Op::MpFn => match self.mp.get(reg!(1)) {
-                    Some(e) if e.virt => fail!(Fault::Trap(arg!(2) as u32)),
+                    Some(e) if e.virt => {
+                        let (m, cls) = (e.member, e.cls);
+                        match self.vcall(b, m, cls, reg!(2) as u64) {
+                            // A covariant return through a pointer to
+                            // member: not adjusted (WP-077 stub).
+                            Ok((_, _, cov)) if cov != 0 => fail!(Fault::Invalid),
+                            Ok((f, this, _)) => {
+                                reg!(0) = u128::from(crate::mem::fn_ptr(f));
+                                reg!(2) = u128::from(this);
+                            }
+                            Err(f) => fail!(f),
+                        }
+                        pc += 4;
+                    }
                     Some(e) => {
                         reg!(0) = u128::from(crate::mem::fn_ptr(e.fn_index));
                         pc += 4;
                     }
                     None => fail!(Fault::Invalid),
                 },
+                Op::SetVptr => {
+                    if let Err(f) = self.set_vptrs(b, reg!(0) as u64, OTy(arg!(1) as u32)) {
+                        fail!(f);
+                    }
+                    pc += 3;
+                }
+                Op::VCall => {
+                    let base = arg!(1);
+                    let slot = fb + base + aux as usize;
+                    let m = DeclId::new(self.code[pc + 1]);
+                    let cls = OTy(self.code[pc + 3]);
+                    let adj = arg!(3);
+                    let callee = match self.vcall(b, m, cls, self.regs[slot] as u64) {
+                        Ok((f, this, cov)) => {
+                            self.regs[slot] = u128::from(this);
+                            if adj as u32 != u32::MAX {
+                                self.regs[fb + adj] = cov as u128;
+                            } else if cov != 0 {
+                                fail!(Fault::Invalid);
+                            }
+                            f
+                        }
+                        Err(f) => fail!(f),
+                    };
+                    match self.enter(b, callee, pc, pc + 5, fb, base) {
+                        Ok(Some((npc, nfb))) => {
+                            pc = npc;
+                            fb = nfb;
+                        }
+                        Ok(None) => pc += 5,
+                        Err(f) => fail!(f),
+                    }
+                }
+                Op::CovAdj => {
+                    let p = reg!(0) as u64;
+                    if p != 0 {
+                        let off = i64::from(Ptr::decode(p).off) + reg!(1) as i64;
+                        reg!(0) = u128::from(Ptr::with_off(p, off as u64, false));
+                    }
+                    pc += 3;
+                }
+                Op::DynCast => {
+                    let raw = reg!(1) as u64;
+                    let stat = OTy(arg!(2) as u32);
+                    let t = arg!(3) as u32;
+                    let target = (t != u32::MAX).then_some(OTy(t));
+                    match self.dyn_cast(b, raw, stat, target, aux & 1 != 0) {
+                        Ok(r) => reg!(0) = u128::from(r),
+                        Err(f) => fail!(f),
+                    }
+                    pc += 5;
+                }
+                Op::TypeId => {
+                    let ti = OTy(arg!(2) as u32);
+                    let r = if aux & 1 == 0 {
+                        let Some(q) = QualType::from_raw(arg!(1) as u32) else {
+                            fail!(Fault::Invalid)
+                        };
+                        self.type_info(q, ti)
+                    } else {
+                        match self.type_info_dyn(b.ast(), reg!(1) as u64, OTy(arg!(3) as u32), ti) {
+                            Ok(r) => r,
+                            Err(f) => fail!(f),
+                        }
+                    };
+                    reg!(0) = u128::from(r);
+                    pc += 5;
+                }
                 Op::IsConstEval => {
                     let cc = self.run.const_context;
                     reg!(0) = u128::from(cc);
@@ -1616,6 +1734,28 @@ impl Oven {
             }
             _ => Err(Fault::BadDowncast { dynamic: self.dynamic_type(a.ty, off), to }),
         }
+    }
+
+    /// A single-object `delete` of `raw` (static type `pointee`): a base
+    /// class subobject of a `new`ed object is deleted as the whole object
+    /// (`virt`: `pointee` has a virtual destructor, [expr.delete]/3).
+    fn delete_base(&self, raw: u64, pointee: OTy, virt: bool) -> Result<Option<(u64, OTy)>, Fault> {
+        let p = Ptr::decode(raw);
+        if p.is_fn() || !p.is_heap() || p.past {
+            return Ok(None);
+        }
+        let Some(a) = self.mem.alloc_any(p) else { return Ok(None) };
+        let off = u64::from(p.off);
+        if a.ty == pointee
+            || a.flags & flags::ARRAY_NEW != 0
+            || !self.types.has_base_subobject(a.ty, off, pointee)
+        {
+            return Ok(None);
+        }
+        if !virt {
+            return Err(Fault::DeleteNonVirtual { stat: pointee, dynamic: a.ty });
+        }
+        Ok(Some((Ptr::with_off(raw, 0, false), a.ty)))
     }
 
     /// The most derived object containing the byte at `off` of an object

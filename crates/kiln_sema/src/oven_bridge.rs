@@ -44,6 +44,9 @@ impl SemaBridge for Bridge<'_, '_, '_> {
         if let Some(b) = self.sema.defined_body(f) {
             return Some(b);
         }
+        if let Some(b) = self.sema.define_virtual_dtor(f) {
+            return Some(b);
+        }
         self.sema.instantiate_for_oven(f, oven)
     }
 
@@ -103,6 +106,26 @@ impl<'a, 'sm> Sema<'a, 'sm> {
     fn defined_body(&self, f: DeclId) -> Option<StmtId> {
         let d = self.ast.definition(f)?;
         self.ast.decls.function(d)?.body
+    }
+
+    /// An implicitly defined virtual destructor reached only through a
+    /// virtual call (WP-077): sema defines a destructor when it is
+    /// odr-used by name, clang also when the class's vtable is used
+    /// (`MarkVirtualMembersReferenced`); the Oven's dispatch is that use.
+    fn define_virtual_dtor(&mut self, f: DeclId) -> Option<StmtId> {
+        let first = self.ast.first(f);
+        if self.special_kind_of(first) != Some(crate::class::SpecialKind::Dtor)
+            || !crate::class::is_virtual(&self.ast, first)
+        {
+            return None;
+        }
+        let spec = self.ast.decls.function(first)?.spec;
+        if spec.defaulted() == kiln_ast::decl::Defaulted::No || spec.is_deleted() {
+            return None;
+        }
+        let loc = self.ast.decls.get(first).loc();
+        self.define_implicit_special(first, crate::class::SpecialKind::Dtor, loc);
+        self.defined_body(f)
     }
 
     /// `ensure_body` of a function sema has not defined

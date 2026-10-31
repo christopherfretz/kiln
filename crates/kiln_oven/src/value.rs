@@ -846,6 +846,10 @@ impl Oven {
             }
             (img.relocs.to_vec(), img.unions.to_vec())
         };
+        if pp.off == 0 && self.types.info(aty).has_vptr {
+            // The dynamic-type words are not part of the image.
+            self.thaw_vptrs(b, crate::mem::Sp::Static, base, aty);
+        }
         for r in relocs {
             let at = u64::from(r.at);
             let ty = self.deepest_at(aty, at);

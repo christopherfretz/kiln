@@ -33,6 +33,23 @@ fn name_of(ast: &Ast, d: DeclId) -> String {
     s
 }
 
+/// `d`'s name qualified by its enclosing classes and namespaces (clang's
+/// `getQualifiedNameAsString`).
+pub(crate) fn qualified_name(ast: &Ast, d: DeclId) -> String {
+    let mut parts = vec![name_of(ast, d)];
+    let mut c = ast.decls.get(d).ctx();
+    while let Some(x) = c {
+        let n = ast.decls.get(x);
+        if !matches!(n.kind(), DeclKind::CXXRecord | DeclKind::Namespace) {
+            break;
+        }
+        parts.push(name_of(ast, x));
+        c = n.ctx();
+    }
+    parts.reverse();
+    parts.join("::")
+}
+
 impl Oven {
     pub(crate) fn site(&self, pc: usize) -> Site {
         let i = self.sites.partition_point(|s| s.pc as usize <= pc);
@@ -58,7 +75,19 @@ impl Oven {
     /// The notes of `fault` at `pc`, with the call stack.
     pub(crate) fn render(&self, b: &dyn SemaBridge, fault: Fault, pc: usize) -> Vec<Note> {
         let ast = b.ast();
-        let site = self.site(pc);
+        let mut site = self.site(pc);
+        if self.code.get(pc).is_some_and(|&w| Op::from_u8(w as u8) == Op::VCall)
+            && let Some(e) = site.e
+            && matches!(
+                ast.exprs.get(e).kind(),
+                ExprKind::CallExpr | ExprKind::CXXMemberCallExpr | ExprKind::CXXOperatorCallExpr
+            )
+            && let m = skip_parens(ast, ast.exprs.callee(e))
+            && ast.exprs.get(m).kind() == ExprKind::MemberExpr
+        {
+            // clang diagnoses a dispatch at the member name.
+            site.loc = ast.exprs.get(m).loc();
+        }
         let mut extra = Vec::new();
         let (loc, msg) = match fault {
             Fault::Trap(i) => {
@@ -192,6 +221,55 @@ impl Oven {
                 (site.loc, format!("cannot allocate array; evaluated array bound {v} {what}"))
             }
             Fault::Bi(f) => (site.loc, self.bi_msg(ast, site, f)),
+            Fault::PureVirtual(d) => {
+                extra.push(Note::new(ast.decls.get(d).loc(), "declared here"));
+                (site.loc, format!("pure virtual function '{}' called", qualified_name(ast, d)))
+            }
+            Fault::DeleteNonVirtual { stat, dynamic } => (
+                site.loc,
+                format!(
+                    "delete of object with dynamic type '{}' through pointer to base class type '{}' with non-virtual destructor",
+                    self.tname(ast, dynamic),
+                    self.tname(ast, stat)
+                ),
+            ),
+            Fault::DynCast { kind, stat, dynamic, target } => {
+                let (st, dy, ta) =
+                    (self.tname(ast, stat), self.tname(ast, dynamic), self.tname(ast, target));
+                let what = match kind {
+                    0 => format!(
+                        "static type '{st}' of operand is a non-public base class of dynamic type '{dy}'"
+                    ),
+                    1 => format!(
+                        "dynamic type '{dy}' of operand does not have a base class of type '{ta}'"
+                    ),
+                    2 => format!(
+                        "'{ta}' is an ambiguous base class of dynamic type '{dy}' of operand"
+                    ),
+                    _ => format!(
+                        "'{ta}' is a non-public base class of dynamic type '{dy}' of operand"
+                    ),
+                };
+                (site.loc, format!("reference dynamic_cast failed: {what}"))
+            }
+            Fault::NoDynamic(k) => (
+                site.loc,
+                format!(
+                    "{} object outside its lifetime is not allowed in a constant expression",
+                    ak::verb(k)
+                ),
+            ),
+            Fault::UnknownDynamic { ak: k, p, ty } => {
+                let d = self.ptr_string(ast, p, ty);
+                (
+                    site.loc,
+                    format!(
+                        "{} object '{}' whose dynamic type is not constant",
+                        ak::poly_verb(k),
+                        d.trim_start_matches('&')
+                    ),
+                )
+            }
             Fault::Callee(f) => {
                 let func = &self.funcs[f as usize];
                 let d = func.decl.unwrap_or_else(|| DeclId::new(0));
@@ -295,7 +373,20 @@ impl Oven {
             skip1 = active - limit / 2;
         }
         for (i, fr) in frames.iter().rev().enumerate() {
-            let loc = self.site(fr.call_pc as usize).loc;
+            // A subobject's destructor run by its destructor's epilogue
+            // is noted at that destructor's call (clang).
+            let mut at = fr.call_pc as usize;
+            for outer in frames.iter().rev().skip(i + 1) {
+                if !self
+                    .code
+                    .get(at)
+                    .is_some_and(|&w| Op::from_u8(w as u8) == Op::PushCleanup && (w >> 8) & 2 != 0)
+                {
+                    break;
+                }
+                at = outer.call_pc as usize;
+            }
+            let loc = self.site(at).loc;
             if i >= skip0 && i < skip1 {
                 if i == skip0 {
                     let n = active - limit;
@@ -523,6 +614,9 @@ impl Oven {
             // clang: `{*new T#N}`, N its allocation number.
             Origin::Heap(_, n) => {
                 let _ = write!(s, "{{*new {}#{n}}}", self.tname(ast, a.ty));
+            }
+            Origin::TypeInfo(q) => {
+                let _ = write!(s, "typeid({})", Self::type_name(ast, q));
             }
         }
         let (mut t, mut rel) = (a.ty, u64::from(p.off));

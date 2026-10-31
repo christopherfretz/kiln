@@ -831,7 +831,7 @@ impl Sema<'_, '_> {
             self.check_member_access(via, naming, object, loc);
         }
         if self.is_class_member_ref(d) {
-            return self.implicit_member_ref(d, loc, found.shadow(0), qualifier.is_some());
+            return self.implicit_member_ref(d, loc, found.shadow(0), nns);
         }
         let e = self.build_decl_ref_qualified(d, loc, found.shadow(0), nns);
         // clang's `getBeginLoc` of a qualified name is the qualifier's.
@@ -1027,7 +1027,7 @@ impl Sema<'_, '_> {
             }
             DeclKind::CXXMethod if self.is_static_method(d) => {}
             _ if self.is_class_member_ref(d) => {
-                return self.implicit_member_ref(d, loc, shadow, false);
+                return self.implicit_member_ref(d, loc, shadow, extra.and_then(|x| x.qualifier));
             }
             // [temp.names]/1: a variable template is named with arguments
             // (clang's `diagnoseMissingTemplateArguments`).
