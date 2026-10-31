@@ -97,6 +97,18 @@ impl Parser<'_, '_> {
                 self.bump();
                 self.bump();
             }
+            if self.at_kw(Kw::Template)
+                && self.peek_is(1, Punct::Less)
+                && !self.at_member_class_template_spec()
+            {
+                // `template<> template<params> ... C<args>::m`: a member
+                // template of an implicit class template specialization
+                // ([temp.expl.spec]/16): declared as an out-of-line
+                // member template of the specialization, whose
+                // redeclaration gives its specializations their pattern.
+                self.parse_template_declaration(ctx);
+                return;
+            }
             if self.at_partial_specialization()
                 || self.at_var_template_spec()
                 || !self.at_spec_tag_or_template()
@@ -175,6 +187,39 @@ impl Parser<'_, '_> {
     /// function or variable one (member classes, member templates).
     fn at_spec_tag_or_template(&self) -> bool {
         matches!(self.kw(), Some(Kw::Class | Kw::Struct | Kw::Union | Kw::Enum | Kw::Template))
+    }
+
+    /// At `template<params>` followed by a class-key: a member class
+    /// template specialization (not supported; clang 19 itself does not
+    /// terminate on one).
+    fn at_member_class_template_spec(&self) -> bool {
+        let mut i = self.pos() + 1;
+        let mut depth = 0usize;
+        let mut parens = 0usize;
+        while i < self.pos() + 4096 {
+            match self.tok_at(i).kind {
+                TokKind::Eof => return false,
+                TokKind::Punct(Punct::LParen | Punct::LSquare | Punct::LBrace) => parens += 1,
+                TokKind::Punct(Punct::RParen | Punct::RSquare | Punct::RBrace) => {
+                    parens = parens.saturating_sub(1);
+                }
+                TokKind::Punct(Punct::Less) if parens == 0 => depth += 1,
+                TokKind::Punct(p @ (Punct::Greater | Punct::GreaterGreater)) if parens == 0 => {
+                    let n = if p == Punct::Greater { 1 } else { 2 };
+                    depth = depth.saturating_sub(n);
+                    if depth == 0 {
+                        let t = self.tok_at(i + 1);
+                        return matches!(
+                            self.kw_of(t),
+                            Some(Kw::Class | Kw::Struct | Kw::Union | Kw::Template)
+                        );
+                    }
+                }
+                _ => {}
+            }
+            i += 1;
+        }
+        false
     }
 
     /// A simple-declaration whose declarator-id is a template-id naming

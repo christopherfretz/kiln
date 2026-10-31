@@ -1780,7 +1780,9 @@ impl Sema<'_, '_> {
             // previously declared member of the nominated class or
             // namespace.
             let scope = if method {
-                format!("'{}'", self.qualified_decl_name(ctx))
+                // clang prints a class context as its type (`A<T>`,
+                // `N::A<long>::C`).
+                self.class_context_str(ctx)
             } else {
                 self.qualifier_desc(ctx)
             };
@@ -4585,5 +4587,22 @@ pub(crate) const fn operator_uses(op: OverloadedOperator) -> (bool, bool, bool) 
         O::Equal | O::Subscript | O::Call => (false, true, true),
         O::Arrow => (true, false, true),
         _ => (false, true, false),
+    }
+}
+
+impl Sema<'_, '_> {
+    /// Class `c` as clang prints a class declaration context in a
+    /// diagnostic (`ak_declcontext`: the class's type): the
+    /// injected-class-name `A<T>` of a pattern, else the class with its
+    /// scope (`N::A<long>::C`).
+    pub(crate) fn class_context_str(&mut self, c: DeclId) -> String {
+        let t = self.this_class_type(c);
+        let injected = t != self.tag_type(c);
+        let names = crate::names::SemaNames::new(self);
+        let opts = kiln_ast::types::PrintOptions {
+            full_scope: !injected,
+            ..kiln_ast::types::PrintOptions::SUGARED
+        };
+        format!("'{}'", kiln_ast::types::print_type(&self.ast.types, &names, t, opts))
     }
 }

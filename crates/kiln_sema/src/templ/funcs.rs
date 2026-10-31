@@ -536,7 +536,10 @@ impl Sema<'_, '_> {
         if !in_spec {
             return None;
         }
-        let cands = self.prev_candidates_dn(name, Some(q));
+        let mut cands = self.prev_candidates_dn(name, Some(q));
+        // An invalid out-of-line declaration is not found (clang does
+        // not add it to its context).
+        cands.retain(|&c| !self.ast.decls.get(c).has(DeclFlags::INVALID));
         if cands.iter().any(|&c| self.kind_of(c) == DeclKind::FunctionTemplate) {
             return None;
         }
@@ -578,7 +581,7 @@ impl Sema<'_, '_> {
         let e = self
             .diag(id, d.name_loc())
             .arg(self.decl_name_str(name))
-            .arg(format!("'{}'", self.ty_str(self.class_type(q))));
+            .arg(self.class_context_str(q));
         self.emit(e);
         Some(None)
     }
