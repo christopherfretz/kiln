@@ -2924,8 +2924,17 @@ explicit specialization errors remain. The blockers are:
     satisfied);
   - generic lambdas: lambdas are not implemented;
   - trailing requires-clauses on non-template members of class
-    templates ([over.match.best]/2.6);
-  - `atom_cache`.
+    templates ([over.match.best]/2.6): unowned (next templates package);
+  - `atom_cache`: unowned (perf follow-up; the per-concept cache covers
+    libc++'s patterns).
+- The `<type_traits>` probe went from 20 errors to 10. What remains:
+  - 4 are "not yet implemented: pack expansion" (WP-072), at
+    `common_reference.h:182,183`, `conjunction.h:39` and
+    `disjunction.h:44`;
+  - 2 are "reference to a member of a dependent context" in the
+    `__basic_common_reference_t` alias (`common_reference.h:160,162`),
+    which is alias instantiation, not concepts;
+  - 4 are unrelated to WP-071/073: `__int128_t` and its follow-ons.
 
 ### 11.3 Instantiation report and memory accounting
 
