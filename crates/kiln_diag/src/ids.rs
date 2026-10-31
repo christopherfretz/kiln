@@ -1172,6 +1172,7 @@ diag_ids! {
     // WP-067b: construction, ctor-initializers, implicit definitions,
     // temporaries ([class.base.init], [class.temporary], spec/sema-class.md §4.5-§5).
     sema_temp_return_local = Error (0) "returning reference to local temporary object";
+    sema_return_local_temp_addr = Warning [ReturnStackAddress] (0) "returning address of local temporary object";
     sema_temp_member_ref = Error (1) "reference member {0} binds to a temporary object whose lifetime would be shorter than the lifetime of the constructed object";
     note_temp_member_ref_here = Note (0) "reference member declared here";
     sema_temp_dtor_access = Error (2) "temporary of type {0} has {1:private|protected} destructor";

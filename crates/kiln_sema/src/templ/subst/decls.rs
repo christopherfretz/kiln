@@ -181,8 +181,22 @@ impl Substituter<'_, '_, '_> {
         (v.init.is_some() || missing)
             && (v.spec.is_inline() || v.spec.is_constexpr())
             && v.spec.storage() == VarStorage::Static
-            && !matches!(ast.types.view(t.ty()), TypeView::Auto { .. })
+            && !Self::has_placeholder(ast, t)
             && !matches!(ast.types.view(ast.types.canonical(t).ty()), TypeView::IncompleteArray(_))
+    }
+
+    /// Whether `t` is a placeholder under pointer and reference
+    /// declarators (`auto`, `auto*`, `const auto&`).
+    fn has_placeholder(ast: &kiln_ast::Ast, t: QualType) -> bool {
+        let mut cur = t;
+        for _ in 0..256 {
+            match ast.types.view(cur.ty()) {
+                TypeView::Auto { .. } => return true,
+                TypeView::Pointer(p) | TypeView::LValueRef(p) | TypeView::RValueRef(p) => cur = p,
+                _ => return false,
+            }
+        }
+        false
     }
 
     /// Declares pattern static data member `d` with its initializer

@@ -2979,7 +2979,11 @@ impl Compiler<'_> {
                 // frame is read like a global: usable if it is `constexpr`
                 // or a `const` integral with a constant initializer
                 // ([expr.const]/4), else its value is unknown.
-                if ast.decls.get(d).kind() == DeclKind::ParmVar {
+                // Its address alone is an unknown object, rejected when the
+                // result is frozen ("pointer to 'x' is not a constant
+                // expression").
+                let addr_only = matches!(acc, Access::Addr) && !is_reference_var(ast, d);
+                if ast.decls.get(d).kind() == DeclKind::ParmVar && !addr_only {
                     let name = {
                         let mut s = String::new();
                         kiln_ast::dump::AstNames::new(ast).write_name(d, &mut s);
@@ -2996,8 +3000,10 @@ impl Compiler<'_> {
                     );
                     return Place::Mem(self.reg());
                 }
-                if !matches!(ast.decls.get(d).kind(), DeclKind::Var | DeclKind::TemplateParamObject)
-                {
+                if !matches!(
+                    ast.decls.get(d).kind(),
+                    DeclKind::Var | DeclKind::TemplateParamObject | DeclKind::ParmVar
+                ) {
                     self.unsupported(e);
                     return Place::Mem(self.reg());
                 }

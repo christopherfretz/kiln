@@ -1106,6 +1106,14 @@ impl Sema<'_, '_> {
             && let Some(t) = self.enumerator_pre_brace_type(d)
         {
             t
+        } else if n.kind() == DeclKind::NonTypeTemplateParm
+            && self.placeholder_keyword(declared).is_some()
+        {
+            // `template<auto& R>`: the placeholder is deduced per
+            // argument, so a use is type-dependent (clang's dependent
+            // `AutoType`).
+            let t = self.dependent_auto(declared);
+            self.non_reference(t)
         } else {
             self.non_reference(declared)
         };

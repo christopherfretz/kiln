@@ -4,12 +4,12 @@
 //! parameter objects ([temp.param]/8) class-type arguments designate.
 
 use kiln_ast::consts::{PtrBase, Scalar};
-use kiln_ast::decl::{Access, DeclFlags, DeclKind, DefinitionBits, VarStorage};
+use kiln_ast::decl::{Access, DeclFlags, DeclKind, DefinitionBits};
 use kiln_ast::expr::{ExprFlags, ExprKind, NonOdrUse, UnaryOp};
 use kiln_ast::types::{Quals, TemplateArg, TypeView};
 use kiln_ast::{ConstValueId, DeclId, ExprId, QualType};
 use kiln_diag::{Diag, DiagId};
-use kiln_oven::{EvalContext, EvalFailure, FailKind, Note};
+use kiln_oven::EvalContext;
 use kiln_source::Loc;
 
 use crate::Sema;
@@ -317,29 +317,27 @@ impl Sema<'_, '_> {
         let loc = self.ast.exprs.get(c).loc();
         let a = self.builder().unary(UnaryOp::AddrOf, c, pt, loc, ExprFlags::NONE);
         let a = self.act_on_full_expr(a);
-        let r = self.eval_const(a, EvalContext::converted(at)).and_then(|v| {
+        let r = self.eval_const(a, EvalContext::converted(at)).map_err(|mut f| {
             // [temp.arg.nontype]/3: the referent has static storage
-            // duration (an automatic variable's address is not constant).
+            // duration. The Oven rejects the address `&e` it was given;
+            // clang words it for the reference.
+            if let Some(n) = f.notes.first_mut()
+                && let Some(rest) = n.msg.strip_prefix("pointer to ")
+            {
+                n.msg = format!("reference to {rest}");
+            }
+            f
+        });
+        let r = r.map(|v| {
             match self.ast.consts.scalar(v) {
-                Some(Scalar::Pointer { base: PtrBase::Decl(d), .. }) if self.is_automatic(d) => {
-                    let n = format!(
-                        "reference to '{}' is not a constant expression",
-                        self.decl_name(d)
-                    );
-                    let notes = vec![
-                        Note { loc: at, msg: n },
-                        Note { loc: self.ast.decls.get(d).loc(), msg: "declared here".into() },
-                    ];
-                    Err(EvalFailure { kind: FailKind::NotConstant, notes })
-                }
                 // Re-keyed at the reference type: printed without `&`
                 // (`T<gi>`), as clang.
-                Some(Scalar::Pointer { base, offset, .. }) => Ok(self
+                Some(Scalar::Pointer { base, offset, .. }) => self
                     .ast
                     .consts
                     .push_scalar(Scalar::Pointer { ty: canon, base, offset })
-                    .unwrap_or(v)),
-                _ => Ok(v),
+                    .unwrap_or(v),
+                _ => v,
             }
         });
         match r {
@@ -350,20 +348,6 @@ impl Sema<'_, '_> {
                 self.emit(d);
                 Err(())
             }
-        }
-    }
-
-    /// Whether `d` is a variable or parameter with automatic storage
-    /// duration.
-    fn is_automatic(&self, d: DeclId) -> bool {
-        let n = self.ast.decls.get(d);
-        match n.kind() {
-            DeclKind::ParmVar => true,
-            DeclKind::Var => {
-                self.ast.decls.var(d).is_some_and(|v| v.spec.storage() == VarStorage::None)
-                    && n.ctx().is_some_and(|c| self.ast.decls.get(c).kind().is_function())
-            }
-            _ => false,
         }
     }
 

@@ -155,8 +155,36 @@ impl Sema<'_, '_> {
             return self.builder().return_stmt(Some(e), None, loc);
         }
         let e = self.init_list_entity(ret, l, l.lbrace);
+        if self.returns_list_backing_array(e) {
+            // clang's `checkExprLifetime` for a return: the
+            // `std::initializer_list`'s backing array is a local temporary
+            // ([dcl.init.list]/6).
+            let msg = self.diag(DiagId::sema_return_local_temp_addr, l.lbrace);
+            self.emit(msg);
+        }
         let e = self.act_on_full_expr(e);
         self.builder().return_stmt(Some(e), None, loc)
+    }
+
+    /// Whether the returned `e` is a `std::initializer_list` built over a
+    /// braced list (through implicit no-op conversions and cleanups).
+    fn returns_list_backing_array(&self, mut e: ExprId) -> bool {
+        for _ in 0..64 {
+            let n = self.ast.exprs.get(e);
+            match n.kind() {
+                ExprKind::CXXStdInitializerListExpr => return true,
+                ExprKind::ExprWithCleanups
+                | ExprKind::ParenExpr
+                | ExprKind::CXXBindTemporaryExpr
+                | ExprKind::MaterializeTemporaryExpr
+                | ExprKind::ConstantExpr => e = self.ast.exprs.operand(e),
+                k if k.is_cast() && matches!(self.ast.exprs.cast_kind(e), CastKind::NoOp) => {
+                    e = self.ast.exprs.operand(e);
+                }
+                _ => return false,
+            }
+        }
+        false
     }
 
     /// `x op= { ... }` ([expr.assign]/8): the list initializes a

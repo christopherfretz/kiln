@@ -363,7 +363,12 @@ impl Oven {
                 "pointer to an object outside its lifetime is not a constant expression",
             )]));
         };
-        if p.is_static() {
+        // A variable with automatic storage duration not created by this
+        // evaluation ([expr.const]/14: a constant expression's pointers
+        // point to objects with static storage duration).
+        let automatic = matches!(a.origin, Origin::Global(d) | Origin::External(d)
+            if is_automatic(b.ast(), d));
+        if p.is_static() && !automatic {
             let base = match a.origin {
                 Origin::Global(d) | Origin::External(d) => PtrBase::Decl(d),
                 Origin::Str(lit, Some(origin)) => PtrBase::StringLit { lit, origin },
@@ -397,28 +402,31 @@ impl Oven {
         let ast = b.ast();
         let sub = offset != 0 || p.past || pointee != a.ty;
         let what = if sub { "subobject of " } else { "" };
+        let kind = if ast.types.is_reference(q) { "reference" } else { "pointer" };
         let mut notes = Vec::with_capacity(2);
         match a.origin {
-            Origin::Var(d) => {
+            Origin::Var(d) | Origin::Global(d) | Origin::External(d)
+                if automatic || matches!(a.origin, Origin::Var(_)) =>
+            {
                 let mut name = String::new();
                 kiln_ast::dump::AstNames::new(ast).write_name(d, &mut name);
                 notes.push(Note::new(
                     loc,
-                    format!("pointer to {what}'{name}' is not a constant expression"),
+                    format!("{kind} to {what}'{name}' is not a constant expression"),
                 ));
                 notes.push(Note::new(ast.decls.get(d).loc(), "declared here"));
             }
             Origin::Temp(e) => {
                 notes.push(Note::new(
                     loc,
-                    format!("pointer to {what}temporary is not a constant expression"),
+                    format!("{kind} to {what}temporary is not a constant expression"),
                 ));
                 notes.push(Note::new(ast.exprs.get(e).loc(), "temporary created here"));
             }
             Origin::Let(t) => {
                 notes.push(Note::new(
                     loc,
-                    format!("pointer to {what}temporary is not a constant expression"),
+                    format!("{kind} to {what}temporary is not a constant expression"),
                 ));
                 if let Some(e) = let_mte(ast, t) {
                     notes.push(Note::new(ast.exprs.get(e).loc(), "temporary created here"));
@@ -429,7 +437,7 @@ impl Oven {
             Origin::Heap(e, _) => {
                 notes.push(Note::new(
                     loc,
-                    format!("pointer to {what}heap-allocated object is not a constant expression"),
+                    format!("{kind} to {what}heap-allocated object is not a constant expression"),
                 ));
                 if a.live {
                     notes.push(Note::new(ast.exprs.get(e).loc(), "heap allocation performed here"));
@@ -1000,4 +1008,20 @@ pub(crate) fn let_mte(ast: &Ast, t: DeclId) -> Option<ExprId> {
         work.extend(ast.exprs.children(e, &ast.lists));
     }
     None
+}
+
+/// Whether `d` is a variable or parameter with automatic storage
+/// duration ([basic.stc.auto]).
+fn is_automatic(ast: &Ast, d: DeclId) -> bool {
+    let n = ast.decls.get(d);
+    match n.kind() {
+        DeclKind::ParmVar => true,
+        DeclKind::Var => {
+            ast.decls.var(d).is_some_and(|v| {
+                v.spec.storage() == kiln_ast::decl::VarStorage::None
+                    && v.spec.tls() == kiln_ast::decl::TlsKind::None
+            }) && n.ctx().is_some_and(|c| ast.decls.get(c).kind().is_function())
+        }
+        _ => false,
+    }
 }
