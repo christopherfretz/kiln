@@ -13,6 +13,8 @@ file with one `#include`, error count.
 | 2 block-scope using of overload sets | 0 | 4 | 13 | 18 | 34 |
 | 3 braced arguments in dependent calls | 0 | 2 | 13 | 16 | 32 |
 | 4 dependent `::new` with pack initializer | 0 | 2 | 13 | 12 | 28 |
+| 5 `::__builtin_*` | 0 | 2 | 13 | 10 | 25 |
+| 6b alias substituted in its own context (+ dependent explicit-args callee) | 0 | 1 | 13 | 8 | 23 |
 
 ## Items
 1. [x] `return f(args...);` in a void function template (`stmt.rs`
@@ -34,18 +36,55 @@ file with one `#include`, error count.
    (kiln and clang++-19 pass; `expr.new/` 46/46). Full corpus NOT re-run
    after item 4 (stopped by the host-reset request); after item 3 it was
    1628/1641, 0 failed.
-5. [ ] `::__builtin_memmove` — not started. Diagnosis: `act_on_id_expression_dn`
-   (expr.rs ~778) calls `lazily_create_builtin` only when `qualifier.is_none()`;
-   allow it when the qualifier is the TU (`::`).
-6. [ ] `__get_iterator_concept` / `__do_test` — not started. Diagnosis:
-   `__get_iterator_concept` is the 'consteval' cascade (ranges_iterator_concept.h:31).
-   `__do_test`: repro `struct B { template <class Tr, class T> static T f(T);
-   template <class T> using ok = decltype(f<int>(T{})); };
-   template <class T> struct C { B::ok<T> m; }; C<int> c;` — an unqualified
-   template-id callee with ADL is looked up again from the instantiation
-   context (subst/exprs.rs `callee`, `act_on_call_name_dn`), which lacks
-   B's scope when the alias is instantiated from outside B. Without `<int>`
-   it works.
+5. [x] `::__builtin_memmove`: `act_on_id_expression_dn` declares the
+   builtin for a bare `::` qualifier too (the builtin lives in the global
+   namespace). Tests: `expr.prim.id.qual/global-qualified-builtin.cpp`,
+   `global-qualified-builtin-error.cpp`.
+6. `__get_iterator_concept` / `__do_test`:
+   - 6b [x] `alias_template_type` (templ/class.rs) substitutes the aliased
+     type inside `in_inst_context(<alias's context>)`, as variable
+     templates already did, so `f<int>(T{})` in a member alias finds the
+     class's `f` when the alias is used from elsewhere. This also removed
+     the "`__get_iterator_concept` undeclared" half of 6a (a namespace
+     alias `ranges::__iterator_concept` used from `std::_IterOps`). Going
+     further exposed a panic (`constant_value` on a non-`ConstantExpr`):
+     the subst `callee` ADL path attached substituted explicit template
+     arguments to the rebuilt name without its dependence, so
+     `g<I>()` with a still-dependent `I` instantiated `g`'s body; the
+     name is now rebuilt with the arguments (type-dependent), and a
+     value-dependent `if constexpr` condition in subst keeps both
+     branches instead of panicking. Tests:
+     `templates/alias/temp.alias-lookup-context.cpp` (the `__do_test`
+     repro, plus class-template and namespace variants),
+     `templates/alias/temp.alias-dependent-explicit-args.cpp`.
+   - 6a [ ] OUT of scope: `'consteval' is not supported yet`
+     (ranges_iterator_concept.h:31) — the function is now found, but its
+     declaration is still rejected.
 
-## Status at stop (host reset)
-Done: 1, 2, 3, 4. Not started: 5, 6. Full `cargo xtask ci` not run.
+## Remaining blockers seen at the final probe (listed, not fixed)
+- CTAD deduction guides, "expected unqualified-id" at the guide
+  (`pair.h:484`, `subrange.h:197-210`, `array:384`, `span:604-620`,
+  `string_view:694,699`, `_LIBCPP_CTAD_SUPPORTED_FOR_TYPE` at
+  `string_view:680`) — WP-071b. All of `<utility>`'s last error.
+- `consteval` functions (6a; `ranges_iterator_concept.h:31`).
+- `__datasizeof(_Tp)` builtin not parsed (`datasizeof.h:31`, then
+  "substitution into RecoveryExpr").
+- `static_cast<decltype(_Tp::value)>(_Tp()) == _Tp::value` inside a
+  template argument list ("expected '(' for function-style cast",
+  `span:595`), cascading to `__integral_constant_like` unknown
+  (`span:600-601`).
+- `Base<float>::operator()(v)`: qualified operator-function-id after a
+  template-id (`hash.h:434,444,485`).
+- `switch` on a dependent-typed operand (`hash.h:62`).
+- Local classes in templates (`hash.h:270`), literal operators
+  (`string_view:906`), `__builtin_va_list`, `__builtin_constant_p`,
+  `__is_assignable`, `__invoke` ambiguity (`find.h:48`),
+  `__assign_trivially_copyable` no match (`constexpr_c_functions.h:221`).
+- Not in the probe yet: a member template of an explicit specialization
+  named through it (`template <> struct O<int> { template <class I>
+  using c = I; }; O<int>::c<long> x;` → "expected unqualified-id");
+  clang accepts.
+
+## Status at end
+Done: 1, 2, 3, 4, 5, 6b. Out of scope: 6a. See the corpus lines in the
+handback.
