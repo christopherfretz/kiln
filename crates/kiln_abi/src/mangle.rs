@@ -324,6 +324,71 @@ pub fn mangle_type(ast: &Ast, q: QualType) -> String {
     m.out
 }
 
+/// `<special-name>` of a type: `prefix` (`_ZTI` / `_ZTS`) followed by its
+/// <type> (WP-080).
+pub fn mangle_rtti(ast: &Ast, q: QualType, prefix: &str) -> String {
+    let mut m = Mangler::new(ast, prefix);
+    m.ty(q);
+    m.out
+}
+
+/// `<special-name>` of a class: `prefix` followed by the class's <type>
+/// (`_ZTV` vtable, `_ZTT` VTT, `_ZTI` `type_info`, `_ZTS` `type_info` name;
+/// WP-080).
+pub fn mangle_class_special(ast: &Ast, prefix: &str, class: DeclId) -> String {
+    let mut m = Mangler::new(ast, prefix);
+    m.tag(class);
+    m.out
+}
+
+/// The construction vtable of base `base` at byte `offset` in
+/// `most_derived` (`_ZTC <type> <offset> _ <type>`, one substitution
+/// table for both types, as clang's `mangleCXXCtorVTable`).
+pub fn mangle_ctor_vtable(ast: &Ast, most_derived: DeclId, offset: i64, base: DeclId) -> String {
+    use std::fmt::Write as _;
+    let mut m = Mangler::new(ast, "_ZTC");
+    m.tag(most_derived);
+    let _ = write!(m.out, "{offset}_");
+    m.tag(base);
+    m.out
+}
+
+/// A thunk of `method` (variant `v` for a destructor): `this` adjustment
+/// `this` = (non-virtual, vcall offset offset) and return adjustment
+/// `ret` = (non-virtual, vbase offset offset) (Itanium §5.1.4
+/// <special-name> `T <call-offset> <encoding>` / `Tc <call-offset>
+/// <call-offset> <encoding>`).
+pub fn mangle_thunk(
+    ast: &Ast,
+    method: DeclId,
+    v: Structor,
+    this: (i64, i64),
+    ret: (i64, i64),
+) -> String {
+    let mut m = Mangler::new(ast, "_ZT");
+    let covariant = ret != (0, 0);
+    if covariant {
+        m.out.push('c');
+    }
+    push_call_offset(&mut m.out, this);
+    if covariant {
+        push_call_offset(&mut m.out, ret);
+    }
+    m.encoding(method, v);
+    m.out
+}
+
+/// <call-offset> ::= h <nv-offset> _ | v <offset number> _ <virtual offset number> _
+fn push_call_offset(s: &mut String, (nv, virt): (i64, i64)) {
+    use std::fmt::Write as _;
+    let num = |n: i64| if n < 0 { format!("n{}", n.unsigned_abs()) } else { n.to_string() };
+    if virt == 0 {
+        let _ = write!(s, "h{}_", num(nv));
+    } else {
+        let _ = write!(s, "v{}_{}_", num(nv), num(virt));
+    }
+}
+
 /// The Itanium mangler state for one symbol.
 struct Mangler<'a> {
     ast: &'a Ast,

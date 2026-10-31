@@ -50,6 +50,10 @@ pub(crate) struct Sig {
     /// `arrangeCXXMethodType` prepends it; it is classified with the
     /// parameters but kept out of `info.args`/`params`).
     pub this: Option<DeclId>,
+    /// A VTT parameter follows `this` (clang `ItaniumCXXABI::
+    /// buildStructorSignature` for base-object structors of classes with
+    /// virtual bases).
+    pub vtt: bool,
 }
 
 impl Sig {
@@ -121,8 +125,22 @@ pub(crate) struct Cg<'a> {
     pub c1_decl: FxHashSet<DeclId>,
     /// Structors whose complete variant is defined (alias or RAUW).
     pub c1_done: FxHashSet<DeclId>,
+    /// Deleting destructors already emitted (WP-080).
+    pub d0_done: FxHashSet<DeclId>,
+    /// Thunk functions by mangled name (WP-080).
+    pub thunk_fns: FxHashMap<String, FuncId>,
     /// Structors whose base variant body was generated.
     pub sdone: FxHashSet<DeclId>,
+    /// `_ZTV` globals by class (WP-080).
+    pub vtables: FxHashMap<DeclId, GlobalId>,
+    /// Vtable group layouts by class.
+    pub vt_layouts: FxHashMap<DeclId, std::rc::Rc<kiln_ast::class::VTableLayout>>,
+    /// Vtables referenced but not yet defined (clang `DeferredVTables`).
+    pub deferred_vtables: Vec<DeclId>,
+    /// Vtables already defined.
+    pub vt_emitted: FxHashSet<DeclId>,
+    /// `_ZTI` definitions by mangled name.
+    pub rtti_globals: FxHashMap<String, GlobalId>,
     /// Bodies using placeholders, lowered once the module is complete.
     pub pending: Vec<(FuncId, DeclId, crate::fir::Fir)>,
     /// Per-function state.
@@ -169,7 +187,14 @@ impl<'a> Cg<'a> {
             squeued: FxHashSet::default(),
             c1_decl: FxHashSet::default(),
             c1_done: FxHashSet::default(),
+            d0_done: FxHashSet::default(),
+            thunk_fns: FxHashMap::default(),
             sdone: FxHashSet::default(),
+            vtables: FxHashMap::default(),
+            vt_layouts: FxHashMap::default(),
+            deferred_vtables: Vec::new(),
+            vt_emitted: FxHashSet::default(),
+            rtti_globals: FxHashMap::default(),
             pending: Vec::new(),
             f: Fx::empty(),
         }
@@ -185,6 +210,7 @@ impl<'a> Cg<'a> {
     pub fn run(mut self) -> R<Module> {
         let tu = self.ast.tu;
         self.emit_members(tu)?;
+        self.emit_key_function_vtables()?;
         self.emit_deferred()?;
         self.resolve_placeholders()?;
         self.trailer();
@@ -296,13 +322,16 @@ impl<'a> Cg<'a> {
 
     /// clang `EmitDeferred`.
     fn emit_deferred(&mut self) -> R<()> {
+        if !self.deferred_vtables.is_empty() {
+            self.emit_deferred_vtables()?;
+        }
         let cur = std::mem::take(&mut self.to_emit);
         for def in cur {
             let d = match def {
                 Def::Decl(d) => d,
                 Def::Structor(d, v) => {
                     self.emit_structor_def(d, v)?;
-                    if !self.to_emit.is_empty() {
+                    if !self.to_emit.is_empty() || !self.deferred_vtables.is_empty() {
                         self.emit_deferred()?;
                     }
                     continue;
@@ -324,7 +353,7 @@ impl<'a> Cg<'a> {
                     self.emit_fn_def(d)?;
                 }
             }
-            if !self.to_emit.is_empty() {
+            if !self.to_emit.is_empty() || !self.deferred_vtables.is_empty() {
                 self.emit_deferred()?;
             }
         }
@@ -616,7 +645,7 @@ impl<'a> Cg<'a> {
         let variadic = p.variadic();
         let info = self.classify(ret, &params, params.len(), !extern_c, this.is_some());
         let fn_ty = self.fn_type(&info, this.is_some(), variadic);
-        Sig { info, fn_ty, ret, params, nothrow, this }
+        Sig { info, fn_ty, ret, params, nothrow, this, vtt: false }
     }
 
     /// clang `arrangeLLVMFunctionInfo`: classifies `this` (when present)
@@ -664,7 +693,24 @@ impl<'a> Cg<'a> {
         let info = self.classify(ret, &all, params.len(), !extern_c, t);
         let decl_info = self.classify(ret, &params, params.len(), !extern_c, t);
         let fn_ty = self.fn_type(&decl_info, t, p.variadic());
-        Sig { info, fn_ty, ret, params: all, nothrow: ast.types.exc_spec(&p).is_nothrow(), this }
+        let nothrow = ast.types.exc_spec(&p).is_nothrow();
+        Sig { info, fn_ty, ret, params: all, nothrow, this, vtt: false }
+    }
+
+    /// `sig` with a VTT parameter after `this`.
+    pub(crate) fn with_vtt(&mut self, mut sig: Sig) -> Sig {
+        if sig.vtt {
+            return sig;
+        }
+        let Some((ret, ps, variadic)) = self.m.types.function_info(sig.fn_ty) else {
+            return sig;
+        };
+        let mut ps = ps.to_vec();
+        let at = usize::from(sig.sret()) + 1;
+        ps.insert(at, LTy::PTR);
+        sig.fn_ty = self.m.types.function(ret, &ps, variadic);
+        sig.vtt = true;
+        sig
     }
 
     fn fn_type(&mut self, info: &CallInfo, this: bool, variadic: bool) -> LTy {
@@ -745,6 +791,9 @@ impl<'a> Cg<'a> {
             }
             s.push(Attr::Align(align));
             params.push(self.m.attr_set(&s));
+        }
+        if sig.vtt {
+            params.push(self.m.attr_set(&[Attr::Flag(AttrKind::NoUndef)]));
         }
         for (i, a) in sig.info.args.iter().take(n_args).enumerate() {
             let mut s = Vec::new();
@@ -839,11 +888,20 @@ impl<'a> Cg<'a> {
         self.target_attrs(&mut fa);
         let fa = self.m.attr_set(&fa);
         let (fa, ret) = self.alloc_fn_attrs(first, fa, ret);
+        // clang `SetFunctionAttributes`: virtual member functions are
+        // `unnamed_addr`.
+        let virt = ast.decls.get(first).kind() == DeclKind::CXXMethod
+            && ast
+                .redecls_of(first)
+                .any(|r| ast.decls.function(r).is_some_and(|x| x.spec.is_virtual()));
         {
             let func = self.m.func_mut(f);
             func.attrs.func = fa;
             func.attrs.ret = ret;
             func.attrs.params = params;
+            if virt {
+                func.unnamed_addr = UnnamedAddr::Global;
+            }
         }
         self.nounwind.insert(f, sig.nothrow);
         Ok(f)

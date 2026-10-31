@@ -474,9 +474,15 @@ impl Cg<'_> {
                 else {
                     return err(self.loc_of(e), "derived-to-base cast of a non-class pointer");
                 };
-                let off = self.base_path_offset(e, derived)?;
+                let (vb, off) = self.base_path(e, derived)?;
                 let null_check = ck == CastKind::DerivedToBase && !self.is_this_expr(s);
-                self.base_ptr(p, off, null_check)
+                if vb.is_none() {
+                    self.base_ptr(p, off, null_check)
+                } else {
+                    let ty = self.mty(ast.types.pointee(sq).expect("checked"));
+                    let align = self.record_align_of(sq);
+                    self.base_address(Addr { v: p, ty, align }, derived, vb, off, null_check)?.0
+                }
             }
             // `__builtin_bit_cast` ([bit.cast]): the operand's bytes
             // loaded as the destination type (clang `EmitLoadOfLValue` of
@@ -489,6 +495,11 @@ impl Cg<'_> {
             CastKind::ToVoid => {
                 self.emit_ignored(s)?;
                 return Ok(None);
+            }
+            CastKind::Dynamic => {
+                let p = self.emit_scalar(s)?;
+                let align = self.record_align_of(sq);
+                self.emit_dynamic_cast(e, p, align)?
             }
             CastKind::ArrayToPointerDecay => {
                 let lv = self.emit_lvalue(s)?;
@@ -1155,6 +1166,12 @@ impl Cg<'_> {
         }
     }
 
+    /// The natural alignment of the object pointer type `q` points to.
+    pub(crate) fn record_align_of(&mut self, q: QualType) -> u64 {
+        let p = self.ast.types.pointee(q).unwrap_or(q);
+        self.pointee_layout(p).1
+    }
+
     /// The lvalue of type `q` at the address `p` a reference holds.
     pub(crate) fn ref_lvalue(&mut self, p: V, q: QualType) -> LV {
         let ty = if self.ast.types.is_function(q) { LTy::PTR } else { self.mty(q) };
@@ -1195,6 +1212,10 @@ impl Cg<'_> {
                 Ok(self.ref_lvalue(p, q))
             }
             ExprKind::ConstantExpr => self.emit_lvalue(ast.exprs.operand(e)),
+            ExprKind::CXXTypeidExpr => {
+                let p = self.emit_typeid(e)?;
+                Ok(self.ref_lvalue(p, q))
+            }
             ExprKind::SubstNonTypeTemplateParmExpr => self.emit_lvalue(ExprId::new(n.b())),
             ExprKind::DeclRefExpr => self.decl_lvalue(e, ast.exprs.decl(e), q),
             ExprKind::StringLiteral => {
@@ -1302,11 +1323,15 @@ impl Cg<'_> {
                     let Some(derived) = ast.types.as_record(ast.exprs.get(s).ty()) else {
                         return err(self.loc_of(e), "derived-to-base cast of a non-class");
                     };
-                    let off = self.base_path_offset(e, derived)?;
-                    let v = self.byte_offset(lv.addr.v, off);
+                    let (vb, off) = self.base_path(e, derived)?;
+                    let (v, align) = self.base_address(lv.addr, derived, vb, off, false)?;
                     let ty = self.mty(q);
-                    let align = min_align(lv.addr.align, off);
                     Ok(LV { addr: Addr { v, ty, align }, q, bf: None })
+                }
+                CastKind::Dynamic => {
+                    let lv = self.emit_lvalue(ast.exprs.operand(e))?;
+                    let p = self.emit_dynamic_cast(e, lv.addr.v, lv.addr.align)?;
+                    Ok(self.ref_lvalue(p, q))
                 }
                 k => err(self.loc_of(e), format!("lvalue cast {k:?} is not supported yet")),
             },
@@ -1596,7 +1621,7 @@ impl Cg<'_> {
                             let args: Vec<ExprId> =
                                 ast.lists.iter(ast.exprs.call_args(e)).collect();
                             if let Some((&obj, rest)) = args.split_first() {
-                                return self.emit_method_call(e, d, obj, false, rest, dest);
+                                return self.emit_method_call(e, d, obj, false, rest, dest, false);
                             }
                         }
                         if matches!(ast.decls.get(d).kind(), DeclKind::Function)
@@ -1720,12 +1745,24 @@ impl Cg<'_> {
         if let Some(t) = this {
             ir_args.push(t);
         }
+        if sig.vtt {
+            let Some(v) = self.f.call_vtt.take() else {
+                return err(
+                    args.first().and_then(|&a| self.loc_of(a)),
+                    "structor call without a VTT",
+                );
+            };
+            ir_args.push(v);
+        }
         for (i, &v) in vals.iter().enumerate() {
             let Some(info) = sig.info.args.get(i) else {
-                return err(self.loc_of(args[i]), "call argument without ABI information");
+                return err(
+                    args.get(i).and_then(|&a| self.loc_of(a)),
+                    "call argument without ABI information",
+                );
             };
             let kind = info.kind.clone();
-            let loc = self.loc_of(args[i]);
+            let loc = args.get(i).and_then(|&a| self.loc_of(a));
             self.call_arg(&kind, sig.params[i], v, &mut ir_args, loc)?;
         }
         let rty = match &sig.info.ret.kind {
@@ -1735,7 +1772,7 @@ impl Cg<'_> {
             }
             _ => LTy::VOID,
         };
-        let (ret, params) = self.sig_attrs(sig, args.len(), false);
+        let (ret, params) = self.sig_attrs(sig, vals.len(), false);
         let func = if sig.nothrow {
             let mut fa = vec![Attr::Flag(AttrKind::NoUnwind)];
             fa.extend(extra.iter().cloned());

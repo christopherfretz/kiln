@@ -455,6 +455,124 @@ pointer, a VTT or a virtual call reports a `CodegenError` naming WP-080.
 - The comment in `templates/builtins/builtin.bit-cast-run.cpp` defers
   class-template member calls. That test has no `xfail` and passes.
 
+## 7a. Landed (WP-080): virtual functions
+Lowering of polymorphic classes (`vtable.rs`, `dyncast.rs`, plus hooks in
+`class.rs`, `func.rs`, `expr.rs`, `memptr.rs`, `new_delete.rs`), mirroring
+clang 19 `-O0` on both targets. Layouts come from `kiln_abi::vtable`.
+- **Vtables** (clang `CGVTables`, `ItaniumCXXABI::emitVTableDefinitions`):
+  a vtable global is created on first use (vptr store, slot load) and
+  defined at the end of the TU. Linkage follows the key function: a
+  class whose key function is defined in this TU gets a strong
+  `external` vtable; one whose key function is defined elsewhere gets an
+  `external` declaration only; a class with no key function (or an
+  inline/template one) gets a `linkonce_odr` `unnamed_addr` definition in its own
+  COMDAT, as clang on ELF. The initializer is
+  `{ [N x ptr] ... }`, one array per primary/secondary group, with
+  offset-to-top, RTTI, then the slots. Pure slots are
+  `__cxa_pure_virtual`, deleted slots `__cxa_deleted_virtual`.
+- **RTTI** (`ItaniumRTTIBuilder`): `_ZTI`/`_ZTS` for classes
+  (`__class_type_info`, `__si_class_type_info`, `__vmi_class_type_info`
+  with flags and base offset words), pointers (`__pointer_type_info`,
+  qualifier flags plus 8 for an incomplete pointee), enums, functions and
+  arrays (`{vt, name}`). Fundamental types and (const) pointers to them
+  refer to the runtime's `external constant` objects. RTTI of a type that
+  involves an incomplete class has `internal` linkage. Linkage of class
+  RTTI follows the vtable.
+- **vptr stores**: constructors store the address point of every vptr
+  after the base initializers and before the member initializers;
+  destructors re-store them on entry unless clang's
+  `CanSkipVTablePointerInitialization` holds (trivial body, no
+  members needing destruction).
+- **Virtual calls** (`CGCXXABI::getVirtualFunctionPointer`): the
+  arguments are emitted first, then the vtable load (`!tbaa` free at
+  `-O0`), the slot GEP and load. Calls are devirtualized when the class
+  or the method is `final`, when the object is a known complete object
+  (a named non-reference variable or a temporary), and for qualified
+  calls (`p->B::f()`).
+- **Deleting destructors** (D0): the body calls D1 then the sized
+  `operator delete` (or the class's own). An abstract class's D0 is
+  `llvm.trap` + `unreachable`. `delete p` of a polymorphic class with a
+  virtual destructor calls D0 through the vtable; otherwise D1 then
+  `operator delete`. `::delete p` of such a class is not supported yet.
+- **Thunks** (`CodeGenVTables::maybeEmitThunk`): a thunk is declared
+  when the vtable that needs it is built and defined right after its
+  target (method, D1 or D0) is emitted. `this`-adjusting (`_ZThn`) and
+  return-adjusting (`_ZTch`, with a null check and phi for pointers)
+  thunks spill and reload their parameters like any function, adjust
+  `this`, and forward the arguments with a `tail call` (not `musttail`).
+  Attributes follow clang's IsThunk rules: `this` keeps only `noundef`,
+  and a reference return keeps only `noundef`.
+- **`dynamic_cast`** (`EmitDynamicCast`): pointer sources are
+  null-checked (blocks `dynamic_cast.notnull`/`.null`/`.end`, then a
+  phi). The runtime call is `__dynamic_cast(p, srcRTTI, dstRTTI, hint)`
+  with clang's `computeOffsetHint` (-1 virtual path, -2 not a public
+  base, -3 multiple public paths, else the offset). A reference cast
+  checks for null and calls `__cxa_bad_cast` (`noreturn`). `dynamic_cast
+  <void*>` uses the offset-to-top word. Casts known to fail (final
+  source, or final unrelated destination) fold to null / a bad_cast call.
+- **`typeid`**: a type operand, or an expression that is not potentially
+  evaluated or names a most-derived object, yields the static `_ZTI`.
+  Otherwise the type_info pointer is loaded from vtable slot -1; a glvalue
+  that comes from a pointer dereference is first null-checked with a
+  call to `__cxa_bad_typeid`.
+- **Pointers to virtual members**: `&C::vf` is `{index * 8 + 1, adj}` on
+  x86-64 and `{index * 8, 2 * adj + 1}` on AArch64; calls through them
+  take the virtual branch already present in WP-079's `memptr.rs`.
+- **Template linkage policy**: vtables, RTTI and thunks of classes that
+  are template specializations, or have no key function, are
+  `linkonce_odr` and emitted only when used (deferred), as with inline
+  functions. Explicit instantiation definitions (`weak_odr`) are not
+  covered yet.
+
+- **Virtual bases** (clang `GetAddressOfBaseClass`,
+  `ItaniumCXXABI::{buildStructorSignature, getImplicitConstructorArgs,
+  EmitDestructorCall}`, `CodeGenVTables::{EmitVTTDefinition,
+  GenerateConstructionVTable}`):
+  - *Conversions* start at the last virtual step of the cast's path
+    (clang `BuildBasePathArray`); the non-virtual offset after it is
+    static. The vbase offset is loaded from the vtable (non-`inbounds`
+    `gep i8` by the vbase-offset offset, `load i64 align 8`), the
+    non-virtual offset added, then one `gep inbounds i8`. A pointer
+    operand is null-checked (branch + `phi`); `this` and lvalues are
+    not. A `final` derived class uses its static vbase offset. The
+    result alignment is clang's `getVBaseAlignment`.
+  - *Structors* of a class with virtual bases are separate C1/C2 (D1/D2)
+    functions, never aliased or replaced. The base-object variant takes
+    `ptr noundef %vtt` after `this`; the prolog spills and reloads it
+    after `this`. C1 constructs the virtual bases first (at their static
+    offsets, `MayOverlap`), then everything C2 does; C2 skips them (and
+    so does C1 of an abstract class). D1 calls D2 with the class's own
+    `@_ZTT` and then destroys the virtual bases in reverse `vbases()`
+    order with their D2; D1 of an abstract class is `llvm.trap`.
+  - *VTT argument* (clang `GetVTTParameter`): in a function with a VTT
+    parameter, `gep inbounds ptr, %vtt, i64 idx` (the parameter itself
+    when delegating or idx = 0); otherwise the constant
+    `getelementptr inbounds ([N x ptr], @_ZTT, i64 0, i64 idx)`, which
+    folds to `@_ZTT` for idx = 0. `idx` is the sub-VTT index of the base
+    subobject (the first VTT component of its construction vtable).
+  - *Vptr stores in a base-object structor* load each address point from
+    the VTT (secondary-vptr index; a non-zero index is a `gep inbounds
+    ptr`); a vptr inside a virtual base is stored at an address computed
+    with the vbase offset from the already-stored vtable.
+  - *VTT and construction vtables* (`_ZTT<class>`, `_ZTC<class><off>_
+    <base>`): `[N x ptr]` and vtable-group constants, `unnamed_addr`,
+    `align 8`, with the vtable's linkage and COMDAT, emitted before the
+    vtable's own initializer (clang `GenerateClassData` order;
+    `GetAddrOfVTT` creates `_ZTV` first). VTT entries are address points
+    with `inrange`; an address point at the end of a vtable (no virtual
+    functions) belongs to that vtable, not the next one.
+  - Thunks with a virtual adjustment (`_ZTv0_n<off>_`) load the
+    vcall offset from the vtable.
+
+**Gaps (owned elsewhere or open):**
+- Virtual bases: the `-1` `__dynamic_cast` offset hint (no public path
+  through a virtual base) is implemented but not covered by the corpus;
+  inheriting constructors of classes with virtual bases are not covered.
+- EH-dependent forms (WP-100): `dynamic_cast` / `typeid` inside cleanup
+  scopes use plain `call`s.
+- Member-pointer RTTI (`__pointer_to_member_type_info`), the
+  `noexcept` function-pointer flag, `::delete` of a polymorphic class.
+
 ## Status and what remains
 **Done:** WP-052 (lowering, §2–§4; unit corpus 79/79 exact on aarch64)
 and WP-052b (driver §5; IR-diff corpus 92/92 exact on both triples; 33

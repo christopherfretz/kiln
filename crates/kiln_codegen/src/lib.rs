@@ -20,6 +20,7 @@ mod builtins;
 mod class;
 mod cleanup;
 mod consts;
+mod dyncast;
 mod expr;
 mod fir;
 mod fold;
@@ -28,6 +29,7 @@ mod memptr;
 mod module;
 mod new_delete;
 mod stmt;
+mod vtable;
 
 use kiln_abi::Target;
 use kiln_ast::Ast;

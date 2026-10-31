@@ -111,6 +111,12 @@ pub(crate) struct Fx {
     pub this_class: Option<DeclId>,
     /// The constructor/destructor variant being emitted.
     pub structor: Option<mangle::Structor>,
+    /// The VTT parameter, loaded in the prolog (clang
+    /// `CXXStructorImplicitParamValue`).
+    pub vtt: Option<V>,
+    /// The VTT argument of the structor call being emitted
+    /// (consumed by `call_vals` for a signature with `vtt`).
+    pub call_vtt: Option<V>,
     /// The NRVO flags of NRVO variables with non-trivial destructors.
     pub nrvo_flags: FxHashMap<DeclId, V>,
     /// The body refers to a [`V::P`] placeholder.
@@ -167,6 +173,8 @@ impl Fx {
             this: None,
             this_class: None,
             structor: None,
+            vtt: None,
+            call_vtt: None,
             nrvo_flags: FxHashMap::default(),
             uses_ph: false,
             error: None,
@@ -197,15 +205,50 @@ impl Cg<'_> {
     /// clang `GenerateCode` for the function definition `d`.
     pub fn emit_fn_def(&mut self, d: DeclId) -> R<()> {
         let f = self.get_fn(d)?;
-        self.gen_code(d, f, None)
+        self.gen_code(d, f, None)?;
+        self.emit_thunks(d, None)
+    }
+
+    /// `llvm.trap` (`noreturn nounwind`) followed by `unreachable`.
+    pub(crate) fn emit_trap_unreachable(&mut self) {
+        let trap = kiln_llvm::intrinsics::trap(&mut self.m);
+        let fa = self.m.attr_set(&[Attr::Flag(AttrKind::NoReturn), Attr::Flag(AttrKind::NoUnwind)]);
+        let fn_ty = self.m.func(trap).ty();
+        let opts =
+            CallOpts { attrs: AttrList { func: fa, ..AttrList::default() }, ..CallOpts::default() };
+        let c = self.f.fir.push(
+            Op::Call {
+                fn_ty,
+                callee: V::C(Value::func(trap)),
+                args: Vec::new(),
+                opts: Box::new(opts),
+            },
+            LTy::VOID,
+        );
+        self.f.calls.push((Fir::last_inst(c), Some(trap), true));
+        self.f.fir.push(Op::Unreachable, LTy::VOID);
+        self.f.fir.set_cur(None);
     }
 
     /// clang `GenerateCode` for the definition `d` into `f` (`structor`:
     /// the constructor/destructor variant being emitted).
     pub fn gen_code(&mut self, d: DeclId, f: FuncId, structor: Option<mangle::Structor>) -> R<()> {
+        self.gen_code_or_thunk(d, f, structor, None)
+    }
+
+    /// `gen_code`, or with `thunk` clang `generateThunk` (`StartThunk` +
+    /// `EmitCallAndReturnForThunk` + `FinishThunk`) for the method
+    /// definition `d` into the thunk function `f`.
+    pub(crate) fn gen_code_or_thunk(
+        &mut self,
+        d: DeclId,
+        f: FuncId,
+        structor: Option<mangle::Structor>,
+        thunk: Option<kiln_ast::class::Thunk>,
+    ) -> R<()> {
         let ast = self.ast;
         let first = ast.first(d);
-        let sig = self.decl_sig(first)?;
+        let sig = self.structor_sig(first, structor)?;
         let fd = *ast.decls.function(d).expect("function");
         let Some(body) = fd.body else { return Ok(()) };
         let is_main = mangle::decl_name(ast, first) == "main"
@@ -237,7 +280,7 @@ impl Cg<'_> {
         {
             self.m.func_mut(f).align = Some(2);
         }
-        if structor.is_some() {
+        if structor.is_some() || thunk.is_some() {
             self.m.func_mut(f).unnamed_addr = kiln_llvm::UnnamedAddr::Global;
         }
 
@@ -284,6 +327,11 @@ impl Cg<'_> {
             arg_no += 1;
             v
         });
+        let vtt_arg = sig.vtt.then(|| {
+            let v = V::Arg(arg_no);
+            arg_no += 1;
+            v
+        });
         let param_decls: Vec<DeclId> = ast.lists.iter(fd.params).collect();
         let mut vals = Vec::with_capacity(param_decls.len());
         for (i, &p) in param_decls.iter().enumerate() {
@@ -293,6 +341,11 @@ impl Cg<'_> {
             vals.push(self.prolog_arg(&info.kind, pq, &mut arg_no, loc)?);
         }
         let this_addr = this_arg.map(|v| {
+            let a = self.f.fir.alloca(LTy::PTR, 8);
+            self.store(v, a, 8, false);
+            a
+        });
+        let vtt_addr = vtt_arg.map(|v| {
             let a = self.f.fir.alloca(LTy::PTR, 8);
             self.store(v, a, 8, false);
             a
@@ -322,35 +375,35 @@ impl Cg<'_> {
         if let Some(a) = this_addr {
             self.f.this = Some(self.load(LTy::PTR, a, 8, false));
         }
+        if let Some(a) = vtt_addr {
+            self.f.vtt = Some(self.load(LTy::PTR, a, 8, false));
+        }
 
         match kind {
+            _ if let Some(th) = thunk => {
+                self.f.mustprogress = false;
+                self.emit_thunk_body(d, structor, th, &param_decls)?;
+            }
             DeclKind::CXXConstructor => self.emit_ctor_body(d, body)?,
+            DeclKind::CXXDestructor if structor == Some(mangle::Structor::Deleting) => {
+                self.emit_deleting_dtor_body(d)?;
+            }
+            DeclKind::CXXDestructor
+                if structor == Some(mangle::Structor::Complete) && self.structor_has_vbases(d) =>
+            {
+                self.emit_complete_dtor_body()?;
+            }
             DeclKind::CXXDestructor => self.emit_dtor_body(d, body)?,
             _ => self.emit_body(body)?,
         }
 
         // GenerateCode: falling off the end of a value-returning function.
-        if !is_main && self.f.ret_kind != RetKind::Void && self.f.fir.cur().is_some() {
-            let trap = kiln_llvm::intrinsics::trap(&mut self.m);
-            let fa =
-                self.m.attr_set(&[Attr::Flag(AttrKind::NoReturn), Attr::Flag(AttrKind::NoUnwind)]);
-            let fn_ty = self.m.func(trap).ty();
-            let opts = CallOpts {
-                attrs: AttrList { func: fa, ..AttrList::default() },
-                ..CallOpts::default()
-            };
-            let c = self.f.fir.push(
-                Op::Call {
-                    fn_ty,
-                    callee: V::C(Value::func(trap)),
-                    args: Vec::new(),
-                    opts: Box::new(opts),
-                },
-                LTy::VOID,
-            );
-            self.f.calls.push((Fir::last_inst(c), Some(trap), true));
-            self.f.fir.push(Op::Unreachable, LTy::VOID);
-            self.f.fir.set_cur(None);
+        if !is_main
+            && thunk.is_none()
+            && self.f.ret_kind != RetKind::Void
+            && self.f.fir.cur().is_some()
+        {
+            self.emit_trap_unreachable();
         }
         // FinishFunction.
         self.pop_cleanup_blocks(0);
@@ -379,7 +432,10 @@ impl Cg<'_> {
         // Attributes.
         let nothrow_def = sig.nothrow || !self.opts.exceptions || self.no_throw_calls();
         let fa = self.def_fn_attrs(is_main, nothrow_def, self.f.mustprogress, self.f.vector_width);
-        let (ret, params) = self.sig_attrs(&sig, sig.params.len(), true);
+        let (mut ret, mut params) = self.sig_attrs(&sig, sig.params.len(), true);
+        if thunk.is_some() {
+            (ret, params) = self.thunk_attrs(&sig, ret, params);
+        }
         let (fa, ret) = self.alloc_fn_attrs(d, fa, ret);
         {
             let func = self.m.func_mut(f);

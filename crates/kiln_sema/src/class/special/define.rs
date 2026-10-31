@@ -268,6 +268,7 @@ impl Sema<'_, '_> {
             SpecialKind::Dtor => {
                 let at = self.ast.decls.get(f).loc();
                 self.mark_base_and_member_dtors_referenced(at, class);
+                self.check_destructor_delete(f, class);
                 true
             }
         };
