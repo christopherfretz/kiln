@@ -116,6 +116,10 @@ pub struct TemplState {
     /// The `...` of each fold-expression (clang `CXXFoldExpr::EllipsisLoc`;
     /// the AST node stores only the parentheses).
     pub(crate) fold_ellipsis: kiln_source::fx::FxHashMap<ExprId, Loc>,
+    /// The dependent-scope marker of dependent `decltype(e)::` qualifiers
+    /// (an unlinked alias of `<dependent type>`, created on first use;
+    /// [`Sema::act_on_nested_name_decltype`]).
+    pub(crate) decltype_scope: Option<DeclId>,
 }
 
 /// The instantiation engine's state (spec/sema-templates.md §11.2).
