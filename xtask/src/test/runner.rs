@@ -96,7 +96,10 @@ enum Problem {
     Fail(String),
     Broken(String),
     /// A process ran out of address space under the test's cap of `mib`.
-    Killed { mib: u64, details: String },
+    Killed {
+        mib: u64,
+        details: String,
+    },
 }
 
 impl Problem {

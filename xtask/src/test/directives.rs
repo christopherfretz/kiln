@@ -867,8 +867,19 @@ mod tests {
         assert_eq!(ok("int x;\n").mem_mib, None);
         assert_eq!(ok("//@ mem<=512\n").mem_mib, Some(512));
         assert_eq!(ok("//@ expect: run\n//@ mem<= 64\n").mem_mib, Some(64));
-        let msg = "a memory budget is written `mem<=N`, N a positive number of MiB (e.g. `//@ mem<=512`)";
-        for bad in ["mem: 512", "mem<=0", "mem<=-1", "mem<=1.5", "mem<=", "mem", "mem=512", "mem<512", "mem<=512: x"] {
+        let msg =
+            "a memory budget is written `mem<=N`, N a positive number of MiB (e.g. `//@ mem<=512`)";
+        for bad in [
+            "mem: 512",
+            "mem<=0",
+            "mem<=-1",
+            "mem<=1.5",
+            "mem<=",
+            "mem",
+            "mem=512",
+            "mem<512",
+            "mem<=512: x",
+        ] {
             assert_eq!(errs(&format!("//@ {bad}\n")), [format!("line 1: {msg}")], "{bad}");
         }
         assert_eq!(errs("//@ mem<=512\n//@ mem<=256\n"), ["line 2: duplicate `mem<=`"]);

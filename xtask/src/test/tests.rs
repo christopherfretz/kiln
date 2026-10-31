@@ -327,12 +327,7 @@ fn memory_limits_with_a_fake_hog() {
     if !have_clang() {
         return;
     }
-    if process::run(
-        Command::new("python3").arg("--version"),
-        Duration::from_secs(30),
-    )
-    .is_err()
-    {
+    if process::run(Command::new("python3").arg("--version"), Duration::from_secs(30)).is_err() {
         eprintln!("python3 not installed; skipping the memory-limit fixtures");
         return;
     }

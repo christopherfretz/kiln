@@ -122,10 +122,7 @@ impl MemLimit {
         }
         let mut c = Command::new("sh");
         c.arg("-c")
-            .arg(format!(
-                "ulimit -v \"$1\" || exit {}; shift; exec \"$@\"",
-                Self::ULIMIT_FAILED
-            ))
+            .arg(format!("ulimit -v \"$1\" || exit {}; shift; exec \"$@\"", Self::ULIMIT_FAILED))
             .arg("kiln-mem-limit")
             .arg(self.mib.saturating_mul(1024).to_string())
             .arg(cmd.get_program());
@@ -534,8 +531,8 @@ mod tests {
         let probe = RssProbe::detect(&dir);
         let mut c = Command::new("sleep");
         c.arg("30");
-        let m = run_measured(&c, &probe, &dir.join("rss"), Duration::from_millis(200), None)
-                .unwrap();
+        let m =
+            run_measured(&c, &probe, &dir.join("rss"), Duration::from_millis(200), None).unwrap();
         assert!(m.status.is_none());
         assert!(m.wall < Duration::from_secs(10), "{m:?}");
         assert_eq!(m.max_rss_kb, None);
@@ -581,14 +578,23 @@ mod tests {
         hog.args(["-c", "b = bytearray(1 << 30); print(len(b))"]);
         let o = run(&mut limited(&hog, MemLimit::from_mib(256)), Duration::from_secs(30)).unwrap();
         assert!(!o.success() && o.out_of_memory(), "{o:?}");
-        let o = run(&mut limited(&hog, MemLimit::from_mib(DEFAULT_MEM_LIMIT_MIB)), Duration::from_secs(30))
-            .unwrap();
+        let o = run(
+            &mut limited(&hog, MemLimit::from_mib(DEFAULT_MEM_LIMIT_MIB)),
+            Duration::from_secs(30),
+        )
+        .unwrap();
         assert!(o.success() && !o.out_of_memory(), "{o:?}");
         // The cap applies under the RSS probe, too.
         let dir = scratch("hog");
         let probe = RssProbe::detect(&dir);
-        let m = run_measured(&hog, &probe, &dir.join("rss"), Duration::from_secs(30), MemLimit::from_mib(256))
-            .unwrap();
+        let m = run_measured(
+            &hog,
+            &probe,
+            &dir.join("rss"),
+            Duration::from_secs(30),
+            MemLimit::from_mib(256),
+        )
+        .unwrap();
         assert!(m.as_output().out_of_memory(), "{m:?}");
         std::fs::remove_dir_all(&dir).unwrap();
     }
@@ -612,7 +618,10 @@ mod tests {
         assert!(out_of_memory(exit(1), py));
         let ld = "clang++-19: error while loading shared libraries: libLLVM.so.19.1: failed to map segment from shared object\n";
         assert!(out_of_memory(exit(127), ld));
-        assert!(out_of_memory(exit(2), "kiln-mem-limit: 1: exec: /bin/x: Cannot allocate memory\n"));
+        assert!(out_of_memory(
+            exit(2),
+            "kiln-mem-limit: 1: exec: /bin/x: Cannot allocate memory\n"
+        ));
         // Other failures are not.
         assert!(!out_of_memory(signal(11), "Segmentation fault\n"));
         assert!(!out_of_memory(exit(1), "t.cpp:3:1: error: MemoryError is not a type\n"));
@@ -625,11 +634,21 @@ mod tests {
         assert_eq!(kiln_stack_reservation_mib::<&str>(&[]), 1024);
         assert_eq!(kiln_stack_reservation_mib(&["-O2", "-fkiln-stack-size=8M"]), 8);
         assert_eq!(kiln_stack_reservation_mib(&["-fkiln-stack-size=2G"]), 2048);
-        assert_eq!(kiln_stack_reservation_mib(&["-fkiln-stack-size=100k"]), 4, "raised to the minimum");
+        assert_eq!(
+            kiln_stack_reservation_mib(&["-fkiln-stack-size=100k"]),
+            4,
+            "raised to the minimum"
+        );
         assert_eq!(kiln_stack_reservation_mib(&["-fkiln-stack-size=5242881"]), 6, "rounded up");
         // The last valid one wins, as in kiln; an invalid one is skipped.
-        assert_eq!(kiln_stack_reservation_mib(&["-fkiln-stack-size=64M", "-fkiln-stack-size=x"]), 64);
-        assert_eq!(kiln_stack_reservation_mib(&["-fkiln-stack-size=64M", "-fkiln-stack-size=32M"]), 32);
+        assert_eq!(
+            kiln_stack_reservation_mib(&["-fkiln-stack-size=64M", "-fkiln-stack-size=x"]),
+            64
+        );
+        assert_eq!(
+            kiln_stack_reservation_mib(&["-fkiln-stack-size=64M", "-fkiln-stack-size=32M"]),
+            32
+        );
         assert_eq!(kiln_stack_reservation_mib(&["-fkiln-stack-size=0"]), 1024);
     }
 
