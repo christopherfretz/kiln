@@ -129,6 +129,13 @@ impl Substituter<'_, '_, '_> {
                 }
                 _ => return Err(SubstFail),
             };
+            // The constraints stay unsubstituted, as in clang: they are
+            // checked with the specialization's levels through
+            // `member_constraints`, and keep redeclarations that differ
+            // only in them apart ([temp.over.link]/6).
+            if let Some(c) = pi.constraint {
+                self.sema.builder().set_parm_constraint(np, c);
+            }
             self.locals.insert(p, DeclOrPack::Decl(np));
             if let Some(a) = self.sema.template_default(p) {
                 // Substituted now (clang's `SubstDefaultArgument` when
@@ -147,7 +154,7 @@ impl Substituter<'_, '_, '_> {
             l.r_angle,
             depth,
             &new,
-            None,
+            l.requires,
         ))
     }
 }

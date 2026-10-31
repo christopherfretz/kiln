@@ -386,6 +386,16 @@ impl Substituter<'_, '_, '_> {
         if requires.is_some() {
             self.sema.inst.concepts.member_constraints.insert(f, (d, self.args.clone()));
         }
+        // A friend defined in the class: its definition is instantiated
+        // from the pattern when used ([temp.inst]/4, clang's
+        // `isThisDeclarationInstantiatedFromAFriendDefinition`).
+        if friend.is_some()
+            && self.sema.ast.decls.function(d).is_some_and(|x| x.body.is_some())
+            && self.sema.ast.definition(f).is_none()
+            && self.sema.ast.instantiated_from(f).is_none()
+        {
+            self.member_link(f, d);
+        }
         if fs.is_some_and(kiln_ast::decl::FnSpec::is_pure) {
             self.sema.ast.decls.mark_function(f, kiln_ast::decl::FnSpec::new().with_pure(true));
         }

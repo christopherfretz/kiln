@@ -1872,6 +1872,12 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                     self.name(d);
                 }
             }
+            // clang's `VisitRequiresExpr`: the value of a non-dependent one.
+            ExprKind::RequiresExpr => match exprs.satisfied(e) {
+                Some(true) => self.line.push_str(" satisfied"),
+                Some(false) => self.line.push_str(" unsatisfied"),
+                None => {}
+            },
             ExprKind::CXXNewExpr | ExprKind::CXXDeleteExpr => {
                 if n.has(ExprFlags::GLOBAL) {
                     self.line.push_str(" global");

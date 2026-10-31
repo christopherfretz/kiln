@@ -1044,7 +1044,14 @@ impl Parser<'_, '_> {
             if self.unqualified_type_requirement() {
                 self.bump();
                 let at = self.loc();
-                Requirement::Type(self.parse_type_id()?, at)
+                // clang keeps the keyword as `ElaboratedType 'typename X'`.
+                let t = self.parse_type_id()?;
+                let t = if self.s.is_error_type(t) {
+                    t
+                } else {
+                    self.s.ast.types.elaborated(TagKeyword::Typename, None, t)
+                };
+                Requirement::Type(t, at)
             } else {
                 let at = self.tok_at(self.pos() + 1).span.lo;
                 Requirement::Type(self.parse_typename_specifier()?, at)

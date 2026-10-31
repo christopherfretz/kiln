@@ -326,7 +326,7 @@ fn specific_keys(kind: &str) -> Option<&'static [&'static str]> {
         // `isArrayAsWritten` is not printed (clang's text dump has none).
         "CXXDeleteExpr" => &["isGlobal", "isArray", "isArrayAsWritten", "operatorDeleteDecl"],
         "DeclRefExpr" => &["referencedDecl", "foundReferencedDecl", "nonOdrUseReason"],
-        "MemberExpr" => &["name", "isArrow", "referencedMemberDecl"],
+        "MemberExpr" => &["name", "isArrow", "referencedMemberDecl", "nonOdrUseReason"],
         // `conversionFunc` is the child's callee (not printed by clang).
         "ImplicitCastExpr" => &["castKind", "path", "isPartOfExplicitCast", "conversionFunc"],
         "CStyleCastExpr"
@@ -393,8 +393,8 @@ fn specific_keys(kind: &str) -> Option<&'static [&'static str]> {
         "TemplateTypeParmDecl" => &["tagUsed", "depth", "index", "isParameterPack", "defaultArg"],
         "NonTypeTemplateParmDecl" => &["type", "depth", "index", "isParameterPack", "defaultArg"],
         "TemplateTemplateParmDecl" => &["depth", "index", "isParameterPack", "defaultArg"],
-        // `satisfied` (a non-dependent requires-expression) is rejected by
-        // the printer: kiln does not evaluate requires-expressions yet.
+        // `satisfied` (a non-dependent requires-expression) prints as
+        // `satisfied`/`unsatisfied`; a requirement's own is dropped.
         "RequiresExpr" => &["satisfied"],
         "SimpleRequirement" | "TypeRequirement" | "NestedRequirement" => {
             &["isDependent", "satisfied"]

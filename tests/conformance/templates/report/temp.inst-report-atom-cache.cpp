@@ -19,3 +19,11 @@ int d = h(2);
 static_assert(IsInt<int> && IsIntToo<int> && !IsInt<long>);
 static_assert(SameAs<int, int>);
 
+// Multi-level constraints (a member template of a class template
+// specialization) are not in the per-entity cache; their atoms are.
+template <class T> struct Box {
+  template <class U> requires (sizeof(T) == sizeof(U)) static int same(U) { return 4; }
+};
+int e = Box<int>::same(1);
+int f2 = Box<int>::same(2);
+int g2 = Box<int>::same(3u);

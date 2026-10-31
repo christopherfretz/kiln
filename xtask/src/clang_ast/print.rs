@@ -71,6 +71,31 @@ fn type_pair(t: Option<&Json>, what: &str) -> Res<String> {
     })
 }
 
+/// The type node at the end of `t`'s sugar chain (clang's
+/// `getSplitDesugaredType` over a dumped type node): each sugar node's
+/// last non-argument child is the type it stands for.
+fn desugar_type_node(t: &Json) -> &Json {
+    const SUGAR: &[&str] = &[
+        "ElaboratedType",
+        "TypedefType",
+        "UsingType",
+        "ParenType",
+        "TemplateSpecializationType",
+        "SubstTemplateTypeParmType",
+        "AttributedType",
+        "MacroQualifiedType",
+        "DecltypeType",
+    ];
+    let mut t = t;
+    while SUGAR.contains(&kind(t)) {
+        match kids(t).filter(|c| kind(c).ends_with("Type")).last() {
+            Some(c) => t = c,
+            None => break,
+        }
+    }
+    t
+}
+
 fn qual_type(n: &Json) -> &str {
     n.get("type").and_then(|t| text(t, "qualType")).unwrap_or("")
 }
@@ -940,26 +965,38 @@ impl<'a> Printer<'a, '_> {
                 kids_out = self.template_kids(n, false)?;
             }
             "RequiresExpr" => {
-                if n.get("satisfied").is_some() {
-                    return Err("clang-ast: unsupported non-dependent RequiresExpr (kiln does \
-                                not evaluate requires-expressions in the dump yet)"
-                        .into());
+                let mut l = self.expr_head(n, k)?;
+                match n.get("satisfied") {
+                    Some(Json::Bool(true)) => push_word(&mut l, "satisfied"),
+                    Some(Json::Bool(false)) => push_word(&mut l, "unsatisfied"),
+                    _ => {}
                 }
-                line = self.expr_head(n, k)?;
+                line = l;
                 kids_out = self.kid_trees(n)?;
             }
             "SimpleRequirement"
             | "TypeRequirement"
             | "CompoundRequirement"
             | "NestedRequirement" => {
-                if n.get("satisfied").is_some() {
-                    return Err(format!("clang-ast: unsupported non-dependent {k}"));
-                }
+                // A requirement's own `satisfied` is not printed: kiln
+                // records only the requires-expression's value (stopping at
+                // the first failed requirement, [expr.prim.req.general]/5).
                 let mut l = String::from(k);
                 if k == "TypeRequirement" {
-                    // The required type is the type node child's type.
-                    let t = kids(n).next().and_then(|c| c.get("type"));
-                    push_word(&mut l, &type_pair(t, k)?);
+                    // The required type is the type node child's type; the
+                    // node carries no `desugaredQualType`, so the desugar
+                    // is read off its sugar chain.
+                    let node = kids(n).next();
+                    let q = node
+                        .map(qual_type)
+                        .filter(|q| !q.is_empty())
+                        .ok_or_else(|| format!("clang-ast: {k} has no type"))?;
+                    let d = node.map_or(q, |t| qual_type(desugar_type_node(t)));
+                    if d.is_empty() || d == q {
+                        let _ = write!(l, " '{q}'");
+                    } else {
+                        let _ = write!(l, " '{q}':'{d}'");
+                    }
                 }
                 if flag(n, "noexcept") {
                     push_word(&mut l, "noexcept");
@@ -1093,11 +1130,16 @@ impl<'a> Printer<'a, '_> {
             }
             "MemberExpr" => {
                 let arrow = if flag(n, "isArrow") { "->" } else { "." };
-                line = format!(
+                let mut l = format!(
                     "{} {arrow}{}",
                     self.expr_head(n, k)?,
                     text(n, "name").ok_or("clang-ast: MemberExpr without a name")?
                 );
+                if let Some(why) = text(n, "nonOdrUseReason") {
+                    l.push_str(" non_odr_use_");
+                    l.push_str(why);
+                }
+                line = l;
                 kids_out = self.kid_trees(n)?;
             }
             "ImplicitCastExpr"
