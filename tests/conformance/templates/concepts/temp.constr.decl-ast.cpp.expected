@@ -1,0 +1,27 @@
+TranslationUnitDecl
+|-ConceptDecl Big
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| `-BinaryOperator 'bool' '>'
+|   |-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof 'T'
+|   `-ImplicitCastExpr 'unsigned long' <IntegralCast>
+|     `-IntegerLiteral 'int' 4
+|-FunctionTemplateDecl f
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| | `-ConceptSpecializationExpr 'bool'
+| |   `-TemplateArgument type 'T'
+| `-FunctionDecl f 'int (T)'
+|   |-ParmVarDecl t 'T'
+|   |-ParenExpr 'bool'
+|   | `-BinaryOperator 'bool' '<'
+|   |   |-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof 'T'
+|   |   `-ImplicitCastExpr 'unsigned long' <IntegralCast>
+|   |     `-IntegerLiteral 'int' 16
+|   `-CompoundStmt
+|     `-ReturnStmt
+|       `-IntegerLiteral 'int' 1
+`-ClassTemplateDecl S
+  |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+  |-ConceptSpecializationExpr 'bool'
+  | `-TemplateArgument type 'T'
+  `-CXXRecordDecl struct S definition
+    `-FieldDecl v 'T'

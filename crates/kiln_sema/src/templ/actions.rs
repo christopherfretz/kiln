@@ -465,7 +465,16 @@ impl Sema<'_, '_> {
         // is evaluated at once (§8.6).
         let levels = crate::templ::args::MultiLevelArgs::new();
         let r = crate::templ::subst::Substituter::new(self, &levels).requires_expr(e, loc);
-        r.unwrap_or(e)
+        // The written expression keeps its requirements; it takes the
+        // evaluated one's value and notes.
+        if let Ok(x) = r {
+            let ok = self.ast.exprs.satisfied(x).unwrap_or(true);
+            let _ = self.ast.exprs.set_satisfied(e, ok);
+            if let Some(&s) = self.inst.concepts.expr_sat.get(&x) {
+                self.inst.concepts.expr_sat.insert(e, s);
+            }
+        }
+        e
     }
 
     /// `{ e } -> C<args>` ([expr.prim.req.compound]/1): the immediately
