@@ -1,0 +1,39 @@
+TranslationUnitDecl
+|-ClassTemplateDecl A
+| |-TemplateTypeParmDecl class depth 0 index 0 T
+| `-CXXRecordDecl class A
+|-ClassTemplateDecl B
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| `-CXXRecordDecl class B definition
+|   |-FriendDecl
+|   | `-ClassTemplateDecl parent A
+|   |   |-TemplateTypeParmDecl class depth 1 index 0 U
+|   |   `-CXXRecordDecl parent class A
+|   |-FriendDecl
+|   | `-ClassTemplateDecl parent B
+|   |   |-TemplateTypeParmDecl class depth 1 index 0 U
+|   |   `-CXXRecordDecl parent class B
+|   `-FieldDecl b 'T'
+|-ClassTemplateDecl A
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| `-CXXRecordDecl class A definition
+|   |-FriendDecl
+|   | `-ClassTemplateDecl parent B
+|   |   |-TemplateTypeParmDecl class depth 1 index 0 U
+|   |   `-CXXRecordDecl parent class B
+|   |-FriendDecl
+|   | `-ClassTemplateDecl parent A
+|   |   |-TemplateTypeParmDecl class depth 1 index 0 U
+|   |   `-CXXRecordDecl parent class A
+|   `-FieldDecl a 'T'
+`-ClassTemplateDecl C
+  |-TemplateTypeParmDecl class depth 0 index 0 T
+  `-CXXRecordDecl class C definition
+    |-FriendDecl
+    | `-ClassTemplateDecl parent C
+    |   |-TemplateTypeParmDecl class depth 1 index 0 U
+    |   `-CXXRecordDecl parent class C
+    `-FriendDecl
+      `-ClassTemplateDecl parent C
+        |-TemplateTypeParmDecl class depth 1 index 0 V
+        `-CXXRecordDecl parent class C

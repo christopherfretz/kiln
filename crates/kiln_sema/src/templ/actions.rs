@@ -1125,7 +1125,10 @@ impl Sema<'_, '_> {
         let c = self.injected_class_for(tmpl)?;
         let first = self.ast.first(c);
         if self.ast.described_template(first).is_some() {
-            return self.injected_type_of(tmpl);
+            // The parameters of the template whose definition this is:
+            // `tmpl` may be a redeclaration with its own (a friend's).
+            let own = self.ast.described_template(c).unwrap_or(tmpl);
+            return self.injected_type_of(own);
         }
         if self.ast.partial_spec_info(first).is_some() {
             return self.partial_injected_type(first);

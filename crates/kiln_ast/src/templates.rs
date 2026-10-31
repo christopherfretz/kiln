@@ -19,7 +19,7 @@ use kiln_source::symbol::Symbol;
 use crate::ast::Ast;
 use crate::builder::{AstBuilder, DeclHead};
 use crate::decl::{
-    DeclFlags, DeclKind, Members, NewDecl, Payload, ScopeData, TemplLink, TemplLinkKind,
+    DeclFlags, DeclKind, FriendKind, Members, NewDecl, Payload, ScopeData, TemplLink, TemplLinkKind,
 };
 use crate::expr::{BinaryOp, ExprDeps, ExprFlags, ExprKind, ObjectKind, UnaryOp, ValueCategory};
 use crate::ids::{
@@ -954,7 +954,10 @@ impl AstBuilder<'_> {
         self.ast.templates.dependent_depth = depth;
         debug_assert_eq!(d, d2);
         let _ = self.ast.decls.set_templ(pattern, TemplLink::new(TemplLinkKind::Pattern, i));
-        if self.ast.decls.get(d).has(DeclFlags::DEPENDENT_CTX) {
+        // A friend class template declared in a class template is a
+        // template of the enclosing namespace, which stays independent.
+        let friend_class = kind == DeclKind::ClassTemplate && n.misc().friend() != FriendKind::None;
+        if self.ast.decls.get(d).has(DeclFlags::DEPENDENT_CTX) && !friend_class {
             let first = prev.map_or(d, |p| self.ast.first(p));
             self.ast.types.mark_dependent_template(first);
         }

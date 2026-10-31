@@ -2,7 +2,19 @@
 
 Updated: 2026-10-31
 
-## State: item 1 done; items 2-5 not started
+## State: items 1-4 done (WIP commits on the branch); item 5 in progress
+
+**Item 1 is green and can merge early.** Its commit is `66ab349`, and quick CI
+on it was 1500 passed / 0 failed / 15 xfail. Every later WIP commit also kept
+quick CI green. The branch is never left red.
+
+| item | commits | state |
+|---|---|---|
+| 1 member access by declared name | 66ab349 | done, green |
+| 2 qualified member access | d0a8a38, 82f9e06, 5599dbf | done, green |
+| 3 dependent NNS chains, typename/template diags | db0fcfd, 01dc8b5 | done, green |
+| 4 friend templates ([temp.friend]) | c936c33, 4af684f, b9338cb | done (quick CI re-run after the restart) |
+| 5 trailing-return-type member refs | - | in progress |
 
 ### Item 1: member access by declared name (done)
 - `x.operator@(…)`, `x.operator T()`, `x.operator->()`, and unqualified
@@ -25,13 +37,51 @@ Updated: 2026-10-31
   - `destructor-name-errors.cpp` (strict-diags)
   - `tests/conformance/ast/expr.ref/operator-and-destructor-members.cpp` (clang-19 golden)
 
-### Pending
-- 2: qualified member access `e.N::m`, `this->Base::x`, `e.::N::m`.
-- 3: dependent NNS chains rebuilt on substitution; missing typename/template diags.
-- 4: friend templates.
-- 5: dependent-context member references (parameters in a trailing
-  return type: `-> decltype(t.f())` fails substitution in
-  `find_instantiated_decl`).
+### Item 2: qualified member access (done)
+- `e.N::m`, `p->B::f()`, `this->Base::x`, and dependent qualifiers.
+- Tests: `expr.ref/qualified-member{,-errors}.cpp` and
+  `ast/expr.ref/qualified-member.cpp`.
+- Flipped the `class.member.lookup/ambiguous.cpp` xfail.
+
+### Item 3: dependent NNS chains (done)
+- A dependent NNS that is still dependent is rebuilt on substitution.
+- `find_instantiated_decl` keeps a member of a parent that depends only on
+  retained levels.
+- Unnamed NTTP packs.
+- The missing `typename`/`template` diagnostics use the canonical context.
+- Tests: `temp.res/{dependent-nns-chain,missing-typename-template}.cpp` and
+  `ast/temp.res/dependent-nns-chain.cpp`.
+
+### Item 4: friend templates (done)
+- Forms: `template<class U> friend class X;`, `template<class U> friend
+  R f(U);`, and friend specializations `friend R f<>(...)`, `friend bool
+  operator==<>(...)`, `friend R N::g<T>(...)`.
+- Instantiated per specialization. A dependent friend specialization is a
+  `FriendSpec` that is matched when its class is instantiated.
+- Access checks honour them, including inside the definition of a
+  befriended function template.
+- clang's errors: no candidate for a dependent friend specialization (with
+  a not-a-template note), no matching template, and access.
+- Template redeclarations share one identity: `Ast::first`/`latest` resolve
+  a template through its pattern's redeclaration group.
+- Inherited default template arguments ([temp.param]/12) are now
+  supported.
+- Deduction completes a dependent `P` with its defaulted arguments
+  ([temp.deduct.type]).
+- Tests: `temp.friend/{friend-templates,friend-template-access,
+  friend-specializations,friend-spec-errors}.cpp`,
+  `ast/temp.friend/friend-templates.cpp`,
+  `temp.param/inherited-defaults.cpp`, and
+  `templates/deduce/temp.deduct.type-defaulted-args.cpp`.
+
+### Item 5 (in progress)
+- A trailing return type in a template body already works
+  (`-> decltype(t.f())`, `-> decltype(v + u)` in a member template, a
+  nested class template).
+- Bug: in an out-of-line member definition (`auto S::f() -> decltype(v)`,
+  `auto S::g() -> T`), the trailing return type is not looked up in the
+  class scope. The result is "use of undeclared identifier" and then "does
+  not match any declaration". Fixing this next.
 
 ## Evidence
 - Item 1 `cargo xtask ci --quick`: corpus (kiln) 1500 passed; 0 failed; 15 xfail; 0 xpass (1515 tests; baseline 1496/1511).

@@ -2972,7 +2972,9 @@ impl Sema<'_, '_> {
     pub fn mark_type_referenced(&mut self, d: DeclId) {
         self.ast.decls.set_flags(d, DeclFlags::REFERENCED);
         let first = self.ast.first(d);
-        if first != d {
+        // (Not a class a friend declaration introduced: clang leaves it
+        // unreferenced once a later declaration makes the name visible.)
+        if first != d && self.ast.decls.get(first).misc().friend() != FriendKind::Undeclared {
             self.ast.decls.set_flags(first, DeclFlags::REFERENCED);
         }
     }
@@ -3133,11 +3135,15 @@ impl Sema<'_, '_> {
                         self.emit(msg);
                         prev = None;
                     }
-                } else if use_ == TagUse::Declaration {
+                } else if use_ == TagUse::Declaration
+                    && self.ast.decls.get(p).misc().friend() != FriendKind::Undeclared
+                {
                     // A redeclaration creates no new decl (a deviation:
                     // clang adds a `ClassTemplateDecl` per redeclaration),
                     // but its template head is still checked against the
-                    // template's ([temp.param]/12, /14).
+                    // template's ([temp.param]/12, /14). One of a class
+                    // only a friend declaration introduced makes it
+                    // visible ([namespace.memdef]/3): a new decl (below).
                     self.check_redeclared_class_head(p);
                     return p;
                 }
@@ -3274,13 +3280,18 @@ impl Sema<'_, '_> {
             .find(|&d| is_tag_kind(self.kind_of(d)) || self.kind_of(d) == DeclKind::ClassTemplate);
         let prev = prev.map(|d| self.pattern_of(d).unwrap_or(d));
         if let Some(p) = prev {
-            if let Some(t) = self.ast.described_template(p) {
+            if self.ast.described_template(p).is_some() {
                 if self.tag_matches(p, keyword) {
-                    self.check_redeclared_class_head(p);
-                    self.templ.cur = None;
-                    self.mark_type_referenced(p);
-                    self.friend_class_template = Some(t);
-                    return p;
+                    // A redeclaration of the template, lexically in the
+                    // class (clang's friend `ClassTemplateDecl`); the
+                    // befriended entity is its first declaration.
+                    let mut h = DeclHead::new(ns, DeclName::ident(n), nloc);
+                    h.lexical = Some(self.ctx);
+                    h.misc = h.misc.with_friend(FriendKind::Declared);
+                    self.mark_pattern_next();
+                    let d = self.builder().record(h, Self::tag_kind_of(keyword), Some(p));
+                    self.friend_class_template = self.finish_template_pattern(d);
+                    return d;
                 }
                 let msg = self.diag(DiagId::sema_use_with_wrong_tag, nloc).arg(sym_str(self, n));
                 let msg = self.note_prev(msg, p, false);

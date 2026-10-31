@@ -180,7 +180,16 @@ struct Dumper<'a, W> {
     prefix: String,
     stack: Vec<Item>,
     kids: Vec<(Node, Option<&'static str>)>,
+    /// The declaration of each line on the path from the root to the
+    /// current line (`None` for other nodes), indexed by depth: a
+    /// declaration that is its own ancestor is printed as a leaf (a
+    /// malformed AST must not make the dump unbounded).
+    path: Vec<Option<DeclId>>,
 }
+
+/// The deepest line printed; deeper children are cut (a backstop against
+/// an unbounded tree; real ASTs stay far below it).
+const MAX_DUMP_DEPTH: usize = 4096;
 
 impl<'a, W: io::Write> Dumper<'a, W> {
     fn new(ast: &'a Ast, opts: &'a DumpOptions<'a>, out: W) -> Self {
@@ -193,6 +202,7 @@ impl<'a, W: io::Write> Dumper<'a, W> {
             prefix: String::with_capacity(64),
             stack: Vec::new(),
             kids: Vec::new(),
+            path: Vec::new(),
         }
     }
 
@@ -343,9 +353,17 @@ impl<'a, W: io::Write> Dumper<'a, W> {
     fn dump_tree(&mut self, root: Node) -> io::Result<()> {
         self.prefix.clear();
         self.stack.clear();
+        self.path.clear();
         self.stack.push(Item { node: root, label: None, last: true, depth: 0 });
         while let Some(it) = self.stack.pop() {
             let depth = it.depth as usize;
+            self.path.truncate(depth);
+            let decl = match it.node {
+                Node::Decl(d) => Some(d),
+                _ => None,
+            };
+            let cycle = decl.is_some() && self.path.contains(&decl);
+            self.path.push(decl);
             self.line.clear();
             if depth > 0 {
                 self.prefix.truncate(2 * (depth - 1));
@@ -381,9 +399,15 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                     }
                 }
             }
+            if cycle {
+                self.line.push_str(" <cycle>");
+            }
             debug_assert!(!self.line.ends_with(' '), "trailing whitespace: {:?}", self.line);
             self.line.push('\n');
             self.out.write_all(self.line.as_bytes())?;
+            if cycle || depth >= MAX_DUMP_DEPTH {
+                continue;
+            }
             if depth > 0 {
                 self.prefix.push_str(if it.last { "  " } else { "| " });
             }
@@ -887,7 +911,16 @@ impl<'a, W: io::Write> Dumper<'a, W> {
             self.function_fields(d);
             return;
         }
-        self.friend_word(n.misc().friend());
+        // Besides functions, clang shows a friend kind only on a class a
+        // friend declaration introduces (not on a befriended template or
+        // its pattern).
+        if kind == DeclKind::CXXRecord
+            && n.misc().friend() == FriendKind::Undeclared
+            && ast.described_template(d).is_none()
+            && ast.spec_info(d).is_none()
+        {
+            self.friend_word(FriendKind::Undeclared);
+        }
         if let Some(v) = decls.var(d) {
             let v = *v;
             self.name(d);
@@ -1260,8 +1293,13 @@ impl<'a, W: io::Write> Dumper<'a, W> {
         // The specializations, in creation order (§5): an implicit
         // instantiation is printed in full once, under its template; an
         // explicit specialization or instantiation is a reference line
-        // (its tree prints at its lexical position).
-        for &s in ast.templates.specs_of(d) {
+        // (its tree prints at its lexical position). A template first
+        // declared by a friend declaration lists them under its first
+        // declaration outside a class (as clang's JSON dump does).
+        if self.spec_owner(d) != Some(d) {
+            return;
+        }
+        for &s in ast.templates.specs_of(ast.first(d)) {
             match ast.spec_info(s).map(|(_, i)| i.kind) {
                 Some(SpecKind::Undeclared | SpecKind::ImplicitInstantiation) => {
                     kids.push((Node::Decl(s), None));
@@ -1270,6 +1308,22 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                 None => {}
             }
         }
+    }
+
+    /// The declaration of template `d` its specializations are listed
+    /// under: the first one not introduced by a friend declaration, else
+    /// the first.
+    fn spec_owner(&self, d: DeclId) -> Option<DeclId> {
+        let ast = self.ast;
+        let first = ast.first(d);
+        let Some(p) = ast.template_info(first).and_then(|i| i.pattern) else { return Some(d) };
+        let mut redecls: Vec<DeclId> = ast.redecls_of(p).collect();
+        redecls.reverse();
+        let owner = redecls
+            .iter()
+            .filter_map(|&r| ast.described_template(r))
+            .find(|&t| ast.decls.get(t).misc().friend() == FriendKind::None);
+        Some(owner.unwrap_or(first))
     }
 
     /// A template parameter's children: a template template parameter's

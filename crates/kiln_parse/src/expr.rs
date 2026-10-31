@@ -1030,6 +1030,15 @@ impl Parser<'_, '_> {
                 }
                 return self.parse_functional_cast();
             }
+            // A class template's injected-class-name used as a type
+            // ([temp.local]/1): `X(args)` / `X{args}` in its definition.
+            if let Some((end, NameClass::TypeTemplate(d), _)) = self.scan_name(self.pos())
+                && end == self.pos() + 1
+                && matches!(Self::punct_of(self.tok_at(end)), Some(Punct::LParen | Punct::LBrace))
+                && self.s.names_injected_class(d)
+            {
+                return self.parse_functional_cast();
+            }
             return self.parse_id_expression_rest();
         }
         self.error_here(DiagId::parse_expected_expression);
