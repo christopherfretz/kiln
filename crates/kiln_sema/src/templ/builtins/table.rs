@@ -182,7 +182,6 @@ pub fn trait_status(t: TypeTrait) -> Status {
         T::IsConstructible
         | T::IsNothrowConstructible
         | T::IsTriviallyConstructible
-        | T::IsAssignable
         | T::IsNothrowAssignable
         | T::IsTriviallyAssignable
         | T::IsConvertible

@@ -20,9 +20,6 @@
 #if __has_builtin(__has_nothrow_move_assign)
 #error __has_nothrow_move_assign
 #endif
-#if __has_builtin(__is_assignable)
-#error __is_assignable
-#endif
 #if __has_builtin(__is_bitwise_cloneable)
 #error __is_bitwise_cloneable
 #endif

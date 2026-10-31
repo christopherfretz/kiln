@@ -69,6 +69,9 @@
 #if !__has_builtin(__is_array)
 #error __is_array
 #endif
+#if !__has_builtin(__is_assignable)
+#error __is_assignable
+#endif
 #if !__has_builtin(__is_base_of)
 #error __is_base_of
 #endif

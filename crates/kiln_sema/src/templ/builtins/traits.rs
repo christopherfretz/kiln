@@ -10,7 +10,7 @@
 //! zero-length array is not an array).
 
 use kiln_ast::decl::{Access, DefinitionBits};
-use kiln_ast::expr::{ExprDeps, TypeTrait, ValueCategory};
+use kiln_ast::expr::{BinaryOp, ExprDeps, TypeTrait, ValueCategory};
 use kiln_ast::types::{ExcSpec, Quals, TypeFlags, TypeView};
 use kiln_ast::{DeclId, ExprId, QualType};
 use kiln_diag::DiagId;
@@ -21,6 +21,7 @@ use crate::Sema;
 use crate::class::{Selected, SpecialKind};
 use crate::conv::rank::builtin_signed;
 use crate::target;
+use crate::templ::stack::FrameKind;
 
 impl Sema<'_, '_> {
     /// `__trait(T, ...)` as parsed at `loc` (the keyword) up to `rparen`:
@@ -92,6 +93,11 @@ impl Sema<'_, '_> {
                 return self.recover(QualType::BOOL, &[], loc);
             }
             self.eval_unary_trait(t, tys[0])
+        } else if t == TypeTrait::IsAssignable {
+            match self.eval_assignable(args[0], args[1], loc) {
+                Some(v) => v,
+                None => return self.recover(QualType::BOOL, &[], loc),
+            }
         } else {
             self.eval_binary_trait(t, tys[0], tys[1], args[1].1)
         };
@@ -297,6 +303,62 @@ impl Sema<'_, '_> {
             }
             _ => false,
         }
+    }
+
+    /// `__is_assignable(T, U)` ([meta.unary.prop]/3, clang's
+    /// `EvaluateBinaryTypeTrait`): whether `declval<T>() = declval<U>()` is
+    /// well-formed as an unevaluated operand. The assignment is built
+    /// on opaque operands in a SFINAE context, with access checked from
+    /// the translation unit. `None` when an operand is incomplete (not
+    /// `void` or an array of unknown bound), which is an error.
+    fn eval_assignable(
+        &mut self,
+        a: (QualType, Loc),
+        b: (QualType, Loc),
+        loc: Loc,
+    ) -> Option<bool> {
+        for (q, at) in [a, b] {
+            let tys = &self.ast.types;
+            if tys.is_void(q)
+                || matches!(tys.canonical_view(q), TypeView::IncompleteArray(_))
+                || tys.is_reference(q)
+                || tys.is_function(q)
+                || self.require_complete(q, at)
+            {
+                continue;
+            }
+            let msg = self.diag(DiagId::sema_incomplete_type_trait, at).arg(self.ty_arg(q));
+            let msg = self.incomplete_note(msg, q);
+            self.emit(msg);
+            return None;
+        }
+        if self.ast.types.is_void(a.0) || self.ast.types.is_void(b.0) {
+            return Some(false);
+        }
+        // `declval<T>()`: an lvalue for an lvalue reference (or a
+        // reference to function), else an xvalue.
+        let operand = |s: &mut Self, q: QualType| {
+            let (ty, vc) = match s.ast.types.canonical_view(q) {
+                TypeView::LValueRef(p) => (p, ValueCategory::LValue),
+                TypeView::RValueRef(p) if s.ast.types.is_function(p) => (p, ValueCategory::LValue),
+                TypeView::RValueRef(p) => (p, ValueCategory::XValue),
+                _ if s.ast.types.is_function(q) => (q, ValueCategory::LValue),
+                _ => (q, ValueCategory::XValue),
+            };
+            s.builder().opaque_value_of(ty, vc, loc)
+        };
+        let tu = self.ast.tu;
+        let saved = std::mem::replace(&mut self.ctx, tu);
+        let r = self.in_sfinae(FrameKind::ConstraintSubstitution, tu, None, loc, |s| {
+            s.enter_unevaluated();
+            let l = operand(s, a.0);
+            let r = operand(s, b.0);
+            let e = s.binary_operator(BinaryOp::Assign, l, r, None, loc);
+            s.exit_unevaluated();
+            !s.is_err_expr(e)
+        });
+        self.ctx = saved;
+        Some(matches!(r, Some((true, Ok(())))))
     }
 
     /// The record of `q` (not looking through arrays), if it is a class
