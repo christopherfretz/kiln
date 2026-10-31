@@ -39,12 +39,14 @@ Branch `wp/109-concepts-alias-followups`. Living file; deleted at merge.
   "because 'long' does not satisfy 'Int'"; kiln "'... && ...' evaluated
   to false"). TODO: `sat_fold` in concepts/sat.rs + tests.
 
-## Item 4 — note locations: mostly DONE (uncommitted tests)
+## Item 4 — note locations: mostly DONE
 - type-requirement note at the type (`Requirement::Type(QualType, Loc)`),
   noexcept note at the keyword (`Compound { noexcept: Option<Loc> }`),
   member access after substitution at the `.`/`->`
   (`templates.member_op_loc` side table). Verified vs clang on scratch.
-- TODO: non-bool atom at concept definition; ambiguous-atomic note;
-  `static_assert(requires{...})` prints the expression, no note.
+- `static_assert(requires{...})` prints the expression like clang
+  (`AstNames::expr` RequiresExpr arm; test
+  `templates/concepts/expr.prim.req-static-assert-print.cpp`).
+- TODO: non-bool atom at concept definition; ambiguous-atomic note.
 
 ## Items 3, 5, 6, 7: pending

@@ -536,12 +536,9 @@ impl Sema<'_, '_> {
     ) -> Result<ExprId, ()> {
         let c = self.ast.first(c);
         let args: Vec<TemplateArg> = self.ast.types.args(written).to_vec();
-        let dep = self
-            .ast
-            .types
-            .arg_list_flags(written)
-            .intersects(kiln_ast::types::TypeFlags::DEPENDENT_INSTANTIATION)
-            || args.iter().any(|&a| self.is_pack_expansion_arg(a));
+        let dep =
+            self.ast.types.arg_list_flags(written).intersects(TypeFlags::DEPENDENT_INSTANTIATION)
+                || args.iter().any(|&a| self.is_pack_expansion_arg(a));
         if dep {
             return Ok(self.builder().concept_spec_expr(c, written, QualType::BOOL, loc));
         }
