@@ -1,0 +1,21 @@
+#!/bin/sh
+# A stand-in for kiln that can exhaust memory, for the harness's
+# memory-limit self-tests (`xtask/src/test/tests.rs`, `xtask/fixtures/memory`).
+# It identifies as kiln (so the harness adds kiln's stack reservation to its
+# cap). When the source file has a line `// fake-hog-mib: N` it allocates N
+# MiB with python3 and exits with python's status (a `MemoryError` under the
+# cap); otherwise it compiles with clang++-19.
+if [ "$1" = "--version" ]; then
+  echo "kiln version 0.0.0-fake-hog (xtask fixture)"
+  exit 0
+fi
+for a in "$@"; do
+  case "$a" in
+    *.cpp) src=$a ;;
+  esac
+done
+mib=$(sed -n 's|^// fake-hog-mib: *\([0-9][0-9]*\).*|\1|p' "$src" 2>/dev/null)
+if [ -n "$mib" ]; then
+  python3 -c "import sys; b = bytearray($mib << 20); sys.exit(0)" || exit
+fi
+exec clang++-19 "$@"

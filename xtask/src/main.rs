@@ -13,7 +13,7 @@ const USAGE: &str = "\
 usage: cargo xtask <command>
 
 commands:
-  test        run tests/conformance and tests/differential through the kiln binary
+  test        run tests/conformance, tests/differential and tests/stress through kiln
               (`cargo xtask test --help` for options; contract in spec/harness.md)
   bench       measure bench/ compile time and memory against bench/baselines
               (`cargo xtask bench --help` for options; contract in spec/bench.md)
@@ -26,7 +26,8 @@ commands:
   ci          the merge gate: fmt --check, clippy -D warnings, cargo test, then the
               corpus twice: xtask test --compiler clang++-19 (the corpus self-check;
               skipped when clang++-19 is not on PATH) and xtask test with kiln; fails
-              on any FAIL, XPASS or ERROR in either (contract in spec/harness.md \"CI\")
+              on any FAIL, XPASS, ERROR or KILLED in either (contract in spec/harness.md
+              \"CI\"); a cargo step failing with error[E0463] is rerun once
               `--quick` skips the clang self-check (local iteration only)
 ";
 
@@ -81,10 +82,7 @@ fn ci(args: impl Iterator<Item = String>) -> ExitCode {
         &["test", "--workspace"],
     ];
     for step in steps {
-        eprintln!("xtask ci: cargo {}", step.join(" "));
-        let mut cmd = std::process::Command::new(env!("CARGO"));
-        cmd.args(*step);
-        if !ci_step(&mut cmd) {
+        if !ci_step(step) {
             return ExitCode::FAILURE;
         }
     }
@@ -126,8 +124,8 @@ fn ci(args: impl Iterator<Item = String>) -> ExitCode {
         ExitCode::SUCCESS
     } else {
         eprintln!(
-            "xtask ci: FAILED: a corpus run has a FAIL, XPASS or ERROR, or could not run \
-             (see above)"
+            "xtask ci: FAILED: a corpus run has a FAIL, XPASS, ERROR or KILLED, or could not \
+             run (see above)"
         );
         ExitCode::FAILURE
     }
@@ -145,16 +143,61 @@ fn ci_corpus(what: &str, compiler: Option<std::path::PathBuf>) -> test::CorpusOu
     test::CorpusOutcome::of(&run, start.elapsed())
 }
 
-fn ci_step(cmd: &mut std::process::Command) -> bool {
-    match cmd.status() {
-        Ok(s) if s.success() => true,
-        Ok(s) => {
-            eprintln!("xtask ci: failed with {s}");
-            false
+/// Runs `cargo <step>`, echoing its stderr while scanning it, and reruns it
+/// once when it failed with `error[E0463]` ([`test::ci_should_retry`]).
+fn ci_step(step: &[&str]) -> bool {
+    let shown = step.join(" ");
+    let mut retried = false;
+    loop {
+        eprintln!("xtask ci: cargo {shown}");
+        let mut cmd = std::process::Command::new(env!("CARGO"));
+        cmd.args(step).stderr(std::process::Stdio::piped());
+        let (status, stderr) = match run_teeing_stderr(&mut cmd) {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("xtask ci: could not run cargo {shown}: {e}");
+                return false;
+            }
+        };
+        if status.success() {
+            return true;
         }
-        Err(e) => {
-            eprintln!("xtask ci: could not run {cmd:?}: {e}");
-            false
+        if test::ci_should_retry(&stderr, retried) {
+            eprintln!(
+                "xtask ci: [retry] cargo {shown} failed with error[E0463] (can't find crate: an \
+                 artifact vanished mid-build); rerunning it once"
+            );
+            retried = true;
+            continue;
+        }
+        eprintln!("xtask ci: failed with {status}");
+        return false;
+    }
+}
+
+/// Runs `cmd` (stderr piped), copying its stderr to ours as it arrives and
+/// returning it with the exit status.
+fn run_teeing_stderr(
+    cmd: &mut std::process::Command,
+) -> std::io::Result<(std::process::ExitStatus, String)> {
+    use std::io::{BufRead as _, Write as _};
+    let mut child = cmd.spawn()?;
+    let mut captured = Vec::new();
+    if let Some(pipe) = child.stderr.take() {
+        let mut reader = std::io::BufReader::new(pipe);
+        let mut line = Vec::new();
+        let mut out = std::io::stderr();
+        loop {
+            line.clear();
+            match reader.read_until(b'\n', &mut line) {
+                Ok(0) | Err(_) => break,
+                Ok(_) => {
+                    let _ = out.write_all(&line);
+                    captured.extend_from_slice(&line);
+                }
+            }
         }
     }
+    let status = child.wait()?;
+    Ok((status, String::from_utf8_lossy(&captured).into_owned()))
 }
