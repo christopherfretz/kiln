@@ -914,6 +914,10 @@ impl Oven {
                 )
             }
             MemFault::DoubleDelete => "delete of pointer that has already been deleted".into(),
+            // Trials are silent; rendered only if one ever is not.
+            MemFault::Speculative => {
+                format!("kiln: {verb} an object created outside a speculative evaluation is not allowed")
+            }
             MemFault::Subobject if Ptr::decode(p).past => format!(
                 "delete of pointer '{}' that does not point to complete object",
                 self.ptr_string(ast, p, ty)
