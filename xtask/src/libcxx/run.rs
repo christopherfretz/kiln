@@ -306,7 +306,7 @@ fn execute(
         cmd.current_dir(scratch).env("TMPDIR", scratch);
         let is_kiln = stage != Stage::Run;
         let limit = if is_kiln {
-            let args: Vec<_> = cmd.get_args().map(|a| a.to_os_string()).collect();
+            let args: Vec<_> = cmd.get_args().map(std::ffi::OsStr::to_os_string).collect();
             cfg.mem.map(|m| m.plus(process::kiln_stack_reservation_mib(&args)))
         } else {
             cfg.mem
@@ -389,16 +389,18 @@ fn judge(stage: Stage, m: &Measured) -> Step {
         }
     }
     let mut keys = errors;
-    if keys.is_empty() && stage == Stage::Link {
-        if let Some(l) = stderr.lines().find(|l| l.contains("undefined reference to")) {
-            let i = l.find("undefined reference to").unwrap_or(0);
-            keys.push((format!("link: {}", cluster::normalize(&l[i..])), l.trim().to_owned()));
-        }
+    if keys.is_empty()
+        && stage == Stage::Link
+        && let Some(l) = stderr.lines().find(|l| l.contains("undefined reference to"))
+    {
+        let i = l.find("undefined reference to").unwrap_or(0);
+        keys.push((format!("link: {}", cluster::normalize(&l[i..])), l.trim().to_owned()));
     }
-    if keys.is_empty() && stage == Stage::Run {
-        if let Some(l) = stderr.lines().find(|l| l.contains("Assertion") && l.contains("failed")) {
-            keys.push(("run: assertion failed".to_owned(), l.trim().to_owned()));
-        }
+    if keys.is_empty()
+        && stage == Stage::Run
+        && let Some(l) = stderr.lines().find(|l| l.contains("Assertion") && l.contains("failed"))
+    {
+        keys.push(("run: assertion failed".to_owned(), l.trim().to_owned()));
     }
     if keys.is_empty() {
         let first = stderr.lines().map(str::trim).find(|l| !l.is_empty());

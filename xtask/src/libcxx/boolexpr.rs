@@ -50,8 +50,8 @@ fn tokenize(s: &str) -> Result<Vec<Tok>, ExprError> {
                 let mut len = 0;
                 loop {
                     let r = &rest[len..];
-                    if r.starts_with("{{") {
-                        let Some(end) = r[2..].find("}}") else {
+                    if let Some(inner) = r.strip_prefix("{{") {
+                        let Some(end) = inner.find("}}") else {
                             return Err(err("unterminated `{{`"));
                         };
                         len += end + 4;

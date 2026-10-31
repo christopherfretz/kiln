@@ -27,7 +27,7 @@ pub fn normalize(msg: &str) -> String {
                 let rest: String = chars.clone().collect();
                 if let Some(end) = rest.find('\'') {
                     out.push_str("'…'");
-                    for _ in 0..rest[..end].chars().count() + 1 {
+                    for _ in 0..=rest[..end].chars().count() {
                         chars.next();
                     }
                 } else {
@@ -93,8 +93,8 @@ impl Clusters {
                 c.first += 1;
             }
             if c.example.is_empty() || i == 0 && !c.example_is_first {
-                c.example = test.to_owned();
-                c.raw = raw.clone();
+                test.clone_into(&mut c.example);
+                c.raw.clone_from(raw);
                 c.example_is_first = i == 0;
             }
         }

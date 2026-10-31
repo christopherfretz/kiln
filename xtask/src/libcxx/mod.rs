@@ -1,5 +1,5 @@
 //! `cargo xtask libcxx` — runs libc++'s own test suite (`libcxx/test` of a
-//! pinned LLVM release) with kiln as the compiler. No lit and no CMake: the
+//! pinned LLVM release) with kiln as the compiler. No lit and no `CMake`: the
 //! classification, keywords and feature evaluation of libc++'s `format.py`
 //! are reimplemented for the subset the suite needs. Contract:
 //! `spec/libcxx.md`.
@@ -12,6 +12,7 @@ mod report;
 mod run;
 
 use std::collections::HashMap;
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 use std::sync::Mutex;
@@ -60,6 +61,7 @@ pub const GATE_M3: &[&str] = &[
 pub const TESTS_TAG: &str = "llvmorg-19.1.7";
 
 #[derive(Clone, Debug, PartialEq)]
+#[allow(clippy::struct_excessive_bools)] // independent command-line switches
 pub struct Options {
     pub tests: Option<PathBuf>,
     pub compiler: Option<PathBuf>,
@@ -281,10 +283,10 @@ fn load_local_cfgs(test_root: &Path, tests: &[(PathBuf, String)]) -> HashMap<Pat
     for (p, _) in tests {
         let mut dir = p.parent();
         while let Some(d) = dir {
-            if !cache.contains_key(d) {
-                if let Ok(text) = std::fs::read_to_string(d.join("lit.local.cfg")) {
-                    cache.insert(d.to_path_buf(), LocalCfg::parse(&text));
-                }
+            if !cache.contains_key(d)
+                && let Ok(text) = std::fs::read_to_string(d.join("lit.local.cfg"))
+            {
+                cache.insert(d.to_path_buf(), LocalCfg::parse(&text));
             }
             if d == test_root {
                 break;
@@ -296,6 +298,7 @@ fn load_local_cfgs(test_root: &Path, tests: &[(PathBuf, String)]) -> HashMap<Pat
 }
 
 /// Runs the selection; `Ok(true)` when any test failed the run.
+#[allow(clippy::too_many_lines)] // linear setup / run / report sequence
 fn execute(opts: &Options) -> Result<bool, String> {
     let start = Instant::now();
     let root = repo_root();
@@ -460,8 +463,10 @@ fn run_info(opts: &Options, cfg: &Config, root: &Path, wall: Duration) -> report
             .output()
             .ok()
             .filter(|o| o.status.success())
-            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned())
-            .unwrap_or_else(|| "unknown".to_owned())
+            .map_or_else(
+                || "unknown".to_owned(),
+                |o| String::from_utf8_lossy(&o.stdout).trim().to_owned(),
+            )
     };
     let kiln_version =
         crate::util::identify(&cfg.kiln).map_or_else(|_| "unknown".to_owned(), |id| id.version);
@@ -474,9 +479,9 @@ fn run_info(opts: &Options, cfg: &Config, root: &Path, wall: Duration) -> report
         command.push_str(d);
     }
     if let Some(f) = &opts.filter {
-        command.push_str(&format!(" --filter {f}"));
+        let _ = write!(command, " --filter {f}");
     }
-    command.push_str(&format!(" -j {}", opts.jobs));
+    let _ = write!(command, " -j {}", opts.jobs);
     let mut flags = cfg.base_compile_flags();
     for f in &mut flags {
         if let Some(r) = f.strip_prefix(&root.display().to_string()) {

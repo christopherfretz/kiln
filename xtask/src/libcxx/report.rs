@@ -53,6 +53,7 @@ impl Counts {
     }
 
     /// PASS over the tests that ran (total minus UNSUPPORTED), in percent.
+    #[allow(clippy::cast_precision_loss)] // test counts are far below 2^52
     pub fn pass_rate(&self) -> Option<f64> {
         let ran = self.total - self.unsupported;
         (ran > 0).then(|| 100.0 * self.pass as f64 / ran as f64)
@@ -115,6 +116,7 @@ pub fn clusters_of(results: &[TestResult]) -> Clusters {
 }
 
 /// The generated region of the status page, markers included.
+#[allow(clippy::too_many_lines, clippy::cast_precision_loss)] // one straight-line document; KiB fits f64
 pub fn render(
     info: &RunInfo,
     roots: &[String],
