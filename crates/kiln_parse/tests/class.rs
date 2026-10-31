@@ -49,11 +49,11 @@ fn class_friend_special_names() {
     assert_eq!(p.problems().len(), 1, "{:?}", p.problems());
 }
 
-/// [over.literal]: literal operators are not supported.
+/// [over.literal]/2: a literal operator is not a class member.
 #[test]
-fn class_literal_operator_unsupported() {
+fn class_literal_operator_member() {
     let p = parse("struct S { int operator\"\"_x(unsigned long long); };");
-    p.assert_diag("literal operators is not supported yet");
+    p.assert_diag("literal operator 'operator\"\"_x' must be in a namespace or global scope");
 }
 
 /// [dcl.constexpr], [dcl.constinit]: the specifiers on members, and that

@@ -1055,7 +1055,12 @@ recomputed exactly as for non-template code (clang's
 - **Parameters.** `ParmVar`s are substituted. A function parameter pack
   becomes N `ParmVar`s (`DeclOrPack::Pack`).
 - **Local classes** inside an instantiated body are instantiated fully
-  and immediately ([temp.inst]/2).
+  and immediately ([temp.inst]/3), by the body's own substituter
+  (`subst/local.rs`, WP-131): so their members see the function's
+  template arguments and its local declarations. Member classes are
+  defined with the outermost local class. Member function bodies are
+  defined after it is complete, in the re-entered class scopes, as the
+  parser replays them. Local enumerations are substituted the same way.
 - **Member templates** are created as in §4.6.
 - **`static_assert`** is evaluated with the substituted condition.
 - **`using` declarations** with packs give a `UsingPack` decl.
@@ -1749,9 +1754,9 @@ used in type trait expression". Each "complete" check calls
 | `__is_trivially_equality_comparable(T)` | clang 19: trivially copyable, unique object representations, and no user `operator==` (or a defaulted one whose members are all trivially comparable) | `cls` + `abi` + lookup |
 | `__is_trivially_relocatable(T)` | clang 19: trivially copyable, or a class with `[[clang::trivial_abi]]` that is not volatile | `cls` |
 | `__is_base_of(B,D)` | both are classes (not unions), `D` is complete when the two differ, and `B` is `D` or a base of `D` (cv ignored) | `cls.bases` (S3C) |
-| `__is_convertible(F,T)` / `__is_nothrow_convertible(F,T)` | `conv_check(F,T).ok` (and `.nothrow`) | `conv_check` |
-| `__is_constructible(T,A…)` / `__is_trivially_constructible` / `__is_nothrow_constructible` | `init_check(T, A…, Direct)`: `.ok`, `.ok && .trivial`, `.ok && .nothrow`. A reference `T` with a single argument does **not** count as constructible when the reference would bind to a temporary created by an implicit conversion (clang 19) | `init_check` |
-| `__is_assignable(T,U)` / `__is_trivially_assignable` / `__is_nothrow_assignable` | `declval<T>() = declval<U>()` is well-formed (unevaluated), and is trivial / cannot throw | `init_check(Assign)` |
+| `__is_convertible(F,T)` / `__is_nothrow_convertible(F,T)` | `conv_check(F,T).ok` (and `.nothrow`). WP-131 landed them (and `__is_convertible_to`): `To` void is true only for `From` void; `To` function or array, or `From` void, is false; otherwise the copy-initialization of a `To` from an opaque `declval<From>()` operand under a SFINAE frame, access from the TU; nothrow is `!can_throw` of the result | `conv_check` |
+| `__is_constructible(T,A…)` / `__is_trivially_constructible` / `__is_nothrow_constructible` | `init_check(T, A…, Direct)`: `.ok`, `.ok && .trivial`, `.ok && .nothrow`. A reference `T` takes exactly one argument; it still counts as constructible when the reference binds to a temporary created by an implicit conversion (clang 19; only `__reference_constructs_from_temporary` excludes that). WP-131 landed `__is_constructible` and `__is_nothrow_constructible`: a temporary's direct-initialization (value-initialization for no arguments) built on opaque `declval` operands under a SFINAE frame, access from the TU; nothrow is `!can_throw` of the result | `init_check` |
+| `__is_assignable(T,U)` / `__is_trivially_assignable` / `__is_nothrow_assignable` | `declval<T>() = declval<U>()` is well-formed (unevaluated), and is trivial / cannot throw. `__is_nothrow_assignable` landed in WP-131 (`!can_throw` of the WP-130 assignment) | `init_check(Assign)` |
 | `__is_destructible(T)` / `__is_nothrow_destructible(T)` / `__is_trivially_destructible(T)` | [meta.unary.prop] (`void`, functions and arrays of unknown bound are false) | `cls.dtor` |
 
 Two more behave the same way but are only probed, not used, by the M3
@@ -2558,7 +2563,7 @@ pub fn has_constexpr_builtin_staged(name: &str) -> Option<bool>;
 `__has_builtin` answers false):
 | Stub | Owner |
 |---|---|
-| The 16 other overload-resolution traits (`__is_constructible`, `__is_convertible`, `__is_nothrow_*`, `__reference_*_from_temporary`, …) | WP-068a (`__is_assignable` landed in WP-130: the assignment built on opaque operands under a SFINAE frame, access from the TU) |
+| The 10 other overload-resolution traits (`__is_trivially_constructible`, `__is_trivially_assignable`, `__reference_*_from_temporary`, …) | WP-068a (`__is_assignable` landed in WP-130: the assignment built on opaque operands under a SFINAE frame, access from the TU; `__is_constructible` / `__is_nothrow_constructible` the three `__is_convertible` forms and `__is_nothrow_assignable` in WP-131) |
 | `__is_layout_compatible`, `__is_pointer_interconvertible_base_of`, `__can_pass_in_regs`, `__is_bitwise_cloneable` | M4 (unassigned) |
 | `__is_trivially_relocatable` (`TRIVIALLY_RELOCATABLE` is never set) | unowned: S3C canPassInRegisters |
 | `__type_pack_element` and `__make_integer_seq` with pack arguments | WP-072 |
@@ -3208,8 +3213,8 @@ explicit specialization errors remain. The blockers are:
     ([special]/6): unowned;
   - conversion functions and user-defined conversion sequences
     (`ics.rs`) do not order constrained candidates: unowned;
-  - `__is_convertible` (WP-068a): `temp.constr.concept-std-like.cpp`
-    is xfail, it passed only through the removed fallback.
+  - `__is_convertible` landed in WP-131, and
+    `temp.constr.concept-std-like.cpp` passes again.
 
 **Landed (WP-116): expression equivalence ([temp.over.link]).**
 - `templ/equiv.rs` is the equivalence API on `Sema`:

@@ -144,6 +144,7 @@ impl Sema<'_, '_> {
                 SpecialName::Destructor(_) => self.error(DiagId::sema_dtor_not_member, sloc),
                 SpecialName::Constructor(_) => self.unsupported("constructors", sloc),
                 SpecialName::Operator(_) => self.unsupported("overloaded operators", sloc),
+                SpecialName::LiteralOperator(_) => self.unsupported("literal operators", sloc),
                 SpecialName::DeductionGuide(_) => self.unsupported("deduction guides here", sloc),
             }
             return None;
@@ -164,7 +165,7 @@ impl Sema<'_, '_> {
             }
             SpecialName::Conversion(t) => Shape::Conv(t),
             SpecialName::Operator(_) => Shape::Assign,
-            SpecialName::DeductionGuide(_) => return None,
+            SpecialName::DeductionGuide(_) | SpecialName::LiteralOperator(_) => return None,
         };
         let in_class = d.qualifier.is_none();
         let is_static = matches!(ds.storage, Some((StorageSpec::Static, _)));

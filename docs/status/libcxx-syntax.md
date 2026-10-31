@@ -19,7 +19,10 @@ their own context) on the last four, and for WP-130 (`__datasizeof`,
 `__builtin_va_list`, `__builtin_constant_p`, `__is_assignable`, named
 casts in template argument lists, qualified operator-function-ids,
 member templates of explicit specializations; counts after merging
-WP-071b's CTAD guides) on the same four. The M3
+WP-071b's CTAD guides) on the same four, and for WP-131 (local classes
+in templates, dependent `switch`, literal operators, `__is_constructible`,
+CWG1395 pack ordering; counts after merging WP-133's `consteval`) on
+`<array>` and `<string_view>`, with `<optional>` and `<tuple>` added. The M3
 gate headers (WP-081) are listed last. "First
 blocker" is the first error kiln reports. The counts are all the errors
 in the header's closure; most are follow-ons of the same unsupported
@@ -41,8 +44,10 @@ feature. Every header preprocesses identically to clang (see
 | `<compare>` | 0 | 0 | 399 | none (clean since WP-122, 2026-10-31) | that error + follow-ons |
 | `<utility>` | 0 | 0 | — | none (clean since WP-071b + WP-130, 2026-10-31) | |
 | `<span>` | 0 | 0 | — | none (clean since WP-071b + WP-130, 2026-10-31) | |
-| `<array>` | 1 | 1 | — | `consteval` (`ranges_iterator_concept.h:31`) | that error only |
-| `<string_view>` | 1 | 9 | — | dependent `switch` (`hash.h:62`) | local classes in templates (`hash.h`, 4), `consteval`, `__is_constructible`, `__invoke` ambiguity (`find.h:48`), literal operators (`string_view:906`) |
+| `<array>` | 0 | 0 | — | none (clean since WP-133, 2026-10-31) | |
+| `<string_view>` | 0 | 0 | — | none (clean since WP-131 + WP-133, 2026-10-31) | |
+| `<optional>` | 1 | 25 | — | inheriting constructors from a dependent base (`using __base::__base;`) | that (11) + follow-ons (3); `>` inside parentheses in a template argument (`decltype(declval<T>() > declval<U>())`, 5) |
+| `<tuple>` | 1 | 23 | — | pack expansion in a mem-initializer list (`__tuple_leaf<...>(...)...`) | that (4); partially substituted pack expansion in a requires-expression (8); functional cast of a template-id with a pack (`tuple<_Tp&...>(__t...)`, 5); member-template partial specialization in a class template (3); `sizeof...(T) >= 1` in a template argument |
 
 The single-header counts rose a little: before WP-065 the parser gave
 up on a class at its first constructor or operator (one "special member

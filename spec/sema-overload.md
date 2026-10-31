@@ -545,6 +545,51 @@ array-new size) is `contextual_implicit_convert(e, pred)`: the unique
 non-explicit conversion function whose result satisfies `pred`; several is
 clang's `err_*_multiple_conversions` + one note per function.
 
+### 6.7 Literal operators and user-defined literals ([over.literal], [lex.ext]; `literal_op.rs`)
+- **Declarations.** A literal-operator-id is `operator "" X` or
+  `operator ""X`. Adjacent string literals concatenate; the result must
+  be empty and must have no encoding prefix. The `Declarator` carries
+  `lit_suffix`, and the function's name is
+  `DeclName::literal_operator(X)`. `check_literal_operator_decl` mirrors
+  clang's `CheckLiteralOperatorDeclaration`, and its first failure marks
+  the decl invalid. In order:
+  - it must not be a class member;
+  - it must not have `extern "C"` linkage, which comes with a note at the
+    linkage specification;
+  - a template has no function parameters, and its head is one of:
+    - `<char...>`;
+    - one non-pack class-type NTTP;
+    - GNU `<class C, C...>`, which also gives an ExtWarn;
+  - a non-template has one parameter of type `unsigned long long`,
+    `long double`, a character type or `const char *`, or it has two
+    parameters, `(const C *, size_t)`; a mismatch gets clang's
+    "did you mean" type;
+  - no parameter has a default argument.
+
+  A suffix that does not start with `_`, or that contains `__`, gets
+  the `-Wuser-defined-literals` reserved warning.
+- **Calls.** Unqualified ordinary lookup of `operator""X` picks the form
+  in this order:
+  - **integer:** `unsigned long long`, with the value too large to fit
+    being an error; then raw `const char *`, with the spelling minus the
+    suffix as a string literal; then `template<char...>`, with one
+    `char` template argument per spelled character;
+  - **floating:** the same, with `long double` re-classified as an
+    `L`-suffixed literal;
+  - **character:** the literal's own type;
+  - **string:** in [lex.ext]/5 order:
+    - a class-NTTP template called as `operator""X<str>()`;
+    - the GNU pack, with the element type and then the code units;
+    - `(str, len)`.
+
+  A plain function call goes through `act_on_call`, so overload
+  resolution and access checks apply. A template form calls through an
+  `UnresolvedLookupExpr` with explicit template arguments.
+- **AST deviation.** The result is a plain `CallExpr`. Clang's is a
+  `UserDefinedLiteral`, a `CallExpr` subclass whose dump differs only in
+  the node name. IR and mangling (`li <source-name>`) match clang
+  (tests/codegen/user_defined_literals.cpp).
+
 ## 7. Default arguments ([dcl.fct.default])
 `ParamData.default_arg: Option<ExprId>` (ast.md §16.10), write-once.
 **Ownership**: parsing is WP-065 (in place at namespace and block scope,

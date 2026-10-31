@@ -409,6 +409,12 @@ impl Substituter<'_, '_, '_> {
             }
             DeclKind::StaticAssert => self.static_assert_decl(d),
             DeclKind::Using => self.local_using_decl(d, loc),
+            DeclKind::CXXRecord => Ok(self.local_class(d, None)),
+            DeclKind::Enum => {
+                let x = self.enum_decl(d)?;
+                self.locals.insert(d, super::DeclOrPack::Decl(x));
+                Ok(x)
+            }
             k => self.unimplemented(&format!("local {k:?} declarations in templates"), loc),
         }
     }

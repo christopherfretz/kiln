@@ -269,7 +269,7 @@ impl Sema<'_, '_> {
         self.templ.cur = None;
         let dname = match (d.op_name, d.name) {
             (Some(op), _) => DeclName::operator(op),
-            (None, Some((n, _))) => DeclName::ident(n),
+            (None, Some((n, _))) => d.fn_decl_name(n),
             _ => {
                 self.error(DiagId::parse_expected_unqualified_id, d.loc);
                 return None;

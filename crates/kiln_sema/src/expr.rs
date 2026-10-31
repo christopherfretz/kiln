@@ -1248,7 +1248,12 @@ impl Sema<'_, '_> {
     /// Rejects a user-defined literal: M2 declares no literal operators
     /// ([over.literal]), so lookup always fails ([lex.ext]/2-8). The
     /// error is clang's, at the suffix `ud_loc`.
-    fn reject_ud_suffix(&mut self, ud: Option<&str>, ud_loc: Loc, operand: UdOperand) -> bool {
+    pub(crate) fn reject_ud_suffix(
+        &mut self,
+        ud: Option<&str>,
+        ud_loc: Loc,
+        operand: UdOperand,
+    ) -> bool {
         let Some(suffix) = ud else { return false };
         let op = format!("'operator\"\"{suffix}'");
         let msg = match operand {
@@ -1296,12 +1301,7 @@ impl Sema<'_, '_> {
         if self.reject_ud_suffix(lit.ud_suffix, ud_loc, UdOperand::Integer) {
             return self.recover_err(&[], loc);
         }
-        let radix = match lit.radix {
-            kiln_lex::literal::Radix::Binary => Radix::Binary,
-            kiln_lex::literal::Radix::Octal => Radix::Octal,
-            kiln_lex::literal::Radix::Decimal => Radix::Decimal,
-            kiln_lex::literal::Radix::Hex => Radix::Hex,
-        };
+        let radix = ast_radix(lit.radix);
         match literal::classify_integer_literal(self, lit) {
             Ok(t) => {
                 if let Some(w) = &t.warning {
@@ -1353,10 +1353,10 @@ impl Sema<'_, '_> {
 
     /// A character literal ([lex.ccon]).
     pub fn act_on_char_literal(&mut self, lit: &CharLiteral<'_>, loc: Loc, ud_loc: Loc) -> ExprId {
-        if lit.ud_suffix.is_some() {
-            let ty = literal::type_char_literal(self, lit).map_or(QualType::CHAR, |x| x.0);
-            self.reject_ud_suffix(lit.ud_suffix, ud_loc, UdOperand::Char(ty));
-            return self.recover_err(&[], loc);
+        if let Some(sfx) = lit.ud_suffix {
+            let plain = CharLiteral { ud_suffix: None, ..lit.clone() };
+            let e = self.act_on_char_literal(&plain, loc, ud_loc);
+            return self.char_udl(e, sfx, loc, ud_loc);
         }
         let kind = match lit.encoding {
             Encoding::Ordinary => CharKind::Ascii,
@@ -1399,8 +1399,12 @@ impl Sema<'_, '_> {
                 Encoding::Utf16 => QualType::CHAR16,
                 Encoding::Utf32 => QualType::CHAR32,
             };
-            self.reject_ud_suffix(Some(ud), ud_loc, UdOperand::String(elem));
-            return self.recover_err(&[], loc);
+            let plain: Vec<(StringLiteral<'_>, Loc)> = pieces
+                .iter()
+                .map(|(p, l)| (StringLiteral { ud_suffix: None, ..p.clone() }, *l))
+                .collect();
+            let e = self.act_on_string_literal(&plain, unevaluated, ud_loc);
+            return self.string_udl(e, ud, elem, loc, ud_loc);
         }
         // The encoding: all the same, or ordinary pieces and one other.
         let mut enc = Encoding::Ordinary;
@@ -3793,9 +3797,19 @@ pub(crate) fn ordinal(n: usize) -> String {
 }
 
 /// The operand kind of a rejected user-defined literal, which selects
+/// The AST form of a literal's base.
+pub(crate) const fn ast_radix(r: kiln_lex::literal::Radix) -> Radix {
+    match r {
+        kiln_lex::literal::Radix::Binary => Radix::Binary,
+        kiln_lex::literal::Radix::Octal => Radix::Octal,
+        kiln_lex::literal::Radix::Decimal => Radix::Decimal,
+        kiln_lex::literal::Radix::Hex => Radix::Hex,
+    }
+}
+
 /// clang's wording for the failed literal-operator lookup.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum UdOperand {
+pub(crate) enum UdOperand {
     Integer,
     Float,
     /// A character literal of the given type.

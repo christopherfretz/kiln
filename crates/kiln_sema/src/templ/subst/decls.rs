@@ -120,11 +120,13 @@ impl Substituter<'_, '_, '_> {
                 let ret = self.ty(ret, loc)?;
                 dr.special = Some((SpecialName::Conversion(ret), loc));
             }
-            DeclNameKind::LiteralOperator | DeclNameKind::DeductionGuide => {
-                return self.unimplemented(
-                    "literal operators and deduction guides in class templates",
-                    loc,
-                );
+            DeclNameKind::LiteralOperator => {
+                if let Some(s) = name.as_literal_operator() {
+                    dr.special = Some((SpecialName::LiteralOperator(s), loc));
+                }
+            }
+            DeclNameKind::DeductionGuide => {
+                return self.unimplemented("deduction guides in class templates", loc);
             }
         }
         Ok(dr)

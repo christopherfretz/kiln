@@ -23,26 +23,8 @@
 #if __has_builtin(__is_bitwise_cloneable)
 #error __is_bitwise_cloneable
 #endif
-#if __has_builtin(__is_constructible)
-#error __is_constructible
-#endif
-#if __has_builtin(__is_convertible)
-#error __is_convertible
-#endif
-#if __has_builtin(__is_convertible_to)
-#error __is_convertible_to
-#endif
 #if __has_builtin(__is_layout_compatible)
 #error __is_layout_compatible
-#endif
-#if __has_builtin(__is_nothrow_assignable)
-#error __is_nothrow_assignable
-#endif
-#if __has_builtin(__is_nothrow_constructible)
-#error __is_nothrow_constructible
-#endif
-#if __has_builtin(__is_nothrow_convertible)
-#error __is_nothrow_convertible
 #endif
 #if __has_builtin(__is_pointer_interconvertible_base_of)
 #error __is_pointer_interconvertible_base_of

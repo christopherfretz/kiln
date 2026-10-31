@@ -179,14 +179,8 @@ pub fn trait_status(t: TypeTrait) -> Status {
         // [meta.unary.prop] initialization and conversion checks: these
         // need the unevaluated `init_check` / `conv_check` of overload
         // resolution.
-        T::IsConstructible
-        | T::IsNothrowConstructible
-        | T::IsTriviallyConstructible
-        | T::IsNothrowAssignable
+        T::IsTriviallyConstructible
         | T::IsTriviallyAssignable
-        | T::IsConvertible
-        | T::IsConvertibleTo
-        | T::IsNothrowConvertible
         | T::ReferenceBindsToTemporary
         | T::ReferenceConstructsFromTemporary
         | T::ReferenceConvertsFromTemporary
@@ -395,8 +389,10 @@ mod tests {
 
     #[test]
     fn overload_traits_are_staged_off() {
-        assert_eq!(has_builtin_staged("__is_constructible"), Some(false));
-        assert_eq!(has_builtin_staged("__is_convertible"), Some(false));
+        assert_eq!(has_builtin_staged("__is_trivially_constructible"), Some(false));
+        assert_eq!(has_builtin_staged("__is_layout_compatible"), Some(false));
+        assert_eq!(has_builtin_staged("__is_constructible"), Some(true));
+        assert_eq!(has_builtin_staged("__is_convertible"), Some(true));
         assert_eq!(has_builtin_staged("__is_same"), Some(true));
         assert_eq!(has_builtin_staged("__remove_cvref"), Some(true));
         assert_eq!(has_builtin_staged("__builtin_memcpy"), Some(true));

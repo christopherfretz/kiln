@@ -117,6 +117,11 @@ impl DeclName {
         }
     }
 
+    /// The ud-suffix, if this is an `operator""X` name.
+    pub fn as_literal_operator(self) -> Option<Symbol> {
+        (self.kind() == DeclNameKind::LiteralOperator).then(|| Symbol::from_index(self.payload()))
+    }
+
     /// The raw word.
     pub const fn to_raw(self) -> u32 {
         self.0

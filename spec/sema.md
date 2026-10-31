@@ -810,8 +810,9 @@ diagnostics and IR.
 - **Supported expressions:**
   - **names:** DeclRefExpr, enumerators, functions with
     function-to-pointer decay
-  - **literals:** via `kiln_sema::literal`; user-defined literals are
-    diagnosed with clang's `no matching literal operator`
+  - **literals:** via `kiln_sema::literal`; user-defined literals
+    call literal operators (sema-overload.md §6.7); when no form
+    matches, clang's `no matching literal operator` is reported
   - **operators:**
     - unary and binary operators, including compound assignment (its
       computation type promotes the left operand's type, bit-fields

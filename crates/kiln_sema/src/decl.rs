@@ -240,16 +240,25 @@ impl Sema<'_, '_> {
         target::is_complete_object(&self.ast, q)
     }
 
-    /// An operator-function-id declarator written with the
-    /// `SpecialName::Operator` form, rewritten into the `op_name` form
-    /// every operator function other than a member `operator=` uses
-    /// (`name` holds `operator`). `None` for any other declarator.
+    /// An operator-function-id (literal-operator-id) declarator written
+    /// with the `SpecialName::Operator` (`LiteralOperator`) form,
+    /// rewritten into the `op_name` (`lit_suffix`) form every operator
+    /// function other than a member `operator=` uses (`name` holds
+    /// `operator`). `None` for any other declarator.
     pub(crate) fn operator_declarator(&self, d: &Declarator) -> Option<Declarator> {
-        let Some((SpecialName::Operator(op), loc)) = d.special else { return None };
         let mut c = d.clone();
+        match d.special {
+            Some((SpecialName::Operator(op), loc)) => {
+                c.op_name = Some(op);
+                c.name = Some((self.intern("operator"), loc));
+            }
+            Some((SpecialName::LiteralOperator(s), loc)) => {
+                c.lit_suffix = Some(s);
+                c.name = Some((self.intern("operator"), loc));
+            }
+            _ => return None,
+        }
         c.special = None;
-        c.op_name = Some(op);
-        c.name = Some((self.intern("operator"), loc));
         Some(c)
     }
 
@@ -259,6 +268,7 @@ impl Sema<'_, '_> {
                 SpecialName::Constructor(n) => sym_str(self, n),
                 SpecialName::Destructor(n) => format!("~{}", sym_str(self, n)),
                 SpecialName::Operator(op) => format!("operator{}", op.spelling()),
+                SpecialName::LiteralOperator(x) => format!("operator\"\"{}", sym_str(self, x)),
                 SpecialName::Conversion(t) => format!("operator {}", self.ty_arg(t)),
                 SpecialName::DeductionGuide(t) => self.decl_name_str(self.ast.decls.get(t).name()),
             };
@@ -1115,6 +1125,7 @@ impl Sema<'_, '_> {
                 SpecialName::Destructor(_) => "destructors",
                 SpecialName::Conversion(_) => "conversion functions",
                 SpecialName::Operator(_) => "overloaded operators",
+                SpecialName::LiteralOperator(_) => "literal operators",
                 SpecialName::DeductionGuide(_) => "deduction guides here",
             };
             self.unsupported(what, loc);
@@ -1388,7 +1399,7 @@ impl Sema<'_, '_> {
             self.set_member_access(t);
         }
         self.act_on_asm_label(ds, d, decl, &mut attrs);
-        if d.qualifier.is_none() && d.op_name.is_none() {
+        if d.qualifier.is_none() && d.op_name.is_none() && d.lit_suffix.is_none() {
             self.check_using_shadow_conflict(decl, name);
         }
         if !attrs.is_empty() {
@@ -1894,10 +1905,10 @@ impl Sema<'_, '_> {
             head: self.templ.cur,
             requires: d.trailing_requires,
         };
-        let dname = d.op_name.map_or(DeclName::ident(name), DeclName::operator);
+        let dname = d.fn_decl_name(name);
         let fname = match d.op_name {
             Some(op) => format!("operator{}", op.spelling()),
-            None => sym_str(self, name),
+            None => self.decl_name_str(dname),
         };
         // A replaceable global allocation or deallocation function
         // redeclares the implicit one ([new.delete]/2).
@@ -2135,12 +2146,18 @@ impl Sema<'_, '_> {
         if invalid_redecl {
             self.ast.decls.set_flags(f, DeclFlags::INVALID);
         }
-        if d.op_name.is_none() {
+        if d.op_name.is_none() && d.lit_suffix.is_none() {
             self.note_local_extern(name, f);
         }
         self.create_params(f, &params, &defaults);
         self.defer_late_noexcept(f, d);
-        if d.op_name.is_none() {
+        if d.lit_suffix.is_some() {
+            if !self.ast.decls.get(f).flags().contains(DeclFlags::INVALID)
+                && !self.check_literal_operator_decl(f)
+            {
+                self.ast.decls.set_flags(f, DeclFlags::INVALID);
+            }
+        } else if d.op_name.is_none() {
             self.register_local(name, f);
         } else if !global_new_delete
             && !self.ast.decls.get(f).flags().contains(DeclFlags::INVALID)
