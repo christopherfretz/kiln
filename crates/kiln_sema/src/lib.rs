@@ -253,6 +253,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
     ) -> Self {
         let tu = ast.tu;
         templ::builtins::declare_builtin_templates(&mut ast);
+        builtins::declare_int128_typedefs(&mut ast, &target);
         Sema {
             ast,
             diags,

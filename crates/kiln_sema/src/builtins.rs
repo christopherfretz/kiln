@@ -18,13 +18,32 @@ use kiln_ast::expr::{SourceLocKind, SourceLocValues};
 use kiln_ast::names::{DeclName, OverloadedOperator};
 use kiln_ast::types::{BuiltinType, ExcSpec, FuncInfo, Quals};
 use kiln_ast::types::{Nns, TagKeyword};
-use kiln_ast::{DeclHead, DeclId, ExprId, QualType};
+use kiln_ast::types::TargetTypes;
+use kiln_ast::{Ast, DeclHead, DeclId, ExprId, QualType};
 use kiln_diag::DiagId;
 use kiln_source::Loc;
 use kiln_source::symbol::Symbol;
 
 use crate::Sema;
 use crate::conv::{self, ConvCtx};
+
+/// The implicit typedefs `__int128_t` and `__uint128_t` for `__int128`
+/// and `unsigned __int128` (clang's `Sema::Initialize`: declared in the
+/// translation unit when the target has a 128-bit integer type, i.e. on
+/// 64-bit targets). They are ordinary `Typedef` decls marked `IMPLICIT`,
+/// so a program's `typedef __int128 __int128_t;` redeclares them and
+/// `-ast-dump` skips them, as clang.
+pub(crate) fn declare_int128_typedefs(ast: &mut Ast, target: &TargetTypes) {
+    if target.pointer_bytes < 8 {
+        return;
+    }
+    let tu = ast.tu;
+    for (name, ty) in [("__int128_t", QualType::INT128), ("__uint128_t", QualType::UINT128)] {
+        let n = DeclName::ident(ast.symbols().intern(name));
+        let h = DeclHead::new(tu, n, Loc::INVALID).flags(DeclFlags::IMPLICIT);
+        let _ = ast.builder().typedef(h, DeclKind::Typedef, ty, None);
+    }
+}
 
 impl Sema<'_, '_> {
     /// Declares the builtin function `name` (first used at `loc`) if it
