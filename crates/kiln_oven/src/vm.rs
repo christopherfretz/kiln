@@ -239,6 +239,10 @@ pub(crate) enum Fault {
         p: u64,
         ty: OTy,
     },
+    /// A polymorphic operation (access kind `ak`) on a subobject whose
+    /// construction has not started or whose destruction has finished:
+    /// its dynamic-type word is uninitialized ([class.cdtor]/1, CWG1517).
+    NoDynamic(u32),
 }
 
 /// Why an array `new` bound is erroneous ([expr.new]/8).
@@ -977,7 +981,7 @@ impl Oven {
                         };
                         self.type_info(q, ti)
                     } else {
-                        match self.type_info_dyn(reg!(1) as u64, OTy(arg!(3) as u32), ti) {
+                        match self.type_info_dyn(b.ast(), reg!(1) as u64, OTy(arg!(3) as u32), ti) {
                             Ok(r) => r,
                             Err(f) => fail!(f),
                         }

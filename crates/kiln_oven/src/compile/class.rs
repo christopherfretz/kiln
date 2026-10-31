@@ -154,7 +154,10 @@ impl Compiler<'_> {
     }
 
     /// Registers the destruction of the object of type `ty` at `p` with
-    /// the enclosing scope (aux 1: `p` is a heap array of `ty`s).
+    /// the enclosing scope (aux 1: `p` is a heap array of `ty`s; aux 2: a
+    /// subobject destroyed by a destructor, whose backtrace note is at the
+    /// destructor's call, as clang's `HandleDestructionImpl` passes its
+    /// call range down).
     pub(super) fn push_cleanup(&mut self, p: u32, ty: OTy, aux: u32, loc: Loc) {
         if let Some(f) = self.dtor_of(ty) {
             self.emit_loc(Op::PushCleanup, aux, &[p, f, ty.0], loc);
@@ -379,7 +382,7 @@ impl Compiler<'_> {
             let off = self.base_offset(cls, bty);
             let m = self.next;
             let q = self.elem_ptr_loc(this, off, loc);
-            self.push_cleanup(q, bty, 0, loc);
+            self.push_cleanup(q, bty, 2, loc);
             self.next = m;
         }
         let fields = self.o.types.fields(cls).to_vec();
@@ -392,7 +395,7 @@ impl Compiler<'_> {
             }
             let m = self.next;
             let q = self.elem_ptr_loc(this, fi.offset, loc);
-            self.push_cleanup(q, fi.ty, 0, loc);
+            self.push_cleanup(q, fi.ty, 2, loc);
             self.next = m;
         }
     }

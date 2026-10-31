@@ -77,7 +77,12 @@ impl Oven {
         let ast = b.ast();
         let mut site = self.site(pc);
         if self.code.get(pc).is_some_and(|&w| Op::from_u8(w as u8) == Op::VCall)
-            && let Some(m) = site.e.map(|e| skip_parens(ast, ast.exprs.callee(e)))
+            && let Some(e) = site.e
+            && matches!(
+                ast.exprs.get(e).kind(),
+                ExprKind::CallExpr | ExprKind::CXXMemberCallExpr | ExprKind::CXXOperatorCallExpr
+            )
+            && let m = skip_parens(ast, ast.exprs.callee(e))
             && ast.exprs.get(m).kind() == ExprKind::MemberExpr
         {
             // clang diagnoses a dispatch at the member name.
@@ -247,6 +252,13 @@ impl Oven {
                 };
                 (site.loc, format!("reference dynamic_cast failed: {what}"))
             }
+            Fault::NoDynamic(k) => (
+                site.loc,
+                format!(
+                    "{} object outside its lifetime is not allowed in a constant expression",
+                    ak::verb(k)
+                ),
+            ),
             Fault::UnknownDynamic { ak: k, p, ty } => {
                 let d = self.ptr_string(ast, p, ty);
                 (
@@ -361,7 +373,20 @@ impl Oven {
             skip1 = active - limit / 2;
         }
         for (i, fr) in frames.iter().rev().enumerate() {
-            let loc = self.site(fr.call_pc as usize).loc;
+            // A subobject's destructor run by its destructor's epilogue
+            // is noted at that destructor's call (clang).
+            let mut at = fr.call_pc as usize;
+            for outer in frames.iter().rev().skip(i + 1) {
+                if !self
+                    .code
+                    .get(at)
+                    .is_some_and(|&w| Op::from_u8(w as u8) == Op::PushCleanup && (w >> 8) & 2 != 0)
+                {
+                    break;
+                }
+                at = outer.call_pc as usize;
+            }
+            let loc = self.site(at).loc;
             if i >= skip0 && i < skip1 {
                 if i == skip0 {
                     let n = active - limit;

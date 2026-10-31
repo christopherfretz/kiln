@@ -9,7 +9,7 @@
 //! from its type (`Oven::thaw_vptrs`).
 
 use kiln_ast::class::SubobjectId;
-use kiln_ast::decl::{Access, TagKind};
+use kiln_ast::decl::{Access, DeclKind, TagKind};
 use kiln_ast::{Ast, DeclId, QualType};
 use kiln_source::fx::FxHashMap;
 
@@ -262,7 +262,13 @@ impl Oven {
     /// and the subobject's offset in it. An object of unknown dynamic type
     /// (not usable in constant expressions) or one whose word is not set
     /// (its construction has not reached it: CWG1517) fails.
-    pub(crate) fn read_vptr(&self, raw: u64, cls: OTy, k: u32) -> Result<(OTy, u64), Fault> {
+    pub(crate) fn read_vptr(
+        &self,
+        ast: &Ast,
+        raw: u64,
+        cls: OTy,
+        k: u32,
+    ) -> Result<(OTy, u64), Fault> {
         let (sp, abs, _) = self.mem.check(raw, 8, false).map_err(|f| match f {
             MemFault::External(..) | MemFault::Temporary(..) => {
                 Fault::UnknownDynamic { ak: k, p: raw, ty: cls }
@@ -271,10 +277,25 @@ impl Oven {
         })?;
         let s = self.mem.space(sp);
         if !s.is_init(abs, 8) {
-            return Err(Fault::Invalid);
+            return Err(self.no_dynamic(ast, raw, cls, k));
         }
         let w = s.read(abs, 8) as u64;
         Ok((OTy(w as u32), w >> 32))
+    }
+
+    /// The fault of a polymorphic operation (access kind `k`) on the
+    /// object of class `cls` at `raw` that has no dynamic type yet (or
+    /// any more). clang: an object whose constructor is running (in its
+    /// bases phase) is CWG1517's "subexpression not valid"; one whose
+    /// construction has not started is outside its lifetime.
+    fn no_dynamic(&self, ast: &Ast, raw: u64, cls: OTy, k: u32) -> Fault {
+        let constructing = self.stack[self.run.entry + 1..].iter().any(|fr| {
+            let f = &self.funcs[fr.func as usize];
+            f.this_ty == Some(cls)
+                && f.this_reg.is_some_and(|r| self.regs[(fr.fb + r) as usize] as u64 == raw)
+                && f.decl.is_some_and(|d| ast.decls.get(d).kind() == DeclKind::CXXConstructor)
+        });
+        if constructing { Fault::Invalid } else { Fault::NoDynamic(k) }
     }
 
     /// The subobject of the dynamic type `c` at offset `ott` whose class
@@ -303,7 +324,7 @@ impl Oven {
         cls: OTy,
         raw: u64,
     ) -> Result<(u32, u64, i64), Fault> {
-        let (c, ott) = self.read_vptr(raw, cls, ak::MEMBER_CALL)?;
+        let (c, ott) = self.read_vptr(b.ast(), raw, cls, ak::MEMBER_CALL)?;
         let t = match self.virt.dispatch.get(&(c, ott, method)) {
             Some(&t) => t,
             None => {
@@ -384,7 +405,7 @@ impl Oven {
         if raw == 0 && !glvalue {
             return Ok(0);
         }
-        let (c, ott) = self.read_vptr(raw, stat, ak::DYNAMIC_CAST)?;
+        let (c, ott) = self.read_vptr(b.ast(), raw, stat, ak::DYNAMIC_CAST)?;
         let base = u64::from(Ptr::decode(raw).off) - ott;
         let at = |off: u64| Ptr::with_off(raw, base + off, false);
         let Some(t) = target else { return Ok(at(0)) };
@@ -444,8 +465,14 @@ impl Oven {
 
     /// `Op::TypeId` of a polymorphic glvalue at `raw` (static class
     /// `cls`): its dynamic type ([expr.typeid]/3).
-    pub(crate) fn type_info_dyn(&mut self, raw: u64, cls: OTy, ti: OTy) -> Result<u64, Fault> {
-        let (c, _) = self.read_vptr(raw, cls, ak::TYPEID)?;
+    pub(crate) fn type_info_dyn(
+        &mut self,
+        ast: &Ast,
+        raw: u64,
+        cls: OTy,
+        ti: OTy,
+    ) -> Result<u64, Fault> {
+        let (c, _) = self.read_vptr(ast, raw, cls, ak::TYPEID)?;
         let q = self.types.info(c).q;
         Ok(self.type_info(q, ti))
     }
