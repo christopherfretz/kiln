@@ -542,7 +542,7 @@ diag_ids! {
     sema_for_range_invalid = Error (2) "invalid range expression of type {0}; no viable {1:'begin'|'end'} function available";
     sema_for_range_dereference = Error (1) "invalid range expression of type {0}; did you mean to dereference it with '*'?";
     sema_range_on_array_parameter = Error (3) "cannot build range expression with array function parameter '{0}' since parameter with array type {1} is treated as pointer type {2}";
-    note_for_range_member_begin_end_ignored = Note (2) "range type {0} has '{1:begin|end}' member but no '{1:end|begin}' member";
+    note_for_range_member_begin_end_ignored = Note (2) "member is not a candidate because range type {0} has no '{1:end|begin}' member";
     note_in_for_range = Note (2) "when looking up '{0:begin|end}' function for range expression of type {1}";
     note_for_range_begin_end = Note (4) "selected '{0:begin|end}' {1:function|template }{2} with iterator type {3}";
     note_for_range_invalid_iterator = Note (2) "in implicit call to 'operator{0:!=|*|++}' for iterator of type {1}";

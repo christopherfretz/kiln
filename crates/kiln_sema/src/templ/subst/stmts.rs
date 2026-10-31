@@ -317,9 +317,9 @@ impl Substituter<'_, '_, '_> {
             if !self.sema.act_on_for_range_decl(&ds, v) {
                 return Err(SubstFail);
             }
-            let head = self.sema.instantiate_for_range(
-                init, range_name, range, temps, v, d.colon, loc, depth,
-            );
+            let head = self
+                .sema
+                .instantiate_for_range(init, range_name, range, temps, v, d.colon, loc, depth);
             self.sema.act_on_start_loop();
             let body = self.sub_stmt(d.body);
             self.sema.act_on_end_loop();

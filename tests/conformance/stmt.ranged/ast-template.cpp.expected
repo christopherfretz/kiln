@@ -1,0 +1,45 @@
+TranslationUnitDecl
+`-FunctionTemplateDecl sum_dep
+  |-TemplateTypeParmDecl referenced class depth 0 index 0 C
+  `-FunctionDecl sum_dep 'int (C &)'
+    |-ParmVarDecl referenced c 'C &'
+    `-CompoundStmt
+      |-DeclStmt
+      | `-VarDecl referenced s 'int' cinit
+      |   `-IntegerLiteral 'int' 0
+      |-CXXForRangeStmt
+      | |-DeclStmt
+      | |-DeclStmt
+      | | `-VarDecl referenced x 'auto'
+      | `-CompoundAssignOperator '<dependent type>' lvalue '+=' ComputeLHSTy='<dependent type>' ComputeResultTy='<dependent type>'
+      |   |-DeclRefExpr 'int' lvalue Var 's' 'int'
+      |   `-DeclRefExpr 'auto' lvalue Var 'x' 'auto'
+      |-DeclStmt
+      | `-VarDecl referenced a 'int[2]' cinit
+      |   `-InitListExpr 'int[2]'
+      |     `-array_filler: ImplicitValueInitExpr 'int'
+      |-CXXForRangeStmt
+      | |-DeclStmt
+      | |-DeclStmt
+      | |-DeclStmt
+      | |-BinaryOperator 'bool' '!='
+      | | |-ImplicitCastExpr 'int *' <LValueToRValue>
+      | | | `-DeclRefExpr 'int *' lvalue Var '__begin1' 'int *'
+      | | `-ImplicitCastExpr 'int *' <LValueToRValue>
+      | |   `-DeclRefExpr 'int *' lvalue Var '__end1' 'int *'
+      | |-UnaryOperator 'int *' lvalue prefix '++'
+      | | `-DeclRefExpr 'int *' lvalue Var '__begin1' 'int *'
+      | |-DeclStmt
+      | | `-VarDecl referenced x 'int' cinit
+      | |   `-ImplicitCastExpr 'int' <LValueToRValue>
+      | |     `-UnaryOperator 'int' lvalue prefix '*' cannot overflow
+      | |       `-ImplicitCastExpr 'int *' <LValueToRValue>
+      | |         `-DeclRefExpr 'int *' lvalue Var '__begin1' 'int *'
+      | `-CompoundAssignOperator 'int' lvalue '+=' ComputeLHSTy='int' ComputeResultTy='int'
+      |   |-DeclRefExpr 'int' lvalue Var 's' 'int'
+      |   `-ImplicitCastExpr 'int' <LValueToRValue>
+      |     `-DeclRefExpr 'int' lvalue Var 'x' 'int'
+      `-ReturnStmt
+        `-ImplicitCastExpr 'int' <LValueToRValue>
+          `-ImplicitCastExpr 'int' xvalue <NoOp>
+            `-DeclRefExpr 'int' lvalue Var 's' 'int'

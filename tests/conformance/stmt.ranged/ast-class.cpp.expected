@@ -1,0 +1,56 @@
+TranslationUnitDecl
+|-CXXRecordDecl referenced struct R definition
+| |-FieldDecl d 'int[2]'
+| |-CXXMethodDecl used begin 'int *()'
+| `-CXXMethodDecl used end 'int *()'
+`-FunctionDecl sum_class 'int (R)'
+  |-ParmVarDecl used r 'R'
+  `-CompoundStmt
+    |-DeclStmt
+    | `-VarDecl used s 'int' cinit
+    |   `-IntegerLiteral 'int' 0
+    |-CXXForRangeStmt
+    | |-DeclStmt
+    | |-DeclStmt
+    | |-DeclStmt
+    | |-BinaryOperator 'bool' '!='
+    | | |-ImplicitCastExpr 'int *' <LValueToRValue>
+    | | | `-DeclRefExpr 'int *' lvalue Var '__begin1' 'int *'
+    | | `-ImplicitCastExpr 'int *' <LValueToRValue>
+    | |   `-DeclRefExpr 'int *' lvalue Var '__end1' 'int *'
+    | |-UnaryOperator 'int *' lvalue prefix '++'
+    | | `-DeclRefExpr 'int *' lvalue Var '__begin1' 'int *'
+    | |-DeclStmt
+    | | `-VarDecl used x 'int &' cinit
+    | |   `-UnaryOperator 'int' lvalue prefix '*' cannot overflow
+    | |     `-ImplicitCastExpr 'int *' <LValueToRValue>
+    | |       `-DeclRefExpr 'int *' lvalue Var '__begin1' 'int *'
+    | `-CompoundAssignOperator 'int' lvalue '+=' ComputeLHSTy='int' ComputeResultTy='int'
+    |   |-DeclRefExpr 'int' lvalue Var 's' 'int'
+    |   `-ImplicitCastExpr 'int' <LValueToRValue>
+    |     `-DeclRefExpr 'int' lvalue Var 'x' 'int &'
+    |-CXXForRangeStmt
+    | |-DeclStmt
+    | |-DeclStmt
+    | |-DeclStmt
+    | |-BinaryOperator 'bool' '!='
+    | | |-ImplicitCastExpr 'const_iterator':'const int *' <LValueToRValue>
+    | | | `-DeclRefExpr 'const_iterator':'const int *' lvalue Var '__begin1' 'const_iterator':'const int *'
+    | | `-ImplicitCastExpr 'const_iterator':'const int *' <LValueToRValue>
+    | |   `-DeclRefExpr 'const_iterator':'const int *' lvalue Var '__end1' 'const_iterator':'const int *'
+    | |-UnaryOperator 'const_iterator':'const int *' lvalue prefix '++'
+    | | `-DeclRefExpr 'const_iterator':'const int *' lvalue Var '__begin1' 'const_iterator':'const int *'
+    | |-DeclStmt
+    | | `-VarDecl used x 'int' cinit
+    | |   `-ImplicitCastExpr 'int' <LValueToRValue>
+    | |     `-UnaryOperator 'const int' lvalue prefix '*' cannot overflow
+    | |       `-ImplicitCastExpr 'const_iterator':'const int *' <LValueToRValue>
+    | |         `-DeclRefExpr 'const_iterator':'const int *' lvalue Var '__begin1' 'const_iterator':'const int *'
+    | `-CompoundAssignOperator 'int' lvalue '+=' ComputeLHSTy='int' ComputeResultTy='int'
+    |   |-DeclRefExpr 'int' lvalue Var 's' 'int'
+    |   `-ImplicitCastExpr 'int' <LValueToRValue>
+    |     `-DeclRefExpr 'int' lvalue Var 'x' 'int'
+    `-ReturnStmt
+      `-ImplicitCastExpr 'int' <LValueToRValue>
+        `-ImplicitCastExpr 'int' xvalue <NoOp>
+          `-DeclRefExpr 'int' lvalue Var 's' 'int'

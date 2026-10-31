@@ -67,6 +67,7 @@ pub use scope::ScopeKind;
 /// manager it reports against (two lifetimes: `DiagEngine` is invariant
 /// in `'sm` and has drop glue, spec/sema.md §1).
 #[derive(Debug)]
+#[allow(clippy::struct_excessive_bools, reason = "independent language switches set by the driver")]
 pub struct Sema<'a, 'sm> {
     /// The AST being built.
     pub ast: Ast,

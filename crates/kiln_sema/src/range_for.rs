@@ -124,24 +124,24 @@ impl Sema<'_, '_> {
 
     // -- diagnostics capture ----------------------------------------------------
 
-    /// Runs `f` with its diagnostics held back; returns them in order.
+    /// Runs `f` with its diagnostics stash back; returns them in order.
     fn capturing<R>(&mut self, f: impl FnOnce(&mut Self) -> R) -> (R, Vec<Diag>) {
         let old = self.diag_capture.replace(Some(Vec::new()));
         let r = f(self);
-        let held = self.diag_capture.replace(old).unwrap_or_default();
-        (r, held)
+        let stash = self.diag_capture.replace(old).unwrap_or_default();
+        (r, stash)
     }
 
-    /// Emits `held`, the last with `notes` attached (clang's standalone
+    /// Emits `stash`, the last with `notes` attached (clang's standalone
     /// notes continue the diagnostic before them).
-    fn release(&self, mut held: Vec<Diag>, notes: Vec<Diag>) {
-        if let Some(mut last) = held.pop() {
+    fn release(&self, mut stash: Vec<Diag>, notes: Vec<Diag>) {
+        if let Some(mut last) = stash.pop() {
             for n in notes {
                 last = last.with_note(n);
             }
-            held.push(last);
+            stash.push(last);
         }
-        for d in held {
+        for d in stash {
             self.emit(d);
         }
     }
@@ -233,16 +233,8 @@ impl Sema<'_, '_> {
         loc: Loc,
     ) -> Option<RangeForHead> {
         let depth = self.clang_scope_depth() / 2;
-        let parts = Parts {
-            init,
-            range: loop_var,
-            loop_var,
-            colon,
-            loc,
-            temps,
-            depth,
-            build: true,
-        };
+        let parts =
+            Parts { init, range: loop_var, loop_var, colon, loc, temps, depth, build: true };
         let name = self.intern(&format!("__range{depth}"));
         self.for_range_from_init(parts, range, name)
     }
@@ -272,13 +264,17 @@ impl Sema<'_, '_> {
             RangeInit::Expr(e) => Initializer::Expr(e),
             RangeInit::List(l) => Initializer::List(l),
         };
-        if self.finish_range_var(range_var, init, range_loc, DiagId::sema_for_range_deduction_failure)
-        {
+        if self.finish_range_var(
+            range_var,
+            init,
+            range_loc,
+            DiagId::sema_for_range_deduction_failure,
+        ) {
             self.act_on_for_range_error(loop_var);
             return None;
         }
         parts.range = range_var;
-        let head = self.build_for_range(parts);
+        let head = self.build_for_range(&parts);
         if head.is_none() {
             self.act_on_for_range_error(loop_var);
         }
@@ -326,33 +322,30 @@ impl Sema<'_, '_> {
             Initializer::Paren(..) => (Vec::new(), AutoInit::Paren, QualType::ERROR),
         };
         let is_list = matches!(init, Initializer::List(_));
-        let deduced = if !is_list && self.ast.types.is_void(init_ty) {
-            let msg = self.diag(id, loc).arg(self.ty_arg(init_ty));
-            self.emit(msg);
-            None
-        } else if init_ty == QualType::OVERLOAD {
-            let msg = self.diag(id, loc).arg(self.ty_arg(init_ty));
-            self.emit(msg);
-            None
-        } else {
-            match self.deduce_auto(declared, &items, kind) {
-                Ok(t) => Some(t),
-                Err(AutoFail::Error) => None,
-                Err(AutoFail::NoInitializerList) => {
-                    let at = match &init {
-                        Initializer::List(l) => l.lbrace,
-                        _ => loc,
-                    };
-                    self.error(DiagId::sema_auto_init_list_deduction, at);
-                    None
+        let deduced =
+            if (!is_list && self.ast.types.is_void(init_ty)) || init_ty == QualType::OVERLOAD {
+                let msg = self.diag(id, loc).arg(self.ty_arg(init_ty));
+                self.emit(msg);
+                None
+            } else {
+                match self.deduce_auto(declared, &items, kind) {
+                    Ok(t) => Some(t),
+                    Err(AutoFail::Error) => None,
+                    Err(AutoFail::NoInitializerList) => {
+                        let at = match &init {
+                            Initializer::List(l) => l.lbrace,
+                            _ => loc,
+                        };
+                        self.error(DiagId::sema_auto_init_list_deduction, at);
+                        None
+                    }
+                    Err(_) => {
+                        let msg = self.diag(id, loc).arg(self.ty_arg(init_ty));
+                        self.emit(msg);
+                        None
+                    }
                 }
-                Err(_) => {
-                    let msg = self.diag(id, loc).arg(self.ty_arg(init_ty));
-                    self.emit(msg);
-                    None
-                }
-            }
-        };
+            };
         let Some(t) = deduced else {
             self.ast.decls.set_ty(v, QualType::ERROR);
             self.ast.decls.set_flags(v, DeclFlags::INVALID);
@@ -365,7 +358,11 @@ impl Sema<'_, '_> {
 
     /// clang `BuildCXXForRangeStmt` for a statement without `__begin`
     /// and `__end` yet: `parts.range` is the initialized `__range`.
-    fn build_for_range(&mut self, parts: Parts) -> Option<RangeForHead> {
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one step per statement of clang's BuildCXXForRangeStmt"
+    )]
+    fn build_for_range(&mut self, parts: &Parts) -> Option<RangeForHead> {
         let range_var = parts.range;
         let loop_var = parts.loop_var;
         let colon = parts.colon;
@@ -431,7 +428,7 @@ impl Sema<'_, '_> {
         let end_var = self.implicit_range_var(end_sym, auto, colon);
         let (begin_expr, end_expr) = if self.ast.types.is_array(range_ty) {
             // [stmt.ranged]/1.1: `__range` and `__range + __bound`.
-            let (failed, held) = self.capturing(|s| {
+            let (failed, stash) = self.capturing(|s| {
                 s.finish_range_var(
                     begin_var,
                     Initializer::Expr(begin_range),
@@ -441,10 +438,10 @@ impl Sema<'_, '_> {
             });
             if failed {
                 let notes = self.begin_end_note(begin_range, Bef::Begin);
-                self.release(held, notes);
+                self.release(stash, notes);
                 return None;
             }
-            self.release(held, Vec::new());
+            self.release(stash, Vec::new());
             let Some(bound) = self.ast.types.array_size(range_ty) else {
                 self.unsupported("range-based for over a variable length array", range_loc);
                 return None;
@@ -455,7 +452,7 @@ impl Sema<'_, '_> {
             if self.is_err_expr(end) {
                 return None;
             }
-            let (failed, held) = self.capturing(|s| {
+            let (failed, stash) = self.capturing(|s| {
                 s.finish_range_var(
                     end_var,
                     Initializer::Expr(end),
@@ -465,21 +462,27 @@ impl Sema<'_, '_> {
             });
             if failed {
                 let notes = self.begin_end_note(end, Bef::End);
-                self.release(held, notes);
+                self.release(stash, notes);
                 return None;
             }
-            self.release(held, Vec::new());
+            self.release(stash, Vec::new());
             (begin_range, end)
         } else {
-            let (status, bef, exprs) =
-                self.build_non_array_range(begin_range, end_range, range_ty, begin_var, end_var, colon);
+            let (status, bef, exprs) = self.build_non_array_range(
+                begin_range,
+                end_range,
+                range_ty,
+                begin_var,
+                end_var,
+                colon,
+            );
             if let Status::NoViable(notes) = status {
                 if parts.build && bef == Bef::Begin {
-                    if let Some(r) = self.range_on_array_parameter(range_init, range_loc) {
-                        return r;
+                    if self.range_on_array_parameter(range_init) {
+                        return None;
                     }
-                    if let Some(r) = self.rebuild_with_dereference(&parts, range_init, range_loc) {
-                        return r;
+                    if let Some(h) = self.rebuild_with_dereference(parts, range_init, range_loc) {
+                        return Some(h);
                     }
                 }
                 let at = if bef == Bef::End { end_range } else { begin_range };
@@ -504,7 +507,7 @@ impl Sema<'_, '_> {
         head.begin = Some(begin_var);
         head.end = Some(end_var);
         // `__begin != __end`, contextually converted to `bool`.
-        let (cond, held) = self.capturing(|s| {
+        let (cond, stash) = self.capturing(|s| {
             let b = s.build_decl_ref(begin_var, colon);
             let e = s.build_decl_ref(end_var, colon);
             let ne = s.act_on_binary(BinaryOp::NE, b, e, colon);
@@ -525,12 +528,12 @@ impl Sema<'_, '_> {
             if !same {
                 notes.extend(self.begin_end_note(end_expr, Bef::End));
             }
-            self.release(held, notes);
+            self.release(stash, notes);
             return None;
         };
-        self.release(held, Vec::new());
+        self.release(stash, Vec::new());
         // `++__begin`.
-        let (inc, held) = self.capturing(|s| {
+        let (inc, stash) = self.capturing(|s| {
             let b = s.build_decl_ref(begin_var, colon);
             let inc = s.act_on_unary(UnaryOp::PreInc, b, colon);
             if s.is_err_expr(inc) { None } else { Some(s.act_on_full_expr(inc)) }
@@ -538,12 +541,12 @@ impl Sema<'_, '_> {
         let Some(inc) = inc else {
             let mut notes = vec![self.invalid_iterator_note(range_loc, 2, range_nonref)];
             notes.extend(self.begin_end_note(begin_expr, Bef::Begin));
-            self.release(held, notes);
+            self.release(stash, notes);
             return None;
         };
-        self.release(held, Vec::new());
+        self.release(stash, Vec::new());
         // `*__begin`.
-        let (deref, held) = self.capturing(|s| {
+        let (deref, stash) = self.capturing(|s| {
             let b = s.build_decl_ref(begin_var, colon);
             let d = s.act_on_unary(UnaryOp::Deref, b, colon);
             (!s.is_err_expr(d)).then_some(d)
@@ -551,14 +554,14 @@ impl Sema<'_, '_> {
         let Some(deref) = deref else {
             let mut notes = vec![self.invalid_iterator_note(range_loc, 1, range_nonref)];
             notes.extend(self.begin_end_note(begin_expr, Bef::Begin));
-            self.release(held, notes);
+            self.release(stash, notes);
             return None;
         };
-        self.release(held, Vec::new());
+        self.release(stash, Vec::new());
         head.cond = Some(cond);
         head.inc = Some(inc);
         if !self.ast.decls.get(loop_var).has(DeclFlags::INVALID) {
-            let ((), held) = self.capturing(|s| s.act_on_init(loop_var, Initializer::Expr(deref)));
+            let ((), stash) = self.capturing(|s| s.act_on_init(loop_var, Initializer::Expr(deref)));
             let bad = self.ast.decls.get(loop_var).has(DeclFlags::INVALID)
                 || self
                     .ast
@@ -567,7 +570,7 @@ impl Sema<'_, '_> {
                     .and_then(|x| x.init)
                     .is_some_and(|e| self.has_errors_in(e));
             let notes = if bad { self.begin_end_note(begin_expr, Bef::Begin) } else { Vec::new() };
-            self.release(held, notes);
+            self.release(stash, notes);
         }
         Some(head)
     }
@@ -648,9 +651,7 @@ impl Sema<'_, '_> {
         }
         let ctx = BeCtx { begin_range, end_range, begin_var, end_var, colon };
         match members {
-            (Some(found), None) => {
-                self.build_nonmember(&ctx, Bef::Begin, &found, range_ty)
-            }
+            (Some(found), None) => self.build_nonmember(&ctx, Bef::Begin, &found, range_ty),
             (None, Some(found)) => self.build_nonmember(&ctx, Bef::End, &found, range_ty),
             (b, e) => {
                 let (st, be) = self.build_begin_end(&ctx, Bef::Begin, b.is_some());
@@ -682,16 +683,19 @@ impl Sema<'_, '_> {
                 .decls
                 .iter()
                 .map(|&d| {
-                    s.diag(DiagId::note_for_range_member_begin_end_ignored, s.ast.decls.get(d).loc())
-                        .arg(s.ty_arg(s.ety(ctx.begin_range)))
-                        .arg(found_bef.index())
+                    s.diag(
+                        DiagId::note_for_range_member_begin_end_ignored,
+                        s.ast.decls.get(d).loc(),
+                    )
+                    .arg(s.ty_arg(s.ety(ctx.begin_range)))
+                    .arg(found_bef.index())
                 })
                 .collect()
         };
-        let ((st, y), held) = self.capturing(|s| s.build_begin_end(ctx, found_bef, false));
+        let ((st, y), stash) = self.capturing(|s| s.build_begin_end(ctx, found_bef, false));
         match st {
             Status::Success => {
-                self.release(held, Vec::new());
+                self.release(stash, Vec::new());
                 let (Some(x), Some(y)) = (x, y) else {
                     return (Status::DiagnosticIssued, found_bef, None);
                 };
@@ -699,7 +703,7 @@ impl Sema<'_, '_> {
                 (Status::Success, found_bef, Some(pair))
             }
             Status::NoViable(notes) => {
-                self.release(held, Vec::new());
+                self.release(stash, Vec::new());
                 let _ = range_ty;
                 let mut msg = self
                     .diag(DiagId::sema_for_range_invalid, self.begin_loc(ctx.begin_range))
@@ -716,7 +720,7 @@ impl Sema<'_, '_> {
             }
             Status::DiagnosticIssued => {
                 let notes = ignored(self);
-                self.release(held, notes);
+                self.release(stash, notes);
                 (Status::DiagnosticIssued, found_bef, None)
             }
         }
@@ -729,24 +733,25 @@ impl Sema<'_, '_> {
             Bef::Begin => (ctx.begin_range, ctx.begin_var),
             Bef::End => (ctx.end_range, ctx.end_var),
         };
-        let ((st, call), held) = self.capturing(|s| s.begin_end_call(bef, member, range, ctx.colon));
+        let ((st, call), stash) =
+            self.capturing(|s| s.begin_end_call(bef, member, range, ctx.colon));
         match st {
-            Status::Success => self.release(held, Vec::new()),
+            Status::Success => self.release(stash, Vec::new()),
             Status::DiagnosticIssued => {
                 let note = self
                     .diag(DiagId::note_in_for_range, self.begin_loc(range))
                     .arg(bef.index())
                     .arg(self.ty_arg(self.ety(range)));
-                self.release(held, vec![note]);
+                self.release(stash, vec![note]);
                 return (Status::DiagnosticIssued, None);
             }
             Status::NoViable(n) => {
-                self.release(held, Vec::new());
+                self.release(stash, Vec::new());
                 return (Status::NoViable(n), None);
             }
         }
         let Some(call) = call else { return (Status::DiagnosticIssued, None) };
-        let (failed, held) = self.capturing(|s| {
+        let (failed, stash) = self.capturing(|s| {
             s.finish_range_var(
                 var,
                 Initializer::Expr(call),
@@ -756,10 +761,10 @@ impl Sema<'_, '_> {
         });
         if failed {
             let notes = self.begin_end_note(call, bef);
-            self.release(held, notes);
+            self.release(stash, notes);
             return (Status::DiagnosticIssued, None);
         }
-        self.release(held, Vec::new());
+        self.release(stash, Vec::new());
         (Status::Success, Some(call))
     }
 
@@ -828,23 +833,21 @@ impl Sema<'_, '_> {
     }
 
     /// clang's `err_range_on_array_parameter`: the range names a function
-    /// parameter declared with array type.
-    fn range_on_array_parameter(
-        &mut self,
-        range_init: ExprId,
-        range_loc: Loc,
-    ) -> Option<Option<RangeForHead>> {
+    /// parameter declared with array type. True when diagnosed.
+    fn range_on_array_parameter(&mut self, range_init: ExprId) -> bool {
         if self.ast.exprs.get(range_init).kind() != ExprKind::DeclRefExpr {
-            return None;
+            return false;
         }
         let p = self.ast.exprs.decl(range_init);
         if self.kind_of(p) != DeclKind::ParmVar {
-            return None;
+            return false;
         }
-        let array_ty = self.ast.decls.param(p).and_then(|x| x.original_ty)?;
-        let ptr_ty = self.ast.decls.get(p).ty()?;
+        let Some(array_ty) = self.ast.decls.param(p).and_then(|x| x.original_ty) else {
+            return false;
+        };
+        let Some(ptr_ty) = self.ast.decls.get(p).ty() else { return false };
         if !self.ast.types.is_pointer(ptr_ty) || !self.ast.types.is_array(array_ty) {
-            return None;
+            return false;
         }
         let msg = self
             .diag(DiagId::sema_range_on_array_parameter, self.begin_loc(range_init))
@@ -852,9 +855,8 @@ impl Sema<'_, '_> {
             .arg(self.ty_arg(array_ty))
             .arg(self.ty_arg(ptr_ty))
             .with_note(self.diag(DiagId::note_declared_at, self.ast.decls.get(p).loc()));
-        let _ = range_loc;
         self.emit(msg);
-        Some(None)
+        true
     }
 
     /// clang `RebuildForRangeWithDereference`: if `*range` makes a valid
@@ -864,9 +866,9 @@ impl Sema<'_, '_> {
         parts: &Parts,
         range_init: ExprId,
         range_loc: Loc,
-    ) -> Option<Option<RangeForHead>> {
+    ) -> Option<RangeForHead> {
         let range_ty = self.ety(range_init);
-        let (head, held) = self.capturing(|s| {
+        let (head, stash) = self.capturing(|s| {
             let adjusted = s.act_on_unary(UnaryOp::Deref, range_init, range_loc);
             if s.is_err_expr(adjusted) {
                 return None;
@@ -884,16 +886,21 @@ impl Sema<'_, '_> {
             s.for_range_from_init_unchecked(retry, adjusted)
         });
         let head = head?;
-        let msg = self.diag(DiagId::sema_for_range_dereference, range_loc).arg(self.ty_arg(range_ty));
+        let msg =
+            self.diag(DiagId::sema_for_range_dereference, range_loc).arg(self.ty_arg(range_ty));
         self.emit(msg);
-        self.release(held, Vec::new());
-        Some(Some(head))
+        self.release(stash, Vec::new());
+        Some(head)
     }
 
     /// [`Sema::for_range_from_init`] for the dereferenced range of
     /// [`Sema::rebuild_with_dereference`] (the loop variable is left as
     /// is on failure).
-    fn for_range_from_init_unchecked(&mut self, mut parts: Parts, e: ExprId) -> Option<RangeForHead> {
+    fn for_range_from_init_unchecked(
+        &mut self,
+        mut parts: Parts,
+        e: ExprId,
+    ) -> Option<RangeForHead> {
         let range_loc = self.begin_loc(e);
         let auto = self.ast.types.auto_type(AutoKeyword::Auto, None, None, None, false);
         let rref = self.ast.types.rvalue_ref_to(auto);
@@ -909,7 +916,7 @@ impl Sema<'_, '_> {
             return None;
         }
         parts.range = range_var;
-        self.build_for_range(parts)
+        self.build_for_range(&parts)
     }
 
     /// clang `FinishCXXForRangeStmt`: the statement with its body.

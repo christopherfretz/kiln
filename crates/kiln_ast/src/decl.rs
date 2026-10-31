@@ -946,8 +946,7 @@ impl VarSpec {
     /// member becomes inline with its deferred initializer, [temp.inst]/4),
     /// and `cxx_for_range` (a for-range-declaration is known as one after
     /// it is declared, clang `ActOnCXXForRangeDecl`).
-    pub const LATE: VarSpec =
-        VarSpec((1 << 12) | (1 << 10) | (1 << 9) | (1 << 6) | (1 << 5));
+    pub const LATE: VarSpec = VarSpec((1 << 12) | (1 << 10) | (1 << 9) | (1 << 6) | (1 << 5));
 }
 
 bit_accessors!(VarSpec:

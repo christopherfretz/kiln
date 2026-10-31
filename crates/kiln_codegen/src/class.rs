@@ -1067,7 +1067,16 @@ impl Cg<'_> {
         };
         match ast.exprs.temporary_storage(m) {
             StorageDuration::FullExpression => self.push_full_expr_cleanup(c, true, true),
-            StorageDuration::Automatic => self.f.cl.lifetime_extended.push((c, None)),
+            StorageDuration::Automatic => {
+                // `pushLifetimeExtendedDestroy`: outside a conditional
+                // branch, an EH-only cleanup covers the rest of the
+                // full-expression (a P2718 temporary of a range
+                // initializer is followed by more calls).
+                if self.opts.exceptions && self.f.conds.is_empty() {
+                    self.push_cleanup_kind(c.clone(), false, true);
+                }
+                self.f.cl.lifetime_extended.push((c, None));
+            }
             StorageDuration::Static | StorageDuration::Thread => {}
         }
     }

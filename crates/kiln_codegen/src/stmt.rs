@@ -588,13 +588,13 @@ impl Cg<'_> {
             self.branch_through_cleanup(end);
         }
         self.emit_block(body_b, false);
-        let cont = self.jump_dest_here();
-        self.f.jumps.push(Jump { brk: end, cont: Some(cont) });
+        let next = self.jump_dest_here();
+        self.f.jumps.push(Jump { brk: end, cont: Some(next) });
         let sc = self.begin_scope(false);
         self.emit_var_decl(d.loop_var)?;
         self.emit_stmt(d.body)?;
         self.end_scope(sc);
-        self.emit_block(cont.blk, false);
+        self.emit_block(next.blk, false);
         self.emit_ignored(inc)?;
         self.f.jumps.pop();
         self.emit_branch(cond_b);
