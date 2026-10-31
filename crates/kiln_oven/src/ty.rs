@@ -61,6 +61,9 @@ pub(crate) struct TyInfo {
     pub has_union: bool,
     /// Contains a pointer subobject.
     pub has_ptr: bool,
+    /// Contains a subobject of polymorphic class type (whose vptr slots
+    /// hold the Oven's dynamic-type words, WP-077).
+    pub has_vptr: bool,
     /// Union subobjects at fixed offsets: `union_pos[upos.0..upos.1]`.
     pub upos: (u32, u32),
 }
@@ -232,6 +235,7 @@ impl Types {
             kind: TyKind::Array { elem, n },
             has_union: e.has_union,
             has_ptr: e.has_ptr || matches!(e.kind, TyKind::Ptr(_) | TyKind::NullPtr),
+            has_vptr: e.has_vptr,
             upos: (start, end),
         });
         self.arrays.insert((elem, n), t);
@@ -254,7 +258,16 @@ impl Types {
     }
 
     fn simple(&mut self, q: QualType, size: u64, align: u32, kind: TyKind) -> OTy {
-        self.push(TyInfo { q, size, align, kind, has_union: false, has_ptr: false, upos: (0, 0) })
+        self.push(TyInfo {
+            q,
+            size,
+            align,
+            kind,
+            has_union: false,
+            has_ptr: false,
+            has_vptr: false,
+            upos: (0, 0),
+        })
     }
 
     fn build(&mut self, bridge: &mut dyn SemaBridge, c: QualType) -> OTy {
@@ -333,6 +346,7 @@ impl Types {
                     kind: TyKind::Array { elem, n: a.size },
                     has_union: e.has_union,
                     has_ptr: e.has_ptr || matches!(e.kind, TyKind::Ptr(_) | TyKind::NullPtr),
+                    has_vptr: e.has_vptr,
                     upos: (start, end),
                 })
             }
@@ -357,6 +371,10 @@ impl Types {
             return self.simple(c, 0, 1, TyKind::Opaque);
         };
         let union = ast.decls.record(def).is_some_and(|r| r.tag == kiln_ast::decl::TagKind::Union);
+        let poly = ast
+            .decls
+            .record(def)
+            .is_some_and(|r| r.defn.contains(kiln_ast::decl::DefinitionBits::POLYMORPHIC));
         // Direct non-virtual bases as written; empty bases have no storage
         // the evaluator touches (they would shadow the member at offset 0).
         let bdecls: Vec<(DeclId, QualType, DeclId)> = ast
@@ -399,6 +417,7 @@ impl Types {
         self.map.insert(c, me);
         let mut fields = Vec::with_capacity(fdecls.len());
         let (mut has_union, mut has_ptr) = (union, false);
+        let mut has_vptr = poly;
         let mut upos = Vec::new();
         if union {
             upos.push((0, me));
@@ -408,6 +427,7 @@ impl Types {
             let bi = *self.info(bty);
             has_union |= bi.has_union;
             has_ptr |= bi.has_ptr;
+            has_vptr |= bi.has_vptr;
             for k in bi.upos.0..bi.upos.1 {
                 let (o, u) = self.union_pos[k as usize];
                 upos.push((off + o, u));
@@ -426,6 +446,7 @@ impl Types {
             let bits = offs.get(i).copied().unwrap_or(0);
             let fi = *self.info(fty);
             has_union |= fi.has_union;
+            has_vptr |= fi.has_vptr;
             has_ptr |= fi.has_ptr || matches!(fi.kind, TyKind::Ptr(_) | TyKind::NullPtr);
             if fi.has_union {
                 for k in fi.upos.0..fi.upos.1 {
@@ -463,6 +484,7 @@ impl Types {
         info.kind = TyKind::Record { decl: def, union, first, count };
         info.has_union = has_union;
         info.has_ptr = has_ptr;
+        info.has_vptr = has_vptr;
         info.upos = (ustart, uend);
         me
     }

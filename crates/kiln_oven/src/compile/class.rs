@@ -28,6 +28,9 @@ const NULL_MEMBER_CALL: &str =
 #[derive(Clone, Copy)]
 pub(super) enum Callee {
     Direct(DeclId),
+    /// A virtual call of the method (dispatched on the dynamic type of
+    /// the object argument), a member of the class.
+    Virtual(DeclId, OTy),
     /// A function pointer in a register.
     Ind(u32),
 }
@@ -336,14 +339,29 @@ impl Compiler<'_> {
         };
         let cls = self.ty(cq);
         let TyKind::Record { union, decl: rdef, .. } = self.kind(cls) else { return };
+        // [class.cdtor]/4: the object's dynamic type is the class from
+        // the end of its base initializers (a constructor) or the start
+        // of the body (a destructor).
+        let poly = record_bits(self.ast(), rdef).contains(DefinitionBits::POLYMORPHIC);
         if kind == DeclKind::CXXConstructor {
             let inits: Vec<CtorInit> = self.ast().ctor_inits(def).copied().collect();
+            let mut vptr = poly && !inits.iter().any(|c| c.kind == CtorInitKind::Delegating);
             for ci in inits {
+                if vptr && !matches!(ci.kind, CtorInitKind::Base | CtorInitKind::VirtualBase) {
+                    self.emit(Op::SetVptr, 0, &[this, cls.0]);
+                    vptr = false;
+                }
                 let m = self.next;
                 self.ctor_init(&ci, this, cls, union);
                 self.next = m;
             }
+            if vptr {
+                self.emit(Op::SetVptr, 0, &[this, cls.0]);
+            }
             return;
+        }
+        if poly {
+            self.emit(Op::SetVptr, 0, &[this, cls.0]);
         }
         if union {
             // A union's destructor destroys no member.
@@ -633,6 +651,10 @@ impl Compiler<'_> {
                 self.emit_at(Op::Call, 0, &[f, base], e)
             }
             Callee::Ind(r) => self.emit_at(Op::CallInd, 0, &[r, base], e),
+            Callee::Virtual(d, cls) => {
+                let m = self.ast().first(d);
+                self.emit_at(Op::VCall, u32::from(is_sret), &[m.index(), base, cls.0], e)
+            }
         };
         if let Some(loc) = loc
             && let Some(site) = self.o.sites.last_mut().filter(|x| x.pc == pc as u32)
@@ -645,8 +667,9 @@ impl Compiler<'_> {
 
     /// Whether the object expression `obj` of a member call designates an
     /// object whose dynamic type is its static type (so a virtual call
-    /// needs no dispatch): a variable or temporary of class type, or
-    /// `*this` in a constructor or destructor ([class.cdtor]/4).
+    /// needs no dispatch): a variable or temporary of class type. (`*this`
+    /// in a constructor or destructor dispatches: the final overrider in
+    /// the constructor's class may be pure or in another base.)
     fn exact_dynamic_type(&self, obj: ExprId, arrow: bool) -> bool {
         let ast = self.ast();
         let mut x = skip_parens(ast, obj);
@@ -655,15 +678,6 @@ impl Compiler<'_> {
         }
         let n = ast.exprs.get(x);
         match n.kind() {
-            ExprKind::CXXThisExpr => {
-                arrow
-                    && self.cur_fn.is_some_and(|f| {
-                        matches!(
-                            ast.decls.get(f).kind(),
-                            DeclKind::CXXConstructor | DeclKind::CXXDestructor
-                        )
-                    })
-            }
             ExprKind::DeclRefExpr if !arrow => {
                 let d = ast.exprs.decl(x);
                 matches!(ast.decls.get(d).kind(), DeclKind::Var | DeclKind::ParmVar)
@@ -724,14 +738,10 @@ impl Compiler<'_> {
             self.effect(obj);
             return self.call_frame(e, Callee::Direct(md), rty, sret, None, args, &refs, Some(loc));
         }
-        if spec.is_some_and(|s| s.is_virtual() && !s.is_final())
+        let dispatch = spec.is_some_and(|s| s.is_virtual() && !s.is_final())
             && !qualified
             && !class_final
-            && !self.exact_dynamic_type(obj, arrow)
-        {
-            self.trap(e, VIRTUAL_UNSUPPORTED);
-            return self.reg();
-        }
+            && !self.exact_dynamic_type(obj, arrow);
         let this = if arrow {
             self.rv(obj)
         } else if self.node(obj).value_category().is_glvalue() {
@@ -757,7 +767,18 @@ impl Compiler<'_> {
             self.patch_here(ok);
             self.next = m;
         }
-        self.call_frame(e, Callee::Direct(md), rty, sret, Some(this), args, &refs, Some(loc))
+        let callee = match self.method_class(md) {
+            Some(cls) if dispatch => Callee::Virtual(md, cls),
+            _ => Callee::Direct(md),
+        };
+        self.call_frame(e, callee, rty, sret, Some(this), args, &refs, Some(loc))
+    }
+
+    /// The class type of member `md`.
+    pub(super) fn method_class(&mut self, md: DeclId) -> Option<OTy> {
+        let ast = self.ast();
+        let q = ast.decls.get(md).ctx().and_then(|c| ast.decls.get(c).ty())?;
+        Some(self.ty(q))
     }
 
     // ---- aggregates ---------------------------------------------------------

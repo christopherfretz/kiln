@@ -20,8 +20,10 @@ use crate::{Oven, SemaBridge};
 
 mod bitcast;
 mod builtins;
+mod virt;
 
 pub(crate) use builtins::BiFault;
+pub(crate) use virt::Virt;
 
 /// `Frame::mark` of a frame whose memory is not released on return.
 pub(crate) const BOTTOM: u64 = u64::MAX;
@@ -213,6 +215,15 @@ pub(crate) enum Fault {
     },
     /// A library builtin's own failure.
     Bi(BiFault),
+    /// A virtual call whose final overrider is pure ([class.abstract]/6).
+    PureVirtual(DeclId),
+    /// A polymorphic operation (access kind `ak`) on an object whose
+    /// dynamic type is unknown (not usable in constant expressions).
+    UnknownDynamic {
+        ak: u32,
+        p: u64,
+        ty: OTy,
+    },
 }
 
 /// Why an array `new` bound is erroneous ([expr.new]/8).
@@ -864,13 +875,50 @@ impl Oven {
                     pc += 3;
                 }
                 Op::MpFn => match self.mp.get(reg!(1)) {
-                    Some(e) if e.virt => fail!(Fault::Trap(arg!(2) as u32)),
+                    Some(e) if e.virt => {
+                        let (m, cls) = (e.member, e.cls);
+                        match self.vcall(b, m, cls, reg!(2) as u64) {
+                            Ok((f, this)) => {
+                                reg!(0) = u128::from(crate::mem::fn_ptr(f));
+                                reg!(2) = u128::from(this);
+                            }
+                            Err(f) => fail!(f),
+                        }
+                        pc += 4;
+                    }
                     Some(e) => {
                         reg!(0) = u128::from(crate::mem::fn_ptr(e.fn_index));
                         pc += 4;
                     }
                     None => fail!(Fault::Invalid),
                 },
+                Op::SetVptr => {
+                    if let Err(f) = self.set_vptrs(b, reg!(0) as u64, OTy(arg!(1) as u32)) {
+                        fail!(f);
+                    }
+                    pc += 3;
+                }
+                Op::VCall => {
+                    let base = arg!(1);
+                    let slot = fb + base + aux as usize;
+                    let m = DeclId::new(self.code[pc + 1]);
+                    let cls = OTy(self.code[pc + 3]);
+                    let callee = match self.vcall(b, m, cls, self.regs[slot] as u64) {
+                        Ok((f, this)) => {
+                            self.regs[slot] = u128::from(this);
+                            f
+                        }
+                        Err(f) => fail!(f),
+                    };
+                    match self.enter(b, callee, pc, pc + 4, fb, base) {
+                        Ok(Some((npc, nfb))) => {
+                            pc = npc;
+                            fb = nfb;
+                        }
+                        Ok(None) => pc += 4,
+                        Err(f) => fail!(f),
+                    }
+                }
                 Op::IsConstEval => {
                     let cc = self.run.const_context;
                     reg!(0) = u128::from(cc);

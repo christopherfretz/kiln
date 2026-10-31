@@ -33,6 +33,23 @@ fn name_of(ast: &Ast, d: DeclId) -> String {
     s
 }
 
+/// `d`'s name qualified by its enclosing classes and namespaces (clang's
+/// `getQualifiedNameAsString`).
+pub(crate) fn qualified_name(ast: &Ast, d: DeclId) -> String {
+    let mut parts = vec![name_of(ast, d)];
+    let mut c = ast.decls.get(d).ctx();
+    while let Some(x) = c {
+        let n = ast.decls.get(x);
+        if !matches!(n.kind(), DeclKind::CXXRecord | DeclKind::Namespace) {
+            break;
+        }
+        parts.push(name_of(ast, x));
+        c = n.ctx();
+    }
+    parts.reverse();
+    parts.join("::")
+}
+
 impl Oven {
     pub(crate) fn site(&self, pc: usize) -> Site {
         let i = self.sites.partition_point(|s| s.pc as usize <= pc);
@@ -58,7 +75,14 @@ impl Oven {
     /// The notes of `fault` at `pc`, with the call stack.
     pub(crate) fn render(&self, b: &dyn SemaBridge, fault: Fault, pc: usize) -> Vec<Note> {
         let ast = b.ast();
-        let site = self.site(pc);
+        let mut site = self.site(pc);
+        if self.code.get(pc).is_some_and(|&w| Op::from_u8(w as u8) == Op::VCall)
+            && let Some(m) = site.e.map(|e| skip_parens(ast, ast.exprs.callee(e)))
+            && ast.exprs.get(m).kind() == ExprKind::MemberExpr
+        {
+            // clang diagnoses a dispatch at the member name.
+            site.loc = ast.exprs.get(m).loc();
+        }
         let mut extra = Vec::new();
         let (loc, msg) = match fault {
             Fault::Trap(i) => {
@@ -192,6 +216,21 @@ impl Oven {
                 (site.loc, format!("cannot allocate array; evaluated array bound {v} {what}"))
             }
             Fault::Bi(f) => (site.loc, self.bi_msg(ast, site, f)),
+            Fault::PureVirtual(d) => {
+                extra.push(Note::new(ast.decls.get(d).loc(), "declared here"));
+                (site.loc, format!("pure virtual function '{}' called", qualified_name(ast, d)))
+            }
+            Fault::UnknownDynamic { ak: k, p, ty } => {
+                let d = self.ptr_string(ast, p, ty);
+                (
+                    site.loc,
+                    format!(
+                        "{} object '{}' whose dynamic type is not constant",
+                        ak::poly_verb(k),
+                        d.trim_start_matches('&')
+                    ),
+                )
+            }
             Fault::Callee(f) => {
                 let func = &self.funcs[f as usize];
                 let d = func.decl.unwrap_or_else(|| DeclId::new(0));

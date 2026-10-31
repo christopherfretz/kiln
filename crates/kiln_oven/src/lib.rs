@@ -267,6 +267,8 @@ pub struct Oven {
     pub(crate) scratch: value::Scratch,
     /// The interned pointer-to-member values.
     pub(crate) mp: memptr::MemPtrs,
+    /// Class subobject graphs and resolved virtual calls (WP-077).
+    pub(crate) virt: vm::Virt,
     /// Evaluation contexts in progress (R-OVEN-1: 0 between evaluations,
     /// above 1 while a bridge callback evaluates a nested one).
     pub(crate) ctx_depth: u32,
@@ -314,6 +316,7 @@ impl Oven {
             run: vm::RunState::default(),
             scratch: value::Scratch::default(),
             mp: memptr::MemPtrs::default(),
+            virt: vm::Virt::default(),
             ctx_depth: 0,
             inner: Inner::default(),
         }
@@ -445,6 +448,7 @@ impl Oven {
             + self.run.footprint()
             + self.scratch.footprint()
             + self.mp.footprint()
+            + self.virt.footprint()
     }
 
     /// The disassembly of everything compiled so far (debugging aid).
