@@ -1726,9 +1726,8 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                     self.decl_ref(found);
                     self.line.push(')');
                 }
-                if n.has(ExprFlags::REFERS_TO_ENCLOSING) {
-                    self.line.push_str(" refers_to_enclosing_variable_or_capture");
-                }
+                // `refers_to_enclosing_variable_or_capture` is not printed:
+                // clang's JSON dump, the oracle's source, omits it.
                 self.non_odr_use(exprs.non_odr_use(e));
             }
             ExprKind::MemberExpr => {

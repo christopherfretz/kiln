@@ -24,6 +24,8 @@ use crate::Sema;
 use crate::declspec::{Chunk, Declarator, DefaultArg, ParamInfo};
 use crate::scope::{Scope, ScopeKind};
 
+mod capture;
+
 /// One *capture* of a *lambda-capture* as written ([expr.prim.lambda.capture]/1).
 #[derive(Clone, Debug)]
 pub struct LambdaCaptureSpec {
@@ -112,6 +114,10 @@ pub(crate) struct LambdaScope {
     /// `templ.heads.len()` at the introducer: a deeper head after the
     /// parameters is a generic lambda's invented one.
     heads: usize,
+    /// The type of the member of each capture so far, in order.
+    pub(crate) cap_tys: Vec<QualType>,
+    /// The init-captures whose variables the body declares.
+    init_caps: Vec<capture::InitCapture>,
 }
 
 impl Sema<'_, '_> {
@@ -128,9 +134,6 @@ impl Sema<'_, '_> {
         data.rbracket = intro.rbracket;
         let id = self.ast.exprs.lambdas.push(data);
         self.ast.decls.set_closure(closure, id);
-        if let Some(c) = intro.captures.first() {
-            self.unsupported("lambda captures", c.loc);
-        }
         self.lambdas.push(LambdaScope {
             id,
             closure,
@@ -148,7 +151,10 @@ impl Sema<'_, '_> {
             body_open: false,
             explicit_constexpr: false,
             heads: self.templ.heads.len(),
+            cap_tys: Vec::new(),
+            init_caps: Vec::new(),
         });
+        self.act_on_explicit_captures(id, intro);
         id
     }
 
@@ -362,7 +368,12 @@ impl Sema<'_, '_> {
     /// state and the current full-expression's are saved, the
     /// parameters enter a new function scope.
     fn begin_lambda_body(&mut self, f: DeclId, explicit_constexpr: bool) {
-        let this_ty = self.current_this();
+        let outer_this = self.current_this();
+        let id = self.lambdas.last().map(|t| t.id);
+        let this_ty = match id {
+            Some(id) => self.lambda_body_this(id, outer_this),
+            None => outer_this,
+        };
         let fty = self.ast.decls.get(f).ty().unwrap_or(QualType::ERROR);
         let ret =
             self.ast.types.proto(fty).map_or(QualType::ERROR, kiln_ast::types::FuncProto::ret);
@@ -415,6 +426,9 @@ impl Sema<'_, '_> {
                 self.emit(self.incomplete_note(msg, pty));
             }
         }
+        if let Some(id) = id {
+            self.declare_init_captures(id, f);
+        }
         self.begin_function_body(f, ret);
         if let Some(state) = self.func.as_mut() {
             state.this_ty = this_ty;
@@ -466,6 +480,7 @@ impl Sema<'_, '_> {
         self.ctor_entity = top.saved_ctor_entity.take();
         self.ast.exprs.lambdas.get_mut(id).body = Some(body);
         let closure = top.closure;
+        self.finish_captures(id, closure, &top.cap_tys);
         if let Some(f) = top.call_op {
             self.add_function_pointer_conversion(id, closure, f, top.explicit_constexpr);
         }

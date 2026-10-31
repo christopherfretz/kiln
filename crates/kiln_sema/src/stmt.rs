@@ -152,7 +152,9 @@ impl Sema<'_, '_> {
         while self.ast.exprs.get(id).kind() == ExprKind::ParenExpr {
             id = self.ast.exprs.operand(id);
         }
-        if self.ast.exprs.get(id).kind() != ExprKind::DeclRefExpr {
+        if self.ast.exprs.get(id).kind() != ExprKind::DeclRefExpr
+            || self.ast.exprs.get(id).has(kiln_ast::expr::ExprFlags::REFERS_TO_ENCLOSING)
+        {
             return None;
         }
         let d = self.ast.exprs.decl(id);
@@ -642,7 +644,11 @@ impl Sema<'_, '_> {
             id = self.ast.exprs.operand(id);
         }
         let n = *self.ast.exprs.get(id);
-        if n.kind() != ExprKind::DeclRefExpr {
+        // A captured variable is not declared in the innermost function
+        // or lambda ([class.copy.elision]/3).
+        if n.kind() != ExprKind::DeclRefExpr
+            || n.has(kiln_ast::expr::ExprFlags::REFERS_TO_ENCLOSING)
+        {
             return e;
         }
         let d = self.ast.exprs.decl(id);

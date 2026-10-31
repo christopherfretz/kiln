@@ -41,7 +41,8 @@ pub(crate) fn needs_from(bits: DefinitionBits, implicit: u8, k: SpecialKind) -> 
                 && !ud(SpecialKind::Dtor)
         }
         SpecialKind::MoveAssign => {
-            !ud(SpecialKind::CopyCtor)
+            !bits.contains(DefinitionBits::LAMBDA_CAPTURES)
+                && !ud(SpecialKind::CopyCtor)
                 && !ud(SpecialKind::CopyAssign)
                 && !ud(SpecialKind::MoveCtor)
                 && !ud(SpecialKind::Dtor)

@@ -3264,6 +3264,14 @@ impl Sema<'_, '_> {
             // [expr.prim.lambda.closure]/2: a closure type is not an
             // aggregate.
             bits = bits.without(DefinitionBits::AGGREGATE);
+            if self
+                .ast
+                .decls
+                .record(r)
+                .is_some_and(|x| x.defn.contains(DefinitionBits::LAMBDA_CAPTURES))
+            {
+                bits = bits.with(DefinitionBits::LAMBDA_CAPTURES);
+            }
         }
         let fields: Vec<DeclId> = self.ast.decls.members(r).collect();
         let mut any_named = false;

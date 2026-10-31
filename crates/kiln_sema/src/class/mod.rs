@@ -401,6 +401,7 @@ impl Sema<'_, '_> {
     /// WP-066b).
     pub fn act_on_this(&mut self, loc: Loc) -> ExprId {
         if let Some(t) = self.current_this() {
+            self.note_this_use(loc);
             self.builder().this_expr(t, false, loc)
         } else {
             self.error(DiagId::sema_this_outside_member, loc);

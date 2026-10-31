@@ -401,6 +401,8 @@ impl Sema<'_, '_> {
                 continue;
             }
             self.mark_used(d);
+            let at = self.eloc(r);
+            self.capture_odr_use(d, at);
         }
         e
     }
@@ -494,7 +496,7 @@ impl Sema<'_, '_> {
     /// True if variable `d` has static storage duration ([basic.stc.static]):
     /// a namespace-scope variable or a `static`/`extern` local, not
     /// `thread_local`.
-    fn has_static_storage(&self, d: DeclId) -> bool {
+    pub(crate) fn has_static_storage(&self, d: DeclId) -> bool {
         let Some(v) = self.ast.decls.var(d) else { return false };
         if v.spec.tls() != kiln_ast::decl::TlsKind::None {
             return false;
@@ -682,7 +684,8 @@ impl Sema<'_, '_> {
             | ExprKind::CXXStaticCastExpr
             | ExprKind::CXXReinterpretCastExpr
             | ExprKind::CXXConstCastExpr
-            | ExprKind::CompoundLiteralExpr => Some((DiagId::sema_unused_expr, loc, Vec::new())),
+            | ExprKind::CompoundLiteralExpr
+            | ExprKind::LambdaExpr => Some((DiagId::sema_unused_expr, loc, Vec::new())),
             _ => None,
         }
     }
@@ -946,6 +949,7 @@ impl Sema<'_, '_> {
                 via.push(found.found.get(i).copied().unwrap_or(d));
             }
         }
+        self.note_this_use(loc);
         let this = self.builder().this_expr(this_ty, true, loc);
         let obj_ty = self.ast.types.pointee(this_ty).unwrap_or(QualType::ERROR);
         let set = crate::overload::OvlMember {
@@ -1061,6 +1065,11 @@ impl Sema<'_, '_> {
         {
             return self.recover_err(&[], loc);
         }
+        // clang `BuildDeclarationNameExpr`: "Only create DeclRefExpr's for
+        // valid Decl's" (an invalid variable's uses raise no more errors).
+        if matches!(n.kind(), DeclKind::Var | DeclKind::ParmVar) && n.has(DeclFlags::INVALID) {
+            return self.recover_err(&[], loc);
+        }
         // [dcl.spec.auto.general]/11: a placeholder variable's type is
         // not known inside its own initializer.
         if n.kind() == DeclKind::Var
@@ -1109,7 +1118,16 @@ impl Sema<'_, '_> {
         }
         self.diagnose_deprecated(d, loc);
         let nou = if self.unevaluated > 0 { NonOdrUse::Unevaluated } else { NonOdrUse::None };
-        let e = self.builder().decl_ref(d, ty, loc, extra, nou, ExprFlags::NONE);
+        // [expr.prim.id.unqual]/3: naming a variable captured by an
+        // enclosing lambda (spec/sema-lambda.md §3).
+        let (ty, flags) = match n.kind() {
+            DeclKind::Var | DeclKind::ParmVar => match self.capture_at_decl_ref(d, loc) {
+                Some(t) => (t, ExprFlags::REFERS_TO_ENCLOSING),
+                None => (ty, ExprFlags::NONE),
+            },
+            _ => (ty, ExprFlags::NONE),
+        };
+        let e = self.builder().decl_ref(d, ty, loc, extra, nou, flags);
         if defer {
             self.deferred_call_refs.push((e, d));
         }
@@ -1421,7 +1439,19 @@ impl Sema<'_, '_> {
         }
         if self.ast.types.effective_quals(t).is_const() {
             let base = self.ignore_parens(e);
-            if self.ast.exprs.get(base).kind() == ExprKind::DeclRefExpr {
+            if self.ast.exprs.get(base).kind() == ExprKind::DeclRefExpr
+                && self.ast.exprs.get(base).has(ExprFlags::REFERS_TO_ENCLOSING)
+                && let d = self.ast.exprs.decl(base)
+                && !self
+                    .ast
+                    .types
+                    .effective_quals(self.ast.decls.get(d).ty().unwrap_or(t))
+                    .is_const()
+            {
+                // [expr.prim.lambda.closure]/5: the copy is a member of
+                // the const closure object.
+                self.error(DiagId::sema_assign_captured_by_copy, loc);
+            } else if self.ast.exprs.get(base).kind() == ExprKind::DeclRefExpr {
                 let d = self.ast.exprs.decl(base);
                 let dt = self.ast.decls.get(d).ty().unwrap_or(t);
                 let msg = self

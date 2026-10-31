@@ -93,6 +93,7 @@ impl Sema<'_, '_> {
         if let Some(class) = self.implicit_object_class(d)
             && let Some((this_ty, _)) = self.this_class()
         {
+            self.note_this_use(loc);
             let this = self.builder().this_expr(this_ty, true, loc);
             let obj_ty = self.ast.types.pointee(this_ty).unwrap_or(QualType::ERROR);
             let e = self.member_of_object(this, obj_ty, class, true, d, shadow, nns, loc);
@@ -779,9 +780,30 @@ impl Sema<'_, '_> {
         if self.ast.exprs.get(b).kind() != ExprKind::CXXThisExpr {
             return false;
         }
-        let Some(f) = self.func.as_ref().map(|f| f.decl) else { return false };
+        let Some(mut f) = self.func.as_ref().map(|f| f.decl) else { return false };
+        // In a lambda, `this` is the enclosing member function's
+        // (spec/sema-lambda.md §3): the diagnostic names that function,
+        // and only if it is const (a `*this` copy is const otherwise).
+        let mut in_lambda = false;
+        while let Some(l) = self.lambda_of_call_op(f) {
+            let closure = self.ast.exprs.lambdas.get(l).closure;
+            let Some(p) = self.ast.decls.get(closure).ctx() else { return false };
+            f = p;
+            in_lambda = true;
+        }
         if !matches!(self.kind_of(f), DeclKind::CXXMethod | DeclKind::CXXConversion) {
             return false;
+        }
+        if in_lambda {
+            let fty = self.ast.decls.get(f).ty().unwrap_or(QualType::ERROR);
+            let konst = self
+                .ast
+                .types
+                .proto(self.ast.types.canonical(fty))
+                .is_some_and(|p| p.info().this_quals().is_const());
+            if !konst {
+                return false;
+            }
         }
         let msg = self.diag(DiagId::sema_const_member_assign, loc).arg(self.decl_name(f));
         let note = self
