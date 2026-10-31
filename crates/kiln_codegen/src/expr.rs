@@ -1610,6 +1610,8 @@ impl Cg<'_> {
                 let n = ast.exprs.get(c);
                 match n.kind() {
                     ExprKind::ParenExpr => c = ast.exprs.operand(c),
+                    // `f()` with `f` a function-reference template argument.
+                    ExprKind::SubstNonTypeTemplateParmExpr => c = ast.exprs.subst_replacement(c),
                     ExprKind::ImplicitCastExpr
                         if matches!(
                             ast.exprs.cast_kind(c),

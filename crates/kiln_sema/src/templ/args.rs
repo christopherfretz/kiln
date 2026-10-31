@@ -393,7 +393,10 @@ impl Sema<'_, '_> {
             // [temp.param]/8: a template parameter object (§6.10).
             return self.convert_class_nttp_arg(pty, e, at);
         }
-        if t.is_reference(pty) || t.is_array(ety) && !t.is_pointer(pty) {
+        if t.is_reference(pty) {
+            return self.convert_ref_nttp_arg(pty, e, at);
+        }
+        if t.is_array(ety) && !t.is_pointer(pty) {
             self.templ_unimplemented("non-type template parameter of class or reference type", at);
             return Err(());
         }

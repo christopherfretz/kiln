@@ -1093,14 +1093,12 @@ impl<'a> AstBuilder<'a> {
     /// a `TemplateParamObject` once substituted).
     fn decl_ref_category(&self, d: DeclId) -> ValueCategory {
         match self.ast.decls.get(d).kind() {
-            // [temp.param]/8: a class-type parameter names an object.
+            // [temp.param]/8: a class-type parameter names an object; a
+            // reference parameter names its referent.
             DeclKind::NonTypeTemplateParm
-                if self
-                    .ast
-                    .decls
-                    .get(d)
-                    .ty()
-                    .is_some_and(|t| self.ast.types.as_record(t).is_some()) =>
+                if self.ast.decls.get(d).ty().is_some_and(|t| {
+                    self.ast.types.as_record(t).is_some() || self.ast.types.is_reference(t)
+                }) =>
             {
                 ValueCategory::LValue
             }

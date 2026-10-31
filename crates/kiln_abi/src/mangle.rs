@@ -848,7 +848,21 @@ impl<'a> Mangler<'a> {
                     ast.types.canonical_view(ty),
                     TypeView::LValueRef(_) | TypeView::RValueRef(_)
                 );
+                let decayed = d.filter(|&d| {
+                    !is_ref && ast.decls.get(d).ty().is_some_and(|t| ast.types.is_array(t))
+                });
+                let pointee = ast.types.pointee(ty);
                 match d {
+                    Some(d) if decayed.is_some() && pointee.is_some() => {
+                        // `arr` decayed to `&arr[0]`: a subobject
+                        // expression (`Xadso <elem> L_Z <arr> E E E`, clang
+                        // `mangleTemplateArgValue` of an lvalue path).
+                        self.out.push_str("Xadso");
+                        self.ty(pointee.unwrap_or(ty).without_quals());
+                        self.out.push_str("L_Z");
+                        self.encoding(d, Structor::Complete);
+                        self.out.push_str("EEE");
+                    }
                     Some(d) => {
                         // The entity's encoding shares this symbol's
                         // substitutions.

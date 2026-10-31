@@ -4,16 +4,17 @@
 //! parameter objects ([temp.param]/8) class-type arguments designate.
 
 use kiln_ast::consts::{PtrBase, Scalar};
-use kiln_ast::decl::{Access, DeclFlags, DeclKind, DefinitionBits};
-use kiln_ast::expr::{ExprFlags, NonOdrUse, UnaryOp};
+use kiln_ast::decl::{Access, DeclFlags, DeclKind, DefinitionBits, VarStorage};
+use kiln_ast::expr::{ExprFlags, ExprKind, NonOdrUse, UnaryOp};
 use kiln_ast::types::{Quals, TemplateArg, TypeView};
 use kiln_ast::{ConstValueId, DeclId, ExprId, QualType};
 use kiln_diag::{Diag, DiagId};
-use kiln_oven::EvalContext;
+use kiln_oven::{EvalContext, EvalFailure, FailKind, Note};
 use kiln_source::Loc;
 
 use crate::Sema;
 use crate::init::Initializer;
+use crate::overload::IcsOptions;
 
 /// Recursion bound for the explanation walk (a class cannot contain
 /// itself, but a broken one may refer to itself through errors).
@@ -257,6 +258,114 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// Converts argument `e` of a reference-typed non-type template
+    /// parameter `pty` ([temp.arg.nontype]/2): the reference is bound as
+    /// in copy-initialization and the result must be a constant
+    /// expression designating an object or function with static storage;
+    /// the argument value is that address (a pointer value), keyed at the
+    /// canonical reference type.
+    pub(crate) fn convert_ref_nttp_arg(
+        &mut self,
+        pty: QualType,
+        e: ExprId,
+        at: Loc,
+    ) -> Result<TemplateArg, ()> {
+        if !self.check_nttp_type(pty, at) {
+            return Err(());
+        }
+        let canon = self.ast.types.canonical(pty);
+        // clang `CheckConvertedConstantExpression`: the conversion must
+        // exist and must not bind the reference to a temporary.
+        let info = self.arg_info(e);
+        let ety = self.ety(e);
+        if self.try_implicit_conversion(&info, pty, IcsOptions::NONE).is_bad() {
+            let d = self
+                .diag(DiagId::sema_cce_not_implicitly_convertible, at)
+                .arg(self.ty_arg(ety))
+                .arg(self.ty_arg(pty));
+            self.emit(d);
+            return Err(());
+        }
+        let c = self.perform_init(pty, Initializer::Expr(e), at, false);
+        if self.is_err_expr(c) || self.has_errors_in(c) {
+            return Err(());
+        }
+        let mut inner = c;
+        for _ in 0..MAX_DEPTH {
+            match self.ast.exprs.get(inner).kind() {
+                ExprKind::ImplicitCastExpr
+                | ExprKind::ExprWithCleanups
+                | ExprKind::ConstantExpr => {
+                    inner = self.ast.exprs.operand(inner);
+                }
+                _ => break,
+            }
+        }
+        if self.ast.exprs.get(inner).kind() == ExprKind::MaterializeTemporaryExpr {
+            let d = self
+                .diag(DiagId::sema_cce_ref_binds_temporary, at)
+                .arg(self.ty_arg(ety))
+                .arg(self.ty_arg(pty));
+            self.emit(d);
+            return Err(());
+        }
+        // The value is the referent's address: evaluate the built-in `&`
+        // of the bound glvalue (never an overloaded `operator&`).
+        let rt = self.ety(c);
+        let pt = self.ast.types.pointer_to(rt);
+        let loc = self.ast.exprs.get(c).loc();
+        let a = self.builder().unary(UnaryOp::AddrOf, c, pt, loc, ExprFlags::NONE);
+        let a = self.act_on_full_expr(a);
+        let r = self.eval_const(a, EvalContext::converted(at)).and_then(|v| {
+            // [temp.arg.nontype]/3: the referent has static storage
+            // duration (an automatic variable's address is not constant).
+            match self.ast.consts.scalar(v) {
+                Some(Scalar::Pointer { base: PtrBase::Decl(d), .. }) if self.is_automatic(d) => {
+                    let n = format!(
+                        "reference to '{}' is not a constant expression",
+                        self.decl_name(d)
+                    );
+                    let notes = vec![
+                        Note { loc: at, msg: n },
+                        Note { loc: self.ast.decls.get(d).loc(), msg: "declared here".into() },
+                    ];
+                    Err(EvalFailure { kind: FailKind::NotConstant, notes })
+                }
+                // Re-keyed at the reference type: printed without `&`
+                // (`T<gi>`), as clang.
+                Some(Scalar::Pointer { base, offset, .. }) => Ok(self
+                    .ast
+                    .consts
+                    .push_scalar(Scalar::Pointer { ty: canon, base, offset })
+                    .unwrap_or(v)),
+                _ => Ok(v),
+            }
+        });
+        match r {
+            Ok(v) => Ok(TemplateArg::value(canon, v)),
+            Err(f) => {
+                let d = self.diag(DiagId::sema_expr_not_cce, at).arg("non-type template argument");
+                let d = Self::with_failure_notes(d, f);
+                self.emit(d);
+                Err(())
+            }
+        }
+    }
+
+    /// Whether `d` is a variable or parameter with automatic storage
+    /// duration.
+    fn is_automatic(&self, d: DeclId) -> bool {
+        let n = self.ast.decls.get(d);
+        match n.kind() {
+            DeclKind::ParmVar => true,
+            DeclKind::Var => {
+                self.ast.decls.var(d).is_some_and(|v| v.spec.storage() == VarStorage::None)
+                    && n.ctx().is_some_and(|c| self.ast.decls.get(c).kind().is_function())
+            }
+            _ => false,
+        }
+    }
+
     /// The expression a non-type template argument value of class,
     /// pointer or null type stands for when substituted (clang's
     /// `BuildExpressionFromNonTypeTemplateArgument`): an lvalue naming
@@ -302,6 +411,17 @@ impl Sema<'_, '_> {
                 let t = &self.ast.types;
                 if t.is_reference(ty) {
                     return Some(r);
+                }
+                let rt = self.ety(r);
+                if self.ast.types.is_array(rt) {
+                    // `arr` as a pointer argument: the array decays ([conv.array]).
+                    return crate::conv::implicit_convert(
+                        self,
+                        r,
+                        ty,
+                        crate::conv::ConvCtx::Initialization,
+                    )
+                    .ok();
                 }
                 let a = self.act_on_unary(UnaryOp::AddrOf, r, loc);
                 let at = self.ety(a);

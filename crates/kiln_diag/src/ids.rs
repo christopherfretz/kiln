@@ -1220,6 +1220,7 @@ diag_ids! {
     note_non_literal_base_class = Note (2) "{0} is not literal because it has base class {1} of non-literal type";
     note_non_literal_field = Note (3) "{0} is not literal because it has data member {1} of non-literal type {2}";
     note_non_literal_non_constexpr_dtor = Note (1) "{0} is not literal because its destructor is not constexpr";
+    sema_cce_ref_binds_temporary = Error (2) "conversion from {0} to {1} in converted constant expression would bind reference to a temporary";
 }
 
 impl DiagId {
