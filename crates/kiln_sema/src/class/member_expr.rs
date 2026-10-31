@@ -313,7 +313,8 @@ impl Sema<'_, '_> {
         let vk =
             if arrow { ValueCategory::PRValue } else { self.ast.exprs.get(b).value_category() };
         let to_ty = |s: &mut Self, class: DeclId| {
-            let t = s.tag_type(class);
+            // clang converts to the bare `RecordType`, which prints scoped.
+            let t = s.scoped_class_type(class);
             let t = if to_q.is_empty() { t } else { s.ast.types.qualify(t, to_q) };
             if arrow { s.ast.types.pointer_to(t) } else { t }
         };

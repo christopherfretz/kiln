@@ -5,7 +5,7 @@
 //! comparisons — and the `CXXOperatorCallExpr` of the selected function.
 
 use kiln_ast::decl::{DeclFlags, DeclKind, Defaulted};
-use kiln_ast::expr::{BinaryOp, DeclRefExtra, UnaryOp, ValueCategory};
+use kiln_ast::expr::{BinaryOp, DeclRefExtra, ExprKind, UnaryOp, ValueCategory};
 use kiln_ast::names::{DeclName, OverloadedOperator as OO};
 use kiln_ast::types::{Quals, RefQual, TypeView};
 use kiln_ast::{DeclId, ExprId, QualType};
@@ -172,6 +172,8 @@ struct Chosen {
     f: DeclId,
     found: DeclId,
     rewrite: Rewrite,
+    /// Found only by argument-dependent lookup.
+    adl: bool,
 }
 
 impl Sema<'_, '_> {
@@ -238,6 +240,113 @@ impl Sema<'_, '_> {
         self.ast.types.as_record(t).is_some() || self.ast.types.as_enum(t).is_some()
     }
 
+    /// Builds and resolves the candidate set of operator `op` (`form`)
+    /// applied to `ops` (`nargs` of them written; `brs` the braced
+    /// operands): [over.match.oper]/3. With `!overloadable`, only the
+    /// built-in candidates (clang's defaulted-comparison analyzer for
+    /// operands of non-class type). Returns the set (for notes; the
+    /// caller ends it), the outcome, the operand types, and whether
+    /// reversed candidates were considered.
+    #[allow(clippy::too_many_arguments, reason = "the operator form and its operands")]
+    pub(crate) fn oper_set(
+        &mut self,
+        form: OperForm,
+        op: OO,
+        ops: &[ExprId],
+        brs: &[Option<InitList>],
+        nargs: usize,
+        loc: Loc,
+        rewrites: bool,
+        overloadable: bool,
+    ) -> (OverloadCandidateSet, OvlOutcome, Vec<QualType>, bool) {
+        let member_only = matches!(
+            form,
+            OperForm::Subscript | OperForm::Call | OperForm::Binary(BinaryOp::Assign)
+        );
+        let a0 = ops[0];
+        let extra =
+            if rewrites && matches!(form, OperForm::Binary(_)) { rewritten_of(op) } else { None };
+        let reversible = rewrites
+            && matches!(form, OperForm::Binary(_))
+            && (extra.is_some() || allows_reversed(op));
+        let active = self.cmp_active();
+        let mut set = self.begin_set(SetKind::Normal, loc);
+        set.exclude = active;
+        set.oper = true;
+        set.note_extra_args = usize::from(form != OperForm::Call);
+        set.object = Some(self.arg_info(a0));
+        let mark = self.push_call_args(&mut set, &ops[1..], &brs[1..]);
+        let types: Vec<QualType> = ops.iter().map(|&e| self.ety(e)).collect();
+        // [over.match.oper]/3.2: non-member candidates from unqualified
+        // lookup, each with its reversed form (/3.4.4).
+        let mut fns: Vec<(DeclId, DeclId)> = Vec::new();
+        if overloadable && !member_only {
+            // A defaulted comparison uses the lookups captured at its
+            // `= default` ([class.compare.default]/1; clang's
+            // `DefaultedOrDeletedFunctionInfo` lookups).
+            let captured = active.and_then(|f| self.special.cmp.lookups.get(&f).cloned());
+            for name in [Some(op), extra].into_iter().flatten() {
+                let dn = DeclName::operator(name);
+                let found: Vec<(DeclId, DeclId)> = if let Some(c) = &captured {
+                    c.iter().copied().filter(|&(d, _)| self.ast.decls.get(d).name() == dn).collect()
+                } else {
+                    let found = self.lookup_operator_name(dn);
+                    found.decls.iter().copied().zip(found.found.iter().copied()).collect()
+                };
+                for (d, f) in found {
+                    let first = self.ast.first(d);
+                    if !fns.iter().any(|&(o, _)| self.ast.first(o) == first) {
+                        fns.push((d, f));
+                    }
+                }
+            }
+        }
+        let n_unqual = fns.len();
+        for &(d, f) in &fns {
+            self.add_nonmember_oper(&mut set, d, f, op, extra, ops, &types, false);
+        }
+        // /3.1: member candidates of the first operand's class, then
+        // the reversed and rewritten ones.
+        if overloadable {
+            self.add_member_opers(&mut set, op, ops, Rewrite::None, loc);
+            // [over.call.object]/2: the surrogate call functions.
+            if form == OperForm::Call {
+                self.add_surrogates(&mut set, a0);
+            }
+            if reversible && allows_reversed(op) {
+                self.add_member_opers(&mut set, op, ops, Rewrite::Reversed, loc);
+            }
+            if let Some(x) = extra {
+                self.add_member_opers(&mut set, x, ops, Rewrite::Different, loc);
+                if allows_reversed(x) {
+                    self.add_member_opers(&mut set, x, ops, Rewrite::DifferentReversed, loc);
+                }
+            }
+            // /3.2: argument-dependent lookup (not for `=`, `[]`, `()`).
+            if !member_only {
+                let adl_args: Vec<ExprId> = ops[..nargs]
+                    .iter()
+                    .zip(brs)
+                    .filter(|(_, b)| b.is_none())
+                    .map(|(&e, _)| e)
+                    .collect();
+                for name in [Some(op), extra].into_iter().flatten() {
+                    self.adl_lookup_dn(DeclName::operator(name), &adl_args, &mut fns);
+                }
+                let adl: Vec<(DeclId, DeclId)> = fns[n_unqual..].to_vec();
+                for (d, f) in adl {
+                    self.add_nonmember_oper(&mut set, d, f, op, extra, ops, &types, true);
+                }
+            }
+        }
+        // /3.3: built-in candidates.
+        self.add_builtin_candidates(&mut set, op, form, ops, &types);
+        self.order_template_candidates(&mut set);
+        let out = self.best_viable(&mut set);
+        self.ovl.lists.truncate(mark);
+        (set, out, types, reversible)
+    }
+
     /// Resolves the operator `form` applied to `args` (the first operand
     /// first; `braced` the braced-init-list operands): an overloaded
     /// operator if an operand has class or enumeration type
@@ -267,10 +376,6 @@ impl Sema<'_, '_> {
         let Some(op) = form.oper() else { return OperResult::Builtin };
         let Some(&a0) = args.first() else { return OperResult::Builtin };
         let is_braced = |i: usize| braced.get(i).is_some_and(Option::is_some);
-        let member_only = matches!(
-            form,
-            OperForm::Subscript | OperForm::Call | OperForm::Binary(BinaryOp::Assign)
-        );
         let use_it = match form {
             OperForm::Call => self.operand_class(a0).is_some(),
             // clang `ActOnArraySubscriptExpr`: a class object or a class
@@ -307,68 +412,8 @@ impl Sema<'_, '_> {
                 let _ = c;
             }
         }
-        let extra =
-            if rewrites && matches!(form, OperForm::Binary(_)) { rewritten_of(op) } else { None };
-        let reversible = rewrites
-            && matches!(form, OperForm::Binary(_))
-            && (extra.is_some() || allows_reversed(op));
-        let mut set = self.begin_set(SetKind::Normal, loc);
-        set.oper = true;
-        set.note_extra_args = usize::from(form != OperForm::Call);
-        set.object = Some(self.arg_info(a0));
-        let mark = self.push_call_args(&mut set, &ops[1..], &brs[1..]);
-        let types: Vec<QualType> = ops.iter().map(|&e| self.ety(e)).collect();
-        // [over.match.oper]/3.2: non-member candidates from unqualified
-        // lookup, each with its reversed form (/3.4.4).
-        let mut fns: Vec<(DeclId, DeclId)> = Vec::new();
-        if !member_only {
-            for name in [Some(op), extra].into_iter().flatten() {
-                let found = self.lookup_operator_name(DeclName::operator(name));
-                for (&d, &f) in found.decls.iter().zip(&found.found) {
-                    let first = self.ast.first(d);
-                    if !fns.iter().any(|&(o, _)| self.ast.first(o) == first) {
-                        fns.push((d, f));
-                    }
-                }
-            }
-        }
-        let n_unqual = fns.len();
-        for &(d, f) in &fns {
-            self.add_nonmember_oper(&mut set, d, f, op, extra, &ops, &types, false);
-        }
-        // /3.1: member candidates of the first operand's class, then
-        // the reversed and rewritten ones.
-        self.add_member_opers(&mut set, op, &ops, Rewrite::None, loc);
-        // [over.call.object]/2: the surrogate call functions.
-        if form == OperForm::Call {
-            self.add_surrogates(&mut set, a0);
-        }
-        if reversible && allows_reversed(op) {
-            self.add_member_opers(&mut set, op, &ops, Rewrite::Reversed, loc);
-        }
-        if let Some(x) = extra {
-            self.add_member_opers(&mut set, x, &ops, Rewrite::Different, loc);
-            if allows_reversed(x) {
-                self.add_member_opers(&mut set, x, &ops, Rewrite::DifferentReversed, loc);
-            }
-        }
-        // /3.2: argument-dependent lookup (not for `=`, `[]`, `()`).
-        if !member_only {
-            let adl_args: Vec<ExprId> =
-                args.iter().enumerate().filter(|&(i, _)| !is_braced(i)).map(|(_, &e)| e).collect();
-            for name in [Some(op), extra].into_iter().flatten() {
-                self.adl_lookup_dn(DeclName::operator(name), &adl_args, &mut fns);
-            }
-            let adl: Vec<(DeclId, DeclId)> = fns[n_unqual..].to_vec();
-            for (d, f) in adl {
-                self.add_nonmember_oper(&mut set, d, f, op, extra, &ops, &types, true);
-            }
-        }
-        // /3.3: built-in candidates.
-        self.add_builtin_candidates(&mut set, op, form, &ops, &types);
-        self.order_template_candidates(&mut set);
-        let out = self.best_viable(&mut set);
-        self.ovl.lists.truncate(mark);
+        let (set, out, types, reversible) =
+            self.oper_set(form, op, &ops, &brs, args.len(), loc, rewrites, true);
         let undecided = set.uncertain
             || (set.skipped_templates
                 && !matches!(out, OvlOutcome::Success(b) | OvlOutcome::Deleted(b)
@@ -421,7 +466,8 @@ impl Sema<'_, '_> {
                     self.diagnose_reversed_ambiguity(&set, b, op, spelling, &types, loc);
                 }
                 let c = set.cand(b);
-                let chosen = Chosen { f: c.func(), found: c.found, rewrite: c.rewrite };
+                let chosen =
+                    Chosen { f: c.func(), found: c.found, rewrite: c.rewrite, adl: c.adl_only };
                 self.end_set(set);
                 return self.finish_operator(form, op, chosen, &ops, &mut brs, args, loc, end);
             }
@@ -443,6 +489,19 @@ impl Sema<'_, '_> {
                             .diag(DiagId::sema_ovl_deleted_special_oper, loc)
                             .arg(self.ty_arg(t0))
                             .arg(k as u8);
+                        for n in self.deleted_function_notes(f, 0) {
+                            m = m.with_note(n);
+                        }
+                        m
+                    }
+                    // clang's `err_ovl_deleted_comparison`: a defaulted
+                    // comparison that is implicitly deleted explains why.
+                    (_, None) if implicit && self.cmp_kind(f).is_some() => {
+                        let fd = self.decl_arg(f);
+                        let mut m = self
+                            .diag(DiagId::sema_ovl_deleted_comparison, loc)
+                            .arg(self.ty_arg(t0))
+                            .arg(&fd);
                         for n in self.deleted_function_notes(f, 0) {
                             m = m.with_note(n);
                         }
@@ -935,7 +994,7 @@ impl Sema<'_, '_> {
         loc: Loc,
         end: Loc,
     ) -> OperResult {
-        let Chosen { f, found, rewrite } = chosen;
+        let Chosen { f, found, rewrite, adl } = chosen;
         let mut order: Vec<ExprId> = ops.to_vec();
         if rewrite.is_reversed() {
             order.swap(0, 1);
@@ -969,6 +1028,16 @@ impl Sema<'_, '_> {
         let Some(call) = self.build_operator_call(f, found, fop, &order, brs, loc, end) else {
             return OperResult::Done(self.recover_err(written, loc));
         };
+        if adl {
+            // clang's `IsADLCandidate` (dumped `adl`).
+            let mut c = call;
+            while self.ast.exprs.get(c).kind() == ExprKind::CXXBindTemporaryExpr {
+                c = self.ast.exprs.operand(c);
+            }
+            if self.ast.exprs.get(c).kind() == ExprKind::CXXOperatorCallExpr {
+                self.ast.exprs.set_call_adl(c);
+            }
+        }
         let OperForm::Binary(bop) = form else { return OperResult::Done(call) };
         if rewrite == Rewrite::None {
             return OperResult::Done(call);
@@ -1006,6 +1075,14 @@ impl Sema<'_, '_> {
         loc: Loc,
         end: Loc,
     ) -> Option<ExprId> {
+        if !self.in_template() && self.is_defaulted_cmp(f) {
+            // The exception specification is part of the type the callee
+            // names (clang `CreateFunctionRefExpr`, C++17): a defaulted
+            // comparison is defined (odr-use) and then its deferred
+            // specification is resolved from the body.
+            self.define_cmp_on_use(f, loc);
+            self.resolve_exception_spec(f, loc);
+        }
         let fty = self.ast.decls.get(f).ty().unwrap_or(QualType::ERROR);
         let proto = self.sugared_proto(fty)?;
         let method = self.kind_of(f) == DeclKind::CXXMethod;

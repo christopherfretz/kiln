@@ -862,8 +862,7 @@ Where the code differs from (or details) the design above:
   `operator delete` without an exception specification is implicitly
   `noexcept` ([except.spec]/9).
 - **Gaps (owners).** Reversed and rewritten operator function template
-  candidates are not formed (see §10.7). Builtin `<=>` on scalars reports "not supported yet" where
-  clang reports the missing `std::strong_ordering` (WP-082). No access
+  candidates are not formed (see §10.7). No access
   check on class `operator new`/`delete`; no destroying
   `operator delete` (WP-061 follow-up). `x.operator+=(2)` (member access
   naming an operator-function-id) is a parse error: `act_on_member` and
@@ -873,6 +872,17 @@ Where the code differs from (or details) the design above:
   `aka` of a template specialization with an expression argument prints
   `'T<0 + 1>' (aka 'T<1>')` where clang prints no `aka` (types/print).
   `ovl.*` counters are not printed by the driver (§10.5).
+- **Landed (WP-082).** The built-in `<=>` on scalars
+  ([expr.spaceship]) yields the comparison category, or reports
+  `sema_cmp_category_not_found` as clang does. The `adl` flag is set on
+  a `CXXOperatorCallExpr` whose operator was found only by ADL (not yet on
+  ordinary calls). A defaulted comparison is kept out of the candidate
+  sets of its own subobject comparisons (`OverloadCandidateSet.exclude`).
+  Those comparisons use the operator lookups captured at its
+  `= default`. Selecting a deleted defaulted comparison reports
+  `sema_ovl_deleted_comparison` (`object of type 'A' cannot be compared
+  because its 'operator==' is implicitly deleted`) followed by the
+  analyzer's notes (sema-class.md §4.12).
 
 ### 10.7 Landed (WP-071): template candidates
 - `add_template_candidate` (`call.rs`) adds the specialization

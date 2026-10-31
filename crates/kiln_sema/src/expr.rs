@@ -1683,7 +1683,7 @@ impl Sema<'_, '_> {
 
     // -- binary operators --------------------------------------------------------
 
-    fn invalid_operands(&mut self, l: ExprId, r: ExprId, loc: Loc) -> ExprId {
+    pub(crate) fn invalid_operands(&mut self, l: ExprId, r: ExprId, loc: Loc) -> ExprId {
         let msg = self
             .diag(DiagId::sema_invalid_operands, loc)
             .arg(self.ty_arg(self.ety(l)))
@@ -1692,7 +1692,13 @@ impl Sema<'_, '_> {
         self.recover_err(&[l, r], loc)
     }
 
-    fn conv_failed(&mut self, err: &ConvError, l: ExprId, r: ExprId, loc: Loc) -> ExprId {
+    pub(crate) fn conv_failed(
+        &mut self,
+        err: &ConvError,
+        l: ExprId,
+        r: ExprId,
+        loc: Loc,
+    ) -> ExprId {
         self.emit_conv_error(err.clone(), loc);
         self.recover_err(&[l, r], loc)
     }
@@ -1818,6 +1824,7 @@ impl Sema<'_, '_> {
             | BinaryOp::GE
             | BinaryOp::EQ
             | BinaryOp::NE => self.comparison(op, l, r, loc),
+            BinaryOp::Cmp => self.builtin_three_way(l, r, loc),
             BinaryOp::PtrMemD | BinaryOp::PtrMemI => self.act_on_ptr_mem(op, l, r, loc),
             _ => {
                 self.unsupported(&format!("operator '{}'", op.spelling()), loc);
@@ -2025,7 +2032,11 @@ impl Sema<'_, '_> {
 
     /// The composite pointer type of two pointer operands
     /// ([expr.type]/4), converting the operands to it.
-    fn composite_pointer(&mut self, l: ExprId, r: ExprId) -> Option<(ExprId, ExprId, QualType)> {
+    pub(crate) fn composite_pointer(
+        &mut self,
+        l: ExprId,
+        r: ExprId,
+    ) -> Option<(ExprId, ExprId, QualType)> {
         let (lt, rt) = (self.ety(l), self.ety(r));
         let (lp, rp) = (
             self.ast.types.is_pointer(lt) || self.is_nullptr_type(lt),
@@ -2104,7 +2115,7 @@ impl Sema<'_, '_> {
         }
     }
 
-    fn is_member_pointer(&self, t: QualType) -> bool {
+    pub(crate) fn is_member_pointer(&self, t: QualType) -> bool {
         matches!(self.ast.types.canonical_view(t), TypeView::MemberPointer { .. })
     }
 

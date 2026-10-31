@@ -609,6 +609,12 @@ stores ids.
   type, and a written qualified type `N::E`, print `'E':'N::E'` in kiln
   but `'N::E'` in clang (kiln makes no `Elaborated` node carrying the
   qualifier there).
+  Comparison category types are made by sema, not written, and clang
+  prints them as `'std::strong_ordering'`. kiln gives them `Elaborated`
+  sugar with the enclosing non-inline namespaces as the qualifier
+  (`scoped_class_type`, WP-082). A diagnostic's `aka` still shows the
+  inline namespace (`'std::S' (aka 'std::__1::S')`), whereas clang
+  suppresses inline namespaces there (printer follow-up).
 - **R5 A thread-safe `&self` interner (sharded locks, as
   `kiln_lex::Interner`).** Sema is single-threaded per TU (spec/ast.md
   §13 Q8); parallelism is across TUs. A lock per type construction costs

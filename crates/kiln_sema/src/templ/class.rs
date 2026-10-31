@@ -1036,6 +1036,11 @@ impl Substituter<'_, '_, '_> {
                 return Ok(r.filter(|&x| self.sema.kind_of(x) != DeclKind::Friend));
             }
             DeclKind::Empty => return Ok(None),
+            // A friend function is in its class's member list as well as
+            // in its FriendDecl, which instantiates it.
+            DeclKind::Function if n.misc().friend() != kiln_ast::decl::FriendKind::None => {
+                return Ok(None);
+            }
             DeclKind::CXXRecord => self.member_class_decl(m)?,
             DeclKind::ClassTemplate
             | DeclKind::FunctionTemplate

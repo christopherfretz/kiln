@@ -2523,7 +2523,8 @@ impl<'a> AstBuilder<'a> {
 
     /// An `OpaqueValueExpr` of type `ty` with no source expression: the
     /// exception object a handler's variable is copy-initialized from
-    /// ([except.handle]/15).
+    /// ([except.handle]/15), or a defaulted comparison's analyzer operands
+    /// (`Xi, Xi`, clang's `DefaultedComparisonAnalyzer`).
     pub fn opaque_value_of(&mut self, ty: QualType, vc: ValueCategory, loc: Loc) -> ExprId {
         self.push_expr(
             ExprKind::OpaqueValueExpr,

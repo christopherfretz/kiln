@@ -36,12 +36,22 @@ use crate::conv::{self, ConvCtx};
 /// `CodeSynthesisContext::DefiningSynthesizedFunction`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct SynthContext {
-    /// The member (its first declaration).
+    /// The member (its first declaration; for a defaulted comparison, the
+    /// declaration defaulted).
     pub member: DeclId,
-    /// Which special member it is.
-    pub kind: SpecialKind,
+    /// Which function it is.
+    pub kind: SynthKind,
     /// The use that required the definition.
     pub loc: Loc,
+}
+
+/// What [`SynthContext::member`] is (clang `DefaultedFunctionKind`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SynthKind {
+    /// A special member function.
+    Special(SpecialKind),
+    /// A defaulted comparison operator ([class.compare.default]).
+    Comparison(crate::class::compare::CmpKind),
 }
 
 /// How a constructor initializes the subobjects it has no
@@ -155,7 +165,7 @@ struct InitInfo {
 }
 
 /// The state saved around an implicit definition.
-struct Saved {
+pub(crate) struct Saved {
     ctx: DeclId,
     func: Option<crate::stmt::FnState>,
     cleanup: super::super::CleanupState,
@@ -185,20 +195,29 @@ impl Sema<'_, '_> {
             .synth
             .iter()
             .rev()
-            .map(|c| {
-                let spec = self.ast.decls.function(c.member).map(|x| x.spec).unwrap_or_default();
-                let class = self.ast.decls.get(c.member).ctx().unwrap_or(self.ast.tu);
-                self.diag(DiagId::note_member_synthesized_at, c.loc)
-                    .arg(u8::from(spec.defaulted() == Defaulted::Explicit))
-                    .arg(c.kind.index())
-                    .arg(self.ty_arg(self.tag_type(class)))
+            .map(|c| match c.kind {
+                SynthKind::Special(kind) => {
+                    let spec =
+                        self.ast.decls.function(c.member).map(|x| x.spec).unwrap_or_default();
+                    let class = self.ast.decls.get(c.member).ctx().unwrap_or(self.ast.tu);
+                    self.diag(DiagId::note_member_synthesized_at, c.loc)
+                        .arg(u8::from(spec.defaulted() == Defaulted::Explicit))
+                        .arg(kind.index())
+                        .arg(self.ty_arg(self.tag_type(class)))
+                }
+                SynthKind::Comparison(k) => {
+                    let class = self.cmp_class(c.member).unwrap_or(self.ast.tu);
+                    self.diag(DiagId::note_defaulted_cmp_synthesized_at, c.loc)
+                        .arg(k.index())
+                        .arg(self.ty_arg(self.tag_type(class)))
+                }
             })
             .collect();
         self.synth_noted.set(n);
         d.with_context_notes(notes)
     }
 
-    fn push_synth(&mut self, member: DeclId, kind: SpecialKind, loc: Loc) -> Saved {
+    pub(crate) fn push_synth(&mut self, member: DeclId, kind: SynthKind, loc: Loc) -> Saved {
         self.synth.push(SynthContext { member, kind, loc });
         let saved = Saved {
             ctx: self.ctx,
@@ -212,15 +231,14 @@ impl Sema<'_, '_> {
         };
         self.ctx = member;
         let fty = self.ast.decls.get(member).ty().unwrap_or(QualType::ERROR);
-        let ret =
-            self.ast.types.proto(fty).map_or(QualType::ERROR, kiln_ast::types::FuncProto::ret);
+        let ret = self.sugared_proto(fty).map_or(QualType::ERROR, |p| p.ret());
         let mut st = crate::stmt::FnState::new(member, ret);
         st.this_ty = self.method_this_type(member);
         self.func = Some(st);
         saved
     }
 
-    fn pop_synth(&mut self, saved: Saved) {
+    pub(crate) fn pop_synth(&mut self, saved: Saved) {
         if self.synth_noted.get() == self.synth.len() {
             self.synth_noted.set(0);
         }
@@ -259,7 +277,7 @@ impl Sema<'_, '_> {
         {
             return;
         }
-        let saved = self.push_synth(f, kind, loc);
+        let saved = self.push_synth(f, SynthKind::Special(kind), loc);
         let ok = match kind {
             SpecialKind::DefaultCtor => self.define_ctor(f, class, ImplicitInit::Default),
             SpecialKind::CopyCtor => self.define_ctor(f, class, ImplicitInit::Copy),

@@ -5,7 +5,7 @@ use std::sync::Arc;
 use kiln_source::symbol::Interner;
 
 use crate::attr::AttrArena;
-use crate::class::{ClassCache, ClassVirtuals, VTableLayout};
+use crate::class::{ClassCache, ClassVirtuals, CmpCategories, VTableLayout};
 use crate::consts::ConstStore;
 use crate::decl::{
     DeclArena, DeclFlags, DeclKind, DeclMisc, EnumData, NewDecl, Payload, ScopeData,
@@ -65,6 +65,9 @@ pub struct Ast {
     /// Itanium vtable layouts (computed by `kiln_abi::vtable`,
     /// insert-only).
     pub vtables: ClassCache<VTableLayout>,
+    /// The validated `<compare>` comparison category classes (spec/sema-class.md
+    /// §4.4; recorded by sema, read by the Oven and codegen).
+    pub cmp_categories: CmpCategories,
     /// The `TranslationUnitDecl`.
     pub tu: DeclId,
     symbols: Arc<Interner>,
@@ -114,6 +117,7 @@ impl Ast {
             layouts: LayoutCache::default(),
             virtuals: ClassCache::default(),
             vtables: ClassCache::default(),
+            cmp_categories: CmpCategories::default(),
             tu,
             symbols,
             inst: InstantiationMeter::default(),

@@ -33,7 +33,9 @@ use kiln_source::fx::{FxHashMap, FxHashSet};
 
 use crate::Sema;
 
-pub(crate) use define::{CtorCall, DeletedAs, DiagSites, ImplicitInit, InitEntity, SynthContext};
+pub(crate) use define::{
+    CtorCall, DeletedAs, DiagSites, ImplicitInit, InitEntity, SynthContext, SynthKind,
+};
 pub(crate) use deletion::Selected;
 use uses::PendingDeleted;
 
@@ -185,6 +187,8 @@ pub(crate) struct SpecialState {
     /// The shared `false` operand of the resolved `noexcept(false)`
     /// specifications of implicit special members (`excspec`).
     pub noexcept_false: Option<ExprId>,
+    /// Defaulted comparison operator state (`class/compare.rs`).
+    pub cmp: crate::class::compare::CompareState,
 }
 
 impl Sema<'_, '_> {
@@ -318,6 +322,12 @@ impl Sema<'_, '_> {
         if self.ast.decls.get(f).flags().contains(DeclFlags::INVALID) {
             return;
         }
+        // `= default` in the class is a definition there: implicitly
+        // inline ([class.mfct]/1; clang `setImplicitlyInline` for a
+        // defaulted function definition in a record).
+        if self.ast.decls.lexical_ctx(f).is_some_and(|c| self.kind_of(c) == DeclKind::CXXRecord) {
+            self.ast.decls.mark_function(f, FnSpec::new().with_implicit_inline(true));
+        }
         let Some(kind) = self.special_kind_of(f) else {
             let name = self.ast.decls.get(f).name();
             let op = match self.ast.names.view(name) {
@@ -336,8 +346,7 @@ impl Sema<'_, '_> {
                 return;
             }
             if op.is_some_and(is_comparison) {
-                // todo(WP-068b): defaulted comparison operators.
-                self.unsupported("defaulted comparison operators", loc);
+                self.defaulted_comparison(f, loc);
             } else {
                 self.error(DiagId::sema_default_not_special, loc);
             }

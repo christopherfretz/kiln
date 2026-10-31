@@ -98,6 +98,7 @@ impl Sema<'_, '_> {
     /// even odr-used); then `f` is odr-used.
     pub(crate) fn mark_function_referenced(&mut self, f: DeclId, loc: Loc) {
         self.ast.decls.set_flags(f, DeclFlags::REFERENCED);
+        self.define_cmp_on_use(f, loc);
         self.exc_spec_needed(f, loc);
         if self.unevaluated > 0 || self.in_template() {
             return;

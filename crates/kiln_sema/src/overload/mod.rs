@@ -283,6 +283,10 @@ pub(crate) struct OverloadCandidateSet {
     /// ([over.match.best.general]/2.5), precomputed by
     /// `order_template_candidates` because `better` cannot deduce.
     pub tmpl_order: Vec<(u32, u32)>,
+    /// A function never added as a candidate: the defaulted comparison
+    /// being analyzed or synthesized ([class.compare.default]/1, clang's
+    /// `DefaultedFn` exclusion). Compared by first declaration.
+    pub exclude: Option<DeclId>,
 }
 
 impl Default for OverloadCandidateSet {
@@ -303,6 +307,7 @@ impl Default for OverloadCandidateSet {
             note_extra_args: 0,
             builtin_op: None,
             tmpl_order: Vec::new(),
+            exclude: None,
         }
     }
 }
@@ -325,6 +330,7 @@ impl OverloadCandidateSet {
         self.note_extra_args = 0;
         self.builtin_op = None;
         self.tmpl_order.clear();
+        self.exclude = None;
     }
 
     /// The conversion sequences of candidate `c`.

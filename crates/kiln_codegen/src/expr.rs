@@ -2071,6 +2071,7 @@ impl Cg<'_> {
                         | CastKind::LValueToRValue
                         | CastKind::LValueToRValueBitCast
                         | CastKind::ConstructorConversion
+                        | CastKind::UserDefinedConversion
                 ) =>
             {
                 let s = ast.exprs.operand(e);
@@ -2108,8 +2109,77 @@ impl Cg<'_> {
                 self.memcpy(dest, V::C(gval(g)), align, size, false);
                 Ok(())
             }
+            ExprKind::BinaryOperator if ast.exprs.binary_op(e) == BinaryOp::Cmp => {
+                self.agg_three_way(e, dest)
+            }
             k => err(self.loc_of(e), format!("aggregate expression {k:?} is not supported yet")),
         }
+    }
+
+    /// The builtin three-way comparison `e` into the comparison-category
+    /// object at `dest`: clang `AggExprEmitter::VisitBinCmp`, a chain of
+    /// selects over the category's integer values stored into its only
+    /// field.
+    fn agg_three_way(&mut self, e: ExprId, dest: Addr) -> R<()> {
+        use kiln_ast::class::{CmpCategory, CmpResult};
+        let ast = self.ast;
+        let q = ast.exprs.get(e).ty();
+        let rd = ast.types.as_record(q).and_then(|d| ast.definition(d));
+        let Some(info) = rd.and_then(|d| ast.cmp_categories.for_record(d)).copied() else {
+            return err(self.loc_of(e), "comparison category type not recorded");
+        };
+        let [l, r] = ast.exprs.operands(e);
+        let lq = ast.exprs.get(l).ty();
+        let lv = self.emit_scalar(l)?;
+        let rv = self.emit_scalar(r)?;
+        let fq = ast.decls.get(info.field).ty().unwrap_or(q);
+        let fty = self.mty(fq);
+        let lt = self.f.fir.ty(&self.m, lv);
+        let float = self.is_float_ty(lt);
+        let signed = !ast.types.is_pointer(lq) && self.is_signed(lq);
+        let cmp = |cg: &mut Self, k: CmpResult| -> V {
+            if float {
+                let p = match k {
+                    CmpResult::Less => FloatPredicate::Olt,
+                    CmpResult::Greater => FloatPredicate::Ogt,
+                    _ => FloatPredicate::Oeq,
+                };
+                cg.fcmp(p, lv, rv)
+            } else {
+                let p = match (k, signed) {
+                    (CmpResult::Less, true) => IntPredicate::Slt,
+                    (CmpResult::Less, false) => IntPredicate::Ult,
+                    (CmpResult::Greater, true) => IntPredicate::Sgt,
+                    (CmpResult::Greater, false) => IntPredicate::Ugt,
+                    _ => IntPredicate::Eq,
+                };
+                cg.icmp(p, lv, rv)
+            }
+        };
+        let val = |cg: &mut Self, x: i64| cg.icn(fty, i128::from(x));
+        let select = if info.kind == CmpCategory::Partial {
+            let c = cmp(self, CmpResult::Equal);
+            let (a, b) =
+                (val(self, info.equal_or_equiv_int()), val(self, info.int(CmpResult::Unordered)));
+            let sel_eq = self.select(c, a, b);
+            let c = cmp(self, CmpResult::Greater);
+            let a = val(self, info.int(CmpResult::Greater));
+            let sel_gt = self.select(c, a, sel_eq);
+            let c = cmp(self, CmpResult::Less);
+            let a = val(self, info.int(CmpResult::Less));
+            self.select(c, a, sel_gt)
+        } else {
+            let c = cmp(self, CmpResult::Less);
+            let (a, b) =
+                (val(self, info.int(CmpResult::Less)), val(self, info.int(CmpResult::Greater)));
+            let sel_lt = self.select(c, a, b);
+            let c = cmp(self, CmpResult::Equal);
+            let a = val(self, info.equal_or_equiv_int());
+            self.select(c, a, sel_lt)
+        };
+        let flv = self.field_lvalue_init(dest, info.field, fq)?;
+        self.store_lv(select, flv, false);
+        Ok(())
     }
 
     /// clang `AggExprEmitter::EmitInitializationToLValue`.

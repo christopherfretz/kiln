@@ -3308,7 +3308,7 @@ impl Sema<'_, '_> {
     /// must be known before the definition's bits freeze.
     pub fn act_on_finish_record_definition(&mut self, r: DeclId, then_semi: bool) {
         self.scopes.pop();
-        let build = if self.classes.last().is_some_and(|c| c.record == r) {
+        let mut build = if self.classes.last().is_some_and(|c| c.record == r) {
             self.classes.pop()
         } else {
             None
@@ -3375,6 +3375,13 @@ impl Sema<'_, '_> {
         // Special members (spec/sema-class.md §4.1, §4.2, §4.4).
         let bits = self.special_member_bits(r, bits);
         let bits = self.finish_special_members(r, bits);
+        // [class.compare.default]/4: the implicit `operator==`s.
+        let mut friends =
+            build.as_mut().map(|b| std::mem::take(&mut b.friends)).unwrap_or_default();
+        self.declare_implicit_equality(r, &mut friends);
+        if let Some(b) = &mut build {
+            b.friends = friends;
+        }
         if let Some(b) = &build {
             let _ = self.builder().set_friends(r, &b.friends);
         }
