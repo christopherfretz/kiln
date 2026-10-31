@@ -145,6 +145,7 @@ pub const TABLE: &[(&str, Disposition)] = &[
     ("WhileStmt", Keep),
     ("DoStmt", Keep),
     ("ForStmt", Keep),
+    ("CXXForRangeStmt", Keep),
     // Documentation comments: never part of the kiln dump.
     ("FullComment", Drop),
     ("ParagraphComment", Drop),
@@ -182,7 +183,6 @@ pub const TABLE: &[(&str, Disposition)] = &[
     ("GotoStmt", Unsupported(NOT_M2)),
     ("IndirectGotoStmt", Unsupported(NOT_M2)),
     ("AttributedStmt", Unsupported("attributes are not in the M2 dump")),
-    ("CXXForRangeStmt", Unsupported(NOT_M2)),
     ("CXXTryStmt", Keep),
     ("CXXCatchStmt", Keep),
     ("GCCAsmStmt", Unsupported(NOT_M2)),
@@ -424,7 +424,8 @@ fn specific_keys(kind: &str) -> Option<&'static [&'static str]> {
         "SwitchStmt" => &["hasInit", "hasVar"],
         "WhileStmt" => &["hasVar"],
         "CompoundStmt" | "DeclStmt" | "NullStmt" | "ReturnStmt" | "BreakStmt" | "ContinueStmt"
-        | "DefaultStmt" | "CaseStmt" | "DoStmt" | "ForStmt" | "CXXTryStmt" | "CXXCatchStmt" => &[],
+        | "DefaultStmt" | "CaseStmt" | "DoStmt" | "ForStmt" | "CXXForRangeStmt" | "CXXTryStmt"
+        | "CXXCatchStmt" => &[],
         _ => return None,
     })
 }
@@ -585,6 +586,7 @@ pub const M2_KINDS: &[&str] = &[
     "WhileStmt",
     "DoStmt",
     "ForStmt",
+    "CXXForRangeStmt",
     "CXXTryStmt",
     "CXXCatchStmt",
 ];
