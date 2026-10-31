@@ -141,7 +141,7 @@ impl Substituter<'_, '_, '_> {
 
     /// `t`, the type of pattern declaration `d`, substituted with `d`'s
     /// name available to diagnostics.
-    fn named_decl_ty(&mut self, d: DeclId, t: QualType, loc: Loc) -> SubstResult<QualType> {
+    pub(crate) fn named_decl_ty(&mut self, d: DeclId, t: QualType, loc: Loc) -> SubstResult<QualType> {
         let name = self.sema.ast.decls.get(d).name().as_ident().map(|n| (n, loc));
         let saved = std::mem::replace(&mut self.declarator_name, name);
         let r = self.ty(t, loc);

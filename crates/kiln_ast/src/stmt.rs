@@ -175,6 +175,9 @@ pub struct RangeForData {
     pub loop_var: DeclId,
     /// The body.
     pub body: StmtId,
+    /// The `:` (where the implicit `__begin`/`__end` variables and
+    /// expressions are located; diagnostics at instantiation).
+    pub colon: Loc,
 }
 
 /// Statement headers and side records. Index 0 of every vector is a dummy.
@@ -213,6 +216,7 @@ impl Default for StmtArena {
                 inc: None,
                 loop_var: DeclId::new(DeclId::MAX_INDEX),
                 body: ds,
+                colon: Loc::INVALID,
             }],
         }
     }

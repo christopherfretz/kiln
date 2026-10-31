@@ -889,6 +889,16 @@ impl Scan<'_> {
                 d.inc.into_iter().for_each(|x| self.expr(x, true));
                 d.body.into_iter().for_each(|x| self.stmt(x));
             }
+            StmtKind::CXXForRangeStmt => {
+                let d = *ast.stmts.range_for_data(s);
+                d.init.into_iter().for_each(|x| self.stmt(x));
+                self.decl(d.range);
+                d.begin.into_iter().chain(d.end).for_each(|x| self.decl(x));
+                d.cond.into_iter().for_each(|x| self.expr(x, false));
+                d.inc.into_iter().for_each(|x| self.expr(x, true));
+                self.decl(d.loop_var);
+                self.stmt(d.body);
+            }
             StmtKind::ReturnStmt => {
                 if let Some(v) = ast.stmts.return_value(s) {
                     self.expr(v, false);
@@ -1345,6 +1355,10 @@ impl Compiler<'_> {
                 self.switch_stmt(s);
                 self.next = m;
             }
+            StmtKind::CXXForRangeStmt => {
+                self.range_for_stmt(s);
+                self.next = m;
+            }
             StmtKind::BreakStmt | StmtKind::ContinueStmt => {
                 let brk = n.kind() == StmtKind::BreakStmt;
                 let idx = if brk {
@@ -1525,6 +1539,77 @@ impl Compiler<'_> {
         let end = self.here();
         for j in b.breaks {
             self.patch(j, end);
+        }
+        self.close_scope();
+    }
+
+    /// A range-based `for` (clang `EvaluateStmt` on `CXXForRangeStmt`):
+    /// the init-statement and `__range`, `__begin`, `__end` in the
+    /// statement's scope; per iteration the condition, the loop variable
+    /// and the body, then `++__begin` before the loop variable is
+    /// destroyed. The temporaries of the for-range-initializer extended
+    /// to `__range` (P2718) live in the statement's scope.
+    fn range_for_stmt(&mut self, s: StmtId) {
+        let ast = self.b.ast();
+        let d = *ast.stmts.range_for_data(s);
+        let loc = ast.stmts.get(s).loc();
+        let (Some(begin), Some(end), Some(cond), Some(inc)) = (d.begin, d.end, d.cond, d.inc)
+        else {
+            self.trap_loc(loc, "kiln: a range-based for statement without its iterators".into());
+            return;
+        };
+        let mut decls = self.stmt_decls(d.init, None);
+        decls.extend([d.range, begin, end]);
+        self.open_scope(&decls, false);
+        if let Some(i) = d.init {
+            self.stmt(i);
+        }
+        // One step for each implicit declaration statement, as clang.
+        for v in [d.range, begin, end] {
+            self.pending.push(self.b.ast().decls.get(v).loc());
+            self.decl(v);
+        }
+        let top = self.here();
+        let break_depth = self.scopes.len();
+        self.open_scope(&[d.loop_var], self.has_temps);
+        let iter = self.scopes.last().copied().flatten();
+        let m = self.next;
+        let r = self.rv(cond);
+        let exit = self.jmp_if(r, false);
+        self.next = m;
+        let cont_depth = self.scopes.len();
+        self.breakables.push(Breakable {
+            breaks: Vec::new(),
+            conts: Some(Vec::new()),
+            depth: break_depth,
+            cont_depth,
+        });
+        self.pending.push(self.b.ast().decls.get(d.loop_var).loc());
+        self.decl(d.loop_var);
+        self.stmt(d.body);
+        let b = self.breakables.pop().unwrap_or(Breakable {
+            breaks: Vec::new(),
+            conts: None,
+            depth: 0,
+            cont_depth: 0,
+        });
+        let cont = self.here();
+        for j in b.conts.unwrap_or_default() {
+            self.patch(j, cont);
+        }
+        let m = self.next;
+        self.effect(inc);
+        self.next = m;
+        if let Some(mark) = iter {
+            self.emit(Op::ScopeExit, 0, &[mark]);
+        }
+        let j = self.jmp();
+        self.patch(j, top);
+        self.patch_here(exit);
+        self.close_scope();
+        let end_pc = self.here();
+        for j in b.breaks {
+            self.patch(j, end_pc);
         }
         self.close_scope();
     }

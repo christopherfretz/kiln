@@ -32,6 +32,7 @@ pub mod names;
 pub mod new_delete;
 mod oven_bridge;
 pub mod overload;
+mod range_for;
 mod rtti;
 pub mod scope;
 mod side_effects;
@@ -57,6 +58,7 @@ pub use declspec::{
 pub use gnu::{OffsetofComponent, StmtExprScope};
 pub use init::{Designator, InitItem, InitList, InitValue, Initializer};
 pub use kiln_oven::{Budget, EvalContext, EvalFailure, EvalKind, Oven};
+pub use range_for::{RangeCollect, RangeForHead, RangeInit};
 pub use scope::ScopeKind;
 
 /// The semantic-analysis state of one translation unit (spec/sema.md §1).
@@ -84,6 +86,9 @@ pub struct Sema<'a, 'sm> {
     /// Run-time type information is enabled (`-f[no-]rtti`; default on):
     /// `typeid` is an error otherwise.
     pub rtti: bool,
+    /// The temporaries of a for-range-initializer are extended to the
+    /// whole loop (C++23, P2718R0; spec/sema-class.md §5.4).
+    pub range_lifetime_extension: bool,
     /// The `#pragma pack` state (clang's `AlignPackStack`): the current
     /// maximum field alignment in bytes (0: none) and the pushed
     /// `(label, value)` entries. Applied to each class definition as it
@@ -202,6 +207,15 @@ pub struct Sema<'a, 'sm> {
     /// Materialized temporaries collected for P2718 range-for lifetime
     /// extension (spec/sema-class.md §5.4).
     pub(crate) extend_collector: Option<Vec<ExprId>>,
+    /// Diagnostics held back while a range-based `for` step runs, so
+    /// clang's trailing notes (`when looking up 'begin' function...`)
+    /// can be attached to the last of them (`range_for.rs`).
+    pub(crate) diag_capture: std::cell::RefCell<Option<Vec<Diag>>>,
+    /// The scope depth at the point of instantiation (clang numbers the
+    /// implicit `__begin`/`__end` variables of an instantiated dependent
+    /// range-based `for` from `getCurScope()`); set by the outermost
+    /// `in_inst_context`.
+    pub(crate) range_for_outer_depth: Option<usize>,
     /// Member functions whose *noexcept-specifier* awaits replay
     /// (`ExcSpec::Deferred`, spec/sema-class.md §2.7).
     pub(crate) unparsed_exc: kiln_source::fx::FxHashSet<DeclId>,
@@ -272,6 +286,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             pragma_packs: Vec::new(),
             exceptions: true,
             rtti: true,
+            range_lifetime_extension: false,
             pack: (0, Vec::new()),
             scopes: vec![scope::Scope::new(ScopeKind::TranslationUnit, Some(tu))],
             ctx: tu,
@@ -309,6 +324,8 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             ctor_entity: None,
             mem_inits: class::MemInitState::default(),
             extend_collector: None,
+            diag_capture: std::cell::RefCell::new(None),
+            range_for_outer_depth: None,
             unparsed_exc: kiln_source::fx::FxHashSet::default(),
             uninstantiated_exc: kiln_source::fx::FxHashMap::default(),
             fn_saved: Vec::new(),
@@ -372,6 +389,10 @@ impl<'a, 'sm> Sema<'a, 'sm> {
     /// here` note (spec/sema-class.md §4.5) goes first, as the innermost
     /// code-synthesis context.
     pub fn emit(&self, mut d: Diag) {
+        if let Some(held) = self.diag_capture.borrow_mut().as_mut() {
+            held.push(d);
+            return;
+        }
         if self.inst.suppress_next_error.replace(false) {
             return;
         }

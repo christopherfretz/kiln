@@ -44,13 +44,21 @@ impl Sema<'_, '_> {
         lvalue_ref: bool,
     ) -> ExprId {
         self.cleanup.needs = true;
-        self.builder().materialize_temporary(
+        let m = self.builder().materialize_temporary(
             e,
             ty,
             lvalue_ref,
             StorageDuration::FullExpression,
             None,
-        )
+        );
+        // P2718: a temporary of a for-range-initializer is extended to
+        // `__range` (spec/sema-class.md §5.4).
+        if self.unevaluated == 0
+            && let Some(c) = self.extend_collector.as_mut()
+        {
+            c.push(m);
+        }
+        m
     }
 
     /// clang `MaybeBindToTemporary`: a class prvalue `e` whose class has a
