@@ -356,7 +356,8 @@ impl Substituter<'_, '_, '_> {
         // A using-declaration whose lookup finds nothing survives in the
         // pattern only with `using_if_exists` (the qualifier is not
         // dependent, so the lookup is the definition's).
-        let if_exists = self.sema.lookup_qualified(ctx, name, crate::lookup::LookupKind::All).is_empty();
+        let if_exists =
+            self.sema.lookup_qualified(ctx, name, crate::lookup::LookupKind::All).is_empty();
         let q = crate::using::Qualifier { ctx, nns, loc };
         self.sema.act_on_using_declarator(loc, Some(q), name, loc, if_exists).ok_or(SubstFail)
     }

@@ -175,6 +175,10 @@ impl Parser<'_, '_> {
                 self.skip_until(&[Punct::RParen], false, true);
                 return None;
             };
+            let a = match self.eat(Punct::Ellipsis) {
+                Some(l) => self.s.act_pack_expansion(a, l),
+                None => a,
+            };
             args.push(a);
             if self.eat(Punct::Comma).is_none() {
                 return Some(args);

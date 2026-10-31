@@ -470,8 +470,55 @@ impl Substituter<'_, '_, '_> {
                     _ => self.sema.act_on_paren_list_cast(ty, &args, loc, end),
                 })
             }
+            ExprKind::CXXNewExpr => self.new_expr(e, loc, end),
             _ => self.unimplemented(&format!("substitution into {k:?}"), loc),
         }
+    }
+
+    /// A dependent new-expression ([expr.new]), as
+    /// [`crate::Sema::act_on_cxx_new`] kept it: rebuilt from the
+    /// allocated type, the first bound, the placement arguments and the
+    /// initializer as written (clang `TransformCXXNewExpr`).
+    fn new_expr(&mut self, e: ExprId, loc: Loc, end: Loc) -> SubstResult<ExprId> {
+        use crate::declspec::{Chunk, Declarator, DeclaratorContext};
+        use crate::new_delete::{NewInit, NewPlacement, NewTypeId};
+        use kiln_ast::expr::NewInitStyle;
+        let n = *self.sema.ast.exprs.get(e);
+        let x = *self.sema.ast.exprs.new_extra(e);
+        let style = self.sema.ast.exprs.new_init_style(e);
+        if x.operator_new.is_some() {
+            return self.unimplemented("substitution into an analyzed new-expression", loc);
+        }
+        let placement = match x.placement {
+            Some(l) => {
+                let args: Vec<ExprId> = self.sema.ast.lists.iter::<ExprId>(l).collect();
+                Some(NewPlacement { args: self.expand_exprs(&args)?, lparen: loc, rparen: loc })
+            }
+            None => None,
+        };
+        let base = self.ty(x.allocated_ty, x.type_loc)?;
+        let mut declarator = Declarator::new(DeclaratorContext::TypeName, x.type_loc);
+        if n.has(ExprFlags::ARRAY_FORM) {
+            let size = self.opt_expr(x.array_size)?;
+            declarator.chunks.push(Chunk::Array { size, loc: x.type_loc });
+        }
+        let tid = NewTypeId { base, declarator, loc: x.type_loc, parenthesized: false };
+        let init = match (style, x.init) {
+            (NewInitStyle::None, _) | (_, None) => NewInit::None,
+            (_, Some(i)) => match self.sema.ast.exprs.get(i).kind() {
+                ExprKind::ParenListExpr => {
+                    let l = kiln_ast::ids::ListId::new(self.sema.ast.exprs.get(i).a());
+                    let args = self.expr_list(l)?;
+                    let at = self.sema.ast.exprs.get(i).loc();
+                    let r = self.sema.ast.exprs.end_loc(i).unwrap_or(at);
+                    NewInit::Paren(args, at, r)
+                }
+                ExprKind::InitListExpr => NewInit::List(self.init_list(i)?),
+                _ => return self.unimplemented("substitution into this new-initializer", loc),
+            },
+        };
+        let global = n.has(ExprFlags::GLOBAL);
+        Ok(self.sema.act_on_cxx_new(global, loc, placement, tid, init, end))
     }
 
     /// The object expression of a member access: an implicit `this` is

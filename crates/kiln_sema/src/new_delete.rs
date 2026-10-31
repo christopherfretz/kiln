@@ -8,7 +8,7 @@
 //! calls (array cookies) are WP-067b / WP-076.
 
 use kiln_ast::decl::{DeclFlags, DeclKind, DefinitionBits, EnumData, FnSpec};
-use kiln_ast::expr::{ExprFlags, ExprKind, NewExtra, NewInitStyle, Radix};
+use kiln_ast::expr::{ExprDeps, ExprFlags, ExprKind, NewExtra, NewInitStyle, Radix};
 use kiln_ast::names::{DeclName, OverloadedOperator};
 use kiln_ast::types::{ExcSpec, FuncInfo, Nns, Quals, TagKeyword};
 use kiln_ast::{DeclHead, DeclId, ExprId, QualType};
@@ -271,6 +271,41 @@ impl Sema<'_, '_> {
             self.error(DiagId::sema_new_array_size_unknown, at);
             return self.recover_err(&kids, loc);
         }
+        // A dependent new-expression is checked at instantiation ([temp.res]).
+        let kids_dep = kids.iter().any(|&k| {
+            self.ast
+                .exprs
+                .get(k)
+                .deps()
+                .intersects(ExprDeps::TYPE_VALUE_INST | ExprDeps::UNEXPANDED_PACK)
+        });
+        if kids_dep || self.is_dependent_type(tid.base) {
+            if d.invalid || self.is_error_type(tid.base) {
+                return self.recover_err(&kids, loc);
+            }
+            // The later bounds are part of the allocated type.
+            let rest = std::mem::take(&mut d.chunks);
+            d.chunks = arrays
+                .iter()
+                .skip(1)
+                .map(|&(size, loc)| Chunk::Array { size, loc })
+                .chain(rest)
+                .collect();
+            let elem = self.type_for_declarator(tid.base, &d);
+            if self.is_error_type(elem) {
+                return self.recover_err(&kids, loc);
+            }
+            return self.dependent_new(
+                global,
+                loc,
+                placement,
+                elem,
+                arrays.first().copied(),
+                init,
+                tid.loc,
+                end,
+            );
+        }
         // Every later bound is a converted constant expression of type
         // `std::size_t` ([expr.new]/6).
         let mut later: Vec<(Option<u64>, Loc)> = Vec::new();
@@ -317,6 +352,10 @@ impl Sema<'_, '_> {
                 }
                 None => self.ast.types.incomplete_array(elem),
             };
+        }
+        if self.is_dependent_type(elem) {
+            let first = arrays.first().copied();
+            return self.dependent_new(global, loc, placement, elem, first, init, tid.loc, end);
         }
         // [expr.new]/5: a typedef of an array type allocates an array.
         let mut first: Option<(Option<ExprId>, Loc)> = arrays.first().copied();
@@ -475,6 +514,57 @@ impl Sema<'_, '_> {
             operator_new: Some(self.ast.latest(op_new)),
             operator_delete: op_delete.map(|d| self.ast.latest(d)),
             type_loc: tid.loc,
+        };
+        self.builder().cxx_new(ty, flags, style, extra, loc, end)
+    }
+
+    /// A new-expression whose allocated type or operands are dependent,
+    /// kept as written for instantiation (clang's `BuildCXXNew` for a
+    /// dependent type): the allocated type `elem` with its later bounds,
+    /// the first bound as written, the placement arguments and the
+    /// initializer as a `ParenListExpr` or dependent `InitListExpr`; no
+    /// allocation function is looked up.
+    #[allow(clippy::too_many_arguments, reason = "the parts of the new-expression")]
+    fn dependent_new(
+        &mut self,
+        global: bool,
+        loc: Loc,
+        placement: Option<NewPlacement>,
+        elem: QualType,
+        first: Option<(Option<ExprId>, Loc)>,
+        init: NewInit,
+        type_loc: Loc,
+        end: Loc,
+    ) -> ExprId {
+        let (style, init_expr) = match init {
+            NewInit::None => (NewInitStyle::None, None),
+            NewInit::Paren(v, open, rparen) => {
+                (NewInitStyle::Parens, Some(self.builder().paren_list(&v, open, rparen)))
+            }
+            NewInit::List(l) => (NewInitStyle::Braces, Some(self.dependent_init_list(&l))),
+        };
+        let mut flags = ExprFlags::NONE;
+        if global {
+            flags = flags.with(ExprFlags::GLOBAL);
+        }
+        if first.is_some() {
+            flags = flags.with(ExprFlags::ARRAY_FORM);
+        }
+        let placement_list = placement.map(|p| self.ast.lists.push(&p.args));
+        // `new auto(e)` with a dependent `e`: the type is deduced later.
+        let ty = if self.contains_auto(elem) {
+            QualType::DEPENDENT
+        } else {
+            self.ast.types.pointer_to(elem)
+        };
+        let extra = NewExtra {
+            allocated_ty: elem,
+            array_size: first.and_then(|f| f.0),
+            init: init_expr,
+            placement: placement_list,
+            operator_new: None,
+            operator_delete: None,
+            type_loc,
         };
         self.builder().cxx_new(ty, flags, style, extra, loc, end)
     }
