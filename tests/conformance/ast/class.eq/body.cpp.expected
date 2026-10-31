@@ -1,0 +1,72 @@
+Dumping B::operator==:
+CXXMethodDecl used constexpr operator== 'bool (const B &) const noexcept' default implicit-inline
+|-ParmVarDecl used 'const B &'
+`-CompoundStmt
+  `-ReturnStmt
+    `-BinaryOperator 'bool' '=='
+      |-ImplicitCastExpr 'int' <LValueToRValue>
+      | `-MemberExpr 'const int' lvalue .x
+      |   `-UnaryOperator 'const B' lvalue prefix '*' cannot overflow
+      |     `-CXXThisExpr 'const B *' this
+      `-ImplicitCastExpr 'int' <LValueToRValue>
+        `-MemberExpr 'const int' lvalue .x
+          `-DeclRefExpr 'const B' lvalue ParmVar '' 'const B &'
+
+Dumping operator==:
+FunctionDecl parent used constexpr friend_undeclared operator== 'bool (const A &, const A &) noexcept' default implicit-inline
+|-ParmVarDecl used 'const A &'
+|-ParmVarDecl used 'const A &'
+`-CompoundStmt
+  |-IfStmt
+  | |-UnaryOperator 'bool' prefix '!' cannot overflow
+  | | `-BinaryOperator 'bool' '&&'
+  | |   |-CXXOperatorCallExpr 'bool' '=='
+  | |   | |-ImplicitCastExpr 'bool (*)(const B &) const noexcept' <FunctionToPointerDecay>
+  | |   | | `-DeclRefExpr 'bool (const B &) const noexcept' lvalue CXXMethod 'operator==' 'bool (const B &) const noexcept'
+  | |   | |-ImplicitCastExpr 'const B' lvalue <NoOp>
+  | |   | | `-ImplicitCastExpr 'B' lvalue <DerivedToBase (B)>
+  | |   | |   `-DeclRefExpr 'const A' lvalue ParmVar '' 'const A &'
+  | |   | `-ImplicitCastExpr 'const B' lvalue <NoOp>
+  | |   |   `-ImplicitCastExpr 'B' lvalue <DerivedToBase (B)>
+  | |   |     `-DeclRefExpr 'const A' lvalue ParmVar '' 'const A &'
+  | |   `-BinaryOperator 'bool' '=='
+  | |     |-ImplicitCastExpr 'int' <LValueToRValue>
+  | |     | `-MemberExpr 'const int' lvalue .a
+  | |     |   `-DeclRefExpr 'const A' lvalue ParmVar '' 'const A &'
+  | |     `-ImplicitCastExpr 'int' <LValueToRValue>
+  | |       `-MemberExpr 'const int' lvalue .a
+  | |         `-DeclRefExpr 'const A' lvalue ParmVar '' 'const A &'
+  | `-ReturnStmt
+  |   `-CXXBoolLiteralExpr 'bool' false
+  |-ForStmt has_init has_cond has_inc
+  | |-DeclStmt
+  | | `-VarDecl used i0 'unsigned long' cinit
+  | |   `-IntegerLiteral 'unsigned long' 0
+  | |-BinaryOperator 'bool' '!='
+  | | |-ImplicitCastExpr 'unsigned long' <LValueToRValue>
+  | | | `-DeclRefExpr 'unsigned long' lvalue Var 'i0' 'unsigned long'
+  | | `-IntegerLiteral 'unsigned long' 2
+  | |-UnaryOperator 'unsigned long' lvalue prefix '++'
+  | | `-DeclRefExpr 'unsigned long' lvalue Var 'i0' 'unsigned long'
+  | `-IfStmt
+  |   |-UnaryOperator 'bool' prefix '!' cannot overflow
+  |   | `-BinaryOperator 'bool' '=='
+  |   |   |-ImplicitCastExpr 'int' <LValueToRValue>
+  |   |   | `-ArraySubscriptExpr 'const int' lvalue
+  |   |   |   |-ImplicitCastExpr 'const int *' <ArrayToPointerDecay>
+  |   |   |   | `-MemberExpr 'const int[2]' lvalue .arr
+  |   |   |   |   `-DeclRefExpr 'const A' lvalue ParmVar '' 'const A &'
+  |   |   |   `-ImplicitCastExpr 'unsigned long' <LValueToRValue>
+  |   |   |     `-DeclRefExpr 'unsigned long' lvalue Var 'i0' 'unsigned long'
+  |   |   `-ImplicitCastExpr 'int' <LValueToRValue>
+  |   |     `-ArraySubscriptExpr 'const int' lvalue
+  |   |       |-ImplicitCastExpr 'const int *' <ArrayToPointerDecay>
+  |   |       | `-MemberExpr 'const int[2]' lvalue .arr
+  |   |       |   `-DeclRefExpr 'const A' lvalue ParmVar '' 'const A &'
+  |   |       `-ImplicitCastExpr 'unsigned long' <LValueToRValue>
+  |   |         `-DeclRefExpr 'unsigned long' lvalue Var 'i0' 'unsigned long'
+  |   `-ReturnStmt
+  |     `-CXXBoolLiteralExpr 'bool' false
+  `-ReturnStmt
+    `-CXXBoolLiteralExpr 'bool' true
+

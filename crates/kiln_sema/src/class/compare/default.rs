@@ -555,7 +555,7 @@ impl Sema<'_, '_> {
             self.ast.types.function(QualType::BOOL, &params, info.with_trailing_return(false), exc);
         let src_spec = self.fn_spec(s);
         let spec = FnSpec::new()
-            .with_inline(true)
+            .with_implicit_inline(true)
             .with_constexpr_kind(src_spec.constexpr_kind())
             .with_defaulted(Defaulted::Explicit)
             .with_explicit_object(src_spec.has_explicit_object());

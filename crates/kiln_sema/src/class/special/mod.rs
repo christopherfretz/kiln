@@ -322,6 +322,12 @@ impl Sema<'_, '_> {
         if self.ast.decls.get(f).flags().contains(DeclFlags::INVALID) {
             return;
         }
+        // `= default` in the class is a definition there: implicitly
+        // inline ([class.mfct]/1; clang `setImplicitlyInline` for a
+        // defaulted function definition in a record).
+        if self.ast.decls.lexical_ctx(f).is_some_and(|c| self.kind_of(c) == DeclKind::CXXRecord) {
+            self.ast.decls.mark_function(f, FnSpec::new().with_implicit_inline(true));
+        }
         let Some(kind) = self.special_kind_of(f) else {
             let name = self.ast.decls.get(f).name();
             let op = match self.ast.names.view(name) {

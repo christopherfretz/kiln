@@ -1,0 +1,126 @@
+Dumping A::operator<=>:
+CXXMethodDecl used constexpr operator<=> 'std::partial_ordering (const A &) const noexcept' default implicit-inline
+|-ParmVarDecl used 'const A &'
+`-CompoundStmt
+  |-IfStmt has_init
+  | |-DeclStmt
+  | | `-VarDecl used cmp 'std::partial_ordering' cinit
+  | |   `-ExprWithCleanups 'std::partial_ordering'
+  | |     `-CXXStaticCastExpr 'std::partial_ordering' static_cast<std::partial_ordering> <NoOp>
+  | |       `-ImplicitCastExpr 'partial_ordering':'std::partial_ordering' <UserDefinedConversion> part_of_explicit_cast
+  | |         `-CXXMemberCallExpr 'partial_ordering':'std::partial_ordering'
+  | |           `-MemberExpr '<bound member function type>' .operator partial_ordering
+  | |             `-ImplicitCastExpr 'const std::strong_ordering' lvalue <NoOp>
+  | |               `-MaterializeTemporaryExpr 'std::strong_ordering' lvalue
+  | |                 `-CXXOperatorCallExpr 'std::strong_ordering' '<=>'
+  | |                   |-ImplicitCastExpr 'std::strong_ordering (*)(const B &) const noexcept' <FunctionToPointerDecay>
+  | |                   | `-DeclRefExpr 'std::strong_ordering (const B &) const noexcept' lvalue CXXMethod 'operator<=>' 'std::strong_ordering (const B &) const noexcept'
+  | |                   |-ImplicitCastExpr 'const B' lvalue <NoOp>
+  | |                   | `-ImplicitCastExpr 'B' lvalue <DerivedToBase (B)>
+  | |                   |   `-UnaryOperator 'const A' lvalue prefix '*' cannot overflow
+  | |                   |     `-CXXThisExpr 'const A *' this
+  | |                   `-ImplicitCastExpr 'const B' lvalue <NoOp>
+  | |                     `-ImplicitCastExpr 'B' lvalue <DerivedToBase (B)>
+  | |                       `-DeclRefExpr 'const A' lvalue ParmVar '' 'const A &'
+  | |-CXXRewrittenBinaryOperator 'bool'
+  | | `-UnaryOperator 'bool' prefix '!' cannot overflow
+  | |   `-CXXOperatorCallExpr 'bool' '==' adl
+  | |     |-ImplicitCastExpr 'bool (*)(partial_ordering, _CmpUnspecifiedParam) noexcept' <FunctionToPointerDecay>
+  | |     | `-DeclRefExpr 'bool (partial_ordering, _CmpUnspecifiedParam) noexcept' lvalue Function 'operator==' 'bool (partial_ordering, _CmpUnspecifiedParam) noexcept'
+  | |     |-CXXConstructExpr 'partial_ordering':'std::partial_ordering' 'void (const partial_ordering &) noexcept'
+  | |     | `-ImplicitCastExpr 'const partial_ordering':'const std::partial_ordering' lvalue <NoOp>
+  | |     |   `-DeclRefExpr 'std::partial_ordering' lvalue Var 'cmp' 'std::partial_ordering'
+  | |     `-ImplicitCastExpr '_CmpUnspecifiedParam':'std::_CmpUnspecifiedParam' <ConstructorConversion>
+  | |       `-CXXConstructExpr '_CmpUnspecifiedParam':'std::_CmpUnspecifiedParam' 'void (int std::_CmpUnspecifiedParam::*) noexcept'
+  | |         `-ImplicitCastExpr 'int std::_CmpUnspecifiedParam::*' <NullToMemberPointer>
+  | |           `-IntegerLiteral 'int' 0
+  | `-ReturnStmt nrvo_candidate(Var 'cmp' 'std::partial_ordering')
+  |   `-CXXConstructExpr 'std::partial_ordering' 'void (partial_ordering &&) noexcept'
+  |     `-ImplicitCastExpr 'std::partial_ordering' xvalue <NoOp>
+  |       `-DeclRefExpr 'std::partial_ordering' lvalue Var 'cmp' 'std::partial_ordering'
+  |-IfStmt has_init
+  | |-DeclStmt
+  | | `-VarDecl used cmp 'std::partial_ordering' cinit
+  | |   `-ExprWithCleanups 'std::partial_ordering'
+  | |     `-CXXStaticCastExpr 'std::partial_ordering' static_cast<std::partial_ordering> <NoOp>
+  | |       `-ImplicitCastExpr 'partial_ordering':'std::partial_ordering' <UserDefinedConversion> part_of_explicit_cast
+  | |         `-CXXMemberCallExpr 'partial_ordering':'std::partial_ordering'
+  | |           `-MemberExpr '<bound member function type>' .operator partial_ordering
+  | |             `-ImplicitCastExpr 'const std::strong_ordering' lvalue <NoOp>
+  | |               `-MaterializeTemporaryExpr 'std::strong_ordering' lvalue
+  | |                 `-BinaryOperator 'std::strong_ordering' '<=>'
+  | |                   |-ImplicitCastExpr 'int' <LValueToRValue>
+  | |                   | `-MemberExpr 'const int' lvalue .a
+  | |                   |   `-UnaryOperator 'const A' lvalue prefix '*' cannot overflow
+  | |                   |     `-CXXThisExpr 'const A *' this
+  | |                   `-ImplicitCastExpr 'int' <LValueToRValue>
+  | |                     `-MemberExpr 'const int' lvalue .a
+  | |                       `-DeclRefExpr 'const A' lvalue ParmVar '' 'const A &'
+  | |-CXXRewrittenBinaryOperator 'bool'
+  | | `-UnaryOperator 'bool' prefix '!' cannot overflow
+  | |   `-CXXOperatorCallExpr 'bool' '==' adl
+  | |     |-ImplicitCastExpr 'bool (*)(partial_ordering, _CmpUnspecifiedParam) noexcept' <FunctionToPointerDecay>
+  | |     | `-DeclRefExpr 'bool (partial_ordering, _CmpUnspecifiedParam) noexcept' lvalue Function 'operator==' 'bool (partial_ordering, _CmpUnspecifiedParam) noexcept'
+  | |     |-CXXConstructExpr 'partial_ordering':'std::partial_ordering' 'void (const partial_ordering &) noexcept'
+  | |     | `-ImplicitCastExpr 'const partial_ordering':'const std::partial_ordering' lvalue <NoOp>
+  | |     |   `-DeclRefExpr 'std::partial_ordering' lvalue Var 'cmp' 'std::partial_ordering'
+  | |     `-ImplicitCastExpr '_CmpUnspecifiedParam':'std::_CmpUnspecifiedParam' <ConstructorConversion>
+  | |       `-CXXConstructExpr '_CmpUnspecifiedParam':'std::_CmpUnspecifiedParam' 'void (int std::_CmpUnspecifiedParam::*) noexcept'
+  | |         `-ImplicitCastExpr 'int std::_CmpUnspecifiedParam::*' <NullToMemberPointer>
+  | |           `-IntegerLiteral 'int' 0
+  | `-ReturnStmt nrvo_candidate(Var 'cmp' 'std::partial_ordering')
+  |   `-CXXConstructExpr 'std::partial_ordering' 'void (partial_ordering &&) noexcept'
+  |     `-ImplicitCastExpr 'std::partial_ordering' xvalue <NoOp>
+  |       `-DeclRefExpr 'std::partial_ordering' lvalue Var 'cmp' 'std::partial_ordering'
+  |-ForStmt has_init has_cond has_inc
+  | |-DeclStmt
+  | | `-VarDecl used i0 'unsigned long' cinit
+  | |   `-IntegerLiteral 'unsigned long' 0
+  | |-BinaryOperator 'bool' '!='
+  | | |-ImplicitCastExpr 'unsigned long' <LValueToRValue>
+  | | | `-DeclRefExpr 'unsigned long' lvalue Var 'i0' 'unsigned long'
+  | | `-IntegerLiteral 'unsigned long' 2
+  | |-UnaryOperator 'unsigned long' lvalue prefix '++'
+  | | `-DeclRefExpr 'unsigned long' lvalue Var 'i0' 'unsigned long'
+  | `-IfStmt has_init
+  |   |-DeclStmt
+  |   | `-VarDecl used cmp 'std::partial_ordering' cinit
+  |   |   `-BinaryOperator 'std::partial_ordering' '<=>'
+  |   |     |-ImplicitCastExpr 'float' <LValueToRValue>
+  |   |     | `-ArraySubscriptExpr 'const float' lvalue
+  |   |     |   |-ImplicitCastExpr 'const float *' <ArrayToPointerDecay>
+  |   |     |   | `-MemberExpr 'const float[2]' lvalue .f
+  |   |     |   |   `-UnaryOperator 'const A' lvalue prefix '*' cannot overflow
+  |   |     |   |     `-CXXThisExpr 'const A *' this
+  |   |     |   `-ImplicitCastExpr 'unsigned long' <LValueToRValue>
+  |   |     |     `-DeclRefExpr 'unsigned long' lvalue Var 'i0' 'unsigned long'
+  |   |     `-ImplicitCastExpr 'float' <LValueToRValue>
+  |   |       `-ArraySubscriptExpr 'const float' lvalue
+  |   |         |-ImplicitCastExpr 'const float *' <ArrayToPointerDecay>
+  |   |         | `-MemberExpr 'const float[2]' lvalue .f
+  |   |         |   `-DeclRefExpr 'const A' lvalue ParmVar '' 'const A &'
+  |   |         `-ImplicitCastExpr 'unsigned long' <LValueToRValue>
+  |   |           `-DeclRefExpr 'unsigned long' lvalue Var 'i0' 'unsigned long'
+  |   |-CXXRewrittenBinaryOperator 'bool'
+  |   | `-UnaryOperator 'bool' prefix '!' cannot overflow
+  |   |   `-CXXOperatorCallExpr 'bool' '==' adl
+  |   |     |-ImplicitCastExpr 'bool (*)(partial_ordering, _CmpUnspecifiedParam) noexcept' <FunctionToPointerDecay>
+  |   |     | `-DeclRefExpr 'bool (partial_ordering, _CmpUnspecifiedParam) noexcept' lvalue Function 'operator==' 'bool (partial_ordering, _CmpUnspecifiedParam) noexcept'
+  |   |     |-CXXConstructExpr 'partial_ordering':'std::partial_ordering' 'void (const partial_ordering &) noexcept'
+  |   |     | `-ImplicitCastExpr 'const partial_ordering':'const std::partial_ordering' lvalue <NoOp>
+  |   |     |   `-DeclRefExpr 'std::partial_ordering' lvalue Var 'cmp' 'std::partial_ordering'
+  |   |     `-ImplicitCastExpr '_CmpUnspecifiedParam':'std::_CmpUnspecifiedParam' <ConstructorConversion>
+  |   |       `-CXXConstructExpr '_CmpUnspecifiedParam':'std::_CmpUnspecifiedParam' 'void (int std::_CmpUnspecifiedParam::*) noexcept'
+  |   |         `-ImplicitCastExpr 'int std::_CmpUnspecifiedParam::*' <NullToMemberPointer>
+  |   |           `-IntegerLiteral 'int' 0
+  |   `-ReturnStmt nrvo_candidate(Var 'cmp' 'std::partial_ordering')
+  |     `-CXXConstructExpr 'std::partial_ordering' 'void (partial_ordering &&) noexcept'
+  |       `-ImplicitCastExpr 'std::partial_ordering' xvalue <NoOp>
+  |         `-DeclRefExpr 'std::partial_ordering' lvalue Var 'cmp' 'std::partial_ordering'
+  `-ReturnStmt
+    `-CXXStaticCastExpr 'std::partial_ordering' static_cast<std::partial_ordering> <NoOp>
+      `-ImplicitCastExpr 'partial_ordering':'std::partial_ordering' <UserDefinedConversion> part_of_explicit_cast
+        `-CXXMemberCallExpr 'partial_ordering':'std::partial_ordering'
+          `-MemberExpr '<bound member function type>' .operator partial_ordering
+            `-DeclRefExpr 'const strong_ordering':'const std::strong_ordering' lvalue Var 'equal' 'const strong_ordering':'const std::strong_ordering'
+
