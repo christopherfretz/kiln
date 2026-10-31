@@ -398,6 +398,8 @@ impl Sema<'_, '_> {
         }
         if ds.constexpr.is_some() {
             spec = spec.with_constexpr_kind(ConstexprKind::Constexpr).with_implicit_inline(true);
+        } else if ds.consteval.is_some() && shape != Shape::Dtor {
+            spec = spec.with_constexpr_kind(ConstexprKind::Consteval).with_implicit_inline(true);
         }
         spec = spec.with_variadic(variadic && shape != Shape::Dtor);
         if let Some(p) = prev_ok

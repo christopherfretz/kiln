@@ -851,6 +851,7 @@ impl Sema<'_, '_> {
             }
             Initializer::Paren(v, l, _) => self.recover(p.ty, &v, l),
         };
+        self.note_default_init_full_expr();
         let e = self.act_on_full_expr(e);
         p.default_arg = DefaultArg::Parsed(e);
     }
@@ -1121,8 +1122,15 @@ impl Sema<'_, '_> {
                 self.check_explicit_spec(ds, d, function, false);
             }
         }
-        if let Some(l) = ds.consteval {
-            self.unsupported("'consteval'", l);
+        // [dcl.constexpr]/2: `consteval` declares an immediate function.
+        // A non-static data member reports it in `act_on_field`.
+        if let Some(l) = ds.consteval
+            && !(d.is_function_declarator() && !ds.is_typedef())
+            && !(d.ctx == DeclaratorContext::Member
+                && !ds.is_typedef()
+                && !matches!(ds.storage, Some((StorageSpec::Static, _))))
+        {
+            self.error(DiagId::sema_consteval_wrong_decl_kind, l);
         }
         // A friend function goes through `act_on_friend`; elsewhere
         // `friend` is not in a class.
@@ -1390,8 +1398,12 @@ impl Sema<'_, '_> {
         d: &Declarator,
         invalid: bool,
     ) -> Option<DeclId> {
-        if let Some(l) = ds.consteval {
-            self.unsupported("'consteval'", l);
+        // [dcl.constexpr]/2: a destructor is not an immediate function
+        // (clang `err_constexpr_dtor`, consteval).
+        if let Some(l) = ds.consteval
+            && matches!(d.special, Some((SpecialName::Destructor(_), _)))
+        {
+            self.error(DiagId::sema_consteval_dtor, l);
         }
         let mut invalid = invalid;
         let Some(decl) = self.act_on_special_declarator(ds, ty, d, &mut invalid) else {
@@ -1839,6 +1851,8 @@ impl Sema<'_, '_> {
         }
         if ds.constexpr.is_some() {
             spec = spec.with_constexpr_kind(ConstexprKind::Constexpr).with_implicit_inline(true);
+        } else if ds.consteval.is_some() {
+            spec = spec.with_constexpr_kind(ConstexprKind::Consteval).with_implicit_inline(true);
         }
         let variadic = self.ast.types.proto(ty).is_some_and(|p| p.info().variadic());
         spec = spec.with_variadic(variadic);
@@ -1850,6 +1864,15 @@ impl Sema<'_, '_> {
             let ret = p.ret();
             if !self.ast.types.same_type(ret, QualType::INT) && !self.is_error_type(ret) {
                 self.error(DiagId::sema_main_returns_nonint, ds.type_loc.unwrap_or(ds.loc));
+            }
+            // [basic.start.main]/3: `main` is not constexpr or consteval;
+            // clang drops the specifier.
+            if let Some((l, which)) =
+                ds.constexpr.map(|l| (l, 0u8)).or(ds.consteval.map(|l| (l, 1u8)))
+            {
+                let m = self.diag(DiagId::sema_constexpr_main, l).arg(which);
+                self.emit(m);
+                spec = spec.with_constexpr_kind(ConstexprKind::None).with_implicit_inline(false);
             }
         }
         let mut prev_ok = None;
@@ -1975,6 +1998,22 @@ impl Sema<'_, '_> {
                     }
                     if pspec.is_inline() {
                         spec = spec.with_implicit_inline(true);
+                    }
+                    // [dcl.constexpr]/1: every declaration of an immediate
+                    // function is `consteval` (clang's mismatch check; kiln
+                    // applies it only when one side is consteval).
+                    let (ok, nk) = (pspec.constexpr_kind(), spec.constexpr_kind());
+                    if ok != nk && (ok == ConstexprKind::Consteval || nk == ConstexprKind::Consteval)
+                    {
+                        let msg = self
+                            .diag(DiagId::sema_constexpr_redecl_mismatch, d.name_loc())
+                            .arg(nk as u8)
+                            .arg(fname.clone())
+                            .arg(ok as u8);
+                        let msg = self.note_prev(msg, p, false);
+                        self.emit(msg);
+                        prev_ok = None;
+                        invalid_redecl = true;
                     }
                 } else if self.same_ignoring_exc_spec(pty, ty) {
                     // [except.spec]/5: every declaration of a function with
@@ -2402,8 +2441,11 @@ impl Sema<'_, '_> {
                 }
             }
         }
-        if let Some(loc) = ds.constexpr {
+        if let Some(loc) = ds.constexpr.or(ds.consteval) {
             self.error(DiagId::sema_constexpr_nonstatic_member, loc);
+        }
+        if let Some(loc) = ds.consteval {
+            self.error(DiagId::sema_consteval_wrong_decl_kind, loc);
         }
         if let Some(style) = d.init_style {
             // A default member initializer ([class.mem.general]/11),
@@ -2778,6 +2820,7 @@ impl Sema<'_, '_> {
             let style = VarSpec::new().with_init_style(kiln_ast::decl::InitStyle::ParenList);
             self.ast.decls.mark_var(v, style);
         }
+        self.note_var_init_full_expr(v);
         let e = self.act_on_full_expr(e);
         let _ = self.builder().set_var_init(v, e);
         // [class.temporary]/6: the temporaries the variable binds live as

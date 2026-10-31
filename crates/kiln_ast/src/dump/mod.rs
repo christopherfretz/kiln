@@ -463,6 +463,15 @@ impl<'a, W: io::Write> Dumper<'a, W> {
             | Node::Fixed(_)
             | Node::SpecRef(_) => {}
         }
+        // A nested immediate invocation has no wrapper in clang.
+        for (k, _) in kids.iter_mut() {
+            while let Node::Expr(x) = *k
+                && self.ast.exprs.get(x).kind() == ExprKind::ConstantExpr
+                && self.ast.exprs.constant_elided(x)
+            {
+                *k = Node::Expr(self.ast.exprs.operand(x));
+            }
+        }
     }
 
     fn decl_children(&self, d: DeclId, kids: &mut Vec<(Node, Option<&'static str>)>) {
@@ -1066,6 +1075,9 @@ impl<'a, W: io::Write> Dumper<'a, W> {
         };
         let spec = f.spec;
         match spec.constexpr_kind() {
+            ConstexprKind::Constexpr if spec.escalated() => {
+                self.line.push_str(" constexpr immediate");
+            }
             ConstexprKind::Constexpr => self.line.push_str(" constexpr"),
             ConstexprKind::Consteval => self.line.push_str(" consteval"),
             ConstexprKind::None if spec.escalated() => self.line.push_str(" immediate"),
@@ -1985,7 +1997,9 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                 }
             }
             ExprKind::ConstantExpr => {
-                if let Some(v) = exprs.constant_value(e) {
+                if let Some(v) = exprs.constant_value(e)
+                    && !exprs.constant_value_hidden(e)
+                {
                     self.value(v);
                 }
             }

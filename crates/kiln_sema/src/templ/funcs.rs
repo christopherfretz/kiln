@@ -632,6 +632,10 @@ impl Sema<'_, '_> {
             fspec = fspec
                 .with_constexpr_kind(kiln_ast::decl::ConstexprKind::Constexpr)
                 .with_implicit_inline(true);
+        } else if ds.consteval.is_some() {
+            fspec = fspec
+                .with_constexpr_kind(kiln_ast::decl::ConstexprKind::Consteval)
+                .with_implicit_inline(true);
         }
         let variadic = self.ast.types.proto(ty).is_some_and(|p| p.info().variadic());
         fspec = fspec.with_variadic(variadic);

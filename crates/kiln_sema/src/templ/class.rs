@@ -66,6 +66,7 @@ impl Sema<'_, '_> {
         if outer_depth.is_none() {
             self.range_for_outer_depth = Some(self.clang_scope_depth());
         }
+        let imm = self.take_immediate_state(true);
         let saved = SavedState {
             scopes: std::mem::take(&mut self.scopes),
             ctx: Some(self.ctx),
@@ -127,6 +128,7 @@ impl Sema<'_, '_> {
         self.unevaluated = saved.unevaluated;
         self.immediate = saved.immediate;
         self.pending_odr = saved.pending_odr;
+        self.restore_immediate_state(imm);
         self.defining = saved.defining;
         self.enums = saved.enums;
         self.braced_args = saved.braced_args;

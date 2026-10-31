@@ -110,6 +110,7 @@ pub(crate) struct LambdaScope {
     saved_cleanup: crate::class::CleanupState,
     saved_unevaluated: u32,
     saved_immediate: u32,
+    saved_imm: crate::consteval::SavedImm,
     saved_extend: Option<Vec<ExprId>>,
     saved_ctor_entity: Option<(crate::class::InitEntity, kiln_ast::expr::ConstructionKind)>,
     saved_mangle_var: Option<DeclId>,
@@ -155,6 +156,7 @@ impl Sema<'_, '_> {
             saved_cleanup: crate::class::CleanupState::default(),
             saved_unevaluated: 0,
             saved_immediate: 0,
+            saved_imm: crate::consteval::SavedImm::default(),
             saved_extend: None,
             saved_ctor_entity: None,
             saved_mangle_var: None,
@@ -218,11 +220,6 @@ impl Sema<'_, '_> {
         if generic {
             self.finish_invented_head();
             self.take_innermost_head();
-        }
-        if let Some(l) = specs.consteval {
-            // Immediate functions are not implemented (decl.rs reports a
-            // `consteval` function the same way).
-            self.unsupported("consteval lambdas", l);
         }
         let is_static = specs.static_.is_some();
         // [expr.prim.lambda.closure]/5: `const` unless `mutable` or
@@ -426,6 +423,7 @@ impl Sema<'_, '_> {
         let cleanup = std::mem::take(&mut self.cleanup);
         let unevaluated = std::mem::take(&mut self.unevaluated);
         let immediate = std::mem::take(&mut self.immediate);
+        let imm = self.take_immediate_state(true);
         let extend = self.extend_collector.take();
         let entity = self.ctor_entity.take();
         let mangle_var = self.lambda_mangle.var.take();
@@ -440,6 +438,7 @@ impl Sema<'_, '_> {
             top.saved_cleanup = cleanup;
             top.saved_unevaluated = unevaluated;
             top.saved_immediate = immediate;
+            top.saved_imm = imm;
             top.saved_extend = extend;
             top.saved_ctor_entity = entity;
             top.body_open = true;
@@ -518,6 +517,7 @@ impl Sema<'_, '_> {
         self.pending_odr = std::mem::take(&mut top.saved_pending_odr);
         self.cleanup = top.saved_cleanup;
         self.unevaluated = top.saved_unevaluated;
+        self.restore_immediate_state(std::mem::take(&mut top.saved_imm));
         self.immediate = top.saved_immediate;
         self.extend_collector = top.saved_extend.take();
         self.ctor_entity = top.saved_ctor_entity.take();
@@ -557,6 +557,7 @@ impl Sema<'_, '_> {
             self.pending_odr = std::mem::take(&mut top.saved_pending_odr);
             self.cleanup = top.saved_cleanup;
             self.unevaluated = top.saved_unevaluated;
+            self.restore_immediate_state(std::mem::take(&mut top.saved_imm));
             self.immediate = top.saved_immediate;
             self.extend_collector = top.saved_extend.take();
             self.ctor_entity = top.saved_ctor_entity.take();

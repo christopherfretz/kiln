@@ -17,6 +17,7 @@
 mod builtins;
 pub mod class;
 pub mod constfold;
+mod consteval;
 pub mod conv;
 pub mod decl;
 pub mod declspec;
@@ -114,6 +115,10 @@ pub struct Sema<'a, 'sm> {
     /// odr-uses ([basic.def.odr]/4): resolved at the end of the
     /// full-expression (spec/sema.md §5.2).
     pub(crate) pending_odr: Vec<ExprId>,
+    /// Immediate invocations and references to immediate functions of
+    /// the current full-expression, and why escalated functions are
+    /// immediate (spec/sema.md §5.6).
+    pub(crate) imm: consteval::ImmState,
     /// Classes whose definitions are being processed (incomplete until
     /// their closing brace).
     pub(crate) defining: Vec<DeclId>,
@@ -323,6 +328,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             decltype_calls: Vec::new(),
             immediate: 0,
             pending_odr: Vec::new(),
+            imm: consteval::ImmState::default(),
             defining: Vec::new(),
             enums: Vec::new(),
             local_externs: Vec::new(),

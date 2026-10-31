@@ -750,7 +750,11 @@ impl Sema<'_, '_> {
             rparen,
             ExprFlags::NONE,
         );
-        Some(self.maybe_bind_temporary(call))
+        let call = self.maybe_bind_temporary(call);
+        Some(match method {
+            Some(m) => self.check_immediate_invocation(call, m, None),
+            None => call,
+        })
     }
 
     /// [class.cdtor]/4 (spec/sema-class.md §4.11, clang

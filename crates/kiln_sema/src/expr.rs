@@ -372,6 +372,8 @@ impl Sema<'_, '_> {
         if !self.special.pending_deleted.is_empty() {
             self.flush_pending_deleted();
         }
+        // [expr.const]/16: the immediate invocations are evaluated.
+        self.finish_immediate_invocations(e);
         // [intro.execution]/5: the temporaries of the full-expression are
         // destroyed at its end (spec/sema-class.md §5.3).
         let e = self.finish_cleanups(e);
@@ -1195,6 +1197,7 @@ impl Sema<'_, '_> {
                 DeclKind::Function | DeclKind::CXXMethod => {
                     let at = self.eloc(e);
                     self.mark_function_referenced(d, at);
+                    self.note_immediate_ref(e, d);
                 }
                 DeclKind::Var | DeclKind::ParmVar => self.pending_odr.push(e),
                 _ => {}
@@ -2737,7 +2740,14 @@ impl Sema<'_, '_> {
         let at = self.begin_loc(callee);
         let (ty, vk) = self.call_result_of(proto.ret(), loc, named, at);
         let call = self.builder().call(f, &conv_args, ty, vk, loc, rparen, ExprFlags::NONE);
-        self.maybe_bind_temporary(call)
+        let call = self.maybe_bind_temporary(call);
+        match named {
+            Some(d) => {
+                let r = self.ignore_parens(callee);
+                self.check_immediate_invocation(call, d, Some(r))
+            }
+            None => call,
+        }
     }
 
     /// Converts the arguments of a call through a function of type `proto`

@@ -480,6 +480,7 @@ impl Sema<'_, '_> {
         let pty = self.ast.decls.get(p).ty().unwrap_or(QualType::ERROR);
         let loc = self.ast.exprs.get(e).loc();
         let c = self.perform_init(pty, crate::init::Initializer::Expr(e), loc, false);
+        self.note_default_init_full_expr();
         let c = self.act_on_full_expr(c);
         let _ = self.ast.decls.set_default_arg(p, c);
     }

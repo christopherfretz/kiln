@@ -635,6 +635,13 @@ diag_ids! {
     sema_constexpr_var_non_constant = Error (1) "constexpr variable '{0}' must be initialized by a constant expression";
     sema_constexpr_var_requires_const_destruction = Error (1) "constexpr variable '{0}' must have constant destruction";
     sema_constexpr_non_literal = Error (0) "constexpr can only be used in variable and function declarations";
+    sema_consteval_wrong_decl_kind = Error (0) "consteval can only be used in function declarations";
+    sema_consteval_dtor = Error (0) "destructor cannot be declared consteval";
+    sema_constexpr_main = Error (1) "'main' is not allowed to be declared {0:constexpr|consteval}";
+    sema_constexpr_redecl_mismatch = Error (3) "{0:non-constexpr|constexpr|consteval} declaration of '{1}' follows {2:non-constexpr|constexpr|consteval} declaration";
+    sema_immediate_call_non_constant = Error (2) "call to {0:immediate|consteval} function '{1}' is not a constant expression";
+    sema_immediate_address = Error (2) "cannot take address of {0:immediate|consteval} function '{1}' outside of an immediate invocation";
+    note_immediate_function_reason = Note (4) "'{0}' is an immediate function because its body {1:evaluates the address of|contains a call to} {2:an immediate|a consteval} function '{3}'{1:| and that call is not a constant expression}";
     sema_extern_init = Warning [ExternInitializer] (0) "'extern' variable has an initializer";
     sema_block_extern_init = Error (0) "declaration of block scope identifier with linkage cannot have an initializer";
     sema_invalid_storage_class_in_func_decl = Error (0) "invalid storage class specifier in function declarator";

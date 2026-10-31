@@ -295,6 +295,7 @@ impl Sema<'_, '_> {
         let zeroing = !self.is_user_provided(ctor);
         let info = ConstructInfo { zeroing, ..ConstructInfo::COMPLETE };
         let t = self.builder().temporary_object(ty, ctor, &[], info, ExprFlags::NONE, loc, rparen);
+        let t = self.check_immediate_invocation(t, ctor, None);
         Some(self.maybe_bind_temporary(t))
     }
 }

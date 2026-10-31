@@ -436,7 +436,15 @@ impl Parser<'_, '_> {
             return None;
         }
         self.s.push_scope(ScopeKind::Control);
-        let Some((init, (var, c))) = self.parse_paren_condition("if") else {
+        // An `if constexpr` condition is manifestly constant-evaluated.
+        if constexpr {
+            self.s.enter_constant_evaluated();
+        }
+        let cond = self.parse_paren_condition("if");
+        if constexpr {
+            self.s.exit_constant_evaluated();
+        }
+        let Some((init, (var, c))) = cond else {
             self.s.pop_scope();
             self.skip_if_rest_after_cond();
             return None;
