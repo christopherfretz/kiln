@@ -6,7 +6,7 @@
 use std::cmp::Ordering;
 
 use kiln_ast::consts::FloatKind;
-use kiln_ast::{DeclId, ExprId};
+use kiln_ast::{DeclId, ExprId, QualType};
 use kiln_source::Loc;
 
 use crate::arith::{self, FloatErr, IntErr, canon};
@@ -222,6 +222,15 @@ pub(crate) enum Fault {
     DeleteNonVirtual {
         stat: OTy,
         dynamic: OTy,
+    },
+    /// A failed reference `dynamic_cast` (clang's
+    /// `note_constexpr_dynamic_cast_to_reference_failed`, `kind` its
+    /// select index).
+    DynCast {
+        kind: u8,
+        stat: OTy,
+        dynamic: OTy,
+        target: OTy,
     },
     /// A polymorphic operation (access kind `ak`) on an object whose
     /// dynamic type is unknown (not usable in constant expressions).
@@ -931,6 +940,33 @@ impl Oven {
                         Ok(None) => pc += 4,
                         Err(f) => fail!(f),
                     }
+                }
+                Op::DynCast => {
+                    let raw = reg!(1) as u64;
+                    let stat = OTy(arg!(2) as u32);
+                    let t = arg!(3) as u32;
+                    let target = (t != u32::MAX).then_some(OTy(t));
+                    match self.dyn_cast(b, raw, stat, target, aux & 1 != 0) {
+                        Ok(r) => reg!(0) = u128::from(r),
+                        Err(f) => fail!(f),
+                    }
+                    pc += 5;
+                }
+                Op::TypeId => {
+                    let ti = OTy(arg!(2) as u32);
+                    let r = if aux & 1 == 0 {
+                        let Some(q) = QualType::from_raw(arg!(1) as u32) else {
+                            fail!(Fault::Invalid)
+                        };
+                        self.type_info(q, ti)
+                    } else {
+                        match self.type_info_dyn(reg!(1) as u64, OTy(arg!(3) as u32), ti) {
+                            Ok(r) => r,
+                            Err(f) => fail!(f),
+                        }
+                    };
+                    reg!(0) = u128::from(r);
+                    pc += 5;
                 }
                 Op::IsConstEval => {
                     let cc = self.run.const_context;

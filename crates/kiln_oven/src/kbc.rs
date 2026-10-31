@@ -207,6 +207,15 @@ ops! {
     // result object when aux = 1): the final overrider for the object's
     // dynamic type, `this` adjusted to its subobject ([class.virtual]/2)
     VCall = 3,
+    // [dst, p, static class, target class (`u32::MAX`: `void`)]:
+    // `dynamic_cast` ([expr.dynamic.cast]/6-9); aux = 1: a reference cast
+    // (`p` a glvalue's address; failure is diagnosed, not null)
+    DynCast = 4,
+    // [dst, type | p, type_info type, class]: the address of the
+    // `std::type_info` object of `type` (a canonical `QualType`), or with
+    // aux = 1 of the dynamic type of the polymorphic glvalue of `class`
+    // at `p` ([expr.typeid]/3-4)
+    TypeId = 4,
 }
 
 /// The kinds of `Builtin` and their operands.

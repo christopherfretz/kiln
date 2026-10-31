@@ -228,6 +228,25 @@ impl Oven {
                     self.tname(ast, stat)
                 ),
             ),
+            Fault::DynCast { kind, stat, dynamic, target } => {
+                let (st, dy, ta) =
+                    (self.tname(ast, stat), self.tname(ast, dynamic), self.tname(ast, target));
+                let what = match kind {
+                    0 => format!(
+                        "static type '{st}' of operand is a non-public base class of dynamic type '{dy}'"
+                    ),
+                    1 => format!(
+                        "dynamic type '{dy}' of operand does not have a base class of type '{ta}'"
+                    ),
+                    2 => format!(
+                        "'{ta}' is an ambiguous base class of dynamic type '{dy}' of operand"
+                    ),
+                    _ => format!(
+                        "'{ta}' is a non-public base class of dynamic type '{dy}' of operand"
+                    ),
+                };
+                (site.loc, format!("reference dynamic_cast failed: {what}"))
+            }
             Fault::UnknownDynamic { ak: k, p, ty } => {
                 let d = self.ptr_string(ast, p, ty);
                 (
@@ -570,6 +589,9 @@ impl Oven {
             // clang: `{*new T#N}`, N its allocation number.
             Origin::Heap(_, n) => {
                 let _ = write!(s, "{{*new {}#{n}}}", self.tname(ast, a.ty));
+            }
+            Origin::TypeInfo(q) => {
+                let _ = write!(s, "typeid({})", Self::type_name(ast, q));
             }
         }
         let (mut t, mut rel) = (a.ty, u64::from(p.off));

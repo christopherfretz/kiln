@@ -25,7 +25,7 @@
 
 use std::collections::VecDeque;
 
-use kiln_ast::{ConstValueId, DeclId, ExprId, StringLitId};
+use kiln_ast::{ConstValueId, DeclId, ExprId, QualType, StringLitId};
 use kiln_source::fx::FxHashMap;
 
 use crate::ty::{OTy, TyKind, Types};
@@ -148,6 +148,8 @@ pub(crate) enum Origin {
     /// its evaluation context (clang's `{*new T#N}`; the leak check
     /// reports the lowest).
     Heap(ExprId, u32),
+    /// The `std::type_info` object of a type (`typeid`, WP-077).
+    TypeInfo(QualType),
 }
 
 pub(crate) mod flags {

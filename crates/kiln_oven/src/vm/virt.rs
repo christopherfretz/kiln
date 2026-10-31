@@ -9,6 +9,7 @@
 //! from its type (`Oven::thaw_vptrs`).
 
 use kiln_ast::class::SubobjectId;
+use kiln_ast::decl::{Access, TagKind};
 use kiln_ast::{Ast, DeclId, QualType};
 use kiln_source::fx::FxHashMap;
 
@@ -16,7 +17,7 @@ use super::Fault;
 use crate::Oven;
 use crate::SemaBridge;
 use crate::kbc::ak;
-use crate::mem::{MemFault, Ptr};
+use crate::mem::{MemFault, Origin, Ptr};
 use crate::ty::{OTy, TyKind};
 
 /// One subobject of a class (indexed by [`SubobjectId`]).
@@ -32,6 +33,10 @@ pub(crate) struct Sub {
     pub virt: bool,
     /// The class is polymorphic (has a vptr slot at `off`).
     pub poly: bool,
+    /// The subobject this one is a direct base of (itself for 0).
+    pub parent: u16,
+    /// That base-specifier grants public access ([class.access.base]/1).
+    pub public: bool,
 }
 
 /// The subobject graph of a class with offsets.
@@ -61,6 +66,10 @@ pub(crate) struct Virt {
     map: FxHashMap<OTy, u32>,
     infos: Vec<PolyInfo>,
     dispatch: FxHashMap<(OTy, u64, DeclId), Target>,
+    /// The `std::type_info` object of each type `typeid` named (by its
+    /// canonical type): a static allocation, so `&typeid(T)` is one
+    /// address for the translation unit.
+    type_infos: FxHashMap<u32, u64>,
 }
 
 impl Virt {
@@ -72,6 +81,7 @@ impl Virt {
                 .map(|i| i.subs.capacity() * 40 + i.vptrs.capacity() * 8)
                 .sum::<usize>()
             + self.dispatch.capacity() * 48
+            + self.type_infos.capacity() * 12
     }
 }
 
@@ -121,7 +131,30 @@ impl Oven {
                 let o = l.bases.iter().find(|v| v.0 == s.class).map_or(0, |v| v.1);
                 (parent.off + o, parent.virt)
             };
-            subs.push(Sub { off, cls: cty, decl: s.class, virt, poly });
+            let public = i == 0 || {
+                let ast = b.ast();
+                let pd = graph[s.parent.index()].class;
+                let pdef = ast.definition(pd).unwrap_or(pd);
+                let written = ast
+                    .decls
+                    .bases(pdef, &ast.lists)
+                    .nth(usize::from(s.base_index))
+                    .map_or(Access::Public, |bs| bs.access);
+                match written {
+                    Access::Public => true,
+                    Access::None => ast.decls.record(pdef).is_none_or(|r| r.tag != TagKind::Class),
+                    _ => false,
+                }
+            };
+            subs.push(Sub {
+                off,
+                cls: cty,
+                decl: s.class,
+                virt,
+                poly,
+                parent: s.parent.index() as u16,
+                public,
+            });
         }
         let mut vptrs: Vec<u64> =
             subs.iter().filter(|s| s.poly && !s.virt).map(|s| s.off).collect();
@@ -302,5 +335,87 @@ impl Oven {
         let pure = ast.decls.function(ast.first(ov)).is_some_and(|f| f.spec.is_pure());
         let func = self.func_index(ast, ov);
         Ok(Target { func, delta: to.off as i64 - ott as i64, ov, pure })
+    }
+
+    /// `Op::DynCast`: `dynamic_cast` of the object at `raw` (static class
+    /// `stat`) to class `target` (`None`: `void*`, the most derived
+    /// object), clang's `HandleDynamicCast` ([expr.dynamic.cast]/7-9). A
+    /// failed pointer cast is null (0); a failed reference cast is a
+    /// [`Fault::DynCast`] (it would throw `std::bad_cast`).
+    pub(crate) fn dyn_cast(
+        &mut self,
+        b: &mut dyn SemaBridge,
+        raw: u64,
+        stat: OTy,
+        target: Option<OTy>,
+        glvalue: bool,
+    ) -> Result<u64, Fault> {
+        if raw == 0 && !glvalue {
+            return Ok(0);
+        }
+        let (c, ott) = self.read_vptr(raw, stat, ak::DYNAMIC_CAST)?;
+        let base = u64::from(Ptr::decode(raw).off) - ott;
+        let at = |off: u64| Ptr::with_off(raw, base + off, false);
+        let Some(t) = target else { return Ok(at(0)) };
+        let (i, k) = self.locate(b, c, ott, stat).ok_or(Fault::Invalid)?;
+        let subs = &self.virt.infos[i as usize].subs;
+        let fail = |kind: u8| {
+            if glvalue { Err(Fault::DynCast { kind, stat, dynamic: c, target: t }) } else { Ok(0) }
+        };
+        // Phase 1: from the operand's subobject up towards the most
+        // derived object, across public edges only.
+        let mut cur = usize::from(k);
+        loop {
+            let s = subs[cur];
+            if s.cls == t {
+                return Ok(at(s.off));
+            }
+            if cur == 0 {
+                break;
+            }
+            if !s.public {
+                let has = subs.iter().any(|s| s.cls == t);
+                return fail(if has { 0 } else { 1 });
+            }
+            cur = usize::from(s.parent);
+        }
+        // Phase 2: an unambiguous public base of the dynamic type.
+        let mut found = subs.iter().enumerate().filter(|(_, s)| s.cls == t);
+        let Some((j, s)) = found.next() else { return fail(1) };
+        if found.next().is_some() {
+            return fail(2);
+        }
+        let mut j = j;
+        while j != 0 {
+            if !subs[j].public {
+                return fail(3);
+            }
+            j = usize::from(subs[j].parent);
+        }
+        if s.virt {
+            return Err(Fault::Invalid);
+        }
+        Ok(at(s.off))
+    }
+
+    /// `Op::TypeId`: the `std::type_info` object (of type `ti`) for the
+    /// canonical type `q` ([expr.typeid]/1).
+    pub(crate) fn type_info(&mut self, q: QualType, ti: OTy) -> u64 {
+        let key = q.to_raw();
+        if let Some(&p) = self.virt.type_infos.get(&key) {
+            return p;
+        }
+        let size = self.types.size(ti);
+        let p = self.mem.alloc_static(ti, size, crate::mem::flags::CONST, Origin::TypeInfo(q));
+        self.virt.type_infos.insert(key, p);
+        p
+    }
+
+    /// `Op::TypeId` of a polymorphic glvalue at `raw` (static class
+    /// `cls`): its dynamic type ([expr.typeid]/3).
+    pub(crate) fn type_info_dyn(&mut self, raw: u64, cls: OTy, ti: OTy) -> Result<u64, Fault> {
+        let (c, _) = self.read_vptr(raw, cls, ak::TYPEID)?;
+        let q = self.types.info(c).q;
+        Ok(self.type_info(q, ti))
     }
 }
