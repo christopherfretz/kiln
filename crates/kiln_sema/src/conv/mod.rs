@@ -633,7 +633,13 @@ fn bind_reference(s: &mut Sema<'_, '_>, e: ExprId, to: QualType) -> Result<ExprI
         _ => BaseSearch::NotDerived,
     };
     let related = same || base.is_derived();
-    let to_str = s.ty_arg(referee);
+    // Diagnostics print the referee as written (clang
+    // `DestType.getNonReferenceType()`): `I` in `I &&`.
+    let written = s.ast.types.desugar_top(to);
+    let to_str = match s.ast.types.view(written.ty()) {
+        TypeView::LValueRef(p) | TypeView::RValueRef(p) => s.ty_arg(p),
+        _ => s.ty_arg(referee),
+    };
     // A non-const (or volatile) lvalue reference: binds no temporary.
     let plain_lref = !rvalue_ref && (!rq.contains(Quals::CONST) || rq.contains(Quals::VOLATILE));
     // [dcl.init.ref]/5.1 binds an lvalue; /5.3.1 binds an xvalue to an
@@ -658,8 +664,12 @@ fn bind_reference(s: &mut Sema<'_, '_>, e: ExprId, to: QualType) -> Result<ExprI
         // [dcl.init.ref]/5.4.2: a temporary of type cv1 T1
         // copy-initialized from the initializer.
         let target = s.ast.types.qualify(r_un, rq);
-        let scs = standard_conversion(s, e, r_un, ConvCtx::Initialization)
-            .ok_or_else(|| conversion_error(s, e, r_un, ConvCtx::Initialization))?;
+        // clang `FK_ReferenceInitFailed`: the referee as written.
+        let Some(scs) = standard_conversion(s, e, r_un, ConvCtx::Initialization) else {
+            let sel = if vk.is_glvalue() { "1" } else { "0" };
+            let args = vec![to_str, sel.into(), s.ty_arg(from)];
+            return Err(ConvError::new(DiagId::sema_reference_bind_failed, args));
+        };
         let mut x = apply_standard_conversion(s, e, &scs, r_un)?;
         if !rq.is_empty() {
             x = qualify_prvalue(s, x, target);

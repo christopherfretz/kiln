@@ -1,0 +1,96 @@
+Dumping test_base:
+FunctionDecl test_base 'int (D)'
+|-ParmVarDecl used d 'D'
+`-CompoundStmt
+  |-DeclStmt
+  | `-DecompositionDecl used 'D' cinit
+  |   |-CXXConstructExpr 'D' 'void (const D &) noexcept'
+  |   | `-ImplicitCastExpr 'const D' lvalue <NoOp>
+  |   |   `-DeclRefExpr 'D' lvalue ParmVar 'd' 'D'
+  |   |-BindingDecl referenced x 'int'
+  |   | `-MemberExpr 'int' lvalue .x
+  |   |   `-ImplicitCastExpr 'B' lvalue <UncheckedDerivedToBase (B)>
+  |   |     `-DeclRefExpr 'D' lvalue Decomposition '' 'D'
+  |   `-BindingDecl referenced y 'long'
+  |     `-MemberExpr 'long' lvalue .y
+  |       `-ImplicitCastExpr 'B' lvalue <UncheckedDerivedToBase (B)>
+  |         `-DeclRefExpr 'D' lvalue Decomposition '' 'D'
+  `-ReturnStmt
+    `-BinaryOperator 'int' '+'
+      |-ImplicitCastExpr 'int' <LValueToRValue>
+      | `-DeclRefExpr 'int' lvalue Binding 'x' 'int'
+      `-CXXFunctionalCastExpr 'int' functional cast to int <NoOp>
+        `-ImplicitCastExpr 'int' <IntegralCast> part_of_explicit_cast
+          `-ImplicitCastExpr 'long' <LValueToRValue> part_of_explicit_cast
+            `-DeclRefExpr 'long' lvalue Binding 'y' 'long'
+
+Dumping test_mutable:
+FunctionDecl test_mutable 'int (M)'
+|-ParmVarDecl used mm 'M'
+`-CompoundStmt
+  |-DeclStmt
+  | `-DecompositionDecl used 'const M' cinit
+  |   |-CXXConstructExpr 'const M' 'void (const M &) noexcept'
+  |   | `-ImplicitCastExpr 'const M' lvalue <NoOp>
+  |   |   `-DeclRefExpr 'M' lvalue ParmVar 'mm' 'M'
+  |   |-BindingDecl referenced i 'const int'
+  |   | `-MemberExpr 'const int' lvalue .i
+  |   |   `-DeclRefExpr 'const M' lvalue Decomposition '' 'const M'
+  |   `-BindingDecl referenced m 'int'
+  |     `-MemberExpr 'int' lvalue .m
+  |       `-DeclRefExpr 'const M' lvalue Decomposition '' 'const M'
+  |-BinaryOperator 'int' lvalue '='
+  | |-DeclRefExpr 'int' lvalue Binding 'm' 'int'
+  | `-IntegerLiteral 'int' 3
+  `-ReturnStmt
+    `-BinaryOperator 'int' '+'
+      |-ImplicitCastExpr 'int' <LValueToRValue>
+      | `-DeclRefExpr 'const int' lvalue Binding 'i' 'const int'
+      `-ImplicitCastExpr 'int' <LValueToRValue>
+        `-DeclRefExpr 'int' lvalue Binding 'm' 'int'
+
+Dumping test_temporary:
+FunctionDecl test_temporary 'int ()'
+`-CompoundStmt
+  |-DeclStmt
+  | `-DecompositionDecl used 'const M &' cinit
+  |   |-ExprWithCleanups 'const M' lvalue
+  |   | `-MaterializeTemporaryExpr 'const M' lvalue extended by Decomposition '' 'const M &'
+  |   |   `-ImplicitCastExpr 'const M' <NoOp>
+  |   |     `-CXXFunctionalCastExpr 'M' functional cast to M <NoOp>
+  |   |       `-InitListExpr 'M'
+  |   |         |-IntegerLiteral 'int' 1
+  |   |         `-IntegerLiteral 'int' 2
+  |   |-BindingDecl referenced i 'const int'
+  |   | `-MemberExpr 'const int' lvalue .i
+  |   |   `-DeclRefExpr 'const M' lvalue Decomposition '' 'const M &'
+  |   `-BindingDecl referenced m 'int'
+  |     `-MemberExpr 'int' lvalue .m
+  |       `-DeclRefExpr 'const M' lvalue Decomposition '' 'const M &'
+  |-DeclStmt
+  | `-DecompositionDecl used 'M &&' cinit
+  |   |-ExprWithCleanups 'M' xvalue
+  |   | `-MaterializeTemporaryExpr 'M' xvalue extended by Decomposition '' 'M &&'
+  |   |   `-CXXFunctionalCastExpr 'M' functional cast to M <NoOp>
+  |   |     `-InitListExpr 'M'
+  |   |       |-IntegerLiteral 'int' 3
+  |   |       `-IntegerLiteral 'int' 4
+  |   |-BindingDecl referenced j 'int'
+  |   | `-MemberExpr 'int' lvalue .i
+  |   |   `-DeclRefExpr 'M' lvalue Decomposition '' 'M &&'
+  |   `-BindingDecl referenced n 'int'
+  |     `-MemberExpr 'int' lvalue .m
+  |       `-DeclRefExpr 'M' lvalue Decomposition '' 'M &&'
+  `-ReturnStmt
+    `-BinaryOperator 'int' '+'
+      |-BinaryOperator 'int' '+'
+      | |-BinaryOperator 'int' '+'
+      | | |-ImplicitCastExpr 'int' <LValueToRValue>
+      | | | `-DeclRefExpr 'const int' lvalue Binding 'i' 'const int'
+      | | `-ImplicitCastExpr 'int' <LValueToRValue>
+      | |   `-DeclRefExpr 'int' lvalue Binding 'm' 'int'
+      | `-ImplicitCastExpr 'int' <LValueToRValue>
+      |   `-DeclRefExpr 'int' lvalue Binding 'j' 'int'
+      `-ImplicitCastExpr 'int' <LValueToRValue>
+        `-DeclRefExpr 'int' lvalue Binding 'n' 'int'
+

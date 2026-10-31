@@ -145,6 +145,9 @@ struct Index<'a> {
     types: Types,
     /// Bit-field `FieldDecl` ids.
     bitfields: HashSet<&'a str>,
+    /// `BindingDecl`s by id (a reference to one is a bit-field lvalue when
+    /// its binding expression is).
+    bindings: HashMap<&'a str, &'a Json>,
     /// Functions by id (for `previousDecl`).
     funcs: HashMap<&'a str, &'a Json>,
     /// Functions whose lexical context is a class (members, and friends
@@ -330,6 +333,9 @@ impl<'a> Index<'a> {
         match k {
             "FieldDecl" if flag(n, "isBitfield") => {
                 self.bitfields.insert(id(n));
+            }
+            "BindingDecl" => {
+                self.bindings.insert(id(n), n);
             }
             "CXXRecordDecl" if flag(n, "completeDefinition") && !flag(n, "isImplicit") => {
                 if let Some(nm) = name(n) {
@@ -1547,6 +1553,13 @@ impl<'a> Printer<'a, '_> {
             "MemberExpr" => {
                 text(n, "referencedMemberDecl").is_some_and(|d| self.ix.bitfields.contains(d))
             }
+            "DeclRefExpr" => n
+                .get("referencedDecl")
+                .and_then(|r| r.get("id"))
+                .and_then(Json::as_str)
+                .and_then(|b| self.ix.bindings.get(b))
+                .and_then(|b| kids(b).last())
+                .is_some_and(|e| self.bitfield(e)),
             "ParenExpr" | "CompoundAssignOperator" => kid(0),
             "SubstNonTypeTemplateParmExpr" => kid(1),
             "BinaryOperator" => match text(n, "opcode") {

@@ -1,0 +1,4 @@
+count-mismatch.cpp:14:8: error: type 'S' decomposes into 2 elements, but only 1 name was provided
+count-mismatch.cpp:15:8: error: type 'S' decomposes into 2 elements, but 3 names were provided
+count-mismatch.cpp:16:8: error: type 'int[3]' decomposes into 3 elements, but only 2 names were provided
+count-mismatch.cpp:17:8: error: type 'E' decomposes into 0 elements, but 1 name was provided

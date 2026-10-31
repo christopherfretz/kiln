@@ -1,0 +1,73 @@
+Dumping test_loop:
+FunctionDecl test_loop 'int (P (&)[2])'
+|-ParmVarDecl used ps 'P (&)[2]'
+`-CompoundStmt
+  |-DeclStmt
+  | `-VarDecl used s 'int' cinit
+  |   `-IntegerLiteral 'int' 0
+  |-CXXForRangeStmt
+  | |-DeclStmt
+  | |-DeclStmt
+  | |-DeclStmt
+  | |-BinaryOperator 'bool' '!='
+  | | |-ImplicitCastExpr 'P *' <LValueToRValue>
+  | | | `-DeclRefExpr 'P *' lvalue Var '__begin1' 'P *'
+  | | `-ImplicitCastExpr 'P *' <LValueToRValue>
+  | |   `-DeclRefExpr 'P *' lvalue Var '__end1' 'P *'
+  | |-UnaryOperator 'P *' lvalue prefix '++'
+  | | `-DeclRefExpr 'P *' lvalue Var '__begin1' 'P *'
+  | |-DeclStmt
+  | | `-DecompositionDecl used 'P' cinit
+  | |   |-CXXConstructExpr 'P' 'void (const P &) noexcept'
+  | |   | `-ImplicitCastExpr 'const P' lvalue <NoOp>
+  | |   |   `-UnaryOperator 'P' lvalue prefix '*' cannot overflow
+  | |   |     `-ImplicitCastExpr 'P *' <LValueToRValue>
+  | |   |       `-DeclRefExpr 'P *' lvalue Var '__begin1' 'P *'
+  | |   |-BindingDecl referenced x 'int'
+  | |   | `-MemberExpr 'int' lvalue .x
+  | |   |   `-DeclRefExpr 'P' lvalue Decomposition '' 'P'
+  | |   `-BindingDecl referenced y 'int'
+  | |     `-MemberExpr 'int' lvalue .y
+  | |       `-DeclRefExpr 'P' lvalue Decomposition '' 'P'
+  | `-CompoundAssignOperator 'int' lvalue '+=' ComputeLHSTy='int' ComputeResultTy='int'
+  |   |-DeclRefExpr 'int' lvalue Var 's' 'int'
+  |   `-BinaryOperator 'int' '*'
+  |     |-ImplicitCastExpr 'int' <LValueToRValue>
+  |     | `-DeclRefExpr 'int' lvalue Binding 'x' 'int'
+  |     `-ImplicitCastExpr 'int' <LValueToRValue>
+  |       `-DeclRefExpr 'int' lvalue Binding 'y' 'int'
+  |-CXXForRangeStmt
+  | |-DeclStmt
+  | |-DeclStmt
+  | |-DeclStmt
+  | |-BinaryOperator 'bool' '!='
+  | | |-ImplicitCastExpr 'P *' <LValueToRValue>
+  | | | `-DeclRefExpr 'P *' lvalue Var '__begin1' 'P *'
+  | | `-ImplicitCastExpr 'P *' <LValueToRValue>
+  | |   `-DeclRefExpr 'P *' lvalue Var '__end1' 'P *'
+  | |-UnaryOperator 'P *' lvalue prefix '++'
+  | | `-DeclRefExpr 'P *' lvalue Var '__begin1' 'P *'
+  | |-DeclStmt
+  | | `-DecompositionDecl used 'const P &' cinit
+  | |   |-ImplicitCastExpr 'const P' lvalue <NoOp>
+  | |   | `-UnaryOperator 'P' lvalue prefix '*' cannot overflow
+  | |   |   `-ImplicitCastExpr 'P *' <LValueToRValue>
+  | |   |     `-DeclRefExpr 'P *' lvalue Var '__begin1' 'P *'
+  | |   |-BindingDecl referenced x 'const int'
+  | |   | `-MemberExpr 'const int' lvalue .x
+  | |   |   `-DeclRefExpr 'const P' lvalue Decomposition '' 'const P &'
+  | |   `-BindingDecl referenced y 'const int'
+  | |     `-MemberExpr 'const int' lvalue .y
+  | |       `-DeclRefExpr 'const P' lvalue Decomposition '' 'const P &'
+  | `-CompoundAssignOperator 'int' lvalue '+=' ComputeLHSTy='int' ComputeResultTy='int'
+  |   |-DeclRefExpr 'int' lvalue Var 's' 'int'
+  |   `-BinaryOperator 'int' '-'
+  |     |-ImplicitCastExpr 'int' <LValueToRValue>
+  |     | `-DeclRefExpr 'const int' lvalue Binding 'x' 'const int'
+  |     `-ImplicitCastExpr 'int' <LValueToRValue>
+  |       `-DeclRefExpr 'const int' lvalue Binding 'y' 'const int'
+  `-ReturnStmt
+    `-ImplicitCastExpr 'int' <LValueToRValue>
+      `-ImplicitCastExpr 'int' xvalue <NoOp>
+        `-DeclRefExpr 'int' lvalue Var 's' 'int'
+

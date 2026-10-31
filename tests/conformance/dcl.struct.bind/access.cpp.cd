@@ -1,0 +1,4 @@
+access.cpp:16:9: error: cannot decompose private member 'p' of 'Pr'
+access.cpp:10:16: note: implicitly declared private here
+access.cpp:17:9: error: cannot decompose protected member 'x' of 'Pro'
+access.cpp:11:29: note: declared protected here

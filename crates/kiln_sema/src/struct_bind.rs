@@ -349,7 +349,7 @@ impl Sema<'_, '_> {
         let provided = if (names as u64) > elems {
             match names {
                 0 => "no names were".to_owned(),
-                1 => "one name was".to_owned(),
+                1 => "1 name was".to_owned(),
                 n => format!("{n} names were"),
             }
         } else if names == 1 {
@@ -418,31 +418,40 @@ impl Sema<'_, '_> {
     /// The complete class `std::TRAIT<args>` (clang
     /// `lookupStdTypeTraitMember` up to the member lookup), if any.
     fn std_trait(&mut self, trait_name: &str, args: &[TemplateArg], loc: Loc) -> Option<DeclId> {
-        self.std_trait_ty(trait_name, args, loc).map(|x| x.0)
+        self.std_trait_ty(trait_name, args, loc, false).ok().map(|x| x.0)
     }
 
     /// [`Self::std_trait`], with the specialization's type as written
-    /// (`std::NAME<args>::`, a nested-name-specifier).
+    /// (`std::NAME<args>::`, a nested-name-specifier). With `complain`, an
+    /// incomplete specialization is diagnosed as clang's
+    /// `RequireCompleteType` does (`implicit instantiation of undefined
+    /// template`), and the error is `Err(true)`.
     fn std_trait_ty(
         &mut self,
         trait_name: &str,
         args: &[TemplateArg],
         loc: Loc,
-    ) -> Option<(DeclId, NnsId)> {
-        let (ns, tmpl) = self.std_class_template(trait_name)?;
+        complain: bool,
+    ) -> Result<(DeclId, NnsId), bool> {
+        let (ns, tmpl) = self.std_class_template(trait_name).ok_or(false)?;
         let name = self.template_name_for(tmpl);
         let t = match self.act_template_id(name, args, loc, loc) {
             Ok(TemplateIdRef::Type(t)) => t,
-            _ => return None,
+            _ => return Err(false),
         };
-        if !self.require_complete_silent(t, loc) {
-            return None;
+        let complete = if complain {
+            self.require_complete(t, loc)
+        } else {
+            self.require_complete_silent(t, loc)
+        };
+        if !complete {
+            return Err(complain);
         }
-        let r = self.ast.types.as_record(t)?;
-        let def = self.ast.definition(r)?;
+        let r = self.ast.types.as_record(t).ok_or(false)?;
+        let def = self.ast.definition(r).ok_or(false)?;
         let std = self.ast.types.nns(Nns::Namespace { prefix: None, ns });
         let nns = self.ast.types.nns(Nns::Type { prefix: Some(std), ty: t, template_kw: false });
-        Some((def, nns))
+        Ok((def, nns))
     }
 
     /// clang `isTupleLike`: `std::tuple_size<E>::value`.
@@ -490,11 +499,15 @@ impl Sema<'_, '_> {
     fn tuple_element_type(&mut self, loc: Loc, i: u64, dty: QualType) -> Option<QualType> {
         let args = [self.size_t_arg(i), TemplateArg::ty(dty)];
         let mut qual = None;
-        let found = self.std_trait_ty("tuple_element", &args, loc).map(|(c, nns)| {
-            qual = Some(nns);
-            let ty = self.intern("type");
-            self.lookup_in_class(c, ty, LookupKind::Ordinary)
-        });
+        let found = match self.std_trait_ty("tuple_element", &args, loc, true) {
+            Ok((c, nns)) => {
+                qual = Some(nns);
+                let ty = self.intern("type");
+                Some(self.lookup_in_class(c, ty, LookupKind::Ordinary))
+            }
+            Err(true) => return None,
+            Err(false) => None,
+        };
         let td = found.as_ref().and_then(|f| {
             f.decls.first().copied().filter(|&d| crate::lookup::is_type_kind(self.kind_of(d)))
         });
@@ -556,24 +569,29 @@ impl Sema<'_, '_> {
         };
         let vspec = self.ast.decls.var(v).map(|x| x.spec).unwrap_or_default();
         let tc = TupleCtx { v, dty, lref, member_get, get, ctx, lexical, vspec };
+        let mut ok = true;
         for (i, &b) in bindings.iter().enumerate() {
             let loc = self.ast.decls.get(b).loc();
             // Diagnostics name the binding being initialized.
             if !self.push_inst_frame(FrameKind::BindingInit, b, b, loc) {
                 return false;
             }
-            let ok = self.decompose_tuple_binding(&tc, i, b);
+            let r = self.decompose_tuple_binding(&tc, i, b);
             self.pop_inst_frame();
-            if !ok {
-                return false;
+            match r {
+                Some(true) => {}
+                Some(false) => ok = false,
+                None => return false,
             }
         }
-        true
+        ok
     }
 
     /// One binding of [`Self::decompose_tuple`]: its holding variable and
-    /// initializer.
-    fn decompose_tuple_binding(&mut self, tc: &TupleCtx, i: usize, b: DeclId) -> bool {
+    /// initializer. `Some(false)` when only the `get` call failed: clang
+    /// recovers it (a `RecoveryExpr`) and goes on to the next binding;
+    /// `None` stops the decomposition.
+    fn decompose_tuple_binding(&mut self, tc: &TupleCtx, i: usize, b: DeclId) -> Option<bool> {
         let TupleCtx { v, dty, lref, member_get, get, ctx, lexical, vspec } = *tc;
         let loc = self.ast.decls.get(b).loc();
         let mut e = self.decomp_ref(v, loc);
@@ -583,14 +601,20 @@ impl Sema<'_, '_> {
         }
         let idx = self.size_t_arg(i as u64);
         let targs = self.ast.types.arg_list(&[idx]);
+        // An empty lookup is not recovered (clang `DiagnoseEmptyLookup`
+        // in `BuildRecoveryCallExpr`); a failed overload resolution is.
+        let mut recoverable = true;
         let call = if member_get {
             let m = self.act_on_member(e, get, loc, loc, false);
             if self.is_err_expr(m) {
-                return false;
+                return None;
             }
             let m = self.act_on_member_template_args(m, targs);
             self.act_on_call(m, &[], loc, loc)
         } else {
+            let mut found = Vec::new();
+            self.adl_lookup(get, &[e], &mut found);
+            recoverable = !found.is_empty();
             let ule = self.builder().unresolved_lookup(get, &[], true, None, Some(targs), loc);
             let call = self.act_on_call(ule, &[e], loc, loc);
             // The lookup is argument-dependent only ([dcl.struct.bind]/4),
@@ -604,10 +628,13 @@ impl Sema<'_, '_> {
             }
             call
         };
-        if self.is_err_expr(call) {
-            return false;
+        if self.is_err_expr(call) && !recoverable {
+            return None;
         }
-        let Some(t) = self.tuple_element_type(loc, i as u64, dty) else { return false };
+        let t = self.tuple_element_type(loc, i as u64, dty)?;
+        if self.is_err_expr(call) {
+            return Some(false);
+        }
         let is_lvalue = self.ast.exprs.get(call).value_category() == ValueCategory::LValue;
         let ref_ty = if is_lvalue {
             self.ast.types.lvalue_ref_to(t)
@@ -629,13 +656,13 @@ impl Sema<'_, '_> {
         let init = self.act_on_full_expr(init);
         let _ = self.builder().set_var_init(hv, init);
         if self.is_err_expr(init) {
-            return false;
+            return None;
         }
         self.extend_temporaries(hv, init);
         let r = self.build_decl_ref(hv, loc);
         self.ast.decls.set_ty(b, t);
         let _ = self.ast.decls.set_binding(b, r, Some(hv));
-        true
+        Some(true)
     }
 
     /// Whether function template `d`'s first template parameter is a

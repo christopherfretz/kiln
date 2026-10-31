@@ -1,0 +1,7 @@
+specifiers.cpp:16:1: error: decomposition declaration cannot be declared 'constexpr'
+specifiers.cpp:17:1: error: decomposition declaration cannot be declared 'constinit'
+specifiers.cpp:18:1: error: decomposition declaration cannot be declared 'inline'
+specifiers.cpp:19:1: error: decomposition declaration cannot be declared with 'constexpr inline' specifiers
+specifiers.cpp:23:1: error: decomposition declaration cannot be declared 'typedef'
+specifiers.cpp:25:3: error: decomposition declaration cannot be declared 'extern'
+specifiers.cpp:25:15: error: declaration of block scope identifier with linkage cannot have an initializer

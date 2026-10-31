@@ -414,6 +414,7 @@ diag_ids! {
     sema_lvalue_ref_bind_to_temporary = Error (3) "{0:non-const|volatile} lvalue reference to type {1} cannot bind to a temporary of type {2}";
     sema_lvalue_ref_bind_to_unrelated = Error (3) "{0:non-const|volatile} lvalue reference to type {1} cannot bind to a value of unrelated type {2}";
     sema_rvalue_ref_bind_to_lvalue = Error (2) "rvalue reference to type {0} cannot bind to lvalue of type {1}";
+    sema_reference_bind_failed = Error (3) "reference to type {0} could not bind to an {1:rvalue|lvalue} of type {2}";
     sema_reference_bind_drops_quals = Error (4) "binding reference of type {0} to value of type {1} drops {2} qualifier{3:|s}";
     sema_conv_unsupported = Error (1) "{0} is not supported yet";
 

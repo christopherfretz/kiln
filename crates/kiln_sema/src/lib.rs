@@ -467,6 +467,14 @@ impl<'a, 'sm> Sema<'a, 'sm> {
         print_type(&self.ast.types, &names, q, PrintOptions::SUGARED)
     }
 
+    /// `q` printed canonical and fully scoped, without quotes: how clang
+    /// prints a declaration's own type (`Context.getTypeDeclType(D)`, a
+    /// bare `RecordType`), e.g. `N::X<int>`.
+    pub fn decl_ty_str(&self, q: QualType) -> String {
+        let names = names::SemaNames::new(self);
+        print_type(&self.ast.types, &names, q, PrintOptions::CANONICAL)
+    }
+
     /// The qualified name of `d`, as clang prints a declaration argument.
     pub fn qualified_decl_name(&self, d: DeclId) -> String {
         use kiln_ast::types::TypeNames as _;
