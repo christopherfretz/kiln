@@ -1055,6 +1055,7 @@ diag_ids! {
     note_ovl_candidate_explicit_arg_mismatch_named = Note (1) "candidate template ignored: invalid explicitly-specified argument for template parameter '{0}'";
     note_ovl_candidate_explicit_arg_mismatch_unnamed = Note (1) "candidate template ignored: invalid explicitly-specified argument for {0} template parameter";
     note_ovl_candidate_instantiation_depth = Note (0) "candidate template ignored: substitution exceeded maximum template instantiation depth";
+    note_ovl_candidate_bad_deduction = Note (0) "candidate template ignored: failed template argument deduction";
     note_deduction_non_deduced_mismatch = Note (2) "candidate template ignored: could not match '{0}' against '{1}'";
     sema_partial_spec_ambiguous = Error (1) "ambiguous partial specializations of '{0}'";
     note_partial_spec_match = Note (1) "partial specialization matches {0}";

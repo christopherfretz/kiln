@@ -313,7 +313,7 @@ impl Sema<'_, '_> {
                     let mut set = self.begin_set(SetKind::ConvToRef { lvalue }, Loc::INVALID);
                     set.target = to;
                     set.args.push(*a);
-                    for (found, f) in self.conversion_functions(a.ty) {
+                    for (found, f) in self.conversion_functions_all(a.ty) {
                         self.add_conversion_candidate(&mut set, f, found, to, opts);
                     }
                     if set.viable().next().is_some() {

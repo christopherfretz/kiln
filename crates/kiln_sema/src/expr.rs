@@ -784,7 +784,11 @@ impl Sema<'_, '_> {
                 let valid = found.decls.clone();
                 return self.overload_name_ref(name, &found, &valid, qualifier.is_none(), nns, loc);
             }
-            let decls: Vec<DeclId> = found.decls.clone();
+            let mut decls: Vec<DeclId> = found.decls.clone();
+            if qualifier.is_none() {
+                // Newest first, as for a non-template set (§2.1).
+                decls.reverse();
+            }
             return self.builder().unresolved_lookup(
                 name,
                 &decls,

@@ -194,7 +194,6 @@ pub const TABLE: &[(&str, Disposition)] = &[
     ("CXXNewExpr", Keep),
     ("CXXDeleteExpr", Keep),
     ("CXXNoexceptExpr", Keep),
-    ("CXXStdInitializerListExpr", Unsupported(NOT_M2)),
     ("CXXRewrittenBinaryOperator", Keep),
     ("UnresolvedMemberExpr", Unsupported("member function template names are not in the dump yet")),
     // The parameter (reprinted) then the replacement (spec/ast-dump.md §5).

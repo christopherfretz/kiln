@@ -185,6 +185,7 @@ impl Sema<'_, '_> {
 
 /// A function template matched by the declarator of an explicit
 /// specialization or instantiation ([temp.deduct.decl]).
+#[derive(Clone, Copy)]
 struct SpecMatch {
     /// The specialization deduced.
     spec: DeclId,
@@ -264,16 +265,12 @@ impl Sema<'_, '_> {
             };
         }
         let m = self.match_function_spec(d, dname, ty, inst.is_some(), name_loc)?;
-        match inst {
-            Some((ext, _)) => {
-                self.act_on_explicit_function_inst(m, ext.is_some(), name_loc);
-                None
-            }
-            None => {
-                let _ = spec_head;
-                self.act_on_explicit_function_spec(ds, ty, d, m, name_loc)
-            }
+        let _ = spec_head;
+        if let Some((ext, _)) = inst {
+            self.act_on_explicit_function_inst(m, ext.is_some(), name_loc);
+            return None;
         }
+        self.act_on_explicit_function_spec(ds, ty, d, m, name_loc)
     }
 
     /// The function template specialization declarator `d` names
@@ -343,26 +340,23 @@ impl Sema<'_, '_> {
                     i == j || self.more_specialized(matches[i].template, matches[j].template, n)
                 })
             });
-            match best {
-                Some(i) => return Some(matches.swap_remove(i)),
-                None => {
-                    // clang lists the candidates last-declared first.
-                    let mut e = self.diag(DiagId::sema_fn_template_spec_ambiguous, loc).arg(fname);
-                    for m in matches.iter().rev() {
-                        let Some((_, info)) = self.ast.spec_info(m.spec).map(|(i, s)| (i, *s))
-                        else {
-                            continue;
-                        };
-                        let note = self
-                            .diag(DiagId::note_fn_template_spec_matched, self.loc_of(m.template))
-                            .arg(self.spec_name(info.template, info.print_args))
-                            .arg(self.template_args_desc(info.template, info.args));
-                        e = e.with_note(note);
-                    }
-                    self.emit(e);
-                    return None;
-                }
+            if let Some(i) = best {
+                return Some(matches.swap_remove(i));
             }
+            // clang lists the candidates last-declared first.
+            let mut e = self.diag(DiagId::sema_fn_template_spec_ambiguous, loc).arg(fname);
+            for m in matches.iter().rev() {
+                let Some((_, info)) = self.ast.spec_info(m.spec).map(|(i, s)| (i, *s)) else {
+                    continue;
+                };
+                let note = self
+                    .diag(DiagId::note_fn_template_spec_matched, self.loc_of(m.template))
+                    .arg(self.spec_name(info.template, info.print_args))
+                    .arg(self.template_args_desc(info.template, info.args));
+                e = e.with_note(note);
+            }
+            self.emit(e);
+            return None;
         }
         matches.pop()
     }
@@ -502,6 +496,7 @@ impl Sema<'_, '_> {
     /// a specialization or names a member function template (then the
     /// declarator is a function template specialization), `Some(None)`
     /// after a diagnostic.
+    #[allow(clippy::option_option, reason = "not a candidate / diagnosed / the member")]
     fn member_of_spec_candidate(
         &mut self,
         d: &Declarator,
