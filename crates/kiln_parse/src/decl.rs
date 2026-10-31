@@ -729,6 +729,14 @@ impl Parser<'_, '_> {
                 } else {
                     ty
                 };
+                // `T...[index]` (C++26 [dcl.type.pack.index]).
+                let ty = match self.parse_pack_index() {
+                    Ok(Some((ellipsis, index, _))) => {
+                        self.s.act_pack_indexing_type(ty, ellipsis, index)
+                    }
+                    Ok(None) => ty,
+                    Err(()) => QualType::ERROR,
+                };
                 if let Err(e) = ds.set_base(TypeSpecKind::Named, Some(ty), loc) {
                     ds.invalid = true;
                     self.spec_error(&e, loc);
@@ -1872,6 +1880,11 @@ impl Parser<'_, '_> {
                         let Some(e) = self.parse_assignment_expr() else {
                             self.skip_until(&[Punct::RParen], false, true);
                             return Err(());
+                        };
+                        // [temp.variadic]/5: `T x(args...)`.
+                        let e = match self.eat(Punct::Ellipsis) {
+                            Some(l) => self.s.act_pack_expansion(e, l),
+                            None => e,
                         };
                         v.push(e);
                         if self.eat(Punct::Comma).is_none() {

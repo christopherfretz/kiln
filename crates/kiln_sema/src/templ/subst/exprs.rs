@@ -42,19 +42,13 @@ impl Substituter<'_, '_, '_> {
     /// Substitutes into the expressions of list `l` (default arguments
     /// of a call are dropped: the rebuilt call adds its own).
     fn expr_list(&mut self, l: kiln_ast::ids::ListId) -> SubstResult<Vec<ExprId>> {
-        let v: Vec<ExprId> = self.sema.ast.lists.iter::<ExprId>(l).collect();
-        let mut out = Vec::with_capacity(v.len());
-        for x in v {
-            if self.sema.ast.exprs.get(x).kind() == ExprKind::CXXDefaultArgExpr {
-                break;
-            }
-            if self.sema.ast.exprs.get(x).kind() == ExprKind::PackExpansionExpr {
-                let loc = self.sema.ast.exprs.get(x).loc();
-                return self.unimplemented("pack expansion", loc);
-            }
-            out.push(self.expr(x)?);
+        let mut v: Vec<ExprId> = self.sema.ast.lists.iter::<ExprId>(l).collect();
+        if let Some(i) =
+            v.iter().position(|&x| self.sema.ast.exprs.get(x).kind() == ExprKind::CXXDefaultArgExpr)
+        {
+            v.truncate(i);
         }
-        Ok(out)
+        self.expand_exprs(&v)
     }
 
     #[allow(clippy::too_many_lines, reason = "one arm per expression kind, as TreeTransform")]
@@ -312,10 +306,14 @@ impl Substituter<'_, '_, '_> {
                 let l = kiln_ast::ids::ListId::new(n.a());
                 if n.aux() != 0 {
                     let items: Vec<ExprId> = self.sema.ast.lists.iter::<ExprId>(l).collect();
-                    let mut out = Vec::new();
-                    for x in items {
-                        out.push(self.init_value(x)?);
+                    // `T{...}` keeps its braced list as the one argument.
+                    if let [x] = items[..]
+                        && self.sema.ast.exprs.get(x).kind() == ExprKind::InitListExpr
+                    {
+                        let il = self.init_list(x)?;
+                        return Ok(self.sema.act_on_list_cast(ty, &il, loc));
                     }
+                    let out = self.init_items(&items)?;
                     let il = InitList { items: out, lbrace: loc, rbrace: end };
                     return Ok(self.sema.act_on_list_cast(ty, &il, loc));
                 }
@@ -344,13 +342,7 @@ impl Substituter<'_, '_, '_> {
                 let tys: Vec<QualType> =
                     self.sema.ast.lists.iter::<QualType>(ex(self).type_trait_args(e)).collect();
                 let rhs = ex(self).type_trait_rhs_loc(e).unwrap_or(loc);
-                let is_exp = |s: &crate::Sema<'_, '_>, q: QualType| {
-                    matches!(
-                        s.ast.types.view(q.ty()),
-                        kiln_ast::types::TypeView::PackExpansion { .. }
-                    )
-                };
-                let tys = self.expand_list(&tys, is_exp, |s, q| s.ty(q, loc), loc)?;
+                let tys = self.expand_types(&tys, loc)?;
                 let args: Vec<(QualType, Loc)> = tys
                     .iter()
                     .enumerate()
@@ -382,10 +374,10 @@ impl Substituter<'_, '_, '_> {
                 let o = self.opt_expr(o)?;
                 Ok(self.sema.act_on_throw(o, loc))
             }
+            ExprKind::CXXFoldExpr => self.fold(e, loc, end),
+            ExprKind::SizeOfPackExpr => self.size_of_pack(e, loc, end),
+            ExprKind::PackIndexingExpr => self.pack_indexing_expr(e, loc, end),
             ExprKind::PackExpansionExpr
-            | ExprKind::CXXFoldExpr
-            | ExprKind::SizeOfPackExpr
-            | ExprKind::PackIndexingExpr
             | ExprKind::SubstNonTypeTemplateParmPackExpr
             | ExprKind::FunctionParmPackExpr => self.unimplemented("pack expansion", loc),
             ExprKind::ConceptSpecializationExpr => self.concept_id_expr(e, loc),
@@ -519,7 +511,7 @@ impl Substituter<'_, '_, '_> {
     fn nttp_ref(&mut self, e: ExprId, p: DeclId, loc: Loc) -> SubstResult<ExprId> {
         let Some(info) = self.sema.ast.template_parm(p).copied() else { return Err(SubstFail) };
         let a = match self.lookup(info.depth, info.index) {
-            ArgLookup::Arg(a) => self.element(a, loc)?,
+            ArgLookup::Arg(a) => self.element(a, Some(p), loc)?,
             ArgLookup::Retain(d) if d == info.depth => return Ok(e),
             // A parameter of a member template redeclared one level
             // shallower ([temp.mem]; §4.6).
@@ -604,7 +596,7 @@ impl Substituter<'_, '_, '_> {
         Ok(self.int_literal(ty, v, loc))
     }
 
-    fn int_literal(&mut self, ty: QualType, v: i128, loc: Loc) -> ExprId {
+    pub(crate) fn int_literal(&mut self, ty: QualType, v: i128, loc: Loc) -> ExprId {
         if let Ok(u) = u64::try_from(v) {
             self.sema.ast.builder().int_literal(ty, u, Radix::Decimal, loc)
         } else {
@@ -623,15 +615,28 @@ impl Substituter<'_, '_, '_> {
         Ok(InitItem { designator: Vec::new(), value })
     }
 
+    /// The initializer-clauses `items` of a braced list, pack expansions
+    /// expanded ([temp.variadic]/5).
+    fn init_items(&mut self, items: &[ExprId]) -> SubstResult<Vec<InitItem>> {
+        let mut out = Vec::with_capacity(items.len());
+        for &x in items {
+            if crate::templ::pack::expr_pattern(self.sema, x).is_some() {
+                for y in self.expand_exprs(&[x])? {
+                    out.push(InitItem { designator: Vec::new(), value: InitValue::Expr(y) });
+                }
+                continue;
+            }
+            out.push(self.init_value(x)?);
+        }
+        Ok(out)
+    }
+
     /// A braced-init-list of the pattern (designators: a gap).
     pub(crate) fn init_list(&mut self, e: ExprId) -> SubstResult<InitList> {
         let n = *self.sema.ast.exprs.get(e);
         let l = self.sema.ast.exprs.init_list_inits(e);
         let items: Vec<ExprId> = self.sema.ast.lists.iter::<ExprId>(l).collect();
-        let mut out = Vec::with_capacity(items.len());
-        for x in items {
-            out.push(self.init_value(x)?);
-        }
+        let out = self.init_items(&items)?;
         let rbrace = self.sema.ast.exprs.end_loc(e).unwrap_or(n.loc());
         Ok(InitList { items: out, lbrace: n.loc(), rbrace })
     }
@@ -644,6 +649,12 @@ impl Substituter<'_, '_, '_> {
                 return self.unimplemented("designated initializers in a template", l.lbrace);
             }
             let value = match &it.value {
+                InitValue::Expr(e) if crate::templ::pack::expr_pattern(self.sema, *e).is_some() => {
+                    for y in self.expand_exprs(&[*e])? {
+                        items.push(InitItem { designator: Vec::new(), value: InitValue::Expr(y) });
+                    }
+                    continue;
+                }
                 InitValue::Expr(e) => InitValue::Expr(self.written_arg(*e)?),
                 InitValue::List(n) => InitValue::List(self.written_list(n)?),
             };
@@ -660,33 +671,44 @@ impl Substituter<'_, '_, '_> {
         self.expr(e)
     }
 
+    /// Written arguments, pack expansions expanded.
+    fn written_args(&mut self, v: &[ExprId]) -> SubstResult<Vec<ExprId>> {
+        self.expand_exprs(v)
+    }
+
     /// A mem-initializer of a constructor of the pattern, as the parser
     /// handed it to `act_on_mem_initializer` (clang
     /// `InstantiateMemInitializers`): the id's type and the initializer's
     /// expressions are substituted; the id is resolved again in the
     /// instantiated class.
+    /// A pack expansion `B(args)...` gives one mem-initializer per
+    /// element ([temp.variadic]/5).
     pub(crate) fn mem_initializer(
+        &mut self,
+        info: &crate::class::MemInitInfo,
+    ) -> SubstResult<Vec<crate::class::MemInitInfo>> {
+        if !info.pack_expansion {
+            return Ok(vec![self.mem_initializer_one(info)?]);
+        }
+        match self.expand_pattern(|s| s.mem_initializer_one(info))? {
+            crate::templ::pack::Expansion::Elements(v) => Ok(v),
+            crate::templ::pack::Expansion::Unexpanded(_) => self
+                .unimplemented("a mem-initializer pack expansion of an enclosing pack", info.loc),
+        }
+    }
+
+    fn mem_initializer_one(
         &mut self,
         info: &crate::class::MemInitInfo,
     ) -> SubstResult<crate::class::MemInitInfo> {
         use crate::class::MemInitId;
-        if info.pack_expansion {
-            // Reported by `act_on_mem_initializer` (WP-070).
-            return Ok(info.clone());
-        }
         let id = match info.id {
             MemInitId::Ident(s) => MemInitId::Ident(s),
             MemInitId::Type(t) => MemInitId::Type(self.ty(t, info.loc)?),
         };
         let init = match &info.init {
             Initializer::Expr(e) => Initializer::Expr(self.written_arg(*e)?),
-            Initializer::Paren(v, l, r) => {
-                let mut out = Vec::with_capacity(v.len());
-                for &e in v {
-                    out.push(self.written_arg(e)?);
-                }
-                Initializer::Paren(out, *l, *r)
-            }
+            Initializer::Paren(v, l, r) => Initializer::Paren(self.written_args(v)?, *l, *r),
             Initializer::List(l) => Initializer::List(self.written_list(l)?),
         };
         Ok(crate::class::MemInitInfo { id, loc: info.loc, init, pack_expansion: false })
@@ -739,6 +761,12 @@ impl Substituter<'_, '_, '_> {
             }
             // `= {…}` and `{…}` alike: list-initialization ([dcl.init.list]/1).
             ExprKind::InitListExpr => Initializer::List(self.init_list(init)?),
+            // `T x(args...)`: the one written argument is an expansion.
+            ExprKind::PackExpansionExpr => {
+                let args = self.expand_exprs(&[init])?;
+                let r = self.sema.ast.exprs.end_loc(init).unwrap_or(n.loc());
+                Initializer::Paren(args, n.loc(), r)
+            }
             _ => {
                 let e = self.expr(init)?;
                 match style {
@@ -808,10 +836,7 @@ impl Substituter<'_, '_, '_> {
             .iter::<ExprId>(self.sema.ast.exprs.construct_args(e))
             .take_while(|&a| self.sema.ast.exprs.get(a).kind() != ExprKind::CXXDefaultArgExpr)
             .collect();
-        let mut out = Vec::with_capacity(items.len());
-        for x in items {
-            out.push(self.init_value(x)?);
-        }
+        let out = self.init_items(&items)?;
         Ok(InitList { items: out, lbrace, rbrace })
     }
 }

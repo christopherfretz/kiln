@@ -1373,6 +1373,10 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                 }
             }
             ExprKind::PackExpansionExpr => opt(kids, n.a()),
+            ExprKind::PackIndexingExpr => {
+                opt(kids, n.a());
+                opt(kids, n.b());
+            }
             ExprKind::CXXFoldExpr => {
                 kids.push((Node::Fixed("<<<NULL>>>"), None));
                 opt(kids, n.a());

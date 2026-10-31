@@ -140,16 +140,14 @@ impl Sema<'_, '_> {
         let Some(templated) = self.templated_function(ft) else {
             return Err(DeductionFailure::new(Tdk::MiscellaneousDeductionFailure, d));
         };
-        if params.iter().any(|&p| self.ast.template_parm(p).is_some_and(|x| x.pack)) {
-            self.templ_unimplemented("deduction of template parameter packs", loc);
-            return Err(DeductionFailure::new(Tdk::MiscellaneousDeductionFailure, d));
-        }
+        let is_pack = |s: &Self, p: DeclId| s.ast.template_parm(p).is_some_and(|x| x.pack);
+        let last_pack = params.last().is_some_and(|&p| is_pack(self, p));
         // §6.1 step 1: the explicitly-specified arguments.
         let (mut ptys, variadic) = self.proto_param_types(templated);
         let written: Vec<TemplateArg> =
             explicit.map(|l| self.ast.types.args(l).to_vec()).unwrap_or_default();
         if !written.is_empty() {
-            if written.len() > n {
+            if written.len() > n && !last_pack {
                 // clang: a substitution failure with the arity message.
                 let msg = self
                     .diag(DiagId::sema_template_arg_list_different_arity, loc)
@@ -163,8 +161,25 @@ impl Sema<'_, '_> {
             let mut bad = None;
             let r = self.in_sfinae(FrameKind::ExplicitArgSubstitution, ft, None, loc, |s| {
                 for (i, &w) in written.iter().enumerate() {
+                    let Some(&parm) = params.get(i) else { break };
                     let prior: Vec<TemplateArg> = d.args[..i].to_vec();
-                    let Ok(a) = s.check_template_arg(ft, depth, params[i], w, loc, &prior) else {
+                    if is_pack(s, parm) {
+                        // [temp.arg.explicit]/9: the rest form a pack,
+                        // which deduction may extend.
+                        let mut v = Vec::new();
+                        for &w in &written[i..] {
+                            let Ok(a) = s.check_template_arg(ft, depth, parm, w, loc, &prior)
+                            else {
+                                bad = Some(i);
+                                return;
+                            };
+                            v.push(a);
+                        }
+                        let l = s.ast.types.arg_list(&v);
+                        d.args[i] = TemplateArg::pack(l);
+                        break;
+                    }
+                    let Ok(a) = s.check_template_arg(ft, depth, parm, w, loc, &prior) else {
                         bad = Some(i);
                         return;
                     };
@@ -180,11 +195,21 @@ impl Sema<'_, '_> {
             }
             // P with the explicit arguments substituted ([temp.deduct]/2).
             let levels = self.prior_levels(ft, depth, &d.args);
-            let shown = self.ast.types.arg_list(&d.args[..written.len()]);
+            let shown = self.ast.types.arg_list(&d.args[..written.len().min(n)]);
             let tys = ptys.clone();
             let r = self.in_sfinae(FrameKind::ExplicitArgSubstitution, ft, Some(shown), loc, |s| {
                 let mut sub = Substituter::new(s, &levels);
-                tys.iter().map(|&t| sub.ty(t, loc)).collect::<Result<Vec<_>, _>>()
+                // A function parameter pack keeps its pattern: the
+                // explicitly given prefix may be extended by deduction.
+                tys.iter()
+                    .map(|&t| {
+                        if crate::templ::pack::type_pattern(sub.sema, t).is_some() {
+                            Ok(t)
+                        } else {
+                            sub.ty(t, loc)
+                        }
+                    })
+                    .collect::<Result<Vec<_>, _>>()
             });
             match r {
                 None => return Err(DeductionFailure::new(Tdk::InstantiationDepth, d)),
@@ -200,7 +225,8 @@ impl Sema<'_, '_> {
         // Arity ([temp.deduct.call]/1: a parameter without an argument
         // is not deduced from).
         let nargs = args.len();
-        if call.is_some() && nargs > ptys.len() && !variadic {
+        let fn_pack = ptys.last().and_then(|&t| crate::templ::pack::type_pattern(self, t));
+        if call.is_some() && nargs > ptys.len() && !variadic && fn_pack.is_none() {
             return Err(DeductionFailure::new(Tdk::TooManyArguments, d));
         }
         if call.is_some() && nargs < self.fn_min_args(templated) {
@@ -217,6 +243,23 @@ impl Sema<'_, '_> {
         // §6.1 step 2: each (P, A).
         for (i, a) in args.iter().enumerate() {
             let Some(&p) = ptys.get(i) else { break };
+            if i + 1 == ptys.len()
+                && let Some(pat) = fn_pack
+            {
+                // [temp.deduct.call]/1: the trailing function parameter
+                // pack's pattern against each remaining argument; the
+                // elements given explicitly are not deduced.
+                let skip = self.explicit_pack_len(&params, &d);
+                let rest = &args[i..];
+                let r = self.deduce_pack_elements_from(skip, rest.len(), &mut d, |s, k, d| {
+                    s.deduce_call_arg(pat, &rest[k], d)
+                });
+                if r != Tdk::Success {
+                    self.resugar_mismatch(pat, &mut d);
+                    return Err(DeductionFailure::new(r, d));
+                }
+                break;
+            }
             if !self.is_dependent_type(p) {
                 continue;
             }
@@ -229,6 +272,13 @@ impl Sema<'_, '_> {
         // §6.1 step 3: defaults, then completeness.
         for (j, &p) in params.iter().enumerate() {
             if !matches!(d.args[j].view(), ArgView::Null) {
+                continue;
+            }
+            if is_pack(self, p) {
+                // [temp.arg.explicit]/4: a trailing pack not otherwise
+                // deduced is deduced as empty.
+                let l = self.ast.types.arg_list(&[]);
+                d.args[j] = TemplateArg::pack(l);
                 continue;
             }
             let Some(def) = self.template_default(p) else {

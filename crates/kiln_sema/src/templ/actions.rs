@@ -518,6 +518,39 @@ impl Sema<'_, '_> {
         self.ast.types.pack_expansion(pattern, None)
     }
 
+    /// `pack...[index]` as an expression (C++26 [expr.prim.pack.index]).
+    pub fn act_pack_indexing(
+        &mut self,
+        pattern: ExprId,
+        ellipsis: Loc,
+        index: ExprId,
+        rsquare: Loc,
+    ) -> ExprId {
+        if self.is_err_expr(pattern) || self.is_err_expr(index) {
+            return self.recover_err(&[pattern, index], ellipsis);
+        }
+        if !self.ast.exprs.get(pattern).deps().contains(ExprDeps::UNEXPANDED_PACK) {
+            self.error(DiagId::parse_expected_name_of_pack, self.begin_loc(pattern));
+            return self.recover_err(&[pattern, index], ellipsis);
+        }
+        self.builder().pack_indexing_expr(pattern, index, rsquare)
+    }
+
+    /// `T...[index]` as a type (C++26 [dcl.type.pack.index]).
+    pub fn act_pack_indexing_type(
+        &mut self,
+        pattern: QualType,
+        ellipsis: Loc,
+        index: ExprId,
+    ) -> QualType {
+        if !self.ast.types.flags(pattern.ty()).contains(TypeFlags::UNEXPANDED_PACK) {
+            self.error(DiagId::parse_expected_name_of_pack, ellipsis);
+            return QualType::ERROR;
+        }
+        let p = self.dependent_profile(index);
+        self.ast.types.pack_indexing(pattern, index, Some(p), None)
+    }
+
     /// A template argument followed by `...`.
     pub fn act_pack_expansion_arg(&mut self, a: TemplateArg, ellipsis: Loc) -> TemplateArg {
         match a.view() {
@@ -561,7 +594,9 @@ impl Sema<'_, '_> {
         if l && r {
             self.error(DiagId::sema_fold_packs_both_sides, ellipsis);
         }
-        self.builder().fold_expr(lhs, op, rhs, lparen, rparen)
+        let e = self.builder().fold_expr(lhs, op, rhs, lparen, rparen);
+        self.templ.fold_ellipsis.insert(e, ellipsis);
+        e
     }
 
     /// `sizeof...(name)` ([expr.sizeof]/5): `name` must name a pack.

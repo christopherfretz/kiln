@@ -1011,7 +1011,30 @@ impl Parser<'_, '_> {
         if qual.is_none() && self.at(Punct::LParen) {
             return Some(self.s.act_on_call_name(name, nl));
         }
-        Some(self.s.act_on_id_expression(name, nl, qual))
+        let e = self.s.act_on_id_expression(name, nl, qual);
+        self.parse_pack_index_suffix(e)
+    }
+
+    /// `pack...[index]` after an id-expression (C++26
+    /// [expr.prim.pack.index]); `e` unchanged without `...[`.
+    fn parse_pack_index_suffix(&mut self, e: ExprId) -> PExpr {
+        let Some((ellipsis, index, rsquare)) = self.parse_pack_index().ok()? else {
+            return Some(e);
+        };
+        Some(self.s.act_pack_indexing(e, ellipsis, index, rsquare))
+    }
+
+    /// `...[ constant-expression ]` (shared by the expression and type
+    /// forms): `Err` on a parse error, `Ok(None)` without `...[`.
+    pub(crate) fn parse_pack_index(&mut self) -> Result<Option<(Loc, ExprId, Loc)>, ()> {
+        if !(self.at(Punct::Ellipsis) && self.peek_is(1, Punct::LSquare)) {
+            return Ok(None);
+        }
+        let ellipsis = self.bump().span.lo;
+        let lsquare = self.bump().span.lo;
+        let index = self.with_greater_op(true, Self::parse_constant_expr).ok_or(())?;
+        let rsquare = self.expect_closing(Punct::RSquare, Punct::LSquare, lsquare);
+        Ok(Some((ellipsis, index, rsquare)))
     }
 
     /// The rest of a parenthesized expression or fold-expression after

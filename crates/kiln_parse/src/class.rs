@@ -811,6 +811,12 @@ impl Parser<'_, '_> {
         };
         let pack_expansion = self.eat(Punct::Ellipsis).is_some();
         let id = match q {
+            // `Bs(args)...` names a pack: resolve the type now so that
+            // instantiation can expand it ([temp.variadic]/5).
+            None if pack_expansion => match self.s.classify_name(name, None) {
+                NameClass::Type(ty, d) => MemInitId::Type(self.named_type(ty, d)),
+                _ => MemInitId::Ident(name),
+            },
             None => MemInitId::Ident(name),
             Some(q) => {
                 if let NameClass::Type(ty, d) = self.s.classify_name(name, Some(q)) {

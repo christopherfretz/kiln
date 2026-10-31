@@ -540,7 +540,13 @@ impl Sema<'_, '_> {
         let mut min = 0;
         for i in 0..n {
             let Some(p) = self.ast.lists.at::<DeclId>(fd.params, i) else { break };
-            if !self.param_has_default(p) {
+            // A function parameter pack may be empty (WP-072).
+            let pack = self
+                .ast
+                .decls
+                .param(p)
+                .is_some_and(|x| x.flags & kiln_ast::decl::ParamData::PACK != 0);
+            if !self.param_has_default(p) && !pack {
                 min = i + 1;
             }
         }

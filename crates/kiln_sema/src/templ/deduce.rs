@@ -116,12 +116,20 @@ pub struct DeducedArgs {
     pub args: Vec<TemplateArg>,
     /// The failure detail.
     pub info: DeductionInfo,
+    /// While deducing one element of a pack expansion: the deductions
+    /// of the pack parameters it names (§6.2, §7.2).
+    pub pack_cur: Option<Vec<(u16, TemplateArg)>>,
 }
 
 impl DeducedArgs {
     /// Nothing deduced yet for `n` parameters at `depth`.
     pub fn new(depth: u16, n: usize) -> Self {
-        DeducedArgs { depth, args: vec![TemplateArg::NULL; n], info: DeductionInfo::default() }
+        DeducedArgs {
+            depth,
+            args: vec![TemplateArg::NULL; n],
+            info: DeductionInfo::default(),
+            pack_cur: None,
+        }
     }
 
     /// The first parameter left undeduced.
@@ -142,6 +150,7 @@ const DEDUCE_DEPTH_LIMIT: u32 = 512;
 struct ParmRef {
     depth: u16,
     index: u16,
+    pack: bool,
 }
 
 impl Sema<'_, '_> {
@@ -182,8 +191,7 @@ impl Sema<'_, '_> {
         loc: Loc,
     ) -> Tdk {
         if ps.iter().chain(as_).any(|a| self.is_pack_arg(*a)) {
-            self.templ_unimplemented("template argument deduction for a pack", loc);
-            return Tdk::MiscellaneousDeductionFailure;
+            return self.deduce_arg_list_packs(ps, as_, must_match, d, level, loc);
         }
         if ps.len() != as_.len() && (must_match || as_.len() < ps.len()) {
             return Tdk::MiscellaneousDeductionFailure;
@@ -195,6 +203,225 @@ impl Sema<'_, '_> {
             }
         }
         Tdk::Success
+    }
+
+    /// [`Self::deduce_arg_list`] with packs ([temp.deduct.type]/9): both
+    /// lists are flattened (an argument pack contributes its elements); a
+    /// pack expansion in `P` matches every remaining `A` element.
+    fn deduce_arg_list_packs(
+        &mut self,
+        ps: &[TemplateArg],
+        as_: &[TemplateArg],
+        must_match: bool,
+        d: &mut DeducedArgs,
+        level: u32,
+        loc: Loc,
+    ) -> Tdk {
+        let ps = self.flatten_args(ps);
+        let as_ = self.flatten_args(as_);
+        for (k, &p) in ps.iter().enumerate() {
+            if let Some(pat) = self.arg_expansion_pattern(p) {
+                if k + 1 != ps.len() {
+                    // Not the last: a non-deduced context ([temp.deduct.type]/9).
+                    return Tdk::Success;
+                }
+                let rest = as_.get(k..).unwrap_or(&[]);
+                if rest.iter().any(|&a| self.is_pack_arg(a)) {
+                    // `A` has an expansion too: equal only as written.
+                    let same = rest.len() == 1
+                        && self.ast.types.canonical_arg(p) == self.ast.types.canonical_arg(rest[0]);
+                    return if same { Tdk::Success } else { Tdk::MiscellaneousDeductionFailure };
+                }
+                return self.deduce_pack_elements(rest.len(), d, |s, i, d| {
+                    s.deduce_arg(pat, rest[i], d, level, loc)
+                });
+            }
+            let Some(&a) = as_.get(k) else { return Tdk::MiscellaneousDeductionFailure };
+            if self.is_pack_arg(a) {
+                return Tdk::MiscellaneousDeductionFailure;
+            }
+            let r = self.deduce_arg(p, a, d, level, loc);
+            if r != Tdk::Success {
+                return r;
+            }
+        }
+        if as_.len() != ps.len() && (must_match || as_.len() < ps.len()) {
+            return Tdk::MiscellaneousDeductionFailure;
+        }
+        Tdk::Success
+    }
+
+    /// The parameter types `ps` of a function type against `as_`: a
+    /// trailing pack expansion matches the remaining types.
+    fn deduce_type_list(
+        &mut self,
+        ps: &[QualType],
+        as_: &[QualType],
+        d: &mut DeducedArgs,
+        level: u32,
+    ) -> Tdk {
+        for (k, &p) in ps.iter().enumerate() {
+            if let TypeView::PackExpansion { pattern, .. } = self.ast.types.view(p.ty()) {
+                if k + 1 != ps.len() {
+                    return Tdk::Success;
+                }
+                let rest = as_.get(k..).unwrap_or(&[]).to_vec();
+                return self.deduce_pack_elements(rest.len(), d, |s, i, d| {
+                    s.deduce_ty(pattern, rest[i], TdfFlags::NONE, d, level)
+                });
+            }
+            let Some(&a) = as_.get(k) else { return Tdk::MiscellaneousDeductionFailure };
+            let r = self.deduce_ty(p, a, TdfFlags::NONE, d, level);
+            if r != Tdk::Success {
+                return r;
+            }
+        }
+        if as_.len() == ps.len() { Tdk::Success } else { Tdk::MiscellaneousDeductionFailure }
+    }
+
+    /// Deduces a pack expansion from `n` elements (§6.2): `f(i)`
+    /// deduces element `i`; the pack parameters it names collect one
+    /// argument each, then become `Pack` arguments (agreeing with any
+    /// already deduced or given explicitly).
+    pub(crate) fn deduce_pack_elements(
+        &mut self,
+        n: usize,
+        d: &mut DeducedArgs,
+        f: impl FnMut(&mut Self, usize, &mut DeducedArgs) -> Tdk,
+    ) -> Tdk {
+        self.deduce_pack_elements_from(0, n, d, f)
+    }
+
+    /// The length of the explicitly given pack among `params`, if any
+    /// ([temp.arg.explicit]/9).
+    pub(crate) fn explicit_pack_len(&self, params: &[DeclId], d: &DeducedArgs) -> usize {
+        params
+            .iter()
+            .enumerate()
+            .filter(|&(_, &p)| self.ast.template_parm(p).is_some_and(|x| x.pack))
+            .find_map(|(i, _)| match d.args.get(i).map(TemplateArg::view) {
+                Some(ArgView::Pack(l)) => Some(self.ast.types.args(l).len()),
+                _ => None,
+            })
+            .unwrap_or(0)
+    }
+
+    /// [`Self::deduce_pack_elements`] where elements `0..skip` were given
+    /// explicitly: only `skip..n` are deduced, appended to the given
+    /// prefix of each pack.
+    pub(crate) fn deduce_pack_elements_from(
+        &mut self,
+        skip: usize,
+        n: usize,
+        d: &mut DeducedArgs,
+        mut f: impl FnMut(&mut Self, usize, &mut DeducedArgs) -> Tdk,
+    ) -> Tdk {
+        let saved = d.pack_cur.take();
+        let mut per: Vec<(u16, Vec<TemplateArg>)> = Vec::new();
+        let skip = skip.min(n);
+        for i in skip..n {
+            d.pack_cur = Some(Vec::new());
+            let r = f(self, i, d);
+            let cur = d.pack_cur.take().unwrap_or_default();
+            if r != Tdk::Success {
+                d.pack_cur = saved;
+                return r;
+            }
+            for (idx, a) in cur {
+                if let Some(x) = per.iter_mut().find(|x| x.0 == idx) {
+                    x.1.push(a);
+                } else {
+                    let mut v = Vec::with_capacity(n);
+                    if let Some(ArgView::Pack(l)) = d.args.get(idx as usize).map(TemplateArg::view)
+                    {
+                        v.extend(self.ast.types.args(l).iter().take(skip));
+                    }
+                    v.push(a);
+                    per.push((idx, v));
+                }
+            }
+        }
+        d.pack_cur = saved;
+        for (idx, v) in per {
+            if v.len() != n {
+                continue;
+            }
+            let l = self.ast.types.arg_list(&v);
+            let r = self.record_pack(idx, TemplateArg::pack(l), d);
+            if r != Tdk::Success {
+                return r;
+            }
+        }
+        Tdk::Success
+    }
+
+    /// Records a deduced pack for parameter `index` (a pack already
+    /// deduced must agree element by element; an explicitly given prefix
+    /// is extended, [temp.arg.explicit]/9).
+    pub(crate) fn record_pack(&mut self, index: u16, a: TemplateArg, d: &mut DeducedArgs) -> Tdk {
+        let i = index as usize;
+        if i >= d.args.len() {
+            d.args.resize(i + 1, TemplateArg::NULL);
+        }
+        let prev = d.args[i];
+        let ArgView::Pack(pl) = prev.view() else {
+            if matches!(prev.view(), ArgView::Null) {
+                d.args[i] = a;
+                return Tdk::Success;
+            }
+            return Tdk::Inconsistent;
+        };
+        let ArgView::Pack(al) = a.view() else { return Tdk::Inconsistent };
+        let (pv, av) = (self.ast.types.args(pl).to_vec(), self.ast.types.args(al).to_vec());
+        if pv.len() <= av.len() && pv.iter().zip(&av).all(|(&x, &y)| self.same_deduced(x, y)) {
+            d.args[i] = a;
+            return Tdk::Success;
+        }
+        d.info.param = Some(index);
+        d.info.first = Some(prev);
+        d.info.second = Some(a);
+        Tdk::Inconsistent
+    }
+
+    /// `as_` with every argument pack replaced by its elements.
+    fn flatten_args(&self, as_: &[TemplateArg]) -> Vec<TemplateArg> {
+        let mut out = Vec::with_capacity(as_.len());
+        for &a in as_ {
+            match a.view() {
+                ArgView::Pack(l) => out.extend_from_slice(self.ast.types.args(l)),
+                _ => out.push(a),
+            }
+        }
+        out
+    }
+
+    /// The pattern of a pack-expansion template argument `P`, as an
+    /// argument.
+    fn arg_expansion_pattern(&mut self, a: TemplateArg) -> Option<TemplateArg> {
+        match a.view() {
+            ArgView::Type(q) => match self.ast.types.view(q.ty()) {
+                TypeView::PackExpansion { pattern, .. } => Some(TemplateArg::ty(pattern)),
+                _ => match self.ast.types.canonical_view(q) {
+                    TypeView::PackExpansion { pattern, .. } => Some(TemplateArg::ty(pattern)),
+                    _ => None,
+                },
+            },
+            ArgView::Expr { expr, .. } => {
+                let n = self.ast.exprs.get(expr);
+                (n.kind() == ExprKind::PackExpansionExpr)
+                    .then(|| ExprId::new(n.a()))
+                    .map(|p| self.ast.builder().template_arg_expr(p))
+            }
+            ArgView::Profile(p) => {
+                let e = self.ast.types.profile_expr(p)?;
+                let n = self.ast.exprs.get(e);
+                (n.kind() == ExprKind::PackExpansionExpr)
+                    .then(|| ExprId::new(n.a()))
+                    .map(|p| self.ast.builder().template_arg_expr(p))
+            }
+            ArgView::TemplateExpansion { name, .. } => Some(TemplateArg::template(name)),
+            _ => None,
+        }
     }
 
     /// Whether `a` is a pack or a pack expansion (WP-072).
@@ -272,7 +499,7 @@ impl Sema<'_, '_> {
         }
         match a.view() {
             ArgView::Value { .. } | ArgView::Expr { .. } | ArgView::Profile(_) => {
-                self.record_deduction(parm.index, a, d)
+                self.record_deduction(parm.index, parm.pack, a, d)
             }
             _ => {
                 d.info.first = Some(p);
@@ -286,7 +513,7 @@ impl Sema<'_, '_> {
     /// that argument `a` names as a bare (possibly converted) reference.
     pub(crate) fn bare_nttp_index(&self, a: TemplateArg, depth: u16) -> Option<u16> {
         let ArgView::Expr { expr, .. } = a.view() else { return None };
-        self.nttp_of_expr(expr).filter(|r| r.depth == depth).map(|r| r.index)
+        self.nttp_of_expr(expr).filter(|r| r.depth == depth && !r.pack).map(|r| r.index)
     }
 
     /// The non-type template parameter expression `e` names (through
@@ -304,7 +531,7 @@ impl Sema<'_, '_> {
                         return None;
                     }
                     let i = self.ast.template_parm(decl)?;
-                    return (!i.pack).then_some(ParmRef { depth: i.depth, index: i.index });
+                    return Some(ParmRef { depth: i.depth, index: i.index, pack: i.pack });
                 }
                 _ => return None,
             }
@@ -316,14 +543,13 @@ impl Sema<'_, '_> {
     fn template_parm_of_name(&self, n: kiln_ast::ids::TemplateNameId) -> Option<ParmRef> {
         let t = &self.ast.types;
         match t.template_name_view(t.canonical_template_name(n)) {
-            kiln_ast::types::TemplateName::CanonTemplateTemplateParm {
-                depth,
-                index,
-                pack: false,
-            } => Some(ParmRef {
-                depth: u16::try_from(depth).ok()?,
-                index: u16::try_from(index).ok()?,
-            }),
+            kiln_ast::types::TemplateName::CanonTemplateTemplateParm { depth, index, pack } => {
+                Some(ParmRef {
+                    depth: u16::try_from(depth).ok()?,
+                    index: u16::try_from(index).ok()?,
+                    pack,
+                })
+            }
             _ => None,
         }
     }
@@ -339,7 +565,7 @@ impl Sema<'_, '_> {
             && parm.depth == d.depth
         {
             let a = TemplateArg::template(t.canonical_template_name(an));
-            return self.record_deduction(parm.index, a, d);
+            return self.record_deduction(parm.index, parm.pack, a, d);
         }
         if t.same_template_name(pn, an) {
             return Tdk::Success;
@@ -359,7 +585,28 @@ impl Sema<'_, '_> {
 
     /// Records `a` for parameter `index`, checking consistency with an
     /// earlier deduction ([temp.deduct.type]/2, /17).
-    fn record_deduction(&mut self, index: u16, a: TemplateArg, d: &mut DeducedArgs) -> Tdk {
+    fn record_deduction(
+        &mut self,
+        index: u16,
+        pack: bool,
+        a: TemplateArg,
+        d: &mut DeducedArgs,
+    ) -> Tdk {
+        if pack {
+            // One element of a pack (§6.2): collected by the expansion.
+            let Some(cur) = d.pack_cur.as_mut() else { return Tdk::Success };
+            if let Some(&(_, prev)) = cur.iter().find(|x| x.0 == index) {
+                if self.same_deduced(prev, a) {
+                    return Tdk::Success;
+                }
+                d.info.param = Some(index);
+                d.info.first = Some(prev);
+                d.info.second = Some(a);
+                return Tdk::Inconsistent;
+            }
+            cur.push((index, a));
+            return Tdk::Success;
+        }
         let i = index as usize;
         if i >= d.args.len() {
             d.args.resize(i + 1, TemplateArg::NULL);
@@ -433,10 +680,6 @@ impl Sema<'_, '_> {
         let pv = t.view(p.ty());
         // `cv T` ([temp.deduct.type]/8: the forms `T` and `cv T`).
         if let TypeView::CanonTemplateTypeParm { depth, index, pack } = pv {
-            if pack {
-                self.templ_unimplemented("template argument deduction for a pack", Loc::INVALID);
-                return Tdk::MiscellaneousDeductionFailure;
-            }
             if depth != u32::from(d.depth) {
                 return Tdk::Success;
             }
@@ -458,6 +701,7 @@ impl Sema<'_, '_> {
             let deduced = QualType::new(a.ty(), aq & !pq);
             return self.record_deduction(
                 u16::try_from(index).unwrap_or(u16::MAX),
+                pack,
                 TemplateArg::ty(deduced),
                 d,
             );
@@ -552,7 +796,11 @@ impl Sema<'_, '_> {
             TypeView::Function(pf) => {
                 let TypeView::Function(af) = av else { return mismatch(d) };
                 let t = &self.ast.types;
-                if pf.num_params() != af.num_params()
+                let p_pack = t
+                    .params(&pf)
+                    .last()
+                    .is_some_and(|&x| matches!(t.view(x.ty()), TypeView::PackExpansion { .. }));
+                if (pf.num_params() != af.num_params() && !p_pack)
                     || pf.variadic() != af.variadic()
                     || pf.info().ref_qual() != af.info().ref_qual()
                     || pf.info().this_quals() != af.info().this_quals()
@@ -566,11 +814,9 @@ impl Sema<'_, '_> {
                 if r != Tdk::Success {
                     return r;
                 }
-                for (pp, ap) in pps.into_iter().zip(aps) {
-                    let r = self.deduce_ty(pp, ap, TdfFlags::NONE, d, next);
-                    if r != Tdk::Success {
-                        return r;
-                    }
+                let r = self.deduce_type_list(&pps, &aps, d, next);
+                if r != Tdk::Success {
+                    return r;
                 }
                 self.deduce_noexcept(pexc, aexc, flags, d, p, a)
             }
@@ -679,7 +925,7 @@ impl Sema<'_, '_> {
             Some(Err(ExprOperand::Expr(e))) => self.ast.builder().template_arg_expr(e),
             None => return Tdk::Success,
         };
-        self.record_deduction(parm.index, a, d)
+        self.record_deduction(parm.index, parm.pack, a, d)
     }
 
     /// The declared type of the non-type parameter `e` names, when it is
@@ -716,7 +962,8 @@ impl Sema<'_, '_> {
                 && parm.depth == d.depth
             {
                 let v = self.int_const(QualType::BOOL, i128::from(a_nothrow));
-                return self.record_deduction(parm.index, TemplateArg::value(QualType::BOOL, v), d);
+                let a = TemplateArg::value(QualType::BOOL, v);
+                return self.record_deduction(parm.index, parm.pack, a, d);
             }
             return Tdk::Success;
         }
@@ -839,8 +1086,13 @@ impl Sema<'_, '_> {
         match tdk {
             Tdk::Inconsistent => {
                 let (x, y) = (d.info.first?, d.info.second?);
-                let kind = match x.view() {
-                    ArgView::Type(_) => 0,
+                // A pack: the kind of its elements (clang prints `<int>`).
+                let first = match x.view() {
+                    ArgView::Pack(l) => self.ast.types.args(l).first().copied().unwrap_or(x),
+                    _ => x,
+                };
+                let kind = match first.view() {
+                    ArgView::Type(_) | ArgView::Pack(_) => 0,
                     ArgView::Template(_) => 2,
                     _ => 1,
                 };
@@ -897,6 +1149,11 @@ impl Sema<'_, '_> {
     fn deduced_arg_str(&self, a: TemplateArg) -> String {
         match a.view() {
             ArgView::Type(q) => format!("'{}'", self.ty_str(q)),
+            ArgView::Pack(l) => {
+                let v: Vec<String> =
+                    self.ast.types.args(l).iter().map(|&x| self.arg_str(x)).collect();
+                format!("<{}>", v.join(", "))
+            }
             _ => self.arg_str(a),
         }
     }

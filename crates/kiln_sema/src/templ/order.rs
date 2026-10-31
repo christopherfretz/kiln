@@ -65,10 +65,6 @@ impl Sema<'_, '_> {
         }
         let canonical = self.ast.types.canonical_args(args);
         let as_: Vec<TemplateArg> = self.ast.types.args(canonical).to_vec();
-        if as_.iter().any(|&a| self.is_pack_arg(a)) {
-            self.templ_unimplemented("partial specialization matching with packs", poi);
-            return Ok(None);
-        }
         let mut matched: Vec<PartialMatch> = Vec::new();
         for i in candidates {
             let Some(p) = self.ast.templates.partial(i).copied() else { continue };
@@ -78,10 +74,6 @@ impl Sema<'_, '_> {
             if shapes.len() != as_.len()
                 || !shapes.iter().zip(&as_).all(|(s, &a)| s.admits(&self.ast.types, a))
             {
-                continue;
-            }
-            if p.has_pack {
-                self.templ_unimplemented("class template partial specialization with a pack", poi);
                 continue;
             }
             if let Some(args) = self.deduce_partial(p.partial, i, &as_, canonical, poi) {
@@ -123,8 +115,23 @@ impl Sema<'_, '_> {
         }
         self.inst.sfinae.borrow_mut().push(SfinaeState::default());
         let mut d = DeducedArgs::new(list.depth, n);
-        let ok = self.deduce_args(&ps, as_, true, &mut d, poi) == Tdk::Success
-            && d.first_undeduced().is_none();
+        let mut ok = self.deduce_args(&ps, as_, true, &mut d, poi) == Tdk::Success;
+        if ok && p.has_pack {
+            // A pack deduced from no elements is empty ([temp.deduct.type]/9).
+            for i in 0..n {
+                let pack = self
+                    .ast
+                    .lists
+                    .at::<DeclId>(list.params, i)
+                    .and_then(|x| self.ast.template_parm(x))
+                    .is_some_and(|x| x.pack);
+                if pack && matches!(d.args.get(i).map(TemplateArg::view), Some(ArgView::Null)) {
+                    let l = self.ast.types.arg_list(&[]);
+                    d.args[i] = TemplateArg::pack(l);
+                }
+            }
+        }
+        ok &= d.first_undeduced().is_none();
         let r = if ok {
             let deduced = self.ast.types.arg_list(&d.args);
             self.set_frame_args(deduced);
@@ -162,13 +169,25 @@ impl Sema<'_, '_> {
         canonical: ArgListId,
         loc: Loc,
     ) -> bool {
-        let written: Vec<TemplateArg> = self.ast.types.args(p.args).to_vec();
+        let mut written: Vec<TemplateArg> = Vec::new();
+        let mut packed = false;
+        for &a in self.ast.types.args(p.args) {
+            match a.view() {
+                // A converted pack (`X<T, Ts...>` of a variadic primary):
+                // its elements are substituted, then converted again.
+                ArgView::Pack(l) => {
+                    packed = true;
+                    written.extend_from_slice(self.ast.types.args(l));
+                }
+                _ => written.push(a),
+            }
+        }
         let deduced_elems: Vec<TemplateArg> = self.ast.types.args(deduced).to_vec();
         let mut args = Self::outer_levels(p.template, depth);
         args.push(deduced, p.partial, LevelMode::Substitute);
         let saved = std::mem::take(&mut self.ast.templates.dependent_depth);
         let mut out = Vec::with_capacity(written.len());
-        let mut has_expr = false;
+        let mut has_expr = packed;
         let mut failed = false;
         {
             let mut s = Substituter::new(self, &args);
@@ -177,11 +196,24 @@ impl Sema<'_, '_> {
                     out.push(deduced_elems.get(usize::from(i)).copied().unwrap_or(a));
                     continue;
                 }
+                match s.expand_arg(a, loc) {
+                    Ok(Some(v)) => {
+                        // An expanded pack: compare after conversion.
+                        has_expr = true;
+                        out.extend(v);
+                        continue;
+                    }
+                    Ok(None) => {}
+                    Err(_) => {
+                        failed = true;
+                        break;
+                    }
+                }
                 let Ok(x) = s.template_arg(a, loc) else {
                     failed = true;
                     break;
                 };
-                has_expr |= matches!(x.view(), ArgView::Expr { .. });
+                has_expr |= matches!(x.view(), ArgView::Expr { .. } | ArgView::Pack(_));
                 out.push(x);
             }
         }

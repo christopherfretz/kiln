@@ -171,9 +171,7 @@ impl Sema<'_, '_> {
             let mut sub = Substituter::new(s, &args);
             sub.entity = Some(f);
             sub.map_contexts(&pairs);
-            for (a, b) in pp.into_iter().zip(fp) {
-                sub.locals.insert(a, crate::templ::subst::DeclOrPack::Decl(b));
-            }
+            sub.map_params(&pp, &fp);
             let b = sub.body(body);
             s.act_on_finish_function_def(f, b, rbrace);
         });

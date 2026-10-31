@@ -1007,6 +1007,10 @@ diag_ids! {
     sema_make_signed_bad_type = Error (2) "'{0:make_signed|make_unsigned}' is only compatible with non-bool integers and enum types, but was given {1}";
     sema_only_enums_have_underlying = Error (0) "only enumeration types have underlying types";
     sema_pack_index_out_of_bounds = Error (0) "a parameter pack may not be accessed at an out of bounds index";
+    // WP-072: packs (spec/sema-templates.md §7, §10.5)
+    sema_pack_length_mismatch = Error (4) "pack expansion contains parameter packs '{0}' and '{1}' that have different lengths ({2} vs. {3})";
+    sema_fold_empty = Error (1) "unary fold expression has empty expansion for operator '{0}' with no fallback value";
+    sema_pack_index_invalid = Error (3) "invalid index {0} for pack {1} of size {2}";
     sema_integer_seq_negative_length = Error (0) "integer sequences must have non-negative sequence length";
     sema_bit_cast_size_mismatch = Error (2) "__builtin_bit_cast source size does not equal destination size ({0} vs {1})";
     sema_bit_cast_not_trivially_copyable = Error (1) "__builtin_bit_cast {0:source|destination} type must be trivially copyable";
