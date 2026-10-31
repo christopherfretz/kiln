@@ -1118,6 +1118,9 @@ impl Sema<'_, '_> {
                 DeclKind::Var | DeclKind::ParmVar => self.pending_odr.push(e),
                 _ => {}
             }
+        } else if matches!(n.kind(), DeclKind::Function | DeclKind::CXXMethod) {
+            let at = self.eloc(e);
+            self.exc_spec_needed(d, at);
         }
         e
     }

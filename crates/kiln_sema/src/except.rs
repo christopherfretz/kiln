@@ -317,6 +317,18 @@ impl Sema<'_, '_> {
     }
 
     /// clang's `ResolveExceptionSpec` diagnostic for a function whose
+    /// A use of function `f` at `loc` needs its exception specification
+    /// ([except.spec]/13): clang's `MarkFunctionReferenced` resolves it
+    /// even in unevaluated operands (for `noexcept`), and diagnoses one
+    /// still awaiting its complete-class context. Uses in an unevaluated
+    /// operand call this directly; evaluated ones through
+    /// `mark_function_referenced`.
+    pub(crate) fn exc_spec_needed(&mut self, f: kiln_ast::DeclId, loc: Loc) {
+        if !self.in_template() && !self.diagnose_unparsed_exc_spec(f, loc) {
+            self.resolve_exception_spec(f);
+        }
+    }
+
     /// *noexcept-specifier* is needed ([except.spec]/13) before the
     /// complete-class context it is parsed in: `exception specification is
     /// not available until end of class definition`. Returns true then.

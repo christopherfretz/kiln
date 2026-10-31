@@ -260,6 +260,8 @@ impl Sema<'_, '_> {
                 let e = self.builder().member(b, m, ty, arrow, loc, extra);
                 if self.unevaluated == 0 && kind == DeclKind::CXXMethod {
                     self.mark_function_referenced(m, loc);
+                } else if kind == DeclKind::CXXMethod {
+                    self.exc_spec_needed(m, loc);
                 } else if self.unevaluated == 0 && kind != DeclKind::EnumConstant {
                     self.mark_used_at(m, loc);
                 }
@@ -465,10 +467,13 @@ impl Sema<'_, '_> {
         else {
             return Some(self.recover_err(&kids, loc));
         };
-        if let Some(m) = method
-            && self.unevaluated == 0
-        {
-            self.mark_function_referenced(m, loc);
+        if let Some(m) = method {
+            if self.unevaluated == 0 {
+                self.mark_function_referenced(m, loc);
+            } else {
+                // At the member's name, as clang's `MarkMemberReferenced`.
+                self.exc_spec_needed(m, n.loc());
+            }
         }
         let (ty, vk) = self.call_result(proto.ret(), loc);
         let call = self.builder().member_call(
@@ -694,9 +699,13 @@ impl Sema<'_, '_> {
             let at = self.eloc(e);
             self.builder().decl_ref(d, declared, at, None, nou, ExprFlags::NONE)
         };
-        if self.kind_of(d) == DeclKind::CXXMethod && self.unevaluated == 0 {
+        if self.kind_of(d) == DeclKind::CXXMethod {
             let at = self.eloc(e);
-            self.mark_function_referenced(d, at);
+            if self.unevaluated == 0 {
+                self.mark_function_referenced(d, at);
+            } else {
+                self.exc_spec_needed(d, at);
+            }
         }
         let class_ty = self.tag_type(class).ty();
         let mp = self.ast.types.member_pointer(declared, class_ty);
