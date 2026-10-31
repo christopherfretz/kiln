@@ -635,7 +635,11 @@ impl Parser<'_, '_> {
         }
         if let Some(t) = parts.noexcept {
             self.begin_replay(t.toks, t.end);
+            // [expr.prim.this]/2: `this` may appear in a member
+            // function's noexcept-specifier.
+            let this = self.s.act_on_start_delayed_exception_spec(f);
             let spec = self.parse_exception_spec();
+            self.s.act_on_end_this_scope(this);
             if !self.at_eof() {
                 self.error_here(DiagId::parse_except_spec_unparsed);
             }

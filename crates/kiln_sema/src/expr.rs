@@ -1085,6 +1085,10 @@ impl Sema<'_, '_> {
         }
         let ty = if self.ast.decls.builtin_id(d).is_some() {
             QualType::BUILTIN_FN
+        } else if n.kind() == DeclKind::EnumConstant
+            && let Some(t) = self.enumerator_pre_brace_type(d)
+        {
+            t
         } else {
             self.non_reference(declared)
         };

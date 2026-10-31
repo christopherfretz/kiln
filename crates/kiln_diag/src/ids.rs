@@ -743,6 +743,7 @@ diag_ids! {
     note_use_noexcept_false = Note (0) "use 'noexcept(false)' instead";
     sema_exception_spec_mismatch = Error (0) "exception specification in declaration does not match previous declaration";
     sema_missing_exception_spec = Error (2) "'{0}' is missing exception specification '{1}'";
+    sema_exception_spec_not_parsed = Error (0) "exception specification is not available until end of class definition";
     sema_undeclared_label = Error (1) "use of undeclared label '{0}'";
     sema_redefinition_of_label = Error (1) "redefinition of label '{0}'";
     sema_return_missing_expr = Error (1) "non-void function '{0}' should return a value";

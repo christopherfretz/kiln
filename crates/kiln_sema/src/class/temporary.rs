@@ -100,7 +100,7 @@ impl Sema<'_, '_> {
         self.ast.decls.set_flags(f, DeclFlags::REFERENCED);
         // clang's `MarkFunctionReferenced` resolves the exception
         // specification even in unevaluated operands (for `noexcept`).
-        if !self.in_template() {
+        if !self.in_template() && !self.diagnose_unparsed_exc_spec(f, loc) {
             self.resolve_exception_spec(f);
         }
         if self.unevaluated > 0 || self.in_template() {

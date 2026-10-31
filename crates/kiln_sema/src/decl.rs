@@ -100,6 +100,10 @@ pub struct EnumBuild {
     /// The value of the previous enumerator.
     last: Option<i128>,
     enumerators: Vec<(DeclId, i128)>,
+    /// The type of each enumerator before the closing brace
+    /// ([dcl.enum]/5), for an enumeration without a fixed underlying
+    /// type: a reference to an enumerator inside the body has it.
+    pre_types: Vec<(DeclId, QualType)>,
 }
 
 /// The parameters declared so far in a parameter-declaration-clause
@@ -1868,6 +1872,7 @@ impl Sema<'_, '_> {
             self.note_local_extern(name, f);
         }
         self.create_params(f, &params, &defaults);
+        self.defer_late_noexcept(f, d);
         if d.op_name.is_none() {
             self.register_local(name, f);
         } else if !global_new_delete
@@ -3311,9 +3316,24 @@ impl Sema<'_, '_> {
             .decls
             .enumeration(e)
             .and_then(|x| if x.is_fixed() { x.int_type } else { None });
-        self.enums.push(EnumBuild { decl: e, fixed, last: None, enumerators: Vec::new() });
+        self.enums.push(EnumBuild {
+            decl: e,
+            fixed,
+            last: None,
+            enumerators: Vec::new(),
+            pre_types: Vec::new(),
+        });
         self.scopes.push(Scope::new(ScopeKind::Enum, Some(e)));
         self.ctx = e;
+    }
+
+    /// The type of enumerator `d` while its enumeration (without a fixed
+    /// underlying type) is being defined ([dcl.enum]/5), if it is.
+    pub(crate) fn enumerator_pre_brace_type(&self, d: DeclId) -> Option<QualType> {
+        self.enums
+            .iter()
+            .rev()
+            .find_map(|b| b.pre_types.iter().find(|x| x.0 == d).map(|x| x.1))
     }
 
     /// The value and the converted initializer of an enumerator whose
@@ -3462,6 +3482,21 @@ impl Sema<'_, '_> {
         });
         let cv = self.int_const(vty, v);
         let _ = self.ast.decls.set_enumerator_value(d, cv);
+        // [dcl.enum]/5 (clang `CheckEnumConstant`): without a fixed
+        // underlying type, an enumerator has the type of its initializing
+        // value until the closing brace; without an initializer, that of
+        // the previous enumerator if the incremented value fits, else `int`
+        // for the first one or a type wide enough.
+        let pre = if build.fixed.is_some() {
+            None
+        } else if let Some(ie) = init_e {
+            Some(self.ast.types.unqualified(self.ast.exprs.get(ie).ty()))
+        } else {
+            match build.pre_types.last() {
+                Some(&(_, t)) if self.fits(t, v) => Some(t),
+                _ => Some(vty),
+            }
+        };
         if !attrs.is_empty() {
             let _ = self.builder().attach_attrs(d, attrs);
         }
@@ -3471,6 +3506,9 @@ impl Sema<'_, '_> {
         if let Some(b) = self.enums.last_mut() {
             b.last = Some(v);
             b.enumerators.push((d, v));
+            if let Some(t) = pre {
+                b.pre_types.push((d, t));
+            }
         }
         d
     }

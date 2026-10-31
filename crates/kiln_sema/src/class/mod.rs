@@ -21,7 +21,7 @@ mod special;
 mod temporary;
 mod r#virtual;
 
-use kiln_ast::decl::{Access, DefinitionBits, TagKind};
+use kiln_ast::decl::{Access, DeclKind, DefinitionBits, TagKind};
 use kiln_ast::types::ExcSpec;
 use kiln_ast::{AttrId, DeclId, ExprId, QualType};
 use kiln_diag::DiagId;
@@ -283,10 +283,21 @@ impl Sema<'_, '_> {
     /// [`Sema::act_on_noexcept_spec`] or
     /// [`Sema::act_on_dynamic_exception_spec`].
     pub fn act_on_exception_spec(&mut self, f: DeclId, spec: ExcSpec) {
-        let _ = spec;
-        self.unparsed_exc.remove(&f);
-        let loc = self.ast.decls.get(f).loc();
-        self.unsupported("exception specifications of member functions", loc);
+        self.set_member_exception_spec(f, spec);
+    }
+
+    /// Before the replayed *noexcept-specifier* of member function `f` is
+    /// parsed: `this` may appear in it unless `f` is static
+    /// ([expr.prim.this]/2), with `f`'s cv-qualifiers. Returns whether a
+    /// `this` scope was entered, for [`Sema::act_on_end_this_scope`].
+    pub fn act_on_start_delayed_exception_spec(&mut self, f: DeclId) -> bool {
+        if self.is_static_method(f) || self.kind_of(f) == DeclKind::Function {
+            return false;
+        }
+        let ty = self.ast.decls.get(f).ty().unwrap_or(QualType::ERROR);
+        let quals =
+            self.ast.types.proto(ty).map_or(kiln_ast::types::Quals::NONE, |p| p.info().this_quals());
+        self.act_on_start_this_scope(true, quals)
     }
 
     /// The replayed default member initializer of `field`

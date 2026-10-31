@@ -11,6 +11,7 @@ use kiln_oven::EvalContext;
 use kiln_source::Loc;
 
 use crate::Sema;
+use crate::declspec::Declarator;
 use crate::conv::{self, ConvCtx};
 
 /// How a `noexcept` specifier argument converts to `bool`.
@@ -283,6 +284,51 @@ impl Sema<'_, '_> {
 }
 
 impl Sema<'_, '_> {
+    /// A member function declarator whose *noexcept-specifier* the parser
+    /// saved for a complete-class context ([class.mem.general]/7,
+    /// spec/sema-class.md §2.7): `f`'s type carries `ExcSpec::Deferred(f)`
+    /// and `f` sits in `unparsed_exc` until
+    /// [`Sema::act_on_exception_spec`].
+    pub(crate) fn defer_late_noexcept(&mut self, f: kiln_ast::DeclId, d: &Declarator) {
+        if d.late_noexcept.is_none() {
+            return;
+        }
+        let Some(ty) = self.ast.decls.get(f).ty() else { return };
+        if self.ast.types.proto(ty).is_none() {
+            return;
+        }
+        let t = self.with_exc_spec(ty, ExcSpec::Deferred(f));
+        self.ast.decls.set_ty(f, t);
+        self.unparsed_exc.insert(f);
+    }
+
+    /// The replayed exception specification `spec` of member function `f`
+    /// (spec/sema-class.md §2.7): `f`'s type takes it as written.
+    pub(crate) fn set_member_exception_spec(&mut self, f: kiln_ast::DeclId, spec: ExcSpec) {
+        if !self.unparsed_exc.remove(&f) {
+            return;
+        }
+        let redecls: Vec<kiln_ast::DeclId> = self.ast.redecls_of(f).collect();
+        for d in redecls {
+            let Some(ty) = self.ast.decls.get(d).ty() else { continue };
+            let t = self.with_exc_spec(ty, spec);
+            self.ast.decls.set_ty(d, t);
+        }
+    }
+
+    /// clang's `ResolveExceptionSpec` diagnostic for a function whose
+    /// *noexcept-specifier* is needed ([except.spec]/13) before the
+    /// complete-class context it is parsed in: `exception specification is
+    /// not available until end of class definition`. Returns true then.
+    pub(crate) fn diagnose_unparsed_exc_spec(&mut self, f: kiln_ast::DeclId, loc: Loc) -> bool {
+        let first = self.ast.first(f);
+        if !self.unparsed_exc.contains(&first) {
+            return false;
+        }
+        self.error(DiagId::sema_exception_spec_not_parsed, loc);
+        true
+    }
+
     /// `throw` / `throw e` ([expr.throw]): a prvalue of type `void`. The
     /// exception object's type is `e`'s with arrays and functions decayed
     /// and top-level cv removed ([expr.throw]/3); it must not be (a
