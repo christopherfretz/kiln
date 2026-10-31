@@ -565,7 +565,7 @@ diag_ids! {
     sema_redefinition_different_kind = Error (1) "redefinition of '{0}' as different kind of symbol";
     sema_redefinition_different_type = Error (3) "redefinition of '{0}' with a different type: {1} vs {2}";
     sema_redeclaration_different_type = Error (3) "redeclaration of '{0}' with a different type: {1} vs {2}";
-    sema_redefinition_different_typedef = Error (3) "{0:typedef|type alias} redefinition with different types ({1} vs {2})";
+    sema_redefinition_different_typedef = Error (3) "{0:typedef|type alias|type alias template} redefinition with different types ({1} vs {2})";
     sema_ovl_diff_return_type = Error (0) "functions that differ only in their return type cannot be overloaded";
     sema_static_non_static = Error (1) "static declaration of '{0}' follows non-static declaration";
     sema_param_redefinition = Error (1) "redefinition of parameter '{0}'";
@@ -743,6 +743,7 @@ diag_ids! {
     note_use_noexcept_false = Note (0) "use 'noexcept(false)' instead";
     sema_exception_spec_mismatch = Error (0) "exception specification in declaration does not match previous declaration";
     sema_missing_exception_spec = Error (2) "'{0}' is missing exception specification '{1}'";
+    sema_exception_spec_not_parsed = Error (0) "exception specification is not available until end of class definition";
     sema_undeclared_label = Error (1) "use of undeclared label '{0}'";
     sema_redefinition_of_label = Error (1) "redefinition of label '{0}'";
     sema_return_missing_expr = Error (1) "non-void function '{0}' should return a value";
@@ -962,6 +963,7 @@ diag_ids! {
     note_template_class_instantiation_here = Note (1) "in instantiation of template class '{0}' requested here";
     note_template_member_class_here = Note (1) "in instantiation of member class '{0}' requested here";
     note_template_member_function_here = Note (1) "in instantiation of member function '{0}' requested here";
+    note_template_exception_spec_here = Note (1) "in instantiation of exception specification for '{0}' requested here";
     note_function_template_spec_here = Note (1) "in instantiation of function template specialization '{0}' requested here";
     note_template_static_data_member_def_here = Note (1) "in instantiation of static data member '{0}' requested here";
     note_template_type_alias_instantiation_here = Note (1) "in instantiation of template type alias '{0}' requested here";
@@ -983,6 +985,7 @@ diag_ids! {
     note_typename_member_refers_here = Note (1) "referenced member '{0}' is declared here";
     // WP-073: concepts (spec/sema-templates.md §8, §8.7; clang 19's texts).
     sema_template_constraints_not_satisfied = Error (3) "constraints not satisfied for {0:class template|function template|variable template|alias template|template template parameter|template} '{1}' {2}";
+    sema_reference_to_unsatisfied_function = Error (1) "invalid reference to function {0}: constraints not satisfied";
     sema_non_bool_atomic_constraint = Error (1) "atomic constraint must be of type 'bool' (found {0})";
     sema_non_constant_constraint = Error (0) "substitution into constraint expression resulted in a non-constant expression";
     sema_constraint_depends_on_self = Error (1) "satisfaction of constraint '{0}' depends on itself";
@@ -999,6 +1002,7 @@ diag_ids! {
     note_checking_concept_here = Note (1) "while checking the satisfaction of concept '{0}' requested here";
     note_constraint_substitution_here = Note (0) "while substituting template arguments into constraint expression here";
     note_ambiguous_atomic_constraints = Note (0) "similar constraint expressions not considered equivalent; constraint expressions cannot be considered equivalent unless they originate from the same concept";
+    note_ambiguous_atomic_constraints_similar_expression = Note (0) "similar constraint expression here";
     // WP-074: builtin type traits, transforms and templates (spec/sema-templates.md §9)
     sema_type_trait_arity = Error (5) "type trait requires {0}{1:| or more} argument{2:|s}; have {3} argument{4:|s}";
     sema_incomplete_type_trait = Error (1) "incomplete type {0} used in type trait expression";
@@ -1149,6 +1153,7 @@ diag_ids! {
     note_ovl_candidate = Note (1) "candidate {0}";
     note_ovl_candidate_kind_not_viable = Note (2) "candidate {0} not viable: {1}";
     note_ovl_candidate_deleted = Note (2) "candidate {0} has been {1:explicitly|implicitly} deleted";
+    note_ovl_candidate_illegal_constructor = Note (1) "candidate {0:constructor|template} ignored: instantiation {0:takes|would take} its own class type by value";
     note_ovl_candidate_explicit = Note (1) "explicit {0:constructor|conversion function|deduction guide} is not a candidate";
     note_possible_target = Note (0) "possible target for call";
     sema_addr_ovl_cast = Error (3) "address of overloaded function '{0}' cannot be {1:cast|static_cast} to type {2}";

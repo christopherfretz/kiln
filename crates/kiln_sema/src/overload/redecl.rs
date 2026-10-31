@@ -155,7 +155,7 @@ impl Sema<'_, '_> {
         })
     }
 
-    fn opt_exprs_equivalent(&self, a: Option<ExprId>, b: Option<ExprId>) -> bool {
+    pub(crate) fn opt_exprs_equivalent(&self, a: Option<ExprId>, b: Option<ExprId>) -> bool {
         match (a, b) {
             (None, None) => true,
             (Some(a), Some(b)) => self.exprs_equivalent(a, b, 0),
@@ -210,6 +210,25 @@ impl Sema<'_, '_> {
                         }
                         _ => t.canonical_arg(*x) == t.canonical_arg(*y),
                     })
+            }
+            // `sizeof(T)`/`alignof(T)`: the type operand by canonical type
+            // (template parameters by position).
+            ExprKind::UnaryExprOrTypeTraitExpr
+                if e.trait_type_arg(a).is_some() || e.trait_type_arg(b).is_some() =>
+            {
+                na.aux() == nb.aux()
+                    && match (e.trait_type_arg(a), e.trait_type_arg(b)) {
+                        (Some(x), Some(y)) => self.ast.types.same_type(x, y),
+                        _ => false,
+                    }
+            }
+            ExprKind::TypeTraitExpr => {
+                let l = &self.ast.lists;
+                let xa: Vec<QualType> = l.iter::<QualType>(e.type_trait_args(a)).collect();
+                let xb: Vec<QualType> = l.iter::<QualType>(e.type_trait_args(b)).collect();
+                na.aux() == nb.aux()
+                    && xa.len() == xb.len()
+                    && xa.iter().zip(&xb).all(|(&x, &y)| self.ast.types.same_type(x, y))
             }
             ExprKind::BinaryOperator if e.binary_op(a) != e.binary_op(b) => false,
             ExprKind::UnaryOperator if e.unary_op(a) != e.unary_op(b) => false,

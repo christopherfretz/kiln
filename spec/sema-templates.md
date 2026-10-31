@@ -2968,14 +2968,11 @@ explicit specialization errors remain. The blockers are:
   single-level argument lists. A non-dependent concept-id or
   requires-expression stores its value in `ExprNode.aux`
   (`ExprArena::satisfied`/`set_satisfied`), and the Oven folds that.
-  **Deviation from §8.3:** there is no `atom_cache`. Atoms are
-  evaluated per (entity, args). The per-concept `sat_cache` is what
-  shares `same_as`-style sub-concepts.
-- Conservative fallbacks: an atom is treated as *satisfied* when its
-  substitution hits `sema_unimplemented_template_feature`, or when it
-  is still value-dependent after substitution. A requirement whose
-  substitution is unimplemented also holds. This avoids rejecting
-  valid code that relies on unlanded features (packs in folds: WP-072).
+  The §8.3 `atom_cache` landed with WP-109 (below).
+- Conservative fallbacks (WP-073; tightened by WP-109, below): an atom
+  was treated as *satisfied* when its substitution hit
+  `sema_unimplemented_template_feature`, or when it was still
+  value-dependent after substitution.
 - Call sites:
   - `deduce_call.rs` checks the associated constraints after deduction
     (`Tdk::ConstraintsNotSatisfied`, `DeductionFailure::sat`, and the
@@ -3017,28 +3014,11 @@ explicit specialization errors remain. The blockers are:
   Invented parameters of abbreviated templates carry their constraint
   at that location too (`act_on_invented_template_param` takes `(C,
   args, loc)`).
-- Known divergences from clang:
-  - a failed type-requirement's note points at `requires`, not at the
-    type;
-  - a member-access failure inside a substituted requirement points at
-    the member name, not the `.`;
-  - a `noexcept` requirement's note points at the expression, not at
-    `noexcept` (`Requirement::Compound` stores no location for it);
-  - a non-bool atom is diagnosed at satisfaction time, not at the
-    concept definition;
-  - `static_assert(requires {…})` adds the requirement's note, where
-    clang prints the expression;
-  - ambiguity between non-comparable constraints lacks clang's
-    `note_ambiguous_atomic_constraints` pair.
-- Gaps, with owners:
-  - constrained parameter packs and folds over packs in constraints:
-    WP-072 (substitution is unimplemented, so they are treated as
-    satisfied);
-  - generic lambdas: lambdas are not implemented;
-  - trailing requires-clauses on non-template members of class
-    templates ([over.match.best]/2.6): unowned (next templates package);
-  - `atom_cache`: unowned (perf follow-up; the per-concept cache covers
-    libc++'s patterns).
+- The WP-073 divergences (note locations, non-bool atoms, the
+  `static_assert(requires {…})` print, the ambiguous-atom notes) and
+  gaps (trailing requires-clauses on members of class templates,
+  `atom_cache`) were closed by WP-109 (below). Generic lambdas wait for
+  lambdas.
 - The `<type_traits>` probe went from 20 errors to 10. What remains:
   - 4 are "not yet implemented: pack expansion" (WP-072), at
     `common_reference.h:182,183`, `conjunction.h:39` and
@@ -3116,6 +3096,107 @@ explicit specialization errors remain. The blockers are:
   constrained partial specializations and requires-expressions
   (WP-073, already on main) and `__int128_t` (WP-107). Main after
   WP-073 has 10, of which 4 are pack expansions that this branch fixes.
+
+**Landed (WP-109): concepts and alias follow-ups.**
+- Dependent member templates as template template arguments:
+  `X<T>::template M` (and `X<T>::M` naming a member template of a
+  dependent specialization) is a `DependentIdentifier` template name,
+  looked up again at substitution; inside the current instantiation it
+  resolves at once to a `Qualified` name. A template template parameter
+  replaced by a `Qualified` name yields the underlying declaration. This
+  fixes `__basic_common_reference_t` (`<type_traits>` reaches 0 errors).
+  `unqualified()` peels sugar that buries qualifiers. An alias template
+  redeclared with the same type is accepted.
+- Fallback policy (replaces WP-073's): an atom or requirement whose
+  substitution hits `sema_unimplemented_template_feature` is a hard
+  error (the captured diagnostic is emitted, nothing is assumed). A
+  value-dependent result is *satisfied* only while the levels themselves
+  are dependent (a retained level or a dependent argument: a partial
+  check during the definition); with concrete levels it is "not yet
+  implemented". Fold-expanded constraints `(C<Ts> && ...)` evaluate
+  through the substituted fold.
+- `atom_cache` (§8.3): `ConceptState::atom_cache: (atom ExprId,
+  Vec<canonical ArgListId>) → (bool, records)`; `sat_atom` wraps
+  `sat_atom_uncached`. An atom's `ExprId` belongs to one entity's
+  constraint, so the key is that entity's levels; this replaces
+  `NormId` in §8.3's key. Not cached when a level is dependent or the
+  evaluation emitted or trapped an error. Single-level checks are
+  already served by `sat_cache`, so hits come from multi-level
+  constraints (member templates of class template specializations).
+  `SatCounters` gains `atoms`/`atom_hits`; the instantiation report's
+  JSON totals row gains `"sat"`, `"sat_cached"`, `"atoms"`,
+  `"atoms_cached"`, and the text format a `satisfaction: N (M cached)
+  atoms: A (H cached)` line (§11.3).
+- Note locations: a type-requirement's note is at the type
+  (`Requirement::Type(QualType, Loc)`), a `noexcept` requirement's at
+  the keyword (`Requirement::Compound { noexcept: Option<Loc>, .. }`),
+  a member access failing after substitution at the `.`/`->`
+  (`TemplateTables::member_op_loc`).
+- A non-`bool` atom is diagnosed where it is written
+  (`Sema::check_constraint_expression`, called by `act_concept` and the
+  requires-clause parser). The concept's constraint (or the clause)
+  becomes a `RecoveryExpr`; naming such a concept is an error expression
+  with no further diagnostic, and a clause's atom is unsatisfied.
+- `static_assert(requires {…})` prints the expression as clang does
+  (`AstNames::expr` has a `RequiresExpr` arm).
+- After an ambiguous call between non-comparable constrained candidates,
+  `ambiguous_constraint_notes` (`concepts/subsume.rs`, called from
+  `with_ovl_notes`) adds clang's `note_ambiguous_atomic_constraints` and
+  `note_ambiguous_atomic_constraints_similar_expression`.
+  `exprs_equivalent` compares `sizeof(T)` and type-trait operands by
+  canonical type.
+- Trailing requires-clauses of members of class templates
+  ([over.match.viable]/3, [over.match.best]/2.6). As in clang, the
+  instantiated member keeps the pattern's clause, which is checked with
+  the specialization's levels:
+  - `ConceptState::member_constraints: DeclId → (pattern DeclId,
+    MultiLevelArgs)` is filled by `function_decl` (non-template
+    members) and `member_template` (member templates, whose
+    `associated_constraints` and `check_constraints` then use the
+    pattern's clause with the outer levels plus their own);
+  - `Sema::check_function_constraints(f, loc) -> Option<SatId>`;
+    overload resolution marks a failing candidate
+    `CandidateFailure::ConstraintsNotSatisfied { sat }` ("candidate
+    function not viable: constraints not satisfied" plus the chain);
+  - `order_constrained_candidates` (`overload/best.rs`) orders viable
+    non-template candidates with the same parameter-type lists
+    (`same_param_type_lists`, [over.match.best]/2.6) by
+    `more_constrained`; constructor selection and special-member
+    deletion now call `order_template_candidates` too;
+  - naming a function whose constraints fail is
+    `sema_reference_to_unsatisfied_function` ("invalid reference to
+    function 'f': constraints not satisfied",
+    `Sema::diagnose_unsatisfied_use`);
+  - special-member redeclaration matching also compares the trailing
+    requires-clauses, so constrained copy constructors overload;
+  - friends attach their trailing requires-clause; hidden friends
+    defined in class templates are no longer replayed as members
+    (previously "not yet implemented: Function members of class
+    templates").
+- AST dump: a non-dependent `RequiresExpr` prints ` satisfied` or
+  ` unsatisfied` (spec/ast-dump.md); a `MemberExpr` built in an
+  unevaluated operand is `non_odr_use_unevaluated`; an unqualified
+  type-requirement keeps clang's `ElaboratedType 'typename X'`. The
+  xtask clang-ast normalizer accepts non-dependent requires-expressions
+  (a requirement's own `satisfied` is dropped: kiln records only the
+  expression's value) and `MemberExpr.nonOdrUseReason`.
+- Known divergences from clang:
+  - a non-`bool` atom: clang drops the whole declaration (later uses
+    are "use of undeclared identifier"), kiln keeps it;
+  - a fold-expanded constraint's note is "'... && ...' evaluated to
+    false", where clang expands the fold per element ("because 'long'
+    does not satisfy 'Int'");
+  - "no matching function" for a qualified call of a function template
+    is at the name, not the qualifier (deduction path);
+  - an instantiated requires-expression keeps no requirements in the
+    dump (its value and notes are kept).
+- Gaps, with owners:
+  - eligibility and triviality of special members by their constraints
+    ([special]/6): unowned;
+  - conversion functions and user-defined conversion sequences
+    (`ics.rs`) do not order constrained candidates: unowned;
+  - `__is_convertible` (WP-068a): `temp.constr.concept-std-like.cpp`
+    is xfail, it passed only through the removed fallback.
 
 ### 11.3 Instantiation report and memory accounting
 
@@ -3467,3 +3548,4 @@ Each question has a recommendation (R).
 | Q15 | Reserved depths recorded in types.md §5.3; user templates limited to depth < 0x7FF0. |
 | Q16 | Dumper, Oven lowering and codegen are iterative along binary spines in M3, tested by `fold-65536.cpp` (owner: WP-072 adds the test; each walker's owner crate fixes its walker; the Oven's `compile.rs` is WP-076's). |
 | Q17 | P1061, P2963, P2893, P2841 deferred to M4/M5. |
+| Q3 (2026-10-31) | Measured in WP-106 (§14 Q3): sharing saves 0.8% of `inst.bytes` on `libcxx_m3.cpp` (≤3% counting literal leaves), below the 15% bar. Q3 is closed: sharing stays as the substituter's base case via `needs_rebuild`; no `ExprDeps::LOCAL` bit, no `-fno-share-nondependent` flag. |

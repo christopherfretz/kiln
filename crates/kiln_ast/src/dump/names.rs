@@ -830,6 +830,64 @@ impl<'a> AstNames<'a> {
                 }
                 out.push(')');
             }
+            // clang's `VisitRequiresExpr`.
+            ExprKind::RequiresExpr => {
+                let Some(rq) = ast.requires_of(e) else {
+                    out.push_str("...");
+                    return;
+                };
+                out.push_str("requires ");
+                let mut parms = ast.lists.iter::<DeclId>(rq.params).peekable();
+                if parms.peek().is_some() {
+                    out.push('(');
+                    for (i, p) in parms.enumerate() {
+                        if i > 0 {
+                            out.push_str(", ");
+                        }
+                        let mut name = String::new();
+                        self.write_name(p, &mut name);
+                        match ast.decls.get(p).ty() {
+                            Some(t) => crate::types::write_declarator(
+                                &ast.types,
+                                self,
+                                t,
+                                self.expr_types,
+                                &name,
+                                out,
+                            ),
+                            None => out.push_str(&name),
+                        }
+                    }
+                    out.push_str(") ");
+                }
+                out.push_str("{ ");
+                for r in ast.templates.requirements(rq) {
+                    match *r {
+                        crate::templates::Requirement::Simple(x) => self.expr(x, d, out),
+                        crate::templates::Requirement::Type(t, _) => {
+                            write_type(&ast.types, self, t, self.expr_types, out);
+                        }
+                        crate::templates::Requirement::Compound { expr, noexcept, constraint } => {
+                            out.push_str("{ ");
+                            self.expr(expr, d, out);
+                            out.push_str(" }");
+                            if noexcept.is_some() {
+                                out.push_str(" noexcept");
+                            }
+                            if let Some(c) = constraint {
+                                out.push_str(" -> ");
+                                self.type_constraint(c, out);
+                            }
+                        }
+                        crate::templates::Requirement::Nested(x) => {
+                            out.push_str("requires ");
+                            self.expr(x, d, out);
+                        }
+                    }
+                    out.push_str("; ");
+                }
+                out.push('}');
+            }
             ExprKind::CXXFoldExpr => {
                 let op = crate::expr::BinaryOp::from_u8(n.aux()).map_or("?", |o| o.spelling());
                 out.push('(');
@@ -906,6 +964,32 @@ impl<'a> AstNames<'a> {
 }
 
 impl AstNames<'_> {
+    /// A return-type-requirement's type-constraint as written: the
+    /// immediately-declared constraint `C<decltype((e)), args...>` printed
+    /// as `C<args...>` (clang's `TypeConstraint::print`).
+    fn type_constraint(&self, c: ExprId, out: &mut String) {
+        let x = self.ast.exprs.get(c);
+        let Some(concept) =
+            DeclId::from_raw(x.a()).filter(|_| x.kind() == ExprKind::ConceptSpecializationExpr)
+        else {
+            out.push_str("...");
+            return;
+        };
+        self.write_name(concept, out);
+        let Some(args) = crate::ids::ArgListId::from_raw(x.b()) else { return };
+        let all = self.ast.types.args(args);
+        if all.len() > 1 {
+            out.push('<');
+            for (i, a) in all.iter().skip(1).enumerate() {
+                if i > 0 {
+                    out.push_str(", ");
+                }
+                crate::types::write_template_arg(&self.ast.types, self, *a, out);
+            }
+            out.push('>');
+        }
+    }
+
     /// [`TypeNames::invented_parm`]: an implicit type template parameter
     /// and its type-constraint's concept and arguments.
     #[allow(clippy::option_option, reason = "the TypeNames::invented_parm contract")]

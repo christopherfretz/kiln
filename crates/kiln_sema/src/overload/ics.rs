@@ -233,6 +233,63 @@ impl Sema<'_, '_> {
         t.canonical(q).without_quals() == QualType::ERROR || t.is_dependent(q)
     }
 
+    /// Whether `from` and `to` (or the type `to` refers to) are the same
+    /// class, one of them the current instantiation in its own template
+    /// (the injected-class-name and `X<params...>` are one type,
+    /// [temp.dep.type]/1): the conversion is a reference binding or an
+    /// identity whatever the template arguments, so it is ranked as one
+    /// (a copy constructor over a move constructor for an lvalue).
+    fn same_dependent_class(&mut self, from: QualType, to: QualType) -> bool {
+        let t = &self.ast.types;
+        let referee = match t.canonical_view(to) {
+            TypeView::LValueRef(p) | TypeView::RValueRef(p) => p,
+            _ => to,
+        };
+        let err = |q: QualType| t.canonical(q).without_quals() == QualType::ERROR;
+        if err(from) || err(referee) {
+            return false;
+        }
+        let (a, b) = (t.canonical(from).without_quals(), t.canonical(referee).without_quals());
+        if a == b {
+            // The canonical current instantiation is a dependent
+            // specialization, a record only through its sugar.
+            return t.as_record(a).is_some()
+                || t.as_record(from).is_some()
+                || matches!(t.canonical_view(a), TypeView::TemplateSpecialization { .. });
+        }
+        match (t.as_record(a), t.as_record(b)) {
+            (Some(x), Some(y)) => same_class(self, x, y),
+            (Some(x), None) => {
+                let q = self.this_class_type(x);
+                self.ast.types.canonical(q).without_quals() == b
+            }
+            (None, Some(y)) => {
+                let q = self.this_class_type(y);
+                self.ast.types.canonical(q).without_quals() == a
+            }
+            (None, None) => false,
+        }
+    }
+
+    /// `to` (a reference to, or an object of, the class of `from`) spelt
+    /// with `from`'s class type, keeping `to`'s qualifiers.
+    fn retarget_to_class(&mut self, from: QualType, to: QualType) -> QualType {
+        let t = &mut self.ast.types;
+        let (r, referee) = match t.canonical_view(to) {
+            TypeView::LValueRef(p) => (Some(true), p),
+            TypeView::RValueRef(p) => (Some(false), p),
+            _ => (None, to),
+        };
+        let cv = t.effective_quals(referee) & Quals::CV;
+        let class = t.canonical(from).without_quals();
+        let obj = t.qualify(class, cv);
+        match r {
+            Some(true) => t.lvalue_ref_to(obj),
+            Some(false) => t.rvalue_ref_to(obj),
+            None => obj,
+        }
+    }
+
     /// The implicit conversion sequence converting `a` to `to`
     /// ([over.best.ics]).
     pub(crate) fn try_implicit_conversion(
@@ -245,8 +302,12 @@ impl Sema<'_, '_> {
         if let Some(i) = a.list {
             return self.list_ics_at(i, to, opts);
         }
+        let mut to = to;
         if self.ics_is_error(a.ty) || self.ics_is_error(to) {
-            return Ics::Standard(StandardConversion::identity(a.ty, to, RefBinding::NONE));
+            if !self.same_dependent_class(a.ty, to) {
+                return Ics::Standard(StandardConversion::identity(a.ty, to, RefBinding::NONE));
+            }
+            to = self.retarget_to_class(a.ty, to);
         }
         if a.ty == QualType::OVERLOAD {
             return self.overload_set_ics(a, to, opts);
@@ -797,7 +858,7 @@ impl Sema<'_, '_> {
         for &f in found {
             let k = self.kind_of(f);
             if k == DeclKind::FunctionTemplate {
-                set.skipped_templates = true;
+                self.add_found_template(set, f, want, kind, first_opts, list_only, &mut seen);
                 continue;
             }
             if k != want || self.ast.decls.get(f).has(DeclFlags::INVALID) {
@@ -820,6 +881,77 @@ impl Sema<'_, '_> {
 
     /// Whether constructor `f` is an initializer-list constructor
     /// ([dcl.init.list]/2).
+    /// Adds function template `ft` (a constructor or member function
+    /// template of the kind `want`) to `set` through template argument
+    /// deduction from the set's arguments ([over.match.funcs.general]/8,
+    /// [temp.deduct.call]). A constructor specialization that would copy
+    /// its own class by value is not viable ([class.copy.ctor]/5).
+    #[allow(clippy::too_many_arguments, reason = "add_found_candidates' parts")]
+    fn add_found_template(
+        &mut self,
+        set: &mut super::OverloadCandidateSet,
+        ft: DeclId,
+        want: DeclKind,
+        kind: CandidateKind,
+        first_opts: IcsOptions,
+        list_only: bool,
+        seen: &mut Vec<DeclId>,
+    ) {
+        let Some(pattern) = self.templated_function(ft) else { return };
+        if self.kind_of(pattern) != want || self.ast.decls.get(ft).has(DeclFlags::INVALID) {
+            return;
+        }
+        let first = self.ast.first(ft);
+        if seen.contains(&first) {
+            return;
+        }
+        seen.push(first);
+        if list_only && !self.is_init_list_ctor(pattern) {
+            return;
+        }
+        if self.ast.decls.cold.requires_clause.contains(ft) {
+            set.uncertain = true;
+        }
+        let n = set.cands.len();
+        let loc = set.loc;
+        self.add_template_candidate(set, ft, ft, None, kind, first_opts, loc);
+        if kind == CandidateKind::Ctor
+            && set.args.len() == 1
+            && let Some(c) = set.cands.get(n)
+            && c.viable
+            && self.specialization_copies_object(c.func(), &set.args[0])
+        {
+            let c = &mut set.cands[n];
+            c.viable = false;
+            c.failure = CandidateFailure::IllegalCtor;
+        }
+    }
+
+    /// clang `isSpecializationCopyingObject` with the argument check of
+    /// `AddOverloadCandidate`: constructor `f`'s first parameter is its
+    /// class by value, the others defaulted, and `a` is of that class
+    /// (or derived from it).
+    fn specialization_copies_object(&mut self, f: DeclId, a: &ArgInfo) -> bool {
+        let params = self.param_decls(f);
+        let Some(&p) = params.first() else { return false };
+        if params[1..].iter().any(|&q| !self.param_has_default(q)) {
+            return false;
+        }
+        let pty = self.ast.decls.get(p).ty().unwrap_or(QualType::ERROR);
+        if self.ast.types.is_reference(pty) {
+            return false;
+        }
+        let Some(class) = self.ast.decls.get(f).ctx() else { return false };
+        let cty = self.class_type(class);
+        if !self.ast.types.same_unqualified(pty, cty) || a.list.is_some() {
+            return false;
+        }
+        if self.ast.types.same_unqualified(a.ty, cty) {
+            return true;
+        }
+        self.ast.types.as_record(a.ty).is_some_and(|d| is_derived_from(self, d, class))
+    }
+
     pub(crate) fn is_init_list_ctor(&mut self, f: DeclId) -> bool {
         let params = self.param_decls(f);
         let Some(&p) = params.first() else { return false };
@@ -938,6 +1070,7 @@ impl Sema<'_, '_> {
         to: QualType,
         list_ctor: bool,
     ) -> Ics {
+        self.order_template_candidates(set);
         let c = match self.best_viable(set) {
             OvlOutcome::Success(c) | OvlOutcome::Deleted(c) => c,
             OvlOutcome::Ambiguous => return Ics::Ambiguous { from, to },

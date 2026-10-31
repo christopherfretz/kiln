@@ -683,7 +683,16 @@ impl<'a, 'sm> Parser<'a, 'sm> {
     /// [`Parser::scan_name`], also saying whether the name's last
     /// argument list closed on the first `>` of the `>>`-like token at the
     /// returned index.
-    pub(crate) fn scan_name_at(&self, mut i: usize) -> Option<(usize, bool, NameClass, Symbol)> {
+    pub(crate) fn scan_name_at(&self, i: usize) -> Option<(usize, bool, NameClass, Symbol)> {
+        self.scan_name_qual_at(i).map(|(end, split, c, n, _)| (end, split, c, n))
+    }
+
+    /// [`Parser::scan_name_at`], also giving the context the name's
+    /// qualifier names (`None` when unqualified).
+    pub(crate) fn scan_name_qual_at(
+        &self,
+        mut i: usize,
+    ) -> Option<(usize, bool, NameClass, Symbol, Option<DeclId>)> {
         if !self.stack_ok() {
             return None;
         }
@@ -706,7 +715,7 @@ impl<'a, 'sm> Parser<'a, 'sm> {
                 let (close, split) = self.skip_template_args(end)?;
                 class = type_if_args(class);
                 if split {
-                    return Some((close, true, class, name));
+                    return Some((close, true, class, name, qual));
                 }
                 end = close + 1;
             }
@@ -720,7 +729,7 @@ impl<'a, 'sm> Parser<'a, 'sm> {
                 i = end + 1;
                 continue;
             }
-            return Some((end, false, class, name));
+            return Some((end, false, class, name, qual));
         }
     }
 

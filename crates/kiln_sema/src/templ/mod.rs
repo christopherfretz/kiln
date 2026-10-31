@@ -797,7 +797,8 @@ impl Sema<'_, '_> {
             self.error(DiagId::sema_trailing_requires_non_function, loc);
             return;
         }
-        if !self.in_template() {
+        // An instantiated member keeps its pattern's clause.
+        if !self.in_template() && self.inst.stack.is_empty() {
             let loc = self.ast.exprs.get(r).loc();
             self.error(DiagId::sema_trailing_requires_non_template, loc);
         }

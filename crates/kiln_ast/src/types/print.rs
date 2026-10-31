@@ -319,10 +319,48 @@ pub fn write_template_arg(
 /// The diagnostic `aka` string: the canonical type printed with every
 /// name scoped, when it differs textually from the type as written
 /// (`'S' (aka 'ns::S')`).
+///
+/// clang's `desugarForDiagnostic` keeps a function type's exception
+/// specification as written, so a difference only there (`noexcept(false)`
+/// against its canonical nothing) gives no `aka`.
 pub fn aka(ctx: &TypeContext, names: &dyn TypeNames, q: QualType) -> Option<String> {
     let written = print_type(ctx, names, q, PrintOptions::SUGARED);
     let canon = print_type(ctx, names, q, PrintOptions::CANONICAL);
-    (canon != written).then_some(canon)
+    (canon != written && without_exc_specs(&canon) != without_exc_specs(&written)).then_some(canon)
+}
+
+/// `s` with every printed exception specification (` noexcept`,
+/// ` noexcept(...)`, ` throw(...)`) removed.
+fn without_exc_specs(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    loop {
+        let next = [" noexcept", " throw("]
+            .iter()
+            .filter_map(|k| rest.find(k).map(|i| (i, k.len())))
+            .min();
+        let Some((i, n)) = next else {
+            out.push_str(rest);
+            return out;
+        };
+        out.push_str(&rest[..i]);
+        rest = &rest[i + n..];
+        // The balanced parenthesized operand, if any (`throw(` opened one).
+        let mut depth = usize::from(n == " throw(".len());
+        if depth == 0 && rest.starts_with('(') {
+            depth = 1;
+            rest = &rest[1..];
+        }
+        while depth > 0 {
+            let Some(c) = rest.chars().next() else { break };
+            rest = &rest[c.len_utf8()..];
+            match c {
+                '(' => depth += 1,
+                ')' => depth -= 1,
+                _ => {}
+            }
+        }
+    }
 }
 
 /// The two strings of clang's AST dump (`'Arr':'int[3]'`): the type as

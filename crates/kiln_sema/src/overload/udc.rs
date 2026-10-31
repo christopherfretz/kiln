@@ -379,6 +379,7 @@ impl Sema<'_, '_> {
         let mut set = self.begin_set(kind, Loc::INVALID);
         set.target = target;
         self.build_conversion_set(&mut set, a, target, opts);
+        self.order_template_candidates(&mut set);
         Some(set)
     }
 }

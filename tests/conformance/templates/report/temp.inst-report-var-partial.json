@@ -2,4 +2,4 @@
 {"template":"P<T>","kind":"class","loc":"temp.inst-report-var-partial.cpp:8:27","count":3,"nodes":5,"bytes":265,"self_us":0,"incl_us":0}
 {"template":"A<T>","kind":"class","loc":"temp.inst-report-var-partial.cpp:10:27","count":1,"nodes":3,"bytes":161,"self_us":0,"incl_us":0}
 {"template":"A<int>::B<U>","kind":"class","loc":"temp.inst-report-var-partial.cpp:11:29","count":1,"nodes":2,"bytes":106,"self_us":0,"incl_us":0}
-{"total":true,"count":11,"nodes":30,"bytes":1156,"self_us":0}
+{"total":true,"count":11,"nodes":30,"bytes":1156,"self_us":0,"sat":0,"sat_cached":0,"atoms":0,"atoms_cached":0}

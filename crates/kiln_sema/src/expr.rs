@@ -1082,6 +1082,12 @@ impl Sema<'_, '_> {
             self.ast.decls.set_flags(d, DeclFlags::INVALID);
             return self.recover_err(&[], loc);
         }
+        // The exception specification is part of the type ([dcl.fct]/14):
+        // resolved before the reference takes it (clang's
+        // `DiagnoseUseOfDecl`).
+        if matches!(n.kind(), DeclKind::Function | DeclKind::CXXMethod) {
+            self.resolve_exc_for_type(d, loc);
+        }
         // Re-read: `check_undeduced_use` may have deduced the return type.
         let mut declared = self.ast.decls.get(d).ty().unwrap_or(QualType::ERROR);
         // A pack names its pattern ([temp.variadic]/5): `Ts... x` gives `x`
@@ -1096,6 +1102,10 @@ impl Sema<'_, '_> {
         {
             // [temp.param]/8: an lvalue of type `const T`.
             self.ast.types.qualify(declared, kiln_ast::types::Quals::CONST)
+        } else if n.kind() == DeclKind::EnumConstant
+            && let Some(t) = self.enumerator_pre_brace_type(d)
+        {
+            t
         } else {
             self.non_reference(declared)
         };
@@ -1125,6 +1135,9 @@ impl Sema<'_, '_> {
                 DeclKind::Var | DeclKind::ParmVar => self.pending_odr.push(e),
                 _ => {}
             }
+        } else if matches!(n.kind(), DeclKind::Function | DeclKind::CXXMethod) {
+            let at = self.eloc(e);
+            self.exc_spec_needed(d, at);
         }
         e
     }
@@ -2887,6 +2900,9 @@ impl Sema<'_, '_> {
             return self.recover_err(&[base], loc);
         }
         if let Some(e) = self.try_dependent_member(base, name, None, false, loc, arrow) {
+            if op_loc != loc {
+                let _ = self.ast.templates.member_op_loc.insert(e, op_loc);
+            }
             return e;
         }
         // [over.ref]/1: `x->m` on a class `x` is `(x.operator->())->m`.
@@ -3000,7 +3016,26 @@ impl Sema<'_, '_> {
             }
             if q.is_empty() { declared } else { self.ast.types.qualify(declared, q) }
         };
-        self.builder().member(base, f, ty, arrow, loc, None)
+        self.build_member_expr(base, f, ty, arrow, loc, None)
+    }
+
+    /// Builds the `MemberExpr` `base.m`; one built in an unevaluated operand
+    /// is not an odr-use (clang's `getNonOdrUseReasonInCurrentContext` in
+    /// `BuildMemberExpr`).
+    pub(crate) fn build_member_expr(
+        &mut self,
+        base: ExprId,
+        m: DeclId,
+        ty: QualType,
+        arrow: bool,
+        loc: Loc,
+        extra: Option<kiln_ast::expr::DeclRefExtra>,
+    ) -> ExprId {
+        let e = self.builder().member(base, m, ty, arrow, loc, extra);
+        if self.unevaluated > 0 {
+            let _ = self.ast.exprs.set_non_odr_use(e, NonOdrUse::Unevaluated);
+        }
+        e
     }
 
     // -- sizeof / alignof --------------------------------------------------------

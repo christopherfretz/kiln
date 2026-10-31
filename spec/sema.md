@@ -419,8 +419,53 @@ specification as written (`TypeNames` prints ` noexcept`,
   non-empty list is `ISO C++17 does not allow dynamic exception
   specifications` (`-Wdynamic-exception-spec`, default error) with a
   `use 'noexcept(false)' instead` note, then `Dynamic(types)`.
-- **Gaps:** deferred specifications of member functions, `__attribute__((nothrow))`
-  and the implicit specifications of special members are M3.
+- **Gaps:** `__attribute__((nothrow))` is not parsed.
+
+**Landed (WP-112).** Member functions, lazy instantiation and the
+"needed" points ([except.spec]/13):
+- *Complete-class context* ([class.mem.general]/7): a member
+  declarator's *noexcept-specifier* is replayed after the class.
+  `defer_late_noexcept(f, d)` gives `f`'s type `ExcSpec::Deferred(f)`
+  and puts `f` in `unparsed_exc`. The parser brackets the replay with
+  `act_on_start_delayed_exception_spec(f) -> bool` (a `this` scope with
+  `f`'s cv-qualifiers unless `f` is static, [expr.prim.this]/2) and
+  `act_on_end_this_scope`. `act_on_exception_spec(f, spec)` then sets
+  the written spec on every redeclaration (`set_member_exception_spec`).
+  `throw()`, `noexcept` and `noexcept(expr)` all go through this path.
+- *Needed*: `exc_spec_needed(f, loc)` runs at every use that marks a
+  function referenced, including unevaluated operands such as
+  `noexcept(f())`, as clang's `MarkFunctionReferenced` does. A spec
+  that is still unparsed gives `exception specification is not
+  available until end of class definition`
+  (`sema_exception_spec_not_parsed`). Otherwise `resolve_exception_spec(f,
+  at)` runs; it now takes the point of instantiation `at`.
+  `resolve_exc_for_type(f, loc)` resolves the spec before a
+  `DeclRefExpr` or a `&C::m` member pointer takes `f`'s type, because
+  the spec is part of the type (clang's `DiagnoseUseOfDecl`).
+- *Lazy dependent specs* ([temp.inst]/14, clang `EST_Uninstantiated`):
+  when a member of a class template specialization is instantiated and
+  its `noexcept(expr)` is value-dependent, and the member is neither a
+  member template nor in a still-dependent context (`lazy_exc_spec`),
+  the member gets `ExcSpec::Deferred(pattern)` and an entry in
+  `uninstantiated_exc: FxHashMap<DeclId, DeclId>` (first declaration to
+  pattern). `resolve_exc` calls `instantiate_exception_spec(f, poi)`
+  first. That function substitutes the pattern's expression in the
+  member's context, with its parameters and `this`, under a
+  `FrameKind::ExceptionSpec` instantiation frame. Errors carry `in
+  instantiation of exception specification for 'f' requested here`
+  (`note_template_exception_spec_here`). A failed substitution leaves
+  the member potentially throwing (`ExcSpec::None`), as clang does.
+- *Redeclarations*, overriders more lax than the base, and
+  [conv.fctptr] function-pointer conversions use clang's wording. The
+  tests are in `tests/conformance/except.spec/`.
+- *Diagnostics*: `TypeNames::aka` gives no `aka` when the written and
+  canonical spellings differ only in exception specifications, matching
+  clang's `desugarForDiagnostic`. The Oven's `this` trap says `implicit
+  use of 'this' pointer ...` for a member named without `this->`.
+- Implicit and defaulted special members keep `Deferred(f)` and are
+  resolved through `class/special/excspec.rs` (sema-class.md §4.7). The
+  `noexcept` operator sees these specs through constructor, destructor
+  and member calls (§5.3).
 
 ### 4.8 Using-declarations, `using enum`, namespace aliases (`using.rs`)
 - **Using-declarators** ([namespace.udecl]):
@@ -593,9 +638,9 @@ constant and never look at the operand.
 | `throw` expression; `new` expression | yes (neither is produced by the M2 parser) |
 | `dynamic_cast` to a reference type needing a run-time check | yes (not produced by the M2 parser) |
 | `typeid` of a glvalue of polymorphic class type | M3 (no polymorphic classes in M2) |
-| implicit calls: constructors, destructors, conversion functions, allocation functions | M3 (none exist in M2) |
+| implicit calls: constructors, destructors, conversion functions, allocation functions | yes: constructors (`CXXConstructExpr`), destructors (`CXXBindTemporaryExpr`) and conversion functions (implicit member calls), each resolving the callee's spec first (WP-112); every `new` counts as throwing |
 | `__attribute__((nothrow))` on the callee | M3 (not parsed) |
-| a dependent operand (value-dependent `CXXNoexceptExpr`) | M3 (no templates) |
+| a dependent operand (value-dependent `CXXNoexceptExpr`) | yes (lazily instantiated member specs, §4.7) |
 
 The operands of nested `sizeof`, `alignof` and `noexcept` are not
 looked at (they are unevaluated). An erroneous operand gives an error

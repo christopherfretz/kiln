@@ -176,6 +176,28 @@ impl Sema<'_, '_> {
             sub.entity = Some(f);
             sub.map_contexts(&pairs);
             sub.map_params(&pp, &fp);
+            if sub.sema.kind_of(f) == DeclKind::CXXConstructor {
+                // A constructor template's ctor-initializer, as a class
+                // template member's (`templ/class.rs`).
+                let (inits, colon) = sub
+                    .sema
+                    .inst
+                    .pattern_mem_inits
+                    .get(&pdef)
+                    .cloned()
+                    .unwrap_or((Vec::new(), lbrace));
+                for info in &inits {
+                    match sub.mem_initializer(info) {
+                        Ok(v) => {
+                            for i in &v {
+                                sub.sema.act_on_mem_initializer(f, i);
+                            }
+                        }
+                        Err(_) => sub.sema.note_failed_mem_initializer(f),
+                    }
+                }
+                sub.sema.act_on_mem_initializers(f, &[], colon);
+            }
             let b = sub.body(body);
             s.act_on_finish_function_def(f, b, rbrace);
         });
@@ -743,6 +765,9 @@ impl Sema<'_, '_> {
         arrow: bool,
     ) -> ExprId {
         if let Some(e) = self.try_dependent_member(base, name, targs, template_kw, loc, arrow) {
+            if op_loc != loc {
+                let _ = self.ast.templates.member_op_loc.insert(e, op_loc);
+            }
             return e;
         }
         let e = self.act_on_member(base, name, loc, op_loc, arrow);

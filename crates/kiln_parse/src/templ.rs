@@ -611,15 +611,21 @@ impl Parser<'_, '_> {
     /// alias template or a template template parameter
     /// ([temp.arg.template]/1): consumed, as a template name.
     fn at_template_name_arg(&mut self) -> Option<TemplateArg> {
-        let (end, split, class, _) = self.scan_name_at(self.pos())?;
+        let (end, split, class, _, qual) = self.scan_name_qual_at(self.pos())?;
         // `nns template name` with a dependent `nns` ([temp.names]/5,
-        // [temp.arg.template]/1).
-        let dep_name = matches!(class, NameClass::Dependent)
+        // [temp.arg.template]/1). A member template of a dependent
+        // specialization that is not the current instantiation (`X<T>::
+        // template M`, found in `X`'s primary pattern by the lookahead)
+        // is a dependent template name too: the member is looked up again
+        // in the specialization `X<T>` becomes ([temp.dep.type]/6).
+        let dep_qual = qual.is_some_and(|q| self.s.is_dependent_ctx(q));
+        let dep_name = (matches!(class, NameClass::Dependent)
             && end >= 2
-            && self.kw_of(self.tok_at(end - 2)) == Some(Kw::Template);
+            && self.kw_of(self.tok_at(end - 2)) == Some(Kw::Template))
+            || (dep_qual && matches!(class, NameClass::TypeTemplate(_)));
         let d = match class {
-            NameClass::TypeTemplate(d) => Some(d),
             _ if dep_name => None,
+            NameClass::TypeTemplate(d) => Some(d),
             _ => return None,
         };
         if split
@@ -639,9 +645,22 @@ impl Parser<'_, '_> {
         }
         let Some(d) = d else {
             let qual = self.parse_nested_name_nns().ok()??;
-            self.eat_kw(Kw::Template);
+            let template_kw = self.eat_kw(Kw::Template).is_some();
             let n = self.ident()?;
             self.bump();
+            // `X<T>::template M` inside `X` names the current
+            // instantiation's member ([temp.dep.type]/1), found now.
+            if !self.s.is_dependent_ctx(qual.ctx)
+                && let NameClass::TypeTemplate(d) = self.s.classify_name(n, Some(qual.ctx))
+            {
+                let underlying = self.s.template_name_for(d);
+                let tn = self.s.ast.types.template_name(TemplateName::Qualified {
+                    nns: qual.nns,
+                    template_kw,
+                    underlying,
+                });
+                return Some(TemplateArg::template(tn));
+            }
             let tn = self
                 .s
                 .ast
@@ -924,6 +943,12 @@ impl Parser<'_, '_> {
             || (self.at(Punct::LSquare) && !self.peek_is(1, Punct::LSquare));
         let binary = self.cur_binop_prec().is_some_and(|p| p > prec::LAND);
         if !(non_primary || postfix || binary) {
+            // A non-`bool` atom makes the clause invalid (clang's
+            // `CheckConstraintExpression` from the parser).
+            if !self.s.check_constraint_expression(e) {
+                let loc = self.s.ast.exprs.get(e).loc();
+                return Some(self.s.act_on_error_expr(&[e], loc));
+            }
             return Some(e);
         }
         let e = if postfix { self.parse_postfix_suffix(e)? } else { e };
@@ -1024,7 +1049,7 @@ impl Parser<'_, '_> {
                 return None;
             };
             self.expect_closing(Punct::RBrace, Punct::LBrace, open);
-            let noexcept = self.eat_kw(Kw::Noexcept).is_some();
+            let noexcept = self.eat_kw(Kw::Noexcept);
             let mut constraint = None;
             if self.eat(Punct::Arrow).is_some() {
                 let loc = self.loc();
@@ -1038,9 +1063,18 @@ impl Parser<'_, '_> {
             // type-name (`typename X<T>;`) is a plain type.
             if self.unqualified_type_requirement() {
                 self.bump();
-                Requirement::Type(self.parse_type_id()?)
+                let at = self.loc();
+                // clang keeps the keyword as `ElaboratedType 'typename X'`.
+                let t = self.parse_type_id()?;
+                let t = if self.s.is_error_type(t) {
+                    t
+                } else {
+                    self.s.ast.types.elaborated(TagKeyword::Typename, None, t)
+                };
+                Requirement::Type(t, at)
             } else {
-                Requirement::Type(self.parse_typename_specifier()?)
+                let at = self.tok_at(self.pos() + 1).span.lo;
+                Requirement::Type(self.parse_typename_specifier()?, at)
             }
         } else if self.at_kw(Kw::Requires) {
             // nested-requirement ([expr.prim.req.nested]).

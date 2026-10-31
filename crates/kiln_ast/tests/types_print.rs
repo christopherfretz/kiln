@@ -184,6 +184,10 @@ fn functions() {
         ExcSpec::NoexceptExpr { expr: ex, value: kiln_ast::types::NoexceptValue::True },
     );
     assert_eq!(f.p(t), "void () noexcept(sizeof(int) > 2)");
+    // clang keeps the written exception specification in the `aka`
+    // desugaring: `void (*)() noexcept(sizeof(int) > 2)` gets none.
+    let pt = f.ptr(t);
+    assert_eq!(aka(&f.ctx, &f.n, pt), None);
     let list = f.ctx.type_list(&[INT, QualType::CHAR]);
     let t = f.ctx.function(QualType::VOID, &[], info, ExcSpec::Dynamic(list));
     assert_eq!(f.p(t), "void () throw(int, char)");

@@ -1054,6 +1054,8 @@ impl Sema<'_, '_> {
         }
         if self.unevaluated == 0 {
             self.mark_function_referenced(f, loc);
+        } else {
+            self.exc_spec_needed(f, loc);
         }
         let (ty, vk) = self.call_result_of(proto.ret(), loc, Some(f), loc);
         if ty == QualType::ERROR {

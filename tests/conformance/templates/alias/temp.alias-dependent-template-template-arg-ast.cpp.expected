@@ -1,0 +1,28 @@
+TranslationUnitDecl
+|-ClassTemplateDecl X
+| |-TemplateTypeParmDecl class depth 0 index 0 T
+| |-CXXRecordDecl struct X definition
+| | `-TypeAliasTemplateDecl apply
+| |   |-TemplateTypeParmDecl referenced class depth 1 index 0 U
+| |   `-TypeAliasDecl apply 'U *'
+| `-ClassTemplateSpecializationDecl struct X definition implicit_instantiation
+|   |-TemplateArgument type 'int'
+|   `-TypeAliasTemplateDecl apply
+|     |-TemplateTypeParmDecl class depth 0 index 0 U
+|     `-TypeAliasDecl apply 'U *'
+|-ClassTemplateDecl B
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| |-TemplateTemplateParmDecl depth 0 index 1 F
+| | `-TemplateTypeParmDecl class depth 1 index 0
+| |-CXXRecordDecl struct B definition
+| | `-TypeAliasDecl type 'F<T>'
+| `-ClassTemplateSpecializationDecl struct B definition implicit_instantiation
+|   |-TemplateArgument type 'int'
+|   |-TemplateArgument template
+|   `-TypeAliasDecl referenced type 'apply<int>':'int *'
+|-TypeAliasTemplateDecl A
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| `-TypeAliasDecl A 'typename B<T, X<T>::template apply>::type'
+`-VarDecl p 'A<int>':'int *' cinit
+  `-ImplicitCastExpr 'A<int>':'int *' <NullToPointer>
+    `-CXXNullPtrLiteralExpr 'std::nullptr_t'

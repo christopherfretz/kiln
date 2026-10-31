@@ -17,8 +17,11 @@ use crate::init::{InitItem, InitList, InitValue, Initializer};
 use crate::templ::args::ArgLookup;
 
 impl Substituter<'_, '_, '_> {
-    /// Whether `e` must be rebuilt (§5.4; with `-fno-share-nondependent`
-    /// every expression is).
+    /// Whether `e` must be rebuilt (§5.4). An expression with no type,
+    /// value or instantiation dependence (references to decls of a
+    /// dependent context are instantiation-dependent) and no unexpanded
+    /// pack is shared with the pattern by id; this is the substituter's
+    /// base case, so leaves need no rebuild arm (§3.3, §14 Q3).
     pub(crate) fn needs_rebuild(&self, e: ExprId) -> bool {
         let deps = self.sema.ast.exprs.get(e).deps();
         deps.intersects(ExprDeps::TYPE_VALUE_INST | ExprDeps::UNEXPANDED_PACK)
@@ -201,7 +204,8 @@ impl Substituter<'_, '_, '_> {
                     Some(l) => Some(self.args(l, loc)?),
                     None => None,
                 };
-                Ok(self.sema.act_on_template_member(base, name, targs, false, loc, loc, arrow))
+                let op = self.sema.ast.templates.member_op_loc.get(e).copied().unwrap_or(loc);
+                Ok(self.sema.act_on_template_member(base, name, targs, false, loc, op, arrow))
             }
             ExprKind::CXXDependentScopeMemberExpr => {
                 let Some(base) = ExprId::from_raw(n.a()) else {
@@ -215,7 +219,8 @@ impl Substituter<'_, '_, '_> {
                     None => None,
                 };
                 let kw = n.aux() & 2 != 0;
-                Ok(self.sema.act_on_template_member(base, name, targs, kw, loc, loc, arrow))
+                let op = self.sema.ast.templates.member_op_loc.get(e).copied().unwrap_or(loc);
+                Ok(self.sema.act_on_template_member(base, name, targs, kw, loc, op, arrow))
             }
             ExprKind::DependentScopeDeclRefExpr => {
                 let Some(nns) = kiln_ast::ids::NnsId::try_new(n.a()) else {

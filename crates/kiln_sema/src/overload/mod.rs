@@ -107,15 +107,21 @@ pub(crate) enum CandidateFailure {
     },
     /// Template argument deduction failed (WP-071).
     BadDeduction,
-    /// The trailing requires-clause is not satisfied (WP-073).
-    #[allow(dead_code, reason = "stub: WP-073 constraints")]
-    ConstraintsNotSatisfied,
+    /// The trailing requires-clause of a non-template function is not
+    /// satisfied ([over.match.viable]/3).
+    ConstraintsNotSatisfied {
+        /// Why.
+        sat: crate::templ::concepts::SatId,
+    },
     /// An `explicit` constructor or conversion function in
     /// copy-initialization ([over.match.copy]/1.1).
     Explicit,
     /// The result of a conversion function does not convert to the
     /// target ([over.match.conv]/1).
     BadFinalConversion,
+    /// A constructor template specialization that would take its own
+    /// class by value to copy an object of it ([class.copy.ctor]/5).
+    IllegalCtor,
 }
 
 /// A rewritten comparison candidate's form ([over.match.oper]/3.4;

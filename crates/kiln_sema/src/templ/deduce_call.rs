@@ -681,6 +681,12 @@ impl Sema<'_, '_> {
     ) -> bool {
         let (x, y) = (set.cand(c1), set.cand(c2));
         let (Some(t1), Some(t2)) = (x.template, y.template) else { return false };
+        // Conversion function templates order by their return types
+        // ([temp.deduct.partial]/3.2); one never orders against a
+        // constructor template.
+        if x.kind == CandidateKind::ConvFn || y.kind == CandidateKind::ConvFn {
+            return x.kind == y.kind && self.more_specialized_conversion(t1, t2);
+        }
         if !set.oper {
             return self.more_specialized(t1, t2, nargs);
         }
