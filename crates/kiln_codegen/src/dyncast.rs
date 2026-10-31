@@ -48,14 +48,15 @@ impl Cg<'_> {
     }
 
     /// `call void @name() noreturn; unreachable` (`__cxa_bad_cast`,
-    /// `__cxa_bad_typeid`); leaves no insertion point.
+    /// `__cxa_bad_typeid`). As clang's builder, the insertion point stays
+    /// on the terminated block, so the next block is laid out right after
+    /// it (before a landing pad the invoke created).
     fn emit_noreturn_runtime_call(&mut self, name: &str) -> R<()> {
         let f = self.runtime_fn(name, LTy::VOID, &[], &[])?;
         // emitBadCastCall / emitBadTypeidCall: EmitRuntimeCallOrInvoke,
         // setDoesNotReturn, then `unreachable`.
         self.runtime_call_or_invoke(f, LTy::VOID, Vec::new(), &[AttrKind::NoReturn]);
         self.f.fir.push(Op::Unreachable, LTy::VOID);
-        self.f.fir.set_cur(None);
         Ok(())
     }
 

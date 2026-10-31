@@ -360,6 +360,13 @@ impl Cg<'_> {
         if matches!(t.canonical_view(base), TypeView::MemberPointer { .. }) {
             return err(loc, "new of a member pointer is not supported yet");
         }
+        if is_array && self.needs_array_cookie(base, x.operator_delete) {
+            return err(
+                loc,
+                "array new of a type that needs an array cookie (non-trivial destructor or \
+                 sized deallocation) is not supported yet",
+            );
+        }
         let (esize, alloc_align) = self.size_align(base);
         let Some(fty) = ast.decls.get(op_new).ty() else {
             return err(loc, "allocation function without a type");
@@ -594,6 +601,32 @@ impl Cg<'_> {
         Ok(alloc)
     }
 
+    /// Itanium `requiresArrayCookie`: elements of class type with a
+    /// non-trivial destructor, or a usual array deallocation function
+    /// that takes the size ([expr.new]/16, [expr.delete]/11).
+    fn needs_array_cookie(&self, elem: QualType, op_delete: Option<DeclId>) -> bool {
+        let ast = self.ast;
+        if ast.types.as_record(elem).is_some_and(|r| self.has_nontrivial_dtor(ast.first(r))) {
+            return true;
+        }
+        // Only a class-scope usual deallocation function asks for the
+        // size without a non-trivial destructor (`doesUsualArrayDeleteWantSize`).
+        let Some(d) = op_delete.filter(|&d| {
+            ast.types.as_record(elem).is_some()
+                && ast.decls.get(d).ctx().is_some_and(|c| ast.decls.record(c).is_some())
+        }) else {
+            return false;
+        };
+        let Some(proto) = ast.decls.get(d).ty().and_then(|f| ast.types.proto(f).copied()) else {
+            return false;
+        };
+        let params = ast.types.params(&proto);
+        params.len() >= 2
+            && !self.is_std_enum(params[1], "align_val_t")
+            && ast.types.canonical(params[1])
+                == ast.types.canonical(QualType::unqual(ast.types.target().size_t))
+    }
+
     /// `e` is (through parentheses and implicit casts) a string literal.
     fn strip_to_string_literal(&self, mut e: ExprId) -> bool {
         let ast = self.ast;
@@ -670,6 +703,28 @@ impl Cg<'_> {
         let Some(init) = init else {
             return err(loc, "array new with trailing elements but no initializer");
         };
+        // A constructor call loop over the remaining elements
+        // (`EmitCXXAggrConstructorCall`).
+        if ast.exprs.get(init).kind() == ExprKind::CXXConstructExpr {
+            let ctor = ast.exprs.constructor(init);
+            let zeroing = ast.exprs.construct_info(init).zeroing;
+            let trivial = ast.decls.function(ctor).is_some_and(|f| f.spec.is_trivial());
+            if trivial && !zeroing {
+                return Ok(());
+            }
+            if zeroing {
+                return err(
+                    loc,
+                    "zero-initializing array new with constructors is not supported yet",
+                );
+            }
+            let mut rem = num;
+            if n_init > 0 {
+                let k = self.i64c(i128::from(n_init));
+                rem = self.bin(BinOp::Sub, Flags::NONE, num, k);
+            }
+            return self.construct_array_n(init, cur, base_ty, min_align(cur_align, esize), rem);
+        }
         // TryMemsetInitialization.
         if self.memset_init(init) {
             let mut rem = size;
@@ -758,6 +813,19 @@ impl Cg<'_> {
         let Some(mut dt) = t.pointee(ast.exprs.get(arg).ty()) else {
             return err(loc, "delete of a non-pointer");
         };
+        if ast.exprs.get(e).has(ExprFlags::ARRAY_FORM) {
+            let mut b = dt;
+            while let Some(el) = t.element(b) {
+                b = el;
+            }
+            if self.needs_array_cookie(b, Some(od)) {
+                return err(
+                    loc,
+                    "array delete of a type that needs an array cookie (non-trivial destructor \
+                     or sized deallocation) is not supported yet",
+                );
+            }
+        }
         let p = self.emit_scalar(arg)?;
         let notnull = self.f.fir.create_block();
         let end = self.f.fir.create_block();

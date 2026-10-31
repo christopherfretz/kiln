@@ -1150,7 +1150,33 @@ impl Cg<'_> {
         let elem_size = self.alloc_size(elem);
         let elem_align = min_align(dest.align, elem_size);
         let nn = self.i64c(i128::from(n));
-        let end = self.gep(elem, begin, vec![nn], true);
+        self.construct_array_n(e, begin, elem, elem_align, nn)
+    }
+
+    /// The element loop of clang `EmitCXXAggrConstructorCall`: `num`
+    /// objects of type `elem` from `begin`, each constructed by `e` in
+    /// its own cleanup scope; a non-constant count is checked for zero
+    /// first (`isempty`).
+    pub(crate) fn construct_array_n(
+        &mut self,
+        e: ExprId,
+        begin: V,
+        elem: LTy,
+        elem_align: u64,
+        num: V,
+    ) -> R<()> {
+        let ast = self.ast;
+        let mut out = None;
+        if self.cint(num).is_none() {
+            let z = self.i64c(0);
+            let empty = self.icmp(IntPredicate::Eq, num, z);
+            let lp = self.f.fir.create_block();
+            let o = self.f.fir.create_block();
+            self.cond_br(empty, o, lp);
+            self.emit_block(lp, false);
+            out = Some(o);
+        }
+        let end = self.gep(elem, begin, vec![num], true);
         let entry = self.f.fir.cur().expect("insertion point");
         let body = self.f.fir.create_block();
         self.emit_block(body, false);
@@ -1171,7 +1197,7 @@ impl Cg<'_> {
         let cur = self.f.fir.cur().expect("insertion point");
         self.f.fir.add_incoming(crate::fir::Fir::last_inst(phi), next, cur);
         let done = self.icmp(IntPredicate::Eq, next, end);
-        let out = self.f.fir.create_block();
+        let out = out.unwrap_or_else(|| self.f.fir.create_block());
         self.cond_br(done, out, body);
         self.emit_block(out, false);
         Ok(())
