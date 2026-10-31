@@ -53,6 +53,13 @@ pub(crate) enum Cleanup {
     /// array of class `record` whose construction threw
     /// (`RegularPartialArrayDestroy`, [except.ctor]/3).
     PartialArray { begin: V, end: V, elem: LTy, record: DeclId },
+    /// Destroys, in reverse order, the elements of an array being
+    /// initialized from a braced list up to the pointer stored in
+    /// `end_slot` (`IrregularPartialArrayDestroy`, [except.ctor]/3).
+    /// `outer` is the array's element type; when it is itself an array
+    /// (`depth` levels deep), both ends are first drilled down to the
+    /// innermost `elem` objects (`emitPartialArrayDestroy`).
+    IrregularPartialArray(Box<IrregularPartialArray>),
     /// Calls the deallocation function of a new-expression whose
     /// initialization threw (`CallDeleteDuringNew`, [expr.new]/28).
     NewDelete(Box<NewDelete>),
@@ -68,6 +75,17 @@ pub(crate) enum Cleanup {
 pub(crate) enum Saved {
     Direct(CallArg),
     Slot { slot: V, ty: LTy, align: u64 },
+}
+
+/// The operands of a [`Cleanup::IrregularPartialArray`].
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct IrregularPartialArray {
+    pub begin: V,
+    pub end_slot: V,
+    pub outer: LTy,
+    pub depth: usize,
+    pub elem: LTy,
+    pub record: DeclId,
 }
 
 /// The operands of a [`Cleanup::NewDelete`].
@@ -332,6 +350,15 @@ impl Cg<'_> {
                 self.f.error.get_or_insert(crate::CodegenError {
                     loc: None,
                     msg: "a conditional temporary at a computed address is not supported yet"
+                        .into(),
+                });
+                c
+            }
+            Cleanup::IrregularPartialArray(ref p) if needs_saving(self, p.begin) => {
+                self.f.error.get_or_insert(crate::CodegenError {
+                    loc: None,
+                    msg: "a conditional array initialization at a computed address is not \
+                          supported yet"
                         .into(),
                 });
                 c
@@ -904,6 +931,20 @@ impl Cg<'_> {
                 self.nounwind_runtime_call(f, LTy::VOID, vec![exn]);
             }
             Cleanup::PartialArray { begin, end, elem, record } => {
+                self.array_destroy_range(begin, end, elem, record, true);
+            }
+            Cleanup::IrregularPartialArray(ref p) => {
+                let IrregularPartialArray { begin, end_slot, outer, depth, elem, record } = **p;
+                let al = self.pref_align(LTy::PTR);
+                let end = self.load(LTy::PTR, end_slot, al, false);
+                let (begin, end) = if depth > 0 {
+                    let zero = self.i64c(0);
+                    let b = self.gep(outer, begin, vec![zero; depth + 1], true);
+                    let e = self.gep(outer, end, vec![zero; depth + 1], true);
+                    (b, e)
+                } else {
+                    (begin, end)
+                };
                 self.array_destroy_range(begin, end, elem, record, true);
             }
             Cleanup::NewDelete(ref nd) => {

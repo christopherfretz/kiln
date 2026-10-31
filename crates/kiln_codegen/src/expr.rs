@@ -13,7 +13,7 @@ use kiln_llvm::{
     IntPredicate, TypeId as LTy, Value,
 };
 
-use crate::cleanup::Cleanup;
+use crate::cleanup::{Cleanup, IrregularPartialArray};
 use crate::fir::{Fir, Op, V};
 use crate::fold::is_local;
 use crate::func::{Addr, CallArg, min_align};
@@ -2113,7 +2113,13 @@ impl Cg<'_> {
             return self.null_init_lvalue(lv, zeroed);
         }
         if self.is_aggregate(lv.q) {
-            return self.emit_agg(e, lv.addr, zeroed);
+            // `AggValueSlot::IsDestructed`: the enclosing object owns the
+            // destruction, so a bound temporary initializing it in place
+            // gets no cleanup of its own.
+            let saved = std::mem::replace(&mut self.f.dest_destructed, true);
+            let r = self.emit_agg(e, lv.addr, zeroed);
+            self.f.dest_destructed = saved;
+            return r;
         }
         let v = self.emit_scalar(e)?;
         self.store_lv(v, lv, false);
@@ -2165,6 +2171,11 @@ impl Cg<'_> {
         let def = ast.definition(rd).unwrap_or(rd);
         let bases: Vec<_> = ast.decls.bases(def, &ast.lists).collect();
         let mut k = 0usize;
+        // [except.ctor]/3: each initialized base and member is destroyed
+        // if a later initialization throws; the cleanups are deactivated
+        // once the object is complete (`pushDestroyAndDeferDeactivation`,
+        // `CleanupDeactivationScope`).
+        let mut deferred = Vec::new();
         for b in bases {
             if b.is_virtual {
                 return err(self.loc_of(e), "aggregate with a virtual base");
@@ -2182,6 +2193,10 @@ impl Cg<'_> {
             let bdest = Addr { v, ty, align: min_align(dest.align, off) };
             let overlap = self.base_may_overlap(rd, brd, off);
             self.emit_agg_into(init, bdest, overlap)?;
+            if self.has_nontrivial_dtor(brd) {
+                let c = Cleanup::Dtor { addr: v, record: brd, base: false };
+                self.push_deferred_destroy(c, &mut deferred);
+            }
         }
         let fields: Vec<DeclId> =
             ast.decls.members(rd).filter(|&m| ast.decls.get(m).kind() == DeclKind::Field).collect();
@@ -2203,8 +2218,41 @@ impl Cg<'_> {
             } else {
                 self.null_init_lvalue(lv, zeroed)?;
             }
+            if let Some(frd) = self.destructed_class(fq) {
+                let c = if self.array_elem(fq).is_some() {
+                    Cleanup::ArrayDtor { addr: lv.addr, record: frd }
+                } else {
+                    Cleanup::Dtor { addr: lv.addr.v, record: frd, base: false }
+                };
+                self.push_deferred_destroy(c, &mut deferred);
+            }
         }
+        self.deactivate_deferred(deferred);
         Ok(())
+    }
+
+    /// `pushDestroyAndDeferDeactivation`: pushes the normal and EH
+    /// cleanup `c` and records it, with its dominating placeholder, for
+    /// [`Self::deactivate_deferred`].
+    fn push_deferred_destroy(&mut self, c: Cleanup, deferred: &mut Vec<(usize, V)>) {
+        if self.f.fir.cur().is_none() {
+            return;
+        }
+        let z = V::C(self.m.const_bool(false));
+        let dominator =
+            self.f.fir.push(Op::Bin { op: BinOp::Or, flags: Flags::NONE, l: z, r: z }, LTy::I1);
+        self.push_full_expr_cleanup(c, true, true);
+        deferred.push((self.f.cl.depth(), dominator));
+    }
+
+    /// `CleanupDeactivationScope::ForceDeactivate`: deactivates the
+    /// deferred cleanups, innermost first, and drops their placeholders.
+    fn deactivate_deferred(&mut self, deferred: Vec<(usize, V)>) {
+        for (c, dominator) in deferred.into_iter().rev() {
+            let d = Fir::last_inst(dominator);
+            self.deactivate_cleanup_block(c, d);
+            self.f.fir.erase(d);
+        }
     }
 
     /// clang `AggExprEmitter::EmitArrayInit`.
@@ -2218,12 +2266,42 @@ impl Cg<'_> {
         let ety = self.mty(eq);
         let ealign = min_align(dest.align, esz);
         let begin = dest.v;
+        // [except.ctor]/3: the elements initialized so far are destroyed
+        // if a later initializer throws. The EH cleanup reads how far the
+        // initialization got from `arrayinit.endOfInit` and is
+        // deactivated once the array is complete (clang `EmitArrayInit`,
+        // `pushIrregularPartialArrayCleanup`, only when `needsEHCleanup`);
+        // `dominator` stands for clang's `dominatingIP`.
+        let mut partial = None;
+        if let Some(record) = self.destructed_class(eq).filter(|_| self.opts.exceptions) {
+            let z = V::C(self.m.const_bool(false));
+            let dominator =
+                self.f.fir.push(Op::Bin { op: BinOp::Or, flags: Flags::NONE, l: z, r: z }, LTy::I1);
+            let al = self.pref_align(LTy::PTR);
+            let slot = self.f.fir.alloca(LTy::PTR, al);
+            self.store(begin, slot, al, false);
+            let mut depth = 0;
+            let mut inner = eq;
+            while let Some(e) = self.array_elem(inner) {
+                inner = e;
+                depth += 1;
+            }
+            let elem = self.mty(inner);
+            let p =
+                IrregularPartialArray { begin, end_slot: slot, outer: ety, depth, elem, record };
+            self.push_full_expr_cleanup(Cleanup::IrregularPartialArray(Box::new(p)), false, true);
+            partial = Some((self.f.cl.depth(), dominator, slot, al));
+        }
         for (i, &init) in inits.iter().enumerate() {
             let el = if i == 0 {
                 begin
             } else {
                 let c = self.i64c(i as i128);
-                self.gep(ety, begin, vec![c], true)
+                let el = self.gep(ety, begin, vec![c], true);
+                if let Some((_, _, slot, al)) = partial {
+                    self.store(el, slot, al, false);
+                }
+                el
             };
             let lv = LV { addr: Addr { v: el, ty: ety, align: ealign }, q: eq, bf: None };
             self.init_to_lvalue(init, lv, zeroed)?;
@@ -2238,6 +2316,9 @@ impl Cg<'_> {
             if !inits.is_empty() {
                 let c = self.i64c(inits.len() as i128);
                 el = self.gep(ety, el, vec![c], true);
+                if let Some((_, _, slot, al)) = partial {
+                    self.store(el, slot, al, false);
+                }
             }
             let c = self.i64c(i128::from(n_elems));
             let end = self.gep(ety, begin, vec![c], true);
@@ -2246,18 +2327,31 @@ impl Cg<'_> {
             self.emit_block(body, false);
             let cur = self.f.fir.push(Op::Phi { ty: LTy::PTR, inc: vec![(el, entry)] }, LTy::PTR);
             let lv = LV { addr: Addr { v: cur, ty: ety, align: ealign }, q: eq, bf: None };
-            match filler {
-                Some(f) => self.init_to_lvalue(f, lv, false)?,
-                None => self.null_init_lvalue(lv, false)?,
-            }
+            // [class.temporary]/5: the temporaries of each element's
+            // initialization are destroyed before the next one starts.
+            let sc = self.begin_scope(false);
+            let r = match filler {
+                Some(f) => self.init_to_lvalue(f, lv, false),
+                None => self.null_init_lvalue(lv, false),
+            };
+            self.end_scope(sc);
+            r?;
             let one = self.i64c(1);
             let next = self.gep(ety, cur, vec![one], true);
+            if let Some((_, _, slot, al)) = partial {
+                self.store(next, slot, al, false);
+            }
             let done = self.icmp(IntPredicate::Eq, next, end);
             let endb = self.f.fir.create_block();
             self.cond_br(done, endb, body);
             let here = self.f.fir.cur().expect("insert point");
             self.f.fir.add_incoming(Fir::last_inst(cur), next, here);
             self.emit_block(endb, false);
+        }
+        if let Some((c, dominator, _, _)) = partial {
+            let d = Fir::last_inst(dominator);
+            self.deactivate_cleanup_block(c, d);
+            self.f.fir.erase(d);
         }
         Ok(())
     }
