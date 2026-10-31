@@ -264,6 +264,11 @@ pub(crate) struct OverloadCandidateSet {
     pub note_extra_args: usize,
     /// The operator of the built-in candidates, for their notes.
     pub builtin_op: Option<kiln_ast::names::OverloadedOperator>,
+    /// Pairs `(c1, c2)` of viable function template specializations
+    /// whose template is more specialized for `c1`
+    /// ([over.match.best.general]/2.5), precomputed by
+    /// `order_template_candidates` because `better` cannot deduce.
+    pub tmpl_order: Vec<(u32, u32)>,
 }
 
 impl Default for OverloadCandidateSet {
@@ -283,6 +288,7 @@ impl Default for OverloadCandidateSet {
             oper: false,
             note_extra_args: 0,
             builtin_op: None,
+            tmpl_order: Vec::new(),
         }
     }
 }
@@ -304,6 +310,7 @@ impl OverloadCandidateSet {
         self.oper = false;
         self.note_extra_args = 0;
         self.builtin_op = None;
+        self.tmpl_order.clear();
     }
 
     /// The conversion sequences of candidate `c`.

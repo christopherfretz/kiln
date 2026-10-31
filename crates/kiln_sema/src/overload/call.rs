@@ -120,6 +120,7 @@ impl Sema<'_, '_> {
                 c.adl_only = true;
             }
         }
+        self.order_template_candidates(&mut set);
         let out = self.best_viable(&mut set);
         self.ovl.lists.truncate(base);
         let r = self.finish_overloaded_call(&set, out, name, at, n.loc(), naming, nns, ule);

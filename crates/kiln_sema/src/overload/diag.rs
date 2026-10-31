@@ -121,6 +121,27 @@ impl Sema<'_, '_> {
         ))
     }
 
+    /// `candidate <kind>`; for a function template specialization,
+    /// `candidate function [with T = int]` (clang's `FnDesc`).
+    fn candidate_note_with_args(
+        &self,
+        f: kiln_ast::DeclId,
+        kind: &str,
+        loc: kiln_source::Loc,
+    ) -> Diag {
+        if self.is_function_spec(f)
+            && let Some((_, info)) = self.ast.spec_info(f)
+        {
+            let (tmpl, args) = (info.template, info.args);
+            let base = kind.strip_suffix(" template").unwrap_or(kind);
+            return self
+                .diag(DiagId::note_ovl_candidate_with_args, loc)
+                .arg(base)
+                .arg(self.template_args_desc(tmpl, args));
+        }
+        self.diag(DiagId::note_ovl_candidate, loc).arg(kind)
+    }
+
     /// The note for candidate `c` of `set` (clang `NoteFunctionCandidate`).
     pub(crate) fn ovl_note(&mut self, set: &OverloadCandidateSet, c: u32) -> Diag {
         let cand = set.cand(c);
@@ -138,7 +159,7 @@ impl Sema<'_, '_> {
                     .arg(kind)
                     .arg(u8::from(defaulted));
             }
-            return self.diag(DiagId::note_ovl_candidate, loc).arg(kind);
+            return self.candidate_note_with_args(f, &kind, loc);
         }
         if cand.failure == CandidateFailure::BadDeduction
             && let (Some(ft), Some(fail)) = (cand.template, cand.deduction.as_deref())
@@ -186,7 +207,7 @@ impl Sema<'_, '_> {
             | CandidateFailure::BadFinalConversion
             | CandidateFailure::BadDeduction
             | CandidateFailure::ConstraintsNotSatisfied => {
-                return self.diag(DiagId::note_ovl_candidate, loc).arg(kind);
+                return self.candidate_note_with_args(f, &kind, loc);
             }
         };
         self.diag(DiagId::note_ovl_candidate_kind_not_viable, loc).arg(kind).arg(detail)

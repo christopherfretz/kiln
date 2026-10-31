@@ -1,19 +1,19 @@
 //! Partial specialization matching and partial ordering
 //! ([temp.spec.partial.match], [temp.spec.partial.order];
 //! spec/sema-templates.md §7). Partial ordering of function templates
-//! ([temp.func.order]) is WP-071/WP-072 and reports
-//! `sema_unimplemented_template_feature`.
+//! ([temp.func.order]) without packs is WP-071; with packs, WP-072.
 
 use kiln_ast::DeclId;
+use kiln_ast::QualType;
 use kiln_ast::decl::DeclKind;
 use kiln_ast::ids::ArgListId;
-use kiln_ast::types::{ArgView, TemplateArg};
+use kiln_ast::types::{ArgView, TemplateArg, TypeView};
 use kiln_diag::DiagId;
 use kiln_source::Loc;
 
 use crate::Sema;
 use crate::templ::args::LevelMode;
-use crate::templ::deduce::{DeducedArgs, Tdk};
+use crate::templ::deduce::{DeducedArgs, TdfFlags, Tdk};
 use crate::templ::stack::{FrameKind, SfinaeState};
 use crate::templ::subst::Substituter;
 
@@ -265,12 +265,67 @@ impl Sema<'_, '_> {
         r
     }
 
-    /// Whether function template `a` is at least as specialized as `b`
-    /// ([temp.func.order]). Not implemented (WP-071/WP-072): reports and
-    /// says no.
-    pub fn more_specialized(&mut self, a: DeclId, b: DeclId, loc: Loc) -> bool {
-        let _ = (a, b);
-        self.templ_unimplemented("partial ordering of function templates", loc);
-        false
+    /// Whether function template `a` is more specialized than `b` in the
+    /// context of a call with `nargs` arguments ([temp.func.order]/3-5,
+    /// [temp.deduct.partial]): `a` is at least as specialized as `b` and
+    /// not the reverse. Packs are WP-072; the reference-binding
+    /// tie-breaker ([temp.deduct.partial]/9) is not applied.
+    pub fn more_specialized(&mut self, a: DeclId, b: DeclId, nargs: usize) -> bool {
+        let (a, b) = (self.ast.first(a), self.ast.first(b));
+        if a == b {
+            return false;
+        }
+        self.fn_at_least_as_specialized(a, b, nargs)
+            && !self.fn_at_least_as_specialized(b, a, nargs)
+    }
+
+    /// The first `nargs` parameter types of function template `ft`'s
+    /// templated function, adjusted for partial ordering
+    /// ([temp.deduct.partial]/5-7): references and top-level cv dropped.
+    fn ordering_types(&mut self, ft: DeclId, nargs: usize) -> Option<Vec<QualType>> {
+        let f = self.templated_function(ft)?;
+        let (ptys, _) = self.proto_param_types(f);
+        let t = &mut self.ast.types;
+        Some(
+            ptys.into_iter()
+                .take(nargs)
+                .map(|p| {
+                    let p = t.canonical(p);
+                    let p = match t.canonical_view(p) {
+                        TypeView::LValueRef(x) | TypeView::RValueRef(x) => t.canonical(x),
+                        _ => p,
+                    };
+                    let u = t.unqualified(p);
+                    t.canonical(u)
+                })
+                .collect(),
+        )
+    }
+
+    /// Whether function template `a` is at least as specialized as `b`:
+    /// `b`'s parameters deduce from `a`'s parameter types, `a`'s template
+    /// parameters standing for unique synthesized types
+    /// ([temp.func.order]/3-4, [temp.deduct.partial]/2-10).
+    fn fn_at_least_as_specialized(&mut self, a: DeclId, b: DeclId, nargs: usize) -> bool {
+        let (Some(pa), Some(pb)) = (self.ordering_types(a, nargs), self.ordering_types(b, nargs))
+        else {
+            return false;
+        };
+        if pa.len() != pb.len() {
+            return false;
+        }
+        let depth = self.template_param_depth(b);
+        let n = self.template_params(b).len();
+        self.inst.sfinae.borrow_mut().push(SfinaeState::default());
+        let mut d = DeducedArgs::new(depth, n);
+        let mut ok = true;
+        for (&p, &x) in pb.iter().zip(&pa) {
+            if self.deduce(p, x, TdfFlags::NONE, &mut d) != Tdk::Success {
+                ok = false;
+                break;
+            }
+        }
+        let failed = self.inst.sfinae.borrow_mut().pop().is_some_and(|s| s.errors > 0);
+        ok && !failed
     }
 }
