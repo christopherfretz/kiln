@@ -175,6 +175,7 @@ fn internal_by_storage(ast: &Ast, d: DeclId) -> bool {
             if v.spec.storage() == VarStorage::Static {
                 return true;
             }
+
             let q = ast.types.canonical(n.ty().unwrap_or(QualType::INT));
             let is_const = ast.types.effective_quals(q).is_const() || const_array(ast, q);
             is_const
@@ -184,6 +185,79 @@ fn internal_by_storage(ast: &Ast, d: DeclId) -> bool {
                 && !matches!(v.templ.get(), Some((TemplLinkKind::Specialization, _)))
         }
         _ => false,
+    }
+}
+
+/// True if `d` is emitted with internal linkage: it has internal linkage
+/// ([`has_internal_linkage`]) or is unique-external (clang
+/// `getLVForNamespaceScopeDecl`: a namespace-scope variable whose type,
+/// or function whose parameter types, have no linkage; such an entity
+/// keeps its unmangled or `_Z` name).
+pub fn is_internal_symbol(ast: &Ast, d: DeclId) -> bool {
+    has_internal_linkage(ast, d) || is_unique_external(ast, d)
+}
+
+fn is_unique_external(ast: &Ast, d: DeclId) -> bool {
+    let first = ast.first(d);
+    if !is_file_context(ast, first) || is_extern_c(ast, first) {
+        return false;
+    }
+    let n = ast.decls.get(first);
+    match n.kind() {
+        DeclKind::Var => n.ty().is_some_and(|t| !type_externally_visible(ast, t)),
+        DeclKind::Function => ast.decls.function(first).is_some_and(|f| {
+            ast.lists
+                .iter::<DeclId>(f.params)
+                .any(|p| ast.decls.get(p).ty().is_some_and(|t| !type_externally_visible(ast, t)))
+        }),
+        _ => false,
+    }
+}
+
+/// clang `Type::getLinkage` is externally visible, for the types kiln
+/// distinguishes: a type built from a class or enumeration without linkage
+/// (an unnamed one without a typedef name for linkage, a local one outside
+/// an inline function, one in an unnamed namespace, or a closure type
+/// without a mangling number) has none.
+pub fn type_externally_visible(ast: &Ast, q: QualType) -> bool {
+    let t = ast.types.canonical(q);
+    match ast.types.canonical_view(t) {
+        TypeView::Pointer(p) | TypeView::LValueRef(p) | TypeView::RValueRef(p) => {
+            type_externally_visible(ast, p)
+        }
+        TypeView::ConstantArray(_) | TypeView::IncompleteArray(_) => {
+            ast.types.element(t).is_none_or(|e| type_externally_visible(ast, e))
+        }
+        TypeView::MemberPointer { pointee, class } => {
+            type_externally_visible(ast, pointee)
+                && type_externally_visible(ast, QualType::unqual(class))
+        }
+        TypeView::Function(p) => {
+            type_externally_visible(ast, p.ret())
+                && ast.types.params(&p).iter().all(|&x| type_externally_visible(ast, x))
+        }
+        TypeView::Record(d) | TypeView::Enum(d) => tag_externally_visible(ast, ast.first(d)),
+        _ => true,
+    }
+}
+
+fn tag_externally_visible(ast: &Ast, d: DeclId) -> bool {
+    if ast.closure_lambda(d).is_some() {
+        if is_unnumbered_closure(ast, d) {
+            return false;
+        }
+    } else if decl_name(ast, d).is_empty() && ast.decls.typedef_for_anon(d).is_none() {
+        return false;
+    }
+    if in_anon_ns(ast, d) {
+        return false;
+    }
+    match effective_ctx(ast, d) {
+        Some(c) if is_function_kind(ast.decls.get(c).kind()) => fn_is_inline(ast, c),
+        Some(c) if is_record_kind(ast.decls.get(c).kind()) => {
+            tag_externally_visible(ast, ast.first(c))
+        }
+        _ => true,
     }
 }
 
@@ -211,23 +285,43 @@ pub fn has_internal_linkage(ast: &Ast, d: DeclId) -> bool {
     if internal_by_storage(ast, first) || in_anon_ns(ast, first) {
         return true;
     }
-    // A member of a local class takes the linkage of the function; a
-    // member of a closure type without a mangling number has none.
+    // A local entity has no linkage unless its function is inline (then it
+    // takes the function's); a member of a class without linkage (clang
+    // `isExternallyVisible`: an unnamed or local class, a closure type
+    // without a mangling number) has none either.
     let mut c = effective_ctx(ast, first);
     while let Some(ctx) = c {
         let k = ast.decls.get(ctx).kind();
         if is_function_kind(k) {
-            return has_internal_linkage(ast, ctx);
+            return !fn_is_inline(ast, ctx) || has_internal_linkage(ast, ctx);
         }
         if !is_record_kind(k) {
             break;
         }
-        if is_unnumbered_closure(ast, ctx) {
+        if !tag_externally_visible(ast, ast.first(ctx)) {
             return true;
         }
         c = effective_ctx(ast, ctx);
     }
     false
+}
+
+/// True if class `rd` is not externally visible: it has internal linkage
+/// or no linkage (clang `getTypeInfoLinkage`, `getVTableLinkage`).
+pub fn class_is_internal(ast: &Ast, rd: DeclId) -> bool {
+    let first = ast.first(rd);
+    has_internal_linkage(ast, first) || !tag_externally_visible(ast, first)
+}
+
+/// An inline (or constexpr, or implicitly inline) function.
+fn fn_is_inline(ast: &Ast, f: DeclId) -> bool {
+    ast.redecls_of(f).any(|r| {
+        ast.decls.function(r).is_some_and(|x| {
+            x.spec.is_inline()
+                || x.spec.implicit_inline()
+                || x.spec.constexpr_kind() != kiln_ast::decl::ConstexprKind::None
+        })
+    })
 }
 
 fn const_array(ast: &Ast, q: QualType) -> bool {

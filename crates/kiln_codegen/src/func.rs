@@ -384,6 +384,11 @@ impl Cg<'_> {
                 self.f.mustprogress = false;
                 self.emit_thunk_body(d, structor, th, &param_decls)?;
             }
+            _ if let Some(kiln_ast::lambda::ClosureThunk::Invoker { call_op }) =
+                ast.closure_thunk(d) =>
+            {
+                self.emit_lambda_invoke_body(call_op, &param_decls)?;
+            }
             DeclKind::CXXConstructor => self.emit_ctor_body(d, body)?,
             DeclKind::CXXDestructor if structor == Some(mangle::Structor::Deleting) => {
                 self.emit_deleting_dtor_body(d)?;
@@ -400,6 +405,7 @@ impl Cg<'_> {
         // GenerateCode: falling off the end of a value-returning function.
         if !is_main
             && thunk.is_none()
+            && ast.closure_thunk(d).is_none()
             && self.f.ret_kind != RetKind::Void
             && self.f.fir.cur().is_some()
         {

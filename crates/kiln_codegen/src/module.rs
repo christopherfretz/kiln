@@ -10,7 +10,7 @@ use kiln_ast::decl::{
     ConstexprKind, DeclFlags, DeclKind, DefinitionBits, TemplLinkKind, VarStorage,
 };
 use kiln_ast::templates::SpecKind;
-use kiln_ast::types::{BuiltinType, TypeView};
+use kiln_ast::types::{BuiltinType, PrintOptions, TypeView, print_type};
 use kiln_ast::{Ast, DeclId, QualType};
 use kiln_llvm::{
     Attr, AttrKind, AttrSetId, ComdatKind, FuncId, GlobalId, Linkage, Module, TypeId as LTy,
@@ -418,7 +418,7 @@ impl<'a> Cg<'a> {
     }
 
     pub fn fn_internal(&self, d: DeclId) -> bool {
-        mangle::has_internal_linkage(self.ast, d)
+        mangle::is_internal_symbol(self.ast, d)
     }
 
     pub(crate) fn discardable_fn(&self, d: DeclId) -> bool {
@@ -431,7 +431,7 @@ impl<'a> Cg<'a> {
     }
 
     fn discardable_var(&self, d: DeclId) -> bool {
-        mangle::has_internal_linkage(self.ast, d) || self.var_is_inline(d)
+        mangle::is_internal_symbol(self.ast, d) || self.var_is_inline(d)
     }
 
     // ---- types ---------------------------------------------------------
@@ -508,8 +508,32 @@ impl<'a> Cg<'a> {
 
     fn qualified_name(&self, d: DeclId) -> String {
         let ast = self.ast;
-        let mut parts = Vec::new();
-        let mut cur = Some(d);
+        let is_fn = |k: DeclKind| {
+            matches!(
+                k,
+                DeclKind::Function
+                    | DeclKind::CXXMethod
+                    | DeclKind::CXXConstructor
+                    | DeclKind::CXXDestructor
+                    | DeclKind::CXXConversion
+            )
+        };
+        let leaf = || {
+            let s = mangle::decl_name(ast, d);
+            if s.is_empty() { "anon".to_owned() } else { s }
+        };
+        // clang `printQualifiedName` on a function-local declaration
+        // prints only its name.
+        let mut ctx = ast.decls.get(d).ctx();
+        while let Some(c) = ctx {
+            match ast.decls.get(c).kind() {
+                DeclKind::LinkageSpec | DeclKind::Export => ctx = ast.decls.get(c).ctx(),
+                k if is_fn(k) => return leaf(),
+                _ => break,
+            }
+        }
+        let mut parts = vec![leaf()];
+        let mut cur = ast.decls.get(d).ctx();
         while let Some(x) = cur {
             let n = ast.decls.get(x);
             match n.kind() {
@@ -519,9 +543,31 @@ impl<'a> Cg<'a> {
                     let s = mangle::decl_name(ast, x);
                     parts.push(if s.is_empty() { "(anonymous namespace)".to_owned() } else { s });
                 }
+                k if is_fn(k) => {
+                    let mut s = mangle::decl_name(ast, x);
+                    s.push('(');
+                    if let Some(p) = n.ty().and_then(|t| ast.types.proto(t).copied()) {
+                        let ps = ast.types.params(&p);
+                        for (i, &q) in ps.iter().enumerate() {
+                            if i > 0 {
+                                s.push_str(", ");
+                            }
+                            s.push_str(&print_type(&ast.types, ast, q, PrintOptions::SUGARED));
+                        }
+                        if p.variadic() {
+                            s.push_str(if ps.is_empty() { "..." } else { ", ..." });
+                        }
+                    }
+                    s.push(')');
+                    parts.push(s);
+                }
                 _ => {
                     let s = mangle::decl_name(ast, x);
-                    parts.push(if s.is_empty() { "anon".to_owned() } else { s });
+                    parts.push(if s.is_empty() {
+                        format!("(anonymous {})", record_kind_prefix(ast, x))
+                    } else {
+                        s
+                    });
                 }
             }
             cur = n.ctx();
@@ -1076,7 +1122,7 @@ impl<'a> Cg<'a> {
             self.gvars.insert(first, g);
             g
         };
-        let internal = mangle::has_internal_linkage(ast, d);
+        let internal = mangle::is_internal_symbol(ast, d);
         let inline = self.var_is_inline(d);
         let quals = ast.types.effective_quals(ty);
         let constant = quals.is_const() && !has_mutable(ty);

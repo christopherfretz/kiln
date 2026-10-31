@@ -25,6 +25,7 @@ mod expr;
 mod fir;
 mod fold;
 mod func;
+mod lambda;
 mod memptr;
 mod module;
 mod new_delete;

@@ -120,6 +120,7 @@ impl Sema<'_, '_> {
                 }
             }
         }
+        self.define_lambda_conversion(first, loc);
         // A member function of a class template specialization is
         // instantiated ([temp.inst]/5).
         self.mark_used_at(f, loc);

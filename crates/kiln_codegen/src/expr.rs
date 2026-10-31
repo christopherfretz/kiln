@@ -465,7 +465,13 @@ impl Cg<'_> {
                 }
                 return self.emit_scalar_opt(s);
             }
-            CastKind::NoOp | CastKind::BitCast | CastKind::LValueBitCast => {
+            // clang `ScalarExprEmitter::VisitCastExpr`: a user-defined or
+            // constructor conversion is its (call) operand.
+            CastKind::NoOp
+            | CastKind::BitCast
+            | CastKind::LValueBitCast
+            | CastKind::UserDefinedConversion
+            | CastKind::ConstructorConversion => {
                 return self.emit_scalar_opt(s);
             }
             CastKind::DerivedToBase | CastKind::UncheckedDerivedToBase => {
@@ -1309,7 +1315,10 @@ impl Cg<'_> {
                 Ok(LV { addr: tmp, q: sq, bf: None })
             }
             k if k.is_cast() => match ast.exprs.cast_kind(e) {
-                CastKind::NoOp | CastKind::LValueBitCast | CastKind::LValueToRValue => {
+                CastKind::NoOp
+                | CastKind::LValueBitCast
+                | CastKind::LValueToRValue
+                | CastKind::UserDefinedConversion => {
                     let mut lv = self.emit_lvalue(ast.exprs.operand(e))?;
                     if lv.bf.is_none() && !ast.types.is_function(q) {
                         lv.addr.ty = self.mty(q);
@@ -2018,6 +2027,7 @@ impl Cg<'_> {
                         | CastKind::LValueToRValue
                         | CastKind::LValueToRValueBitCast
                         | CastKind::ConstructorConversion
+                        | CastKind::UserDefinedConversion
                 ) =>
             {
                 let s = ast.exprs.operand(e);
@@ -2053,6 +2063,16 @@ impl Cg<'_> {
                 let g = self.lit_global_sized(ast.exprs.string_lit(e), size);
                 let align = self.m.global(g).align.unwrap_or(1);
                 self.memcpy(dest, V::C(gval(g)), align, size, false);
+                Ok(())
+            }
+            // clang `AggExprEmitter::VisitLambdaExpr`: each capture
+            // initializes its field; a captureless closure has nothing to
+            // initialize.
+            ExprKind::LambdaExpr => {
+                let l = ast.exprs.lambda(e);
+                if l.inits.is_some_and(|x| ast.lists.iter::<ExprId>(x).next().is_some()) {
+                    return err(self.loc_of(e), "lambda captures are not supported yet");
+                }
                 Ok(())
             }
             k => err(self.loc_of(e), format!("aggregate expression {k:?} is not supported yet")),

@@ -12,7 +12,7 @@
 
 use kiln_ast::decl::{Access, ConstexprKind, DeclFlags, DeclKind, FnSpec, FnStorage, TagKind};
 use kiln_ast::ids::{AttrId, ExprId, LambdaId, StmtId};
-use kiln_ast::lambda::{CaptureDefault, CaptureKind, LambdaData};
+use kiln_ast::lambda::{CaptureDefault, CaptureKind, ClosureThunk, LambdaData};
 use kiln_ast::names::{DeclName, OverloadedOperator};
 use kiln_ast::types::{AutoKeyword, ExcSpec, FuncInfo, Quals, RefQual, TypeView};
 use kiln_ast::{DeclHead, DeclId, QualType};
@@ -557,6 +557,47 @@ impl Sema<'_, '_> {
         if !ps.is_empty() {
             let _ = self.builder().set_params(inv, &ps);
         }
+    }
+
+    /// clang `DefineImplicitLambdaToFunctionPointerConversion`: on the
+    /// first odr-use of the conversion function `conv` of a closure type,
+    /// gives it the body `{ return target; }` (the static invoker, or the
+    /// static call operator) and marks the invoker defined with an empty
+    /// body (code generation and the Oven synthesize what it does).
+    pub(crate) fn define_lambda_conversion(&mut self, conv: DeclId, loc: Loc) {
+        let Some(ClosureThunk::Conversion { target }) = self.ast.closure_thunk(conv) else {
+            return;
+        };
+        if self.ast.definition(conv).is_some() {
+            return;
+        }
+        let at = self.ast.decls.get(conv).loc();
+        let Some(tq) = self.ast.decls.get(target).ty() else { return };
+        let ptr = self.ast.types.pointer_to(tq);
+        let r = self.builder().decl_ref(
+            target,
+            tq,
+            at,
+            None,
+            kiln_ast::expr::NonOdrUse::None,
+            kiln_ast::expr::ExprFlags::NONE,
+        );
+        let c = self.builder().implicit_cast(
+            kiln_ast::expr::CastKind::FunctionToPointerDecay,
+            r,
+            ptr,
+            kiln_ast::expr::ValueCategory::PRValue,
+        );
+        let ret = self.builder().return_stmt(Some(c), None, at);
+        let body = self.builder().compound(&[ret], at, at);
+        let _ = self.builder().set_body(conv, body);
+        if matches!(self.ast.closure_thunk(target), Some(ClosureThunk::Invoker { .. }))
+            && self.ast.definition(target).is_none()
+        {
+            let body = self.builder().compound(&[], at, at);
+            let _ = self.builder().set_body(target, body);
+        }
+        self.mark_function_referenced(target, loc);
     }
 
     /// True if `f` is the function call operator (or its template

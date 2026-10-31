@@ -120,11 +120,9 @@ impl Parser<'_, '_> {
             first = false;
         }
         while !self.at(Punct::RSquare) {
-            if !first {
-                if self.eat(Punct::Comma).is_none() {
-                    self.error_here(DiagId::parse_expected_comma_or_rsquare);
-                    return None;
-                }
+            if !first && self.eat(Punct::Comma).is_none() {
+                self.error_here(DiagId::parse_expected_comma_or_rsquare);
+                return None;
             }
             first = false;
             let loc = self.loc();

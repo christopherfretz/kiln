@@ -145,7 +145,7 @@ impl Cg<'_> {
     /// clang `getVTableLinkage` / `isVTableExternal` (at `-O0`).
     pub(crate) fn vtable_linkage(&self, rd: DeclId) -> VtLinkage {
         let first = self.ast.first(rd);
-        if mangle::has_internal_linkage(self.ast, first) {
+        if mangle::class_is_internal(self.ast, first) {
             return VtLinkage::Internal;
         }
         if self.is_implicit_instantiation(first) {
@@ -1301,8 +1301,7 @@ impl Cg<'_> {
             return VtLinkage::Internal;
         }
         let ast = self.ast;
-        let internal =
-            |d: Option<DeclId>| d.is_some_and(|d| mangle::has_internal_linkage(ast, ast.first(d)));
+        let internal = |d: Option<DeclId>| d.is_some_and(|d| mangle::class_is_internal(ast, d));
         let mut t = q;
         loop {
             // (`pointee` also looks through member pointers.)
@@ -1479,9 +1478,7 @@ impl Cg<'_> {
 
     /// clang `getTypeInfoLinkage` for class `rd`.
     fn rtti_linkage(&self, rd: DeclId) -> VtLinkage {
-        if mangle::has_internal_linkage(self.ast, self.ast.first(rd))
-            || self.class_def(rd).is_none()
-        {
+        if mangle::class_is_internal(self.ast, rd) || self.class_def(rd).is_none() {
             return VtLinkage::Internal;
         }
         if self.is_dynamic(rd) {
