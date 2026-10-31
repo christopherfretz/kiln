@@ -40,8 +40,13 @@ Branch `wp/100-codegen-eh`, worktree `kiln/.worktrees/wp-100`.
   `TryMarkNoThrow` counting invokes and `resume`. Cleanup kinds
   `FreeException` / `EndCatch`. `CurrentCleanupScopeDepth`.
   Dtor cleanups on unwind match clang (scratch t1/t3 exact, both triples).
-- Next: throw expression, try/catch (dispatch, handlers, catch params),
-  function-try-blocks, ctor partial-construction EH cleanups, `new`
+- Done: throw expression (`__cxa_allocate_exception` / `__cxa_throw`,
+  FreeException deactivation), try/catch (`try_catch.rs`: catch scopes,
+  dispatch via `llvm.eh.typeid.for`, handler blocks after uses,
+  `InitCatchParam` for ref/pointer/scalar/trivial/non-trivial class,
+  EndCatch cleanup, rethrow); fall-off `llvm.trap` without call-site
+  attributes (clang `EmitTrapCall`). Scratch tc1 exact on both triples.
+- Next: ctor/dtor function-try-blocks (implicit rethrow), ctor partial-construction EH cleanups, `new`
   dealloc cleanup, IR-diff corpus `tests/codegen/eh_*.cpp`.
 
 ## Step 4 — wrap-up (todo)

@@ -211,8 +211,19 @@ impl Cg<'_> {
 
     /// `llvm.trap` (`noreturn nounwind`) followed by `unreachable`.
     pub(crate) fn emit_trap_unreachable(&mut self) {
+        self.emit_trap_unreachable_ex(true);
+    }
+
+    /// `llvm.trap` then `unreachable`; `site_attrs`: the call is marked
+    /// `noreturn nounwind` (clang's `EmitTrapCall` alone marks nothing,
+    /// as at the fall-off end of a value-returning function).
+    pub(crate) fn emit_trap_unreachable_ex(&mut self, site_attrs: bool) {
         let trap = kiln_llvm::intrinsics::trap(&mut self.m);
-        let fa = self.m.attr_set(&[Attr::Flag(AttrKind::NoReturn), Attr::Flag(AttrKind::NoUnwind)]);
+        let fa = if site_attrs {
+            self.m.attr_set(&[Attr::Flag(AttrKind::NoReturn), Attr::Flag(AttrKind::NoUnwind)])
+        } else {
+            self.m.attr_set(&[])
+        };
         let fn_ty = self.m.func(trap).ty();
         let opts =
             CallOpts { attrs: AttrList { func: fa, ..AttrList::default() }, ..CallOpts::default() };
@@ -410,7 +421,7 @@ impl Cg<'_> {
             && self.f.ret_kind != RetKind::Void
             && self.f.fir.cur().is_some()
         {
-            self.emit_trap_unreachable();
+            self.emit_trap_unreachable_ex(false);
         }
         // FinishFunction.
         let prologue = self.f.cl.prologue;

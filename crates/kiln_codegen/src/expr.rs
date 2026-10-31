@@ -1040,7 +1040,9 @@ impl Cg<'_> {
     }
 
     fn opaque_of(&self, e: ExprId) -> Option<Opaque> {
-        let src = self.ast.exprs.opaque_source(e)?;
+        // A handler's copy-initialization source has no source
+        // expression: it is bound by itself.
+        let src = self.ast.exprs.opaque_source(e).unwrap_or(e);
         self.f.opaque.get(&src).copied()
     }
 

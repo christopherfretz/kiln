@@ -71,7 +71,7 @@ impl Cg<'_> {
         self.ast.definition(rd)
     }
 
-    fn class_bits(&self, rd: DeclId) -> DefinitionBits {
+    pub(crate) fn class_bits(&self, rd: DeclId) -> DefinitionBits {
         self.class_def(rd)
             .and_then(|d| self.ast.decls.record(d))
             .map_or(DefinitionBits::empty(), |r| r.defn)
