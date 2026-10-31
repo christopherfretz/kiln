@@ -10,8 +10,16 @@ Updated: 2026-10-31
   templates_wide 2,189,540,028; templates_deep 679,640,025.
 
 ## State
-- Survey done; root cause: profiles are `[expr id]` (templates.rs
-  `template_arg_expr`, templ/actions.rs `dependent_profile`).
+- Done: `Ast::profile_expr` + unit tests; canonical dependent types and
+  template args use it; `templ/equiv.rs` (`exprs_equivalent`,
+  `equivalent_signatures`, `check_template_heads_match`); typedef
+  redefinition per clang; 27 `templates/equiv` tests (26 + 1 xfail);
+  spec landed blocks (types.md §7.2, sema-templates.md §11.2).
+- Probe after (debug kiln at d8c63f2): array 96, string_view 160,
+  span 69, utility 32. swap.h:33 gone. New first blockers:
+  `__iterator/iterator_traits.h:123:95` (`decltype(...)::value` as NNS,
+  parser) for array/string_view; defaulted comparisons (WP-082) for
+  span/utility.
 
 ## Next step
-- Implement `Ast::profile_expr` (kiln_ast/src/types/profile_expr.rs).
+- Bench after-measurement, full `cargo xtask ci`, handback.
