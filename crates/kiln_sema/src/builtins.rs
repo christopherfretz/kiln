@@ -276,6 +276,7 @@ impl Sema<'_, '_> {
             | builtin::ISLESSGREATER
             | builtin::ISUNORDERED => self.builtin_unordered_compare(args, rparen),
             builtin::LAUNDER => self.builtin_launder(callee, args, rparen),
+            builtin::CONSTANT_P => self.builtin_constant_p(args, rparen),
             builtin::OPERATOR_NEW | builtin::OPERATOR_DELETE => {
                 return self.builtin_operator_new_delete(callee, b, id, args, loc, rparen);
             }
@@ -464,6 +465,20 @@ impl Sema<'_, '_> {
     /// argument of pointer-to-complete-object type (an array or function
     /// argument decays), copy-initialized to that type, which is the
     /// call's.
+    /// `__builtin_constant_p(e)` (clang `CheckBuiltinFunctionCall`): exactly one argument, which undergoes
+    /// `DefaultFunctionArrayLvalueConversion`; the result is `int`.
+    fn builtin_constant_p(
+        &mut self,
+        args: &[ExprId],
+        rparen: Loc,
+    ) -> Option<(Vec<ExprId>, QualType)> {
+        if !self.builtin_arg_count(args, 1, rparen) {
+            return None;
+        }
+        let a = conv::decay(self, args[0]);
+        Some((vec![a], QualType::INT))
+    }
+
     fn builtin_launder(
         &mut self,
         callee: ExprId,

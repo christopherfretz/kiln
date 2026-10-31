@@ -178,6 +178,10 @@ impl Cg<'_> {
         let Some(a0) = arg(0).or(Some(e)) else { unreachable!() };
         let v = match b {
             id::IS_CONSTANT_EVALUATED => V::C(self.m.const_bool(false)),
+            // An argument that did not fold (the fold prepass made the call
+            // 1 or 0 when it could evaluate it) is not a constant, as at
+            // clang -O0; it is not evaluated.
+            id::CONSTANT_P => V::C(self.m.const_int(LTy::I32, 0)),
             // [specialized.addressof]: `&x` without an overloaded `&`.
             id::ADDRESSOF => self.emit_lvalue(a0)?.addr.v,
             id::CLZ

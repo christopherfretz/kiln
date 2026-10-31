@@ -351,7 +351,8 @@ impl Oven {
         self.run.entry = entry;
         let pend = self.run.pending.len();
         let clean = self.cleanups.len();
-        let r = self.run_loop(b, func, fb);
+        let entry_pc = self.funcs[func as usize].entry as usize;
+        let r = self.run_loop(b, func, entry_pc, fb);
         self.cleanups.truncate(clean);
         let out = match r {
             Ok(()) => Ok(()),
@@ -416,8 +417,63 @@ impl Oven {
         }
     }
 
-    fn run_loop(&mut self, b: &mut dyn SemaBridge, func: u32, fb0: u32) -> Exit {
-        let mut pc = self.funcs[func as usize].entry as usize;
+    /// `Op::Speculate`: runs the region of `func` at `pc0` (ending in a
+    /// `Ret`) in the frame at `fb` and reports whether it completed (and,
+    /// for a pointer, whether register `val`'s value is null or the start
+    /// of a string literal). A failure is 0 and its effects on the stack,
+    /// the cleanups and the frame memory are undone; a resource limit
+    /// fails the evaluation.
+    #[inline(never)]
+    fn speculate(
+        &mut self,
+        b: &mut dyn SemaBridge,
+        func: u32,
+        pc0: usize,
+        fb: usize,
+        val: usize,
+        ptr: bool,
+    ) -> Result<bool, Fault> {
+        let entry = self.stack.len();
+        let saved_entry = self.run.entry;
+        let pend = self.run.pending.len();
+        let clean = self.cleanups.len();
+        let mark = self.mem.mark();
+        // The region's `Ret` writes the frame's result slot.
+        let slot = self.regs[fb];
+        let silent = self.run.silent;
+        self.run.entry = entry;
+        self.run.silent = true;
+        let r = self.run_loop(b, func, pc0, fb as u32);
+        self.run.silent = silent;
+        self.run.entry = saved_entry;
+        let v = self.regs[fb + val];
+        self.regs[fb] = slot;
+        let out = match r {
+            Ok(()) => Ok(!ptr || v == 0 || {
+                let p = Ptr::decode(v as u64);
+                p.off == 0 && self.is_literal(v as u64)
+            }),
+            Err((f, _)) if f.kind() != FailKind::NotConstant => Err(f),
+            Err(_) => {
+                while self.run.pending.len() > pend {
+                    if let Some(p) = self.run.pending.pop() {
+                        self.mem.peak = self.mem.peak.max(p.peak_saved);
+                        self.mem.arena_peak = self.mem.arena_peak.max(p.arena_saved);
+                        self.run.maxd = self.run.maxd.max(p.maxd_saved);
+                    }
+                }
+                Ok(false)
+            }
+        };
+        self.cleanups.truncate(clean);
+        self.stack.truncate(entry);
+        self.mem.release(mark, &self.types);
+        self.mem.cur_frame = self.stack.last().map_or(0, |f| f.serial);
+        out
+    }
+
+    fn run_loop(&mut self, b: &mut dyn SemaBridge, func: u32, pc0: usize, fb0: u32) -> Exit {
+        let mut pc = pc0;
         let mut fb = fb0 as usize;
         self.grow_regs(fb + self.funcs[func as usize].nregs as usize + 1);
         let serial = self.mem.next_frame();
@@ -996,6 +1052,14 @@ impl Oven {
                         self.always_true_diag(b, pc, aux);
                     }
                     pc += 2;
+                }
+                Op::Speculate => {
+                    let func = self.stack[self.stack.len() - 1].func;
+                    match self.speculate(b, func, pc + 4, fb, arg!(1), aux & 1 != 0) {
+                        Ok(c) => reg!(0) = u128::from(c),
+                        Err(f) => fail!(f),
+                    }
+                    pc = arg!(2);
                 }
                 Op::Call | Op::CallInd => {
                     let callee = if op == Op::Call {

@@ -1795,7 +1795,7 @@ not use it, so it is not in M3.
 |---|---|---|
 | `__array_extent(T, I)` | `ArrayTypeTraitExpr`, of type `size_t`: the bound of dimension `I`, or 0 | `tc` |
 | `__builtin_is_constant_evaluated()` | the Oven returns `true` in a manifestly constant-evaluated context. Codegen emits `false`. Sema warns "'__builtin_is_constant_evaluated' will always evaluate to 'true' in a manifestly constant-evaluated expression" where clang does. Owned by WP-063 | Oven `EvalContext` |
-| `__builtin_constant_p(e)` | the Oven returns `true` if `e` folds to a constant (clang's rules for pointers and strings). Otherwise codegen lowers it through `llvm.is.constant` | Oven, codegen |
+| `__builtin_constant_p(e)` | `int`. The Oven returns 1 if `e` (integral, enumeration, floating, pointer or `nullptr_t`, with no assignment, increment, `new`, `delete` or `throw` of its own) evaluates to a constant. A pointer counts only if it is null or the start of a string literal. Other types and arguments with side effects give 0. The argument is evaluated speculatively (`Op::Speculate`): a failure gives 0, but a resource limit still fails the evaluation. Codegen folds the call through the Oven and emits 0 if that fold fails, as clang does at -O0 (WP-130) | Oven, codegen |
 
 ### 9.5 `__builtin_*` functions used by the M3 headers
 
@@ -2559,7 +2559,6 @@ pub fn has_constexpr_builtin_staged(name: &str) -> Option<bool>;
 | `__is_layout_compatible`, `__is_pointer_interconvertible_base_of`, `__can_pass_in_regs`, `__is_bitwise_cloneable` | M4 (unassigned) |
 | `__is_trivially_relocatable` (`TRIVIALLY_RELOCATABLE` is never set) | unowned: S3C canPassInRegisters |
 | `__type_pack_element` and `__make_integer_seq` with pack arguments | WP-072 |
-| `__builtin_constant_p` (sema and Oven) | unowned: not in WP-088 |
 | `__builtin_operator_new` / `__builtin_operator_delete` in the Oven (sema and codegen landed in WP-088) | WP-061b |
 
 The other §9.5 functions, the source-location builtins and

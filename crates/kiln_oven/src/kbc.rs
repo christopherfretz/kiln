@@ -220,6 +220,14 @@ ops! {
     // aux = 1 of the dynamic type of the polymorphic glvalue of `class`
     // at `p` ([expr.typeid]/3-4)
     TypeId = 4,
+    // [dst, value, end]: `__builtin_constant_p` (clang
+    // `EvaluateBuiltinConstantP`): the region after this instruction,
+    // which ends in a `Ret` of register `value`, runs speculatively in
+    // this frame's registers; `dst` is 1 if it completes (aux = 1: and the
+    // value, a pointer, is null or the start of a string literal), else 0
+    // (a resource limit still fails the evaluation); execution resumes at
+    // `end`.
+    Speculate = 3,
 }
 
 /// The kinds of `Builtin` and their operands.
