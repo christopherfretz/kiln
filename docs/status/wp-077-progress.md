@@ -18,11 +18,24 @@ landed is in spec/oven.md "Dynamic types — Landed (WP-077)".
 - [x] Tests: `tests/conformance/expr.const/virtual-{dispatch,errors,dynamic-cast,dynamic-cast-errors,typeid,typeid-errors,delete}.cpp`
 - [x] Bench entry `bench/oven/virtual-dispatch.cpp`
 - [x] Spec section
-- [ ] Bench baseline: record only on a quiet host
-- [ ] Full `cargo xtask ci`
+- [x] Bench baseline `oven/virtual-dispatch`: 19.0 ms, 6.2 MB, 375540 steps,
+      2176 bytes. Recorded at 21:26 EDT with nothing else running in the
+      container (`ps`) and host loadavg 6.5 on 24 CPUs.
+- [x] Full `cargo xtask ci` green on f94481a: kiln 1166 passed / 12 xfail /
+      0 xpass / 0 failed (was 1159); clang self-check 1152 passed.
+
+## Bench A/B against the merge base (125af7c)
+Every counter (steps, bytes, evaluations, peak_arena, frozen_bytes) is
+identical on every entry that has a baseline. An apparent ~3.5 ms fixed
+per-process slowdown turned out to be a measurement artifact. The base
+binary was in /tmp and the WP-077 binary was on the slow workspace mount;
+loading a 42 MB binary from the mount costs ~3.5 ms. With both binaries in
+/tmp: empty.cpp 1.17 vs 1.31 ms, fib 1.34 vs 1.47 ms, and churn-mixed 4.97 vs
+5.03 ms (medians). The remaining ~0.1 ms comes from the larger binary.
+For tooling: timings from `cargo xtask bench` include this mount cost.
 
 ## Next step
-Run the full `cargo xtask ci` (in the background). Then record the
-`virtual-dispatch` baseline with
-`cargo xtask bench --filter oven/virtual-dispatch --record`, but only when
-`ps` shows a quiet host.
+Nothing is left inside WP-077's scope. Resume with review and merge. The
+follow-ups are listed under "Left for later" in spec/oven.md (virtual bases,
+covariant returns through member pointers, freezing typeid pointers in
+WP-080).
