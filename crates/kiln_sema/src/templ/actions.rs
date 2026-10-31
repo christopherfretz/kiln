@@ -227,8 +227,7 @@ impl Sema<'_, '_> {
             return base;
         };
         let Nns::Type { ty, .. } = self.ast.types.nns_view(nns) else { return base };
-        let TypeView::TemplateSpecialization { name: tn, .. } = self.ast.types.view(ty.ty())
-        else {
+        let TypeView::TemplateSpecialization { name: tn, .. } = self.ast.types.view(ty.ty()) else {
             return base;
         };
         let Some(tmpl) = self.ast.types.template_decl(tn) else { return base };
@@ -1067,14 +1066,12 @@ impl Sema<'_, '_> {
         }
         // The class scopes entered for the rest of a qualified declarator
         // (`template<class T> void A<T>::f(const A&)`, [basic.lookup.unqual]/1).
-        self.scopes.iter().rev().filter(|s| s.kind == ScopeKind::Record).find_map(
-            |s| {
-                let x = s.entity?;
-                (self.kind_of(x) == DeclKind::CXXRecord
-                    && self.injected_template_of(x).is_some_and(|t| self.ast.first(t) == tmpl))
-                .then_some(x)
-            },
-        )
+        self.scopes.iter().rev().filter(|s| s.kind == ScopeKind::Record).find_map(|s| {
+            let x = s.entity?;
+            (self.kind_of(x) == DeclKind::CXXRecord
+                && self.injected_template_of(x).is_some_and(|t| self.ast.first(t) == tmpl))
+            .then_some(x)
+        })
     }
 
     /// The injected-class-name of class template `tmpl` used without

@@ -566,18 +566,13 @@ impl<'a> Cg<'a> {
                 _ => {
                     let mut s = mangle::decl_name(ast, x);
                     if s.is_empty() {
-                        s = "anon".to_owned();
+                        "anon".clone_into(&mut s);
                     } else if x != d {
                         // clang `printQualifiedName`: an enclosing class
                         // template specialization prints its arguments
                         // (`struct.A<int>::B`); the record itself does not.
                         if let Some((_, sp)) = ast.spec_info(x) {
-                            kiln_ast::types::write_arg_list(
-                                &ast.types,
-                                ast,
-                                sp.print_args,
-                                &mut s,
-                            );
+                            kiln_ast::types::write_arg_list(&ast.types, ast, sp.print_args, &mut s);
                         }
                     }
                     parts.push(s);

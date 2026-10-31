@@ -471,7 +471,9 @@ impl Cg<'_> {
                 // conversion loads the object (clang `EmitLoadOfLValue`).
                 if matches!(
                     ast.exprs.get(s).kind(),
-                    ExprKind::CallExpr | ExprKind::CXXOperatorCallExpr | ExprKind::CXXMemberCallExpr
+                    ExprKind::CallExpr
+                        | ExprKind::CXXOperatorCallExpr
+                        | ExprKind::CXXMemberCallExpr
                 ) && self.is_glvalue(s)
                 {
                     let lv = self.emit_lvalue(s)?;
