@@ -329,7 +329,26 @@ impl Sema<'_, '_> {
                         .map(|e| e.1),
                 };
                 if let Some(raw) = hit {
-                    let found = self.filter(vec![raw], kind);
+                    // A function found at block scope is one of an
+                    // overload set: every block-scope function and
+                    // using-declarator target of the name
+                    // ([basic.lookup.general]/1, [namespace.udecl]/1).
+                    let fnlike = |me: &Self, d: DeclId| {
+                        matches!(
+                            me.kind_of(me.ast.strip_shadow(d)),
+                            DeclKind::Function | DeclKind::FunctionTemplate
+                        )
+                    };
+                    let v = if kind == LookupKind::Ordinary && fnlike(self, raw) {
+                        s.locals
+                            .iter()
+                            .filter(|e| e.0 == name && e.2 == Ns::Ordinary && fnlike(self, e.1))
+                            .map(|e| e.1)
+                            .collect()
+                    } else {
+                        vec![raw]
+                    };
+                    let found = self.filter(v, kind);
                     if !found.is_empty() {
                         return found;
                     }

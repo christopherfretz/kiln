@@ -341,6 +341,26 @@ impl Substituter<'_, '_, '_> {
         r
     }
 
+    /// A block-scope using-declaration ([namespace.udecl]; clang
+    /// `TemplateDeclInstantiator::VisitUsingDecl`): the qualifier is
+    /// substituted and the declarator is redone in the instantiation's
+    /// block scope, introducing its shadows there.
+    fn local_using_decl(&mut self, d: DeclId, loc: Loc) -> SubstResult<DeclId> {
+        let name = self.sema.ast.decls.get(d).name().as_ident().ok_or(SubstFail)?;
+        let nns = self.sema.ast.using_qualifier(d).ok_or(SubstFail)?;
+        let nns = self.nns(nns, loc)?;
+        if self.nns_still_dependent(nns) {
+            return self.unimplemented("dependent using-declarations in templates", loc);
+        }
+        let ctx = self.nns_context(nns, loc)?;
+        // A using-declaration whose lookup finds nothing survives in the
+        // pattern only with `using_if_exists` (the qualifier is not
+        // dependent, so the lookup is the definition's).
+        let if_exists = self.sema.lookup_qualified(ctx, name, crate::lookup::LookupKind::All).is_empty();
+        let q = crate::using::Qualifier { ctx, nns, loc };
+        self.sema.act_on_using_declarator(loc, Some(q), name, loc, if_exists).ok_or(SubstFail)
+    }
+
     /// A declaration of a declaration statement.
     fn local_decl(&mut self, d: DeclId) -> SubstResult<DeclId> {
         let loc = self.sema.ast.decls.get(d).loc();
@@ -355,6 +375,7 @@ impl Substituter<'_, '_, '_> {
                 Ok(x)
             }
             DeclKind::StaticAssert => self.static_assert_decl(d),
+            DeclKind::Using => self.local_using_decl(d, loc),
             k => self.unimplemented(&format!("local {k:?} declarations in templates"), loc),
         }
     }

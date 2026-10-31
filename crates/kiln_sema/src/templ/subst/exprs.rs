@@ -58,6 +58,29 @@ impl Substituter<'_, '_, '_> {
         self.expand_exprs(&v)
     }
 
+    /// The arguments of a call: a braced-init-list argument becomes a
+    /// braced argument again ([`crate::Sema::act_on_braced_arg`]), which
+    /// the call list-initializes its parameter from (a dependent call
+    /// keeps it as written, [`crate::Sema::dependent_init_list`]).
+    fn call_arg_list(&mut self, l: kiln_ast::ids::ListId) -> SubstResult<Vec<ExprId>> {
+        let v: Vec<ExprId> = self.sema.ast.lists.iter::<ExprId>(l).collect();
+        if !v.iter().any(|&x| self.sema.ast.exprs.get(x).kind() == ExprKind::InitListExpr) {
+            return self.expr_list(l);
+        }
+        let mut out = Vec::with_capacity(v.len());
+        for x in v {
+            match self.sema.ast.exprs.get(x).kind() {
+                ExprKind::CXXDefaultArgExpr => break,
+                ExprKind::InitListExpr => {
+                    let il = self.init_list(x)?;
+                    out.push(self.sema.act_on_braced_arg(il));
+                }
+                _ => out.extend(self.expand_exprs(&[x])?),
+            }
+        }
+        Ok(out)
+    }
+
     #[allow(clippy::too_many_lines, reason = "one arm per expression kind, as TreeTransform")]
     fn expr_node(&mut self, e: ExprId) -> SubstResult<ExprId> {
         fn ex<'x>(s: &'x Substituter<'_, '_, '_>) -> &'x kiln_ast::expr::ExprArena {
@@ -146,7 +169,7 @@ impl Substituter<'_, '_, '_> {
                 let callee = ex(self).callee(e);
                 let args = ex(self).call_args(e);
                 let callee = self.callee(callee)?;
-                let args = self.expr_list(args)?;
+                let args = self.call_arg_list(args)?;
                 // clang `TransformCallExpr`: the "fake" `(` is where the
                 // callee begins.
                 let lparen = self.sema.begin_loc(callee);

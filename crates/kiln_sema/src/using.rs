@@ -214,6 +214,16 @@ impl Sema<'_, '_> {
                 }
                 continue;
             }
+            // [namespace.udecl]/11 (example): two using-declarators may
+            // introduce functions with the same parameter-type-list (a
+            // call is then ambiguous); only a function declared in the
+            // scope conflicts.
+            let fnlike = |me: &Self, d| {
+                matches!(me.kind_of(d), DeclKind::Function | DeclKind::FunctionTemplate)
+            };
+            if e != es && fnlike(self, es) && fnlike(self, target) {
+                continue;
+            }
             if self.using_conflicts(target, es) {
                 let msg = self
                     .diag(DiagId::sema_using_decl_conflict, loc)
@@ -256,6 +266,14 @@ impl Sema<'_, '_> {
         }
         if ka == DeclKind::Function && kb == DeclKind::Function {
             return self.same_ignoring_exc_spec(ta, tb);
+        }
+        // A function template overloads with functions and with other
+        // function templates unless the signatures, including the
+        // template heads, are equivalent ([basic.scope.scope]/4,
+        // [temp.over.link]/7; clang `CheckOverload`).
+        let fnlike = |k| matches!(k, DeclKind::Function | DeclKind::FunctionTemplate);
+        if fnlike(ka) && fnlike(kb) {
+            return ka == kb && self.equivalent_signatures(a, b);
         }
         true
     }
