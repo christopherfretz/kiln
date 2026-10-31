@@ -1475,15 +1475,12 @@ impl Parser<'_, '_> {
                     d.invalid = true;
                     return;
                 };
-                match t {
-                    Some(t) => {
-                        d.spec_id = self.s.act_on_specialization_declarator_id(t, &args, loc, r);
-                    }
-                    None => {
-                        let n = DeclName::operator(op);
-                        self.s.act_on_friend_spec_without_template(n, d.qualifier, loc);
-                        d.dropped = true;
-                    }
+                if let Some(t) = t {
+                    d.spec_id = self.s.act_on_specialization_declarator_id(t, &args, loc, r);
+                } else {
+                    let n = DeclName::operator(op);
+                    self.s.act_on_friend_spec_without_template(n, d.qualifier, loc);
+                    d.dropped = true;
                 }
                 return;
             }
