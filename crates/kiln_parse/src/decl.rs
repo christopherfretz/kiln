@@ -1193,7 +1193,9 @@ impl Parser<'_, '_> {
                 d.qualifier = qual;
                 if !ctor
                     && self.at(Punct::Less)
-                    && (self.s.has_pending_head() || self.s.has_explicit_spec_head())
+                    && (self.s.has_pending_head()
+                        || self.s.has_explicit_spec_head()
+                        || self.s.has_explicit_inst_head())
                 {
                     self.parse_specialization_declarator_id(d, n, l);
                 }

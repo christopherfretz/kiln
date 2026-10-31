@@ -824,10 +824,6 @@ impl Sema<'_, '_> {
                 self.error(DiagId::sema_function_partial_spec, loc);
                 None
             }
-            (DeclKind::FunctionTemplate, true) => {
-                self.templ_unimplemented("explicit specialization of a function template", loc);
-                None
-            }
             (_, _) => Some(spec::SpecDeclaratorId {
                 template: self.ast.first(tmpl),
                 args: args.to_vec(),
@@ -841,6 +837,12 @@ impl Sema<'_, '_> {
     /// True between `template<>` and the declaration it introduces.
     pub fn has_explicit_spec_head(&self) -> bool {
         self.templ.explicit_spec.is_some()
+    }
+
+    /// True between an explicit-instantiation `[extern] template` and
+    /// the declaration it introduces.
+    pub fn has_explicit_inst_head(&self) -> bool {
+        self.templ.explicit_inst.is_some()
     }
 
     /// True while parsing between `template<...>` and the declaration it

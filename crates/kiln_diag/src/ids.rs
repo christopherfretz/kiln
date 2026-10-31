@@ -1203,6 +1203,9 @@ diag_ids! {
     note_rewriting_operator_as_spaceship = Note (0) "while rewriting comparison as call to 'operator<=>' declared here";
     sema_operator_arrow_not_pointer = Error (1) "member reference type {0} is not a pointer";
     sema_no_suitable_delete_member = Error (2) "no suitable member {0} in {1}";
+    sema_fn_template_spec_no_match = Error (1) "no function template matches function template specialization '{0}'";
+    sema_fn_template_spec_ambiguous = Error (1) "function template specialization '{0}' ambiguously refers to more than one function template; explicitly specify template arguments to identify a particular function template";
+    note_fn_template_spec_matched = Note (2) "function template '{0}' matches specialization {1}";
 }
 
 impl DiagId {

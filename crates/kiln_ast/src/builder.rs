@@ -339,7 +339,7 @@ impl<'a> AstBuilder<'a> {
     /// The redeclaration link of a new declaration: joins `prev`'s group
     /// (after its latest declaration) or starts a group at the id the next
     /// push returns.
-    fn redecl_link(&mut self, prev: Option<DeclId>) -> Redecl {
+    pub(crate) fn redecl_link(&mut self, prev: Option<DeclId>) -> Redecl {
         let d = self.ast.decls.next_id();
         match prev {
             Some(p) => {

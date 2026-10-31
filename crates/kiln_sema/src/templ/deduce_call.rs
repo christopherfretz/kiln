@@ -144,6 +144,9 @@ impl Sema<'_, '_> {
         let last_pack = params.last().is_some_and(|&p| is_pack(self, p));
         // §6.1 step 1: the explicitly-specified arguments.
         let (mut ptys, variadic) = self.proto_param_types(templated);
+        // [temp.deduct.funcaddr]: P is the function type, with the
+        // explicit arguments substituted below.
+        let mut pfn = self.ast.decls.get(templated).ty().unwrap_or(QualType::ERROR);
         let written: Vec<TemplateArg> =
             explicit.map(|l| self.ast.types.args(l).to_vec()).unwrap_or_default();
         if !written.is_empty() {
@@ -197,11 +200,14 @@ impl Sema<'_, '_> {
             let levels = self.prior_levels(ft, depth, &d.args);
             let shown = self.ast.types.arg_list(&d.args[..written.len().min(n)]);
             let tys = ptys.clone();
+            let fn_has_pack = tys.iter().any(|&t| crate::templ::pack::type_pattern(self, t).is_some());
+            let whole = target.is_some() && !fn_has_pack;
             let r = self.in_sfinae(FrameKind::ExplicitArgSubstitution, ft, Some(shown), loc, |s| {
                 let mut sub = Substituter::new(s, &levels);
                 // A function parameter pack keeps its pattern: the
                 // explicitly given prefix may be extended by deduction.
-                tys.iter()
+                let v = tys
+                    .iter()
                     .map(|&t| {
                         if crate::templ::pack::type_pattern(sub.sema, t).is_some() {
                             Ok(t)
@@ -209,11 +215,18 @@ impl Sema<'_, '_> {
                             sub.ty(t, loc)
                         }
                     })
-                    .collect::<Result<Vec<_>, _>>()
+                    .collect::<Result<Vec<_>, _>>()?;
+                let f = if whole { Some(sub.ty(pfn, loc)?) } else { None };
+                Ok::<_, crate::templ::subst::SubstFail>((v, f))
             });
             match r {
                 None => return Err(DeductionFailure::new(Tdk::InstantiationDepth, d)),
-                Some((Ok(t), Ok(()))) => ptys = t,
+                Some((Ok((t, f)), Ok(()))) => {
+                    ptys = t;
+                    if let Some(f) = f {
+                        pfn = f;
+                    }
+                }
                 Some((_, failed)) => {
                     let mut f = DeductionFailure::new(Tdk::SubstitutionFailure, d);
                     f.args = Some(shown);
@@ -234,9 +247,9 @@ impl Sema<'_, '_> {
         }
         // [temp.deduct.funcaddr]: the function type against the target.
         if let Some(a) = target {
-            let p = self.ast.decls.get(templated).ty().unwrap_or(QualType::ERROR);
-            let r = self.deduce(p, a, TdfFlags::NONE, &mut d);
+            let r = self.deduce(pfn, a, TdfFlags::NONE, &mut d);
             if r != Tdk::Success {
+                self.resugar_fn_mismatch(pfn, &mut d);
                 return Err(DeductionFailure::new(r, d));
             }
         }
@@ -445,6 +458,33 @@ impl Sema<'_, '_> {
             if t.canonical(cand) == t.canonical(fq) {
                 d.info.first = Some(TemplateArg::ty(cand));
                 return;
+            }
+        }
+    }
+
+    /// [`Self::resugar_mismatch`] for a function type P: the mismatched
+    /// component as written in P's return or parameter types (`T *`, not
+    /// `type-parameter-0-0 *`), or P itself.
+    fn resugar_fn_mismatch(&mut self, p: QualType, d: &mut DeducedArgs) {
+        let Some(first) = d.info.first else { return };
+        let ArgView::Type(fq) = first.view() else { return };
+        let t = &self.ast.types;
+        let mut parts = vec![p];
+        if let TypeView::Function(f) = t.view(p.ty()) {
+            parts.push(f.ret());
+            parts.extend(t.params(&f).iter().copied());
+        }
+        let want = t.canonical(fq);
+        for cand in parts {
+            let inner = match t.view(cand.ty()) {
+                TypeView::LValueRef(x) | TypeView::RValueRef(x) => x,
+                _ => cand,
+            };
+            for c in [cand, inner] {
+                if t.canonical(c) == want {
+                    d.info.first = Some(TemplateArg::ty(c));
+                    return;
+                }
             }
         }
     }

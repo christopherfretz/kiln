@@ -1105,6 +1105,45 @@ impl AstBuilder<'_> {
         d
     }
 
+    /// A declaration of function template specialization `spec` written
+    /// as an explicit specialization (`template<> int f<int>(int);`,
+    /// [temp.expl.spec], sema-templates.md §6.9): a redeclaration of
+    /// `spec` with its [`TemplLink::Specialization`] link, function type
+    /// `ty` and specifiers `fspec`, located at `loc` and listed in
+    /// `lexical` (clang lists the explicit specialization among the decls
+    /// of the context it appears in) but entered into no lookup table
+    /// (lookup finds the template). Parameters are attached afterwards.
+    pub fn function_spec_redecl(
+        &mut self,
+        spec: DeclId,
+        lexical: DeclId,
+        loc: Loc,
+        ty: QualType,
+        fspec: crate::decl::FnSpec,
+    ) -> DeclId {
+        let n = *self.ast.decls.get(spec);
+        let templ = self.ast.decls.function(spec).map_or(TemplLink::NONE, |f| f.templ);
+        let ctx = n.ctx().unwrap_or(self.ast.tu);
+        let mut h = DeclHead::new(ctx, n.name(), loc);
+        h.misc = n.misc();
+        h.lexical = Some(lexical);
+        let redecl = self.redecl_link(Some(spec));
+        let payload = Payload::Function(crate::decl::FunctionData {
+            redecl,
+            params: ListId::EMPTY,
+            body: None,
+            spec: fspec,
+            templ,
+        });
+        let depth = std::mem::take(&mut self.ast.templates.dependent_depth);
+        let d = self.add_pattern(h, n.kind(), Some(ty), payload);
+        self.ast.templates.dependent_depth = depth;
+        if self.ast.decls.member_list(lexical).is_some() {
+            self.ast.decls.append_member(lexical, d);
+        }
+        d
+    }
+
     /// The specialization `v<args>` of variable template `template`
     /// ([temp.spec], sema-templates.md §4.7, clang's
     /// `VarTemplateSpecializationDecl`): a `Var` with a

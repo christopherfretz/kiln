@@ -2136,6 +2136,13 @@ impl DeclArena {
         d.spec = FnSpec(d.spec.0 | bits.0);
     }
 
+    /// Replaces the specifiers of function template specialization `f`
+    /// when it becomes an explicit specialization: those are the explicit
+    /// declaration's, not the template's ([temp.expl.spec]/13; WP-106).
+    pub fn respecify_function(&mut self, f: DeclId, spec: FnSpec) {
+        self.function_mut(f).spec = spec;
+    }
+
     /// Sets the parameter list of function `f` (once a non-empty list is
     /// set it is frozen; parameters are created after their function
     /// because they name it as their semantic context).
