@@ -288,6 +288,17 @@ impl Sema<'_, '_> {
             .filter(|&c| !ambiguous || set.cand(c).ambiguous_mark && set.cand(c).viable)
             // A non-viable built-in candidate is never listed.
             .filter(|&c| set.cand(c).kind != CandidateKind::Builtin || set.cand(c).viable)
+            // An inherited copy/move constructor excluded by
+            // [over.match.funcs]/8 is not listed (clang
+            // `NoteFunctionCandidate`, `ovl_fail_inhctor_slice`).
+            .filter(|&c| {
+                let cand = set.cand(c);
+                !matches!(cand.failure, CandidateFailure::InhCtorSlice { .. })
+                    || !matches!(
+                        self.special_kind_of(cand.func()),
+                        Some(SpecialKind::CopyCtor | SpecialKind::MoveCtor)
+                    )
+            })
             .collect();
         order.sort_by(|&a, &b| self.compare_for_display(set, a, b));
         let mut out = Vec::with_capacity(order.len());
