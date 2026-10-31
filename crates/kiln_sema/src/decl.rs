@@ -3257,6 +3257,11 @@ impl Sema<'_, '_> {
             .with(DefinitionBits::TRIVIAL_DTOR)
             .with(DefinitionBits::LITERAL)
             .with(DefinitionBits::STRUCTURAL);
+        if self.ast.decls.record(r).is_some_and(|x| x.lambda.is_some()) {
+            // [expr.prim.lambda.closure]/2: a closure type is not an
+            // aggregate.
+            bits = bits.without(DefinitionBits::AGGREGATE);
+        }
         let fields: Vec<DeclId> = self.ast.decls.members(r).collect();
         let mut any_named = false;
         for f in fields {

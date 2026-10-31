@@ -2242,6 +2242,14 @@ impl DeclArena {
         d.defn = d.defn.with(DefinitionBits::BEING_DEFINED);
     }
 
+    /// Marks class `r` (being defined) as the closure type of lambda `l`
+    /// ([expr.prim.lambda.closure]).
+    pub fn set_closure(&mut self, r: DeclId, l: LambdaId) {
+        let d = self.record_mut(r);
+        d.lambda = Some(l);
+        d.defn = d.defn.with(DefinitionBits::LAMBDA);
+    }
+
     /// Sets property bits of a class being defined.
     ///
     /// # Panics

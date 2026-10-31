@@ -28,7 +28,8 @@ use crate::expr::{
     TypeTrait, TypeidOperand, UnaryOp, ValueCategory,
 };
 use crate::ids::{
-    AttrId, ConstValueId, DeclId, ExprId, LambdaId, ListId, QualType, RawId, StmtId, StringLitId, TypeId,
+    AttrId, ConstValueId, DeclId, ExprId, LambdaId, ListId, QualType, RawId, StmtId, StringLitId,
+    TypeId,
 };
 use crate::lookup::LookupFlags;
 use crate::names::DeclName;
@@ -2111,7 +2112,16 @@ impl<'a> AstBuilder<'a> {
                 deps |= self.deps(e);
             }
         }
-        let e = self.simple(ExprKind::LambdaExpr, ValueCategory::PRValue, deps, 0, ty, loc, id.raw(), 0);
+        let e = self.simple(
+            ExprKind::LambdaExpr,
+            ValueCategory::PRValue,
+            deps,
+            0,
+            ty,
+            loc,
+            id.raw(),
+            0,
+        );
         self.ast.exprs.cold.end_loc.insert(e, end).expect("fresh expression");
         e
     }

@@ -734,8 +734,13 @@ impl Sema<'_, '_> {
         if is_main || self.diags.error_count() > 0 {
             return;
         }
+        let lambda = self.is_lambda_call_op(state.decl);
         match self.falls_off(body) {
             Falloff::Never => {}
+            Falloff::Always if lambda => self.error(DiagId::sema_falloff_nonvoid_lambda, rbrace),
+            Falloff::Maybe if lambda => {
+                self.error(DiagId::sema_falloff_nonvoid_lambda_maybe, rbrace);
+            }
             Falloff::Always => self.error(DiagId::sema_falloff_nonvoid, rbrace),
             Falloff::Maybe => self.error(DiagId::sema_falloff_nonvoid_maybe, rbrace),
         }

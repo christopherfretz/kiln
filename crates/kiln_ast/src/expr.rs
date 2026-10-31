@@ -9,7 +9,8 @@
 use kiln_source::Loc;
 
 use crate::ids::{
-    ArgListId, ConstValueId, DeclId, ExprId, LambdaId, ListId, NnsId, QualType, RawId, StmtId, StringLitId,
+    ArgListId, ConstValueId, DeclId, ExprId, LambdaId, ListId, NnsId, QualType, RawId, StmtId,
+    StringLitId,
 };
 use crate::lists::IdLists;
 use crate::mem::{HeapSize, MemReport, MemRow};

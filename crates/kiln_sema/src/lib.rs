@@ -26,6 +26,7 @@ pub mod expr;
 mod forms;
 mod gnu;
 pub mod init;
+pub mod lambda;
 pub mod literal;
 pub mod lookup;
 pub mod names;
@@ -233,6 +234,9 @@ pub struct Sema<'a, 'sm> {
     pub(crate) abstract_noted: kiln_source::fx::FxHashSet<DeclId>,
     /// State of the source-location builtins (`builtins.rs`).
     pub(crate) srcloc: builtins::SrcLocCache,
+    /// The lambdas whose bodies are being analysed, innermost last
+    /// (spec/sema-lambda.md; WP-075).
+    pub(crate) lambdas: Vec<lambda::LambdaScope>,
 }
 
 impl<'a, 'sm> Sema<'a, 'sm> {
@@ -314,6 +318,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             inst: templ::InstState::default(),
             abstract_noted: kiln_source::fx::FxHashSet::default(),
             srcloc: builtins::SrcLocCache::default(),
+            lambdas: Vec::new(),
         }
     }
 

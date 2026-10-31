@@ -440,6 +440,15 @@ diag_ids! {
     parse_expected_expression = Error (0) "expected expression";
     parse_expected_name_of_pack = Error (0) "expected the name of a parameter pack";
     parse_stmt_expr_in_default_arg = Error (0) "default argument may not use a GNU statement expression";
+    parse_static_mutable_lambda = Error (0) "lambda cannot be both mutable and static";
+    parse_static_lambda_captures = Error (0) "a static lambda cannot have any captures";
+    parse_lambda_decl_specifier_repeated = Error (1) "{0} cannot appear multiple times in a lambda declarator";
+    parse_expected_lambda_body = Error (0) "expected body of lambda expression";
+    parse_expected_comma_or_rsquare = Error (0) "expected ',' or ']' in lambda capture list";
+    parse_expected_star_this_capture = Error (0) "expected 'this' following '*' in lambda capture list";
+    parse_capture_default_first = Error (0) "capture default must be first";
+    parse_this_captured_by_reference = Error (0) "'this' cannot be captured by reference";
+    parse_expected_capture = Error (0) "expected variable name or 'this' in lambda capture list";
     parse_expected_unqualified_id = Error (0) "expected unqualified-id";
     parse_expected_type = Error (0) "expected a type";
     parse_expected_member_name = Error (0) "expected member name or ';' after declaration specifiers";
@@ -751,6 +760,8 @@ diag_ids! {
     sema_return_void_expr_in_nonvoid = Error (1) "non-void function '{0}' should return a value";
     sema_falloff_nonvoid = Warning [ReturnType] (0) "non-void function does not return a value";
     sema_falloff_nonvoid_maybe = Warning [ReturnType] (0) "non-void function does not return a value in all control paths";
+    sema_falloff_nonvoid_lambda = Warning [ReturnType] (0) "non-void lambda does not return a value";
+    sema_falloff_nonvoid_lambda_maybe = Warning [ReturnType] (0) "non-void lambda does not return a value in all control paths";
     sema_main_returns_nonint = Error (0) "'main' must return 'int'";
     sema_switch_into_protected_scope = Error (0) "cannot jump from switch statement to this case label";
     sema_goto_into_protected_scope = Error (0) "cannot jump from this goto statement to its label";
@@ -864,6 +875,7 @@ diag_ids! {
     sema_out_of_line_default_deletes = Error (1) "defaulting this {0:default constructor|copy constructor|move constructor|copy assignment operator|move assignment operator|destructor} would delete it after its first declaration";
     note_defaulted_deleted_here = Note (0) "explicitly defaulted function was implicitly deleted here";
     note_explicitly_deleted_here = Note (1) "{0} has been explicitly marked deleted here";
+    note_lambda_decl = Note (0) "lambda expression begins here";
     note_candidate_deleted = Note (1) "candidate function has been {0:explicitly|implicitly} deleted";
     note_deleted_subobject = Note (6) "{0:default constructor|copy constructor|move constructor|copy assignment operator|move assignment operator|destructor} of {1} is implicitly deleted because {2:base class|field|variant field} {3} has {4:no|a deleted|multiple|an inaccessible|a non-trivial} {5}";
     note_deleted_uninit_field = Note (4) "default constructor of {0} is implicitly deleted because field {1} of {2:reference|const-qualified} type {3} would not be initialized";

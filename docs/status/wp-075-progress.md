@@ -12,3 +12,12 @@ Header probe (`kiln -std=c++26 -stdlib=libc++ -fsyntax-only -ferror-limit=0`):
 3. [ ] Generic lambdas
 4. [ ] spec/sema-lambda.md, ast.md/abi.md rows
 5. [ ] Tests (conformance >= 40, codegen corpus, xtask clang-ast LambdaExpr)
+
+## Log
+- WIP 1: parser (`kiln_parse/src/lambda.rs`: introducer, specifiers, declarator,
+  body; clang ParseLambda* diagnostics), sema (`kiln_sema/src/lambda.rs`:
+  closure record, constexpr inline `operator()`, function-pointer conversion,
+  `__invoke`, deleted default ctor/copy-assign with captures, lambda falloff
+  wording, referenced trivial dtor). Dump of non-capturing forms matches clang
+  19 including implicit members. Captures/generic/template-param lists still
+  `unsupported`. Oven/codegen not started.

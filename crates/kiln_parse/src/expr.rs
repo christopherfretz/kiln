@@ -869,10 +869,7 @@ impl Parser<'_, '_> {
                 // [expr.prim.paren]: `>` is an operator inside parentheses.
                 return self.with_greater_op(true, |p| p.parse_paren_rest(loc));
             }
-            TokKind::Punct(Punct::LSquare) => {
-                self.unsupported("lambda expressions", loc);
-                return None;
-            }
+            TokKind::Punct(Punct::LSquare) => return self.parse_lambda_expr(),
             TokKind::Punct(Punct::CaretCaret | Punct::SpliceOpen) => {
                 self.unsupported("reflection", loc);
                 return None;
