@@ -55,6 +55,8 @@ options:
                            default: 2)
                            (each --threshold-* overrides the entries'
                            threshold-* directives, which override the defaults)
+  --mem-limit <MiB>        address-space cap of every measured compile (default:
+                           8192; 0 disables it); kiln's stack reservation is added
   -v, --verbose            print the commands that were run
   -h, --help               this text
 
@@ -85,6 +87,8 @@ pub struct Options {
     pub runs: usize,
     /// `--threshold-*`; they override the entries' `threshold-*:` directives.
     pub thresholds: ThresholdOverrides,
+    /// `--mem-limit`, in MiB; `0` disables the cap.
+    pub mem_limit_mib: u64,
     pub verbose: bool,
     pub paths: Vec<PathBuf>,
 }
@@ -99,6 +103,7 @@ impl Default for Options {
             filter: None,
             runs: 5,
             thresholds: ThresholdOverrides::default(),
+            mem_limit_mib: process::DEFAULT_MEM_LIMIT_MIB,
             verbose: false,
             paths: Vec::new(),
         }
@@ -133,6 +138,11 @@ pub fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Option<Optio
                 let v = value("--runs")?;
                 o.runs =
                     v.parse().ok().filter(|&n| n > 0).ok_or_else(|| format!("bad --runs `{v}`"))?;
+            }
+            "--mem-limit" => {
+                let v = value("--mem-limit")?;
+                o.mem_limit_mib =
+                    v.parse().map_err(|_| format!("bad --mem-limit `{v}` (MiB; 0 disables)"))?;
             }
             f @ ("--threshold-time" | "--threshold-mem" | "--threshold-steps"
             | "--threshold-bytes") => {
@@ -249,6 +259,8 @@ struct Ctx<'a> {
     probe: RssProbe,
     host: Host,
     runs: usize,
+    /// `--mem-limit` (`spec/bench.md` "Resource limits").
+    mem_limit: Option<process::MemLimit>,
     verbose: bool,
 }
 
@@ -301,6 +313,7 @@ pub fn execute(
         probe: RssProbe::detect(&layout.scratch),
         host: Host::current(),
         runs: opts.runs,
+        mem_limit: process::MemLimit::from_mib(opts.mem_limit_mib),
         verbose: opts.verbose,
     };
     let result = measure_and_report(opts, &cx, &entries, &test, oracle.as_ref(), start);
@@ -634,6 +647,14 @@ fn measure(cx: &Ctx<'_>, e: &Entry, spec: &BenchSpec, hash: &str, s: &Subject) -
     if cx.verbose {
         eprintln!("  $ {}", Shown(&cmd));
     }
+    // kiln reserves its compiling thread's stack up front; the cap is on top.
+    let cap = cx.mem_limit.map(|l| {
+        if s.id.kind == CompilerKind::Kiln {
+            l.plus(process::kiln_stack_reservation_mib(&flags))
+        } else {
+            l
+        }
+    });
     let rss_file = cx.layout.scratch.join("rss.txt");
     let mut walls = Vec::with_capacity(cx.runs);
     let mut rss = Vec::with_capacity(cx.runs);
@@ -643,7 +664,7 @@ fn measure(cx: &Ctx<'_>, e: &Entry, spec: &BenchSpec, hash: &str, s: &Subject) -
         if let Some(r) = &report {
             let _ = std::fs::remove_file(r);
         }
-        let m = match process::run_measured(&cmd, &cx.probe, &rss_file, RUN_TIMEOUT) {
+        let m = match process::run_measured(&cmd, &cx.probe, &rss_file, RUN_TIMEOUT, cap) {
             Ok(m) => m,
             Err(err) => return Outcome::Failed(format!("cannot run {}: {err}", s.path.display())),
         };
@@ -652,6 +673,9 @@ fn measure(cx: &Ctx<'_>, e: &Entry, spec: &BenchSpec, hash: &str, s: &Subject) -
             let stderr = out.stderr_str();
             let head: Vec<&str> = stderr.lines().take(5).collect();
             let mut why = out.describe_end();
+            if let Some(c) = cap.filter(|_| out.out_of_memory()) {
+                why = format!("killed (memory limit {} MiB address space): {why}", c.mib);
+            }
             if !head.is_empty() {
                 let _ = write!(why, "\n{}", head.join("\n"));
             }

@@ -25,6 +25,7 @@ cargo xtask bench [options] [paths...]
 | `--threshold-mem <PCT>` | Allowed peak-RSS regression, percent, >= 0. Default 2. |
 | `--threshold-steps <PCT>` | Allowed constexpr `steps` regression, percent, >= 0. Default 0. |
 | `--threshold-bytes <PCT>` | Allowed constexpr `bytes`/`peak_bytes`/`peak_arena`/`frozen_bytes` regression, percent, >= 0. Default 2. |
+| `--mem-limit <MiB>` | Address-space cap of every measured compile. Default 8192; `0` disables it. See "Resource limits". |
 
 A `--threshold-*` option overrides the same entry's `threshold-*:` directive
 (below), which overrides the default. Options apply to every selected entry.
@@ -127,6 +128,16 @@ the fixed 300 s timeout) fails the entry, and its remaining runs are skipped.
   Without it, memory is not measured and the records say `"rss_source": "none"`.
   The child runs in its own process group, so a timeout kills the wrapper and
   the compiler together.
+- **Resource limits**: every run is capped at `--mem-limit` MiB of address
+  space (`RLIMIT_AS`), exactly as in `cargo xtask test` (`spec/harness.md`
+  "Resource limits"): the `sh -c 'ulimit -v ...; exec "$@"'` wrapper, run
+  outside GNU time so the measured process is the compiler; for a kiln
+  subject the cap is raised by kiln's stack reservation (the entry's last
+  `-fkiln-stack-size=`, else 1024 MiB). A run that runs out of memory under
+  the cap fails the entry with `killed (memory limit <cap> MiB address
+  space): <how it ended>` and the first lines of its stderr. The cap bounds
+  address space, not resident memory, so it does not perturb the peak-RSS
+  measurement of a compile within it.
 - **Statistics** over the N samples: `min`, `max`, and `median`, where the
   median is taken after dropping one minimum and one maximum sample when
   N >= 3 (the mean of the two middle samples for an even count). Peak RSS is
@@ -346,7 +357,10 @@ kinds. `recorded` is the timestamp of the results file of the recording run.
 
 - `xtask/src/util/{json,header,process}.rs`: JSON round-trip, foreign and
   malformed input; directive scanning; measured runs (exit status, stderr,
-  RSS, timeout killing the process group, a missing GNU time).
+  RSS, timeout killing the process group, a missing GNU time, the memory cap
+  stopping an allocating process).
+- `xtask/src/bench/tests.rs` `parses_the_command_line`: `--mem-limit` and
+  its default.
 - `xtask/src/bench/entry.rs`: directive defaults, every key, rejected headers,
   source hashes.
 - `xtask/src/util/oven_report.rs`: report parsing, every rejection, located
