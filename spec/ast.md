@@ -506,6 +506,37 @@ needed later). Values of non-constant-context folding (`try_fold`) are
   the outermost `CXXDefaultArgExpr` in scope that has an entry, else the
   `SourceLocExpr`'s own.
 
+### 5.9 Lambdas (WP-075)
+- **`LambdaExpr`** ([expr.prim.lambda]; spec/sema-lambda.md): `a` is its
+  `LambdaId`, an index into `exprs.lambdas: LambdaArena` (side records
+  `kiln_ast::lambda::LambdaData`, `Exprs::lambda_id`); its children are
+  the initializers of the closure's capture members, in member order
+  (clang `capture_inits`). A prvalue of the closure type. Built by
+  `act_on_lambda_end`.
+- **`LambdaData`**: `closure` (the `CXXRecordDecl`), `call_op` (the
+  call operator, or for a generic lambda the pattern of its template),
+  `default` / `default_loc` (`CaptureDefault`), `captures:
+  Vec<LambdaCapture>` (kind `This`/`StarThis`/`ByCopy`/`ByRef`, the
+  variable — an init-capture's own `VarDecl` —, the member `field`,
+  `loc`, pack `ellipsis`, `implicit`, `init`), `inits: Option<ListId>`,
+  `body: Option<StmtId>` (also the call operator's body), `lbracket` /
+  `rbracket`, the bits `explicit_params`, `explicit_result`, `mutable`,
+  and `mangling: LambdaMangling { number, context }` (abi.md §8.9).
+  Written by sema while the lambda is open (§2.4: the record is
+  completed at `}`), immutable after.
+- **Closure classes**: `RecordData.lambda: Option<LambdaId>` names the
+  same record (`DeclArena::set_closure`); `DefinitionBits::LAMBDA` and
+  `LAMBDA_CAPTURES` (a capture-default or a capture). Queries on `Ast`:
+  `closure_lambda(record)`, `call_op_lambda(f)` (the call operator or a
+  specialization of its template), `closure_invoker(record)`, and
+  `closure_thunk(f) -> Option<ClosureThunk>` (`Conversion { target }` /
+  `Invoker { call_op }`: the body-less closure members the Oven and
+  codegen synthesize).
+- **Captured names**: a `DeclRefExpr` to a captured entity carries
+  `ExprFlags::REFERS_TO_ENCLOSING` (clang `refersToEnclosingVariableOrCapture`).
+- Memory: `exprs.lambdas` has its own `MemRow` ("lambdas", captures
+  included).
+
 ## 6. Statements
 ```rust
 struct StmtNode { kind: StmtKind /*u8*/, flags: u8, aux: u16, loc: Loc, a: u32, b: u32 }  // 16 bytes

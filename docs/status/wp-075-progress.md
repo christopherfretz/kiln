@@ -10,8 +10,9 @@ Header probe (`kiln -std=c++26 -stdlib=libc++ -fsyntax-only -ferror-limit=0`):
 1. [x] Non-capturing lambdas end to end (parse, sema closure class, Oven, codegen, dump)
 2. [x] Captures (except packs and braced/paren init-captures)
 3. [x] Generic lambdas
-4. [ ] spec/sema-lambda.md, ast.md/abi.md rows
-5. [ ] Tests (conformance >= 40, codegen corpus, xtask clang-ast LambdaExpr)
+4. [x] Lambdas in templates (LambdaExpr substitution), generic lambdas in templates
+5. [x] spec/sema-lambda.md, ast.md §5.9, abi.md §8.9
+6. [x] Tests (46 conformance, 4 codegen, xtask clang-ast LambdaExpr)
 
 ## Log
 - WIP 1: parser (`kiln_parse/src/lambda.rs`: introducer, specifiers, declarator,
@@ -44,4 +45,17 @@ Header probe (`kiln -std=c++26 -stdlib=libc++ -fsyntax-only -ferror-limit=0`):
   dependent void return deduction deferred to instantiation; local-scope
   qualified names in instantiation notes (`f()::(anonymous class)::...`).
   42 lambda tests (40 pass, 2 xfail: lambdas in templates).
-- Step 3 done. Next: merge main, lambdas in templates (LambdaExpr subst).
+- Step 3 done. Merged main at 25785be.
+- WIP 12-13: lambdas in templates (`templ/subst/lambda.rs`): the lambda is
+  replayed through the parser's actions per instantiation (explicit
+  captures with substituted init-captures, declarator, body; implicit and
+  `this` captures found again). Generic lambdas in templates: substituted
+  template parameter list (`open_substituted_head`), pre-resolved simple
+  captures (`LambdaCaptureSpec.var`), retained function parameter packs,
+  constraints through `member_constraints`. `ci --quick` green at ca79afb
+  (1561/1577; 46 lambda tests, 1 xfail).
+- Step 4-6 done: spec/sema-lambda.md, ast.md §5.9, abi.md §8.9.
+
+## Result
+Header probe after: `<array>` 78, `<string_view>` 142, `<span>` 59
+(main's binary at handback: 82 / 146 / 61).
