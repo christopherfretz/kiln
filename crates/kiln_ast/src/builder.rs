@@ -641,6 +641,20 @@ impl<'a> AstBuilder<'a> {
         self.add(h, kind, Some(ty), payload, replaces)
     }
 
+    /// A deduction guide ([temp.deduct.guide]) with function type `ty`
+    /// (its return type is the guided specialization). Guides are not
+    /// redeclarable; parameters are attached as for [`AstBuilder::function`].
+    pub fn deduction_guide(&mut self, h: DeclHead, ty: QualType, spec: FnSpec) -> DeclId {
+        let payload = Payload::Function(FunctionData {
+            redecl: self.redecl_link(None),
+            params: ListId::EMPTY,
+            body: None,
+            spec,
+            templ: TemplLink::NONE,
+        });
+        self.add(h, DeclKind::CXXDeductionGuide, Some(ty), payload, None)
+    }
+
     /// A function parameter of `func` ([dcl.fct]); `index` is its position.
     /// Parameters are not members of any list or lookup table (§4.3).
     pub fn param(

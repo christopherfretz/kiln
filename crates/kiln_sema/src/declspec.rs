@@ -638,6 +638,9 @@ pub enum SpecialName {
     Conversion(QualType),
     /// `operator @`.
     Operator(OverloadedOperator),
+    /// The template-name of a deduction-guide ([temp.deduct.guide]):
+    /// the class template it is for.
+    DeductionGuide(DeclId),
 }
 
 impl Declarator {

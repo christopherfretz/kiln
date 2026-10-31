@@ -1211,9 +1211,19 @@ impl Parser<'_, '_> {
                 self.parse_special_declarator_id(d);
             } else if let Some(n) = self.ident() {
                 let ctor = self.names_constructor(n, last_qual, d.ctx);
+                let guide = if ctor
+                    || qual.is_some()
+                    || !matches!(d.ctx, DeclaratorContext::File | DeclaratorContext::Member)
+                {
+                    None
+                } else {
+                    self.deduction_guide_at(self.pos())
+                };
                 let l = self.bump().span.lo;
                 if ctor {
                     d.special = Some((SpecialName::Constructor(n), l));
+                } else if let Some(t) = guide {
+                    d.special = Some((SpecialName::DeductionGuide(t), l));
                 } else {
                     d.name = Some((n, l));
                 }
@@ -1842,7 +1852,9 @@ impl Parser<'_, '_> {
             // [class.conv.fct]/1).
             let untyped = !ds.has_type_specifier() && is_untyped_special(&d);
             let base = *base_ty.get_or_insert_with(|| {
-                if untyped {
+                if untyped && is_deduction_guide(&d) {
+                    self.s.plain_auto_type()
+                } else if untyped {
                     QualType::VOID
                 } else if d.invalid && !ds.has_type_specifier() {
                     QualType::ERROR
@@ -2156,10 +2168,20 @@ pub(crate) fn is_untyped_special(d: &Declarator) -> bool {
     matches!(
         d.special,
         Some((
-            SpecialName::Constructor(_) | SpecialName::Destructor(_) | SpecialName::Conversion(_),
+            SpecialName::Constructor(_)
+                | SpecialName::Destructor(_)
+                | SpecialName::Conversion(_)
+                | SpecialName::DeductionGuide(_),
             _
         ))
     )
+}
+
+/// True for a deduction-guide declarator, whose declared return type is
+/// the placeholder its trailing return type replaces
+/// ([temp.deduct.guide]/1, [dcl.fct]/2).
+pub(crate) fn is_deduction_guide(d: &Declarator) -> bool {
+    matches!(d.special, Some((SpecialName::DeductionGuide(_), _)))
 }
 
 /// `constexpr`, `consteval` or `constinit`: at most one of them
