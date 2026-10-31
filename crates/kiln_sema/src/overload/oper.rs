@@ -287,16 +287,11 @@ impl Sema<'_, '_> {
             let captured = active.and_then(|f| self.special.cmp.lookups.get(&f).cloned());
             for name in [Some(op), extra].into_iter().flatten() {
                 let dn = DeclName::operator(name);
-                let found: Vec<(DeclId, DeclId)> = match &captured {
-                    Some(c) => c
-                        .iter()
-                        .copied()
-                        .filter(|&(d, _)| self.ast.decls.get(d).name() == dn)
-                        .collect(),
-                    None => {
-                        let found = self.lookup_operator_name(dn);
-                        found.decls.iter().copied().zip(found.found.iter().copied()).collect()
-                    }
+                let found: Vec<(DeclId, DeclId)> = if let Some(c) = &captured {
+                    c.iter().copied().filter(|&(d, _)| self.ast.decls.get(d).name() == dn).collect()
+                } else {
+                    let found = self.lookup_operator_name(dn);
+                    found.decls.iter().copied().zip(found.found.iter().copied()).collect()
                 };
                 for (d, f) in found {
                     let first = self.ast.first(d);

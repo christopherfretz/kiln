@@ -397,7 +397,9 @@ impl Substituter<'_, '_, '_> {
             if s.is_deleted() {
                 let msg = self.sema.ast.decls.cold.delete_message.get(d).copied();
                 self.sema.act_on_deleted(f, loc, msg);
-            } else if s.defaulted() == kiln_ast::decl::Defaulted::Explicit && friend.is_none() {
+            } else if s.defaulted() == kiln_ast::decl::Defaulted::Explicit
+                && (friend.is_none() || self.sema.cmp_kind(f).is_some())
+            {
                 self.sema.act_on_defaulted(f, loc);
             }
         }
@@ -656,7 +658,13 @@ impl Substituter<'_, '_, '_> {
                     return self.unimplemented("friend templates", loc);
                 }
                 let ctx = DeclaratorContext::Member;
-                self.function_decl(f, ctx, Some(loc)).map(Some)
+                let r = self.function_decl(f, ctx, Some(loc))?;
+                if let FriendTarget::Decl(x) = self.sema.ast.decls.friend_target(r)
+                    && self.sema.ast.instantiated_from(x).is_none()
+                {
+                    self.member_link(x, f);
+                }
+                Ok(Some(r))
             }
         }
     }

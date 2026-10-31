@@ -458,8 +458,8 @@ impl Sema<'_, '_> {
         let mut cur = q;
         for _ in 0..256 {
             match self.ast.types.canonical_view(cur) {
-                TypeView::Auto { deduced: None, .. } => return true,
-                TypeView::DeducedTemplateSpecialization { .. } => return true,
+                TypeView::Auto { deduced: None, .. }
+                | TypeView::DeducedTemplateSpecialization { .. } => return true,
                 TypeView::Pointer(p) | TypeView::LValueRef(p) | TypeView::RValueRef(p) => cur = p,
                 _ => return false,
             }
@@ -553,12 +553,12 @@ impl Sema<'_, '_> {
         };
         let fty =
             self.ast.types.function(QualType::BOOL, &params, info.with_trailing_return(false), exc);
-        let sspec = self.fn_spec(s);
+        let src_spec = self.fn_spec(s);
         let spec = FnSpec::new()
             .with_inline(true)
-            .with_constexpr_kind(sspec.constexpr_kind())
+            .with_constexpr_kind(src_spec.constexpr_kind())
             .with_defaulted(Defaulted::Explicit)
-            .with_explicit_object(sspec.has_explicit_object());
+            .with_explicit_object(src_spec.has_explicit_object());
         let f = if self.ast.decls.get(s).kind() == DeclKind::CXXMethod {
             let h = DeclHead::new(r, eq, loc).flags(DeclFlags::IMPLICIT).access(access);
             self.builder().append_implicit_member(h, DeclKind::CXXMethod, fty, spec)

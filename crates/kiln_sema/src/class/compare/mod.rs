@@ -368,10 +368,9 @@ impl Sema<'_, '_> {
         let at = self.begin_loc(e);
         let from = conv::strip_cv(self, self.ety(e));
         let msg = match n {
-            Narrowing::NotNarrowing | Narrowing::Dependent => return false,
-            // clang ignores float-to-integral conversions here; the
-            // usual arithmetic conversions never make one.
-            Narrowing::Type => return false,
+            // clang ignores float-to-integral conversions (`Type`) here;
+            // the usual arithmetic conversions never make one.
+            Narrowing::NotNarrowing | Narrowing::Dependent | Narrowing::Type => return false,
             Narrowing::Variable => self
                 .diag(DiagId::sema_spaceship_narrowing_var, at)
                 .arg(self.ty_arg(from))

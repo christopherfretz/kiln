@@ -301,7 +301,13 @@ impl Sema<'_, '_> {
                                 .arg(&fname)
                                 .arg(u8::from(prot))
                                 .arg(&callee_name)
-                                .arg(kind)
+                                // The template's last branch is the member
+                                // one (spec/diag.md §2.2 renders it).
+                                .arg(match kind {
+                                    1 => 2u8,
+                                    2 => 1,
+                                    k => k,
+                                })
                                 .arg(&ac_arg)
                                 .arg(&decl)
                         })
@@ -330,29 +336,28 @@ impl Sema<'_, '_> {
                             return CmpAnalysis::DELETED;
                         }
                         let rt = self.non_reference(ret);
-                        match self.cmp_category_of(rt) {
-                            Some(cat) => r.category = cat,
-                            None => {
-                                if cx.diagnose {
-                                    let shown = self.ast.types.unqualified(rt);
-                                    let d = self
-                                        .diag(DiagId::note_defaulted_cmp_cannot_deduce, sub.loc)
-                                        .arg(self.ty_arg(shown))
-                                        .arg(sub.kind)
-                                        .arg(&sub.decl);
-                                    cx.notes.push(d);
-                                    let d = self
-                                        .diag(
-                                            DiagId::note_defaulted_cmp_cannot_deduce_callee,
-                                            self.ast.decls.get(fd).loc(),
-                                        )
-                                        .arg(sub.kind)
-                                        .arg(&sub.decl);
-                                    cx.notes.push(d);
-                                }
-                                self.end_set(set);
-                                return CmpAnalysis::DELETED;
+                        if let Some(cat) = self.cmp_category_of(rt) {
+                            r.category = cat;
+                        } else {
+                            if cx.diagnose {
+                                let shown = self.ast.types.unqualified(rt);
+                                let d = self
+                                    .diag(DiagId::note_defaulted_cmp_cannot_deduce, sub.loc)
+                                    .arg(self.ty_arg(shown))
+                                    .arg(sub.kind)
+                                    .arg(&sub.decl);
+                                cx.notes.push(d);
+                                let d = self
+                                    .diag(
+                                        DiagId::note_defaulted_cmp_cannot_deduce_callee,
+                                        self.ast.decls.get(fd).loc(),
+                                    )
+                                    .arg(sub.kind)
+                                    .arg(&sub.decl);
+                                cx.notes.push(d);
                             }
+                            self.end_set(set);
+                            return CmpAnalysis::DELETED;
                         }
                     }
                 } else if deducing {

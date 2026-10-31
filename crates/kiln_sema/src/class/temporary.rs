@@ -104,7 +104,7 @@ impl Sema<'_, '_> {
         if self.unevaluated == 0
             && !self.in_template()
             && self.is_defaulted_cmp(f)
-            && !self.func.as_ref().is_some_and(|s| self.ast.first(s.decl) == self.ast.first(f))
+            && self.func.as_ref().is_none_or(|s| self.ast.first(s.decl) != self.ast.first(f))
         {
             self.define_defaulted_comparison(f, loc);
         }
