@@ -196,7 +196,12 @@ impl Substituter<'_, '_, '_> {
                 let Some(name) = self.sema.ast.decls.get(m).name().as_ident() else {
                     return self.unimplemented("member access to a special member", loc);
                 };
-                Ok(self.sema.act_on_member(base, name, loc, loc, arrow))
+                // A member template-id `x.f<args>` (§6.4).
+                let targs = match self.sema.ovl.members.get(&e).and_then(|m| m.targs) {
+                    Some(l) => Some(self.args(l, loc)?),
+                    None => None,
+                };
+                Ok(self.sema.act_on_template_member(base, name, targs, false, loc, loc, arrow))
             }
             ExprKind::CXXDependentScopeMemberExpr => {
                 let Some(base) = ExprId::from_raw(n.a()) else {
@@ -205,7 +210,12 @@ impl Substituter<'_, '_, '_> {
                 let name = kiln_source::symbol::Symbol::from_index(n.b());
                 let arrow = n.aux() & 1 != 0;
                 let base = self.member_base(base)?;
-                Ok(self.sema.act_on_member(base, name, loc, loc, arrow))
+                let targs = match self.sema.ast.templates.expr_targs.get(e).copied() {
+                    Some(l) => Some(self.args(l, loc)?),
+                    None => None,
+                };
+                let kw = n.aux() & 2 != 0;
+                Ok(self.sema.act_on_template_member(base, name, targs, kw, loc, loc, arrow))
             }
             ExprKind::DependentScopeDeclRefExpr => {
                 let Some(nns) = kiln_ast::ids::NnsId::try_new(n.a()) else {
@@ -498,10 +508,13 @@ impl Substituter<'_, '_, '_> {
             return Ok(self.sema.act_on_undeclared_call_name(name, n.loc()));
         }
         let r = self.sema.act_on_call_name(name, n.loc());
-        if let Some(t) = targs
-            && self.sema.ast.exprs.get(r).kind() == ExprKind::UnresolvedLookupExpr
-        {
-            let _ = self.sema.ast.templates.expr_targs.insert(r, t);
+        if let Some(t) = targs {
+            if self.sema.ast.exprs.get(r).kind() == ExprKind::UnresolvedLookupExpr {
+                let _ = self.sema.ast.templates.expr_targs.insert(r, t);
+            } else if self.sema.is_member_template_ref(r) {
+                // An implicit member template-id `this->f<T>` (§6.4).
+                return Ok(self.sema.act_on_member_template_args(r, t));
+            }
         }
         Ok(r)
     }

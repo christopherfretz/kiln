@@ -6,12 +6,12 @@
 //! and deduced-return specializations, else at the end of the
 //! translation unit.
 
-use kiln_ast::DeclId;
 use kiln_ast::QualType;
 use kiln_ast::decl::{DeclFlags, DeclKind};
 use kiln_ast::ids::ArgListId;
 use kiln_ast::templates::SpecKind;
 use kiln_ast::types::TypeView;
+use kiln_ast::{DeclId, ExprId};
 use kiln_source::Loc;
 
 use kiln_ast::names::DeclName;
@@ -721,5 +721,87 @@ impl Sema<'_, '_> {
                 self.queue_instantiation(m, name_loc);
             }
         }
+    }
+}
+
+impl Sema<'_, '_> {
+    /// `base.template name<targs>` / `base->template name`
+    /// ([temp.names]/5): on a type-dependent object a
+    /// `CXXDependentScopeMemberExpr`; on any other object the member
+    /// access, which must name a member template
+    /// ([`Self::act_on_member_template_args`] takes `targs`). Also forms
+    /// a dependent member access again at instantiation.
+    #[allow(clippy::too_many_arguments, reason = "the parts of a member template-id")]
+    pub fn act_on_template_member(
+        &mut self,
+        base: ExprId,
+        name: kiln_source::symbol::Symbol,
+        targs: Option<ArgListId>,
+        template_kw: bool,
+        loc: Loc,
+        op_loc: Loc,
+        arrow: bool,
+    ) -> ExprId {
+        if let Some(e) = self.try_dependent_member(base, name, targs, template_kw, loc, arrow) {
+            return e;
+        }
+        let e = self.act_on_member(base, name, loc, op_loc, arrow);
+        if self.is_err_expr(e) {
+            return e;
+        }
+        if !self.is_member_template_ref(e) {
+            if targs.is_none() && !template_kw {
+                return e;
+            }
+            let mut d = self
+                .diag(DiagId::sema_template_kw_refers_to_non_template, loc)
+                .arg(crate::decl::sym_str(self, name));
+            if self.ast.exprs.get(e).kind() == kiln_ast::expr::ExprKind::MemberExpr {
+                let at = self.ast.decls.get(self.ast.exprs.decl(e)).loc();
+                d = d.with_note(self.diag(DiagId::note_declared_non_template, at));
+            }
+            self.emit(d);
+            return self.recover_err(&[e], loc);
+        }
+        match targs {
+            Some(l) => self.act_on_member_template_args(e, l),
+            None => e,
+        }
+    }
+
+    /// The member template-id `e<targs>` of the overloaded member access
+    /// `e` naming a member function template ([temp.names]/3,
+    /// [temp.arg.explicit]): the arguments are recorded for the call.
+    /// Dependent arguments make it a dependent member access
+    /// (`CXXDependentScopeMemberExpr`, clang's type-dependent
+    /// `UnresolvedMemberExpr`) formed again, lookup and all, at
+    /// instantiation.
+    pub fn act_on_member_template_args(&mut self, e: ExprId, targs: ArgListId) -> ExprId {
+        let dependent = self
+            .ast
+            .types
+            .arg_list_flags(targs)
+            .intersects(kiln_ast::types::TypeFlags::DEPENDENT_INSTANTIATION);
+        if !dependent {
+            let _ = self.set_member_template_args(e, targs);
+            return e;
+        }
+        let Some(x) = self.member_overload(e) else { return e };
+        let Some(m) = self.ovl.members.remove(&x) else { return e };
+        let loc = self.ast.exprs.get(x).loc();
+        // `p->f<T>` through `operator->` ([over.ref]/1): the chain is
+        // formed again from the class object at instantiation.
+        let mut base = m.base;
+        while m.arrow
+            && self.ast.exprs.get(base).kind() == kiln_ast::expr::ExprKind::CXXOperatorCallExpr
+            && self.ast.exprs.operator_call_op(base) == kiln_ast::names::OverloadedOperator::Arrow
+        {
+            let l = self.ast.exprs.call_args(base);
+            match self.ast.lists.iter::<ExprId>(l).next() {
+                Some(o) => base = o,
+                None => break,
+            }
+        }
+        self.builder().dependent_member(Some(base), m.arrow, m.name, false, None, Some(targs), loc)
     }
 }

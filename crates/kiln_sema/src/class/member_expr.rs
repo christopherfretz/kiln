@@ -468,7 +468,9 @@ impl Sema<'_, '_> {
         if let Some(m) = method
             && self.unevaluated == 0
         {
-            self.mark_function_referenced(m, loc);
+            // At the member name (clang's `MarkMemberReferenced`).
+            let at = if n.kind() == ExprKind::MemberExpr { n.loc() } else { loc };
+            self.mark_function_referenced(m, at);
         }
         let (ty, vk) = self.call_result(proto.ret(), loc);
         let call = self.builder().member_call(
