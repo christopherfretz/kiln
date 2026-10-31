@@ -412,8 +412,9 @@ pub(crate) struct OverloadScratch {
 /// (spec/sema-overload.md §2.3).
 #[derive(Clone, Debug)]
 pub(crate) struct OvlMember {
-    /// The member name.
-    pub name: kiln_source::symbol::Symbol,
+    /// The member name (an identifier, operator-function-id,
+    /// conversion-function-id, ..., [expr.ref]/1).
+    pub name: kiln_ast::names::DeclName,
     /// The member functions (and member function templates), in
     /// declaration order.
     pub decls: Vec<DeclId>,

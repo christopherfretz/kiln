@@ -321,10 +321,18 @@ impl Sema<'_, '_> {
     /// whether a `this` scope was entered, for
     /// [`Sema::act_on_end_this_scope`].
     pub fn act_on_start_this_scope(&mut self, member: bool, quals: Quals) -> bool {
-        if !member || self.kind_of(self.ctx) != DeclKind::CXXRecord {
+        let class = if member && self.kind_of(self.ctx) == DeclKind::CXXRecord {
+            self.ctx
+        } else if let Some(&(c, depth, _)) = self.declarator_records.last()
+            && depth == self.scopes.len()
+            && self.kind_of(c) == DeclKind::CXXRecord
+        {
+            // After the declarator-id of an out-of-line member
+            // (`auto S::f() -> decltype(this->v)`).
+            c
+        } else {
             return false;
-        }
-        let class = self.ctx;
+        };
         let t = self.this_class_type(class);
         let t = if quals.is_empty() { t } else { self.ast.types.qualify(t, quals) };
         let p = self.ast.types.pointer_to(t);
@@ -343,6 +351,127 @@ impl Sema<'_, '_> {
     /// scopes (see [`Sema::act_on_start_prototype`]).
     pub fn act_on_end_prototype(&mut self) {
         self.prototype_params.pop();
+    }
+
+    /// After a qualified declarator-id `N::name` (clang's
+    /// `ActOnCXXEnterDeclaratorScope`): the rest of the declarator, its
+    /// parameters, array bounds and trailing return type, is looked up in
+    /// the scope of `N` and the contexts between it and the current one
+    /// ([basic.lookup.unqual]/1, [dcl.meaning]). Returns what
+    /// [`Sema::act_on_exit_declarator_scope`] leaves.
+    pub fn act_on_enter_declarator_scope(&mut self, qual: DeclId) -> usize {
+        if !matches!(self.kind_of(qual), DeclKind::CXXRecord | DeclKind::Namespace) {
+            return 0;
+        }
+        let n = self.push_scopes_between(qual, self.ctx);
+        if n > 0 {
+            // The current context is the qualifier's
+            // (clang's `EnterDeclaratorContext`): `X<P...>::` names the
+            // current instantiation there ([temp.dep.type]/1).
+            let c = self.ast.definition(qual).unwrap_or(qual);
+            self.declarator_records.push((c, self.scopes.len(), self.ctx));
+            self.ctx = c;
+        }
+        n
+    }
+
+    /// The type of the decl-specifiers `base` of a declaration whose
+    /// declarator-id is qualified by `d.qualifier` (clang's
+    /// `RebuildDeclaratorInCurrentInstantiation`): a `typename X<P...>::m`
+    /// written before the declarator-id of a member of the class template
+    /// `X` names the member of the current instantiation
+    /// ([temp.dep.type]/6), as it does inside the class.
+    pub fn rebuild_in_current_instantiation(&mut self, base: QualType, d: &Declarator) -> QualType {
+        let Some(qual) = d.qualifier else { return base };
+        if self.kind_of(qual) != DeclKind::CXXRecord {
+            return base;
+        }
+        let TypeView::DependentName { keyword, nns, name } = self.ast.types.view(base.ty()) else {
+            return base;
+        };
+        let kiln_ast::types::Nns::Type { ty, .. } = self.ast.types.nns_view(nns) else {
+            return base;
+        };
+        let TypeView::TemplateSpecialization { name: tn, .. } = self.ast.types.view(ty.ty()) else {
+            return base;
+        };
+        let Some(tmpl) = self.ast.types.template_decl(tn) else { return base };
+        let entered = self.act_on_enter_declarator_scope(qual);
+        let pat = self.current_instantiation(tmpl, ty);
+        self.act_on_exit_declarator_scope(entered);
+        let Some(pat) = pat else { return base };
+        let found = self.lookup_qualified(pat, name, LookupKind::Ordinary);
+        let Some(&m) = found.decls.first() else { return base };
+        if !matches!(
+            self.kind_of(m),
+            DeclKind::Typedef | DeclKind::TypeAlias | DeclKind::CXXRecord | DeclKind::Enum
+        ) {
+            return base;
+        }
+        let t = match self.kind_of(m) {
+            DeclKind::Typedef | DeclKind::TypeAlias => {
+                self.ast.decls.get(m).ty().unwrap_or(QualType::ERROR)
+            }
+            _ => self.tag_type(m),
+        };
+        let t = self.ast.types.elaborated(keyword, Some(nns), t);
+        self.ast.types.qualify(t, base.quals())
+    }
+
+    /// Before the initializer of `v`, declared with a qualified
+    /// declarator-id (clang's `ActOnCXXEnterDeclInitializer`): the scopes
+    /// of its context, as for the rest of its declarator. Returns what
+    /// [`Sema::act_on_exit_declarator_scope`] leaves.
+    pub fn act_on_enter_decl_initializer(&mut self, v: DeclId) -> usize {
+        match self.ast.decls.get(v).ctx() {
+            Some(c) if c != self.ctx => self.act_on_enter_declarator_scope(c),
+            _ => 0,
+        }
+    }
+
+    /// Leaves the scopes [`Sema::act_on_enter_declarator_scope`] entered.
+    pub fn act_on_exit_declarator_scope(&mut self, entered: usize) {
+        if entered == 0 {
+            return;
+        }
+        if let Some(&(_, d, ctx)) = self.declarator_records.last()
+            && d == self.scopes.len()
+        {
+            self.declarator_records.pop();
+            self.ctx = ctx;
+        }
+        for _ in 0..entered {
+            self.scopes.pop();
+        }
+    }
+
+    /// The trailing requires-clause of function declarator `d`: its
+    /// parameters are in scope again ([basic.scope.param]/1), and in a
+    /// member-declaration so is `this` ([expr.prim.this]/2); after a
+    /// qualified declarator-id, so is the scope of its qualifier. Returns
+    /// what [`Sema::act_on_end_trailing_requires`] leaves.
+    pub fn act_on_start_trailing_requires(&mut self, d: &Declarator) -> (usize, bool) {
+        let Some(Chunk::Function { params, quals, .. }) = d.chunks.first() else {
+            return (0, false);
+        };
+        let quals = *quals;
+        let scopes = d.qualifier.map_or(0, |q| self.act_on_enter_declarator_scope(q));
+        let mut frame =
+            PrototypeFrame { depth: self.scopes.len(), params: Vec::new(), index: params.len() };
+        for p in params {
+            if let (Some((n, _)), Some(pd)) = (p.name, p.decl) {
+                frame.params.push((n, pd));
+            }
+        }
+        self.prototype_params.push(frame);
+        (scopes, self.act_on_start_this_scope(d.ctx == DeclaratorContext::Member, quals))
+    }
+
+    /// Leaves the scopes [`Sema::act_on_start_trailing_requires`] entered.
+    pub fn act_on_end_trailing_requires(&mut self, (scopes, this): (usize, bool)) {
+        self.act_on_end_this_scope(this);
+        self.prototype_params.pop();
+        self.act_on_exit_declarator_scope(scopes);
     }
 
     /// Normalizes a parameter list ([dcl.fct]/2): a lone unnamed `void`
@@ -1901,10 +2030,10 @@ impl Sema<'_, '_> {
             // [namespace.memdef]/3: visible to ordinary lookup only if
             // declared outside the class (before or after).
             let visible = prev_ok.is_some_and(|p| {
-                self.ast
-                    .lookup_local(ctx, dname)
-                    .iter_with_flags()
-                    .any(|(x, fl)| x == p && !fl.contains(LookupFlags::ADL_ONLY))
+                self.ast.lookup_local(ctx, dname).iter_with_flags().any(|(x, fl)| {
+                    (x == p || Some(x) == self.ast.described_template(p))
+                        && !fl.contains(LookupFlags::ADL_ONLY)
+                })
             });
             let k = if visible || d.qualifier.is_some() {
                 FriendKind::Declared
@@ -2992,7 +3121,9 @@ impl Sema<'_, '_> {
     pub fn mark_type_referenced(&mut self, d: DeclId) {
         self.ast.decls.set_flags(d, DeclFlags::REFERENCED);
         let first = self.ast.first(d);
-        if first != d {
+        // (Not a class a friend declaration introduced: clang leaves it
+        // unreferenced once a later declaration makes the name visible.)
+        if first != d && self.ast.decls.get(first).misc().friend() != FriendKind::Undeclared {
             self.ast.decls.set_flags(first, DeclFlags::REFERENCED);
         }
     }
@@ -3153,11 +3284,15 @@ impl Sema<'_, '_> {
                         self.emit(msg);
                         prev = None;
                     }
-                } else if use_ == TagUse::Declaration {
+                } else if use_ == TagUse::Declaration
+                    && self.ast.decls.get(p).misc().friend() != FriendKind::Undeclared
+                {
                     // A redeclaration creates no new decl (a deviation:
                     // clang adds a `ClassTemplateDecl` per redeclaration),
                     // but its template head is still checked against the
-                    // template's ([temp.param]/12, /14).
+                    // template's ([temp.param]/12, /14). One of a class
+                    // only a friend declaration introduced makes it
+                    // visible ([namespace.memdef]/3): a new decl (below).
                     self.check_redeclared_class_head(p);
                     return p;
                 }
@@ -3240,6 +3375,9 @@ impl Sema<'_, '_> {
             }
             false
         };
+        if self.has_pending_head() {
+            return self.act_on_friend_class_template(keyword, n, nloc, ns);
+        }
         let found = self.lookup_name(n, LookupKind::Tag).decls;
         let hidden = || {
             self.ast
@@ -3265,6 +3403,64 @@ impl Sema<'_, '_> {
         h.misc = h.misc.with_friend(FriendKind::Undeclared);
         let d = self.builder().record(h, Self::tag_kind_of(keyword), None);
         self.friend_tag = Some(d);
+        d
+    }
+
+    /// `template<class U> friend class X;` ([temp.friend]/1): `X` names
+    /// a class template of the innermost enclosing namespace (its
+    /// injected-class-name is not considered), else declares one there,
+    /// hidden from ordinary lookup ([namespace.memdef]/3). The template is
+    /// left in [`Sema::friend_class_template`] for `act_on_friend`.
+    fn act_on_friend_class_template(
+        &mut self,
+        keyword: TagKeyword,
+        n: Symbol,
+        nloc: Loc,
+        ns: DeclId,
+    ) -> DeclId {
+        let head = self.take_template_head(None);
+        let prev = self
+            .ast
+            .lookup_local(ns, DeclName::ident(n))
+            .iter()
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .find(|&d| is_tag_kind(self.kind_of(d)) || self.kind_of(d) == DeclKind::ClassTemplate);
+        let prev = prev.map(|d| self.pattern_of(d).unwrap_or(d));
+        if let Some(p) = prev {
+            if self.ast.described_template(p).is_some() {
+                if self.tag_matches(p, keyword) {
+                    // A redeclaration of the template, lexically in the
+                    // class (clang's friend `ClassTemplateDecl`); the
+                    // befriended entity is its first declaration.
+                    let mut h = DeclHead::new(ns, DeclName::ident(n), nloc);
+                    h.lexical = Some(self.ctx);
+                    h.misc = h.misc.with_friend(FriendKind::Declared);
+                    self.mark_pattern_next();
+                    let d = self.builder().record(h, Self::tag_kind_of(keyword), Some(p));
+                    self.friend_class_template = self.finish_template_pattern(d);
+                    return d;
+                }
+                let msg = self.diag(DiagId::sema_use_with_wrong_tag, nloc).arg(sym_str(self, n));
+                let msg = self.note_prev(msg, p, false);
+                self.emit(msg);
+            } else if head.is_some() {
+                // clang: "redefinition of 'X' as different kind of symbol".
+                let msg =
+                    self.diag(DiagId::sema_redefinition_different_kind, nloc).arg(sym_str(self, n));
+                let msg = self.note_prev(msg, p, false);
+                self.emit(msg);
+                self.templ.cur = None;
+                return p;
+            }
+        }
+        let mut h = DeclHead::new(ns, DeclName::ident(n), nloc);
+        h.lexical = Some(self.ctx);
+        h.misc = h.misc.with_friend(FriendKind::Undeclared);
+        self.mark_pattern_next();
+        let d = self.builder().record(h, Self::tag_kind_of(keyword), None);
+        self.friend_class_template = self.finish_template_pattern(d);
         d
     }
 
@@ -4194,6 +4390,18 @@ impl Sema<'_, '_> {
             Some(q) => self.lookup_qualified(q, name, LookupKind::Nested),
             None => self.lookup_name(name, LookupKind::Nested),
         };
+        self.nested_name_from_found(prefix, name, &found, loc)
+    }
+
+    /// [`Sema::act_on_nested_name_spelled`] once lookup of `name` (after
+    /// `prefix`) found `found`.
+    pub(crate) fn nested_name_from_found(
+        &mut self,
+        prefix: Option<DeclId>,
+        name: Symbol,
+        found: &crate::lookup::Found,
+        loc: Loc,
+    ) -> Option<(DeclId, DeclId)> {
         let Some(&d) = found.decls.first() else {
             // [basic.lookup.qual]/1 ignores names that are not types,
             // templates or namespaces; one that ordinary lookup finds is
@@ -4288,9 +4496,11 @@ impl Sema<'_, '_> {
         match self.ast.decls.get(q).kind() {
             DeclKind::Namespace => format!("namespace '{}'", self.qualified_decl_name(q)),
             DeclKind::TranslationUnit => "the global namespace".to_owned(),
+            // clang prints the context's qualified name (the canonical
+            // type: `'N::B'`, not `'B' (aka 'N::B')`).
             _ => {
                 let t = self.tag_type(q);
-                self.ty_arg(t)
+                format!("'{}'", self.ty_canonical_str(t))
             }
         }
     }

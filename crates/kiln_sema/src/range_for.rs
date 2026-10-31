@@ -652,11 +652,11 @@ impl Sema<'_, '_> {
         {
             let class = self.ast.definition(rec).unwrap_or(rec);
             let b = self.lookup_in_class(class, begin_sym, LookupKind::Ordinary);
-            if self.diagnose_member_ambiguity(&b, begin_sym, colon) {
+            if self.diagnose_member_ambiguity(&b, DeclName::ident(begin_sym), colon) {
                 return (Status::DiagnosticIssued, Bef::Begin, None);
             }
             let e = self.lookup_in_class(class, end_sym, LookupKind::Ordinary);
-            if self.diagnose_member_ambiguity(&e, end_sym, colon) {
+            if self.diagnose_member_ambiguity(&e, DeclName::ident(end_sym), colon) {
                 return (Status::DiagnosticIssued, Bef::Begin, None);
             }
             members = ((!b.decls.is_empty()).then_some(b), (!e.decls.is_empty()).then_some(e));
@@ -802,7 +802,7 @@ impl Sema<'_, '_> {
             return (Status::Success, Some(call));
         }
         let mut cands = Vec::new();
-        self.adl_lookup(sym, &[range], &mut cands);
+        self.adl_lookup_dn(DeclName::ident(sym), &[range], &mut cands);
         cands.retain(|&(d, _)| !self.ast.decls.get(d).has(DeclFlags::INVALID));
         if cands.is_empty() {
             return (Status::NoViable(Vec::new()), None);
@@ -836,7 +836,7 @@ impl Sema<'_, '_> {
             return (Status::NoViable(notes), None);
         }
         self.end_set(set);
-        let ule = self.build_overload_ref(sym, &[], &[], None, true, None, colon);
+        let ule = self.build_overload_ref(DeclName::ident(sym), &[], &[], None, true, None, colon);
         let call = self.act_on_call(ule, &[range], colon, colon);
         if self.is_err_expr(call) {
             return (Status::DiagnosticIssued, None);

@@ -208,13 +208,11 @@ fn expr_prim_this() {
     p.assert_diag("1:9 error: invalid use of 'this' outside of a non-static member function");
 }
 
-/// [expr.ref]/1: a qualified-id after `.`/`->` is reported unsupported
-/// (no cascade of parse errors).
+/// [expr.ref]/1, /4: a qualified-id after `.`/`->` (WP-121).
 #[test]
 fn expr_ref_qualified_member() {
     let p = parse("struct B { int x; }; struct D : B {}; int f(D d) { return d.B::x; }");
-    p.assert_diag("1:61 error: qualified member access is not supported yet");
-    assert_eq!(p.problems().len(), 1, "{:?}", p.problems());
+    assert!(p.problems().is_empty(), "{:?}", p.problems());
 }
 
 /// [class.pre], [dcl.enum]: a missing `;` after a definition is diagnosed

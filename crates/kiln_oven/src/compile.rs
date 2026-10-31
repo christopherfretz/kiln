@@ -4027,6 +4027,19 @@ impl Compiler<'_> {
         {
             c = skip_parens(ast, ast.exprs.operand(c));
         }
+        // `p->~T()` on a scalar ([expr.prim.id.dtor]/2, [expr.call]/5):
+        // the object expression is evaluated and nothing else happens.
+        // The oven does not track the end of lifetime of an explicitly
+        // destroyed object (as for an explicit destructor call).
+        if ast.exprs.get(c).kind() == ExprKind::CXXPseudoDestructorExpr {
+            let (base, arrow, _) = ast.exprs.pseudo_destructor(c);
+            if arrow {
+                self.rv(base);
+            } else {
+                self.lv_mem(base, Access::Addr);
+            }
+            return self.reg();
+        }
         let direct = (ast.exprs.get(c).kind() == ExprKind::DeclRefExpr
             && ast.decls.get(ast.exprs.decl(c)).kind().is_function())
         .then(|| ast.exprs.decl(c));

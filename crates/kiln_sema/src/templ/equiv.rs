@@ -200,11 +200,15 @@ impl Sema<'_, '_> {
             _ => {}
         }
         if which == 0 && !self.opt_exprs_equivalent(ix.constraint, iy.constraint) {
-            // An unconstrained parameter's diagnostic is at its name: the
-            // parameter's first token is not recorded (clang: the
-            // `class`/`typename` keyword).
-            let at = |s: &Self, c: Option<ExprId>, l: Loc| c.map_or(l, |e| s.begin_loc(e));
-            let (at_x, at_y) = (at(self, ix.constraint, lx), at(self, iy.constraint, ly));
+            // An unconstrained parameter's diagnostic is at its first
+            // token, the `class`/`typename` key (clang's `getBeginLoc`).
+            let at = |s: &Self, c: Option<ExprId>, d: DeclId, l: Loc| {
+                c.map_or_else(
+                    || s.ast.decls.cold.begin_loc.get(d).copied().unwrap_or(l),
+                    |e| s.begin_loc(e),
+                )
+            };
+            let (at_x, at_y) = (at(self, ix.constraint, x, lx), at(self, iy.constraint, y, ly));
             let d = self.diag(DiagId::sema_template_different_type_constraint, at_x);
             let note = self.diag(DiagId::note_template_prev_declaration, at_y).arg(0);
             self.emit(d.with_note(note));

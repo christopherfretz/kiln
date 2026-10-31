@@ -1,0 +1,29 @@
+TranslationUnitDecl
+|-CXXRecordDecl class W definition
+| `-FriendDecl 'class X':'X'
+|   `-CXXRecordDecl parent friend_undeclared class X
+|-CXXRecordDecl referenced class X
+|-VarDecl p 'X *'
+|-ClassTemplateDecl Wrap
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 I
+| `-CXXRecordDecl class Wrap definition
+|   |-FriendDecl
+|   | `-ClassTemplateDecl parent Str
+|   |   |-TemplateTypeParmDecl class depth 1 index 0 C
+|   |   |-TemplateTypeParmDecl class depth 1 index 1 T
+|   |   |-TemplateTypeParmDecl class depth 1 index 2 A
+|   |   `-CXXRecordDecl parent class Str
+|   `-FieldDecl i 'I'
+|-ClassTemplateDecl Str
+| |-TemplateTypeParmDecl class depth 0 index 0 C
+| |-TemplateTypeParmDecl class depth 0 index 1 T
+| | `-TemplateArgument type 'int'
+| |-TemplateTypeParmDecl class depth 0 index 2 A
+| | `-TemplateArgument type 'char'
+| |-CXXRecordDecl class Str
+| `-ClassTemplateSpecializationDecl class Str
+|   |-TemplateArgument type 'char'
+|   |-TemplateArgument type 'int'
+|   `-TemplateArgument type 'char'
+|-TypeAliasDecl S 'Str<char>'
+`-VarDecl q 'Str<char> *'

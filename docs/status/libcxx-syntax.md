@@ -20,21 +20,21 @@ feature. Every header preprocesses identically to clang (see
 
 | header | exit | errors | was (WP-069) | first blocker | main error kinds |
 |---|---:|---:|---:|---|---|
-| `<cstddef>` | 0 | 0 | 45 | none (clean since WP-070b/071) | |
+| `<cstddef>` | 0 | 0 | 45 | none | |
 | `<cstdint>` | 0 | 0 | 0 | none | |
 | `<climits>` | 0 | 0 | 0 | none | |
 | `<cfloat>` | 0 | 0 | 0 | none | |
-| `<cstring>` | 0 | 0 | 10 | none (clean since WP-068a) | |
+| `<cstring>` | 0 | 0 | 10 | none | |
 | `<version>` | 0 | 0 | 0 | none | |
-| `<initializer_list>` | 0 | 0 | 47 | none (clean since WP-070b/071) | |
+| `<initializer_list>` | 0 | 0 | 47 | none | |
 | `<bit>` | 0 | 0 | — | none | |
 | `<limits>` | 0 | 0 | — | none | |
-| `<type_traits>` | 0 | 0 | 431 | none (clean since WP-109) | |
-| `<compare>` | 1 | 48 | 399 | defaulted comparison operators (WP-082) | defaulted comparisons, follow-ons |
-| `<utility>` | 1 | 81 | — | defaulted comparison operators (WP-082) | defaulted comparisons, follow-ons |
-| `<array>` | 1 | 177 | — | `__utility/swap.h:33`: type alias template redefinition with different types (`__swap_result_t`; expression profiles, spec/types.md §7.2) | member exception specifications ×64, constructor selection, friend templates |
-| `<span>` | 1 | 113 | — | defaulted comparison operators (WP-082) | member exception specifications ×28, constructor selection, friend templates |
-| `<string_view>` | 1 | 329 | — | same as `<array>` (`swap.h:33`) | ambiguous overloaded operator ×84, member exception specifications ×63 |
+| `<type_traits>` | 0 | 0 | 431 | none (clean since WP-109, 2026-10-31) | |
+| `<compare>` | 1 | 3 | 399 | `__get_comp_type`: deduced return over discarded `if constexpr` branches in an uninstantiated template (WP-122 item 1) | that error + follow-ons |
+| `<utility>` | 1 | 20 | — | same (WP-122) | same + follow-ons |
+| `<span>` | 1 | 59 | — | same (WP-122) | same + follow-ons |
+| `<array>` | 1 | 78 | — | `x.operator->()` member access through an operator-function name (WP-121) | that + dependent NNS chains, friend templates |
+| `<string_view>` | 1 | 142 | — | same (WP-121) | same |
 
 The single-header counts rose a little: before WP-065 the parser gave
 up on a class at its first constructor or operator (one "special member

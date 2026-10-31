@@ -244,7 +244,7 @@ impl Sema<'_, '_> {
             return None;
         }
         let cands = self.ule_candidates(ule);
-        let name = self.ast.symbols().as_str(self.ast.unresolved_name(ule)).to_owned();
+        let name = self.decl_name_str(self.ast.unresolved_name(ule));
         let loc = self.begin_loc(ule);
         if matches.len() > 1 {
             let msg = self.diag(DiagId::sema_addr_ovl_ambiguous, loc).arg(name);

@@ -906,13 +906,13 @@ impl<'a> AstNames<'a> {
             // `VisitUnresolvedLookupExpr`: `N::name<args>`.
             ExprKind::DependentScopeDeclRefExpr => {
                 write_nns(&ast.types, self, crate::ids::NnsId::new(n.a()), out);
-                self.dependent_name(e, Symbol::from_index(n.b()), out);
+                self.dependent_name(e, DeclName::ident(Symbol::from_index(n.b())), out);
             }
             ExprKind::UnresolvedLookupExpr => {
                 if let Some(&nns) = ast.templates.expr_nns.get(e) {
                     write_nns(&ast.types, self, nns, out);
                 }
-                self.dependent_name(e, Symbol::from_index(n.a()), out);
+                self.dependent_name(e, ast.unresolved_name(e), out);
             }
             // clang's `VisitCXXDependentScopeMemberExpr`.
             ExprKind::CXXDependentScopeMemberExpr => {
@@ -926,7 +926,14 @@ impl<'a> AstNames<'a> {
                 if let Some(&nns) = ast.templates.expr_nns.get(e) {
                     write_nns(&ast.types, self, nns, out);
                 }
-                self.dependent_name(e, Symbol::from_index(n.b()), out);
+                self.dependent_name(e, ast.dependent_member_name(e), out);
+            }
+            // clang's `VisitCXXPseudoDestructorExpr`: `p->~T`.
+            ExprKind::CXXPseudoDestructorExpr => {
+                let (b, arrow, t) = exprs.pseudo_destructor(e);
+                self.expr(b, d, out);
+                out.push_str(if arrow { "->~" } else { ".~" });
+                write_type(&ast.types, self, t, PrintOptions::SUGARED, out);
             }
             _ => out.push_str("..."),
         }
@@ -934,8 +941,8 @@ impl<'a> AstNames<'a> {
 
     /// The name and explicit template arguments of dependent name
     /// expression `e`.
-    fn dependent_name(&self, e: ExprId, name: Symbol, out: &mut String) {
-        self.write_symbol(name, out);
+    fn dependent_name(&self, e: ExprId, name: DeclName, out: &mut String) {
+        self.write_decl_name_value(name, out);
         if let Some(&l) = self.ast.templates.expr_targs.get(e) {
             write_arg_list(&self.ast.types, self, l, out);
         }

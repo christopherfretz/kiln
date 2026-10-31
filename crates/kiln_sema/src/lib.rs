@@ -137,6 +137,10 @@ pub struct Sema<'a, 'sm> {
     /// parameter-declaration-clause being parsed
     /// ([`Sema::act_on_start_prototype`]).
     pub(crate) prototype_params: Vec<decl::PrototypeFrame>,
+    /// The contexts of the qualified declarator-ids being parsed
+    /// ([`Sema::act_on_enter_declarator_scope`]), the scope depth each
+    /// one's scopes end at, and the context to restore.
+    pub(crate) declarator_records: Vec<(DeclId, usize, DeclId)>,
     /// Parameters created by [`Sema::act_on_prototype_param`] that no
     /// function has adopted yet ([`Sema::create_params`]).
     pub(crate) unowned_params: std::collections::HashSet<DeclId>,
@@ -242,6 +246,18 @@ pub struct Sema<'a, 'sm> {
     /// The class the last `friend class X;` declared ([`TagUse::Friend`]),
     /// taken by [`Sema::act_on_friend`] as the `FriendDecl`'s owned tag.
     pub(crate) friend_tag: Option<DeclId>,
+    /// The class template the last `template<..> friend class X;`
+    /// befriended ([temp.friend]/1), taken by [`Sema::act_on_friend`].
+    pub(crate) friend_class_template: Option<DeclId>,
+    /// Default template arguments a template parameter inherits from
+    /// another declaration of its template ([temp.param]/12), keyed by
+    /// the parameter that has none of its own.
+    /// The friend function template specializations of class template
+    /// patterns (`friend bool operator==<>(const X&, const X&);`,
+    /// [temp.friend]/1.3), keyed by their `FriendDecl`: matched against
+    /// their templates per specialization.
+    pub(crate) friend_specs: kiln_source::fx::FxHashMap<DeclId, class::friend::FriendSpec>,
+    pub(crate) inherited_defaults: kiln_source::fx::FxHashMap<DeclId, kiln_ast::types::TemplateArg>,
     /// The `this` type of the default member initializers being parsed,
     /// innermost last, with their fields (`C*`, spec/sema-class.md §2.5).
     pub(crate) nsdmi_this: Vec<(DeclId, QualType)>,
@@ -314,6 +330,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             global_ops: new_delete::GlobalOps::default(),
             braced_args: Vec::new(),
             prototype_params: Vec::new(),
+            declarator_records: Vec::new(),
             unowned_params: std::collections::HashSet::new(),
             decomp_written: std::collections::HashMap::new(),
             declared_returns: kiln_source::fx::FxHashMap::default(),
@@ -344,6 +361,9 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             fn_saved: Vec::new(),
             member_refs: kiln_source::fx::FxHashMap::default(),
             friend_tag: None,
+            friend_class_template: None,
+            inherited_defaults: kiln_source::fx::FxHashMap::default(),
+            friend_specs: kiln_source::fx::FxHashMap::default(),
             nsdmi_this: Vec::new(),
             initializing: None,
             templ: templ::TemplState::default(),
@@ -459,6 +479,12 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             Some(a) => format!("'{s}' (aka '{a}')"),
             None => format!("'{s}'"),
         }
+    }
+
+    /// `q` printed canonically (fully qualified) without quotes.
+    pub fn ty_canonical_str(&self, q: QualType) -> String {
+        let names = names::SemaNames::new(self);
+        print_type(&self.ast.types, &names, q, PrintOptions::CANONICAL)
     }
 
     /// `q` printed without quotes.

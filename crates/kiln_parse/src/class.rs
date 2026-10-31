@@ -12,7 +12,7 @@
 use std::mem;
 
 use kiln_ast::decl::{Access, DeclFlags, DeclKind, FriendTarget, InitStyle};
-use kiln_ast::names::OverloadedOperator;
+use kiln_ast::names::{DeclName, OverloadedOperator};
 use kiln_ast::types::TagKeyword;
 use kiln_ast::{DeclId, QualType};
 use kiln_diag::DiagId;
@@ -1132,6 +1132,7 @@ impl Parser<'_, '_> {
         let mut group = AutoGroup::default();
         loop {
             let mut d = Declarator::new(DeclaratorContext::Member, self.loc());
+            d.friend = ds.friend.is_some();
             self.late_fn = LateFnParts {
                 delay_args: !is_typedef,
                 delay_noexcept: !is_typedef && ds.friend.is_none(),
@@ -1282,8 +1283,12 @@ impl Parser<'_, '_> {
             let decls = &self.s.ast.decls;
             if decls.get(x).kind() == DeclKind::Friend {
                 match decls.friend_target(x) {
-                    FriendTarget::Decl(t) if decls.function(t).is_some() => Some(t),
-                    _ => None,
+                    // A friend function template's body is its pattern's.
+                    FriendTarget::Decl(t) => {
+                        let t = self.s.ast.template_info(t).and_then(|i| i.pattern).unwrap_or(t);
+                        decls.function(t).map(|_| t)
+                    }
+                    FriendTarget::Type { .. } => None,
                 }
             } else {
                 decls.function(x).map(|_| x)
@@ -1467,6 +1472,23 @@ impl Parser<'_, '_> {
         self.bump();
         if let Some(op) = self.parse_operator_symbol() {
             d.special = Some((SpecialName::Operator(op), loc));
+            if self.at(Punct::Less) && d.friend && !self.s.has_pending_head() {
+                // `friend bool operator==<>(const X&, const X&);`
+                // ([temp.friend]/1.3).
+                let t = self.s.friend_spec_template(DeclName::operator(op), d.qualifier);
+                let Some((args, _, r)) = self.parse_template_arg_list() else {
+                    d.invalid = true;
+                    return;
+                };
+                if let Some(t) = t {
+                    d.spec_id = self.s.act_on_specialization_declarator_id(t, &args, loc, r);
+                } else {
+                    let n = DeclName::operator(op);
+                    self.s.act_on_friend_spec_without_template(n, d.qualifier, loc);
+                    d.dropped = true;
+                }
+                return;
+            }
             if self.at(Punct::Less)
                 && (self.s.has_explicit_spec_head() || self.s.has_explicit_inst_head())
                 && let Some(t) = self.s.operator_function_template(op, d.qualifier)

@@ -208,11 +208,11 @@ impl Sema<'_, '_> {
 /// A function template matched by the declarator of an explicit
 /// specialization or instantiation ([temp.deduct.decl]).
 #[derive(Clone, Copy)]
-struct SpecMatch {
+pub(crate) struct SpecMatch {
     /// The specialization deduced.
-    spec: DeclId,
+    pub(crate) spec: DeclId,
     /// The function template it specializes.
-    template: DeclId,
+    pub(crate) template: DeclId,
 }
 
 impl Sema<'_, '_> {
@@ -310,8 +310,16 @@ impl Sema<'_, '_> {
         loc: Loc,
     ) -> Option<SpecMatch> {
         let explicit = d.spec_id.as_ref().map(|s| self.ast.types.arg_list(&s.args));
+        let found = self.prev_candidates_dn(name, d.qualifier);
+        let templates = self.function_templates_in(&found);
+        self.match_function_spec_in(&templates, explicit, name, ty, inst, loc)
+    }
+
+    /// The function templates among `found` (first declarations, once
+    /// each).
+    pub(crate) fn function_templates_in(&self, found: &[DeclId]) -> Vec<DeclId> {
         let mut templates: Vec<DeclId> = Vec::new();
-        for c in self.prev_candidates_dn(name, d.qualifier) {
+        for &c in found {
             if self.kind_of(c) == DeclKind::FunctionTemplate {
                 let c = self.ast.first(c);
                 if !templates.contains(&c) {
@@ -319,9 +327,23 @@ impl Sema<'_, '_> {
                 }
             }
         }
+        templates
+    }
+
+    /// [`Self::match_function_spec`] over the candidate `templates`, with
+    /// the `explicit` template arguments written.
+    pub(crate) fn match_function_spec_in(
+        &mut self,
+        templates: &[DeclId],
+        explicit: Option<ArgListId>,
+        name: DeclName,
+        ty: QualType,
+        inst: bool,
+        loc: Loc,
+    ) -> Option<SpecMatch> {
         let mut matches: Vec<SpecMatch> = Vec::new();
         let mut failures = Vec::new();
-        for &ft in &templates {
+        for &ft in templates {
             match self.deduce_funcaddr(ft, explicit, ty, loc) {
                 Ok(s) => {
                     let sty = self.ast.decls.get(s).ty().unwrap_or(QualType::ERROR);
@@ -757,20 +779,40 @@ impl Sema<'_, '_> {
     pub fn act_on_template_member(
         &mut self,
         base: ExprId,
-        name: kiln_source::symbol::Symbol,
+        name: DeclName,
         targs: Option<ArgListId>,
         template_kw: bool,
         loc: Loc,
         op_loc: Loc,
         arrow: bool,
     ) -> ExprId {
-        if let Some(e) = self.try_dependent_member(base, name, targs, template_kw, loc, arrow) {
+        self.act_on_template_member_q(base, None, name, targs, template_kw, loc, op_loc, arrow)
+    }
+
+    /// [`Sema::act_on_template_member`] with an optional
+    /// nested-name-specifier before the name (`e.N::template f<T>`,
+    /// WP-121).
+    #[allow(clippy::too_many_arguments, reason = "the operands of a member access")]
+    pub fn act_on_template_member_q(
+        &mut self,
+        base: ExprId,
+        qual: Option<crate::using::Qualifier>,
+        name: DeclName,
+        targs: Option<ArgListId>,
+        template_kw: bool,
+        loc: Loc,
+        op_loc: Loc,
+        arrow: bool,
+    ) -> ExprId {
+        if let Some(e) =
+            self.try_dependent_member_q(base, qual, name, targs, template_kw, loc, arrow)
+        {
             if op_loc != loc {
                 let _ = self.ast.templates.member_op_loc.insert(e, op_loc);
             }
             return e;
         }
-        let e = self.act_on_member(base, name, loc, op_loc, arrow);
+        let e = self.act_on_member_q(base, qual, name, loc, op_loc, arrow);
         if self.is_err_expr(e) {
             return e;
         }
@@ -780,7 +822,7 @@ impl Sema<'_, '_> {
             }
             let mut d = self
                 .diag(DiagId::sema_template_kw_refers_to_non_template, loc)
-                .arg(crate::decl::sym_str(self, name));
+                .arg(self.decl_name_str(name));
             if self.ast.exprs.get(e).kind() == kiln_ast::expr::ExprKind::MemberExpr {
                 let at = self.ast.decls.get(self.ast.exprs.decl(e)).loc();
                 d = d.with_note(self.diag(DiagId::note_declared_non_template, at));

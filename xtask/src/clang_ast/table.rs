@@ -123,6 +123,7 @@ pub const TABLE: &[(&str, Disposition)] = &[
     ("NestedRequirement", Keep),
     ("CXXFoldExpr", Keep),
     ("CXXDependentScopeMemberExpr", Keep),
+    ("CXXPseudoDestructorExpr", Keep),
     ("DependentScopeDeclRefExpr", Keep),
     ("CXXUnresolvedConstructExpr", Keep),
     ("UnresolvedLookupExpr", Keep),
@@ -321,7 +322,7 @@ fn specific_keys(kind: &str) -> Option<&'static [&'static str]> {
         "StaticAssertDecl" => &[],
         "IntegerLiteral" | "FloatingLiteral" | "CharacterLiteral" | "StringLiteral"
         | "CXXBoolLiteralExpr" => &["value"],
-        "CXXNullPtrLiteralExpr" | "CXXNoexceptExpr" => &[],
+        "CXXNullPtrLiteralExpr" | "CXXNoexceptExpr" | "CXXPseudoDestructorExpr" => &[],
         // `isPlacement` and `initStyle` are implied by the children.
         "CXXNewExpr" => &[
             "isGlobal",
@@ -565,6 +566,7 @@ pub const M2_KINDS: &[&str] = &[
     "CXXNullPtrLiteralExpr",
     "DeclRefExpr",
     "MemberExpr",
+    "CXXPseudoDestructorExpr",
     "ImplicitCastExpr",
     "CStyleCastExpr",
     "UnaryOperator",

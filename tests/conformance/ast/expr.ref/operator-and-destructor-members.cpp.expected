@@ -1,0 +1,75 @@
+TranslationUnitDecl
+|-CXXRecordDecl referenced struct A definition
+| |-CXXDestructorDecl used ~A 'void () noexcept'
+| |-CXXMethodDecl used operator+= 'int (int)'
+| | `-ParmVarDecl 'int'
+| |-CXXConversionDecl used operator int 'int () const'
+| |-CXXMethodDecl used operator-> 'A *()'
+| `-CXXMethodDecl call 'int ()' implicit-inline
+|   `-CompoundStmt
+|     `-ReturnStmt
+|       `-BinaryOperator 'int' '+'
+|         |-CXXMemberCallExpr 'int'
+|         | |-MemberExpr '<bound member function type>' ->operator+=
+|         | | `-CXXThisExpr 'A *' implicit this
+|         | `-IntegerLiteral 'int' 1
+|         `-CXXMemberCallExpr 'int'
+|           `-MemberExpr '<bound member function type>' ->operator int
+|             `-ImplicitCastExpr 'const A *' <NoOp>
+|               `-CXXThisExpr 'A *' implicit this
+|-TypedefDecl referenced I 'int'
+|-FunctionDecl use 'void (A, A *, I *, int)'
+| |-ParmVarDecl used a 'A' destroyed
+| |-ParmVarDecl used pa 'A *'
+| |-ParmVarDecl used pi 'I *'
+| |-ParmVarDecl used i 'int'
+| `-CompoundStmt
+|   |-CXXMemberCallExpr 'void'
+|   | `-MemberExpr '<bound member function type>' .~A
+|   |   `-DeclRefExpr 'A' lvalue ParmVar 'a' 'A'
+|   |-CXXMemberCallExpr 'void'
+|   | `-MemberExpr '<bound member function type>' ->~A
+|   |   `-ImplicitCastExpr 'A *' <LValueToRValue>
+|   |     `-DeclRefExpr 'A *' lvalue ParmVar 'pa' 'A *'
+|   |-CXXMemberCallExpr 'int'
+|   | |-MemberExpr '<bound member function type>' .operator+=
+|   | | `-DeclRefExpr 'A' lvalue ParmVar 'a' 'A'
+|   | `-IntegerLiteral 'int' 2
+|   |-CXXMemberCallExpr 'int'
+|   | `-MemberExpr '<bound member function type>' ->operator int
+|   |   `-ImplicitCastExpr 'const A *' <NoOp>
+|   |     `-ImplicitCastExpr 'A *' <LValueToRValue>
+|   |       `-DeclRefExpr 'A *' lvalue ParmVar 'pa' 'A *'
+|   |-CXXMemberCallExpr 'A *'
+|   | `-MemberExpr '<bound member function type>' .operator->
+|   |   `-DeclRefExpr 'A' lvalue ParmVar 'a' 'A'
+|   |-CallExpr 'void'
+|   | `-CXXPseudoDestructorExpr '<bound member function type>'
+|   |   `-ImplicitCastExpr 'I *' <LValueToRValue>
+|   |     `-DeclRefExpr 'I *' lvalue ParmVar 'pi' 'I *'
+|   `-CallExpr 'void'
+|     `-CXXPseudoDestructorExpr '<bound member function type>'
+|       `-DeclRefExpr 'int' lvalue ParmVar 'i' 'int'
+|-FunctionTemplateDecl destroy
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| `-FunctionDecl destroy 'void (T *)'
+|   |-ParmVarDecl referenced p 'T *'
+|   `-CompoundStmt
+|     `-CallExpr 'void'
+|       `-CXXPseudoDestructorExpr '<bound member function type>'
+|         `-ImplicitCastExpr 'T *' <LValueToRValue>
+|           `-DeclRefExpr 'T *' lvalue ParmVar 'p' 'T *'
+`-FunctionTemplateDecl ops
+  |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+  `-FunctionDecl ops 'int (T)'
+    |-ParmVarDecl referenced t 'T'
+    `-CompoundStmt
+      `-ReturnStmt
+        `-BinaryOperator '<dependent type>' '+'
+          |-CallExpr '<dependent type>'
+          | |-CXXDependentScopeMemberExpr '<dependent type>' lvalue .operator+=
+          | | `-DeclRefExpr 'T' lvalue ParmVar 't' 'T'
+          | `-IntegerLiteral 'int' 1
+          `-CallExpr '<dependent type>'
+            `-CXXDependentScopeMemberExpr '<dependent type>' lvalue .operator int
+              `-DeclRefExpr 'T' lvalue ParmVar 't' 'T'

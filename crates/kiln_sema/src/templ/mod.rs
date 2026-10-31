@@ -147,6 +147,23 @@ pub struct TemplState {
     /// (an unlinked alias of `<dependent type>`, created on first use;
     /// [`Sema::act_on_nested_name_decltype`]).
     pub(crate) decltype_scope: Option<DeclId>,
+    /// The object scope of a nested-name-specifier after `.`/`->`
+    /// ([basic.lookup.qual.general]/2, WP-121): its first component is
+    /// looked up in the object's class before the expression's context.
+    /// Set by [`Sema::begin_member_qualifier`], taken by the first
+    /// component.
+    pub(crate) member_scope: Option<MemberScope>,
+}
+
+/// The class an object expression names for the lookup of the first
+/// component of a member access's qualifier.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum MemberScope {
+    /// The object's (complete) class.
+    Class(DeclId),
+    /// A type-dependent object: a name not found in the context is
+    /// a dependent member of the object's type.
+    Dependent,
 }
 
 /// The instantiation engine's state (spec/sema-templates.md §11.2).
@@ -337,10 +354,16 @@ impl Sema<'_, '_> {
         kw_loc: Loc,
         pack: bool,
         name: Option<(Symbol, Loc)>,
+        at: Loc,
     ) -> DeclId {
-        let h = self.param_head(name, kw_loc);
+        let h = self.param_head(name, at);
         let (depth, index) = (self.cur_depth(), self.next_param_index());
         let p = self.builder().template_type_parm(h, depth, index, pack, typename_kw);
+        // Its first token, the key or the type-constraint (clang's
+        // `getBeginLoc`; redeclaration diagnostics point there).
+        if kw_loc != h.loc {
+            let _ = self.ast.decls.cold.begin_loc.insert(p, kw_loc);
+        }
         self.push_template_param(p, name);
         p
     }
@@ -354,9 +377,9 @@ impl Sema<'_, '_> {
         cargs: &[TemplateArg],
         loc: Loc,
         pack: bool,
-        name: Option<(Symbol, Loc)>,
+        (name, at): (Option<(Symbol, Loc)>, Loc),
     ) -> DeclId {
-        let p = self.act_on_type_template_param(false, loc, pack, name);
+        let p = self.act_on_type_template_param(false, loc, pack, name, at);
         let ty = self.ast.decls.get(p).ty().unwrap_or(QualType::ERROR);
         let mut c = self.immediately_declared_constraint(concept, ty, cargs, loc);
         if pack {
@@ -435,12 +458,12 @@ impl Sema<'_, '_> {
         &mut self,
         params: TemplateParamListId,
         typename_kw: bool,
-        kw_loc: Loc,
         pack: bool,
         name: Option<(Symbol, Loc)>,
+        at: Loc,
     ) -> DeclId {
         self.act_on_finish_template_decl();
-        let h = self.param_head(name, kw_loc);
+        let h = self.param_head(name, at);
         let (depth, index) = (self.cur_depth(), self.next_param_index());
         let p = self.builder().template_template_parm(h, params, depth, index, pack, typename_kw);
         self.push_template_param(p, name);
@@ -672,7 +695,36 @@ impl Sema<'_, '_> {
             self.check_template_param_list(kind, list, prev);
         }
         let t = self.builder().template_decl(kind, pattern, list, prev);
+        if prev.is_some() {
+            self.merge_template_defaults(t);
+        }
         Some(t)
+    }
+
+    /// Shares the default template arguments across the declarations of
+    /// template `t` ([temp.param]/12: the defaults available are the
+    /// union of those of all declarations), recording each one for the
+    /// parameters at its position that have none of their own.
+    fn merge_template_defaults(&mut self, t: DeclId) {
+        let Some(p) = self.pattern_of(t) else { return };
+        let lists: Vec<Vec<DeclId>> = self
+            .ast
+            .redecls_of(p)
+            .filter_map(|x| self.ast.described_template(x))
+            .map(|x| self.template_params(x))
+            .collect();
+        let n = lists.iter().map(Vec::len).max().unwrap_or(0);
+        for i in 0..n {
+            let own = |q: &DeclId| self.ast.templates.defaults.get(*q).copied();
+            let Some(a) = lists.iter().find_map(|l| l.get(i).and_then(own)) else { continue };
+            for l in &lists {
+                if let Some(&q) = l.get(i)
+                    && self.ast.templates.defaults.get(q).is_none()
+                {
+                    self.inherited_defaults.insert(q, a);
+                }
+            }
+        }
     }
 
     /// The template decl `d` (a template, or the pattern of one) is part
@@ -852,7 +904,12 @@ impl Sema<'_, '_> {
 
     /// The default argument recorded for template parameter `p`.
     pub fn template_default(&self, p: DeclId) -> Option<TemplateArg> {
-        self.ast.templates.defaults.get(p).copied()
+        self.ast
+            .templates
+            .defaults
+            .get(p)
+            .copied()
+            .or_else(|| self.inherited_defaults.get(&p).copied())
     }
 
     /// A declarator-id that is a template-id `tmpl<args>` naming the

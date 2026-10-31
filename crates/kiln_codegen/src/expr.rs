@@ -1731,6 +1731,12 @@ impl Cg<'_> {
                         }
                         break;
                     }
+                    // `p->~T()` on a scalar ([expr.prim.id.dtor]/2): the
+                    // object expression is evaluated; there is no call.
+                    ExprKind::CXXPseudoDestructorExpr => {
+                        self.emit_ignored(ast.exprs.pseudo_destructor(c).0)?;
+                        return Ok(None);
+                    }
                     // `obj.f()` naming a static member function: the object
                     // is evaluated and ignored.
                     ExprKind::MemberExpr if self.is_static_method(ast.exprs.decl(c)) => {

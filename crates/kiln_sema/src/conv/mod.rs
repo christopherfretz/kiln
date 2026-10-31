@@ -721,7 +721,8 @@ fn bind_reference(s: &mut Sema<'_, '_>, e: ExprId, to: QualType) -> Result<ExprI
             let sel = if rq.contains(Quals::VOLATILE) { "1" } else { "0" };
             let f = source_bit_field(s, e);
             let name = f.map_or_else(String::new, |f| format!(" '{}'", s.decl_name(f)));
-            let mut err = ConvError::new(DiagId::sema_reference_bind_to_bitfield, vec![sel.into(), name]);
+            let mut err =
+                ConvError::new(DiagId::sema_reference_bind_to_bitfield, vec![sel.into(), name]);
             if let Some(f) = f {
                 let at = s.ast.decls.get(f).loc();
                 err.notes.push(s.diag(DiagId::note_bitfield_decl, at));

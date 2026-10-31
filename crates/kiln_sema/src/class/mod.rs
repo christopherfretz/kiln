@@ -15,7 +15,7 @@ mod compare;
 mod construct;
 mod ctor_select;
 mod ctorinit;
-mod friend;
+pub(crate) mod friend;
 mod member_expr;
 mod members;
 mod special;

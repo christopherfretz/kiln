@@ -593,6 +593,10 @@ pub struct Declarator {
     /// ([dcl.struct.bind], [dcl.pre]/6): the declarator has no name then
     /// (a ref-qualifier is its only chunk).
     pub decomp: Option<Decomposition>,
+    /// The declarator of a friend declaration ([class.friend]): its
+    /// declarator-id may be a template-id naming a specialization of a
+    /// function template without a template head ([temp.friend]/1.3).
+    pub friend: bool,
 }
 
 /// The bracketed identifier list of a structured binding declaration
@@ -664,6 +668,7 @@ impl Declarator {
             dropped: false,
             spec_id: None,
             decomp: None,
+            friend: false,
         }
     }
 

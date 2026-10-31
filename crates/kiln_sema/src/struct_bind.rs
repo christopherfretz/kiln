@@ -613,9 +613,16 @@ impl Sema<'_, '_> {
             self.act_on_call(m, &[], loc, loc)
         } else {
             let mut found = Vec::new();
-            self.adl_lookup(get, &[e], &mut found);
+            self.adl_lookup_dn(DeclName::ident(get), &[e], &mut found);
             recoverable = !found.is_empty();
-            let ule = self.builder().unresolved_lookup(get, &[], true, None, Some(targs), loc);
+            let ule = self.builder().unresolved_lookup(
+                DeclName::ident(get),
+                &[],
+                true,
+                None,
+                Some(targs),
+                loc,
+            );
             let call = self.act_on_call(ule, &[e], loc, loc);
             // The lookup is argument-dependent only ([dcl.struct.bind]/4),
             // so the function is clang's `IsADLCandidate` (dumped `adl`).
