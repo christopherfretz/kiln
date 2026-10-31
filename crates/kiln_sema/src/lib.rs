@@ -425,6 +425,12 @@ impl<'a, 'sm> Sema<'a, 'sm> {
         }
     }
 
+    /// `q` printed canonically (fully qualified) without quotes.
+    pub fn ty_canonical_str(&self, q: QualType) -> String {
+        let names = names::SemaNames::new(self);
+        print_type(&self.ast.types, &names, q, PrintOptions::CANONICAL)
+    }
+
     /// `q` printed without quotes.
     pub fn ty_str(&self, q: QualType) -> String {
         let names = names::SemaNames::new(self);

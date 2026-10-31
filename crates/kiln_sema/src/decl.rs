@@ -4161,6 +4161,18 @@ impl Sema<'_, '_> {
             Some(q) => self.lookup_qualified(q, name, LookupKind::Nested),
             None => self.lookup_name(name, LookupKind::Nested),
         };
+        self.nested_name_from_found(prefix, name, &found, loc)
+    }
+
+    /// [`Sema::act_on_nested_name_spelled`] once lookup of `name` (after
+    /// `prefix`) found `found`.
+    pub(crate) fn nested_name_from_found(
+        &mut self,
+        prefix: Option<DeclId>,
+        name: Symbol,
+        found: &crate::lookup::Found,
+        loc: Loc,
+    ) -> Option<(DeclId, DeclId)> {
         let Some(&d) = found.decls.first() else {
             // [basic.lookup.qual]/1 ignores names that are not types,
             // templates or namespaces; one that ordinary lookup finds is
@@ -4255,9 +4267,11 @@ impl Sema<'_, '_> {
         match self.ast.decls.get(q).kind() {
             DeclKind::Namespace => format!("namespace '{}'", self.qualified_decl_name(q)),
             DeclKind::TranslationUnit => "the global namespace".to_owned(),
+            // clang prints the context's qualified name (the canonical
+            // type: `'N::B'`, not `'B' (aka 'N::B')`).
             _ => {
                 let t = self.tag_type(q);
-                self.ty_arg(t)
+                format!("'{}'", self.ty_canonical_str(t))
             }
         }
     }

@@ -204,8 +204,19 @@ impl Substituter<'_, '_, '_> {
                     Some(l) => Some(self.args(l, loc)?),
                     None => None,
                 };
+                // `this->B::f()` keeps its qualifier (no virtual call).
+                let q = ex(self)
+                    .decl_ref_extra(e)
+                    .and_then(|x| x.qualifier)
+                    .or_else(|| self.sema.ovl.members.get(&e).and_then(|m| m.nns));
+                let qual = match q {
+                    Some(q) => Some(self.member_qualifier(q, base, arrow, loc)?),
+                    None => None,
+                };
                 let op = self.sema.ast.templates.member_op_loc.get(e).copied().unwrap_or(loc);
-                Ok(self.sema.act_on_template_member(base, name, targs, false, loc, op, arrow))
+                Ok(self
+                    .sema
+                    .act_on_template_member_q(base, qual, name, targs, false, loc, op, arrow))
             }
             ExprKind::CXXPseudoDestructorExpr => {
                 let (base, arrow, destroyed) = ex(self).pseudo_destructor(e);
@@ -222,13 +233,20 @@ impl Substituter<'_, '_, '_> {
                 let name = self.member_name(name, loc)?;
                 let arrow = n.aux() & 1 != 0;
                 let base = self.member_base(base)?;
+                let qual = match self.sema.ast.templates.expr_nns.get(e).copied() {
+                    Some(q) => {
+                        let at = self.sema.ast.templates.expr_begin.get(e).copied().unwrap_or(loc);
+                        Some(self.member_qualifier(q, base, arrow, at)?)
+                    }
+                    None => None,
+                };
                 let targs = match self.sema.ast.templates.expr_targs.get(e).copied() {
                     Some(l) => Some(self.args(l, loc)?),
                     None => None,
                 };
                 let kw = n.aux() & 2 != 0;
                 let op = self.sema.ast.templates.member_op_loc.get(e).copied().unwrap_or(loc);
-                Ok(self.sema.act_on_template_member(base, name, targs, kw, loc, op, arrow))
+                Ok(self.sema.act_on_template_member_q(base, qual, name, targs, kw, loc, op, arrow))
             }
             ExprKind::DependentScopeDeclRefExpr => {
                 let Some(nns) = kiln_ast::ids::NnsId::try_new(n.a()) else {
@@ -442,6 +460,75 @@ impl Substituter<'_, '_, '_> {
                 self.unimplemented("member access to a special member", loc)
             }
             _ => Ok(name),
+        }
+    }
+
+    /// The substituted qualifier of a member access on the substituted
+    /// object `base`: a leading dependent `name::` (not found where the
+    /// template was defined) is looked up in the object's class now
+    /// ([basic.lookup.qual.general]/2, WP-121).
+    fn member_qualifier(
+        &mut self,
+        n: kiln_ast::ids::NnsId,
+        base: ExprId,
+        arrow: bool,
+        loc: Loc,
+    ) -> SubstResult<crate::using::Qualifier> {
+        let (ctx, nns) = self.member_nns(n, base, arrow, loc)?;
+        Ok(crate::using::Qualifier { ctx, nns, loc })
+    }
+
+    fn member_nns(
+        &mut self,
+        n: kiln_ast::ids::NnsId,
+        base: ExprId,
+        arrow: bool,
+        loc: Loc,
+    ) -> SubstResult<(DeclId, kiln_ast::ids::NnsId)> {
+        match self.sema.ast.types.nns_view(n) {
+            Nns::Identifier { prefix: None, name } => {
+                let bt = self.sema.ety(base);
+                let obj = if arrow { self.sema.ast.types.pointee(bt) } else { Some(bt) };
+                let Some(rec) = obj.and_then(|o| self.sema.ast.types.as_record(o)) else {
+                    let d = self
+                        .sema
+                        .diag(kiln_diag::DiagId::sema_undeclared_var_use, loc)
+                        .arg(self.sema.ast.symbols().as_str(name).to_owned());
+                    self.sema.emit(d);
+                    return Err(SubstFail);
+                };
+                let def = self.sema.ast.definition(rec).unwrap_or(rec);
+                let found = self.sema.lookup_in_class(def, name, crate::lookup::LookupKind::Nested);
+                let Some((c, spelled)) = self.sema.nested_name_from_found(None, name, &found, loc)
+                else {
+                    return Err(SubstFail);
+                };
+                Ok((c, self.sema.nns_component(None, c, spelled)))
+            }
+            Nns::Identifier { prefix: Some(p), name } if self.rooted_in_member(p) => {
+                let (pc, pn) = self.member_nns(p, base, arrow, loc)?;
+                let Some((c, spelled)) = self.sema.act_on_nested_name_spelled(Some(pc), name, loc)
+                else {
+                    return Err(SubstFail);
+                };
+                Ok((c, self.sema.nns_component(Some(pn), c, spelled)))
+            }
+            _ => {
+                let q = self.nns(n, loc)?;
+                Ok((self.nns_context(q, loc)?, q))
+            }
+        }
+    }
+
+    /// True if specifier `n` starts with a dependent `name::` of a
+    /// member access's object scope.
+    fn rooted_in_member(&self, mut n: kiln_ast::ids::NnsId) -> bool {
+        loop {
+            match self.sema.ast.types.nns_view(n) {
+                Nns::Identifier { prefix: None, .. } => return true,
+                Nns::Identifier { prefix: Some(p), .. } => n = p,
+                _ => return false,
+            }
         }
     }
 

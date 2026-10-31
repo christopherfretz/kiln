@@ -20,6 +20,7 @@ use crate::Sema;
 use crate::decl::sym_str;
 use crate::lookup::LookupKind;
 use crate::scope::{Scope, ScopeKind};
+use crate::templ::MemberScope;
 
 /// What a template-id names ([temp.names]/3-8).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -78,9 +79,88 @@ impl Sema<'_, '_> {
             let n = self.ast.types.nns(Nns::Identifier { prefix: Some(pn), name });
             return Some((p, n));
         }
+        let scope = self.templ.member_scope.take();
+        if prefix.is_none()
+            && let Some(scope) = scope
+            && let Some(r) = self.member_qualifier_first(scope, name, loc)
+        {
+            return r;
+        }
         let (ctx, spelled) = self.act_on_nested_name_spelled(prefix.map(|p| p.0), name, loc)?;
         let n = self.nns_component(prefix.map(|p| p.1), ctx, spelled);
         Some((ctx, n))
+    }
+
+    /// Starts the nested-name-specifier of a member access `base.N::m` /
+    /// `base->N::m`: its first component is looked up in the object's
+    /// class, then in the context ([basic.lookup.qual.general]/2). Ended
+    /// by [`Sema::end_member_qualifier`].
+    pub fn begin_member_qualifier(&mut self, base: ExprId, arrow: bool) {
+        let bt = self.ety(base);
+        let obj = if self.is_err_expr(base) {
+            None
+        } else if arrow {
+            if self.ast.types.is_pointer(bt) {
+                self.ast.types.pointee(bt)
+            } else if self.ast.types.is_dependent(bt) {
+                Some(QualType::DEPENDENT)
+            } else {
+                None
+            }
+        } else {
+            Some(bt)
+        };
+        self.templ.member_scope = obj.and_then(|o| {
+            if let Some(r) = self.ast.types.as_record(o) {
+                Some(MemberScope::Class(self.ast.definition(r).unwrap_or(r)))
+            } else if self.ast.types.is_dependent(o) {
+                Some(MemberScope::Dependent)
+            } else {
+                None
+            }
+        });
+    }
+
+    /// Ends [`Sema::begin_member_qualifier`].
+    pub fn end_member_qualifier(&mut self) {
+        self.templ.member_scope = None;
+    }
+
+    /// The first component `name::` of a member access's qualifier in
+    /// object scope `scope`: a type or template found in the object's
+    /// class; for a dependent object, a name found nowhere is a
+    /// dependent `name::` (clang's `ActOnCXXNestedNameSpecifier` with a
+    /// dependent object type). `None` to use ordinary lookup.
+    fn member_qualifier_first(
+        &mut self,
+        scope: MemberScope,
+        name: Symbol,
+        loc: Loc,
+    ) -> Option<Option<(DeclId, NnsId)>> {
+        let dependent_class = match scope {
+            MemberScope::Class(c) => {
+                let found = self.lookup_in_class(c, name, LookupKind::Nested);
+                if !found.decls.is_empty() {
+                    let r = self.nested_name_from_found(None, name, &found, loc).map(
+                        |(ctx, spelled)| {
+                            let n = self.nns_component(None, ctx, spelled);
+                            (ctx, n)
+                        },
+                    );
+                    return Some(r);
+                }
+                self.is_dependent_type(self.tag_type(c))
+            }
+            MemberScope::Dependent => true,
+        };
+        if !dependent_class
+            || !self.lookup_name(name, LookupKind::Nested).decls.is_empty()
+            || !self.lookup_name(name, LookupKind::Ordinary).decls.is_empty()
+        {
+            return None;
+        }
+        let n = self.ast.types.nns(Nns::Identifier { prefix: None, name });
+        Some(Some((self.decltype_scope_marker(), n)))
     }
 
     /// `decltype(e)::`, the first component of a nested-name-specifier
@@ -901,22 +981,52 @@ impl Sema<'_, '_> {
         loc: Loc,
         arrow: bool,
     ) -> Option<ExprId> {
+        self.try_dependent_member_q(base, None, name, targs, template_kw, loc, arrow)
+    }
+
+    /// [`Sema::try_dependent_member`] with an optional qualifier
+    /// (`t.N::m`): a dependent qualifier ([temp.dep.type]/6) also makes
+    /// the access dependent, and the specifier is kept for substitution
+    /// (WP-121).
+    #[allow(clippy::too_many_arguments, reason = "the operands of a member access")]
+    pub(crate) fn try_dependent_member_q(
+        &mut self,
+        base: ExprId,
+        qual: Option<crate::using::Qualifier>,
+        name: DeclName,
+        targs: Option<ArgListId>,
+        template_kw: bool,
+        loc: Loc,
+        arrow: bool,
+    ) -> Option<ExprId> {
         let bt = self.ety(base);
-        if !self.ast.types.is_dependent(bt) {
+        let dep_qual = qual.is_some_and(|q| self.is_dependent_ctx(q.ctx));
+        if !dep_qual && !self.ast.types.is_dependent(bt) {
             return None;
         }
         // A member of the current instantiation found by lookup is an
         // ordinary member access ([temp.dep.expr]/5, clang's MemberExpr).
-        if targs.is_none() && !template_kw {
+        if targs.is_none() && !template_kw && !dep_qual {
             let obj = if arrow {
                 self.pointee_sugared(bt).filter(|_| self.ast.types.is_pointer(bt))
             } else {
                 Some(bt)
             };
-            if let Some(rec) = obj.and_then(|o| self.ast.types.as_record(o))
-                && self.lookup_in_class_dn(rec, name, LookupKind::Ordinary).decls.len() == 1
-            {
-                return None;
+            if let Some(rec) = obj.and_then(|o| self.ast.types.as_record(o)) {
+                let found = match qual {
+                    Some(q) => {
+                        let def = self.ast.definition(rec).unwrap_or(rec);
+                        if self.qualifier_names_base(q.ctx, def) {
+                            self.lookup_qualified_dn(q.ctx, name, LookupKind::Ordinary).decls.len()
+                        } else {
+                            0
+                        }
+                    }
+                    None => self.lookup_in_class_dn(rec, name, LookupKind::Ordinary).decls.len(),
+                };
+                if found == 1 {
+                    return None;
+                }
             }
         }
         let b = if arrow && !self.is_dependent_overloadable(bt) {
@@ -924,7 +1034,12 @@ impl Sema<'_, '_> {
         } else {
             base
         };
-        Some(self.builder().dependent_member(Some(b), arrow, name, template_kw, None, targs, loc))
+        let nns = qual.map(|q| q.nns);
+        let e = self.builder().dependent_member(Some(b), arrow, name, template_kw, nns, targs, loc);
+        if let Some(q) = qual {
+            let _ = self.ast.templates.expr_begin.insert(e, q.loc);
+        }
+        Some(e)
     }
     /// Parameter `p` (the `idx`th) of the requires-expression whose body
     /// is `body` ([expr.prim.req.general]/4): a `ParmVarDecl` in the body,

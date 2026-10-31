@@ -2967,10 +2967,25 @@ impl Sema<'_, '_> {
         op_loc: Loc,
         arrow: bool,
     ) -> ExprId {
+        self.act_on_member_q(base, None, name, loc, op_loc, arrow)
+    }
+
+    /// [`Sema::act_on_member_dn`] with an optional nested-name-specifier
+    /// before the name (`e.N::m`, `p->B::f`, `e.::N::m`; [expr.ref]/4,
+    /// WP-121).
+    pub fn act_on_member_q(
+        &mut self,
+        base: ExprId,
+        qual: Option<crate::using::Qualifier>,
+        name: DeclName,
+        loc: Loc,
+        op_loc: Loc,
+        arrow: bool,
+    ) -> ExprId {
         if self.is_err_expr(base) {
             return self.recover_err(&[base], loc);
         }
-        if let Some(e) = self.try_dependent_member(base, name, None, false, loc, arrow) {
+        if let Some(e) = self.try_dependent_member_q(base, qual, name, None, false, loc, arrow) {
             if op_loc != loc {
                 let _ = self.ast.templates.member_op_loc.insert(e, op_loc);
             }
@@ -3049,7 +3064,7 @@ impl Sema<'_, '_> {
             self.emit(self.incomplete_note(msg, obj_ty));
             return self.recover_err(&[base], loc);
         };
-        self.member_access(base, b, obj_ty, def, arrow, name, loc)
+        self.member_access(base, b, obj_ty, def, arrow, name, qual, loc)
     }
 
     /// A name declared by an anonymous union outside a class

@@ -14,7 +14,9 @@ use kiln_diag::DiagId;
 use kiln_source::Loc;
 
 use crate::Sema;
-use crate::conv::bases::{BaseSearch, ambiguous_paths_string, find_base, path_list, same_class};
+use crate::conv::bases::{
+    BaseSearch, ambiguous_paths_string, find_base, is_derived_from, path_list, same_class,
+};
 use crate::conv::{self};
 use crate::expr::CallCallee;
 use crate::init::InitList;
@@ -146,20 +148,42 @@ impl Sema<'_, '_> {
         def: DeclId,
         arrow: bool,
         name: kiln_ast::names::DeclName,
+        qual: Option<crate::using::Qualifier>,
         loc: Loc,
     ) -> ExprId {
-        let found = self.lookup_in_class_dn(def, name, LookupKind::Ordinary);
+        // `e.N::m` ([expr.ref]/4, [basic.lookup.qual]/1): `m` is looked
+        // up in the qualifier's scope, which must be the object's class
+        // or one of its bases.
+        let look = qual.map_or(def, |q| q.ctx);
+        let found = match qual {
+            Some(q) => self.lookup_qualified_dn(q.ctx, name, LookupKind::Ordinary),
+            None => self.lookup_in_class_dn(def, name, LookupKind::Ordinary),
+        };
         if self.diagnose_member_ambiguity(&found, name, loc) {
             return self.recover_err(&[base], loc);
         }
         let Some(&m) = found.decls.first() else {
-            let msg = self
-                .diag(DiagId::sema_no_member, loc)
-                .arg(self.decl_name_str(name))
-                .arg(self.ty_arg(obj_ty));
+            let desc = match qual {
+                Some(q) => self.qualifier_desc(q.ctx),
+                None => self.ty_arg(obj_ty),
+            };
+            let msg =
+                self.diag(DiagId::sema_no_member, loc).arg(self.decl_name_str(name)).arg(desc);
             self.emit(msg);
             return self.recover_err(&[base], loc);
         };
+        if let Some(q) = qual
+            && !self.qualifier_names_base(q.ctx, def)
+        {
+            // clang's `CheckQualifiedMemberReference`.
+            let msg = self
+                .diag(DiagId::sema_qualified_member_of_unrelated, loc)
+                .arg(format!("'{}'", self.qualified_decl_name(m)))
+                .arg(self.ty_arg(obj_ty));
+            self.emit(msg);
+            return self.recover_err(&[base], loc);
+        }
+        let nns = qual.map(|q| q.nns);
         if found.decls.len() > 1 || self.kind_of(m) == DeclKind::FunctionTemplate {
             if !self.is_member_overload_set(&found.decls) {
                 self.unsupported("this kind of overloaded member access", loc);
@@ -172,12 +196,12 @@ impl Sema<'_, '_> {
                 found: (0..found.decls.len())
                     .map(|i| found.found.get(i).copied().unwrap_or(found.decls[i]))
                     .collect(),
-                naming: found.naming.unwrap_or(def),
+                naming: found.naming.unwrap_or(look),
                 obj_ty,
                 def,
                 base: b,
                 arrow,
-                nns: None,
+                nns,
                 implicit: false,
                 targs: None,
             };
@@ -197,10 +221,17 @@ impl Sema<'_, '_> {
             self.emit(msg);
             return self.recover_err(&[base], loc);
         }
-        let naming = found.naming.unwrap_or(def);
+        let naming = found.naming.unwrap_or(look);
         let via = found.found.first().copied().unwrap_or(m);
         self.check_member_access(via, naming, Some(def), loc);
-        self.member_of_object(b, obj_ty, def, arrow, m, found.shadow(0), None, loc)
+        self.member_of_object(b, obj_ty, def, arrow, m, found.shadow(0), nns, loc)
+    }
+
+    /// True if qualifier context `ctx` names class `def` or one of its
+    /// bases ([expr.ref]/4: a qualified member of the object's class).
+    pub(crate) fn qualifier_names_base(&self, ctx: DeclId, def: DeclId) -> bool {
+        self.kind_of(ctx) == DeclKind::CXXRecord
+            && (self.ast.first(ctx) == self.ast.first(def) || is_derived_from(self, def, ctx))
     }
 
     /// `base.~name` / `base->~name` ([expr.ref]/1 with a destructor name,
@@ -382,7 +413,7 @@ impl Sema<'_, '_> {
             self.ensure_implicit(def, crate::class::special::SpecialKind::Dtor);
             let canon = self.ast.types.canonical(self.class_type(def)).ty();
             let dn = self.ast.names.destructor(canon);
-            return self.member_access(base, b, obj_ty, def, arrow, dn, loc);
+            return self.member_access(base, b, obj_ty, def, arrow, dn, None, loc);
         }
         if !self.is_scalar(obj_ty) {
             let msg = self

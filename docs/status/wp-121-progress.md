@@ -35,3 +35,17 @@ Updated: 2026-10-31
 
 ## Evidence
 - Item 1 `cargo xtask ci --quick`: corpus (kiln) 1500 passed; 0 failed; 15 xfail; 0 xpass (1515 tests; baseline 1496/1511).
+- libc++ probe (`#include <h>`, `-fsyntax-only -ferror-limit=0`, error count):
+
+  | header | baseline | after 1 |
+  |---|---|---|
+  | array | 83 | 73 |
+  | string_view | 147 | 136 |
+  | span | 62 | 54 |
+  | utility | 23 | 22 |
+
+  First blockers after item 1:
+  - array: `__iterator/concepts.h:128` dependent nested name specifier (item 3).
+  - string_view, span, utility: `common_comparison_category.h:44` range-for (WP-089),
+    then lambdas (WP-075).
+  - span: `bounded_iter.h:99` friend templates (item 4).

@@ -571,6 +571,7 @@ diag_ids! {
     sema_unexpected_typedef_ident = Error (1) "unexpected type name '{0}': expected expression";
     sema_unknown_typename = Error (1) "unknown type name '{0}'";
     sema_no_member = Error (2) "no member named '{0}' in {1}";
+    sema_qualified_member_of_unrelated = Error (2) "{0} is not a member of class {1}";
     sema_ambiguous_reference = Error (1) "reference to '{0}' is ambiguous";
     note_ambiguous_candidate = Note (1) "candidate found by name lookup is '{0}'";
     sema_expected_class_or_namespace = Error (1) "{0} is not a class, namespace, or enumeration";

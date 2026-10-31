@@ -120,6 +120,23 @@ pub struct TemplState {
     /// (an unlinked alias of `<dependent type>`, created on first use;
     /// [`Sema::act_on_nested_name_decltype`]).
     pub(crate) decltype_scope: Option<DeclId>,
+    /// The object scope of a nested-name-specifier after `.`/`->`
+    /// ([basic.lookup.qual.general]/2, WP-121): its first component is
+    /// looked up in the object's class before the expression's context.
+    /// Set by [`Sema::begin_member_qualifier`], taken by the first
+    /// component.
+    pub(crate) member_scope: Option<MemberScope>,
+}
+
+/// The class an object expression names for the lookup of the first
+/// component of a member access's qualifier.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum MemberScope {
+    /// The object's (complete) class.
+    Class(DeclId),
+    /// A type-dependent object: a name not found in the context is
+    /// a dependent member of the object's type.
+    Dependent,
 }
 
 /// The instantiation engine's state (spec/sema-templates.md §11.2).

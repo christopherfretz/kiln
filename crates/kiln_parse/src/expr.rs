@@ -767,7 +767,24 @@ impl Parser<'_, '_> {
     /// already consumed): `[template] id-expression` or a
     /// pseudo-destructor-name ([expr.ref]/1, [expr.prim.id.dtor]).
     fn parse_member_access_suffix(&mut self, e: ExprId, loc: Loc, arrow: bool) -> PExpr {
-        let template_kw = self.eat_kw(Kw::Template).is_some();
+        let mut template_kw = self.eat_kw(Kw::Template).is_some();
+        // `e.N::m`, `p->B::f`, `e.::N::m` ([expr.ref]/1 with a
+        // qualified-id; [basic.lookup.qual.general]/2 looks the first
+        // component up in the object's class, then here).
+        let qual = if self.at_member_qualifier() {
+            self.s.begin_member_qualifier(e, arrow);
+            let q = self.parse_nested_name_nns();
+            self.s.end_member_qualifier();
+            let Ok(q) = q else { return None };
+            template_kw |= q.is_some() && self.eat_kw(Kw::Template).is_some();
+            q
+        } else {
+            None
+        };
+        if qual.is_some() && self.at(Punct::Tilde) {
+            self.unsupported("a qualified destructor name", self.loc());
+            return None;
+        }
         if self.at(Punct::Tilde) {
             // `p->~T()` / `x.~T()`.
             let tl = self.bump().span.lo;
@@ -781,14 +798,6 @@ impl Parser<'_, '_> {
                 return None;
             }
             return Some(self.s.act_on_member_destructor(e, name, tl, nl, loc, arrow));
-        }
-        // `e.N::m` ([expr.ref]/1 with a qualified-id): sema's
-        // `act_on_member` takes no nested-name-specifier yet.
-        if self.at(Punct::ColonColon)
-            || (self.ident().is_some() && self.peek_is(1, Punct::ColonColon))
-        {
-            self.unsupported("qualified member access", self.loc());
-            return None;
         }
         let nl = self.loc();
         let name = if self.at_kw(Kw::Operator) {
@@ -811,9 +820,11 @@ impl Parser<'_, '_> {
             } else {
                 None
             };
-            return Some(self.s.act_on_template_member(e, name, targs, true, nl, loc, arrow));
+            return Some(
+                self.s.act_on_template_member_q(e, qual, name, targs, true, nl, loc, arrow),
+            );
         }
-        let mut e = self.s.act_on_member_dn(e, name, nl, loc, arrow);
+        let mut e = self.s.act_on_member_q(e, qual, name, nl, loc, arrow);
         // `e.f<args>` naming a member function template ([temp.names]/3).
         if self.at(Punct::Less) && self.s.is_member_template_ref(e) {
             let (args, _, _) = self.parse_template_arg_list()?;
@@ -821,6 +832,26 @@ impl Parser<'_, '_> {
             e = self.s.act_on_member_template_args(e, l);
         }
         Some(e)
+    }
+
+    /// True at a nested-name-specifier after `.`/`->`: `::`, `N::`,
+    /// `X<args>::` or `decltype(e)::`.
+    fn at_member_qualifier(&mut self) -> bool {
+        if self.at(Punct::ColonColon) || self.decltype_scope_end(self.pos()).is_some() {
+            return true;
+        }
+        if self.ident().is_none() {
+            return false;
+        }
+        if self.peek_is(1, Punct::ColonColon) {
+            return true;
+        }
+        self.peek_is(1, Punct::Less)
+            && matches!(
+                self.skip_template_args(self.pos() + 1),
+                Some((close, false))
+                    if self.tok_at(close + 1).kind == TokKind::Punct(Punct::ColonColon)
+            )
     }
 
     /// An unqualified operator- or conversion-function-id as a primary

@@ -764,13 +764,33 @@ impl Sema<'_, '_> {
         op_loc: Loc,
         arrow: bool,
     ) -> ExprId {
-        if let Some(e) = self.try_dependent_member(base, name, targs, template_kw, loc, arrow) {
+        self.act_on_template_member_q(base, None, name, targs, template_kw, loc, op_loc, arrow)
+    }
+
+    /// [`Sema::act_on_template_member`] with an optional
+    /// nested-name-specifier before the name (`e.N::template f<T>`,
+    /// WP-121).
+    #[allow(clippy::too_many_arguments, reason = "the operands of a member access")]
+    pub fn act_on_template_member_q(
+        &mut self,
+        base: ExprId,
+        qual: Option<crate::using::Qualifier>,
+        name: DeclName,
+        targs: Option<ArgListId>,
+        template_kw: bool,
+        loc: Loc,
+        op_loc: Loc,
+        arrow: bool,
+    ) -> ExprId {
+        if let Some(e) =
+            self.try_dependent_member_q(base, qual, name, targs, template_kw, loc, arrow)
+        {
             if op_loc != loc {
                 let _ = self.ast.templates.member_op_loc.insert(e, op_loc);
             }
             return e;
         }
-        let e = self.act_on_member_dn(base, name, loc, op_loc, arrow);
+        let e = self.act_on_member_q(base, qual, name, loc, op_loc, arrow);
         if self.is_err_expr(e) {
             return e;
         }
