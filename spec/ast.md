@@ -167,7 +167,7 @@ Option<DeclId>, group: RedeclGroupId }`). `T` = may be templated (§8.2).
 | types | `Typedef`R, `TypeAlias`R T, `Enum`★R T (scoped, fixed underlying type, `int_type`, promotion type), `EnumConstant` (value: `ConstValueId`), `CXXRecord`★R T (struct/class/union; lambda closure bit), `ClassTemplateSpecialization`★R, `ClassTemplatePartialSpecialization`★R |
 | members | `Field` (bit-width `ExprId`, default member init, mutable, `[[no_unique_address]]`), `IndirectField` (chain into anonymous unions), `AccessSpec` (no payload: the access is `misc.access`), `Friend` (no payload: a friend type is `DeclNode.ty` and `data` the raw `DeclId` of the class its elaborated-type-specifier first declared, or 0; a befriended function or class has `ty` None and `data` its `DeclId` — `Decls::friend_target` → `FriendTarget::{Decl, Type { ty, owned_tag }}`; P2893 pack), `FriendTemplate` |
 | functions | `Function`R T, `CXXMethod`R T, `CXXConstructor`R T, `CXXDestructor`R T, `CXXConversion`R T, `CXXDeductionGuide` T |
-| variables | `Var`R T, `ParmVar`, `ImplicitParam` (`this`, coroutine frame), `Decomposition` (structured bindings: `bindings: ListId`; P1061 pack), `Binding` (`binding: ExprId`, holding var for tuple-like), `VarTemplateSpecialization`R, `VarTemplatePartialSpecialization`R |
+| variables | `Var`R T, `ParmVar`, `ImplicitParam` (`this`, coroutine frame), `Binding` (one structured-binding name; no payload: its expression and holding variable are cold, see below; P1061 pack M4+). The decomposed object of a structured binding declaration (clang's `DecompositionDecl`) is a `Var` with an empty name and the cold `decomp_bindings` list, not a kind of its own (WP-122), `VarTemplateSpecialization`R, `VarTemplatePartialSpecialization`R |
 | templates | `ClassTemplate`R, `FunctionTemplate`R, `VarTemplate`R, `TypeAliasTemplate`R, `Concept`, `BuiltinTemplate` (`__make_integer_seq`, `__type_pack_element`), `TemplateTypeParm`, `NonTypeTemplateParm`, `TemplateTemplateParm`, `ImplicitConceptSpecialization`, `RequiresExprBody`★ |
 | synthesized | `LifetimeExtendedTemporary` (payload `LetData { extending: DeclId, mangling_index: u32, value: Option<ConstValueId> }`; context the extending declaration's, in no member list or lookup table), `TemplateParamObject` (class-type NTTP object: type + `ConstValueId`), `StaticAssert` (cond `ExprId`, message `ExprId`, P2741), `Label`, `ContractResultName` (P2900 `post(r: ...)`) |
 
@@ -252,6 +252,21 @@ fields used by fewer than ~5% of decls of a kind go there.
   `DeclArena::builtin_id(d)`. Ids and spellings are in
   `kiln_ast::decl::builtin` (`IS_CONSTANT_EVALUATED = 722`, clang's
   numbering; `ALL`; `by_name`).
+- Structured bindings (WP-122, sema.md §4.9). Write-once cold maps:
+  `decomp_bindings: ColdMap<DeclId, ListId>` (decomposed `Var` → its
+  `Binding`s, in order), `binding_decomp` (`Binding` → that `Var`),
+  `binding_expr: ColdMap<DeclId, ExprId>` (the binding expression:
+  `e[i]`, `e.m`, or a `DeclRefExpr` to the holding variable) and
+  `binding_var` (`Binding` → holding variable, tuple-like only).
+  `DeclArena::set_decomp_bindings(v, list, bindings)` and
+  `set_binding(b, expr, holding)` write them; `decomp_bindings`,
+  `is_decomposition`, `binding_decomp`, `binding_expr` and
+  `binding_var` read them. `AstBuilder::binding(head)` creates a
+  `Binding` (type set later by sema), `set_decomposition(v, bindings)`
+  links them, and `holding_var(head, ty, spec)` creates the implicit
+  (`implicit`) `Var` a tuple-like binding refers to: a member of its
+  lexical context that name lookup never finds. The dump prints the `Var` as `DecompositionDecl`
+  (spec/ast-dump.md §3).
 - `AstBuilder::linkage_spec_head(head, lang)` creates a
   `LinkageSpecDecl` from a full `DeclHead`, so implicit ones get
   `IMPLICIT` at creation (`linkage_spec` delegates to it).

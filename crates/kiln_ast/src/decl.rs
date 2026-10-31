@@ -109,9 +109,9 @@ pub enum DeclKind {
     ParmVar,
     /// An implicit parameter (`this`, coroutine frame).
     ImplicitParam,
-    /// A structured-binding declaration.
-    Decomposition,
-    /// One structured binding.
+    /// One structured binding. The declaration it belongs to is a `Var`
+    /// with an empty name (clang's `DecompositionDecl`): see
+    /// [`DeclArena::decomp_bindings`] and [`DeclArena::binding_decomp`].
     Binding,
     /// A variable template specialization (R, payload [`VarData`], M3).
     VarTemplateSpecialization,
@@ -302,7 +302,6 @@ impl DeclKind {
             K::Var => "Var",
             K::ParmVar => "ParmVar",
             K::ImplicitParam => "ImplicitParam",
-            K::Decomposition => "Decomposition",
             K::Binding => "Binding",
             K::VarTemplateSpecialization => "VarTemplateSpecialization",
             K::VarTemplatePartialSpecialization => "VarTemplatePartialSpecialization",
