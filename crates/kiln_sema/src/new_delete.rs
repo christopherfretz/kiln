@@ -19,8 +19,8 @@ use crate::class::{CtorCall, DeletedAs, DiagSites, InitEntity, Selected, Special
 use crate::conv::{self, ConvCtx};
 use crate::declspec::{Chunk, Declarator};
 use crate::init::{InitList, InitValue, Initializer};
-use crate::{EvalContext, Sema};
 use crate::templ::ctad::CtadInit;
+use crate::{EvalContext, Sema};
 
 /// The type-id of a new-expression ([expr.new]/1), as parsed: the
 /// decl-specifier type and the abstract declarator (a new-declarator,

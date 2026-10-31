@@ -1294,6 +1294,9 @@ the arguments. The result type is the guide's return type, after
 substitution. If several best guides tie, the [over.match.best]/2.10–12
 tie-breakers apply.
 
+**Landed (WP-071b):** see spec/sema.md §4.3.2 for what is implemented
+and what is deferred.
+
 The M3 exit headers need only the user-declared guides:
 `array(_Tp, _Up...)`, the `span` guides and the `basic_string_view`
 guides.

@@ -960,9 +960,15 @@ impl Sema<'_, '_> {
                         loc,
                         end,
                     ),
-                    None => {
-                        self.builder().construct(ty, m, &args, info, ExprFlags::NONE, loc, call.rparen)
-                    }
+                    None => self.builder().construct(
+                        ty,
+                        m,
+                        &args,
+                        info,
+                        ExprFlags::NONE,
+                        loc,
+                        call.rparen,
+                    ),
                 })
             }
             Selected::Deleted(m) => {

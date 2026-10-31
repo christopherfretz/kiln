@@ -3,8 +3,8 @@
 //! "Class template argument deduction".
 
 use kiln_ast::decl::{DeclFlags, DeclKind, FnSpec, ParamData};
-use kiln_ast::names::DeclName;
 use kiln_ast::ids::{TemplateNameId, TemplateParamListId};
+use kiln_ast::names::DeclName;
 use kiln_ast::types::{AutoKeyword, ExcSpec, FuncInfo, TemplateName, TypeView};
 use kiln_ast::{DeclHead, DeclId, ExprId, NnsId, QualType};
 use kiln_diag::DiagId;
@@ -13,7 +13,9 @@ use kiln_source::Loc;
 use crate::Sema;
 use crate::declspec::{Chunk, DeclSpec, Declarator};
 use crate::init::{InitList, InitValue, Initializer};
-use crate::overload::{Candidate, CandidateFailure, CandidateKind, IcsOptions, OvlOutcome, SetKind};
+use crate::overload::{
+    Candidate, CandidateFailure, CandidateKind, IcsOptions, OvlOutcome, SetKind,
+};
 
 /// How the object whose type is a deduced class template specialization
 /// is initialized ([over.match.class.deduct]/1, /3).
@@ -166,13 +168,14 @@ impl Sema<'_, '_> {
                 match n.kind() {
                     DeclKind::CXXConstructor => {
                         any_ctor = true;
-                        let g = self.implicit_guide(ctx, name, injected, info.params, Some(m), n.loc());
+                        let g =
+                            self.implicit_guide(ctx, name, injected, info.params, Some(m), n.loc());
                         out.extend(g);
                     }
                     DeclKind::FunctionTemplate
-                        if self.pattern_of(m).is_some_and(|p| {
-                            self.kind_of(p) == DeclKind::CXXConstructor
-                        }) =>
+                        if self
+                            .pattern_of(m)
+                            .is_some_and(|p| self.kind_of(p) == DeclKind::CXXConstructor) =>
                     {
                         // Constructor templates (guides with the
                         // constructor's own parameters appended) are
@@ -408,7 +411,11 @@ impl Sema<'_, '_> {
     /// Whether candidate function (or template) `f` is an implicit
     /// deduction guide, and the copy deduction candidate
     /// ([over.match.best.general]/2.10, /2.12).
-    pub(crate) fn ctad_guide_kind(&self, f: DeclId, template: Option<DeclId>) -> Option<(bool, bool)> {
+    pub(crate) fn ctad_guide_kind(
+        &self,
+        f: DeclId,
+        template: Option<DeclId>,
+    ) -> Option<(bool, bool)> {
         let g = template.unwrap_or(f);
         let pattern = template.and_then(|t| self.pattern_of(t)).unwrap_or(f);
         if self.kind_of(pattern) != DeclKind::CXXDeductionGuide
@@ -436,7 +443,11 @@ impl Sema<'_, '_> {
             let pname = self.decl_name_str(self.ast.decls.get(p).name());
             match self.kind_of(p) {
                 DeclKind::TemplateTypeParm => {
-                    out.push_str(if pi.is_some_and(|x| x.typename_kw) { "typename" } else { "class" });
+                    out.push_str(if pi.is_some_and(|x| x.typename_kw) {
+                        "typename"
+                    } else {
+                        "class"
+                    });
                 }
                 DeclKind::NonTypeTemplateParm => {
                     let mut t = self.ast.decls.get(p).ty().unwrap_or(QualType::ERROR);
@@ -562,7 +573,12 @@ impl Sema<'_, '_> {
     }
 
     /// `C{args}` ([expr.type.conv]/1).
-    pub(crate) fn act_on_ctad_list_cast_type(&mut self, ty: QualType, l: &InitList, loc: Loc) -> QualType {
+    pub(crate) fn act_on_ctad_list_cast_type(
+        &mut self,
+        ty: QualType,
+        l: &InitList,
+        loc: Loc,
+    ) -> QualType {
         let init = Initializer::List(l.clone());
         self.ctad_for_initializer(ty, &init, true, loc).unwrap_or(QualType::ERROR)
     }

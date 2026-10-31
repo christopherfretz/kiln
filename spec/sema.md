@@ -340,6 +340,77 @@ and returns the scope it names:
   `DependentNameType` (`typename S::type`, as clang's
   `ElaboratedType`); it was dropped before.
 
+### 4.3.2 Class template argument deduction (`templ/ctad.rs`, WP-071b)
+[dcl.type.class.deduct], [over.match.class.deduct], [temp.deduct.guide].
+
+**Implemented.**
+- **Guides parse** at namespace and class scope: `[explicit] X(params)
+  -> X<…>;`, as a template or not, with a requires-clause. The
+  declarator name is `SpecialName::DeductionGuide(template)`, the
+  declaration a `CXXDeductionGuide` (`act_on_deduction_guide`). Guides
+  are found by lookup of that name in the template's context
+  (`user_guides`).
+- **Placeholder.** A class template name used as a type specifier is a
+  `DeducedTemplateSpecialization` (DTS) type with no deduced type
+  (`ctad_placeholder`). The parser accepts one in a simple-declaration,
+  after `new`, and before `(`/`{` in an expression (functional cast).
+- **Sites.** Each site calls `deduce_ctad(declared, args, braced, how,
+  loc)` with `how` one of `CtadInit::{Direct, DirectList, Copy, CopyList}`:
+  - variables (`act_on_init`; `act_on_uninit` for `X x;`);
+  - `new X(…)`, `new X{…}`, `new X`;
+  - `X(…)`, `X{…}`, `X()` (`ctad_cast_type`,
+    `act_on_ctad_list_cast_type`).
+
+  The result is the DTS with the deduced type (printed as the
+  specialization, as clang), with the declared cv-qualifiers.
+- **Guide set.** The set is cached per template in `TemplState::ctad_guides`,
+  once the class has a definition. It contains:
+  - one implicit guide per non-template constructor of the primary
+    definition (a hypothetical `X()` when there is none). An implicit
+    guide is a detached `FunctionTemplate` over the class template's
+    own parameter list (`AstContext::detached_template_decl`) with
+    return type `X<T…>`;
+  - the copy deduction candidate `X(X<T…>) -> X<T…>`
+    (`TemplState::ctad_copy`);
+  - the user guides.
+- **Resolution.** The usual candidate machinery with `deduce_call`, then
+  `order_template_candidates` and `best_viable`.
+  - In copy-initialization (`=` and `= {…}`), explicit guides and
+    constructors are non-viable (`CandidateFailure::Explicit`).
+  - In copy-list-initialization, an explicit winner is
+    `sema_ctad_explicit_copy_list` plus `note_ctad_explicit_here`.
+  - Tie-breakers in `overload/best.rs`: [over.match.best]/2.10 (a user
+    guide beats an implicit one) and 2.11 (the copy deduction candidate
+    beats the others).
+- **Diagnostics** use clang's wording: `sema_ctad_no_viable`,
+  `sema_ctad_ambiguous`, and the explicit-copy-list error and note
+  above. Each implicit-guide candidate note is followed by
+  `implicit deduction guide declared as '<sig>'`
+  (`implicit_guide_signature`).
+- **Dependent initializers.** A type-dependent argument gives the DTS
+  deduced as `QualType::DEPENDENT`. The Substituter maps it back to the
+  undeduced placeholder, so deduction is redone for the instantiation.
+  A non-dependent use in a template is deduced at definition.
+
+**Deferred (diagnosed as unsupported, or no candidate).**
+- Constructor templates as implicit guides, which need their template
+  parameters re-depthed. Tie-breaker 2.12 (a guide from a template
+  constructor is more specialized) is deferred with them.
+- Aggregate deduction P1816 (`templates/ctad/over.match.class.deduct-aggregate.cpp`,
+  xfail) and alias-template CTAD P1814 (`…-alias.cpp`, xfail).
+- Inherited-constructor guides (P2582).
+- Guides of a member class template of a class template once it is
+  instantiated.
+- [over.match.list] phase 1 (initializer-list constructors) for braced
+  CTAD.
+- `new X[n]{…}` with CTAD.
+- `new X{t}` with a dependent `t`: CXXNewExpr is not substituted yet.
+- `sema_ctad_deleted` (a deleted constructor selected) and
+  `sema_ctad_not_allowed` (a placeholder in a non-deducible position)
+  are reserved ids that nothing emits yet.
+- The AST dump of `CXXDeductionGuideDecl` is still `Unsupported` in the
+  normalizer (`xtask/src/clang_ast/table.rs`).
+
 ### 4.4 Tags, enumerations, bit-fields and anonymous records
 - **`act_on_tag(kind, name, TagUse, …)`** implements [dcl.type.elab]
   and [class.name]:

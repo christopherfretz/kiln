@@ -609,7 +609,16 @@ impl Parser<'_, '_> {
         // `decltype(e)::name` (WP-119): the parenthesized operand is
         // parsed with `>` as an operator.
         self.with_greater_op(true, Self::annotate_decltype_scope_here);
-        let a = if self.is_cxx_type_id_at(self.pos(), TypeIdContext::AsTemplateArgument).0 {
+        // A class template name alone is a template template argument,
+        // not a deduced class type placeholder ([dcl.type.class.deduct]/2
+        // allows no placeholder here).
+        let ctad_name = matches!(
+            self.scan_name_qual_at(self.pos()),
+            Some((_, false, NameClass::TypeTemplate(d), _, _)) if self.s.is_ctad_template(d)
+        );
+        let a = if ctad_name && let Some(t) = self.at_template_name_arg() {
+            t
+        } else if self.is_cxx_type_id_at(self.pos(), TypeIdContext::AsTemplateArgument).0 {
             TemplateArg::ty(self.with_greater_op(false, Self::parse_type_id)?)
         } else if let Some(t) = self.at_template_name_arg() {
             t
