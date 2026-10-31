@@ -792,7 +792,83 @@ impl Cg<'_> {
                 idx.push(zero);
             }
             ptr = self.gep(src, p, idx, true);
+        } else if self.emit_object_delete(e, arg, p, dt, loc)? {
+            self.emit_block(end, false);
+            return Ok(());
         }
+        self.emit_delete_call(od, ptr, dt, loc)?;
+        self.emit_block(end, false);
+        Ok(())
+    }
+
+    /// clang `EmitObjectDelete` (the destructor part): destroys the object
+    /// of type `dt` at `p` before its deallocation. Returns `true` when a
+    /// virtual call to the deleting destructor (`emitVirtualObjectDelete`)
+    /// also deallocated it.
+    fn emit_object_delete(
+        &mut self,
+        e: ExprId,
+        arg: ExprId,
+        p: V,
+        dt: QualType,
+        loc: Option<Loc>,
+    ) -> R<bool> {
+        let ast = self.ast;
+        let Some(rd) = ast.types.as_record(dt) else { return Ok(false) };
+        let Some(def) = self.class_def(rd) else { return Ok(false) };
+        if !self.has_nontrivial_dtor(def) {
+            return Ok(false);
+        }
+        let Some(mut dtor) = ast.destructor(def) else {
+            return err(loc, "destructor not declared");
+        };
+        let mut dclass = def;
+        if ast.decls.function(dtor).is_some_and(|f| f.spec.is_virtual()) {
+            let mut use_virtual = true;
+            if let Some((dd, _)) = self.devirtualize(dtor, arg) {
+                let dd_class = ast.decls.get(dd).ctx().map(|c| ast.first(c));
+                if dd_class == Some(ast.first(def)) {
+                    dtor = dd;
+                    use_virtual = false;
+                }
+            }
+            if use_virtual {
+                if ast.exprs.get(e).has(ExprFlags::GLOBAL) {
+                    return err(loc, "virtual ::delete is not supported yet (WP-080)");
+                }
+                // emitVirtualObjectDelete: the deleting destructor frees it.
+                let first = ast.first(dtor);
+                let fty = ast.decls.get(first).ty().expect("destructor type");
+                let sig = self.call_sig_this(fty, false, &[], Some(def));
+                let (_, al) = self.size_align(dt);
+                let fp = self.virtual_fn_ptr(dtor, Some(mangle::Structor::Deleting), p, al)?;
+                self.call_vals(&sig, fp, None, Some(p), &[], &[], None, &[])?;
+                return Ok(true);
+            }
+            dclass = ast.decls.get(dtor).ctx().map_or(def, |c| ast.first(c));
+        }
+        // EmitCXXDestructorCall(Dtor_Complete); the CallObjectDelete
+        // cleanup then deallocates.
+        let (callee, fid) = self.structor_ref(dtor, mangle::Structor::Complete)?;
+        let first = ast.first(dtor);
+        let fty = ast.decls.get(first).ty().expect("destructor type");
+        let sig = self.call_sig_this(fty, false, &[], Some(dclass));
+        self.call_vals(&sig, callee, fid, Some(p), &[], &[], None, &[])?;
+        Ok(false)
+    }
+
+    /// clang `EmitDeleteCall`: calls deallocation function `od` for the
+    /// object of type `dt` at `ptr` (sized / aligned per its parameters,
+    /// `getUsualDeleteParams`).
+    pub(crate) fn emit_delete_call(
+        &mut self,
+        od: DeclId,
+        ptr: V,
+        dt: QualType,
+        loc: Option<Loc>,
+    ) -> R<()> {
+        let ast = self.ast;
+        let t = &ast.types;
         // getUsualDeleteParams.
         let Some(fty) = ast.decls.get(od).ty() else {
             return err(loc, "deallocation function without a type");
@@ -844,7 +920,6 @@ impl Cg<'_> {
             return err(loc, "this deallocation function is not supported yet");
         }
         self.emit_new_delete_call(od, &vals, &arg_tys, loc)?;
-        self.emit_block(end, false);
         Ok(())
     }
 }

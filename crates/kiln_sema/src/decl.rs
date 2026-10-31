@@ -2847,6 +2847,7 @@ impl Sema<'_, '_> {
             // destructor definition (clang `ActOnFinishFunctionBody`).
             let loc = self.ast.decls.get(f).loc();
             self.mark_base_and_member_dtors_referenced(loc, class);
+            self.check_destructor_delete(f, class);
         }
         self.pop_scope();
         if let Some(saved) = self.fn_saved.pop() {

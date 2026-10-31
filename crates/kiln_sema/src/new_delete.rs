@@ -1228,3 +1228,32 @@ fn op_spelling(op: OverloadedOperator) -> &'static str {
         _ => "operator new",
     }
 }
+
+impl Sema<'_, '_> {
+    /// clang `CheckDestructor`: the deallocation function the deleting
+    /// destructor of virtual destructor `dtor` of `class` calls
+    /// ([class.dtor]/16, `FindDeallocationFunctionForDestructor`),
+    /// recorded in `cold.dtor_delete` for codegen (WP-080).
+    pub(crate) fn check_destructor_delete(&mut self, dtor: DeclId, class: DeclId) {
+        let first = self.ast.first(dtor);
+        let is_virtual = self
+            .ast
+            .redecls_of(first)
+            .any(|r| self.ast.decls.function(r).is_some_and(|f| f.spec.is_virtual()));
+        if !is_virtual || self.ast.decls.cold.dtor_delete.contains(first) {
+            return;
+        }
+        self.declare_global_new_delete();
+        let loc = self.ast.decls.get(dtor).loc();
+        let ty = self.tag_type(class);
+        let align = crate::target::size_align(&self.ast, ty, &self.abi).map_or(1, |(_, a)| a);
+        let aligned = align > self.abi.default_new_align;
+        let found = self.alloc_fns(ty, OverloadedOperator::Delete, false, loc);
+        let usual = self.usual_delete(&found.fns, found.in_class, aligned, true);
+        if let Some((op, _)) = usual {
+            self.mark_function_referenced(op, loc);
+            let op = self.ast.latest(op);
+            let _ = self.ast.decls.cold.dtor_delete.insert(first, op);
+        }
+    }
+}

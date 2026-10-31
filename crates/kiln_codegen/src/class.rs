@@ -189,18 +189,11 @@ impl Cg<'_> {
         })
     }
 
-    /// Structors of polymorphic classes and classes with virtual bases
-    /// are WP-080.
+    /// Structors of classes with virtual bases are not supported yet.
     fn check_structor(&self, d: DeclId) -> R<()> {
         let ast = self.ast;
         let Some(c) = ast.decls.get(d).ctx() else { return Ok(()) };
         let bits = self.class_bits(c);
-        if bits.contains(DefinitionBits::POLYMORPHIC) {
-            return err(
-                Some(ast.decls.get(d).loc()),
-                "constructors and destructors of polymorphic classes are not supported yet (WP-080)",
-            );
-        }
         if bits.contains(DefinitionBits::HAS_VIRTUAL_BASES) {
             return err(
                 Some(ast.decls.get(d).loc()),
@@ -266,10 +259,9 @@ impl Cg<'_> {
         let ast = self.ast;
         let first = ast.first(d);
         if v == Structor::Deleting {
-            return err(
-                Some(ast.decls.get(d).loc()),
-                "deleting destructors are not supported yet (WP-080)",
-            );
+            let (val, f) = self.declare_structor(first, v)?;
+            self.queue_structor(first, v);
+            return Ok((V::C(val), Some(f)));
         }
         if let Some(&(val, f)) = self.sfns.get(&(first, v)) {
             if v == Structor::Base {
@@ -329,8 +321,12 @@ impl Cg<'_> {
             .get(d)
             .ctx()
             .is_some_and(|c| self.class_bits(c).contains(DefinitionBits::ABSTRACT));
-        for v in [Structor::Base, Structor::Complete] {
+        let virtual_dtor = !is_ctor && fd.spec.is_virtual();
+        for v in [Structor::Base, Structor::Complete, Structor::Deleting] {
             if is_ctor && v == Structor::Complete && abstract_ {
+                continue;
+            }
+            if v == Structor::Deleting && !virtual_dtor {
                 continue;
             }
             if !self.discardable_fn(d) {
@@ -338,7 +334,7 @@ impl Cg<'_> {
                 continue;
             }
             let visible = match v {
-                Structor::Base => self.sfns.contains_key(&(first, v)),
+                Structor::Base | Structor::Deleting => self.sfns.contains_key(&(first, v)),
                 _ => self.c1_decl.contains(&first),
             };
             if visible {
@@ -409,10 +405,17 @@ impl Cg<'_> {
                 }
                 Ok(())
             }
-            Structor::Deleting => err(
-                Some(ast.decls.get(d).loc()),
-                "deleting destructors are not supported yet (WP-080)",
-            ),
+            Structor::Deleting => {
+                self.squeued.insert((first, v));
+                let (_, f) = self.declare_structor(first, v)?;
+                if !self.m.func(f).is_declaration() || !self.d0_done.insert(first) {
+                    return Ok(());
+                }
+                let saved = std::mem::replace(&mut self.f, crate::func::Fx::empty());
+                let r = self.gen_code(d, f, Some(Structor::Deleting));
+                self.f = saved;
+                r
+            }
         }
     }
 
@@ -467,7 +470,16 @@ impl Cg<'_> {
             && matches!(self.special_of(d), Some(Special::CopyCtor | Special::MoveCtor));
         let rd = self.f.this_class.expect("constructor class");
         let mut run: Vec<(DeclId, u64, u64)> = Vec::new();
+        // InitializeVTablePointers runs after the base initializers and
+        // before the member initializers (not in delegating constructors).
+        let delegating = inits.iter().any(|ci| ci.kind == CtorInitKind::Delegating);
+        let mut vptrs_done = delegating;
         for ci in &inits {
+            if !vptrs_done && matches!(ci.kind, CtorInitKind::Field | CtorInitKind::IndirectField) {
+                self.flush_memcpy_run(d, &mut run)?;
+                self.init_vtable_ptrs(rd)?;
+                vptrs_done = true;
+            }
             match ci.kind {
                 CtorInitKind::Base => {
                     self.flush_memcpy_run(d, &mut run)?;
@@ -511,6 +523,9 @@ impl Cg<'_> {
             }
         }
         self.flush_memcpy_run(d, &mut run)?;
+        if !vptrs_done {
+            self.init_vtable_ptrs(rd)?;
+        }
         self.emit_stmt(body)?;
         self.end_scope(sc);
         Ok(())
@@ -695,10 +710,36 @@ impl Cg<'_> {
                 }
             }
         }
-        let _ = d;
+        if !self.can_skip_vptr_init(d, rd) {
+            self.init_vtable_ptrs(rd)?;
+        }
         self.emit_stmt(body)?;
         self.end_scope(sc);
         Ok(())
+    }
+
+    /// clang `EmitDestructorBody` for the deleting variant: the
+    /// complete-object destructor, then the class's deallocation function
+    /// (`CallDtorDelete`).
+    pub(crate) fn emit_deleting_dtor_body(&mut self, d: DeclId) -> R<()> {
+        let ast = self.ast;
+        let rd = self.f.this_class.expect("destructor class");
+        let loc = Some(ast.decls.get(d).loc());
+        let this = self.this_addr();
+        // EmitDestructorBody: an abstract class's D0 can never be called.
+        if self.class_bits_of(rd).contains(DefinitionBits::ABSTRACT) {
+            self.emit_trap_unreachable();
+            return Ok(());
+        }
+        let fty = ast.decls.get(d).ty().expect("destructor type");
+        let (callee, fid) = self.structor_ref(d, Structor::Complete)?;
+        let sig = self.call_sig_this(fty, false, &[], Some(rd));
+        self.call_vals(&sig, callee, fid, Some(this.v), &[], &[], None, &[])?;
+        let Some(&od) = ast.decls.cold.dtor_delete.get(ast.first(d)) else {
+            return err(loc, "virtual destructor without a deallocation function");
+        };
+        let ty = self.class_type(rd);
+        self.emit_delete_call(od, this.v, ty, loc)
     }
 
     /// `DestroyField`: destroys field `field` of `*this` (class `record`).
@@ -995,21 +1036,25 @@ impl Cg<'_> {
         let base = ast.exprs.operand(callee_e);
         let arrow = ast.exprs.get(callee_e).has(ExprFlags::ARROW);
         let args: Vec<ExprId> = ast.lists.iter(ast.exprs.call_args(e)).collect();
-        self.emit_method_call(e, md, base, arrow, &args, dest)
+        let qualified =
+            ast.exprs.decl_ref_extra(callee_e).is_some_and(|x| x.qualifier.is_some());
+        self.emit_method_call(e, md, base, arrow, &args, dest, qualified)
     }
 
     /// A call of member function `md` on object `base` (`arrow`: a
     /// pointer to it) with arguments `args`: a `CXXMemberCallExpr`, or a
     /// `CXXOperatorCallExpr` whose callee is a member (clang
     /// `EmitCXXOperatorMemberCallExpr`).
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn emit_method_call(
         &mut self,
-        e: ExprId,
+        _e: ExprId,
         md: DeclId,
         base: ExprId,
         arrow: bool,
         args: &[ExprId],
         dest: Option<Addr>,
+        qualified: bool,
     ) -> R<Option<V>> {
         let ast = self.ast;
         let arg_tys: Vec<QualType> = args.iter().map(|&a| ast.exprs.get(a).ty()).collect();
@@ -1021,8 +1066,15 @@ impl Cg<'_> {
             let sig = self.call_sig(fty, false, &arg_tys);
             return self.call_with(&sig, V::C(Value::func(f)), Some(f), None, args, dest, &[]);
         }
-        if ast.decls.function(md).is_some_and(|f| f.spec.is_virtual()) {
-            return err(self.loc_of(e), "virtual calls are not supported yet (WP-080)");
+        // clang `EmitCXXMemberOrOperatorMemberCallExpr`: devirtualization.
+        let is_virtual = ast.decls.function(md).is_some_and(|f| f.spec.is_virtual());
+        let mut callee_md = md;
+        let mut base = base;
+        let mut use_virtual = is_virtual && !qualified;
+        if use_virtual && let Some((dm, b)) = self.devirtualize(md, base) {
+            callee_md = dm;
+            base = b;
+            use_virtual = false;
         }
         let this = if arrow {
             let p = self.emit_scalar(base)?;
@@ -1048,13 +1100,24 @@ impl Cg<'_> {
                 return Ok(Some(this.v));
             }
         }
+        let crd = ast.decls.get(callee_md).ctx().expect("method class");
+        let cfty = ast.decls.get(callee_md).ty().expect("method type");
         if kind == DeclKind::CXXDestructor {
-            let (callee, fid) = self.structor_ref(md, Structor::Complete)?;
-            let sig = self.call_sig_this(fty, false, &[], Some(rd));
+            let sig = self.call_sig_this(cfty, false, &[], Some(crd));
+            if use_virtual {
+                let fp =
+                    self.virtual_fn_ptr(md, Some(Structor::Complete), this.v, this.align)?;
+                return self.call_vals(&sig, fp, None, Some(this.v), &[], &[], None, &[]);
+            }
+            let (callee, fid) = self.structor_ref(callee_md, Structor::Complete)?;
             return self.call_vals(&sig, callee, fid, Some(this.v), &[], &[], None, &[]);
         }
-        let f = self.get_fn(md)?;
-        let sig = self.call_sig_this(fty, false, &arg_tys, Some(rd));
+        let sig = self.call_sig_this(cfty, false, &arg_tys, Some(crd));
+        if use_virtual {
+            let fp = self.virtual_fn_ptr(md, None, this.v, this.align)?;
+            return self.call_with(&sig, fp, None, Some(this.v), args, dest, &[]);
+        }
+        let f = self.get_fn(callee_md)?;
         self.call_with(&sig, V::C(Value::func(f)), Some(f), Some(this.v), args, dest, &[])
     }
 

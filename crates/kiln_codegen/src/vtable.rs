@@ -11,7 +11,7 @@ use kiln_abi::mangle::{self, Structor};
 use kiln_ast::class::{SubobjectId, VTableComponent, VTableLayout};
 use kiln_ast::decl::{Access, DeclKind, DefinitionBits, TagKind};
 use kiln_ast::types::{BuiltinType, TypeView};
-use kiln_ast::{DeclId, QualType};
+use kiln_ast::{DeclId, ExprId, QualType};
 use kiln_llvm::{
     CastOp, ComdatKind, GepFlags, GlobalId, Linkage, TypeId as LTy, UnnamedAddr, Value,
 };
@@ -671,6 +671,203 @@ impl Cg<'_> {
         let i = self.i64c(i128::from(idx));
         let slot = self.gep(LTy::PTR, vt, vec![i], true);
         Ok(self.load(LTy::PTR, slot, 8, false))
+    }
+
+    // ---- devirtualization ----------------------------------------------
+
+    /// Methods `m` overrides directly (first declarations).
+    pub(crate) fn overridden_methods(&self, m: DeclId) -> Vec<DeclId> {
+        let ast = self.ast;
+        let list = ast
+            .decls
+            .cold
+            .overrides
+            .get(ast.first(m))
+            .copied()
+            .unwrap_or(kiln_ast::ListId::EMPTY);
+        ast.lists.iter::<DeclId>(list).map(|o| ast.first(o)).collect()
+    }
+
+    /// clang `recursivelyOverrides(derived, base)`.
+    fn recursively_overrides(&self, derived: DeclId, base: DeclId) -> bool {
+        let base = self.ast.first(base);
+        let mut stack = self.overridden_methods(derived);
+        let mut seen = Vec::new();
+        while let Some(o) = stack.pop() {
+            if o == base {
+                return true;
+            }
+            if seen.contains(&o) {
+                continue;
+            }
+            seen.push(o);
+            stack.extend(self.overridden_methods(o));
+        }
+        false
+    }
+
+    /// clang `getCorrespondingMethodDeclaredInClass(RD, false)`.
+    fn corresponding_declared_in(&self, md: DeclId, rd: DeclId) -> Option<DeclId> {
+        let ast = self.ast;
+        let md = ast.first(md);
+        let def = self.class_def(rd)?;
+        if ast.decls.get(md).ctx().map(|c| ast.first(c)) == Some(ast.first(rd)) {
+            return Some(md);
+        }
+        if ast.decls.get(md).kind() == DeclKind::CXXDestructor {
+            let d = ast.destructor(def)?;
+            return self.recursively_overrides(d, md).then(|| ast.first(d));
+        }
+        ast.decls
+            .members(def)
+            .filter(|&m| ast.decls.get(m).kind() == DeclKind::CXXMethod)
+            .find(|&m| self.recursively_overrides(m, md))
+            .map(|m| ast.first(m))
+    }
+
+    /// clang `CXXMethodDecl::getCorrespondingMethodInClass(RD, false)`.
+    pub(crate) fn corresponding_method(&self, md: DeclId, rd: DeclId) -> Option<DeclId> {
+        if let Some(m) = self.corresponding_declared_in(md, rd) {
+            return Some(m);
+        }
+        let ast = self.ast;
+        let def = self.class_def(rd)?;
+        let mut finals: Vec<DeclId> = Vec::new();
+        let bases: Vec<QualType> = ast.decls.bases(def, &ast.lists).map(|b| b.ty).collect();
+        for bq in bases {
+            let Some(b) = ast.types.as_record(bq) else { continue };
+            let Some(d) = self.corresponding_method(md, b) else { continue };
+            if finals.iter().any(|&o| o == d || self.recursively_overrides(o, d)) {
+                continue;
+            }
+            finals.retain(|&o| !self.recursively_overrides(d, o));
+            finals.push(d);
+        }
+        (finals.len() == 1).then(|| finals[0])
+    }
+
+    /// clang `Expr::IgnoreParenBaseCasts`.
+    pub(crate) fn ignore_paren_base_casts(&self, mut e: ExprId) -> ExprId {
+        use kiln_ast::expr::{CastKind, ExprKind};
+        let ast = self.ast;
+        loop {
+            let k = ast.exprs.get(e).kind();
+            if k == ExprKind::ParenExpr {
+                e = ast.exprs.operand(e);
+            } else if k.is_cast()
+                && matches!(
+                    ast.exprs.cast_kind(e),
+                    CastKind::DerivedToBase | CastKind::UncheckedDerivedToBase | CastKind::NoOp
+                )
+            {
+                e = ast.exprs.operand(e);
+            } else {
+                return e;
+            }
+        }
+    }
+
+    /// clang `getCXXRecord(E)`: the class of `e`'s type or pointee type.
+    pub(crate) fn expr_class(&self, e: ExprId) -> Option<DeclId> {
+        let ast = self.ast;
+        let q = ast.exprs.get(e).ty();
+        let q = ast.types.pointee(q).unwrap_or(q);
+        ast.types.as_record(q).map(|r| ast.first(r))
+    }
+
+    /// clang `Expr::getBestDynamicClassType`.
+    fn best_dynamic_class(&self, e: ExprId) -> Option<DeclId> {
+        let e = self.ignore_paren_base_casts(e);
+        let rd = self.expr_class(e)?;
+        self.class_def(rd).map(|_| rd)
+    }
+
+    /// The class is effectively final (clang `isEffectivelyFinal`).
+    pub(crate) fn effectively_final(&self, rd: DeclId) -> bool {
+        self.class_def(rd).is_some_and(|d| self.class_is_final(d) || self.dtor_final(d))
+    }
+
+    fn method_final(&self, m: DeclId) -> bool {
+        let ast = self.ast;
+        ast.redecls_of(m).any(|r| ast.decls.function(r).is_some_and(|f| f.spec.is_final()))
+    }
+
+    fn method_pure(&self, m: DeclId) -> bool {
+        let ast = self.ast;
+        ast.redecls_of(m).any(|r| ast.decls.function(r).is_some_and(|f| f.spec.is_pure()))
+    }
+
+    /// clang `CXXMethodDecl::getDevirtualizedMethod(Base, false)` reduced
+    /// to whether it is non-null.
+    fn can_devirtualize(&self, md: DeclId, base: ExprId) -> bool {
+        use kiln_ast::expr::ExprKind;
+        let ast = self.ast;
+        if self.method_final(md) {
+            return !self.method_pure(md);
+        }
+        let b = self.ignore_paren_base_casts(base);
+        let bn = ast.exprs.get(b);
+        if bn.value_category() == kiln_ast::expr::ValueCategory::PRValue
+            && ast.types.as_record(bn.ty()).is_some()
+        {
+            return true;
+        }
+        let Some(best) = self.best_dynamic_class(base) else { return false };
+        let Some(dm) = self.corresponding_method(md, best) else { return false };
+        if self.method_pure(dm) {
+            return false;
+        }
+        if self.method_final(dm) || self.effectively_final(best) {
+            return true;
+        }
+        match bn.kind() {
+            ExprKind::DeclRefExpr => {
+                let d = ast.exprs.decl(b);
+                matches!(ast.decls.get(d).kind(), DeclKind::Var | DeclKind::ParmVar)
+                    && ast.decls.get(d).ty().is_some_and(|q| ast.types.as_record(q).is_some())
+            }
+            ExprKind::MemberExpr => {
+                let d = ast.exprs.decl(b);
+                ast.decls.get(d).ty().is_some_and(|q| ast.types.as_record(q).is_some())
+            }
+            ExprKind::BinaryOperator if ast.exprs.binary_op(b).is_ptr_mem() => {
+                let [_, r] = ast.exprs.operands(b);
+                self.mp_parts(ast.exprs.get(r).ty())
+                    .is_some_and(|(p, _)| ast.types.as_record(p).is_some())
+            }
+            _ => false,
+        }
+    }
+
+    /// clang `EmitCXXMemberOrOperatorMemberCallExpr`'s devirtualization:
+    /// the method to call directly and the (possibly stripped) object
+    /// expression, or `None` for a virtual call.
+    pub(crate) fn devirtualize(&self, md: DeclId, base: ExprId) -> Option<(DeclId, ExprId)> {
+        if !self.can_devirtualize(md, base) {
+            return None;
+        }
+        let ast = self.ast;
+        let best = self.best_dynamic_class(base)?;
+        let dm = self.corresponding_method(md, best)?;
+        let dclass = ast.decls.get(dm).ctx().map(|c| ast.first(c));
+        let ret = |m: DeclId| {
+            ast.decls
+                .get(m)
+                .ty()
+                .and_then(|t| ast.types.proto(t).copied())
+                .map(|p| ast.types.canonical(p.ret()))
+        };
+        if ret(dm) != ret(md) {
+            return None;
+        }
+        let inner = self.ignore_paren_base_casts(base);
+        if self.expr_class(inner) == dclass {
+            return Some((dm, inner));
+        }
+        if self.expr_class(base) != dclass {
+            return None;
+        }
+        Some((dm, base))
     }
 
     // ---- RTTI ----------------------------------------------------------

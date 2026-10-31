@@ -121,6 +121,8 @@ pub(crate) struct Cg<'a> {
     pub c1_decl: FxHashSet<DeclId>,
     /// Structors whose complete variant is defined (alias or RAUW).
     pub c1_done: FxHashSet<DeclId>,
+    /// Deleting destructors already emitted (WP-080).
+    pub d0_done: FxHashSet<DeclId>,
     /// Structors whose base variant body was generated.
     pub sdone: FxHashSet<DeclId>,
     /// `_ZTV` globals by class (WP-080).
@@ -179,6 +181,7 @@ impl<'a> Cg<'a> {
             squeued: FxHashSet::default(),
             c1_decl: FxHashSet::default(),
             c1_done: FxHashSet::default(),
+            d0_done: FxHashSet::default(),
             sdone: FxHashSet::default(),
             vtables: FxHashMap::default(),
             vt_layouts: FxHashMap::default(),
@@ -858,11 +861,18 @@ impl<'a> Cg<'a> {
         self.target_attrs(&mut fa);
         let fa = self.m.attr_set(&fa);
         let (fa, ret) = self.alloc_fn_attrs(first, fa, ret);
+        // clang `SetFunctionAttributes`: virtual member functions are
+        // `unnamed_addr`.
+        let virt = ast.decls.get(first).kind() == DeclKind::CXXMethod
+            && ast.redecls_of(first).any(|r| ast.decls.function(r).is_some_and(|x| x.spec.is_virtual()));
         {
             let func = self.m.func_mut(f);
             func.attrs.func = fa;
             func.attrs.ret = ret;
             func.attrs.params = params;
+            if virt {
+                func.unnamed_addr = UnnamedAddr::Global;
+            }
         }
         self.nounwind.insert(f, sig.nothrow);
         Ok(f)

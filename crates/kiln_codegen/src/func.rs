@@ -200,6 +200,30 @@ impl Cg<'_> {
         self.gen_code(d, f, None)
     }
 
+    /// `llvm.trap` (`noreturn nounwind`) followed by `unreachable`.
+    pub(crate) fn emit_trap_unreachable(&mut self) {
+        let trap = kiln_llvm::intrinsics::trap(&mut self.m);
+        let fa =
+            self.m.attr_set(&[Attr::Flag(AttrKind::NoReturn), Attr::Flag(AttrKind::NoUnwind)]);
+        let fn_ty = self.m.func(trap).ty();
+        let opts = CallOpts {
+            attrs: AttrList { func: fa, ..AttrList::default() },
+            ..CallOpts::default()
+        };
+        let c = self.f.fir.push(
+            Op::Call {
+                fn_ty,
+                callee: V::C(Value::func(trap)),
+                args: Vec::new(),
+                opts: Box::new(opts),
+            },
+            LTy::VOID,
+        );
+        self.f.calls.push((Fir::last_inst(c), Some(trap), true));
+        self.f.fir.push(Op::Unreachable, LTy::VOID);
+        self.f.fir.set_cur(None);
+    }
+
     /// clang `GenerateCode` for the definition `d` into `f` (`structor`:
     /// the constructor/destructor variant being emitted).
     pub fn gen_code(&mut self, d: DeclId, f: FuncId, structor: Option<mangle::Structor>) -> R<()> {
@@ -325,32 +349,16 @@ impl Cg<'_> {
 
         match kind {
             DeclKind::CXXConstructor => self.emit_ctor_body(d, body)?,
+            DeclKind::CXXDestructor if structor == Some(mangle::Structor::Deleting) => {
+                self.emit_deleting_dtor_body(d)?;
+            }
             DeclKind::CXXDestructor => self.emit_dtor_body(d, body)?,
             _ => self.emit_body(body)?,
         }
 
         // GenerateCode: falling off the end of a value-returning function.
         if !is_main && self.f.ret_kind != RetKind::Void && self.f.fir.cur().is_some() {
-            let trap = kiln_llvm::intrinsics::trap(&mut self.m);
-            let fa =
-                self.m.attr_set(&[Attr::Flag(AttrKind::NoReturn), Attr::Flag(AttrKind::NoUnwind)]);
-            let fn_ty = self.m.func(trap).ty();
-            let opts = CallOpts {
-                attrs: AttrList { func: fa, ..AttrList::default() },
-                ..CallOpts::default()
-            };
-            let c = self.f.fir.push(
-                Op::Call {
-                    fn_ty,
-                    callee: V::C(Value::func(trap)),
-                    args: Vec::new(),
-                    opts: Box::new(opts),
-                },
-                LTy::VOID,
-            );
-            self.f.calls.push((Fir::last_inst(c), Some(trap), true));
-            self.f.fir.push(Op::Unreachable, LTy::VOID);
-            self.f.fir.set_cur(None);
+            self.emit_trap_unreachable();
         }
         // FinishFunction.
         self.pop_cleanup_blocks(0);
