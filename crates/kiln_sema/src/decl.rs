@@ -4281,14 +4281,23 @@ impl Sema<'_, '_> {
     /// skipped the template-id `X<...>` without forming the
     /// specialization: classified by the primary template's pattern (a
     /// partial or explicit specialization may differ; the parse proper
-    /// looks up in the specialization).
+    /// looks up in the specialization). A name the pattern lacks is
+    /// looked up in the explicit, then the partial specializations
+    /// ([temp.expl.spec], [temp.spec.partial]): `template<> struct
+    /// O<int> { template<class I> using c = I; }; O<int>::c<long> x;`.
     fn classify_template_member(&self, tmpl: DeclId, name: Symbol) -> NameClass {
         let Some(p) = self.ast.template_info(tmpl).and_then(|i| i.pattern) else {
             return NameClass::Dependent;
         };
         let Some(def) = self.ast.definition(p) else { return NameClass::Dependent };
         let found = self.lookup_qualified(def, name, LookupKind::Ordinary);
-        let Some(&d) = found.decls.first() else { return NameClass::Dependent };
+        let d = match found.decls.first() {
+            Some(&d) => d,
+            None => match self.specialization_member(tmpl, name) {
+                Some(d) => d,
+                None => return NameClass::Dependent,
+            },
+        };
         let k = self.kind_of(self.ast.strip_shadow(d));
         match k {
             DeclKind::ClassTemplate | DeclKind::TypeAliasTemplate => NameClass::TypeTemplate(d),
@@ -4297,6 +4306,23 @@ impl Sema<'_, '_> {
             _ if is_type_kind(k) => NameClass::Type(QualType::DEPENDENT, d),
             _ => NameClass::Value(d),
         }
+    }
+
+    /// The first member named `name` of an explicit or partial
+    /// specialization of `tmpl` (the lookahead fallback of
+    /// [`Sema::classify_template_member`]).
+    fn specialization_member(&self, tmpl: DeclId, name: Symbol) -> Option<DeclId> {
+        use kiln_ast::templates::SpecKind;
+        let first = self.ast.first(tmpl);
+        let t = &self.ast.templates;
+        let explicit = t.specs_of(first).iter().copied().filter(|&s| {
+            self.ast.spec_info(s).is_some_and(|(_, i)| i.kind == SpecKind::ExplicitSpecialization)
+        });
+        let partial = t.partials_of(first).iter().filter_map(|&i| t.partial(i).map(|p| p.partial));
+        explicit.chain(partial).find_map(|s| {
+            let def = self.ast.definition(s)?;
+            self.lookup_qualified(def, name, LookupKind::Ordinary).decls.first().copied()
+        })
     }
 
     /// What an identifier names here (for parser decisions,
