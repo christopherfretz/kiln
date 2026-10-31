@@ -13,7 +13,7 @@ and perf-sensitive behavior ships with a recorded baseline.
 | Stress | `tests/stress/` | Deep nesting, huge packs, the stack guard, runaway-allocation regressions, under `mem<=N` budgets |
 | Differential | `tests/differential/` | Same result as clang (-E tokens, program stdout, AST/layout facts) |
 | Goldens | alongside the above, `*.expected` | AST dumps, diagnostics, IR shapes (FileCheck-style) |
-| libc++ suite | external, driven by `cargo xtask libcxx` | The real world |
+| libc++ suite | `libcxx/test` of llvmorg-19.1.7 (`scripts/fetch-libcxx-tests.sh`), driven by `cargo xtask libcxx` (`spec/libcxx.md`); manual/periodic gate, not part of `ci`; M3 gate status in `docs/status/libcxx-m3.md` | The real world |
 | Perf | `bench/` + `bench/baselines/*.json` | No wall-clock or memory regression; vs-clang ratios |
 
 ## Conformance test format
@@ -104,6 +104,16 @@ on any FAIL, XPASS, ERROR or KILLED in either run:
 `cargo xtask ci --quick` drops the clang self-check for local iteration;
 merges use the full form. The contract is spec/harness.md "CI". An oracle
 that hangs or crashes makes the test an ERROR, never a kiln FAIL.
+
+`cargo xtask libcxx` is deliberately outside `ci`. It runs libc++'s own
+tests (a pinned upstream release, fetched by `scripts/fetch-libcxx-tests.sh`)
+with kiln. It reimplements the subset of lit that the gates need: suffix
+classification, `REQUIRES`/`UNSUPPORTED`/`XFAIL` with lit's boolean grammar
+over a static feature set, and `ADDITIONAL_COMPILE_FLAGS`. `--gate m3` is
+the M3 exit gate. A run's `--report` regenerates the per-directory table and
+the error-cluster table of a status page (`docs/status/libcxx-m3.md`). It is
+run by hand or periodically, and the pass rate is tracked there. The
+contract is `spec/libcxx.md`.
 
 Each test file names the standard section it covers in its directory path,
 and `spec/` entries list the tests that back them, so coverage of a spec is

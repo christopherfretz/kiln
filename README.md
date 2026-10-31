@@ -55,6 +55,8 @@ cargo build
 cargo xtask ci                          # fmt, clippy, unit tests, corpus as clang self-check + kiln-mode (--quick skips the self-check)
 cargo xtask test --compiler clang++-19  # validate the corpus against the oracle
 cargo xtask test                        # run it through kiln
+scripts/fetch-libcxx-tests.sh           # once: libc++ 19.1.7 tests into .toolchain/
+cargo xtask libcxx --gate m3            # libc++'s own tests with kiln (manual gate, not in ci)
 ```
 
 ## License

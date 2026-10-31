@@ -1,0 +1,566 @@
+//! Running one libc++ test with kiln (`spec/libcxx.md` "Commands" and
+//! "Outcomes").
+
+use std::fmt;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::time::Duration;
+
+use super::cluster;
+use super::directives::{Directives, Kind, LocalCfg};
+use super::features;
+use crate::util::process::{self, Measured, MemLimit, RssProbe};
+
+/// Everything a test run needs that does not vary per test.
+pub struct Config {
+    pub kiln: PathBuf,
+    /// The `llvm-project` checkout (holding `libcxx/test`).
+    pub checkout: PathBuf,
+    pub resource_dir: PathBuf,
+    pub features: Vec<String>,
+    pub compile_timeout: Duration,
+    pub run_timeout: Duration,
+    pub mem: Option<MemLimit>,
+    pub probe: RssProbe,
+    /// The per-run scratch root; test `i` uses `<root>/t<i>`.
+    pub scratch: PathBuf,
+    pub keep: bool,
+}
+
+impl Config {
+    pub fn test_root(&self) -> PathBuf {
+        self.checkout.join("libcxx").join("test")
+    }
+
+    fn feature_refs(&self) -> Vec<&str> {
+        self.features.iter().map(String::as_str).collect()
+    }
+
+    /// The flags every compile gets, before the test's own.
+    pub fn base_compile_flags(&self) -> Vec<String> {
+        let mut v: Vec<String> = [
+            format!("-std={}", features::STD),
+            "-stdlib=libc++".to_owned(),
+            "-resource-dir".to_owned(),
+            self.resource_dir.display().to_string(),
+            "-pthread".to_owned(),
+            "-ferror-limit=0".to_owned(),
+            "-D_LIBCPP_ENABLE_EXPERIMENTAL".to_owned(),
+            "-I".to_owned(),
+        ]
+        .into();
+        v.push(self.test_root().join("support").display().to_string());
+        v
+    }
+
+    /// The flags of the link step, after the object.
+    pub fn link_flags() -> &'static [&'static str] {
+        &["-stdlib=libc++", "-pthread", "-lc++experimental", "-lc++abi"]
+    }
+}
+
+/// The step a test failed in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Stage {
+    Compile,
+    Link,
+    Run,
+    /// A `.compile.fail` test compiled, or a `.link.fail` test linked.
+    ExpectedFail,
+}
+
+impl Stage {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Compile => "compile",
+            Self::Link => "link",
+            Self::Run => "run",
+            Self::ExpectedFail => "expected-fail-but-succeeded",
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Outcome {
+    Pass,
+    Fail(Stage),
+    XFail,
+    XPass,
+    Unsupported(String),
+    Killed(Stage),
+    Timeout(Stage),
+    Error(String),
+}
+
+impl Outcome {
+    pub fn tag(&self) -> &'static str {
+        match self {
+            Self::Pass => "PASS",
+            Self::Fail(_) => "FAIL",
+            Self::XFail => "XFAIL",
+            Self::XPass => "XPASS",
+            Self::Unsupported(_) => "UNSUPPORTED",
+            Self::Killed(_) => "KILLED",
+            Self::Timeout(_) => "TIMEOUT",
+            Self::Error(_) => "ERROR",
+        }
+    }
+
+    /// Whether the outcome fails the run (exit status 1).
+    pub fn is_failure(&self) -> bool {
+        matches!(
+            self,
+            Self::Fail(_) | Self::XPass | Self::Killed(_) | Self::Timeout(_) | Self::Error(_)
+        )
+    }
+}
+
+impl fmt::Display for Outcome {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Fail(s) | Self::Killed(s) | Self::Timeout(s) => {
+                write!(f, "{} ({})", self.tag(), s.label())
+            }
+            Self::Unsupported(r) | Self::Error(r) => write!(f, "{} ({r})", self.tag()),
+            _ => f.write_str(self.tag()),
+        }
+    }
+}
+
+/// The result of one test.
+#[derive(Clone, Debug)]
+pub struct TestResult {
+    /// Path relative to `libcxx/test`, with `/` separators.
+    pub rel: String,
+    pub outcome: Outcome,
+    /// Stage-prefixed cluster keys with a raw example each (first error
+    /// first); empty unless a step failed.
+    pub keys: Vec<(String, String)>,
+    /// kiln panicked or crashed (never hidden by `XFAIL`).
+    pub crashed: bool,
+    /// The tail of the failing step's stderr.
+    pub detail: String,
+    pub wall: Duration,
+    /// The largest per-process peak RSS among the test's steps, KiB.
+    pub max_rss_kb: Option<u64>,
+}
+
+/// One test to run: its path, the lit.local.cfg files above it (outermost
+/// first), and its index (for the scratch directory).
+pub struct Job<'a> {
+    pub path: PathBuf,
+    pub rel: String,
+    pub local_cfgs: Vec<&'a LocalCfg>,
+    pub index: usize,
+}
+
+/// What lit decides before anything runs: `Err(outcome)` ends the test
+/// (UNSUPPORTED or ERROR), `Ok` carries the directives, flags and the
+/// XFAIL expression that applies, if any.
+pub fn prepare(
+    kind: Kind,
+    text: &str,
+    local_cfgs: &[&LocalCfg],
+    features: &[&str],
+) -> Result<(Directives, Vec<String>, Option<String>), Outcome> {
+    for cfg in local_cfgs {
+        if let Some(r) = cfg.unsupported(features) {
+            return Err(Outcome::Unsupported(r));
+        }
+    }
+    let d = Directives::parse(text).map_err(Outcome::Error)?;
+    let xfail = d.verdict(features).map_err(Outcome::Unsupported)?;
+    if let Some(r) = kind.unsupported() {
+        return Err(Outcome::Unsupported(r.to_owned()));
+    }
+    if d.has_run {
+        return Err(Outcome::Unsupported("driver: RUN lines".to_owned()));
+    }
+    if !d.module_dependencies.is_empty() {
+        return Err(Outcome::Unsupported("driver: modules".to_owned()));
+    }
+    let flags = d.flags_for(features);
+    if flags.iter().any(|f| f.contains("%{")) {
+        return Err(Outcome::Unsupported("driver: substitution".to_owned()));
+    }
+    if d.file_dependencies.iter().any(|f| f.contains("%{") || f.contains('*')) {
+        return Err(Outcome::Unsupported("driver: FILE_DEPENDENCIES".to_owned()));
+    }
+    Ok((d, flags, xfail))
+}
+
+/// A step's verdict.
+enum Step {
+    Ok,
+    Failed { keys: Vec<(String, String)>, crashed: bool, detail: String },
+    Killed(String),
+    Timeout,
+}
+
+pub fn run_test(cfg: &Config, job: &Job<'_>) -> TestResult {
+    let name = job.path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    let kind = Kind::of(name).unwrap_or(Kind::Pass);
+    let mut r = TestResult {
+        rel: job.rel.clone(),
+        outcome: Outcome::Pass,
+        keys: Vec::new(),
+        crashed: false,
+        detail: String::new(),
+        wall: Duration::ZERO,
+        max_rss_kb: None,
+    };
+    let text = match std::fs::read(&job.path) {
+        Ok(b) => String::from_utf8_lossy(&b).into_owned(),
+        Err(e) => {
+            r.outcome = Outcome::Error(format!("cannot read: {e}"));
+            return r;
+        }
+    };
+    let features = cfg.feature_refs();
+    let (d, flags, xfail) = match prepare(kind, &text, &job.local_cfgs, &features) {
+        Ok(p) => p,
+        Err(o) => {
+            r.outcome = o;
+            return r;
+        }
+    };
+    let scratch = cfg.scratch.join(format!("t{}", job.index));
+    if let Err(e) = std::fs::create_dir_all(&scratch) {
+        r.outcome = Outcome::Error(format!("cannot create {}: {e}", scratch.display()));
+        return r;
+    }
+    let dir = job.path.parent().unwrap_or(Path::new("."));
+    for dep in &d.file_dependencies {
+        let from = dir.join(dep);
+        let to = scratch.join(Path::new(dep).file_name().unwrap_or_default());
+        if std::fs::copy(&from, &to).is_err() {
+            r.outcome = Outcome::Unsupported("driver: FILE_DEPENDENCIES".to_owned());
+            cleanup(cfg, &scratch);
+            return r;
+        }
+    }
+    execute(cfg, &job.path, &scratch, kind, &flags, &mut r);
+    // XFAIL turns PASS into XPASS and FAIL into XFAIL; it never hides a
+    // KILLED, a TIMEOUT or a compiler crash.
+    if xfail.is_some() && !r.crashed {
+        r.outcome = match r.outcome {
+            Outcome::Pass => Outcome::XPass,
+            Outcome::Fail(_) => Outcome::XFail,
+            o => o,
+        };
+    }
+    cleanup(cfg, &scratch);
+    r
+}
+
+fn cleanup(cfg: &Config, scratch: &Path) {
+    if !cfg.keep {
+        let _ = std::fs::remove_dir_all(scratch);
+    }
+}
+
+/// Runs the steps of `kind` and fills in `r`'s outcome, keys and timing.
+fn execute(
+    cfg: &Config,
+    src: &Path,
+    scratch: &Path,
+    kind: Kind,
+    flags: &[String],
+    r: &mut TestResult,
+) {
+    let obj = scratch.join("t.o");
+    let exe = scratch.join("t.exe");
+    let compile = |extra: &[&str]| {
+        let mut c = Command::new(&cfg.kiln);
+        c.args(cfg.base_compile_flags()).args(flags).args(extra).arg(src);
+        c
+    };
+    let link = || {
+        let mut c = Command::new(&cfg.kiln);
+        c.arg(&obj).arg("-o").arg(&exe).args(Config::link_flags());
+        c
+    };
+    let obj_s = obj.display().to_string();
+    let steps: Vec<(Stage, Command, bool)> = match kind {
+        Kind::CompilePass => vec![(Stage::Compile, compile(&["-fsyntax-only"]), true)],
+        Kind::CompileFail => vec![(Stage::Compile, compile(&["-fsyntax-only"]), false)],
+        Kind::LinkPass => vec![
+            (Stage::Compile, compile(&["-c", "-o", &obj_s]), true),
+            (Stage::Link, link(), true),
+        ],
+        Kind::LinkFail => vec![
+            (Stage::Compile, compile(&["-c", "-o", &obj_s]), true),
+            (Stage::Link, link(), false),
+        ],
+        _ => {
+            let mut run = Command::new(&exe);
+            run.current_dir(scratch);
+            vec![
+                (Stage::Compile, compile(&["-c", "-o", &obj_s]), true),
+                (Stage::Link, link(), true),
+                (Stage::Run, run, true),
+            ]
+        }
+    };
+    for (stage, mut cmd, expect_success) in steps {
+        cmd.current_dir(scratch).env("TMPDIR", scratch);
+        let is_kiln = stage != Stage::Run;
+        let limit = if is_kiln {
+            let args: Vec<_> = cmd.get_args().map(std::ffi::OsStr::to_os_string).collect();
+            cfg.mem.map(|m| m.plus(process::kiln_stack_reservation_mib(&args)))
+        } else {
+            cfg.mem
+        };
+        let timeout = if is_kiln { cfg.compile_timeout } else { cfg.run_timeout };
+        let measured =
+            process::run_measured(&cmd, &cfg.probe, &scratch.join("rss.txt"), timeout, limit);
+        let m = match measured {
+            Ok(m) => m,
+            Err(e) => {
+                r.outcome = Outcome::Error(format!(
+                    "cannot run {stage:?} step: {e}",
+                    stage = stage.label()
+                ));
+                return;
+            }
+        };
+        r.wall += m.wall;
+        r.max_rss_kb = r.max_rss_kb.max(m.max_rss_kb);
+        match judge(stage, &m) {
+            Step::Ok if expect_success => {}
+            Step::Ok => {
+                r.outcome = Outcome::Fail(Stage::ExpectedFail);
+                let what = if stage == Stage::Compile { "compiled" } else { "linked" };
+                r.keys =
+                    vec![(format!("{}.fail: {what} successfully", stage.label()), String::new())];
+                return;
+            }
+            Step::Failed { crashed: false, .. } if !expect_success => return,
+            Step::Failed { keys, crashed, detail } => {
+                r.outcome = Outcome::Fail(stage);
+                r.keys = keys;
+                r.crashed = crashed;
+                r.detail = detail;
+                return;
+            }
+            Step::Killed(detail) => {
+                r.outcome = Outcome::Killed(stage);
+                r.detail = detail;
+                return;
+            }
+            Step::Timeout => {
+                r.outcome = Outcome::Timeout(stage);
+                r.detail = format!("killed after {}s", timeout.as_secs());
+                return;
+            }
+        }
+    }
+}
+
+/// Classifies one step's end. A compiler step "crashes" on a panic, an LLVM
+/// crash banner or a signal; a test binary that aborts is an ordinary
+/// failure.
+fn judge(stage: Stage, m: &Measured) -> Step {
+    let stderr = String::from_utf8_lossy(&m.stderr);
+    if m.status.is_none() {
+        return Step::Timeout;
+    }
+    let out = m.as_output();
+    if process::out_of_memory(m.status, &stderr) {
+        return Step::Killed(tail(&stderr, 6));
+    }
+    if out.success() {
+        return Step::Ok;
+    }
+    let detail = tail(&stderr, 12);
+    let signalled = out.code().is_none_or(|c| c >= 128);
+    let label = stage.label();
+    let errors = cluster::staged(label, cluster::error_keys(&stderr));
+    if stage != Stage::Run {
+        // A crash is the first key; the errors before it still count as
+        // "any" occurrences of their clusters.
+        let crash = cluster::crash_key(&stderr).or_else(|| {
+            signalled.then(|| (format!("crash: {}", out.describe_end()), out.describe_end()))
+        });
+        if let Some(k) = crash {
+            let mut keys = vec![k];
+            keys.extend(errors);
+            return Step::Failed { keys, crashed: true, detail };
+        }
+    }
+    let mut keys = errors;
+    if keys.is_empty()
+        && stage == Stage::Link
+        && let Some(l) = stderr.lines().find(|l| l.contains("undefined reference to"))
+    {
+        let i = l.find("undefined reference to").unwrap_or(0);
+        keys.push((format!("link: {}", cluster::normalize(&l[i..])), l.trim().to_owned()));
+    }
+    if keys.is_empty()
+        && stage == Stage::Run
+        && let Some(l) = stderr.lines().find(|l| l.contains("Assertion") && l.contains("failed"))
+    {
+        keys.push(("run: assertion failed".to_owned(), l.trim().to_owned()));
+    }
+    if keys.is_empty() {
+        let first = stderr.lines().map(str::trim).find(|l| !l.is_empty());
+        let k = match first {
+            Some(l) => format!("{label}: {}", cluster::normalize(l)),
+            None => format!("{label}: {}", out.describe_end()),
+        };
+        keys.push((k, first.unwrap_or("").to_owned()));
+    }
+    Step::Failed { keys, crashed: false, detail }
+}
+
+/// The last `n` non-empty lines of `s`, each cut to 300 characters.
+pub fn tail(s: &str, n: usize) -> String {
+    let lines: Vec<&str> = s.lines().filter(|l| !l.trim().is_empty()).collect();
+    let start = lines.len().saturating_sub(n);
+    lines[start..]
+        .iter()
+        .map(|l| {
+            if l.chars().count() > 300 {
+                format!("{}…", l.chars().take(300).collect::<String>())
+            } else {
+                (*l).to_owned()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const F: &[&str] = &["c++26", "kiln", "linux", "c++experimental"];
+
+    #[test]
+    fn preparation() {
+        let p = |kind, text: &str| prepare(kind, text, &[], F).map(|(_, f, x)| (f, x));
+        assert_eq!(p(Kind::Pass, "int main(){}"), Ok((vec![], None)));
+        assert_eq!(
+            p(Kind::Pass, "// UNSUPPORTED: c++26"),
+            Err(Outcome::Unsupported("UNSUPPORTED: c++26".into()))
+        );
+        // A config verdict outranks the driver's.
+        assert_eq!(
+            p(Kind::Verify, "// REQUIRES: c++03"),
+            Err(Outcome::Unsupported("REQUIRES: c++03".into()))
+        );
+        assert_eq!(p(Kind::Verify, ""), Err(Outcome::Unsupported("driver: -verify".into())));
+        assert_eq!(
+            p(Kind::Pass, "// RUN: %{exec} x"),
+            Err(Outcome::Unsupported("driver: RUN lines".into()))
+        );
+        assert_eq!(
+            p(Kind::Pass, "// ADDITIONAL_COMPILE_FLAGS: %{maybe-include}"),
+            Err(Outcome::Unsupported("driver: substitution".into()))
+        );
+        assert_eq!(
+            p(Kind::Pass, "// MODULE_DEPENDENCIES: std"),
+            Err(Outcome::Unsupported("driver: modules".into()))
+        );
+        assert_eq!(p(Kind::Pass, "// XFAIL: kiln"), Ok((vec![], Some("kiln".into()))));
+        assert!(matches!(p(Kind::Pass, "// XFAIL: (a"), Err(Outcome::Error(_))));
+        let cfg = LocalCfg::Conditions(vec![
+            ("no-localization".into(), false),
+            ("c++experimental".into(), true),
+        ]);
+        assert_eq!(prepare(Kind::Pass, "", &[&cfg], F).map(|_| ()), Ok(()));
+        assert_eq!(
+            prepare(Kind::Pass, "", &[&LocalCfg::Opaque], F).map(|_| ()),
+            Err(Outcome::Unsupported("driver: lit.local.cfg".into()))
+        );
+    }
+
+    #[test]
+    fn outcomes() {
+        assert!(Outcome::Fail(Stage::Run).is_failure());
+        assert!(Outcome::XPass.is_failure());
+        assert!(Outcome::Killed(Stage::Compile).is_failure());
+        assert!(Outcome::Timeout(Stage::Run).is_failure());
+        assert!(Outcome::Error(String::new()).is_failure());
+        assert!(!Outcome::XFail.is_failure());
+        assert!(!Outcome::Unsupported(String::new()).is_failure());
+        assert_eq!(
+            Outcome::Fail(Stage::ExpectedFail).to_string(),
+            "FAIL (expected-fail-but-succeeded)"
+        );
+        assert_eq!(
+            Outcome::Unsupported("driver: -verify".into()).to_string(),
+            "UNSUPPORTED (driver: -verify)"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn judging() {
+        use std::os::unix::process::ExitStatusExt;
+        use std::process::ExitStatus;
+        let m = |raw: i32, stderr: &str| Measured {
+            status: Some(ExitStatus::from_raw(raw)),
+            stderr: stderr.as_bytes().to_vec(),
+            wall: Duration::ZERO,
+            max_rss_kb: None,
+        };
+        let keys = |s: Step| match s {
+            Step::Failed { keys, crashed, .. } => {
+                (keys.into_iter().map(|k| k.0).collect::<Vec<_>>(), crashed)
+            }
+            Step::Ok => (vec!["ok".into()], false),
+            Step::Killed(_) => (vec!["killed".into()], false),
+            Step::Timeout => (vec!["timeout".into()], false),
+        };
+        assert_eq!(keys(judge(Stage::Compile, &m(0, ""))).0, ["ok"]);
+        assert_eq!(
+            keys(judge(
+                Stage::Compile,
+                &m(256, "a.h:1:2: error: 'asm' statements is not supported yet\n")
+            )),
+            (vec!["compile: '…' statements is not supported yet".to_owned()], false)
+        );
+        let crash = "t.h:1:1: error: expected '>'\nthread 'kiln' panicked at crates/kiln_ast/src/decl.rs:1907:5:\ndecl has no Function payload\n";
+        assert_eq!(
+            keys(judge(Stage::Compile, &m(101 << 8, crash))),
+            (
+                vec![
+                    "crash: panicked at crates/kiln_ast/src/decl.rs: decl has no Function payload"
+                        .to_owned(),
+                    "compile: expected '…'".to_owned()
+                ],
+                true
+            )
+        );
+        assert_eq!(
+            keys(judge(Stage::Compile, &m(11, ""))),
+            (vec!["crash: killed by signal 11".to_owned()], true)
+        );
+        assert_eq!(
+            keys(judge(Stage::Link, &m(256, "/usr/bin/ld: t.o: in function `main':\nt.cpp:(.text+0x1): undefined reference to `foo()'\n"))).0,
+            ["link: undefined reference to '…'"]
+        );
+        assert_eq!(
+            keys(judge(
+                Stage::Run,
+                &m(6, "t.exe: t.cpp:3: int main(): Assertion `x == 1' failed.\n")
+            )),
+            (vec!["run: assertion failed".to_owned()], false)
+        );
+        assert_eq!(keys(judge(Stage::Run, &m(256, ""))).0, ["run: exit code 1"]);
+        assert_eq!(
+            keys(judge(Stage::Compile, &m(134, "memory allocation of 8 bytes failed\n"))).0,
+            ["killed"]
+        );
+        let timed_out =
+            Measured { status: None, stderr: Vec::new(), wall: Duration::ZERO, max_rss_kb: None };
+        assert_eq!(keys(judge(Stage::Run, &timed_out)).0, ["timeout"]);
+    }
+
+    #[test]
+    fn tails() {
+        assert_eq!(tail("a\n\nb\nc\n", 2), "b\nc");
+        assert_eq!(tail("", 3), "");
+    }
+}

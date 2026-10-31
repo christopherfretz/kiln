@@ -6,6 +6,7 @@ use std::process::ExitCode;
 mod bench;
 mod clang_ast;
 mod gen_pp;
+mod libcxx;
 mod test;
 mod util;
 
@@ -22,7 +23,9 @@ commands:
   gen-pp-corpus
               write the generated per-header preprocessor corpus under
               tests/differential/pp (`cargo xtask gen-pp-corpus --help`)
-  libcxx      run the libc++ lit suite with kiln as the compiler
+  libcxx      run libc++'s own tests (llvmorg-19.1.7 libcxx/test) with kiln; --gate m3
+              is the M3 gate; not part of ci (`cargo xtask libcxx --help`; contract
+              in spec/libcxx.md; needs scripts/fetch-libcxx-tests.sh)
   ci          the merge gate: fmt --check, clippy -D warnings, cargo test, then the
               corpus twice: xtask test --compiler clang++-19 (the corpus self-check;
               skipped when clang++-19 is not on PATH) and xtask test with kiln; fails
@@ -38,10 +41,7 @@ fn main() -> ExitCode {
         Some("bench") => bench::main(args),
         Some("clang-ast") => clang_ast::main(args),
         Some("gen-pp-corpus") => gen_pp::main(args),
-        Some("libcxx") => {
-            eprintln!("xtask: not implemented yet (M0 work package)");
-            ExitCode::FAILURE
-        }
+        Some("libcxx") => libcxx::main(args),
         Some("ci") => ci(args),
         _ => {
             eprint!("{USAGE}");

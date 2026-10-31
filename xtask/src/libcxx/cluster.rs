@@ -1,0 +1,226 @@
+//! Error clustering for the status page (`spec/libcxx.md` "Clusters").
+//!
+//! A failing test's diagnostics are reduced to cluster keys: the text after
+//! `error: ` with the location dropped, every quoted span (`'…'` or
+//! `` `…' ``) replaced by `'…'`, and every run of digits replaced by `N`.
+//! The key is prefixed with the stage that failed, so a link error never
+//! merges with a compile error of the same text.
+
+use std::collections::BTreeMap;
+
+/// The message of an `error:` (or `fatal error:`) diagnostic line, if the
+/// line is one. The location prefix (`file:line:col: `) is dropped.
+pub fn error_message(line: &str) -> Option<&str> {
+    let i = line.find("error: ")?;
+    Some(line[i + "error: ".len()..].trim())
+}
+
+/// Normalizes one diagnostic message into its cluster text.
+pub fn normalize(msg: &str) -> String {
+    let mut out = String::with_capacity(msg.len());
+    let mut chars = msg.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\'' | '`' => {
+                // A quoted span runs to the next `'`. An apostrophe with no
+                // closing quote (`isn't`) is kept as is.
+                let rest: String = chars.clone().collect();
+                if let Some(end) = rest.find('\'') {
+                    out.push_str("'…'");
+                    for _ in 0..=rest[..end].chars().count() {
+                        chars.next();
+                    }
+                } else {
+                    out.push(c);
+                }
+            }
+            '0'..='9' => {
+                out.push('N');
+                while chars.peek().is_some_and(char::is_ascii_digit) {
+                    chars.next();
+                }
+            }
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+/// All distinct cluster texts in `stderr`, in order of first appearance;
+/// the first one is the test's "first error".
+pub fn error_keys(stderr: &str) -> Vec<(String, String)> {
+    let mut seen = Vec::<(String, String)>::new();
+    for line in stderr.lines() {
+        if let Some(m) = error_message(line) {
+            let k = normalize(m);
+            if !seen.iter().any(|(s, _)| *s == k) {
+                seen.push((k, m.to_owned()));
+            }
+        }
+    }
+    seen
+}
+
+/// One row of the clusters table.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Cluster {
+    /// Tests whose first error is this cluster.
+    pub first: usize,
+    /// Tests with this cluster anywhere in their diagnostics.
+    pub any: usize,
+    /// A test that shows it (the first, in run order, whose first error it
+    /// is, else the first that has it at all).
+    pub example: String,
+    /// The raw message from `example`.
+    pub raw: String,
+    example_is_first: bool,
+}
+
+/// Cluster counts over all failing tests.
+#[derive(Clone, Debug, Default)]
+pub struct Clusters {
+    map: BTreeMap<String, Cluster>,
+}
+
+impl Clusters {
+    /// Records one failing test: `keys` are its `(cluster, raw)` pairs in
+    /// order (first error first), each already stage-prefixed.
+    pub fn add(&mut self, test: &str, keys: &[(String, String)]) {
+        for (i, (k, raw)) in keys.iter().enumerate() {
+            let c = self.map.entry(k.clone()).or_default();
+            c.any += 1;
+            if i == 0 {
+                c.first += 1;
+            }
+            if c.example.is_empty() || i == 0 && !c.example_is_first {
+                test.clone_into(&mut c.example);
+                c.raw.clone_from(raw);
+                c.example_is_first = i == 0;
+            }
+        }
+    }
+
+    /// Clusters ordered by first-error count, then any-count, then text.
+    pub fn ranked(&self) -> Vec<(&str, &Cluster)> {
+        let mut v: Vec<(&str, &Cluster)> = self.map.iter().map(|(k, c)| (k.as_str(), c)).collect();
+        v.sort_by(|a, b| b.1.first.cmp(&a.1.first).then(b.1.any.cmp(&a.1.any)).then(a.0.cmp(b.0)));
+        v
+    }
+
+    pub fn len(&self) -> usize {
+        self.map.len()
+    }
+}
+
+/// Stage-prefixes keys: `compile: …`.
+pub fn staged(stage: &str, keys: Vec<(String, String)>) -> Vec<(String, String)> {
+    keys.into_iter().map(|(k, raw)| (format!("{stage}: {k}"), raw)).collect()
+}
+
+/// The cluster of a compiler crash: the panic location's file and the
+/// normalized panic message (`thread 'main' panicked at src/x.rs:1:2:`
+/// followed by the message line).
+pub fn crash_key(stderr: &str) -> Option<(String, String)> {
+    let mut lines = stderr.lines();
+    while let Some(l) = lines.next() {
+        if let Some(i) = l.find("panicked at ") {
+            let loc = l[i + "panicked at ".len()..].trim_end_matches(':');
+            let file = loc.split(':').next().unwrap_or(loc);
+            let msg = lines.next().unwrap_or("").trim();
+            return Some((
+                format!("crash: panicked at {file}: {}", normalize(msg)),
+                format!("panicked at {loc}: {msg}"),
+            ));
+        }
+        if l.contains("PLEASE submit a bug report") {
+            return Some(("crash: LLVM crash".to_owned(), l.trim().to_owned()));
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalization() {
+        let cases: &[(&str, &str)] = &[
+            (
+                "use of undeclared identifier '__PRETTY_FUNCTION__'",
+                "use of undeclared identifier '…'",
+            ),
+            ("no member named 'value' in 'std::is_same<int, long>'", "no member named '…' in '…'"),
+            ("'asm' statements is not supported yet", "'…' statements is not supported yet"),
+            ("expected `;' after expression", "expected '…' after expression"),
+            ("too many arguments (3 for 12)", "too many arguments (N for N)"),
+            ("isn't handled", "isn't handled"),
+            (
+                "constexpr evaluation exceeded 1048576 steps",
+                "constexpr evaluation exceeded N steps",
+            ),
+        ];
+        for &(msg, want) in cases {
+            assert_eq!(normalize(msg), want, "{msg}");
+        }
+    }
+
+    #[test]
+    fn messages() {
+        assert_eq!(
+            error_message("/x/test_macros.h:294:5: error: 'asm' statements is not supported yet"),
+            Some("'asm' statements is not supported yet")
+        );
+        assert_eq!(
+            error_message("a.cpp:1:1: fatal error: 'x.h' file not found"),
+            Some("'x.h' file not found")
+        );
+        assert_eq!(error_message("a.cpp:1:1: warning: unused"), None);
+        assert_eq!(
+            error_message("/usr/bin/ld: error: undefined symbol: foo"),
+            Some("undefined symbol: foo")
+        );
+        let stderr = "a.cpp:1:1: error: no type named 'x'\nnote: here\nb.h:2:2: error: no type named 'y'\nc.h:3:3: error: other 7\n";
+        let keys = error_keys(stderr);
+        assert_eq!(keys.len(), 2);
+        assert_eq!(keys[0].0, "no type named '…'");
+        assert_eq!(keys[0].1, "no type named 'x'");
+        assert_eq!(keys[1].0, "other N");
+    }
+
+    #[test]
+    fn counting() {
+        let mut c = Clusters::default();
+        let k = |v: &[&str]| {
+            staged("compile", v.iter().map(|s| (normalize(s), (*s).to_owned())).collect())
+        };
+        c.add("t1", &k(&["a 'x'", "b"]));
+        c.add("t2", &k(&["b", "a 'y'"]));
+        c.add("t3", &k(&["b"]));
+        c.add("t4", &staged("link", vec![("b".into(), "b".into())]));
+        let r = c.ranked();
+        assert_eq!(c.len(), 3);
+        assert_eq!(r[0].0, "compile: b");
+        assert_eq!((r[0].1.first, r[0].1.any), (2, 3));
+        // The example prefers a test whose first error is the cluster.
+        assert_eq!(r[0].1.example, "t2");
+        assert_eq!(r[1].0, "compile: a '…'");
+        assert_eq!((r[1].1.first, r[1].1.any, r[1].1.example.as_str()), (1, 2, "t1"));
+        assert_eq!(r[2].0, "link: b");
+    }
+
+    #[test]
+    fn crashes() {
+        let s = "thread 'main' panicked at crates/kiln_sema/src/expr.rs:812:9:\nindex out of bounds: the len is 3 but the index is 7\nnote: run with RUST_BACKTRACE=1";
+        assert_eq!(
+            crash_key(s).unwrap().0,
+            "crash: panicked at crates/kiln_sema/src/expr.rs: index out of bounds: the len is N but the index is N"
+        );
+        assert_eq!(
+            crash_key(s).unwrap().1,
+            "panicked at crates/kiln_sema/src/expr.rs:812:9: index out of bounds: the len is 3 but the index is 7"
+        );
+        assert_eq!(crash_key("error: x").map(|k| k.0), None);
+        assert_eq!(crash_key("PLEASE submit a bug report to ...").unwrap().0, "crash: LLVM crash");
+    }
+}
