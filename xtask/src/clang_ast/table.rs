@@ -201,7 +201,9 @@ pub const TABLE: &[(&str, Disposition)] = &[
     // A template argument outside the template nodes that print theirs
     // (an explicit specialization's or instantiation's arguments).
     ("TemplateArgument", Unsupported(INSTANTIATION)),
-    ("LambdaExpr", Unsupported("lambdas are M3 (spec/ast-dump.md §5)")),
+    // The closure (implicit, so only under `implicit`), the capture
+    // initializers, then the body (spec/ast-dump.md §5).
+    ("LambdaExpr", Keep),
     ("TypeTraitExpr", Unsupported(NOT_M2)),
     ("ArrayTypeTraitExpr", Unsupported(NOT_M2)),
     ("ExpressionTraitExpr", Unsupported(NOT_M2)),

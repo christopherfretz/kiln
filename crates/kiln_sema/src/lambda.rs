@@ -181,6 +181,8 @@ impl Sema<'_, '_> {
         let closure = top.closure;
         let lbracket = self.ast.exprs.lambdas.get(id).lbracket;
         if let Some(l) = specs.consteval {
+            // Immediate functions are not implemented (decl.rs reports a
+            // `consteval` function the same way).
             self.unsupported("consteval lambdas", l);
         }
         let is_static = specs.static_.is_some();
@@ -195,9 +197,26 @@ impl Sema<'_, '_> {
             }
         }
         let base = self.ast.types.auto_type(AutoKeyword::Auto, None, None, None, false);
-        let ty = self.type_for_declarator_at(base, lbracket, &d);
-        let mut spec =
-            FnSpec::new().with_inline(true).with_constexpr_kind(ConstexprKind::Constexpr);
+        let mut ty = self.type_for_declarator_at(base, lbracket, &d);
+        // clang `getDummyLambdaType`: with no parameter-declaration-clause
+        // the call operator's type is `auto () const -> R`.
+        if !specs.explicit_params
+            && let TypeView::Function(p) = self.ast.types.view(ty.ty())
+            && !p.info().trailing_return()
+        {
+            let params = self.ast.types.params(&p).to_vec();
+            let exc = self.ast.types.exc_spec(&p);
+            let info = p.info().with_trailing_return(true);
+            ty = self.ast.types.function(p.ret(), &params, info, exc);
+        }
+        // [dcl.constexpr]/1: `consteval` makes the call operator an
+        // immediate function; otherwise it is constexpr if it can be.
+        let kind = if specs.consteval.is_some() {
+            ConstexprKind::Consteval
+        } else {
+            ConstexprKind::Constexpr
+        };
+        let mut spec = FnSpec::new().with_inline(true).with_constexpr_kind(kind);
         if is_static {
             spec = spec.with_storage(FnStorage::Static);
         }
@@ -520,7 +539,15 @@ impl Sema<'_, '_> {
         );
         let canon = self.ast.types.canonical(ptr);
         let name = self.ast.names.conversion(canon);
-        let spec = FnSpec::new().with_inline(true).with_constexpr_kind(ConstexprKind::Constexpr);
+        // [expr.prim.lambda.closure]/10-11: the conversion and the
+        // invoker are immediate functions if the call operator is.
+        let consteval = self
+            .ast
+            .decls
+            .function(call_op)
+            .is_some_and(|x| x.spec.constexpr_kind() == ConstexprKind::Consteval);
+        let kind = if consteval { ConstexprKind::Consteval } else { ConstexprKind::Constexpr };
+        let spec = FnSpec::new().with_inline(true).with_constexpr_kind(kind);
         let h = DeclHead::new(closure, name, lbracket)
             .flags(DeclFlags::IMPLICIT)
             .access(Access::Public);
@@ -529,7 +556,9 @@ impl Sema<'_, '_> {
             return;
         }
         let mut spec = FnSpec::new().with_inline(true).with_storage(FnStorage::Static);
-        if explicit_constexpr {
+        if consteval {
+            spec = spec.with_constexpr_kind(ConstexprKind::Consteval);
+        } else if explicit_constexpr {
             spec = spec.with_constexpr_kind(ConstexprKind::Constexpr);
         }
         let sym = self.ast.symbols().intern("__invoke");

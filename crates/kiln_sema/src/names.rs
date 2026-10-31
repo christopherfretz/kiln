@@ -17,17 +17,19 @@ use crate::Sema;
 #[derive(Debug)]
 pub struct SemaNames<'s> {
     ast: &'s Ast,
+    /// Where unnamed tags' locations resolve (`(lambda at F:L:C)`).
+    sources: Option<&'s kiln_source::SourceManager>,
 }
 
 impl<'s> SemaNames<'s> {
     /// Names for `sema`'s AST.
     pub fn new(sema: &'s Sema<'_, '_>) -> Self {
-        SemaNames { ast: &sema.ast }
+        SemaNames { ast: &sema.ast, sources: Some(sema.diags.sm()) }
     }
 
     /// Names for `ast` alone.
     pub fn of_ast(ast: &'s Ast) -> Self {
-        SemaNames { ast }
+        SemaNames { ast, sources: None }
     }
 
     fn simple(&self, d: DeclId) -> Option<String> {
@@ -45,10 +47,13 @@ impl<'s> SemaNames<'s> {
     fn write_unscoped(&self, d: DeclId, out: &mut String) {
         if let Some(s) = self.simple(d) {
             out.push_str(&s);
-        } else if self.ast.decls.get(d).kind() == DeclKind::Enum {
-            out.push_str("(unnamed enum)");
         } else {
-            out.push_str("(unnamed struct)");
+            // `(unnamed struct at F:L:C)`, `(lambda at F:L:C)`, ...
+            let names = match self.sources {
+                Some(sm) => kiln_ast::dump::AstNames::with_sources(self.ast, sm),
+                None => kiln_ast::dump::AstNames::new(self.ast),
+            };
+            names.write_decl_name(d, false, out);
         }
     }
 
