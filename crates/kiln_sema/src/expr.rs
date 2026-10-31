@@ -3362,6 +3362,12 @@ impl Sema<'_, '_> {
         loc: Loc,
         rparen: Loc,
     ) -> ExprId {
+        // `C(e)` ([dcl.type.class.deduct]/2, WP-071b).
+        let ty = if style == CastStyle::Functional && !self.is_err_expr(e) {
+            self.ctad_cast_type(ty, &[e], loc)
+        } else {
+            ty
+        };
         let is_err = self.is_err_expr(e) || self.is_error_type(ty);
         if !is_err && (self.ast.types.is_dependent(ty) || self.expr_is_type_dependent(e)) {
             return self.dependent_cast(style, ty, e, loc, rparen);

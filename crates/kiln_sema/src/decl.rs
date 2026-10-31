@@ -260,6 +260,7 @@ impl Sema<'_, '_> {
                 SpecialName::Destructor(n) => format!("~{}", sym_str(self, n)),
                 SpecialName::Operator(op) => format!("operator{}", op.spelling()),
                 SpecialName::Conversion(t) => format!("operator {}", self.ty_arg(t)),
+                SpecialName::DeductionGuide(t) => self.decl_name_str(self.ast.decls.get(t).name()),
             };
         }
         d.name.map_or_else(|| "type name".to_owned(), |(n, _)| sym_str(self, n))
@@ -1105,6 +1106,7 @@ impl Sema<'_, '_> {
                 SpecialName::Destructor(_) => "destructors",
                 SpecialName::Conversion(_) => "conversion functions",
                 SpecialName::Operator(_) => "overloaded operators",
+                SpecialName::DeductionGuide(_) => "deduction guides here",
             };
             self.unsupported(what, loc);
             return true;
@@ -1252,6 +1254,12 @@ impl Sema<'_, '_> {
     ) -> Option<DeclId> {
         self.finish_invented_head();
         let head = self.take_template_head(d.qualifier);
+        if !d.dropped
+            && ds.friend.is_none()
+            && let Some((SpecialName::DeductionGuide(t), _)) = d.special
+        {
+            return self.act_on_deduction_guide(ds, base, d, t);
+        }
         let special = !d.dropped && self.handles_special_declarator(ds, d);
         let op_d = if special { None } else { self.operator_declarator(d) };
         let d = op_d.as_ref().unwrap_or(d);
@@ -2711,6 +2719,23 @@ impl Sema<'_, '_> {
             self.init_decomposition_array(v, t, &init);
             return;
         }
+        if self.undeduced_ctad(ty).is_some() {
+            // [dcl.type.class.deduct]/1 (WP-071b).
+            ty = self.ctad_for_initializer(ty, &init, direct, loc).unwrap_or(QualType::ERROR);
+            self.ast.decls.set_ty(v, ty);
+            if self.is_error_type(ty) {
+                self.ast.decls.set_flags(v, DeclFlags::INVALID);
+                let es = match &init {
+                    Initializer::Expr(e) => vec![*e],
+                    Initializer::Paren(es, ..) => es.clone(),
+                    Initializer::List(l) => Self::list_exprs(l),
+                };
+                for e in es {
+                    self.act_on_full_expr(e);
+                }
+                return;
+            }
+        }
         if self.contains_undeduced_auto(ty) {
             ty = match self.deduce_var_auto(v, ty, &init, loc, direct) {
                 Some(t) => t,
@@ -2946,6 +2971,7 @@ impl Sema<'_, '_> {
         let ty = vn.ty().unwrap_or(QualType::ERROR);
         let loc = vn.loc();
         let name = self.decl_name(v);
+        let Some(ty) = self.ctad_uninit(v, ty, loc) else { return };
         // [temp.res.general]/6: checked when instantiated.
         if self.is_error_type(ty) || self.ast.types.is_dependent(ty) {
             return;

@@ -1038,10 +1038,12 @@ impl Parser<'_, '_> {
         // A class template's injected-class-name used as a type
         // ([temp.local]/1): `X(args)` / `X{args}` in its definition.
         if let Some((end, NameClass::TypeTemplate(d), _)) = self.scan_name(self.pos())
-            && end == self.pos() + 1
             && matches!(Self::punct_of(self.tok_at(end)), Some(Punct::LParen | Punct::LBrace))
-            && self.s.names_injected_class(d)
+            && (end == self.pos() + 1 && self.s.names_injected_class(d)
+                || self.s.is_ctad_template(d))
         {
+            // Or a class template named for class template argument
+            // deduction ([dcl.type.class.deduct]/2): `C(args)`.
             return self.parse_functional_cast();
         }
         self.parse_id_expression_rest()

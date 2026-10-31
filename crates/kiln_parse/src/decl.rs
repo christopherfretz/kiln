@@ -694,6 +694,35 @@ impl Parser<'_, '_> {
         self.emit(d);
     }
 
+    /// Class template `d`, written up to token `end` (`qualified`: after a
+    /// nested-name-specifier), as the placeholder for a deduced class type
+    /// ([dcl.type.class.deduct]) of `ds`.
+    fn parse_ctad_placeholder(
+        &mut self,
+        ds: &mut DeclSpec,
+        d: DeclId,
+        qualified: bool,
+        end: usize,
+        loc: Loc,
+    ) {
+        let mut nns = None;
+        if qualified {
+            if let Ok(Some(q)) = self.parse_nested_name_nns() {
+                nns = Some(q.nns);
+            } else {
+                ds.invalid = true;
+            }
+        }
+        while self.pos() < end {
+            self.bump();
+        }
+        let ty = self.s.ctad_placeholder(d, nns);
+        if let Err(e) = ds.set_base(TypeSpecKind::Named, Some(ty), loc) {
+            ds.invalid = true;
+            self.spec_error(&e, loc);
+        }
+    }
+
     /// A type-name in a decl-specifier-seq (`T`, `N::T`), or an unknown
     /// identifier that can only be one. Returns false (consuming nothing)
     /// if the tokens are not a type name.
@@ -767,6 +796,11 @@ impl Parser<'_, '_> {
                     ds.invalid = true;
                     self.spec_error(&e, loc);
                 }
+                true
+            }
+            // A placeholder for a deduced class type ([dcl.type.class.deduct]).
+            Some((end, NameClass::TypeTemplate(d), _)) if self.s.is_ctad_template(d) => {
+                self.parse_ctad_placeholder(ds, d, end > start + 1, end, loc);
                 true
             }
             Some((end, NameClass::Undeclared, name)) if end == start + 1 => {
@@ -1211,9 +1245,19 @@ impl Parser<'_, '_> {
                 self.parse_special_declarator_id(d);
             } else if let Some(n) = self.ident() {
                 let ctor = self.names_constructor(n, last_qual, d.ctx);
+                let guide = if ctor
+                    || qual.is_some()
+                    || !matches!(d.ctx, DeclaratorContext::File | DeclaratorContext::Member)
+                {
+                    None
+                } else {
+                    self.deduction_guide_at(self.pos())
+                };
                 let l = self.bump().span.lo;
                 if ctor {
                     d.special = Some((SpecialName::Constructor(n), l));
+                } else if let Some(t) = guide {
+                    d.special = Some((SpecialName::DeductionGuide(t), l));
                 } else {
                     d.name = Some((n, l));
                 }
@@ -1842,7 +1886,9 @@ impl Parser<'_, '_> {
             // [class.conv.fct]/1).
             let untyped = !ds.has_type_specifier() && is_untyped_special(&d);
             let base = *base_ty.get_or_insert_with(|| {
-                if untyped {
+                if untyped && is_deduction_guide(&d) {
+                    self.s.plain_auto_type()
+                } else if untyped {
                     QualType::VOID
                 } else if d.invalid && !ds.has_type_specifier() {
                     QualType::ERROR
@@ -2156,10 +2202,20 @@ pub(crate) fn is_untyped_special(d: &Declarator) -> bool {
     matches!(
         d.special,
         Some((
-            SpecialName::Constructor(_) | SpecialName::Destructor(_) | SpecialName::Conversion(_),
+            SpecialName::Constructor(_)
+                | SpecialName::Destructor(_)
+                | SpecialName::Conversion(_)
+                | SpecialName::DeductionGuide(_),
             _
         ))
     )
+}
+
+/// True for a deduction-guide declarator, whose declared return type is
+/// the placeholder its trailing return type replaces
+/// ([temp.deduct.guide]/1, [dcl.fct]/2).
+pub(crate) fn is_deduction_guide(d: &Declarator) -> bool {
+    matches!(d.special, Some((SpecialName::DeductionGuide(_), _)))
 }
 
 /// `constexpr`, `consteval` or `constinit`: at most one of them

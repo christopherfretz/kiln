@@ -153,6 +153,12 @@ pub struct TemplState {
     /// Set by [`Sema::begin_member_qualifier`], taken by the first
     /// component.
     pub(crate) member_scope: Option<MemberScope>,
+    /// The implicit deduction guides of each class template (first
+    /// declaration), formed on first use ([over.match.class.deduct]/1).
+    pub(crate) ctad_guides: kiln_source::fx::FxHashMap<DeclId, Vec<DeclId>>,
+    /// The copy deduction candidates among them (template decls;
+    /// [over.match.class.deduct]/1.3, [over.match.best.general]/2.12).
+    pub(crate) ctad_copy: kiln_source::fx::FxHashSet<DeclId>,
 }
 
 /// The class an object expression names for the lookup of the first

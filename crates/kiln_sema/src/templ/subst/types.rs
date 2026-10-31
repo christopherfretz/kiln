@@ -252,6 +252,19 @@ impl Substituter<'_, '_, '_> {
                 }
                 None => Ok(q),
             },
+            // A class template placeholder deduced from type-dependent
+            // arguments: deduced again from the substituted ones
+            // ([over.match.class.deduct], WP-071b).
+            TypeView::DeducedTemplateSpecialization { name, deduced } => match deduced {
+                Some(d) if d == QualType::DEPENDENT => {
+                    Ok(self.sema.ast.types.deduced_template_specialization(name, None))
+                }
+                Some(d) => {
+                    let d = self.ty(d, loc)?;
+                    Ok(self.sema.ast.types.deduced_template_specialization(name, Some(d)))
+                }
+                None => Ok(q),
+            },
             TypeView::Attributed { kind, modified, equivalent } => {
                 let m = self.ty(modified, loc)?;
                 let e = self.ty(equivalent, loc)?;

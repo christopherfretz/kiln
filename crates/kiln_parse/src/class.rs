@@ -24,7 +24,7 @@ use kiln_sema::{
 use kiln_source::Loc;
 use kiln_source::symbol::Symbol;
 
-use crate::decl::is_untyped_special;
+use crate::decl::{is_deduction_guide, is_untyped_special};
 use crate::keywords::Kw;
 use crate::parser::{Parser, quote};
 use kiln_sema::templ::auto::AutoGroup;
@@ -1084,7 +1084,9 @@ impl Parser<'_, '_> {
     /// once the first declarator is known: clang reports a missing type
     /// specifier at its name.
     fn member_base_type(&mut self, ds: &DeclSpec, d: &Declarator) -> QualType {
-        if !ds.has_type_specifier() && is_untyped_special(d) {
+        if !ds.has_type_specifier() && is_deduction_guide(d) {
+            self.s.plain_auto_type()
+        } else if !ds.has_type_specifier() && is_untyped_special(d) {
             QualType::VOID
         } else if d.invalid && !ds.has_type_specifier() {
             // A malformed special declarator-id (`operator;`) is reported;
@@ -1306,6 +1308,7 @@ impl Parser<'_, '_> {
             (None, Some((SpecialName::Destructor(n), _))) => format!("~{}", sym(*n)),
             (None, Some((SpecialName::Conversion(_), _))) => "operator <conv>".to_owned(),
             (None, Some((SpecialName::Operator(_), _))) => "operator".to_owned(),
+            (None, Some((SpecialName::DeductionGuide(_), _))) => "<deduction guide>".to_owned(),
             (None, None) => "<anon>".to_owned(),
         }
     }
@@ -1394,6 +1397,9 @@ impl Parser<'_, '_> {
         if Self::punct_of(self.tok_at(i + 1)) != Some(Punct::LParen) {
             return false;
         }
+        if i == self.pos() && self.deduction_guide_at(i).is_some() {
+            return true;
+        }
         match last {
             Some(q) => q == n,
             None => {
@@ -1405,6 +1411,26 @@ impl Parser<'_, '_> {
                     )
             }
         }
+    }
+
+    /// The class template whose deduction-guide ([temp.deduct.guide])
+    /// starts at token `i`: an unqualified template-name of a class
+    /// template, a parenthesized parameter list, then `->` (clang's
+    /// `isDeductionGuideName` plus its declarator check). The
+    /// injected-class-name in its own class is a constructor instead.
+    pub(crate) fn deduction_guide_at(&self, i: usize) -> Option<DeclId> {
+        let n = self.ident_of(self.tok_at(i))?;
+        if Self::punct_of(self.tok_at(i + 1)) != Some(Punct::LParen) {
+            return None;
+        }
+        let NameClass::TypeTemplate(t) = self.s.classify_name(n, None) else { return None };
+        if self.s.ast.decls.get(t).kind() != DeclKind::ClassTemplate
+            || self.s.names_injected_class(t)
+        {
+            return None;
+        }
+        let close = self.skip_balanced(i + 1)?;
+        (Self::punct_of(self.tok_at(close)) == Some(Punct::Arrow)).then_some(t)
     }
 
     // -- special declarator-ids ----------------------------------------------------------

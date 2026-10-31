@@ -1143,6 +1143,13 @@ diag_ids! {
     sema_integer_seq_integral_element_type = Error (0) "integer sequences must have integral element type";
     sema_integer_seq_too_long = Error (2) "integer sequence length {0} exceeds the implementation limit of {1}";
     sema_auto_var_requires_init = Error (2) "declaration of variable '{0}' with deduced type {1} requires an initializer";
+    sema_ctad_no_viable = Error (1) "no viable constructor or deduction guide for deduction of template arguments of '{0}'";
+    sema_ctad_ambiguous = Error (1) "ambiguous deduction for template arguments of '{0}'";
+    sema_ctad_deleted = Error (1) "class template argument deduction for '{0}' selected a deleted constructor";
+    sema_ctad_explicit_copy_list = Error (2) "class template argument deduction for '{0}' selected an explicit {1:constructor|deduction guide} for copy-list-initialization";
+    note_ctad_explicit_here = Note (1) "explicit {0:constructor|deduction guide} declared here";
+    note_implicit_deduction_guide = Note (1) "implicit deduction guide declared as '{0}'";
+    sema_ctad_not_allowed = Error (1) "cannot use deduced class template specialization type {0} here";
     sema_auto_var_init_multiple_expressions = Error (2) "initializer for variable '{0}' with type {1} contains multiple expressions";
     sema_auto_var_init_no_expression = Error (2) "initializer for variable '{0}' with type {1} is empty";
     sema_auto_inconsistent_deduction = Error (2) "deduced conflicting types ({0} vs {1}) for initializer list element type";

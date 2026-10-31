@@ -107,7 +107,7 @@ impl Sema<'_, '_> {
     /// The value of `explicit(expr)` ([dcl.fct.spec]/3: a contextually
     /// converted constant expression of type `bool`): `None` when it is
     /// value-dependent or not a constant.
-    fn explicit_value(&mut self, e: kiln_ast::ExprId) -> Option<bool> {
+    pub(crate) fn explicit_value(&mut self, e: kiln_ast::ExprId) -> Option<bool> {
         let x = self.ast.exprs.get(e);
         if x.is_value_dependent() || x.is_type_dependent() {
             return None;
@@ -144,6 +144,7 @@ impl Sema<'_, '_> {
                 SpecialName::Destructor(_) => self.error(DiagId::sema_dtor_not_member, sloc),
                 SpecialName::Constructor(_) => self.unsupported("constructors", sloc),
                 SpecialName::Operator(_) => self.unsupported("overloaded operators", sloc),
+                SpecialName::DeductionGuide(_) => self.unsupported("deduction guides here", sloc),
             }
             return None;
         };
@@ -163,6 +164,7 @@ impl Sema<'_, '_> {
             }
             SpecialName::Conversion(t) => Shape::Conv(t),
             SpecialName::Operator(_) => Shape::Assign,
+            SpecialName::DeductionGuide(_) => return None,
         };
         let in_class = d.qualifier.is_none();
         let is_static = matches!(ds.storage, Some((StorageSpec::Static, _)));
