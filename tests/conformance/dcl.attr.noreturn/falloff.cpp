@@ -1,7 +1,7 @@
 // [dcl.attr.noreturn]/2: a noreturn function that can reach its end
 // (clang -Winvalid-noreturn, ahead of -Wreturn-type); a throw or a
 // handler that rethrows does not return.
-//@ expect: compile-fail
+//@ expect: compile-ok
 //@ strict-diags
 //@ diag: 10:57 warning "function declared 'noreturn' should not return"
 //@ diag: 11:25 warning "function declared 'noreturn' should not return"

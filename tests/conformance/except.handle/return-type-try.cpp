@@ -1,7 +1,7 @@
 // [stmt.return]/2, [except.handle]/16: flowing off the end of a handler of
 // a value-returning function; a throw-expression statement does not flow
 // off ([expr.throw]).
-//@ expect: compile-fail
+//@ expect: compile-ok
 //@ strict-diags
 //@ diag: 10:45 warning "non-void function does not return a value in all control paths"
 //@ diag: 11:45 warning "non-void function does not return a value in all control paths"

@@ -3,7 +3,7 @@
 // exception specification, calls std::terminate; clang warns
 // (-Wexceptions) once per such throw, in reverse source order. Templates
 // are checked at instantiation, not as patterns.
-//@ expect: compile-fail
+//@ expect: compile-ok
 //@ strict-diags
 //@ diag: 22:21 warning "'f' has a non-throwing exception specification but can still throw"
 //@ diag: 22:6 note "function declared non-throwing here"
