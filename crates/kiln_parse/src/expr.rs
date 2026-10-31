@@ -725,16 +725,15 @@ impl Parser<'_, '_> {
                         return Some(e);
                     }
                     self.bump();
-                    if self.at(Punct::LBrace) {
-                        self.unsupported("braced-init-list subscripts", self.loc());
-                        return None;
-                    }
-                    let Some(idx) = self.with_greater_op(true, Self::parse_expression) else {
-                        self.skip_until(&[Punct::RSquare], false, true);
-                        return None;
+                    // C++23 [expr.sub]: an expression-list (possibly
+                    // empty, possibly braced-init-lists).
+                    let args = if self.at(Punct::RSquare) {
+                        Vec::new()
+                    } else {
+                        self.with_greater_op(true, |p| p.parse_expr_list(Punct::RSquare))?
                     };
-                    self.expect_closing(Punct::RSquare, Punct::LSquare, loc);
-                    e = self.s.act_on_subscript(e, idx, loc);
+                    let rsquare = self.expect_closing(Punct::RSquare, Punct::LSquare, loc);
+                    e = self.s.act_on_subscript_args(e, &args, loc, rsquare);
                 }
                 Some(Punct::LParen) => {
                     self.bump();
@@ -801,20 +800,26 @@ impl Parser<'_, '_> {
     /// expression-list whose initializer-clauses may be braced lists or
     /// pack expansions ([temp.variadic]/5).
     fn parse_call_args(&mut self) -> Option<Vec<ExprId>> {
-        let mut args = Vec::new();
         if self.at(Punct::RParen) {
-            return Some(args);
+            return Some(Vec::new());
         }
+        self.parse_expr_list(Punct::RParen)
+    }
+
+    /// A non-empty expression-list of initializer-clauses closed by
+    /// `close` ([expr.post.general]).
+    fn parse_expr_list(&mut self, close: Punct) -> Option<Vec<ExprId>> {
+        let mut args = Vec::new();
         loop {
             let a = if self.at(Punct::LBrace) {
                 let Ok(l) = self.parse_init_list() else {
-                    self.skip_until(&[Punct::RParen], false, true);
+                    self.skip_until(&[close], false, true);
                     return None;
                 };
                 self.s.act_on_braced_arg(l)
             } else {
                 let Some(a) = self.parse_assignment_expr() else {
-                    self.skip_until(&[Punct::RParen], false, true);
+                    self.skip_until(&[close], false, true);
                     return None;
                 };
                 a

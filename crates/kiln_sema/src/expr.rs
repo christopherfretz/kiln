@@ -28,6 +28,7 @@ use crate::conv::{self, ArithConvKind, ConvCtx, ConvError};
 use crate::init::InitList;
 use crate::literal;
 use crate::lookup::LookupKind;
+use crate::overload::oper::{OperForm, OperResult};
 
 mod ref_cast;
 
@@ -324,6 +325,28 @@ impl Sema<'_, '_> {
                 | ExprKind::CXXMemberCallExpr
                 | ExprKind::MemberExpr => true,
                 ExprKind::UnaryOperator => self.ast.exprs.unary_op(e).is_postfix(),
+                ExprKind::CXXRewrittenBinaryOperator => {
+                    e = self.ast.exprs.rewritten_semantic(e);
+                    continue;
+                }
+                // clang's `CXXOperatorCallExpr::getSourceRangeImpl`: a
+                // prefix unary operator begins at its token, every other
+                // form at its first operand.
+                ExprKind::CXXOperatorCallExpr => {
+                    use kiln_ast::names::OverloadedOperator as O;
+                    let op = self.ast.exprs.operator_call_op(e);
+                    let args = self.ast.exprs.call_args(e);
+                    let first = self.ast.lists.at::<ExprId>(args, 0);
+                    let prefix = self.ast.lists.get(args).len() == 1
+                        && !matches!(op, O::Call | O::Subscript | O::Arrow);
+                    match first {
+                        Some(a) if !prefix => {
+                            e = a;
+                            continue;
+                        }
+                        _ => return n.loc(),
+                    }
+                }
                 _ => false,
             };
             let kids = if first { self.ast.exprs.children(e, &self.ast.lists) } else { Vec::new() };
@@ -532,7 +555,32 @@ impl Sema<'_, '_> {
         let n = *self.ast.exprs.get(x);
         let loc = n.loc();
         match n.kind() {
-            ExprKind::CallExpr => {
+            // clang's `isUnusedResultAWarning`: user-defined comparisons
+            // warn as the built-in ones do.
+            ExprKind::CXXOperatorCallExpr
+                if !self.ast.types.is_reference(n.ty())
+                    && !self.ast.types.is_void(n.ty())
+                    && matches!(
+                        self.ast.exprs.operator_call_op(x),
+                        kiln_ast::names::OverloadedOperator::EqualEqual
+                            | kiln_ast::names::OverloadedOperator::ExclaimEqual
+                            | kiln_ast::names::OverloadedOperator::Less
+                            | kiln_ast::names::OverloadedOperator::Greater
+                            | kiln_ast::names::OverloadedOperator::LessEqual
+                            | kiln_ast::names::OverloadedOperator::GreaterEqual
+                    ) =>
+            {
+                let which = match self.ast.exprs.operator_call_op(x) {
+                    kiln_ast::names::OverloadedOperator::EqualEqual => "0",
+                    kiln_ast::names::OverloadedOperator::ExclaimEqual => "1",
+                    _ => "2",
+                };
+                Some((DiagId::sema_unused_comparison, loc, vec![which.to_owned()]))
+            }
+            ExprKind::CXXRewrittenBinaryOperator => {
+                Some((DiagId::sema_unused_expr, loc, Vec::new()))
+            }
+            ExprKind::CallExpr | ExprKind::CXXOperatorCallExpr => {
                 let callee = self.ignore_paren_imp_casts(self.ast.exprs.callee(x));
                 if self.ast.exprs.get(callee).kind() == ExprKind::DeclRefExpr {
                     let f = self.ast.exprs.decl(callee);
@@ -1373,10 +1421,6 @@ impl Sema<'_, '_> {
             }
             return false;
         }
-        if self.ast.types.as_record(t).is_some() {
-            self.unsupported("assignment of class objects", loc);
-            return false;
-        }
         true
     }
 
@@ -1398,6 +1442,17 @@ impl Sema<'_, '_> {
         if self.is_dependent_overloadable(t0) {
             return self.builder().dependent_unary(op, e, loc);
         }
+        match self.try_overloaded_operator(OperForm::Unary(op), &[e], &[], loc, Loc::INVALID) {
+            OperResult::Done(x) => x,
+            OperResult::Converted(v) => self.builtin_unary(op, v[0], loc),
+            OperResult::Builtin | OperResult::BuiltinNotes(_) => self.builtin_unary(op, e, loc),
+        }
+    }
+
+    /// The built-in unary operator `op` ([expr.unary.op], [expr.pre.incr],
+    /// [expr.post.incr]).
+    pub(crate) fn builtin_unary(&mut self, op: UnaryOp, e: ExprId, loc: Loc) -> ExprId {
+        let t0 = self.ety(e);
         if op != UnaryOp::AddrOf && self.check_overload_use(e) {
             return self.recover_err(&[e], loc);
         }
@@ -1617,6 +1672,43 @@ impl Sema<'_, '_> {
         if self.expr_is_type_dependent(l) || self.expr_is_type_dependent(r) {
             return self.builder().dependent_binary(op, l, r, loc);
         }
+        self.binary_operator(op, l, r, None, loc)
+    }
+
+    /// A binary operator on non-dependent operands: an overloaded
+    /// operator if an operand has class or enumeration type
+    /// ([over.match.oper]), else the built-in one. `braced`: the braced
+    /// right operand of an assignment ([expr.assign]/8).
+    pub(crate) fn binary_operator(
+        &mut self,
+        op: BinaryOp,
+        l: ExprId,
+        r: ExprId,
+        braced: Option<InitList>,
+        loc: Loc,
+    ) -> ExprId {
+        let br = [None, braced];
+        match self.try_overloaded_operator(OperForm::Binary(op), &[l, r], &br, loc, Loc::INVALID) {
+            OperResult::Done(e) => e,
+            OperResult::Builtin => self.builtin_binary(op, l, r, loc),
+            OperResult::Converted(v) => self.builtin_binary(op, v[0], v[1], loc),
+            OperResult::BuiltinNotes(notes) => {
+                *self.trailing_notes.borrow_mut() = notes;
+                let e = self.builtin_binary(op, l, r, loc);
+                self.trailing_notes.borrow_mut().clear();
+                e
+            }
+        }
+    }
+
+    /// The built-in binary operator `op` ([expr.mul] .. [expr.comma]).
+    pub(crate) fn builtin_binary(
+        &mut self,
+        op: BinaryOp,
+        l: ExprId,
+        r: ExprId,
+        loc: Loc,
+    ) -> ExprId {
         // [over.over]/1: an overload set needs a target; only an
         // assignment's right operand has one.
         if self.check_overload_use(l) || (op != BinaryOp::Assign && self.check_overload_use(r)) {
@@ -2217,11 +2309,69 @@ impl Sema<'_, '_> {
         self.ast.types.proto(q).copied()
     }
 
+    /// `e1[args]` ([expr.sub], [over.sub]): `loc` is the `[`, `end` the
+    /// `]`.
+    pub fn act_on_subscript_args(
+        &mut self,
+        base: ExprId,
+        args: &[ExprId],
+        loc: Loc,
+        end: Loc,
+    ) -> ExprId {
+        let braced: Vec<Option<InitList>> = args.iter().map(|&a| self.take_braced_arg(a)).collect();
+        let mut kids = vec![base];
+        kids.extend_from_slice(args);
+        if kids.iter().any(|&e| self.is_err_expr(e)) {
+            return self.recover_err(&kids, loc);
+        }
+        let single = (args.len() == 1 && braced[0].is_none()).then(|| args[0]);
+        if kids.iter().any(|&e| self.expr_is_type_dependent(e)) {
+            if let Some(idx) = single {
+                return self.act_on_subscript(base, idx, loc);
+            }
+            self.templ_unimplemented("dependent multi-argument subscripts", loc);
+            return self.recover_err(&kids, loc);
+        }
+        let mut br = vec![None];
+        br.extend(braced.iter().cloned());
+        match self.try_overloaded_operator(OperForm::Subscript, &kids, &br, loc, end) {
+            OperResult::Done(e) => return e,
+            OperResult::Converted(v) if v.len() == 2 => {
+                return self.builtin_subscript(v[0], v[1], loc);
+            }
+            OperResult::Builtin | OperResult::BuiltinNotes(_) | OperResult::Converted(_) => {}
+        }
+        if let Some(idx) = single {
+            return self.act_on_subscript(base, idx, loc);
+        }
+        if args.len() == 1 {
+            // A braced index of a built-in subscript ([expr.sub]/2).
+            self.error(DiagId::sema_subscript_not_integer, self.begin_loc(args[0]));
+        } else {
+            let msg =
+                self.diag(DiagId::sema_no_subscript_operator, loc).arg(self.ty_arg(self.ety(base)));
+            self.emit(msg);
+        }
+        self.recover_err(&kids, loc)
+    }
+
     /// `e1[e2]` ([expr.sub]).
     pub fn act_on_subscript(&mut self, base: ExprId, idx: ExprId, loc: Loc) -> ExprId {
         if self.is_err_expr(base) || self.is_err_expr(idx) {
             return self.recover_err(&[base, idx], loc);
         }
+        if !self.expr_is_type_dependent(base)
+            && !self.expr_is_type_dependent(idx)
+            && (self.ast.types.as_record(self.non_reference(self.ety(base))).is_some()
+                || self.ast.types.as_record(self.non_reference(self.ety(idx))).is_some())
+        {
+            return self.act_on_subscript_args_resolved(base, idx, loc);
+        }
+        self.builtin_subscript(base, idx, loc)
+    }
+
+    /// The built-in subscript `base[idx]` ([expr.sub]/2).
+    pub(crate) fn builtin_subscript(&mut self, base: ExprId, idx: ExprId, loc: Loc) -> ExprId {
         // Either operand type-dependent: an unanalyzed lvalue with no
         // operand conversions ([temp.dep.expr]/3; clang's
         // `getDependentArraySubscriptType`).
@@ -2251,6 +2401,32 @@ impl Sema<'_, '_> {
             return self.recover_err(&[b, i], loc);
         }
         self.builder().subscript(b, i, elem, loc)
+    }
+
+    /// `act_on_subscript` with a class base: the overloaded `operator[]`.
+    fn act_on_subscript_args_resolved(&mut self, base: ExprId, idx: ExprId, loc: Loc) -> ExprId {
+        match self.try_overloaded_operator(
+            OperForm::Subscript,
+            &[base, idx],
+            &[],
+            loc,
+            Loc::INVALID,
+        ) {
+            OperResult::Done(e) => e,
+            OperResult::Converted(v) => self.builtin_subscript(v[0], v[1], loc),
+            OperResult::Builtin | OperResult::BuiltinNotes(_)
+                if self.ast.types.as_record(self.non_reference(self.ety(base))).is_none() =>
+            {
+                self.builtin_subscript(base, idx, loc)
+            }
+            OperResult::Builtin | OperResult::BuiltinNotes(_) => {
+                let msg = self
+                    .diag(DiagId::sema_no_subscript_operator, loc)
+                    .arg(self.ty_arg(self.ety(base)));
+                self.emit(msg);
+                self.recover_err(&[base, idx], loc)
+            }
+        }
     }
 
     /// Reports argument `a` (the `i`th, 0-based) of a call of `d` (a
@@ -2336,6 +2512,21 @@ impl Sema<'_, '_> {
                 return self.recover_err(&kids, loc);
             }
             return self.dependent_call(callee, args, loc, rparen);
+        }
+        // [over.call.object]: a call of an object of class type.
+        if self.ast.types.as_record(self.ety(callee)).is_some()
+            && self.member_overload(callee).is_none()
+        {
+            let mut ops = vec![callee];
+            ops.extend_from_slice(args);
+            let mut br = vec![None];
+            br.append(&mut braced);
+            if let OperResult::Done(e) =
+                self.try_overloaded_operator(OperForm::Call, &ops, &br, loc, rparen)
+            {
+                return e;
+            }
+            braced = br.split_off(1);
         }
         if let Some(b) = self.builtin_callee(callee)
             && let Some(id) = self.ast.decls.builtin_id(b)
@@ -2684,24 +2875,43 @@ impl Sema<'_, '_> {
         if let Some(e) = self.try_dependent_member(base, name, None, false, loc, arrow) {
             return e;
         }
-        let (b, obj_ty) = if arrow {
-            let b = conv::decay(self, base);
-            let bt = self.ety(b);
-            match self.pointee_sugared(bt).filter(|_| self.ast.types.is_pointer(bt)) {
-                Some(p) if self.ast.types.as_record(p).is_some() => (b, p),
-                _ => {
-                    let msg = if self.ast.types.as_record(bt).is_some() {
-                        self.diag(DiagId::sema_member_reference_suggestion, op_loc)
-                            .arg(self.ty_arg(bt))
-                            .arg("1")
-                    } else {
-                        self.diag(DiagId::sema_member_reference_struct_union, op_loc)
-                            .arg(self.ty_arg(bt))
-                    };
-                    self.emit(msg);
-                    return self.recover_err(&[base], loc);
-                }
+        // [over.ref]/1: `x->m` on a class `x` is `(x.operator->())->m`.
+        let (base, arrow) = if arrow && self.ast.types.as_record(self.ety(base)).is_some() {
+            match self.arrow_base(base, op_loc) {
+                crate::overload::arrow::ArrowBase::Arrow(e) => (e, true),
+                crate::overload::arrow::ArrowBase::Dot => (base, false),
+                crate::overload::arrow::ArrowBase::Err => return self.recover_err(&[base], loc),
             }
+        } else {
+            (base, arrow)
+        };
+        let (b, obj_ty) = if arrow {
+            // clang `LookupMemberExpr`: the pointee or element type, or a
+            // function type as written.
+            let ot = self.ety(base);
+            let pointee = if self.ast.types.is_pointer(ot) {
+                self.pointee_sugared(ot)
+            } else if self.ast.types.is_array(ot) {
+                self.ast.types.element(ot)
+            } else if self.ast.types.is_function(ot) {
+                Some(ot)
+            } else {
+                None
+            };
+            let Some(p) = pointee else {
+                let msg =
+                    self.diag(DiagId::sema_operator_arrow_not_pointer, loc).arg(self.ty_arg(ot));
+                self.emit(msg);
+                return self.recover_err(&[base], loc);
+            };
+            if self.ast.types.as_record(p).is_none() {
+                let msg = self
+                    .diag(DiagId::sema_member_reference_struct_union, op_loc)
+                    .arg(self.ty_arg(p));
+                self.emit(msg);
+                return self.recover_err(&[base], loc);
+            }
+            (conv::decay(self, base), p)
         } else {
             let bt = self.ety(base);
             if self.ast.types.as_record(bt).is_none() {

@@ -621,6 +621,59 @@ impl<'a> AstNames<'a> {
                 self.expr(exprs.callee(e), d, out);
                 self.expr_list(exprs.call_args(e), '(', ')', d, out);
             }
+            ExprKind::CXXRewrittenBinaryOperator => {
+                self.expr(exprs.rewritten_semantic(e), depth, out);
+            }
+            // clang's `VisitCXXOperatorCallExpr`.
+            ExprKind::CXXOperatorCallExpr => {
+                use crate::names::OverloadedOperator as O;
+                let op = exprs.operator_call_op(e);
+                let args: Vec<ExprId> = ast.lists.iter::<ExprId>(exprs.call_args(e)).collect();
+                match (op, args.as_slice()) {
+                    (O::Call, [obj, rest @ ..]) => {
+                        self.expr(*obj, d, out);
+                        out.push('(');
+                        for (i, &a) in rest.iter().enumerate() {
+                            if i > 0 {
+                                out.push_str(", ");
+                            }
+                            self.expr(a, d, out);
+                        }
+                        out.push(')');
+                    }
+                    (O::Subscript, [obj, rest @ ..]) => {
+                        self.expr(*obj, d, out);
+                        out.push('[');
+                        for (i, &a) in rest.iter().enumerate() {
+                            if i > 0 {
+                                out.push_str(", ");
+                            }
+                            self.expr(a, d, out);
+                        }
+                        out.push(']');
+                    }
+                    (O::Arrow, [obj, ..]) => {
+                        self.expr(*obj, d, out);
+                        out.push_str("->");
+                    }
+                    (O::PlusPlus | O::MinusMinus, [x, _]) => {
+                        self.expr(*x, d, out);
+                        out.push_str(op.spelling());
+                    }
+                    (_, [x]) => {
+                        out.push_str(op.spelling());
+                        self.expr(*x, d, out);
+                    }
+                    (_, [l, r, ..]) => {
+                        self.expr(*l, d, out);
+                        out.push(' ');
+                        out.push_str(op.spelling());
+                        out.push(' ');
+                        self.expr(*r, d, out);
+                    }
+                    _ => out.push_str(op.spelling()),
+                }
+            }
             ExprKind::ImplicitCastExpr
             | ExprKind::ConstantExpr
             | ExprKind::MaterializeTemporaryExpr

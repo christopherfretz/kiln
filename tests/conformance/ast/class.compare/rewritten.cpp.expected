@@ -1,0 +1,64 @@
+TranslationUnitDecl
+|-CXXRecordDecl referenced struct A definition
+| `-CXXMethodDecl used operator== 'bool (int) const'
+|   `-ParmVarDecl 'int'
+|-CXXRecordDecl referenced struct O definition
+| `-CXXMethodDecl used operator<=> 'int (const O &) const'
+|   `-ParmVarDecl 'const O &'
+`-FunctionDecl f 'bool (A, O)'
+  |-ParmVarDecl used a 'A'
+  |-ParmVarDecl used o 'O'
+  `-CompoundStmt
+    `-ReturnStmt
+      `-BinaryOperator 'bool' '&&'
+        |-BinaryOperator 'bool' '&&'
+        | |-BinaryOperator 'bool' '&&'
+        | | |-BinaryOperator 'bool' '&&'
+        | | | |-ParenExpr 'bool'
+        | | | | `-CXXRewrittenBinaryOperator 'bool'
+        | | | |   `-UnaryOperator 'bool' prefix '!' cannot overflow
+        | | | |     `-CXXOperatorCallExpr 'bool' '=='
+        | | | |       |-ImplicitCastExpr 'bool (*)(int) const' <FunctionToPointerDecay>
+        | | | |       | `-DeclRefExpr 'bool (int) const' lvalue CXXMethod 'operator==' 'bool (int) const'
+        | | | |       |-ImplicitCastExpr 'const A' lvalue <NoOp>
+        | | | |       | `-DeclRefExpr 'A' lvalue ParmVar 'a' 'A'
+        | | | |       `-IntegerLiteral 'int' 1
+        | | | `-ParenExpr 'bool'
+        | | |   `-CXXRewrittenBinaryOperator 'bool'
+        | | |     `-CXXOperatorCallExpr 'bool' '=='
+        | | |       |-ImplicitCastExpr 'bool (*)(int) const' <FunctionToPointerDecay>
+        | | |       | `-DeclRefExpr 'bool (int) const' lvalue CXXMethod 'operator==' 'bool (int) const'
+        | | |       |-ImplicitCastExpr 'const A' lvalue <NoOp>
+        | | |       | `-DeclRefExpr 'A' lvalue ParmVar 'a' 'A'
+        | | |       `-IntegerLiteral 'int' 1
+        | | `-ParenExpr 'bool'
+        | |   `-CXXRewrittenBinaryOperator 'bool'
+        | |     `-UnaryOperator 'bool' prefix '!' cannot overflow
+        | |       `-CXXOperatorCallExpr 'bool' '=='
+        | |         |-ImplicitCastExpr 'bool (*)(int) const' <FunctionToPointerDecay>
+        | |         | `-DeclRefExpr 'bool (int) const' lvalue CXXMethod 'operator==' 'bool (int) const'
+        | |         |-ImplicitCastExpr 'const A' lvalue <NoOp>
+        | |         | `-DeclRefExpr 'A' lvalue ParmVar 'a' 'A'
+        | |         `-IntegerLiteral 'int' 1
+        | `-ParenExpr 'bool'
+        |   `-CXXRewrittenBinaryOperator 'bool'
+        |     `-BinaryOperator 'bool' '<'
+        |       |-CXXOperatorCallExpr 'int' '<=>'
+        |       | |-ImplicitCastExpr 'int (*)(const O &) const' <FunctionToPointerDecay>
+        |       | | `-DeclRefExpr 'int (const O &) const' lvalue CXXMethod 'operator<=>' 'int (const O &) const'
+        |       | |-ImplicitCastExpr 'const O' lvalue <NoOp>
+        |       | | `-DeclRefExpr 'O' lvalue ParmVar 'o' 'O'
+        |       | `-ImplicitCastExpr 'const O' lvalue <NoOp>
+        |       |   `-DeclRefExpr 'O' lvalue ParmVar 'o' 'O'
+        |       `-IntegerLiteral 'int' 0
+        `-ParenExpr 'bool'
+          `-CXXRewrittenBinaryOperator 'bool'
+            `-BinaryOperator 'bool' '>='
+              |-CXXOperatorCallExpr 'int' '<=>'
+              | |-ImplicitCastExpr 'int (*)(const O &) const' <FunctionToPointerDecay>
+              | | `-DeclRefExpr 'int (const O &) const' lvalue CXXMethod 'operator<=>' 'int (const O &) const'
+              | |-ImplicitCastExpr 'const O' lvalue <NoOp>
+              | | `-DeclRefExpr 'O' lvalue ParmVar 'o' 'O'
+              | `-ImplicitCastExpr 'const O' lvalue <NoOp>
+              |   `-DeclRefExpr 'O' lvalue ParmVar 'o' 'O'
+              `-IntegerLiteral 'int' 0

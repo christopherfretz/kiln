@@ -194,9 +194,13 @@ Notes:
   casts and the construction and temporary expressions, spec/sema-class.md
   §8.1) are WP-066a; kiln produces them once sema builds them (WP-065,
   066b/c, 078a).
+- Overloaded operator calls (WP-068b): `CXXOperatorCallExpr '<op>'`
+  (plus ` adl`), whose spelling the normalizer takes from the callee's
+  name, and `CXXRewrittenBinaryOperator` with its semantic form as the
+  only child, as in clang's text dump
+  (`tests/conformance/ast/{over.*,class.compare}/`).
 - Not in the dump (an error in the clang normalizer, §6): attributes
-  other than `override`/`final`, `thread_local`, overloaded operator calls
-  (`CXXOperatorCallExpr`), `new`/`delete`, lambdas,
+  other than `override`/`final`, `thread_local`, `new`/`delete`, lambdas,
   `ConstantExpr` values of floating, pointer or lvalue type, and
   `long double` values; also clang's `noexcept-uninstantiated`,
   `ineligible` and `not_selected` member-function words (templates and

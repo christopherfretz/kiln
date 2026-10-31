@@ -24,6 +24,17 @@ fn text<'a>(n: &'a Json, key: &str) -> Option<&'a str> {
     n.get(key).and_then(Json::as_str)
 }
 
+/// The operator of an overloaded operator call: the callee's name
+/// (`operator+`, through its decay cast) without `operator`.
+fn operator_call_spelling(n: &Json) -> Option<&str> {
+    let mut callee = n.get("inner")?.as_arr()?.first()?;
+    while text(callee, "kind") == Some("ImplicitCastExpr") {
+        callee = callee.get("inner")?.as_arr()?.first()?;
+    }
+    let decl = callee.get("referencedDecl")?;
+    Some(text(decl, "name")?.strip_prefix("operator")?.trim_start())
+}
+
 fn id(n: &Json) -> &str {
     text(n, "id").unwrap_or("")
 }
@@ -1273,6 +1284,14 @@ impl<'a> Printer<'a, '_> {
                 line = format!("{} value={v}", self.expr_head(n, k)?);
                 kids_out = self.kid_trees(n)?;
             }
+            "CXXOperatorCallExpr" => {
+                let op = operator_call_spelling(n).ok_or_else(|| {
+                    "clang-ast: CXXOperatorCallExpr without an `operator` callee".to_string()
+                })?;
+                let adl = if flag(n, "adl") { " adl" } else { "" };
+                line = format!("{} '{op}'{adl}", self.expr_head(n, k)?);
+                kids_out = self.kid_trees(n)?;
+            }
             "CXXNullPtrLiteralExpr"
             | "CXXNoexceptExpr"
             | "ConditionalOperator"
@@ -1295,7 +1314,8 @@ impl<'a> Printer<'a, '_> {
             | "OffsetOfExpr"
             | "DependentScopeDeclRefExpr"
             | "SubstNonTypeTemplateParmExpr"
-            | "PackExpansionExpr" => {
+            | "PackExpansionExpr"
+            | "CXXRewrittenBinaryOperator" => {
                 line = self.expr_head(n, k)?;
                 kids_out = self.kid_trees(n)?;
             }

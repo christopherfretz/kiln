@@ -148,6 +148,10 @@ pub struct Sema<'a, 'sm> {
     /// Overload resolution's pooled candidate sets and counters
     /// (spec/sema-overload.md §1.4).
     pub(crate) ovl: overload::OverloadScratch,
+    /// Notes the next error takes (the user-declared candidates of an
+    /// operator whose built-in fallback fails, spec/sema-overload.md
+    /// §6.2): set and cleared around the fallback.
+    pub(crate) trailing_notes: std::cell::RefCell<Vec<Diag>>,
     /// Callees whose function is not marked referenced yet (see
     /// `deferring_call_ref`), resolved by [`Sema::act_on_call`].
     pub(crate) deferred_call_refs: Vec<(ExprId, DeclId)>,
@@ -277,6 +281,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             group_placeholders: kiln_source::fx::FxHashMap::default(),
             deferring_call_ref: false,
             ovl: overload::OverloadScratch::default(),
+            trailing_notes: std::cell::RefCell::new(Vec::new()),
             deferred_call_refs: Vec::new(),
             classes: Vec::new(),
             implicit_declared: kiln_source::fx::FxHashMap::default(),
@@ -356,6 +361,13 @@ impl<'a, 'sm> Sema<'a, 'sm> {
     pub fn emit(&self, mut d: Diag) {
         if self.inst.suppress_next_error.replace(false) {
             return;
+        }
+        if !self.trailing_notes.borrow().is_empty()
+            && d.id().is_some_and(|id| self.diags.severity(id) >= kiln_diag::Severity::Error)
+        {
+            for n in self.trailing_notes.take() {
+                d = d.with_note(n);
+            }
         }
         if !self.inst.stack.is_empty()
             && let Some(id) = d.id()

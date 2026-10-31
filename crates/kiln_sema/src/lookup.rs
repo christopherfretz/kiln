@@ -201,7 +201,13 @@ impl Sema<'_, '_> {
     /// The members of context `ctx` named `name` (its own table, inline
     /// namespaces included).
     pub fn lookup_in(&self, ctx: DeclId, name: Symbol, kind: LookupKind) -> Found {
-        let r = self.ast.lookup_local(ctx, DeclName::ident(name));
+        self.lookup_in_dn(ctx, DeclName::ident(name), kind)
+    }
+
+    /// [`Sema::lookup_in`] for any declaration name (operator-function-ids,
+    /// WP-068b).
+    pub(crate) fn lookup_in_dn(&self, ctx: DeclId, name: DeclName, kind: LookupKind) -> Found {
+        let r = self.ast.lookup_local(ctx, name);
         self.filter(r.iter_ordinary().collect(), kind)
     }
 
@@ -209,14 +215,24 @@ impl Sema<'_, '_> {
     /// [class.qual]). Namespaces nominated by using-directives in `ctx`
     /// are searched when `ctx` itself has no result.
     pub fn lookup_qualified(&self, ctx: DeclId, name: Symbol, kind: LookupKind) -> Found {
+        self.lookup_qualified_dn(ctx, DeclName::ident(name), kind)
+    }
+
+    /// [`Sema::lookup_qualified`] for any declaration name.
+    pub(crate) fn lookup_qualified_dn(
+        &self,
+        ctx: DeclId,
+        name: DeclName,
+        kind: LookupKind,
+    ) -> Found {
         if self.is_dependent_ctx(ctx) {
             // [temp.dep.type]/6: nothing is known about a dependent scope.
             return Found::default();
         }
         if self.kind_of(ctx) == DeclKind::CXXRecord {
-            return self.lookup_in_class(ctx, name, kind);
+            return self.lookup_in_class_dn(ctx, name, kind);
         }
-        let found = self.lookup_in(ctx, name, kind);
+        let found = self.lookup_in_dn(ctx, name, kind);
         if !found.is_empty() {
             return found;
         }
@@ -226,7 +242,7 @@ impl Sema<'_, '_> {
         for s in &self.scopes {
             if s.entity.map(|e| self.ast.first(e)) == Some(self.ast.first(ctx)) {
                 for &n in &s.using_dirs {
-                    v.extend(self.ast.lookup_local(n, DeclName::ident(name)).iter_ordinary());
+                    v.extend(self.ast.lookup_local(n, name).iter_ordinary());
                 }
             }
         }
@@ -236,6 +252,25 @@ impl Sema<'_, '_> {
     /// Unqualified lookup of `name` from the current scope
     /// ([basic.lookup.unqual]).
     pub fn lookup_name(&self, name: Symbol, kind: LookupKind) -> Found {
+        self.lookup_name_dn(DeclName::ident(name), kind)
+    }
+
+    /// [`Sema::lookup_name`] for any declaration name: a name that is not
+    /// an identifier (an operator-function-id) is never a parameter,
+    /// template parameter or block-scope name here.
+    pub(crate) fn lookup_name_dn(&self, dname: DeclName, kind: LookupKind) -> Found {
+        self.lookup_name_scoped(dname, kind, false)
+    }
+
+    /// The unqualified lookup of an operator function name for an operator
+    /// expression ([over.match.oper]/3.2): class scopes are skipped.
+    pub(crate) fn lookup_operator_name(&self, dname: DeclName) -> Found {
+        self.lookup_name_scoped(dname, LookupKind::Ordinary, true)
+    }
+
+    fn lookup_name_scoped(&self, dname: DeclName, kind: LookupKind, skip_records: bool) -> Found {
+        let ident = dname.as_ident();
+        let name = ident.unwrap_or(Symbol::from_index(0));
         // Namespaces nominated by block-scope using-directives: their
         // members appear as if declared in the nearest enclosing
         // namespace that contains both the directive and the nominated
@@ -245,6 +280,7 @@ impl Sema<'_, '_> {
             // [basic.scope.param]: the parameters of a declarator being
             // parsed, before the scope the declarator appears in.
             if kind != LookupKind::Tag
+                && ident.is_some()
                 && !self.prototype_params.is_empty()
                 && let Some(d) = self.prototype_param_named(i + 1, name)
             {
@@ -256,6 +292,7 @@ impl Sema<'_, '_> {
             if s.kind == ScopeKind::TemplateParams {
                 // [temp.local]/6: template parameter names.
                 if kind != LookupKind::Tag
+                    && ident.is_some()
                     && let Some(d) = s.find(name, Ns::Ordinary)
                     && self.accept(d, kind)
                 {
@@ -265,6 +302,9 @@ impl Sema<'_, '_> {
             }
             if s.is_local() {
                 local_dirs.extend(s.using_dirs.iter().copied());
+                if ident.is_none() {
+                    continue;
+                }
                 let hit = match kind {
                     LookupKind::Tag => s.find(name, Ns::Tag),
                     LookupKind::Ordinary => {
@@ -301,28 +341,30 @@ impl Sema<'_, '_> {
             }
             let Some(entity) = s.entity else { continue };
             if s.kind == ScopeKind::Record {
-                let found = self.lookup_in_class(entity, name, kind);
+                if skip_records {
+                    continue;
+                }
+                let found = self.lookup_in_class_dn(entity, dname, kind);
                 if !found.is_empty() || found.ambiguity.is_some() {
                     return found;
                 }
                 continue;
             }
-            let mut v: Vec<DeclId> =
-                self.ast.lookup_local(entity, DeclName::ident(name)).iter_ordinary().collect();
+            let mut v: Vec<DeclId> = self.ast.lookup_local(entity, dname).iter_ordinary().collect();
             let own = self.filter(v.clone(), kind);
             if !own.is_empty() {
                 return own;
             }
             v.clear();
             for &n in &s.using_dirs {
-                v.extend(self.ast.lookup_local(n, DeclName::ident(name)).iter_ordinary());
+                v.extend(self.ast.lookup_local(n, dname).iter_ordinary());
             }
             if matches!(s.kind, ScopeKind::Namespace | ScopeKind::TranslationUnit) {
                 let mut i = 0;
                 while i < local_dirs.len() {
                     if self.encloses(entity, local_dirs[i]) {
                         let n = local_dirs.remove(i);
-                        v.extend(self.ast.lookup_local(n, DeclName::ident(name)).iter_ordinary());
+                        v.extend(self.ast.lookup_local(n, dname).iter_ordinary());
                     } else {
                         i += 1;
                     }
@@ -348,6 +390,11 @@ impl Sema<'_, '_> {
     /// A declaration found in a class dominates the declarations found in
     /// that class's virtual bases (WP-078a).
     pub fn lookup_in_class(&self, c: DeclId, name: Symbol, kind: LookupKind) -> Found {
+        self.lookup_in_class_dn(c, DeclName::ident(name), kind)
+    }
+
+    /// [`Sema::lookup_in_class`] for any declaration name.
+    pub(crate) fn lookup_in_class_dn(&self, c: DeclId, name: DeclName, kind: LookupKind) -> Found {
         let def = self.ast.definition(c).unwrap_or(c);
         let Some(hit) = self.class_hit(def, name, kind, 0) else {
             return Found { naming: Some(def), ..Found::default() };
@@ -395,7 +442,7 @@ impl Sema<'_, '_> {
     fn class_hit(
         &self,
         def: DeclId,
-        name: Symbol,
+        name: DeclName,
         kind: LookupKind,
         depth: usize,
     ) -> Option<ClassHit> {
@@ -427,16 +474,19 @@ impl Sema<'_, '_> {
 
     /// Every declaration set the search of `def` finds, with the path
     /// from `def` to the class it is found in (in base-specifier order).
-    fn class_leaves(&self, def: DeclId, name: Symbol, kind: LookupKind, depth: usize) -> Vec<Leaf> {
+    fn class_leaves(
+        &self,
+        def: DeclId,
+        name: DeclName,
+        kind: LookupKind,
+        depth: usize,
+    ) -> Vec<Leaf> {
         if depth > 256 {
             return Vec::new();
         }
-        let mut own = self.filter(
-            self.ast.lookup_local(def, DeclName::ident(name)).iter_ordinary().collect(),
-            kind,
-        );
+        let mut own = self.filter(self.ast.lookup_local(def, name).iter_ordinary().collect(), kind);
         if own.is_empty()
-            && self.ast.decls.get(def).name() == DeclName::ident(name)
+            && self.ast.decls.get(def).name() == name
             && !matches!(kind, LookupKind::All)
         {
             // The injected-class-name ([class.pre]/2).
@@ -586,11 +636,18 @@ impl Sema<'_, '_> {
     }
 
     pub(crate) fn current_scope_raw(&self, name: Symbol) -> Vec<DeclId> {
+        self.current_scope_raw_dn(DeclName::ident(name))
+    }
+
+    /// [`Sema::current_scope_raw`] for any declaration name (block scopes
+    /// hold identifiers only).
+    pub(crate) fn current_scope_raw_dn(&self, dname: DeclName) -> Vec<DeclId> {
         let Some(i) = self.scopes.iter().rposition(|s| !s.is_transparent()) else {
             return Vec::new();
         };
         let s = &self.scopes[i];
         if s.is_local() {
+            let Some(name) = dname.as_ident() else { return Vec::new() };
             let mut out: Vec<DeclId> = Vec::new();
             // The outermost block of a control statement's sub-statement
             // also conflicts with the condition's names ([basic.scope.block]/2).
@@ -604,7 +661,7 @@ impl Sema<'_, '_> {
             return out;
         }
         match s.entity {
-            Some(e) => self.ast.lookup_local(e, DeclName::ident(name)).iter().collect(),
+            Some(e) => self.ast.lookup_local(e, dname).iter().collect(),
             None => Vec::new(),
         }
     }

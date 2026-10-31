@@ -252,9 +252,9 @@ impl Sema<'_, '_> {
             }
             Shape::Assign => {
                 if is_static {
-                    // todo(WP-068b): `operator=` declared `static`
-                    // ([over.ass]/1).
-                    self.unsupported("a static 'operator='", sloc);
+                    // [over.ass]/1: a non-static member function.
+                    let m = self.diag(DiagId::sema_operator_overload_static, sloc).arg("operator=");
+                    self.emit(m);
                     return None;
                 }
             }
@@ -454,6 +454,9 @@ impl Sema<'_, '_> {
         }
         if shape == Shape::Ctor && !*invalid && !redecl_invalid {
             self.check_copy_ctor_by_value(f, class, &fparams);
+        }
+        if shape == Shape::Assign && !*invalid && !redecl_invalid && !self.check_operator_decl(f) {
+            self.ast.decls.set_flags(f, DeclFlags::INVALID);
         }
         Some(f)
     }

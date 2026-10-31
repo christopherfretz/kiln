@@ -209,7 +209,11 @@ impl Sema<'_, '_> {
                 | ExprKind::ExpressionTraitExpr
                 | ExprKind::CXXTypeidExpr => continue,
                 ExprKind::CXXThrowExpr | ExprKind::CXXNewExpr => return true,
-                ExprKind::CallExpr if self.callee_can_throw(exprs.callee(x)) => return true,
+                ExprKind::CallExpr | ExprKind::CXXOperatorCallExpr
+                    if self.callee_can_throw(exprs.callee(x)) =>
+                {
+                    return true;
+                }
                 ExprKind::CXXConstructExpr | ExprKind::CXXTemporaryObjectExpr
                     if !self.decl_is_nothrow(exprs.constructor(x)) =>
                 {

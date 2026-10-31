@@ -67,6 +67,11 @@ impl IcsOptions {
     /// where an initialization diagnoses the deleted function.
     pub const CANDIDATE_ARG: IcsOptions = IcsOptions(8);
 
+    /// The raw bits.
+    pub(crate) fn bits(self) -> u8 {
+        self.0
+    }
+
     /// All of `o`'s bits are set.
     pub(crate) fn contains(self, o: IcsOptions) -> bool {
         self.0 & o.0 == o.0
@@ -1061,7 +1066,11 @@ impl Sema<'_, '_> {
                 }
             }
             _ => {
-                let r = ArgInfo::of_type(rty, rvk);
+                // A `std::nullptr_t` prvalue result is a null pointer
+                // constant ([conv.ptr]/1).
+                let npc = rvk == ValueCategory::PRValue
+                    && self.ast.types.canonical(rty).ty() == kiln_ast::TypeId::NULLPTR;
+                let r = ArgInfo { npc, ..ArgInfo::of_type(rty, rvk) };
                 match self.try_implicit_conversion(&r, to, IcsOptions::SUPPRESS_UDC) {
                     Ics::Standard(s) => Some(s),
                     _ => None,

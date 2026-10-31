@@ -258,7 +258,10 @@ impl Cg<'_> {
                 Some(Opaque::Lv(lv)) => self.load_lv(lv),
                 None => return err(self.loc_of(e), "unbound OpaqueValueExpr"),
             },
-            ExprKind::CallExpr => return self.emit_call(e, None),
+            ExprKind::CallExpr | ExprKind::CXXOperatorCallExpr => return self.emit_call(e, None),
+            ExprKind::CXXRewrittenBinaryOperator => {
+                return self.emit_scalar_opt(ast.exprs.rewritten_semantic(e));
+            }
             ExprKind::CXXNewExpr => self.emit_cxx_new(e)?,
             ExprKind::CXXDeleteExpr => {
                 self.emit_cxx_delete(e)?;
@@ -1255,14 +1258,20 @@ impl Cg<'_> {
                 Some(Opaque::Lv(lv)) => Ok(lv),
                 _ => err(self.loc_of(e), "unbound glvalue OpaqueValueExpr"),
             },
-            ExprKind::CallExpr if self.is_glvalue(e) => {
+            ExprKind::CXXRewrittenBinaryOperator => {
+                self.emit_lvalue(ast.exprs.rewritten_semantic(e))
+            }
+            ExprKind::CallExpr | ExprKind::CXXOperatorCallExpr if self.is_glvalue(e) => {
                 // A call returning a reference.
                 let Some(p) = self.emit_call(e, None)? else {
                     return err(self.loc_of(e), "reference-returning call produced no value");
                 };
                 Ok(self.ref_lvalue(p, q))
             }
-            ExprKind::MaterializeTemporaryExpr | ExprKind::CallExpr | ExprKind::InitListExpr => {
+            ExprKind::MaterializeTemporaryExpr
+            | ExprKind::CallExpr
+            | ExprKind::CXXOperatorCallExpr
+            | ExprKind::InitListExpr => {
                 let s =
                     if n.kind() == ExprKind::MaterializeTemporaryExpr { self.sub(e) } else { e };
                 let sq = ast.exprs.get(s).ty();
@@ -1579,6 +1588,17 @@ impl Cg<'_> {
                     }
                     ExprKind::DeclRefExpr => {
                         let d = ast.exprs.decl(c);
+                        // An operator call whose callee is a member: the
+                        // first argument is the object.
+                        if ast.exprs.get(e).kind() == ExprKind::CXXOperatorCallExpr
+                            && ast.decls.get(d).kind() == DeclKind::CXXMethod
+                        {
+                            let args: Vec<ExprId> =
+                                ast.lists.iter(ast.exprs.call_args(e)).collect();
+                            if let Some((&obj, rest)) = args.split_first() {
+                                return self.emit_method_call(e, d, obj, false, rest, dest);
+                            }
+                        }
                         if matches!(ast.decls.get(d).kind(), DeclKind::Function)
                             || self.is_static_method(d)
                         {
@@ -1937,13 +1957,13 @@ impl Cg<'_> {
                     self.record_init(e, dest, zeroed)
                 }
             }
-            ExprKind::CallExpr if self.is_glvalue(e) => {
+            ExprKind::CallExpr | ExprKind::CXXOperatorCallExpr if self.is_glvalue(e) => {
                 let lv = self.emit_lvalue(e)?;
                 let size = self.size_align(q).0;
                 self.memcpy(dest, lv.addr.v, lv.addr.align, size, false);
                 Ok(())
             }
-            ExprKind::CallExpr => {
+            ExprKind::CallExpr | ExprKind::CXXOperatorCallExpr => {
                 self.emit_call(e, Some(dest))?;
                 Ok(())
             }

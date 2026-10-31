@@ -593,7 +593,9 @@ impl Compiler<'_> {
         refs: &[bool],
         loc: Option<Loc>,
     ) -> u32 {
-        let is_sret = self.o.types.is_aggregate(rty);
+        // A call returning a reference (a glvalue) returns the referent's
+        // address in a register, whatever the referent's type.
+        let is_sret = self.o.types.is_aggregate(rty) && !self.node(e).value_category().is_glvalue();
         let base = self.next;
         let first = u32::from(is_sret) + u32::from(this.is_some());
         let window = args.len() as u32 + first;
@@ -675,7 +677,6 @@ impl Compiler<'_> {
     /// `CXXMemberCallExpr` `e`: the scalar result in the returned register
     /// (`sret`: the result object of a class result).
     pub(super) fn member_call(&mut self, e: ExprId, sret: Option<u32>) -> u32 {
-        let rty = self.ety(e);
         let ast = self.ast();
         let callee = skip_parens(ast, ast.exprs.callee(e));
         let args: Vec<ExprId> = ast.lists.iter::<ExprId>(ast.exprs.call_args(e)).collect();
@@ -689,8 +690,29 @@ impl Compiler<'_> {
         let obj = ast.exprs.member_call_object(e);
         let md = ast.exprs.decl(callee);
         let arrow = ast.exprs.get(callee).has(ExprFlags::ARROW);
-        let spec = ast.decls.function(md).map(|f| f.spec);
         let qualified = ast.exprs.decl_ref_extra(callee).is_some_and(|x| x.qualifier.is_some());
+        self.method_call(e, callee, md, obj, arrow, qualified, &args, sret)
+    }
+
+    /// A call of member function `md` on object expression `obj`
+    /// (`arrow`: `obj` is a pointer) with the remaining arguments `args`:
+    /// a `CXXMemberCallExpr`, or a `CXXOperatorCallExpr` whose callee is a
+    /// member (its first argument the object, [over.match.oper]/2).
+    #[allow(clippy::too_many_arguments, reason = "the call's parts, as decomposed by both callers")]
+    pub(super) fn method_call(
+        &mut self,
+        e: ExprId,
+        callee: ExprId,
+        md: DeclId,
+        obj: ExprId,
+        arrow: bool,
+        qualified: bool,
+        args: &[ExprId],
+        sret: Option<u32>,
+    ) -> u32 {
+        let rty = self.ety(e);
+        let ast = self.ast();
+        let spec = ast.decls.function(md).map(|f| f.spec);
         let class_final = ast
             .decls
             .get(md)
@@ -700,16 +722,7 @@ impl Compiler<'_> {
         let loc = self.begin(e);
         if spec.is_some_and(|s| s.storage() == FnStorage::Static) {
             self.effect(obj);
-            return self.call_frame(
-                e,
-                Callee::Direct(md),
-                rty,
-                sret,
-                None,
-                &args,
-                &refs,
-                Some(loc),
-            );
+            return self.call_frame(e, Callee::Direct(md), rty, sret, None, args, &refs, Some(loc));
         }
         if spec.is_some_and(|s| s.is_virtual() && !s.is_final())
             && !qualified
@@ -744,7 +757,7 @@ impl Compiler<'_> {
             self.patch_here(ok);
             self.next = m;
         }
-        self.call_frame(e, Callee::Direct(md), rty, sret, Some(this), &args, &refs, Some(loc))
+        self.call_frame(e, Callee::Direct(md), rty, sret, Some(this), args, &refs, Some(loc))
     }
 
     // ---- aggregates ---------------------------------------------------------

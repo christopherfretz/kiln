@@ -1,0 +1,32 @@
+TranslationUnitDecl
+|-CXXRecordDecl referenced struct F definition
+| |-CXXMethodDecl used operator() 'int (int)' static
+| | `-ParmVarDecl 'int'
+| `-CXXMethodDecl used operator[] 'int (int, int)' static
+|   |-ParmVarDecl 'int'
+|   `-ParmVarDecl 'int'
+`-FunctionDecl f 'int (F)'
+  |-ParmVarDecl used g 'F'
+  `-CompoundStmt
+    `-ReturnStmt
+      `-ExprWithCleanups 'int'
+        `-BinaryOperator 'int' '+'
+          |-BinaryOperator 'int' '+'
+          | |-CXXOperatorCallExpr 'int' '()'
+          | | |-ImplicitCastExpr 'int (*)(int)' <FunctionToPointerDecay>
+          | | | `-DeclRefExpr 'int (int)' lvalue CXXMethod 'operator()' 'int (int)'
+          | | |-DeclRefExpr 'F' lvalue ParmVar 'g' 'F'
+          | | `-IntegerLiteral 'int' 1
+          | `-CXXOperatorCallExpr 'int' '()'
+          |   |-ImplicitCastExpr 'int (*)(int)' <FunctionToPointerDecay>
+          |   | `-DeclRefExpr 'int (int)' lvalue CXXMethod 'operator()' 'int (int)'
+          |   |-MaterializeTemporaryExpr 'F' lvalue
+          |   | `-CXXFunctionalCastExpr 'F' functional cast to F <NoOp>
+          |   |   `-InitListExpr 'F'
+          |   `-IntegerLiteral 'int' 2
+          `-CXXOperatorCallExpr 'int' '[]'
+            |-ImplicitCastExpr 'int (*)(int, int)' <FunctionToPointerDecay>
+            | `-DeclRefExpr 'int (int, int)' lvalue CXXMethod 'operator[]' 'int (int, int)'
+            |-DeclRefExpr 'F' lvalue ParmVar 'g' 'F'
+            |-IntegerLiteral 'int' 1
+            `-IntegerLiteral 'int' 2

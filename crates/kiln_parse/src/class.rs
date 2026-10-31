@@ -1470,6 +1470,10 @@ impl Parser<'_, '_> {
     /// taken greedily.
     fn parse_conversion_declarator(&mut self, d: &mut Declarator) {
         let loc = self.loc();
+        if let Some(star) = self.at_member_pointer() {
+            self.parse_member_pointer(d, star, Self::parse_conversion_declarator);
+            return;
+        }
         match Self::punct_of(self.tok()) {
             Some(Punct::Star) => {
                 self.bump();

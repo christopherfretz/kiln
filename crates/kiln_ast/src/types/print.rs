@@ -25,7 +25,9 @@ use std::fmt::Display;
 use super::args::{ArgView, TemplateArg};
 use super::context::{ExprOperand, TypeContext, TypeOfOperand, TypeView};
 use super::func::ExcSpec;
-use super::kinds::{CallConv, Quals, RefQual, TagKeyword, TypeAttrKind, TypeKind, VectorKind};
+use super::kinds::{
+    BuiltinType, CallConv, Quals, RefQual, TagKeyword, TypeAttrKind, TypeKind, VectorKind,
+};
 use super::names::TemplateName;
 use super::nns::Nns;
 use crate::ids::{
@@ -57,6 +59,13 @@ pub trait TypeNames {
     fn specialization_args(&self, decl: DeclId) -> Option<ArgListId> {
         let _ = decl;
         None
+    }
+
+    /// The keyword of class `decl` (`struct`, `class` or `union`), for
+    /// [`PrintOptions::c_policy`].
+    fn tag_keyword(&self, decl: DeclId) -> &'static str {
+        let _ = decl;
+        "struct"
     }
 
     /// For the invented type parameter of an abbreviated function
@@ -142,18 +151,46 @@ pub struct PrintOptions {
     pub full_scope: bool,
     /// Omit written elaboration keywords (`struct S` prints `S`).
     pub suppress_tag: bool,
+    /// clang's default (C) `PrintingPolicy`, as `QualType::getAsString()`
+    /// with no policy uses: `_Bool`, `nullptr_t`, and tag types with
+    /// their keyword (`struct S`, `enum E`).
+    pub c_policy: bool,
 }
 
 impl PrintOptions {
     /// The type as written (diagnostics' first string).
-    pub const SUGARED: PrintOptions =
-        PrintOptions { canonical: false, desugar: false, full_scope: false, suppress_tag: false };
+    pub const SUGARED: PrintOptions = PrintOptions {
+        canonical: false,
+        desugar: false,
+        full_scope: false,
+        suppress_tag: false,
+        c_policy: false,
+    };
     /// The canonical type with every name scoped (the `aka` string).
-    pub const CANONICAL: PrintOptions =
-        PrintOptions { canonical: true, desugar: false, full_scope: true, suppress_tag: false };
+    pub const CANONICAL: PrintOptions = PrintOptions {
+        canonical: true,
+        desugar: false,
+        full_scope: true,
+        suppress_tag: false,
+        c_policy: false,
+    };
     /// The top-level-desugared type (the AST dump's second string).
-    pub const DESUGARED: PrintOptions =
-        PrintOptions { canonical: false, desugar: true, full_scope: false, suppress_tag: false };
+    pub const DESUGARED: PrintOptions = PrintOptions {
+        canonical: false,
+        desugar: true,
+        full_scope: false,
+        suppress_tag: false,
+        c_policy: false,
+    };
+    /// The canonical type as clang's policy-less `QualType::getAsString()`
+    /// prints it (built-in candidate notes).
+    pub const C_DEFAULT: PrintOptions = PrintOptions {
+        canonical: true,
+        desugar: false,
+        full_scope: true,
+        suppress_tag: false,
+        c_policy: true,
+    };
 }
 
 /// Renders `q` as clang 19's `QualType::getAsString` (spec/types.md §12).
@@ -212,6 +249,7 @@ pub fn write_declarator(
         empty_ph: true,
         scope,
         suppress_tag: opts.suppress_tag,
+        c_policy: opts.c_policy,
         inside_cc_attr: false,
         depth: 0,
     };
@@ -229,6 +267,7 @@ pub fn write_nns(ctx: &TypeContext, names: &dyn TypeNames, n: NnsId, out: &mut S
         empty_ph: true,
         scope: false,
         suppress_tag: false,
+        c_policy: false,
         inside_cc_attr: false,
         depth: 0,
     };
@@ -246,6 +285,7 @@ pub fn write_arg_list(ctx: &TypeContext, names: &dyn TypeNames, l: ArgListId, ou
         empty_ph: true,
         scope: false,
         suppress_tag: false,
+        c_policy: false,
         inside_cc_attr: false,
         depth: 0,
     };
@@ -268,6 +308,7 @@ pub fn write_template_arg(
         empty_ph: true,
         scope: false,
         suppress_tag: false,
+        c_policy: false,
         inside_cc_attr: false,
         depth: 0,
     };
@@ -340,6 +381,8 @@ struct Printer<'a> {
     /// clang's `!SuppressScope`.
     scope: bool,
     suppress_tag: bool,
+    /// [`PrintOptions::c_policy`].
+    c_policy: bool,
     /// clang's `InsideCCAttribute`.
     inside_cc_attr: bool,
     depth: u32,
@@ -506,7 +549,12 @@ impl Printer<'_> {
                 self.space_before_ph();
             }
             TypeView::Builtin(b) => {
-                self.push(b.name());
+                let name = match b {
+                    BuiltinType::Bool if self.c_policy => "_Bool",
+                    BuiltinType::NullPtr if self.c_policy => "nullptr_t",
+                    _ => b.name(),
+                };
+                self.push(name);
                 self.space_before_ph();
             }
             TypeView::BitInt { signed, width } => {
@@ -548,6 +596,11 @@ impl Printer<'_> {
             | TypeView::DependentSizedArray { elem: e, .. } => self.before(e),
             TypeView::Function(_) => self.function_before(t),
             TypeView::Record(d) => {
+                if self.c_policy {
+                    let names = self.names;
+                    self.push(names.tag_keyword(d));
+                    self.push(" ");
+                }
                 self.decl(d, self.scope);
                 if let Some(args) = self.names.specialization_args(d) {
                     self.arg_list(args, false);
@@ -555,6 +608,9 @@ impl Printer<'_> {
                 self.space_before_ph();
             }
             TypeView::Enum(d) => {
+                if self.c_policy {
+                    self.push("enum ");
+                }
                 self.decl(d, self.scope);
                 self.space_before_ph();
             }

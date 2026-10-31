@@ -1547,7 +1547,10 @@ impl ExprArena {
     fn expect_call(&self, e: ExprId) -> &ExprNode {
         let n = self.get(e);
         assert!(
-            matches!(n.kind, ExprKind::CallExpr | ExprKind::CXXMemberCallExpr),
+            matches!(
+                n.kind,
+                ExprKind::CallExpr | ExprKind::CXXMemberCallExpr | ExprKind::CXXOperatorCallExpr
+            ),
             "expected a call, found {:?}",
             n.kind
         );
@@ -1564,6 +1567,25 @@ impl ExprArena {
     /// `ExprId`s; the implied object argument is not among them).
     pub fn call_args(&self, e: ExprId) -> ListId {
         ListId::new(self.expect_call(e).b)
+    }
+
+    /// The operator of a `CXXOperatorCallExpr` (spec/sema-overload.md §8).
+    pub fn operator_call_op(&self, e: ExprId) -> crate::names::OverloadedOperator {
+        let n = self.expect_kind(e, ExprKind::CXXOperatorCallExpr);
+        crate::names::OverloadedOperator::from_u8(n.aux).expect("operator kind")
+    }
+
+    /// The operand of a `CXXRewrittenBinaryOperator`: its semantic form
+    /// (spec/sema-overload.md §5.2).
+    pub fn rewritten_semantic(&self, e: ExprId) -> ExprId {
+        ExprId::new(self.expect_kind(e, ExprKind::CXXRewrittenBinaryOperator).a)
+    }
+
+    /// The written operator of a `CXXRewrittenBinaryOperator` and its list
+    /// of the two operands as written.
+    pub fn rewritten_written(&self, e: ExprId) -> (BinaryOp, ListId) {
+        let n = self.expect_kind(e, ExprKind::CXXRewrittenBinaryOperator);
+        (BinaryOp::from_u8(n.aux).expect("valid opcode"), ListId::new(n.b))
     }
 
     /// The implied object argument of a `CXXMemberCallExpr`: the base of
@@ -1980,7 +2002,8 @@ impl ExprArena {
             | ExprKind::CompoundLiteralExpr
             | ExprKind::CXXDeleteExpr
             | ExprKind::CXXDependentScopeMemberExpr
-            | ExprKind::PackExpansionExpr => v.extend(id(n.a)),
+            | ExprKind::PackExpansionExpr
+            | ExprKind::CXXRewrittenBinaryOperator => v.extend(id(n.a)),
             ExprKind::BinaryOperator | ExprKind::ArraySubscriptExpr | ExprKind::CXXFoldExpr => {
                 v.extend(id(n.a));
                 v.extend(id(n.b));
@@ -1993,7 +2016,7 @@ impl ExprArena {
                 v.extend(id(n.a));
                 v.extend(self.cond_arms[n.b as usize]);
             }
-            ExprKind::CallExpr | ExprKind::CXXMemberCallExpr => {
+            ExprKind::CallExpr | ExprKind::CXXMemberCallExpr | ExprKind::CXXOperatorCallExpr => {
                 v.extend(id(n.a));
                 v.extend(lists.iter::<ExprId>(ListId::new(n.b)));
             }

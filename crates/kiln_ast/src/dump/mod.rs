@@ -565,7 +565,8 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                     push(c.raw());
                 }
             }
-            ExprKind::CallExpr | ExprKind::CXXMemberCallExpr => {
+            ExprKind::CXXRewrittenBinaryOperator => push(n.a()),
+            ExprKind::CallExpr | ExprKind::CXXMemberCallExpr | ExprKind::CXXOperatorCallExpr => {
                 push(n.a());
                 for c in lists.iter::<ExprId>(exprs.call_args(e)) {
                     push(c.raw());
@@ -1720,6 +1721,12 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                 self.non_odr_use(exprs.non_odr_use(e));
             }
             ExprKind::CallExpr => {
+                if n.has(ExprFlags::ADL) {
+                    self.line.push_str(" adl");
+                }
+            }
+            ExprKind::CXXOperatorCallExpr => {
+                let _ = write!(self.line, " '{}'", exprs.operator_call_op(e).spelling());
                 if n.has(ExprFlags::ADL) {
                     self.line.push_str(" adl");
                 }

@@ -215,12 +215,23 @@ impl Sema<'_, '_> {
         args: &[ExprId],
         out: &mut Vec<(DeclId, DeclId)>,
     ) {
+        self.adl_lookup_dn(DeclName::ident(name), args, out);
+    }
+
+    /// [`Sema::adl_lookup`] of any declaration name (an `operator@`,
+    /// [over.match.oper]/3.2).
+    pub(crate) fn adl_lookup_dn(
+        &self,
+        name: DeclName,
+        args: &[ExprId],
+        out: &mut Vec<(DeclId, DeclId)>,
+    ) {
         let mut assoc = AssocSet::default();
         for &a in args {
             self.assoc_arg(a, &mut assoc);
         }
         for &ns in &assoc.namespaces {
-            let r = self.ast.lookup_local(ns, DeclName::ident(name));
+            let r = self.ast.lookup_local(ns, name);
             for (raw, flags) in r.iter_with_flags() {
                 let d = self.ast.strip_shadow(raw);
                 let k = self.kind_of(d);

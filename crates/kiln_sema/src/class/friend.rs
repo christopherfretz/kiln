@@ -34,6 +34,8 @@ impl Sema<'_, '_> {
         };
         // Constructor, destructor, conversion and operator names
         // (WP-067a/WP-068b) are still stubs; report them by name.
+        let op_d = self.operator_declarator(d);
+        let d = op_d.as_ref().unwrap_or(d);
         if self.unsupported_declarator(ds, d) {
             return None;
         }

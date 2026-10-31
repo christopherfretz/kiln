@@ -236,6 +236,19 @@ impl Sema<'_, '_> {
         target::is_complete_object(&self.ast, q)
     }
 
+    /// An operator-function-id declarator written with the
+    /// `SpecialName::Operator` form, rewritten into the `op_name` form
+    /// every operator function other than a member `operator=` uses
+    /// (`name` holds `operator`). `None` for any other declarator.
+    pub(crate) fn operator_declarator(&self, d: &Declarator) -> Option<Declarator> {
+        let Some((SpecialName::Operator(op), loc)) = d.special else { return None };
+        let mut c = d.clone();
+        c.special = None;
+        c.op_name = Some(op);
+        c.name = Some((self.intern("operator"), loc));
+        Some(c)
+    }
+
     fn declarator_name(&self, d: &Declarator) -> String {
         if let Some((sp, _)) = d.special {
             return match sp {
@@ -816,16 +829,29 @@ impl Sema<'_, '_> {
     /// The declarations of `name` a declaration may redeclare (redeclaration
     /// lookup, declaration order).
     pub(crate) fn prev_candidates(&self, name: Symbol, qualifier: Option<DeclId>) -> Vec<DeclId> {
+        self.prev_candidates_dn(DeclName::ident(name), qualifier)
+    }
+
+    /// [`Sema::prev_candidates`] for any declaration name.
+    pub(crate) fn prev_candidates_dn(
+        &self,
+        name: DeclName,
+        qualifier: Option<DeclId>,
+    ) -> Vec<DeclId> {
         match qualifier {
             // [class.mfct]/3, [class.static.data]/3: an out-of-line
             // definition redeclares a member of that class itself, never
             // one inherited from a base.
             Some(q) if self.kind_of(q) == DeclKind::CXXRecord => {
                 let def = self.ast.definition(q).unwrap_or(q);
-                self.lookup_in(def, name, LookupKind::Ordinary).decls
+                self.lookup_in_dn(def, name, LookupKind::Ordinary).decls
             }
-            Some(q) => self.lookup_qualified(q, name, LookupKind::Ordinary).decls,
-            None => self.lookup_current_scope(name),
+            Some(q) => self.lookup_qualified_dn(q, name, LookupKind::Ordinary).decls,
+            None => {
+                let mut v = self.current_scope_raw_dn(name);
+                v.retain(|&d| self.kind_of(d) != DeclKind::UsingShadow);
+                v
+            }
         }
     }
 
@@ -879,11 +905,11 @@ impl Sema<'_, '_> {
     /// same entity ([`Sema::local_externs`]).
     fn find_prev_function(
         &mut self,
-        name: Symbol,
+        dname: DeclName,
         qualifier: Option<DeclId>,
         new: NewFn,
     ) -> Option<DeclId> {
-        let found = self.prev_candidates(name, qualifier);
+        let found = self.prev_candidates_dn(dname, qualifier);
         if let Some(p) = self.pick_prev_function(&found, new) {
             return Some(p);
         }
@@ -891,6 +917,7 @@ impl Sema<'_, '_> {
             return None;
         }
         let ns = self.enclosing_namespace()?;
+        let name = dname.as_ident()?;
         if self.in_local_scope() {
             let mut outer = self.lookup_in(ns, name, LookupKind::Ordinary).decls;
             outer.retain(|&d| matches!(self.kind_of(d), DeclKind::Var | DeclKind::Function));
@@ -1083,6 +1110,7 @@ impl Sema<'_, '_> {
     /// the variable, function, typedef or field (spec/sema.md §4.2). The
     /// caller then supplies the initializer ([`Sema::act_on_init`] /
     /// [`Sema::act_on_uninit`]) or the function body.
+    #[allow(clippy::too_many_lines, reason = "one flat dispatch over declarator kinds")]
     pub fn act_on_declarator(
         &mut self,
         ds: &DeclSpec,
@@ -1092,6 +1120,8 @@ impl Sema<'_, '_> {
         self.finish_invented_head();
         let head = self.take_template_head(d.qualifier);
         let special = !d.dropped && self.handles_special_declarator(ds, d);
+        let op_d = if special { None } else { self.operator_declarator(d) };
+        let d = op_d.as_ref().unwrap_or(d);
         if d.dropped || !special && self.unsupported_declarator(ds, d) {
             self.templ.cur = None;
             return None;
@@ -1136,16 +1166,21 @@ impl Sema<'_, '_> {
         }
         let mut attrs = ds.attrs.clone();
         attrs.extend(d.attrs.iter().copied());
-        if d.op_name.is_some()
-            && (ds.is_typedef()
-                || !self.ast.types.is_function(ty)
-                || d.ctx == DeclaratorContext::Member
-                || d.qualifier.is_some())
+        if let Some(op) = d.op_name
+            && (ds.is_typedef() || !self.ast.types.is_function(ty))
         {
-            // An operator-function-id names a function at namespace scope
-            // here; member operators are WP-068b.
+            // [over.oper.general]/6: an operator function is a function.
             self.templ.cur = None;
-            self.unsupported("this declaration of an operator function", d.loc);
+            if !invalid {
+                if ds.is_typedef() {
+                    self.error(DiagId::sema_typedef_not_identifier, d.name_loc());
+                } else {
+                    let m = self
+                        .diag(DiagId::sema_operator_overload_variable, d.name_loc())
+                        .arg(format!("operator{}", op.spelling()));
+                    self.emit(m);
+                }
+            }
             return None;
         }
         if ds.is_typedef() || !self.ast.types.is_function(ty) {
@@ -1548,10 +1583,35 @@ impl Sema<'_, '_> {
             }
             _ => {}
         }
+        // [class.free]/1: class-specific allocation and deallocation
+        // functions are static members.
+        if method
+            && d.op_name.is_some_and(|op| {
+                matches!(
+                    op,
+                    OverloadedOperator::New
+                        | OverloadedOperator::ArrayNew
+                        | OverloadedOperator::Delete
+                        | OverloadedOperator::ArrayDelete
+                )
+            })
+        {
+            spec = spec.with_storage(FnStorage::Static);
+        }
         let ty = if in_class && spec.storage() == FnStorage::Static {
             self.check_static_method_quals(ty, d)
         } else {
             ty
+        };
+        // [except.spec]/9: a class-specific deallocation function without
+        // an exception specification is non-throwing.
+        let ty = match d.op_name {
+            Some(OverloadedOperator::Delete | OverloadedOperator::ArrayDelete)
+                if method && self.written_exc_spec(ty) == ExcSpec::None =>
+            {
+                self.with_basic_noexcept(ty)
+            }
+            _ => ty,
         };
         if ds.inline.is_some() {
             spec = spec.with_inline(true);
@@ -1580,29 +1640,15 @@ impl Sema<'_, '_> {
             head: self.templ.cur,
             requires: d.trailing_requires,
         };
-        let prev = if d.op_name.is_some() {
-            None
-        } else if friend && d.qualifier.is_none() {
-            // Redeclaration lookup in the namespace sees hidden friends.
-            let found: Vec<DeclId> =
-                self.ast.lookup_local(ctx, DeclName::ident(name)).iter().collect();
-            self.pick_prev_function(&found, new_fn)
-        } else if method {
-            let found = self.prev_candidates(name, d.qualifier);
-            self.pick_prev_function(&found, new_fn)
-        } else {
-            self.find_prev_function(name, d.qualifier, new_fn)
+        let dname = d.op_name.map_or(DeclName::ident(name), DeclName::operator);
+        let fname = match d.op_name {
+            Some(op) => format!("operator{}", op.spelling()),
+            None => sym_str(self, name),
         };
-        let matches_member = prev.is_some_and(|p| {
-            self.kind_of(p) == DeclKind::CXXMethod
-                && self.ast.decls.get(p).ty().is_some()
-                && self.declared_fn_type(p).is_some_and(|pty| self.same_ignoring_exc_spec(pty, ty))
-        });
-        let mut ty = ty;
-        if let Some(op) = d.op_name {
-            // A replaceable global allocation or deallocation function
-            // redeclares the implicit one ([new.delete]/2).
-            if !method
+        // A replaceable global allocation or deallocation function
+        // redeclares the implicit one ([new.delete]/2).
+        let global_new_delete = d.op_name.is_some_and(|op| {
+            !method
                 && !friend
                 && matches!(
                     op,
@@ -1611,22 +1657,35 @@ impl Sema<'_, '_> {
                         | OverloadedOperator::Delete
                         | OverloadedOperator::ArrayDelete
                 )
-            {
-                let (t, p) = self.act_on_global_new_delete_decl(op, ty);
-                ty = t;
-                prev_ok = p;
-            } else {
-                // todo(WP-068b): other operator functions, class-specific
-                // and friend operator functions.
-                self.unsupported(
-                    "operator functions other than 'operator new' and 'operator delete'",
-                    d.name_loc(),
-                );
-            }
+        });
+        let prev = if global_new_delete {
+            None
+        } else if friend && d.qualifier.is_none() {
+            // Redeclaration lookup in the namespace sees hidden friends.
+            let found: Vec<DeclId> = self.ast.lookup_local(ctx, dname).iter().collect();
+            self.pick_prev_function(&found, new_fn)
+        } else if method {
+            let found = self.prev_candidates_dn(dname, d.qualifier);
+            self.pick_prev_function(&found, new_fn)
+        } else {
+            self.find_prev_function(dname, d.qualifier, new_fn)
+        };
+        let matches_member = prev.is_some_and(|p| {
+            self.kind_of(p) == DeclKind::CXXMethod
+                && self.ast.decls.get(p).ty().is_some()
+                && self.declared_fn_type(p).is_some_and(|pty| self.same_ignoring_exc_spec(pty, ty))
+        });
+        let mut ty = ty;
+        if let Some(op) = d.op_name
+            && global_new_delete
+        {
+            let (t, p) = self.act_on_global_new_delete_decl(op, ty);
+            ty = t;
+            prev_ok = p;
         } else if friend && d.qualifier.is_some() && (prev.is_none() || method && !matches_member) {
             let msg = self
                 .diag(DiagId::sema_friend_def_no_match, d.name_loc())
-                .arg(sym_str(self, name))
+                .arg(fname.clone())
                 .arg(self.qualifier_desc(ctx));
             self.emit(msg);
             invalid_redecl = true;
@@ -1643,7 +1702,7 @@ impl Sema<'_, '_> {
             };
             let msg = self
                 .diag(DiagId::sema_member_def_no_match, d.name_loc())
-                .arg(sym_str(self, name))
+                .arg(fname.clone())
                 .arg(scope);
             self.emit(msg);
             invalid_redecl = true;
@@ -1686,7 +1745,7 @@ impl Sema<'_, '_> {
                     if spec.storage() == FnStorage::Static && pspec.storage() != FnStorage::Static {
                         let msg = self
                             .diag(DiagId::sema_static_non_static, d.name_loc())
-                            .arg(sym_str(self, name));
+                            .arg(fname.clone());
                         let msg = self.note_prev(msg, p, false);
                         self.emit(msg);
                     }
@@ -1703,7 +1762,7 @@ impl Sema<'_, '_> {
                         ExcSpec::None => {
                             let spelled = self.exc_spec_spelling(self.written_exc_spec(pty));
                             self.diag(DiagId::sema_missing_exception_spec, d.name_loc())
-                                .arg(sym_str(self, name))
+                                .arg(fname.clone())
                                 .arg(spelled)
                         }
                         _ => self.diag(DiagId::sema_exception_spec_mismatch, d.name_loc()),
@@ -1738,7 +1797,7 @@ impl Sema<'_, '_> {
             } else {
                 let msg = self
                     .diag(DiagId::sema_redefinition_different_kind, d.name_loc())
-                    .arg(sym_str(self, name));
+                    .arg(fname.clone());
                 let msg = self.note_prev(msg, p, true);
                 self.emit(msg);
             }
@@ -1752,7 +1811,6 @@ impl Sema<'_, '_> {
             prev_ok = None;
             invalid_redecl = true;
         }
-        let dname = d.op_name.map_or(DeclName::ident(name), DeclName::operator);
         let mut h = DeclHead::new(ctx, dname, d.name_loc());
         h.lexical = Some(lexical);
         if friend {
@@ -1760,7 +1818,7 @@ impl Sema<'_, '_> {
             // declared outside the class (before or after).
             let visible = prev_ok.is_some_and(|p| {
                 self.ast
-                    .lookup_local(ctx, DeclName::ident(name))
+                    .lookup_local(ctx, dname)
                     .iter_with_flags()
                     .any(|(x, fl)| x == p && !fl.contains(LookupFlags::ADL_ONLY))
             });
@@ -1791,8 +1849,10 @@ impl Sema<'_, '_> {
         let f = self.builder().function(h, fkind, ty, spec, prev_ok);
         self.finish_virtual_decl(f, &virt);
         // A pure virtual function's notes point at its decl-specifiers
-        // (clang `getBeginLoc`, §4.11).
-        if self.ast.decls.function(f).is_some_and(|x| x.spec.is_pure())
+        // (clang `getBeginLoc`, §4.11), as does the `->` note on an
+        // `operator->` result ([over.ref]).
+        if (self.ast.decls.function(f).is_some_and(|x| x.spec.is_pure())
+            || self.ast.decls.get(f).name().as_operator() == Some(OverloadedOperator::Arrow))
             && ds.loc.is_valid()
             && ds.loc != self.ast.decls.get(f).loc()
         {
@@ -1807,8 +1867,121 @@ impl Sema<'_, '_> {
         self.create_params(f, &params, &defaults);
         if d.op_name.is_none() {
             self.register_local(name, f);
+        } else if !global_new_delete
+            && !self.ast.decls.get(f).flags().contains(DeclFlags::INVALID)
+            && !self.check_operator_decl(f)
+        {
+            self.ast.decls.set_flags(f, DeclFlags::INVALID);
         }
         f
+    }
+
+    /// The [over.oper] rules for operator function `f` (spec/sema-overload.md
+    /// §6.1, clang `CheckOverloadedOperatorDeclaration`): reports the first
+    /// violation and returns false. Allocation and deallocation functions
+    /// are checked elsewhere.
+    pub(crate) fn check_operator_decl(&mut self, f: DeclId) -> bool {
+        use OverloadedOperator as O;
+        let Some(op) = self.ast.decls.get(f).name().as_operator() else { return true };
+        if matches!(op, O::New | O::ArrayNew | O::Delete | O::ArrayDelete) {
+            return true;
+        }
+        let loc = self.ast.decls.get(f).loc();
+        let spelled = format!("operator{}", op.spelling());
+        let method = self.kind_of(f) == DeclKind::CXXMethod;
+        let is_static = method && self.is_static_method(f);
+        let params: Vec<DeclId> = self
+            .ast
+            .decls
+            .function(f)
+            .map(|fd| self.ast.lists.iter::<DeclId>(fd.params).collect())
+            .unwrap_or_default();
+        let ptys: Vec<QualType> =
+            params.iter().map(|&p| self.ast.decls.get(p).ty().unwrap_or(QualType::ERROR)).collect();
+        if is_static {
+            if !matches!(op, O::Call | O::Subscript) {
+                let m = self.diag(DiagId::sema_operator_overload_static, loc).arg(spelled);
+                self.emit(m);
+                return false;
+            }
+        } else if !method {
+            // [over.oper.general]/7: a non-member operator function has a
+            // parameter of class or enumeration type (or reference to one).
+            let ok = ptys.iter().any(|&t| {
+                let t = self.non_reference(t);
+                self.ast.types.is_dependent(t)
+                    || self.ast.types.as_record(t).is_some()
+                    || self.ast.types.as_enum(t).is_some()
+                    || self.is_error_type(t)
+            });
+            if !ok {
+                let m =
+                    self.diag(DiagId::sema_operator_overload_needs_class_or_enum, loc).arg(spelled);
+                self.emit(m);
+                return false;
+            }
+        }
+        // [over.oper.general]/10: no default arguments, except for `()`
+        // and (C++23) `[]`.
+        if !matches!(op, O::Call | O::Subscript)
+            && let Some(&p) = params.iter().find(|&&p| self.param_has_default(p))
+        {
+            let ploc = self.ast.decls.get(p).loc();
+            let m = self.diag(DiagId::sema_operator_overload_default_arg, ploc).arg(spelled);
+            self.emit(m);
+            return false;
+        }
+        let (unary, binary, member) = operator_uses(op);
+        let explicit_obj = self.has_explicit_object(f);
+        let n = params.len() + usize::from(method && !is_static && !explicit_obj);
+        if !matches!(op, O::Call | O::Subscript)
+            && (n == 1 && !unary || n == 2 && !binary || !(1..=2).contains(&n))
+        {
+            let which = match (unary, binary) {
+                (true, true) => "2",
+                (true, false) => "0",
+                _ => "1",
+            };
+            let m = self
+                .diag(DiagId::sema_operator_overload_must_be, loc)
+                .arg(spelled)
+                .arg(which)
+                .arg(n.to_string())
+                .arg(if n == 1 { "0" } else { "1" });
+            self.emit(m);
+            return false;
+        }
+        let variadic = self.ast.decls.function(f).is_some_and(|x| x.spec.is_variadic());
+        if op != O::Call && variadic {
+            let m = self.diag(DiagId::sema_operator_overload_variadic, loc).arg(spelled);
+            self.emit(m);
+            return false;
+        }
+        if member && !method {
+            let m = self.diag(DiagId::sema_operator_overload_must_be_member, loc).arg(spelled);
+            self.emit(m);
+            return false;
+        }
+        // [over.inc]/1: the parameter of a postfix `++`/`--` is `int`.
+        if matches!(op, O::PlusPlus | O::MinusMinus)
+            && n == 2
+            && let (Some(&p), Some(&t)) = (params.last(), ptys.last())
+        {
+            let t = self.ast.types.canonical(t);
+            if !self.ast.types.is_dependent(t)
+                && !self.ast.types.same_unqualified(t, QualType::INT)
+                && !self.is_error_type(t)
+            {
+                let ploc = self.ast.decls.get(p).loc();
+                let m = self
+                    .diag(DiagId::sema_operator_overload_post_incdec_must_be_int, ploc)
+                    .arg(self.ty_arg(ptys[ptys.len() - 1]))
+                    .arg(if op == O::PlusPlus { "0" } else { "1" });
+                self.emit(m);
+                return false;
+            }
+        }
+        true
     }
 
     /// Creates the parameter declarations of function `f` from the
@@ -4233,5 +4406,27 @@ impl Sema<'_, '_> {
             _ => return false,
         }
         true
+    }
+}
+
+/// Whether operator `op` can be unary, can be binary, and must be a
+/// member ([over.oper], clang `OperatorKinds.def`).
+pub(crate) const fn operator_uses(op: OverloadedOperator) -> (bool, bool, bool) {
+    use OverloadedOperator as O;
+    match op {
+        O::Plus
+        | O::Minus
+        | O::Star
+        | O::Amp
+        | O::PlusPlus
+        | O::MinusMinus
+        | O::New
+        | O::Delete
+        | O::ArrayNew
+        | O::ArrayDelete => (true, true, false),
+        O::Tilde | O::Exclaim | O::Coawait => (true, false, false),
+        O::Equal | O::Subscript | O::Call => (false, true, true),
+        O::Arrow => (true, false, true),
+        _ => (false, true, false),
     }
 }

@@ -176,11 +176,12 @@ impl Sema<'_, '_> {
         }
         let lt = self.ast.exprs.get(lhs).ty();
         let lt = conv::strip_cv(self, self.non_reference(lt));
-        if self.ast.types.as_record(lt).is_some() {
-            self.unsupported("assignment of a braced-init-list to a class object", l.lbrace);
-            let mut kids = vec![lhs];
-            kids.extend(flat);
-            return self.recover_err(&kids, op_loc);
+        if self.ast.types.as_record(lt).is_some() && !self.expr_is_type_dependent(lhs) {
+            // [expr.assign]/8: the list is the argument of the
+            // assignment operator function ([over.match.oper]).
+            let r = self.act_on_braced_arg(l.clone());
+            let br = self.take_braced_arg(r);
+            return self.binary_operator(op, lhs, r, br, op_loc);
         }
         let r = self.init_from_list_at(lt, l, Some(l.lbrace));
         self.act_on_binary(op, lhs, r, op_loc)

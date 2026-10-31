@@ -1,0 +1,25 @@
+TranslationUnitDecl
+|-TypedefDecl referenced F 'int (int)'
+|-CXXRecordDecl referenced struct A definition
+| `-CXXConversionDecl used operator int (*)(int) 'F *()'
+|-CXXRecordDecl referenced struct C definition
+| |-CXXMethodDecl used operator() 'int (long)'
+| | `-ParmVarDecl 'long'
+| `-CXXConversionDecl operator int (*)(int) 'F *()'
+`-FunctionDecl f 'int (A, C)'
+  |-ParmVarDecl used a 'A'
+  |-ParmVarDecl used c 'C'
+  `-CompoundStmt
+    `-ReturnStmt
+      `-BinaryOperator 'int' '+'
+        |-CallExpr 'int'
+        | |-ImplicitCastExpr 'F *' <UserDefinedConversion>
+        | | `-CXXMemberCallExpr 'F *'
+        | |   `-MemberExpr '<bound member function type>' .operator int (*)(int)
+        | |     `-DeclRefExpr 'A' lvalue ParmVar 'a' 'A'
+        | `-IntegerLiteral 'int' 1
+        `-CXXOperatorCallExpr 'int' '()'
+          |-ImplicitCastExpr 'int (*)(long)' <FunctionToPointerDecay>
+          | `-DeclRefExpr 'int (long)' lvalue CXXMethod 'operator()' 'int (long)'
+          |-DeclRefExpr 'C' lvalue ParmVar 'c' 'C'
+          `-IntegerLiteral 'long' 1

@@ -820,7 +820,7 @@ impl Sema<'_, '_> {
 
     fn is_noreturn_call(&self, e: ExprId) -> bool {
         let n = self.ast.exprs.get(e);
-        if n.kind() != ExprKind::CallExpr {
+        if !matches!(n.kind(), ExprKind::CallExpr | ExprKind::CXXOperatorCallExpr) {
             return false;
         }
         let mut c = self.ast.exprs.callee(e);

@@ -5,7 +5,7 @@ use kiln_ast::DeclId;
 
 use super::{
     Candidate, CandidateFailure, CandidateKind, Ics, IcsOptions, OverloadCandidateSet, OvlOutcome,
-    SetKind,
+    Rewrite, SetKind,
 };
 use crate::Sema;
 use crate::conv::{IcsCompare, RefBinding, compare_standard_conversions};
@@ -69,7 +69,11 @@ impl Sema<'_, '_> {
         let mut cand = Candidate::new(f, found, kind);
         let mut params = std::mem::take(&mut set.params);
         let variadic = self.fn_param_types(f, &mut params);
-        let explicit_obj = set.object.is_some() && self.has_explicit_object(f);
+        // The object argument initializes the first parameter: an explicit
+        // object parameter, or a non-member operator function's first
+        // ([over.match.oper]/2).
+        let oper_fn = set.oper && kind == CandidateKind::Function;
+        let explicit_obj = set.object.is_some() && (oper_fn || self.has_explicit_object(f));
         let skip = usize::from(explicit_obj);
         let nparams = params.len().saturating_sub(skip);
         let nargs = set.args.len();
@@ -93,8 +97,15 @@ impl Sema<'_, '_> {
             cand.failure = CandidateFailure::Explicit;
         } else {
             if let Some(o) = set.object {
-                let x = if explicit_obj {
-                    self.try_implicit_conversion(&o, params[0], IcsOptions::NONE)
+                let x = if explicit_obj && params.is_empty() {
+                    Ics::Ellipsis
+                } else if explicit_obj {
+                    let opts = if oper_fn {
+                        first_opts.with(IcsOptions::CANDIDATE_ARG)
+                    } else {
+                        IcsOptions::NONE
+                    };
+                    self.try_implicit_conversion(&o, params[0], opts)
                 } else if kind == CandidateKind::Function || self.is_static_method(f) {
                     super::ignored_object(o.ty)
                 } else {
@@ -111,7 +122,8 @@ impl Sema<'_, '_> {
                     let a = set.args[i];
                     let x = match params.get(skip + i) {
                         Some(&p) => {
-                            let opts = if i == 0 { first_opts } else { IcsOptions::NONE };
+                            let opts =
+                                if i == 0 && !oper_fn { first_opts } else { IcsOptions::NONE };
                             self.try_implicit_conversion(
                                 &a,
                                 p,
@@ -140,24 +152,35 @@ impl Sema<'_, '_> {
     /// `c2` (C++26 order, spec/sema-overload.md §4.1).
     pub(crate) fn better(&self, set: &OverloadCandidateSet, c1: u32, c2: u32) -> bool {
         let (a, b) = (set.ics_of(c1), set.ics_of(c2));
+        let (x, y) = (set.cand(c1), set.cand(c2));
         let mut has_better = false;
+        let mut has_worse = false;
+        // clang's workaround for C++20 reversed `operator==`: against the
+        // reversed form of a function written the same way, a better
+        // conversion for one operand and a worse one for the other are
+        // treated as equally good (diagnosed as an extension).
+        let tolerate = x.rewrite.is_reversed() != y.rewrite.is_reversed()
+            && x.decl.is_some()
+            && y.decl.is_some();
         // /2.1: no worse for every argument, better for one. In a
         // conversion set, a conversion function's object argument and a
         // constructor's argument occupy the same slot.
-        for (x, y) in a.iter().zip(b.iter()) {
-            if x.is_ignored() || y.is_ignored() {
+        for (p, q) in a.iter().zip(b.iter()) {
+            if p.is_ignored() || q.is_ignored() {
                 continue;
             }
-            match self.compare_ics(x, y) {
+            match self.compare_ics(p, q) {
                 IcsCompare::Better => has_better = true,
+                IcsCompare::Worse if tolerate && self.allow_ambiguity(x.func(), y.func()) => {
+                    has_worse = true;
+                }
                 IcsCompare::Worse => return false,
                 IcsCompare::Indistinguishable => {}
             }
         }
-        if has_better {
+        if has_better && !has_worse {
             return true;
         }
-        let (x, y) = (set.cand(c1), set.cand(c2));
         // clang's CWG2327 workaround: in an initialization by constructor,
         // a constructor over a conversion function.
         if matches!(set.kind, SetKind::Normal | SetKind::ListCtor { .. })
@@ -181,6 +204,14 @@ impl Sema<'_, '_> {
             (false, true) => return true,
             (true, false) => return false,
             _ => {}
+        }
+        // /2.8: a non-rewritten candidate over a rewritten one; /2.9:
+        // of two rewritten candidates, the one not reversed.
+        if (x.rewrite == Rewrite::None) != (y.rewrite == Rewrite::None) {
+            return x.rewrite == Rewrite::None;
+        }
+        if x.rewrite.is_reversed() != y.rewrite.is_reversed() {
+            return !x.rewrite.is_reversed();
         }
         // /2.5 (more specialized template): WP-071. /2.6 (more
         // constrained): WP-073. /2.7 (constructor of a derived class over
@@ -221,7 +252,10 @@ impl Sema<'_, '_> {
         if ambiguous {
             return OvlOutcome::Ambiguous;
         }
-        if self.ovl_deleted(set.cand(b).func()) {
+        if set.cand(b).decl.is_some()
+            && set.cand(b).kind != CandidateKind::Surrogate
+            && self.ovl_deleted(set.cand(b).func())
+        {
             return OvlOutcome::Deleted(b);
         }
         OvlOutcome::Success(b)

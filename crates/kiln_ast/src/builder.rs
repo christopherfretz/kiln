@@ -1496,6 +1496,113 @@ impl<'a> AstBuilder<'a> {
         e
     }
 
+    /// A call of an overloaded operator function (`CXXOperatorCallExpr`,
+    /// spec/sema-overload.md §8): `callee` the decayed reference to the
+    /// operator function, `args` its operands in parameter order (the
+    /// object first for a member). `loc` is the operator token and `end`
+    /// the closing `)`/`]` of a call or subscript (else invalid).
+    #[allow(clippy::too_many_arguments, reason = "the call's parts")]
+    pub fn operator_call(
+        &mut self,
+        op: crate::names::OverloadedOperator,
+        callee: ExprId,
+        args: &[ExprId],
+        ty: QualType,
+        vk: ValueCategory,
+        loc: Loc,
+        end: Loc,
+    ) -> ExprId {
+        let mut deps = self.deps(callee) | self.type_deps(ty);
+        for &a in args {
+            deps |= self.deps(a);
+        }
+        let list = self.ast.lists.push(args);
+        let e = self.push_expr(
+            ExprKind::CXXOperatorCallExpr,
+            vk,
+            ObjectKind::Ordinary,
+            ExprFlags::NONE,
+            deps,
+            op as u8,
+            ty,
+            loc,
+            callee.raw(),
+            list.raw(),
+        );
+        if end.is_valid() {
+            self.ast.exprs.cold.end_loc.insert(e, end).expect("fresh expression");
+        }
+        e
+    }
+
+    /// The callee of an operator call (clang `CreateFunctionRefExpr`): an
+    /// lvalue `DeclRefExpr` of the operator function `d` of type `ty`
+    /// (a member function too), decayed to a pointer.
+    pub fn operator_callee(
+        &mut self,
+        d: DeclId,
+        ty: QualType,
+        loc: Loc,
+        extra: Option<DeclRefExtra>,
+    ) -> ExprId {
+        let deps = self.type_deps(ty) | self.decl_deps(d);
+        let b = extra.map_or(0, |x| self.ast.exprs.push_declref_extra(x));
+        let dre = self.push_expr(
+            ExprKind::DeclRefExpr,
+            ValueCategory::LValue,
+            ObjectKind::Ordinary,
+            ExprFlags::NONE,
+            deps,
+            NonOdrUse::None as u8,
+            ty,
+            loc,
+            d.raw(),
+            b,
+        );
+        let pty = self.ast.types.pointer_to(ty);
+        self.cast(
+            ExprKind::ImplicitCastExpr,
+            CastKind::FunctionToPointerDecay,
+            dre,
+            pty,
+            ValueCategory::PRValue,
+            None,
+            loc,
+            ExprFlags::NONE,
+        )
+    }
+
+    /// A comparison rewritten to `==` or `<=>` ([over.match.oper]/3.4,
+    /// `CXXRewrittenBinaryOperator`): `semantic` is the expression it
+    /// stands for, `loc` the written operator; `op` and the operands
+    /// `l`, `r` are the expression as written (kept for template
+    /// instantiation, not dumped).
+    pub fn rewritten_binary(
+        &mut self,
+        op: BinaryOp,
+        l: ExprId,
+        r: ExprId,
+        semantic: ExprId,
+        loc: Loc,
+    ) -> ExprId {
+        let deps = self.deps(semantic);
+        let ty = self.ast.exprs.get(semantic).ty();
+        let vk = self.vk(semantic);
+        let list = self.ast.lists.push(&[l, r]);
+        self.push_expr(
+            ExprKind::CXXRewrittenBinaryOperator,
+            vk,
+            ObjectKind::Ordinary,
+            ExprFlags::NONE,
+            deps,
+            op as u8,
+            ty,
+            loc,
+            semantic.raw(),
+            list.raw(),
+        )
+    }
+
     /// A cast of `kind` (`ImplicitCastExpr` or an explicit cast kind) with
     /// cast kind `ck` ([expr.cast], [expr.static.cast], \[conv\]).
     /// Dependence ([temp.dep.expr]/3, [temp.dep.constexpr]/2): type-

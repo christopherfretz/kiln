@@ -148,11 +148,56 @@ impl Substituter<'_, '_, '_> {
                 let args = self.expr_list(args)?;
                 Ok(self.sema.act_on_call(callee, &args, loc, end))
             }
+            ExprKind::CXXOperatorCallExpr => {
+                use crate::overload::oper::{binary_of, unary_of};
+                use kiln_ast::names::OverloadedOperator as OO;
+                let op = ex(self).operator_call_op(e);
+                let args = ex(self).call_args(e);
+                let args = self.expr_list(args)?;
+                match (op, args.as_slice()) {
+                    (OO::Call, [f, rest @ ..]) => Ok(self.sema.act_on_call(*f, rest, loc, end)),
+                    (OO::Subscript, [b, rest @ ..]) => {
+                        Ok(self.sema.act_on_subscript_args(*b, rest, loc, end))
+                    }
+                    (_, &[a]) | (OO::PlusPlus | OO::MinusMinus, &[a, _]) => {
+                        match unary_of(op, args.len() == 2) {
+                            Some(u) => Ok(self.sema.act_on_unary(u, a, loc)),
+                            None => self.unimplemented("this overloaded operator", loc),
+                        }
+                    }
+                    (_, &[l, r]) => match binary_of(op) {
+                        Some(b) => Ok(self.sema.act_on_binary(b, l, r, loc)),
+                        None => self.unimplemented("this overloaded operator", loc),
+                    },
+                    _ => self.unimplemented("this overloaded operator", loc),
+                }
+            }
+            ExprKind::CXXRewrittenBinaryOperator => {
+                let (op, l) = ex(self).rewritten_written(e);
+                let v = self.expr_list(l)?;
+                match v.as_slice() {
+                    &[l, r] => Ok(self.sema.act_on_binary(op, l, r, loc)),
+                    _ => self.unimplemented("this rewritten comparison", loc),
+                }
+            }
             ExprKind::UnresolvedLookupExpr => self.callee(e),
             ExprKind::MemberExpr => {
                 let base = ex(self).operand(e);
                 let m = ex(self).decl(e);
                 let arrow = n.has(ExprFlags::ARROW);
+                // `x->m` through `operator->`: the chain is formed again
+                // from the substituted `x` ([over.ref]/1).
+                let mut base = base;
+                while arrow
+                    && ex(self).get(base).kind() == ExprKind::CXXOperatorCallExpr
+                    && ex(self).operator_call_op(base) == kiln_ast::names::OverloadedOperator::Arrow
+                {
+                    let l = ex(self).call_args(base);
+                    match self.sema.ast.lists.iter::<ExprId>(l).next() {
+                        Some(x) => base = x,
+                        None => break,
+                    }
+                }
                 let base = self.member_base(base)?;
                 let Some(name) = self.sema.ast.decls.get(m).name().as_ident() else {
                     return self.unimplemented("member access to a special member", loc);

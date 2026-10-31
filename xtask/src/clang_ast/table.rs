@@ -189,12 +189,12 @@ pub const TABLE: &[(&str, Disposition)] = &[
     ("CoroutineBodyStmt", Unsupported(NOT_M2)),
     // Expressions kiln does not dump in M2.
     ("BuiltinBitCastExpr", Unsupported(CXX_CAST)),
-    ("CXXOperatorCallExpr", Unsupported("overloaded operator calls are not in the dump yet")),
+    ("CXXOperatorCallExpr", Keep),
     ("CXXNewExpr", Keep),
     ("CXXDeleteExpr", Keep),
     ("CXXNoexceptExpr", Keep),
     ("CXXStdInitializerListExpr", Unsupported(NOT_M2)),
-    ("CXXRewrittenBinaryOperator", Unsupported(NOT_M2)),
+    ("CXXRewrittenBinaryOperator", Keep),
     ("UnresolvedMemberExpr", Unsupported("member function template names are not in the dump yet")),
     // The parameter (reprinted) then the replacement (spec/ast-dump.md §5).
     ("SubstNonTypeTemplateParmExpr", Keep),
@@ -339,6 +339,10 @@ fn specific_keys(kind: &str) -> Option<&'static [&'static str]> {
         "BinaryOperator" => &["opcode"],
         "CompoundAssignOperator" => &["opcode", "computeLHSType", "computeResultType"],
         "ConditionalOperator" | "ParenExpr" | "ArraySubscriptExpr" | "CallExpr" => &[],
+        // The operator spelling is the callee's (clang's text dump prints it).
+        "CXXOperatorCallExpr" => &["adl"],
+        // Only the semantic form is a child (as in clang's text dump).
+        "CXXRewrittenBinaryOperator" => &[],
         "SubstNonTypeTemplateParmExpr" => &[],
         "UnaryExprOrTypeTraitExpr" => &["name", "argType"],
         "InitListExpr" => &["field", "array_filler"],
@@ -451,6 +455,8 @@ pub fn check_keys(kind: &str, keys: impl Iterator<Item = impl AsRef<str>>) -> Re
 #[cfg(test)]
 pub const CLASS_KINDS: &[&str] = &[
     "AccessSpecDecl",
+    "CXXOperatorCallExpr",
+    "CXXRewrittenBinaryOperator",
     "FriendDecl",
     "CXXMethodDecl",
     "CXXConstructorDecl",

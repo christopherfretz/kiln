@@ -2,8 +2,8 @@
 //! [class.mem], [class.derived], [class.friend], [dcl.fct.def]).
 //!
 //! Member functions, static data members, bases, friends, access labels
-//! and default member initializers are WP-066b's sema; special members,
-//! virtual functions and operators are still sema stubs that report
+//! and default member initializers are WP-066b's sema; some special
+//! members and virtual functions are still sema stubs that report
 //! "... is not supported yet". These tests pin that the parser accepts
 //! each form (only those stub diagnostics appear) and pin the parser's own
 //! diagnostics against clang.
@@ -29,11 +29,9 @@ fn class_special_declarator_ids() {
            explicit(false) S(int); explicit S(char); operator const int *(); };",
     );
     assert_parsed(&p);
-    // Constructors, destructors and conversion functions are declared
-    // (WP-067a); operator functions are WP-068b.
-    p.assert_diag("1:38 error: overloaded operators is not supported yet");
-    p.assert_diag("1:59 error: overloaded operators is not supported yet");
-    assert_eq!(p.problems().len(), 2, "{:?}", p.problems());
+    // Constructors, destructors, conversion functions (WP-067a) and
+    // operator functions (WP-068b) are all declared.
+    assert_eq!(p.problems().len(), 0, "{:?}", p.problems());
 }
 
 /// [class.friend]: friend declarations with special declarator-ids reach
@@ -45,7 +43,10 @@ fn class_friend_special_names() {
          { return v; } friend P::operator int(); };",
     );
     assert_parsed(&p);
-    p.assert_diag("1:21 error: overloaded operators is not supported yet");
+    // Operator friends are declared (WP-068b); only the out-of-class
+    // conversion-function friend reaches a stub.
+    p.assert_diag("1:114 error: conversion functions is not supported yet");
+    assert_eq!(p.problems().len(), 1, "{:?}", p.problems());
 }
 
 /// [over.literal]: literal operators are not supported.
