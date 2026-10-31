@@ -640,6 +640,15 @@ points, thunks and method indices are clang's.
 - **Member function pointers to virtual functions**: see 8.6 (x86-64
   `ptr = offset + 1`; AArch64 `adj = 2 * adj + 1`).
 
+### 8.8 Landed (WP-107): `__int128`
+- Layout 16/16 on both targets (§3); mangling `n` / `o`, also through the
+  implicit `__int128_t` / `__uint128_t` typedefs (`tests/mangle/int128.cpp`).
+- Calls: AArch64 passes and returns `i128` (an even general-register
+  pair, AAPCS64 C.8); x86-64 coerces to `{ i64, i64 }`, two INTEGER
+  eightbytes, on the stack when fewer than two registers remain.
+  IR-exact on both triples (`tests/codegen/int128.cpp`,
+  `tests/codegen/int128_ops.cpp`).
+
 ## 9. Open questions (with recommendation)
 - **A1.** `preferred_align` is equal to `align` on both targets. i386
   `double` is where it differs; out of scope.

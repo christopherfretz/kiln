@@ -695,3 +695,25 @@ In AST dumps (`spec/ast-dump.md` §2) the second string of `'X':'Y'` is
 clang's **top-level-only desugar** of the written type (`desugar_top`), not
 the canonical type, and is omitted when equal. `print_type` with
 `PrintOptions::CANONICAL` remains the canonical printer for diagnostics.
+
+## 20. Landed (WP-107): `__int128` end to end
+- `__int128` / `unsigned __int128` are builtins 18/19 (§5.1), rank 7,
+  above `long long` (`kiln_sema/src/conv/rank.rs`), integral, with
+  `__make_signed` / `__make_unsigned` rows.
+- `__int128_t` / `__uint128_t` are implicit `Typedef` decls in the
+  translation unit (`DeclFlags::IMPLICIT`, no location), made by
+  `kiln_sema::builtins::declare_int128_typedefs` when `Sema` is created
+  and the target's pointers are 64-bit (clang's `Sema::Initialize`,
+  `TargetInfo::hasInt128Type`). As in clang they are ordinary typedefs:
+  diagnostics print `'__int128_t'` (sugar kept), a program's
+  `typedef __int128 __int128_t;` redeclares them, and `-fdump-ast`
+  without `=implicit` does not show them.
+- There is no 128-bit literal suffix (as clang 19): a literal over
+  `unsigned long long` is "integer literal is too large to be
+  represented in any integer type".
+- Tests: `tests/conformance/basic.fundamental/int128-*.cpp`,
+  `tests/codegen/int128_ops.cpp`, `tests/mangle/int128.cpp`.
+- Gaps (not `__int128`-specific): Oven notes print a typedef without its
+  `(aka '...')` and kiln emits `-Wshift-count-overflow` /
+  `-Wdivision-by-zero` in a constexpr variable's initializer where clang
+  does not.
