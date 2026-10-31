@@ -322,7 +322,12 @@ impl Sema<'_, '_> {
                 continue;
             }
             let cty = self.ast.decls.get(c).ty().unwrap_or(QualType::ERROR);
-            if self.same_ignoring_exc_spec(cty, ty) {
+            // [temp.over.link]/5: a different trailing requires-clause
+            // declares a different (constrained) member.
+            let creq = self.ast.templates.trailing_requires.get(c).copied();
+            if self.same_ignoring_exc_spec(cty, ty)
+                && self.opt_exprs_equivalent(creq, d.trailing_requires)
+            {
                 matched = Some(c);
                 break;
             }

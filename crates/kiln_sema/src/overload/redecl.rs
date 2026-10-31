@@ -155,7 +155,7 @@ impl Sema<'_, '_> {
         })
     }
 
-    fn opt_exprs_equivalent(&self, a: Option<ExprId>, b: Option<ExprId>) -> bool {
+    pub(crate) fn opt_exprs_equivalent(&self, a: Option<ExprId>, b: Option<ExprId>) -> bool {
         match (a, b) {
             (None, None) => true,
             (Some(a), Some(b)) => self.exprs_equivalent(a, b, 0),

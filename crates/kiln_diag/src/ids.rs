@@ -983,6 +983,7 @@ diag_ids! {
     note_typename_member_refers_here = Note (1) "referenced member '{0}' is declared here";
     // WP-073: concepts (spec/sema-templates.md §8, §8.7; clang 19's texts).
     sema_template_constraints_not_satisfied = Error (3) "constraints not satisfied for {0:class template|function template|variable template|alias template|template template parameter|template} '{1}' {2}";
+    sema_reference_to_unsatisfied_function = Error (1) "invalid reference to function {0}: constraints not satisfied";
     sema_non_bool_atomic_constraint = Error (1) "atomic constraint must be of type 'bool' (found {0})";
     sema_non_constant_constraint = Error (0) "substitution into constraint expression resulted in a non-constant expression";
     sema_constraint_depends_on_self = Error (1) "satisfaction of constraint '{0}' depends on itself";

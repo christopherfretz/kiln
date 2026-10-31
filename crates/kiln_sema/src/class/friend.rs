@@ -54,6 +54,9 @@ impl Sema<'_, '_> {
         if ds.invalid || d.invalid {
             self.ast.decls.set_flags(f, kiln_ast::decl::DeclFlags::INVALID);
         }
+        if let Some(r) = d.trailing_requires {
+            self.act_on_trailing_requires(f, r);
+        }
         let mut attrs = ds.attrs.clone();
         attrs.extend(d.attrs.iter().copied());
         if !attrs.is_empty() {

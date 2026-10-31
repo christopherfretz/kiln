@@ -1,7 +1,8 @@
 //! Viable functions and the best viable function ([over.match.viable],
 //! [over.match.best]; spec/sema-overload.md §3, §4).
 
-use kiln_ast::DeclId;
+use kiln_ast::decl::DeclKind;
+use kiln_ast::{DeclId, ExprId};
 
 use super::{
     Candidate, CandidateFailure, CandidateKind, Ics, IcsOptions, OverloadCandidateSet, OvlOutcome,
@@ -88,6 +89,13 @@ impl Sema<'_, '_> {
             cand.viable = false;
             cand.failure =
                 CandidateFailure::TooFewArgs { min: u16::try_from(min).unwrap_or(u16::MAX) };
+        } else if let Some(sat) =
+            self.check_function_constraints(f, set.loc).filter(|&s| !self.sat_ok(s))
+        {
+            // [over.match.viable]/3: the trailing requires-clause, after
+            // the arity check (clang `AddOverloadCandidate`).
+            cand.viable = false;
+            cand.failure = CandidateFailure::ConstraintsNotSatisfied { sat };
         } else if kind == CandidateKind::Ctor
             && set.kind == SetKind::CopyInit
             && self.fn_spec(f).is_explicit()
@@ -203,8 +211,10 @@ impl Sema<'_, '_> {
         match (x.template.is_some(), y.template.is_some()) {
             (false, true) => return true,
             (true, false) => return false,
-            (true, true) => {
-                // /2.5: the more specialized template.
+            // /2.5: the more specialized template; /2.6: of non-template
+            // functions with the same parameter-type-lists, the more
+            // constrained.
+            _ => {
                 if set.tmpl_order.contains(&(c1, c2)) {
                     return true;
                 }
@@ -212,7 +222,6 @@ impl Sema<'_, '_> {
                     return false;
                 }
             }
-            _ => {}
         }
         // /2.8: a non-rewritten candidate over a rewritten one; /2.9:
         // of two rewritten candidates, the one not reversed.
@@ -222,8 +231,7 @@ impl Sema<'_, '_> {
         if x.rewrite.is_reversed() != y.rewrite.is_reversed() {
             return !x.rewrite.is_reversed();
         }
-        // /2.6 (more
-        // constrained): WP-073. /2.7 (constructor of a derived class over
+        // /2.7 (constructor of a derived class over
         // an inherited constructor): inherited constructors are not
         // candidates yet. /2.8-2.10 (rewritten candidates, deduction
         // guides): WP-068b, S3T.
@@ -235,6 +243,7 @@ impl Sema<'_, '_> {
     /// ([over.match.best.general]/2.5, [temp.func.order]), for `better`.
     pub(crate) fn order_template_candidates(&mut self, set: &mut OverloadCandidateSet) {
         set.tmpl_order.clear();
+        self.order_constrained_candidates(set);
         let ts: Vec<(u32, DeclId)> = set
             .cands
             .iter()
@@ -255,6 +264,75 @@ impl Sema<'_, '_> {
                 }
             }
         }
+    }
+
+    /// Records in `set.tmpl_order` which viable non-template candidates
+    /// are more constrained than which ([over.match.best.general]/2.6,
+    /// clang `getMoreConstrainedFunction`): both non-templates with the
+    /// same non-object parameter-type-lists, the constraints those of the
+    /// members they were instantiated from.
+    fn order_constrained_candidates(&mut self, set: &mut OverloadCandidateSet) {
+        let fs: Vec<(u32, DeclId, Vec<ExprId>)> = set
+            .cands
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| c.viable && c.template.is_none())
+            .filter_map(|(i, c)| {
+                let f = c.decl?;
+                let r = self.ast.templates.trailing_requires.get(f).copied();
+                Some((u32::try_from(i).ok()?, f, r.into_iter().collect()))
+            })
+            .collect();
+        if !fs.iter().any(|(_, _, r)| !r.is_empty()) {
+            return;
+        }
+        for (i, (c1, f1, r1)) in fs.iter().enumerate() {
+            for (c2, f2, r2) in &fs[i + 1..] {
+                if r1.is_empty() && r2.is_empty() || !self.same_param_type_lists(*f1, *f2) {
+                    continue;
+                }
+                if self.more_constrained(*f1, r1, *f2, r2) {
+                    set.tmpl_order.push((*c1, *c2));
+                } else if self.more_constrained(*f2, r2, *f1, r1) {
+                    set.tmpl_order.push((*c2, *c1));
+                }
+            }
+        }
+    }
+
+    /// clang `sameFunctionParameterTypeLists`: the same variadic-ness and
+    /// non-object parameter types, and for two implicit object member
+    /// functions the same cv- and ref-qualifiers.
+    fn same_param_type_lists(&mut self, f1: DeclId, f2: DeclId) -> bool {
+        let (mut p1, mut p2) = (Vec::new(), Vec::new());
+        let v1 = self.fn_param_types(f1, &mut p1);
+        let v2 = self.fn_param_types(f2, &mut p2);
+        let s1 = usize::from(self.has_explicit_object(f1));
+        let s2 = usize::from(self.has_explicit_object(f2));
+        if v1 != v2 || p1.len() - s1 != p2.len() - s2 {
+            return false;
+        }
+        if !p1[s1..].iter().zip(&p2[s2..]).all(|(&a, &b)| self.ast.types.same_type(a, b)) {
+            return false;
+        }
+        let quals = |s: &Self, f: DeclId| {
+            let t = s.ast.decls.get(f).ty()?;
+            match s.ast.types.view(t.ty()) {
+                kiln_ast::types::TypeView::Function(p) => {
+                    Some((p.info().this_quals(), p.info().ref_qual()))
+                }
+                _ => None,
+            }
+        };
+        let method = |s: &Self, f: DeclId| {
+            s.kind_of(f) != DeclKind::Function
+                && !s.is_static_method(f)
+                && !s.has_explicit_object(f)
+        };
+        if method(self, f1) && method(self, f2) {
+            return quals(self, f1) == quals(self, f2);
+        }
+        true
     }
 
     /// [over.match.best]/2-3: the best viable function of `set` (clang

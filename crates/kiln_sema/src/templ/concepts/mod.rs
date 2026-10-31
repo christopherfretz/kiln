@@ -84,6 +84,14 @@ pub struct ConceptState {
     /// §8.3 `atom_cache`: (atom, canonical arguments) -> (satisfied, the
     /// records explaining a failure).
     pub(crate) atom_cache: FxHashMap<AtomKey, (bool, Vec<SatRecord>)>,
+    /// A member of a class template specialization redeclared from a
+    /// constrained member of the pattern (a member template, or a
+    /// function with a trailing requires-clause): the pattern member and
+    /// the specialization's levels. Its constraints stay the pattern's,
+    /// unsubstituted, and are checked with these outer levels (clang
+    /// keeps the pattern's clauses and checks them with the
+    /// instantiation's `MultiLevelTemplateArgumentList`).
+    pub(crate) member_constraints: FxHashMap<DeclId, (DeclId, crate::templ::args::MultiLevelArgs)>,
     /// The type-constraint location of a variable or function declared
     /// with a constrained placeholder (`C auto x`, `C auto f()`).
     pub(crate) placeholder_locs: FxHashMap<DeclId, Loc>,

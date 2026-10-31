@@ -32,6 +32,12 @@ impl Sema<'_, '_> {
     /// parameter's immediately-declared constraint, the trailing
     /// requires-clause.
     pub(crate) fn associated_constraints(&self, tmpl: DeclId) -> Vec<ExprId> {
+        if let Some(&(pattern, _)) = self.inst.concepts.member_constraints.get(&tmpl)
+            && pattern != tmpl
+            && self.ast.template_info(tmpl).is_some()
+        {
+            return self.associated_constraints(pattern);
+        }
         let mut out = Vec::new();
         let Some(info) = self.ast.template_info(tmpl).copied() else { return out };
         let pl = *self.ast.templates.param_list(info.params);
@@ -110,6 +116,20 @@ impl Sema<'_, '_> {
         if exprs.is_empty() {
             return self.satisfied_id();
         }
+        // A redeclared member template: the pattern's constraints with
+        // the specialization's levels outside the template's own.
+        let remapped;
+        let levels = if let Some((_, outer)) = self.inst.concepts.member_constraints.get(&tmpl)
+            && self.ast.template_info(tmpl).is_some()
+            && let Some(own) = levels.levels.last()
+        {
+            let mut m = outer.clone();
+            m.levels.push(*own);
+            remapped = m;
+            &remapped
+        } else {
+            levels
+        };
         let key = (tmpl, self.ast.types.canonical_args(shown));
         let cacheable = levels.levels.len() == 1;
         if cacheable && let Some(&id) = self.inst.concepts.sat_cache.get(&key) {
@@ -123,6 +143,42 @@ impl Sema<'_, '_> {
             self.inst.concepts.sat_cache.insert(key, id);
         }
         id
+    }
+
+    /// The satisfaction of the trailing requires-clause of non-template
+    /// function `f` ([over.match.viable]/3), when `f` is a member of a
+    /// class template specialization redeclared from a constrained
+    /// member of the pattern (else `None`: nothing to check, or the
+    /// arguments are dependent).
+    pub(crate) fn check_function_constraints(&mut self, f: DeclId, loc: Loc) -> Option<SatId> {
+        let &r = self.ast.templates.trailing_requires.get(f)?;
+        let (_, outer) = self.inst.concepts.member_constraints.get(&f)?;
+        if self.levels_dependent(outer) {
+            return None;
+        }
+        let outer = outer.clone();
+        let shown = outer.levels.last().map_or(ArgListId::EMPTY, |l| l.args);
+        Some(self.check_constraints(f, &[r], &outer, shown, loc))
+    }
+
+    /// A reference to non-template function `f` outside overload
+    /// resolution requires its constraints satisfied
+    /// ([expr.prim.id.general]/4, clang `DiagnoseUseOfDecl`'s
+    /// `err_reference_to_function_with_unsatisfied_constraints`);
+    /// whether it diagnosed.
+    pub(crate) fn diagnose_unsatisfied_use(&mut self, f: DeclId, loc: Loc) -> bool {
+        if self.ast.templates.trailing_requires.get(f).is_none() {
+            return false;
+        }
+        let Some(sat) = self.check_function_constraints(f, loc) else { return false };
+        if self.sat_ok(sat) {
+            return false;
+        }
+        let d =
+            self.diag(DiagId::sema_reference_to_unsatisfied_function, loc).arg(self.decl_arg(f));
+        let d = self.with_sat_notes(d, sat);
+        self.emit(d);
+        true
     }
 
     /// [temp.names]/9 (clang's `EnsureTemplateArgumentListConstraints`):

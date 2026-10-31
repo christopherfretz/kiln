@@ -209,14 +209,20 @@ impl Sema<'_, '_> {
                 let x = set.ics_of(c).get(slot).copied().unwrap_or(Ics::Ellipsis);
                 self.bad_conversion_detail(&x, which)
             }
+            CandidateFailure::ConstraintsNotSatisfied { sat } => {
+                let d = self
+                    .diag(DiagId::note_ovl_candidate_kind_not_viable, loc)
+                    .arg(kind)
+                    .arg("constraints not satisfied");
+                return self.with_sat_notes(d, sat);
+            }
             CandidateFailure::Explicit => {
                 let which = u8::from(cand.kind == CandidateKind::ConvFn);
                 return self.diag(DiagId::note_ovl_candidate_explicit, loc).arg(which);
             }
             CandidateFailure::None
             | CandidateFailure::BadFinalConversion
-            | CandidateFailure::BadDeduction
-            | CandidateFailure::ConstraintsNotSatisfied => {
+            | CandidateFailure::BadDeduction => {
                 return self.diag(DiagId::note_ovl_candidate, loc).arg(kind);
             }
         };

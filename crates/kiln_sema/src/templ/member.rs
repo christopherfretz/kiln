@@ -20,7 +20,8 @@ use crate::templ::subst::{DeclOrPack, SubstFail, SubstResult, Substituter};
 impl Substituter<'_, '_, '_> {
     /// Redeclares member template `t` of the pattern class in the
     /// specialization being instantiated; returns the new template decl.
-    /// Constraints and requires-clauses are dropped (WP-073).
+    /// Its constraints stay the pattern's: they are recorded in
+    /// `member_constraints` with this specialization's levels.
     pub(crate) fn member_template(&mut self, t: DeclId) -> SubstResult<DeclId> {
         let Some(info) = self.sema.ast.template_info(t).copied() else { return Err(SubstFail) };
         let Some(pattern) = info.pattern else { return Err(SubstFail) };
@@ -50,6 +51,9 @@ impl Substituter<'_, '_, '_> {
         let d = r?;
         if let Some(x) = self.sema.template_of(d) {
             self.locals.insert(pattern, DeclOrPack::Decl(d));
+            if !self.sema.associated_constraints(t).is_empty() {
+                self.sema.inst.concepts.member_constraints.insert(x, (t, self.args.clone()));
+            }
             return Ok(x);
         }
         Err(SubstFail)
