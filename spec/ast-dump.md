@@ -142,7 +142,7 @@ no category).
 | `StringLiteral` | `StringLiteral 'type' lvalue "text"` (as an initializer of a `char` array clang 19 prints it as a prvalue) |
 | `CXXBoolLiteralExpr`, `CXXNullPtrLiteralExpr` | `... 'bool' true`, `... 'std::nullptr_t'` |
 | `DeclRefExpr` | `DeclRefExpr 'type' [lvalue] Kind 'name' 'type' [(UsingShadow 'name')] [non_odr_use_constant\|non_odr_use_unevaluated\|non_odr_use_discarded]` (`(UsingShadow 'name')`: the name was found through a using-declaration, clang's `FoundDecl`) |
-| `MemberExpr` | `MemberExpr 'type' [lvalue [bitfield]] .name\|->name` |
+| `MemberExpr` | `MemberExpr 'type' [lvalue [bitfield]] .name\|->name [non_odr_use_unevaluated]` (`non_odr_use_unevaluated`: the access is in an unevaluated operand, clang's `NOUR_Unevaluated`) |
 | `ImplicitCastExpr` | `ImplicitCastExpr 'type' [lvalue\|xvalue] <Kind> [part_of_explicit_cast]` |
 | `CStyleCastExpr` | `CStyleCastExpr 'type' [lvalue\|xvalue] <Kind>` |
 | `CXXFunctionalCastExpr` | `CXXFunctionalCastExpr 'type' [lvalue\|xvalue] functional cast to T <Kind>` (`T` is the type as written, the expression's sugared type) |
@@ -382,10 +382,16 @@ sketch above (WP-071/072).
 - `ConceptDecl <name>`, with the constraint-expression as its child.
 - `ConceptSpecializationExpr 'bool'`. The children are the written
   arguments as `TemplateArgument` lines.
-- `RequiresExpr 'bool'`. Its parameters are `ParmVarDecl` children,
-  followed by `SimpleRequirement` / `TypeRequirement '<type>'` /
-  `CompoundRequirement [noexcept]` / `NestedRequirement`. Each
-  requirement prints `dependent` when it is dependent.
+- `RequiresExpr 'bool' [satisfied|unsatisfied]`. A non-dependent
+  requires-expression prints its value (`satisfied`/`unsatisfied`);
+  a dependent one prints neither. Its parameters are `ParmVarDecl`
+  children, followed by `SimpleRequirement` / `TypeRequirement
+  '<type>'[:'<desugared>']` / `CompoundRequirement [noexcept]` /
+  `NestedRequirement`. Each requirement prints `dependent` when it is
+  dependent. A requirement's own satisfaction is not printed (clang
+  prints it; kiln records only the expression's value, so the
+  clang-ast normalizer drops it). An unqualified type requirement's
+  type is `ElaboratedType` sugar (`'typename S':'S'`), as in clang.
 - `TemplateArgument type '<type>' | expr | template`. A pack-expansion
   argument prints its pattern, without the `...` (`type 'Ts'`); this
   matches clang.

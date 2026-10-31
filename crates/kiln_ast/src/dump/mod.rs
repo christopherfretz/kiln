@@ -1416,17 +1416,17 @@ impl<'a, W: io::Write> Dumper<'a, W> {
             Requirement::Simple(x)
             | Requirement::Nested(x)
             | Requirement::Compound { expr: x, .. } => !self.ast.exprs.get(x).deps().is_none(),
-            Requirement::Type(t) => self.ast.types.is_dependent(t),
+            Requirement::Type(t, _) => self.ast.types.is_dependent(t),
         };
         match r {
             Requirement::Simple(_) => self.line.push_str("SimpleRequirement"),
-            Requirement::Type(t) => {
+            Requirement::Type(t, _) => {
                 self.line.push_str("TypeRequirement");
                 self.ty(t);
             }
             Requirement::Compound { noexcept, .. } => {
                 self.line.push_str("CompoundRequirement");
-                if noexcept {
+                if noexcept.is_some() {
                     self.line.push_str(" noexcept");
                 }
             }
@@ -1448,7 +1448,7 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                     kids.push((Node::Expr(c), None));
                 }
             }
-            Some(Requirement::Type(_)) | None => {}
+            Some(Requirement::Type(..)) | None => {}
         }
     }
 
@@ -1872,6 +1872,12 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                     self.name(d);
                 }
             }
+            // clang's `VisitRequiresExpr`: the value of a non-dependent one.
+            ExprKind::RequiresExpr => match exprs.satisfied(e) {
+                Some(true) => self.line.push_str(" satisfied"),
+                Some(false) => self.line.push_str(" unsatisfied"),
+                None => {}
+            },
             ExprKind::CXXNewExpr | ExprKind::CXXDeleteExpr => {
                 if n.has(ExprFlags::GLOBAL) {
                     self.line.push_str(" global");

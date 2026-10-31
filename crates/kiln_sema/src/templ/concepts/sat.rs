@@ -10,15 +10,15 @@
 
 use kiln_ast::expr::{BinaryOp, ExprKind};
 use kiln_ast::ids::{ArgListId, RawId};
-use kiln_ast::types::{ArgView, BuiltinType, TemplateArg};
+use kiln_ast::types::{ArgView, BuiltinType, TemplateArg, TypeFlags};
 use kiln_ast::{DeclId, ExprId, QualType};
 use kiln_diag::{Diag, DiagId};
 use kiln_oven::{EvalContext, EvalKind};
 use kiln_source::Loc;
 
-use super::{SatId, SatRecord, Satisfaction};
+use super::{AtomKey, SatId, SatRecord, Satisfaction};
 use crate::Sema;
-use crate::templ::args::MultiLevelArgs;
+use crate::templ::args::{LevelMode, MultiLevelArgs};
 use crate::templ::stack::FrameKind;
 use crate::templ::subst::Substituter;
 
@@ -32,6 +32,12 @@ impl Sema<'_, '_> {
     /// parameter's immediately-declared constraint, the trailing
     /// requires-clause.
     pub(crate) fn associated_constraints(&self, tmpl: DeclId) -> Vec<ExprId> {
+        if let Some(&(pattern, _)) = self.inst.concepts.member_constraints.get(&tmpl)
+            && pattern != tmpl
+            && self.ast.template_info(tmpl).is_some()
+        {
+            return self.associated_constraints(pattern);
+        }
         let mut out = Vec::new();
         let Some(info) = self.ast.template_info(tmpl).copied() else { return out };
         let pl = *self.ast.templates.param_list(info.params);
@@ -110,6 +116,20 @@ impl Sema<'_, '_> {
         if exprs.is_empty() {
             return self.satisfied_id();
         }
+        // A redeclared member template: the pattern's constraints with
+        // the specialization's levels outside the template's own.
+        let remapped;
+        let levels = if let Some((_, outer)) = self.inst.concepts.member_constraints.get(&tmpl)
+            && self.ast.template_info(tmpl).is_some()
+            && let Some(own) = levels.levels.last()
+        {
+            let mut m = outer.clone();
+            m.levels.push(*own);
+            remapped = m;
+            &remapped
+        } else {
+            levels
+        };
         let key = (tmpl, self.ast.types.canonical_args(shown));
         let cacheable = levels.levels.len() == 1;
         if cacheable && let Some(&id) = self.inst.concepts.sat_cache.get(&key) {
@@ -123,6 +143,42 @@ impl Sema<'_, '_> {
             self.inst.concepts.sat_cache.insert(key, id);
         }
         id
+    }
+
+    /// The satisfaction of the trailing requires-clause of non-template
+    /// function `f` ([over.match.viable]/3), when `f` is a member of a
+    /// class template specialization redeclared from a constrained
+    /// member of the pattern (else `None`: nothing to check, or the
+    /// arguments are dependent).
+    pub(crate) fn check_function_constraints(&mut self, f: DeclId, loc: Loc) -> Option<SatId> {
+        let &r = self.ast.templates.trailing_requires.get(f)?;
+        let (_, outer) = self.inst.concepts.member_constraints.get(&f)?;
+        if self.levels_dependent(outer) {
+            return None;
+        }
+        let outer = outer.clone();
+        let shown = outer.levels.last().map_or(ArgListId::EMPTY, |l| l.args);
+        Some(self.check_constraints(f, &[r], &outer, shown, loc))
+    }
+
+    /// A reference to non-template function `f` outside overload
+    /// resolution requires its constraints satisfied
+    /// ([expr.prim.id.general]/4, clang `DiagnoseUseOfDecl`'s
+    /// `err_reference_to_function_with_unsatisfied_constraints`);
+    /// whether it diagnosed.
+    pub(crate) fn diagnose_unsatisfied_use(&mut self, f: DeclId, loc: Loc) -> bool {
+        if self.ast.templates.trailing_requires.get(f).is_none() {
+            return false;
+        }
+        let Some(sat) = self.check_function_constraints(f, loc) else { return false };
+        if self.sat_ok(sat) {
+            return false;
+        }
+        let d =
+            self.diag(DiagId::sema_reference_to_unsatisfied_function, loc).arg(self.decl_arg(f));
+        let d = self.with_sat_notes(d, sat);
+        self.emit(d);
+        true
     }
 
     /// [temp.names]/9 (clang's `EnsureTemplateArgumentListConstraints`):
@@ -285,7 +341,12 @@ impl Sema<'_, '_> {
     }
 
     /// Whether atomic constraint `e` is satisfied
-    /// ([temp.constr.atomic]/3).
+    /// ([temp.constr.atomic]/3), through the §8.3 `atom_cache`: an atom
+    /// with the same canonical arguments is evaluated once across every
+    /// concept and constrained template that reaches it (a change in
+    /// result is ill-formed NDR, [temp.constr.atomic]/3). An evaluation
+    /// that emitted an error, or whose arguments are dependent, is not
+    /// cached, so its diagnostics are not lost on a later hit.
     fn sat_atom(
         &mut self,
         entity: DeclId,
@@ -293,6 +354,49 @@ impl Sema<'_, '_> {
         levels: &MultiLevelArgs,
         recs: &mut Vec<SatRecord>,
     ) -> bool {
+        let key: Option<AtomKey> = (!self.levels_dependent(levels)).then(|| {
+            let args =
+                levels.levels.iter().map(|l| self.ast.types.canonical_args(l.args)).collect();
+            (e, args)
+        });
+        if let Some(k) = &key
+            && let Some((ok, r)) = self.inst.concepts.atom_cache.get(k)
+        {
+            self.inst.concepts.counters.atom_hits += 1;
+            recs.extend(r.iter().cloned());
+            return *ok;
+        }
+        self.inst.concepts.counters.atoms += 1;
+        let errors = self.errors_so_far();
+        let mut mine = Vec::new();
+        let ok = self.sat_atom_uncached(entity, e, levels, &mut mine);
+        if let Some(k) = key
+            && self.errors_so_far() == errors
+        {
+            self.inst.concepts.atom_cache.insert(k, (ok, mine.clone()));
+        }
+        recs.extend(mine);
+        ok
+    }
+
+    /// Errors emitted or captured by the enclosing SFINAE trap so far.
+    fn errors_so_far(&self) -> u64 {
+        let trapped = self.inst.sfinae.borrow().last().map_or(0, |s| s.errors);
+        u64::from(self.diags.error_count()) + u64::from(trapped)
+    }
+
+    fn sat_atom_uncached(
+        &mut self,
+        entity: DeclId,
+        e: ExprId,
+        levels: &MultiLevelArgs,
+        recs: &mut Vec<SatRecord>,
+    ) -> bool {
+        // An atom diagnosed where it was written (a non-`bool` atom in a
+        // requires-clause) is not satisfied, silently.
+        if self.has_errors_in(e) {
+            return false;
+        }
         let loc = self.begin_loc(e);
         let Some((r, st)) =
             self.in_sfinae(FrameKind::ConstraintSubstitution, entity, None, loc, |s| {
@@ -305,13 +409,15 @@ impl Sema<'_, '_> {
             (Some(x), Ok(())) => x,
             (_, st) => {
                 let first = st.err().flatten();
-                // A construct the substituter does not handle yet: assume
-                // satisfied rather than reject a valid program.
-                if first
+                // A construct the substituter does not handle yet is a
+                // hard error: assuming either answer could accept an
+                // invalid program or pick the wrong overload.
+                if let Some(d) = first
                     .as_ref()
-                    .is_some_and(|d| d.id() == Some(DiagId::sema_unimplemented_template_feature))
+                    .filter(|d| d.id() == Some(DiagId::sema_unimplemented_template_feature))
                 {
-                    return true;
+                    self.emit(d.clone());
+                    return false;
                 }
                 let at = first.as_ref().map_or(loc, Diag::loc);
                 let msg = first.map(|d| format!(": {}", d.message())).unwrap_or_default();
@@ -329,9 +435,19 @@ impl Sema<'_, '_> {
             return false;
         }
         if self.expr_is_value_dependent(x) {
-            // Still dependent (an enclosing template's parameters are
-            // retained): checked again when instantiated.
-            return true;
+            // Dependent arguments (an enclosing template's parameters are
+            // retained): checked again when instantiated, as clang treats
+            // constraints with dependent arguments as satisfied.
+            if self.levels_dependent(levels) {
+                return true;
+            }
+            // Concrete arguments but a dependent result: a substitution
+            // the substituter does not complete.
+            let d = self
+                .diag(DiagId::sema_unimplemented_template_feature, loc)
+                .arg("an atomic constraint that stays value-dependent after substitution");
+            self.emit(d);
+            return false;
         }
         let ty = self.ety(x);
         if self.ast.types.builtin(ty) != Some(BuiltinType::Bool) {
@@ -352,6 +468,19 @@ impl Sema<'_, '_> {
                 false
             }
         }
+    }
+
+    /// True if substituting `levels` leaves template parameters behind: a
+    /// retained level or a dependent argument.
+    fn levels_dependent(&self, levels: &MultiLevelArgs) -> bool {
+        levels.levels.iter().any(|l| {
+            l.mode == LevelMode::Retain
+                || self.ast.types.args(l.args).iter().any(|&a| {
+                    self.ast.types.arg_flags(a).intersects(
+                        TypeFlags::DEPENDENT_INSTANTIATION | TypeFlags::INSTANTIATION_DEPENDENT,
+                    )
+                })
+        })
     }
 
     /// The notes explaining why the (substituted, non-dependent) atomic
@@ -511,16 +640,24 @@ impl Sema<'_, '_> {
     ) -> Result<ExprId, ()> {
         let c = self.ast.first(c);
         let args: Vec<TemplateArg> = self.ast.types.args(written).to_vec();
-        let dep = self
-            .ast
-            .types
-            .arg_list_flags(written)
-            .intersects(kiln_ast::types::TypeFlags::DEPENDENT_INSTANTIATION)
-            || args.iter().any(|&a| self.is_pack_expansion_arg(a));
+        let dep =
+            self.ast.types.arg_list_flags(written).intersects(TypeFlags::DEPENDENT_INSTANTIATION)
+                || args.iter().any(|&a| self.is_pack_expansion_arg(a));
         if dep {
             return Ok(self.builder().concept_spec_expr(c, written, QualType::BOOL, loc));
         }
         let conv = self.check_template_args(c, &args, arg_locs, loc)?;
+        // A concept whose definition was diagnosed (a non-`bool` atom) is
+        // invalid: naming it is an error expression, already diagnosed
+        // (clang's invalid `ConceptDecl`).
+        if self
+            .ast
+            .template_info(c)
+            .and_then(|i| i.constraint)
+            .is_some_and(|x| self.has_errors_in(x))
+        {
+            return Ok(self.act_on_error_expr(&[], loc));
+        }
         let e = self.builder().concept_spec_expr(c, written, QualType::BOOL, loc);
         let sat = self.check_concept(c, conv.sugared, loc);
         let ok = self.sat_ok(sat);

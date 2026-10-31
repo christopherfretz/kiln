@@ -257,7 +257,7 @@ impl Sema<'_, '_> {
                     self.diagnose_deleted_use(m, loc);
                 }
                 let ty = self.non_reference(self.ast.decls.get(m).ty().unwrap_or(QualType::ERROR));
-                let e = self.builder().member(b, m, ty, arrow, loc, extra);
+                let e = self.build_member_expr(b, m, ty, arrow, loc, extra);
                 if self.unevaluated == 0 && kind == DeclKind::CXXMethod {
                     self.mark_function_referenced(m, loc);
                 } else if kind == DeclKind::CXXMethod {
@@ -270,7 +270,7 @@ impl Sema<'_, '_> {
             k if k.is_function() && k != DeclKind::Function => {
                 self.ast.decls.set_flags(m, DeclFlags::REFERENCED);
                 self.diagnose_deleted_use(m, loc);
-                self.builder().member(b, m, QualType::BOUND_MEMBER, arrow, loc, extra)
+                self.build_member_expr(b, m, QualType::BOUND_MEMBER, arrow, loc, extra)
             }
             _ => {
                 self.unsupported("this kind of member access", loc);
@@ -594,7 +594,7 @@ impl Sema<'_, '_> {
             return Some(x);
         }
         let extra = self.ast.exprs.decl_ref_extra(x).copied();
-        Some(self.builder().member(b, m, QualType::BOUND_MEMBER, arrow, n.loc(), extra))
+        Some(self.build_member_expr(b, m, QualType::BOUND_MEMBER, arrow, n.loc(), extra))
     }
 
     /// `l .* r` / `l ->* r` ([expr.mptr.oper]).

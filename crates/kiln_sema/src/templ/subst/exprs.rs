@@ -196,7 +196,8 @@ impl Substituter<'_, '_, '_> {
                 let Some(name) = self.sema.ast.decls.get(m).name().as_ident() else {
                     return self.unimplemented("member access to a special member", loc);
                 };
-                Ok(self.sema.act_on_member(base, name, loc, loc, arrow))
+                let op = self.sema.ast.templates.member_op_loc.get(e).copied().unwrap_or(loc);
+                Ok(self.sema.act_on_member(base, name, loc, op, arrow))
             }
             ExprKind::CXXDependentScopeMemberExpr => {
                 let Some(base) = ExprId::from_raw(n.a()) else {
@@ -205,7 +206,8 @@ impl Substituter<'_, '_, '_> {
                 let name = kiln_source::symbol::Symbol::from_index(n.b());
                 let arrow = n.aux() & 1 != 0;
                 let base = self.member_base(base)?;
-                Ok(self.sema.act_on_member(base, name, loc, loc, arrow))
+                let op = self.sema.ast.templates.member_op_loc.get(e).copied().unwrap_or(loc);
+                Ok(self.sema.act_on_member(base, name, loc, op, arrow))
             }
             ExprKind::DependentScopeDeclRefExpr => {
                 let Some(nns) = kiln_ast::ids::NnsId::try_new(n.a()) else {

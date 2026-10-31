@@ -1472,16 +1472,32 @@ impl Sema<'_, '_> {
         };
         let mut prev_ok = None;
         let mut invalid = false;
+        // An alias template redeclared ([temp.alias], clang's
+        // `ActOnAliasDeclaration`): the same type through equivalent
+        // parameters (canonical types compare by depth and index) chains
+        // to the earlier pattern.
+        let alias_template_prev = prev.and_then(|p| {
+            (alias && self.templ.cur.is_some() && self.kind_of(p) == DeclKind::TypeAliasTemplate)
+                .then(|| self.pattern_of(p))
+                .flatten()
+        });
+        let prev = alias_template_prev.or(prev);
         if let Some(p) = prev {
             let pk = self.ast.decls.get(p).kind();
-            if matches!(pk, DeclKind::Typedef | DeclKind::TypeAlias) {
+            if matches!(pk, DeclKind::Typedef | DeclKind::TypeAlias)
+                && (alias_template_prev.is_some() == self.templ.cur.is_some())
+            {
                 let pty = self.ast.decls.typedef(p).map_or(QualType::ERROR, |t| t.underlying);
                 if self.ast.types.same_type(pty, underlying) {
                     prev_ok = Some(p);
                 } else {
                     let msg = self
                         .diag(DiagId::sema_redefinition_different_typedef, d.name_loc())
-                        .arg(if alias { "1" } else { "0" })
+                        .arg(match (alias, alias_template_prev.is_some()) {
+                            (_, true) => "2",
+                            (true, false) => "1",
+                            (false, false) => "0",
+                        })
                         .arg(self.ty_arg(underlying))
                         .arg(self.ty_arg(pty));
                     let msg = self.note_prev(msg, p, true);
@@ -3753,7 +3769,7 @@ impl Sema<'_, '_> {
                         ExprKind::CXXBoolLiteralExpr | ExprKind::IntegerLiteral
                     );
                     let ik = self.ast.exprs.get(inner).kind();
-                    if matches!(ik, ExprKind::ConceptSpecializationExpr | ExprKind::RequiresExpr) {
+                    if ik == ExprKind::ConceptSpecializationExpr {
                         // [temp.constr]: the unsatisfied constraint's chain
                         // (clang's `DiagnoseUnsatisfiedConstraint`).
                         let d = match text {

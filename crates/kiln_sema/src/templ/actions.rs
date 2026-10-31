@@ -423,6 +423,14 @@ impl Sema<'_, '_> {
         if self.in_local_scope() || self.kind_of(self.ctx) == DeclKind::CXXRecord {
             self.error(DiagId::sema_template_outside_namespace_or_class, loc);
         }
+        // A non-`bool` atom makes the definition invalid (clang's
+        // `ParseConstraintExpression`).
+        let e = if self.check_constraint_expression(e) {
+            e
+        } else {
+            let at = self.ast.exprs.get(e).loc();
+            self.act_on_error_expr(&[e], at)
+        };
         let h = DeclHead::new(self.ctx, DeclName::ident(name), loc);
         self.builder().concept(h, head, e)
     }

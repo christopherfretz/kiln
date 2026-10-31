@@ -2889,6 +2889,9 @@ impl Sema<'_, '_> {
             return self.recover_err(&[base], loc);
         }
         if let Some(e) = self.try_dependent_member(base, name, None, false, loc, arrow) {
+            if op_loc != loc {
+                let _ = self.ast.templates.member_op_loc.insert(e, op_loc);
+            }
             return e;
         }
         // [over.ref]/1: `x->m` on a class `x` is `(x.operator->())->m`.
@@ -3002,7 +3005,26 @@ impl Sema<'_, '_> {
             }
             if q.is_empty() { declared } else { self.ast.types.qualify(declared, q) }
         };
-        self.builder().member(base, f, ty, arrow, loc, None)
+        self.build_member_expr(base, f, ty, arrow, loc, None)
+    }
+
+    /// Builds the `MemberExpr` `base.m`; one built in an unevaluated operand
+    /// is not an odr-use (clang's `getNonOdrUseReasonInCurrentContext` in
+    /// `BuildMemberExpr`).
+    pub(crate) fn build_member_expr(
+        &mut self,
+        base: ExprId,
+        m: DeclId,
+        ty: QualType,
+        arrow: bool,
+        loc: Loc,
+        extra: Option<kiln_ast::expr::DeclRefExtra>,
+    ) -> ExprId {
+        let e = self.builder().member(base, m, ty, arrow, loc, extra);
+        if self.unevaluated > 0 {
+            let _ = self.ast.exprs.set_non_odr_use(e, NonOdrUse::Unevaluated);
+        }
+        e
     }
 
     // -- sizeof / alignof --------------------------------------------------------

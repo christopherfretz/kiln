@@ -640,6 +640,14 @@ impl Sema<'_, '_> {
             if n.flags().contains(DeclFlags::IMPLICIT) {
                 continue;
             }
+            // A friend function defined in the class is a member of the
+            // list as well as its `FriendDecl`'s target; the
+            // `FriendDecl` redeclares it.
+            if n.kind() == DeclKind::Function
+                && n.misc().friend() != kiln_ast::decl::FriendKind::None
+            {
+                continue;
+            }
             let r = sub.member(m);
             if let Ok(Some(x)) = r {
                 sub.member_link(x, m);

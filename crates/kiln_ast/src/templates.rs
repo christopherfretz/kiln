@@ -88,16 +88,17 @@ pub struct TemplateParmInfo {
 pub enum Requirement {
     /// `expr ;` ([expr.prim.req.simple]).
     Simple(ExprId),
-    /// `typename T::type ;` ([expr.prim.req.type]).
-    Type(QualType),
+    /// `typename T::type ;` ([expr.prim.req.type]) and where the type
+    /// begins (the failure note points there).
+    Type(QualType, Loc),
     /// `{ expr } noexcept? -> type-constraint? ;`
     /// ([expr.prim.req.compound]); `constraint` is the immediately-declared
     /// constraint of the return-type-requirement.
     Compound {
         /// The expression.
         expr: ExprId,
-        /// `noexcept` was written.
-        noexcept: bool,
+        /// `noexcept` was written, here.
+        noexcept: Option<Loc>,
         /// The return-type-requirement's constraint.
         constraint: Option<ExprId>,
     },
@@ -271,6 +272,9 @@ pub struct TemplateTables {
     /// The first token of a qualified dependent name whose qualifier is
     /// not its own location (clang's `getBeginLoc`).
     pub expr_begin: ColdMap<ExprId, Loc>,
+    /// The `.`/`->` of a dependent member access (diagnostics after
+    /// substitution point at the operator, as clang's `OperatorLoc`).
+    pub member_op_loc: ColdMap<ExprId, Loc>,
     /// Set by sema right before it creates a template's pattern: the next
     /// declaration the builder adds is neither a member nor a name (its
     /// template decl is both, [`AstBuilder::template_decl`]).
@@ -331,6 +335,7 @@ impl Default for TemplateTables {
             trailing_requires: ColdMap::new("trailing_requires"),
             expr_targs: ColdMap::new("expr_targs"),
             expr_begin: ColdMap::new("expr_begin"),
+            member_op_loc: ColdMap::new("member_op_loc"),
             expr_nns: ColdMap::new("expr_nns"),
             pattern_next: false,
             dependent_depth: 0,
@@ -484,6 +489,7 @@ impl HeapSize for TemplateTables {
         r.push(self.trailing_requires.mem_row());
         r.push(self.expr_targs.mem_row());
         r.push(self.expr_begin.mem_row());
+        r.push(self.member_op_loc.mem_row());
         r.push(self.expr_nns.mem_row());
         r.push(MemRow::of_vec("templ.specs", &self.specs));
         r.push(MemRow::of_vec("templ.member_specs", &self.member_specs));
@@ -1665,7 +1671,7 @@ impl AstBuilder<'_> {
             dep |= match *r {
                 Requirement::Simple(e) | Requirement::Nested(e) => !self.deps(e).is_none(),
                 Requirement::Compound { expr, .. } => !self.deps(expr).is_none(),
-                Requirement::Type(t) => !self.type_deps(t).is_none(),
+                Requirement::Type(t, _) => !self.type_deps(t).is_none(),
             };
         }
         let t = &mut self.ast.templates;

@@ -232,6 +232,13 @@ impl Sema<'_, '_> {
                 let x = set.ics_of(c).get(slot).copied().unwrap_or(Ics::Ellipsis);
                 self.bad_conversion_detail(&x, which)
             }
+            CandidateFailure::ConstraintsNotSatisfied { sat } => {
+                let d = self
+                    .diag(DiagId::note_ovl_candidate_kind_not_viable, loc)
+                    .arg(kind)
+                    .arg("constraints not satisfied");
+                return self.with_sat_notes(d, sat);
+            }
             CandidateFailure::Explicit => {
                 let which = u8::from(cand.kind == CandidateKind::ConvFn);
                 return self.diag(DiagId::note_ovl_candidate_explicit, loc).arg(which);
@@ -242,8 +249,7 @@ impl Sema<'_, '_> {
             }
             CandidateFailure::None
             | CandidateFailure::BadFinalConversion
-            | CandidateFailure::BadDeduction
-            | CandidateFailure::ConstraintsNotSatisfied => {
+            | CandidateFailure::BadDeduction => {
                 return self.diag(DiagId::note_ovl_candidate, loc).arg(kind);
             }
         };
@@ -286,6 +292,17 @@ impl Sema<'_, '_> {
     ) -> Diag {
         for n in self.ovl_notes(set, ambiguous) {
             msg = msg.with_note(n);
+        }
+        if ambiguous {
+            let cands: Vec<_> = set
+                .cands
+                .iter()
+                .filter(|c| c.decl.is_some())
+                .map(|c| (c.func(), c.template))
+                .collect();
+            for n in self.ambiguous_constraint_notes(&cands) {
+                msg = msg.with_note(n);
+            }
         }
         msg
     }

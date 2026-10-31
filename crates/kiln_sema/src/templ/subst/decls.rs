@@ -368,6 +368,11 @@ impl Substituter<'_, '_, '_> {
                 dr.virt_final = Some(loc);
             }
         }
+        // The pattern's trailing requires-clause, unsubstituted: checked
+        // with this instantiation's levels ([temp.inst]/17, clang
+        // `InstantiateFunctionDeclaration` keeps it).
+        let requires = self.sema.ast.templates.trailing_requires.get(d).copied();
+        dr.trailing_requires = requires;
         let base = if ds.base == TypeSpecKind::None { QualType::VOID } else { ret };
         let r = match friend {
             Some(fl) => self.sema.act_on_friend(&ds, base, Some(&dr), fl),
@@ -387,6 +392,19 @@ impl Substituter<'_, '_, '_> {
         if lazy_exc {
             let first = self.sema.ast.first(f);
             self.sema.uninstantiated_exc.insert(first, d);
+        }
+        if requires.is_some() {
+            self.sema.inst.concepts.member_constraints.insert(f, (d, self.args.clone()));
+        }
+        // A friend defined in the class: its definition is instantiated
+        // from the pattern when used ([temp.inst]/4, clang's
+        // `isThisDeclarationInstantiatedFromAFriendDefinition`).
+        if friend.is_some()
+            && self.sema.ast.decls.function(d).is_some_and(|x| x.body.is_some())
+            && self.sema.ast.definition(f).is_none()
+            && self.sema.ast.instantiated_from(f).is_none()
+        {
+            self.member_link(f, d);
         }
         if fs.is_some_and(kiln_ast::decl::FnSpec::is_pure) {
             self.sema.ast.decls.mark_function(f, kiln_ast::decl::FnSpec::new().with_pure(true));
