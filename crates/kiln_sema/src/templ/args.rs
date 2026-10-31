@@ -382,11 +382,34 @@ impl Sema<'_, '_> {
             return Ok(self.builder().template_arg_expr(e));
         }
         let ety = self.ast.exprs.get(e).ty();
-        if matches!(self.ast.types.canonical_view(pty), TypeView::Auto { .. }) {
+        if matches!(
+            self.ast.types.canonical_view(pty),
+            TypeView::Auto { keyword: kiln_ast::types::AutoKeyword::Auto, .. }
+        ) {
             // `template<auto V>` ([temp.arg.nontype]/1): the type is
             // deduced from the argument (decayed, unqualified).
             let d = conv::decay(self, e);
             pty = conv::strip_cv(self, self.ast.exprs.get(d).ty());
+        } else if self.placeholder_keyword(pty).is_some() {
+            // `auto&`, `auto*`, `decltype(auto)`, `const auto&`
+            // ([temp.param]/6.3): deduced as for a variable
+            // `T x = e;` ([dcl.type.auto.deduct]).
+            match self.deduce_auto(pty, &[Some(e)], super::auto::AutoInit::Expr) {
+                Ok(t) => pty = t,
+                Err(_) => {
+                    let d = self
+                        .diag(DiagId::sema_nttp_deduction_failed, at)
+                        .arg(self.decl_name(p))
+                        .arg(self.ty_arg(pty))
+                        .arg(self.ty_arg(ety))
+                        .note(
+                            DiagId::note_template_param_here,
+                            Span::empty(self.ast.decls.get(p).loc()),
+                        );
+                    self.emit(d);
+                    return Err(());
+                }
+            }
         }
         let t = &self.ast.types;
         if t.as_record(pty).is_some() {

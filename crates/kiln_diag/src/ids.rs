@@ -1292,6 +1292,7 @@ diag_ids! {
     sema_nttp_not_structural = Error (1) "type {0} of non-type template parameter is not a structural type";
     sema_nttp_non_literal = Error (1) "non-type template parameter has non-literal type {0}";
     sema_nttp_rvalue_ref = Error (1) "non-type template parameter has rvalue reference type {0}";
+    sema_nttp_deduction_failed = Error (3) "non-type template parameter '{0}' with type {1} has incompatible initializer of type {2}";
     note_not_structural_non_public = Note (2) "{0} is not a structural type because it has a {1:non-static data member|base class} that is not public";
     note_not_structural_mutable_field = Note (1) "{0} is not a structural type because it has a mutable non-static data member";
     note_not_structural_rvalue_ref_field = Note (1) "{0} is not a structural type because it has a non-static data member of rvalue reference type";

@@ -9,7 +9,7 @@
 //! spec/abi.md §"Mangling".
 
 use kiln_ast::Ast;
-use kiln_ast::consts::{ConstValue, PtrBase, Scalar};
+use kiln_ast::consts::{ByteImage, ConstValue, Member, PrintEnv, PtrBase, Scalar, Shape};
 use kiln_ast::decl::{DeclKind, FnStorage, LinkageLang, NamespaceData, TemplLinkKind, VarStorage};
 use kiln_ast::ids::{ArgListId, ConstValueId, DeclId, QualType, TemplateNameId};
 use kiln_ast::names::{DeclNameView, OverloadedOperator};
@@ -201,7 +201,14 @@ pub fn is_unmangled(ast: &Ast, d: DeclId) -> bool {
         DeclKind::Function => decl_name(ast, d) == "main" && in_global_ns(ast, d),
         // Only variables with internal linkage are mangled at global scope
         // (clang `shouldMangleCXXName`): `static int h;` is `_ZL1h`.
-        DeclKind::Var => in_global_ns(ast, d) && !is_local(ast, d) && !has_internal_linkage(ast, d),
+        // A variable template specialization is always mangled
+        // (`_Z2viILi3EE`).
+        DeclKind::Var => {
+            in_global_ns(ast, d)
+                && !is_local(ast, d)
+                && !has_internal_linkage(ast, d)
+                && ast.spec_info(d).is_none()
+        }
         _ => false,
     }
 }
@@ -532,7 +539,7 @@ impl<'a> Mangler<'a> {
             let std = !at_top;
             if let Some((t, args)) = spec {
                 self.unscoped_template(t, std);
-                self.template_args(args);
+                self.template_args_of(t, args);
             } else {
                 if std {
                     self.out.push_str("St");
@@ -548,7 +555,7 @@ impl<'a> Mangler<'a> {
         let p = parent.expect("nested name has a parent");
         if let Some((t, args)) = spec {
             self.template_prefix(t, stop);
-            self.template_args(args);
+            self.template_args_of(t, args);
         } else {
             self.prefix(p, stop);
             self.l_prefix(d);
@@ -737,6 +744,80 @@ impl<'a> Mangler<'a> {
 
     // ---- template arguments ---------------------------------------------
 
+    /// The template arguments `list` of a specialization of `t`. A
+    /// function template can be overloaded on its template-head, so an
+    /// argument whose natural parameter differs from the actual one is
+    /// prefixed by the parameter (clang 18+ `<template-param-decl>`,
+    /// cxx-abi issue 47): `Tn <type>` for a non-type parameter of
+    /// deduced or dependent type, `Tp` for a pack.
+    fn template_args_of(&mut self, t: DeclId, list: ArgListId) {
+        let ast = self.ast;
+        let overloadable = ast.decls.get(t).kind() == DeclKind::FunctionTemplate
+            && self
+                .parent(t)
+                .is_none_or(|c| ast.decls.record(c).is_none_or(|r| r.lambda.is_none()));
+        let params: Vec<DeclId> = match ast.template_info(t) {
+            Some(info) if overloadable => {
+                let l = *ast.templates.param_list(info.params);
+                ast.lists.iter::<DeclId>(l.params).collect()
+            }
+            _ => return self.template_args(list),
+        };
+        self.out.push('I');
+        let args: Vec<_> = ast.types.args(list).to_vec();
+        for (i, a) in args.into_iter().enumerate() {
+            let a = a.view();
+            let p = params.get(i).or_else(|| {
+                params.last().filter(|&&p| ast.template_parm(p).is_some_and(|x| x.pack))
+            });
+            if let Some(&p) = p
+                && self.needs_param_decl(p, a)
+            {
+                self.template_param_decl(p);
+            }
+            self.template_arg(a);
+        }
+        self.out.push('E');
+    }
+
+    /// clang `needToMangleTemplateParam`.
+    fn needs_param_decl(&self, p: DeclId, a: ArgView) -> bool {
+        let ast = self.ast;
+        match ast.decls.get(p).kind() {
+            // A constrained type parameter's `Tk <type-constraint>` is not
+            // mangled yet.
+            DeclKind::NonTypeTemplateParm => {}
+            _ => return false,
+        }
+        if let ArgView::Pack(l) = a {
+            match ast.types.args(l).first() {
+                None => return true,
+                Some(x) => return self.needs_param_decl(p, x.view()),
+            }
+        }
+        ast.decls.get(p).ty().is_some_and(|t| {
+            ast.types.flags(t.ty()).intersects(
+                kiln_ast::types::TypeFlags::DEPENDENT
+                    | kiln_ast::types::TypeFlags::INSTANTIATION_DEPENDENT
+                    | kiln_ast::types::TypeFlags::UNDEDUCED,
+            )
+        })
+    }
+
+    /// <template-param-decl> of non-type parameter `p`: `[Tp] Tn <type>`.
+    fn template_param_decl(&mut self, p: DeclId) {
+        let ast = self.ast;
+        let mut ty = ast.decls.get(p).ty().unwrap_or(QualType::INT);
+        if ast.template_parm(p).is_some_and(|x| x.pack) {
+            self.out.push_str("Tp");
+            if let TypeView::PackExpansion { pattern, .. } = ast.types.view(ty.ty()) {
+                ty = pattern;
+            }
+        }
+        self.out.push_str("Tn");
+        self.ty(ty);
+    }
+
     fn template_args(&mut self, list: ArgListId) {
         self.out.push('I');
         let args: Vec<_> = self.ast.types.args(list).to_vec();
@@ -809,99 +890,452 @@ impl<'a> Mangler<'a> {
     /// A non-type template argument value: `L <type> <value> E`, or
     /// `L <mangled-name> E` for a reference to an entity.
     fn value_arg(&mut self, ty: QualType, value: ConstValueId) {
-        let ast = self.ast;
-        match ast.consts.get(value) {
-            ConstValue::Scalar(Scalar::Int { signed, bits, .. }) => {
-                self.out.push('L');
-                self.ty(ty);
-                let v = if signed {
-                    bits.to_i128().map(|v| (v < 0, v.unsigned_abs()))
-                } else {
-                    bits.to_u128().map(|v| (false, v))
-                };
-                if let Some((neg, mag)) = v {
-                    if neg {
-                        self.out.push('n');
-                    }
-                    self.out.push_str(&mag.to_string());
-                }
-                self.out.push('E');
-            }
-            ConstValue::Scalar(Scalar::Bool { value, .. }) => {
-                self.out.push_str(if value { "Lb1E" } else { "Lb0E" });
-            }
-            ConstValue::Scalar(Scalar::Null { .. }) => {
-                if matches!(ast.types.canonical_view(ty), TypeView::Builtin(BuiltinType::NullPtr)) {
-                    self.out.push_str("LDn0E");
-                } else {
-                    self.out.push('L');
-                    self.ty(ty);
-                    self.out.push_str("0E");
-                }
-            }
-            ConstValue::Scalar(Scalar::Pointer { base, offset: 0, .. }) => {
-                let d = match base {
-                    PtrBase::Decl(d) | PtrBase::Function(d) => Some(d),
-                    _ => None,
-                };
-                let is_ref = matches!(
-                    ast.types.canonical_view(ty),
-                    TypeView::LValueRef(_) | TypeView::RValueRef(_)
-                );
-                let decayed = d.filter(|&d| {
-                    !is_ref && ast.decls.get(d).ty().is_some_and(|t| ast.types.is_array(t))
-                });
-                let pointee = ast.types.pointee(ty);
-                match d {
-                    Some(d) if decayed.is_some() && pointee.is_some() => {
-                        // `arr` decayed to `&arr[0]`: a subobject
-                        // expression (`Xadso <elem> L_Z <arr> E E E`, clang
-                        // `mangleTemplateArgValue` of an lvalue path).
-                        self.out.push_str("Xadso");
-                        self.ty(pointee.unwrap_or(ty).without_quals());
-                        self.out.push_str("L_Z");
-                        self.encoding(d, Structor::Complete);
-                        self.out.push_str("EEE");
-                    }
-                    Some(d) => {
-                        // The entity's encoding shares this symbol's
-                        // substitutions.
-                        self.out.push_str(if is_ref { "L_Z" } else { "XadL_Z" });
-                        self.encoding(d, Structor::Complete);
-                        self.out.push_str(if is_ref { "E" } else { "EE" });
-                    }
-                    None => self.out.push_str("XLi0EE"),
-                }
-            }
-            ConstValue::Aggregate(_) => self.aggregate_arg(ty, value),
-            ConstValue::Scalar(_) => self.out.push_str("XLi0EE"),
+        self.value_in_arg(ty, value, true);
+    }
+
+    /// clang `mangleValueInTemplateArg`: value `value` of type `ty`; at
+    /// the top level of a template argument (`top`) a non-primary
+    /// expression is wrapped in `X…E`.
+    fn value_in_arg(&mut self, ty: QualType, value: ConstValueId, top: bool) {
+        let ty = self.value_type(ty);
+        match self.ast.consts.get(value) {
+            ConstValue::Aggregate(img) => self.image_value(&img, ty, 0, top),
+            ConstValue::Scalar(s) => self.scalar_value(ty, &s, top),
         }
     }
 
-    /// A class-type value (a template parameter object's value,
-    /// [temp.param]/8). Itanium spells it `Xtl <type> <member exprs> EE`
-    /// with each member's value; that walk needs the record layout, which
-    /// the mangler does not have yet, so this seam (sema-templates.md
-    /// §6.10) spells the image as its 8-byte little-endian words instead:
-    /// deterministic and distinct for distinct byte images, but not
-    /// clang's spelling (pointer members are not distinguished).
-    fn aggregate_arg(&mut self, ty: QualType, value: ConstValueId) {
-        self.out.push_str("Xtl");
-        self.ty(ty);
-        let bytes = self.ast.consts.bytes(value);
-        let mut words: Vec<u64> = bytes
-            .chunks(8)
-            .map(|c| c.iter().rev().fold(0u64, |a, &b| (a << 8) | u64::from(b)))
-            .collect();
-        while words.last() == Some(&0) {
-            words.pop();
+    /// A value's type with its top-level cv-qualifiers dropped ("to match
+    /// GCC").
+    fn value_type(&self, ty: QualType) -> QualType {
+        self.ast.types.canonical(ty).without_quals()
+    }
+
+    fn scalar_value(&mut self, ty: QualType, s: &Scalar<'_>, top: bool) {
+        match *s {
+            Scalar::Int { signed, bits, .. } => self.int_literal(ty, signed, &bits),
+            Scalar::Bool { value, .. } => {
+                self.out.push('L');
+                self.ty(ty);
+                self.out.push_str(if value { "1E" } else { "0E" });
+            }
+            Scalar::Float { kind, bits, .. } => self.float_literal(ty, kind.bits(), bits),
+            Scalar::Null { .. } => self.null_literal(ty),
+            Scalar::Pointer { base, offset, .. } => self.pointer_value(ty, base, offset, top),
+            Scalar::MemberPtr { member, path, .. } => {
+                // `[X] [mc <type>] adL <member> E [E] [E]`.
+                if top {
+                    self.out.push('X');
+                }
+                if !path.is_empty() {
+                    self.out.push_str("mc");
+                    self.ty(ty);
+                }
+                self.out.push_str("adL");
+                self.entity(member);
+                self.out.push('E');
+                if !path.is_empty() {
+                    // The path adjustment (nonzero only for a non-primary
+                    // base) is not computed.
+                    self.out.push('E');
+                }
+                if top {
+                    self.out.push('E');
+                }
+            }
+            Scalar::Reflection { .. } => self.out.push_str("XLi0EE"),
         }
-        for w in words {
-            self.out.push_str("Ly");
-            self.out.push_str(&w.to_string());
+    }
+
+    /// `L <type> <number> E` (`n` for negative; `0`/`1` for `bool`).
+    fn int_literal(&mut self, ty: QualType, signed: bool, bits: &kiln_ast::consts::IntBits<'_>) {
+        self.out.push('L');
+        self.ty(ty);
+        let mut v = String::new();
+        bits.write_decimal(signed, &mut v);
+        if let Some(mag) = v.strip_prefix('-') {
+            self.out.push('n');
+            self.out.push_str(mag);
+        } else {
+            self.out.push_str(&v);
+        }
+        self.out.push('E');
+    }
+
+    /// `L <type> <hex> E`: the value bits as fixed-width lowercase hex.
+    fn float_literal(&mut self, ty: QualType, width: u32, bits: u128) {
+        self.out.push('L');
+        self.ty(ty);
+        let n = width.div_ceil(4);
+        for i in (0..n).rev() {
+            let d = (bits >> (4 * i)) & 0xf;
+            self.out.push(char::from_digit(d as u32, 16).unwrap_or('0'));
+        }
+        self.out.push('E');
+    }
+
+    /// `L <type> 0 E` (clang `mangleNullPointer`).
+    fn null_literal(&mut self, ty: QualType) {
+        self.out.push('L');
+        self.ty(ty);
+        self.out.push_str("0E");
+    }
+
+    /// `_Z <encoding>` of `d`, or `_ZTA <value>` for a template parameter
+    /// object, sharing this symbol's substitutions.
+    fn entity(&mut self, d: DeclId) {
+        let ast = self.ast;
+        if ast.decls.get(d).kind() == DeclKind::TemplateParamObject {
+            self.out.push_str("_ZTA");
+            if let Some(v) = ast.templates.param_object_value(d) {
+                let ty = ast.decls.get(d).ty().unwrap_or(QualType::INT);
+                self.value_in_arg(ty, v, true);
+            }
+            return;
+        }
+        self.out.push_str("_Z");
+        self.encoding(d, Structor::Complete);
+    }
+
+    /// A pointer or reference value (clang's `APValue::LValue` case):
+    /// `[X] [ad] L <entity> E [E]` for a whole object, else the subobject
+    /// form `[X] [ad] so <referent type> L <entity> E [<offset>]
+    /// <union-selector>* [p] E [E]`.
+    fn pointer_value(&mut self, ty: QualType, base: PtrBase, offset: u64, top: bool) {
+        let ast = self.ast;
+        let is_ref =
+            matches!(ast.types.canonical_view(ty), TypeView::LValueRef(_) | TypeView::RValueRef(_));
+        let pointee = ast.types.pointee(ty);
+        let d = match base {
+            PtrBase::Decl(d) | PtrBase::Function(d) => d,
+            PtrBase::TypeInfo(t) => {
+                self.out.push_str(if top { "X" } else { "" });
+                self.out.push_str(if is_ref { "ti" } else { "adti" });
+                self.ty(t);
+                self.out.push_str(if top { "E" } else { "" });
+                return;
+            }
+            // Temporaries, string literals and frozen objects are not
+            // template arguments.
+            _ => {
+                self.out.push_str("XLi0EE");
+                return;
+            }
+        };
+        let path = match base {
+            PtrBase::Decl(_) => self.lvalue_path(ast.decls.get(d).ty(), offset, pointee),
+            _ => LvaluePath::default(),
+        };
+        let wrap = top && (!is_ref || path.nonempty || path.past_end);
+        if wrap {
+            self.out.push('X');
+        }
+        if !is_ref {
+            self.out.push_str("ad");
+        }
+        if path.nonempty || path.past_end {
+            self.out.push_str("so");
+            self.ty(pointee.unwrap_or(ty));
+            self.out.push('L');
+            self.entity(d);
+            self.out.push('E');
+            if offset != 0 {
+                self.out.push_str(&offset.to_string());
+            }
+            self.out.push_str(&path.selectors);
+            if path.past_end {
+                self.out.push('p');
+            }
+            self.out.push('E');
+        } else {
+            self.out.push('L');
+            self.entity(d);
             self.out.push('E');
         }
-        self.out.push_str("EE");
+        if wrap {
+            self.out.push('E');
+        }
+    }
+
+    /// The lvalue path from an object of type `obj` to the subobject at
+    /// byte `offset` of type `pointee` (kiln pointers are `(base,
+    /// offset)`; clang keeps the path).
+    fn lvalue_path(
+        &self,
+        obj: Option<QualType>,
+        offset: u64,
+        pointee: Option<QualType>,
+    ) -> LvaluePath {
+        let ast = self.ast;
+        let same = |a: QualType, b: QualType| {
+            ast.types.canonical(a).without_quals() == ast.types.canonical(b).without_quals()
+        };
+        let mut r = LvaluePath::default();
+        let Some(mut cur) = obj else {
+            r.past_end = offset != 0;
+            return r;
+        };
+        let mut off = offset;
+        // Bounded by the nesting depth of the type.
+        for _ in 0..4096 {
+            if off == 0 && pointee.is_none_or(|p| same(p, cur)) {
+                break;
+            }
+            match ast.shape(cur) {
+                Shape::Array { elem, stride, len } if stride != 0 => {
+                    let i = off / stride;
+                    r.nonempty = true;
+                    if i >= len {
+                        r.past_end = true;
+                        break;
+                    }
+                    off -= i * stride;
+                    cur = elem;
+                }
+                Shape::Record { members, union } => {
+                    let inside = |m: &&Member| {
+                        let at = m.offset_bits / 8;
+                        m.bit_width.is_none()
+                            && m.offset_bits.is_multiple_of(8)
+                            && at <= off
+                            && (off < at + m.size || (off == at && m.size == 0))
+                    };
+                    let hit = members
+                        .iter()
+                        .filter(inside)
+                        .find(|m| {
+                            off == m.offset_bits / 8 && pointee.is_some_and(|p| same(p, m.ty))
+                        })
+                        .or_else(|| members.iter().find(inside));
+                    let Some(m) = hit else { break };
+                    r.nonempty = true;
+                    if union {
+                        // <union-selector> ::= _ [<number>]
+                        let idx = members
+                            .iter()
+                            .filter(|x| x.field.is_some())
+                            .position(|x| x.field == m.field)
+                            .unwrap_or(0);
+                        r.selectors.push('_');
+                        if idx > 0 {
+                            r.selectors.push_str(&(idx - 1).to_string());
+                        }
+                    }
+                    off -= m.offset_bits / 8;
+                    cur = m.ty;
+                }
+                _ => {
+                    // Past the end of a complete scalar object.
+                    r.past_end = !r.nonempty && offset != 0;
+                    break;
+                }
+            }
+        }
+        r
+    }
+
+    /// The pointer-like value relocated at byte `at` of `img`, for a
+    /// scalar type.
+    fn reloc_at(img: &ByteImage<'_>, at: u64) -> Option<ConstValueId> {
+        img.relocs.binary_search_by_key(&at, |r| u64::from(r.at)).ok().map(|i| img.relocs[i].value)
+    }
+
+    /// The object of type `ty` at byte `at` of aggregate image `img`
+    /// (clang's `Struct`, `Union` and `Array` cases; trailing
+    /// zero-initialized elements are dropped).
+    fn image_value(&mut self, img: &ByteImage<'_>, ty: QualType, at: u64, top: bool) {
+        let ty = self.value_type(ty);
+        let shape = self.ast.shape(ty);
+        let scalar = !matches!(shape, Shape::Array { .. } | Shape::Record { .. });
+        if scalar && let Some(v) = Self::reloc_at(img, at) {
+            if let ConstValue::Scalar(s) = self.ast.consts.get(v) {
+                self.scalar_value(ty, &s, top);
+            }
+            return;
+        }
+        match shape {
+            Shape::Bool => {
+                self.out.push('L');
+                self.ty(ty);
+                self.out.push_str(if read_le(img.bytes, at, 1) != 0 { "1E" } else { "0E" });
+            }
+            Shape::Int { width, signed, .. } => {
+                let width = width.clamp(1, kiln_ast::consts::IntBits::MAX_WIDTH);
+                let w = read_bits(img.bytes, at * 8, width);
+                if let Some(bits) = kiln_ast::consts::IntBits::from_words(width, &w) {
+                    self.int_literal(ty, signed, &bits);
+                }
+            }
+            Shape::Float(kind) => {
+                let bits = read_le(img.bytes, at, kind.value_bytes());
+                self.float_literal(ty, kind.bits(), bits);
+            }
+            Shape::NullPtr | Shape::Pointer { .. } | Shape::MemberPointer => self.null_literal(ty),
+            Shape::Unknown | Shape::Reflection => {
+                self.out.push('L');
+                self.ty(ty);
+                self.out.push('E');
+            }
+            Shape::Array { elem, stride, len } => {
+                self.out.push_str(if top { "Xtl" } else { "tl" });
+                self.ty(ty);
+                let mut n = len;
+                while n > 0 && self.image_zero(img, elem, at + (n - 1) * stride) {
+                    n -= 1;
+                }
+                for i in 0..n {
+                    self.image_value(img, elem, at + i * stride, false);
+                }
+                self.out.push_str(if top { "EE" } else { "E" });
+            }
+            Shape::Record { members, union: false } => {
+                let unnamed_bf = |m: &Member| m.bit_width.is_some() && m.name.is_empty();
+                let mut fields: Vec<&Member> =
+                    members.iter().filter(|m| m.field.is_some()).collect();
+                while fields.last().is_some_and(|m| unnamed_bf(m) || self.member_zero(img, m, at)) {
+                    fields.pop();
+                }
+                let mut bases: Vec<&Member> =
+                    members.iter().filter(|m| m.field.is_none()).collect();
+                if fields.is_empty() {
+                    while bases.last().is_some_and(|m| self.member_zero(img, m, at)) {
+                        bases.pop();
+                    }
+                }
+                self.out.push_str(if top { "Xtl" } else { "tl" });
+                self.ty(ty);
+                for m in bases {
+                    self.image_value(img, m.ty, at + m.offset_bits / 8, false);
+                }
+                for m in fields {
+                    if !unnamed_bf(m) {
+                        self.member_value(img, m, at);
+                    }
+                }
+                self.out.push_str(if top { "EE" } else { "E" });
+            }
+            Shape::Record { members, union: true } => {
+                let Some(m) = Self::active_member(img, &members, at) else {
+                    self.out.push('L');
+                    self.ty(ty);
+                    self.out.push('E');
+                    return;
+                };
+                self.out.push_str(if top { "Xtl" } else { "tl" });
+                self.ty(ty);
+                if !self.union_zero(img, &members, at) {
+                    // <braced-expression> ::= di <field source-name> <expr>
+                    self.out.push_str("di");
+                    if let Some(n) = m.field.and_then(|f| self.union_init_name(f)) {
+                        self.source_name(&n);
+                    }
+                    self.member_value(img, m, at);
+                }
+                self.out.push_str(if top { "EE" } else { "E" });
+            }
+        }
+    }
+
+    /// Member `m` of the record at byte `at` of `img`.
+    fn member_value(&mut self, img: &ByteImage<'_>, m: &Member, at: u64) {
+        match m.bit_width {
+            Some(width) if width > 0 => {
+                let ty = self.value_type(m.ty);
+                let w = read_bits(img.bytes, at * 8 + m.offset_bits, width);
+                if matches!(self.ast.shape(ty), Shape::Bool) {
+                    self.out.push('L');
+                    self.ty(ty);
+                    self.out.push_str(if w[0] != 0 { "1E" } else { "0E" });
+                } else {
+                    let signed = matches!(self.ast.shape(ty), Shape::Int { signed: true, .. });
+                    if let Some(bits) = kiln_ast::consts::IntBits::from_words(width, &w) {
+                        self.int_literal(ty, signed, &bits);
+                    }
+                }
+            }
+            Some(_) => {
+                self.out.push('L');
+                self.ty(m.ty);
+                self.out.push_str("0E");
+            }
+            None => self.image_value(img, m.ty, at + m.offset_bits / 8, false),
+        }
+    }
+
+    /// The active member of the union at byte `at` of `img`.
+    fn active_member<'m>(
+        img: &ByteImage<'_>,
+        members: &'m [Member],
+        at: u64,
+    ) -> Option<&'m Member> {
+        img.unions
+            .iter()
+            .filter(|u| u64::from(u.at) == at)
+            .find_map(|u| members.iter().find(|m| m.field == Some(u.field)))
+    }
+
+    /// The name a union initializer designates (clang `getUnionInitName`):
+    /// the field's, or for an anonymous member the first named field of
+    /// a depth-first walk.
+    fn union_init_name(&self, f: DeclId) -> Option<String> {
+        let ast = self.ast;
+        let n = decl_name(ast, f);
+        if !n.is_empty() {
+            return Some(n);
+        }
+        if ast.decls.field(f).is_some_and(|fd| fd.bit_width.is_some()) {
+            return None;
+        }
+        let ty = ast.decls.get(f).ty()?;
+        let TypeView::Record(rd) = ast.types.canonical_view(ty) else { return None };
+        let def = ast.definition(rd)?;
+        ast.members(def)
+            .filter(|&x| ast.decls.get(x).kind() == DeclKind::Field)
+            .find_map(|x| self.union_init_name(x))
+    }
+
+    /// clang `isZeroInitialized` for the object of type `ty` at byte `at`.
+    fn image_zero(&self, img: &ByteImage<'_>, ty: QualType, at: u64) -> bool {
+        let shape = self.ast.shape(ty);
+        let scalar = !matches!(shape, Shape::Array { .. } | Shape::Record { .. });
+        if scalar && let Some(v) = Self::reloc_at(img, at) {
+            return matches!(self.ast.consts.get(v), ConstValue::Scalar(Scalar::Null { .. }));
+        }
+        match shape {
+            Shape::Bool => read_le(img.bytes, at, 1) == 0,
+            Shape::Int { width, .. } => {
+                read_bits(img.bytes, at * 8, width.max(1)).iter().all(|&w| w == 0)
+            }
+            Shape::Float(kind) => read_le(img.bytes, at, kind.value_bytes()) == 0,
+            Shape::NullPtr | Shape::Pointer { .. } | Shape::MemberPointer => true,
+            Shape::Unknown | Shape::Reflection => false,
+            Shape::Array { elem, stride, len } => {
+                (0..len).all(|i| self.image_zero(img, elem, at + i * stride))
+            }
+            Shape::Record { members, union: false } => members
+                .iter()
+                .filter(|m| !(m.bit_width.is_some() && m.name.is_empty()))
+                .all(|m| self.member_zero(img, m, at)),
+            Shape::Record { members, union: true } => self.union_zero(img, &members, at),
+        }
+    }
+
+    /// Whether member `m` of the record at byte `at` is zero.
+    fn member_zero(&self, img: &ByteImage<'_>, m: &Member, at: u64) -> bool {
+        match m.bit_width {
+            Some(width) => {
+                read_bits(img.bytes, at * 8 + m.offset_bits, width.max(1)).iter().all(|&w| w == 0)
+            }
+            None => self.image_zero(img, m.ty, at + m.offset_bits / 8),
+        }
+    }
+
+    /// A union is zero-initialized when its first named member is active
+    /// and zero, or it has no named member.
+    fn union_zero(&self, img: &ByteImage<'_>, members: &[Member], at: u64) -> bool {
+        let first = members.iter().find(|m| !(m.bit_width.is_some() && m.name.is_empty()));
+        let Some(first) = first else { return true };
+        Self::active_member(img, members, at).is_some_and(|a| a.field == first.field)
+            && self.member_zero(img, first, at)
     }
 
     fn template_param(&mut self, index: u32) {
@@ -1029,6 +1463,9 @@ impl<'a> Mangler<'a> {
             TypeView::PackExpansion { pattern, .. } => {
                 self.out.push_str("Dp");
                 self.ty(pattern);
+            }
+            TypeView::Auto { keyword: kiln_ast::types::AutoKeyword::DecltypeAuto, .. } => {
+                self.out.push_str("Dc");
             }
             TypeView::Auto { .. } => self.out.push_str("Da"),
             _ => self.out.push_str("u7unknown"),
@@ -1196,4 +1633,36 @@ pub fn operator_code(op: OverloadedOperator, arity: usize) -> &'static str {
         O::Subscript => "ix",
         O::Coawait => "aw",
     }
+}
+
+/// A subobject designation recovered from a byte offset.
+#[derive(Default)]
+struct LvaluePath {
+    /// The path has at least one entry.
+    nonempty: bool,
+    /// One past the end of an array or complete object (`p`).
+    past_end: bool,
+    /// `<union-selector>*`.
+    selectors: String,
+}
+
+/// `width` bits starting at bit `start` of little-endian `bytes`, as
+/// normalized words; bits past the end read as zero.
+fn read_bits(bytes: &[u8], start: u64, width: u32) -> Vec<u64> {
+    let mut w = vec![0u64; kiln_ast::consts::IntBits::words_for(width)];
+    for i in 0..u64::from(width) {
+        let b = start + i;
+        let set = bytes.get((b / 8) as usize).is_some_and(|&x| x >> (b % 8) & 1 != 0);
+        if set {
+            w[(i / 64) as usize] |= 1 << (i % 64);
+        }
+    }
+    w
+}
+
+/// `n` (at most 16) little-endian bytes at `at`.
+fn read_le(bytes: &[u8], at: u64, n: u32) -> u128 {
+    (0..u64::from(n.min(16))).rev().fold(0u128, |acc, i| {
+        (acc << 8) | u128::from(bytes.get((at + i) as usize).copied().unwrap_or(0))
+    })
 }
