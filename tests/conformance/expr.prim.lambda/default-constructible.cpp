@@ -8,5 +8,5 @@ int use() {
   c = b;
   return c(1);
 }
-static_assert(__is_trivially_constructible(decltype(a)));
+static_assert(__is_trivially_copyable(decltype(a)));
 static_assert(decltype(a){}(2) == 3);

@@ -374,7 +374,8 @@ fn specific_keys(kind: &str) -> Option<&'static [&'static str]> {
         | "StmtExpr"
         | "CompoundLiteralExpr"
         | "BinaryConditionalOperator"
-        | "OffsetOfExpr" => &[],
+        | "OffsetOfExpr"
+        | "LambdaExpr" => &[],
         "CXXThisExpr" => &["implicit"],
         "CXXDefaultInitExpr" => &["hasRewrittenInit"],
         // `temp` and `dtor` (the temporary's destructor) are not printed.
@@ -487,6 +488,8 @@ pub const CLASS_KINDS: &[&str] = &[
     "ArrayInitLoopExpr",
     "ArrayInitIndexExpr",
     "OpaqueValueExpr",
+    // WP-075: the closure class of a lambda.
+    "LambdaExpr",
 ];
 
 /// The template kinds §5 of `spec/ast-dump.md` adds (WP-069).

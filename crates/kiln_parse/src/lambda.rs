@@ -192,7 +192,15 @@ impl Parser<'_, '_> {
     /// `constexpr`, `consteval` and `static`, each at most once.
     fn parse_lambda_specifiers(&mut self, specs: &mut LambdaSpecifiers, intro: &LambdaIntroducer) {
         loop {
-            let (slot, what): (&mut Option<Loc>, &str) = match self.kw() {
+            let kw = self.kw();
+            // clang `DeclSpec::SetConstexprSpec`: `constexpr` and
+            // `consteval` do not combine.
+            let clash = match kw {
+                Some(Kw::Constexpr) => specs.consteval.map(|_| "consteval"),
+                Some(Kw::Consteval) => specs.constexpr.map(|_| "constexpr"),
+                _ => None,
+            };
+            let (slot, what): (&mut Option<Loc>, &str) = match kw {
                 Some(Kw::Mutable) => (&mut specs.mutable, "'mutable'"),
                 Some(Kw::Static) => (&mut specs.static_, "'static'"),
                 Some(Kw::Constexpr) => (&mut specs.constexpr, "'constexpr'"),
@@ -200,7 +208,10 @@ impl Parser<'_, '_> {
                 _ => break,
             };
             let loc = self.tok().span.lo;
-            if slot.is_some() {
+            if let Some(prev) = clash {
+                let d = self.s.diag(DiagId::parse_invalid_decl_spec_combination, loc).arg(prev);
+                self.emit(d);
+            } else if slot.is_some() {
                 let d = self.s.diag(DiagId::parse_lambda_decl_specifier_repeated, loc).arg(what);
                 self.emit(d);
             } else {

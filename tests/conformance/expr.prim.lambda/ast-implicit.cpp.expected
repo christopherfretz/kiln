@@ -1,0 +1,64 @@
+Dumping lamtest:
+FunctionDecl lamtest 'int (int)'
+|-ParmVarDecl used y 'int'
+`-CompoundStmt
+  |-DeclStmt
+  | `-VarDecl used l '(lambda at tests/conformance/expr.prim.lambda/ast-implicit.cpp:8:12)' cinit
+  |   `-LambdaExpr '(lambda at tests/conformance/expr.prim.lambda/ast-implicit.cpp:8:12)'
+  |     |-CXXRecordDecl implicit class definition
+  |     | |-CXXMethodDecl used constexpr operator() 'int (int) const' inline
+  |     | | |-ParmVarDecl used x 'int'
+  |     | | `-CompoundStmt
+  |     | |   `-ReturnStmt
+  |     | |     `-BinaryOperator 'int' '+'
+  |     | |       |-ImplicitCastExpr 'int' <LValueToRValue>
+  |     | |       | `-DeclRefExpr 'int' lvalue ParmVar 'x' 'int'
+  |     | |       `-IntegerLiteral 'int' 1
+  |     | |-CXXConversionDecl implicit used constexpr operator int (*)(int) 'int (*() const noexcept)(int)' inline
+  |     | | `-CompoundStmt
+  |     | |   `-ReturnStmt
+  |     | |     `-ImplicitCastExpr 'int (*)(int)' <FunctionToPointerDecay>
+  |     | |       `-DeclRefExpr 'int (int)' lvalue CXXMethod '__invoke' 'int (int)'
+  |     | |-CXXMethodDecl implicit used __invoke 'int (int)' static inline
+  |     | | |-ParmVarDecl x 'int'
+  |     | | `-CompoundStmt
+  |     | `-CXXDestructorDecl implicit referenced constexpr ~(lambda at tests/conformance/expr.prim.lambda/ast-implicit.cpp:8:12) 'void () noexcept' inline default trivial
+  |     `-CompoundStmt
+  |       `-ReturnStmt
+  |         `-BinaryOperator 'int' '+'
+  |           |-ImplicitCastExpr 'int' <LValueToRValue>
+  |           | `-DeclRefExpr 'int' lvalue ParmVar 'x' 'int'
+  |           `-IntegerLiteral 'int' 1
+  |-DeclStmt
+  | `-VarDecl used fp 'int (*)(int)' cinit
+  |   `-ImplicitCastExpr 'int (*)(int)' <UserDefinedConversion>
+  |     `-CXXMemberCallExpr 'int (*)(int)'
+  |       `-MemberExpr '<bound member function type>' .operator int (*)(int)
+  |         `-ImplicitCastExpr 'const (lambda at tests/conformance/expr.prim.lambda/ast-implicit.cpp:8:12)' lvalue <NoOp>
+  |           `-DeclRefExpr '(lambda at tests/conformance/expr.prim.lambda/ast-implicit.cpp:8:12)' lvalue Var 'l' '(lambda at tests/conformance/expr.prim.lambda/ast-implicit.cpp:8:12)'
+  `-ReturnStmt
+    `-ExprWithCleanups 'int'
+      `-BinaryOperator 'int' '+'
+        |-CallExpr 'int'
+        | |-ImplicitCastExpr 'int (*)(int)' <LValueToRValue>
+        | | `-DeclRefExpr 'int (*)(int)' lvalue Var 'fp' 'int (*)(int)'
+        | `-ImplicitCastExpr 'int' <LValueToRValue>
+        |   `-DeclRefExpr 'int' lvalue ParmVar 'y' 'int'
+        `-CXXOperatorCallExpr 'int' '()'
+          |-ImplicitCastExpr 'auto (*)() const -> int' <FunctionToPointerDecay>
+          | `-DeclRefExpr 'auto () const -> int' lvalue CXXMethod 'operator()' 'auto () const -> int'
+          `-ImplicitCastExpr 'const (lambda at tests/conformance/expr.prim.lambda/ast-implicit.cpp:10:18)' lvalue <NoOp>
+            `-MaterializeTemporaryExpr '(lambda at tests/conformance/expr.prim.lambda/ast-implicit.cpp:10:18)' lvalue
+              `-LambdaExpr '(lambda at tests/conformance/expr.prim.lambda/ast-implicit.cpp:10:18)'
+                |-CXXRecordDecl implicit class definition
+                | |-CXXMethodDecl used constexpr operator() 'auto () const -> int' inline
+                | | `-CompoundStmt
+                | |   `-ReturnStmt
+                | |     `-IntegerLiteral 'int' 2
+                | |-CXXConversionDecl implicit constexpr operator int (*)() 'auto (*() const noexcept)() -> int' inline
+                | |-CXXMethodDecl implicit __invoke 'auto () -> int' static inline
+                | `-CXXDestructorDecl implicit referenced constexpr ~(lambda at tests/conformance/expr.prim.lambda/ast-implicit.cpp:10:18) 'void () noexcept' inline default trivial
+                `-CompoundStmt
+                  `-ReturnStmt
+                    `-IntegerLiteral 'int' 2
+

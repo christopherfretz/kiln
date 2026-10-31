@@ -230,6 +230,22 @@ impl Sema<'_, '_> {
                 _ => None,
             })
             .collect();
+        // [dcl.fct.default]/4: every parameter after one with a default
+        // argument has one too.
+        if let Some(first) = params.iter().position(|p| p.default_arg != DefaultArg::None) {
+            for p in params.iter().skip(first + 1) {
+                if p.default_arg != DefaultArg::None || p.invalid {
+                    continue;
+                }
+                let msg = match p.name {
+                    Some((n, _)) => self
+                        .diag(DiagId::sema_missing_default_arg, p.loc)
+                        .arg(self.ast.symbols().as_str(n).to_string()),
+                    None => self.diag(DiagId::sema_missing_default_arg_unnamed, p.loc),
+                };
+                self.emit(msg);
+            }
+        }
         self.create_params(f, &params, &defaults);
         let mut attrs = specs.attrs.clone();
         attrs.extend(d.attrs.iter().copied());
@@ -601,6 +617,20 @@ impl Sema<'_, '_> {
             return;
         }
         let at = self.ast.decls.get(conv).loc();
+        // clang marks the call operator referenced: the invoker forwards
+        // to it.
+        let call_op = self
+            .ast
+            .decls
+            .get(conv)
+            .ctx()
+            .and_then(|c| self.ast.decls.record(c).and_then(|r| r.lambda))
+            .and_then(|id| self.ast.exprs.lambdas.get(id).call_op);
+        if let Some(op) = call_op
+            && op != target
+        {
+            self.mark_function_referenced(op, loc);
+        }
         let Some(tq) = self.ast.decls.get(target).ty() else { return };
         let ptr = self.ast.types.pointer_to(tq);
         let r = self.builder().decl_ref(
