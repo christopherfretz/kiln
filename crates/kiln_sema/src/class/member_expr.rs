@@ -146,7 +146,7 @@ impl Sema<'_, '_> {
             self.emit(msg);
             return self.recover_err(&[base], loc);
         };
-        if found.decls.len() > 1 {
+        if found.decls.len() > 1 || self.kind_of(m) == DeclKind::FunctionTemplate {
             if !self.is_member_overload_set(&found.decls) {
                 self.unsupported("this kind of overloaded member access", loc);
                 return self.recover_err(&[base], loc);
@@ -165,6 +165,7 @@ impl Sema<'_, '_> {
                 arrow,
                 nns: None,
                 implicit: false,
+                targs: None,
             };
             return self.build_member_overload(set, loc);
         }

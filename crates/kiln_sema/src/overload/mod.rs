@@ -415,6 +415,9 @@ pub(crate) struct OvlMember {
     /// The object is an implicit `this` (a static winner is then named
     /// by a `DeclRefExpr`, as clang does).
     pub implicit: bool,
+    /// The explicit template arguments of a member template-id
+    /// (`this->f<int>(…)`, [temp.arg.explicit]).
+    pub targs: Option<kiln_ast::ids::ArgListId>,
 }
 
 /// The lookup details of an `UnresolvedLookupExpr` its decl list does not

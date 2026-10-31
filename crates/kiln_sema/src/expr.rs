@@ -772,8 +772,10 @@ impl Sema<'_, '_> {
             // an overload set resolved at the call (clang's
             // `UnresolvedLookupExpr`; deduction is WP-071).
             if found.naming.is_some() {
-                self.templ_unimplemented("member function template names", loc);
-                return self.recover_err(&[], loc);
+                // A member template: the member overload set (an
+                // implicit `this->` for instance members).
+                let valid = found.decls.clone();
+                return self.overload_name_ref(name, &found, &valid, qualifier.is_none(), nns, loc);
             }
             let decls: Vec<DeclId> = found.decls.clone();
             return self.builder().unresolved_lookup(
@@ -957,6 +959,7 @@ impl Sema<'_, '_> {
             arrow: true,
             nns,
             implicit: true,
+            targs: None,
         };
         Some(self.build_member_overload(set, loc))
     }
