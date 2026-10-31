@@ -70,7 +70,13 @@
 ## Spec
 - spec/codegen.md §7a (incl. virtual bases), spec/abi.md §8.7 (incl. VTT).
 
+## Evidence (f2516fb)
+- Full `cargo xtask ci`: green. corpus (kiln) 1169 passed / 12 xfail /
+  1181; corpus (clang++-19 self-check) 1155 passed / 3 xfail / 23 skipped.
+- ir_vs_clang: 152/152 exact (both triples; was 146 before the vbase
+  structor cases).
+
 ## Next step
-Exit gate: fmt, clippy -D warnings, full `cargo xtask ci`, handback.
+Handed back for review/merge. Follow-ups are listed under "Not yet".
 Gotcha: corpus cases must be noexcept unless they need a throwing runtime
 call with no cleanups (no EH before WP-100).
