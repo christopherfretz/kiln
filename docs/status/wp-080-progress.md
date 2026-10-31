@@ -18,7 +18,14 @@
   `__cxa_bad_cast`, always-null casts, typeid from the vtable with the
   `__cxa_bad_typeid` deref check, static typeid, pointer/enum/array/
   function/incomplete RTTI.
-- ir_vs_clang: 142/142 exact.
+- `virtual_memptr.cpp`: pointers to virtual member functions.
+- ir_vs_clang: 144/144 exact.
+
+## Run tests
+- `tests/conformance/class.virtual/dispatch-run.cpp` (dispatch, MI,
+  covariant, virtual dtor order, ptr-to-virtual-member).
+- `tests/conformance/expr.dynamic.cast/run.cpp` (down/cross/failed/void*
+  casts, reference casts, typeid names).
 
 ## Landed
 - mangle.rs: `mangle_class_special`, `mangle_rtti`, `mangle_ctor_vtable`,
@@ -42,12 +49,19 @@
 - module.rs: virtual methods `unnamed_addr`.
 
 ## Not yet
-- Member-pointer RTTI, noexcept-function-pointer flag, ptr-to-virtual-member (memptr.rs:120), VTT/virtual bases,
-  `expect: run` tests, spec text.
+- VTT/virtual bases (all of it), member-pointer RTTI,
+  noexcept-function-pointer flag, `::delete` of a polymorphic class.
+
+## Spec
+- spec/codegen.md §7a, spec/abi.md §8.7.
 
 ## Next step
-ptr-to-virtual-member (memptr.rs:120: `&C::vf` = vtable offset + 1, and
-the call path's `memptr.virtual` branch), then VTT/virtual bases (`_ZTT`,
-`_ZTC`, `_ZTv` thunks, vbase offsets, C1-only vbase ctor, offset hint -1).
+Virtual-base derived-to-base conversions: `base_path_offset`
+(class.rs ~1152/1168) must return (virtual step, non-virtual offset);
+emit clang `GetVirtualBaseClassOffset` (vtable load, non-inbounds
+`gep i8 vt, vbase_offset_offset`, `load i64 align 8`, add nv offset,
+`gep inbounds i8`), with null check for pointers. Then structors:
+C1 != C2 / D1 != D2, VTT param (`needs_vtt_param` stub in vtable.rs),
+`_ZTT`/`_ZTC` emission, VTT-loaded vptrs, `_ZTv` thunks.
 Gotcha: corpus cases must be noexcept unless they need a throwing runtime
 call with no cleanups (no EH before WP-100).

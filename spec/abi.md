@@ -611,6 +611,26 @@ points, thunks and method indices are clang's.
     is passed in two INTEGER eightbytes; on AArch64 it is coerced to
     `[2 x i64]`. Codegen is in spec/codegen.md §7.
 
+### 8.7 Landed (WP-080): vtable and RTTI mangling and layout
+- **Mangling** (`mangle.rs`): `_ZTV` (vtable), `_ZTI` / `_ZTS` (type_info
+  and its name, for any type), `_ZTT` (VTT), `_ZTC<derived><offset>_<base>`
+  (construction vtable), and thunks `_ZThn<off>_` (non-virtual `this`
+  adjustment), `_ZTv<off>_<vcall>_` (virtual), `_ZTch...h...` /
+  `_ZTcv...` (covariant). Destructor thunks mangle the D1/D0 target.
+- **Vtable layout** (`kiln_abi::vtable`, Itanium §2.5): per group, vcall
+  and vbase offsets, offset-to-top, RTTI, then the slots. A virtual
+  destructor takes two slots (D1, D0). `vbase_offset_offsets` gives the
+  (negative) byte offset of each vbase-offset word from the address
+  point.
+- **RTTI layout** (Itanium §2.9.5): every type_info starts
+  `{ ptr vtable + 16, ptr name }`. `__si_class_type_info` adds the base
+  pointer; `__vmi_class_type_info` adds `i32 flags, i32 base_count` and a
+  `{ ptr, i64 offset_flags }` per direct base; `__pointer_type_info`
+  adds `i32 flags, ptr pointee`. Enums, functions and arrays have no
+  extra fields.
+- **Member function pointers to virtual functions**: see 8.6 (x86-64
+  `ptr = offset + 1`; AArch64 `adj = 2 * adj + 1`).
+
 ## 9. Open questions (with recommendation)
 - **A1.** `preferred_align` is equal to `align` on both targets. i386
   `double` is where it differs; out of scope.
