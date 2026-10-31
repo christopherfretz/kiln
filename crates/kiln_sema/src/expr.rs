@@ -3218,6 +3218,7 @@ impl Sema<'_, '_> {
         match kind {
             TraitKind::AlignOf => "alignof",
             TraitKind::PreferredAlignOf => "__alignof",
+            TraitKind::DataSizeOf => "__datasizeof",
             _ => "sizeof",
         }
     }
@@ -3229,7 +3230,8 @@ impl Sema<'_, '_> {
         if self.is_error_type(ty) {
             return false;
         }
-        let t = if kind == TraitKind::SizeOf { self.non_reference(ty) } else { ty };
+        let size_like = matches!(kind, TraitKind::SizeOf | TraitKind::DataSizeOf);
+        let t = if size_like { self.non_reference(ty) } else { ty };
         // [expr.sizeof]/1, [expr.alignof]/1: in C++ a function type is an
         // error and `void` is an incomplete type; clang's GNU extensions
         // for both are C-only ("hard errors for SFINAE").
@@ -3238,7 +3240,7 @@ impl Sema<'_, '_> {
             self.emit(msg);
             return false;
         }
-        let check = if kind == TraitKind::SizeOf {
+        let check = if size_like {
             t
         } else {
             let mut x = self.non_reference(t);

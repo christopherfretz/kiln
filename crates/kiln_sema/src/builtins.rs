@@ -46,6 +46,76 @@ pub(crate) fn declare_int128_typedefs(ast: &mut Ast, target: &TargetTypes) {
 }
 
 impl Sema<'_, '_> {
+    /// The implicit typedef `__builtin_va_list` (clang's `Sema::Initialize`
+    /// and `CreateVaListDecl`), declared in the translation unit:
+    /// - `AArch64` (AAPCS64 §10.1.5): `typedef std::__va_list
+    ///   __builtin_va_list;` with `struct __va_list { void *__stack;
+    ///   void *__gr_top; void *__vr_top; int __gr_offs; int __vr_offs; }`
+    ///   in an implicit `namespace std` that lookup does not see;
+    /// - x86-64 (SysV psABI §3.5.7): `typedef __va_list_tag
+    ///   __builtin_va_list[1];` with `struct __va_list_tag { unsigned
+    ///   gp_offset; unsigned fp_offset; void *overflow_arg_area; void
+    ///   *reg_save_area; }`, a record lookup does not see.
+    ///
+    /// All are `IMPLICIT`, so `-ast-dump` skips them, as clang.
+    pub(crate) fn declare_builtin_va_list(&mut self) {
+        use kiln_abi::target::Arch;
+        use kiln_ast::decl::{Access, TagKind};
+        if self.target.pointer_bytes == 0 {
+            return;
+        }
+        let tu = self.ast.tu;
+        let void_ptr = self.ast.types.pointer_to(QualType::VOID);
+        let (ctx, tag_name, fields): (DeclId, &str, [(&str, QualType); 5]) =
+            match self.abi.triple.arch {
+                Arch::AArch64 => {
+                    let std = DeclName::ident(self.ast.symbols().intern("std"));
+                    let ns = self.builder().hidden_namespace(tu, std);
+                    let f = [
+                        ("__stack", void_ptr),
+                        ("__gr_top", void_ptr),
+                        ("__vr_top", void_ptr),
+                        ("__gr_offs", QualType::INT),
+                        ("__vr_offs", QualType::INT),
+                    ];
+                    (ns, "__va_list", f)
+                }
+                Arch::X86_64 => {
+                    let f = [
+                        ("gp_offset", QualType::UINT),
+                        ("fp_offset", QualType::UINT),
+                        ("overflow_arg_area", void_ptr),
+                        ("reg_save_area", void_ptr),
+                        ("", QualType::VOID),
+                    ];
+                    (tu, "__va_list_tag", f)
+                }
+            };
+        // Created unnamed and named afterwards, so the tag is not entered
+        // in lookup.
+        let h = DeclHead::new(ctx, DeclName::EMPTY, Loc::INVALID).flags(DeclFlags::IMPLICIT);
+        let r = self.builder().record(h, TagKind::Struct, None);
+        let tag = DeclName::ident(self.ast.symbols().intern(tag_name));
+        self.ast.decls.set_name(r, tag);
+        let saved = self.ctx;
+        self.act_on_start_record_definition(r);
+        for (name, ty) in fields.into_iter().filter(|f| !f.0.is_empty()) {
+            let n = DeclName::ident(self.ast.symbols().intern(name));
+            let f = self.builder().field(DeclHead::new(r, n, Loc::INVALID), ty, None, 0);
+            self.ast.decls.set_access(f, Access::Public);
+        }
+        self.act_on_finish_record_definition(r, false);
+        self.ctx = saved;
+        let rty = self.tag_type(r);
+        let ty = match self.abi.triple.arch {
+            Arch::AArch64 => rty,
+            Arch::X86_64 => self.ast.types.constant_array(rty, 1, None),
+        };
+        let n = DeclName::ident(self.ast.symbols().intern("__builtin_va_list"));
+        let h = DeclHead::new(tu, n, Loc::INVALID).flags(DeclFlags::IMPLICIT);
+        let _ = self.builder().typedef(h, DeclKind::Typedef, ty, None);
+    }
+
     /// Declares the builtin function `name` (first used at `loc`) if it
     /// is one kiln knows, from its [`builtin::Info`] row: the type its
     /// `Builtins.td` signature spells (`noexcept` for the `NoThrow` ones,

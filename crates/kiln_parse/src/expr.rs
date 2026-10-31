@@ -394,6 +394,7 @@ impl Parser<'_, '_> {
             Some(Kw::GnuAlignof) => {
                 return self.parse_sizeof_alignof(TraitKind::PreferredAlignOf);
             }
+            Some(Kw::DataSizeof) => return self.parse_sizeof_alignof(TraitKind::DataSizeOf),
             Some(Kw::Extension) => {
                 self.bump();
                 return self.parse_cast_expr();
@@ -463,7 +464,8 @@ impl Parser<'_, '_> {
         Some(self.s.act_on_sizeof_pack_name(name, name_loc, loc, rparen))
     }
 
-    /// `sizeof`/`alignof`/`__alignof` ([expr.sizeof], [expr.alignof]).
+    /// `sizeof`/`alignof`/`__alignof`/`__datasizeof` ([expr.sizeof],
+    /// [expr.alignof]; `__datasizeof` is clang's size without tail padding).
     fn parse_sizeof_alignof(&mut self, kind: TraitKind) -> PExpr {
         let loc = self.bump().span.lo;
         if kind == TraitKind::SizeOf && self.at(Punct::Ellipsis) {
