@@ -316,7 +316,15 @@ impl Sema<'_, '_> {
         }
     }
 
-    /// clang's `ResolveExceptionSpec` diagnostic for a function whose
+    /// Resolves the exception specification of function `f` before an
+    /// expression takes its type at `loc` (C++17: it is part of the type).
+    /// A specification not yet parsed is left to [`Sema::exc_spec_needed`].
+    pub(crate) fn resolve_exc_for_type(&mut self, f: kiln_ast::DeclId, loc: Loc) {
+        if !self.in_template() && !self.unparsed_exc.contains(&self.ast.first(f)) {
+            self.resolve_exception_spec(f, loc);
+        }
+    }
+
     /// A use of function `f` at `loc` needs its exception specification
     /// ([except.spec]/13): clang's `MarkFunctionReferenced` resolves it
     /// even in unevaluated operands (for `noexcept`), and diagnoses one
@@ -418,6 +426,7 @@ impl Sema<'_, '_> {
         r
     }
 
+    /// clang's `ResolveExceptionSpec` diagnostic for a function whose
     /// *noexcept-specifier* is needed ([except.spec]/13) before the
     /// complete-class context it is parsed in: `exception specification is
     /// not available until end of class definition`. Returns true then.

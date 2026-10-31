@@ -1,0 +1,16 @@
+TranslationUnitDecl
+|-CXXRecordDecl struct A definition
+| |-CXXMethodDecl referenced f 'void () noexcept(sizeof(int) > 2)'
+| |-CXXMethodDecl used g 'void () noexcept(noexcept(this->f()))'
+| |-CXXMethodDecl used s 'void () noexcept(N == 2)' static
+| |-CXXMethodDecl t 'void () throw()'
+| |-VarDecl referenced N 'const int' static inline constexpr cinit value=2
+| | `-IntegerLiteral 'int' 2
+| `-FieldDecl x 'int'
+|-VarDecl pg 'void (A::*)()' cinit
+| `-ImplicitCastExpr 'void (A::*)()' <NoOp>
+|   `-UnaryOperator 'void (A::*)() noexcept(noexcept(this->f()))' prefix '&' cannot overflow
+|     `-DeclRefExpr 'void () noexcept(noexcept(this->f()))' CXXMethod 'g' 'void () noexcept(noexcept(this->f()))'
+`-VarDecl p 'void (*)() noexcept' cinit
+  `-UnaryOperator 'void (*)() noexcept(N == 2)' prefix '&' cannot overflow
+    `-DeclRefExpr 'void () noexcept(N == 2)' lvalue CXXMethod 's' 'void () noexcept(N == 2)'

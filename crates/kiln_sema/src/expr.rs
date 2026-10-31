@@ -1076,6 +1076,12 @@ impl Sema<'_, '_> {
             self.ast.decls.set_flags(d, DeclFlags::INVALID);
             return self.recover_err(&[], loc);
         }
+        // The exception specification is part of the type ([dcl.fct]/14):
+        // resolved before the reference takes it (clang's
+        // `DiagnoseUseOfDecl`).
+        if matches!(n.kind(), DeclKind::Function | DeclKind::CXXMethod) {
+            self.resolve_exc_for_type(d, loc);
+        }
         // Re-read: `check_undeduced_use` may have deduced the return type.
         let mut declared = self.ast.decls.get(d).ty().unwrap_or(QualType::ERROR);
         // A pack names its pattern ([temp.variadic]/5): `Ts... x` gives `x`

@@ -172,7 +172,7 @@ impl Sema<'_, '_> {
             sub.entity = Some(f);
             sub.map_contexts(&pairs);
             sub.map_params(&pp, &fp);
-            if sub.sema.kind_of(f) == kiln_ast::decl::DeclKind::CXXConstructor {
+            if sub.sema.kind_of(f) == DeclKind::CXXConstructor {
                 // A constructor template's ctor-initializer, as a class
                 // template member's (`templ/class.rs`).
                 let (inits, colon) = sub

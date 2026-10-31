@@ -687,6 +687,10 @@ impl Sema<'_, '_> {
         let d = r.decl;
         let class = self.declaring_class(d)?;
         self.member_refs.remove(&e);
+        if self.kind_of(d) == DeclKind::CXXMethod {
+            let at = self.eloc(e);
+            self.resolve_exc_for_type(d, at);
+        }
         let declared = self.ast.decls.get(d).ty().unwrap_or(QualType::ERROR);
         if self.ast.types.is_reference(declared) {
             self.unsupported("pointer to member of reference type", loc);
