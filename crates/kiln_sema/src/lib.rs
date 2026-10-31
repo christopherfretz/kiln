@@ -224,6 +224,10 @@ pub struct Sema<'a, 'sm> {
     /// The class template the last `template<..> friend class X;`
     /// befriended ([temp.friend]/1), taken by [`Sema::act_on_friend`].
     pub(crate) friend_class_template: Option<DeclId>,
+    /// Default template arguments a template parameter inherits from
+    /// another declaration of its template ([temp.param]/12), keyed by
+    /// the parameter that has none of its own.
+    pub(crate) inherited_defaults: kiln_source::fx::FxHashMap<DeclId, kiln_ast::types::TemplateArg>,
     /// The `this` type of the default member initializers being parsed,
     /// innermost last, with their fields (`C*`, spec/sema-class.md §2.5).
     pub(crate) nsdmi_this: Vec<(DeclId, QualType)>,
@@ -318,6 +322,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             member_refs: kiln_source::fx::FxHashMap::default(),
             friend_tag: None,
             friend_class_template: None,
+            inherited_defaults: kiln_source::fx::FxHashMap::default(),
             nsdmi_this: Vec::new(),
             initializing: None,
             templ: templ::TemplState::default(),

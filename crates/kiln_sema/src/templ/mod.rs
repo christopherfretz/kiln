@@ -662,7 +662,36 @@ impl Sema<'_, '_> {
             self.check_template_param_list(kind, list, prev);
         }
         let t = self.builder().template_decl(kind, pattern, list, prev);
+        if prev.is_some() {
+            self.merge_template_defaults(t);
+        }
         Some(t)
+    }
+
+    /// Shares the default template arguments across the declarations of
+    /// template `t` ([temp.param]/12: the defaults available are the
+    /// union of those of all declarations), recording each one for the
+    /// parameters at its position that have none of their own.
+    fn merge_template_defaults(&mut self, t: DeclId) {
+        let Some(p) = self.pattern_of(t) else { return };
+        let lists: Vec<Vec<DeclId>> = self
+            .ast
+            .redecls_of(p)
+            .filter_map(|x| self.ast.described_template(x))
+            .map(|x| self.template_params(x))
+            .collect();
+        let n = lists.iter().map(Vec::len).max().unwrap_or(0);
+        for i in 0..n {
+            let own = |q: &DeclId| self.ast.templates.defaults.get(*q).copied();
+            let Some(a) = lists.iter().find_map(|l| l.get(i).and_then(own)) else { continue };
+            for l in &lists {
+                if let Some(&q) = l.get(i) {
+                    if self.ast.templates.defaults.get(q).is_none() {
+                        self.inherited_defaults.insert(q, a);
+                    }
+                }
+            }
+        }
     }
 
     /// The template decl `d` (a template, or the pattern of one) is part
@@ -842,7 +871,12 @@ impl Sema<'_, '_> {
 
     /// The default argument recorded for template parameter `p`.
     pub fn template_default(&self, p: DeclId) -> Option<TemplateArg> {
-        self.ast.templates.defaults.get(p).copied()
+        self.ast
+            .templates
+            .defaults
+            .get(p)
+            .copied()
+            .or_else(|| self.inherited_defaults.get(&p).copied())
     }
 
     /// A declarator-id that is a template-id `tmpl<args>` naming the

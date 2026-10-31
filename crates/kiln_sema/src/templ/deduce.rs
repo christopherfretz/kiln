@@ -1016,9 +1016,45 @@ impl Sema<'_, '_> {
         if r != Tdk::Success {
             return r;
         }
-        let ps = self.ast.types.args(args).to_vec();
+        let mut ps = self.ast.types.args(args).to_vec();
         let as_ = self.ast.types.args(aargs).to_vec();
+        if ps.len() < as_.len() {
+            self.complete_dependent_args(name, &mut ps);
+        }
         self.deduce_arg_list(&ps, &as_, true, d, level, Loc::INVALID)
+    }
+
+    /// The arguments of a dependent class template-id `P` completed with
+    /// its parameters' defaults ([temp.arg.general]/9), as `A`'s were:
+    /// `B<T>` is `B<T, int>` for `template<class, class = int> struct B`
+    /// (clang converts a dependent template-id's arguments up front). A
+    /// default that cannot be formed leaves `ps` short (the deduction
+    /// then fails as before).
+    fn complete_dependent_args(
+        &mut self,
+        name: kiln_ast::ids::TemplateNameId,
+        ps: &mut Vec<TemplateArg>,
+    ) {
+        let Some(t) = self.ast.types.template_decl(name) else { return };
+        if self.kind_of(t) != DeclKind::ClassTemplate || ps.iter().any(|a| self.is_pack_arg(*a)) {
+            return;
+        }
+        let t = self.ast.first(t);
+        let params = self.template_params(t);
+        let depth = self.template_param_depth(t);
+        for &p in params.iter().skip(ps.len()) {
+            if self.ast.template_parm(p).is_none_or(|x| x.pack) {
+                return;
+            }
+            let Some(def) = self.template_default(p) else { return };
+            self.inst.sfinae.borrow_mut().push(crate::templ::stack::SfinaeState::default());
+            let r = self.default_template_arg(t, depth, p, def, Loc::INVALID, ps);
+            let failed = self.inst.sfinae.borrow_mut().pop().is_some_and(|s| s.errors > 0);
+            match r {
+                Ok(a) if !failed => ps.push(a),
+                _ => return,
+            }
+        }
     }
 
     /// [temp.deduct.call]/4.3: `P` against the bases of `A`; the
