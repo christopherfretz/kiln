@@ -100,7 +100,10 @@ impl Cg<'_> {
     pub(crate) fn address_point_of(l: &VTableLayout, sub: SubobjectId) -> Option<(u32, u32)> {
         let i = l.address_points.binary_search_by_key(&sub, |&(s, _)| s).ok()?;
         let ap = l.address_points[i].1;
-        let k = l.vtable_starts.iter().rposition(|&st| st <= ap)?;
+        // An address point follows at least the offset-to-top and RTTI
+        // of its own vtable, and may equal the end of it (no virtual
+        // functions): never the start of the next one.
+        let k = l.vtable_starts.iter().rposition(|&st| st < ap)?;
         Some((u32::try_from(k).ok()?, ap - l.vtable_starts[k]))
     }
 
@@ -355,7 +358,7 @@ impl Cg<'_> {
     pub(crate) fn class_type(&self, rd: DeclId) -> QualType {
         let ast = self.ast;
         let def = self.class_def(rd).unwrap_or(rd);
-        ast.decls.get(def).ty().map_or(QualType::ERROR, |t| t)
+        ast.decls.get(def).ty().unwrap_or(QualType::ERROR)
     }
 
     /// clang `createVTableInitializer` for group `l` of `layout_class`.
@@ -758,7 +761,11 @@ impl Cg<'_> {
     pub(crate) fn vtt_arg(&mut self, base: DeclId, virt: bool, delegating: bool) -> R<V> {
         let rd = self.f.this_class.expect("structor class");
         let loc = Some(self.ast.decls.get(base).loc());
-        let idx = if delegating {
+        if delegating && let Some(vtt) = self.f.vtt {
+            return Ok(vtt);
+        }
+        let same = self.class_def(base) == self.class_def(rd);
+        let idx = if delegating || same {
             0
         } else {
             let off = if virt { self.vbase_offset(rd, base) } else { self.base_offset(rd, base) };
@@ -780,6 +787,10 @@ impl Cg<'_> {
             return Ok(self.gep(LTy::PTR, vtt, vec![o], true));
         }
         let g = self.vtt_global(rd)?;
+        if idx == 0 {
+            // A constant GEP of all-zero indices folds to the global.
+            return Ok(V::C(Value::global(g)));
+        }
         let ty = self.m.global(g).value_type();
         let zero = self.m.const_int(LTy::I64, 0);
         let iv = self.m.const_int(LTy::I64, idx as i128);
@@ -920,12 +931,11 @@ impl Cg<'_> {
         let first = ast.first(d);
         let fty = ast.decls.get(first).ty().expect("method type");
         let sig = self.call_sig_this(fty, false, &ptys, Some(rd));
-        let (callee, fid) = match v {
-            Some(v) => self.structor_ref(d, v)?,
-            None => {
-                let f = self.get_fn(d)?;
-                (V::C(Value::func(f)), Some(f))
-            }
+        let (callee, fid) = if let Some(v) = v {
+            self.structor_ref(d, v)?
+        } else {
+            let f = self.get_fn(d)?;
+            (V::C(Value::func(f)), Some(f))
         };
         let rq = sig.ret;
         let agg = self.is_aggregate(rq);
@@ -1113,13 +1123,12 @@ impl Cg<'_> {
         let ast = self.ast;
         loop {
             let k = ast.exprs.get(e).kind();
-            if k == ExprKind::ParenExpr {
-                e = ast.exprs.operand(e);
-            } else if k.is_cast()
-                && matches!(
-                    ast.exprs.cast_kind(e),
-                    CastKind::DerivedToBase | CastKind::UncheckedDerivedToBase | CastKind::NoOp
-                )
+            if k == ExprKind::ParenExpr
+                || (k.is_cast()
+                    && matches!(
+                        ast.exprs.cast_kind(e),
+                        CastKind::DerivedToBase | CastKind::UncheckedDerivedToBase | CastKind::NoOp
+                    ))
             {
                 e = ast.exprs.operand(e);
             } else {
@@ -1313,7 +1322,7 @@ impl Cg<'_> {
         if let Some(g) = self.m.get_global(&ts_name) {
             return Value::global(g);
         }
-        let init = self.m.const_cstring(ts_name[4..].as_bytes());
+        let init = self.m.const_cstring(&ts_name.as_bytes()[4..]);
         let ty = self.m.const_type(init);
         let g = self.m.add_global(&ts_name, ty);
         let _ = self.m.set_initializer(g, Some(init));
@@ -1373,18 +1382,15 @@ impl Cg<'_> {
         Value::global(g)
     }
 
-    /// The `__cxxabiv1` type_info vtable `name` (`external global [0 x
+    /// The `__cxxabiv1` `type_info` vtable `name` (`external global [0 x
     /// ptr]`) plus 2 pointers.
     fn abi_vtable(&mut self, name: &str) -> R<Value> {
-        let g = match self.m.get_global(name) {
-            Some(g) => g,
-            None => {
-                let t = self.m.types.array(LTy::PTR, 0);
-                let g = self.m.add_global(name, t);
-                self.m.global_mut(g).linkage = Linkage::External;
-                g
-            }
-        };
+        let g = self.m.get_global(name).unwrap_or_else(|| {
+            let t = self.m.types.array(LTy::PTR, 0);
+            let g = self.m.add_global(name, t);
+            self.m.global_mut(g).linkage = Linkage::External;
+            g
+        });
         let two = self.m.const_int(LTy::I64, 2);
         match self.m.const_gep(LTy::PTR, Value::global(g), &[two], GepFlags::INBOUNDS, None) {
             Ok(v) => Ok(v),

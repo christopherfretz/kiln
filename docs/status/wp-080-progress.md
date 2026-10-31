@@ -21,13 +21,22 @@
 - `virtual_memptr.cpp`: pointers to virtual member functions.
 - `virtual_base_conv.cpp`: derived-to-base through virtual bases
   (vbase offset load, null check, nv tail, final class).
-- ir_vs_clang: 146/146 exact.
+- `virtual_base_ctor.cpp`: C1/C2 of vbase classes, VTT param, `_ZTT`,
+  `_ZTC`, VTT-loaded vptrs, diamond, `_ZTv` thunks.
+- `virtual_base_dtor.cpp`: D1 -> D2(VTT) + vbase dtors, D2 skips vbases,
+  vbase with its own vbases (sub-VTT), fields, final class, address point
+  at the end of a vtable.
+- `virtual_base_special.cpp`: delegating base ctor (VTT passed through),
+  implicit copy ctor/assignment, abstract class (D1 traps), new/delete,
+  virtual delete through a vbase.
 
 ## Run tests
 - `tests/conformance/class.virtual/dispatch-run.cpp` (dispatch, MI,
   covariant, virtual dtor order, ptr-to-virtual-member).
 - `tests/conformance/expr.dynamic.cast/run.cpp` (down/cross/failed/void*
   casts, reference casts, typeid names).
+- `tests/conformance/class.mi/virtual-base-run.cpp` (diamond, shared
+  vbase, construction-time dispatch, null conversion, dtor order).
 
 ## Landed
 - mangle.rs: `mangle_class_special`, `mangle_rtti`, `mangle_ctor_vtable`,
@@ -36,8 +45,11 @@
   initializer, RTTI, address points, vptr walk, skip-vptr-init,
   slot loads, devirtualization, thunks (`thunk_fn` declares at vtable
   build; `emit_thunks` defines after the method / D1 / D0, this- and
-  return-adjusting; `thunk_attrs` = IsThunk attribute rules). VTT/vbase
-  paths are error stubs.
+  return-adjusting; `thunk_attrs` = IsThunk attribute rules).
+  VTT: `vtt_global`, `emit_vtt` (+ `_ZTC`), `vtt_address_point`, `vtt_arg`.
+- class.rs vbases: `base_path`, `base_address`, `vbase_offset_value`,
+  `structor_sig` (VTT param), separate C1/D1, `emit_complete_dtor_body`.
+- module.rs: `Sig.vtt`, `with_vtt`; func.rs: Fx `vtt` / `call_vtt`.
 - dyncast.rs: `emit_dynamic_cast`, `emit_typeid` (+ runtime fn helpers).
 - vtable.rs RTTI: `pointer_rtti`, enum/array/function type_info,
   `type_rtti_linkage` (incomplete -> internal).
@@ -51,19 +63,14 @@
 - module.rs: virtual methods `unnamed_addr`.
 
 ## Not yet
-- VTT/virtual bases (all of it), member-pointer RTTI,
-  noexcept-function-pointer flag, `::delete` of a polymorphic class.
+- Member-pointer RTTI, noexcept-function-pointer flag, `::delete` of a
+  polymorphic class, `__dynamic_cast` hint -1 uncovered, inheriting ctors
+  of vbase classes uncovered, explicit-instantiation (`weak_odr`) vtables.
 
 ## Spec
-- spec/codegen.md §7a, spec/abi.md §8.7.
+- spec/codegen.md §7a (incl. virtual bases), spec/abi.md §8.7 (incl. VTT).
 
 ## Next step
-DONE: virtual-base conversions (`base_path` / `base_address`). Was: `base_path_offset`
-(class.rs ~1152/1168) must return (virtual step, non-virtual offset);
-emit clang `GetVirtualBaseClassOffset` (vtable load, non-inbounds
-`gep i8 vt, vbase_offset_offset`, `load i64 align 8`, add nv offset,
-`gep inbounds i8`), with null check for pointers. Then structors:
-C1 != C2 / D1 != D2, VTT param (`needs_vtt_param` stub in vtable.rs),
-`_ZTT`/`_ZTC` emission, VTT-loaded vptrs, `_ZTv` thunks.
+Exit gate: fmt, clippy -D warnings, full `cargo xtask ci`, handback.
 Gotcha: corpus cases must be noexcept unless they need a throwing runtime
 call with no cleanups (no EH before WP-100).

@@ -333,7 +333,7 @@ pub fn mangle_rtti(ast: &Ast, q: QualType, prefix: &str) -> String {
 }
 
 /// `<special-name>` of a class: `prefix` followed by the class's <type>
-/// (`_ZTV` vtable, `_ZTT` VTT, `_ZTI` type_info, `_ZTS` type_info name;
+/// (`_ZTV` vtable, `_ZTT` VTT, `_ZTI` `type_info`, `_ZTS` `type_info` name;
 /// WP-080).
 pub fn mangle_class_special(ast: &Ast, prefix: &str, class: DeclId) -> String {
     let mut m = Mangler::new(ast, prefix);

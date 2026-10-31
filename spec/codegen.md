@@ -524,12 +524,50 @@ clang 19 `-O0` on both targets. Layouts come from `kiln_abi::vtable`.
   functions. Explicit instantiation definitions (`weak_odr`) are not
   covered yet.
 
+- **Virtual bases** (clang `GetAddressOfBaseClass`,
+  `ItaniumCXXABI::{buildStructorSignature, getImplicitConstructorArgs,
+  EmitDestructorCall}`, `CodeGenVTables::{EmitVTTDefinition,
+  GenerateConstructionVTable}`):
+  - *Conversions* start at the last virtual step of the cast's path
+    (clang `BuildBasePathArray`); the non-virtual offset after it is
+    static. The vbase offset is loaded from the vtable (non-`inbounds`
+    `gep i8` by the vbase-offset offset, `load i64 align 8`), the
+    non-virtual offset added, then one `gep inbounds i8`. A pointer
+    operand is null-checked (branch + `phi`); `this` and lvalues are
+    not. A `final` derived class uses its static vbase offset. The
+    result alignment is clang's `getVBaseAlignment`.
+  - *Structors* of a class with virtual bases are separate C1/C2 (D1/D2)
+    functions, never aliased or replaced. The base-object variant takes
+    `ptr noundef %vtt` after `this`; the prolog spills and reloads it
+    after `this`. C1 constructs the virtual bases first (at their static
+    offsets, `MayOverlap`), then everything C2 does; C2 skips them (and
+    so does C1 of an abstract class). D1 calls D2 with the class's own
+    `@_ZTT` and then destroys the virtual bases in reverse `vbases()`
+    order with their D2; D1 of an abstract class is `llvm.trap`.
+  - *VTT argument* (clang `GetVTTParameter`): in a function with a VTT
+    parameter, `gep inbounds ptr, %vtt, i64 idx` (the parameter itself
+    when delegating or idx = 0); otherwise the constant
+    `getelementptr inbounds ([N x ptr], @_ZTT, i64 0, i64 idx)`, which
+    folds to `@_ZTT` for idx = 0. `idx` is the sub-VTT index of the base
+    subobject (the first VTT component of its construction vtable).
+  - *Vptr stores in a base-object structor* load each address point from
+    the VTT (secondary-vptr index; a non-zero index is a `gep inbounds
+    ptr`); a vptr inside a virtual base is stored at an address computed
+    with the vbase offset from the already-stored vtable.
+  - *VTT and construction vtables* (`_ZTT<class>`, `_ZTC<class><off>_
+    <base>`): `[N x ptr]` and vtable-group constants, `unnamed_addr`,
+    `align 8`, with the vtable's linkage and COMDAT, emitted before the
+    vtable's own initializer (clang `GenerateClassData` order;
+    `GetAddrOfVTT` creates `_ZTV` first). VTT entries are address points
+    with `inrange`; an address point at the end of a vtable (no virtual
+    functions) belongs to that vtable, not the next one.
+  - Thunks with a virtual adjustment (`_ZTv0_n<off>_`) load the
+    vcall offset from the vtable.
+
 **Gaps (owned elsewhere or open):**
-- Virtual bases: VTT (`_ZTT`), construction vtables (`_ZTC`), the VTT
-  parameter of base-variant structors, C1-only virtual base
-  construction, virtual-base conversions and `_ZTv` thunks. The
-  `kiln_abi` layouts exist (`construction_vtable`, `vtt`); codegen still
-  reports a `CodegenError` naming WP-080 (follow-up WP).
+- Virtual bases: the `-1` `__dynamic_cast` offset hint (no public path
+  through a virtual base) is implemented but not covered by the corpus;
+  inheriting constructors of classes with virtual bases are not covered.
 - EH-dependent forms (WP-100): `dynamic_cast` / `typeid` inside cleanup
   scopes use plain `call`s.
 - Member-pointer RTTI (`__pointer_to_member_type_info`), the

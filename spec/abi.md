@@ -628,6 +628,15 @@ points, thunks and method indices are clang's.
   `{ ptr, i64 offset_flags }` per direct base; `__pointer_type_info`
   adds `i32 flags, ptr pointee`. Enums, functions and arrays have no
   extra fields.
+- **VTT** (Itanium §2.6, `kiln_abi::vtable::vtt`): the class's own
+  primary vtable address point, then per non-virtual base with virtual
+  bases its sub-VTT (construction vtable `_ZTC`), then the secondary
+  virtual pointers, then the virtual bases' sub-VTTs. Codegen reads two
+  indices from it: a base subobject's sub-VTT index (the first component
+  pointing into its construction vtable) and a secondary vptr's index
+  (the component for that subobject at address point 0 of the group).
+  The base-object structor of a class with virtual bases takes the VTT
+  as a second, implicit `ptr` parameter after `this`.
 - **Member function pointers to virtual functions**: see 8.6 (x86-64
   `ptr = offset + 1`; AArch64 `adj = 2 * adj + 1`).
 

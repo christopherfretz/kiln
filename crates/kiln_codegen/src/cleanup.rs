@@ -44,9 +44,10 @@ pub(crate) enum Cleanup {
     NrvoDtor { addr: V, record: DeclId, flag: V },
     /// Destroys a field of `this` in a base destructor (`DestroyField`).
     Field { field: DeclId, record: DeclId },
-    /// Destroys a non-virtual base subobject of `this` in a base
-    /// destructor (`CallBaseDtor`).
-    BaseOfThis { base: DeclId, offset: u64 },
+    /// Destroys a base subobject of `this` (`CallBaseDtor`): a
+    /// non-virtual base in a base-object destructor, a virtual base
+    /// (`virt`) in a complete-object one.
+    BaseOfThis { base: DeclId, offset: u64, virt: bool },
 }
 
 /// One scope (clang `EHCleanupScope`, normal cleanups only).
@@ -602,10 +603,10 @@ impl Cg<'_> {
             }
             Cleanup::ArrayDtor { addr, record } => self.array_destroy_at(addr, record),
             Cleanup::Field { field, record } => self.destroy_field_of_this(field, record),
-            Cleanup::BaseOfThis { base, offset } => {
+            Cleanup::BaseOfThis { base, offset, virt } => {
                 let this = self.this_value();
                 let p = self.byte_offset(this, offset);
-                self.call_dtor(base, p, true);
+                self.call_dtor_of(base, p, true, virt);
             }
         }
     }

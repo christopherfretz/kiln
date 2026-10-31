@@ -199,11 +199,6 @@ impl Cg<'_> {
             .is_some_and(|c| self.class_bits(c).contains(DefinitionBits::HAS_VIRTUAL_BASES))
     }
 
-    /// Structor variants that are not supported yet.
-    fn check_structor(&self, _d: DeclId, _v: Structor) -> R<()> {
-        Ok(())
-    }
-
     /// The signature of variant `v` of `first` (`decl_sig`, plus the VTT
     /// parameter of a base-object structor of a class with virtual
     /// bases).
@@ -279,7 +274,6 @@ impl Cg<'_> {
             self.queue_structor(first, v);
             return Ok((V::C(val), Some(f)));
         }
-        self.check_structor(first, v)?;
         if let Some(&(val, f)) = self.sfns.get(&(first, v)) {
             if v == Structor::Base {
                 // Declared by a RAUW'd complete-object reference: a use
@@ -353,13 +347,12 @@ impl Cg<'_> {
                 continue;
             }
             if !self.discardable_fn(d) {
-                self.check_structor(d, v)?;
                 self.emit_structor_def(d, v)?;
                 continue;
             }
             let visible = match v {
                 Structor::Base | Structor::Deleting => self.sfns.contains_key(&(first, v)),
-                _ => self.c1_decl.contains(&first),
+                Structor::Complete => self.c1_decl.contains(&first),
             };
             if visible {
                 if self.squeued.insert((first, v)) {
@@ -377,7 +370,6 @@ impl Cg<'_> {
     pub(crate) fn emit_structor_def(&mut self, d: DeclId, v: Structor) -> R<()> {
         let ast = self.ast;
         let first = ast.first(d);
-        self.check_structor(d, v)?;
         match v {
             Structor::Base => {
                 self.squeued.insert((first, v));
@@ -744,7 +736,7 @@ impl Cg<'_> {
                     continue;
                 }
                 let Some(off) = self.base_offset(rd, b) else { continue };
-                self.push_cleanup(Cleanup::BaseOfThis { base: b, offset: off });
+                self.push_cleanup(Cleanup::BaseOfThis { base: b, offset: off, virt: false });
             }
             let fields: Vec<DeclId> = ast
                 .decls
@@ -774,6 +766,62 @@ impl Cg<'_> {
         self.emit_stmt(body)?;
         self.end_scope(sc);
         Ok(())
+    }
+
+    /// clang `EmitDestructorBody` for the complete-object variant of a
+    /// class with virtual bases: the base-object destructor (with the
+    /// class's own VTT), then the virtual bases in reverse order
+    /// (`EnterDtorCleanups(Dtor_Complete)`).
+    pub(crate) fn emit_complete_dtor_body(&mut self) -> R<()> {
+        let rd = self.f.this_class.expect("destructor class");
+        // An abstract class's complete-object destructor can never be
+        // called.
+        if self.class_bits_of(rd).contains(DefinitionBits::ABSTRACT) {
+            self.emit_trap_unreachable();
+            return Ok(());
+        }
+        let sc = self.begin_scope(false);
+        let def = self.class_def(rd).expect("class definition");
+        let mut vbases = Vec::new();
+        self.collect_vbases(def, &mut vbases, 0);
+        for b in vbases {
+            if !self.has_nontrivial_dtor(b) {
+                continue;
+            }
+            let Some(off) = self.vbase_offset(rd, b) else { continue };
+            self.push_cleanup(Cleanup::BaseOfThis { base: b, offset: off, virt: true });
+        }
+        let this = self.this_value();
+        self.call_dtor_of(rd, this, true, false);
+        self.end_scope(sc);
+        Ok(())
+    }
+
+    /// clang `CXXRecordDecl::vbases()` order: per direct base, its
+    /// virtual bases, then itself if virtual; each class once.
+    fn collect_vbases(&self, r: DeclId, out: &mut Vec<DeclId>, depth: usize) {
+        let ast = self.ast;
+        if depth > 1024 {
+            return;
+        }
+        let bases: Vec<(QualType, bool)> =
+            ast.decls.bases(r, &ast.lists).map(|b| (b.ty, b.is_virtual)).collect();
+        for (bq, virt) in bases {
+            let Some(b) = ast.types.as_record(bq) else { continue };
+            let Some(bd) = self.class_def(b) else { continue };
+            if self.class_bits(bd).contains(DefinitionBits::HAS_VIRTUAL_BASES) {
+                let mut inner = Vec::new();
+                self.collect_vbases(bd, &mut inner, depth + 1);
+                for c in inner {
+                    if !out.iter().any(|&x| ast.first(x) == ast.first(c)) {
+                        out.push(c);
+                    }
+                }
+            }
+            if virt && !out.iter().any(|&x| ast.first(x) == ast.first(bd)) {
+                out.push(bd);
+            }
+        }
     }
 
     /// clang `EmitDestructorBody` for the deleting variant: the
@@ -848,12 +896,19 @@ impl Cg<'_> {
     /// the base-object variant). Errors go to `f.error` (cleanups cannot
     /// fail).
     pub(crate) fn call_dtor(&mut self, record: DeclId, addr: V, base: bool) {
-        if let Err(e) = self.try_call_dtor(record, addr, base) {
+        self.call_dtor_of(record, addr, base, false);
+    }
+
+    /// `call_dtor` where `virt` says the base-object variant destroys a
+    /// virtual base of `*this` (its VTT argument, clang
+    /// `GetVTTParameter(ForVirtualBase)`).
+    pub(crate) fn call_dtor_of(&mut self, record: DeclId, addr: V, base: bool, virt: bool) {
+        if let Err(e) = self.try_call_dtor(record, addr, base, virt) {
             self.f.error.get_or_insert(e);
         }
     }
 
-    fn try_call_dtor(&mut self, record: DeclId, addr: V, base: bool) -> R<()> {
+    fn try_call_dtor(&mut self, record: DeclId, addr: V, base: bool, virt: bool) -> R<()> {
         let ast = self.ast;
         let Some(def) = self.class_def(record) else { return Ok(()) };
         if !self.has_nontrivial_dtor(def) {
@@ -866,7 +921,12 @@ impl Cg<'_> {
         let (callee, fid) = self.structor_ref(dtor, v)?;
         let first = ast.first(dtor);
         let fty = ast.decls.get(first).ty().expect("destructor type");
-        let sig = self.call_sig_this(fty, false, &[], Some(def));
+        let mut sig = self.call_sig_this(fty, false, &[], Some(def));
+        if base && self.structor_has_vbases(first) {
+            sig = self.with_vtt(sig);
+            let vtt = self.vtt_arg(def, virt, false)?;
+            self.f.call_vtt = Some(vtt);
+        }
         self.call_vals(&sig, callee, fid, Some(addr), &[], &[], None, &[])?;
         Ok(())
     }

@@ -2,12 +2,16 @@
 // virtual bases at run time (WP-080): one shared subobject in a
 // diamond, initialized by the most derived class only, conversions to it
 // through the vbase offset in the vtable, null conversions, and virtual
-// dispatch while a base subobject is constructed (construction vtables).
+// dispatch while a base subobject is constructed (construction vtables),
+// and destruction of the shared subobject exactly once, last
+// ([class.dtor]/13), also through a pointer to the virtual base.
 //@ expect: run
 //@ stdout: ctor L:10 R:20
 //@ stdout: D 7 4 5 shared 1
 //@ stdout: E 9 9 6 7
 //@ stdout: null 1
+//@ stdout: ~D ~R ~L ~W
+//@ stdout: ~L ~W
 extern "C" int printf(const char *, ...);
 struct V {
   int v;
@@ -25,6 +29,19 @@ struct R : virtual V {
   R() noexcept : V(20) { seen = f(); }
   int seen;
   virtual int g() noexcept { return r; }
+};
+struct W {
+  virtual ~W() { printf("~W\n"); }
+};
+struct Vd : W {};
+struct Ld : virtual Vd {
+  ~Ld() { printf("~L "); }
+};
+struct Rd : virtual Vd {
+  ~Rd() { printf("~R "); }
+};
+struct Dd : Ld, Rd {
+  ~Dd() { printf("~D "); }
 };
 struct D : L, R {
   int d = 4;
@@ -52,5 +69,10 @@ int main() {
   R *nr = nullptr;
   V *nv = nr;
   printf("null %d\n", nv == nullptr);
+  {
+    Dd dd;
+  }
+  W *w = static_cast<Vd *>(new Ld);
+  delete w;
   return 0;
 }

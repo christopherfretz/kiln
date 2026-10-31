@@ -388,6 +388,11 @@ impl Cg<'_> {
             DeclKind::CXXDestructor if structor == Some(mangle::Structor::Deleting) => {
                 self.emit_deleting_dtor_body(d)?;
             }
+            DeclKind::CXXDestructor
+                if structor == Some(mangle::Structor::Complete) && self.structor_has_vbases(d) =>
+            {
+                self.emit_complete_dtor_body()?;
+            }
             DeclKind::CXXDestructor => self.emit_dtor_body(d, body)?,
             _ => self.emit_body(body)?,
         }
