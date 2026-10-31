@@ -851,7 +851,7 @@ impl Sema<'_, '_> {
         op: kiln_ast::names::OverloadedOperator,
         qualifier: Option<DeclId>,
     ) -> Option<DeclId> {
-        self.prev_candidates_dn(kiln_ast::names::DeclName::operator(op), qualifier)
+        self.prev_candidates_dn(DeclName::operator(op), qualifier)
             .into_iter()
             .find(|&c| self.kind_of(c) == DeclKind::FunctionTemplate)
     }
