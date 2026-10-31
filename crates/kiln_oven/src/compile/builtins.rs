@@ -38,6 +38,36 @@ pub(crate) fn designator_type(ast: &Ast, mut e: ExprId) -> Option<QualType> {
     }
 }
 
+/// Whether evaluating `e` would modify an object, allocate, or throw on
+/// its own (clang `Expr::HasSideEffects` without its treatment of calls:
+/// a called function is evaluated, and a failure in it makes the result
+/// 0). `__builtin_constant_p` of such an argument is 0 without evaluating it.
+fn has_side_effects(ast: &Ast, e: ExprId) -> bool {
+    let exprs = &ast.exprs;
+    let mut stack = vec![e];
+    while let Some(x) = stack.pop() {
+        match exprs.get(x).kind() {
+            ExprKind::UnaryOperator if exprs.unary_op(x).is_inc_dec() => return true,
+            ExprKind::BinaryOperator | ExprKind::CompoundAssignOperator
+                if exprs.binary_op(x).is_assignment() =>
+            {
+                return true;
+            }
+            ExprKind::CXXNewExpr
+            | ExprKind::CXXDeleteExpr
+            | ExprKind::CXXThrowExpr
+            | ExprKind::CoawaitExpr
+            | ExprKind::CoyieldExpr => return true,
+            ExprKind::UnaryExprOrTypeTraitExpr
+            | ExprKind::CXXNoexceptExpr
+            | ExprKind::LambdaExpr
+            | ExprKind::RequiresExpr => {}
+            _ => stack.extend(exprs.children(x, &ast.lists)),
+        }
+    }
+    false
+}
+
 /// `StringRef::getAsInteger(0, APInt)`: an unsigned integer whose radix
 /// is sensed from its prefix (`0x`, `0b`, `0o`, a leading `0`), modulo
 /// 2^128 (only the low bits of a NaN payload are kept).
@@ -120,6 +150,31 @@ impl Compiler<'_> {
             s.emit_site(Op::Builtin, k | sub << 8, &[dst, r[0], r[1], r[2], t[0], t[1]], e, loc);
         };
         match bid {
+            id::CONSTANT_P => {
+                let x = arg(0)?;
+                let k = self.ety(x);
+                let ptr = matches!(self.kind(k), TyKind::Ptr(_));
+                let scalar = ptr
+                    || matches!(
+                        self.kind(k),
+                        TyKind::Bool | TyKind::Int { .. } | TyKind::Float(_) | TyKind::NullPtr
+                    );
+                if !scalar || has_side_effects(self.b.ast(), x) {
+                    // clang `EvaluateBuiltinConstantP`: any other type, or
+                    // an argument with side effects, is not a constant.
+                    self.konst(dst, 0);
+                } else {
+                    // The argument is evaluated speculatively in this
+                    // frame's registers: the region ends in a `Ret` of
+                    // its value, after which `Speculate` resumes at `end`.
+                    let pc = self.emit(Op::Speculate, u32::from(ptr), &[dst, 0, 0]);
+                    let v = self.rv(x);
+                    self.emit(Op::Ret, 1, &[v]);
+                    let end = self.here();
+                    self.patch(pc + 2, v);
+                    self.patch(pc + 3, end);
+                }
+            }
             id::CLZ
             | id::CLZL
             | id::CLZLL

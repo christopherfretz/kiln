@@ -522,7 +522,7 @@ impl Sema<'_, '_> {
     pub fn act_dependent_scope_ref(
         &mut self,
         nns: NnsId,
-        name: Symbol,
+        name: DeclName,
         targs: Option<ArgListId>,
         begin: Loc,
         loc: Loc,

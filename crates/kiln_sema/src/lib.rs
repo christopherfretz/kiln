@@ -311,7 +311,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
         let tu = ast.tu;
         templ::builtins::declare_builtin_templates(&mut ast);
         builtins::declare_int128_typedefs(&mut ast, &target);
-        Sema {
+        let mut s = Sema {
             ast,
             diags,
             target,
@@ -378,7 +378,9 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             srcloc: builtins::SrcLocCache::default(),
             lambdas: Vec::new(),
             lambda_mangle: lambda::ManglingState::default(),
-        }
+        };
+        s.declare_builtin_va_list();
+        s
     }
 
     /// The AST, mutably.

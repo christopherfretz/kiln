@@ -17,7 +17,6 @@ use kiln_lex::{Punct, TokKind, Token};
 use kiln_sema::expr::CastStyle;
 use kiln_sema::{DeclaratorContext, NameClass, OffsetofComponent, SpecialName};
 use kiln_source::Loc;
-use kiln_source::symbol::Symbol;
 
 use crate::decl::is_type_specifier_kw;
 use crate::keywords::Kw;
@@ -294,12 +293,12 @@ impl Parser<'_, '_> {
         } else {
             return false;
         };
-        let text = if n.kind() == ExprKind::CXXDependentScopeMemberExpr {
-            let name = self.s.ast.dependent_member_name(lhs);
-            self.s.decl_name_str(name)
+        let name = if n.kind() == ExprKind::CXXDependentScopeMemberExpr {
+            self.s.ast.dependent_member_name(lhs)
         } else {
-            self.s.ast.symbols().as_str(Symbol::from_index(n.b())).to_owned()
+            self.s.ast.dependent_scope_ref_name(lhs)
         };
+        let text = self.s.decl_name_str(name);
         let d = self.s.diag(id, n.loc()).arg(text);
         self.emit(d);
         true
@@ -398,6 +397,7 @@ impl Parser<'_, '_> {
             Some(Kw::GnuAlignof) => {
                 return self.parse_sizeof_alignof(TraitKind::PreferredAlignOf);
             }
+            Some(Kw::DataSizeof) => return self.parse_sizeof_alignof(TraitKind::DataSizeOf),
             Some(Kw::Extension) => {
                 self.bump();
                 return self.parse_cast_expr();
@@ -467,7 +467,8 @@ impl Parser<'_, '_> {
         Some(self.s.act_on_sizeof_pack_name(name, name_loc, loc, rparen))
     }
 
-    /// `sizeof`/`alignof`/`__alignof` ([expr.sizeof], [expr.alignof]).
+    /// `sizeof`/`alignof`/`__alignof`/`__datasizeof` ([expr.sizeof],
+    /// [expr.alignof]; `__datasizeof` is clang's size without tail padding).
     fn parse_sizeof_alignof(&mut self, kind: TraitKind) -> PExpr {
         let loc = self.bump().span.lo;
         if kind == TraitKind::SizeOf && self.at(Punct::Ellipsis) {
@@ -1062,6 +1063,12 @@ impl Parser<'_, '_> {
         let begin = self.name_begin();
         let qual = self.parse_nested_name_nns().ok()?;
         let template_kw = qual.is_some() && self.eat_kw(Kw::Template).is_some();
+        if let Some(q) = qual
+            && !template_kw
+            && self.at_kw(Kw::Operator)
+        {
+            return self.parse_qualified_operator_id(q, begin);
+        }
         let Some(name) = self.ident() else {
             self.error_here(DiagId::parse_expected_unqualified_id);
             return None;
@@ -1076,7 +1083,13 @@ impl Parser<'_, '_> {
             } else {
                 None
             };
-            return Some(self.s.act_dependent_scope_ref(q.nns, name, targs, begin, nl));
+            return Some(self.s.act_dependent_scope_ref(
+                q.nns,
+                DeclName::ident(name),
+                targs,
+                begin,
+                nl,
+            ));
         }
         let class = self.s.classify_name(name, qual.map(|q| q.ctx));
         if self.at(Punct::Less) && (template_kw || is_template_class(class)) {
@@ -1113,6 +1126,23 @@ impl Parser<'_, '_> {
         }
         let e = self.s.act_on_id_expression(name, nl, qual);
         self.parse_pack_index_suffix(e)
+    }
+
+    /// `N::operator@` / `X<T>::operator T` after the nested-name-specifier
+    /// `q` ([expr.prim.id.qual]/1: a qualified-id's unqualified-id may be
+    /// an operator- or conversion-function-id): `B<float>::operator()(v)`
+    /// in libc++ <__functional/hash.h>.
+    fn parse_qualified_operator_id(&mut self, q: kiln_sema::using::Qualifier, begin: Loc) -> PExpr {
+        let nl = self.loc();
+        let name = self.parse_operator_function_name()?;
+        if self.at(Punct::Less) {
+            self.unsupported("an operator function template-id", nl);
+            return None;
+        }
+        if self.s.is_dependent_ctx(q.ctx) {
+            return Some(self.s.act_dependent_scope_ref(q.nns, name, None, begin, nl));
+        }
+        Some(self.s.act_on_id_expression_dn(name, nl, Some(q)))
     }
 
     /// `pack...[index]` after an id-expression (C++26

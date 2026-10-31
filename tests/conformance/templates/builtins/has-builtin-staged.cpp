@@ -24,6 +24,9 @@
 #if !__has_builtin(__builtin_bit_cast)
 #error __builtin_bit_cast
 #endif
+#if !__has_builtin(__builtin_constant_p)
+#error __builtin_constant_p
+#endif
 #if !__has_builtin(__builtin_is_constant_evaluated)
 #error __builtin_is_constant_evaluated
 #endif
@@ -65,6 +68,9 @@
 #endif
 #if !__has_builtin(__is_array)
 #error __is_array
+#endif
+#if !__has_builtin(__is_assignable)
+#error __is_assignable
 #endif
 #if !__has_builtin(__is_base_of)
 #error __is_base_of
@@ -477,6 +483,6 @@
 #if !__has_constexpr_builtin(__builtin_memcpy) || !__has_constexpr_builtin(__builtin_strlen) || !__has_constexpr_builtin(__builtin_popcount)
 #error constexpr WP-088
 #endif
-#if !__has_constexpr_builtin(__builtin_is_constant_evaluated) || !__has_constexpr_builtin(__builtin_addressof)
+#if !__has_constexpr_builtin(__builtin_is_constant_evaluated) || !__has_constexpr_builtin(__builtin_addressof) || !__has_constexpr_builtin(__builtin_constant_p)
 #error constexpr
 #endif

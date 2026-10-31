@@ -1010,6 +1010,7 @@ impl Parser<'_, '_> {
                 Kw::Sizeof
                     | Kw::Alignof
                     | Kw::GnuAlignof
+                    | Kw::DataSizeof
                     | Kw::Noexcept
                     | Kw::New
                     | Kw::Delete

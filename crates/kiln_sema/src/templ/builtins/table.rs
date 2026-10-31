@@ -182,7 +182,6 @@ pub fn trait_status(t: TypeTrait) -> Status {
         T::IsConstructible
         | T::IsNothrowConstructible
         | T::IsTriviallyConstructible
-        | T::IsAssignable
         | T::IsNothrowAssignable
         | T::IsTriviallyAssignable
         | T::IsConvertible
@@ -231,11 +230,6 @@ const fn f(name: &'static str, status: Status, oven: Oven) -> Row {
 }
 
 const DONE: Status = Status::Done;
-/// The owner of the §9.5 builtin declarations kiln does not declare yet:
-/// WP-088 landed the rest of §9.5; `__builtin_constant_p` has no package
-/// (spec/sema-templates.md §11, "Landed (WP-088)").
-const DECL_WP: Status = Status::Owner("unowned: proposed §9.5 builtin-functions WP");
-const OVEN_WP: &str = "unowned: proposed §9.5 builtin-functions WP";
 
 /// The non-trait rows: §9.3 templates, then §9.4-9.5 functions.
 pub static TABLE: &[Row] = &[
@@ -248,7 +242,7 @@ pub static TABLE: &[Row] = &[
     },
     // §9.4
     f("__builtin_is_constant_evaluated", DONE, Oven::Yes),
-    f("__builtin_constant_p", DECL_WP, Oven::Stub(OVEN_WP)),
+    f("__builtin_constant_p", DONE, Oven::Yes),
     // §9.5 object model
     f("__builtin_addressof", DONE, Oven::Yes),
     f("__builtin_launder", DONE, Oven::Yes),
@@ -406,9 +400,9 @@ mod tests {
         assert_eq!(has_builtin_staged("__is_same"), Some(true));
         assert_eq!(has_builtin_staged("__remove_cvref"), Some(true));
         assert_eq!(has_builtin_staged("__builtin_memcpy"), Some(true));
-        assert_eq!(has_builtin_staged("__builtin_constant_p"), Some(false));
+        assert_eq!(has_builtin_staged("__builtin_constant_p"), Some(true));
         assert_eq!(has_constexpr_builtin_staged("__builtin_strlen"), Some(true));
-        assert_eq!(has_constexpr_builtin_staged("__builtin_constant_p"), Some(false));
+        assert_eq!(has_constexpr_builtin_staged("__builtin_constant_p"), Some(true));
         assert_eq!(has_builtin_staged("__builtin_expect"), None);
         assert_eq!(has_builtin_staged("__make_integer_seq"), Some(true));
     }

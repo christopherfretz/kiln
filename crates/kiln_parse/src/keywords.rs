@@ -34,6 +34,7 @@ keywords! {
     Alignas = "alignas" | "_Alignas";
     Alignof = "alignof" | "_Alignof";
     GnuAlignof = "__alignof" | "__alignof__";
+    DataSizeof = "__datasizeof";
     Asm = "asm" | "__asm" | "__asm__";
     Auto = "auto";
     Bool = "bool" | "_Bool";

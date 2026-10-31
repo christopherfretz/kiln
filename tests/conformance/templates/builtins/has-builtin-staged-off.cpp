@@ -5,9 +5,6 @@
 // Oven side is a stub.
 //@ strict-diags
 //@ xfail(clang): clang 19 implements every row; kiln stages these off
-#if __has_builtin(__builtin_constant_p)
-#error __builtin_constant_p
-#endif
 #if __has_builtin(__can_pass_in_regs)
 #error __can_pass_in_regs
 #endif
@@ -22,9 +19,6 @@
 #endif
 #if __has_builtin(__has_nothrow_move_assign)
 #error __has_nothrow_move_assign
-#endif
-#if __has_builtin(__is_assignable)
-#error __is_assignable
 #endif
 #if __has_builtin(__is_bitwise_cloneable)
 #error __is_bitwise_cloneable
@@ -77,6 +71,6 @@
 #if __has_builtin(__type_pack_element)
 #error __type_pack_element
 #endif
-#if __has_constexpr_builtin(__builtin_bit_cast) || __has_constexpr_builtin(__builtin_constant_p)
+#if __has_constexpr_builtin(__builtin_bit_cast)
 #error constexpr
 #endif

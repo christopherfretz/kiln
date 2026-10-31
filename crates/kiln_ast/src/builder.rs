@@ -385,6 +385,17 @@ impl<'a> AstBuilder<'a> {
         d
     }
 
+    /// A namespace that is neither entered in `ctx`'s lookup table nor
+    /// listed among its members: a context for naming only (clang's
+    /// implicit `namespace std` around `AArch64`'s builtin `__va_list`).
+    pub fn hidden_namespace(&mut self, ctx: DeclId, name: DeclName) -> DeclId {
+        let redecl = self.redecl_link(None);
+        let payload =
+            Payload::Namespace(NamespaceData { redecl, members: Members::default(), flags: 0 });
+        let h = DeclHead::new(ctx, name, Loc::INVALID).flags(DeclFlags::IMPLICIT);
+        self.add_unregistered(h, DeclKind::Namespace, payload, false)
+    }
+
     /// A linkage specification `extern "C" { }` ([dcl.link]). Transparent:
     /// its declarations are named in the enclosing context.
     pub fn linkage_spec(&mut self, ctx: DeclId, lang: LinkageLang, loc: Loc) -> DeclId {

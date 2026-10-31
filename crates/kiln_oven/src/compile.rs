@@ -2319,10 +2319,20 @@ impl Compiler<'_> {
         let t = self.ty(q);
         let v = match kind {
             TraitKind::SizeOf => self.o.types.size(t),
+            // clang's `getTypeInfoDataSizeInChars`: a class's `dsize` (its
+            // size without the tail padding a derived class may reuse),
+            // any other type's size.
+            TraitKind::DataSizeOf => {
+                let ast = self.b.ast();
+                match ast.types.as_record(q).and_then(|r| ast.definition(r)) {
+                    Some(def) => self.b.ensure_layout(def).data_size,
+                    None => self.o.types.size(t),
+                }
+            }
             TraitKind::AlignOf | TraitKind::PreferredAlignOf => {
                 u64::from(self.o.types.info(t).align)
             }
-            _ => {
+            TraitKind::VecStep => {
                 self.unsupported(e);
                 return;
             }

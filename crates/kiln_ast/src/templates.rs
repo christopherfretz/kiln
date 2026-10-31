@@ -14,7 +14,6 @@
 
 use kiln_source::Loc;
 use kiln_source::fx::FxHashMap;
-use kiln_source::symbol::Symbol;
 
 use crate::ast::Ast;
 use crate::builder::{AstBuilder, DeclHead};
@@ -676,6 +675,17 @@ impl Ast {
             ExprKind::CXXDependentScopeMemberExpr,
             "not a CXXDependentScopeMemberExpr"
         );
+        DeclName::from_raw(n.b()).unwrap_or(DeclName::EMPTY)
+    }
+
+    /// The name a `DependentScopeDeclRefExpr` names (an identifier,
+    /// operator-function-id or conversion-function-id,
+    /// [expr.prim.id.qual]/1); empty for any other expression.
+    pub fn dependent_scope_ref_name(&self, e: ExprId) -> DeclName {
+        let n = self.exprs.get(e);
+        if n.kind() != ExprKind::DependentScopeDeclRefExpr {
+            return DeclName::EMPTY;
+        }
         DeclName::from_raw(n.b()).unwrap_or(DeclName::EMPTY)
     }
 
@@ -1445,13 +1455,13 @@ impl AstBuilder<'_> {
         TemplateArg::expr(e, Some(p))
     }
 
-    /// `T::name` / `X<T>::name<args>` in an expression
-    /// ([temp.dep.expr]/3): `DependentScopeDeclRefExpr`, a type-dependent
-    /// lvalue.
+    /// `T::name` / `X<T>::name<args>` / `X<T>::operator()` in an
+    /// expression ([temp.dep.expr]/3): `DependentScopeDeclRefExpr`, a
+    /// type-dependent lvalue (`b` holds the [`DeclName`]).
     pub fn dependent_scope_decl_ref(
         &mut self,
         nns: NnsId,
-        name: Symbol,
+        name: DeclName,
         targs: Option<ArgListId>,
         begin: Loc,
         loc: Loc,
@@ -1466,7 +1476,7 @@ impl AstBuilder<'_> {
             ty,
             loc,
             nns.raw(),
-            name.index(),
+            name.to_raw(),
         );
         self.side(e, None, targs);
         if begin != loc {
