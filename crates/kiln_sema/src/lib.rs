@@ -16,6 +16,7 @@
 
 mod builtins;
 pub mod class;
+mod consteval;
 pub mod constfold;
 pub mod conv;
 pub mod decl;
@@ -115,6 +116,10 @@ pub struct Sema<'a, 'sm> {
     /// odr-uses ([basic.def.odr]/4): resolved at the end of the
     /// full-expression (spec/sema.md §5.2).
     pub(crate) pending_odr: Vec<ExprId>,
+    /// Immediate invocations and references to immediate functions of
+    /// the current full-expression, and why escalated functions are
+    /// immediate (spec/sema.md §5.10).
+    pub(crate) imm: consteval::ImmState,
     /// Classes whose definitions are being processed (incomplete until
     /// their closing brace).
     pub(crate) defining: Vec<DeclId>,
@@ -324,6 +329,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             decltype_calls: Vec::new(),
             immediate: 0,
             pending_odr: Vec::new(),
+            imm: consteval::ImmState::default(),
             defining: Vec::new(),
             enums: Vec::new(),
             local_externs: Vec::new(),
@@ -509,6 +515,15 @@ impl<'a, 'sm> Sema<'a, 'sm> {
         use kiln_ast::types::TypeNames as _;
         let mut s = String::new();
         names::SemaNames::new(self).write_decl_name(d, true, &mut s);
+        s
+    }
+
+    /// The unqualified name of `d` with its template arguments, as clang
+    /// prints a `NamedDecl` argument without the `q` modifier.
+    pub fn unqualified_decl_name(&self, d: DeclId) -> String {
+        use kiln_ast::types::TypeNames as _;
+        let mut s = String::new();
+        names::SemaNames::new(self).write_decl_name(d, false, &mut s);
         s
     }
 

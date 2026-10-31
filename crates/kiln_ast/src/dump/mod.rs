@@ -463,6 +463,15 @@ impl<'a, W: io::Write> Dumper<'a, W> {
             | Node::Fixed(_)
             | Node::SpecRef(_) => {}
         }
+        // A nested immediate invocation has no wrapper in clang.
+        for (k, _) in kids.iter_mut() {
+            while let Node::Expr(x) = *k
+                && self.ast.exprs.get(x).kind() == ExprKind::ConstantExpr
+                && self.ast.exprs.constant_elided(x)
+            {
+                *k = Node::Expr(self.ast.exprs.operand(x));
+            }
+        }
     }
 
     fn decl_children(&self, d: DeclId, kids: &mut Vec<(Node, Option<&'static str>)>) {
@@ -1066,6 +1075,9 @@ impl<'a, W: io::Write> Dumper<'a, W> {
         };
         let spec = f.spec;
         match spec.constexpr_kind() {
+            ConstexprKind::Constexpr if spec.escalated() => {
+                self.line.push_str(" constexpr immediate");
+            }
             ConstexprKind::Constexpr => self.line.push_str(" constexpr"),
             ConstexprKind::Consteval => self.line.push_str(" consteval"),
             ConstexprKind::None if spec.escalated() => self.line.push_str(" immediate"),
@@ -1855,6 +1867,9 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                 // `refers_to_enclosing_variable_or_capture` is not printed:
                 // clang's JSON dump, the oracle's source, omits it.
                 self.non_odr_use(exprs.non_odr_use(e));
+                if n.has(ExprFlags::IMMEDIATE_ESCALATING) {
+                    self.line.push_str(" immediate-escalating");
+                }
             }
             ExprKind::MemberExpr => {
                 self.line.push_str(if n.has(ExprFlags::ARROW) { " ->" } else { " ." });
@@ -1985,7 +2000,9 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                 }
             }
             ExprKind::ConstantExpr => {
-                if let Some(v) = exprs.constant_value(e) {
+                if let Some(v) = exprs.constant_value(e)
+                    && !exprs.constant_value_hidden(e)
+                {
                     self.value(v);
                 }
             }

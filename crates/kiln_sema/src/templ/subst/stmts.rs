@@ -234,7 +234,25 @@ impl Substituter<'_, '_, '_> {
         let kind = self.sema.ast.stmts.if_kind(s);
         let d = *self.sema.ast.stmts.if_data(s);
         if matches!(kind, IfKind::Consteval | IfKind::NotConsteval) {
-            return self.unimplemented("if consteval in templates", loc);
+            // [stmt.if]/4: the branch taken in a constant evaluation is an
+            // immediate function context ([expr.const]/16).
+            let sub = |me: &mut Self, st: Option<StmtId>, immediate: bool| {
+                st.map(|x| {
+                    if immediate {
+                        me.sema.enter_immediate_context();
+                    }
+                    let r = me.sub_stmt(x);
+                    if immediate {
+                        me.sema.exit_immediate_context();
+                    }
+                    r
+                })
+            };
+            let positive = kind == IfKind::Consteval;
+            let then = sub(self, d.then, positive);
+            let then = then.unwrap_or_else(|| self.sema.act_on_null_stmt(loc));
+            let els = sub(self, d.els, !positive);
+            return Ok(self.sema.act_on_if(kind, None, None, None, then, els, loc));
         }
         self.sema.push_scope(ScopeKind::Control);
         let r = (|| {

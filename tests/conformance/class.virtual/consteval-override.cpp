@@ -2,7 +2,7 @@
 // one and vice versa.
 //@ expect: compile-fail
 //@ strict-diags
-//@ xfail(kiln): 'consteval' member functions are not supported yet; the override check is in place
+// Consteval virtual functions are allowed ([class.virtual]/19).
 //@ diag: 15:17 error "non-consteval function 'c' cannot override a consteval function"
 //@ diag: 11:25 note "overridden virtual function is here"
 //@ diag: 16:17 error "consteval function 'n' cannot override a non-consteval function"

@@ -1312,7 +1312,10 @@ impl Parser<'_, '_> {
                 let open = self.bump().span.lo;
                 let mut size = None;
                 if !self.at(Punct::RSquare) {
+                    // An array bound is manifestly constant-evaluated.
+                    self.s.enter_constant_evaluated();
                     size = self.parse_assignment_expr();
+                    self.s.exit_constant_evaluated();
                     if size.is_none() {
                         d.invalid = true;
                         self.skip_until(&[Punct::RSquare], false, false);

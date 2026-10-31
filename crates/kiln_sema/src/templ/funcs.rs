@@ -48,7 +48,14 @@ impl Sema<'_, '_> {
         if !kind.is_function() {
             return Err(());
         }
-        let fspec = self.ast.decls.function(pattern).map(|x| x.spec).unwrap_or_default();
+        // A specialization escalates on its own (P2564): clang does not
+        // carry an escalated pattern's `immediate` over.
+        let fspec = self
+            .ast
+            .decls
+            .function(pattern)
+            .map(|x| x.spec.with_escalated(false))
+            .unwrap_or_default();
         let spec = self.builder().function_spec(
             tmpl,
             args.sugared,
@@ -631,6 +638,10 @@ impl Sema<'_, '_> {
         if ds.constexpr.is_some() {
             fspec = fspec
                 .with_constexpr_kind(kiln_ast::decl::ConstexprKind::Constexpr)
+                .with_implicit_inline(true);
+        } else if ds.consteval.is_some() {
+            fspec = fspec
+                .with_constexpr_kind(kiln_ast::decl::ConstexprKind::Consteval)
                 .with_implicit_inline(true);
         }
         let variadic = self.ast.types.proto(ty).is_some_and(|p| p.info().variadic());

@@ -334,7 +334,9 @@ fn specific_keys(kind: &str) -> Option<&'static [&'static str]> {
         ],
         // `isArrayAsWritten` is not printed (clang's text dump has none).
         "CXXDeleteExpr" => &["isGlobal", "isArray", "isArrayAsWritten", "operatorDeleteDecl"],
-        "DeclRefExpr" => &["referencedDecl", "foundReferencedDecl", "nonOdrUseReason"],
+        "DeclRefExpr" => {
+            &["referencedDecl", "foundReferencedDecl", "nonOdrUseReason", "isImmediateEscalating"]
+        }
         "MemberExpr" => &["name", "isArrow", "referencedMemberDecl", "nonOdrUseReason"],
         // `conversionFunc` is the child's callee (not printed by clang).
         "ImplicitCastExpr" => &["castKind", "path", "isPartOfExplicitCast", "conversionFunc"],

@@ -511,7 +511,16 @@ pub fn constant(types: &Types, value: &str, ty: &str) -> Result<String, String> 
                  not recoverable"
             ));
         }
-        Shape::Array { .. } | Shape::Record(_) => false,
+        // An aggregate of integral, `bool` and null pointer members, as
+        // clang's `APValue::printPretty` spells it (`{1, {2, 3}}`).
+        Shape::Array { .. } | Shape::Record(_) => {
+            value.starts_with('{')
+                && value.split(['{', '}', ',']).map(str::trim).all(|t| {
+                    t.is_empty()
+                        || t.parse::<i128>().is_ok()
+                        || matches!(t, "true" | "false" | "nullptr")
+                })
+        }
     };
     if ok {
         Ok(value.to_owned())

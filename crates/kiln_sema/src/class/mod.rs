@@ -321,6 +321,7 @@ impl Sema<'_, '_> {
             }
         } else {
             let e = self.perform_init(fty, init, loc, direct);
+            self.note_default_init_full_expr();
             let e = self.act_on_full_expr(e);
             let _ = self.ast.decls.set_field_init(field, e);
         }

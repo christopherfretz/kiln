@@ -175,6 +175,7 @@ pub(crate) struct Saved {
     cleanup: super::super::CleanupState,
     unevaluated: u32,
     pending_odr: Vec<ExprId>,
+    imm: crate::consteval::SavedImm,
     initializing: Option<DeclId>,
     nsdmi_this: Vec<(DeclId, QualType)>,
     deferring: bool,
@@ -229,6 +230,7 @@ impl Sema<'_, '_> {
             cleanup: std::mem::take(&mut self.cleanup),
             unevaluated: std::mem::take(&mut self.unevaluated),
             pending_odr: std::mem::take(&mut self.pending_odr),
+            imm: self.take_immediate_state(true),
             initializing: self.initializing.take(),
             nsdmi_this: std::mem::take(&mut self.nsdmi_this),
             deferring: std::mem::take(&mut self.deferring_call_ref),
@@ -252,6 +254,7 @@ impl Sema<'_, '_> {
         self.cleanup = saved.cleanup;
         self.unevaluated = saved.unevaluated;
         self.pending_odr = saved.pending_odr;
+        self.restore_immediate_state(saved.imm);
         self.initializing = saved.initializing;
         self.nsdmi_this = saved.nsdmi_this;
         self.deferring_call_ref = saved.deferring;
@@ -950,7 +953,7 @@ impl Sema<'_, '_> {
                 let args = self.ctor_args(m, call.args, call.narrowing)?;
                 let zeroing = call.info.zeroing || call.value_init && !self.is_user_provided(m);
                 let info = ConstructInfo { zeroing, ..call.info };
-                Some(match call.temp_end {
+                let e = match call.temp_end {
                     Some(end) => self.builder().temporary_object(
                         ty,
                         m,
@@ -969,7 +972,8 @@ impl Sema<'_, '_> {
                         loc,
                         call.rparen,
                     ),
-                })
+                };
+                Some(self.check_immediate_invocation(e, m, None))
             }
             Selected::Deleted(m) => {
                 let spec =

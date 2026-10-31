@@ -1,0 +1,79 @@
+TranslationUnitDecl
+|-CXXRecordDecl referenced struct P definition
+| |-FieldDecl referenced a 'int'
+| `-FieldDecl referenced b 'int'
+|-FunctionDecl used consteval mk 'P (int)' implicit-inline
+| |-ParmVarDecl used x 'int'
+| `-CompoundStmt
+|   `-ReturnStmt
+|     `-InitListExpr 'P'
+|       |-ImplicitCastExpr 'int' <LValueToRValue>
+|       | `-DeclRefExpr 'int' lvalue ParmVar 'x' 'int'
+|       `-BinaryOperator 'int' '+'
+|         |-ImplicitCastExpr 'int' <LValueToRValue>
+|         | `-DeclRefExpr 'int' lvalue ParmVar 'x' 'int'
+|         `-IntegerLiteral 'int' 1
+|-FunctionDecl used consteval sum 'int (P)' implicit-inline
+| |-ParmVarDecl used p 'P'
+| `-CompoundStmt
+|   `-ReturnStmt
+|     `-BinaryOperator 'int' '+'
+|       |-ImplicitCastExpr 'int' <LValueToRValue>
+|       | `-MemberExpr 'int' lvalue .a
+|       |   `-DeclRefExpr 'P' lvalue ParmVar 'p' 'P'
+|       `-ImplicitCastExpr 'int' <LValueToRValue>
+|         `-MemberExpr 'int' lvalue .b
+|           `-DeclRefExpr 'P' lvalue ParmVar 'p' 'P'
+|-VarDecl referenced k 'const int' constexpr cinit value=5
+| `-ConstantExpr 'int'
+|   `-CallExpr 'int'
+|     |-ImplicitCastExpr 'int (*)(P)' <FunctionToPointerDecay>
+|     | `-DeclRefExpr 'int (P)' lvalue Function 'sum' 'int (P)'
+|     `-ConstantExpr 'P'
+|       `-CallExpr 'P'
+|         |-ImplicitCastExpr 'P (*)(int)' <FunctionToPointerDecay>
+|         | `-DeclRefExpr 'P (int)' lvalue Function 'mk' 'P (int)'
+|         `-IntegerLiteral 'int' 2
+`-FunctionDecl run 'int ()'
+  `-CompoundStmt
+    |-DeclStmt
+    | `-VarDecl used p 'P' cinit
+    |   `-ConstantExpr 'P' value={3, 4}
+    |     `-CallExpr 'P'
+    |       |-ImplicitCastExpr 'P (*)(int)' <FunctionToPointerDecay>
+    |       | `-DeclRefExpr 'P (int)' lvalue Function 'mk' 'P (int)'
+    |       `-IntegerLiteral 'int' 3
+    |-DeclStmt
+    | `-VarDecl used s 'int' cinit
+    |   `-ConstantExpr 'int' value=9
+    |     `-CallExpr 'int'
+    |       |-ImplicitCastExpr 'int (*)(P)' <FunctionToPointerDecay>
+    |       | `-DeclRefExpr 'int (P)' lvalue Function 'sum' 'int (P)'
+    |       `-CallExpr 'P'
+    |         |-ImplicitCastExpr 'P (*)(int)' <FunctionToPointerDecay>
+    |         | `-DeclRefExpr 'P (int)' lvalue Function 'mk' 'P (int)'
+    |         `-IntegerLiteral 'int' 4
+    |-DeclStmt
+    | `-VarDecl used t 'int' cinit
+    |   `-ExprWithCleanups 'int'
+    |     `-ImplicitCastExpr 'int' <LValueToRValue>
+    |       `-MemberExpr 'int' xvalue .b
+    |         `-MaterializeTemporaryExpr 'P' xvalue
+    |           `-ConstantExpr 'P' value={5, 6}
+    |             `-CallExpr 'P'
+    |               |-ImplicitCastExpr 'P (*)(int)' <FunctionToPointerDecay>
+    |               | `-DeclRefExpr 'P (int)' lvalue Function 'mk' 'P (int)'
+    |               `-IntegerLiteral 'int' 5
+    `-ReturnStmt
+      `-BinaryOperator 'int' '+'
+        |-BinaryOperator 'int' '+'
+        | |-BinaryOperator 'int' '+'
+        | | |-ImplicitCastExpr 'int' <LValueToRValue>
+        | | | `-MemberExpr 'int' lvalue .a
+        | | |   `-DeclRefExpr 'P' lvalue Var 'p' 'P'
+        | | `-ImplicitCastExpr 'int' <LValueToRValue>
+        | |   `-DeclRefExpr 'int' lvalue Var 's' 'int'
+        | `-ImplicitCastExpr 'int' <LValueToRValue>
+        |   `-DeclRefExpr 'int' lvalue Var 't' 'int'
+        `-ImplicitCastExpr 'int' <LValueToRValue>
+          `-DeclRefExpr 'const int' lvalue Var 'k' 'const int' non_odr_use_constant

@@ -139,10 +139,14 @@ impl Parser<'_, '_> {
         Some(self.s.act_on_throw(operand, loc))
     }
 
-    /// constant-expression ([expr.const]): a conditional-expression.
+    /// constant-expression ([expr.const]): a conditional-expression,
+    /// manifestly constant-evaluated (an immediate function context,
+    /// [expr.const]/16).
     pub fn parse_constant_expr(&mut self) -> PExpr {
-        let lhs = self.parse_cast_expr()?;
-        self.parse_rhs(lhs, prec::COND)
+        self.s.enter_constant_evaluated();
+        let r = self.parse_cast_expr().and_then(|lhs| self.parse_rhs(lhs, prec::COND));
+        self.s.exit_constant_evaluated();
+        r
     }
 
     /// An expression whose operators all have precedence `min` or higher

@@ -16,6 +16,11 @@ use crate::lists::IdLists;
 use crate::mem::{HeapSize, MemReport, VecDims};
 use crate::slot::{AlreadySet, ColdMap};
 
+/// `ConstantExpr` aux bit: a nested immediate invocation (no wrapper in clang).
+const CONSTANT_ELIDED: u8 = 1;
+/// `ConstantExpr` aux bit: the cached value is not clang's (not dumped).
+const CONSTANT_VALUE_HIDDEN: u8 = 2;
+
 /// Expression kinds (spec/ast.md §5.3; clang's class names without the
 /// `Expr`/`Operator` suffix where the dump adds it). The numbering is
 /// stable.
@@ -223,6 +228,9 @@ impl ExprFlags {
     pub const PASS_ALIGN: ExprFlags = ExprFlags(1 << 6);
     /// `CXXDeleteExpr`: written `delete[]`.
     pub const ARRAY_AS_WRITTEN: ExprFlags = ExprFlags(1 << 6);
+    /// `DeclRefExpr`: names an immediate function where that made the
+    /// enclosing function immediate (P2564; dump `immediate-escalating`).
+    pub const IMMEDIATE_ESCALATING: ExprFlags = ExprFlags(1 << 7);
 
     /// The raw bits (already shifted into bits 4..=7).
     pub const fn bits(self) -> u8 {
@@ -1965,6 +1973,58 @@ impl ExprArena {
         }
         n.b = v.raw();
         Ok(())
+    }
+
+    /// Whether the `ConstantExpr` `e` is an immediate invocation nested in
+    /// another one: clang removes its wrapper ([expr.const]/16; the dump
+    /// shows the operand in its place).
+    pub fn constant_elided(&self, e: ExprId) -> bool {
+        self.expect_kind(e, ExprKind::ConstantExpr).aux & CONSTANT_ELIDED != 0
+    }
+
+    /// Whether the cached value of the `ConstantExpr` `e` is kiln's own:
+    /// clang leaves the immediate invocations of a constant-initialized
+    /// variable's initializer unevaluated (the dump omits the value).
+    pub fn constant_value_hidden(&self, e: ExprId) -> bool {
+        self.expect_kind(e, ExprKind::ConstantExpr).aux & CONSTANT_VALUE_HIDDEN != 0
+    }
+
+    /// Marks the `DeclRefExpr` or construction `e` as immediate-escalating
+    /// (P2564): it made the enclosing function immediate.
+    ///
+    /// # Panics
+    /// If `e` is neither a `DeclRefExpr` nor a construction.
+    pub fn set_immediate_escalating(&mut self, e: ExprId) {
+        let n = &mut self.nodes[e.index() as usize];
+        match n.kind {
+            ExprKind::DeclRefExpr => n.bits |= ExprFlags::IMMEDIATE_ESCALATING.bits(),
+            ExprKind::CXXConstructExpr | ExprKind::CXXTemporaryObjectExpr => {
+                n.aux |= 1 << 5;
+            }
+            k => panic!("expected DeclRefExpr or CXXConstructExpr, found {k:?}"),
+        }
+    }
+
+    /// Marks the `ConstantExpr` `e` as a nested immediate invocation
+    /// ([`ExprArena::constant_elided`]).
+    ///
+    /// # Panics
+    /// If `e` is not a `ConstantExpr`.
+    pub fn set_constant_elided(&mut self, e: ExprId) {
+        let n = &mut self.nodes[e.index() as usize];
+        assert!(n.kind == ExprKind::ConstantExpr, "expected ConstantExpr, found {:?}", n.kind);
+        n.aux |= CONSTANT_ELIDED;
+    }
+
+    /// Marks the value of the `ConstantExpr` `e` as kiln's own
+    /// ([`ExprArena::constant_value_hidden`]).
+    ///
+    /// # Panics
+    /// If `e` is not a `ConstantExpr`.
+    pub fn set_constant_value_hidden(&mut self, e: ExprId) {
+        let n = &mut self.nodes[e.index() as usize];
+        assert!(n.kind == ExprKind::ConstantExpr, "expected ConstantExpr, found {:?}", n.kind);
+        n.aux |= CONSTANT_VALUE_HIDDEN;
     }
 
     /// The satisfaction of a non-dependent `ConceptSpecializationExpr` or

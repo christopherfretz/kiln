@@ -750,7 +750,11 @@ impl Sema<'_, '_> {
             rparen,
             ExprFlags::NONE,
         );
-        Some(self.maybe_bind_temporary(call))
+        let call = self.maybe_bind_temporary(call);
+        Some(match method {
+            Some(m) => self.check_immediate_invocation(call, m, None),
+            None => call,
+        })
     }
 
     /// [class.cdtor]/4 (spec/sema-class.md §4.11, clang
@@ -975,6 +979,8 @@ impl Sema<'_, '_> {
             } else {
                 self.exc_spec_needed(d, at);
             }
+            // [expr.const]/18: `&C::f` of an immediate member function.
+            self.note_immediate_ref(operand, d);
         }
         let class_ty = self.tag_type(class).ty();
         let mp = self.ast.types.member_pointer(declared, class_ty);

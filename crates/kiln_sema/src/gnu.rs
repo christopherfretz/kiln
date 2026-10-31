@@ -23,6 +23,7 @@ use crate::target;
 #[derive(Debug)]
 pub struct StmtExprScope {
     outer_odr: Vec<ExprId>,
+    outer_imm: crate::consteval::SavedImm,
 }
 
 /// One part of a `__builtin_offsetof` designator (clang
@@ -67,7 +68,10 @@ impl Sema<'_, '_> {
     /// full-expressions, so the enclosing one's pending odr-uses are set
     /// aside until [`Sema::act_on_stmt_expr`].
     pub fn act_on_start_stmt_expr(&mut self) -> StmtExprScope {
-        StmtExprScope { outer_odr: std::mem::take(&mut self.pending_odr) }
+        StmtExprScope {
+            outer_odr: std::mem::take(&mut self.pending_odr),
+            outer_imm: self.take_immediate_state(false),
+        }
     }
 
     /// The expression statement that ends a statement expression (clang's
@@ -118,6 +122,7 @@ impl Sema<'_, '_> {
     ) -> ExprId {
         let inner = std::mem::replace(&mut self.pending_odr, scope.outer_odr);
         self.pending_odr.extend(inner);
+        self.restore_immediate_state(scope.outer_imm);
         let ty = self.stmt_expr_result(body).map_or(QualType::VOID, |e| self.ast.exprs.get(e).ty());
         self.builder().stmt_expr(body, ty, lparen, rparen)
     }

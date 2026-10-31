@@ -372,6 +372,8 @@ impl Sema<'_, '_> {
         if !self.special.pending_deleted.is_empty() {
             self.flush_pending_deleted();
         }
+        // [expr.const]/16: the immediate invocations are evaluated.
+        self.finish_immediate_invocations(e);
         // [intro.execution]/5: the temporaries of the full-expression are
         // destroyed at its end (spec/sema-class.md §5.3).
         let e = self.finish_cleanups(e);
@@ -755,6 +757,17 @@ impl Sema<'_, '_> {
         self.act_on_id_expression_dn(DeclName::ident(name), loc, qualifier)
     }
 
+    /// clang's `getBeginLoc` of a qualified name is the qualifier's: the
+    /// begin `b` of `DeclRefExpr` `e` named at `loc`.
+    fn set_qualified_begin(&mut self, e: ExprId, begin: Option<Loc>, loc: Loc) {
+        if let Some(b) = begin
+            && b != loc
+            && self.ast.exprs.get(e).kind() == ExprKind::DeclRefExpr
+        {
+            let _ = self.ast.templates.expr_begin.insert(e, b);
+        }
+    }
+
     /// [`Sema::act_on_id_expression`] for any unqualified-id: an
     /// identifier, an operator-function-id or a conversion-function-id
     /// ([expr.prim.id.unqual]/1; WP-121).
@@ -865,16 +878,12 @@ impl Sema<'_, '_> {
             self.check_member_access(via, naming, object, loc);
         }
         if self.is_class_member_ref(d) {
-            return self.implicit_member_ref(d, loc, found.shadow(0), nns);
+            let e = self.implicit_member_ref(d, loc, found.shadow(0), nns);
+            self.set_qualified_begin(e, begin, loc);
+            return e;
         }
         let e = self.build_decl_ref_qualified(d, loc, found.shadow(0), nns);
-        // clang's `getBeginLoc` of a qualified name is the qualifier's.
-        if let Some(b) = begin
-            && b != loc
-            && self.ast.exprs.get(e).kind() == ExprKind::DeclRefExpr
-        {
-            let _ = self.ast.templates.expr_begin.insert(e, b);
-        }
+        self.set_qualified_begin(e, begin, loc);
         self.note_function_name_use(d, e, loc, qualifier.is_none());
         e
     }
@@ -1195,6 +1204,7 @@ impl Sema<'_, '_> {
                 DeclKind::Function | DeclKind::CXXMethod => {
                     let at = self.eloc(e);
                     self.mark_function_referenced(d, at);
+                    self.note_immediate_ref(e, d);
                 }
                 DeclKind::Var | DeclKind::ParmVar => self.pending_odr.push(e),
                 _ => {}
@@ -1202,6 +1212,7 @@ impl Sema<'_, '_> {
         } else if matches!(n.kind(), DeclKind::Function | DeclKind::CXXMethod) {
             let at = self.eloc(e);
             self.exc_spec_needed(d, at);
+            self.note_immediate_ref(e, d);
         }
         e
     }
@@ -2741,7 +2752,14 @@ impl Sema<'_, '_> {
         let at = self.begin_loc(callee);
         let (ty, vk) = self.call_result_of(proto.ret(), loc, named, at);
         let call = self.builder().call(f, &conv_args, ty, vk, loc, rparen, ExprFlags::NONE);
-        self.maybe_bind_temporary(call)
+        let call = self.maybe_bind_temporary(call);
+        match named {
+            Some(d) => {
+                let r = self.ignore_parens(callee);
+                self.check_immediate_invocation(call, d, Some(r))
+            }
+            None => call,
+        }
     }
 
     /// Converts the arguments of a call through a function of type `proto`
@@ -3441,7 +3459,7 @@ impl Sema<'_, '_> {
                 .arg(self.ty_arg(self.ety(e)))
                 .arg(self.ty_arg(ty));
             let site = crate::class::ConstructSite {
-                loc: self.begin_loc(e),
+                loc,
                 temp_end: None,
                 rparen: None,
                 sites: crate::class::DiagSites {

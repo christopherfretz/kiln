@@ -36,7 +36,8 @@ source manager it reports against.
 | `declared_returns` | the declared (placeholder) function type of a deduced-return function, for its redeclarations (§4.3.1) |
 | `group_placeholders` | placeholder types of instantiation-pattern variables whose declarator group passed the one-deduction check, for the re-check at instantiation (§4.3.1) |
 | `pragma_packs` | `#pragma pack` directives seen, with their location and argument text (recorded for the class layout, sema-class.md §6.1) |
-| `immediate` | depth of immediate function contexts ([expr.const]/16) entered by `if consteval` |
+| `immediate` | depth of immediate function contexts ([expr.const]/16) entered by `if consteval` and `consteval` bodies (§5.10) |
+| `imm` | immediate invocations and immediate-function references of the current full-expression, and why escalated functions are immediate (§5.10) |
 | `oven` | the constant evaluator and its budget |
 | `classes`, `implicit_declared`, `delayed_access` (+ `delayed_access_depth`), `cleanup`, `extend_collector`, `unparsed_exc` | class state, sema-class.md §8.3 (`FnState` gains `this_ty`/`this_override`, `Scope` gains `nrvo`) |
 
@@ -1091,6 +1092,71 @@ and aggregate element types.
   default arguments of a user-declared allocation function are not
   used (every parameter must be matched by an argument).
 
+### 5.10 Immediate functions (`consteval.rs`, WP-133)
+clang's `CheckForImmediateInvocation`, `HandleImmediateInvocations` and
+P2564 escalation ([expr.const]/16-20, [dcl.constexpr]/2).
+- **Declarations.** `consteval` is accepted on functions, member
+  functions, constructors, conversion functions, lambdas (`[]()
+  consteval {}`) and function templates, and dumped as clang does
+  (`consteval`; an escalated function is `constexpr immediate`, a
+  lambda's escalated `__invoke` `implicit immediate`). Errors: on a
+  variable or field (`consteval can only be used in function
+  declarations`), a destructor, `main`, a parameter (`function parameter
+  cannot be constexpr|consteval|constinit`), with `constexpr`, and a
+  redeclaration that disagrees. A consteval virtual function is allowed
+  ([class.virtual]/19). `FnSpec::is_immediate()` (consteval or
+  escalated) is what codegen skips.
+- **Immediate function context** ([expr.const]/16): a consteval body,
+  the constant-evaluated branch of `if consteval`, an unevaluated
+  operand, and the manifestly constant-evaluated contexts the parser
+  brackets with `enter/exit_constant_evaluated` (`static_assert`,
+  array bounds, template arguments, the `if constexpr` condition,
+  `parse_constant_expr`). Nothing is wrapped or checked there.
+- **Invocations.** Building a call, member call, operator call or
+  construction of an immediate function outside such a context wraps
+  it in an unvalued `ConstantExpr` and records it as a candidate
+  (`check_immediate_invocation`); the callee's `DeclRefExpr` is dropped
+  from the references. `finish_immediate_invocations` runs at the end of
+  every full-expression (`act_on_full_expr`): nested candidates lose
+  their wrapper, the outermost are evaluated with `eval_const`
+  (`EvalKind::Consteval`) and the value stored in the `ConstantExpr`.
+  The initializer of a variable that is constant-initialized keeps its
+  wrappers unvalued (clang's deferred mode). A failure reports `call to
+  consteval|immediate function 'f' is not a constant expression` with
+  the Oven's notes. Default arguments and default member initializers
+  are not checked at their definition (`note_default_init_full_expr`).
+- **References.** A `DeclRefExpr` (or `&C::m`) naming an immediate
+  function that is not the callee of a candidate is `cannot take
+  address of consteval function 'f' outside of an immediate
+  invocation`, with `declared here`.
+- **Escalation** (P2564, [expr.const]/18-20). Immediate-escalating:
+  a lambda call operator, a defaulted special member, a `constexpr`
+  function instantiated from a templated entity, and any templated
+  function while its definition is parsed. In one, a failed invocation
+  or a bad reference makes the function immediate (`FnSpec::escalated`)
+  instead of an error: the failed `ConstantExpr` loses its wrapper and
+  its callee `DeclRefExpr` (or the `CXXConstructExpr`) is flagged
+  `immediate-escalating` (dumped), and the reason is kept for the note
+  `'f' is an immediate function because its body contains a call to ...`
+  on a later failed call of `f`. Successful invocations in it are still
+  wrapped and folded. A specialization starts non-escalated whatever
+  its pattern is; refs already flagged are skipped. A lambda whose call
+  operator escalates gets an escalated `__invoke`.
+- **Templates.** A template definition's non-dependent invocations are
+  checked at the definition (they are shared with every instantiation);
+  dependent ones are built and checked at instantiation, with
+  `in instantiation of ...` notes. A `ConstantExpr` is substituted
+  through to its operand and re-wrapped by the rebuilt call.
+- **Codegen.** A valued `ConstantExpr` lowers to its constant: scalars
+  directly, aggregates by clang 19's `CreateCoercedStore` into the
+  destination (one store per top-level element).
+- Gaps: default-argument and default-member-initializer invocations are
+  not checked where used; functions called only from shared
+  non-dependent template expressions are `referenced`, not `used`; the
+  lambda conversion function returns the escalated `__invoke` without
+  being immediate itself (as clang); `&C::m` inside a member function
+  reports at the name, not the qualifier.
+
 ## 6. Initialization (`init.rs`)
 - **`perform_init(ty, init, direct_list)`** implements [dcl.init]:
   - copy- and direct-initialization of scalars, through the implicit
@@ -1162,8 +1228,9 @@ and aggregate element types.
     `if consteval`, the `else` branch of `if !consteval`) is an
     immediate function context ([expr.const]/16):
     `enter_immediate_context`/`exit_immediate_context` bracket it and
-    `in_immediate_context()` reports it. Nothing consumes it yet: the
-    immediate-invocation checks it relaxes are M3.
+    `in_immediate_context()` reports it, and its immediate invocations
+    are neither wrapped nor checked (§5.10). In a template the branches
+    are substituted the same way at instantiation.
 - **`switch`:**
   - integral promotion of the condition
   - duplicate `case` values (with a note)
@@ -1402,8 +1469,6 @@ unscoped enumeration is reported (spec/oven.md "Integration").
     one, and class-glvalue results
 - **Constant evaluation** (what the Oven supports in M2 is in
   spec/oven.md):
-  - `consteval` and immediate invocations (the immediate function
-    context of `if consteval` is tracked, §7, but not consulted)
   - the discarded statement of `if constexpr` ([stmt.if]/2), with
     templates
   - template arguments (`EvalKind::TemplateArg`)

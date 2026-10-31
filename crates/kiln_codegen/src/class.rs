@@ -8,8 +8,7 @@
 
 use kiln_abi::mangle::{self, Structor};
 use kiln_ast::decl::{
-    ConstexprKind, CtorInitKind, DeclKind, Defaulted, DefinitionBits, FnStorage, TagKind,
-    TemplLinkKind,
+    CtorInitKind, DeclKind, Defaulted, DefinitionBits, FnStorage, TagKind, TemplLinkKind,
 };
 use kiln_ast::expr::{ConstructionKind, ExprFlags, ExprKind, StorageDuration};
 use kiln_ast::stmt::StmtKind;
@@ -185,7 +184,7 @@ impl Cg<'_> {
             ast.decls.function(r).is_some_and(|f| {
                 f.body.is_some()
                     && !matches!(f.templ.get(), Some((TemplLinkKind::Pattern, _)))
-                    && f.spec.constexpr_kind() != ConstexprKind::Consteval
+                    && !f.spec.is_immediate()
             })
         })
     }
@@ -329,7 +328,7 @@ impl Cg<'_> {
         if fd.body.is_none() || matches!(fd.templ.get(), Some((TemplLinkKind::Pattern, _))) {
             return Ok(());
         }
-        if fd.spec.constexpr_kind() == ConstexprKind::Consteval {
+        if fd.spec.is_immediate() {
             return Ok(());
         }
         let first = ast.first(d);

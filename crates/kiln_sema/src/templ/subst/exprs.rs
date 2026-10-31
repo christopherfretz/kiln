@@ -128,6 +128,11 @@ impl Substituter<'_, '_, '_> {
                     None => None,
                 };
                 let r = self.sema.build_decl_ref_qualified(i, loc, None, nns);
+                if n.has(ExprFlags::IMMEDIATE_ESCALATING)
+                    && self.sema.ast.exprs.get(r).kind() == ExprKind::DeclRefExpr
+                {
+                    self.sema.ast.exprs.set_immediate_escalating(r);
+                }
                 if nns.is_some()
                     && let Some(b) = self.sema.ast.templates.expr_begin.get(e).copied()
                     && self.sema.ast.exprs.get(r).kind() == ExprKind::DeclRefExpr

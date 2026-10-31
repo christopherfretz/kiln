@@ -1144,6 +1144,7 @@ impl Sema<'_, '_> {
             return None;
         }
         let e = self.builder().operator_call(op, callee, &conv, ty, vk, loc, end);
-        Some(self.maybe_bind_temporary(e))
+        let e = self.maybe_bind_temporary(e);
+        Some(self.check_immediate_invocation(e, f, None))
     }
 }
