@@ -1256,6 +1256,13 @@ impl Parser<'_, '_> {
         {
             self.parse_special_declarator_id(d);
         }
+        self.parse_declarator_suffixes(d, abstract_ok);
+        self.s.act_on_exit_declarator_scope(entered);
+    }
+
+    /// The array and function declarator suffixes after a declarator-id
+    /// or parenthesized declarator ([dcl.array], [dcl.fct]).
+    fn parse_declarator_suffixes(&mut self, d: &mut Declarator, abstract_ok: bool) {
         loop {
             if self.at(Punct::LSquare) && !self.at_cxx11_attr() {
                 let open = self.bump().span.lo;
@@ -1289,7 +1296,6 @@ impl Parser<'_, '_> {
                 break;
             }
         }
-        self.s.act_on_exit_declarator_scope(entered);
     }
 
     /// True at the `[` of a structured binding declaration's
@@ -1335,20 +1341,18 @@ impl Parser<'_, '_> {
         let mut ids: Vec<BindingId> = Vec::new();
         let mut closed = true;
         while !self.at(Punct::RSquare) {
-            if !ids.is_empty() {
-                if self.eat(Punct::Comma).is_none() {
-                    if self.ident().is_some() {
-                        let d = self.s.diag(DiagId::parse_expected, self.prev_end()).arg("','");
-                        self.emit(d);
-                    } else {
-                        self.error_here(DiagId::parse_expected_comma_or_rsquare);
-                    }
-                    if self.ident().is_none() {
-                        self.skip_until(&[Punct::RSquare, Punct::Comma], true, false);
-                        if self.eat(Punct::Comma).is_none() {
-                            closed = false;
-                            break;
-                        }
+            if !ids.is_empty() && self.eat(Punct::Comma).is_none() {
+                if self.ident().is_some() {
+                    let d = self.s.diag(DiagId::parse_expected, self.prev_end()).arg("','");
+                    self.emit(d);
+                } else {
+                    self.error_here(DiagId::parse_expected_comma_or_rsquare);
+                }
+                if self.ident().is_none() {
+                    self.skip_until(&[Punct::RSquare, Punct::Comma], true, false);
+                    if self.eat(Punct::Comma).is_none() {
+                        closed = false;
+                        break;
                     }
                 }
             }
@@ -1906,6 +1910,12 @@ impl Parser<'_, '_> {
         {
             self.s.act_on_decomposition_not_alone(l, v);
         }
+        self.expect_declaration_semi(ctx);
+        decls
+    }
+
+    /// The `;` ending a simple-declaration.
+    fn expect_declaration_semi(&mut self, ctx: DeclaratorContext) {
         if self.eat(Punct::Semi).is_none() {
             let id = if ctx == DeclaratorContext::File {
                 DiagId::parse_expected_semi_toplevel
@@ -1917,7 +1927,6 @@ impl Parser<'_, '_> {
                 self.skip_to_semi();
             }
         }
-        decls
     }
 
     /// True at the start of a function-body or `= default` / `= delete`

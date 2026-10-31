@@ -1043,11 +1043,6 @@ impl Sema<'_, '_> {
             .filter(|_| extra.is_some_and(|x| x.template_args.is_none()));
         let n = *self.ast.decls.get(d);
         match n.kind() {
-            DeclKind::Var
-            | DeclKind::ParmVar
-            | DeclKind::Function
-            | DeclKind::EnumConstant
-            | DeclKind::NonTypeTemplateParm => {}
             // [dcl.struct.bind]/1: a binding is not usable before its
             // decomposition is initialized.
             DeclKind::Binding if n.has(DeclFlags::INVALID) => return self.recover_err(&[], loc),
@@ -1057,7 +1052,12 @@ impl Sema<'_, '_> {
                 self.emit(msg);
                 return self.recover_err(&[], loc);
             }
-            DeclKind::Binding => {}
+            DeclKind::Var
+            | DeclKind::ParmVar
+            | DeclKind::Binding
+            | DeclKind::Function
+            | DeclKind::EnumConstant
+            | DeclKind::NonTypeTemplateParm => {}
             DeclKind::IndirectField
                 if self
                     .ast

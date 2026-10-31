@@ -100,11 +100,7 @@ impl Sema<'_, '_> {
             return None;
         }
         let mut invalid = ds.invalid || d.invalid || self.is_error_type(ty);
-        let one_ref = match d.chunks.as_slice() {
-            [] => true,
-            [Chunk::LRef { .. } | Chunk::RRef { .. }] => true,
-            _ => false,
-        };
+        let one_ref = matches!(d.chunks.as_slice(), [] | [Chunk::LRef { .. } | Chunk::RRef { .. }]);
         if ds.base != TypeSpecKind::Auto || d.grouping || !one_ref {
             let id = if d.grouping {
                 DiagId::sema_decomp_decl_parens
@@ -259,7 +255,7 @@ impl Sema<'_, '_> {
             Initializer::Paren(es, ..) => es[0],
             Initializer::List(l) => match l.items[0].value {
                 crate::init::InitValue::Expr(e) => e,
-                _ => return,
+                crate::init::InitValue::List(_) => return,
             },
         };
         self.ast.decls.set_ty(v, ty);
@@ -435,9 +431,8 @@ impl Sema<'_, '_> {
     ) -> Result<(DeclId, NnsId), bool> {
         let (ns, tmpl) = self.std_class_template(trait_name).ok_or(false)?;
         let name = self.template_name_for(tmpl);
-        let t = match self.act_template_id(name, args, loc, loc) {
-            Ok(TemplateIdRef::Type(t)) => t,
-            _ => return Err(false),
+        let Ok(TemplateIdRef::Type(t)) = self.act_template_id(name, args, loc, loc) else {
+            return Err(false);
         };
         let complete = if complain {
             self.require_complete(t, loc)
@@ -471,19 +466,16 @@ impl Sema<'_, '_> {
                 Err(f) => (None, Some(f)),
             }
         };
-        match n.and_then(|n| u64::try_from(n).ok()) {
-            Some(n) => TupleLike::Yes(n),
-            None => {
-                let mut msg = self
-                    .diag(DiagId::sema_decomp_decl_tuple_size_not_constant, loc)
-                    .arg(self.ty_str(dty));
-                if let Some(f) = fail {
-                    msg = Self::with_failure_notes(msg, f);
-                }
-                self.emit(msg);
-                TupleLike::Error
-            }
+        if let Some(n) = n.and_then(|n| u64::try_from(n).ok()) {
+            return TupleLike::Yes(n);
         }
+        let mut msg =
+            self.diag(DiagId::sema_decomp_decl_tuple_size_not_constant, loc).arg(self.ty_str(dty));
+        if let Some(f) = fail {
+            msg = Self::with_failure_notes(msg, f);
+        }
+        self.emit(msg);
+        TupleLike::Error
     }
 
     /// The integral template argument `i` of type `std::size_t` (clang

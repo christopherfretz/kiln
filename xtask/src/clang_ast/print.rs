@@ -330,6 +330,12 @@ impl<'a> Index<'a> {
         if is_template {
             self.template_depth -= 1;
         }
+        self.note_decl(n, k);
+    }
+
+    /// Records the bit-fields, bindings, records, aliases and enumerations
+    /// the printer looks up by id or name.
+    fn note_decl(&mut self, n: &'a Json, k: &str) {
         match k {
             "FieldDecl" if flag(n, "isBitfield") => {
                 self.bitfields.insert(id(n));
