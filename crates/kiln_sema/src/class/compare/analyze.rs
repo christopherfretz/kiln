@@ -213,7 +213,7 @@ impl Sema<'_, '_> {
             }
             return CmpAnalysis::DELETED;
         }
-        let xi = self.builder().opaque_of(t, ValueCategory::LValue, cx.floc);
+        let xi = self.builder().opaque_value_of(t, ValueCategory::LValue, cx.floc);
         let Some(op) = self.fn_operator(cx.f) else { return CmpAnalysis::DELETED };
         self.visit_binary(cx, op, xi, sub, None)
     }

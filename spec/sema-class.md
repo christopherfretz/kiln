@@ -972,6 +972,7 @@ against `-complete` block by block, in order (abi.md §8.4).
 | `cleanup: CleanupState` | §5.3 |
 | `extend_collector: Option<Vec<ExprId>>` | §5.4 P2718 |
 | `unparsed_exc: FxHashSet<DeclId>` | §2.7 |
+| `uninstantiated_exc: FxHashMap<DeclId, DeclId>` (WP-112) | members of specializations whose dependent `noexcept(expr)` is instantiated when needed: first decl → pattern (sema.md §4.7) |
 | `special: SpecialState` (WP-067a) | pending `= default` checks, pending deleted uses, lazily found deleted implicit members, the definition bits of classes at `}`, fields with an NSDMI (§4) |
 | `FnState.this_ty`, `this_override` | §2.5 |
 | `Scope.nrvo` | §5.5 |
@@ -1272,6 +1273,57 @@ definitions and temporaries. Modules in `kiln_sema/src/class/`:
   reference, `new T(args)` for classes (unowned in sema); template
   mem-initializers (WP-070); codegen and Oven of construction (WP-079,
   WP-076); injected-class-names (§2.2).
+
+**Landed (WP-112).** Member exception specifications, constructor
+selection, and operator ambiguity:
+- *Exception specs*: sema.md §4.7 covers the parser entry point
+  `act_on_start_delayed_exception_spec(f) -> bool`, `exc_spec_needed`,
+  `resolve_exc_for_type`, `resolve_exception_spec(f, at)` (new `at`
+  parameter), lazy instantiation and `FrameKind::ExceptionSpec`.
+  `act_on_exception_spec` no longer reports `sema_unsupported`.
+  `templ/class.rs` makes `inst_owner` and `spec_pattern_class`
+  `pub(crate)` so `except.rs` can find a member's specialization.
+- *Constructor templates are candidates* ([over.match.funcs.general]/8):
+  `overload/ics.rs` `add_found_template` deduces each constructor or
+  member function template against the call's arguments. A
+  specialization that would copy its own class by value is not viable
+  ([class.copy.ctor]/5; clang `isSpecializationCopyingObject`). It
+  fails with `CandidateFailure::IllegalCtor` and the note `candidate
+  template ignored: instantiation would take its own class type by
+  value` (`note_ovl_candidate_illegal_constructor`).
+  `order_template_candidates` runs before the best-viable comparison.
+- *Same and derived class construction*: `construct_from_class` now
+  calls `resolve_ctor`, which runs full overload resolution
+  ([dcl.init.general]/16.6.2.1), instead of a fixed copy/move
+  selection. As a result a constructor template can beat the copy
+  constructor for a derived-class source. The location used for the
+  instantiation note is the entity for direct-init and the expression
+  for copy-init, matching clang. "selecting the constructor is not
+  supported yet" is gone.
+- *Dependent same-class ICS*: `same_dependent_class` ranks a binding
+  from the current instantiation (injected-class-name and `X<T...>`,
+  [temp.dep.type]/1) as an identity or reference binding. Without this,
+  copy and move constructors were ambiguous inside a class template.
+- *Constructor template mem-initializers*: `templ/funcs.rs`
+  `instantiate_function_spec_definition` replays the pattern's
+  mem-initializers, as `templ/class.rs` already did for members of
+  class templates.
+- *Ambiguous operators*: the 84 `<string_view>` errors came from glibc
+  `_ISbit`/`_ISwbit` enumerators being typed as their still-incomplete
+  enumeration. [dcl.enum]/5 pre-brace types (`EnumBuild.pre_types`,
+  `enumerator_pre_brace_type`) fix them. The ambiguity diagnostics and
+  their built-in candidate notes match clang 19
+  (`tests/conformance/over.match.oper/ambiguous.cpp`).
+- *Bad-conversion notes*: `LosesQuals` reads `no known conversion from
+  'A' to 'B'` unless the unqualified types are the same
+  (`same_unqualified_referee`), as clang does.
+- *Not done*:
+  - the AST dump prints `noexcept-unevaluated` where clang prints
+    `noexcept-uninstantiated`;
+  - the AST dump of a constructor template's pattern has no
+    `CXXCtorInitializer`;
+  - an outer record named in its own body is dumped as `referenced`,
+    where clang marks the injected-class-name instead.
 
 ### 8.4 `SemaBridge` (kiln_oven) — public-interface change
 Replace `fn vtable(&mut self, record) -> &VTableLayout` with

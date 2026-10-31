@@ -640,6 +640,14 @@ impl Sema<'_, '_> {
             if n.flags().contains(DeclFlags::IMPLICIT) {
                 continue;
             }
+            // A friend function defined in the class is a member of the
+            // list as well as its `FriendDecl`'s target; the
+            // `FriendDecl` redeclares it.
+            if n.kind() == DeclKind::Function
+                && n.misc().friend() != kiln_ast::decl::FriendKind::None
+            {
+                continue;
+            }
             let r = sub.member(m);
             if let Ok(Some(x)) = r {
                 sub.member_link(x, m);
@@ -898,7 +906,7 @@ impl Sema<'_, '_> {
     /// The class definition specialization `spec` of `tmpl` was
     /// instantiated from: the matched partial specialization's
     /// ([temp.spec.partial.match]) or the primary template's.
-    fn spec_pattern_class(&self, spec: DeclId, tmpl: DeclId) -> Option<DeclId> {
+    pub(crate) fn spec_pattern_class(&self, spec: DeclId, tmpl: DeclId) -> Option<DeclId> {
         let from = self.ast.spec_info(spec).map(|(_, s)| s.from);
         if let Some(from) = from.filter(|&f| self.ast.partial_spec_info(f).is_some()) {
             return self.ast.definition(from);
@@ -908,7 +916,7 @@ impl Sema<'_, '_> {
 
     /// The class template specialization member `f` was instantiated
     /// with.
-    fn inst_owner(&self, f: DeclId) -> Option<DeclId> {
+    pub(crate) fn inst_owner(&self, f: DeclId) -> Option<DeclId> {
         let mut c = self.ast.decls.lexical_ctx(f).or_else(|| self.ast.decls.get(f).ctx());
         while let Some(x) = c {
             if self.ast.spec_info(x).is_some() {
@@ -982,6 +990,13 @@ impl Substituter<'_, '_, '_> {
     fn member(&mut self, m: DeclId) -> Result<Option<DeclId>, SubstFail> {
         let n = *self.sema.ast.decls.get(m);
         let loc = n.loc();
+        // A typedef member diagnosed as a redefinition in the pattern is
+        // not instantiated (clang skips invalid members), so it is not
+        // diagnosed again.
+        if matches!(n.kind(), DeclKind::Typedef | DeclKind::TypeAlias) && n.has(DeclFlags::INVALID)
+        {
+            return Ok(None);
+        }
         Ok(Some(match n.kind() {
             DeclKind::Field => self.field_decl(m)?,
             DeclKind::Var if self.defers_init(m) => self.deferred_static_member(m)?,

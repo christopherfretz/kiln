@@ -1,4 +1,5 @@
 //@ expect: compile-ok
+//@ xfail(kiln): `__is_convertible` is not implemented (WP-068a); this passed only through the WP-073 "assumed satisfied" fallback that WP-109 removed
 // [concepts.lang]-style concepts over type traits.
 template <class T, class U> concept same_as = __is_same(T, U) && __is_same(U, T);
 template <class From, class To> concept convertible_to =

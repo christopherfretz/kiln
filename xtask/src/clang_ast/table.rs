@@ -92,6 +92,7 @@ pub const TABLE: &[(&str, Disposition)] = &[
     ("CXXDefaultInitExpr", Keep),
     ("CXXBindTemporaryExpr", Keep),
     ("MaterializeTemporaryExpr", Keep),
+    ("CXXStdInitializerListExpr", Keep),
     ("ExprWithCleanups", Keep),
     ("CXXTypeidExpr", Keep),
     ("CXXParenListInitExpr", Keep),
@@ -182,8 +183,8 @@ pub const TABLE: &[(&str, Disposition)] = &[
     ("IndirectGotoStmt", Unsupported(NOT_M2)),
     ("AttributedStmt", Unsupported("attributes are not in the M2 dump")),
     ("CXXForRangeStmt", Unsupported(NOT_M2)),
-    ("CXXTryStmt", Unsupported(NOT_M2)),
-    ("CXXCatchStmt", Unsupported(NOT_M2)),
+    ("CXXTryStmt", Keep),
+    ("CXXCatchStmt", Keep),
     ("GCCAsmStmt", Unsupported(NOT_M2)),
     ("CoreturnStmt", Unsupported(NOT_M2)),
     ("CoroutineBodyStmt", Unsupported(NOT_M2)),
@@ -193,7 +194,6 @@ pub const TABLE: &[(&str, Disposition)] = &[
     ("CXXNewExpr", Keep),
     ("CXXDeleteExpr", Keep),
     ("CXXNoexceptExpr", Keep),
-    ("CXXStdInitializerListExpr", Unsupported(NOT_M2)),
     ("CXXRewrittenBinaryOperator", Keep),
     ("UnresolvedMemberExpr", Unsupported("member function template names are not in the dump yet")),
     // The parameter (reprinted) then the replacement (spec/ast-dump.md §5).
@@ -326,7 +326,7 @@ fn specific_keys(kind: &str) -> Option<&'static [&'static str]> {
         // `isArrayAsWritten` is not printed (clang's text dump has none).
         "CXXDeleteExpr" => &["isGlobal", "isArray", "isArrayAsWritten", "operatorDeleteDecl"],
         "DeclRefExpr" => &["referencedDecl", "foundReferencedDecl", "nonOdrUseReason"],
-        "MemberExpr" => &["name", "isArrow", "referencedMemberDecl"],
+        "MemberExpr" => &["name", "isArrow", "referencedMemberDecl", "nonOdrUseReason"],
         // `conversionFunc` is the child's callee (not printed by clang).
         "ImplicitCastExpr" => &["castKind", "path", "isPartOfExplicitCast", "conversionFunc"],
         "CStyleCastExpr"
@@ -361,6 +361,7 @@ fn specific_keys(kind: &str) -> Option<&'static [&'static str]> {
         ],
         "CXXInheritedCtorInitExpr"
         | "CXXMemberCallExpr"
+        | "CXXStdInitializerListExpr"
         | "CXXDefaultArgExpr"
         | "ArrayInitLoopExpr"
         | "ArrayInitIndexExpr"
@@ -393,8 +394,8 @@ fn specific_keys(kind: &str) -> Option<&'static [&'static str]> {
         "TemplateTypeParmDecl" => &["tagUsed", "depth", "index", "isParameterPack", "defaultArg"],
         "NonTypeTemplateParmDecl" => &["type", "depth", "index", "isParameterPack", "defaultArg"],
         "TemplateTemplateParmDecl" => &["depth", "index", "isParameterPack", "defaultArg"],
-        // `satisfied` (a non-dependent requires-expression) is rejected by
-        // the printer: kiln does not evaluate requires-expressions yet.
+        // `satisfied` (a non-dependent requires-expression) prints as
+        // `satisfied`/`unsatisfied`; a requirement's own is dropped.
         "RequiresExpr" => &["satisfied"],
         "SimpleRequirement" | "TypeRequirement" | "NestedRequirement" => {
             &["isDependent", "satisfied"]
@@ -423,7 +424,7 @@ fn specific_keys(kind: &str) -> Option<&'static [&'static str]> {
         "SwitchStmt" => &["hasInit", "hasVar"],
         "WhileStmt" => &["hasVar"],
         "CompoundStmt" | "DeclStmt" | "NullStmt" | "ReturnStmt" | "BreakStmt" | "ContinueStmt"
-        | "DefaultStmt" | "CaseStmt" | "DoStmt" | "ForStmt" => &[],
+        | "DefaultStmt" | "CaseStmt" | "DoStmt" | "ForStmt" | "CXXTryStmt" | "CXXCatchStmt" => &[],
         _ => return None,
     })
 }
@@ -479,6 +480,7 @@ pub const CLASS_KINDS: &[&str] = &[
     "CXXDefaultInitExpr",
     "CXXBindTemporaryExpr",
     "MaterializeTemporaryExpr",
+    "CXXStdInitializerListExpr",
     "ExprWithCleanups",
     "CXXTypeidExpr",
     "CXXParenListInitExpr",
@@ -583,6 +585,8 @@ pub const M2_KINDS: &[&str] = &[
     "WhileStmt",
     "DoStmt",
     "ForStmt",
+    "CXXTryStmt",
+    "CXXCatchStmt",
 ];
 
 /// Counts of table entries by disposition: (keep, drop, unsupported).

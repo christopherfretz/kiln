@@ -156,6 +156,11 @@ impl Sema<'_, '_> {
                 );
                 continue;
             }
+            // A template-id names only the templates ([temp.arg.explicit]/4;
+            // clang's `AddOverloadedCallCandidates`).
+            if m.targs.is_some() {
+                continue;
+            }
             self.add_candidate(&mut set, d, f, CandidateKind::Method, IcsOptions::NONE);
         }
         self.order_template_candidates(&mut set);

@@ -100,7 +100,7 @@ impl Sema<'_, '_> {
             None => self.ast.decls.set_flags(d, DeclFlags::INVALID),
         }
         self.pop_synth(saved);
-        self.resolve_exception_spec(d);
+        self.resolve_exception_spec(d, use_loc);
     }
 
     /// The defaulted comparison to define for a use of `f`: the

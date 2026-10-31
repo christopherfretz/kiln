@@ -129,6 +129,11 @@ impl Sema<'_, '_> {
         let n = *self.ast.exprs.get(e);
         if matches!(n.kind(), ExprKind::DeclRefExpr | ExprKind::MemberExpr) {
             let d = self.ast.exprs.decl(e);
+            // An enumerator inside its enumeration's body has the type
+            // of its initializing value ([dcl.enum]/5).
+            if let Some(t) = self.enumerator_pre_brace_type(d) {
+                return t;
+            }
             if let Some(t) = self.ast.decls.get(d).ty() {
                 return t;
             }

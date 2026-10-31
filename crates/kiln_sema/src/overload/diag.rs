@@ -37,7 +37,9 @@ fn lost_quals(q: Quals, joiner: &str) -> (String, bool) {
 impl Sema<'_, '_> {
     /// The candidate kind phrase of clang's `select_ovl_candidate_kind`:
     /// "function", "constructor (the implicit copy constructor)", ...
-    pub(crate) fn ovl_kind_str(&self, c: &Candidate) -> String {
+    /// `oper_fn`: a non-member operator candidate, whose first operand
+    /// is its first argument.
+    pub(crate) fn ovl_kind_str(&self, c: &Candidate, oper_fn: bool) -> String {
         let f = c.func();
         let implicit = self.ast.decls.get(f).has(DeclFlags::IMPLICIT);
         let base = match c.kind {
@@ -55,7 +57,7 @@ impl Sema<'_, '_> {
             },
             _ => "function",
         };
-        if let Some(desc) = self.spec_desc(c) {
+        if let Some(desc) = self.spec_desc(c, oper_fn) {
             format!("{base} {desc}")
         } else if c.template.is_some() {
             format!("{base} template")
@@ -69,7 +71,7 @@ impl Sema<'_, '_> {
     /// parameter of non-dependent type was checked before the
     /// specialization was formed (CWG1391), so that note names the
     /// template.
-    fn spec_desc(&self, c: &Candidate) -> Option<String> {
+    fn spec_desc(&self, c: &Candidate, oper_fn: bool) -> Option<String> {
         let f = c.func();
         if !self.is_function_spec(f) {
             return None;
@@ -77,12 +79,19 @@ impl Sema<'_, '_> {
         let (_, info) = self.ast.spec_info(f)?;
         let (tmpl, args) = (info.template, info.args);
         if let CandidateFailure::BadConversion { arg } = c.failure
-            && arg != u16::MAX
+            && (arg != u16::MAX || oper_fn)
             && let Some(pattern) = c.template.and_then(|t| self.templated_function(t))
         {
             let (ptys, _) = self.proto_param_types(pattern);
-            let skip = usize::from(self.has_explicit_object(f));
-            if ptys.get(usize::from(arg) + skip).is_some_and(|&p| !self.is_dependent_type(p)) {
+            let param = if oper_fn {
+                // The written operand, in the parameter order of a
+                // reversed candidate.
+                let slot = if arg == u16::MAX { 0 } else { usize::from(arg) + 1 };
+                if c.rewrite.is_reversed() { 1 - slot.min(1) } else { slot }
+            } else {
+                usize::from(arg) + usize::from(self.has_explicit_object(f))
+            };
+            if ptys.get(param).is_some_and(|&p| !self.is_dependent_type(p)) {
                 return None;
             }
         }
@@ -110,6 +119,16 @@ impl Sema<'_, '_> {
             }
             BadKind::LvalueRequired => format!("expects an lvalue for {which}"),
             BadKind::RvalueRequired => format!("expects an rvalue for {which}"),
+            BadKind::LosesQuals(_) if !self.same_unqualified_referee(b.from, b.to) => {
+                // clang names the lost qualifiers only for the same type
+                // (`DiagnoseBadConversion`); a derived class is no known
+                // conversion.
+                format!(
+                    "no known conversion from {} to {} for {which}",
+                    self.ty_arg(b.from),
+                    self.ty_arg(b.to)
+                )
+            }
             BadKind::LosesQuals(q) => {
                 let (s, plural) = lost_quals(q, "and");
                 let s = if plural { format!("{s} qualifiers") } else { format!("{s} qualifier") };
@@ -128,6 +147,19 @@ impl Sema<'_, '_> {
                 format!("cannot convert initializer list argument to {}", self.ty_arg(b.to))
             }
         }
+    }
+
+    /// Whether `from` is, cv aside, the type `to` refers or points to.
+    fn same_unqualified_referee(&self, from: kiln_ast::QualType, to: kiln_ast::QualType) -> bool {
+        let t = &self.ast.types;
+        let (from, to) = if t.is_reference(to) {
+            (from, t.pointee(to).unwrap_or(to))
+        } else if let (Some(f), Some(p)) = (t.pointee(from), t.pointee(to)) {
+            (f, p)
+        } else {
+            (from, to)
+        };
+        t.canonical(from).without_quals() == t.canonical(to).without_quals()
     }
 
     /// clang's "cannot convert from base class pointer 'B *' to derived
@@ -157,8 +189,8 @@ impl Sema<'_, '_> {
         let cand = set.cand(c);
         let f = cand.func();
         let loc = self.ast.decls.get(f).loc();
-        let kind = self.ovl_kind_str(cand);
         let oper_fn = set.oper && cand.kind == CandidateKind::Function && set.object.is_some();
+        let kind = self.ovl_kind_str(cand, oper_fn);
         if cand.viable {
             if self.ovl_deleted(f) {
                 let first = self.ast.first(f);
@@ -209,14 +241,24 @@ impl Sema<'_, '_> {
                 let x = set.ics_of(c).get(slot).copied().unwrap_or(Ics::Ellipsis);
                 self.bad_conversion_detail(&x, which)
             }
+            CandidateFailure::ConstraintsNotSatisfied { sat } => {
+                let d = self
+                    .diag(DiagId::note_ovl_candidate_kind_not_viable, loc)
+                    .arg(kind)
+                    .arg("constraints not satisfied");
+                return self.with_sat_notes(d, sat);
+            }
             CandidateFailure::Explicit => {
                 let which = u8::from(cand.kind == CandidateKind::ConvFn);
                 return self.diag(DiagId::note_ovl_candidate_explicit, loc).arg(which);
             }
+            CandidateFailure::IllegalCtor => {
+                let which = u8::from(cand.template.is_some());
+                return self.diag(DiagId::note_ovl_candidate_illegal_constructor, loc).arg(which);
+            }
             CandidateFailure::None
             | CandidateFailure::BadFinalConversion
-            | CandidateFailure::BadDeduction
-            | CandidateFailure::ConstraintsNotSatisfied => {
+            | CandidateFailure::BadDeduction => {
                 return self.diag(DiagId::note_ovl_candidate, loc).arg(kind);
             }
         };
@@ -259,6 +301,17 @@ impl Sema<'_, '_> {
     ) -> Diag {
         for n in self.ovl_notes(set, ambiguous) {
             msg = msg.with_note(n);
+        }
+        if ambiguous {
+            let cands: Vec<_> = set
+                .cands
+                .iter()
+                .filter(|c| c.decl.is_some())
+                .map(|c| (c.func(), c.template))
+                .collect();
+            for n in self.ambiguous_constraint_notes(&cands) {
+                msg = msg.with_note(n);
+            }
         }
         msg
     }

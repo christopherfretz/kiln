@@ -144,7 +144,26 @@ impl Sema<'_, '_> {
                     .next()
                     .map_or(Loc::INVALID, |&e| self.ast.exprs.get(e).loc());
                 match self.act_template_id(name, &[TemplateArg::ty(u)], loc, loc) {
-                    Ok(TemplateIdRef::Type(t)) => Ok(self.replace_placeholder(declared, t)),
+                    Ok(TemplateIdRef::Type(t)) => {
+                        // clang's `BuildStdInitializerList`: the type is
+                        // spelled `std::initializer_list<U>`.
+                        let t = match self.ast.decls.get(il).ctx() {
+                            Some(ns) => {
+                                let ns = self.ast.first(ns);
+                                let n = self
+                                    .ast
+                                    .types
+                                    .nns(kiln_ast::types::Nns::Namespace { prefix: None, ns });
+                                self.ast.types.elaborated(
+                                    kiln_ast::types::TagKeyword::None,
+                                    Some(n),
+                                    t,
+                                )
+                            }
+                            None => t,
+                        };
+                        Ok(self.replace_placeholder(declared, t))
+                    }
                     _ => Err(AutoFail::Error),
                 }
             }

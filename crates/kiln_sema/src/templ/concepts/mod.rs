@@ -56,7 +56,15 @@ pub struct SatCounters {
     pub cache_hits: u64,
     /// Subsumption checks computed.
     pub subsume: u64,
+    /// Atomic constraints evaluated (§8.3 `atom_cache` misses).
+    pub atoms: u64,
+    /// Atomic constraints answered from the `atom_cache`.
+    pub atom_hits: u64,
 }
+
+/// An `atom_cache` key: the atom and the canonical argument list of each
+/// level.
+pub(crate) type AtomKey = (ExprId, Vec<ArgListId>);
 
 /// The concept engine's state (§11.2).
 #[derive(Debug, Default)]
@@ -73,6 +81,17 @@ pub struct ConceptState {
     pub(crate) norm: NormTable,
     pub(crate) normal_forms: FxHashMap<DeclId, Option<NormId>>,
     pub(crate) subsume_cache: FxHashMap<(NormId, NormId), bool>,
+    /// §8.3 `atom_cache`: (atom, canonical arguments) -> (satisfied, the
+    /// records explaining a failure).
+    pub(crate) atom_cache: FxHashMap<AtomKey, (bool, Vec<SatRecord>)>,
+    /// A member of a class template specialization redeclared from a
+    /// constrained member of the pattern (a member template, or a
+    /// function with a trailing requires-clause): the pattern member and
+    /// the specialization's levels. Its constraints stay the pattern's,
+    /// unsubstituted, and are checked with these outer levels (clang
+    /// keeps the pattern's clauses and checks them with the
+    /// instantiation's `MultiLevelTemplateArgumentList`).
+    pub(crate) member_constraints: FxHashMap<DeclId, (DeclId, crate::templ::args::MultiLevelArgs)>,
     /// The type-constraint location of a variable or function declared
     /// with a constrained placeholder (`C auto x`, `C auto f()`).
     pub(crate) placeholder_locs: FxHashMap<DeclId, Loc>,
@@ -90,5 +109,52 @@ impl ConceptState {
         let id = SatId(u32::try_from(self.sats.len()).unwrap_or(u32::MAX));
         self.sats.push(s);
         id
+    }
+}
+
+impl crate::Sema<'_, '_> {
+    /// Checks a constraint-expression where it is written (a concept's
+    /// definition or a requires-clause operand; clang's
+    /// `CheckConstraintExpression`, [temp.constr.atomic]/3): each atomic
+    /// constraint that is not type-dependent must have type `bool`.
+    /// Diagnoses at the atom and returns false when one does not.
+    pub fn check_constraint_expression(&mut self, e: ExprId) -> bool {
+        self.check_constraint_at(e, 0)
+    }
+
+    fn check_constraint_at(&mut self, e: ExprId, depth: u32) -> bool {
+        use kiln_ast::expr::{BinaryOp, ExprKind};
+        let e = self.ignore_paren_imp_casts(e);
+        let n = *self.ast.exprs.get(e);
+        if depth < 256 {
+            match n.kind() {
+                ExprKind::BinaryOperator
+                    if matches!(self.ast.exprs.binary_op(e), BinaryOp::LAnd | BinaryOp::LOr) =>
+                {
+                    let [l, r] = self.ast.exprs.operands(e);
+                    return self.check_constraint_at(l, depth + 1)
+                        && self.check_constraint_at(r, depth + 1);
+                }
+                ExprKind::ExprWithCleanups => {
+                    let o = self.ast.exprs.operand(e);
+                    return self.check_constraint_at(o, depth + 1);
+                }
+                _ => {}
+            }
+        }
+        if self.expr_is_type_dependent(e) || self.has_errors_in(e) {
+            return true;
+        }
+        let ty = self.ety(e);
+        if self.is_error_type(ty)
+            || self.ast.types.builtin(self.ast.types.canonical(ty).without_quals())
+                == Some(kiln_ast::types::BuiltinType::Bool)
+        {
+            return true;
+        }
+        let arg = self.ty_arg(ty);
+        let d = self.diag(DiagId::sema_non_bool_atomic_constraint, n.loc()).arg(arg);
+        self.emit(d);
+        false
     }
 }

@@ -1180,8 +1180,8 @@ impl Parser<'_, '_> {
                 None
             });
             if self.at(Punct::Tilde) || self.at_kw(Kw::Operator) {
-                self.parse_special_declarator_id(d);
                 d.qualifier = qual;
+                self.parse_special_declarator_id(d);
             } else if let Some(n) = self.ident() {
                 let ctor = self.names_constructor(n, last_qual, d.ctx);
                 let l = self.bump().span.lo;
@@ -1193,7 +1193,9 @@ impl Parser<'_, '_> {
                 d.qualifier = qual;
                 if !ctor
                     && self.at(Punct::Less)
-                    && (self.s.has_pending_head() || self.s.has_explicit_spec_head())
+                    && (self.s.has_pending_head()
+                        || self.s.has_explicit_spec_head()
+                        || self.s.has_explicit_inst_head())
                 {
                     self.parse_specialization_declarator_id(d, n, l);
                 }
@@ -1760,7 +1762,9 @@ impl Parser<'_, '_> {
         d: &Declarator,
         decls: &mut Vec<DeclId>,
     ) {
+        self.s.act_function_def_next(true);
         let f = self.s.act_on_declarator(ds, base, d);
+        self.s.act_function_def_next(false);
         // An invalid declarator sema did not make a function (an unknown
         // return type, say): the error is reported; the body is skipped.
         let f = f.filter(|&f| self.s.ast.decls.function(f).is_some());
@@ -1874,24 +1878,13 @@ impl Parser<'_, '_> {
             }
             Some(InitStyle::Call | InitStyle::ParenList) => {
                 let l = self.bump().span.lo;
-                let mut v = Vec::new();
-                if !self.at(Punct::RParen) {
-                    loop {
-                        let Some(e) = self.parse_assignment_expr() else {
-                            self.skip_until(&[Punct::RParen], false, true);
-                            return Err(());
-                        };
-                        // [temp.variadic]/5: `T x(args...)`.
-                        let e = match self.eat(Punct::Ellipsis) {
-                            Some(l) => self.s.act_pack_expansion(e, l),
-                            None => e,
-                        };
-                        v.push(e);
-                        if self.eat(Punct::Comma).is_none() {
-                            break;
-                        }
-                    }
-                }
+                // An expression-list of initializer-clauses: braced lists
+                // and pack expansions ([dcl.init.general], [temp.variadic]/5).
+                let v = if self.at(Punct::RParen) {
+                    Vec::new()
+                } else {
+                    self.parse_expr_list(Punct::RParen).ok_or(())?
+                };
                 let r = self.expect_closing(Punct::RParen, Punct::LParen, l);
                 Ok(Some(Initializer::Paren(v, l, r)))
             }

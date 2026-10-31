@@ -135,9 +135,24 @@ impl TypeContext {
     /// `q` without its top-level qualifiers, including those an array
     /// type carries on its element type (§2.1).
     pub fn unqualified(&mut self, q: QualType) -> QualType {
-        let q = q.without_quals();
-        if !self.canonical_kind(q).is_array() || self.effective_quals(q).is_empty() {
+        let mut q = q.without_quals();
+        if self.effective_quals(q).is_empty() {
             return q;
+        }
+        if !self.canonical_kind(q).is_array() {
+            // Qualifiers buried in sugar (a substituted `const int`, a
+            // `const`-qualified typedef): peel sugar until they surface.
+            loop {
+                let d = self.desugar_once(q);
+                if d == q {
+                    let c = self.canonical(q);
+                    return c.without_quals();
+                }
+                q = d.without_quals();
+                if self.effective_quals(q).is_empty() {
+                    return q;
+                }
+            }
         }
         let t = match self.view(q.ty()) {
             TypeView::ConstantArray(a) => {

@@ -156,6 +156,7 @@ impl Sema<'_, '_> {
             );
             set.found = found;
         }
+        self.order_template_candidates(&mut set);
         let out = self.best_viable(&mut set);
         let r = self.selected_of(set, out);
         // Special-member selection keeps no notes.

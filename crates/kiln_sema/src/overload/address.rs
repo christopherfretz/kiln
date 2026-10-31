@@ -234,7 +234,10 @@ impl Sema<'_, '_> {
             let nns = self.ast.templates.expr_nns.get(ule).copied();
             let loc = self.ast.exprs.get(ule).loc();
             let r = self.finish_overload_ref(d, f, naming, loc, nns, ule, false);
-            self.note_function_name_use(d, r, loc, nns.is_none());
+            // clang diagnoses a deleted function at the start of the
+            // whole operand (its `&` or parenthesis).
+            let at = self.begin_loc(e);
+            self.note_function_name_use(d, r, at, nns.is_none());
             return Some(self.rebuild_over(e, ule, r));
         }
         if !complain {
@@ -243,12 +246,6 @@ impl Sema<'_, '_> {
         let cands = self.ule_candidates(ule);
         let name = self.ast.symbols().as_str(self.ast.unresolved_name(ule)).to_owned();
         let loc = self.begin_loc(ule);
-        if matches.is_empty()
-            && cands.iter().any(|&(d, _)| self.kind_of(d) == DeclKind::FunctionTemplate)
-        {
-            self.templ_unimplemented("the address of a function template", loc);
-            return None;
-        }
         if matches.len() > 1 {
             let msg = self.diag(DiagId::sema_addr_ovl_ambiguous, loc).arg(name);
             let notes: Vec<Diag> =
@@ -275,17 +272,36 @@ impl Sema<'_, '_> {
             ),
         };
         let fn_target = detailed && self.ast.types.is_function(fnty);
-        let notes: Vec<Diag> =
-            cands
-                .iter()
-                .map(|&(d, _)| {
-                    if fn_target {
-                        self.mismatch_note(d, fnty)
-                    } else {
-                        self.plain_candidate_note(d)
-                    }
-                })
-                .collect();
+        let explicit = self.ast.templates.expr_targs.get(ule).copied();
+        // clang `ComplainNoMatchesFound`: with deduction failures, the
+        // non-template candidates in lookup order, then the failed
+        // templates by position ([temp.deduct.funcaddr]; clang's
+        // `DiagnoseBadDeduction`); otherwise every candidate in order.
+        let mut failed: Vec<(Loc, Diag)> = Vec::new();
+        if detailed {
+            for &(d, _) in &cands {
+                if self.kind_of(d) == DeclKind::FunctionTemplate
+                    && let Err(f) = self.deduce_funcaddr(d, explicit, fnty, loc)
+                {
+                    let at = self.ast.decls.get(d).loc();
+                    failed.push((at, self.deduction_note(d, &f, at)));
+                }
+            }
+        }
+        let mut notes: Vec<Diag> = Vec::with_capacity(cands.len());
+        for &(d, _) in &cands {
+            let tmpl = self.kind_of(d) == DeclKind::FunctionTemplate;
+            if tmpl && !failed.is_empty() {
+                continue;
+            }
+            notes.push(if fn_target && !tmpl {
+                self.mismatch_note(d, fnty)
+            } else {
+                self.plain_candidate_note(d)
+            });
+        }
+        failed.sort_by_key(|&(at, _)| at);
+        notes.extend(failed.into_iter().map(|(_, n)| n));
         self.emit(notes.into_iter().fold(msg, Diag::with_note));
         None
     }

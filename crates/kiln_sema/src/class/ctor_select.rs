@@ -67,13 +67,14 @@ impl Sema<'_, '_> {
         };
         let mut set = self.begin_set(kind, loc);
         for &a in args {
-            let info = self.arg_info(a);
+            let info = self.ctor_arg_info(a);
             set.args.push(info);
         }
         self.add_ctor_candidates(&mut set, c, opts, false);
         if let [arg] = args {
             self.add_elision_candidates(&mut set, c, *arg, style);
         }
+        self.order_template_candidates(&mut set);
         let out = self.best_viable(&mut set);
         self.selected_of(set, out)
     }

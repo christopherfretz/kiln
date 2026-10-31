@@ -70,10 +70,16 @@ impl Compiler<'_> {
                     self.emit(Op::Mov, 0, &[dst, t]);
                 }
             }
-            None => self.trap(
-                e,
-                "use of 'this' pointer is only allowed within the evaluation of a call to a 'constexpr' member function",
-            ),
+            None => {
+                // clang `note_constexpr_this`: "implicit use" for a member
+                // named without `this->`.
+                let msg = if self.b.ast().exprs.this_is_implicit(e) {
+                    "implicit use of 'this' pointer is only allowed within the evaluation of a call to a 'constexpr' member function"
+                } else {
+                    "use of 'this' pointer is only allowed within the evaluation of a call to a 'constexpr' member function"
+                };
+                self.trap(e, msg);
+            }
         }
     }
 

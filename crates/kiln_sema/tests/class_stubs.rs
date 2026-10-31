@@ -19,10 +19,6 @@ fn messages(sink: &MemorySink) -> Vec<String> {
     sink.take().into_iter().map(|d| format!("{}: {}", d.level.text_name(), d.message)).collect()
 }
 
-fn unsupported(what: &str) -> Vec<String> {
-    vec![format!("error: {what} is not supported yet")]
-}
-
 /// `struct S {` (or `class S {`): a class being defined, with a member
 /// function `void f()` declared in it.
 fn open_class(s: &mut Sema<'_, '_>, tag: TagKind) -> (DeclId, DeclId) {
@@ -64,11 +60,12 @@ fn calls_every_class_makes_are_silent() {
 }
 
 #[test]
-fn class_features_report_unsupported() {
+fn class_features_once_stubbed_are_silent() {
     with_sema(|s, sink| {
         let (r, f) = open_class(s, TagKind::Struct);
+        // WP-112: member exception specifications are implemented.
         s.act_on_exception_spec(f, ExcSpec::BasicNoexcept);
-        assert_eq!(messages(sink), unsupported("exception specifications of member functions"));
+        assert_eq!(messages(sink), Vec::<String>::new());
         let one = int_lit(s, QualType::INT, 1);
         let init = MemInitInfo {
             id: MemInitId::Ident(name(s, "x").as_ident().unwrap()),

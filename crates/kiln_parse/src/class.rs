@@ -635,7 +635,11 @@ impl Parser<'_, '_> {
         }
         if let Some(t) = parts.noexcept {
             self.begin_replay(t.toks, t.end);
+            // [expr.prim.this]/2: `this` may appear in a member
+            // function's noexcept-specifier.
+            let this = self.s.act_on_start_delayed_exception_spec(f);
             let spec = self.parse_exception_spec();
+            self.s.act_on_end_this_scope(this);
             if !self.at_eof() {
                 self.error_here(DiagId::parse_except_spec_unparsed);
             }
@@ -718,11 +722,9 @@ impl Parser<'_, '_> {
     /// [class.base.init]), at `:`, `try` or `{`; `ctor` if `f` declares a
     /// constructor.
     pub(crate) fn parse_function_definition(&mut self, f: DeclId, ctor: bool) {
-        if self.at_kw(Kw::Try) {
-            self.unsupported("function try blocks", self.loc());
-            self.skip_function_body();
-            return;
-        }
+        // function-try-block ([except.pre]/1): `try ctor-initializer?
+        // compound-statement handler-seq` (clang `ParseFunctionTryBlock`).
+        let fn_try = self.eat_kw(Kw::Try);
         self.trace(|p| format!("start_function_def({})", p.decl_name(f)));
         self.s.act_on_start_function_def(f);
         let had_colon = self.at(Punct::Colon);
@@ -776,6 +778,22 @@ impl Parser<'_, '_> {
             let body = self.s.act_on_compound(&[], l, l);
             self.trace(|p| format!("finish_function_def({})", p.decl_name(f)));
             self.s.act_on_finish_function_def(f, body, l);
+            return;
+        }
+        if let Some(try_loc) = fn_try {
+            let body = self.parse_try_block_common(try_loc);
+            let (body, end) = match body {
+                Some(t) => {
+                    // The `}` of the last handler ends the definition.
+                    let st = &self.s.ast.stmts;
+                    let last = self.s.ast.lists.iter::<kiln_ast::StmtId>(st.try_handlers(t)).last();
+                    let end = last.map_or(try_loc, |h| st.rbrace(st.catch_block(h)));
+                    (t, end)
+                }
+                None => (self.s.act_on_compound(&[], try_loc, try_loc), try_loc),
+            };
+            self.trace(|p| format!("finish_function_def({})", p.decl_name(f)));
+            self.s.act_on_finish_function_def(f, body, end);
             return;
         }
         let (body, rbrace) = self.parse_compound(false);
@@ -1444,6 +1462,17 @@ impl Parser<'_, '_> {
         self.bump();
         if let Some(op) = self.parse_operator_symbol() {
             d.special = Some((SpecialName::Operator(op), loc));
+            if self.at(Punct::Less)
+                && (self.s.has_explicit_spec_head() || self.s.has_explicit_inst_head())
+                && let Some(t) = self.s.operator_function_template(op, d.qualifier)
+            {
+                // `template<> R operator==<int>(...)` ([temp.expl.spec]).
+                let Some((args, _, r)) = self.parse_template_arg_list() else {
+                    d.invalid = true;
+                    return;
+                };
+                d.spec_id = self.s.act_on_specialization_declarator_id(t, &args, loc, r);
+            }
             return;
         }
         if matches!(self.tok().kind, TokKind::StringLit(_)) {

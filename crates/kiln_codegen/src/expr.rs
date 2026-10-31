@@ -13,7 +13,7 @@ use kiln_llvm::{
     IntPredicate, TypeId as LTy, Value,
 };
 
-use crate::cleanup::Cleanup;
+use crate::cleanup::{Cleanup, IrregularPartialArray};
 use crate::fir::{Fir, Op, V};
 use crate::fold::is_local;
 use crate::func::{Addr, CallArg, min_align};
@@ -145,6 +145,10 @@ impl Cg<'_> {
                 None => return err(self.loc_of(e), "default argument not yet parsed"),
             },
             ExprKind::SourceLocExpr => V::C(self.source_loc_value(e)?),
+            ExprKind::CXXThrowExpr => {
+                self.emit_throw(e, true)?;
+                return Ok(None);
+            }
             ExprKind::ExprWithCleanups => {
                 let sc = self.begin_scope(false);
                 let r = self.emit_scalar_opt(self.sub(e));
@@ -1010,6 +1014,8 @@ impl Cg<'_> {
                 self.emit_block(rb, false);
                 self.cond_eval(start, |cg| cg.branch_on_bool(b, t, f))
             }
+            // `br(c ? throw x : y, t, f)` folds to `br(c, throw x, br(y, t, f))`.
+            ExprKind::CXXThrowExpr => self.emit_throw(e, false),
             _ => {
                 let v = self.eval_bool(e)?;
                 self.cond_br(v, t, f);
@@ -1034,7 +1040,9 @@ impl Cg<'_> {
     }
 
     fn opaque_of(&self, e: ExprId) -> Option<Opaque> {
-        let src = self.ast.exprs.opaque_source(e)?;
+        // A handler's copy-initialization source has no source
+        // expression: it is bound by itself.
+        let src = self.ast.exprs.opaque_source(e).unwrap_or(e);
         self.f.opaque.get(&src).copied()
     }
 
@@ -1146,6 +1154,13 @@ impl Cg<'_> {
                     self.get_gvar(d)?
                 };
                 let dq = ast.decls.get(d).ty().unwrap_or(q);
+                let align = self.global_align(dq);
+                Ok(LV { addr: Addr { v: V::C(gval(g)), ty, align }, q, bf: None })
+            }
+            DeclKind::TemplateParamObject => {
+                let g = self.param_object_global(d)?;
+                let dq = ast.decls.get(d).ty().unwrap_or(q);
+                let ty = self.mty(dq);
                 let align = self.global_align(dq);
                 Ok(LV { addr: Addr { v: V::C(gval(g)), ty, align }, q, bf: None })
             }
@@ -1342,7 +1357,17 @@ impl Cg<'_> {
     fn cond_lvalue(&mut self, e: ExprId, c: ExprId, a: ExprId, b: ExprId) -> R<LV> {
         let ast = self.ast;
         if let Some(x) = self.fold_bool(c) {
-            return self.emit_lvalue(if x { a } else { b });
+            let (live, dead) = if x { (a, b) } else { (b, a) };
+            // A live throw-expression: emitted, with an undefined lvalue
+            // (`HandleConditionalOperatorLValueSimpleCase`).
+            if let Some(t) = self.throw_of(live) {
+                self.emit_throw(t, true)?;
+                let dq = ast.exprs.get(dead).ty();
+                let ty = self.mty(dq);
+                let v = V::C(self.m.const_undef(LTy::PTR));
+                return Ok(LV { addr: Addr { v, ty, align: 1 }, q: dq, bf: None });
+            }
+            return self.emit_lvalue(live);
         }
         let lb = self.f.fir.create_block();
         let rb = self.f.fir.create_block();
@@ -1350,19 +1375,46 @@ impl Cg<'_> {
         let start = self.f.fir.cur();
         self.branch_on_bool(c, lb, rb)?;
         self.emit_block(lb, false);
-        let x = self.cond_eval(start, |cg| cg.emit_lvalue(a))?;
+        let x = self.cond_eval(start, |cg| cg.lvalue_or_throw(a))?;
         let lb = self.f.fir.cur().expect("insert point");
-        self.br(cont);
+        if x.is_some() {
+            self.br(cont);
+        }
         self.emit_block(rb, false);
-        let y = self.cond_eval(start, |cg| cg.emit_lvalue(b))?;
+        let y = self.cond_eval(start, |cg| cg.lvalue_or_throw(b))?;
         let rb = self.f.fir.cur().expect("insert point");
         self.emit_block(cont, false);
+        let (x, y) = match (x, y) {
+            (Some(x), Some(y)) => (x, y),
+            (Some(lv), None) | (None, Some(lv)) => return Ok(lv),
+            (None, None) => {
+                return err(self.loc_of(e), "both operands of a glvalue conditional throw");
+            }
+        };
         let p = self
             .f
             .fir
             .push(Op::Phi { ty: LTy::PTR, inc: vec![(x.addr.v, lb), (y.addr.v, rb)] }, LTy::PTR);
         let align = x.addr.align.min(y.addr.align);
         Ok(LV { addr: Addr { v: p, ty: x.addr.ty, align }, q: ast.exprs.get(e).ty(), bf: None })
+    }
+
+    /// `e` through parentheses, if it is a throw-expression.
+    pub(crate) fn throw_of(&self, mut e: ExprId) -> Option<ExprId> {
+        let ast = self.ast;
+        while ast.exprs.get(e).kind() == ExprKind::ParenExpr {
+            e = ast.exprs.operand(e);
+        }
+        (ast.exprs.get(e).kind() == ExprKind::CXXThrowExpr).then_some(e)
+    }
+
+    /// clang `EmitLValueOrThrowExpression`.
+    fn lvalue_or_throw(&mut self, e: ExprId) -> R<Option<LV>> {
+        if let Some(t) = self.throw_of(e) {
+            self.emit_throw(t, false)?;
+            return Ok(None);
+        }
+        Ok(Some(self.emit_lvalue(e)?))
     }
 
     /// The byte offset of element `i` of the IR aggregate `t`.
@@ -1603,6 +1655,8 @@ impl Cg<'_> {
                 let n = ast.exprs.get(c);
                 match n.kind() {
                     ExprKind::ParenExpr => c = ast.exprs.operand(c),
+                    // `f()` with `f` a function-reference template argument.
+                    ExprKind::SubstNonTypeTemplateParmExpr => c = ast.exprs.subst_replacement(c),
                     ExprKind::ImplicitCastExpr
                         if matches!(
                             ast.exprs.cast_kind(c),
@@ -1781,11 +1835,7 @@ impl Cg<'_> {
             AttrList::default().func
         };
         let opts = CallOpts { attrs: AttrList { func, ret, params }, ..CallOpts::default() };
-        let r = self
-            .f
-            .fir
-            .push(Op::Call { fn_ty: sig.fn_ty, callee, args: ir_args, opts: Box::new(opts) }, rty);
-        self.f.calls.push((Fir::last_inst(r), fid, sig.nothrow));
+        let r = self.emit_call_op(sig.fn_ty, callee, ir_args, opts, rty, fid, sig.nothrow);
         if let Some(a) = sret_addr {
             let _ = a;
             return Ok(None);
@@ -1962,14 +2012,17 @@ impl Cg<'_> {
                 r
             }
             ExprKind::MaterializeTemporaryExpr => self.agg_visit(self.sub(e), dest, zeroed),
+            ExprKind::CXXThrowExpr => self.emit_throw(e, true),
             ExprKind::CXXConstructExpr | ExprKind::CXXTemporaryObjectExpr => {
                 self.emit_construct(e, dest, zeroed)
             }
+            ExprKind::CXXStdInitializerListExpr => self.std_initializer_list(e, dest),
             ExprKind::CXXBindTemporaryExpr => {
                 let destructed = std::mem::take(&mut self.f.dest_destructed);
                 self.agg_visit(self.sub(e), dest, zeroed)?;
                 if !destructed && let Some(rd) = self.destructed_class(q) {
-                    self.push_cleanup(Cleanup::Dtor { addr: dest.v, record: rd, base: false });
+                    let c = Cleanup::Dtor { addr: dest.v, record: rd, base: false };
+                    self.push_full_expr_cleanup(c, true, true);
                 }
                 Ok(())
             }
@@ -2139,7 +2192,13 @@ impl Cg<'_> {
             return self.null_init_lvalue(lv, zeroed);
         }
         if self.is_aggregate(lv.q) {
-            return self.emit_agg(e, lv.addr, zeroed);
+            // `AggValueSlot::IsDestructed`: the enclosing object owns the
+            // destruction, so a bound temporary initializing it in place
+            // gets no cleanup of its own.
+            let saved = std::mem::replace(&mut self.f.dest_destructed, true);
+            let r = self.emit_agg(e, lv.addr, zeroed);
+            self.f.dest_destructed = saved;
+            return r;
         }
         let v = self.emit_scalar(e)?;
         self.store_lv(v, lv, false);
@@ -2167,6 +2226,51 @@ impl Cg<'_> {
         Ok(())
     }
 
+    /// clang `AggExprEmitter::VisitCXXStdInitializerListExpr`: the
+    /// object points at its backing array, then holds the length (or a
+    /// pointer past the end) ([dcl.init.list]/5).
+    fn std_initializer_list(&mut self, e: ExprId, dest: Addr) -> R<()> {
+        let ast = self.ast;
+        let q = ast.exprs.get(e).ty();
+        let arr = ast.exprs.operand(e);
+        let Some(rd) = ast.types.as_record(q) else {
+            return err(self.loc_of(e), "std::initializer_list of a non-class type");
+        };
+        let def = ast.definition(rd).unwrap_or(rd);
+        let fields: Vec<DeclId> = ast
+            .decls
+            .members(def)
+            .filter(|&m| ast.decls.get(m).kind() == DeclKind::Field)
+            .collect();
+        let n = match ast.types.canonical_view(ast.exprs.get(arr).ty()) {
+            kiln_ast::types::TypeView::ConstantArray(a) => a.size,
+            _ => return err(self.loc_of(e), "std::initializer_list without a constant array"),
+        };
+        let [f0, f1] = fields.as_slice() else {
+            return err(self.loc_of(e), "std::initializer_list of an unexpected layout");
+        };
+        let (f0, f1) = (*f0, *f1);
+        let a = self.emit_lvalue(arr)?.addr.v;
+        let rty = self.record_ty(rd);
+        let base = Addr { v: dest.v, ty: rty, align: dest.align };
+        let q0 = ast.decls.get(f0).ty().expect("field type");
+        let lv0 = self.field_lvalue(base, f0, q0)?;
+        self.store_scalar(a, lv0.addr, q0);
+        let q1 = ast.decls.get(f1).ty().expect("field type");
+        let lv1 = self.field_lvalue(base, f1, q1)?;
+        let len = i128::from(n);
+        let v = if ast.types.is_pointer(q1) {
+            let elem = ast.types.pointee(q1).unwrap_or(q1);
+            let size = self.size_align(elem).0;
+            self.byte_offset(a, n * size)
+        } else {
+            let t = self.lty(q1);
+            self.icn(t, len)
+        };
+        self.store_scalar(v, lv1.addr, q1);
+        Ok(())
+    }
+
     fn record_init(&mut self, e: ExprId, dest: Addr, zeroed: bool) -> R<()> {
         let ast = self.ast;
         let q = ast.exprs.get(e).ty();
@@ -2191,6 +2295,11 @@ impl Cg<'_> {
         let def = ast.definition(rd).unwrap_or(rd);
         let bases: Vec<_> = ast.decls.bases(def, &ast.lists).collect();
         let mut k = 0usize;
+        // [except.ctor]/3: each initialized base and member is destroyed
+        // if a later initialization throws; the cleanups are deactivated
+        // once the object is complete (`pushDestroyAndDeferDeactivation`,
+        // `CleanupDeactivationScope`).
+        let mut deferred = Vec::new();
         for b in bases {
             if b.is_virtual {
                 return err(self.loc_of(e), "aggregate with a virtual base");
@@ -2208,6 +2317,10 @@ impl Cg<'_> {
             let bdest = Addr { v, ty, align: min_align(dest.align, off) };
             let overlap = self.base_may_overlap(rd, brd, off);
             self.emit_agg_into(init, bdest, overlap)?;
+            if self.has_nontrivial_dtor(brd) {
+                let c = Cleanup::Dtor { addr: v, record: brd, base: false };
+                self.push_deferred_destroy(c, &mut deferred);
+            }
         }
         let fields: Vec<DeclId> =
             ast.decls.members(rd).filter(|&m| ast.decls.get(m).kind() == DeclKind::Field).collect();
@@ -2229,8 +2342,41 @@ impl Cg<'_> {
             } else {
                 self.null_init_lvalue(lv, zeroed)?;
             }
+            if let Some(frd) = self.destructed_class(fq) {
+                let c = if self.array_elem(fq).is_some() {
+                    Cleanup::ArrayDtor { addr: lv.addr, record: frd }
+                } else {
+                    Cleanup::Dtor { addr: lv.addr.v, record: frd, base: false }
+                };
+                self.push_deferred_destroy(c, &mut deferred);
+            }
         }
+        self.deactivate_deferred(deferred);
         Ok(())
+    }
+
+    /// `pushDestroyAndDeferDeactivation`: pushes the normal and EH
+    /// cleanup `c` and records it, with its dominating placeholder, for
+    /// [`Self::deactivate_deferred`].
+    fn push_deferred_destroy(&mut self, c: Cleanup, deferred: &mut Vec<(usize, V)>) {
+        if self.f.fir.cur().is_none() {
+            return;
+        }
+        let z = V::C(self.m.const_bool(false));
+        let dominator =
+            self.f.fir.push(Op::Bin { op: BinOp::Or, flags: Flags::NONE, l: z, r: z }, LTy::I1);
+        self.push_full_expr_cleanup(c, true, true);
+        deferred.push((self.f.cl.depth(), dominator));
+    }
+
+    /// `CleanupDeactivationScope::ForceDeactivate`: deactivates the
+    /// deferred cleanups, innermost first, and drops their placeholders.
+    fn deactivate_deferred(&mut self, deferred: Vec<(usize, V)>) {
+        for (c, dominator) in deferred.into_iter().rev() {
+            let d = Fir::last_inst(dominator);
+            self.deactivate_cleanup_block(c, d);
+            self.f.fir.erase(d);
+        }
     }
 
     /// clang `AggExprEmitter::EmitArrayInit`.
@@ -2244,12 +2390,42 @@ impl Cg<'_> {
         let ety = self.mty(eq);
         let ealign = min_align(dest.align, esz);
         let begin = dest.v;
+        // [except.ctor]/3: the elements initialized so far are destroyed
+        // if a later initializer throws. The EH cleanup reads how far the
+        // initialization got from `arrayinit.endOfInit` and is
+        // deactivated once the array is complete (clang `EmitArrayInit`,
+        // `pushIrregularPartialArrayCleanup`, only when `needsEHCleanup`);
+        // `dominator` stands for clang's `dominatingIP`.
+        let mut partial = None;
+        if let Some(record) = self.destructed_class(eq).filter(|_| self.opts.exceptions) {
+            let z = V::C(self.m.const_bool(false));
+            let dominator =
+                self.f.fir.push(Op::Bin { op: BinOp::Or, flags: Flags::NONE, l: z, r: z }, LTy::I1);
+            let al = self.pref_align(LTy::PTR);
+            let slot = self.f.fir.alloca(LTy::PTR, al);
+            self.store(begin, slot, al, false);
+            let mut depth = 0;
+            let mut inner = eq;
+            while let Some(e) = self.array_elem(inner) {
+                inner = e;
+                depth += 1;
+            }
+            let elem = self.mty(inner);
+            let p =
+                IrregularPartialArray { begin, end_slot: slot, outer: ety, depth, elem, record };
+            self.push_full_expr_cleanup(Cleanup::IrregularPartialArray(Box::new(p)), false, true);
+            partial = Some((self.f.cl.depth(), dominator, slot, al));
+        }
         for (i, &init) in inits.iter().enumerate() {
             let el = if i == 0 {
                 begin
             } else {
                 let c = self.i64c(i as i128);
-                self.gep(ety, begin, vec![c], true)
+                let el = self.gep(ety, begin, vec![c], true);
+                if let Some((_, _, slot, al)) = partial {
+                    self.store(el, slot, al, false);
+                }
+                el
             };
             let lv = LV { addr: Addr { v: el, ty: ety, align: ealign }, q: eq, bf: None };
             self.init_to_lvalue(init, lv, zeroed)?;
@@ -2264,6 +2440,9 @@ impl Cg<'_> {
             if !inits.is_empty() {
                 let c = self.i64c(inits.len() as i128);
                 el = self.gep(ety, el, vec![c], true);
+                if let Some((_, _, slot, al)) = partial {
+                    self.store(el, slot, al, false);
+                }
             }
             let c = self.i64c(i128::from(n_elems));
             let end = self.gep(ety, begin, vec![c], true);
@@ -2272,18 +2451,31 @@ impl Cg<'_> {
             self.emit_block(body, false);
             let cur = self.f.fir.push(Op::Phi { ty: LTy::PTR, inc: vec![(el, entry)] }, LTy::PTR);
             let lv = LV { addr: Addr { v: cur, ty: ety, align: ealign }, q: eq, bf: None };
-            match filler {
-                Some(f) => self.init_to_lvalue(f, lv, false)?,
-                None => self.null_init_lvalue(lv, false)?,
-            }
+            // [class.temporary]/5: the temporaries of each element's
+            // initialization are destroyed before the next one starts.
+            let sc = self.begin_scope(false);
+            let r = match filler {
+                Some(f) => self.init_to_lvalue(f, lv, false),
+                None => self.null_init_lvalue(lv, false),
+            };
+            self.end_scope(sc);
+            r?;
             let one = self.i64c(1);
             let next = self.gep(ety, cur, vec![one], true);
+            if let Some((_, _, slot, al)) = partial {
+                self.store(next, slot, al, false);
+            }
             let done = self.icmp(IntPredicate::Eq, next, end);
             let endb = self.f.fir.create_block();
             self.cond_br(done, endb, body);
             let here = self.f.fir.cur().expect("insert point");
             self.f.fir.add_incoming(Fir::last_inst(cur), next, here);
             self.emit_block(endb, false);
+        }
+        if let Some((c, dominator, _, _)) = partial {
+            let d = Fir::last_inst(dominator);
+            self.deactivate_cleanup_block(c, d);
+            self.f.fir.erase(d);
         }
         Ok(())
     }

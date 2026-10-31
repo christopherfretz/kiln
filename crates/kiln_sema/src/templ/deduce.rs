@@ -796,12 +796,10 @@ impl Sema<'_, '_> {
             TypeView::Function(pf) => {
                 let TypeView::Function(af) = av else { return mismatch(d) };
                 let t = &self.ast.types;
-                let p_pack = t
-                    .params(&pf)
-                    .last()
-                    .is_some_and(|&x| matches!(t.view(x.ty()), TypeView::PackExpansion { .. }));
-                if (pf.num_params() != af.num_params() && !p_pack)
-                    || pf.variadic() != af.variadic()
+                // The parameter counts are compared pair by pair after
+                // the return type (clang: "failed template argument
+                // deduction" for a count mismatch).
+                if pf.variadic() != af.variadic()
                     || pf.info().ref_qual() != af.info().ref_qual()
                     || pf.info().this_quals() != af.info().this_quals()
                 {

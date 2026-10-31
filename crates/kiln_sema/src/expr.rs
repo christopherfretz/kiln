@@ -315,6 +315,7 @@ impl Sema<'_, '_> {
                 | ExprKind::ConstantExpr
                 | ExprKind::MaterializeTemporaryExpr
                 | ExprKind::CXXBindTemporaryExpr
+                | ExprKind::CXXStdInitializerListExpr
                 | ExprKind::ExprWithCleanups
                 | ExprKind::BinaryOperator
                 | ExprKind::CompoundAssignOperator
@@ -525,6 +526,12 @@ impl Sema<'_, '_> {
     /// Converts `e` to `ty` as in `ctx`, diagnosing failure (the result
     /// is then a `RecoveryExpr`).
     pub(crate) fn convert_for_init(&mut self, e: ExprId, ty: QualType, ctx: ConvCtx) -> ExprId {
+        // A braced-init-list argument (`T x({1, 2})`) list-initializes
+        // the parameter ([dcl.init.list]).
+        if let Some(l) = self.take_braced_arg(e) {
+            let to = if self.ast.types.is_reference(ty) { ty } else { conv::strip_cv(self, ty) };
+            return self.init_list_entity(to, &l, l.lbrace);
+        }
         match conv::implicit_convert(self, e, ty, ctx) {
             Ok(x) => x,
             Err(err) => {
@@ -777,10 +784,9 @@ impl Sema<'_, '_> {
                 let valid = found.decls.clone();
                 return self.overload_name_ref(name, &found, &valid, qualifier.is_none(), nns, loc);
             }
-            let decls: Vec<DeclId> = found.decls.clone();
             return self.builder().unresolved_lookup(
                 name,
-                &decls,
+                &lookup_set_order(&found.decls, qualifier.is_none()),
                 qualifier.is_none(),
                 nns,
                 None,
@@ -1076,6 +1082,12 @@ impl Sema<'_, '_> {
             self.ast.decls.set_flags(d, DeclFlags::INVALID);
             return self.recover_err(&[], loc);
         }
+        // The exception specification is part of the type ([dcl.fct]/14):
+        // resolved before the reference takes it (clang's
+        // `DiagnoseUseOfDecl`).
+        if matches!(n.kind(), DeclKind::Function | DeclKind::CXXMethod) {
+            self.resolve_exc_for_type(d, loc);
+        }
         // Re-read: `check_undeduced_use` may have deduced the return type.
         let mut declared = self.ast.decls.get(d).ty().unwrap_or(QualType::ERROR);
         // A pack names its pattern ([temp.variadic]/5): `Ts... x` gives `x`
@@ -1085,6 +1097,15 @@ impl Sema<'_, '_> {
         }
         let ty = if self.ast.decls.builtin_id(d).is_some() {
             QualType::BUILTIN_FN
+        } else if n.kind() == DeclKind::NonTypeTemplateParm
+            && self.ast.types.as_record(declared).is_some()
+        {
+            // [temp.param]/8: an lvalue of type `const T`.
+            self.ast.types.qualify(declared, kiln_ast::types::Quals::CONST)
+        } else if n.kind() == DeclKind::EnumConstant
+            && let Some(t) = self.enumerator_pre_brace_type(d)
+        {
+            t
         } else {
             self.non_reference(declared)
         };
@@ -1114,6 +1135,9 @@ impl Sema<'_, '_> {
                 DeclKind::Var | DeclKind::ParmVar => self.pending_odr.push(e),
                 _ => {}
             }
+        } else if matches!(n.kind(), DeclKind::Function | DeclKind::CXXMethod) {
+            let at = self.eloc(e);
+            self.exc_spec_needed(d, at);
         }
         e
     }
@@ -1498,6 +1522,12 @@ impl Sema<'_, '_> {
                 Err(_) => bad(self, e),
             },
             UnaryOp::Deref => {
+                // A type-dependent operand that is not of an overloadable
+                // type (`*a` for `T (&a)[N]`): the result type is dependent
+                // (clang's `CheckIndirectionOperand`).
+                if self.ast.types.is_dependent(t0) {
+                    return self.builder().dependent_unary(op, e, loc);
+                }
                 let x = conv::decay(self, e);
                 let pt = self.ety(x);
                 let Some(p) =
@@ -2887,6 +2917,9 @@ impl Sema<'_, '_> {
             return self.recover_err(&[base], loc);
         }
         if let Some(e) = self.try_dependent_member(base, name, None, false, loc, arrow) {
+            if op_loc != loc {
+                let _ = self.ast.templates.member_op_loc.insert(e, op_loc);
+            }
             return e;
         }
         // [over.ref]/1: `x->m` on a class `x` is `(x.operator->())->m`.
@@ -3000,7 +3033,26 @@ impl Sema<'_, '_> {
             }
             if q.is_empty() { declared } else { self.ast.types.qualify(declared, q) }
         };
-        self.builder().member(base, f, ty, arrow, loc, None)
+        self.build_member_expr(base, f, ty, arrow, loc, None)
+    }
+
+    /// Builds the `MemberExpr` `base.m`; one built in an unevaluated operand
+    /// is not an odr-use (clang's `getNonOdrUseReasonInCurrentContext` in
+    /// `BuildMemberExpr`).
+    pub(crate) fn build_member_expr(
+        &mut self,
+        base: ExprId,
+        m: DeclId,
+        ty: QualType,
+        arrow: bool,
+        loc: Loc,
+        extra: Option<kiln_ast::expr::DeclRefExtra>,
+    ) -> ExprId {
+        let e = self.builder().member(base, m, ty, arrow, loc, extra);
+        if self.unevaluated > 0 {
+            let _ = self.ast.exprs.set_non_odr_use(e, NonOdrUse::Unevaluated);
+        }
+        e
     }
 
     // -- sizeof / alignof --------------------------------------------------------
@@ -3591,4 +3643,10 @@ pub(crate) struct CallCallee {
     /// A non-member function named by an id-expression: clang reports
     /// arity errors through overload resolution ("no matching function").
     pub(crate) overloadable: bool,
+}
+
+/// An overload set in the order clang lists it: an unqualified lookup
+/// newest first, as for a non-template set (spec/sema-overload.md §2.1).
+fn lookup_set_order(decls: &[DeclId], unqualified: bool) -> Vec<DeclId> {
+    if unqualified { decls.iter().rev().copied().collect() } else { decls.to_vec() }
 }

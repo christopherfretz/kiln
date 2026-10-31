@@ -1,5 +1,4 @@
 // [temp.deduct.call]/1: a braced list deduces through std::initializer_list<P>.
-//@ xfail(kiln): building std::initializer_list objects from a braced list is not implemented (pre-existing gap, not deduction)
 namespace std {
 template <class E> class initializer_list {
   const E* b; decltype(sizeof 0) n;

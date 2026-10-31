@@ -100,6 +100,10 @@ pub struct EnumBuild {
     /// The value of the previous enumerator.
     last: Option<i128>,
     enumerators: Vec<(DeclId, i128)>,
+    /// The type of each enumerator before the closing brace
+    /// ([dcl.enum]/5), for an enumeration without a fixed underlying
+    /// type: a reference to an enumerator inside the body has it.
+    pre_types: Vec<(DeclId, QualType)>,
 }
 
 /// The parameters declared so far in a parameter-declaration-clause
@@ -1145,6 +1149,17 @@ impl Sema<'_, '_> {
         if special {
             return self.act_on_special_member_declarator(ds, ty, d, invalid);
         }
+        if head.is_none() && !ds.is_typedef() && self.is_function_spec_declarator(d, ty) {
+            return self.act_on_function_spec_declarator(ds, ty, d, invalid);
+        }
+        if let Some((_, l)) = self.templ.explicit_inst.filter(|_| self.at_explicit_head()) {
+            self.templ.explicit_inst = None;
+            // [temp.explicit]/3: of a variable template or static data
+            // member (WP-106 lands functions only).
+            self.templ_unimplemented("explicit instantiation of a variable", l);
+            self.templ.cur = None;
+            return None;
+        }
         if let Some(sid) = &d.spec_id {
             return self.act_on_var_spec_declarator(ds, ty, d, sid, head);
         }
@@ -1421,6 +1436,53 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// A typedef-name redeclared by a typedef or alias-declaration of
+    /// `name` at `loc` with type `underlying`, the previous one being `p`
+    /// (`alias_template`: both are alias template patterns). The previous
+    /// declaration to chain to, `None` after a diagnostic.
+    fn check_typedef_redefinition(
+        &mut self,
+        p: DeclId,
+        underlying: QualType,
+        alias_template: bool,
+        name: Symbol,
+        loc: Loc,
+    ) -> Option<DeclId> {
+        let pk = self.ast.decls.get(p).kind();
+        let pty = self.ast.decls.typedef(p).map_or(QualType::ERROR, |t| t.underlying);
+        // [dcl.typedef]/4 with [temp.over.link]/5: dependent types compare
+        // by their canonical profiles. A redefinition that is not an alias
+        // template's is checked only when neither type is dependent
+        // (clang's `isIncompatibleTypedef`); a mismatch is then diagnosed
+        // at instantiation.
+        let t = &self.ast.types;
+        let deferred = !alias_template && (t.is_dependent(pty) || t.is_dependent(underlying));
+        if !deferred && !t.same_type(pty, underlying) {
+            // The kind is the previous declaration's (clang).
+            let msg = self
+                .diag(DiagId::sema_redefinition_different_typedef, loc)
+                .arg(match (pk, alias_template) {
+                    (_, true) => "2",
+                    (DeclKind::TypeAlias, false) => "1",
+                    (_, false) => "0",
+                })
+                .arg(self.ty_arg(underlying))
+                .arg(self.ty_arg(pty));
+            let msg = self.note_prev(msg, p, true);
+            self.emit(msg);
+            return None;
+        }
+        if self.kind_of(self.ctx) == DeclKind::CXXRecord {
+            // [dcl.typedef]/4, CWG56/424: a typedef-name is not redeclared
+            // in class scope.
+            let msg = self.diag(DiagId::sema_redefinition, loc).arg(sym_str(self, name));
+            let msg = self.note_prev(msg, p, true);
+            self.emit(msg);
+            return None;
+        }
+        Some(p)
+    }
+
     /// `typedef T name;` or `using name = T;` ([dcl.typedef]).
     fn act_on_typedef(
         &mut self,
@@ -1467,22 +1529,40 @@ impl Sema<'_, '_> {
             None => ty,
         };
         let mut prev_ok = None;
-        let mut invalid = false;
+        // An alias template redeclared ([temp.alias], clang's
+        // `ActOnAliasDeclaration`): the same type through equivalent
+        // parameters (canonical types compare by depth and index) chains
+        // to the earlier pattern.
+        let alias_template_prev = prev.and_then(|p| {
+            (alias && self.templ.cur.is_some() && self.kind_of(p) == DeclKind::TypeAliasTemplate)
+                .then(|| self.pattern_of(p))
+                .flatten()
+        });
+        // [temp.over.link]/6: the heads must be equivalent first (clang
+        // drops a redeclaration whose head differs).
+        let heads_differ = match (alias_template_prev, self.templ.cur, prev) {
+            (Some(_), Some(new), Some(t)) => {
+                let old = self.ast.template_info(t).map(|i| i.params);
+                old.is_some_and(|old| !self.check_template_heads_match(new, old))
+            }
+            _ => false,
+        };
+        let mut invalid = heads_differ;
+        let prev = if heads_differ { None } else { alias_template_prev.or(prev) };
         if let Some(p) = prev {
             let pk = self.ast.decls.get(p).kind();
-            if matches!(pk, DeclKind::Typedef | DeclKind::TypeAlias) {
-                let pty = self.ast.decls.typedef(p).map_or(QualType::ERROR, |t| t.underlying);
-                if self.ast.types.same_type(pty, underlying) {
-                    prev_ok = Some(p);
-                } else {
-                    let msg = self
-                        .diag(DiagId::sema_redefinition_different_typedef, d.name_loc())
-                        .arg(if alias { "1" } else { "0" })
-                        .arg(self.ty_arg(underlying))
-                        .arg(self.ty_arg(pty));
-                    let msg = self.note_prev(msg, p, true);
-                    self.emit(msg);
-                    invalid = true;
+            if matches!(pk, DeclKind::Typedef | DeclKind::TypeAlias)
+                && (alias_template_prev.is_some() == self.templ.cur.is_some())
+            {
+                match self.check_typedef_redefinition(
+                    p,
+                    underlying,
+                    alias_template_prev.is_some(),
+                    name,
+                    d.name_loc(),
+                ) {
+                    Some(p) => prev_ok = Some(p),
+                    None => invalid = true,
                 }
             } else {
                 let msg = self
@@ -1868,6 +1948,7 @@ impl Sema<'_, '_> {
             self.note_local_extern(name, f);
         }
         self.create_params(f, &params, &defaults);
+        self.defer_late_noexcept(f, d);
         if d.op_name.is_none() {
             self.register_local(name, f);
         } else if !global_new_delete
@@ -2492,20 +2573,8 @@ impl Sema<'_, '_> {
                 None => QualType::ERROR,
             };
             self.ast.decls.set_ty(v, ty);
-            // `auto x = {...};` deduced `std::initializer_list<U>`; its
-            // initialization (`CXXStdInitializerListExpr` over a backing
-            // array) lands with WP-068a (spec/sema-class.md §5.7).
-            if let Initializer::List(l) = &init
-                && !direct
-                && !self.is_error_type(ty)
-                && !self.ast.types.is_dependent(ty)
-            {
-                self.unsupported("std::initializer_list", l.lbrace);
-                for e in Self::list_exprs(l) {
-                    self.act_on_full_expr(e);
-                }
-                return;
-            }
+            // `auto x = {...};` deduced `std::initializer_list<U>`; the
+            // list initializes it below ([dcl.init.list]/3.6, WP-106).
             // `auto x = f();` with a `void` f deduces an incomplete
             // object type (clang `DeduceVariableDeclarationType`, then
             // `err_typecheck_decl_incomplete_type`); `x` gets no initializer.
@@ -2852,6 +2921,7 @@ impl Sema<'_, '_> {
 
     /// Finishes the definition of `f` with `body`.
     pub fn act_on_finish_function_def(&mut self, f: DeclId, body: StmtId, rbrace: Loc) {
+        self.check_function_try_block(f, body);
         self.end_function_body(body, rbrace);
         if self.ast.definition(f).is_none() {
             let _ = self.builder().set_body(f, body);
@@ -2984,6 +3054,20 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// The template head of a class template redeclaration that creates
+    /// no new decl (`template<class T> struct C;` again): equivalent to
+    /// the template's ([temp.over.link]/6), then checked for default
+    /// arguments ([temp.param]/12, /14).
+    fn check_redeclared_class_head(&mut self, p: DeclId) {
+        if let Some(list) = self.templ.cur.take()
+            && let Some(t) = self.ast.described_template(p)
+            && let Some(old) = self.ast.template_info(t).map(|i| i.params)
+            && self.check_template_heads_match(list, old)
+        {
+            self.check_template_param_list(DeclKind::ClassTemplate, list, Some(t));
+        }
+    }
+
     /// A class-key or `enum` followed by a name ([dcl.type.elab],
     /// [class.pre], [dcl.enum]). `scoped` is `EnumData::SCOPED[_STRUCT]`
     /// bits; `fixed` the enum-base. Returns the tag declaration.
@@ -3054,11 +3138,7 @@ impl Sema<'_, '_> {
                     // clang adds a `ClassTemplateDecl` per redeclaration),
                     // but its template head is still checked against the
                     // template's ([temp.param]/12, /14).
-                    if let Some(list) = self.templ.cur.take()
-                        && let Some(t) = self.ast.described_template(p)
-                    {
-                        self.check_template_param_list(DeclKind::ClassTemplate, list, Some(t));
-                    }
+                    self.check_redeclared_class_head(p);
                     return p;
                 }
             } else if qualifier.is_some() {
@@ -3318,9 +3398,21 @@ impl Sema<'_, '_> {
             .decls
             .enumeration(e)
             .and_then(|x| if x.is_fixed() { x.int_type } else { None });
-        self.enums.push(EnumBuild { decl: e, fixed, last: None, enumerators: Vec::new() });
+        self.enums.push(EnumBuild {
+            decl: e,
+            fixed,
+            last: None,
+            enumerators: Vec::new(),
+            pre_types: Vec::new(),
+        });
         self.scopes.push(Scope::new(ScopeKind::Enum, Some(e)));
         self.ctx = e;
+    }
+
+    /// The type of enumerator `d` while its enumeration (without a fixed
+    /// underlying type) is being defined ([dcl.enum]/5), if it is.
+    pub(crate) fn enumerator_pre_brace_type(&self, d: DeclId) -> Option<QualType> {
+        self.enums.iter().rev().find_map(|b| b.pre_types.iter().find(|x| x.0 == d).map(|x| x.1))
     }
 
     /// The value and the converted initializer of an enumerator whose
@@ -3469,6 +3561,21 @@ impl Sema<'_, '_> {
         });
         let cv = self.int_const(vty, v);
         let _ = self.ast.decls.set_enumerator_value(d, cv);
+        // [dcl.enum]/5 (clang `CheckEnumConstant`): without a fixed
+        // underlying type, an enumerator has the type of its initializing
+        // value until the closing brace; without an initializer, that of
+        // the previous enumerator if the incremented value fits, else `int`
+        // for the first one or a type wide enough.
+        let pre = if build.fixed.is_some() {
+            None
+        } else if let Some(ie) = init_e {
+            Some(self.ast.types.unqualified(self.ast.exprs.get(ie).ty()))
+        } else {
+            match build.pre_types.last() {
+                Some(&(_, t)) if self.fits(t, v) => Some(t),
+                _ => Some(vty),
+            }
+        };
         if !attrs.is_empty() {
             let _ = self.builder().attach_attrs(d, attrs);
         }
@@ -3478,6 +3585,9 @@ impl Sema<'_, '_> {
         if let Some(b) = self.enums.last_mut() {
             b.last = Some(v);
             b.enumerators.push((d, v));
+            if let Some(t) = pre {
+                b.pre_types.push((d, t));
+            }
         }
         d
     }
@@ -3725,7 +3835,7 @@ impl Sema<'_, '_> {
                         ExprKind::CXXBoolLiteralExpr | ExprKind::IntegerLiteral
                     );
                     let ik = self.ast.exprs.get(inner).kind();
-                    if matches!(ik, ExprKind::ConceptSpecializationExpr | ExprKind::RequiresExpr) {
+                    if ik == ExprKind::ConceptSpecializationExpr {
                         // [temp.constr]: the unsatisfied constraint's chain
                         // (clang's `DiagnoseUnsatisfiedConstraint`).
                         let d = match text {

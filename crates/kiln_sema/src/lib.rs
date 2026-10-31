@@ -39,6 +39,7 @@ pub mod stack_guard;
 pub mod stmt;
 pub mod target;
 pub mod templ;
+mod try_stmt;
 pub mod using;
 
 use kiln_abi::Target;
@@ -135,6 +136,10 @@ pub struct Sema<'a, 'sm> {
     /// return type was deduced, by first declaration: redeclarations are
     /// matched against it ([dcl.spec.auto.general]/13).
     pub(crate) declared_returns: kiln_source::fx::FxHashMap<DeclId, QualType>,
+    /// The type-specifier location of each handler's exception
+    /// declaration (clang `getTypeSpecStartLoc`), where the handler-order
+    /// warnings point ([except.handle]/4, WP-100).
+    pub(crate) handler_type_locs: kiln_source::fx::FxHashMap<DeclId, Loc>,
     /// The declared placeholder type and decl-specifiers' type location
     /// of each variable of a multi-declarator group in a template
     /// pattern: instantiation checks the group's deductions again
@@ -200,6 +205,11 @@ pub struct Sema<'a, 'sm> {
     /// Member functions whose *noexcept-specifier* awaits replay
     /// (`ExcSpec::Deferred`, spec/sema-class.md §2.7).
     pub(crate) unparsed_exc: kiln_source::fx::FxHashSet<DeclId>,
+    /// Members of class template specializations whose dependent
+    /// *noexcept-specifier* is instantiated when needed ([temp.inst]/14,
+    /// clang's `EST_Uninstantiated`): the first declaration maps to its
+    /// pattern; its type carries `ExcSpec::Deferred(pattern)`.
+    pub(crate) uninstantiated_exc: kiln_source::fx::FxHashMap<DeclId, DeclId>,
     /// The enclosing function's state and the scopes pushed for a member
     /// function definition, saved by `act_on_start_function_def` while a
     /// (local class's or out-of-line) member function body is analysed.
@@ -279,6 +289,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             prototype_params: Vec::new(),
             unowned_params: std::collections::HashSet::new(),
             declared_returns: kiln_source::fx::FxHashMap::default(),
+            handler_type_locs: kiln_source::fx::FxHashMap::default(),
             group_placeholders: kiln_source::fx::FxHashMap::default(),
             deferring_call_ref: false,
             ovl: overload::OverloadScratch::default(),
@@ -299,6 +310,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             mem_inits: class::MemInitState::default(),
             extend_collector: None,
             unparsed_exc: kiln_source::fx::FxHashSet::default(),
+            uninstantiated_exc: kiln_source::fx::FxHashMap::default(),
             fn_saved: Vec::new(),
             member_refs: kiln_source::fx::FxHashMap::default(),
             friend_tag: None,

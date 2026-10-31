@@ -760,7 +760,7 @@ in `kiln_diag` for now; nothing emits them.
     `decltype` mem-initializer-ids, braced default arguments
   - clang's template-argument heuristics when saving a default argument
     or default member initializer (`a < b, c > d`)
-  - function-try-blocks, literal operators (`operator""`)
+  - literal operators (`operator""`)
   - pragma events inside saved tokens (they fire at capture)
   - diagnostics clang gives that the parser skips: a decl-specifier
     after a virt-specifier, the missing-`{` fix-it after a base clause,
@@ -781,7 +781,18 @@ in `kiln_diag` for now; nothing emits them.
     nested-name-specifier)
   - reflection (`^^`, `[: :]`)
   - `co_await`/`co_yield`
-- **Statements:** range-based `for`, `try`/`catch`, `co_return`, contracts.
+- **Statements:** range-based `for`, `co_return`, contracts.
+
+**Landed (WP-100).** `try` compound-statement handler-seq ([except.pre]/1)
+in `stmt.rs`: a handler is `catch ( exception-declaration )
+compound-statement`, the declaration `...` or a type-specifier-seq with
+an optional (possibly abstract) declarator, sent to
+`act_on_exception_decl`; the handlers to `act_on_catch` and the whole to
+`act_on_try`. A `try` without a handler is `expected catch`. A
+function-try-block (`class.rs` captured prologue and the free-function
+path) parses `try`, then the ctor-initializer, then the body and its
+handlers; the body statement given to `act_on_finish_function_def` is the
+`CXXTryStmt` (as clang's AST: no enclosing `CompoundStmt`).
 - **Other declarations:**
   - pack expansions in dynamic exception specifications
   - `auto` deduction from braced lists (`std::initializer_list`)

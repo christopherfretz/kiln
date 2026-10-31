@@ -894,6 +894,8 @@ impl Scan<'_> {
                     self.expr(v, false);
                 }
             }
+            // Only the compound statement is evaluated (see `stmt`).
+            StmtKind::CXXTryStmt => self.stmt(ast.stmts.try_block(s)),
             _ => {}
         }
     }
@@ -1414,6 +1416,12 @@ impl Compiler<'_> {
             // A label is evaluated by evaluating its statement (clang
             // charges a step for each: `EvaluateStmt` recurses).
             StmtKind::LabelStmt => self.stmt(StmtId::new(n.b())),
+            // [expr.const]/5.25 (C++20, P1002): a try-block is evaluated by
+            // evaluating its compound statement; no exception can be
+            // thrown during constant evaluation (a throw-expression is not
+            // a core constant expression), so no handler is ever entered
+            // (clang `EvaluateStmt`, one step for the try itself).
+            StmtKind::CXXTryStmt => self.stmt(ast.stmts.try_block(s)),
             // The payload of an attributed statement is not yet defined by
             // kiln_ast (spec/ast.md §6; no builder exists).
             StmtKind::AttributedStmt => {
@@ -2903,7 +2911,8 @@ impl Compiler<'_> {
                     );
                     return Place::Mem(self.reg());
                 }
-                if ast.decls.get(d).kind() != DeclKind::Var {
+                if !matches!(ast.decls.get(d).kind(), DeclKind::Var | DeclKind::TemplateParamObject)
+                {
                     self.unsupported(e);
                     return Place::Mem(self.reg());
                 }
@@ -3335,6 +3344,10 @@ impl Compiler<'_> {
                 self.three_way(e, p, ty);
                 return;
             }
+            ExprKind::CXXStdInitializerListExpr => {
+                self.std_initializer_list(e, p, ty);
+                return;
+            }
             ExprKind::CXXParenListInitExpr => {
                 let ast = self.ast();
                 let inits: Vec<ExprId> =
@@ -3577,6 +3590,34 @@ impl Compiler<'_> {
     }
 
     /// `p + off` (bytes).
+    /// A `std::initializer_list<E>` over its backing array
+    /// ([dcl.init.list]/5): the first field points at the array, the
+    /// second holds its length (libstdc++, libc++) or points past its end.
+    fn std_initializer_list(&mut self, e: ExprId, p: u32, ty: OTy) {
+        let arr = self.ast().exprs.operand(e);
+        let aty = self.ety(arr);
+        let TyKind::Array { elem, n } = self.kind(aty) else { return self.unsupported(e) };
+        let &[f0, f1] = self.o.types.fields(ty) else { return self.unsupported(e) };
+        if !matches!(self.kind(f0.ty), TyKind::Ptr(_)) || f0.width.is_some() {
+            return self.unsupported(e);
+        }
+        let a = self.lv_mem(arr, Access::Addr);
+        let q0 = self.elem_ptr(p, f0.offset, e);
+        self.emit_at(Op::InitStore, 0, &[q0, a, f0.ty.0], e);
+        let r = self.reg();
+        match self.kind(f1.ty) {
+            TyKind::Int { .. } if f1.width.is_none() => self.konst(r, u128::from(n)),
+            TyKind::Ptr(_) => {
+                let k = self.reg();
+                self.konst(k, u128::from(n));
+                self.emit_at(Op::PtrAdd, int_aux(64, false), &[r, a, k, elem.0], e);
+            }
+            _ => return self.unsupported(e),
+        }
+        let q1 = self.elem_ptr(p, f1.offset, e);
+        self.emit_at(Op::InitStore, 0, &[q1, r, f1.ty.0], e);
+    }
+
     fn elem_ptr(&mut self, p: u32, off: u64, e: ExprId) -> u32 {
         if off == 0 {
             return p;
