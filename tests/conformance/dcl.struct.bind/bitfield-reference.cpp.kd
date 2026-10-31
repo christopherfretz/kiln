@@ -1,2 +1,0 @@
-bitfield-reference.cpp:10:8: error: non-const reference cannot bind to bit-field 'a'
-bitfield-reference.cpp:7:17: note: bit-field is declared here

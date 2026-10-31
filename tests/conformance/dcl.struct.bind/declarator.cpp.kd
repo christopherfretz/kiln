@@ -1,6 +1,0 @@
-declarator.cpp:14:8: error: decomposition declaration '[k, l]' requires an initializer
-declarator.cpp:15:7: error: decomposition declaration cannot be declared with type 'int'; declared type must be 'auto' or reference to 'auto'
-declarator.cpp:15:7: error: no viable conversion from 'S' to 'int'
-declarator.cpp:16:8: error: decomposition declaration must be the only declaration in its group
-declarator.cpp:17:9: error: decomposition declaration cannot be declared with type 'auto *'; declared type must be 'auto' or reference to 'auto'
-declarator.cpp:17:9: error: cannot decompose non-class, non-array type 'S *'

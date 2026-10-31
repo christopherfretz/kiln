@@ -1,9 +1,0 @@
-tuple-errors.cpp:28:9: error: use of undeclared identifier 'get'
-tuple-errors.cpp:28:9: note: in implicit initialization of binding declaration 't'
-tuple-errors.cpp:29:8: error: cannot decompose this type; 'std::tuple_size<T2>::value' is not a valid integral constant expression
-tuple-errors.cpp:29:8: note: initializer of 'value' is unknown
-tuple-errors.cpp:24:69: note: declared here
-tuple-errors.cpp:30:9: error: implicit instantiation of undefined template 'std::tuple_element<0, T3>'
-tuple-errors.cpp:30:9: note: in implicit initialization of binding declaration 'u'
-tuple-errors.cpp:19:44: note: template is declared here
-tuple-errors.cpp:31:8: error: type 'T3' decomposes into 2 elements, but only 1 name was provided

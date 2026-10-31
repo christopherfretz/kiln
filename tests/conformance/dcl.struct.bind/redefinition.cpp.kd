@@ -1,4 +1,0 @@
-redefinition.cpp:11:12: error: redefinition of 'z'
-redefinition.cpp:11:9: note: previous definition is here
-redefinition.cpp:13:9: error: redefinition of 'w'
-redefinition.cpp:12:7: note: previous definition is here

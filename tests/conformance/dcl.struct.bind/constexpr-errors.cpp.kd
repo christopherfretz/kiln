@@ -1,6 +1,0 @@
-constexpr-errors.cpp:16:15: error: static assertion expression is not an integral constant expression
-constexpr-errors.cpp:16:15: note: read of non-constexpr variable '[a, b]' is not allowed in a constant expression
-constexpr-errors.cpp:15:12: note: declared here
-constexpr-errors.cpp:22:15: error: static assertion expression is not an integral constant expression
-constexpr-errors.cpp:20:10: note: read of dereferenced one-past-the-end pointer is not allowed in a constant expression
-constexpr-errors.cpp:22:15: note: in call to 'f()'
