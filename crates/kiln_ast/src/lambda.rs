@@ -227,16 +227,16 @@ impl crate::Ast {
     /// The lambda whose function call operator is `f`: the call operator
     /// itself or, for a generic lambda, a specialization of its template.
     pub fn call_op_lambda(&self, f: DeclId) -> Option<LambdaId> {
-        let r = self.decls.get(f).ctx()?;
-        let l = self.closure_lambda(r)?;
-        let op = self.exprs.lambdas.get(l).call_op?;
+        let rec = self.decls.get(f).ctx()?;
+        let lambda = self.closure_lambda(rec)?;
+        let op = self.exprs.lambdas.get(lambda).call_op?;
         if self.first(op) == self.first(f) {
-            return Some(l);
+            return Some(lambda);
         }
         let (_, s) = self.spec_info(f)?;
         let t = self.described_template(op)?;
         (self.first(t) == self.first(s.template) || self.first(op) == self.first(s.from))
-            .then_some(l)
+            .then_some(lambda)
     }
 
     /// The static invoker `__invoke` of closure type `r` (the one implicit
@@ -282,10 +282,10 @@ impl crate::Ast {
             return None;
         }
         let decl = self.decls.get(pat);
-        let r = decl.ctx()?;
-        let l = self.closure_lambda(r)?;
-        let call_op = self.exprs.lambdas.get(l).call_op?;
-        let invoker = self.closure_invoker(r);
+        let rec = decl.ctx()?;
+        let lambda = self.closure_lambda(rec)?;
+        let call_op = self.exprs.lambdas.get(lambda).call_op?;
+        let invoker = self.closure_invoker(rec);
         let spec = |x: DeclId| match args {
             None => Some(x),
             Some(a) => {
