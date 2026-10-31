@@ -51,6 +51,9 @@ pub(crate) enum FState {
     /// running, and may evaluate nested constant expressions): a call to it
     /// meanwhile fails as a call to an undefined function.
     Compiling,
+    /// An invalid declaration (its template instantiation failed): a
+    /// call is "subexpression not valid" (clang `isInvalidDecl`).
+    Invalid,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -436,6 +439,10 @@ impl Oven {
         };
         let ast = b.ast();
         let def = ast.definition(d).unwrap_or(d);
+        if ast.decls.get(def).has(kiln_ast::decl::DeclFlags::INVALID) {
+            self.funcs[idx as usize].state = FState::Invalid;
+            return;
+        }
         let params: Vec<DeclId> = ast
             .decls
             .function(def)

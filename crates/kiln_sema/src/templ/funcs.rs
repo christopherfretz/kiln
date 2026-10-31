@@ -199,7 +199,15 @@ impl Sema<'_, '_> {
                 sub.sema.act_on_mem_initializers(f, &[], colon);
             }
             let b = sub.body(body);
+            let failed = sub.failed;
             s.act_on_finish_function_def(f, b, rbrace);
+            if failed {
+                // [temp.inst]: a body that failed to instantiate makes the
+                // specialization invalid (clang `setInvalidDecl`): later
+                // deductions find it a substitution failure, constant
+                // evaluation a "subexpression not valid".
+                s.ast.decls.set_flags(f, DeclFlags::INVALID);
+            }
         });
         self.pop_inst_frame();
     }

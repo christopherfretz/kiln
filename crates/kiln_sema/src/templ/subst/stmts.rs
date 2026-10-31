@@ -25,7 +25,10 @@ impl Substituter<'_, '_, '_> {
         }
         match self.stmt_node(s) {
             Ok(x) => x,
-            Err(SubstFail) => self.sema.act_on_null_stmt(loc),
+            Err(SubstFail) => {
+                self.failed = true;
+                self.sema.act_on_null_stmt(loc)
+            }
         }
     }
 

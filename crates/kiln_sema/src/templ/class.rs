@@ -700,6 +700,15 @@ impl Sema<'_, '_> {
         if self.ast.definition(f).is_some() || self.inst.fatal {
             return;
         }
+        // [temp.expl.spec]/7: an explicit specialization is never
+        // instantiated from the pattern (its definition, if any, is the
+        // user's, possibly in another translation unit).
+        let explicit = self.ast.spec_info(f).map(|(_, i)| i.kind).or_else(|| {
+            self.ast.member_spec_info(f).map(|(_, m)| m.kind)
+        });
+        if explicit == Some(SpecKind::ExplicitSpecialization) {
+            return;
+        }
         let Some(pattern) = self.ast.instantiated_from(f) else { return };
         let Some(pdef) = self.ast.definition(pattern) else { return };
         let Some(body) = self.ast.decls.function(pdef).and_then(|x| x.body) else { return };
@@ -775,7 +784,15 @@ impl Sema<'_, '_> {
                 sub.sema.act_on_mem_initializers(f, &[], colon);
             }
             let b = sub.body(body);
+            let failed = sub.failed;
             s.act_on_finish_function_def(f, b, rbrace);
+            if failed {
+                // [temp.inst]: a body that failed to instantiate makes the
+                // specialization invalid (clang `setInvalidDecl`): later
+                // deductions find it a substitution failure, constant
+                // evaluation a "subexpression not valid".
+                s.ast.decls.set_flags(f, DeclFlags::INVALID);
+            }
         });
         self.pop_inst_frame();
     }

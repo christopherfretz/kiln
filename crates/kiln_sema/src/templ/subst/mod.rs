@@ -63,6 +63,10 @@ pub struct Substituter<'s, 'a, 'sm> {
     /// (clang's diagnostics name it: "'a' declared as an array with a
     /// negative size").
     pub(crate) declarator_name: Option<(Symbol, Loc)>,
+    /// A statement failed to substitute (it was replaced by a null
+    /// statement): the instantiated function is invalid (clang's
+    /// `Body.isInvalid()` -> `setInvalidDecl`).
+    pub(crate) failed: bool,
 }
 
 impl std::fmt::Debug for Substituter<'_, '_, '_> {
@@ -87,6 +91,7 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
             entity: None,
             pairs: Vec::new(),
             declarator_name: None,
+            failed: false,
         }
     }
 
