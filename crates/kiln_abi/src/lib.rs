@@ -14,6 +14,7 @@ pub mod dump_blocks;
 pub mod irtype;
 pub mod layout;
 pub mod mangle;
+pub mod mangle_decomp;
 pub mod target;
 pub mod vtable;
 
