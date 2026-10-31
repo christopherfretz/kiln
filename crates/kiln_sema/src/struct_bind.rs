@@ -20,6 +20,7 @@ use crate::declspec::{Chunk, DeclSpec, Declarator, StorageSpec, TypeSpecKind};
 use crate::init::Initializer;
 use crate::lookup::LookupKind;
 use crate::templ::actions::TemplateIdRef;
+use crate::templ::stack::FrameKind;
 
 /// The outcome of clang's `isTupleLike`.
 enum TupleLike {
@@ -30,6 +31,19 @@ enum TupleLike {
     /// Committed to the tuple interpretation, but `value` is unusable
     /// (diagnosed).
     Error,
+}
+
+/// What every binding of a tuple-like decomposition shares.
+#[derive(Clone, Copy)]
+struct TupleCtx {
+    v: DeclId,
+    dty: QualType,
+    lref: bool,
+    member_get: bool,
+    get: kiln_source::symbol::Symbol,
+    ctx: DeclId,
+    lexical: Option<DeclId>,
+    vspec: VarSpec,
 }
 
 impl Sema<'_, '_> {
@@ -436,17 +450,23 @@ impl Sema<'_, '_> {
         let found = self.lookup_in_class(c, value, LookupKind::Ordinary);
         let Some(&d) = found.decls.first() else { return TupleLike::No };
         let e = self.build_decl_ref(d, loc);
-        let n = if self.is_err_expr(e) {
-            None
+        let (n, fail) = if self.is_err_expr(e) {
+            (None, None)
         } else {
-            self.eval_int(e, EvalContext::new(EvalKind::Other, loc)).ok()
+            match self.eval_int(e, EvalContext::new(EvalKind::Other, loc)) {
+                Ok(n) => (Some(n), None),
+                Err(f) => (None, Some(f)),
+            }
         };
         match n.and_then(|n| u64::try_from(n).ok()) {
             Some(n) => TupleLike::Yes(n),
             None => {
-                let msg = self
+                let mut msg = self
                     .diag(DiagId::sema_decomp_decl_tuple_size_not_constant, loc)
                     .arg(self.ty_str(dty));
+                if let Some(f) = fail {
+                    msg = Self::with_failure_notes(msg, f);
+                }
                 self.emit(msg);
                 TupleLike::Error
             }
@@ -531,68 +551,86 @@ impl Sema<'_, '_> {
             (n.ctx().unwrap_or(self.ast.tu), self.ast.decls.lexical_ctx(v))
         };
         let vspec = self.ast.decls.var(v).map(|x| x.spec).unwrap_or_default();
+        let tc = TupleCtx { v, dty, lref, member_get, get, ctx, lexical, vspec };
         for (i, &b) in bindings.iter().enumerate() {
             let loc = self.ast.decls.get(b).loc();
-            let mut e = self.decomp_ref(v, loc);
-            if !lref {
-                let t = self.ety(e);
-                e = self.builder().implicit_cast(CastKind::NoOp, e, t, ValueCategory::XValue);
-            }
-            let idx = self.size_t_arg(i as u64);
-            let targs = self.ast.types.arg_list(&[idx]);
-            let call = if member_get {
-                let m = self.act_on_member(e, get, loc, loc, false);
-                if self.is_err_expr(m) {
-                    return false;
-                }
-                let m = self.act_on_member_template_args(m, targs);
-                self.act_on_call(m, &[], loc, loc)
-            } else {
-                let ule = self.builder().unresolved_lookup(get, &[], true, None, Some(targs), loc);
-                let call = self.act_on_call(ule, &[e], loc, loc);
-                // The lookup is argument-dependent only ([dcl.struct.bind]/4),
-                // so the function is clang's `IsADLCandidate` (dumped `adl`).
-                let mut c = call;
-                while self.ast.exprs.get(c).kind() == ExprKind::CXXBindTemporaryExpr {
-                    c = self.ast.exprs.operand(c);
-                }
-                if self.ast.exprs.get(c).kind() == ExprKind::CallExpr {
-                    self.ast.exprs.set_call_adl(c);
-                }
-                call
-            };
-            if self.is_err_expr(call) {
+            // Diagnostics name the binding being initialized.
+            if !self.push_inst_frame(FrameKind::BindingInit, b, b, loc) {
                 return false;
             }
-            let Some(t) = self.tuple_element_type(loc, i as u64, dty) else { return false };
-            let is_lvalue = self.ast.exprs.get(call).value_category() == ValueCategory::LValue;
-            let ref_ty = if is_lvalue {
-                self.ast.types.lvalue_ref_to(t)
-            } else {
-                self.ast.types.rvalue_ref_to(t)
-            };
-            let mut h = DeclHead::new(ctx, self.ast.decls.get(b).name(), loc);
-            h.lexical = lexical;
-            h.flags = DeclFlags::IMPLICIT;
-            let spec = VarSpec::new()
-                .with_storage(if vspec.storage() == VarStorage::Static {
-                    VarStorage::Static
-                } else {
-                    VarStorage::None
-                })
-                .with_tls(vspec.tls());
-            let hv = self.builder().holding_var(h, ref_ty, spec);
-            let init = self.perform_init(ref_ty, Initializer::Expr(call), loc, false);
-            let init = self.act_on_full_expr(init);
-            let _ = self.builder().set_var_init(hv, init);
-            if self.is_err_expr(init) {
+            let ok = self.decompose_tuple_binding(&tc, i, b);
+            self.pop_inst_frame();
+            if !ok {
                 return false;
             }
-            self.extend_temporaries(hv, init);
-            let r = self.build_decl_ref(hv, loc);
-            self.ast.decls.set_ty(b, t);
-            let _ = self.ast.decls.set_binding(b, r, Some(hv));
         }
+        true
+    }
+
+    /// One binding of [`Self::decompose_tuple`]: its holding variable and
+    /// initializer.
+    fn decompose_tuple_binding(&mut self, tc: &TupleCtx, i: usize, b: DeclId) -> bool {
+        let TupleCtx { v, dty, lref, member_get, get, ctx, lexical, vspec } = *tc;
+        let loc = self.ast.decls.get(b).loc();
+        let mut e = self.decomp_ref(v, loc);
+        if !lref {
+            let t = self.ety(e);
+            e = self.builder().implicit_cast(CastKind::NoOp, e, t, ValueCategory::XValue);
+        }
+        let idx = self.size_t_arg(i as u64);
+        let targs = self.ast.types.arg_list(&[idx]);
+        let call = if member_get {
+            let m = self.act_on_member(e, get, loc, loc, false);
+            if self.is_err_expr(m) {
+                return false;
+            }
+            let m = self.act_on_member_template_args(m, targs);
+            self.act_on_call(m, &[], loc, loc)
+        } else {
+            let ule = self.builder().unresolved_lookup(get, &[], true, None, Some(targs), loc);
+            let call = self.act_on_call(ule, &[e], loc, loc);
+            // The lookup is argument-dependent only ([dcl.struct.bind]/4),
+            // so the function is clang's `IsADLCandidate` (dumped `adl`).
+            let mut c = call;
+            while self.ast.exprs.get(c).kind() == ExprKind::CXXBindTemporaryExpr {
+                c = self.ast.exprs.operand(c);
+            }
+            if self.ast.exprs.get(c).kind() == ExprKind::CallExpr {
+                self.ast.exprs.set_call_adl(c);
+            }
+            call
+        };
+        if self.is_err_expr(call) {
+            return false;
+        }
+        let Some(t) = self.tuple_element_type(loc, i as u64, dty) else { return false };
+        let is_lvalue = self.ast.exprs.get(call).value_category() == ValueCategory::LValue;
+        let ref_ty = if is_lvalue {
+            self.ast.types.lvalue_ref_to(t)
+        } else {
+            self.ast.types.rvalue_ref_to(t)
+        };
+        let mut h = DeclHead::new(ctx, self.ast.decls.get(b).name(), loc);
+        h.lexical = lexical;
+        h.flags = DeclFlags::IMPLICIT;
+        let spec = VarSpec::new()
+            .with_storage(if vspec.storage() == VarStorage::Static {
+                VarStorage::Static
+            } else {
+                VarStorage::None
+            })
+            .with_tls(vspec.tls());
+        let hv = self.builder().holding_var(h, ref_ty, spec);
+        let init = self.perform_init(ref_ty, Initializer::Expr(call), loc, false);
+        let init = self.act_on_full_expr(init);
+        let _ = self.builder().set_var_init(hv, init);
+        if self.is_err_expr(init) {
+            return false;
+        }
+        self.extend_temporaries(hv, init);
+        let r = self.build_decl_ref(hv, loc);
+        self.ast.decls.set_ty(b, t);
+        let _ = self.ast.decls.set_binding(b, r, Some(hv));
         true
     }
 

@@ -1155,6 +1155,13 @@ impl Sema<'_, '_> {
             _ => (ty, ExprFlags::NONE),
         };
         let e = self.builder().decl_ref(d, ty, loc, extra, nou, flags);
+        // A binding to a bit-field designates it (clang `BuildDeclRefExpr`).
+        if n.kind() == DeclKind::Binding
+            && let Some(b) = self.ast.decls.binding_expr(d)
+            && self.is_bitfield(b)
+        {
+            self.ast.exprs.mark_bitfield(e);
+        }
         if defer {
             self.deferred_call_refs.push((e, d));
         }

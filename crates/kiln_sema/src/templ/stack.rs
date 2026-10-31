@@ -69,6 +69,10 @@ pub enum FrameKind {
     /// Substituting into an atomic constraint or a requirement
     /// ([temp.constr.atomic]/3, [expr.prim.req]; a SFINAE context).
     ConstraintSubstitution,
+    /// Building a tuple-like structured binding's initializer
+    /// ([dcl.struct.bind]/4; clang `InitializingStructuredBinding`). Not
+    /// an instantiation; the entity is the binding.
+    BindingInit,
 }
 
 impl FrameKind {
@@ -81,6 +85,7 @@ impl FrameKind {
                 | FrameKind::ConstraintsCheck
                 | FrameKind::ConceptCheck
                 | FrameKind::ConstraintSubstitution
+                | FrameKind::BindingInit
         )
     }
 
@@ -112,6 +117,7 @@ impl FrameKind {
             FrameKind::ConstraintsCheck => DiagId::note_checking_constraints_here,
             FrameKind::ConceptCheck => DiagId::note_checking_concept_here,
             FrameKind::ConstraintSubstitution => DiagId::note_constraint_substitution_here,
+            FrameKind::BindingInit => DiagId::note_in_binding_decl_init,
         }
     }
 
@@ -138,6 +144,7 @@ impl FrameKind {
             FrameKind::ConstraintsCheck => "constraints",
             FrameKind::ConceptCheck => "concept",
             FrameKind::ConstraintSubstitution => "constraint-subst",
+            FrameKind::BindingInit => "binding-init",
         }
     }
 }
@@ -462,7 +469,7 @@ impl Sema<'_, '_> {
                 }
             }
             // clang names the function unqualified here.
-            FrameKind::ExceptionSpec => self.decl_name(f.entity),
+            FrameKind::ExceptionSpec | FrameKind::BindingInit => self.decl_name(f.entity),
             _ => self.qualified_decl_name(f.entity),
         }
     }
