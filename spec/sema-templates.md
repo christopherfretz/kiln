@@ -2834,6 +2834,99 @@ explicit specialization errors remain. The blockers are:
   - 2 pack expansions (WP-072);
   - 4 unrelated to WP-071: `__int128_t` and its follow-ons.
 
+**Landed (WP-073): concepts.**
+- State: `InstState::concepts: ConceptState` (`templ/concepts/mod.rs`)
+  holds `sats: Vec<Satisfaction>` (a `SatId` indexes it), `sat_cache:
+  (first(concept or entity), canonical args) → SatId`, `expr_sat:
+  ExprId → SatId` (the satisfaction behind a non-dependent
+  `ConceptSpecializationExpr`/`RequiresExpr`, for notes), the recursion
+  guard `checking`, `norm: NormTable` with `normal_forms` and
+  `subsume_cache`, `placeholder_locs` (the type-constraint location of
+  a `C auto` variable or function), and `counters: SatCounters { count,
+  cache_hits, subsume }` (`sat.count`, `sat.cache_hits`).
+- Satisfaction (`concepts/sat.rs`) walks the constraint *expression*
+  (`&&`, `||`, parens, a bool `ImplicitCast` over them), as clang 19
+  does. Each atom is substituted under a `ConstraintSubstitution`
+  SFINAE frame, must have type `bool`
+  (`sema_non_bool_atomic_constraint`), and is evaluated by the Oven
+  (`EvalKind::Constraint`). A concept-id is checked by `check_concept`
+  under a `ConceptCheck` frame ("while checking the satisfaction of
+  concept '…' requested here") and memoized. Template constraints use
+  `check_constraints` under `ConstraintsCheck`, memoized only for
+  single-level argument lists. A non-dependent concept-id or
+  requires-expression stores its value in `ExprNode.aux`
+  (`ExprArena::satisfied`/`set_satisfied`), and the Oven folds that.
+  **Deviation from §8.3:** there is no `atom_cache`. Atoms are
+  evaluated per (entity, args). The per-concept `sat_cache` is what
+  shares `same_as`-style sub-concepts.
+- Conservative fallbacks: an atom is treated as *satisfied* when its
+  substitution hits `sema_unimplemented_template_feature`, or when it
+  is still value-dependent after substitution. A requirement whose
+  substitution is unimplemented also holds. This avoids rejecting
+  valid code that relies on unlanded features (packs in folds: WP-072).
+- Call sites:
+  - `deduce_call.rs` checks the associated constraints after deduction
+    (`Tdk::ConstraintsNotSatisfied`, `DeductionFailure::sat`, and the
+    note "candidate template ignored: constraints not satisfied
+    [with …]" plus its chain).
+  - `ensure_template_constraints` checks class and variable template
+    specializations (`get_class_spec`, `get_var_spec`).
+  - `order.rs::deduce_partial` checks a partial specialization's head
+    constraints after matching.
+  - `find_partial_decl` tells same-argument partial specializations
+    apart by their printed head constraints.
+  - `act_on_static_assert` prints the chain for a failing
+    concept-id/requires-expression.
+- Requires-expressions (`concepts/requires.rs`): `Substituter::
+  requires_expr` substitutes the parameters and evaluates requirements
+  in order:
+  - simple and type requirements must be valid;
+  - compound requirements check `noexcept` (`Sema::can_throw`, which
+    now covers `CXXMemberCallExpr`) and the return-type-requirement on
+    `decltype((E))`;
+  - nested requirements are evaluated.
+
+  A non-dependent requires-expression is evaluated in
+  `act_requires_expr` and keeps its written requirements in the AST.
+  The parser accepts an unqualified type-requirement
+  `typename X<T>;`.
+- Subsumption (`concepts/normal.rs`, `concepts/subsume.rs`): normal
+  forms are hash-consed `NormNode::{Atomic{expr, mapping}, And, Or}`.
+  A concept-id is expanded through its arguments, with a recursion
+  guard. `subsumes(p, q)` uses DNF(p) against CNF(q), capped at 65,536
+  clauses (over the cap counts as "does not subsume"), and is cached.
+  `more_specialized`/`partial_more_specialized` apply
+  [temp.func.order]/6 when both directions deduce, and an
+  unconstrained template is the weakest.
+- Constrained placeholders: `check_placeholder_constraint`
+  (`templ/auto.rs`) checks `C<deduced, args…>` for `C auto` variables
+  and deduced return types. It reports "deduced type 'T' does not
+  satisfy 'C<args>'" at the concept name (`DeclSpec::constraint_loc`).
+  Invented parameters of abbreviated templates carry their constraint
+  at that location too (`act_on_invented_template_param` takes `(C,
+  args, loc)`).
+- Known divergences from clang:
+  - a failed type-requirement's note points at `requires`, not at the
+    type;
+  - a member-access failure inside a substituted requirement points at
+    the member name, not the `.`;
+  - a `noexcept` requirement's note points at the expression, not at
+    `noexcept` (`Requirement::Compound` stores no location for it);
+  - a non-bool atom is diagnosed at satisfaction time, not at the
+    concept definition;
+  - `static_assert(requires {…})` adds the requirement's note, where
+    clang prints the expression;
+  - ambiguity between non-comparable constraints lacks clang's
+    `note_ambiguous_atomic_constraints` pair.
+- Gaps, with owners:
+  - constrained parameter packs and folds over packs in constraints:
+    WP-072 (substitution is unimplemented, so they are treated as
+    satisfied);
+  - generic lambdas: lambdas are not implemented;
+  - trailing requires-clauses on non-template members of class
+    templates ([over.match.best]/2.6);
+  - `atom_cache`.
+
 ### 11.3 Instantiation report and memory accounting
 
 **Meter.** Each instantiation frame records, at push, `(Ast::bytes(),

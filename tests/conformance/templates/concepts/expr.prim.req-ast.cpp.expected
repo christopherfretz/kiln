@@ -1,9 +1,0 @@
-TranslationUnitDecl
-|-CXXRecordDecl referenced struct S definition
-| `-FieldDecl referenced x 'int'
-`-VarDecl b 'bool' cinit
-  `-RequiresExpr 'bool'
-    |-ParmVarDecl referenced s 'S'
-    `-SimpleRequirement
-      `-MemberExpr 'int' lvalue .x
-        `-DeclRefExpr 'S' lvalue ParmVar 's' 'S' non_odr_use_unevaluated
