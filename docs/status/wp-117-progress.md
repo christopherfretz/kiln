@@ -30,9 +30,22 @@
   context (LValueToRValue of a glvalue call) now loads through the reference.
 - mangle_vs_clang: 628 clang symbols/triple (was 582).
 
-## In progress
-- IR diff of out_of_line.cpp vs clang: LLVM context-wide struct-name uniquing
-  counter; explicit-specialization static member must be strong; extra memcpy.
+- IR struct names: LLVM's single module-wide uniquing counter (value then
+  increment, as `StructType::setName`); `.base` types (incl. unused ones for
+  empty non-POD classes) consume counter values (kiln_llvm `named_struct`,
+  codegen `record_ty`; hunks identical to wp-075's).
+- Explicit specialization of a static data member of a class template
+  specialization (`template<> int A<long>::s = 9;`): sema
+  `act_on_explicit_member_var_spec` marks the member spec ExplicitSpecialization
+  (strong definition), "explicit specialization of 's' after instantiation".
+- Codegen: copies of empty classes emit no memcpy (`agg_copy`/
+  `agg_copy_record`, clang EmitAggregateCopy); trivially default-constructed
+  locals still register their destructor cleanup (also wrong on main).
+- Partial-spec member return types `typename Q<P*>::vt Q<P*>::deref(P*)`
+  rebuilt in the current instantiation.
+- Tests: tests/codegen/template_out_of_line.cpp (exact both triples),
+  conformance basic.lookup.unqual/qualified-declarator-run.cpp,
+  templates/spec/temp.expl.spec-static-member-{run,after-use}.cpp.
 
 ## Gaps found (out of scope, for handback)
 - codegen `UserDefinedConversion` cast unsupported (even non-template).

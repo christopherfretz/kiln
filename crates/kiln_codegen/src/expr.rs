@@ -2043,7 +2043,7 @@ impl Cg<'_> {
             ExprKind::CXXMemberCallExpr if self.is_glvalue(e) => {
                 let lv = self.emit_lvalue(e)?;
                 let size = self.size_align(q).0;
-                self.memcpy(dest, lv.addr.v, lv.addr.align, size, false);
+                self.agg_copy(q, dest, lv.addr, size, false);
                 Ok(())
             }
             ExprKind::CXXMemberCallExpr => {
@@ -2060,7 +2060,7 @@ impl Cg<'_> {
             ExprKind::CallExpr | ExprKind::CXXOperatorCallExpr if self.is_glvalue(e) => {
                 let lv = self.emit_lvalue(e)?;
                 let size = self.size_align(q).0;
-                self.memcpy(dest, lv.addr.v, lv.addr.align, size, false);
+                self.agg_copy(q, dest, lv.addr, size, false);
                 Ok(())
             }
             ExprKind::CallExpr | ExprKind::CXXOperatorCallExpr => {
@@ -2089,7 +2089,7 @@ impl Cg<'_> {
                     let lv = self.emit_lvalue(s)?;
                     let size = self.size_align(q).0;
                     let vol = self.is_volatile(q) || self.is_volatile(lv.q);
-                    self.memcpy(dest, lv.addr.v, lv.addr.align, size, vol);
+                    self.agg_copy(q, dest, lv.addr, size, vol);
                     Ok(())
                 } else {
                     self.agg_visit(s, dest, zeroed)
@@ -2101,7 +2101,7 @@ impl Cg<'_> {
             | ExprKind::UnaryOperator => {
                 let lv = self.emit_lvalue(e)?;
                 let size = self.size_align(q).0;
-                self.memcpy(dest, lv.addr.v, lv.addr.align, size, false);
+                self.agg_copy(q, dest, lv.addr, size, false);
                 Ok(())
             }
             ExprKind::BinaryOperator if ast.exprs.binary_op(e) == BinaryOp::Comma => {
@@ -2543,16 +2543,15 @@ impl Cg<'_> {
             (Addr { v: a, ty, align }, None)
         };
         self.f.locals.insert(d, addr);
-        // Default-initialization by a trivial constructor emits nothing.
-        let Some(init) = v.init.filter(|&i| {
-            !ast.is_trivial_default_construction(i) || ast.exprs.construct_info(i).zeroing
-        }) else {
-            return Ok(());
-        };
         if self.f.fir.cur().is_none() {
             return Ok(());
         }
-        self.emit_var_init(d, q, addr, init)?;
+        // Default-initialization by a trivial constructor emits nothing,
+        // but a non-trivial destructor still runs (`EmitAutoVarCleanups`).
+        let Some(init) = v.init else { return Ok(()) };
+        if !ast.is_trivial_default_construction(init) || ast.exprs.construct_info(init).zeroing {
+            self.emit_var_init(d, q, addr, init)?;
+        }
         // clang `EmitAutoVarCleanups`.
         if self.f.fir.cur().is_none() {
             return Ok(());

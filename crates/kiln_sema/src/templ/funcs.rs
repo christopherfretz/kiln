@@ -682,6 +682,42 @@ impl Sema<'_, '_> {
         Some(self.declare_explicit_spec(m, d, ty, fspec, name_loc))
     }
 
+    /// `template<> T C<args>::s ...;` for static data member `m` of an
+    /// implicit class template specialization ([temp.expl.spec]/1): the
+    /// member's definition is no longer instantiated from the pattern
+    /// (clang `CheckMemberSpecialization`). False after a diagnostic
+    /// ([temp.expl.spec]/7).
+    pub(crate) fn act_on_explicit_member_var_spec(&mut self, m: DeclId, name_loc: Loc) -> bool {
+        let first = self.ast.first(m);
+        let Some((i, info)) = self.ast.member_spec_info(first).map(|(i, x)| (i, *x)) else {
+            return true;
+        };
+        let after_inst = match info.kind {
+            SpecKind::ImplicitInstantiation => self.ast.decls.get(first).has(DeclFlags::USED),
+            SpecKind::ExplicitInstantiationDeclaration
+            | SpecKind::ExplicitInstantiationDefinition => true,
+            SpecKind::Undeclared | SpecKind::ExplicitSpecialization => false,
+        };
+        if after_inst {
+            let explicit = u32::from(info.kind != SpecKind::ImplicitInstantiation);
+            let at = self.member_use_loc(first, info.point_of_instantiation);
+            let note = self.diag(DiagId::note_instantiation_required_here, at).arg(explicit);
+            let e = self
+                .diag(DiagId::sema_spec_after_instantiation, name_loc)
+                .arg(self.decl_name_str(self.ast.decls.get(first).name()))
+                .with_note(note);
+            self.emit(e);
+            return false;
+        }
+        self.ast.templates.update_member_spec(i, |x| {
+            x.kind = SpecKind::ExplicitSpecialization;
+            x.point_of_instantiation = Loc::INVALID;
+        });
+        self.inst.member_defs.remove(&first);
+        self.inst.deferred_inits.remove(&first);
+        true
+    }
+
     /// `[extern] template R C<args>::f(params);` for member `m` of a
     /// class template specialization ([temp.explicit]/3, §4.5).
     fn act_on_explicit_member_inst(&mut self, m: DeclId, declaration: bool, name_loc: Loc) {

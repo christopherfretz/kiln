@@ -96,8 +96,6 @@ pub(crate) struct Cg<'a> {
     pub named: FxHashMap<DeclId, LTy>,
     /// Base-subobject (`.base`) struct types by record.
     pub named_base: FxHashMap<DeclId, LTy>,
-    /// Names already used for named struct types.
-    pub struct_names: FxHashMap<String, u32>,
     /// The `.constant` globals of frozen constant objects (clang
     /// `GetAddrOfUnnamedGlobalConstantDecl`), by value.
     pub const_objects: FxHashMap<kiln_ast::ConstValueId, GlobalId>,
@@ -174,7 +172,6 @@ impl<'a> Cg<'a> {
             strings: FxHashMap::default(),
             named: FxHashMap::default(),
             named_base: FxHashMap::default(),
-            struct_names: FxHashMap::default(),
             const_objects: FxHashMap::default(),
             srcloc: None,
             static_locals: FxHashMap::default(),
@@ -525,11 +522,15 @@ impl<'a> Cg<'a> {
         if let Some(&t) = self.named.get(&first) {
             return t;
         }
-        let base =
-            format!("{}.{}", record_kind_prefix(self.ast, first), self.qualified_name(first));
-        let n = self.struct_names.entry(base.clone()).or_insert(0);
-        let name = if *n == 0 { base } else { format!("{base}.{n}") };
-        *n += 1;
+        // clang `addRecordTypeName`: an unnamed class (without a typedef
+        // name for linkage) is plain `anon`; LLVM uniquifies a repeated
+        // name with one module-wide counter.
+        let leaf = if mangle::decl_name(self.ast, first).is_empty() {
+            "anon".to_owned()
+        } else {
+            self.qualified_name(first)
+        };
+        let name = format!("{}.{leaf}", record_kind_prefix(self.ast, first));
         let t = self.m.types.named_struct(&name);
         self.named.insert(first, t);
         let rec = self.tys.record(first).clone();
@@ -537,6 +538,9 @@ impl<'a> Cg<'a> {
         // clang `ComputeRecordLayout`: the base-subobject type is created
         // before the complete type's body is filled in.
         if let Some(bm) = &rec.base_members {
+            // `addRecordTypeName(D, BaseTy, ".base")` spells the record's
+            // own name, uniquified on its own (an empty non-POD class
+            // consumes a counter value for an unused `.base`).
             let bt = self.m.types.named_struct(&format!("{name}.base"));
             self.named_base.insert(first, bt);
             let bf: Vec<LTy> = bm.iter().map(|x| self.ir(x)).collect();

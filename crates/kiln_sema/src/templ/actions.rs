@@ -232,11 +232,22 @@ impl Sema<'_, '_> {
             return base;
         };
         let Some(tmpl) = self.ast.types.template_decl(tn) else { return base };
-        let saved = self.set_entering_context(true);
-        let cur = self.current_instantiation(tmpl, ty);
-        self.set_entering_context(saved);
-        if cur.is_none_or(|c| self.ast.first(c) != self.ast.first(q)) {
+        let TypeView::TemplateSpecialization { args, .. } = self.ast.types.view(ty.ty()) else {
             return base;
+        };
+        // A partial specialization's own arguments name it
+        // ([temp.dep.type]/1: `Q<P*>` inside `Q<P*>`'s members).
+        let partial = self.ast.partial_spec_info(self.ast.first(q)).is_some_and(|(_, p)| {
+            self.ast.first(p.template) == self.ast.first(tmpl)
+                && self.ast.types.canonical_args(p.args) == self.ast.types.canonical_args(args)
+        });
+        if !partial {
+            let saved = self.set_entering_context(true);
+            let cur = self.current_instantiation(tmpl, ty);
+            self.set_entering_context(saved);
+            if cur.is_none_or(|c| self.ast.first(c) != self.ast.first(q)) {
+                return base;
+            }
         }
         let found = self.lookup_in_class(q, name, LookupKind::Ordinary);
         let Some(&d) = found.decls.first() else { return base };
