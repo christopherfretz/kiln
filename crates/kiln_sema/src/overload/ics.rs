@@ -238,7 +238,11 @@ impl Sema<'_, '_> {
         }
         let (a, b) = (t.canonical(from).without_quals(), t.canonical(referee).without_quals());
         if a == b {
-            return t.as_record(a).is_some();
+            // The canonical current instantiation is a dependent
+            // specialization, a record only through its sugar.
+            return t.as_record(a).is_some()
+                || t.as_record(from).is_some()
+                || matches!(t.canonical_view(a), TypeView::TemplateSpecialization { .. });
         }
         match (t.as_record(a), t.as_record(b)) {
             (Some(x), Some(y)) => same_class(self, x, y),

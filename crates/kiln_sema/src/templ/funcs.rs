@@ -172,6 +172,28 @@ impl Sema<'_, '_> {
             sub.entity = Some(f);
             sub.map_contexts(&pairs);
             sub.map_params(&pp, &fp);
+            if sub.sema.kind_of(f) == kiln_ast::decl::DeclKind::CXXConstructor {
+                // A constructor template's ctor-initializer, as a class
+                // template member's (`templ/class.rs`).
+                let (inits, colon) = sub
+                    .sema
+                    .inst
+                    .pattern_mem_inits
+                    .get(&pdef)
+                    .cloned()
+                    .unwrap_or((Vec::new(), lbrace));
+                for info in &inits {
+                    match sub.mem_initializer(info) {
+                        Ok(v) => {
+                            for i in &v {
+                                sub.sema.act_on_mem_initializer(f, i);
+                            }
+                        }
+                        Err(_) => sub.sema.note_failed_mem_initializer(f),
+                    }
+                }
+                sub.sema.act_on_mem_initializers(f, &[], colon);
+            }
             let b = sub.body(body);
             s.act_on_finish_function_def(f, b, rbrace);
         });
