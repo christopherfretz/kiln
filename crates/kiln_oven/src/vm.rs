@@ -13,7 +13,7 @@ use crate::arith::{self, FloatErr, IntErr, canon};
 use crate::compile::{FState, GState, float_of};
 use crate::failure::{EvalFailure, FailKind};
 use crate::kbc::{Op, ak, cmp, new_aux};
-use crate::mem::{Alloc, MemFault, Origin, Ptr, Sp, flags};
+use crate::mem::{Alloc, MemFault, Origin, Ptr, Sp, TrialMode, flags};
 use crate::memo::{MAX_ARGS, MemoKey, MemoVal};
 use crate::ty::{OTy, TyKind};
 use crate::{Oven, SemaBridge};
@@ -418,11 +418,14 @@ impl Oven {
     }
 
     /// `Op::Speculate`: runs the region of `func` at `pc0` (ending in a
-    /// `Ret`) in the frame at `fb` and reports whether it completed (and,
-    /// for a pointer, whether register `val`'s value is null or the start
-    /// of a string literal). A failure is 0 and its effects on the stack,
-    /// the cleanups and the frame memory are undone; a resource limit
-    /// fails the evaluation.
+    /// `Ret`) in the frame at `fb` as a speculative trial (spec/oven.md
+    /// "Trial evaluation") and reports whether it completed (and, for a
+    /// pointer, whether register `val`'s value is null or the start of a
+    /// string literal). Modifying an object that existed before the trial
+    /// (other than a heap object) or allocating fails it. A failure is 0
+    /// and its effects on the stack, the cleanups and the memory are
+    /// rolled back; a resource limit is rolled back and fails the
+    /// evaluation.
     #[inline(never)]
     fn speculate(
         &mut self,
@@ -443,7 +446,13 @@ impl Oven {
         let silent = self.run.silent;
         self.run.entry = entry;
         self.run.silent = true;
+        self.mem.checkpoint(TrialMode::Speculative);
         let r = self.run_loop(b, func, pc0, fb as u32);
+        if r.is_ok() {
+            self.mem.commit();
+        } else {
+            self.mem.rollback(&self.types);
+        }
         self.run.silent = silent;
         self.run.entry = saved_entry;
         let v = self.regs[fb + val];
@@ -795,8 +804,11 @@ impl Oven {
                     let ty = OTy(arg!(1) as u32);
                     let raw = reg!(0) as u64;
                     let size = self.types.size(ty);
-                    match self.mem.check(raw, size, true) {
-                        Ok((st, abs, _)) => {
+                    match self.mem.check(raw, size, true).map(|(st, abs, _)| (st, abs)) {
+                        Ok((st, abs)) => {
+                            if let Err(f) = self.mem.trial_write(raw, size) {
+                                fail!(Fault::Mem { f, ak: ak::INIT, ty, p: raw });
+                            }
                             self.mem.zero(st, abs, size);
                             if self.types.info(ty).has_union {
                                 self.zero_unions(raw, u64::from(Ptr::decode(raw).off), ty);
@@ -904,8 +916,11 @@ impl Oven {
                 }
                 Op::MakeConst => {
                     let p = Ptr::decode(reg!(0) as u64);
-                    if reg!(0) != 0 && self.mem.alloc_of(p).is_ok() {
-                        self.mem.alloc_of_mut(p).flags |= flags::CONST;
+                    if reg!(0) != 0
+                        && let Ok(a) = self.mem.alloc_of(p)
+                    {
+                        let fl = a.flags | flags::CONST;
+                        self.mem.set_flags(p, fl);
                     }
                     pc += 2;
                 }
@@ -1150,8 +1165,11 @@ impl Oven {
         // A const object is modifiable during its destruction
         // ([class.dtor]/5).
         let p = Ptr::decode(c.this);
-        if c.this != 0 && self.mem.alloc_of(p).is_ok() {
-            self.mem.alloc_of_mut(p).flags &= !flags::CONST;
+        if c.this != 0
+            && let Ok(a) = self.mem.alloc_of(p)
+        {
+            let fl = a.flags & !flags::CONST;
+            self.mem.set_flags(p, fl);
         }
         let cur = self.stack.last().map_or(0, |f| f.func);
         let base = self.funcs[cur as usize].nregs as usize;
@@ -1360,7 +1378,10 @@ impl Oven {
         };
         let info = *self.types.info(ty);
         let fl = fl | if info.has_union { flags::HAS_UNION } else { 0 };
-        let raw = self.mem.heap_alloc(ty, info.size, fl, origin).map_err(|_| Fault::Memory)?;
+        let raw = self.mem.heap_alloc(ty, info.size, fl, origin).map_err(|f| match f {
+            MemFault::Speculative => Fault::Mem { f, ak: ak::INIT, ty, p: 0 },
+            _ => Fault::Memory,
+        })?;
         if aux & new_aux::ZERO != 0 && info.size > 0 {
             let (st, abs, _) = self.mem.check(raw, info.size, true).map_err(|f| Fault::Mem {
                 f,
@@ -1638,7 +1659,9 @@ impl Oven {
         if !init && let Some(f) = write_fault(st, a, ty) {
             return Err(fault(f));
         }
-        if a.flags & flags::HAS_UNION != 0 {
+        let has_union = a.flags & flags::HAS_UNION != 0;
+        self.mem.trial_write(raw, len).map_err(fault)?;
+        if has_union {
             self.union_path(raw, ty, k)?;
         }
         let sp = self.mem.space_mut(st);
@@ -1687,7 +1710,9 @@ impl Oven {
         if !init && let Some(f) = write_fault(st, a, ty) {
             return Err(fault(f));
         }
-        if a.flags & flags::HAS_UNION != 0 {
+        let has_union = a.flags & flags::HAS_UNION != 0;
+        self.mem.trial_write(raw, n).map_err(fault)?;
+        if has_union {
             self.union_path(raw, ty, k)?;
         }
         if width == 0 {
@@ -1725,20 +1750,15 @@ impl Oven {
         if size == 0 {
             return Ok(());
         }
+        self.mem.trial_write(dst, size).map_err(|f| Fault::Mem { f, ak: k, ty, p: dst })?;
         self.mem.copy(ds, da, ss, sa, size);
         if self.types.info(ty).has_union {
             let (so, dof) = (u64::from(Ptr::decode(src).off), u64::from(Ptr::decode(dst).off));
             let (a, z) = self.types.info(ty).upos;
             for i in a..z {
                 let o = self.types.union_pos[i as usize].0;
-                match self.mem.unions.get(&Ptr::union_key(src, so + o)).copied() {
-                    Some(v) => {
-                        self.mem.unions.insert(Ptr::union_key(dst, dof + o), v);
-                    }
-                    None => {
-                        self.mem.unions.remove(&Ptr::union_key(dst, dof + o));
-                    }
-                }
+                let v = self.mem.unions.get(&Ptr::union_key(src, so + o)).copied();
+                self.mem.union_put(Ptr::union_key(dst, dof + o), v);
             }
         }
         Ok(())
@@ -1763,12 +1783,12 @@ impl Oven {
                     let (a, z) = self.types.info(t).upos;
                     for i in a..z {
                         let o = self.types.union_pos[i as usize].0;
-                        self.mem.unions.remove(&Ptr::union_key(raw, off + o));
+                        self.mem.union_put(Ptr::union_key(raw, off + o), None);
                     }
                     if count == 0 {
                         return;
                     }
-                    self.mem.unions.insert(Ptr::union_key(raw, off), 0);
+                    self.mem.union_put(Ptr::union_key(raw, off), Some(0));
                     let f = self.types.fields[first as usize];
                     if self.types.info(f.ty).has_union {
                         self.zero_unions(raw, off + f.offset, f.ty);
@@ -1878,6 +1898,7 @@ impl Oven {
         if self.mem.unions.get(&key) == Some(&idx) {
             return Ok(());
         }
+        self.mem.trial_write(raw, size).map_err(|f| Fault::Mem { f, ak: k, ty: uty, p: raw })?;
         let sp = self.mem.space_mut(st);
         sp.set_init(abs, size, false);
         if size > 0 && abs % crate::mem::GRAN == 0 && size.is_multiple_of(crate::mem::GRAN) {
@@ -1886,9 +1907,9 @@ impl Oven {
         let (a0, z) = self.types.info(uty).upos;
         for i in a0..z {
             let o = self.types.union_pos[i as usize].0;
-            self.mem.unions.remove(&Ptr::union_key(raw, off + o));
+            self.mem.union_put(Ptr::union_key(raw, off + o), None);
         }
-        self.mem.unions.insert(key, idx);
+        self.mem.union_put(key, Some(idx));
         Ok(())
     }
 

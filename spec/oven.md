@@ -596,6 +596,162 @@ The bench entries take the default thresholds (`threshold-bytes` 2%), so
 once recorded, any allocator change that raises `peak_bytes`, `peak_arena`
 or `allocs` fails the bench. `steps` is gated at 0% as everywhere.
 
+### Trial evaluation — Landed (WP-135)
+A *trial* is a part of an evaluation whose effects on the abstract memory
+can be undone. `Memory` (`src/mem.rs`, "trial evaluation") keeps a stack of
+open checkpoints and one undo log.
+- `checkpoint(mode)` opens a checkpoint. It records the undo-log length, the
+  frame mark (whose low half is the frame top), the static top, the
+  evaluation context (`ctx`) and the heap allocation counter.
+- `commit()` closes the innermost checkpoint and keeps its effects. An
+  enclosing checkpoint can still undo them, because its log entries are
+  older.
+- `rollback(types)` closes the innermost checkpoint and undoes its effects.
+  It replays the log entries made since the checkpoint, newest first, then
+  releases the frame objects made since (`release(mark)`).
+- When the last checkpoint closes, either way, the log and its index are
+  cleared.
+
+**Fresh objects.** An object is *fresh* for a checkpoint if it was created
+after the checkpoint. Writes to fresh objects are never logged, because a
+rollback discards those objects anyway.
+- A frame object is fresh if its base is at or above the checkpoint's frame
+  top.
+- A static object is fresh if its base is at or above the checkpoint's
+  static top.
+- A heap object is fresh if it belongs to a deeper evaluation context, or if
+  it belongs to the checkpoint's context and its `Origin::Heap` number is at
+  least the checkpoint's allocation counter.
+
+**What is logged.** All entries are made against the innermost checkpoint:
+- `Gran`: the 8 bytes and the shadow (init and ptr bits) of each granule of
+  a non-fresh object that is about to be written. A granule is logged at
+  most once per checkpoint; `seen` maps the granule to the checkpoint's
+  serial number.
+- `Union`: an active-member entry of a non-fresh union that changes.
+- `Flags`: changed allocation flags of a non-fresh object. This covers
+  `MakeConst`, and the end of lifetime marked by cleanups.
+- `HeapMeta`: on the first heap allocation or deallocation under a
+  checkpoint, a snapshot of the heap structure, taken once per checkpoint.
+  It holds the top, the live and count counters, the slot count, the
+  size-class bins and the free-slot list.
+- `HSlot`: a heap slot that is about to be reused or freed. Freeing a
+  non-fresh block also logs that block's granules, since the allocator
+  reuses its bytes.
+
+A rollback therefore does three things. Objects that existed at the
+checkpoint get back their values, shadow, active members, flags and
+liveness. Heap blocks allocated since the checkpoint go back to the
+allocator. Frame and static objects made since the checkpoint are released.
+
+**The hooks.** Every VM path that modifies existing memory calls
+`trial_write(ptr, len)` before writing. These paths are:
+- stores and bit-field stores;
+- object copies and `bulk_copy`;
+- `ZeroInit` and `bit_cast` destinations;
+- vptr writes;
+- active-member changes.
+
+Union entries and flags change only through `union_put` and `set_flags`.
+
+**Speculative mode.** `TrialMode::Speculative` is clang's speculative
+evaluation (`EvaluateBuiltinConstantP`: `SpeculativeEvaluationRAII`, plus
+the evaluation-mode checks on side effects). Two kinds of effect fail with
+`MemFault::Speculative`, which is a not-constant fault:
+- writing a frame or static object that is not fresh for the innermost
+  speculative checkpoint;
+- `new` or `delete` in the evaluation context of any open speculative
+  checkpoint.
+
+Nested evaluations (`ensure_body`, constraints) run in deeper contexts and
+may still allocate.
+
+Writes to heap objects that existed before the trial are allowed and
+logged. `Op::Speculate` (`__builtin_constant_p`) opens a speculative
+checkpoint around its region:
+- if the region completes, the checkpoint is committed;
+- if the region fails, the checkpoint is rolled back. A not-constant
+  failure then answers 0. A resource limit (steps, depth, memory) is still
+  rolled back first, and then fails the evaluation.
+
+**Divergence from clang 19.** A failed speculative evaluation that wrote a
+heap object keeps that write in clang. In kiln it is rolled back
+(`tests/conformance/expr.const/constant-p-trial-rollback.cpp`, which is
+skipped for clang). Every other observable result matches clang
+(`constant-p-trial.cpp`, which is strict-diags under both compilers).
+
+`TrialMode::Transactional` allows every effect and undoes it on rollback.
+It is the general mode for future evaluator trials. No evaluator path uses
+it yet; the unit tests exercise it.
+
+**Complexity.**
+
+| Operation | Cost |
+|---|---|
+| Write outside any trial | One `Vec::is_empty` test. The logging path is out of line (`#[inline(never)]`). |
+| `checkpoint`, `commit` | O(1). |
+| Write inside a trial | O(granules written) the first time per checkpoint (a hash insert per granule), and a hash lookup after that. A fresh object costs one allocation lookup. |
+| Heap op inside a trial | O(bins + free slots) once per checkpoint (`HeapMeta`), O(1) after that. |
+| `rollback` | O(log entries since the checkpoint) plus the frame release. |
+
+**Memory bounds.**
+- The log holds at most one `Gran` per granule of a non-fresh object
+  written per open checkpoint. It also holds one `HeapMeta` per checkpoint
+  that touches the heap, and one `HSlot` (a boxed `Alloc`) per heap slot
+  reused or freed.
+- Writes to fresh objects are never logged. A trial that builds its own
+  data costs nothing beyond that data.
+- The log, the `seen` index and the checkpoint stack are freed when the
+  outermost checkpoint closes, and by `Memory::reset`. They are counted in
+  `Memory::footprint`.
+- So the memory of N sequential failed trials is O(1) in N.
+  `bench/oven/trial-rollback.cpp` runs 20000 failed trials over a helper
+  that writes a pre-existing heap buffer, fills a local array and calls
+  `new`. Before WP-135, every trial leaked its allocation: the measurement
+  was `peak_arena` 20,480,320 and `allocs` 20001, and the evaluation failed
+  the leak check. After WP-135 the measurement is `peak_arena` 320, `allocs`
+  1 and `frozen_bytes` 32 for any N.
+
+**Statistics.**
+- Cumulative counters keep the trial's work: `allocated` bytes, `allocs`,
+  steps and calls. The peaks keep their maxima: `peak_bytes`, `peak_arena`
+  and depth.
+- A rollback lowers the current arena and the live heap bytes. This keeps
+  `peak_arena` honest: it is the most memory the Oven held at once,
+  including inside trials.
+- The diagnostics of a failed trial are discarded. `Op::Speculate` runs its
+  region silent, and drops the pending records the region pushed, keeping
+  only their peaks.
+
+**Not rolled back.** These effects are all either independent of the trial
+or idempotent:
+- thawed globals and the provisional-resolution cache, which are reverted at
+  the next outermost evaluation;
+- the memo cache, which holds only pure calls with scalar parameters and no
+  heap operations, so its entries do not depend on context;
+- constants interned into the AST store, which are deduplicated by content;
+- functions instantiated by `ensure_body`, which are sema effects, as they
+  are in clang;
+- frame slot generation numbers.
+
+A frame release below an open checkpoint's frame top does not happen: the
+trial's region returns to the checkpoint's frame before the checkpoint
+closes. Rollback relies on this.
+
+**kiln_sema's speculative sites (audit).** SFINAE `fold_int` in
+`templ/args.rs`, constraint satisfaction (`templ/concepts`), noexcept
+(`except.rs`), narrowing `try_fold` (`init.rs`), and every other sema call
+of `try_fold`, `fold_int`, `eval_const`, `eval_int` or
+`is_constant_initialized` share one property. Each is an *outermost* Oven
+evaluation, or a nested one under `ensure_body`, so no memory outlives it:
+- `eval_outermost` resets `Memory` at its end;
+- provisional global resolutions are undone at the next outermost start;
+- frozen results are interned.
+
+None of these sites needs a checkpoint. A failed SFINAE or `requires` trial
+leaves only an interned constant and the instantiations clang would also
+perform. The WP-135 progress note has the site table.
+
 ### Classes — Landed (WP-076)
 
 *Status:* implemented in `crates/kiln_oven/src/compile/class.rs`
@@ -1038,6 +1194,10 @@ destruction, temporaries (static ones frozen into `LetData.value`),
 constant destruction, member pointers, class `new`/`delete` and the
 iterative spine walkers; see "Classes — Landed (WP-076)".
 
+Implemented (M3, WP-135): trial evaluation — checkpoint/commit/rollback
+over an undo log, with `__builtin_constant_p` as a speculative trial whose
+failure is rolled back; see "Trial evaluation — Landed (WP-135)".
+
 Remaining (each traps with a `kiln:` note today):
 - `std::allocator<T>::allocate`/`deallocate` and
   `__builtin_operator_new`/`__builtin_operator_delete`: need class
@@ -1076,7 +1236,15 @@ Remaining (each traps with a `kiln:` note today):
   function whose body is being made available, no memoization through it)
   and content interning of frozen aggregates.
 - `src/mem.rs` unit tests: the size classes, LIFO reuse, best-fit carving,
-  coalescing, top lowering, heap counters and per-context freeing.
+  coalescing, top lowering, heap counters and per-context freeing; the
+  trial undo log (WP-135): interleaved writes, once-per-checkpoint granule
+  logging, allocations and frees rolled back, nested checkpoints, unions
+  and flags, the speculative refusals, and a flat footprint over failed
+  trials.
+- `tests/conformance/expr.const/constant-p-trial*.cpp` (WP-135): a failed
+  trial's callee writes, unions and allocations, nested trials, kept
+  effects of a successful trial, and (kiln only, `oven:` budget) heap
+  rollback and memory O(1) in the number of failed trials.
 - `bench.rs` (ignored): the benchmarks above.
 - `common/`: a small recursive-descent C++ subset parser building kiln_ast
   directly (test-only; replaced by the real front end as it lands).

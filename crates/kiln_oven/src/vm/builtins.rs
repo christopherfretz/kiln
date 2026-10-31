@@ -400,6 +400,10 @@ impl Oven {
         if d_alloc.flags & flags::HAS_UNION != 0 || write_fault(ds, d_alloc, t).is_some() {
             return false;
         }
+        // A refused trial write: the element-wise copy reports it.
+        if self.mem.trial_write(dst, n).is_err() {
+            return false;
+        }
         self.mem.copy(ds, da, ss, sa, n);
         true
     }

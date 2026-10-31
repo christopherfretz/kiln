@@ -59,5 +59,6 @@ parsing past them exposed three more local-class-in-template errors
 - Default arguments that depend on a function template's parameters
   (`template<class T> void f(C<sizeof(T)> = {}); f<int>();`) find no
   viable function.
-- `__builtin_constant_p` speculation does not roll back writes made by
-  called functions, nor reclaim heap allocations, when it answers 0.
+- ~~`__builtin_constant_p` speculation does not roll back writes made by
+  called functions, nor reclaim heap allocations, when it answers 0.~~
+  Resolved by WP-135 (spec/oven.md "Trial evaluation").

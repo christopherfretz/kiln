@@ -126,9 +126,10 @@ impl Oven {
     }
 
     /// The destination object's space and absolute address.
-    fn dest(&self, dst: u64, n: u64, td: OTy) -> Result<(Sp, u64), Fault> {
+    fn dest(&mut self, dst: u64, n: u64, td: OTy) -> Result<(Sp, u64), Fault> {
         let fault = |f| Fault::Mem { f, ak: ak::INIT, ty: td, p: dst };
         let (ds, da, _) = self.mem.check(dst, n, true).map_err(fault)?;
+        self.mem.trial_write(dst, n).map_err(fault)?;
         Ok((ds, da))
     }
 
