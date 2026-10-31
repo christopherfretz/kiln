@@ -93,7 +93,20 @@ impl Sema<'_, '_> {
             deleted_as,
         };
         let (entity, ck) = self.take_ctor_entity();
-        let built = self.construct_special_at(to, class, k, Some(e), ck, at, entity, sites);
+        // [dcl.init.general]/16.6.2.1: the constructors are candidates
+        // for the source itself (a constructor template may beat the
+        // copy constructor for a derived-class source), and a failure
+        // lists them.
+        let style = if direct { InitStyle::Direct } else { InitStyle::Copy };
+        let sel = self.resolve_ctor(class, std::slice::from_ref(&e), style);
+        let call = CtorCall {
+            info: ConstructInfo { kind: ck, ..ConstructInfo::COMPLETE },
+            ..CtorCall::new(std::slice::from_ref(&e))
+        };
+        // A direct-initialization is at the entity (the variable, the
+        // cast), as clang's construct location.
+        let loc = if direct { entity_at } else { at };
+        let built = self.use_ctor(sel, to, class, k, call, loc, entity, sites);
         let Some(c) = built else {
             return Some(self.recover(to, &[e], at));
         };

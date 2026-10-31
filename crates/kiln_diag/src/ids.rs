@@ -743,6 +743,7 @@ diag_ids! {
     note_use_noexcept_false = Note (0) "use 'noexcept(false)' instead";
     sema_exception_spec_mismatch = Error (0) "exception specification in declaration does not match previous declaration";
     sema_missing_exception_spec = Error (2) "'{0}' is missing exception specification '{1}'";
+    sema_exception_spec_not_parsed = Error (0) "exception specification is not available until end of class definition";
     sema_undeclared_label = Error (1) "use of undeclared label '{0}'";
     sema_redefinition_of_label = Error (1) "redefinition of label '{0}'";
     sema_return_missing_expr = Error (1) "non-void function '{0}' should return a value";
@@ -962,6 +963,7 @@ diag_ids! {
     note_template_class_instantiation_here = Note (1) "in instantiation of template class '{0}' requested here";
     note_template_member_class_here = Note (1) "in instantiation of member class '{0}' requested here";
     note_template_member_function_here = Note (1) "in instantiation of member function '{0}' requested here";
+    note_template_exception_spec_here = Note (1) "in instantiation of exception specification for '{0}' requested here";
     note_function_template_spec_here = Note (1) "in instantiation of function template specialization '{0}' requested here";
     note_template_static_data_member_def_here = Note (1) "in instantiation of static data member '{0}' requested here";
     note_template_type_alias_instantiation_here = Note (1) "in instantiation of template type alias '{0}' requested here";
@@ -1148,6 +1150,7 @@ diag_ids! {
     note_ovl_candidate = Note (1) "candidate {0}";
     note_ovl_candidate_kind_not_viable = Note (2) "candidate {0} not viable: {1}";
     note_ovl_candidate_deleted = Note (2) "candidate {0} has been {1:explicitly|implicitly} deleted";
+    note_ovl_candidate_illegal_constructor = Note (1) "candidate {0:constructor|template} ignored: instantiation {0:takes|would take} its own class type by value";
     note_ovl_candidate_explicit = Note (1) "explicit {0:constructor|conversion function|deduction guide} is not a candidate";
     note_possible_target = Note (0) "possible target for call";
     sema_addr_ovl_cast = Error (3) "address of overloaded function '{0}' cannot be {1:cast|static_cast} to type {2}";

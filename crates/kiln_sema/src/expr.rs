@@ -1076,6 +1076,12 @@ impl Sema<'_, '_> {
             self.ast.decls.set_flags(d, DeclFlags::INVALID);
             return self.recover_err(&[], loc);
         }
+        // The exception specification is part of the type ([dcl.fct]/14):
+        // resolved before the reference takes it (clang's
+        // `DiagnoseUseOfDecl`).
+        if matches!(n.kind(), DeclKind::Function | DeclKind::CXXMethod) {
+            self.resolve_exc_for_type(d, loc);
+        }
         // Re-read: `check_undeduced_use` may have deduced the return type.
         let mut declared = self.ast.decls.get(d).ty().unwrap_or(QualType::ERROR);
         // A pack names its pattern ([temp.variadic]/5): `Ts... x` gives `x`
@@ -1085,6 +1091,10 @@ impl Sema<'_, '_> {
         }
         let ty = if self.ast.decls.builtin_id(d).is_some() {
             QualType::BUILTIN_FN
+        } else if n.kind() == DeclKind::EnumConstant
+            && let Some(t) = self.enumerator_pre_brace_type(d)
+        {
+            t
         } else {
             self.non_reference(declared)
         };
@@ -1114,6 +1124,9 @@ impl Sema<'_, '_> {
                 DeclKind::Var | DeclKind::ParmVar => self.pending_odr.push(e),
                 _ => {}
             }
+        } else if matches!(n.kind(), DeclKind::Function | DeclKind::CXXMethod) {
+            let at = self.eloc(e);
+            self.exc_spec_needed(d, at);
         }
         e
     }

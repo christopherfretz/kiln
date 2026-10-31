@@ -439,6 +439,7 @@ impl Sema<'_, '_> {
             let _ = self.ast.decls.cold.explicit_expr.insert(f, e);
         }
         self.create_params(f, &fparams, &defaults);
+        self.defer_late_noexcept(f, d);
         // A destructor without an exception specification gets the
         // implicit one ([except.spec]/8), computed when needed. In a
         // dependent context it is left alone; the instantiation gets its own

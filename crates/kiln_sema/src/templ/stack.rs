@@ -25,6 +25,9 @@ pub enum FrameKind {
     MemberClass,
     /// The definition of a member function of a specialization.
     MemberFunction,
+    /// The *noexcept-specifier* of a member of a specialization,
+    /// instantiated when needed ([temp.inst]/14, WP-112).
+    ExceptionSpec,
     /// The definition of a function template specialization (WP-071).
     FunctionSpec,
     /// The initializer of a static data member of a specialization.
@@ -87,6 +90,7 @@ impl FrameKind {
             FrameKind::ClassInstantiation => DiagId::note_template_class_instantiation_here,
             FrameKind::MemberClass => DiagId::note_template_member_class_here,
             FrameKind::MemberFunction => DiagId::note_template_member_function_here,
+            FrameKind::ExceptionSpec => DiagId::note_template_exception_spec_here,
             FrameKind::FunctionSpec => DiagId::note_function_template_spec_here,
             FrameKind::StaticDataMember => DiagId::note_template_static_data_member_def_here,
             FrameKind::AliasTemplate => DiagId::note_template_type_alias_instantiation_here,
@@ -117,6 +121,7 @@ impl FrameKind {
             FrameKind::ClassInstantiation => "class",
             FrameKind::MemberClass => "member-class",
             FrameKind::MemberFunction => "member-function",
+            FrameKind::ExceptionSpec => "exception-spec",
             FrameKind::FunctionSpec => "function",
             FrameKind::StaticDataMember => "static-data-member",
             FrameKind::AliasTemplate => "alias",
@@ -341,6 +346,7 @@ impl Sema<'_, '_> {
             FrameKind::ClassInstantiation
             | FrameKind::MemberClass
             | FrameKind::MemberFunction
+            | FrameKind::ExceptionSpec
             | FrameKind::FunctionSpec
             | FrameKind::StaticDataMember
             | FrameKind::VarTemplateInstantiation
@@ -455,6 +461,8 @@ impl Sema<'_, '_> {
                     None => self.qualified_decl_name(f.entity),
                 }
             }
+            // clang names the function unqualified here.
+            FrameKind::ExceptionSpec => self.decl_name(f.entity),
             _ => self.qualified_decl_name(f.entity),
         }
     }

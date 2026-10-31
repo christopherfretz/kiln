@@ -898,7 +898,7 @@ impl Sema<'_, '_> {
     /// The class definition specialization `spec` of `tmpl` was
     /// instantiated from: the matched partial specialization's
     /// ([temp.spec.partial.match]) or the primary template's.
-    fn spec_pattern_class(&self, spec: DeclId, tmpl: DeclId) -> Option<DeclId> {
+    pub(crate) fn spec_pattern_class(&self, spec: DeclId, tmpl: DeclId) -> Option<DeclId> {
         let from = self.ast.spec_info(spec).map(|(_, s)| s.from);
         if let Some(from) = from.filter(|&f| self.ast.partial_spec_info(f).is_some()) {
             return self.ast.definition(from);
@@ -908,7 +908,7 @@ impl Sema<'_, '_> {
 
     /// The class template specialization member `f` was instantiated
     /// with.
-    fn inst_owner(&self, f: DeclId) -> Option<DeclId> {
+    pub(crate) fn inst_owner(&self, f: DeclId) -> Option<DeclId> {
         let mut c = self.ast.decls.lexical_ctx(f).or_else(|| self.ast.decls.get(f).ctx());
         while let Some(x) = c {
             if self.ast.spec_info(x).is_some() {

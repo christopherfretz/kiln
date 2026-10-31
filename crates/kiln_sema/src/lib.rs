@@ -200,6 +200,11 @@ pub struct Sema<'a, 'sm> {
     /// Member functions whose *noexcept-specifier* awaits replay
     /// (`ExcSpec::Deferred`, spec/sema-class.md §2.7).
     pub(crate) unparsed_exc: kiln_source::fx::FxHashSet<DeclId>,
+    /// Members of class template specializations whose dependent
+    /// *noexcept-specifier* is instantiated when needed ([temp.inst]/14,
+    /// clang's `EST_Uninstantiated`): the first declaration maps to its
+    /// pattern; its type carries `ExcSpec::Deferred(pattern)`.
+    pub(crate) uninstantiated_exc: kiln_source::fx::FxHashMap<DeclId, DeclId>,
     /// The enclosing function's state and the scopes pushed for a member
     /// function definition, saved by `act_on_start_function_def` while a
     /// (local class's or out-of-line) member function body is analysed.
@@ -299,6 +304,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             mem_inits: class::MemInitState::default(),
             extend_collector: None,
             unparsed_exc: kiln_source::fx::FxHashSet::default(),
+            uninstantiated_exc: kiln_source::fx::FxHashMap::default(),
             fn_saved: Vec::new(),
             member_refs: kiln_source::fx::FxHashMap::default(),
             friend_tag: None,

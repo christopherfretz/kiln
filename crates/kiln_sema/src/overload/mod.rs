@@ -116,6 +116,9 @@ pub(crate) enum CandidateFailure {
     /// The result of a conversion function does not convert to the
     /// target ([over.match.conv]/1).
     BadFinalConversion,
+    /// A constructor template specialization that would take its own
+    /// class by value to copy an object of it ([class.copy.ctor]/5).
+    IllegalCtor,
 }
 
 /// A rewritten comparison candidate's form ([over.match.oper]/3.4;

@@ -55,6 +55,7 @@ impl RowKind {
             FrameKind::VarTemplateInstantiation | FrameKind::VarTemplateInit => RowKind::Var,
             FrameKind::MemberClass
             | FrameKind::MemberFunction
+            | FrameKind::ExceptionSpec
             | FrameKind::Enum
             | FrameKind::Nsdmi => RowKind::Member,
             FrameKind::DefaultTemplateArg
