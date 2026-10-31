@@ -268,6 +268,33 @@ impl Sema<'_, '_> {
         self.lookup_name_scoped(dname, LookupKind::Ordinary, true)
     }
 
+    /// The declarations block scope `s` gives for `name` when `raw` is
+    /// the last one found: a function is one of an overload set of every
+    /// block-scope function and using-declarator target of the name
+    /// ([basic.lookup.general]/1, [namespace.udecl]/1).
+    fn block_scope_set(
+        &self,
+        s: &crate::scope::Scope,
+        name: Symbol,
+        raw: DeclId,
+        kind: LookupKind,
+    ) -> Vec<DeclId> {
+        let fnlike = |d: DeclId| {
+            matches!(
+                self.kind_of(self.ast.strip_shadow(d)),
+                DeclKind::Function | DeclKind::FunctionTemplate
+            )
+        };
+        if kind != LookupKind::Ordinary || !fnlike(raw) {
+            return vec![raw];
+        }
+        s.locals
+            .iter()
+            .filter(|e| e.0 == name && e.2 == Ns::Ordinary && fnlike(e.1))
+            .map(|e| e.1)
+            .collect()
+    }
+
     fn lookup_name_scoped(&self, dname: DeclName, kind: LookupKind, skip_records: bool) -> Found {
         let ident = dname.as_ident();
         let name = ident.unwrap_or(Symbol::from_index(0));
@@ -329,7 +356,7 @@ impl Sema<'_, '_> {
                         .map(|e| e.1),
                 };
                 if let Some(raw) = hit {
-                    let found = self.filter(vec![raw], kind);
+                    let found = self.filter(self.block_scope_set(s, name, raw, kind), kind);
                     if !found.is_empty() {
                         return found;
                     }

@@ -11,7 +11,11 @@ with kiln main after WP-072 (2026-10-31: the whole M3 template engine —
 070a/b, 071, 072, 073, 074, 087 — plus classes 067a/b, overloading
 068a/b, virtuals 077/078/080, builtins 088, `__int128` 107), updated
 for WP-109 (concepts and alias follow-ups) on the `<type_traits>`,
-`<compare>`, `<utility>`, `<array>`, `<span>` and `<string_view>` rows. The M3
+`<compare>`, `<utility>`, `<array>`, `<span>` and `<string_view>` rows,
+and again for WP-128 (gate blockers: void returns of dependent calls,
+block-scope `using` of overload sets, braced arguments and `::new` in
+dependent expressions, `::__builtin_*`, alias templates substituted in
+their own context) on the last four. The M3
 gate headers (WP-081) are listed last. "First
 blocker" is the first error kiln reports. The counts are all the errors
 in the header's closure; most are follow-ons of the same unsupported
@@ -31,10 +35,10 @@ feature. Every header preprocesses identically to clang (see
 | `<limits>` | 0 | 0 | — | none | |
 | `<type_traits>` | 0 | 0 | 431 | none (clean since WP-109, 2026-10-31) | |
 | `<compare>` | 0 | 0 | 399 | none (clean since WP-122, 2026-10-31) | that error + follow-ons |
-| `<utility>` | 1 | 6 | — | WP-128 items | same + follow-ons |
-| `<span>` | 1 | 15 | — | WP-128 items | same + follow-ons |
-| `<array>` | 1 | 25 | — | WP-128 items (void returns in `new`, `using ranges::get`, `::new`, `::__builtin_*`) + CTAD deduction guides (WP-071b) | that + dependent NNS chains, friend templates |
-| `<string_view>` | 1 | 41 | — | same as `<array>` | same |
+| `<utility>` | 1 | 1 | — | CTAD deduction guide (`pair.h:484`, WP-071b) | that error only |
+| `<span>` | 1 | 13 | — | CTAD deduction guides (`subrange.h`, `span:604-620`) | guides; `static_cast<…>(_Tp())` in a template argument list (`span:595`) and its `__integral_constant_like` follow-ons |
+| `<array>` | 1 | 8 | — | `__datasizeof(_Tp)` (`datasizeof.h:31`) | CTAD deduction guides (5), `consteval` (`ranges_iterator_concept.h:31`) |
+| `<string_view>` | 1 | 23 | — | CTAD deduction guide (`pair.h:484`) | guides (8), qualified `operator()` after a template-id (`hash.h`, 3), dependent `switch`, `consteval`, `__datasizeof`, `__builtin_va_list`, `__builtin_constant_p`, `__is_assignable`, literal operators, local classes in templates, `__invoke` ambiguity |
 
 The single-header counts rose a little: before WP-065 the parser gave
 up on a class at its first constructor or operator (one "special member

@@ -279,13 +279,17 @@ impl Sema<'_, '_> {
         if !self.push_inst_frame(FrameKind::AliasTemplate, pattern, tmpl, loc) {
             return Err(());
         }
-        let r = {
-            let saved = std::mem::take(&mut self.ast.templates.dependent_depth);
-            let mut s = Substituter::new(self, &args);
-            let r = s.ty(u, loc);
-            self.ast.templates.dependent_depth = saved;
-            r
-        };
+        // Names in the aliased type are looked up from the alias's own
+        // context, not from the use ([temp.res.general]/1): `f<int>(t)`
+        // in a member alias finds the class's `f` when the alias is used
+        // outside the class.
+        let ctx = self.ast.decls.get(tmpl).ctx().unwrap_or(self.ast.tu);
+        let pairs = self.inst_context_pairs(ctx);
+        let r = self.in_inst_context(ctx, |s| {
+            let mut sub = Substituter::new(s, &args);
+            sub.map_contexts(&pairs);
+            sub.ty(u, loc)
+        });
         self.pop_inst_frame();
         let Ok(u) = r else { return Err(()) };
         let _ = self.inst.alias_cache.insert((tmpl, conv.canonical), u);

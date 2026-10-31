@@ -610,7 +610,12 @@ impl Sema<'_, '_> {
             Some(e) => {
                 let ety = self.ast.exprs.get(e).ty();
                 if ret_void {
-                    if !self.ast.types.is_void(ety) && !self.is_error_type(ety) {
+                    // [stmt.return]/2: an operand of type `void` is fine;
+                    // a type-dependent one is checked at instantiation.
+                    if !self.ast.types.is_void(ety)
+                        && !self.is_error_type(ety)
+                        && !self.expr_is_type_dependent(e)
+                    {
                         let d = self.diag(DiagId::sema_return_has_expr, loc).arg(fname);
                         self.emit(d);
                     }

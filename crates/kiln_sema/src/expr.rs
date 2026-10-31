@@ -775,7 +775,9 @@ impl Sema<'_, '_> {
             return self.recover_err(&[], loc);
         }
         let Some(&d) = found.decls.first() else {
-            if qualifier.is_none()
+            // A builtin is declared in the global namespace on first use,
+            // so `::__builtin_memmove` names it too (clang).
+            if qualifier.is_none_or(|q| q == self.ast.tu)
                 && let Some(sym) = name.as_ident()
                 && let Some(b) = self.lazily_create_builtin(sym, loc)
             {
@@ -2622,18 +2624,21 @@ impl Sema<'_, '_> {
         if self.is_err_expr(callee) || args.iter().any(|&a| self.is_err_expr(a)) {
             return self.recover_err(&kids, loc);
         }
+        // [temp.dep.expr]/3: a braced-init-list argument with a
+        // type-dependent initializer (at any depth) makes the call
+        // dependent.
+        let args_dep = args.iter().any(|&a| self.expr_is_type_dependent(a))
+            || braced.iter().flatten().any(|l| self.init_list_type_dependent(l));
         let callee = if self.ast.exprs.get(self.ignore_parens(callee)).kind()
             == ExprKind::UnresolvedLookupExpr
             && !self.expr_is_type_dependent(callee)
-            && !args.iter().any(|&a| self.expr_is_type_dependent(a))
+            && !args_dep
         {
             match self.resolve_unresolved_call(callee, args, &braced) {
                 Some(e) if !self.is_err_expr(e) => e,
                 _ => return self.recover_err(&kids, loc),
             }
-        } else if self.member_overload(callee).is_some()
-            && !args.iter().any(|&a| self.expr_is_type_dependent(a))
-        {
+        } else if self.member_overload(callee).is_some() && !args_dep {
             match self.resolve_member_call(callee, args, &braced) {
                 Some(e) if !self.is_err_expr(e) => self.rebuild_parens(callee, e),
                 _ => return self.recover_err(&kids, loc),
@@ -2641,14 +2646,16 @@ impl Sema<'_, '_> {
         } else {
             callee
         };
-        if self.expr_is_type_dependent(callee)
-            || args.iter().any(|&a| self.expr_is_type_dependent(a))
-        {
-            if braced.iter().any(Option::is_some) {
-                self.templ_unimplemented("braced arguments in a dependent call", loc);
-                return self.recover_err(&kids, loc);
-            }
-            return self.dependent_call(callee, args, loc, rparen);
+        if self.expr_is_type_dependent(callee) || args_dep {
+            // A braced-init-list argument is kept as written (nested
+            // lists included) and list-initializes its parameter at
+            // instantiation ([dcl.init.list]/1, [temp.dep.expr]/3).
+            let args: Vec<ExprId> = args
+                .iter()
+                .zip(&braced)
+                .map(|(&a, b)| b.as_ref().map_or(a, |l| self.dependent_init_list(l)))
+                .collect();
+            return self.dependent_call(callee, &args, loc, rparen);
         }
         // [over.call.object]: a call of an object of class type.
         if self.ast.types.as_record(self.ety(callee)).is_some()

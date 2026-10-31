@@ -58,6 +58,29 @@ impl Substituter<'_, '_, '_> {
         self.expand_exprs(&v)
     }
 
+    /// The arguments of a call: a braced-init-list argument becomes a
+    /// braced argument again ([`crate::Sema::act_on_braced_arg`]), which
+    /// the call list-initializes its parameter from (a dependent call
+    /// keeps it as written, [`crate::Sema::dependent_init_list`]).
+    fn call_arg_list(&mut self, l: kiln_ast::ids::ListId) -> SubstResult<Vec<ExprId>> {
+        let v: Vec<ExprId> = self.sema.ast.lists.iter::<ExprId>(l).collect();
+        if !v.iter().any(|&x| self.sema.ast.exprs.get(x).kind() == ExprKind::InitListExpr) {
+            return self.expr_list(l);
+        }
+        let mut out = Vec::with_capacity(v.len());
+        for x in v {
+            match self.sema.ast.exprs.get(x).kind() {
+                ExprKind::CXXDefaultArgExpr => break,
+                ExprKind::InitListExpr => {
+                    let il = self.init_list(x)?;
+                    out.push(self.sema.act_on_braced_arg(il));
+                }
+                _ => out.extend(self.expand_exprs(&[x])?),
+            }
+        }
+        Ok(out)
+    }
+
     #[allow(clippy::too_many_lines, reason = "one arm per expression kind, as TreeTransform")]
     fn expr_node(&mut self, e: ExprId) -> SubstResult<ExprId> {
         fn ex<'x>(s: &'x Substituter<'_, '_, '_>) -> &'x kiln_ast::expr::ExprArena {
@@ -146,7 +169,7 @@ impl Substituter<'_, '_, '_> {
                 let callee = ex(self).callee(e);
                 let args = ex(self).call_args(e);
                 let callee = self.callee(callee)?;
-                let args = self.expr_list(args)?;
+                let args = self.call_arg_list(args)?;
                 // clang `TransformCallExpr`: the "fake" `(` is where the
                 // callee begins.
                 let lparen = self.sema.begin_loc(callee);
@@ -447,8 +470,55 @@ impl Substituter<'_, '_, '_> {
                     _ => self.sema.act_on_paren_list_cast(ty, &args, loc, end),
                 })
             }
+            ExprKind::CXXNewExpr => self.new_expr(e, loc, end),
             _ => self.unimplemented(&format!("substitution into {k:?}"), loc),
         }
+    }
+
+    /// A dependent new-expression ([expr.new]), as
+    /// [`crate::Sema::act_on_cxx_new`] kept it: rebuilt from the
+    /// allocated type, the first bound, the placement arguments and the
+    /// initializer as written (clang `TransformCXXNewExpr`).
+    fn new_expr(&mut self, e: ExprId, loc: Loc, end: Loc) -> SubstResult<ExprId> {
+        use crate::declspec::{Chunk, Declarator, DeclaratorContext};
+        use crate::new_delete::{NewInit, NewPlacement, NewTypeId};
+        use kiln_ast::expr::NewInitStyle;
+        let n = *self.sema.ast.exprs.get(e);
+        let x = *self.sema.ast.exprs.new_extra(e);
+        let style = self.sema.ast.exprs.new_init_style(e);
+        if x.operator_new.is_some() {
+            return self.unimplemented("substitution into an analyzed new-expression", loc);
+        }
+        let placement = match x.placement {
+            Some(l) => {
+                let args: Vec<ExprId> = self.sema.ast.lists.iter::<ExprId>(l).collect();
+                Some(NewPlacement { args: self.expand_exprs(&args)?, lparen: loc, rparen: loc })
+            }
+            None => None,
+        };
+        let base = self.ty(x.allocated_ty, x.type_loc)?;
+        let mut declarator = Declarator::new(DeclaratorContext::TypeName, x.type_loc);
+        if n.has(ExprFlags::ARRAY_FORM) {
+            let size = self.opt_expr(x.array_size)?;
+            declarator.chunks.push(Chunk::Array { size, loc: x.type_loc });
+        }
+        let tid = NewTypeId { base, declarator, loc: x.type_loc, parenthesized: false };
+        let init = match (style, x.init) {
+            (NewInitStyle::None, _) | (_, None) => NewInit::None,
+            (_, Some(i)) => match self.sema.ast.exprs.get(i).kind() {
+                ExprKind::ParenListExpr => {
+                    let l = kiln_ast::ids::ListId::new(self.sema.ast.exprs.get(i).a());
+                    let args = self.expr_list(l)?;
+                    let at = self.sema.ast.exprs.get(i).loc();
+                    let r = self.sema.ast.exprs.end_loc(i).unwrap_or(at);
+                    NewInit::Paren(args, at, r)
+                }
+                ExprKind::InitListExpr => NewInit::List(self.init_list(i)?),
+                _ => return self.unimplemented("substitution into this new-initializer", loc),
+            },
+        };
+        let global = n.has(ExprFlags::GLOBAL);
+        Ok(self.sema.act_on_cxx_new(global, loc, placement, tid, init, end))
     }
 
     /// The object expression of a member access: an implicit `this` is
@@ -637,7 +707,20 @@ impl Substituter<'_, '_, '_> {
         let r = self.sema.act_on_call_name_dn(name, n.loc());
         if let Some(t) = targs {
             if self.sema.ast.exprs.get(r).kind() == ExprKind::UnresolvedLookupExpr {
-                let _ = self.sema.ast.templates.expr_targs.insert(r, t);
+                // Rebuilt with the arguments, so that dependent ones (an
+                // outer level still being substituted) make the name, and
+                // the call, type-dependent ([temp.dep.expr]/3).
+                let rn = *self.sema.ast.exprs.get(r);
+                let ds = self.sema.ast.unresolved_decls(r);
+                let nns = self.sema.ast.templates.expr_nns.get(r).copied();
+                return Ok(self.sema.builder().unresolved_lookup(
+                    name,
+                    &ds,
+                    rn.aux() != 0,
+                    nns,
+                    Some(t),
+                    rn.loc(),
+                ));
             } else if self.sema.is_member_template_ref(r) {
                 // An implicit member template-id `this->f<T>` (§6.4).
                 return Ok(self.sema.act_on_member_template_args(r, t));
