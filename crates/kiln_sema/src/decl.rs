@@ -1425,6 +1425,53 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// A typedef-name redeclared by a typedef or alias-declaration of
+    /// `name` at `loc` with type `underlying`, the previous one being `p`
+    /// (`alias_template`: both are alias template patterns). The previous
+    /// declaration to chain to, `None` after a diagnostic.
+    fn check_typedef_redefinition(
+        &mut self,
+        p: DeclId,
+        underlying: QualType,
+        alias_template: bool,
+        name: Symbol,
+        loc: Loc,
+    ) -> Option<DeclId> {
+        let pk = self.ast.decls.get(p).kind();
+        let pty = self.ast.decls.typedef(p).map_or(QualType::ERROR, |t| t.underlying);
+        // [dcl.typedef]/4 with [temp.over.link]/5: dependent types compare
+        // by their canonical profiles. A redefinition that is not an alias
+        // template's is checked only when neither type is dependent
+        // (clang's `isIncompatibleTypedef`); a mismatch is then diagnosed
+        // at instantiation.
+        let t = &self.ast.types;
+        let deferred = !alias_template && (t.is_dependent(pty) || t.is_dependent(underlying));
+        if !deferred && !t.same_type(pty, underlying) {
+            // The kind is the previous declaration's (clang).
+            let msg = self
+                .diag(DiagId::sema_redefinition_different_typedef, loc)
+                .arg(match (pk, alias_template) {
+                    (_, true) => "2",
+                    (DeclKind::TypeAlias, false) => "1",
+                    (_, false) => "0",
+                })
+                .arg(self.ty_arg(underlying))
+                .arg(self.ty_arg(pty));
+            let msg = self.note_prev(msg, p, true);
+            self.emit(msg);
+            return None;
+        }
+        if self.kind_of(self.ctx) == DeclKind::CXXRecord {
+            // [dcl.typedef]/4, CWG56/424: a typedef-name is not redeclared
+            // in class scope.
+            let msg = self.diag(DiagId::sema_redefinition, loc).arg(sym_str(self, name));
+            let msg = self.note_prev(msg, p, true);
+            self.emit(msg);
+            return None;
+        }
+        Some(p)
+    }
+
     /// `typedef T name;` or `using name = T;` ([dcl.typedef]).
     fn act_on_typedef(
         &mut self,
@@ -1471,7 +1518,6 @@ impl Sema<'_, '_> {
             None => ty,
         };
         let mut prev_ok = None;
-        let mut invalid = false;
         // An alias template redeclared ([temp.alias], clang's
         // `ActOnAliasDeclaration`): the same type through equivalent
         // parameters (canonical types compare by depth and index) chains
@@ -1481,48 +1527,31 @@ impl Sema<'_, '_> {
                 .then(|| self.pattern_of(p))
                 .flatten()
         });
-        let prev = alias_template_prev.or(prev);
+        // [temp.over.link]/6: the heads must be equivalent first (clang
+        // drops a redeclaration whose head differs).
+        let heads_differ = match (alias_template_prev, self.templ.cur, prev) {
+            (Some(_), Some(new), Some(t)) => {
+                let old = self.ast.template_info(t).map(|i| i.params);
+                old.is_some_and(|old| !self.check_template_heads_match(new, old))
+            }
+            _ => false,
+        };
+        let mut invalid = heads_differ;
+        let prev = if heads_differ { None } else { alias_template_prev.or(prev) };
         if let Some(p) = prev {
             let pk = self.ast.decls.get(p).kind();
             if matches!(pk, DeclKind::Typedef | DeclKind::TypeAlias)
                 && (alias_template_prev.is_some() == self.templ.cur.is_some())
             {
-                let pty = self.ast.decls.typedef(p).map_or(QualType::ERROR, |t| t.underlying);
-                // [dcl.typedef]/4 with [temp.over.link]/5: dependent types
-                // compare by their canonical profiles. A redefinition that
-                // is not an alias template's is checked only when neither
-                // type is dependent (clang's `isIncompatibleTypedef`); a
-                // mismatch is then diagnosed at instantiation.
-                let t = &self.ast.types;
-                let deferred = alias_template_prev.is_none()
-                    && (t.is_dependent(pty) || t.is_dependent(underlying));
-                if deferred || t.same_type(pty, underlying) {
-                    if self.kind_of(self.ctx) == DeclKind::CXXRecord {
-                        // [dcl.typedef]/4, CWG56/424: a typedef-name is not
-                        // redeclared in class scope.
-                        let msg = self
-                            .diag(DiagId::sema_redefinition, d.name_loc())
-                            .arg(sym_str(self, name));
-                        let msg = self.note_prev(msg, p, true);
-                        self.emit(msg);
-                        invalid = true;
-                    } else {
-                        prev_ok = Some(p);
-                    }
-                } else {
-                    // The kind is the previous declaration's (clang).
-                    let msg = self
-                        .diag(DiagId::sema_redefinition_different_typedef, d.name_loc())
-                        .arg(match (pk, alias_template_prev.is_some()) {
-                            (_, true) => "2",
-                            (DeclKind::TypeAlias, false) => "1",
-                            (_, false) => "0",
-                        })
-                        .arg(self.ty_arg(underlying))
-                        .arg(self.ty_arg(pty));
-                    let msg = self.note_prev(msg, p, true);
-                    self.emit(msg);
-                    invalid = true;
+                match self.check_typedef_redefinition(
+                    p,
+                    underlying,
+                    alias_template_prev.is_some(),
+                    name,
+                    d.name_loc(),
+                ) {
+                    Some(p) => prev_ok = Some(p),
+                    None => invalid = true,
                 }
             } else {
                 let msg = self
@@ -3025,6 +3054,20 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// The template head of a class template redeclaration that creates
+    /// no new decl (`template<class T> struct C;` again): equivalent to
+    /// the template's ([temp.over.link]/6), then checked for default
+    /// arguments ([temp.param]/12, /14).
+    fn check_redeclared_class_head(&mut self, p: DeclId) {
+        if let Some(list) = self.templ.cur.take()
+            && let Some(t) = self.ast.described_template(p)
+            && let Some(old) = self.ast.template_info(t).map(|i| i.params)
+            && self.check_template_heads_match(list, old)
+        {
+            self.check_template_param_list(DeclKind::ClassTemplate, list, Some(t));
+        }
+    }
+
     /// A class-key or `enum` followed by a name ([dcl.type.elab],
     /// [class.pre], [dcl.enum]). `scoped` is `EnumData::SCOPED[_STRUCT]`
     /// bits; `fixed` the enum-base. Returns the tag declaration.
@@ -3095,11 +3138,7 @@ impl Sema<'_, '_> {
                     // clang adds a `ClassTemplateDecl` per redeclaration),
                     // but its template head is still checked against the
                     // template's ([temp.param]/12, /14).
-                    if let Some(list) = self.templ.cur.take()
-                        && let Some(t) = self.ast.described_template(p)
-                    {
-                        self.check_template_param_list(DeclKind::ClassTemplate, list, Some(t));
-                    }
+                    self.check_redeclared_class_head(p);
                     return p;
                 }
             } else if qualifier.is_some() {

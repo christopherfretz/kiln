@@ -614,7 +614,20 @@ impl Sema<'_, '_> {
             }
         };
         let prev = self.ast.prev(pattern).and_then(|p| self.ast.described_template(p));
-        self.check_template_param_list(kind, list, prev);
+        // [temp.over.link]/6: a class or variable template is redeclared
+        // with an equivalent head (alias templates are checked by
+        // `act_on_typedef`, function templates with other heads are
+        // overloads).
+        let old = prev.and_then(|t| self.ast.template_info(t)).map(|i| i.params);
+        let heads_match = match old {
+            Some(old) if matches!(kind, DeclKind::ClassTemplate | DeclKind::VarTemplate) => {
+                self.check_template_heads_match(list, old)
+            }
+            _ => true,
+        };
+        if heads_match {
+            self.check_template_param_list(kind, list, prev);
+        }
         let t = self.builder().template_decl(kind, pattern, list, prev);
         Some(t)
     }

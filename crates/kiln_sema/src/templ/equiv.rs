@@ -13,6 +13,8 @@
 
 use kiln_ast::decl::{DeclKind, FnStorage};
 use kiln_ast::{DeclId, ExprId, TemplateParamListId};
+use kiln_diag::DiagId;
+use kiln_source::Loc;
 
 use crate::Sema;
 use crate::overload::redecl::NewFn;
@@ -76,5 +78,138 @@ impl Sema<'_, '_> {
             .and_then(|t| self.ast.template_info(t))
             .map(|i| i.params);
         self.ast.decls.function(d).map(|_| (d, head))
+    }
+
+    /// clang's `TemplateParameterListsAreEqual` (`TPL_TemplateMatch`):
+    /// whether the template head `new` of a class, variable or alias
+    /// template redeclaration is equivalent to the previous head `old`
+    /// ([temp.over.link]/6: same length, kinds, packs, non-type
+    /// parameter types, type-constraints and requires-clause). Diagnoses
+    /// the first difference.
+    pub(crate) fn check_template_heads_match(
+        &mut self,
+        new: TemplateParamListId,
+        old: TemplateParamListId,
+    ) -> bool {
+        self.heads_match_in(new, old, false)
+    }
+
+    /// [`Self::check_template_heads_match`]; `nested`: the lists of a
+    /// template template parameter (clang's
+    /// `TPL_TemplateTemplateParmMatch`), which carry no requires-clause
+    /// check of their own here.
+    fn heads_match_in(
+        &mut self,
+        new: TemplateParamListId,
+        old: TemplateParamListId,
+        nested: bool,
+    ) -> bool {
+        if new == old {
+            return true;
+        }
+        let which = u8::from(nested);
+        let (ln, lo) = (*self.ast.templates.param_list(new), *self.ast.templates.param_list(old));
+        let pn: Vec<DeclId> = self.ast.lists.iter::<DeclId>(ln.params).collect();
+        let po: Vec<DeclId> = self.ast.lists.iter::<DeclId>(lo.params).collect();
+        if pn.len() != po.len() {
+            let d = self
+                .diag(DiagId::sema_template_param_list_different_arity, ln.template_loc)
+                .arg(u8::from(pn.len() > po.len()))
+                .arg(which);
+            let note =
+                self.diag(DiagId::note_template_prev_declaration, lo.template_loc).arg(which);
+            self.emit(d.with_note(note));
+            return false;
+        }
+        for (&x, &y) in pn.iter().zip(&po) {
+            if !self.params_match(x, y, which) {
+                return false;
+            }
+        }
+        if nested {
+            return true;
+        }
+        if !self.opt_exprs_equivalent(ln.requires, lo.requires) {
+            let at_n = ln.requires.map_or(ln.template_loc, |e| self.begin_loc(e));
+            let at_o = lo.requires.map_or(lo.template_loc, |e| self.begin_loc(e));
+            let d = self.diag(DiagId::sema_template_different_requires_clause, at_n);
+            let note = self.diag(DiagId::note_template_prev_declaration, at_o).arg(0);
+            self.emit(d.with_note(note));
+            return false;
+        }
+        true
+    }
+
+    /// clang's `MatchTemplateParameterKind` for parameter `x` of a
+    /// redeclaration against `y` of the previous declaration.
+    fn params_match(&mut self, x: DeclId, y: DeclId, which: u8) -> bool {
+        let (kx, ky) = (self.kind_of(x), self.kind_of(y));
+        let (lx, ly) = (self.ast.decls.get(x).loc(), self.ast.decls.get(y).loc());
+        if kx != ky {
+            let d = self.diag(DiagId::sema_template_param_different_kind, lx).arg(which);
+            let note = self.diag(DiagId::note_template_prev_declaration, ly).arg(which);
+            self.emit(d.with_note(note));
+            return false;
+        }
+        let (Some(ix), Some(iy)) =
+            (self.ast.template_parm(x).copied(), self.ast.template_parm(y).copied())
+        else {
+            return true;
+        };
+        let kind_index = match kx {
+            DeclKind::TemplateTypeParm => 0u8,
+            DeclKind::NonTypeTemplateParm => 1,
+            _ => 2,
+        };
+        if ix.pack != iy.pack {
+            let d = self
+                .diag(DiagId::sema_template_parameter_pack_non_pack, lx)
+                .arg(kind_index)
+                .arg(u8::from(ix.pack));
+            let note = self
+                .diag(DiagId::note_template_parameter_pack_here, ly)
+                .arg(kind_index)
+                .arg(u8::from(iy.pack));
+            self.emit(d.with_note(note));
+            return false;
+        }
+        match kx {
+            DeclKind::NonTypeTemplateParm => {
+                let (tx, ty) = (self.ast.decls.get(x).ty(), self.ast.decls.get(y).ty());
+                if let (Some(tx), Some(ty)) = (tx, ty)
+                    && !self.ast.types.same_type(tx, ty)
+                {
+                    let d = self
+                        .diag(DiagId::sema_template_nontype_parm_different_type, lx)
+                        .arg(self.ty_arg(tx))
+                        .arg(which);
+                    let note = self
+                        .diag(DiagId::note_template_nontype_parm_prev_declaration, ly)
+                        .arg(self.ty_arg(ty));
+                    self.emit(d.with_note(note));
+                    return false;
+                }
+            }
+            DeclKind::TemplateTemplateParm => {
+                if let (Some(a), Some(b)) = (ix.params, iy.params)
+                    && !self.heads_match_in(a, b, true)
+                {
+                    return false;
+                }
+            }
+            _ => {}
+        }
+        if which == 0 && !self.opt_exprs_equivalent(ix.constraint, iy.constraint) {
+            // An unconstrained parameter's diagnostic is at its name: the
+            // parameter's first token is not recorded (clang: the
+            // `class`/`typename` keyword).
+            let at = |s: &Self, c: Option<ExprId>, l: Loc| c.map_or(l, |e| s.begin_loc(e));
+            let (at_x, at_y) = (at(self, ix.constraint, lx), at(self, iy.constraint, ly));
+            let d = self.diag(DiagId::sema_template_different_type_constraint, at_x);
+            let note = self.diag(DiagId::note_template_prev_declaration, at_y).arg(0);
+            self.emit(d.with_note(note));
+            return false;
+        }
+        true
     }
 }
