@@ -2834,6 +2834,76 @@ explicit specialization errors remain. The blockers are:
   - 2 pack expansions (WP-072);
   - 4 unrelated to WP-071: `__int128_t` and its follow-ons.
 
+**Landed (WP-072): packs.**
+- `templ/pack.rs` expands by probing (§7.1): the pattern is substituted
+  once with `probing` set; the first pack reached records its length
+  (and name) and aborts the probe; the pattern is then substituted once
+  per element. A probe that reaches no pack leaves the expansion as
+  written (`Expansion::Unexpanded`). Packs of different lengths are
+  "pack expansion contains parameter packs 'Ts' and 'Us' that have
+  different lengths (2 vs. 3)" at the `...` (clang's `EllipsisLoc`).
+- Expansion sites: template argument lists, function parameter types,
+  call arguments and paren lists, braced lists (`S{ts...}`), paren
+  initializers (`P p(ts...)`, also in the parser), mem-initializer
+  expansions (`B(ts)...`) and their argument lists, base-specifier
+  packs, type-trait arguments, and function parameter packs
+  (`DeclOrPack::Pack`).
+- Folds (§7.3) are built iteratively along the spine with `act_binary`
+  at the `...`. Empty folds give `true`, `false` or `void()` at the
+  `...`; any other operator is an error there. R-WALK:
+  `stress/fold-65536.cpp` folds 65,536 elements through the Oven (2
+  steps, 1 call, 8 bytes; 0.12 s of Oven wall time in a debug build) and
+  codegen, and runs. clang 19 cannot compile it (bracket depth 256;
+  raised, it overflows its stack), so it runs with `oracle: none`. The
+  dumper is not exercised there: clang's indented format is quadratic
+  in the depth (about 21 GB of text for 65,536); a 4,096-deep fold
+  dumps fine (85 MB).
+- Deduction (§6): a trailing function parameter pack takes the
+  remaining call arguments; packs in template argument lists match
+  the remaining elements (`deduce_arg_list_packs`); explicit arguments
+  form a pack prefix that deduction extends; an undeduced pack is
+  empty. Conflicts give clang's note (`deduced conflicting types for
+  parameter 'Ts' (<int> vs. <char>)`). Partial specializations of a
+  variadic primary store their written arguments as `Pack`s, and
+  matching and ordering compare the flattened lists.
+- `__make_integer_seq` and `__type_pack_element` take expanded packs.
+- Pack indexing (P2662), `T...[i]` and `p...[i]`: parsed after a type
+  name in a decl-specifier and after an id-expression. Substitution
+  yields the selected element. An index out of range is clang's
+  "invalid index 1 for pack ts of size 1" (an expression is named
+  unquoted, at the pack's name) or "invalid index 0 for pack 'Ts' of
+  size 0" (a type is quoted, at the index).
+  Indexing a non-type template parameter pack (`Is...[0]`) works in
+  kiln, but clang 19 rejects it ("cannot initialize ... with an lvalue
+  of type '<dependent type>'"), so no test pins it.
+- Gaps, with owners:
+  - `sizeof...` after substitution is an `IntegerLiteral` of `size_t`,
+    not a `SizeOfPackExpr` with the length (dump gap; WP-072 follow-up).
+  - A substituted `PackIndexingExpr`/`PackIndexingType` is replaced by
+    its element; clang keeps the node as sugar (dump gap).
+  - A pack index that stays dependent while its pack is known (a
+    member alias template `template <int I> using at = Ts...[I];`)
+    needs a pack-indexing type over the expanded elements:
+    unimplemented ("pack index that stays dependent").
+  - Partially substituted pack expansions (`tl<tl<Ts, Us>...>` with
+    only `Ts` known) need clang's `SubstTemplateTypeParmPackType`:
+    unimplemented ("partially substituted pack expansion").
+  - `using Ts::operator()...;`: the parser rejects a pack in a
+    using-declarator.
+  - Lambda init-capture packs: WP-075. Fold-expanded constraints: Q17.
+  - Pre-existing, seen while testing: `int a[] = {sizeof(Ts)...};`
+    reports "sizeof incomplete type" (a reference to an incomplete
+    array with a dependent initializer should be type-dependent);
+    `__is_same(H::type, int)` with a dependent `H` does not parse;
+    `L::member` through an alias `L` of a class template specialization
+    is "expected a type"; an `auto` function whose instantiated body
+    fails deduces `void`, giving a follow-on error at the caller.
+- The `<type_traits>` probe went from 20 errors to 18 on this branch
+  (based before WP-073): the pack expansions are gone; the rest are
+  constrained partial specializations and requires-expressions
+  (WP-073, already on main) and `__int128_t` (WP-107). Main after
+  WP-073 has 10, of which 4 are pack expansions that this branch fixes.
+
 ### 11.3 Instantiation report and memory accounting
 
 **Meter.** Each instantiation frame records, at push, `(Ast::bytes(),

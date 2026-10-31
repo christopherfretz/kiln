@@ -16,12 +16,16 @@
   form (`<int> vs. <char>`), undeduced pack = empty.
 - Variadic partial specializations (incl. of a variadic primary), ordering.
 - `__make_integer_seq` / `__type_pack_element` with expanded packs.
-- 45 tests in `tests/conformance/templates/packs/` + the stress test.
+- 51 tests in `tests/conformance/templates/packs/` + the stress test.
+
+- Pack indexing (P2662): types and function parameter packs, clang's
+  bounds errors (5 tests + run test).
+- `<type_traits>`: 20 -> 18 errors (rest: WP-073 concepts, WP-107 int128).
 
 ## Not done
-- Pack indexing (P2662): no parser/sema support yet (next step).
+- Pack index that stays dependent with a known pack (member alias template).
 - `using Ts::operator()...;` (parser: using-declarator kind unsupported).
 - Partially substituted pack expansions (SubstTemplateTypeParmPack): stub.
 
 ## Next
-- Pack indexing; then `<type_traits>` probe, spec note, full CI.
+- Full `cargo xtask ci` (running), then hand back. Spec note in §11.2 done.
