@@ -3699,6 +3699,27 @@ impl Sema<'_, '_> {
                         self.ast.exprs.get(inner).kind(),
                         ExprKind::CXXBoolLiteralExpr | ExprKind::IntegerLiteral
                     );
+                    let ik = self.ast.exprs.get(inner).kind();
+                    if matches!(
+                        ik,
+                        ExprKind::ConceptSpecializationExpr | ExprKind::RequiresExpr
+                    ) {
+                        // [temp.constr]: the unsatisfied constraint's chain
+                        // (clang's `DiagnoseUnsatisfiedConstraint`).
+                        let d = match text {
+                            Some(t) => {
+                                self.diag(DiagId::sema_static_assert_failed_msg, cloc).arg(t)
+                            }
+                            None => self.diag(DiagId::sema_static_assert_failed, cloc),
+                        };
+                        let recs = self.false_atom_records(inner);
+                        let mut notes = Vec::new();
+                        self.render_records(&recs, &mut notes, 0);
+                        let d = notes.into_iter().fold(d, kiln_diag::Diag::with_note);
+                        self.emit(d);
+                        let ctx = self.ctx;
+                        return self.builder().static_assert(ctx, loc, c, msg);
+                    }
                     let d = if lit {
                         match text {
                             Some(t) => {

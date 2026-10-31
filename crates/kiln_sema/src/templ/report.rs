@@ -62,7 +62,10 @@ impl RowKind {
             | FrameKind::DefaultArgChecking
             | FrameKind::PartialSpecDeduction
             | FrameKind::DeducedArgSubstitution
-            | FrameKind::ExplicitArgSubstitution => RowKind::Default,
+            | FrameKind::ExplicitArgSubstitution
+            | FrameKind::ConstraintsCheck
+            | FrameKind::ConceptCheck
+            | FrameKind::ConstraintSubstitution => RowKind::Default,
         }
     }
 }

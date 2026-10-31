@@ -347,8 +347,8 @@ impl Sema<'_, '_> {
                 Ok(TemplateIdRef::Overload(e))
             }
             DeclKind::Concept => {
-                let c = self.ast.first(d);
-                let e = self.builder().concept_spec_expr(c, list, QualType::BOOL, l);
+                let locs = std::mem::take(&mut self.templ.arg_locs);
+                let e = self.build_concept_id(d, list, &locs, l)?;
                 Ok(TemplateIdRef::Value(e))
             }
             _ => {

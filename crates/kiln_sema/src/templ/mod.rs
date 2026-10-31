@@ -15,6 +15,7 @@ pub mod args;
 pub mod auto;
 pub mod builtins;
 pub mod class;
+pub mod concepts;
 pub mod ctad;
 pub mod deduce;
 pub mod deduce_call;
@@ -155,6 +156,8 @@ pub struct InstState {
     /// The guard tripped: its fatal error was emitted, and every later
     /// check fails so the recursion unwinds.
     pub(crate) stack_exhausted: std::cell::Cell<bool>,
+    /// Concepts and constraints (§8): normal forms, satisfaction caches.
+    pub concepts: concepts::ConceptState,
 }
 
 impl Sema<'_, '_> {

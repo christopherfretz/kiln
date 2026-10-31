@@ -388,9 +388,8 @@ impl Substituter<'_, '_, '_> {
             | ExprKind::PackIndexingExpr
             | ExprKind::SubstNonTypeTemplateParmPackExpr
             | ExprKind::FunctionParmPackExpr => self.unimplemented("pack expansion", loc),
-            ExprKind::ConceptSpecializationExpr | ExprKind::RequiresExpr => {
-                self.unimplemented("constraint satisfaction", loc)
-            }
+            ExprKind::ConceptSpecializationExpr => self.concept_id_expr(e, loc),
+            ExprKind::RequiresExpr => self.requires_expr(e, loc),
             ExprKind::LambdaExpr => self.unimplemented("lambda expressions in templates", loc),
             ExprKind::CXXConstructExpr => self.construct_expr(e, loc),
             ExprKind::CXXTemporaryObjectExpr => {

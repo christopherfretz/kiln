@@ -1949,6 +1949,45 @@ impl ExprArena {
         Ok(())
     }
 
+    /// The satisfaction of a non-dependent `ConceptSpecializationExpr` or
+    /// `RequiresExpr` (spec/sema-templates.md §8.1, §8.5; kept in `aux`:
+    /// 0 not computed, 1 false, 2 true). `None` while dependent or not yet
+    /// checked.
+    pub fn satisfied(&self, e: ExprId) -> Option<bool> {
+        let n = self.get(e);
+        debug_assert!(matches!(
+            n.kind,
+            ExprKind::ConceptSpecializationExpr | ExprKind::RequiresExpr
+        ));
+        match n.aux {
+            1 => Some(false),
+            2 => Some(true),
+            _ => None,
+        }
+    }
+
+    /// Records the satisfaction of a `ConceptSpecializationExpr` or
+    /// `RequiresExpr` (write-once, spec/ast.md §8.4).
+    ///
+    /// # Errors
+    /// If a value was already recorded.
+    ///
+    /// # Panics
+    /// If `e` is neither kind.
+    pub fn set_satisfied(&mut self, e: ExprId, v: bool) -> Result<(), AlreadySet> {
+        let n = &mut self.nodes[e.index() as usize];
+        assert!(
+            matches!(n.kind, ExprKind::ConceptSpecializationExpr | ExprKind::RequiresExpr),
+            "expected a constraint expression, found {:?}",
+            n.kind
+        );
+        if n.aux != 0 {
+            return Err(AlreadySet { slot: "satisfied", existing: u32::from(n.aux) });
+        }
+        n.aux = if v { 2 } else { 1 };
+        Ok(())
+    }
+
     /// The closing-token location of `e`, if stored.
     pub fn end_loc(&self, e: ExprId) -> Option<Loc> {
         let n = self.get(e);

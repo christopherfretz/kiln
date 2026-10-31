@@ -45,7 +45,7 @@ impl Sema<'_, '_> {
     /// `args`: its result, and the first error captured (`Some` when
     /// substitution failed). `None` when the instantiation depth limit
     /// stops it.
-    fn in_sfinae<R>(
+    pub(crate) fn in_sfinae<R>(
         &mut self,
         kind: FrameKind,
         ft: DeclId,
