@@ -814,6 +814,20 @@ impl<'a, 'sm> Parser<'a, 'sm> {
                     };
                     continue;
                 }
+                TokKind::Identifier(_)
+                    if matches!(
+                        self.kw_of(t),
+                        Some(
+                            Kw::StaticCast | Kw::DynamicCast | Kw::ReinterpretCast | Kw::ConstCast
+                        )
+                    ) && self.tok_at(j + 1).kind == TokKind::Punct(Punct::Less) =>
+                {
+                    // `static_cast<T>(e)` ([expr.post.general]): the cast's
+                    // `<` always opens a type list of its own.
+                    stack.push(Punct::Less);
+                    j += 2;
+                    continue;
+                }
                 TokKind::Identifier(_) if self.kw_of(t).is_some() => {
                     j += 1;
                     continue;
