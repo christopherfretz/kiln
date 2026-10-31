@@ -315,7 +315,7 @@ impl Parser<'_, '_> {
 
     /// template-parameter-list `>` after the `<` ([temp.param]/1).
     /// Returns the `>`'s location; on an error, recovers to it.
-    fn parse_template_param_list_tail(&mut self) -> Loc {
+    pub(crate) fn parse_template_param_list_tail(&mut self) -> Loc {
         if !self.at_greater() {
             loop {
                 if !self.parse_template_param() {

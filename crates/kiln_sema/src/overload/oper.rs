@@ -1083,15 +1083,20 @@ impl Sema<'_, '_> {
             self.define_cmp_on_use(f, loc);
             self.resolve_exception_spec(f, loc);
         }
+        // [dcl.spec.auto.general]/12: a specialization's return type is
+        // deduced by instantiating its definition.
+        if self.check_undeduced_use(f, loc) {
+            return None;
+        }
         let fty = self.ast.decls.get(f).ty().unwrap_or(QualType::ERROR);
         let proto = self.sugared_proto(fty)?;
         let method = self.kind_of(f) == DeclKind::CXXMethod;
         let implicit_obj = method && !self.is_static_method(f) && !self.has_explicit_object(f);
-        let extra = (found != f).then_some(DeclRefExtra {
-            qualifier: None,
-            template_args: None,
-            found_decl: Some(found),
-        });
+        // clang `CreateFunctionRefExpr` records no found declaration (a
+        // member template's specialization prints without it).
+        let extra = (found != f && self.kind_of(found) != DeclKind::FunctionTemplate).then_some(
+            DeclRefExtra { qualifier: None, template_args: None, found_decl: Some(found) },
+        );
         let callee = self.builder().operator_callee(f, fty, loc, extra);
         let named = Some(CallCallee { decl: f, overloadable: false });
         let rparen = if end.is_valid() { end } else { loc };

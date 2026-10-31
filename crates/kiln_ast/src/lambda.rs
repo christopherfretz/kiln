@@ -224,12 +224,18 @@ impl crate::Ast {
         self.decls.record(self.first(r)).and_then(|x| x.lambda)
     }
 
-    /// The lambda whose function call operator is `f`.
+    /// The lambda whose function call operator is `f`: the call operator
+    /// itself or, for a generic lambda, a specialization of its template.
     pub fn call_op_lambda(&self, f: DeclId) -> Option<LambdaId> {
         let r = self.decls.get(f).ctx()?;
         let l = self.closure_lambda(r)?;
         let op = self.exprs.lambdas.get(l).call_op?;
-        (self.first(op) == self.first(f)).then_some(l)
+        if self.first(op) == self.first(f) {
+            return Some(l);
+        }
+        let (_, s) = self.spec_info(f)?;
+        let t = self.described_template(op)?;
+        (self.first(t) == self.first(s.from)).then_some(l)
     }
 
     /// The static invoker `__invoke` of closure type `r` (the one implicit

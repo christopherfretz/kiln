@@ -67,9 +67,7 @@ pub(crate) struct InitCapture {
 impl Sema<'_, '_> {
     /// The lambda whose function call operator is `f`.
     pub(crate) fn lambda_of_call_op(&self, f: DeclId) -> Option<LambdaId> {
-        let c = self.ast.decls.get(f).ctx()?;
-        let id = self.ast.decls.record(c)?.lambda?;
-        (self.ast.exprs.lambdas.get(id).call_op == Some(f)).then_some(id)
+        self.ast.call_op_lambda(f)
     }
 
     /// The context enclosing lambda `l`'s closure type.
@@ -191,6 +189,12 @@ impl Sema<'_, '_> {
                 if let Some(i) = data.captures.iter().position(|x| x.var == Some(d)) {
                     start = Some((l, i));
                     break;
+                }
+                // A generic lambda's call operator being instantiated:
+                // its closure is complete, and the pattern captured every
+                // variable a specialization may odr-use.
+                if !self.lambdas.iter().any(|s| s.id == l) {
+                    return Err(Captured::NotNeeded);
                 }
                 if data.default == CaptureDefault::None {
                     if build {

@@ -64,6 +64,33 @@ pub(crate) struct HeadBuild {
     invented: bool,
 }
 
+impl Sema<'_, '_> {
+    /// Takes the innermost head for the declaration about to be created
+    /// (a generic lambda's call operator, whose head is always its own).
+    pub(crate) fn take_innermost_head(&mut self) {
+        if let Some(h) = self.templ.heads.last_mut() {
+            h.taken = true;
+            self.templ.cur = h.list;
+        }
+    }
+}
+
+impl HeadBuild {
+    /// A written head whose list starts at `l_angle` (a lambda's
+    /// *template-parameter-list*, which has no `template` keyword).
+    pub(crate) fn explicit(l_angle: Loc, depth: u16) -> Self {
+        HeadBuild {
+            template_loc: Loc::INVALID,
+            l_angle,
+            depth,
+            params: Vec::new(),
+            list: None,
+            taken: false,
+            invented: false,
+        }
+    }
+}
+
 /// The template state of [`Sema`] (spec/sema-templates.md §11.2; the
 /// engine's `InstState` is WP-070's).
 #[derive(Clone, Debug, Default)]

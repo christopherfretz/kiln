@@ -114,6 +114,11 @@ pub(crate) struct LambdaScope {
     /// `templ.heads.len()` at the introducer: a deeper head after the
     /// parameters is a generic lambda's invented one.
     heads: usize,
+    /// `scopes.len()` at the introducer: a template parameter scope above
+    /// it is the lambda's *template-parameter-list*.
+    scope_base: usize,
+    /// The call operator's template decl (a generic lambda).
+    call_template: Option<DeclId>,
     /// The type of the member of each capture so far, in order.
     pub(crate) cap_tys: Vec<QualType>,
     /// The init-captures whose variables the body declares.
@@ -151,6 +156,8 @@ impl Sema<'_, '_> {
             body_open: false,
             explicit_constexpr: false,
             heads: self.templ.heads.len(),
+            scope_base: self.scopes.len(),
+            call_template: None,
             cap_tys: Vec::new(),
             init_caps: Vec::new(),
         });
@@ -158,17 +165,30 @@ impl Sema<'_, '_> {
         id
     }
 
-    /// After the *lambda-declarator*'s parameters: whether `auto`
-    /// parameters made the lambda generic ([expr.prim.lambda.general]/6).
-    /// Generic lambdas are not supported yet: reported, and the caller
-    /// abandons the lambda through [`Self::act_on_lambda_error`].
-    pub fn act_on_lambda_check_generic(&mut self, loc: Loc) -> bool {
-        let Some(top) = self.lambdas.last() else { return false };
-        if self.templ.heads.len() <= top.heads {
-            return false;
+    /// `<` after the *lambda-introducer*: opens the lambda's
+    /// *template-parameter-list* ([expr.prim.lambda.general]/1), a head
+    /// one level deeper than the enclosing ones. Closed with the lambda.
+    pub fn act_on_lambda_template_params_start(&mut self, l_angle: Loc) {
+        let depth = self.template_depth();
+        self.templ.heads.push(crate::templ::HeadBuild::explicit(l_angle, depth));
+        self.scopes.push(Scope::new(ScopeKind::TemplateParams, None));
+        self.ast.templates.dependent_depth += 1;
+    }
+
+    /// Pops the template heads (and the parameter scope of a written
+    /// *template-parameter-list*) a generic lambda pushed.
+    fn pop_lambda_heads(&mut self, heads: usize, scope_base: usize) {
+        while self.templ.heads.len() > heads {
+            self.templ.heads.pop();
+            self.ast.templates.dependent_depth =
+                self.ast.templates.dependent_depth.saturating_sub(1);
         }
-        self.unsupported("generic lambdas", loc);
-        true
+        self.templ.invented = 0;
+        while self.scopes.len() > scope_base
+            && self.scopes.last().is_some_and(|s| s.kind == ScopeKind::TemplateParams)
+        {
+            self.scopes.pop();
+        }
     }
 
     /// The *lambda-declarator* `d` (a member declarator whose single
@@ -185,7 +205,14 @@ impl Sema<'_, '_> {
         let Some(top) = self.lambdas.last() else { return };
         debug_assert_eq!(top.id, id);
         let closure = top.closure;
+        // [expr.prim.lambda.general]/6: a *template-parameter-list* or an
+        // `auto` parameter makes the call operator a member template.
+        let generic = self.templ.heads.len() > top.heads;
         let lbracket = self.ast.exprs.lambdas.get(id).lbracket;
+        if generic {
+            self.finish_invented_head();
+            self.take_innermost_head();
+        }
         if let Some(l) = specs.consteval {
             // Immediate functions are not implemented (decl.rs reports a
             // `consteval` function the same way).
@@ -228,7 +255,17 @@ impl Sema<'_, '_> {
         }
         let h = DeclHead::new(closure, DeclName::operator(OverloadedOperator::Call), lbracket)
             .access(Access::Public);
+        if generic {
+            self.mark_pattern_next();
+        }
         let f = self.builder().function(h, DeclKind::CXXMethod, ty, spec, None);
+        let call_template = self.finish_template_pattern(f);
+        if let Some(t) = call_template {
+            self.ast.decls.set_access(t, Access::Public);
+        }
+        if let Some(top) = self.lambdas.last_mut() {
+            top.call_template = call_template;
+        }
         let defaults: Vec<Option<ExprId>> = params
             .iter()
             .map(|p| match p.default_arg {
@@ -478,6 +515,7 @@ impl Sema<'_, '_> {
         self.immediate = top.saved_immediate;
         self.extend_collector = top.saved_extend.take();
         self.ctor_entity = top.saved_ctor_entity.take();
+        self.pop_lambda_heads(top.heads, top.scope_base);
         self.ast.exprs.lambdas.get_mut(id).body = Some(body);
         let closure = top.closure;
         self.finish_captures(id, closure, &top.cap_tys);
@@ -517,13 +555,7 @@ impl Sema<'_, '_> {
             self.extend_collector = top.saved_extend.take();
             self.ctor_entity = top.saved_ctor_entity.take();
         }
-        // A generic lambda's invented template head.
-        while self.templ.heads.len() > top.heads {
-            self.templ.heads.pop();
-            self.ast.templates.dependent_depth =
-                self.ast.templates.dependent_depth.saturating_sub(1);
-        }
-        self.templ.invented = 0;
+        self.pop_lambda_heads(top.heads, top.scope_base);
         self.ast.decls.set_flags(top.closure, DeclFlags::INVALID);
         self.finish_closure(top.closure);
     }

@@ -26,10 +26,18 @@ impl Parser<'_, '_> {
         let id = self.s.act_on_lambda_start(&intro);
         let lbracket = intro.lbracket;
         if self.at(Punct::Less) {
-            self.unsupported("template parameter lists of lambdas", self.loc());
-            self.s.act_on_lambda_error(id);
-            self.skip_lambda_rest();
-            return None;
+            // [expr.prim.lambda.general]/1: `<` template-parameter-list
+            // `>` requires-clause?
+            let l_angle = self.bump().span.lo;
+            self.s.act_on_lambda_template_params_start(l_angle);
+            let r_angle = self.parse_template_param_list_tail();
+            let requires = if self.at_kw(Kw::Requires) {
+                self.bump();
+                self.parse_requires_clause()
+            } else {
+                None
+            };
+            let _ = self.s.act_template_head(requires, r_angle);
         }
         let mut specs = LambdaSpecifiers::default();
         if self.at_attr() {
@@ -47,12 +55,6 @@ impl Parser<'_, '_> {
             open = l;
             (params, variadic) = self.parse_param_clause(&mut d, false);
             rparen = self.expect_closing(Punct::RParen, Punct::LParen, open);
-            if self.s.act_on_lambda_check_generic(open) {
-                self.s.act_on_end_prototype();
-                self.s.act_on_lambda_error(id);
-                self.skip_lambda_rest();
-                return None;
-            }
         }
         self.parse_lambda_specifiers(&mut specs, &intro);
         let exc = if matches!(self.kw(), Some(Kw::Noexcept | Kw::Throw)) {
@@ -94,13 +96,6 @@ impl Parser<'_, '_> {
         let (body, rbrace) = self.with_greater_op(true, |p| p.parse_compound(false));
         self.in_stmt_expr = saved_stmt_expr;
         Some(self.s.act_on_lambda_end(id, body, rbrace))
-    }
-
-    /// Skips an abandoned (unsupported) lambda's declarator and body.
-    fn skip_lambda_rest(&mut self) {
-        if self.skip_until(&[Punct::LBrace], true, true) {
-            self.skip_until(&[Punct::RBrace], false, true);
-        }
     }
 
     /// lambda-introducer ([expr.prim.lambda.general]/1,
