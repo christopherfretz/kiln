@@ -1025,6 +1025,14 @@ template saved in `range_for_outer_depth` for instantiations).
   P2718 collection, declares the loop variable, and finishes the head
   with `instantiate_for_range`. A non-dependent range is desugared in
   the definition.
+- **Fixed on the way (WP-089).** Reference binding and reference ICS
+  compare reference-relatedness on types made unqualified through array
+  levels (clang `getUnqualifiedArrayType`), so `int[3]` binds to
+  `const int (&)[3]`. `auto` deduction under a reference or pointer
+  declarator keeps an array result as `Auto` sugar deduced to the
+  cv-unqualified-through-arrays array (clang's `AutoType`), so
+  `auto &r = a;` prints `int &[2]` as clang does; the dump printer keeps a
+  dependent `auto` (deduced as `<dependent type>`) as `auto`.
 - **Left (WP-089):** `err_range_on_array_parameter` (needs
   `ParamData.original_ty`, which `act_on_param_declarator` does not set,
   so an array parameter gets the generic `'int *'` diagnostic);
