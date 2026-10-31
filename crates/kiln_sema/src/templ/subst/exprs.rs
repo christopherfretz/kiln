@@ -28,6 +28,17 @@ impl Substituter<'_, '_, '_> {
         deps.intersects(ExprDeps::TYPE_VALUE_INST | ExprDeps::UNEXPANDED_PACK)
     }
 
+    /// Substitutes into the unevaluated operand `e` of `sizeof`,
+    /// `alignof`, `noexcept` or an expression trait ([expr.context]/1):
+    /// rebuilt inside an unevaluated context, as the parser builds it, so
+    /// the functions it names are not odr-used (and not instantiated).
+    pub(crate) fn unevaluated_operand(&mut self, e: ExprId) -> SubstResult<ExprId> {
+        self.sema.enter_unevaluated();
+        let r = self.expr(e);
+        self.sema.exit_unevaluated();
+        r
+    }
+
     /// Substitutes into `e`.
     pub fn expr(&mut self, e: ExprId) -> SubstResult<ExprId> {
         if !self.needs_rebuild(e) {
@@ -406,7 +417,7 @@ impl Substituter<'_, '_, '_> {
                     Ok(self.sema.act_on_trait_type(kind, t, loc, end))
                 } else {
                     let o = ExprId::new(n.a());
-                    let o = self.expr(o)?;
+                    let o = self.unevaluated_operand(o)?;
                     Ok(self.sema.act_on_trait_expr(kind, o, loc))
                 }
             }
@@ -436,12 +447,12 @@ impl Substituter<'_, '_, '_> {
             ExprKind::ExpressionTraitExpr => {
                 let t = ex(self).type_trait(e);
                 let o = ex(self).expression_trait_operand(e);
-                let o = self.expr(o)?;
+                let o = self.unevaluated_operand(o)?;
                 Ok(self.sema.build_expression_trait(t, o, loc, end))
             }
             ExprKind::CXXNoexceptExpr => {
                 let o = ex(self).noexcept_operand(e);
-                let o = self.expr(o)?;
+                let o = self.unevaluated_operand(o)?;
                 Ok(self.sema.act_on_noexcept_expr(o, loc, end))
             }
             ExprKind::CXXThrowExpr => {

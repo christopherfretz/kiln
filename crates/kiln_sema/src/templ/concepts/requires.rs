@@ -52,6 +52,9 @@ impl Substituter<'_, '_, '_> {
         let mut recs = Vec::new();
         let mut new_params = Vec::with_capacity(params.len());
         let mut ok = true;
+        // The requirements are unevaluated operands
+        // ([expr.prim.req.general]/2), as in `act_on_requires_expr_start`.
+        self.sema.enter_unevaluated();
         for (i, &p) in params.iter().enumerate() {
             let n = *self.sema.ast.decls.get(p);
             let ty = n.ty().unwrap_or(QualType::ERROR);
@@ -89,6 +92,7 @@ impl Substituter<'_, '_, '_> {
                 }
             }
         }
+        self.sema.exit_unevaluated();
         let x = self.sema.builder().requires_expr(
             rq.body,
             &new_params,
