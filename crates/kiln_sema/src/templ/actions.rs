@@ -558,7 +558,9 @@ impl Sema<'_, '_> {
         if l && r {
             self.error(DiagId::sema_fold_packs_both_sides, ellipsis);
         }
-        self.builder().fold_expr(lhs, op, rhs, lparen, rparen)
+        let e = self.builder().fold_expr(lhs, op, rhs, lparen, rparen);
+        self.templ.fold_ellipsis.insert(e, ellipsis);
+        e
     }
 
     /// `sizeof...(name)` ([expr.sizeof]/5): `name` must name a pack.

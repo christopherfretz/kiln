@@ -65,10 +65,6 @@ impl Sema<'_, '_> {
         }
         let canonical = self.ast.types.canonical_args(args);
         let as_: Vec<TemplateArg> = self.ast.types.args(canonical).to_vec();
-        if as_.iter().any(|&a| self.is_pack_arg(a)) {
-            self.templ_unimplemented("partial specialization matching with packs", poi);
-            return Ok(None);
-        }
         let mut matched: Vec<PartialMatch> = Vec::new();
         for i in candidates {
             let Some(p) = self.ast.templates.partial(i).copied() else { continue };
@@ -78,10 +74,6 @@ impl Sema<'_, '_> {
             if shapes.len() != as_.len()
                 || !shapes.iter().zip(&as_).all(|(s, &a)| s.admits(&self.ast.types, a))
             {
-                continue;
-            }
-            if p.has_pack {
-                self.templ_unimplemented("class template partial specialization with a pack", poi);
                 continue;
             }
             if let Some(args) = self.deduce_partial(p.partial, i, &as_, canonical, poi) {
@@ -123,8 +115,23 @@ impl Sema<'_, '_> {
         }
         self.inst.sfinae.borrow_mut().push(SfinaeState::default());
         let mut d = DeducedArgs::new(list.depth, n);
-        let ok = self.deduce_args(&ps, as_, true, &mut d, poi) == Tdk::Success
-            && d.first_undeduced().is_none();
+        let mut ok = self.deduce_args(&ps, as_, true, &mut d, poi) == Tdk::Success;
+        if ok && p.has_pack {
+            // A pack deduced from no elements is empty ([temp.deduct.type]/9).
+            for i in 0..n {
+                let pack = self
+                    .ast
+                    .lists
+                    .at::<DeclId>(list.params, i)
+                    .and_then(|x| self.ast.template_parm(x))
+                    .is_some_and(|x| x.pack);
+                if pack && matches!(d.args.get(i).map(|a| a.view()), Some(ArgView::Null)) {
+                    let l = self.ast.types.arg_list(&[]);
+                    d.args[i] = TemplateArg::pack(l);
+                }
+            }
+        }
+        ok &= d.first_undeduced().is_none();
         let r = if ok {
             let deduced = self.ast.types.arg_list(&d.args);
             self.set_frame_args(deduced);
@@ -164,11 +171,24 @@ impl Sema<'_, '_> {
                     out.push(deduced_elems.get(usize::from(i)).copied().unwrap_or(a));
                     continue;
                 }
+                match s.expand_arg(a, loc) {
+                    Ok(Some(v)) => {
+                        // An expanded pack: compare after conversion.
+                        has_expr = true;
+                        out.extend(v);
+                        continue;
+                    }
+                    Ok(None) => {}
+                    Err(_) => {
+                        failed = true;
+                        break;
+                    }
+                }
                 let Ok(x) = s.template_arg(a, loc) else {
                     failed = true;
                     break;
                 };
-                has_expr |= matches!(x.view(), ArgView::Expr { .. });
+                has_expr |= matches!(x.view(), ArgView::Expr { .. } | ArgView::Pack(_));
                 out.push(x);
             }
         }

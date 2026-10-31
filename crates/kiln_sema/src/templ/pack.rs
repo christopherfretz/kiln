@@ -240,12 +240,13 @@ impl Substituter<'_, '_, '_> {
         let right = has_pack(self, lhs);
         let (pattern, init) = if right { (lhs, rhs) } else { (rhs, lhs) };
         let pattern = pattern.ok_or(SubstFail)?;
+        let ellipsis = self.sema.templ.fold_ellipsis.get(&e).copied().unwrap_or(loc);
         let init = self.opt_expr(init)?;
         let elems = match self.expand_pattern(|s| s.expr(pattern))? {
             Expansion::Elements(v) => v,
             Expansion::Unexpanded(p) => {
                 let (l, r) = if right { (Some(p), init) } else { (init, Some(p)) };
-                return Ok(self.sema.act_fold(l, op, r, loc, loc, end));
+                return Ok(self.sema.act_fold(l, op, r, loc, ellipsis, end));
             }
         };
         let mut it: Box<dyn Iterator<Item = ExprId>> =
@@ -255,13 +256,14 @@ impl Substituter<'_, '_, '_> {
             None => {
                 use kiln_ast::expr::BinaryOp;
                 return match op {
-                    BinaryOp::LAnd => Ok(self.sema.act_on_bool_literal(true, loc)),
-                    BinaryOp::LOr => Ok(self.sema.act_on_bool_literal(false, loc)),
+                    BinaryOp::LAnd => Ok(self.sema.act_on_bool_literal(true, ellipsis)),
+                    BinaryOp::LOr => Ok(self.sema.act_on_bool_literal(false, ellipsis)),
                     BinaryOp::Comma => {
-                        Ok(self.sema.act_on_value_init_cast(QualType::VOID, loc, end))
+                        Ok(self.sema.act_on_value_init_cast(QualType::VOID, ellipsis, ellipsis))
                     }
                     _ => {
-                        let d = self.sema.diag(DiagId::sema_fold_empty, loc).arg(op.spelling());
+                        let d =
+                            self.sema.diag(DiagId::sema_fold_empty, ellipsis).arg(op.spelling());
                         self.sema.emit(d);
                         Err(SubstFail)
                     }
@@ -271,9 +273,9 @@ impl Substituter<'_, '_, '_> {
         for x in it {
             self.check_stack(|_| loc)?;
             acc = if right {
-                self.sema.act_on_binary(op, x, acc, loc)
+                self.sema.act_on_binary(op, x, acc, ellipsis)
             } else {
-                self.sema.act_on_binary(op, acc, x, loc)
+                self.sema.act_on_binary(op, acc, x, ellipsis)
             };
             if self.sema.is_err_expr(acc) {
                 return Err(SubstFail);

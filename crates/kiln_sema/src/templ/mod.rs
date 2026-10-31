@@ -102,6 +102,9 @@ pub struct TemplState {
     pub(crate) fn_spec_failures: kiln_source::fx::FxHashMap<DeclId, kiln_diag::Diag>,
     /// Pack elements produced by expansions (§11.3 `templ.pack_elements`).
     pub pack_elements: u64,
+    /// The `...` of each fold-expression (clang `CXXFoldExpr::EllipsisLoc`;
+    /// the AST node stores only the parentheses).
+    pub(crate) fold_ellipsis: kiln_source::fx::FxHashMap<ExprId, Loc>,
 }
 
 /// The instantiation engine's state (spec/sema-templates.md §11.2).
