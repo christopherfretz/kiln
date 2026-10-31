@@ -25,10 +25,12 @@ and spec/sema-overload.md §10.7.
   stay hard errors.
 - `&f<int>` / uncalled `f<int>` naming the one specialization
   (`resolve_single_template_id`).
+- `&f` / `f` against a target function type ([temp.deduct.funcaddr];
+  `address_template_candidates`, which picks the more specialized match).
 - Diagnostics: `candidate function [with T = int]`, CWG1391
   `candidate function template not viable`, `f<int>` names, deduction
   notes.
-- Tests: 72 in `tests/conformance/templates/{deduce,order,sfinae}/`.
+- Tests: 73 in `tests/conformance/templates/{deduce,order,sfinae}/`.
   Generator: the conversation scratchpad `gen/` (not committed); every
   compile-fail header is clang-19 output with strict-diags. The only
   xfail is `call-init-list`, because `std::initializer_list` objects
@@ -39,12 +41,12 @@ and spec/sema-overload.md §10.7.
 - Reversed and rewritten operator template candidates.
 - Conversion function templates (`ics.rs`) and `operator->` templates
   (`arrow.rs`).
-- Done: `&f` against a target type ([temp.deduct.funcaddr]) — deduction + more-specialized pick in `overload/address.rs::address_template_candidates`. The no-match diagnostic still reports "not yet implemented" (owner: WP-071 follow-up).
+- `&f` with no matching template: still a "not yet implemented" error
+  instead of clang's `address of overloaded function` diagnostic plus
+  deduction notes.
 - Explicit specialization and explicit instantiation of function
   templates; `TemplateParamObject`.
 - Q3 non-dependent sharing measurement.
 
 ## Next step
-- Done: `&f` against a target type ([temp.deduct.funcaddr]) — deduction + more-specialized pick in `overload/address.rs::address_template_candidates`. The no-match diagnostic still reports "not yet implemented" (owner: WP-071 follow-up).
-`overload/address.rs::resolve_address_of_overloaded`: deduce P = the
-template's function type from A = the target function type.
+Handback. Follow-ups are the "Not yet" items above.
