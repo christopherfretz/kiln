@@ -1897,13 +1897,10 @@ impl Sema<'_, '_> {
             // [namespace.memdef]/3: visible to ordinary lookup only if
             // declared outside the class (before or after).
             let visible = prev_ok.is_some_and(|p| {
-                self.ast
-                    .lookup_local(ctx, dname)
-                    .iter_with_flags()
-                    .any(|(x, fl)| {
-                        (x == p || Some(x) == self.ast.described_template(p))
-                            && !fl.contains(LookupFlags::ADL_ONLY)
-                    })
+                self.ast.lookup_local(ctx, dname).iter_with_flags().any(|(x, fl)| {
+                    (x == p || Some(x) == self.ast.described_template(p))
+                        && !fl.contains(LookupFlags::ADL_ONLY)
+                })
             });
             let k = if visible || d.qualifier.is_some() {
                 FriendKind::Declared
@@ -3290,8 +3287,8 @@ impl Sema<'_, '_> {
                 self.emit(msg);
             } else if head.is_some() {
                 // clang: "redefinition of 'X' as different kind of symbol".
-                let msg = self.diag(DiagId::sema_redefinition_different_kind, nloc)
-                    .arg(sym_str(self, n));
+                let msg =
+                    self.diag(DiagId::sema_redefinition_different_kind, nloc).arg(sym_str(self, n));
                 let msg = self.note_prev(msg, p, false);
                 self.emit(msg);
                 self.templ.cur = None;
