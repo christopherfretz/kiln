@@ -802,16 +802,77 @@ Where the code differs from (or details) the design above:
   does not print either, so `cargo xtask bench` records the `overload`
   group's wall time and peak RSS but not `ovl.*` (an open item: a report
   flag like `-fkiln-instantiation-report`). `sema.ovl.conv_types` and
-  `ovl.builtin_candidates` are WP-068b's.
+  `ovl.builtin_candidates` are WP-068b's (§10.6).
 - **Bench** `bench/overload/`: `calls` (200 overloads × 3,000 calls) and
   `ctors` (64 converting constructors, 5,440 copy/direct/list
-  initializations). The `->` chain and class `a < b` entries of §11 are
-  WP-068b's.
+  initializations). WP-068b adds `arrow-chain` (a 50-deep `->` chain,
+  12,000 accesses) and `less-10k` (10,000 class `a < b` with ADL friends,
+  100 unrelated visible overloads and built-in candidates).
 - **Stubs.** `CandidateFailure::BadDeduction` (WP-071),
-  `ConstraintsNotSatisfied` (WP-073), `Candidate::rewrite` (WP-068b) and
+  `ConstraintsNotSatisfied` (WP-073) and
   `SetKind::Address` (WP-071: [over.over] of templates; non-template
   targets are resolved without a set in `address.rs`) are declared and
   unused.
+
+### 10.6 Landed (WP-068b): operators
+Where the code differs from (or details) the design above:
+- **Dispatch.** `act_on_binary`/`act_on_unary`/`act_on_subscript_args`
+  (multi-argument `[]`), call-on-object in `act_on_call`, and braced
+  assignment right operands call `oper.rs::try_overloaded_operator` when
+  an operand has class or enumeration type; it returns the built call, a
+  converted built-in form (`OperResult::Converted`, the operands after the
+  selected built-in candidate's user-defined conversions) or nothing (the
+  built-in path). Non-member candidates: unqualified lookup plus ADL,
+  with the enum-only filter of [over.match.oper]/3.2; members from the
+  left operand's class; rewritten and reversed candidates per §5 with
+  P2468 (`allows_reversed`, `rewritten_of`). The AST is
+  `CXXOperatorCallExpr` (callee `operator_callee`: decay cast of a
+  `DeclRefExpr`, found decl kept) and `CXXRewrittenBinaryOperator` whose
+  only child is the semantic form. A static `operator()`/`operator[]`
+  keeps the object operand, materialized when it is a class prvalue.
+- **Built-in candidates (`builtin.rs`).** Built in clang's
+  `AddBuiltinOperatorCandidates` order; the class operands' type sets
+  (from their conversion functions, `sema.ovl.conv_types`) are cached per
+  class, and one resolution memoizes each (argument, parameter, options)
+  ICS. `ovl.builtin_candidates` counts the candidates added. The
+  /3.3.4 duplicate drop (a built-in with the same parameter types as a
+  non-member candidate) is the enum-pair rule. The assignment candidates'
+  left operand uses `SUPPRESS_UDC | NO_TEMPORARY`. Notes print
+  `built-in candidate operator<(int, int)`; the relational ambiguity
+  golden has 144 notes on x86_64 and 121 on aarch64
+  (`tests/conformance/over.built/relational-ambiguity-*.cpp`). A selected
+  built-in candidate applies only the user-defined-conversion part of each
+  operand's ICS (the built-in operator then converts as usual).
+- **`->` (`arrow.rs`).** `arrow_base` follows `operator->` until a
+  pointer: cycle detection by class (`sema_circular_arrow`) and a depth
+  limit of 256 (`sema_operator_arrow_depth_exceeded` with clang's note
+  backtrace and suppression). There is no `-foperator-arrow-depth`
+  option; the note naming it is printed as clang does.
+- **Surrogates (`surrogate.rs`).** One surrogate per conversion function
+  to pointer/reference to function ([over.call.object]/2), noted
+  `conversion candidate of type …`. Divergence: the object's
+  `UserDefinedConversion` cast stays an lvalue (clang: prvalue).
+- **`operator new`/`delete` (`alloc.rs`, wired into `new_delete.rs`).**
+  Class scope first (bases included) unless `::new`/`::delete` or the
+  type is incomplete, else global. The usual deallocation function
+  prefers the alignment-matching one; in class scope the unsized one,
+  globally the sized one for a complete type. Nothing suitable in a class
+  is `sema_no_suitable_delete_member` plus `note_member_declared_named` per function;
+  a deleted class `operator new` is `sema_call_deleted_function`. A member
+  `operator delete` without an exception specification is implicitly
+  `noexcept` ([except.spec]/9).
+- **Gaps (owners).** Function templates are not operator candidates
+  (WP-071). Builtin `<=>` on scalars reports "not supported yet" where
+  clang reports the missing `std::strong_ordering` (WP-082). No access
+  check on class `operator new`/`delete`; no destroying
+  `operator delete` (WP-061 follow-up). `x.operator+=(2)` (member access
+  naming an operator-function-id) is a parse error: `act_on_member` and
+  `member_access` take a `Symbol`, not a `DeclName` (parser follow-up).
+  No `note_equality_comparison_to_assign` ("use '=' to turn this equality
+  comparison into an assignment") anywhere in kiln (sema follow-up).
+  `aka` of a template specialization with an expression argument prints
+  `'T<0 + 1>' (aka 'T<1>')` where clang prints no `aka` (types/print).
+  `ovl.*` counters are not printed by the driver (§10.5).
 
 ## 11. Agent parallelization (WP-068 split)
 WP-068 has more than five deliverables, so it splits. 068a merges §10.1–10.3

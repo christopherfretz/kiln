@@ -48,5 +48,5 @@ int use(const P49 &p) {
 }
 
 // The chain is resolved, so a compiler that skips it cannot look fast.
-static_assert(__is_same(decltype(P49{}.operator->()), P48));
+static_assert(__is_same(decltype(P1{}->get()), int));
 static_assert(__is_same(decltype(P49{}->m), int));
