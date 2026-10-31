@@ -301,6 +301,10 @@ impl Substituter<'_, '_, '_> {
     /// substituted signature; its definition is instantiated when used
     /// (§4.4). Default arguments are substituted now (a gap: clang
     /// instantiates them when a call uses them).
+    #[allow(
+        clippy::too_many_lines,
+        reason = "the 112 lazy exception specs and the 109 constrained/friend members meet here"
+    )]
     pub(crate) fn function_decl(
         &mut self,
         d: DeclId,
