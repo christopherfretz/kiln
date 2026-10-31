@@ -2071,6 +2071,7 @@ impl Cg<'_> {
                         | CastKind::LValueToRValue
                         | CastKind::LValueToRValueBitCast
                         | CastKind::ConstructorConversion
+                        | CastKind::UserDefinedConversion
                 ) =>
             {
                 let s = ast.exprs.operand(e);

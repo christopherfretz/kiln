@@ -395,12 +395,40 @@ impl Sema<'_, '_> {
         true
     }
 
-    /// The comparison category of class type `t`, if it is a validated
-    /// one (clang's `ComparisonCategories::lookupInfoForType`).
+    /// The comparison category of class type `t`, if it is one (clang's `ComparisonCategories::lookupInfoForType`).
     pub(crate) fn cmp_category_of(&self, t: QualType) -> Option<CmpCategory> {
         let d = self.ast.types.as_record(t)?;
         let def = self.class_def(d);
-        self.ast.cmp_categories.for_record(def).map(|i| i.kind)
+        if let Some(i) = self.ast.cmp_categories.for_record(def) {
+            return Some(i.kind);
+        }
+        // Not yet looked up: a class of namespace `std` (through inline
+        // namespaces) named as a category is one (clang
+        // `ComparisonCategories::lookupInfoForType`); its form is checked
+        // when the category is used ([`Sema::cmp_category_type`]).
+        let name = self.ast.decls.get(def).name().as_ident()?;
+        let name = self.ast.symbols().as_str(name);
+        let kind = CmpCategory::ALL.into_iter().find(|k| k.name() == name)?;
+        let mut c = self.ast.decls.get(def).ctx();
+        while let Some(ns) = c
+            && self.kind_of(ns) == DeclKind::Namespace
+        {
+            let first = self.ast.first(ns);
+            if !self.ast.decls.namespace(first).is_some_and(NamespaceData::is_inline) {
+                let parent = self.ast.decls.get(ns).ctx();
+                let is_std = parent == Some(self.ast.tu)
+                    && self
+                        .ast
+                        .decls
+                        .get(ns)
+                        .name()
+                        .as_ident()
+                        .is_some_and(|n| self.ast.symbols().as_str(n) == "std");
+                return is_std.then_some(kind);
+            }
+            c = self.ast.decls.get(ns).ctx();
+        }
+        None
     }
 }
 
