@@ -336,15 +336,25 @@ impl Sema<'_, '_> {
     /// not the reverse. Packs are WP-072; the reference-binding
     /// tie-breaker ([temp.deduct.partial]/9) is not applied.
     pub fn more_specialized(&mut self, a: DeclId, b: DeclId, nargs: usize) -> bool {
+        self.more_specialized_in(a, b, OrderCtx::Call(nargs))
+    }
+
+    /// [`Self::more_specialized`] for two conversion function templates
+    /// ([temp.deduct.partial]/3.2: their return types are compared).
+    pub fn more_specialized_conversion(&mut self, a: DeclId, b: DeclId) -> bool {
+        self.more_specialized_in(a, b, OrderCtx::Conversion)
+    }
+
+    fn more_specialized_in(&mut self, a: DeclId, b: DeclId, ctx: OrderCtx) -> bool {
         let (a, b) = (self.ast.first(a), self.ast.first(b));
         if a == b {
             return false;
         }
-        let ab = self.fn_at_least_as_specialized(a, b, nargs);
+        let ab = self.fn_at_least_as_specialized(a, b, ctx);
         if !ab {
             return false;
         }
-        if !self.fn_at_least_as_specialized(b, a, nargs) {
+        if !self.fn_at_least_as_specialized(b, a, ctx) {
             return true;
         }
         // [temp.func.order]/6: equally specialized, the more constrained.
@@ -354,9 +364,12 @@ impl Sema<'_, '_> {
     /// The first `nargs` parameter types of function template `ft`'s
     /// templated function, adjusted for partial ordering
     /// ([temp.deduct.partial]/5-7): references and top-level cv dropped.
-    fn ordering_types(&mut self, ft: DeclId, nargs: usize) -> Option<Vec<QualType>> {
+    fn ordering_types(&mut self, ft: DeclId, ctx: OrderCtx) -> Option<Vec<QualType>> {
         let f = self.templated_function(ft)?;
-        let (ptys, _) = self.proto_param_types(f);
+        let (ptys, nargs) = match ctx {
+            OrderCtx::Call(n) => (self.proto_param_types(f).0, n),
+            OrderCtx::Conversion => (vec![self.conversion_result_type(f)], 1),
+        };
         let t = &mut self.ast.types;
         Some(
             ptys.into_iter()
@@ -378,8 +391,8 @@ impl Sema<'_, '_> {
     /// `b`'s parameters deduce from `a`'s parameter types, `a`'s template
     /// parameters standing for unique synthesized types
     /// ([temp.func.order]/3-4, [temp.deduct.partial]/2-10).
-    fn fn_at_least_as_specialized(&mut self, a: DeclId, b: DeclId, nargs: usize) -> bool {
-        let (Some(pa), Some(pb)) = (self.ordering_types(a, nargs), self.ordering_types(b, nargs))
+    fn fn_at_least_as_specialized(&mut self, a: DeclId, b: DeclId, ctx: OrderCtx) -> bool {
+        let (Some(pa), Some(pb)) = (self.ordering_types(a, ctx), self.ordering_types(b, ctx))
         else {
             return false;
         };
@@ -400,4 +413,14 @@ impl Sema<'_, '_> {
         let failed = self.inst.sfinae.borrow_mut().pop().is_some_and(|s| s.errors > 0);
         ok && !failed
     }
+}
+
+/// The context of a partial ordering of function templates
+/// ([temp.deduct.partial]/3).
+#[derive(Clone, Copy, Debug)]
+enum OrderCtx {
+    /// A call with this many arguments: the parameter types.
+    Call(usize),
+    /// A conversion: the conversion types.
+    Conversion,
 }

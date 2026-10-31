@@ -215,6 +215,44 @@ impl Sema<'_, '_> {
         self.ast.types.proto(fty).map_or(QualType::ERROR, kiln_ast::types::FuncProto::ret)
     }
 
+    /// Whether conversion function (template) `f` is a candidate for
+    /// binding a non-const lvalue reference ([over.match.ref]/1.1):
+    /// declared to yield an lvalue reference, and not explicit unless
+    /// `opts` allows it (clang `TryRefInitWithConversionFunction`).
+    pub(crate) fn lvalue_ref_conversion_candidate(
+        &self,
+        f: kiln_ast::DeclId,
+        opts: IcsOptions,
+    ) -> bool {
+        let f = if self.kind_of(f) == kiln_ast::decl::DeclKind::FunctionTemplate {
+            match self.templated_function(f) {
+                Some(p) => p,
+                None => return false,
+            }
+        } else {
+            f
+        };
+        let ret = self.conversion_result_type(f);
+        matches!(self.ast.types.canonical_view(ret), TypeView::LValueRef(_))
+            && (opts.contains(IcsOptions::ALLOW_EXPLICIT) || !self.fn_spec(f).is_explicit())
+    }
+
+    /// Whether a non-const lvalue reference binding from class type `ty`
+    /// has conversion function candidates (clang reports their failure
+    /// as "no viable conversion" rather than a temporary binding).
+    pub(crate) fn has_lvalue_ref_conversion_candidates(
+        &mut self,
+        ty: QualType,
+        opts: IcsOptions,
+    ) -> bool {
+        if !self.require_complete_silent(ty, Loc::INVALID) {
+            return false;
+        }
+        self.conversion_functions_all(ty)
+            .into_iter()
+            .any(|(_, f)| self.lvalue_ref_conversion_candidate(f, opts))
+    }
+
     /// clang's ambiguity error for converting `a` to `to`, with a note
     /// per ambiguous candidate.
     pub(crate) fn ambiguous_conversion(
@@ -314,9 +352,15 @@ impl Sema<'_, '_> {
                     set.target = to;
                     set.args.push(*a);
                     for (found, f) in self.conversion_functions_all(a.ty) {
+                        if plain && !self.lvalue_ref_conversion_candidate(f, opts) {
+                            continue;
+                        }
                         self.add_conversion_candidate(&mut set, f, found, to, opts);
                     }
-                    if set.viable().next().is_some() {
+                    self.order_conversion_templates(&mut set);
+                    // clang `FK_ReferenceInitOverloadFailed`: a non-const
+                    // lvalue reference keeps the failed set for its notes.
+                    if set.viable().next().is_some() || (plain && !set.cands.is_empty()) {
                         return Some(set);
                     }
                     self.end_set(set);

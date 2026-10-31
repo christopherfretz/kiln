@@ -660,7 +660,13 @@ fn bind_reference(s: &mut Sema<'_, '_>, e: ExprId, to: QualType) -> Result<ExprI
             if let Some(r) = s.user_convert(e, to, ConvCtx::Initialization, at) {
                 return r;
             }
-            if !plain_lref {
+            if !plain_lref
+                || (class_src
+                    && s.has_lvalue_ref_conversion_candidates(
+                        from,
+                        crate::overload::udc::udc_options(ConvCtx::Initialization),
+                    ))
+            {
                 let mut err = ConvError::new(
                     DiagId::sema_no_viable_conversion,
                     vec![s.ty_arg(from), s.ty_arg(referee)],

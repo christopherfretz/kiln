@@ -905,6 +905,29 @@ impl Sema<'_, '_> {
                 self.add_conversion_candidate(set, f, found, to, opts);
             }
         }
+        self.order_conversion_templates(set);
+    }
+
+    /// Records in `set.tmpl_order` which viable conversion function
+    /// template specializations come from a more specialized template
+    /// ([over.match.best.general]/2.5, [temp.deduct.partial]/3.2).
+    pub(crate) fn order_conversion_templates(&mut self, set: &mut super::OverloadCandidateSet) {
+        let ts: Vec<(u32, DeclId)> = set
+            .cands
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| c.viable && c.kind == CandidateKind::ConvFn)
+            .filter_map(|(i, c)| Some((u32::try_from(i).ok()?, c.template?)))
+            .collect();
+        for (i, &(c1, t1)) in ts.iter().enumerate() {
+            for &(c2, t2) in &ts[i + 1..] {
+                if self.more_specialized_conversion(t1, t2) {
+                    set.tmpl_order.push((c1, c2));
+                } else if self.more_specialized_conversion(t2, t1) {
+                    set.tmpl_order.push((c2, c1));
+                }
+            }
+        }
     }
 
     /// The outcome of a user-defined conversion set as an ICS.
@@ -1154,10 +1177,19 @@ impl Sema<'_, '_> {
         opts: IcsOptions,
     ) {
         let Some(pattern) = self.templated_function(ft) else { return };
-        if self.fn_spec(pattern).is_explicit()
-            && !opts.contains(IcsOptions::ALLOW_EXPLICIT)
-            && !matches!(set.kind, SetKind::ConvToRef { .. })
-        {
+        if self.fn_spec(pattern).is_explicit() && !opts.contains(IcsOptions::ALLOW_EXPLICIT) {
+            // clang `AddTemplateConversionCandidate`: noted as "not a
+            // candidate" (a reference binding skips it).
+            if !matches!(set.kind, SetKind::ConvToRef { .. }) {
+                self.ovl.stats.candidates += 1;
+                let mut c = super::Candidate::new(pattern, found, CandidateKind::ConvFn);
+                let start = u32::try_from(set.ics.len()).unwrap_or(u32::MAX);
+                c.ics = start..start;
+                c.template = Some(ft);
+                c.viable = false;
+                c.failure = CandidateFailure::Explicit;
+                set.cands.push(c);
+            }
             return;
         }
         let loc = set.loc;
@@ -1222,6 +1254,7 @@ impl Sema<'_, '_> {
         for (found, f) in fns {
             self.add_conversion_candidate(&mut set, f, found, to, opts);
         }
+        self.order_conversion_templates(&mut set);
         let r = if set.viable().next().is_some() {
             if opts.contains(IcsOptions::CANDIDATE_ARG)
                 && matches!(self.best_viable(&mut set), OvlOutcome::Deleted(_))

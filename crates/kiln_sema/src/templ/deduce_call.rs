@@ -286,7 +286,14 @@ impl Sema<'_, '_> {
             let (p, a, tdf) = self.conversion_deduction_pair(ret, to);
             let r = self.deduce(p, a, tdf, &mut d);
             if r != Tdk::Success {
-                self.resugar_mismatch(p, &mut d);
+                // clang shows the written `cv T` of an underqualified
+                // result and the canonical type of a mismatch.
+                if r == Tdk::Underqualified
+                    && let TypeView::Function(f) = self.ast.types.view(pfn.ty())
+                {
+                    let written = self.non_reference(f.ret());
+                    self.resugar_mismatch(written, &mut d);
+                }
                 return Err(DeductionFailure::new(r, d));
             }
         }
@@ -401,10 +408,7 @@ impl Sema<'_, '_> {
         ret: QualType,
         to: QualType,
     ) -> (QualType, QualType, TdfFlags) {
-        let mut p = ret;
-        if let TypeView::LValueRef(x) | TypeView::RValueRef(x) = self.ast.types.canonical_view(p) {
-            p = x;
-        }
+        let mut p = self.non_reference(ret);
         let a_ref = match self.ast.types.canonical_view(to) {
             TypeView::LValueRef(x) | TypeView::RValueRef(x) => Some(x),
             _ => None,
