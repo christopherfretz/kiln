@@ -490,6 +490,11 @@ impl Cg<'_> {
                 self.emit_ignored(s)?;
                 return Ok(None);
             }
+            CastKind::Dynamic => {
+                let p = self.emit_scalar(s)?;
+                let align = self.record_align_of(sq);
+                self.emit_dynamic_cast(e, p, align)?
+            }
             CastKind::ArrayToPointerDecay => {
                 let lv = self.emit_lvalue(s)?;
                 self.decay(lv.addr)
@@ -1155,6 +1160,12 @@ impl Cg<'_> {
         }
     }
 
+    /// The natural alignment of the object pointer type `q` points to.
+    pub(crate) fn record_align_of(&mut self, q: QualType) -> u64 {
+        let p = self.ast.types.pointee(q).unwrap_or(q);
+        self.pointee_layout(p).1
+    }
+
     /// The lvalue of type `q` at the address `p` a reference holds.
     pub(crate) fn ref_lvalue(&mut self, p: V, q: QualType) -> LV {
         let ty = if self.ast.types.is_function(q) { LTy::PTR } else { self.mty(q) };
@@ -1195,6 +1206,10 @@ impl Cg<'_> {
                 Ok(self.ref_lvalue(p, q))
             }
             ExprKind::ConstantExpr => self.emit_lvalue(ast.exprs.operand(e)),
+            ExprKind::CXXTypeidExpr => {
+                let p = self.emit_typeid(e)?;
+                Ok(self.ref_lvalue(p, q))
+            }
             ExprKind::SubstNonTypeTemplateParmExpr => self.emit_lvalue(ExprId::new(n.b())),
             ExprKind::DeclRefExpr => self.decl_lvalue(e, ast.exprs.decl(e), q),
             ExprKind::StringLiteral => {
@@ -1307,6 +1322,11 @@ impl Cg<'_> {
                     let ty = self.mty(q);
                     let align = min_align(lv.addr.align, off);
                     Ok(LV { addr: Addr { v, ty, align }, q, bf: None })
+                }
+                CastKind::Dynamic => {
+                    let lv = self.emit_lvalue(ast.exprs.operand(e))?;
+                    let p = self.emit_dynamic_cast(e, lv.addr.v, lv.addr.align)?;
+                    Ok(self.ref_lvalue(p, q))
                 }
                 k => err(self.loc_of(e), format!("lvalue cast {k:?} is not supported yet")),
             },

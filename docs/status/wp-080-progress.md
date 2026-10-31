@@ -13,7 +13,12 @@
   sret return.
 - `virtual_covariant.cpp`: `_ZTch` return-adjusting thunks (pointer with
   null check + phi; reference).
-- ir_vs_clang: 138/138 exact.
+- `virtual_dynamic_cast.cpp`, `virtual_typeid.cpp`: `__dynamic_cast`
+  (offset hints 0/-2/-3), `void*` via offset-to-top, reference casts with
+  `__cxa_bad_cast`, always-null casts, typeid from the vtable with the
+  `__cxa_bad_typeid` deref check, static typeid, pointer/enum/array/
+  function/incomplete RTTI.
+- ir_vs_clang: 142/142 exact.
 
 ## Landed
 - mangle.rs: `mangle_class_special`, `mangle_rtti`, `mangle_ctor_vtable`,
@@ -24,6 +29,9 @@
   build; `emit_thunks` defines after the method / D1 / D0, this- and
   return-adjusting; `thunk_attrs` = IsThunk attribute rules). VTT/vbase
   paths are error stubs.
+- dyncast.rs: `emit_dynamic_cast`, `emit_typeid` (+ runtime fn helpers).
+- vtable.rs RTTI: `pointer_rtti`, enum/array/function type_info,
+  `type_rtti_linkage` (incomplete -> internal).
 - func.rs: `gen_code_or_thunk`, `emit_trap_unreachable`; virtual call args
   are emitted before the slot load.
 - class.rs: vptr stores (ctor after bases, dtor unless skippable), D0
@@ -34,13 +42,12 @@
 - module.rs: virtual methods `unnamed_addr`.
 
 ## Not yet
-- RTTI for pointer types, typeid,
-  dynamic_cast, ptr-to-virtual-member (memptr.rs:120), VTT/virtual bases,
+- Member-pointer RTTI, noexcept-function-pointer flag, ptr-to-virtual-member (memptr.rs:120), VTT/virtual bases,
   `expect: run` tests, spec text.
 
 ## Next step
-RTTI for pointer types + `typeid` + `dynamic_cast` (incl. `void*`): scratch
-case, compare with clang (`__dynamic_cast` decl, `_ZTIPK...` pointer
-type_info). Then ptr-to-virtual-member (memptr.rs:120), then VTT/virtual
-bases (`_ZTT`, `_ZTC`, `_ZTv` thunks, vbase offsets, C1-only vbase ctor).
-Gotcha: corpus cases must be noexcept throughout (no EH before WP-100).
+ptr-to-virtual-member (memptr.rs:120: `&C::vf` = vtable offset + 1, and
+the call path's `memptr.virtual` branch), then VTT/virtual bases (`_ZTT`,
+`_ZTC`, `_ZTv` thunks, vbase offsets, C1-only vbase ctor, offset hint -1).
+Gotcha: corpus cases must be noexcept unless they need a throwing runtime
+call with no cleanups (no EH before WP-100).

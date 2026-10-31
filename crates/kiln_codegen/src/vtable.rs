@@ -1095,7 +1095,95 @@ impl Cg<'_> {
         if self.is_std_lib_rtti(q) {
             return Ok(self.external_rtti(&name));
         }
-        err(None, format!("RTTI for type `{name}` is not supported yet"))
+        let abi = match ast.types.canonical_view(q) {
+            TypeView::Pointer(p) => return self.pointer_rtti(q, p, &name),
+            TypeView::Enum(_) => "_ZTVN10__cxxabiv116__enum_type_infoE",
+            TypeView::Function(_) => "_ZTVN10__cxxabiv120__function_type_infoE",
+            TypeView::ConstantArray(_) | TypeView::IncompleteArray(_) => {
+                "_ZTVN10__cxxabiv117__array_type_infoE"
+            }
+            _ => return err(None, format!("RTTI for type `{name}` is not supported yet")),
+        };
+        let linkage = self.type_rtti_linkage(q);
+        let fields = vec![self.abi_vtable(abi)?, self.rtti_type_name(q, linkage)];
+        self.finish_rtti(&name, &fields, linkage)
+    }
+
+    /// clang `ContainsIncompleteClassType`.
+    fn contains_incomplete_class(&self, q: QualType) -> bool {
+        match self.ast.types.canonical_view(q) {
+            TypeView::Record(rd) => self.class_def(rd).is_none(),
+            TypeView::Pointer(p) => self.contains_incomplete_class(p),
+            _ => false,
+        }
+    }
+
+    /// clang `getTypeInfoLinkage` for a non-class type `q`.
+    fn type_rtti_linkage(&self, q: QualType) -> VtLinkage {
+        if self.contains_incomplete_class(q) {
+            return VtLinkage::Internal;
+        }
+        let ast = self.ast;
+        let mut t = q;
+        while let Some(p) = ast.types.pointee(t) {
+            t = p;
+        }
+        let d = ast.types.as_record(t).or_else(|| ast.types.as_enum(t));
+        if d.is_some_and(|d| mangle::has_internal_linkage(ast, ast.first(d))) {
+            return VtLinkage::Internal;
+        }
+        VtLinkage::LinkOnce
+    }
+
+    /// clang `BuildPointerTypeInfo`: `{ vtable, name, i32 flags, pointee }`.
+    fn pointer_rtti(&mut self, q: QualType, pointee: QualType, name: &str) -> R<Value> {
+        let ast = self.ast;
+        let linkage = self.type_rtti_linkage(q);
+        let mut fields = vec![self.abi_vtable("_ZTVN10__cxxabiv119__pointer_type_infoE")?];
+        fields.push(self.rtti_type_name(q, linkage));
+        // extractPBaseFlags.
+        // PTI_Const/Volatile/Restrict are the `Quals` bits.
+        let mut flags = u32::from(ast.types.effective_quals(pointee).bits());
+        if self.contains_incomplete_class(pointee) {
+            flags |= 8;
+        }
+        fields.push(self.m.const_int(LTy::I32, i128::from(flags)));
+        fields.push(self.rtti(pointee)?);
+        self.finish_rtti(name, &fields, linkage)
+    }
+
+    /// clang `GetAddrOfTypeName`: the `_ZTS` string of `q`.
+    fn rtti_type_name(&mut self, q: QualType, linkage: VtLinkage) -> Value {
+        let ts_name = mangle::mangle_rtti(self.ast, q, "_ZTS");
+        if let Some(g) = self.m.get_global(&ts_name) {
+            return Value::global(g);
+        }
+        let init = self.m.const_cstring(ts_name[4..].as_bytes());
+        let ty = self.m.const_type(init);
+        let g = self.m.add_global(&ts_name, ty);
+        let _ = self.m.set_initializer(g, Some(init));
+        let gv = self.m.global_mut(g);
+        gv.is_constant = true;
+        gv.align = Some(1);
+        self.set_vague_linkage(g, linkage);
+        Value::global(g)
+    }
+
+    /// The `_ZTI` global `name` initialized with `fields`.
+    fn finish_rtti(&mut self, name: &str, fields: &[Value], linkage: VtLinkage) -> R<Value> {
+        let init = match self.m.const_anon_struct(fields, false) {
+            Ok(v) => v,
+            Err(e) => return err(None, format!("bad type_info: {e:?}")),
+        };
+        let ty = self.m.const_type(init);
+        let g = self.m.add_global(name, ty);
+        let _ = self.m.set_initializer(g, Some(init));
+        let gv = self.m.global_mut(g);
+        gv.is_constant = true;
+        gv.align = Some(8);
+        self.set_vague_linkage(g, linkage);
+        self.rtti_globals.insert(name.to_owned(), g);
+        Ok(Value::global(g))
     }
 
     /// clang `IsStandardLibraryRTTIDescriptor`: fundamental types and
@@ -1151,7 +1239,9 @@ impl Cg<'_> {
 
     /// clang `getTypeInfoLinkage` for class `rd`.
     fn rtti_linkage(&self, rd: DeclId) -> VtLinkage {
-        if mangle::has_internal_linkage(self.ast, self.ast.first(rd)) {
+        if mangle::has_internal_linkage(self.ast, self.ast.first(rd))
+            || self.class_def(rd).is_none()
+        {
             return VtLinkage::Internal;
         }
         if self.is_dynamic(rd) {
@@ -1205,20 +1295,7 @@ impl Cg<'_> {
             "_ZTVN10__cxxabiv121__vmi_class_type_infoE"
         };
         let mut fields = vec![self.abi_vtable(vt_name)?];
-        // GetAddrOfTypeName.
-        let ts_name = mangle::mangle_rtti(ast, q, "_ZTS");
-        let ts = {
-            let init = self.m.const_cstring(ts_name[4..].as_bytes());
-            let ty = self.m.const_type(init);
-            let g = self.m.add_global(&ts_name, ty);
-            let _ = self.m.set_initializer(g, Some(init));
-            let gv = self.m.global_mut(g);
-            gv.is_constant = true;
-            gv.align = Some(1);
-            self.set_vague_linkage(g, linkage);
-            g
-        };
-        fields.push(Value::global(ts));
+        fields.push(self.rtti_type_name(q, linkage));
         if single {
             let b = self.rtti(bases[0].0)?;
             fields.push(b);
@@ -1250,19 +1327,7 @@ impl Cg<'_> {
                 fields.push(self.m.const_int(LTy::I64, i128::from(of)));
             }
         }
-        let init = match self.m.const_anon_struct(&fields, false) {
-            Ok(v) => v,
-            Err(e) => return err(None, format!("bad type_info: {e:?}")),
-        };
-        let ty = self.m.const_type(init);
-        let g = self.m.add_global(name, ty);
-        let _ = self.m.set_initializer(g, Some(init));
-        let gv = self.m.global_mut(g);
-        gv.is_constant = true;
-        gv.align = Some(8);
-        self.set_vague_linkage(g, linkage);
-        self.rtti_globals.insert(name.to_owned(), g);
-        Ok(Value::global(g))
+        self.finish_rtti(name, &fields, linkage)
     }
 
     /// Linkage, `dso_local` and comdat of an RTTI or vtable definition.
