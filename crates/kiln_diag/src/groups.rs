@@ -154,7 +154,9 @@ diag_groups! {
     InvalidPartialSpecialization = "invalid-partial-specialization" [];
     UnusablePartialSpecialization = "unusable-partial-specialization" [];
     InstantiationAfterSpecialization = "instantiation-after-specialization" [];
-    Deprecated = "deprecated" [DeprecatedDeclarations, DeprecatedRedundantConstexprStaticDef];
+    Deprecated = "deprecated" [DeprecatedDeclarations, DeprecatedRedundantConstexprStaticDef, DeprecatedThisCapture];
+    // WP-075
+    DeprecatedThisCapture = "deprecated-this-capture" [];
     DeprecatedRedundantConstexprStaticDef = "deprecated-redundant-constexpr-static-def" [];
     ExplicitSpecializationStorageClass = "explicit-specialization-storage-class" [];
     ReturnStackAddress = "return-stack-address" [];

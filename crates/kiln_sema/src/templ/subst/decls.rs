@@ -231,7 +231,7 @@ impl Substituter<'_, '_, '_> {
     }
 
     /// The parameters of pattern function `f` with substituted types.
-    fn param_infos(&mut self, f: DeclId) -> SubstResult<Vec<ParamInfo>> {
+    pub(crate) fn param_infos(&mut self, f: DeclId) -> SubstResult<Vec<ParamInfo>> {
         let params: Vec<DeclId> = self
             .sema
             .ast
@@ -253,8 +253,34 @@ impl Substituter<'_, '_, '_> {
                 let loc = n.loc();
                 let tys = match self.expand_pattern(|s| s.ty(pat, loc))? {
                     crate::templ::pack::Expansion::Elements(v) => v,
-                    crate::templ::pack::Expansion::Unexpanded(_) => {
-                        return self.unimplemented("function parameter packs", loc);
+                    crate::templ::pack::Expansion::Unexpanded(x) => {
+                        // Still a pack: a parameter pack of a template
+                        // being redeclared (a generic lambda's) whose
+                        // own levels stay.
+                        let ty = self.sema.ast.types.pack_expansion(x, None);
+                        let ctx = self.sema.ctx;
+                        let idx = u16::try_from(out.len()).unwrap_or(u16::MAX);
+                        let np = self.sema.builder().prototype_param(
+                            ctx,
+                            n.name(),
+                            loc,
+                            ty,
+                            idx,
+                            ParamData::PACK,
+                        );
+                        self.sema.unowned_params.insert(np);
+                        self.locals.insert(p, DeclOrPack::Decl(np));
+                        out.push(ParamInfo {
+                            name,
+                            ty,
+                            loc,
+                            attrs: Vec::new(),
+                            invalid: false,
+                            default_arg: DefaultArg::None,
+                            range: (loc, loc),
+                            decl: Some(np),
+                        });
+                        continue;
                     }
                 };
                 let mut decls = Vec::with_capacity(tys.len());
@@ -500,7 +526,7 @@ impl Substituter<'_, '_, '_> {
 
     /// Drops the mapping of pattern function `pat`'s parameters
     /// ([`Self::param_infos`]).
-    fn forget_pattern_params(&mut self, pat: DeclId) {
+    pub(crate) fn forget_pattern_params(&mut self, pat: DeclId) {
         let pp: Vec<DeclId> = self
             .sema
             .ast
@@ -514,7 +540,7 @@ impl Substituter<'_, '_, '_> {
     }
 
     /// The exception specification of function type `p`.
-    fn exc_spec(
+    pub(crate) fn exc_spec(
         &mut self,
         p: &kiln_ast::types::FuncProto,
         loc: Loc,
@@ -533,7 +559,7 @@ impl Substituter<'_, '_, '_> {
     }
 
     /// The default arguments of pattern function `pat` on `f`.
-    fn default_args(&mut self, pat: DeclId, f: DeclId) {
+    pub(crate) fn default_args(&mut self, pat: DeclId, f: DeclId) {
         let pp: Vec<DeclId> = self
             .sema
             .ast

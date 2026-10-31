@@ -270,6 +270,7 @@ impl Sema<'_, '_> {
         h.lexical = Some(lexical);
         self.mark_pattern_next();
         let v = self.builder().var(h, ty, spec, prev_ok);
+        self.lambda_mangle.var = Some(v);
         if invalid {
             self.ast.decls.set_flags(v, kiln_ast::decl::DeclFlags::INVALID);
         }

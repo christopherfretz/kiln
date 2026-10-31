@@ -1352,6 +1352,7 @@ impl<'a> Printer<'a, '_> {
             | "CXXScalarValueInitExpr"
             | "CXXThrowExpr"
             | "StmtExpr"
+            | "LambdaExpr"
             | "CompoundLiteralExpr"
             | "BinaryConditionalOperator"
             | "OffsetOfExpr"

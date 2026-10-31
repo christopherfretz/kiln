@@ -247,7 +247,10 @@ impl Substituter<'_, '_, '_> {
         let extra = (fp.len() + packs).saturating_sub(pp.len());
         let mut j = 0;
         for &a in pp {
-            if is_pack(self, a) && packs == 1 {
+            // A pack whose new parameter is still a pack (a generic
+            // lambda's, rebuilt with its levels retained) maps one to one.
+            let retained = fp.get(j).is_some_and(|&b| is_pack(self, b));
+            if is_pack(self, a) && packs == 1 && !retained {
                 let end = (j + extra).min(fp.len());
                 let l = self.sema.ast.lists.push(&fp[j..end]);
                 self.locals.insert(a, DeclOrPack::Pack(l));
@@ -404,6 +407,11 @@ impl Substituter<'_, '_, '_> {
         let d = kiln_ast::DeclId::from_raw(n.a()).ok_or(SubstFail)?;
         let len = if let Some(&DeclOrPack::Pack(l)) = self.locals.get(&d) {
             Some(self.sema.ast.lists.len(l))
+        } else if let Some(&DeclOrPack::Decl(x)) = self.locals.get(&d) {
+            // A function parameter pack that stays one (a generic
+            // lambda's, its own levels retained).
+            let st = self.sema.size_type();
+            return Ok(self.sema.builder().size_of_pack(x, st, loc, end));
         } else if let Some(info) = self.sema.ast.template_parm(d).copied() {
             match self.lookup(info.depth, info.index) {
                 ArgLookup::Arg(a) => match a.view() {

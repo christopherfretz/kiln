@@ -252,7 +252,8 @@ pub(crate) fn is_pod(
     fields: &[FieldDesc],
     field_pod: &dyn Fn(DeclId) -> bool,
 ) -> bool {
-    if class.has_bases || class.dynamic {
+    // clang `LambdaDefinitionData`: a closure type is never POD.
+    if class.has_bases || class.dynamic || ast.closure_lambda(def).is_some() {
         return false;
     }
     // [class.access]/3: members of a `class` are private by default. A

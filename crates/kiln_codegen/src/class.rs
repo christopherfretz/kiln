@@ -221,7 +221,7 @@ impl Cg<'_> {
         if let Some(&r) = self.sfns.get(&(first, v)) {
             return Ok(r);
         }
-        let name = mangle::mangle_structor(self.ast, first, v);
+        let name = mangle::mangle_structor(self.ast, &mut self.anon, first, v);
         let sig = self.structor_sig(first, Some(v))?;
         let f = self.declare_fn(&name, first, &sig)?;
         self.m.func_mut(f).unnamed_addr = UnnamedAddr::Global;
@@ -409,7 +409,7 @@ impl Cg<'_> {
                     return self.emit_thunks(d, Some(v));
                 }
                 let f = self.base_fn(first, true)?;
-                let name = mangle::mangle_structor(ast, first, v);
+                let name = mangle::mangle_structor(ast, &mut self.anon, first, v);
                 let fty = self.m.func(f).ty();
                 let a = match self.m.add_alias(&name, fty, Value::func(f)) {
                     Ok(a) => a,

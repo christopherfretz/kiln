@@ -1348,6 +1348,33 @@ impl Parser<'_, '_> {
         let delay_args = delayable && self.late_fn.delay_args;
         let open = self.bump().span.lo;
         self.s.act_on_start_prototype();
+        let (params, variadic) = self.parse_param_clause(d, delay_args);
+        let rparen = self.expect_closing(Punct::RParen, Punct::LParen, open);
+        let (exc, quals, ref_qual, trailing) = self.parse_function_qualifiers(d, delayable);
+        self.s.act_on_end_prototype();
+        let params = self.s.act_on_param_list(params);
+        d.chunks.push(Chunk::Function {
+            params,
+            variadic,
+            loc: open,
+            rparen,
+            exc,
+            quals,
+            ref_qual,
+            trailing,
+            ambiguous,
+        });
+    }
+
+    /// The parameter-declaration-clause of a function declarator
+    /// ([dcl.fct]/1) after the `(` (and `act_on_start_prototype`), up to
+    /// the `)`: the parameters and whether `...` ends the list. With
+    /// `delay_args`, default arguments are saved in `late_fn`.
+    pub(crate) fn parse_param_clause(
+        &mut self,
+        d: &mut Declarator,
+        delay_args: bool,
+    ) -> (Vec<ParamInfo>, bool) {
         let mut params = Vec::new();
         let mut variadic = false;
         loop {
@@ -1422,21 +1449,7 @@ impl Parser<'_, '_> {
                 break;
             }
         }
-        let rparen = self.expect_closing(Punct::RParen, Punct::LParen, open);
-        let (exc, quals, ref_qual, trailing) = self.parse_function_qualifiers(d, delayable);
-        self.s.act_on_end_prototype();
-        let params = self.s.act_on_param_list(params);
-        d.chunks.push(Chunk::Function {
-            params,
-            variadic,
-            loc: open,
-            rparen,
-            exc,
-            quals,
-            ref_qual,
-            trailing,
-            ambiguous,
-        });
+        (params, variadic)
     }
 
     /// `= initializer-clause` after a parameter-declaration

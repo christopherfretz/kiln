@@ -199,8 +199,9 @@ impl Parser<'_, '_> {
                 }
                 Some(open @ (Punct::LParen | Punct::LSquare | Punct::LBrace)) => {
                     self.take_into(out);
+                    // Nested brackets may hold a lambda body's `;`.
                     if let Some(close) = closer_of(open) {
-                        self.capture_until(&[close], out, true, true);
+                        self.capture_until(&[close], out, false, true);
                     }
                 }
                 Some(Punct::RParen) if kind == InitKind::DefaultArg => return true,
@@ -614,6 +615,9 @@ impl Parser<'_, '_> {
         for (i, t) in parts.default_args {
             self.begin_replay(t.toks, t.end);
             self.bump();
+            if let Some(&p) = params.get(i) {
+                self.s.act_on_start_delayed_default_arg(p);
+            }
             if self.at(Punct::LBrace) {
                 self.unsupported("braced default arguments", self.loc());
             } else if let Some(e) = self.parse_assignment_expr() {
@@ -631,6 +635,7 @@ impl Parser<'_, '_> {
                     }
                 }
             }
+            self.s.act_on_end_delayed_default_arg();
             self.finish_replay();
         }
         if let Some(t) = parts.noexcept {

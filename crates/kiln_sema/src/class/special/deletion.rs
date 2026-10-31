@@ -248,14 +248,19 @@ impl Sema<'_, '_> {
             return (DeleteReason::No, Vec::new());
         }
         let bits = self.defn_bits(class);
-        if bits.contains(DefinitionBits::LAMBDA) {
-            // todo(WP-074): closure types ([expr.prim.lambda.closure]/13).
-            let r = if matches!(k, K::DefaultCtor | K::CopyAssign) {
-                DeleteReason::Unsupported
+        if bits.contains(DefinitionBits::LAMBDA)
+            && matches!(k, K::DefaultCtor | K::CopyAssign)
+            && !self.closure_default_constructible(class)
+        {
+            // [expr.prim.lambda.closure]/13: a closure type with a
+            // lambda-capture has a deleted default constructor and copy
+            // assignment operator (clang `note_lambda_decl`).
+            let notes = if diagnose {
+                vec![self.diag(DiagId::note_lambda_decl, self.ast.decls.get(class).loc())]
             } else {
-                DeleteReason::No
+                Vec::new()
             };
-            return (r, Vec::new());
+            return (DeleteReason::Yes, notes);
         }
         if k != K::DefaultCtor && k != K::Dtor && bits.contains(DefinitionBits::ANONYMOUS) {
             return (DeleteReason::No, Vec::new());

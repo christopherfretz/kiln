@@ -322,8 +322,10 @@ impl Cg<'_> {
                         .and_then(|p| inits.get(p).copied());
                     if by_member[i].is_none() {
                         let mt = self.ir(m);
+                        // clang `ConstantAggregateBuilder`: padding (and
+                        // the byte of an empty class) is `undef`.
                         if matches!(m, IrType::Array(..) | IrType::Int(8)) {
-                            elems.push(self.m.const_zero(mt));
+                            elems.push(self.m.const_undef(mt));
                             continue;
                         }
                         return err(

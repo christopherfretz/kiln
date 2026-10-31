@@ -11,6 +11,7 @@
 
 mod decls;
 mod exprs;
+mod lambda;
 mod stmts;
 mod types;
 
@@ -63,6 +64,9 @@ pub struct Substituter<'s, 'a, 'sm> {
     /// (clang's diagnostics name it: "'a' declared as an array with a
     /// negative size").
     pub(crate) declarator_name: Option<(Symbol, Loc)>,
+    /// How many lambda bodies are being rebuilt (a shared expression in
+    /// one still captures `this`).
+    pub(crate) lambda_bodies: u32,
 }
 
 impl std::fmt::Debug for Substituter<'_, '_, '_> {
@@ -87,6 +91,7 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
             entity: None,
             pairs: Vec::new(),
             declarator_name: None,
+            lambda_bodies: 0,
         }
     }
 

@@ -649,6 +649,31 @@ points, thunks and method indices are clang's.
   IR-exact on both triples (`tests/codegen/int128.cpp`,
   `tests/codegen/int128_ops.cpp`).
 
+### 8.9 Landed (WP-075): closure types
+- **Linkage** (`is_unnumbered_closure`, `has_internal_linkage`,
+  `is_unique_external`, `type_externally_visible`): a closure type with
+  a mangling number (spec/sema-lambda.md §3.5) takes its context's linkage; one without has
+  no linkage, its members are internal, and a type built from it has no
+  linkage. A namespace-scope variable whose type, or a function whose
+  parameter types, have no linkage is unique-external (clang
+  `getLVForNamespaceScopeDecl`): emitted `internal`, keeping its name.
+- **Mangling** (`mangle.rs`, Itanium §5.1.8): a numbered closure is
+  `<closure-type-name> ::= Ul <lambda-sig> E [ <number> ] _` (`Ul..E_`
+  for number 1, `Ul..E0_` for 2, ...), its signature the call operator's
+  parameter types (`v` for none; a generic lambda's invented parameters
+  as `T_`-style template parameters at the lambda's level). An unnumbered
+  one mangles as an unnamed class, `$_N`, from the module's
+  `AnonIds` table (clang `getAnonymousStructId`: per function for a
+  class in a function, else one module-wide counter). A closure created
+  in a default argument of a function's parameter mangles in that
+  function's local scope with `d [<number>] _` (the parameter counted
+  from the last, clang `mangleLocalName`); one created in the initializer
+  of a variable or data member has `<closure-prefix> ::= [ <prefix> ]
+  <unqualified-name> M` (a substitution candidate). `decltype(auto)` is
+  `Dc`. `tests/codegen/lambda_names.cpp` checks it IR-exact (symbols
+  included) against clang; the `S2_` substitution in some closure
+  names inside templates is WP-117's.
+
 ## 9. Open questions (with recommendation)
 - **A1.** `preferred_align` is equal to `align` on both targets. i386
   `double` is where it differs; out of scope.

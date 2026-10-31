@@ -9,7 +9,8 @@
 use kiln_source::Loc;
 
 use crate::ids::{
-    ArgListId, ConstValueId, DeclId, ExprId, ListId, NnsId, QualType, RawId, StmtId, StringLitId,
+    ArgListId, ConstValueId, DeclId, ExprId, LambdaId, ListId, NnsId, QualType, RawId, StmtId,
+    StringLitId,
 };
 use crate::lists::IdLists;
 use crate::mem::{HeapSize, MemReport, VecDims};
@@ -1208,6 +1209,8 @@ pub struct ExprArena {
     compound_assigns: Vec<CompoundAssignExtra>,
     init_lists: Vec<InitListExtra>,
     news: Vec<NewExtra>,
+    /// Lambda side records (`LambdaExpr.a`, `RecordData.lambda`).
+    pub lambdas: crate::lambda::LambdaArena,
     /// Cold per-expression data.
     pub cold: ColdExprData,
 }
@@ -1242,6 +1245,7 @@ impl Default for ExprArena {
                 operator_delete: None,
                 type_loc: Loc::INVALID,
             }],
+            lambdas: crate::lambda::LambdaArena::default(),
             cold: ColdExprData::default(),
         }
     }
@@ -2079,6 +2083,11 @@ impl ExprArena {
                 v.extend(self.init_lists[n.b as usize].array_filler);
             }
             ExprKind::RecoveryExpr => v.extend(lists.iter::<ExprId>(ListId::new(n.a))),
+            ExprKind::LambdaExpr => {
+                if let Some(l) = self.lambdas.get(LambdaId::new(n.a)).inits {
+                    v.extend(lists.iter::<ExprId>(l));
+                }
+            }
             ExprKind::CXXNewExpr => {
                 let x = &self.news[n.a as usize];
                 v.extend(x.array_size);
@@ -2122,6 +2131,7 @@ impl HeapSize for ExprArena {
         for row in self.vec_rows() {
             r.push(row.row());
         }
+        r.push(self.lambdas.mem_row());
         r.push(self.cold.end_loc.mem_row().prefixed("cold"));
         r.push(self.cold.member_extra.mem_row().prefixed("cold"));
         r.push(self.cold.designators.mem_row().prefixed("cold"));
@@ -2148,6 +2158,16 @@ impl ExprArena {
         let mut it = lists.iter::<ExprId>(ListId::new(n.a));
         let mut next = || it.next().expect("four operands");
         [next(), next(), next(), next()]
+    }
+
+    /// The side record of a `LambdaExpr`.
+    pub fn lambda_id(&self, e: ExprId) -> LambdaId {
+        LambdaId::new(self.expect_kind(e, ExprKind::LambdaExpr).a)
+    }
+
+    /// The side record of a `LambdaExpr`.
+    pub fn lambda(&self, e: ExprId) -> &crate::lambda::LambdaData {
+        self.lambdas.get(self.lambda_id(e))
     }
 
     /// The compound statement of a `StmtExpr`.

@@ -1150,6 +1150,11 @@ impl DefinitionBits {
     /// The class was declared with the `final` class-virt-specifier
     /// ([class.pre]; clang dumps a `FinalAttr final` child).
     pub const FINAL: DefinitionBits = DefinitionBits(1 << 50);
+    /// A closure type whose lambda has a *lambda-capture*
+    /// ([expr.prim.lambda.closure]/13: no default constructor, a deleted
+    /// copy assignment operator and no implicit move assignment; clang
+    /// `!lambdaIsDefaultConstructibleAndAssignable`).
+    pub const LAMBDA_CAPTURES: DefinitionBits = DefinitionBits(1 << 51);
 
     /// No bits.
     pub const fn empty() -> Self {
@@ -2249,6 +2254,14 @@ impl DeclArena {
             "class defined twice"
         );
         d.defn = d.defn.with(DefinitionBits::BEING_DEFINED);
+    }
+
+    /// Marks class `r` (being defined) as the closure type of lambda `l`
+    /// ([expr.prim.lambda.closure]).
+    pub fn set_closure(&mut self, r: DeclId, l: LambdaId) {
+        let d = self.record_mut(r);
+        d.lambda = Some(l);
+        d.defn = d.defn.with(DefinitionBits::LAMBDA);
     }
 
     /// Sets property bits of a class being defined.

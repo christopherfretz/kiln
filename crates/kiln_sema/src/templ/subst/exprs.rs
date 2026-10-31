@@ -30,6 +30,9 @@ impl Substituter<'_, '_, '_> {
     /// Substitutes into `e`.
     pub fn expr(&mut self, e: ExprId) -> SubstResult<ExprId> {
         if !self.needs_rebuild(e) {
+            if self.lambda_bodies > 0 {
+                self.note_shared_this(e);
+            }
             return Ok(e);
         }
         self.check_stack(|s| s.sema.ast.exprs.get(e).loc())?;
@@ -143,7 +146,10 @@ impl Substituter<'_, '_, '_> {
                 let args = ex(self).call_args(e);
                 let callee = self.callee(callee)?;
                 let args = self.expr_list(args)?;
-                Ok(self.sema.act_on_call(callee, &args, loc, end))
+                // clang `TransformCallExpr`: the "fake" `(` is where the
+                // callee begins.
+                let lparen = self.sema.begin_loc(callee);
+                Ok(self.sema.act_on_call(callee, &args, lparen, end))
             }
             ExprKind::CXXOperatorCallExpr => {
                 use crate::overload::oper::{binary_of, unary_of};
@@ -152,7 +158,10 @@ impl Substituter<'_, '_, '_> {
                 let args = ex(self).call_args(e);
                 let args = self.expr_list(args)?;
                 match (op, args.as_slice()) {
-                    (OO::Call, [f, rest @ ..]) => Ok(self.sema.act_on_call(*f, rest, loc, end)),
+                    (OO::Call, [f, rest @ ..]) => {
+                        let lparen = self.sema.begin_loc(*f);
+                        Ok(self.sema.act_on_call(*f, rest, lparen, end))
+                    }
                     (OO::Subscript, [b, rest @ ..]) => {
                         Ok(self.sema.act_on_subscript_args(*b, rest, loc, end))
                     }
@@ -397,7 +406,7 @@ impl Substituter<'_, '_, '_> {
             | ExprKind::FunctionParmPackExpr => self.unimplemented("pack expansion", loc),
             ExprKind::ConceptSpecializationExpr => self.concept_id_expr(e, loc),
             ExprKind::RequiresExpr => self.requires_expr(e, loc),
-            ExprKind::LambdaExpr => self.unimplemented("lambda expressions in templates", loc),
+            ExprKind::LambdaExpr => self.lambda_expr(e, loc),
             ExprKind::CXXConstructExpr => self.construct_expr(e, loc),
             ExprKind::CXXTemporaryObjectExpr => {
                 // `T(a, b)` / `T()` / `T{...}` ([expr.type.conv]/2): rebuilt
@@ -431,7 +440,10 @@ impl Substituter<'_, '_, '_> {
 
     fn this_expr(&mut self, implicit: bool, loc: Loc) -> ExprId {
         match self.sema.current_this() {
-            Some(t) => self.sema.builder().this_expr(t, implicit, loc),
+            Some(t) => {
+                self.sema.note_this_use(loc);
+                self.sema.builder().this_expr(t, implicit, loc)
+            }
             None => self.sema.act_on_this(loc),
         }
     }

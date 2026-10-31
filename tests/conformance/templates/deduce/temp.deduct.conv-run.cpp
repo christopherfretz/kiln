@@ -2,7 +2,6 @@
 // runs; a conversion to a reference binds to the returned object.
 //@ expect: run
 //@ stdout: 42 2.5 1 9
-//@ xfail(kiln): codegen does not lower UserDefinedConversion casts yet (kiln_codegen)
 extern "C" int printf(const char*, ...);
 struct A {
   int v = 42;

@@ -10,7 +10,7 @@ use kiln_ast::decl::{
     ConstexprKind, DeclFlags, DeclKind, DefinitionBits, TemplLinkKind, VarStorage,
 };
 use kiln_ast::templates::SpecKind;
-use kiln_ast::types::{BuiltinType, TypeView};
+use kiln_ast::types::{BuiltinType, PrintOptions, TypeView, print_type};
 use kiln_ast::{Ast, DeclId, QualType};
 use kiln_llvm::{
     Attr, AttrKind, AttrSetId, ComdatKind, FuncId, GlobalId, Linkage, Module, TypeId as LTy,
@@ -96,8 +96,6 @@ pub(crate) struct Cg<'a> {
     pub named: FxHashMap<DeclId, LTy>,
     /// Base-subobject (`.base`) struct types by record.
     pub named_base: FxHashMap<DeclId, LTy>,
-    /// Names already used for named struct types.
-    pub struct_names: FxHashMap<String, u32>,
     /// The `.constant` globals of frozen constant objects (clang
     /// `GetAddrOfUnnamedGlobalConstantDecl`), by value.
     pub const_objects: FxHashMap<kiln_ast::ConstValueId, GlobalId>,
@@ -145,6 +143,8 @@ pub(crate) struct Cg<'a> {
     pub pending: Vec<(FuncId, DeclId, crate::fir::Fir)>,
     /// Per-function state.
     pub f: Fx,
+    /// The `$_N` ids of unnamed classes, in first-mangle order.
+    pub anon: mangle::AnonIds,
 }
 
 impl<'a> Cg<'a> {
@@ -174,7 +174,6 @@ impl<'a> Cg<'a> {
             strings: FxHashMap::default(),
             named: FxHashMap::default(),
             named_base: FxHashMap::default(),
-            struct_names: FxHashMap::default(),
             const_objects: FxHashMap::default(),
             srcloc: None,
             static_locals: FxHashMap::default(),
@@ -197,6 +196,7 @@ impl<'a> Cg<'a> {
             rtti_globals: FxHashMap::default(),
             pending: Vec::new(),
             f: Fx::empty(),
+            anon: mangle::AnonIds::new(),
         }
     }
 
@@ -427,7 +427,7 @@ impl<'a> Cg<'a> {
     }
 
     pub fn fn_internal(&self, d: DeclId) -> bool {
-        mangle::has_internal_linkage(self.ast, d)
+        mangle::is_internal_symbol(self.ast, d)
     }
 
     pub(crate) fn discardable_fn(&self, d: DeclId) -> bool {
@@ -440,7 +440,7 @@ impl<'a> Cg<'a> {
     }
 
     fn discardable_var(&self, d: DeclId) -> bool {
-        mangle::has_internal_linkage(self.ast, d) || self.var_is_inline(d)
+        mangle::is_internal_symbol(self.ast, d) || self.var_is_inline(d)
     }
 
     // ---- types ---------------------------------------------------------
@@ -490,11 +490,15 @@ impl<'a> Cg<'a> {
         if let Some(&t) = self.named.get(&first) {
             return t;
         }
-        let base =
-            format!("{}.{}", record_kind_prefix(self.ast, first), self.qualified_name(first));
-        let n = self.struct_names.entry(base.clone()).or_insert(0);
-        let name = if *n == 0 { base } else { format!("{base}.{n}") };
-        *n += 1;
+        // clang `addRecordTypeName`: an unnamed class (without a typedef
+        // name for linkage) is plain `anon`; LLVM uniquifies a repeated
+        // name with one module-wide counter.
+        let leaf = if mangle::decl_name(self.ast, first).is_empty() {
+            "anon".to_owned()
+        } else {
+            self.qualified_name(first)
+        };
+        let name = format!("{}.{leaf}", record_kind_prefix(self.ast, first));
         let t = self.m.types.named_struct(&name);
         self.named.insert(first, t);
         let rec = self.tys.record(first).clone();
@@ -513,8 +517,32 @@ impl<'a> Cg<'a> {
 
     fn qualified_name(&self, d: DeclId) -> String {
         let ast = self.ast;
-        let mut parts = Vec::new();
-        let mut cur = Some(d);
+        let is_fn = |k: DeclKind| {
+            matches!(
+                k,
+                DeclKind::Function
+                    | DeclKind::CXXMethod
+                    | DeclKind::CXXConstructor
+                    | DeclKind::CXXDestructor
+                    | DeclKind::CXXConversion
+            )
+        };
+        let leaf = || {
+            let s = mangle::decl_name(ast, d);
+            if s.is_empty() { "anon".to_owned() } else { s }
+        };
+        // clang `printQualifiedName` on a function-local declaration
+        // prints only its name.
+        let mut ctx = ast.decls.get(d).ctx();
+        while let Some(c) = ctx {
+            match ast.decls.get(c).kind() {
+                DeclKind::LinkageSpec | DeclKind::Export => ctx = ast.decls.get(c).ctx(),
+                k if is_fn(k) => return leaf(),
+                _ => break,
+            }
+        }
+        let mut parts = vec![leaf()];
+        let mut cur = ast.decls.get(d).ctx();
         while let Some(x) = cur {
             let n = ast.decls.get(x);
             match n.kind() {
@@ -524,9 +552,31 @@ impl<'a> Cg<'a> {
                     let s = mangle::decl_name(ast, x);
                     parts.push(if s.is_empty() { "(anonymous namespace)".to_owned() } else { s });
                 }
+                k if is_fn(k) => {
+                    let mut s = mangle::decl_name(ast, x);
+                    s.push('(');
+                    if let Some(p) = n.ty().and_then(|t| ast.types.proto(t).copied()) {
+                        let ps = ast.types.params(&p);
+                        for (i, &q) in ps.iter().enumerate() {
+                            if i > 0 {
+                                s.push_str(", ");
+                            }
+                            s.push_str(&print_type(&ast.types, ast, q, PrintOptions::SUGARED));
+                        }
+                        if p.variadic() {
+                            s.push_str(if ps.is_empty() { "..." } else { ", ..." });
+                        }
+                    }
+                    s.push(')');
+                    parts.push(s);
+                }
                 _ => {
                     let s = mangle::decl_name(ast, x);
-                    parts.push(if s.is_empty() { "anon".to_owned() } else { s });
+                    parts.push(if s.is_empty() {
+                        format!("(anonymous {})", record_kind_prefix(ast, x))
+                    } else {
+                        s
+                    });
                 }
             }
             cur = n.ctx();
@@ -863,7 +913,7 @@ impl<'a> Cg<'a> {
         if let Some(&f) = self.fns.get(&first) {
             return Ok(f);
         }
-        let name = mangle::mangle_decl(ast, first);
+        let name = mangle::mangle_decl(ast, &mut self.anon, first);
         let sig = self.decl_sig(first)?;
         let f = self.declare_fn(&name, first, &sig)?;
         self.fns.insert(first, f);
@@ -985,7 +1035,7 @@ impl<'a> Cg<'a> {
         }
         let Some(ty) = ast.decls.get(first).ty() else { return err(None, "variable without type") };
         let lt = self.mty(ty);
-        let name = mangle::mangle_decl(ast, first);
+        let name = mangle::mangle_decl(ast, &mut self.anon, first);
         let g = self.m.add_global(&name, lt);
         let (_, align) = self.size_align(ty);
         let gv = self.m.global_mut(g);
@@ -1076,12 +1126,12 @@ impl<'a> Cg<'a> {
             }
             g
         } else {
-            let name = mangle::mangle_decl(ast, first);
+            let name = mangle::mangle_decl(ast, &mut self.anon, first);
             let g = self.m.add_global(&name, ity);
             self.gvars.insert(first, g);
             g
         };
-        let internal = mangle::has_internal_linkage(ast, d);
+        let internal = mangle::is_internal_symbol(ast, d);
         let inline = self.var_is_inline(d);
         let quals = ast.types.effective_quals(ty);
         let constant = quals.is_const() && !has_mutable(ty);
@@ -1130,7 +1180,7 @@ impl<'a> Cg<'a> {
             *n += 1;
             *n - 1
         };
-        let name = mangle::mangle_static_local(ast, first, index);
+        let name = mangle::mangle_static_local(ast, &mut self.anon, first, index);
         let mt = self.mty(ty);
         let g = self.m.add_global(&name, mt);
         let align = self.global_align(ty);
@@ -1186,7 +1236,7 @@ impl<'a> Cg<'a> {
         };
         let ty = ast.decls.get(d).ty().unwrap_or(QualType::INT);
         let init = self.const_value(v, ty, None, true)?;
-        let name = mangle::mangle_param_object(ast, d);
+        let name = mangle::mangle_param_object(ast, &mut self.anon, d);
         let ity = self.m.const_type(init);
         let g = self.m.add_global(&name, ity);
         self.gvars.insert(d, g);

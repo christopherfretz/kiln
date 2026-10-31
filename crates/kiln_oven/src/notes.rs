@@ -7,6 +7,7 @@ use std::fmt::Write as _;
 use kiln_ast::decl::DeclKind;
 use kiln_ast::dump::AstNames;
 use kiln_ast::expr::{ExprFlags, ExprKind};
+use kiln_ast::lambda::ClosureThunk;
 use kiln_ast::types::TypeNames as _;
 use kiln_ast::{Ast, DeclId, ExprId, QualType};
 use kiln_source::Loc;
@@ -414,15 +415,26 @@ impl Oven {
             }
             let func = &self.funcs[fr.func as usize];
             let mut s = String::from("in call to '");
-            self.object_prefix(ast, fr.call_pc as usize, fr.fb as usize, fr.func, &mut s);
-            if let Some(d) = func.decl {
-                write_name_for_diag(ast, d, &mut s);
+            // A closure's static invoker runs as its call operator with no
+            // object: clang's `describeCall` then prints the first argument
+            // as the object (`(0->operator()()`, or `()` with none).
+            let mut invoker = match func.decl.and_then(|d| ast.closure_thunk(d)) {
+                Some(ClosureThunk::Invoker { call_op }) => Some(call_op),
+                _ => None,
+            };
+            if invoker.is_none() {
+                self.object_prefix(ast, fr.call_pc as usize, fr.fb as usize, fr.func, &mut s);
+                if let Some(d) = func.decl {
+                    write_name_for_diag(ast, d, &mut s);
+                }
             }
             s.push('(');
-            for (k, p) in func.params.iter().enumerate() {
-                if k > 0 {
+            let mut sep = false;
+            for p in &func.params {
+                if sep {
                     s.push_str(", ");
                 }
+                sep = true;
                 let v = self.regs[fr.fb as usize + p.reg as usize];
                 match self.types.kind(p.ty) {
                     // A reference argument prints as its referent's lvalue
@@ -432,6 +444,12 @@ impl Oven {
                         s.push_str(r.strip_prefix('&').unwrap_or(&r));
                     }
                     _ => self.write_value(ast, &mut s, p.ty, v, 0),
+                }
+                if let Some(op) = invoker.take() {
+                    s.push_str("->");
+                    write_name_for_diag(ast, op, &mut s);
+                    s.push('(');
+                    sep = false;
                 }
             }
             s.push_str(")'");

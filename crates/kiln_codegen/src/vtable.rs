@@ -145,7 +145,7 @@ impl Cg<'_> {
     /// clang `getVTableLinkage` / `isVTableExternal` (at `-O0`).
     pub(crate) fn vtable_linkage(&self, rd: DeclId) -> VtLinkage {
         let first = self.ast.first(rd);
-        if mangle::has_internal_linkage(self.ast, first) {
+        if mangle::class_is_internal(self.ast, first) {
             return VtLinkage::Internal;
         }
         if self.is_implicit_instantiation(first) {
@@ -176,7 +176,7 @@ impl Cg<'_> {
         self.deferred_vtables.push(first);
         let l = self.vt_layout(first)?;
         let ty = self.vtable_ir_ty(&l);
-        let name = mangle::mangle_class_special(self.ast, "_ZTV", first);
+        let name = mangle::mangle_class_special(self.ast, &mut self.anon, "_ZTV", first);
         let g = self.m.add_global(&name, ty);
         let gv = self.m.global_mut(g);
         gv.is_constant = true;
@@ -249,7 +249,7 @@ impl Cg<'_> {
     /// clang `GetAddrOfVTT`: the `_ZTT` global of `rd` (declared).
     pub(crate) fn vtt_global(&mut self, rd: DeclId) -> R<GlobalId> {
         let first = self.ast.first(rd);
-        let name = mangle::mangle_class_special(self.ast, "_ZTT", first);
+        let name = mangle::mangle_class_special(self.ast, &mut self.anon, "_ZTT", first);
         if let Some(g) = self.m.get_global(&name) {
             return Ok(g);
         }
@@ -305,7 +305,7 @@ impl Cg<'_> {
                 Ok(l) => Rc::new(l),
                 Err(e) => return err(loc, format!("cannot lay out a construction vtable: {e:?}")),
             };
-            let name = mangle::mangle_ctor_vtable(ast, rd, off as i64, so.class);
+            let name = mangle::mangle_ctor_vtable(ast, &mut self.anon, rd, off as i64, so.class);
             let ty = self.vtable_ir_ty(&l);
             let g = match self.m.get_global(&name) {
                 Some(g) => g,
@@ -820,8 +820,14 @@ impl Cg<'_> {
     fn thunk_fn(&mut self, m: DeclId, v: Option<Structor>, th: Thunk) -> R<FuncId> {
         let ast = self.ast;
         let first = ast.first(m);
-        let name =
-            mangle::mangle_thunk(ast, first, v.unwrap_or(Structor::Complete), th.this, th.ret);
+        let name = mangle::mangle_thunk(
+            ast,
+            &mut self.anon,
+            first,
+            v.unwrap_or(Structor::Complete),
+            th.this,
+            th.ret,
+        );
         if let Some(&f) = self.thunk_fns.get(&name) {
             return Ok(f);
         }
@@ -1246,7 +1252,7 @@ impl Cg<'_> {
     pub(crate) fn rtti(&mut self, q: QualType) -> R<Value> {
         let ast = self.ast;
         let q = QualType::unqual(ast.types.canonical(q).ty());
-        let name = mangle::mangle_rtti(ast, q, "_ZTI");
+        let name = mangle::mangle_rtti(ast, &mut self.anon, q, "_ZTI");
         if let Some(&g) = self.rtti_globals.get(&name) {
             return Ok(Value::global(g));
         }
@@ -1295,8 +1301,7 @@ impl Cg<'_> {
             return VtLinkage::Internal;
         }
         let ast = self.ast;
-        let internal =
-            |d: Option<DeclId>| d.is_some_and(|d| mangle::has_internal_linkage(ast, ast.first(d)));
+        let internal = |d: Option<DeclId>| d.is_some_and(|d| mangle::class_is_internal(ast, d));
         let mut t = q;
         loop {
             // (`pointee` also looks through member pointers.)
@@ -1333,7 +1338,7 @@ impl Cg<'_> {
         // The mangling of the function type without its exception
         // specification: drop the `Do` before `F`.
         let q = QualType::unqual(ast.types.canonical(pointee).ty());
-        let with = mangle::mangle_rtti(ast, q, "_ZTI");
+        let with = mangle::mangle_rtti(ast, &mut self.anon, q, "_ZTI");
         let name = match with.strip_prefix("_ZTIDo") {
             Some(rest) => format!("_ZTI{rest}"),
             None => return err(None, format!("unexpected noexcept function mangling `{with}`")),
@@ -1384,7 +1389,7 @@ impl Cg<'_> {
 
     /// clang `GetAddrOfTypeName`: the `_ZTS` string of `q`.
     fn rtti_type_name(&mut self, q: QualType, linkage: VtLinkage) -> Value {
-        let ts_name = mangle::mangle_rtti(self.ast, q, "_ZTS");
+        let ts_name = mangle::mangle_rtti(self.ast, &mut self.anon, q, "_ZTS");
         self.rtti_name_global(&ts_name, linkage)
     }
 
@@ -1473,9 +1478,7 @@ impl Cg<'_> {
 
     /// clang `getTypeInfoLinkage` for class `rd`.
     fn rtti_linkage(&self, rd: DeclId) -> VtLinkage {
-        if mangle::has_internal_linkage(self.ast, self.ast.first(rd))
-            || self.class_def(rd).is_none()
-        {
+        if mangle::class_is_internal(self.ast, rd) || self.class_def(rd).is_none() {
             return VtLinkage::Internal;
         }
         if self.is_dynamic(rd) {

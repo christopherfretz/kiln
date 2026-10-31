@@ -152,12 +152,14 @@ impl Sema<'_, '_> {
         while self.ast.exprs.get(id).kind() == ExprKind::ParenExpr {
             id = self.ast.exprs.operand(id);
         }
-        if self.ast.exprs.get(id).kind() != ExprKind::DeclRefExpr {
+        if self.ast.exprs.get(id).kind() != ExprKind::DeclRefExpr
+            || self.ast.exprs.get(id).has(kiln_ast::expr::ExprFlags::REFERS_TO_ENCLOSING)
+        {
             return None;
         }
         let d = self.ast.exprs.decl(id);
         let dn = *self.ast.decls.get(d);
-        if dn.kind() != DeclKind::Var {
+        if dn.kind() != DeclKind::Var || !self.in_innermost_function(dn.ctx()) {
             return None;
         }
         let v = self.ast.decls.var(d)?;
@@ -632,6 +634,16 @@ impl Sema<'_, '_> {
         r
     }
 
+    /// Whether a local whose semantic context is `ctx` is declared in the
+    /// innermost enclosing function or lambda ([class.copy.elision]/3): a
+    /// local of an enclosing function named from a lambda body is not.
+    fn in_innermost_function(&self, ctx: Option<DeclId>) -> bool {
+        let (Some(c), Some(f)) = (ctx, self.func.as_ref().map(|f| f.decl)) else {
+            return true;
+        };
+        !self.ast.decls.get(c).kind().is_function() || self.ast.first(c) == self.ast.first(f)
+    }
+
     /// C++23 implicit move ([expr.prim.id.unqual]/4, [class.copy.elision]/3):
     /// an id-expression naming a non-volatile object of automatic storage
     /// duration declared in the function becomes an xvalue.
@@ -642,11 +654,18 @@ impl Sema<'_, '_> {
             id = self.ast.exprs.operand(id);
         }
         let n = *self.ast.exprs.get(id);
-        if n.kind() != ExprKind::DeclRefExpr {
+        // A captured variable is not declared in the innermost function
+        // or lambda ([class.copy.elision]/3).
+        if n.kind() != ExprKind::DeclRefExpr
+            || n.has(kiln_ast::expr::ExprFlags::REFERS_TO_ENCLOSING)
+        {
             return e;
         }
         let d = self.ast.exprs.decl(id);
         let dn = *self.ast.decls.get(d);
+        if !self.in_innermost_function(dn.ctx()) {
+            return e;
+        }
         let local = match dn.kind() {
             DeclKind::ParmVar => true,
             DeclKind::Var => {
@@ -694,9 +713,11 @@ impl Sema<'_, '_> {
             }
         }
         // No return statement: the placeholder deduces `void`
-        // ([dcl.spec.auto.general]/10).
+        // ([dcl.spec.auto.general]/10); a templated function's when it
+        // is instantiated (clang skips a dependent context).
         if let Some(st) = self.func.as_ref()
             && st.auto_ret.is_some()
+            && !self.in_template()
             && !st.deduced
         {
             let f = st.decl;
@@ -746,8 +767,15 @@ impl Sema<'_, '_> {
                 .ctx()
                 .is_some_and(|c| self.ast.redecl_context(c) == self.ast.tu);
         if !is_main {
+            let lambda = self.is_lambda_call_op(state.decl);
             match self.falls_off(body) {
                 Falloff::Never => {}
+                Falloff::Always if lambda => {
+                    self.error(DiagId::sema_falloff_nonvoid_lambda, rbrace);
+                }
+                Falloff::Maybe if lambda => {
+                    self.error(DiagId::sema_falloff_nonvoid_lambda_maybe, rbrace);
+                }
                 Falloff::Always => self.error(DiagId::sema_falloff_nonvoid, rbrace),
                 Falloff::Maybe => self.error(DiagId::sema_falloff_nonvoid_maybe, rbrace),
             }

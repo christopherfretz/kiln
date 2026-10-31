@@ -201,7 +201,9 @@ pub const TABLE: &[(&str, Disposition)] = &[
     // A template argument outside the template nodes that print theirs
     // (an explicit specialization's or instantiation's arguments).
     ("TemplateArgument", Unsupported(INSTANTIATION)),
-    ("LambdaExpr", Unsupported("lambdas are M3 (spec/ast-dump.md §5)")),
+    // The closure (implicit, so only under `implicit`), the capture
+    // initializers, then the body (spec/ast-dump.md §5).
+    ("LambdaExpr", Keep),
     ("TypeTraitExpr", Unsupported(NOT_M2)),
     ("ArrayTypeTraitExpr", Unsupported(NOT_M2)),
     ("ExpressionTraitExpr", Unsupported(NOT_M2)),
@@ -373,7 +375,8 @@ fn specific_keys(kind: &str) -> Option<&'static [&'static str]> {
         | "StmtExpr"
         | "CompoundLiteralExpr"
         | "BinaryConditionalOperator"
-        | "OffsetOfExpr" => &[],
+        | "OffsetOfExpr"
+        | "LambdaExpr" => &[],
         "CXXThisExpr" => &["implicit"],
         "CXXDefaultInitExpr" => &["hasRewrittenInit"],
         // `temp` and `dtor` (the temporary's destructor) are not printed.
@@ -488,6 +491,8 @@ pub const CLASS_KINDS: &[&str] = &[
     "ArrayInitLoopExpr",
     "ArrayInitIndexExpr",
     "OpaqueValueExpr",
+    // WP-075: the closure class of a lambda.
+    "LambdaExpr",
 ];
 
 /// The template kinds §5 of `spec/ast-dump.md` adds (WP-069).

@@ -176,8 +176,13 @@ impl Sema<'_, '_> {
         // /2.1: no worse for every argument, better for one. In a
         // conversion set, a conversion function's object argument and a
         // constructor's argument occupy the same slot.
+        // A static `operator()`'s ignored object argument still counts as
+        // an identity conversion against a surrogate's user-defined object
+        // conversion (clang; [over.call.object] with P1169 static lambdas).
+        let surrogate =
+            (x.kind == CandidateKind::Surrogate) != (y.kind == CandidateKind::Surrogate);
         for (p, q) in a.iter().zip(b.iter()) {
-            if p.is_ignored() || q.is_ignored() {
+            if (p.is_ignored() || q.is_ignored()) && !surrogate {
                 continue;
             }
             match self.compare_ics(p, q) {

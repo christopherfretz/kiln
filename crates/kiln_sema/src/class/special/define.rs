@@ -792,7 +792,7 @@ impl Sema<'_, '_> {
     /// [class.copy.ctor]/14): a reference binds, a class is copied or
     /// moved by its constructor, an array element-wise
     /// (`ArrayInitLoopExpr`), a scalar converted to a prvalue.
-    fn init_subobject_from(
+    pub(crate) fn init_subobject_from(
         &mut self,
         ty: QualType,
         arg: ExprId,

@@ -28,7 +28,8 @@ use crate::expr::{
     TypeTrait, TypeidOperand, UnaryOp, ValueCategory,
 };
 use crate::ids::{
-    AttrId, ConstValueId, DeclId, ExprId, ListId, QualType, RawId, StmtId, StringLitId, TypeId,
+    AttrId, ConstValueId, DeclId, ExprId, LambdaId, ListId, QualType, RawId, StmtId, StringLitId,
+    TypeId,
 };
 use crate::lookup::LookupFlags;
 use crate::names::DeclName;
@@ -2132,6 +2133,31 @@ impl<'a> AstBuilder<'a> {
             0,
         );
         self.ast.exprs.cold.end_loc.insert(e, rparen).expect("fresh expression");
+        e
+    }
+
+    /// A `LambdaExpr` ([expr.prim.lambda], §5): a prvalue of the closure
+    /// type `ty` over the side record `id` (its capture initializers are
+    /// the children); `loc` is the `[`, `end` the `}` of the body.
+    pub fn lambda_expr(&mut self, id: LambdaId, ty: QualType, loc: Loc, end: Loc) -> ExprId {
+        let mut deps = self.type_deps(ty);
+        if let Some(l) = self.ast.exprs.lambdas.get(id).inits {
+            let inits: Vec<ExprId> = self.ast.lists.iter::<ExprId>(l).collect();
+            for e in inits {
+                deps |= self.deps(e);
+            }
+        }
+        let e = self.simple(
+            ExprKind::LambdaExpr,
+            ValueCategory::PRValue,
+            deps,
+            0,
+            ty,
+            loc,
+            id.raw(),
+            0,
+        );
+        self.ast.exprs.cold.end_loc.insert(e, end).expect("fresh expression");
         e
     }
 

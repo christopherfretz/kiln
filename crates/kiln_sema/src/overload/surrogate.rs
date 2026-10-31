@@ -109,7 +109,13 @@ impl Sema<'_, '_> {
     /// clang `NoteSurrogateCandidate`: "conversion candidate of type
     /// 'R (*)(P...)'", the function type desugared.
     pub(crate) fn surrogate_note(&mut self, conv: DeclId) -> Diag {
-        let t = self.conversion_result_type(conv);
+        // The return type as written (`conversion_result_type` is
+        // canonical).
+        let fty0 = self.ast.decls.get(conv).ty().unwrap_or(QualType::ERROR);
+        let t = match self.ast.types.view(self.ast.types.desugar_top(fty0).ty()) {
+            TypeView::Function(p) => p.ret(),
+            _ => self.conversion_result_type(conv),
+        };
         let (lref, rref) = match self.ast.types.canonical_view(t) {
             TypeView::LValueRef(_) => (true, false),
             TypeView::RValueRef(_) => (false, true),
@@ -117,19 +123,51 @@ impl Sema<'_, '_> {
         };
         let t = self.non_reference(t);
         let ptr = self.ast.types.is_pointer(t);
-        let t = if ptr { self.ast.types.pointee(t).unwrap_or(t) } else { t };
-        let mut fty = self.ast.types.canonical(t);
-        if ptr {
-            fty = self.ast.types.pointer_to(fty);
-        }
-        if rref {
-            fty = self.ast.types.rvalue_ref_to(fty);
-        }
-        if lref {
-            fty = self.ast.types.lvalue_ref_to(fty);
-        }
+        let t = if ptr { self.pointee_sugared(t).unwrap_or(t) } else { t };
+        // clang `getAs<FunctionType>()`: the sugar is stripped, the
+        // function node (with its trailing-return spelling) kept.
+        let fty = self.ast.types.desugar_top(t);
+        // clang's `desugarForDiagnostic` keeps the trailing-return spelling
+        // (the canonical type drops it): the `aka` form is the function
+        // with canonical parts.
+        let aka_fty = match self.ast.types.view(fty.ty()) {
+            TypeView::Function(p) if p.info().trailing_return() => {
+                let params: Vec<QualType> = self
+                    .ast
+                    .types
+                    .params(&p)
+                    .iter()
+                    .map(|&q| self.ast.types.canonical(q))
+                    .collect();
+                let exc = self.ast.types.exc_spec(&p);
+                let ret = self.ast.types.canonical(p.ret());
+                Some(self.ast.types.function(ret, &params, p.info(), exc))
+            }
+            _ => None,
+        };
+        let wrap = |s: &mut Self, mut f: QualType| {
+            if ptr {
+                f = s.ast.types.pointer_to(f);
+            }
+            if rref {
+                f = s.ast.types.rvalue_ref_to(f);
+            }
+            if lref {
+                f = s.ast.types.lvalue_ref_to(f);
+            }
+            f
+        };
+        let fty = wrap(self, fty);
+        let arg = match aka_fty {
+            Some(a) => {
+                let a = wrap(self, a);
+                let (w, c) = (self.ty_str(fty), self.ty_str(a));
+                if w == c { format!("'{w}'") } else { format!("'{w}' (aka '{c}')") }
+            }
+            None => self.ty_arg(fty),
+        };
         let at = self.ast.decls.get(conv).loc();
-        self.diag(DiagId::note_ovl_surrogate_candidate, at).arg(self.ty_arg(fty))
+        self.diag(DiagId::note_ovl_surrogate_candidate, at).arg(arg)
     }
 
     /// `obj(args)` through the surrogate for conversion function `f`:

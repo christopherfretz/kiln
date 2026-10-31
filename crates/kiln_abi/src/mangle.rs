@@ -14,6 +14,67 @@ use kiln_ast::decl::{DeclKind, FnStorage, LinkageLang, NamespaceData, TemplLinkK
 use kiln_ast::ids::{ArgListId, ConstValueId, DeclId, QualType, TemplateNameId};
 use kiln_ast::names::{DeclNameView, OverloadedOperator};
 use kiln_ast::types::{ArgView, BuiltinType, RefQual, TemplateName, TypeView};
+use kiln_source::fx::FxHashMap;
+
+/// The ids of unnamed classes that have no mangling number (`$_N`; clang
+/// `getAnonymousStructId`), handed out in first-mangle order: per function
+/// for a class whose context is a function, else from one module-wide
+/// counter whose next id is the number of ids handed out so far (the
+/// per-function ones included). One table per module, shared by every
+/// symbol mangled for it (spec/abi.md §"Mangling").
+#[derive(Default, Debug)]
+pub struct AnonIds {
+    ids: FxHashMap<DeclId, u32>,
+    per_fn: FxHashMap<DeclId, u32>,
+}
+
+impl AnonIds {
+    /// An empty table.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// The id of class `d` (first declaration), assigning the next one
+    /// (of function `func`'s counter, if any) on first use.
+    fn id(&mut self, d: DeclId, func: Option<DeclId>) -> u32 {
+        if let Some(&n) = self.ids.get(&d) {
+            return n;
+        }
+        let n = match func {
+            Some(f) => {
+                let c = self.per_fn.entry(f).or_insert(0);
+                *c += 1;
+                *c - 1
+            }
+            None => u32::try_from(self.ids.len()).unwrap_or(u32::MAX),
+        };
+        self.ids.insert(d, n);
+        n
+    }
+}
+
+/// The semantic context of `d` as the mangler sees it (clang
+/// `getEffectiveDeclContext`): a closure type created in a default
+/// argument belongs to the parameter's function.
+fn effective_ctx(ast: &Ast, d: DeclId) -> Option<DeclId> {
+    if let Some(p) = closure_param_ctx(ast, d) {
+        return ast.decls.get(p).ctx();
+    }
+    ast.decls.get(d).ctx()
+}
+
+/// The parameter whose default argument created closure type `d`.
+fn closure_param_ctx(ast: &Ast, d: DeclId) -> Option<DeclId> {
+    let l = ast.closure_lambda(d)?;
+    let c = ast.exprs.lambdas.get(l).mangling.context?;
+    (ast.decls.get(c).kind() == DeclKind::ParmVar).then_some(c)
+}
+
+/// True if `r` is a closure type without a mangling number: it has no
+/// linkage, and its members are internal.
+fn is_unnumbered_closure(ast: &Ast, r: DeclId) -> bool {
+    ast.closure_lambda(r).is_some_and(|l| ast.exprs.lambdas.get(l).mangling.number == 0)
+}
 
 /// A substitution candidate ([abi:mangling.compression]).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -114,6 +175,7 @@ fn internal_by_storage(ast: &Ast, d: DeclId) -> bool {
             if v.spec.storage() == VarStorage::Static {
                 return true;
             }
+
             let q = ast.types.canonical(n.ty().unwrap_or(QualType::INT));
             let is_const = ast.types.effective_quals(q).is_const() || const_array(ast, q);
             is_const
@@ -123,6 +185,79 @@ fn internal_by_storage(ast: &Ast, d: DeclId) -> bool {
                 && !matches!(v.templ.get(), Some((TemplLinkKind::Specialization, _)))
         }
         _ => false,
+    }
+}
+
+/// True if `d` is emitted with internal linkage: it has internal linkage
+/// ([`has_internal_linkage`]) or is unique-external (clang
+/// `getLVForNamespaceScopeDecl`: a namespace-scope variable whose type,
+/// or function whose parameter types, have no linkage; such an entity
+/// keeps its unmangled or `_Z` name).
+pub fn is_internal_symbol(ast: &Ast, d: DeclId) -> bool {
+    has_internal_linkage(ast, d) || is_unique_external(ast, d)
+}
+
+fn is_unique_external(ast: &Ast, d: DeclId) -> bool {
+    let first = ast.first(d);
+    if !is_file_context(ast, first) || is_extern_c(ast, first) {
+        return false;
+    }
+    let n = ast.decls.get(first);
+    match n.kind() {
+        DeclKind::Var => n.ty().is_some_and(|t| !type_externally_visible(ast, t)),
+        DeclKind::Function => ast.decls.function(first).is_some_and(|f| {
+            ast.lists
+                .iter::<DeclId>(f.params)
+                .any(|p| ast.decls.get(p).ty().is_some_and(|t| !type_externally_visible(ast, t)))
+        }),
+        _ => false,
+    }
+}
+
+/// clang `Type::getLinkage` is externally visible, for the types kiln
+/// distinguishes: a type built from a class or enumeration without linkage
+/// (an unnamed one without a typedef name for linkage, a local one outside
+/// an inline function, one in an unnamed namespace, or a closure type
+/// without a mangling number) has none.
+pub fn type_externally_visible(ast: &Ast, q: QualType) -> bool {
+    let t = ast.types.canonical(q);
+    match ast.types.canonical_view(t) {
+        TypeView::Pointer(p) | TypeView::LValueRef(p) | TypeView::RValueRef(p) => {
+            type_externally_visible(ast, p)
+        }
+        TypeView::ConstantArray(_) | TypeView::IncompleteArray(_) => {
+            ast.types.element(t).is_none_or(|e| type_externally_visible(ast, e))
+        }
+        TypeView::MemberPointer { pointee, class } => {
+            type_externally_visible(ast, pointee)
+                && type_externally_visible(ast, QualType::unqual(class))
+        }
+        TypeView::Function(p) => {
+            type_externally_visible(ast, p.ret())
+                && ast.types.params(&p).iter().all(|&x| type_externally_visible(ast, x))
+        }
+        TypeView::Record(d) | TypeView::Enum(d) => tag_externally_visible(ast, ast.first(d)),
+        _ => true,
+    }
+}
+
+fn tag_externally_visible(ast: &Ast, d: DeclId) -> bool {
+    if ast.closure_lambda(d).is_some() {
+        if is_unnumbered_closure(ast, d) {
+            return false;
+        }
+    } else if decl_name(ast, d).is_empty() && ast.decls.typedef_for_anon(d).is_none() {
+        return false;
+    }
+    if in_anon_ns(ast, d) {
+        return false;
+    }
+    match effective_ctx(ast, d) {
+        Some(c) if is_function_kind(ast.decls.get(c).kind()) => fn_is_inline(ast, c),
+        Some(c) if is_record_kind(ast.decls.get(c).kind()) => {
+            tag_externally_visible(ast, ast.first(c))
+        }
+        _ => true,
     }
 }
 
@@ -150,19 +285,43 @@ pub fn has_internal_linkage(ast: &Ast, d: DeclId) -> bool {
     if internal_by_storage(ast, first) || in_anon_ns(ast, first) {
         return true;
     }
-    // A member of a local class takes the linkage of the function.
-    let mut c = ast.decls.get(first).ctx();
+    // A local entity has no linkage unless its function is inline (then it
+    // takes the function's); a member of a class without linkage (clang
+    // `isExternallyVisible`: an unnamed or local class, a closure type
+    // without a mangling number) has none either.
+    let mut c = effective_ctx(ast, first);
     while let Some(ctx) = c {
         let k = ast.decls.get(ctx).kind();
         if is_function_kind(k) {
-            return has_internal_linkage(ast, ctx);
+            return !fn_is_inline(ast, ctx) || has_internal_linkage(ast, ctx);
         }
         if !is_record_kind(k) {
             break;
         }
-        c = ast.decls.get(ctx).ctx();
+        if !tag_externally_visible(ast, ast.first(ctx)) {
+            return true;
+        }
+        c = effective_ctx(ast, ctx);
     }
     false
+}
+
+/// True if class `rd` is not externally visible: it has internal linkage
+/// or no linkage (clang `getTypeInfoLinkage`, `getVTableLinkage`).
+pub fn class_is_internal(ast: &Ast, rd: DeclId) -> bool {
+    let first = ast.first(rd);
+    has_internal_linkage(ast, first) || !tag_externally_visible(ast, first)
+}
+
+/// An inline (or constexpr, or implicitly inline) function.
+fn fn_is_inline(ast: &Ast, f: DeclId) -> bool {
+    ast.redecls_of(f).any(|r| {
+        ast.decls.function(r).is_some_and(|x| {
+            x.spec.is_inline()
+                || x.spec.implicit_inline()
+                || x.spec.constexpr_kind() != kiln_ast::decl::ConstexprKind::None
+        })
+    })
 }
 
 fn const_array(ast: &Ast, q: QualType) -> bool {
@@ -225,12 +384,12 @@ fn is_local(ast: &Ast, d: DeclId) -> bool {
 /// The function whose body declares `d` (directly or in a local class),
 /// if any.
 pub fn enclosing_function(ast: &Ast, d: DeclId) -> Option<DeclId> {
-    let mut c = ast.decls.get(d).ctx();
+    let mut c = effective_ctx(ast, d);
     while let Some(ctx) = c {
         if is_function_kind(ast.decls.get(ctx).kind()) {
             return Some(ctx);
         }
-        c = ast.decls.get(ctx).ctx();
+        c = effective_ctx(ast, ctx);
     }
     None
 }
@@ -248,28 +407,28 @@ pub fn asm_label(ast: &Ast, d: DeclId) -> Option<String> {
 
 /// The linkage name of a function, variable or static data member (a
 /// constructor or destructor gets its complete-object variant).
-pub fn mangle_decl(ast: &Ast, d: DeclId) -> String {
-    mangle_structor(ast, d, Structor::Complete)
+pub fn mangle_decl(ast: &Ast, anon: &mut AnonIds, d: DeclId) -> String {
+    mangle_structor(ast, anon, d, Structor::Complete)
 }
 
 /// The linkage name of `d` with constructor/destructor variant `v`
 /// (ignored for other functions).
-pub fn mangle_structor(ast: &Ast, d: DeclId, v: Structor) -> String {
+pub fn mangle_structor(ast: &Ast, anon: &mut AnonIds, d: DeclId, v: Structor) -> String {
     if let Some(l) = asm_label(ast, d) {
         return l;
     }
     if is_unmangled(ast, d) {
         return decl_name(ast, d);
     }
-    let mut m = Mangler::new(ast, "_Z");
+    let mut m = Mangler::new(ast, anon, "_Z");
     m.encoding(d, v);
     m.out
 }
 
 /// The linkage name of template parameter object `d` ([temp.param]/8):
 /// `_ZTA` and its value as a template argument.
-pub fn mangle_param_object(ast: &Ast, d: DeclId) -> String {
-    let mut m = Mangler::new(ast, "_ZTA");
+pub fn mangle_param_object(ast: &Ast, anon: &mut AnonIds, d: DeclId) -> String {
+    let mut m = Mangler::new(ast, anon, "_ZTA");
     if let Some(v) = ast.templates.param_object_value(d) {
         let ty = ast.decls.get(d).ty().unwrap_or(QualType::INT);
         m.value_arg(ast.types.canonical(ty).without_quals(), v);
@@ -279,11 +438,11 @@ pub fn mangle_param_object(ast: &Ast, d: DeclId) -> String {
 
 /// The linkage name of a static local `d`, the `index`-th (0-based)
 /// static local of its function with the same name.
-pub fn mangle_static_local(ast: &Ast, d: DeclId, index: u32) -> String {
+pub fn mangle_static_local(ast: &Ast, anon: &mut AnonIds, d: DeclId, index: u32) -> String {
     if let Some(l) = asm_label(ast, d) {
         return l;
     }
-    let mut s = mangle_decl(ast, d);
+    let mut s = mangle_decl(ast, anon, d);
     push_discriminator(&mut s, index);
     s
 }
@@ -303,8 +462,8 @@ fn push_discriminator(s: &mut String, index: u32) {
 
 /// The guard variable of static-storage variable `d` (`_ZGV <name>`);
 /// `index` is the static-local discriminator index (0 elsewhere).
-pub fn mangle_guard(ast: &Ast, d: DeclId, index: u32) -> String {
-    let name = mangle_static_local(ast, d, index);
+pub fn mangle_guard(ast: &Ast, anon: &mut AnonIds, d: DeclId, index: u32) -> String {
+    let name = mangle_static_local(ast, anon, d, index);
     match name.strip_prefix("_Z") {
         Some(rest) => format!("_ZGV{rest}"),
         None => format!("_ZGV{}{name}", name.len()),
@@ -314,8 +473,14 @@ pub fn mangle_guard(ast: &Ast, d: DeclId, index: u32) -> String {
 /// The reference temporary `index` (clang's mangling number) extended by
 /// variable `d`: `_ZGR <name> [<seq-id>] _` ([abi:mangling]
 /// <special-name>).
-pub fn mangle_ref_temporary(ast: &Ast, d: DeclId, local_index: u32, index: u32) -> String {
-    let name = mangle_static_local(ast, d, local_index);
+pub fn mangle_ref_temporary(
+    ast: &Ast,
+    anon: &mut AnonIds,
+    d: DeclId,
+    local_index: u32,
+    index: u32,
+) -> String {
+    let name = mangle_static_local(ast, anon, d, local_index);
     let mut s = match name.strip_prefix("_Z") {
         Some(rest) => format!("_ZGR{rest}"),
         None => format!("_ZGR{}{name}", name.len()),
@@ -329,16 +494,16 @@ pub fn mangle_ref_temporary(ast: &Ast, d: DeclId, local_index: u32, index: u32) 
 
 /// The <type> mangling of `q` on its own (no substitutions shared with
 /// an enclosing symbol).
-pub fn mangle_type(ast: &Ast, q: QualType) -> String {
-    let mut m = Mangler::new(ast, "");
+pub fn mangle_type(ast: &Ast, anon: &mut AnonIds, q: QualType) -> String {
+    let mut m = Mangler::new(ast, anon, "");
     m.ty(q);
     m.out
 }
 
 /// `<special-name>` of a type: `prefix` (`_ZTI` / `_ZTS`) followed by its
 /// <type> (WP-080).
-pub fn mangle_rtti(ast: &Ast, q: QualType, prefix: &str) -> String {
-    let mut m = Mangler::new(ast, prefix);
+pub fn mangle_rtti(ast: &Ast, anon: &mut AnonIds, q: QualType, prefix: &str) -> String {
+    let mut m = Mangler::new(ast, anon, prefix);
     m.ty(q);
     m.out
 }
@@ -346,8 +511,8 @@ pub fn mangle_rtti(ast: &Ast, q: QualType, prefix: &str) -> String {
 /// `<special-name>` of a class: `prefix` followed by the class's <type>
 /// (`_ZTV` vtable, `_ZTT` VTT, `_ZTI` `type_info`, `_ZTS` `type_info` name;
 /// WP-080).
-pub fn mangle_class_special(ast: &Ast, prefix: &str, class: DeclId) -> String {
-    let mut m = Mangler::new(ast, prefix);
+pub fn mangle_class_special(ast: &Ast, anon: &mut AnonIds, prefix: &str, class: DeclId) -> String {
+    let mut m = Mangler::new(ast, anon, prefix);
     m.tag(class);
     m.out
 }
@@ -355,9 +520,15 @@ pub fn mangle_class_special(ast: &Ast, prefix: &str, class: DeclId) -> String {
 /// The construction vtable of base `base` at byte `offset` in
 /// `most_derived` (`_ZTC <type> <offset> _ <type>`, one substitution
 /// table for both types, as clang's `mangleCXXCtorVTable`).
-pub fn mangle_ctor_vtable(ast: &Ast, most_derived: DeclId, offset: i64, base: DeclId) -> String {
+pub fn mangle_ctor_vtable(
+    ast: &Ast,
+    anon: &mut AnonIds,
+    most_derived: DeclId,
+    offset: i64,
+    base: DeclId,
+) -> String {
     use std::fmt::Write as _;
-    let mut m = Mangler::new(ast, "_ZTC");
+    let mut m = Mangler::new(ast, anon, "_ZTC");
     m.tag(most_derived);
     let _ = write!(m.out, "{offset}_");
     m.tag(base);
@@ -371,12 +542,13 @@ pub fn mangle_ctor_vtable(ast: &Ast, most_derived: DeclId, offset: i64, base: De
 /// <call-offset> <encoding>`).
 pub fn mangle_thunk(
     ast: &Ast,
+    anon: &mut AnonIds,
     method: DeclId,
     v: Structor,
     this: (i64, i64),
     ret: (i64, i64),
 ) -> String {
-    let mut m = Mangler::new(ast, "_ZT");
+    let mut m = Mangler::new(ast, anon, "_ZT");
     let covariant = ret != (0, 0);
     if covariant {
         m.out.push('c');
@@ -401,21 +573,22 @@ fn push_call_offset(s: &mut String, (nv, virt): (i64, i64)) {
 }
 
 /// The Itanium mangler state for one symbol.
-struct Mangler<'a> {
+struct Mangler<'a, 'b> {
     ast: &'a Ast,
+    anon: &'b mut AnonIds,
     out: String,
     subs: Vec<Sub>,
 }
 
-impl<'a> Mangler<'a> {
-    fn new(ast: &'a Ast, prefix: &str) -> Self {
-        Mangler { ast, out: String::from(prefix), subs: Vec::new() }
+impl<'a, 'b> Mangler<'a, 'b> {
+    fn new(ast: &'a Ast, anon: &'b mut AnonIds, prefix: &str) -> Self {
+        Mangler { ast, anon, out: String::from(prefix), subs: Vec::new() }
     }
 
     /// The semantic parent of `d`, looking through linkage
     /// specifications and `export`.
     fn parent(&self, d: DeclId) -> Option<DeclId> {
-        let mut c = self.ast.decls.get(d).ctx();
+        let mut c = effective_ctx(self.ast, d);
         while let Some(ctx) = c {
             match self.ast.decls.get(ctx).kind() {
                 DeclKind::LinkageSpec | DeclKind::Export => c = self.ast.decls.get(ctx).ctx(),
@@ -513,15 +686,76 @@ impl<'a> Mangler<'a> {
             self.out.push('Z');
             self.encoding(f, Structor::Complete);
             self.out.push('E');
+            self.default_arg_discriminator(d, f);
             self.name_in(d, v, Some(f));
             return;
         }
         self.name_in(d, v, None);
     }
 
+    /// `d [<number>] _` when local entity `d` of function `f` is (in) a
+    /// closure type created in the default argument of `f`'s parameter
+    /// counted `<number>` + 2 from the last (clang `mangleLocalName`).
+    fn default_arg_discriminator(&mut self, d: DeclId, f: DeclId) {
+        let ast = self.ast;
+        let mut c = Some(d);
+        while let Some(x) = c
+            && x != f
+        {
+            if let Some(p) = closure_param_ctx(ast, x) {
+                let params: Vec<DeclId> = ast
+                    .decls
+                    .function(f)
+                    .map(|fd| ast.lists.iter::<DeclId>(fd.params).collect())
+                    .unwrap_or_default();
+                let idx = params.iter().position(|&q| q == p).unwrap_or(0);
+                let num = params.len().saturating_sub(idx);
+                self.out.push('d');
+                if num > 1 {
+                    self.out.push_str(&(num - 2).to_string());
+                }
+                self.out.push('_');
+                return;
+            }
+            c = effective_ctx(ast, x);
+        }
+    }
+
+    /// The variable or data member whose initializer created closure type
+    /// `d`, which prefixes its name (`<closure-prefix>`, clang
+    /// `getClosurePrefix`).
+    fn closure_prefix_decl(&self, d: DeclId) -> Option<DeclId> {
+        let l = self.ast.closure_lambda(d)?;
+        let c = self.ast.exprs.lambdas.get(l).mangling.context?;
+        matches!(self.ast.decls.get(c).kind(), DeclKind::Var | DeclKind::Field).then_some(c)
+    }
+
+    /// <closure-prefix> ::= [ <prefix> ] <unqualified-name> M, a
+    /// substitution candidate.
+    fn closure_prefix(&mut self, c: DeclId, stop: Option<DeclId>) {
+        let key = Sub::Decl(self.ast.first(c));
+        if self.try_sub(key) {
+            return;
+        }
+        if let Some(p) = self.parent(c) {
+            self.prefix(p, stop);
+        }
+        self.unqualified(c, Structor::Complete);
+        self.out.push('M');
+        self.subs.push(key);
+    }
+
     /// The name of `d` relative to `stop` (the enclosing function of a
     /// local entity, or the translation unit).
     fn name_in(&mut self, d: DeclId, v: Structor, stop: Option<DeclId>) {
+        if let Some(c) = self.closure_prefix_decl(d) {
+            // A closure needs a nested name even at namespace scope.
+            self.out.push('N');
+            self.closure_prefix(c, stop);
+            self.unqualified(d, v);
+            self.out.push('E');
+            return;
+        }
         let parent = self.parent(d);
         let at_top = parent.is_none_or(|p| {
             Some(p) == stop || self.ast.decls.get(p).kind() == DeclKind::TranslationUnit
@@ -623,7 +857,9 @@ impl<'a> Mangler<'a> {
             self.template_prefix(t, stop);
             self.template_args(args);
         } else {
-            if let Some(p) = self.parent(dc) {
+            if let Some(c) = self.closure_prefix_decl(dc) {
+                self.closure_prefix(c, stop);
+            } else if let Some(p) = self.parent(dc) {
                 self.prefix(p, stop);
             }
             self.unqualified(dc, Structor::Complete);
@@ -699,7 +935,11 @@ impl<'a> Mangler<'a> {
                     return;
                 }
                 let nm = decl_name(ast, d);
-                if nm.is_empty() {
+                if nm.is_empty()
+                    && let Some(l) = ast.closure_lambda(d)
+                {
+                    self.closure_name(d, l);
+                } else if nm.is_empty() {
                     // An unnamed class without a typedef name for linkage.
                     self.out.push_str("Ut_");
                 } else {
@@ -707,6 +947,45 @@ impl<'a> Mangler<'a> {
                 }
             }
         }
+    }
+
+    /// The name of closure type `d` of lambda `l`: `<closure-type-name> ::=
+    /// Ul <lambda-sig> E [ <number> ] _` when it has a mangling number, else
+    /// clang's `$_N` ([`AnonIds`]).
+    fn closure_name(&mut self, d: DeclId, l: kiln_ast::ids::LambdaId) {
+        let ast = self.ast;
+        let data = ast.exprs.lambdas.get(l);
+        let number = data.mangling.number;
+        if number == 0 {
+            let func = self.parent(d).filter(|&p| is_function_kind(ast.decls.get(p).kind()));
+            let n = self.anon.id(ast.first(d), func);
+            self.source_name(&format!("$_{n}"));
+            return;
+        }
+        self.out.push_str("Ul");
+        let proto = data
+            .call_op
+            .and_then(|f| ast.decls.get(f).ty())
+            .and_then(|t| ast.types.proto(ast.types.canonical(t)).copied());
+        if let Some(p) = proto {
+            let params: Vec<QualType> = ast.types.params(&p).to_vec();
+            if params.is_empty() && !p.variadic() {
+                self.out.push('v');
+            }
+            for q in params {
+                self.ty(self.param_type(q));
+            }
+            if p.variadic() {
+                self.out.push('z');
+            }
+        } else {
+            self.out.push('v');
+        }
+        self.out.push('E');
+        if number > 1 {
+            self.out.push_str(&(number - 2).to_string());
+        }
+        self.out.push('_');
     }
 
     fn source_name(&mut self, s: &str) {
@@ -1029,6 +1308,10 @@ impl<'a> Mangler<'a> {
             TypeView::PackExpansion { pattern, .. } => {
                 self.out.push_str("Dp");
                 self.ty(pattern);
+            }
+            // <builtin-type> ::= Dc  # decltype(auto)
+            TypeView::Auto { keyword: kiln_ast::types::AutoKeyword::DecltypeAuto, .. } => {
+                self.out.push_str("Dc");
             }
             TypeView::Auto { .. } => self.out.push_str("Da"),
             _ => self.out.push_str("u7unknown"),
