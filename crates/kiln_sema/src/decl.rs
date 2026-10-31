@@ -1839,8 +1839,10 @@ impl Sema<'_, '_> {
         let f = self.builder().function(h, fkind, ty, spec, prev_ok);
         self.finish_virtual_decl(f, &virt);
         // A pure virtual function's notes point at its decl-specifiers
-        // (clang `getBeginLoc`, §4.11).
-        if self.ast.decls.function(f).is_some_and(|x| x.spec.is_pure())
+        // (clang `getBeginLoc`, §4.11), as does the `->` note on an
+        // `operator->` result ([over.ref]).
+        if (self.ast.decls.function(f).is_some_and(|x| x.spec.is_pure())
+            || self.ast.decls.get(f).name().as_operator() == Some(OverloadedOperator::Arrow))
             && ds.loc.is_valid()
             && ds.loc != self.ast.decls.get(f).loc()
         {

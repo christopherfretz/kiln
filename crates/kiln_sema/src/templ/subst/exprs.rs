@@ -185,6 +185,19 @@ impl Substituter<'_, '_, '_> {
                 let base = ex(self).operand(e);
                 let m = ex(self).decl(e);
                 let arrow = n.has(ExprFlags::ARROW);
+                // `x->m` through `operator->`: the chain is formed again
+                // from the substituted `x` ([over.ref]/1).
+                let mut base = base;
+                while arrow
+                    && ex(self).get(base).kind() == ExprKind::CXXOperatorCallExpr
+                    && ex(self).operator_call_op(base) == kiln_ast::names::OverloadedOperator::Arrow
+                {
+                    let l = ex(self).call_args(base);
+                    match self.sema.ast.lists.iter::<ExprId>(l).next() {
+                        Some(x) => base = x,
+                        None => break,
+                    }
+                }
                 let base = self.member_base(base)?;
                 let Some(name) = self.sema.ast.decls.get(m).name().as_ident() else {
                     return self.unimplemented("member access to a special member", loc);

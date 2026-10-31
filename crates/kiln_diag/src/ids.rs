@@ -1160,6 +1160,8 @@ diag_ids! {
     sema_operator_arrow_depth_exceeded = Error (2) "use of 'operator->' on type {0} would invoke a sequence of more than {1} 'operator->' calls";
     note_operator_arrow_here = Note (1) "'operator->' declared here produces an object of type {0}";
     note_operator_arrow_depth = Note (0) "use -foperator-arrow-depth=N to increase 'operator->' limit";
+    note_operator_arrows_suppressed = Note (2) "(skipping {0} 'operator->'{1:|s} in backtrace)";
+    note_member_reference_arrow_from_operator_arrow = Note (0) "'->' applied to return value of the operator->() declared here";
     note_ovl_builtin_candidate = Note (1) "built-in candidate {0}";
     note_ambiguous_type_conversion = Note (2) "because of ambiguity in conversion of {0} to {1}";
     note_ovl_surrogate_candidate = Note (1) "conversion candidate of type {0}";

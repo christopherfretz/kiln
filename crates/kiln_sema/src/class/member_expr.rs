@@ -379,9 +379,16 @@ impl Sema<'_, '_> {
         let Some(c) = self.ast.types.as_record(obj_ty) else { return obj };
         let obj_class = self.ast.definition(c).unwrap_or(c);
         let Some(declaring) = self.declaring_class(m) else { return obj };
-        let (mq, _) = self.method_object_quals(m);
+        let (mq, rq) = self.method_object_quals(m);
         let oq = self.ast.types.effective_quals(obj_ty);
         let to_q = (oq & CV) | (mq & CV);
+        // clang materializes a prvalue object as an lvalue unless `m` is
+        // `&&`-qualified.
+        let obj = if self.ast.exprs.get(obj).value_category() == ValueCategory::PRValue {
+            self.materialize_temporary(obj, obj_ty, rq != RefQual::RValue)
+        } else {
+            obj
+        };
         self.object_to_class(
             obj,
             false,

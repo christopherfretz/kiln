@@ -644,7 +644,7 @@ impl Sema<'_, '_> {
     /// Adds the member candidates named `name` of the class of the
     /// object operand: the first, or for a reversed `rewrite` the second
     /// ([over.match.oper]/3.1, /3.4.4).
-    fn add_member_opers(
+    pub(crate) fn add_member_opers(
         &mut self,
         set: &mut OverloadCandidateSet,
         name: OO,

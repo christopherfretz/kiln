@@ -2875,24 +2875,43 @@ impl Sema<'_, '_> {
         if let Some(e) = self.try_dependent_member(base, name, None, false, loc, arrow) {
             return e;
         }
-        let (b, obj_ty) = if arrow {
-            let b = conv::decay(self, base);
-            let bt = self.ety(b);
-            match self.pointee_sugared(bt).filter(|_| self.ast.types.is_pointer(bt)) {
-                Some(p) if self.ast.types.as_record(p).is_some() => (b, p),
-                _ => {
-                    let msg = if self.ast.types.as_record(bt).is_some() {
-                        self.diag(DiagId::sema_member_reference_suggestion, op_loc)
-                            .arg(self.ty_arg(bt))
-                            .arg("1")
-                    } else {
-                        self.diag(DiagId::sema_member_reference_struct_union, op_loc)
-                            .arg(self.ty_arg(bt))
-                    };
-                    self.emit(msg);
-                    return self.recover_err(&[base], loc);
-                }
+        // [over.ref]/1: `x->m` on a class `x` is `(x.operator->())->m`.
+        let (base, arrow) = if arrow && self.ast.types.as_record(self.ety(base)).is_some() {
+            match self.arrow_base(base, op_loc) {
+                crate::overload::arrow::ArrowBase::Arrow(e) => (e, true),
+                crate::overload::arrow::ArrowBase::Dot => (base, false),
+                crate::overload::arrow::ArrowBase::Err => return self.recover_err(&[base], loc),
             }
+        } else {
+            (base, arrow)
+        };
+        let (b, obj_ty) = if arrow {
+            // clang `LookupMemberExpr`: the pointee or element type, or a
+            // function type as written.
+            let ot = self.ety(base);
+            let pointee = if self.ast.types.is_pointer(ot) {
+                self.pointee_sugared(ot)
+            } else if self.ast.types.is_array(ot) {
+                self.ast.types.element(ot)
+            } else if self.ast.types.is_function(ot) {
+                Some(ot)
+            } else {
+                None
+            };
+            let Some(p) = pointee else {
+                let msg =
+                    self.diag(DiagId::sema_operator_arrow_not_pointer, loc).arg(self.ty_arg(ot));
+                self.emit(msg);
+                return self.recover_err(&[base], loc);
+            };
+            if self.ast.types.as_record(p).is_none() {
+                let msg = self
+                    .diag(DiagId::sema_member_reference_struct_union, op_loc)
+                    .arg(self.ty_arg(p));
+                self.emit(msg);
+                return self.recover_err(&[base], loc);
+            }
+            (conv::decay(self, base), p)
         } else {
             let bt = self.ety(base);
             if self.ast.types.as_record(bt).is_none() {
