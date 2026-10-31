@@ -857,8 +857,8 @@ Where the code differs from (or details) the design above:
   type is incomplete, else global. The usual deallocation function
   prefers the alignment-matching one; in class scope the unsized one,
   globally the sized one for a complete type. Nothing suitable in a class
-  is `sema_no_suitable_delete_member` plus `note_member_declared_named` per function;
-  a deleted class `operator new` is `sema_call_deleted_function`. A member
+  is `sema_no_suitable_delete_member` plus `note_member_declared_named`
+  per function found; a deleted class `operator new` is `sema_call_deleted_function`. A member
   `operator delete` without an exception specification is implicitly
   `noexcept` ([except.spec]/9).
 - **Gaps (owners).** Function templates are not operator candidates

@@ -56,8 +56,13 @@ Branch `wp/068b-operators`, worktree `kiln/.worktrees/wp-068b`.
   1154 pass / 0 fail / 12 xfail / 0 xpass.
 - Static operator() / [] with a prvalue object: materialized (as clang).
 
-## Next
-1. Clippy fixes (list in scratch clip.out), `cargo xtask ci --quick`.
-2. bench/overload/{arrow-chain,less-10k}.cpp (check `ps` for quiet host).
-3. spec/sema-overload.md §10 "Landed (WP-068b)" with divergences.
-4. type_traits probe; full `cargo xtask ci`; handback.
+- Clippy clean; bench `bench/overload/{arrow-chain,less-10k}.cpp`
+  (release kiln 0.37 s / 76 MB and 1.41 s / 17 MB; clang 1.06 s / 297 MB
+  and 2.25 s / 97 MB; host load avg ~6 on 24 cores, so no baseline
+  recorded). Spec sema-overload §10.6. type_traits probe: 24 errors
+  (main 36; all 12 "overloaded operators is not supported yet" gone).
+
+## State
+Full `cargo xtask ci` green (20:58 EDT): clang self-check 1145 pass /
+3 xfail / 23 skipped; kiln 1159 pass / 0 fail / 12 xfail / 0 xpass of
+1171. Ready for review; nothing pending in this WP.
