@@ -266,6 +266,17 @@ pub fn mangle_structor(ast: &Ast, d: DeclId, v: Structor) -> String {
     m.out
 }
 
+/// The linkage name of template parameter object `d` ([temp.param]/8):
+/// `_ZTA` and its value as a template argument.
+pub fn mangle_param_object(ast: &Ast, d: DeclId) -> String {
+    let mut m = Mangler::new(ast, "_ZTA");
+    if let Some(v) = ast.templates.param_object_value(d) {
+        let ty = ast.decls.get(d).ty().unwrap_or(QualType::INT);
+        m.value_arg(ast.types.canonical(ty).without_quals(), v);
+    }
+    m.out
+}
+
 /// The linkage name of a static local `d`, the `index`-th (0-based)
 /// static local of its function with the same name.
 pub fn mangle_static_local(ast: &Ast, d: DeclId, index: u32) -> String {
@@ -837,7 +848,21 @@ impl<'a> Mangler<'a> {
                     ast.types.canonical_view(ty),
                     TypeView::LValueRef(_) | TypeView::RValueRef(_)
                 );
+                let decayed = d.filter(|&d| {
+                    !is_ref && ast.decls.get(d).ty().is_some_and(|t| ast.types.is_array(t))
+                });
+                let pointee = ast.types.pointee(ty);
                 match d {
+                    Some(d) if decayed.is_some() && pointee.is_some() => {
+                        // `arr` decayed to `&arr[0]`: a subobject
+                        // expression (`Xadso <elem> L_Z <arr> E E E`, clang
+                        // `mangleTemplateArgValue` of an lvalue path).
+                        self.out.push_str("Xadso");
+                        self.ty(pointee.unwrap_or(ty).without_quals());
+                        self.out.push_str("L_Z");
+                        self.encoding(d, Structor::Complete);
+                        self.out.push_str("EEE");
+                    }
                     Some(d) => {
                         // The entity's encoding shares this symbol's
                         // substitutions.
@@ -848,8 +873,35 @@ impl<'a> Mangler<'a> {
                     None => self.out.push_str("XLi0EE"),
                 }
             }
-            _ => self.out.push_str("XLi0EE"),
+            ConstValue::Aggregate(_) => self.aggregate_arg(ty, value),
+            ConstValue::Scalar(_) => self.out.push_str("XLi0EE"),
         }
+    }
+
+    /// A class-type value (a template parameter object's value,
+    /// [temp.param]/8). Itanium spells it `Xtl <type> <member exprs> EE`
+    /// with each member's value; that walk needs the record layout, which
+    /// the mangler does not have yet, so this seam (sema-templates.md
+    /// §6.10) spells the image as its 8-byte little-endian words instead:
+    /// deterministic and distinct for distinct byte images, but not
+    /// clang's spelling (pointer members are not distinguished).
+    fn aggregate_arg(&mut self, ty: QualType, value: ConstValueId) {
+        self.out.push_str("Xtl");
+        self.ty(ty);
+        let bytes = self.ast.consts.bytes(value);
+        let mut words: Vec<u64> = bytes
+            .chunks(8)
+            .map(|c| c.iter().rev().fold(0u64, |a, &b| (a << 8) | u64::from(b)))
+            .collect();
+        while words.last() == Some(&0) {
+            words.pop();
+        }
+        for w in words {
+            self.out.push_str("Ly");
+            self.out.push_str(&w.to_string());
+            self.out.push('E');
+        }
+        self.out.push_str("EE");
     }
 
     fn template_param(&mut self, index: u32) {

@@ -770,31 +770,16 @@ impl Parser<'_, '_> {
                         } else {
                             None
                         };
-                        let Some(m) = self.s.try_dependent_member(e, name, targs, true, nl, arrow)
-                        else {
-                            self.unsupported(
-                                "'template' member access on a non-dependent object",
-                                nl,
-                            );
-                            return None;
-                        };
-                        e = m;
+                        e = self.s.act_on_template_member(e, name, targs, true, nl, loc, arrow);
                         continue;
                     }
                     e = self.s.act_on_member(e, name, nl, loc, arrow);
                     // `e.f<args>` naming a member function template
                     // ([temp.names]/3).
                     if self.at(Punct::Less) && self.s.is_member_template_ref(e) {
-                        let at = self.loc();
                         let (args, _, _) = self.parse_template_arg_list()?;
                         let l = self.s.ast.types.arg_list(&args);
-                        if !self.s.set_member_template_args(e, l) {
-                            self.unsupported(
-                                "dependent template arguments of a member template",
-                                at,
-                            );
-                            return None;
-                        }
+                        e = self.s.act_on_member_template_args(e, l);
                     }
                 }
                 Some(Punct::PlusPlus) => {
@@ -822,7 +807,7 @@ impl Parser<'_, '_> {
 
     /// A non-empty expression-list of initializer-clauses closed by
     /// `close` ([expr.post.general]).
-    fn parse_expr_list(&mut self, close: Punct) -> Option<Vec<ExprId>> {
+    pub(crate) fn parse_expr_list(&mut self, close: Punct) -> Option<Vec<ExprId>> {
         let mut args = Vec::new();
         loop {
             let a = if self.at(Punct::LBrace) {

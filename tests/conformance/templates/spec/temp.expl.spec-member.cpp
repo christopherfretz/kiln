@@ -1,7 +1,6 @@
 // [temp.expl.spec]/1 (member of a class template): an explicit
 // specialization of a member function or static data member of an
 // implicit specialization.
-//@ xfail(kiln): explicit specializations of members of implicit specializations are not implemented (declarator path in decl.rs and class/members.rs)
 template <class T> struct Num {
   static constexpr int id() { return 0; }
   static const int scale;

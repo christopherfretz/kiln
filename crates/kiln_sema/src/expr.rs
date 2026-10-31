@@ -315,6 +315,7 @@ impl Sema<'_, '_> {
                 | ExprKind::ConstantExpr
                 | ExprKind::MaterializeTemporaryExpr
                 | ExprKind::CXXBindTemporaryExpr
+                | ExprKind::CXXStdInitializerListExpr
                 | ExprKind::ExprWithCleanups
                 | ExprKind::BinaryOperator
                 | ExprKind::CompoundAssignOperator
@@ -525,6 +526,12 @@ impl Sema<'_, '_> {
     /// Converts `e` to `ty` as in `ctx`, diagnosing failure (the result
     /// is then a `RecoveryExpr`).
     pub(crate) fn convert_for_init(&mut self, e: ExprId, ty: QualType, ctx: ConvCtx) -> ExprId {
+        // A braced-init-list argument (`T x({1, 2})`) list-initializes
+        // the parameter ([dcl.init.list]).
+        if let Some(l) = self.take_braced_arg(e) {
+            let to = if self.ast.types.is_reference(ty) { ty } else { conv::strip_cv(self, ty) };
+            return self.init_list_entity(to, &l, l.lbrace);
+        }
         match conv::implicit_convert(self, e, ty, ctx) {
             Ok(x) => x,
             Err(err) => {
@@ -777,10 +784,9 @@ impl Sema<'_, '_> {
                 let valid = found.decls.clone();
                 return self.overload_name_ref(name, &found, &valid, qualifier.is_none(), nns, loc);
             }
-            let decls: Vec<DeclId> = found.decls.clone();
             return self.builder().unresolved_lookup(
                 name,
-                &decls,
+                &lookup_set_order(&found.decls, qualifier.is_none()),
                 qualifier.is_none(),
                 nns,
                 None,
@@ -1091,6 +1097,11 @@ impl Sema<'_, '_> {
         }
         let ty = if self.ast.decls.builtin_id(d).is_some() {
             QualType::BUILTIN_FN
+        } else if n.kind() == DeclKind::NonTypeTemplateParm
+            && self.ast.types.as_record(declared).is_some()
+        {
+            // [temp.param]/8: an lvalue of type `const T`.
+            self.ast.types.qualify(declared, kiln_ast::types::Quals::CONST)
         } else if n.kind() == DeclKind::EnumConstant
             && let Some(t) = self.enumerator_pre_brace_type(d)
         {
@@ -3615,4 +3626,10 @@ pub(crate) struct CallCallee {
     /// A non-member function named by an id-expression: clang reports
     /// arity errors through overload resolution ("no matching function").
     pub(crate) overloadable: bool,
+}
+
+/// An overload set in the order clang lists it: an unqualified lookup
+/// newest first, as for a non-template set (spec/sema-overload.md §2.1).
+fn lookup_set_order(decls: &[DeclId], unqualified: bool) -> Vec<DeclId> {
+    if unqualified { decls.iter().rev().copied().collect() } else { decls.to_vec() }
 }

@@ -293,6 +293,11 @@ impl Sema<'_, '_> {
             k if k.is_cast() && self.ast.exprs.cast_kind(e) == CastKind::NoOp => {
                 self.temporaries_in_aggregate(self.ast.exprs.operand(e), out, depth + 1);
             }
+            // The backing array of a `std::initializer_list` is extended
+            // like a reference bound to it ([dcl.init.list]/6).
+            ExprKind::CXXStdInitializerListExpr => {
+                self.temporaries_bound_by(self.ast.exprs.operand(e), out, depth + 1);
+            }
             ExprKind::InitListExpr | ExprKind::CXXParenListInitExpr => {
                 let list = if n.kind() == ExprKind::InitListExpr {
                     self.ast.exprs.init_list_inits(e)

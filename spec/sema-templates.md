@@ -558,6 +558,13 @@ are invisible to it ([temp.res.general]/1).
 - The AST then becomes a DAG. Dumps are unchanged, because the dumper
   prints a shared subtree at each use.
 - `-fno-share-nondependent` turns sharing off for differential testing.
+
+*As built (WP-070a; measured in WP-106, §14 Q3).* Sharing is
+unconditional. No `LOCAL` bit was added: the builder marks references to
+decls of a dependent context `INSTANTIATION`, so the test is
+`deps & (TYPE_VALUE_INST | UNEXPANDED_PACK) == 0`. The flag does not
+exist. On `libcxx_m3.cpp`, sharing saves 0.8% of `inst.bytes` (at most
+3%).
 - The expected saving is 30–60% of the expression nodes in libc++ bodies.
   It is measured by the instantiation report (§11.3).
 
@@ -1001,8 +1008,8 @@ recomputed exactly as for non-template code (clang's
   covers `ImplicitCastExpr`, `MaterializeTemporaryExpr`,
   `CXXBindTemporaryExpr`, `ExprWithCleanups` and the `ConstantExpr`
   wrappers. `ParenExpr` is kept.
-- **Sharing.** A non-dependent subtree is shared (§3.3), unless sharing is
-  turned off.
+- **Sharing.** A non-dependent subtree is always shared (§3.3; there is
+  no switch).
 - **Dependent forms** are resolved:
   - `DependentScopeDeclRefExpr` becomes qualified lookup;
   - `UnresolvedLookupExpr` becomes an overload set plus ADL (§3.5);
@@ -1362,6 +1369,59 @@ The `SpecKind` transitions are those of §4.5.
   across the TU, and it mangles as `_ZTAX…` (WP-079).
 - Pointer and reference NTTPs, including `template<auto V>`, use the same
   `ConstValue` path representation. Floating-point NTTPs compare by bits.
+
+**As built (WP-106, `templ/nttp.rs`).**
+- **Type check** (`check_nttp_type`, clang `CheckNonTypeTemplateParameterType`
+  / `RequireStructuralType`), at the parameter declaration
+  (`act_on_non_type_template_param`; the parameter is marked `INVALID`)
+  and again when a class argument is converted:
+  - an rvalue-reference type: `sema_nttp_rvalue_ref`;
+  - an incomplete class is accepted (checked at use);
+  - not literal: `sema_nttp_non_literal` plus one `note_non_literal_*`
+    (no constexpr constructor and not an aggregate; a non-literal base;
+    a non-literal data member; a non-constexpr destructor), clang's order;
+  - not structural: `sema_nttp_not_structural` plus the first reason:
+    a non-public or mutable member, an rvalue-reference member, a
+    non-public base, then the first member/base of non-structural type
+    (`note_not_structural_subobject`), recursing into it. Structurality is
+    recomputed (`is_structural_at`), because `DefinitionBits::STRUCTURAL`
+    misses rvalue-reference members (class owner).
+  - Dependent types are checked when substituted (not yet: §11.2 gaps).
+- **Class arguments** (`convert_class_nttp_arg`, hooked from
+  `args.rs::convert_nttp_arg`): copy-initialize a `const T` from the
+  argument, `eval_const` with `EvalContext::converted`, then
+  `AstBuilder::template_param_object(const T, v)`; the argument is
+  `TemplateArg::value(canonical T, v)`. Aggregate values are interned, so
+  the `ConstValueId` is the (type, value) key.
+- **The object** is a `TemplateParamObject` decl (`IMPLICIT`, unnamed, in
+  the TU, in no lookup or member list) memoized in
+  `TemplateTables::{param_objects, param_object_values}`
+  (`param_object(v)`, `param_object_value(d)`).
+- **Uses.** An id-expression naming a class-type NTTP in the pattern is an
+  lvalue of type `const T` (builder `decl_ref_category`,
+  `build_decl_ref_extra`); a reference NTTP names its referent (an
+  lvalue). Substitution (`subst/exprs.rs::value_literal` →
+  `nttp_value_expr`) builds the replacement: a `DeclRefExpr` to the
+  object (class), the entity (reference), `&entity` / the decayed array
+  (pointer), or `nullptr` converted to the parameter type.
+- **Reference arguments** (`convert_ref_nttp_arg`): the conversion must
+  exist (`sema_cce_not_implicitly_convertible`), must not bind a
+  temporary (`sema_cce_ref_binds_temporary`), and the referent must not
+  be automatic ("reference to 'x' is not a constant expression"). The
+  value is the built-in `&` of the bound glvalue, re-interned at the
+  reference type so it prints as `T<gi>`.
+- **Oven.** `var_info` treats the object as a usable constant whose value
+  is its `ConstValueId`; `lv()` addresses it as a global.
+- **Codegen.** `param_object_global`: a `linkonce_odr dso_local constant`
+  in its own comdat (clang `GetAddrOfTemplateParamObject`).
+- **Mangling seam** (`kiln_abi::mangle::{aggregate_arg, mangle_param_object}`):
+  `_ZTA` + `Xtl <type> (Ly<word>E)* EE`, the value's 8-byte little-endian
+  words with trailing zero words trimmed. Deterministic and distinct for
+  distinct images, but **not clang's spelling** (clang walks the members:
+  `Xtl1PLi1ELi2EE`; that needs the record layout in the mangler, and
+  pointer members are not distinguished). Owner: WP-079. Reference and
+  pointer arguments mangle as clang (`L_Z2giE`, `XadL_Z1gEE`,
+  `Xadso<elem>L_Z3arrEEE` for a decayed array).
 
 ## 7. Packs
 
@@ -2358,7 +2418,7 @@ before WP-070a, then 415 (the main binary at merge time gives 426). The
 | ~19 | Operators, constructors and conversion functions | WP-067b/068 |
 | 3 | `__copy_cv<_From>::template __apply<_To>` | WP-070b |
 
-Q3 was not implemented; see §14.
+Q3 was measured in WP-106 and falls below the bar; see §14.
 
 **Landed (WP-074).** The builtins of §9, `auto`/`decltype(auto)`
 deduction for variables and return types, `decltype` (including the
@@ -2833,6 +2893,58 @@ explicit specialization errors remain. The blockers are:
   - 7 requires-expressions (WP-073);
   - 2 pack expansions (WP-072);
   - 4 unrelated to WP-071: `__int128_t` and its follow-ons.
+
+**Landed (WP-106): function templates, remainder.**
+- **Explicit specialization and instantiation** (§6.9, `templ/funcs.rs`):
+  the parser accepts `template<>` / `[extern] template` before a
+  non-class declaration and template-id declarator ids.
+  `act_on_function_spec_declarator` matches by [temp.deduct.decl]
+  (`deduce_funcaddr`, which substitutes explicit args into the whole
+  function type, then `more_specialized`) with clang's no-match /
+  ambiguous / after-instantiation errors; an explicit specialization is an
+  unregistered redeclaration of the specialization
+  (`AstBuilder::function_spec_redecl`). Members of class template
+  specializations (`template<> int A<int>::f()`, `template int A<char>::f();`,
+  `extern template`) go through `member_of_spec_candidate` and
+  `act_on_explicit_member_{spec,inst}` (MemberSpecInfo transitions).
+  `template<> template<>` heads, in-class explicit specializations and
+  operator template-ids work.
+- **Template candidates**: conversion-function templates
+  ([temp.deduct.conv], `deduce_conversion`, `more_specialized_conversion`),
+  `operator->` templates (`arrow.rs`), reversed/rewritten operator
+  templates ([over.match.oper]/3.4, `add_rewritten_template`,
+  `more_specialized_operator`), `&f` deduction notes (`address.rs`), and
+  dependent member template-ids (`act_on_template_member`,
+  `act_on_member_template_args`).
+- **`std::initializer_list`** ([dcl.init.list]/5): `CXXStdInitializerListExpr`
+  over a `MaterializeTemporaryExpr 'const E[N]'`; `init.rs`
+  `std_initializer_list_init`, `init_list_ctor_init` ([over.match.list]
+  phase 1), `reference_list_init`; `auto x = {..}`; Oven and codegen store
+  the begin pointer and size (or end pointer).
+- **Template parameter objects and reference NTTPs**: §6.10 "As built".
+- Gaps, with owners:
+  - `template<> template<class U> int A<long>::g(U)` (a member template of
+    an implicit specialization redeclared as a template);
+  - a declared-but-undefined explicit member specialization can still be
+    instantiated from the pattern (one-line hook proposed in `class.rs`,
+    WP-109's file);
+  - [temp.func.order]/6 (reversed-candidate constraint rules);
+  - the expression printer drops explicit template args (`C{}.m<int>(1)`);
+  - a specialization whose body failed to instantiate is not marked
+    invalid;
+  - dependent NTTP types (`template<class T, T V>` with a class `T`) and
+    the "while substituting prior template arguments" note;
+  - reference/pointer NTTP values with a non-zero offset (subobjects,
+    `&arr[1]`) are not substituted back;
+  - a base-specifier note with an access keyword points at the keyword,
+    not the type (`BaseSpec` has no type location);
+  - class-value mangling is the §6.10 seam (WP-079);
+  - explicit instantiation definitions are emitted `external`, clang
+    uses `weak_odr` + comdat; `extern template` does not suppress
+    emission (WP-113);
+  - a pointer to an automatic variable at the top of a constant
+    expression is accepted by the Oven (`constexpr int* p = &local;`,
+    Oven owner).
 
 **Landed (WP-073): concepts.**
 - State: `InstState::concepts: ConceptState` (`templ/concepts/mod.rs`)
@@ -3321,6 +3433,50 @@ Each question has a recommendation (R).
    default member initializers, static-member initializers, array
    bounds and `static_assert`s. WP-071 measures it once function bodies
    and `libcxx_m3.cpp` exist, with the same ≥15% rule.
+   **WP-106: measured; below the bar.**
+   - *What exists.* Sharing landed with no flag and no new bit in
+     WP-070a's substituter. `Substituter::needs_rebuild`
+     (`templ/subst/exprs.rs`) reuses an expression by id when
+     `deps & (TYPE_VALUE_INST | UNEXPANDED_PACK) == 0`. The LOCAL role
+     is played by `INSTANTIATION`: the builder's `decl_deps` sets it on
+     every reference to a decl with `DeclFlags::DEPENDENT_CTX`, which
+     covers parameters, locals, local classes and lambdas of a template.
+     `-fno-share-nondependent` was never added; the doc comment on
+     `needs_rebuild` that mentions it is stale (wp-109's file).
+   - *Method.* `libcxx_m3.cpp` includes `<type_traits>`, `<bit>`,
+     `<limits>`, `<initializer_list>` and `<cstddef>`, then has a few
+     `static_assert`s over `numeric_limits`, `bit_ceil`, `rotl`,
+     `is_same_v` and `initializer_list`. Clang 19 accepts it. Kiln
+     reports 2 errors in both modes ("reference to a member of a
+     dependent context", `common_reference.h:160/162`). The run used
+     `-fsyntax-only -fkiln-instantiation-report=json`. For "no
+     sharing", a temporary env toggle (not landed) forced
+     `needs_rebuild` to true. Non-dependent literal leaves (`Integer`,
+     `CXXBool`, `String`, …) still had to be shared, because the
+     rebuilder has no arm for them ("substitution into IntegerLiteral");
+     there were 32 such leaves.
+
+     | mode | instantiations | nodes | `inst.bytes` |
+     |---|---:|---:|---:|
+     | sharing (default) | 238 | 706 | 27,758 |
+     | no sharing (leaves still shared) | 238 | 717 | 27,978 |
+
+   - *Result.* Sharing saves 220 B, or 0.8%. Charging the 32 shared
+     leaves at the observed ~20 B per node gives an upper bound of about
+     860 B, or 3%. Either way it is far below 15%. The rebuilt bytes are
+     dominated by dependent nodes: calls, member accesses and casts on
+     template parameters, plus the decls and statements of instantiated
+     bodies, none of which can be shared.
+   - *Proposal.*
+     1. Close Q3 as "measured, below the bar". Do not add
+        `ExprDeps::LOCAL` or `-fno-share-nondependent`.
+     2. Keep the existing `needs_rebuild` test. It is not an optional
+        optimization but the substituter's base case: without it every
+        leaf kind would need a rebuild arm. It costs one flag test per
+        node.
+     3. Fix the stale doc comment.
+     4. Re-measure only if a reflection-heavy workload shows
+        instantiation memory dominated by non-dependent subtrees.
 4. **Q4: Stack strategy (D1).** **R:** a dedicated sema thread with a
    256 MiB reserved stack, plus `StackGuard` with a 1 MiB red zone. The
    alternative is a `stacker`-style segmented stack, which needs `unsafe`
@@ -3392,3 +3548,4 @@ Each question has a recommendation (R).
 | Q15 | Reserved depths recorded in types.md §5.3; user templates limited to depth < 0x7FF0. |
 | Q16 | Dumper, Oven lowering and codegen are iterative along binary spines in M3, tested by `fold-65536.cpp` (owner: WP-072 adds the test; each walker's owner crate fixes its walker; the Oven's `compile.rs` is WP-076's). |
 | Q17 | P1061, P2963, P2893, P2841 deferred to M4/M5. |
+| Q3 (2026-10-31) | Measured in WP-106 (§14 Q3): sharing saves 0.8% of `inst.bytes` on `libcxx_m3.cpp` (≤3% counting literal leaves), below the 15% bar. Q3 is closed: sharing stays as the substituter's base case via `needs_rebuild`; no `ExprDeps::LOCAL` bit, no `-fno-share-nondependent` flag. |

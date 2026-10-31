@@ -6,15 +6,19 @@
 //! and deduced-return specializations, else at the end of the
 //! translation unit.
 
-use kiln_ast::DeclId;
 use kiln_ast::QualType;
 use kiln_ast::decl::{DeclFlags, DeclKind};
 use kiln_ast::ids::ArgListId;
 use kiln_ast::templates::SpecKind;
 use kiln_ast::types::TypeView;
+use kiln_ast::{DeclId, ExprId};
 use kiln_source::Loc;
 
+use kiln_ast::names::DeclName;
+use kiln_diag::DiagId;
+
 use crate::Sema;
+use crate::declspec::{DeclSpec, Declarator};
 use crate::templ::args::ConvertedArgs;
 use crate::templ::subst::Substituter;
 
@@ -198,5 +202,631 @@ impl Sema<'_, '_> {
             s.act_on_finish_function_def(f, b, rbrace);
         });
         self.pop_inst_frame();
+    }
+}
+
+/// A function template matched by the declarator of an explicit
+/// specialization or instantiation ([temp.deduct.decl]).
+#[derive(Clone, Copy)]
+struct SpecMatch {
+    /// The specialization deduced.
+    spec: DeclId,
+    /// The function template it specializes.
+    template: DeclId,
+}
+
+impl Sema<'_, '_> {
+    fn loc_of(&self, d: DeclId) -> Loc {
+        self.ast.decls.get(d).loc()
+    }
+
+    /// Whether `template<>` or an explicit instantiation's `template`
+    /// heads the declaration being parsed (not a declaration met while
+    /// instantiating a class named in its qualifier).
+    pub(crate) fn at_explicit_head(&self) -> bool {
+        (self.templ.explicit_spec.is_some() || self.templ.explicit_inst.is_some())
+            && self.inst.stack.len() == self.templ.explicit_depth
+    }
+
+    /// Whether declarator `d` of function type `ty` declares a function
+    /// template specialization: after `template<>` or an explicit
+    /// instantiation's `template`, or with a template-id naming a
+    /// function template (§6.9).
+    pub(crate) fn is_function_spec_declarator(&self, d: &Declarator, ty: QualType) -> bool {
+        self.ast.types.is_function(ty)
+            && (self.at_explicit_head()
+                || d.spec_id
+                    .as_ref()
+                    .is_some_and(|s| self.kind_of(s.template) == DeclKind::FunctionTemplate))
+    }
+
+    /// The declarator `d` (function type `ty`) of an explicit
+    /// specialization `template<> R f<args>(params)` or explicit
+    /// instantiation `[extern] template R f<args>(params);` of a function
+    /// template (§6.9, [temp.expl.spec], [temp.explicit]): the template is
+    /// found by deduction from the declared type ([temp.deduct.decl]), the
+    /// most specialized of several kept, then the specialization's
+    /// [`SpecKind`] moves as in §4.5. An explicit specialization is a new
+    /// declaration of the specialization (returned; its body follows); an
+    /// explicit instantiation returns `None`.
+    pub(crate) fn act_on_function_spec_declarator(
+        &mut self,
+        ds: &DeclSpec,
+        ty: QualType,
+        d: &Declarator,
+        invalid: bool,
+    ) -> Option<DeclId> {
+        let head = self.at_explicit_head();
+        let spec_head = if head { self.templ.explicit_spec.take() } else { None };
+        let inst = if head { self.templ.explicit_inst.take() } else { None };
+        self.templ.cur = None;
+        let dname = match (d.op_name, d.name) {
+            (Some(op), _) => DeclName::operator(op),
+            (None, Some((n, _))) => DeclName::ident(n),
+            _ => {
+                self.error(DiagId::parse_expected_unqualified_id, d.loc);
+                return None;
+            }
+        };
+        if invalid {
+            return None;
+        }
+        let name_loc = d.name_loc();
+        if d.spec_id.is_none()
+            && let Some(m) = self.member_of_spec_candidate(d, dname, ty, inst.is_some())
+        {
+            let m = m?;
+            // [temp.expl.spec]/1, [temp.explicit]/3: a member function
+            // of an implicit class template specialization.
+            return match inst {
+                Some((ext, _)) => {
+                    self.act_on_explicit_member_inst(m, ext.is_some(), name_loc);
+                    None
+                }
+                None => self.act_on_explicit_member_spec(ds, ty, d, m, name_loc),
+            };
+        }
+        let m = self.match_function_spec(d, dname, ty, inst.is_some(), name_loc)?;
+        let _ = spec_head;
+        if let Some((ext, _)) = inst {
+            self.act_on_explicit_function_inst(m, ext.is_some(), name_loc);
+            return None;
+        }
+        self.act_on_explicit_function_spec(ds, ty, d, m, name_loc)
+    }
+
+    /// The function template specialization declarator `d` names
+    /// (§6.9 steps 1-2, [temp.deduct.decl]): every function template
+    /// found by redeclaration lookup of `name` is deduced against `ty`;
+    /// of the matches the most specialized is kept ([temp.func.order]).
+    /// Diagnoses no match and ambiguity (clang's
+    /// `CheckFunctionTemplateSpecialization`).
+    fn match_function_spec(
+        &mut self,
+        d: &Declarator,
+        name: DeclName,
+        ty: QualType,
+        inst: bool,
+        loc: Loc,
+    ) -> Option<SpecMatch> {
+        let explicit = d.spec_id.as_ref().map(|s| self.ast.types.arg_list(&s.args));
+        let mut templates: Vec<DeclId> = Vec::new();
+        for c in self.prev_candidates_dn(name, d.qualifier) {
+            if self.kind_of(c) == DeclKind::FunctionTemplate {
+                let c = self.ast.first(c);
+                if !templates.contains(&c) {
+                    templates.push(c);
+                }
+            }
+        }
+        let mut matches: Vec<SpecMatch> = Vec::new();
+        let mut failures = Vec::new();
+        for &ft in &templates {
+            match self.deduce_funcaddr(ft, explicit, ty, loc) {
+                Ok(s) => {
+                    let sty = self.ast.decls.get(s).ty().unwrap_or(QualType::ERROR);
+                    if self.same_ignoring_exc_spec(sty, ty) {
+                        matches.push(SpecMatch { spec: s, template: ft });
+                    } else {
+                        let n = self
+                            .diag(DiagId::note_deduction_non_deduced_mismatch, self.loc_of(ft))
+                            .arg(self.ty_str(sty))
+                            .arg(self.ty_str(ty));
+                        failures.push(n);
+                    }
+                }
+                Err(f) => failures.push(self.deduction_note(ft, &f, self.loc_of(ft))),
+            }
+        }
+        let fname = self.decl_name_str(name);
+        if matches.is_empty() {
+            let id = if inst {
+                DiagId::sema_explicit_inst_not_known
+            } else {
+                DiagId::sema_fn_template_spec_no_match
+            };
+            let mut e = self.diag(id, loc).arg(fname);
+            for n in failures {
+                e = e.with_note(n);
+            }
+            self.emit(e);
+            return None;
+        }
+        if matches.len() > 1 {
+            let n = match self.ast.types.canonical_view(ty) {
+                TypeView::Function(p) => p.num_params() as usize,
+                _ => 0,
+            };
+            let best = (0..matches.len()).find(|&i| {
+                (0..matches.len()).all(|j| {
+                    i == j || self.more_specialized(matches[i].template, matches[j].template, n)
+                })
+            });
+            if let Some(i) = best {
+                return Some(matches.swap_remove(i));
+            }
+            // clang lists the candidates last-declared first.
+            let mut e = self.diag(DiagId::sema_fn_template_spec_ambiguous, loc).arg(fname);
+            for m in matches.iter().rev() {
+                let Some((_, info)) = self.ast.spec_info(m.spec).map(|(i, s)| (i, *s)) else {
+                    continue;
+                };
+                let note = self
+                    .diag(DiagId::note_fn_template_spec_matched, self.loc_of(m.template))
+                    .arg(self.spec_name(info.template, info.print_args))
+                    .arg(self.template_args_desc(info.template, info.args));
+                e = e.with_note(note);
+            }
+            self.emit(e);
+            return None;
+        }
+        matches.pop()
+    }
+
+    /// `template<> R f<args>(params)` for specialization `m.spec`
+    /// ([temp.expl.spec]; §4.5): diagnosed after an instantiation; else
+    /// a declaration of the specialization joins its redeclarations and
+    /// the specialization is never instantiated from the pattern.
+    fn act_on_explicit_function_spec(
+        &mut self,
+        ds: &DeclSpec,
+        ty: QualType,
+        d: &Declarator,
+        m: SpecMatch,
+        name_loc: Loc,
+    ) -> Option<DeclId> {
+        let s = m.spec;
+        let (i, info) = self.ast.spec_info(s).map(|(i, x)| (i, *x))?;
+        let used = self.ast.decls.get(s).has(DeclFlags::USED) || self.ast.definition(s).is_some();
+        let after_inst = match info.kind {
+            SpecKind::ImplicitInstantiation => used,
+            SpecKind::ExplicitInstantiationDeclaration
+            | SpecKind::ExplicitInstantiationDefinition => true,
+            SpecKind::Undeclared | SpecKind::ExplicitSpecialization => false,
+        };
+        if after_inst {
+            // [temp.expl.spec]/7: declared before the first use that
+            // would cause an implicit instantiation.
+            let explicit = u32::from(info.kind != SpecKind::ImplicitInstantiation);
+            let note = self
+                .diag(DiagId::note_instantiation_required_here, info.point_of_instantiation)
+                .arg(explicit);
+            let e = self
+                .diag(DiagId::sema_spec_after_instantiation, name_loc)
+                .arg(self.spec_name(info.template, info.print_args))
+                .with_note(note);
+            self.emit(e);
+            return None;
+        }
+        let fspec = self.explicit_spec_fnspec(ds, ty, s);
+        self.ast.templates.update_spec(i, |x| {
+            x.kind = SpecKind::ExplicitSpecialization;
+            x.from = info.template;
+            if !used {
+                x.point_of_instantiation = Loc::INVALID;
+            }
+        });
+        if info.kind != SpecKind::ExplicitSpecialization {
+            self.ast.decls.respecify_function(s, fspec);
+        }
+        Some(self.declare_explicit_spec(s, d, ty, fspec, name_loc))
+    }
+
+    /// `[extern] template R f<args>(params);` for specialization `m.spec`
+    /// ([temp.explicit]; §4.5): an explicit instantiation definition
+    /// instantiates the definition (now or at the end of the translation
+    /// unit) and lists the specialization in the current context so that
+    /// it is emitted; a declaration only records the kind.
+    fn act_on_explicit_function_inst(&mut self, m: SpecMatch, declaration: bool, name_loc: Loc) {
+        let s = m.spec;
+        let Some((i, info)) = self.ast.spec_info(s).map(|(i, x)| (i, *x)) else { return };
+        let name = self.spec_name(info.template, info.print_args);
+        match (info.kind, declaration) {
+            (
+                SpecKind::ExplicitSpecialization | SpecKind::ExplicitInstantiationDeclaration,
+                true,
+            ) => return,
+            (SpecKind::ExplicitSpecialization, false) => {
+                // [temp.explicit]/8 (clang: no effect, a warning).
+                let def = self.ast.latest(s);
+                let note =
+                    self.diag(DiagId::note_previous_template_specialization, self.loc_of(def));
+                let e = self
+                    .diag(DiagId::sema_explicit_inst_after_spec_ignored, name_loc)
+                    .arg(name)
+                    .with_note(note);
+                self.emit(e);
+                return;
+            }
+            (SpecKind::ExplicitInstantiationDefinition, false) => {
+                // [temp.spec.general]/5: at most once.
+                let note = self.diag(
+                    DiagId::note_previous_explicit_instantiation,
+                    info.point_of_instantiation,
+                );
+                let e = self
+                    .diag(DiagId::sema_explicit_inst_duplicate, name_loc)
+                    .arg(name)
+                    .with_note(note);
+                self.emit(e);
+                return;
+            }
+            (SpecKind::ExplicitInstantiationDefinition, true) => {
+                // [temp.explicit]/11.
+                let note = self.diag(
+                    DiagId::note_explicit_instantiation_definition_here,
+                    info.point_of_instantiation,
+                );
+                let e = self
+                    .diag(DiagId::sema_explicit_inst_declaration_after_definition, name_loc)
+                    .with_note(note);
+                self.emit(e);
+                return;
+            }
+            _ => {}
+        }
+        let used = self.ast.decls.get(s).has(DeclFlags::USED);
+        let kind = if declaration {
+            SpecKind::ExplicitInstantiationDeclaration
+        } else {
+            SpecKind::ExplicitInstantiationDefinition
+        };
+        self.ast.templates.update_spec(i, |x| {
+            x.kind = kind;
+            if !used || x.point_of_instantiation == Loc::INVALID {
+                x.point_of_instantiation = name_loc;
+            }
+        });
+        if declaration {
+            return;
+        }
+        // [temp.explicit]/10: the definition is instantiated (clang lists
+        // the specialization where the explicit instantiation appears).
+        let lexical = self.ctx;
+        if self.ast.decls.member_list(lexical).is_some() {
+            self.ast.decls.append_member(lexical, s);
+        }
+        self.instantiate_function_definition(s, name_loc);
+        if self.ast.definition(s).is_none() {
+            self.queue_instantiation(s, name_loc);
+        }
+    }
+
+    /// The member function of an implicit class template specialization
+    /// that `template<> R C<args>::f(params)` (or `template R
+    /// C<args>::f(params);`) names: `None` when the qualifier is not such
+    /// a specialization or names a member function template (then the
+    /// declarator is a function template specialization), `Some(None)`
+    /// after a diagnostic.
+    #[allow(clippy::option_option, reason = "not a candidate / diagnosed / the member")]
+    fn member_of_spec_candidate(
+        &mut self,
+        d: &Declarator,
+        name: DeclName,
+        ty: QualType,
+        inst: bool,
+    ) -> Option<Option<DeclId>> {
+        let q = d.qualifier?;
+        if self.kind_of(q).payload() != kiln_ast::decl::PayloadClass::Record {
+            return None;
+        }
+        let in_spec =
+            self.ast.spec_info(q).is_some_and(|(_, x)| x.kind != SpecKind::ExplicitSpecialization)
+                || self.ast.member_spec_info(q).is_some();
+        if !in_spec {
+            return None;
+        }
+        let cands = self.prev_candidates_dn(name, Some(q));
+        if cands.iter().any(|&c| self.kind_of(c) == DeclKind::FunctionTemplate) {
+            return None;
+        }
+        let mut exc = None;
+        for c in cands {
+            if self.kind_of(c).payload() != kiln_ast::decl::PayloadClass::Function
+                || self.ast.member_spec_info(c).is_none()
+            {
+                continue;
+            }
+            let Some(pty) = self.declared_fn_type(c) else { continue };
+            if self.ast.types.same_type(pty, ty) {
+                return Some(Some(self.ast.first(c)));
+            }
+            if exc.is_none() && self.same_ignoring_exc_spec(pty, ty) {
+                exc = Some(c);
+            }
+        }
+        if let Some(p) = exc {
+            // [except.spec]/5.
+            let e = self.diag(DiagId::sema_exception_spec_mismatch, d.name_loc());
+            let e = self.note_prev(e, p, false);
+            self.emit(e);
+            return Some(None);
+        }
+        if inst {
+            let e = self
+                .diag(DiagId::sema_explicit_inst_not_known, d.name_loc())
+                .arg(self.decl_name_str(name));
+            self.emit(e);
+            return Some(None);
+        }
+        // [dcl.meaning.general]/2 (clang's `err_member_decl_does_not_match`).
+        let id = if self.templ.fn_def_next {
+            DiagId::sema_member_def_no_match
+        } else {
+            DiagId::sema_member_decl_no_match
+        };
+        let e = self
+            .diag(id, d.name_loc())
+            .arg(self.decl_name_str(name))
+            .arg(format!("'{}'", self.ty_str(self.class_type(q))));
+        self.emit(e);
+        Some(None)
+    }
+
+    /// Where the definition of member `m` of a class template
+    /// specialization was first required: its point of instantiation,
+    /// else where its instantiation was queued.
+    fn member_use_loc(&self, m: DeclId, poi: Loc) -> Loc {
+        if poi != Loc::INVALID {
+            return poi;
+        }
+        self.inst.pending.iter().find(|p| p.decl == m).map_or(Loc::INVALID, |p| p.poi)
+    }
+
+    /// The [`kiln_ast::decl::FnSpec`] of an explicit specialization
+    /// declared with `ds` (function type `ty`), keeping `old`'s storage
+    /// class (`static` is not repeated).
+    fn explicit_spec_fnspec(
+        &self,
+        ds: &DeclSpec,
+        ty: QualType,
+        old: DeclId,
+    ) -> kiln_ast::decl::FnSpec {
+        let mut fspec = kiln_ast::decl::FnSpec::new();
+        if ds.inline.is_some() {
+            fspec = fspec.with_inline(true);
+        }
+        if ds.constexpr.is_some() {
+            fspec = fspec
+                .with_constexpr_kind(kiln_ast::decl::ConstexprKind::Constexpr)
+                .with_implicit_inline(true);
+        }
+        let variadic = self.ast.types.proto(ty).is_some_and(|p| p.info().variadic());
+        fspec = fspec.with_variadic(variadic);
+        let old = self.ast.decls.function(old).map(|x| x.spec).unwrap_or_default();
+        fspec.with_storage(old.storage())
+    }
+
+    /// The new declaration of an explicit specialization `s` (of a
+    /// function template, or a member function of a class template
+    /// specialization) with its parameters.
+    fn declare_explicit_spec(
+        &mut self,
+        s: DeclId,
+        d: &Declarator,
+        ty: QualType,
+        fspec: kiln_ast::decl::FnSpec,
+        name_loc: Loc,
+    ) -> DeclId {
+        let lexical = self.ctx;
+        let f = self.builder().function_spec_redecl(s, lexical, name_loc, ty, fspec);
+        let params: Vec<crate::declspec::ParamInfo> =
+            d.function_params().map(<[crate::declspec::ParamInfo]>::to_vec).unwrap_or_default();
+        let (defaults, _) = self.merge_default_args(None, false, &params);
+        self.create_params(f, &params, &defaults);
+        if self.kind_of(lexical) == DeclKind::CXXRecord {
+            self.set_member_access(f);
+        }
+        f
+    }
+
+    /// `template<> R C<args>::f(params)` for member `m` of an implicit
+    /// specialization ([temp.expl.spec]/1, §4.5): the member is no longer
+    /// instantiated from the pattern.
+    fn act_on_explicit_member_spec(
+        &mut self,
+        ds: &DeclSpec,
+        ty: QualType,
+        d: &Declarator,
+        m: DeclId,
+        name_loc: Loc,
+    ) -> Option<DeclId> {
+        let (i, info) = self.ast.member_spec_info(m).map(|(i, x)| (i, *x))?;
+        let used = self.ast.decls.get(m).has(DeclFlags::USED) || self.ast.definition(m).is_some();
+        let after_inst = match info.kind {
+            SpecKind::ImplicitInstantiation => used,
+            SpecKind::ExplicitInstantiationDeclaration
+            | SpecKind::ExplicitInstantiationDefinition => true,
+            SpecKind::Undeclared | SpecKind::ExplicitSpecialization => false,
+        };
+        if after_inst {
+            // [temp.expl.spec]/7.
+            let explicit = u32::from(info.kind != SpecKind::ImplicitInstantiation);
+            let at = self.member_use_loc(m, info.point_of_instantiation);
+            let note = self.diag(DiagId::note_instantiation_required_here, at).arg(explicit);
+            let e = self
+                .diag(DiagId::sema_spec_after_instantiation, name_loc)
+                .arg(self.decl_name_str(self.ast.decls.get(m).name()))
+                .with_note(note);
+            self.emit(e);
+            return None;
+        }
+        let fspec = self.explicit_spec_fnspec(ds, ty, m);
+        self.ast.templates.update_member_spec(i, |x| {
+            x.kind = SpecKind::ExplicitSpecialization;
+            x.point_of_instantiation = Loc::INVALID;
+        });
+        if info.kind != SpecKind::ExplicitSpecialization {
+            self.ast.decls.respecify_function(m, fspec);
+        }
+        Some(self.declare_explicit_spec(m, d, ty, fspec, name_loc))
+    }
+
+    /// `[extern] template R C<args>::f(params);` for member `m` of a
+    /// class template specialization ([temp.explicit]/3, §4.5).
+    fn act_on_explicit_member_inst(&mut self, m: DeclId, declaration: bool, name_loc: Loc) {
+        let Some((i, info)) = self.ast.member_spec_info(m).map(|(i, x)| (i, *x)) else { return };
+        let name = self.qualified_decl_name(m);
+        match (info.kind, declaration) {
+            (
+                SpecKind::ExplicitSpecialization | SpecKind::ExplicitInstantiationDeclaration,
+                true,
+            ) => return,
+            (SpecKind::ExplicitSpecialization, false) => {
+                let def = self.ast.latest(m);
+                let note =
+                    self.diag(DiagId::note_previous_template_specialization, self.loc_of(def));
+                let e = self
+                    .diag(DiagId::sema_explicit_inst_after_spec_ignored, name_loc)
+                    .arg(name)
+                    .with_note(note);
+                self.emit(e);
+                return;
+            }
+            (SpecKind::ExplicitInstantiationDefinition, false) => {
+                let note = self.diag(
+                    DiagId::note_previous_explicit_instantiation,
+                    info.point_of_instantiation,
+                );
+                let e = self
+                    .diag(DiagId::sema_explicit_inst_duplicate, name_loc)
+                    .arg(name)
+                    .with_note(note);
+                self.emit(e);
+                return;
+            }
+            (SpecKind::ExplicitInstantiationDefinition, true) => {
+                let note = self.diag(
+                    DiagId::note_explicit_instantiation_definition_here,
+                    info.point_of_instantiation,
+                );
+                let e = self
+                    .diag(DiagId::sema_explicit_inst_declaration_after_definition, name_loc)
+                    .with_note(note);
+                self.emit(e);
+                return;
+            }
+            _ => {}
+        }
+        let kind = if declaration {
+            SpecKind::ExplicitInstantiationDeclaration
+        } else {
+            SpecKind::ExplicitInstantiationDefinition
+        };
+        self.ast.templates.update_member_spec(i, |x| {
+            x.kind = kind;
+            x.point_of_instantiation = name_loc;
+        });
+        if !declaration {
+            self.instantiate_function_definition(m, name_loc);
+            if self.ast.definition(m).is_none() {
+                self.queue_instantiation(m, name_loc);
+            }
+        }
+    }
+}
+
+impl Sema<'_, '_> {
+    /// `base.template name<targs>` / `base->template name`
+    /// ([temp.names]/5): on a type-dependent object a
+    /// `CXXDependentScopeMemberExpr`; on any other object the member
+    /// access, which must name a member template
+    /// ([`Self::act_on_member_template_args`] takes `targs`). Also forms
+    /// a dependent member access again at instantiation.
+    #[allow(clippy::too_many_arguments, reason = "the parts of a member template-id")]
+    pub fn act_on_template_member(
+        &mut self,
+        base: ExprId,
+        name: kiln_source::symbol::Symbol,
+        targs: Option<ArgListId>,
+        template_kw: bool,
+        loc: Loc,
+        op_loc: Loc,
+        arrow: bool,
+    ) -> ExprId {
+        if let Some(e) = self.try_dependent_member(base, name, targs, template_kw, loc, arrow) {
+            if op_loc != loc {
+                let _ = self.ast.templates.member_op_loc.insert(e, op_loc);
+            }
+            return e;
+        }
+        let e = self.act_on_member(base, name, loc, op_loc, arrow);
+        if self.is_err_expr(e) {
+            return e;
+        }
+        if !self.is_member_template_ref(e) {
+            if targs.is_none() && !template_kw {
+                return e;
+            }
+            let mut d = self
+                .diag(DiagId::sema_template_kw_refers_to_non_template, loc)
+                .arg(crate::decl::sym_str(self, name));
+            if self.ast.exprs.get(e).kind() == kiln_ast::expr::ExprKind::MemberExpr {
+                let at = self.ast.decls.get(self.ast.exprs.decl(e)).loc();
+                d = d.with_note(self.diag(DiagId::note_declared_non_template, at));
+            }
+            self.emit(d);
+            return self.recover_err(&[e], loc);
+        }
+        match targs {
+            Some(l) => self.act_on_member_template_args(e, l),
+            None => e,
+        }
+    }
+
+    /// The member template-id `e<targs>` of the overloaded member access
+    /// `e` naming a member function template ([temp.names]/3,
+    /// [temp.arg.explicit]): the arguments are recorded for the call.
+    /// Dependent arguments make it a dependent member access
+    /// (`CXXDependentScopeMemberExpr`, clang's type-dependent
+    /// `UnresolvedMemberExpr`) formed again, lookup and all, at
+    /// instantiation.
+    pub fn act_on_member_template_args(&mut self, e: ExprId, targs: ArgListId) -> ExprId {
+        let dependent = self
+            .ast
+            .types
+            .arg_list_flags(targs)
+            .intersects(kiln_ast::types::TypeFlags::DEPENDENT_INSTANTIATION);
+        if !dependent {
+            let _ = self.set_member_template_args(e, targs);
+            return e;
+        }
+        let Some(x) = self.member_overload(e) else { return e };
+        let Some(m) = self.ovl.members.remove(&x) else { return e };
+        let loc = self.ast.exprs.get(x).loc();
+        // `p->f<T>` through `operator->` ([over.ref]/1): the chain is
+        // formed again from the class object at instantiation.
+        let mut base = m.base;
+        while m.arrow
+            && self.ast.exprs.get(base).kind() == kiln_ast::expr::ExprKind::CXXOperatorCallExpr
+            && self.ast.exprs.operator_call_op(base) == kiln_ast::names::OverloadedOperator::Arrow
+        {
+            let l = self.ast.exprs.call_args(base);
+            match self.ast.lists.iter::<ExprId>(l).next() {
+                Some(o) => base = o,
+                None => break,
+            }
+        }
+        self.builder().dependent_member(Some(base), m.arrow, m.name, false, None, Some(targs), loc)
     }
 }

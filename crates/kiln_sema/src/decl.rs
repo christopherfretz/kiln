@@ -1149,6 +1149,17 @@ impl Sema<'_, '_> {
         if special {
             return self.act_on_special_member_declarator(ds, ty, d, invalid);
         }
+        if head.is_none() && !ds.is_typedef() && self.is_function_spec_declarator(d, ty) {
+            return self.act_on_function_spec_declarator(ds, ty, d, invalid);
+        }
+        if let Some((_, l)) = self.templ.explicit_inst.filter(|_| self.at_explicit_head()) {
+            self.templ.explicit_inst = None;
+            // [temp.explicit]/3: of a variable template or static data
+            // member (WP-106 lands functions only).
+            self.templ_unimplemented("explicit instantiation of a variable", l);
+            self.templ.cur = None;
+            return None;
+        }
         if let Some(sid) = &d.spec_id {
             return self.act_on_var_spec_declarator(ds, ty, d, sid, head);
         }
@@ -2513,20 +2524,8 @@ impl Sema<'_, '_> {
                 None => QualType::ERROR,
             };
             self.ast.decls.set_ty(v, ty);
-            // `auto x = {...};` deduced `std::initializer_list<U>`; its
-            // initialization (`CXXStdInitializerListExpr` over a backing
-            // array) lands with WP-068a (spec/sema-class.md §5.7).
-            if let Initializer::List(l) = &init
-                && !direct
-                && !self.is_error_type(ty)
-                && !self.ast.types.is_dependent(ty)
-            {
-                self.unsupported("std::initializer_list", l.lbrace);
-                for e in Self::list_exprs(l) {
-                    self.act_on_full_expr(e);
-                }
-                return;
-            }
+            // `auto x = {...};` deduced `std::initializer_list<U>`; the
+            // list initializes it below ([dcl.init.list]/3.6, WP-106).
             // `auto x = f();` with a `void` f deduces an incomplete
             // object type (clang `DeduceVariableDeclarationType`, then
             // `err_typecheck_decl_incomplete_type`); `x` gets no initializer.

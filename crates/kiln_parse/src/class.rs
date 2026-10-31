@@ -1448,6 +1448,17 @@ impl Parser<'_, '_> {
         self.bump();
         if let Some(op) = self.parse_operator_symbol() {
             d.special = Some((SpecialName::Operator(op), loc));
+            if self.at(Punct::Less)
+                && (self.s.has_explicit_spec_head() || self.s.has_explicit_inst_head())
+                && let Some(t) = self.s.operator_function_template(op, d.qualifier)
+            {
+                // `template<> R operator==<int>(...)` ([temp.expl.spec]).
+                let Some((args, _, r)) = self.parse_template_arg_list() else {
+                    d.invalid = true;
+                    return;
+                };
+                d.spec_id = self.s.act_on_specialization_declarator_id(t, &args, loc, r);
+            }
             return;
         }
         if matches!(self.tok().kind, TokKind::StringLit(_)) {

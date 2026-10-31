@@ -336,31 +336,86 @@ impl Sema<'_, '_> {
     /// not the reverse. Packs are WP-072; the reference-binding
     /// tie-breaker ([temp.deduct.partial]/9) is not applied.
     pub fn more_specialized(&mut self, a: DeclId, b: DeclId, nargs: usize) -> bool {
+        let side = |n| Side::Call { nargs: n, object: false, reverse: false };
+        self.more_specialized_in(a, side(nargs), b, side(nargs))
+    }
+
+    /// [`Self::more_specialized`] for two conversion function templates
+    /// ([temp.deduct.partial]/3.2: their return types are compared).
+    pub fn more_specialized_conversion(&mut self, a: DeclId, b: DeclId) -> bool {
+        self.more_specialized_in(a, Side::Conversion, b, Side::Conversion)
+    }
+
+    /// [`Self::more_specialized`] for two operator candidates, each
+    /// with its own count of explicit call arguments (the object operand
+    /// of a member is not one): [temp.func.order]/3 inserts an object
+    /// parameter for a member compared with a non-member, and reverses
+    /// the parameters of `b` when exactly one candidate is a reversed
+    /// rewritten candidate (`reversed`, clang `getMoreSpecializedTemplate`).
+    pub fn more_specialized_operator(
+        &mut self,
+        a: DeclId,
+        nargs_a: usize,
+        b: DeclId,
+        nargs_b: usize,
+        reversed: bool,
+    ) -> bool {
+        let member = |s: &Self, t: DeclId| {
+            s.templated_function(t)
+                .is_some_and(|f| s.kind_of(f) == DeclKind::CXXMethod && !s.has_explicit_object(f))
+        };
+        let (ma, mb) = (member(self, a), member(self, b));
+        let sa = Side::Call { nargs: nargs_a, object: ma && !mb, reverse: false };
+        let sb = Side::Call { nargs: nargs_b, object: mb && !ma, reverse: reversed };
+        self.more_specialized_in(a, sa, b, sb)
+    }
+
+    fn more_specialized_in(&mut self, a: DeclId, sa: Side, b: DeclId, sb: Side) -> bool {
         let (a, b) = (self.ast.first(a), self.ast.first(b));
         if a == b {
             return false;
         }
-        let ab = self.fn_at_least_as_specialized(a, b, nargs);
-        if !ab {
+        let (Some(pa), Some(pb)) = (self.ordering_types(a, sa), self.ordering_types(b, sb)) else {
+            return false;
+        };
+        if pa.len() != pb.len() {
             return false;
         }
-        if !self.fn_at_least_as_specialized(b, a, nargs) {
+        if !self.fn_at_least_as_specialized(&pa, b, &pb) {
+            return false;
+        }
+        if !self.fn_at_least_as_specialized(&pb, a, &pa) {
             return true;
         }
         // [temp.func.order]/6: equally specialized, the more constrained.
         self.template_more_constrained(a, b)
     }
 
-    /// The first `nargs` parameter types of function template `ft`'s
-    /// templated function, adjusted for partial ordering
+    /// The parameter types of function template `ft`'s templated
+    /// function that partial ordering compares (`side`), adjusted
     /// ([temp.deduct.partial]/5-7): references and top-level cv dropped.
-    fn ordering_types(&mut self, ft: DeclId, nargs: usize) -> Option<Vec<QualType>> {
+    fn ordering_types(&mut self, ft: DeclId, side: Side) -> Option<Vec<QualType>> {
         let f = self.templated_function(ft)?;
-        let (ptys, _) = self.proto_param_types(f);
+        let mut ptys = match side {
+            Side::Call { nargs, object, .. } => {
+                let mut v = self.proto_param_types(f).0;
+                v.truncate(nargs);
+                if object {
+                    // The class of the member stands for its object
+                    // parameter (cv and reference are dropped below).
+                    let c = self.ast.decls.get(f).ctx()?;
+                    v.insert(0, self.class_type(c));
+                }
+                v
+            }
+            Side::Conversion => vec![self.conversion_result_type(f)],
+        };
+        if matches!(side, Side::Call { reverse: true, .. }) {
+            ptys.reverse();
+        }
         let t = &mut self.ast.types;
         Some(
             ptys.into_iter()
-                .take(nargs)
                 .map(|p| {
                     let p = t.canonical(p);
                     let p = match t.canonical_view(p) {
@@ -374,24 +429,18 @@ impl Sema<'_, '_> {
         )
     }
 
-    /// Whether function template `a` is at least as specialized as `b`:
-    /// `b`'s parameters deduce from `a`'s parameter types, `a`'s template
-    /// parameters standing for unique synthesized types
-    /// ([temp.func.order]/3-4, [temp.deduct.partial]/2-10).
-    fn fn_at_least_as_specialized(&mut self, a: DeclId, b: DeclId, nargs: usize) -> bool {
-        let (Some(pa), Some(pb)) = (self.ordering_types(a, nargs), self.ordering_types(b, nargs))
-        else {
-            return false;
-        };
-        if pa.len() != pb.len() {
-            return false;
-        }
+    /// Whether the template with ordering types `pa` is at least as
+    /// specialized as function template `b` with ordering types `pb`:
+    /// `b`'s parameters deduce from `pa`, whose template parameters
+    /// stand for unique synthesized types ([temp.func.order]/3-4,
+    /// [temp.deduct.partial]/2-10).
+    fn fn_at_least_as_specialized(&mut self, pa: &[QualType], b: DeclId, pb: &[QualType]) -> bool {
         let depth = self.template_param_depth(b);
         let n = self.template_params(b).len();
         self.inst.sfinae.borrow_mut().push(SfinaeState::default());
         let mut d = DeducedArgs::new(depth, n);
         let mut ok = true;
-        for (&p, &x) in pb.iter().zip(&pa) {
+        for (&p, &x) in pb.iter().zip(pa) {
             if self.deduce(p, x, TdfFlags::NONE, &mut d) != Tdk::Success {
                 ok = false;
                 break;
@@ -400,4 +449,16 @@ impl Sema<'_, '_> {
         let failed = self.inst.sfinae.borrow_mut().pop().is_some_and(|s| s.errors > 0);
         ok && !failed
     }
+}
+
+/// One side of a partial ordering of function templates
+/// ([temp.deduct.partial]/3).
+#[derive(Clone, Copy, Debug)]
+enum Side {
+    /// A call: the first `nargs` parameter types, after an inserted
+    /// object parameter (`object`), reversed for a reversed rewritten
+    /// candidate (`reverse`).
+    Call { nargs: usize, object: bool, reverse: bool },
+    /// A conversion: the conversion type.
+    Conversion,
 }

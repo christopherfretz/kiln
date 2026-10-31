@@ -92,6 +92,7 @@ pub const TABLE: &[(&str, Disposition)] = &[
     ("CXXDefaultInitExpr", Keep),
     ("CXXBindTemporaryExpr", Keep),
     ("MaterializeTemporaryExpr", Keep),
+    ("CXXStdInitializerListExpr", Keep),
     ("ExprWithCleanups", Keep),
     ("CXXTypeidExpr", Keep),
     ("CXXParenListInitExpr", Keep),
@@ -193,7 +194,6 @@ pub const TABLE: &[(&str, Disposition)] = &[
     ("CXXNewExpr", Keep),
     ("CXXDeleteExpr", Keep),
     ("CXXNoexceptExpr", Keep),
-    ("CXXStdInitializerListExpr", Unsupported(NOT_M2)),
     ("CXXRewrittenBinaryOperator", Keep),
     ("UnresolvedMemberExpr", Unsupported("member function template names are not in the dump yet")),
     // The parameter (reprinted) then the replacement (spec/ast-dump.md §5).
@@ -361,6 +361,7 @@ fn specific_keys(kind: &str) -> Option<&'static [&'static str]> {
         ],
         "CXXInheritedCtorInitExpr"
         | "CXXMemberCallExpr"
+        | "CXXStdInitializerListExpr"
         | "CXXDefaultArgExpr"
         | "ArrayInitLoopExpr"
         | "ArrayInitIndexExpr"
@@ -479,6 +480,7 @@ pub const CLASS_KINDS: &[&str] = &[
     "CXXDefaultInitExpr",
     "CXXBindTemporaryExpr",
     "MaterializeTemporaryExpr",
+    "CXXStdInitializerListExpr",
     "ExprWithCleanups",
     "CXXTypeidExpr",
     "CXXParenListInitExpr",

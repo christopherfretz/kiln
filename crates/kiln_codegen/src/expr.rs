@@ -1149,6 +1149,13 @@ impl Cg<'_> {
                 let align = self.global_align(dq);
                 Ok(LV { addr: Addr { v: V::C(gval(g)), ty, align }, q, bf: None })
             }
+            DeclKind::TemplateParamObject => {
+                let g = self.param_object_global(d)?;
+                let dq = ast.decls.get(d).ty().unwrap_or(q);
+                let ty = self.mty(dq);
+                let align = self.global_align(dq);
+                Ok(LV { addr: Addr { v: V::C(gval(g)), ty, align }, q, bf: None })
+            }
             k => err(self.loc_of(e), format!("reference to {k:?} is not supported yet")),
         }
     }
@@ -1603,6 +1610,8 @@ impl Cg<'_> {
                 let n = ast.exprs.get(c);
                 match n.kind() {
                     ExprKind::ParenExpr => c = ast.exprs.operand(c),
+                    // `f()` with `f` a function-reference template argument.
+                    ExprKind::SubstNonTypeTemplateParmExpr => c = ast.exprs.subst_replacement(c),
                     ExprKind::ImplicitCastExpr
                         if matches!(
                             ast.exprs.cast_kind(c),
@@ -1965,6 +1974,7 @@ impl Cg<'_> {
             ExprKind::CXXConstructExpr | ExprKind::CXXTemporaryObjectExpr => {
                 self.emit_construct(e, dest, zeroed)
             }
+            ExprKind::CXXStdInitializerListExpr => self.std_initializer_list(e, dest),
             ExprKind::CXXBindTemporaryExpr => {
                 let destructed = std::mem::take(&mut self.f.dest_destructed);
                 self.agg_visit(self.sub(e), dest, zeroed)?;
@@ -2095,6 +2105,51 @@ impl Cg<'_> {
             let vol = self.is_volatile(lv.q);
             self.store(z, lv.addr.v, lv.addr.align, vol);
         }
+        Ok(())
+    }
+
+    /// clang `AggExprEmitter::VisitCXXStdInitializerListExpr`: the
+    /// object points at its backing array, then holds the length (or a
+    /// pointer past the end) ([dcl.init.list]/5).
+    fn std_initializer_list(&mut self, e: ExprId, dest: Addr) -> R<()> {
+        let ast = self.ast;
+        let q = ast.exprs.get(e).ty();
+        let arr = ast.exprs.operand(e);
+        let Some(rd) = ast.types.as_record(q) else {
+            return err(self.loc_of(e), "std::initializer_list of a non-class type");
+        };
+        let def = ast.definition(rd).unwrap_or(rd);
+        let fields: Vec<DeclId> = ast
+            .decls
+            .members(def)
+            .filter(|&m| ast.decls.get(m).kind() == DeclKind::Field)
+            .collect();
+        let n = match ast.types.canonical_view(ast.exprs.get(arr).ty()) {
+            kiln_ast::types::TypeView::ConstantArray(a) => a.size,
+            _ => return err(self.loc_of(e), "std::initializer_list without a constant array"),
+        };
+        let [f0, f1] = fields.as_slice() else {
+            return err(self.loc_of(e), "std::initializer_list of an unexpected layout");
+        };
+        let (f0, f1) = (*f0, *f1);
+        let a = self.emit_lvalue(arr)?.addr.v;
+        let rty = self.record_ty(rd);
+        let base = Addr { v: dest.v, ty: rty, align: dest.align };
+        let q0 = ast.decls.get(f0).ty().expect("field type");
+        let lv0 = self.field_lvalue(base, f0, q0)?;
+        self.store_scalar(a, lv0.addr, q0);
+        let q1 = ast.decls.get(f1).ty().expect("field type");
+        let lv1 = self.field_lvalue(base, f1, q1)?;
+        let len = i128::from(n);
+        let v = if ast.types.is_pointer(q1) {
+            let elem = ast.types.pointee(q1).unwrap_or(q1);
+            let size = self.size_align(elem).0;
+            self.byte_offset(a, n * size)
+        } else {
+            let t = self.lty(q1);
+            self.icn(t, len)
+        };
+        self.store_scalar(v, lv1.addr, q1);
         Ok(())
     }
 

@@ -199,6 +199,7 @@ impl Cg<'_> {
         let ast = self.ast;
         match ast.decls.get(d).kind() {
             DeclKind::Function => Ok(Value::func(self.get_fn(d)?)),
+            DeclKind::TemplateParamObject => Ok(gval(self.param_object_global(d)?)),
             DeclKind::Var => {
                 let st = ast.decls.var(d).map(|v| v.spec.storage());
                 if is_local(ast, d) && st == Some(VarStorage::Static) {

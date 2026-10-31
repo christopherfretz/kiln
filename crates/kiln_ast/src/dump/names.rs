@@ -678,6 +678,7 @@ impl<'a> AstNames<'a> {
             | ExprKind::ConstantExpr
             | ExprKind::MaterializeTemporaryExpr
             | ExprKind::CXXBindTemporaryExpr
+            | ExprKind::CXXStdInitializerListExpr
             | ExprKind::ExprWithCleanups => {
                 self.expr(exprs.operand(e), depth, out);
             }

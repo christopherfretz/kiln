@@ -130,6 +130,14 @@ impl Sema<'_, '_> {
         {
             return None;
         }
+        if !l.items.is_empty()
+            && let Some(e) = self.std_initializer_list_init(ty, l, at)
+        {
+            return Some(e);
+        }
+        if let Some(e) = self.init_list_ctor_init(ty, l, style, at, temp_end) {
+            return Some(e);
+        }
         let mut args = Vec::with_capacity(l.items.len());
         for item in &l.items {
             match item.value {
@@ -149,6 +157,112 @@ impl Sema<'_, '_> {
         let mut site = ConstructSite::at(at);
         site.temp_end = temp_end;
         self.construct_class(ty, &args, style, site)
+    }
+
+    /// [over.match.list]/1.1 (phase 1): the initializer-list
+    /// constructors of class `ty` with the whole list `l` as their one
+    /// argument ([dcl.init.list]/3.7). `None` when phase 1 does not apply
+    /// (no initializer-list constructor, an empty list and a default
+    /// constructor, a type-dependent element) or selects nothing (phase 2
+    /// follows). The argument is built as list-initialization of the
+    /// parameter (a `CXXStdInitializerListExpr`, bound to a temporary for
+    /// a reference parameter).
+    fn init_list_ctor_init(
+        &mut self,
+        ty: QualType,
+        l: &InitList,
+        style: InitStyle,
+        at: Loc,
+        temp_end: Option<Loc>,
+    ) -> Option<ExprId> {
+        use crate::class::{CtorCall, Selected, SpecialKind};
+        use crate::overload::{ArgInfo, IcsOptions, SetKind};
+        use kiln_ast::expr::ConstructInfo;
+        let target = self.ast.types.as_record(ty)?;
+        let class = self.ast.definition(target)?;
+        let class = conv::bases::complete_class(self, class)?;
+        if !self.has_init_list_ctor(class)
+            || (l.items.is_empty() && self.has_default_ctor_cheap(class))
+            || l.items.iter().any(|i| match i.value {
+                InitValue::Expr(e) => self.expr_is_type_dependent(e),
+                InitValue::List(_) => false,
+            })
+        {
+            return None;
+        }
+        let idx = u32::try_from(self.ovl.lists.len()).unwrap_or(u32::MAX);
+        self.ovl.lists.push(l.clone());
+        let mut set = self.begin_set(SetKind::ListCtor { phase: 1 }, at);
+        set.args.push(ArgInfo {
+            list: Some(idx),
+            ..ArgInfo::of_type(QualType::VOID, ValueCategory::PRValue)
+        });
+        self.add_ctor_candidates(&mut set, class, IcsOptions::NONE, true);
+        if set.viable().next().is_none() && !set.skipped_templates && !set.uncertain {
+            self.end_set(set);
+            self.ovl.lists.pop();
+            return None;
+        }
+        let out = self.best_viable(&mut set);
+        let sel = self.selected_of(set, out);
+        self.ovl.lists.pop();
+        let (Selected::Found(f) | Selected::Deleted(f)) = sel else {
+            self.unsupported("this initializer-list constructor selection", l.lbrace);
+            let flat = Self::list_exprs(l);
+            return Some(self.recover(ty, &flat, l.lbrace));
+        };
+        let (entity, ck) = self.take_ctor_entity();
+        let p = self.param_decls(f)[0];
+        let pty = self.ast.decls.get(p).ty().unwrap_or(QualType::ERROR);
+        let pty = if self.ast.types.is_reference(pty) { pty } else { conv::strip_cv(self, pty) };
+        let arg = self.init_from_list_at(pty, l, Some(l.lbrace));
+        if self.is_err_expr(arg) {
+            return Some(self.recover(ty, &[arg], l.lbrace));
+        }
+        let call = CtorCall {
+            info: ConstructInfo {
+                kind: ck,
+                list: style.is_list(),
+                std_init_list: true,
+                ..ConstructInfo::COMPLETE
+            },
+            temp_end,
+            reject_explicit: style == InitStyle::CopyList,
+            ..CtorCall::new(std::slice::from_ref(&arg))
+        };
+        let site = ConstructSite::at(at);
+        let built =
+            self.use_ctor(sel, ty, class, SpecialKind::CopyCtor, call, at, entity, site.sites);
+        Some(built.unwrap_or_else(|| self.recover(ty, &[arg], at)))
+    }
+
+    /// [dcl.init.list]/3.6, /5: list-initialization of
+    /// `std::initializer_list<E>` from a non-empty list: a backing array
+    /// `const E[N]` is copy-initialized from the elements and the object
+    /// refers to it (`CXXStdInitializerListExpr` over the materialized
+    /// array; the array's lifetime is extended with the object's,
+    /// [dcl.init.list]/6). `None` for other types and while an element is
+    /// type-dependent.
+    pub(crate) fn std_initializer_list_init(
+        &mut self,
+        ty: QualType,
+        l: &InitList,
+        at: Loc,
+    ) -> Option<ExprId> {
+        let elem = self.initializer_list_element(ty)?;
+        let dependent = l.items.iter().any(|i| match i.value {
+            InitValue::Expr(e) => self.expr_is_type_dependent(e),
+            InitValue::List(_) => false,
+        });
+        if dependent || self.ast.types.is_dependent(elem) {
+            return None;
+        }
+        let n = u64::try_from(l.items.len()).unwrap_or(u64::MAX);
+        let celem = self.ast.types.qualify(elem, kiln_ast::types::Quals::CONST);
+        let arr = self.ast.types.constant_array(celem, n, None);
+        let init = self.init_from_list_at(arr, l, Some(at));
+        let mte = self.materialize_temporary(init, arr, false);
+        Some(self.builder().std_initializer_list(mte, ty))
     }
 
     /// The initialization of an object of type `ty` by `init`
@@ -319,7 +433,10 @@ impl Sema<'_, '_> {
         if self.is_error_type(ty) {
             return self.perform_init(ty, Initializer::List(l.clone()), entity, false);
         }
+        // Scalars only: a class (aggregate or not, complete or not yet
+        // instantiated) takes its braces.
         if !self.is_aggregate(ty)
+            && self.ast.types.as_record(ty).is_none()
             && !self.ast.types.is_reference(ty)
             && let [InitItem { value: InitValue::Expr(_), designator }] = l.items.as_slice()
             && designator.is_empty()
@@ -571,8 +688,7 @@ impl Sema<'_, '_> {
             return e;
         }
         if self.ast.types.is_reference(ty) {
-            self.unsupported("list-initialization of a reference", l.lbrace);
-            return self.recover(ty, &[], l.lbrace);
+            return self.reference_list_init(ty, l, entity);
         }
         // Scalar ([dcl.init.list]/3.9-10).
         let mut inits = Vec::new();
@@ -603,6 +719,49 @@ impl Sema<'_, '_> {
             self.emit(msg);
         }
         self.builder().init_list(ty, &inits, None, None, l.lbrace, l.rbrace)
+    }
+
+    /// List-initialization of reference `ty` ([dcl.init.list]/3.9-10):
+    /// a single element the referee is reference-related to initializes
+    /// the reference directly; otherwise a prvalue of the referenced type
+    /// is copy-list-initialized and the reference binds to it (a
+    /// non-const lvalue reference cannot).
+    fn reference_list_init(&mut self, ty: QualType, l: &InitList, entity: Option<Loc>) -> ExprId {
+        let r = self.pointee_sugared(ty).unwrap_or(QualType::ERROR);
+        let ur = conv::strip_cv(self, r);
+        let cr = self.ast.types.canonical(ur);
+        let at = entity.unwrap_or(l.lbrace);
+        let lref =
+            matches!(self.ast.types.canonical_view(ty), kiln_ast::types::TypeView::LValueRef(_));
+        let q = self.ast.types.effective_quals(r);
+        // A non-const (or volatile) lvalue reference binds no temporary.
+        let no_temp = lref && (!q.is_const() || q.is_volatile());
+        if let [InitItem { value: InitValue::Expr(e), designator }] = l.items.as_slice()
+            && designator.is_empty()
+        {
+            let e = *e;
+            let et = conv::strip_cv(self, self.ety(e));
+            let ce = self.ast.types.canonical(et);
+            let lvalue = self.ast.exprs.get(e).value_category() == ValueCategory::LValue;
+            if self.expr_is_type_dependent(e)
+                || (self.ref_related(cr, ce).0 && (lvalue || !no_temp))
+            {
+                return self.init_from_expr(ty, e, ConvCtx::Initialization, at);
+            }
+        }
+        if no_temp {
+            // clang's `FK_NonConstLValueReferenceBindingToTemporary` with
+            // an initializer list argument.
+            let msg = self
+                .diag(DiagId::sema_lvalue_ref_bind_to_initlist, at)
+                .arg(u8::from(q.is_const()))
+                .arg(self.ty_arg(r));
+            self.emit(msg);
+            let flat = Self::list_exprs(l);
+            return self.recover(ty, &flat, l.lbrace);
+        }
+        let tmp = self.init_from_list_at(r, l, entity);
+        self.init_from_expr(ty, tmp, ConvCtx::Initialization, at)
     }
 
     /// `E e{v};` for an enumeration `E` with a fixed underlying type `U`

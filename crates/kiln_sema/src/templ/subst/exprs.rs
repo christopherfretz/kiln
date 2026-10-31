@@ -17,8 +17,11 @@ use crate::init::{InitItem, InitList, InitValue, Initializer};
 use crate::templ::args::ArgLookup;
 
 impl Substituter<'_, '_, '_> {
-    /// Whether `e` must be rebuilt (§5.4; with `-fno-share-nondependent`
-    /// every expression is).
+    /// Whether `e` must be rebuilt (§5.4). An expression with no type,
+    /// value or instantiation dependence (references to decls of a
+    /// dependent context are instantiation-dependent) and no unexpanded
+    /// pack is shared with the pattern by id; this is the substituter's
+    /// base case, so leaves need no rebuild arm (§3.3, §14 Q3).
     pub(crate) fn needs_rebuild(&self, e: ExprId) -> bool {
         let deps = self.sema.ast.exprs.get(e).deps();
         deps.intersects(ExprDeps::TYPE_VALUE_INST | ExprDeps::UNEXPANDED_PACK)
@@ -196,8 +199,13 @@ impl Substituter<'_, '_, '_> {
                 let Some(name) = self.sema.ast.decls.get(m).name().as_ident() else {
                     return self.unimplemented("member access to a special member", loc);
                 };
+                // A member template-id `x.f<args>` (§6.4).
+                let targs = match self.sema.ovl.members.get(&e).and_then(|m| m.targs) {
+                    Some(l) => Some(self.args(l, loc)?),
+                    None => None,
+                };
                 let op = self.sema.ast.templates.member_op_loc.get(e).copied().unwrap_or(loc);
-                Ok(self.sema.act_on_member(base, name, loc, op, arrow))
+                Ok(self.sema.act_on_template_member(base, name, targs, false, loc, op, arrow))
             }
             ExprKind::CXXDependentScopeMemberExpr => {
                 let Some(base) = ExprId::from_raw(n.a()) else {
@@ -206,8 +214,13 @@ impl Substituter<'_, '_, '_> {
                 let name = kiln_source::symbol::Symbol::from_index(n.b());
                 let arrow = n.aux() & 1 != 0;
                 let base = self.member_base(base)?;
+                let targs = match self.sema.ast.templates.expr_targs.get(e).copied() {
+                    Some(l) => Some(self.args(l, loc)?),
+                    None => None,
+                };
+                let kw = n.aux() & 2 != 0;
                 let op = self.sema.ast.templates.member_op_loc.get(e).copied().unwrap_or(loc);
-                Ok(self.sema.act_on_member(base, name, loc, op, arrow))
+                Ok(self.sema.act_on_template_member(base, name, targs, kw, loc, op, arrow))
             }
             ExprKind::DependentScopeDeclRefExpr => {
                 let Some(nns) = kiln_ast::ids::NnsId::try_new(n.a()) else {
@@ -500,10 +513,13 @@ impl Substituter<'_, '_, '_> {
             return Ok(self.sema.act_on_undeclared_call_name(name, n.loc()));
         }
         let r = self.sema.act_on_call_name(name, n.loc());
-        if let Some(t) = targs
-            && self.sema.ast.exprs.get(r).kind() == ExprKind::UnresolvedLookupExpr
-        {
-            let _ = self.sema.ast.templates.expr_targs.insert(r, t);
+        if let Some(t) = targs {
+            if self.sema.ast.exprs.get(r).kind() == ExprKind::UnresolvedLookupExpr {
+                let _ = self.sema.ast.templates.expr_targs.insert(r, t);
+            } else if self.sema.is_member_template_ref(r) {
+                // An implicit member template-id `this->f<T>` (§6.4).
+                return Ok(self.sema.act_on_member_template_args(r, t));
+            }
         }
         Ok(r)
     }
@@ -554,6 +570,10 @@ impl Substituter<'_, '_, '_> {
         loc: Loc,
     ) -> SubstResult<ExprId> {
         let Some(v) = self.sema.const_int(value) else {
+            // Class, pointer and null values (§6.10).
+            if let Some(r) = self.sema.nttp_value_expr(ty, value, loc) {
+                return Ok(r);
+            }
             return self.unimplemented("non-type template argument of this type", loc);
         };
         let t = &self.sema.ast.types;
@@ -753,6 +773,13 @@ impl Substituter<'_, '_, '_> {
             let r = self.sema.ast.exprs.end_loc(peeled).unwrap_or(pn.loc());
             return Ok(Some(Initializer::Paren(args, pn.loc(), r)));
         }
+        // `std::initializer_list<E> x = {…}` (WP-106): redone from the list.
+        if pk == ExprKind::InitListExpr
+            && self.sema.ast.types.is_array(self.sema.ety(peeled))
+            && self.sema.ast.types.as_record(self.sema.ety(init)).is_some()
+        {
+            return Ok(Some(Initializer::List(self.init_list(peeled)?)));
+        }
         let n = *self.sema.ast.exprs.get(init);
         Ok(Some(match n.kind() {
             ExprKind::ParenListExpr => {
@@ -798,6 +825,10 @@ impl Substituter<'_, '_, '_> {
         }
         if ex.get(init).kind() == ExprKind::ImplicitCastExpr {
             init = ex.operand(init);
+        }
+        // `std::initializer_list` over its backing array (WP-106).
+        if ex.get(init).kind() == ExprKind::CXXStdInitializerListExpr {
+            init = ex.operand(ex.operand(init));
         }
         init
     }

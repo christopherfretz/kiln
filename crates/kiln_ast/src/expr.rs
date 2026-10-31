@@ -1882,8 +1882,8 @@ impl ExprArena {
 
     /// The single operand of a unary operator, cast, `ParenExpr`,
     /// `ConstantExpr`, `MemberExpr` (its base), `MaterializeTemporaryExpr`,
-    /// `CXXBindTemporaryExpr`, `ExprWithCleanups` or `PackExpansionExpr`
-    /// (its pattern).
+    /// `CXXBindTemporaryExpr`, `CXXStdInitializerListExpr` (its backing
+    /// array), `ExprWithCleanups` or `PackExpansionExpr` (its pattern).
     pub fn operand(&self, e: ExprId) -> ExprId {
         let n = self.get(e);
         assert!(
@@ -1896,6 +1896,7 @@ impl ExprArena {
                         | ExprKind::MemberExpr
                         | ExprKind::MaterializeTemporaryExpr
                         | ExprKind::CXXBindTemporaryExpr
+                        | ExprKind::CXXStdInitializerListExpr
                         | ExprKind::ExprWithCleanups
                         | ExprKind::PackExpansionExpr
                 ),
@@ -2015,6 +2016,7 @@ impl ExprArena {
             | ExprKind::ConstantExpr
             | ExprKind::MaterializeTemporaryExpr
             | ExprKind::CXXBindTemporaryExpr
+            | ExprKind::CXXStdInitializerListExpr
             | ExprKind::ExprWithCleanups => v.extend(id(n.a)),
             ExprKind::CXXTypeidExpr if !n.has(ExprFlags::ARG_IS_TYPE) => v.extend(id(n.a)),
             ExprKind::CXXConstructExpr | ExprKind::CXXTemporaryObjectExpr => {

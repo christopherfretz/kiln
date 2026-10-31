@@ -258,11 +258,11 @@ impl Sema<'_, '_> {
             return;
         }
         let nargs = set.args.len();
-        for (i, &(c1, t1)) in ts.iter().enumerate() {
-            for &(c2, t2) in &ts[i + 1..] {
-                if self.more_specialized(t1, t2, nargs) {
+        for (i, &(c1, _)) in ts.iter().enumerate() {
+            for &(c2, _) in &ts[i + 1..] {
+                if self.more_specialized_candidate(set, c1, c2, nargs) {
                     set.tmpl_order.push((c1, c2));
-                } else if self.more_specialized(t2, t1, nargs) {
+                } else if self.more_specialized_candidate(set, c2, c1, nargs) {
                     set.tmpl_order.push((c2, c1));
                 }
             }
