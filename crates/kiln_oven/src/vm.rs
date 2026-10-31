@@ -217,6 +217,12 @@ pub(crate) enum Fault {
     Bi(BiFault),
     /// A virtual call whose final overrider is pure ([class.abstract]/6).
     PureVirtual(DeclId),
+    /// `delete` of a base class subobject whose class has no virtual
+    /// destructor ([expr.delete]/3).
+    DeleteNonVirtual {
+        stat: OTy,
+        dynamic: OTy,
+    },
     /// A polymorphic operation (access kind `ak`) on an object whose
     /// dynamic type is unknown (not usable in constant expressions).
     UnknownDynamic {
@@ -769,8 +775,15 @@ impl Oven {
                     pc += 6;
                 }
                 Op::Delete => {
-                    let raw = reg!(0) as u64;
-                    let pointee = OTy(arg!(1) as u32);
+                    let mut raw = reg!(0) as u64;
+                    let mut pointee = OTy(arg!(1) as u32);
+                    if aux & 1 == 0 && raw != 0 {
+                        match self.delete_base(raw, pointee, aux & 4 != 0) {
+                            Ok(Some((r, t))) => (raw, pointee) = (r, t),
+                            Ok(None) => {}
+                            Err(f) => fail!(f),
+                        }
+                    }
                     // aux 2: the checks only (before the destructors run).
                     let r = if aux & 2 != 0 {
                         self.mem.heap_check(raw, aux & 1 != 0, Some(pointee), &self.types).map(drop)
@@ -1664,6 +1677,29 @@ impl Oven {
             }
             _ => Err(Fault::BadDowncast { dynamic: self.dynamic_type(a.ty, off), to }),
         }
+    }
+
+    /// A single-object `delete` of `raw` (static type `pointee`): a base
+    /// class subobject of a `new`ed object is deleted as the whole object
+    /// (`virt`: `pointee` has a virtual destructor, [expr.delete]/3).
+    fn delete_base(&self, raw: u64, pointee: OTy, virt: bool) -> Result<Option<(u64, OTy)>, Fault> {
+        let p = Ptr::decode(raw);
+        if p.is_fn() || !p.is_heap() || p.past {
+            return Ok(None);
+        }
+        let Some(a) = self.mem.alloc_any(p) else { return Ok(None) };
+        let off = u64::from(p.off);
+        if a.ty == pointee
+            || a.flags & flags::ARRAY_NEW != 0
+            || !self.types.has_subobject(a.ty, off, pointee)
+            || self.dynamic_type(a.ty, off) != a.ty
+        {
+            return Ok(None);
+        }
+        if !virt {
+            return Err(Fault::DeleteNonVirtual { stat: pointee, dynamic: a.ty });
+        }
+        Ok(Some((Ptr::with_off(raw, 0, false), a.ty)))
     }
 
     /// The most derived object containing the byte at `off` of an object

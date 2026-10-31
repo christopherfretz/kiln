@@ -220,6 +220,14 @@ impl Oven {
                 extra.push(Note::new(ast.decls.get(d).loc(), "declared here"));
                 (site.loc, format!("pure virtual function '{}' called", qualified_name(ast, d)))
             }
+            Fault::DeleteNonVirtual { stat, dynamic } => (
+                site.loc,
+                format!(
+                    "delete of object with dynamic type '{}' through pointer to base class type '{}' with non-virtual destructor",
+                    self.tname(ast, dynamic),
+                    self.tname(ast, stat)
+                ),
+            ),
             Fault::UnknownDynamic { ak: k, p, ty } => {
                 let d = self.ptr_string(ast, p, ty);
                 (

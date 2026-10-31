@@ -13,6 +13,7 @@ use kiln_ast::expr::{CastKind, ExprFlags, ExprKind};
 use kiln_ast::names::OverloadedOperator;
 use kiln_ast::{Ast, DeclId, ExprId, QualType};
 
+use super::class::Callee;
 use super::{Access, Compiler, skip_parens};
 use crate::kbc::{Op, cmp, int_aux, new_aux};
 use crate::mem::Origin;
@@ -243,6 +244,32 @@ impl Compiler<'_> {
         }
         let pointee = self.ty(pq);
         let p = self.rv(arg);
+        // [expr.delete]/3: through a base class with a virtual destructor,
+        // the most-derived object is destroyed and freed (aux 4).
+        let vdtor = if array { None } else { self.virtual_dtor(pointee) };
+        if let Some(d) = vdtor {
+            self.emit_at(Op::Delete, 2 | 4, &[p, pointee.0], e);
+            let m = self.next;
+            let c = self.reg();
+            self.emit(Op::PtrToBool, 0, &[c, p]);
+            let skip = self.jmp_if(c, false);
+            let loc = self.ast().exprs.get(e).loc();
+            let void = self.ety(e);
+            self.call_frame(
+                e,
+                Callee::Virtual(d, pointee),
+                void,
+                None,
+                Some(p),
+                &[],
+                &[],
+                Some(loc),
+            );
+            self.patch_here(skip);
+            self.next = m;
+            self.emit_at(Op::Delete, 4, &[p, pointee.0], e);
+            return;
+        }
         if self.dtor_of(pointee).is_some() {
             // [expr.delete]/6: the destructor (of each element, in reverse
             // order) runs first, once the operand is known to be an object
@@ -261,6 +288,16 @@ impl Compiler<'_> {
 }
 
 /// The definition bits of record `r` (empty when it is incomplete).
+impl Compiler<'_> {
+    /// The destructor of class `ty`, if it is virtual.
+    pub(super) fn virtual_dtor(&mut self, ty: OTy) -> Option<DeclId> {
+        let TyKind::Record { decl, .. } = self.kind(ty) else { return None };
+        let ast = self.ast();
+        let d = ast.destructor(decl)?;
+        ast.decls.function(ast.first(d)).is_some_and(|f| f.spec.is_virtual()).then_some(d)
+    }
+}
+
 pub(super) fn record_bits(ast: &Ast, r: DeclId) -> DefinitionBits {
     let def = ast.definition(r).unwrap_or(r);
     ast.decls.record(def).map(|x| x.defn).unwrap_or_default()

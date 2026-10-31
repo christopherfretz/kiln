@@ -66,7 +66,11 @@ pub(crate) struct Virt {
 impl Virt {
     pub fn footprint(&self) -> usize {
         self.map.capacity() * 12
-            + self.infos.iter().map(|i| i.subs.capacity() * 40 + i.vptrs.capacity() * 8).sum::<usize>()
+            + self
+                .infos
+                .iter()
+                .map(|i| i.subs.capacity() * 40 + i.vptrs.capacity() * 8)
+                .sum::<usize>()
             + self.dispatch.capacity() * 48
     }
 }
@@ -99,9 +103,10 @@ impl Oven {
         for (i, s) in graph.iter().enumerate() {
             let ast = b.ast();
             let q = class_qtype(ast, s.class).unwrap_or(QualType::INT);
-            let poly = ast.definition(s.class).and_then(|d| ast.decls.record(d)).is_some_and(|r| {
-                r.defn.contains(kiln_ast::decl::DefinitionBits::POLYMORPHIC)
-            });
+            let poly = ast
+                .definition(s.class)
+                .and_then(|d| ast.decls.record(d))
+                .is_some_and(|r| r.defn.contains(kiln_ast::decl::DefinitionBits::POLYMORPHIC));
             let cty = self.types.intern(b, q);
             let (off, virt) = if i == 0 {
                 (0, false)
@@ -141,8 +146,12 @@ impl Oven {
         for k in 0..n {
             let off = self.virt.infos[i as usize].vptrs[k];
             let p = Ptr::with_off(raw, u64::from(Ptr::decode(raw).off) + off, false);
-            self.write_vptr(p, word(cls, off))
-                .map_err(|f| Fault::Mem { f, ak: ak::INIT, ty: cls, p: raw })?;
+            self.write_vptr(p, word(cls, off)).map_err(|f| Fault::Mem {
+                f,
+                ak: ak::INIT,
+                ty: cls,
+                p: raw,
+            })?;
         }
         Ok(())
     }
@@ -234,7 +243,13 @@ impl Oven {
 
     /// The subobject of the dynamic type `c` at offset `ott` whose class
     /// is `cls`: the subobject `raw` designates, viewed as part of `c`.
-    pub(crate) fn locate(&mut self, b: &mut dyn SemaBridge, c: OTy, ott: u64, cls: OTy) -> Option<(u32, u16)> {
+    pub(crate) fn locate(
+        &mut self,
+        b: &mut dyn SemaBridge,
+        c: OTy,
+        ott: u64,
+        cls: OTy,
+    ) -> Option<(u32, u16)> {
         let i = self.poly_info(b, c);
         let k = self.virt.infos[i as usize]
             .subs
