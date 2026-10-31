@@ -9,7 +9,7 @@ Header probe (`kiln -std=c++26 -stdlib=libc++ -fsyntax-only -ferror-limit=0`):
 ## Steps
 1. [x] Non-capturing lambdas end to end (parse, sema closure class, Oven, codegen, dump)
 2. [x] Captures (except packs and braced/paren init-captures)
-3. [ ] Generic lambdas
+3. [x] Generic lambdas
 4. [ ] spec/sema-lambda.md, ast.md/abi.md rows
 5. [ ] Tests (conformance >= 40, codegen corpus, xtask clang-ast LambdaExpr)
 
@@ -34,4 +34,14 @@ Header probe (`kiln -std=c++26 -stdlib=libc++ -fsyntax-only -ferror-limit=0`):
   capture members and captured arrays (matches clang -fexceptions). Oven:
   closure member places, captured `this`/`*this`. Merged main at 19aa409.
   Step 2 done: `ci --quick` green at 39e190d (1526/1542, 35 lambda tests).
-- Step 3 (generic lambdas) in progress.
+- WIP 9-11: generic lambdas. Call operator is a FunctionTemplate (invented
+  `auto` parameters + explicit template-parameter-list + requires-clause);
+  conversion function and `__invoke` are FunctionTemplates sharing its
+  parameter list; conversion deduction (P = `auto(*)(T...)`, return type
+  taken from the target) then specializes the call operator to deduce its
+  return type and types the conversion/invoker specs from it (mismatch fails
+  the conversion sequence like clang). decltype(auto) mangles `Dc`;
+  dependent void return deduction deferred to instantiation; local-scope
+  qualified names in instantiation notes (`f()::(anonymous class)::...`).
+  42 lambda tests (40 pass, 2 xfail: lambdas in templates).
+- Step 3 done. Next: merge main, lambdas in templates (LambdaExpr subst).
