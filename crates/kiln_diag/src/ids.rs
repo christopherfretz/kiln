@@ -862,6 +862,12 @@ diag_ids! {
     sema_defaulted_default_args = Error (1) "an explicitly-defaulted {0:default constructor|copy constructor|move constructor|copy assignment operator|move assignment operator|destructor} cannot have default arguments";
     sema_out_of_line_default_deletes = Error (1) "defaulting this {0:default constructor|copy constructor|move constructor|copy assignment operator|move assignment operator|destructor} would delete it after its first declaration";
     note_defaulted_deleted_here = Note (0) "explicitly defaulted function was implicitly deleted here";
+    sema_cmp_category_not_found = Error (2) "cannot {1:use builtin operator '<=>'|default 'operator<=>'} because type '{0}' was not found; include <compare>";
+    sema_std_compare_member_form = Error (3) "standard library implementation of {0} is not supported; member '{1}' {2:does not have expected form|is missing}";
+    sema_std_compare_type_form = Error (2) "standard library implementation of {0} is not supported; the type {1:is not trivially copyable|does not have the expected form}";
+    sema_spaceship_narrowing_var = Error (2) "argument to 'operator<=>' cannot be narrowed from type {0} to {1}";
+    sema_spaceship_narrowing_const = Error (2) "argument to 'operator<=>' evaluates to {0}, which cannot be narrowed to type {1}";
+    sema_ordered_pointer_zero = Error (2) "ordered comparison between pointer and zero ({0} and {1})";
     note_explicitly_deleted_here = Note (1) "{0} has been explicitly marked deleted here";
     note_candidate_deleted = Note (1) "candidate function has been {0:explicitly|implicitly} deleted";
     note_deleted_subobject = Note (6) "{0:default constructor|copy constructor|move constructor|copy assignment operator|move assignment operator|destructor} of {1} is implicitly deleted because {2:base class|field|variant field} {3} has {4:no|a deleted|multiple|an inaccessible|a non-trivial} {5}";

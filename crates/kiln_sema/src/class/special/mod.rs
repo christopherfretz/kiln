@@ -185,6 +185,8 @@ pub(crate) struct SpecialState {
     /// The shared `false` operand of the resolved `noexcept(false)`
     /// specifications of implicit special members (`excspec`).
     pub noexcept_false: Option<ExprId>,
+    /// Defaulted comparison operator state (`class/compare.rs`).
+    pub cmp: crate::class::compare::CompareState,
 }
 
 impl Sema<'_, '_> {

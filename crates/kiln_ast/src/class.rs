@@ -355,6 +355,9 @@ pub struct CmpCategoryInfo {
     /// The static data member for each [`CmpResult`] (indexed by its
     /// discriminant) the category declares.
     pub values: [Option<DeclId>; 5],
+    /// The value of the data member of each of `values` (clang's
+    /// `ValueInfo::getIntValue`), 0 where absent.
+    pub ints: [i64; 5],
 }
 
 impl CmpCategoryInfo {
@@ -367,6 +370,20 @@ impl CmpCategoryInfo {
     /// `getEqualOrEquiv`).
     pub fn equal_or_equiv(&self) -> Option<DeclId> {
         self.value(CmpResult::Equal).or(self.value(CmpResult::Equivalent))
+    }
+
+    /// The integer value of `r`'s static data member.
+    pub fn int(&self, r: CmpResult) -> i64 {
+        self.ints[r as usize]
+    }
+
+    /// The integer value of `equal` (strong) or `equivalent`.
+    pub fn equal_or_equiv_int(&self) -> i64 {
+        if self.values[CmpResult::Equal as usize].is_some() {
+            self.int(CmpResult::Equal)
+        } else {
+            self.int(CmpResult::Equivalent)
+        }
     }
 }
 
