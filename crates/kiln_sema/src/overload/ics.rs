@@ -842,6 +842,7 @@ impl Sema<'_, '_> {
         let mut found = std::mem::take(&mut set.found);
         found.clear();
         found.extend(self.ast.constructors(c).iter());
+        found.extend(self.ctor_shadows(c));
         self.add_found_candidates(set, &found, CandidateKind::Ctor, first_opts, list_only);
         set.found = found;
     }
@@ -865,10 +866,25 @@ impl Sema<'_, '_> {
             DeclKind::CXXMethod
         };
         let mut seen: Vec<DeclId> = Vec::with_capacity(found.len());
-        for &f in found {
+        for &fd in found {
+            // An inherited constructor is its base constructor found
+            // through its shadow ([namespace.udecl]/13,
+            // [over.match.funcs.general]/8).
+            let mut f = fd;
+            if self.kind_of(fd) == DeclKind::ConstructorUsingShadow {
+                if kind != CandidateKind::Ctor {
+                    continue;
+                }
+                let Some(t) = self.ast.using_target(fd) else { continue };
+                f = t;
+            }
             let k = self.kind_of(f);
+            let n = set.cands.len();
             if k == DeclKind::FunctionTemplate {
-                self.add_found_template(set, f, want, kind, first_opts, list_only, &mut seen);
+                self.add_found_template(set, f, fd, want, kind, first_opts, list_only, &mut seen);
+                if fd != f {
+                    self.exclude_inhctor_slice(set, n, fd);
+                }
                 continue;
             }
             if k != want || self.ast.decls.get(f).has(DeclFlags::INVALID) {
@@ -885,7 +901,57 @@ impl Sema<'_, '_> {
             if self.ast.decls.cold.requires_clause.contains(f) {
                 set.uncertain = true;
             }
-            self.add_candidate(set, f, f, kind, first_opts);
+            self.add_candidate(set, f, fd, kind, first_opts);
+            if fd != f {
+                self.exclude_inhctor_slice(set, n, fd);
+            }
+        }
+    }
+
+    /// [over.match.funcs.general]/8 (clang `AddOverloadCandidate`): an
+    /// inherited constructor of class C whose first parameter is a
+    /// reference to P is not viable for a single argument when the
+    /// constructed class D is reference-related to P and P to C (it
+    /// would copy or move a base subobject).
+    fn exclude_inhctor_slice(
+        &mut self,
+        set: &mut super::OverloadCandidateSet,
+        n: usize,
+        shadow: DeclId,
+    ) {
+        if set.args.len() != 1 {
+            return;
+        }
+        let Some(cand) = set.cands.get(n) else { return };
+        if !cand.viable {
+            return;
+        }
+        let f = cand.func();
+        let params = self.param_decls(f);
+        let Some(&p0) = params.first() else { return };
+        let pty = self.ast.decls.get(p0).ty().unwrap_or(QualType::ERROR);
+        if !self.ast.types.is_reference(pty) {
+            return;
+        }
+        let moving = self.ast.types.canonical_kind(pty) == kiln_ast::types::TypeKind::RValueRef;
+        let Some(p) = self.ast.types.pointee(pty) else { return };
+        let (Some(c), Some(d)) =
+            (self.ast.decls.get(f).ctx(), self.ast.decls.get(shadow).ctx())
+        else {
+            return;
+        };
+        let (cty, dty) = (self.class_type(c), self.class_type(d));
+        let related = |s: &Self, a: QualType, b: QualType| {
+            s.ast.types.same_unqualified(a, b)
+                || match (s.ast.types.as_record(a), s.ast.types.as_record(b)) {
+                    (Some(x), Some(y)) => is_derived_from(s, x, y),
+                    _ => false,
+                }
+        };
+        if related(self, p, cty) && related(self, dty, p) {
+            let c = &mut set.cands[n];
+            c.viable = false;
+            c.failure = CandidateFailure::InhCtorSlice { moving };
         }
     }
 
@@ -901,6 +967,7 @@ impl Sema<'_, '_> {
         &mut self,
         set: &mut super::OverloadCandidateSet,
         ft: DeclId,
+        found: DeclId,
         want: DeclKind,
         kind: CandidateKind,
         first_opts: IcsOptions,
@@ -924,7 +991,7 @@ impl Sema<'_, '_> {
         }
         let n = set.cands.len();
         let loc = set.loc;
-        self.add_template_candidate(set, ft, ft, None, kind, first_opts, loc);
+        self.add_template_candidate(set, ft, found, None, kind, first_opts, loc);
         if kind == CandidateKind::Ctor
             && set.args.len() == 1
             && let Some(c) = set.cands.get(n)

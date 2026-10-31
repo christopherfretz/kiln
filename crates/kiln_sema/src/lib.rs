@@ -264,6 +264,11 @@ pub struct Sema<'a, 'sm> {
     /// their templates per specialization.
     pub(crate) friend_specs: kiln_source::fx::FxHashMap<DeclId, class::friend::FriendSpec>,
     pub(crate) inherited_defaults: kiln_source::fx::FxHashMap<DeclId, kiln_ast::types::TemplateArg>,
+    /// The inheriting constructors declared, by (derived class, base
+    /// constructor) (WP-114, clang `findInheritingConstructor`'s lookup).
+    pub(crate) inh_ctors: kiln_source::fx::FxHashMap<(DeclId, DeclId), DeclId>,
+    /// The base constructor of each inheriting constructor.
+    pub(crate) inh_ctor_base: kiln_source::fx::FxHashMap<DeclId, DeclId>,
     /// The `this` type of the default member initializers being parsed,
     /// innermost last, with their fields (`C*`, spec/sema-class.md §2.5).
     pub(crate) nsdmi_this: Vec<(DeclId, QualType)>,
@@ -370,6 +375,8 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             friend_tag: None,
             friend_class_template: None,
             inherited_defaults: kiln_source::fx::FxHashMap::default(),
+            inh_ctors: kiln_source::fx::FxHashMap::default(),
+            inh_ctor_base: kiln_source::fx::FxHashMap::default(),
             friend_specs: kiln_source::fx::FxHashMap::default(),
             nsdmi_this: Vec::new(),
             initializing: None,

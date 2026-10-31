@@ -46,14 +46,27 @@ impl Sema<'_, '_> {
         if self.cmp_kind(first).is_some() {
             return self.resolve_cmp_exc(first);
         }
-        let Some(k) = self.special_kind_of(first) else { return false };
+        // An inheriting constructor: its inherited constructors, then
+        // as a default constructor (clang
+        // `ComputeInheritingCtorExceptionSpec`).
+        let inherited = if self.inherited_ctor_base(first).is_some() {
+            self.inherited_bases(first)
+        } else {
+            Vec::new()
+        };
+        let k = if inherited.is_empty() {
+            let Some(k) = self.special_kind_of(first) else { return false };
+            k
+        } else {
+            SpecialKind::DefaultCtor
+        };
         let Some(ctx) = self.ast.decls.get(first).ctx() else { return false };
         let class = self.class_def(ctx);
         let cflags = self.ast.decls.get(class).flags();
         if cflags.contains(DeclFlags::INVALID) || cflags.contains(DeclFlags::DEPENDENT_CTX) {
             return false;
         }
-        let nothrow = self.implicit_nothrow(first, class, k, depth, at);
+        let nothrow = self.implicit_nothrow(first, class, k, &inherited, depth, at);
         let spec = if nothrow {
             ExcSpec::BasicNoexcept
         } else {
@@ -94,6 +107,7 @@ impl Sema<'_, '_> {
         f: DeclId,
         class: DeclId,
         k: SpecialKind,
+        inherited: &[crate::class::inhctor::InheritedBase],
         depth: usize,
         at: Loc,
     ) -> bool {
@@ -106,6 +120,13 @@ impl Sema<'_, '_> {
         }
         for b in subs {
             let Some(bc) = self.base_class(&b) else { continue };
+            let first = self.ast.first(bc);
+            if let Some(ib) = inherited.iter().find(|ib| ib.base == first) {
+                if !self.resolve_exc(ib.ctor, depth + 1, at) {
+                    return false;
+                }
+                continue;
+            }
             let rhs = if const_arg { Quals::CONST } else { Quals::NONE };
             if !self.subobject_nothrow(bc, k, rhs, Quals::NONE, depth, at) {
                 return false;

@@ -4,7 +4,7 @@
 
 use std::cmp::Ordering;
 
-use kiln_ast::decl::{DeclFlags, Defaulted};
+use kiln_ast::decl::{DeclFlags, DeclKind, Defaulted};
 use kiln_ast::types::Quals;
 use kiln_diag::{Diag, DiagId};
 
@@ -48,6 +48,11 @@ impl Sema<'_, '_> {
                 Some(SpecialKind::MoveCtor) => "constructor (the implicit move constructor)",
                 _ => "constructor (the implicit copy constructor)",
             },
+            CandidateKind::Ctor if c.found != f
+                && self.kind_of(c.found) == DeclKind::ConstructorUsingShadow =>
+            {
+                "inherited constructor"
+            }
             CandidateKind::Ctor => "constructor",
             _ if c.rewrite.is_reversed() => "function (with reversed parameter order)",
             CandidateKind::Method if implicit => match self.special_kind_of(f) {
@@ -259,6 +264,13 @@ impl Sema<'_, '_> {
                 let which = u8::from(cand.template.is_some());
                 return self.diag(DiagId::note_ovl_candidate_illegal_constructor, loc).arg(which);
             }
+            CandidateFailure::InhCtorSlice { moving } => {
+                let which = u8::from(cand.template.is_some());
+                return self
+                    .diag(DiagId::note_ovl_candidate_inherited_constructor_slice, loc)
+                    .arg(which)
+                    .arg(u8::from(moving));
+            }
             CandidateFailure::None
             | CandidateFailure::BadFinalConversion
             | CandidateFailure::BadDeduction => {
@@ -290,6 +302,20 @@ impl Sema<'_, '_> {
                 out.push(self.surrogate_note(set.cand(c).func()));
             } else {
                 out.push(self.ovl_note(set, c));
+                // clang `MaybeEmitInheritedConstructorNote`.
+                let found = set.cand(c).found;
+                if self.kind_of(found) == DeclKind::ConstructorUsingShadow {
+                    let nominated = self.ast.decls.ctor_shadow_nominated(found);
+                    let base = nominated
+                        .and_then(|n| self.ast.decls.get(n).ctx())
+                        .or_else(|| self.ast.using_target(found).and_then(|t| self.ast.decls.get(t).ctx()));
+                    if let Some(b) = base {
+                        let ty = self.class_type(b);
+                        let loc = self.ast.decls.get(found).loc();
+                        let d = self.diag(DiagId::note_ovl_candidate_inherited_constructor, loc);
+                        out.push(d.arg(self.ty_arg(ty)));
+                    }
+                }
                 // clang `NoteDeductionGuide`: an implicit guide's notes
                 // say what it was synthesized as.
                 let cand = set.cand(c);

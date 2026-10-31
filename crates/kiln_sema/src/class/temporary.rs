@@ -116,7 +116,9 @@ impl Sema<'_, '_> {
             // A recursive use from the function's own body.
             return;
         }
-        if let Some(kind) = self.special_kind_of(first) {
+        if self.inherited_ctor_base(first).is_some() {
+            self.define_inheriting_ctor(first, loc);
+        } else if let Some(kind) = self.special_kind_of(first) {
             let spec = self.ast.decls.function(first).map(|x| x.spec).unwrap_or_default();
             if spec.defaulted() != Defaulted::No && !spec.is_deleted() {
                 // clang 19 odr-uses a trivial default constructor without

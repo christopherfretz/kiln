@@ -15,6 +15,7 @@ mod compare;
 mod construct;
 mod ctor_select;
 mod ctorinit;
+pub(crate) mod inhctor;
 pub(crate) mod friend;
 mod member_expr;
 mod members;
