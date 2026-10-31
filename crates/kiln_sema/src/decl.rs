@@ -770,6 +770,14 @@ impl Sema<'_, '_> {
         {
             self.error(DiagId::sema_invalid_storage_class_in_func_decl, loc);
         }
+        // [dcl.constexpr]/1, [dcl.constinit]/1: clang `err_invalid_constexpr`.
+        let specs = [ds.constexpr, ds.consteval, ds.constinit];
+        if let Some((which, l)) =
+            specs.iter().enumerate().find_map(|(i, l)| l.map(|l| (i as u8, l)))
+        {
+            let m = self.diag(DiagId::sema_param_constexpr_spec, l).arg(which);
+            self.emit(m);
+        }
         if self.ast.types.is_array(ty) {
             let elem = self.ast.types.element(ty).unwrap_or(QualType::ERROR);
             ty = self.ast.types.pointer_to(elem);

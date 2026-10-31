@@ -177,7 +177,10 @@ impl Sema<'_, '_> {
     /// A reference `e` to function `d`: recorded when `d` is immediate
     /// and `e` is not exempt ([expr.const]/17).
     pub(crate) fn note_immediate_ref(&mut self, e: ExprId, d: DeclId) {
-        if self.is_immediate_fn(d) && !self.immediate_exempt() {
+        if self.is_immediate_fn(d)
+            && !self.immediate_exempt()
+            && !self.imm.pending.refs.contains(&e)
+        {
             self.imm.pending.refs.push(e);
         }
     }
@@ -286,7 +289,7 @@ impl Sema<'_, '_> {
             let msg = self
                 .diag(DiagId::sema_immediate_address, loc)
                 .arg(u8::from(consteval))
-                .arg(self.qualified_decl_name(d))
+                .arg(self.unqualified_decl_name(d))
                 .with_note(self.diag(DiagId::note_declared_at, self.ast.decls.get(d).loc()));
             self.emit(msg);
         }

@@ -637,6 +637,7 @@ diag_ids! {
     sema_constexpr_non_literal = Error (0) "constexpr can only be used in variable and function declarations";
     sema_consteval_wrong_decl_kind = Error (0) "consteval can only be used in function declarations";
     sema_consteval_dtor = Error (0) "destructor cannot be declared consteval";
+    sema_param_constexpr_spec = Error (1) "function parameter cannot be {0:constexpr|consteval|constinit}";
     sema_constexpr_main = Error (1) "'main' is not allowed to be declared {0:constexpr|consteval}";
     sema_constexpr_redecl_mismatch = Error (3) "{0:non-constexpr|constexpr|consteval} declaration of '{1}' follows {2:non-constexpr|constexpr|consteval} declaration";
     sema_immediate_call_non_constant = Error (2) "call to {0:immediate|consteval} function '{1}' is not a constant expression";

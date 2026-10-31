@@ -1364,9 +1364,17 @@ impl<'a> Printer<'a, '_> {
                     first.line.insert_str(0, "array_filler: ");
                 }
             }
+            // A prvalue without a value is an immediate invocation not yet
+            // evaluated: nested in another, or in a constant initializer.
+            "ConstantExpr"
+                if text(n, "value").is_none() && text(n, "valueCategory") == Some("prvalue") =>
+            {
+                line = self.expr_head(n, k)?;
+                kids_out = self.kid_trees(n)?;
+            }
             "ConstantExpr" => {
                 let v = text(n, "value").ok_or_else(|| {
-                    "clang-ast: ConstantExpr without a value (an lvalue or unevaluated \
+                    "clang-ast: ConstantExpr without a value (an lvalue \
                      constant) is not supported"
                         .to_string()
                 })?;

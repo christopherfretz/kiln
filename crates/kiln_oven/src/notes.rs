@@ -871,7 +871,12 @@ impl Oven {
                         format!("initializer of '{name}' is unknown")
                     } else if vi.usable {
                         format!("initializer of '{name}' is not a constant expression")
-                    } else if vi.is_const {
+                    } else if vi.is_const || {
+                        // clang `findCompleteObject`: only a non-const
+                        // integral or enumeration variable is "non-const".
+                        let c = ast.types.canonical(vi.ty);
+                        !(ast.types.is_integral(c) || ast.types.as_enum(c).is_some())
+                    } {
                         format!(
                             "read of non-constexpr variable '{name}' is not allowed in a constant expression"
                         )

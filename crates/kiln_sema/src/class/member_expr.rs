@@ -979,6 +979,8 @@ impl Sema<'_, '_> {
             } else {
                 self.exc_spec_needed(d, at);
             }
+            // [expr.const]/18: `&C::f` of an immediate member function.
+            self.note_immediate_ref(operand, d);
         }
         let class_ty = self.tag_type(class).ty();
         let mp = self.ast.types.member_pointer(declared, class_ty);

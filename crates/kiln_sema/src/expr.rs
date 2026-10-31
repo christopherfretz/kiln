@@ -867,7 +867,14 @@ impl Sema<'_, '_> {
             self.check_member_access(via, naming, object, loc);
         }
         if self.is_class_member_ref(d) {
-            return self.implicit_member_ref(d, loc, found.shadow(0), nns);
+            let e = self.implicit_member_ref(d, loc, found.shadow(0), nns);
+            if let Some(b) = begin
+                && b != loc
+                && self.ast.exprs.get(e).kind() == ExprKind::DeclRefExpr
+            {
+                let _ = self.ast.templates.expr_begin.insert(e, b);
+            }
+            return e;
         }
         let e = self.build_decl_ref_qualified(d, loc, found.shadow(0), nns);
         // clang's `getBeginLoc` of a qualified name is the qualifier's.
@@ -3446,7 +3453,7 @@ impl Sema<'_, '_> {
                 .arg(self.ty_arg(self.ety(e)))
                 .arg(self.ty_arg(ty));
             let site = crate::class::ConstructSite {
-                loc: self.begin_loc(e),
+                loc,
                 temp_end: None,
                 rparen: None,
                 sites: crate::class::DiagSites {

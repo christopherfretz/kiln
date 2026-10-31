@@ -1,0 +1,65 @@
+TranslationUnitDecl
+|-FunctionDecl consteval sq 'int (int)' implicit-inline
+| |-ParmVarDecl used x 'int'
+| `-CompoundStmt
+|   `-ReturnStmt
+|     `-BinaryOperator 'int' '*'
+|       |-ImplicitCastExpr 'int' <LValueToRValue>
+|       | `-DeclRefExpr 'int' lvalue ParmVar 'x' 'int'
+|       `-ImplicitCastExpr 'int' <LValueToRValue>
+|         `-DeclRefExpr 'int' lvalue ParmVar 'x' 'int'
+|-CXXRecordDecl struct S definition
+| |-FieldDecl referenced v 'int'
+| |-CXXConstructorDecl consteval S 'void (int)' implicit-inline
+| | |-ParmVarDecl used x 'int'
+| | |-CXXCtorInitializer Field 'v' 'int'
+| | | `-ImplicitCastExpr 'int' <LValueToRValue>
+| | |   `-DeclRefExpr 'int' lvalue ParmVar 'x' 'int'
+| | `-CompoundStmt
+| |-CXXMethodDecl consteval get 'int () const' implicit-inline
+| | `-CompoundStmt
+| |   `-ReturnStmt
+| |     `-ImplicitCastExpr 'int' <LValueToRValue>
+| |       `-MemberExpr 'const int' lvalue ->v
+| |         `-CXXThisExpr 'const S *' implicit this
+| |-CXXConversionDecl consteval operator long 'long () const' implicit-inline
+| | `-CompoundStmt
+| |   `-ReturnStmt
+| |     `-ImplicitCastExpr 'long' <IntegralCast>
+| |       `-ImplicitCastExpr 'int' <LValueToRValue>
+| |         `-MemberExpr 'const int' lvalue ->v
+| |           `-CXXThisExpr 'const S *' implicit this
+| `-CXXMethodDecl consteval twice 'int (int)' static implicit-inline
+|   |-ParmVarDecl used x 'int'
+|   `-CompoundStmt
+|     `-ReturnStmt
+|       `-BinaryOperator 'int' '*'
+|         |-IntegerLiteral 'int' 2
+|         `-ImplicitCastExpr 'int' <LValueToRValue>
+|           `-DeclRefExpr 'int' lvalue ParmVar 'x' 'int'
+|-CXXRecordDecl struct V definition
+| `-CXXMethodDecl consteval vf 'int () const' virtual implicit-inline
+|   `-CompoundStmt
+|     `-ReturnStmt
+|       `-IntegerLiteral 'int' 1
+|-FunctionTemplateDecl ident
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| `-FunctionDecl consteval ident 'T (T)' implicit-inline
+|   |-ParmVarDecl referenced t 'T'
+|   `-CompoundStmt
+|     `-ReturnStmt
+|       `-ImplicitCastExpr 'T' xvalue <NoOp>
+|         `-DeclRefExpr 'T' lvalue ParmVar 't' 'T'
+|-VarDecl lam '(lambda at tests/conformance/ast/dcl.constexpr/consteval-decls.cpp:14:12)' cinit
+| `-LambdaExpr '(lambda at tests/conformance/ast/dcl.constexpr/consteval-decls.cpp:14:12)'
+|   `-CompoundStmt
+|     `-ReturnStmt
+|       `-BinaryOperator 'int' '+'
+|         |-ImplicitCastExpr 'int' <LValueToRValue>
+|         | `-DeclRefExpr 'int' lvalue ParmVar 'y' 'int'
+|         `-IntegerLiteral 'int' 1
+|-FunctionDecl consteval forward_declared 'int ()' implicit-inline
+`-FunctionDecl consteval forward_declared 'int ()' implicit-inline
+  `-CompoundStmt
+    `-ReturnStmt
+      `-IntegerLiteral 'int' 3

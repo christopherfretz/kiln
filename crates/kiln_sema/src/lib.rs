@@ -515,6 +515,15 @@ impl<'a, 'sm> Sema<'a, 'sm> {
         s
     }
 
+    /// The unqualified name of `d` with its template arguments, as clang
+    /// prints a `NamedDecl` argument without the `q` modifier.
+    pub fn unqualified_decl_name(&self, d: DeclId) -> String {
+        use kiln_ast::types::TypeNames as _;
+        let mut s = String::new();
+        names::SemaNames::new(self).write_decl_name(d, false, &mut s);
+        s
+    }
+
     /// A nested-name-specifier as written (`N::M::`, `::`).
     pub fn nns_str(&self, n: kiln_ast::ids::NnsId) -> String {
         let mut s = String::new();

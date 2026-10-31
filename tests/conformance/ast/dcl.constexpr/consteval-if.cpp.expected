@@ -1,0 +1,59 @@
+TranslationUnitDecl
+|-FunctionDecl used consteval sq 'int (int)' implicit-inline
+| |-ParmVarDecl used x 'int'
+| `-CompoundStmt
+|   `-ReturnStmt
+|     `-BinaryOperator 'int' '*'
+|       |-ImplicitCastExpr 'int' <LValueToRValue>
+|       | `-DeclRefExpr 'int' lvalue ParmVar 'x' 'int'
+|       `-ImplicitCastExpr 'int' <LValueToRValue>
+|         `-DeclRefExpr 'int' lvalue ParmVar 'x' 'int'
+|-FunctionDecl used constexpr pick 'int (int)' implicit-inline
+| |-ParmVarDecl used x 'int'
+| `-CompoundStmt
+|   `-IfStmt has_else consteval
+|     |-CompoundStmt
+|     | `-ReturnStmt
+|     |   `-CallExpr 'int'
+|     |     |-ImplicitCastExpr 'int (*)(int)' <FunctionToPointerDecay>
+|     |     | `-DeclRefExpr 'int (int)' lvalue Function 'sq' 'int (int)'
+|     |     `-ImplicitCastExpr 'int' <LValueToRValue>
+|     |       `-DeclRefExpr 'int' lvalue ParmVar 'x' 'int'
+|     `-CompoundStmt
+|       `-ReturnStmt
+|         `-ImplicitCastExpr 'int' <LValueToRValue>
+|           `-ImplicitCastExpr 'int' xvalue <NoOp>
+|             `-DeclRefExpr 'int' lvalue ParmVar 'x' 'int'
+|-FunctionDecl used constexpr neg 'int (int)' implicit-inline
+| |-ParmVarDecl used x 'int'
+| `-CompoundStmt
+|   |-IfStmt !consteval
+|   | `-CompoundStmt
+|   |   `-ReturnStmt
+|   |     `-UnaryOperator 'int' prefix '-'
+|   |       `-ImplicitCastExpr 'int' <LValueToRValue>
+|   |         `-DeclRefExpr 'int' lvalue ParmVar 'x' 'int'
+|   `-ReturnStmt
+|     `-BinaryOperator 'int' '+'
+|       |-ConstantExpr 'int' value=16
+|       | `-CallExpr 'int'
+|       |   |-ImplicitCastExpr 'int (*)(int)' <FunctionToPointerDecay>
+|       |   | `-DeclRefExpr 'int (int)' lvalue Function 'sq' 'int (int)'
+|       |   `-IntegerLiteral 'int' 4
+|       `-ImplicitCastExpr 'int' <LValueToRValue>
+|         `-DeclRefExpr 'int' lvalue ParmVar 'x' 'int'
+`-FunctionDecl run 'int (int)'
+  |-ParmVarDecl used n 'int'
+  `-CompoundStmt
+    `-ReturnStmt
+      `-BinaryOperator 'int' '+'
+        |-CallExpr 'int'
+        | |-ImplicitCastExpr 'int (*)(int)' <FunctionToPointerDecay>
+        | | `-DeclRefExpr 'int (int)' lvalue Function 'pick' 'int (int)'
+        | `-ImplicitCastExpr 'int' <LValueToRValue>
+        |   `-DeclRefExpr 'int' lvalue ParmVar 'n' 'int'
+        `-CallExpr 'int'
+          |-ImplicitCastExpr 'int (*)(int)' <FunctionToPointerDecay>
+          | `-DeclRefExpr 'int (int)' lvalue Function 'neg' 'int (int)'
+          `-ImplicitCastExpr 'int' <LValueToRValue>
+            `-DeclRefExpr 'int' lvalue ParmVar 'n' 'int'
