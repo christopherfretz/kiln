@@ -513,7 +513,7 @@ struct StmtNode { kind: StmtKind /*u8*/, flags: u8, aux: u16, loc: Loc, a: u32, 
 | `AttributedStmt` | attrs `ListId` + sub (`[[likely]]`, `[[fallthrough]]`, `[[assume(e)]]`) |
 | `CXXForRangeStmt` | clang's desugaring, all slots kept: `{init, range_var DeclStmt, begin DeclStmt, end DeclStmt, cond, inc, loop_var DeclStmt, body}`; for C++26 lifetime extension of temporaries in the range-init (P2718) the range var's init records extended temporaries |
 | `CXXExpansionStmt` (P1306, M6) | `aux` = enumerating / iterating / destructuring; `{init, expansion_var pattern DeclStmt, range (expansion-init-list `ListId` or range expr), body pattern, instantiations: ListId}` where each instantiation is a `CompoundStmt` with the per-element variable; `break`/`continue` target the whole statement |
-| `CXXTryStmt` | `{block, handlers: ListId}`; `CXXCatchStmt {exception_decl or catch-all, block}` |
+| `CXXTryStmt` (WP-100) | `{block, handlers: ListId}` (`try_stmt`, `try_block`, `try_handlers`); `CXXCatchStmt {exception_decl or catch-all, block}` (`catch_stmt`, `catch_var`, `catch_block`). A class-type handler variable's init is a copy from an `OpaqueValueExpr` (`opaque_value_of(ty, vc, loc)`, a builder that makes a sourceless one) |
 | `CoroutineBodyStmt` | side record with clang's fixed slots: body, promise decl, initial/final suspend, exception handler, fallthrough handler, allocate, deallocate, return-value init, result decl, return stmt on alloc failure, param moves `ListId` |
 | `CoreturnStmt` | `{operand, promise call}` |
 | `GCCAsmStmt` | side record: template `StringLitId`, outputs/inputs `ListId` of `(constraint StringLitId, ExprId)`, clobbers, labels; volatile/goto bits |

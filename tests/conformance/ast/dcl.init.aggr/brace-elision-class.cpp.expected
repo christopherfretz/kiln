@@ -1,0 +1,34 @@
+Dumping use:
+FunctionDecl use 'void ()'
+`-CompoundStmt
+  |-DeclStmt
+  | `-VarDecl g 'G[2]' listinit
+  |   `-InitListExpr 'G[2]'
+  |     |-ImplicitCastExpr 'G' <ConstructorConversion>
+  |     | `-CXXConstructExpr 'G' 'void (int)'
+  |     |   `-IntegerLiteral 'int' 1
+  |     `-ImplicitCastExpr 'G' <ConstructorConversion>
+  |       `-CXXConstructExpr 'G' 'void (int)'
+  |         `-IntegerLiteral 'int' 2
+  |-DeclStmt
+  | `-VarDecl a 'A[2]' listinit
+  |   `-InitListExpr 'A[2]'
+  |     |-InitListExpr 'A'
+  |     | |-IntegerLiteral 'int' 1
+  |     | `-IntegerLiteral 'int' 2
+  |     `-InitListExpr 'A'
+  |       |-IntegerLiteral 'int' 3
+  |       `-ImplicitValueInitExpr 'int'
+  `-DeclStmt
+    `-VarDecl p 'G *' cinit
+      `-CXXNewExpr 'G *' array Function 'operator new[]' 'void *(unsigned long)'
+        |-ImplicitCastExpr 'unsigned long' <IntegralCast>
+        | `-IntegerLiteral 'int' 2
+        `-InitListExpr 'G[2]'
+          |-ImplicitCastExpr 'G' <ConstructorConversion>
+          | `-CXXConstructExpr 'G' 'void (int)'
+          |   `-IntegerLiteral 'int' 3
+          `-ImplicitCastExpr 'G' <ConstructorConversion>
+            `-CXXConstructExpr 'G' 'void (int)'
+              `-IntegerLiteral 'int' 4
+

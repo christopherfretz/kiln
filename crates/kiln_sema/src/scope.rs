@@ -59,6 +59,9 @@ pub struct Scope {
     pub using_dirs: Vec<DeclId>,
     /// The NRVO candidate of this scope (spec/sema-class.md §5.5).
     pub nrvo: NrvoState,
+    /// A try-block's compound statement (clang `TryScope`): the search
+    /// for a thrown variable's scope stops here ([class.copy.elision]/3.2).
+    pub try_barrier: bool,
 }
 
 /// The name space (C's "tag" vs "ordinary" split) of a local entry.
@@ -79,6 +82,7 @@ impl Scope {
             locals: Vec::new(),
             using_dirs: Vec::new(),
             nrvo: NrvoState::default(),
+            try_barrier: false,
         }
     }
 

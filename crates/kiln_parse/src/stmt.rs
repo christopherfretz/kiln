@@ -5,7 +5,7 @@ use kiln_ast::stmt::IfKind;
 use kiln_ast::{DeclId, ExprId, StmtId};
 use kiln_diag::DiagId;
 use kiln_lex::Punct;
-use kiln_sema::{Declarator, DeclaratorContext, ScopeKind};
+use kiln_sema::{Chunk, Declarator, DeclaratorContext, ScopeKind};
 use kiln_source::Loc;
 
 use crate::keywords::Kw;
@@ -121,7 +121,8 @@ impl Parser<'_, '_> {
                 }
                 Kw::Return => return self.parse_return(),
                 Kw::Goto => return self.parse_goto(),
-                Kw::Try | Kw::CoReturn | Kw::Asm => {
+                Kw::Try => return self.parse_try_stmt(),
+                Kw::CoReturn | Kw::Asm => {
                     self.unsupported(&format!("'{}' statements", k.spelling()), loc);
                     self.skip_statement();
                     return None;
@@ -315,6 +316,103 @@ impl Parser<'_, '_> {
         let v = v?;
         self.s.act_on_init(v, init);
         Some(self.s.act_on_condition_var(v, name_loc))
+    }
+
+    /// try-block ([except.pre]/1): `try compound-statement handler-seq`,
+    /// at `try` (clang `ParseCXXTryBlock`).
+    fn parse_try_stmt(&mut self) -> Option<StmtId> {
+        let loc = self.bump().span.lo;
+        if !self.at(Punct::LBrace) {
+            let d = self.s.diag(DiagId::parse_expected, self.loc()).arg("'{'");
+            self.emit(d);
+            self.skip_statement();
+            return None;
+        }
+        self.parse_try_block_common(loc)
+    }
+
+    /// The compound statement and handlers of a try-block or a
+    /// function-try-block (clang `ParseCXXTryBlockCommon`), at `{`.
+    pub(crate) fn parse_try_block_common(&mut self, loc: Loc) -> Option<StmtId> {
+        self.s.push_try_scope();
+        let (block, _) = self.parse_compound(false);
+        self.s.pop_scope();
+        if self.at_attr() {
+            // clang `DiagnoseAndSkipCXX11Attributes`.
+            self.skip_attributes();
+        }
+        if !self.at_kw(Kw::Catch) {
+            self.error_here(DiagId::parse_expected_catch);
+            return None;
+        }
+        let mut handlers = Vec::new();
+        while self.at_kw(Kw::Catch) {
+            if let Some(h) = self.parse_handler() {
+                handlers.push(h);
+            }
+        }
+        if handlers.is_empty() {
+            return None;
+        }
+        self.s.act_on_try(loc, block, &handlers)
+    }
+
+    /// handler ([except.pre]/1): `catch ( exception-declaration )
+    /// compound-statement`, at `catch` (clang `ParseCXXCatchBlock`). The
+    /// exception variable lives in the handler's own scope, which the
+    /// compound statement's outermost block may not redeclare
+    /// ([basic.scope.block]/2).
+    fn parse_handler(&mut self) -> Option<StmtId> {
+        let loc = self.bump().span.lo;
+        let Some(lparen) = self.eat(Punct::LParen) else {
+            let d = self.s.diag(DiagId::parse_expected, self.loc()).arg("'('");
+            self.emit(d);
+            return None;
+        };
+        self.s.push_scope(ScopeKind::Control);
+        let var = if self.eat(Punct::Ellipsis).is_some() {
+            None
+        } else {
+            let mut attrs = Vec::new();
+            if self.at_attr() {
+                self.parse_attributes(&mut attrs);
+            }
+            let ctx = DeclaratorContext::Block;
+            let ds = self.parse_decl_specifiers(ctx);
+            let mut d = Declarator::new(ctx, self.loc());
+            self.parse_declarator(&mut d);
+            if d.name.is_none() {
+                // An abstract declarator's identifier location is where
+                // the name would be (clang `ParseDirectDeclarator`): the
+                // first array bound, else the token after the declarator.
+                d.loc = d
+                    .chunks
+                    .iter()
+                    .find_map(|c| match c {
+                        Chunk::Array { loc, .. } => Some(*loc),
+                        _ => None,
+                    })
+                    .unwrap_or_else(|| self.loc());
+            }
+            let base = self.s.type_from_declspec_at(&ds, d.name_loc());
+            self.s.act_on_exception_decl(&ds, base, &d)
+        };
+        if self.eat(Punct::RParen).is_none() {
+            self.expect_closing(Punct::RParen, Punct::LParen, lparen);
+            if !self.at(Punct::LBrace) {
+                self.s.pop_scope();
+                return None;
+            }
+        }
+        if !self.at(Punct::LBrace) {
+            let d = self.s.diag(DiagId::parse_expected, self.loc()).arg("'{'");
+            self.emit(d);
+            self.s.pop_scope();
+            return None;
+        }
+        let (block, _) = self.parse_compound(true);
+        self.s.pop_scope();
+        Some(self.s.act_on_catch(var, block, loc))
     }
 
     /// if-statement ([stmt.if]): `if constexpr? ( init-statement?

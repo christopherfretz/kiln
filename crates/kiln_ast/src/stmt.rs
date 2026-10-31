@@ -306,6 +306,26 @@ impl StmtArena {
         DeclId::from_raw(self.expect(s, &[StmtKind::ReturnStmt]).b)
     }
 
+    /// The try-block of a `CXXTryStmt` ([except.pre]/1).
+    pub fn try_block(&self, s: StmtId) -> StmtId {
+        StmtId::new(self.expect(s, &[StmtKind::CXXTryStmt]).a)
+    }
+
+    /// The handlers of a `CXXTryStmt` (a `ListId` of `CXXCatchStmt`s).
+    pub fn try_handlers(&self, s: StmtId) -> ListId {
+        ListId::new(self.expect(s, &[StmtKind::CXXTryStmt]).b)
+    }
+
+    /// The exception variable of a `CXXCatchStmt`; `None` for `catch (...)`.
+    pub fn catch_var(&self, s: StmtId) -> Option<DeclId> {
+        DeclId::from_raw(self.expect(s, &[StmtKind::CXXCatchStmt]).a)
+    }
+
+    /// The compound statement of a `CXXCatchStmt`.
+    pub fn catch_block(&self, s: StmtId) -> StmtId {
+        StmtId::new(self.expect(s, &[StmtKind::CXXCatchStmt]).b)
+    }
+
     pub(crate) fn live_bytes(&self) -> u64 {
         self.rows().iter().map(|r| r.live_bytes).sum()
     }

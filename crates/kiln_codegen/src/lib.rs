@@ -21,6 +21,7 @@ mod class;
 mod cleanup;
 mod consts;
 mod dyncast;
+mod eh;
 mod expr;
 mod fir;
 mod fold;
@@ -29,6 +30,7 @@ mod memptr;
 mod module;
 mod new_delete;
 mod stmt;
+mod try_catch;
 mod vtable;
 
 use kiln_abi::Target;

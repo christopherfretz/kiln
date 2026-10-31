@@ -681,12 +681,14 @@ clang's `LazilyCreateBuiltin`. kiln knows one builtin,
   pointer to) an incomplete type other than cv `void` (clang's
   `CheckCXXThrowOperand`).
 - The operand is copy-initialized into it after the implicit move
-  ([class.copy.elision]/3).
+  ([class.copy.elision]/3), which applies only when the named local's
+  scope does not extend past the innermost enclosing try-block
+  (`thrown_var_in_scope`, WP-100).
 - In `?:`, a throw operand gives the other operand's type and value
   category ([expr.cond]/2).
 - clang's exemption for system headers is not implemented. The Oven
   treats a `throw` it reaches as not a constant expression; codegen
-  does not lower it yet.
+  lowers it (spec/codegen.md §7b).
 
 ### 5.6 `typeid` (`rtti.rs`)
 `act_on_typeid(Ok(expr) | Err(type), loc, rparen)` ([expr.typeid]):
@@ -927,6 +929,51 @@ and aggregate element types.
 - A redefinition is an error, with a note.
 - Jumps past initializations are not checked yet (M3, [stmt.dcl]/3).
 
+### 7.5 Landed (WP-100): try-blocks (`try_stmt.rs`)
+- `act_on_exception_decl` ([except.handle]/1-3): an rvalue-reference
+  type is `cannot catch exceptions by rvalue reference`; (a pointer or
+  reference to) an incomplete type other than cv `void` is
+  `cannot catch [pointer|reference] to incomplete type T`; an abstract
+  class is the usual abstract-variable error; array and function types
+  decay. A class type by value is copy-initialized from an
+  `OpaqueValueExpr` (clang's `ExceptionDecl` init) and its destructor is
+  checked (access, deleted).
+- With `-fno-exceptions`, `try` is `cannot use 'try' with exceptions
+  disabled` (the statement is still analyzed).
+- `act_on_try`: a `catch (...)` that is not last is `catch-all handler
+  must come last`; a handler whose type is the same as, or a public
+  unambiguous derived class of, an earlier one gets `-Wexceptions`
+  `exception of type T will be caught by earlier handler` with the note
+  `for type U` (clang `CheckCXXTryBlock`, references and pointers
+  compared by their pointee).
+- `push_try_scope` marks the scope a try barrier (`Scope::try_barrier`)
+  for the implicit move of thrown locals (§5.5).
+- Function-try-blocks: `check_function_try_block` (from
+  `act_on_finish_function_def`) diagnoses `return` in a constructor's
+  handler (`return in the catch of a function try block of a
+  constructor is illegal`); falling off a constructor or destructor
+  handler rethrows ([except.handle]/14), so the fall-off analysis
+  (§4.3) treats such handlers as not returning, and a value-returning
+  function's handler that falls off is `-Wreturn-type`.
+- Analysis warnings ([except.spec]/5, [dcl.attr.noreturn]/2), skipped
+  in templates: a `throw` that can escape a non-throwing function is
+  `-Wexceptions` `'f' has a non-throwing exception specification but
+  can still throw` with `function declared non-throwing here` (or the
+  destructor/deallocator note); a `[[noreturn]]` function that can fall
+  off is `-Winvalid-noreturn`.
+- Initialization (one condition in `init.rs`, flagged): brace elision
+  ([dcl.init.aggr]/16) only descends into an aggregate element; a class
+  with a user-provided constructor is copy-initialized from the element
+  instead (`brace-elision-class.cpp` AST golden).
+- **Left (WP-100):** the member-reference-in-handler warning of a
+  constructor/destructor function-try-block ([except.handle]/10); the
+  throw-escape reachability is clang's coarse form (no CFG); a written
+  vs implicit `noexcept` on deallocators in the note; a mem-initializer
+  `arr()` for an array of a class with a user constructor gives an
+  `ImplicitValueInitExpr` (should be a `CXXConstructExpr` per element);
+  `new K[2][3]` of a class with a default constructor has no
+  `CXXConstructExpr` initializer, so codegen calls no constructors.
+
 ## 8. Constant evaluation (`oven_bridge.rs`)
 
 Sema does no constant evaluation of its own: every constant it needs
@@ -1016,10 +1063,8 @@ unscoped enumeration is reported (spec/oven.md "Integration").
   conversions, operator overloading.
 - **Templates:** templates, concepts, packs; `auto` and `decltype`
   beyond the M2 basics. Design: spec/sema-templates.md.
-- **Other language features:** lambdas, exceptions (`try`/`catch`
-  and lowering `throw`; exception specifications, the `noexcept`
-  operator and `throw` are §4.7, §5.3 and §5.5), coroutines,
-  reflection, contracts.
+- **Other language features:** lambdas, coroutines, reflection,
+  contracts. (Exceptions landed with WP-100: §5.5, §7.5.)
 - **WP-064 follow-ups:**
   - prototype scope (§4.3)
   - `dynamic_cast` and polymorphic `typeid`

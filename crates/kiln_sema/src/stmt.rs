@@ -719,7 +719,23 @@ impl Sema<'_, '_> {
             }
         }
         let ret = state.ret;
+        // clang skips its analysis-based warnings once an error occurred
+        // (`hasUncompilableErrorOccurred`), and in dependent contexts.
+        if self.diags.error_count() > 0 || self.in_template() {
+            return;
+        }
+        if self.decl_is_noreturn(state.decl) {
+            // [dcl.attr.noreturn]/2: control reaching the end of a
+            // `noreturn` function (clang `warn_falloff_noreturn_function`,
+            // ahead of the return-type check).
+            if self.falls_off(body) != Falloff::Never {
+                self.error(DiagId::sema_falloff_noreturn, rbrace);
+            }
+            self.check_throw_in_nothrow(state.decl, body);
+            return;
+        }
         if self.ast.types.is_void(ret) || self.is_error_type(ret) {
+            self.check_throw_in_nothrow(state.decl, body);
             return;
         }
         let is_main = self.decl_name(state.decl) == "main"
@@ -729,16 +745,23 @@ impl Sema<'_, '_> {
                 .get(state.decl)
                 .ctx()
                 .is_some_and(|c| self.ast.redecl_context(c) == self.ast.tu);
-        // clang skips its analysis-based warnings once an error occurred
-        // (`hasUncompilableErrorOccurred`).
-        if is_main || self.diags.error_count() > 0 {
-            return;
+        if !is_main {
+            match self.falls_off(body) {
+                Falloff::Never => {}
+                Falloff::Always => self.error(DiagId::sema_falloff_nonvoid, rbrace),
+                Falloff::Maybe => self.error(DiagId::sema_falloff_nonvoid_maybe, rbrace),
+            }
         }
-        match self.falls_off(body) {
-            Falloff::Never => {}
-            Falloff::Always => self.error(DiagId::sema_falloff_nonvoid, rbrace),
-            Falloff::Maybe => self.error(DiagId::sema_falloff_nonvoid_maybe, rbrace),
-        }
+        self.check_throw_in_nothrow(state.decl, body);
+    }
+
+    /// Whether function `f` is declared `[[noreturn]]`.
+    fn decl_is_noreturn(&self, f: DeclId) -> bool {
+        let attrs = self.ast.attrs.of_decl(f);
+        self.ast
+            .lists
+            .iter::<kiln_ast::AttrId>(attrs)
+            .any(|a| self.ast.attrs.get(a).kind == kiln_ast::attr::AttrKind::NORETURN)
     }
 
     /// Whether control can reach the end of `s` (a structural
@@ -812,7 +835,28 @@ impl Sema<'_, '_> {
             }
             StmtKind::ExprStmt => {
                 let e = self.ast.stmts.expr_stmt_expr(s);
-                if self.is_noreturn_call(e) { Falloff::Never } else { Falloff::Always }
+                if self.is_noreturn_call(e) || self.is_throw_stmt_expr(e) {
+                    Falloff::Never
+                } else {
+                    Falloff::Always
+                }
+            }
+            StmtKind::CXXTryStmt => {
+                // clang's CFG makes every handler a successor of the
+                // try-block's entry ([except.handle]).
+                let mut parts = vec![self.falls_off(self.ast.stmts.try_block(s))];
+                let handlers: Vec<StmtId> =
+                    self.ast.lists.iter(self.ast.stmts.try_handlers(s)).collect();
+                for h in handlers {
+                    parts.push(self.falls_off(self.ast.stmts.catch_block(h)));
+                }
+                if parts.iter().all(|&p| p == Falloff::Never) {
+                    Falloff::Never
+                } else if parts.iter().all(|&p| p == Falloff::Always) {
+                    Falloff::Always
+                } else {
+                    Falloff::Maybe
+                }
             }
             _ => Falloff::Always,
         }
@@ -848,7 +892,7 @@ impl Sema<'_, '_> {
         }
     }
 
-    fn children(&self, s: StmtId) -> Vec<StmtId> {
+    pub(crate) fn children(&self, s: StmtId) -> Vec<StmtId> {
         let st = &self.ast.stmts;
         let n = st.get(s);
         match n.kind() {
@@ -864,6 +908,10 @@ impl Sema<'_, '_> {
             StmtKind::CaseStmt => vec![st.case_data(s).sub],
             StmtKind::DefaultStmt => vec![st.default_sub(s)],
             StmtKind::LabelStmt => vec![StmtId::new(n.b())],
+            StmtKind::CXXTryStmt => std::iter::once(st.try_block(s))
+                .chain(self.ast.lists.iter::<StmtId>(st.try_handlers(s)))
+                .collect(),
+            StmtKind::CXXCatchStmt => vec![st.catch_block(s)],
             _ => Vec::new(),
         }
     }

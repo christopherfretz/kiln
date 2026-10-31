@@ -1434,8 +1434,22 @@ impl<'a> Printer<'a, '_> {
                     }
                 }
             }
+            "CXXCatchStmt" => {
+                // `catch (...)` has an absent exception-declaration slot
+                // (`{"id": "0x0"}`), which kiln does not print
+                // (spec/ast-dump.md §3).
+                line = k.to_owned();
+                for slot in kids(n) {
+                    if !is_null(slot)
+                        && !kind(slot).is_empty()
+                        && let Some(t) = self.node(slot)?
+                    {
+                        kids_out.push(t);
+                    }
+                }
+            }
             "CompoundStmt" | "DeclStmt" | "NullStmt" | "ReturnStmt" | "BreakStmt"
-            | "ContinueStmt" | "DefaultStmt" | "CaseStmt" | "DoStmt" => {
+            | "ContinueStmt" | "DefaultStmt" | "CaseStmt" | "DoStmt" | "CXXTryStmt" => {
                 line = k.to_owned();
                 kids_out = self.kid_trees(n)?;
             }
@@ -1620,7 +1634,12 @@ impl<'a> Printer<'a, '_> {
     fn var(&mut self, n: &'a Json) -> Res<String> {
         let class = kind(n);
         let mut l = self.head(n, class);
-        push_word(&mut l, name(n).ok_or("clang-ast: VarDecl without a name")?);
+        // A handler's exception declaration may be unnamed ([except.pre]/1).
+        if class == "VarDecl" {
+            push_opt(&mut l, name(n));
+        } else {
+            push_word(&mut l, name(n).ok_or("clang-ast: VarDecl without a name")?);
+        }
         push_word(&mut l, &type_pair(n.get("type"), "VarDecl")?);
         match class {
             "VarTemplatePartialSpecializationDecl" => {
