@@ -234,7 +234,7 @@ impl Sema<'_, '_> {
         let t = self.ety(xi);
         let arg_class = self.ast.types.as_record(t);
         let overloadable = arg_class.is_some() || self.ast.types.as_enum(t).is_some();
-        let (set, out, _, _) = self.oper_set(
+        let (mut set, out, _, _) = self.oper_set(
             OperForm::Binary(bop),
             op,
             &[xi, xi],
@@ -288,7 +288,13 @@ impl Sema<'_, '_> {
                     let fname = cx.fname.clone();
                     let (kind, decl) = (sub.kind, sub.decl.clone());
                     let loc = sub.loc;
-                    let ac_arg = self.decl_arg(ac);
+                    // clang appends the declaring class of the callee.
+                    let owner = cand
+                        .decl
+                        .and_then(|d| self.declaring_class(d))
+                        .or_else(|| self.declaring_class(cand.found))
+                        .unwrap_or(ac);
+                    let ac_arg = self.decl_arg(owner);
                     if let Some(d) = self.cmp_member_access(cand.found, ac, object, cx.from, |s, prot| {
                         s.diag(DiagId::note_defaulted_cmp_inaccessible, loc)
                             .arg(&fname)
@@ -369,6 +375,10 @@ impl Sema<'_, '_> {
                         .arg(sub.kind)
                         .arg(&sub.decl);
                     cx.notes.push(d);
+                    // clang notes these candidates with no operator
+                    // spelling and an invalid location.
+                    set.builtin_op = None;
+                    set.loc = Loc::INVALID;
                     let ns = self.ovl_notes(&set, true);
                     cx.notes.extend(ns);
                 }

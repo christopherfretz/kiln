@@ -17,12 +17,21 @@ Branch `wp/082-defaulted-comparisons`, worktree `.worktrees/wp-082`.
 6. Tests + spec + probe.
 
 ## Status
-- Steps 1-2 done: `std::*_ordering` recognition/validation
-  (`cmp_category_type`, `CmpCategories` table in `Ast`), builtin `<=>` in
-  sema (diags match clang 19), the Oven (`three_way`) and codegen
-  (`agg_three_way`, clang's `VisitBinCmp` select chain; IR matches clang).
-- Step 3 starting: defaulted comparison declarations.
+- Steps 1-2 done: `std::*_ordering` recognition/validation, builtin `<=>`
+  in sema, the Oven and codegen.
+- Steps 3-4 done (`class/compare/{default,analyze}.rs`): clang's
+  `CheckExplicitlyDefaultedComparison` + `DefaultedComparisonAnalyzer`
+  (deletedness, category deduction, constexpr, access via
+  `cmp_member_access`), implicit `operator==` from a defaulted `<=>`,
+  checks at class completion (primaries, then secondaries). Scratch
+  diffs e1/e2/e5/e7 match clang; e3 off by RetLoc column (spec gap).
+- Pre-existing gaps seen (not WP-082): Oven "non-constexpr function" note
+  points at the operand start instead of the operator; explicit object
+  parameters unsupported in the parser.
+- Step 5 in progress: `class/compare/synth.rs` (`define_defaulted_comparison`).
 
 ## Next step
-- `exclude` on `OverloadCandidateSet`; `compare.rs` check/analyze/synthesize;
-  hook `defaulted_impl` seam in `class/special/mod.rs`.
+- synth.rs body per clang's `DefaultedComparisonSynthesizer` (base operands
+  cast to the *unqualified* base type, as clang does), exception spec from
+  the body, hooks in `mark_function_referenced`, `ensure_body`,
+  `resolve_exc`, `deleted_function_notes`; then tests/spec/probe.
