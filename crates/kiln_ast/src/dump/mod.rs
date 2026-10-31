@@ -1243,6 +1243,8 @@ impl<'a, W: io::Write> Dumper<'a, W> {
             DeclKind::Using
             | DeclKind::NamespaceAlias
             | DeclKind::UsingShadow
+            | DeclKind::ConstructorUsingShadow
+            | DeclKind::UnresolvedUsingValue
             | DeclKind::UsingEnum
             | DeclKind::UsingDirective => self.using_fields(d, n.kind()),
             DeclKind::LinkageSpec => {
@@ -1614,6 +1616,18 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                 return;
             }
             DeclKind::NamespaceAlias => self.name(d),
+            // clang's JSON `name` is the unqualified member name (a
+            // constructor's is its canonical class type).
+            DeclKind::UnresolvedUsingValue => {
+                self.line.push(' ');
+                if let crate::names::DeclNameView::Constructor(t) = ast.names.view(ast.decls.get(d).name()) {
+                    let opts = PrintOptions { full_scope: false, ..PrintOptions::CANONICAL };
+                    write_type(&ast.types, &self.names, QualType::unqual(t), opts, &mut self.line);
+                } else {
+                    self.names.write_name(d, &mut self.line);
+                }
+                return;
+            }
             _ => {}
         }
         if let Some(t) = ast.using_target(d) {

@@ -341,7 +341,16 @@ impl Sema<'_, '_> {
         inheriting: bool,
     ) -> DeclId {
         let access = self.current_member_access();
-        let h = DeclHead::new(self.ctx, DeclName::ident(name), name_loc).access(access);
+        // An inheriting declarator is named by the constructor name of the
+        // canonical nominated type (clang: `T::type-parameter-0-0`).
+        let dn = match self.ast.types.nns_view(q.nns) {
+            Nns::Type { ty, .. } if inheriting => {
+                let canon = self.ast.types.canonical(ty).ty();
+                self.ast.names.constructor(canon)
+            }
+            _ => DeclName::ident(name),
+        };
+        let h = DeclHead::new(self.ctx, dn, name_loc).access(access);
         let d = self.builder().unresolved_using_value(h, q.nns, !inheriting);
         if inheriting {
             self.note_inherited_ctor(class);

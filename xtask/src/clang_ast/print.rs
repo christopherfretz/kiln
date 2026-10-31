@@ -774,7 +774,11 @@ impl<'a> Printer<'a, '_> {
                 line = l;
                 kids_out = self.kid_trees(n)?;
             }
-            "NamespaceAliasDecl" | "UsingDirectiveDecl" | "UsingShadowDecl" | "UsingEnumDecl" => {
+            "NamespaceAliasDecl"
+            | "UsingDirectiveDecl"
+            | "UsingShadowDecl"
+            | "ConstructorUsingShadowDecl"
+            | "UsingEnumDecl" => {
                 let mut l = decl_head(n, k);
                 if k == "NamespaceAliasDecl" {
                     push_opt(&mut l, name(n));
@@ -787,7 +791,9 @@ impl<'a> Printer<'a, '_> {
                 let t = n.get(key).ok_or_else(|| format!("clang-ast: {k} without `{key}`"))?;
                 l.push(' ');
                 l.push_str(&bare_ref(t)?);
-                if k == "UsingShadowDecl" && t.get("type").is_some() {
+                if matches!(k, "UsingShadowDecl" | "ConstructorUsingShadowDecl")
+                    && t.get("type").is_some()
+                {
                     push_word(&mut l, &type_pair(t.get("type"), "shadowed declaration")?);
                 }
                 line = l;
@@ -800,8 +806,9 @@ impl<'a> Printer<'a, '_> {
                     }
                 }
             }
-            "UsingDecl" => {
-                // clang's `name` is the qualified name as written (`N::x`).
+            "UsingDecl" | "UnresolvedUsingValueDecl" => {
+                // clang's `name` is the qualified name as written (`N::x`);
+                // an unresolved one's is the unqualified member name.
                 let mut l = decl_head(n, k);
                 push_opt(&mut l, name(n));
                 line = l;

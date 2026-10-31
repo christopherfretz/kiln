@@ -44,6 +44,10 @@ pub const TABLE: &[(&str, Disposition)] = &[
     ("UsingDirectiveDecl", Keep),
     ("UsingShadowDecl", Keep),
     ("UsingEnumDecl", Keep),
+    // Inheriting constructors (WP-114); clang's JSON omits the
+    // nominated/constructed base classes of the text dump.
+    ("ConstructorUsingShadowDecl", Keep),
+    ("UnresolvedUsingValueDecl", Keep),
     ("FunctionDecl", Keep),
     ("CXXMethodDecl", Keep),
     ("CXXConstructorDecl", Keep),
@@ -288,7 +292,8 @@ fn specific_keys(kind: &str) -> Option<&'static [&'static str]> {
         "NamespaceAliasDecl" => &["aliasedNamespace"],
         "UsingDecl" => &[],
         "UsingDirectiveDecl" => &["nominatedNamespace"],
-        "UsingShadowDecl" => &["target"],
+        "UsingShadowDecl" | "ConstructorUsingShadowDecl" => &["target"],
+        "UnresolvedUsingValueDecl" => &[],
         "UsingEnumDecl" => &["target"],
         // `immediate`: kiln prints clang's text-dump `consteval` instead;
         // `variadic` is part of the printed type; `deletedMessage` becomes

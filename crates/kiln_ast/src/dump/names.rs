@@ -110,6 +110,14 @@ impl<'a> AstNames<'a> {
     }
 
     fn write_class_type(&self, t: TypeId, out: &mut String) {
+        // clang `printCXXConstructorDestructorName`: a class template
+        // specialization prints its bare name (`Base`, not `Base<int>`).
+        if let Some(d) = self.ast.types.as_record(QualType::unqual(t))
+            && self.ast.spec_info(d).is_some()
+        {
+            self.write_decl_name_value(self.ast.decls.get(d).name(), out);
+            return;
+        }
         write_type(&self.ast.types, self, QualType::unqual(t), PrintOptions::SUGARED, out);
     }
 
