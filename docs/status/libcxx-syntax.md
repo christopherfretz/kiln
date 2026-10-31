@@ -30,11 +30,11 @@ feature. Every header preprocesses identically to clang (see
 | `<bit>` | 0 | 0 | — | none | |
 | `<limits>` | 0 | 0 | — | none | |
 | `<type_traits>` | 0 | 0 | 431 | none (clean since WP-109, 2026-10-31) | |
-| `<compare>` | 1 | 3 | 399 | `__get_comp_type`: deduced return over discarded `if constexpr` branches (WP-122 item 1) | that error + follow-ons |
-| `<utility>` | 1 | 9 | — | same (WP-122) | same + follow-ons |
-| `<span>` | 1 | 18 | — | same (WP-122) | same + follow-ons |
-| `<array>` | 1 | 32 | — | same (WP-122); then `new:298` / `::new` parsing, deduction guides, `consteval`, literal operators | that + dependent NNS chains, friend templates |
-| `<string_view>` | 1 | 48 | — | same (WP-122); then as `<array>` | same |
+| `<compare>` | 0 | 0 | 399 | none (clean since WP-122, 2026-10-31) | that error + follow-ons |
+| `<utility>` | 1 | 6 | — | WP-128 items | same + follow-ons |
+| `<span>` | 1 | 15 | — | WP-128 items | same + follow-ons |
+| `<array>` | 1 | 25 | — | WP-128 items (void returns in `new`, `using ranges::get`, `::new`, `::__builtin_*`) + CTAD deduction guides (WP-071b) | that + dependent NNS chains, friend templates |
+| `<string_view>` | 1 | 41 | — | same as `<array>` | same |
 
 The single-header counts rose a little: before WP-065 the parser gave
 up on a class at its first constructor or operator (one "special member
