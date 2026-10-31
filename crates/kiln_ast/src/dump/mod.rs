@@ -1867,6 +1867,9 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                 // `refers_to_enclosing_variable_or_capture` is not printed:
                 // clang's JSON dump, the oracle's source, omits it.
                 self.non_odr_use(exprs.non_odr_use(e));
+                if n.has(ExprFlags::IMMEDIATE_ESCALATING) {
+                    self.line.push_str(" immediate-escalating");
+                }
             }
             ExprKind::MemberExpr => {
                 self.line.push_str(if n.has(ExprFlags::ARROW) { " ->" } else { " ." });

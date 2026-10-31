@@ -1205,6 +1205,7 @@ impl Sema<'_, '_> {
         } else if matches!(n.kind(), DeclKind::Function | DeclKind::CXXMethod) {
             let at = self.eloc(e);
             self.exc_spec_needed(d, at);
+            self.note_immediate_ref(e, d);
         }
         e
     }

@@ -228,6 +228,9 @@ impl ExprFlags {
     pub const PASS_ALIGN: ExprFlags = ExprFlags(1 << 6);
     /// `CXXDeleteExpr`: written `delete[]`.
     pub const ARRAY_AS_WRITTEN: ExprFlags = ExprFlags(1 << 6);
+    /// `DeclRefExpr`: names an immediate function where that made the
+    /// enclosing function immediate (P2564; dump `immediate-escalating`).
+    pub const IMMEDIATE_ESCALATING: ExprFlags = ExprFlags(1 << 7);
 
     /// The raw bits (already shifted into bits 4..=7).
     pub const fn bits(self) -> u8 {
@@ -1984,6 +1987,22 @@ impl ExprArena {
     /// variable's initializer unevaluated (the dump omits the value).
     pub fn constant_value_hidden(&self, e: ExprId) -> bool {
         self.expect_kind(e, ExprKind::ConstantExpr).aux & CONSTANT_VALUE_HIDDEN != 0
+    }
+
+    /// Marks the `DeclRefExpr` or construction `e` as immediate-escalating
+    /// (P2564): it made the enclosing function immediate.
+    ///
+    /// # Panics
+    /// If `e` is neither a `DeclRefExpr` nor a construction.
+    pub fn set_immediate_escalating(&mut self, e: ExprId) {
+        let n = &mut self.nodes[e.index() as usize];
+        match n.kind {
+            ExprKind::DeclRefExpr => n.bits |= ExprFlags::IMMEDIATE_ESCALATING.bits(),
+            ExprKind::CXXConstructExpr | ExprKind::CXXTemporaryObjectExpr => {
+                n.aux |= 1 << 5;
+            }
+            k => panic!("expected DeclRefExpr or CXXConstructExpr, found {k:?}"),
+        }
     }
 
     /// Marks the `ConstantExpr` `e` as a nested immediate invocation

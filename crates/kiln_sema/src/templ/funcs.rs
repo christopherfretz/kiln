@@ -48,7 +48,14 @@ impl Sema<'_, '_> {
         if !kind.is_function() {
             return Err(());
         }
-        let fspec = self.ast.decls.function(pattern).map(|x| x.spec).unwrap_or_default();
+        // A specialization escalates on its own (P2564): clang does not
+        // carry an escalated pattern's `immediate` over.
+        let fspec = self
+            .ast
+            .decls
+            .function(pattern)
+            .map(|x| x.spec.with_escalated(false))
+            .unwrap_or_default();
         let spec = self.builder().function_spec(
             tmpl,
             args.sugared,

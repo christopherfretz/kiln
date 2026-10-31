@@ -1170,6 +1170,9 @@ impl<'a> Printer<'a, '_> {
                     l.push_str(" non_odr_use_");
                     l.push_str(why);
                 }
+                if flag(n, "isImmediateEscalating") {
+                    l.push_str(" immediate-escalating");
+                }
                 line = l;
                 kids_out = self.kid_trees(n)?;
             }

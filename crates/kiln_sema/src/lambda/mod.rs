@@ -640,6 +640,11 @@ impl Sema<'_, '_> {
         } else if explicit_constexpr {
             spec = spec.with_constexpr_kind(ConstexprKind::Constexpr);
         }
+        // P2564: an escalated call operator makes the invoker immediate
+        // too (clang marks only the invoker, not the conversion).
+        if self.ast.decls.function(call_op).is_some_and(|x| x.spec.escalated()) {
+            spec = spec.with_escalated(true);
+        }
         let sym = self.ast.symbols().intern("__invoke");
         let h = DeclHead::new(closure, DeclName::ident(sym), lbracket)
             .flags(DeclFlags::IMPLICIT)

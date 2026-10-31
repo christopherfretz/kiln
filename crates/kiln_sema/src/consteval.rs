@@ -15,6 +15,7 @@ use std::collections::{HashMap, HashSet};
 
 use kiln_ast::decl::{ConstexprKind, Defaulted, FnSpec};
 use kiln_ast::templates::SpecKind;
+use kiln_ast::expr::{ExprFlags, ExprKind};
 use kiln_ast::{DeclId, ExprId, QualType};
 use kiln_diag::DiagId;
 use kiln_oven::{EvalContext, EvalKind};
@@ -99,6 +100,8 @@ impl Sema<'_, '_> {
                     )
                 }) || self.ast.member_spec_info(f).is_some()
                     || self.ast.templates.instantiated_from_map(f).is_some()
+                    // A templated function being defined (its pattern).
+                    || self.in_template()
             }
             ConstexprKind::None => false,
         }
@@ -106,14 +109,15 @@ impl Sema<'_, '_> {
 
     /// Whether the expression being built is in an immediate function
     /// context ([expr.const]/16), or otherwise exempt from the checks
-    /// here: unevaluated, in a template definition (checked at
-    /// instantiation), in a manifestly constant-evaluated expression.
+    /// here: unevaluated, or in a manifestly constant-evaluated
+    /// expression. A template definition is checked like clang does: its
+    /// non-dependent invocations now (an instantiation shares them),
+    /// the dependent ones at instantiation.
     fn immediate_exempt(&self) -> bool {
         self.unevaluated > 0
-            || self.in_template()
             || self.immediate > 0
             || self.imm.pending.const_eval > 0
-            || self.func.as_ref().is_some_and(|s| self.is_immediate_fn(s.decl))
+            || self.func.as_ref().is_some_and(|s| self.is_consteval_kind(s.decl))
     }
 
     /// Enters a manifestly constant-evaluated context ([expr.const]/22):
@@ -225,9 +229,11 @@ impl Sema<'_, '_> {
             return;
         }
         let (outer, nested, bad_refs) = self.classify_immediate(e, &candidates, &refs);
-        let escalating = self.func.as_ref().map(|s| s.decl).filter(|&f| {
-            !self.is_immediate_fn(f) && self.is_immediate_escalating(f)
-        });
+        // An escalating function's body is not an immediate function
+        // context even once it has escalated: later invocations are still
+        // evaluated (and wrapped) individually.
+        let escalating =
+            self.func.as_ref().map(|s| s.decl).filter(|&f| self.is_immediate_escalating(f));
         let mut results = Vec::with_capacity(outer.len());
         for &(c, _) in &outer {
             let at = self.begin_loc(c);
@@ -252,6 +258,7 @@ impl Sema<'_, '_> {
                     match escalating {
                         Some(g) => {
                             self.ast.exprs.set_constant_elided(c);
+                            self.mark_immediate_escalating(self.ast.exprs.operand(c));
                             let loc = self.begin_loc(c);
                             self.escalate(g, Escalation { loc, callee, call: true });
                         }
@@ -266,9 +273,15 @@ impl Sema<'_, '_> {
             }
         }
         for r in bad_refs {
+            // Already immediate-escalating (an instantiation's copy of a
+            // pattern's reference): clang skips it.
+            if self.ast.exprs.get(r).has(ExprFlags::IMMEDIATE_ESCALATING) {
+                continue;
+            }
             let d = self.ast.exprs.decl(r);
             let loc = self.begin_loc(r);
             if let Some(g) = escalating {
+                self.ast.exprs.set_immediate_escalating(r);
                 self.escalate(g, Escalation { loc, callee: d, call: false });
                 continue;
             }
@@ -313,6 +326,42 @@ impl Sema<'_, '_> {
             stack.extend(kids.into_iter().rev().map(|k| (k, inside || is_c)));
         }
         (outer, nested, bad)
+    }
+
+    /// Marks the immediate invocation `e` that made the enclosing
+    /// function immediate (clang's `MarkExpressionAsImmediateEscalating`):
+    /// a construction itself, a call's callee `DeclRefExpr`.
+    fn mark_immediate_escalating(&mut self, e: ExprId) {
+        let e = self.ignore_implicit_for_imm(e);
+        match self.ast.exprs.get(e).kind() {
+            ExprKind::CXXConstructExpr | ExprKind::CXXTemporaryObjectExpr => {
+                self.ast.exprs.set_immediate_escalating(e);
+            }
+            ExprKind::CallExpr | ExprKind::CXXOperatorCallExpr | ExprKind::CXXMemberCallExpr => {
+                let callee = self.ast.exprs.callee(e);
+                let r = self.ignore_implicit_for_imm(callee);
+                if self.ast.exprs.get(r).kind() == ExprKind::DeclRefExpr {
+                    self.ast.exprs.set_immediate_escalating(r);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// `e` without the implicit nodes around it (clang's `IgnoreImplicit`
+    /// plus parentheses).
+    fn ignore_implicit_for_imm(&self, mut e: ExprId) -> ExprId {
+        loop {
+            let n = self.ast.exprs.get(e);
+            match n.kind() {
+                ExprKind::ImplicitCastExpr
+                | ExprKind::ParenExpr
+                | ExprKind::MaterializeTemporaryExpr
+                | ExprKind::CXXBindTemporaryExpr
+                | ExprKind::ExprWithCleanups => e = self.ast.exprs.operand(e),
+                _ => return e,
+            }
+        }
     }
 
     fn is_consteval_kind(&self, f: DeclId) -> bool {
