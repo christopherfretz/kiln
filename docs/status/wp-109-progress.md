@@ -101,3 +101,14 @@ Branch `wp/109-concepts-alias-followups`. Living file; deleted at merge.
   RequiresExpr/MemberExpr; docs/status/libcxx-syntax.md rows refreshed
   (type_traits 0, compare 48, utility 81, array 177, span 113,
   string_view 329).
+
+## Bench (bench/frontend/templates_*), A/B vs merge base 45fbbab
+- `cargo xtask bench --filter frontend/templates` reports REGRESSED (mem)
+  for deep/wide against the WP-070a baselines (2026-10-29); the merge
+  base shows the same RSS (deep ~32.9 MB, wide ~53.6 MB both), so this
+  is drift from earlier merges, not WP-109. `frontend/templates` fails
+  on base too (libc++ `<concepts>`; no kiln baseline). Not re-recorded.
+- Callgrind: deep 679.6M (base) vs 679.5M Ir; wide 2186.6M vs 2189.0M
+  (+0.11%) after making `order_constrained_candidates` allocation-free
+  when nothing is constrained (was +0.7%). Wall time equal within noise
+  with both binaries in /tmp (the workspace mount adds ~5 ms startup).
