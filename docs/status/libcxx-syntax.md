@@ -7,26 +7,32 @@ kiln -std=c++26 -stdlib=libc++ -fsyntax-only -ferror-limit=0 h.cpp
 ```
 
 The setup is libc++ 19.1.7 (Debian `libc++-19-dev`) on aarch64 Linux,
-with kiln main after WP-069 (parser templates: no template-syntax
-errors remain; the remaining errors are the template engine, WP-070a/b,
-builtin traits, WP-074, special members, WP-067a, and overloading,
-WP-068a/b), WP-078a/b, WP-066b, WP-065, WP-064 and WP-061a/b. "First
+with kiln main after WP-072 (2026-10-31: the whole M3 template engine —
+070a/b, 071, 072, 073, 074, 087 — plus classes 067a/b, overloading
+068a/b, virtuals 077/078/080, builtins 088, `__int128` 107). The M3
+gate headers (WP-081) are listed last. "First
 blocker" is the first error kiln reports. The counts are all the errors
 in the header's closure; most are follow-ons of the same unsupported
 feature. Every header preprocesses identically to clang (see
 `pp-parity.md`), so these are all parser or Sema gaps.
 
-| header | exit | errors | was (WP-065) | first blocker | main error kinds |
+| header | exit | errors | was (WP-069) | first blocker | main error kinds |
 |---|---:|---:|---:|---|---|
-| `<cstddef>` | 1 | 45 | 53 | `__type_traits/enable_if.h:22:1`: explicit specialization (WP-070b) | explicit specialization 18, overloaded operators 12, follow-on type errors 11, class template specialization 3 |
-| `<cstdint>` | 0 | 0 | 0 | none (clean since WP-062; no warnings since WP-063) | |
-| `<climits>` | 0 | 0 | 0 | none (clean; was blocked by glibc's `__THROW`, `noexcept(true)`, before WP-058) | |
-| `<cfloat>` | 0 | 0 | 0 | none (clean) | |
-| `<cstring>` | 1 | 10 | 10 | `string.h:89:20`: overloading `memchr` (WP-068a) | overloading 10 |
-| `<version>` | 0 | 0 | 0 | none (clean) | |
-| `<initializer_list>` | 1 | 47 | 56 | `__type_traits/enable_if.h:22:1`: explicit specialization (WP-070b) | explicit specialization, overloaded operators, follow-ons |
-| `<compare>` | 1 | 399 | 417 | `__type_traits/enable_if.h:22:1`: explicit specialization (WP-070b) | undeclared identifiers 81 (builtin traits, WP-074), overloaded operators 49 + overloading 33 (WP-068a/b), follow-on type/expression errors 81, explicit specialization 30 |
-| `<type_traits>` | 1 | 431 | 464 | `__type_traits/integral_constant.h:25:43`: conversion functions (WP-067a) | follow-on "unexpected type name" 155 + "expected a type" 52 (mostly builtin traits, WP-074), partial specialization 60 (WP-070b), explicit specialization 27, class template specialization 23 (WP-070a), undeclared identifiers 26 |
+| `<cstddef>` | 0 | 0 | 45 | none (clean since WP-070b/071) | |
+| `<cstdint>` | 0 | 0 | 0 | none | |
+| `<climits>` | 0 | 0 | 0 | none | |
+| `<cfloat>` | 0 | 0 | 0 | none | |
+| `<cstring>` | 0 | 0 | 10 | none (clean since WP-068a) | |
+| `<version>` | 0 | 0 | 0 | none | |
+| `<initializer_list>` | 0 | 0 | 47 | none (clean since WP-070b/071) | |
+| `<bit>` | 0 | 0 | — | none | |
+| `<limits>` | 0 | 0 | — | none | |
+| `<type_traits>` | 1 | 2 | 431 | `common_reference.h:160`: alias instantiation "reference to a member of a dependent context" (WP-109) | that error ×2 |
+| `<compare>` | 1 | 50 | 399 | defaulted comparison operators (WP-082) | defaulted comparisons, follow-ons |
+| `<utility>` | 1 | 83 | — | defaulted comparison operators (WP-082) | defaulted comparisons, follow-ons |
+| `<array>` | 1 | 180 | — | alias instantiation "reference to a member of a dependent context" (WP-109) | that error + follow-ons |
+| `<span>` | 1 | 116 | — | same (WP-109) | |
+| `<string_view>` | 1 | 332 | — | same (WP-109) | |
 
 The single-header counts rose a little: before WP-065 the parser gave
 up on a class at its first constructor or operator (one "special member
