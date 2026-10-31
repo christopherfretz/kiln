@@ -47,10 +47,40 @@
   conformance basic.lookup.unqual/qualified-declarator-run.cpp,
   templates/spec/temp.expl.spec-static-member-{run,after-use}.cpp.
 
+- Class-value NTTP mangling: `Xtl <type> <fields> E` (clang trailing
+  zero-member trimming), `so` subobject paths for pointer/reference NTTPs at an
+  offset, `di` designators for unions, `_ZTA` template parameter objects.
+  Placeholder `mangle_template_param_object` removed.
+- `<template-param-decl>` (clang 19): `Tn <type>` / `Tp` for NTTPs whose type
+  is dependent/undeduced in function templates (`template_args_of`); `Dc` for
+  decltype(auto).
+- Placeholder NTTP types (`auto*`, `const auto&`, decltype(auto)) deduced via
+  `deduce_auto`; new error `sema_nttp_deduction_failed`. Placeholder NTTP
+  decl-refs are type-dependent in the pattern.
+- Variable template specializations mangled (`_Z1vIiE`).
+- Oven: pointers/references to automatic variables not created by the
+  evaluation are not constant ("pointer to 'x' is not a constant expression" /
+  "reference to ..."), incl. `constexpr int* p = &local`.
+- `-Wreturn-stack-address` for a braced list returned as initializer_list
+  (`sema_return_local_temp_addr`).
+- Class-template static members `static constexpr auto* p = <dependent>` no
+  longer deferred (were "cannot appear in its own initializer").
+- Tests: tests/mangle/class_nttp.cpp (97 clang symbols); conformance
+  expr.const/pointer-to-automatic-errors.cpp,
+  stmt.return/return-init-list-stack-address.cpp,
+  templates/nttp/temp.param-placeholder-deduction.cpp.
+- mangle_vs_clang: 725 clang symbols/triple.
+
 ## Gaps found (out of scope, for handback)
 - codegen `UserDefinedConversion` cast unsupported (even non-template).
 - `a.operator int()` -> "expected unqualified-id" (wp-121?).
 
+- `Tk`/`Tt`/`Q` requires-clause mangling, constrained `Dk` not implemented.
+- general `-Wreturn-stack-address` (`return &x;`) missing.
+
 ## Next
-- mangle_vs_clang green; IR corpus case; multi-TU run test.
-- Deliverables 2–5.
+- Deliverable 3: `template<> template<class U> int A<long>::g(U)`;
+  ExplicitSpecialization early return; failed body instantiation -> invalid.
+- Deliverable 4: `_ZGR` namespace-scope temporaries; ctor templates with
+  initializer_list params; printer explicit member template args.
+- Deliverable 5: spec Landed entries.
