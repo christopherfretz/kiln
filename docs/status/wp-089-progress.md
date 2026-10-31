@@ -20,7 +20,7 @@ Updated: 2026-10-31
 - [x] Spec: sema.md §7.6, sema-class.md §5.4, ast.md, ast-dump.md.
 - [x] `cargo xtask ci --quick` green (kiln corpus 1490 passed, 15 xfail, 1505 tests).
 - [x] Header probe after (same flags): `<array>` 95 errors (0 range-for), `<span>` 68 (0), `<string_view>` 159 (0).
-- [ ] Full `cargo xtask ci` (exit gate).
+- [x] Full `cargo xtask ci` green: clang self-check 1476 passed / 4 xfail / 25 skipped; kiln 1490 passed / 15 xfail (1505 tests).
 
 ## Next step
-Full `cargo xtask ci`, then hand back.
+Handed back for review and merge.
