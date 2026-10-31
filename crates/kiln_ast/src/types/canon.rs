@@ -956,8 +956,18 @@ impl TypeContext {
                 ArgListId::raw_opt(args),
             );
             self.intern_with(key, flags, |ctx| {
-                if let Some(d) = deduced {
+                if let Some(d) = deduced
+                    && d != QualType::DEPENDENT
+                {
                     Some(ctx.canonical(d))
+                } else if deduced.is_some() {
+                    // Deduced as dependent (clang's dependent `AutoType`):
+                    // canonical itself, so a templated function declared
+                    // `auto f()` keeps `auto` in its signature (mangled
+                    // `Da`) and two such placeholders compare equal.
+                    let ca = args.map(|a| ctx.canonical_args(a));
+                    (ca != args)
+                        .then(|| Self::uq(ctx.auto_type(keyword, deduced, concept, ca, pack)))
                 } else {
                     let ca = args.map(|a| ctx.canonical_args(a));
                     (ca != args).then(|| Self::uq(ctx.auto_type(keyword, None, concept, ca, pack)))

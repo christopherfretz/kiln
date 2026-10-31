@@ -280,6 +280,22 @@ Redeclaration and linkage rules:
   the deduced one, and then adopts the deduced type
   (`adopt_deduced_return`), so `auto f(); auto f() { return 1; } auto
   f();` is valid and `int f();` after it is not.
+- Deduced return types in templated functions (WP-122,
+  [dcl.spec.auto.general]/12): when the body is in a dependent context
+  (`in_template()`), `begin_function_body` gives the pattern the
+  return type `dependent_auto(declared)` (clang's AutoType "deduced as
+  dependent", printed `auto`, canonical to itself so it mangles `Da`/
+  `Dc`) and `deduce_return` checks nothing. The pattern's returns are
+  left unconverted, `return;` / `return void();` are not diagnosed
+  against the dependent type, and there is no NRVO candidate
+  (`copy_elision_candidate`), as in clang. Deduction runs when the body
+  is instantiated, so a `return` in a discarded `if constexpr` branch
+  never participates (libc++ `__get_comp_type`) and only a real
+  conflict between instantiated returns is reported. `return {…}` is
+  still an error in the pattern. A call `x.g()` to a member whose
+  return type is not yet deduced goes through `check_undeduced_use`
+  (instantiating it when it is a specialization member) before
+  member-call building.
 - Declarator groups ([dcl.spec.auto.general]/3, /8): the parser records
   each declarator of a simple-declaration or member-declaration with
   `act_on_group_declarator(&mut AutoGroup, d)` and closes the group with

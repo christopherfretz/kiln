@@ -471,6 +471,20 @@ impl Cg<'_> {
                 {
                     return Ok(Some(V::C(self.const_scalar_value(c, q)?)));
                 }
+                // A call returning a reference yields the referee's address
+                // (clang `ScalarExprEmitter::VisitCallExpr`: a reference
+                // result is `EmitLoadOfLValue`).
+                let inner = self.skip_parens(s);
+                if matches!(
+                    ast.exprs.get(inner).kind(),
+                    ExprKind::CallExpr
+                        | ExprKind::CXXMemberCallExpr
+                        | ExprKind::CXXOperatorCallExpr
+                ) && self.is_glvalue(inner)
+                {
+                    let lv = self.emit_lvalue(s)?;
+                    return Ok(Some(self.load_lv(lv)));
+                }
                 return self.emit_scalar_opt(s);
             }
             // clang `ScalarExprEmitter::VisitCastExpr`: a user-defined or

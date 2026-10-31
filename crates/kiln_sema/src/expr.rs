@@ -2609,6 +2609,20 @@ impl Sema<'_, '_> {
             let has_braced = braced.iter().any(Option::is_some);
             return self.builtin_custom_call(callee, b, id, args, has_braced, loc, rparen);
         }
+        // A member function named by a member access with no overload set
+        // to resolve (`x.f()`): a placeholder return type is deduced first,
+        // instantiating the definition of a class template member (clang's
+        // `DiagnoseUseOfDecl` -> `DeduceReturnType`).
+        {
+            let x = self.ignore_parens(callee);
+            if self.ast.exprs.get(x).kind() == ExprKind::MemberExpr {
+                let m = self.ast.exprs.decl(x);
+                let at = self.ast.exprs.get(x).loc();
+                if self.ast.decls.get(m).kind().is_function() && self.check_undeduced_use(m, at) {
+                    return self.recover_err(&kids, loc);
+                }
+            }
+        }
         if let Some(e) = self.try_member_call(callee, args, &mut braced, loc, rparen) {
             return e;
         }

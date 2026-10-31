@@ -299,12 +299,15 @@ impl Sema<'_, '_> {
         let (fdecl, ret, done) = (state.decl, state.ret, state.deduced);
         let Some(declared) = state.auto_ret else { return ret };
         let kw = self.undeduced_keyword(declared).unwrap_or(AutoKeyword::Auto);
-        // A type-dependent operand defers the deduction to instantiation
-        // ([dcl.spec.auto.general]/12): the declared type keeps its
-        // placeholder (clang prints `auto`).
-        if let Some(e) = value
-            && self.expr_is_type_dependent(e)
-        {
+        // In a templated function (a dependent context) deduction happens
+        // when the definition is instantiated, even from a return statement
+        // with a non-type-dependent operand ([dcl.spec.auto.general]/12;
+        // clang's `DeduceFunctionTypeFromReturnExpr` skips a dependent
+        // context). Only the instantiation's non-discarded returns then
+        // participate ([stmt.if]/2), so `if constexpr (c) return; else
+        // return 1;` deduces per specialization. The declared type keeps
+        // its placeholder (clang prints `auto`).
+        if self.in_template() || value.is_some_and(|e| self.expr_is_type_dependent(e)) {
             if let Some(st) = self.func.as_mut()
                 && !st.deduced
             {

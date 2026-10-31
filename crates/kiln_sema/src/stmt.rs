@@ -148,6 +148,14 @@ impl Sema<'_, '_> {
     /// variable of the function (not a parameter or exception variable)
     /// whose type is the class return type ignoring cv.
     fn copy_elision_candidate(&self, e: ExprId, ret: QualType) -> Option<DeclId> {
+        // A return type still to be deduced at instantiation has no
+        // candidate (clang `getCopyElisionCandidate`: a canonical `auto` or
+        // the dependent builtin).
+        if ret == QualType::DEPENDENT
+            || matches!(self.ast.types.canonical_view(ret), TypeView::Auto { .. })
+        {
+            return None;
+        }
         let mut id = e;
         while self.ast.exprs.get(id).kind() == ExprKind::ParenExpr {
             id = self.ast.exprs.operand(id);
@@ -588,9 +596,12 @@ impl Sema<'_, '_> {
         let ret_void = self.ast.types.is_void(ret);
         let fname = self.decl_name(fdecl);
         let mut candidate = None;
+        // A dependent return type checks the operand at instantiation
+        // (clang `BuildReturnStmt`'s `HasDependentReturnType`).
+        let ret_dep = self.ast.types.is_dependent(ret);
         let value = match value {
             None => {
-                if !ret_void && !self.is_error_type(ret) {
+                if !ret_void && !self.is_error_type(ret) && !ret_dep {
                     let d = self.diag(DiagId::sema_return_missing_expr, loc).arg(fname);
                     self.emit(d);
                 }
@@ -604,7 +615,7 @@ impl Sema<'_, '_> {
                         self.emit(d);
                     }
                     Some(self.act_on_full_expr(e))
-                } else if self.ast.types.is_void(ety) {
+                } else if self.ast.types.is_void(ety) && !ret_dep {
                     let d = self.diag(DiagId::sema_return_void_expr_in_nonvoid, loc).arg(fname);
                     self.emit(d);
                     Some(self.act_on_full_expr(e))
@@ -692,10 +703,20 @@ impl Sema<'_, '_> {
     /// the function scope).
     pub(crate) fn begin_function_body(&mut self, f: DeclId, ret: QualType) {
         let mut state = FnState::new(f, ret);
-        if self.contains_undeduced_auto(ret) {
+        let auto = self.contains_undeduced_auto(ret);
+        if auto {
             state.auto_ret = Some(ret);
         }
         self.func = Some(state);
+        // A templated function deduces its return type when it is
+        // instantiated ([dcl.spec.auto.general]/12): until then the
+        // placeholder is deduced as dependent (clang's dependent
+        // `AutoType`, printed `auto`), so calls of it in the template are
+        // type-dependent rather than uses of an undeduced function.
+        if auto && self.in_template() {
+            let dep = self.dependent_auto(ret);
+            self.set_deduced_return(f, dep);
+        }
     }
 
     /// Ends the body: undefined labels and fall-off-the-end checks.
