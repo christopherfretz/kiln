@@ -146,10 +146,7 @@ impl Parser<'_, '_> {
                 self.unsupported("modules", loc);
                 self.skip_unsupported_declaration();
             }
-            (_, Some(Kw::Asm)) => {
-                self.unsupported("asm declarations", loc);
-                self.skip_unsupported_declaration();
-            }
+            (_, Some(Kw::Asm)) => self.parse_file_scope_asm(),
             (Some(Punct::LSquare), _) if self.at_attributed_using() => {
                 self.parse_attributed_using();
             }

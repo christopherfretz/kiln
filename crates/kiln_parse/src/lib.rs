@@ -6,6 +6,7 @@
 //! (clang's Parser/Sema split).
 #![forbid(unsafe_code)]
 
+mod asm;
 mod attr;
 mod class;
 mod decl;

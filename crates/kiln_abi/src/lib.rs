@@ -8,6 +8,7 @@
 //! both dumps into the blocks the clang differentials compare.
 #![forbid(unsafe_code)]
 
+pub mod asm;
 pub mod call;
 pub mod dump;
 pub mod dump_blocks;

@@ -4,7 +4,9 @@
 
 use kiln_source::Loc;
 
-use crate::ids::{DeclId, ExprId, ListId, RawId, StmtId};
+use kiln_source::symbol::Symbol;
+
+use crate::ids::{DeclId, ExprId, ListId, RawId, StmtId, StringLitId};
 use crate::mem::{HeapSize, MemReport, VecDims};
 
 /// Statement kinds (spec/ast.md §6; clang's class names). The numbering is
@@ -180,6 +182,59 @@ pub struct RangeForData {
     pub colon: Loc,
 }
 
+/// One operand of a `GCCAsmStmt` ([dcl.asm], GNU extended asm): an
+/// output or input `[name] "constraint" (expr)`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct AsmOperand {
+    /// The symbolic name (`[name]`), if any.
+    pub name: Option<Symbol>,
+    /// The constraint string (an ordinary literal).
+    pub constraint: StringLitId,
+    /// The constraint literal's location.
+    pub constraint_loc: Loc,
+    /// The operand expression (an lvalue for outputs).
+    pub expr: ExprId,
+}
+
+/// Side record of a `GCCAsmStmt` (GNU extended asm; `aux` bit 0 =
+/// `volatile`, bit 1 = `goto`, bit 2 = `inline`, bit 3 = basic asm
+/// without any `:`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct AsmData {
+    /// The assembler template (an ordinary literal).
+    pub string: StringLitId,
+    /// The template literal's first token location.
+    pub string_loc: Loc,
+    /// Index of the first operand in the operand table (outputs first,
+    /// then inputs).
+    pub operands: u32,
+    /// The number of outputs.
+    pub num_outputs: u32,
+    /// The number of inputs.
+    pub num_inputs: u32,
+    /// The clobber strings (a `ListId` of `StringLitId`s).
+    pub clobbers: ListId,
+    /// The `asm goto` labels (a `ListId` of `Label` `DeclId`s).
+    pub labels: ListId,
+    /// The closing `)`.
+    pub rparen: Loc,
+    /// For a template spanning several lines, the raw [`Loc`] of each
+    /// line's first byte (clang's `!srcloc` entries); empty for one line.
+    pub srclocs: ListId,
+}
+
+/// `GCCAsmStmt` `aux` bits.
+pub mod asm_bits {
+    /// `asm volatile`.
+    pub const VOLATILE: u16 = 1;
+    /// `asm goto`.
+    pub const GOTO: u16 = 2;
+    /// `asm inline`.
+    pub const INLINE: u16 = 4;
+    /// Basic asm (no `:` at all).
+    pub const BASIC: u16 = 8;
+}
+
 /// Statement headers and side records. Index 0 of every vector is a dummy.
 #[derive(Debug)]
 pub struct StmtArena {
@@ -189,6 +244,8 @@ pub struct StmtArena {
     cases: Vec<CaseData>,
     loops: Vec<LoopData>,
     range_fors: Vec<RangeForData>,
+    asms: Vec<AsmData>,
+    asm_operands: Vec<AsmOperand>,
 }
 
 impl Default for StmtArena {
@@ -218,6 +275,18 @@ impl Default for StmtArena {
                 body: ds,
                 colon: Loc::INVALID,
             }],
+            asms: vec![AsmData {
+                string: StringLitId::new(StringLitId::MAX_INDEX),
+                string_loc: Loc::INVALID,
+                operands: 0,
+                num_outputs: 0,
+                num_inputs: 0,
+                clobbers: ListId::EMPTY,
+                labels: ListId::EMPTY,
+                rparen: Loc::INVALID,
+                srclocs: ListId::EMPTY,
+            }],
+            asm_operands: Vec::new(),
         }
     }
 }
@@ -274,6 +343,15 @@ impl StmtArena {
     pub(crate) fn push_range_for(&mut self, x: RangeForData) -> u32 {
         push_side(&mut self.range_fors, x)
     }
+    pub(crate) fn push_asm(&mut self, mut x: AsmData, ops: &[AsmOperand]) -> u32 {
+        x.operands = self.asm_operands.len() as u32;
+        assert!(
+            self.asm_operands.len() + ops.len() < u32::MAX as usize,
+            "asm operand space exhausted"
+        );
+        self.asm_operands.extend_from_slice(ops);
+        push_side(&mut self.asms, x)
+    }
 
     fn expect(&self, s: StmtId, kinds: &[StmtKind]) -> &StmtNode {
         let n = self.get(s);
@@ -315,6 +393,23 @@ impl StmtArena {
     /// The side record of a `CXXForRangeStmt`.
     pub fn range_for_data(&self, s: StmtId) -> &RangeForData {
         &self.range_fors[self.expect(s, &[StmtKind::CXXForRangeStmt]).a as usize]
+    }
+
+    /// The side record of a `GCCAsmStmt`.
+    pub fn asm_data(&self, s: StmtId) -> &AsmData {
+        &self.asms[self.expect(s, &[StmtKind::GCCAsmStmt]).a as usize]
+    }
+
+    /// The `aux` bits of a `GCCAsmStmt` (see [`asm_bits`]).
+    pub fn asm_bits(&self, s: StmtId) -> u16 {
+        self.expect(s, &[StmtKind::GCCAsmStmt]).aux
+    }
+
+    /// The operands of a `GCCAsmStmt`: outputs, then inputs.
+    pub fn asm_operands(&self, s: StmtId) -> &[AsmOperand] {
+        let d = self.asm_data(s);
+        let lo = d.operands as usize;
+        &self.asm_operands[lo..lo + (d.num_outputs + d.num_inputs) as usize]
     }
 
     /// The statements of a `CompoundStmt` (a `ListId` of `StmtId`s).
@@ -376,7 +471,7 @@ impl StmtArena {
         self.rows().iter().map(|r| r.live_bytes()).sum()
     }
 
-    fn rows(&self) -> [VecDims; 6] {
+    fn rows(&self) -> [VecDims; 8] {
         [
             VecDims::of("nodes", &self.nodes),
             VecDims::of("ifs", &self.ifs),
@@ -384,6 +479,8 @@ impl StmtArena {
             VecDims::of("cases", &self.cases),
             VecDims::of("loops", &self.loops),
             VecDims::of("range_fors", &self.range_fors),
+            VecDims::of("asms", &self.asms),
+            VecDims::of("asm_operands", &self.asm_operands),
         ]
     }
 }

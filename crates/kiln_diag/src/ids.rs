@@ -1393,6 +1393,33 @@ diag_ids! {
     note_non_literal_base_class = Note (2) "{0} is not literal because it has base class {1} of non-literal type";
     note_non_literal_field = Note (3) "{0} is not literal because it has data member {1} of non-literal type {2}";
     note_non_literal_non_constexpr_dtor = Note (1) "{0} is not literal because its destructor is not constexpr";
+    // GNU asm statements (WP-140)
+    parse_asm_duplicate_qual = Error (1) "duplicate asm qualifier '{0}'";
+    parse_asm_qualifier_ignored = Error (0) "expected 'volatile', 'inline', 'goto', or '('";
+    sema_asm_invalid_output_constraint = Error (1) "invalid output constraint '{0}' in asm";
+    sema_asm_invalid_input_constraint = Error (1) "invalid input constraint '{0}' in asm";
+    sema_asm_invalid_lvalue_in_output = Error (0) "invalid lvalue in asm output";
+    sema_asm_invalid_lvalue_in_input = Error (1) "invalid lvalue in asm input for constraint '{0}'";
+    sema_asm_invalid_type_in_input = Error (2) "invalid type {0} in asm input for constraint '{1}'";
+    sema_asm_unknown_register_name = Error (1) "unknown register name '{0}' in asm";
+    sema_asm_invalid_escape = Error (0) "invalid % escape in inline assembly string";
+    sema_asm_invalid_operand_number = Error (0) "invalid operand number in inline asm string";
+    sema_asm_unknown_symbolic_operand_name = Error (0) "unknown symbolic operand name in inline assembly string";
+    sema_asm_unterminated_symbolic_operand_name = Error (0) "unterminated symbolic operand name in inline assembly string";
+    sema_asm_empty_symbolic_operand_name = Error (0) "empty symbolic operand name in inline assembly string";
+    sema_asm_unexpected_constraint_alternatives = Error (2) "asm constraint has an unexpected number of alternatives: {0} vs {1}";
+    sema_asm_tying_incompatible_types = Error (2) "unsupported inline asm: input with type {0} matching output with type {1}";
+    sema_asm_input_duplicate_match = Error (1) "more than one input constraint matches the same output '{0}'";
+    note_asm_input_duplicate_first = Note (1) "constraint '{0}' is already present here";
+    sema_duplicate_asm_operand_name = Error (1) "duplicate use of asm operand name \"{0}\"";
+    note_duplicate_asm_operand_name = Note (1) "asm operand name \"{0}\" first referenced here";
+    sema_asm_mismatched_size_modifier = Warning [AsmOperandWidths] (0) "value size does not match register size specified by the constraint and modifier";
+    note_asm_missing_constraint_modifier = Note (1) "use constraint modifier \"{0}\"";
+    sema_invalid_asm_value_for_constraint = Error (2) "value '{0}' out of range for constraint '{1}'";
+    sema_dereference_incomplete_type = Error (1) "dereference of pointer to incomplete type {0}";
+    sema_asm_pmf_through_constraint = Error (0) "cannot pass a pointer-to-member through register-constrained inline assembly parameter";
+    // Predefined identifiers (WP-140)
+    sema_predefined_identifier_outside_function = Warning [PredefinedIdentifierOutsideFunction] (0) "predefined identifier is only valid inside function";
     sema_cce_ref_binds_temporary = Error (2) "conversion from {0} to {1} in converted constant expression would bind reference to a temporary";
 }
 
