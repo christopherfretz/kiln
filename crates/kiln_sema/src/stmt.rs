@@ -367,7 +367,12 @@ impl Sema<'_, '_> {
         let ok = t.is_integral(ty0)
             || t.as_enum(ty0).is_some()
             || t.builtin(ty0) == Some(BuiltinType::Error);
-        let (cond, cond_ty, invalid) = if ok {
+        // [temp.res.general]/6: a condition of dependent type is checked
+        // (converted, promoted) when the template is instantiated; the
+        // case values are left unevaluated until then.
+        let (cond, cond_ty, invalid) = if self.is_dependent_type(ty0) {
+            (cond, ty0, false)
+        } else if ok {
             let c = conv::integral_promotion(self, cond);
             let ty = self.ast.exprs.get(c).ty();
             (c, ty, false)
