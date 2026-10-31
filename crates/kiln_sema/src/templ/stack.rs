@@ -58,12 +58,27 @@ pub enum FrameKind {
     /// Substituting explicitly-specified arguments into a function
     /// template's signature ([temp.arg.explicit]; a SFINAE context).
     ExplicitArgSubstitution,
+    /// Checking the satisfaction of a template's associated constraints
+    /// or a concept-id ([temp.constr.sat]; WP-073). Not an instantiation.
+    ConstraintsCheck,
+    /// Checking the satisfaction of a concept-id ([temp.names]/9).
+    ConceptCheck,
+    /// Substituting into an atomic constraint or a requirement
+    /// ([temp.constr.atomic]/3, [expr.prim.req]; a SFINAE context).
+    ConstraintSubstitution,
 }
 
 impl FrameKind {
     /// Whether the frame counts toward the depth limit.
     pub const fn is_instantiation(self) -> bool {
-        !matches!(self, FrameKind::DefaultArgChecking | FrameKind::PartialSpecDeduction)
+        !matches!(
+            self,
+            FrameKind::DefaultArgChecking
+                | FrameKind::PartialSpecDeduction
+                | FrameKind::ConstraintsCheck
+                | FrameKind::ConceptCheck
+                | FrameKind::ConstraintSubstitution
+        )
     }
 
     /// The context note clang prints for the frame.
@@ -90,6 +105,9 @@ impl FrameKind {
             FrameKind::ExplicitArgSubstitution => {
                 DiagId::note_explicit_template_arg_substitution_here
             }
+            FrameKind::ConstraintsCheck => DiagId::note_checking_constraints_here,
+            FrameKind::ConceptCheck => DiagId::note_checking_concept_here,
+            FrameKind::ConstraintSubstitution => DiagId::note_constraint_substitution_here,
         }
     }
 
@@ -112,6 +130,9 @@ impl FrameKind {
             FrameKind::VarTemplateInit => "var-init",
             FrameKind::DeducedArgSubstitution => "deduction",
             FrameKind::ExplicitArgSubstitution => "explicit-args",
+            FrameKind::ConstraintsCheck => "constraints",
+            FrameKind::ConceptCheck => "concept",
+            FrameKind::ConstraintSubstitution => "constraint-subst",
         }
     }
 }
@@ -413,6 +434,10 @@ impl Sema<'_, '_> {
                 s
             }
             FrameKind::PartialSpecDeduction => self.partial_spec_desc(f.entity, f.args),
+            FrameKind::ConstraintsCheck | FrameKind::ConceptCheck => match f.args {
+                Some(l) => self.spec_name(f.template, l),
+                None => self.qualified_decl_name(f.template),
+            },
             FrameKind::DeducedArgSubstitution | FrameKind::ExplicitArgSubstitution => {
                 let name = self.qualified_decl_name(f.template);
                 match f.args {

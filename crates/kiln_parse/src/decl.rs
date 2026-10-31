@@ -473,6 +473,7 @@ impl Parser<'_, '_> {
                 && (self.at(Punct::ColonColon) || self.ident().is_some())
                 && self.at_constrained_placeholder()
             {
+                ds.constraint_loc = self.loc();
                 match self.parse_concept_name() {
                     Some(c) => ds.auto_constraint = Some(c),
                     None => ds.invalid = true,
@@ -1353,7 +1354,7 @@ impl Parser<'_, '_> {
                 // An abbreviated function template's invented parameter
                 // ([dcl.fct]/22).
                 let at = ds.type_loc.unwrap_or(start);
-                let constraint = ds.auto_constraint.take();
+                let constraint = ds.auto_constraint.take().map(|(c, a)| (c, a, ds.constraint_loc));
                 let pname = pd.name.map(|(n, _)| n);
                 let ty = self.s.act_on_invented_template_param(
                     at,

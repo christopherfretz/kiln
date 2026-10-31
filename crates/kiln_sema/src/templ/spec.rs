@@ -246,7 +246,7 @@ impl Sema<'_, '_> {
             use_ == TagUse::Definition,
             range,
         )?;
-        if let Some(i) = self.ast.templates.find_partial(tmpl, conv.canonical) {
+        if let Some(i) = self.find_partial_decl(tmpl, conv.canonical, head) {
             let p = self.ast.templates.partial(i).map(|p| p.partial).ok_or(())?;
             if use_ == TagUse::Definition
                 && let Some(def) = self.ast.definition(p)
@@ -303,23 +303,21 @@ impl Sema<'_, '_> {
             self.emit(d);
             return Err(());
         }
-        if self.ast.templates.param_list(head).requires.is_some() {
-            // Constrained partial specializations order by constraints
-            // ([temp.spec.partial.order]/1, [temp.constr.order]: WP-073)
-            // and may repeat the primary's arguments
-            // ([temp.spec.partial.general]/9.3).
-            let what = if var { "variable" } else { "class" };
-            self.templ_unimplemented(
-                &format!("constrained {what} template partial specialization"),
-                name_loc,
-            );
-            return Err(());
-        }
+        // A constrained partial specialization may repeat the primary's
+        // arguments ([temp.spec.partial.general]/9.3: it is more
+        // specialized by its constraints).
+        let constrained = {
+            let mut c = Vec::new();
+            let hl = *self.ast.templates.param_list(head);
+            self.head_constraints(hl.params, hl.requires, &mut c);
+            !c.is_empty()
+        };
         // [temp.spec.partial.general]/9.3: the arguments are not the
         // primary template's own parameters in order.
         let params = self.template_params(tmpl);
         let conv_args: Vec<TemplateArg> = self.ast.types.args(conv.sugared).to_vec();
-        if params.len() == conv_args.len()
+        if !constrained
+            && params.len() == conv_args.len()
             && params.iter().zip(&conv_args).all(|(&p, &a)| self.arg_names_param(p, a))
         {
             let d = self

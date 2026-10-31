@@ -214,6 +214,9 @@ impl Sema<'_, '_> {
                 {
                     return true;
                 }
+                ExprKind::CXXMemberCallExpr if self.member_call_can_throw(exprs.callee(x)) => {
+                    return true;
+                }
                 ExprKind::CXXConstructExpr | ExprKind::CXXTemporaryObjectExpr
                     if !self.decl_is_nothrow(exprs.constructor(x)) =>
                 {
@@ -249,6 +252,19 @@ impl Sema<'_, '_> {
         let t = &self.ast.types;
         let ty = self.ast.decls.get(f).ty().unwrap_or(QualType::ERROR);
         t.proto(ty).is_some_and(|p| t.exc_spec(p).is_nothrow())
+    }
+
+    /// Whether a member call through `callee` (a `MemberExpr`, or a
+    /// `.*`/`->*` operator) may throw.
+    fn member_call_can_throw(&self, callee: ExprId) -> bool {
+        let c = self.ignore_parens(callee);
+        if self.ast.exprs.get(c).kind() == ExprKind::MemberExpr {
+            return !self.decl_is_nothrow(self.ast.exprs.decl(c));
+        }
+        // `(o.*pm)()`: the pointer-to-member's function type.
+        let t = &self.ast.types;
+        let ty = self.ast.exprs.get(c).ty();
+        t.proto(ty).is_none_or(|p| !t.exc_spec(p).is_nothrow())
     }
 
     /// Whether calling through `callee` may throw: its (pointer to)

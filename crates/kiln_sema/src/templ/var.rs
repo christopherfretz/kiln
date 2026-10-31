@@ -37,6 +37,7 @@ impl Sema<'_, '_> {
     ) -> Result<DeclId, ()> {
         let tmpl = self.ast.first(tmpl);
         let conv = self.check_template_args(tmpl, written, arg_locs, loc)?;
+        self.ensure_template_constraints(tmpl, conv.sugared, 2, loc)?;
         if let Some(s) = self.ast.templates.find_spec(tmpl, conv.canonical) {
             if self.ast.decls.get(s).has(DeclFlags::INVALID) {
                 return Err(());
@@ -257,7 +258,7 @@ impl Sema<'_, '_> {
         let def = d.init_style.is_some();
         let conv =
             self.check_partial_args(tmpl, head, &sid.args, &sid.arg_locs, true, def, range)?;
-        if let Some(i) = self.ast.templates.find_partial(tmpl, conv.canonical) {
+        if let Some(i) = self.find_partial_decl(tmpl, conv.canonical, head) {
             let p = self.ast.templates.partial(i).map(|p| p.partial).ok_or(())?;
             if Self::declares_definition(d, vspec) && self.is_var_definition(p) {
                 let msg =

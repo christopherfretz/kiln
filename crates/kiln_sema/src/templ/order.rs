@@ -134,7 +134,20 @@ impl Sema<'_, '_> {
         };
         let failed = self.inst.sfinae.borrow_mut().pop().is_some_and(|s| s.errors > 0);
         self.pop_inst_frame();
-        r.filter(|_| !failed)
+        let deduced = r.filter(|_| !failed)?;
+        // [temp.spec.partial.match]/2: the partial specialization's
+        // associated constraints must be satisfied (§8.3).
+        let mut constraints = Vec::new();
+        self.head_constraints(list.params, list.requires, &mut constraints);
+        if !constraints.is_empty() {
+            let mut levels = Self::outer_levels(tmpl, list.depth);
+            levels.push(deduced, p.partial, LevelMode::Substitute);
+            let sat = self.check_constraints(partial, &constraints, &levels, deduced, poi);
+            if !self.sat_ok(sat) {
+                return None;
+            }
+        }
+        Some(deduced)
     }
 
     /// Whether the arguments of partial specialization `p`, with
@@ -235,8 +248,28 @@ impl Sema<'_, '_> {
     /// Whether partial specialization row `a` is more specialized than
     /// row `b` ([temp.spec.partial.order]/1, [temp.func.order]/5).
     fn partial_more_specialized(&mut self, a: u32, b: u32, loc: Loc) -> bool {
-        self.partial_at_least_as_specialized(a, b, loc)
-            && !self.partial_at_least_as_specialized(b, a, loc)
+        if !self.partial_at_least_as_specialized(a, b, loc) {
+            return false;
+        }
+        if !self.partial_at_least_as_specialized(b, a, loc) {
+            return true;
+        }
+        // [temp.spec.partial.order]/1, [temp.func.order]/6: equally
+        // specialized, the more constrained.
+        let (Some(pa), Some(pb)) =
+            (self.ast.templates.partial(a).copied(), self.ast.templates.partial(b).copied())
+        else {
+            return false;
+        };
+        let (la, lb) =
+            (*self.ast.templates.param_list(pa.params), *self.ast.templates.param_list(pb.params));
+        let (mut ca, mut cb) = (Vec::new(), Vec::new());
+        self.head_constraints(la.params, la.requires, &mut ca);
+        self.head_constraints(lb.params, lb.requires, &mut cb);
+        if ca.is_empty() {
+            return false;
+        }
+        self.more_constrained(pa.partial, &ca, pb.partial, &cb)
     }
 
     /// Whether partial specialization row `a` is at least as specialized
@@ -275,8 +308,15 @@ impl Sema<'_, '_> {
         if a == b {
             return false;
         }
-        self.fn_at_least_as_specialized(a, b, nargs)
-            && !self.fn_at_least_as_specialized(b, a, nargs)
+        let ab = self.fn_at_least_as_specialized(a, b, nargs);
+        if !ab {
+            return false;
+        }
+        if !self.fn_at_least_as_specialized(b, a, nargs) {
+            return true;
+        }
+        // [temp.func.order]/6: equally specialized, the more constrained.
+        self.template_more_constrained(a, b)
     }
 
     /// The first `nargs` parameter types of function template `ft`'s

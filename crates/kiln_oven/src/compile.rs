@@ -985,7 +985,9 @@ impl Scan<'_> {
             | ExprKind::OffsetOfExpr
             | ExprKind::TypeTraitExpr
             | ExprKind::ArrayTypeTraitExpr
-            | ExprKind::ExpressionTraitExpr => {}
+            | ExprKind::ExpressionTraitExpr
+            | ExprKind::ConceptSpecializationExpr
+            | ExprKind::RequiresExpr => {}
             ExprKind::CallExpr
             | ExprKind::CXXMemberCallExpr
             | ExprKind::CXXOperatorCallExpr
@@ -1927,6 +1929,11 @@ impl Compiler<'_> {
             }
             ExprKind::CXXNoexceptExpr => {
                 let v = self.ast().exprs.noexcept_value(e);
+                self.konst(dst, u128::from(v));
+            }
+            // spec/sema-templates.md §8.3, §8.5: Sema checked satisfaction.
+            ExprKind::ConceptSpecializationExpr | ExprKind::RequiresExpr => {
+                let v = self.ast().exprs.satisfied(e).unwrap_or(false);
                 self.konst(dst, u128::from(v));
             }
             // spec/sema-templates.md §9.1, §9.4: Sema evaluated the trait.

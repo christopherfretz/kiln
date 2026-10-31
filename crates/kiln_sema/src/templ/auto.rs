@@ -331,6 +331,56 @@ impl Sema<'_, '_> {
         None
     }
 
+    /// [dcl.type.auto.deduct]/2: the type a constrained placeholder in
+    /// `declared` deduced (`deduced` is the whole declared type after
+    /// deduction) must satisfy its type-constraint `C<T, args...>`.
+    /// Reports clang's "deduced type 'T' does not satisfy 'C'" at `loc`
+    /// with the concept's chain; returns false when it did.
+    pub(crate) fn check_placeholder_constraint(
+        &mut self,
+        declared: QualType,
+        deduced: QualType,
+        loc: Loc,
+    ) -> bool {
+        let mut cur = declared;
+        let mut found = None;
+        for _ in 0..256 {
+            match self.ast.types.canonical_view(cur) {
+                TypeView::Auto { deduced: None, concept: Some(c), args, .. } => {
+                    found = Some((c, args));
+                    break;
+                }
+                TypeView::Pointer(p) | TypeView::LValueRef(p) | TypeView::RValueRef(p) => cur = p,
+                _ => break,
+            }
+        }
+        let Some((c, extra)) = found else { return true };
+        if self.ast.types.is_dependent(deduced) || self.is_error_type(deduced) {
+            return true;
+        }
+        let Some((_, t)) = self.placeholder_deduction(declared, deduced) else { return true };
+        let mut args = vec![TemplateArg::ty(t)];
+        if let Some(x) = extra {
+            args.extend_from_slice(self.ast.types.args(x));
+        }
+        let list = self.ast.types.arg_list(&args);
+        let sat = self.check_concept(c, list, loc);
+        if self.sat_ok(sat) {
+            return true;
+        }
+        let shown = match extra {
+            Some(x) => self.spec_name(c, x),
+            None => self.qualified_decl_name(c),
+        };
+        let d = self
+            .diag(DiagId::sema_placeholder_constraints_not_satisfied, loc)
+            .arg(self.ty_arg(t))
+            .arg(format!("'{shown}'"));
+        let d = self.with_sat_notes(d, sat);
+        self.emit(d);
+        false
+    }
+
     /// The keyword of the placeholder in `declared` (under pointer and
     /// reference declarators).
     pub(crate) fn placeholder_keyword(&self, declared: QualType) -> Option<AutoKeyword> {

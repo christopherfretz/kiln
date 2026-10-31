@@ -1858,6 +1858,9 @@ impl Sema<'_, '_> {
         {
             let _ = self.ast.decls.cold.begin_loc.insert(f, ds.loc);
         }
+        if ds.auto_constraint.is_some() && ds.constraint_loc.is_valid() {
+            self.inst.concepts.placeholder_locs.insert(f, ds.constraint_loc);
+        }
         if invalid_redecl {
             self.ast.decls.set_flags(f, DeclFlags::INVALID);
         }
@@ -2240,6 +2243,9 @@ impl Sema<'_, '_> {
         if ds.loc.is_valid() && ds.loc != d.name_loc() {
             let _ = self.ast.decls.cold.begin_loc.insert(f, ds.loc);
         }
+        if ds.auto_constraint.is_some() && ds.constraint_loc.is_valid() {
+            self.inst.concepts.placeholder_locs.insert(f, ds.constraint_loc);
+        }
         if d.init_style.is_some() {
             self.special.nsdmi.insert(f);
         }
@@ -2434,6 +2440,10 @@ impl Sema<'_, '_> {
         h.lexical = Some(lexical);
         self.mark_pattern_next();
         let v = self.builder().var(h, ty, spec, prev_ok);
+        if ds.auto_constraint.is_some() && ds.constraint_loc.is_valid() {
+            // The constrained placeholder's diagnostics point here.
+            self.inst.concepts.placeholder_locs.insert(v, ds.constraint_loc);
+        }
         self.check_abstract_var(v);
         self.register_local(name, v);
         if spec.storage() == VarStorage::Extern {
@@ -2595,7 +2605,14 @@ impl Sema<'_, '_> {
         let fail = match overload {
             Some(e) => AutoFail::Incompatible(e),
             None => match self.deduce_auto(declared, &items, kind) {
-                Ok(t) => return Some(t),
+                Ok(t) => {
+                    let at = self.inst.concepts.placeholder_locs.get(&v).copied().unwrap_or(loc);
+                    return Some(if self.check_placeholder_constraint(declared, t, at) {
+                        t
+                    } else {
+                        QualType::ERROR
+                    });
+                }
                 Err(f) => f,
             },
         };
@@ -3700,6 +3717,24 @@ impl Sema<'_, '_> {
                         self.ast.exprs.get(inner).kind(),
                         ExprKind::CXXBoolLiteralExpr | ExprKind::IntegerLiteral
                     );
+                    let ik = self.ast.exprs.get(inner).kind();
+                    if matches!(ik, ExprKind::ConceptSpecializationExpr | ExprKind::RequiresExpr) {
+                        // [temp.constr]: the unsatisfied constraint's chain
+                        // (clang's `DiagnoseUnsatisfiedConstraint`).
+                        let d = match text {
+                            Some(t) => {
+                                self.diag(DiagId::sema_static_assert_failed_msg, cloc).arg(t)
+                            }
+                            None => self.diag(DiagId::sema_static_assert_failed, cloc),
+                        };
+                        let recs = self.false_atom_records(inner);
+                        let mut notes = Vec::new();
+                        self.render_records(&recs, &mut notes, 0);
+                        let d = notes.into_iter().fold(d, kiln_diag::Diag::with_note);
+                        self.emit(d);
+                        let ctx = self.ctx;
+                        return self.builder().static_assert(ctx, loc, c, msg);
+                    }
                     let d = if lit {
                         match text {
                             Some(t) => {

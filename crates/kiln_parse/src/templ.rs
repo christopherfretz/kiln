@@ -659,6 +659,25 @@ impl Parser<'_, '_> {
         self.s.act_template_id(tn, &args, name_loc, r)
     }
 
+    /// At `typename name ;` or `typename name<args> ;` in a
+    /// type-requirement: the type-name has no nested-name-specifier.
+    fn unqualified_type_requirement(&self) -> bool {
+        let p = self.pos() + 1;
+        if self.ident_of(self.tok_at(p)).is_none() {
+            return false;
+        }
+        match self.tok_at(p + 1).kind {
+            TokKind::Punct(Punct::ColonColon) => false,
+            TokKind::Punct(Punct::Less) => match self.skip_template_args(p + 1) {
+                Some((close, false)) => {
+                    self.tok_at(close + 1).kind != TokKind::Punct(Punct::ColonColon)
+                }
+                _ => false,
+            },
+            _ => true,
+        }
+    }
+
     // -- typename-specifiers -----------------------------------------------------------
 
     /// `typename nested-name-specifier template? name (< args >)?`
@@ -994,8 +1013,15 @@ impl Parser<'_, '_> {
             }
             Requirement::Compound { expr, noexcept, constraint }
         } else if self.at_kw(Kw::Typename) {
-            // type-requirement ([expr.prim.req.type]).
-            Requirement::Type(self.parse_typename_specifier()?)
+            // type-requirement ([expr.prim.req.type]): `typename
+            // nested-name-specifier? type-name ;`; an unqualified
+            // type-name (`typename X<T>;`) is a plain type.
+            if self.unqualified_type_requirement() {
+                self.bump();
+                Requirement::Type(self.parse_type_id()?)
+            } else {
+                Requirement::Type(self.parse_typename_specifier()?)
+            }
         } else if self.at_kw(Kw::Requires) {
             // nested-requirement ([expr.prim.req.nested]).
             self.bump();

@@ -981,6 +981,24 @@ diag_ids! {
     sema_nested_name_spec_non_tag = Error (1) "type {0} cannot be used prior to '::' because it has no members";
     sema_mempointer_in_nonclass_type = Error (1) "member pointer refers into non-class type {0}";
     note_typename_member_refers_here = Note (1) "referenced member '{0}' is declared here";
+    // WP-073: concepts (spec/sema-templates.md §8, §8.7; clang 19's texts).
+    sema_template_constraints_not_satisfied = Error (3) "constraints not satisfied for {0:class template|function template|variable template|alias template|template template parameter|template} '{1}' {2}";
+    sema_non_bool_atomic_constraint = Error (1) "atomic constraint must be of type 'bool' (found {0})";
+    sema_non_constant_constraint = Error (0) "substitution into constraint expression resulted in a non-constant expression";
+    sema_constraint_depends_on_self = Error (1) "satisfaction of constraint '{0}' depends on itself";
+    sema_placeholder_constraints_not_satisfied = Error (2) "deduced type {0} does not satisfy {1}";
+    note_ovl_candidate_unsatisfied_constraints = Note (1) "candidate template ignored: constraints not satisfied{0}";
+    note_atomic_constraint_false = Note (2) "{0:and|because} '{1}' evaluated to false";
+    note_atomic_constraint_false_elaborated = Note (5) "{0:and|because} '{1}' ({2} {3} {4}) evaluated to false";
+    note_single_arg_concept_false = Note (3) "{0:and|because} {1} does not satisfy '{2}'";
+    note_substituted_constraint_ill_formed = Note (1) "because substituted constraint expression is ill-formed{0}";
+    note_requirement_would_be_invalid = Note (3) "{0:and|because} '{1}' would be invalid: {2}";
+    note_requirement_may_throw = Note (2) "{0:and|because} '{1}' may throw an exception";
+    note_requirement_type_constraint = Note (2) "{0:and|because} type constraint '{1}' was not satisfied:";
+    note_checking_constraints_here = Note (1) "while checking constraint satisfaction for template '{0}' required here";
+    note_checking_concept_here = Note (1) "while checking the satisfaction of concept '{0}' requested here";
+    note_constraint_substitution_here = Note (0) "while substituting template arguments into constraint expression here";
+    note_ambiguous_atomic_constraints = Note (0) "similar constraint expressions not considered equivalent; constraint expressions cannot be considered equivalent unless they originate from the same concept";
     // WP-074: builtin type traits, transforms and templates (spec/sema-templates.md §9)
     sema_type_trait_arity = Error (5) "type trait requires {0}{1:| or more} argument{2:|s}; have {3} argument{4:|s}";
     sema_incomplete_type_trait = Error (1) "incomplete type {0} used in type trait expression";
