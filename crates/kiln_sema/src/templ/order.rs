@@ -125,7 +125,7 @@ impl Sema<'_, '_> {
                     .at::<DeclId>(list.params, i)
                     .and_then(|x| self.ast.template_parm(x))
                     .is_some_and(|x| x.pack);
-                if pack && matches!(d.args.get(i).map(|a| a.view()), Some(ArgView::Null)) {
+                if pack && matches!(d.args.get(i).map(TemplateArg::view), Some(ArgView::Null)) {
                     let l = self.ast.types.arg_list(&[]);
                     d.args[i] = TemplateArg::pack(l);
                 }

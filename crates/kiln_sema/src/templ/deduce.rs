@@ -299,7 +299,7 @@ impl Sema<'_, '_> {
             .iter()
             .enumerate()
             .filter(|&(_, &p)| self.ast.template_parm(p).is_some_and(|x| x.pack))
-            .find_map(|(i, _)| match d.args.get(i).map(|a| a.view()) {
+            .find_map(|(i, _)| match d.args.get(i).map(TemplateArg::view) {
                 Some(ArgView::Pack(l)) => Some(self.ast.types.args(l).len()),
                 _ => None,
             })
@@ -328,16 +328,16 @@ impl Sema<'_, '_> {
                 return r;
             }
             for (idx, a) in cur {
-                match per.iter_mut().find(|x| x.0 == idx) {
-                    Some(x) => x.1.push(a),
-                    None => {
-                        let mut v = Vec::with_capacity(n);
-                        if let Some(ArgView::Pack(l)) = d.args.get(idx as usize).map(|a| a.view()) {
-                            v.extend(self.ast.types.args(l).iter().take(skip));
-                        }
-                        v.push(a);
-                        per.push((idx, v));
+                if let Some(x) = per.iter_mut().find(|x| x.0 == idx) {
+                    x.1.push(a);
+                } else {
+                    let mut v = Vec::with_capacity(n);
+                    if let Some(ArgView::Pack(l)) = d.args.get(idx as usize).map(TemplateArg::view)
+                    {
+                        v.extend(self.ast.types.args(l).iter().take(skip));
                     }
+                    v.push(a);
+                    per.push((idx, v));
                 }
             }
         }

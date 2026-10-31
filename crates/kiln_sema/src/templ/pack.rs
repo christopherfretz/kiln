@@ -264,7 +264,7 @@ impl Substituter<'_, '_, '_> {
     /// element, R-WALK), wrapped in a `ParenExpr`.
     pub(crate) fn fold(&mut self, e: ExprId, loc: Loc, end: Loc) -> SubstResult<ExprId> {
         let n = *self.sema.ast.exprs.get(e);
-        let op = kiln_ast::expr::BinaryOp::from_u8(n.aux() as u8).ok_or(SubstFail)?;
+        let op = kiln_ast::expr::BinaryOp::from_u8(n.aux()).ok_or(SubstFail)?;
         let lhs = ExprId::from_raw(n.a());
         let rhs = ExprId::from_raw(n.b());
         let has_pack = |s: &Self, x: Option<ExprId>| {
@@ -287,23 +287,20 @@ impl Substituter<'_, '_, '_> {
         };
         let mut it: Box<dyn Iterator<Item = ExprId>> =
             if right { Box::new(elems.into_iter().rev()) } else { Box::new(elems.into_iter()) };
-        let mut acc = match init.or_else(|| it.next()) {
-            Some(x) => x,
-            None => {
-                use kiln_ast::expr::BinaryOp;
-                return match op {
-                    BinaryOp::LAnd => Ok(self.sema.act_on_bool_literal(true, ellipsis)),
-                    BinaryOp::LOr => Ok(self.sema.act_on_bool_literal(false, ellipsis)),
-                    BinaryOp::Comma => {
-                        Ok(self.sema.act_on_value_init_cast(QualType::VOID, ellipsis, ellipsis))
-                    }
-                    _ => {
-                        let d = self.sema.diag(DiagId::sema_fold_empty, loc).arg(op.spelling());
-                        self.sema.emit(d);
-                        Err(SubstFail)
-                    }
-                };
-            }
+        let Some(mut acc) = init.or_else(|| it.next()) else {
+            use kiln_ast::expr::BinaryOp;
+            return match op {
+                BinaryOp::LAnd => Ok(self.sema.act_on_bool_literal(true, ellipsis)),
+                BinaryOp::LOr => Ok(self.sema.act_on_bool_literal(false, ellipsis)),
+                BinaryOp::Comma => {
+                    Ok(self.sema.act_on_value_init_cast(QualType::VOID, ellipsis, ellipsis))
+                }
+                _ => {
+                    let d = self.sema.diag(DiagId::sema_fold_empty, loc).arg(op.spelling());
+                    self.sema.emit(d);
+                    Err(SubstFail)
+                }
+            };
         };
         for x in it {
             self.check_stack(|_| loc)?;
