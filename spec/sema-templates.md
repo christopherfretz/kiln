@@ -272,7 +272,7 @@ All of these are built by sema actions, which compute dependence as in
 
 | Syntax (in a dependent context) | Node |
 |---|---|
-| `T::x`, or `X<T>::x` (not the current instantiation) in an expression | `DependentScopeDeclRefExpr {nns, name, targs?}` |
+| `T::x`, `X<T>::x` or `X<T>::operator@` (not the current instantiation) in an expression | `DependentScopeDeclRefExpr {nns, name (a `DeclName`), targs?}` |
 | `e.m` or `p->m` with a type-dependent object, or a member of the current instantiation that is not found when it has dependent bases | `CXXDependentScopeMemberExpr {base, arrow, nns?, name, targs?}` |
 | unqualified `f(args)` with type-dependent args, where lookup finds functions or templates (or nothing) | `UnresolvedLookupExpr {requires_adl, overloaded, decls, targs?}`, plus `CallExpr` of dependent type |
 | `obj.f(args)` that names an overload set of members | `UnresolvedMemberExpr` |

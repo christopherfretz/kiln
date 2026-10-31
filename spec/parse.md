@@ -259,6 +259,13 @@ template-argument-list closes before an operator could
 in the list and recurses into nested lists, so without a memo each of `N`
 nesting levels re-scans everything inside it: `W<W<...<char>...>>` was
 quadratic in `N` (2,000 levels took 1.4 s in release).
+- A named cast keyword (`static_cast`, `dynamic_cast`, `reinterpret_cast`,
+  `const_cast`) followed by `<` opens a nested list, so
+  `C<static_cast<T>(e)>` closes at the last `>` (WP-130).
+- In `X<args>::name` the arguments are not converted: `name` is
+  classified by the primary template's pattern, and, when the pattern
+  lacks it, by the explicit and then the partial specializations
+  (`Sema::classify_template_member`, WP-130).
 - `skip_template_args(i)` memoizes its result by token index `i` in
   `Parser::targs_memo`.
 - A result is valid while `Sema::lookup_stamp()` is unchanged. The stamp
