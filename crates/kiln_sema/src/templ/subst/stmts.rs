@@ -5,7 +5,7 @@
 //! conversions, NRVO) run on the instantiation.
 
 use kiln_ast::decl::DeclKind;
-use kiln_ast::expr::ExprKind;
+use kiln_ast::expr::{ExprDeps, ExprKind};
 use kiln_ast::stmt::{IfKind, StmtKind};
 use kiln_ast::{DeclId, ExprId, StmtId};
 use kiln_source::Loc;
@@ -243,6 +243,20 @@ impl Substituter<'_, '_, '_> {
             let c = c.ok_or(SubstFail)?;
             if kind == IfKind::Constexpr {
                 let c = self.sema.act_on_constexpr_condition(c);
+                if self.sema.ast.exprs.get(c).kind() != ExprKind::ConstantExpr {
+                    // Still value-dependent (an outer level is not yet
+                    // substituted): both branches are kept, as written.
+                    if self.sema.ast.exprs.get(c).deps().intersects(ExprDeps::VALUE) {
+                        let then = match d.then {
+                            Some(t) => self.sub_stmt(t),
+                            None => self.sema.act_on_null_stmt(loc),
+                        };
+                        let els = d.els.map(|e| self.sub_stmt(e));
+                        return Ok(self.sema.act_on_if(kind, init, var, Some(c), then, els, loc));
+                    }
+                    // Invalid (diagnosed).
+                    return Err(SubstFail);
+                }
                 let taken = self
                     .sema
                     .ast

@@ -707,7 +707,20 @@ impl Substituter<'_, '_, '_> {
         let r = self.sema.act_on_call_name_dn(name, n.loc());
         if let Some(t) = targs {
             if self.sema.ast.exprs.get(r).kind() == ExprKind::UnresolvedLookupExpr {
-                let _ = self.sema.ast.templates.expr_targs.insert(r, t);
+                // Rebuilt with the arguments, so that dependent ones (an
+                // outer level still being substituted) make the name, and
+                // the call, type-dependent ([temp.dep.expr]/3).
+                let rn = *self.sema.ast.exprs.get(r);
+                let ds = self.sema.ast.unresolved_decls(r);
+                let nns = self.sema.ast.templates.expr_nns.get(r).copied();
+                return Ok(self.sema.builder().unresolved_lookup(
+                    name,
+                    &ds,
+                    rn.aux() != 0,
+                    nns,
+                    Some(t),
+                    rn.loc(),
+                ));
             } else if self.sema.is_member_template_ref(r) {
                 // An implicit member template-id `this->f<T>` (§6.4).
                 return Ok(self.sema.act_on_member_template_args(r, t));
