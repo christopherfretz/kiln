@@ -404,7 +404,6 @@ and returns the scope it names:
 - [over.match.list] phase 1 (initializer-list constructors) for braced
   CTAD.
 - `new X[n]{…}` with CTAD.
-- `new X{t}` with a dependent `t`: CXXNewExpr is not substituted yet.
 - `sema_ctad_deleted` (a deleted constructor selected) and
   `sema_ctad_not_allowed` (a placeholder in a non-deducible position)
   are reserved ids that nothing emits yet.

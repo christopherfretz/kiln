@@ -16,7 +16,11 @@ template<class T> constexpr auto make_copy(T t) {
   H h = t;
   return h;
 }
+template<class T> auto make_new(T t) { return new H(t); }
+template<class T> auto make_new_list(T t) { return new H{t}; }
 static_assert(__is_same(decltype(make_var(1.0)), H<double>));
+static_assert(__is_same(decltype(make_new(1)), H<int> *));
+static_assert(__is_same(decltype(make_new_list(1.f)), H<float> *));
 static_assert(__is_same(decltype(make_cast('a')), H<char>));
 static_assert(__is_same(decltype(make_list(1u)), H<unsigned>));
 static_assert(__is_same(decltype(make_copy(2L)), H<long>));
