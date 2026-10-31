@@ -507,6 +507,13 @@ impl Sema<'_, '_> {
                 .decls
                 .mark_function(f, kiln_ast::decl::FnSpec::new().with_implicit_inline(true));
         }
+        self.push_scopes_between(ctx, lexical)
+    }
+
+    /// Pushes the scopes of `ctx` and its enclosing contexts up to (not
+    /// including) the first one that encloses `lexical`, outermost
+    /// first. Returns how many were pushed.
+    pub(crate) fn push_scopes_between(&mut self, ctx: DeclId, lexical: DeclId) -> usize {
         let mut chain = Vec::new();
         let mut c = Some(ctx);
         while let Some(x) = c {

@@ -14,7 +14,7 @@ quick CI green. The branch is never left red.
 | 2 qualified member access | d0a8a38, 82f9e06, 5599dbf | done, green |
 | 3 dependent NNS chains, typename/template diags | db0fcfd, 01dc8b5 | done, green |
 | 4 friend templates ([temp.friend]) | c936c33, 4af684f, b9338cb, e2057bb | done, green |
-| 5 declarator parameters / trailing requires-clause / out-of-line scope | f439d2e, next | in progress |
+| 5 declarator parameters / trailing requires-clause / out-of-line scope | f439d2e, 271b0c0, next | in progress |
 
 ### Item 1: member access by declared name (done)
 - `x.operator@(…)`, `x.operator T()`, `x.operator->()`, and unqualified
@@ -126,10 +126,39 @@ quick CI green. The branch is never left red.
 - **A trailing return type in a template body already works**:
   `-> decltype(t.f())`, `-> decltype(v + u)` in a member template, and a
   nested class template.
-- **Next: out-of-line member declarators.** In `auto S::f() -> decltype(v)`
-  and `auto S::g() -> T`, the parameters, array bounds and trailing return
-  type after the declarator-id `S::f` must be looked up in `S`'s scope
-  ([basic.scope.class], [dcl.meaning]).
+- **Out-of-line declarator scope** ([dcl.meaning]/1, [basic.scope.class],
+  clang `ActOnCXXEnterDeclaratorScope`/`EnterDeclaratorContext`).
+  - After a qualified declarator-id `N::f` / `S::f` / `C<X>::f`, the
+    scopes from the qualifier's context down to the current context are
+    pushed, and `Sema.ctx` becomes the qualifier's definition until the
+    declarator ends. Parameters, array bounds, the trailing return type,
+    `noexcept` and `this` are then looked up in the class or namespace.
+  - The same scope is entered for the initializer of a qualified variable
+    (`ActOnCXXEnterDeclInitializer`: `int S::v = k;`,
+    `const T C<X>::y = z + 1;`) and for a trailing requires-clause.
+  - Current-instantiation rebuild (clang
+    `RebuildDeclaratorInCurrentInstantiation`): a decl-spec type
+    `typename C<X>::T` in an out-of-line member of `C<X>` resolves to the
+    member `T`, so `typename C<X>::T C<X>::h(typename C<X>::T)` matches
+    its in-class declaration. Only a top-level decl-spec type is rebuilt
+    (a gap; nested positions are not).
+  - An out-of-line static data member whose initializer names another
+    out-of-line-defined member (`z` in `C<X>::y = z + 1`) found the
+    pattern's redeclaration of `z`; instantiation now maps it through its
+    first declaration (`find_instantiated_decl`).
+  - The satisfaction of a member's trailing requires-clause maps pattern
+    contexts to the specialization's (`inst_context_pairs`), so
+    `requires(sizeof(V) > 1)` with a member typedef `V` works.
+  - Tests: `dcl.meaning/qualified-declarator-scope.cpp` (run, namespace
+    and class members) and `qualified-declarator-scope-template.cpp`
+    (compile-ok; a class template's out-of-line members). It is
+    compile-ok rather than run because of a pre-existing codegen panic,
+    below.
+- **Gap, pre-existing on main:** codegen panics at
+  `kiln_abi/src/irtype.rs:489` when a program defines a member of a class
+  template out of line and the object file is emitted (`emit_global_fn`
+  reaches the dependent pattern). `-fsyntax-only` and compile-ok are
+  unaffected.
 
 ## Evidence
 - Item 1 `cargo xtask ci --quick`: corpus (kiln) 1500 passed; 0 failed; 15 xfail; 0 xpass (1515 tests; baseline 1496/1511).

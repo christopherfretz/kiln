@@ -1187,6 +1187,9 @@ impl Parser<'_, '_> {
                 d.ellipsis = Some(self.bump().span.lo);
             }
         }
+        // The scopes a qualified declarator-id enters for the rest of the
+        // declarator.
+        let mut entered = 0;
         if (self.ident().is_some() || self.at(Punct::ColonColon))
             && d.ctx != DeclaratorContext::TypeName
         {
@@ -1200,6 +1203,7 @@ impl Parser<'_, '_> {
             });
             if self.at(Punct::Tilde) || self.at_kw(Kw::Operator) {
                 d.qualifier = qual;
+                entered = qual.map_or(0, |q| self.s.act_on_enter_declarator_scope(q));
                 self.parse_special_declarator_id(d);
             } else if let Some(n) = self.ident() {
                 let ctor = self.names_constructor(n, last_qual, d.ctx);
@@ -1210,6 +1214,7 @@ impl Parser<'_, '_> {
                     d.name = Some((n, l));
                 }
                 d.qualifier = qual;
+                entered = qual.map_or(0, |q| self.s.act_on_enter_declarator_scope(q));
                 if !ctor
                     && self.at(Punct::Less)
                     && (self.s.has_pending_head()
@@ -1280,6 +1285,7 @@ impl Parser<'_, '_> {
                 break;
             }
         }
+        self.s.act_on_exit_declarator_scope(entered);
     }
 
     /// `name<args>` as the declarator-id after a template head, when
@@ -1695,7 +1701,8 @@ impl Parser<'_, '_> {
                 } else if d.invalid && !ds.has_type_specifier() {
                     QualType::ERROR
                 } else {
-                    self.s.type_from_declspec_at(&ds, d.name_loc())
+                    let t = self.s.type_from_declspec_at(&ds, d.name_loc());
+                    self.s.rebuild_in_current_instantiation(t, &d)
                 }
             });
             // GNU asm label (clang's `ParseAsmAttributesAfterDeclarator`):
@@ -1735,7 +1742,15 @@ impl Parser<'_, '_> {
             if let Some(v) = v {
                 self.s.act_on_group_declarator(&mut group, v);
             }
-            match self.parse_initializer(d.init_style, d.is_function_declarator()) {
+            // The initializer of a qualified declarator-id is in the
+            // scope of its qualifier ([basic.scope.class]/1).
+            let entered = match (v, d.qualifier) {
+                (Some(v), Some(_)) => self.s.act_on_enter_decl_initializer(v),
+                _ => 0,
+            };
+            let init = self.parse_initializer(d.init_style, d.is_function_declarator());
+            self.s.act_on_exit_declarator_scope(entered);
+            match init {
                 Ok(init) => match (v, init) {
                     (Some(v), Some(i)) => self.s.act_on_init(v, i),
                     (Some(v), None) => self.s.act_on_uninit(v),

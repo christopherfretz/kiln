@@ -427,11 +427,20 @@ impl Sema<'_, '_> {
         }
         let loc = self.begin_loc(e);
         let (params_of, this_ty) = self.constraint_function_scope(entity);
+        // A member of a class template specialization: names of the
+        // pattern class are looked up in the specialization.
+        let pairs = match self.ast.decls.get(entity).ctx() {
+            Some(c) if self.kind_of(c) == kiln_ast::decl::DeclKind::CXXRecord => {
+                self.inst_context_pairs(c)
+            }
+            _ => Vec::new(),
+        };
         if let Some(t) = this_ty {
             self.nsdmi_this.push((entity, t));
         }
         let r = self.in_sfinae(FrameKind::ConstraintSubstitution, entity, None, loc, |s| {
             let mut sub = Substituter::new(s, levels);
+            sub.map_contexts(&pairs);
             if let Some(f) = params_of {
                 sub.seed_function_params(f).ok()?;
             }
