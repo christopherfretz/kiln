@@ -864,6 +864,14 @@ impl Parser<'_, '_> {
             }
             _ => {}
         }
+        // `decltype(e)::name` (WP-119): the qualifier is parsed first.
+        if self.decltype_scope_end(self.pos()).is_some() && !self.annotate_decltype_scope() {
+            return None;
+        }
+        if self.at_decltype_scope() && !self.decltype_scope_ok() {
+            self.skip_failed_decltype_scope();
+            return Some(self.s.act_on_error_expr(&[], loc));
+        }
         if let Some(k) = self.kw() {
             return match k {
                 Kw::True | Kw::False => {
@@ -944,7 +952,7 @@ impl Parser<'_, '_> {
     /// is found by argument-dependent lookup at instantiation
     /// ([temp.dep.general]/2).
     fn parse_id_expression_rest(&mut self) -> PExpr {
-        let begin = self.loc();
+        let begin = self.name_begin();
         let qual = self.parse_nested_name_nns().ok()?;
         let template_kw = qual.is_some() && self.eat_kw(Kw::Template).is_some();
         let Some(name) = self.ident() else {
@@ -1115,7 +1123,7 @@ impl Parser<'_, '_> {
 
     /// `T(e)` ([expr.type.conv]) with one operand.
     fn parse_functional_cast(&mut self) -> PExpr {
-        let loc = self.loc();
+        let loc = self.name_begin();
         let ds = self.parse_decl_specifiers(DeclaratorContext::TypeName);
         let ty: QualType = self.s.type_from_declspec(&ds);
         if self.at(Punct::LBrace) {

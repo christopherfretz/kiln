@@ -582,6 +582,30 @@ impl<'a> AstBuilder<'a> {
         self.add(h, kind, Some(ty), payload, replaces)
     }
 
+    /// An alias declaration (`TypeAlias`) of `underlying` linked into no
+    /// context's member list and no lookup table: Sema's dependent-scope
+    /// marker for a dependent `decltype(e)::` qualifier
+    /// (spec/sema-templates.md §3, WP-119). Its `ty` is its own `Typedef`
+    /// sugar type, as for [`AstBuilder::typedef`].
+    pub fn unlinked_alias(&mut self, h: DeclHead, underlying: QualType) -> DeclId {
+        let redecl = self.redecl_link(None);
+        let d = self.ast.decls.next_id();
+        let ty = QualType::unqual(self.ast.types.typedef_type(d, underlying));
+        let payload = Payload::Typedef(TypedefData { redecl, underlying, templ: TemplLink::NONE });
+        self.ast.decls.push(
+            NewDecl {
+                kind: DeclKind::TypeAlias,
+                flags: h.flags,
+                misc: h.misc,
+                name: h.name,
+                ctx: Some(h.ctx),
+                loc: h.loc,
+                ty: Some(ty),
+            },
+            payload,
+        )
+    }
+
     /// A function declaration of `kind` (`Function`, `CXXMethod`,
     /// `CXXConstructor`, `CXXDestructor`, `CXXConversion`) with function
     /// type `ty`; `prev` is the redeclared function (overloads are distinct

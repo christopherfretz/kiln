@@ -1,0 +1,44 @@
+TranslationUnitDecl
+|-CXXRecordDecl referenced struct S definition
+| |-TypeAliasDecl referenced type 'int'
+| |-VarDecl referenced v 'const int' static inline constexpr cinit value=3
+| | `-IntegerLiteral 'int' 3
+| |-ClassTemplateDecl M
+| | |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| | |-CXXRecordDecl struct M definition
+| | | `-TypeAliasDecl type 'T'
+| | `-ClassTemplateSpecializationDecl struct M definition implicit_instantiation
+| |   |-TemplateArgument type 'int'
+| |   `-TypeAliasDecl referenced type 'int'
+| `-FieldDecl referenced m 'int'
+|-VarDecl referenced s 'S' callinit
+| `-CXXConstructExpr 'S' 'void () noexcept'
+|-VarDecl y 'decltype(s)::type':'int' cinit
+| `-IntegerLiteral 'int' 2
+|-VarDecl x 'typename decltype(s)::type':'int' cinit
+| `-IntegerLiteral 'int' 1
+|-VarDecl z 'decltype(s)::M<int>::type':'int' cinit
+| `-IntegerLiteral 'int' 3
+|-VarDecl pm 'int decltype(s)::*' cinit
+| `-UnaryOperator 'int S::*' prefix '&' cannot overflow
+|   `-DeclRefExpr 'int' lvalue Field 'm' 'int'
+|-VarDecl k 'int' cinit
+| `-ImplicitCastExpr 'int' <LValueToRValue>
+|   `-DeclRefExpr 'const int' lvalue Var 'v' 'const int' non_odr_use_constant
+|-ClassTemplateDecl X
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| |-CXXRecordDecl struct X definition
+| | |-VarDecl value 'const int' static cinit
+| | | `-DependentScopeDeclRefExpr '<dependent type>' lvalue
+| | `-TypeAliasDecl type 'typename decltype(T())::type'
+| `-ClassTemplateSpecializationDecl struct X definition implicit_instantiation
+|   |-TemplateArgument type 'S'
+|   |-VarDecl referenced value 'const int' static cinit
+|   | `-ImplicitCastExpr 'int' <LValueToRValue>
+|   |   `-DeclRefExpr 'const int' lvalue Var 'v' 'const int' non_odr_use_constant
+|   `-TypeAliasDecl referenced type 'typename decltype(S())::type':'int'
+|-VarDecl q 'int' cinit
+| `-ImplicitCastExpr 'int' <LValueToRValue>
+|   `-DeclRefExpr 'const int' lvalue Var 'value' 'const int' non_odr_use_constant
+`-VarDecl r 'X<S>::type':'int' cinit
+  `-IntegerLiteral 'int' 4

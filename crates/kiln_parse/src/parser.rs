@@ -104,6 +104,23 @@ pub struct Parser<'a, 'sm> {
     /// every token read from then on is this `Eof`, so every rule
     /// unwinds.
     halt: Cell<Option<Token>>,
+    /// The parsed `decltype ( expression )` whose `::` is the current
+    /// token: the first component of a nested-name-specifier (WP-119,
+    /// clang's `annot_decltype`). Cleared by every [`Parser::bump`].
+    decltype_scope: Option<DecltypeScope>,
+}
+
+/// A `decltype(e)` parsed ahead as a nested-name-specifier
+/// ([`Parser::annotate_decltype_scope`]).
+#[derive(Clone, Copy, Debug)]
+struct DecltypeScope {
+    /// The replay depth and token index of the `::`.
+    level: usize,
+    pos: usize,
+    /// The scope and specifier; `None` after an error (diagnosed).
+    qual: Option<(DeclId, NnsId)>,
+    /// The `decltype` keyword.
+    loc: Loc,
 }
 
 /// The template-argument scan memo: the `<` index → the scan's result,
@@ -169,6 +186,7 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             pack_hint: false,
             targs_memo: RefCell::new(TemplateArgsMemo::default()),
             halt: Cell::new(None),
+            decltype_scope: None,
         };
         p.handle_events(0);
         p
@@ -280,6 +298,7 @@ impl<'a, 'sm> Parser<'a, 'sm> {
         if t.kind == TokKind::Eof {
             return t;
         }
+        self.decltype_scope = None;
         if let TokKind::Punct(p) = t.kind {
             match p {
                 Punct::LParen => self.depth[Bracket::Paren as usize] += 1,
@@ -697,7 +716,10 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             return None;
         }
         let mut qual: Option<DeclId> = None;
-        if self.tok_at(i).kind == TokKind::Punct(Punct::ColonColon) {
+        if let Some(d) = self.decltype_scope_at(i) {
+            qual = Some(d.qual?.0);
+            i += 1;
+        } else if self.tok_at(i).kind == TokKind::Punct(Punct::ColonColon) {
             qual = Some(self.s.ast.tu);
             i += 1;
         }
@@ -781,6 +803,15 @@ impl<'a, 'sm> Parser<'a, 'sm> {
                 TokKind::Identifier(_) if self.kw_of(t) == Some(Kw::Template) => {
                     after_template_kw = true;
                     j += 1;
+                    continue;
+                }
+                TokKind::Identifier(_) if self.kw_of(t) == Some(Kw::Decltype) => {
+                    // `decltype(e)::name<...>` (WP-119): the components'
+                    // own lists are skipped with the name.
+                    j = match self.decltype_scope_end(j) {
+                        Some(cc) => self.skip_qualified_rest(cc).unwrap_or(cc + 1),
+                        None => j + 1,
+                    };
                     continue;
                 }
                 TokKind::Identifier(_) if self.kw_of(t).is_some() => {
@@ -871,6 +902,156 @@ impl<'a, 'sm> Parser<'a, 'sm> {
         lo
     }
 
+    /// The index of the `::` when a `decltype ( expression ) ::` starts
+    /// at token `i` ([expr.prim.id.qual]: a *computed-type-specifier* as
+    /// the first component of a nested-name-specifier). `decltype(auto)`
+    /// is never one.
+    pub(crate) fn decltype_scope_end(&self, i: usize) -> Option<usize> {
+        if self.kw_of(self.tok_at(i)) != Some(Kw::Decltype)
+            || self.tok_at(i + 1).kind != TokKind::Punct(Punct::LParen)
+            || (self.kw_of(self.tok_at(i + 2)) == Some(Kw::Auto)
+                && self.tok_at(i + 3).kind == TokKind::Punct(Punct::RParen))
+        {
+            return None;
+        }
+        let after = self.skip_balanced(i + 1)?;
+        (self.tok_at(after).kind == TokKind::Punct(Punct::ColonColon)).then_some(after)
+    }
+
+    /// The index after the bracket group whose opener is token `i`
+    /// (`None` at an unbalanced closer or the end of input).
+    pub(crate) fn skip_balanced(&self, mut i: usize) -> Option<usize> {
+        let mut stack: Vec<Punct> = Vec::new();
+        loop {
+            match self.tok_at(i).kind {
+                TokKind::Eof => return None,
+                TokKind::Punct(Punct::LParen) => stack.push(Punct::RParen),
+                TokKind::Punct(Punct::LSquare) => stack.push(Punct::RSquare),
+                TokKind::Punct(Punct::LBrace) => stack.push(Punct::RBrace),
+                // A matching closer is popped by the guard.
+                TokKind::Punct(c @ (Punct::RParen | Punct::RSquare | Punct::RBrace))
+                    if stack.pop() != Some(c) =>
+                {
+                    return None;
+                }
+                _ => {}
+            }
+            i += 1;
+            if stack.is_empty() {
+                return Some(i);
+            }
+        }
+    }
+
+    /// At a `decltype ( expression ) ::` ([`Parser::decltype_scope_end`]),
+    /// parses the decltype-specifier and records it as the pending first
+    /// component of the nested-name-specifier at the `::`, diagnosing a
+    /// type that is not a class or enumeration. True if the current token
+    /// is then that `::` (whose annotation may carry an error).
+    pub(crate) fn annotate_decltype_scope(&mut self) -> bool {
+        if self.decltype_scope_at(self.pos).is_some() {
+            return true;
+        }
+        let loc = self.loc();
+        let (_, ty) = self.parse_decltype_specifier();
+        if !self.at(Punct::ColonColon) {
+            return false;
+        }
+        let qual = ty.and_then(|t| self.s.act_on_nested_name_decltype(t, loc));
+        self.decltype_scope =
+            Some(DecltypeScope { level: self.replay.len(), pos: self.pos, qual, loc });
+        true
+    }
+
+    /// The pending decltype qualifier whose `::` is token `i`.
+    fn decltype_scope_at(&self, i: usize) -> Option<DecltypeScope> {
+        self.decltype_scope.filter(|d| d.level == self.replay.len() && d.pos == i)
+    }
+
+    /// At the `::` of a pending decltype qualifier at token `i`: the
+    /// scope it names (`Err` after an error).
+    pub(crate) fn decltype_scope_qual_at(&self, i: usize) -> Option<Result<DeclId, ()>> {
+        self.decltype_scope_at(i).map(|d| d.qual.map(|q| q.0).ok_or(()))
+    }
+
+    /// The index after the components following the `::` at token `cc`,
+    /// skipped without classifying them (the scope is unknown): `template`,
+    /// identifiers, template argument lists after a `<` that close, and
+    /// `::`s (not a `::*`). `None` if no identifier follows a `::`.
+    pub(crate) fn skip_qualified_rest(&self, cc: usize) -> Option<usize> {
+        let mut i = cc + 1;
+        loop {
+            if self.kw_of(self.tok_at(i)) == Some(Kw::Template) {
+                i += 1;
+            }
+            self.ident_of(self.tok_at(i))?;
+            i += 1;
+            if self.tok_at(i).kind == TokKind::Punct(Punct::Less) {
+                // Not an argument list unless it closes (`x < y` is an
+                // expression).
+                let Some((close, split)) = self.skip_template_args(i) else { return Some(i) };
+                if split {
+                    return Some(close);
+                }
+                i = close + 1;
+            }
+            if self.tok_at(i).kind != TokKind::Punct(Punct::ColonColon)
+                || self.tok_at(i + 1).kind == TokKind::Punct(Punct::Star)
+            {
+                return Some(i);
+            }
+            i += 1;
+        }
+    }
+
+    /// Where a name starting at the current token begins: the `decltype`
+    /// of a pending decltype qualifier, else the current token.
+    pub(crate) fn name_begin(&self) -> Loc {
+        self.decltype_scope_at(self.pos).map_or_else(|| self.loc(), |d| d.loc)
+    }
+
+    /// True when the current token is the `::` of a pending decltype
+    /// qualifier that named a scope (no error).
+    pub(crate) fn decltype_scope_ok(&self) -> bool {
+        self.decltype_scope_at(self.pos).is_some_and(|d| d.qual.is_some())
+    }
+
+    /// Skips the rest of a qualified name after a `decltype(e)` qualifier
+    /// that was diagnosed (clang recovers silently): `::`, then
+    /// `template`, identifiers, template argument lists and `::`s.
+    pub(crate) fn skip_failed_decltype_scope(&mut self) {
+        if !self.at(Punct::ColonColon) {
+            return;
+        }
+        self.bump();
+        loop {
+            if self.kw_of(self.tok()) == Some(Kw::Template) {
+                self.bump();
+            }
+            if self.ident_of(self.tok()).is_none() {
+                return;
+            }
+            self.bump();
+            if self.at(Punct::Less)
+                && let Some((close, false)) = self.skip_template_args(self.pos)
+            {
+                while self.pos <= close && !self.at_eof() {
+                    self.bump();
+                }
+            }
+            if !self.at(Punct::ColonColon) {
+                return;
+            }
+            self.bump();
+        }
+    }
+
+    /// True when the current token is the `::` of a pending decltype
+    /// qualifier.
+    pub(crate) fn at_decltype_scope(&self) -> bool {
+        self.decltype_scope_at(self.pos).is_some()
+    }
+
     /// Parses an optional nested-name-specifier (`::`, `N::`, `N::M::`),
     /// diagnosing unknown names. Returns `Ok(None)` when there is none,
     /// `Err(())` after an error.
@@ -881,9 +1062,16 @@ impl<'a, 'sm> Parser<'a, 'sm> {
     /// [`Parser::parse_nested_name`], also building the specifier as
     /// written (namespace aliases and typedef names kept).
     pub(crate) fn parse_nested_name_nns(&mut self) -> Result<Option<Qualifier>, ()> {
-        let start = self.loc();
+        let mut start = self.loc();
         let mut qual: Option<(DeclId, NnsId)> = None;
-        if self.at(Punct::ColonColon) {
+        if self.decltype_scope_end(self.pos).is_some() {
+            self.annotate_decltype_scope();
+        }
+        if let Some(d) = self.decltype_scope_at(self.pos) {
+            self.bump();
+            start = d.loc;
+            qual = Some(d.qual.ok_or(())?);
+        } else if self.at(Punct::ColonColon) {
             self.bump();
             qual = Some((self.s.ast.tu, self.s.nns_global()));
         }
