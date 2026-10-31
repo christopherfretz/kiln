@@ -85,6 +85,10 @@ impl TypeNames for SemaNames<'_> {
         self.ast.spec_print_args(decl)
     }
 
+    fn tag_keyword(&self, decl: DeclId) -> &'static str {
+        self.ast.decls.record(decl).map_or("struct", |r| r.tag.keyword())
+    }
+
     fn write_decl_name(&self, decl: DeclId, scoped: bool, out: &mut String) {
         if scoped {
             self.write_scope(decl, out);
