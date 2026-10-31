@@ -575,7 +575,12 @@ impl<'a, W: io::Write> Dumper<'a, W> {
         if !kind.is_function() && decls.member_list(d).is_some() {
             for m in ast.members(d) {
                 // A befriended declaration prints under its `FriendDecl`.
-                if self.shown(d, m) && decls.get(m).misc().friend() == FriendKind::None {
+                // A shadow hidden by a later member is gone, as clang's
+                // `HideUsingShadowDecl` removes it from the class.
+                if self.shown(d, m)
+                    && decls.get(m).misc().friend() == FriendKind::None
+                    && decls.hidden_shadow(m).is_none()
+                {
                     kids.push((Node::Decl(m), None));
                 }
             }

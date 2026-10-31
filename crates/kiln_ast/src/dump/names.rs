@@ -118,6 +118,35 @@ impl<'a> AstNames<'a> {
             self.write_decl_name_value(self.ast.decls.get(d).name(), out);
             return;
         }
+        // The pattern of a class template: clang's class type is the
+        // injected-class-name `X<P...>`, printed with the parameters'
+        // names (`Base<T>`, `~Tuple<Ts...>`).
+        if let Some(d) = self.ast.types.as_record(QualType::unqual(t))
+            && let Some(tmpl) = self.ast.described_template(d)
+            && let Some(info) = self.ast.template_info(tmpl)
+        {
+            self.write_decl_name_value(self.ast.decls.get(d).name(), out);
+            out.push('<');
+            let list = self.ast.templates.param_list(info.params);
+            for (i, q) in self.ast.lists.iter::<DeclId>(list.params).enumerate() {
+                if i > 0 {
+                    out.push_str(", ");
+                }
+                let parm = self.ast.template_parm(q).copied();
+                match self.ast.decls.get(q).name().as_ident() {
+                    Some(n) => out.push_str(self.ast.symbols().as_str(n)),
+                    None => {
+                        let (depth, index) = parm.map_or((0, 0), |p| (p.depth, p.index));
+                        let _ = write!(out, "type-parameter-{depth}-{index}");
+                    }
+                }
+                if parm.is_some_and(|p| p.pack) {
+                    out.push_str("...");
+                }
+            }
+            out.push('>');
+            return;
+        }
         write_type(&self.ast.types, self, QualType::unqual(t), PrintOptions::SUGARED, out);
     }
 
