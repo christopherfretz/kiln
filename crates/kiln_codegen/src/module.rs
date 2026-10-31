@@ -256,7 +256,7 @@ impl<'a> Cg<'a> {
         if fd.body.is_none() || matches!(fd.templ.get(), Some((TemplLinkKind::Pattern, _))) {
             return Ok(());
         }
-        if fd.spec.constexpr_kind() == ConstexprKind::Consteval {
+        if fd.spec.is_immediate() {
             return Ok(());
         }
         let first = ast.first(d);
@@ -401,7 +401,7 @@ impl<'a> Cg<'a> {
             if f.body.is_none() || matches!(f.templ.get(), Some((TemplLinkKind::Pattern, _))) {
                 return false;
             }
-            if f.spec.constexpr_kind() == ConstexprKind::Consteval {
+            if f.spec.is_immediate() {
                 return false;
             }
             let in_class = ast.decls.lexical_ctx(r).is_some_and(|c| {

@@ -16,8 +16,8 @@
 
 mod builtins;
 pub mod class;
-pub mod constfold;
 mod consteval;
+pub mod constfold;
 pub mod conv;
 pub mod decl;
 pub mod declspec;

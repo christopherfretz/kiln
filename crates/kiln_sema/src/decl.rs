@@ -2003,7 +2003,8 @@ impl Sema<'_, '_> {
                     // function is `consteval` (clang's mismatch check; kiln
                     // applies it only when one side is consteval).
                     let (ok, nk) = (pspec.constexpr_kind(), spec.constexpr_kind());
-                    if ok != nk && (ok == ConstexprKind::Consteval || nk == ConstexprKind::Consteval)
+                    if ok != nk
+                        && (ok == ConstexprKind::Consteval || nk == ConstexprKind::Consteval)
                     {
                         let msg = self
                             .diag(DiagId::sema_constexpr_redecl_mismatch, d.name_loc())

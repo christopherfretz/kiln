@@ -1114,7 +1114,7 @@ impl Cg<'_> {
     }
 
     /// clang `EnterStructPointerForCoercedAccess`.
-    fn enter_struct_for_coerce(&mut self, a: Addr, want: u64) -> Addr {
+    pub(crate) fn enter_struct_for_coerce(&mut self, a: Addr, want: u64) -> Addr {
         let Some(fields) = self.struct_fields(a.ty) else { return a };
         if fields.is_empty() {
             return a;

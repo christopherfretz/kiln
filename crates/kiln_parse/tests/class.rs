@@ -64,7 +64,7 @@ fn class_constexpr_specifiers() {
         "struct S { consteval int f(); constexpr static int v = 1; constinit static int w; };",
     );
     assert_parsed(&p);
-    p.assert_diag("1:12 error: 'consteval' is not supported yet");
+    p.assert_clean();
     let p = parse("struct S { consteval constexpr int m(); };");
     p.assert_diag("1:22 error: cannot combine with previous 'consteval' declaration specifier");
 }

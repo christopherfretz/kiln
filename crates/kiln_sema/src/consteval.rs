@@ -14,8 +14,8 @@
 use std::collections::{HashMap, HashSet};
 
 use kiln_ast::decl::{ConstexprKind, Defaulted, FnSpec};
-use kiln_ast::templates::SpecKind;
 use kiln_ast::expr::{ExprFlags, ExprKind};
+use kiln_ast::templates::SpecKind;
 use kiln_ast::{DeclId, ExprId, QualType};
 use kiln_diag::DiagId;
 use kiln_oven::{EvalContext, EvalKind};
@@ -200,9 +200,7 @@ impl Sema<'_, '_> {
         {
             self.imm.pending.refs.remove(i);
         }
-        if self.immediate_exempt()
-            || self.has_errors_in(call)
-            || self.expr_is_value_dependent(call)
+        if self.immediate_exempt() || self.has_errors_in(call) || self.expr_is_value_dependent(call)
         {
             return call;
         }
@@ -237,7 +235,8 @@ impl Sema<'_, '_> {
         let mut results = Vec::with_capacity(outer.len());
         for &(c, _) in &outer {
             let at = self.begin_loc(c);
-            let r = self.eval_const(self.ast.exprs.operand(c), EvalContext::new(EvalKind::Consteval, at));
+            let r = self
+                .eval_const(self.ast.exprs.operand(c), EvalContext::new(EvalKind::Consteval, at));
             results.push(r);
         }
         // A constant-initialized variable's initializer (clang evaluates
@@ -254,17 +253,15 @@ impl Sema<'_, '_> {
                         self.ast.exprs.set_constant_value_hidden(c);
                     }
                 }
-                Err(fail) => {
-                    match escalating {
-                        Some(g) => {
-                            self.ast.exprs.set_constant_elided(c);
-                            self.mark_immediate_escalating(self.ast.exprs.operand(c));
-                            let loc = self.begin_loc(c);
-                            self.escalate(g, Escalation { loc, callee, call: true });
-                        }
-                        None => self.report_immediate_call(c, callee, fail),
+                Err(fail) => match escalating {
+                    Some(g) => {
+                        self.ast.exprs.set_constant_elided(c);
+                        self.mark_immediate_escalating(self.ast.exprs.operand(c));
+                        let loc = self.begin_loc(c);
+                        self.escalate(g, Escalation { loc, callee, call: true });
                     }
-                }
+                    None => self.report_immediate_call(c, callee, fail),
+                },
             }
         }
         if !deferred {
@@ -365,7 +362,10 @@ impl Sema<'_, '_> {
     }
 
     fn is_consteval_kind(&self, f: DeclId) -> bool {
-        self.ast.decls.function(f).is_some_and(|x| x.spec.constexpr_kind() == ConstexprKind::Consteval)
+        self.ast
+            .decls
+            .function(f)
+            .is_some_and(|x| x.spec.constexpr_kind() == ConstexprKind::Consteval)
     }
 
     /// Makes the immediate-escalating function `g` an immediate function
@@ -378,12 +378,7 @@ impl Sema<'_, '_> {
     /// "call to consteval function 'f' is not a constant expression",
     /// with why an escalated function is immediate and the evaluation's
     /// notes (clang's `EvaluateAndDiagnoseImmediateInvocation`).
-    fn report_immediate_call(
-        &mut self,
-        c: ExprId,
-        f: DeclId,
-        mut fail: kiln_oven::EvalFailure,
-    ) {
+    fn report_immediate_call(&mut self, c: ExprId, f: DeclId, mut fail: kiln_oven::EvalFailure) {
         let loc = self.begin_loc(c);
         let consteval = self.is_consteval_kind(f);
         let at = Self::fold_lone_invalid(&mut fail, loc);

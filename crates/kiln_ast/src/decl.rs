@@ -751,6 +751,11 @@ impl FnSpec {
     pub const fn with_constexpr_kind(self, k: ConstexprKind) -> Self {
         FnSpec((self.0 & !(3 << 4)) | ((k as u32) << 4))
     }
+    /// An immediate function ([expr.const]/20): `consteval`, or escalated
+    /// (P2564). It is never emitted.
+    pub const fn is_immediate(self) -> bool {
+        matches!(self.constexpr_kind(), ConstexprKind::Consteval) || self.escalated()
+    }
     /// Defaulted status.
     pub const fn defaulted(self) -> Defaulted {
         match (self.0 >> 8) & 3 {

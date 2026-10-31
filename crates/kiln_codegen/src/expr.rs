@@ -2045,6 +2045,14 @@ impl Cg<'_> {
         let n = *ast.exprs.get(e);
         let q = n.ty();
         match n.kind() {
+            ExprKind::ConstantExpr if ast.exprs.constant_value(e).is_some() => {
+                // clang `AggExprEmitter::VisitConstantExpr`: the value of
+                // an immediate invocation, stored by `CreateCoercedStore`.
+                let c = ast.exprs.constant_value(e).expect("guarded");
+                let k = self.const_value(c, q, Some(e), true)?;
+                self.coerced_store_const(k, dest, self.is_volatile(q));
+                Ok(())
+            }
             ExprKind::ParenExpr | ExprKind::ConstantExpr => {
                 self.agg_visit(ast.exprs.operand(e), dest, zeroed)
             }
@@ -2898,6 +2906,51 @@ impl Cg<'_> {
     }
 
     /// clang `emitStoresForConstant`.
+    /// clang 19 `CreateCoercedStore` of constant `k` into `dst` (whose
+    /// size is that of its IR type), with `BuildAggStore` splitting a
+    /// first-class struct into one store per element.
+    fn coerced_store_const(&mut self, k: Value, dst: Addr, vol: bool) {
+        let dst_size = self.alloc_size(dst.ty);
+        if dst_size == 0 {
+            return;
+        }
+        let st = self.m.const_type(k);
+        let ssize = self.alloc_size(st);
+        let mut dst = dst;
+        if st != dst.ty {
+            dst = self.enter_struct_for_coerce(dst, ssize);
+        }
+        if ssize > dst_size {
+            let a = self.ir_layout(st).1.max(dst.align);
+            let tmp = self.f.fir.alloca(st, a);
+            self.store(V::C(k), tmp, a, vol);
+            self.memcpy_v(dst, tmp, a, dst_size);
+            return;
+        }
+        let Some(fields) = self.struct_fields(st) else {
+            self.store(V::C(k), dst.v, dst.align, vol);
+            return;
+        };
+        let elems = match self.const_elems(k) {
+            Some(es) if es.len() == fields.len() => es,
+            _ => match self.m.const_of(k) {
+                Some(ConstData::Zero(_)) => fields.iter().map(|&f| self.m.const_zero(f)).collect(),
+                Some(ConstData::Undef(_)) => {
+                    fields.iter().map(|&f| self.m.const_undef(f)).collect()
+                }
+                _ => {
+                    self.store(V::C(k), dst.v, dst.align, vol);
+                    return;
+                }
+            },
+        };
+        let offs = self.struct_field_offsets(st);
+        for (i, ek) in elems.into_iter().enumerate() {
+            let p = self.struct_gep(st, dst.v, i as u32);
+            self.store(V::C(ek), p, min_align(dst.align, offs[i]), vol);
+        }
+    }
+
     fn stores_for_constant(&mut self, d: DeclId, at: Addr, k: Value, vol: bool) -> R<()> {
         let ty = self.m.const_type(k);
         let size = self.alloc_size(ty);
