@@ -9,6 +9,13 @@ base a1e8e9c (WP-075 merge, kiln-mode 1561/1577).
 3. [ ] Oven + codegen for bindings
 4. [ ] Tests (`tests/conformance/dcl.struct.bind/`, ≥ 20) + spec
 
+## Merge note (item 1)
+Item 1 is complete and green on its own at commit **4abe197**
+(`cargo xtask ci --quick`: 1565 passed / 16 xfail / 1581 tests; base
+1561/1577). Merge 4abe197 if structured bindings are still in progress:
+the later `WP-122 WIP:` commits (structured bindings) are mid-work and
+do not build yet.
+
 ## Item 1 — header probe
 `kiln -std=c++26 -stdlib=libc++ -fsyntax-only -ferror-limit=0`, errors:
 

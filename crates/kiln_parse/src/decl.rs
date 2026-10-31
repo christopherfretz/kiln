@@ -1772,6 +1772,10 @@ impl Parser<'_, '_> {
         let direct_init = Self::may_have_direct_init(ctx, ds.storage);
         // [dcl.spec.auto.general]/3, /8: checked at the end of the group.
         let mut group = AutoGroup::default();
+        // [dcl.pre]/6 (clang's `BuildDeclaratorGroup`): a structured
+        // binding declaration is alone in its group.
+        let mut first_decomp: Option<(Loc, Option<DeclId>)> = None;
+        let mut declarators = 0usize;
         loop {
             let mut d = Declarator::new(ctx, self.loc());
             d.direct_init = direct_init;
@@ -1829,6 +1833,12 @@ impl Parser<'_, '_> {
             if let Some(v) = v {
                 self.s.act_on_group_declarator(&mut group, v);
             }
+            declarators += 1;
+            if first_decomp.is_none()
+                && let Some(b) = &d.decomp
+            {
+                first_decomp = Some((b.lbracket, v));
+            }
             match self.parse_initializer(d.init_style, d.is_function_declarator()) {
                 Ok(init) => match (v, init) {
                     (Some(v), Some(i)) => self.s.act_on_init(v, i),
@@ -1851,6 +1861,11 @@ impl Parser<'_, '_> {
             }
         }
         self.s.act_on_end_group(group, &ds);
+        if declarators > 1
+            && let Some((l, v)) = first_decomp
+        {
+            self.s.act_on_decomposition_not_alone(l, v);
+        }
         if self.eat(Punct::Semi).is_none() {
             let id = if ctx == DeclaratorContext::File {
                 DiagId::parse_expected_semi_toplevel
