@@ -197,6 +197,8 @@ pub struct DeclSpec {
     /// The type-constraint `C<args>` of a placeholder `C auto`
     /// ([dcl.spec.auto.general]/1).
     pub auto_constraint: Option<(DeclId, Vec<kiln_ast::types::TemplateArg>)>,
+    /// Where that type-constraint's concept name starts.
+    pub constraint_loc: Loc,
 }
 
 impl DeclSpec {

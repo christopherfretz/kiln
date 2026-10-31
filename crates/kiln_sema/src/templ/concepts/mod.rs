@@ -73,6 +73,9 @@ pub struct ConceptState {
     pub(crate) norm: NormTable,
     pub(crate) normal_forms: FxHashMap<DeclId, Option<NormId>>,
     pub(crate) subsume_cache: FxHashMap<(NormId, NormId), bool>,
+    /// The type-constraint location of a variable or function declared
+    /// with a constrained placeholder (`C auto x`, `C auto f()`).
+    pub(crate) placeholder_locs: FxHashMap<DeclId, Loc>,
     /// Counters.
     pub counters: SatCounters,
 }

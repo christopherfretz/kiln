@@ -678,7 +678,7 @@ impl Sema<'_, '_> {
         &mut self,
         loc: Loc,
         pack: bool,
-        constraint: Option<(DeclId, Vec<TemplateArg>)>,
+        constraint: Option<(DeclId, Vec<TemplateArg>, Loc)>,
         param_name: Option<Symbol>,
     ) -> QualType {
         // An explicit head is open once its list is built; an invented one
@@ -717,8 +717,9 @@ impl Sema<'_, '_> {
             head.params.push(p);
         }
         let ty = self.ast.decls.get(p).ty().unwrap_or(QualType::ERROR);
-        if let Some((c, extra)) = constraint {
-            let mut e = self.immediately_declared_constraint(c, ty, &extra, loc);
+        if let Some((c, extra, cloc)) = constraint {
+            let cloc = if cloc.is_valid() { cloc } else { loc };
+            let mut e = self.immediately_declared_constraint(c, ty, &extra, cloc);
             if pack {
                 e = self.pack_constraint(e, loc);
             }

@@ -1858,6 +1858,9 @@ impl Sema<'_, '_> {
         {
             let _ = self.ast.decls.cold.begin_loc.insert(f, ds.loc);
         }
+        if ds.auto_constraint.is_some() && ds.constraint_loc.is_valid() {
+            self.inst.concepts.placeholder_locs.insert(f, ds.constraint_loc);
+        }
         if invalid_redecl {
             self.ast.decls.set_flags(f, DeclFlags::INVALID);
         }
@@ -2240,6 +2243,9 @@ impl Sema<'_, '_> {
         if ds.loc.is_valid() && ds.loc != d.name_loc() {
             let _ = self.ast.decls.cold.begin_loc.insert(f, ds.loc);
         }
+        if ds.auto_constraint.is_some() && ds.constraint_loc.is_valid() {
+            self.inst.concepts.placeholder_locs.insert(f, ds.constraint_loc);
+        }
         if d.init_style.is_some() {
             self.special.nsdmi.insert(f);
         }
@@ -2434,6 +2440,10 @@ impl Sema<'_, '_> {
         h.lexical = Some(lexical);
         self.mark_pattern_next();
         let v = self.builder().var(h, ty, spec, prev_ok);
+        if ds.auto_constraint.is_some() && ds.constraint_loc.is_valid() {
+            // The constrained placeholder's diagnostics point here.
+            self.inst.concepts.placeholder_locs.insert(v, ds.constraint_loc);
+        }
         self.check_abstract_var(v);
         self.register_local(name, v);
         if spec.storage() == VarStorage::Extern {
@@ -2595,7 +2605,14 @@ impl Sema<'_, '_> {
         let fail = match overload {
             Some(e) => AutoFail::Incompatible(e),
             None => match self.deduce_auto(declared, &items, kind) {
-                Ok(t) => return Some(t),
+                Ok(t) => {
+                    let at = self.inst.concepts.placeholder_locs.get(&v).copied().unwrap_or(loc);
+                    return Some(if self.check_placeholder_constraint(declared, t, at) {
+                        t
+                    } else {
+                        QualType::ERROR
+                    });
+                }
                 Err(f) => f,
             },
         };

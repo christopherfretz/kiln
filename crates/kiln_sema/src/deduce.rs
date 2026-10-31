@@ -321,6 +321,16 @@ impl Sema<'_, '_> {
             }
         };
         if !done {
+            if !self.is_error_type(deduced) && !self.ast.types.is_dependent(deduced) {
+                let at = self
+                    .inst
+                    .concepts
+                    .placeholder_locs
+                    .get(&fdecl)
+                    .copied()
+                    .unwrap_or(self.ast.decls.get(fdecl).loc());
+                let _ = self.check_placeholder_constraint(declared, deduced, at);
+            }
             self.set_deduced_return(fdecl, deduced);
             return deduced;
         }

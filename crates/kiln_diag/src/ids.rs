@@ -986,10 +986,11 @@ diag_ids! {
     sema_non_bool_atomic_constraint = Error (1) "atomic constraint must be of type 'bool' (found {0})";
     sema_non_constant_constraint = Error (0) "substitution into constraint expression resulted in a non-constant expression";
     sema_constraint_depends_on_self = Error (1) "satisfaction of constraint '{0}' depends on itself";
+    sema_placeholder_constraints_not_satisfied = Error (2) "deduced type {0} does not satisfy {1}";
     note_ovl_candidate_unsatisfied_constraints = Note (1) "candidate template ignored: constraints not satisfied{0}";
     note_atomic_constraint_false = Note (2) "{0:and|because} '{1}' evaluated to false";
     note_atomic_constraint_false_elaborated = Note (5) "{0:and|because} '{1}' ({2} {3} {4}) evaluated to false";
-    note_single_arg_concept_false = Note (3) "{0:and|because} '{1}' does not satisfy '{2}'";
+    note_single_arg_concept_false = Note (3) "{0:and|because} {1} does not satisfy '{2}'";
     note_substituted_constraint_ill_formed = Note (1) "because substituted constraint expression is ill-formed{0}";
     note_requirement_would_be_invalid = Note (3) "{0:and|because} '{1}' would be invalid: {2}";
     note_requirement_may_throw = Note (2) "{0:and|because} '{1}' may throw an exception";

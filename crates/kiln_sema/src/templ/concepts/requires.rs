@@ -44,9 +44,9 @@ impl Substituter<'_, '_, '_> {
 
     /// Substitutes into requires-expression `e` and evaluates it.
     pub(crate) fn requires_expr(&mut self, e: ExprId, loc: Loc) -> SubstResult<ExprId> {
-        let Some(data) = self.sema.ast.requires_of(e).copied() else { return Err(SubstFail) };
-        let reqs: Vec<Requirement> = self.sema.ast.templates.requirements(&data).to_vec();
-        let params: Vec<DeclId> = self.sema.ast.lists.iter::<DeclId>(data.params).collect();
+        let Some(rq) = self.sema.ast.requires_of(e).copied() else { return Err(SubstFail) };
+        let items: Vec<Requirement> = self.sema.ast.templates.requirements(&rq).to_vec();
+        let params: Vec<DeclId> = self.sema.ast.lists.iter::<DeclId>(rq.params).collect();
         let at = self.sema.ast.exprs.get(e).loc();
         let rbrace = self.sema.ast.exprs.cold.end_loc.get(e).copied().unwrap_or(at);
         let mut recs = Vec::new();
@@ -55,11 +55,11 @@ impl Substituter<'_, '_, '_> {
         for (i, &p) in params.iter().enumerate() {
             let n = *self.sema.ast.decls.get(p);
             let ty = n.ty().unwrap_or(QualType::ERROR);
-            let r = self.sfinae(data.body, n.loc(), |s| s.ty(ty, n.loc()).ok());
+            let r = self.sfinae(rq.body, n.loc(), |s| s.ty(ty, n.loc()).ok());
             match r {
                 Some((Some(t), Ok(()))) => {
                     let np = self.sema.builder().param(
-                        data.body,
+                        rq.body,
                         n.name(),
                         n.loc(),
                         t,
@@ -71,7 +71,7 @@ impl Substituter<'_, '_, '_> {
                 }
                 Some((_, st)) => {
                     let first = st.err().flatten();
-                    recs.push(invalid_record(self.sema, &first, n.loc(), String::new()));
+                    recs.push(invalid_record(self.sema, first.as_ref(), n.loc(), String::new()));
                     ok = false;
                     break;
                 }
@@ -82,15 +82,15 @@ impl Substituter<'_, '_, '_> {
             }
         }
         if ok {
-            for r in reqs {
-                if !self.requirement(data.body, r, at, &mut recs) {
+            for r in items {
+                if !self.requirement(rq.body, r, at, &mut recs) {
                     ok = false;
                     break;
                 }
             }
         }
         let x = self.sema.builder().requires_expr(
-            data.body,
+            rq.body,
             &new_params,
             &[],
             QualType::BOOL,
@@ -124,7 +124,7 @@ impl Substituter<'_, '_, '_> {
                     Some((_, st)) => {
                         let first = st.err().flatten();
                         let text = self.sema.type_requirement_text(t);
-                        recs.push(invalid_record(self.sema, &first, loc, text));
+                        recs.push(invalid_record(self.sema, first.as_ref(), loc, text));
                         false
                     }
                     None => false,
@@ -206,7 +206,7 @@ impl Substituter<'_, '_, '_> {
                     return Some(e);
                 }
                 let text = self.sema.expr_text(e);
-                recs.push(invalid_record(self.sema, &first, loc, text));
+                recs.push(invalid_record(self.sema, first.as_ref(), loc, text));
                 None
             }
             None => None,
@@ -255,9 +255,9 @@ impl Substituter<'_, '_, '_> {
 }
 
 /// The "'X' would be invalid: msg" note for a failed substitution.
-fn invalid_record(s: &Sema<'_, '_>, first: &Option<Diag>, loc: Loc, text: String) -> SatRecord {
-    let at = first.as_ref().map_or(loc, Diag::loc);
-    let msg = first.as_ref().map(Diag::message).unwrap_or_default();
+fn invalid_record(s: &Sema<'_, '_>, first: Option<&Diag>, loc: Loc, text: String) -> SatRecord {
+    let at = first.map_or(loc, Diag::loc);
+    let msg = first.map(Diag::message).unwrap_or_default();
     let _ = s;
     SatRecord {
         id: DiagId::note_requirement_would_be_invalid,
