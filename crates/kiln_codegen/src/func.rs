@@ -109,6 +109,10 @@ pub(crate) struct Fx {
     pub this: Option<V>,
     /// The class of `this` in a member function.
     pub this_class: Option<DeclId>,
+    /// In a lambda's function call operator: the closure object's
+    /// address (clang `CXXABIThisValue`, which `this` no longer is once
+    /// `this` is captured) and the lambda.
+    pub closure: Option<(V, kiln_ast::LambdaId)>,
     /// The constructor/destructor variant being emitted.
     pub structor: Option<mangle::Structor>,
     /// The VTT parameter, loaded in the prolog (clang
@@ -150,6 +154,9 @@ pub(crate) struct Fx {
     /// The bound common expressions of the enclosing GNU binary
     /// conditionals (clang `OpaqueValueMapping`).
     pub opaque: FxHashMap<kiln_ast::ExprId, crate::expr::Opaque>,
+    /// The indices of the enclosing `ArrayInitLoopExpr`s, innermost last
+    /// (clang `ArrayInitIndex`).
+    pub array_index: Vec<V>,
 }
 
 impl Fx {
@@ -172,6 +179,7 @@ impl Fx {
             ret_dest: None,
             this: None,
             this_class: None,
+            closure: None,
             structor: None,
             vtt: None,
             call_vtt: None,
@@ -189,6 +197,7 @@ impl Fx {
             loop_mp: None,
             conds: Vec::new(),
             opaque: FxHashMap::default(),
+            array_index: Vec::new(),
         }
     }
 }
@@ -374,6 +383,9 @@ impl Cg<'_> {
         // EmitInstanceFunctionProlog: `this` is loaded once.
         if let Some(a) = this_addr {
             self.f.this = Some(self.load(LTy::PTR, a, 8, false));
+            if let Some(l) = ast.call_op_lambda(d) {
+                self.lambda_prolog(l)?;
+            }
         }
         if let Some(a) = vtt_addr {
             self.f.vtt = Some(self.load(LTy::PTR, a, 8, false));

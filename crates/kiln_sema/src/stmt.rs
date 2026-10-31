@@ -159,7 +159,7 @@ impl Sema<'_, '_> {
         }
         let d = self.ast.exprs.decl(id);
         let dn = *self.ast.decls.get(d);
-        if dn.kind() != DeclKind::Var {
+        if dn.kind() != DeclKind::Var || !self.in_innermost_function(dn.ctx()) {
             return None;
         }
         let v = self.ast.decls.var(d)?;
@@ -634,6 +634,16 @@ impl Sema<'_, '_> {
         r
     }
 
+    /// Whether a local whose semantic context is `ctx` is declared in the
+    /// innermost enclosing function or lambda ([class.copy.elision]/3): a
+    /// local of an enclosing function named from a lambda body is not.
+    fn in_innermost_function(&self, ctx: Option<DeclId>) -> bool {
+        let (Some(c), Some(f)) = (ctx, self.func.as_ref().map(|f| f.decl)) else {
+            return true;
+        };
+        !self.ast.decls.get(c).kind().is_function() || self.ast.first(c) == self.ast.first(f)
+    }
+
     /// C++23 implicit move ([expr.prim.id.unqual]/4, [class.copy.elision]/3):
     /// an id-expression naming a non-volatile object of automatic storage
     /// duration declared in the function becomes an xvalue.
@@ -653,6 +663,9 @@ impl Sema<'_, '_> {
         }
         let d = self.ast.exprs.decl(id);
         let dn = *self.ast.decls.get(d);
+        if !self.in_innermost_function(dn.ctx()) {
+            return e;
+        }
         let local = match dn.kind() {
             DeclKind::ParmVar => true,
             DeclKind::Var => {

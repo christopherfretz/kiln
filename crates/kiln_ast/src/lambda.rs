@@ -224,6 +224,14 @@ impl crate::Ast {
         self.decls.record(self.first(r)).and_then(|x| x.lambda)
     }
 
+    /// The lambda whose function call operator is `f`.
+    pub fn call_op_lambda(&self, f: DeclId) -> Option<LambdaId> {
+        let r = self.decls.get(f).ctx()?;
+        let l = self.closure_lambda(r)?;
+        let op = self.exprs.lambdas.get(l).call_op?;
+        (self.first(op) == self.first(f)).then_some(l)
+    }
+
     /// The static invoker `__invoke` of closure type `r` (the one implicit
     /// static member function of a closure).
     pub fn closure_invoker(&self, r: DeclId) -> Option<DeclId> {

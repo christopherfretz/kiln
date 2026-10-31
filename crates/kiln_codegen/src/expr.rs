@@ -152,6 +152,10 @@ impl Cg<'_> {
                 return r;
             }
             ExprKind::CXXThisExpr => self.this_value(),
+            ExprKind::ArrayInitIndexExpr => match self.f.array_index.last() {
+                Some(&v) => v,
+                None => return err(self.loc_of(e), "ArrayInitIndexExpr outside its loop"),
+            },
             ExprKind::CXXMemberCallExpr => return self.emit_member_call(e, None),
             ExprKind::CXXDefaultInitExpr => {
                 let Some(init) = self.default_member_init(e) else {
@@ -1126,6 +1130,11 @@ impl Cg<'_> {
                 })
             }
             DeclKind::Var | DeclKind::ParmVar => {
+                if ast.exprs.get(e).has(ExprFlags::REFERS_TO_ENCLOSING)
+                    && let Some(lv) = self.captured_var_lvalue(d, q)?
+                {
+                    return Ok(lv);
+                }
                 let dq = ast.decls.get(d).ty().unwrap_or(q);
                 if self.referee(dq).is_some() {
                     // clang `EmitLoadOfReferenceLValue`: the slot holds the
@@ -2065,13 +2074,31 @@ impl Cg<'_> {
                 self.memcpy(dest, V::C(gval(g)), align, size, false);
                 Ok(())
             }
+            ExprKind::ArrayInitLoopExpr => self.array_init_loop(e, dest),
             // clang `AggExprEmitter::VisitLambdaExpr`: each capture
             // initializes its field; a captureless closure has nothing to
             // initialize.
             ExprKind::LambdaExpr => {
                 let l = ast.exprs.lambda(e);
-                if l.inits.is_some_and(|x| ast.lists.iter::<ExprId>(x).next().is_some()) {
-                    return err(self.loc_of(e), "lambda captures are not supported yet");
+                let inits: Vec<ExprId> =
+                    l.inits.map(|x| ast.lists.iter::<ExprId>(x).collect()).unwrap_or_default();
+                let fields: Vec<DeclId> = l.captures.iter().filter_map(|c| c.field).collect();
+                let rty = self.record_ty(l.closure);
+                let base = Addr { v: dest.v, ty: rty, align: dest.align };
+                // The members' destructors would only run on an exception
+                // (clang `pushDestroyAndDeferDeactivation`, deactivated at
+                // the end): nothing to emit without exceptions.
+                for (f, init) in fields.into_iter().zip(inits) {
+                    let fq = ast.decls.get(f).ty().expect("capture type");
+                    let lv = self.field_lvalue_init(base, f, fq)?;
+                    if self.referee(fq).is_some() {
+                        // clang `EmitInitializationToLValue` on a
+                        // reference: bind, then store the address.
+                        let p = self.emit_ref_binding(init)?;
+                        self.store(p, lv.addr.v, lv.addr.align, false);
+                    } else {
+                        self.init_to_lvalue(init, lv, false)?;
+                    }
                 }
                 Ok(())
             }
@@ -2090,7 +2117,11 @@ impl Cg<'_> {
             return self.null_init_lvalue(lv, zeroed);
         }
         if self.is_aggregate(lv.q) {
-            return self.emit_agg(e, lv.addr, zeroed);
+            // The slot is destructed by its owner (`IsDestructed`).
+            let saved = std::mem::replace(&mut self.f.dest_destructed, true);
+            let r = self.emit_agg(e, lv.addr, zeroed);
+            self.f.dest_destructed = saved;
+            return r;
         }
         let v = self.emit_scalar(e)?;
         self.store_lv(v, lv, false);
@@ -2180,6 +2211,65 @@ impl Cg<'_> {
             } else {
                 self.null_init_lvalue(lv, zeroed)?;
             }
+        }
+        Ok(())
+    }
+
+    /// clang `AggExprEmitter::VisitArrayInitLoopExpr`: binds the common
+    /// expression, then initializes each element of `dest` in a loop.
+    fn array_init_loop(&mut self, e: ExprId, dest: Addr) -> R<()> {
+        let ast = self.ast;
+        let q = ast.exprs.get(e).ty();
+        let [ove, sub] = ast.exprs.array_init_loop(e);
+        let src = ast.exprs.opaque_source(ove);
+        if let Some(src) = src {
+            let v = if self.is_glvalue(src) {
+                Opaque::Lv(self.emit_lvalue(src)?)
+            } else {
+                Opaque::Rv(self.emit_scalar_opt(src)?)
+            };
+            self.f.opaque.insert(src, v);
+        }
+        let n = ast.types.array_size(q).unwrap_or(0);
+        if n == 0 {
+            if let Some(src) = src {
+                self.f.opaque.remove(&src);
+            }
+            return Ok(());
+        }
+        let eq = ast.types.element(q).expect("element type");
+        let esz = self.size_align(eq).0;
+        let ety = self.mty(eq);
+        let ealign = min_align(dest.align, esz);
+        let zero = self.i64c(0);
+        let begin = self.gep(dest.ty, dest.v, vec![zero, zero], true);
+        let entry = self.f.fir.cur().expect("insertion point");
+        let body = self.f.fir.create_block();
+        self.emit_block(body, false);
+        let phi = self.f.fir.push(Op::Phi { ty: LTy::I64, inc: vec![(zero, entry)] }, LTy::I64);
+        let el = self.gep(ety, begin, vec![phi], true);
+        self.f.array_index.push(phi);
+        let sc = self.begin_scope(false);
+        let lv = LV { addr: Addr { v: el, ty: ety, align: ealign }, q: eq, bf: None };
+        let r = if ast.exprs.get(sub).kind() == ExprKind::ArrayInitLoopExpr {
+            self.array_init_loop(sub, lv.addr)
+        } else {
+            self.init_to_lvalue(sub, lv, false)
+        };
+        self.end_scope(sc);
+        self.f.array_index.pop();
+        r?;
+        let one = self.i64c(1);
+        let next = self.bin(BinOp::Add, Flags::NUW, phi, one);
+        let cur = self.f.fir.cur().expect("insertion point");
+        self.f.fir.add_incoming(Fir::last_inst(phi), next, cur);
+        let nn = self.i64c(i128::from(n));
+        let done = self.icmp(IntPredicate::Eq, next, nn);
+        let end = self.f.fir.create_block();
+        self.cond_br(done, end, body);
+        self.emit_block(end, false);
+        if let Some(src) = src {
+            self.f.opaque.remove(&src);
         }
         Ok(())
     }
