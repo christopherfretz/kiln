@@ -775,7 +775,9 @@ impl Sema<'_, '_> {
             return self.recover_err(&[], loc);
         }
         let Some(&d) = found.decls.first() else {
-            if qualifier.is_none()
+            // A builtin is declared in the global namespace on first use,
+            // so `::__builtin_memmove` names it too (clang).
+            if qualifier.is_none_or(|q| q == self.ast.tu)
                 && let Some(sym) = name.as_ident()
                 && let Some(b) = self.lazily_create_builtin(sym, loc)
             {
