@@ -118,10 +118,13 @@ impl Cg<'_> {
     fn mfp_const(&mut self, md: DeclId, adj: i128, t: LTy) -> R<Value> {
         let ast = self.ast;
         if ast.decls.function(md).is_some_and(|f| f.spec.is_virtual()) {
-            return err(
-                Some(ast.decls.get(md).loc()),
-                "pointers to virtual member functions are WP-080",
-            );
+            // clang `BuildMemberPointer`: the vtable offset plus one
+            // (Itanium) or the offset with `adj`'s low bit set (ARM).
+            let off = i128::from(self.method_vtable_index(md, None)?) * 8;
+            let (p, a) = if self.arm_mp() { (off, adj + 1) } else { (off + 1, adj) };
+            let p = self.m.const_int(LTy::I64, p);
+            let a = self.m.const_int(LTy::I64, a);
+            return self.m.const_struct(t, &[p, a]).map_err(|e| crate::consts::ir_err(&e));
         }
         let f = self.get_fn(md)?;
         let p = self
