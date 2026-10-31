@@ -12,9 +12,9 @@ use kiln_lex::{Punct, TokKind};
 use kiln_sema::declspec::SpecError;
 use kiln_sema::templ::auto::AutoGroup;
 use kiln_sema::{
-    Chunk, DeclSpec, Declarator, DeclaratorContext, DefaultArg, Designator, InitItem, InitList,
-    InitValue, Initializer, NameClass, ParamInfo, Sign, SpecialName, StorageSpec, TagUse,
-    TypeSpecKind, Width,
+    BindingId, Chunk, DeclSpec, Declarator, DeclaratorContext, Decomposition, DefaultArg,
+    Designator, InitItem, InitList, InitValue, Initializer, NameClass, ParamInfo, Sign,
+    SpecialName, StorageSpec, TagUse, TypeSpecKind, Width,
 };
 use kiln_source::symbol::Symbol;
 use kiln_source::{Loc, Span};
@@ -1187,6 +1187,10 @@ impl Parser<'_, '_> {
                 d.ellipsis = Some(self.bump().span.lo);
             }
         }
+        if self.at_decomposition_declarator(d) {
+            self.parse_decomposition_declarator(d);
+            return;
+        }
         // The scopes a qualified declarator-id enters for the rest of the
         // declarator.
         let mut entered = 0;
@@ -1252,6 +1256,13 @@ impl Parser<'_, '_> {
         {
             self.parse_special_declarator_id(d);
         }
+        self.parse_declarator_suffixes(d, abstract_ok);
+        self.s.act_on_exit_declarator_scope(entered);
+    }
+
+    /// The array and function declarator suffixes after a declarator-id
+    /// or parenthesized declarator ([dcl.array], [dcl.fct]).
+    fn parse_declarator_suffixes(&mut self, d: &mut Declarator, abstract_ok: bool) {
         loop {
             if self.at(Punct::LSquare) && !self.at_cxx11_attr() {
                 let open = self.bump().span.lo;
@@ -1285,7 +1296,93 @@ impl Parser<'_, '_> {
                 break;
             }
         }
-        self.s.act_on_exit_declarator_scope(entered);
+    }
+
+    /// True at the `[` of a structured binding declaration's
+    /// sb-identifier-list ([dcl.pre]/6; clang's
+    /// `mayHaveDecompositionDeclarator` and the lookahead of
+    /// `ParseDecompositionDeclarator`): a declaration, condition or
+    /// for-init context, an identifier followed by `,`, `]`, `alignas`,
+    /// an identifier or `[`, or an empty list before `=` or `{`. A C++26
+    /// binding pack's `...` (P1061) is accepted too.
+    fn at_decomposition_declarator(&self, d: &Declarator) -> bool {
+        if !matches!(
+            d.ctx,
+            DeclaratorContext::File
+                | DeclaratorContext::Block
+                | DeclaratorContext::ForInit
+                | DeclaratorContext::Condition
+        ) || d.name.is_some()
+            || !self.at(Punct::LSquare)
+            || self.at_cxx11_attr()
+        {
+            return false;
+        }
+        let mut i = 1;
+        if Self::punct_of(self.peek(1)) == Some(Punct::Ellipsis) {
+            i = 2;
+        }
+        if self.ident_of(self.peek(i)).is_some() {
+            let next = self.peek(i + 1);
+            return matches!(
+                Self::punct_of(next),
+                Some(Punct::Comma | Punct::RSquare | Punct::LSquare)
+            ) || self.ident_of(next).is_some()
+                || self.kw_of(next) == Some(Kw::Alignas);
+        }
+        i == 1
+            && Self::punct_of(self.peek(1)) == Some(Punct::RSquare)
+            && matches!(Self::punct_of(self.peek(2)), Some(Punct::Equal | Punct::LBrace))
+    }
+
+    /// `[ sb-identifier-list ]` (clang's `ParseDecompositionDeclarator`).
+    fn parse_decomposition_declarator(&mut self, d: &mut Declarator) {
+        let lbracket = self.bump().span.lo;
+        let mut ids: Vec<BindingId> = Vec::new();
+        let mut closed = true;
+        while !self.at(Punct::RSquare) {
+            if !ids.is_empty() && self.eat(Punct::Comma).is_none() {
+                if self.ident().is_some() {
+                    let d = self.s.diag(DiagId::parse_expected, self.prev_end()).arg("','");
+                    self.emit(d);
+                } else {
+                    self.error_here(DiagId::parse_expected_comma_or_rsquare);
+                }
+                if self.ident().is_none() {
+                    self.skip_until(&[Punct::RSquare, Punct::Comma], true, false);
+                    if self.eat(Punct::Comma).is_none() {
+                        closed = false;
+                        break;
+                    }
+                }
+            }
+            if self.at_cxx11_attr() {
+                self.skip_attributes();
+            }
+            let ellipsis = self.eat(Punct::Ellipsis);
+            let Some(name) = self.ident() else {
+                let d = self.s.diag(DiagId::parse_expected, self.loc()).arg("identifier");
+                self.emit(d);
+                closed = false;
+                break;
+            };
+            let loc = self.bump().span.lo;
+            let mut attrs = Vec::new();
+            if self.at_cxx11_attr() {
+                self.parse_attributes(&mut attrs);
+            }
+            ids.push(BindingId { name, loc, ellipsis, attrs });
+        }
+        let rbracket = if closed {
+            self.bump().span.lo
+        } else {
+            self.skip_until(&[Punct::RSquare], true, false);
+            self.eat(Punct::RSquare).unwrap_or(self.loc())
+        };
+        if closed && ids.is_empty() {
+            self.s.error(DiagId::parse_decomp_decl_empty, rbracket);
+        }
+        d.decomp = Some(Decomposition { lbracket, rbracket, ids });
     }
 
     /// `name<args>` as the declarator-id after a template head, when
@@ -1729,6 +1826,10 @@ impl Parser<'_, '_> {
         let direct_init = Self::may_have_direct_init(ctx, ds.storage);
         // [dcl.spec.auto.general]/3, /8: checked at the end of the group.
         let mut group = AutoGroup::default();
+        // [dcl.pre]/6 (clang's `BuildDeclaratorGroup`): a structured
+        // binding declaration is alone in its group.
+        let mut first_decomp: Option<(Loc, Option<DeclId>)> = None;
+        let mut declarators = 0usize;
         loop {
             let mut d = Declarator::new(ctx, self.loc());
             d.direct_init = direct_init;
@@ -1787,6 +1888,12 @@ impl Parser<'_, '_> {
             if let Some(v) = v {
                 self.s.act_on_group_declarator(&mut group, v);
             }
+            declarators += 1;
+            if first_decomp.is_none()
+                && let Some(b) = &d.decomp
+            {
+                first_decomp = Some((b.lbracket, v));
+            }
             if self.parse_declarator_initializer(&d, v).is_err() {
                 decls.extend(v);
                 self.skip_to_semi();
@@ -1798,6 +1905,17 @@ impl Parser<'_, '_> {
             }
         }
         self.s.act_on_end_group(group, &ds);
+        if declarators > 1
+            && let Some((l, v)) = first_decomp
+        {
+            self.s.act_on_decomposition_not_alone(l, v);
+        }
+        self.expect_declaration_semi(ctx);
+        decls
+    }
+
+    /// The `;` ending a simple-declaration.
+    fn expect_declaration_semi(&mut self, ctx: DeclaratorContext) {
         if self.eat(Punct::Semi).is_none() {
             let id = if ctx == DeclaratorContext::File {
                 DiagId::parse_expected_semi_toplevel
@@ -1809,7 +1927,6 @@ impl Parser<'_, '_> {
                 self.skip_to_semi();
             }
         }
-        decls
     }
 
     /// True at the start of a function-body or `= default` / `= delete`

@@ -141,6 +141,8 @@ no category).
 | `FriendDecl` | `FriendDecl <head> ['type']` (a friend type; with no child unless the type is first declared here) or `FriendDecl <head>` with the befriended declaration as its child |
 | `ParmVarDecl` | `ParmVarDecl <head> [name] 'type' [cinit] [pack]` (`cinit`: has a default argument, its child) |
 | `VarDecl` | `VarDecl <head> name 'type' [static\|extern\|register] [tls\|tls_dynamic] [nrvo] [inline] [constexpr] [cinit\|callinit\|listinit\|parenlistinit] [value=V]` (the init style only with an initializer; `constinit` is an attribute in clang and is not printed); `value=` only on a `constexpr` variable with an initializer (a `const int` initialized by a constant prints none, as in clang) |
+| `DecompositionDecl` | `DecompositionDecl <head> 'type' [static\|extern] [tls\|tls_dynamic] [cinit\|callinit\|listinit]` (a structured binding declaration's unnamed variable `e`, printed as a `VarDecl` without a name); children: the initializer, then its `BindingDecl`s (WP-122) |
+| `BindingDecl` | `BindingDecl <head> name 'type'` (the binding's type; `'<dependent type>'` in a dependent pattern); children: the holding `VarDecl` (tuple-like only; `implicit`, but printed even without `implicit` nodes, as clang's text dump does), then the binding expression (`ArraySubscriptExpr`, `MemberExpr`, or a `DeclRefExpr` to the holding variable). A `DeclRefExpr` to the variable `e` prints kind `Decomposition` and name `''`; one to a binding prints kind `Binding` and is `bitfield` when the binding expression is |
 | `StaticAssertDecl` | `StaticAssertDecl <head>` children: condition, [message (`StringLiteral unevaluated "msg"`)] |
 | attribute | `<Name>Attr [#aN] [@loc] [Inherited] [Implicit]` with clang's class name (`[[nodiscard]]` → `WarnUnusedResultAttr`); a kind without one prints `UnknownAttr kind=N`. Arguments are not printed (M2), except: `AsmLabelAttr [Inherited] "label" IsLiteralLabel` (the label's bytes unescaped, as clang) and `BuiltinAttr Implicit N` (the builtin id; the implicit builtin decl and its `extern "C"` `LinkageSpecDecl` print only with `implicit`). Implicit attributes print only with `implicit` |
 | `IntegerLiteral` | `IntegerLiteral 'type' N` |
@@ -157,7 +159,8 @@ no category).
 | `UnaryOperator` | `UnaryOperator 'type' [lvalue [bitfield]] prefix\|postfix 'op' [cannot overflow]` |
 | `BinaryOperator` | `BinaryOperator 'type' [lvalue [bitfield]] 'op'` |
 | `CompoundAssignOperator` | `CompoundAssignOperator 'type' lvalue [bitfield] 'op' ComputeLHSTy='T' ComputeResultTy='T'` |
-| `ConditionalOperator`, `ParenExpr`, `ArraySubscriptExpr`, `CallExpr` | class, type, category; children in source order (callee first) |
+| `ConditionalOperator`, `ParenExpr`, `ArraySubscriptExpr` | class, type, category; children in source order |
+| `CallExpr` | `CallExpr 'type' [lvalue\|xvalue] [adl]` (`adl`: the callee was found by argument-dependent lookup, clang's `usesADL`; WP-122); children: callee, arguments |
 | `UnaryExprOrTypeTraitExpr` | `UnaryExprOrTypeTraitExpr 'type' sizeof\|alignof 'operand-type'` (or expression child) |
 | `CXXNoexceptExpr` | `CXXNoexceptExpr 'bool'`; one child, the unevaluated operand. The value is not printed (clang prints none) |
 | `CXXStaticCastExpr`, `CXXDynamicCastExpr`, `CXXConstCastExpr`, `CXXReinterpretCastExpr` | `Class 'type' [lvalue\|xvalue] static_cast<T> <Kind [(path)]>` (the written type, as `'type'` plus `&` for an lvalue and `&&` for an xvalue result) |
@@ -521,7 +524,11 @@ contract:
   flags; `array_filler` is printed first with its label; the
   `'NULL TYPE'` static-assert message becomes `unevaluated`); type pairs
   collapse when equal (§2); strings are re-escaped (§2); the `bitfield`
-  flag is derived from the referenced `FieldDecl`'s `isBitfield` (§2);
+  flag is derived from the referenced `FieldDecl`'s `isBitfield` (§2),
+  or for a `DeclRefExpr` to a `BindingDecl` from that binding's
+  expression (its last child, WP-122); a `BindingDecl`'s type, which the
+  JSON lacks, is its last child's type (`'<dependent type>'` without
+  one), and its holding `VarDecl` is printed although implicit;
   enumerator values come from the initializer's `ConstantExpr` (or the
   previous value + 1).
 - **Side channel.** The JSON lacks the `value:` of a constexpr variable,

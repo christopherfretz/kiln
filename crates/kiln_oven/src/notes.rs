@@ -38,6 +38,19 @@ fn name_of(ast: &Ast, d: DeclId) -> String {
 /// template specialization with its arguments (`f<int>`).
 fn write_name_for_diag(ast: &Ast, d: DeclId, out: &mut String) {
     let names = AstNames::new(ast);
+    // A decomposition's variable prints as `[a, b]` (clang
+    // `DecompositionDecl::printName`).
+    if let Some(l) = ast.decls.decomp_bindings(d) {
+        out.push('[');
+        for (i, b) in ast.lists.iter::<DeclId>(l).enumerate() {
+            if i > 0 {
+                out.push_str(", ");
+            }
+            names.write_name(b, out);
+        }
+        out.push(']');
+        return;
+    }
     names.write_name(d, out);
     if ast.decls.get(d).kind().is_function()
         && let Some((_, info)) = ast.spec_info(d)

@@ -292,12 +292,13 @@ impl Parser<'_, '_> {
         if self.at_attr() {
             self.parse_attributes(&mut d.attrs);
         }
-        let Some((_, name_loc)) = d.name else {
+        if !d.has_name() {
             if !d.invalid {
                 self.error_here(DiagId::parse_expected_unqualified_id);
             }
             return None;
-        };
+        }
+        let name_loc = d.name_loc();
         d.init_style = match Self::punct_of(self.tok()) {
             Some(Punct::Equal) => Some(InitStyle::C),
             Some(Punct::LBrace) => Some(InitStyle::List),
@@ -729,15 +730,6 @@ impl Parser<'_, '_> {
             return self.finish_for_range(open, loc, init, v, range, Vec::new(), colon);
         }
         let ds = self.parse_decl_specifiers(ctx);
-        let binding = self.at(Punct::LSquare)
-            || (matches!(Self::punct_of(self.tok()), Some(Punct::Amp | Punct::AmpAmp))
-                && Self::punct_of(self.peek(1)) == Some(Punct::LSquare));
-        if binding {
-            self.unsupported("structured bindings", self.loc());
-            self.skip_until(&[Punct::RParen], false, true);
-            self.skip_sub_statement();
-            return None;
-        }
         if ds.is_empty() {
             // `for (expr : r)`: clang `err_for_range_expected_decl` at the
             // `:` after the expression.

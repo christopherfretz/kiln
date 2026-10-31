@@ -518,7 +518,7 @@ impl Sema<'_, '_> {
                 let note = self.diag(DiagId::note_template_decl_here, self.ast.decls.get(at).loc());
                 let d = self
                     .diag(DiagId::sema_template_implicit_instantiate_undefined, poi)
-                    .arg(self.ty_str(t))
+                    .arg(self.decl_ty_str(t))
                     .with_note(note);
                 self.emit(d);
                 self.inst.undefined_diagnosed.set(Some(spec));

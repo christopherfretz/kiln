@@ -39,6 +39,7 @@ pub mod scope;
 mod side_effects;
 pub mod stack_guard;
 pub mod stmt;
+mod struct_bind;
 pub mod target;
 pub mod templ;
 mod try_stmt;
@@ -53,8 +54,8 @@ use kiln_source::{Loc, Span};
 pub use class::{BaseSpecInfo, MemInitId, MemInitInfo};
 pub use decl::{NameClass, TagUse};
 pub use declspec::{
-    Chunk, DeclSpec, Declarator, DeclaratorContext, DefaultArg, ParamInfo, Sign, SpecialName,
-    StorageSpec, TypeSpecKind, Width,
+    BindingId, Chunk, DeclSpec, Declarator, DeclaratorContext, Decomposition, DefaultArg,
+    ParamInfo, Sign, SpecialName, StorageSpec, TypeSpecKind, Width,
 };
 pub use gnu::{OffsetofComponent, StmtExprScope};
 pub use init::{Designator, InitItem, InitList, InitValue, Initializer};
@@ -143,6 +144,10 @@ pub struct Sema<'a, 'sm> {
     /// Parameters created by [`Sema::act_on_prototype_param`] that no
     /// function has adopted yet ([`Sema::create_params`]).
     pub(crate) unowned_params: std::collections::HashSet<DeclId>,
+    /// The declared type (`cv auto`, `auto &`, `auto &&`) of each
+    /// decomposition declared in a template, which instantiation
+    /// deduces anew (the pattern's own may be deduced, spec/sema.md).
+    pub(crate) decomp_written: std::collections::HashMap<DeclId, QualType>,
     /// The declared (placeholder) return type of each function whose
     /// return type was deduced, by first declaration: redeclarations are
     /// matched against it ([dcl.spec.auto.general]/13).
@@ -327,6 +332,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             prototype_params: Vec::new(),
             declarator_records: Vec::new(),
             unowned_params: std::collections::HashSet::new(),
+            decomp_written: std::collections::HashMap::new(),
             declared_returns: kiln_source::fx::FxHashMap::default(),
             handler_type_locs: kiln_source::fx::FxHashMap::default(),
             group_placeholders: kiln_source::fx::FxHashMap::default(),
@@ -487,6 +493,14 @@ impl<'a, 'sm> Sema<'a, 'sm> {
         print_type(&self.ast.types, &names, q, PrintOptions::SUGARED)
     }
 
+    /// `q` printed canonical and fully scoped, without quotes: how clang
+    /// prints a declaration's own type (`Context.getTypeDeclType(D)`, a
+    /// bare `RecordType`), e.g. `N::X<int>`.
+    pub fn decl_ty_str(&self, q: QualType) -> String {
+        let names = names::SemaNames::new(self);
+        print_type(&self.ast.types, &names, q, PrintOptions::CANONICAL)
+    }
+
     /// The qualified name of `d`, as clang prints a declaration argument.
     pub fn qualified_decl_name(&self, d: DeclId) -> String {
         use kiln_ast::types::TypeNames as _;
@@ -504,6 +518,9 @@ impl<'a, 'sm> Sema<'a, 'sm> {
 
     /// The simple name of `d` (empty when unnamed).
     pub fn decl_name(&self, d: DeclId) -> String {
+        if self.ast.decls.decomp_bindings(d).is_some() {
+            return self.decomp_name(d);
+        }
         self.decl_name_str(self.ast.decls.get(d).name())
     }
 

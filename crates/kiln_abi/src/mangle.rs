@@ -353,6 +353,9 @@ pub fn decl_name(ast: &Ast, d: DeclId) -> String {
 /// scope.
 pub fn is_unmangled(ast: &Ast, d: DeclId) -> bool {
     let n = ast.decls.get(d);
+    if ast.decls.decomp_bindings(d).is_some() {
+        return false;
+    }
     if is_extern_c(ast, d) {
         return true;
     }
@@ -794,7 +797,10 @@ impl<'a, 'b> Mangler<'a, 'b> {
     /// `L` for an internal-linkage name at namespace scope outside an
     /// unnamed namespace (clang `isInternalLinkageDecl`).
     fn l_prefix(&mut self, d: DeclId) {
-        if internal_by_storage(self.ast, d) && !in_anon_ns(self.ast, d) {
+        if internal_by_storage(self.ast, d)
+            && !in_anon_ns(self.ast, d)
+            && self.ast.decls.decomp_bindings(d).is_none()
+        {
             self.out.push('L');
         }
     }
@@ -935,7 +941,9 @@ impl<'a, 'b> Mangler<'a, 'b> {
                     return;
                 }
                 let nm = decl_name(ast, d);
-                if nm.is_empty()
+                if let Some(dc) = crate::mangle_decomp::decomposition_name(ast, d) {
+                    self.out.push_str(&dc);
+                } else if nm.is_empty()
                     && let Some(l) = ast.closure_lambda(d)
                 {
                     self.closure_name(d, l);

@@ -117,6 +117,11 @@ impl Sema<'_, '_> {
                 let Some(v) = self.ast.decls.var(d) else { return false };
                 v.spec.tls() == kiln_ast::decl::TlsKind::None && !self.has_static_storage(d)
             }
+            // A structured binding has its decomposition's storage
+            // ([expr.prim.lambda.capture]/12 captures it as an entity).
+            DeclKind::Binding => {
+                self.ast.decls.binding_decomp(d).is_some_and(|v| self.has_local_storage(v))
+            }
             _ => false,
         }
     }
@@ -156,7 +161,7 @@ impl Sema<'_, '_> {
     }
 
     pub(crate) fn may_need_capture(&self, d: DeclId) -> bool {
-        matches!(self.kind_of(d), DeclKind::Var | DeclKind::ParmVar)
+        matches!(self.kind_of(d), DeclKind::Var | DeclKind::ParmVar | DeclKind::Binding)
             && (self.ast.decls.get(d).ctx() != Some(self.ctx)
                 || self.init_capture_owner(d).is_some())
             && (self.has_local_storage(d) || self.init_capture_owner(d).is_some())
@@ -240,7 +245,7 @@ impl Sema<'_, '_> {
         ellipsis: Loc,
         build: bool,
     ) -> Captured {
-        if !matches!(self.kind_of(d), DeclKind::Var | DeclKind::ParmVar) {
+        if !matches!(self.kind_of(d), DeclKind::Var | DeclKind::ParmVar | DeclKind::Binding) {
             return Captured::NotNeeded;
         }
         let owner = self.init_capture_owner(d);
@@ -517,10 +522,9 @@ impl Sema<'_, '_> {
                 self.emit(msg);
                 continue;
             }
-            let Some(var) = found
-                .single()
-                .filter(|&d| matches!(self.kind_of(d), DeclKind::Var | DeclKind::ParmVar))
-            else {
+            let Some(var) = found.single().filter(|&d| {
+                matches!(self.kind_of(d), DeclKind::Var | DeclKind::ParmVar | DeclKind::Binding)
+            }) else {
                 let field = found.single().is_some_and(|d| self.kind_of(d) == DeclKind::Field);
                 let id = if field {
                     DiagId::sema_capture_class_member

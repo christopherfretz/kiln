@@ -875,6 +875,25 @@ impl Substituter<'_, '_, '_> {
         // initialization is redone for the instantiated variable.
         let peeled = self.peel_initializer(init);
         let pk = self.sema.ast.exprs.get(peeled).kind();
+        // An array decomposition's element-wise copy: redone from the
+        // array (clang `TransformInitializer` takes its common
+        // expression's source).
+        if pk == ExprKind::ArrayInitLoopExpr {
+            let ex = &self.sema.ast.exprs;
+            let [common, _] = ex.array_init_loop(peeled);
+            let src = ex.opaque_source(common).ok_or(SubstFail)?;
+            let at = ex.get(src).loc();
+            let e = self.expr(src)?;
+            return Ok(Some(match style {
+                InitStyle::Call | InitStyle::ParenList => Initializer::Paren(vec![e], at, at),
+                InitStyle::List => Initializer::List(InitList {
+                    items: vec![InitItem { designator: Vec::new(), value: InitValue::Expr(e) }],
+                    lbrace: at,
+                    rbrace: at,
+                }),
+                InitStyle::C => Initializer::Expr(e),
+            }));
+        }
         let list_construct =
             pk == ExprKind::CXXConstructExpr && self.sema.ast.exprs.construct_info(peeled).list;
         if pk == ExprKind::CXXConstructExpr && (style != InitStyle::C || list_construct) {

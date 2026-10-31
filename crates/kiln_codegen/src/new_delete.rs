@@ -321,7 +321,7 @@ impl Cg<'_> {
         }
     }
 
-    fn skip_parens(&self, mut e: ExprId) -> ExprId {
+    pub(crate) fn skip_parens(&self, mut e: ExprId) -> ExprId {
         while self.ast.exprs.get(e).kind() == ExprKind::ParenExpr {
             e = self.ast.exprs.operand(e);
         }

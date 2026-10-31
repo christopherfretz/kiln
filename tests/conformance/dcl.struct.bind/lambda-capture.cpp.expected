@@ -1,0 +1,68 @@
+Dumping test_capture:
+FunctionDecl test_capture 'int (P)'
+|-ParmVarDecl used p 'P'
+`-CompoundStmt
+  |-DeclStmt
+  | `-DecompositionDecl used 'P' cinit
+  |   |-CXXConstructExpr 'P' 'void (const P &) noexcept'
+  |   | `-ImplicitCastExpr 'const P' lvalue <NoOp>
+  |   |   `-DeclRefExpr 'P' lvalue ParmVar 'p' 'P'
+  |   |-BindingDecl referenced a 'int'
+  |   | `-MemberExpr 'int' lvalue .x
+  |   |   `-DeclRefExpr 'P' lvalue Decomposition '' 'P'
+  |   `-BindingDecl referenced b 'int'
+  |     `-MemberExpr 'int' lvalue .y
+  |       `-DeclRefExpr 'P' lvalue Decomposition '' 'P'
+  |-DeclStmt
+  | `-VarDecl used byref '(lambda at tests/conformance/dcl.struct.bind/lambda-capture.cpp:10:16)' cinit
+  |   `-LambdaExpr '(lambda at tests/conformance/dcl.struct.bind/lambda-capture.cpp:10:16)'
+  |     |-DeclRefExpr 'int' lvalue Binding 'a' 'int'
+  |     |-DeclRefExpr 'int' lvalue Binding 'b' 'int'
+  |     `-CompoundStmt
+  |       `-ReturnStmt
+  |         `-BinaryOperator 'int' '+'
+  |           |-ImplicitCastExpr 'int' <LValueToRValue>
+  |           | `-DeclRefExpr 'int' lvalue Binding 'a' 'int'
+  |           `-ImplicitCastExpr 'int' <LValueToRValue>
+  |             `-DeclRefExpr 'int' lvalue Binding 'b' 'int'
+  |-DeclStmt
+  | `-VarDecl used bycopy '(lambda at tests/conformance/dcl.struct.bind/lambda-capture.cpp:11:17)' cinit
+  |   `-LambdaExpr '(lambda at tests/conformance/dcl.struct.bind/lambda-capture.cpp:11:17)'
+  |     |-ImplicitCastExpr 'int' <LValueToRValue>
+  |     | `-DeclRefExpr 'int' lvalue Binding 'a' 'int'
+  |     `-CompoundStmt
+  |       `-ReturnStmt
+  |         `-ImplicitCastExpr 'int' <LValueToRValue>
+  |           `-DeclRefExpr 'int' lvalue Binding 'a' 'int'
+  |-DeclStmt
+  | `-VarDecl used mixed '(lambda at tests/conformance/dcl.struct.bind/lambda-capture.cpp:12:16)' cinit
+  |   `-LambdaExpr '(lambda at tests/conformance/dcl.struct.bind/lambda-capture.cpp:12:16)'
+  |     |-DeclRefExpr 'int' lvalue Binding 'b' 'int'
+  |     |-ImplicitCastExpr 'int' <LValueToRValue>
+  |     | `-DeclRefExpr 'int' lvalue Binding 'a' 'int'
+  |     `-CompoundStmt
+  |       `-ReturnStmt
+  |         `-BinaryOperator 'int' '*'
+  |           |-ImplicitCastExpr 'int' <LValueToRValue>
+  |           | `-DeclRefExpr 'int' lvalue Binding 'a' 'int'
+  |           `-ImplicitCastExpr 'int' <LValueToRValue>
+  |             `-DeclRefExpr 'int' lvalue Binding 'b' 'int'
+  `-ReturnStmt
+    `-BinaryOperator 'int' '+'
+      |-BinaryOperator 'int' '+'
+      | |-CXXOperatorCallExpr 'int' '()'
+      | | |-ImplicitCastExpr 'auto (*)() const -> int' <FunctionToPointerDecay>
+      | | | `-DeclRefExpr 'auto () const -> int' lvalue CXXMethod 'operator()' 'auto () const -> int'
+      | | `-ImplicitCastExpr 'const (lambda at tests/conformance/dcl.struct.bind/lambda-capture.cpp:10:16)' lvalue <NoOp>
+      | |   `-DeclRefExpr '(lambda at tests/conformance/dcl.struct.bind/lambda-capture.cpp:10:16)' lvalue Var 'byref' '(lambda at tests/conformance/dcl.struct.bind/lambda-capture.cpp:10:16)'
+      | `-CXXOperatorCallExpr 'int' '()'
+      |   |-ImplicitCastExpr 'auto (*)() const -> int' <FunctionToPointerDecay>
+      |   | `-DeclRefExpr 'auto () const -> int' lvalue CXXMethod 'operator()' 'auto () const -> int'
+      |   `-ImplicitCastExpr 'const (lambda at tests/conformance/dcl.struct.bind/lambda-capture.cpp:11:17)' lvalue <NoOp>
+      |     `-DeclRefExpr '(lambda at tests/conformance/dcl.struct.bind/lambda-capture.cpp:11:17)' lvalue Var 'bycopy' '(lambda at tests/conformance/dcl.struct.bind/lambda-capture.cpp:11:17)'
+      `-CXXOperatorCallExpr 'int' '()'
+        |-ImplicitCastExpr 'auto (*)() const -> int' <FunctionToPointerDecay>
+        | `-DeclRefExpr 'auto () const -> int' lvalue CXXMethod 'operator()' 'auto () const -> int'
+        `-ImplicitCastExpr 'const (lambda at tests/conformance/dcl.struct.bind/lambda-capture.cpp:12:16)' lvalue <NoOp>
+          `-DeclRefExpr '(lambda at tests/conformance/dcl.struct.bind/lambda-capture.cpp:12:16)' lvalue Var 'mixed' '(lambda at tests/conformance/dcl.struct.bind/lambda-capture.cpp:12:16)'
+

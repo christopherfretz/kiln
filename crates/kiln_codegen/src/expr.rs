@@ -471,6 +471,20 @@ impl Cg<'_> {
                 {
                     return Ok(Some(V::C(self.const_scalar_value(c, q)?)));
                 }
+                // A call returning a reference yields the referee's address
+                // (clang `ScalarExprEmitter::VisitCallExpr`: a reference
+                // result is `EmitLoadOfLValue`).
+                let inner = self.skip_parens(s);
+                if matches!(
+                    ast.exprs.get(inner).kind(),
+                    ExprKind::CallExpr
+                        | ExprKind::CXXMemberCallExpr
+                        | ExprKind::CXXOperatorCallExpr
+                ) && self.is_glvalue(inner)
+                {
+                    let lv = self.emit_lvalue(s)?;
+                    return Ok(Some(self.load_lv(lv)));
+                }
                 return self.emit_scalar_opt(s);
             }
             // clang `ScalarExprEmitter::VisitCastExpr`: a user-defined or
@@ -1136,6 +1150,20 @@ impl Cg<'_> {
                     q,
                     bf: None,
                 })
+            }
+            // clang `EmitDeclRefLValue`: a structured binding is its
+            // binding expression ([dcl.struct.bind]), or its capture.
+            DeclKind::Binding => {
+                if ast.exprs.get(e).has(ExprFlags::REFERS_TO_ENCLOSING)
+                    && let Some(lv) = self.captured_var_lvalue(d, q)?
+                {
+                    return Ok(lv);
+                }
+                let Some(b) = ast.decls.binding_expr(d) else {
+                    return err(Some(ast.decls.get(d).loc()), "unbound binding");
+                };
+                let lv = self.emit_lvalue(b)?;
+                Ok(LV { q, ..lv })
             }
             DeclKind::Var | DeclKind::ParmVar => {
                 if ast.exprs.get(e).has(ExprFlags::REFERS_TO_ENCLOSING)
@@ -2634,8 +2662,23 @@ impl Cg<'_> {
 
     // ---- local variables -----------------------------------------------
 
-    /// clang `EmitVarDecl` for a block-scope variable.
+    /// clang `EmitVarDecl` for a block-scope variable; a decomposition's
+    /// tuple-like bindings' holding variables follow it (clang
+    /// `EmitDecl` of a `DecompositionDecl`).
     pub(crate) fn emit_var_decl(&mut self, d: DeclId) -> R<()> {
+        self.emit_one_var_decl(d)?;
+        let ast = self.ast;
+        if let Some(l) = ast.decls.decomp_bindings(d) {
+            for b in ast.lists.iter::<DeclId>(l).collect::<Vec<_>>() {
+                if let Some(h) = ast.decls.binding_var(b) {
+                    self.emit_one_var_decl(h)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn emit_one_var_decl(&mut self, d: DeclId) -> R<()> {
         let ast = self.ast;
         let Some(v) = ast.decls.var(d) else { return Ok(()) };
         match v.spec.storage() {

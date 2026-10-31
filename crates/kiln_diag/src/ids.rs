@@ -414,6 +414,7 @@ diag_ids! {
     sema_lvalue_ref_bind_to_temporary = Error (3) "{0:non-const|volatile} lvalue reference to type {1} cannot bind to a temporary of type {2}";
     sema_lvalue_ref_bind_to_unrelated = Error (3) "{0:non-const|volatile} lvalue reference to type {1} cannot bind to a value of unrelated type {2}";
     sema_rvalue_ref_bind_to_lvalue = Error (2) "rvalue reference to type {0} cannot bind to lvalue of type {1}";
+    sema_reference_bind_failed = Error (3) "reference to type {0} could not bind to an {1:rvalue|lvalue} of type {2}";
     sema_reference_bind_drops_quals = Error (4) "binding reference of type {0} to value of type {1} drops {2} qualifier{3:|s}";
     sema_conv_unsupported = Error (1) "{0} is not supported yet";
 
@@ -1157,6 +1158,29 @@ diag_ids! {
     sema_auto_not_allowed_field = Error (2) "'{0:auto|decltype(auto)}' not allowed in non-static {1:struct|class|union} member";
     sema_auto_fn_virtual = Error (0) "function with deduced return type cannot be virtual";
     parse_decltype_auto_invalid = Error (0) "'decltype(auto)' not allowed here";
+    // WP-122: structured bindings (spec/sema.md §4.9).
+    parse_decomp_decl_empty = ExtWarn [EmptyDecomposition] (0) "ISO C++17 does not allow a decomposition group to be empty";
+    sema_decomp_decl_cond = ExtWarn [BindingInCondition] (0) "ISO C++17 does not permit structured binding declaration in a condition";
+    sema_decomp_decl_spec = Error (1) "decomposition declaration cannot be declared {0}";
+    sema_decomp_decl_type = Error (1) "decomposition declaration cannot be declared with type {0}; declared type must be 'auto' or reference to 'auto'";
+    sema_decomp_decl_parens = Error (0) "decomposition declaration cannot be declared with parentheses";
+    sema_decomp_decl_constraint = Error (0) "decomposition declaration cannot be declared with constrained 'auto'";
+    sema_decomp_decl_template = Error (0) "decomposition declaration template not supported";
+    sema_decomp_decl_not_alone = Error (0) "decomposition declaration must be the only declaration in its group";
+    sema_decomp_decl_requires_init = Error (1) "decomposition declaration '{0}' requires an initializer";
+    sema_decomp_decl_wrong_number_bindings = Error (3) "type {0} decomposes into {1}, but {2} provided";
+    sema_decomp_decl_unbindable_type = Error (2) "cannot decompose {0:union|non-class, non-array} type {1}";
+    sema_decomp_decl_multiple_bases_with_members = Error (3) "cannot decompose class type {0}: {1} {2} have non-static data members";
+    sema_decomp_decl_ambiguous_base = Error (2) "cannot decompose members of ambiguous base class {1} of {0}";
+    sema_decomp_decl_inaccessible_base = Error (2) "cannot decompose members of inaccessible base class {1} of {0}";
+    sema_decomp_decl_inaccessible_field = Error (3) "cannot decompose {0:private|protected} member '{1}' of {2}";
+    sema_decomp_decl_lambda = Error (1) "cannot decompose lambda closure type {0}";
+    sema_decomp_decl_anon_union_member = Error (2) "cannot decompose class type {0} because it has an anonymous {1:struct|union} member";
+    sema_decomp_decl_tuple_element_not_specialized = Error (1) "cannot decompose this type; 'std::tuple_element<{0}>::type' does not name a type";
+    sema_decomp_decl_tuple_size_not_constant = Error (1) "cannot decompose this type; 'std::tuple_size<{0}>::value' is not a valid integral constant expression";
+    note_in_binding_decl_init = Note (1) "in implicit initialization of binding declaration '{0}'";
+    sema_binding_in_own_initializer = Error (1) "binding '{0}' cannot appear in the initializer of its own decomposition declaration";
+    sema_reference_bind_to_bitfield = Error (2) "{0:non-const|volatile} reference cannot bind to bit-field{1}";
     // WP-087
     sema_param_default_argument_references_param = Error (1) "default argument references parameter '{0}'";
     sema_side_effects_unevaluated_context = Warning [UnevaluatedExpression] (0) "expression with side effects has no effect in an unevaluated context";

@@ -228,6 +228,14 @@ pub(crate) fn skip_parens(ast: &kiln_ast::Ast, mut e: ExprId) -> ExprId {
     e
 }
 
+/// The holding variables of decomposition `d`'s tuple-like bindings
+/// ([dcl.struct.bind]/4), in order; empty for any other declaration.
+pub(crate) fn holding_vars(ast: &kiln_ast::Ast, d: DeclId) -> Vec<DeclId> {
+    ast.decls.decomp_bindings(d).map_or_else(Vec::new, |l| {
+        ast.lists.iter::<DeclId>(l).filter_map(|b| ast.decls.binding_var(b)).collect()
+    })
+}
+
 /// Whether `d` is a variable with automatic storage duration.
 pub(crate) fn is_local_var(ast: &kiln_ast::Ast, d: DeclId) -> bool {
     let n = ast.decls.get(d);
@@ -980,6 +988,14 @@ impl Scan<'_> {
         if ast.decls.get(d).kind() != DeclKind::Var {
             return;
         }
+        self.decl_one(d);
+        for h in holding_vars(ast, d) {
+            self.decl_one(h);
+        }
+    }
+
+    fn decl_one(&mut self, d: DeclId) {
+        let ast = self.ast;
         if let Some(init) = ast.decls.var(d).and_then(|v| v.init) {
             // A `__builtin_bit_cast` result may be indeterminate
             // ([bit.cast]/2): the variable is built in memory.
@@ -1198,7 +1214,10 @@ impl Compiler<'_> {
     fn open_scope(&mut self, decls: &[DeclId], force: bool) {
         let mut mem = Vec::new();
         let mut force = force;
-        for &d in decls {
+        let ast = self.b.ast();
+        let decls: Vec<DeclId> =
+            decls.iter().flat_map(|&d| std::iter::once(d).chain(holding_vars(ast, d))).collect();
+        for &d in &decls {
             let ast = self.b.ast();
             if !is_local_var(ast, d) || ast.decls.get(d).kind() != DeclKind::Var {
                 continue;
@@ -1832,8 +1851,16 @@ impl Compiler<'_> {
         self.close_scope();
     }
 
-    /// A declaration in a `DeclStmt` (or a condition variable).
+    /// A declaration in a `DeclStmt` (or a condition variable); a
+    /// decomposition's holding variables follow it.
     fn decl(&mut self, d: DeclId) {
+        self.decl_one(d);
+        for h in holding_vars(self.b.ast(), d) {
+            self.decl_one(h);
+        }
+    }
+
+    fn decl_one(&mut self, d: DeclId) {
         let ast = self.b.ast();
         let n = *ast.decls.get(d);
         if n.kind() != DeclKind::Var {
@@ -3035,6 +3062,14 @@ impl Compiler<'_> {
                     return p;
                 }
                 let ast = self.ast();
+                if ast.decls.get(d).kind() == DeclKind::Binding {
+                    // A binding names its expression ([dcl.struct.bind]).
+                    let Some(b) = ast.decls.binding_expr(d) else {
+                        self.unsupported(e);
+                        return Place::Mem(self.reg());
+                    };
+                    return self.lv(b, acc);
+                }
                 if let Some(l) = self.locals.get(&d).copied() {
                     return match l {
                         Local::Reg(r) => Place::Reg(r),

@@ -1237,6 +1237,11 @@ least as specialized as").
   earlier return statement";
 - generic lambdas (WP-075).
 
+In a function template (or a member of a class template) the pattern
+does not deduce: its return type is a dependent `auto`, and each
+specialization deduces from its own instantiated, non-discarded returns
+(sema.md §4.3.1, WP-122).
+
 A function with a deduced return type that is used before its type is
 known has its body **instantiated immediately**. That is not the
 immediate context: errors are hard.

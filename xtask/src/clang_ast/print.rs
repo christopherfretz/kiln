@@ -145,6 +145,9 @@ struct Index<'a> {
     types: Types,
     /// Bit-field `FieldDecl` ids.
     bitfields: HashSet<&'a str>,
+    /// `BindingDecl`s by id (a reference to one is a bit-field lvalue when
+    /// its binding expression is).
+    bindings: HashMap<&'a str, &'a Json>,
     /// Functions by id (for `previousDecl`).
     funcs: HashMap<&'a str, &'a Json>,
     /// Functions whose lexical context is a class (members, and friends
@@ -327,9 +330,18 @@ impl<'a> Index<'a> {
         if is_template {
             self.template_depth -= 1;
         }
+        self.note_decl(n, k);
+    }
+
+    /// Records the bit-fields, bindings, records, aliases and enumerations
+    /// the printer looks up by id or name.
+    fn note_decl(&mut self, n: &'a Json, k: &str) {
         match k {
             "FieldDecl" if flag(n, "isBitfield") => {
                 self.bitfields.insert(id(n));
+            }
+            "BindingDecl" => {
+                self.bindings.insert(id(n), n);
             }
             "CXXRecordDecl" if flag(n, "completeDefinition") && !flag(n, "isImplicit") => {
                 if let Some(nm) = name(n) {
@@ -408,6 +420,9 @@ struct Printer<'a, 'f> {
     /// Function words derived from the JSON, checked against the side
     /// channel when it is loaded: (order position, [(word, present)]).
     fn_flags: Vec<(usize, [(&'static str, bool); 3])>,
+    /// The next `node` prints even if implicit (a binding's holding
+    /// variable, spec/ast-dump.md §3).
+    force: bool,
 }
 
 /// Prints `root` (a `TranslationUnitDecl`) per `opts`.
@@ -420,8 +435,15 @@ pub fn dump(
     if kind(root) != "TranslationUnitDecl" {
         return Err("clang-ast: the JSON dump is not a TranslationUnitDecl".into());
     }
-    let mut p =
-        Printer { ix: Index::build(root), opts, main_file, text, side: None, fn_flags: Vec::new() };
+    let mut p = Printer {
+        ix: Index::build(root),
+        opts,
+        main_file,
+        text,
+        side: None,
+        fn_flags: Vec::new(),
+        force: false,
+    };
     let mut out = String::new();
     match &opts.filter {
         None => {
@@ -611,7 +633,7 @@ impl<'a> Printer<'a, '_> {
             return Err("clang-ast: unexpected absent child (`{}`) in clang's JSON".into());
         }
         let k = kind(n);
-        if self.implicit_dropped(n) {
+        if !std::mem::take(&mut self.force) && self.implicit_dropped(n) {
             return Ok(None);
         }
         match table::lookup(k)? {
@@ -837,9 +859,32 @@ impl<'a> Printer<'a, '_> {
                 line = l;
                 kids_out = self.kid_trees(n)?;
             }
-            "VarDecl" => {
+            "VarDecl" | "DecompositionDecl" => {
                 line = self.var(n)?;
                 kids_out = self.kid_trees(n)?;
+            }
+            "BindingDecl" => {
+                // clang's JSON has no type for a binding: it is the type of
+                // its binding expression (the last child: the expression,
+                // or the holding variable then a reference to it), or
+                // dependent. (A reference member's binding has the member's
+                // reference type, which the expression lacks.)
+                let mut l = decl_head(n, k);
+                push_opt(&mut l, name(n));
+                let ty = match kids(n).last() {
+                    Some(e) => type_pair(e.get("type"), "binding expression")?,
+                    None => "'<dependent type>'".to_owned(),
+                };
+                push_word(&mut l, &ty);
+                line = l;
+                let mut v = Vec::new();
+                for c in kids(n) {
+                    self.force = kind(c) == "VarDecl";
+                    if let Some(t) = self.node(c)? {
+                        v.push(t);
+                    }
+                }
+                kids_out = v;
             }
             "ClassTemplateDecl"
             | "FunctionTemplateDecl"
@@ -1334,13 +1379,17 @@ impl<'a> Printer<'a, '_> {
                 line = format!("{} '{op}'{adl}", self.expr_head(n, k)?);
                 kids_out = self.kid_trees(n)?;
             }
+            "CallExpr" => {
+                let adl = if flag(n, "adl") { " adl" } else { "" };
+                line = format!("{}{adl}", self.expr_head(n, k)?);
+                kids_out = self.kid_trees(n)?;
+            }
             "CXXNullPtrLiteralExpr"
             | "CXXNoexceptExpr"
             | "CXXPseudoDestructorExpr"
             | "ConditionalOperator"
             | "ParenExpr"
             | "ArraySubscriptExpr"
-            | "CallExpr"
             | "ImplicitValueInitExpr"
             | "ExprWithCleanups"
             | "CXXStdInitializerListExpr"
@@ -1511,6 +1560,13 @@ impl<'a> Printer<'a, '_> {
             "MemberExpr" => {
                 text(n, "referencedMemberDecl").is_some_and(|d| self.ix.bitfields.contains(d))
             }
+            "DeclRefExpr" => n
+                .get("referencedDecl")
+                .and_then(|r| r.get("id"))
+                .and_then(Json::as_str)
+                .and_then(|b| self.ix.bindings.get(b))
+                .and_then(|b| kids(b).last())
+                .is_some_and(|e| self.bitfield(e)),
             "ParenExpr" | "CompoundAssignOperator" => kid(0),
             "SubstNonTypeTemplateParmExpr" => kid(1),
             "BinaryOperator" => match text(n, "opcode") {
@@ -1661,7 +1717,7 @@ impl<'a> Printer<'a, '_> {
         let class = kind(n);
         let mut l = self.head(n, class);
         // A handler's exception declaration may be unnamed ([except.pre]/1).
-        if class == "VarDecl" {
+        if class == "VarDecl" || class == "DecompositionDecl" {
             push_opt(&mut l, name(n));
         } else {
             push_word(&mut l, name(n).ok_or("clang-ast: VarDecl without a name")?);

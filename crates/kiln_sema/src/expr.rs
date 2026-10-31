@@ -1043,8 +1043,18 @@ impl Sema<'_, '_> {
             .filter(|_| extra.is_some_and(|x| x.template_args.is_none()));
         let n = *self.ast.decls.get(d);
         match n.kind() {
+            // [dcl.struct.bind]/1: a binding is not usable before its
+            // decomposition is initialized.
+            DeclKind::Binding if n.has(DeclFlags::INVALID) => return self.recover_err(&[], loc),
+            DeclKind::Binding if n.ty().is_none() => {
+                let msg =
+                    self.diag(DiagId::sema_binding_in_own_initializer, loc).arg(self.decl_name(d));
+                self.emit(msg);
+                return self.recover_err(&[], loc);
+            }
             DeclKind::Var
             | DeclKind::ParmVar
+            | DeclKind::Binding
             | DeclKind::Function
             | DeclKind::EnumConstant
             | DeclKind::NonTypeTemplateParm => {}
@@ -1157,9 +1167,22 @@ impl Sema<'_, '_> {
                 Some(t) => (t, ExprFlags::REFERS_TO_ENCLOSING),
                 None => (ty, ExprFlags::NONE),
             },
+            // clang 19 keeps a captured binding's own type (its
+            // `getCapturedDeclRefType` adjusts variables only).
+            DeclKind::Binding => match self.capture_at_decl_ref(d, loc) {
+                Some(_) => (ty, ExprFlags::REFERS_TO_ENCLOSING),
+                None => (ty, ExprFlags::NONE),
+            },
             _ => (ty, ExprFlags::NONE),
         };
         let e = self.builder().decl_ref(d, ty, loc, extra, nou, flags);
+        // A binding to a bit-field designates it (clang `BuildDeclRefExpr`).
+        if n.kind() == DeclKind::Binding
+            && let Some(b) = self.ast.decls.binding_expr(d)
+            && self.is_bitfield(b)
+        {
+            self.ast.exprs.mark_bitfield(e);
+        }
         if defer {
             self.deferred_call_refs.push((e, d));
         }
@@ -2648,6 +2671,20 @@ impl Sema<'_, '_> {
         {
             let has_braced = braced.iter().any(Option::is_some);
             return self.builtin_custom_call(callee, b, id, args, has_braced, loc, rparen);
+        }
+        // A member function named by a member access with no overload set
+        // to resolve (`x.f()`): a placeholder return type is deduced first,
+        // instantiating the definition of a class template member (clang's
+        // `DiagnoseUseOfDecl` -> `DeduceReturnType`).
+        {
+            let x = self.ignore_parens(callee);
+            if self.ast.exprs.get(x).kind() == ExprKind::MemberExpr {
+                let m = self.ast.exprs.decl(x);
+                let at = self.ast.exprs.get(x).loc();
+                if self.ast.decls.get(m).kind().is_function() && self.check_undeduced_use(m, at) {
+                    return self.recover_err(&kids, loc);
+                }
+            }
         }
         if let Some(e) = self.try_member_call(callee, args, &mut braced, loc, rparen) {
             return e;

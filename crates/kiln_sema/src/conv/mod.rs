@@ -369,6 +369,15 @@ pub(crate) fn eval_width(s: &Sema<'_, '_>, w: ExprId) -> Option<u32> {
 /// parentheses and no-op/lvalue-to-rvalue casts; clang's
 /// `getSourceBitField`).
 pub fn bit_field_width(s: &Sema<'_, '_>, e: ExprId) -> Option<u32> {
+    let f = source_bit_field(s, e)?;
+    let w = s.ast.decls.field(f)?.bit_width?;
+    eval_width(s, w)
+}
+
+/// The bit-field `e` designates, if any: through parentheses, no-op and
+/// lvalue-to-rvalue casts and a structured binding's expression (clang
+/// `Expr::getSourceBitField`).
+pub fn source_bit_field(s: &Sema<'_, '_>, e: ExprId) -> Option<kiln_ast::DeclId> {
     let mut cur = e;
     for _ in 0..256 {
         let n = s.ast.exprs.get(cur);
@@ -383,9 +392,10 @@ pub fn bit_field_width(s: &Sema<'_, '_>, e: ExprId) -> Option<u32> {
                 cur = s.ast.exprs.operand(cur);
             }
             ExprKind::MemberExpr if n.object_kind() == ObjectKind::BitField => {
-                let f = s.ast.exprs.decl(cur);
-                let w = s.ast.decls.field(f)?.bit_width?;
-                return eval_width(s, w);
+                return Some(s.ast.exprs.decl(cur));
+            }
+            ExprKind::DeclRefExpr if n.object_kind() == ObjectKind::BitField => {
+                cur = s.ast.decls.binding_expr(s.ast.exprs.decl(cur))?;
             }
             _ => return None,
         }
@@ -623,7 +633,13 @@ fn bind_reference(s: &mut Sema<'_, '_>, e: ExprId, to: QualType) -> Result<ExprI
         _ => BaseSearch::NotDerived,
     };
     let related = same || base.is_derived();
-    let to_str = s.ty_arg(referee);
+    // Diagnostics print the referee as written (clang
+    // `DestType.getNonReferenceType()`): `I` in `I &&`.
+    let written = s.ast.types.desugar_top(to);
+    let to_str = match s.ast.types.view(written.ty()) {
+        TypeView::LValueRef(p) | TypeView::RValueRef(p) => s.ty_arg(p),
+        _ => s.ty_arg(referee),
+    };
     // A non-const (or volatile) lvalue reference: binds no temporary.
     let plain_lref = !rvalue_ref && (!rq.contains(Quals::CONST) || rq.contains(Quals::VOLATILE));
     // [dcl.init.ref]/5.1 binds an lvalue; /5.3.1 binds an xvalue to an
@@ -648,8 +664,12 @@ fn bind_reference(s: &mut Sema<'_, '_>, e: ExprId, to: QualType) -> Result<ExprI
         // [dcl.init.ref]/5.4.2: a temporary of type cv1 T1
         // copy-initialized from the initializer.
         let target = s.ast.types.qualify(r_un, rq);
-        let scs = standard_conversion(s, e, r_un, ConvCtx::Initialization)
-            .ok_or_else(|| conversion_error(s, e, r_un, ConvCtx::Initialization))?;
+        // clang `FK_ReferenceInitFailed`: the referee as written.
+        let Some(scs) = standard_conversion(s, e, r_un, ConvCtx::Initialization) else {
+            let sel = if vk.is_glvalue() { "1" } else { "0" };
+            let args = vec![to_str, sel.into(), s.ty_arg(from)];
+            return Err(ConvError::new(DiagId::sema_reference_bind_failed, args));
+        };
         let mut x = apply_standard_conversion(s, e, &scs, r_un)?;
         if !rq.is_empty() {
             x = qualify_prvalue(s, x, target);
@@ -692,6 +712,30 @@ fn bind_reference(s: &mut Sema<'_, '_>, e: ExprId, to: QualType) -> Result<ExprI
             return Err(ConvError::new(id, vec![sel.into(), to_str, s.ty_arg(from)]));
         }
         return Err(unsupported("binding a reference to a temporary"));
+    }
+    if related && vk.is_glvalue() && s.ast.exprs.get(e).object_kind() == ObjectKind::BitField {
+        // A bit-field is not referenceable ([dcl.init.ref]/5.1, clang
+        // `isNonReferenceableGLValue`): a non-const lvalue reference is
+        // ill-formed, any other binds a temporary copy (/5.4.2).
+        if plain_lref {
+            let sel = if rq.contains(Quals::VOLATILE) { "1" } else { "0" };
+            let f = source_bit_field(s, e);
+            let name = f.map_or_else(String::new, |f| format!(" '{}'", s.decl_name(f)));
+            let mut err =
+                ConvError::new(DiagId::sema_reference_bind_to_bitfield, vec![sel.into(), name]);
+            if let Some(f) = f {
+                let at = s.ast.decls.get(f).loc();
+                err.notes.push(s.diag(DiagId::note_bitfield_decl, at));
+            }
+            return Err(err);
+        }
+        let target = s.ast.types.qualify(r_un, rq);
+        let scs = standard_conversion(s, e, r_un, ConvCtx::Initialization)
+            .ok_or_else(|| conversion_error(s, e, r_un, ConvCtx::Initialization))?;
+        // clang materializes the cv1 T1 temporary from the unqualified
+        // value, without a qualification cast.
+        let x = apply_standard_conversion(s, e, &scs, r_un)?;
+        return Ok(s.materialize_temporary(x, target, !rvalue_ref));
     }
     if !rq.contains(fq) {
         let dropped = fq - rq;

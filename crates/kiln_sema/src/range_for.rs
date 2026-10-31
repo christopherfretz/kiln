@@ -191,6 +191,15 @@ impl Sema<'_, '_> {
     /// clang `ActOnInitializerError` for the loop variable `v` of a
     /// range-based `for` that is dropped.
     pub fn act_on_for_range_error(&mut self, v: DeclId) {
+        self.for_range_error_var(v);
+        // A decomposition's bindings are not decomposed: uses of them
+        // raise no further errors.
+        if self.ast.decls.decomp_bindings(v).is_some() {
+            self.invalidate_bindings(v);
+        }
+    }
+
+    fn for_range_error_var(&mut self, v: DeclId) {
         let n = *self.ast.decls.get(v);
         if n.kind() != DeclKind::Var || n.has(DeclFlags::INVALID) {
             return;
@@ -389,6 +398,9 @@ impl Sema<'_, '_> {
             {
                 let d = self.dependent_auto(t);
                 self.ast.decls.set_ty(loop_var, d);
+            }
+            if self.ast.decls.decomp_bindings(loop_var).is_some() {
+                self.complete_decomposition(loop_var);
             }
             return Some(head);
         }

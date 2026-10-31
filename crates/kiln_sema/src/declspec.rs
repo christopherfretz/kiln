@@ -589,10 +589,41 @@ pub struct Declarator {
     ///
     /// [`Sema::act_on_specialization_declarator_id`]: crate::Sema::act_on_specialization_declarator_id
     pub spec_id: Option<crate::templ::spec::SpecDeclaratorId>,
+    /// A structured binding declaration's `[ identifier-list ]`
+    /// ([dcl.struct.bind], [dcl.pre]/6): the declarator has no name then
+    /// (a ref-qualifier is its only chunk).
+    pub decomp: Option<Decomposition>,
     /// The declarator of a friend declaration ([class.friend]): its
     /// declarator-id may be a template-id naming a specialization of a
     /// function template without a template head ([temp.friend]/1.3).
     pub friend: bool,
+}
+
+/// The bracketed identifier list of a structured binding declaration
+/// ([dcl.pre]/6: `attribute-specifier-seq(opt) decl-specifier-seq
+/// ref-qualifier(opt) [ sb-identifier-list ] initializer ;`).
+#[derive(Clone, Debug)]
+pub struct Decomposition {
+    /// Where `[` is.
+    pub lbracket: Loc,
+    /// Where `]` is.
+    pub rbracket: Loc,
+    /// The sb-identifiers in order.
+    pub ids: Vec<BindingId>,
+}
+
+/// One sb-identifier ([dcl.pre]/6): `...(opt) identifier
+/// attribute-specifier-seq(opt)`.
+#[derive(Clone, Debug)]
+pub struct BindingId {
+    /// The identifier and where it is.
+    pub name: Symbol,
+    /// Its location.
+    pub loc: Loc,
+    /// A C++26 binding pack's `...` (P1061).
+    pub ellipsis: Option<Loc>,
+    /// The attributes after the identifier (P0609).
+    pub attrs: Vec<AttrId>,
 }
 
 /// A declarator-id that is not an identifier ([dcl.decl]/4,
@@ -636,6 +667,7 @@ impl Declarator {
             trailing_requires: None,
             dropped: false,
             spec_id: None,
+            decomp: None,
             friend: false,
         }
     }
@@ -643,12 +675,16 @@ impl Declarator {
     /// True if the declarator has a declarator-id (an identifier or a
     /// [`SpecialName`]).
     pub fn has_name(&self) -> bool {
-        self.name.is_some() || self.special.is_some()
+        self.name.is_some() || self.special.is_some() || self.decomp.is_some()
     }
 
     /// The location of the name, or of the declarator.
     pub fn name_loc(&self) -> Loc {
-        self.name.map(|n| n.1).or(self.special.map(|s| s.1)).unwrap_or(self.loc)
+        self.name
+            .map(|n| n.1)
+            .or(self.special.map(|s| s.1))
+            .or(self.decomp.as_ref().map(|b| b.lbracket))
+            .unwrap_or(self.loc)
     }
 
     /// True if the outermost operator applied to the name is a function

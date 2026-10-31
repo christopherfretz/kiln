@@ -168,6 +168,52 @@ impl Substituter<'_, '_, '_> {
         Ok(v)
     }
 
+    /// Pattern decomposition `d` ([dcl.struct.bind], clang
+    /// `TemplateDeclInstantiator::VisitDecompositionDecl`): its bindings
+    /// anew, then the variable from its declared type, initialized and
+    /// decomposed as written.
+    pub(crate) fn decomp_decl(&mut self, d: DeclId, ctx: DeclaratorContext) -> SubstResult<DeclId> {
+        let (_, v) = self.decomp_declare(d, ctx)?;
+        self.var_init(d, v)?;
+        Ok(v)
+    }
+
+    /// Declares pattern decomposition `d` uninitialized: the declaration
+    /// specifiers used and the variable.
+    pub(crate) fn decomp_declare(
+        &mut self,
+        d: DeclId,
+        ctx: DeclaratorContext,
+    ) -> SubstResult<(DeclSpec, DeclId)> {
+        let loc = self.sema.ast.decls.get(d).loc();
+        let t = self.sema.decomp_written.get(&d).copied().unwrap_or_else(|| self.decl_ty(d));
+        let ty = self.named_decl_ty(d, t, loc)?;
+        let ds = self.pattern_declspec(d, ty);
+        let mut dr = Declarator::new(ctx, loc);
+        let old = self.sema.decomp_binding_list(d);
+        let ids = old
+            .iter()
+            .map(|&b| {
+                let n = self.sema.ast.decls.get(b);
+                crate::declspec::BindingId {
+                    name: n.name().as_ident().unwrap_or(Symbol::from_index(0)),
+                    loc: n.loc(),
+                    ellipsis: None,
+                    attrs: Vec::new(),
+                }
+            })
+            .collect();
+        let dc = crate::declspec::Decomposition { lbracket: loc, rbracket: loc, ids };
+        dr.decomp = Some(dc.clone());
+        let invalid = self.sema.is_error_type(ty);
+        let v = self.sema.declare_decomposition(&ds, ty, &dr, &dc, invalid);
+        for (&b, nb) in old.iter().zip(self.sema.decomp_binding_list(v)) {
+            self.locals.insert(b, DeclOrPack::Decl(nb));
+        }
+        self.locals.insert(d, DeclOrPack::Decl(v));
+        Ok((ds, v))
+    }
+
     /// Whether pattern static data member `d` is declared without its
     /// initializer ([temp.inst]/4): an inline one whose type does not
     /// come from the initializer (`auto`, an array of unknown bound).

@@ -280,6 +280,22 @@ Redeclaration and linkage rules:
   the deduced one, and then adopts the deduced type
   (`adopt_deduced_return`), so `auto f(); auto f() { return 1; } auto
   f();` is valid and `int f();` after it is not.
+- Deduced return types in templated functions (WP-122,
+  [dcl.spec.auto.general]/12): when the body is in a dependent context
+  (`in_template()`), `begin_function_body` gives the pattern the
+  return type `dependent_auto(declared)` (clang's AutoType "deduced as
+  dependent", printed `auto`, canonical to itself so it mangles `Da`/
+  `Dc`) and `deduce_return` checks nothing. The pattern's returns are
+  left unconverted, `return;` / `return void();` are not diagnosed
+  against the dependent type, and there is no NRVO candidate
+  (`copy_elision_candidate`), as in clang. Deduction runs when the body
+  is instantiated, so a `return` in a discarded `if constexpr` branch
+  never participates (libc++ `__get_comp_type`) and only a real
+  conflict between instantiated returns is reported. `return {…}` is
+  still an error in the pattern. A call `x.g()` to a member whose
+  return type is not yet deduced goes through `check_undeduced_use`
+  (instantiating it when it is a specialization member) before
+  member-call building.
 - Declarator groups ([dcl.spec.auto.general]/3, /8): the parser records
   each declarator of a simple-declaration or member-declaration with
   `act_on_group_declarator(&mut AutoGroup, d)` and closes the group with
@@ -564,6 +580,154 @@ specification as written (`TypeNames` prints ` noexcept`,
   (`Nns::NamespaceAlias`). `Sema::nns_str` prints one as written.
 - **Uses:** a `DeclRefExpr` found through a shadow records it as its
   found declaration (`build_decl_ref_via`; `DeclRefExtra::found_decl`).
+
+### 4.9 Structured bindings (`struct_bind.rs`)
+
+**Landed (WP-122).** [dcl.struct.bind] for simple-declarations,
+conditions, range-for loop variables, namespace scope (`static`,
+`thread_local` and plain) and block scope, matching clang 19's AST,
+diagnostics and IR.
+
+- **Representation** (spec/ast.md §4). The decomposed object `e` is a
+  `DeclKind::Var` with an empty name, located at `[` (clang's
+  `DecompositionDecl`). Each name is a `DeclKind::Binding` declared
+  before it. The links are write-once cold maps:
+  - `set_decomp_bindings(v, list, bindings)` records the bindings, read
+    back with `decomp_bindings(v)`, `is_decomposition(v)` and
+    `binding_decomp(b)`;
+  - `set_binding(b, expr, holding)` records the binding expression
+    (`binding_expr(b)`) and, for a tuple-like type, the holding
+    variable (`binding_var(b)`, built with `builder.holding_var`).
+
+  `decl_name(v)` prints `[a, b]`, as clang's `printName` does.
+- **Declaring.** The parser hands a declarator with a decomposition to
+  `act_on_decomposition_declarator`:
+  - In a template-declaration it is `decomposition declaration template
+    not supported`.
+  - In a condition (`DeclaratorContext::Condition`, not an
+    init-statement) it warns `ISO C++17 does not permit structured
+    binding declaration in a condition` (`-Wbinding-in-condition`) at
+    `[`. Clang 19 does not implement P0963 yet and warns in C++26 too.
+  - Only `static`, `thread_local`, `auto` and cv are allowed
+    ([dcl.pre]/6). Another storage class, `constexpr`, `consteval`,
+    `constinit` or `inline` is `decomposition declaration cannot be
+    declared 'constexpr'`, or `... with 'static constexpr' specifiers`
+    when there are several, at the first one. The declaration continues:
+    a `constexpr` is still applied, which makes `e` const, as in clang.
+  - A declarator chunk other than `&`/`&&` is `decomposition declaration
+    cannot be declared with parentheses` or `... with type 'T'; declared
+    type must be 'auto' or reference to 'auto'`.
+  - A constrained placeholder is `decomposition declaration cannot be
+    declared with constrained 'auto'`.
+
+  `declare_decomposition` then declares the bindings: redefinitions are
+  checked against earlier names, binding attributes are attached, and a
+  pack `...a` (P1061) is reported as `a structured binding pack` is
+  unsupported. It then declares `e`. A second declarator in the same
+  group is `decomposition declaration must be the only declaration in
+  its group` (`act_on_decomposition_not_alone`). A missing initializer
+  is `decomposition declaration '[a, b]' requires an initializer`
+  (`decomposition_requires_init`).
+- **Initializing** (`act_on_init`):
+  - `auto [a, b] = arr;` with a plain `cv auto` and an array initializer
+    deduces `cv A`. It initializes element-wise with an
+    `ArrayInitLoopExpr` (`decomp_array_type`, `init_decomposition_array`,
+    clang's `TryArrayCopy`).
+  - Otherwise `e` is deduced and initialized as an ordinary variable.
+
+  `complete_decomposition` (clang's
+  `CheckCompleteDecompositionDeclaration`) then gives every binding a
+  type and an expression. An invalid `e` or an error initializer
+  invalidates the bindings silently. A dependent `e` gives them
+  `QualType::DEPENDENT` until instantiation.
+  - **Arrays** (`decompose_array`): `e[i]` (an `ArraySubscriptExpr` on a
+    `DeclRefExpr` to `e`), of the element type with `e`'s cv.
+  - **Tuple-like** (`tuple_like`, `decompose_tuple`): applies when
+    `std::tuple_size<E>` is a complete class.
+    - A `value` that is not an integral constant expression is `cannot
+      decompose this type; 'std::tuple_size<T>::value' is not a valid
+      integral constant expression`.
+    - Each binding gets a holding variable of type `tuple_element<i,
+      E>::type&` (lvalue `e`) or `&&`, with the binding's name. It is
+      initialized with `e.get<i>()` when a member template `get` has a
+      non-type first parameter, else with an ADL-only `get<i>(xvalue
+      e)`, which prints `adl`.
+    - The binding's type is `tuple_element<i, E>::type`, as written,
+      and its expression a `DeclRefExpr` to the holding variable.
+    - `tuple_element` is checked after the `get` call. An incomplete
+      specialization gets clang's `implicit instantiation of undefined
+      template 'std::tuple_element<0, T>'` (`std_trait_ty(..,
+      complain = true)`). A specialization without `type` is `cannot
+      decompose this type; 'std::tuple_element<0>::type' does not name a
+      type`.
+    - A failed `get` call that had candidates is recovered as clang does
+      (a `RecoveryExpr`), and the next binding is still checked.
+      An empty `get` lookup (`use of undeclared identifier 'get'`) or a
+      failed initialization stops at that binding.
+    - The holding variable's initialization runs in a
+      `FrameKind::BindingInit` frame, whose note is `in implicit
+      initialization of binding declaration 'a'`.
+  - **Classes** (`decomposable_class`, `decompose_members`): the bindings
+    are `e.mi` (a `MemberExpr`) for the non-static data members of the
+    one class in the hierarchy that has any. The member's type gets
+    `e`'s cv, with `mutable` dropping const.
+    - Fields spread over several classes are `cannot decompose class type
+      'D': both it and its base class 'B' have non-static data members`
+      (or `its base classes 'A' and 'B'`).
+    - An ambiguous base is `cannot decompose members of ambiguous base
+      class 'B' of 'D'`.
+    - A lambda closure is `cannot decompose lambda closure type`.
+    - An anonymous struct or union member is `cannot decompose class
+      type 'S' because it has an anonymous struct|union member`, with a
+      note.
+    - An inaccessible member is `cannot decompose private|protected
+      member 'x' of 'S'` at the binding, through the usual access
+      check.
+    - A union or a non-class type is `cannot decompose union|non-class,
+      non-array type 'T'`.
+    - A bit-field member makes the binding a bit-field lvalue. Every
+      `DeclRefExpr` to it is marked `bitfield` (`mark_bitfield`, clang's
+      `refersToBitField`), so `int &r = b;` is `non-const reference
+      cannot bind to bit-field 'b'`.
+  - A binding count that differs from the element count is `type 'T'
+    decomposes into N elements, but M names were provided` (`1 name
+    was`, `only 1 name was`).
+- **Uses.** A `DeclRefExpr` to a binding is an lvalue of the binding's
+  type, kind `Binding`. A binding is captured by a lambda as the entity
+  it names ([expr.prim.lambda.capture]/12, P1091R3): `has_local_storage`
+  and `may_need_capture` follow `binding_decomp`. Codegen loads a
+  captured binding through the closure field. Reference binding
+  (`conv::bind_reference`) looks through a binding to its expression for
+  the bit-field check.
+- **Templates.** `decomp_written` records each pattern's declared type.
+  `templ/subst/decls.rs` re-declares the bindings and `e` from it, then
+  completes the decomposition. A range-for loop variable and a
+  condition are re-declared in `templ/subst/stmts.rs`. Binding
+  attributes are not instantiated.
+- **Constant evaluation and codegen.** The Oven and codegen treat `e`
+  as an ordinary variable, followed by the holding variables
+  (`kiln_oven` `holding_vars`, codegen `emit_var_decl`). A use of a
+  binding evaluates or emits its binding expression. A namespace-scope
+  `e` mangles as `_ZDC1a1bE` (`kiln_abi` `mangle_decomp.rs`, `DC
+  <source-name>+ E`, never `L`-prefixed). A `constexpr` decomposition is
+  rejected, so constant bindings come from a `const` `e` with a
+  constant initializer, which is usable in constant expressions.
+- **Fixed on the way.**
+  - A reference that cannot bind (to `void`, or to a non-class type
+    with no conversion) is `reference to type 'int' could not bind to
+    an rvalue|lvalue of type 'void'` (`sema_reference_bind_failed`, the
+    referee as written, clang's `FK_ReferenceInitFailed`).
+  - `implicit instantiation of undefined template` names the
+    specialization fully qualified (`Sema::decl_ty_str`, clang's
+    printing of `getTypeDeclType`).
+- **Left.**
+  - Structured binding packs (P1061).
+  - `constexpr` structured bindings (P2686; clang 19 rejects them too).
+  - Instantiating binding attributes.
+  - The NoOp `'const M'` cast clang adds when a const class `e` is
+    copy-initialized from a prvalue.
+  - Clang 19 rejects a capture of a binding by a lambda in a constant
+    expression, and kiln accepts it.
 
 ## 5. Expressions (`expr.rs`, `conv/`)
 - **Typed nodes:** each `act_on_*` builds clang's typed node, with
@@ -1021,7 +1185,8 @@ template saved in `range_for_outer_depth` for instantiations).
   head (`None`) or a failed declaration (`act_on_for_range_error`) marks
   the loop variable invalid and the body is still parsed. `for (x : r)`
   is `range-based for loop requires type for loop variable` (the
-  variable gets type `auto`); a structured binding is unsupported; an
+  variable gets type `auto`); a structured binding is declared by
+  `act_on_decomposition_declarator` (§4.9); an
   init-statement before C++20 is `-Wc++20-extensions`.
 - **Range kinds.** An array range (a constant array; a VLA is
   unsupported) uses `__range` and `__range + N` (`N` a `ptrdiff_t`
@@ -1059,7 +1224,7 @@ template saved in `range_for_outer_depth` for instantiations).
 - **Left (WP-089):** `err_range_on_array_parameter` (needs
   `ParamData.original_ty`, which `act_on_param_declarator` does not set,
   so an array parameter gets the generic `'int *'` diagnostic);
-  structured bindings; VLA ranges; the default-on
+  VLA ranges; the default-on
   `-Wempty-body`-style `warn_empty_range_based_for_body` and the
   DefaultIgnore `-Wrange-loop-construct`/`-Wrange-loop-bind-reference`
   warnings (groups declared, not emitted); the begin/end-types-differ

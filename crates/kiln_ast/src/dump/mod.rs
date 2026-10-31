@@ -514,6 +514,21 @@ impl<'a, W: io::Write> Dumper<'a, W> {
             if let Some(e) = init {
                 kids.push((Node::Expr(e), None));
             }
+            // clang's `DecompositionDecl`: the bindings follow the init.
+            if let Some(list) = decls.decomp_bindings(d) {
+                for b in ast.lists.iter::<DeclId>(list) {
+                    kids.push((Node::Decl(b), None));
+                }
+            }
+        } else if kind == DeclKind::Binding {
+            // clang's `BindingDecl`: the holding variable (tuple-like),
+            // then the binding expression.
+            if let Some(h) = decls.binding_var(d) {
+                kids.push((Node::Decl(h), None));
+            }
+            if let Some(e) = decls.binding_expr(d) {
+                kids.push((Node::Expr(e), None));
+            }
         } else if let Some(p) = decls.param(d) {
             expr(p.default_arg);
         } else if let Some(f) = decls.field(d) {
@@ -1295,6 +1310,8 @@ impl<'a, W: io::Write> Dumper<'a, W> {
             (DeclKind::CXXRecord, _, true) => "ClassTemplatePartialSpecialization",
             (DeclKind::Var, true, _) => "VarTemplateSpecialization",
             (DeclKind::Var, _, true) => "VarTemplatePartialSpecialization",
+            // A structured binding's hidden variable `e` (spec/ast.md).
+            (DeclKind::Var, ..) if self.ast.decls.is_decomposition(d) => "Decomposition",
             _ => kind.name(),
         }
     }

@@ -1255,6 +1255,10 @@ impl Sema<'_, '_> {
         let special = !d.dropped && self.handles_special_declarator(ds, d);
         let op_d = if special { None } else { self.operator_declarator(d) };
         let d = op_d.as_ref().unwrap_or(d);
+        if !d.dropped && d.decomp.is_some() {
+            let ty = self.type_for_declarator_at(base, ds.type_loc.unwrap_or(ds.loc), d);
+            return self.act_on_decomposition_declarator(ds, ty, d, head);
+        }
         if d.dropped || !special && self.unsupported_declarator(ds, d) {
             self.templ.cur = None;
             return None;
@@ -2671,6 +2675,9 @@ impl Sema<'_, '_> {
         self.act_on_init_inner(v, init);
         self.initializing = None;
         self.lambda_mangle.var = None;
+        if self.ast.decls.decomp_bindings(v).is_some() {
+            self.complete_decomposition(v);
+        }
     }
 
     fn act_on_init_inner(&mut self, v: DeclId, init: Initializer) {
@@ -2698,6 +2705,12 @@ impl Sema<'_, '_> {
         }
         let mut ty = vn.ty().unwrap_or(QualType::ERROR);
         let direct = spec.init_style() == kiln_ast::decl::InitStyle::List;
+        if self.ast.decls.decomp_bindings(v).is_some()
+            && let Some(t) = self.decomp_array_type(ty, &init, direct)
+        {
+            self.init_decomposition_array(v, t, &init);
+            return;
+        }
         if self.contains_undeduced_auto(ty) {
             ty = match self.deduce_var_auto(v, ty, &init, loc, direct) {
                 Some(t) => t,
@@ -2893,6 +2906,10 @@ impl Sema<'_, '_> {
     pub fn act_on_uninit(&mut self, v: DeclId) {
         self.initializing = None;
         self.lambda_mangle.var = None;
+        if self.ast.decls.decomp_bindings(v).is_some() {
+            self.decomposition_requires_init(v);
+            return;
+        }
         let vn = *self.ast.decls.get(v);
         if vn.kind() != DeclKind::Var || vn.has(DeclFlags::INVALID) {
             return;
