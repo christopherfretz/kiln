@@ -20,6 +20,7 @@ pub mod ctad;
 pub mod deduce;
 pub mod deduce_call;
 pub mod funcs;
+pub mod nttp;
 pub mod member;
 pub mod order;
 pub mod pack;
@@ -370,6 +371,9 @@ impl Sema<'_, '_> {
             ty = self.ast.types.pack_expansion(ty, None);
         }
         let d = self.builder().non_type_template_parm(h, ty, depth, index, pack);
+        if !self.check_nttp_type(ty, p.loc) {
+            self.ast.decls.set_flags(d, kiln_ast::decl::DeclFlags::INVALID);
+        }
         self.push_template_param(d, p.name);
         d
     }

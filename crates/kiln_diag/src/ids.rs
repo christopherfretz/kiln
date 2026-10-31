@@ -1209,6 +1209,17 @@ diag_ids! {
     note_fn_template_spec_matched = Note (2) "function template '{0}' matches specialization {1}";
     sema_member_decl_no_match = Error (2) "out-of-line declaration of '{0}' does not match any declaration in {1}";
     sema_lvalue_ref_bind_to_initlist = Error (2) "{0:non-const|volatile} lvalue reference to type {1} cannot bind to an initializer list temporary";
+    sema_nttp_not_structural = Error (1) "type {0} of non-type template parameter is not a structural type";
+    sema_nttp_non_literal = Error (1) "non-type template parameter has non-literal type {0}";
+    sema_nttp_rvalue_ref = Error (1) "non-type template parameter has rvalue reference type {0}";
+    note_not_structural_non_public = Note (2) "{0} is not a structural type because it has a {1:non-static data member|base class} that is not public";
+    note_not_structural_mutable_field = Note (1) "{0} is not a structural type because it has a mutable non-static data member";
+    note_not_structural_rvalue_ref_field = Note (1) "{0} is not a structural type because it has a non-static data member of rvalue reference type";
+    note_not_structural_subobject = Note (3) "{0} is not a structural type because it has a {1:non-static data member|base class} of non-structural type {2}";
+    note_non_literal_no_constexpr_ctors = Note (1) "{0} is not literal because it is not an aggregate and has no constexpr constructors other than copy or move constructors";
+    note_non_literal_base_class = Note (2) "{0} is not literal because it has base class {1} of non-literal type";
+    note_non_literal_field = Note (3) "{0} is not literal because it has data member {1} of non-literal type {2}";
+    note_non_literal_non_constexpr_dtor = Note (1) "{0} is not literal because its destructor is not constexpr";
 }
 
 impl DiagId {
