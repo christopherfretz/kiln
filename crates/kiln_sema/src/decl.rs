@@ -1488,15 +1488,35 @@ impl Sema<'_, '_> {
                 && (alias_template_prev.is_some() == self.templ.cur.is_some())
             {
                 let pty = self.ast.decls.typedef(p).map_or(QualType::ERROR, |t| t.underlying);
-                if self.ast.types.same_type(pty, underlying) {
-                    prev_ok = Some(p);
+                // [dcl.typedef]/4 with [temp.over.link]/5: dependent types
+                // compare by their canonical profiles. A redefinition that
+                // is not an alias template's is checked only when neither
+                // type is dependent (clang's `isIncompatibleTypedef`); a
+                // mismatch is then diagnosed at instantiation.
+                let t = &self.ast.types;
+                let deferred = alias_template_prev.is_none()
+                    && (t.is_dependent(pty) || t.is_dependent(underlying));
+                if deferred || t.same_type(pty, underlying) {
+                    if self.kind_of(self.ctx) == DeclKind::CXXRecord {
+                        // [dcl.typedef]/4, CWG56/424: a typedef-name is not
+                        // redeclared in class scope.
+                        let msg = self
+                            .diag(DiagId::sema_redefinition, d.name_loc())
+                            .arg(sym_str(self, name));
+                        let msg = self.note_prev(msg, p, true);
+                        self.emit(msg);
+                        invalid = true;
+                    } else {
+                        prev_ok = Some(p);
+                    }
                 } else {
+                    // The kind is the previous declaration's (clang).
                     let msg = self
                         .diag(DiagId::sema_redefinition_different_typedef, d.name_loc())
-                        .arg(match (alias, alias_template_prev.is_some()) {
+                        .arg(match (pk, alias_template_prev.is_some()) {
                             (_, true) => "2",
-                            (true, false) => "1",
-                            (false, false) => "0",
+                            (DeclKind::TypeAlias, false) => "1",
+                            (_, false) => "0",
                         })
                         .arg(self.ty_arg(underlying))
                         .arg(self.ty_arg(pty));

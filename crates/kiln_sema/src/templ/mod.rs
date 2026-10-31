@@ -19,6 +19,7 @@ pub mod concepts;
 pub mod ctad;
 pub mod deduce;
 pub mod deduce_call;
+mod equiv;
 pub mod funcs;
 pub mod member;
 pub mod order;
