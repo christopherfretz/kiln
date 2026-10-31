@@ -558,6 +558,13 @@ are invisible to it ([temp.res.general]/1).
 - The AST then becomes a DAG. Dumps are unchanged, because the dumper
   prints a shared subtree at each use.
 - `-fno-share-nondependent` turns sharing off for differential testing.
+
+*As built (WP-070a; measured in WP-106, §14 Q3).* Sharing is
+unconditional. No `LOCAL` bit was added: the builder marks references to
+decls of a dependent context `INSTANTIATION`, so the test is
+`deps & (TYPE_VALUE_INST | UNEXPANDED_PACK) == 0`. The flag does not
+exist. On `libcxx_m3.cpp`, sharing saves 0.8% of `inst.bytes` (at most
+3%).
 - The expected saving is 30–60% of the expression nodes in libc++ bodies.
   It is measured by the instantiation report (§11.3).
 
@@ -1001,8 +1008,8 @@ recomputed exactly as for non-template code (clang's
   covers `ImplicitCastExpr`, `MaterializeTemporaryExpr`,
   `CXXBindTemporaryExpr`, `ExprWithCleanups` and the `ConstantExpr`
   wrappers. `ParenExpr` is kept.
-- **Sharing.** A non-dependent subtree is shared (§3.3), unless sharing is
-  turned off.
+- **Sharing.** A non-dependent subtree is always shared (§3.3; there is
+  no switch).
 - **Dependent forms** are resolved:
   - `DependentScopeDeclRefExpr` becomes qualified lookup;
   - `UnresolvedLookupExpr` becomes an overload set plus ADL (§3.5);
@@ -2411,7 +2418,7 @@ before WP-070a, then 415 (the main binary at merge time gives 426). The
 | ~19 | Operators, constructors and conversion functions | WP-067b/068 |
 | 3 | `__copy_cv<_From>::template __apply<_To>` | WP-070b |
 
-Q3 was not implemented; see §14.
+Q3 was measured in WP-106 and falls below the bar; see §14.
 
 **Landed (WP-074).** The builtins of §9, `auto`/`decltype(auto)`
 deduction for variables and return types, `decltype` (including the
@@ -3345,6 +3352,50 @@ Each question has a recommendation (R).
    default member initializers, static-member initializers, array
    bounds and `static_assert`s. WP-071 measures it once function bodies
    and `libcxx_m3.cpp` exist, with the same ≥15% rule.
+   **WP-106: measured; below the bar.**
+   - *What exists.* Sharing landed with no flag and no new bit in
+     WP-070a's substituter. `Substituter::needs_rebuild`
+     (`templ/subst/exprs.rs`) reuses an expression by id when
+     `deps & (TYPE_VALUE_INST | UNEXPANDED_PACK) == 0`. The LOCAL role
+     is played by `INSTANTIATION`: the builder's `decl_deps` sets it on
+     every reference to a decl with `DeclFlags::DEPENDENT_CTX`, which
+     covers parameters, locals, local classes and lambdas of a template.
+     `-fno-share-nondependent` was never added; the doc comment on
+     `needs_rebuild` that mentions it is stale (wp-109's file).
+   - *Method.* `libcxx_m3.cpp` includes `<type_traits>`, `<bit>`,
+     `<limits>`, `<initializer_list>` and `<cstddef>`, then has a few
+     `static_assert`s over `numeric_limits`, `bit_ceil`, `rotl`,
+     `is_same_v` and `initializer_list`. Clang 19 accepts it. Kiln
+     reports 2 errors in both modes ("reference to a member of a
+     dependent context", `common_reference.h:160/162`). The run used
+     `-fsyntax-only -fkiln-instantiation-report=json`. For "no
+     sharing", a temporary env toggle (not landed) forced
+     `needs_rebuild` to true. Non-dependent literal leaves (`Integer`,
+     `CXXBool`, `String`, …) still had to be shared, because the
+     rebuilder has no arm for them ("substitution into IntegerLiteral");
+     there were 32 such leaves.
+
+     | mode | instantiations | nodes | `inst.bytes` |
+     |---|---:|---:|---:|
+     | sharing (default) | 238 | 706 | 27,758 |
+     | no sharing (leaves still shared) | 238 | 717 | 27,978 |
+
+   - *Result.* Sharing saves 220 B, or 0.8%. Charging the 32 shared
+     leaves at the observed ~20 B per node gives an upper bound of about
+     860 B, or 3%. Either way it is far below 15%. The rebuilt bytes are
+     dominated by dependent nodes: calls, member accesses and casts on
+     template parameters, plus the decls and statements of instantiated
+     bodies, none of which can be shared.
+   - *Proposal.*
+     1. Close Q3 as "measured, below the bar". Do not add
+        `ExprDeps::LOCAL` or `-fno-share-nondependent`.
+     2. Keep the existing `needs_rebuild` test. It is not an optional
+        optimization but the substituter's base case: without it every
+        leaf kind would need a rebuild arm. It costs one flag test per
+        node.
+     3. Fix the stale doc comment.
+     4. Re-measure only if a reflection-heavy workload shows
+        instantiation memory dominated by non-dependent subtrees.
 4. **Q4: Stack strategy (D1).** **R:** a dedicated sema thread with a
    256 MiB reserved stack, plus `StackGuard` with a 1 MiB red zone. The
    alternative is a `stacker`-style segmented stack, which needs `unsafe`

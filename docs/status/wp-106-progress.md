@@ -91,7 +91,9 @@ supervisor folds the outcome into BACKLOG/HANDOFF.
      range-for over a braced list is WP-089's; ctor templates with initializer_list
      params in phase 1 go through construct.rs:128 unsupported (wp-112's file).
 5. Tests DONE (46 new conformance files); spec DONE (sema-templates §6.10, Landed (WP-106),
-   sema-overload §10.8); Q3 measurement — see §14 Q3
+   sema-overload §10.8); Q3 DONE: sharing saves 220 B / 27,978 B = 0.8% inst.bytes
+   (≤3% counting literal leaves) on libcxx_m3.cpp; below 15%; nothing landed; proposal in §14 Q3.
+   ci --quick: 1409 passed, 12 xfail, 1421 tests.
 
 ## Interface changes
 - `kiln_ast`: `AstBuilder::function_spec_redecl`, `DeclArena::respecify_function`,
