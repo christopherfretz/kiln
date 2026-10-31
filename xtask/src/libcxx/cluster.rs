@@ -129,7 +129,7 @@ pub fn crash_key(stderr: &str) -> Option<(String, String)> {
             let msg = lines.next().unwrap_or("").trim();
             return Some((
                 format!("crash: panicked at {file}: {}", normalize(msg)),
-                l.trim().to_owned(),
+                format!("panicked at {loc}: {msg}"),
             ));
         }
         if l.contains("PLEASE submit a bug report") {
@@ -215,6 +215,10 @@ mod tests {
         assert_eq!(
             crash_key(s).unwrap().0,
             "crash: panicked at crates/kiln_sema/src/expr.rs: index out of bounds: the len is N but the index is N"
+        );
+        assert_eq!(
+            crash_key(s).unwrap().1,
+            "panicked at crates/kiln_sema/src/expr.rs:812:9: index out of bounds: the len is 3 but the index is 7"
         );
         assert_eq!(crash_key("error: x").map(|k| k.0), None);
         assert_eq!(crash_key("PLEASE submit a bug report to ...").unwrap().0, "crash: LLVM crash");

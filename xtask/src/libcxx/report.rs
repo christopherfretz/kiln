@@ -270,29 +270,40 @@ pub fn render(
         );
     }
 
+    let _ = writeln!(s, "\n### Crashes\n");
+    let mut crashes: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+    for r in results.iter().filter(|r| r.crashed) {
+        let k = r.keys.first().map_or("crash", |k| k.0.as_str());
+        crashes.entry(k).or_default().push(&r.rel);
+    }
+    if crashes.is_empty() {
+        let _ = writeln!(s, "None.");
+    } else {
+        let _ = writeln!(s, "| crash | tests | examples |\n|---|---:|---|");
+        let mut v: Vec<(&str, Vec<&str>)> = crashes.into_iter().collect();
+        v.sort_by(|a, b| b.1.len().cmp(&a.1.len()).then(a.0.cmp(b.0)));
+        for (k, tests) in v {
+            let ex: Vec<String> = tests.iter().take(3).map(|t| format!("`{t}`")).collect();
+            let _ = writeln!(s, "| {} | {} | {} |", md_code(k), tests.len(), ex.join(", "));
+        }
+    }
     let notable: Vec<&TestResult> = results
         .iter()
         .filter(|r| {
-            r.crashed
-                || matches!(
-                    r.outcome,
-                    Outcome::Killed(_) | Outcome::Timeout(_) | Outcome::Error(_) | Outcome::XPass
-                )
+            matches!(
+                r.outcome,
+                Outcome::Killed(_) | Outcome::Timeout(_) | Outcome::Error(_) | Outcome::XPass
+            )
         })
         .collect();
-    let _ = writeln!(s, "\n### Crashes, KILLED, TIMEOUT, ERROR and XPASS\n");
+    let _ = writeln!(s, "\n### KILLED, TIMEOUT, ERROR and XPASS\n");
     if notable.is_empty() {
         let _ = writeln!(s, "None.");
     }
     for r in notable {
-        let what = if r.crashed {
-            format!("{} — compiler crash", r.outcome)
-        } else {
-            r.outcome.to_string()
-        };
         let first =
             r.keys.first().map(|k| format!(": {}", md_code(&cut(&k.1, 160)))).unwrap_or_default();
-        let _ = writeln!(s, "- `{}` — {what}{first}", r.rel);
+        let _ = writeln!(s, "- `{}` — {}{first}", r.rel, r.outcome);
     }
 
     let mut reasons: BTreeMap<&str, usize> = BTreeMap::new();
@@ -408,6 +419,7 @@ mod tests {
             "{page}"
         );
         assert!(page.contains("- `std/a/3.pass.cpp` — KILLED (compile)"), "{page}");
+        assert!(page.contains("### Crashes\n\nNone."), "{page}");
         assert!(page.contains("2 MiB (largest single process"), "{page}");
         assert!(page.contains("| `std/a` | `compile: x '…'` (1) |"), "{page}");
     }

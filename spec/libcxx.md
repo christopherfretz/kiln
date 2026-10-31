@@ -221,8 +221,9 @@ appended. The region contains:
 - **Dominant first errors per directory**: the three most common first-error
   clusters among each directory's FAIL tests.
 - **Error clusters**: the top 40 clusters (see below).
-- **Crashes, KILLED, TIMEOUT, ERROR and XPASS**: each test, with its first
-  message.
+- **Crashes**: one row per crash cluster, with its test count and up to
+  three example tests.
+- **KILLED, TIMEOUT, ERROR and XPASS**: each test, with its first message.
 - **UNSUPPORTED reasons**: the count for each reason.
 
 **Clusters.** For a FAIL (or a crash), each `error:` and `fatal error:` line
