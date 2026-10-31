@@ -194,9 +194,9 @@ impl Sema<'_, '_> {
     ///   subexpression ([except.spec]/6.4), except that the unevaluated
     ///   operands of `sizeof`, `alignof` and `noexcept` are not looked at.
     ///
-    /// `typeid` of a polymorphic glvalue cannot occur: M2 has no
-    /// polymorphic classes. Implicit calls (constructors, destructors,
-    /// conversion functions) do not exist in M2 either.
+    /// Implicit calls are seen through their nodes: constructors
+    /// (`CXXConstructExpr`), destructors of bound temporaries
+    /// (`CXXBindTemporaryExpr`) and conversion functions (member calls).
     pub fn can_throw(&self, e: ExprId) -> bool {
         let exprs = &self.ast.exprs;
         let mut stack = vec![e];
