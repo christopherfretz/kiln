@@ -447,7 +447,7 @@ impl Sema<'_, '_> {
         let loc = sx.loc;
         let op = binary_of(self.fn_operator(sx.f)?)?;
         if sx.k == CmpKind::ThreeWay && self.cmp_needs_synth_three_way(l, loc) {
-            // todo(spec/sema-class.md §11): clang builds a PseudoObjectExpr
+            // todo(spec/sema-class.md §11 Q12): clang builds a PseudoObjectExpr
             // (`BuildSynthesizedThreeWayComparison`), which kiln's AST lacks.
             self.unsupported(
                 "a defaulted 'operator<=>' that synthesizes a three-way comparison from '==' and '<'",

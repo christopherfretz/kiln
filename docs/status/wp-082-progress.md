@@ -1,46 +1,33 @@
-# WP-082 progress — defaulted comparison operators
+# WP-082 progress: defaulted comparison operators
 
-Branch `wp/082-defaulted-comparisons`, worktree `.worktrees/wp-082`.
+Branch `wp/082-defaulted-comparisons`, worktree `.worktrees/wp-082`. Main
+was merged at e990962 (WP-106, WP-100, WP-116).
 
-## Baseline (main @ 45fbbab)
-- `<compare>` 50 errors, `<utility>` 83 errors.
-- `<compare>` WP-082-owned: 6 `operator '<=>'` not supported, 3 "defaulted
-  comparison operators", part of 12 "selecting the constructor" (ordering.h
-  static member definitions / `_CmpUnspecifiedParam`).
+## Status: complete, pending the full CI
+- Categories: `std::*_ordering` lookup and validation, plus lookup by
+  name. The built-in `<=>` works in sema, the Oven and codegen.
+- Declaration checks, deletedness, category deduction, constexpr, and the
+  implicit `==`.
+- Clang-shaped bodies, defined on odr-use. The implicit exception spec
+  comes from the body.
+- Class templates: member and friend defaulted comparisons.
+- Spec: sema-class.md §4.4, §4.12, §8.3 "Landed (WP-082)" and §11 Q12
+  (gaps); sema-overload.md §10.6; sema-templates.md §4.8; types.md R4.
+- Tests: `class.compare.default/`, `class.eq/`, `class.spaceship/`,
+  `class.compare.secondary/`, `cmp.categories/`, plus four ast goldens.
+- The synthesized three-way comparison reports `not supported yet`. It
+  needs a PseudoObjectExpr; its test is xfailed (Q12).
 
-## Plan
-1. `class/compare.rs`: comparison-category lookup/validation (`std::*_ordering`).
-2. Builtin `<=>` on scalars (sema, Oven, codegen).
-3. Declaration checks + deferral of defaulted comparisons; implicit `==` from `<=>`.
-4. Deletedness / category deduction / constexpr.
-5. Implicit definitions (clang-shaped bodies) on odr-use and `ensure_body`.
-6. Tests + spec + probe.
+## Probe (`kiln -std=c++26 -stdlib=libc++ -fsyntax-only -ferror-limit=0`)
 
-## Status
-- Steps 1-2 done: `std::*_ordering` recognition/validation, builtin `<=>`
-  in sema, the Oven and codegen.
-- Steps 3-4 done (`class/compare/{default,analyze}.rs`): clang's
-  `CheckExplicitlyDefaultedComparison` + `DefaultedComparisonAnalyzer`
-  (deletedness, category deduction, constexpr, access via
-  `cmp_member_access`), implicit `operator==` from a defaulted `<=>`,
-  checks at class completion (primaries, then secondaries). Scratch
-  diffs e1/e2/e5/e7 match clang; e3 off by RetLoc column (spec gap).
-- Pre-existing gaps seen (not WP-082): Oven "non-constexpr function" note
-  points at the operand start instead of the operator; explicit object
-  parameters unsupported in the parser.
-- Step 5 done (`class/compare/synth.rs`): clang-shaped bodies on odr-use
-  (`mark_function_referenced`, before the exception spec) and from
-  `ensure_body`; implicit exception spec from the body (built unevaluated
-  when not yet defined); deleted-function notes via the analyzer.
-  Scratch d1 (base + int + float[2], `<=>`, `<`, implicit `==`) matches
-  clang except `nrvo_candidate` (clang's JSON omits it: <=> goldens need
-  `skip(clang)` checked against the text dump).
-- Side fixes needed by the goldens: comparison category types print
-  `'std::strong_ordering'` (Elaborated with the namespace qualifier,
-  `scoped_class_type`); CXXOperatorCallExpr `adl` when the operator was
-  found only by ADL; a defaulted comparison's exception spec is resolved
-  before its callee DeclRefExpr is built.
+| header | baseline (45fbbab) | main e990962 | wp-082 |
+|---|---|---|---|
+| `<compare>` | 44 | 15 | 6 |
+| `<utility>` | 77 | 32 | 23 |
+
+These count `: error:` lines. All WP-082-owned errors are gone. The ones
+left in `<compare>` belong to range-for (WP-089), lambdas (WP-075), and
+the cascades those cause.
 
 ## Next step
-- Rebuild, re-diff d1; `git merge main`; tests in the 5 conformance dirs;
-  class-template instantiation of defaulted comparisons; probe; spec.
+Run the full `cargo xtask ci`, then hand back.

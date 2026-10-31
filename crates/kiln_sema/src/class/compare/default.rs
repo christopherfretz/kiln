@@ -1,6 +1,6 @@
 //! Explicitly defaulted comparison operators: the declaration checks of
 //! [class.compare.default] and the implicit `operator==` of a defaulted
-//! `operator<=>` ([class.compare.default]/4; spec/sema-class.md §4.10).
+//! `operator<=>` ([class.compare.default]/4; spec/sema-class.md §4.12).
 
 use kiln_ast::decl::{ConstexprKind, DeclFlags, DeclKind, DeclMisc, Defaulted, FnSpec, FriendKind};
 use kiln_ast::names::{DeclName, DeclNameView, OverloadedOperator as OO};

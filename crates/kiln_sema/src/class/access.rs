@@ -398,7 +398,7 @@ impl Sema<'_, '_> {
     /// subobject comparison: the operator function `found`, a member
     /// named in class `naming` (the subobject's class) through an object
     /// of class `object`, as from the context `from`
-    /// ([class.compare.default]/2, spec/sema-class.md §4.10). `None` if
+    /// ([class.compare.default]/2, spec/sema-class.md §4.12). `None` if
     /// accessible, else `mk(protected)` with the access-path notes.
     pub(crate) fn cmp_member_access(
         &self,

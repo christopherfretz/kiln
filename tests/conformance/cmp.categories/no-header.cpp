@@ -2,7 +2,7 @@
 // are looked up in namespace std; without <compare> a builtin `<=>` and a
 // deduced defaulted `operator<=>` are ill-formed.
 // The defaulted case has no column: clang points at the declared return
-// type, whose location kiln does not record (spec/sema-class.md §11).
+// type, whose location kiln does not record (spec/sema-class.md §11 Q12).
 //@ expect: compile-fail
 //@ strict-diags
 //@ diag: 11:12 error "cannot use builtin operator '<=>' because type 'std::strong_ordering' was not found; include <compare>"

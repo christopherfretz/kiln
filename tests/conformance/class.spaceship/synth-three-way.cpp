@@ -2,7 +2,7 @@
 // synthesized three-way comparison when the return type is a specified
 // comparison category type.
 //@ expect: compile-ok
-//@ xfail(kiln): the synthesized three-way comparison needs a PseudoObjectExpr (spec/sema-class.md §11); kiln reports it as not supported yet
+//@ xfail(kiln): the synthesized three-way comparison needs a PseudoObjectExpr (spec/sema-class.md §11 Q12); kiln reports it as not supported yet
 #include "../cmp.categories/Inputs/compare.h"
 struct L {
   int n;

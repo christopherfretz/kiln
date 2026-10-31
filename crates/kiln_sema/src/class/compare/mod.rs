@@ -1,6 +1,6 @@
 //! Three-way comparison and defaulted comparison operators
 //! ([expr.spaceship], [cmp.categories], [class.compare];
-//! spec/sema-class.md §4.10, spec/sema-overload.md §10.6).
+//! spec/sema-class.md §4.12, spec/sema-overload.md §10.6).
 //!
 //! - The comparison category types `std::partial_ordering`,
 //!   `std::weak_ordering` and `std::strong_ordering` are looked up and

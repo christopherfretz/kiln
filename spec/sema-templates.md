@@ -814,7 +814,11 @@ Later uses of it are silent.
 
 - A friend function **defined** in a class template (a hidden friend) is
   instantiated as a declaration into the innermost enclosing namespace,
-  visible only to ADL. Its body is instantiated on odr-use.
+  visible only to ADL. Its body is instantiated on odr-use. It is
+  instantiated through its `FriendDecl` only (WP-082), not also as an
+  entry of the class's member list. A defaulted friend comparison is
+  instantiated as defaulted and checked at the specialization's `}`
+  (sema-class.md §4.12).
 - If its signature does not depend on the template's parameters, the
   second specialization to instantiate it reports "redefinition of 'f'"
   (clang). The note shows the first instantiation.
