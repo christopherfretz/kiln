@@ -44,7 +44,7 @@ macro_rules! diag_groups {
 
 diag_groups! {
     All = "all" [Most];
-    Most = "most" [Comment, UnknownPragmas, OverloadedVirtual, UnevaluatedExpression, Reorder, Uninitialized];
+    Most = "most" [Comment, UnknownPragmas, OverloadedVirtual, UnevaluatedExpression, Reorder, Uninitialized, RangeLoopConstruct];
     Pragmas = "pragmas" [UnknownPragmas, IgnoredPragmas];
     Pedantic = "pedantic" [];
     BackslashNewlineEscape = "backslash-newline-escape" [];
@@ -93,6 +93,9 @@ diag_groups! {
     Comment = "comment" [];
     C23Extensions = "c23-extensions" [];
     Cxx20Compat = "c++20-compat" [];
+    RangeLoopConstruct = "range-loop-construct" [];
+    RangeLoopBindReference = "range-loop-bind-reference" [];
+    RangeLoopAnalysis = "range-loop-analysis" [RangeLoopConstruct, RangeLoopBindReference];
     DateTime = "date-time" [];
     DelimitedEscapeSequenceExtension = "delimited-escape-sequence-extension" [];
     DisabledMacroExpansion = "disabled-macro-expansion" [];
@@ -126,6 +129,7 @@ diag_groups! {
     Cxx14BinaryLiteral = "c++14-binary-literal" [];
     Cxx14Extensions = "c++14-extensions" [Cxx14BinaryLiteral];
     Cxx17Extensions = "c++17-extensions" [];
+    Cxx20Extensions = "c++20-extensions" [];
     Cxx23Extensions = "c++23-extensions" [];
     // WP-064
     VexingParse = "vexing-parse" [];

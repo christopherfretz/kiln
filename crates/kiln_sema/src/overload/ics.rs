@@ -384,6 +384,14 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// The canonical type of `q` without its qualifiers, including an
+    /// array's element qualifiers (clang `getUnqualifiedArrayType`).
+    fn unqualified_canonical(&mut self, q: QualType) -> QualType {
+        let c = self.ast.types.canonical(q);
+        let u = self.ast.types.unqualified(c);
+        self.ast.types.canonical(u)
+    }
+
     /// The conversion sequence binding reference type `to` to `a`
     /// ([over.ics.ref], clang `TryReferenceInit`).
     #[allow(clippy::too_many_lines, reason = "one step per bullet of [dcl.init.ref]/5")]
@@ -393,10 +401,12 @@ impl Sema<'_, '_> {
             TypeView::RValueRef(p) => (false, p),
             _ => return Ics::bad(BadKind::NoConversion, a.ty, to),
         };
+        // Unqualified through arrays: `const int[3]` and `int[3]` are
+        // reference-related ([dcl.init.ref]/4, [basic.type.qualifier]/3).
+        let u1 = self.unqualified_canonical(t1);
+        let u2 = self.unqualified_canonical(a.ty);
         let types = &self.ast.types;
         let (q1, q2) = (types.effective_quals(t1), types.effective_quals(a.ty));
-        let u1 = types.canonical(t1).without_quals();
-        let u2 = types.canonical(a.ty).without_quals();
         let is_fn = types.is_function(u1);
         let class_src = types.as_record(u2).is_some();
         let class_or_array = class_src || types.is_array(u2);

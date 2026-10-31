@@ -438,6 +438,9 @@ diag_ids! {
     parse_expected_init_in_condition_lparen = Error (0) "variable declaration in condition cannot have a parenthesized initializer";
     parse_expected_semi_after_stmt = Error (1) "expected ';' after {0} statement";
     parse_expected_expression = Error (0) "expected expression";
+    parse_for_range_identifier = Error (0) "range-based for loop requires type for loop variable";
+    parse_for_range_expected_decl = Error (0) "for range declaration must declare a variable";
+    parse_ext_for_range_init_stmt = ExtWarn [Cxx20Extensions] (0) "range-based for loop initialization statements are a C++20 extension";
     parse_expected_name_of_pack = Error (0) "expected the name of a parameter pack";
     parse_stmt_expr_in_default_arg = Error (0) "default argument may not use a GNU statement expression";
     parse_expected_unqualified_id = Error (0) "expected unqualified-id";
@@ -529,6 +532,23 @@ diag_ids! {
     sema_auto_fn_init_list = Error (0) "cannot deduce return type from initializer list";
     sema_auto_fn_deduction_failure = Error (2) "cannot deduce return type {0} from returned value of type {1}";
     sema_auto_var_deduction_failure = Error (3) "variable '{0}' with type {1} has incompatible initializer of type {2}";
+    // [stmt.ranged] (WP-089)
+    sema_for_range_decl_must_be_var = Error (0) "for range declaration must declare a variable";
+    sema_type_defined_in_for_range = Error (0) "types may not be defined in a for range declaration";
+    sema_for_range_storage_class = Error (2) "loop variable '{0}' may not be declared {1:'extern'|'static'|'__private_extern__'|'auto'|'register'|'constexpr'|'thread_local'}";
+    sema_for_range_incomplete_type = Error (1) "cannot use incomplete type {0} as a range";
+    sema_for_range_deduction_failure = Error (1) "cannot use type {0} as a range";
+    sema_for_range_iter_deduction_failure = Error (1) "cannot use type {0} as an iterator";
+    sema_for_range_invalid = Error (2) "invalid range expression of type {0}; no viable {1:'begin'|'end'} function available";
+    sema_for_range_dereference = Error (1) "invalid range expression of type {0}; did you mean to dereference it with '*'?";
+    sema_range_on_array_parameter = Error (3) "cannot build range expression with array function parameter '{0}' since parameter with array type {1} is treated as pointer type {2}";
+    note_for_range_member_begin_end_ignored = Note (2) "member is not a candidate because range type {0} has no '{1:end|begin}' member";
+    note_in_for_range = Note (2) "when looking up '{0:begin|end}' function for range expression of type {1}";
+    note_for_range_begin_end = Note (4) "selected '{0:begin|end}' {1:function|template }{2} with iterator type {3}";
+    note_for_range_invalid_iterator = Note (2) "in implicit call to 'operator{0:!=|*|++}' for iterator of type {1}";
+    warn_for_range_copy = WarningOff [RangeLoopConstruct] (2) "loop variable '{0}' creates a copy from type {1}";
+    warn_for_range_const_ref_binds_temp_built_from_ref = WarningOff [RangeLoopConstruct] (3) "loop variable '{0}' of type {1} binds to a temporary constructed from type {2}";
+    warn_for_range_ref_binds_ret_temp = WarningOff [RangeLoopBindReference] (2) "loop variable '{0}' binds to a temporary value produced by a range of type {1}";
     sema_auto_init_list_deduction = Error (0) "cannot deduce type of initializer list because std::initializer_list was not found; include <initializer_list>";
     sema_decltype_auto_compound = Error (1) "cannot form {0:pointer to|reference to|array of} 'decltype(auto)'";
     sema_need_header_before_typeid = Error (0) "you need to include <typeinfo> before using the 'typeid' operator";

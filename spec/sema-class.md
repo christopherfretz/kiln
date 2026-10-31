@@ -774,10 +774,20 @@ extended by Var '__range1'`). Sema collects every full-expression-duration
 `InLifetimeExtendingContext`), including those in default arguments of calls in
 it, and extends them all to `__range`.
 
-Status (WP-067b): not implemented. Range-based `for` itself (parser,
-`CXXForRangeStmt` builder, dump, codegen, Oven) does not exist yet and no
-work package owns it; `Sema.extend_collector` is declared but unused, so
-P2718 and the `stmt.ranged` conformance directory are blocked on it.
+Status (WP-089): implemented. `Sema::begin_for_range_init(extend)` opens a
+collection (`extend` is `Sema.range_lifetime_extension`, set by the parser for
+`-std=c++23` and later) and `end_for_range_init` closes it, returning the
+collected temporaries; `materialize_temporary` pushes each one it creates onto
+the innermost open `extend_collector`. Temporaries already bound to a reference
+inside the initializer are left alone. After `__range` is initialized each
+collected temporary still of full-expression duration is extended to
+`__range` (`extend_temporary`, so it gets the `extended by Var '__range1'`
+dump, a mangling index, and the variable's storage duration). Codegen and the
+Oven destroy the extended temporaries at the end of the loop, after `__range`'s
+own temporary, in reverse order of construction. Before C++23 nothing is
+collected, and only the temporary bound directly to `__range` is extended.
+Templates collect again when the range is substituted (`templ/subst/stmts.rs`
+`range_for`).
 
 ### 5.5 Copy elision and NRVO ([class.copy.elision])
 - **Guaranteed elision** ([dcl.init.general]/16.6.1): a prvalue of the same
@@ -1316,8 +1326,7 @@ definitions and temporaries. Modules in `kiln_sema/src/class/`:
   groups `Reorder`/`ReorderCtor`, `Uninitialized`, `Dangling`/
   `DanglingField`/`ReturnStackAddress`, `DelegatingCtorCycles`,
   `CallToPureVirtualFromCtorDtor`.
-- Not done (owners): P2718 and range-based `for` (unowned, §5.4);
-  `initializer_list` constructors (follow-up, `construct.rs`); "explicit
+- Not done (owners): `initializer_list` constructors (follow-up, `construct.rs`); "explicit
   constructor is not a candidate" and no-viable notes, volatile copies
   (WP-068a); class-typed `?:` with different classes, `static_cast` to a
   reference, `new T(args)` for classes (unowned in sema); template

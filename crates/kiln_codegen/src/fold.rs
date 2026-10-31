@@ -224,6 +224,17 @@ impl Collect<'_> {
                 d.inc.into_iter().for_each(|x| self.expr(x));
                 d.body.into_iter().for_each(|x| self.stmt(x));
             }
+            StmtKind::CXXForRangeStmt => {
+                let d = *ast.stmts.range_for_data(s);
+                d.init.into_iter().for_each(|x| self.stmt(x));
+                self.local_decl(d.range);
+                d.begin.into_iter().for_each(|x| self.local_decl(x));
+                d.end.into_iter().for_each(|x| self.local_decl(x));
+                d.cond.into_iter().for_each(|x| self.cond(x));
+                d.inc.into_iter().for_each(|x| self.expr(x));
+                self.local_decl(d.loop_var);
+                self.stmt(d.body);
+            }
             StmtKind::ReturnStmt => {
                 if let Some(v) = ast.stmts.return_value(s) {
                     self.expr(v);

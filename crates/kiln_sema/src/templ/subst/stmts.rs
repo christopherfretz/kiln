@@ -185,6 +185,7 @@ impl Substituter<'_, '_, '_> {
                 self.sema.pop_scope();
                 r
             }
+            StmtKind::CXXForRangeStmt => self.range_for(s),
             StmtKind::SwitchStmt => {
                 let sw = *self.sema.ast.stmts.switch_data(s);
                 self.sema.push_scope(ScopeKind::Control);
@@ -268,6 +269,62 @@ impl Substituter<'_, '_, '_> {
             };
             let els = d.els.map(|e| self.sub_stmt(e));
             Ok(self.sema.act_on_if(kind, init, var, Some(c), then, els, loc))
+        })();
+        self.sema.pop_scope();
+        r
+    }
+
+    /// A range-based `for` ([stmt.ranged]; clang
+    /// `TransformCXXForRangeStmt`): the for-range-initializer and the
+    /// loop variable are substituted, and the desugaring is rebuilt
+    /// (spec/sema-templates.md §5.5).
+    fn range_for(&mut self, s: StmtId) -> SubstResult<StmtId> {
+        let d = *self.sema.ast.stmts.range_for_data(s);
+        let loc = self.sema.ast.stmts.get(s).loc();
+        let range_init = self.sema.ast.decls.var(d.range).and_then(|v| v.init).ok_or(SubstFail)?;
+        let range_name = self.sema.ast.decls.get(d.range).name().as_ident().ok_or(SubstFail)?;
+        // `__begin`/`__end` keep the pattern's numbering when the pattern
+        // has them, else they are numbered where the instantiation runs.
+        let depth = match d.begin {
+            Some(b) => {
+                let n = self.sema.ast.decls.get(b).name();
+                let digits = n.as_ident().map(|x| self.sema.ast.symbols().as_str(x).to_owned());
+                digits
+                    .and_then(|x| x.strip_prefix("__begin").and_then(|n| n.parse().ok()))
+                    .unwrap_or(0)
+            }
+            None => self.sema.range_for_inst_depth(),
+        };
+        self.sema.push_scope(ScopeKind::Control);
+        let r = (|| {
+            let init = self.opt_stmt(d.init);
+            let collect = self.sema.begin_for_range_init(self.sema.range_lifetime_extension);
+            let range = if self.sema.ast.exprs.get(range_init).kind() == ExprKind::InitListExpr {
+                self.init_list(range_init).map(crate::RangeInit::List)
+            } else {
+                self.expr(range_init).map(crate::RangeInit::Expr)
+            };
+            let temps = self.sema.end_for_range_init(collect);
+            let range = range?;
+            let lv = d.loop_var;
+            let vloc = self.sema.ast.decls.get(lv).loc();
+            let t = self.decl_ty(lv);
+            let ty = self.named_decl_ty(lv, t, vloc)?;
+            let ds = self.pattern_declspec(lv, ty);
+            let dr = self.pattern_declarator(lv, DeclaratorContext::ForInit)?;
+            let Some(v) = self.sema.act_on_declarator(&ds, ty, &dr) else { return Err(SubstFail) };
+            self.locals.insert(lv, super::DeclOrPack::Decl(v));
+            if !self.sema.act_on_for_range_decl(&ds, v) {
+                return Err(SubstFail);
+            }
+            let head = self
+                .sema
+                .instantiate_for_range(init, range_name, range, temps, v, d.colon, loc, depth);
+            self.sema.act_on_start_loop();
+            let body = self.sub_stmt(d.body);
+            self.sema.act_on_end_loop();
+            let head = head.ok_or(SubstFail)?;
+            Ok(self.sema.act_on_finish_for_range(head, body))
         })();
         self.sema.pop_scope();
         r

@@ -154,6 +154,32 @@ pub struct LoopData {
     pub body: Option<StmtId>,
 }
 
+/// Side record of a `CXXForRangeStmt`: clang's desugaring of
+/// [stmt.ranged]/1, every slot kept. `begin`, `end`, `cond` and `inc`
+/// are `None` while the range is type-dependent (a template pattern).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct RangeForData {
+    /// The C++20 init-statement.
+    pub init: Option<StmtId>,
+    /// `auto&& __range = for-range-initializer;`
+    pub range: DeclId,
+    /// `auto __begin = begin-expr;`
+    pub begin: Option<DeclId>,
+    /// `auto __end = end-expr;`
+    pub end: Option<DeclId>,
+    /// `__begin != __end`
+    pub cond: Option<ExprId>,
+    /// `++__begin`
+    pub inc: Option<ExprId>,
+    /// The for-range-declaration, initialized from `*__begin`.
+    pub loop_var: DeclId,
+    /// The body.
+    pub body: StmtId,
+    /// The `:` (where the implicit `__begin`/`__end` variables and
+    /// expressions are located; diagnostics at instantiation).
+    pub colon: Loc,
+}
+
 /// Statement headers and side records. Index 0 of every vector is a dummy.
 #[derive(Debug)]
 pub struct StmtArena {
@@ -162,6 +188,7 @@ pub struct StmtArena {
     switches: Vec<SwitchData>,
     cases: Vec<CaseData>,
     loops: Vec<LoopData>,
+    range_fors: Vec<RangeForData>,
 }
 
 impl Default for StmtArena {
@@ -180,6 +207,17 @@ impl Default for StmtArena {
             }],
             cases: vec![CaseData { lhs: de, rhs: None, sub: ds }],
             loops: vec![LoopData::default()],
+            range_fors: vec![RangeForData {
+                init: None,
+                range: DeclId::new(DeclId::MAX_INDEX),
+                begin: None,
+                end: None,
+                cond: None,
+                inc: None,
+                loop_var: DeclId::new(DeclId::MAX_INDEX),
+                body: ds,
+                colon: Loc::INVALID,
+            }],
         }
     }
 }
@@ -233,6 +271,9 @@ impl StmtArena {
     pub(crate) fn push_loop(&mut self, x: LoopData) -> u32 {
         push_side(&mut self.loops, x)
     }
+    pub(crate) fn push_range_for(&mut self, x: RangeForData) -> u32 {
+        push_side(&mut self.range_fors, x)
+    }
 
     fn expect(&self, s: StmtId, kinds: &[StmtKind]) -> &StmtNode {
         let n = self.get(s);
@@ -269,6 +310,11 @@ impl StmtArena {
     pub fn loop_data(&self, s: StmtId) -> &LoopData {
         let n = self.expect(s, &[StmtKind::WhileStmt, StmtKind::DoStmt, StmtKind::ForStmt]);
         &self.loops[n.a as usize]
+    }
+
+    /// The side record of a `CXXForRangeStmt`.
+    pub fn range_for_data(&self, s: StmtId) -> &RangeForData {
+        &self.range_fors[self.expect(s, &[StmtKind::CXXForRangeStmt]).a as usize]
     }
 
     /// The statements of a `CompoundStmt` (a `ListId` of `StmtId`s).
@@ -330,13 +376,14 @@ impl StmtArena {
         self.rows().iter().map(|r| r.live_bytes()).sum()
     }
 
-    fn rows(&self) -> [VecDims; 5] {
+    fn rows(&self) -> [VecDims; 6] {
         [
             VecDims::of("nodes", &self.nodes),
             VecDims::of("ifs", &self.ifs),
             VecDims::of("switches", &self.switches),
             VecDims::of("cases", &self.cases),
             VecDims::of("loops", &self.loops),
+            VecDims::of("range_fors", &self.range_fors),
         ]
     }
 }

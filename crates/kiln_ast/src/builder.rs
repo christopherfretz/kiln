@@ -33,7 +33,9 @@ use crate::ids::{
 use crate::lookup::LookupFlags;
 use crate::names::DeclName;
 use crate::slot::AlreadySet;
-use crate::stmt::{CaseData, IfData, IfKind, LoopData, StmtKind, StmtNode, SwitchData};
+use crate::stmt::{
+    CaseData, IfData, IfKind, LoopData, RangeForData, StmtKind, StmtNode, SwitchData,
+};
 use crate::types::TypeFlags;
 
 /// Builtin `TypeId` of the `Dependent` placeholder (spec/types.md §5).
@@ -2711,6 +2713,13 @@ impl<'a> AstBuilder<'a> {
     pub fn for_stmt(&mut self, data: LoopData, loc: Loc) -> StmtId {
         let side = self.ast.stmts.push_loop(data);
         self.stmt(StmtKind::ForStmt, 0, loc, side, 0)
+    }
+
+    /// A range-based `for` statement ([stmt.ranged]), with clang's
+    /// desugaring in `data`.
+    pub fn cxx_for_range_stmt(&mut self, data: RangeForData, loc: Loc) -> StmtId {
+        let side = self.ast.stmts.push_range_for(data);
+        self.stmt(StmtKind::CXXForRangeStmt, 0, loc, side, 0)
     }
 
     /// A labeled statement `label: sub` ([stmt.label]); `label` is the

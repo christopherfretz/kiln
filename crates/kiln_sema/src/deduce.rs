@@ -257,11 +257,25 @@ impl Sema<'_, '_> {
         let t = &self.ast.types;
         let pq = t.canonical(p).quals();
         match t.canonical_view(p) {
-            TypeView::Auto { deduced: None, .. } => {
+            TypeView::Auto { keyword, deduced: None, concept, args, pack } => {
                 let aq = self.ast.types.effective_quals(a);
                 let rest = Quals::from_bits(aq.bits() & !pq.bits());
                 let base = crate::conv::strip_cv(self, a);
-                let leaf = if rest.is_empty() { base } else { self.ast.types.qualify(base, rest) };
+                let mut leaf =
+                    if rest.is_empty() { base } else { self.ast.types.qualify(base, rest) };
+                // An array keeps the deduced `auto` as sugar, as clang's
+                // `AutoType` does: the declarator then prints without
+                // parentheses (`int &[2]`, not `int (&)[2]`).
+                // The cv written on the placeholder comes off the element
+                // type ([basic.type.qualifier]/3: an array's cv is its
+                // element's).
+                if self.ast.types.is_array(leaf) {
+                    let c = self.ast.types.canonical(a);
+                    let u = self.ast.types.unqualified(c);
+                    let u = self.ast.types.canonical(u);
+                    let el = if rest.is_empty() { u } else { self.ast.types.qualify(u, rest) };
+                    leaf = self.ast.types.auto_type(keyword, Some(el), concept, args, pack);
+                }
                 Some(if pq.is_empty() { leaf } else { self.ast.types.qualify(leaf, pq) })
             }
             TypeView::Pointer(pp) => {
