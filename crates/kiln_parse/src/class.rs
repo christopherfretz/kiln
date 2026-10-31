@@ -1652,6 +1652,12 @@ impl Parser<'_, '_> {
         if self.decltype_scope_end(self.pos()).is_some() && !self.annotate_decltype_scope() {
             return None;
         }
+        if self.at_decltype_scope() && !self.decltype_scope_ok() {
+            // clang goes on to the name after the failed qualifier.
+            self.bump();
+            self.error_here(DiagId::parse_expected_class_name);
+            return None;
+        }
         if self.at_kw(Kw::Decltype) {
             let at = self.loc();
             let (kind, ty) = self.parse_decltype_specifier();

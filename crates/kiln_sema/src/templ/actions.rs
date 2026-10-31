@@ -121,8 +121,8 @@ impl Sema<'_, '_> {
         if let Some(d) = self.templ.decltype_scope {
             return d;
         }
-        let h = DeclHead::new(self.ast.tu, DeclName::EMPTY, Loc::INVALID)
-            .flags(DeclFlags::IMPLICIT);
+        let h =
+            DeclHead::new(self.ast.tu, DeclName::EMPTY, Loc::INVALID).flags(DeclFlags::IMPLICIT);
         let d = self.ast.builder().unlinked_alias(h, QualType::DEPENDENT);
         self.templ.decltype_scope = Some(d);
         d

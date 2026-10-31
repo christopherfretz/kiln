@@ -261,7 +261,9 @@ impl<'x, 'a, 'sm> Scan<'x, 'a, 'sm> {
                         return Tpr::Error;
                     }
                     match self.skip_group(self.i + 1) {
-                        Some(j) if k == Kw::Decltype && self.punct_at(j) == Some(Punct::ColonColon) => {
+                        Some(j)
+                            if k == Kw::Decltype && self.punct_at(j) == Some(Punct::ColonColon) =>
+                        {
                             self.unparsed_decltype_scope(j)
                         }
                         Some(j) => self.after_simple_type(j, braced),
@@ -460,7 +462,7 @@ impl<'x, 'a, 'sm> Scan<'x, 'a, 'sm> {
         let mut any = false;
         if let Some(q) = self.p.decltype_scope_qual_at(i) {
             // `decltype(e)::` parsed ahead (WP-119).
-            ctx = q.map(Some);
+            ctx = q.ok().map(Some);
             any = true;
             i += 1;
         } else if let Some(cc) = self.p.decltype_scope_end(i) {

@@ -928,10 +928,11 @@ impl<'a, 'sm> Parser<'a, 'sm> {
                 TokKind::Punct(Punct::LParen) => stack.push(Punct::RParen),
                 TokKind::Punct(Punct::LSquare) => stack.push(Punct::RSquare),
                 TokKind::Punct(Punct::LBrace) => stack.push(Punct::RBrace),
-                TokKind::Punct(c @ (Punct::RParen | Punct::RSquare | Punct::RBrace)) => {
-                    if stack.pop() != Some(c) {
-                        return None;
-                    }
+                // A matching closer is popped by the guard.
+                TokKind::Punct(c @ (Punct::RParen | Punct::RSquare | Punct::RBrace))
+                    if stack.pop() != Some(c) =>
+                {
+                    return None;
                 }
                 _ => {}
             }
@@ -968,9 +969,9 @@ impl<'a, 'sm> Parser<'a, 'sm> {
     }
 
     /// At the `::` of a pending decltype qualifier at token `i`: the
-    /// scope it names (`None` after an error).
-    pub(crate) fn decltype_scope_qual_at(&self, i: usize) -> Option<Option<DeclId>> {
-        self.decltype_scope_at(i).map(|d| d.qual.map(|q| q.0))
+    /// scope it names (`Err` after an error).
+    pub(crate) fn decltype_scope_qual_at(&self, i: usize) -> Option<Result<DeclId, ()>> {
+        self.decltype_scope_at(i).map(|d| d.qual.map(|q| q.0).ok_or(()))
     }
 
     /// The index after the components following the `::` at token `cc`,
