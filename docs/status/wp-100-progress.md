@@ -45,7 +45,7 @@ Branch `wp/100-codegen-eh`, worktree `kiln/.worktrees/wp-100`.
 - Corpus: 10 `tests/codegen/eh_*.cpp`, exact on both triples (whole
   corpus 90 programs, IR exact on both).
 
-## Step 4 — wrap-up (in progress)
+## Step 4 — wrap-up (done)
 - Run tests: `except.handle/run-throw-catch`,
   `except.ctor/run-unwind-destroy`, `expr.new/run-delete-on-throw`
   (kiln and clang both 0). No existing `xfail(kiln)` test involved
@@ -53,4 +53,7 @@ Branch `wp/100-codegen-eh`, worktree `kiln/.worktrees/wp-100`.
 - Spec: codegen.md §7b, sema.md §5.5/§7.5, ast.md §6, parse.md landed
   note — written with the leftovers.
 - Quick CI on 94dd318: 1379 passed, 0 failed, 13 xfail.
-- Next: full `cargo xtask ci`, handback.
+- Full `cargo xtask ci` on c378c75: green (kiln 1379 passed / 13 xfail;
+  clang self-check 1365 passed / 3 xfail / 24 skipped; ir_vs_clang
+  180/180 exact = 90 programs x 2 triples).
+- Done; handed back.
