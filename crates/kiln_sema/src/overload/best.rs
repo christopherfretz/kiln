@@ -65,6 +65,9 @@ impl Sema<'_, '_> {
         kind: CandidateKind,
         first_opts: IcsOptions,
     ) {
+        if set.exclude.is_some_and(|x| x == self.ast.first(f)) {
+            return;
+        }
         self.ovl.stats.candidates += 1;
         let mut cand = Candidate::new(f, found, kind);
         let mut params = std::mem::take(&mut set.params);

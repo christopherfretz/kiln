@@ -2083,7 +2083,7 @@ impl Cg<'_> {
         let lt = self.f.fir.ty(&self.m, lv);
         let float = self.is_float_ty(lt);
         let signed = !ast.types.is_pointer(lq) && self.is_signed(lq);
-        let mut cmp = |cg: &mut Self, k: CmpResult| -> V {
+        let cmp = |cg: &mut Self, k: CmpResult| -> V {
             if float {
                 let p = match k {
                     CmpResult::Less => FloatPredicate::Olt,

@@ -2495,6 +2495,24 @@ impl<'a> AstBuilder<'a> {
         )
     }
 
+    /// A sourceless `OpaqueValueExpr` of type `ty` and category `vk`
+    /// (clang's defaulted-comparison analyzer operands, `Xi, Xi`).
+    pub fn opaque_of(&mut self, ty: QualType, vk: ValueCategory, loc: Loc) -> ExprId {
+        let deps = self.type_deps(ty);
+        self.push_expr(
+            ExprKind::OpaqueValueExpr,
+            vk,
+            ObjectKind::Ordinary,
+            ExprFlags::NONE,
+            deps,
+            0,
+            ty,
+            loc,
+            0,
+            0,
+        )
+    }
+
     /// Element-wise array copy ([class.copy.ctor]/14, [expr.prim.lambda.capture]/
     /// 10, structured bindings): `common` is the `OpaqueValueExpr` of the
     /// source array, `elem` the initializer of one element (indexed by an

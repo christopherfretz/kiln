@@ -16,6 +16,7 @@ use kiln_ast::types::BuiltinType;
 use kiln_ast::{DeclId, ExprId, QualType};
 use kiln_diag::DiagId;
 use kiln_source::Loc;
+use kiln_source::fx::FxHashMap;
 
 use crate::Sema;
 use crate::conv::{self, ArithConvKind, ConvCtx, Narrowing};
@@ -360,4 +361,26 @@ impl Sema<'_, '_> {
 /// The defaulted-comparison state of [`Sema`] (spec/sema-class.md §8.3),
 /// kept in [`crate::class::SpecialState`].
 #[derive(Debug, Default)]
-pub(crate) struct CompareState {}
+pub(crate) struct CompareState {
+    /// The defaulted comparison whose subobject comparisons are being
+    /// analyzed or synthesized: excluded from their candidate sets
+    /// (clang's `DefaultedFn`), and their unqualified operator lookups
+    /// are the ones captured at its `= default`.
+    pub exclude: Option<DeclId>,
+    /// The unqualified operator lookups captured at each defaulted
+    /// comparison's `= default` (clang's `UnresolvedSet` of
+    /// `DefaultedFunctionInfo`), keyed by its first declaration:
+    /// `(found decl, target decl)` pairs.
+    pub lookups: FxHashMap<DeclId, Vec<(DeclId, DeclId)>>,
+    /// Where each defaulted comparison's `= default` was written, keyed by
+    /// its first declaration (the location of the synthesized body).
+    pub default_loc: FxHashMap<DeclId, Loc>,
+}
+
+impl Sema<'_, '_> {
+    /// The defaulted comparison whose body is being analyzed or
+    /// synthesized, when the current context is that function.
+    pub(crate) fn cmp_active(&self) -> Option<DeclId> {
+        self.special.cmp.exclude.filter(|&f| self.ast.first(self.ctx) == f)
+    }
+}
