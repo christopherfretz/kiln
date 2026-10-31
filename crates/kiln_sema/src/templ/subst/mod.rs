@@ -458,7 +458,9 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
 impl Substituter<'_, '_, '_> {
     /// True if none of the outermost `n` levels is substituted.
     fn levels_retained(&self, n: u16) -> bool {
-        (0..n).all(|k| self.args.level(k).is_none_or(|l| l.mode == crate::templ::args::LevelMode::Retain))
+        (0..n).all(|k| {
+            self.args.level(k).is_none_or(|l| l.mode == crate::templ::args::LevelMode::Retain)
+        })
     }
 }
 
