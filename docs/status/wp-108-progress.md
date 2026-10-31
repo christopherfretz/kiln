@@ -27,3 +27,9 @@
 Comparison helper: build `kiln` then diff against clang++-19 through
 `opt-19 -passes=verify` (or `KILN_CASE=<stem> cargo test -p kiln_codegen
 --test ir_vs_clang`).
+
+## Evidence
+- `cargo xtask ci` (full) exit 0: fmt, clippy -D warnings, cargo test green.
+  corpus (clang++-19 self-check): 1299 passed, 3 xfail, 23 skipped / 1325.
+  corpus (kiln): 1312 passed, 13 xfail, 0 failed / 1325.
+- IR-diff: 80/80 cases exact on both triples (160/160), +3 cases.
