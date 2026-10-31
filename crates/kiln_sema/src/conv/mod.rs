@@ -606,8 +606,15 @@ fn bind_reference(s: &mut Sema<'_, '_>, e: ExprId, to: QualType) -> Result<ExprI
     let from = n.ty();
     let vk = n.value_category();
     let (rq, fq) = (s.ast.types.effective_quals(referee), s.ast.types.effective_quals(from));
-    let f_un = s.ast.types.canonical(from).without_quals();
-    let r_un = s.ast.types.canonical(referee).without_quals();
+    // Unqualified through arrays, so `const int[3]` is related to
+    // `int[3]`.
+    let unqual = |s: &mut Sema<'_, '_>, q: QualType| {
+        let c = s.ast.types.canonical(q);
+        let u = s.ast.types.unqualified(c);
+        s.ast.types.canonical(u)
+    };
+    let f_un = unqual(s, from);
+    let r_un = unqual(s, referee);
     // Reference-related: same type, or `referee` a base of `from`
     // ([dcl.init.ref]/4).
     let same = s.ast.types.same_type(f_un, r_un);
