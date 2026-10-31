@@ -160,6 +160,7 @@ no category).
 | `CXXThisExpr` | `CXXThisExpr 'type' [implicit] this` |
 | `CXXDefaultArgExpr`, `CXXDefaultInitExpr` | `CXXDefaultArgExpr 'type'`; `CXXDefaultInitExpr 'type' has rewritten init`; child: the parameter's default argument or the member's initializer (printed under every use, as clang) |
 | `MaterializeTemporaryExpr` | `MaterializeTemporaryExpr 'type' lvalue\|xvalue [extended by Var 'name' 'type']` |
+| `CXXStdInitializerListExpr` | `CXXStdInitializerListExpr 'type'`; child: the `MaterializeTemporaryExpr` of the backing array `const E[N]` (WP-106) |
 | `CXXBindTemporaryExpr` | `CXXBindTemporaryExpr 'type' (CXXTemporary)` (clang adds an address) |
 | `ExprWithCleanups` | `ExprWithCleanups 'type' [lvalue\|xvalue]` |
 | `CXXTypeidExpr` | `CXXTypeidExpr 'type' lvalue [type_operand='T']` (or an expression child; `type_operand` is a kiln addition: clang 19 prints nothing) |

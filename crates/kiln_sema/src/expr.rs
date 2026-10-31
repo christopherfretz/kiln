@@ -315,6 +315,7 @@ impl Sema<'_, '_> {
                 | ExprKind::ConstantExpr
                 | ExprKind::MaterializeTemporaryExpr
                 | ExprKind::CXXBindTemporaryExpr
+                | ExprKind::CXXStdInitializerListExpr
                 | ExprKind::ExprWithCleanups
                 | ExprKind::BinaryOperator
                 | ExprKind::CompoundAssignOperator
@@ -525,6 +526,12 @@ impl Sema<'_, '_> {
     /// Converts `e` to `ty` as in `ctx`, diagnosing failure (the result
     /// is then a `RecoveryExpr`).
     pub(crate) fn convert_for_init(&mut self, e: ExprId, ty: QualType, ctx: ConvCtx) -> ExprId {
+        // A braced-init-list argument (`T x({1, 2})`) list-initializes
+        // the parameter ([dcl.init.list]).
+        if let Some(l) = self.take_braced_arg(e) {
+            let to = if self.ast.types.is_reference(ty) { ty } else { conv::strip_cv(self, ty) };
+            return self.init_list_entity(to, &l, l.lbrace);
+        }
         match conv::implicit_convert(self, e, ty, ctx) {
             Ok(x) => x,
             Err(err) => {

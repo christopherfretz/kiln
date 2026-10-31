@@ -1207,6 +1207,7 @@ diag_ids! {
     sema_fn_template_spec_ambiguous = Error (1) "function template specialization '{0}' ambiguously refers to more than one function template; explicitly specify template arguments to identify a particular function template";
     note_fn_template_spec_matched = Note (2) "function template '{0}' matches specialization {1}";
     sema_member_decl_no_match = Error (2) "out-of-line declaration of '{0}' does not match any declaration in {1}";
+    sema_lvalue_ref_bind_to_initlist = Error (2) "{0:non-const|volatile} lvalue reference to type {1} cannot bind to an initializer list temporary";
 }
 
 impl DiagId {

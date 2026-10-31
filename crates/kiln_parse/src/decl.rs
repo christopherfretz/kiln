@@ -1878,24 +1878,13 @@ impl Parser<'_, '_> {
             }
             Some(InitStyle::Call | InitStyle::ParenList) => {
                 let l = self.bump().span.lo;
-                let mut v = Vec::new();
-                if !self.at(Punct::RParen) {
-                    loop {
-                        let Some(e) = self.parse_assignment_expr() else {
-                            self.skip_until(&[Punct::RParen], false, true);
-                            return Err(());
-                        };
-                        // [temp.variadic]/5: `T x(args...)`.
-                        let e = match self.eat(Punct::Ellipsis) {
-                            Some(l) => self.s.act_pack_expansion(e, l),
-                            None => e,
-                        };
-                        v.push(e);
-                        if self.eat(Punct::Comma).is_none() {
-                            break;
-                        }
-                    }
-                }
+                // An expression-list of initializer-clauses: braced lists
+                // and pack expansions ([dcl.init.general], [temp.variadic]/5).
+                let v = if self.at(Punct::RParen) {
+                    Vec::new()
+                } else {
+                    self.parse_expr_list(Punct::RParen).ok_or(())?
+                };
                 let r = self.expect_closing(Punct::RParen, Punct::LParen, l);
                 Ok(Some(Initializer::Paren(v, l, r)))
             }

@@ -2330,6 +2330,23 @@ impl<'a> AstBuilder<'a> {
         )
     }
 
+    /// A `std::initializer_list<E>` prvalue of type `ty` over the backing
+    /// array `array` (a `MaterializeTemporaryExpr` of type `const E[N]`,
+    /// [dcl.init.list]/5).
+    pub fn std_initializer_list(&mut self, array: ExprId, ty: QualType) -> ExprId {
+        let n = *self.ast.exprs.get(array);
+        self.simple(
+            ExprKind::CXXStdInitializerListExpr,
+            ValueCategory::PRValue,
+            n.deps() | self.type_deps(ty),
+            0,
+            ty,
+            n.loc(),
+            array.raw(),
+            0,
+        )
+    }
+
     /// Binds the class prvalue `sub` to a temporary destroyed by `dtor`
     /// at the end of the full-expression ([class.temporary]/4).
     pub fn bind_temporary(&mut self, sub: ExprId, dtor: DeclId) -> ExprId {

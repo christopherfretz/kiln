@@ -215,6 +215,19 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// The [`ArgInfo`] of constructor argument `e`: a braced-init-list
+    /// placeholder ([`Sema::act_on_braced_arg`], `T x({1, 2})`) is a list
+    /// argument ([over.ics.list]); its list stays in `ovl.lists` for the
+    /// set's notes.
+    pub(crate) fn ctor_arg_info(&mut self, e: ExprId) -> ArgInfo {
+        let Some(l) = self.braced_args.iter().find(|(x, _)| *x == e).map(|(_, l)| l.clone()) else {
+            return self.arg_info(e);
+        };
+        let idx = u32::try_from(self.ovl.lists.len()).unwrap_or(u32::MAX);
+        self.ovl.lists.push(l);
+        ArgInfo { list: Some(idx), ..ArgInfo::of_type(QualType::VOID, ValueCategory::PRValue) }
+    }
+
     fn ics_is_error(&self, q: QualType) -> bool {
         let t = &self.ast.types;
         t.canonical(q).without_quals() == QualType::ERROR || t.is_dependent(q)
@@ -294,7 +307,7 @@ impl Sema<'_, '_> {
     /// Reference-relatedness of `t1` (the referee) and `t2`, both
     /// canonical and unqualified ([dcl.init.ref]/4): `(related,
     /// derived)`.
-    fn ref_related(&self, t1: QualType, t2: QualType) -> (bool, bool) {
+    pub(crate) fn ref_related(&self, t1: QualType, t2: QualType) -> (bool, bool) {
         if t1 == t2 {
             return (true, false);
         }
@@ -675,6 +688,7 @@ impl Sema<'_, '_> {
             });
             self.add_ctor_candidates(&mut set, c, IcsOptions::NONE, true);
             self.ovl.lists.pop();
+            self.drop_explicit_ctors(&mut set, opts);
             if set.viable().next().is_some() {
                 let r = self.udc_outcome(&mut set, QualType::VOID, to, true);
                 self.end_set(set);
@@ -705,10 +719,27 @@ impl Sema<'_, '_> {
         for _ in 0..pushed {
             self.ovl.lists.pop();
         }
-        let _ = opts;
+        self.drop_explicit_ctors(&mut set, opts);
         let r = self.udc_outcome(&mut set, QualType::VOID, to, false);
         self.end_set(set);
         r
+    }
+
+    /// clang's `IsInitializerListConstructorConversion` /
+    /// `IsUserDefinedConversion` without `AllowExplicit`: as an implicit
+    /// conversion sequence, list-initialization does not use explicit
+    /// constructors (the initialization itself still considers them,
+    /// [over.match.list]/1, and is then ill-formed).
+    fn drop_explicit_ctors(&self, set: &mut super::OverloadCandidateSet, opts: IcsOptions) {
+        if opts.contains(IcsOptions::ALLOW_EXPLICIT) {
+            return;
+        }
+        for c in &mut set.cands {
+            if c.viable && self.fn_spec(c.func()).is_explicit() {
+                c.viable = false;
+                c.failure = CandidateFailure::Explicit;
+            }
+        }
     }
 
     /// Whether `c` has a default constructor (a cheap check for the

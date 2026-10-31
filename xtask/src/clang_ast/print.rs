@@ -1300,6 +1300,7 @@ impl<'a> Printer<'a, '_> {
             | "CallExpr"
             | "ImplicitValueInitExpr"
             | "ExprWithCleanups"
+            | "CXXStdInitializerListExpr"
             | "CXXDefaultArgExpr"
             | "CXXMemberCallExpr"
             | "CXXInheritedCtorInitExpr"

@@ -751,6 +751,13 @@ impl Substituter<'_, '_, '_> {
             let r = self.sema.ast.exprs.end_loc(peeled).unwrap_or(pn.loc());
             return Ok(Some(Initializer::Paren(args, pn.loc(), r)));
         }
+        // `std::initializer_list<E> x = {…}` (WP-106): redone from the list.
+        if pk == ExprKind::InitListExpr
+            && self.sema.ast.types.is_array(self.sema.ety(peeled))
+            && self.sema.ast.types.as_record(self.sema.ety(init)).is_some()
+        {
+            return Ok(Some(Initializer::List(self.init_list(peeled)?)));
+        }
         let n = *self.sema.ast.exprs.get(init);
         Ok(Some(match n.kind() {
             ExprKind::ParenListExpr => {
@@ -796,6 +803,10 @@ impl Substituter<'_, '_, '_> {
         }
         if ex.get(init).kind() == ExprKind::ImplicitCastExpr {
             init = ex.operand(init);
+        }
+        // `std::initializer_list` over its backing array (WP-106).
+        if ex.get(init).kind() == ExprKind::CXXStdInitializerListExpr {
+            init = ex.operand(ex.operand(init));
         }
         init
     }

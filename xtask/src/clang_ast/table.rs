@@ -92,6 +92,7 @@ pub const TABLE: &[(&str, Disposition)] = &[
     ("CXXDefaultInitExpr", Keep),
     ("CXXBindTemporaryExpr", Keep),
     ("MaterializeTemporaryExpr", Keep),
+    ("CXXStdInitializerListExpr", Keep),
     ("ExprWithCleanups", Keep),
     ("CXXTypeidExpr", Keep),
     ("CXXParenListInitExpr", Keep),
@@ -361,6 +362,7 @@ fn specific_keys(kind: &str) -> Option<&'static [&'static str]> {
         ],
         "CXXInheritedCtorInitExpr"
         | "CXXMemberCallExpr"
+        | "CXXStdInitializerListExpr"
         | "CXXDefaultArgExpr"
         | "ArrayInitLoopExpr"
         | "ArrayInitIndexExpr"
@@ -479,6 +481,7 @@ pub const CLASS_KINDS: &[&str] = &[
     "CXXDefaultInitExpr",
     "CXXBindTemporaryExpr",
     "MaterializeTemporaryExpr",
+    "CXXStdInitializerListExpr",
     "ExprWithCleanups",
     "CXXTypeidExpr",
     "CXXParenListInitExpr",

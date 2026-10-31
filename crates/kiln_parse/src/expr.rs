@@ -822,7 +822,7 @@ impl Parser<'_, '_> {
 
     /// A non-empty expression-list of initializer-clauses closed by
     /// `close` ([expr.post.general]).
-    fn parse_expr_list(&mut self, close: Punct) -> Option<Vec<ExprId>> {
+    pub(crate) fn parse_expr_list(&mut self, close: Punct) -> Option<Vec<ExprId>> {
         let mut args = Vec::new();
         loop {
             let a = if self.at(Punct::LBrace) {
