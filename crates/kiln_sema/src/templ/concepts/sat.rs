@@ -383,6 +383,30 @@ impl Sema<'_, '_> {
         ok
     }
 
+    /// What a trailing requires-clause of `entity` may name besides
+    /// template parameters: the pattern function whose parameters are in
+    /// scope ([basic.scope.param]/1), if it has any, and the type of
+    /// `this` in a non-static member function ([expr.prim.this]/2).
+    /// Both `None` without a trailing requires-clause.
+    fn constraint_function_scope(&mut self, entity: DeclId) -> (Option<DeclId>, Option<QualType>) {
+        let pattern = match self.inst.concepts.member_constraints.get(&entity) {
+            Some(&(p, _)) => p,
+            None => entity,
+        };
+        let function_of = |s: &Self, d: DeclId| match s.kind_of(d) {
+            kiln_ast::decl::DeclKind::FunctionTemplate => s.templated_function(d),
+            k if k.is_function() => Some(d),
+            _ => None,
+        };
+        let Some(f) = function_of(self, pattern) else { return (None, None) };
+        if self.ast.templates.trailing_requires.get(f).is_none() {
+            return (None, None);
+        }
+        let params = self.ast.decls.function(f).map_or(0, |x| self.ast.lists.len(x.params));
+        let this_ty = function_of(self, entity).and_then(|g| self.method_this_type(g));
+        ((params > 0).then_some(f), this_ty)
+    }
+
     /// Errors emitted or captured by the enclosing SFINAE trap so far.
     fn errors_so_far(&self) -> u64 {
         let trapped = self.inst.sfinae.borrow().last().map_or(0, |s| s.errors);
@@ -402,11 +426,21 @@ impl Sema<'_, '_> {
             return false;
         }
         let loc = self.begin_loc(e);
-        let Some((r, st)) =
-            self.in_sfinae(FrameKind::ConstraintSubstitution, entity, None, loc, |s| {
-                Substituter::new(s, levels).expr(e).ok()
-            })
-        else {
+        let (params_of, this_ty) = self.constraint_function_scope(entity);
+        if let Some(t) = this_ty {
+            self.nsdmi_this.push((entity, t));
+        }
+        let r = self.in_sfinae(FrameKind::ConstraintSubstitution, entity, None, loc, |s| {
+            let mut sub = Substituter::new(s, levels);
+            if let Some(f) = params_of {
+                sub.seed_function_params(f).ok()?;
+            }
+            sub.expr(e).ok()
+        });
+        if this_ty.is_some() {
+            self.nsdmi_this.pop();
+        }
+        let Some((r, st)) = r else {
             return false;
         };
         let x = match (r, st) {

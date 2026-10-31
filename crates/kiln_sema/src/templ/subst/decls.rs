@@ -225,6 +225,19 @@ impl Substituter<'_, '_, '_> {
         }
     }
 
+    /// Maps the parameters of pattern function `f` to parameters with
+    /// substituted types, for a constraint of `f` that names them (its
+    /// trailing requires-clause, [basic.scope.param]; clang's
+    /// `addInstantiatedParametersToScope`).
+    pub(crate) fn seed_function_params(&mut self, f: DeclId) -> SubstResult<()> {
+        for p in self.param_infos(f)? {
+            if let Some(d) = p.decl {
+                self.sema.unowned_params.remove(&d);
+            }
+        }
+        Ok(())
+    }
+
     /// The parameters of pattern function `f` with substituted types.
     fn param_infos(&mut self, f: DeclId) -> SubstResult<Vec<ParamInfo>> {
         let params: Vec<DeclId> = self

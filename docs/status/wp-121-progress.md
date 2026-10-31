@@ -13,8 +13,8 @@ quick CI green. The branch is never left red.
 | 1 member access by declared name | 66ab349 | done, green |
 | 2 qualified member access | d0a8a38, 82f9e06, 5599dbf | done, green |
 | 3 dependent NNS chains, typename/template diags | db0fcfd, 01dc8b5 | done, green |
-| 4 friend templates ([temp.friend]) | c936c33, 4af684f, b9338cb | done (quick CI re-run after the restart) |
-| 5 trailing-return-type member refs | - | in progress |
+| 4 friend templates ([temp.friend]) | c936c33, 4af684f, b9338cb, e2057bb | done, green |
+| 5 declarator parameters / trailing requires-clause / out-of-line scope | f439d2e, next | in progress |
 
 ### Item 1: member access by declared name (done)
 - `x.operator@(…)`, `x.operator T()`, `x.operator->()`, and unqualified
@@ -74,14 +74,62 @@ quick CI green. The branch is never left red.
   `temp.param/inherited-defaults.cpp`, and
   `templates/deduce/temp.deduct.type-defaulted-args.cpp`.
 
+### Item 4 follow-ups (e2057bb)
+- **AST dumper is cycle-safe in general** (coordinator ask 1). The dumper
+  keeps the chain of declarations it is inside. A declaration reached
+  again inside itself prints ` <cycle>` and is not descended into. Depth is
+  also capped at 4096. This fixes the 2 -> 24 GB blow-up that the friend
+  template redeclaration cycle (`A` befriends `B`, `B` befriends `A`)
+  caused through the `template_children` specialization lists.
+- A friend class template naming an existing template is a real
+  redeclaration in the template's group. It does not mark the original
+  template dependent. Before this fix, `C<char>` inside `A<T>` became
+  dependent.
+- Specializations are dumped under the first non-friend declaration
+  (`spec_owner`), as clang does. `friend_undeclared` is printed only on a
+  direct friend introduction.
+- A class first introduced by a friend declaration (a hidden friend,
+  [namespace.memdef]/3) becomes visible at a later namespace-scope
+  declaration, `friend class X; ... class X; X *p;`. This affected
+  libc++'s `basic_string<char>`.
+- The injected-class-name of a class template used as a functional cast,
+  `X(args)` / `X{args}`, works (libc++ `reverse_iterator::operator+`).
+- Tests:
+  - `temp.friend/{friend-template-cycles,injected-functional-cast}.cpp` (run)
+  - `ast/temp.friend/{friend-template-cycles,friend-declared-later}.cpp`
+    (clang-19 goldens)
+- **Memory-budgeted variant: not possible yet** (coordinator ask 2). The
+  harness has no per-test RSS or address-space limit; WP-125 tracks that.
+  `oven:` budgets only constant evaluation, and `tests/stress/` is not
+  discovered by the harness (`xtask/src/test/discover.rs` walks
+  `tests/conformance` and `tests/differential` only).
+  - So the regression tests stay in `tests/conformance/{ast/,}temp.friend/`,
+    `friend-templates.cpp` among them.
+  - Once WP-125 lands, `tests/conformance/stress/` is the place for an RSS
+    budget variant, for example a wide friend cycle under `expect: ast`.
+  - Until then every manual kiln run and corpus run goes under
+    `ulimit -v 8388608`.
+
 ### Item 5 (in progress)
-- A trailing return type in a template body already works
-  (`-> decltype(t.f())`, `-> decltype(v + u)` in a member template, a
-  nested class template).
-- Bug: in an out-of-line member definition (`auto S::f() -> decltype(v)`,
-  `auto S::g() -> T`), the trailing return type is not looked up in the
-  class scope. The result is "use of undeclared identifier" and then "does
-  not match any declaration". Fixing this next.
+- **Trailing requires-clause** (f439d2e and the next commit). The function
+  parameters, and `this` in a member, are in scope again in a trailing
+  requires-clause ([basic.scope.param]/1, [expr.prim.this]/2).
+  - Satisfaction checking substitutes the parameters' types into fresh
+    parameters, the same as clang's `addInstantiatedParametersToScope`.
+    It also sets the specialization's `this` type.
+  - This was libc++'s `reverse_iterator.h:209` blocker: `operator==`
+    `requires requires { __x.base() == __y.base(); }`.
+  - Tests: `basic.scope.param/trailing-requires-params.cpp` (run; function
+    templates, a member template using `this`, a member of a class
+    template) and `trailing-requires-params-fail.cpp` (strict-diags,
+    identical to clang).
+- **A trailing return type in a template body already works**:
+  `-> decltype(t.f())`, `-> decltype(v + u)` in a member template, and a
+  nested class template.
+- **Next: out-of-line member declarators.** In `auto S::f() -> decltype(v)`
+  and `auto S::g() -> T`, the parameters, array bounds and trailing return
+  type after the declarator-id `S::f` must be looked up in `S`'s scope
+  ([basic.scope.class], [dcl.meaning]).
 
 ## Evidence
 - Item 1 `cargo xtask ci --quick`: corpus (kiln) 1500 passed; 0 failed; 15 xfail; 0 xpass (1515 tests; baseline 1496/1511).
