@@ -2,7 +2,7 @@
 
 Updated: 2026-10-31
 
-## State: items 1-5 done (WIP commits on the branch); final full CI running
+## State: items 1-5 done; final full `cargo xtask ci` green at 2ac86ea
 
 **Item 1 is green and can merge early.** Its commit is `66ab349`, and quick CI
 on it was 1500 passed / 0 failed / 15 xfail. Every later WIP commit also kept
@@ -169,6 +169,10 @@ quick CI green. The branch is never left red.
   unaffected.
 
 ## Evidence
+- Full `cargo xtask ci` at 2ac86ea: fmt, clippy `-D warnings`, `cargo
+  test --workspace` all green; corpus (clang++-19 self-check) 1508
+  passed / 0 failed / 3 xfail / 26 skipped (baseline 1482/1511); corpus
+  (kiln) 1524 passed / 0 failed / 13 xfail (baseline 1496/1511).
 - Corpus (kiln, `-j 2`) at ba13c42: 1524 passed; 0 failed; 13 xfail; 0
   xpass (1537 tests; baseline 1496/1511 kiln-mode). The new tests pass on
   clang 19 as well.
