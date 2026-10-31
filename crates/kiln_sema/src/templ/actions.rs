@@ -1019,14 +1019,18 @@ impl Sema<'_, '_> {
                     Some(q) => {
                         let def = self.ast.definition(rec).unwrap_or(rec);
                         if self.qualifier_names_base(q.ctx, def) {
-                            self.lookup_qualified_dn(q.ctx, name, LookupKind::Ordinary).decls.len()
+                            self.lookup_qualified_dn(q.ctx, name, LookupKind::Ordinary).decls
                         } else {
-                            0
+                            Vec::new()
                         }
                     }
-                    None => self.lookup_in_class_dn(rec, name, LookupKind::Ordinary).decls.len(),
+                    None => self.lookup_in_class_dn(rec, name, LookupKind::Ordinary).decls,
                 };
-                if found == 1 {
+                // A member named by a dependent using-declaration
+                // (`using __base::has_value;`) is found at instantiation.
+                if let [d] = found[..]
+                    && self.kind_of(d) != DeclKind::UnresolvedUsingValue
+                {
                     return None;
                 }
             }

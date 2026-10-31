@@ -101,7 +101,7 @@ impl Sema<'_, '_> {
         if let Some(class) = self.member_spec_class()
             && qk != DeclKind::Enum
         {
-            return self.class_using_declarator(class, q, name, name_loc, using_loc);
+            return self.class_using_declarator(class, q, name, name_loc, using_loc, false);
         }
         let found = self.lookup_qualified(q.ctx, name, LookupKind::All);
         // [namespace.udecl]/8: at namespace or block scope a
@@ -180,6 +180,7 @@ impl Sema<'_, '_> {
         name: Symbol,
         name_loc: Loc,
         using_loc: Loc,
+        force_inheriting: bool,
     ) -> Option<DeclId> {
         let qk = self.kind_of(q.ctx);
         if matches!(qk, DeclKind::Namespace | DeclKind::TranslationUnit) {
@@ -189,7 +190,7 @@ impl Sema<'_, '_> {
             self.emit(msg);
             return None;
         }
-        let inheriting = self.nns_last_name(q.nns) == Some(name);
+        let inheriting = force_inheriting || self.nns_last_name(q.nns) == Some(name);
         if self.is_dependent_ctx(q.ctx) || self.ast.types.nns_flags(q.nns).intersects(
             kiln_ast::types::TypeFlags::DEPENDENT_INSTANTIATION,
         ) && qk != DeclKind::CXXRecord
@@ -250,6 +251,22 @@ impl Sema<'_, '_> {
             let _ = self.introduce_shadow(name, name_loc, t);
         }
         Some(using)
+    }
+
+    /// A class-scope using-declaration of a class template's pattern,
+    /// replayed in the instantiation being defined ([temp.inst]/3):
+    /// `inheriting` when the pattern's declarator named the base's
+    /// constructors (`using B<T>::B;`, `using T::T;`, `using __base::__base;`),
+    /// which the substituted qualifier may no longer spell.
+    pub(crate) fn instantiate_class_using(
+        &mut self,
+        q: Qualifier,
+        name: Symbol,
+        name_loc: Loc,
+        inheriting: bool,
+    ) -> Option<DeclId> {
+        let class = self.member_spec_class()?;
+        self.class_using_declarator(class, q, name, name_loc, name_loc, inheriting)
     }
 
     /// Whether `base` is a direct base class of `class`.
