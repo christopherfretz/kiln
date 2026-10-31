@@ -43,7 +43,20 @@ The `xfail(kiln)` lines of `class.virtual/consteval-override.cpp` and
 
 ## libc++ probe (errors per header, `-fsyntax-only`)
 
-PROBE_TABLE
+| build | `<compare>` | `<utility>` | `<span>` | `<array>` | `<string_view>` |
+|---|---|---|---|---|---|
+| main 10156ed (before) | 0 | 0 | 4 | 2 | 15 |
+| wp-133 before merge | 0 | 0 | 4 | 1 | 14 |
+| wp-133 + main e42ea07 (after) | 0 | 0 | 0 | 0 | 8 |
+
+The consteval error at `ranges_iterator_concept.h:31` is gone. The other drops
+come from WP-130 (datasizeof, builtins). No new blockers. These are the
+remaining `<string_view>` errors, none of them consteval:
+- `__is_constructible` is not implemented.
+- The `__invoke` call is ambiguous (`find.h:48`).
+- Literal operators (`string_view:906`).
+- Local class declarations in templates (`hash.h` ×4).
+- A dependent `_Size` switch condition (`hash.h:62`).
 
 ## Deferred / open
 
