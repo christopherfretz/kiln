@@ -318,10 +318,16 @@ impl Substituter<'_, '_, '_> {
         // ([expr.prim.this]/2).
         let params = self.param_infos(d);
         let method = friend.is_none() && self.sema.kind_of(d) == DeclKind::CXXMethod;
+        let lazy_exc = friend.is_none() && self.sema.lazy_exc_spec(d, &p);
         let this = self.sema.act_on_start_this_scope(method, info.this_quals());
         let sig = params.and_then(|params| {
             let ret = self.ty(p.ret(), loc)?;
-            let exc = self.exc_spec(&p, loc)?;
+            // A dependent `noexcept(expr)` waits until needed (WP-112).
+            let exc = if lazy_exc {
+                kiln_ast::types::ExcSpec::Deferred(d)
+            } else {
+                self.exc_spec(&p, loc)?
+            };
             Ok((params, ret, exc))
         });
         self.sema.act_on_end_this_scope(this);
@@ -378,6 +384,10 @@ impl Substituter<'_, '_, '_> {
         } else {
             r
         };
+        if lazy_exc {
+            let first = self.sema.ast.first(f);
+            self.sema.uninstantiated_exc.insert(first, d);
+        }
         if fs.is_some_and(kiln_ast::decl::FnSpec::is_pure) {
             self.sema.ast.decls.mark_function(f, kiln_ast::decl::FnSpec::new().with_pure(true));
         }

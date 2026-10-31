@@ -325,8 +325,97 @@ impl Sema<'_, '_> {
     /// `mark_function_referenced`.
     pub(crate) fn exc_spec_needed(&mut self, f: kiln_ast::DeclId, loc: Loc) {
         if !self.in_template() && !self.diagnose_unparsed_exc_spec(f, loc) {
-            self.resolve_exception_spec(f);
+            self.resolve_exception_spec(f, loc);
         }
+    }
+
+    /// Whether member `d` of a class template, being instantiated now,
+    /// keeps its dependent `noexcept(expr)` uninstantiated until needed
+    /// ([temp.inst]/14; clang's `EST_Uninstantiated`). A member template's
+    /// pattern, and a member of a still-dependent specialization, are
+    /// substituted at once.
+    pub(crate) fn lazy_exc_spec(
+        &self,
+        d: kiln_ast::DeclId,
+        p: &kiln_ast::types::FuncProto,
+    ) -> bool {
+        matches!(
+            self.ast.types.exc_spec(p),
+            ExcSpec::NoexceptExpr { value: NoexceptValue::Dependent(_), .. }
+        ) && !self.in_template()
+            && self.ast.described_template(d).is_none()
+            && !self.ast.decls.get(self.ctx).has(kiln_ast::decl::DeclFlags::DEPENDENT_CTX)
+    }
+
+    /// Instantiates the deferred `noexcept(expr)` of `f`, a member of a
+    /// class template specialization, from its pattern at `poi` (clang's
+    /// `InstantiateExceptionSpec`): substituted in the member's context,
+    /// with its parameters and `this`. A substitution failure leaves `f`
+    /// potentially throwing, as clang (`EST_None`).
+    pub(crate) fn instantiate_exception_spec(&mut self, f: kiln_ast::DeclId, poi: Loc) {
+        let Some(pattern) = self.uninstantiated_exc.remove(&f) else { return };
+        let pty = self.ast.decls.get(pattern).ty().unwrap_or(QualType::ERROR);
+        let Some(pp) = self.sugared_proto(pty) else { return };
+        let ExcSpec::NoexceptExpr { expr, .. } = self.ast.types.exc_spec(&pp) else { return };
+        let quals = pp.info().this_quals();
+        let resolved = self.substitute_exception_spec(f, pattern, expr, quals, poi);
+        let spec = resolved.unwrap_or(ExcSpec::None);
+        let redecls: Vec<kiln_ast::DeclId> = self.ast.redecls_of(f).collect();
+        for d in redecls {
+            let Some(ty) = self.ast.decls.get(d).ty() else { continue };
+            let t = self.with_exc_spec(ty, spec);
+            self.ast.decls.set_ty(d, t);
+        }
+    }
+
+    /// `noexcept(expr)` of pattern `pattern` substituted for member `f`;
+    /// `None` when the substitution fails or no instantiation context is
+    /// found.
+    fn substitute_exception_spec(
+        &mut self,
+        f: kiln_ast::DeclId,
+        pattern: kiln_ast::DeclId,
+        expr: ExprId,
+        quals: kiln_ast::types::Quals,
+        poi: Loc,
+    ) -> Option<ExcSpec> {
+        use crate::templ::stack::FrameKind;
+        use crate::templ::subst::Substituter;
+        let spec = self.inst_owner(f)?;
+        let (tmpl, args) = self.spec_args(spec)?;
+        let pclass = self.spec_pattern_class(spec, tmpl)?;
+        let mut pairs = self.inst_context_pairs(spec);
+        if pairs.first().is_none_or(|&(_, x)| x != spec) {
+            pairs.insert(0, (pclass, spec));
+        }
+        if !self.push_inst_frame(FrameKind::ExceptionSpec, f, pattern, poi) {
+            return None;
+        }
+        let params = |s: &Self, d: kiln_ast::DeclId| -> Vec<kiln_ast::DeclId> {
+            s.ast
+                .decls
+                .function(d)
+                .map(|x| s.ast.lists.iter::<kiln_ast::DeclId>(x.params).collect())
+                .unwrap_or_default()
+        };
+        let (pp, fp) = (params(self, pattern), params(self, f));
+        let method = self.kind_of(f) == kiln_ast::decl::DeclKind::CXXMethod;
+        let at = self.ast.exprs.get(expr).loc();
+        let start = self.begin_loc(expr);
+        let ctx = self.ast.decls.get(f).ctx().unwrap_or(self.ast.tu);
+        let r = self.in_inst_context(ctx, |s| {
+            let this = s.act_on_start_this_scope(method, quals);
+            let mut sub = Substituter::new(s, &args);
+            sub.entity = Some(spec);
+            sub.map_contexts(&pairs);
+            sub.map_params(&pp, &fp);
+            let e = sub.expr(expr);
+            let r = e.ok().map(|e| sub.sema.act_on_noexcept_spec(e, at, start));
+            s.act_on_end_this_scope(this);
+            r
+        });
+        self.pop_inst_frame();
+        r
     }
 
     /// *noexcept-specifier* is needed ([except.spec]/13) before the

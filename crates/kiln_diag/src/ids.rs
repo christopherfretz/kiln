@@ -963,6 +963,7 @@ diag_ids! {
     note_template_class_instantiation_here = Note (1) "in instantiation of template class '{0}' requested here";
     note_template_member_class_here = Note (1) "in instantiation of member class '{0}' requested here";
     note_template_member_function_here = Note (1) "in instantiation of member function '{0}' requested here";
+    note_template_exception_spec_here = Note (1) "in instantiation of exception specification for '{0}' requested here";
     note_function_template_spec_here = Note (1) "in instantiation of function template specialization '{0}' requested here";
     note_template_static_data_member_def_here = Note (1) "in instantiation of static data member '{0}' requested here";
     note_template_type_alias_instantiation_here = Note (1) "in instantiation of template type alias '{0}' requested here";

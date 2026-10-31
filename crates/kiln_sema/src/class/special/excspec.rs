@@ -23,13 +23,19 @@ const MAX_DEPTH: usize = 256;
 impl Sema<'_, '_> {
     /// Resolves the deferred exception specification of special member
     /// `f` (and its redeclarations); a no-op for any other function.
-    pub(crate) fn resolve_exception_spec(&mut self, f: DeclId) {
-        let _ = self.resolve_exc(f, 0);
+    /// A specification still to be instantiated from a class template
+    /// member's pattern is instantiated, with `at` as its point of
+    /// instantiation.
+    pub(crate) fn resolve_exception_spec(&mut self, f: DeclId, at: Loc) {
+        let _ = self.resolve_exc(f, 0, at);
     }
 
     /// Whether `f` is non-throwing, resolving it first if deferred.
-    fn resolve_exc(&mut self, f: DeclId, depth: usize) -> bool {
+    fn resolve_exc(&mut self, f: DeclId, depth: usize, at: Loc) -> bool {
         let first = self.ast.first(f);
+        if self.uninstantiated_exc.contains_key(&first) {
+            self.instantiate_exception_spec(first, at);
+        }
         let exc = self.exc_of(first);
         if !matches!(exc, ExcSpec::Deferred(_)) {
             return exc.is_nothrow();
@@ -44,7 +50,7 @@ impl Sema<'_, '_> {
         if cflags.contains(DeclFlags::INVALID) || cflags.contains(DeclFlags::DEPENDENT_CTX) {
             return false;
         }
-        let nothrow = self.implicit_nothrow(first, class, k, depth);
+        let nothrow = self.implicit_nothrow(first, class, k, depth, at);
         let spec = if nothrow {
             ExcSpec::BasicNoexcept
         } else {
@@ -80,7 +86,14 @@ impl Sema<'_, '_> {
     /// field; a default constructor looks at default member initializers
     /// instead of the members' default constructors. Destructors of
     /// subobjects do not affect a constructor (clang 19).
-    fn implicit_nothrow(&mut self, f: DeclId, class: DeclId, k: SpecialKind, depth: usize) -> bool {
+    fn implicit_nothrow(
+        &mut self,
+        f: DeclId,
+        class: DeclId,
+        k: SpecialKind,
+        depth: usize,
+        at: Loc,
+    ) -> bool {
         use SpecialKind as K;
         let const_arg = matches!(k, K::CopyCtor | K::CopyAssign) && self.copy_param_is_const_ref(f);
         let bases: Vec<BaseSpec> = self.ast.decls.bases(class, &self.ast.lists).copied().collect();
@@ -91,7 +104,7 @@ impl Sema<'_, '_> {
         for b in subs {
             let Some(bc) = self.base_class(&b) else { continue };
             let rhs = if const_arg { Quals::CONST } else { Quals::NONE };
-            if !self.subobject_nothrow(bc, k, rhs, Quals::NONE, depth) {
+            if !self.subobject_nothrow(bc, k, rhs, Quals::NONE, depth, at) {
                 return false;
             }
         }
@@ -119,7 +132,7 @@ impl Sema<'_, '_> {
                 _ => quals,
             };
             let lhs = if k.is_assign() { quals } else { Quals::NONE };
-            if !self.subobject_nothrow(rec, k, rhs, lhs, depth) {
+            if !self.subobject_nothrow(rec, k, rhs, lhs, depth, at) {
                 return false;
             }
         }
@@ -136,9 +149,10 @@ impl Sema<'_, '_> {
         rhs: Quals,
         lhs: Quals,
         depth: usize,
+        at: Loc,
     ) -> bool {
         match self.select_special(rec, k, rhs, lhs) {
-            Selected::Found(m) | Selected::Deleted(m) => self.resolve_exc(m, depth + 1),
+            Selected::Found(m) | Selected::Deleted(m) => self.resolve_exc(m, depth + 1, at),
             _ => true,
         }
     }

@@ -468,10 +468,10 @@ impl Sema<'_, '_> {
             return Some(self.recover_err(&kids, loc));
         };
         if let Some(m) = method {
+            // At the member's name, as clang's `MarkMemberReferenced`.
             if self.unevaluated == 0 {
-                self.mark_function_referenced(m, loc);
+                self.mark_function_referenced(m, n.loc());
             } else {
-                // At the member's name, as clang's `MarkMemberReferenced`.
                 self.exc_spec_needed(m, n.loc());
             }
         }
