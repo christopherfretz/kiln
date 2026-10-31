@@ -900,8 +900,16 @@ Where the code differs from (or details) the design above:
 - Not yet:
   - `ics.rs` (conversion function templates);
   - `arrow.rs` (`operator->` templates);
-  - `address.rs` against a target type. Only the single-specialization
-    template-id case (`&f<int>`) resolves.
+  - a diagnostic for `&f` when no template matches the target type. That
+    case still reports "not yet implemented", where clang prints
+    `address of overloaded function` with deduction notes.
+- Address of a function template ([temp.deduct.funcaddr]):
+  - `resolve_single_template_id` resolves `&f<int>` when exactly one
+    template accepts the explicit args.
+  - When no non-template matches the target, `address_template_candidates`
+    deduces P (the template's function type) from A (the target type)
+    through `deduce_spec(.., target)`. It keeps the specializations that
+    match exactly, then the one more specialized than all the others.
 
 ## 11. Agent parallelization (WP-068 split)
 WP-068 has more than five deliverables, so it splits. 068a merges §10.1–10.3
