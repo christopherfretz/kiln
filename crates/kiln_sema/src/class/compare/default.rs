@@ -2,9 +2,7 @@
 //! [class.compare.default] and the implicit `operator==` of a defaulted
 //! `operator<=>` ([class.compare.default]/4; spec/sema-class.md §4.10).
 
-use kiln_ast::decl::{
-    ConstexprKind, DeclFlags, DeclKind, DeclMisc, Defaulted, FnSpec, FriendKind,
-};
+use kiln_ast::decl::{ConstexprKind, DeclFlags, DeclKind, DeclMisc, Defaulted, FnSpec, FriendKind};
 use kiln_ast::names::{DeclName, DeclNameView, OverloadedOperator as OO};
 use kiln_ast::types::{ExcSpec, FuncProto, Quals, RefQual, TypeView};
 use kiln_ast::{DeclHead, DeclId, QualType};
@@ -71,8 +69,7 @@ impl Sema<'_, '_> {
     /// Whether `f` is an explicitly defaulted comparison operator (or the
     /// implicit `operator==` of one).
     pub(crate) fn is_defaulted_cmp(&self, f: DeclId) -> bool {
-        self.cmp_kind(f).is_some()
-            && self.fn_spec(self.ast.first(f)).defaulted() != Defaulted::No
+        self.cmp_kind(f).is_some() && self.fn_spec(self.ast.first(f)).defaulted() != Defaulted::No
             || self.special.cmp.default_loc.contains_key(&self.ast.first(f))
     }
 
@@ -170,7 +167,11 @@ impl Sema<'_, '_> {
     }
 
     /// Rebuilds the type of function `f` with prototype info `info`.
-    fn set_fn_info(&mut self, f: DeclId, info: impl FnOnce(kiln_ast::types::FuncInfo) -> kiln_ast::types::FuncInfo) {
+    fn set_fn_info(
+        &mut self,
+        f: DeclId,
+        info: impl FnOnce(kiln_ast::types::FuncInfo) -> kiln_ast::types::FuncInfo,
+    ) {
         let Some(fty) = self.ast.decls.get(f).ty() else { return };
         let TypeView::Function(p) = self.ast.types.view(fty.ty()) else { return };
         let params = self.ast.types.params(&p).to_vec();
@@ -186,7 +187,12 @@ impl Sema<'_, '_> {
     /// implicit exception specification. `from` is the context the
     /// subobject comparisons are resolved in. True if ill-formed.
     #[allow(clippy::too_many_lines, reason = "clang's checks, in its order")]
-    pub(crate) fn check_defaulted_comparison(&mut self, f: DeclId, k: CmpKind, from: DeclId) -> bool {
+    pub(crate) fn check_defaulted_comparison(
+        &mut self,
+        f: DeclId,
+        k: CmpKind,
+        from: DeclId,
+    ) -> bool {
         let floc = self.ast.decls.get(f).loc();
         let implicit = self.ast.decls.get(f).has(DeclFlags::IMPLICIT);
         let is_method = self.kind_of(f) == DeclKind::CXXMethod;
@@ -340,7 +346,8 @@ impl Sema<'_, '_> {
                     .arg(k.index())
                     .arg(0u8)
                     .arg(self.decl_arg(rd));
-                let d = d.with_note(self.diag(DiagId::note_declared_at, self.ast.decls.get(rd).loc()));
+                let d =
+                    d.with_note(self.diag(DiagId::note_declared_at, self.ast.decls.get(rd).loc()));
                 self.emit(d);
                 return true;
             }
@@ -357,7 +364,8 @@ impl Sema<'_, '_> {
             self.emit(d);
             return true;
         }
-        if k == CmpKind::ThreeWay && self.contains_deduced(ret) && !self.is_unconstrained_auto(ret) {
+        if k == CmpKind::ThreeWay && self.contains_deduced(ret) && !self.is_unconstrained_auto(ret)
+        {
             let d = self
                 .diag(DiagId::sema_defaulted_cmp_deduced_return, floc)
                 .arg(k.index())
@@ -389,7 +397,8 @@ impl Sema<'_, '_> {
                 return true;
             }
             if lex_is_record {
-                let d = self.diag(DiagId::sema_defaulted_cmp_non_first_in_class, floc).arg(k.index());
+                let d =
+                    self.diag(DiagId::sema_defaulted_cmp_non_first_in_class, floc).arg(k.index());
                 let prev = self.ast.prev(f).unwrap_or(f);
                 let d = self.note_prev(d, prev, false);
                 self.emit(d);
@@ -418,11 +427,10 @@ impl Sema<'_, '_> {
             };
             self.set_deduced_return(f, cat);
         }
-        if first
-            && self.fn_spec(f).constexpr_kind() == ConstexprKind::None
-            && info.constexpr
-        {
-            self.ast.decls.mark_function(f, FnSpec::new().with_constexpr_kind(ConstexprKind::Constexpr));
+        if first && self.fn_spec(f).constexpr_kind() == ConstexprKind::None && info.constexpr {
+            self.ast
+                .decls
+                .mark_function(f, FnSpec::new().with_constexpr_kind(ConstexprKind::Constexpr));
         }
         let fty = self.ast.decls.get(f).ty().unwrap_or(QualType::ERROR);
         if self.written_exc_spec(fty) == ExcSpec::None {
@@ -501,9 +509,10 @@ impl Sema<'_, '_> {
         };
         let mut spaceships: Vec<DeclId> = Vec::new();
         for &fr in friends.iter() {
-            let latest = self.ast.redecls_of(fr).find(|&d| {
-                self.ast.decls.lexical_ctx(d).is_some_and(|l| self.class_def(l) == r)
-            });
+            let latest = self
+                .ast
+                .redecls_of(fr)
+                .find(|&d| self.ast.decls.lexical_ctx(d).is_some_and(|l| self.class_def(l) == r));
             if let Some(d) = latest
                 && is_candidate(self, d)
             {
@@ -542,12 +551,8 @@ impl Sema<'_, '_> {
             ExcSpec::Deferred(_) => ExcSpec::None,
             e => e,
         };
-        let fty = self.ast.types.function(
-            QualType::BOOL,
-            &params,
-            info.with_trailing_return(false),
-            exc,
-        );
+        let fty =
+            self.ast.types.function(QualType::BOOL, &params, info.with_trailing_return(false), exc);
         let sspec = self.fn_spec(s);
         let spec = FnSpec::new()
             .with_inline(true)

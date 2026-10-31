@@ -213,6 +213,13 @@ impl Sema<'_, '_> {
                 && let Some(k) = self.special_kind_of(m)
             {
                 out.extend(self.deletion_notes(m, k, depth + 1));
+            } else if depth < MAX_NOTE_DEPTH
+                && let Some(k) = self.cmp_kind(m)
+                && let Some(rd) = self.cmp_class(m)
+            {
+                // clang `DiagnoseDeletedDefaultedFunction` for a
+                // comparison: the analyzer explaining the deletion.
+                out.extend(self.analyze_cmp(m, k, rd, rd, true).1);
             }
             return out;
         }

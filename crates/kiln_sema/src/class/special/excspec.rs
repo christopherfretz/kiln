@@ -37,6 +37,9 @@ impl Sema<'_, '_> {
         if depth > MAX_DEPTH || self.unparsed_exc.contains(&first) {
             return false;
         }
+        if self.cmp_kind(first).is_some() {
+            return self.resolve_cmp_exc(first);
+        }
         let Some(k) = self.special_kind_of(first) else { return false };
         let Some(ctx) = self.ast.decls.get(first).ctx() else { return false };
         let class = self.class_def(ctx);
@@ -65,7 +68,7 @@ impl Sema<'_, '_> {
     }
 
     /// The shared `false` of `noexcept(false)`.
-    fn noexcept_false(&mut self) -> kiln_ast::ExprId {
+    pub(crate) fn noexcept_false(&mut self) -> kiln_ast::ExprId {
         if let Some(e) = self.special.noexcept_false {
             return e;
         }

@@ -47,6 +47,13 @@ impl SemaBridge for Bridge<'_, '_, '_> {
         if let Some(b) = self.sema.define_virtual_dtor(f) {
             return Some(b);
         }
+        if self.sema.is_defaulted_cmp(f) {
+            // A defaulted comparison used only in a context the use did
+            // not define it in (WP-082; spec/sema-class.md §8.3).
+            let loc = self.sema.ast.decls.get(f).loc();
+            self.sema.define_defaulted_comparison(f, loc);
+            return self.sema.defined_body(f);
+        }
         self.sema.instantiate_for_oven(f, oven)
     }
 

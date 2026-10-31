@@ -3296,7 +3296,8 @@ impl Sema<'_, '_> {
         let bits = self.special_member_bits(r, bits);
         let bits = self.finish_special_members(r, bits);
         // [class.compare.default]/4: the implicit `operator==`s.
-        let mut friends = build.as_mut().map(|b| std::mem::take(&mut b.friends)).unwrap_or_default();
+        let mut friends =
+            build.as_mut().map(|b| std::mem::take(&mut b.friends)).unwrap_or_default();
         self.declare_implicit_equality(r, &mut friends);
         if let Some(b) = &mut build {
             b.friends = friends;

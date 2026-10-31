@@ -33,7 +33,9 @@ use kiln_source::fx::{FxHashMap, FxHashSet};
 
 use crate::Sema;
 
-pub(crate) use define::{CtorCall, DeletedAs, DiagSites, ImplicitInit, InitEntity, SynthContext};
+pub(crate) use define::{
+    CtorCall, DeletedAs, DiagSites, ImplicitInit, InitEntity, SynthContext, SynthKind,
+};
 pub(crate) use deletion::Selected;
 use uses::PendingDeleted;
 

@@ -28,10 +28,19 @@ Branch `wp/082-defaulted-comparisons`, worktree `.worktrees/wp-082`.
 - Pre-existing gaps seen (not WP-082): Oven "non-constexpr function" note
   points at the operand start instead of the operator; explicit object
   parameters unsupported in the parser.
-- Step 5 in progress: `class/compare/synth.rs` (`define_defaulted_comparison`).
+- Step 5 done (`class/compare/synth.rs`): clang-shaped bodies on odr-use
+  (`mark_function_referenced`, before the exception spec) and from
+  `ensure_body`; implicit exception spec from the body (built unevaluated
+  when not yet defined); deleted-function notes via the analyzer.
+  Scratch d1 (base + int + float[2], `<=>`, `<`, implicit `==`) matches
+  clang except `nrvo_candidate` (clang's JSON omits it: <=> goldens need
+  `skip(clang)` checked against the text dump).
+- Side fixes needed by the goldens: comparison category types print
+  `'std::strong_ordering'` (Elaborated with the namespace qualifier,
+  `scoped_class_type`); CXXOperatorCallExpr `adl` when the operator was
+  found only by ADL; a defaulted comparison's exception spec is resolved
+  before its callee DeclRefExpr is built.
 
 ## Next step
-- synth.rs body per clang's `DefaultedComparisonSynthesizer` (base operands
-  cast to the *unqualified* base type, as clang does), exception spec from
-  the body, hooks in `mark_function_referenced`, `ensure_body`,
-  `resolve_exc`, `deleted_function_notes`; then tests/spec/probe.
+- Rebuild, re-diff d1; `git merge main`; tests in the 5 conformance dirs;
+  class-template instantiation of defaulted comparisons; probe; spec.

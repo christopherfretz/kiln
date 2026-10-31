@@ -295,15 +295,17 @@ impl Sema<'_, '_> {
                         .or_else(|| self.declaring_class(cand.found))
                         .unwrap_or(ac);
                     let ac_arg = self.decl_arg(owner);
-                    if let Some(d) = self.cmp_member_access(cand.found, ac, object, cx.from, |s, prot| {
-                        s.diag(DiagId::note_defaulted_cmp_inaccessible, loc)
-                            .arg(&fname)
-                            .arg(u8::from(prot))
-                            .arg(&callee_name)
-                            .arg(kind)
-                            .arg(&ac_arg)
-                            .arg(&decl)
-                    }) {
+                    if let Some(d) =
+                        self.cmp_member_access(cand.found, ac, object, cx.from, |s, prot| {
+                            s.diag(DiagId::note_defaulted_cmp_inaccessible, loc)
+                                .arg(&fname)
+                                .arg(u8::from(prot))
+                                .arg(&callee_name)
+                                .arg(kind)
+                                .arg(&ac_arg)
+                                .arg(&decl)
+                        })
+                    {
                         if cx.diagnose {
                             cx.notes.push(d);
                         }
@@ -452,6 +454,6 @@ impl Sema<'_, '_> {
     /// The declared (or deduced) return type of function `f`.
     pub(crate) fn fn_ret(&self, f: DeclId) -> QualType {
         let ty = self.ast.decls.get(f).ty().unwrap_or(QualType::ERROR);
-        self.ast.types.proto(ty).map_or(QualType::ERROR, kiln_ast::types::FuncProto::ret)
+        self.sugared_proto(ty).map_or(QualType::ERROR, |p| p.ret())
     }
 }

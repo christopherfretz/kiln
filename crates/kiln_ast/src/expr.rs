@@ -1450,6 +1450,19 @@ impl ExprArena {
         Ok(())
     }
 
+    /// Marks the call `e` (`CallExpr` or `CXXOperatorCallExpr`) as calling
+    /// a function found only by argument-dependent lookup (clang's
+    /// `UsesADL`, dumped `adl`).
+    pub fn set_call_adl(&mut self, e: ExprId) {
+        let n = &mut self.nodes[e.index() as usize];
+        assert!(
+            matches!(n.kind, ExprKind::CallExpr | ExprKind::CXXOperatorCallExpr),
+            "expected a call, found {:?}",
+            n.kind
+        );
+        n.bits |= ExprFlags::ADL.0;
+    }
+
     /// Marks the `UnresolvedLookupExpr` `e` as using argument-dependent
     /// lookup: an unqualified template-id followed by `(`
     /// ([basic.lookup.argdep]/1, [temp.names]/3). Write-once.

@@ -5,7 +5,7 @@
 //! comparisons — and the `CXXOperatorCallExpr` of the selected function.
 
 use kiln_ast::decl::{DeclFlags, DeclKind, Defaulted};
-use kiln_ast::expr::{BinaryOp, DeclRefExtra, UnaryOp, ValueCategory};
+use kiln_ast::expr::{BinaryOp, DeclRefExtra, ExprKind, UnaryOp, ValueCategory};
 use kiln_ast::names::{DeclName, OverloadedOperator as OO};
 use kiln_ast::types::{Quals, RefQual, TypeKind, TypeView};
 use kiln_ast::{DeclId, ExprId, QualType};
@@ -172,6 +172,8 @@ struct Chosen {
     f: DeclId,
     found: DeclId,
     rewrite: Rewrite,
+    /// Found only by argument-dependent lookup.
+    adl: bool,
 }
 
 impl Sema<'_, '_> {
@@ -469,7 +471,8 @@ impl Sema<'_, '_> {
                     self.diagnose_reversed_ambiguity(&set, b, op, spelling, &types, loc);
                 }
                 let c = set.cand(b);
-                let chosen = Chosen { f: c.func(), found: c.found, rewrite: c.rewrite };
+                let chosen =
+                    Chosen { f: c.func(), found: c.found, rewrite: c.rewrite, adl: c.adl_only };
                 self.end_set(set);
                 return self.finish_operator(form, op, chosen, &ops, &mut brs, args, loc, end);
             }
@@ -1004,7 +1007,7 @@ impl Sema<'_, '_> {
         loc: Loc,
         end: Loc,
     ) -> OperResult {
-        let Chosen { f, found, rewrite } = chosen;
+        let Chosen { f, found, rewrite, adl } = chosen;
         let mut order: Vec<ExprId> = ops.to_vec();
         if rewrite.is_reversed() {
             order.swap(0, 1);
@@ -1038,6 +1041,16 @@ impl Sema<'_, '_> {
         let Some(call) = self.build_operator_call(f, found, fop, &order, brs, loc, end) else {
             return OperResult::Done(self.recover_err(written, loc));
         };
+        if adl {
+            // clang's `IsADLCandidate` (dumped `adl`).
+            let mut c = call;
+            while self.ast.exprs.get(c).kind() == ExprKind::CXXBindTemporaryExpr {
+                c = self.ast.exprs.operand(c);
+            }
+            if self.ast.exprs.get(c).kind() == ExprKind::CXXOperatorCallExpr {
+                self.ast.exprs.set_call_adl(c);
+            }
+        }
         let OperForm::Binary(bop) = form else { return OperResult::Done(call) };
         if rewrite == Rewrite::None {
             return OperResult::Done(call);
@@ -1075,6 +1088,12 @@ impl Sema<'_, '_> {
         loc: Loc,
         end: Loc,
     ) -> Option<ExprId> {
+        if !self.in_template() && self.is_defaulted_cmp(f) {
+            // The exception specification is part of the type the callee
+            // names (clang `DiagnoseUseOfDecl`, C++17); resolved here for a
+            // defaulted comparison, whose specification is deferred.
+            self.resolve_exception_spec(f);
+        }
         let fty = self.ast.decls.get(f).ty().unwrap_or(QualType::ERROR);
         let proto = self.sugared_proto(fty)?;
         let method = self.kind_of(f) == DeclKind::CXXMethod;

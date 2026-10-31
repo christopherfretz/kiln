@@ -10,9 +10,9 @@
 //! - The built-in `<=>` on scalars ([expr.spaceship]/4–8).
 
 use kiln_ast::class::{CmpCategory, CmpCategoryInfo};
-use kiln_ast::decl::{DeclKind, DefinitionBits, VarEvalState};
+use kiln_ast::decl::{DeclKind, DefinitionBits, NamespaceData, VarEvalState};
 use kiln_ast::expr::{BinaryOp, CastKind};
-use kiln_ast::types::BuiltinType;
+use kiln_ast::types::{BuiltinType, Nns, TagKeyword};
 use kiln_ast::{DeclId, ExprId, QualType};
 use kiln_diag::DiagId;
 use kiln_source::Loc;
@@ -40,6 +40,36 @@ pub(crate) enum CmpUsage {
 }
 
 impl Sema<'_, '_> {
+    /// The type of namespace-scope class `r` as clang's bare `RecordType`
+    /// of it prints: `'std::strong_ordering'`, which kiln spells as
+    /// `Elaborated` sugar with the enclosing non-inline namespaces as the
+    /// qualifier (spec/types.md §15 R4).
+    pub(crate) fn scoped_class_type(&mut self, r: DeclId) -> QualType {
+        let t = self.class_type(r);
+        let mut chain = Vec::new();
+        let mut c = self.ast.decls.get(r).ctx();
+        while let Some(d) = c
+            && d != self.ast.tu
+        {
+            if self.kind_of(d) != DeclKind::Namespace {
+                return t;
+            }
+            let first = self.ast.first(d);
+            if !self.ast.decls.namespace(first).is_some_and(NamespaceData::is_inline) {
+                chain.push(first);
+            }
+            c = self.ast.decls.get(d).ctx();
+        }
+        if chain.is_empty() {
+            return t;
+        }
+        let mut nns = None;
+        for ns in chain.into_iter().rev() {
+            nns = Some(self.ast.types.nns(Nns::Namespace { prefix: nns, ns }));
+        }
+        self.ast.types.elaborated(TagKeyword::None, nns, t)
+    }
+
     /// The comparison category class `std::<kind>` (clang's
     /// `CheckComparisonCategoryType`): looked up in namespace `std`,
     /// required complete and checked to have the form kiln's evaluation
@@ -56,7 +86,7 @@ impl Sema<'_, '_> {
     ) -> Option<QualType> {
         if let Some(info) = self.ast.cmp_categories.get(kind) {
             let r = info.record;
-            return Some(self.class_type(r));
+            return Some(self.scoped_class_type(r));
         }
         let Some(rec) = self.std_record(kind.name()) else {
             let msg = self
@@ -133,7 +163,7 @@ impl Sema<'_, '_> {
             self.mark_used_at(var, loc);
         }
         self.ast.cmp_categories.set(info);
-        Some(ty)
+        Some(self.scoped_class_type(rec))
     }
 
     /// The class `std::<name>` (through inline namespaces), if declared.
