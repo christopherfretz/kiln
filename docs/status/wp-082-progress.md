@@ -3,7 +3,7 @@
 Branch `wp/082-defaulted-comparisons`, worktree `.worktrees/wp-082`. Main
 was merged at e990962 (WP-106, WP-100, WP-116).
 
-## Status: complete, pending the full CI
+## Status: complete (full `cargo xtask ci` green at 467fe3c)
 - Categories: `std::*_ordering` lookup and validation, plus lookup by
   name. The built-in `<=>` works in sema, the Oven and codegen.
 - Declaration checks, deletedness, category deduction, constexpr, and the
@@ -30,4 +30,4 @@ left in `<compare>` belong to range-for (WP-089), lambdas (WP-075), and
 the cascades those cause.
 
 ## Next step
-Run the full `cargo xtask ci`, then hand back.
+Hand back to the supervisor for review and merge.
