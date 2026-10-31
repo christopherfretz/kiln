@@ -64,7 +64,9 @@ New first blockers:
 - Tests: 28 in `tests/conformance/dcl.struct.bind/` (9 AST goldens,
   12 strict diag, 1 constexpr compile-ok, 6 run); flipped
   `stmt.ranged/structured-binding.cpp`. Corpus (kiln mode, -j 2):
-  1594 passed / 0 failed / 15 xfail / 1609 tests.
+  1594 passed / 0 failed / 15 xfail / 1609 tests before merging main;
+  after `git merge main` (WP-121): 1622 passed / 0 failed / 13 xfail /
+  1635 tests. fmt and clippy `-D warnings` clean.
 - Fixed on the way: `reference to type 'X' could not bind to an
   rvalue|lvalue of type 'Y'` (`sema_reference_bind_failed`), qualified
   name in `implicit instantiation of undefined template 'N::X<int>'`
