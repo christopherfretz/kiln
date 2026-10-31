@@ -7,7 +7,17 @@
    exact both triples); sema diagnostic for member-pointer
    conversion via a virtual base in static_cast/C-style cast (ref_cast.rs
    `static_mp_upcast`; conformance expr.static.cast/member-pointer-virtual-base).
-3. [ ] `weak_odr` vtables/RTTI for explicit instantiation definitions.
+3. [not done] `weak_odr` vtables/RTTI for explicit instantiation definitions:
+   larger than a linkage switch. Codegen emits nothing for
+   `template struct X<int>;` (sema instantiates the members, codegen only
+   emits used functions, linkonce_odr). clang emits every member weak_odr,
+   the vtable/RTTI weak_odr, and the destructor as a D5 COMDAT with a
+   weak_odr D1 alias; `extern template` makes the vtable `external` and
+   suppresses member bodies. Needs: a codegen walk of explicit
+   instantiation definitions (members in clang's order), weak_odr in
+   `set_def_linkage` / `vtable_linkage` / `rtti_linkage`, the C5/D5
+   COMDAT structor form, extern-template suppression. Documented as a
+   gap in spec/codegen.md §7a.
 4. [x] Corpus `virtual_base_dyncast_hint` (`-1` hint) exact both triples.
    [blocked] Inheriting ctors with vbases: inheriting constructors are not
    implemented at all (sema rejects `using B::B;` with
