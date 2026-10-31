@@ -833,14 +833,29 @@ impl Cg<'_> {
                 }
             }
             if use_virtual {
-                if ast.exprs.get(e).has(ExprFlags::GLOBAL) {
-                    return err(loc, "virtual ::delete is not supported yet (WP-080)");
-                }
-                // emitVirtualObjectDelete: the deleting destructor frees it.
                 let first = ast.first(dtor);
                 let fty = ast.decls.get(first).ty().expect("destructor type");
                 let sig = self.call_sig_this(fty, false, &[], Some(def));
                 let (_, al) = self.size_align(dt);
+                if ast.exprs.get(e).has(ExprFlags::GLOBAL) {
+                    // emitVirtualObjectDelete with UseGlobalDelete: the
+                    // complete object is `p + vtable[-2]`; the complete
+                    // destructor is called virtually, then the global
+                    // `operator delete` (the CallObjectDelete cleanup).
+                    let Some(od) = ast.exprs.operator_delete(e) else {
+                        return err(loc, "delete-expression without a deallocation function");
+                    };
+                    let vt = self.load(LTy::PTR, p, al, false);
+                    let m2 = self.i64c(-2);
+                    let op = self.gep(LTy::I64, vt, vec![m2], true);
+                    let off = self.load(LTy::I64, op, 8, false);
+                    let complete = self.gep(LTy::I8, p, vec![off], true);
+                    let fp = self.virtual_fn_ptr(dtor, Some(mangle::Structor::Complete), p, al)?;
+                    self.call_vals(&sig, fp, None, Some(p), &[], &[], None, &[])?;
+                    self.emit_delete_call(od, complete, dt, loc)?;
+                    return Ok(true);
+                }
+                // emitVirtualObjectDelete: the deleting destructor frees it.
                 let fp = self.virtual_fn_ptr(dtor, Some(mangle::Structor::Deleting), p, al)?;
                 self.call_vals(&sig, fp, None, Some(p), &[], &[], None, &[])?;
                 return Ok(true);
