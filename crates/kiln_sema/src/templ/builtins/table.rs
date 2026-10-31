@@ -180,11 +180,7 @@ pub fn trait_status(t: TypeTrait) -> Status {
         // need the unevaluated `init_check` / `conv_check` of overload
         // resolution.
         T::IsTriviallyConstructible
-        | T::IsNothrowAssignable
         | T::IsTriviallyAssignable
-        | T::IsConvertible
-        | T::IsConvertibleTo
-        | T::IsNothrowConvertible
         | T::ReferenceBindsToTemporary
         | T::ReferenceConstructsFromTemporary
         | T::ReferenceConvertsFromTemporary

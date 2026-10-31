@@ -88,8 +88,7 @@ impl Sema<'_, '_> {
             self.emit(d);
             return self.recover(QualType::BOOL, &[], loc);
         }
-        let value = if matches!(t, TypeTrait::IsConstructible | TypeTrait::IsNothrowConstructible)
-        {
+        let value = if matches!(t, TypeTrait::IsConstructible | TypeTrait::IsNothrowConstructible) {
             match self.eval_constructible(t, args, loc, rparen) {
                 Some(v) => v,
                 None => return self.recover(QualType::BOOL, &[], loc),
@@ -99,8 +98,17 @@ impl Sema<'_, '_> {
                 return self.recover(QualType::BOOL, &[], loc);
             }
             self.eval_unary_trait(t, tys[0])
-        } else if t == TypeTrait::IsAssignable {
-            match self.eval_assignable(args[0], args[1], loc) {
+        } else if matches!(
+            t,
+            TypeTrait::IsConvertible | TypeTrait::IsConvertibleTo | TypeTrait::IsNothrowConvertible
+        ) {
+            match self.eval_convertible(t, args[0], args[1], loc) {
+                Some(v) => v,
+                None => return self.recover(QualType::BOOL, &[], loc),
+            }
+        } else if matches!(t, TypeTrait::IsAssignable | TypeTrait::IsNothrowAssignable) {
+            let nothrow = t == TypeTrait::IsNothrowAssignable;
+            match self.eval_assignable(args[0], args[1], nothrow, loc) {
                 Some(v) => v,
                 None => return self.recover(QualType::BOOL, &[], loc),
             }
@@ -315,12 +323,14 @@ impl Sema<'_, '_> {
     /// `EvaluateBinaryTypeTrait`): whether `declval<T>() = declval<U>()` is
     /// well-formed as an unevaluated operand. The assignment is built
     /// on opaque operands in a SFINAE context, with access checked from
-    /// the translation unit. `None` when an operand is incomplete (not
+    /// the translation unit; `__is_nothrow_assignable` also requires
+    /// that it cannot throw. `None` when an operand is incomplete (not
     /// `void` or an array of unknown bound), which is an error.
     fn eval_assignable(
         &mut self,
         a: (QualType, Loc),
         b: (QualType, Loc),
+        nothrow: bool,
         loc: Loc,
     ) -> Option<bool> {
         for (q, at) in [a, b] {
@@ -361,7 +371,7 @@ impl Sema<'_, '_> {
             let r = operand(s, b.0);
             let e = s.binary_operator(BinaryOp::Assign, l, r, None, loc);
             s.exit_unevaluated();
-            !s.is_err_expr(e)
+            !s.is_err_expr(e) && !(nothrow && s.can_throw(e))
         });
         self.ctx = saved;
         Some(matches!(r, Some((true, Ok(())))))
@@ -439,6 +449,63 @@ impl Sema<'_, '_> {
                 let init = crate::init::Initializer::Paren(ops, loc, rparen);
                 s.perform_init(ty, init, loc, false)
             };
+            s.exit_unevaluated();
+            !s.is_err_expr(e) && !(nothrow && s.can_throw(e))
+        });
+        self.ctx = saved;
+        Some(matches!(r, Some((true, Ok(())))))
+    }
+
+    /// `__is_convertible(From, To)` / `__is_convertible_to` /
+    /// `__is_nothrow_convertible` ([meta.rel]/5, clang's
+    /// `EvaluateBinaryTypeTrait`): whether `To test() { return
+    /// declval<From>(); }` is well-formed, i.e. the copy-initialization of
+    /// a `To` temporary from a `declval<From>()` operand, built
+    /// unevaluated under a SFINAE frame with access from the TU (and,
+    /// for the nothrow form, cannot throw). `None` when an operand is
+    /// incomplete, an error.
+    fn eval_convertible(
+        &mut self,
+        t: TypeTrait,
+        from: (QualType, Loc),
+        to: (QualType, Loc),
+        loc: Loc,
+    ) -> Option<bool> {
+        let tys = &self.ast.types;
+        if tys.is_void(to.0) {
+            return Some(tys.is_void(from.0));
+        }
+        if tys.is_function(to.0) || tys.is_array(to.0) || tys.is_void(from.0) {
+            return Some(false);
+        }
+        for (q, at) in [from, to] {
+            let tys = &self.ast.types;
+            if matches!(tys.canonical_view(q), TypeView::IncompleteArray(_))
+                || tys.is_reference(q)
+                || tys.is_function(q)
+                || self.require_complete(q, at)
+            {
+                continue;
+            }
+            let msg = self.diag(DiagId::sema_incomplete_type_trait, at).arg(self.ty_arg(q));
+            let msg = self.incomplete_note(msg, q);
+            self.emit(msg);
+            return None;
+        }
+        let (fty, vc) = match self.ast.types.canonical_view(from.0) {
+            TypeView::LValueRef(p) => (p, ValueCategory::LValue),
+            TypeView::RValueRef(p) if self.ast.types.is_function(p) => (p, ValueCategory::LValue),
+            TypeView::RValueRef(p) => (p, ValueCategory::XValue),
+            _ if self.ast.types.is_function(from.0) => (from.0, ValueCategory::LValue),
+            _ => (from.0, ValueCategory::XValue),
+        };
+        let nothrow = t == TypeTrait::IsNothrowConvertible;
+        let tu = self.ast.tu;
+        let saved = std::mem::replace(&mut self.ctx, tu);
+        let r = self.in_sfinae(FrameKind::ConstraintSubstitution, tu, None, loc, |s| {
+            s.enter_unevaluated();
+            let op = s.builder().opaque_value_of(fty, vc, from.1);
+            let e = s.perform_init(to.0, crate::init::Initializer::Expr(op), loc, false);
             s.exit_unevaluated();
             !s.is_err_expr(e) && !(nothrow && s.can_throw(e))
         });
