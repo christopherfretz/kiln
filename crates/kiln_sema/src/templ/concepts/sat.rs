@@ -293,6 +293,11 @@ impl Sema<'_, '_> {
         levels: &MultiLevelArgs,
         recs: &mut Vec<SatRecord>,
     ) -> bool {
+        // An atom diagnosed where it was written (a non-`bool` atom in a
+        // requires-clause) is not satisfied, silently.
+        if self.has_errors_in(e) {
+            return false;
+        }
         let loc = self.begin_loc(e);
         let Some((r, st)) =
             self.in_sfinae(FrameKind::ConstraintSubstitution, entity, None, loc, |s| {
@@ -543,6 +548,17 @@ impl Sema<'_, '_> {
             return Ok(self.builder().concept_spec_expr(c, written, QualType::BOOL, loc));
         }
         let conv = self.check_template_args(c, &args, arg_locs, loc)?;
+        // A concept whose definition was diagnosed (a non-`bool` atom) is
+        // invalid: naming it is an error expression, already diagnosed
+        // (clang's invalid `ConceptDecl`).
+        if self
+            .ast
+            .template_info(c)
+            .and_then(|i| i.constraint)
+            .is_some_and(|x| self.has_errors_in(x))
+        {
+            return Ok(self.act_on_error_expr(&[], loc));
+        }
         let e = self.builder().concept_spec_expr(c, written, QualType::BOOL, loc);
         let sat = self.check_concept(c, conv.sugared, loc);
         let ok = self.sat_ok(sat);

@@ -92,3 +92,50 @@ impl ConceptState {
         id
     }
 }
+
+impl crate::Sema<'_, '_> {
+    /// Checks a constraint-expression where it is written (a concept's
+    /// definition or a requires-clause operand; clang's
+    /// `CheckConstraintExpression`, [temp.constr.atomic]/3): each atomic
+    /// constraint that is not type-dependent must have type `bool`.
+    /// Diagnoses at the atom and returns false when one does not.
+    pub fn check_constraint_expression(&mut self, e: ExprId) -> bool {
+        self.check_constraint_at(e, 0)
+    }
+
+    fn check_constraint_at(&mut self, e: ExprId, depth: u32) -> bool {
+        use kiln_ast::expr::{BinaryOp, ExprKind};
+        let e = self.ignore_paren_imp_casts(e);
+        let n = *self.ast.exprs.get(e);
+        if depth < 256 {
+            match n.kind() {
+                ExprKind::BinaryOperator
+                    if matches!(self.ast.exprs.binary_op(e), BinaryOp::LAnd | BinaryOp::LOr) =>
+                {
+                    let [l, r] = self.ast.exprs.operands(e);
+                    return self.check_constraint_at(l, depth + 1)
+                        && self.check_constraint_at(r, depth + 1);
+                }
+                ExprKind::ExprWithCleanups => {
+                    let o = self.ast.exprs.operand(e);
+                    return self.check_constraint_at(o, depth + 1);
+                }
+                _ => {}
+            }
+        }
+        if self.expr_is_type_dependent(e) || self.has_errors_in(e) {
+            return true;
+        }
+        let ty = self.ety(e);
+        if self.is_error_type(ty)
+            || self.ast.types.builtin(self.ast.types.canonical(ty).without_quals())
+                == Some(kiln_ast::types::BuiltinType::Bool)
+        {
+            return true;
+        }
+        let arg = self.ty_arg(ty);
+        let d = self.diag(DiagId::sema_non_bool_atomic_constraint, n.loc()).arg(arg);
+        self.emit(d);
+        false
+    }
+}

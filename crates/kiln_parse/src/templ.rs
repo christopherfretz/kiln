@@ -923,6 +923,12 @@ impl Parser<'_, '_> {
             || (self.at(Punct::LSquare) && !self.peek_is(1, Punct::LSquare));
         let binary = self.cur_binop_prec().is_some_and(|p| p > prec::LAND);
         if !(non_primary || postfix || binary) {
+            // A non-`bool` atom makes the clause invalid (clang's
+            // `CheckConstraintExpression` from the parser).
+            if !self.s.check_constraint_expression(e) {
+                let loc = self.s.ast.exprs.get(e).loc();
+                return Some(self.s.act_on_error_expr(&[e], loc));
+            }
             return Some(e);
         }
         let e = if postfix { self.parse_postfix_suffix(e)? } else { e };

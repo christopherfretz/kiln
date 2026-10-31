@@ -47,6 +47,13 @@ Branch `wp/109-concepts-alias-followups`. Living file; deleted at merge.
 - `static_assert(requires{...})` prints the expression like clang
   (`AstNames::expr` RequiresExpr arm; test
   `templates/concepts/expr.prim.req-static-assert-print.cpp`).
-- TODO: non-bool atom at concept definition; ambiguous-atomic note.
+- Non-`bool` atom diagnosed where written (`check_constraint_expression`
+  in concepts/mod.rs, called by `act_concept` and the requires-clause
+  primary parser); the concept/clause becomes a RecoveryExpr, naming the
+  concept yields an error expression (no further diag), a clause's atom
+  is silently unsatisfied. Divergence: clang drops the whole declaration
+  ("use of undeclared identifier 'f'"); kiln keeps it and reports
+  "no matching function". Test `temp.constr.atomic-non-bool-at-definition.cpp`.
+- TODO: ambiguous-atomic note.
 
 ## Items 3, 5, 6, 7: pending
