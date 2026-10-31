@@ -493,6 +493,9 @@ removed at the end of the run.
 
 ## CI
 
+The libc++ suite driver (`cargo xtask libcxx`) is not part of `ci`. It is a
+separate manual or periodic gate, and its contract is `spec/libcxx.md`.
+
 `cargo xtask ci [--quick]` is the merge gate (`docs/AGENTS.md` rule 3). It
 runs, stopping at the first failing step:
 
