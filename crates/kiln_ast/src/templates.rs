@@ -657,10 +657,26 @@ impl Ast {
     ///
     /// # Panics
     /// If `e` is not an `UnresolvedLookupExpr`.
-    pub fn unresolved_name(&self, e: ExprId) -> Symbol {
+    pub fn unresolved_name(&self, e: ExprId) -> DeclName {
         let n = self.exprs.get(e);
         assert_eq!(n.kind(), ExprKind::UnresolvedLookupExpr, "not an UnresolvedLookupExpr");
-        Symbol::from_index(n.a())
+        DeclName::from_raw(n.a()).unwrap_or(DeclName::EMPTY)
+    }
+
+    /// The member name a `CXXDependentScopeMemberExpr` names (an
+    /// identifier, operator-function-id, conversion-function-id or
+    /// destructor name, [expr.ref]/1).
+    ///
+    /// # Panics
+    /// If `e` is not a `CXXDependentScopeMemberExpr`.
+    pub fn dependent_member_name(&self, e: ExprId) -> DeclName {
+        let n = self.exprs.get(e);
+        assert_eq!(
+            n.kind(),
+            ExprKind::CXXDependentScopeMemberExpr,
+            "not a CXXDependentScopeMemberExpr"
+        );
+        DeclName::from_raw(n.b()).unwrap_or(DeclName::EMPTY)
     }
 
     /// The declarations an `UnresolvedLookupExpr` found.
@@ -1433,7 +1449,7 @@ impl AstBuilder<'_> {
     /// applies at instantiation ([temp.dep.candidate]).
     pub fn unresolved_lookup(
         &mut self,
-        name: Symbol,
+        name: DeclName,
         decls: &[DeclId],
         adl: bool,
         nns: Option<NnsId>,
@@ -1449,7 +1465,7 @@ impl AstBuilder<'_> {
     #[allow(clippy::too_many_arguments, reason = "the lookup fields")]
     pub fn unresolved_lookup_in(
         &mut self,
-        name: Symbol,
+        name: DeclName,
         decls: &[DeclId],
         adl: bool,
         nns: Option<NnsId>,
@@ -1472,7 +1488,7 @@ impl AstBuilder<'_> {
             u8::from(adl),
             ty,
             loc,
-            name.index(),
+            name.to_raw(),
             list.raw(),
         );
         self.side(e, nns, targs);
@@ -1486,7 +1502,7 @@ impl AstBuilder<'_> {
         &mut self,
         base: Option<ExprId>,
         arrow: bool,
-        name: Symbol,
+        name: DeclName,
         template_kw: bool,
         nns: Option<NnsId>,
         targs: Option<ArgListId>,
@@ -1506,7 +1522,7 @@ impl AstBuilder<'_> {
             ty,
             loc,
             ExprId::raw_opt(base),
-            name.index(),
+            name.to_raw(),
         );
         self.side(e, nns, targs);
         e

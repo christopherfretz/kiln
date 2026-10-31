@@ -967,6 +967,32 @@ impl<'a> AstBuilder<'a> {
         self.push_expr(kind, vk, ObjectKind::Ordinary, ExprFlags::NONE, deps, aux, ty, loc, a, b)
     }
 
+    /// `p->~T` / `x.~T` naming the destructor of a scalar or dependent
+    /// type `destroyed` ([expr.prim.id.dtor]/2, [expr.ref]/1):
+    /// `CXXPseudoDestructorExpr`, a prvalue of the bound-member type
+    /// whose only use is a call of type `void` ([expr.call]/5). `base`
+    /// is the object (a pointer for `arrow`); `loc` is the destroyed
+    /// type's name.
+    pub fn pseudo_destructor(
+        &mut self,
+        base: ExprId,
+        arrow: bool,
+        destroyed: QualType,
+        loc: Loc,
+    ) -> ExprId {
+        let deps = self.deps(base) | self.type_deps(destroyed);
+        self.simple(
+            ExprKind::CXXPseudoDestructorExpr,
+            ValueCategory::PRValue,
+            deps,
+            u8::from(arrow),
+            QualType::BOUND_MEMBER,
+            loc,
+            base.raw(),
+            destroyed.to_raw(),
+        )
+    }
+
     /// An integer literal of at most 64 bits ([lex.icon]): a prvalue,
     /// never dependent.
     pub fn int_literal(&mut self, ty: QualType, value: u64, radix: Radix, loc: Loc) -> ExprId {

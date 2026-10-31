@@ -6,7 +6,6 @@ use kiln_ast::lookup::LookupFlags;
 use kiln_ast::names::DeclName;
 use kiln_ast::types::{ArgView, TypeView};
 use kiln_ast::{DeclId, ExprId, QualType};
-use kiln_source::symbol::Symbol;
 
 use crate::Sema;
 
@@ -203,23 +202,13 @@ impl Sema<'_, '_> {
         self.assoc_type(n.ty(), out, 0);
     }
 
-    /// Argument-dependent lookup of `name` for a call with `args`
+    /// Argument-dependent lookup of `name` (an identifier or an
+    /// `operator@`, [over.match.oper]/3.2) for a call with `args`
     /// ([basic.lookup.argdep]/4): the functions and function templates
     /// declared in the associated namespaces (using-directives ignored),
     /// including hidden friends of the associated classes, that `out`
     /// does not already hold (compared by first declaration). Appends
     /// `(decl, found)` pairs to `out`.
-    pub(crate) fn adl_lookup(
-        &self,
-        name: Symbol,
-        args: &[ExprId],
-        out: &mut Vec<(DeclId, DeclId)>,
-    ) {
-        self.adl_lookup_dn(DeclName::ident(name), args, out);
-    }
-
-    /// [`Sema::adl_lookup`] of any declaration name (an `operator@`,
-    /// [over.match.oper]/3.2).
     pub(crate) fn adl_lookup_dn(
         &self,
         name: DeclName,

@@ -25,7 +25,6 @@ mod names;
 use std::fmt::Write as _;
 use std::io;
 
-use kiln_source::symbol::Symbol;
 use kiln_source::{FileId, Loc, SourceManager};
 
 pub use names::AstNames;
@@ -544,6 +543,7 @@ impl<'a, W: io::Write> Dumper<'a, W> {
             | ExprKind::CXXNoexceptExpr
             | ExprKind::ExpressionTraitExpr
             | ExprKind::CXXThrowExpr
+            | ExprKind::CXXPseudoDestructorExpr
             | ExprKind::CompoundLiteralExpr => push(n.a()),
             ExprKind::SubstNonTypeTemplateParmExpr => {
                 // The parameter prints first (clang), then the replacement.
@@ -1877,11 +1877,15 @@ impl<'a, W: io::Write> Dumper<'a, W> {
             }
             ExprKind::CXXDependentScopeMemberExpr => {
                 self.line.push_str(if n.aux() & 1 != 0 { " ->" } else { " ." });
-                self.line.push_str(ast.symbols().as_str(Symbol::from_index(n.b())));
+                let mut t = String::new();
+                AstNames::new(ast).write_decl_name_value(ast.dependent_member_name(e), &mut t);
+                self.line.push_str(&t);
             }
             ExprKind::UnresolvedLookupExpr => {
                 self.line.push_str(if n.aux() != 0 { " (ADL) = '" } else { " (no ADL) = '" });
-                self.line.push_str(ast.symbols().as_str(Symbol::from_index(n.a())));
+                let mut t = String::new();
+                AstNames::new(ast).write_decl_name_value(ast.unresolved_name(e), &mut t);
+                self.line.push_str(&t);
                 self.line.push('\'');
                 if ast.unresolved_decls(e).is_empty() {
                     self.line.push_str(" empty");

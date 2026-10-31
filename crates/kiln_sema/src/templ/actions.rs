@@ -272,7 +272,7 @@ impl Sema<'_, '_> {
         let n = *self.ast.exprs.get(e);
         let nns = self.ast.templates.expr_nns.get(e).copied();
         let targs = self.ast.templates.expr_targs.get(e).copied();
-        self.builder().unresolved_lookup(name, &decls, false, nns, targs, n.loc())
+        self.builder().unresolved_lookup(DeclName::ident(name), &decls, false, nns, targs, n.loc())
     }
 
     /// The template name of template (or template template parameter)
@@ -369,7 +369,7 @@ impl Sema<'_, '_> {
                     };
                     return Ok(TemplateIdRef::Value(self.build_decl_ref_extra(v, l, Some(extra))));
                 }
-                let n = self.decl_symbol(d);
+                let n = self.ast.decls.get(d).name();
                 let dep_name = self
                     .ast
                     .types
@@ -387,7 +387,7 @@ impl Sema<'_, '_> {
                 Ok(TemplateIdRef::Value(e))
             }
             DeclKind::FunctionTemplate => {
-                let n = self.decl_symbol(d);
+                let n = self.ast.decls.get(d).name();
                 let e = self.builder().unresolved_lookup(n, &[d], false, None, Some(list), l);
                 Ok(TemplateIdRef::Overload(e))
             }
@@ -416,10 +416,6 @@ impl Sema<'_, '_> {
             }
             _ => false,
         }
-    }
-
-    fn decl_symbol(&self, d: DeclId) -> Symbol {
-        self.ast.decls.get(d).name().as_ident().unwrap_or(Symbol::from_index(0))
     }
 
     /// `[typename] nns::name` / `nns::[template] name<args>` with a
@@ -862,6 +858,7 @@ impl Sema<'_, '_> {
             if self.kind_of(d) == DeclKind::Function && !qualified {
                 let name = self.ast.decls.get(d).name().as_ident();
                 if let Some(name) = name {
+                    let name = DeclName::ident(name);
                     f = self.builder().unresolved_lookup(name, &[d], true, None, None, n.loc());
                 }
             }
@@ -877,7 +874,15 @@ impl Sema<'_, '_> {
     /// ([basic.lookup.argdep]). The call diagnoses an undeclared
     /// identifier when ADL finds nothing.
     pub fn act_on_undeclared_call_name(&mut self, name: Symbol, loc: Loc) -> ExprId {
-        if let Some(b) = self.lazily_create_builtin(name, loc) {
+        self.act_on_undeclared_call_name_dn(DeclName::ident(name), loc)
+    }
+
+    /// [`Sema::act_on_undeclared_call_name`] for any unqualified-id
+    /// (`operator==(a, b)` found only by ADL; WP-121).
+    pub fn act_on_undeclared_call_name_dn(&mut self, name: DeclName, loc: Loc) -> ExprId {
+        if let Some(sym) = name.as_ident()
+            && let Some(b) = self.lazily_create_builtin(sym, loc)
+        {
             return self.build_decl_ref(b, loc);
         }
         self.builder().unresolved_lookup(name, &[], true, None, None, loc)
@@ -890,7 +895,7 @@ impl Sema<'_, '_> {
     pub fn try_dependent_member(
         &mut self,
         base: ExprId,
-        name: Symbol,
+        name: DeclName,
         targs: Option<ArgListId>,
         template_kw: bool,
         loc: Loc,
@@ -909,7 +914,7 @@ impl Sema<'_, '_> {
                 Some(bt)
             };
             if let Some(rec) = obj.and_then(|o| self.ast.types.as_record(o))
-                && self.lookup_in_class(rec, name, LookupKind::Ordinary).decls.len() == 1
+                && self.lookup_in_class_dn(rec, name, LookupKind::Ordinary).decls.len() == 1
             {
                 return None;
             }

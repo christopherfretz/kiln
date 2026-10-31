@@ -143,6 +143,7 @@ no category).
 | `CXXBoolLiteralExpr`, `CXXNullPtrLiteralExpr` | `... 'bool' true`, `... 'std::nullptr_t'` |
 | `DeclRefExpr` | `DeclRefExpr 'type' [lvalue] Kind 'name' 'type' [(UsingShadow 'name')] [non_odr_use_constant\|non_odr_use_unevaluated\|non_odr_use_discarded]` (`(UsingShadow 'name')`: the name was found through a using-declaration, clang's `FoundDecl`) |
 | `MemberExpr` | `MemberExpr 'type' [lvalue [bitfield]] .name\|->name [non_odr_use_unevaluated]` (`non_odr_use_unevaluated`: the access is in an unevaluated operand, clang's `NOUR_Unevaluated`) |
+| `CXXPseudoDestructorExpr` | `CXXPseudoDestructorExpr '<bound member function type>'`; one child, the object expression (`p->~T` on a scalar or dependent object, WP-121). The destroyed type is not printed (clang prints none) |
 | `ImplicitCastExpr` | `ImplicitCastExpr 'type' [lvalue\|xvalue] <Kind> [part_of_explicit_cast]` |
 | `CStyleCastExpr` | `CStyleCastExpr 'type' [lvalue\|xvalue] <Kind>` |
 | `CXXFunctionalCastExpr` | `CXXFunctionalCastExpr 'type' [lvalue\|xvalue] functional cast to T <Kind>` (`T` is the type as written, the expression's sugared type) |

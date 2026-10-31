@@ -757,7 +757,7 @@ impl Sema<'_, '_> {
     pub fn act_on_template_member(
         &mut self,
         base: ExprId,
-        name: kiln_source::symbol::Symbol,
+        name: DeclName,
         targs: Option<ArgListId>,
         template_kw: bool,
         loc: Loc,
@@ -770,7 +770,7 @@ impl Sema<'_, '_> {
             }
             return e;
         }
-        let e = self.act_on_member(base, name, loc, op_loc, arrow);
+        let e = self.act_on_member_dn(base, name, loc, op_loc, arrow);
         if self.is_err_expr(e) {
             return e;
         }
@@ -780,7 +780,7 @@ impl Sema<'_, '_> {
             }
             let mut d = self
                 .diag(DiagId::sema_template_kw_refers_to_non_template, loc)
-                .arg(crate::decl::sym_str(self, name));
+                .arg(self.decl_name_str(name));
             if self.ast.exprs.get(e).kind() == kiln_ast::expr::ExprKind::MemberExpr {
                 let at = self.ast.decls.get(self.ast.exprs.decl(e)).loc();
                 d = d.with_note(self.diag(DiagId::note_declared_non_template, at));

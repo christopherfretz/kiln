@@ -566,11 +566,11 @@ impl Sema<'_, '_> {
     pub(crate) fn diagnose_member_ambiguity(
         &self,
         found: &Found,
-        name: Symbol,
+        name: DeclName,
         loc: kiln_source::Loc,
     ) -> bool {
         let Some(amb) = &found.ambiguity else { return false };
-        let text = self.ast.symbols().as_str(name).to_owned();
+        let text = self.decl_name_str(name);
         match amb {
             MemberAmbiguity::Types(decls) => {
                 let mut msg =

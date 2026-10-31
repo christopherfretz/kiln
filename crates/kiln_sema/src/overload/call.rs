@@ -22,7 +22,7 @@ impl Sema<'_, '_> {
     #[allow(clippy::too_many_arguments, reason = "the lookup result's parts")]
     pub(crate) fn build_overload_ref(
         &mut self,
-        name: kiln_source::symbol::Symbol,
+        name: kiln_ast::names::DeclName,
         decls: &[DeclId],
         found: &[DeclId],
         naming: Option<DeclId>,
@@ -60,12 +60,12 @@ impl Sema<'_, '_> {
             .map(|(i, &d)| (d, extra.as_ref().and_then(|x| x.found.get(i).copied()).unwrap_or(d)))
             .collect();
         if adl {
-            self.adl_lookup(name, args, &mut cands);
+            self.adl_lookup_dn(name, args, &mut cands);
         }
         cands.retain(|&(d, _)| !self.ast.decls.get(d).has(DeclFlags::INVALID));
         let at = self.begin_loc(callee);
         if cands.is_empty() {
-            let text = self.ast.symbols().as_str(name).to_owned();
+            let text = self.decl_name_str(name);
             let msg = self.diag(DiagId::sema_undeclared_var_use, n.loc()).arg(text);
             self.emit(msg);
             return None;
@@ -218,7 +218,7 @@ impl Sema<'_, '_> {
         &mut self,
         set: &OverloadCandidateSet,
         out: OvlOutcome,
-        name: kiln_source::symbol::Symbol,
+        name: kiln_ast::names::DeclName,
         at: Loc,
         loc: Loc,
         naming: Option<DeclId>,
@@ -239,12 +239,12 @@ impl Sema<'_, '_> {
         &mut self,
         set: &OverloadCandidateSet,
         out: OvlOutcome,
-        name: kiln_source::symbol::Symbol,
+        name: kiln_ast::names::DeclName,
         at: Loc,
         loc: Loc,
         member: bool,
     ) -> Option<u32> {
-        let text = self.ast.symbols().as_str(name).to_owned();
+        let text = self.decl_name_str(name);
         let undecided = set.uncertain
             || (set.skipped_templates
                 && !matches!(out, OvlOutcome::Success(b) | OvlOutcome::Deleted(b)

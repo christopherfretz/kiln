@@ -686,6 +686,14 @@ diag_ids! {
     sema_member_reference_struct_union = Error (1) "member reference base type {0} is not a structure or union";
     sema_member_reference_suggestion = Error (2) "member reference type {0} is {1:a|not a} pointer; did you mean to use '{1:->|.}'?";
     sema_member_reference_incomplete = Error (1) "member access into incomplete type {0}";
+    sema_dtor_type_mismatch = Error (2) "destructor type {0} in object destruction expression does not match the type {1} of the object being destroyed";
+    note_dtor_type_found = Note (1) "type {0} found by destructor name lookup";
+    sema_dtor_name_undeclared = Error (1) "undeclared identifier '{0}' in destructor name";
+    sema_pseudo_dtor_type_mismatch = Error (2) "the type of object expression ({0}) does not match the type being destroyed ({1}) in pseudo-destructor expression";
+    sema_pseudo_dtor_not_type = Error (2) "'{0}' does not refer to a type name in pseudo-destructor expression; expected the name of type {1}";
+    sema_pseudo_dtor_base_not_scalar = Error (1) "object expression of non-scalar type {0} cannot be used in a pseudo-destructor expression";
+    sema_pseudo_dtor_call_with_args = Error (0) "call to pseudo-destructor cannot have any arguments";
+    sema_pseudo_dtor_not_called = Error (0) "reference to pseudo-destructor must be called; did you mean to call it with no arguments?";
     sema_invalid_unary_operand = Error (1) "invalid argument type {0} to unary expression";
     sema_incompatible_cond_operands = Error (2) "incompatible operand types ({0} and {1})";
     sema_conditional_void_nonvoid = Error (2) "{0:left|right} operand to ? is void, but {0:right|left} operand is of type {1}";

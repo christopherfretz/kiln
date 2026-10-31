@@ -13,6 +13,7 @@ use kiln_ast::expr::{
     TraitKind, UnaryOp, ValueCategory,
 };
 use kiln_ast::ids::RawId;
+use kiln_ast::names::DeclName;
 use kiln_ast::strings::StringEncoding;
 use kiln_ast::types::{BuiltinType, TypeView};
 use kiln_ast::{Ast, AttrId, ConstValueId, DeclId, ExprId, QualType};
@@ -146,7 +147,7 @@ impl Sema<'_, '_> {
         self.ast.types.is_integral(t) || self.ast.types.as_enum(t).is_some()
     }
 
-    fn is_scalar(&self, t: QualType) -> bool {
+    pub(crate) fn is_scalar(&self, t: QualType) -> bool {
         self.ast.types.is_arithmetic(t)
             || self.ast.types.as_enum(t).is_some()
             || self.ast.types.is_pointer(t)
@@ -324,6 +325,7 @@ impl Sema<'_, '_> {
                 | ExprKind::ArraySubscriptExpr
                 | ExprKind::CallExpr
                 | ExprKind::CXXMemberCallExpr
+                | ExprKind::CXXPseudoDestructorExpr
                 | ExprKind::MemberExpr => true,
                 ExprKind::UnaryOperator => self.ast.exprs.unary_op(e).is_postfix(),
                 ExprKind::CXXRewrittenBinaryOperator => {
@@ -725,8 +727,14 @@ impl Sema<'_, '_> {
     /// directly is marked referenced only by [`Sema::act_on_call`] once
     /// the call is known not to be dependent ([temp.dep.candidate]).
     pub fn act_on_call_name(&mut self, name: Symbol, loc: Loc) -> ExprId {
+        self.act_on_call_name_dn(DeclName::ident(name), loc)
+    }
+
+    /// [`Sema::act_on_call_name`] for any unqualified-id (`operator()(x)`
+    /// inside a member function names `this->operator()`; WP-121).
+    pub fn act_on_call_name_dn(&mut self, name: DeclName, loc: Loc) -> ExprId {
         let saved = std::mem::replace(&mut self.deferring_call_ref, true);
-        let e = self.act_on_id_expression(name, loc, None);
+        let e = self.act_on_id_expression_dn(name, loc, None);
         self.deferring_call_ref = saved;
         e
     }
@@ -741,23 +749,36 @@ impl Sema<'_, '_> {
         loc: Loc,
         qualifier: Option<crate::using::Qualifier>,
     ) -> ExprId {
+        self.act_on_id_expression_dn(DeclName::ident(name), loc, qualifier)
+    }
+
+    /// [`Sema::act_on_id_expression`] for any unqualified-id: an
+    /// identifier, an operator-function-id or a conversion-function-id
+    /// ([expr.prim.id.unqual]/1; WP-121).
+    pub fn act_on_id_expression_dn(
+        &mut self,
+        name: DeclName,
+        loc: Loc,
+        qualifier: Option<crate::using::Qualifier>,
+    ) -> ExprId {
         let nns = qualifier.map(|q| q.nns);
         let begin = qualifier.map(|q| q.loc);
         let qualifier = qualifier.map(|q| q.ctx);
         let found = match qualifier {
-            Some(q) => self.lookup_qualified(q, name, LookupKind::Ordinary),
-            None => self.lookup_name(name, LookupKind::Ordinary),
+            Some(q) => self.lookup_qualified_dn(q, name, LookupKind::Ordinary),
+            None => self.lookup_name_dn(name, LookupKind::Ordinary),
         };
         if self.diagnose_member_ambiguity(&found, name, loc) {
             return self.recover_err(&[], loc);
         }
         let Some(&d) = found.decls.first() else {
             if qualifier.is_none()
-                && let Some(b) = self.lazily_create_builtin(name, loc)
+                && let Some(sym) = name.as_ident()
+                && let Some(b) = self.lazily_create_builtin(sym, loc)
             {
                 return self.build_decl_ref(b, loc);
             }
-            let text = self.ast.symbols().as_str(name).to_owned();
+            let text = self.decl_name_str(name);
             let msg = match qualifier {
                 Some(q) => {
                     self.diag(DiagId::sema_no_member, loc).arg(text).arg(self.qualifier_desc(q))
@@ -815,7 +836,7 @@ impl Sema<'_, '_> {
             d = valid[0];
         } else if found.decls.len() > 1 {
             // Distinct entities found via using-directives ([namespace.udir]/6).
-            let text = self.ast.symbols().as_str(name).to_owned();
+            let text = self.decl_name_str(name);
             let mut msg = self.diag(DiagId::sema_ambiguous_reference, loc).arg(text);
             for &c in &found.decls {
                 let n = self
@@ -888,7 +909,7 @@ impl Sema<'_, '_> {
     #[inline(never)]
     fn overload_name_ref(
         &mut self,
-        name: Symbol,
+        name: DeclName,
         found: &crate::lookup::Found,
         valid: &[DeclId],
         unqualified: bool,
@@ -922,7 +943,7 @@ impl Sema<'_, '_> {
     /// to non-static member function without an object argument".
     fn implicit_member_overload(
         &mut self,
-        name: Symbol,
+        name: DeclName,
         found: &crate::lookup::Found,
         valid: &[DeclId],
         nns: Option<kiln_ast::NnsId>,
@@ -2520,6 +2541,25 @@ impl Sema<'_, '_> {
                 || args.iter().any(|&a| self.expr_is_type_dependent(a));
             self.act_on_deleted_callee(callee, dependent, invalid);
         }
+        // [expr.call]/5: a call of a pseudo-destructor has type `void`,
+        // dependent or not (clang's `ActOnCallExpr`).
+        if self.ast.exprs.get(self.ignore_parens(callee)).kind()
+            == ExprKind::CXXPseudoDestructorExpr
+        {
+            if !args.is_empty() {
+                let d = self.diag(DiagId::sema_pseudo_dtor_call_with_args, self.begin_loc(callee));
+                self.emit(d);
+            }
+            return self.builder().call(
+                callee,
+                &[],
+                QualType::VOID,
+                ValueCategory::PRValue,
+                loc,
+                rparen,
+                ExprFlags::NONE,
+            );
+        }
         let mut kids = vec![callee];
         kids.extend_from_slice(args);
         // Braced-init-list arguments (placeholders until the parameter
@@ -2909,6 +2949,20 @@ impl Sema<'_, '_> {
         &mut self,
         base: ExprId,
         name: Symbol,
+        loc: Loc,
+        op_loc: Loc,
+        arrow: bool,
+    ) -> ExprId {
+        self.act_on_member_dn(base, DeclName::ident(name), loc, op_loc, arrow)
+    }
+
+    /// [`Sema::act_on_member`] naming any unqualified-id: an identifier,
+    /// `operator@` or `operator T` (WP-121; destructor names go through
+    /// [`Sema::act_on_member_destructor`]).
+    pub fn act_on_member_dn(
+        &mut self,
+        base: ExprId,
+        name: DeclName,
         loc: Loc,
         op_loc: Loc,
         arrow: bool,

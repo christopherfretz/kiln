@@ -7,6 +7,7 @@
 use kiln_ast::decl::DeclKind;
 use kiln_ast::expr::{CastKind, CharKind, ExprDeps, ExprFlags, ExprKind, Radix, ValueCategory};
 use kiln_ast::ids::RawId;
+use kiln_ast::names::{DeclName, DeclNameView};
 use kiln_ast::types::{ArgView, BuiltinType, Nns};
 use kiln_ast::{DeclId, ExprId, QualType};
 use kiln_source::Loc;
@@ -196,9 +197,8 @@ impl Substituter<'_, '_, '_> {
                     }
                 }
                 let base = self.member_base(base)?;
-                let Some(name) = self.sema.ast.decls.get(m).name().as_ident() else {
-                    return self.unimplemented("member access to a special member", loc);
-                };
+                let name = self.sema.ast.decls.get(m).name();
+                let name = self.member_name(name, loc)?;
                 // A member template-id `x.f<args>` (§6.4).
                 let targs = match self.sema.ovl.members.get(&e).and_then(|m| m.targs) {
                     Some(l) => Some(self.args(l, loc)?),
@@ -207,11 +207,19 @@ impl Substituter<'_, '_, '_> {
                 let op = self.sema.ast.templates.member_op_loc.get(e).copied().unwrap_or(loc);
                 Ok(self.sema.act_on_template_member(base, name, targs, false, loc, op, arrow))
             }
+            ExprKind::CXXPseudoDestructorExpr => {
+                let (base, arrow, destroyed) = ex(self).pseudo_destructor(e);
+                let base = self.member_base(base)?;
+                let destroyed = self.ty(destroyed, loc)?;
+                let op = self.sema.ast.templates.member_op_loc.get(e).copied().unwrap_or(loc);
+                Ok(self.sema.rebuild_member_destructor(base, destroyed, loc, op, arrow))
+            }
             ExprKind::CXXDependentScopeMemberExpr => {
                 let Some(base) = ExprId::from_raw(n.a()) else {
                     return self.unimplemented("implicit dependent member access", loc);
                 };
-                let name = kiln_source::symbol::Symbol::from_index(n.b());
+                let name = self.sema.ast.dependent_member_name(e);
+                let name = self.member_name(name, loc)?;
                 let arrow = n.aux() & 1 != 0;
                 let base = self.member_base(base)?;
                 let targs = match self.sema.ast.templates.expr_targs.get(e).copied() {
@@ -420,6 +428,23 @@ impl Substituter<'_, '_, '_> {
 
     /// The object expression of a member access: an implicit `this` is
     /// rebuilt implicit.
+    /// The member name `name` of a member access, substituted: the target
+    /// type of a conversion-function-id is rebuilt (`t.operator T()`,
+    /// [temp.dep.type]); identifiers and operator names are kept.
+    fn member_name(&mut self, name: DeclName, loc: Loc) -> SubstResult<DeclName> {
+        match self.sema.ast.names.view(name) {
+            DeclNameView::Conversion(t) => {
+                let t = self.ty(t, loc)?;
+                let t = self.sema.ast.types.canonical(t);
+                Ok(self.sema.ast.names.conversion(t))
+            }
+            DeclNameView::Destructor(_) | DeclNameView::Constructor(_) => {
+                self.unimplemented("member access to a special member", loc)
+            }
+            _ => Ok(name),
+        }
+    }
+
     fn member_base(&mut self, base: ExprId) -> SubstResult<ExprId> {
         let b = *self.sema.ast.exprs.get(base);
         if b.kind() == ExprKind::CXXThisExpr && self.needs_rebuild(base) {
@@ -510,9 +535,9 @@ impl Substituter<'_, '_, '_> {
             ));
         }
         if decls.is_empty() {
-            return Ok(self.sema.act_on_undeclared_call_name(name, n.loc()));
+            return Ok(self.sema.act_on_undeclared_call_name_dn(name, n.loc()));
         }
-        let r = self.sema.act_on_call_name(name, n.loc());
+        let r = self.sema.act_on_call_name_dn(name, n.loc());
         if let Some(t) = targs {
             if self.sema.ast.exprs.get(r).kind() == ExprKind::UnresolvedLookupExpr {
                 let _ = self.sema.ast.templates.expr_targs.insert(r, t);
