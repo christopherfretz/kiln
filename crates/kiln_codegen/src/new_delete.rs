@@ -238,8 +238,15 @@ impl Cg<'_> {
         let ret = self.m.attr_set(&ra);
         let opts = CallOpts { attrs: AttrList { func, ret, params }, ..CallOpts::default() };
         let rty = if af.is_new { LTy::PTR } else { LTy::VOID };
-        let r =
-            self.emit_call_op(sig.fn_ty, V::C(Value::func(f)), ir_args, opts, rty, Some(f), sig.nothrow);
+        let r = self.emit_call_op(
+            sig.fn_ty,
+            V::C(Value::func(f)),
+            ir_args,
+            opts,
+            rty,
+            Some(f),
+            sig.nothrow,
+        );
         Ok(r)
     }
 
@@ -321,7 +328,7 @@ impl Cg<'_> {
 
     /// The preferred alignment of `ty` (`DataLayout::getPrefTypeAlign`):
     /// `AArch64` prefers 32-bit alignment for `i8`/`i16`.
-    fn pref_align(&self, ty: LTy) -> u64 {
+    pub(crate) fn pref_align(&self, ty: LTy) -> u64 {
         let (_, a) = self.ir_layout(ty);
         if !self.is_x86() && self.m.types.int_width(ty).is_some_and(|w| (2..=16).contains(&w)) {
             return a.max(4);

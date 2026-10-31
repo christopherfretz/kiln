@@ -4,13 +4,20 @@
 //! choice of `EmitCall`).
 
 use kiln_llvm::{
-    Attr, AttrKind, AttrList, CallOpts, ComdatKind, FuncId, IrBuilder, Linkage, TypeId as LTy,
-    UwTableKind, Value, Visibility,
+    Attr, AttrKind, AttrList, CallOpts, ComdatKind, FuncId, IrBuilder, Linkage, MemOpts,
+    TypeId as LTy, UwTableKind, Value, Visibility,
 };
 
-use crate::cleanup::{Depth, Kind};
+use kiln_abi::mangle::Structor;
+use kiln_ast::ExprId;
+
+use crate::cleanup::{Cleanup, Depth, Kind};
 use crate::fir::{Blk, Fir, Op, V};
-use crate::module::Cg;
+use crate::func::Addr;
+use crate::module::{Cg, R, err};
+
+/// `ASTContext::getExnObjectAlignment` on the Itanium targets.
+const EXN_ALIGN: u64 = 16;
 
 impl Cg<'_> {
     /// `getExceptionSlot`.
@@ -59,12 +66,11 @@ impl Cg<'_> {
         if self.m.func(f).personality.is_some() {
             return;
         }
-        let p = match self.m.get_function("__gxx_personality_v0") {
-            Some(p) => p,
-            None => {
-                let ty = self.m.types.function(LTy::I32, &[], true);
-                self.m.add_function("__gxx_personality_v0", ty).expect("a function type")
-            }
+        let p = if let Some(p) = self.m.get_function("__gxx_personality_v0") {
+            p
+        } else {
+            let ty = self.m.types.function(LTy::I32, &[], true);
+            self.m.add_function("__gxx_personality_v0", ty).expect("a function type")
         };
         self.m.func_mut(f).personality = Some(Value::func(p));
     }
@@ -132,10 +138,7 @@ impl Cg<'_> {
             clauses.push(V::C(self.m.const_null(LTy::PTR)));
         }
         let lp_ty = self.lpad_ty();
-        let lp = self.f.fir.push(
-            Op::LandingPad { cleanup: !catch_all && cleanup, clauses },
-            lp_ty,
-        );
+        let lp = self.f.fir.push(Op::LandingPad { cleanup: !catch_all && cleanup, clauses }, lp_ty);
         let exn = self.f.fir.push(Op::ExtractValue { agg: lp, idx: 0 }, LTy::PTR);
         let es = self.exn_slot();
         self.store(exn, es, 8, false);
@@ -279,7 +282,10 @@ impl Cg<'_> {
         let mut b = IrBuilder::new(&mut self.m, f);
         let entry = b.append_block("");
         b.position_at_end(entry);
-        let opts = |func| CallOpts { attrs: AttrList { func, ..AttrList::default() }, ..CallOpts::default() };
+        let opts = |func| CallOpts {
+            attrs: AttrList { func, ..AttrList::default() },
+            ..CallOpts::default()
+        };
         let r = b
             .call_ex(begin_ty, Value::func(begin), &[Value::arg(0)], &opts(nu))
             .and_then(|_| b.call_ex(term_ty, Value::func(term), &[], &opts(nr)))
@@ -390,14 +396,128 @@ impl Cg<'_> {
                 LTy::VOID,
             )
         } else {
-            let r = self
-                .f
-                .fir
-                .push(Op::Call { fn_ty, callee, args, opts: Box::new(opts) }, LTy::VOID);
+            let r =
+                self.f.fir.push(Op::Call { fn_ty, callee, args, opts: Box::new(opts) }, LTy::VOID);
             self.f.fir.push(Op::Unreachable, LTy::VOID);
             r
         };
         self.f.calls.push((Fir::last_inst(r), Some(f), false));
+    }
+
+    /// `EmitCXXThrowExpr`: a throw-expression (`ItaniumCXXABI::emitThrow`
+    /// / `emitRethrow`). With `keep_ip` the insertion point moves to a
+    /// fresh `throw.cont` block; otherwise it stays in the terminated one.
+    pub(crate) fn emit_throw(&mut self, e: ExprId, keep_ip: bool) -> R<()> {
+        let ast = self.ast;
+        if let Some(sub) = ast.exprs.throw_operand(e) {
+            let q = ast.exprs.get(sub).ty();
+            let (size, _) = self.size_align(q);
+            let alloc = self.rt_fn("__cxa_allocate_exception", LTy::PTR, &[LTy::I64], &[]);
+            let n = self.i64c(i128::from(size));
+            let exn = self.nounwind_runtime_call(alloc, LTy::PTR, vec![n]);
+            self.emit_any_expr_to_exn(sub, exn)?;
+            let ti = V::C(self.rtti(q)?);
+            let rd = ast.types.as_record(q).and_then(|r| self.class_def(r));
+            let dtor = match rd {
+                Some(def) if self.has_nontrivial_dtor(def) => {
+                    let Some(d) = ast.destructor(def) else {
+                        return err(Some(ast.decls.get(def).loc()), "destructor not declared");
+                    };
+                    self.structor_ref(d, Structor::Complete)?.0
+                }
+                _ => V::C(self.m.const_null(LTy::PTR)),
+            };
+            let throw = self.rt_fn("__cxa_throw", LTy::VOID, &[LTy::PTR, LTy::PTR, LTy::PTR], &[]);
+            self.noreturn_runtime_call_or_invoke(throw, vec![exn, ti, dtor]);
+        } else {
+            let f = self.rt_fn("__cxa_rethrow", LTy::VOID, &[], &[]);
+            self.noreturn_runtime_call_or_invoke(f, Vec::new());
+        }
+        if keep_ip {
+            let b = self.f.fir.create_block();
+            self.emit_block(b, false);
+        }
+        Ok(())
+    }
+
+    /// `EmitAnyExprToExn`: initializes the exception object at `exn`
+    /// from `e` under a `FreeException` EH cleanup, deactivated once the
+    /// object is complete.
+    fn emit_any_expr_to_exn(&mut self, e: ExprId, exn: V) -> R<()> {
+        self.push_full_expr_cleanup(Cleanup::FreeException { exn, saved: false }, false, true);
+        let c = self.f.cl.depth();
+
+        // `EmitAnyExprToMem(e, exn, IsInit)` at the exception object's
+        // alignment (`getExnObjectAlignment`).
+        let ast = self.ast;
+        let q = ast.exprs.get(e).ty();
+        let ty = self.mty(q);
+        let addr = Addr { v: exn, ty, align: EXN_ALIGN };
+        if self.is_aggregate(q) {
+            self.emit_agg_into(e, addr, true)?;
+        } else {
+            let v = self.emit_scalar(e)?;
+            self.store_scalar(v, addr, q);
+        }
+
+        let dominating = Fir::last_inst(exn);
+        self.deactivate_cleanup_block(c, dominating);
+        Ok(())
+    }
+
+    /// `DeactivateCleanupBlock(C, dominatingIP)`.
+    pub(crate) fn deactivate_cleanup_block(&mut self, c: Depth, dominating: u32) {
+        if c == self.f.cl.depth() && self.f.cl.cur_scope < c {
+            self.pop_cleanup_block_ex(false, true);
+            return;
+        }
+        // `SetupCleanupBlockActivation(ForDeactivation)`.
+        let (normal, eh) = {
+            let s = &self.f.cl.stack[c - 1];
+            (s.normal, s.eh)
+        };
+        let used_eh = eh && self.used_as_eh_cleanup(c);
+        if normal || used_eh {
+            let s = &mut self.f.cl.stack[c - 1];
+            s.test_flag |= normal;
+            s.test_flag_eh |= used_eh;
+            let flag = if let Some(f) = self.f.cl.stack[c - 1].active_flag {
+                f.v
+            } else {
+                let v = self.f.fir.alloca(LTy::I1, 1);
+                self.f.cl.stack[c - 1].active_flag = Some(Addr { v, ty: LTy::I1, align: 1 });
+                let t = V::C(self.m.const_bool(true));
+                let st = Op::Store { val: t, ptr: v, mem: MemOpts::aligned(1) };
+                if let Some(&outer) = self.f.conds.first() {
+                    self.f.fir.insert_before_last(outer, st, LTy::VOID);
+                } else {
+                    self.f.fir.insert_before(dominating, st, LTy::VOID);
+                }
+                v
+            };
+            let f0 = V::C(self.m.const_bool(false));
+            self.store(f0, flag, 1, false);
+        }
+        self.f.cl.stack[c - 1].active = false;
+    }
+
+    /// `IsUsedAsEHCleanup`: the cleanup at `c`, or an EH scope inside it,
+    /// has a used EH dispatch block.
+    fn used_as_eh_cleanup(&self, c: Depth) -> bool {
+        let used = |d: Depth| {
+            self.f.cl.stack[d - 1].cached_eh.is_some_and(|b| self.f.fir.block_uses(b) > 0)
+        };
+        if used(c) {
+            return true;
+        }
+        let mut i = self.f.cl.innermost_eh();
+        while i != c && i != 0 {
+            if used(i) {
+                return true;
+            }
+            i = self.f.cl.enclosing_eh(i);
+        }
+        false
     }
 
     /// `FinishFunction`'s `EmitIfUsed` of the EH blocks (before the

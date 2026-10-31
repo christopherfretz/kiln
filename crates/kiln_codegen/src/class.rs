@@ -984,7 +984,7 @@ impl Cg<'_> {
             Cleanup::Dtor { addr: a.v, record: rd, base: false }
         };
         match ast.exprs.temporary_storage(m) {
-            StorageDuration::FullExpression => self.push_cleanup(c),
+            StorageDuration::FullExpression => self.push_full_expr_cleanup(c, true, true),
             StorageDuration::Automatic => self.f.cl.lifetime_extended.push((c, None)),
             StorageDuration::Static | StorageDuration::Thread => {}
         }

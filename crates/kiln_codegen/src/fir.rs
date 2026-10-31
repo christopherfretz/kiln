@@ -8,7 +8,7 @@
 //! emits — and lowered into the module once it is final ([`Fir::lower`]).
 
 use kiln_llvm::{
-    BinOp, BlockId, CallOpts, Clause, CastOp, FastMath, Flags, FloatPredicate, FuncId, GepFlags,
+    BinOp, BlockId, CallOpts, CastOp, Clause, FastMath, Flags, FloatPredicate, FuncId, GepFlags,
     IntPredicate, IrBuilder, IrResult, MdKindId, MemOpts, MetadataId, Module, TypeId, Value,
 };
 
@@ -34,31 +34,110 @@ pub(crate) enum V {
 /// One instruction.
 #[derive(Clone, Debug)]
 pub(crate) enum Op {
-    Alloca { ty: TypeId, align: u64 },
-    Load { ty: TypeId, ptr: V, mem: MemOpts },
-    Store { val: V, ptr: V, mem: MemOpts },
-    Bin { op: BinOp, flags: Flags, l: V, r: V },
-    FNeg { v: V },
-    ICmp { p: IntPredicate, l: V, r: V },
-    FCmp { p: FloatPredicate, l: V, r: V },
-    Cast { op: CastOp, flags: Flags, v: V, to: TypeId },
-    Gep { src: TypeId, base: V, idx: Vec<V>, flags: GepFlags },
-    Phi { ty: TypeId, inc: Vec<(V, Blk)> },
-    Select { c: V, t: V, f: V },
-    Call { fn_ty: TypeId, callee: V, args: Vec<V>, opts: Box<CallOpts> },
+    Alloca {
+        ty: TypeId,
+        align: u64,
+    },
+    Load {
+        ty: TypeId,
+        ptr: V,
+        mem: MemOpts,
+    },
+    Store {
+        val: V,
+        ptr: V,
+        mem: MemOpts,
+    },
+    Bin {
+        op: BinOp,
+        flags: Flags,
+        l: V,
+        r: V,
+    },
+    FNeg {
+        v: V,
+    },
+    ICmp {
+        p: IntPredicate,
+        l: V,
+        r: V,
+    },
+    FCmp {
+        p: FloatPredicate,
+        l: V,
+        r: V,
+    },
+    Cast {
+        op: CastOp,
+        flags: Flags,
+        v: V,
+        to: TypeId,
+    },
+    Gep {
+        src: TypeId,
+        base: V,
+        idx: Vec<V>,
+        flags: GepFlags,
+    },
+    Phi {
+        ty: TypeId,
+        inc: Vec<(V, Blk)>,
+    },
+    Select {
+        c: V,
+        t: V,
+        f: V,
+    },
+    Call {
+        fn_ty: TypeId,
+        callee: V,
+        args: Vec<V>,
+        opts: Box<CallOpts>,
+    },
     /// `invoke ... to label %normal unwind label %unwind` (spec/codegen.md §7b).
-    Invoke { fn_ty: TypeId, callee: V, args: Vec<V>, opts: Box<CallOpts>, normal: Blk, unwind: Blk },
+    Invoke {
+        fn_ty: TypeId,
+        callee: V,
+        args: Vec<V>,
+        opts: Box<CallOpts>,
+        normal: Blk,
+        unwind: Blk,
+    },
     /// `landingpad { ptr, i32 } [cleanup] catch ptr <clause>...`.
-    LandingPad { cleanup: bool, clauses: Vec<V> },
+    LandingPad {
+        cleanup: bool,
+        clauses: Vec<V>,
+    },
     /// `resume { ptr, i32 } %v`.
-    Resume { v: V },
-    Br { dest: Blk },
-    CondBr { c: V, t: Blk, f: Blk },
-    Switch { c: V, default: Blk, cases: Vec<(V, Blk)> },
-    Ret { v: Option<V> },
+    Resume {
+        v: V,
+    },
+    Br {
+        dest: Blk,
+    },
+    CondBr {
+        c: V,
+        t: Blk,
+        f: Blk,
+    },
+    Switch {
+        c: V,
+        default: Blk,
+        cases: Vec<(V, Blk)>,
+    },
+    Ret {
+        v: Option<V>,
+    },
     Unreachable,
-    ExtractValue { agg: V, idx: u32 },
-    InsertValue { agg: V, val: V, idx: u32 },
+    ExtractValue {
+        agg: V,
+        idx: u32,
+    },
+    InsertValue {
+        agg: V,
+        val: V,
+        idx: u32,
+    },
 }
 
 impl Op {
@@ -596,7 +675,8 @@ impl Fir {
                         b.invoke_ex(*fn_ty, val(*callee), &args, blk(*normal), blk(*unwind), opts)?
                     }
                     Op::LandingPad { cleanup, clauses } => {
-                        let cl: Vec<Clause> = clauses.iter().map(|&x| Clause::Catch(val(x))).collect();
+                        let cl: Vec<Clause> =
+                            clauses.iter().map(|&x| Clause::Catch(val(x))).collect();
                         b.landingpad(inst.ty, *cleanup, &cl)?
                     }
                     Op::Resume { v } => b.resume(val(*v))?,

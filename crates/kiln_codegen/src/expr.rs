@@ -145,6 +145,10 @@ impl Cg<'_> {
                 None => return err(self.loc_of(e), "default argument not yet parsed"),
             },
             ExprKind::SourceLocExpr => V::C(self.source_loc_value(e)?),
+            ExprKind::CXXThrowExpr => {
+                self.emit_throw(e, true)?;
+                return Ok(None);
+            }
             ExprKind::ExprWithCleanups => {
                 let sc = self.begin_scope(false);
                 let r = self.emit_scalar_opt(self.sub(e));
@@ -1010,6 +1014,8 @@ impl Cg<'_> {
                 self.emit_block(rb, false);
                 self.cond_eval(start, |cg| cg.branch_on_bool(b, t, f))
             }
+            // `br(c ? throw x : y, t, f)` folds to `br(c, throw x, br(y, t, f))`.
+            ExprKind::CXXThrowExpr => self.emit_throw(e, false),
             _ => {
                 let v = self.eval_bool(e)?;
                 self.cond_br(v, t, f);
@@ -1342,7 +1348,17 @@ impl Cg<'_> {
     fn cond_lvalue(&mut self, e: ExprId, c: ExprId, a: ExprId, b: ExprId) -> R<LV> {
         let ast = self.ast;
         if let Some(x) = self.fold_bool(c) {
-            return self.emit_lvalue(if x { a } else { b });
+            let (live, dead) = if x { (a, b) } else { (b, a) };
+            // A live throw-expression: emitted, with an undefined lvalue
+            // (`HandleConditionalOperatorLValueSimpleCase`).
+            if let Some(t) = self.throw_of(live) {
+                self.emit_throw(t, true)?;
+                let dq = ast.exprs.get(dead).ty();
+                let ty = self.mty(dq);
+                let v = V::C(self.m.const_undef(LTy::PTR));
+                return Ok(LV { addr: Addr { v, ty, align: 1 }, q: dq, bf: None });
+            }
+            return self.emit_lvalue(live);
         }
         let lb = self.f.fir.create_block();
         let rb = self.f.fir.create_block();
@@ -1350,19 +1366,46 @@ impl Cg<'_> {
         let start = self.f.fir.cur();
         self.branch_on_bool(c, lb, rb)?;
         self.emit_block(lb, false);
-        let x = self.cond_eval(start, |cg| cg.emit_lvalue(a))?;
+        let x = self.cond_eval(start, |cg| cg.lvalue_or_throw(a))?;
         let lb = self.f.fir.cur().expect("insert point");
-        self.br(cont);
+        if x.is_some() {
+            self.br(cont);
+        }
         self.emit_block(rb, false);
-        let y = self.cond_eval(start, |cg| cg.emit_lvalue(b))?;
+        let y = self.cond_eval(start, |cg| cg.lvalue_or_throw(b))?;
         let rb = self.f.fir.cur().expect("insert point");
         self.emit_block(cont, false);
+        let (x, y) = match (x, y) {
+            (Some(x), Some(y)) => (x, y),
+            (Some(lv), None) | (None, Some(lv)) => return Ok(lv),
+            (None, None) => {
+                return err(self.loc_of(e), "both operands of a glvalue conditional throw");
+            }
+        };
         let p = self
             .f
             .fir
             .push(Op::Phi { ty: LTy::PTR, inc: vec![(x.addr.v, lb), (y.addr.v, rb)] }, LTy::PTR);
         let align = x.addr.align.min(y.addr.align);
         Ok(LV { addr: Addr { v: p, ty: x.addr.ty, align }, q: ast.exprs.get(e).ty(), bf: None })
+    }
+
+    /// `e` through parentheses, if it is a throw-expression.
+    pub(crate) fn throw_of(&self, mut e: ExprId) -> Option<ExprId> {
+        let ast = self.ast;
+        while ast.exprs.get(e).kind() == ExprKind::ParenExpr {
+            e = ast.exprs.operand(e);
+        }
+        (ast.exprs.get(e).kind() == ExprKind::CXXThrowExpr).then_some(e)
+    }
+
+    /// clang `EmitLValueOrThrowExpression`.
+    fn lvalue_or_throw(&mut self, e: ExprId) -> R<Option<LV>> {
+        if let Some(t) = self.throw_of(e) {
+            self.emit_throw(t, false)?;
+            return Ok(None);
+        }
+        Ok(Some(self.emit_lvalue(e)?))
     }
 
     /// The byte offset of element `i` of the IR aggregate `t`.
@@ -1958,6 +2001,7 @@ impl Cg<'_> {
                 r
             }
             ExprKind::MaterializeTemporaryExpr => self.agg_visit(self.sub(e), dest, zeroed),
+            ExprKind::CXXThrowExpr => self.emit_throw(e, true),
             ExprKind::CXXConstructExpr | ExprKind::CXXTemporaryObjectExpr => {
                 self.emit_construct(e, dest, zeroed)
             }
@@ -1965,7 +2009,8 @@ impl Cg<'_> {
                 let destructed = std::mem::take(&mut self.f.dest_destructed);
                 self.agg_visit(self.sub(e), dest, zeroed)?;
                 if !destructed && let Some(rd) = self.destructed_class(q) {
-                    self.push_cleanup(Cleanup::Dtor { addr: dest.v, record: rd, base: false });
+                    let c = Cleanup::Dtor { addr: dest.v, record: rd, base: false };
+                    self.push_full_expr_cleanup(c, true, true);
                 }
                 Ok(())
             }

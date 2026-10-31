@@ -72,6 +72,7 @@ pub(crate) enum Kind {
 
 /// One scope (clang `EHCleanupScope`, `EHCatchScope`, `EHTerminateScope`).
 #[derive(Clone, Debug)]
+#[allow(clippy::struct_excessive_bools, reason = "clang's EHCleanupScope bit-fields")]
 pub(crate) struct Scope {
     pub kind: Kind,
     /// A cleanup run on normal exits.
@@ -271,6 +272,54 @@ impl Cg<'_> {
         let under_terminate = ie != 0 && matches!(self.f.cl.stack[ie - 1].kind, Kind::Terminate);
         let eh = eh && self.opts.exceptions && !under_terminate;
         self.push_scope(Kind::Cleanup(c), normal, eh);
+    }
+
+    /// `pushFullExprCleanup`: outside a conditional branch a plain
+    /// cleanup; inside one, its values are saved if they do not dominate
+    /// the cleanup (`saveValueInCond`) and it runs only if its
+    /// `cleanup.cond` flag, cleared before the outermost conditional and
+    /// set here, says it was reached (`initFullExprCleanup`).
+    pub(crate) fn push_full_expr_cleanup(&mut self, c: Cleanup, normal: bool, eh: bool) {
+        let Some(&outer) = self.f.conds.first() else {
+            self.push_cleanup_kind(c, normal, eh);
+            return;
+        };
+        let entry = self.f.fir.entry();
+        let needs_saving =
+            |cg: &Self, v: V| matches!(v, V::I(i) if cg.f.fir.inst_block(i) != Some(entry));
+        let c = match c {
+            Cleanup::FreeException { exn, saved: false } if needs_saving(self, exn) => {
+                let al = self.pref_align(LTy::PTR);
+                let slot = self.f.fir.alloca(LTy::PTR, al);
+                self.store(exn, slot, al, false);
+                Cleanup::FreeException { exn: slot, saved: true }
+            }
+            Cleanup::Dtor { addr, .. } | Cleanup::ArrayDtor { addr: Addr { v: addr, .. }, .. }
+                if needs_saving(self, addr) =>
+            {
+                self.f.error.get_or_insert(crate::CodegenError {
+                    loc: None,
+                    msg: "a conditional temporary at a computed address is not supported yet"
+                        .into(),
+                });
+                c
+            }
+            c => c,
+        };
+        self.push_cleanup_kind(c, normal, eh);
+        let flag = self.f.fir.alloca(LTy::I1, 1);
+        let f0 = V::C(self.m.const_bool(false));
+        self.f.fir.insert_before_last(
+            outer,
+            Op::Store { val: f0, ptr: flag, mem: MemOpts::aligned(1) },
+            LTy::VOID,
+        );
+        let t1 = V::C(self.m.const_bool(true));
+        self.store(t1, flag, 1, false);
+        let s = self.f.cl.stack.last_mut().expect("cleanup scope");
+        s.active_flag = Some(Addr { v: flag, ty: LTy::I1, align: 1 });
+        s.test_flag = s.normal;
+        s.test_flag_eh = s.eh;
     }
 
     fn push_scope(&mut self, kind: Kind, normal: bool, eh: bool) {
@@ -558,8 +607,7 @@ impl Cg<'_> {
         let fallthrough_source = self.f.fir.cur();
         let has_fallthrough = fallthrough_source.is_some() && (is_active || has_existing_branches);
         let has_prebranched = fallthrough_source.is_some_and(|b| self.f.fir.is_terminated(b));
-        let requires_normal =
-            is_normal && (has_fixups || has_existing_branches || has_fallthrough);
+        let requires_normal = is_normal && (has_fixups || has_existing_branches || has_fallthrough);
         let cleanup = self.f.cl.stack[top - 1].cleanup().clone();
 
         if is_normal && has_prebranched && !requires_normal {
