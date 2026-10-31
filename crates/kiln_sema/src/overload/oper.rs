@@ -339,6 +339,10 @@ impl Sema<'_, '_> {
         // /3.1: member candidates of the first operand's class, then
         // the reversed and rewritten ones.
         self.add_member_opers(&mut set, op, &ops, Rewrite::None, loc);
+        // [over.call.object]/2: the surrogate call functions.
+        if form == OperForm::Call {
+            self.add_surrogates(&mut set, a0);
+        }
         if reversible && allows_reversed(op) {
             self.add_member_opers(&mut set, op, &ops, Rewrite::Reversed, loc);
         }
@@ -398,6 +402,12 @@ impl Sema<'_, '_> {
                         }
                         None => OperResult::Done(self.recover_err(args, loc)),
                     };
+                }
+                if set.cand(b).kind == CandidateKind::Surrogate {
+                    let c = set.cand(b);
+                    let (f, found) = (c.func(), c.found);
+                    self.end_set(set);
+                    return OperResult::Done(self.call_surrogate(a0, f, found, &args[1..], loc, end));
                 }
                 if reversible && !set.cand(b).rewrite.is_reversed() {
                     self.diagnose_reversed_ambiguity(&set, b, op, spelling, &types, loc);

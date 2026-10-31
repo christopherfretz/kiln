@@ -205,6 +205,8 @@ impl Sema<'_, '_> {
             if set.cand(c).kind == CandidateKind::Builtin {
                 out.extend(self.builtin_notes(set, c, ambiguities));
                 ambiguities = false;
+            } else if set.cand(c).kind == CandidateKind::Surrogate {
+                out.push(self.surrogate_note(set.cand(c).func()));
             } else {
                 out.push(self.ovl_note(set, c));
             }
@@ -276,12 +278,18 @@ impl Sema<'_, '_> {
                 // implicit object parameter counts as an argument).
                 let arity = |c: &Candidate| match c.failure {
                     CandidateFailure::TooManyArgs { max } => Some((usize::from(max), true)),
+                    CandidateFailure::TooFewArgs { min } if c.kind == CandidateKind::Surrogate => {
+                        Some((usize::from(min), false))
+                    }
                     CandidateFailure::TooFewArgs { .. } => {
                         let mut p = Vec::new();
                         let _ = self.fn_param_types(c.func(), &mut p);
                         Some((p.len(), false))
                     }
-                    _ if set.note_extra_args > 0 && c.decl.is_some() => {
+                    _ if set.note_extra_args > 0
+                        && c.decl.is_some()
+                        && c.kind != CandidateKind::Surrogate =>
+                    {
                         let mut p = Vec::new();
                         let variadic = self.fn_param_types(c.func(), &mut p);
                         if nargs > p.len() && !variadic {

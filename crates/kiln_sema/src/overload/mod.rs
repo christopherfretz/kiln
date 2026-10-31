@@ -17,6 +17,7 @@ pub(crate) mod ics;
 pub(crate) mod member;
 pub(crate) mod oper;
 pub(crate) mod redecl;
+pub(crate) mod surrogate;
 pub(crate) mod udc;
 
 use std::ops::Range;
@@ -76,6 +77,9 @@ pub(crate) enum CandidateKind {
     /// A built-in operator ([over.built]): `decl` is `None` and the
     /// parameter types are [`Candidate::builtin`].
     Builtin,
+    /// A surrogate call function ([over.call.object]/2): `decl` is the
+    /// conversion function to a pointer or reference to function.
+    Surrogate,
 }
 
 /// Why a candidate is not viable.
