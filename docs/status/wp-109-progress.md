@@ -54,6 +54,14 @@ Branch `wp/109-concepts-alias-followups`. Living file; deleted at merge.
   is silently unsatisfied. Divergence: clang drops the whole declaration
   ("use of undeclared identifier 'f'"); kiln keeps it and reports
   "no matching function". Test `temp.constr.atomic-non-bool-at-definition.cpp`.
-- TODO: ambiguous-atomic note.
+- `note_ambiguous_atomic_constraints` (+ new
+  `note_ambiguous_atomic_constraints_similar_expression`) after an
+  ambiguous call: `ambiguous_constraint_notes` in concepts/subsume.rs,
+  called from `with_ovl_notes` (overload/diag.rs). `exprs_equivalent`
+  (overload/redecl.rs) now compares `sizeof(T)`/type-trait operands by
+  canonical type, so such redeclarations are redefinitions like clang.
+  Tests `temp.constr.order-ambiguous-atomic-note.cpp`,
+  `temp.over.link-requires-clause-trait-equivalence.cpp`.
+- Item 4 DONE.
 
 ## Items 3, 5, 6, 7: pending

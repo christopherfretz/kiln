@@ -999,6 +999,7 @@ diag_ids! {
     note_checking_concept_here = Note (1) "while checking the satisfaction of concept '{0}' requested here";
     note_constraint_substitution_here = Note (0) "while substituting template arguments into constraint expression here";
     note_ambiguous_atomic_constraints = Note (0) "similar constraint expressions not considered equivalent; constraint expressions cannot be considered equivalent unless they originate from the same concept";
+    note_ambiguous_atomic_constraints_similar_expression = Note (0) "similar constraint expression here";
     // WP-074: builtin type traits, transforms and templates (spec/sema-templates.md §9)
     sema_type_trait_arity = Error (5) "type trait requires {0}{1:| or more} argument{2:|s}; have {3} argument{4:|s}";
     sema_incomplete_type_trait = Error (1) "incomplete type {0} used in type trait expression";

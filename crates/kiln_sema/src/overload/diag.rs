@@ -260,6 +260,17 @@ impl Sema<'_, '_> {
         for n in self.ovl_notes(set, ambiguous) {
             msg = msg.with_note(n);
         }
+        if ambiguous {
+            let cands: Vec<_> = set
+                .cands
+                .iter()
+                .filter(|c| c.decl.is_some())
+                .map(|c| (c.func(), c.template))
+                .collect();
+            for n in self.ambiguous_constraint_notes(&cands) {
+                msg = msg.with_note(n);
+            }
+        }
         msg
     }
 
