@@ -394,21 +394,20 @@ impl Sema<'_, '_> {
             // `auto&`, `auto*`, `decltype(auto)`, `const auto&`
             // ([temp.param]/6.3): deduced as for a variable
             // `T x = e;` ([dcl.type.auto.deduct]).
-            match self.deduce_auto(pty, &[Some(e)], super::auto::AutoInit::Expr) {
-                Ok(t) => pty = t,
-                Err(_) => {
-                    let d = self
-                        .diag(DiagId::sema_nttp_deduction_failed, at)
-                        .arg(self.decl_name(p))
-                        .arg(self.ty_arg(pty))
-                        .arg(self.ty_arg(ety))
-                        .note(
-                            DiagId::note_template_param_here,
-                            Span::empty(self.ast.decls.get(p).loc()),
-                        );
-                    self.emit(d);
-                    return Err(());
-                }
+            if let Ok(t) = self.deduce_auto(pty, &[Some(e)], super::auto::AutoInit::Expr) {
+                pty = t;
+            } else {
+                let d = self
+                    .diag(DiagId::sema_nttp_deduction_failed, at)
+                    .arg(self.decl_name(p))
+                    .arg(self.ty_arg(pty))
+                    .arg(self.ty_arg(ety))
+                    .note(
+                        DiagId::note_template_param_here,
+                        Span::empty(self.ast.decls.get(p).loc()),
+                    );
+                self.emit(d);
+                return Err(());
             }
         }
         let t = &self.ast.types;
