@@ -10,7 +10,7 @@ Updated: 2026-10-31
 | 2 `tests/stress/` discovery, `mem<=N` directive, dumper cycle regression test | done (the test is `xfail(kiln)` for a dump-fidelity gap; KILLED is never masked) |
 | 3 `xtask ci` retry once on `error[E0463]` (WP-124) | done |
 | 4 spec + docs + unit tests | done |
-| exit gates: fmt, clippy, `cargo test -p xtask`, corpus, merge main, full `cargo xtask ci` | in progress |
+| exit gates: fmt, clippy, `cargo test -p xtask` (123 passed), kiln corpus (1589 passed, 15 xfail, 0 killed), main merged | done; full `cargo xtask ci` running |
 
 ## Mechanism (decided)
 - `std::process::Command` has no rlimit API and `#![forbid(unsafe_code)]`
