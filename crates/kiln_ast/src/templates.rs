@@ -678,6 +678,17 @@ impl Ast {
         DeclName::from_raw(n.b()).unwrap_or(DeclName::EMPTY)
     }
 
+    /// The name a `DependentScopeDeclRefExpr` names (an identifier,
+    /// operator-function-id or conversion-function-id,
+    /// [expr.prim.id.qual]/1); empty for any other expression.
+    pub fn dependent_scope_ref_name(&self, e: ExprId) -> DeclName {
+        let n = self.exprs.get(e);
+        if n.kind() != ExprKind::DependentScopeDeclRefExpr {
+            return DeclName::EMPTY;
+        }
+        DeclName::from_raw(n.b()).unwrap_or(DeclName::EMPTY)
+    }
+
     /// The declarations an `UnresolvedLookupExpr` found.
     ///
     /// # Panics

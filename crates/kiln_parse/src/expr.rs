@@ -17,7 +17,6 @@ use kiln_lex::{Punct, TokKind, Token};
 use kiln_sema::expr::CastStyle;
 use kiln_sema::{DeclaratorContext, NameClass, OffsetofComponent, SpecialName};
 use kiln_source::Loc;
-use kiln_source::symbol::Symbol;
 
 use crate::decl::is_type_specifier_kw;
 use crate::keywords::Kw;
@@ -290,12 +289,12 @@ impl Parser<'_, '_> {
         } else {
             return false;
         };
-        let text = if n.kind() == ExprKind::CXXDependentScopeMemberExpr {
-            let name = self.s.ast.dependent_member_name(lhs);
-            self.s.decl_name_str(name)
+        let name = if n.kind() == ExprKind::CXXDependentScopeMemberExpr {
+            self.s.ast.dependent_member_name(lhs)
         } else {
-            self.s.ast.symbols().as_str(Symbol::from_index(n.b())).to_owned()
+            self.s.ast.dependent_scope_ref_name(lhs)
         };
+        let text = self.s.decl_name_str(name);
         let d = self.s.diag(id, n.loc()).arg(text);
         self.emit(d);
         true

@@ -284,7 +284,7 @@ impl Substituter<'_, '_, '_> {
                 let Some(nns) = kiln_ast::ids::NnsId::try_new(n.a()) else {
                     return Err(SubstFail);
                 };
-                let name = DeclName::from_raw(n.b()).unwrap_or(DeclName::EMPTY);
+                let name = self.sema.ast.dependent_scope_ref_name(e);
                 let name = self.member_name(name, loc)?;
                 let begin = self.sema.ast.templates.expr_begin.get(e).copied().unwrap_or(loc);
                 let nns = self.nns(nns, begin)?;
