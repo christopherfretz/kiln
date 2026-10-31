@@ -60,7 +60,7 @@ enum ParamVal {
 }
 
 /// An evaluated call argument (clang `CallArg`).
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub(crate) enum CallArg {
     /// A scalar value.
     Scalar(V),
@@ -127,10 +127,6 @@ pub(crate) struct Fx {
     /// The aggregate slot being initialized may overlap other data
     /// (clang `AggValueSlot::Overlap_t`), consumed by the next emission.
     pub overlap: bool,
-    /// An object with a non-trivial destructor has been constructed in
-    /// the current constructor prologue: under `-fexceptions` its EH
-    /// cleanup would be needed by any throwing call (spec gap).
-    pub eh_only: bool,
     /// The aggregate slot being initialized is destructed by its owner
     /// (clang `AggValueSlot::IsDestructed`): a bound temporary written
     /// there needs no cleanup.
@@ -179,7 +175,6 @@ impl Fx {
             uses_ph: false,
             error: None,
             overlap: false,
-            eh_only: false,
             dest_destructed: false,
             sw: None,
             loops: Vec::new(),
@@ -407,7 +402,9 @@ impl Cg<'_> {
                 self.emit_deleting_dtor_body(d)?;
             }
             DeclKind::CXXDestructor
-                if structor == Some(mangle::Structor::Complete) && self.structor_has_vbases(d) =>
+                if structor == Some(mangle::Structor::Complete)
+                    && self.structor_has_vbases(d)
+                    && self.ast.stmts.get(body).kind() != kiln_ast::stmt::StmtKind::CXXTryStmt =>
             {
                 self.emit_complete_dtor_body()?;
             }

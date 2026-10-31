@@ -46,8 +46,19 @@ Branch `wp/100-codegen-eh`, worktree `kiln/.worktrees/wp-100`.
   `InitCatchParam` for ref/pointer/scalar/trivial/non-trivial class,
   EndCatch cleanup, rethrow); fall-off `llvm.trap` without call-site
   attributes (clang `EmitTrapCall`). Scratch tc1 exact on both triples.
-- Next: ctor/dtor function-try-blocks (implicit rethrow), ctor partial-construction EH cleanups, `new`
-  dealloc cleanup, IR-diff corpus `tests/codegen/eh_*.cpp`.
+- Done: ctor/dtor function-try-blocks (try entered before the body scope,
+  implicit `__cxa_rethrow`, abstract complete dtor trap, complete dtor
+  with try = base + vbase cleanups); partial-construction EH cleanups
+  (base dtors, member dtors, delegating ctor, memcpyizer); partial array
+  cleanup in array construction (`pushRegularPartialArrayCleanup`);
+  new-expression delete cleanup (`CallDeleteDuringNew`, saved values in
+  conditional branches, dominator placeholder + deactivation), class
+  operator new result type. Sema: brace elision only into aggregates
+  ([dcl.init.aggr]/16; `init.rs`, one condition).
+- Found (not EH): `new G[n]` for a class with a non-trivial dtor has no
+  array cookie and a wrong nested loop (silent miscompile); aligned new
+  picks the sized aligned delete (clang the unsized one).
+- Next: CI quick, corpus `tests/codegen/eh_*.cpp`.
 
 ## Step 4 — wrap-up (todo)
 - run tests flip, spec §7b / sema / ast / parse notes, full CI.

@@ -231,10 +231,8 @@ impl Cg<'_> {
         }
         if !self.is_aggregate(q) {
             let adj = self.call_begin_catch(exn, false);
-            let nullptr = matches!(
-                ast.types.canonical_view(q),
-                TypeView::Builtin(BuiltinType::NullPtr)
-            );
+            let nullptr =
+                matches!(ast.types.canonical_view(q), TypeView::Builtin(BuiltinType::NullPtr));
             if ast.types.is_pointer(q) || nullptr {
                 self.store(adj, addr.v, addr.align, false);
                 return Ok(());

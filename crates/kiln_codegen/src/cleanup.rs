@@ -5,11 +5,11 @@
 //! clang's block shapes (`cleanup.dest.slot`, the exit switch,
 //! `cleanup.cont`) and EH cleanups clang's `ehcleanup` blocks (WP-100).
 
-use kiln_ast::DeclId;
+use kiln_ast::{DeclId, QualType};
 use kiln_llvm::{IntPredicate, MemOpts, TypeId as LTy};
 
 use crate::fir::{Blk, Op, V};
-use crate::func::Addr;
+use crate::func::{Addr, CallArg};
 use crate::module::Cg;
 
 /// A stable position in the cleanup stack (clang `stable_iterator`): the
@@ -49,9 +49,39 @@ pub(crate) enum Cleanup {
     /// (`FreeException`); `saved` when `exn` is the
     /// `cond-cleanup.save` slot holding it.
     FreeException { exn: V, saved: bool },
+    /// Destroys, in reverse order, the elements in `[begin, end)` of an
+    /// array of class `record` whose construction threw
+    /// (`RegularPartialArrayDestroy`, [except.ctor]/3).
+    PartialArray { begin: V, end: V, elem: LTy, record: DeclId },
+    /// Calls the deallocation function of a new-expression whose
+    /// initialization threw (`CallDeleteDuringNew`, [expr.new]/28).
+    NewDelete(Box<NewDelete>),
     /// Ends a catch handler (`CallEndCatch`); `might_throw` when the
     /// caught object has a class type whose destructor may throw.
     EndCatch { might_throw: bool },
+}
+
+/// A value a cleanup uses: directly, or reloaded from the
+/// `cond-cleanup.save` slot it was saved to inside a conditional branch
+/// (`DominatingValue::save` / `restore`).
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum Saved {
+    Direct(CallArg),
+    Slot { slot: V, ty: LTy, align: u64 },
+}
+
+/// The operands of a [`Cleanup::NewDelete`].
+#[derive(Clone, Debug)]
+pub(crate) struct NewDelete {
+    pub op_delete: DeclId,
+    pub ptr: Saved,
+    pub size: Saved,
+    /// The allocated type's alignment (`allocAlign`).
+    pub align: u64,
+    /// The allocation was passed an alignment (`passAlignment`).
+    pub pass_align: bool,
+    /// The placement arguments and their types.
+    pub placement: Vec<(Saved, QualType)>,
 }
 
 /// A handler of a catch scope (clang `EHCatchScope::Handler`): the
@@ -294,7 +324,9 @@ impl Cg<'_> {
                 self.store(exn, slot, al, false);
                 Cleanup::FreeException { exn: slot, saved: true }
             }
-            Cleanup::Dtor { addr, .. } | Cleanup::ArrayDtor { addr: Addr { v: addr, .. }, .. }
+            Cleanup::Dtor { addr, .. }
+            | Cleanup::ArrayDtor { addr: Addr { v: addr, .. }, .. }
+            | Cleanup::PartialArray { end: addr, .. }
                 if needs_saving(self, addr) =>
             {
                 self.f.error.get_or_insert(crate::CodegenError {
@@ -303,6 +335,33 @@ impl Cg<'_> {
                         .into(),
                 });
                 c
+            }
+            Cleanup::NewDelete(mut nd) => {
+                // EnterNewDeleteCleanup: the pointer, the size, then the
+                // placement arguments.
+                let save = |cg: &mut Self, s: &mut Saved| match *s {
+                    Saved::Direct(CallArg::Scalar(v)) if needs_saving(cg, v) => {
+                        let ty = cg.f.fir.ty(&cg.m, v);
+                        let align = cg.pref_align(ty);
+                        let slot = cg.f.fir.alloca(ty, align);
+                        cg.store(v, slot, align, false);
+                        *s = Saved::Slot { slot, ty, align };
+                    }
+                    Saved::Direct(CallArg::Agg(_)) => {
+                        cg.f.error.get_or_insert(crate::CodegenError {
+                            loc: None,
+                            msg: "a conditional new-expression with a class placement argument is not supported yet"
+                                .into(),
+                        });
+                    }
+                    _ => {}
+                };
+                save(self, &mut nd.ptr);
+                save(self, &mut nd.size);
+                for (a, _) in &mut nd.placement {
+                    save(self, a);
+                }
+                Cleanup::NewDelete(nd)
             }
             c => c,
         };
@@ -844,6 +903,14 @@ impl Cg<'_> {
                 let f = self.rt_fn("__cxa_free_exception", LTy::VOID, &[LTy::PTR], &[]);
                 self.nounwind_runtime_call(f, LTy::VOID, vec![exn]);
             }
+            Cleanup::PartialArray { begin, end, elem, record } => {
+                self.array_destroy_range(begin, end, elem, record, true);
+            }
+            Cleanup::NewDelete(ref nd) => {
+                if let Err(e) = self.emit_new_delete_cleanup(nd) {
+                    self.f.error.get_or_insert(e);
+                }
+            }
             Cleanup::EndCatch { might_throw } => {
                 let f = self.rt_fn("__cxa_end_catch", LTy::VOID, &[], &[]);
                 if might_throw {
@@ -859,7 +926,25 @@ impl Cg<'_> {
     pub(crate) fn array_destroy(&mut self, begin: V, n: u64, elem: LTy, record: DeclId) {
         let nn = self.i64c(i128::from(n));
         let end = self.gep(elem, begin, vec![nn], true);
+        self.array_destroy_range(begin, end, elem, record, false);
+    }
+
+    /// `emitArrayDestroy` of `[begin, end)`; `check_zero` tests for an
+    /// empty range first (`checkZeroLength`).
+    pub(crate) fn array_destroy_range(
+        &mut self,
+        begin: V,
+        end: V,
+        elem: LTy,
+        record: DeclId,
+        check_zero: bool,
+    ) {
         let body = self.f.fir.create_block();
+        let out = self.f.fir.create_block();
+        if check_zero {
+            let empty = self.icmp(IntPredicate::Eq, begin, end);
+            self.cond_br(empty, out, body);
+        }
         let entry = self.f.fir.cur().expect("insertion point");
         self.emit_block(body, false);
         let phi = self.f.fir.push(Op::Phi { ty: LTy::PTR, inc: vec![(end, entry)] }, LTy::PTR);
@@ -867,7 +952,6 @@ impl Cg<'_> {
         let el = self.gep(elem, phi, vec![m1], true);
         self.call_dtor(record, el, false);
         let done = self.icmp(IntPredicate::Eq, el, begin);
-        let out = self.f.fir.create_block();
         let cur = self.f.fir.cur().expect("insertion point");
         self.f.fir.add_incoming(crate::fir::Fir::last_inst(phi), el, cur);
         self.cond_br(done, out, body);

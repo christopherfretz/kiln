@@ -713,9 +713,15 @@ impl Sema<'_, '_> {
                     let elem = self.ast.types.element(ty).unwrap_or(QualType::ERROR);
                     !(self.is_char_type(elem) && self.string_lit_of(e).is_some())
                 } else if let Some(r) = self.ast.types.as_record(ty) {
-                    self.ast.types.as_record(ety).is_none_or(|x| {
-                        self.ast.first(x) != self.ast.first(r) && !conv::is_derived_from(self, x, r)
-                    }) && !self.is_error_type(ety)
+                    // Only an aggregate takes brace elision; a class with
+                    // a user constructor is copy-initialized from the
+                    // element ([dcl.init.aggr]/16).
+                    self.is_aggregate(ty)
+                        && self.ast.types.as_record(ety).is_none_or(|x| {
+                            self.ast.first(x) != self.ast.first(r)
+                                && !conv::is_derived_from(self, x, r)
+                        })
+                        && !self.is_error_type(ety)
                 } else {
                     false
                 };
