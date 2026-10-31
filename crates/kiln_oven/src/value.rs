@@ -5,7 +5,7 @@
 use kiln_ast::consts::{
     ByteImage, ByteRange, ConstValue, IntBits, NullKind, PtrBase, Reloc, Scalar, UnionMember,
 };
-use kiln_ast::decl::VarEvalState;
+use kiln_ast::decl::{DeclKind, VarEvalState};
 use kiln_ast::strings::StringEncoding;
 use kiln_ast::{Ast, ConstValueId, DeclId, ExprId, QualType, StringLitId};
 use kiln_source::Loc;
@@ -62,6 +62,16 @@ pub(crate) fn var_info(ast: &Ast, d: DeclId) -> VarInfo {
         ty: ast.decls.get(d).ty().unwrap_or(QualType::INT),
         is_const: false,
     };
+    // A template parameter object ([temp.param]/8): a `const` object
+    // whose value is the template argument's.
+    if ast.decls.get(d).kind() == DeclKind::TemplateParamObject {
+        if let Some(cv) = ast.templates.param_object_value(d) {
+            info.state = VarEvalState::Value(cv);
+            info.usable = true;
+            info.is_const = true;
+        }
+        return info;
+    }
     let mut constexpr = false;
     for r in ast.redecls_of(d) {
         if let Some(v) = ast.decls.var(r) {
@@ -650,7 +660,8 @@ impl Oven {
                 // n;` before its definition) may get one later in the
                 // translation unit: its unknown value is kept for this
                 // evaluation only.
-                if var_info(b.ast(), d).init.is_none() {
+                let info = var_info(b.ast(), d);
+                if info.init.is_none() && !matches!(info.state, VarEvalState::Value(_)) {
                     self.provisional.push(g);
                 }
                 p

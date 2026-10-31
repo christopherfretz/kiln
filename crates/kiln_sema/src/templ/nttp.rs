@@ -3,14 +3,17 @@
 //! the structural-type check of a parameter's type, and the template
 //! parameter objects ([temp.param]/8) class-type arguments designate.
 
-use kiln_ast::QualType;
-use kiln_ast::decl::{Access, DeclKind, DefinitionBits};
-use kiln_ast::types::TypeView;
-use kiln_ast::DeclId;
+use kiln_ast::consts::{PtrBase, Scalar};
+use kiln_ast::decl::{Access, DeclFlags, DeclKind, DefinitionBits};
+use kiln_ast::expr::{ExprFlags, NonOdrUse, UnaryOp};
+use kiln_ast::types::{Quals, TemplateArg, TypeView};
+use kiln_ast::{ConstValueId, DeclId, ExprId, QualType};
 use kiln_diag::{Diag, DiagId};
+use kiln_oven::EvalContext;
 use kiln_source::Loc;
 
 use crate::Sema;
+use crate::init::Initializer;
 
 /// Recursion bound for the explanation walk (a class cannot contain
 /// itself, but a broken one may refer to itself through errors).
@@ -82,13 +85,14 @@ impl Sema<'_, '_> {
         if depth >= MAX_DEPTH {
             return true;
         }
-        self.fields_in(def).into_iter().all(|f| {
-            self.ast.decls.get(f).ty().is_none_or(|q| self.is_structural_at(q, depth + 1))
-        }) && self
-            .ast
-            .decls
-            .bases(def, &self.ast.lists)
-            .all(|b| self.is_structural_at(b.ty, depth + 1))
+        self.fields_in(def)
+            .into_iter()
+            .all(|f| self.ast.decls.get(f).ty().is_none_or(|q| self.is_structural_at(q, depth + 1)))
+            && self
+                .ast
+                .decls
+                .bases(def, &self.ast.lists)
+                .all(|b| self.is_structural_at(b.ty, depth + 1))
     }
 
     fn fields_in(&self, def: DeclId) -> Vec<DeclId> {
@@ -111,13 +115,20 @@ impl Sema<'_, '_> {
             for &f in &fields {
                 let n = *self.ast.decls.get(f);
                 let note = if n.misc().access() != Access::Public {
-                    Some(self.diag(DiagId::note_not_structural_non_public, n.loc()).arg(&shown).arg(0u8))
+                    Some(
+                        self.diag(DiagId::note_not_structural_non_public, n.loc())
+                            .arg(&shown)
+                            .arg(0u8),
+                    )
                 } else if self.ast.decls.field(f).is_some_and(|x| x.is_mutable()) {
                     Some(self.diag(DiagId::note_not_structural_mutable_field, n.loc()).arg(&shown))
                 } else if n.ty().is_some_and(|q| {
                     matches!(self.ast.types.canonical_view(q), TypeView::RValueRef(_))
                 }) {
-                    Some(self.diag(DiagId::note_not_structural_rvalue_ref_field, n.loc()).arg(&shown))
+                    Some(
+                        self.diag(DiagId::note_not_structural_rvalue_ref_field, n.loc())
+                            .arg(&shown),
+                    )
                 } else {
                     None
                 };
@@ -130,7 +141,9 @@ impl Sema<'_, '_> {
             for b in &bases {
                 if self.base_access(def, b.access) != Access::Public {
                     notes.push(
-                        self.diag(DiagId::note_not_structural_non_public, b.loc).arg(&shown).arg(1u8),
+                        self.diag(DiagId::note_not_structural_non_public, b.loc)
+                            .arg(&shown)
+                            .arg(1u8),
                     );
                     return notes;
                 }
@@ -143,7 +156,9 @@ impl Sema<'_, '_> {
                     (!self.is_structural(q)).then_some((n.loc(), q, 0u8))
                 })
                 .or_else(|| {
-                    bases.iter().find_map(|b| (!self.is_structural(b.ty)).then_some((b.loc, b.ty, 1u8)))
+                    bases
+                        .iter()
+                        .find_map(|b| (!self.is_structural(b.ty)).then_some((b.loc, b.ty, 1u8)))
                 });
             let Some((at, q, kind)) = sub else { break };
             notes.push(
@@ -191,10 +206,113 @@ impl Sema<'_, '_> {
                 );
             }
         }
-        let dtor = self.ast.members(def).find(|&m| self.ast.decls.get(m).kind() == DeclKind::CXXDestructor)?;
-        let constexpr = self.ast.decls.function(dtor).is_some_and(|f| f.spec.constexpr_kind() != kiln_ast::decl::ConstexprKind::None);
+        let dtor = self
+            .ast
+            .members(def)
+            .find(|&m| self.ast.decls.get(m).kind() == DeclKind::CXXDestructor)?;
+        let constexpr = self
+            .ast
+            .decls
+            .function(dtor)
+            .is_some_and(|f| f.spec.constexpr_kind() != kiln_ast::decl::ConstexprKind::None);
         (!constexpr).then(|| {
-            self.diag(DiagId::note_non_literal_non_constexpr_dtor, self.ast.decls.get(dtor).loc()).arg(shown)
+            self.diag(DiagId::note_non_literal_non_constexpr_dtor, self.ast.decls.get(dtor).loc())
+                .arg(shown)
         })
+    }
+
+    /// A template argument `e` for a non-type parameter of class type
+    /// `pty` ([temp.arg.nontype]/2): a `const T` copy-initialized from
+    /// `e` as a converted constant expression, evaluated to a frozen
+    /// aggregate value whose template parameter object is created here
+    /// ([temp.param]/8: one object per type and value).
+    pub(crate) fn convert_class_nttp_arg(
+        &mut self,
+        pty: QualType,
+        e: ExprId,
+        at: Loc,
+    ) -> Result<TemplateArg, ()> {
+        if !self.check_nttp_type(pty, at) {
+            return Err(());
+        }
+        let canon = self.ast.types.canonical(pty);
+        let canon = crate::conv::strip_cv(self, canon);
+        let cty = self.ast.types.qualify(canon, Quals::CONST);
+        let c = self.perform_init(cty, Initializer::Expr(e), at, false);
+        if self.is_err_expr(c) || self.has_errors_in(c) {
+            return Err(());
+        }
+        let c = self.act_on_full_expr(c);
+        match self.eval_const(c, EvalContext::converted(at)) {
+            Ok(v) => {
+                self.builder().template_param_object(cty, v);
+                Ok(TemplateArg::value(canon, v))
+            }
+            Err(f) => {
+                let d = self.diag(DiagId::sema_expr_not_cce, at).arg("non-type template argument");
+                let d = Self::with_failure_notes(d, f);
+                self.emit(d);
+                Err(())
+            }
+        }
+    }
+
+    /// The expression a non-type template argument value of class,
+    /// pointer or null type stands for when substituted (clang's
+    /// `BuildExpressionFromNonTypeTemplateArgument`): an lvalue naming
+    /// the template parameter object, `&x` / `&f` / `f`, or a null
+    /// pointer converted to `ty`. `None` for values handled elsewhere
+    /// (integers) or not yet supported.
+    pub(crate) fn nttp_value_expr(
+        &mut self,
+        ty: QualType,
+        v: ConstValueId,
+        loc: Loc,
+    ) -> Option<ExprId> {
+        if self.ast.types.as_record(ty).is_some() {
+            let d = self.ast.templates.param_object(v)?;
+            let q = self.ast.decls.get(d).ty()?;
+            self.ast.decls.set_flags(d, DeclFlags::REFERENCED);
+            return Some(self.builder().decl_ref(
+                d,
+                q,
+                loc,
+                None,
+                NonOdrUse::None,
+                ExprFlags::NONE,
+            ));
+        }
+        match self.ast.consts.scalar(v)? {
+            Scalar::Null { .. } => {
+                let n = self.builder().nullptr_literal(QualType::NULLPTR, loc);
+                if self.is_nullptr_type(ty) {
+                    return Some(n);
+                }
+                crate::conv::implicit_convert(self, n, ty, crate::conv::ConvCtx::Initialization)
+                    .ok()
+            }
+            Scalar::Pointer { base, offset: 0, .. } => {
+                let (PtrBase::Decl(d) | PtrBase::Function(d)) = base else { return None };
+                let r = if self.kind_of(d) == DeclKind::TemplateParamObject {
+                    let q = self.ast.decls.get(d).ty()?;
+                    self.builder().decl_ref(d, q, loc, None, NonOdrUse::None, ExprFlags::NONE)
+                } else {
+                    self.build_decl_ref(d, loc)
+                };
+                let t = &self.ast.types;
+                if t.is_reference(ty) {
+                    return Some(r);
+                }
+                let a = self.act_on_unary(UnaryOp::AddrOf, r, loc);
+                let at = self.ety(a);
+                if self.ast.types.canonical(at) == self.ast.types.canonical(ty) {
+                    Some(a)
+                } else {
+                    crate::conv::implicit_convert(self, a, ty, crate::conv::ConvCtx::Initialization)
+                        .ok()
+                }
+            }
+            _ => None,
+        }
     }
 }

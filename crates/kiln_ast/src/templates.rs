@@ -22,7 +22,9 @@ use crate::decl::{
     DeclFlags, DeclKind, Members, NewDecl, Payload, ScopeData, TemplLink, TemplLinkKind,
 };
 use crate::expr::{BinaryOp, ExprDeps, ExprFlags, ExprKind, ObjectKind, UnaryOp, ValueCategory};
-use crate::ids::{ArgListId, DeclId, ExprId, ListId, NnsId, QualType, RawId, TemplateParamListId};
+use crate::ids::{
+    ArgListId, ConstValueId, DeclId, ExprId, ListId, NnsId, QualType, RawId, TemplateParamListId,
+};
 use crate::mem::{HeapSize, MemReport, MemRow};
 use crate::names::DeclName;
 use crate::slot::ColdMap;
@@ -301,6 +303,12 @@ pub struct TemplateTables {
     partials_of: FxHashMap<DeclId, Vec<u32>>,
     /// `(template, canonical args) -> partial` (redeclarations).
     partial_map: FxHashMap<(DeclId, ArgListId), u32>,
+    /// Template parameter objects ([temp.param]/8, sema-templates.md
+    /// §6.10): one `TemplateParamObject` per interned class-type value
+    /// (the value's id determines its type).
+    param_objects: FxHashMap<ConstValueId, DeclId>,
+    /// The value of each template parameter object.
+    param_object_values: FxHashMap<DeclId, ConstValueId>,
 }
 
 impl Default for TemplateTables {
@@ -344,6 +352,8 @@ impl Default for TemplateTables {
             shapes: Vec::new(),
             partials_of: FxHashMap::default(),
             partial_map: FxHashMap::default(),
+            param_objects: FxHashMap::default(),
+            param_object_values: FxHashMap::default(),
         }
     }
 }
@@ -463,6 +473,17 @@ impl TemplateTables {
         self.partial_map.get(&(template, canonical)).copied()
     }
 
+    /// The template parameter object holding class-type value `v`
+    /// ([temp.param]/8), if one was created.
+    pub fn param_object(&self, v: ConstValueId) -> Option<DeclId> {
+        self.param_objects.get(&v).copied()
+    }
+
+    /// The value of template parameter object `d`.
+    pub fn param_object_value(&self, d: DeclId) -> Option<ConstValueId> {
+        self.param_object_values.get(&d).copied()
+    }
+
     /// `h` with `DEPENDENT_CTX` added while inside a template.
     pub(crate) fn dependent_head(&self, mut h: DeclHead) -> DeclHead {
         if self.dependent_depth > 0 {
@@ -503,6 +524,8 @@ impl HeapSize for TemplateTables {
         row.reserved_bytes += order;
         r.push(row);
         r.push(MemRow::of_map("templ.partial_map", &self.partial_map));
+        r.push(MemRow::of_map("templ.param_objects", &self.param_objects));
+        r.push(MemRow::of_map("templ.param_object_values", &self.param_object_values));
         r
     }
 }
@@ -738,6 +761,31 @@ impl AstBuilder<'_> {
             },
             Payload::None(i),
         )
+    }
+
+    /// The template parameter object of type `ty` (`const T`) holding
+    /// class-type value `v` ([temp.param]/8): one per value, in the
+    /// translation unit but in no member list or lookup table (clang's
+    /// `TemplateParamObjectDecl`).
+    pub fn template_param_object(&mut self, ty: QualType, v: ConstValueId) -> DeclId {
+        if let Some(d) = self.ast.templates.param_object(v) {
+            return d;
+        }
+        let d = self.ast.decls.push(
+            NewDecl {
+                kind: DeclKind::TemplateParamObject,
+                flags: DeclFlags::IMPLICIT,
+                misc: crate::decl::DeclMisc::default(),
+                name: DeclName::EMPTY,
+                ctx: Some(self.ast.tu),
+                loc: Loc::INVALID,
+                ty: Some(ty),
+            },
+            Payload::None(0),
+        );
+        self.ast.templates.param_objects.insert(v, d);
+        self.ast.templates.param_object_values.insert(d, v);
+        d
     }
 
     /// A type template parameter ([temp.param]/2); its declared type is the

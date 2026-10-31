@@ -1149,6 +1149,13 @@ impl Cg<'_> {
                 let align = self.global_align(dq);
                 Ok(LV { addr: Addr { v: V::C(gval(g)), ty, align }, q, bf: None })
             }
+            DeclKind::TemplateParamObject => {
+                let g = self.param_object_global(d)?;
+                let dq = ast.decls.get(d).ty().unwrap_or(q);
+                let ty = self.mty(dq);
+                let align = self.global_align(dq);
+                Ok(LV { addr: Addr { v: V::C(gval(g)), ty, align }, q, bf: None })
+            }
             k => err(self.loc_of(e), format!("reference to {k:?} is not supported yet")),
         }
     }

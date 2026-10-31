@@ -122,7 +122,7 @@ impl TypeNames for SemaNames<'_> {
         }
     }
 
-    fn write_value(&self, _ty: QualType, value: ConstValueId, out: &mut String) {
+    fn write_value(&self, ty: QualType, value: ConstValueId, out: &mut String) {
         match self.ast.consts.scalar(value) {
             Some(Scalar::Int { signed: true, bits, .. }) => match bits.to_i128() {
                 Some(v) => out.push_str(&v.to_string()),
@@ -133,7 +133,9 @@ impl TypeNames for SemaNames<'_> {
                 None => out.push_str("<value>"),
             },
             Some(Scalar::Bool { value, .. }) => out.push_str(if value { "true" } else { "false" }),
-            _ => out.push_str("<value>"),
+            // Class, pointer and floating values (§6.10): the constant
+            // printer.
+            _ => kiln_ast::dump::AstNames::new(self.ast).write_value(ty, value, out),
         }
     }
 

@@ -1172,6 +1172,38 @@ impl<'a> Cg<'a> {
         Ok(g)
     }
 
+    /// The global of template parameter object `d` ([temp.param]/8):
+    /// a `linkonce_odr` constant in its own comdat holding its value
+    /// (clang `GetAddrOfTemplateParamObject`).
+    pub fn param_object_global(&mut self, d: DeclId) -> R<GlobalId> {
+        if let Some(&g) = self.gvars.get(&d) {
+            return Ok(g);
+        }
+        let ast = self.ast;
+        let loc = Some(ast.decls.get(d).loc());
+        let Some(v) = ast.templates.param_object_value(d) else {
+            return err(loc, "template parameter object without a value");
+        };
+        let ty = ast.decls.get(d).ty().unwrap_or(QualType::INT);
+        let init = self.const_value(v, ty, None, true)?;
+        let name = mangle::mangle_param_object(ast, d);
+        let ity = self.m.const_type(init);
+        let g = self.m.add_global(&name, ity);
+        self.gvars.insert(d, g);
+        if let Err(e) = self.m.set_initializer(g, Some(init)) {
+            return err(loc, format!("bad initializer: {e:?}"));
+        }
+        let align = self.global_align(ty);
+        let comdat = Some(self.m.comdat(&name, ComdatKind::Any));
+        let gv = self.m.global_mut(g);
+        gv.is_constant = true;
+        gv.align = Some(align);
+        gv.linkage = Linkage::LinkOnceOdr;
+        gv.dso_local = true;
+        gv.comdat = comdat;
+        Ok(g)
+    }
+
     /// A private `unnamed_addr` constant named `base`, uniqued `.N` by the
     /// module's one counter as LLVM's `ValueSymbolTable::makeUniqueName`
     /// (`.str.1`, `.constant.2`, `.str.3`).

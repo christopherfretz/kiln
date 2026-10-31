@@ -1091,6 +1091,11 @@ impl Sema<'_, '_> {
         }
         let ty = if self.ast.decls.builtin_id(d).is_some() {
             QualType::BUILTIN_FN
+        } else if n.kind() == DeclKind::NonTypeTemplateParm
+            && self.ast.types.as_record(declared).is_some()
+        {
+            // [temp.param]/8: an lvalue of type `const T`.
+            self.ast.types.qualify(declared, kiln_ast::types::Quals::CONST)
         } else {
             self.non_reference(declared)
         };

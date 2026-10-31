@@ -565,6 +565,10 @@ impl Substituter<'_, '_, '_> {
         loc: Loc,
     ) -> SubstResult<ExprId> {
         let Some(v) = self.sema.const_int(value) else {
+            // Class, pointer and null values (§6.10).
+            if let Some(r) = self.sema.nttp_value_expr(ty, value, loc) {
+                return Ok(r);
+            }
             return self.unimplemented("non-type template argument of this type", loc);
         };
         let t = &self.sema.ast.types;

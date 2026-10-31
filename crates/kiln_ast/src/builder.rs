@@ -1093,6 +1093,17 @@ impl<'a> AstBuilder<'a> {
     /// a `TemplateParamObject` once substituted).
     fn decl_ref_category(&self, d: DeclId) -> ValueCategory {
         match self.ast.decls.get(d).kind() {
+            // [temp.param]/8: a class-type parameter names an object.
+            DeclKind::NonTypeTemplateParm
+                if self
+                    .ast
+                    .decls
+                    .get(d)
+                    .ty()
+                    .is_some_and(|t| self.ast.types.as_record(t).is_some()) =>
+            {
+                ValueCategory::LValue
+            }
             DeclKind::EnumConstant | DeclKind::NonTypeTemplateParm => ValueCategory::PRValue,
             // A builtin function's name has the placeholder type
             // `<builtin fn type>` and is a prvalue (as clang).

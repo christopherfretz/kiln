@@ -2843,7 +2843,8 @@ impl Compiler<'_> {
                     );
                     return Place::Mem(self.reg());
                 }
-                if ast.decls.get(d).kind() != DeclKind::Var {
+                if !matches!(ast.decls.get(d).kind(), DeclKind::Var | DeclKind::TemplateParamObject)
+                {
                     self.unsupported(e);
                     return Place::Mem(self.reg());
                 }
