@@ -284,7 +284,8 @@ impl Substituter<'_, '_, '_> {
                 let Some(nns) = kiln_ast::ids::NnsId::try_new(n.a()) else {
                     return Err(SubstFail);
                 };
-                let name = kiln_source::symbol::Symbol::from_index(n.b());
+                let name = DeclName::from_raw(n.b()).unwrap_or(DeclName::EMPTY);
+                let name = self.member_name(name, loc)?;
                 let begin = self.sema.ast.templates.expr_begin.get(e).copied().unwrap_or(loc);
                 let nns = self.nns(nns, begin)?;
                 if self.nns_still_dependent(nns) {
@@ -299,6 +300,9 @@ impl Substituter<'_, '_, '_> {
                 // `T::template x<args>` ([temp.names]/5, /6): the member
                 // template the name finds after substitution.
                 if let Some(l) = self.sema.ast.templates.expr_targs.get(e).copied() {
+                    let Some(name) = name.as_ident() else {
+                        return self.unimplemented("an operator function template-id", loc);
+                    };
                     let t = self.member_template_named(nns, name, loc)?;
                     let l = self.args(l, loc)?;
                     let args = self.sema.ast.types.args(l).to_vec();
@@ -316,7 +320,7 @@ impl Substituter<'_, '_, '_> {
                 }
                 let ctx = self.nns_context(nns, begin)?;
                 let q = crate::using::Qualifier { ctx, nns, loc: begin };
-                Ok(self.sema.act_on_id_expression(name, loc, Some(q)))
+                Ok(self.sema.act_on_id_expression_dn(name, loc, Some(q)))
             }
             ExprKind::CXXThisExpr => {
                 let implicit = ex(self).this_is_implicit(e);

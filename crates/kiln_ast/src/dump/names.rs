@@ -906,7 +906,7 @@ impl<'a> AstNames<'a> {
             // `VisitUnresolvedLookupExpr`: `N::name<args>`.
             ExprKind::DependentScopeDeclRefExpr => {
                 write_nns(&ast.types, self, crate::ids::NnsId::new(n.a()), out);
-                self.dependent_name(e, DeclName::ident(Symbol::from_index(n.b())), out);
+                self.dependent_name(e, DeclName::from_raw(n.b()).unwrap_or(DeclName::EMPTY), out);
             }
             ExprKind::UnresolvedLookupExpr => {
                 if let Some(&nns) = ast.templates.expr_nns.get(e) {

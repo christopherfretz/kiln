@@ -1058,6 +1058,12 @@ impl Parser<'_, '_> {
         let begin = self.name_begin();
         let qual = self.parse_nested_name_nns().ok()?;
         let template_kw = qual.is_some() && self.eat_kw(Kw::Template).is_some();
+        if let Some(q) = qual
+            && !template_kw
+            && self.at_kw(Kw::Operator)
+        {
+            return self.parse_qualified_operator_id(q, begin);
+        }
         let Some(name) = self.ident() else {
             self.error_here(DiagId::parse_expected_unqualified_id);
             return None;
@@ -1072,7 +1078,13 @@ impl Parser<'_, '_> {
             } else {
                 None
             };
-            return Some(self.s.act_dependent_scope_ref(q.nns, name, targs, begin, nl));
+            return Some(self.s.act_dependent_scope_ref(
+                q.nns,
+                DeclName::ident(name),
+                targs,
+                begin,
+                nl,
+            ));
         }
         let class = self.s.classify_name(name, qual.map(|q| q.ctx));
         if self.at(Punct::Less) && (template_kw || is_template_class(class)) {
@@ -1109,6 +1121,23 @@ impl Parser<'_, '_> {
         }
         let e = self.s.act_on_id_expression(name, nl, qual);
         self.parse_pack_index_suffix(e)
+    }
+
+    /// `N::operator@` / `X<T>::operator T` after the nested-name-specifier
+    /// `q` ([expr.prim.id.qual]/1: a qualified-id's unqualified-id may be
+    /// an operator- or conversion-function-id): `B<float>::operator()(v)`
+    /// in libc++ <__functional/hash.h>.
+    fn parse_qualified_operator_id(&mut self, q: kiln_sema::using::Qualifier, begin: Loc) -> PExpr {
+        let nl = self.loc();
+        let name = self.parse_operator_function_name()?;
+        if self.at(Punct::Less) {
+            self.unsupported("an operator function template-id", nl);
+            return None;
+        }
+        if self.s.is_dependent_ctx(q.ctx) {
+            return Some(self.s.act_dependent_scope_ref(q.nns, name, None, begin, nl));
+        }
+        Some(self.s.act_on_id_expression_dn(name, nl, Some(q)))
     }
 
     /// `pack...[index]` after an id-expression (C++26
