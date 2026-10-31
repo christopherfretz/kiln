@@ -222,7 +222,7 @@ impl<'a> Cg<'a> {
         let members: Vec<DeclId> = ast.decls.members(ctx).collect();
         for d in members {
             let n = ast.decls.get(d);
-            if n.has(DeclFlags::INVALID) {
+            if n.has(DeclFlags::INVALID) || self.is_templated(d) {
                 continue;
             }
             match n.kind() {
@@ -362,6 +362,39 @@ impl<'a> Cg<'a> {
 
     // ---- linkage -------------------------------------------------------
 
+    /// Whether `d` is a templated entity ([temp.pre]/8): the pattern of a
+    /// template or a partial specialization, or declared in one (an
+    /// out-of-line member definition `template<class T> void A<T>::g()
+    /// {}` is a member of `A`'s pattern). Templated entities are never
+    /// emitted; only their instantiations are (clang `isDependentContext`
+    /// in `EmitTopLevelDecl`).
+    pub(crate) fn is_templated(&self, d: DeclId) -> bool {
+        let ast = self.ast;
+        let mut c = Some(d);
+        while let Some(x) = c {
+            let n = ast.decls.get(x);
+            if kiln_ast::templates::is_template_kind(n.kind()) {
+                return true;
+            }
+            if matches!(
+                ast.templ_link(x).get(),
+                Some((
+                    TemplLinkKind::Pattern
+                        | TemplLinkKind::PartialSpecialization
+                        | TemplLinkKind::DependentFriend,
+                    _
+                ))
+            ) {
+                return true;
+            }
+            if n.kind() == DeclKind::TranslationUnit {
+                return false;
+            }
+            c = n.ctx();
+        }
+        false
+    }
+
     /// Whether `d` is (a member of) an implicit template instantiation,
     /// which has vague (`linkonce_odr`) linkage.
     pub(crate) fn is_implicit_instantiation(&self, d: DeclId) -> bool {
@@ -440,7 +473,9 @@ impl<'a> Cg<'a> {
     }
 
     fn discardable_var(&self, d: DeclId) -> bool {
-        mangle::has_internal_linkage(self.ast, d) || self.var_is_inline(d)
+        mangle::has_internal_linkage(self.ast, d)
+            || self.var_is_inline(d)
+            || self.is_implicit_instantiation(d)
     }
 
     // ---- types ---------------------------------------------------------
@@ -525,8 +560,23 @@ impl<'a> Cg<'a> {
                     parts.push(if s.is_empty() { "(anonymous namespace)".to_owned() } else { s });
                 }
                 _ => {
-                    let s = mangle::decl_name(ast, x);
-                    parts.push(if s.is_empty() { "anon".to_owned() } else { s });
+                    let mut s = mangle::decl_name(ast, x);
+                    if s.is_empty() {
+                        s = "anon".to_owned();
+                    } else if x != d {
+                        // clang `printQualifiedName`: an enclosing class
+                        // template specialization prints its arguments
+                        // (`struct.A<int>::B`); the record itself does not.
+                        if let Some((_, sp)) = ast.spec_info(x) {
+                            kiln_ast::types::write_arg_list(
+                                &ast.types,
+                                ast,
+                                sp.print_args,
+                                &mut s,
+                            );
+                        }
+                    }
+                    parts.push(s);
                 }
             }
             cur = n.ctx();
@@ -1082,7 +1132,10 @@ impl<'a> Cg<'a> {
             g
         };
         let internal = mangle::has_internal_linkage(ast, d);
-        let inline = self.var_is_inline(d);
+        // An implicitly instantiated static data member (or variable
+        // template specialization) has vague linkage like an inline
+        // variable (clang `GVA_DiscardableODR`).
+        let inline = self.var_is_inline(d) || self.is_implicit_instantiation(d);
         let quals = ast.types.effective_quals(ty);
         let constant = quals.is_const() && !has_mutable(ty);
         let align = self.global_align(ty);

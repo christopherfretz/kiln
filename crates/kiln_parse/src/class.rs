@@ -1363,17 +1363,7 @@ impl Parser<'_, '_> {
         if !matches!(ctx, DeclaratorContext::File | DeclaratorContext::Member) {
             return false;
         }
-        let mut i = self.pos();
-        if Self::punct_of(self.tok_at(i)) == Some(Punct::ColonColon) {
-            i += 1;
-        }
-        let mut last = None;
-        while let Some(n) = self.ident_of(self.tok_at(i))
-            && Self::punct_of(self.tok_at(i + 1)) == Some(Punct::ColonColon)
-        {
-            last = Some(n);
-            i += 2;
-        }
+        let (i, last) = self.scan_qualifier();
         let t = self.tok_at(i);
         if Self::punct_of(t) == Some(Punct::Tilde) || self.kw_of(t) == Some(Kw::Operator) {
             return true;
@@ -1402,18 +1392,36 @@ impl Parser<'_, '_> {
     /// The last name in the nested-name-specifier starting here (`B` in
     /// `A::B::f`), for recognising `C::C` ([class.ctor.general]/1).
     pub(crate) fn last_qualifier_name(&self) -> Option<Symbol> {
+        let (_, last) = self.scan_qualifier();
+        last
+    }
+
+    /// Scans the nested-name-specifier starting here (`::`, then `N ::`
+    /// or `N < args > ::` components): the index of the token after it
+    /// and its last component's name (`A` in `n::A<T>::`).
+    fn scan_qualifier(&self) -> (usize, Option<Symbol>) {
         let mut i = self.pos();
         if Self::punct_of(self.tok_at(i)) == Some(Punct::ColonColon) {
             i += 1;
         }
         let mut last = None;
-        while let Some(n) = self.ident_of(self.tok_at(i))
-            && Self::punct_of(self.tok_at(i + 1)) == Some(Punct::ColonColon)
-        {
+        while let Some(n) = self.ident_of(self.tok_at(i)) {
+            let mut end = i + 1;
+            if Self::punct_of(self.tok_at(end)) == Some(Punct::Less) {
+                // `A<T>::A` ([class.ctor.general]/1 with a
+                // simple-template-id qualifier).
+                match self.skip_template_args(end) {
+                    Some((close, false)) => end = close + 1,
+                    _ => break,
+                }
+            }
+            if Self::punct_of(self.tok_at(end)) != Some(Punct::ColonColon) {
+                break;
+            }
             last = Some(n);
-            i += 2;
+            i = end + 1;
         }
-        last
+        (i, last)
     }
 
     /// True if identifier `n`, which is at the current token, names a
