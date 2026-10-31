@@ -123,6 +123,15 @@ impl CorpusOutcome {
     }
 }
 
+/// Should `cargo xtask ci` rerun a cargo step that failed with `stderr`
+/// (`spec/harness.md` "CI")? Once, and only for rustc's `error[E0463]`
+/// (can't find crate): a dependency artifact went missing under the build,
+/// as when another cargo process shares the target directory; a rerun
+/// rebuilds it. Every other failure is real.
+pub fn ci_should_retry(stderr: &str, retried: bool) -> bool {
+    !retried && stderr.lines().any(|l| l.trim_start().starts_with("error[E0463]"))
+}
+
 /// `cargo xtask ci`'s corpus verdict: it passes only if every run passes.
 pub fn ci_corpus_passes(runs: &[CorpusOutcome]) -> bool {
     runs.iter().all(CorpusOutcome::passes)

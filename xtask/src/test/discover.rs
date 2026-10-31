@@ -20,7 +20,7 @@ pub struct TestCase {
 
 /// The default test roots that exist under `root`.
 pub fn default_roots(root: &Path) -> Vec<PathBuf> {
-    ["tests/conformance", "tests/differential"]
+    ["tests/conformance", "tests/differential", "tests/stress"]
         .iter()
         .map(|d| root.join(d))
         .filter(|p| p.is_dir())

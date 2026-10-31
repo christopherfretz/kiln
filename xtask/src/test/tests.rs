@@ -349,8 +349,11 @@ fn memory_limits_with_a_fake_hog() {
         let text = report::format_result(&r, false);
         assert!(text.contains(what), "{n}: {what:?} not in\n{text}");
     };
-    has(&results, "killed-compiler-hog.cpp", "KILLED killed-compiler-hog.cpp");
-    has(&results, "killed-compiler-hog.cpp", "(memory limit 8192 MiB)");
+    has(
+        &results,
+        "killed-compiler-hog.cpp",
+        "KILLED xtask/fixtures/memory/killed-compiler-hog.cpp (memory limit 8192 MiB)\n",
+    );
     has(
         &results,
         "killed-compiler-hog.cpp",
@@ -623,6 +626,29 @@ fn update_rewrites_existing_goldens() {
 /// run has a FAIL, XPASS or ERROR (XFAIL and SKIP are allowed), an
 /// infrastructure error fails it, and a skipped run (the clang self-check
 /// under `--quick` or without clang) does not.
+/// `xtask ci` reruns a cargo step once on rustc's `error[E0463]` and
+/// never on anything else (`spec/harness.md` "CI").
+#[test]
+fn ci_retries_only_missing_crates_once() {
+    let e0463 = "   Compiling kiln_sema v0.0.1\n\
+                 error[E0463]: can't find crate for `kiln_ast`\n \
+                 --> crates/kiln_sema/src/lib.rs:3:1\n";
+    assert!(ci_should_retry(e0463, false));
+    assert!(!ci_should_retry(e0463, true), "only one retry");
+    assert!(ci_should_retry("warning: x\n  error[E0463]: can't find crate for `std`\n", false));
+    for other in [
+        "",
+        "error[E0425]: cannot find value `x` in this scope\n",
+        "error: could not compile `kiln_sema`\n",
+        "test foo ... FAILED\n",
+        // Only rustc's diagnostic line counts, not a mention of it.
+        "note: the test checks that error[E0463] is retried\n",
+        "Diff in xtask/src/main.rs: \"error[E0463]\"\n",
+    ] {
+        assert!(!ci_should_retry(other, false), "{other:?}");
+    }
+}
+
 #[test]
 fn ci_gate_honours_failure_counts() {
     let mk = |status| TestResult {

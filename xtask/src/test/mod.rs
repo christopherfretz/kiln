@@ -20,7 +20,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use directives::PpCompare;
-pub use report::{CorpusOutcome, ci_corpus_passes};
+pub use report::{CorpusOutcome, ci_corpus_passes, ci_should_retry};
 use runner::TestResult;
 
 #[cfg(test)]
@@ -31,8 +31,8 @@ pub use crate::util::{repo_root, target_dir};
 pub const USAGE: &str = "\
 usage: cargo xtask test [options] [paths...]
 
-Runs tests/conformance and tests/differential (or the given files/directories)
-through a compiler. See spec/harness.md.
+Runs tests/conformance, tests/differential and tests/stress (or the given
+files/directories) through a compiler. See spec/harness.md.
 
 options:
   --compiler <path>   compiler under test (default: build and use the kiln binary)
