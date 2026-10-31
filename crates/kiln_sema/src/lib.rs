@@ -117,7 +117,7 @@ pub struct Sema<'a, 'sm> {
     pub(crate) pending_odr: Vec<ExprId>,
     /// Immediate invocations and references to immediate functions of
     /// the current full-expression, and why escalated functions are
-    /// immediate (spec/sema.md §5.6).
+    /// immediate (spec/sema.md §5.10).
     pub(crate) imm: consteval::ImmState,
     /// Classes whose definitions are being processed (incomplete until
     /// their closing brace).

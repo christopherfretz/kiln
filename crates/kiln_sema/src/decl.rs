@@ -1132,11 +1132,13 @@ impl Sema<'_, '_> {
         }
         // [dcl.constexpr]/2: `consteval` declares an immediate function.
         // A non-static data member reports it in `act_on_field`.
+        let function = d.is_function_declarator() && !ds.is_typedef();
+        let field = d.ctx == DeclaratorContext::Member
+            && !ds.is_typedef()
+            && !matches!(ds.storage, Some((StorageSpec::Static, _)));
         if let Some(l) = ds.consteval
-            && !(d.is_function_declarator() && !ds.is_typedef())
-            && !(d.ctx == DeclaratorContext::Member
-                && !ds.is_typedef()
-                && !matches!(ds.storage, Some((StorageSpec::Static, _))))
+            && !function
+            && !field
         {
             self.error(DiagId::sema_consteval_wrong_decl_kind, l);
         }

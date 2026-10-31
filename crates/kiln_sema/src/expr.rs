@@ -757,6 +757,17 @@ impl Sema<'_, '_> {
         self.act_on_id_expression_dn(DeclName::ident(name), loc, qualifier)
     }
 
+    /// clang's `getBeginLoc` of a qualified name is the qualifier's: the
+    /// begin `b` of `DeclRefExpr` `e` named at `loc`.
+    fn set_qualified_begin(&mut self, e: ExprId, begin: Option<Loc>, loc: Loc) {
+        if let Some(b) = begin
+            && b != loc
+            && self.ast.exprs.get(e).kind() == ExprKind::DeclRefExpr
+        {
+            let _ = self.ast.templates.expr_begin.insert(e, b);
+        }
+    }
+
     /// [`Sema::act_on_id_expression`] for any unqualified-id: an
     /// identifier, an operator-function-id or a conversion-function-id
     /// ([expr.prim.id.unqual]/1; WP-121).
@@ -868,22 +879,11 @@ impl Sema<'_, '_> {
         }
         if self.is_class_member_ref(d) {
             let e = self.implicit_member_ref(d, loc, found.shadow(0), nns);
-            if let Some(b) = begin
-                && b != loc
-                && self.ast.exprs.get(e).kind() == ExprKind::DeclRefExpr
-            {
-                let _ = self.ast.templates.expr_begin.insert(e, b);
-            }
+            self.set_qualified_begin(e, begin, loc);
             return e;
         }
         let e = self.build_decl_ref_qualified(d, loc, found.shadow(0), nns);
-        // clang's `getBeginLoc` of a qualified name is the qualifier's.
-        if let Some(b) = begin
-            && b != loc
-            && self.ast.exprs.get(e).kind() == ExprKind::DeclRefExpr
-        {
-            let _ = self.ast.templates.expr_begin.insert(e, b);
-        }
+        self.set_qualified_begin(e, begin, loc);
         self.note_function_name_use(d, e, loc, qualifier.is_none());
         e
     }

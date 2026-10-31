@@ -1,5 +1,5 @@
 //! Immediate functions and immediate invocations ([expr.const]/16-19,
-//! P2564; spec/sema.md §5.6).
+//! P2564; spec/sema.md §5.10).
 //!
 //! A call to an immediate function outside an immediate function context
 //! is wrapped in a `ConstantExpr` when it is built (clang's
@@ -169,7 +169,7 @@ impl Sema<'_, '_> {
 
     /// The next full-expression is a default argument or a default
     /// member initializer: clang checks its immediate invocations where
-    /// it is used (a gap: kiln does not; spec/sema.md §5.6).
+    /// it is used (a gap: kiln does not; spec/sema.md §5.10).
     pub(crate) fn note_default_init_full_expr(&mut self) {
         self.imm.pending.default_init = true;
     }
