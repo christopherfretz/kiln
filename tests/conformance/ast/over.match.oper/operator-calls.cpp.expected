@@ -1,0 +1,89 @@
+TranslationUnitDecl
+|-CXXRecordDecl referenced struct V definition
+| |-FieldDecl referenced x 'int'
+| |-CXXMethodDecl used operator+ 'V (const V &) const'
+| | `-ParmVarDecl 'const V &'
+| |-CXXMethodDecl used operator+= 'V &(int)'
+| | `-ParmVarDecl 'int'
+| |-CXXMethodDecl used operator[] 'int (int) const'
+| | `-ParmVarDecl 'int'
+| |-CXXMethodDecl used operator() 'int (int, int) const'
+| | |-ParmVarDecl 'int'
+| | `-ParmVarDecl 'int'
+| `-CXXMethodDecl used operator! 'bool () const'
+|-FunctionDecl used operator- 'V (V)'
+| `-ParmVarDecl 'V'
+|-CXXRecordDecl referenced struct I definition
+| `-CXXConversionDecl used operator int 'int () const'
+`-FunctionDecl f 'int (V, V, I)'
+  |-ParmVarDecl used a 'V'
+  |-ParmVarDecl used b 'V'
+  |-ParmVarDecl used i 'I'
+  `-CompoundStmt
+    |-DeclStmt
+    | `-VarDecl used c 'V' cinit
+    |   `-CXXOperatorCallExpr 'V' '+'
+    |     |-ImplicitCastExpr 'V (*)(const V &) const' <FunctionToPointerDecay>
+    |     | `-DeclRefExpr 'V (const V &) const' lvalue CXXMethod 'operator+' 'V (const V &) const'
+    |     |-ImplicitCastExpr 'const V' lvalue <NoOp>
+    |     | `-DeclRefExpr 'V' lvalue ParmVar 'a' 'V'
+    |     `-ImplicitCastExpr 'const V' lvalue <NoOp>
+    |       `-DeclRefExpr 'V' lvalue ParmVar 'b' 'V'
+    |-CXXOperatorCallExpr 'V' lvalue '+='
+    | |-ImplicitCastExpr 'V &(*)(int)' <FunctionToPointerDecay>
+    | | `-DeclRefExpr 'V &(int)' lvalue CXXMethod 'operator+=' 'V &(int)'
+    | |-DeclRefExpr 'V' lvalue Var 'c' 'V'
+    | `-IntegerLiteral 'int' 1
+    |-DeclStmt
+    | `-VarDecl d 'V' cinit
+    |   `-CXXOperatorCallExpr 'V' '-'
+    |     |-ImplicitCastExpr 'V (*)(V)' <FunctionToPointerDecay>
+    |     | `-DeclRefExpr 'V (V)' lvalue Function 'operator-' 'V (V)'
+    |     `-CXXConstructExpr 'V' 'void (const V &) noexcept'
+    |       `-ImplicitCastExpr 'const V' lvalue <NoOp>
+    |         `-DeclRefExpr 'V' lvalue Var 'c' 'V'
+    |-ExprWithCleanups 'void'
+    | `-CStyleCastExpr 'void' <ToVoid>
+    |   `-CXXOperatorCallExpr 'bool' '!'
+    |     |-ImplicitCastExpr 'bool (*)() const' <FunctionToPointerDecay>
+    |     | `-DeclRefExpr 'bool () const' lvalue CXXMethod 'operator!' 'bool () const'
+    |     `-ImplicitCastExpr 'const V' lvalue <NoOp>
+    |       `-MaterializeTemporaryExpr 'V' lvalue
+    |         `-CXXFunctionalCastExpr 'V' functional cast to V <NoOp>
+    |           `-InitListExpr 'V'
+    |             `-ImplicitValueInitExpr 'int'
+    `-ReturnStmt
+      `-ExprWithCleanups 'int'
+        `-BinaryOperator 'int' '+'
+          |-BinaryOperator 'int' '+'
+          | |-BinaryOperator 'int' '+'
+          | | |-CXXOperatorCallExpr 'int' '[]'
+          | | | |-ImplicitCastExpr 'int (*)(int) const' <FunctionToPointerDecay>
+          | | | | `-DeclRefExpr 'int (int) const' lvalue CXXMethod 'operator[]' 'int (int) const'
+          | | | |-ImplicitCastExpr 'const V' lvalue <NoOp>
+          | | | | `-DeclRefExpr 'V' lvalue ParmVar 'a' 'V'
+          | | | `-IntegerLiteral 'int' 0
+          | | `-CXXOperatorCallExpr 'int' '()'
+          | |   |-ImplicitCastExpr 'int (*)(int, int) const' <FunctionToPointerDecay>
+          | |   | `-DeclRefExpr 'int (int, int) const' lvalue CXXMethod 'operator()' 'int (int, int) const'
+          | |   |-ImplicitCastExpr 'const V' lvalue <NoOp>
+          | |   | `-DeclRefExpr 'V' lvalue ParmVar 'a' 'V'
+          | |   |-IntegerLiteral 'int' 1
+          | |   `-IntegerLiteral 'int' 2
+          | `-ParenExpr 'int'
+          |   `-BinaryOperator 'int' '+'
+          |     |-ImplicitCastExpr 'int' <UserDefinedConversion>
+          |     | `-CXXMemberCallExpr 'int'
+          |     |   `-MemberExpr '<bound member function type>' .operator int
+          |     |     `-ImplicitCastExpr 'const I' lvalue <NoOp>
+          |     |       `-DeclRefExpr 'I' lvalue ParmVar 'i' 'I'
+          |     `-IntegerLiteral 'int' 1
+          `-CXXOperatorCallExpr 'int' '[]'
+            |-ImplicitCastExpr 'int (*)(int) const' <FunctionToPointerDecay>
+            | `-DeclRefExpr 'int (int) const' lvalue CXXMethod 'operator[]' 'int (int) const'
+            |-ImplicitCastExpr 'const V' lvalue <NoOp>
+            | `-MaterializeTemporaryExpr 'V' lvalue
+            |   `-CXXFunctionalCastExpr 'V' functional cast to V <NoOp>
+            |     `-InitListExpr 'V'
+            |       `-ImplicitValueInitExpr 'int'
+            `-IntegerLiteral 'int' 1

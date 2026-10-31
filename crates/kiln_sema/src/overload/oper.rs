@@ -5,7 +5,7 @@
 //! comparisons — and the `CXXOperatorCallExpr` of the selected function.
 
 use kiln_ast::decl::{DeclFlags, DeclKind, Defaulted};
-use kiln_ast::expr::{BinaryOp, DeclRefExtra, UnaryOp};
+use kiln_ast::expr::{BinaryOp, DeclRefExtra, UnaryOp, ValueCategory};
 use kiln_ast::names::{DeclName, OverloadedOperator as OO};
 use kiln_ast::types::{Quals, RefQual, TypeKind, TypeView};
 use kiln_ast::{DeclId, ExprId, QualType};
@@ -1002,7 +1002,20 @@ impl Sema<'_, '_> {
         let rparen = if end.is_valid() { end } else { loc };
         let mut conv = Vec::with_capacity(ops.len());
         if method && !self.has_explicit_object(f) {
-            let obj = if implicit_obj { self.operator_object(ops[0], f) } else { ops[0] };
+            let obj = if implicit_obj {
+                self.operator_object(ops[0], f)
+            } else {
+                // A static operator's object is still evaluated; a class
+                // prvalue is materialized (clang, as an lvalue).
+                let n = *self.ast.exprs.get(ops[0]);
+                if n.value_category() == ValueCategory::PRValue
+                    && self.ast.types.as_record(n.ty()).is_some()
+                {
+                    self.materialize_temporary(ops[0], n.ty(), true)
+                } else {
+                    ops[0]
+                }
+            };
             conv.push(obj);
             let rest = self.convert_call_args(
                 named,

@@ -1,0 +1,48 @@
+TranslationUnitDecl
+|-CXXRecordDecl referenced struct X definition
+| |-FieldDecl referenced m 'int'
+| `-CXXMethodDecl used g 'int ()'
+|-CXXRecordDecl referenced struct P definition
+| `-CXXMethodDecl used operator-> 'X *()'
+|-CXXRecordDecl referenced struct Q definition
+| `-CXXMethodDecl used operator-> 'P ()'
+|-CXXRecordDecl referenced struct R definition
+| `-CXXMethodDecl used operator-> 'Q &() const'
+`-FunctionDecl f 'int (P, Q, const R &)'
+  |-ParmVarDecl used p 'P'
+  |-ParmVarDecl used q 'Q'
+  |-ParmVarDecl used r 'const R &'
+  `-CompoundStmt
+    `-ReturnStmt
+      `-ExprWithCleanups 'int'
+        `-BinaryOperator 'int' '+'
+          |-BinaryOperator 'int' '+'
+          | |-ImplicitCastExpr 'int' <LValueToRValue>
+          | | `-MemberExpr 'int' lvalue ->m
+          | |   `-CXXOperatorCallExpr 'X *' '->'
+          | |     |-ImplicitCastExpr 'X *(*)()' <FunctionToPointerDecay>
+          | |     | `-DeclRefExpr 'X *()' lvalue CXXMethod 'operator->' 'X *()'
+          | |     `-DeclRefExpr 'P' lvalue ParmVar 'p' 'P'
+          | `-ImplicitCastExpr 'int' <LValueToRValue>
+          |   `-MemberExpr 'int' lvalue ->m
+          |     `-CXXOperatorCallExpr 'X *' '->'
+          |       |-ImplicitCastExpr 'X *(*)()' <FunctionToPointerDecay>
+          |       | `-DeclRefExpr 'X *()' lvalue CXXMethod 'operator->' 'X *()'
+          |       `-MaterializeTemporaryExpr 'P' lvalue
+          |         `-CXXOperatorCallExpr 'P' '->'
+          |           |-ImplicitCastExpr 'P (*)()' <FunctionToPointerDecay>
+          |           | `-DeclRefExpr 'P ()' lvalue CXXMethod 'operator->' 'P ()'
+          |           `-DeclRefExpr 'Q' lvalue ParmVar 'q' 'Q'
+          `-CXXMemberCallExpr 'int'
+            `-MemberExpr '<bound member function type>' ->g
+              `-CXXOperatorCallExpr 'X *' '->'
+                |-ImplicitCastExpr 'X *(*)()' <FunctionToPointerDecay>
+                | `-DeclRefExpr 'X *()' lvalue CXXMethod 'operator->' 'X *()'
+                `-MaterializeTemporaryExpr 'P' lvalue
+                  `-CXXOperatorCallExpr 'P' '->'
+                    |-ImplicitCastExpr 'P (*)()' <FunctionToPointerDecay>
+                    | `-DeclRefExpr 'P ()' lvalue CXXMethod 'operator->' 'P ()'
+                    `-CXXOperatorCallExpr 'Q' lvalue '->'
+                      |-ImplicitCastExpr 'Q &(*)() const' <FunctionToPointerDecay>
+                      | `-DeclRefExpr 'Q &() const' lvalue CXXMethod 'operator->' 'Q &() const'
+                      `-DeclRefExpr 'const R' lvalue ParmVar 'r' 'const R &'
