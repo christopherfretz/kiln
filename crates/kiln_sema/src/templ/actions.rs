@@ -1168,7 +1168,7 @@ impl Sema<'_, '_> {
 
     /// `X<P...>` for class template `tmpl`'s own parameters `P`, as an
     /// `InjectedClassNameType`.
-    fn injected_type_of(&mut self, tmpl: DeclId) -> Option<QualType> {
+    pub(crate) fn injected_type_of(&mut self, tmpl: DeclId) -> Option<QualType> {
         let pat = self.pattern_of(tmpl)?;
         let info = self.ast.template_info(tmpl).copied()?;
         let list = *self.ast.templates.param_list(info.params);

@@ -964,6 +964,35 @@ impl AstBuilder<'_> {
         d
     }
 
+    /// A template decl for `pattern` that is neither a member nor a
+    /// name (an implicit deduction guide, [over.match.class.deduct]/1):
+    /// found only through the table that owns it. `pattern` is created
+    /// through [`TemplateTables::pattern_next`].
+    pub fn detached_template_decl(
+        &mut self,
+        kind: DeclKind,
+        pattern: DeclId,
+        params: TemplateParamListId,
+    ) -> DeclId {
+        let n = *self.ast.decls.get(pattern);
+        let ctx = n.ctx().unwrap_or(self.ast.tu);
+        let mut h = DeclHead::new(ctx, n.name(), n.loc());
+        h.misc = n.misc();
+        h.flags = n.flags().without(DeclFlags::HAS_LEXICAL_CTX.with(DeclFlags::DEPENDENT_CTX));
+        let i = self.ast.templates.infos.len() as u32;
+        let d = self.ast.decls.next_id();
+        self.ast.templates.infos.push(TemplateInfo {
+            decl: d,
+            params,
+            pattern: Some(pattern),
+            constraint: None,
+        });
+        let d2 = self.add_unregistered(h, kind, Payload::None(i), false);
+        debug_assert_eq!(d, d2);
+        let _ = self.ast.decls.set_templ(pattern, TemplLink::new(TemplLinkKind::Pattern, i));
+        d
+    }
+
     /// A concept ([temp.concept]): `template<params> concept C = e;`.
     pub fn concept(&mut self, h: DeclHead, params: TemplateParamListId, e: ExprId) -> DeclId {
         let i = self.ast.templates.infos.len() as u32;

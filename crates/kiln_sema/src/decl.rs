@@ -2719,6 +2719,23 @@ impl Sema<'_, '_> {
             self.init_decomposition_array(v, t, &init);
             return;
         }
+        if self.undeduced_ctad(ty).is_some() {
+            // [dcl.type.class.deduct]/1 (WP-071b).
+            ty = self.ctad_for_initializer(ty, &init, direct, loc).unwrap_or(QualType::ERROR);
+            self.ast.decls.set_ty(v, ty);
+            if self.is_error_type(ty) {
+                self.ast.decls.set_flags(v, DeclFlags::INVALID);
+                let es = match &init {
+                    Initializer::Expr(e) => vec![*e],
+                    Initializer::Paren(es, ..) => es.clone(),
+                    Initializer::List(l) => Self::list_exprs(l),
+                };
+                for e in es {
+                    self.act_on_full_expr(e);
+                }
+                return;
+            }
+        }
         if self.contains_undeduced_auto(ty) {
             ty = match self.deduce_var_auto(v, ty, &init, loc, direct) {
                 Some(t) => t,
@@ -2954,6 +2971,19 @@ impl Sema<'_, '_> {
         let ty = vn.ty().unwrap_or(QualType::ERROR);
         let loc = vn.loc();
         let name = self.decl_name(v);
+        let ty = if self.undeduced_ctad(ty).is_some() {
+            // `C x;` deduces from no arguments ([over.match.class.deduct]).
+            let t = self.deduce_ctad(ty, &[], &[], crate::templ::ctad::CtadInit::Direct, loc);
+            let t = t.unwrap_or(QualType::ERROR);
+            self.ast.decls.set_ty(v, t);
+            if self.is_error_type(t) {
+                self.ast.decls.set_flags(v, DeclFlags::INVALID);
+                return;
+            }
+            t
+        } else {
+            ty
+        };
         // [temp.res.general]/6: checked when instantiated.
         if self.is_error_type(ty) || self.ast.types.is_dependent(ty) {
             return;

@@ -769,6 +769,29 @@ impl Parser<'_, '_> {
                 }
                 true
             }
+            // A placeholder for a deduced class type ([dcl.type.class.deduct]).
+            Some((end, NameClass::TypeTemplate(d), _)) if self.s.is_ctad_template(d) => {
+                let nns = if end > start + 1 {
+                    match self.parse_nested_name_nns() {
+                        Ok(Some(q)) => Some(q.nns),
+                        _ => {
+                            ds.invalid = true;
+                            None
+                        }
+                    }
+                } else {
+                    None
+                };
+                while self.pos() < end {
+                    self.bump();
+                }
+                let ty = self.s.ctad_placeholder(d, nns);
+                if let Err(e) = ds.set_base(TypeSpecKind::Named, Some(ty), loc) {
+                    ds.invalid = true;
+                    self.spec_error(&e, loc);
+                }
+                true
+            }
             Some((end, NameClass::Undeclared, name)) if end == start + 1 => {
                 let next = self.tok_at(end);
                 let unknown_type = self.ident_of(next).is_some()

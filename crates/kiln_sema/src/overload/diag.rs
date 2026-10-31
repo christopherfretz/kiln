@@ -249,7 +249,10 @@ impl Sema<'_, '_> {
                 return self.with_sat_notes(d, sat);
             }
             CandidateFailure::Explicit => {
-                let which = u8::from(cand.kind == CandidateKind::ConvFn);
+                let which = match self.ctad_guide_kind(f, cand.template) {
+                    Some((false, _)) => 2,
+                    _ => u8::from(cand.kind == CandidateKind::ConvFn),
+                };
                 return self.diag(DiagId::note_ovl_candidate_explicit, loc).arg(which);
             }
             CandidateFailure::IllegalCtor => {
@@ -287,6 +290,16 @@ impl Sema<'_, '_> {
                 out.push(self.surrogate_note(set.cand(c).func()));
             } else {
                 out.push(self.ovl_note(set, c));
+                // clang `NoteDeductionGuide`: an implicit guide's notes
+                // say what it was synthesized as.
+                let cand = set.cand(c);
+                if let Some((true, _)) = self.ctad_guide_kind(cand.func(), cand.template)
+                    && let Some(t) = cand.template
+                    && let Some(sig) = self.implicit_guide_signature(t)
+                {
+                    let loc = self.ast.decls.get(cand.func()).loc();
+                    out.push(self.diag(DiagId::note_implicit_deduction_guide, loc).arg(sig));
+                }
             }
         }
         out
