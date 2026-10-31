@@ -148,6 +148,10 @@ impl Cg<'_> {
                 let d = *st.loop_data(s);
                 d.init.into_iter().chain(d.body).collect()
             }
+            StmtKind::CXXForRangeStmt => {
+                let d = *st.range_for_data(s);
+                d.init.into_iter().chain(Some(d.body)).collect()
+            }
             StmtKind::LabelStmt | StmtKind::AttributedStmt => vec![StmtId::new(n.b())],
             _ => Vec::new(),
         }
@@ -254,6 +258,7 @@ impl Cg<'_> {
             StmtKind::WhileStmt => self.emit_while(s),
             StmtKind::DoStmt => self.emit_do(s),
             StmtKind::ForStmt => self.emit_for(s),
+            StmtKind::CXXForRangeStmt => self.emit_range_for(s),
             StmtKind::SwitchStmt => self.emit_switch(s),
             StmtKind::CaseStmt => self.emit_case(s),
             StmtKind::DefaultStmt => {
@@ -543,6 +548,55 @@ impl Cg<'_> {
         }
         self.f.jumps.pop();
         self.end_scope(cond_scope);
+        self.emit_branch(cond_b);
+        self.end_scope(for_scope);
+        self.f.loops.pop();
+        self.emit_block(end.blk, true);
+        Ok(())
+    }
+
+    /// clang `EmitCXXForRangeStmt`: the implicit variables, then the
+    /// loop. The loop carries no `llvm.loop` metadata (clang pushes the
+    /// loop without `mustprogress`).
+    fn emit_range_for(&mut self, s: StmtId) -> R<()> {
+        let ast = self.ast;
+        let d = *ast.stmts.range_for_data(s);
+        let loc = ast.stmts.get(s).loc();
+        let (Some(begin), Some(end_var), Some(cond), Some(inc)) = (d.begin, d.end, d.cond, d.inc)
+        else {
+            return err(Some(loc), "a dependent range-based for statement");
+        };
+        let end = self.jump_dest_here();
+        let for_scope = self.begin_scope(true);
+        if let Some(i) = d.init {
+            self.emit_stmt(i)?;
+        }
+        self.emit_var_decl(d.range)?;
+        self.emit_var_decl(begin)?;
+        self.emit_var_decl(end_var)?;
+        let cond_d = self.jump_dest_here();
+        let cond_b = cond_d.blk;
+        self.emit_block(cond_b, false);
+        self.f.loops.push(LoopFrame { header: cond_b, md: None });
+        let exit =
+            if self.requires_cleanups(&for_scope) { self.f.fir.create_block() } else { end.blk };
+        let body_b = self.f.fir.create_block();
+        let cv = self.eval_bool(cond)?;
+        self.cond_br(cv, body_b, exit);
+        if exit != end.blk {
+            self.emit_block(exit, false);
+            self.branch_through_cleanup(end);
+        }
+        self.emit_block(body_b, false);
+        let next = self.jump_dest_here();
+        self.f.jumps.push(Jump { brk: end, cont: Some(next) });
+        let sc = self.begin_scope(false);
+        self.emit_var_decl(d.loop_var)?;
+        self.emit_stmt(d.body)?;
+        self.end_scope(sc);
+        self.emit_block(next.blk, false);
+        self.emit_ignored(inc)?;
+        self.f.jumps.pop();
         self.emit_branch(cond_b);
         self.end_scope(for_scope);
         self.f.loops.pop();

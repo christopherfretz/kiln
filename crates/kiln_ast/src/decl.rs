@@ -943,8 +943,10 @@ impl VarSpec {
     /// (set over `C` only, with its `CXXConstructExpr`), `ParenList` (set
     /// over `Call` once the parenthesized initializer turns out to
     /// initialize an aggregate), and `inline` (an instantiated static data
-    /// member becomes inline with its deferred initializer, [temp.inst]/4).
-    pub const LATE: VarSpec = VarSpec((1 << 10) | (1 << 9) | (1 << 6) | (1 << 5));
+    /// member becomes inline with its deferred initializer, [temp.inst]/4),
+    /// and `cxx_for_range` (a for-range-declaration is known as one after
+    /// it is declared, clang `ActOnCXXForRangeDecl`).
+    pub const LATE: VarSpec = VarSpec((1 << 12) | (1 << 10) | (1 << 9) | (1 << 6) | (1 << 5));
 }
 
 bit_accessors!(VarSpec:

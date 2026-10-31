@@ -321,6 +321,14 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                 push(l.body, todo);
             }
             StmtKind::DoStmt => push(stmts.loop_data(s).body, todo),
+            StmtKind::CXXForRangeStmt => {
+                let r = *stmts.range_for_data(s);
+                push(r.init, todo);
+                for v in [Some(r.range), r.begin, r.end, Some(r.loop_var)].into_iter().flatten() {
+                    todo.push(Search::Decl(v));
+                }
+                push(Some(r.body), todo);
+            }
             StmtKind::CXXTryStmt => {
                 push(Some(stmts.try_block(s)), todo);
                 for h in lists.iter::<StmtId>(stmts.try_handlers(s)) {
@@ -414,7 +422,11 @@ impl<'a, W: io::Write> Dumper<'a, W> {
             Node::Decl(d) => self.decl_children(d, kids),
             Node::Expr(e) => self.expr_children(e, kids),
             Node::Stmt(s) => self.stmt_children(s, kids),
-            Node::CondVar(d) => kids.push((Node::Decl(d), None)),
+            Node::CondVar(d) => {
+                if self.opts.implicit || !names::is_implicit(self.ast, d) {
+                    kids.push((Node::Decl(d), None));
+                }
+            }
             Node::CtorInit(c, i) => {
                 if let Some(ci) = self.ast.ctor_inits(c).nth(i as usize) {
                     kids.push((Node::Expr(ci.init), None));
@@ -734,6 +746,17 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                 let l = *stmts.loop_data(s);
                 stmt(l.body, kids);
                 expr(l.cond, kids);
+            }
+            StmtKind::CXXForRangeStmt => {
+                let r = *stmts.range_for_data(s);
+                stmt(r.init, kids);
+                var(Some(r.range), kids);
+                var(r.begin, kids);
+                var(r.end, kids);
+                expr(r.cond, kids);
+                expr(r.inc, kids);
+                var(Some(r.loop_var), kids);
+                stmt(Some(r.body), kids);
             }
             StmtKind::ReturnStmt => expr(stmts.return_value(s), kids),
             StmtKind::CXXTryStmt => {
@@ -1660,6 +1683,9 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                     (l.cond.is_some(), " has_cond"),
                     (l.inc.is_some(), " has_inc"),
                 ]);
+            }
+            StmtKind::CXXForRangeStmt => {
+                self.flags(&[(stmts.range_for_data(s).init.is_some(), " has_init")]);
             }
             StmtKind::ReturnStmt => {
                 if let Some(v) = stmts.return_nrvo(s) {

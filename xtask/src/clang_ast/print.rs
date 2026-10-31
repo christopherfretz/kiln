@@ -1435,6 +1435,30 @@ impl<'a> Printer<'a, '_> {
                     }
                 }
             }
+            "CXXForRangeStmt" => {
+                // Eight slots ({init, __range, __begin, __end, cond, inc,
+                // loop variable, body}); absent ones (`{}`: no init, or
+                // the desugaring of a dependent range) are not printed.
+                let slots: Vec<&Json> = kids(n).collect();
+                if slots.len() != 8 {
+                    return Err(format!(
+                        "clang-ast: CXXForRangeStmt with {} child slots, not 8",
+                        slots.len()
+                    ));
+                }
+                let mut l = String::from(k);
+                if !is_null(slots[0]) {
+                    push_word(&mut l, "has_init");
+                }
+                line = l;
+                for slot in slots {
+                    if !is_null(slot)
+                        && let Some(t) = self.node(slot)?
+                    {
+                        kids_out.push(t);
+                    }
+                }
+            }
             "CXXCatchStmt" => {
                 // `catch (...)` has an absent exception-declaration slot
                 // (`{"id": "0x0"}`), which kiln does not print

@@ -997,6 +997,74 @@ and aggregate element types.
   `new K[2][3]` of a class with a default constructor has no
   `CXXConstructExpr` initializer, so codegen calls no constructors.
 
+### 7.6 Landed (WP-089): range-based `for` (`range_for.rs`)
+Sema desugars `for (init; decl : range) body` ([stmt.ranged]/1) the way
+clang's `ActOnCXXForRangeStmt`/`BuildCXXForRangeStmt` does, into a
+`CXXForRangeStmt` (ast.md, `RangeForData`) holding `__range{d}`
+(`auto&&`), `__begin{d}` and `__end{d}` (`auto`), the condition
+`__begin != __end`, the increment `++__begin` and the loop variable
+initialized from `*__begin`. `d` is clang's scope depth of the for's
+control scope halved (`clang_scope_depth()/2`, with the depth outside the
+template saved in `range_for_outer_depth` for instantiations).
+
+- **Parser contract.** `parse_for` pushes the control scope and scans the
+  head for a top-level `:` (`at_for_range_head`). The range path calls
+  `act_on_declarator` for the loop variable, then
+  `act_on_for_range_decl(ds, v)` (storage classes:
+  `loop variable 'x' may not be declared 'static'`; a type definition:
+  `types may not be defined in a for range declaration`), parses the
+  range inside `begin_for_range_init(extend)`/`end_for_range_init`
+  (P2718 collection, sema-class.md §5.4), and calls
+  `act_on_for_range(init, loop_var, range, temps, colon, loc)`, which
+  returns a `RangeForHead`; after the body,
+  `act_on_finish_for_range(head, body)` builds the statement. A failed
+  head (`None`) or a failed declaration (`act_on_for_range_error`) marks
+  the loop variable invalid and the body is still parsed. `for (x : r)`
+  is `range-based for loop requires type for loop variable` (the
+  variable gets type `auto`); a structured binding is unsupported; an
+  init-statement before C++20 is `-Wc++20-extensions`.
+- **Range kinds.** An array range (a constant array; a VLA is
+  unsupported) uses `__range` and `__range + N` (`N` a `ptrdiff_t`
+  literal). A class range uses member `begin`/`end` when the class has
+  either member ([stmt.ranged]/1.3, P0962), else ADL-only calls
+  `begin(__range)`/`end(__range)` (`build_begin_end`), each checked for
+  viability before it is built. A braced-init-list range deduces
+  `std::initializer_list<E>` for `__range`.
+- **Diagnostics (clang's text and locations).**
+  `invalid range expression of type T; no viable 'begin'|'end' function
+  available` with the overload candidates as notes; a lone member is
+  `member is not a candidate because range type T has no 'end'|'begin'
+  member`; an incomplete class is `cannot use incomplete type T as a
+  range` with the forward-declaration note; a pointer whose pointee is a
+  valid range is `invalid range expression of type T; did you mean to
+  dereference it with '*'?` and the loop is rebuilt on `*range`
+  (`rebuild_with_dereference`); an iterator or loop-variable failure gets
+  `selected 'begin' function with iterator type T` (the candidate notes
+  are captured through `diag_capture` while each attempt runs and
+  released on success of the diagnosis).
+- **Templates.** A type-dependent range (or loop-variable type) keeps
+  only `__range` and the loop variable in the pattern; instantiation
+  (`templ/subst/stmts.rs` `range_for`) substitutes the range under a new
+  P2718 collection, declares the loop variable, and finishes the head
+  with `instantiate_for_range`. A non-dependent range is desugared in
+  the definition.
+- **Fixed on the way (WP-089).** Reference binding and reference ICS
+  compare reference-relatedness on types made unqualified through array
+  levels (clang `getUnqualifiedArrayType`), so `int[3]` binds to
+  `const int (&)[3]`. `auto` deduction under a reference or pointer
+  declarator keeps an array result as `Auto` sugar deduced to the
+  cv-unqualified-through-arrays array (clang's `AutoType`), so
+  `auto &r = a;` prints `int &[2]` as clang does; the dump printer keeps a
+  dependent `auto` (deduced as `<dependent type>`) as `auto`.
+- **Left (WP-089):** `err_range_on_array_parameter` (needs
+  `ParamData.original_ty`, which `act_on_param_declarator` does not set,
+  so an array parameter gets the generic `'int *'` diagnostic);
+  structured bindings; VLA ranges; the default-on
+  `-Wempty-body`-style `warn_empty_range_based_for_body` and the
+  DefaultIgnore `-Wrange-loop-construct`/`-Wrange-loop-bind-reference`
+  warnings (groups declared, not emitted); the begin/end-types-differ
+  pre-C++17 extension warning; clang's recovery for `for (int x, y : a)`.
+
 ## 8. Constant evaluation (`oven_bridge.rs`)
 
 Sema does no constant evaluation of its own: every constant it needs

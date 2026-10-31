@@ -177,6 +177,7 @@ pub fn parse_preprocessed<'a, 'sm>(
     s.set_constexpr_limits(limits.budget, limits.backtrace_limit);
     s.exceptions = opts.exceptions;
     s.rtti = opts.rtti;
+    s.range_lifetime_extension = opts.std >= Std::Cxx23;
     s.inst.limits = opts.inst_limits;
     s.inst.report.format = opts.inst_report;
     let main = pp.main_file().map(|f| diags.sm().file_name(f).to_owned()).unwrap_or_default();

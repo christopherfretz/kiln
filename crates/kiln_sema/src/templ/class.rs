@@ -62,6 +62,10 @@ impl Sema<'_, '_> {
     /// definition, not from where the instantiation was required).
     pub(crate) fn in_inst_context<R>(&mut self, ctx: DeclId, f: impl FnOnce(&mut Self) -> R) -> R {
         let tu_dirs = self.scopes.first().map(|s| s.using_dirs.clone()).unwrap_or_default();
+        let outer_depth = self.range_for_outer_depth;
+        if outer_depth.is_none() {
+            self.range_for_outer_depth = Some(self.clang_scope_depth());
+        }
         let saved = SavedState {
             scopes: std::mem::take(&mut self.scopes),
             ctx: Some(self.ctx),
@@ -132,6 +136,7 @@ impl Sema<'_, '_> {
         self.classes = saved.classes;
         self.cleanup = saved.cleanup;
         self.extend_collector = saved.extend_collector;
+        self.range_for_outer_depth = outer_depth;
         self.nsdmi_this = saved.nsdmi_this;
         self.initializing = saved.initializing;
         self.templ.heads = saved.heads;

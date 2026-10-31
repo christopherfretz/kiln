@@ -234,7 +234,7 @@ pub fn write_declarator(
     }
     let mut scope = opts.full_scope;
     if opts.desugar {
-        q = ctx.desugar_top(q);
+        q = desugar_top_for_print(ctx, q);
         let (t, _) = split(ctx, q);
         // clang prints a bare RecordType (what desugaring an
         // ElaboratedType leaves) with its scope.
@@ -378,8 +378,25 @@ pub fn dump_strings(
 ) -> (String, Option<String>) {
     let written = print_type(ctx, names, q, PrintOptions::SUGARED);
     let desugared = print_type(ctx, names, q, PrintOptions::DESUGARED);
-    let differs = ctx.desugar_top(q) != q || desugared != written;
+    let differs = desugar_top_for_print(ctx, q) != q || desugared != written;
     (written, differs.then_some(desugared))
+}
+
+/// [`TypeContext::desugar_top`], except that an undeduced `auto` whose
+/// initializer is type-dependent (kiln: deduced to `<dependent type>`)
+/// is kept: clang's `AutoType` is canonical there and prints as `auto`.
+fn desugar_top_for_print(ctx: &TypeContext, mut q: QualType) -> QualType {
+    loop {
+        if matches!(ctx.view(q.ty()), TypeView::Auto { deduced: Some(d), .. } if d == QualType::DEPENDENT)
+        {
+            return q;
+        }
+        let n = ctx.desugar_once(q);
+        if n == q {
+            return q;
+        }
+        q = n;
+    }
 }
 
 /// Nesting beyond this prints `...` instead of recursing (no stack

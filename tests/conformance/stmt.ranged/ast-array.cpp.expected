@@ -1,0 +1,52 @@
+Dumping sum_array:
+FunctionDecl sum_array 'int ()'
+`-CompoundStmt
+  |-DeclStmt
+  | `-VarDecl used s 'int' cinit
+  |   `-IntegerLiteral 'int' 0
+  |-CXXForRangeStmt has_init
+  | |-DeclStmt
+  | | `-VarDecl used a 'int[2][2]' cinit
+  | |   `-InitListExpr 'int[2][2]'
+  | |     `-array_filler: ImplicitValueInitExpr 'int[2]'
+  | |-DeclStmt
+  | |-DeclStmt
+  | |-DeclStmt
+  | |-BinaryOperator 'bool' '!='
+  | | |-ImplicitCastExpr 'int (*)[2]' <LValueToRValue>
+  | | | `-DeclRefExpr 'int (*)[2]' lvalue Var '__begin1' 'int (*)[2]'
+  | | `-ImplicitCastExpr 'int (*)[2]' <LValueToRValue>
+  | |   `-DeclRefExpr 'int (*)[2]' lvalue Var '__end1' 'int (*)[2]'
+  | |-UnaryOperator 'int (*)[2]' lvalue prefix '++'
+  | | `-DeclRefExpr 'int (*)[2]' lvalue Var '__begin1' 'int (*)[2]'
+  | |-DeclStmt
+  | | `-VarDecl used row 'int &[2]' cinit
+  | |   `-UnaryOperator 'int[2]' lvalue prefix '*' cannot overflow
+  | |     `-ImplicitCastExpr 'int (*)[2]' <LValueToRValue>
+  | |       `-DeclRefExpr 'int (*)[2]' lvalue Var '__begin1' 'int (*)[2]'
+  | `-CXXForRangeStmt
+  |   |-DeclStmt
+  |   |-DeclStmt
+  |   |-DeclStmt
+  |   |-BinaryOperator 'bool' '!='
+  |   | |-ImplicitCastExpr 'int *' <LValueToRValue>
+  |   | | `-DeclRefExpr 'int *' lvalue Var '__begin2' 'int *'
+  |   | `-ImplicitCastExpr 'int *' <LValueToRValue>
+  |   |   `-DeclRefExpr 'int *' lvalue Var '__end2' 'int *'
+  |   |-UnaryOperator 'int *' lvalue prefix '++'
+  |   | `-DeclRefExpr 'int *' lvalue Var '__begin2' 'int *'
+  |   |-DeclStmt
+  |   | `-VarDecl used x 'const int &' cinit
+  |   |   `-ImplicitCastExpr 'const int' lvalue <NoOp>
+  |   |     `-UnaryOperator 'int' lvalue prefix '*' cannot overflow
+  |   |       `-ImplicitCastExpr 'int *' <LValueToRValue>
+  |   |         `-DeclRefExpr 'int *' lvalue Var '__begin2' 'int *'
+  |   `-CompoundAssignOperator 'int' lvalue '+=' ComputeLHSTy='int' ComputeResultTy='int'
+  |     |-DeclRefExpr 'int' lvalue Var 's' 'int'
+  |     `-ImplicitCastExpr 'int' <LValueToRValue>
+  |       `-DeclRefExpr 'const int' lvalue Var 'x' 'const int &'
+  `-ReturnStmt
+    `-ImplicitCastExpr 'int' <LValueToRValue>
+      `-ImplicitCastExpr 'int' xvalue <NoOp>
+        `-DeclRefExpr 'int' lvalue Var 's' 'int'
+

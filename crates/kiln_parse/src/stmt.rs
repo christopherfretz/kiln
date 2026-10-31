@@ -4,8 +4,10 @@ use kiln_ast::decl::InitStyle;
 use kiln_ast::stmt::IfKind;
 use kiln_ast::{DeclId, ExprId, StmtId};
 use kiln_diag::DiagId;
-use kiln_lex::Punct;
-use kiln_sema::{Chunk, Declarator, DeclaratorContext, ScopeKind};
+use kiln_lex::{Punct, Std, TokKind};
+use kiln_sema::{
+    Chunk, DeclSpec, Declarator, DeclaratorContext, RangeInit, ScopeKind, TypeSpecKind,
+};
 use kiln_source::Loc;
 
 use crate::keywords::Kw;
@@ -612,9 +614,13 @@ impl Parser<'_, '_> {
     /// do-statement ([stmt.do]).
     fn parse_do(&mut self) -> Option<StmtId> {
         let loc = self.bump().span.lo;
+        // clang's `ParseDoStatement` opens a scope (it numbers the
+        // implicit variables of a nested range-based for).
+        self.s.push_scope(ScopeKind::Control);
         self.s.act_on_start_loop();
         let body = self.parse_sub_statement();
         self.s.act_on_end_loop();
+        self.s.pop_scope();
         if self.eat_kw(Kw::While).is_none() {
             self.error_here(DiagId::parse_expected_while);
             self.skip_until(&[Punct::RBrace], true, false);
@@ -632,7 +638,7 @@ impl Parser<'_, '_> {
         Some(s)
     }
 
-    /// for-statement ([stmt.for]); range-based for is not supported.
+    /// for-statement ([stmt.for]) or range-based for ([stmt.ranged]).
     fn parse_for(&mut self) -> Option<StmtId> {
         let loc = self.bump().span.lo;
         let Some(open) = self.eat(Punct::LParen) else {
@@ -645,20 +651,184 @@ impl Parser<'_, '_> {
             self.skip_until(&[Punct::RBrace], true, false);
             return None;
         };
-        if let Some((_, Punct::Colon)) = self.scan_for(&[Punct::Semi, Punct::Colon, Punct::RParen])
-        {
-            self.unsupported("range-based for", loc);
-            self.skip_until(&[Punct::RParen], false, true);
-            self.skip_sub_statement();
-            return None;
-        }
         self.s.push_scope(ScopeKind::Control);
-        let r = self.parse_for_rest(open, loc);
+        let r = if self.at_for_range_head() {
+            self.parse_for_range(open, loc, None)
+        } else {
+            self.parse_for_rest(open, loc)
+        };
         self.s.pop_scope();
         r
     }
 
+    /// True if the tokens from the current one up to the next top-level
+    /// `;` or the closing `)` contain a top-level `:` (not the `:` of a
+    /// conditional expression): a for-range-declaration follows
+    /// (clang's `ForRangeInit` detection in `ParseForStatement`).
+    fn at_for_range_head(&self) -> bool {
+        let mut depth = 0u32;
+        let mut questions = 0u32;
+        let mut i = self.pos();
+        loop {
+            let p = match self.tok_at(i).kind {
+                TokKind::Eof => return false,
+                TokKind::Punct(p) => p,
+                _ => {
+                    i += 1;
+                    continue;
+                }
+            };
+            match p {
+                Punct::LParen | Punct::LSquare | Punct::LBrace => depth += 1,
+                Punct::RParen | Punct::RSquare | Punct::RBrace => {
+                    if depth == 0 {
+                        return false;
+                    }
+                    depth -= 1;
+                }
+                Punct::Semi if depth == 0 => return false,
+                Punct::Question if depth == 0 => questions += 1,
+                Punct::Colon if depth == 0 => {
+                    if questions == 0 {
+                        return true;
+                    }
+                    questions -= 1;
+                }
+                _ => {}
+            }
+            i += 1;
+        }
+    }
+
+    /// The rest of a range-based for statement ([stmt.ranged]) after
+    /// `(` and the optional init-statement `init`: the
+    /// for-range-declaration, `:`, the for-range-initializer, `)` and the
+    /// body. The range is parsed before the loop variable is declared,
+    /// as clang does (`for (auto x : x)` names an outer `x`).
+    fn parse_for_range(&mut self, open: Loc, loc: Loc, init: Option<StmtId>) -> Option<StmtId> {
+        let ctx = DeclaratorContext::ForInit;
+        if let Some(name) = self.ident()
+            && Self::punct_of(self.peek(1)) == Some(Punct::Colon)
+        {
+            // `for (x : r)` (clang `isForRangeIdentifier`): diagnosed after
+            // the range, then declared as `auto&& x` (clang
+            // `ActOnCXXForRangeIdentifier`).
+            let nloc = self.bump().span.lo;
+            let colon = self.bump().span.lo;
+            let range = self.parse_for_range_initializer();
+            self.s.error(DiagId::parse_for_range_identifier, nloc);
+            let mut ds = DeclSpec::new(nloc);
+            let _ = ds.set_base(TypeSpecKind::Auto, None, nloc);
+            let mut d = Declarator::new(ctx, nloc);
+            d.name = Some((name, nloc));
+            d.chunks.push(Chunk::RRef { loc: nloc });
+            d.init_style = Some(InitStyle::C);
+            let base = self.s.type_from_declspec_at(&ds, nloc);
+            let v = self.s.act_on_declarator(&ds, base, &d);
+            let v = v.filter(|&v| self.s.act_on_for_range_decl(&ds, v));
+            return self.finish_for_range(open, loc, init, v, range, Vec::new(), colon);
+        }
+        let ds = self.parse_decl_specifiers(ctx);
+        let binding = self.at(Punct::LSquare)
+            || (matches!(Self::punct_of(self.tok()), Some(Punct::Amp | Punct::AmpAmp))
+                && Self::punct_of(self.peek(1)) == Some(Punct::LSquare));
+        if binding {
+            self.unsupported("structured bindings", self.loc());
+            self.skip_until(&[Punct::RParen], false, true);
+            self.skip_sub_statement();
+            return None;
+        }
+        if ds.is_empty() {
+            // `for (expr : r)`: clang `err_for_range_expected_decl` at the
+            // `:` after the expression.
+            let _ = self.parse_expression();
+            if self.at(Punct::Colon) {
+                self.error_here(DiagId::parse_for_range_expected_decl);
+            } else {
+                let e = self.s.diag(DiagId::parse_expected, self.loc()).arg("';'");
+                self.emit(e);
+            }
+            self.skip_until(&[Punct::RParen], false, true);
+            self.parse_dead_loop_body();
+            return None;
+        }
+        let mut d = Declarator::new(ctx, self.loc());
+        self.parse_declarator(&mut d);
+        let base = self.s.type_from_declspec_at(&ds, d.name_loc());
+        if self.at_attr() {
+            self.parse_attributes(&mut d.attrs);
+        }
+        if !d.has_name() || !self.at(Punct::Colon) {
+            if !d.invalid {
+                if d.has_name() {
+                    let e = self.s.diag(DiagId::parse_expected, self.loc()).arg("';'");
+                    self.emit(e);
+                } else {
+                    self.error_here(DiagId::parse_expected_unqualified_id);
+                }
+            }
+            self.skip_until(&[Punct::RParen], false, true);
+            self.parse_dead_loop_body();
+            return None;
+        }
+        let colon = self.bump().span.lo;
+        let collect = self.s.begin_for_range_init(self.s.range_lifetime_extension);
+        let range = self.parse_for_range_initializer();
+        let temps = self.s.end_for_range_init(collect);
+        d.init_style = Some(InitStyle::C);
+        let v = self.s.act_on_declarator(&ds, base, &d);
+        let v = v.filter(|&v| self.s.act_on_for_range_decl(&ds, v));
+        self.finish_for_range(open, loc, init, v, range, temps, colon)
+    }
+
+    /// The for-range-initializer: an expression or a braced-init-list.
+    fn parse_for_range_initializer(&mut self) -> Option<RangeInit> {
+        if self.at(Punct::LBrace) {
+            self.parse_init_list().ok().map(RangeInit::List)
+        } else {
+            self.parse_expression().map(RangeInit::Expr)
+        }
+    }
+
+    /// The `)` and the body of a range-based for whose loop variable `v`
+    /// (`None` after an error) and range were parsed.
+    #[allow(clippy::too_many_arguments, reason = "the parsed parts of the head")]
+    fn finish_for_range(
+        &mut self,
+        open: Loc,
+        loc: Loc,
+        init: Option<StmtId>,
+        v: Option<DeclId>,
+        range: Option<RangeInit>,
+        temps: Vec<ExprId>,
+        colon: Loc,
+    ) -> Option<StmtId> {
+        let Some(range) = range else {
+            if let Some(v) = v {
+                self.s.act_on_for_range_error(v);
+            }
+            self.skip_until(&[Punct::RParen], false, true);
+            self.parse_dead_loop_body();
+            return None;
+        };
+        self.expect_closing(Punct::RParen, Punct::LParen, open);
+        let head = v.and_then(|v| self.s.act_on_for_range(init, v, range, temps, colon, loc));
+        self.s.act_on_start_loop();
+        let body = self.parse_sub_statement();
+        self.s.act_on_end_loop();
+        head.map(|h| self.s.act_on_finish_for_range(h, body))
+    }
+
+    /// The body of a loop whose head was in error: analysed (clang keeps
+    /// parsing it) and dropped.
+    fn parse_dead_loop_body(&mut self) {
+        self.s.act_on_start_loop();
+        let _ = self.parse_sub_statement();
+        self.s.act_on_end_loop();
+    }
+
     fn parse_for_rest(&mut self, open: Loc, loc: Loc) -> Option<StmtId> {
+        let first = self.loc();
         let init = if self.at(Punct::Semi) {
             self.bump();
             None
@@ -669,6 +839,14 @@ impl Parser<'_, '_> {
         } else {
             self.parse_expression_statement(false)
         };
+        if self.at_for_range_head() {
+            if self.std < Std::Cxx20 {
+                // clang reports at the start of the init-statement.
+                let w = self.s.diag(DiagId::parse_ext_for_range_init_stmt, first);
+                self.emit(w);
+            }
+            return self.parse_for_range(open, loc, init);
+        }
         let (mut var, mut cond) = (None, None);
         if !self.at(Punct::Semi) {
             let Some((v, c)) = self.parse_condition() else {

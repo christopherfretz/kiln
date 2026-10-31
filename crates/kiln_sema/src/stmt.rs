@@ -842,6 +842,11 @@ impl Sema<'_, '_> {
                     Falloff::Maybe.min_with(Falloff::Always, d.body.map(|b| self.has_return(b)))
                 }
             }
+            StmtKind::CXXForRangeStmt => {
+                // Never infinite: the condition is `__begin != __end`.
+                let body = self.ast.stmts.range_for_data(s).body;
+                Falloff::Maybe.min_with(Falloff::Always, Some(self.has_return(body)))
+            }
             StmtKind::LabelStmt => self.falls_off(StmtId::new(n.b())),
             StmtKind::CaseStmt => self.falls_off(self.ast.stmts.case_data(s).sub),
             StmtKind::DefaultStmt => self.falls_off(self.ast.stmts.default_sub(s)),
@@ -932,6 +937,7 @@ impl Sema<'_, '_> {
             StmtKind::WhileStmt | StmtKind::ForStmt | StmtKind::DoStmt => {
                 st.loop_data(s).body.into_iter().collect()
             }
+            StmtKind::CXXForRangeStmt => vec![st.range_for_data(s).body],
             StmtKind::SwitchStmt => vec![st.switch_data(s).body],
             StmtKind::CaseStmt => vec![st.case_data(s).sub],
             StmtKind::DefaultStmt => vec![st.default_sub(s)],
@@ -953,7 +959,11 @@ impl Sema<'_, '_> {
         }
         let nested = matches!(
             k,
-            StmtKind::WhileStmt | StmtKind::ForStmt | StmtKind::DoStmt | StmtKind::SwitchStmt
+            StmtKind::WhileStmt
+                | StmtKind::ForStmt
+                | StmtKind::DoStmt
+                | StmtKind::SwitchStmt
+                | StmtKind::CXXForRangeStmt
         );
         let d = if nested { depth + 1 } else { depth };
         self.children(s).into_iter().any(|c| self.contains_break(c, d))
