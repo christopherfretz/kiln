@@ -301,6 +301,10 @@ impl Substituter<'_, '_, '_> {
     /// substituted signature; its definition is instantiated when used
     /// (§4.4). Default arguments are substituted now (a gap: clang
     /// instantiates them when a call uses them).
+    #[allow(
+        clippy::too_many_lines,
+        reason = "the 112 lazy exception specs and the 109 constrained/friend members meet here"
+    )]
     pub(crate) fn function_decl(
         &mut self,
         d: DeclId,
@@ -368,6 +372,11 @@ impl Substituter<'_, '_, '_> {
                 dr.virt_final = Some(loc);
             }
         }
+        // The pattern's trailing requires-clause, unsubstituted: checked
+        // with this instantiation's levels ([temp.inst]/17, clang
+        // `InstantiateFunctionDeclaration` keeps it).
+        let requires = self.sema.ast.templates.trailing_requires.get(d).copied();
+        dr.trailing_requires = requires;
         let base = if ds.base == TypeSpecKind::None { QualType::VOID } else { ret };
         let r = match friend {
             Some(fl) => self.sema.act_on_friend(&ds, base, Some(&dr), fl),
@@ -388,6 +397,19 @@ impl Substituter<'_, '_, '_> {
             let first = self.sema.ast.first(f);
             self.sema.uninstantiated_exc.insert(first, d);
         }
+        if requires.is_some() {
+            self.sema.inst.concepts.member_constraints.insert(f, (d, self.args.clone()));
+        }
+        // A friend defined in the class: its definition is instantiated
+        // from the pattern when used ([temp.inst]/4, clang's
+        // `isThisDeclarationInstantiatedFromAFriendDefinition`).
+        if friend.is_some()
+            && self.sema.ast.decls.function(d).is_some_and(|x| x.body.is_some())
+            && self.sema.ast.definition(f).is_none()
+            && self.sema.ast.instantiated_from(f).is_none()
+        {
+            self.member_link(f, d);
+        }
         if fs.is_some_and(kiln_ast::decl::FnSpec::is_pure) {
             self.sema.ast.decls.mark_function(f, kiln_ast::decl::FnSpec::new().with_pure(true));
         }
@@ -407,7 +429,9 @@ impl Substituter<'_, '_, '_> {
             if s.is_deleted() {
                 let msg = self.sema.ast.decls.cold.delete_message.get(d).copied();
                 self.sema.act_on_deleted(f, loc, msg);
-            } else if s.defaulted() == kiln_ast::decl::Defaulted::Explicit && friend.is_none() {
+            } else if s.defaulted() == kiln_ast::decl::Defaulted::Explicit
+                && (friend.is_none() || self.sema.cmp_kind(f).is_some())
+            {
                 self.sema.act_on_defaulted(f, loc);
             }
         }
@@ -666,7 +690,13 @@ impl Substituter<'_, '_, '_> {
                     return self.unimplemented("friend templates", loc);
                 }
                 let ctx = DeclaratorContext::Member;
-                self.function_decl(f, ctx, Some(loc)).map(Some)
+                let r = self.function_decl(f, ctx, Some(loc))?;
+                if let FriendTarget::Decl(x) = self.sema.ast.decls.friend_target(r)
+                    && self.sema.ast.instantiated_from(x).is_none()
+                {
+                    self.member_link(x, f);
+                }
+                Ok(Some(r))
             }
         }
     }

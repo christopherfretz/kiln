@@ -215,6 +215,19 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// The [`ArgInfo`] of constructor argument `e`: a braced-init-list
+    /// placeholder ([`Sema::act_on_braced_arg`], `T x({1, 2})`) is a list
+    /// argument ([over.ics.list]); its list stays in `ovl.lists` for the
+    /// set's notes.
+    pub(crate) fn ctor_arg_info(&mut self, e: ExprId) -> ArgInfo {
+        let Some(l) = self.braced_args.iter().find(|(x, _)| *x == e).map(|(_, l)| l.clone()) else {
+            return self.arg_info(e);
+        };
+        let idx = u32::try_from(self.ovl.lists.len()).unwrap_or(u32::MAX);
+        self.ovl.lists.push(l);
+        ArgInfo { list: Some(idx), ..ArgInfo::of_type(QualType::VOID, ValueCategory::PRValue) }
+    }
+
     fn ics_is_error(&self, q: QualType) -> bool {
         let t = &self.ast.types;
         t.canonical(q).without_quals() == QualType::ERROR || t.is_dependent(q)
@@ -355,7 +368,7 @@ impl Sema<'_, '_> {
     /// Reference-relatedness of `t1` (the referee) and `t2`, both
     /// canonical and unqualified ([dcl.init.ref]/4): `(related,
     /// derived)`.
-    fn ref_related(&self, t1: QualType, t2: QualType) -> (bool, bool) {
+    pub(crate) fn ref_related(&self, t1: QualType, t2: QualType) -> (bool, bool) {
         if t1 == t2 {
             return (true, false);
         }
@@ -736,6 +749,7 @@ impl Sema<'_, '_> {
             });
             self.add_ctor_candidates(&mut set, c, IcsOptions::NONE, true);
             self.ovl.lists.pop();
+            self.drop_explicit_ctors(&mut set, opts);
             if set.viable().next().is_some() {
                 let r = self.udc_outcome(&mut set, QualType::VOID, to, true);
                 self.end_set(set);
@@ -766,10 +780,27 @@ impl Sema<'_, '_> {
         for _ in 0..pushed {
             self.ovl.lists.pop();
         }
-        let _ = opts;
+        self.drop_explicit_ctors(&mut set, opts);
         let r = self.udc_outcome(&mut set, QualType::VOID, to, false);
         self.end_set(set);
         r
+    }
+
+    /// clang's `IsInitializerListConstructorConversion` /
+    /// `IsUserDefinedConversion` without `AllowExplicit`: as an implicit
+    /// conversion sequence, list-initialization does not use explicit
+    /// constructors (the initialization itself still considers them,
+    /// [over.match.list]/1, and is then ill-formed).
+    fn drop_explicit_ctors(&self, set: &mut super::OverloadCandidateSet, opts: IcsOptions) {
+        if opts.contains(IcsOptions::ALLOW_EXPLICIT) {
+            return;
+        }
+        for c in &mut set.cands {
+            if c.viable && self.fn_spec(c.func()).is_explicit() {
+                c.viable = false;
+                c.failure = CandidateFailure::Explicit;
+            }
+        }
     }
 
     /// Whether `c` has a default constructor (a cheap check for the
@@ -1001,9 +1032,32 @@ impl Sema<'_, '_> {
         if self.ast.types.as_record(a.ty).is_some()
             && self.require_complete_silent(a.ty, Loc::INVALID)
         {
-            let fns = self.conversion_functions(a.ty);
+            let fns = self.conversion_functions_all(a.ty);
             for (found, f) in fns {
                 self.add_conversion_candidate(set, f, found, to, opts);
+            }
+        }
+        self.order_conversion_templates(set);
+    }
+
+    /// Records in `set.tmpl_order` which viable conversion function
+    /// template specializations come from a more specialized template
+    /// ([over.match.best.general]/2.5, [temp.deduct.partial]/3.2).
+    pub(crate) fn order_conversion_templates(&mut self, set: &mut super::OverloadCandidateSet) {
+        let ts: Vec<(u32, DeclId)> = set
+            .cands
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| c.viable && c.kind == CandidateKind::ConvFn)
+            .filter_map(|(i, c)| Some((u32::try_from(i).ok()?, c.template?)))
+            .collect();
+        for (i, &(c1, t1)) in ts.iter().enumerate() {
+            for &(c2, t2) in &ts[i + 1..] {
+                if self.more_specialized_conversion(t1, t2) {
+                    set.tmpl_order.push((c1, c2));
+                } else if self.more_specialized_conversion(t2, t1) {
+                    set.tmpl_order.push((c2, c1));
+                }
             }
         }
     }
@@ -1062,8 +1116,19 @@ impl Sema<'_, '_> {
 
     /// The conversion functions of class type `ty` and its bases
     /// ([class.conv.fct]/9: hidden by one converting to the same type),
-    /// as `(found, function)`; templates are skipped (WP-071).
+    /// as `(found, function)`; conversion function templates are
+    /// skipped (the built-in candidate types and surrogate calls do not
+    /// consider them).
     pub(crate) fn conversion_functions(&self, ty: QualType) -> Vec<(DeclId, DeclId)> {
+        let mut v = self.conversion_functions_all(ty);
+        v.retain(|&(_, f)| self.kind_of(f) == DeclKind::CXXConversion);
+        v
+    }
+
+    /// [`Self::conversion_functions`] with the conversion function
+    /// templates ([temp.deduct.conv]), which [`Self::add_conversion_candidate`]
+    /// deduces.
+    pub(crate) fn conversion_functions_all(&self, ty: QualType) -> Vec<(DeclId, DeclId)> {
         let mut out: Vec<(DeclId, DeclId)> = Vec::new();
         let mut seen_types: Vec<QualType> = Vec::new();
         let Some(r) = self.ast.types.as_record(ty) else { return out };
@@ -1077,12 +1142,20 @@ impl Sema<'_, '_> {
             let Some(def) = self.ast.definition(c) else { continue };
             let mut here: Vec<QualType> = Vec::new();
             for m in self.ast.decls.members(def) {
-                if self.kind_of(m) != DeclKind::CXXConversion
+                let f = if self.kind_of(m) == DeclKind::FunctionTemplate {
+                    match self.templated_function(m) {
+                        Some(f) if self.kind_of(f) == DeclKind::CXXConversion => f,
+                        _ => continue,
+                    }
+                } else {
+                    m
+                };
+                if self.kind_of(f) != DeclKind::CXXConversion
                     || self.ast.decls.get(m).has(DeclFlags::INVALID)
                 {
                     continue;
                 }
-                let fty = self.ast.decls.get(m).ty().unwrap_or(QualType::ERROR);
+                let fty = self.ast.decls.get(f).ty().unwrap_or(QualType::ERROR);
                 let ret = self
                     .ast
                     .types
@@ -1119,6 +1192,10 @@ impl Sema<'_, '_> {
         to: QualType,
         opts: IcsOptions,
     ) {
+        if self.kind_of(f) == DeclKind::FunctionTemplate {
+            self.add_conversion_template_candidate(set, f, found, to, opts);
+            return;
+        }
         self.ovl.stats.candidates += 1;
         let a = set.args[0];
         let start = u32::try_from(set.ics.len()).unwrap_or(u32::MAX);
@@ -1219,6 +1296,57 @@ impl Sema<'_, '_> {
         set.cands.push(cand);
     }
 
+    /// Adds conversion function template `ft`: the specialization
+    /// deduced for `to` ([temp.deduct.conv]), else a non-viable
+    /// candidate keeping the deduction failure for its note. A template
+    /// whose pattern is explicit is not a candidate where explicit
+    /// conversions are not allowed (clang `isNonDependentlyExplicit`).
+    fn add_conversion_template_candidate(
+        &mut self,
+        set: &mut super::OverloadCandidateSet,
+        ft: DeclId,
+        found: DeclId,
+        to: QualType,
+        opts: IcsOptions,
+    ) {
+        let Some(pattern) = self.templated_function(ft) else { return };
+        if self.fn_spec(pattern).is_explicit() && !opts.contains(IcsOptions::ALLOW_EXPLICIT) {
+            // clang `AddTemplateConversionCandidate`: noted as "not a
+            // candidate" (a reference binding skips it).
+            if !matches!(set.kind, SetKind::ConvToRef { .. }) {
+                self.ovl.stats.candidates += 1;
+                let mut c = super::Candidate::new(pattern, found, CandidateKind::ConvFn);
+                let start = u32::try_from(set.ics.len()).unwrap_or(u32::MAX);
+                c.ics = start..start;
+                c.template = Some(ft);
+                c.viable = false;
+                c.failure = CandidateFailure::Explicit;
+                set.cands.push(c);
+            }
+            return;
+        }
+        let loc = set.loc;
+        match self.deduce_conversion(ft, to, loc) {
+            Ok(spec) => {
+                self.add_conversion_candidate(set, spec, found, to, opts);
+                if let Some(c) = set.cands.last_mut() {
+                    c.template = Some(ft);
+                }
+            }
+            Err(fail) => {
+                self.ovl.stats.candidates += 1;
+                let mut c = super::Candidate::new(pattern, found, CandidateKind::ConvFn);
+                let start = u32::try_from(set.ics.len()).unwrap_or(u32::MAX);
+                c.ics = start..start;
+                c.template = Some(ft);
+                c.viable = false;
+                c.failure = CandidateFailure::BadDeduction;
+                c.deduction = Some(fail);
+                set.cands.push(c);
+            }
+        }
+    }
+
     /// Whether an explicit conversion function returning `ret` may
     /// convert to `to`: the same type (references and cv dropped), or a
     /// qualification conversion of pointers ([over.match.conv]/1.2).
@@ -1249,7 +1377,7 @@ impl Sema<'_, '_> {
         if !self.require_complete_silent(a.ty, Loc::INVALID) {
             return None;
         }
-        let fns = self.conversion_functions(a.ty);
+        let fns = self.conversion_functions_all(a.ty);
         if fns.is_empty() {
             return None;
         }
@@ -1259,6 +1387,7 @@ impl Sema<'_, '_> {
         for (found, f) in fns {
             self.add_conversion_candidate(&mut set, f, found, to, opts);
         }
+        self.order_conversion_templates(&mut set);
         let r = if set.viable().next().is_some() {
             if opts.contains(IcsOptions::CANDIDATE_ARG)
                 && matches!(self.best_viable(&mut set), OvlOutcome::Deleted(_))

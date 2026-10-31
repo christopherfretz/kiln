@@ -12,6 +12,7 @@ use kiln_ast::decl::{
     TemplLinkKind,
 };
 use kiln_ast::expr::{ConstructionKind, ExprFlags, ExprKind, StorageDuration};
+use kiln_ast::stmt::StmtKind;
 use kiln_ast::types::TypeView;
 use kiln_ast::{DeclId, ExprId, QualType, StmtId, TypeId};
 use kiln_llvm::{FuncId, IntPredicate, Linkage, TypeId as LTy, UnnamedAddr, Value};
@@ -71,7 +72,7 @@ impl Cg<'_> {
         self.ast.definition(rd)
     }
 
-    fn class_bits(&self, rd: DeclId) -> DefinitionBits {
+    pub(crate) fn class_bits(&self, rd: DeclId) -> DefinitionBits {
         self.class_def(rd)
             .and_then(|d| self.ast.decls.record(d))
             .map_or(DefinitionBits::empty(), |r| r.defn)
@@ -492,6 +493,12 @@ impl Cg<'_> {
     /// it: no virtual bases).
     pub(crate) fn emit_ctor_body(&mut self, d: DeclId, body: StmtId) -> R<()> {
         let ast = self.ast;
+        // A function-try-block's handlers also cover the mem-initializers
+        // ([except.pre]/4): the catch scope is entered before the prologue.
+        let fn_try = ast.stmts.get(body).kind() == StmtKind::CXXTryStmt;
+        if fn_try {
+            self.enter_try(body)?;
+        }
         let sc = self.begin_scope(false);
         let inits: Vec<kiln_ast::decl::CtorInit> = ast.ctor_inits(d).copied().collect();
         let memcpyize = self.is_defaulted(d)
@@ -524,9 +531,7 @@ impl Cg<'_> {
                     let dest = Addr { v, ty, align: min_align(this.align, off) };
                     let overlap = self.base_may_overlap(rd, base, off);
                     self.emit_agg_into(ci.init, dest, overlap)?;
-                    if self.opts.exceptions && self.has_nontrivial_dtor(base) {
-                        self.f.eh_only = true;
-                    }
+                    self.push_base_eh_dtor(base, off, false);
                 }
                 CtorInitKind::VirtualBase => {
                     // clang `EmitBaseInitializer`: only the complete
@@ -549,14 +554,20 @@ impl Cg<'_> {
                     let ty = self.record_ty(base);
                     let dest = Addr { v, ty, align: min_align(this.align, off) };
                     self.emit_agg_into(ci.init, dest, true)?;
-                    if self.opts.exceptions && self.has_nontrivial_dtor(base) {
-                        self.f.eh_only = true;
-                    }
+                    self.push_base_eh_dtor(base, off, true);
                 }
                 CtorInitKind::Delegating => {
                     self.flush_memcpy_run(d, &mut run)?;
                     let this = self.this_addr();
                     self.emit_agg_into(ci.init, this, false)?;
+                    // clang `EmitDelegatingCXXConstructorCall`: once the
+                    // target constructor returns the object is complete
+                    // ([except.ctor]/4), so a throw destroys it.
+                    if self.opts.exceptions && self.has_nontrivial_dtor(rd) {
+                        let base = self.f.structor == Some(Structor::Base);
+                        let c = Cleanup::Dtor { addr: this.v, record: rd, base };
+                        self.push_cleanup_kind(c, false, true);
+                    }
                 }
                 CtorInitKind::Field | CtorInitKind::IndirectField => {
                     let field = DeclId::new(ci.target);
@@ -576,9 +587,36 @@ impl Cg<'_> {
         if !vptrs_done {
             self.init_vtable_ptrs(rd)?;
         }
-        self.emit_stmt(body)?;
+        self.emit_stmt(if fn_try { ast.stmts.try_block(body) } else { body })?;
         self.end_scope(sc);
+        if fn_try {
+            self.exit_try(body, true)?;
+        }
         Ok(())
+    }
+
+    /// clang `EmitBaseInitializer`'s `CallBaseDtor` EH cleanup: a base
+    /// subobject at `off` (a virtual base when `virt`) is destroyed if a
+    /// later initializer or the body throws ([except.ctor]/3).
+    fn push_base_eh_dtor(&mut self, base: DeclId, off: u64, virt: bool) {
+        if self.opts.exceptions && self.has_nontrivial_dtor(base) {
+            self.push_cleanup_kind(Cleanup::BaseOfThis { base, offset: off, virt }, false, true);
+        }
+    }
+
+    /// clang `pushEHDestroy`: an EH-only cleanup destroying the
+    /// just-initialized member at `a` of type `q` ([except.ctor]/3).
+    fn push_eh_destroy(&mut self, a: Addr, q: QualType) {
+        if !self.opts.exceptions {
+            return;
+        }
+        let Some(rd) = self.destructed_class(q) else { return };
+        let c = if self.array_elem(q).is_some() {
+            Cleanup::ArrayDtor { addr: a, record: rd }
+        } else {
+            Cleanup::Dtor { addr: a.v, record: rd, base: false }
+        };
+        self.push_cleanup_kind(c, false, true);
     }
 
     /// The byte range `[first, last)` of field `field` of `rd` if clang's
@@ -663,6 +701,18 @@ impl Cg<'_> {
         }
         let start = items[0].1;
         let end = items.last().expect("run").2;
+        // clang `ConstructorMemcpyizer::pushEHDestructors`, before the
+        // memcpy.
+        if self.opts.exceptions {
+            for &(f, _, _) in &items {
+                let q = ast.decls.get(f).ty().expect("field type");
+                if self.destructed_class(q).is_some() {
+                    let this = self.this_addr();
+                    let a = self.field_lvalue_init(this, f, q)?.addr;
+                    self.push_eh_destroy(a, q);
+                }
+            }
+        }
         let first = items[0].0;
         let fq = ast.decls.get(first).ty().expect("field type");
         // clang `emitMemcpy`: the destination and the source are the first
@@ -710,19 +760,43 @@ impl Cg<'_> {
             self.store(p, lv.addr.v, lv.addr.align, false);
             return Ok(());
         }
+        let addr = lv.addr;
         if self.is_aggregate(fq) {
             let overlap = false;
-            return self.emit_agg_into(init, lv.addr, overlap);
+            self.emit_agg_into(init, addr, overlap)?;
+        } else {
+            self.init_to_lvalue(init, lv, false)?;
         }
-        self.init_to_lvalue(init, lv, false)
+        self.push_eh_destroy(addr, fq);
+        Ok(())
     }
 
     /// clang `EmitDestructorBody` for the base variant (the complete
     /// variant is an alias or replaced by it: no virtual bases).
     pub(crate) fn emit_dtor_body(&mut self, d: DeclId, body: StmtId) -> R<()> {
         let ast = self.ast;
-        let sc = self.begin_scope(false);
+        // A function-try-block is entered before anything else; its
+        // handlers also cover the destruction of the members and bases
+        // ([except.pre]/4).
+        let fn_try = ast.stmts.get(body).kind() == StmtKind::CXXTryStmt;
         let rd = self.f.this_class.expect("destructor class");
+        let complete_vbases =
+            self.f.structor == Some(Structor::Complete) && self.structor_has_vbases(d);
+        if complete_vbases && self.class_bits_of(rd).contains(DefinitionBits::ABSTRACT) {
+            self.emit_trap_unreachable();
+            return Ok(());
+        }
+        if fn_try {
+            self.enter_try(body)?;
+        }
+        let sc = self.begin_scope(false);
+        // The complete variant of a class with virtual bases and a
+        // function-try-block acts like the base variant after entering
+        // the virtual-base cleanups (clang does not delegate: that would
+        // introduce two handler blocks).
+        if complete_vbases {
+            self.push_vbase_dtor_cleanups(rd);
+        }
         if !self.is_union(rd) {
             let def = self.class_def(rd).expect("class definition");
             let bases: Vec<(QualType, bool)> =
@@ -763,8 +837,11 @@ impl Cg<'_> {
         if !self.can_skip_vptr_init(d, rd) {
             self.init_vtable_ptrs(rd)?;
         }
-        self.emit_stmt(body)?;
+        self.emit_stmt(if fn_try { ast.stmts.try_block(body) } else { body })?;
         self.end_scope(sc);
+        if fn_try {
+            self.exit_try(body, true)?;
+        }
         Ok(())
     }
 
@@ -781,6 +858,15 @@ impl Cg<'_> {
             return Ok(());
         }
         let sc = self.begin_scope(false);
+        self.push_vbase_dtor_cleanups(rd);
+        let this = self.this_value();
+        self.call_dtor_of(rd, this, true, false);
+        self.end_scope(sc);
+        Ok(())
+    }
+
+    /// `EnterDtorCleanups(Dtor_Complete)`: the virtual bases of `rd`.
+    fn push_vbase_dtor_cleanups(&mut self, rd: DeclId) {
         let def = self.class_def(rd).expect("class definition");
         let mut vbases = Vec::new();
         self.collect_vbases(def, &mut vbases, 0);
@@ -791,10 +877,6 @@ impl Cg<'_> {
             let Some(off) = self.vbase_offset(rd, b) else { continue };
             self.push_cleanup(Cleanup::BaseOfThis { base: b, offset: off, virt: true });
         }
-        let this = self.this_value();
-        self.call_dtor_of(rd, this, true, false);
-        self.end_scope(sc);
-        Ok(())
     }
 
     /// clang `CXXRecordDecl::vbases()` order: per direct base, its
@@ -984,7 +1066,7 @@ impl Cg<'_> {
             Cleanup::Dtor { addr: a.v, record: rd, base: false }
         };
         match ast.exprs.temporary_storage(m) {
-            StorageDuration::FullExpression => self.push_cleanup(c),
+            StorageDuration::FullExpression => self.push_full_expr_cleanup(c, true, true),
             StorageDuration::Automatic => self.f.cl.lifetime_extended.push((c, None)),
             StorageDuration::Static | StorageDuration::Thread => {}
         }
@@ -1068,12 +1150,45 @@ impl Cg<'_> {
         let elem_size = self.alloc_size(elem);
         let elem_align = min_align(dest.align, elem_size);
         let nn = self.i64c(i128::from(n));
-        let end = self.gep(elem, begin, vec![nn], true);
+        self.construct_array_n(e, begin, elem, elem_align, nn)
+    }
+
+    /// The element loop of clang `EmitCXXAggrConstructorCall`: `num`
+    /// objects of type `elem` from `begin`, each constructed by `e` in
+    /// its own cleanup scope; a non-constant count is checked for zero
+    /// first (`isempty`).
+    pub(crate) fn construct_array_n(
+        &mut self,
+        e: ExprId,
+        begin: V,
+        elem: LTy,
+        elem_align: u64,
+        num: V,
+    ) -> R<()> {
+        let ast = self.ast;
+        let mut out = None;
+        if self.cint(num).is_none() {
+            let z = self.i64c(0);
+            let empty = self.icmp(IntPredicate::Eq, num, z);
+            let lp = self.f.fir.create_block();
+            let o = self.f.fir.create_block();
+            self.cond_br(empty, o, lp);
+            self.emit_block(lp, false);
+            out = Some(o);
+        }
+        let end = self.gep(elem, begin, vec![num], true);
         let entry = self.f.fir.cur().expect("insertion point");
         let body = self.f.fir.create_block();
         self.emit_block(body, false);
         let phi = self.f.fir.push(Op::Phi { ty: LTy::PTR, inc: vec![(begin, entry)] }, LTy::PTR);
         let sc = self.begin_scope(false);
+        // The elements constructed so far are destroyed if a constructor
+        // throws ([except.ctor]/3, `pushRegularPartialArrayCleanup`).
+        let ctor_class = ast.decls.get(ast.exprs.constructor(e)).ctx().expect("constructor class");
+        if self.opts.exceptions && self.has_nontrivial_dtor(ctor_class) {
+            let c = Cleanup::PartialArray { begin, end: phi, elem, record: ctor_class };
+            self.push_full_expr_cleanup(c, false, true);
+        }
         let r = self.construct_one(e, Addr { v: phi, ty: elem, align: elem_align }, false);
         self.end_scope(sc);
         r?;
@@ -1082,7 +1197,7 @@ impl Cg<'_> {
         let cur = self.f.fir.cur().expect("insertion point");
         self.f.fir.add_incoming(crate::fir::Fir::last_inst(phi), next, cur);
         let done = self.icmp(IntPredicate::Eq, next, end);
-        let out = self.f.fir.create_block();
+        let out = out.unwrap_or_else(|| self.f.fir.create_block());
         self.cond_br(done, out, body);
         self.emit_block(out, false);
         Ok(())

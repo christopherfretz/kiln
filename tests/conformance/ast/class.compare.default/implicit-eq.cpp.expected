@@ -1,0 +1,18 @@
+Dumping S::operator<=>:
+CXXMethodDecl constexpr operator<=> 'std::strong_ordering (const S &) const' default noexcept-unevaluated implicit-inline
+`-ParmVarDecl 'const S &'
+
+Dumping S::operator==:
+CXXMethodDecl implicit used constexpr operator== 'bool (const S &) const noexcept' default implicit-inline
+|-ParmVarDecl used 'const S &'
+`-CompoundStmt
+  `-ReturnStmt
+    `-BinaryOperator 'bool' '=='
+      |-ImplicitCastExpr 'int' <LValueToRValue>
+      | `-MemberExpr 'const int' lvalue .v
+      |   `-UnaryOperator 'const S' lvalue prefix '*' cannot overflow
+      |     `-CXXThisExpr 'const S *' this
+      `-ImplicitCastExpr 'int' <LValueToRValue>
+        `-MemberExpr 'const int' lvalue .v
+          `-DeclRefExpr 'const S' lvalue ParmVar '' 'const S &'
+

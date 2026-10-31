@@ -16,7 +16,7 @@ C++26 draft; "clang" means clang 19 with `-std=c++26` on the container target
 | definitions | all member kinds, injected-class-name, nested/local classes, static data members, `mutable`, `[[no_unique_address]]` (layout already M2) | `using` members beyond what WP-062 provides |
 | access | [class.access] complete: specifiers, base access, friends, protected rule, nested classes, delayed checks | access in templates beyond WP-070's instantiation-context rule |
 | bases | non-virtual (WP-066/067), virtual (WP-078), `final`, `override`, abstract classes, covariance | |
-| special members | all six: implicit declaration/definition, triviality, deletedness, `constexpr`, `= default`/`= delete`, inheriting ctors (after WP-062) | defaulted comparisons ([class.compare]; owner to be assigned, see §4.4), trivially relocatable (P2786) |
+| special members | all six: implicit declaration/definition, triviality, deletedness, `constexpr`, `= default`/`= delete`, inheriting ctors (after WP-062); defaulted comparisons ([class.compare], WP-082, §4.12) | trivially relocatable (P2786) |
 | construction | ctor-initializers, delegating ctors, NSDMI, temporaries, cleanups, lifetime extension incl. P2718 range-for, guaranteed elision, NRVO marking, aggregates with bases, paren-aggregate init | function-try-blocks and EH cleanups (exceptions milestone) |
 | layout | full Itanium: bases, vptr, vbases, primary base, EBO, tail padding, bit-fields across bases, `#pragma pack`, `alignas`; vtable layout and VTT | MS ABI, `#pragma ms_struct`, `-fclang-abi-compat` |
 | RTTI | `dynamic_cast`/`typeid` sema; final overriders for the Oven | |
@@ -512,9 +512,11 @@ for non-template classes every non-deleted declared special member is eligible.
 ### 4.4 `= default`, `= delete`, user-provided
 `act_on_defaulted(f, loc)` / `act_on_deleted(f, loc, msg)` (C++26 message in
 the cold map). Defaultable: special members and comparison operators
-(defaulted comparisons, [class.compare], are covered neither by S3O §5 nor
-here; until a WP owns them they are `sema_unsupported`); else `only special
-member functions and comparison operators may be defaulted`. Explicitly defaulted on its first
+(defaulted comparisons, [class.compare], are §4.12's); else `only special
+member functions and comparison operators may be defaulted`. An `= default`
+written in the class body is a definition there and so implicitly inline
+([class.mfct]/1; clang `setImplicitlyInline`; the dump prints
+`implicit-inline`); one written out of class is not. Explicitly defaulted on its first
 declaration → not user-provided; out of line → user-provided, defined there. A
 deleted function must be deleted on its first declaration. Signature checks of
 [dcl.fct.def.default]/2–3 (`the parameter for an explicitly-defaulted copy
@@ -630,6 +632,54 @@ class: `call to pure virtual member function 'f' has undefined behavior;
 overrides of 'f' in subclasses are not available in the constructor of 'C'`
 (+ `'f' declared here`). Dynamic-type rules during construction are the
 Oven's and codegen's (WP-076/077, vptr stores in ctors).
+
+### 4.12 Defaulted comparisons ([class.compare]; WP-082)
+Modules `kiln_sema/src/class/compare/{mod,default,analyze,synth}.rs`, each
+a port of the clang 19 function it names.
+- **Categories** (`mod.rs`, [cmp.categories]). `cmp_category_type(kind,
+  loc, usage)` is clang's `CheckComparisonCategoryType`: it looks up
+  `std::partial_ordering`/`weak_ordering`/`strong_ordering`, requires it
+  complete and of the form kiln's evaluation relies on, and records the
+  valid result in `Ast.cmp_categories` (`kiln_ast::class::CmpCategories`,
+  read by the Oven and codegen). `cmp_category_of(t)` is clang's
+  `lookupInfoForType`: a recorded class, or else, by name, a class of
+  namespace `std` (through inline namespaces) named like a category, even
+  before it is validated. The built-in `<=>` on scalars
+  (`builtin_three_way`, [expr.spaceship]/4–8) is in the same module.
+  Category types print as `'std::strong_ordering'` (`scoped_class_type`:
+  `Elaborated` with the non-inline namespaces as qualifier, types.md R4).
+- **Declaration checks** (`default.rs`, clang
+  `CheckExplicitlyDefaultedComparison`). At `act_on_defaulted` the
+  unqualified operator lookups are captured (`capture_cmp_lookups`); the
+  checks run at the class's `}` (primaries, then secondaries), or at an
+  out-of-class `= default`. An ill-formed comparison is recorded in
+  `special.cmp.invalid` rather than marked `INVALID`, because clang still
+  considers it as a candidate. The implicit `operator==` of a defaulted
+  `<=>` ([class.compare.default]/4) is declared at `}`
+  (`declare_implicit_equality`), `default implicit-inline`.
+- **Deletedness, category deduction, `constexpr`** (`analyze.rs`, clang
+  `DefaultedComparisonAnalyzer`). Overload resolution for each subobject
+  comparison `xi @ xi` (opaque lvalues) runs with the defaulted function
+  excluded from the candidate set (`OverloadCandidateSet.exclude`,
+  clang's `DefaultedFn`) and with the captured lookups. A deleted
+  explicitly defaulted comparison warns
+  (`-Wdefaulted-function-deleted`) and a use reports
+  `sema_ovl_deleted_comparison` with the analyzer's notes.
+- **Implicit definition** (`synth.rs`, clang `DefineDefaultedComparison`
+  and `DefaultedComparisonSynthesizer`). A defaulted comparison is defined
+  on odr-use (`mark_function_referenced` and `build_operator_call` call
+  `define_cmp_on_use`, outside templates and unevaluated operands, and not
+  from its own body) before its exception specification is resolved, so
+  errors in the body get the note `in defaulted ... comparison operator
+  for 'X' first required here` at the use. The Oven bridge defines one it
+  meets undefined (`oven_bridge.rs`). The bodies match clang's AST
+  (goldens under `tests/conformance/ast/class.{eq,spaceship,
+  compare.secondary,compare.default}/`). The implicit exception
+  specification comes from the body.
+- **Templates.** Defaulted comparisons of class templates (member and
+  friend) are instantiated with the class and checked at the
+  specialization's `}`. Friend functions of class templates are
+  instantiated through their `FriendDecl` only (sema-templates.md §4.8).
 
 ## 5. Object construction and temporaries
 
@@ -1325,6 +1375,36 @@ selection, and operator ambiguity:
   - an outer record named in its own body is dumped as `referenced`,
     where clang marks the injected-class-name instead.
 
+**Landed (WP-082).** Defaulted comparison operators (§4.12):
+- *AST* (`kiln_ast`): `class::{CmpCategory, CmpResult, CmpCategoryInfo,
+  CmpCategories}` and the field `Ast.cmp_categories` (sema writes each
+  category once, when it is validated; the Oven and codegen read it).
+  `Exprs::set_call_adl(e)` marks a call whose callee was found only by
+  ADL (clang `UsesADL`, dumped `adl`).
+- *Sema state*: `special.cmp: CompareState` holds `exclude` (the
+  comparison being analyzed or synthesized, and its context),
+  `lookups` (the operator lookups captured at each `= default`),
+  `default_loc` (where each was defaulted) and `invalid`.
+  `OverloadCandidateSet.exclude` keeps that comparison out of its own
+  subobject candidate sets. `SynthContext.kind` is now
+  `SynthKind::{Special(SpecialKind), Comparison(CmpKind)}`.
+- *Entry points* (`pub(crate)`): `defaulted_comparison(f, loc)` (from
+  `act_on_defaulted`, which no longer reports `sema_unsupported`),
+  `check_defaulted_comparison(f, k, r)`, `declare_implicit_equality`,
+  `analyze_cmp`, `define_cmp_on_use(f, loc)`,
+  `define_defaulted_comparison(f, use_loc)`, `resolve_cmp_exc`,
+  `cmp_category_type`, `cmp_category_of`, `builtin_three_way`.
+- *Oven and codegen*: the built-in `<=>` (`BinaryOp::Cmp`) evaluates to
+  the category's static member value; aggregates initialized through a
+  user-defined conversion are emitted (`agg_visit`).
+- *Diagnostics*: the `sema_defaulted_cmp_*` errors,
+  `-Wdefaulted-function-deleted` for comparisons, the
+  `note_defaulted_cmp_*` notes, `sema_cmp_category_not_found`,
+  `sema_std_compare_*`, `sema_spaceship_narrowing_*`,
+  `sema_ordered_pointer_zero` and `sema_ovl_deleted_comparison`, all
+  with clang 19's text.
+- *Gaps* (§11 Q12).
+
 ### 8.4 `SemaBridge` (kiln_oven) — public-interface change
 Replace `fn vtable(&mut self, record) -> &VTableLayout` with
 ```
@@ -1463,6 +1543,36 @@ polymorphic classes) for `final_overrider`/vtable cache size.
   and `<=>`, implicit `==` from a defaulted `<=>`) have no owner: S3O §5
   covers only rewritten/reversed candidates. *Recommend* a WP after 067a and
   068b in `class/compare.rs`, reusing §4.2 deletedness and §4.6 constexpr.
+  (Done: WP-082, §4.12.)
+
+- **Q12 WP-082 gaps** (owners proposed; none changes an accepted
+  program's meaning, each is a missing diagnostic or `not supported yet`):
+  - The synthesized three-way comparison ([class.spaceship]/1: a member
+    with `==` and `<` but no `<=>`, under a specified return category)
+    reports `not supported yet` at the `= default`. clang builds it as a
+    `PseudoObjectExpr` (`BuildSynthesizedThreeWayComparison`), which
+    kiln's AST lacks. *Recommend* a small WP that adds `PseudoObjectExpr`
+    (AST, dump, Oven, codegen). It is xfailed in
+    `tests/conformance/class.spaceship/synth-three-way.cpp`. libc++ does not
+    need it: `__synth_three_way` is a library template.
+  - An instantiated implicit `operator==` in a class template is declared
+    again, rather than instantiated from the pattern's; it has no
+    `instantiated_from`. It is unobservable today.
+  - A direct `DeclRefExpr` to a defaulted comparison (`&A::operator==`)
+    resolves its exception spec before the body is defined
+    (`expr.rs` `resolve_exc_for_type`). The parser does not yet accept
+    `&A::operator==` or `a.A::operator==` (parser follow-up).
+  - The location of a deduced return type in the `deduced return type ...
+    must be 'auto'` error is the type's start column; clang uses the
+    `auto` RetLoc.
+  - Template candidates whose viability is undecided (WP-071/073
+    follow-ups) are assumed usable by the analyzer.
+  - Missing beside clang: no `ExplainConstexpr` notes for a non-constexpr
+    defaulted comparison; no `-Wtautological-compare`; no
+    `ExceptionSpecEvaluation` context note; no consteval or explicit
+    object parameter defaulted comparisons (those features are missing).
+  - A constexpr mismatch between redeclarations of a defaulted
+    comparison is not diagnosed.
 
 ### Supervisor decisions (2026-10-28, binding)
 - **Q1** clang's eager/lazy policy (goldens must match clang's `implicit` lines).

@@ -315,6 +315,7 @@ impl Sema<'_, '_> {
                 | ExprKind::ConstantExpr
                 | ExprKind::MaterializeTemporaryExpr
                 | ExprKind::CXXBindTemporaryExpr
+                | ExprKind::CXXStdInitializerListExpr
                 | ExprKind::ExprWithCleanups
                 | ExprKind::BinaryOperator
                 | ExprKind::CompoundAssignOperator
@@ -527,6 +528,12 @@ impl Sema<'_, '_> {
     /// Converts `e` to `ty` as in `ctx`, diagnosing failure (the result
     /// is then a `RecoveryExpr`).
     pub(crate) fn convert_for_init(&mut self, e: ExprId, ty: QualType, ctx: ConvCtx) -> ExprId {
+        // A braced-init-list argument (`T x({1, 2})`) list-initializes
+        // the parameter ([dcl.init.list]).
+        if let Some(l) = self.take_braced_arg(e) {
+            let to = if self.ast.types.is_reference(ty) { ty } else { conv::strip_cv(self, ty) };
+            return self.init_list_entity(to, &l, l.lbrace);
+        }
         match conv::implicit_convert(self, e, ty, ctx) {
             Ok(x) => x,
             Err(err) => {
@@ -780,10 +787,9 @@ impl Sema<'_, '_> {
                 let valid = found.decls.clone();
                 return self.overload_name_ref(name, &found, &valid, qualifier.is_none(), nns, loc);
             }
-            let decls: Vec<DeclId> = found.decls.clone();
             return self.builder().unresolved_lookup(
                 name,
-                &decls,
+                &lookup_set_order(&found.decls, qualifier.is_none()),
                 qualifier.is_none(),
                 nns,
                 None,
@@ -1100,6 +1106,11 @@ impl Sema<'_, '_> {
         }
         let ty = if self.ast.decls.builtin_id(d).is_some() {
             QualType::BUILTIN_FN
+        } else if n.kind() == DeclKind::NonTypeTemplateParm
+            && self.ast.types.as_record(declared).is_some()
+        {
+            // [temp.param]/8: an lvalue of type `const T`.
+            self.ast.types.qualify(declared, kiln_ast::types::Quals::CONST)
         } else if n.kind() == DeclKind::EnumConstant
             && let Some(t) = self.enumerator_pre_brace_type(d)
         {
@@ -1541,6 +1552,12 @@ impl Sema<'_, '_> {
                 Err(_) => bad(self, e),
             },
             UnaryOp::Deref => {
+                // A type-dependent operand that is not of an overloadable
+                // type (`*a` for `T (&a)[N]`): the result type is dependent
+                // (clang's `CheckIndirectionOperand`).
+                if self.ast.types.is_dependent(t0) {
+                    return self.builder().dependent_unary(op, e, loc);
+                }
                 let x = conv::decay(self, e);
                 let pt = self.ety(x);
                 let Some(p) =
@@ -1696,7 +1713,7 @@ impl Sema<'_, '_> {
 
     // -- binary operators --------------------------------------------------------
 
-    fn invalid_operands(&mut self, l: ExprId, r: ExprId, loc: Loc) -> ExprId {
+    pub(crate) fn invalid_operands(&mut self, l: ExprId, r: ExprId, loc: Loc) -> ExprId {
         let msg = self
             .diag(DiagId::sema_invalid_operands, loc)
             .arg(self.ty_arg(self.ety(l)))
@@ -1705,7 +1722,13 @@ impl Sema<'_, '_> {
         self.recover_err(&[l, r], loc)
     }
 
-    fn conv_failed(&mut self, err: &ConvError, l: ExprId, r: ExprId, loc: Loc) -> ExprId {
+    pub(crate) fn conv_failed(
+        &mut self,
+        err: &ConvError,
+        l: ExprId,
+        r: ExprId,
+        loc: Loc,
+    ) -> ExprId {
         self.emit_conv_error(err.clone(), loc);
         self.recover_err(&[l, r], loc)
     }
@@ -1831,6 +1854,7 @@ impl Sema<'_, '_> {
             | BinaryOp::GE
             | BinaryOp::EQ
             | BinaryOp::NE => self.comparison(op, l, r, loc),
+            BinaryOp::Cmp => self.builtin_three_way(l, r, loc),
             BinaryOp::PtrMemD | BinaryOp::PtrMemI => self.act_on_ptr_mem(op, l, r, loc),
             _ => {
                 self.unsupported(&format!("operator '{}'", op.spelling()), loc);
@@ -2038,7 +2062,11 @@ impl Sema<'_, '_> {
 
     /// The composite pointer type of two pointer operands
     /// ([expr.type]/4), converting the operands to it.
-    fn composite_pointer(&mut self, l: ExprId, r: ExprId) -> Option<(ExprId, ExprId, QualType)> {
+    pub(crate) fn composite_pointer(
+        &mut self,
+        l: ExprId,
+        r: ExprId,
+    ) -> Option<(ExprId, ExprId, QualType)> {
         let (lt, rt) = (self.ety(l), self.ety(r));
         let (lp, rp) = (
             self.ast.types.is_pointer(lt) || self.is_nullptr_type(lt),
@@ -2117,7 +2145,7 @@ impl Sema<'_, '_> {
         }
     }
 
-    fn is_member_pointer(&self, t: QualType) -> bool {
+    pub(crate) fn is_member_pointer(&self, t: QualType) -> bool {
         matches!(self.ast.types.canonical_view(t), TypeView::MemberPointer { .. })
     }
 
@@ -2919,6 +2947,9 @@ impl Sema<'_, '_> {
             return self.recover_err(&[base], loc);
         }
         if let Some(e) = self.try_dependent_member(base, name, None, false, loc, arrow) {
+            if op_loc != loc {
+                let _ = self.ast.templates.member_op_loc.insert(e, op_loc);
+            }
             return e;
         }
         // [over.ref]/1: `x->m` on a class `x` is `(x.operator->())->m`.
@@ -3032,7 +3063,26 @@ impl Sema<'_, '_> {
             }
             if q.is_empty() { declared } else { self.ast.types.qualify(declared, q) }
         };
-        self.builder().member(base, f, ty, arrow, loc, None)
+        self.build_member_expr(base, f, ty, arrow, loc, None)
+    }
+
+    /// Builds the `MemberExpr` `base.m`; one built in an unevaluated operand
+    /// is not an odr-use (clang's `getNonOdrUseReasonInCurrentContext` in
+    /// `BuildMemberExpr`).
+    pub(crate) fn build_member_expr(
+        &mut self,
+        base: ExprId,
+        m: DeclId,
+        ty: QualType,
+        arrow: bool,
+        loc: Loc,
+        extra: Option<kiln_ast::expr::DeclRefExtra>,
+    ) -> ExprId {
+        let e = self.builder().member(base, m, ty, arrow, loc, extra);
+        if self.unevaluated > 0 {
+            let _ = self.ast.exprs.set_non_odr_use(e, NonOdrUse::Unevaluated);
+        }
+        e
     }
 
     // -- sizeof / alignof --------------------------------------------------------
@@ -3623,4 +3673,10 @@ pub(crate) struct CallCallee {
     /// A non-member function named by an id-expression: clang reports
     /// arity errors through overload resolution ("no matching function").
     pub(crate) overloadable: bool,
+}
+
+/// An overload set in the order clang lists it: an unqualified lookup
+/// newest first, as for a non-template set (spec/sema-overload.md §2.1).
+fn lookup_set_order(decls: &[DeclId], unqualified: bool) -> Vec<DeclId> {
+    if unqualified { decls.iter().rev().copied().collect() } else { decls.to_vec() }
 }

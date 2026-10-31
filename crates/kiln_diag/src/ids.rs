@@ -555,6 +555,20 @@ diag_ids! {
     sema_throw_disabled = Error (0) "cannot use 'throw' with exceptions disabled";
     sema_throw_incomplete = Error (1) "cannot throw object of incomplete type {0}";
     sema_throw_incomplete_ptr = Error (1) "cannot throw pointer to object of incomplete type {0}";
+    sema_try_disabled = Error (0) "cannot use 'try' with exceptions disabled";
+    sema_early_catch_all = Error (0) "catch-all handler must come last";
+    sema_caught_by_earlier_handler = Warning [Exceptions] (1) "exception of type {0} will be caught by earlier handler";
+    note_previous_exception_handler = Note (1) "for type {0}";
+    sema_catch_rvalue_ref = Error (0) "cannot catch exceptions by rvalue reference";
+    sema_catch_incomplete = Error (1) "cannot catch incomplete type {0}";
+    sema_catch_incomplete_ptr = Error (1) "cannot catch pointer to incomplete type {0}";
+    sema_catch_incomplete_ref = Error (1) "cannot catch reference to incomplete type {0}";
+    sema_return_in_ctor_handler = Error (0) "return in the catch of a function try block of a constructor is illegal";
+    parse_expected_catch = Error (0) "expected catch";
+    sema_throw_in_nothrow_func = Warning [Exceptions] (1) "'{0}' has a non-throwing exception specification but can still throw";
+    note_throw_in_function = Note (0) "function declared non-throwing here";
+    note_throw_in_dtor = Note (2) "{0:destructor|deallocator} has a {1:non-throwing|implicit non-throwing} exception specification";
+    sema_falloff_noreturn = Warning [InvalidNoreturn] (0) "function declared 'noreturn' should not return";
     note_parameter_named_here = Note (1) "passing argument to parameter '{0}' here";
     note_parameter_here = Note (0) "passing argument to parameter here";
     parse_init_list_bin_op = Error (2) "initializer list cannot be used on the {0:left|right} hand side of operator '{1}'";
@@ -574,7 +588,7 @@ diag_ids! {
     sema_redefinition_different_kind = Error (1) "redefinition of '{0}' as different kind of symbol";
     sema_redefinition_different_type = Error (3) "redefinition of '{0}' with a different type: {1} vs {2}";
     sema_redeclaration_different_type = Error (3) "redeclaration of '{0}' with a different type: {1} vs {2}";
-    sema_redefinition_different_typedef = Error (3) "{0:typedef|type alias} redefinition with different types ({1} vs {2})";
+    sema_redefinition_different_typedef = Error (3) "{0:typedef|type alias|type alias template} redefinition with different types ({1} vs {2})";
     sema_ovl_diff_return_type = Error (0) "functions that differ only in their return type cannot be overloaded";
     sema_static_non_static = Error (1) "static declaration of '{0}' follows non-static declaration";
     sema_param_redefinition = Error (1) "redefinition of parameter '{0}'";
@@ -874,6 +888,37 @@ diag_ids! {
     sema_defaulted_default_args = Error (1) "an explicitly-defaulted {0:default constructor|copy constructor|move constructor|copy assignment operator|move assignment operator|destructor} cannot have default arguments";
     sema_out_of_line_default_deletes = Error (1) "defaulting this {0:default constructor|copy constructor|move constructor|copy assignment operator|move assignment operator|destructor} would delete it after its first declaration";
     note_defaulted_deleted_here = Note (0) "explicitly defaulted function was implicitly deleted here";
+    sema_defaulted_cmp_template = Error (0) "comparison operator template cannot be defaulted";
+    sema_defaulted_cmp_ref_qual = Error (0) "ref-qualifier '&&' is not allowed on a defaulted comparison operator";
+    sema_defaulted_cmp_non_const = Error (1) "defaulted member {0:equality|three-way|equality|relational} comparison operator must be const-qualified";
+    sema_defaulted_cmp_volatile = Error (0) "defaulted comparison function must not be volatile";
+    sema_defaulted_cmp_param_mismatch = Error (3) "parameters for defaulted {0:equality|three-way|equality|relational} comparison operator must have the same type (found {1} vs {2})";
+    sema_defaulted_cmp_param_unknown = Error (2) "invalid parameter type for non-member defaulted {0:equality|three-way|equality|relational} comparison operator; found {1}, expected class or reference to a constant class";
+    sema_defaulted_cmp_param = Error (5) "invalid parameter type for defaulted {0:equality|three-way|equality|relational} comparison operator; found {1}, expected {2}{3:| or {4}}";
+    sema_defaulted_cmp_deduced_return = Error (2) "deduced return type for defaulted {0:equality|three-way|equality|relational} comparison operator must be 'auto', not {1}";
+    sema_defaulted_cmp_return = Error (2) "return type for defaulted {0:equality|three-way|equality|relational} comparison operator must be 'bool', not {1}";
+    sema_defaulted_cmp_not_friend = Error (3) "{0:equality|three-way|equality|relational} comparison operator is not a friend of {1:|incomplete class }{2}";
+    sema_defaulted_cmp_non_first_deletes = Error (1) "defaulting {0} would delete it after its first declaration";
+    sema_defaulted_cmp_non_first_in_class = Error (1) "defaulting this {0:equality|three-way|equality|relational} comparison operator is not allowed because it was already declared outside the class";
+    sema_defaulted_cmp_deleted = Warning [DefaultedFunctionDeleted] (1) "explicitly defaulted {0:equality|three-way|equality|relational} comparison operator is implicitly deleted";
+    note_defaulted_cmp_union = Note (3) "defaulted '{0}' is implicitly deleted because {2} is a {1:union-like class|union} with variant members";
+    note_defaulted_cmp_ref_member = Note (2) "defaulted '{0}' is implicitly deleted because class {1} has a reference member";
+    note_defaulted_cmp_no_viable = Note (4) "defaulted '{0}' is implicitly deleted because there is no viable {1:three-way comparison function|'operator=='} for {2:|member |base class }{3}";
+    note_defaulted_cmp_ambiguous = Note (4) "defaulted '{0}' is implicitly deleted because implied {1:|'==' |'<' }comparison {2:|for member {3} |for base class {3} }is ambiguous";
+    note_defaulted_cmp_calls_deleted = Note (3) "defaulted '{0}' is implicitly deleted because it would invoke a deleted comparison function{1:| for member {2}| for base class {2}}";
+    note_defaulted_cmp_inaccessible = Note (6) "defaulted '{0}' is implicitly deleted because it would invoke a {1:private|protected} '{2}'{3: member of {4}| to compare base class {5}| member of {4} to compare member {5}}";
+    note_defaulted_cmp_cannot_deduce = Note (3) "return type of defaulted 'operator<=>' cannot be deduced because return type {0} of three-way comparison for {1:|member |base class }{2} is not a standard comparison category type";
+    note_defaulted_cmp_cannot_deduce_callee = Note (2) "selected 'operator<=>' for {0:|member |base class }{1} declared here";
+    note_defaulted_cmp_not_rewritten_callee = Note (1) "defaulted '{0}' is implicitly deleted because this non-rewritten comparison function would be the best match for the comparison";
+    note_defaulted_cmp_not_rewritten_conversion = Note (1) "defaulted '{0}' is implicitly deleted because a builtin comparison function using this conversion would be the best match for the comparison";
+    note_defaulted_cmp_no_viable_synth = Note (1) "three-way comparison cannot be synthesized because there is no viable function for {0:'=='|'<'} comparison";
+    note_defaulted_cmp_synthesized_at = Note (2) "in defaulted {0:equality|three-way|equality|relational} comparison operator for {1} first required here";
+    sema_cmp_category_not_found = Error (2) "cannot {1:use builtin operator '<=>'|default 'operator<=>'} because type '{0}' was not found; include <compare>";
+    sema_std_compare_member_form = Error (3) "standard library implementation of {0} is not supported; member '{1}' {2:does not have expected form|is missing}";
+    sema_std_compare_type_form = Error (2) "standard library implementation of {0} is not supported; the type {1:is not trivially copyable|does not have the expected form}";
+    sema_spaceship_narrowing_var = Error (2) "argument to 'operator<=>' cannot be narrowed from type {0} to {1}";
+    sema_spaceship_narrowing_const = Error (2) "argument to 'operator<=>' evaluates to {0}, which cannot be narrowed to type {1}";
+    sema_ordered_pointer_zero = Error (2) "ordered comparison between pointer and zero ({0} and {1})";
     note_explicitly_deleted_here = Note (1) "{0} has been explicitly marked deleted here";
     note_lambda_decl = Note (0) "lambda expression begins here";
     sema_lambda_impcap = Error (1) "variable '{0}' cannot be implicitly captured in a lambda with no capture-default specified";
@@ -967,6 +1012,15 @@ diag_ids! {
     sema_template_param_missing_default = Error (0) "template parameter missing a default argument";
     note_template_param_has_default = Note (0) "previous default template argument defined here";
     sema_template_param_pack_not_last = Error (0) "template parameter pack must be the last template parameter";
+    sema_template_param_list_different_arity = Error (2) "{0:too few|too many} template parameters in template {1:|template parameter }redeclaration";
+    sema_template_param_different_kind = Error (1) "template parameter has a different kind in template {0:|template parameter }redeclaration";
+    sema_template_nontype_parm_different_type = Error (2) "template non-type parameter has a different type {0} in template {1:|template parameter }redeclaration";
+    note_template_nontype_parm_prev_declaration = Note (1) "previous non-type template parameter with type {0} is here";
+    sema_template_parameter_pack_non_pack = Error (2) "{0:template type|non-type template|template template} parameter{1:| pack} conflicts with previous {0:template type|non-type template|template template} parameter{1: pack|}";
+    note_template_parameter_pack_here = Note (2) "previous {0:template type|non-type template|template template} parameter{1:| pack} declared here";
+    sema_template_different_requires_clause = Error (0) "requires clause differs in template redeclaration";
+    sema_template_different_type_constraint = Error (0) "type constraint differs in template redeclaration";
+    note_template_prev_declaration = Note (1) "previous template {0:declaration|template parameter} is here";
     parse_expected_template_param = Error (0) "expected template parameter";
     sema_no_template_named = Error (1) "no template named '{0}'";
     sema_template_decl_in_local = Error (0) "templates cannot be declared inside of a local class";
@@ -1014,6 +1068,7 @@ diag_ids! {
     note_typename_member_refers_here = Note (1) "referenced member '{0}' is declared here";
     // WP-073: concepts (spec/sema-templates.md §8, §8.7; clang 19's texts).
     sema_template_constraints_not_satisfied = Error (3) "constraints not satisfied for {0:class template|function template|variable template|alias template|template template parameter|template} '{1}' {2}";
+    sema_reference_to_unsatisfied_function = Error (1) "invalid reference to function {0}: constraints not satisfied";
     sema_non_bool_atomic_constraint = Error (1) "atomic constraint must be of type 'bool' (found {0})";
     sema_non_constant_constraint = Error (0) "substitution into constraint expression resulted in a non-constant expression";
     sema_constraint_depends_on_self = Error (1) "satisfaction of constraint '{0}' depends on itself";
@@ -1030,6 +1085,7 @@ diag_ids! {
     note_checking_concept_here = Note (1) "while checking the satisfaction of concept '{0}' requested here";
     note_constraint_substitution_here = Note (0) "while substituting template arguments into constraint expression here";
     note_ambiguous_atomic_constraints = Note (0) "similar constraint expressions not considered equivalent; constraint expressions cannot be considered equivalent unless they originate from the same concept";
+    note_ambiguous_atomic_constraints_similar_expression = Note (0) "similar constraint expression here";
     // WP-074: builtin type traits, transforms and templates (spec/sema-templates.md §9)
     sema_type_trait_arity = Error (5) "type trait requires {0}{1:| or more} argument{2:|s}; have {3} argument{4:|s}";
     sema_incomplete_type_trait = Error (1) "incomplete type {0} used in type trait expression";
@@ -1086,6 +1142,7 @@ diag_ids! {
     note_ovl_candidate_explicit_arg_mismatch_named = Note (1) "candidate template ignored: invalid explicitly-specified argument for template parameter '{0}'";
     note_ovl_candidate_explicit_arg_mismatch_unnamed = Note (1) "candidate template ignored: invalid explicitly-specified argument for {0} template parameter";
     note_ovl_candidate_instantiation_depth = Note (0) "candidate template ignored: substitution exceeded maximum template instantiation depth";
+    note_ovl_candidate_bad_deduction = Note (0) "candidate template ignored: failed template argument deduction";
     note_deduction_non_deduced_mismatch = Note (2) "candidate template ignored: could not match '{0}' against '{1}'";
     sema_partial_spec_ambiguous = Error (1) "ambiguous partial specializations of '{0}'";
     note_partial_spec_match = Note (1) "partial specialization matches {0}";
@@ -1215,6 +1272,7 @@ diag_ids! {
     sema_no_call_operator = Error (1) "type {0} does not provide a call operator";
     sema_no_subscript_operator = Error (1) "type {0} does not provide a subscript operator";
     sema_ovl_ambiguous_subscript_call = Error (1) "call to subscript operator of type {0} is ambiguous";
+    sema_ovl_deleted_comparison = Error (2) "object of type {0} cannot be compared because its {1} is implicitly deleted";
     sema_ovl_deleted_special_oper = Error (2) "object of type {0} cannot be {1:constructed|copied|moved|assigned|assigned|destroyed} because its {1:default constructor|copy constructor|move constructor|copy assignment operator|move assignment operator|destructor} is implicitly deleted";
     sema_ovl_rewrite_equalequal_not_bool = Error (2) "return type {0} of selected 'operator==' function for rewritten '{1}' comparison is not 'bool'";
     sema_circular_arrow = Error (0) "circular pointer delegation detected";
@@ -1235,6 +1293,23 @@ diag_ids! {
     note_rewriting_operator_as_spaceship = Note (0) "while rewriting comparison as call to 'operator<=>' declared here";
     sema_operator_arrow_not_pointer = Error (1) "member reference type {0} is not a pointer";
     sema_no_suitable_delete_member = Error (2) "no suitable member {0} in {1}";
+    sema_fn_template_spec_no_match = Error (1) "no function template matches function template specialization '{0}'";
+    sema_fn_template_spec_ambiguous = Error (1) "function template specialization '{0}' ambiguously refers to more than one function template; explicitly specify template arguments to identify a particular function template";
+    note_fn_template_spec_matched = Note (2) "function template '{0}' matches specialization {1}";
+    sema_member_decl_no_match = Error (2) "out-of-line declaration of '{0}' does not match any declaration in {1}";
+    sema_lvalue_ref_bind_to_initlist = Error (2) "{0:non-const|volatile} lvalue reference to type {1} cannot bind to an initializer list temporary";
+    sema_nttp_not_structural = Error (1) "type {0} of non-type template parameter is not a structural type";
+    sema_nttp_non_literal = Error (1) "non-type template parameter has non-literal type {0}";
+    sema_nttp_rvalue_ref = Error (1) "non-type template parameter has rvalue reference type {0}";
+    note_not_structural_non_public = Note (2) "{0} is not a structural type because it has a {1:non-static data member|base class} that is not public";
+    note_not_structural_mutable_field = Note (1) "{0} is not a structural type because it has a mutable non-static data member";
+    note_not_structural_rvalue_ref_field = Note (1) "{0} is not a structural type because it has a non-static data member of rvalue reference type";
+    note_not_structural_subobject = Note (3) "{0} is not a structural type because it has a {1:non-static data member|base class} of non-structural type {2}";
+    note_non_literal_no_constexpr_ctors = Note (1) "{0} is not literal because it is not an aggregate and has no constexpr constructors other than copy or move constructors";
+    note_non_literal_base_class = Note (2) "{0} is not literal because it has base class {1} of non-literal type";
+    note_non_literal_field = Note (3) "{0} is not literal because it has data member {1} of non-literal type {2}";
+    note_non_literal_non_constexpr_dtor = Note (1) "{0} is not literal because its destructor is not constexpr";
+    sema_cce_ref_binds_temporary = Error (2) "conversion from {0} to {1} in converted constant expression would bind reference to a temporary";
 }
 
 impl DiagId {

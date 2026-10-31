@@ -15,7 +15,7 @@ use kiln_diag::{Diag, DiagId};
 use kiln_source::Loc;
 
 use crate::Sema;
-use crate::overload::ArgInfo;
+use crate::overload::{ArgInfo, CandidateKind, IcsOptions, OverloadCandidateSet, Rewrite};
 use crate::templ::args::ConvertedArgs;
 use crate::templ::deduce::{DeducedArgs, TdfFlags, Tdk};
 use crate::templ::stack::{FrameKind, SfinaeState};
@@ -34,6 +34,19 @@ pub struct DeductionFailure {
     pub diag: Option<Diag>,
     /// `ConstraintsNotSatisfied`: why (§8.7).
     pub sat: Option<super::concepts::SatId>,
+}
+
+/// What a deduction without call arguments matches the template
+/// against.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum DeduceTarget {
+    /// Nothing: every argument explicit or defaulted.
+    None,
+    /// The function type of the address target ([temp.deduct.funcaddr]).
+    FuncAddr(QualType),
+    /// The type a conversion function template converts to
+    /// ([temp.deduct.conv]).
+    Conversion(QualType),
 }
 
 impl DeductionFailure {
@@ -91,7 +104,7 @@ impl Sema<'_, '_> {
         args: &[ArgInfo],
         loc: Loc,
     ) -> Result<DeclId, Box<DeductionFailure>> {
-        self.deduce_spec(ft, explicit, Some(args), None, loc)
+        self.deduce_spec(ft, explicit, Some(args), DeduceTarget::None, loc)
     }
 
     /// The specialization of `ft` whose type matches the function type
@@ -104,7 +117,20 @@ impl Sema<'_, '_> {
         target: QualType,
         loc: Loc,
     ) -> Result<DeclId, Box<DeductionFailure>> {
-        self.deduce_spec(ft, explicit, None, Some(target), loc)
+        self.deduce_spec(ft, explicit, None, DeduceTarget::FuncAddr(target), loc)
+    }
+
+    /// The specialization of conversion function template `ft` that
+    /// converts to `to` ([temp.deduct.conv]): P is the template's
+    /// conversion type, A `to` (a reference type for a reference
+    /// binding).
+    pub(crate) fn deduce_conversion(
+        &mut self,
+        ft: DeclId,
+        to: QualType,
+        loc: Loc,
+    ) -> Result<DeclId, Box<DeductionFailure>> {
+        self.deduce_spec(ft, None, None, DeduceTarget::Conversion(to), loc)
     }
 
     /// The specialization of `ft` a template-id with the explicit
@@ -117,7 +143,7 @@ impl Sema<'_, '_> {
         explicit: Option<ArgListId>,
         loc: Loc,
     ) -> Result<DeclId, Box<DeductionFailure>> {
-        self.deduce_spec(ft, explicit, None, None, loc)
+        self.deduce_spec(ft, explicit, None, DeduceTarget::None, loc)
     }
 
     /// [`Self::deduce_call`]; `call` `None` for no call (no arity
@@ -128,7 +154,7 @@ impl Sema<'_, '_> {
         ft: DeclId,
         explicit: Option<ArgListId>,
         call: Option<&[ArgInfo]>,
-        target: Option<QualType>,
+        target: DeduceTarget,
         loc: Loc,
     ) -> Result<DeclId, Box<DeductionFailure>> {
         let args = call.unwrap_or(&[]);
@@ -144,6 +170,9 @@ impl Sema<'_, '_> {
         let last_pack = params.last().is_some_and(|&p| is_pack(self, p));
         // §6.1 step 1: the explicitly-specified arguments.
         let (mut ptys, variadic) = self.proto_param_types(templated);
+        // [temp.deduct.funcaddr]: P is the function type, with the
+        // explicit arguments substituted below.
+        let mut pfn = self.ast.decls.get(templated).ty().unwrap_or(QualType::ERROR);
         let written: Vec<TemplateArg> =
             explicit.map(|l| self.ast.types.args(l).to_vec()).unwrap_or_default();
         if !written.is_empty() {
@@ -197,11 +226,15 @@ impl Sema<'_, '_> {
             let levels = self.prior_levels(ft, depth, &d.args);
             let shown = self.ast.types.arg_list(&d.args[..written.len().min(n)]);
             let tys = ptys.clone();
+            let fn_has_pack =
+                tys.iter().any(|&t| crate::templ::pack::type_pattern(self, t).is_some());
+            let whole = matches!(target, DeduceTarget::FuncAddr(_)) && !fn_has_pack;
             let r = self.in_sfinae(FrameKind::ExplicitArgSubstitution, ft, Some(shown), loc, |s| {
                 let mut sub = Substituter::new(s, &levels);
                 // A function parameter pack keeps its pattern: the
                 // explicitly given prefix may be extended by deduction.
-                tys.iter()
+                let v = tys
+                    .iter()
                     .map(|&t| {
                         if crate::templ::pack::type_pattern(sub.sema, t).is_some() {
                             Ok(t)
@@ -209,11 +242,18 @@ impl Sema<'_, '_> {
                             sub.ty(t, loc)
                         }
                     })
-                    .collect::<Result<Vec<_>, _>>()
+                    .collect::<Result<Vec<_>, _>>()?;
+                let f = if whole { Some(sub.ty(pfn, loc)?) } else { None };
+                Ok::<_, crate::templ::subst::SubstFail>((v, f))
             });
             match r {
                 None => return Err(DeductionFailure::new(Tdk::InstantiationDepth, d)),
-                Some((Ok(t), Ok(()))) => ptys = t,
+                Some((Ok((t, f)), Ok(()))) => {
+                    ptys = t;
+                    if let Some(f) = f {
+                        pfn = f;
+                    }
+                }
                 Some((_, failed)) => {
                     let mut f = DeductionFailure::new(Tdk::SubstitutionFailure, d);
                     f.args = Some(shown);
@@ -233,10 +273,27 @@ impl Sema<'_, '_> {
             return Err(DeductionFailure::new(Tdk::TooFewArguments, d));
         }
         // [temp.deduct.funcaddr]: the function type against the target.
-        if let Some(a) = target {
-            let p = self.ast.decls.get(templated).ty().unwrap_or(QualType::ERROR);
-            let r = self.deduce(p, a, TdfFlags::NONE, &mut d);
+        if let DeduceTarget::FuncAddr(a) = target {
+            let r = self.deduce(pfn, a, TdfFlags::NONE, &mut d);
             if r != Tdk::Success {
+                self.resugar_fn_mismatch(pfn, &mut d);
+                return Err(DeductionFailure::new(r, d));
+            }
+        }
+        if let DeduceTarget::Conversion(to) = target {
+            let ret =
+                self.ast.types.proto(pfn).map_or(QualType::ERROR, kiln_ast::types::FuncProto::ret);
+            let (p, a, tdf) = self.conversion_deduction_pair(ret, to);
+            let r = self.deduce(p, a, tdf, &mut d);
+            if r != Tdk::Success {
+                // clang shows the written `cv T` of an underqualified
+                // result and the canonical type of a mismatch.
+                if r == Tdk::Underqualified
+                    && let TypeView::Function(f) = self.ast.types.view(pfn.ty())
+                {
+                    let written = self.non_reference(f.ret());
+                    self.resugar_mismatch(written, &mut d);
+                }
                 return Err(DeductionFailure::new(r, d));
             }
         }
@@ -341,6 +398,49 @@ impl Sema<'_, '_> {
                 Err(f)
             }
         }
+    }
+
+    /// [temp.deduct.conv]/2–6: the `(P, A)` pair and flags for a
+    /// conversion function template returning `ret` converting to `to`
+    /// (clang `DeduceTemplateArguments` for a conversion).
+    fn conversion_deduction_pair(
+        &mut self,
+        ret: QualType,
+        to: QualType,
+    ) -> (QualType, QualType, TdfFlags) {
+        let mut p = self.non_reference(ret);
+        let a_ref = match self.ast.types.canonical_view(to) {
+            TypeView::LValueRef(x) | TypeView::RValueRef(x) => Some(x),
+            _ => None,
+        };
+        let a = if let Some(x) = a_ref {
+            self.ast.types.unqualified(x)
+        } else {
+            // /3: A not a reference: decay P, else drop its top-level cv.
+            let t = &mut self.ast.types;
+            if t.is_array(p) {
+                let e = t.element(p).unwrap_or(QualType::ERROR);
+                p = t.pointer_to(e);
+            } else if t.is_function(p) {
+                p = t.pointer_to(p);
+            } else {
+                p = self.ast.types.unqualified(p);
+            }
+            self.ast.types.unqualified(to)
+        };
+        let mut tdf = TdfFlags::NONE;
+        if a_ref.is_some() {
+            tdf = tdf.union(TdfFlags::ARG_WITH_REFERENCE_TYPE);
+        }
+        let ptr =
+            |s: &Self, t: QualType| matches!(s.ast.types.canonical_view(t), TypeView::Pointer(_));
+        let mptr = |s: &Self, t: QualType| {
+            matches!(s.ast.types.canonical_view(t), TypeView::MemberPointer { .. })
+        };
+        if (ptr(self, p) && ptr(self, a)) || (mptr(self, p) && mptr(self, a)) {
+            tdf = tdf.union(TdfFlags::IGNORE_QUALIFIERS);
+        }
+        (p, a, tdf)
     }
 
     /// Deduces from one call argument `a` for parameter type `p`
@@ -449,6 +549,33 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// [`Self::resugar_mismatch`] for a function type P: the mismatched
+    /// component as written in P's return or parameter types (`T *`, not
+    /// `type-parameter-0-0 *`), or P itself.
+    fn resugar_fn_mismatch(&mut self, p: QualType, d: &mut DeducedArgs) {
+        let Some(first) = d.info.first else { return };
+        let ArgView::Type(fq) = first.view() else { return };
+        let t = &self.ast.types;
+        let mut parts = vec![p];
+        if let TypeView::Function(f) = t.view(p.ty()) {
+            parts.push(f.ret());
+            parts.extend(t.params(&f).iter().copied());
+        }
+        let want = t.canonical(fq);
+        for cand in parts {
+            let inner = match t.view(cand.ty()) {
+                TypeView::LValueRef(x) | TypeView::RValueRef(x) => x,
+                _ => cand,
+            };
+            for c in [cand, inner] {
+                if t.canonical(c) == want {
+                    d.info.first = Some(TemplateArg::ty(c));
+                    return;
+                }
+            }
+        }
+    }
+
     /// `E` when `p` is `std::initializer_list<E>` (dependent or not).
     fn initializer_list_param(&mut self, p: QualType) -> Option<QualType> {
         if let TypeView::TemplateSpecialization { name, args, .. } =
@@ -534,7 +661,67 @@ impl Sema<'_, '_> {
             Tdk::InstantiationDepth => {
                 self.diag(DiagId::note_ovl_candidate_instantiation_depth, loc)
             }
+            Tdk::MiscellaneousDeductionFailure => {
+                self.diag(DiagId::note_ovl_candidate_bad_deduction, loc)
+            }
             _ => self.diag(DiagId::note_ovl_candidate, loc).arg("function template"),
+        }
+    }
+
+    /// Whether the template of candidate `c1` of `set` is more
+    /// specialized than that of `c2` ([over.match.best]/2.5) in a call
+    /// with `nargs` arguments; for an operator, each candidate counts its
+    /// own explicit arguments and reversal ([temp.func.order]/3).
+    pub(crate) fn more_specialized_candidate(
+        &mut self,
+        set: &OverloadCandidateSet,
+        c1: u32,
+        c2: u32,
+        nargs: usize,
+    ) -> bool {
+        let (x, y) = (set.cand(c1), set.cand(c2));
+        let (Some(t1), Some(t2)) = (x.template, y.template) else { return false };
+        // Conversion function templates order by their return types
+        // ([temp.deduct.partial]/3.2); one never orders against a
+        // constructor template.
+        if x.kind == CandidateKind::ConvFn || y.kind == CandidateKind::ConvFn {
+            return x.kind == y.kind && self.more_specialized_conversion(t1, t2);
+        }
+        if !set.oper {
+            return self.more_specialized(t1, t2, nargs);
+        }
+        let n = |k: CandidateKind| {
+            nargs + usize::from(k == CandidateKind::Function && set.object.is_some())
+        };
+        let reversed = x.rewrite.is_reversed() != y.rewrite.is_reversed();
+        self.more_specialized_operator(t1, n(x.kind), t2, n(y.kind), reversed)
+    }
+
+    /// A rewritten or reversed operator function template candidate
+    /// ([over.match.oper]/3.4, [temp.deduct.call]): deduction runs
+    /// against the operands in the candidate's parameter order (swapped
+    /// for a reversed `rewrite`); the hook `add_member_opers` and
+    /// `add_nonmember_oper` call for templates (spec/sema-overload.md
+    /// §10, WP-106).
+    pub(crate) fn add_rewritten_template(
+        &mut self,
+        set: &mut OverloadCandidateSet,
+        ft: DeclId,
+        found: DeclId,
+        kind: CandidateKind,
+        rewrite: Rewrite,
+        ops: &[ExprId],
+    ) {
+        if rewrite.is_reversed() {
+            if ops.len() == 2 && self.should_add_reversed(ft, ops[1]) {
+                self.add_reversed(set, ft, found, kind, rewrite);
+            }
+            return;
+        }
+        let loc = ops.first().map_or(set.loc, |&e| self.ast.exprs.get(e).loc());
+        self.add_template_candidate(set, ft, found, None, kind, IcsOptions::NONE, loc);
+        if let Some(c) = set.cands.last_mut() {
+            c.rewrite = rewrite;
         }
     }
 }

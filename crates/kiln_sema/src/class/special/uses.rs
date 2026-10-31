@@ -67,11 +67,13 @@ impl Sema<'_, '_> {
         loc: Loc,
         unqualified: bool,
     ) {
-        if !self.ast.decls.get(d).kind().is_function()
-            || self.is_class_member_ref(d)
-            || !self.is_deleted_fn(d)
-            || self.is_err_expr(e)
-        {
+        if !self.ast.decls.get(d).kind().is_function() || self.is_class_member_ref(d) {
+            return;
+        }
+        if !self.is_err_expr(e) && self.diagnose_unsatisfied_use(d, loc) {
+            return;
+        }
+        if !self.is_deleted_fn(d) || self.is_err_expr(e) {
             return;
         }
         if unqualified && self.kind_of(d) == DeclKind::Function {
@@ -84,6 +86,9 @@ impl Sema<'_, '_> {
     /// `attempt to use a deleted function` at `loc` with the notes of
     /// clang `NoteDeletedFunction`.
     pub(crate) fn diagnose_deleted_use(&mut self, d: DeclId, loc: Loc) {
+        if self.diagnose_unsatisfied_use(d, loc) {
+            return;
+        }
         if !self.is_deleted_fn(d) {
             return;
         }

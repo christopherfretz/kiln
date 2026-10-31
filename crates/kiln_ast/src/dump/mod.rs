@@ -321,6 +321,18 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                 push(l.body, todo);
             }
             StmtKind::DoStmt => push(stmts.loop_data(s).body, todo),
+            StmtKind::CXXTryStmt => {
+                push(Some(stmts.try_block(s)), todo);
+                for h in lists.iter::<StmtId>(stmts.try_handlers(s)) {
+                    push(Some(h), todo);
+                }
+            }
+            StmtKind::CXXCatchStmt => {
+                if let Some(v) = stmts.catch_var(s) {
+                    todo.push(Search::Decl(v));
+                }
+                push(Some(stmts.catch_block(s)), todo);
+            }
             _ => {}
         }
     }
@@ -527,6 +539,7 @@ impl<'a, W: io::Write> Dumper<'a, W> {
             | ExprKind::ConstantExpr
             | ExprKind::MaterializeTemporaryExpr
             | ExprKind::CXXBindTemporaryExpr
+            | ExprKind::CXXStdInitializerListExpr
             | ExprKind::ExprWithCleanups
             | ExprKind::CXXNoexceptExpr
             | ExprKind::ExpressionTraitExpr
@@ -723,6 +736,18 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                 expr(l.cond, kids);
             }
             StmtKind::ReturnStmt => expr(stmts.return_value(s), kids),
+            StmtKind::CXXTryStmt => {
+                stmt(Some(stmts.try_block(s)), kids);
+                for h in lists.iter::<StmtId>(stmts.try_handlers(s)) {
+                    stmt(Some(h), kids);
+                }
+            }
+            StmtKind::CXXCatchStmt => {
+                if let Some(v) = stmts.catch_var(s) {
+                    kids.push((Node::Decl(v), None));
+                }
+                stmt(Some(stmts.catch_block(s)), kids);
+            }
             _ => {}
         }
     }
@@ -1430,17 +1455,17 @@ impl<'a, W: io::Write> Dumper<'a, W> {
             Requirement::Simple(x)
             | Requirement::Nested(x)
             | Requirement::Compound { expr: x, .. } => !self.ast.exprs.get(x).deps().is_none(),
-            Requirement::Type(t) => self.ast.types.is_dependent(t),
+            Requirement::Type(t, _) => self.ast.types.is_dependent(t),
         };
         match r {
             Requirement::Simple(_) => self.line.push_str("SimpleRequirement"),
-            Requirement::Type(t) => {
+            Requirement::Type(t, _) => {
                 self.line.push_str("TypeRequirement");
                 self.ty(t);
             }
             Requirement::Compound { noexcept, .. } => {
                 self.line.push_str("CompoundRequirement");
-                if noexcept {
+                if noexcept.is_some() {
                     self.line.push_str(" noexcept");
                 }
             }
@@ -1462,7 +1487,7 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                     kids.push((Node::Expr(c), None));
                 }
             }
-            Some(Requirement::Type(_)) | None => {}
+            Some(Requirement::Type(..)) | None => {}
         }
     }
 
@@ -1885,6 +1910,12 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                     self.name(d);
                 }
             }
+            // clang's `VisitRequiresExpr`: the value of a non-dependent one.
+            ExprKind::RequiresExpr => match exprs.satisfied(e) {
+                Some(true) => self.line.push_str(" satisfied"),
+                Some(false) => self.line.push_str(" unsatisfied"),
+                None => {}
+            },
             ExprKind::CXXNewExpr | ExprKind::CXXDeleteExpr => {
                 if n.has(ExprFlags::GLOBAL) {
                     self.line.push_str(" global");

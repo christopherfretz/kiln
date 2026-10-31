@@ -862,8 +862,7 @@ Where the code differs from (or details) the design above:
   `operator delete` without an exception specification is implicitly
   `noexcept` ([except.spec]/9).
 - **Gaps (owners).** Reversed and rewritten operator function template
-  candidates are not formed (see §10.7). Builtin `<=>` on scalars reports "not supported yet" where
-  clang reports the missing `std::strong_ordering` (WP-082). No access
+  candidates are not formed (see §10.7). No access
   check on class `operator new`/`delete`; no destroying
   `operator delete` (WP-061 follow-up). `x.operator+=(2)` (member access
   naming an operator-function-id) is a parse error: `act_on_member` and
@@ -873,6 +872,17 @@ Where the code differs from (or details) the design above:
   `aka` of a template specialization with an expression argument prints
   `'T<0 + 1>' (aka 'T<1>')` where clang prints no `aka` (types/print).
   `ovl.*` counters are not printed by the driver (§10.5).
+- **Landed (WP-082).** The built-in `<=>` on scalars
+  ([expr.spaceship]) yields the comparison category, or reports
+  `sema_cmp_category_not_found` as clang does. The `adl` flag is set on
+  a `CXXOperatorCallExpr` whose operator was found only by ADL (not yet on
+  ordinary calls). A defaulted comparison is kept out of the candidate
+  sets of its own subobject comparisons (`OverloadCandidateSet.exclude`).
+  Those comparisons use the operator lookups captured at its
+  `= default`. Selecting a deleted defaulted comparison reports
+  `sema_ovl_deleted_comparison` (`object of type 'A' cannot be compared
+  because its 'operator==' is implicitly deleted`) followed by the
+  analyzer's notes (sema-class.md §4.12).
 
 ### 10.7 Landed (WP-071): template candidates
 - `add_template_candidate` (`call.rs`) adds the specialization
@@ -910,6 +920,29 @@ Where the code differs from (or details) the design above:
     deduces P (the template's function type) from A (the target type)
     through `deduce_spec(.., target)`. It keeps the specializations that
     match exactly, then the one more specialized than all the others.
+
+### 10.8 Landed (WP-106): the rest of the template candidates
+- Conversion-function templates: `build_conversion_set` /
+  `conversion_functions_all` (`ics.rs`) add `deduce_conversion`
+  specializations ([temp.deduct.conv], `DeduceTarget`);
+  `order_conversion_templates` applies /2.5 with
+  `more_specialized_conversion`.
+- `operator->` templates (`arrow.rs`): clang adds invalid `operator->`
+  declarations as candidates, so `declares_arrow` decides between "no
+  member named" and "no viable".
+- Reversed and rewritten operator templates ([over.match.oper]/3.4):
+  `add_rewritten_template`; ordering by `more_specialized_operator`
+  ([temp.func.order]/3, object parameter and reversal) through
+  `more_specialized_candidate`; P2468 `functions_correspond` maps
+  specializations to their patterns. Operators no longer set
+  `skipped_templates` for reversed or rewritten templates.
+- `&f` against a target type with no matching template prints clang's
+  `address of overloaded function` with `note_ovl_candidate_bad_deduction`
+  notes (`address.rs`).
+- [over.ics.list]: `drop_explicit_ctors`; `ctor_arg_info` gives braced
+  arguments list `ArgInfo` (`T t({1})`); `init_list_ctor_init` is
+  [over.match.list] phase 1.
+- Gap: [temp.func.order]/6 (constraints of reversed candidates).
 
 ## 11. Agent parallelization (WP-068 split)
 WP-068 has more than five deliverables, so it splits. 068a merges §10.1–10.3

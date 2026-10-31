@@ -19,6 +19,34 @@ pub struct MemRow {
     pub reserved_bytes: u64,
 }
 
+/// The dimensions of a `Vec<T>` of plain data under a static name: a
+/// [`MemRow::of_vec`] that allocates nothing until [`VecDims::row`], for
+/// meters read on hot paths (the per-instantiation node meter).
+#[derive(Clone, Copy, Debug)]
+pub struct VecDims {
+    name: &'static str,
+    len: u64,
+    cap: u64,
+    elem: u64,
+}
+
+impl VecDims {
+    /// The dimensions of `v`.
+    pub fn of<T>(name: &'static str, v: &Vec<T>) -> Self {
+        Self { name, len: v.len() as u64, cap: v.capacity() as u64, elem: size_of::<T>() as u64 }
+    }
+
+    /// `len * size_of::<T>()`.
+    pub fn live_bytes(self) -> u64 {
+        self.len * self.elem
+    }
+
+    /// The accounting row ([`MemRow::of_vec`]).
+    pub fn row(self) -> MemRow {
+        MemRow::new(self.name, self.len, self.len * self.elem, self.cap * self.elem)
+    }
+}
+
 impl MemRow {
     /// A row with explicit numbers.
     pub fn new(name: impl Into<String>, count: u64, live_bytes: u64, reserved_bytes: u64) -> Self {

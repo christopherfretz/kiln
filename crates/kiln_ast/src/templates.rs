@@ -22,7 +22,9 @@ use crate::decl::{
     DeclFlags, DeclKind, Members, NewDecl, Payload, ScopeData, TemplLink, TemplLinkKind,
 };
 use crate::expr::{BinaryOp, ExprDeps, ExprFlags, ExprKind, ObjectKind, UnaryOp, ValueCategory};
-use crate::ids::{ArgListId, DeclId, ExprId, ListId, NnsId, QualType, RawId, TemplateParamListId};
+use crate::ids::{
+    ArgListId, ConstValueId, DeclId, ExprId, ListId, NnsId, QualType, RawId, TemplateParamListId,
+};
 use crate::mem::{HeapSize, MemReport, MemRow};
 use crate::names::DeclName;
 use crate::slot::ColdMap;
@@ -88,16 +90,17 @@ pub struct TemplateParmInfo {
 pub enum Requirement {
     /// `expr ;` ([expr.prim.req.simple]).
     Simple(ExprId),
-    /// `typename T::type ;` ([expr.prim.req.type]).
-    Type(QualType),
+    /// `typename T::type ;` ([expr.prim.req.type]) and where the type
+    /// begins (the failure note points there).
+    Type(QualType, Loc),
     /// `{ expr } noexcept? -> type-constraint? ;`
     /// ([expr.prim.req.compound]); `constraint` is the immediately-declared
     /// constraint of the return-type-requirement.
     Compound {
         /// The expression.
         expr: ExprId,
-        /// `noexcept` was written.
-        noexcept: bool,
+        /// `noexcept` was written, here.
+        noexcept: Option<Loc>,
         /// The return-type-requirement's constraint.
         constraint: Option<ExprId>,
     },
@@ -271,6 +274,9 @@ pub struct TemplateTables {
     /// The first token of a qualified dependent name whose qualifier is
     /// not its own location (clang's `getBeginLoc`).
     pub expr_begin: ColdMap<ExprId, Loc>,
+    /// The `.`/`->` of a dependent member access (diagnostics after
+    /// substitution point at the operator, as clang's `OperatorLoc`).
+    pub member_op_loc: ColdMap<ExprId, Loc>,
     /// Set by sema right before it creates a template's pattern: the next
     /// declaration the builder adds is neither a member nor a name (its
     /// template decl is both, [`AstBuilder::template_decl`]).
@@ -301,6 +307,12 @@ pub struct TemplateTables {
     partials_of: FxHashMap<DeclId, Vec<u32>>,
     /// `(template, canonical args) -> partial` (redeclarations).
     partial_map: FxHashMap<(DeclId, ArgListId), u32>,
+    /// Template parameter objects ([temp.param]/8, sema-templates.md
+    /// §6.10): one `TemplateParamObject` per interned class-type value
+    /// (the value's id determines its type).
+    param_objects: FxHashMap<ConstValueId, DeclId>,
+    /// The value of each template parameter object.
+    param_object_values: FxHashMap<DeclId, ConstValueId>,
 }
 
 impl Default for TemplateTables {
@@ -331,6 +343,7 @@ impl Default for TemplateTables {
             trailing_requires: ColdMap::new("trailing_requires"),
             expr_targs: ColdMap::new("expr_targs"),
             expr_begin: ColdMap::new("expr_begin"),
+            member_op_loc: ColdMap::new("member_op_loc"),
             expr_nns: ColdMap::new("expr_nns"),
             pattern_next: false,
             dependent_depth: 0,
@@ -344,6 +357,8 @@ impl Default for TemplateTables {
             shapes: Vec::new(),
             partials_of: FxHashMap::default(),
             partial_map: FxHashMap::default(),
+            param_objects: FxHashMap::default(),
+            param_object_values: FxHashMap::default(),
         }
     }
 }
@@ -463,6 +478,17 @@ impl TemplateTables {
         self.partial_map.get(&(template, canonical)).copied()
     }
 
+    /// The template parameter object holding class-type value `v`
+    /// ([temp.param]/8), if one was created.
+    pub fn param_object(&self, v: ConstValueId) -> Option<DeclId> {
+        self.param_objects.get(&v).copied()
+    }
+
+    /// The value of template parameter object `d`.
+    pub fn param_object_value(&self, d: DeclId) -> Option<ConstValueId> {
+        self.param_object_values.get(&d).copied()
+    }
+
     /// `h` with `DEPENDENT_CTX` added while inside a template.
     pub(crate) fn dependent_head(&self, mut h: DeclHead) -> DeclHead {
         if self.dependent_depth > 0 {
@@ -484,6 +510,7 @@ impl HeapSize for TemplateTables {
         r.push(self.trailing_requires.mem_row());
         r.push(self.expr_targs.mem_row());
         r.push(self.expr_begin.mem_row());
+        r.push(self.member_op_loc.mem_row());
         r.push(self.expr_nns.mem_row());
         r.push(MemRow::of_vec("templ.specs", &self.specs));
         r.push(MemRow::of_vec("templ.member_specs", &self.member_specs));
@@ -503,6 +530,8 @@ impl HeapSize for TemplateTables {
         row.reserved_bytes += order;
         r.push(row);
         r.push(MemRow::of_map("templ.partial_map", &self.partial_map));
+        r.push(MemRow::of_map("templ.param_objects", &self.param_objects));
+        r.push(MemRow::of_map("templ.param_object_values", &self.param_object_values));
         r
     }
 }
@@ -738,6 +767,31 @@ impl AstBuilder<'_> {
             },
             Payload::None(i),
         )
+    }
+
+    /// The template parameter object of type `ty` (`const T`) holding
+    /// class-type value `v` ([temp.param]/8): one per value, in the
+    /// translation unit but in no member list or lookup table (clang's
+    /// `TemplateParamObjectDecl`).
+    pub fn template_param_object(&mut self, ty: QualType, v: ConstValueId) -> DeclId {
+        if let Some(d) = self.ast.templates.param_object(v) {
+            return d;
+        }
+        let d = self.ast.decls.push(
+            NewDecl {
+                kind: DeclKind::TemplateParamObject,
+                flags: DeclFlags::IMPLICIT,
+                misc: crate::decl::DeclMisc::default(),
+                name: DeclName::EMPTY,
+                ctx: Some(self.ast.tu),
+                loc: Loc::INVALID,
+                ty: Some(ty),
+            },
+            Payload::None(0),
+        );
+        self.ast.templates.param_objects.insert(v, d);
+        self.ast.templates.param_object_values.insert(d, v);
+        d
     }
 
     /// A type template parameter ([temp.param]/2); its declared type is the
@@ -1105,6 +1159,45 @@ impl AstBuilder<'_> {
         d
     }
 
+    /// A declaration of function template specialization `spec` written
+    /// as an explicit specialization (`template<> int f<int>(int);`,
+    /// [temp.expl.spec], sema-templates.md §6.9): a redeclaration of
+    /// `spec` with its [`TemplLink::Specialization`] link, function type
+    /// `ty` and specifiers `fspec`, located at `loc` and listed in
+    /// `lexical` (clang lists the explicit specialization among the decls
+    /// of the context it appears in) but entered into no lookup table
+    /// (lookup finds the template). Parameters are attached afterwards.
+    pub fn function_spec_redecl(
+        &mut self,
+        spec: DeclId,
+        lexical: DeclId,
+        loc: Loc,
+        ty: QualType,
+        fspec: crate::decl::FnSpec,
+    ) -> DeclId {
+        let n = *self.ast.decls.get(spec);
+        let templ = self.ast.decls.function(spec).map_or(TemplLink::NONE, |f| f.templ);
+        let ctx = n.ctx().unwrap_or(self.ast.tu);
+        let mut h = DeclHead::new(ctx, n.name(), loc);
+        h.misc = n.misc();
+        h.lexical = Some(lexical);
+        let redecl = self.redecl_link(Some(spec));
+        let payload = Payload::Function(crate::decl::FunctionData {
+            redecl,
+            params: ListId::EMPTY,
+            body: None,
+            spec: fspec,
+            templ,
+        });
+        let depth = std::mem::take(&mut self.ast.templates.dependent_depth);
+        let d = self.add_pattern(h, n.kind(), Some(ty), payload);
+        self.ast.templates.dependent_depth = depth;
+        if self.ast.decls.member_list(lexical).is_some() {
+            self.ast.decls.append_member(lexical, d);
+        }
+        d
+    }
+
     /// The specialization `v<args>` of variable template `template`
     /// ([temp.spec], sema-templates.md §4.7, clang's
     /// `VarTemplateSpecializationDecl`): a `Var` with a
@@ -1294,24 +1387,13 @@ impl AstBuilder<'_> {
     }
 
     /// A template argument for expression `e`: dependent expressions get
-    /// a stub profile carrying their dependence (WP-070 replaces it with
-    /// the canonical profile, spec/types.md §7.2).
+    /// their canonical profile (spec/types.md §7.2), so equivalent
+    /// arguments ([temp.over.link]/5) canonicalize alike.
     pub fn template_arg_expr(&mut self, e: ExprId) -> TemplateArg {
-        let deps = self.deps(e);
-        if deps.is_none() {
+        if self.deps(e).is_none() {
             return TemplateArg::expr(e, None);
         }
-        let mut f = TypeFlags::NONE;
-        if deps.intersects(ExprDeps::TYPE.with(ExprDeps::VALUE)) {
-            f |= TypeFlags::DEPENDENT_INSTANTIATION;
-        }
-        if deps.contains(ExprDeps::INSTANTIATION) {
-            f |= TypeFlags::INSTANTIATION_DEPENDENT;
-        }
-        if deps.contains(ExprDeps::UNEXPANDED_PACK) {
-            f |= TypeFlags::UNEXPANDED_PACK;
-        }
-        let p = self.ast.types.profile(&[e.raw()], e, f);
+        let p = self.ast.profile_expr(e);
         TemplateArg::expr(e, Some(p))
     }
 
@@ -1665,7 +1747,7 @@ impl AstBuilder<'_> {
             dep |= match *r {
                 Requirement::Simple(e) | Requirement::Nested(e) => !self.deps(e).is_none(),
                 Requirement::Compound { expr, .. } => !self.deps(expr).is_none(),
-                Requirement::Type(t) => !self.type_deps(t).is_none(),
+                Requirement::Type(t, _) => !self.type_deps(t).is_none(),
             };
         }
         let t = &mut self.ast.templates;

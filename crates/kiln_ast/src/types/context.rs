@@ -227,6 +227,8 @@ pub struct TypeContext {
     pub(crate) nns: KeyedTable,
     pub(crate) args: ArgTable,
     pub(crate) profiles: ProfileTable,
+    /// Reusable buffers of `Ast::profile_expr`.
+    pub(crate) profile_scratch: super::profile_expr::ProfileScratch,
     pub(crate) target: TargetTypes,
     pub(crate) opts: TypeOptions,
     pub(crate) exhausted: bool,
@@ -274,6 +276,7 @@ impl TypeContext {
             nns: KeyedTable::new(),
             args: ArgTable::new(),
             profiles: ProfileTable::new(),
+            profile_scratch: super::profile_expr::ProfileScratch::default(),
             target,
             opts,
             exhausted: false,

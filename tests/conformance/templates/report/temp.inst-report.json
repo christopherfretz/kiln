@@ -2,4 +2,4 @@
 {"template":"Box<T>","kind":"class","loc":"temp.inst-report.cpp:6:27","count":3,"nodes":3,"bytes":159,"self_us":0,"incl_us":0}
 {"template":"Arr<T, N>","kind":"class","loc":"temp.inst-report.cpp:7:34","count":1,"nodes":3,"bytes":93,"self_us":0,"incl_us":0}
 {"template":"Outer::Inner","kind":"member","loc":"temp.inst-report.cpp:9:10","count":1,"nodes":1,"bytes":53,"self_us":0,"incl_us":0}
-{"total":true,"count":6,"nodes":10,"bytes":531,"self_us":0}
+{"total":true,"count":6,"nodes":10,"bytes":531,"self_us":0,"sat":0,"sat_cached":0,"atoms":0,"atoms_cached":0}

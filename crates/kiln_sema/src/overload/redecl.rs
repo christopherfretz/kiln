@@ -4,11 +4,8 @@
 //! (spec/sema-overload.md §2).
 
 use kiln_ast::decl::{DeclKind, FnStorage, PayloadClass};
-use kiln_ast::expr::ExprKind;
-use kiln_ast::ids::RawId;
 use kiln_ast::templates::is_template_kind;
-use kiln_ast::types::ArgView;
-use kiln_ast::{ArgListId, DeclId, ExprId, QualType, TemplateParamListId};
+use kiln_ast::{DeclId, ExprId, QualType, TemplateParamListId};
 
 use crate::Sema;
 use crate::lookup::is_tag_kind;
@@ -153,74 +150,5 @@ impl Sema<'_, '_> {
                 _ => true,
             }
         })
-    }
-
-    fn opt_exprs_equivalent(&self, a: Option<ExprId>, b: Option<ExprId>) -> bool {
-        match (a, b) {
-            (None, None) => true,
-            (Some(a), Some(b)) => self.exprs_equivalent(a, b, 0),
-            _ => false,
-        }
-    }
-
-    /// A structural approximation of expression equivalence
-    /// ([temp.over.link]/5) for comparing requires-clauses and
-    /// type-constraints of redeclarations. Template parameters compare by
-    /// position. todo(WP-073): profile-based equivalence.
-    pub(crate) fn exprs_equivalent(&self, a: ExprId, b: ExprId, depth: u32) -> bool {
-        if a == b {
-            return true;
-        }
-        if depth > 256 {
-            return false;
-        }
-        let e = &self.ast.exprs;
-        let (na, nb) = (*e.get(a), *e.get(b));
-        if na.kind() != nb.kind() || !self.ast.types.same_type(na.ty(), nb.ty()) {
-            return false;
-        }
-        match na.kind() {
-            ExprKind::DeclRefExpr => {
-                let (da, db) = (e.decl(a), e.decl(b));
-                if da == db || self.ast.first(da) == self.ast.first(db) {
-                    return true;
-                }
-                match (self.ast.template_parm(da), self.ast.template_parm(db)) {
-                    (Some(x), Some(y)) => x.depth == y.depth && x.index == y.index,
-                    _ => false,
-                }
-            }
-            ExprKind::ConceptSpecializationExpr => {
-                let (ca, cb) = (na.a(), nb.a());
-                if ca != cb {
-                    return false;
-                }
-                let t = &self.ast.types;
-                let (Some(la), Some(lb)) =
-                    (ArgListId::from_raw(na.b()), ArgListId::from_raw(nb.b()))
-                else {
-                    return na.b() == nb.b();
-                };
-                let (xa, xb) = (t.args(la), t.args(lb));
-                xa.len() == xb.len()
-                    && xa.iter().zip(xb).all(|(x, y)| match (x.view(), y.view()) {
-                        (ArgView::Type(p), ArgView::Type(q)) => t.same_type(p, q),
-                        (ArgView::Expr { expr: p, .. }, ArgView::Expr { expr: q, .. }) => {
-                            self.exprs_equivalent(p, q, depth + 1)
-                        }
-                        _ => t.canonical_arg(*x) == t.canonical_arg(*y),
-                    })
-            }
-            ExprKind::BinaryOperator if e.binary_op(a) != e.binary_op(b) => false,
-            ExprKind::UnaryOperator if e.unary_op(a) != e.unary_op(b) => false,
-            _ => {
-                let (ca, cb) = (e.children(a, &self.ast.lists), e.children(b, &self.ast.lists));
-                if ca.is_empty() && cb.is_empty() {
-                    return na.a() == nb.a() && na.b() == nb.b() && na.aux() == nb.aux();
-                }
-                ca.len() == cb.len()
-                    && ca.iter().zip(&cb).all(|(&x, &y)| self.exprs_equivalent(x, y, depth + 1))
-            }
-        }
     }
 }

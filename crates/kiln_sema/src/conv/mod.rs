@@ -469,10 +469,16 @@ fn entity_select(ctx: ConvCtx) -> &'static str {
 pub(crate) fn has_conversion_functions(s: &Sema<'_, '_>, q: QualType) -> bool {
     let Some(d) = s.ast.types.as_record(q) else { return false };
     let Some(def) = bases::complete_class(s, d) else { return false };
-    s.ast
-        .decls
-        .members(def)
-        .any(|m| s.ast.decls.get(m).kind() == kiln_ast::decl::DeclKind::CXXConversion)
+    s.ast.decls.members(def).any(|m| {
+        use kiln_ast::decl::DeclKind;
+        match s.ast.decls.get(m).kind() {
+            DeclKind::CXXConversion => true,
+            DeclKind::FunctionTemplate => s
+                .templated_function(m)
+                .is_some_and(|f| s.ast.decls.get(f).kind() == DeclKind::CXXConversion),
+            _ => false,
+        }
+    })
 }
 
 /// The "remove `*`" / "remove `&`" / "dereference" / "take the address"
@@ -654,7 +660,13 @@ fn bind_reference(s: &mut Sema<'_, '_>, e: ExprId, to: QualType) -> Result<ExprI
             if let Some(r) = s.user_convert(e, to, ConvCtx::Initialization, at) {
                 return r;
             }
-            if !plain_lref {
+            if !plain_lref
+                || (class_src
+                    && s.has_lvalue_ref_conversion_candidates(
+                        from,
+                        crate::overload::udc::udc_options(ConvCtx::Initialization),
+                    ))
+            {
                 let mut err = ConvError::new(
                     DiagId::sema_no_viable_conversion,
                     vec![s.ty_arg(from), s.ty_arg(referee)],

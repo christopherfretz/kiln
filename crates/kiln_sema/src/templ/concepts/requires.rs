@@ -117,8 +117,8 @@ impl Substituter<'_, '_, '_> {
     ) -> bool {
         match r {
             Requirement::Simple(e) => self.req_expr(body, e, recs).is_some(),
-            Requirement::Type(t) => {
-                let loc = at;
+            Requirement::Type(t, loc) => {
+                let _ = at;
                 match self.sfinae(body, loc, |s| s.ty(t, loc).ok()) {
                     Some((Some(_), Ok(()))) => true,
                     Some((_, st)) => {
@@ -132,8 +132,9 @@ impl Substituter<'_, '_, '_> {
             }
             Requirement::Compound { expr, noexcept, constraint } => {
                 let Some(x) = self.req_expr(body, expr, recs) else { return false };
-                if noexcept && self.sema.can_throw(x) {
-                    let at = self.sema.begin_loc(expr);
+                if let Some(at) = noexcept
+                    && self.sema.can_throw(x)
+                {
                     recs.push(SatRecord {
                         id: DiagId::note_requirement_may_throw,
                         loc: at,
@@ -198,12 +199,14 @@ impl Substituter<'_, '_, '_> {
             Some((Some(x), Ok(()))) => Some(x),
             Some((_, st)) => {
                 let first = st.err().flatten();
-                if first
+                if let Some(d) = first
                     .as_ref()
-                    .is_some_and(|d| d.id() == Some(DiagId::sema_unimplemented_template_feature))
+                    .filter(|d| d.id() == Some(DiagId::sema_unimplemented_template_feature))
                 {
-                    // Not substitutable yet: assume the requirement holds.
-                    return Some(e);
+                    // Not substitutable yet: a hard error, never assumed
+                    // to hold.
+                    self.sema.emit(d.clone());
+                    return None;
                 }
                 let text = self.sema.expr_text(e);
                 recs.push(invalid_record(self.sema, first.as_ref(), loc, text));

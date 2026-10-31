@@ -13,7 +13,7 @@ use crate::ids::{
     StringLitId,
 };
 use crate::lists::IdLists;
-use crate::mem::{HeapSize, MemReport, MemRow};
+use crate::mem::{HeapSize, MemReport, VecDims};
 use crate::slot::{AlreadySet, ColdMap};
 
 /// Expression kinds (spec/ast.md §5.3; clang's class names without the
@@ -1454,6 +1454,19 @@ impl ExprArena {
         Ok(())
     }
 
+    /// Marks the call `e` (`CallExpr` or `CXXOperatorCallExpr`) as calling
+    /// a function found only by argument-dependent lookup (clang's
+    /// `UsesADL`, dumped `adl`).
+    pub fn set_call_adl(&mut self, e: ExprId) {
+        let n = &mut self.nodes[e.index() as usize];
+        assert!(
+            matches!(n.kind, ExprKind::CallExpr | ExprKind::CXXOperatorCallExpr),
+            "expected a call, found {:?}",
+            n.kind
+        );
+        n.bits |= ExprFlags::ADL.0;
+    }
+
     /// Marks the `UnresolvedLookupExpr` `e` as using argument-dependent
     /// lookup: an unqualified template-id followed by `(`
     /// ([basic.lookup.argdep]/1, [temp.names]/3). Write-once.
@@ -1886,8 +1899,8 @@ impl ExprArena {
 
     /// The single operand of a unary operator, cast, `ParenExpr`,
     /// `ConstantExpr`, `MemberExpr` (its base), `MaterializeTemporaryExpr`,
-    /// `CXXBindTemporaryExpr`, `ExprWithCleanups` or `PackExpansionExpr`
-    /// (its pattern).
+    /// `CXXBindTemporaryExpr`, `CXXStdInitializerListExpr` (its backing
+    /// array), `ExprWithCleanups` or `PackExpansionExpr` (its pattern).
     pub fn operand(&self, e: ExprId) -> ExprId {
         let n = self.get(e);
         assert!(
@@ -1900,6 +1913,7 @@ impl ExprArena {
                         | ExprKind::MemberExpr
                         | ExprKind::MaterializeTemporaryExpr
                         | ExprKind::CXXBindTemporaryExpr
+                        | ExprKind::CXXStdInitializerListExpr
                         | ExprKind::ExprWithCleanups
                         | ExprKind::PackExpansionExpr
                 ),
@@ -2019,6 +2033,7 @@ impl ExprArena {
             | ExprKind::ConstantExpr
             | ExprKind::MaterializeTemporaryExpr
             | ExprKind::CXXBindTemporaryExpr
+            | ExprKind::CXXStdInitializerListExpr
             | ExprKind::ExprWithCleanups => v.extend(id(n.a)),
             ExprKind::CXXTypeidExpr if !n.has(ExprFlags::ARG_IS_TYPE) => v.extend(id(n.a)),
             ExprKind::CXXConstructExpr | ExprKind::CXXTemporaryObjectExpr => {
@@ -2095,17 +2110,17 @@ impl ExprArena {
     }
 
     pub(crate) fn live_bytes(&self) -> u64 {
-        self.vec_rows().iter().map(|r| r.live_bytes).sum()
+        self.vec_rows().iter().map(|r| r.live_bytes()).sum()
     }
 
-    fn vec_rows(&self) -> [MemRow; 6] {
+    fn vec_rows(&self) -> [VecDims; 6] {
         [
-            MemRow::of_vec("nodes", &self.nodes),
-            MemRow::of_vec("cond_arms", &self.cond_arms),
-            MemRow::of_vec("declref_extras", &self.declref_extras),
-            MemRow::of_vec("compound_assigns", &self.compound_assigns),
-            MemRow::of_vec("init_lists", &self.init_lists),
-            MemRow::of_vec("news", &self.news),
+            VecDims::of("nodes", &self.nodes),
+            VecDims::of("cond_arms", &self.cond_arms),
+            VecDims::of("declref_extras", &self.declref_extras),
+            VecDims::of("compound_assigns", &self.compound_assigns),
+            VecDims::of("init_lists", &self.init_lists),
+            VecDims::of("news", &self.news),
         ]
     }
 }
@@ -2114,7 +2129,7 @@ impl HeapSize for ExprArena {
     fn heap_bytes(&self) -> MemReport {
         let mut r = MemReport::new();
         for row in self.vec_rows() {
-            r.push(row);
+            r.push(row.row());
         }
         r.push(self.lambdas.mem_row());
         r.push(self.cold.end_loc.mem_row().prefixed("cold"));

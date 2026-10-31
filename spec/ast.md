@@ -73,6 +73,15 @@ the Oven counters (spec/bench.md). Size assertions (`size_of`) for every
 header type are unit tests (§14), so a field addition that grows a header
 fails CI rather than silently costing memory.
 
+The per-instantiation node meter (`Ast::node_live_bytes`, read at every
+instantiation frame push and pop) must not allocate. The decl, expr and
+stmt arenas therefore list their vectors as `kiln_ast::VecDims`, which
+holds a static name, length, capacity and element size and has
+`live_bytes()` and `row() -> MemRow`. A `MemRow` and its `String` name
+are built only for the report (WP-116: the meter was allocating about 1M
+`String`s on `templates_wide`, roughly 9% of its instruction count, once
+LLVM stopped eliding them).
+
 ### 2.4 Mutation discipline
 After a node is created its header and side record are immutable, except:
 
@@ -513,7 +522,7 @@ struct StmtNode { kind: StmtKind /*u8*/, flags: u8, aux: u16, loc: Loc, a: u32, 
 | `AttributedStmt` | attrs `ListId` + sub (`[[likely]]`, `[[fallthrough]]`, `[[assume(e)]]`) |
 | `CXXForRangeStmt` | clang's desugaring, all slots kept: `{init, range_var DeclStmt, begin DeclStmt, end DeclStmt, cond, inc, loop_var DeclStmt, body}`; for C++26 lifetime extension of temporaries in the range-init (P2718) the range var's init records extended temporaries |
 | `CXXExpansionStmt` (P1306, M6) | `aux` = enumerating / iterating / destructuring; `{init, expansion_var pattern DeclStmt, range (expansion-init-list `ListId` or range expr), body pattern, instantiations: ListId}` where each instantiation is a `CompoundStmt` with the per-element variable; `break`/`continue` target the whole statement |
-| `CXXTryStmt` | `{block, handlers: ListId}`; `CXXCatchStmt {exception_decl or catch-all, block}` |
+| `CXXTryStmt` (WP-100) | `{block, handlers: ListId}` (`try_stmt`, `try_block`, `try_handlers`); `CXXCatchStmt {exception_decl or catch-all, block}` (`catch_stmt`, `catch_var`, `catch_block`). A class-type handler variable's init is a copy from an `OpaqueValueExpr` (`opaque_value_of(ty, vc, loc)`, a builder that makes a sourceless one) |
 | `CoroutineBodyStmt` | side record with clang's fixed slots: body, promise decl, initial/final suspend, exception handler, fallthrough handler, allocate, deallocate, return-value init, result decl, return stmt on alloc failure, param moves `ListId` |
 | `CoreturnStmt` | `{operand, promise call}` |
 | `GCCAsmStmt` | side record: template `StringLitId`, outputs/inputs `ListId` of `(constraint StringLitId, ExprId)`, clobbers, labels; volatile/goto bits |

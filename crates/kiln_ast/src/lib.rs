@@ -41,4 +41,4 @@ pub use ids::{
     TemplateParamListId, TypeId,
 };
 pub use lists::IdLists;
-pub use mem::{HeapSize, MemReport, MemRow};
+pub use mem::{HeapSize, MemReport, MemRow, VecDims};

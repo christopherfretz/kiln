@@ -9,7 +9,9 @@ kiln -std=c++26 -stdlib=libc++ -fsyntax-only -ferror-limit=0 h.cpp
 The setup is libc++ 19.1.7 (Debian `libc++-19-dev`) on aarch64 Linux,
 with kiln main after WP-072 (2026-10-31: the whole M3 template engine —
 070a/b, 071, 072, 073, 074, 087 — plus classes 067a/b, overloading
-068a/b, virtuals 077/078/080, builtins 088, `__int128` 107). The M3
+068a/b, virtuals 077/078/080, builtins 088, `__int128` 107), updated
+for WP-109 (concepts and alias follow-ups) on the `<type_traits>`,
+`<compare>`, `<utility>`, `<array>`, `<span>` and `<string_view>` rows. The M3
 gate headers (WP-081) are listed last. "First
 blocker" is the first error kiln reports. The counts are all the errors
 in the header's closure; most are follow-ons of the same unsupported
@@ -27,12 +29,12 @@ feature. Every header preprocesses identically to clang (see
 | `<initializer_list>` | 0 | 0 | 47 | none (clean since WP-070b/071) | |
 | `<bit>` | 0 | 0 | — | none | |
 | `<limits>` | 0 | 0 | — | none | |
-| `<type_traits>` | 1 | 2 | 431 | `common_reference.h:160`: alias instantiation "reference to a member of a dependent context" (WP-109) | that error ×2 |
-| `<compare>` | 1 | 50 | 399 | defaulted comparison operators (WP-082) | defaulted comparisons, follow-ons |
-| `<utility>` | 1 | 83 | — | defaulted comparison operators (WP-082) | defaulted comparisons, follow-ons |
-| `<array>` | 1 | 180 | — | alias instantiation "reference to a member of a dependent context" (WP-109) | that error + follow-ons |
-| `<span>` | 1 | 116 | — | same (WP-109) | |
-| `<string_view>` | 1 | 332 | — | same (WP-109) | |
+| `<type_traits>` | 0 | 0 | 431 | none (clean since WP-109) | |
+| `<compare>` | 1 | 48 | 399 | defaulted comparison operators (WP-082) | defaulted comparisons, follow-ons |
+| `<utility>` | 1 | 81 | — | defaulted comparison operators (WP-082) | defaulted comparisons, follow-ons |
+| `<array>` | 1 | 177 | — | `__utility/swap.h:33`: type alias template redefinition with different types (`__swap_result_t`; expression profiles, spec/types.md §7.2) | member exception specifications ×64, constructor selection, friend templates |
+| `<span>` | 1 | 113 | — | defaulted comparison operators (WP-082) | member exception specifications ×28, constructor selection, friend templates |
+| `<string_view>` | 1 | 329 | — | same as `<array>` (`swap.h:33`) | ambiguous overloaded operator ×84, member exception specifications ×63 |
 
 The single-header counts rose a little: before WP-065 the parser gave
 up on a class at its first constructor or operator (one "special member

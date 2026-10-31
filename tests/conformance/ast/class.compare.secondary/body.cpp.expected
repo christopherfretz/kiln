@@ -1,0 +1,24 @@
+Dumping S::operator<=>:
+CXXMethodDecl used operator<=> 'std::strong_ordering (const S &) const'
+`-ParmVarDecl 'const S &'
+
+Dumping S::operator<:
+CXXMethodDecl used operator< 'bool (const S &) const noexcept(false)' default implicit-inline
+|-ParmVarDecl used 'const S &'
+`-CompoundStmt
+  `-ReturnStmt
+    `-CXXRewrittenBinaryOperator 'bool'
+      `-CXXOperatorCallExpr 'bool' '<' adl
+        |-ImplicitCastExpr 'bool (*)(strong_ordering, _CmpUnspecifiedParam) noexcept' <FunctionToPointerDecay>
+        | `-DeclRefExpr 'bool (strong_ordering, _CmpUnspecifiedParam) noexcept' lvalue Function 'operator<' 'bool (strong_ordering, _CmpUnspecifiedParam) noexcept'
+        |-CXXOperatorCallExpr 'std::strong_ordering' '<=>'
+        | |-ImplicitCastExpr 'std::strong_ordering (*)(const S &) const' <FunctionToPointerDecay>
+        | | `-DeclRefExpr 'std::strong_ordering (const S &) const' lvalue CXXMethod 'operator<=>' 'std::strong_ordering (const S &) const'
+        | |-UnaryOperator 'const S' lvalue prefix '*' cannot overflow
+        | | `-CXXThisExpr 'const S *' this
+        | `-DeclRefExpr 'const S' lvalue ParmVar '' 'const S &'
+        `-ImplicitCastExpr '_CmpUnspecifiedParam':'std::_CmpUnspecifiedParam' <ConstructorConversion>
+          `-CXXConstructExpr '_CmpUnspecifiedParam':'std::_CmpUnspecifiedParam' 'void (int std::_CmpUnspecifiedParam::*) noexcept'
+            `-ImplicitCastExpr 'int std::_CmpUnspecifiedParam::*' <NullToMemberPointer>
+              `-IntegerLiteral 'int' 0
+

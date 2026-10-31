@@ -340,7 +340,7 @@ impl<'a> AstBuilder<'a> {
     /// The redeclaration link of a new declaration: joins `prev`'s group
     /// (after its latest declaration) or starts a group at the id the next
     /// push returns.
-    fn redecl_link(&mut self, prev: Option<DeclId>) -> Redecl {
+    pub(crate) fn redecl_link(&mut self, prev: Option<DeclId>) -> Redecl {
         let d = self.ast.decls.next_id();
         match prev {
             Some(p) => {
@@ -1094,6 +1094,15 @@ impl<'a> AstBuilder<'a> {
     /// a `TemplateParamObject` once substituted).
     fn decl_ref_category(&self, d: DeclId) -> ValueCategory {
         match self.ast.decls.get(d).kind() {
+            // [temp.param]/8: a class-type parameter names an object; a
+            // reference parameter names its referent.
+            DeclKind::NonTypeTemplateParm
+                if self.ast.decls.get(d).ty().is_some_and(|t| {
+                    self.ast.types.as_record(t).is_some() || self.ast.types.is_reference(t)
+                }) =>
+            {
+                ValueCategory::LValue
+            }
             DeclKind::EnumConstant | DeclKind::NonTypeTemplateParm => ValueCategory::PRValue,
             // A builtin function's name has the placeholder type
             // `<builtin fn type>` and is a prvalue (as clang).
@@ -2356,6 +2365,23 @@ impl<'a> AstBuilder<'a> {
         )
     }
 
+    /// A `std::initializer_list<E>` prvalue of type `ty` over the backing
+    /// array `array` (a `MaterializeTemporaryExpr` of type `const E[N]`,
+    /// [dcl.init.list]/5).
+    pub fn std_initializer_list(&mut self, array: ExprId, ty: QualType) -> ExprId {
+        let n = *self.ast.exprs.get(array);
+        self.simple(
+            ExprKind::CXXStdInitializerListExpr,
+            ValueCategory::PRValue,
+            n.deps() | self.type_deps(ty),
+            0,
+            ty,
+            n.loc(),
+            array.raw(),
+            0,
+        )
+    }
+
     /// Binds the class prvalue `sub` to a temporary destroyed by `dtor`
     /// at the end of the full-expression ([class.temporary]/4).
     pub fn bind_temporary(&mut self, sub: ExprId, dtor: DeclId) -> ExprId {
@@ -2521,6 +2547,25 @@ impl<'a> AstBuilder<'a> {
         )
     }
 
+    /// An `OpaqueValueExpr` of type `ty` with no source expression: the
+    /// exception object a handler's variable is copy-initialized from
+    /// ([except.handle]/15), or a defaulted comparison's analyzer operands
+    /// (`Xi, Xi`, clang's `DefaultedComparisonAnalyzer`).
+    pub fn opaque_value_of(&mut self, ty: QualType, vc: ValueCategory, loc: Loc) -> ExprId {
+        self.push_expr(
+            ExprKind::OpaqueValueExpr,
+            vc,
+            ObjectKind::Ordinary,
+            ExprFlags::NONE,
+            ExprDeps::NONE,
+            0,
+            ty,
+            loc,
+            0,
+            0,
+        )
+    }
+
     /// Element-wise array copy ([class.copy.ctor]/14, [expr.prim.lambda.capture]/
     /// 10, structured bindings): `common` is the `OpaqueValueExpr` of the
     /// source array, `elem` the initializer of one element (indexed by an
@@ -2679,6 +2724,19 @@ impl<'a> AstBuilder<'a> {
     /// `goto label;` ([stmt.goto]); `a` = the `Label` declaration.
     pub fn goto_stmt(&mut self, label: DeclId, loc: Loc) -> StmtId {
         self.stmt(StmtKind::GotoStmt, 0, loc, label.raw(), 0)
+    }
+
+    /// A try-block ([except.pre]/1): `try compound-statement handler-seq`
+    /// (`a` = the compound statement, `b` = the `CXXCatchStmt` list).
+    pub fn try_stmt(&mut self, block: StmtId, handlers: &[StmtId], loc: Loc) -> StmtId {
+        let list = self.ast.lists.push(handlers);
+        self.stmt(StmtKind::CXXTryStmt, 0, loc, block.raw(), list.raw())
+    }
+
+    /// A handler `catch ( exception-declaration ) compound-statement`
+    /// ([except.handle]); `var` is `None` for `catch (...)`.
+    pub fn catch_stmt(&mut self, var: Option<DeclId>, block: StmtId, loc: Loc) -> StmtId {
+        self.stmt(StmtKind::CXXCatchStmt, 0, loc, var.map_or(0, RawId::raw), block.raw())
     }
 
     /// A `return` statement ([stmt.return]) with its NRVO candidate

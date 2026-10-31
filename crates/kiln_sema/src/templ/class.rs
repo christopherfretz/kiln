@@ -640,6 +640,14 @@ impl Sema<'_, '_> {
             if n.flags().contains(DeclFlags::IMPLICIT) {
                 continue;
             }
+            // A friend function defined in the class is a member of the
+            // list as well as its `FriendDecl`'s target; the
+            // `FriendDecl` redeclares it.
+            if n.kind() == DeclKind::Function
+                && n.misc().friend() != kiln_ast::decl::FriendKind::None
+            {
+                continue;
+            }
             let r = sub.member(m);
             if let Ok(Some(x)) = r {
                 sub.member_link(x, m);
@@ -982,6 +990,13 @@ impl Substituter<'_, '_, '_> {
     fn member(&mut self, m: DeclId) -> Result<Option<DeclId>, SubstFail> {
         let n = *self.sema.ast.decls.get(m);
         let loc = n.loc();
+        // A typedef member diagnosed as a redefinition in the pattern is
+        // not instantiated (clang skips invalid members), so it is not
+        // diagnosed again.
+        if matches!(n.kind(), DeclKind::Typedef | DeclKind::TypeAlias) && n.has(DeclFlags::INVALID)
+        {
+            return Ok(None);
+        }
         Ok(Some(match n.kind() {
             DeclKind::Field => self.field_decl(m)?,
             DeclKind::Var if self.defers_init(m) => self.deferred_static_member(m)?,
@@ -1021,6 +1036,11 @@ impl Substituter<'_, '_, '_> {
                 return Ok(r.filter(|&x| self.sema.kind_of(x) != DeclKind::Friend));
             }
             DeclKind::Empty => return Ok(None),
+            // A friend function is in its class's member list as well as
+            // in its FriendDecl, which instantiates it.
+            DeclKind::Function if n.misc().friend() != kiln_ast::decl::FriendKind::None => {
+                return Ok(None);
+            }
             DeclKind::CXXRecord => self.member_class_decl(m)?,
             DeclKind::ClassTemplate
             | DeclKind::FunctionTemplate

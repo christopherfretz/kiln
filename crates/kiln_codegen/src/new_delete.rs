@@ -12,11 +12,11 @@ use kiln_ast::types::TypeView;
 use kiln_ast::{DeclId, ExprId, QualType};
 use kiln_llvm::intrinsics::OverflowOp;
 use kiln_llvm::{
-    Attr, AttrKind, AttrList, AttrSetId, BinOp, CallOpts, Flags, IntPredicate, MemOpts,
-    TypeId as LTy, Value,
+    Attr, AttrKind, AttrList, AttrSetId, BinOp, CallOpts, Flags, IntPredicate, TypeId as LTy, Value,
 };
 use kiln_source::Loc;
 
+use crate::cleanup::{Cleanup, NewDelete, Saved};
 use crate::expr::LV;
 use crate::fir::{Fir, Op, V};
 use crate::func::{Addr, CallArg, min_align};
@@ -237,17 +237,18 @@ impl Cg<'_> {
         let func = self.m.attr_set(&fa);
         let ret = self.m.attr_set(&ra);
         let opts = CallOpts { attrs: AttrList { func, ret, params }, ..CallOpts::default() };
-        let rty = if af.is_new { LTy::PTR } else { LTy::VOID };
-        let r = self.f.fir.push(
-            Op::Call {
-                fn_ty: sig.fn_ty,
-                callee: V::C(Value::func(f)),
-                args: ir_args,
-                opts: Box::new(opts),
-            },
+        // A class-specific allocation function is no global one: its
+        // result type comes from its signature.
+        let rty = self.m.types.function_info(sig.fn_ty).map_or(LTy::VOID, |(r, _, _)| r);
+        let r = self.emit_call_op(
+            sig.fn_ty,
+            V::C(Value::func(f)),
+            ir_args,
+            opts,
             rty,
+            Some(f),
+            sig.nothrow,
         );
-        self.f.calls.push((Fir::last_inst(r), Some(f), sig.nothrow));
         Ok(r)
     }
 
@@ -329,7 +330,7 @@ impl Cg<'_> {
 
     /// The preferred alignment of `ty` (`DataLayout::getPrefTypeAlign`):
     /// `AArch64` prefers 32-bit alignment for `i8`/`i16`.
-    fn pref_align(&self, ty: LTy) -> u64 {
+    pub(crate) fn pref_align(&self, ty: LTy) -> u64 {
         let (_, a) = self.ir_layout(ty);
         if !self.is_x86() && self.m.types.int_width(ty).is_some_and(|w| (2..=16).contains(&w)) {
             return a.max(4);
@@ -358,6 +359,13 @@ impl Cg<'_> {
         }
         if matches!(t.canonical_view(base), TypeView::MemberPointer { .. }) {
             return err(loc, "new of a member pointer is not supported yet");
+        }
+        if is_array && self.needs_array_cookie(base, x.operator_delete) {
+            return err(
+                loc,
+                "array new of a type that needs an array cookie (non-trivial destructor or \
+                 sized deallocation) is not supported yet",
+            );
         }
         let (esize, alloc_align) = self.size_align(base);
         let Some(fty) = ast.decls.get(op_new).ty() else {
@@ -531,47 +539,35 @@ impl Cg<'_> {
             cont = Some(c);
         }
 
-        // The `operator delete` cleanup: only its conditional-evaluation
-        // bookkeeping is observable without an exceptional edge.
+        // EnterNewDeleteCleanup: the deallocation function runs if the
+        // initialization throws ([expr.new]/28); deactivated once it
+        // completes. `dominator` stands for clang's `cleanupDominator`.
         let cleanup = self.opts.exceptions
             && x.operator_delete.is_some_and(|d| !self.alloc_fn(d).is_some_and(|a| a.reserved));
-        if cleanup && let Some(&outer) = self.f.conds.first() {
-            let mut save = vec![alloc, size];
-            for v in &placement_vals {
-                match *v {
-                    CallArg::Scalar(s) => save.push(s),
-                    CallArg::Agg(_) => {
-                        return err(
-                            loc,
-                            "a conditional new-expression with a class placement argument is not supported yet",
-                        );
-                    }
-                }
-            }
-            let entry = self.f.fir.entry();
-            for v in save {
-                if let V::I(i) = v
-                    && self.f.fir.inst_block(i) != Some(entry)
-                {
-                    let ty = self.f.fir.ty(&self.m, v);
-                    let al = self.pref_align(ty);
-                    let slot = self.f.fir.alloca(ty, al);
-                    self.store(v, slot, al, false);
-                }
-            }
-            let flag = self.f.fir.alloca(LTy::I1, 1);
-            let f0 = V::C(self.m.const_bool(false));
-            self.f.fir.insert_before_last(
-                outer,
-                Op::Store { val: f0, ptr: flag, mem: MemOpts { align: 1, ..MemOpts::default() } },
-                LTy::VOID,
-            );
-            let t1 = V::C(self.m.const_bool(true));
-            self.store(t1, flag, 1, false);
+        let mut del_cleanup = None;
+        if cleanup && let Some(op_delete) = x.operator_delete {
+            let placement = placement_vals
+                .iter()
+                .zip(&placement)
+                .map(|(&v, &a)| (Saved::Direct(v), ast.exprs.get(a).ty()))
+                .collect();
+            let nd = NewDelete {
+                op_delete,
+                ptr: Saved::Direct(CallArg::Scalar(alloc)),
+                size: Saved::Direct(CallArg::Scalar(size)),
+                align: alloc_align,
+                pass_align,
+                placement,
+            };
+            self.push_full_expr_cleanup(Cleanup::NewDelete(Box::new(nd)), false, true);
+            let c = self.f.cl.depth();
+            let z = V::C(self.m.const_bool(false));
+            let dominator =
+                self.f.fir.push(Op::Bin { op: BinOp::Or, flags: Flags::NONE, l: z, r: z }, LTy::I1);
+            del_cleanup = Some((c, dominator));
         }
 
         // The initializer.
-        let calls_before = self.f.calls.len();
         if is_array {
             let num = num_elems.unwrap_or(size);
             self.emit_new_array_init(&x, base, esize, alloc, allocation_align, num, size, loc)?;
@@ -584,16 +580,10 @@ impl Cg<'_> {
             };
             self.init_to_lvalue(init, lv, false)?;
         }
-        if cleanup {
-            let may_throw = self.f.calls[calls_before..].iter().any(|&(_, c, site)| {
-                !site && !c.is_some_and(|c| self.nounwind.get(&c).copied().unwrap_or(false))
-            });
-            if may_throw {
-                return err(
-                    loc,
-                    "a new-expression whose initializer may throw needs an exception cleanup, which is not supported yet",
-                );
-            }
+        if let Some((c, dominator)) = del_cleanup {
+            let d = Fir::last_inst(dominator);
+            self.deactivate_cleanup_block(c, d);
+            self.f.fir.erase(d);
         }
 
         if let (Some(nb), Some(c)) = (null_bb, cont) {
@@ -609,6 +599,32 @@ impl Cg<'_> {
                 .push(Op::Phi { ty: LTy::PTR, inc: vec![(alloc, nn_end), (z, nb)] }, LTy::PTR));
         }
         Ok(alloc)
+    }
+
+    /// Itanium `requiresArrayCookie`: elements of class type with a
+    /// non-trivial destructor, or a usual array deallocation function
+    /// that takes the size ([expr.new]/16, [expr.delete]/11).
+    fn needs_array_cookie(&self, elem: QualType, op_delete: Option<DeclId>) -> bool {
+        let ast = self.ast;
+        if ast.types.as_record(elem).is_some_and(|r| self.has_nontrivial_dtor(ast.first(r))) {
+            return true;
+        }
+        // Only a class-scope usual deallocation function asks for the
+        // size without a non-trivial destructor (`doesUsualArrayDeleteWantSize`).
+        let Some(d) = op_delete.filter(|&d| {
+            ast.types.as_record(elem).is_some()
+                && ast.decls.get(d).ctx().is_some_and(|c| ast.decls.record(c).is_some())
+        }) else {
+            return false;
+        };
+        let Some(proto) = ast.decls.get(d).ty().and_then(|f| ast.types.proto(f).copied()) else {
+            return false;
+        };
+        let params = ast.types.params(&proto);
+        params.len() >= 2
+            && !self.is_std_enum(params[1], "align_val_t")
+            && ast.types.canonical(params[1])
+                == ast.types.canonical(QualType::unqual(ast.types.target().size_t))
     }
 
     /// `e` is (through parentheses and implicit casts) a string literal.
@@ -687,6 +703,28 @@ impl Cg<'_> {
         let Some(init) = init else {
             return err(loc, "array new with trailing elements but no initializer");
         };
+        // A constructor call loop over the remaining elements
+        // (`EmitCXXAggrConstructorCall`).
+        if ast.exprs.get(init).kind() == ExprKind::CXXConstructExpr {
+            let ctor = ast.exprs.constructor(init);
+            let zeroing = ast.exprs.construct_info(init).zeroing;
+            let trivial = ast.decls.function(ctor).is_some_and(|f| f.spec.is_trivial());
+            if trivial && !zeroing {
+                return Ok(());
+            }
+            if zeroing {
+                return err(
+                    loc,
+                    "zero-initializing array new with constructors is not supported yet",
+                );
+            }
+            let mut rem = num;
+            if n_init > 0 {
+                let k = self.i64c(i128::from(n_init));
+                rem = self.bin(BinOp::Sub, Flags::NONE, num, k);
+            }
+            return self.construct_array_n(init, cur, base_ty, min_align(cur_align, esize), rem);
+        }
         // TryMemsetInitialization.
         if self.memset_init(init) {
             let mut rem = size;
@@ -775,6 +813,19 @@ impl Cg<'_> {
         let Some(mut dt) = t.pointee(ast.exprs.get(arg).ty()) else {
             return err(loc, "delete of a non-pointer");
         };
+        if ast.exprs.get(e).has(ExprFlags::ARRAY_FORM) {
+            let mut b = dt;
+            while let Some(el) = t.element(b) {
+                b = el;
+            }
+            if self.needs_array_cookie(b, Some(od)) {
+                return err(
+                    loc,
+                    "array delete of a type that needs an array cookie (non-trivial destructor \
+                     or sized deallocation) is not supported yet",
+                );
+            }
+        }
         let p = self.emit_scalar(arg)?;
         let notnull = self.f.fir.create_block();
         let end = self.f.fir.create_block();
@@ -870,6 +921,64 @@ impl Cg<'_> {
         let sig = self.call_sig_this(fty, false, &[], Some(dclass));
         self.call_vals(&sig, callee, fid, Some(p), &[], &[], None, &[])?;
         Ok(false)
+    }
+
+    /// `CallDeleteDuringNew::Emit`: the deallocation function of a
+    /// new-expression whose initialization threw, passed the size and
+    /// alignment a usual deallocation function takes, or for a placement
+    /// form the placement arguments (and the alignment if the allocation
+    /// was passed one) ([expr.new]/28).
+    pub(crate) fn emit_new_delete_cleanup(&mut self, c: &NewDelete) -> R<()> {
+        let ast = self.ast;
+        let t = &ast.types;
+        let loc = Some(ast.decls.get(c.op_delete).loc());
+        let Some(fty) = ast.decls.get(c.op_delete).ty() else {
+            return err(loc, "deallocation function without a type");
+        };
+        let Some(proto) = t.proto(fty).copied() else {
+            return err(loc, "deallocation function without a prototype");
+        };
+        let params: Vec<QualType> = t.params(&proto).to_vec();
+        let Some(&p0) = params.first() else {
+            return err(loc, "deallocation function without parameters");
+        };
+        let size_t = QualType::unqual(t.target().size_t);
+        let mut vals = vec![self.restore_saved(c.ptr)];
+        let mut arg_tys = vec![p0];
+        if c.placement.is_empty() {
+            let mut i = 1;
+            if let Some(&q) = params.get(i)
+                && t.is_integral(q)
+                && !self.is_std_enum(q, "align_val_t")
+            {
+                vals.push(self.restore_saved(c.size));
+                arg_tys.push(size_t);
+                i += 1;
+            }
+            if let Some(&q) = params.get(i)
+                && self.is_std_enum(q, "align_val_t")
+            {
+                vals.push(CallArg::Scalar(self.i64c(i128::from(c.align))));
+                arg_tys.push(size_t);
+            }
+        } else if c.pass_align {
+            vals.push(CallArg::Scalar(self.i64c(i128::from(c.align))));
+            arg_tys.push(size_t);
+        }
+        for &(a, q) in &c.placement {
+            vals.push(self.restore_saved(a));
+            arg_tys.push(q);
+        }
+        self.emit_new_delete_call(c.op_delete, &vals, &arg_tys, loc)?;
+        Ok(())
+    }
+
+    /// `DominatingValue::restore`.
+    fn restore_saved(&mut self, s: Saved) -> CallArg {
+        match s {
+            Saved::Direct(a) => a,
+            Saved::Slot { slot, ty, align } => CallArg::Scalar(self.load(ty, slot, align, false)),
+        }
     }
 
     /// clang `EmitDeleteCall`: calls deallocation function `od` for the

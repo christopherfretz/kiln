@@ -11,6 +11,7 @@
 //! those packages.
 
 mod access;
+mod compare;
 mod construct;
 mod ctor_select;
 mod ctorinit;

@@ -423,6 +423,14 @@ impl Sema<'_, '_> {
         if self.in_local_scope() || self.kind_of(self.ctx) == DeclKind::CXXRecord {
             self.error(DiagId::sema_template_outside_namespace_or_class, loc);
         }
+        // A non-`bool` atom makes the definition invalid (clang's
+        // `ParseConstraintExpression`).
+        let e = if self.check_constraint_expression(e) {
+            e
+        } else {
+            let at = self.ast.exprs.get(e).loc();
+            self.act_on_error_expr(&[e], at)
+        };
         let h = DeclHead::new(self.ctx, DeclName::ident(name), loc);
         self.builder().concept(h, head, e)
     }
@@ -897,11 +905,9 @@ impl Sema<'_, '_> {
     /// The profile of a value-dependent expression `e` (for dependent
     /// array bounds and `noexcept` operands).
     pub(crate) fn dependent_profile(&mut self, e: ExprId) -> kiln_ast::ProfileId {
-        if let ArgView::Expr { profile: Some(p), .. } = self.builder().template_arg_expr(e).view() {
-            return p;
-        }
-        let f = TypeFlags::DEPENDENT_INSTANTIATION;
-        self.ast.types.profile(&[e.index()], e, f)
+        let f = kiln_ast::types::deps_type_flags(self.ast.exprs.get(e).deps());
+        let f = if f.is_empty() { TypeFlags::DEPENDENT_INSTANTIATION } else { f };
+        self.ast.profile_expr_with(e, f)
     }
 
     /// True if class template `tmpl`'s name, used without arguments here,

@@ -107,9 +107,12 @@ pub(crate) enum CandidateFailure {
     },
     /// Template argument deduction failed (WP-071).
     BadDeduction,
-    /// The trailing requires-clause is not satisfied (WP-073).
-    #[allow(dead_code, reason = "stub: WP-073 constraints")]
-    ConstraintsNotSatisfied,
+    /// The trailing requires-clause of a non-template function is not
+    /// satisfied ([over.match.viable]/3).
+    ConstraintsNotSatisfied {
+        /// Why.
+        sat: crate::templ::concepts::SatId,
+    },
     /// An `explicit` constructor or conversion function in
     /// copy-initialization ([over.match.copy]/1.1).
     Explicit,
@@ -141,6 +144,14 @@ impl Rewrite {
     /// The parameters take the operands in reverse order.
     pub(crate) fn is_reversed(self) -> bool {
         matches!(self, Rewrite::Reversed | Rewrite::DifferentReversed)
+    }
+
+    /// The same rewrite with the operands reversed.
+    pub(crate) fn reversed(self) -> Rewrite {
+        match self {
+            Rewrite::None | Rewrite::Reversed => Rewrite::Reversed,
+            Rewrite::Different | Rewrite::DifferentReversed => Rewrite::DifferentReversed,
+        }
     }
 }
 
@@ -272,6 +283,10 @@ pub(crate) struct OverloadCandidateSet {
     /// ([over.match.best.general]/2.5), precomputed by
     /// `order_template_candidates` because `better` cannot deduce.
     pub tmpl_order: Vec<(u32, u32)>,
+    /// A function never added as a candidate: the defaulted comparison
+    /// being analyzed or synthesized ([class.compare.default]/1, clang's
+    /// `DefaultedFn` exclusion). Compared by first declaration.
+    pub exclude: Option<DeclId>,
 }
 
 impl Default for OverloadCandidateSet {
@@ -292,6 +307,7 @@ impl Default for OverloadCandidateSet {
             note_extra_args: 0,
             builtin_op: None,
             tmpl_order: Vec::new(),
+            exclude: None,
         }
     }
 }
@@ -314,6 +330,7 @@ impl OverloadCandidateSet {
         self.note_extra_args = 0;
         self.builtin_op = None;
         self.tmpl_order.clear();
+        self.exclude = None;
     }
 
     /// The conversion sequences of candidate `c`.

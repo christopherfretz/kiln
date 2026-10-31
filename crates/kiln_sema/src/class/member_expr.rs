@@ -258,7 +258,7 @@ impl Sema<'_, '_> {
                     self.diagnose_deleted_use(m, loc);
                 }
                 let ty = self.non_reference(self.ast.decls.get(m).ty().unwrap_or(QualType::ERROR));
-                let e = self.builder().member(b, m, ty, arrow, loc, extra);
+                let e = self.build_member_expr(b, m, ty, arrow, loc, extra);
                 if self.unevaluated == 0 && kind == DeclKind::CXXMethod {
                     self.mark_function_referenced(m, loc);
                 } else if kind == DeclKind::CXXMethod {
@@ -271,7 +271,7 @@ impl Sema<'_, '_> {
             k if k.is_function() && k != DeclKind::Function => {
                 self.ast.decls.set_flags(m, DeclFlags::REFERENCED);
                 self.diagnose_deleted_use(m, loc);
-                self.builder().member(b, m, QualType::BOUND_MEMBER, arrow, loc, extra)
+                self.build_member_expr(b, m, QualType::BOUND_MEMBER, arrow, loc, extra)
             }
             _ => {
                 self.unsupported("this kind of member access", loc);
@@ -314,7 +314,8 @@ impl Sema<'_, '_> {
         let vk =
             if arrow { ValueCategory::PRValue } else { self.ast.exprs.get(b).value_category() };
         let to_ty = |s: &mut Self, class: DeclId| {
-            let t = s.tag_type(class);
+            // clang converts to the bare `RecordType`, which prints scoped.
+            let t = s.scoped_class_type(class);
             let t = if to_q.is_empty() { t } else { s.ast.types.qualify(t, to_q) };
             if arrow { s.ast.types.pointer_to(t) } else { t }
         };
@@ -470,10 +471,11 @@ impl Sema<'_, '_> {
         };
         if let Some(m) = method {
             // At the member's name, as clang's `MarkMemberReferenced`.
+            let at = if n.kind() == ExprKind::MemberExpr { n.loc() } else { loc };
             if self.unevaluated == 0 {
-                self.mark_function_referenced(m, n.loc());
+                self.mark_function_referenced(m, at);
             } else {
-                self.exc_spec_needed(m, n.loc());
+                self.exc_spec_needed(m, at);
             }
         }
         let (ty, vk) = self.call_result(proto.ret(), loc);
@@ -595,7 +597,7 @@ impl Sema<'_, '_> {
             return Some(x);
         }
         let extra = self.ast.exprs.decl_ref_extra(x).copied();
-        Some(self.builder().member(b, m, QualType::BOUND_MEMBER, arrow, n.loc(), extra))
+        Some(self.build_member_expr(b, m, QualType::BOUND_MEMBER, arrow, n.loc(), extra))
     }
 
     /// `l .* r` / `l ->* r` ([expr.mptr.oper]).

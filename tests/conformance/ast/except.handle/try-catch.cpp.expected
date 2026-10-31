@@ -1,0 +1,99 @@
+TranslationUnitDecl
+|-CXXRecordDecl referenced struct E definition
+| |-CXXConstructorDecl used E 'void ()'
+| |-CXXConstructorDecl used E 'void (const E &)'
+| | `-ParmVarDecl 'const E &'
+| `-CXXDestructorDecl used ~E 'void () noexcept'
+|-CXXRecordDecl referenced struct T definition
+| `-FieldDecl referenced x 'int'
+|-FunctionDecl used g 'void ()'
+|-FunctionDecl f 'void ()'
+| `-CompoundStmt
+|   `-CXXTryStmt
+|     |-CompoundStmt
+|     | `-CallExpr 'void'
+|     |   `-ImplicitCastExpr 'void (*)()' <FunctionToPointerDecay>
+|     |     `-DeclRefExpr 'void ()' lvalue Function 'g' 'void ()'
+|     |-CXXCatchStmt
+|     | |-VarDecl e 'E' cinit destroyed
+|     | | `-CXXConstructExpr 'E' 'void (const E &)'
+|     | |   `-ImplicitCastExpr 'const E' lvalue <NoOp>
+|     | |     `-OpaqueValueExpr 'E' lvalue
+|     | `-CompoundStmt
+|     |-CXXCatchStmt
+|     | |-VarDecl t 'T'
+|     | `-CompoundStmt
+|     |-CXXCatchStmt
+|     | |-VarDecl 'int &'
+|     | `-CompoundStmt
+|     |   `-CXXThrowExpr 'void'
+|     |-CXXCatchStmt
+|     | |-VarDecl used p 'const E *'
+|     | `-CompoundStmt
+|     |   `-CXXThrowExpr 'void'
+|     |     `-ImplicitCastExpr 'const E *' <LValueToRValue>
+|     |       `-ImplicitCastExpr 'const E *' xvalue <NoOp>
+|     |         `-DeclRefExpr 'const E *' lvalue Var 'p' 'const E *'
+|     `-CXXCatchStmt
+|       `-CompoundStmt
+|-FunctionDecl h 'int (int)'
+| |-ParmVarDecl a 'int'
+| `-CompoundStmt
+|   `-CXXTryStmt
+|     |-CompoundStmt
+|     | `-ReturnStmt
+|     |   `-IntegerLiteral 'int' 1
+|     `-CXXCatchStmt
+|       |-VarDecl x 'int'
+|       `-CompoundStmt
+|         |-DeclStmt
+|         | `-VarDecl used e 'E' callinit destroyed
+|         |   `-CXXConstructExpr 'E' 'void ()'
+|         `-CXXThrowExpr 'void'
+|           `-CXXConstructExpr 'E' 'void (const E &)'
+|             `-ImplicitCastExpr 'const E' xvalue <NoOp>
+|               `-DeclRefExpr 'E' lvalue Var 'e' 'E'
+|-FunctionDecl k 'void (int)'
+| |-ParmVarDecl used a 'int'
+| `-CXXTryStmt
+|   |-CompoundStmt
+|   | `-CallExpr 'void'
+|   |   `-ImplicitCastExpr 'void (*)()' <FunctionToPointerDecay>
+|   |     `-DeclRefExpr 'void ()' lvalue Function 'g' 'void ()'
+|   `-CXXCatchStmt
+|     |-VarDecl 'int'
+|     `-CompoundStmt
+|       `-CXXThrowExpr 'void'
+|         `-ImplicitCastExpr 'int' <LValueToRValue>
+|           `-ImplicitCastExpr 'int' xvalue <NoOp>
+|             `-DeclRefExpr 'int' lvalue ParmVar 'a' 'int'
+|-CXXRecordDecl struct C definition
+| |-FieldDecl m 'int'
+| `-CXXConstructorDecl C 'void (int)' implicit-inline
+|   |-ParmVarDecl used v 'int'
+|   |-CXXCtorInitializer Field 'm' 'int'
+|   | `-ImplicitCastExpr 'int' <LValueToRValue>
+|   |   `-DeclRefExpr 'int' lvalue ParmVar 'v' 'int'
+|   `-CXXTryStmt
+|     |-CompoundStmt
+|     | `-CallExpr 'void'
+|     |   `-ImplicitCastExpr 'void (*)()' <FunctionToPointerDecay>
+|     |     `-DeclRefExpr 'void ()' lvalue Function 'g' 'void ()'
+|     `-CXXCatchStmt
+|       `-CompoundStmt
+`-FunctionDecl nested 'void ()'
+  `-CompoundStmt
+    `-CXXTryStmt
+      |-CompoundStmt
+      | `-CXXTryStmt
+      |   |-CompoundStmt
+      |   | `-CallExpr 'void'
+      |   |   `-ImplicitCastExpr 'void (*)()' <FunctionToPointerDecay>
+      |   |     `-DeclRefExpr 'void ()' lvalue Function 'g' 'void ()'
+      |   `-CXXCatchStmt
+      |     |-VarDecl 'int'
+      |     `-CompoundStmt
+      `-CXXCatchStmt
+        |-VarDecl e 'E &'
+        `-CompoundStmt
+          `-CXXThrowExpr 'void'
