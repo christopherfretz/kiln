@@ -226,7 +226,8 @@ impl Substituter<'_, '_, '_> {
                 }
                 self.sema.mark_type_referenced(d);
                 let t = self.decl_type(d);
-                Ok(self.sema.ast.types.elaborated(kiln_ast::types::TagKeyword::None, Some(n), t))
+                // The keyword is kept as written (clang: `typename S::type`).
+                Ok(self.sema.ast.types.elaborated(keyword, Some(n), t))
             }
             // spec/sema-templates.md §9.2.
             TypeView::UnaryTransform { kind, base, .. } => {

@@ -593,6 +593,9 @@ impl Parser<'_, '_> {
     /// One template-argument, with a trailing `...` ([temp.names]/1,
     /// [temp.arg]/2: a type-id wins an ambiguity).
     fn parse_template_argument(&mut self) -> Option<TemplateArg> {
+        // `decltype(e)::name` (WP-119): the parenthesized operand is
+        // parsed with `>` as an operator.
+        self.with_greater_op(true, Self::annotate_decltype_scope_here);
         let a = if self.is_cxx_type_id_at(self.pos(), TypeIdContext::AsTemplateArgument).0 {
             TemplateArg::ty(self.with_greater_op(false, Self::parse_type_id)?)
         } else if let Some(t) = self.at_template_name_arg() {

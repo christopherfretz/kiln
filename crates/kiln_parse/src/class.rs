@@ -1647,7 +1647,11 @@ impl Parser<'_, '_> {
             is_virtual = true;
         }
         // class-or-decltype ([class.derived.general]/1): a decltype-specifier
-        // (WP-074). `decltype(auto)` is not a class-or-decltype.
+        // (WP-074). `decltype(auto)` is not a class-or-decltype. A
+        // `decltype(e)::` qualifies a class-name (WP-119).
+        if self.decltype_scope_end(self.pos()).is_some() && !self.annotate_decltype_scope() {
+            return None;
+        }
         if self.at_kw(Kw::Decltype) {
             let at = self.loc();
             let (kind, ty) = self.parse_decltype_specifier();

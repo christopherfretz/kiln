@@ -261,6 +261,9 @@ impl<'x, 'a, 'sm> Scan<'x, 'a, 'sm> {
                         return Tpr::Error;
                     }
                     match self.skip_group(self.i + 1) {
+                        Some(j) if k == Kw::Decltype && self.punct_at(j) == Some(Punct::ColonColon) => {
+                            self.unparsed_decltype_scope(j)
+                        }
                         Some(j) => self.after_simple_type(j, braced),
                         None => Tpr::Error,
                     }
@@ -314,6 +317,35 @@ impl<'x, 'a, 'sm> Scan<'x, 'a, 'sm> {
         }
     }
 
+    /// A `decltype(e)::name` whose qualifier was not parsed ahead (a
+    /// position other than the current token, e.g. after the `(` of a
+    /// possible cast): its scope is unknown, so the name is classified
+    /// by what follows it (WP-119, spec/parse.md §2.1). `cc` is the
+    /// index of the `::`.
+    fn unparsed_decltype_scope(&self, cc: usize) -> Tpr {
+        let Some(end) = self.p.skip_qualified_rest(cc) else { return Tpr::Error };
+        let after = |n: usize| self.punct_at(end + n);
+        match self.punct_at(end) {
+            None if self.ident_at(end).is_some() => Tpr::True,
+            Some(Punct::Star | Punct::Amp | Punct::AmpAmp)
+                if matches!(after(1), Some(Punct::RParen | Punct::Comma | Punct::Greater)) =>
+            {
+                Tpr::True
+            }
+            Some(Punct::RParen)
+                if self.ident_at(end + 1).is_some()
+                    || matches!(after(1), Some(Punct::LParen))
+                    || matches!(
+                        self.p.tok_at(end + 1).kind,
+                        TokKind::PpNumber | TokKind::CharLit(_) | TokKind::StringLit(_)
+                    ) =>
+            {
+                Tpr::True
+            }
+            _ => Tpr::False,
+        }
+    }
+
     /// clang's `isCXXDeclarationSpecifierAType`.
     fn decl_specifier_is_type(&self) -> bool {
         match self.kw() {
@@ -337,10 +369,17 @@ impl<'x, 'a, 'sm> Scan<'x, 'a, 'sm> {
             return Tpr::Ambiguous;
         }
         match self.kw() {
-            Some(Kw::Decltype | Kw::Typeof) => {
+            Some(k @ (Kw::Decltype | Kw::Typeof)) => {
                 self.i += 1;
                 if !self.at(Punct::LParen) || !self.skip_group_here() {
                     return Tpr::Error;
+                }
+                if k == Kw::Decltype && self.at(Punct::ColonColon) {
+                    // `decltype(e)::name` (WP-119).
+                    match self.p.skip_qualified_rest(self.i) {
+                        Some(end) => self.i = end,
+                        None => return Tpr::Error,
+                    }
                 }
             }
             Some(Kw::Alignas | Kw::Attribute) => {
@@ -418,11 +457,21 @@ impl<'x, 'a, 'sm> Scan<'x, 'a, 'sm> {
         // (`None` = unqualified), `None` once it can no longer be
         // classified (a component that names no scope).
         let mut ctx: Option<Option<DeclId>> = Some(None);
-        if self.punct_at(i) == Some(Punct::ColonColon) {
+        let mut any = false;
+        if let Some(q) = self.p.decltype_scope_qual_at(i) {
+            // `decltype(e)::` parsed ahead (WP-119).
+            ctx = q.map(Some);
+            any = true;
+            i += 1;
+        } else if let Some(cc) = self.p.decltype_scope_end(i) {
+            // `decltype(e)::` not yet parsed: its scope is unknown.
+            ctx = None;
+            any = true;
+            i = cc + 1;
+        } else if self.punct_at(i) == Some(Punct::ColonColon) {
             ctx = Some(Some(self.p.s.ast.tu));
             i += 1;
         }
-        let mut any = false;
         loop {
             if any && self.punct_at(i) == Some(Punct::Star) {
                 return Some(i + 1);
@@ -866,7 +915,8 @@ impl Parser<'_, '_> {
     /// [stmt.ambig]: whether the statement at the current token (after
     /// any attributes) is a declaration-statement (clang's
     /// `isCXXDeclarationStatement`).
-    pub(crate) fn is_cxx_declaration_statement(&self, allow_for_range: bool) -> bool {
+    pub(crate) fn is_cxx_declaration_statement(&mut self, allow_for_range: bool) -> bool {
+        self.annotate_decltype_scope_here();
         let mut s = Scan::new(self, self.pos());
         if !s.skip_attributes() {
             return true;
@@ -883,7 +933,8 @@ impl Parser<'_, '_> {
     /// Whether the condition at the current token declares a variable
     /// (clang's `isCXXConditionDeclarationOrInitStatement`, condition
     /// half): it must have a brace-or-equal-initializer.
-    pub(crate) fn is_cxx_condition_declaration(&self) -> bool {
+    pub(crate) fn is_cxx_condition_declaration(&mut self) -> bool {
+        self.annotate_decltype_scope_here();
         let mut s = Scan::new(self, self.pos());
         if !s.skip_attributes() {
             return true;
@@ -909,8 +960,18 @@ impl Parser<'_, '_> {
     /// (clang's `isCXXTypeId`). Returns (is a type-id, the parse was
     /// ambiguous -- it could also have been an expression).
     #[allow(dead_code)] // the entry point for WP-069 (template arguments)
-    pub(crate) fn is_cxx_type_id(&self, ctx: TypeIdContext) -> (bool, bool) {
+    pub(crate) fn is_cxx_type_id(&mut self, ctx: TypeIdContext) -> (bool, bool) {
+        self.annotate_decltype_scope_here();
         self.is_cxx_type_id_at(self.pos(), ctx)
+    }
+
+    /// Parses a `decltype(e)::` at the current token ahead, as clang
+    /// annotates the scope before disambiguating (WP-119): the scanner
+    /// then classifies the name after it.
+    pub(crate) fn annotate_decltype_scope_here(&mut self) {
+        if self.decltype_scope_end(self.pos()).is_some() {
+            self.annotate_decltype_scope();
+        }
     }
 
     /// [`Parser::is_cxx_type_id`] at token index `i`.

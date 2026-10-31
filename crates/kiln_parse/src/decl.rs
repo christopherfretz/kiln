@@ -453,7 +453,7 @@ impl Parser<'_, '_> {
     /// decl-specifier-seq ([dcl.spec]).
     #[allow(clippy::too_many_lines, reason = "one arm per decl-specifier")]
     pub(crate) fn parse_decl_specifiers(&mut self, ctx: DeclaratorContext) -> DeclSpec {
-        let mut ds = DeclSpec::new(self.loc());
+        let mut ds = DeclSpec::new(self.name_begin());
         loop {
             let loc = self.loc();
             if self.at_attr() || self.at_kw(Kw::Declspec) {
@@ -479,6 +479,19 @@ impl Parser<'_, '_> {
                     None => ds.invalid = true,
                 }
                 continue;
+            }
+            if self.decltype_scope_end(self.pos()).is_some() || self.at_decltype_scope() {
+                // `decltype(e)::name` (WP-119); after a type specifier it
+                // starts a member-pointer declarator.
+                if ds.has_type_specifier() {
+                    break;
+                }
+                if !self.annotate_decltype_scope() || !self.decltype_scope_ok() {
+                    self.skip_failed_decltype_scope();
+                    ds.invalid = true;
+                    let _ = ds.set_base(TypeSpecKind::Named, Some(QualType::ERROR), loc);
+                    continue;
+                }
             }
             if self.at(Punct::ColonColon) || self.ident().is_some() {
                 if ds.has_type_specifier()
@@ -685,7 +698,7 @@ impl Parser<'_, '_> {
     /// if the tokens are not a type name.
     fn parse_type_name_spec(&mut self, ds: &mut DeclSpec, ctx: DeclaratorContext) -> bool {
         let start = self.pos();
-        let loc = self.loc();
+        let loc = self.name_begin();
         if self.at_template_type_name(ctx) {
             let ty = self.parse_template_type_name(ctx);
             if ty.is_none() {
@@ -1072,10 +1085,15 @@ impl Parser<'_, '_> {
     /// of the `*`. The components may be template-ids (`X<T>::*`).
     pub(crate) fn at_member_pointer(&self) -> Option<usize> {
         let mut i = self.pos();
-        if self.tok_at(i).kind == TokKind::Punct(Punct::ColonColon) {
+        let mut any = false;
+        if let Some(cc) = self.decltype_scope_end(i) {
+            // `decltype(e)::*` (WP-119).
+            i = cc + 1;
+            any = true;
+        } else if self.tok_at(i).kind == TokKind::Punct(Punct::ColonColon) {
+            any = self.at_decltype_scope();
             i += 1;
         }
-        let mut any = false;
         loop {
             let k = usize::from(any && self.kw_of(self.tok_at(i)) == Some(Kw::Template));
             if self.ident_of(self.tok_at(i + k)).is_none() {
