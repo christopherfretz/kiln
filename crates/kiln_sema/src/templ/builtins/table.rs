@@ -179,9 +179,7 @@ pub fn trait_status(t: TypeTrait) -> Status {
         // [meta.unary.prop] initialization and conversion checks: these
         // need the unevaluated `init_check` / `conv_check` of overload
         // resolution.
-        T::IsConstructible
-        | T::IsNothrowConstructible
-        | T::IsTriviallyConstructible
+        T::IsTriviallyConstructible
         | T::IsNothrowAssignable
         | T::IsTriviallyAssignable
         | T::IsConvertible

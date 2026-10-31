@@ -88,7 +88,13 @@ impl Sema<'_, '_> {
             self.emit(d);
             return self.recover(QualType::BOOL, &[], loc);
         }
-        let value = if tys.len() == 1 {
+        let value = if matches!(t, TypeTrait::IsConstructible | TypeTrait::IsNothrowConstructible)
+        {
+            match self.eval_constructible(t, args, loc, rparen) {
+                Some(v) => v,
+                None => return self.recover(QualType::BOOL, &[], loc),
+            }
+        } else if tys.len() == 1 {
             if !self.check_trait_completeness(t, tys[0], loc) {
                 return self.recover(QualType::BOOL, &[], loc);
             }
@@ -356,6 +362,85 @@ impl Sema<'_, '_> {
             let e = s.binary_operator(BinaryOp::Assign, l, r, None, loc);
             s.exit_unevaluated();
             !s.is_err_expr(e)
+        });
+        self.ctx = saved;
+        Some(matches!(r, Some((true, Ok(())))))
+    }
+
+    /// `__is_constructible(T, Args...)` / `__is_nothrow_constructible`
+    /// ([meta.unary.prop]/9, clang's `EvaluateBooleanTypeTrait`): whether
+    /// the direct-initialization `T t(declval<Args>()...);` of a
+    /// temporary is well-formed as an unevaluated operand (and, for the
+    /// nothrow form, cannot throw). Built in a SFINAE context with
+    /// access checked from the translation unit. `None` when an operand
+    /// is incomplete (not `void` or an array of unknown bound), an error.
+    fn eval_constructible(
+        &mut self,
+        t: TypeTrait,
+        args: &[(QualType, Loc)],
+        loc: Loc,
+        rparen: Loc,
+    ) -> Option<bool> {
+        for &(q, at) in args {
+            let tys = &self.ast.types;
+            if tys.is_void(q)
+                || matches!(tys.canonical_view(q), TypeView::IncompleteArray(_))
+                || tys.is_reference(q)
+                || tys.is_function(q)
+                || self.require_complete(q, at)
+            {
+                continue;
+            }
+            let msg = self.diag(DiagId::sema_incomplete_type_trait, at).arg(self.ty_arg(q));
+            let msg = self.incomplete_note(msg, q);
+            self.emit(msg);
+            return None;
+        }
+        let ty = args[0].0;
+        let tys = &self.ast.types;
+        if tys.is_void(ty)
+            || matches!(tys.canonical_view(ty), TypeView::IncompleteArray(_))
+            || tys.is_function(ty)
+            || self.record_bit(ty, DefinitionBits::ABSTRACT)
+            || args[1..].iter().any(|a| self.ast.types.is_void(a.0))
+        {
+            return Some(false);
+        }
+        // A reference is bound by exactly one argument; anything else
+        // but a class or an array takes at most one.
+        let n = args.len() - 1;
+        let is_ref = self.ast.types.is_reference(ty);
+        if (is_ref && n != 1)
+            || (n > 1 && self.ast.types.as_record(ty).is_none() && !self.ast.types.is_array(ty))
+        {
+            return Some(false);
+        }
+        // `declval<A>()`: an lvalue for an lvalue reference (or a function
+        // type), else an xvalue.
+        let operand = |s: &mut Self, q: QualType, at: Loc| {
+            let (ty, vc) = match s.ast.types.canonical_view(q) {
+                TypeView::LValueRef(p) => (p, ValueCategory::LValue),
+                TypeView::RValueRef(p) if s.ast.types.is_function(p) => (p, ValueCategory::LValue),
+                TypeView::RValueRef(p) => (p, ValueCategory::XValue),
+                _ if s.ast.types.is_function(q) => (q, ValueCategory::LValue),
+                _ => (q, ValueCategory::XValue),
+            };
+            s.builder().opaque_value_of(ty, vc, at)
+        };
+        let nothrow = t == TypeTrait::IsNothrowConstructible;
+        let tu = self.ast.tu;
+        let saved = std::mem::replace(&mut self.ctx, tu);
+        let r = self.in_sfinae(FrameKind::ConstraintSubstitution, tu, None, loc, |s| {
+            s.enter_unevaluated();
+            let ops: Vec<ExprId> = args[1..].iter().map(|&(q, at)| operand(s, q, at)).collect();
+            let e = if ops.is_empty() {
+                s.paren_value_init(ty, loc)
+            } else {
+                let init = crate::init::Initializer::Paren(ops, loc, rparen);
+                s.perform_init(ty, init, loc, false)
+            };
+            s.exit_unevaluated();
+            !s.is_err_expr(e) && !(nothrow && s.can_throw(e))
         });
         self.ctx = saved;
         Some(matches!(r, Some((true, Ok(())))))
