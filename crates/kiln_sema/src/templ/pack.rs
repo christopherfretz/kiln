@@ -181,9 +181,22 @@ impl Substituter<'_, '_, '_> {
         self.expand_list(
             tys,
             type_pattern,
-            |s, q| s.ty(q, loc),
+            |s, q| s.element_ty(q, loc),
             |s, q| s.sema.ast.types.pack_expansion(q, None),
         )
+    }
+
+    /// One element of a type pack expansion: an element that still names
+    /// an unexpanded pack (of a level not substituted, `tl<Ts, Us>...`
+    /// with only `Ts` known) needs clang's partially-substituted packs.
+    pub(crate) fn element_ty(&mut self, q: QualType, loc: Loc) -> SubstResult<QualType> {
+        let t = self.ty(q, loc)?;
+        if self.pack_index.is_some()
+            && self.sema.ast.types.qflags(t).contains(kiln_ast::types::TypeFlags::UNEXPANDED_PACK)
+        {
+            return self.unimplemented("partially substituted pack expansion", loc);
+        }
+        Ok(t)
     }
 
     /// Substitutes into a list of expressions that may contain pack

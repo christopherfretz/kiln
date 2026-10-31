@@ -202,7 +202,7 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
         let r = match a.view() {
             ArgView::Type(q) => {
                 let Some(p) = type_pattern(self.sema, q) else { return Ok(None) };
-                match self.expand_pattern(|s| s.ty(p, loc))? {
+                match self.expand_pattern(|s| s.element_ty(p, loc))? {
                     Expansion::Elements(v) => v.into_iter().map(TemplateArg::ty).collect(),
                     Expansion::Unexpanded(t) => {
                         vec![TemplateArg::ty(self.sema.ast.types.pack_expansion(t, None))]

@@ -599,7 +599,25 @@ impl Sema<'_, '_> {
         let mut specs = Vec::with_capacity(bases.len());
         for b in bases {
             if b.pack_expansion {
-                let _ = sub.unimplemented::<()>("pack expansion", b.loc);
+                // [temp.variadic]/5: one base per element.
+                let tys = match sub.expand_pattern(|s| s.element_ty(b.ty, b.loc)) {
+                    Ok(crate::templ::pack::Expansion::Elements(v)) => v,
+                    Ok(crate::templ::pack::Expansion::Unexpanded(_)) => {
+                        let _ = sub.unimplemented::<()>("base pack expansion", b.loc);
+                        continue;
+                    }
+                    Err(_) => continue,
+                };
+                for ty in tys {
+                    specs.push(BaseSpecInfo {
+                        ty,
+                        loc: b.loc,
+                        is_virtual: b.is_virtual,
+                        access: b.access,
+                        pack_expansion: false,
+                        attrs: Vec::new(),
+                    });
+                }
                 continue;
             }
             if let Ok(ty) = sub.ty(b.ty, b.loc) {
@@ -732,7 +750,11 @@ impl Sema<'_, '_> {
                     .unwrap_or((Vec::new(), lbrace));
                 for info in &inits {
                     match sub.mem_initializer(info) {
-                        Ok(i) => sub.sema.act_on_mem_initializer(f, &i),
+                        Ok(v) => {
+                            for i in &v {
+                                sub.sema.act_on_mem_initializer(f, i);
+                            }
+                        }
                         Err(_) => sub.sema.note_failed_mem_initializer(f),
                     }
                 }

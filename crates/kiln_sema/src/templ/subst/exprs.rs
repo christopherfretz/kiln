@@ -671,15 +671,27 @@ impl Substituter<'_, '_, '_> {
     /// `InstantiateMemInitializers`): the id's type and the initializer's
     /// expressions are substituted; the id is resolved again in the
     /// instantiated class.
+    /// A pack expansion `B(args)...` gives one mem-initializer per
+    /// element ([temp.variadic]/5).
     pub(crate) fn mem_initializer(
+        &mut self,
+        info: &crate::class::MemInitInfo,
+    ) -> SubstResult<Vec<crate::class::MemInitInfo>> {
+        if !info.pack_expansion {
+            return Ok(vec![self.mem_initializer_one(info)?]);
+        }
+        match self.expand_pattern(|s| s.mem_initializer_one(info))? {
+            crate::templ::pack::Expansion::Elements(v) => Ok(v),
+            crate::templ::pack::Expansion::Unexpanded(_) => self
+                .unimplemented("a mem-initializer pack expansion of an enclosing pack", info.loc),
+        }
+    }
+
+    fn mem_initializer_one(
         &mut self,
         info: &crate::class::MemInitInfo,
     ) -> SubstResult<crate::class::MemInitInfo> {
         use crate::class::MemInitId;
-        if info.pack_expansion {
-            // Reported by `act_on_mem_initializer` (WP-070).
-            return Ok(info.clone());
-        }
         let id = match info.id {
             MemInitId::Ident(s) => MemInitId::Ident(s),
             MemInitId::Type(t) => MemInitId::Type(self.ty(t, info.loc)?),
