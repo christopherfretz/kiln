@@ -606,10 +606,125 @@ clang 19 `-O0` on both targets. Layouts come from `kiln_abi::vtable`.
   definitions. Kiln still treats both like implicit instantiations
   (and explicit instantiation of function templates is a sema
   "not yet implemented").
-- EH-dependent forms (WP-100): `dynamic_cast` / `typeid` inside cleanup
-  scopes use plain `call`s.
+- (Resolved by WP-100: `__cxa_bad_cast` / `__cxa_bad_typeid` are
+  invoked inside EH scopes, §7b.)
 - RTTI of a pointer to member function with method qualifiers
   (`void (S::*)() const`, an abominable pointee) is not covered.
+
+## 7b. Landed (WP-100): exceptions
+Itanium EH as clang 19 emits it at -O0 (CGException.cpp, CGCleanup.cpp,
+CGClass.cpp, CGExprCXX.cpp, CGExprAgg.cpp). `CodegenOptions::exceptions`
+(`-fexceptions`, default on; `-fno-exceptions` turns every EH cleanup
+off and sema rejects `try`/`throw`).
+
+- **EH scope stack** (`cleanup.rs`, `eh.rs`): cleanups, catch scopes and
+  terminate scopes share one stack (`EHScopeStack`), with clang's
+  innermost-EH-scope links, `CurrentCleanupScopeDepth`, cached EH
+  dispatch blocks and `IsUsedAsEHCleanup`. A call is an `invoke` when
+  `getInvokeDest` finds an EH scope (`emit_call_op`,
+  `runtime_call_or_invoke`, `noreturn_runtime_call_or_invoke`);
+  nounwind callees stay `call`s. Landing pads (`EmitLandingPad`) take
+  `cleanup` / `catch ptr @_ZTI…` / `catch ptr null` clauses in clang's
+  order and spill to `exn.slot` / `ehselector.slot`; `eh.resume` loads
+  them back into `resume`. The personality is `__gxx_personality_v0`,
+  attached once the function has a landing pad. `FinishFunction` emits
+  the EH blocks (resume, terminate landing pad, terminate handler)
+  before the unreachable block; `TryMarkNoThrow` adds `nounwind` to a
+  function without `invoke`s or `resume`.
+- **Terminate scopes:** the body of a non-throwing function
+  ([except.spec]/5) and EH cleanups that may throw are inside a
+  terminate scope: its landing pad is `catch ptr null` and calls
+  `__clang_call_terminate` (the linkonce_odr hidden helper calling
+  `__cxa_begin_catch` then `std::terminate`).
+- **throw** ([expr.throw]): `__cxa_allocate_exception(size)`, the
+  operand initialized in place under a `FreeException` EH cleanup
+  (deactivated after it), then `__cxa_throw(exn, @_ZTI…, dtor or null)`
+  (invoked inside an EH scope) and `unreachable`; the insertion point
+  stays on the terminated block (clang `EmitBlock` placement). A
+  rethrow is `__cxa_rethrow`.
+- **try/catch** (`try_catch.rs`): `enter_try` pushes a catch scope with
+  one handler per `catch` (type-info, or catch-all); `exit_try` emits the
+  dispatch chain (`llvm.eh.typeid.for` compares against the selector),
+  each handler (`__cxa_begin_catch`, `InitCatchParam` for references,
+  pointers, scalars, trivially and non-trivially copied classes, an
+  `EndCatch` cleanup that calls `__cxa_end_catch`, invoked when the
+  caught class's destructor may throw), and the `try.cont` block.
+  Handler blocks are placed after their uses, as clang's.
+- **Function-try-blocks** ([except.handle]/14-15): the try is entered
+  before the constructor's member initializers / the body scope;
+  falling off a constructor or destructor handler emits `__cxa_rethrow`;
+  a destructor's try covers the member and base destruction (the
+  complete destructor then emits base + virtual base cleanups itself,
+  and an abstract class's complete destructor is a trap).
+- **Partially constructed objects** ([except.ctor]/3-4): EH cleanups for
+  constructed bases (`CallBaseDtor`), members (`DestroyField`), virtual
+  bases, the target of a delegating constructor (`CallDtorDelegating`),
+  the elements of an array being constructed
+  (`RegularPartialArrayDestroy`), the elements of an array initialized
+  from a braced list (`IrregularPartialArrayDestroy`, reading
+  `arrayinit.endOfInit`; only with exceptions on, as clang's
+  `needsEHCleanup`), and each base and member of a braced aggregate
+  initialization (`pushDestroyAndDeferDeactivation`; all of these are
+  deactivated, innermost first, once the object is complete, using a
+  placeholder for clang's dominating instruction). An element slot of
+  such a list is `IsDestructed` (no temporary cleanup for a
+  `CXXBindTemporaryExpr` written in place).
+- **new-expressions** ([expr.new]/28): `CallDeleteDuringNew` as an EH
+  cleanup around the initializer, with the pointer, size and placement
+  arguments saved to `cond-cleanup.save` slots inside a conditional
+  branch; class `operator new` keeps its declared result type.
+  Array new runs the constructor loop for a non-constant count
+  (`arrayctor.cont` isempty check, as clang's
+  `EmitCXXAggrConstructorCall`).
+- **Destructor variants:** D1/D2 destroy members and bases through
+  normal-and-EH cleanups, so a throwing destructor body still destroys
+  them; D1 of a class with virtual bases adds the virtual base cleanups.
+- **RTTI under EH:** `__cxa_bad_cast` / `__cxa_bad_typeid` are invoked
+  inside an EH scope; the insertion point stays on the terminated block.
+- **Oven:** a `CXXTryStmt` evaluates its compound statement only (a
+  throw is not a core constant expression, so no handler is entered).
+- **Interface change (flagged):** none in `kiln_codegen`'s public API;
+  `kiln_ast` gained the try/catch builders and accessors (spec/ast.md
+  §6) and `opaque_value_of`; `kiln_sema` gained `act_on_exception_decl`,
+  `act_on_catch`, `act_on_try`, `push_try_scope` and
+  `Scope::try_barrier` (spec/sema.md §7.5).
+- **Behavior changes outside EH (flagged):** sema brace elision only
+  into aggregates (spec/sema.md §7.5); `init_to_lvalue` marks aggregate
+  element slots destructed, which fixed a double destruction of array
+  elements initialized from bound temporaries.
+- **Corpus:** `eh_throw`, `eh_throw_cleanups`, `eh_try_catch`,
+  `eh_function_try`, `eh_partial_construction`, `eh_noexcept`, `eh_new`,
+  `eh_new_array`, `eh_rtti`, `eh_aggregate_init`, exact on both triples.
+  `run` tests: `except.handle/run-throw-catch`,
+  `except.ctor/run-unwind-destroy`, `expr.new/run-delete-on-throw`.
+
+**Left (WP-100), each a `CodegenError` or noted:**
+- Array cookies: `new[]` / `delete[]` of a class with a non-trivial
+  destructor or a class-scope sized `operator delete[]` is a
+  `CodegenError` (was silently miscompiled); zero-initializing array
+  new with constructors is a `CodegenError`.
+- Aligned new picks the sized aligned delete (`_ZdlPvmSt11align_val_t`)
+  for its cleanup; clang the unsized one (sema's selection).
+- Lifetime-extended temporaries: their EH cleanups are not deferred
+  (clang `pushCleanupAfterFullExprWithActiveFlag`), and a lifetime-
+  extended temporary in a conditional branch is unsupported.
+- A conditional temporary or braced array at a computed address
+  (needs saving across the branch) is a `CodegenError`.
+- A `noexcept(false)` destructor's array destroy has no partial-array
+  EH cleanup inside the normal destroy loop.
+- A delegating constructor's EH cleanup in a base variant with virtual
+  bases passes the VTT incorrectly.
+- D0 calls D1 and then the deallocation function directly; clang runs
+  the deallocation as a normal-and-EH `CallDtorDelete` cleanup, which
+  differs only when D1 can throw (a `noexcept(false)` destructor, which
+  sema rejects until WP-112 lands member exception specifications).
+- A conditional `new` with a class-type placement argument.
+- Calls of user `[[noreturn]]` functions are not followed by
+  `unreachable`.
+- Static locals with dynamic initialization (`__cxa_guard_*`, its EH
+  abort) are M3.
+- The LLVM name of an anonymous union member type is
+  `%"union.U::anon"` (clang `%union.anon`).
 
 ## Status and what remains
 **Done:** WP-052 (lowering, §2–§4; unit corpus 79/79 exact on aarch64)

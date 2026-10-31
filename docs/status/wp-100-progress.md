@@ -31,34 +31,26 @@ Branch `wp/100-codegen-eh`, worktree `kiln/.worktrees/wp-100`.
   entered: a throw is not a constant expression); test in
   `tests/kiln` constexpr try-block.
 
-## Step 3 — codegen EH (in progress)
-- Done: `kiln_codegen/src/eh.rs` (EH scope stack use, `getInvokeDest`,
-  `EmitLandingPad`, `getEHDispatchBlock`, `eh.resume`, terminate
-  landing pad / handler, `__clang_call_terminate`, personality),
-  call-or-invoke in `call_vals`/operator new/bad_cast, terminate scope
-  of noexcept functions, `FinishFunction` EH block order,
-  `TryMarkNoThrow` counting invokes and `resume`. Cleanup kinds
-  `FreeException` / `EndCatch`. `CurrentCleanupScopeDepth`.
-  Dtor cleanups on unwind match clang (scratch t1/t3 exact, both triples).
-- Done: throw expression (`__cxa_allocate_exception` / `__cxa_throw`,
-  FreeException deactivation), try/catch (`try_catch.rs`: catch scopes,
-  dispatch via `llvm.eh.typeid.for`, handler blocks after uses,
-  `InitCatchParam` for ref/pointer/scalar/trivial/non-trivial class,
-  EndCatch cleanup, rethrow); fall-off `llvm.trap` without call-site
-  attributes (clang `EmitTrapCall`). Scratch tc1 exact on both triples.
-- Done: ctor/dtor function-try-blocks (try entered before the body scope,
-  implicit `__cxa_rethrow`, abstract complete dtor trap, complete dtor
-  with try = base + vbase cleanups); partial-construction EH cleanups
-  (base dtors, member dtors, delegating ctor, memcpyizer); partial array
-  cleanup in array construction (`pushRegularPartialArrayCleanup`);
-  new-expression delete cleanup (`CallDeleteDuringNew`, saved values in
-  conditional branches, dominator placeholder + deactivation), class
-  operator new result type. Sema: brace elision only into aggregates
-  ([dcl.init.aggr]/16; `init.rs`, one condition).
-- Found (not EH): `new G[n]` for a class with a non-trivial dtor has no
-  array cookie and a wrong nested loop (silent miscompile); aligned new
-  picks the sized aligned delete (clang the unsized one).
-- Next: CI quick, corpus `tests/codegen/eh_*.cpp`.
+## Step 3 — codegen EH (done)
+- `eh.rs` (EH scope stack use, invoke dest, landing pads, dispatch,
+  resume, terminate scopes, personality, TryMarkNoThrow), `try_catch.rs`
+  (catch scopes, dispatch, InitCatchParam, EndCatch, rethrow), throw
+  (FreeException), function-try-blocks, partial-construction cleanups
+  (bases, members, vbases, delegating, regular and irregular partial
+  arrays, aggregate members/bases with deferred deactivation),
+  new-expression delete cleanup, array-new constructor loop, bad_cast /
+  bad_typeid invoke, IsDestructed element slots.
+- Guards instead of silent miscompiles: array cookies, zero-initializing
+  array new with constructors.
+- Corpus: 10 `tests/codegen/eh_*.cpp`, exact on both triples (whole
+  corpus 90 programs, IR exact on both).
 
-## Step 4 — wrap-up (todo)
-- run tests flip, spec §7b / sema / ast / parse notes, full CI.
+## Step 4 — wrap-up (in progress)
+- Run tests: `except.handle/run-throw-catch`,
+  `except.ctor/run-unwind-destroy`, `expr.new/run-delete-on-throw`
+  (kiln and clang both 0). No existing `xfail(kiln)` test involved
+  exceptions, so none flipped.
+- Spec: codegen.md §7b, sema.md §5.5/§7.5, ast.md §6, parse.md landed
+  note — written with the leftovers.
+- Quick CI on 94dd318: 1379 passed, 0 failed, 13 xfail.
+- Next: full `cargo xtask ci`, handback.
