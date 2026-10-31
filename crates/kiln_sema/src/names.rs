@@ -85,6 +85,82 @@ impl<'s> SemaNames<'s> {
     }
 }
 
+impl SemaNames<'_> {
+    /// Whether a function or closure type encloses `d`.
+    fn in_local_scope(&self, d: DeclId) -> bool {
+        let mut cur = self.ast.decls.get(d).ctx();
+        while let Some(c) = cur {
+            if self.ast.decls.get(c).kind().is_function() || self.ast.closure_lambda(c).is_some() {
+                return true;
+            }
+            cur = self.ast.decls.get(c).ctx();
+        }
+        false
+    }
+
+    /// The scope of function `d` as clang's
+    /// `NamedDecl::printNestedNameSpecifier` prints it: an enclosing
+    /// function as `f(int)`, a closure type as `(anonymous class)`.
+    fn write_decl_scope(&self, d: DeclId, out: &mut String) {
+        let mut chain = Vec::new();
+        let mut cur = self.ast.decls.get(d).ctx();
+        while let Some(c) = cur {
+            let n = self.ast.decls.get(c);
+            let k = n.kind();
+            if k.is_function() {
+                let mut s = String::new();
+                self.write_unscoped(c, &mut s);
+                s.push('(');
+                if let Some(ty) = n.ty()
+                    && let Some(p) = self.ast.types.proto(ty)
+                {
+                    let params = self.ast.types.params(p).to_vec();
+                    for (i, &q) in params.iter().enumerate() {
+                        if i > 0 {
+                            s.push_str(", ");
+                        }
+                        kiln_ast::types::write_type(
+                            &self.ast.types,
+                            self,
+                            q,
+                            kiln_ast::types::PrintOptions::SUGARED,
+                            &mut s,
+                        );
+                    }
+                    if p.variadic() {
+                        s.push_str(if params.is_empty() { "..." } else { ", ..." });
+                    }
+                }
+                s.push(')');
+                chain.push(s);
+            } else if self.ast.closure_lambda(c).is_some() {
+                chain.push("(anonymous class)".into());
+            } else if matches!(k, DeclKind::Namespace | DeclKind::CXXRecord | DeclKind::Enum) {
+                let mut s = String::new();
+                self.write_scope_component(c, &mut s);
+                chain.push(s);
+            }
+            cur = n.ctx();
+        }
+        for c in chain.iter().rev() {
+            out.push_str(c);
+            out.push_str("::");
+        }
+    }
+
+    /// One namespace, class or enumeration of a scope.
+    fn write_scope_component(&self, c: DeclId, s: &mut String) {
+        if self.ast.decls.get(c).kind() == DeclKind::Namespace {
+            s.push_str(&self.simple(c).unwrap_or_else(|| "(anonymous namespace)".into()));
+            return;
+        }
+        self.write_unscoped(c, s);
+        if let Some(args) = self.ast.spec_print_args(c) {
+            kiln_ast::types::write_arg_list(&self.ast.types, self, args, s);
+        }
+    }
+}
+
 impl TypeNames for SemaNames<'_> {
     fn specialization_args(&self, decl: DeclId) -> Option<kiln_ast::ids::ArgListId> {
         self.ast.spec_print_args(decl)
@@ -95,7 +171,13 @@ impl TypeNames for SemaNames<'_> {
     }
 
     fn write_decl_name(&self, decl: DeclId, scoped: bool, out: &mut String) {
-        if scoped {
+        let k = self.ast.decls.get(decl).kind();
+        if scoped
+            && (k.is_function() || k == DeclKind::FunctionTemplate)
+            && self.in_local_scope(decl)
+        {
+            self.write_decl_scope(decl, out);
+        } else if scoped {
             self.write_scope(decl, out);
         }
         self.write_unscoped(decl, out);

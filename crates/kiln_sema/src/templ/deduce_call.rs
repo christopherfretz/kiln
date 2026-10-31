@@ -130,7 +130,13 @@ impl Sema<'_, '_> {
         to: QualType,
         loc: Loc,
     ) -> Result<DeclId, Box<DeductionFailure>> {
-        self.deduce_spec(ft, None, None, DeduceTarget::Conversion(to), loc)
+        let spec = self.deduce_spec(ft, None, None, DeduceTarget::Conversion(to), loc)?;
+        if !self.specialize_lambda_conversion(ft, spec, loc) {
+            let n = self.template_params(ft).len();
+            let d = DeducedArgs::new(self.template_param_depth(ft), n);
+            return Err(DeductionFailure::new(Tdk::NonDeducedMismatch, d));
+        }
+        Ok(spec)
     }
 
     /// The specialization of `ft` a template-id with the explicit
@@ -284,6 +290,7 @@ impl Sema<'_, '_> {
             let ret =
                 self.ast.types.proto(pfn).map_or(QualType::ERROR, kiln_ast::types::FuncProto::ret);
             let (p, a, tdf) = self.conversion_deduction_pair(ret, to);
+            let p = self.lambda_conversion_p(ft, p, a);
             let r = self.deduce(p, a, tdf, &mut d);
             if r != Tdk::Success {
                 // clang shows the written `cv T` of an underqualified

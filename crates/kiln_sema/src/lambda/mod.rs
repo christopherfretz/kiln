@@ -10,7 +10,9 @@
 //! closure and returns the `LambdaExpr`. [`Sema::act_on_lambda_error`]
 //! abandons a lambda whose body could not be parsed.
 
-use kiln_ast::decl::{Access, ConstexprKind, DeclFlags, DeclKind, FnSpec, FnStorage, TagKind};
+use kiln_ast::decl::{
+    Access, ConstexprKind, DeclFlags, DeclKind, FnSpec, FnStorage, ParamData, TagKind,
+};
 use kiln_ast::ids::{AttrId, ExprId, LambdaId, StmtId};
 use kiln_ast::lambda::{CaptureDefault, CaptureKind, ClosureThunk, LambdaData};
 use kiln_ast::names::{DeclName, OverloadedOperator};
@@ -25,6 +27,7 @@ use crate::declspec::{Chunk, Declarator, DefaultArg, ParamInfo};
 use crate::scope::{Scope, ScopeKind};
 
 mod capture;
+mod generic;
 
 /// One *capture* of a *lambda-capture* as written ([expr.prim.lambda.capture]/1).
 #[derive(Clone, Debug)]
@@ -614,7 +617,16 @@ impl Sema<'_, '_> {
         let h = DeclHead::new(closure, name, lbracket)
             .flags(DeclFlags::IMPLICIT)
             .access(Access::Public);
-        let _conv = self.builder().function(h, DeclKind::CXXConversion, conv_ty, spec, None);
+        // A generic lambda's are templates with the call operator's
+        // template parameters ([expr.prim.lambda.closure]/9).
+        let list = self
+            .ast
+            .described_template(call_op)
+            .and_then(|t| self.ast.template_info(t))
+            .map(|i| i.params);
+        self.ast.templates.pattern_next = list.is_some();
+        let conv = self.builder().function(h, DeclKind::CXXConversion, conv_ty, spec, None);
+        self.wrap_thunk_template(conv, list);
         if self.is_static_method(call_op) {
             return;
         }
@@ -628,7 +640,9 @@ impl Sema<'_, '_> {
         let h = DeclHead::new(closure, DeclName::ident(sym), lbracket)
             .flags(DeclFlags::IMPLICIT)
             .access(Access::Public);
+        self.ast.templates.pattern_next = list.is_some();
         let inv = self.builder().function(h, DeclKind::CXXMethod, invoker, spec, None);
+        self.wrap_thunk_template(inv, list);
         let src: Vec<DeclId> = self
             .ast
             .decls
@@ -643,11 +657,22 @@ impl Sema<'_, '_> {
                 let (name, loc) = (n.name(), n.loc());
                 let t = n.ty().unwrap_or(QualType::ERROR);
                 let i = u16::try_from(i).unwrap_or(u16::MAX);
-                self.builder().param(inv, name, loc, t, i, 0)
+                // A function parameter pack stays one.
+                let flags = self.ast.decls.param(s).map_or(0, |x| x.flags & ParamData::PACK);
+                self.builder().param(inv, name, loc, t, i, flags)
             })
             .collect();
         if !ps.is_empty() {
             let _ = self.builder().set_params(inv, &ps);
+        }
+    }
+
+    /// Wraps the conversion or invoker pattern `f` of a generic lambda in
+    /// a function template over the call operator's parameter list.
+    fn wrap_thunk_template(&mut self, f: DeclId, list: Option<kiln_ast::TemplateParamListId>) {
+        if let Some(list) = list {
+            let t = self.builder().template_decl(DeclKind::FunctionTemplate, f, list, None);
+            self.ast.decls.set_access(t, Access::Public);
         }
     }
 

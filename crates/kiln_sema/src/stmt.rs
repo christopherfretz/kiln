@@ -713,9 +713,11 @@ impl Sema<'_, '_> {
             }
         }
         // No return statement: the placeholder deduces `void`
-        // ([dcl.spec.auto.general]/10).
+        // ([dcl.spec.auto.general]/10); a templated function's when it
+        // is instantiated (clang skips a dependent context).
         if let Some(st) = self.func.as_ref()
             && st.auto_ret.is_some()
+            && !self.in_template()
             && !st.deduced
         {
             let f = st.decl;

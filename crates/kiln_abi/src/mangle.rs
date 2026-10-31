@@ -1309,6 +1309,10 @@ impl<'a, 'b> Mangler<'a, 'b> {
                 self.out.push_str("Dp");
                 self.ty(pattern);
             }
+            // <builtin-type> ::= Dc  # decltype(auto)
+            TypeView::Auto { keyword: kiln_ast::types::AutoKeyword::DecltypeAuto, .. } => {
+                self.out.push_str("Dc");
+            }
             TypeView::Auto { .. } => self.out.push_str("Da"),
             _ => self.out.push_str("u7unknown"),
         }

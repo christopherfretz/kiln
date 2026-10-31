@@ -235,44 +235,73 @@ impl crate::Ast {
         }
         let (_, s) = self.spec_info(f)?;
         let t = self.described_template(op)?;
-        (self.first(t) == self.first(s.from)).then_some(l)
+        (self.first(t) == self.first(s.template) || self.first(op) == self.first(s.from))
+            .then_some(l)
     }
 
     /// The static invoker `__invoke` of closure type `r` (the one implicit
-    /// static member function of a closure).
+    /// static member function of a closure; for a generic lambda, the
+    /// pattern of the invoker template).
     pub fn closure_invoker(&self, r: DeclId) -> Option<DeclId> {
         let l = self.closure_lambda(r)?;
         let call_op = self.exprs.lambdas.get(l).call_op;
-        self.members(self.first(r)).find(|&m| {
-            Some(m) != call_op
-                && self.decls.get(m).kind() == crate::decl::DeclKind::CXXMethod
-                && self.decls.get(m).flags().contains(crate::decl::DeclFlags::IMPLICIT)
-                && self
-                    .decls
-                    .function(m)
-                    .is_some_and(|f| f.spec.storage() == crate::decl::FnStorage::Static)
-        })
+        self.members(self.first(r))
+            .map(|m| match self.decls.get(m).kind() {
+                crate::decl::DeclKind::FunctionTemplate => {
+                    self.template_info(m).and_then(|i| i.pattern).unwrap_or(m)
+                }
+                _ => m,
+            })
+            .find(|&m| {
+                Some(m) != call_op
+                    && self.decls.get(m).kind() == crate::decl::DeclKind::CXXMethod
+                    && self.decls.get(m).flags().contains(crate::decl::DeclFlags::IMPLICIT)
+                    && self
+                        .decls
+                        .function(m)
+                        .is_some_and(|f| f.spec.storage() == crate::decl::FnStorage::Static)
+            })
     }
 
-    /// Whether function `d` is a body-less closure member, and which.
+    /// Whether function `d` is a body-less closure member, and which. A
+    /// specialization of a generic lambda's conversion or invoker
+    /// template forwards to the specializations for the same arguments
+    /// (clang `SpecializeCorrespondingLambdaCallOperatorAndInvoker`);
+    /// `None` while one of them does not exist.
     pub fn closure_thunk(&self, d: DeclId) -> Option<ClosureThunk> {
-        let decl = self.decls.get(d);
-        if !decl.flags().contains(crate::decl::DeclFlags::IMPLICIT) {
+        let implicit =
+            |x: DeclId| self.decls.get(x).flags().contains(crate::decl::DeclFlags::IMPLICIT);
+        let (pat, args) = match self.spec_info(d) {
+            Some((_, s)) => {
+                let pat = self.template_info(s.template)?.pattern?;
+                (pat, Some(self.types.canonical_args(s.args)))
+            }
+            None => (d, None),
+        };
+        if !implicit(pat) {
             return None;
         }
+        let decl = self.decls.get(pat);
         let r = decl.ctx()?;
         let l = self.closure_lambda(r)?;
         let call_op = self.exprs.lambdas.get(l).call_op?;
         let invoker = self.closure_invoker(r);
+        let spec = |x: DeclId| match args {
+            None => Some(x),
+            Some(a) => {
+                let t = self.described_template(x)?;
+                self.templates.find_spec(self.first(t), a)
+            }
+        };
         match decl.kind() {
             crate::decl::DeclKind::CXXConversion => {
-                let target = invoker.unwrap_or(call_op);
+                let target = spec(invoker.unwrap_or(call_op))?;
                 Some(ClosureThunk::Conversion { target })
             }
             crate::decl::DeclKind::CXXMethod
-                if Some(self.first(d)) == invoker.map(|i| self.first(i)) =>
+                if Some(self.first(pat)) == invoker.map(|i| self.first(i)) =>
             {
-                Some(ClosureThunk::Invoker { call_op })
+                Some(ClosureThunk::Invoker { call_op: spec(call_op)? })
             }
             _ => None,
         }

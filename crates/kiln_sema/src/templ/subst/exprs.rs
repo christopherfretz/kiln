@@ -143,7 +143,10 @@ impl Substituter<'_, '_, '_> {
                 let args = ex(self).call_args(e);
                 let callee = self.callee(callee)?;
                 let args = self.expr_list(args)?;
-                Ok(self.sema.act_on_call(callee, &args, loc, end))
+                // clang `TransformCallExpr`: the "fake" `(` is where the
+                // callee begins.
+                let lparen = self.sema.begin_loc(callee);
+                Ok(self.sema.act_on_call(callee, &args, lparen, end))
             }
             ExprKind::CXXOperatorCallExpr => {
                 use crate::overload::oper::{binary_of, unary_of};
@@ -152,7 +155,10 @@ impl Substituter<'_, '_, '_> {
                 let args = ex(self).call_args(e);
                 let args = self.expr_list(args)?;
                 match (op, args.as_slice()) {
-                    (OO::Call, [f, rest @ ..]) => Ok(self.sema.act_on_call(*f, rest, loc, end)),
+                    (OO::Call, [f, rest @ ..]) => {
+                        let lparen = self.sema.begin_loc(*f);
+                        Ok(self.sema.act_on_call(*f, rest, lparen, end))
+                    }
                     (OO::Subscript, [b, rest @ ..]) => {
                         Ok(self.sema.act_on_subscript_args(*b, rest, loc, end))
                     }
