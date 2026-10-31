@@ -89,7 +89,20 @@ impl Sema<'_, '_> {
         args: &[ArgInfo],
         loc: Loc,
     ) -> Result<DeclId, Box<DeductionFailure>> {
-        self.deduce_spec(ft, explicit, Some(args), loc)
+        self.deduce_spec(ft, explicit, Some(args), None, loc)
+    }
+
+    /// The specialization of `ft` whose type matches the function type
+    /// `target` (the address of an overload set, [temp.deduct.funcaddr]):
+    /// P is the template's function type, A `target`.
+    pub(crate) fn deduce_funcaddr(
+        &mut self,
+        ft: DeclId,
+        explicit: Option<ArgListId>,
+        target: QualType,
+        loc: Loc,
+    ) -> Result<DeclId, Box<DeductionFailure>> {
+        self.deduce_spec(ft, explicit, None, Some(target), loc)
     }
 
     /// The specialization of `ft` a template-id with the explicit
@@ -102,7 +115,7 @@ impl Sema<'_, '_> {
         explicit: Option<ArgListId>,
         loc: Loc,
     ) -> Result<DeclId, Box<DeductionFailure>> {
-        self.deduce_spec(ft, explicit, None, loc)
+        self.deduce_spec(ft, explicit, None, None, loc)
     }
 
     /// [`Self::deduce_call`]; `call` `None` for no call (no arity
@@ -113,6 +126,7 @@ impl Sema<'_, '_> {
         ft: DeclId,
         explicit: Option<ArgListId>,
         call: Option<&[ArgInfo]>,
+        target: Option<QualType>,
         loc: Loc,
     ) -> Result<DeclId, Box<DeductionFailure>> {
         let args = call.unwrap_or(&[]);
@@ -189,6 +203,14 @@ impl Sema<'_, '_> {
         }
         if call.is_some() && nargs < self.fn_min_args(templated) {
             return Err(DeductionFailure::new(Tdk::TooFewArguments, d));
+        }
+        // [temp.deduct.funcaddr]: the function type against the target.
+        if let Some(a) = target {
+            let p = self.ast.decls.get(templated).ty().unwrap_or(QualType::ERROR);
+            let r = self.deduce(p, a, TdfFlags::NONE, &mut d);
+            if r != Tdk::Success {
+                return Err(DeductionFailure::new(r, d));
+            }
         }
         // §6.1 step 2: each (P, A).
         for (i, a) in args.iter().enumerate() {

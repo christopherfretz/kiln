@@ -106,6 +106,47 @@ impl Sema<'_, '_> {
         cands.into_iter().filter(|&(d, _)| self.address_matches(d, fnty)).collect()
     }
 
+    /// The specializations of the templates of `ule` deduced from the
+    /// function type of `target` that match it, the most specialized
+    /// kept ([over.over]/3, /5).
+    fn address_template_candidates(
+        &mut self,
+        ule: ExprId,
+        target: QualType,
+    ) -> Vec<(DeclId, DeclId)> {
+        let (fnty, member) = self.address_target(target);
+        if !self.ast.types.is_function(fnty) {
+            return Vec::new();
+        }
+        let explicit = self.ast.templates.expr_targs.get(ule).copied();
+        let loc = self.ast.exprs.get(ule).loc();
+        let mut out: Vec<(DeclId, DeclId, DeclId)> = Vec::new();
+        for (d, f) in self.ule_candidates(ule) {
+            if self.kind_of(d) != DeclKind::FunctionTemplate {
+                continue;
+            }
+            let Ok(spec) = self.deduce_funcaddr(d, explicit, fnty, loc) else { continue };
+            if self.address_matches(spec, (fnty, member)) {
+                out.push((spec, f, d));
+            }
+        }
+        if out.len() > 1 {
+            let n = match self.ast.types.canonical_view(fnty) {
+                TypeView::Function(p) => p.num_params() as usize,
+                _ => 0,
+            };
+            let keep: Vec<bool> = (0..out.len())
+                .map(|i| {
+                    (0..out.len()).all(|j| i == j || self.more_specialized(out[i].2, out[j].2, n))
+                })
+                .collect();
+            if let Some(i) = keep.iter().position(|&k| k) {
+                return vec![(out[i].0, out[i].1)];
+            }
+        }
+        out.into_iter().map(|(s, f, _)| (s, f)).collect()
+    }
+
     /// The function an expression of overloaded-function type `e`
     /// resolves to for `target`, silently (an implicit conversion
     /// sequence's query, [over.ics.scs]/… via [over.over]).
@@ -181,7 +222,13 @@ impl Sema<'_, '_> {
             }
             return None;
         };
-        let matches = self.address_candidates(ule, target);
+        let mut matches = self.address_candidates(ule, target);
+        if matches.is_empty() {
+            // [over.over]/3: a function template's specialization deduced
+            // from the target ([temp.deduct.funcaddr]); /5: a
+            // non-template beats it, and of several the more specialized.
+            matches = self.address_template_candidates(ule, target);
+        }
         if let [(d, f)] = matches[..] {
             let naming = self.ovl.ule_found.get(&ule).and_then(|x| x.naming);
             let nns = self.ast.templates.expr_nns.get(ule).copied();

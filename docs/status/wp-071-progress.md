@@ -39,12 +39,12 @@ and spec/sema-overload.md §10.7.
 - Reversed and rewritten operator template candidates.
 - Conversion function templates (`ics.rs`) and `operator->` templates
   (`arrow.rs`).
-- `&f` against a target type ([temp.deduct.funcaddr]).
+- Done: `&f` against a target type ([temp.deduct.funcaddr]) — deduction + more-specialized pick in `overload/address.rs::address_template_candidates`. The no-match diagnostic still reports "not yet implemented" (owner: WP-071 follow-up).
 - Explicit specialization and explicit instantiation of function
   templates; `TemplateParamObject`.
 - Q3 non-dependent sharing measurement.
 
 ## Next step
-Run the full `cargo xtask ci`. Then do `&f` against a target type in
+- Done: `&f` against a target type ([temp.deduct.funcaddr]) — deduction + more-specialized pick in `overload/address.rs::address_template_candidates`. The no-match diagnostic still reports "not yet implemented" (owner: WP-071 follow-up).
 `overload/address.rs::resolve_address_of_overloaded`: deduce P = the
 template's function type from A = the target function type.

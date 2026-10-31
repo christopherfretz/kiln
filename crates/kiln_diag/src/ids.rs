@@ -1033,11 +1033,6 @@ diag_ids! {
     note_ovl_candidate_explicit_arg_mismatch_named = Note (1) "candidate template ignored: invalid explicitly-specified argument for template parameter '{0}'";
     note_ovl_candidate_explicit_arg_mismatch_unnamed = Note (1) "candidate template ignored: invalid explicitly-specified argument for {0} template parameter";
     note_ovl_candidate_instantiation_depth = Note (0) "candidate template ignored: substitution exceeded maximum template instantiation depth";
-    note_ovl_candidate_deduced_mismatch = Note (4) "candidate template ignored: deduced type {0} of {1} parameter does not match adjusted type {2} of argument{3}";
-    note_ovl_candidate_non_deduced_mismatch = Note (2) "candidate function not viable: no known conversion from {0} to {1}";
-    sema_fn_template_spec_no_match = Error (1) "no function template matches function template specialization '{0}'";
-    sema_fn_template_spec_ambiguous = Error (1) "function template specialization '{0}' ambiguously refers to more than one function template";
-    sema_explicit_instantiation_no_match = Error (1) "explicit instantiation of '{0}' does not refer to a function template, variable template, member function, member class, or static data member";
     note_deduction_non_deduced_mismatch = Note (2) "candidate template ignored: could not match '{0}' against '{1}'";
     sema_partial_spec_ambiguous = Error (1) "ambiguous partial specializations of '{0}'";
     note_partial_spec_match = Note (1) "partial specialization matches {0}";
