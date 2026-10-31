@@ -27,7 +27,7 @@ Branch `wp/109-concepts-alias-followups`. Living file; deleted at merge.
   implemented); span `__compare/ordering.h:62` defaulted comparisons
   (WP-082).
 
-## Item 2 — tighten the 073 fallback: IN PROGRESS
+## Item 2 — tighten the 073 fallback: DONE (sat_fold deferred)
 - `sat_atom`: an unimplemented substitution is now a hard error (the
   captured diagnostic is emitted); a value-dependent result is satisfied
   only when the levels are dependent (retained level / dependent arg),
@@ -37,7 +37,8 @@ Branch `wp/109-concepts-alias-followups`. Living file; deleted at merge.
 - Fold-expanded constraints `(C<Ts> && ...)` evaluate correctly; notes
   differ from clang 19 (clang expands the fold per element:
   "because 'long' does not satisfy 'Int'"; kiln "'... && ...' evaluated
-  to false"). TODO: `sat_fold` in concepts/sat.rs + tests.
+  to false"). `sat_fold` (per-element notes) deferred; recorded as a
+  known divergence in spec/sema-templates.md §11.2 (Landed WP-109).
 
 ## Item 4 — note locations: mostly DONE
 - type-requirement note at the type (`Requirement::Type(QualType, Loc)`),
@@ -75,8 +76,28 @@ Branch `wp/109-concepts-alias-followups`. Living file; deleted at merge.
   `satisfaction: N (M cached)   atoms: A (H cached)` line.
 - Test `templates/report/temp.inst-report-atom-cache.cpp` (atoms_cached
   is 0 there: single-level checks are already served by `sat_cache`).
-- Finding: member templates of class template specializations drop
-  their requires-clause (templ/member.rs `param_list` passes `None`), so
-  `Box<int>::same<U> requires (sizeof(T)==sizeof(U))` accepts anything.
+- Member templates of class template specializations used to drop
+  their requires-clause; fixed (templ/member.rs `param_list` keeps the
+  unsubstituted requires-clause and type-constraints, like clang).
 
-## Items 5, 6, 7: pending
+## Item 5 — trailing requires on members of class templates: DONE
+- `member_constraints` (pattern constraints + specialization levels),
+  checked in `check_function_constraints`; "more constrained" tie-break
+  (`order_constrained_candidates` / `same_param_type_lists`); uses of an
+  unsatisfied member diagnosed (`diagnose_unsatisfied_use`).
+- Hidden friend definitions in class templates now instantiate
+  (subst/decls.rs `function_decl` links the friend to its pattern).
+- Tests `over.match.best-more-constrained-member.cpp`,
+  `over.match.viable-member-trailing-requires.cpp`.
+
+## Item 6 — clang-ast accepts non-dependent RequiresExpr: DONE
+- Dump prints `RequiresExpr 'bool' satisfied|unsatisfied`; normalizer
+  drops per-requirement `satisfied`; TypeRequirement `'q':'desugared'`;
+  MemberExpr `non_odr_use_unevaluated` (kiln + normalizer).
+- Golden `templates/concepts/expr.prim.req-ast.cpp` restored.
+
+## Item 7 — spec/status: DONE
+- spec/sema-templates.md §11.2 "Landed (WP-109)"; spec/ast-dump.md
+  RequiresExpr/MemberExpr; docs/status/libcxx-syntax.md rows refreshed
+  (type_traits 0, compare 48, utility 81, array 177, span 113,
+  string_view 329).

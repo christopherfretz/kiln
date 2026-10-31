@@ -987,15 +987,15 @@ impl<'a> Printer<'a, '_> {
                     // node carries no `desugaredQualType`, so the desugar
                     // is read off its sugar chain.
                     let node = kids(n).next();
-                    let q = node
+                    let ty = node
                         .map(qual_type)
-                        .filter(|q| !q.is_empty())
+                        .filter(|ty| !ty.is_empty())
                         .ok_or_else(|| format!("clang-ast: {k} has no type"))?;
-                    let d = node.map_or(q, |t| qual_type(desugar_type_node(t)));
-                    if d.is_empty() || d == q {
-                        let _ = write!(l, " '{q}'");
+                    let desugared = node.map_or(ty, |t| qual_type(desugar_type_node(t)));
+                    if desugared.is_empty() || desugared == ty {
+                        let _ = write!(l, " '{ty}'");
                     } else {
-                        let _ = write!(l, " '{q}':'{d}'");
+                        let _ = write!(l, " '{ty}':'{desugared}'");
                     }
                 }
                 if flag(n, "noexcept") {
