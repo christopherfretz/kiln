@@ -125,6 +125,69 @@ impl Sema<'_, '_> {
         id
     }
 
+    /// [temp.names]/9 (clang's `EnsureTemplateArgumentListConstraints`):
+    /// a template-id naming a class, variable or alias template
+    /// specialization requires its associated constraints satisfied.
+    /// `sel` picks the kind in the error (0 class, 2 variable, 3 alias).
+    #[allow(clippy::result_unit_err, reason = "`Err` means already diagnosed")]
+    pub(crate) fn ensure_template_constraints(
+        &mut self,
+        tmpl: DeclId,
+        args: ArgListId,
+        sel: u32,
+        loc: Loc,
+    ) -> Result<(), ()> {
+        let constraints = self.associated_constraints(tmpl);
+        if constraints.is_empty() {
+            return Ok(());
+        }
+        let depth = self.template_param_depth(tmpl);
+        let a: Vec<TemplateArg> = self.ast.types.args(args).to_vec();
+        let levels = self.prior_levels(tmpl, depth, &a);
+        let sat = self.check_constraints(tmpl, &constraints, &levels, args, loc);
+        if self.sat_ok(sat) {
+            return Ok(());
+        }
+        let d = self
+            .diag(DiagId::sema_template_constraints_not_satisfied, loc)
+            .arg(sel)
+            .arg(self.qualified_decl_name(tmpl))
+            .arg(self.template_args_desc(tmpl, args));
+        let d = self.with_sat_notes(d, sat);
+        self.emit(d);
+        Err(())
+    }
+
+    /// The partial specialization of `tmpl` a partial specialization
+    /// declaration with arguments `canonical` and template-head `head`
+    /// redeclares: same arguments and equivalent constraints
+    /// ([temp.spec.partial.general]/2, [temp.over.link]/6; constraints
+    /// compared by their printed form).
+    pub(crate) fn find_partial_decl(
+        &self,
+        tmpl: DeclId,
+        canonical: ArgListId,
+        head: kiln_ast::ids::TemplateParamListId,
+    ) -> Option<u32> {
+        let i = self.ast.templates.find_partial(tmpl, canonical)?;
+        let sig = self.head_signature(head);
+        let rows = self.ast.templates.partials_of(tmpl);
+        std::iter::once(i).chain(rows.iter().copied()).find(|&r| {
+            self.ast
+                .templates
+                .partial(r)
+                .is_some_and(|p| p.canonical == canonical && self.head_signature(p.params) == sig)
+        })
+    }
+
+    /// The constraints of template-head `head`, printed.
+    fn head_signature(&self, head: kiln_ast::ids::TemplateParamListId) -> Vec<String> {
+        let l = *self.ast.templates.param_list(head);
+        let mut c = Vec::new();
+        self.head_constraints(l.params, l.requires, &mut c);
+        c.into_iter().map(|e| self.expr_text(e)).collect()
+    }
+
     /// A satisfied result.
     pub(crate) fn satisfied_id(&mut self) -> SatId {
         self.inst.concepts.push(Satisfaction { ok: true, records: Vec::new() })
@@ -244,9 +307,10 @@ impl Sema<'_, '_> {
                 let first = st.err().flatten();
                 // A construct the substituter does not handle yet: assume
                 // satisfied rather than reject a valid program.
-                if first.as_ref().is_some_and(|d| {
-                    d.id() == Some(DiagId::sema_unimplemented_template_feature)
-                }) {
+                if first
+                    .as_ref()
+                    .is_some_and(|d| d.id() == Some(DiagId::sema_unimplemented_template_feature))
+                {
                     return true;
                 }
                 let at = first.as_ref().map_or(loc, Diag::loc);

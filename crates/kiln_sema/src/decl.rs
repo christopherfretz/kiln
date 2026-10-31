@@ -3700,10 +3700,7 @@ impl Sema<'_, '_> {
                         ExprKind::CXXBoolLiteralExpr | ExprKind::IntegerLiteral
                     );
                     let ik = self.ast.exprs.get(inner).kind();
-                    if matches!(
-                        ik,
-                        ExprKind::ConceptSpecializationExpr | ExprKind::RequiresExpr
-                    ) {
+                    if matches!(ik, ExprKind::ConceptSpecializationExpr | ExprKind::RequiresExpr) {
                         // [temp.constr]: the unsatisfied constraint's chain
                         // (clang's `DiagnoseUnsatisfiedConstraint`).
                         let d = match text {

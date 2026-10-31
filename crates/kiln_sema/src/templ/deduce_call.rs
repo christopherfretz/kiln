@@ -32,11 +32,13 @@ pub struct DeductionFailure {
     pub args: Option<ArgListId>,
     /// `SubstitutionFailure`: the first error captured.
     pub diag: Option<Diag>,
+    /// `ConstraintsNotSatisfied`: why (§8.7).
+    pub sat: Option<super::concepts::SatId>,
 }
 
 impl DeductionFailure {
     fn new(tdk: Tdk, deduced: DeducedArgs) -> Box<DeductionFailure> {
-        Box::new(DeductionFailure { tdk, deduced, args: None, diag: None })
+        Box::new(DeductionFailure { tdk, deduced, args: None, diag: None, sat: None })
     }
 }
 
@@ -249,8 +251,22 @@ impl Sema<'_, '_> {
                 }
             }
         }
-        // §6.1 step 4: the specialization, its signature substituted.
         let sugared = self.ast.types.arg_list(&d.args);
+        // [temp.deduct.general]/5: the associated constraints
+        // ([temp.constr.decl]/3) are checked before the function type is
+        // substituted (§8.3).
+        let constraints = self.associated_constraints(ft);
+        if !constraints.is_empty() {
+            let levels = self.prior_levels(ft, depth, &d.args);
+            let sat = self.check_constraints(ft, &constraints, &levels, sugared, loc);
+            if !self.sat_ok(sat) {
+                let mut f = DeductionFailure::new(Tdk::ConstraintsNotSatisfied, d);
+                f.args = Some(sugared);
+                f.sat = Some(sat);
+                return Err(f);
+            }
+        }
+        // §6.1 step 4: the specialization, its signature substituted.
         let canonical = self.ast.types.canonical_args(sugared);
         let conv = ConvertedArgs { sugared, canonical };
         let r = self.in_sfinae(FrameKind::DeducedArgSubstitution, ft, Some(sugared), loc, |s| {
@@ -438,6 +454,16 @@ impl Sema<'_, '_> {
             self.template_params(ft).get(i as usize).map(|&p| self.decl_name(p)).unwrap_or_default()
         };
         match f.tdk {
+            Tdk::ConstraintsNotSatisfied => {
+                let with = f.args.map(|l| format!(" {}", self.template_args_desc(ft, l)));
+                let d = self
+                    .diag(DiagId::note_ovl_candidate_unsatisfied_constraints, loc)
+                    .arg(with.unwrap_or_default());
+                match f.sat {
+                    Some(id) => self.with_sat_notes(d, id),
+                    None => d,
+                }
+            }
             Tdk::SubstitutionFailure => {
                 let with = f.args.map(|l| format!(" {}", self.template_args_desc(ft, l)));
                 let msg = f.diag.as_ref().map(|x| format!(": {}", x.message()));

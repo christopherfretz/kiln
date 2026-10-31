@@ -198,9 +198,10 @@ impl Substituter<'_, '_, '_> {
             Some((Some(x), Ok(()))) => Some(x),
             Some((_, st)) => {
                 let first = st.err().flatten();
-                if first.as_ref().is_some_and(|d| {
-                    d.id() == Some(DiagId::sema_unimplemented_template_feature)
-                }) {
+                if first
+                    .as_ref()
+                    .is_some_and(|d| d.id() == Some(DiagId::sema_unimplemented_template_feature))
+                {
                     // Not substitutable yet: assume the requirement holds.
                     return Some(e);
                 }
@@ -271,10 +272,6 @@ impl Sema<'_, '_> {
     /// A type requirement's type as clang prints it (`typename T::type`).
     pub(crate) fn type_requirement_text(&self, t: QualType) -> String {
         let s = self.ty_str(t);
-        if s.contains("::") && !s.starts_with("typename ") {
-            format!("typename {s}")
-        } else {
-            s
-        }
+        if s.contains("::") && !s.starts_with("typename ") { format!("typename {s}") } else { s }
     }
 }

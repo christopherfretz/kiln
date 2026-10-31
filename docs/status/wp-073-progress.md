@@ -15,11 +15,15 @@ Branch `wp/073-concepts`, worktree `.worktrees/wp-073`.
   simple/type/compound(noexcept, return-type-requirement)/nested requirements.
 - static_assert of a failing concept-id/requires-expr prints clang's chain.
 
-## Not yet
-- Constraint checks in function deduction (`deduce_spec`), class template
-  selection (`get_class_spec`), partial specs (`deduce_partial`), spec.rs stub.
+- Constraint checks in function deduction (`deduce_call.rs`, Tdk
+  ConstraintsNotSatisfied + note chain), class/var template selection
+  (`ensure_template_constraints`), partial specs (`deduce_partial` +
+  `find_partial_decl` distinguishing same-args partials by printed head).
 - Eager evaluation of non-dependent requires-expressions (`act_requires_expr`).
-- Subsumption (`subsume.rs`), normal.rs normalization, overload tie-breaker.
+- Subsumption: `normal.rs` hash-consed normal forms, `subsume.rs` DNF/CNF
+  (cap 65,536 clauses), tie-break in `order.rs` (functions + partials).
+
+## Not yet
 - Constrained auto / abbreviated templates.
 - Tests in `tests/conformance/templates/concepts/`.
 

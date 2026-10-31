@@ -457,21 +457,15 @@ impl Sema<'_, '_> {
             self.ctx = c;
             self.exit_unevaluated();
         }
-        if !self.in_template() {
-            // A non-dependent requires-expression is evaluated at once
-            // ([expr.prim.req.general]/5): satisfaction is WP-073.
-            let dep = reqs.iter().any(|r| match *r {
-                Requirement::Simple(e) | Requirement::Nested(e) => {
-                    !self.ast.exprs.get(e).deps().is_none()
-                }
-                Requirement::Compound { expr, .. } => !self.ast.exprs.get(expr).deps().is_none(),
-                Requirement::Type(t) => self.is_dependent_type(t),
-            });
-            if !dep && !reqs.is_empty() {
-                self.templ_unimplemented("evaluation of a requires-expression", loc);
-            }
+        let e = self.builder().requires_expr(body, params, reqs, QualType::BOOL, loc, rbrace);
+        if !self.ast.exprs.get(e).deps().is_none() {
+            return e;
         }
-        self.builder().requires_expr(body, params, reqs, QualType::BOOL, loc, rbrace)
+        // [expr.prim.req.general]/5: a non-dependent requires-expression
+        // is evaluated at once (§8.6).
+        let levels = crate::templ::args::MultiLevelArgs::new();
+        let r = crate::templ::subst::Substituter::new(self, &levels).requires_expr(e, loc);
+        r.unwrap_or(e)
     }
 
     /// `{ e } -> C<args>` ([expr.prim.req.compound]/1): the immediately
