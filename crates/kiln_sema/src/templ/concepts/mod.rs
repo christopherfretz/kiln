@@ -56,7 +56,15 @@ pub struct SatCounters {
     pub cache_hits: u64,
     /// Subsumption checks computed.
     pub subsume: u64,
+    /// Atomic constraints evaluated (§8.3 `atom_cache` misses).
+    pub atoms: u64,
+    /// Atomic constraints answered from the `atom_cache`.
+    pub atom_hits: u64,
 }
+
+/// An `atom_cache` key: the atom and the canonical argument list of each
+/// level.
+pub(crate) type AtomKey = (ExprId, Vec<ArgListId>);
 
 /// The concept engine's state (§11.2).
 #[derive(Debug, Default)]
@@ -73,6 +81,9 @@ pub struct ConceptState {
     pub(crate) norm: NormTable,
     pub(crate) normal_forms: FxHashMap<DeclId, Option<NormId>>,
     pub(crate) subsume_cache: FxHashMap<(NormId, NormId), bool>,
+    /// §8.3 `atom_cache`: (atom, canonical arguments) -> (satisfied, the
+    /// records explaining a failure).
+    pub(crate) atom_cache: FxHashMap<AtomKey, (bool, Vec<SatRecord>)>,
     /// The type-constraint location of a variable or function declared
     /// with a constrained placeholder (`C auto x`, `C auto f()`).
     pub(crate) placeholder_locs: FxHashMap<DeclId, Loc>,

@@ -16,7 +16,7 @@ use kiln_diag::{Diag, DiagId};
 use kiln_oven::{EvalContext, EvalKind};
 use kiln_source::Loc;
 
-use super::{SatId, SatRecord, Satisfaction};
+use super::{AtomKey, SatId, SatRecord, Satisfaction};
 use crate::Sema;
 use crate::templ::args::{LevelMode, MultiLevelArgs};
 use crate::templ::stack::FrameKind;
@@ -285,8 +285,51 @@ impl Sema<'_, '_> {
     }
 
     /// Whether atomic constraint `e` is satisfied
-    /// ([temp.constr.atomic]/3).
+    /// ([temp.constr.atomic]/3), through the §8.3 `atom_cache`: an atom
+    /// with the same canonical arguments is evaluated once across every
+    /// concept and constrained template that reaches it (a change in
+    /// result is ill-formed NDR, [temp.constr.atomic]/3). An evaluation
+    /// that emitted an error, or whose arguments are dependent, is not
+    /// cached, so its diagnostics are not lost on a later hit.
     fn sat_atom(
+        &mut self,
+        entity: DeclId,
+        e: ExprId,
+        levels: &MultiLevelArgs,
+        recs: &mut Vec<SatRecord>,
+    ) -> bool {
+        let key: Option<AtomKey> = (!self.levels_dependent(levels)).then(|| {
+            let args =
+                levels.levels.iter().map(|l| self.ast.types.canonical_args(l.args)).collect();
+            (e, args)
+        });
+        if let Some(k) = &key
+            && let Some((ok, r)) = self.inst.concepts.atom_cache.get(k)
+        {
+            self.inst.concepts.counters.atom_hits += 1;
+            recs.extend(r.iter().cloned());
+            return *ok;
+        }
+        self.inst.concepts.counters.atoms += 1;
+        let errors = self.errors_so_far();
+        let mut mine = Vec::new();
+        let ok = self.sat_atom_uncached(entity, e, levels, &mut mine);
+        if let Some(k) = key
+            && self.errors_so_far() == errors
+        {
+            self.inst.concepts.atom_cache.insert(k, (ok, mine.clone()));
+        }
+        recs.extend(mine);
+        ok
+    }
+
+    /// Errors emitted or captured by the enclosing SFINAE trap so far.
+    fn errors_so_far(&self) -> u64 {
+        let trapped = self.inst.sfinae.borrow().last().map_or(0, |s| s.errors);
+        u64::from(self.diags.error_count()) + u64::from(trapped)
+    }
+
+    fn sat_atom_uncached(
         &mut self,
         entity: DeclId,
         e: ExprId,

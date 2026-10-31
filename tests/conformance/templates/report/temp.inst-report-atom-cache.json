@@ -1,0 +1,7 @@
+{"template":"h<T>","kind":"default","loc":"temp.inst-report-atom-cache.cpp:13:42","count":2,"nodes":2,"bytes":116,"self_us":0,"incl_us":0}
+{"template":"f<T>","kind":"default","loc":"temp.inst-report-atom-cache.cpp:11:54","count":1,"nodes":2,"bytes":116,"self_us":0,"incl_us":0}
+{"template":"g<T>","kind":"default","loc":"temp.inst-report-atom-cache.cpp:12:45","count":1,"nodes":2,"bytes":116,"self_us":0,"incl_us":0}
+{"template":"f<T>","kind":"function","loc":"temp.inst-report-atom-cache.cpp:11:54","count":1,"nodes":2,"bytes":44,"self_us":0,"incl_us":0}
+{"template":"g<T>","kind":"function","loc":"temp.inst-report-atom-cache.cpp:12:45","count":1,"nodes":2,"bytes":44,"self_us":0,"incl_us":0}
+{"template":"h<T>","kind":"function","loc":"temp.inst-report-atom-cache.cpp:13:42","count":1,"nodes":2,"bytes":44,"self_us":0,"incl_us":0}
+{"total":true,"count":7,"nodes":12,"bytes":480,"self_us":0,"sat":9,"sat_cached":6,"atoms":11,"atoms_cached":0}

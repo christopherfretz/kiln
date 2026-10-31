@@ -212,6 +212,7 @@ impl Sema<'_, '_> {
     pub fn instantiation_report(&self, file: &str) -> String {
         let r = &self.inst.report;
         let rows = r.rows();
+        let sat = self.inst.concepts.counters;
         let mut out = String::new();
         let loc = |d: DeclId| -> String {
             let l = self.ast.decls.get(d).loc();
@@ -243,11 +244,15 @@ impl Sema<'_, '_> {
                 }
                 let _ = writeln!(
                     out,
-                    "{{\"total\":true,\"count\":{},\"nodes\":{},\"bytes\":{},\"self_us\":{}}}",
+                    "{{\"total\":true,\"count\":{},\"nodes\":{},\"bytes\":{},\"self_us\":{},\"sat\":{},\"sat_cached\":{},\"atoms\":{},\"atoms_cached\":{}}}",
                     r.count,
                     total_nodes,
                     total_bytes,
-                    total_ns / 1000
+                    total_ns / 1000,
+                    sat.count,
+                    sat.cache_hits,
+                    sat.atoms,
+                    sat.atom_hits
                 );
             }
             ReportFormat::Text | ReportFormat::All => {
@@ -282,6 +287,11 @@ impl Sema<'_, '_> {
                     total_nodes,
                     mib(total_bytes),
                     ms(total_ns)
+                );
+                let _ = writeln!(
+                    out,
+                    "  satisfaction: {} ({} cached)   atoms: {} ({} cached)",
+                    sat.count, sat.cache_hits, sat.atoms, sat.atom_hits
                 );
             }
         }

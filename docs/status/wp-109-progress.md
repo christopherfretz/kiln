@@ -64,4 +64,19 @@ Branch `wp/109-concepts-alias-followups`. Living file; deleted at merge.
   `temp.over.link-requires-clause-trait-equivalence.cpp`.
 - Item 4 DONE.
 
-## Items 3, 5, 6, 7: pending
+## Item 3 — atom_cache: DONE (hits only for multi-level constraints)
+- `ConceptState::atom_cache: (ExprId, Vec<canonical ArgListId>) ->
+  (bool, records)` in concepts/mod.rs; `sat_atom` (concepts/sat.rs)
+  wraps `sat_atom_uncached`. Not cached when levels are dependent or the
+  evaluation emitted/trapped an error. Sound because an atom ExprId
+  belongs to one entity's constraint and the key is that entity's levels.
+- Counters `atoms`/`atom_hits` in `SatCounters`; the report totals row
+  gained `"sat","sat_cached","atoms","atoms_cached"`, text format a
+  `satisfaction: N (M cached)   atoms: A (H cached)` line.
+- Test `templates/report/temp.inst-report-atom-cache.cpp` (atoms_cached
+  is 0 there: single-level checks are already served by `sat_cache`).
+- Finding: member templates of class template specializations drop
+  their requires-clause (templ/member.rs `param_list` passes `None`), so
+  `Box<int>::same<U> requires (sizeof(T)==sizeof(U))` accepts anything.
+
+## Items 5, 6, 7: pending
