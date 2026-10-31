@@ -719,9 +719,7 @@ impl Sema<'_, '_> {
             let mut sub = Substituter::new(s, &args);
             sub.entity = Some(spec);
             sub.map_contexts(&pairs);
-            for (a, b) in pp.into_iter().zip(fp) {
-                sub.locals.insert(a, crate::templ::subst::DeclOrPack::Decl(b));
-            }
+            sub.map_params(&pp, &fp);
             if sub.sema.kind_of(f) == DeclKind::CXXConstructor {
                 // The pattern's ctor-initializer, substituted and checked
                 // as the parser's would be (spec/sema-class.md §4.9).

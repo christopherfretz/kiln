@@ -121,10 +121,7 @@ impl Substituter<'_, '_, '_> {
             TypeView::Function(p) => {
                 let ret = self.ty(p.ret(), loc)?;
                 let params = self.sema.ast.types.params(&p).to_vec();
-                let mut out = Vec::with_capacity(params.len());
-                for x in params {
-                    out.push(self.ty(x, loc)?);
-                }
+                let out = self.expand_types(&params, loc)?;
                 let exc = match self.sema.ast.types.exc_spec(&p) {
                     ExcSpec::NoexceptExpr {
                         expr,
@@ -316,7 +313,7 @@ impl Substituter<'_, '_, '_> {
     ) -> SubstResult<QualType> {
         match self.lookup(depth, index) {
             ArgLookup::Arg(a) => {
-                let a = self.element(a, loc)?;
+                let a = self.element(a, decl, loc)?;
                 let ArgView::Type(t) = a.view() else { return Err(SubstFail) };
                 let Some(assoc) = self.assoc(depth) else { return Ok(t) };
                 Ok(self.sema.ast.types.subst_template_type_parm(

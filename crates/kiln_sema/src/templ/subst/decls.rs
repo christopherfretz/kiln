@@ -238,12 +238,43 @@ impl Substituter<'_, '_, '_> {
         for p in params {
             let n = *self.sema.ast.decls.get(p);
             let pd = self.sema.ast.decls.param(p).copied();
-            if pd.is_some_and(|x| x.flags & ParamData::PACK != 0) {
-                return self.unimplemented("function parameter packs", n.loc());
-            }
             let t = pd.and_then(|x| x.original_ty).unwrap_or_else(|| self.decl_ty(p));
-            let ty = self.ty(t, n.loc())?;
             let name = n.name().as_ident().filter(|_| !n.name().is_empty()).map(|s| (s, n.loc()));
+            if pd.is_some_and(|x| x.flags & ParamData::PACK != 0)
+                && let Some(pat) = crate::templ::pack::type_pattern(self.sema, t)
+            {
+                // A function parameter pack ([temp.variadic]/2): one
+                // parameter per element (§7.1).
+                let loc = n.loc();
+                let tys = match self.expand_pattern(|s| s.ty(pat, loc))? {
+                    crate::templ::pack::Expansion::Elements(v) => v,
+                    crate::templ::pack::Expansion::Unexpanded(_) => {
+                        return self.unimplemented("function parameter packs", loc);
+                    }
+                };
+                let mut decls = Vec::with_capacity(tys.len());
+                for ty in tys {
+                    let ctx = self.sema.ctx;
+                    let idx = u16::try_from(out.len()).unwrap_or(u16::MAX);
+                    let np = self.sema.builder().prototype_param(ctx, n.name(), loc, ty, idx, 0);
+                    self.sema.unowned_params.insert(np);
+                    decls.push(np);
+                    out.push(ParamInfo {
+                        name,
+                        ty,
+                        loc,
+                        attrs: Vec::new(),
+                        invalid: false,
+                        default_arg: DefaultArg::None,
+                        range: (loc, loc),
+                        decl: Some(np),
+                    });
+                }
+                let l = self.sema.ast.lists.push(&decls);
+                self.locals.insert(p, DeclOrPack::Pack(l));
+                continue;
+            }
+            let ty = self.ty(t, n.loc())?;
             // Created now, so that the rest of the signature (a trailing
             // return type, the exception specification) refers to it
             // ([basic.scope.param]); the function adopts it.
@@ -478,9 +509,7 @@ impl Substituter<'_, '_, '_> {
             .function(f)
             .map(|x| self.sema.ast.lists.iter::<DeclId>(x.params).collect())
             .unwrap_or_default();
-        for (&a, &b) in pp.iter().zip(fp.iter()) {
-            self.locals.insert(a, DeclOrPack::Decl(b));
-        }
+        self.map_params(&pp, &fp);
         for (&a, &b) in pp.iter().zip(fp.iter()) {
             let Some(def) = self.sema.ast.decls.param(a).and_then(|x| x.default_arg) else {
                 continue;

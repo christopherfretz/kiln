@@ -52,6 +52,8 @@ pub struct Substituter<'s, 'a, 'sm> {
     pub locals: FxHashMap<DeclId, DeclOrPack>,
     /// The element of the pack being expanded (WP-072).
     pub pack_index: Option<u32>,
+    /// The innermost expansion's state (§7.2).
+    pub pack: crate::templ::pack::PackState,
     /// The specialization (or member) being instantiated.
     pub entity: Option<DeclId>,
     /// Pattern contexts and their instantiations (the pattern class and
@@ -81,6 +83,7 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
             args,
             locals: FxHashMap::default(),
             pack_index: None,
+            pack: crate::templ::pack::PackState::default(),
             entity: None,
             pairs: Vec::new(),
             declarator_name: None,
@@ -136,16 +139,16 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
         self.args.level(depth).map(|l| l.assoc)
     }
 
-    /// A pack argument found where one element was expected: pack
-    /// expansion is WP-072.
-    pub(crate) fn element(&mut self, a: TemplateArg, loc: Loc) -> SubstResult<TemplateArg> {
-        match a.view() {
-            ArgView::Pack(l) => match self.pack_index {
-                Some(i) => Ok(self.sema.ast.types.args(l).get(i as usize).copied().unwrap_or(a)),
-                None => self.unimplemented("pack expansion", loc),
-            },
-            _ => Ok(a),
-        }
+    /// The element of a pack argument for the current pack index (§7.2);
+    /// `a` itself when it is not a pack. `parm` names the parameter in
+    /// the length-mismatch diagnostic.
+    pub(crate) fn element(
+        &mut self,
+        a: TemplateArg,
+        parm: Option<DeclId>,
+        loc: Loc,
+    ) -> SubstResult<TemplateArg> {
+        self.pack_element(a, |s| parm.map_or_else(String::new, |d| s.sema.decl_name(d)), loc)
     }
 
     /// Substitutes into one template argument (§5.3).
@@ -168,12 +171,18 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
         }
     }
 
-    /// Substitutes into an argument list (no pack expansions, WP-072).
+    /// Substitutes into an argument list, expanding pack expansions
+    /// (§7.2).
     pub fn args(&mut self, l: ArgListId, loc: Loc) -> SubstResult<ArgListId> {
         let v = self.sema.ast.types.args(l).to_vec();
         let mut out = Vec::with_capacity(v.len());
         let mut changed = false;
         for a in v {
+            if let Some(x) = self.expand_arg(a, loc)? {
+                changed = true;
+                out.extend(x);
+                continue;
+            }
             let b = self.template_arg(a, loc)?;
             changed |= b != a;
             out.push(b);
@@ -181,24 +190,46 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
         Ok(if changed { self.sema.ast.types.arg_list(&out) } else { l })
     }
 
-    /// Expands a list of pattern elements that may contain pack
-    /// expansions: lists without expansions map one to one. Expansion is
-    /// WP-072.
-    pub fn expand_list<T: Copy>(
+    /// Expands template argument `a` when it is a pack expansion (`T...`,
+    /// `v...`, `TT...`): its elements, or the expansion rebuilt when it
+    /// cannot be expanded yet. `None` when `a` is not an expansion.
+    pub(crate) fn expand_arg(
         &mut self,
-        items: &[T],
-        is_expansion: impl Fn(&Sema<'_, '_>, T) -> bool,
-        mut each: impl FnMut(&mut Self, T) -> SubstResult<T>,
+        a: TemplateArg,
         loc: Loc,
-    ) -> SubstResult<Vec<T>> {
-        let mut out = Vec::with_capacity(items.len());
-        for &x in items {
-            if is_expansion(self.sema, x) {
-                return self.unimplemented("pack expansion", loc);
+    ) -> SubstResult<Option<Vec<TemplateArg>>> {
+        use crate::templ::pack::{Expansion, expr_pattern, type_pattern};
+        let r = match a.view() {
+            ArgView::Type(q) => {
+                let Some(p) = type_pattern(self.sema, q) else { return Ok(None) };
+                match self.expand_pattern(|s| s.ty(p, loc))? {
+                    Expansion::Elements(v) => v.into_iter().map(TemplateArg::ty).collect(),
+                    Expansion::Unexpanded(t) => {
+                        vec![TemplateArg::ty(self.sema.ast.types.pack_expansion(t, None))]
+                    }
+                }
             }
-            out.push(each(self, x)?);
-        }
-        Ok(out)
+            ArgView::Expr { expr, .. } => {
+                let Some(p) = expr_pattern(self.sema, expr) else { return Ok(None) };
+                match self.expand_pattern(|s| s.expr(p))? {
+                    Expansion::Elements(v) => {
+                        v.into_iter().map(|e| self.sema.ast.builder().template_arg_expr(e)).collect()
+                    }
+                    Expansion::Unexpanded(e) => {
+                        let x = self.sema.act_pack_expansion(e, loc);
+                        vec![self.sema.ast.builder().template_arg_expr(x)]
+                    }
+                }
+            }
+            ArgView::TemplateExpansion { name, .. } => {
+                match self.expand_pattern(|s| s.template_name(name, loc))? {
+                    Expansion::Elements(v) => v.into_iter().map(TemplateArg::template).collect(),
+                    Expansion::Unexpanded(n) => vec![TemplateArg::template_expansion(n, None)],
+                }
+            }
+            _ => return Ok(None),
+        };
+        Ok(Some(r))
     }
 
     /// Substitutes into a template name (a template template parameter
@@ -213,7 +244,7 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
             | TemplateName::CanonTemplateTemplateParm { depth, index, .. } => {
                 let (d, i) = (depth as u16, index as u16);
                 match self.lookup(d, i) {
-                    ArgLookup::Arg(a) => match self.element(a, loc)?.view() {
+                    ArgLookup::Arg(a) => match self.element(a, None, loc)?.view() {
                         ArgView::Template(t) => Ok(t),
                         _ => Err(SubstFail),
                     },
@@ -350,7 +381,11 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
         if let Some(&x) = self.locals.get(&d) {
             return match x {
                 DeclOrPack::Decl(x) => Ok(x),
-                DeclOrPack::Pack(_) => self.unimplemented("pack expansion", loc),
+                DeclOrPack::Pack(l) => {
+                    let n = u32::try_from(self.sema.ast.lists.len(l)).unwrap_or(u32::MAX);
+                    let i = self.pack_reached(n, |s| s.sema.decl_name(d), loc)?;
+                    self.sema.ast.lists.at::<DeclId>(l, i as usize).ok_or(SubstFail)
+                }
             };
         }
         let node = *self.sema.ast.decls.get(d);

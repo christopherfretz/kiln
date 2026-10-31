@@ -42,19 +42,13 @@ impl Substituter<'_, '_, '_> {
     /// Substitutes into the expressions of list `l` (default arguments
     /// of a call are dropped: the rebuilt call adds its own).
     fn expr_list(&mut self, l: kiln_ast::ids::ListId) -> SubstResult<Vec<ExprId>> {
-        let v: Vec<ExprId> = self.sema.ast.lists.iter::<ExprId>(l).collect();
-        let mut out = Vec::with_capacity(v.len());
-        for x in v {
-            if self.sema.ast.exprs.get(x).kind() == ExprKind::CXXDefaultArgExpr {
-                break;
-            }
-            if self.sema.ast.exprs.get(x).kind() == ExprKind::PackExpansionExpr {
-                let loc = self.sema.ast.exprs.get(x).loc();
-                return self.unimplemented("pack expansion", loc);
-            }
-            out.push(self.expr(x)?);
+        let mut v: Vec<ExprId> = self.sema.ast.lists.iter::<ExprId>(l).collect();
+        if let Some(i) =
+            v.iter().position(|&x| self.sema.ast.exprs.get(x).kind() == ExprKind::CXXDefaultArgExpr)
+        {
+            v.truncate(i);
         }
-        Ok(out)
+        self.expand_exprs(&v)
     }
 
     #[allow(clippy::too_many_lines, reason = "one arm per expression kind, as TreeTransform")]
@@ -344,13 +338,7 @@ impl Substituter<'_, '_, '_> {
                 let tys: Vec<QualType> =
                     self.sema.ast.lists.iter::<QualType>(ex(self).type_trait_args(e)).collect();
                 let rhs = ex(self).type_trait_rhs_loc(e).unwrap_or(loc);
-                let is_exp = |s: &crate::Sema<'_, '_>, q: QualType| {
-                    matches!(
-                        s.ast.types.view(q.ty()),
-                        kiln_ast::types::TypeView::PackExpansion { .. }
-                    )
-                };
-                let tys = self.expand_list(&tys, is_exp, |s, q| s.ty(q, loc), loc)?;
+                let tys = self.expand_types(&tys, loc)?;
                 let args: Vec<(QualType, Loc)> = tys
                     .iter()
                     .enumerate()
@@ -382,9 +370,9 @@ impl Substituter<'_, '_, '_> {
                 let o = self.opt_expr(o)?;
                 Ok(self.sema.act_on_throw(o, loc))
             }
+            ExprKind::CXXFoldExpr => self.fold(e, loc, end),
+            ExprKind::SizeOfPackExpr => self.size_of_pack(e, loc, end),
             ExprKind::PackExpansionExpr
-            | ExprKind::CXXFoldExpr
-            | ExprKind::SizeOfPackExpr
             | ExprKind::PackIndexingExpr
             | ExprKind::SubstNonTypeTemplateParmPackExpr
             | ExprKind::FunctionParmPackExpr => self.unimplemented("pack expansion", loc),
@@ -520,7 +508,7 @@ impl Substituter<'_, '_, '_> {
     fn nttp_ref(&mut self, e: ExprId, p: DeclId, loc: Loc) -> SubstResult<ExprId> {
         let Some(info) = self.sema.ast.template_parm(p).copied() else { return Err(SubstFail) };
         let a = match self.lookup(info.depth, info.index) {
-            ArgLookup::Arg(a) => self.element(a, loc)?,
+            ArgLookup::Arg(a) => self.element(a, Some(p), loc)?,
             ArgLookup::Retain(d) if d == info.depth => return Ok(e),
             // A parameter of a member template redeclared one level
             // shallower ([temp.mem]; §4.6).
@@ -605,7 +593,7 @@ impl Substituter<'_, '_, '_> {
         Ok(self.int_literal(ty, v, loc))
     }
 
-    fn int_literal(&mut self, ty: QualType, v: i128, loc: Loc) -> ExprId {
+    pub(crate) fn int_literal(&mut self, ty: QualType, v: i128, loc: Loc) -> ExprId {
         if let Ok(u) = u64::try_from(v) {
             self.sema.ast.builder().int_literal(ty, u, Radix::Decimal, loc)
         } else {
@@ -631,6 +619,12 @@ impl Substituter<'_, '_, '_> {
         let items: Vec<ExprId> = self.sema.ast.lists.iter::<ExprId>(l).collect();
         let mut out = Vec::with_capacity(items.len());
         for x in items {
+            if crate::templ::pack::expr_pattern(self.sema, x).is_some() {
+                for y in self.expand_exprs(&[x])? {
+                    out.push(InitItem { designator: Vec::new(), value: InitValue::Expr(y) });
+                }
+                continue;
+            }
             out.push(self.init_value(x)?);
         }
         let rbrace = self.sema.ast.exprs.end_loc(e).unwrap_or(n.loc());
@@ -645,6 +639,12 @@ impl Substituter<'_, '_, '_> {
                 return self.unimplemented("designated initializers in a template", l.lbrace);
             }
             let value = match &it.value {
+                InitValue::Expr(e) if crate::templ::pack::expr_pattern(self.sema, *e).is_some() => {
+                    for y in self.expand_exprs(&[*e])? {
+                        items.push(InitItem { designator: Vec::new(), value: InitValue::Expr(y) });
+                    }
+                    continue;
+                }
                 InitValue::Expr(e) => InitValue::Expr(self.written_arg(*e)?),
                 InitValue::List(n) => InitValue::List(self.written_list(n)?),
             };
@@ -659,6 +659,11 @@ impl Substituter<'_, '_, '_> {
             return self.unimplemented("pack expansion", loc);
         }
         self.expr(e)
+    }
+
+    /// Written arguments, pack expansions expanded.
+    fn written_args(&mut self, v: &[ExprId]) -> SubstResult<Vec<ExprId>> {
+        self.expand_exprs(v)
     }
 
     /// A mem-initializer of a constructor of the pattern, as the parser
@@ -681,13 +686,7 @@ impl Substituter<'_, '_, '_> {
         };
         let init = match &info.init {
             Initializer::Expr(e) => Initializer::Expr(self.written_arg(*e)?),
-            Initializer::Paren(v, l, r) => {
-                let mut out = Vec::with_capacity(v.len());
-                for &e in v {
-                    out.push(self.written_arg(e)?);
-                }
-                Initializer::Paren(out, *l, *r)
-            }
+            Initializer::Paren(v, l, r) => Initializer::Paren(self.written_args(v)?, *l, *r),
             Initializer::List(l) => Initializer::List(self.written_list(l)?),
         };
         Ok(crate::class::MemInitInfo { id, loc: info.loc, init, pack_expansion: false })

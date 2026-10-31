@@ -21,6 +21,7 @@ pub mod deduce_call;
 pub mod funcs;
 pub mod member;
 pub mod order;
+pub mod pack;
 pub mod pending;
 pub mod report;
 pub mod spec;
@@ -99,6 +100,8 @@ pub struct TemplState {
     /// substitution-failure note of a later deduction that finds it
     /// memoized (§6.1 step 4).
     pub(crate) fn_spec_failures: kiln_source::fx::FxHashMap<DeclId, kiln_diag::Diag>,
+    /// Pack elements produced by expansions (§11.3 `templ.pack_elements`).
+    pub pack_elements: u64,
 }
 
 /// The instantiation engine's state (spec/sema-templates.md §11.2).
