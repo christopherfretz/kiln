@@ -1363,6 +1363,59 @@ The `SpecKind` transitions are those of §4.5.
 - Pointer and reference NTTPs, including `template<auto V>`, use the same
   `ConstValue` path representation. Floating-point NTTPs compare by bits.
 
+**As built (WP-106, `templ/nttp.rs`).**
+- **Type check** (`check_nttp_type`, clang `CheckNonTypeTemplateParameterType`
+  / `RequireStructuralType`), at the parameter declaration
+  (`act_on_non_type_template_param`; the parameter is marked `INVALID`)
+  and again when a class argument is converted:
+  - an rvalue-reference type: `sema_nttp_rvalue_ref`;
+  - an incomplete class is accepted (checked at use);
+  - not literal: `sema_nttp_non_literal` plus one `note_non_literal_*`
+    (no constexpr constructor and not an aggregate; a non-literal base;
+    a non-literal data member; a non-constexpr destructor), clang's order;
+  - not structural: `sema_nttp_not_structural` plus the first reason:
+    a non-public or mutable member, an rvalue-reference member, a
+    non-public base, then the first member/base of non-structural type
+    (`note_not_structural_subobject`), recursing into it. Structurality is
+    recomputed (`is_structural_at`), because `DefinitionBits::STRUCTURAL`
+    misses rvalue-reference members (class owner).
+  - Dependent types are checked when substituted (not yet: §11.2 gaps).
+- **Class arguments** (`convert_class_nttp_arg`, hooked from
+  `args.rs::convert_nttp_arg`): copy-initialize a `const T` from the
+  argument, `eval_const` with `EvalContext::converted`, then
+  `AstBuilder::template_param_object(const T, v)`; the argument is
+  `TemplateArg::value(canonical T, v)`. Aggregate values are interned, so
+  the `ConstValueId` is the (type, value) key.
+- **The object** is a `TemplateParamObject` decl (`IMPLICIT`, unnamed, in
+  the TU, in no lookup or member list) memoized in
+  `TemplateTables::{param_objects, param_object_values}`
+  (`param_object(v)`, `param_object_value(d)`).
+- **Uses.** An id-expression naming a class-type NTTP in the pattern is an
+  lvalue of type `const T` (builder `decl_ref_category`,
+  `build_decl_ref_extra`); a reference NTTP names its referent (an
+  lvalue). Substitution (`subst/exprs.rs::value_literal` →
+  `nttp_value_expr`) builds the replacement: a `DeclRefExpr` to the
+  object (class), the entity (reference), `&entity` / the decayed array
+  (pointer), or `nullptr` converted to the parameter type.
+- **Reference arguments** (`convert_ref_nttp_arg`): the conversion must
+  exist (`sema_cce_not_implicitly_convertible`), must not bind a
+  temporary (`sema_cce_ref_binds_temporary`), and the referent must not
+  be automatic ("reference to 'x' is not a constant expression"). The
+  value is the built-in `&` of the bound glvalue, re-interned at the
+  reference type so it prints as `T<gi>`.
+- **Oven.** `var_info` treats the object as a usable constant whose value
+  is its `ConstValueId`; `lv()` addresses it as a global.
+- **Codegen.** `param_object_global`: a `linkonce_odr dso_local constant`
+  in its own comdat (clang `GetAddrOfTemplateParamObject`).
+- **Mangling seam** (`kiln_abi::mangle::{aggregate_arg, mangle_param_object}`):
+  `_ZTA` + `Xtl <type> (Ly<word>E)* EE`, the value's 8-byte little-endian
+  words with trailing zero words trimmed. Deterministic and distinct for
+  distinct images, but **not clang's spelling** (clang walks the members:
+  `Xtl1PLi1ELi2EE`; that needs the record layout in the mangler, and
+  pointer members are not distinguished). Owner: WP-079. Reference and
+  pointer arguments mangle as clang (`L_Z2giE`, `XadL_Z1gEE`,
+  `Xadso<elem>L_Z3arrEEE` for a decayed array).
+
 ## 7. Packs
 
 ### 7.1 Representation
@@ -2833,6 +2886,58 @@ explicit specialization errors remain. The blockers are:
   - 7 requires-expressions (WP-073);
   - 2 pack expansions (WP-072);
   - 4 unrelated to WP-071: `__int128_t` and its follow-ons.
+
+**Landed (WP-106): function templates, remainder.**
+- **Explicit specialization and instantiation** (§6.9, `templ/funcs.rs`):
+  the parser accepts `template<>` / `[extern] template` before a
+  non-class declaration and template-id declarator ids.
+  `act_on_function_spec_declarator` matches by [temp.deduct.decl]
+  (`deduce_funcaddr`, which substitutes explicit args into the whole
+  function type, then `more_specialized`) with clang's no-match /
+  ambiguous / after-instantiation errors; an explicit specialization is an
+  unregistered redeclaration of the specialization
+  (`AstBuilder::function_spec_redecl`). Members of class template
+  specializations (`template<> int A<int>::f()`, `template int A<char>::f();`,
+  `extern template`) go through `member_of_spec_candidate` and
+  `act_on_explicit_member_{spec,inst}` (MemberSpecInfo transitions).
+  `template<> template<>` heads, in-class explicit specializations and
+  operator template-ids work.
+- **Template candidates**: conversion-function templates
+  ([temp.deduct.conv], `deduce_conversion`, `more_specialized_conversion`),
+  `operator->` templates (`arrow.rs`), reversed/rewritten operator
+  templates ([over.match.oper]/3.4, `add_rewritten_template`,
+  `more_specialized_operator`), `&f` deduction notes (`address.rs`), and
+  dependent member template-ids (`act_on_template_member`,
+  `act_on_member_template_args`).
+- **`std::initializer_list`** ([dcl.init.list]/5): `CXXStdInitializerListExpr`
+  over a `MaterializeTemporaryExpr 'const E[N]'`; `init.rs`
+  `std_initializer_list_init`, `init_list_ctor_init` ([over.match.list]
+  phase 1), `reference_list_init`; `auto x = {..}`; Oven and codegen store
+  the begin pointer and size (or end pointer).
+- **Template parameter objects and reference NTTPs**: §6.10 "As built".
+- Gaps, with owners:
+  - `template<> template<class U> int A<long>::g(U)` (a member template of
+    an implicit specialization redeclared as a template);
+  - a declared-but-undefined explicit member specialization can still be
+    instantiated from the pattern (one-line hook proposed in `class.rs`,
+    WP-109's file);
+  - [temp.func.order]/6 (reversed-candidate constraint rules);
+  - the expression printer drops explicit template args (`C{}.m<int>(1)`);
+  - a specialization whose body failed to instantiate is not marked
+    invalid;
+  - dependent NTTP types (`template<class T, T V>` with a class `T`) and
+    the "while substituting prior template arguments" note;
+  - reference/pointer NTTP values with a non-zero offset (subobjects,
+    `&arr[1]`) are not substituted back;
+  - a base-specifier note with an access keyword points at the keyword,
+    not the type (`BaseSpec` has no type location);
+  - class-value mangling is the §6.10 seam (WP-079);
+  - explicit instantiation definitions are emitted `external`, clang
+    uses `weak_odr` + comdat; `extern template` does not suppress
+    emission (WP-113);
+  - a pointer to an automatic variable at the top of a constant
+    expression is accepted by the Oven (`constexpr int* p = &local;`,
+    Oven owner).
 
 **Landed (WP-073): concepts.**
 - State: `InstState::concepts: ConceptState` (`templ/concepts/mod.rs`)

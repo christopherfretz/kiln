@@ -911,6 +911,29 @@ Where the code differs from (or details) the design above:
     through `deduce_spec(.., target)`. It keeps the specializations that
     match exactly, then the one more specialized than all the others.
 
+### 10.8 Landed (WP-106): the rest of the template candidates
+- Conversion-function templates: `build_conversion_set` /
+  `conversion_functions_all` (`ics.rs`) add `deduce_conversion`
+  specializations ([temp.deduct.conv], `DeduceTarget`);
+  `order_conversion_templates` applies /2.5 with
+  `more_specialized_conversion`.
+- `operator->` templates (`arrow.rs`): clang adds invalid `operator->`
+  declarations as candidates, so `declares_arrow` decides between "no
+  member named" and "no viable".
+- Reversed and rewritten operator templates ([over.match.oper]/3.4):
+  `add_rewritten_template`; ordering by `more_specialized_operator`
+  ([temp.func.order]/3, object parameter and reversal) through
+  `more_specialized_candidate`; P2468 `functions_correspond` maps
+  specializations to their patterns. Operators no longer set
+  `skipped_templates` for reversed or rewritten templates.
+- `&f` against a target type with no matching template prints clang's
+  `address of overloaded function` with `note_ovl_candidate_bad_deduction`
+  notes (`address.rs`).
+- [over.ics.list]: `drop_explicit_ctors`; `ctor_arg_info` gives braced
+  arguments list `ArgInfo` (`T t({1})`); `init_list_ctor_init` is
+  [over.match.list] phase 1.
+- Gap: [temp.func.order]/6 (constraints of reversed candidates).
+
 ## 11. Agent parallelization (WP-068 split)
 WP-068 has more than five deliverables, so it splits. 068a merges §10.1–10.3
 types first (interface PR, docs/AGENTS.md); 068b starts from that.

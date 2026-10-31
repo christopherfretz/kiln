@@ -121,7 +121,8 @@ impl Sema<'_, '_> {
                             .arg(&shown)
                             .arg(0u8),
                     )
-                } else if self.ast.decls.field(f).is_some_and(|x| x.is_mutable()) {
+                } else if self.ast.decls.field(f).is_some_and(kiln_ast::decl::FieldData::is_mutable)
+                {
                     Some(self.diag(DiagId::note_not_structural_mutable_field, n.loc()).arg(&shown))
                 } else if n.ty().is_some_and(|q| {
                     matches!(self.ast.types.canonical_view(q), TypeView::RValueRef(_))

@@ -874,7 +874,7 @@ impl<'a> Mangler<'a> {
                 }
             }
             ConstValue::Aggregate(_) => self.aggregate_arg(ty, value),
-            _ => self.out.push_str("XLi0EE"),
+            ConstValue::Scalar(_) => self.out.push_str("XLi0EE"),
         }
     }
 
