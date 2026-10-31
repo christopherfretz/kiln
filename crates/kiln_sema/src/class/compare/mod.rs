@@ -22,6 +22,12 @@ use crate::Sema;
 use crate::conv::{self, ArithConvKind, ConvCtx, Narrowing};
 use crate::lookup::LookupKind;
 
+mod analyze;
+mod default;
+mod synth;
+
+pub(crate) use default::CmpKind;
+
 /// Why a comparison category type is needed (clang's
 /// `ComparisonCategoryUsage`), selecting the wording of
 /// `sema_cmp_category_not_found`.
@@ -193,7 +199,7 @@ impl Sema<'_, '_> {
 
     /// The comparison category of a built-in `<=>` on operands of the
     /// (composite) type `t` (clang's `getComparisonCategoryForBuiltinCmp`).
-    fn builtin_cmp_category(&self, t: QualType) -> Option<CmpCategory> {
+    pub(crate) fn builtin_cmp_category(&self, t: QualType) -> Option<CmpCategory> {
         if self.is_integral_or_enum(t) {
             Some(CmpCategory::Strong)
         } else if self.ast.types.is_floating(t) {
@@ -363,24 +369,34 @@ impl Sema<'_, '_> {
 #[derive(Debug, Default)]
 pub(crate) struct CompareState {
     /// The defaulted comparison whose subobject comparisons are being
-    /// analyzed or synthesized: excluded from their candidate sets
-    /// (clang's `DefaultedFn`), and their unqualified operator lookups
-    /// are the ones captured at its `= default`.
-    pub exclude: Option<DeclId>,
+    /// analyzed or synthesized, with the context they are resolved in:
+    /// `(first declaration, context)`. It is excluded from their
+    /// candidate sets (clang's `DefaultedFn`), and their unqualified
+    /// operator lookups are the ones captured at its `= default`.
+    pub exclude: Option<(DeclId, DeclId)>,
     /// The unqualified operator lookups captured at each defaulted
     /// comparison's `= default` (clang's `UnresolvedSet` of
-    /// `DefaultedFunctionInfo`), keyed by its first declaration:
-    /// `(found decl, target decl)` pairs.
+    /// `DefaultedOrDeletedFunctionInfo`), keyed by its first declaration:
+    /// `(target decl, found decl)` pairs.
     pub lookups: FxHashMap<DeclId, Vec<(DeclId, DeclId)>>,
     /// Where each defaulted comparison's `= default` was written, keyed by
-    /// its first declaration (the location of the synthesized body).
-    pub default_loc: FxHashMap<DeclId, Loc>,
+    /// its first declaration: the declaration defaulted there and the
+    /// location (the synthesized body is placed at its last character).
+    pub default_loc: FxHashMap<DeclId, (DeclId, Loc)>,
+    /// Defaulted comparisons found ill-formed by their declaration checks
+    /// (clang `setInvalidDecl`; kept out of [`kiln_ast::decl::DeclFlags::INVALID`]
+    /// because clang still considers them as candidates). First
+    /// declarations.
+    pub invalid: kiln_source::fx::FxHashSet<DeclId>,
+    /// Defaulted comparisons whose implicit definition is being built,
+    /// against recursion. First declarations.
+    pub defining: Vec<DeclId>,
 }
 
 impl Sema<'_, '_> {
     /// The defaulted comparison whose body is being analyzed or
-    /// synthesized, when the current context is that function.
+    /// synthesized, when the current context is the one it is resolved in.
     pub(crate) fn cmp_active(&self) -> Option<DeclId> {
-        self.special.cmp.exclude.filter(|&f| self.ast.first(self.ctx) == f)
+        self.special.cmp.exclude.filter(|&(_, c)| c == self.ctx).map(|(f, _)| f)
     }
 }

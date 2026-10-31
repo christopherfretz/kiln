@@ -901,13 +901,40 @@ impl Sema<'_, '_> {
     /// checked once `r` is complete (clang `CheckCompletedCXXClass` →
     /// `CheckExplicitlyDefaultedSpecialMember`).
     pub(crate) fn check_pending_defaulted(&mut self, r: DeclId) {
-        let (mine, rest): (Vec<_>, Vec<_>) = std::mem::take(&mut self.special.defaulted)
-            .into_iter()
-            .partition(|&(f, _)| self.ast.decls.get(f).ctx().map(|c| self.class_def(c)) == Some(r));
+        let (mine, rest): (Vec<_>, Vec<_>) =
+            std::mem::take(&mut self.special.defaulted).into_iter().partition(|&(f, _)| {
+                let ctx = if self.cmp_kind(f).is_some() {
+                    self.ast.decls.lexical_ctx(f)
+                } else {
+                    self.ast.decls.get(f).ctx()
+                };
+                ctx.map(|c| self.class_def(c)) == Some(r)
+            });
         self.special.defaulted = rest;
+        // [class.compare.default]: the secondary comparisons after the
+        // primary ones (and the implicit `operator==`s, declared last),
+        // whose deletedness they may depend on (clang
+        // `CheckCompletedCXXClass`).
+        let mut secondary = Vec::new();
         for (f, loc) in mine {
-            if let Some(k) = self.special_kind_of(f) {
+            if let Some(k) = self.cmp_kind(f) {
+                if self.ast.decls.get(f).has(DeclFlags::INVALID) {
+                    continue;
+                }
+                if k.is_primary() {
+                    if self.check_defaulted_comparison(f, k, r) {
+                        let _ = self.special.cmp.invalid.insert(self.ast.first(f));
+                    }
+                } else {
+                    secondary.push((f, k));
+                }
+            } else if let Some(k) = self.special_kind_of(f) {
                 self.check_defaulted(f, k, loc);
+            }
+        }
+        for (f, k) in secondary {
+            if self.check_defaulted_comparison(f, k, r) {
+                let _ = self.special.cmp.invalid.insert(self.ast.first(f));
             }
         }
     }

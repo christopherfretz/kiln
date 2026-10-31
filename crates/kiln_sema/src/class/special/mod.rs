@@ -338,8 +338,7 @@ impl Sema<'_, '_> {
                 return;
             }
             if op.is_some_and(is_comparison) {
-                // todo(WP-068b): defaulted comparison operators.
-                self.unsupported("defaulted comparison operators", loc);
+                self.defaulted_comparison(f, loc);
             } else {
                 self.error(DiagId::sema_default_not_special, loc);
             }

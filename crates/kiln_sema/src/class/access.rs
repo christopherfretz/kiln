@@ -115,7 +115,7 @@ impl Sema<'_, '_> {
     }
 
     /// The first declarations befriended by class `r`.
-    fn friends_of(&self, r: DeclId) -> Vec<DeclId> {
+    pub(crate) fn friends_of(&self, r: DeclId) -> Vec<DeclId> {
         let def = self.ast.definition(r).unwrap_or(r);
         if let Some(b) = self.classes.iter().rev().find(|b| same_class(self, b.record, def)) {
             return b.friends.clone();
@@ -386,6 +386,31 @@ impl Sema<'_, '_> {
         let naming = self.ast.definition(naming).unwrap_or(naming);
         let t = self.member_target(m, Some(naming))?;
         let ec = self.effective_context();
+        let unpriv = self.unprivileged_access(naming, t.declaring, t.decl_access);
+        if self.is_accessible(&ec, &t, naming, unpriv) {
+            return None;
+        }
+        let msg = mk(self, unpriv == Access::Protected);
+        Some(self.access_path_notes(msg, &ec, &t, naming))
+    }
+
+    /// clang `isMemberAccessibleForDeletion` for a defaulted comparison's
+    /// subobject comparison: the operator function `found`, a member
+    /// named in class `naming` (the subobject's class) through an object
+    /// of class `object`, as from the context `from`
+    /// ([class.compare.default]/2, spec/sema-class.md §4.10). `None` if
+    /// accessible, else `mk(protected)` with the access-path notes.
+    pub(crate) fn cmp_member_access(
+        &self,
+        found: DeclId,
+        naming: DeclId,
+        object: DeclId,
+        from: DeclId,
+        mk: impl FnOnce(&Self, bool) -> Diag,
+    ) -> Option<Diag> {
+        let naming = self.ast.definition(naming).unwrap_or(naming);
+        let t = self.member_target(found, Some(self.ast.first(object)))?;
+        let ec = self.effective_context_at(from);
         let unpriv = self.unprivileged_access(naming, t.declaring, t.decl_access);
         if self.is_accessible(&ec, &t, naming, unpriv) {
             return None;
