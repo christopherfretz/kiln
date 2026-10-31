@@ -5,7 +5,7 @@
 //! `ActOnDecompositionDeclarator` / `CheckCompleteDecompositionDeclaration`).
 
 use kiln_ast::decl::{DeclFlags, DeclKind, VarSpec, VarStorage};
-use kiln_ast::expr::{CastKind, Radix, ValueCategory};
+use kiln_ast::expr::{CastKind, ExprKind, Radix, ValueCategory};
 use kiln_ast::names::DeclName;
 use kiln_ast::types::{Nns, Quals, TagKeyword, TemplateArg, TypeView};
 use kiln_ast::{DeclHead, DeclId, ExprId, NnsId, QualType, TemplateParamListId};
@@ -532,7 +532,17 @@ impl Sema<'_, '_> {
                 self.act_on_call(m, &[], loc, loc)
             } else {
                 let ule = self.builder().unresolved_lookup(get, &[], true, None, Some(targs), loc);
-                self.act_on_call(ule, &[e], loc, loc)
+                let call = self.act_on_call(ule, &[e], loc, loc);
+                // The lookup is argument-dependent only ([dcl.struct.bind]/4),
+                // so the function is clang's `IsADLCandidate` (dumped `adl`).
+                let mut c = call;
+                while self.ast.exprs.get(c).kind() == ExprKind::CXXBindTemporaryExpr {
+                    c = self.ast.exprs.operand(c);
+                }
+                if self.ast.exprs.get(c).kind() == ExprKind::CallExpr {
+                    self.ast.exprs.set_call_adl(c);
+                }
+                call
             };
             if self.is_err_expr(call) {
                 return false;

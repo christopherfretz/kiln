@@ -1142,12 +1142,16 @@ impl Sema<'_, '_> {
         // [expr.prim.id.unqual]/3: naming a variable captured by an
         // enclosing lambda (spec/sema-lambda.md §3).
         let (ty, flags) = match n.kind() {
-            DeclKind::Var | DeclKind::ParmVar | DeclKind::Binding => {
-                match self.capture_at_decl_ref(d, loc) {
-                    Some(t) => (t, ExprFlags::REFERS_TO_ENCLOSING),
-                    None => (ty, ExprFlags::NONE),
-                }
-            }
+            DeclKind::Var | DeclKind::ParmVar => match self.capture_at_decl_ref(d, loc) {
+                Some(t) => (t, ExprFlags::REFERS_TO_ENCLOSING),
+                None => (ty, ExprFlags::NONE),
+            },
+            // clang 19 keeps a captured binding's own type (its
+            // `getCapturedDeclRefType` adjusts variables only).
+            DeclKind::Binding => match self.capture_at_decl_ref(d, loc) {
+                Some(_) => (ty, ExprFlags::REFERS_TO_ENCLOSING),
+                None => (ty, ExprFlags::NONE),
+            },
             _ => (ty, ExprFlags::NONE),
         };
         let e = self.builder().decl_ref(d, ty, loc, extra, nou, flags);

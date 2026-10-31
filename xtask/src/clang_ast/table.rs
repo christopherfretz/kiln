@@ -169,8 +169,9 @@ pub const TABLE: &[(&str, Disposition)] = &[
     ("VarTemplateSpecializationDecl", Keep),
     ("VarTemplatePartialSpecializationDecl", Keep),
     ("CXXDeductionGuideDecl", Unsupported(INSTANTIATION)),
-    ("DecompositionDecl", Unsupported("structured bindings are not in the M2 dump")),
-    ("BindingDecl", Unsupported("structured bindings are not in the M2 dump")),
+    // Structured bindings (WP-122, spec/ast-dump.md §3).
+    ("DecompositionDecl", Keep),
+    ("BindingDecl", Keep),
     ("EmptyDecl", Unsupported(NOT_M2)),
     ("LabelDecl", Unsupported(NOT_M2)),
     ("FileScopeAsmDecl", Unsupported(NOT_M2)),
@@ -309,9 +310,14 @@ fn specific_keys(kind: &str) -> Option<&'static [&'static str]> {
         // `init` (always `c`, printed `cinit`): the default argument is the
         // child.
         "ParmVarDecl" => &["type", "init", "isParameterPack"],
-        "VarDecl" | "VarTemplateSpecializationDecl" | "VarTemplatePartialSpecializationDecl" => {
+        "VarDecl"
+        | "DecompositionDecl"
+        | "VarTemplateSpecializationDecl"
+        | "VarTemplatePartialSpecializationDecl" => {
             &["type", "storageClass", "nrvo", "inline", "constexpr", "init"]
         }
+        // The type is the binding expression's (the JSON has none).
+        "BindingDecl" => &[],
         "StaticAssertDecl" => &[],
         "IntegerLiteral" | "FloatingLiteral" | "CharacterLiteral" | "StringLiteral"
         | "CXXBoolLiteralExpr" => &["value"],
@@ -340,7 +346,8 @@ fn specific_keys(kind: &str) -> Option<&'static [&'static str]> {
         "UnaryOperator" => &["opcode", "isPostfix", "canOverflow"],
         "BinaryOperator" => &["opcode"],
         "CompoundAssignOperator" => &["opcode", "computeLHSType", "computeResultType"],
-        "ConditionalOperator" | "ParenExpr" | "ArraySubscriptExpr" | "CallExpr" => &[],
+        "ConditionalOperator" | "ParenExpr" | "ArraySubscriptExpr" => &[],
+        "CallExpr" => &["adl"],
         // The operator spelling is the callee's (clang's text dump prints it).
         "CXXOperatorCallExpr" => &["adl"],
         // Only the semantic form is a child (as in clang's text dump).
@@ -547,6 +554,8 @@ pub const M2_KINDS: &[&str] = &[
     "FunctionDecl",
     "ParmVarDecl",
     "VarDecl",
+    "DecompositionDecl",
+    "BindingDecl",
     "StaticAssertDecl",
     "IntegerLiteral",
     "FloatingLiteral",
