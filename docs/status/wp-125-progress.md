@@ -2,14 +2,15 @@
 
 Updated: 2026-10-31
 
-## State: started
+## State: implemented; final gate pending
 
 | item | state |
 |---|---|
-| 1 address-space cap on every compiler/oracle/binary invocation, `KILLED` outcome | in progress |
-| 2 `tests/stress/` discovery, `mem<=N` directive, dumper cycle regression test | todo |
-| 3 `xtask ci` retry once on `error[E0463]` (WP-124) | todo |
-| 4 spec + docs + unit tests | todo |
+| 1 address-space cap on every compiler/oracle/binary invocation (test + bench), `KILLED` outcome | done |
+| 2 `tests/stress/` discovery, `mem<=N` directive, dumper cycle regression test | done (the test is `xfail(kiln)` for a dump-fidelity gap; KILLED is never masked) |
+| 3 `xtask ci` retry once on `error[E0463]` (WP-124) | done |
+| 4 spec + docs + unit tests | done |
+| exit gates: fmt, clippy, `cargo test -p xtask`, corpus, merge main, full `cargo xtask ci` | in progress |
 
 ## Mechanism (decided)
 - `std::process::Command` has no rlimit API and `#![forbid(unsafe_code)]`
@@ -21,3 +22,13 @@ Updated: 2026-10-31
   `-fkiln-stack-size=`) as address space; the harness adds that reservation
   to the cap for kiln invocations, so a budget measures what the compile
   allocates.
+- Kill detection: `util::process::out_of_memory` (allocation-failure
+  signatures in stderr; abort markers only with a signal / exit >= 128).
+
+## Findings for the supervisor
+- kiln exits 70 with no diagnostic when it cannot spawn its compile thread
+  (cap below the stack reservation): `crates/kiln_driver/src/main.rs`.
+- `tests/stress/dump-friend-template-cycle.cpp`: kiln's dump of a
+  befriended class template inside an instantiation shows the pattern
+  (U at depth 1, no specialization list); clang shows it instantiated.
+  No cycle and no blow-up (0.02 s); recorded as `xfail(kiln)`.

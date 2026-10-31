@@ -26,7 +26,8 @@ commands:
   ci          the merge gate: fmt --check, clippy -D warnings, cargo test, then the
               corpus twice: xtask test --compiler clang++-19 (the corpus self-check;
               skipped when clang++-19 is not on PATH) and xtask test with kiln; fails
-              on any FAIL, XPASS or ERROR in either (contract in spec/harness.md \"CI\")
+              on any FAIL, XPASS, ERROR or KILLED in either (contract in spec/harness.md
+              \"CI\"); a cargo step failing with error[E0463] is rerun once
               `--quick` skips the clang self-check (local iteration only)
 ";
 
@@ -123,8 +124,8 @@ fn ci(args: impl Iterator<Item = String>) -> ExitCode {
         ExitCode::SUCCESS
     } else {
         eprintln!(
-            "xtask ci: FAILED: a corpus run has a FAIL, XPASS or ERROR, or could not run \
-             (see above)"
+            "xtask ci: FAILED: a corpus run has a FAIL, XPASS, ERROR or KILLED, or could not \
+             run (see above)"
         );
         ExitCode::FAILURE
     }
