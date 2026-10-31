@@ -128,6 +128,9 @@ pub(crate) struct CtorCall<'a> {
     /// A `CXXTemporaryObjectExpr` ending at this location (`T(a, b)`,
     /// `T{...}`); otherwise a `CXXConstructExpr`.
     pub temp_end: Option<Loc>,
+    /// The `)` of a parenthesized initializer of a `CXXConstructExpr`
+    /// (`T x(a)`): kept so instantiation redoes it as written.
+    pub rparen: Option<Loc>,
     /// Converted arguments of non-class type are checked for narrowing
     /// (list-initialization, [dcl.init.list]/3.7).
     pub narrowing: bool,
@@ -143,6 +146,7 @@ impl<'a> CtorCall<'a> {
             info: ConstructInfo::COMPLETE,
             value_init: false,
             temp_end: None,
+            rparen: None,
             narrowing: false,
             reject_explicit: false,
         }
@@ -957,7 +961,7 @@ impl Sema<'_, '_> {
                         end,
                     ),
                     None => {
-                        self.builder().construct(ty, m, &args, info, ExprFlags::NONE, loc, None)
+                        self.builder().construct(ty, m, &args, info, ExprFlags::NONE, loc, call.rparen)
                     }
                 })
             }

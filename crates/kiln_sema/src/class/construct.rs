@@ -166,6 +166,7 @@ impl Sema<'_, '_> {
             info: ConstructInfo { kind: ck, list: style.is_list(), ..ConstructInfo::COMPLETE },
             value_init: style.is_list() && args.is_empty(),
             temp_end: site.temp_end,
+            rparen: site.rparen,
             narrowing: style.is_list(),
             reject_explicit: style == InitStyle::CopyList,
             ..CtorCall::new(args)
