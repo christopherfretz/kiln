@@ -19,7 +19,7 @@ use kiln_source::symbol::Symbol;
 use crate::ast::Ast;
 use crate::builder::{AstBuilder, DeclHead};
 use crate::decl::{
-    DeclFlags, DeclKind, Members, NewDecl, Payload, ScopeData, TemplLink, TemplLinkKind,
+    DeclFlags, DeclKind, FriendKind, Members, NewDecl, Payload, ScopeData, TemplLink, TemplLinkKind,
 };
 use crate::expr::{BinaryOp, ExprDeps, ExprFlags, ExprKind, ObjectKind, UnaryOp, ValueCategory};
 use crate::ids::{
@@ -657,10 +657,26 @@ impl Ast {
     ///
     /// # Panics
     /// If `e` is not an `UnresolvedLookupExpr`.
-    pub fn unresolved_name(&self, e: ExprId) -> Symbol {
+    pub fn unresolved_name(&self, e: ExprId) -> DeclName {
         let n = self.exprs.get(e);
         assert_eq!(n.kind(), ExprKind::UnresolvedLookupExpr, "not an UnresolvedLookupExpr");
-        Symbol::from_index(n.a())
+        DeclName::from_raw(n.a()).unwrap_or(DeclName::EMPTY)
+    }
+
+    /// The member name a `CXXDependentScopeMemberExpr` names (an
+    /// identifier, operator-function-id, conversion-function-id or
+    /// destructor name, [expr.ref]/1).
+    ///
+    /// # Panics
+    /// If `e` is not a `CXXDependentScopeMemberExpr`.
+    pub fn dependent_member_name(&self, e: ExprId) -> DeclName {
+        let n = self.exprs.get(e);
+        assert_eq!(
+            n.kind(),
+            ExprKind::CXXDependentScopeMemberExpr,
+            "not a CXXDependentScopeMemberExpr"
+        );
+        DeclName::from_raw(n.b()).unwrap_or(DeclName::EMPTY)
     }
 
     /// The declarations an `UnresolvedLookupExpr` found.
@@ -938,7 +954,10 @@ impl AstBuilder<'_> {
         self.ast.templates.dependent_depth = depth;
         debug_assert_eq!(d, d2);
         let _ = self.ast.decls.set_templ(pattern, TemplLink::new(TemplLinkKind::Pattern, i));
-        if self.ast.decls.get(d).has(DeclFlags::DEPENDENT_CTX) {
+        // A friend class template declared in a class template is a
+        // template of the enclosing namespace, which stays independent.
+        let friend_class = kind == DeclKind::ClassTemplate && n.misc().friend() != FriendKind::None;
+        if self.ast.decls.get(d).has(DeclFlags::DEPENDENT_CTX) && !friend_class {
             let first = prev.map_or(d, |p| self.ast.first(p));
             self.ast.types.mark_dependent_template(first);
         }
@@ -1433,7 +1452,7 @@ impl AstBuilder<'_> {
     /// applies at instantiation ([temp.dep.candidate]).
     pub fn unresolved_lookup(
         &mut self,
-        name: Symbol,
+        name: DeclName,
         decls: &[DeclId],
         adl: bool,
         nns: Option<NnsId>,
@@ -1449,7 +1468,7 @@ impl AstBuilder<'_> {
     #[allow(clippy::too_many_arguments, reason = "the lookup fields")]
     pub fn unresolved_lookup_in(
         &mut self,
-        name: Symbol,
+        name: DeclName,
         decls: &[DeclId],
         adl: bool,
         nns: Option<NnsId>,
@@ -1472,7 +1491,7 @@ impl AstBuilder<'_> {
             u8::from(adl),
             ty,
             loc,
-            name.index(),
+            name.to_raw(),
             list.raw(),
         );
         self.side(e, nns, targs);
@@ -1486,7 +1505,7 @@ impl AstBuilder<'_> {
         &mut self,
         base: Option<ExprId>,
         arrow: bool,
-        name: Symbol,
+        name: DeclName,
         template_kw: bool,
         nns: Option<NnsId>,
         targs: Option<ArgListId>,
@@ -1506,7 +1525,7 @@ impl AstBuilder<'_> {
             ty,
             loc,
             ExprId::raw_opt(base),
-            name.index(),
+            name.to_raw(),
         );
         self.side(e, nns, targs);
         e

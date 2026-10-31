@@ -133,12 +133,47 @@ impl Sema<'_, '_> {
     fn is_friend(&self, ec: &EffectiveContext, class: DeclId) -> bool {
         self.friends_of(class).into_iter().any(|f| {
             let f = self.ast.first(f);
-            if self.ast.decls.get(f).kind().is_function() {
-                ec.functions.contains(&f)
-            } else {
-                ec.records.iter().any(|&r| same_class(self, r, f))
+            match self.kind_of(f) {
+                // [temp.friend]/1: every specialization of a befriended
+                // template is a friend (and the pattern, for uses inside
+                // its definition).
+                DeclKind::FunctionTemplate => {
+                    ec.functions.iter().any(|&g| self.friend_template_of(g) == Some(f))
+                }
+                DeclKind::ClassTemplate => {
+                    ec.records.iter().any(|&r| self.friend_template_of(r) == Some(f))
+                }
+                // A befriended specialization of the function template
+                // whose definition is being parsed may be the context once
+                // instantiated: decided then (clang's `MightInstantiateTo`
+                // making the check dependent).
+                k if k.is_function() => {
+                    ec.functions.contains(&f)
+                        || self.ast.spec_info(f).is_some_and(|(_, s)| {
+                            let t = Some(self.ast.first(s.template));
+                            ec.functions.iter().any(|&g| {
+                                self.ast.described_template(self.ast.first(g)).is_some()
+                                    && self.friend_template_of(g) == t
+                            })
+                        })
+                }
+                _ => ec.records.iter().any(|&r| same_class(self, r, f)),
             }
         })
+    }
+
+    /// The (first declaration of the) template `d` is a specialization,
+    /// partial specialization or pattern of.
+    fn friend_template_of(&self, d: DeclId) -> Option<DeclId> {
+        let t = match self.ast.spec_info(d) {
+            Some((_, s)) => Some(s.template),
+            None => self
+                .ast
+                .partial_spec_info(d)
+                .map(|(_, p)| p.template)
+                .or_else(|| self.ast.described_template(self.ast.first(d))),
+        };
+        t.map(|t| self.ast.first(t))
     }
 
     /// clang `GetProtectedFriendKind`: friendship of any class `P` with

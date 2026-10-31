@@ -600,6 +600,7 @@ diag_ids! {
     sema_unexpected_typedef_ident = Error (1) "unexpected type name '{0}': expected expression";
     sema_unknown_typename = Error (1) "unknown type name '{0}'";
     sema_no_member = Error (2) "no member named '{0}' in {1}";
+    sema_qualified_member_of_unrelated = Error (2) "{0} is not a member of class {1}";
     sema_ambiguous_reference = Error (1) "reference to '{0}' is ambiguous";
     note_ambiguous_candidate = Note (1) "candidate found by name lookup is '{0}'";
     sema_expected_class_or_namespace = Error (1) "{0} is not a class, namespace, or enumeration";
@@ -715,6 +716,14 @@ diag_ids! {
     sema_member_reference_struct_union = Error (1) "member reference base type {0} is not a structure or union";
     sema_member_reference_suggestion = Error (2) "member reference type {0} is {1:a|not a} pointer; did you mean to use '{1:->|.}'?";
     sema_member_reference_incomplete = Error (1) "member access into incomplete type {0}";
+    sema_dtor_type_mismatch = Error (2) "destructor type {0} in object destruction expression does not match the type {1} of the object being destroyed";
+    note_dtor_type_found = Note (1) "type {0} found by destructor name lookup";
+    sema_dtor_name_undeclared = Error (1) "undeclared identifier '{0}' in destructor name";
+    sema_pseudo_dtor_type_mismatch = Error (2) "the type of object expression ({0}) does not match the type being destroyed ({1}) in pseudo-destructor expression";
+    sema_pseudo_dtor_not_type = Error (2) "'{0}' does not refer to a type name in pseudo-destructor expression; expected the name of type {1}";
+    sema_pseudo_dtor_base_not_scalar = Error (1) "object expression of non-scalar type {0} cannot be used in a pseudo-destructor expression";
+    sema_pseudo_dtor_call_with_args = Error (0) "call to pseudo-destructor cannot have any arguments";
+    sema_pseudo_dtor_not_called = Error (0) "reference to pseudo-destructor must be called; did you mean to call it with no arguments?";
     sema_invalid_unary_operand = Error (1) "invalid argument type {0} to unary expression";
     sema_incompatible_cond_operands = Error (2) "incompatible operand types ({0} and {1})";
     sema_conditional_void_nonvoid = Error (2) "{0:left|right} operand to ? is void, but {0:right|left} operand is of type {1}";
@@ -1314,6 +1323,8 @@ diag_ids! {
     sema_operator_arrow_not_pointer = Error (1) "member reference type {0} is not a pointer";
     sema_no_suitable_delete_member = Error (2) "no suitable member {0} in {1}";
     sema_fn_template_spec_no_match = Error (1) "no function template matches function template specialization '{0}'";
+    sema_dependent_friend_spec_no_candidate = Error (0) "no candidate function template was found for dependent friend function template specialization";
+    note_dependent_spec_not_template = Note (0) "candidate ignored: not a function template";
     sema_fn_template_spec_ambiguous = Error (1) "function template specialization '{0}' ambiguously refers to more than one function template; explicitly specify template arguments to identify a particular function template";
     note_fn_template_spec_matched = Note (2) "function template '{0}' matches specialization {1}";
     sema_member_decl_no_match = Error (2) "out-of-line declaration of '{0}' does not match any declaration in {1}";

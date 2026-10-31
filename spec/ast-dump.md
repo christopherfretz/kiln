@@ -97,6 +97,13 @@ type   := "'" printed-type "'" [":'" desugared "'"]     -- only when the strings
   written). Concatenated literals print as one. clang instead prints
   bytes and small code units in octal (`\303\251`) and large code points
   as `\U0001F600`.
+- Cycles (WP-121): the dumper keeps the chain of declarations it is
+  inside. A declaration reached again inside itself (a friend template
+  redeclaration cycle through specialization lists, `A` befriends `B`
+  and `B` befriends `A`) prints its line with ` <cycle>` and is not
+  descended into. Nesting is also capped at 4096 levels (deeper children
+  are not printed). clang never prints these; a test whose golden
+  contains them is a kiln bug.
 - Floats and other values print per ast.md §9.3.
 - Types print per spec/types.md §12 (as clang).
 
@@ -143,6 +150,7 @@ no category).
 | `CXXBoolLiteralExpr`, `CXXNullPtrLiteralExpr` | `... 'bool' true`, `... 'std::nullptr_t'` |
 | `DeclRefExpr` | `DeclRefExpr 'type' [lvalue] Kind 'name' 'type' [(UsingShadow 'name')] [non_odr_use_constant\|non_odr_use_unevaluated\|non_odr_use_discarded]` (`(UsingShadow 'name')`: the name was found through a using-declaration, clang's `FoundDecl`) |
 | `MemberExpr` | `MemberExpr 'type' [lvalue [bitfield]] .name\|->name [non_odr_use_unevaluated]` (`non_odr_use_unevaluated`: the access is in an unevaluated operand, clang's `NOUR_Unevaluated`) |
+| `CXXPseudoDestructorExpr` | `CXXPseudoDestructorExpr '<bound member function type>'`; one child, the object expression (`p->~T` on a scalar or dependent object, WP-121). The destroyed type is not printed (clang prints none) |
 | `ImplicitCastExpr` | `ImplicitCastExpr 'type' [lvalue\|xvalue] <Kind> [part_of_explicit_cast]` |
 | `CStyleCastExpr` | `CStyleCastExpr 'type' [lvalue\|xvalue] <Kind>` |
 | `CXXFunctionalCastExpr` | `CXXFunctionalCastExpr 'type' [lvalue\|xvalue] functional cast to T <Kind>` (`T` is the type as written, the expression's sugared type) |
@@ -455,6 +463,11 @@ Normative. The order and placement are clang 19's.
 - A `VarTemplateSpecializationDecl` that clang prints at a top-level
   position (after the first declaration that uses it) is also printed
   there in full.
+- A template's specializations print under its first declaration not
+  introduced by a friend declaration (else its first declaration), as
+  clang does (WP-121). A friend redeclaration of a template prints
+  `friend` / `friend_undeclared` only when the friend declaration
+  introduced it directly.
 - `ClassTemplateSpecializationDecl <tag> <name> [definition]
   <kind>`. The kinds are `implicit_instantiation`,
   `explicit_specialization`, `explicit_instantiation_definition` and

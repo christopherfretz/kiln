@@ -230,6 +230,19 @@ impl Substituter<'_, '_, '_> {
         }
     }
 
+    /// Maps the parameters of pattern function `f` to parameters with
+    /// substituted types, for a constraint of `f` that names them (its
+    /// trailing requires-clause, [basic.scope.param]; clang's
+    /// `addInstantiatedParametersToScope`).
+    pub(crate) fn seed_function_params(&mut self, f: DeclId) -> SubstResult<()> {
+        for p in self.param_infos(f)? {
+            if let Some(d) = p.decl {
+                self.sema.unowned_params.remove(&d);
+            }
+        }
+        Ok(())
+    }
+
     /// The parameters of pattern function `f` with substituted types.
     pub(crate) fn param_infos(&mut self, f: DeclId) -> SubstResult<Vec<ParamInfo>> {
         let params: Vec<DeclId> = self
@@ -703,6 +716,18 @@ impl Substituter<'_, '_, '_> {
     /// A friend declaration of the pattern ([temp.friend]).
     pub(crate) fn friend_decl(&mut self, d: DeclId) -> SubstResult<Option<DeclId>> {
         let loc = self.sema.ast.decls.get(d).loc();
+        if let Some(fs) = self.sema.friend_specs.get(&d).cloned() {
+            // `friend bool operator==<>(const X&, const X&);`
+            // ([temp.friend]/1.3).
+            let ty = self.ty(fs.ty, loc)?;
+            let args = fs
+                .args
+                .iter()
+                .map(|&a| self.template_arg(a, loc))
+                .collect::<SubstResult<Vec<_>>>()?;
+            let record = self.sema.current_class().map(|c| c.record).ok_or(SubstFail)?;
+            return Ok(self.sema.instantiate_friend_spec(record, &fs, ty, &args));
+        }
         match self.sema.ast.decls.friend_target(d) {
             FriendTarget::Type { ty, owned_tag } => {
                 if owned_tag.is_some() {
@@ -716,9 +741,21 @@ impl Substituter<'_, '_, '_> {
                 ds.friend = Some(loc);
                 Ok(self.sema.act_on_friend(&ds, ty, None, loc))
             }
+            FriendTarget::Decl(t) if self.sema.kind_of(t) == DeclKind::ClassTemplate => {
+                // `template<class U> friend class X;` names a namespace
+                // scope template, which substitution leaves unchanged.
+                let record = self.sema.current_class().map(|c| c.record).ok_or(SubstFail)?;
+                let fd = self.sema.builder().friend(record, loc, FriendTarget::Decl(t));
+                let first = self.sema.ast.first(t);
+                self.sema.push_friend(first);
+                Ok(Some(fd))
+            }
+            FriendTarget::Decl(t) if self.sema.kind_of(t) == DeclKind::FunctionTemplate => {
+                self.friend_function_template(t, loc).map(Some)
+            }
             FriendTarget::Decl(f) => {
                 if !matches!(self.sema.kind_of(f), DeclKind::Function | DeclKind::CXXMethod) {
-                    return self.unimplemented("friend templates", loc);
+                    return self.unimplemented("this kind of friend declaration", loc);
                 }
                 let ctx = DeclaratorContext::Member;
                 let r = self.function_decl(f, ctx, Some(loc))?;

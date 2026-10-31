@@ -198,13 +198,35 @@ impl Ast {
 
     /// The first declaration of `d`'s entity (`d` itself if not
     /// redeclarable).
+    ///
+    /// A template decl has no redeclaration group of its own; its
+    /// redeclarations are those of its pattern ([temp.decls]/1), so the
+    /// first one is the template described by the pattern's first
+    /// declaration (clang's `RedeclarableTemplateDecl::getFirstDecl`).
     pub fn first(&self, d: DeclId) -> DeclId {
-        self.decls.redecl(d).map_or(d, |r| self.redecls.get(r.group).first)
+        match self.decls.redecl(d) {
+            Some(r) => self.redecls.get(r.group).first,
+            None => self.template_redecl(d, true),
+        }
     }
 
-    /// The latest declaration of `d`'s entity.
+    /// The latest declaration of `d`'s entity (a template's follows its
+    /// pattern's, as for [`Ast::first`]).
     pub fn latest(&self, d: DeclId) -> DeclId {
-        self.decls.redecl(d).map_or(d, |r| self.redecls.get(r.group).latest)
+        match self.decls.redecl(d) {
+            Some(r) => self.redecls.get(r.group).latest,
+            None => self.template_redecl(d, false),
+        }
+    }
+
+    /// The template described by the first (or latest) declaration of
+    /// template `d`'s pattern; `d` itself for other declarations.
+    fn template_redecl(&self, d: DeclId, first: bool) -> DeclId {
+        let Some(pattern) = self.template_info(d).and_then(|t| t.pattern) else { return d };
+        let Some(link) = self.decls.redecl(pattern) else { return d };
+        let group = self.redecls.get(link.group);
+        let target = if first { group.first } else { group.latest };
+        self.described_template(target).unwrap_or(d)
     }
 
     /// The definition of `d`'s entity, once seen.

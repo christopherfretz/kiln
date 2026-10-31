@@ -12,14 +12,30 @@ use kiln_ast::types::{Quals, RefQual};
 use kiln_ast::{DeclId, ExprId, QualType};
 use kiln_diag::DiagId;
 use kiln_source::Loc;
-use kiln_source::symbol::Symbol;
 
 use crate::Sema;
-use crate::conv::bases::{BaseSearch, ambiguous_paths_string, find_base, path_list, same_class};
+use crate::conv::bases::{
+    BaseSearch, ambiguous_paths_string, find_base, is_derived_from, path_list, same_class,
+};
 use crate::conv::{self};
 use crate::expr::CallCallee;
 use crate::init::InitList;
 use crate::lookup::LookupKind;
+
+/// The object of a destructor member access (`x.~T`, `p->~T`).
+#[derive(Clone, Copy, Debug)]
+struct DtorObject {
+    /// The object expression as written (after any `operator->` chain).
+    base: ExprId,
+    /// The converted object (the pointer for `->`).
+    b: ExprId,
+    /// The object type (the pointee for `->`; dependent if unknown).
+    ty: QualType,
+    /// The complete class of a class object.
+    def: Option<DeclId>,
+    /// `->` (cleared when `operator->` is not used).
+    arrow: bool,
+}
 
 /// A name of a non-static member whose meaning depends on the operand it
 /// appears in (spec/sema-class.md §2.6): `&C::m` forms a pointer to
@@ -48,7 +64,7 @@ impl Sema<'_, '_> {
     /// namespace or block scope) or non-static member function.
     pub(crate) fn is_class_member_ref(&self, d: DeclId) -> bool {
         match self.kind_of(d) {
-            DeclKind::Field => true,
+            DeclKind::Field | DeclKind::CXXConversion | DeclKind::CXXDestructor => true,
             DeclKind::IndirectField => self
                 .ast
                 .lists
@@ -132,21 +148,43 @@ impl Sema<'_, '_> {
         obj_ty: QualType,
         def: DeclId,
         arrow: bool,
-        name: Symbol,
+        name: kiln_ast::names::DeclName,
+        qual: Option<crate::using::Qualifier>,
         loc: Loc,
     ) -> ExprId {
-        let found = self.lookup_in_class(def, name, LookupKind::Ordinary);
+        // `e.N::m` ([expr.ref]/4, [basic.lookup.qual]/1): `m` is looked
+        // up in the qualifier's scope, which must be the object's class
+        // or one of its bases.
+        let look = qual.map_or(def, |q| q.ctx);
+        let found = match qual {
+            Some(q) => self.lookup_qualified_dn(q.ctx, name, LookupKind::Ordinary),
+            None => self.lookup_in_class_dn(def, name, LookupKind::Ordinary),
+        };
         if self.diagnose_member_ambiguity(&found, name, loc) {
             return self.recover_err(&[base], loc);
         }
         let Some(&m) = found.decls.first() else {
-            let msg = self
-                .diag(DiagId::sema_no_member, loc)
-                .arg(self.ast.symbols().as_str(name).to_owned())
-                .arg(self.ty_arg(obj_ty));
+            let desc = match qual {
+                Some(q) => self.qualifier_desc(q.ctx),
+                None => self.ty_arg(obj_ty),
+            };
+            let msg =
+                self.diag(DiagId::sema_no_member, loc).arg(self.decl_name_str(name)).arg(desc);
             self.emit(msg);
             return self.recover_err(&[base], loc);
         };
+        if let Some(q) = qual
+            && !self.qualifier_names_base(q.ctx, def)
+        {
+            // clang's `CheckQualifiedMemberReference`.
+            let msg = self
+                .diag(DiagId::sema_qualified_member_of_unrelated, loc)
+                .arg(format!("'{}'", self.qualified_decl_name(m)))
+                .arg(self.ty_arg(obj_ty));
+            self.emit(msg);
+            return self.recover_err(&[base], loc);
+        }
+        let nns = qual.map(|q| q.nns);
         if found.decls.len() > 1 || self.kind_of(m) == DeclKind::FunctionTemplate {
             if !self.is_member_overload_set(&found.decls) {
                 self.unsupported("this kind of overloaded member access", loc);
@@ -159,19 +197,19 @@ impl Sema<'_, '_> {
                 found: (0..found.decls.len())
                     .map(|i| found.found.get(i).copied().unwrap_or(found.decls[i]))
                     .collect(),
-                naming: found.naming.unwrap_or(def),
+                naming: found.naming.unwrap_or(look),
                 obj_ty,
                 def,
                 base: b,
                 arrow,
-                nns: None,
+                nns,
                 implicit: false,
                 targs: None,
             };
             return self.build_member_overload(set, loc);
         }
         if crate::lookup::is_type_kind(self.kind_of(m)) {
-            let text = self.ast.symbols().as_str(name).to_owned();
+            let text = self.decl_name_str(name);
             let note = self
                 .diag(DiagId::note_member_declared_named, self.ast.decls.get(m).loc())
                 .arg(text.clone());
@@ -184,10 +222,234 @@ impl Sema<'_, '_> {
             self.emit(msg);
             return self.recover_err(&[base], loc);
         }
-        let naming = found.naming.unwrap_or(def);
+        let naming = found.naming.unwrap_or(look);
         let via = found.found.first().copied().unwrap_or(m);
         self.check_member_access(via, naming, Some(def), loc);
-        self.member_of_object(b, obj_ty, def, arrow, m, found.shadow(0), None, loc)
+        self.member_of_object(b, obj_ty, def, arrow, m, found.shadow(0), nns, loc)
+    }
+
+    /// True if qualifier context `ctx` names class `def` or one of its
+    /// bases ([expr.ref]/4: a qualified member of the object's class).
+    pub(crate) fn qualifier_names_base(&self, ctx: DeclId, def: DeclId) -> bool {
+        self.kind_of(ctx) == DeclKind::CXXRecord
+            && (self.ast.first(ctx) == self.ast.first(def) || is_derived_from(self, def, ctx))
+    }
+
+    /// `base.~name` / `base->~name` ([expr.ref]/1 with a destructor name,
+    /// [expr.prim.id.dtor]): `name` is looked up as a type in the object's
+    /// class and then in the context of the expression
+    /// ([basic.lookup.unqual]/6 for `~`). On a class object it names the
+    /// destructor (a `MemberExpr` naming `~A`); on a scalar or a dependent
+    /// object it is a `CXXPseudoDestructorExpr` (clang's
+    /// `ActOnPseudoDestructorExpr`). `tilde` is the `~`, `loc` the name,
+    /// `op_loc` the `.`/`->` (WP-121).
+    pub fn act_on_member_destructor(
+        &mut self,
+        base: ExprId,
+        name: kiln_source::symbol::Symbol,
+        tilde: Loc,
+        loc: Loc,
+        op_loc: Loc,
+        arrow: bool,
+    ) -> ExprId {
+        let _ = tilde;
+        let obj = match self.destructor_object(base, loc, op_loc, arrow) {
+            Ok(o) => o,
+            Err(e) => return e,
+        };
+        // The type-name after `~`: in the object's class, then here.
+        let in_class = obj.def.and_then(|d| {
+            let found = self.lookup_in_class(d, name, LookupKind::Ordinary);
+            self.type_named_by(&found)
+        });
+        let named = in_class.or_else(|| {
+            let found = self.lookup_name(name, LookupKind::Ordinary);
+            self.type_named_by(&found)
+        });
+        let Some((destroyed, td)) = named else {
+            let text = self.ast.symbols().as_str(name).to_owned();
+            let msg = if self.ast.types.is_dependent(obj.ty) {
+                self.templ_unimplemented("a dependent destructor name", loc);
+                return self.recover_err(&[obj.base], loc);
+            } else if obj.def.is_some() {
+                self.diag(DiagId::sema_dtor_name_undeclared, loc).arg(text)
+            } else {
+                self.diag(DiagId::sema_pseudo_dtor_not_type, loc).arg(text).arg(self.ty_arg(obj.ty))
+            };
+            self.emit(msg);
+            return self.recover_err(&[obj.base], loc);
+        };
+        self.finish_member_destructor(obj, destroyed, Some(td), loc, op_loc)
+    }
+
+    /// A pseudo-destructor `base.~T` / `base->~T` formed again at
+    /// instantiation with the substituted object and destroyed type: a
+    /// class type now names its destructor (clang's
+    /// `TreeTransform::RebuildCXXPseudoDestructorExpr`).
+    pub fn rebuild_member_destructor(
+        &mut self,
+        base: ExprId,
+        destroyed: QualType,
+        loc: Loc,
+        op_loc: Loc,
+        arrow: bool,
+    ) -> ExprId {
+        match self.destructor_object(base, loc, op_loc, arrow) {
+            Ok(obj) => self.finish_member_destructor(obj, destroyed, None, loc, op_loc),
+            Err(e) => e,
+        }
+    }
+
+    /// The object of a destructor member access: `->` through
+    /// `operator->` ([over.ref]/1), the pointee for `->`, and a complete
+    /// class. `Err` with the recovery expression after diagnosing.
+    fn destructor_object(
+        &mut self,
+        base: ExprId,
+        loc: Loc,
+        op_loc: Loc,
+        arrow: bool,
+    ) -> Result<DtorObject, ExprId> {
+        if self.is_err_expr(base) {
+            return Err(self.recover_err(&[base], loc));
+        }
+        let bt = self.ety(base);
+        let dependent = self.ast.types.is_dependent(bt);
+        let (base, arrow) = if arrow && !dependent && self.ast.types.as_record(bt).is_some() {
+            match self.arrow_base(base, op_loc) {
+                crate::overload::arrow::ArrowBase::Arrow(e) => (e, true),
+                crate::overload::arrow::ArrowBase::Dot => (base, false),
+                crate::overload::arrow::ArrowBase::Err => {
+                    return Err(self.recover_err(&[base], loc));
+                }
+            }
+        } else {
+            (base, arrow)
+        };
+        let bt = self.ety(base);
+        let record_pointee =
+            |s: &Self| s.ast.types.pointee(bt).is_some_and(|p| s.ast.types.as_record(p).is_some());
+        let (b, ty) = if arrow {
+            if self.ast.types.is_pointer(bt) {
+                let p = self.pointee_sugared(bt).unwrap_or(QualType::ERROR);
+                (conv::decay_dependent(self, base), p)
+            } else if dependent {
+                (base, QualType::DEPENDENT)
+            } else {
+                let msg = self
+                    .diag(DiagId::sema_member_reference_suggestion, op_loc)
+                    .arg(self.ty_arg(bt))
+                    .arg("1");
+                self.emit(msg);
+                return Err(self.recover_err(&[base], loc));
+            }
+        } else if !dependent && self.ast.types.is_pointer(bt) && record_pointee(self) {
+            let msg = self
+                .diag(DiagId::sema_member_reference_suggestion, op_loc)
+                .arg(self.ty_arg(bt))
+                .arg("0");
+            self.emit(msg);
+            return Err(self.recover_err(&[base], loc));
+        } else if !dependent && (self.ast.types.is_array(bt) || self.ast.types.is_function(bt)) {
+            let d = conv::decay(self, base);
+            (d, self.ety(d))
+        } else {
+            (base, bt)
+        };
+        let rec = if self.ast.types.is_dependent(ty) { None } else { self.ast.types.as_record(ty) };
+        let mut def = None;
+        if let Some(r) = rec {
+            let first = self.ast.first(r);
+            let complete = self.defining.iter().any(|&d| self.ast.first(d) == first)
+                || self.require_complete(ty, op_loc);
+            let Some(d) = self.ast.definition(r).filter(|_| complete) else {
+                let msg = self
+                    .diag(DiagId::sema_member_reference_incomplete, op_loc)
+                    .arg(self.ty_arg(ty));
+                self.emit(self.incomplete_note(msg, ty));
+                return Err(self.recover_err(&[base], loc));
+            };
+            def = Some(d);
+        }
+        Ok(DtorObject { base, b, ty, def, arrow })
+    }
+
+    /// The destructor member access of `obj` naming `destroyed` (found as
+    /// `td` by destructor name lookup, `None` when substituted).
+    fn finish_member_destructor(
+        &mut self,
+        obj: DtorObject,
+        destroyed: QualType,
+        td: Option<DeclId>,
+        loc: Loc,
+        op_loc: Loc,
+    ) -> ExprId {
+        let DtorObject { base, b, ty: obj_ty, def, arrow } = obj;
+        if self.is_error_type(destroyed) {
+            return self.recover_err(&[base], loc);
+        }
+        if self.ast.types.is_dependent(obj_ty) || self.ast.types.is_dependent(destroyed) {
+            return self.builder().pseudo_destructor(b, arrow, destroyed, loc);
+        }
+        let same = {
+            let x = self.ast.types.canonical(obj_ty);
+            let y = self.ast.types.canonical(destroyed);
+            QualType::unqual(x.ty()) == QualType::unqual(y.ty())
+        };
+        if let Some(def) = def {
+            if !same {
+                let mut msg = self
+                    .diag(DiagId::sema_dtor_type_mismatch, loc)
+                    .arg(self.ty_arg(destroyed))
+                    .arg(self.ty_arg(obj_ty));
+                if let Some(td) = td {
+                    let note = self
+                        .diag(DiagId::note_dtor_type_found, self.ast.decls.get(td).loc())
+                        .arg(self.ty_arg(destroyed));
+                    msg = msg.with_note(note);
+                }
+                self.emit(msg);
+                return self.recover_err(&[base], loc);
+            }
+            self.ensure_implicit(def, crate::class::special::SpecialKind::Dtor);
+            let canon = self.ast.types.canonical(self.class_type(def)).ty();
+            let dn = self.ast.names.destructor(canon);
+            return self.member_access(base, b, obj_ty, def, arrow, dn, None, loc);
+        }
+        if !self.is_scalar(obj_ty) {
+            let msg = self
+                .diag(DiagId::sema_pseudo_dtor_base_not_scalar, op_loc)
+                .arg(self.ty_arg(obj_ty));
+            self.emit(msg);
+            return self.recover_err(&[base], loc);
+        }
+        if !same {
+            let msg = self
+                .diag(DiagId::sema_pseudo_dtor_type_mismatch, loc)
+                .arg(self.ty_arg(obj_ty))
+                .arg(self.ty_arg(destroyed));
+            self.emit(msg);
+            return self.recover_err(&[base], loc);
+        }
+        self.builder().pseudo_destructor(b, arrow, destroyed, loc)
+    }
+
+    /// The type and type declaration a lookup result names, if it names a
+    /// type (the type-name of a destructor name).
+    fn type_named_by(&self, found: &crate::lookup::Found) -> Option<(QualType, DeclId)> {
+        let &d = found.decls.first()?;
+        let d = self.ast.strip_shadow(d);
+        let k = self.kind_of(d);
+        if !crate::lookup::is_type_kind(k) {
+            return None;
+        }
+        let ty =
+            if matches!(k, DeclKind::Typedef | DeclKind::TypeAlias | DeclKind::TemplateTypeParm) {
+                self.ast.decls.get(d).ty().unwrap_or(QualType::ERROR)
+            } else {
+                self.tag_type(d)
+            };
+        Some((ty, d))
     }
 
     /// Member `m` of the object `b` (a pointer for `arrow`) of class type
@@ -749,6 +1011,11 @@ impl Sema<'_, '_> {
     /// ([expr.ref]/7.3.2); reports clang's "must be called".
     pub(crate) fn diagnose_bound_member(&mut self, e: ExprId) {
         let x = self.ignore_parens(e);
+        if self.ast.exprs.get(x).kind() == ExprKind::CXXPseudoDestructorExpr {
+            let msg = self.diag(DiagId::sema_pseudo_dtor_not_called, self.begin_loc(x));
+            self.emit(msg);
+            return;
+        }
         let no_args = (self.ast.exprs.get(x).kind() == ExprKind::MemberExpr)
             .then(|| self.ast.exprs.decl(x))
             .and_then(|m| self.ast.decls.function(m))

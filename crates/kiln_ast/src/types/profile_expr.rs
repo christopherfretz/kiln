@@ -405,6 +405,12 @@ impl Ast {
                 out.push(tag(k, 0));
                 stack.push(Work::Opt(x.throw_operand(e)));
             }
+            // `p->~T` (WP-121): the object, the arrow and the destroyed type.
+            K::CXXPseudoDestructorExpr => {
+                let (base, arrow, destroyed) = x.pseudo_destructor(e);
+                out.extend([tag(k, u32::from(arrow)), self.canon_word(destroyed)]);
+                stack.push(Work::Expr(base));
+            }
             K::CXXTypeidExpr => match x.typeid_operand(e) {
                 TypeidOperand::Type(t) => out.extend([tag(k, 1), self.canon_word(t)]),
                 TypeidOperand::Expr(o) => {
@@ -487,7 +493,6 @@ impl Ast {
             | K::FunctionParmPackExpr
             | K::CXXInheritedCtorInitExpr
             | K::CXXStdInitializerListExpr
-            | K::CXXPseudoDestructorExpr
             | K::OffsetOfExpr
             | K::LambdaExpr
             | K::CoawaitExpr

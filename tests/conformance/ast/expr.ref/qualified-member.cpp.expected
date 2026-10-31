@@ -1,0 +1,100 @@
+TranslationUnitDecl
+|-CXXRecordDecl referenced struct B definition
+| |-FieldDecl referenced m 'int'
+| `-CXXMethodDecl used f 'int ()' virtual implicit-inline
+|   `-CompoundStmt
+|     `-ReturnStmt
+|       `-IntegerLiteral 'int' 1
+|-CXXRecordDecl referenced struct D definition
+| |-public 'B'
+| |-FieldDecl referenced m 'int'
+| |-CXXMethodDecl f 'int ()' implicit-inline
+| | |-Overrides: [ B::f 'int ()' ]
+| | |-CompoundStmt
+| | | `-ReturnStmt
+| | |   `-IntegerLiteral 'int' 2
+| | `-OverrideAttr
+| `-CXXMethodDecl g 'int ()' implicit-inline
+|   `-CompoundStmt
+|     `-ReturnStmt
+|       `-BinaryOperator 'int' '+'
+|         |-BinaryOperator 'int' '+'
+|         | |-CXXMemberCallExpr 'int'
+|         | | `-MemberExpr '<bound member function type>' ->f
+|         | |   `-ImplicitCastExpr 'B *' <UncheckedDerivedToBase (B)>
+|         | |     `-CXXThisExpr 'D *' this
+|         | `-ImplicitCastExpr 'int' <LValueToRValue>
+|         |   `-MemberExpr 'int' lvalue ->m
+|         |     `-CXXThisExpr 'D *' this
+|         `-ImplicitCastExpr 'int' <LValueToRValue>
+|           `-MemberExpr 'int' lvalue ->m
+|             `-ImplicitCastExpr 'B *' <UncheckedDerivedToBase (B)>
+|               `-CXXThisExpr 'D *' implicit this
+|-FunctionTemplateDecl dep
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| `-FunctionDecl dep 'int (T)'
+|   |-ParmVarDecl referenced t 'T'
+|   `-CompoundStmt
+|     `-ReturnStmt
+|       `-BinaryOperator '<dependent type>' '+'
+|         |-BinaryOperator '<dependent type>' '+'
+|         | |-CXXDependentScopeMemberExpr '<dependent type>' lvalue .m
+|         | | `-DeclRefExpr 'T' lvalue ParmVar 't' 'T'
+|         | `-CallExpr '<dependent type>'
+|         |   `-CXXDependentScopeMemberExpr '<dependent type>' lvalue .f
+|         |     `-DeclRefExpr 'T' lvalue ParmVar 't' 'T'
+|         `-CXXDependentScopeMemberExpr '<dependent type>' lvalue .m
+|           `-DeclRefExpr 'T' lvalue ParmVar 't' 'T'
+|-ClassTemplateDecl TD
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| `-CXXRecordDecl struct TD definition
+|   |-public 'T'
+|   `-CXXMethodDecl referenced h 'int ()' implicit-inline
+|     `-CompoundStmt
+|       `-ReturnStmt
+|         `-BinaryOperator '<dependent type>' '+'
+|           |-CXXDependentScopeMemberExpr '<dependent type>' lvalue ->m
+|           | `-CXXThisExpr 'TD<T> *' this
+|           `-CallExpr '<dependent type>'
+|             `-MemberExpr '<bound member function type>' ->h
+|               `-CXXThisExpr 'TD<T> *' this
+|-ClassTemplateDecl TB
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| `-CXXRecordDecl struct TB definition
+|   |-FieldDecl referenced t 'T'
+|   `-CXXMethodDecl k 'int ()' implicit-inline
+|     `-CompoundStmt
+|       `-ReturnStmt
+|         `-BinaryOperator '<dependent type>' '+'
+|           |-CallExpr '<dependent type>'
+|           | `-CXXDependentScopeMemberExpr '<dependent type>' lvalue .f
+|           |   `-MemberExpr 'T' lvalue ->t
+|           |     `-CXXThisExpr 'TB<T> *' implicit this
+|           `-CXXDependentScopeMemberExpr '<dependent type>' lvalue .m
+|             `-MemberExpr 'T' lvalue ->t
+|               `-CXXThisExpr 'TB<T> *' implicit this
+`-FunctionDecl use 'int (D, D *)'
+  |-ParmVarDecl used d 'D'
+  |-ParmVarDecl used p 'D *'
+  `-CompoundStmt
+    `-ReturnStmt
+      `-BinaryOperator 'int' '+'
+        |-BinaryOperator 'int' '+'
+        | |-BinaryOperator 'int' '+'
+        | | |-ImplicitCastExpr 'int' <LValueToRValue>
+        | | | `-MemberExpr 'int' lvalue .m
+        | | |   `-ImplicitCastExpr 'B' lvalue <UncheckedDerivedToBase (B)>
+        | | |     `-DeclRefExpr 'D' lvalue ParmVar 'd' 'D'
+        | | `-CXXMemberCallExpr 'int'
+        | |   `-MemberExpr '<bound member function type>' ->f
+        | |     `-ImplicitCastExpr 'B *' <UncheckedDerivedToBase (B)>
+        | |       `-ImplicitCastExpr 'D *' <LValueToRValue>
+        | |         `-DeclRefExpr 'D *' lvalue ParmVar 'p' 'D *'
+        | `-ImplicitCastExpr 'int' <LValueToRValue>
+        |   `-MemberExpr 'int' lvalue .m
+        |     `-ImplicitCastExpr 'B' lvalue <UncheckedDerivedToBase (B)>
+        |       `-DeclRefExpr 'D' lvalue ParmVar 'd' 'D'
+        `-ImplicitCastExpr 'int' <LValueToRValue>
+          `-MemberExpr 'int' lvalue ->m
+            `-ImplicitCastExpr 'D *' <LValueToRValue>
+              `-DeclRefExpr 'D *' lvalue ParmVar 'p' 'D *'

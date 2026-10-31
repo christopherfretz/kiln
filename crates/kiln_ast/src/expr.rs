@@ -2006,6 +2006,17 @@ impl ExprArena {
         Ok(())
     }
 
+    /// The object, `->` flag and destroyed type of a
+    /// `CXXPseudoDestructorExpr`.
+    pub fn pseudo_destructor(&self, e: ExprId) -> (ExprId, bool, QualType) {
+        let n = self.expect_kind(e, ExprKind::CXXPseudoDestructorExpr);
+        (
+            ExprId::new(n.a),
+            n.aux & 1 != 0,
+            QualType::from_raw(n.b).expect("CXXPseudoDestructorExpr: destroyed type"),
+        )
+    }
+
     /// The closing-token location of `e`, if stored.
     pub fn end_loc(&self, e: ExprId) -> Option<Loc> {
         let n = self.get(e);
@@ -2060,6 +2071,7 @@ impl ExprArena {
             | ExprKind::CompoundLiteralExpr
             | ExprKind::CXXDeleteExpr
             | ExprKind::CXXDependentScopeMemberExpr
+            | ExprKind::CXXPseudoDestructorExpr
             | ExprKind::PackExpansionExpr
             | ExprKind::CXXRewrittenBinaryOperator => v.extend(id(n.a)),
             ExprKind::BinaryOperator | ExprKind::ArraySubscriptExpr | ExprKind::CXXFoldExpr => {

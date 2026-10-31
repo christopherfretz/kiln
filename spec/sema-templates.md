@@ -3267,15 +3267,71 @@ explicit specialization errors remain. The blockers are:
   (`act_on_specialization_declarator_id`). When they land, clang matches
   them by deduction plus `hasSameType`, and canonical types are now
   profile-based, so no extra equivalence step is needed.
-- Known divergences, recorded in the xfail test
-  `templates/equiv/temp.over.link-head-locations.cpp`:
-  - an unnamed template parameter's diagnostic sits at its keyword, not
-    at the following token (a parser location);
-  - an unconstrained type parameter's begin location is not recorded.
+- `templates/equiv/temp.over.link-head-locations.cpp` passes since
+  WP-121: an unnamed template parameter is located where its name would
+  be (the token after its key, `...` or declarator; clang's `NameLoc`),
+  and a type parameter's key is recorded as its begin location
+  (`ColdDeclData::begin_loc`).
 - Not done here (BACKLOG WP-116 extras): `sat_fold` per-element notes;
   dropping a declaration with a non-`bool` atom; keeping requirements in
   an instantiated `RequiresExpr`.
 - Tests: `tests/conformance/templates/equiv/` (27).
+
+**Landed (WP-121): dependent NNS chains, friend templates, trailing
+requires-clause scope.**
+- *Dependent nested-name-specifiers* ([temp.dep.type]/6, [temp.res]):
+  an NNS that is still dependent after substitution is rebuilt
+  (`nns_still_dependent`); `find_instantiated_decl` keeps a member of a
+  parent that depends only on retained levels (`ctx_template_levels`);
+  the missing `typename` / `template` diagnostics name the canonical
+  context. A builtin template-id with a dependent argument
+  (`__make_integer_seq<S, T, N>::`) is a dependent context
+  (`is_dependent_ctx` includes `BuiltinTemplate`). Unnamed NTTP packs
+  are supported.
+- *Friend templates* ([temp.friend]): `template<class U> friend class X;`
+  (`act_on_friend_class_template`, `Sema.friend_class_template`),
+  `template<class U> friend R f(U);` (`friend_function_template`), and
+  friend specializations `friend R f<>(...)` / `friend R N::g<T>(...)`
+  (`Declarator::friend`, `friend_spec_template`,
+  `act_on_friend_spec_without_template`, `function_templates_in`,
+  `match_function_spec_in`). A dependent friend specialization is a
+  `FriendSpec` in `Sema.friend_specs`, matched when its class is
+  instantiated (`instantiate_friend_spec`); `friend_template_of` finds
+  the befriended template for access checks. Diagnostics:
+  `sema_dependent_friend_spec_no_candidate` with
+  `note_dependent_spec_not_template`.
+- *Template redeclarations* share one identity: `Ast::first`/`latest`
+  resolve a template through its pattern's redeclaration group. A friend
+  class template naming an existing template is a redeclaration in that
+  group and does not make the original dependent.
+- *Inherited default arguments* ([temp.param]/12):
+  `Sema.inherited_defaults`, filled by `merge_template_defaults`; they
+  are not dumped (a gap). Deduction completes a dependent `P` with its
+  defaulted arguments (`complete_dependent_args`, [temp.deduct.type]).
+- *Trailing requires-clause* ([basic.scope.param]/1, [expr.prim.this]/2):
+  the function parameters (and `this` in a member) are in scope.
+  Satisfaction substitutes the pattern's parameters into fresh ones
+  (`Substituter::seed_function_params`, clang
+  `addInstantiatedParametersToScope`), sets the specialization's `this`
+  type, and maps pattern contexts to the specialization's for members
+  of class templates (`constraint_function_scope`,
+  `inst_context_pairs`).
+- *Out-of-line members of class templates*: a later out-of-line
+  initializer that names another out-of-line-defined static member
+  finds that member's redeclaration; `find_instantiated_decl` maps it
+  through its first declaration.
+- *Template parameter locations*: an unnamed parameter is located where
+  its name would be (`act_on_type_template_param`,
+  `act_on_constrained_template_param` and `act_on_template_template_param`
+  take that location); a type parameter's key is its begin location.
+- Gaps: friend templates declared outside a class; an owned friend class
+  in a class template; the dependent friend specialization placeholder
+  in dumps; codegen of out-of-line class template member definitions
+  (pre-existing panic in `kiln_abi/src/irtype.rs`).
+- Tests: `tests/conformance/temp.res/`, `temp.friend/`, `temp.param/`,
+  `basic.scope.param/`, `dcl.meaning/qualified-declarator-scope-template.cpp`,
+  `templates/deduce/temp.deduct.type-defaulted-args.cpp`, and the
+  `ast/` goldens for each.
 
 ### 11.3 Instantiation report and memory accounting
 

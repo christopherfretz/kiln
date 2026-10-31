@@ -342,6 +342,12 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
             Nns::Identifier { prefix, name } => {
                 let Some(p) = prefix else { return self.unimplemented("dependent name", loc) };
                 let p = self.nns(p, loc)?;
+                if self.nns_still_dependent(p) {
+                    // Substituted with dependent arguments: `X::name::`
+                    // stays dependent ([temp.dep.type]/6), rebuilt on
+                    // the substituted prefix (WP-121).
+                    return Ok(self.sema.ast.types.nns(Nns::Identifier { prefix: Some(p), name }));
+                }
                 let ctx = self.nns_context(p, loc)?;
                 let Some((c, spelled)) = self.sema.act_on_nested_name_spelled(Some(ctx), name, loc)
                 else {
@@ -358,6 +364,13 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
             other => other,
         };
         Ok(self.sema.ast.types.nns(r))
+    }
+
+    /// True if the substituted specifier `n` is still dependent (its
+    /// arguments were dependent: an alias or member template named in
+    /// another template), so names after it are looked up later.
+    pub(crate) fn nns_still_dependent(&self, n: NnsId) -> bool {
+        self.sema.ast.types.nns_flags(n).intersects(TypeFlags::DEPENDENT_INSTANTIATION)
     }
 
     /// The context a substituted nested-name-specifier names (a class
@@ -425,6 +438,13 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
         // being instantiated (its template is not itself a context).
         let inst_parent = self.find_instantiated_decl(parent, loc)?;
         if inst_parent == parent {
+            // The parent depends only on levels this substitution keeps
+            // (an alias or member template of a class template named
+            // inside its pattern): the member stays (clang's
+            // `FindInstantiatedDecl`, `ParentDependsOnArgs`).
+            if self.levels_retained(self.sema.ctx_template_levels(parent)) {
+                return Ok(d);
+            }
             return self.unimplemented("reference to a member of a dependent context", loc);
         }
         if self.sema.kind_of(inst_parent) == DeclKind::CXXRecord {
@@ -434,13 +454,52 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
         if let Some(m) = self.sema.ast.templates.find_member(inst_parent, d) {
             return Ok(m);
         }
+        // An out-of-line redeclaration of the member (`T C<T>::z = ...;`
+        // found by lookup in a later out-of-line initializer): the
+        // member instantiated from its first declaration.
+        let first = self.sema.ast.first(d);
+        if first != d
+            && let Some(m) = self.sema.ast.templates.find_member(inst_parent, first)
+        {
+            return Ok(m);
+        }
         // A member not instantiated (an invalid member of the
         // specialization): already diagnosed.
         Err(SubstFail)
     }
 }
 
+impl Substituter<'_, '_, '_> {
+    /// True if none of the outermost `n` levels is substituted.
+    fn levels_retained(&self, n: u16) -> bool {
+        (0..n).all(|k| {
+            self.args.level(k).is_none_or(|l| l.mode == crate::templ::args::LevelMode::Retain)
+        })
+    }
+}
+
 impl Sema<'_, '_> {
+    /// The number of template parameter levels context `c` is inside
+    /// (its own, for a template pattern or partial specialization).
+    pub(crate) fn ctx_template_levels(&self, c: DeclId) -> u16 {
+        let mut cur = Some(c);
+        let mut guard = 0;
+        while let Some(d) = cur {
+            if let Some(t) = self.ast.described_template(d) {
+                return self.template_param_depth(t) + 1;
+            }
+            if let Some((_, p)) = self.ast.partial_spec_info(d) {
+                return self.ast.templates.param_list(p.params).depth + 1;
+            }
+            guard += 1;
+            if guard > 1024 {
+                break;
+            }
+            cur = self.ast.decls.get(d).ctx();
+        }
+        0
+    }
+
     /// Whether template-argument flags `f` make a node dependent.
     pub(crate) fn dependent_flags(f: TypeFlags) -> bool {
         f.intersects(TypeFlags::DEPENDENT_INSTANTIATION | TypeFlags::UNEXPANDED_PACK)

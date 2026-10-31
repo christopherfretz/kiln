@@ -589,6 +589,10 @@ pub struct Declarator {
     ///
     /// [`Sema::act_on_specialization_declarator_id`]: crate::Sema::act_on_specialization_declarator_id
     pub spec_id: Option<crate::templ::spec::SpecDeclaratorId>,
+    /// The declarator of a friend declaration ([class.friend]): its
+    /// declarator-id may be a template-id naming a specialization of a
+    /// function template without a template head ([temp.friend]/1.3).
+    pub friend: bool,
 }
 
 /// A declarator-id that is not an identifier ([dcl.decl]/4,
@@ -632,6 +636,7 @@ impl Declarator {
             trailing_requires: None,
             dropped: false,
             spec_id: None,
+            friend: false,
         }
     }
 

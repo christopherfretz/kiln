@@ -3,6 +3,7 @@
 use kiln_ast::attr::AttrKind;
 use kiln_ast::decl::{EnumData, InitStyle};
 use kiln_ast::expr::ExprKind;
+use kiln_ast::names::DeclName;
 use kiln_ast::strings::StringEncoding;
 use kiln_ast::types::{ExcSpec, Quals, RefQual, TagKeyword, UnaryTransformKind};
 use kiln_ast::{AttrId, DeclId, ExprId, QualType};
@@ -1186,6 +1187,9 @@ impl Parser<'_, '_> {
                 d.ellipsis = Some(self.bump().span.lo);
             }
         }
+        // The scopes a qualified declarator-id enters for the rest of the
+        // declarator.
+        let mut entered = 0;
         if (self.ident().is_some() || self.at(Punct::ColonColon))
             && d.ctx != DeclaratorContext::TypeName
         {
@@ -1199,6 +1203,7 @@ impl Parser<'_, '_> {
             });
             if self.at(Punct::Tilde) || self.at_kw(Kw::Operator) {
                 d.qualifier = qual;
+                entered = qual.map_or(0, |q| self.s.act_on_enter_declarator_scope(q));
                 self.parse_special_declarator_id(d);
             } else if let Some(n) = self.ident() {
                 let ctor = self.names_constructor(n, last_qual, d.ctx);
@@ -1209,11 +1214,13 @@ impl Parser<'_, '_> {
                     d.name = Some((n, l));
                 }
                 d.qualifier = qual;
+                entered = qual.map_or(0, |q| self.s.act_on_enter_declarator_scope(q));
                 if !ctor
                     && self.at(Punct::Less)
                     && (self.s.has_pending_head()
                         || self.s.has_explicit_spec_head()
-                        || self.s.has_explicit_inst_head())
+                        || self.s.has_explicit_inst_head()
+                        || d.friend)
                 {
                     self.parse_specialization_declarator_id(d, n, l);
                 }
@@ -1278,6 +1285,7 @@ impl Parser<'_, '_> {
                 break;
             }
         }
+        self.s.act_on_exit_declarator_scope(entered);
     }
 
     /// `name<args>` as the declarator-id after a template head, when
@@ -1286,10 +1294,20 @@ impl Parser<'_, '_> {
     /// arguments are parsed and recorded on the declarator, or it is
     /// dropped ([`Sema::act_on_specialization_declarator_id`]).
     fn parse_specialization_declarator_id(&mut self, d: &mut Declarator, name: Symbol, loc: Loc) {
-        let (NameClass::FunctionTemplate(t) | NameClass::VarTemplate(t)) =
-            self.s.classify_name(name, d.qualifier)
-        else {
-            return;
+        let t = match self.s.classify_name(name, d.qualifier) {
+            NameClass::FunctionTemplate(t) | NameClass::VarTemplate(t) => t,
+            // `friend void f<>(int);` with no function template `f`
+            // ([temp.friend]/1.3, [temp.names]/3.3).
+            NameClass::Value(_) | NameClass::Undeclared if d.friend => {
+                if self.parse_template_arg_list().is_none() {
+                    d.invalid = true;
+                    return;
+                }
+                self.s.act_on_friend_spec_without_template(DeclName::ident(name), d.qualifier, loc);
+                d.dropped = true;
+                return;
+            }
+            _ => return,
         };
         let Some((args, _, r)) = self.parse_template_arg_list() else {
             d.invalid = true;
@@ -1650,6 +1668,38 @@ impl Parser<'_, '_> {
         }
     }
 
+    /// The initializer of declarator `d` (declared as `v`) and its
+    /// semantic action. `Err` when the declaration cannot continue.
+    fn parse_declarator_initializer(
+        &mut self,
+        d: &Declarator,
+        v: Option<DeclId>,
+    ) -> Result<(), ()> {
+        // The initializer of a qualified declarator-id is in the scope of
+        // its qualifier ([basic.scope.class]/1).
+        let entered = match (v, d.qualifier) {
+            (Some(v), Some(_)) => self.s.act_on_enter_decl_initializer(v),
+            _ => 0,
+        };
+        let init = self.parse_initializer(d.init_style, d.is_function_declarator());
+        self.s.act_on_exit_declarator_scope(entered);
+        match init {
+            Ok(init) => {
+                match (v, init) {
+                    (Some(v), Some(i)) => self.s.act_on_init(v, i),
+                    (Some(v), None) => self.s.act_on_uninit(v),
+                    _ => {}
+                }
+                Ok(())
+            }
+            // A malformed braced-init-list without `=` was skipped
+            // through its `}` (clang's `ParseBraceInitializer`); the
+            // declaration continues.
+            Err(()) if d.init_style == Some(InitStyle::List) => Ok(()),
+            Err(()) => Err(()),
+        }
+    }
+
     /// simple-declaration or function-definition ([dcl.pre], [dcl.fct.def]):
     /// returns the declarations made (including a tag the decl-specifiers
     /// declare), for a declaration statement.
@@ -1696,7 +1746,8 @@ impl Parser<'_, '_> {
                 } else if d.invalid && !ds.has_type_specifier() {
                     QualType::ERROR
                 } else {
-                    self.s.type_from_declspec_at(&ds, d.name_loc())
+                    let t = self.s.type_from_declspec_at(&ds, d.name_loc());
+                    self.s.rebuild_in_current_instantiation(t, &d)
                 }
             });
             // GNU asm label (clang's `ParseAsmAttributesAfterDeclarator`):
@@ -1736,21 +1787,10 @@ impl Parser<'_, '_> {
             if let Some(v) = v {
                 self.s.act_on_group_declarator(&mut group, v);
             }
-            match self.parse_initializer(d.init_style, d.is_function_declarator()) {
-                Ok(init) => match (v, init) {
-                    (Some(v), Some(i)) => self.s.act_on_init(v, i),
-                    (Some(v), None) => self.s.act_on_uninit(v),
-                    _ => {}
-                },
-                // A malformed braced-init-list without `=` was skipped
-                // through its `}` (clang's `ParseBraceInitializer`); the
-                // declaration continues.
-                Err(()) if d.init_style == Some(InitStyle::List) => {}
-                Err(()) => {
-                    decls.extend(v);
-                    self.skip_to_semi();
-                    return decls;
-                }
+            if self.parse_declarator_initializer(&d, v).is_err() {
+                decls.extend(v);
+                self.skip_to_semi();
+                return decls;
             }
             decls.extend(v);
             if self.eat(Punct::Comma).is_none() {
