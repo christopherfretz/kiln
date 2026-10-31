@@ -111,6 +111,12 @@ pub(crate) struct Fx {
     pub this_class: Option<DeclId>,
     /// The constructor/destructor variant being emitted.
     pub structor: Option<mangle::Structor>,
+    /// The VTT parameter, loaded in the prolog (clang
+    /// `CXXStructorImplicitParamValue`).
+    pub vtt: Option<V>,
+    /// The VTT argument of the structor call being emitted
+    /// (consumed by `call_vals` for a signature with `vtt`).
+    pub call_vtt: Option<V>,
     /// The NRVO flags of NRVO variables with non-trivial destructors.
     pub nrvo_flags: FxHashMap<DeclId, V>,
     /// The body refers to a [`V::P`] placeholder.
@@ -167,6 +173,8 @@ impl Fx {
             this: None,
             this_class: None,
             structor: None,
+            vtt: None,
+            call_vtt: None,
             nrvo_flags: FxHashMap::default(),
             uses_ph: false,
             error: None,
@@ -240,7 +248,7 @@ impl Cg<'_> {
     ) -> R<()> {
         let ast = self.ast;
         let first = ast.first(d);
-        let sig = self.decl_sig(first)?;
+        let sig = self.structor_sig(first, structor)?;
         let fd = *ast.decls.function(d).expect("function");
         let Some(body) = fd.body else { return Ok(()) };
         let is_main = mangle::decl_name(ast, first) == "main"
@@ -319,6 +327,11 @@ impl Cg<'_> {
             arg_no += 1;
             v
         });
+        let vtt_arg = sig.vtt.then(|| {
+            let v = V::Arg(arg_no);
+            arg_no += 1;
+            v
+        });
         let param_decls: Vec<DeclId> = ast.lists.iter(fd.params).collect();
         let mut vals = Vec::with_capacity(param_decls.len());
         for (i, &p) in param_decls.iter().enumerate() {
@@ -328,6 +341,11 @@ impl Cg<'_> {
             vals.push(self.prolog_arg(&info.kind, pq, &mut arg_no, loc)?);
         }
         let this_addr = this_arg.map(|v| {
+            let a = self.f.fir.alloca(LTy::PTR, 8);
+            self.store(v, a, 8, false);
+            a
+        });
+        let vtt_addr = vtt_arg.map(|v| {
             let a = self.f.fir.alloca(LTy::PTR, 8);
             self.store(v, a, 8, false);
             a
@@ -356,6 +374,9 @@ impl Cg<'_> {
         // EmitInstanceFunctionProlog: `this` is loaded once.
         if let Some(a) = this_addr {
             self.f.this = Some(self.load(LTy::PTR, a, 8, false));
+        }
+        if let Some(a) = vtt_addr {
+            self.f.vtt = Some(self.load(LTy::PTR, a, 8, false));
         }
 
         match kind {

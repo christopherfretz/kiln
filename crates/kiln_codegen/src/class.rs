@@ -199,16 +199,24 @@ impl Cg<'_> {
             .is_some_and(|c| self.class_bits(c).contains(DefinitionBits::HAS_VIRTUAL_BASES))
     }
 
-    /// Base-object structors of classes with virtual bases take a VTT
-    /// parameter, which is not supported yet.
-    fn check_structor(&self, d: DeclId, v: Structor) -> R<()> {
-        if v == Structor::Base && self.structor_has_vbases(d) {
-            return err(
-                Some(self.ast.decls.get(d).loc()),
-                "base-object constructors and destructors of classes with virtual bases (VTT parameter) are not supported yet (WP-080)",
-            );
-        }
+    /// Structor variants that are not supported yet.
+    fn check_structor(&self, _d: DeclId, _v: Structor) -> R<()> {
         Ok(())
+    }
+
+    /// The signature of variant `v` of `first` (`decl_sig`, plus the VTT
+    /// parameter of a base-object structor of a class with virtual
+    /// bases).
+    pub(crate) fn structor_sig(&mut self, first: DeclId, v: Option<Structor>) -> R<Sig> {
+        let sig = self.decl_sig(first)?;
+        let k = self.ast.decls.get(first).kind();
+        if v == Some(Structor::Base)
+            && matches!(k, DeclKind::CXXConstructor | DeclKind::CXXDestructor)
+            && self.structor_has_vbases(first)
+        {
+            return Ok(self.with_vtt(sig));
+        }
+        Ok(sig)
     }
 
     /// Declares structor variant `v` of `first` (clang
@@ -218,7 +226,7 @@ impl Cg<'_> {
             return Ok(r);
         }
         let name = mangle::mangle_structor(self.ast, first, v);
-        let sig = self.decl_sig(first)?;
+        let sig = self.structor_sig(first, Some(v))?;
         let f = self.declare_fn(&name, first, &sig)?;
         self.m.func_mut(f).unnamed_addr = UnnamedAddr::Global;
         let r = (Value::func(f), f);
@@ -1042,12 +1050,22 @@ impl Cg<'_> {
         let first = ast.first(ctor);
         let fty = ast.decls.get(first).ty().expect("constructor type");
         let arg_tys: Vec<QualType> = args.iter().map(|&a| ast.exprs.get(a).ty()).collect();
-        let sig = self.call_sig_this(fty, false, &arg_tys, Some(rd));
+        let mut sig = self.call_sig_this(fty, false, &arg_tys, Some(rd));
+        let needs_vtt = v == Structor::Base && self.structor_has_vbases(first);
+        if needs_vtt {
+            sig = self.with_vtt(sig);
+        }
         let saved = self.f.dest_destructed;
         self.f.dest_destructed = false;
         let vals = self.emit_call_args(&sig, &args);
         self.f.dest_destructed = saved;
         let vals = vals?;
+        if needs_vtt {
+            let virt = info.kind == ConstructionKind::VirtualBase;
+            let delegating = info.kind == ConstructionKind::Delegating;
+            let vtt = self.vtt_arg(rd, virt, delegating)?;
+            self.f.call_vtt = Some(vtt);
+        }
         let (callee, fid) = self.structor_ref(ctor, v)?;
         self.call_vals(&sig, callee, fid, Some(dest.v), &vals, &args, None, &[])?;
         Ok(())
@@ -1264,7 +1282,8 @@ impl Cg<'_> {
     pub(crate) fn vbase_align(&mut self, actual: u64, derived: DeclId, vb: DeclId) -> u64 {
         let Some(vdef) = self.class_def(vb) else { return 1 };
         let expected = u64::from(self.tys.layouter().record(vdef).nv_align);
-        let dalign = self.class_def(derived).map_or(1, |d| u64::from(self.tys.layouter().record(d).align));
+        let dalign =
+            self.class_def(derived).map_or(1, |d| u64::from(self.tys.layouter().record(d).align));
         if actual >= dalign { expected } else { actual.min(expected) }
     }
 
@@ -1323,7 +1342,10 @@ impl Cg<'_> {
         let from = self.f.fir.cur().expect("insertion point");
         self.emit_block(end, false);
         let orig = orig.expect("insertion point");
-        let phi = self.f.fir.push(Op::Phi { ty: LTy::PTR, inc: vec![(adj, from), (null, orig)] }, LTy::PTR);
+        let phi = self
+            .f
+            .fir
+            .push(Op::Phi { ty: LTy::PTR, inc: vec![(adj, from), (null, orig)] }, LTy::PTR);
         Ok((phi, align))
     }
 

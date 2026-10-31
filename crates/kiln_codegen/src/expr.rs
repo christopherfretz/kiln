@@ -1745,6 +1745,15 @@ impl Cg<'_> {
         if let Some(t) = this {
             ir_args.push(t);
         }
+        if sig.vtt {
+            let Some(v) = self.f.call_vtt.take() else {
+                return err(
+                    args.first().and_then(|&a| self.loc_of(a)),
+                    "structor call without a VTT",
+                );
+            };
+            ir_args.push(v);
+        }
         for (i, &v) in vals.iter().enumerate() {
             let Some(info) = sig.info.args.get(i) else {
                 return err(

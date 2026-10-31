@@ -8,7 +8,7 @@
 use std::rc::Rc;
 
 use kiln_abi::mangle::{self, Structor};
-use kiln_ast::class::{SubobjectId, Thunk, VTableComponent, VTableLayout};
+use kiln_ast::class::{SubobjectId, Thunk, VTableComponent, VTableLayout, VttComponent};
 use kiln_ast::decl::{Access, DeclKind, DefinitionBits, TagKind};
 use kiln_ast::types::{BuiltinType, TypeView};
 use kiln_ast::{DeclId, ExprId, QualType};
@@ -250,10 +250,15 @@ impl Cg<'_> {
         if let Some(g) = self.m.get_global(&name) {
             return Ok(g);
         }
+        // "This will also defer the definition of the VTT."
+        self.vtable_global(first)?;
         let n = match kiln_abi::vtable::vtt(self.ast, first, self.target) {
             Ok(c) => c.len(),
             Err(e) => {
-                return err(Some(self.ast.decls.get(first).loc()), format!("cannot lay out the VTT: {e:?}"));
+                return err(
+                    Some(self.ast.decls.get(first).loc()),
+                    format!("cannot lay out the VTT: {e:?}"),
+                );
             }
         };
         let ty = self.m.types.array(LTy::PTR, n as u64);
@@ -589,10 +594,9 @@ impl Cg<'_> {
         };
         let this = self.this_addr();
         let field = if needs_vtt && vp.nearest_vbase.is_some() {
-            let vb = vp.nearest_vbase.expect("checked");
-            let p = self.vbase_ptr(this, vtable_class, vb)?;
-            let a = min_align(this.align, 0);
-            (self.byte_offset(p, vp.offset_from_vbase), a)
+            // isVirtualOffsetNeededForVTableField.
+            let vb = vp.nearest_vbase;
+            self.base_address(this, vtable_class, vb, vp.offset_from_vbase, false)?
         } else {
             (self.byte_offset(this.v, vp.offset), min_align(this.align, vp.offset))
         };
@@ -711,20 +715,78 @@ impl Cg<'_> {
 
     /// clang `CGCXXABI::NeedsVTTParameter(CurGD)`.
     pub(crate) fn needs_vtt_param(&self) -> bool {
-        false
+        self.f.vtt.is_some()
     }
 
-    /// The address point loaded from the VTT parameter.
-    fn vtt_address_point(&mut self, _vtable_class: DeclId, vp: VPtr) -> R<V> {
-        err(
-            Some(self.ast.decls.get(vp.class).loc()),
-            "VTT parameters are not supported yet (WP-080)",
-        )
+    /// The VTT entries of `rd` and the subobjects of the groups they
+    /// point into (cached per class by the layouter's subobject ids).
+    fn vtt_of(&mut self, rd: DeclId) -> R<(Vec<VttComponent>, Vec<SubobjectId>)> {
+        let ast = self.ast;
+        match (
+            kiln_abi::vtable::vtt(ast, rd, self.target),
+            kiln_abi::vtable::vtt_vtables(ast, rd, self.target),
+        ) {
+            (Ok(c), Ok(v)) => Ok((c, v)),
+            (Err(e), _) | (_, Err(e)) => {
+                err(Some(ast.decls.get(rd).loc()), format!("cannot lay out the VTT: {e:?}"))
+            }
+        }
     }
 
-    /// The address of virtual base `vb` of the object at `this`.
-    fn vbase_ptr(&mut self, _this: crate::func::Addr, _rd: DeclId, vb: DeclId) -> R<V> {
-        err(Some(self.ast.decls.get(vb).loc()), "virtual base access is not supported yet (WP-080)")
+    /// clang `getVTableAddressPointInStructorWithVTT`: the address point
+    /// loaded from the VTT parameter (`getSecondaryVirtualPointerIndex`).
+    fn vtt_address_point(&mut self, vtable_class: DeclId, vp: VPtr) -> R<V> {
+        let loc = Some(self.ast.decls.get(vp.class).loc());
+        let (comps, _) = self.vtt_of(vtable_class)?;
+        let Some(sub) = self.subobject_id(vtable_class, vp.class, vp.offset) else {
+            return err(loc, "vtable pointer of an unknown subobject");
+        };
+        let Some(i) = comps.iter().position(|c| c.vtable_index == 0 && c.base == sub) else {
+            return err(loc, "no secondary virtual pointer index");
+        };
+        let mut vtt = self.f.vtt.expect("VTT parameter");
+        if i != 0 {
+            let o = self.i64c(i as i128);
+            vtt = self.gep(LTy::PTR, vtt, vec![o], true);
+        }
+        Ok(self.load(LTy::PTR, vtt, 8, false))
+    }
+
+    /// clang `CodeGenFunction::GetVTTParameter`: the VTT argument of a
+    /// call to a base-object structor of `base` (a virtual base when
+    /// `virt`) from a structor of the current class.
+    pub(crate) fn vtt_arg(&mut self, base: DeclId, virt: bool, delegating: bool) -> R<V> {
+        let rd = self.f.this_class.expect("structor class");
+        let loc = Some(self.ast.decls.get(base).loc());
+        let idx = if delegating {
+            0
+        } else {
+            let off = if virt { self.vbase_offset(rd, base) } else { self.base_offset(rd, base) };
+            let Some(off) = off else { return err(loc, "base class not in the layout") };
+            let Some(sub) = self.subobject_id(rd, base, off) else {
+                return err(loc, "VTT of an unknown subobject");
+            };
+            let (comps, vts) = self.vtt_of(rd)?;
+            let Some(k) = vts.iter().position(|&s| s == sub) else {
+                return err(loc, "no sub-VTT for the base");
+            };
+            let Some(i) = comps.iter().position(|c| c.vtable_index as usize == k) else {
+                return err(loc, "empty sub-VTT");
+            };
+            i
+        };
+        if let Some(vtt) = self.f.vtt {
+            let o = self.i64c(idx as i128);
+            return Ok(self.gep(LTy::PTR, vtt, vec![o], true));
+        }
+        let g = self.vtt_global(rd)?;
+        let ty = self.m.global(g).value_type();
+        let zero = self.m.const_int(LTy::I64, 0);
+        let iv = self.m.const_int(LTy::I64, idx as i128);
+        match self.m.const_gep(ty, Value::global(g), &[zero, iv], GepFlags::INBOUNDS, None) {
+            Ok(v) => Ok(V::C(v)),
+            Err(e) => err(loc, format!("bad VTT address: {e:?}")),
+        }
     }
 
     /// A thunk in a vtable slot (clang `maybeEmitThunk(ForVTable)`: at

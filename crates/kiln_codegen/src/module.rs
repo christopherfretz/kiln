@@ -50,6 +50,10 @@ pub(crate) struct Sig {
     /// `arrangeCXXMethodType` prepends it; it is classified with the
     /// parameters but kept out of `info.args`/`params`).
     pub this: Option<DeclId>,
+    /// A VTT parameter follows `this` (clang `ItaniumCXXABI::
+    /// buildStructorSignature` for base-object structors of classes with
+    /// virtual bases).
+    pub vtt: bool,
 }
 
 impl Sig {
@@ -641,7 +645,7 @@ impl<'a> Cg<'a> {
         let variadic = p.variadic();
         let info = self.classify(ret, &params, params.len(), !extern_c, this.is_some());
         let fn_ty = self.fn_type(&info, this.is_some(), variadic);
-        Sig { info, fn_ty, ret, params, nothrow, this }
+        Sig { info, fn_ty, ret, params, nothrow, this, vtt: false }
     }
 
     /// clang `arrangeLLVMFunctionInfo`: classifies `this` (when present)
@@ -689,7 +693,24 @@ impl<'a> Cg<'a> {
         let info = self.classify(ret, &all, params.len(), !extern_c, t);
         let decl_info = self.classify(ret, &params, params.len(), !extern_c, t);
         let fn_ty = self.fn_type(&decl_info, t, p.variadic());
-        Sig { info, fn_ty, ret, params: all, nothrow: ast.types.exc_spec(&p).is_nothrow(), this }
+        let nothrow = ast.types.exc_spec(&p).is_nothrow();
+        Sig { info, fn_ty, ret, params: all, nothrow, this, vtt: false }
+    }
+
+    /// `sig` with a VTT parameter after `this`.
+    pub(crate) fn with_vtt(&mut self, mut sig: Sig) -> Sig {
+        if sig.vtt {
+            return sig;
+        }
+        let Some((ret, ps, variadic)) = self.m.types.function_info(sig.fn_ty) else {
+            return sig;
+        };
+        let mut ps = ps.to_vec();
+        let at = usize::from(sig.sret()) + 1;
+        ps.insert(at, LTy::PTR);
+        sig.fn_ty = self.m.types.function(ret, &ps, variadic);
+        sig.vtt = true;
+        sig
     }
 
     fn fn_type(&mut self, info: &CallInfo, this: bool, variadic: bool) -> LTy {
@@ -770,6 +791,9 @@ impl<'a> Cg<'a> {
             }
             s.push(Attr::Align(align));
             params.push(self.m.attr_set(&s));
+        }
+        if sig.vtt {
+            params.push(self.m.attr_set(&[Attr::Flag(AttrKind::NoUndef)]));
         }
         for (i, a) in sig.info.args.iter().take(n_args).enumerate() {
             let mut s = Vec::new();
