@@ -265,3 +265,130 @@ mod tests {
         assert_eq!(c.heap_bytes().rows.len(), 2);
     }
 }
+
+/// A comparison category type of `<compare>` ([cmp.categories]), clang's
+/// `ComparisonCategoryType`; ordered from weakest to strongest so that the
+/// common comparison category ([class.spaceship]/4) is the minimum.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub enum CmpCategory {
+    /// `std::partial_ordering`.
+    Partial = 0,
+    /// `std::weak_ordering`.
+    Weak = 1,
+    /// `std::strong_ordering`.
+    Strong = 2,
+}
+
+impl CmpCategory {
+    /// All categories, weakest first.
+    pub const ALL: [CmpCategory; 3] = [CmpCategory::Partial, CmpCategory::Weak, CmpCategory::Strong];
+
+    /// The unqualified name of the class in namespace `std`.
+    pub const fn name(self) -> &'static str {
+        match self {
+            CmpCategory::Partial => "partial_ordering",
+            CmpCategory::Weak => "weak_ordering",
+            CmpCategory::Strong => "strong_ordering",
+        }
+    }
+
+    /// The static data members the category must declare, in clang's
+    /// checking order (`ComparisonCategories::getPossibleResultsForType`).
+    pub const fn results(self) -> &'static [CmpResult] {
+        match self {
+            CmpCategory::Strong => &[
+                CmpResult::Equal,
+                CmpResult::Equivalent,
+                CmpResult::Less,
+                CmpResult::Greater,
+            ],
+            CmpCategory::Weak => &[CmpResult::Equivalent, CmpResult::Less, CmpResult::Greater],
+            CmpCategory::Partial => &[
+                CmpResult::Equivalent,
+                CmpResult::Less,
+                CmpResult::Greater,
+                CmpResult::Unordered,
+            ],
+        }
+    }
+}
+
+/// A value of a comparison category type, clang's `ComparisonCategoryResult`.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum CmpResult {
+    /// `equal`.
+    Equal = 0,
+    /// `equivalent`.
+    Equivalent = 1,
+    /// `less`.
+    Less = 2,
+    /// `greater`.
+    Greater = 3,
+    /// `unordered`.
+    Unordered = 4,
+}
+
+impl CmpResult {
+    /// The name of the static data member.
+    pub const fn name(self) -> &'static str {
+        match self {
+            CmpResult::Equal => "equal",
+            CmpResult::Equivalent => "equivalent",
+            CmpResult::Less => "less",
+            CmpResult::Greater => "greater",
+            CmpResult::Unordered => "unordered",
+        }
+    }
+}
+
+/// A validated comparison category class (clang's
+/// `ComparisonCategoryInfo`), recorded by sema the first time it is
+/// needed; the Oven and codegen read it to evaluate a builtin `<=>`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct CmpCategoryInfo {
+    /// The category.
+    pub kind: CmpCategory,
+    /// The class definition.
+    pub record: DeclId,
+    /// Its one integral or enumeration data member.
+    pub field: DeclId,
+    /// The static data member for each [`CmpResult`] (indexed by its
+    /// discriminant) the category declares.
+    pub values: [Option<DeclId>; 5],
+}
+
+impl CmpCategoryInfo {
+    /// The static data member for `r`.
+    pub fn value(&self, r: CmpResult) -> Option<DeclId> {
+        self.values[r as usize]
+    }
+
+    /// `equal` for `strong_ordering`, `equivalent` otherwise (clang
+    /// `getEqualOrEquiv`).
+    pub fn equal_or_equiv(&self) -> Option<DeclId> {
+        self.value(CmpResult::Equal).or(self.value(CmpResult::Equivalent))
+    }
+}
+
+/// The validated comparison category classes of the translation unit.
+#[derive(Clone, Debug, Default)]
+pub struct CmpCategories {
+    infos: [Option<CmpCategoryInfo>; 3],
+}
+
+impl CmpCategories {
+    /// The recorded info of `kind`.
+    pub fn get(&self, kind: CmpCategory) -> Option<&CmpCategoryInfo> {
+        self.infos[kind as usize].as_ref()
+    }
+
+    /// Records the info of a validated category.
+    pub fn set(&mut self, info: CmpCategoryInfo) {
+        self.infos[info.kind as usize] = Some(info);
+    }
+
+    /// The info whose class definition is `record`.
+    pub fn for_record(&self, record: DeclId) -> Option<&CmpCategoryInfo> {
+        self.infos.iter().flatten().find(|i| i.record == record)
+    }
+}
