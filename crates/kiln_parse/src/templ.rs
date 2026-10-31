@@ -528,7 +528,11 @@ impl Parser<'_, '_> {
             return false;
         }
         let mut d = Declarator::new(DeclaratorContext::Prototype, start);
+        // An unnamed `int...` / `int&...` is a pack here: a template
+        // parameter list has no C variadic ellipsis ([temp.param]/1).
+        let saved = std::mem::replace(&mut self.pack_hint, true);
         self.with_greater_op(false, |s| s.parse_declarator(&mut d));
+        self.pack_hint = saved;
         let pack = d.ellipsis.take().is_some();
         let info = self.s.act_on_param_declarator(&ds, &d);
         let p = self.s.act_on_non_type_template_param(&info, pack);

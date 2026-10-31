@@ -433,6 +433,13 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
         // being instantiated (its template is not itself a context).
         let inst_parent = self.find_instantiated_decl(parent, loc)?;
         if inst_parent == parent {
+            // The parent depends only on levels this substitution keeps
+            // (an alias or member template of a class template named
+            // inside its pattern): the member stays (clang's
+            // `FindInstantiatedDecl`, `ParentDependsOnArgs`).
+            if self.levels_retained(self.sema.ctx_template_levels(parent)) {
+                return Ok(d);
+            }
             return self.unimplemented("reference to a member of a dependent context", loc);
         }
         if self.sema.kind_of(inst_parent) == DeclKind::CXXRecord {
@@ -448,7 +455,35 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
     }
 }
 
+impl Substituter<'_, '_, '_> {
+    /// True if none of the outermost `n` levels is substituted.
+    fn levels_retained(&self, n: u16) -> bool {
+        (0..n).all(|k| self.args.level(k).is_none_or(|l| l.mode == crate::templ::args::LevelMode::Retain))
+    }
+}
+
 impl Sema<'_, '_> {
+    /// The number of template parameter levels context `c` is inside
+    /// (its own, for a template pattern or partial specialization).
+    pub(crate) fn ctx_template_levels(&self, c: DeclId) -> u16 {
+        let mut cur = Some(c);
+        let mut guard = 0;
+        while let Some(d) = cur {
+            if let Some(t) = self.ast.described_template(d) {
+                return self.template_param_depth(t) + 1;
+            }
+            if let Some((_, p)) = self.ast.partial_spec_info(d) {
+                return self.ast.templates.param_list(p.params).depth + 1;
+            }
+            guard += 1;
+            if guard > 1024 {
+                break;
+            }
+            cur = self.ast.decls.get(d).ctx();
+        }
+        0
+    }
+
     /// Whether template-argument flags `f` make a node dependent.
     pub(crate) fn dependent_flags(f: TypeFlags) -> bool {
         f.intersects(TypeFlags::DEPENDENT_INSTANTIATION | TypeFlags::UNEXPANDED_PACK)
