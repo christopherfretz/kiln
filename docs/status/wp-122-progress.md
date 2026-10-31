@@ -5,16 +5,17 @@ base a1e8e9c (WP-075 merge, kiln-mode 1561/1577).
 
 ## Steps
 1. [x] Item 1: deduced return types in templates ([dcl.spec.auto.general]/12)
-2. [ ] Structured bindings: parser + sema (array, tuple-like, members)
-3. [ ] Oven + codegen for bindings
-4. [ ] Tests (`tests/conformance/dcl.struct.bind/`, ≥ 20) + spec
+2. [x] Structured bindings: parser + sema (array, tuple-like, members)
+3. [x] Oven + codegen for bindings
+4. [x] Tests (`tests/conformance/dcl.struct.bind/`: 28) + spec
+5. [ ] `git merge main`, final full CI
 
 ## Merge note (item 1)
 Item 1 is complete and green on its own at commit **4abe197**
 (`cargo xtask ci --quick`: 1565 passed / 16 xfail / 1581 tests; base
 1561/1577). Merge 4abe197 if structured bindings are still in progress:
-the later `WP-122 WIP:` commits (structured bindings) are mid-work and
-do not build yet.
+structured bindings are now complete too (step 4); merge the branch
+head once the final CI is green.
 
 ## Item 1 — header probe
 `kiln -std=c++26 -stdlib=libc++ -fsyntax-only -ferror-limit=0`, errors:
@@ -51,3 +52,31 @@ New first blockers:
   (`template <class T> auto S<T>::s() {...}`) is emitted by codegen as
   a non-template function `_ZN1S1sEv` (pre-existing at base, also for
   non-`auto` returns).
+- Structured bindings (sema.md §4.9): the hidden variable `e` is an
+  unnamed `Var` + cold `decomp_bindings`; `DeclKind::Decomposition`
+  (unused) was removed. Array / tuple-like (member and ADL `get`,
+  holding vars) / data members (bases rule, bit-fields, access),
+  reference forms, conditions (`-Wbinding-in-condition`), range-for,
+  lambda captures, namespace scope (static, thread_local), templates
+  (re-declared from `decomp_written`). Oven: holding vars evaluated
+  after `e`; codegen: `emit_var_decl`, `_ZDC...E` mangling;
+  `tests/codegen/structured_bindings.cpp` exact on 2/2 triples.
+- Tests: 28 in `tests/conformance/dcl.struct.bind/` (9 AST goldens,
+  12 strict diag, 1 constexpr compile-ok, 6 run); flipped
+  `stmt.ranged/structured-binding.cpp`. Corpus (kiln mode, -j 2):
+  1594 passed / 0 failed / 15 xfail / 1609 tests.
+- Fixed on the way: `reference to type 'X' could not bind to an
+  rvalue|lvalue of type 'Y'` (`sema_reference_bind_failed`), qualified
+  name in `implicit instantiation of undefined template 'N::X<int>'`
+  (`decl_ty_str`), clang-ast normalizer: `DecompositionDecl`,
+  `BindingDecl`, `CallExpr adl`, bitfield on a binding `DeclRefExpr`.
+- Open (pre-existing, not WP-122): local `thread_local` not emitted as
+  TLS; constant-initialized reference global emitted `global` not
+  `constant`; dynamic init of statics/globals (M3); missing "in call to
+  'S(s)'" note for trivial copy ctors; diagnostic ranges; "inline
+  declaration not allowed in block scope"; `P const &` sugar in
+  instantiations; general ADL marking; binding attributes not
+  instantiated; NoOp `'const M'` cast for const class copy-init from a
+  prvalue; spurious aka for namespace-member types in overload notes;
+  M3 constants with base classes or bit-fields; clang 19 rejects a
+  constexpr lambda capture of bindings, kiln accepts it.
