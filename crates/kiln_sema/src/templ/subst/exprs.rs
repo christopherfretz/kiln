@@ -376,8 +376,8 @@ impl Substituter<'_, '_, '_> {
             }
             ExprKind::CXXFoldExpr => self.fold(e, loc, end),
             ExprKind::SizeOfPackExpr => self.size_of_pack(e, loc, end),
+            ExprKind::PackIndexingExpr => self.pack_indexing_expr(e, loc, end),
             ExprKind::PackExpansionExpr
-            | ExprKind::PackIndexingExpr
             | ExprKind::SubstNonTypeTemplateParmPackExpr
             | ExprKind::FunctionParmPackExpr => self.unimplemented("pack expansion", loc),
             ExprKind::ConceptSpecializationExpr | ExprKind::RequiresExpr => {

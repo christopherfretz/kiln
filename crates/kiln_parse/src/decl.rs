@@ -728,6 +728,14 @@ impl Parser<'_, '_> {
                 } else {
                     ty
                 };
+                // `T...[index]` (C++26 [dcl.type.pack.index]).
+                let ty = match self.parse_pack_index() {
+                    Ok(Some((ellipsis, index, _))) => {
+                        self.s.act_pack_indexing_type(ty, ellipsis, index)
+                    }
+                    Ok(None) => ty,
+                    Err(()) => QualType::ERROR,
+                };
                 if let Err(e) = ds.set_base(TypeSpecKind::Named, Some(ty), loc) {
                     ds.invalid = true;
                     self.spec_error(&e, loc);

@@ -804,6 +804,14 @@ impl<'a> AstNames<'a> {
                 self.expr(exprs.operand(e), d, out);
                 out.push_str("...");
             }
+            ExprKind::PackIndexingExpr => {
+                self.expr(exprs.operand(e), d, out);
+                out.push_str("...[");
+                if let Some(i) = ExprId::from_raw(n.b()) {
+                    self.expr(i, d, out);
+                }
+                out.push(']');
+            }
             ExprKind::CXXUnresolvedConstructExpr => {
                 write_type(&ast.types, self, n.ty(), self.expr_types, out);
                 let (open, close) = if n.aux() != 0 { ('{', '}') } else { ('(', ')') };

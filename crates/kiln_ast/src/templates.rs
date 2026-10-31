@@ -1596,6 +1596,28 @@ impl AstBuilder<'_> {
         self.simple(ExprKind::PackExpansionExpr, vk, deps, 0, ty, ellipsis, pattern.raw(), 0)
     }
 
+    /// `pack...[index]` (C++26 [expr.prim.pack.index]): `PackIndexingExpr`
+    /// of dependent type, located at the pack's name and ending at `]`.
+    /// The pack is expanded by the indexing; packs in `index` stay.
+    pub fn pack_indexing_expr(&mut self, pattern: ExprId, index: ExprId, rsquare: Loc) -> ExprId {
+        let deps =
+            ((self.deps(pattern) | DEP_ALL).without(ExprDeps::UNEXPANDED_PACK)) | self.deps(index);
+        let n = *self.ast.exprs.get(pattern);
+        let ty = self.dependent_ty();
+        let e = self.simple(
+            ExprKind::PackIndexingExpr,
+            ValueCategory::LValue,
+            deps,
+            0,
+            ty,
+            n.loc(),
+            pattern.raw(),
+            index.raw(),
+        );
+        let _ = self.ast.exprs.cold.end_loc.insert(e, rsquare);
+        e
+    }
+
     /// A fold-expression ([expr.prim.fold]): `CXXFoldExpr`, a dependent
     /// prvalue. `lhs`/`rhs` are the operands as written (`( ... op e )` has
     /// no `lhs`, `( e op ... )` no `rhs`).

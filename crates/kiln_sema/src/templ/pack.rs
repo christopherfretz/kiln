@@ -317,6 +317,85 @@ impl Substituter<'_, '_, '_> {
     }
 
     /// `sizeof...(P)` (§7.4): the length of the substituted pack, a
+    /// `pack...[index]` ([expr.prim.pack.index]): the selected element.
+    /// Gap (spec §7.4): clang keeps a `PackIndexingExpr` around it.
+    pub(crate) fn pack_indexing_expr(
+        &mut self,
+        e: ExprId,
+        loc: Loc,
+        end: Loc,
+    ) -> SubstResult<ExprId> {
+        let n = *self.sema.ast.exprs.get(e);
+        let pattern = ExprId::from_raw(n.a()).ok_or(SubstFail)?;
+        let index = ExprId::from_raw(n.b()).ok_or(SubstFail)?;
+        let index = self.expr(index)?;
+        match self.expand_pattern(|s| s.expr(pattern))? {
+            Expansion::Unexpanded(p) => Ok(self.sema.act_pack_indexing(p, loc, index, end)),
+            Expansion::Elements(v) => {
+                // clang names the pack expression unquoted.
+                let name = if self.sema.ast.exprs.get(pattern).kind() == ExprKind::DeclRefExpr {
+                    let d = self.sema.ast.exprs.decl(pattern);
+                    self.sema.decl_name_str(self.sema.ast.decls.get(d).name())
+                } else {
+                    "<expression>".to_owned()
+                };
+                let i = self.pack_index_value(index, v.len(), &name, loc)?;
+                Ok(v[i])
+            }
+        }
+    }
+
+    /// `T...[index]` ([dcl.type.pack.index]): the selected element.
+    pub(crate) fn pack_indexing_type(
+        &mut self,
+        pattern: QualType,
+        index: ExprId,
+        loc: Loc,
+    ) -> SubstResult<QualType> {
+        let index = self.expr(index)?;
+        match self.expand_pattern(|s| s.element_ty(pattern, loc))? {
+            Expansion::Unexpanded(p) => {
+                let at = self.sema.begin_loc(index);
+                Ok(self.sema.act_pack_indexing_type(p, at, index))
+            }
+            Expansion::Elements(v) => {
+                let name = format!("'{}'", self.sema.ty_str(pattern));
+                let at = self.sema.begin_loc(index);
+                let i = self.pack_index_value(index, v.len(), &name, at)?;
+                Ok(v[i])
+            }
+        }
+    }
+
+    /// The value of a substituted pack index, checked against the pack's
+    /// length `len` (clang: "invalid index 3 for pack 'T' of size 2").
+    fn pack_index_value(
+        &mut self,
+        index: ExprId,
+        len: usize,
+        name: &str,
+        at: Loc,
+    ) -> SubstResult<usize> {
+        use kiln_oven::{EvalContext, EvalKind};
+        if self.sema.expr_is_value_dependent(index) {
+            return self.unimplemented("pack index that stays dependent", at);
+        }
+        let c = crate::conv::decay(self.sema, index);
+        let c = self.sema.act_on_full_expr(c);
+        let loc = self.sema.begin_loc(index);
+        let v =
+            self.sema.eval_int(c, EvalContext::new(EvalKind::Other, loc)).map_err(|_| SubstFail)?;
+        match usize::try_from(v) {
+            Ok(i) if i < len => Ok(i),
+            _ => {
+                let d =
+                    self.sema.diag(DiagId::sema_pack_index_invalid, at).arg(v).arg(name).arg(len);
+                self.sema.emit(d);
+                Err(SubstFail)
+            }
+        }
+    }
+
     /// `SizeOfPackExpr` that is no longer dependent.
     pub(crate) fn size_of_pack(&mut self, e: ExprId, loc: Loc, end: Loc) -> SubstResult<ExprId> {
         use crate::templ::args::ArgLookup;

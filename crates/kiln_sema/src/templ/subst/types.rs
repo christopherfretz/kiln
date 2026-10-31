@@ -294,9 +294,17 @@ impl Substituter<'_, '_, '_> {
                 };
                 Ok(self.sema.ast.types.elaborated(keyword, Some(n), named))
             }
-            TypeView::PackExpansion { .. } | TypeView::PackIndexing { .. } => {
-                self.unimplemented("pack expansion", loc)
+            TypeView::PackIndexing { pattern, index, selected: None } => {
+                let index = match index {
+                    ExprOperand::Expr(e) => e,
+                    ExprOperand::Profile(p) => {
+                        self.sema.ast.types.profile_expr(p).ok_or(SubstFail)?
+                    }
+                };
+                self.pack_indexing_type(pattern, index, loc)
             }
+            TypeView::PackIndexing { selected: Some(s), .. } => self.ty(s, loc),
+            TypeView::PackExpansion { .. } => self.unimplemented("pack expansion", loc),
             _ => self.unimplemented("substitution into this type", loc),
         }
     }
