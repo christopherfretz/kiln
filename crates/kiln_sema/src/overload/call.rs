@@ -237,7 +237,7 @@ impl Sema<'_, '_> {
         if instance {
             // A non-static member without an object: `&C::f`, or "call to
             // non-static member function without an object argument".
-            return self.implicit_member_ref(d, loc, shadow, nns.is_some());
+            return self.implicit_member_ref(d, loc, shadow, nns);
         }
         let e = self.build_decl_ref_qualified(d, loc, shadow, nns);
         if let Some(&b) = self.ast.templates.expr_begin.get(ule)

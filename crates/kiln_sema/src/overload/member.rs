@@ -129,7 +129,7 @@ impl Sema<'_, '_> {
             self.note_function_name_use(d, e, loc, m.nns.is_none());
             return Some(e);
         }
-        let e = self.member_of_object(m.base, m.obj_ty, m.def, m.arrow, d, shadow, loc);
+        let e = self.member_of_object(m.base, m.obj_ty, m.def, m.arrow, d, shadow, m.nns, loc);
         if m.nns.is_some() && !self.is_err_expr(e) {
             self.member_refs.insert(e, MemberRef { decl: d, error: false, qualified: true });
         }
