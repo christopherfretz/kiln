@@ -900,7 +900,10 @@ impl Oven {
                     Some(e) if e.virt => {
                         let (m, cls) = (e.member, e.cls);
                         match self.vcall(b, m, cls, reg!(2) as u64) {
-                            Ok((f, this)) => {
+                            // A covariant return through a pointer to
+                            // member: not adjusted (WP-077 stub).
+                            Ok((_, _, cov)) if cov != 0 => fail!(Fault::Invalid),
+                            Ok((f, this, _)) => {
                                 reg!(0) = u128::from(crate::mem::fn_ptr(f));
                                 reg!(2) = u128::from(this);
                             }
@@ -925,21 +928,35 @@ impl Oven {
                     let slot = fb + base + aux as usize;
                     let m = DeclId::new(self.code[pc + 1]);
                     let cls = OTy(self.code[pc + 3]);
+                    let adj = arg!(3);
                     let callee = match self.vcall(b, m, cls, self.regs[slot] as u64) {
-                        Ok((f, this)) => {
+                        Ok((f, this, cov)) => {
                             self.regs[slot] = u128::from(this);
+                            if adj as u32 != u32::MAX {
+                                self.regs[fb + adj] = cov as u128;
+                            } else if cov != 0 {
+                                fail!(Fault::Invalid);
+                            }
                             f
                         }
                         Err(f) => fail!(f),
                     };
-                    match self.enter(b, callee, pc, pc + 4, fb, base) {
+                    match self.enter(b, callee, pc, pc + 5, fb, base) {
                         Ok(Some((npc, nfb))) => {
                             pc = npc;
                             fb = nfb;
                         }
-                        Ok(None) => pc += 4,
+                        Ok(None) => pc += 5,
                         Err(f) => fail!(f),
                     }
+                }
+                Op::CovAdj => {
+                    let p = reg!(0) as u64;
+                    if p != 0 {
+                        let off = i64::from(Ptr::decode(p).off) + reg!(1) as i64;
+                        reg!(0) = u128::from(Ptr::with_off(p, off as u64, false));
+                    }
+                    pc += 3;
                 }
                 Op::DynCast => {
                     let raw = reg!(1) as u64;
@@ -1727,8 +1744,7 @@ impl Oven {
         let off = u64::from(p.off);
         if a.ty == pointee
             || a.flags & flags::ARRAY_NEW != 0
-            || !self.types.has_subobject(a.ty, off, pointee)
-            || self.dynamic_type(a.ty, off) != a.ty
+            || !self.types.has_base_subobject(a.ty, off, pointee)
         {
             return Ok(None);
         }

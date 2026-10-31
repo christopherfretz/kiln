@@ -57,6 +57,9 @@ struct Target {
     delta: i64,
     ov: DeclId,
     pure: bool,
+    /// A covariant return ([class.virtual]/8): the offset of the called
+    /// function's return class in the overrider's.
+    cov: i64,
 }
 
 /// The Oven's per-class caches (insert-only: the class graph of a
@@ -299,7 +302,7 @@ impl Oven {
         method: DeclId,
         cls: OTy,
         raw: u64,
-    ) -> Result<(u32, u64), Fault> {
+    ) -> Result<(u32, u64, i64), Fault> {
         let (c, ott) = self.read_vptr(raw, cls, ak::MEMBER_CALL)?;
         let t = match self.virt.dispatch.get(&(c, ott, method)) {
             Some(&t) => t,
@@ -313,7 +316,7 @@ impl Oven {
             return Err(Fault::PureVirtual(t.ov));
         }
         let off = i64::from(Ptr::decode(raw).off) + t.delta;
-        Ok((t.func, Ptr::with_off(raw, off as u64, false)))
+        Ok((t.func, Ptr::with_off(raw, off as u64, false), t.cov))
     }
 
     fn resolve(
@@ -334,7 +337,35 @@ impl Oven {
         let ast = b.ast();
         let pure = ast.decls.function(ast.first(ov)).is_some_and(|f| f.spec.is_pure());
         let func = self.func_index(ast, ov);
-        Ok(Target { func, delta: to.off as i64 - ott as i64, ov, pure })
+        let cov = self.covariance(b, method, ov);
+        Ok(Target { func, delta: to.off as i64 - ott as i64, ov, pure, cov })
+    }
+
+    /// The return adjustment of a call of `method` that runs `ov`: the
+    /// offset of the class `method` returns a pointer or reference to in
+    /// the class `ov` returns one to (0 if they are the same).
+    fn covariance(&mut self, b: &mut dyn SemaBridge, method: DeclId, ov: DeclId) -> i64 {
+        let ret_class = |b: &mut dyn SemaBridge, f: DeclId| {
+            let ast = b.ast();
+            let def = ast.definition(f).unwrap_or(f);
+            let fty = ast.decls.get(def).ty()?;
+            let kiln_ast::types::TypeView::Function(p) = ast.types.canonical_view(fty) else {
+                return None;
+            };
+            let r = ast.types.pointee(p.ret())?;
+            ast.types.as_record(r).map(|_| r)
+        };
+        let (Some(rm), Some(ro)) = (ret_class(b, method), ret_class(b, ov)) else { return 0 };
+        let (tm, to) = (self.types.intern(b, rm), self.types.intern(b, ro));
+        if tm == to {
+            return 0;
+        }
+        let i = self.poly_info(b, to);
+        self.virt.infos[i as usize]
+            .subs
+            .iter()
+            .find(|s| s.cls == tm && !s.virt)
+            .map_or(0, |s| s.off as i64)
     }
 
     /// `Op::DynCast`: `dynamic_cast` of the object at `raw` (static class

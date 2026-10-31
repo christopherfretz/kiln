@@ -614,6 +614,10 @@ impl Compiler<'_> {
         // A call returning a reference (a glvalue) returns the referent's
         // address in a register, whatever the referent's type.
         let is_sret = self.o.types.is_aggregate(rty) && !self.node(e).value_category().is_glvalue();
+        let adj = match callee {
+            Callee::Virtual(d, _) if self.returns_class_ref(d) => Some(self.reg()),
+            _ => None,
+        };
         let base = self.next;
         let first = u32::from(is_sret) + u32::from(this.is_some());
         let window = args.len() as u32 + first;
@@ -653,9 +657,13 @@ impl Compiler<'_> {
             Callee::Ind(r) => self.emit_at(Op::CallInd, 0, &[r, base], e),
             Callee::Virtual(d, cls) => {
                 let m = self.ast().first(d);
-                self.emit_at(Op::VCall, u32::from(is_sret), &[m.index(), base, cls.0], e)
+                let a = adj.unwrap_or(u32::MAX);
+                self.emit_at(Op::VCall, u32::from(is_sret), &[m.index(), base, cls.0, a], e)
             }
         };
+        if let Some(a) = adj {
+            self.emit(Op::CovAdj, 0, &[base, a]);
+        }
         if let Some(loc) = loc
             && let Some(site) = self.o.sites.last_mut().filter(|x| x.pc == pc as u32)
         {
@@ -663,6 +671,18 @@ impl Compiler<'_> {
         }
         self.next = base + 1;
         base
+    }
+
+    /// Whether function `d` returns a pointer or reference to a class (a
+    /// virtual one may be overridden covariantly, [class.virtual]/8).
+    fn returns_class_ref(&self, d: DeclId) -> bool {
+        let ast = self.ast();
+        let def = ast.definition(d).unwrap_or(d);
+        let Some(fty) = ast.decls.get(def).ty() else { return false };
+        let kiln_ast::types::TypeView::Function(p) = ast.types.canonical_view(fty) else {
+            return false;
+        };
+        ast.types.pointee(p.ret()).and_then(|r| ast.types.as_record(r)).is_some()
     }
 
     /// Whether the object expression `obj` of a member call designates an

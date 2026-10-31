@@ -201,12 +201,16 @@ ops! {
     // writes the dynamic-type word of each of its polymorphic subobjects
     // (spec/oven.md "Dynamic types", WP-077)
     SetVptr = 2,
-    // [method, arg base, class]: a virtual call of `method` (first
-    // declaration, a member of `class`)
-    // on the object argument of the window at `arg base` (after the
-    // result object when aux = 1): the final overrider for the object's
-    // dynamic type, `this` adjusted to its subobject ([class.virtual]/2)
-    VCall = 3,
+    // [method, arg base, class, adj]: a virtual call of `method` (first
+    // declaration, a member of `class`) on the object argument of the
+    // window at `arg base` (after the result object when aux = 1): the
+    // final overrider for the object's dynamic type, `this` adjusted to
+    // its subobject ([class.virtual]/2); register `adj` (`u32::MAX`:
+    // none) receives the covariant return adjustment ([class.virtual]/8)
+    VCall = 4,
+    // [p, adj]: a covariant return: `p` (unless null) moved by the byte
+    // offset in register `adj`, to the called function's return class
+    CovAdj = 2,
     // [dst, p, static class, target class (`u32::MAX`: `void`)]:
     // `dynamic_cast` ([expr.dynamic.cast]/6-9); aux = 1: a reference cast
     // (`p` a glvalue's address; failure is diagnosed, not null)

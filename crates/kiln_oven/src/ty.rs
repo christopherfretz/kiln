@@ -543,6 +543,21 @@ impl Types {
         }
     }
 
+    /// Whether a base class subobject of type `p` lives at byte `off` of
+    /// an object of class type `root` (through base classes only).
+    pub fn has_base_subobject(&self, root: OTy, off: u64, p: OTy) -> bool {
+        if p == root && off == 0 {
+            return true;
+        }
+        matches!(self.kind(root), TyKind::Record { .. })
+            && self.fields(root).iter().any(|f| {
+                f.base
+                    && off >= f.offset
+                    && off < f.offset + self.size(f.ty).max(1)
+                    && self.has_base_subobject(f.ty, off - f.offset, p)
+            })
+    }
+
     /// Whether an object of type `p` lives at byte `off` of an object of
     /// type `root` (C++26 [expr.static.cast]/14 for `void*` casts).
     pub fn has_subobject(&self, root: OTy, off: u64, p: OTy) -> bool {
