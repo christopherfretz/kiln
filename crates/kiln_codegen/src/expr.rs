@@ -1722,10 +1722,13 @@ impl Cg<'_> {
         }
         for (i, &v) in vals.iter().enumerate() {
             let Some(info) = sig.info.args.get(i) else {
-                return err(self.loc_of(args[i]), "call argument without ABI information");
+                return err(
+                    args.get(i).and_then(|&a| self.loc_of(a)),
+                    "call argument without ABI information",
+                );
             };
             let kind = info.kind.clone();
-            let loc = self.loc_of(args[i]);
+            let loc = args.get(i).and_then(|&a| self.loc_of(a));
             self.call_arg(&kind, sig.params[i], v, &mut ir_args, loc)?;
         }
         let rty = match &sig.info.ret.kind {
@@ -1735,7 +1738,7 @@ impl Cg<'_> {
             }
             _ => LTy::VOID,
         };
-        let (ret, params) = self.sig_attrs(sig, args.len(), false);
+        let (ret, params) = self.sig_attrs(sig, vals.len(), false);
         let func = if sig.nothrow {
             let mut fa = vec![Attr::Flag(AttrKind::NoUnwind)];
             fa.extend(extra.iter().cloned());

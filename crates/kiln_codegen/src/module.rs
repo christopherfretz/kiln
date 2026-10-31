@@ -123,6 +123,8 @@ pub(crate) struct Cg<'a> {
     pub c1_done: FxHashSet<DeclId>,
     /// Deleting destructors already emitted (WP-080).
     pub d0_done: FxHashSet<DeclId>,
+    /// Thunk functions by mangled name (WP-080).
+    pub thunk_fns: FxHashMap<String, FuncId>,
     /// Structors whose base variant body was generated.
     pub sdone: FxHashSet<DeclId>,
     /// `_ZTV` globals by class (WP-080).
@@ -182,6 +184,7 @@ impl<'a> Cg<'a> {
             c1_decl: FxHashSet::default(),
             c1_done: FxHashSet::default(),
             d0_done: FxHashSet::default(),
+            thunk_fns: FxHashMap::default(),
             sdone: FxHashSet::default(),
             vtables: FxHashMap::default(),
             vt_layouts: FxHashMap::default(),
@@ -864,7 +867,9 @@ impl<'a> Cg<'a> {
         // clang `SetFunctionAttributes`: virtual member functions are
         // `unnamed_addr`.
         let virt = ast.decls.get(first).kind() == DeclKind::CXXMethod
-            && ast.redecls_of(first).any(|r| ast.decls.function(r).is_some_and(|x| x.spec.is_virtual()));
+            && ast
+                .redecls_of(first)
+                .any(|r| ast.decls.function(r).is_some_and(|x| x.spec.is_virtual()));
         {
             let func = self.m.func_mut(f);
             func.attrs.func = fa;

@@ -378,7 +378,7 @@ impl Cg<'_> {
                     if let Some(&p) = self.ph_of.get(&(first, v)) {
                         self.phs[p as usize] = Some(Value::func(f));
                     }
-                    return Ok(());
+                    return self.emit_thunks(d, Some(v));
                 }
                 let f = self.base_fn(first, true)?;
                 let name = mangle::mangle_structor(ast, first, v);
@@ -403,7 +403,7 @@ impl Cg<'_> {
                 if let Some(&p) = self.ph_of.get(&(first, v)) {
                     self.phs[p as usize] = Some(val);
                 }
-                Ok(())
+                self.emit_thunks(d, Some(v))
             }
             Structor::Deleting => {
                 self.squeued.insert((first, v));
@@ -414,7 +414,8 @@ impl Cg<'_> {
                 let saved = std::mem::replace(&mut self.f, crate::func::Fx::empty());
                 let r = self.gen_code(d, f, Some(Structor::Deleting));
                 self.f = saved;
-                r
+                r?;
+                self.emit_thunks(d, Some(v))
             }
         }
     }
@@ -1036,8 +1037,7 @@ impl Cg<'_> {
         let base = ast.exprs.operand(callee_e);
         let arrow = ast.exprs.get(callee_e).has(ExprFlags::ARROW);
         let args: Vec<ExprId> = ast.lists.iter(ast.exprs.call_args(e)).collect();
-        let qualified =
-            ast.exprs.decl_ref_extra(callee_e).is_some_and(|x| x.qualifier.is_some());
+        let qualified = ast.exprs.decl_ref_extra(callee_e).is_some_and(|x| x.qualifier.is_some());
         self.emit_method_call(e, md, base, arrow, &args, dest, qualified)
     }
 
@@ -1105,8 +1105,7 @@ impl Cg<'_> {
         if kind == DeclKind::CXXDestructor {
             let sig = self.call_sig_this(cfty, false, &[], Some(crd));
             if use_virtual {
-                let fp =
-                    self.virtual_fn_ptr(md, Some(Structor::Complete), this.v, this.align)?;
+                let fp = self.virtual_fn_ptr(md, Some(Structor::Complete), this.v, this.align)?;
                 return self.call_vals(&sig, fp, None, Some(this.v), &[], &[], None, &[]);
             }
             let (callee, fid) = self.structor_ref(callee_md, Structor::Complete)?;
@@ -1114,8 +1113,11 @@ impl Cg<'_> {
         }
         let sig = self.call_sig_this(cfty, false, &arg_tys, Some(crd));
         if use_virtual {
+            // The arguments come first; `prepareConcreteCallee` then
+            // loads the slot.
+            let vals = self.emit_call_args(&sig, args)?;
             let fp = self.virtual_fn_ptr(md, None, this.v, this.align)?;
-            return self.call_with(&sig, fp, None, Some(this.v), args, dest, &[]);
+            return self.call_vals(&sig, fp, None, Some(this.v), &vals, args, dest, &[]);
         }
         let f = self.get_fn(callee_md)?;
         self.call_with(&sig, V::C(Value::func(f)), Some(f), Some(this.v), args, dest, &[])

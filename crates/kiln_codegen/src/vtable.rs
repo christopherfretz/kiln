@@ -8,16 +8,17 @@
 use std::rc::Rc;
 
 use kiln_abi::mangle::{self, Structor};
-use kiln_ast::class::{SubobjectId, VTableComponent, VTableLayout};
+use kiln_ast::class::{SubobjectId, Thunk, VTableComponent, VTableLayout};
 use kiln_ast::decl::{Access, DeclKind, DefinitionBits, TagKind};
 use kiln_ast::types::{BuiltinType, TypeView};
 use kiln_ast::{DeclId, ExprId, QualType};
 use kiln_llvm::{
-    CastOp, ComdatKind, GepFlags, GlobalId, Linkage, TypeId as LTy, UnnamedAddr, Value,
+    Attr, AttrKind, CastOp, ComdatKind, FuncId, GepFlags, GlobalId, IntPredicate, Linkage,
+    TypeId as LTy, UnnamedAddr, Value,
 };
 
-use crate::fir::V;
-use crate::func::min_align;
+use crate::fir::{Op, V};
+use crate::func::{CallArg, min_align};
 use crate::module::{Cg, R, err};
 
 /// How a class's vtable is emitted (clang `getVTableLinkage` with
@@ -106,9 +107,11 @@ impl Cg<'_> {
     /// The number of components of vtable `k` of group `l`.
     pub(crate) fn vtable_size(l: &VTableLayout, k: usize) -> u32 {
         let start = l.vtable_starts[k];
-        let end = l.vtable_starts.get(k + 1).copied().unwrap_or_else(|| {
-            u32::try_from(l.components.len()).unwrap_or(u32::MAX)
-        });
+        let end = l
+            .vtable_starts
+            .get(k + 1)
+            .copied()
+            .unwrap_or_else(|| u32::try_from(l.components.len()).unwrap_or(u32::MAX));
         end - start
     }
 
@@ -131,7 +134,8 @@ impl Cg<'_> {
         let ast = self.ast;
         let def = self.class_def(rd)?;
         let &k = ast.decls.cold.key_function.get(def)?;
-        let body = ast.redecls_of(k).find(|&r| ast.decls.function(r).is_some_and(|f| f.body.is_some()));
+        let body =
+            ast.redecls_of(k).find(|&r| ast.decls.function(r).is_some_and(|f| f.body.is_some()));
         Some((k, body))
     }
 
@@ -449,8 +453,7 @@ impl Cg<'_> {
                 seen.push(b);
                 let Some(vdef) = self.class_def(vtable_class) else { continue };
                 let l = self.tys.layouter().record(vdef);
-                let off =
-                    l.vbases.iter().find(|&&(x, _)| ast.first(x) == b).map_or(0, |&(_, o)| o);
+                let off = l.vbases.iter().find(|&&(x, _)| ast.first(x) == b).map_or(0, |&(_, o)| o);
                 self.vptrs_rec(b, off, Some(b), 0, false, vtable_class, seen, out);
             } else {
                 let l = self.tys.layouter().record(def);
@@ -586,8 +589,11 @@ impl Cg<'_> {
     /// (`FieldHasTrivialDestructorBody`).
     fn fields_trivial_dtor_body(&mut self, def: DeclId) -> bool {
         let ast = self.ast;
-        let fields: Vec<DeclId> =
-            ast.decls.members(def).filter(|&m| ast.decls.get(m).kind() == DeclKind::Field).collect();
+        let fields: Vec<DeclId> = ast
+            .decls
+            .members(def)
+            .filter(|&m| ast.decls.get(m).kind() == DeclKind::Field)
+            .collect();
         for f in fields {
             let Some(mut q) = ast.decls.get(f).ty() else { continue };
             while let Some(e) = self.array_elem(q) {
@@ -617,7 +623,10 @@ impl Cg<'_> {
 
     /// The address point loaded from the VTT parameter.
     fn vtt_address_point(&mut self, _vtable_class: DeclId, vp: VPtr) -> R<V> {
-        err(Some(self.ast.decls.get(vp.class).loc()), "VTT parameters are not supported yet (WP-080)")
+        err(
+            Some(self.ast.decls.get(vp.class).loc()),
+            "VTT parameters are not supported yet (WP-080)",
+        )
     }
 
     /// The address of virtual base `vb` of the object at `this`.
@@ -625,15 +634,217 @@ impl Cg<'_> {
         err(Some(self.ast.decls.get(vb).loc()), "virtual base access is not supported yet (WP-080)")
     }
 
-    /// A thunk in a vtable slot.
+    /// A thunk in a vtable slot (clang `maybeEmitThunk(ForVTable)`: at
+    /// `-O0` only its declaration; the definition comes with the
+    /// method's, `emit_thunks`).
     fn thunk_for_vtable(
         &mut self,
         m: DeclId,
-        _v: Option<Structor>,
-        _th: kiln_ast::class::Thunk,
+        v: Option<Structor>,
+        th: Thunk,
         _layout_class: DeclId,
     ) -> R<Value> {
-        err(Some(self.ast.decls.get(m).loc()), "thunks are not supported yet (WP-080)")
+        let f = self.thunk_fn(m, v, th)?;
+        Ok(Value::func(f))
+    }
+
+    /// clang `GetAddrOfThunk`: the function of thunk `th` of variant `v`
+    /// of method `m` (declared with `IsThunk` attributes: `this` is only
+    /// `noundef`).
+    fn thunk_fn(&mut self, m: DeclId, v: Option<Structor>, th: Thunk) -> R<FuncId> {
+        let ast = self.ast;
+        let first = ast.first(m);
+        let name =
+            mangle::mangle_thunk(ast, first, v.unwrap_or(Structor::Complete), th.this, th.ret);
+        if let Some(&f) = self.thunk_fns.get(&name) {
+            return Ok(f);
+        }
+        let sig = self.decl_sig(first)?;
+        let f = self.declare_fn(&name, first, &sig)?;
+        let (ret, params) = {
+            let a = &self.m.func(f).attrs;
+            (a.ret, a.params.clone())
+        };
+        let (ret, params) = self.thunk_attrs(&sig, ret, params);
+        {
+            let func = self.m.func_mut(f);
+            func.unnamed_addr = UnnamedAddr::Global;
+            func.attrs.ret = ret;
+            func.attrs.params = params;
+        }
+        self.thunk_fns.insert(name, f);
+        Ok(f)
+    }
+
+    /// clang `ConstructAttributeList(IsThunk)`: `this` is only `noundef`
+    /// and a returned reference has no `nonnull`/`dereferenceable`/`align`.
+    pub(crate) fn thunk_attrs(
+        &mut self,
+        sig: &crate::module::Sig,
+        ret: kiln_llvm::AttrSetId,
+        mut params: Vec<kiln_llvm::AttrSetId>,
+    ) -> (kiln_llvm::AttrSetId, Vec<kiln_llvm::AttrSetId>) {
+        let nu = self.m.attr_set(&[Attr::Flag(AttrKind::NoUndef)]);
+        if let Some(p) = params.get_mut(usize::from(sig.sret())) {
+            *p = nu;
+        }
+        let ret = if self.referee(sig.ret).is_some() {
+            if sig.info.ret.noundef { nu } else { self.m.attr_set(&[]) }
+        } else {
+            ret
+        };
+        (ret, params)
+    }
+
+    /// clang `CodeGenVTables::EmitThunks`: after the definition `d` of a
+    /// virtual method (variant `v` of a destructor) was emitted, defines
+    /// its thunks.
+    pub(crate) fn emit_thunks(&mut self, d: DeclId, v: Option<Structor>) -> R<()> {
+        let ast = self.ast;
+        if v == Some(Structor::Base) {
+            return Ok(());
+        }
+        let first = ast.first(d);
+        let virt = ast
+            .redecls_of(first)
+            .any(|r| ast.decls.function(r).is_some_and(|f| f.spec.is_virtual()));
+        if !virt {
+            return Ok(());
+        }
+        let Some(class) = ast.decls.get(first).ctx() else { return Ok(()) };
+        let l = self.vt_layout(class)?;
+        let ths: Vec<Thunk> = l
+            .method_thunks
+            .iter()
+            .filter(|&&(m, _)| ast.first(m) == first)
+            .map(|&(_, t)| t)
+            .collect();
+        for th in ths {
+            let f = self.thunk_fn(d, v, th)?;
+            if !self.m.func(f).is_declaration() {
+                continue;
+            }
+            let saved = std::mem::replace(&mut self.f, crate::func::Fx::empty());
+            let r = self.gen_code_or_thunk(d, f, v, Some(th));
+            self.f = saved;
+            r?;
+        }
+        Ok(())
+    }
+
+    /// clang `EmitCallAndReturnForThunk`: the body of thunk `th` of
+    /// variant `v` of method `d` (parameters `params`, spilled by the
+    /// prolog).
+    pub(crate) fn emit_thunk_body(
+        &mut self,
+        d: DeclId,
+        v: Option<Structor>,
+        th: Thunk,
+        params: &[DeclId],
+    ) -> R<()> {
+        let ast = self.ast;
+        let rd = self.f.this_class.expect("method class");
+        let (_, this_align) = self.this_layout(rd);
+        let this = self.this_value();
+        let adj = self.type_adjustment(this, this_align, th.this, false);
+        let mut vals = Vec::with_capacity(params.len());
+        let mut ptys = Vec::with_capacity(params.len());
+        for &p in params {
+            let q = ast.decls.get(p).ty().expect("param type");
+            let a = self.f.locals[&p];
+            // EmitDelegateCallArg.
+            vals.push(if self.referee(q).is_some() {
+                CallArg::Scalar(self.load(LTy::PTR, a.v, a.align, false))
+            } else if self.is_aggregate(q) {
+                CallArg::Agg(a)
+            } else {
+                CallArg::Scalar(self.load_scalar(a, q))
+            });
+            ptys.push(q);
+        }
+        let first = ast.first(d);
+        let fty = ast.decls.get(first).ty().expect("method type");
+        let sig = self.call_sig_this(fty, false, &ptys, Some(rd));
+        let (callee, fid) = match v {
+            Some(v) => self.structor_ref(d, v)?,
+            None => {
+                let f = self.get_fn(d)?;
+                (V::C(Value::func(f)), Some(f))
+            }
+        };
+        let rq = sig.ret;
+        let agg = self.is_aggregate(rq);
+        let dest = if sig.sret() || agg { self.f.ret_slot } else { None };
+        let r = self.call_vals(&sig, callee, fid, Some(adj), &vals, &[], dest, &[])?;
+        let call = self.f.calls.last().map(|c| c.0);
+        let mut rv = r;
+        if th.ret != (0, 0) {
+            if let Some(p) = r {
+                rv = Some(self.return_adjustment(p, rq, th.ret));
+            }
+        } else if let Some(c) = call {
+            self.f.fir.set_tail(c);
+        }
+        // EmitReturnOfRValue.
+        if let Some(x) = rv
+            && !agg
+            && let Some(slot) = self.f.ret_slot
+        {
+            self.store_scalar(x, slot, rq);
+        }
+        Ok(())
+    }
+
+    /// clang `PerformReturnAdjustment`: null-checked unless a reference.
+    fn return_adjustment(&mut self, p: V, rq: QualType, adj: (i64, i64)) -> V {
+        let ast = self.ast;
+        let is_ref = self.referee(rq).is_some();
+        let pointee = ast.types.pointee(rq).or_else(|| self.referee(rq));
+        let align =
+            pointee.and_then(|q| ast.types.as_record(q)).map_or(8, |c| self.this_layout(c).1);
+        if is_ref {
+            return self.type_adjustment(p, align, adj, true);
+        }
+        let notnull = self.f.fir.create_block();
+        let null = self.f.fir.create_block();
+        let end = self.f.fir.create_block();
+        let z = V::C(self.m.const_null(LTy::PTR));
+        let isnull = self.icmp(IntPredicate::Eq, p, z);
+        self.cond_br(isnull, null, notnull);
+        self.emit_block(notnull, false);
+        let a = self.type_adjustment(p, align, adj, true);
+        let afrom = self.f.fir.cur().expect("insertion point");
+        self.emit_branch(end);
+        self.emit_block(null, false);
+        self.emit_branch(end);
+        self.emit_block(end, false);
+        self.f.fir.push(Op::Phi { ty: LTy::PTR, inc: vec![(a, afrom), (z, null)] }, LTy::PTR)
+    }
+
+    /// clang (Itanium) `performTypeAdjustment` of the pointer `p` (to an
+    /// object aligned `align`) by (non-virtual, virtual-offset offset).
+    fn type_adjustment(&mut self, p: V, align: u64, (nv, virt): (i64, i64), ret: bool) -> V {
+        if nv == 0 && virt == 0 {
+            return p;
+        }
+        let mut v = p;
+        if nv != 0 && !ret {
+            let o = self.i64c(i128::from(nv));
+            v = self.gep(LTy::I8, v, vec![o], true);
+        }
+        let mut r = v;
+        if virt != 0 {
+            let vt = self.load(LTy::PTR, v, min_align(align, nv.unsigned_abs()), false);
+            let o = self.i64c(i128::from(virt));
+            let op = self.gep(LTy::I8, vt, vec![o], true);
+            let off = self.load(LTy::I64, op, 8, false);
+            r = self.gep(LTy::I8, v, vec![off], true);
+        }
+        if nv != 0 && ret {
+            let o = self.i64c(i128::from(nv));
+            r = self.gep(LTy::I8, r, vec![o], true);
+        }
+        r
     }
 
     // ---- virtual calls -------------------------------------------------
@@ -678,13 +889,8 @@ impl Cg<'_> {
     /// Methods `m` overrides directly (first declarations).
     pub(crate) fn overridden_methods(&self, m: DeclId) -> Vec<DeclId> {
         let ast = self.ast;
-        let list = ast
-            .decls
-            .cold
-            .overrides
-            .get(ast.first(m))
-            .copied()
-            .unwrap_or(kiln_ast::ListId::EMPTY);
+        let list =
+            ast.decls.cold.overrides.get(ast.first(m)).copied().unwrap_or(kiln_ast::ListId::EMPTY);
         ast.lists.iter::<DeclId>(list).map(|o| ast.first(o)).collect()
     }
 
