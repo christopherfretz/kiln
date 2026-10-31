@@ -474,9 +474,15 @@ impl Cg<'_> {
                 else {
                     return err(self.loc_of(e), "derived-to-base cast of a non-class pointer");
                 };
-                let off = self.base_path_offset(e, derived)?;
+                let (vb, off) = self.base_path(e, derived)?;
                 let null_check = ck == CastKind::DerivedToBase && !self.is_this_expr(s);
-                self.base_ptr(p, off, null_check)
+                if vb.is_none() {
+                    self.base_ptr(p, off, null_check)
+                } else {
+                    let ty = self.mty(ast.types.pointee(sq).expect("checked"));
+                    let align = self.record_align_of(sq);
+                    self.base_address(Addr { v: p, ty, align }, derived, vb, off, null_check)?.0
+                }
             }
             // `__builtin_bit_cast` ([bit.cast]): the operand's bytes
             // loaded as the destination type (clang `EmitLoadOfLValue` of
@@ -1317,10 +1323,9 @@ impl Cg<'_> {
                     let Some(derived) = ast.types.as_record(ast.exprs.get(s).ty()) else {
                         return err(self.loc_of(e), "derived-to-base cast of a non-class");
                     };
-                    let off = self.base_path_offset(e, derived)?;
-                    let v = self.byte_offset(lv.addr.v, off);
+                    let (vb, off) = self.base_path(e, derived)?;
+                    let (v, align) = self.base_address(lv.addr, derived, vb, off, false)?;
                     let ty = self.mty(q);
-                    let align = min_align(lv.addr.align, off);
                     Ok(LV { addr: Addr { v, ty, align }, q, bf: None })
                 }
                 CastKind::Dynamic => {

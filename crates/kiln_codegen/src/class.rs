@@ -1149,9 +1149,21 @@ impl Cg<'_> {
 
     /// The byte offset of the base a derived-to-base cast `e` converts
     /// to, from class `derived` (clang `computeNonVirtualBaseClassOffset`).
+    /// Paths with a virtual step are an error here (member pointers).
     pub(crate) fn base_path_offset(&mut self, e: ExprId, derived: DeclId) -> R<u64> {
+        match self.base_path(e, derived)? {
+            (None, off) => Ok(off),
+            (Some(_), _) => err(self.loc_of(e), "conversion through a virtual base"),
+        }
+    }
+
+    /// The path of derived-to-base cast `e` from `derived` as clang's
+    /// `GetAddressOfBaseClass` splits it: the last virtual base on the
+    /// path, if any, and the non-virtual offset from it (or from
+    /// `derived`).
+    pub(crate) fn base_path(&mut self, e: ExprId, derived: DeclId) -> R<(Option<DeclId>, u64)> {
         let ast = self.ast;
-        let Some(path) = ast.exprs.cast_path(e) else { return Ok(0) };
+        let Some(path) = ast.exprs.cast_path(e) else { return Ok((None, 0)) };
         let specs: Vec<(QualType, bool)> = ast
             .lists
             .get(path)
@@ -1161,22 +1173,112 @@ impl Cg<'_> {
                 (b.ty, b.is_virtual)
             })
             .collect();
+        // clang's `BuildBasePathArray` drops the steps before the last
+        // virtual one: a virtual base is a base of every class below it.
+        let start = specs.iter().rposition(|&(_, v)| v).unwrap_or(0);
         let mut cur = derived;
         let mut off = 0;
-        for (bq, virt) in specs {
-            if virt {
-                return err(self.loc_of(e), "conversions to virtual bases are WP-080");
-            }
+        let mut vbase = None;
+        for (bq, virt) in specs.into_iter().skip(start) {
             let Some(b) = ast.types.as_record(bq) else {
                 return err(self.loc_of(e), "base of a non-class type");
             };
+            if virt {
+                vbase = Some(b);
+                cur = b;
+                continue;
+            }
             let Some(o) = self.base_offset(cur, b) else {
                 return err(self.loc_of(e), "base class not in the layout");
             };
             off += o;
             cur = b;
         }
-        Ok(off)
+        if let Some(vb) = vbase
+            && self.class_def(derived).is_some_and(|d| self.class_is_final(d))
+        {
+            let Some(o) = self.vbase_offset(derived, vb) else {
+                return err(self.loc_of(e), "virtual base not in the layout");
+            };
+            return Ok((None, off + o));
+        }
+        Ok((vbase, off))
+    }
+
+    /// The byte offset of virtual base `vb` in the complete `rd`.
+    pub(crate) fn vbase_offset(&mut self, rd: DeclId, vb: DeclId) -> Option<u64> {
+        let ast = self.ast;
+        let def = self.class_def(rd)?;
+        let b = ast.first(vb);
+        let l = self.tys.layouter().record(def);
+        l.vbases.iter().find(|&&(x, _)| ast.first(x) == b).map(|&(_, o)| o)
+    }
+
+    /// clang `getVBaseAlignment`.
+    pub(crate) fn vbase_align(&mut self, actual: u64, derived: DeclId, vb: DeclId) -> u64 {
+        let Some(vdef) = self.class_def(vb) else { return 1 };
+        let expected = u64::from(self.tys.layouter().record(vdef).nv_align);
+        let dalign = self.class_def(derived).map_or(1, |d| u64::from(self.tys.layouter().record(d).align));
+        if actual >= dalign { expected } else { actual.min(expected) }
+    }
+
+    /// clang `ItaniumCXXABI::GetVirtualBaseClassOffset`: the offset of
+    /// virtual base `vb` of the `derived` object at `this`, loaded from
+    /// its vtable.
+    pub(crate) fn vbase_offset_value(&mut self, this: Addr, derived: DeclId, vb: DeclId) -> R<V> {
+        let l = self.vt_layout(derived)?;
+        let b = self.ast.first(vb);
+        let Some(&(_, oo)) = l.vbase_offset_offsets.iter().find(|&&(x, _)| self.ast.first(x) == b)
+        else {
+            return err(Some(self.ast.decls.get(vb).loc()), "no vbase offset for the virtual base");
+        };
+        let vt = self.load(LTy::PTR, this.v, this.align, false);
+        let o = self.i64c(i128::from(oo));
+        let p = self.gep(LTy::I8, vt, vec![o], false);
+        Ok(self.load(LTy::I64, p, 8, false))
+    }
+
+    /// clang `GetAddressOfBaseClass` with the path split by `base_path`:
+    /// the address of the base and its alignment.
+    pub(crate) fn base_address(
+        &mut self,
+        this: Addr,
+        derived: DeclId,
+        vbase: Option<DeclId>,
+        nv: u64,
+        null_check: bool,
+    ) -> R<(V, u64)> {
+        let Some(vb) = vbase else {
+            return Ok((self.base_ptr(this.v, nv, null_check), min_align(this.align, nv)));
+        };
+        let blocks = null_check.then(|| {
+            let not_null = self.f.fir.create_block();
+            let end = self.f.fir.create_block();
+            (not_null, end)
+        });
+        let null = V::C(self.m.const_null(LTy::PTR));
+        let mut orig = None;
+        if let Some((not_null, end)) = blocks {
+            let is_null = self.icmp(IntPredicate::Eq, this.v, null);
+            orig = self.f.fir.cur();
+            self.cond_br(is_null, end, not_null);
+            self.emit_block(not_null, false);
+        }
+        let voff = self.vbase_offset_value(this, derived, vb)?;
+        let off = if nv == 0 {
+            voff
+        } else {
+            let c = self.i64c(i128::from(nv));
+            self.bin(kiln_llvm::BinOp::Add, kiln_llvm::Flags::NONE, voff, c)
+        };
+        let adj = self.gep(LTy::I8, this.v, vec![off], true);
+        let align = min_align(self.vbase_align(this.align, derived, vb), nv);
+        let Some((_, end)) = blocks else { return Ok((adj, align)) };
+        let from = self.f.fir.cur().expect("insertion point");
+        self.emit_block(end, false);
+        let orig = orig.expect("insertion point");
+        let phi = self.f.fir.push(Op::Phi { ty: LTy::PTR, inc: vec![(adj, from), (null, orig)] }, LTy::PTR);
+        Ok((phi, align))
     }
 
     /// clang `GetAddressOfBaseClass` on a pointer: `p + off`, null-checked

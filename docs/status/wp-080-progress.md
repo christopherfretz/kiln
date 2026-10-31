@@ -19,7 +19,9 @@
   `__cxa_bad_typeid` deref check, static typeid, pointer/enum/array/
   function/incomplete RTTI.
 - `virtual_memptr.cpp`: pointers to virtual member functions.
-- ir_vs_clang: 144/144 exact.
+- `virtual_base_conv.cpp`: derived-to-base through virtual bases
+  (vbase offset load, null check, nv tail, final class).
+- ir_vs_clang: 146/146 exact.
 
 ## Run tests
 - `tests/conformance/class.virtual/dispatch-run.cpp` (dispatch, MI,
@@ -56,7 +58,7 @@
 - spec/codegen.md §7a, spec/abi.md §8.7.
 
 ## Next step
-Virtual-base derived-to-base conversions: `base_path_offset`
+DONE: virtual-base conversions (`base_path` / `base_address`). Was: `base_path_offset`
 (class.rs ~1152/1168) must return (virtual step, non-virtual offset);
 emit clang `GetVirtualBaseClassOffset` (vtable load, non-inbounds
 `gep i8 vt, vbase_offset_offset`, `load i64 align 8`, add nv offset,
