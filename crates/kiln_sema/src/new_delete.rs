@@ -328,7 +328,7 @@ impl Sema<'_, '_> {
         }
         // [dcl.type.class.deduct]/2: `new C(args)` (WP-071b).
         if self.is_ctad_placeholder(elem) {
-            if arrays.first().is_some() {
+            if !arrays.is_empty() {
                 self.unsupported("class template argument deduction for an array new", tid.loc);
                 return self.recover_err(&kids, loc);
             }

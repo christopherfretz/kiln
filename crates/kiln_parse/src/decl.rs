@@ -694,6 +694,35 @@ impl Parser<'_, '_> {
         self.emit(d);
     }
 
+    /// Class template `d`, written up to token `end` (`qualified`: after a
+    /// nested-name-specifier), as the placeholder for a deduced class type
+    /// ([dcl.type.class.deduct]) of `ds`.
+    fn parse_ctad_placeholder(
+        &mut self,
+        ds: &mut DeclSpec,
+        d: DeclId,
+        qualified: bool,
+        end: usize,
+        loc: Loc,
+    ) {
+        let mut nns = None;
+        if qualified {
+            if let Ok(Some(q)) = self.parse_nested_name_nns() {
+                nns = Some(q.nns);
+            } else {
+                ds.invalid = true;
+            }
+        }
+        while self.pos() < end {
+            self.bump();
+        }
+        let ty = self.s.ctad_placeholder(d, nns);
+        if let Err(e) = ds.set_base(TypeSpecKind::Named, Some(ty), loc) {
+            ds.invalid = true;
+            self.spec_error(&e, loc);
+        }
+    }
+
     /// A type-name in a decl-specifier-seq (`T`, `N::T`), or an unknown
     /// identifier that can only be one. Returns false (consuming nothing)
     /// if the tokens are not a type name.
@@ -771,25 +800,7 @@ impl Parser<'_, '_> {
             }
             // A placeholder for a deduced class type ([dcl.type.class.deduct]).
             Some((end, NameClass::TypeTemplate(d), _)) if self.s.is_ctad_template(d) => {
-                let nns = if end > start + 1 {
-                    match self.parse_nested_name_nns() {
-                        Ok(Some(q)) => Some(q.nns),
-                        _ => {
-                            ds.invalid = true;
-                            None
-                        }
-                    }
-                } else {
-                    None
-                };
-                while self.pos() < end {
-                    self.bump();
-                }
-                let ty = self.s.ctad_placeholder(d, nns);
-                if let Err(e) = ds.set_base(TypeSpecKind::Named, Some(ty), loc) {
-                    ds.invalid = true;
-                    self.spec_error(&e, loc);
-                }
+                self.parse_ctad_placeholder(ds, d, end > start + 1, end, loc);
                 true
             }
             Some((end, NameClass::Undeclared, name)) if end == start + 1 => {

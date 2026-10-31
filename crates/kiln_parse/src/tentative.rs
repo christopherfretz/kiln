@@ -305,9 +305,7 @@ impl<'x, 'a, 'sm> Scan<'x, 'a, 'sm> {
         }
         match class {
             NameClass::Type(..) => self.after_simple_type(end, braced),
-            NameClass::TypeTemplate(d)
-                if self.p.s.names_injected_class(d) || self.p.s.is_ctad_template(d) =>
-            {
+            NameClass::TypeTemplate(d) if self.p.s.names_class_type(d) => {
                 self.after_simple_type(end, braced)
             }
             // `C auto` ([dcl.spec.auto.general]/1).

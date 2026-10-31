@@ -2971,19 +2971,7 @@ impl Sema<'_, '_> {
         let ty = vn.ty().unwrap_or(QualType::ERROR);
         let loc = vn.loc();
         let name = self.decl_name(v);
-        let ty = if self.undeduced_ctad(ty).is_some() {
-            // `C x;` deduces from no arguments ([over.match.class.deduct]).
-            let t = self.deduce_ctad(ty, &[], &[], crate::templ::ctad::CtadInit::Direct, loc);
-            let t = t.unwrap_or(QualType::ERROR);
-            self.ast.decls.set_ty(v, t);
-            if self.is_error_type(t) {
-                self.ast.decls.set_flags(v, DeclFlags::INVALID);
-                return;
-            }
-            t
-        } else {
-            ty
-        };
+        let Some(ty) = self.ctad_uninit(v, ty, loc) else { return };
         // [temp.res.general]/6: checked when instantiated.
         if self.is_error_type(ty) || self.ast.types.is_dependent(ty) {
             return;

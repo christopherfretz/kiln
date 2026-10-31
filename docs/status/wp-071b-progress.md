@@ -15,7 +15,7 @@ Design and what is deferred: spec/sema.md §4.3.2.
 
 | file | covers |
 |---|---|
-| `over.match.class.deduct-var-forms.cpp` | `X x(a)`, `X x{a}`, `X x = a`, `X x = {a}`, `X x;`, cv-qualified |
+| `over.match.class.deduct-var-forms.cpp` | `X x(a, b)`, `X x{…}`, `X x = {…}`, `X x;` (default args), const/constexpr, qualified name, local (`X x = a` is in the explicit and copy-guide tests) |
 | `over.match.class.deduct-functional-cast.cpp` | `X(a)`, `X{a}`, `X()` |
 | `over.match.class.deduct-new.cpp` | `new X(a)`, `new X{a}`, `new X` |
 | `temp.deduct.guide-explicit.cpp` | explicit guides and ctors skipped in copy-init, used in direct-init |

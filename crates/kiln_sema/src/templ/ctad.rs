@@ -5,7 +5,7 @@
 use kiln_ast::decl::{DeclFlags, DeclKind, FnSpec, ParamData};
 use kiln_ast::ids::{TemplateNameId, TemplateParamListId};
 use kiln_ast::names::DeclName;
-use kiln_ast::types::{AutoKeyword, ExcSpec, FuncInfo, TemplateName, TypeView};
+use kiln_ast::types::{AutoKeyword, ExcSpec, FuncInfo, FuncProto, TemplateName, TypeView};
 use kiln_ast::{DeclHead, DeclId, ExprId, NnsId, QualType};
 use kiln_diag::DiagId;
 use kiln_source::Loc;
@@ -14,7 +14,8 @@ use crate::Sema;
 use crate::declspec::{Chunk, DeclSpec, Declarator};
 use crate::init::{InitList, InitValue, Initializer};
 use crate::overload::{
-    Candidate, CandidateFailure, CandidateKind, IcsOptions, OvlOutcome, SetKind,
+    Candidate, CandidateFailure, CandidateKind, IcsOptions, OverloadCandidateSet, OvlOutcome,
+    SetKind,
 };
 
 /// How the object whose type is a deduced class template specialization
@@ -44,6 +45,12 @@ impl Sema<'_, '_> {
     /// (P1814) are not deduced yet.
     pub fn is_ctad_template(&self, d: DeclId) -> bool {
         self.kind_of(d) == DeclKind::ClassTemplate && !self.names_injected_class(d)
+    }
+
+    /// True if a class template name `d` alone is a type: its
+    /// injected-class-name or a CTAD placeholder.
+    pub fn names_class_type(&self, d: DeclId) -> bool {
+        self.kind_of(d) == DeclKind::ClassTemplate
     }
 
     /// The undeduced placeholder `X` / `nns::X` for class template `d`
@@ -118,9 +125,6 @@ impl Sema<'_, '_> {
         Some(f)
     }
 
-    /// Deduces the template arguments of a class template from an
-    /// initializer (WP-071b): reports and fails.
-
     /// The class template `ty` is an undeduced placeholder for
     /// ([dcl.type.class.deduct]), with its template name as written.
     pub(crate) fn undeduced_ctad(&self, ty: QualType) -> Option<(TemplateNameId, DeclId)> {
@@ -192,10 +196,9 @@ impl Sema<'_, '_> {
         }
         // [over.match.class.deduct]/1.3: `C(C<T...>) -> C<T...>`.
         let loc = self.ast.decls.get(owner).loc();
-        if let Some(g) = self.copy_guide(ctx, name, injected, info.params, loc) {
-            let _ = self.templ.ctad_copy.insert(g);
-            out.push(g);
-        }
+        let g = self.copy_guide(ctx, name, injected, info.params, loc);
+        let _ = self.templ.ctad_copy.insert(g);
+        out.push(g);
         self.ast.templates.dependent_depth = saved;
         if def.is_some() {
             let _ = self.templ.ctad_guides.insert(first, out.clone());
@@ -219,7 +222,7 @@ impl Sema<'_, '_> {
                 let fd = self.ast.decls.function(c)?;
                 let ps: Vec<DeclId> = self.ast.lists.iter::<DeclId>(fd.params).collect();
                 let ty = self.ast.decls.get(c).ty().unwrap_or(QualType::ERROR);
-                let variadic = self.ast.types.proto(ty).is_some_and(|p| p.variadic());
+                let variadic = self.ast.types.proto(ty).is_some_and(FuncProto::variadic);
                 (ps, variadic, fd.spec.is_explicit())
             }
             None => (Vec::new(), false, false),
@@ -270,7 +273,7 @@ impl Sema<'_, '_> {
         ret: QualType,
         params: TemplateParamListId,
         loc: Loc,
-    ) -> Option<DeclId> {
+    ) -> DeclId {
         let info = FuncInfo::new().with_trailing_return(true);
         let fty = self.ast.types.function(ret, &[ret], info, ExcSpec::None);
         let mut h = DeclHead::new(ctx, name, loc);
@@ -281,7 +284,7 @@ impl Sema<'_, '_> {
         let p = self.builder().param(f, DeclName::EMPTY, loc, ret, 0, 0);
         let _ = self.builder().set_params(f, &[p]);
         self.ast.templates.dependent_depth = 0;
-        Some(self.builder().detached_template_decl(DeclKind::FunctionTemplate, f, params))
+        self.builder().detached_template_decl(DeclKind::FunctionTemplate, f, params)
     }
 
     /// The user-declared deduction guides of class template `tmpl`
@@ -335,14 +338,7 @@ impl Sema<'_, '_> {
                 continue;
             }
             if how == CtadInit::Copy && self.fn_spec(pattern).is_explicit() {
-                self.ovl.stats.candidates += 1;
-                let mut c = Candidate::new(pattern, g, CandidateKind::Function);
-                let start = u32::try_from(set.ics.len()).unwrap_or(u32::MAX);
-                c.ics = start..start;
-                c.template = template;
-                c.viable = false;
-                c.failure = CandidateFailure::Explicit;
-                set.cands.push(c);
+                self.add_explicit_guide(&mut set, pattern, g, template);
                 continue;
             }
             match template {
@@ -386,7 +382,7 @@ impl Sema<'_, '_> {
                 } else {
                     let ty = self.ast.decls.get(f).ty().unwrap_or(QualType::ERROR);
                     let ret = self.ast.types.proto_of(ty.ty()).or_else(|| self.ast.types.proto(ty));
-                    let ret = ret.map_or(QualType::ERROR, |p| p.ret());
+                    let ret = ret.map_or(QualType::ERROR, FuncProto::ret);
                     Some(with_quals(self, ret))
                 }
             }
@@ -406,6 +402,25 @@ impl Sema<'_, '_> {
         self.ovl.lists.truncate(base);
         self.end_set(set);
         result
+    }
+
+    /// Explicit guide `g` (pattern `pattern`) as a non-viable candidate
+    /// of copy-initialization ([over.match.class.deduct]/3.1).
+    fn add_explicit_guide(
+        &mut self,
+        set: &mut OverloadCandidateSet,
+        pattern: DeclId,
+        g: DeclId,
+        template: Option<DeclId>,
+    ) {
+        self.ovl.stats.candidates += 1;
+        let mut c = Candidate::new(pattern, g, CandidateKind::Function);
+        let start = u32::try_from(set.ics.len()).unwrap_or(u32::MAX);
+        c.ics = start..start;
+        c.template = template;
+        c.viable = false;
+        c.failure = CandidateFailure::Explicit;
+        set.cands.push(c);
     }
 
     /// Whether candidate function (or template) `f` is an implicit
@@ -486,11 +501,11 @@ impl Sema<'_, '_> {
             }
             out.push_str(&self.ty_str(self.ast.decls.get(*p).ty().unwrap_or(QualType::ERROR)));
         }
-        if self.ast.types.proto(ty).is_some_and(|p| p.variadic()) {
+        if self.ast.types.proto(ty).is_some_and(FuncProto::variadic) {
             out.push_str(if params.is_empty() { "..." } else { ", ..." });
         }
         out.push_str(") -> ");
-        let ret = self.ast.types.proto_of(ty.ty()).map_or(QualType::ERROR, |p| p.ret());
+        let ret = self.ast.types.proto_of(ty.ty()).map_or(QualType::ERROR, FuncProto::ret);
         out.push_str(&self.ty_str(ret));
         Some(out)
     }
@@ -555,6 +570,22 @@ impl Sema<'_, '_> {
         };
         let (args, braced) = self.ctad_args(init);
         self.deduce_ctad(declared, &args, &braced, how, loc)
+    }
+
+    /// `C x;` ([over.match.class.deduct], no arguments): the type of
+    /// variable `v` declared as `ty`, deduced if a placeholder; `None`
+    /// after a diagnostic, with `v` invalid.
+    pub(crate) fn ctad_uninit(&mut self, v: DeclId, ty: QualType, loc: Loc) -> Option<QualType> {
+        if self.undeduced_ctad(ty).is_none() {
+            return Some(ty);
+        }
+        let t = self.deduce_ctad(ty, &[], &[], CtadInit::Direct, loc).unwrap_or(QualType::ERROR);
+        self.ast.decls.set_ty(v, t);
+        if self.is_error_type(t) {
+            self.ast.decls.set_flags(v, DeclFlags::INVALID);
+            return None;
+        }
+        Some(t)
     }
 
     /// Whether `ty` is a class template placeholder to deduce.
