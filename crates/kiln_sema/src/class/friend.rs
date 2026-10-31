@@ -95,7 +95,7 @@ impl Sema<'_, '_> {
             && let Some(sid) = &d.spec_id
             && self.kind_of(sid.template) == DeclKind::FunctionTemplate
         {
-            let dname = d.op_name.map_or(DeclName::ident(name), DeclName::operator);
+            let dname = d.fn_decl_name(name);
             return self.declare_friend_spec(record, d, ty, dname);
         }
         if head.is_some() {

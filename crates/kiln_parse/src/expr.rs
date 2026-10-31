@@ -883,6 +883,7 @@ impl Parser<'_, '_> {
         }
         match d.special {
             Some((SpecialName::Operator(op), _)) => Some(DeclName::operator(op)),
+            Some((SpecialName::LiteralOperator(s), _)) => Some(DeclName::literal_operator(s)),
             Some((SpecialName::Conversion(t), _)) => {
                 let c = self.s.ast.types.canonical(t);
                 Some(self.s.ast.names.conversion(c))
@@ -1328,10 +1329,20 @@ impl Parser<'_, '_> {
         match &n.class {
             NumberClass::Integer(l) => {
                 let ud = suffix_loc(t.span.hi, l.ud_suffix);
+                if let Some(u) = l.ud_suffix {
+                    // [lex.ext]/3: the raw form is the spelling without
+                    // the ud-suffix.
+                    let raw = &sp[..sp.len() - u.len()];
+                    return self.s.act_on_integer_udl(l, raw, t.span.lo, ud);
+                }
                 self.s.act_on_integer_literal(l, t.span.lo, ud)
             }
             NumberClass::Floating(l) => {
                 let ud = suffix_loc(t.span.hi, l.ud_suffix);
+                if let Some(u) = l.ud_suffix {
+                    let raw = &sp[..sp.len() - u.len()];
+                    return self.s.act_on_float_udl(l, raw, t.span.lo, ud);
+                }
                 self.s.act_on_float_literal(l, t.span.lo, ud)
             }
             NumberClass::Invalid => self.s.act_on_error_expr(&[], t.span.lo),

@@ -745,6 +745,20 @@ diag_ids! {
     sema_udl_no_operator_raw = Error (3) "no matching literal operator for call to {0} with argument of type {1} or {2}, and no matching literal operator template";
     sema_udl_no_operator_string = Error (3) "no matching literal operator for call to {0} with arguments of types {1} and {2}, and no matching literal operator template";
     sema_unsupported_string_concat = Error (0) "unsupported non-standard concatenation of string literals";
+    // WP-131: literal operators ([over.literal], clang `CheckLiteralOperatorDeclaration`).
+    parse_literal_operator_string_not_empty = Error (0) "string literal after 'operator' must be '\"\"'";
+    parse_literal_operator_string_prefix = Error (0) "string literal after 'operator' cannot have an encoding prefix";
+    sema_literal_operator_outside_namespace = Error (1) "literal operator {0} must be in a namespace or global scope";
+    sema_literal_operator_extern_c = Error (0) "literal operator must have C++ linkage";
+    note_extern_c_begins_here = Note (0) "extern \"C\" language linkage specification begins here";
+    sema_literal_operator_param = Error (2) "invalid literal operator parameter type {0}, did you mean {1}?";
+    sema_literal_operator_invalid_param = Error (0) "parameter of literal operator must have type 'unsigned long long', 'long double', 'char', 'wchar_t', 'char16_t', 'char32_t', or 'const char *'";
+    sema_literal_operator_bad_param_count = Error (0) "non-template literal operator must have one or two parameters";
+    sema_literal_operator_default_argument = Error (0) "literal operator cannot have a default argument";
+    sema_literal_operator_template = Error (0) "template parameter list for literal operator must be either 'char...' or 'typename T, T...'";
+    sema_literal_operator_template_with_params = Error (0) "literal operator template cannot have any parameters";
+    sema_string_literal_operator_template = ExtWarn [GnuStringLiteralOperatorTemplate] (0) "string literal operator templates are a GNU extension";
+    sema_user_literal_reserved = Warning [UserDefinedLiterals] (2) "user-defined literal suffixes {0:<ERROR>|not starting with '_'|containing '__'} are reserved{1:; no literal will invoke this operator|}";
     sema_ref_non_value = Error (1) "{0} does not refer to a value";
     // lexer and literal diagnostics the parser reports (a stopgap until the
     // preprocessor maps every LexDiagKind, spec/parse.md §8)

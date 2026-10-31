@@ -173,6 +173,9 @@ diag_groups! {
     // ----- WP-100 (exceptions)
     Exceptions = "exceptions" [];
     InvalidNoreturn = "invalid-noreturn" [];
+    // ----- WP-131 (literal operators)
+    UserDefinedLiterals = "user-defined-literals" [];
+    GnuStringLiteralOperatorTemplate = "gnu-string-literal-operator-template" [];
 }
 
 impl Group {

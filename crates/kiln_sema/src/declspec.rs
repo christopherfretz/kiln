@@ -5,7 +5,7 @@
 //! [`DeclSpec`] into a type ([dcl.type.simple]) and a [`Declarator`] into
 //! a declaration.
 
-use kiln_ast::names::OverloadedOperator;
+use kiln_ast::names::{DeclName, OverloadedOperator};
 use kiln_ast::types::{ExcSpec, Quals, RefQual, TagKeyword};
 use kiln_ast::{AttrId, DeclId, ExprId, QualType};
 use kiln_diag::DiagId;
@@ -570,6 +570,10 @@ pub struct Declarator {
     /// The declarator-id is an operator-function-id (`operator new`):
     /// `name` then holds the `operator` keyword and its location.
     pub op_name: Option<OverloadedOperator>,
+    /// The declarator-id is a literal-operator-id (`operator""_x`,
+    /// [over.literal]/1): its ud-suffix; `name` then holds the
+    /// `operator` keyword and its location.
+    pub lit_suffix: Option<Symbol>,
     /// `...` before the declarator-id: a function or template parameter
     /// pack ([dcl.fct]/16, [temp.variadic]/3).
     pub ellipsis: Option<Loc>,
@@ -638,6 +642,9 @@ pub enum SpecialName {
     Conversion(QualType),
     /// `operator @`.
     Operator(OverloadedOperator),
+    /// `operator "" X` / `operator ""X` ([over.literal]/1): the
+    /// ud-suffix `X`.
+    LiteralOperator(Symbol),
     /// The template-name of a deduction-guide ([temp.deduct.guide]):
     /// the class template it is for.
     DeductionGuide(DeclId),
@@ -666,6 +673,7 @@ impl Declarator {
             late_noexcept: None,
             explicit_object: None,
             op_name: None,
+            lit_suffix: None,
             ellipsis: None,
             trailing_requires: None,
             dropped: false,
@@ -679,6 +687,17 @@ impl Declarator {
     /// [`SpecialName`]).
     pub fn has_name(&self) -> bool {
         self.name.is_some() || self.special.is_some() || self.decomp.is_some()
+    }
+
+    /// The declaration name of a function declarator whose identifier
+    /// (or `operator` keyword) is `name`: an operator-function-id, a
+    /// literal-operator-id, or `name`.
+    pub fn fn_decl_name(&self, name: Symbol) -> DeclName {
+        match (self.op_name, self.lit_suffix) {
+            (Some(op), _) => DeclName::operator(op),
+            (None, Some(s)) => DeclName::literal_operator(s),
+            (None, None) => DeclName::ident(name),
+        }
     }
 
     /// The location of the name, or of the declarator.

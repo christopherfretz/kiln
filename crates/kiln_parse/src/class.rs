@@ -1309,6 +1309,9 @@ impl Parser<'_, '_> {
             (None, Some((SpecialName::Conversion(_), _))) => "operator <conv>".to_owned(),
             (None, Some((SpecialName::Operator(_), _))) => "operator".to_owned(),
             (None, Some((SpecialName::DeductionGuide(_), _))) => "<deduction guide>".to_owned(),
+            (None, Some((SpecialName::LiteralOperator(n), _))) => {
+                format!("operator\"\"{}", sym(*n))
+            }
             (None, None) => "<anon>".to_owned(),
         }
     }
@@ -1528,13 +1531,46 @@ impl Parser<'_, '_> {
             }
             return;
         }
-        if matches!(self.tok().kind, TokKind::StringLit(_)) {
-            self.unsupported("literal operators", loc);
-            self.bump();
-            if self.ident().is_some() {
-                self.bump();
+        if matches!(self.tok().kind, TokKind::StringLit(_) | TokKind::RawStringLit(_)) {
+            // literal-operator-id ([over.literal]/1): `operator "" X` or
+            // `operator ""X` (clang `ParseUnqualifiedIdOperator`).
+            // Adjacent string literals concatenate ([lex.string]/7).
+            let first = self.loc();
+            let mut empty = true;
+            let mut ud = None;
+            while self.at_string() {
+                let t = self.bump();
+                let sp = self.spelling_of(&t);
+                let lit = kiln_lex::literal::decode_string(&sp, self.lit_opts);
+                empty &= lit.units.is_empty();
+                if (lit.encoding != kiln_lex::Encoding::Ordinary || lit.raw) && !d.invalid {
+                    self.s.error(DiagId::parse_literal_operator_string_prefix, t.span.lo);
+                    d.invalid = true;
+                }
+                if let Some(u) = lit.ud_suffix {
+                    ud.get_or_insert_with(|| self.s.intern(u));
+                }
             }
-            d.invalid = true;
+            if !empty && !d.invalid {
+                self.s.error(DiagId::parse_literal_operator_string_not_empty, first);
+                d.invalid = true;
+            }
+            let suffix = if ud.is_some() {
+                ud
+            } else if let Some(n) = self.ident() {
+                self.bump();
+                Some(n)
+            } else {
+                let m = self.s.diag(DiagId::parse_expected, self.expected_loc()).arg("identifier");
+                self.s.emit(m);
+                None
+            };
+            match suffix {
+                Some(n) if !d.invalid => {
+                    d.special = Some((SpecialName::LiteralOperator(n), loc));
+                }
+                _ => d.invalid = true,
+            }
             return;
         }
         // conversion-type-id: type-specifier-seq conversion-declarator(opt).
