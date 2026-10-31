@@ -1007,8 +1007,15 @@ impl<'a, 'b> Mangler<'a, 'b> {
                     });
                 self.out.push_str(operator_code(op, explicit + usize::from(implicit)));
             }
-            DeclNameView::Constructor(_) => {
-                self.out.push_str(if v == Structor::Base { "C2" } else { "C1" });
+            DeclNameView::Constructor(t) => {
+                // An inheriting constructor ([class.inhctor.init]) is named
+                // as the base constructor: `CI1`/`CI2` <base class type>.
+                if ast.decls.inheriting_ctor_shadow(d).is_some() {
+                    self.out.push_str(if v == Structor::Base { "CI2" } else { "CI1" });
+                    self.ty(QualType::unqual(t));
+                } else {
+                    self.out.push_str(if v == Structor::Base { "C2" } else { "C1" });
+                }
             }
             DeclNameView::Destructor(_) => self.out.push_str(match v {
                 Structor::Complete => "D1",

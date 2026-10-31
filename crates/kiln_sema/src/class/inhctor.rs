@@ -94,9 +94,9 @@ impl Sema<'_, '_> {
         let Some(shadow) = self.ast.decls.inheriting_ctor_shadow(dc) else { return Vec::new() };
         let Some(class) = self.ast.decls.get(dc).ctx() else { return Vec::new() };
         let ns = self.ast.decls.ctor_shadow_nominated(shadow);
-        let nominated = self.shadow_base(ns, shadow);
-        let (cs, virt) = self.shadow_constructed(shadow, 0);
-        let constructed = self.shadow_base(cs, shadow);
+        let nominated = self.ast.shadow_base_class(ns, shadow);
+        let (cs, virt) = self.ast.shadow_constructed(shadow);
+        let constructed = self.ast.shadow_base_class(cs, shadow);
         let mut entries: Vec<(DeclId, Option<DeclId>)> = Vec::new();
         if let Some(n) = nominated {
             entries.push((n, ns));
@@ -118,45 +118,12 @@ impl Sema<'_, '_> {
         for (b, is_virtual) in specs {
             let Some(&(_, via)) = entries.iter().find(|e| e.0 == b) else { continue };
             let (ctor, from_vbase) = match via {
-                Some(s) => (self.find_inheriting_ctor(s, bc), virt),
+                Some(s) => (self.find_inheriting_ctor(s, bc), self.ast.shadow_constructed(s).1),
                 None => (bc, false),
             };
             out.push(InheritedBase { base: b, ctor, is_virtual, from_vbase });
         }
         out
-    }
-
-    /// The class (first declaration) of constructor-using-shadow `s`, or
-    /// for `None` that of `shadow`'s target constructor.
-    fn shadow_base(&self, s: Option<DeclId>, shadow: DeclId) -> Option<DeclId> {
-        let d = match s {
-            Some(s) => s,
-            None => self.ast.using_target(shadow)?,
-        };
-        self.ast.decls.get(d).ctx().map(|c| self.ast.first(c))
-    }
-
-    /// clang `ConstructorUsingShadowDecl`'s constructed base: the shadow
-    /// in the base class whose subobject the inherited constructor
-    /// constructs (`None`: the target's class) and whether that is a
-    /// virtual base (`constructsVirtualBase`).
-    pub(crate) fn shadow_constructed(&self, s: DeclId, depth: usize) -> (Option<DeclId>, bool) {
-        let ns = self.ast.decls.ctor_shadow_nominated(s);
-        if let Some(n) = ns
-            && depth < 256
-        {
-            let (ncs, nvirt) = self.shadow_constructed(n, depth + 1);
-            if nvirt {
-                return (ncs, true);
-            }
-        }
-        let virt = match (self.ast.decls.get(s).ctx(), self.shadow_base(ns, s)) {
-            (Some(d), Some(n)) => self.indexed_bases(d).iter().any(|(_, b)| {
-                b.is_virtual && self.base_class(b).is_some_and(|c| self.ast.first(c) == n)
-            }),
-            _ => false,
-        };
-        (ns, virt)
     }
 
     /// Defines inheriting constructor `dc` on its first odr-use at `loc`

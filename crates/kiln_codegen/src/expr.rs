@@ -2076,6 +2076,7 @@ impl Cg<'_> {
             ExprKind::CXXConstructExpr | ExprKind::CXXTemporaryObjectExpr => {
                 self.emit_construct(e, dest, zeroed)
             }
+            ExprKind::CXXInheritedCtorInitExpr => self.emit_inherited_ctor_init(e, dest),
             ExprKind::CXXStdInitializerListExpr => self.std_initializer_list(e, dest),
             ExprKind::CXXBindTemporaryExpr => {
                 let destructed = std::mem::take(&mut self.f.dest_destructed);

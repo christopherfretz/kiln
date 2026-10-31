@@ -354,7 +354,11 @@ impl Cg<'_> {
             arg_no += 1;
             v
         });
-        let param_decls: Vec<DeclId> = ast.lists.iter(fd.params).collect();
+        let param_decls: Vec<DeclId> = if self.inheriting_drops_params(first, structor) {
+            Vec::new()
+        } else {
+            ast.lists.iter(fd.params).collect()
+        };
         let mut vals = Vec::with_capacity(param_decls.len());
         for (i, &p) in param_decls.iter().enumerate() {
             let pq = ast.decls.get(p).ty().expect("param type");
