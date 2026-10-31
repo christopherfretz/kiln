@@ -208,11 +208,11 @@ impl Sema<'_, '_> {
 /// A function template matched by the declarator of an explicit
 /// specialization or instantiation ([temp.deduct.decl]).
 #[derive(Clone, Copy)]
-struct SpecMatch {
+pub(crate) struct SpecMatch {
     /// The specialization deduced.
-    spec: DeclId,
+    pub(crate) spec: DeclId,
     /// The function template it specializes.
-    template: DeclId,
+    pub(crate) template: DeclId,
 }
 
 impl Sema<'_, '_> {
@@ -310,8 +310,16 @@ impl Sema<'_, '_> {
         loc: Loc,
     ) -> Option<SpecMatch> {
         let explicit = d.spec_id.as_ref().map(|s| self.ast.types.arg_list(&s.args));
+        let found = self.prev_candidates_dn(name, d.qualifier);
+        let templates = self.function_templates_in(&found);
+        self.match_function_spec_in(&templates, explicit, name, ty, inst, loc)
+    }
+
+    /// The function templates among `found` (first declarations, once
+    /// each).
+    pub(crate) fn function_templates_in(&self, found: &[DeclId]) -> Vec<DeclId> {
         let mut templates: Vec<DeclId> = Vec::new();
-        for c in self.prev_candidates_dn(name, d.qualifier) {
+        for &c in found {
             if self.kind_of(c) == DeclKind::FunctionTemplate {
                 let c = self.ast.first(c);
                 if !templates.contains(&c) {
@@ -319,9 +327,23 @@ impl Sema<'_, '_> {
                 }
             }
         }
+        templates
+    }
+
+    /// [`Self::match_function_spec`] over the candidate `templates`, with
+    /// the `explicit` template arguments written.
+    pub(crate) fn match_function_spec_in(
+        &mut self,
+        templates: &[DeclId],
+        explicit: Option<ArgListId>,
+        name: DeclName,
+        ty: QualType,
+        inst: bool,
+        loc: Loc,
+    ) -> Option<SpecMatch> {
         let mut matches: Vec<SpecMatch> = Vec::new();
         let mut failures = Vec::new();
-        for &ft in &templates {
+        for &ft in templates {
             match self.deduce_funcaddr(ft, explicit, ty, loc) {
                 Ok(s) => {
                     let sty = self.ast.decls.get(s).ty().unwrap_or(QualType::ERROR);

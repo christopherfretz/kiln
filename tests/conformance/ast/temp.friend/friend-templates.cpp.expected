@@ -1,0 +1,29 @@
+TranslationUnitDecl
+|-FunctionTemplateDecl peek
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| `-FunctionDecl peek 'int (const T &)'
+|   `-ParmVarDecl 'const T &'
+|-ClassTemplateDecl Box
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| `-CXXRecordDecl class Box definition
+|   |-FieldDecl v 'T'
+|   |-FriendDecl
+|   | `-ClassTemplateDecl parent Box
+|   |   |-TemplateTypeParmDecl class depth 1 index 0 U
+|   |   `-CXXRecordDecl parent class Box
+|   |-FriendDecl
+|   | `-FunctionTemplateDecl parent peek
+|   |   |-TemplateTypeParmDecl referenced class depth 1 index 0 U
+|   |   `-FunctionDecl parent friend_undeclared peek 'int (const U &)'
+|   |     `-ParmVarDecl 'const U &'
+|   `-FriendDecl
+|     `-ClassTemplateDecl parent Reader
+|       |-TemplateTypeParmDecl class depth 1 index 0 U
+|       `-CXXRecordDecl parent struct Reader
+`-CXXRecordDecl class Key definition
+  |-FieldDecl k 'int'
+  `-FriendDecl
+    `-FunctionTemplateDecl parent peek
+      |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+      `-FunctionDecl parent friend peek 'int (const T &)'
+        `-ParmVarDecl 'const T &'

@@ -227,6 +227,11 @@ pub struct Sema<'a, 'sm> {
     /// Default template arguments a template parameter inherits from
     /// another declaration of its template ([temp.param]/12), keyed by
     /// the parameter that has none of its own.
+    /// The friend function template specializations of class template
+    /// patterns (`friend bool operator==<>(const X&, const X&);`,
+    /// [temp.friend]/1.3), keyed by their `FriendDecl`: matched against
+    /// their templates per specialization.
+    pub(crate) friend_specs: kiln_source::fx::FxHashMap<DeclId, class::friend::FriendSpec>,
     pub(crate) inherited_defaults: kiln_source::fx::FxHashMap<DeclId, kiln_ast::types::TemplateArg>,
     /// The `this` type of the default member initializers being parsed,
     /// innermost last, with their fields (`C*`, spec/sema-class.md §2.5).
@@ -323,6 +328,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             friend_tag: None,
             friend_class_template: None,
             inherited_defaults: kiln_source::fx::FxHashMap::default(),
+            friend_specs: kiln_source::fx::FxHashMap::default(),
             nsdmi_this: Vec::new(),
             initializing: None,
             templ: templ::TemplState::default(),

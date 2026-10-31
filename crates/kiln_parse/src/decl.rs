@@ -4,6 +4,7 @@ use kiln_ast::attr::AttrKind;
 use kiln_ast::decl::{EnumData, InitStyle};
 use kiln_ast::expr::ExprKind;
 use kiln_ast::strings::StringEncoding;
+use kiln_ast::names::DeclName;
 use kiln_ast::types::{ExcSpec, Quals, RefQual, TagKeyword, UnaryTransformKind};
 use kiln_ast::{AttrId, DeclId, ExprId, QualType};
 use kiln_diag::DiagId;
@@ -1213,7 +1214,8 @@ impl Parser<'_, '_> {
                     && self.at(Punct::Less)
                     && (self.s.has_pending_head()
                         || self.s.has_explicit_spec_head()
-                        || self.s.has_explicit_inst_head())
+                        || self.s.has_explicit_inst_head()
+                        || d.friend)
                 {
                     self.parse_specialization_declarator_id(d, n, l);
                 }
@@ -1286,10 +1288,20 @@ impl Parser<'_, '_> {
     /// arguments are parsed and recorded on the declarator, or it is
     /// dropped ([`Sema::act_on_specialization_declarator_id`]).
     fn parse_specialization_declarator_id(&mut self, d: &mut Declarator, name: Symbol, loc: Loc) {
-        let (NameClass::FunctionTemplate(t) | NameClass::VarTemplate(t)) =
-            self.s.classify_name(name, d.qualifier)
-        else {
-            return;
+        let t = match self.s.classify_name(name, d.qualifier) {
+            NameClass::FunctionTemplate(t) | NameClass::VarTemplate(t) => t,
+            // `friend void f<>(int);` with no function template `f`
+            // ([temp.friend]/1.3, [temp.names]/3.3).
+            NameClass::Value(_) | NameClass::Undeclared if d.friend => {
+                if self.parse_template_arg_list().is_none() {
+                    d.invalid = true;
+                    return;
+                }
+                self.s.act_on_friend_spec_without_template(DeclName::ident(name), d.qualifier, loc);
+                d.dropped = true;
+                return;
+            }
+            _ => return,
         };
         let Some((args, _, r)) = self.parse_template_arg_list() else {
             d.invalid = true;

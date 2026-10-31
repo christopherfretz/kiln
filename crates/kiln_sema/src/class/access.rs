@@ -143,7 +143,20 @@ impl Sema<'_, '_> {
                 DeclKind::ClassTemplate => {
                     ec.records.iter().any(|&r| self.friend_template_of(r) == Some(f))
                 }
-                k if k.is_function() => ec.functions.contains(&f),
+                // A befriended specialization of the function template
+                // whose definition is being parsed may be the context once
+                // instantiated: decided then (clang's `MightInstantiateTo`
+                // making the check dependent).
+                k if k.is_function() => {
+                    ec.functions.contains(&f)
+                        || self.ast.spec_info(f).is_some_and(|(_, s)| {
+                            let t = Some(self.ast.first(s.template));
+                            ec.functions.iter().any(|&g| {
+                                self.ast.described_template(self.ast.first(g)).is_some()
+                                    && self.friend_template_of(g) == t
+                            })
+                        })
+                }
                 _ => ec.records.iter().any(|&r| same_class(self, r, f)),
             }
         })
