@@ -366,6 +366,7 @@ impl Sema<'_, '_> {
         }
         // /3.3: built-in candidates.
         self.add_builtin_candidates(&mut set, op, form, &ops, &types);
+        self.order_template_candidates(&mut set);
         let out = self.best_viable(&mut set);
         self.ovl.lists.truncate(mark);
         let undecided = set.uncertain
@@ -560,10 +561,28 @@ impl Sema<'_, '_> {
         let reversed_too = ops.len() == 2 && self.should_add_reversed(d, ops[1]);
         if self.kind_of(d) == DeclKind::FunctionTemplate {
             let t2 = types.get(1).copied();
-            if self.template_may_match(d, types[0], t2)
-                || (reversed_too
-                    && t2.is_some_and(|t2| self.template_may_match(d, t2, Some(types[0]))))
-            {
+            if rewrite == Rewrite::None {
+                // [over.match.oper]/3.2 with [temp.deduct.call]: the
+                // specialization deduced from the operands.
+                let loc = self.ast.exprs.get(ops[0]).loc();
+                self.add_template_candidate(
+                    set,
+                    d,
+                    found,
+                    None,
+                    CandidateKind::Function,
+                    IcsOptions::NONE,
+                    loc,
+                );
+                if let Some(c) = set.cands.last_mut() {
+                    c.adl_only = adl_only;
+                }
+            } else if self.template_may_match(d, types[0], t2) {
+                set.skipped_templates = true;
+            }
+            // Reversed and rewritten template candidates (/3.4) are not
+            // formed yet.
+            if reversed_too && t2.is_some_and(|t2| self.template_may_match(d, t2, Some(types[0]))) {
                 set.skipped_templates = true;
             }
             return;
@@ -690,7 +709,19 @@ impl Sema<'_, '_> {
                 continue;
             }
             if self.kind_of(d) == DeclKind::FunctionTemplate {
-                set.skipped_templates = true;
+                if reversed || rewrite != Rewrite::None {
+                    set.skipped_templates = true;
+                } else {
+                    self.add_template_candidate(
+                        set,
+                        d,
+                        f,
+                        None,
+                        CandidateKind::Method,
+                        IcsOptions::NONE,
+                        loc,
+                    );
+                }
                 continue;
             }
             if self.ast.decls.function(d).is_none() {

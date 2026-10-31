@@ -2779,6 +2779,61 @@ explicit specialization errors remain. The blockers are:
   is not produced. A `CXXDefaultInitExpr` does not yet take the
   location of the constructor that uses it (owner: WP-067b).
 
+**Landed (WP-071): function templates.**
+- `deduce_call` (`templ/deduce_call.rs`, §6.1) builds each candidate's
+  specialization. Explicit arguments are checked and then substituted
+  into P under an `ExplicitArgSubstitution` SFINAE frame. Too many of
+  them is a `SubstitutionFailure` that carries clang's arity message.
+  `deduce_explicit_only` is the same pipeline with no call: it is used
+  for a function template-id that is not called ([over.over]/3,
+  `Sema::resolve_single_template_id`). Mismatch notes print P as
+  written, because `proto_param_types` returns the sugared prototype.
+- `deduce_template_id` with `DERIVED_CLASS`: when no base matches, the
+  result is the one for `A` itself (clang's
+  `DeduceTemplateSpecArguments`). For example, "deduced conflicting
+  types" survives a failed base search.
+- Partial ordering (`templ/order.rs::more_specialized`, [temp.func.order])
+  works as follows, without packs:
+  - take the first `nargs` parameter types of each template;
+  - strip references and top-level cv;
+  - deduce the other template's parameters from them under SFINAE.
+
+  The overload sets precompute the "more specialized" pairs
+  (`order_template_candidates` into `OverloadCandidateSet::tmpl_order`)
+  before `best_viable`. `better()` reads the pairs for /2.5.
+- Template candidates come from named calls, member calls (`member.rs`,
+  implicit and explicit object, `e.f<args>` via
+  `Sema::set_member_template_args`), and non-reversed operator
+  candidates, both non-member and member (`oper.rs`). A parsed `f<args>`
+  is widened to the whole overload set (`widen_function_template_id`).
+- Names: a specialization prints as `f<int>` in diagnostics, in Oven
+  notes and in the "in call to" stack (`write_decl_name`,
+  `kiln_oven::notes::write_name_for_diag`). Candidate notes say
+  `candidate function [with T = int]`, except for a bad conversion on a
+  non-dependent parameter (CWG1391), which says
+  `candidate function template`, as clang does.
+- Gaps, with owners:
+  - packs: WP-072;
+  - constraints and `requires`: WP-073;
+  - CTAD: WP-071b;
+  - reversed and rewritten operator template candidates ([over.match.oper]/3.4);
+  - conversion function templates (`ics.rs`);
+  - `&f` of a template against a target type, which needs deduction from
+    a function type ([temp.deduct.funcaddr]);
+  - explicit specialization and explicit instantiation of function
+    templates; `TemplateParamObject`;
+  - dependent explicit arguments on a member template-id of a
+    non-dependent object.
+
+  The [temp.deduct.call]/1 `initializer_list<P>` path deduces, but
+  kiln cannot yet build an `std::initializer_list` object, so the test
+  for it is an xfail.
+- The `<type_traits>` probe went from 24 errors to 20. What remains:
+  - 7 constrained partial specializations (WP-073);
+  - 7 requires-expressions (WP-073);
+  - 2 pack expansions (WP-072);
+  - 4 unrelated to WP-071: `__int128_t` and its follow-ons.
+
 ### 11.3 Instantiation report and memory accounting
 
 **Meter.** Each instantiation frame records, at push, `(Ast::bytes(),

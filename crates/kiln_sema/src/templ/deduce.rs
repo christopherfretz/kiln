@@ -582,7 +582,13 @@ impl Sema<'_, '_> {
                     }
                     return r;
                 }
-                self.deduce_from_bases(name, args, a, d, next).unwrap_or_else(|| mismatch(d))
+                // No base matches: the result for `A` itself (clang's
+                // `DeduceTemplateSpecArguments`).
+                match self.deduce_from_bases(name, args, a, d, next) {
+                    Some(b) => b,
+                    None if r == Tdk::NonDeducedMismatch => mismatch(d),
+                    None => r,
+                }
             }
             TypeView::Complex(pe) => {
                 let TypeView::Complex(ae) = av else { return mismatch(d) };
