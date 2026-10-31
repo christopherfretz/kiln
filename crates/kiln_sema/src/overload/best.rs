@@ -252,7 +252,7 @@ impl Sema<'_, '_> {
         if ambiguous {
             return OvlOutcome::Ambiguous;
         }
-        if self.ovl_deleted(set.cand(b).func()) {
+        if set.cand(b).decl.is_some() && self.ovl_deleted(set.cand(b).func()) {
             return OvlOutcome::Deleted(b);
         }
         OvlOutcome::Success(b)

@@ -72,6 +72,9 @@ pub(crate) enum CandidateKind {
     /// A conversion function ([over.match.copy], [over.match.conv],
     /// [over.match.ref]).
     ConvFn,
+    /// A built-in operator ([over.built]): `decl` is `None` and the
+    /// parameter types are [`Candidate::builtin`].
+    Builtin,
 }
 
 /// Why a candidate is not viable.
@@ -160,6 +163,9 @@ pub(crate) struct Candidate {
     /// [over.match.best]/2.2: the conversion of the result of a
     /// conversion function to the destination.
     pub final_conv: Option<StandardConversion>,
+    /// A built-in candidate's parameter types (the second is
+    /// [`QualType::ERROR`] for a unary operator).
+    pub builtin: [QualType; 2],
 }
 
 /// The result of overload resolution (spec/sema-overload.md §10.1).
@@ -190,10 +196,22 @@ impl Candidate {
             adl_only: false,
             ambiguous_mark: false,
             final_conv: None,
+            builtin: [QualType::ERROR; 2],
         }
     }
 
-    /// The function; built-in candidates do not exist before WP-068b.
+    /// A viable built-in candidate with parameter types `params`.
+    pub(crate) fn builtin(params: [QualType; 2]) -> Candidate {
+        Candidate {
+            decl: None,
+            kind: CandidateKind::Builtin,
+            builtin: params,
+            ..Candidate::new(DeclId::new(1), DeclId::new(1), CandidateKind::Builtin)
+        }
+    }
+
+    /// The function (meaningless for a built-in candidate, whose `decl`
+    /// is `None`).
     pub(crate) fn func(&self) -> DeclId {
         self.decl.unwrap_or(self.found)
     }
@@ -236,6 +254,8 @@ pub(crate) struct OverloadCandidateSet {
     /// 1 for an operator set other than a call, whose argument list
     /// includes the first operand.
     pub note_extra_args: usize,
+    /// The operator of the built-in candidates, for their notes.
+    pub builtin_op: Option<kiln_ast::names::OverloadedOperator>,
 }
 
 impl Default for OverloadCandidateSet {
@@ -254,6 +274,7 @@ impl Default for OverloadCandidateSet {
             uncertain: false,
             oper: false,
             note_extra_args: 0,
+            builtin_op: None,
         }
     }
 }
@@ -274,6 +295,7 @@ impl OverloadCandidateSet {
         self.uncertain = false;
         self.oper = false;
         self.note_extra_args = 0;
+        self.builtin_op = None;
     }
 
     /// The conversion sequences of candidate `c`.
@@ -343,6 +365,12 @@ pub(crate) struct OverloadScratch {
     /// without ADL (qualified, parenthesized, block-scope) reports the
     /// conversion directly. Consumed by [`Sema::act_on_call`].
     pub adl_single: Option<kiln_ast::ExprId>,
+    /// The conversion targets of complete classes, for built-in operator
+    /// candidates (`sema.ovl.conv_types`).
+    pub conv_types: kiln_source::fx::FxHashMap<DeclId, builtin::ConvTargets>,
+    /// One built-in resolution's conversion sequences, by (operand,
+    /// parameter type, [`IcsOptions`] bits).
+    pub builtin_memo: kiln_source::fx::FxHashMap<(u8, QualType, u8), Ics>,
 }
 
 /// An overloaded member access `b.f` / `b->f` / implicit `this->f`
@@ -410,6 +438,17 @@ impl OverloadScratch {
                 .values()
                 .map(|m| (m.decls.capacity() + m.found.capacity()) * size_of::<DeclId>())
                 .sum::<usize>()
+            + self.builtin_memo.capacity() * size_of::<((u8, QualType, u8), Ics)>()
+    }
+
+    /// The heap bytes of the conversion-target cache.
+    pub(crate) fn conv_types_size(&self) -> usize {
+        self.conv_types.capacity() * size_of::<(DeclId, builtin::ConvTargets)>()
+            + self
+                .conv_types
+                .values()
+                .map(|c| c.targets.capacity() * size_of::<(QualType, bool)>())
+                .sum::<usize>()
     }
 }
 
@@ -447,6 +486,13 @@ impl Sema<'_, '_> {
         r.push(kiln_ast::mem::MemRow::new(
             "sema.ovl.pool",
             self.ovl.pool.len() as u64,
+            bytes,
+            bytes,
+        ));
+        let bytes = self.ovl.conv_types_size() as u64;
+        r.push(kiln_ast::mem::MemRow::new(
+            "sema.ovl.conv_types",
+            self.ovl.conv_types.len() as u64,
             bytes,
             bytes,
         ));

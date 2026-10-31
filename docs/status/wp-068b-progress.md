@@ -22,7 +22,16 @@ Branch `wp/068b-operators`, worktree `kiln/.worktrees/wp-068b`.
   rewritten candidates with P2468, template filter heuristic),
   `-Wambiguous-reversed-operator`, rewritten `==` non-bool check,
   `build_operator_call`, all outcome diagnostics. Compiles; not yet wired.
-- `overload/builtin.rs`: stub (no built-in candidates yet).
+- `overload/builtin.rs`: [over.built] candidates in clang's builder
+  order (type sets from conversion functions, VR quals, pointer/member
+  pointer variants in clang CVR numbering, /3.3.4 via the enum pair rule),
+  `sema.ovl.conv_types` cache + memory row, per-resolution ICS memo,
+  `ovl.builtin_candidates`; `CandidateKind::Builtin`; notes
+  (`built-in candidate operator<(int, int)` with C-policy printing,
+  `note_ambiguous_type_conversion`); `OperResult::Converted` consumers;
+  `builtin_subscript` + class-index subscript; display order now clang 19's
+  `ConversionSignals`. Fix: conversion-function `nullptr_t` result is a
+  null pointer constant. Scratch bi1/np match clang.
 
 - Dispatch wired: act_on_binary -> binary_operator -> builtin_binary
   (BuiltinNotes via `trailing_notes`), act_on_unary -> builtin_unary,
@@ -36,6 +45,6 @@ Branch `wp/068b-operators`, worktree `kiln/.worktrees/wp-068b`.
 
 ## Next
 1. cargo test; fix kiln_parse/tests/class.rs operator asserts; ci --quick.
-2. `overload/builtin.rs` built-in candidates + conv_types cache + counter.
+2. More builtin probes (++/--, =, compound, ->*, [] with class index).
 3. `->` chains, call-on-object surrogates; `alloc.rs`.
 4. Tests, xfail flips, bench, spec §10, type_traits probe.

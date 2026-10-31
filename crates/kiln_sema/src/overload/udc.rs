@@ -217,7 +217,7 @@ impl Sema<'_, '_> {
 
     /// clang's ambiguity error for converting `a` to `to`, with a note
     /// per ambiguous candidate.
-    fn ambiguous_conversion(&mut self, a: &ArgInfo, to: QualType, opts: IcsOptions) -> ConvError {
+    pub(crate) fn ambiguous_conversion(&mut self, a: &ArgInfo, to: QualType, opts: IcsOptions) -> ConvError {
         let mut err = if self.ast.types.is_reference(to) {
             ConvError::new(
                 DiagId::sema_ref_init_ambiguous,
@@ -267,7 +267,7 @@ impl Sema<'_, '_> {
         notes
     }
 
-    fn udc_notes_of(
+    pub(crate) fn udc_notes_of(
         &mut self,
         a: &ArgInfo,
         to: QualType,

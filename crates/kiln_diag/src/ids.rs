@@ -1161,6 +1161,7 @@ diag_ids! {
     note_operator_arrow_here = Note (1) "'operator->' declared here produces an object of type {0}";
     note_operator_arrow_depth = Note (0) "use -foperator-arrow-depth=N to increase 'operator->' limit";
     note_ovl_builtin_candidate = Note (1) "built-in candidate {0}";
+    note_ambiguous_type_conversion = Note (2) "because of ambiguity in conversion of {0} to {1}";
     note_ovl_surrogate_candidate = Note (1) "conversion candidate of type {0}";
     note_ovl_ambiguous_oper_binary_reversed_self = Note (0) "ambiguity is between a regular call to this operator and a call with the argument order reversed";
     note_ovl_ambiguous_eqeq_reversed_self_non_const = Note (0) "mark 'operator==' as const or add a matching 'operator!=' to resolve the ambiguity";

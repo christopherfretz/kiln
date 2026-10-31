@@ -11,7 +11,7 @@ use kiln_diag::{Diag, DiagId};
 use super::{BadKind, Candidate, CandidateFailure, CandidateKind, Ics, OverloadCandidateSet};
 use crate::Sema;
 use crate::class::SpecialKind;
-use crate::conv::IcsCompare;
+use crate::conv::ConvRank;
 use crate::expr::ordinal;
 
 /// "const", "const and volatile", ... (clang `note_ovl_candidate_bad_cvr`).
@@ -193,9 +193,23 @@ impl Sema<'_, '_> {
     pub(crate) fn ovl_notes(&mut self, set: &OverloadCandidateSet, ambiguous: bool) -> Vec<Diag> {
         let mut order: Vec<u32> = (0..u32::try_from(set.cands.len()).unwrap_or(u32::MAX))
             .filter(|&c| !ambiguous || set.cand(c).ambiguous_mark && set.cand(c).viable)
+            // A non-viable built-in candidate is never listed.
+            .filter(|&c| set.cand(c).kind != CandidateKind::Builtin || set.cand(c).viable)
             .collect();
         order.sort_by(|&a, &b| self.compare_for_display(set, a, b));
-        order.into_iter().map(|c| self.ovl_note(set, c)).collect()
+        let mut out = Vec::with_capacity(order.len());
+        // The ambiguous conversions of the first built-in candidate's
+        // operands (clang `NoteAmbiguousUserConversions`, once).
+        let mut ambiguities = true;
+        for c in order {
+            if set.cand(c).kind == CandidateKind::Builtin {
+                out.extend(self.builtin_notes(set, c, ambiguities));
+                ambiguities = false;
+            } else {
+                out.push(self.ovl_note(set, c));
+            }
+        }
+        out
     }
 
     /// Attaches the notes of [`Sema::ovl_notes`] to `msg`.
@@ -211,30 +225,35 @@ impl Sema<'_, '_> {
         msg
     }
 
-    /// clang `CompareConversions`: the net count of better sequences.
+    /// clang `CompareConversions`: the first operand whose conversion
+    /// kind (standard, user-defined, ellipsis, none) and rank differ
+    /// decides (a total order, unlike [over.match.best]).
     fn compare_conversions(&self, set: &OverloadCandidateSet, a: u32, b: u32) -> Ordering {
-        let mut score = 0i32;
-        let (x, y) = (set.ics_of(a), set.ics_of(b));
-        for i in 0..x.len().max(y.len()) {
-            let (Some(p), Some(q)) = (x.get(i), y.get(i)) else {
-                // Not computed after the first bad sequence: bad.
-                match (x.get(i), y.get(i)) {
-                    (Some(p), None) if !p.is_bad() => score += 1,
-                    (None, Some(q)) if !q.is_bad() => score -= 1,
-                    _ => {}
-                }
-                continue;
-            };
-            if p.is_ignored() || q.is_ignored() {
-                continue;
+        // clang `ConversionSignals`: (kind rank, rank); an ignored object
+        // argument counts as an exact match. A sequence not computed
+        // after the first bad one counts as bad.
+        let sig = |x: Option<&Ics>| -> (u8, ConvRank) {
+            match x {
+                Some(Ics::Standard(s)) => (0, s.rank()),
+                Some(Ics::UserDefined(u)) => (1, u.after.rank()),
+                Some(Ics::Ambiguous { .. }) => (1, ConvRank::ExactMatch),
+                Some(Ics::Ellipsis) => (2, ConvRank::ExactMatch),
+                Some(Ics::Bad(_)) | None => (3, ConvRank::ExactMatch),
             }
-            match self.compare_ics(p, q) {
-                IcsCompare::Better => score += 1,
-                IcsCompare::Worse => score -= 1,
-                IcsCompare::Indistinguishable => {}
+        };
+        let (x, y) = (set.ics_of(a), set.ics_of(b));
+        // clang tests the right candidate's `IgnoreObjectArgument` for
+        // every operand, not just the first.
+        let y_ignores = y.first().is_some_and(Ics::is_ignored);
+        let exact = (0, ConvRank::ExactMatch);
+        for i in 0..x.len().max(y.len()) {
+            let p = if i == 0 && x.first().is_some_and(Ics::is_ignored) { exact } else { sig(x.get(i)) };
+            let q = if y_ignores { exact } else { sig(y.get(i)) };
+            if p != q {
+                return p.cmp(&q);
             }
         }
-        0.cmp(&score)
+        Ordering::Equal
     }
 
     /// clang `CompareOverloadCandidatesForDisplay` as an ordering.
@@ -311,7 +330,14 @@ impl Sema<'_, '_> {
                 }
             }
         }
-        let (ll, rl) = (self.ast.decls.get(l.func()).loc(), self.ast.decls.get(r.func()).loc());
+        let loc = |c: &Candidate| {
+            if c.kind == CandidateKind::Builtin {
+                kiln_source::Loc::INVALID
+            } else {
+                self.ast.decls.get(c.func()).loc()
+            }
+        };
+        let (ll, rl) = (loc(l), loc(r));
         self.loc_order(ll, rl)
     }
 }

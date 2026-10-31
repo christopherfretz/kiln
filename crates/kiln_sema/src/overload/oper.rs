@@ -41,6 +41,10 @@ pub(crate) enum OperResult {
     /// No viable function ([over.match.oper]/9 aside): the built-in
     /// operator, whose error carries these candidate notes.
     BuiltinNotes(Vec<Diag>),
+    /// A built-in candidate won ([over.match.oper]/11): the built-in
+    /// operator applies to these operands (a class operand converted by
+    /// its user-defined conversion).
+    Converted(Vec<ExprId>),
     /// The result (an error expression after diagnosing).
     Done(ExprId),
 }
@@ -268,7 +272,13 @@ impl Sema<'_, '_> {
             OperForm::Subscript | OperForm::Call | OperForm::Binary(BinaryOp::Assign)
         );
         let use_it = match form {
-            OperForm::Subscript | OperForm::Call => self.operand_class(a0).is_some(),
+            OperForm::Call => self.operand_class(a0).is_some(),
+            // clang `ActOnArraySubscriptExpr`: a class object or a class
+            // index.
+            OperForm::Subscript => {
+                self.operand_class(a0).is_some()
+                    || (args.len() == 2 && !is_braced(1) && self.operand_class(args[1]).is_some())
+            }
             OperForm::Binary(BinaryOp::Assign) => self.overloadable_operand(a0),
             _ => (0..args.len()).any(|i| !is_braced(i) && self.overloadable_operand(args[i])),
         };
@@ -382,7 +392,10 @@ impl Sema<'_, '_> {
                     let conv = self.builtin_operand_conversions(&set, b, &ops);
                     self.end_set(set);
                     return match conv {
-                        Some(()) => OperResult::Builtin,
+                        Some(mut v) => {
+                            v.truncate(args.len());
+                            OperResult::Converted(v)
+                        }
                         None => OperResult::Done(self.recover_err(args, loc)),
                     };
                 }

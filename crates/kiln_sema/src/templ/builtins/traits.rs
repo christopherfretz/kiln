@@ -489,7 +489,7 @@ impl Sema<'_, '_> {
     }
 
     /// [basic.types.general]/8: not a function, reference or `void`.
-    fn is_object_type(&self, q: QualType) -> bool {
+    pub(crate) fn is_object_type(&self, q: QualType) -> bool {
         let t = &self.ast.types;
         !t.is_function(q) && !t.is_reference(q) && !t.is_void(q)
     }

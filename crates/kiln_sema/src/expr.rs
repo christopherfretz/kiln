@@ -1444,6 +1444,7 @@ impl Sema<'_, '_> {
         }
         match self.try_overloaded_operator(OperForm::Unary(op), &[e], &[], loc, Loc::INVALID) {
             OperResult::Done(x) => x,
+            OperResult::Converted(v) => self.builtin_unary(op, v[0], loc),
             OperResult::Builtin | OperResult::BuiltinNotes(_) => self.builtin_unary(op, e, loc),
         }
     }
@@ -1690,6 +1691,7 @@ impl Sema<'_, '_> {
         match self.try_overloaded_operator(OperForm::Binary(op), &[l, r], &br, loc, Loc::INVALID) {
             OperResult::Done(e) => e,
             OperResult::Builtin => self.builtin_binary(op, l, r, loc),
+            OperResult::Converted(v) => self.builtin_binary(op, v[0], v[1], loc),
             OperResult::BuiltinNotes(notes) => {
                 *self.trailing_notes.borrow_mut() = notes;
                 let e = self.builtin_binary(op, l, r, loc);
@@ -2334,7 +2336,10 @@ impl Sema<'_, '_> {
         br.extend(braced.iter().cloned());
         match self.try_overloaded_operator(OperForm::Subscript, &kids, &br, loc, end) {
             OperResult::Done(e) => return e,
-            OperResult::Builtin | OperResult::BuiltinNotes(_) => {}
+            OperResult::Converted(v) if v.len() == 2 => {
+                return self.builtin_subscript(v[0], v[1], loc);
+            }
+            OperResult::Builtin | OperResult::BuiltinNotes(_) | OperResult::Converted(_) => {}
         }
         if let Some(idx) = single {
             return self.act_on_subscript(base, idx, loc);
@@ -2357,10 +2362,16 @@ impl Sema<'_, '_> {
         }
         if !self.expr_is_type_dependent(base)
             && !self.expr_is_type_dependent(idx)
-            && self.ast.types.as_record(self.non_reference(self.ety(base))).is_some()
+            && (self.ast.types.as_record(self.non_reference(self.ety(base))).is_some()
+                || self.ast.types.as_record(self.non_reference(self.ety(idx))).is_some())
         {
             return self.act_on_subscript_args_resolved(base, idx, loc);
         }
+        self.builtin_subscript(base, idx, loc)
+    }
+
+    /// The built-in subscript `base[idx]` ([expr.sub]/2).
+    pub(crate) fn builtin_subscript(&mut self, base: ExprId, idx: ExprId, loc: Loc) -> ExprId {
         // Either operand type-dependent: an unanalyzed lvalue with no
         // operand conversions ([temp.dep.expr]/3; clang's
         // `getDependentArraySubscriptType`).
@@ -2402,6 +2413,12 @@ impl Sema<'_, '_> {
             Loc::INVALID,
         ) {
             OperResult::Done(e) => e,
+            OperResult::Converted(v) => self.builtin_subscript(v[0], v[1], loc),
+            OperResult::Builtin | OperResult::BuiltinNotes(_)
+                if self.ast.types.as_record(self.non_reference(self.ety(base))).is_none() =>
+            {
+                self.builtin_subscript(base, idx, loc)
+            }
             OperResult::Builtin | OperResult::BuiltinNotes(_) => {
                 let msg = self
                     .diag(DiagId::sema_no_subscript_operator, loc)
